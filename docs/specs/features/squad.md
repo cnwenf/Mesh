@@ -1,0 +1,567 @@
+# 小队(Squad)功能 Spec
+
+> **所属层**:智能体编排层(多智能体编排单元 —— leader 拆解、分派、汇总的闭环,而非通讯录分组)。
+> **依赖的其他 Spec**:
+> - `workspace.md`:`squads.workspace_id` 等全部业务表外键回 `workspaces.id`,以 workspace 为隔离边界。
+> - `member.md`:小队成员、消息收发者、任务编排/执行人、时间线行为主体统一引用 `members.id`(`member_type ∈ {human, agent}`)。
+> - `issue.md`:小队任务以 issue 为**内容真源**,`squad_tasks.issue_id → issues.id`;拆解出的子任务可挂为父 issue 的子 issue。
+> - `runtime.md`:agent 成员的执行落地为运行记录(`agent_runs`),其生命周期遵循 runtime 长任务状态机 `queued→claimed→running→completed|failed|cancelled`;本 Spec 通过 `run_id` 引用并观察其终态。
+> - `comment-inbox.md`:小队内的指令/汇报与 issue 评论共用「对话」抽象与通知管线(见 chat-session.md);本 Spec 的小队消息为编排专用群聊式记录。
+> - `auth.md`:RBAC、审计、限流;agent runtime 持 API token 代 leader 调用拆解/分派/汇报端点。
+> **被依赖方**:`autopilot.md`(自动化可把任务派给整个小队)、`kanban.md`(小队任务在看板呈现)。
+
+---
+
+## 1. 功能描述
+
+### 1.1 模块定位
+
+小队(Squad)是 Mesh 的**多智能体编排单元**。其核心价值不在"把成员堆在一起",而在 **leader 的拆解—分派—汇总闭环**:把一张 issue 交给整个小队,由 leader(通常是编排型 agent)接管,读取任务与共享上下文,拆成若干子任务,声明依赖与阶段,分派给 member(agent 或人)并行/串行执行,最后聚合产出回写父任务。
+
+数据模型上必须让 **`squad_tasks`(编排层)与 `issues`(任务内容层)解耦又互链** —— issue 管"任务内容/评论/状态",squad_task 管"这是哪个小队、哪一层、谁拆解、谁执行、依赖谁",二者通过 `issue_id` 关联。这是小队区别于"群组聊天"的根本。
+
+**「人审 AI 编排」是可配置闸门而非默认阻塞**:`require_plan_approval` 让高风险任务在拆解后暂停等人确认方案,低风险任务全自动直通;配合 observer 角色、叫停权、运行中改成员的护栏,构成"AI 自主 + 人类可控"的分层监督。
+
+> **全局名册约定(与 member.md 一致)**:人与 agent 统一登记在 `members` 名册(`member_type ∈ {human, agent}`,`members.id` 为统一引用键)。本 Spec 所有多态行为主体(成员、编排者、执行人、消息收发者、时间线 actor)均用 `(<x>_type, <x>_id)` 二元组,`<x>_type ∈ {human, agent}`、`<x>_id → members.id`。
+
+### 1.2 功能点 + 用户场景表
+
+| # | 功能点 | 说明 | 典型用户场景 |
+|---|--------|------|--------------|
+| S1 | 小队生命周期 | 创建 / 编辑 / 归档(软解散)/ 恢复 / 受限删除 / 列表搜索 | 项目经理为"支付重构"组建固定小队;结项后归档保留全部历史 |
+| S2 | 成员构成与角色 | 多 agent + 人混编;角色 leader / member / observer;单/多 leader | 编码、评审、测试 agent 与人类工程师同列;人类负责人作 observer 只读监督 |
+| S3 | 增减/变更成员 | 运行中可改成员,但有护栏(不可移除持 in_progress 子任务者) | 把某 member 提升为 leader;新加 member 仅对新分派生效 |
+| S4 | 小队级任务入口 | 把 issue 分派给**整个小队**,leader 接管 | 把"订单结算异步化"交给支付重构小队 |
+| S5 | leader 拆解 | 读任务与共享上下文,拆成子任务,写目标与验收口径 | leader 拆为"异步化+幂等""对账""回归验证"三子任务 |
+| S6 | 依赖与顺序(DAG + stage) | 无依赖并行,有依赖串行;stage 批量并行 | 异步化与对账并行(stage 1),回归依赖前两者(stage 2) |
+| S7 | 多层级拆解 | 子 leader 二次拆解,形成多层父子树(限最大深度) | 复杂子任务由被指派的子 leader 再拆 |
+| S8 | 汇总结果 | 全部子任务终态后 leader 聚合产出,回写父任务 | leader 汇总各 member 产出,生成总结回写父 issue |
+| S9 | 人类审核拆解方案 | `require_plan_approval`:拆解后暂停等人确认再分派 | 高风险任务 leader 拆完先停,人类批准后才分派 |
+| S10 | 任务取消/叫停 | 级联取消未完成子任务,终止相关 agent 运行 | observer 中途叫停整个小队任务 |
+| S11 | 小队内消息 | 群聊式;指令(leader→member)/ 汇报(member→leader)/ 闲聊 / 系统 / 上下文 | leader 下达结构化指令;member 完成回报结论与产物链接 |
+| S12 | 协作时间线(审计) | 全程可追溯:分派 / 状态变更 / 产出 / 消息,按时间线性呈现 | 排查"这个子任务为什么失败""这个 agent 当时做了什么" |
+| S13 | 复用形态 | 常设(standing)/ 临时(adhoc)/ 任务级(task_scoped);可选模板 | 临时拉一支突击队,任务完成后自动归档 |
+
+### 1.3 边界与非目标(明确不做什么)
+
+- **不**定义 issue 的内容/评论/状态领域逻辑 —— 归 `issue.md`(本 Spec 仅以 issue 为内容真源,通过 `issue_id` 关联)。
+- **不**定义 agent 运行时的领取/心跳/租约/沙箱 —— 归 `runtime.md`(本 Spec 仅创建运行并观察其终态)。
+- **不**定义成员名册与角色权限矩阵 —— 归 `member.md` / `auth.md`(本 Spec 校验"分派对象是小队成员"等业务约束)。
+- **不**实现拆解/汇总的 prompt 工程与模型调用细节 —— 归 `agent.md`(leader 能力来自其运行时与绑定技能)。
+- **不**支持跨 workspace 组队(YAGNI)。
+- **不**做成员模板的市场化分享(模板为可选增强,仅 workspace 内复用)。
+
+---
+
+## 2. 数据模型
+
+五张表串起一条主线:一个 `squad` 由若干 `squad_members`(agent/人,带角色)组成;把一张 issue 交给小队生成一条根 `squad_tasks`,leader 拆成子 `squad_tasks`(父子自引用 + `squad_task_dependencies` 表达先后)并分派给 member;执行中的指令/汇报沉淀到 `squad_messages`(按 task 聚合);每一步关键动作写入 `squad_activity` 形成可追溯时间线。
+
+### 2.1 ER 概览(文字图)
+
+```
+workspaces ──隔离──► squads ──1:N──► squad_members ──N:1──► members(member.md, 人/agent)
+                       │  (leader_mode / require_plan_approval / max_decompose_depth)
+                       │
+                       ├──1:N──► squad_tasks ──N:1──► issues(issue.md, 内容真源)
+                       │            │  ├─自引用─► parent_task_id / root_task_id(拆解树)
+                       │            │  ├─1:N──► squad_task_dependencies(DAG: depends_on)
+                       │            │  └─ run_id ──► agent_runs(runtime.md, agent 执行)
+                       │            ▼
+                       ├──1:N──► squad_messages(指令/汇报/闲聊/系统/上下文, 按 task 聚合)
+                       └──1:N──► squad_activity(时间线/审计, 只增不改)
+
+多态主体:orchestrator / assignee / sender / recipient / actor = (member_type, member_id) → members.id
+```
+
+### 2.2 表:`squads`(小队主表)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离(所有查询强制带) |
+| `name` | TEXT | NOT NULL,CHECK (char_length BETWEEN 1 AND 80) | — | 小队名称 |
+| `description` | TEXT | NULL | NULL | 目标 / 职责描述 |
+| `avatar_url` | TEXT | NULL | NULL | 头像地址 |
+| `kind` | TEXT | NOT NULL,CHECK IN ('standing','adhoc','task_scoped') | `'standing'` | 形态:常设 / 临时 / 任务级 |
+| `status` | TEXT | NOT NULL,CHECK IN ('active','archived') | `'active'` | 状态;归档=软解散 |
+| `leader_mode` | TEXT | NOT NULL,CHECK IN ('single','multi') | `'single'` | 单 leader(推荐)/ 多 leader |
+| `primary_leader_id` | UUID | NULL,FK→members(id) | NULL | 主 leader(多 leader 时负责最终汇总) |
+| `require_plan_approval` | BOOLEAN | NOT NULL | `false` | 拆解方案是否需人类审核后才分派(干预开关) |
+| `max_decompose_depth` | SMALLINT | NOT NULL,CHECK (BETWEEN 1 AND 4) | `2` | 允许的最大拆解层级 |
+| `creator_type` | TEXT | NOT NULL,CHECK IN ('human','agent') | — | 创建者类型 |
+| `creator_id` | UUID | NOT NULL,FK→members(id) | — | 创建者 ID |
+| `archived_at` | TIMESTAMPTZ | NULL | NULL | 归档时间 |
+| `archived_by_id` | UUID | NULL,FK→members(id) | NULL | 归档操作人 |
+| `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除(仅 owner 受限路径) |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+### 2.3 表:`squad_members`(成员关系)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
+| `squad_id` | UUID | NOT NULL,FK→squads(id) | — | 所属小队 |
+| `member_id` | UUID | NOT NULL,FK→members(id) | — | 成员(人或 agent) |
+| `member_type` | TEXT | NOT NULL,CHECK IN ('human','agent') | — | 成员类型 |
+| `role` | TEXT | NOT NULL,CHECK IN ('leader','member','observer') | `'member'` | 角色 |
+| `joined_at` | TIMESTAMPTZ | NOT NULL | `now()` | 加入时间 |
+| `left_at` | TIMESTAMPTZ | NULL | NULL | 离队时间(NULL=在队;软删除成员关系) |
+| `added_by_type` | TEXT | NOT NULL,CHECK IN ('human','agent','system') | — | 添加者类型 |
+| `added_by_id` | UUID | NOT NULL | — | 添加者 ID |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+> 用 `left_at` 软删除而非物理删,保留"某人曾是成员"的历史;再次加入插入新行(旧行 `left_at` 已置位,不冲突)。应用层校验:每个 `active` 小队至少一个 `role='leader'`。
+
+### 2.4 表:`squad_tasks`(小队任务 —— 编排核心)
+
+> `squad_task` 是**编排层记录**,包裹一张 issue(复用 issues 作为任务真源),并承载拆解树、分派、状态机。issue 管内容/评论/状态,squad_task 管层级/依赖/分派/状态机。一一对应,或一 issue 多 squad_task(重派)。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
+| `squad_id` | UUID | NOT NULL,FK→squads(id) | — | 承接小队 |
+| `issue_id` | UUID | NOT NULL,FK→issues(id) | — | 关联 issue(内容真源) |
+| `parent_task_id` | UUID | NULL,FK→squad_tasks(id) | NULL | 父任务(拆解树自引用);根任务为 NULL |
+| `root_task_id` | UUID | NULL,FK→squad_tasks(id) | NULL | 根任务(冗余,加速整树聚合;根指向自身) |
+| `depth` | SMALLINT | NOT NULL,CHECK (BETWEEN 0 AND 4) | `0` | 拆解层级(根=0),受 `squads.max_decompose_depth` 约束 |
+| `title_snapshot` | TEXT | NOT NULL | — | 标题快照(避免渲染时回查 issue) |
+| `status` | TEXT | NOT NULL,CHECK IN ('pending','decomposing','awaiting_plan_approval','dispatching','in_progress','blocked','aggregating','done','failed','cancelled') | `'pending'` | 任务状态机(见 §4.4) |
+| `orchestrator_type` | TEXT | NULL,CHECK IN ('human','agent') | NULL | 拆解/编排者类型(通常是 leader agent) |
+| `orchestrator_id` | UUID | NULL,FK→members(id) | NULL | 拆解/编排者 ID |
+| `assignee_type` | TEXT | NULL,CHECK IN ('human','agent') | NULL | 执行人类型(member);根任务可空 |
+| `assignee_id` | UUID | NULL,FK→members(id) | NULL | 执行人 ID |
+| `stage` | SMALLINT | NULL | NULL | 执行阶段编号(同 stage 可并行;stage 间串行) |
+| `run_id` | UUID | NULL | NULL | 执行人为 agent 时,其运行记录 ID(→ runtime.md `agent_runs`) |
+| `plan_markdown` | TEXT | NULL | NULL | leader 拆解方案说明(人类审核对象) |
+| `result_summary` | TEXT | NULL | NULL | 汇总结果 / member 完成小结 |
+| `dispatched_at` | TIMESTAMPTZ | NULL | NULL | 分派时间 |
+| `started_at` | TIMESTAMPTZ | NULL | NULL | 开始执行时间 |
+| `finished_at` | TIMESTAMPTZ | NULL | NULL | 结束时间 |
+| `failure_reason` | TEXT | NULL | NULL | 失败原因 |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+**关系与约束**:
+- `parent_task_id → squad_tasks.id` 自引用构成拆解树;应用层校验子任务与父任务同 `squad_id`、同 `root_task_id`,且 `depth = parent.depth + 1 ≤ max_decompose_depth`。
+- `root_task_id` 在根任务创建时事务内回填为自身 id,便于"给定任意节点取整树"。
+- 状态迁移由服务端集中校验(非法迁移返回 409 `conflict`),见 §4.4。
+
+### 2.5 表:`squad_task_dependencies`(任务依赖 DAG)
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `task_id` | UUID | NOT NULL,FK→squad_tasks(id) | 当前任务 |
+| `depends_on_task_id` | UUID | NOT NULL,FK→squad_tasks(id) | 前置任务(task_id 须等其 done) |
+| `created_at` | TIMESTAMPTZ | NOT NULL | |
+
+**约束**:`UNIQUE (task_id, depends_on_task_id)`;CHECK `task_id <> depends_on_task_id`;服务端建表时即支持递归 CTE 环检测。
+> 依赖用独立关系表而非 JSONB,便于环检测与"谁在等谁"反查。`stage` 是依赖的**粗粒度补充**(按阶段批量并行),二者并存:stage 表达"批次",依赖表达"精确先后"。
+
+### 2.6 表:`squad_messages`(小队内消息)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
+| `squad_id` | UUID | NOT NULL,FK→squads(id) | — | 所属小队 |
+| `task_id` | UUID | NULL,FK→squad_tasks(id) | NULL | 关联任务(可空=小队级闲聊) |
+| `sender_type` | TEXT | NOT NULL,CHECK IN ('human','agent','system') | — | 发送者类型 |
+| `sender_id` | UUID | NOT NULL | — | 发送者 ID(system 用固定值) |
+| `recipient_type` | TEXT | NULL,CHECK IN ('human','agent') | NULL | 接收者类型;NULL=广播全队 |
+| `recipient_id` | UUID | NULL,FK→members(id) | NULL | 接收者 ID;NULL=广播 |
+| `kind` | TEXT | NOT NULL,CHECK IN ('chat','instruction','report','system','context') | `'chat'` | 闲聊 / 指令 / 汇报 / 系统 / 共享上下文 |
+| `body_markdown` | TEXT | NOT NULL | — | 原始 markdown(真源) |
+| `body_html` | TEXT | NULL | NULL | 服务端净化后的 HTML 缓存 |
+| `body_text` | TEXT | NULL | NULL | 纯文本(搜索 / 摘要 / 通知预览) |
+| `pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶(共享上下文 / 关键决策) |
+| `attachment_ids` | JSONB | NOT NULL | `'[]'` | 附件 ID 列表(见 attachment.md) |
+| `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除 |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+> `kind='instruction'` 且发送者为 leader 时,member 端呈现为"待办指令";若接收者是 agent member,则触发其运行(副作用动作,见 §5.3 回环抑制)。
+
+### 2.7 表:`squad_activity`(协作时间线 / 审计)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
+| `squad_id` | UUID | NOT NULL,FK→squads(id) | — | 所属小队 |
+| `task_id` | UUID | NULL,FK→squad_tasks(id) | NULL | 关联任务(可空=小队级事件) |
+| `actor_type` | TEXT | NOT NULL,CHECK IN ('human','agent','system') | — | 行为主体类型 |
+| `actor_id` | UUID | NOT NULL | — | 行为主体 ID |
+| `action` | TEXT | NOT NULL | — | 事件枚举(见下) |
+| `target_type` | TEXT | NULL | NULL | 目标实体类型(squad/member/task/message/issue) |
+| `target_id` | UUID | NULL | NULL | 目标实体 ID |
+| `payload` | JSONB | NOT NULL | `'{}'` | 渲染快照(变更前后值、子任务计数),实体被删后仍可读 |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | 活动只增不改 |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | 约定列 |
+
+**`action` 枚举**:`squad_created` / `squad_updated` / `squad_archived` / `squad_restored` / `member_added` / `member_removed` / `role_changed` / `task_received` / `decompose_started` / `plan_submitted` / `plan_approved` / `plan_rejected` / `task_decomposed` / `task_dispatched` / `task_started` / `task_blocked` / `task_finished` / `task_failed` / `task_cancelled` / `task_aggregated` / `message_sent`(仅关键消息可选入时间线)。
+
+### 2.8 索引与约束
+
+```sql
+-- 小队列表与筛选
+CREATE UNIQUE INDEX uq_squads_name ON squads(workspace_id, name)
+  WHERE deleted_at IS NULL AND status = 'active';
+CREATE INDEX idx_squads_list ON squads(workspace_id, status, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_squads_kind ON squads(workspace_id, kind, status);
+
+-- 成员:当前在队 / 反查我加入的小队
+CREATE UNIQUE INDEX uq_squad_member_active ON squad_members(squad_id, member_id, member_type)
+  WHERE left_at IS NULL;
+CREATE INDEX idx_squad_members_active ON squad_members(squad_id, role) WHERE left_at IS NULL;
+CREATE INDEX idx_squad_members_member ON squad_members(member_type, member_id) WHERE left_at IS NULL;
+
+-- 任务:列表 / 拆解树 / 父子汇总 / member 工作台 / 活跃快查
+CREATE INDEX idx_squad_tasks_squad ON squad_tasks(workspace_id, squad_id, status, created_at DESC);
+CREATE INDEX idx_squad_tasks_tree ON squad_tasks(root_task_id, depth, created_at);
+CREATE INDEX idx_squad_tasks_parent ON squad_tasks(parent_task_id, status);
+CREATE INDEX idx_squad_tasks_assignee ON squad_tasks(assignee_type, assignee_id, status);
+CREATE INDEX idx_squad_tasks_active ON squad_tasks(squad_id)
+  WHERE status NOT IN ('done','failed','cancelled');
+
+-- 依赖:取前置集合 / 反查被阻塞者
+CREATE UNIQUE INDEX uq_task_dep ON squad_task_dependencies(task_id, depends_on_task_id);
+CREATE INDEX idx_dep_task ON squad_task_dependencies(task_id);
+CREATE INDEX idx_dep_blocker ON squad_task_dependencies(depends_on_task_id);
+
+-- 消息:流主查询 / 按任务聚合 / 收件箱 / 置顶
+CREATE INDEX idx_messages_squad ON squad_messages(workspace_id, squad_id, created_at) WHERE deleted_at IS NULL;
+CREATE INDEX idx_messages_task ON squad_messages(squad_id, task_id, created_at) WHERE task_id IS NOT NULL;
+CREATE INDEX idx_messages_recipient ON squad_messages(recipient_type, recipient_id, created_at);
+CREATE INDEX idx_messages_pinned ON squad_messages(squad_id) WHERE pinned = true;
+
+-- 时间线
+CREATE INDEX idx_activity_squad ON squad_activity(workspace_id, squad_id, created_at DESC);
+CREATE INDEX idx_activity_task ON squad_activity(squad_id, task_id, created_at) WHERE task_id IS NOT NULL;
+CREATE INDEX idx_activity_actor ON squad_activity(actor_type, actor_id, created_at);
+```
+
+### 2.9 与其他模块的外键关系
+
+| 来源(引用方) | 外键 | 目标 | 说明 |
+|----------------|------|------|------|
+| `squads.workspace_id` 等 | → `workspaces.id` | workspace.md | 隔离 |
+| `squad_members.member_id`、`squads.primary_leader_id`、`squad_tasks.orchestrator_id`/`assignee_id`、消息收发者、时间线 actor | → `members.id` | member.md | 多态主体(人/agent 对称) |
+| `squad_tasks.issue_id` | → `issues.id` | issue.md | 任务内容真源 |
+| `squad_tasks.run_id` | → `agent_runs.id` | runtime.md | agent 成员的执行实例 |
+| `squad_messages.attachment_ids` | → 附件 | attachment.md | 消息附件 |
+
+---
+
+## 3. 接口设计
+
+REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authorization: Bearer <token>`(成员会话 token 或 agent runtime 的 API token,见 auth.md);时间 RFC3339 UTC。统一错误信封 `{"error":{"code","message","details"}}`;列表游标分页 `{"data":[...],"next_cursor"}`;单资源端点直接返回资源对象本体。
+
+### 3.1 REST 端点清单
+
+| 方法 | 路径 | 说明 | 最低角色 |
+|------|------|------|----------|
+| GET | `/workspaces/{ws}/squads` | 列出小队(`status`/`kind`/`q`) | 成员 |
+| POST | `/workspaces/{ws}/squads` | 创建小队(可带初始成员) | 成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}` | 详情(含成员摘要、活跃任务计数) | 小队成员 / observer / admin |
+| PATCH | `/workspaces/{ws}/squads/{squad_id}` | 更新名称/描述/头像/编排开关 | 小队管理权限 / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/archive` | 归档(软解散) | 小队管理权限 / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/restore` | 恢复 | 小队管理权限 / admin |
+| GET | `/workspaces/{ws}/squads/{squad_id}/members` | 列出成员(`role`) | 小队成员 |
+| POST | `/workspaces/{ws}/squads/{squad_id}/members` | 添加成员(批量) | 小队管理权限 / admin |
+| PATCH | `/workspaces/{ws}/squads/{squad_id}/members/{member_id}` | 变更角色 | 小队管理权限 / admin |
+| DELETE | `/workspaces/{ws}/squads/{squad_id}/members/{member_id}` | 移除成员(置 `left_at`) | 小队管理权限 / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks` | 把任务交给小队(建根任务,唤醒 leader) | 对 issue 有分派权 / autopilot |
+| GET | `/workspaces/{ws}/squads/{squad_id}/tasks` | 列出小队任务(`status`) | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}` | 单任务详情 | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/tree` | 拆解树(整棵子任务,含依赖) | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/status` | 长任务状态查询(拆解/汇总进度) | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/stream` | SSE 流式订阅编排进度 | 小队成员 |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/subtasks` | leader 创建子任务(批量,含依赖) | orchestrator agent / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/plan/approve` | 人类批准拆解方案 | 人类成员 / observer / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/plan/reject` | 驳回方案(leader 重拆) | 人类成员 / observer / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/dispatch` | 分派已就绪的子任务 | orchestrator agent / admin |
+| POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/cancel` | 取消(级联取消未完成子任务) | 发起人 / observer / admin |
+| GET | `/workspaces/{ws}/squads/{squad_id}/messages` | 列出消息(`task_id`/`kind`) | 小队成员 |
+| POST | `/workspaces/{ws}/squads/{squad_id}/messages` | 发送消息 | 小队成员 |
+| GET | `/workspaces/{ws}/squads/{squad_id}/activity` | 协作时间线(`task_id`/`action`) | 小队成员 |
+
+### 3.2 请求/响应 JSON 示例
+
+**创建小队** `POST /api/v1/workspaces/{ws}/squads`
+```json
+// Request
+{ "name": "支付重构小队", "description": "负责支付链路的重构与回归验证",
+  "kind": "standing", "leader_mode": "single",
+  "require_plan_approval": true, "max_decompose_depth": 2,
+  "members": [
+    {"member_type": "agent", "member_id": "mem-leader-01", "role": "leader"},
+    {"member_type": "agent", "member_id": "mem-coder-02", "role": "member"},
+    {"member_type": "agent", "member_id": "mem-reviewer-03", "role": "member"},
+    {"member_type": "human", "member_id": "mem-zhang-09", "role": "observer"}
+  ] }
+// 201 Response
+{ "id": "sq-1f3a", "workspace_id": "ws-001", "name": "支付重构小队",
+  "description": "负责支付链路的重构与回归验证", "kind": "standing", "status": "active",
+  "leader_mode": "single", "primary_leader_id": "mem-leader-01",
+  "require_plan_approval": true, "max_decompose_depth": 2, "member_count": 4,
+  "leaders": [{"member_type": "agent", "member_id": "mem-leader-01", "name": "orchestrator"}],
+  "created_at": "2026-07-24T09:00:00Z", "updated_at": "2026-07-24T09:00:00Z" }
+```
+
+**把任务交给小队** `POST /api/v1/workspaces/{ws}/squads/{squad_id}/tasks`
+```json
+// Request
+{ "issue_id": "i-2201", "brief": "把订单结算从同步改为异步,并补齐幂等与对账。",
+  "priority": "high", "due_date": "2026-08-05T18:00:00Z" }
+// 202 Response(已受理,异步唤醒 leader)
+{ "id": "st-root-9001", "squad_id": "sq-1f3a", "issue_id": "i-2201",
+  "parent_task_id": null, "root_task_id": "st-root-9001", "depth": 0,
+  "title_snapshot": "订单结算异步化改造", "status": "pending",
+  "orchestrator_id": "mem-leader-01",
+  "status_url": "/api/v1/workspaces/ws-001/squads/sq-1f3a/tasks/st-root-9001/status",
+  "stream_url": "/api/v1/workspaces/ws-001/squads/sq-1f3a/tasks/st-root-9001/stream",
+  "created_at": "2026-07-24T09:05:00Z" }
+```
+> 服务端落库根任务后即返回 202,随后异步入队 leader 运行;客户端用 `status_url` 轮询或 `stream_url` 订阅拆解进度。
+
+**leader 创建子任务** `POST /api/v1/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/subtasks`
+```json
+// Request
+{ "plan_markdown": "拆为 3 个子任务:先做异步化与幂等(并行),再做对账,最后回归验证(依赖前三者)。",
+  "subtasks": [
+    {"title": "结算入口异步化 + 幂等键", "assignee": {"member_type": "agent", "member_id": "mem-coder-02"}, "stage": 1, "depends_on": []},
+    {"title": "对账批处理任务", "assignee": {"member_type": "agent", "member_id": "mem-coder-02"}, "stage": 1, "depends_on": []},
+    {"title": "回归与压测验证", "assignee": {"member_type": "human", "member_id": "mem-li-07"}, "stage": 2,
+     "depends_on": ["结算入口异步化 + 幂等键", "对账批处理任务"]}
+  ] }
+// 201 Response(require_plan_approval=true → 进入待审核)
+{ "root_task_id": "st-root-9001", "root_status": "awaiting_plan_approval",
+  "created_subtasks": [
+    {"id": "st-9002", "title": "结算入口异步化 + 幂等键", "assignee_id": "mem-coder-02", "assignee_type": "agent", "stage": 1, "depth": 1, "status": "pending"},
+    {"id": "st-9003", "title": "对账批处理任务", "assignee_id": "mem-coder-02", "assignee_type": "agent", "stage": 1, "depth": 1, "status": "pending"},
+    {"id": "st-9004", "title": "回归与压测验证", "assignee_id": "mem-li-07", "assignee_type": "human", "stage": 2, "depth": 1, "status": "pending"}
+  ],
+  "dependencies": [
+    {"task_id": "st-9004", "depends_on_task_id": "st-9002"},
+    {"task_id": "st-9004", "depends_on_task_id": "st-9003"}
+  ],
+  "awaiting_approval": true }
+```
+> `depends_on` 支持引用本批内子任务标题(创建时服务端解析为 id)或 `temp_ref` 临时编号;跨已有任务的依赖直接用 `task_id`。服务端做环检测,越层返回 422 `decompose_depth_exceeded`。
+
+**拆解树** `GET /api/v1/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/tree`
+```json
+{ "id": "st-root-9001", "title_snapshot": "订单结算异步化改造", "status": "in_progress", "depth": 0,
+  "progress": {"total": 3, "done": 1, "in_progress": 1, "pending": 1, "failed": 0},
+  "children": [
+    {"id": "st-9002", "title_snapshot": "结算入口异步化 + 幂等键", "status": "done",
+     "assignee": {"member_type": "agent", "member_id": "mem-coder-02", "name": "coder"}, "stage": 1,
+     "result_summary": "已引入消息队列与幂等键,单测通过。", "finished_at": "2026-07-24T11:20:00Z", "children": []},
+    {"id": "st-9003", "title_snapshot": "对账批处理任务", "status": "in_progress",
+     "assignee": {"member_type": "agent", "member_id": "mem-coder-02", "name": "coder"}, "stage": 1, "children": []},
+    {"id": "st-9004", "title_snapshot": "回归与压测验证", "status": "pending",
+     "assignee": {"member_type": "human", "member_id": "mem-li-07", "name": "李工"}, "stage": 2,
+     "depends_on": ["st-9002", "st-9003"], "blocked_by": ["st-9003"], "children": []}
+  ] }
+```
+> `blocked_by` 由服务端依据 `squad_task_dependencies` 实时计算:前置未 done 的任务列出阻塞者。
+
+**SSE 流式订阅** `GET /api/v1/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/stream`(`Accept: text/event-stream`)
+```
+id: 1
+event: task.status
+data: {"task_id":"st-root-9001","status":"decomposing","at":"2026-07-24T09:05:03Z"}
+
+id: 2
+event: subtask.created
+data: {"task_id":"st-9002","title":"结算入口异步化 + 幂等键","assignee_id":"mem-coder-02"}
+
+id: 3
+event: task.status
+data: {"task_id":"st-root-9001","status":"awaiting_plan_approval","at":"2026-07-24T09:06:10Z"}
+
+id: 4
+event: task.status
+data: {"task_id":"st-root-9001","status":"done","result_summary":"已完成异步化改造,对账通过,回归无异常。","at":"2026-07-24T15:40:00Z"}
+```
+> 每个事件带单调递增 `id`(即 seq);客户端断线重连用 `Last-Event-ID` 续订,服务端从事件缓冲重放缺口。事件类型:`task.status` / `subtask.created` / `subtask.assigned` / `plan.submitted` / `task.aggregated`。
+
+**发送小队消息** `POST /api/v1/workspaces/{ws}/squads/{squad_id}/messages`
+```json
+// Request
+{ "task_id": "st-9003", "recipient": {"member_type": "agent", "member_id": "mem-leader-01"},
+  "kind": "report",
+  "body_markdown": "对账批处理已完成首轮,发现 3 笔差异,详见日志。\n产物: <CI 运行链接>",
+  "attachment_ids": ["att-501"] }
+// 201 Response
+{ "id": "msg-7001", "squad_id": "sq-1f3a", "task_id": "st-9003",
+  "sender": {"member_type": "agent", "member_id": "mem-coder-02", "name": "coder"},
+  "recipient": {"member_type": "agent", "member_id": "mem-leader-01", "name": "orchestrator"},
+  "kind": "report",
+  "body_markdown": "对账批处理已完成首轮,发现 3 笔差异,详见日志。\n产物: <CI 运行链接>",
+  "body_html": "<p>对账批处理已完成首轮,发现 3 笔差异,详见日志。<br>产物: <a>…</a></p>",
+  "pinned": false, "created_at": "2026-07-24T13:10:00Z" }
+```
+> 定向消息 `recipient` 为空即广播全队。`kind='instruction'` 且发送者为 leader 时,member 端呈现为"待办指令"并触发对应运行。
+
+### 3.3 错误码表
+
+| HTTP | code | 场景 |
+|------|------|------|
+| 400 | `validation_error` | 字段缺失/超长/非法(名称为空、role 非法等) |
+| 401 | `unauthorized` | 缺失/过期/非法 token |
+| 403 | `forbidden` | 无权限(非成员操作小队、跨 workspace 访问、agent 自改所属小队成员) |
+| 404 | `not_found` | 小队/任务/成员/消息不存在或已删除 |
+| 409 | `conflict` | 非法状态迁移(对已完成任务再分派)、并发更新冲突、归档时仍有运行中任务 |
+| 409 | `squad_name_taken` | 同工作区活跃小队重名 |
+| 422 | `no_leader` | 变更后小队将没有 leader |
+| 422 | `decompose_depth_exceeded` | 拆解层级超过 `max_decompose_depth` |
+| 422 | `dependency_cycle` | 子任务依赖构成环 |
+| 422 | `assignee_not_member` | 分派对象不是当前小队成员 |
+| 422 | `member_has_active_task` | 移除的成员仍持有 in_progress 子任务 |
+| 429 | `rate_limited` | 触发速率限制(响应含 `Retry-After`) |
+| 500 | `internal_error` | 服务端异常(不泄露堆栈) |
+
+### 3.4 分页 / 鉴权 / 限流
+
+- **分页**:游标分页 `?limit=<1..100,默认30>&cursor=<opaque>`,响应 `{"data":[...],"next_cursor"}`;游标内部为 `(created_at, id)` keyset 编码,`next_cursor` 为 null 表示末页。
+- **鉴权**:小队读需 workspace 成员且为小队成员/observer 或 admin;小队写(创建/编辑/归档/增删成员)需小队管理权限或 admin;**agent 不能自改自己所属小队的成员构成**(防越权)。给小队分派任务需对目标 issue 有分派权(或 autopilot)。leader 拆解/分派/汇报由 agent runtime 持 API token 代该 leader 调用,服务端校验"调用 agent 确为该任务的 orchestrator"。审核方案/取消任务需人类成员、observer 或 admin。
+- **限流**:写端点按 principal 限流;agent runtime 的拆解/分派端点单独限流(防 leader 高频刷派),见 auth.md。
+
+### 3.5 实时通道(WebSocket 为主,SSE 用于编排长链路)
+
+**小队级实时(WebSocket)**:连接 `/ws`(握手鉴权见 auth.md),按 `workspace_id + member_id` 订阅;进入小队详情页时再订阅 `squad:{squad_id}` 频道。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `seq` 重放。
+
+| 事件 | 触发时机 | payload 关键字段 |
+|------|----------|------------------|
+| `squad_message.created` | 消息实时上墙 | `squad_id`, `message_id`, `kind`, `task_id` |
+| `squad_task.status_changed` | 子任务状态流转(驱动拆解树/看板刷新) | `task_id`, `old_status`, `new_status` |
+| `squad_activity.created` | 时间线增量 | `squad_id`, `action`, `task_id` |
+| `squad_member.changed` | 成员/角色变更 | `squad_id`, `member_id`, `role` |
+| `squad.updated` / `squad.archived` | 小队信息/状态变更 | `squad_id` |
+
+**长任务编排流(SSE)**:`GET .../tasks/{task_id}/stream` 专为"拆解—分派—汇总"长链路提供进度流(见 §3.2),每事件带 `id`(seq),断线用 `Last-Event-ID` 续订。
+
+**心跳与重连**:WebSocket 每 ~25s ping/pong,超时指数退避重连(带抖动);重连后带 `?since_seq=` 重放缺口,并对账一次活跃任务与未读。
+
+**降级**:WebSocket 不可用时,长任务进度退化为轮询 `status` 端点(3~5s),消息退化为列表轮询。
+> 选型理由:小队消息/状态变更是多向、双向、高频的小队级事件,走常驻 WebSocket;单任务编排进度是"围绕一个资源的单向流",用 SSE 更轻、天然支持断线续订,二者互补。
+
+---
+
+## 4. UI/UX 设计
+
+### 4.1 信息架构与页面布局
+
+```
+小队页(/squads)
+   ├── 顶部:[搜索] [形态▾] [状态▾]   [+ 新建小队]
+   └── 卡片:头像/名称/形态徽标(常设/临时)/状态点/进行中任务计数/成员头像墙(leader 带(L),人/agent 异图标)
+小队详情页(/squads/{id})
+   ├── 左:成员区(+ 添加成员)/ 当前任务(进度条 → 任务详情)
+   ├── 右上:协作时间线(按任务/成员/action 过滤)
+   └── 底部:消息区([全部|指令|汇报|共享上下文],📌 置顶上下文,输入框 @提及/关联任务/附件)
+小队任务详情页(/squads/{id}/tasks/{task_id})
+   ├── 顶部:状态 + 进度条 + [查看时间线][取消任务];审核横幅(若 awaiting_plan_approval)
+   └── [拆解树视图 | 看板视图]
+```
+
+### 4.2 关键组件
+
+- **成员头像墙**:每行头像 + 名称 + 角色徽标(组长/成员/观察员);agent 与人类图标区分;hover 出"改角色/移除"。
+- **拆解树**:缩进展示父子层级,每节点带状态图标/执行人/阶段/依赖("等待 st-9003")/结果摘要。
+- **看板视图**:按子任务状态分列拖拽(人工可改状态);agent 子任务由运行自动流转。
+- **审核横幅**:`require_plan_approval` 且处于 `awaiting_plan_approval` 时,顶部高亮"leader 已提交拆解方案,等待审核 [批准] [驳回]",方案 markdown 渲染在侧栏。
+- **消息区**:群聊式,按 `kind` 分 tab(指令=蓝、汇报=绿、闲聊=灰、系统=虚线);指令/汇报带"关联任务"标签;顶部固定共享上下文(置顶消息)。
+- **创建/编辑小队表单**:名称/描述/头像/形态/组长模式/`require_plan_approval`/最大拆解层级 + 成员混排选人(人或 agent,逐个设角色,至少一名组长否则"创建"置灰)。
+
+### 4.3 关键交互流程
+
+1. **组建小队**:小队页 → 新建 → 填名称/描述/形态 → 添加成员(混排选人与 agent,逐个设角色,至少一名组长)→ 可选开启"拆解需审核"→ 创建。
+2. **把大任务交给小队**:issue 详情或小分队列 →"分派给小队"→ 服务端建根 squad_task(`pending`)→ 返回 202 与 `status_url`/`stream_url`。
+3. **leader 自动拆解**:根任务唤醒 leader agent → `decomposing` → leader 读任务与共享上下文,调 `subtasks` 端点批量建子任务并声明依赖/阶段 → 写 `squad_activity`。
+4. **(可选)人类审核**:若开启审核,根任务进 `awaiting_plan_approval`,通知人类 → 人类在任务详情页看方案 → 批准(进分派)或驳回(leader 重拆,可附意见)。
+5. **分派与执行**:批准/无需审核后 `dispatching` → 无依赖(stage 1)子任务并行分派:agent member 入队运行、human member 收通知 → 各子任务 `in_progress`;有依赖(stage 2)等前置 done 自动解锁。
+6. **协作与汇报**:member 执行中通过小队消息协商/向 leader 汇报(`report`,关联子任务);遇阻置 `blocked` 并通知 leader。
+7. **leader 汇总**:某父任务全部直接子任务达终态 → 根任务 `aggregating` → leader 聚合各 `result_summary` 与产物,生成总结回写父 issue → 根任务 `done`(有失败则 `failed`,附原因)。
+8. **完成与归档**:发起人收到"小队任务完成"通知;临时小队(adhoc/task_scoped)可在任务完成后自动归档。
+
+### 4.4 状态流转
+
+**根任务 / 编排级状态机**:
+```
+[*] ──► pending ──leader 接管──► decomposing
+decomposing ──提交方案(需审核)──► awaiting_plan_approval ──批准──► dispatching
+decomposing ──无需审核──► dispatching
+awaiting_plan_approval ──驳回──► decomposing(重拆)
+dispatching ──子任务已分派──► in_progress ──全部子任务终态──► aggregating
+in_progress ──关键子任务受阻──► blocked ──解除──► in_progress
+aggregating ──汇总成功──► done;aggregating ──存在失败且不可恢复──► failed
+pending / decomposing / in_progress ──人为叫停──► cancelled(级联取消子任务)
+done / failed / cancelled ──► [*]
+```
+
+**member 子任务状态机**(同一 `status` 枚举,流转更简单):
+```
+[*] ──► pending ──依赖满足被分派──► dispatching ──member 领取/运行启动──► in_progress
+in_progress ──产出待审核(可选)──► (人审)──► done;in_progress ──执行成功──► done
+in_progress ──遇阻上报──► blocked ──解除──► in_progress;in_progress ──执行失败──► failed
+pending / dispatching ──父任务取消──► cancelled
+```
+> 状态迁移集中在服务端校验,非法迁移返回 409 `conflict`。前置任务 done 时,服务端扫描 `squad_task_dependencies.depends_on_task_id` 找出被解锁的子任务,若其全部前置已 done 且 stage 允许,则自动 `pending → dispatching`。
+
+**与 runtime 长任务状态机的衔接**:子任务分派给 agent member 时,服务端创建一条 runtime 运行记录(`agent_runs`,经 `run_id` 关联),其生命周期遵循 runtime 长任务状态机 `queued→claimed→running→completed|failed|cancelled`(runtime.md 内部含租约/心跳/requeue 等恢复态)。squad_task 观察该运行的终态:运行 `completed` → 子任务 `done`;运行 `failed` → 子任务 `failed`(写 `failure_reason`)。squad_task 的编排状态机是上层,运行状态机是下层执行契约,二者经 `run_id` 对齐。
+
+### 4.5 实时性与通知
+
+- **被分派子任务 → 通知 member**:agent member 入队运行(不依赖通知);human member 进收件箱 + 可选邮件/站内推送,含任务标题、来源小队、跳转链接。
+- **汇总完成 → 通知发起人**:根任务 `done`/`failed` 时通知原始分派人,附 `result_summary` 与跳转。
+- **方案待审核 → 通知审核人**:`awaiting_plan_approval` 时通知人类成员/observer 审批。
+- **受阻/失败 → 通知 leader 与发起人**:子任务 `blocked`/`failed` 时上报。
+- **去噪与回环抑制**:动作发起者不给自己发通知;agent 之间的指令/汇报不触发"会再次唤醒自身"的通知,防 leader↔member 死循环(沿用 comment-inbox 的回环抑制原则,见 §5.3)。
+- **通知偏好**:复用通知偏好矩阵,新增事件类型 `squad_task_assigned` / `squad_task_finished` / `squad_plan_review`,可分别开关站内/邮件。
+
+---
+
+## 5. 验收标准
+
+### 5.1 功能性
+
+- [ ] 小队为编排单元:`squad_tasks`(编排层)与 `issues`(内容层)解耦互链(经 `issue_id`);issue 管内容,squad_task 管层级/依赖/分派/状态机。
+- [ ] 拆解树用 `parent_task_id`/`root_task_id` 表达父子(冗余 root 加速整树聚合);依赖用独立 `squad_task_dependencies` 表(非 JSONB);`stage` 为粗粒度并行批次。
+- [ ] 把任务交给小队建根任务并返回 202 + `status_url`/`stream_url`;leader 异步唤醒拆解。
+- [ ] 子任务批量创建支持 `depends_on`(本批标题/`temp_ref`/既有 `task_id`);服务端环检测,成环返回 422 `dependency_cycle`;越层返回 422 `decompose_depth_exceeded`。
+- [ ] 前置任务 done 时自动解锁后置子任务(全部前置 done 且 stage 允许 → `pending→dispatching`)。
+- [ ] `require_plan_approval=true` 时拆解后停在 `awaiting_plan_approval`,人类批准进分派、驳回 leader 重拆。
+- [ ] 每个 active 小队至少一个 leader;变更后无 leader 返回 422 `no_leader`;分派非成员返回 422 `assignee_not_member`。
+- [ ] 取消级联取消未完成子任务、终止相关 agent 运行,已完成结果保留。
+- [ ] 临时小队(adhoc/task_scoped)任务完成后可自动归档;归档保留全部历史(成员/任务/消息/时间线),不做物理删除。
+- [ ] 协作时间线只增不改,`payload` 渲染快照在实体被删后仍可读;支持按任务/成员/action 过滤。
+
+### 5.2 性能
+
+- [ ] 小队任务列表/看板(万级)P95 < 200ms(命中 `idx_squad_tasks_squad`);拆解树拉取走 `idx_squad_tasks_tree`。
+- [ ] 前置完成解锁扫描走 `idx_dep_blocker`,无全表扫描;活跃任务校验走部分索引 `idx_squad_tasks_active`。
+- [ ] 拆解树/汇总进度查询 P95 < 150ms;游标分页在百万级行下稳定(无 OFFSET 深翻页)。
+
+### 5.3 安全
+
+- [ ] **运行中改成员护栏**:不可移除持有 in_progress 子任务的 member(返回 422 `member_has_active_task`);新增 member 仅对后续分派生效,不追溯改写已分派任务。
+- [ ] **防越权**:agent 不能自改所属小队成员构成(返回 403);leader 拆解/分派端点校验"调用 agent 确为该任务 orchestrator"。
+- [ ] **防回环**:leader↔member 的指令/汇报抑制"触发自身再运行"的通知;多 leader 模式设主 leader 收口汇总,避免分派冲突;默认推荐单 leader。
+- [ ] **频率上限**:agent runtime 的拆解/分派/汇报端点受限流约束,超限 429 + `Retry-After`,防 leader 高频刷派。
+- [ ] 状态迁移服务端集中校验,非法迁移返回 409;状态切换/分派/角色变更/叫停均写 auth.md 的 append-only 审计日志(`actor_type` 区分人/agent/system)。
+- [ ] 跨 workspace 访问返回 404(不泄露存在性);所有查询隐式带 `workspace_id`。
+
+### 5.4 实时
+
+- [ ] 小队级事件(`squad_message.created`/`squad_task.status_changed`/`squad_activity.created`/`squad_member.changed`)经 WebSocket 实时推送(带 `seq`),在线成员 1s 内收到。
+- [ ] 编排长链路经 SSE `stream` 推送 `task.status`/`subtask.created`/`plan.submitted`/`task.aggregated`,断线凭 `Last-Event-ID` 续订。
+- [ ] 客户端断线重连凭 `seq` 重放缺口,并对账活跃任务与未读,无丢失无重复。
+- [ ] WebSocket 不可用时,长任务进度降级轮询 `status`(3~5s)、消息降级列表轮询,功能等价。
