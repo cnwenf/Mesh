@@ -464,7 +464,7 @@ Content-Type: application/json
 
 #### WebSocket 实时网关帧协议(统一实时通道)
 
-连接 `/ws?token=<JWT>`(握手鉴权见 auth.md);连接后按主题订阅:
+连接 `/ws`(握手鉴权见 auth.md;**禁止在 URL query 参数中传递 token**,应使用 WebSocket 子协议或连接后首帧认证,避免 token 落入访问日志与中间代理);连接后按主题订阅:
 ```json
 {"type": "subscribe", "topic": "chat_session:ses-b7e4..."}
 {"type": "subscribe", "topic": "issue:iss-9a1c..."}
@@ -524,7 +524,7 @@ Content-Type: application/json
 
 ### 4.2 关键组件
 
-- **上下文关联选择器**:搜索 issue/项目,单选关联;提示"agent 将读取关联上下文作为背景"。服务端把上下文快照注入为 system 消息,保证 agent 回答紧扣任务。
+- **上下文关联选择器**:搜索 issue/项目,单选关联;提示"agent 将读取关联上下文作为背景"。服务端把上下文快照注入为 system 消息,保证 agent 回答紧扣任务。**注入的 issue 上下文(标题/描述/评论/附件)显式标记为不可信数据并做结构隔离**(见 README §6「不可信内容处理」),防止恶意 issue 内容劫持 agent 行为。
 - **流式气泡**:agent 回复逐 token 打字机显示;生成中输入区"停止"按钮全程可用;完成后该条尾部"重新生成"。
 - **候选回复**:多候选用 `‹ 1/3 ›` 翻页,并提供"使用此条";regenerate 不覆盖旧候选,全部可回看回选。
 - **评论区**:agent 评论带 AI 徽章,可展开"生成方式/运行摘要";主评论上"解决线程"按钮;解决后整线程折叠进"已解决"区。
