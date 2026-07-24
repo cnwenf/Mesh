@@ -461,4 +461,5 @@ CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
 - [ ] **大文件分片/内存安全(流式读写,不全量载入)**:源文件解析(CSV 逐行 / JSON 流式)与导出生成(游标分批查询 + 流式写出)全程流式;在 README §10 数据规模(单作业 10 万行)下内存占用平稳,不因单作业 OOM;错误报告流式写附件,行内 `error_report` 有上限。
 - [ ] **幂等**:重复 `run`/`validate` 经状态守卫无副作用;`Idempotency-Key` 重复建作业返回首次结果;outbox 重投不产生重复落库(幂等键 + 状态守卫,README §6.5/§6.6)。
 - [ ] **属主/权限**:非 requested_by/admin 无法查看/下载他人作业(`403`);导入需目标写权限、导出需范围读权限。
+- [ ] **源附件属主校验(M-2)**:`source_attachment_id` 必须是调用者已上传(`uploader_id` = 调用者)或调用者对附件链接目标有读权限的附件,否则 `403`;不可凭附件 ID 引入他人上传的文件(与 attachment.md complete/abort 属主校验先例一致)。
 - [ ] **可观测**:建作业/校验/执行/失败/下载均有审计日志;错误信息不泄露堆栈/SQL/内部 ID(README §6.14)。
