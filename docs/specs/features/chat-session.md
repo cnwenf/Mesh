@@ -130,7 +130,7 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 | `context_issue_id` | UUID | NULL,复合 FK `(workspace_id, context_issue_id) → issues(workspace_id, id)` | NULL | 上下文关联 issue |
 | `context_project_id` | UUID | NULL,复合 FK `(workspace_id, context_project_id) → projects(workspace_id, id)` | NULL | 上下文关联项目 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','archived','deleted') | `'active'` | 会话状态 |
-| `is_pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶 |
+| `is_pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶(**R2:置顶真源为 README §6.19 统一 `favorites` 表,`target_type='chat_session'`;本字段保留为兼容快照,由服务层与 favorites 双向同步,读取以 favorites 为准**) |
 | `last_message_at` | TIMESTAMPTZ | NULL | NULL | 最近一条消息时间(排序用) |
 | `last_message_preview` | TEXT | NULL | NULL | 最近消息摘要(列表展示) |
 | `message_count` | INT | NOT NULL,CHECK (>= 0) | `0` | 消息数 |
@@ -149,9 +149,9 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 | `content` | TEXT | NOT NULL | `''` | 消息内容(markdown) |
 | `generation_id` | UUID | NULL | NULL | 本次生成标识(对应 §3.3 的 generation,用于 stream_url / stop) |
 | `generation_status` | TEXT | NOT NULL,CHECK IN ('streaming','done','failed','interrupted') | `'done'` | 生成状态(user 消息恒为 done) |
-| `parent_id` | UUID | NULL,FK→chat_messages(id)(同表自引用) | NULL | 候选回复:指向其所回答的用户消息 |
+| `parent_id` | UUID | NULL,**同会话复合 FK** `(workspace_id, session_id, parent_id)→chat_messages(workspace_id, session_id, id)` ON DELETE SET NULL (parent_id)(README §6.2 第 7 条:父消息必须同会话,数据库层强制) | NULL | 候选回复:指向其所回答的用户消息 |
 | `selected_candidate` | BOOLEAN | NOT NULL | `true` | 是否为当前选中的候选回复 |
-| `quote_message_id` | UUID | NULL,FK→chat_messages(id)(同表自引用) | NULL | 引用的消息 |
+| `quote_message_id` | UUID | NULL,**同会话复合 FK** `(workspace_id, session_id, quote_message_id)→chat_messages(workspace_id, session_id, id)` ON DELETE SET NULL (quote_message_id)(README §6.2 第 7 条:引用消息必须同会话,数据库层强制) | NULL | 引用的消息 |
 | `prompt_tokens` | INT | NULL | NULL | 输入 token 计数 |
 | `completion_tokens` | INT | NULL | NULL | 输出 token 计数 |
 | `error_message` | TEXT | NULL | NULL | 失败原因 |
@@ -161,6 +161,8 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 > **候选回复设计**:针对同一条用户消息,多个 agent 候选回复都挂在同一 `parent_id` 下;其中仅一条 `selected_candidate=true`;regenerate 时新建候选并把选中项切到新候选,旧候选保留,可翻页回选(不覆盖、不修改旧消息)。
+>
+> **同会话约束(README §6.2 第 7 条)**:候选回复(`parent_id`)与引用(`quote_message_id`)必须与当前消息**同属一个 session**——以**重叠唯一键 + 复合 FK** 在数据库层强制(被引用键 `UNIQUE (workspace_id, session_id, id)`,见 §2.8;引用方 `(workspace_id, session_id, parent_id/quote_message_id)→chat_messages(workspace_id, session_id, id)`)。**跨会话**的父消息/引用在 INSERT 时即被数据库拒绝,而非仅靠服务层校验。
 >
 > **附件**:消息附件经统一 `attachment_links`(`linked_type='chat_message'`,`linked_id → chat_messages.id`)关联,见 §2.4 与 attachment.md;`chat_messages` 上不设附件列。
 
@@ -190,6 +192,7 @@ CREATE INDEX idx_chat_sessions_owner_agent ON chat_sessions(owner_id, agent_id, 
 CREATE INDEX idx_chat_sessions_context_issue ON chat_sessions(context_issue_id) WHERE context_issue_id IS NOT NULL;
 
 -- 消息:历史分页 / 候选回复 / 当前正在生成(并发守卫)
+CREATE UNIQUE INDEX uq_chat_messages_ws_session_id ON chat_messages(workspace_id, session_id, id);  -- 供 parent_id/quote_message_id 同会话复合 FK 引用(README §6.2 第 7 条)
 CREATE INDEX idx_chat_messages_session_time ON chat_messages(session_id, created_at DESC);
 CREATE INDEX idx_chat_messages_parent ON chat_messages(parent_id) WHERE parent_id IS NOT NULL;
 CREATE INDEX idx_chat_messages_streaming ON chat_messages(session_id) WHERE generation_status = 'streaming';
@@ -207,6 +210,8 @@ CREATE INDEX idx_chat_messages_streaming ON chat_messages(session_id) WHERE gene
 | `chat_sessions.(workspace_id, context_issue_id)` | → `issues(workspace_id, id)` | issue.md | 上下文关联(复合 FK,NULL 时不约束) |
 | `chat_sessions.(workspace_id, context_project_id)` | → `projects(workspace_id, id)` | project.md | 上下文关联(复合 FK) |
 | `chat_messages.(workspace_id, session_id)` | → `chat_sessions(workspace_id, id)` | 本 Spec | 消息归属会话(复合 FK) |
+| `chat_messages.(workspace_id, session_id, parent_id)` | → `chat_messages(workspace_id, session_id, id)` | 本 Spec | 候选回复同会话自引用(重叠复合 FK,README §6.2 第 7 条;ON DELETE SET NULL (parent_id)) |
+| `chat_messages.(workspace_id, session_id, quote_message_id)` | → `chat_messages(workspace_id, session_id, id)` | 本 Spec | 引用消息同会话自引用(重叠复合 FK,README §6.2 第 7 条;ON DELETE SET NULL (quote_message_id)) |
 | 消息附件 | `attachment_links(linked_type='chat_message', linked_id)` + `workspace_id` | attachment.md | 统一附件;多态逻辑外键(README §6.2 第 4 条),不建物理 FK |
 | 形态 B 评论/提及/通知 | 引用 `comments` / `comment_mentions` / `notifications` 等 | comment-inbox.md | 唯一权威,本 Spec 仅引用,不持有其 FK |
 
@@ -370,7 +375,7 @@ Authorization: Bearer <JWT>
 ```
 ```json
 // 202 Response
-{ "generation_id": "gen-42", "message_id": "m-9", "generation_status": "interrupted" }
+{ "data": { "generation_id": "gen-42", "message_id": "m-9", "generation_status": "interrupted" } }
 ```
 服务端收到后:停止上游模型生成 → 在 SSE 流上发出 `message.interrupted` → 关闭该流。**stop 必须幂等:重复 stop 返回 200/202 且无副作用**,确保"流断了也能停"。
 
@@ -535,6 +540,7 @@ done ──► [*]
 - [ ] **身份不可冒充**:agent 消息恒带 AI 徽章,`member_type` 由服务端 JOIN `members` 解析(API 快照标注"真源为 members");**存储层无任何人类/agent 判别冗余列**;操作可审计。
 - [ ] **防回环**:形态 B 的 agent 互提循环防护由 **comment-inbox.md §3.5 与 README §6.9 护栏**(链深度/频率)统一实现,本 Spec 不另建机制。
 - [ ] **跨租户复合 FK(集成测试 T1)**:`chat_sessions` / `chat_messages` 的 owner/agent/context 引用均为复合 FK `(workspace_id, x_id)`,跨工作区插入被数据库约束拒绝;A 区凭证访问 B 区会话返回 403/404。
+- [ ] **同会话约束(README §6.2 第 7 条 / §9 T1 同类)**:`parent_id` / `quote_message_id` 经**重叠复合 FK** `(workspace_id, session_id, parent_id/quote_message_id)→chat_messages(workspace_id, session_id, id)` 强制同 session;构造**跨会话**的父消息/引用在 INSERT 时被数据库拒绝(被引用唯一键 `uq_chat_messages_ws_session_id`,§2.8)。
 - [ ] 会话仅 owner 可访问;附件经 attachment.md 签名 URL 访问,不暴露存储绝对路径;附件超限/类型非法按 attachment.md 错误码返回;发送限流,超限 429。
 - [ ] @提及、删除等写操作走 auth.md 限流与审计。
 

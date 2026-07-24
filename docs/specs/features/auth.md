@@ -310,8 +310,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | HTTP | code | 场景 |
 |------|------|------|
 | 400 | `validation_error` | 字段非法、密码太弱 |
-| 401 | `unauthenticated` | 凭证缺失/无效/过期 |
-| 401 | `email_not_verified` | 需先验证邮箱 |
+| 401 | `unauthorized` | 凭证缺失/无效/过期(README §6.14 canonical code) |
+| 401 | `unauthorized` | 邮箱未验证(`details.reason='email_not_verified'`;README §6.14 canonical code) |
 | 403 | `forbidden` | 角色/scope 不足 |
 | 404 | `not_found` | 资源不存在 |
 | 409 | `conflict` | 邮箱已注册、唯一 owner 不可移除 |
@@ -392,6 +392,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 未验证邮箱账号登录受限(如不可创建工作区),验证后解除。
 - [ ] 登录成功颁发短期 access JWT + 长期 refresh;refresh 仅存 SHA-256 哈希。
 - [ ] 登录失败统一返回 422 `invalid_credentials`,不区分邮箱是否存在;恒定时间比较防时序攻击。
+- [ ] **401 canonical code(README §6.14)**:凭证缺失/无效/过期与邮箱未验证统一返回 401 `unauthorized`(未验证以 `details.reason='email_not_verified'` 区分,不另立 code)。
 - [ ] 失败计数达阈值返回 423 `account_locked`。
 - [ ] access 过期可用 refresh 静默续期;refresh 轮换后旧的立即失效(防重放)。
 - [ ] 登出撤销当前 refresh;登出所有批量撤销;密码变更使全部 refresh 会话失效。

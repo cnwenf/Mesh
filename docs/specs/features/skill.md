@@ -109,7 +109,7 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 | `slug` | TEXT | NOT NULL,CHECK (`^[a-z0-9][a-z0-9-]*$`) | — | URL / 匹配用短名 |
 | `summary` | TEXT | NOT NULL | — | 一句话摘要(用于发现与匹配) |
 | `status` | TEXT | NOT NULL,CHECK IN ('draft','published','deprecated','disabled') | `'draft'` | 生命周期状态 |
-| `current_version_id` | UUID | NULL,FK→skill_versions(id) | NULL | 当前指向版本(NULL=尚无版本);`skill_versions` 经 `skill_id` 隶属同一 workspace(隔离随 skill 传递) |
+| `current_version_id` | UUID | NULL,**同 skill 复合 FK `(workspace_id, id, current_version_id) → skill_versions(workspace_id, skill_id, id)` ON DELETE SET NULL (current_version_id)** | NULL | 当前指向版本(NULL=尚无版本);**current_version 必须属于同一 skill——由重叠复合 FK 在数据库层强制(README §6.2 第 7 条:被引用表建 `UNIQUE(workspace_id, skill_id, id)`,引用方以 `(workspace_id, id, current_version_id)` 重叠复合 FK 引用);置空仅 `current_version_id` 列、`workspace_id` 保持不动(PG16 列级 SET NULL,第 6 条)** |
 | `required_capabilities` | JSONB | NOT NULL | `'[]'` | 所需工具/权限声明数组 |
 | `tags` | TEXT[] | NOT NULL | `'{}'` | 标签,用于发现 |
 | `icon` | TEXT | NULL | NULL | 图标标识 |
@@ -140,7 +140,7 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 
 > **不可变约束**:版本一旦 `status='published'` 即冻结,任何修改必须新建版本。`content_hash` 用于检测来源是否真的有变化(避免重复发版)。
 >
-> **复合 FK 引用前提(README §6.2)**:`skill_versions` 被 `skills.current_version_id`、`skill_installations.skill_version_id`、`agent_skills.skill_version_id` 跨表引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
+> **复合 FK 引用前提(README §6.2)**:`skill_versions` 被 `skills.current_version_id`、`skill_installations.skill_version_id`、`agent_skills.skill_version_id` 跨表引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**;**另建 `UNIQUE (workspace_id, skill_id, id)`(重叠唯一键,供 `skills.current_version_id`、`skill_installations`、`agent_skills` 的"同 skill 版本"重叠复合 FK 引用——保证引用行与被引用版本属于同一 skill,README §6.2 第 7 条)**。
 >
 > **入队版本快照(README §6.11,必须实现)**:技能版本不可变。任务入队时,该 agent 当时绑定的各技能版本被冻结进 `task_executions.config_snapshot.skill_versions`(`{"<skill_id>": "<skill_version_id>", ...}`);**绑定变更、安装版本切换、回滚、灰度都只影响后续入队,不改动在途执行**——在途执行永远运行其入队时刻快照里的版本,保证可复现、可审计。
 
@@ -151,7 +151,7 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 安装到的 workspace |
 | `skill_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_id) → skill(workspace_id, id)`** | — | 安装的技能(README §6.2) |
-| `skill_version_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_version_id) → skill_versions(workspace_id, id)`** | — | 当前安装的版本 |
+| `skill_version_id` | UUID | NOT NULL,**同 skill 复合 FK `(workspace_id, skill_id, skill_version_id) → skill_versions(workspace_id, skill_id, id)`** | — | 当前安装的版本(**安装版本必须属于所装 skill**——重叠复合 FK 在数据库层强制,README §6.2 第 7 条) |
 | `scope` | TEXT | NOT NULL,CHECK IN ('workspace','agent') | `'workspace'` | 安装范围 |
 | `agent_id` | UUID | NULL,**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`** | NULL | `scope='agent'` 时指定的 agent(README §6.2) |
 | `install_status` | TEXT | NOT NULL,CHECK IN ('installed','updated_available','disabled') | `'installed'` | 安装状态 |
@@ -165,7 +165,7 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 
 **CHECK(应用层 + 触发器)**:`scope='agent'` 时 `agent_id` 必须非空;`granted_capabilities ⊆ skill_versions.required_capabilities`(只授予声明过的权限子集)。
 
-> **工具权限语义(MES-2 必修-3:工具权限并入能力语义,不再另设 `tools`/`agent_tool_bindings` 表)**:`required_capabilities`/`granted_capabilities` 数组的每一项既可以是纯字符串能力键(如 `"exec:shell"`),也可以是对象 `{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}`;**工具级权限分级(read_only / write / confirm_required)即在此表达**:未标注 `permission` 的能力默认按 `confirm_required` 处理(高风险默认需人工确认);执行时命中 `confirm_required` 的工具调用经统一 `approvals` 闸门(README §6.10)批准后方可执行。入队时授权清单(含 permission)冻结进 `task_executions.config_snapshot.tool_grants`(README §6.11)。
+> **工具权限语义(MES-2 必修-3:工具权限并入能力语义,不再另设 `tools`/`agent_tool_bindings` 表)**:`required_capabilities`/`granted_capabilities` 数组的每一项既可以是纯字符串能力键(如 `"exec:shell"`),也可以是对象 `{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}`;**工具级权限分级(read_only / write / confirm_required)即在此表达**:未标注 `permission` 的能力默认按 `confirm_required` 处理(高风险默认需人工确认);执行时命中 `confirm_required` 的工具调用经统一 `approvals` 闸门(README §6.10)批准后方可执行。入队时授权清单(含 permission)冻结进 `task_executions.config_snapshot.capability_grants`(README §6.11,工具目录主键真源已删除,统一为版本化 capability key + permission)。
 
 > **复合 FK 引用前提(README §6.2)**:`skill_installations` 被 `agent_skills.skill_installation_id` 引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
 
@@ -178,13 +178,16 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
 | `agent_id` | UUID | NOT NULL,**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`** | — | agent(README §6.2) |
-| `skill_installation_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_installation_id) → skill_installations(workspace_id, id)`** | — | 指向安装记录 |
-| `skill_version_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_version_id) → skill_versions(workspace_id, id)`** | — | 绑定的具体版本(可与安装当前版本不同,支持灰度/回滚);**入队时此版本 id 被冻结进 `task_executions.config_snapshot.skill_versions`(README §6.11)** |
+| `skill_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_id) → skills(workspace_id, id)`** | — | 所绑技能(冗余父键,供下行 installation/version 的重叠复合 FK 共享同一 `skill_id`,README §6.2 第 7 条) |
+| `skill_installation_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_installation_id, skill_id) → skill_installations(workspace_id, id, skill_id)`** | — | 指向安装记录(重叠复合 FK,与下行 `skill_version_id` 共同保证绑定版本属于该安装所装 skill,README §6.2 第 7 条) |
+| `skill_version_id` | UUID | NOT NULL,**同 skill 复合 FK `(workspace_id, skill_id, skill_version_id) → skill_versions(workspace_id, skill_id, id)`** | — | 绑定的具体版本(可与安装当前版本不同,支持灰度/回滚);**绑定版本必须属于该安装所装 skill——重叠复合 FK 链同时保证 installation 与 version 属于同一 skill(README §6.2 第 7 条);入队时此版本 id 被冻结进 `task_executions.config_snapshot.skill_versions`(README §6.11)** |
 | `enabled` | BOOLEAN | NOT NULL | `true` | 绑定级启用开关 |
 | `auto_trigger` | BOOLEAN | NOT NULL | `true` | 是否允许自动触发 |
 | `priority` | INT | NOT NULL,CHECK (priority BETWEEN 0 AND 1000) | `100` | 自动触发优先级,数值大者优先 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+> **同 skill 重叠复合 FK 链(README §6.2 第 7 条)**:`agent_skills` 冗余父键 `skill_id`,并以两条重叠复合 FK 引用——`(workspace_id, skill_installation_id, skill_id) → skill_installations(workspace_id, id, skill_id)` 与 `(workspace_id, skill_id, skill_version_id) → skill_versions(workspace_id, skill_id, id)`。两条 FK 共享同一 `skill_id`,在数据库层同时保证「绑定的 installation」与「绑定的 version」属于**同一个 skill**:绑定别 skill 的版本、或与安装不同 skill 的版本,均在 INSERT 被拒绝。
 
 ### 2.6 表:`skill_sources`(来源)
 
@@ -234,6 +237,12 @@ ALTER TABLE skill_versions ADD CONSTRAINT uq_skill_version_ws_id UNIQUE (workspa
 ALTER TABLE skill_sources ADD CONSTRAINT uq_skill_source_ws_id UNIQUE (workspace_id, id);
 ALTER TABLE skill_installations ADD CONSTRAINT uq_skill_installation_ws_id UNIQUE (workspace_id, id);
 
+-- 同 skill 重叠唯一键(README §6.2 第 7 条):供"同 skill 版本"重叠复合 FK 引用
+-- skill_versions(workspace_id, skill_id, id) 供 skills.current_version_id / skill_installations / agent_skills 的 skill_version 引用
+ALTER TABLE skill_versions ADD CONSTRAINT uq_skill_version_ws_skill_id UNIQUE (workspace_id, skill_id, id);
+-- skill_installations(workspace_id, id, skill_id) 供 agent_skills 的 installation 引用(共享 skill_id 保证同 skill)
+ALTER TABLE skill_installations ADD CONSTRAINT uq_skill_installation_ws_skill_id UNIQUE (workspace_id, id, skill_id);
+
 -- 同 workspace 内 slug 唯一(软删除范围内)
 CREATE UNIQUE INDEX uq_skill_workspace_slug ON skills(workspace_id, slug) WHERE deleted_at IS NULL;
 CREATE INDEX idx_skill_workspace_status ON skills(workspace_id, status);
@@ -272,6 +281,11 @@ CREATE INDEX idx_trigger_keyword ON skill_triggers USING GIN (to_tsvector('simpl
 | `skill.created_by` / `skill_versions.created_by` / `skill_installations.installed_by` | 复合 FK → `members(workspace_id, id)` | member.md | 创建/安装/审批者(人类成员;README §6.1/§6.2) |
 | `skill_installations.agent_id` / `agent_skills.agent_id` | 复合 FK → `agents(workspace_id, id)` | agent.md | 明确指向某 agent 定义(README §6.2) |
 | `skill_sources.id` / `skills.id` / `skill_versions.id` / `skill_installations.id` | 被引用方建 `UNIQUE(workspace_id, id)` | 本模块 | 供上述复合 FK 引用(README §6.2) |
+| `skills.current_version_id` | 同 skill 复合 FK `(workspace_id, id, current_version_id) → skill_versions(workspace_id, skill_id, id)`(`ON DELETE SET NULL (current_version_id)` 列级) | 本模块 | current_version 必须属于同一 skill,重叠复合 FK 强制(README §6.2 第 7/6 条);引用 `skill_versions.UNIQUE(workspace_id, skill_id, id)` |
+| `skill_installations.skill_version_id` | 同 skill 复合 FK `(workspace_id, skill_id, skill_version_id) → skill_versions(workspace_id, skill_id, id)` | 本模块 | 安装版本必须属于所装 skill(README §6.2 第 7 条) |
+| `agent_skills.skill_id` | 复合 FK `(workspace_id, skill_id) → skills(workspace_id, id)` | 本模块 | 冗余父键,供下行重叠复合 FK 共享(README §6.2 第 7 条) |
+| `agent_skills.skill_installation_id` | 复合 FK `(workspace_id, skill_installation_id, skill_id) → skill_installations(workspace_id, id, skill_id)` | 本模块 | installation 属于同一 skill;引用 `skill_installations.UNIQUE(workspace_id, id, skill_id)`(README §6.2 第 7 条) |
+| `agent_skills.skill_version_id` | 同 skill 复合 FK `(workspace_id, skill_id, skill_version_id) → skill_versions(workspace_id, skill_id, id)` | 本模块 | 绑定版本必须属于该安装所装 skill,重叠复合 FK 链同时保证 installation 与 version 同 skill(README §6.2 第 7 条) |
 | `skill_scripts.content_ref` / `skill_references.content_ref` | → 对象存储 | attachment.md | 脚本/资料正文 |
 | `agent_skills.skill_version_id`(入队快照) | → `task_executions.config_snapshot.skill_versions` | runtime.md | 入队时冻结绑定版本(README §6.11);脚本越权由运行时拦截 |
 
@@ -320,15 +334,17 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 }
 // 201 Response
 {
-  "id": "5f2a1c00-1111-4a2b-9c3d-000000000001",
-  "workspace_id": "7ea1891c-0000-0000-0000-000000000001",
-  "source_id": "9b0d0000-0000-0000-0000-000000000002",
-  "name": "代码评审规范", "slug": "code-review-sop",
-  "summary": "对改动进行安全、质量、可维护性评审的标准流程",
-  "status": "draft", "current_version_id": null,
-  "required_capabilities": ["read:code", "write:comment"],
-  "tags": ["review", "quality"],
-  "created_at": "2026-07-24T12:00:00Z", "updated_at": "2026-07-24T12:00:00Z"
+  "data": {
+    "id": "5f2a1c00-1111-4a2b-9c3d-000000000001",
+    "workspace_id": "7ea1891c-0000-0000-0000-000000000001",
+    "source_id": "9b0d0000-0000-0000-0000-000000000002",
+    "name": "代码评审规范", "slug": "code-review-sop",
+    "summary": "对改动进行安全、质量、可维护性评审的标准流程",
+    "status": "draft", "current_version_id": null,
+    "required_capabilities": ["read:code", "write:comment"],
+    "tags": ["review", "quality"],
+    "created_at": "2026-07-24T12:00:00Z", "updated_at": "2026-07-24T12:00:00Z"
+  }
 }
 ```
 
@@ -337,27 +353,29 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 // Request
 { "source_type": "url", "uri": "<内部仓库地址>/skills/release-checklist.git", "ref": "v1.3.0" }
 // 202 Response
-{ "task_id": "c1a00000-0000-0000-0000-000000000099", "status": "parsing",
-  "stage": "manifest_parse", "created_at": "2026-07-24T12:01:00Z" }
+{ "data": { "task_id": "c1a00000-0000-0000-0000-000000000099", "status": "parsing",
+  "stage": "manifest_parse", "created_at": "2026-07-24T12:01:00Z" } }
 ```
 
 **查询导入进度(待人工审批脚本)** `GET /api/v1/workspaces/{ws}/skills/import/{task_id}`
 ```json
 {
-  "task_id": "c1a00000-0000-0000-0000-000000000099",
-  "status": "awaiting_review", "stage": "sandbox_preview",
-  "preview": {
-    "name": "发布检查清单", "version": "1.3.0", "summary": "发布前的标准检查流程",
-    "instructions_preview": "## 发布前检查\n1. 运行回归测试...",
-    "scripts": [
-      {"path": "scripts/check.sh", "runtime": "shell", "entrypoint": true,
-       "required_capabilities": ["exec:shell", "net:outbound"]}
-    ],
-    "references": [{"path": "docs/runbook.md", "media_type": "text/markdown"}],
-    "requested_capabilities": ["exec:shell", "net:outbound"]
-  },
-  "requires_approval": true,
-  "created_at": "2026-07-24T12:01:00Z", "updated_at": "2026-07-24T12:01:20Z"
+  "data": {
+    "task_id": "c1a00000-0000-0000-0000-000000000099",
+    "status": "awaiting_review", "stage": "sandbox_preview",
+    "preview": {
+      "name": "发布检查清单", "version": "1.3.0", "summary": "发布前的标准检查流程",
+      "instructions_preview": "## 发布前检查\n1. 运行回归测试...",
+      "scripts": [
+        {"path": "scripts/check.sh", "runtime": "shell", "entrypoint": true,
+         "required_capabilities": ["exec:shell", "net:outbound"]}
+      ],
+      "references": [{"path": "docs/runbook.md", "media_type": "text/markdown"}],
+      "requested_capabilities": ["exec:shell", "net:outbound"]
+    },
+    "requires_approval": true,
+    "created_at": "2026-07-24T12:01:00Z", "updated_at": "2026-07-24T12:01:20Z"
+  }
 }
 ```
 
@@ -368,10 +386,10 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
   "granted_capabilities": ["exec:shell"], "decision": "approve",
   "comment": "拒绝出站网络,仅允许只读 shell" }
 // 200 Response
-{ "skill_id": "5f2a1c00-0000-4a2b-9c3d-000000000010",
+{ "data": { "skill_id": "5f2a1c00-0000-4a2b-9c3d-000000000010",
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000020",
   "status": "published", "granted_capabilities": ["exec:shell"],
-  "reviewed_by": "mem-uuid", "reviewed_at": "2026-07-24T12:05:00Z" }
+  "reviewed_by": "mem-uuid", "reviewed_at": "2026-07-24T12:05:00Z" } }
 ```
 
 **安装到指定 scope** `POST /api/v1/workspaces/{ws}/skill-installations`
@@ -381,13 +399,13 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000020",
   "scope": "workspace", "auto_update": false }
 // 201 Response
-{ "id": "a1000000-0000-0000-0000-000000000030",
+{ "data": { "id": "a1000000-0000-0000-0000-000000000030",
   "workspace_id": "7ea1891c-0000-0000-0000-000000000001",
   "skill_id": "5f2a1c00-0000-4a2b-9c3d-000000000010",
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000020",
   "scope": "workspace", "agent_id": null, "install_status": "installed",
   "auto_update": false, "granted_capabilities": ["exec:shell"],
-  "installed_at": "2026-07-24T12:06:00Z" }
+  "installed_at": "2026-07-24T12:06:00Z" } }
 ```
 
 **绑定到 agent** `POST /api/v1/workspaces/{ws}/agents/{agent_id}/skills`
@@ -397,12 +415,12 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000020",
   "auto_trigger": true, "priority": 120 }
 // 201 Response
-{ "id": "b2000000-0000-0000-0000-000000000040",
+{ "data": { "id": "b2000000-0000-0000-0000-000000000040",
   "agent_id": "d3000000-0000-0000-0000-000000000050",
   "skill_installation_id": "a1000000-0000-0000-0000-000000000030",
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000020",
   "enabled": true, "auto_trigger": true, "priority": 120,
-  "created_at": "2026-07-24T12:07:00Z" }
+  "created_at": "2026-07-24T12:07:00Z" } }
 ```
 
 **列出某 agent 已装技能(分页)** `GET /api/v1/workspaces/{ws}/agents/{agent_id}/skills?limit=20`
@@ -426,10 +444,10 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 { "target_version_id": "8d3b0000-0000-0000-0000-000000000019",
   "reason": "1.3.0 引发脚本超时,回滚到 1.2.0" }
 // 200 Response
-{ "id": "a1000000-0000-0000-0000-000000000030",
+{ "data": { "id": "a1000000-0000-0000-0000-000000000030",
   "skill_version_id": "8d3b0000-0000-0000-0000-000000000019",
   "previous_version_id": "8d3b0000-0000-0000-0000-000000000020",
-  "install_status": "installed", "updated_at": "2026-07-24T13:00:00Z" }
+  "install_status": "installed", "updated_at": "2026-07-24T13:00:00Z" } }
 ```
 
 ### 3.3 错误码表
@@ -558,6 +576,7 @@ installed ──卸载──► (deleted_at 置位)
 - [ ] 三档停用(定义/安装/绑定)为软状态,停用即停止注入,可随时恢复。
 - [ ] **入队版本快照(README §6.11)**:任务入队时把该 agent 当时绑定的技能版本冻结进 `task_executions.config_snapshot.skill_versions`(`{skill_id: skill_version_id}`);入队后变更绑定 / 切换安装版本 / 回滚 / 灰度**均不影响在途执行**,仅对后续入队生效;在途执行恒运行其入队快照里的版本,可复现、可审计。
 - [ ] **多租户复合 FK(README §6.2 / §9 T1)**:`skills` / `skill_versions` / `skill_sources` / `skill_installations` 各建 `UNIQUE(workspace_id, id)`;`created_by`/`installed_by` → `members(workspace_id,id)`、`agent_id` → `agents(workspace_id,id)`、`skill_id`/`source_id`/`skill_version_id`/`skill_installation_id` 均为复合 FK;构造跨 workspace 的复合 FK 插入被数据库约束拒绝(A 区凭证访问 B 区 skill → 403/404)。
+- [ ] **同 skill 版本约束(README §6.2 第 7 条 / §9 T1)**:`skill_versions` 建重叠唯一键 `UNIQUE(workspace_id, skill_id, id)`、`skill_installations` 建 `UNIQUE(workspace_id, id, skill_id)`;`skills.current_version_id`、`skill_installations.skill_version_id`、`agent_skills` 的 installation/version 均以重叠复合 FK 引用,在数据库层保证版本属于同一 skill——**`current_version_id` 指向别 skill 的版本、安装别 skill 的版本、绑定与安装不同 skill 的版本,均在 INSERT 被重叠复合 FK 拒绝**;`skills.current_version_id` 删除时仅置空该列(PG16 列级 SET NULL,`workspace_id` 不动)。
 - [ ] **存储层无 `*_type`/`*_kind` 判别列**:人类/agent 判别一律 JOIN `members.member_type`,API 响应中的 `member_type` 为服务端计算快照(README §6.1)。
 
 ### 5.2 性能
