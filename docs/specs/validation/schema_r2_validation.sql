@@ -1,11 +1,20 @@
 -- ============================================================================
--- Mesh Spec R2+R3 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
--- 依据:docs/specs/README.md(Draft v3 / R2 + R3 修订)§6 全局权威契约 + 20 份功能 Spec
+-- Mesh Spec R2+R3+R4 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
+-- 依据:docs/specs/README.md(Draft v3 / R2 + R3 + R4 修订)§6 全局权威契约 + 20 份功能 Spec
 -- R3(MES-7,HIGH-1～HIGH-9 + 3 建议):agent_config_versions 同租户/重叠 FK(T27);
 --   能力字段严格类型与归一(T28);集成外部身份全局唯一 + scope 异或 + vcs_links(T29);
 --   IM 投递台账多目的地(T30);data job RESTRICT/checkpoint/行台账恢复协议(T31);
 --   users.settings 偏好真源 + locale 单一权威(T32);analytics 可见性缓存键(T33);
 --   onboarding evidence(T34);chat_sessions.is_pinned 快照删除(建议-2)。
+-- R4(MES-8,第四轮架构/UX 复审 HIGH×6 收口):capability_grants 的 permission 必须存在/
+--   字符串/枚举合法 + 归一算法唯一实现 normalize_capability_declarations() 实测(T28 扩展);
+--   data job 单调 lease_seq fencing + row_key 原子占用/预分配 target_id + 实体创建幂等,
+--   过期旧 worker 重新提交整批被拒(T31 扩展);locale 单一真源(default_language 列不存在,
+--   响应只返回 settings.default_locale,T32 扩展);onboarding 入册播种/成熟工作区 reconcile/
+--   未读不得完成/错误 trigger member 不得完成四场景(T34 扩展);external_identities 身份键
+--   纳入 provider tenant + 映射全局 users.id、回调按集成解析工作区再 JOIN 成员(T29 扩展);
+--   analytics execution 指标统一可见性 scope(关联 issue 继承项目可见性;private agent 先过
+--   agent 可见性),workload/agent stats/workspace dashboard 共用并入缓存键(T33 扩展)。
 -- 用法:psql -v ON_ERROR_STOP=1 -f schema_r2_validation.sql(空库执行)
 -- 期望失败断言以 EXCEPTION 块包裹(拒绝即 PASS);ASSERT 失败 = Spec/DDL 缺陷,脚本中止。
 -- ============================================================================
@@ -21,7 +30,8 @@ LANGUAGE sql IMMUTABLE AS $$
   SELECT jsonb_typeof(v) = 'array'
      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v) e WHERE jsonb_typeof(e) <> 'string')
 $$;
--- 授权快照 capability_grants 必须为「[{capability, permission?}] 对象数组」(README §6.11 R3)
+-- 授权快照 capability_grants 必须为「严格 [{capability, permission}] 对象数组」(README §6.11 R3/R4):
+-- R4(HIGH-1):permission **必须存在**、必须为字符串、取值必须为合法枚举——归一后快照不允许缺失 permission
 CREATE OR REPLACE FUNCTION jsonb_is_capability_grants(v JSONB) RETURNS BOOLEAN
 LANGUAGE sql IMMUTABLE AS $$
   SELECT jsonb_typeof(v) = 'array'
@@ -29,9 +39,78 @@ LANGUAGE sql IMMUTABLE AS $$
        SELECT 1 FROM jsonb_array_elements(v) e
         WHERE jsonb_typeof(e) <> 'object'
            OR jsonb_typeof(e->'capability') <> 'string'
-           OR ((e->'permission') IS NOT NULL
-               AND NOT (e->>'permission' IN ('read_only','write','confirm_required')))
+           OR (e->'permission') IS NULL                          -- R4:permission 必须存在
+           OR jsonb_typeof(e->'permission') <> 'string'          -- R4:permission 必须为字符串
+           OR NOT (e->>'permission' IN ('read_only','write','confirm_required'))
      )
+$$;
+
+-- ----------------------------------------------------------------------------
+-- R4 辅助函数(HIGH-1:入队能力归一算法的**唯一可执行实现**,agent.md §3.3 / README §6.4·§6.11)
+-- ----------------------------------------------------------------------------
+-- 输入:声明层混合数组(字符串 key 或 {capability, permission?} 对象,skill.md 声明形态)。
+-- 输出:{"required": [capability key 字符串数组:去重 + 字典序排序],
+--        "grants":   [{capability, permission} 对象数组:按 capability 字典序排序,
+--                     同一 capability 取声明中最严格 permission(confirm_required > write > read_only)]}
+-- 规则:字符串条目 → grants 补默认 permission=confirm_required(未标注默认高风险闸门);
+--       对象条目缺 permission → 同样补 confirm_required;permission 非字符串/非法枚举 → 抛
+--       capability_invalid(422,声明层校验应已拦截);其他形态条目一律拒绝。
+-- T28 以混合声明调用本函数并断言全部归一语义;schema CHECK(jsonb_is_capability_grants)
+-- 兜底归一产物的严格类型;后端编排入口实现与本函数逐条等价(同一算法,单一权威)。
+CREATE OR REPLACE FUNCTION normalize_capability_declarations(declared JSONB) RETURNS JSONB
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  item       JSONB;
+  k          TEXT;
+  p          TEXT;
+  r          INT;
+  pos        INT;
+  caps       TEXT[] := '{}';   -- grants 的 capability 序(去重)
+  ranks      INT[]  := '{}';   -- 各 capability 的最严格 permission 秩(3=confirm_required > 2=write > 1=read_only)
+  reqs       TEXT[] := '{}';   -- required keys(含重复,输出去重)
+  out_req    JSONB;
+  out_grants JSONB;
+BEGIN
+  IF jsonb_typeof(declared) <> 'array' THEN
+    RAISE EXCEPTION 'capability_invalid: declarations must be a JSON array';
+  END IF;
+  FOR item IN SELECT jsonb_array_elements(declared)
+  LOOP
+    IF jsonb_typeof(item) = 'string' THEN
+      k := item #>> '{}';
+      p := 'confirm_required';                                  -- 字符串条目默认高风险闸门
+    ELSIF jsonb_typeof(item) = 'object' AND jsonb_typeof(item->'capability') = 'string' THEN
+      k := item->>'capability';
+      IF (item->'permission') IS NULL THEN
+        p := 'confirm_required';                                -- 对象条目未标注 permission → 默认最严格
+      ELSIF jsonb_typeof(item->'permission') = 'string'
+            AND (item->>'permission') IN ('read_only','write','confirm_required') THEN
+        p := item->>'permission';
+      ELSE
+        RAISE EXCEPTION 'capability_invalid: permission must be read_only|write|confirm_required (%)', k;
+      END IF;
+    ELSE
+      RAISE EXCEPTION 'capability_invalid: entry must be a string key or a {capability, permission?} object';
+    END IF;
+    r := CASE p WHEN 'confirm_required' THEN 3 WHEN 'write' THEN 2 ELSE 1 END;
+    reqs := array_append(reqs, k);
+    pos := array_position(caps, k);
+    IF pos IS NULL THEN
+      caps  := array_append(caps, k);
+      ranks := array_append(ranks, r);
+    ELSIF ranks[pos] < r THEN
+      ranks[pos] := r;                                          -- 同一 capability 取最严格 permission
+    END IF;
+  END LOOP;
+  SELECT COALESCE(jsonb_agg(x ORDER BY x), '[]'::jsonb) INTO out_req
+    FROM (SELECT DISTINCT unnest(reqs) AS x) t;
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('capability', cap, 'permission', perm) ORDER BY cap),
+                  '[]'::jsonb) INTO out_grants
+    FROM (SELECT caps[i] AS cap,
+                 CASE ranks[i] WHEN 3 THEN 'confirm_required' WHEN 2 THEN 'write' ELSE 'read_only' END AS perm
+            FROM generate_subscripts(caps, 1) AS i) t;
+  RETURN jsonb_build_object('required', out_req, 'grants', out_grants);
+END
 $$;
 
 -- ----------------------------------------------------------------------------
@@ -2043,22 +2122,28 @@ CREATE INDEX idx_delivery_retry ON webhook_subscription_deliveries(next_retry_at
   WHERE state = 'pending';
 CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscription_id, created_at DESC);
 
--- ============ external_identities(R3 协同 MES-4 HIGH-1:外部用户身份 ↔ Mesh 成员,卡片回调鉴权真源)============
+-- ============ external_identities(R3 协同 MES-4 HIGH-1;R4 HIGH-5:映射全局 users.id + 身份键含平台租户)============
+-- R4 修订:外部账号映射到**全局登录身份 users.id**(不再锁到单个 workspace-scoped member_id)——
+-- 与 README §6.1「同一 users.id 在多工作区各有 member 行」的核心模型一致:同一已认证外部账号
+-- 可跨多个 Mesh 工作区参与卡片审批。身份键纳入 provider tenant,不同外部租户的同名 user key 不冲突。
+-- 卡片回调鉴权:集成实例解析 workspace → 本表查 (provider, provider_tenant_key, external_user_key)
+-- → users.id → JOIN 该 workspace 的 members(workspace_id, user_id) → README §6.10 权限再校验。
 CREATE TABLE external_identities (
-  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id      UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  provider          TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
-  external_user_key TEXT NOT NULL,
-  member_id         UUID NOT NULL,
-  verified_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,   -- 建链所在工作区(审计/级联);映射本身为全局 users.id 级
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  provider_tenant_key TEXT NOT NULL DEFAULT '',                  -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机),纳入身份键
+  external_user_key   TEXT NOT NULL,
+  user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射到全局登录身份(用户注销 → 映射级联删除)
+  verified_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_external_identities_ws_id UNIQUE (workspace_id, id),
-  CONSTRAINT uq_external_identity UNIQUE (provider, external_user_key),   -- 全局:一个外部用户至多映射一个成员
-  CONSTRAINT fk_external_identity_member FOREIGN KEY (workspace_id, member_id)
-    REFERENCES members(workspace_id, id) ON DELETE CASCADE
+  -- R4:身份键 = 平台 + 平台租户 + 外部用户(全局):一个外部平台账号至多映射一个 Mesh 用户;
+  -- 不同外部租户同 user key 可并存;同一账号跨多 Mesh 工作区参与 = 单映射行 + 按工作区 JOIN member
+  CONSTRAINT uq_external_identity UNIQUE (provider, provider_tenant_key, external_user_key)
 );
-CREATE INDEX idx_external_identities_member ON external_identities(workspace_id, member_id);
+CREATE INDEX idx_external_identities_user ON external_identities(user_id);
 
 -- ============ vcs_links(R3 新增 HIGH-3:VCS 对象 ↔ Mesh 实体 关联真源表)============
 CREATE TABLE vcs_links (
@@ -2127,6 +2212,7 @@ CREATE TABLE data_jobs (
   error_report         JSONB NOT NULL DEFAULT '[]',
   checkpoint           JSONB NOT NULL DEFAULT '{}',        -- R3:持久恢复点 {last_committed_batch,last_row_key,batch_size,resumed_count,resumed_at}
   lease_owner          TEXT NULL,                          -- R3:在途 worker 租约(消除 running 守卫永久卡住)
+  lease_seq            BIGINT NOT NULL DEFAULT 0,          -- R4(HIGH-2):单调 fencing token——每次领取/恢复 +1,旧 worker 的一切批提交因 seq 不匹配被拒(同 §6.4 lease_seq 范式)
   lease_expires_at     TIMESTAMPTZ NULL,
   requested_by         UUID NOT NULL,
   started_at           TIMESTAMPTZ NULL,
@@ -2363,16 +2449,18 @@ BEGIN
   END;
 END $$;
 
--- ===================== T28:能力字段严格类型 + 归一(HIGH-2)=====================
+-- ===================== T28:能力字段严格类型 + 归一(HIGH-2;R4 HIGH-1 扩展:permission 必填 + 同一归一实现实测)=====================
 DO $$
+DECLARE
+  v_norm JSONB;
 BEGIN
-  -- ① 字符串数组合法(调度字段)
+  -- ① 严格快照合法(调度字段纯字符串数组 + 授权快照 [{capability,permission}] 且 permission 均存在)
   INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
   VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
           '["ffmpeg","version_control"]',
-          '{"capability_grants":[{"capability":"ffmpeg","permission":"write"},{"capability":"version_control"}]}',
+          '{"capability_grants":[{"capability":"ffmpeg","permission":"write"},{"capability":"version_control","permission":"confirm_required"}]}',
           'queued');
-  RAISE NOTICE 'PASS T28-1: 调度字段纯字符串数组 + 授权快照对象数组写入合法';
+  RAISE NOTICE 'PASS T28-1: 调度字段纯字符串数组 + 授权快照严格 [{capability,permission}] 写入合法';
 
   -- ② 对象混入调度字段 → CHECK 拒绝(否则 claim 的 <@ 永不命中,任务永久无法领取)
   BEGIN
@@ -2404,18 +2492,99 @@ BEGIN
     RAISE NOTICE 'PASS T28-4: capability_grants.permission 取值受 read_only|write|confirm_required 约束';
   END;
 
-  -- ⑤ 归一后 claim 联动:纯字符串 required_capabilities <@ runtimes.capabilities 命中
+  -- ⑤ R4(HIGH-1):授权快照 **缺失 permission** → CHECK 必拒绝(归一后快照不允许缺 permission)
+  BEGIN
+    INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+            '["version_control"]', '{"capability_grants":[{"capability":"version_control"}]}', 'queued');
+    RAISE EXCEPTION 'T28 FAIL: capability_grants 缺失 permission 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T28-5: capability_grants 条目缺失 permission 必被 CHECK 拒绝(R4:permission 必填)';
+  END;
+
+  -- ⑥ R4(HIGH-1):permission 非字符串类型(如数字)→ CHECK 拒绝
+  BEGIN
+    INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+            '["version_control"]', '{"capability_grants":[{"capability":"version_control","permission":2}]}', 'queued');
+    RAISE EXCEPTION 'T28 FAIL: permission 非字符串未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T28-6: capability_grants.permission 必须为字符串(R4:类型严格)';
+  END;
+
+  -- ⑦ R4(HIGH-1):**以混合字符串/对象声明调用同一归一实现** normalize_capability_declarations(),
+  --    断言字符串自动补 confirm_required、未标注 permission 补 confirm_required、去重、最严格权限、字典序排序
+  v_norm := normalize_capability_declarations(
+    '["ffmpeg",
+      {"capability":"version_control"},
+      {"capability":"exec:shell","permission":"read_only"},
+      "exec:shell",
+      {"capability":"net:fetch","permission":"write"},
+      {"capability":"net:fetch","permission":"read_only"},
+      {"capability":"data:read","permission":"read_only"},
+      {"capability":"data:read","permission":"write"}]'::jsonb);
+  -- 调度字段:纯 key 字符串数组,去重 + 字典序排序
+  ASSERT v_norm->'required' = '["data:read","exec:shell","ffmpeg","net:fetch","version_control"]'::jsonb,
+         'T28 FAIL: 归一 required 应为去重 + 字典序排序的纯字符串数组';
+  -- 授权快照:严格 [{capability,permission}];字符串/未标注补 confirm_required;同 capability 取最严格;字典序
+  ASSERT v_norm->'grants' = '[{"capability":"data:read","permission":"write"},
+                              {"capability":"exec:shell","permission":"confirm_required"},
+                              {"capability":"ffmpeg","permission":"confirm_required"},
+                              {"capability":"net:fetch","permission":"write"},
+                              {"capability":"version_control","permission":"confirm_required"}]'::jsonb,
+         'T28 FAIL: 归一 grants 应补默认 confirm_required、同 capability 取最严格权限、字典序排序';
+  ASSERT jsonb_is_string_array(v_norm->'required') AND jsonb_is_capability_grants(v_norm->'grants'),
+         'T28 FAIL: 归一产物必须通过 schema 严格类型校验';
+  -- 空声明归一为两个空数组(合法入队形态)
+  ASSERT normalize_capability_declarations('[]'::jsonb) = '{"required": [], "grants": []}'::jsonb,
+         'T28 FAIL: 空声明应归一为 {"required":[],"grants":[]}';
+  RAISE NOTICE 'PASS T28-7: 同一归一实现处理混合声明(字符串补 confirm_required / 去重 / 最严格权限 / 排序),产物通过严格类型校验';
+
+  -- ⑧ R4:归一产物直接写入 task_executions(调度字段 + 授权快照)并通过 CHECK,claim 能力匹配 (<@) 命中
+  INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+          v_norm->'required', jsonb_build_object('capability_grants', v_norm->'grants'), 'queued');
   INSERT INTO runtimes (id, workspace_id, name, status, capabilities, max_concurrent)
   VALUES ('abababab-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111', 'rt-t28', 'online',
-          '["ffmpeg","version_control","python"]', 1);
+          '["data:read","exec:shell","ffmpeg","net:fetch","version_control"]', 1);
   PERFORM 1
     FROM task_executions e
    WHERE e.workspace_id = '11111111-1111-1111-1111-111111111111'
      AND e.status = 'queued'
-     AND e.required_capabilities <@ '["ffmpeg","version_control","python"]'::jsonb
+     AND e.required_capabilities <@ (SELECT capabilities FROM runtimes WHERE id = 'abababab-0000-0000-0000-000000000099')
      AND e.required_capabilities @> '["ffmpeg"]'::jsonb;
   ASSERT FOUND, 'T28 FAIL: 归一后的字符串数组应可被 claim <@ 匹配命中';
-  RAISE NOTICE 'PASS T28-5: 归一为字符串数组后 claim 能力匹配 (<@) 命中';
+  RAISE NOTICE 'PASS T28-8: 归一产物入队合法且 claim 能力匹配 (<@) 命中(调度/授权两套字段联动)';
+
+  -- ⑨ R4:归一实现对非法声明拒绝入队(422 capability_invalid):非法 permission 值 / 非字符串非对象条目 / 非数组输入
+  DECLARE
+    v_rejected BOOLEAN;
+  BEGIN
+    v_rejected := FALSE;
+    BEGIN
+      PERFORM normalize_capability_declarations('[{"capability":"x","permission":"admin"}]'::jsonb);
+    EXCEPTION WHEN raise_exception THEN
+      v_rejected := (SQLERRM LIKE '%capability_invalid%');
+    END;
+    ASSERT v_rejected, 'T28 FAIL: 非法 permission 声明未被归一实现拒绝(应抛 capability_invalid)';
+
+    v_rejected := FALSE;
+    BEGIN
+      PERFORM normalize_capability_declarations('[42]'::jsonb);
+    EXCEPTION WHEN raise_exception THEN
+      v_rejected := (SQLERRM LIKE '%capability_invalid%');
+    END;
+    ASSERT v_rejected, 'T28 FAIL: 数字条目未被归一实现拒绝';
+
+    v_rejected := FALSE;
+    BEGIN
+      PERFORM normalize_capability_declarations('{"capability":"x"}'::jsonb);
+    EXCEPTION WHEN raise_exception THEN
+      v_rejected := (SQLERRM LIKE '%capability_invalid%');
+    END;
+    ASSERT v_rejected, 'T28 FAIL: 非数组输入未被归一实现拒绝';
+    RAISE NOTICE 'PASS T28-9: 归一实现拒绝非法 permission / 非法条目形态 / 非数组输入(capability_invalid,422)';
+  END;
 END $$;
 
 -- ===================== T29:集成外部身份全局唯一 + scope 异或 + vcs_links(HIGH-3)=====================
@@ -2488,16 +2657,63 @@ BEGIN
          'T29 FAIL: 集成删除应级联删除其 vcs_links';
   RAISE NOTICE 'PASS T29-6: vcs_links 同租户复合 FK,集成删除级联删关联';
 
-  -- ⑥ external_identities:外部用户身份 → 成员映射,全局唯一(卡片回调点击者鉴权真源,协同 MES-4 HIGH-1)
-  INSERT INTO external_identities (workspace_id, provider, external_user_key, member_id)
-  VALUES ('11111111-1111-1111-1111-111111111111', 'feishu', 'ou_user_1', 'cccccccc-0000-0000-0000-000000000001');
+  -- ⑦ R4(HIGH-5):external_identities 映射**全局 users.id**、身份键含平台租户(卡片回调点击者鉴权真源)
+  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'feishu', 'tenant-a', 'ou_user_1',
+          'aaaaaaaa-0000-0000-0000-000000000001');
+  RAISE NOTICE 'PASS T29-7: 认证外部账号映射全局 users.id(身份键 = provider + provider_tenant_key + external_user_key)';
+
+  -- ⑧ R4(HIGH-5):**同一已认证外部账号跨两个 Mesh 工作区参与**——单映射行,回调按集成解析工作区后
+  --    JOIN 该工作区的 members(workspace_id, user_id),两个工作区各自的 member 行均可解析(§6.1 核心模型)
+  ASSERT (SELECT COUNT(*) = 1 FROM external_identities
+           WHERE provider = 'feishu' AND provider_tenant_key = 'tenant-a' AND external_user_key = 'ou_user_1'),
+         'T29 FAIL: 同一外部账号应仅一条全局映射行';
+  -- 回调链:WS-A 集成 → users.id → WS-A 名册成员 cccccccc-...-0001
+  ASSERT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.workspace_id = '11111111-1111-1111-1111-111111111111' AND m.user_id = ei.user_id
+     WHERE ei.provider = 'feishu' AND ei.provider_tenant_key = 'tenant-a' AND ei.external_user_key = 'ou_user_1'
+       AND m.id = 'cccccccc-0000-0000-0000-000000000001'),
+         'T29 FAIL: WS-A 回调应经映射 JOIN 到本工作区 member';
+  -- 回调链:WS-B 集成 → 同一 users.id → WS-B 名册成员 cccccccc-...-0009(同一自然人的另一 member 行)
+  ASSERT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.workspace_id = '22222222-2222-2222-2222-222222222222' AND m.user_id = ei.user_id
+     WHERE ei.provider = 'feishu' AND ei.provider_tenant_key = 'tenant-a' AND ei.external_user_key = 'ou_user_1'
+       AND m.id = 'cccccccc-0000-0000-0000-000000000009'),
+         'T29 FAIL: 同一外部账号应可跨两个 Mesh 工作区解析各自 member(不再被锁到单个 member_id)';
+  RAISE NOTICE 'PASS T29-8: 同一认证外部账号跨两个 Mesh 工作区参与(单映射 + 按工作区 JOIN member)';
+
+  -- ⑨ R4(HIGH-5):**不同外部租户同 user key 并存**——身份键含 provider_tenant_key,不再全局误撞
+  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
+  VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'tenant-b', 'ou_user_1',
+          'aaaaaaaa-0000-0000-0000-000000000002');
+  ASSERT (SELECT COUNT(*) = 2 FROM external_identities WHERE external_user_key = 'ou_user_1'),
+         'T29 FAIL: 不同外部租户的同名 user key 应可并存';
+  RAISE NOTICE 'PASS T29-9: 不同外部租户同 user key 不冲突(身份键纳入 provider tenant)';
+
+  -- ⑩ R4(HIGH-5):同一外部账号(provider+tenant+user key)重复映射 → 全局唯一键拒绝(即使指向不同用户)
   BEGIN
-    INSERT INTO external_identities (workspace_id, provider, external_user_key, member_id)
-    VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'ou_user_1', 'cccccccc-0000-0000-0000-000000000009');
-    RAISE EXCEPTION 'T29 FAIL: 同一外部用户跨 workspace 重复映射未被拒绝';
+    INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
+    VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'tenant-a', 'ou_user_1',
+            'aaaaaaaa-0000-0000-0000-000000000003');
+    RAISE EXCEPTION 'T29 FAIL: 同一外部账号重复映射未被拒绝';
   EXCEPTION WHEN unique_violation THEN
-    RAISE NOTICE 'PASS T29-7: external_identities 全局唯一(一个外部平台用户至多映射一个 Mesh 成员)';
+    RAISE NOTICE 'PASS T29-10: UNIQUE(provider, provider_tenant_key, external_user_key) 拒绝同一外部账号重复映射';
   END;
+
+  -- ⑪ R4(HIGH-5):用户注销 → 映射级联删除(映射真源挂全局 users.id,ON DELETE CASCADE)
+  INSERT INTO users (id, email, display_name) VALUES
+    ('aaaaaaaa-0000-0000-0000-000000000099', 'u99@example.test', 'U99');
+  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'github', '', 'dev-u99',
+          'aaaaaaaa-0000-0000-0000-000000000099');
+  DELETE FROM users WHERE id = 'aaaaaaaa-0000-0000-0000-000000000099';
+  ASSERT NOT EXISTS (SELECT 1 FROM external_identities WHERE external_user_key = 'dev-u99'),
+         'T29 FAIL: 用户注销应级联删除其外部身份映射';
+  RAISE NOTICE 'PASS T29-11: external_identities.user_id ON DELETE CASCADE(用户注销 → 映射删除,卡片点击回落 403)';
 END $$;
 
 -- ===================== T30:IM 投递台账多目的地 + error 分离(HIGH-4)=====================
@@ -2547,12 +2763,22 @@ BEGIN
   RAISE NOTICE 'PASS T30-4: 路由数据结构化(provider/external_target 列),error 只记失败原因';
 END $$;
 
--- ===================== T31:data job 删除/恢复协议(HIGH-5)=====================
+-- ===================== T31:data job 删除/恢复协议(HIGH-5;R4 HIGH-2 扩展:fencing + 实体副作用幂等)=====================
+-- R4 协议(与 import-export.md §3.4/§3.8 逐条对应):
+--  (a) claim 领取即单调 fencing:lease_seq + 1,worker 记住领取序号;
+--  (b) 每批事务先锁 job 行(SELECT … FOR UPDATE)并校验 owner + lease_seq + 未过期,不符即整批拒绝回滚;
+--  (c) 行台账先原子占用 row_key(ON CONFLICT DO NOTHING + 预分配 target_id),占用成功者才创建实体;
+--  (d) checkpoint/计数/续租与实体同事务推进。旧 worker「复活」提交因 (b) 被拒;合法重放因 (c) 不重复建实体。
 DO $$
 DECLARE
-  v_job UUID;
+  v_job    UUID;
+  v_owner  TEXT;
+  v_seq    BIGINT;
+  v_exp    TIMESTAMPTZ;
+  v_n      INT;
+  v_reject BOOLEAN;
 BEGIN
-  -- 夹具:导入源附件(clean blob)
+  -- 夹具:导入源附件(clean blob)+ 两行导入作业
   INSERT INTO attachment_blobs (id, workspace_id, content_hash, storage_bucket, storage_key, file_size, scan_status, ref_count)
   VALUES ('14141414-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111', 'sha256:src-t31', 'bkt', 'ws/11/src.csv', 200, 'clean', 1);
   INSERT INTO attachments (id, workspace_id, uploader_id, blob_id, file_name, file_size, upload_status)
@@ -2561,7 +2787,7 @@ BEGIN
   INSERT INTO data_jobs (id, workspace_id, kind, entity_type, format, status, source_attachment_id, source_content_hash,
                          total_rows, requested_by)
   VALUES ('d1d1d1d1-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'import', 'issues', 'csv', 'running',
-          '8c8c8c8c-0000-0000-0000-000000000001', 'sha256:src-t31', 1000, 'cccccccc-0000-0000-0000-000000000001')
+          '8c8c8c8c-0000-0000-0000-000000000001', 'sha256:src-t31', 2, 'cccccccc-0000-0000-0000-000000000001')
   RETURNING id INTO v_job;
 
   -- ① 源附件 RESTRICT:作业存续期间删除源附件被拒
@@ -2572,46 +2798,148 @@ BEGIN
     RAISE NOTICE 'PASS T31-1: 源附件 ON DELETE RESTRICT(作业存续期间不可物理删,消除 SET NULL 与 CHECK 互斥)';
   END;
 
-  -- ② 逐批幂等:前两批已提交(台账 created),第 3 批进行中 worker 崩溃 → 重放已提交行幂等
-  UPDATE data_jobs SET checkpoint = '{"last_committed_batch": 2, "batch_size": 500}'::jsonb,
-                       succeeded_rows = 2, lease_owner = 'worker-1', lease_expires_at = now() - interval '1 minute'
+  -- ② worker-1 领取:lease_seq 单调 +1(fencing token),记下领取序号 1
+  UPDATE data_jobs SET lease_owner = 'worker-1', lease_seq = lease_seq + 1,
+                       lease_expires_at = now() + interval '5 minutes', started_at = now()
    WHERE id = v_job;
-  INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id)
-  VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'created', 'issue', '99999999-0000-0000-0000-000000000001'),
-         ('11111111-1111-1111-1111-111111111111', v_job, 2, 'row:2:h2', 'created', 'issue', '99999999-0000-0000-0000-000000000002');
-  -- 重放第 1 行(upsert:已 created 的行不重复写 target)
-  INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id, attempts)
-  VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'created', 'issue', '99999999-0000-0000-0000-000000000001', 1)
-  ON CONFLICT (job_id, row_key) DO UPDATE SET attempts = data_job_rows.attempts + 1;
-  ASSERT (SELECT COUNT(*) = 1 FROM data_job_rows WHERE job_id = v_job AND row_key = 'row:1:h1'),
-         'T31 FAIL: 重放已提交行应保持台账唯一(不重复建实体)';
-  ASSERT (SELECT target_id = '99999999-0000-0000-0000-000000000001' FROM data_job_rows WHERE job_id = v_job AND row_key = 'row:1:h1'),
-         'T31 FAIL: 重放不得覆盖已落库的 target_id(幂等)';
-  RAISE NOTICE 'PASS T31-2: data_job_rows UNIQUE(job_id, row_key) + upsert 保证重放已提交批次不重复建实体';
+  ASSERT (SELECT lease_seq = 1 AND lease_owner = 'worker-1' FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: 领取应使 lease_seq 单调递增至 1';
 
-  -- ③ 行台账 CHECK:created 必带 target;failed 必带 error
+  -- ③ worker-1 批 1(行 1 → 真实 issue WEB-101):锁 job 校验 fencing → 原子占用 row_key + 预分配 target_id
+  --   → 仅占用成功者创建实体 → 台账/计数/checkpoint/续租同事务推进
+  BEGIN
+    SELECT lease_owner, lease_seq, lease_expires_at INTO v_owner, v_seq, v_exp
+      FROM data_jobs WHERE id = v_job FOR UPDATE;
+    ASSERT v_owner = 'worker-1' AND v_seq = 1 AND v_exp > now(), 'T31 FAIL: worker-1 批 1 fencing 应校验通过';
+    INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'pending', 'issue',
+            '99999999-0000-0000-0000-000000000031')
+    ON CONFLICT (job_id, row_key) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    ASSERT v_n = 1, 'T31 FAIL: 行 1 首次占用应成功';
+    INSERT INTO issues (id, workspace_id, project_id, identifier_namespace_key, number, identifier, title, status_id, state_category)
+    VALUES ('99999999-0000-0000-0000-000000000031', '11111111-1111-1111-1111-111111111111',
+            'dddddddd-0000-0000-0000-000000000001', 'WEB', 101, 'WEB-101', '导入行 1',
+            'eeeeeeee-0000-0000-0000-000000000001', 'todo');
+    UPDATE data_job_rows SET status = 'created' WHERE job_id = v_job AND row_key = 'row:1:h1';
+    UPDATE data_jobs SET checkpoint = '{"last_committed_batch": 1, "last_row_key": "row:1:h1", "batch_size": 1}'::jsonb,
+                         succeeded_rows = succeeded_rows + 1,
+                         lease_expires_at = now() + interval '5 minutes'
+     WHERE id = v_job;
+  END;
+  ASSERT (SELECT COUNT(*) = 1 FROM issues WHERE id = '99999999-0000-0000-0000-000000000031'),
+         'T31 FAIL: 批 1 应创建真实 issue WEB-101';
+  RAISE NOTICE 'PASS T31-2: worker-1 批事务(fencing 校验 → row_key 原子占用 + 预分配 target_id → 建实体 → 同事务推进 checkpoint/计数)';
+
+  -- ④ worker-1 卡死:租约过期 → reaper 回收(置空 owner,不回退计数)→ worker-2 领取(lease_seq +1 = 2)
+  UPDATE data_jobs SET lease_expires_at = now() - interval '1 minute' WHERE id = v_job;
+  UPDATE data_jobs SET lease_owner = NULL WHERE id = v_job AND status = 'running' AND lease_expires_at < now();
+  ASSERT (SELECT lease_owner IS NULL AND status = 'running' AND succeeded_rows = 1
+            AND checkpoint->>'last_committed_batch' = '1' FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: reaper 回收租约且计数/checkpoint 不回退';
+  UPDATE data_jobs SET lease_owner = 'worker-2', lease_seq = lease_seq + 1,
+                       lease_expires_at = now() + interval '5 minutes',
+                       checkpoint = checkpoint || '{"resumed_count": 1}'::jsonb
+   WHERE id = v_job;
+  ASSERT (SELECT lease_seq = 2 AND lease_owner = 'worker-2' FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: worker-2 领取后 lease_seq 应为 2';
+  RAISE NOTICE 'PASS T31-3: 租约过期回收 + 新 worker 领取(lease_seq 2);checkpoint 保留,续跑不重跑已提交批';
+
+  -- ⑤ **过期旧 worker「复活」提交批 2(持过期 fencing token seq=1)→ 整批拒绝回滚,不产生重复实体**
+  v_reject := FALSE;
+  BEGIN
+    BEGIN
+      SELECT lease_owner, lease_seq, lease_expires_at INTO v_owner, v_seq, v_exp
+        FROM data_jobs WHERE id = v_job FOR UPDATE;
+      IF NOT (v_owner = 'worker-1' AND v_seq = 1 AND v_exp > now()) THEN
+        RAISE EXCEPTION 'stale_lease: 过期 worker 的批提交被 fencing 拒绝';
+      END IF;
+      -- 下述写入在真实协议中不会到达(fencing 先于副作用);此处证明即便到达亦随事务回滚
+      INSERT INTO issues (id, workspace_id, project_id, identifier_namespace_key, number, identifier, title, status_id, state_category)
+      VALUES ('99999999-0000-0000-0000-000000000033', '11111111-1111-1111-1111-111111111111',
+              'dddddddd-0000-0000-0000-000000000001', 'WEB', 103, 'WEB-103', '陈旧 worker 的重复实体',
+              'eeeeeeee-0000-0000-0000-000000000001', 'todo');
+    EXCEPTION WHEN raise_exception THEN
+      v_reject := (SQLERRM LIKE '%stale_lease%');
+    END;
+  END;
+  ASSERT v_reject, 'T31 FAIL: 过期 worker-1(持 seq=1)的批提交应被 fencing(owner/seq/过期校验)拒绝';
+  ASSERT NOT EXISTS (SELECT 1 FROM issues WHERE id = '99999999-0000-0000-0000-000000000033'),
+         'T31 FAIL: 被拒批事务应整体回滚(不产生重复实体)';
+  ASSERT (SELECT succeeded_rows = 1 AND checkpoint->>'last_committed_batch' = '1' FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: 被拒批不得推进计数/checkpoint';
+  RAISE NOTICE 'PASS T31-4: 过期旧 worker 重新提交被 fencing 拒绝并整批回锁(单调 lease_seq 杜绝双 worker 并发提交)';
+
+  -- ⑥ worker-2 合法重放批 1(已提交行):row_key 占用冲突 → 跳过实体创建,台账 target_id 不变(幂等)
+  BEGIN
+    SELECT lease_owner, lease_seq INTO v_owner, v_seq FROM data_jobs WHERE id = v_job FOR UPDATE;
+    ASSERT v_owner = 'worker-2' AND v_seq = 2, 'T31 FAIL: worker-2 fencing 应通过';
+    INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'pending', 'issue',
+            '99999999-0000-0000-0000-000000000099')   -- 故意不同的预分配 id:占用冲突 → 不建实体、不覆盖 target
+    ON CONFLICT (job_id, row_key) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    ASSERT v_n = 0, 'T31 FAIL: 已提交行的 row_key 占用应冲突(0 行)';
+  END;
+  ASSERT (SELECT COUNT(*) = 1 FROM issues WHERE identifier = 'WEB-101'),
+         'T31 FAIL: 重放已提交批不得重复创建 issue';
+  ASSERT (SELECT target_id = '99999999-0000-0000-0000-000000000031' FROM data_job_rows WHERE job_id = v_job AND row_key = 'row:1:h1'),
+         'T31 FAIL: 重放不得覆盖已落库的 target_id';
+  RAISE NOTICE 'PASS T31-5: 合法重放经 row_key 原子占用冲突跳过实体创建(重放已提交批次 = 幂等)';
+
+  -- ⑦ worker-2 批 2(行 2 → 真实 issue WEB-102):fencing 通过 → 占用成功 → 建实体 → 推进 checkpoint/计数
+  BEGIN
+    SELECT lease_owner, lease_seq, lease_expires_at INTO v_owner, v_seq, v_exp
+      FROM data_jobs WHERE id = v_job FOR UPDATE;
+    ASSERT v_owner = 'worker-2' AND v_seq = 2 AND v_exp > now(), 'T31 FAIL: worker-2 批 2 fencing 应通过';
+    INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_job, 2, 'row:2:h2', 'pending', 'issue',
+            '99999999-0000-0000-0000-000000000032')
+    ON CONFLICT (job_id, row_key) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    ASSERT v_n = 1, 'T31 FAIL: 行 2 占用应成功';
+    INSERT INTO issues (id, workspace_id, project_id, identifier_namespace_key, number, identifier, title, status_id, state_category)
+    VALUES ('99999999-0000-0000-0000-000000000032', '11111111-1111-1111-1111-111111111111',
+            'dddddddd-0000-0000-0000-000000000001', 'WEB', 102, 'WEB-102', '导入行 2',
+            'eeeeeeee-0000-0000-0000-000000000001', 'todo');
+    UPDATE data_job_rows SET status = 'created' WHERE job_id = v_job AND row_key = 'row:2:h2';
+    UPDATE data_jobs SET checkpoint = '{"last_committed_batch": 2, "last_row_key": "row:2:h2", "batch_size": 1, "resumed_count": 1}'::jsonb,
+                         succeeded_rows = succeeded_rows + 1,
+                         lease_expires_at = now() + interval '5 minutes'
+     WHERE id = v_job;
+  END;
+
+  -- ⑧ 终局对账:真实 issue 最终恰每行一条,计数/checkpoint/台账三方一致
+  ASSERT (SELECT COUNT(*) = 1 FROM issues WHERE identifier = 'WEB-101')
+     AND (SELECT COUNT(*) = 1 FROM issues WHERE identifier = 'WEB-102'),
+         'T31 FAIL: 两导入行应各恰有一条真实 issue(无重复、无丢失)';
+  ASSERT (SELECT COUNT(*) = 2 FROM data_job_rows WHERE job_id = v_job AND status = 'created'),
+         'T31 FAIL: 台账应为两条 created';
+  ASSERT (SELECT succeeded_rows = 2 AND checkpoint->>'last_committed_batch' = '2'
+            FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: succeeded_rows/checkpoint 应与台账、实体一致';
+  ASSERT (SELECT COUNT(*) = (SELECT COUNT(DISTINCT target_id) FROM data_job_rows WHERE job_id = v_job)
+            FROM data_job_rows WHERE job_id = v_job),
+         'T31 FAIL: 台账 target_id 应与实体一一对应';
+  RAISE NOTICE 'PASS T31-6: 崩溃/复活/重放后真实 issue 每行恰一条,计数/checkpoint/台账一致(实体副作用幂等)';
+
+  -- ⑨ 行台账 CHECK:created 必带 target;failed 必带 error
   BEGIN
     INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status)
     VALUES ('11111111-1111-1111-1111-111111111111', v_job, 3, 'row:3:h3', 'created');
     RAISE EXCEPTION 'T31 FAIL: created 行缺 target 未被 CHECK 拒绝';
   EXCEPTION WHEN check_violation THEN
-    RAISE NOTICE 'PASS T31-3: 台账行 CHECK(created/updated 必带 target;failed 必带 error)';
+    RAISE NOTICE 'PASS T31-7: 台账行 CHECK(created/updated 必带 target;failed 必带 error)';
   END;
 
-  -- ④ 租约回收:过期 running 作业可被 reaper 置空租约(新 worker 凭 checkpoint 续跑)
-  UPDATE data_jobs SET lease_owner = NULL WHERE id = v_job AND status = 'running' AND lease_expires_at < now();
-  ASSERT (SELECT lease_owner IS NULL AND status = 'running' AND checkpoint->>'last_committed_batch' = '2'
-            FROM data_jobs WHERE id = v_job),
-         'T31 FAIL: 租约过期作业应可回收租约且 checkpoint 保留';
-  RAISE NOTICE 'PASS T31-4: 租约过期回收 + checkpoint 保留(消除 running 守卫永久卡住;续跑从第 2 批后开始)';
-
-  -- 清理:作业级联删台账;源附件在作业删除后可删
+  -- 清理:作业级联删台账;测试 issue 删除;源附件在作业删除后可删
   DELETE FROM data_jobs WHERE id = v_job;
+  DELETE FROM issues WHERE id IN ('99999999-0000-0000-0000-000000000031', '99999999-0000-0000-0000-000000000032');
   DELETE FROM attachments WHERE id = '8c8c8c8c-0000-0000-0000-000000000001';
-  RAISE NOTICE 'PASS T31-5: data_jobs 删除级联 data_job_rows;作业删除后源附件 RESTRICT 解除';
+  RAISE NOTICE 'PASS T31-8: data_jobs 删除级联 data_job_rows;作业删除后源附件 RESTRICT 解除';
 END $$;
 
--- ===================== T32:偏好真源 + locale 单一权威(HIGH-7)=====================
+-- ===================== T32:偏好真源 + locale 单一权威(HIGH-7;R4 HIGH-3 扩展:模型/响应无双真源)=====================
 DO $$
 DECLARE
   v_ws UUID := '11111111-1111-1111-1111-111111111111';
@@ -2631,9 +2959,59 @@ BEGIN
                       WHERE table_name = 'workspaces' AND column_name = 'default_language'),
          'T32 FAIL: default_language 双真源列应已删除(只迁移/弃用,不长期双写)';
   RAISE NOTICE 'PASS T32-2: workspace locale 唯一真源 settings.default_locale(默认 en);default_language 列已删';
+
+  -- ③ R4(HIGH-3):default_locale 经 settings 按键浅合并写入并可回读(响应只返回 settings.default_locale,
+  --    无任何顶层 default_language 字段;非法 locale/timezone 的错误码 422 unsupported_locale /
+  --    422 invalid_timezone 属 API 层校验,与 auth.md §3.1 canonical 一致,本脚本验证模型层单一真源)
+  UPDATE workspaces SET settings = settings || '{"default_locale":"zh-CN"}'::jsonb WHERE id = v_ws;
+  ASSERT (SELECT settings->>'default_locale' = 'zh-CN' FROM workspaces WHERE id = v_ws),
+         'T32 FAIL: settings.default_locale 应可经浅合并写入并回读';
+  ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'workspaces' AND column_name IN ('default_language','language','locale')),
+         'T32 FAIL: workspaces 不得存在任何顶层 locale 列(响应只返回 settings.default_locale)';
+  RAISE NOTICE 'PASS T32-3: workspace locale 写入只经 settings.default_locale(无旧列、无双写,错误码与 auth canonical 对齐)';
 END $$;
 
--- ===================== T33:Analytics 可见性缓存键 + 当前归属口径(HIGH-8)=====================
+-- ----------------------------------------------------------------------------
+-- R4 辅助函数(HIGH-6:execution 指标统一可见性 scope,workload-B / agent stats / workspace dashboard 共用)
+-- ----------------------------------------------------------------------------
+-- 判定一次执行对某成员是否可见(两层串联):
+--   ① **agent 可见性先行**:private agent 的运行统计仅其 owner 与 admin/owner 角色可见;
+--   ② **关联 issue 继承项目可见性**:execution 关联 issue 时按 issue 当前所属 project 的可见性过滤
+--      (private 项目 = 项目成员/admin/owner 可见);**无 issue 的执行(manual/chat/integration)归属 agent**,
+--      经 ① 即可见,不携带任何项目侧信道(普通成员无法经执行计数/成本推断不可见 private project 活动)。
+-- 缓存键协同:execution 类指标(工作区仪表盘 agent 统计区 / agent stats / workload 执行部分)的
+-- analytics_snapshots.scope_key 在 admin/owner 全量时为 'ws_admin',普通成员为
+-- 'exec:p<sha256(可见项目 id 排序)>:a<sha256(可见 agent id 排序)>'——跨权限物理分行、绝不共享(§2.5 R4)。
+CREATE OR REPLACE FUNCTION analytics_exec_visible_to(p_exec UUID, p_member UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1
+      FROM task_executions e
+      JOIN agents  a ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+      JOIN members m ON m.id = p_member   AND m.workspace_id = e.workspace_id
+      LEFT JOIN issues   i ON i.id = e.issue_id   AND i.workspace_id = e.workspace_id
+      LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+     WHERE e.id = p_exec
+       -- ① agent 可见性(private 仅 owner/admin)
+       AND (a.visibility = 'workspace'
+            OR (a.visibility = 'private'
+                AND (a.owner_user_id = m.user_id OR m.role IN ('owner','admin'))))
+       -- ② 关联 issue 继承项目可见性;无 issue 的执行归属 agent(无项目侧信道)
+       AND (i.id IS NULL
+            OR p.id IS NULL
+            OR p.visibility = 'public'
+            OR m.role IN ('owner','admin')
+            OR EXISTS (SELECT 1 FROM project_members pm
+                        WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                          AND pm.member_id = m.id)
+            OR EXISTS (SELECT 1 FROM member_project_access mx
+                        WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                          AND mx.member_id = m.id))
+  )
+$$;
+
+-- ===================== T33:Analytics 可见性缓存键 + 当前归属口径(HIGH-8;R4 HIGH-6 扩展:execution 可见性 scope)=====================
 DO $$
 DECLARE
   v_ws UUID := '11111111-1111-1111-1111-111111111111';
@@ -2669,37 +3047,257 @@ BEGIN
            WHERE workspace_id = v_ws AND dimensions->>'calendar_timezone' = 'Asia/Shanghai' LIMIT 1),
          'T33 FAIL: 不同 calendar_timezone 应产生不同 dim_hash(缓存不跨时区共享)';
   RAISE NOTICE 'PASS T33-3: calendar_timezone 入维度指纹(本地日历分桶,标签与边界一致,建议-3)';
+
+  -- ④ R4(HIGH-6):execution 指标统一可见性 scope——私有项目执行与 private agent 的负向测试
+  -- 夹具:私有项目 SEC + 其 issue 上的执行 e-priv;无 issue 的 manual 执行 e-manual(workspace 可见 agent);
+  --       private agent 及其 manual 执行 e-pagent(private agent 的 owner 为 u2);两名人类成员 u2/u3
+  --       (T18 已物理删除种子成员 u2/u3,此处重建本测试专用成员行)
+  INSERT INTO projects (id, workspace_id, name, key, visibility) VALUES
+    ('dddddddd-0000-0000-0000-000000000003', v_ws, 'Sec 项目', 'SEC', 'private');
+  INSERT INTO identifier_prefix_registry (workspace_id, key, kind, project_id) VALUES
+    (v_ws, 'SEC', 'project', 'dddddddd-0000-0000-0000-000000000003');
+  INSERT INTO issues (id, workspace_id, project_id, identifier_namespace_key, number, identifier, title, status_id, state_category)
+  VALUES ('99999999-0000-0000-0000-000000000041', v_ws, 'dddddddd-0000-0000-0000-000000000003', 'SEC', 1, 'SEC-1', '私有项目 issue',
+          'eeeeeeee-0000-0000-0000-000000000001', 'todo');
+  INSERT INTO agents (id, workspace_id, name, owner_user_id, visibility) VALUES
+    ('bbbbbbbb-0000-0000-0000-000000000003', v_ws, 'agent-priv', 'aaaaaaaa-0000-0000-0000-000000000002', 'private');
+  INSERT INTO members (id, workspace_id, member_type, user_id, role) VALUES
+    ('cccccccc-0000-0000-0000-00000000000d', v_ws, 'human', 'aaaaaaaa-0000-0000-0000-000000000002', 'member'),  -- u2:private agent 的 owner
+    ('cccccccc-0000-0000-0000-00000000000e', v_ws, 'human', 'aaaaaaaa-0000-0000-0000-000000000003', 'member');  -- u3:普通成员
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, status)
+  VALUES ('e2e2e2e2-0000-0000-0000-000000000001', v_ws, 'bbbbbbbb-0000-0000-0000-000000000001',
+          '99999999-0000-0000-0000-000000000041', 'assign', 'completed'),        -- 关联私有项目 issue
+         ('e2e2e2e2-0000-0000-0000-000000000002', v_ws, 'bbbbbbbb-0000-0000-0000-000000000001',
+          NULL, 'manual', 'completed'),                                          -- 无 issue:归属 agent
+         ('e2e2e2e2-0000-0000-0000-000000000003', v_ws, 'bbbbbbbb-0000-0000-0000-000000000003',
+          NULL, 'manual', 'completed');                                          -- private agent 的执行
+  -- admin/owner(owner 成员 cccccccc-...-0001):全量可见(ws_admin 口径)
+  ASSERT (SELECT COUNT(*) = 3 FROM task_executions e
+           WHERE e.id IN ('e2e2e2e2-0000-0000-0000-000000000001','e2e2e2e2-0000-0000-0000-000000000002',
+                          'e2e2e2e2-0000-0000-0000-000000000003')
+             AND analytics_exec_visible_to(e.id, 'cccccccc-0000-0000-0000-000000000001')),
+         'T33 FAIL: admin/owner 应见全工作区执行(含私有项目与 private agent)';
+  -- 普通成员 u3(cccccccc-...-000e,非私有项目成员、非 private agent owner):仅 e-manual 可见
+  ASSERT analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-00000000000e')
+     AND NOT analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-00000000000e')
+     AND NOT analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-00000000000e'),
+         'T33 FAIL: 普通成员不得经执行统计推断不可见私有项目活动,private agent 执行先过 agent 可见性';
+  -- private agent 的 owner(u2,cccccccc-...-000d):可见自家 private agent 执行,仍不可见私有项目执行
+  ASSERT analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-00000000000d')
+     AND analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000002', 'cccccccc-0000-0000-0000-00000000000d')
+     AND NOT analytics_exec_visible_to('e2e2e2e2-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-00000000000d'),
+         'T33 FAIL: private agent owner 可见自家 agent 执行;项目可见性独立于 agent 可见性';
+  RAISE NOTICE 'PASS T33-4: execution 统一可见性 scope(关联 issue 继承项目可见性;无 issue 归属 agent;private agent 先行)';
+
+  -- ⑤ R4(HIGH-6):execution 类指标缓存键纳入同一 scope——'ws_admin' 与 'exec:p<hash>:a<hash>' 物理分行
+  INSERT INTO analytics_snapshots (workspace_id, metric_key, scope_key, dimensions, window_start, window_end, value)
+  VALUES (v_ws, 'agent_stats', 'ws_admin', '{"agent_id":"bbbbbbbb-0000-0000-0000-000000000001"}',
+          '2026-07-10', '2026-07-11', '{"executions": 3}'),
+         (v_ws, 'agent_stats', 'exec:p3f8a:a91c2', '{"agent_id":"bbbbbbbb-0000-0000-0000-000000000001"}',
+          '2026-07-10', '2026-07-11', '{"executions": 1}');
+  ASSERT (SELECT COUNT(*) = 2 FROM analytics_snapshots
+           WHERE workspace_id = v_ws AND metric_key = 'agent_stats'
+             AND dim_hash = md5('{"agent_id":"bbbbbbbb-0000-0000-0000-000000000001"}'::jsonb::text)),
+         'T33 FAIL: execution 指标不同可见性 scope 的快照应物理分行(ws_admin 与成员 scope 绝不共享)';
+  RAISE NOTICE 'PASS T33-5: execution 指标缓存键纳入统一可见性 scope(exec:p<项目集>:a<agent 集>),跨权限缓存不共享';
+
+  -- 清理 R4 夹具(保持后续测试环境干净)
+  DELETE FROM analytics_snapshots WHERE workspace_id = v_ws AND metric_key = 'agent_stats';
+  DELETE FROM task_executions WHERE id IN ('e2e2e2e2-0000-0000-0000-000000000001',
+                                           'e2e2e2e2-0000-0000-0000-000000000002',
+                                           'e2e2e2e2-0000-0000-0000-000000000003');
+  DELETE FROM agents WHERE id = 'bbbbbbbb-0000-0000-0000-000000000003';
+  DELETE FROM members WHERE id IN ('cccccccc-0000-0000-0000-00000000000d', 'cccccccc-0000-0000-0000-00000000000e');
+  DELETE FROM issues WHERE id = '99999999-0000-0000-0000-000000000041';
+  DELETE FROM identifier_prefix_registry WHERE workspace_id = v_ws AND key = 'SEC';
+  DELETE FROM projects WHERE id = 'dddddddd-0000-0000-0000-000000000003';
 END $$;
 
--- ===================== T34:Onboarding 证据与末步判定(HIGH-9)=====================
+-- ===================== T34:Onboarding 证据与末步判定(HIGH-9;R4 HIGH-4 扩展:四真实场景)=====================
+-- R4 四场景(与 onboarding.md §3.5/§3.6 逐条对应):
+--   ① 入册播种:人类成员入册事务同事务播种清单 + 五步,步骤 1 即完成;agent 成员不播种;
+--   ② 成熟工作区 reconcile:受邀进入成熟工作区(已有 agent 成员/issue/历史执行)→ 建状态全量回查,
+--      步骤 2–4 按成员自身历史事实带证据完成,**不永久 pending**;未触发执行的成员步骤 4 保持 pending;
+--   ③ 未读不得完成:末步仅由 notification.read 驱动,相关通知未读 → 末步保持 pending,aha 不置位;
+--   ④ 错误 trigger member 不得完成:末步严格按 trigger_member_id 完成——读了「他人触发的执行」的 agent 回评
+--      通知不得完成本人末步(不给未触发者伪造证据);触发者本人阅读后完成并置 aha。
 DO $$
 DECLARE
-  v_state UUID;
-  v_step UUID;
+  v_ws       UUID := '22222222-2222-2222-2222-222222222222';
+  v_agentm   UUID := 'cccccccc-0000-0000-0000-00000000000a';   -- WS-B 的 agent 成员(agent-b1)
+  v_ma       UUID := 'cccccccc-0000-0000-0000-00000000000b';   -- 人类成员 A(u2,触发者)
+  v_mb       UUID := 'cccccccc-0000-0000-0000-00000000000c';   -- 人类成员 B(u3,非触发者)
+  v_state_a  UUID := 'cdcdcdcd-3333-0000-0000-000000000091';
+  v_state_b  UUID := 'cdcdcdcd-3333-0000-0000-000000000092';
+  v_exec     UUID := 'abababab-7777-0000-0000-000000000001';
+  v_comment  UUID := '66666666-7777-0000-0000-000000000001';
+  v_notif_a  UUID := '16161616-7777-0000-0000-000000000001';
+  v_notif_b  UUID := '16161616-7777-0000-0000-000000000002';
+  v_n        INT;
 BEGIN
-  INSERT INTO onboarding_states (id, workspace_id, member_id, checklist)
-  VALUES ('cdcdcdcd-3333-0000-0000-000000000099', '22222222-2222-2222-2222-222222222222',
-          'cccccccc-0000-0000-0000-000000000009', 'activation')
-  RETURNING id INTO v_state;
-  INSERT INTO onboarding_state_steps (id, workspace_id, state_id, step_key, status)
-  VALUES ('cdcdcdcd-4444-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', v_state,
-          'see_agent_reply_in_inbox', 'pending')
-  RETURNING id INTO v_step;
+  -- 夹具:WS-B 成熟化——agent 入册 + 两名人类成员 + 一次 assign 执行(成员 A 分派)+ agent 回评 + 两条收件箱通知
+  INSERT INTO members (id, workspace_id, member_type, agent_id, role) VALUES
+    (v_agentm, v_ws, 'agent', 'bbbbbbbb-0000-0000-0000-000000000002', 'member');
+  INSERT INTO members (id, workspace_id, member_type, user_id, role) VALUES
+    (v_ma, v_ws, 'human', 'aaaaaaaa-0000-0000-0000-000000000002', 'member'),
+    (v_mb, v_ws, 'human', 'aaaaaaaa-0000-0000-0000-000000000003', 'member');
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, status, finished_at)
+  VALUES (v_exec, v_ws, 'bbbbbbbb-0000-0000-0000-000000000002', '99999999-0000-0000-0000-000000000009',
+          'assign', 'completed', now());
+  INSERT INTO issue_activity (workspace_id, issue_id, actor_member_id, field, new_value)
+  VALUES (v_ws, '99999999-0000-0000-0000-000000000009', v_ma, 'assignee_id', '"cccccccc-0000-0000-0000-00000000000a"'::jsonb);
+  INSERT INTO comments (id, workspace_id, issue_id, author_kind, author_id, body_markdown)
+  VALUES (v_comment, v_ws, '99999999-0000-0000-0000-000000000009', 'member', v_agentm, 'agent 回评:问题已修复');
+  INSERT INTO notifications (id, workspace_id, recipient_id, type, priority, comment_id, execution_id, read_at)
+  VALUES (v_notif_a, v_ws, v_ma, 'comment_created', 'normal', v_comment, v_exec, NULL),
+         (v_notif_b, v_ws, v_mb, 'comment_created', 'normal', v_comment, v_exec, NULL);
 
-  -- ① evidence 列存在且可持久化关联事实
+  -- ① 入册播种(主路径):人类成员入册事务同事务播种清单 + 五步,步骤 1 即 completed(auto);agent 成员不播种
+  INSERT INTO onboarding_states (id, workspace_id, member_id, checklist) VALUES (v_state_a, v_ws, v_ma, 'activation');
+  INSERT INTO onboarding_state_steps (workspace_id, state_id, step_key, status)
+  VALUES (v_ws, v_state_a, 'create_workspace', 'pending'),
+         (v_ws, v_state_a, 'invite_member_or_add_agent', 'pending'),
+         (v_ws, v_state_a, 'create_first_issue', 'pending'),
+         (v_ws, v_state_a, 'dispatch_or_mention_agent', 'pending'),
+         (v_ws, v_state_a, 'see_agent_reply_in_inbox', 'pending');
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now()
+   WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'create_workspace';
+  ASSERT (SELECT COUNT(*) = 5 FROM onboarding_state_steps WHERE workspace_id = v_ws AND state_id = v_state_a),
+         'T34 FAIL: 入册应播种五步';
+  ASSERT (SELECT status = 'completed' FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'create_workspace'),
+         'T34 FAIL: 步骤 1 应在建状态事务内即完成(工作区既已存在)';
+  -- agent 成员不建清单(清单是人类成员的上手路径)
+  ASSERT NOT EXISTS (SELECT 1 FROM onboarding_states WHERE workspace_id = v_ws AND member_id = v_agentm),
+         'T34 FAIL: agent 成员不应播种清单';
+  RAISE NOTICE 'PASS T34-1: 入册事务同事务播种清单 + 五步(步骤 1 即完成);agent 成员不播种';
+
+  -- ② 成熟工作区 reconcile:成员 B 随后入册;对 A/B 建状态全量回查历史事实
+  INSERT INTO onboarding_states (id, workspace_id, member_id, checklist) VALUES (v_state_b, v_ws, v_mb, 'activation');
+  INSERT INTO onboarding_state_steps (workspace_id, state_id, step_key, status)
+  VALUES (v_ws, v_state_b, 'create_workspace', 'pending'),
+         (v_ws, v_state_b, 'invite_member_or_add_agent', 'pending'),
+         (v_ws, v_state_b, 'create_first_issue', 'pending'),
+         (v_ws, v_state_b, 'dispatch_or_mention_agent', 'pending'),
+         (v_ws, v_state_b, 'see_agent_reply_in_inbox', 'pending');
+  -- reconcile 步骤 1/2/3(工作区级事实:成员已在册、已有 agent 成员、已有 issue)——A/B 同路径
   UPDATE onboarding_state_steps
      SET status = 'completed', completed_via = 'auto', completed_at = now(),
-         evidence = '{"execution_id":"cdcdcdcd-0000-0000-0000-000000000001","comment_id":"66666666-0000-0000-0000-000000000001","notification_id":"16161616-0000-0000-0000-000000000001","trigger_member_id":"cccccccc-0000-0000-0000-000000000009"}'::jsonb
-   WHERE id = v_step AND status = 'pending';
-  ASSERT (SELECT evidence ? 'notification_id' AND evidence ? 'execution_id' AND evidence ? 'comment_id'
-            FROM onboarding_state_steps WHERE id = v_step),
-         'T34 FAIL: 末步完成应持久化 execution/comment/notification 证据';
-  RAISE NOTICE 'PASS T34-1: onboarding_state_steps.evidence 持久化末步关联事实(末步完成 = 成员读过相关收件箱项)';
+         evidence = jsonb_build_object('member_added_id', v_agentm)
+   WHERE workspace_id = v_ws AND state_id IN (v_state_a, v_state_b)
+     AND step_key = 'invite_member_or_add_agent' AND status = 'pending'
+     AND EXISTS (SELECT 1 FROM members mm WHERE mm.workspace_id = v_ws AND mm.member_type = 'agent');
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now(),
+         evidence = jsonb_build_object('issue_id', '99999999-0000-0000-0000-000000000009')
+   WHERE workspace_id = v_ws AND state_id IN (v_state_a, v_state_b)
+     AND step_key = 'create_first_issue' AND status = 'pending'
+     AND EXISTS (SELECT 1 FROM issues ii WHERE ii.workspace_id = v_ws AND ii.deleted_at IS NULL);
+  -- reconcile 步骤 4:严格按成员自身历史——仅「该成员触发过 assign/mention 执行」者完成(经分派留痕)
+  UPDATE onboarding_state_steps st
+     SET status = 'completed', completed_via = 'auto', completed_at = now(),
+         evidence = jsonb_build_object('execution_id', v_exec, 'trigger_member_id', st2.member_id)
+    FROM onboarding_states st2
+   WHERE st.workspace_id = v_ws AND st.state_id IN (v_state_a, v_state_b)
+     AND st.step_key = 'dispatch_or_mention_agent' AND st.status = 'pending'
+     AND st2.id = st.state_id
+     AND EXISTS (SELECT 1 FROM task_executions e
+                  JOIN issue_activity ia ON ia.workspace_id = e.workspace_id AND ia.issue_id = e.issue_id
+                   AND ia.field = 'assignee_id' AND ia.actor_member_id = st2.member_id
+                  WHERE e.workspace_id = v_ws AND e.trigger IN ('assign','mention'));
+  -- A:步骤 2–4 带证据完成;步骤 5 保持 pending(未读通知)
+  ASSERT (SELECT COUNT(*) = 4 FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND status = 'completed'),
+         'T34 FAIL: 成员 A 入册 reconcile 后步骤 1–4 应带证据完成,不再永久 pending';
+  ASSERT (SELECT evidence ? 'trigger_member_id' AND evidence->>'trigger_member_id' = v_ma::text
+            FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'dispatch_or_mention_agent'),
+         'T34 FAIL: 步骤 4 evidence 应记 trigger_member_id = 成员 A';
+  ASSERT (SELECT status = 'pending' FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'see_agent_reply_in_inbox'),
+         'T34 FAIL: 成员 A 未读通知,步骤 5 reconcile 后应保持 pending';
+  -- B:步骤 2/3 完成;**B 从未触发执行 → 步骤 4 保持 pending(不拿工作区首个执行给未触发者伪造证据)**
+  ASSERT (SELECT status = 'pending' FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_b AND step_key = 'dispatch_or_mention_agent'),
+         'T34 FAIL: 成员 B 未触发过执行,步骤 4 不得按工作区首个执行批量完成';
+  RAISE NOTICE 'PASS T34-2: 成熟工作区 reconcile(步骤 2–4 按成员自身历史带证据完成;未触发者步骤 4 保持 pending)';
 
-  -- ② CHECK 一致性:completed 必有 completed_at(既有约束不被 evidence 破坏)
-  ASSERT (SELECT (status = 'completed') = (completed_at IS NOT NULL) FROM onboarding_state_steps WHERE id = v_step),
+  -- ③ 未读不得完成:A 的相关通知未读 → 末步完成守卫 0 行(不再凭 completed 执行 + agent 评论批量完成)
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now()
+   WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'see_agent_reply_in_inbox'
+     AND status = 'pending'
+     AND EXISTS (SELECT 1 FROM notifications n
+                  JOIN comments c        ON c.workspace_id = n.workspace_id AND c.id = n.comment_id
+                  JOIN members  am       ON am.workspace_id = c.workspace_id AND am.id = c.author_id
+                                        AND am.member_type = 'agent'
+                  JOIN task_executions e ON e.workspace_id = n.workspace_id AND e.id = n.execution_id
+                  WHERE n.workspace_id = v_ws AND n.recipient_id = v_ma AND n.read_at IS NOT NULL
+                    AND e.status = 'completed'
+                    AND EXISTS (SELECT 1 FROM issue_activity ia
+                                 WHERE ia.workspace_id = e.workspace_id AND ia.issue_id = e.issue_id
+                                   AND ia.field = 'assignee_id' AND ia.actor_member_id = v_ma));
+  ASSERT (SELECT status = 'pending' FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'see_agent_reply_in_inbox')
+     AND (SELECT aha_reached_at IS NULL FROM onboarding_states WHERE id = v_state_a),
+         'T34 FAIL: 通知未读不得完成末步、不得宣告 aha';
+  RAISE NOTICE 'PASS T34-3: 未读不得完成——末步仅由 notification.read 驱动(未读 → pending,aha 不置位)';
+
+  -- ④ 错误 trigger member 不得完成:B 读了「A 触发的执行」的 agent 回评通知 → B 的末步守卫仍 0 行
+  UPDATE notifications SET read_at = now() WHERE id = v_notif_b;
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now()
+   WHERE workspace_id = v_ws AND state_id = v_state_b AND step_key = 'see_agent_reply_in_inbox'
+     AND status = 'pending'
+     AND EXISTS (SELECT 1 FROM notifications n
+                  JOIN comments c        ON c.workspace_id = n.workspace_id AND c.id = n.comment_id
+                  JOIN members  am       ON am.workspace_id = c.workspace_id AND am.id = c.author_id
+                                        AND am.member_type = 'agent'
+                  JOIN task_executions e ON e.workspace_id = n.workspace_id AND e.id = n.execution_id
+                  WHERE n.workspace_id = v_ws AND n.recipient_id = v_mb AND n.read_at IS NOT NULL
+                    AND e.status = 'completed'
+                    AND EXISTS (SELECT 1 FROM issue_activity ia
+                                 WHERE ia.workspace_id = e.workspace_id AND ia.issue_id = e.issue_id
+                                   AND ia.field = 'assignee_id' AND ia.actor_member_id = v_mb));
+  ASSERT (SELECT status = 'pending' FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_b AND step_key = 'see_agent_reply_in_inbox')
+     AND (SELECT aha_reached_at IS NULL FROM onboarding_states WHERE id = v_state_b),
+         'T34 FAIL: 读了他人触发执行的回评通知不得完成本人末步(不给未触发者伪造证据)';
+  -- 触发者 A 本人阅读自己的通知 → A 的末步完成,evidence 持久化四元组 + aha 置位
+  UPDATE notifications SET read_at = now() WHERE id = v_notif_a;
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now(),
+         evidence = jsonb_build_object('execution_id', v_exec, 'comment_id', v_comment,
+                                       'notification_id', v_notif_a, 'trigger_member_id', v_ma)
+   WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'see_agent_reply_in_inbox'
+     AND status = 'pending'
+     AND EXISTS (SELECT 1 FROM notifications n
+                  JOIN comments c        ON c.workspace_id = n.workspace_id AND c.id = n.comment_id
+                  JOIN members  am       ON am.workspace_id = c.workspace_id AND am.id = c.author_id
+                                        AND am.member_type = 'agent'
+                  JOIN task_executions e ON e.workspace_id = n.workspace_id AND e.id = n.execution_id
+                  WHERE n.workspace_id = v_ws AND n.recipient_id = v_ma AND n.read_at IS NOT NULL
+                    AND e.status = 'completed'
+                    AND EXISTS (SELECT 1 FROM issue_activity ia
+                                 WHERE ia.workspace_id = e.workspace_id AND ia.issue_id = e.issue_id
+                                   AND ia.field = 'assignee_id' AND ia.actor_member_id = v_ma));
+  UPDATE onboarding_states SET aha_reached_at = now() WHERE id = v_state_a AND aha_reached_at IS NULL;
+  ASSERT (SELECT evidence ?& ARRAY['execution_id','comment_id','notification_id','trigger_member_id']
+            FROM onboarding_state_steps
+           WHERE workspace_id = v_ws AND state_id = v_state_a AND step_key = 'see_agent_reply_in_inbox'),
+         'T34 FAIL: 末步完成应持久化 execution/comment/notification/trigger_member 四元证据';
+  ASSERT (SELECT aha_reached_at IS NOT NULL FROM onboarding_states WHERE id = v_state_a)
+     AND (SELECT aha_reached_at IS NULL FROM onboarding_states WHERE id = v_state_b),
+         'T34 FAIL: aha 仅为触发者 A 置位,B 不因 A 的事实完成';
+  RAISE NOTICE 'PASS T34-4: 末步严格按 trigger_member_id 完成(错误 trigger member 不得完成;触发者阅读后完成 + aha)';
+
+  -- ⑤ CHECK 一致性:completed 必有 completed_at(既有约束不被 evidence 破坏)
+  ASSERT NOT EXISTS (SELECT 1 FROM onboarding_state_steps
+                      WHERE workspace_id = v_ws AND state_id IN (v_state_a, v_state_b)
+                        AND (status = 'completed') <> (completed_at IS NOT NULL)),
          'T34 FAIL: 状态与完成时间一致性 CHECK';
-  RAISE NOTICE 'PASS T34-2: 步骤状态机 CHECK 与 evidence 共存';
+  RAISE NOTICE 'PASS T34-5: 步骤状态机 CHECK 与 evidence 共存';
 END $$;
 
 -- ===================== 建议-2:is_pinned 快照删除验证 =====================
@@ -2715,5 +3313,5 @@ BEGIN
 END $$;
 
 \echo '============================================================'
-\echo 'ALL R2+R3 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'
