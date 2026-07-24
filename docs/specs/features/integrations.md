@@ -87,11 +87,17 @@ workspaces ──隔离──► integrations(连接器实例:kind + 非密 conf
                        │             ├─ integration_id 复合 FK → integrations
                        │             ├─ project_id NULL 复合 FK → projects(scope='project' 时)
                        │             └─ bound_agent_id NULL 复合 FK → agents
-                       │             UNIQUE(integration_id, external_ref) 外部侧唯一绑定
+                       │             UNIQUE(provider, provider_tenant_key, external_ref) 外部身份全局唯一绑定(R3)
                        │
                        └──1:N──► integration_events(入站摄取台账:签名/去重/审计,复用 autopilot 范式)
                                      UNIQUE(integration_id, external_event_id) 去重
                                      ──► 匹配 binding ──► task_executions(trigger='integration',README §6.9)
+
+external_identities(外部用户身份 ↔ Mesh 用户映射真源,R3 引入/R4 修订):
+   UNIQUE(provider, provider_tenant_key, external_user_key) 全局身份键(R4:纳入平台租户)
+   user_id FK → users(全局登录身份,README §6.1;同一 users.id 在多工作区各有 member 行)
+   卡片回调鉴权:集成实例解析 workspace → 本表查 users.id → JOIN 该 workspace 的
+                 members(workspace_id, user_id) → README §6.10 权限再校验(§2.4.1/§3.2)
 
 workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 事件过滤 + 熔断状态)
                        │   created_by ──► members(复合 FK)
@@ -163,24 +169,27 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 
 **去重唯一键**:`UNIQUE (integration_id, external_event_id)` —— 入站先尝试插入,命中唯一冲突即视为重复,幂等返回 200 `deduped` 不再分发(README §6.9「外部 IM 消息触发」行的去重保证)。
 
-### 2.4.1 表:`external_identities`(外部用户身份 ↔ Mesh 成员映射;R3 协同 MES-4 HIGH-1 补真源)
+### 2.4.1 表:`external_identities`(外部用户身份 ↔ Mesh 用户映射;R3 协同 MES-4 HIGH-1 补真源,R4 修订模型)
 
-> IM 审批/交互卡片回调的点击者鉴权(§3.2/§4.3)需要把外部平台的点击者身份映射到 Mesh 成员再按 README §6.10 权限行校验;本表是该映射的**唯一真源**(此前卡片回调直接转发 approve/reject,无点击者身份核验——MES-4 v3 安全复审 HIGH-1 修复引入本映射要求,R3 补表与约束)。
+> IM 审批/交互卡片回调的点击者鉴权(§3.2/§4.3)需要把外部平台的点击者身份映射到 Mesh 身份再按 README §6.10 权限行校验;本表是该映射的**唯一真源**(此前卡片回调直接转发 approve/reject,无点击者身份核验——MES-4 v3 安全复审 HIGH-1 修复引入本映射要求,R3 补表与约束,R4 修订映射模型)。
+>
+> **R4 模型修订(与 README §6.1 多工作区成员模型对齐)**:映射目标从 workspace-scoped 的 `members.id` 改为**全局登录身份 `users.id`**——此前「外部账号全局锁到一个 member_id」与 §6.1 核心模型(同一 `users.id` 在多工作区各有 member 行)冲突,会阻止同一已认证外部账号跨多个 Mesh 工作区参与卡片审批;身份键亦纳入 `provider_tenant_key`,不同外部租户的同名 user key 不再误撞。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK,`UNIQUE (workspace_id, id)`(README §6.2) | `gen_random_uuid()` | 主键 |
-| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 归属工作区 |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | **建链所在工作区**(审计与级联用;映射本身为全局 `users.id` 级,不锁单个工作区,R4) |
 | `provider` | TEXT | NOT NULL,CHECK IN ('feishu','slack','github','gitlab') | — | 外部平台(与 bindings 同口径) |
+| `provider_tenant_key` | TEXT | NOT NULL DEFAULT `''` | `''` | **规范化外部平台租户标识(R4:纳入身份键)**:飞书 `tenant_key`、Slack `team_id`、GitHub `installation_id`(或 org 登录名)、GitLab 实例主机;与 `integration_bindings.provider_tenant_key` 同口径,建链时从集成实例归一 |
 | `external_user_key` | TEXT | NOT NULL | — | 规范化外部用户标识(飞书 `open_id`、Slack `user_id`、GitHub/GitLab 用户 login/id) |
-| `member_id` | UUID | NOT NULL,**复合 FK `(workspace_id, member_id) → members(workspace_id, id)` ON DELETE CASCADE** | — | 映射到的 Mesh 成员(成员移除 → 映射级联删除,卡片点击回落到「未映射 → 403」) |
+| `user_id` | UUID | NOT NULL,**FK→users(id) ON DELETE CASCADE** | — | **映射到的 Mesh 全局登录身份(R4:不再映射到单个 workspace-scoped 的 member_id)**——同一已认证外部账号可跨多个 Mesh 工作区参与卡片审批(每个工作区经各自的 `members(workspace_id, user_id)` 行解析,README §6.1);用户注销 → 映射级联删除 |
 | `verified_at` | TIMESTAMPTZ | NOT NULL | `now()` | 经**认证的连接流程**建立的时间(见下) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **约束与建立流程**:
-- `UNIQUE (provider, external_user_key)`(**全局**):一个外部平台用户至多映射到一个 Mesh 成员(跨 workspace 唯一,与 bindings 外部身份全局键同构)。
-- **映射只能经认证流程建立**:成员在站内「连接外部账号」流程中完成平台侧 OAuth 确认(服务端核对 OAuth 返回的平台用户身份与请求者会话)后写入;**禁止**经卡片回调/入站事件隐式创建映射(否则攻击者可借他人点击伪造身份绑定)。
-- 卡片回调鉴权链(§3.2):提取点击者外部身份 → 查本表映射成员 → 按 README §6.10 权限行再校验 → 未映射/无权限 → 403,审批状态不变,审计留痕。
+- `UNIQUE (provider, provider_tenant_key, external_user_key)`(**全局身份键,R4**):一个外部平台账号(提供商 + 平台租户 + 外部用户)至多映射一个 Mesh 用户;同一账号在其所属平台租户内全局唯一,**不同外部租户的同名 user key 可并存**(此前 `UNIQUE(provider, external_user_key)` 缺租户维度,既可能让不同外部租户的同名 user key 误撞,又把账号锁死到单个 member)。
+- **映射只能经认证流程建立**:成员在站内「连接外部账号」流程中完成平台侧 OAuth 确认(服务端核对 OAuth 返回的平台用户身份与请求者会话)或一次性验证码确认(§3.1 `:link`/`:link-confirm`)后写入,**映射目标 = 请求者本人的 `users.id`**(经其成员行的 `user_id` 解析,建链端点不接受指向他人用户的参数);**禁止**经卡片回调/入站事件隐式创建映射(否则攻击者可借他人点击伪造身份绑定)。
+- **卡片回调鉴权链(§3.2,R4 写死)**:从回调载荷提取点击者外部身份(provider + 平台租户 + user key,租户由接收回调的集成实例归一)→ **由集成实例解析所属 workspace** → 查本表 `(provider, provider_tenant_key, external_user_key)` 得 `users.id` → **JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行** → 按 README §6.10 权限行再校验 → **未映射 / 该用户在此工作区无名册行 / 名册行非 active / 无权限 → 403,审批状态不变,审计留痕**。同一映射行服务该用户在**所有**工作区的卡片审批(各工作区独立解析各自 member、独立做权限校验)。
 
 ### 2.5 表:`webhook_subscriptions`(出向 Webhook 订阅)
 
@@ -333,23 +342,23 @@ CREATE TABLE integration_events (
 CREATE INDEX idx_event_integration_status ON integration_events(integration_id, process_status, received_at DESC);
 CREATE INDEX idx_event_ws_received ON integration_events(workspace_id, received_at DESC);
 
--- ============ external_identities(R3 协同 MES-4 HIGH-1:外部用户身份 ↔ Mesh 成员,卡片回调鉴权真源)============
+-- ============ external_identities(R3 协同 MES-4 HIGH-1;R4 HIGH-5:映射全局 users.id + 身份键含平台租户)============
 CREATE TABLE external_identities (
-  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id      UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  provider          TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
-  external_user_key TEXT NOT NULL,                       -- 飞书 open_id / Slack user_id / VCS 用户 login
-  member_id         UUID NOT NULL,
-  verified_at       TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 经认证的「连接外部账号」流程建立
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,   -- 建链所在工作区(审计/级联);映射为全局 users.id 级
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  provider_tenant_key TEXT NOT NULL DEFAULT '',                  -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机)
+  external_user_key   TEXT NOT NULL,                             -- 飞书 open_id / Slack user_id / VCS 用户 login
+  user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射全局登录身份(回调按工作区 JOIN members 解析名册行)
+  verified_at         TIMESTAMPTZ NOT NULL DEFAULT now(),        -- 经认证的「连接外部账号」流程建立
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_external_identities_ws_id UNIQUE (workspace_id, id),
-  -- 一个外部平台用户至多映射一个 Mesh 成员(全局唯一,与 bindings 外部身份全局键同构)
-  CONSTRAINT uq_external_identity UNIQUE (provider, external_user_key),
-  CONSTRAINT fk_external_identity_member FOREIGN KEY (workspace_id, member_id)
-    REFERENCES members(workspace_id, id) ON DELETE CASCADE
+  -- R4:身份键 = 平台 + 平台租户 + 外部用户(全局);一个外部平台账号至多映射一个 Mesh 用户,
+  -- 不同外部租户同 user key 可并存;同一账号跨多 Mesh 工作区参与 = 单映射行 + 按工作区 JOIN member
+  CONSTRAINT uq_external_identity UNIQUE (provider, provider_tenant_key, external_user_key)
 );
-CREATE INDEX idx_external_identities_member ON external_identities(workspace_id, member_id);
+CREATE INDEX idx_external_identities_user ON external_identities(user_id);
 
 -- ============ webhook_subscriptions ============
 CREATE TABLE webhook_subscriptions (
@@ -444,7 +453,7 @@ CREATE INDEX idx_vcs_links_integration_status
 | `integration_bindings.project_id` | 复合 FK → `projects(workspace_id, id)` `ON DELETE CASCADE` | project.md | `scope='project'` 时下放绑定(精确异或 CHECK 下项目删除级联删绑定,R3) |
 | `integration_bindings.bound_agent_id` | 复合 FK → `agents(workspace_id, id)` | agent.md | 匹配后触发的目标 agent(README §6.2) |
 | `vcs_links.integration_id` | 复合 FK → `integrations(workspace_id, id)` `ON DELETE CASCADE` | 本模块 | VCS 关联真源表归属的 VCS 集成(R3,§2.8;集成删除级联删关联) |
-| `external_identities.member_id` | 复合 FK → `members(workspace_id, id)` `ON DELETE CASCADE` | member.md | 外部用户身份 → Mesh 成员映射(R3 协同 MES-4 HIGH-1,§2.4.1;成员移除级联删映射,卡片点击回落 403) |
+| `external_identities.user_id` | FK → `users(id)` `ON DELETE CASCADE` | auth.md(README §6.1 全局登录身份) | 外部用户身份 → Mesh **用户**映射(R3 引入、R4 修订,§2.4.1;用户注销级联删映射;卡片回调按集成解析 workspace 后 JOIN `members(workspace_id, user_id)` 得名册行再校验 §6.10 权限,未映射/无该行/无权限 → 403) |
 | `vcs_links.created_by` | 复合 FK → `members(workspace_id, id)` `ON DELETE SET NULL (created_by)` | member.md | 人工关联者(自动关联为 NULL;离册仅置空) |
 | `vcs_links.mesh_entity_id` | 多态逻辑外键 → `issues`/`projects`(携带 `workspace_id`,README §6.2 第 4 条) | issue.md / project.md | 关联的 Mesh 实体(软删除一致性由服务层保证) |
 | `webhook_subscription_deliveries.subscription_id` | 复合 FK → `webhook_subscriptions(workspace_id, id)` | 本模块 | 投递台账归属(README §6.2) |
@@ -487,8 +496,8 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | 方法 | 路径 | 说明 | 最低角色 |
 |------|------|------|----------|
 | GET | `/workspaces/{ws}/external-identities` | 列出当前成员已连接的外部身份 | 成员(仅本人) |
-| POST | `/workspaces/{ws}/external-identities:link` | **建链**:将请求者本人的外部平台账号关联到请求者本人的 `members.id`(**建链目标固定为请求者本人,不接受指向他人成员行的参数**);请求体 `{provider, integration_id}`;服务端经集成出站适配器**向该外部账号私聊下发一次性验证码**(或走外部平台 OAuth 确认,服务端核对 OAuth 返回的平台用户身份与请求者会话),验证码 TTL 10 分钟 + 单次消费;校验通过方写入 `external_identities` 行 | 成员(仅本人) |
-| POST | `/workspaces/{ws}/external-identities:link-confirm` | **建链确认**:提交验证码 `{provider, integration_id, code}`;服务端校验验证码(匹配 + 未过期 + 未消费)→ 写入映射;`UNIQUE(provider, external_user_key)` 拒绝重复映射(409 `identity_already_linked`) | 成员(仅本人) |
+| POST | `/workspaces/{ws}/external-identities:link` | **建链**:将请求者本人的外部平台账号关联到**请求者本人的全局登录身份 `users.id`**(经其本工作区成员行的 `user_id` 解析,R4;**建链目标固定为请求者本人,不接受指向他人用户/成员行的参数**);请求体 `{provider, integration_id}`(`provider_tenant_key` 由 integration 实例归一,不由请求体提供);服务端经集成出站适配器**向该外部账号私聊下发一次性验证码**(或走外部平台 OAuth 确认,服务端核对 OAuth 返回的平台用户身份与请求者会话),验证码 TTL 10 分钟 + 单次消费;校验通过方写入 `external_identities` 行 | 成员(仅本人) |
+| POST | `/workspaces/{ws}/external-identities:link-confirm` | **建链确认**:提交验证码 `{provider, integration_id, code}`;服务端校验验证码(匹配 + 未过期 + 未消费)→ 写入映射(`user_id` = 请求者全局身份);`UNIQUE(provider, provider_tenant_key, external_user_key)` 拒绝同一外部账号重复映射(409 `identity_already_linked`,R4 全局身份键) | 成员(仅本人) |
 | DELETE | `/workspaces/{ws}/external-identities/{id}` | **解链**:删除映射;解链后该外部身份的卡片点击立即恢复为「未映射 → 403」 | 成员(仅本人映射)/ admin |
 
 **OAuth 授权(IM/VCS 连接器)**:
@@ -503,9 +512,9 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | 方法 | 路径 | 平台 | 签名方案 |
 |------|------|------|----------|
 | POST | `/api/v1/integrations/feishu/events` | 飞书/Lark | `signature = SHA256(timestamp + nonce + encrypt_key + raw_body)`(取 `timestamp`/`nonce` 头);恒定时间比较 + 时间戳防重放;**`url_verification` challenge 处理见下** |
-| POST | `/api/v1/integrations/feishu/cards` | 飞书/Lark | 交互/审批卡片回调(同签名方案);回调经 `card.action.value` 携带 `approval_id`;**服务端必须从回调载荷提取点击者外部身份(飞书 `open_id`)→ 经 `external_identities` 映射到 Mesh 成员 → 按 README §6.10 权限行再校验(未映射/无权限 → 403,审批状态不变,留痕)→ 方可转发 `POST /approvals/{id}/approve\|reject`** |
+| POST | `/api/v1/integrations/feishu/cards` | 飞书/Lark | 交互/审批卡片回调(同签名方案);回调经 `card.action.value` 携带 `approval_id`;**服务端必须从回调载荷提取点击者外部身份(飞书 `open_id`)→ 经 `external_identities`(`(provider, provider_tenant_key, external_user_key)` 全局身份键)映射到全局 `users.id`,再由接收回调的集成实例解析所属 workspace、JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行 → 按 README §6.10 权限行再校验(未映射/该用户在此工作区无名册行/无权限 → 403,审批状态不变,留痕)→ 方可转发 `POST /approvals/{id}/approve\|reject`**(R4 映射模型) |
 | POST | `/api/v1/integrations/slack/events` | Slack | `X-Slack-Signature: v0=HMAC_SHA256(signing_secret, "v0:" + X-Slack-Request-Timestamp + ":" + raw_body)`;恒定时间比较 + 时间戳防重放;`url_verification` 回显 `challenge` |
-| POST | `/api/v1/integrations/slack/cards` | Slack | Block Kit 交互回调(`X-Slack-Signature` 同方案);`actions[].value` 携带 `approval_id`;**同飞书:提取 `user_id` → `external_identities` 映射成员 → §6.10 权限校验 → 转发统一审批端点** |
+| POST | `/api/v1/integrations/slack/cards` | Slack | Block Kit 交互回调(`X-Slack-Signature` 同方案);`actions[].value` 携带 `approval_id`;**同飞书:提取 `user_id`(连同 `team_id` 归一平台租户)→ `external_identities` 映射全局 `users.id` → 集成解析 workspace 后 JOIN 该 workspace 名册行 → §6.10 权限校验 → 转发统一审批端点**(R4 映射模型) |
 | POST | `/api/v1/integrations/github/events` | GitHub | `X-Hub-Signature-256: sha256=HMAC_SHA256(webhook_secret, raw_body)`;`X-GitHub-Delivery` 作 `external_event_id`;`X-GitHub-Event` 作事件类型 |
 | POST | `/api/v1/integrations/gitlab/events` | GitLab | `X-Gitlab-Token`(共享密钥,恒定时间比较)或 `X-Gitlab-Signature`(HMAC);`X-Gitlab-Event` 作事件类型;`event_uuid` 作 `external_event_id` |
 
@@ -649,7 +658,7 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 
 **流程 A:连接飞书并绑定值班群**:集成页 → 飞书卡 [连接] → OAuth 授权回跳成功 → 集成详情 → 绑定 tab → [+ 新绑定] → 选"研发值班群"(external_ref)→ 作用域选 INFRA 项目 → 匹配规则勾"@指定 agent"+ 选值班 agent → 保存。群里 @值班 agent → 入站摄取(签名/去重/审计)→ 触发运行 → agent 回评到 issue(IM 消息按不可信数据隔离入上下文)。
 
-**流程 B:审批卡片在 IM 内闭环**:运行命中 `confirm_required` → `approvals` 建审批(README §6.10)→ 出站适配器向绑定 IM 频道推审批卡片(动作/权限/影响/成本/批准按钮)→ 审批人在飞书/Slack 卡片点"批准" → 卡片回调 → **服务端提取点击者外部身份(飞书 `open_id`/Slack `user_id`)→ 经 `external_identities` 映射到 Mesh 成员 → 按 README §6.10 权限行校验(未映射/无权限 → 403 拒绝,审批状态不变,审计留痕)** → 校验通过 → 转发 `POST /approvals/{id}/approve` → 运行从审批点续跑;台账记 `notification_delivery(channel='im')` 与 approvals `decision_comment`。
+**流程 B:审批卡片在 IM 内闭环**:运行命中 `confirm_required` → `approvals` 建审批(README §6.10)→ 出站适配器向绑定 IM 频道推审批卡片(动作/权限/影响/成本/批准按钮)→ 审批人在飞书/Slack 卡片点"批准" → 卡片回调 → **服务端提取点击者外部身份(飞书 `open_id`/Slack `user_id`)→ 经 `external_identities`(`(provider, provider_tenant_key, external_user_key)` 全局身份键)映射到全局 `users.id` → 由接收回调的集成实例解析所属 workspace,JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行 → 按 README §6.10 权限行校验(未映射/该用户在此工作区无名册行/无权限 → 403 拒绝,审批状态不变,审计留痕)** → 校验通过 → 转发 `POST /approvals/{id}/approve` → 运行从审批点续跑;台账记 `notification_delivery(channel='im')` 与 approvals `decision_comment`。**同一已认证外部账号可在其所属的多个 Mesh 工作区各自闭环审批(R4:映射全局 users.id,各工作区独立解析名册行与权限)**。
 
 **流程 C:GitHub PR 合并自动流转**:绑定 GitHub 仓库到 WEB 项目(`auto_status_map={"merged":"done"}`)→ 开发者 PR 标题含 `WEB-123` → PR 合并事件入站 → 签名/去重 → identifier 解析关联 `WEB-123` → 自动置 done + 发评论"PR #N 已合并,自动置为 done" → issue 侧栏显示关联 PR 与流转标记。
 
@@ -699,10 +708,10 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **飞书 `tenant_access_token` 缓存刷新**:出站适配器缓存 `tenant_access_token`,过期前主动刷新;刷新失败/凭据撤销 → 出站投递记 `failed` 并告警,**刷新过程与令牌值不回显响应/日志**。
 - [ ] **飞书 `im.message.receive_v1` 触发**:群里 @绑定 agent 或私聊 agent → 摄取 → 触发运行;agent 回评经出站适配器发回 IM/issue。
 - [ ] **飞书/Slack 审批卡片闭环**:审批产生 → 推审批卡片(字段同 §4.4)→ 卡片点"批准/拒绝" → 回调转发 `POST /approvals/{id}/approve|reject`(README §6.10)→ 运行从审批点续跑/取消;回调记 approvals `decision_comment` + `notification_delivery(channel='im')`;**重复回点幂等**(README §6.10 重复 approve/reject no-op)。
-- [ ] **IM 卡片回调点击者鉴权(HIGH-1)**:卡片回调必须从载荷提取点击者外部身份(飞书 `open_id`/Slack `user_id`)→ 经 `external_identities`(`(平台, 外部用户 id) ↔ member_id`,经认证的「连接外部账号」流程建立)映射到 Mesh 成员 → **服务端按 README §6.10 权限行再校验**;**未映射/无权限的 IM 用户点卡片批准 → 403 拒绝,审批状态不变,审计记录**;卡片决定路径与站内审批权限校验等价;兜底:高危动作审批的卡片可只呈现不提供按钮,强制站内「待我审批」决。
-- [ ] **外部身份建链信任根(HIGH-1 补齐)**:无法将自己不控制的外部身份关联到本人(验证码仅投递至该外部账号私聊,或经 OAuth 确认服务端核对平台返回的用户身份与请求者会话);建链目标固定为请求者本人(不接受指向他人成员行的参数);建链不可经卡片回调/入站事件隐式创建。
-- [ ] **外部身份全局唯一**:`UNIQUE(provider, external_user_key)` 生效——同一外部平台用户至多映射一个 Mesh 成员;重复建链 → 409 `identity_already_linked`。
-- [ ] **建链/解链审计与即时生效**:建链/解链操作均写审计日志;解链后该外部身份的卡片点击**立即**恢复为「未映射 → 403」(无缓存延迟);成员被移除(`ON DELETE CASCADE`)后映射级联删除,效果同解链。
+- [ ] **IM 卡片回调点击者鉴权(HIGH-1;R4 映射模型)**:卡片回调必须从载荷提取点击者外部身份(飞书 `open_id`/Slack `user_id`,连同平台租户归一)→ 经 `external_identities`(`(provider, provider_tenant_key, external_user_key) ↔ users.id` 全局身份键,经认证的「连接外部账号」流程建立)映射到全局 `users.id` → **由接收回调的集成实例解析所属 workspace,JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行,服务端按 README §6.10 权限行再校验**;**未映射/该用户在此工作区无名册行/无权限的 IM 用户点卡片批准 → 403 拒绝,审批状态不变,审计记录**;卡片决定路径与站内审批权限校验等价;兜底:高危动作审批的卡片可只呈现不提供按钮,强制站内「待我审批」决。
+- [ ] **外部身份建链信任根(HIGH-1 补齐)**:无法将自己不控制的外部身份关联到本人(验证码仅投递至该外部账号私聊,或经 OAuth 确认服务端核对平台返回的用户身份与请求者会话);建链目标固定为请求者本人的 `users.id`(不接受指向他人用户/成员行的参数);建链不可经卡片回调/入站事件隐式创建。
+- [ ] **外部身份全局唯一 + 多工作区模型(R4,HIGH-5,集成测试 T29)**:`UNIQUE(provider, provider_tenant_key, external_user_key)` 生效——同一外部平台账号(含平台租户维度)至多映射一个 Mesh 用户;**同一已认证外部账号可跨两个 Mesh 工作区参与卡片审批(单映射行,各工作区经各自 `members(workspace_id, user_id)` 行解析,不再被锁到单个 member_id)**;**不同外部租户的同名 user key 可并存(身份键含 `provider_tenant_key`,不误撞)**;同一外部账号重复建链 → 409 `identity_already_linked`。
+- [ ] **建链/解链审计与即时生效**:建链/解链操作均写审计日志;解链后该外部身份的卡片点击**立即**恢复为「未映射 → 403」(无缓存延迟);**用户注销(`users` 行 `ON DELETE CASCADE`)后映射级联删除**,效果同解链。
 - [ ] **Slack 同构**:Events API 事件回调(`message.channels` 等)经 `X-Slack-Signature` 校验后触发;Block Kit 卡片推送/回调与飞书语义对齐(同一抽象,不同适配点)。
 - [ ] **VCS 关联(真源 `vcs_links`,R3)**:commit/PR/branch ↔ issue 经 `POST /integrations/vcs/links` 显式关联,或经 identifier(`WEB-123`)自动解析关联(`UNIQUE(workspace_id, identifier)`),**一律落 `vcs_links` 表**(§2.8:同租户复合 FK `(workspace_id, integration_id) → integrations(workspace_id, id)`、外部对象部分唯一键 `uq_vcs_links_external_object`、状态索引);`GET /issues/{id}/vcs-links` 返回该 issue 的 active 关联列表;同一外部 PR 重复关联幂等(部分唯一索引命中跳过),外部对象已存在 active 关联时异工作区/异 issue 抢关被拒 409。
 - [ ] **VCS 自动状态流转**:PR merge/close 事件入站并关联 issue 后,按 `auto_status_map` 经 issue.md 状态流转置目标状态(校验目标状态存在 + 迁移合法)+ 刷新 `vcs_links.external_state`/`status='stale'` + 发评论留痕;**重复事件幂等不重复改状态**。
