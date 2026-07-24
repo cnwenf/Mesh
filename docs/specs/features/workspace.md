@@ -25,14 +25,14 @@
 | W1 | 创建工作区 | 登录用户创建工作区,自动成为 `owner` | 创始人新建团队空间,所有数据与其它团队隔离 |
 | W2 | 列出我的工作区 | 同一自然人可属于多个工作区,登录后列出并可切换 | 外包工程师同时服务 A、B 两客户,一键切换 |
 | W3 | 获取单个工作区 | 支持 UUID 或 slug 两种寻址 | 通过收藏的 `/<slug>/board` 链接进入 |
-| W4 | 更新工作区设置 | 名称、Logo、slug、时区、默认语言、杂项配置 | 管理员上传公司 Logo、修改显示名 |
+| W4 | 更新工作区设置 | 名称、Logo、slug、时区、默认 locale(`settings.default_locale`,唯一 locale 真源)、杂项配置 | 管理员上传公司 Logo、修改显示名 |
 | W5 | 数据强隔离 | 所有业务查询隐式带 `workspace_id` 过滤 | 即使猜到别工作区某 issue 的 UUID 也无法读取 |
 | W6 | slug 标识与重定向 | 全局唯一可读标识;改名保留旧 slug → 新 id 映射 | 公司更名后旧收藏链接 301 重定向 |
 | W7 | 邮箱/链接邀请 | 管理员发起邀请,带 token、有效期、次数、预设角色 | 一次性邀请链接贴群里,新人点击即加入 |
 | W8 | 接受邀请 | 被邀请人注册/登录后接受,生成成员记录 | 新用户点链接 → 注册 → 自动成为 `member` |
 | W9 | 撤销邀请 | 未接受的邀请可被管理员撤销 | 发错邮箱,撤回邀请 |
 | W10 | 软删除/归档工作区 | 仅 owner,二次确认,软删除 + 保留期 | 项目结束后删除整个工作区 |
-| W11 | 工作区级配置 | 默认状态集、默认优先级、时区、默认语言、功能开关 | 管理员自定义本工作区的流程开关 |
+| W11 | 工作区级配置 | 默认状态集、默认优先级、时区、默认 locale(`settings.default_locale`)、功能开关 | 管理员自定义本工作区的流程开关 |
 
 ### 1.3 边界与非目标(明确不做什么)
 
@@ -90,8 +90,9 @@ users(人类登录身份,auth.md)──┐
 | `slug` | TEXT | NOT NULL,UNIQUE(见部分索引) | — | 全局唯一 URL 标识,`^[a-z0-9-]{2,32}$` |
 | `logo_url` | TEXT | NULL | NULL | Logo 对象存储地址 |
 | `timezone` | TEXT | NOT NULL | `'UTC'` | IANA 时区名 |
-| `default_language` | TEXT | NULL,**已弃用(R3)** | NULL | **弃用列,仅迁移用**:历史上与 `settings.default_locale` 构成双真源且默认值冲突(本列 `'en'` vs 键 `'zh-CN'`)。R3 统一以 **`settings.default_locale` 为唯一 locale 真源**;迁移脚本把存量 `default_language` 值一次性写入 `settings.default_locale`(键缺失时)后**删除本列**——**不做长期双写**,运行时代码不读本列(README §6.18 / i18n.md) |
-| `settings` | JSONB | NOT NULL | `'{}'` | 杂项配置,见下方已知键约定 |
+| `settings` | JSONB | NOT NULL | `'{"default_locale": "en"}'` | 杂项配置,见下方已知键约定;**`settings.default_locale` 是工作区 locale 的唯一真源(R3 立约,R4 收口)** |
+
+> **Migration note(R4:旧 `default_language` 列的一次性迁移,独立于当前模型)**:当前模型**不含** `default_language` 列(R4 已从模型与全部响应示例移除,运行时代码不读不写、无长期双写)。历史上该列曾与 `settings.default_locale` 构成双真源且默认值冲突(列 `'en'` vs 键 `'zh-CN'`);升级部署执行**一次性迁移**:把存量 `workspaces.default_language` 值写入 `settings.default_locale`(仅键缺失时),随后 `ALTER TABLE workspaces DROP COLUMN default_language`;新建库直接以 `settings DEFAULT '{"default_locale": "en"}'` 建表,无迁移步骤。locale 协商一律只走 `settings.default_locale`(README §6.18 / i18n.md §2.3)。
 | `inbox_issue_seq` | BIGINT | NOT NULL,CHECK (inbox_issue_seq >= 0) | `0` | 工作区级"无项目 issue"编号计数器(行锁自增,同 `projects.issue_seq`;README §6.3) |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除时间(NULL=未删除) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -263,15 +264,14 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 // Request
 { "name": "Acme Team", "slug": "acme", "timezone": "Asia/Shanghai" }
 
-// 201 Response
+// 201 Response(R4:响应不含 default_language 字段——locale 唯一真源为 settings.default_locale)
 {
   "id": "0d6f1c2a-0000-4000-8000-0000000000e2",
   "name": "Acme Team",
   "slug": "acme",
   "logo_url": null,
   "timezone": "Asia/Shanghai",
-  "default_language": "en",
-  "settings": {},
+  "settings": { "default_locale": "en" },
   "my_role": "owner",
   "created_at": "2026-07-24T10:00:00Z",
   "updated_at": "2026-07-24T10:00:00Z"
@@ -348,8 +348,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
   "slug": "acme",
   "logo_url": "https://cdn.example/logo.png",
   "timezone": "Asia/Shanghai",
-  "default_language": "en",
-  "settings": { "default_status_set": "basic", "new_member_default_role": "member",
+  "settings": { "default_locale": "en", "default_status_set": "basic", "new_member_default_role": "member",
                 "seat_limit": 50, "feature_flags": { "autopilot": true } },
   "my_role": "admin",
   "created_at": "2026-07-24T10:00:00Z",
@@ -379,7 +378,9 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 
 | HTTP | code | 场景 |
 |------|------|------|
-| 400 | `validation_error` | slug 含大写/超长、name 超长、非法时区 |
+| 400 | `validation_error` | slug 含大写/超长、name 超长等请求级格式错误 |
+| 422 | `invalid_timezone` | `timezone` 非合法 IANA 时区(与 auth.md §3.1 canonical 对齐,README §6.18) |
+| 422 | `unsupported_locale` | `settings.default_locale` 不在受支持 locale 清单内(与 auth.md §3.1 / i18n.md §3.5 对齐;**R4:locale 写入校验统一用具名 422,不再用 400 validation_error**) |
 | 401 | `unauthorized` | token 缺失/失效 |
 | 403 | `forbidden` | 非成员访问 / 角色不足(如非 owner 删除) |
 | 404 | `not_found` | 工作区不存在或对当前 principal 不可见 |
@@ -507,6 +508,7 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] **前缀注册表(README §6.3 / §9 T19)**:`identifier_prefix_registry.UNIQUE(workspace_id, key)` 使项目 `key` 与收件箱前缀(含 `retired` 历史前缀)工作区级排他——冲突分别返回 409 `project_key_taken`(project.md §3.3)/ 422 `prefix_reserved`;变更收件箱前缀后旧前缀置 `retired` 永久保留、历史 identifier 不重编号;工作区创建时播种默认 `WS` 的 `kind='inbox'` 首行。
 - [ ] 非成员访问任意工作区资源返回 404(不泄露存在性)。
 - [ ] 所有业务查询隐式按 `workspace_id` 过滤,跨工作区不可读。
+- [ ] **workspace locale 单一真源(R4,HIGH-3,集成测试 T32)**:当前模型**无 `default_language` 列**(迁移说明见 §2.2 migration note:存量值一次性写入 `settings.default_locale` 后删列,无双写期);创建/读取响应**只返回 `settings.default_locale`**(默认 `en`),不含任何 `default_language` 字段;`PATCH` 写 `settings.default_locale` 按键浅合并生效,非法 locale → `422 unsupported_locale`、非法时区 → `422 invalid_timezone`(与 auth.md §3.1 canonical 对齐);locale 协商链按 README §6.18 只走本键。
 
 ### 5.2 性能
 
