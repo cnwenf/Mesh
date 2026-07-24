@@ -1,0 +1,661 @@
+# Issue(工作项)功能 Spec【全系统最核心实体】
+
+> **所属层**:项目管理核心层 —— 原子工作单元。Issue 是看板的卡片、列表的行、被分派/被评论/被流转的对象;人类与 AI agent 一样可被设为 assignee,是连接项目管理与 agent 执行的枢纽。
+>
+> **依赖的其他 Spec**:
+> - `workspace.md`(工作区):issue 必属于一个工作区,`workspace_id` 为隔离键。
+> - `member.md`(成员):`assignee_id`/`reporter_id`/活动 `actor_member_id`/@提及统一引用 `members.id`(`member_type` ∈ {`human`,`agent`},人类与 agent 对称)。
+> - `project.md`(项目):`project_id` 归属项目;`projects.key` 提供编号前缀;`projects.issue_seq` 提供项目级自增计数器;`milestone_id`/`cycle_id` 引用里程碑/周期。
+> - `label-property.md`(标签与自定义字段):`issue_labels`(M:N)、`issue_custom_field_values`(EAV)。
+>
+> **被依赖(下游 Spec)**:
+> - `kanban.md`(视图):看板/列表/时间线渲染本实体,复用本 Spec 的列表查询(过滤/分组/排序)。
+> - `comment-inbox.md`(评论与收件箱):评论挂在 issue 上;@提及触发通知/agent 运行。
+> - `agent.md`(智能体):assignee 为 agent 时分派事件触发其执行运行时(本 Spec 点到为止,执行细节归 agent.md)。
+>
+> **技术基准约定(全局锚点)**:PostgreSQL;表名 snake_case 复数;主键 `id UUID` 默认 `gen_random_uuid()`;`created_at`/`updated_at` 为 `TIMESTAMPTZ`;软删除 `deleted_at`(编号保留)。REST 前缀 `/api/v1`,Bearer token,游标分页响应 `{"data","next_cursor"}`,时间 RFC3339 UTC,统一错误信封 `{"error":{"code","message","details"}}`。实时走 WebSocket `/ws`,频道订阅 + `seq` + 断线重放,事件 `<entity>.<action>`。ORM 采用 SQLAlchemy 2.x 声明式约定(或等价 DDL)。
+
+---
+
+## 1. 功能描述
+
+### 1.1 模块定位
+
+Issue 是整个产品的**原子工作单元**。需求、任务、缺陷、史诗(Epic)在数据层统一为 issue,通过父子关系与依赖关系组合成结构。它承载:
+
+1. **工作流转**:状态机驱动 todo → in_progress → in_review → done 的协作节奏。
+2. **责任分派**:assignee 指向统一成员,人或 agent 对称;分派给 agent 即触发其执行。
+3. **结构组织**:父子(sub-issues)表达"组成关系",依赖(blocks/blocked_by)表达"顺序关系"。
+4. **人类可读寻址**:UUID 内部寻址 + `<项目前缀>-<自增号>`(如 `WEB-123`)人类引用。
+5. **可扩展元数据**:标签 + 自定义字段(EAV)提供开放分类与结构化属性。
+
+### 1.2 功能点与用户场景
+
+#### 1.2.1 字段全集
+
+| 字段 | 类型语义 | 说明 | 典型场景 |
+|------|----------|------|----------|
+| `title` | 短文本(必填) | 一句话标题,1–255 | "登录页在 Safari 崩溃" |
+| `description` | 富文本/Markdown | 详细描述、复现步骤、验收标准 | 写 bug 复现步骤 |
+| `status` | 枚举(状态机) | 自定义状态,归属某 category,见 §1.3 | 从 Todo → In Progress |
+| `priority` | 枚举(可排序) | none/low/medium/high/urgent | 标为 urgent |
+| `assignee` | 成员引用(可空) | 负责人(人或 agent) | 分派给"代码助手"agent |
+| `reporter` | 成员引用 | 创建人/报告人 | 谁提的这个 bug |
+| `estimate` | 数值 + 单位 | 估算(points/hours) | 估 5 个故事点 |
+| `due_date` / `start_date` | 日期 | 截止日 / 计划开始日 | 8/15 前完成 |
+| `project` | 项目引用(可空) | 归属项目 | 归到"官网改版" |
+| `milestone` / `cycle` | 引用(可空) | 里程碑 / 迭代 | 挂到 v1.0;排入第 12 迭代 |
+| `labels` | 多对多标签 | 分类标签 | 打"bug""前端" |
+| `custom_field_values` | 动态属性 | 自定义字段值(label-property.md) | 填"严重程度=Major" |
+| `parent` | 自引用(可空) | 父 issue(sub-issues) | 大需求拆子任务 |
+| `position` | 数值 | 看板列内/列表内排序 | 拖拽改顺序 |
+| `attachments` | 关联附件 | 文件(attachment.md) | 上传截图 |
+
+#### 1.2.2 编号体系(项目前缀 + 自增号)
+
+| 功能点 | 说明 | 典型场景 |
+|--------|------|----------|
+| 人类可读编号 | `<项目前缀>-<自增号>`,如 `WEB-123` | 沟通时引用"WEB-123" |
+| 项目内自增 | 序号在**项目内**单调递增(每项目独立计数) | 新项目从 1 开始 |
+| 双主键 | 内部用 UUID 做外键与 URL;编号仅用于人类引用与搜索 | API 用 UUID,UI 显示编号 |
+| 唯一约束 | `(project_id, number)` 唯一 | 不允许两个 WEB-123 |
+| 序号生成 | 项目计数器 `issue_seq` 原子自增(行锁 `FOR UPDATE` / `RETURNING`),保证并发不重号 | 多人同时建 issue 不冲突 |
+| 无项目 issue | 未归项目的 issue 用工作区级保留前缀(如 `WS`)或独立序列 | 收件箱里的临时 issue |
+
+> **编号绝不复用**:issue 删除后其编号废弃(软删除保留行),避免引用错乱。详见 §2.4。
+
+#### 1.2.3 状态机与自定义状态(双层状态)
+
+| 功能点 | 说明 | 典型场景 |
+|--------|------|----------|
+| 内置状态类别(category) | 固定语义:`backlog`/`todo`/`in_progress`/`in_review`/`blocked`/`done`/`cancelled` | 报表按类别聚合"完成率" |
+| 自定义状态 | 工作区/项目在某 category 下自定义具体状态名 | "开发中""联调中"都属 in_progress |
+| 状态属性 | 名称、所属 category、颜色、排序、是否默认 | 给"测试中"配蓝色 |
+| 状态流转 | 默认任意状态可切到任意状态;严格模式可配置允许的转换 | 限制"必须经过 in_review 才能 done" |
+| 完成判定 | category=done 视为完成,用于进度/燃尽 | 项目进度按 done 占比 |
+| 默认状态 | 新建 issue 的默认状态(`is_default=true`,通常 backlog/todo) | 新 issue 默认进 backlog |
+
+> **category 与 status 分离(核心设计)**:`category` 是系统稳定语义(用于聚合、看板默认列、自动化触发);`status` 是用户可自定义的展示层。用户自由命名状态,而进度计算、看板分组等逻辑稳定不变。`issues.state_category` 冗余自 `issue_statuses.category`,加速聚合/筛选。
+
+#### 1.2.4 父子(sub-issues)与依赖关系(分开建模)
+
+| 功能点 | 说明 | 典型场景 |
+|--------|------|----------|
+| 父子关系 | 一个 issue 可有多个 sub-issue;支持多层(建议 ≤2–3 层) | Epic 拆 story,story 再拆 task |
+| 父进度聚合 | 父进度 = 子完成占比 | Epic 显示"3/5 完成" |
+| 依赖关系 | issue 间声明 `blocks`/`blocked_by`/`relates_to`/`duplicates` | "上线"被"压测"阻塞 |
+| 依赖可视化 | 详情页列出阻塞/被阻塞项;可选关系图 | "还差 2 个前置未完成" |
+| 循环依赖检测 | 建立依赖时校验不成环 | 阻止 A→B→A |
+
+> **关键设计**:父子用自引用外键 `parent_id`(树,强关系:级联/聚合);依赖用独立关联表 `issue_dependencies`(有向图,多对多,弱关系:仅约束)。**两者分开建模**,语义与生命周期不同。
+
+#### 1.2.5 批量操作
+
+| 功能点 | 说明 | 典型场景 |
+|--------|------|----------|
+| 多选 | 列表/看板勾选多个 issue | 选中 10 个 |
+| 批量改字段 | 批量改状态/优先级/assignee/项目/标签/周期 | 把选中 10 个标为 high |
+| 批量删除/归档 | 批量软删除 | 清理一批无效 issue |
+| 操作结果反馈 | 返回成功/失败计数,部分失败给出原因 | "成功 9,失败 1(权限不足)" |
+| 撤销(可选) | 批量操作后短时撤销 | 误操作回滚 |
+
+### 1.3 边界与非目标
+
+**本 Spec 范围内**:issue 字段、编号生成、双层状态机、父子与依赖、批量操作、列表查询(过滤/分组/排序)、变更留痕、实时事件。
+
+**非目标(由其他 Spec 承担)**:
+- 看板/列表/时间线视图的渲染、保存视图 → `kanban.md`(复用本 Spec 列表查询)。
+- 评论、@提及、收件箱 → `comment-inbox.md`。
+- 标签/自定义字段的定义与值存储细节 → `label-property.md`。
+- 附件上传 → `attachment.md`。
+- agent 被分派后的执行运行时、技能、模型 → `agent.md`(本 Spec 仅负责发出分派事件)。
+- 项目进度聚合的呈现 → `project.md`(消费 `state_category`)。
+
+---
+
+## 2. 数据模型
+
+### 2.1 ER 概览
+
+```
+projects ──1:N──► issues ──N:1──► issue_statuses(自定义状态)
+                   │  │                (status.category 冗余到 issues.state_category)
+                   │  ├──N:1──► members(assignee / reporter)
+                   │  ├──N:1──► cycles / milestones(project.md)
+                   │  ├──自引用 parent_id(树:sub-issues)
+                   │  ├──M:N──► labels(via issue_labels,label-property.md)
+                   │  ├──1:N──► issue_custom_field_values(EAV,label-property.md)
+                   │  ├──1:N──► comments(comment-inbox.md)
+                   │  ├──1:N──► issue_activity(变更留痕)
+                   │  └──M:N──► issue_dependencies(有向图)
+workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
+```
+
+### 2.2 表定义
+
+#### `issue_statuses`(自定义状态定义)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | |
+| `project_id` | UUID | NULL, FK→projects(id) ON DELETE CASCADE | NULL | NULL=工作区级;非空=项目私有状态 |
+| `name` | TEXT | NOT NULL | — | 如"测试中",1–50 |
+| `category` | TEXT | NOT NULL, CHECK IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled') | — | 稳定语义类别 |
+| `color` | TEXT | NULL | NULL | 颜色 |
+| `position` | REAL | NOT NULL | `0` | 同 category 内排序 |
+| `is_default` | BOOLEAN | NOT NULL | `false` | 是否为新建默认状态 |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+**约束**:`UNIQUE (workspace_id, COALESCE(project_id,'00000000-…'), name)`(工作区 + 作用域内状态名唯一)。
+
+> **category → status 映射**:一个 category 下可挂 0..N 个自定义 status;每个 status 必属且仅属一个 category。系统保证每个 `(workspace, project)` 作用域内至少有一个 `is_default=true` 的状态用于新建 issue。看板默认按 category 分列,列内按 status `position` 排序。
+
+#### `issues`(工作项)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | 内部主键 |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键 |
+| `project_id` | UUID | NULL, FK→projects(id) ON DELETE SET NULL | NULL | 归属项目 |
+| `number` | BIGINT | NOT NULL | — | 项目内自增号 |
+| `identifier` | TEXT | NOT NULL | — | 冗余人类编号 `WEB-123`(搜索/展示) |
+| `title` | TEXT | NOT NULL | — | 1–255 |
+| `description` | TEXT | NULL | NULL | 富文本/Markdown |
+| `status_id` | UUID | NOT NULL, FK→issue_statuses(id) | — | 当前状态 |
+| `state_category` | TEXT | NOT NULL, CHECK IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled') | — | 冗余自 status.category |
+| `priority` | TEXT | NOT NULL, CHECK IN ('none','low','medium','high','urgent') | `'none'` | |
+| `assignee_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 人或 agent |
+| `reporter_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 报告人 |
+| `estimate` | NUMERIC | NULL | NULL | 估算值 |
+| `estimate_unit` | TEXT | NULL, CHECK IN ('points','hours') | NULL | 单位 |
+| `due_date` | DATE | NULL | NULL | 截止日 |
+| `start_date` | DATE | NULL | NULL | 计划开始日 |
+| `milestone_id` | UUID | NULL, FK→milestones(id) ON DELETE SET NULL | NULL | |
+| `cycle_id` | UUID | NULL, FK→cycles(id) ON DELETE SET NULL | NULL | |
+| `parent_id` | UUID | NULL, FK→issues(id) ON DELETE CASCADE | NULL | 父 issue |
+| `position` | REAL | NOT NULL | `0` | 排序值(看板列内/列表) |
+| `completed_at` | TIMESTAMPTZ | NULL | NULL | 进入 done 的时间 |
+| `version` | INT | NOT NULL | `1` | 乐观并发版本号(见 §3.4) |
+| `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除(编号保留) |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+**表级约束**:
+- `UNIQUE (project_id, number)` —— 项目内编号唯一。
+- `CHECK (parent_id <> id)` —— 防自环(更深层环检测在服务层,见 §2.5)。
+- `CHECK (due_date IS NULL OR start_date IS NULL OR due_date >= start_date)`。
+- `state_category` 与 `status_id` 同步由服务层保证(或触发器维护,见 §2.5)。
+
+#### `issue_dependencies`(依赖关系,有向)
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | — | 主体 |
+| `depends_on_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | — | 被依赖项 |
+| `type` | TEXT | NOT NULL, CHECK IN ('blocks','blocked_by','relates_to','duplicates') | `'relates_to'` | 依赖类型 |
+| `created_by` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 建立者 |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+**约束**:`UNIQUE (issue_id, depends_on_id, type)`;`CHECK (issue_id <> depends_on_id)`。
+
+> `blocks` 与 `blocked_by` 互为反向语义:A blocks B ⇔ B blocked_by A。服务层写入时统一规范化为一条边(推荐以 `blocks` 存储,查询时双向展开),避免冗余与不一致。
+
+#### `issue_activity`(变更留痕)
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | |
+| `actor_member_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | 操作者(人或 agent) |
+| `field` | TEXT | NOT NULL | 变更字段(如 `status`/`assignee`) |
+| `old_value` | JSONB | NULL | 变更前 |
+| `new_value` | JSONB | NULL | 变更后 |
+| `created_at` | TIMESTAMPTZ | NOT NULL | 时间 |
+
+> 追加式;由服务层在每次成功 PATCH 后写入 diff。高频字段(如 position 拖拽)可选择不留痕以免噪声。
+
+#### `issue_custom_field_values` / `issue_labels`(跨模块,见 label-property.md)
+
+```
+issue_labels(issue_id, label_id)                      PK(issue_id,label_id)  —— M:N 标签
+issue_custom_field_values(id, issue_id, field_def_id,
+    value_text, value_number, value_date,
+    value_member_id, value_boolean, value_json)        UNIQUE(issue_id,field_def_id) —— EAV
+```
+
+> 字段定义、类型、选项、校验规则均在 `label-property.md`;本 Spec 仅引用其值表参与查询(过滤/分组/排序)。
+
+### 2.3 索引与约束
+
+```sql
+CREATE UNIQUE INDEX uq_issue_number ON issues(project_id, number);
+CREATE INDEX idx_issues_workspace ON issues(workspace_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_project_status
+  ON issues(project_id, state_category) WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_assignee ON issues(assignee_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_reporter ON issues(reporter_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_parent ON issues(parent_id) WHERE parent_id IS NOT NULL;
+CREATE INDEX idx_issues_cycle ON issues(cycle_id) WHERE cycle_id IS NOT NULL;
+CREATE INDEX idx_issues_milestone ON issues(milestone_id) WHERE milestone_id IS NOT NULL;
+CREATE INDEX idx_issues_due
+  ON issues(due_date) WHERE due_date IS NOT NULL AND deleted_at IS NULL;
+CREATE INDEX idx_issues_position ON issues(project_id, state_category, position);
+CREATE INDEX idx_issues_identifier ON issues(workspace_id, identifier);
+CREATE INDEX idx_issues_priority ON issues(workspace_id, priority) WHERE deleted_at IS NULL;
+CREATE INDEX idx_issue_statuses_scope
+  ON issue_statuses(workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), category);
+CREATE INDEX idx_issue_deps_issue ON issue_dependencies(issue_id);
+CREATE INDEX idx_issue_deps_on ON issue_dependencies(depends_on_id);
+CREATE INDEX idx_issue_activity_issue ON issue_activity(issue_id, created_at DESC);
+```
+
+### 2.4 编号生成(项目级原子计数器)
+
+**方案 1(起步,推荐)**:复用 `projects.issue_seq` 计数器,事务内行锁原子自增:
+
+```sql
+BEGIN;
+-- 行锁项目行并自增,RETURNING 取得 number(FOR UPDATE 语义)
+UPDATE projects
+   SET issue_seq = issue_seq + 1
+ WHERE id = $project_id
+ RETURNING issue_seq;                       -- → number
+
+-- identifier = key || '-' || number
+INSERT INTO issues (id, workspace_id, project_id, number, identifier,
+                    title, status_id, state_category, reporter_id, position)
+VALUES ($uuid, $ws, $project_id, $number, $key || '-' || $number,
+        $title, $status_id, $category, $reporter_id, $position);
+COMMIT;
+```
+
+- `UPDATE … RETURNING` 取得行级锁,保证同一项目并发创建串行化、不重号;多数团队规模下性能够用,项目行是潜在热点。
+- **方案 2(规模化演进)**:独立序列表 `issue_number_seq(workspace_id, project_id, last_number)`,对计数器行 `FOR UPDATE` 原子自增,与项目主表解耦,降低主表行锁竞争。
+- **方案 3(可选)**:每项目一个 PostgreSQL `SEQUENCE`,`nextval` 取号;并发友好但多序列管理较繁。
+- **绝不复用**:删除 issue 仅置 `deleted_at`,不回退 `issue_seq`;`(project_id, number)` 行作为墓碑保留,引用不失效。
+- **无项目 issue**:使用工作区保留前缀(如 `WS`)与独立工作区级序列,编号形如 `WS-7`;后续归入项目时是否重编号为产品策略,默认保留原编号。
+
+### 2.5 服务层一致性约束
+
+1. **`state_category` 同步**:写入/更新 `status_id` 时,服务层读取对应 `issue_statuses.category` 写入 `issues.state_category`;或用数据库触发器维护。禁止二者不一致落库。
+2. **`completed_at` 维护**:进入 `category='done'` 时写 `completed_at=now()`;离开 `done` 时清空为 NULL。
+3. **父子防环**:设置/变更 `parent_id` 时,从目标父节点向上遍历祖先链,若命中当前 issue 则拒绝(409 `circular_parent`)。`CHECK (parent_id <> id)` 仅防自环,深层环靠服务层。
+4. **依赖防环**:新增依赖边时,从 `depends_on_id` 出发做有向图可达性遍历(DFS/BFS,可用递归 CTE),若能到达 `issue_id` 则拒绝(409 `circular_dependency`)。
+5. **assignee 有效性**:`assignee_id`/`reporter_id` 必须是该工作区 `members` 中 `status='active'` 的成员(人或 agent 均可),否则 422 `assignee_not_member`。
+6. **乐观并发**:更新携带 `version`(或 `If-Match`),`WHERE id=$1 AND version=$expected`;不匹配返回 409 `conflict`,客户端重取再改。
+
+### 2.6 跨模块外键
+
+| 字段 | 引用 | ON DELETE | 说明 |
+|------|------|-----------|------|
+| `issues.workspace_id` | `workspaces(id)` | CASCADE | 隔离键(workspace.md) |
+| `issues.project_id` | `projects(id)` | SET NULL | 归属项目(project.md) |
+| `issues.status_id` | `issue_statuses(id)` | RESTRICT | 当前状态 |
+| `issues.assignee_id` / `reporter_id` | `members(id)` | SET NULL | 人或 agent(member.md) |
+| `issues.milestone_id` | `milestones(id)` | SET NULL | project.md |
+| `issues.cycle_id` | `cycles(id)` | SET NULL | project.md |
+| `issues.parent_id` | `issues(id)` | CASCADE | 自引用树 |
+| `issue_dependencies.issue_id` / `depends_on_id` | `issues(id)` | CASCADE | 有向图 |
+| `issue_activity.actor_member_id` | `members(id)` | SET NULL | member.md |
+| `issue_custom_field_values.field_def_id` | `custom_field_defs(id)` | CASCADE | label-property.md |
+| `issue_labels.label_id` | `labels(id)` | CASCADE | label-property.md |
+
+### 2.7 SQLAlchemy 2.x 声明式约定(核心表示例)
+
+```python
+class IssueStatus(Base):
+    __tablename__ = "issue_statuses"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('backlog','todo','in_progress','in_review',"
+            "'blocked','done','cancelled')", name="ck_issue_statuses_category"),
+    )
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True,
+                                    server_default=text("gen_random_uuid()"))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[float] = mapped_column(server_default="0")
+    is_default: Mapped[bool] = mapped_column(server_default=text("false"))
+
+
+class Issue(Base):
+    __tablename__ = "issues"
+    __table_args__ = (
+        UniqueConstraint("project_id", "number", name="uq_issue_number"),
+        CheckConstraint("parent_id <> id", name="ck_issues_no_self_parent"),
+    )
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True,
+                                    server_default=text("gen_random_uuid()"))
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    identifier: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status_id: Mapped[str] = mapped_column(ForeignKey("issue_statuses.id"))
+    state_category: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="none")
+    assignee_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"))
+    reporter_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("members.id", ondelete="SET NULL"))
+    parent_id: Mapped[Optional[str]] = mapped_column(ForeignKey("issues.id", ondelete="CASCADE"))
+    position: Mapped[float] = mapped_column(server_default="0")
+    completed_at: Mapped[Optional[datetime]] = mapped_column()
+    version: Mapped[int] = mapped_column(server_default="1")
+    deleted_at: Mapped[Optional[datetime]] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(server_default=text("now()"), onupdate=text("now()"))
+
+    children: Mapped[list["Issue"]] = relationship(
+        cascade="all, delete-orphan", remote_side="Issue.id",
+        foreign_keys="Issue.parent_id", back_populates="parent")
+    parent: Mapped[Optional["Issue"]] = relationship(
+        remote_side="Issue.id", back_populates="children")
+```
+
+---
+
+## 3. 接口设计
+
+REST 基础路径 `/api/v1`,Bearer token,游标分页。
+
+### 3.1 端点清单
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/workspaces/{ws}/issues` | 创建 issue |
+| GET | `/workspaces/{ws}/issues` | 列表(强过滤/排序/分组,见 §3.2) |
+| GET | `/issues/{id}` | 获取(支持 UUID 或 `by-identifier/WEB-123`) |
+| PATCH | `/issues/{id}` | 更新字段(含状态流转) |
+| DELETE | `/issues/{id}` | 软删除 |
+| GET | `/issues/{id}/children` | 子 issue 列表 |
+| GET | `/issues/{id}/dependencies` | 依赖列表(blocks/blocked_by) |
+| POST | `/issues/{id}/dependencies` | 新增依赖 |
+| DELETE | `/issues/{id}/dependencies/{dep_id}` | 删除依赖 |
+| POST | `/issues/bulk` | 批量操作 |
+| GET | `/workspaces/{ws}/statuses` | 状态定义列表 |
+| POST | `/workspaces/{ws}/statuses` | 创建自定义状态 |
+| PATCH | `/statuses/{id}` | 更新状态 |
+| DELETE | `/statuses/{id}` | 删除状态(需迁移其下 issue) |
+| GET | `/issues/{id}/activity` | 变更历史 |
+
+### 3.2 列表查询参数(统一,看板/列表/我的任务复用)
+
+- **过滤**:`status`(status_id)、`state_category`、`priority`、`assignee_id`、`reporter_id`、`project_id`、`cycle_id`、`milestone_id`、`label`(label_id)、`parent_id`、`due_before`/`due_after`、`q`(搜索 title/identifier)、自定义字段过滤(如 `cf_severity=opt_major`)。
+- **排序**:`sort=position|created_at|priority|due_date&order=asc|desc`。
+- **分组**:`group_by=state_category|assignee|priority|project|label|cycle`(看板/分组列表用)。
+- **分页**:`limit`、`cursor`。
+
+### 3.3 请求/响应示例
+
+**创建 issue** `POST /api/v1/workspaces/{ws}/issues`
+```json
+// Request
+{
+  "title": "登录页在 Safari 崩溃",
+  "description": "复现步骤:…",
+  "project_id": "prj_uuid_1",
+  "priority": "high",
+  "assignee_id": "mem_uuid_b2",
+  "estimate": 5, "estimate_unit": "points",
+  "due_date": "2026-08-15",
+  "label_ids": ["lbl_uuid_bug"],
+  "parent_id": null
+}
+
+// 201 Response
+{
+  "id": "iss_uuid_124",
+  "identifier": "WEB-124",
+  "number": 124,
+  "title": "登录页在 Safari 崩溃",
+  "status": { "id": "st_uuid_todo", "name": "Todo", "category": "todo" },
+  "state_category": "todo",
+  "priority": "high",
+  "assignee": { "id": "mem_uuid_b2", "name": "代码助手", "member_type": "agent" },
+  "reporter": { "id": "mem_uuid_a1", "name": "Jane Doe", "member_type": "human" },
+  "estimate": 5, "estimate_unit": "points",
+  "due_date": "2026-08-15",
+  "version": 1,
+  "created_at": "2026-07-24T10:00:00Z",
+  "updated_at": "2026-07-24T10:00:00Z"
+}
+```
+
+**状态流转** `PATCH /api/v1/issues/{id}`
+```json
+// Request(携带乐观并发版本)
+{ "status_id": "st_uuid_in_progress", "version": 1 }
+
+// 200 Response:返回更新后 issue,version+1;进入 done 时 completed_at 自动写入
+```
+
+**批量操作** `POST /api/v1/issues/bulk`
+```json
+// Request
+{
+  "issue_ids": ["iss_1", "iss_2", "iss_3"],
+  "changes": { "priority": "urgent", "assignee_id": "mem_uuid_a1" }
+}
+
+// 200 Response(返回成功/失败计数;部分失败给出原因)
+{
+  "succeeded": 2,
+  "failed": 1,
+  "errors": [ { "issue_id": "iss_3", "code": "forbidden", "message": "无权限改该 issue" } ]
+}
+```
+> 全部成功时 HTTP 200 且 `failed=0`;存在失败时 HTTP 422 `bulk_partial_failure`,`errors` 列出每条失败原因(权限/校验/成环等)。
+
+**依赖** `POST /api/v1/issues/{id}/dependencies`
+```json
+// Request
+{ "depends_on_id": "iss_uuid_9", "type": "blocked_by" }
+// 201;若形成环 → 409 circular_dependency
+```
+
+**分组查询(看板用)** `GET /api/v1/workspaces/{ws}/issues?group_by=state_category&project_id=prj_uuid_1`
+```json
+{
+  "groups": [
+    { "key": "todo", "label": "Todo", "count": 3,
+      "data": [ { "id": "iss_uuid_124", "identifier": "WEB-124", "title": "登录页在 Safari 崩溃" } ] },
+    { "key": "in_progress", "label": "In Progress", "count": 2, "data": [ ] }
+  ],
+  "next_cursor": null
+}
+```
+
+**错误响应(统一信封)**
+```json
+{ "error": { "code": "circular_dependency", "message": "依赖将形成环", "details": { "path": ["iss_1","iss_9","iss_1"] } } }
+```
+
+### 3.4 错误码
+
+| HTTP | code | 场景 |
+|------|------|------|
+| 400 | `validation_error` | title 缺失/超长;非法 priority;`due_date < start_date` |
+| 401 | `unauthorized` | token 缺失/失效 |
+| 403 | `forbidden` | 无权限改该 issue(私有项目/角色不足) |
+| 404 | `not_found` | issue 不存在/不可见 |
+| 409 | `circular_dependency` | 依赖成环 |
+| 409 | `circular_parent` | 父子成环 |
+| 409 | `invalid_status_transition` | 启用流转限制且该转换不允许 |
+| 409 | `conflict` | 乐观并发版本不匹配 |
+| 422 | `assignee_not_member` | assignee/reporter 非该工作区有效活跃成员 |
+| 422 | `bulk_partial_failure` | 批量部分失败(详情在 errors) |
+| 422 | `required_field_missing` | 状态流转时必填自定义字段未填(label-property.md) |
+| 429 | `rate_limited` | 限流 |
+
+### 3.5 分页与鉴权
+
+- **分页**:游标分页,游标编码 `(position 或 created_at, id)`。分组查询推荐**整体游标 + group 元信息**(而非每组独立 cursor),`groups[].count` 为该组总数,`data` 为当前页该组切片,`next_cursor` 驱动下一页。
+- **鉴权**:
+  - 读:工作区成员可读可见 issue;`private` 项目的 issue 需项目成员或 admin。
+  - 写:项目写权限或工作区 `member` 及以上;改他人 issue 需项目 `member`/`lead` 或 admin。
+  - 批量操作**逐个校验权限**,失败的计入 `errors`,成功的照常应用。
+- **乐观并发(推荐)**:PATCH 带 `version`(或 `If-Match: <updated_at>`),冲突返回 409,避免拖拽/编辑互相覆盖。
+- **限流**:写端点按工作区/成员维度限流。
+
+### 3.6 WebSocket 事件
+
+- **频道订阅**:`workspace:{ws}:issues`(列表级)、`issue:{id}`(详情级)。
+- **seq 与断线重放**:每条事件带频道内单调 `seq`;重连传 `last_seq`,服务端自该点重放。
+- **事件清单**(`<entity>.<action>`):
+
+| 事件 | 触发时机 | payload 关键字段 |
+|------|----------|------------------|
+| `issue.created` | 创建 issue | `issue`(含 identifier) |
+| `issue.updated` | 字段/状态变更 | `id`、`changes`(字段 diff)、`version` |
+| `issue.deleted` | 软删除 | `id` |
+| `issue.moved` | 看板位置/状态/分组变化 | `id`、`from`/`to`(category/position) |
+| `issue.labels_changed` | 标签变更 | `id`、`label_ids` |
+| `issue.custom_field_changed` | 自定义字段值变更 | `id`、`field_def_id`、`value` |
+| `dependency.changed` | 依赖增删 | `issue_id`、`depends_on_id`、`type`、`action` |
+| `comment.added` | 新评论(见 comment-inbox.md) | `issue_id`、`comment` |
+
+> **看板拖拽**:乐观更新 + 服务端确认 + 失败回滚;并发冲突由 `version` 检测。列表/收件箱收到 `issue.updated` 时按 `id` 做**增量合并**(更新对应行),而非整页刷新。降级:WS 断开时 30s 轮询列表(带 `since=updated_at` 增量拉取)。
+
+### 3.7 分派给 agent 的执行入口(与 agent.md 衔接)
+
+当 `assignee_id` 指向 `member_type='agent'` 的成员,或评论中 @提及 agent 时,本模块在事务提交后发出**分派/提及领域事件**(经 `issue.updated`/`comment.added` 携带 assignee/mention 信息)。agent 运行时订阅该事件并入队一次执行 run,以 agent 自己的成员身份接管该 issue(改状态、发评论、产出结果)。**执行运行时、技能、模型、sandbox 等细节归 `agent.md`**,本 Spec 仅保证:分派对人与 agent 走同一接口、同一事件、同一成员引用,体验对称。
+
+---
+
+## 4. UI/UX 设计
+
+### 4.1 信息架构
+
+```
+我的任务(/inbox)            —— assignee=我(人或 agent 视角)的 issue
+项目 → Issue 列表/看板       —— 见 kanban.md(复用本 Spec 列表查询)
+
+Issue 详情(全屏或右侧抽屉)
+   ├── 头部:标题(可编辑)、identifier、状态选择器、操作菜单(···)
+   ├── 主体:描述(富文本)、子 issue 列表、依赖列表、活动流、评论区
+   └── 属性侧栏:assignee、reporter、priority、estimate、due/start、
+                 project、cycle、milestone、labels、自定义字段
+```
+
+### 4.2 关键组件
+
+- **issue 行/卡片**:显示 identifier、标题、状态色条、优先级图标、assignee 头像(人/agent 区分)、到期日、标签点。
+- **快速创建**:列表顶部按 `C` 或点"+ 新建"弹轻量表单(标题 + 可选展开更多字段),支持连续创建。
+- **属性内联编辑**:侧栏每字段点击即编辑(assignee 弹成员选择器含 agent;priority 弹图标菜单;日期弹日历)。
+- **状态选择器**:下拉按 category 分组列出所有自定义状态,带颜色;选中即流转。
+- **子 issue 区**:树状展示,父显示完成进度(如"3/5");支持就地新增子任务。
+- **依赖区**:列出 blocks / blocked_by,点击跳转;阻塞项未完成时给出视觉提示("还差 2 个前置")。
+- **批量操作工具条**:勾选后浮出底栏(改状态/优先级/assignee/标签/删除/取消选),提交后展示成功/失败计数。
+
+### 4.3 关键交互流程
+
+**创建 issue**:按 `C` → 输入标题(回车快速创建,或 Tab 展开填项目/assignee/优先级)→ 保存 → 自动分配编号 `WEB-124` → 出现在对应项目/看板。
+
+**分派给 AI agent**:属性栏 assignee → 选择器混合列出人类与 agent(各带类型图标)→ 选 agent → 保存 → 发出 `issue.updated`(assignee=agent)→ agent 收到分派事件并接管。
+
+**拖拽改状态(看板)**:拖动卡片到目标列 → 乐观更新立即落位 → 后台 `PATCH` 改 status → 成功确认,失败回滚并提示。
+
+**批量改优先级**:列表勾选多个 → 底栏出现 → 点优先级 → 选 urgent → 提交 → 行内即时刷新,返回"成功 9,失败 1"。
+
+**建立依赖**:详情页依赖区 → "添加依赖" → 搜索并选目标 issue → 选类型(blocked_by)→ 提交;若成环则就地报错,不创建。
+
+### 4.4 状态机
+
+```
+        ┌──────────────────────────────────────────┐
+        ▼                                          │
+[backlog] → [todo] → [in_progress] → [in_review] → [done]
+                        │     ▲
+                        ▼     │
+                     [blocked](被阻塞/解除)
+   任意状态 → [cancelled](取消)
+```
+- 上图为 **category** 层语义;列内具体 **status** 可自定义(如 in_progress 下"开发中/联调中")。
+- 默认无强制顺序,可自由跳转;严格模式可在状态定义上配置"允许的下一步",违反返回 409 `invalid_status_transition`。
+- 进入 `done`(category)时写 `completed_at`;离开 done 时清空。
+- `state_category` 用于看板列、进度聚合(project.md)、自动化触发(如"进入 in_review 通知 reviewer")。
+
+### 4.5 实时与通知
+
+- **实时**:订阅 `workspace:{ws}:issues` 与 `issue:{id}`;事件见 §3.6。断线依 `seq` 重放;长时间不可用降级 30s 增量轮询。
+- **通知触发点**:
+  - 被分派 / 取消分派:通知 assignee(人收站内+邮件;agent 收事件触发运行)。
+  - 被 @ 提及:同上。
+  - 状态流转到 `in_review`/`done`:通知 reporter / 关注者(可配置)。
+  - 评论新增:通知参与者(创建人、assignee、曾评论者)。
+  - 临近/逾期 `due_date`:提醒 assignee。
+  - 依赖解除(被阻塞项完成):通知阻塞方。
+  - 子 issue 全部完成:通知父 issue 负责人。
+
+---
+
+## 5. 验收标准
+
+### 5.1 功能性 —— 编号体系
+
+- [ ] 创建 issue 自动生成 `identifier = <project.key>-<number>`,`number` 项目内单调递增。
+- [ ] 并发(≥10)在同一项目创建 issue,编号无重复、无跳号(命中 `uq_issue_number`,`issue_seq` 原子自增)。
+- [ ] 不同项目计数相互独立,新项目从 1 开始。
+- [ ] 软删除 issue 后编号**不复用**:新项目仍取下一个 `issue_seq`,被删编号不可再分配。
+- [ ] 支持 `GET /issues/by-identifier/WEB-123` 与 UUID 两种寻址,均返回同一 issue。
+- [ ] 无项目 issue 使用工作区保留前缀(如 `WS-N`)与独立序列。
+
+### 5.2 功能性 —— 双层状态
+
+- [ ] 每个自定义 status 必属且仅属一个 category;`issues.state_category` 始终与 `status_id` 对应 category 一致(无脏数据)。
+- [ ] 看板默认按 category 分列,列内按 status `position` 排序。
+- [ ] 进度/燃尽聚合基于 `state_category='done'`,与具体 status 名无关。
+- [ ] 进入 done 自动写 `completed_at`,离开 done 清空。
+- [ ] 严格模式下,配置外的状态转换返回 409 `invalid_status_transition`;默认模式自由流转。
+- [ ] 每个作用域存在唯一 `is_default=true` 状态;新建 issue 未指定 status 时落入默认状态。
+- [ ] 删除被引用的 status 前需迁移其下 issue,否则拒绝。
+
+### 5.3 功能性 —— 父子与依赖
+
+- [ ] 父子通过 `parent_id` 自引用建模;`GET /issues/{id}/children` 返回直接子项;父进度 = 子 done 占比。
+- [ ] `parent_id = id` 被 `CHECK` 拒绝;设置祖先为子(深层环)返回 409 `circular_parent`。
+- [ ] 父被删除时子级联处理(ON DELETE CASCADE),符合产品策略。
+- [ ] 依赖通过 `issue_dependencies` 有向图建模,与父子表分离。
+- [ ] 新增依赖成环返回 409 `circular_dependency`,且 `details.path` 给出环路径。
+- [ ] `blocks`/`blocked_by` 语义对称,查询双向展开;`UNIQUE(issue_id,depends_on_id,type)` 防重复边。
+- [ ] 删除 issue 时其依赖边级联清除(ON DELETE CASCADE)。
+
+### 5.4 功能性 —— 分派与成员
+
+- [ ] `assignee_id`/`reporter_id` 一律引用 `members.id`,人类与 agent 对称可选。
+- [ ] assignee 非该工作区活跃成员返回 422 `assignee_not_member`。
+- [ ] 分派给 agent(`member_type='agent'`)后,事务提交即发出分派事件,agent 运行时可据此接管(与 agent.md 联调通过)。
+- [ ] 成员被删除时 `assignee_id`/`reporter_id` 置 NULL(ON DELETE SET NULL),issue 不丢失。
+- [ ] @提及 agent 与提及人类走同一交互;agent 收提及事件触发运行。
+
+### 5.5 功能性 —— 批量操作
+
+- [ ] `POST /issues/bulk` 支持批量改状态/优先级/assignee/项目/标签/周期与批量软删除。
+- [ ] 响应返回 `succeeded`/`failed` 计数;部分失败 HTTP 422 `bulk_partial_failure`,`errors` 逐条给出 `issue_id`+`code`+`message`。
+- [ ] 批量操作逐个校验权限,无权限项计入失败,不影响其余项成功。
+- [ ] 批量操作产生对应 `issue.updated`/`issue.deleted` 事件与 `issue_activity` 留痕。
+
+### 5.6 功能性 —— 查询与留痕
+
+- [ ] 列表接口支持 §3.2 全部过滤/排序/分组参数,看板/列表/我的任务复用同一端点。
+- [ ] 分组查询返回 `groups[].{key,label,count,data}` 与整体 `next_cursor`。
+- [ ] 自定义字段可作为过滤/分组/排序条件(经 label-property.md 值表)。
+- [ ] 每次成功 PATCH 写入 `issue_activity` diff(field/old/new/actor)。
+- [ ] 乐观并发:携带过期 `version` 的更新返回 409 `conflict`。
+
+### 5.7 非功能性
+
+- [ ] 所有时间字段 `TIMESTAMPTZ`,API 输出 RFC3339 UTC。
+- [ ] 所有错误响应使用统一信封 `{"error":{"code","message","details"}}`;错误消息不泄露堆栈/内部敏感信息。
+- [ ] 主键 UUID(`gen_random_uuid()`),表名 snake_case 复数,软删除 `deleted_at` 保留编号。
+- [ ] 鉴权中间件校验工作区成员资格 + 项目可见性 + 角色;跨工作区/越权访问被拒(403/404)。
+- [ ] WebSocket 事件带频道内单调 `seq`,断线 `last_seq` 重放不漏不重;客户端按 id 增量合并,不整页刷新。
+- [ ] WS 不可用降级为 30s 增量轮询(`since=updated_at`),功能不中断。
+- [ ] 写端点限流生效,超限 429 `rate_limited`。
+- [ ] 关键查询命中索引(`idx_issues_project_status`/`idx_issues_assignee` 等);1 万级 issue 项目下列表/分组延迟可接受。
+- [ ] 所有用户输入(标题、描述、过滤参数)经 schema 校验,防注入;富文本输出经净化防 XSS。
+- [ ] 编号生成、依赖/父子环检测、批量操作均有单元 + 集成测试,核心路径覆盖率 ≥ 80%。
