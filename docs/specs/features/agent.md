@@ -429,7 +429,7 @@ erDiagram
 - 处理器 `enqueue_agent_run(agent_id, issue_id, trigger, trigger_event_id)`（由 outbox relay 调用）：
   1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
-  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
+  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
   4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、tool grants、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
   5. 创建 `task_executions`（`status='queued'`，`agent_id`、`label_requirements` 取自 agent 绑定；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
   6. 发出 `execution.queued` 事件（outbox → `realtime_events`，README §6.7）。
@@ -722,9 +722,11 @@ stateDiagram-v2
 - [ ] **不重复领取**：分派 / @ 产生的执行经幂等键 + 状态机校验，绝不产生重复的 `task_executions`（与 runtime 的 SKIP LOCKED 协同）。
 - [ ] **失联自愈**：agent 绑定的 runtime 失联时，运行由 runtime 模块 requeue / 标记失败；agent 侧 presence 与卡片状态随之更新，无需人工干预。
 - [ ] **凭证不落盘**：本模块不持久化任何运行期凭证；凭证由 runtime 在 claim 时一次性下发，agent 配置中只引用 `credential_id`，不存明文。
+- [ ] **不可信内容隔离**：issue 标题 / 描述 / 评论 / 附件注入 agent 上下文时显式标记为不可信数据并做结构隔离（见 README §6「不可信内容处理」）；agent 写出的评论 / 附件产出物经全通道 secret 命中检测，命中即拦截并告警。
 - [ ] **日志时延**：运行进度 / 状态事件从发生到 UI 可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 `since_seq` 补发不丢不重。
 - [ ] **配置不可变**：历史配置版本只增不改；回滚通过新增版本实现，审计链完整可追溯。
 - [ ] **审计完整**：所有配置 / 生命周期 / 绑定变更记录操作者 `members.id` 与时间，可查询。
 - [ ] **限流**：创建 / 更新 / 触发类端点接入限流，超限返回 `429` 带 `Retry-After`。
 - [ ] **错误信息不泄漏**：错误响应无堆栈 / 无 SQL，仅含字段级 `details`。
+- [ ] **用户可控 URL scheme 校验**：`avatar_url` 等用户可控 URL 字段服务端校验 scheme，禁止 `javascript:`/`data:`，仅允许 `https`。
 - [ ] **性能**：成员 / agent 列表主查询命中 `idx_members_ws_type_status` / `idx_agents_lifecycle`，10 万成员 workspace 下列表 P95 ≤ 300ms。

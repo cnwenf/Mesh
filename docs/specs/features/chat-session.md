@@ -400,7 +400,7 @@ Content-Type: application/json
 
 #### WebSocket 实时网关(统一实时通道,README §6.7)
 
-连接 `/ws?token=<JWT>`(握手鉴权见 auth.md);按频道订阅(频道命名遵循 README §6.7,如 `chat_session:ses-b7e4...` / `issue:iss-9a1c...`,订阅时逐资源授权):
+连接 `/ws`(握手鉴权见 auth.md;**禁止在 URL query 参数中传递 token**,应使用 WebSocket 子协议(Sec-WebSocket-Protocol)或连接建立后首帧认证,避免 token 落入访问日志与中间代理);按频道订阅(频道命名遵循 README §6.7,如 `chat_session:ses-b7e4...` / `issue:iss-9a1c...`,订阅时逐资源授权):
 ```json
 {"type": "subscribe", "channel": "chat_session:ses-b7e4..."}
 {"type": "subscribe", "channel": "issue:iss-9a1c..."}
@@ -461,7 +461,7 @@ Content-Type: application/json
 
 ### 4.2 关键组件
 
-- **上下文关联选择器**:搜索 issue/项目,单选关联;提示"agent 将读取关联上下文作为背景"。服务端把上下文快照注入为 system 消息,保证 agent 回答紧扣任务。
+- **上下文关联选择器**:搜索 issue/项目,单选关联;提示"agent 将读取关联上下文作为背景"。服务端把上下文快照注入为 system 消息,保证 agent 回答紧扣任务。**注入的 issue 上下文(标题/描述/评论/附件)显式标记为不可信数据并做结构隔离**(见 README §6.15「不可信内容处理」),防止恶意 issue 内容劫持 agent 行为。
 - **流式气泡**:agent 回复逐 token 打字机显示(GET SSE 流驱动);生成中输入区"停止"按钮全程可用;完成后该条尾部"重新生成"。
 - **候选回复**:多候选用 `‹ 1/3 ›` 翻页,并提供"使用此条";regenerate 不覆盖旧候选,全部可回看回选。
 - **附件**:经 attachment.md 签名直传(隔离区扫描完成后才可见/可下载),消息内以缩略图/文件卡呈现。
