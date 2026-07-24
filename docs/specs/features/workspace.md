@@ -90,7 +90,7 @@ users(人类登录身份,auth.md)──┐
 | `slug` | TEXT | NOT NULL,UNIQUE(见部分索引) | — | 全局唯一 URL 标识,`^[a-z0-9-]{2,32}$` |
 | `logo_url` | TEXT | NULL | NULL | Logo 对象存储地址 |
 | `timezone` | TEXT | NOT NULL | `'UTC'` | IANA 时区名 |
-| `default_language` | TEXT | NOT NULL | `'en'` | 默认语言(BCP-47 短码) |
+| `default_language` | TEXT | NULL,**已弃用(R3)** | NULL | **弃用列,仅迁移用**:历史上与 `settings.default_locale` 构成双真源且默认值冲突(本列 `'en'` vs 键 `'zh-CN'`)。R3 统一以 **`settings.default_locale` 为唯一 locale 真源**;迁移脚本把存量 `default_language` 值一次性写入 `settings.default_locale`(键缺失时)后**删除本列**——**不做长期双写**,运行时代码不读本列(README §6.18 / i18n.md) |
 | `settings` | JSONB | NOT NULL | `'{}'` | 杂项配置,见下方已知键约定 |
 | `inbox_issue_seq` | BIGINT | NOT NULL,CHECK (inbox_issue_seq >= 0) | `0` | 工作区级"无项目 issue"编号计数器(行锁自增,同 `projects.issue_seq`;README §6.3) |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除时间(NULL=未删除) |
@@ -110,7 +110,7 @@ users(人类登录身份,auth.md)──┐
 | `inbox_issue_prefix` | string | `"WS"` | 无项目 issue 编号保留前缀(README §6.3,大写,格式同项目前缀);**变更经 §2.6 前缀注册表:旧前缀置 `retired` 永久保留**,历史 identifier 不重编号 |
 | `invitation_max_uses_cap` | int | `100` | 邀请 `max_uses` 可配置上限(LOW-2 硬化:显式值超过上限拒绝,见 §2.3) |
 | `invitation_max_lifetime_hours_cap` | int | `720` | 邀请有效期小时数可配置上限(LOW-2 硬化,默认 30 天:显式 `expires_in_hours` 超过上限拒绝,见 §2.3) |
-| `default_locale` | string | `"zh-CN"` | 工作区默认 locale(BCP-47,README §6.18 / i18n.md:locale 协商链的第三级;**locale 权威为本键**,既有 `default_language` 列仅作建区时的初始播种值,协商一律走 `default_locale`) |
+| `default_locale` | string | `"en"` | **工作区默认 locale(唯一真源,R3)**:BCP-47,README §6.18 / i18n.md locale 协商链的第三级(用户偏好 `users.settings.locale` 缺失时回退到本键,再回退系统 `en`)。R3:默认值由 `"zh-CN"` 统一为 **`"en"`**(与 i18n.md §2.1/§2.3 及 README §6.18 系统回退一致;首发语言 `zh-CN`/`en` 指支持清单,不等于默认值);既有 `default_language` 列仅迁移后弃用,协商一律只走本键,**不长期双写** |
 | `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户未设 `users.settings.theme` 时生效) |
 | `seat_limit` | int \| null | `null` | 席位上限(null=不限,供计费展示) |
 | `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}`(产品级 Feature Flags 系统为未来规划,README §12) |
@@ -251,7 +251,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 | POST | `/workspaces/{id}/invitations` | 创建邀请(邮箱批量 / 链接) | admin |
 | GET | `/workspaces/{id}/invitations` | 列出邀请 | admin |
 | DELETE | `/workspaces/{id}/invitations/{inv_id}` | 撤销邀请 | admin |
-| POST | `/invitations/accept` | 凭 token 接受邀请 | 已登录 |
+| POST | `/invitations/accept` | 凭 token 接受邀请(入册事务内**同事务为人类新成员播种 onboarding 清单**,onboarding.md §3.5,R3) | 已登录 |
 | GET | `/invitations/preview?token=` | 预览邀请(工作区名/角色/是否有效) | 公开(仅返回有限字段) |
 
 > 成员名册的读写端点见 member.md(`GET/PATCH/DELETE /workspaces/{id}/members`)。
