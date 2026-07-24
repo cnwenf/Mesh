@@ -55,12 +55,12 @@ Mesh 的核心价值在「AI agent 作为一等队友被分派任务并回评结
 | 序 | step_key | 步骤 | 自动检测方式(领域事件驱动,非仅 UI 点击) | 深链既有向导 |
 |----|----------|------|--------------------------------------------|----------------|
 | 1 | `create_workspace` | 创建工作区 | 清单记录创建时即检查:当前成员隶属的工作区已存在(`members` 行存在)→ 建区者与被邀请入册者该步均直接 `completed`(工作区既已存在) | workspace.md 创建向导(`/w/{ws}/settings`,§4.2) |
-| 2 | `invite_member_or_add_agent` | 邀请成员或添加 agent | 消费 `member.added`(README §6.7):工作区名册出现 `member_type='agent'` 成员,或 `member_type='human'` 成员数 ≥ 2 → 对工作区内所有未完成本步骤的清单标记 `completed` | workspace.md 邀请面板 + agent.md 四步创建向导(从成员名册页或设置→Agents「+ 新建」进入;agent 无独立名册路由,README §6.12;详情深链 `/w/{ws}/agents/{id}`) |
-| 3 | `create_first_issue` | 创建首个 issue | 消费 `issue.created`:该工作区 `issues` 计数从 0→1(工作区首个 issue)→ 对工作区内所有未完成本步骤的清单标记 `completed`;若 `reporter_id` 为某清单成员,则对其即时标记 | issue.md 新建 issue(看板/收件箱空状态主操作,README §6.12 快捷键 `C`) |
-| 4 | `dispatch_or_mention_agent` | 分派 / @ 触发首个运行 | 消费 `execution.queued`(README §6.7):工作区出现首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(README §6.9)→ 对相关清单标记 `completed` | issue.md 分派 assignee / comment-inbox.md @提及 composer(README §6.9 trigger preview) |
-| 5 | `see_agent_reply_in_inbox` | 收件箱见 agent 回评(aha moment) | 消费 `execution.completed` + `comment.created`(README §6.7):上述首个执行进入 `completed` **且** issue 评论区存在该 agent 的评论(`comments.author_id` 为该 agent 的 `members.id`,JOIN `members.member_type='agent'`)→ 标记 `completed` 并置 `aha_reached_at`(README §6.7 唯一通知优先级见 §6.13) | comment-inbox.md 收件箱(`/w/{ws}` 收件箱入口,README §6.12) |
+| 2 | `invite_member_or_add_agent` | 邀请成员或添加 agent | 消费 `member.added`(README §6.7):工作区名册出现 `member_type='agent'` 成员,或 `member_type='human'` 成员数 ≥ 2 → 对工作区内所有未完成本步骤的清单标记 `completed`;**建状态 reconcile(R3)**:清单创建时(入册播种或首访惰性创建)回查工作区**历史**名册,已满足条件则直接 `completed` 并记 evidence——受邀进入成熟工作区的成员不再永久 pending | workspace.md 邀请面板 + agent.md 四步创建向导(**从成员名册页进入**——README §6.12:Settings 不维护独立 Agents 名册;agent 详情深链 `/w/{ws}/agents/{id}`) |
+| 3 | `create_first_issue` | 创建首个 issue | 消费 `issue.created`:该工作区 `issues` 计数从 0→1(工作区首个 issue)→ 对工作区内所有未完成本步骤的清单标记 `completed`;若 `reporter_id` 为某清单成员,则对其即时标记;**建状态 reconcile(R3)**:清单创建时回查历史——工作区已有 issue、或该成员曾 report 过 issue(`issues.reporter_id`=该成员)→ 直接 `completed`(evidence 记首个 issue / 该成员 report 的 issue) | issue.md 新建 issue(看板/收件箱空状态主操作,README §6.12 快捷键 `C`) |
+| 4 | `dispatch_or_mention_agent` | 分派 / @ 触发首个运行 | 消费 `execution.queued`(README §6.7):工作区出现首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(README §6.9)→ 对相关清单标记 `completed`;**触发者归属(R3)**:分派触发的触发者 = 执行分派操作的成员(`issue_activity` 分派留痕 actor / outbox payload actor),@ 触发的触发者 = 提及所在评论的作者(`comment_mentions` → `comments.author_id`),evidence 记 `trigger_member_id`;**建状态 reconcile**:清单创建时回查该成员**历史上**是否触发过 assign/mention 执行(经 `comment_mentions.triggered_execution_id` 与分派留痕)→ 有则直接 `completed` | issue.md 分派 assignee / comment-inbox.md @提及 composer(README §6.9 trigger preview) |
+| 5 | `see_agent_reply_in_inbox` | 收件箱见 agent 回评(aha moment) | **R3 完成条件(写死)= 该成员触发的执行有 agent 回评,且相关收件箱通知对该成员可见并被其打开/标读**:消费 `notification.read`(comment-inbox.md):当某成员将一条通知标读/打开,且该通知 `payload` 关联的评论由 agent 作者写出(JOIN `members.member_type='agent'`)、该评论所属执行 `completed` 且由**该成员触发**(evidence 链:`notifications.comment_id → comments → task_executions`(`comment_mentions.triggered_execution_id` / 分派触发者 = 该成员))→ 对该成员的清单标记 `completed`、置 `aha_reached_at`,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}`;**不再**凭「workspace 存在 execution.completed + agent comment」对全体成员批量完成(未关联该成员触发的执行、无收件箱阅读证据 = 可能未看见即宣告 aha) | comment-inbox.md 收件箱(`/w/{ws}` 收件箱入口,README §6.12) |
 
-> 检测一律以 outbox 领域事件为准(README §6.6),at-least-once 消费 + 步骤完成幂等(§3.5);**不**依赖 UI 点击上报。「首个」的判定以工作区为作用域,按 `created_at` 取最早一行。
+> 检测一律以 outbox 领域事件为准(README §6.6),at-least-once 消费 + 步骤完成幂等(§3.5);**不**依赖 UI 点击上报(末步的「打开/标读」本身即领域事件 `notification.read`,仍是事件驱动而非 UI 轮询)。「首个」的判定以工作区为作用域,按 `created_at` 取最早一行;**建状态时的全量 reconcile 覆盖受邀进入成熟工作区的成员(R3,§3.5)**。
 
 **深链既有向导目录(不重复造向导)**:激活路径每步 CTA 与各页面空状态主操作,均深链到 Mesh **既有**的创建/注册入口,本模块不另建向导:
 
@@ -68,7 +68,7 @@ Mesh 的核心价值在「AI agent 作为一等队友被分派任务并回评结
 |----------|-----------|------|------------------------------|
 | 工作区创建向导 | workspace.md §4.2 | 工作区切换器「新建」 | 步骤 1 |
 | 邀请面板 | workspace.md §4.2 | 设置→邀请 / 成员页「邀请成员」 | 步骤 2 |
-| agent 四步创建向导(基本信息 → 模型与指令 → 技能与工具 → 可见性) | agent.md §4.4 | 成员名册页 / 设置→Agents「+ 新建」 | 步骤 2 |
+| agent 四步创建向导(基本信息 → 模型与指令 → 技能与工具 → 可见性) | agent.md §4.4 | **成员名册页「添加 agent」(唯一入口,README §6.12:Settings 不再维护独立 Agents 名册与「+ 新建」入口)** | 步骤 2 |
 | runtime 注册引导页(基本信息 → 安装命令 → 等待 `runtime.activated`) | runtime.md §4.3 | 自动化→Runtimes「+ 新增 runtime」 | 步骤 2/4 的上下文化次级 CTA:agent 需匹配 runtime 方能领取执行(README §6.4);agent 无可用 runtime 时,分派提示「无匹配 runtime」并深链此页(README §6.12 专项恢复入口) |
 | skill 导入向导(选择来源 → 预览校验 → 安装) | skill.md §4.1 | 自动化→Skills(`/skills`)「⇩ 导入」 | 步骤 2 的上下文化次级 CTA:agent 四步向导第 ③ 步「技能与工具」可深链导入技能(可跳过) |
 
@@ -156,6 +156,7 @@ workspaces(workspace.md)──1:N──┐
 | `status` | TEXT | NOT NULL,CHECK IN ('pending','completed','skipped') | `'pending'` | 步骤状态 |
 | `completed_via` | TEXT | NULL,CHECK IN ('auto','manual') | NULL | 完成来源:`auto`=领域事件自动检测,`manual`=用户/管理员手动标记(`status != 'completed'` 时为 NULL) |
 | `completed_at` | TIMESTAMPTZ | NULL | NULL | 完成时间(`status='completed'` 时非空) |
+| `evidence` | JSONB | NOT NULL | `'{}'` | **R3:完成证据**(自动完成时持久化关联事实,供审计与末步判定复核):按步骤记录 `{member_added_id?}`(步骤 2)/`{issue_id?, reporter_member_id?}`(步骤 3)/`{execution_id?, trigger_member_id?}`(步骤 4)/`{execution_id?, comment_id?, notification_id?, trigger_member_id?}`(步骤 5:该成员触发的执行 + agent 回评 + 被该成员打开/标读的收件箱项);`completed_via='manual'` 时为 `{"manual_by": "<member_id>"}` |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
@@ -299,22 +300,30 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 
 ### 3.5 幂等与状态迁移(权威)
 
-- **清单惰性创建**:`GET /onboarding/state` 在单一事务内 `INSERT ... ON CONFLICT (workspace_id, member_id, checklist) DO NOTHING` 播种主记录,随后批量插入五步(`ON CONFLICT (workspace_id, state_id, step_key) DO NOTHING`),`create_workspace` 步即置 `completed(auto)`;并发首访由唯一约束兜底,只成一行。
-- **步骤完成守卫**:完成以条件 UPDATE 实现——`UPDATE onboarding_state_steps SET status='completed', completed_via=$1, completed_at=now() WHERE workspace_id=$2 AND state_id=$3 AND step_key=$4 AND status='pending' RETURNING ...`;**0 行返回即已完成/跳过,no-op**,杜绝并发重复完成与来源覆盖。`skipped` 同理由 `pending` 单向迁移。
+- **清单创建的两个入口(R3)**:
+  1. **member 入册时播种(主路径)**:人类成员入册事务(member.md:邀请兑换 / 直接添加 / OAuth 自动入册)在**同一事务**内为该成员播种 `activation` 清单(`INSERT ... ON CONFLICT (workspace_id, member_id, checklist) DO NOTHING` + 五步批量插入);agent 成员(`member_type='agent'`)**不建清单**(清单是人类成员的上手路径)。入册播种保证受邀成员**一进工作区即有清单**,不依赖首访。
+  2. **首访惰性创建(兜底)**:`GET /onboarding/state` 发现无主记录时同路径播种(覆盖存量成员 / 入册播种前已存在的成员);并发由唯一约束兜底,只成一行。
+- **建状态全量 reconcile(R3 必修)**:两个入口播种后,在**同一事务**内对历史事实做一次全量回查,把已发生的步骤直接置 `completed(auto)` 并写 evidence——**受邀加入成熟工作区的成员不再因"事件在入册前已发生"而步骤 2–5 永久 pending**:
+  - 步骤 1:成员已在册 → 恒 `completed`;
+  - 步骤 2:工作区历史名册已含 agent 成员或 human ≥ 2 → `completed`(evidence 记触发的 `member_added_id`);
+  - 步骤 3:工作区已有 issue,或该成员曾 report issue → `completed`(evidence 记 `issue_id`);
+  - 步骤 4:该成员历史上触发过 `trigger ∈ ('assign','mention')` 的执行(经 `comment_mentions.triggered_execution_id`(其评论作者 = 该成员)与分派留痕 `issue_activity`)→ `completed`(evidence 记 `execution_id`);
+  - 步骤 5:该成员历史上**已读**过满足末步条件的通知(`notifications.read_at IS NOT NULL` 且关联 agent 回评 + 该成员触发的已完成执行)→ `completed` + `aha_reached_at`(evidence 记 `notification_id`/`comment_id`/`execution_id`);未读则保持 `pending`,等 `notification.read` 事件驱动。
+- **步骤完成守卫**:完成以条件 UPDATE 实现——`UPDATE onboarding_state_steps SET status='completed', completed_via=$1, completed_at=now(), evidence=$5 WHERE workspace_id=$2 AND state_id=$3 AND step_key=$4 AND status='pending' RETURNING ...`;**0 行返回即已完成/跳过,no-op**,杜绝并发重复完成与来源覆盖。`skipped` 同理由 `pending` 单向迁移。
 - **dismiss / restore 幂等**:dismiss 仅当 `dismissed_at IS NULL` 时置位(条件 UPDATE);restore 仅当 `dismissed_at IS NOT NULL` 时清空;重复操作 no-op。
 - **aha 仅置一次**:`aha_reached_at` 以 `WHERE aha_reached_at IS NULL` 条件 UPDATE 置位,重复达成不覆盖最早时间。
-- **重置**:admin 重置在单事务内 DELETE 主记录(级联步骤)+ 重新播种(同惰性创建路径),返回全新进度。
+- **重置**:admin 重置在单事务内 DELETE 主记录(级联步骤)+ 重新播种(同入册播种路径,含全量 reconcile),返回全新进度。
 
 ### 3.6 自动完成:领域事件消费(README §6.6 唯一权威)
 
-步骤自动完成由**本模块的 outbox 消费者**驱动:订阅业务模块在业务事务内写入的 `outbox_events`(README §6.6),at-least-once 消费、幂等标记(§3.5 完成守卫即去重)。**禁止**业务模块直接写本模块表,亦**禁止**本模块旁路 outbox 直连业务表轮询作为主路径(工作区作用域查询仅用于「首个」判定与建表时即时检查)。
+步骤自动完成由**本模块的 outbox 消费者**驱动:订阅业务模块在业务事务内写入的 `outbox_events`(README §6.6),at-least-once 消费、幂等标记(§3.5 完成守卫即去重)。**禁止**业务模块直接写本模块表,亦**禁止**本模块旁路 outbox 直连业务表轮询作为主路径(工作区作用域查询仅用于「首个」判定与建表时全量 reconcile)。
 
 | 消费事件(outbox `event_type`) | 推进步骤 | 判定 |
 |----------------------------------|----------|------|
-| `member.added` | `invite_member_or_add_agent` | 工作区出现 `member_type='agent'` 成员或 human 成员数 ≥ 2 → 对工作区内该步 `pending` 的清单批量完成(`completed_via='auto'`) |
-| `issue.created` | `create_first_issue` | 工作区 `issues` 计数 0→1(按 `created_at` 最早一行判定「首个」)→ 批量完成该步 `pending` 清单;`reporter_id` 命中者即时完成 |
-| `execution.queued` | `dispatch_or_mention_agent` | 工作区出现首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(README §6.9)→ 完成该步 |
-| `execution.completed` + `comment.created` | `see_agent_reply_in_inbox` | 上述执行 `completed` **且** issue 存在该 agent 的评论(JOIN `members.member_type='agent'`)→ 完成该步并置 `aha_reached_at`(§3.5) |
+| `member.added` | `invite_member_or_add_agent` | 工作区出现 `member_type='agent'` 成员或 human 成员数 ≥ 2 → 对工作区内该步 `pending` 的清单批量完成(`completed_via='auto'`,evidence 记 `member_added_id`) |
+| `issue.created` | `create_first_issue` | 工作区 `issues` 计数 0→1(按 `created_at` 最早一行判定「首个」)→ 批量完成该步 `pending` 清单;`reporter_id` 命中者即时完成(evidence 记 `issue_id`/`reporter_member_id`) |
+| `execution.queued` | `dispatch_or_mention_agent` | 工作区出现首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(README §6.9)→ 完成该步;**触发者归属(R3)**:@ 触发 = 提及评论作者(`comment_mentions → comments.author_id`),分派触发 = 分派操作者(outbox payload actor / `issue_activity` actor),evidence 记 `execution_id` + `trigger_member_id`;仅对触发者本人(及尚未完成该步的其他清单按工作区首个执行口径)标记 |
+| `notification.read`(R3:末步改由阅读证据驱动) | `see_agent_reply_in_inbox` | 某成员标读/打开一条通知,且该通知关联的评论作者为 agent(`members.member_type='agent'`)、评论所属执行 `completed` 且**由该成员触发**(evidence 链校验)→ 完成**该成员**的末步并置 `aha_reached_at`,evidence 记 `{execution_id, comment_id, notification_id, trigger_member_id}`;**不**对未读该通知的其他成员批量完成(README §6.13:agent 回评通知按订阅分发,触发者默认在订阅集内) |
 
 > 每次步骤完成后,本模块在**同一事务**写 outbox 的 `realtime.publish` 事件(载荷含频道、事件名、完整步骤快照),经 realtime projector 统一登记 `onboarding.progress`;末步完成时一并登记 `onboarding.completed`(README §6.6/§6.7 唯一写入路径,本模块不直接写 `realtime_events`)。
 
@@ -359,7 +368,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 
 ### 4.3 关键交互流程
 
-**流程 1:新用户被清单引导至 aha moment**:新用户建区/受邀入册 → 进入工作区,清单卡片常驻,`create_workspace` 已自动勾选 → 点第 2 步 CTA「邀请成员 / 添加 agent」深链邀请面板或 agent 四步向导 → 完成后 `member.added` 事件驱动第 2 步自动勾选(实时 `onboarding.progress` 推送,清单刷新)→ 点第 3 步 CTA「新建 issue」深链看板/收件箱空状态主操作 → 建首 issue,`issue.created` 驱动第 3 步完成 → 第 4 步 CTA「分派给 agent / @ agent」深链 issue 分派或评论 composer(README §6.9 trigger preview 提示「发布后将触发一次运行」)→ 分派/@ 后 `execution.queued` 驱动第 4 步完成 → agent 异步执行并回评,`execution.completed` + `comment.created` 驱动第 5 步完成并置 `aha_reached_at`,清单切庆祝态 + `onboarding.completed` 推送,收件箱出现 agent 回评通知(README §6.13)。
+**流程 1:新用户被清单引导至 aha moment**:新用户建区/受邀入册 → **入册事务即播种清单并按历史事实全量 reconcile(R3:受邀进入成熟工作区时步骤 2–4 可直接带证据完成,不再永久 pending)** → 进入工作区,清单卡片常驻,`create_workspace` 已自动勾选 → 点第 2 步 CTA「邀请成员 / 添加 agent」深链邀请面板或成员名册页「添加 agent」(README §6.12 唯一 agent 名册入口)→ 完成后 `member.added` 事件驱动第 2 步自动勾选(实时 `onboarding.progress` 推送,清单刷新)→ 点第 3 步 CTA「新建 issue」深链看板/收件箱空状态主操作 → 建首 issue,`issue.created` 驱动第 3 步完成 → 第 4 步 CTA「分派给 agent / @ agent」深链 issue 分派或评论 composer(README §6.9 trigger preview 提示「发布后将触发一次运行」)→ 分派/@ 后 `execution.queued` 驱动第 4 步完成(evidence 记触发者)→ agent 异步执行并回评,回评通知进该成员收件箱(README §6.13),**该成员在收件箱打开/标读该回评通知时(`notification.read`)第 5 步才完成**并置 `aha_reached_at`(evidence 记 execution/comment/notification),清单切庆祝态 + `onboarding.completed` 推送——**aha 以成员真实看见回评为准,未读不宣告达成(R3)**。
 
 **流程 2:空状态与清单联动**:用户未走清单,直接进空成员页 → 空状态主操作「添加 agent」深链 agent 向导 → 完成 → 成员页脱离空态,同时清单第 2 步经 `member.added` 自动完成(清单与空状态共享步骤推进逻辑,§1.2.2)。
 
@@ -396,7 +405,8 @@ completed / skipped ──(无回退)──;重置经 §3.4 整体重建回到 p
 
 - [ ] 每成员每工作区每清单一主记录:`UNIQUE(workspace_id, member_id, checklist)` 下,首次 `GET /onboarding/state` 幂等播种主记录 + 五步,并发首访(≥10)恰成一行、步骤恰五步。
 - [ ] `create_workspace` 步对建区者与被邀请入册者在建表事务内即 `completed(completed_via='auto')`(工作区既已存在)。
-- [ ] **步骤自动检测正确性(逐条)**:① 工作区出现 agent 成员或第 2 个人类成员(`member.added`)→ 第 2 步自动完成;② 工作区首个 issue(`issue.created`,按 `created_at` 判定)→ 第 3 步自动完成;③ 首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(`execution.queued`,README §6.9)→ 第 4 步自动完成;④ 该执行 `completed` **且** issue 存在该 agent 的评论(`execution.completed` + `comment.created`,JOIN `members.member_type='agent'`)→ 第 5 步完成并置 `aha_reached_at`。自动检测以 outbox 领域事件为准,**不依赖 UI 点击**。
+- [ ] **步骤自动检测正确性(逐条,R3 修订)**:① 工作区出现 agent 成员或第 2 个人类成员(`member.added`)→ 第 2 步自动完成(evidence 记 `member_added_id`);② 工作区首个 issue(`issue.created`,按 `created_at` 判定)→ 第 3 步自动完成;③ 首个 `task_executions` 且 `trigger ∈ ('assign','mention')`(`execution.queued`,README §6.9)→ 第 4 步自动完成,evidence 记 `execution_id` + `trigger_member_id`(分派触发者 = 分派操作者,@ 触发者 = 提及评论作者);④ **末步(R3)**:该成员在收件箱**打开/标读**一条关联「agent 回评 + 该成员触发的已完成执行」的通知(`notification.read`)→ 该成员的清单第 5 步完成并置 `aha_reached_at`,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}`;**未读不完成**(不再凭 workspace 存在 completed 执行 + agent 评论对全体成员批量完成)。自动检测以 outbox 领域事件为准,**不依赖 UI 轮询**(阅读本身即 `notification.read` 事件)。
+- [ ] **入册播种与全量 reconcile(R3,集成测试 T34)**:① 人类成员入册事务(邀请兑换 / 直接添加)同事务播种清单 + 五步;agent 成员不建清单;② **受邀成员进入成熟工作区**(已有 agent 成员、issue、历史执行)时,建状态 reconcile 使步骤 2–4 带证据直接 `completed`,**不永久 pending**;步骤 5 保持 `pending` 直至该成员读过满足条件的通知;③ 步骤完成证据可在 `onboarding_state_steps.evidence` 逐条复核(关联 execution/comment/notification 真实存在)。
 - [ ] **完成幂等**:对已 `completed`/`skipped` 步骤重复 `POST /onboarding/steps/{step_key}/complete` 为 no-op,`completed_via`/`completed_at` 不被覆盖(完成守卫 0 行返回);同一事件重复消费(at-least-once)不产生重复完成。
 - [ ] **dismiss / restore 幂等**:重复 dismiss `dismissed_at` 保持首次值;restore 清除 `dismissed_at`;dismiss 后清单 UI 消失,经帮助菜单 restore 后按数据库进度恢复。
 - [ ] **aha 仅置一次**:末步多次达成不覆盖最早 `aha_reached_at`;`onboarding.completed` 仅在首次置位时推送一次。
