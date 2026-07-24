@@ -1,6 +1,6 @@
 -- ============================================================================
--- Mesh Spec R2+R3+R4 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
--- 依据:docs/specs/README.md(Draft v3 / R2 + R3 + R4 修订)§6 全局权威契约 + 20 份功能 Spec
+-- Mesh Spec R2+R3+R4+R5 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
+-- 依据:docs/specs/README.md(Draft v3 / R2 + R3 + R4 + R5 修订)§6 全局权威契约 + 20 份功能 Spec
 -- R3(MES-7,HIGH-1～HIGH-9 + 3 建议):agent_config_versions 同租户/重叠 FK(T27);
 --   能力字段严格类型与归一(T28);集成外部身份全局唯一 + scope 异或 + vcs_links(T29);
 --   IM 投递台账多目的地(T30);data job RESTRICT/checkpoint/行台账恢复协议(T31);
@@ -15,6 +15,13 @@
 --   纳入 provider tenant + 映射全局 users.id、回调按集成解析工作区再 JOIN 成员(T29 扩展);
 --   analytics execution 指标统一可见性 scope(关联 issue 继承项目可见性;private agent 先过
 --   agent 可见性),workload/agent stats/workspace dashboard 共用并入缓存键(T33 扩展)。
+-- R5(MES-9,第五轮架构/UX 复审 HIGH×3 收口):external_identities 真正全局化——移除
+--   workspace_id 所有权/RLS 键,建链来源仅 created_in_workspace_id 可空审计列(ON DELETE
+--   SET NULL);删除建链工作区后映射仍存在且其他工作区回调仍可解析 + 全局表结构/RLS 负向 +
+--   解链仅所属 users.id 本人(external_identity_unlink_allowed() 可执行参照,admin 无旁路,
+--   T29 扩展);analytics 统一可见性 CTE visible_executions 直接写入 workload-B / agent 主统计 /
+--   retry / token 四段权威聚合 SQL,T33 以同一聚合 SQL 对普通成员/项目成员/private agent
+--   owner/admin 断言最终统计值(T33 扩展,不再只测 helper)。
 -- 用法:psql -v ON_ERROR_STOP=1 -f schema_r2_validation.sql(空库执行)
 -- 期望失败断言以 EXCEPTION 块包裹(拒绝即 PASS);ASSERT 失败 = Spec/DDL 缺陷,脚本中止。
 -- ============================================================================
@@ -2122,28 +2129,46 @@ CREATE INDEX idx_delivery_retry ON webhook_subscription_deliveries(next_retry_at
   WHERE state = 'pending';
 CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscription_id, created_at DESC);
 
--- ============ external_identities(R3 协同 MES-4 HIGH-1;R4 HIGH-5:映射全局 users.id + 身份键含平台租户)============
--- R4 修订:外部账号映射到**全局登录身份 users.id**(不再锁到单个 workspace-scoped member_id)——
--- 与 README §6.1「同一 users.id 在多工作区各有 member 行」的核心模型一致:同一已认证外部账号
--- 可跨多个 Mesh 工作区参与卡片审批。身份键纳入 provider tenant,不同外部租户的同名 user key 不冲突。
+-- ============ external_identities(R3 协同 MES-4 HIGH-1;R4 HIGH-5:映射全局 users.id + 身份键含平台租户;R5 HIGH-2:真正的全局身份表)============
+-- R5 修订:既然映射目标为全局 users.id,本表即与 users 同级的**全局身份表**——移除租户所有权 / RLS 键
+-- (原 workspace_id NOT NULL ... ON DELETE CASCADE:删除建链工作区 A 会级联删除全局映射,使工作区 B 的审批失效;
+-- 且 §6.2 workspace RLS 口径下 B 无法读取归属 A 的映射)。建链来源仅以可空审计列 created_in_workspace_id
+-- (ON DELETE SET NULL)记录,**不级联控制映射生命周期**。全局解链仅映射所属 users.id 本人(无 admin 旁路;
+-- 可执行参照 external_identity_unlink_allowed(),T29);工作区管理员只能撤销本工作区使用权/成员资格。
 -- 卡片回调鉴权:集成实例解析 workspace → 本表查 (provider, provider_tenant_key, external_user_key)
 -- → users.id → JOIN 该 workspace 的 members(workspace_id, user_id) → README §6.10 权限再校验。
 CREATE TABLE external_identities (
-  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,   -- 建链所在工作区(审计/级联);映射本身为全局 users.id 级
-  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
-  provider_tenant_key TEXT NOT NULL DEFAULT '',                  -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机),纳入身份键
-  external_user_key   TEXT NOT NULL,
-  user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射到全局登录身份(用户注销 → 映射级联删除)
-  verified_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_external_identities_ws_id UNIQUE (workspace_id, id),
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider              TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  provider_tenant_key   TEXT NOT NULL DEFAULT '',                -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机),纳入身份键
+  external_user_key     TEXT NOT NULL,
+  user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射到全局登录身份(用户注销 → 映射级联删除,生命周期唯一级联来源)
+  created_in_workspace_id UUID NULL REFERENCES workspaces(id)
+                          ON DELETE SET NULL (created_in_workspace_id),         -- R5:建链发起工作区(仅审计;删除该工作区仅置空本列,映射保留)
+  verified_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
   -- R4:身份键 = 平台 + 平台租户 + 外部用户(全局):一个外部平台账号至多映射一个 Mesh 用户;
   -- 不同外部租户同 user key 可并存;同一账号跨多 Mesh 工作区参与 = 单映射行 + 按工作区 JOIN member
   CONSTRAINT uq_external_identity UNIQUE (provider, provider_tenant_key, external_user_key)
 );
 CREATE INDEX idx_external_identities_user ON external_identities(user_id);
+CREATE INDEX idx_external_identities_created_in_ws ON external_identities(created_in_workspace_id)
+  WHERE created_in_workspace_id IS NOT NULL;
+
+-- R5(HIGH-2):全局解链授权的可执行参照实现——仅映射所属 users.id 本人可解链;角色列(admin/owner)
+-- 不参与判定,工作区管理员无旁路(后端解链端点的服务层实现须与本函数逐条等价,T29 实测)
+CREATE OR REPLACE FUNCTION external_identity_unlink_allowed(p_identity UUID, p_member UUID) RETURNS BOOLEAN
+LANGUAGE sql STABLE AS $$
+  SELECT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.id = p_member
+     WHERE ei.id = p_identity
+       AND m.user_id = ei.user_id          -- 请求者解析出的全局身份 == 映射所属用户(唯一授权条件)
+       AND m.status = 'active'
+  )
+$$;
 
 -- ============ vcs_links(R3 新增 HIGH-3:VCS 对象 ↔ Mesh 实体 关联真源表)============
 CREATE TABLE vcs_links (
@@ -2657,11 +2682,12 @@ BEGIN
          'T29 FAIL: 集成删除应级联删除其 vcs_links';
   RAISE NOTICE 'PASS T29-6: vcs_links 同租户复合 FK,集成删除级联删关联';
 
-  -- ⑦ R4(HIGH-5):external_identities 映射**全局 users.id**、身份键含平台租户(卡片回调点击者鉴权真源)
-  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
-  VALUES ('11111111-1111-1111-1111-111111111111', 'feishu', 'tenant-a', 'ou_user_1',
-          'aaaaaaaa-0000-0000-0000-000000000001');
-  RAISE NOTICE 'PASS T29-7: 认证外部账号映射全局 users.id(身份键 = provider + provider_tenant_key + external_user_key)';
+  -- ⑦ R4(HIGH-5;R5 全局化):external_identities 映射**全局 users.id**、身份键含平台租户(卡片回调点击者鉴权真源);
+  --   R5:建链发起工作区仅作 created_in_workspace_id 审计列(全局表,无 workspace_id 所有权列)
+  INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id)
+  VALUES ('feishu', 'tenant-a', 'ou_user_1',
+          'aaaaaaaa-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111');
+  RAISE NOTICE 'PASS T29-7: 认证外部账号映射全局 users.id(身份键 = provider + provider_tenant_key + external_user_key;建链工作区仅审计)';
 
   -- ⑧ R4(HIGH-5):**同一已认证外部账号跨两个 Mesh 工作区参与**——单映射行,回调按集成解析工作区后
   --    JOIN 该工作区的 members(workspace_id, user_id),两个工作区各自的 member 行均可解析(§6.1 核心模型)
@@ -2674,7 +2700,7 @@ BEGIN
       FROM external_identities ei
       JOIN members m ON m.workspace_id = '11111111-1111-1111-1111-111111111111' AND m.user_id = ei.user_id
      WHERE ei.provider = 'feishu' AND ei.provider_tenant_key = 'tenant-a' AND ei.external_user_key = 'ou_user_1'
-       AND m.id = 'cccccccc-0000-0000-0000-000000000001'),
+       AND m.id = 'cccccccc-0000-0000-0000-000000000001' AND m.status = 'active'),
          'T29 FAIL: WS-A 回调应经映射 JOIN 到本工作区 member';
   -- 回调链:WS-B 集成 → 同一 users.id → WS-B 名册成员 cccccccc-...-0009(同一自然人的另一 member 行)
   ASSERT EXISTS (
@@ -2682,38 +2708,134 @@ BEGIN
       FROM external_identities ei
       JOIN members m ON m.workspace_id = '22222222-2222-2222-2222-222222222222' AND m.user_id = ei.user_id
      WHERE ei.provider = 'feishu' AND ei.provider_tenant_key = 'tenant-a' AND ei.external_user_key = 'ou_user_1'
-       AND m.id = 'cccccccc-0000-0000-0000-000000000009'),
+       AND m.id = 'cccccccc-0000-0000-0000-000000000009' AND m.status = 'active'),
          'T29 FAIL: 同一外部账号应可跨两个 Mesh 工作区解析各自 member(不再被锁到单个 member_id)';
   RAISE NOTICE 'PASS T29-8: 同一认证外部账号跨两个 Mesh 工作区参与(单映射 + 按工作区 JOIN member)';
 
   -- ⑨ R4(HIGH-5):**不同外部租户同 user key 并存**——身份键含 provider_tenant_key,不再全局误撞
-  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
-  VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'tenant-b', 'ou_user_1',
-          'aaaaaaaa-0000-0000-0000-000000000002');
+  INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id)
+  VALUES ('feishu', 'tenant-b', 'ou_user_1',
+          'aaaaaaaa-0000-0000-0000-000000000002', '22222222-2222-2222-2222-222222222222');
   ASSERT (SELECT COUNT(*) = 2 FROM external_identities WHERE external_user_key = 'ou_user_1'),
          'T29 FAIL: 不同外部租户的同名 user key 应可并存';
   RAISE NOTICE 'PASS T29-9: 不同外部租户同 user key 不冲突(身份键纳入 provider tenant)';
 
   -- ⑩ R4(HIGH-5):同一外部账号(provider+tenant+user key)重复映射 → 全局唯一键拒绝(即使指向不同用户)
   BEGIN
-    INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
-    VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'tenant-a', 'ou_user_1',
-            'aaaaaaaa-0000-0000-0000-000000000003');
+    INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id)
+    VALUES ('feishu', 'tenant-a', 'ou_user_1',
+            'aaaaaaaa-0000-0000-0000-000000000003', '22222222-2222-2222-2222-222222222222');
     RAISE EXCEPTION 'T29 FAIL: 同一外部账号重复映射未被拒绝';
   EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE 'PASS T29-10: UNIQUE(provider, provider_tenant_key, external_user_key) 拒绝同一外部账号重复映射';
   END;
 
-  -- ⑪ R4(HIGH-5):用户注销 → 映射级联删除(映射真源挂全局 users.id,ON DELETE CASCADE)
+  -- ⑪ R4(HIGH-5):用户注销 → 映射级联删除(映射真源挂全局 users.id,ON DELETE CASCADE——生命周期唯一级联来源)
   INSERT INTO users (id, email, display_name) VALUES
     ('aaaaaaaa-0000-0000-0000-000000000099', 'u99@example.test', 'U99');
-  INSERT INTO external_identities (workspace_id, provider, provider_tenant_key, external_user_key, user_id)
-  VALUES ('11111111-1111-1111-1111-111111111111', 'github', '', 'dev-u99',
-          'aaaaaaaa-0000-0000-0000-000000000099');
+  INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id)
+  VALUES ('github', '', 'dev-u99',
+          'aaaaaaaa-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111');
   DELETE FROM users WHERE id = 'aaaaaaaa-0000-0000-0000-000000000099';
   ASSERT NOT EXISTS (SELECT 1 FROM external_identities WHERE external_user_key = 'dev-u99'),
          'T29 FAIL: 用户注销应级联删除其外部身份映射';
   RAISE NOTICE 'PASS T29-11: external_identities.user_id ON DELETE CASCADE(用户注销 → 映射删除,卡片点击回落 403)';
+
+  -- ⑫ R5(HIGH-2):**删除建链工作区后全局映射仍存在,其他工作区回调仍可解析**——
+  --    临时工作区 WS-C 内建链,物理删除 WS-C:映射行保留(created_in_workspace_id 列级 SET NULL),
+  --    同一用户在工作区 B 的回调链(JOIN members)照常解析成功
+  INSERT INTO workspaces (id, name, slug) VALUES
+    ('33333333-3333-3333-3333-333333333333', 'WS C', 'ws-c');
+  INSERT INTO members (id, workspace_id, member_type, user_id, role) VALUES
+    ('cccccccc-0000-0000-0000-00000000000c', '33333333-3333-3333-3333-333333333333', 'human',
+     'aaaaaaaa-0000-0000-0000-000000000001', 'member');
+  INSERT INTO external_identities (id, provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id)
+  VALUES ('44444444-0000-0000-0000-000000000001', 'slack', 'team-c', 'ext-u1-c',
+          'aaaaaaaa-0000-0000-0000-000000000001', '33333333-3333-3333-3333-333333333333');
+  DELETE FROM workspaces WHERE id = '33333333-3333-3333-3333-333333333333';
+  ASSERT EXISTS (SELECT 1 FROM external_identities
+                  WHERE id = '44444444-0000-0000-0000-000000000001' AND created_in_workspace_id IS NULL),
+         'T29 FAIL: 删除建链工作区后全局映射应保留,created_in_workspace_id 经 SET NULL 置空(不得级联删除映射)';
+  -- 该用户(u1)在 WS-B 的卡片回调链仍解析成功:映射 → users.id → WS-B 名册行 cccccccc-...-0009
+  ASSERT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.workspace_id = '22222222-2222-2222-2222-222222222222' AND m.user_id = ei.user_id
+     WHERE ei.id = '44444444-0000-0000-0000-000000000001'
+       AND m.id = 'cccccccc-0000-0000-0000-000000000009' AND m.status = 'active'),
+         'T29 FAIL: 删除建链工作区后,其余工作区回调仍应经全局映射 JOIN 名册行解析成功';
+  RAISE NOTICE 'PASS T29-12: 删除建链工作区 → 映射保留(SET NULL 审计列)且其他工作区回调仍可解析(全局表不受工作区删除级联)';
+
+  -- ⑬ R5(HIGH-2):**全局表结构 + RLS 负向测试**——无 workspace_id 列、无对工作区的 CASCADE FK、无 workspace RLS 策略
+  ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'external_identities' AND column_name = 'workspace_id'),
+         'T29 FAIL: 全局身份表不应携带 workspace_id 所有权列(否则回到单工作区拥有全局身份的旧模型)';
+  ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name = 'external_identities' AND column_name = 'created_in_workspace_id'
+                    AND is_nullable = 'YES'),
+         'T29 FAIL: created_in_workspace_id 应为可空审计列';
+  ASSERT NOT EXISTS (
+    SELECT 1
+      FROM information_schema.referential_constraints rc
+      JOIN information_schema.table_constraints tc
+        ON tc.constraint_name = rc.constraint_name AND tc.constraint_schema = rc.constraint_schema
+      JOIN information_schema.constraint_column_usage ccu
+        ON ccu.constraint_name = rc.constraint_name AND ccu.constraint_schema = rc.constraint_schema
+     WHERE tc.table_name = 'external_identities' AND tc.constraint_type = 'FOREIGN KEY'
+       AND ccu.table_name = 'workspaces' AND rc.delete_rule = 'CASCADE'),
+         'T29 FAIL: external_identities 对工作区不得有 ON DELETE CASCADE 外键(映射生命周期不受任何工作区删除控制)';
+  ASSERT EXISTS (
+    SELECT 1
+      FROM information_schema.referential_constraints rc
+      JOIN information_schema.table_constraints tc
+        ON tc.constraint_name = rc.constraint_name AND tc.constraint_schema = rc.constraint_schema
+      JOIN information_schema.constraint_column_usage ccu
+        ON ccu.constraint_name = rc.constraint_name AND ccu.constraint_schema = rc.constraint_schema
+     WHERE tc.table_name = 'external_identities' AND tc.constraint_type = 'FOREIGN KEY'
+       AND ccu.table_name = 'workspaces' AND rc.delete_rule = 'SET NULL'),
+         'T29 FAIL: created_in_workspace_id 应为 ON DELETE SET NULL 审计外键';
+  ASSERT NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'external_identities'),
+         'T29 FAIL: 全局身份表不适用 workspace RLS(无 workspace_id 可建 mesh.workspace_id 策略;行级边界为所属 user_id)';
+  RAISE NOTICE 'PASS T29-13: 全局表结构负向测试(无 workspace_id 列 / 无 CASCADE 工作区 FK / 无 workspace RLS 策略;created_in_workspace_id 可空 SET NULL)';
+
+  -- ⑭ R5(HIGH-2):**全局解链权限负向测试**——仅映射所属 users.id 本人可解链,admin/owner 角色无旁路
+  --    (映射 44444444-...-0001 属 u1;成员角色不参与 external_identity_unlink_allowed 判定)
+  INSERT INTO members (id, workspace_id, member_type, user_id, role) VALUES
+    ('cccccccc-0000-0000-0000-00000000000b', '22222222-2222-2222-2222-222222222222', 'human',
+     'aaaaaaaa-0000-0000-0000-000000000002', 'admin');                       -- u2:WS-B 的 admin,非映射所属用户
+  ASSERT external_identity_unlink_allowed('44444444-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000001')
+     AND external_identity_unlink_allowed('44444444-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000009'),
+         'T29 FAIL: 映射所属用户本人(经任一工作区成员行解析)应可解链自己的全局身份';
+  ASSERT NOT external_identity_unlink_allowed('44444444-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-00000000000b'),
+         'T29 FAIL: 工作区 admin(非映射所属用户)不得解链他人全局身份(无 admin 旁路,403 identity_unlink_forbidden)';
+  ASSERT NOT external_identity_unlink_allowed('44444444-0000-0000-0000-000000000001', 'cccccccc-0000-0000-0000-000000000003'),
+         'T29 FAIL: 其他普通成员不得解链他人全局身份';
+  -- 管理员的可及手段仅「撤销本工作区使用权/成员资格」:把 u1 在 WS-B 的名册行置软终态 removed 后
+  -- (README §6.1 名册软终态;物理删除被 created_by RESTRICT 拦阻属预期——审计引用不悬空),
+  -- WS-B 回调链 JOIN active 名册行失败(该工作区审批回落 403),但全局映射与其他工作区不受影响
+  UPDATE members SET status = 'removed' WHERE id = 'cccccccc-0000-0000-0000-000000000009';
+  ASSERT NOT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.workspace_id = '22222222-2222-2222-2222-222222222222' AND m.user_id = ei.user_id
+     WHERE ei.id = '44444444-0000-0000-0000-000000000001' AND m.status = 'active'),
+         'T29 FAIL: 撤销成员资格后该工作区回调应 JOIN active 名册行失败(回落 403)';
+  ASSERT EXISTS (SELECT 1 FROM external_identities WHERE id = '44444444-0000-0000-0000-000000000001'),
+         'T29 FAIL: 撤销工作区成员资格不得删除全局映射(仅解链所属用户本人/用户注销可删)';
+  ASSERT EXISTS (
+    SELECT 1
+      FROM external_identities ei
+      JOIN members m ON m.workspace_id = '11111111-1111-1111-1111-111111111111' AND m.user_id = ei.user_id
+     WHERE ei.id = '44444444-0000-0000-0000-000000000001'
+       AND m.id = 'cccccccc-0000-0000-0000-000000000001' AND m.status = 'active'),
+         'T29 FAIL: 一个工作区的成员资格撤销不得影响其余工作区的回调解析';
+  -- 恢复 WS-B 名册行状态(保持后续测试夹具完整)
+  UPDATE members SET status = 'active' WHERE id = 'cccccccc-0000-0000-0000-000000000009';
+  RAISE NOTICE 'PASS T29-14: 全局解链权限负向(仅所属 users.id 本人;admin 无旁路;撤销成员资格仅使本工作区回落 403,全局映射不动)';
+
+  -- 清理 R5 夹具
+  DELETE FROM members WHERE id IN ('cccccccc-0000-0000-0000-00000000000b');
+  DELETE FROM external_identities WHERE id = '44444444-0000-0000-0000-000000000001';
 END $$;
 
 -- ===================== T30:IM 投递台账多目的地 + error 分离(HIGH-4)=====================
@@ -2973,7 +3095,10 @@ BEGIN
 END $$;
 
 -- ----------------------------------------------------------------------------
--- R4 辅助函数(HIGH-6:execution 指标统一可见性 scope,workload-B / agent stats / workspace dashboard 共用)
+-- R4 辅助函数(HIGH-6:execution 指标统一可见性 scope,workload-B / agent stats / workspace dashboard 共用;
+-- R5 HIGH-3:聚合落地的权威形态为 analytics.md §2.3.1 的 visible_executions 统一 CTE——本函数是该谓词的
+-- 逐执行布尔形态(单行判定/结构负向用),两者语义逐条等价;T33 ⑥–⑨ 以同一聚合 SQL(内联 CTE)对
+-- 普通成员/项目成员/private agent owner/admin 断言最终统计值,不再只测本 helper)
 -- ----------------------------------------------------------------------------
 -- 判定一次执行对某成员是否可见(两层串联):
 --   ① **agent 可见性先行**:private agent 的运行统计仅其 owner 与 admin/owner 角色可见;
@@ -3011,10 +3136,14 @@ LANGUAGE sql STABLE AS $$
   )
 $$;
 
--- ===================== T33:Analytics 可见性缓存键 + 当前归属口径(HIGH-8;R4 HIGH-6 扩展:execution 可见性 scope)=====================
+-- ===================== T33:Analytics 可见性缓存键 + 当前归属口径(HIGH-8;R4 HIGH-6 扩展:execution 可见性 scope;R5 HIGH-3 扩展:同一聚合 SQL 真实统计值断言)=====================
 DO $$
 DECLARE
   v_ws UUID := '11111111-1111-1111-1111-111111111111';
+  v_cte TEXT;            -- R5:visible_executions 统一 CTE(analytics.md §2.3.1 权威构件,四段聚合 SQL 逐字复用)
+  v_sql TEXT;
+  v_a BIGINT; v_b BIGINT; v_c BIGINT;
+  v_rate NUMERIC; v_tokens BIGINT; v_runs BIGINT;
 BEGIN
   -- ① 同指标同维度、不同可见性集合 → scope_key 不同可并存(跨权限不共享)
   INSERT INTO analytics_snapshots (workspace_id, metric_key, scope_key, dimensions, window_start, window_end, value)
@@ -3101,13 +3230,174 @@ BEGIN
          'T33 FAIL: execution 指标不同可见性 scope 的快照应物理分行(ws_admin 与成员 scope 绝不共享)';
   RAISE NOTICE 'PASS T33-5: execution 指标缓存键纳入统一可见性 scope(exec:p<项目集>:a<agent 集>),跨权限缓存不共享';
 
-  -- 清理 R4 夹具(保持后续测试环境干净)
+  -- ⑥–⑨ R5(HIGH-3):**同一权威聚合 SQL 的真实统计值断言**——四段落地 SQL(workload-B / agent 主统计 /
+  --   retry 子查询 / token 聚合)一律内联 §2.3.1 visible_executions 统一 CTE;以同一 SQL 文本(仅代入
+  --   请求者参数)对 普通成员 u3 / 项目成员 u4 / private agent owner u2 / admin 四类请求者断言最终统计值。
+  -- 夹具扩展:u4 = 私有项目 SEC 的成员(项目成员 persona);请求者 user_id/role 经其成员行解析(同服务层口径)
+  -- 前置清理:此前测试(T20 claim 容量 / T21 审批等)在 agent-a1 上遗留的执行行已完成其断言使命,
+  -- 先行清除(子表 attempts/approvals 均 ON DELETE CASCADE),保证下述权威聚合在受控夹具集上断言最终值
+  DELETE FROM task_executions
+   WHERE workspace_id = v_ws AND agent_id = 'bbbbbbbb-0000-0000-0000-000000000001'
+     AND id NOT IN ('e2e2e2e2-0000-0000-0000-000000000001',
+                    'e2e2e2e2-0000-0000-0000-000000000002',
+                    'e2e2e2e2-0000-0000-0000-000000000003');
+  INSERT INTO users (id, email, display_name) VALUES
+    ('aaaaaaaa-0000-0000-0000-000000000004', 'u4@example.test', 'U4');
+  INSERT INTO members (id, workspace_id, member_type, user_id, role) VALUES
+    ('cccccccc-0000-0000-0000-00000000000f', v_ws, 'human', 'aaaaaaaa-0000-0000-0000-000000000004', 'member');
+  INSERT INTO project_members (workspace_id, project_id, member_id) VALUES
+    (v_ws, 'dddddddd-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-00000000000f');
+
+  -- 权威构件:visible_executions 统一 CTE($M$ = 请求者成员 id 占位;与 analytics.md §2.3.1 逐条等价)
+  v_cte := $cte$
+WITH visible_executions AS (
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = '11111111-1111-1111-1111-111111111111'
+    AND (a.visibility = 'workspace'
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = (SELECT m0.user_id FROM members m0 WHERE m0.id = $M$)
+                  OR (SELECT m0.role FROM members m0 WHERE m0.id = $M$) IN ('owner','admin'))))
+    AND (i.id IS NULL
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR (SELECT m0.role FROM members m0 WHERE m0.id = $M$) IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id AND pm.member_id = $M$)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id AND mx.member_id = $M$))
+)
+$cte$;
+
+  -- ⑥ agent 主统计(§2.3 同一 SQL:executions / succeeded 最终值,逐请求者断言)
+  -- 普通成员 u3:私有项目 SEC 的执行 e-0001 与 private agent 的执行 e-0003 均被剔除,agent1 仅余 e-0002
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000e')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 1 AND v_b = 1, 'T33 FAIL: 普通成员 agent 主统计应剔除私有项目执行(仅余无 issue 执行 e-0002)';
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000e')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000003''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 0 AND v_b = 0, 'T33 FAIL: 普通成员对 private agent 的聚合应为空(先过 agent 可见性)';
+  -- 项目成员 u4:含私有项目 SEC 执行 e-0001 + 无 issue 执行 e-0002
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000f')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 2 AND v_b = 2, 'T33 FAIL: 项目成员 agent 主统计应含私有项目执行(e-0001 + e-0002)';
+  -- private agent owner u2:自家 private agent 执行可见;但不可见私有项目执行(项目可见性独立于 agent 可见性)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000d')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000003''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 1 AND v_b = 1, 'T33 FAIL: private agent owner 应见自家 agent 执行';
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000d')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 1 AND v_b = 1, 'T33 FAIL: private agent owner 非私有项目成员时仍不得见私有项目执行';
+  -- admin/owner:全量(agent1 = e-0001 + e-0002;agent3 = e-0003)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-000000000001')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 2 AND v_b = 2, 'T33 FAIL: admin 应见全工作区 agent1 执行(含私有项目)';
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-000000000001')) ||
+    'SELECT COUNT(*), COUNT(*) FILTER (WHERE e.status=''completed'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000003''';
+  EXECUTE v_sql INTO v_a, v_b;
+  ASSERT v_a = 1 AND v_b = 1, 'T33 FAIL: admin 应见 private agent 执行';
+  RAISE NOTICE 'PASS T33-6: agent 主统计权威 SQL(内联 visible_executions CTE)逐请求者最终统计值断言(u3/u4/u2/admin)';
+
+  -- ⑦ workload-B(§2.2.4 同一 SQL:在途 running / queued / awaiting_approval 计数,堵执行计数侧信道)
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, status)
+  VALUES ('e2e2e2e2-0000-0000-0000-000000000004', v_ws, 'bbbbbbbb-0000-0000-0000-000000000001',
+          '99999999-0000-0000-0000-000000000041', 'assign', 'running'),          -- 私有项目 issue 的在途执行
+         ('e2e2e2e2-0000-0000-0000-000000000005', v_ws, 'bbbbbbbb-0000-0000-0000-000000000001',
+          NULL, 'manual', 'queued');                                              -- 无 issue 的在途执行(归属 agent)
+  -- 普通成员 u3:私有项目在途执行 e-0004 被剔除,仅余 e-0005 queued
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000e')) ||
+    'SELECT COUNT(*) FILTER (WHERE e.status IN (''claimed'',''running'',''cancelling'')), COUNT(*) FILTER (WHERE e.status = ''queued''), COUNT(*) FILTER (WHERE e.status = ''awaiting_approval'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND e.status IN (''queued'',''claimed'',''running'',''cancelling'',''awaiting_approval'')';
+  EXECUTE v_sql INTO v_a, v_b, v_c;
+  ASSERT v_a = 0 AND v_b = 1 AND v_c = 0, 'T33 FAIL: 普通成员 workload-B 应剔除私有项目在途执行(无法经执行计数推断私有项目活动)';
+  -- admin:两条在途均可见
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-000000000001')) ||
+    'SELECT COUNT(*) FILTER (WHERE e.status IN (''claimed'',''running'',''cancelling'')), COUNT(*) FILTER (WHERE e.status = ''queued''), COUNT(*) FILTER (WHERE e.status = ''awaiting_approval'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND e.status IN (''queued'',''claimed'',''running'',''cancelling'',''awaiting_approval'')';
+  EXECUTE v_sql INTO v_a, v_b, v_c;
+  ASSERT v_a = 1 AND v_b = 1 AND v_c = 0, 'T33 FAIL: admin workload-B 应见全量在途执行';
+  -- 项目成员 u4:含私有项目在途执行
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000f')) ||
+    'SELECT COUNT(*) FILTER (WHERE e.status IN (''claimed'',''running'',''cancelling'')), COUNT(*) FILTER (WHERE e.status = ''queued''), COUNT(*) FILTER (WHERE e.status = ''awaiting_approval'') FROM visible_executions e WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND e.status IN (''queued'',''claimed'',''running'',''cancelling'',''awaiting_approval'')';
+  EXECUTE v_sql INTO v_a, v_b, v_c;
+  ASSERT v_a = 1 AND v_b = 1 AND v_c = 0, 'T33 FAIL: 项目成员 workload-B 应含私有项目在途执行';
+  DELETE FROM task_executions WHERE id IN ('e2e2e2e2-0000-0000-0000-000000000004', 'e2e2e2e2-0000-0000-0000-000000000005');
+  RAISE NOTICE 'PASS T33-7: workload-B 权威 SQL(内联 CTE)在途计数逐请求者断言(私有项目在途执行对普通成员剔除)';
+
+  -- ⑧ retry 子查询(§2.3 同一 SQL:attempts 关联先过 CTE,retry_rate 最终值)
+  INSERT INTO execution_attempts (workspace_id, execution_id, attempt_number, status)
+  VALUES (v_ws, 'e2e2e2e2-0000-0000-0000-000000000001', 1, 'completed'),
+         (v_ws, 'e2e2e2e2-0000-0000-0000-000000000001', 2, 'completed'),   -- e-0001 重试 1 次(n=2)
+         (v_ws, 'e2e2e2e2-0000-0000-0000-000000000002', 1, 'completed');   -- e-0002 无重试(n=1)
+  -- 普通成员 u3:仅余 e-0002(n=1)→ retry_rate = 0(私有项目执行 e-0001 的重试不泄露)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000e')) ||
+    'SELECT COALESCE(ROUND(COUNT(*) FILTER (WHERE n > 1) * 1.0 / NULLIF(COUNT(*),0), 4), 0) FROM (SELECT e.id, COUNT(att.id) AS n FROM visible_executions e LEFT JOIN execution_attempts att ON att.execution_id = e.id AND att.workspace_id = e.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' GROUP BY e.id) r';
+  EXECUTE v_sql INTO v_rate;
+  ASSERT v_rate = 0, 'T33 FAIL: 普通成员 retry_rate 应不含私有项目执行的重试(仅 e-0002,n=1)';
+  -- admin:e-0001(n=2)+ e-0002(n=1)→ 1/2 = 0.5
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-000000000001')) ||
+    'SELECT COALESCE(ROUND(COUNT(*) FILTER (WHERE n > 1) * 1.0 / NULLIF(COUNT(*),0), 4), 0) FROM (SELECT e.id, COUNT(att.id) AS n FROM visible_executions e LEFT JOIN execution_attempts att ON att.execution_id = e.id AND att.workspace_id = e.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' GROUP BY e.id) r';
+  EXECUTE v_sql INTO v_rate;
+  ASSERT v_rate = 0.5, 'T33 FAIL: admin retry_rate 应含私有项目执行重试(1/2)';
+  -- 项目成员 u4:同 admin 口径(1/2)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000f')) ||
+    'SELECT COALESCE(ROUND(COUNT(*) FILTER (WHERE n > 1) * 1.0 / NULLIF(COUNT(*),0), 4), 0) FROM (SELECT e.id, COUNT(att.id) AS n FROM visible_executions e LEFT JOIN execution_attempts att ON att.execution_id = e.id AND att.workspace_id = e.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' GROUP BY e.id) r';
+  EXECUTE v_sql INTO v_rate;
+  ASSERT v_rate = 0.5, 'T33 FAIL: 项目成员 retry_rate 应含私有项目执行重试(1/2)';
+  RAISE NOTICE 'PASS T33-8: retry 权威 SQL(attempts 关联先过 CTE)逐请求者最终 retry_rate 断言';
+
+  -- ⑨ token 聚合(§2.3 同一 SQL:autopilot_runs 关联先过 CTE,total_tokens 最终值)
+  INSERT INTO autopilots (id, workspace_id, name, trigger_type, created_by) VALUES
+    ('55555555-0000-0000-0000-000000000001', v_ws, 'T33-ap', 'schedule', 'cccccccc-0000-0000-0000-000000000001');
+  INSERT INTO autopilot_runs (autopilot_id, workspace_id, trigger_type, execution_id, status, started_at,
+                              prompt_tokens, completion_tokens)
+  VALUES ('55555555-0000-0000-0000-000000000001', v_ws, 'schedule', 'e2e2e2e2-0000-0000-0000-000000000001',
+          'succeeded', '2026-07-20 10:00:00+00', 600, 300),                  -- e-0001(私有项目)token 900
+         ('55555555-0000-0000-0000-000000000001', v_ws, 'schedule', 'e2e2e2e2-0000-0000-0000-000000000002',
+          'succeeded', '2026-07-20 11:00:00+00', 60, 40);                    -- e-0002(无 issue)token 100
+  -- 普通成员 u3:仅 e-0002 的 token(私有项目 token 成本不泄露)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000e')) ||
+    'SELECT COALESCE(SUM(r.total_tokens),0), COUNT(r.id) FROM autopilot_runs r JOIN visible_executions e ON e.id = r.execution_id AND e.workspace_id = r.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND r.started_at >= ''2026-07-01'' AND r.started_at < ''2026-08-01''';
+  EXECUTE v_sql INTO v_tokens, v_runs;
+  ASSERT v_tokens = 100 AND v_runs = 1, 'T33 FAIL: 普通成员 token 聚合应剔除私有项目执行 token(仅 e-0002 的 100)';
+  -- admin:两条执行的 token 全量(1000)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-000000000001')) ||
+    'SELECT COALESCE(SUM(r.total_tokens),0), COUNT(r.id) FROM autopilot_runs r JOIN visible_executions e ON e.id = r.execution_id AND e.workspace_id = r.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND r.started_at >= ''2026-07-01'' AND r.started_at < ''2026-08-01''';
+  EXECUTE v_sql INTO v_tokens, v_runs;
+  ASSERT v_tokens = 1000 AND v_runs = 2, 'T33 FAIL: admin token 聚合应见全量(900 + 100)';
+  -- 项目成员 u4:含私有项目执行 token(1000)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000f')) ||
+    'SELECT COALESCE(SUM(r.total_tokens),0), COUNT(r.id) FROM autopilot_runs r JOIN visible_executions e ON e.id = r.execution_id AND e.workspace_id = r.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000001'' AND r.started_at >= ''2026-07-01'' AND r.started_at < ''2026-08-01''';
+  EXECUTE v_sql INTO v_tokens, v_runs;
+  ASSERT v_tokens = 1000 AND v_runs = 2, 'T33 FAIL: 项目成员 token 聚合应含私有项目执行 token';
+  -- private agent owner u2 对 agent3:无 token 数据(0,诚实口径)
+  v_sql := replace(v_cte, '$M$', quote_literal('cccccccc-0000-0000-0000-00000000000d')) ||
+    'SELECT COALESCE(SUM(r.total_tokens),0), COUNT(r.id) FROM autopilot_runs r JOIN visible_executions e ON e.id = r.execution_id AND e.workspace_id = r.workspace_id WHERE e.agent_id = ''bbbbbbbb-0000-0000-0000-000000000003'' AND r.started_at >= ''2026-07-01'' AND r.started_at < ''2026-08-01''';
+  EXECUTE v_sql INTO v_tokens, v_runs;
+  ASSERT v_tokens = 0 AND v_runs = 0, 'T33 FAIL: private agent owner 对无 token 数据的 agent 聚合应为 0(诚实口径)';
+  RAISE NOTICE 'PASS T33-9: token 权威 SQL(autopilot_runs 关联先过 CTE)逐请求者最终 token 值断言';
+
+  -- 清理 R4/R5 夹具(保持后续测试环境干净)
+  DELETE FROM autopilot_runs WHERE autopilot_id = '55555555-0000-0000-0000-000000000001';
+  DELETE FROM autopilots WHERE id = '55555555-0000-0000-0000-000000000001';
+  DELETE FROM execution_attempts WHERE execution_id IN ('e2e2e2e2-0000-0000-0000-000000000001',
+                                                        'e2e2e2e2-0000-0000-0000-000000000002');
   DELETE FROM analytics_snapshots WHERE workspace_id = v_ws AND metric_key = 'agent_stats';
   DELETE FROM task_executions WHERE id IN ('e2e2e2e2-0000-0000-0000-000000000001',
                                            'e2e2e2e2-0000-0000-0000-000000000002',
                                            'e2e2e2e2-0000-0000-0000-000000000003');
   DELETE FROM agents WHERE id = 'bbbbbbbb-0000-0000-0000-000000000003';
-  DELETE FROM members WHERE id IN ('cccccccc-0000-0000-0000-00000000000d', 'cccccccc-0000-0000-0000-00000000000e');
+  DELETE FROM project_members WHERE member_id = 'cccccccc-0000-0000-0000-00000000000f';
+  DELETE FROM members WHERE id IN ('cccccccc-0000-0000-0000-00000000000d', 'cccccccc-0000-0000-0000-00000000000e',
+                                   'cccccccc-0000-0000-0000-00000000000f');
+  DELETE FROM users WHERE id = 'aaaaaaaa-0000-0000-0000-000000000004';
   DELETE FROM issues WHERE id = '99999999-0000-0000-0000-000000000041';
   DELETE FROM identifier_prefix_registry WHERE workspace_id = v_ws AND key = 'SEC';
   DELETE FROM projects WHERE id = 'dddddddd-0000-0000-0000-000000000003';
@@ -3313,5 +3603,5 @@ BEGIN
 END $$;
 
 \echo '============================================================'
-\echo 'ALL R2+R3+R4 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4+R5 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'
