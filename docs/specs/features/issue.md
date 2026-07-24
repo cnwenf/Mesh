@@ -13,7 +13,22 @@
 > - `comment-inbox.md`(评论与收件箱):评论挂在 issue 上;@提及触发通知/agent 运行。
 > - `agent.md`(智能体):assignee 为 agent 时分派事件触发其执行运行时(本 Spec 点到为止,执行细节归 agent.md)。
 >
-> **技术基准约定(全局锚点)**:PostgreSQL;表名 snake_case 复数;主键 `id UUID` 默认 `gen_random_uuid()`;`created_at`/`updated_at` 为 `TIMESTAMPTZ`;软删除 `deleted_at`(编号保留)。REST 前缀 `/api/v1`,Bearer token,游标分页响应 `{"data","next_cursor"}`,时间 RFC3339 UTC,统一错误信封 `{"error":{"code","message","details"}}`。实时走 WebSocket `/ws`,频道订阅 + `seq` + 断线重放,事件 `<entity>.<action>`。ORM 采用 SQLAlchemy 2.x 声明式约定(或等价 DDL)。
+> **文档性质**:可直接指导开发的实现规格。所有命名、约束、端点、事件均以此为准则;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
+
+---
+
+## 全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)
+
+1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `id UUID`(默认 `gen_random_uuid()`);所有表含 `created_at` / `updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`,UTC);软删除统一 `deleted_at TIMESTAMPTZ NULL`(issue 软删除时编号永久保留)。
+2. **成员**:`assignee_id` / `reporter_id` / 活动 `actor_member_id` / @提及目标一律引用 `members.id`,模型以 README §6.1 为唯一权威(统一 `members` 名册,`member_type ∈ {human,agent}`,人类与 agent 对称)。**存储层不设** `assignee_type` 等冗余判别列,人类/agent 判别 JOIN `members.member_type`;API 响应可携带服务端计算的 `member_type` 快照(真源为 members)。
+3. **多租户**:跨模块外键一律按 README §6.2 建**复合 FK + 目标表 `UNIQUE(workspace_id, id)`**;`issues` 自身也被多张表复合引用,故同样建 `UNIQUE(workspace_id, id)`。
+4. **编号 / 前缀 / 默认状态**:issue 编号、项目前缀永久保留、无项目 issue 工作区级计数器、`UNIQUE(workspace_id, identifier)`、每作用域唯一默认状态(部分表达式唯一索引 + 事务保证至少一个默认)以 **README §6.3 为唯一权威**。
+5. **接口**:基础路径 `/api/v1`;包络 / 游标分页(分组查询统一**整体游标**,不给每组独立 cursor)/ 错误信封 / 乐观并发 / **过滤限制(嵌套深度 ≤3、条件数 ≤20、`statement_timeout` 兜底、超限 `filter_too_complex` / `query_cost_exceeded`)** 见 README §6.14。
+6. **实时**:统一实时契约见 README §6.7(**频道内**单调 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`、订阅逐资源授权);事件名 `<entity>.<action>`。
+7. **队列 / 投递 / 触发**:transactional outbox(README §6.6)、at-least-once + 幂等键(§6.5)、execution/attempt 分层与长任务状态词汇(§6.4)、触发语义矩阵(§6.9);**`agent_runs` 不存在,运行真源实体为 `task_executions`**。
+8. **性能基准**:一切 P95 / 时延指标仅在 README §10 基准下构成验收标准,本 Spec 引用而非自定。
+9. **集成测试**:跨租户复合 FK 拒绝、编号并发、并发成环等场景按 README §9 矩阵(T1/T12/T15 等)必测。
+10. **ORM**:SQLAlchemy 2.x 声明式约定(或等价 DDL,以 PostgreSQL 16 可执行为准)。
 
 ---
 
@@ -55,14 +70,16 @@ Issue 是整个产品的**原子工作单元**。需求、任务、缺陷、史�
 
 | 功能点 | 说明 | 典型场景 |
 |--------|------|----------|
-| 人类可读编号 | `<项目前缀>-<自增号>`,如 `WEB-123` | 沟通时引用"WEB-123" |
-| 项目内自增 | 序号在**项目内**单调递增(每项目独立计数) | 新项目从 1 开始 |
+| 人类可读编号 | `identifier = <前缀>-<自增号>`,如 `WEB-123` | 沟通时引用"WEB-123" |
+| 项目内自增 | 有项目 issue 的序号在**项目内**单调递增(`projects.issue_seq` 行锁自增,每项目独立计数) | 新项目从 1 开始 |
 | 双主键 | 内部用 UUID 做外键与 URL;编号仅用于人类引用与搜索 | API 用 UUID,UI 显示编号 |
-| 唯一约束 | `(project_id, number)` 唯一 | 不允许两个 WEB-123 |
-| 序号生成 | 项目计数器 `issue_seq` 原子自增(行锁 `FOR UPDATE` / `RETURNING`),保证并发不重号 | 多人同时建 issue 不冲突 |
-| 无项目 issue | 未归项目的 issue 用工作区级保留前缀(如 `WS`)或独立序列 | 收件箱里的临时 issue |
+| 唯一约束(双重) | 同时建 `UNIQUE (project_id, number)`(项目内,仅 `project_id` 非空行有效)与 **`UNIQUE (workspace_id, identifier)`**(工作区级,兜住无项目 issue 与一切重复) | 不允许两个 WEB-123;也不允许两个 WS-7 |
+| 序号生成 | 项目计数器 `projects.issue_seq` 原子自增(行锁 `FOR UPDATE` / `RETURNING`),保证并发不重号 | 多人同时建 issue 不冲突 |
+| 无项目 issue | 未归项目的 issue 使用**工作区级计数器 `workspaces.inbox_issue_seq`**(`BIGINT NOT NULL DEFAULT 0`,同发行锁自增,模式与 `projects.issue_seq` 一致)+ 工作区保留前缀(默认 `WS`,可在工作区设置中配置),编号形如 `WS-7` | 收件箱里的临时 issue |
+| 编号不可变 | `identifier` 一经生成**永不改变**:issue 在项目间迁移(含归入/移出项目)**不重编号**,沿用原 `identifier` | 把临时 issue WS-7 归入项目仍叫 WS-7 |
+| 前缀永久保留 | 项目前缀 `projects.key` 永久保留(软删除/归档项目后不可复用,见 README §6.3),杜绝历史 `WEB-123` 歧义 | 删除 WEB 项目后不能新建同名前缀项目 |
 
-> **编号绝不复用**:issue 删除后其编号废弃(软删除保留行),避免引用错乱。详见 §2.4。
+> **编号绝不复用、不可变**(README §6.3):issue 软删除后其编号永久废弃(行作为墓碑保留),删除 issue 的 `identifier` **永不被重新分配**;`identifier` 不随项目迁移改变。详见 §2.4。
 
 #### 1.2.3 状态机与自定义状态(双层状态)
 
@@ -147,9 +164,13 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | `is_default` | BOOLEAN | NOT NULL | `false` | 是否为新建默认状态 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**约束**:`UNIQUE (workspace_id, COALESCE(project_id,'00000000-…'), name)`(工作区 + 作用域内状态名唯一)。
+**约束**(可执行 DDL,见 §2.3;COALESCE 表达式不能写进表级 `UNIQUE` 约束,一律用**部分表达式唯一索引**,README §6.3):
+- 作用域内状态名唯一:`CREATE UNIQUE INDEX uq_issue_statuses_name ON issue_statuses (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), name);`
+- 每作用域唯一默认状态:`CREATE UNIQUE INDEX uq_issue_statuses_default ON issue_statuses (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000')) WHERE is_default;`
+- **至少一个默认状态由事务保证**:任何"取消某状态默认"的写操作必须与"设置新默认"在**同一事务**内完成;工作区/项目创建事务内播种默认状态集;服务层自检校验每作用域恰有一个默认,缺失即报警并在同事务内修复(README §6.3)。
+- 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `issues.status_id` 等复合 FK 引用,README §6.2)。
 
-> **category → status 映射**:一个 category 下可挂 0..N 个自定义 status;每个 status 必属且仅属一个 category。系统保证每个 `(workspace, project)` 作用域内至少有一个 `is_default=true` 的状态用于新建 issue。看板默认按 category 分列,列内按 status `position` 排序。
+> **category → status 映射**:一个 category 下可挂 0..N 个自定义 status;每个 status 必属且仅属一个 category。系统保证每个 `(workspace, project)` 作用域内至少有一个 `is_default=true` 的状态用于新建 issue(见上)。看板默认按 category 分列,列内按 status `position` 排序。
 
 #### `issues`(工作项)
 
@@ -157,31 +178,33 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | 内部主键 |
 | `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键 |
-| `project_id` | UUID | NULL, FK→projects(id) ON DELETE SET NULL | NULL | 归属项目 |
-| `number` | BIGINT | NOT NULL | — | 项目内自增号 |
-| `identifier` | TEXT | NOT NULL | — | 冗余人类编号 `WEB-123`(搜索/展示) |
+| `project_id` | UUID | NULL,**复合 FK** `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE SET NULL | NULL | 归属项目 |
+| `number` | BIGINT | NOT NULL | — | 项目内自增号(有项目)/ 工作区内自增号(无项目) |
+| `identifier` | TEXT | NOT NULL | — | 人类编号 `WEB-123` / `WS-7`(搜索/展示);**一经生成永不改变** |
 | `title` | TEXT | NOT NULL | — | 1–255 |
 | `description` | TEXT | NULL | NULL | 富文本/Markdown |
-| `status_id` | UUID | NOT NULL, FK→issue_statuses(id) | — | 当前状态 |
+| `status_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, status_id)→issue_statuses(workspace_id, id)` ON DELETE RESTRICT | — | 当前状态 |
 | `state_category` | TEXT | NOT NULL, CHECK IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled') | — | 冗余自 status.category |
 | `priority` | TEXT | NOT NULL, CHECK IN ('none','low','medium','high','urgent') | `'none'` | |
-| `assignee_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 人或 agent |
-| `reporter_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 报告人 |
+| `assignee_id` | UUID | NULL,**复合 FK** `(workspace_id, assignee_id)→members(workspace_id, id)` ON DELETE SET NULL | NULL | 人或 agent |
+| `reporter_id` | UUID | NULL,**复合 FK** `(workspace_id, reporter_id)→members(workspace_id, id)` ON DELETE SET NULL | NULL | 报告人 |
 | `estimate` | NUMERIC | NULL | NULL | 估算值 |
 | `estimate_unit` | TEXT | NULL, CHECK IN ('points','hours') | NULL | 单位 |
 | `due_date` | DATE | NULL | NULL | 截止日 |
 | `start_date` | DATE | NULL | NULL | 计划开始日 |
-| `milestone_id` | UUID | NULL, FK→milestones(id) ON DELETE SET NULL | NULL | |
-| `cycle_id` | UUID | NULL, FK→cycles(id) ON DELETE SET NULL | NULL | |
-| `parent_id` | UUID | NULL, FK→issues(id) ON DELETE CASCADE | NULL | 父 issue |
-| `position` | REAL | NOT NULL | `0` | 排序值(看板列内/列表) |
+| `milestone_id` | UUID | NULL,**复合 FK** `(workspace_id, milestone_id)→milestones(workspace_id, id)` ON DELETE SET NULL | NULL | |
+| `cycle_id` | UUID | NULL,**复合 FK** `(workspace_id, cycle_id)→cycles(workspace_id, id)` ON DELETE SET NULL | NULL | |
+| `parent_id` | UUID | NULL, FK→issues(id) ON DELETE CASCADE | NULL | 父 issue(同表自引用,天然同租户) |
+| `position` | REAL | NOT NULL | `0` | **规范默认排序值**(全局唯一规范排序);各视图内的手工拖拽排序不写本列,而存于 kanban.md `view_issue_positions`(避免一个视图的拖拽污染其它视图,README §6.14 排序契约) |
 | `completed_at` | TIMESTAMPTZ | NULL | NULL | 进入 done 的时间 |
 | `version` | INT | NOT NULL | `1` | 乐观并发版本号(见 §3.4) |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除(编号保留) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **表级约束**:
-- `UNIQUE (project_id, number)` —— 项目内编号唯一。
+- `UNIQUE (project_id, number)` —— 项目内编号唯一(仅 `project_id` 非空行有效;PostgreSQL 唯一约束中多个 NULL 互不冲突,无项目 issue 不在此约束下重号,由下一条工作区级唯一兜住)。
+- **`UNIQUE (workspace_id, identifier)`** —— 工作区级编号唯一(普通唯一索引 `uq_issues_identifier`,兜住无项目 issue 与一切重复;README §6.3)。
+- **`UNIQUE (workspace_id, id)`** —— 供 `issue_dependencies` / `issue_activity` / label-property 值表等**复合 FK** 引用本表(README §6.2)。
 - `CHECK (parent_id <> id)` —— 防自环(更深层环检测在服务层,见 §2.5)。
 - `CHECK (due_date IS NULL OR start_date IS NULL OR due_date >= start_date)`。
 - `state_category` 与 `status_id` 同步由服务层保证(或触发器维护,见 §2.5)。
@@ -191,10 +214,11 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
-| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | — | 主体 |
-| `depends_on_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | — | 被依赖项 |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键(复合 FK 的本地列,README §6.2) |
+| `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE | — | 主体 |
+| `depends_on_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, depends_on_id)→issues(workspace_id, id)` ON DELETE CASCADE | — | 被依赖项(同工作区,跨租户依赖在 INSERT 即被复合 FK 拒绝) |
 | `type` | TEXT | NOT NULL, CHECK IN ('blocks','blocked_by','relates_to','duplicates') | `'relates_to'` | 依赖类型 |
-| `created_by` | UUID | NULL, FK→members(id) ON DELETE SET NULL | NULL | 建立者 |
+| `created_by` | UUID | NULL,**复合 FK** `(workspace_id, created_by)→members(workspace_id, id)` ON DELETE SET NULL | NULL | 建立者 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **约束**:`UNIQUE (issue_id, depends_on_id, type)`;`CHECK (issue_id <> depends_on_id)`。
@@ -206,8 +230,9 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `id` | UUID | PK | |
-| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | |
-| `actor_member_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | 操作者(人或 agent) |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | 隔离键(复合 FK 本地列) |
+| `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE | |
+| `actor_member_id` | UUID | NULL,**复合 FK** `(workspace_id, actor_member_id)→members(workspace_id, id)` ON DELETE SET NULL | 操作者(人或 agent) |
 | `field` | TEXT | NOT NULL | 变更字段(如 `status`/`assignee`) |
 | `old_value` | JSONB | NULL | 变更前 |
 | `new_value` | JSONB | NULL | 变更后 |
@@ -229,7 +254,10 @@ issue_custom_field_values(id, issue_id, field_def_id,
 ### 2.3 索引与约束
 
 ```sql
-CREATE UNIQUE INDEX uq_issue_number ON issues(project_id, number);
+-- 编号唯一:项目内 + 工作区级(README §6.3)
+CREATE UNIQUE INDEX uq_issue_number ON issues(project_id, number);          -- 项目内(仅 project_id 非空行)
+CREATE UNIQUE INDEX uq_issues_identifier ON issues(workspace_id, identifier); -- 工作区级,兜住无项目 issue 与一切重复
+CREATE UNIQUE INDEX uq_issues_ws_id ON issues(workspace_id, id);            -- 供复合 FK 引用本表(README §6.2)
 CREATE INDEX idx_issues_workspace ON issues(workspace_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_issues_project_status
   ON issues(project_id, state_category) WHERE deleted_at IS NULL;
@@ -241,8 +269,14 @@ CREATE INDEX idx_issues_milestone ON issues(milestone_id) WHERE milestone_id IS 
 CREATE INDEX idx_issues_due
   ON issues(due_date) WHERE due_date IS NOT NULL AND deleted_at IS NULL;
 CREATE INDEX idx_issues_position ON issues(project_id, state_category, position);
-CREATE INDEX idx_issues_identifier ON issues(workspace_id, identifier);
 CREATE INDEX idx_issues_priority ON issues(workspace_id, priority) WHERE deleted_at IS NULL;
+
+-- issue_statuses:部分表达式唯一索引(COALESCE 不能写进表级 UNIQUE,README §6.3)
+CREATE UNIQUE INDEX uq_issue_statuses_name
+  ON issue_statuses (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), name);
+CREATE UNIQUE INDEX uq_issue_statuses_default
+  ON issue_statuses (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000')) WHERE is_default;
+CREATE UNIQUE INDEX uq_issue_statuses_ws_id ON issue_statuses(workspace_id, id);  -- 供复合 FK 引用
 CREATE INDEX idx_issue_statuses_scope
   ON issue_statuses(workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), category);
 CREATE INDEX idx_issue_deps_issue ON issue_dependencies(issue_id);
@@ -250,9 +284,9 @@ CREATE INDEX idx_issue_deps_on ON issue_dependencies(depends_on_id);
 CREATE INDEX idx_issue_activity_issue ON issue_activity(issue_id, created_at DESC);
 ```
 
-### 2.4 编号生成(项目级原子计数器)
+### 2.4 编号生成(项目级 + 工作区级原子计数器,README §6.3)
 
-**方案 1(起步,推荐)**:复用 `projects.issue_seq` 计数器,事务内行锁原子自增:
+**有项目 issue**:复用 `projects.issue_seq` 计数器,事务内行锁原子自增:
 
 ```sql
 BEGIN;
@@ -270,51 +304,90 @@ VALUES ($uuid, $ws, $project_id, $number, $key || '-' || $number,
 COMMIT;
 ```
 
-- `UPDATE … RETURNING` 取得行级锁,保证同一项目并发创建串行化、不重号;多数团队规模下性能够用,项目行是潜在热点。
-- **方案 2(规模化演进)**:独立序列表 `issue_number_seq(workspace_id, project_id, last_number)`,对计数器行 `FOR UPDATE` 原子自增,与项目主表解耦,降低主表行锁竞争。
-- **方案 3(可选)**:每项目一个 PostgreSQL `SEQUENCE`,`nextval` 取号;并发友好但多序列管理较繁。
-- **绝不复用**:删除 issue 仅置 `deleted_at`,不回退 `issue_seq`;`(project_id, number)` 行作为墓碑保留,引用不失效。
-- **无项目 issue**:使用工作区保留前缀(如 `WS`)与独立工作区级序列,编号形如 `WS-7`;后续归入项目时是否重编号为产品策略,默认保留原编号。
+**无项目 issue**:工作区级计数器 `workspaces.inbox_issue_seq`(README §6.3),与 `projects.issue_seq` 同发行锁自增模式。`workspaces` 表(workspace.md owns,权威定义见该 Spec)含 `inbox_issue_seq BIGINT NOT NULL DEFAULT 0` 列;保留前缀取自 `workspaces.settings` 的 `inbox_issue_prefix` 键(默认 `WS`,可配)。
+
+```sql
+BEGIN;
+-- 行锁工作区行并自增,RETURNING 取得无项目 issue 的 number 与前缀
+UPDATE workspaces
+   SET inbox_issue_seq = inbox_issue_seq + 1
+ WHERE id = $workspace_id
+ RETURNING inbox_issue_seq,
+           COALESCE(settings->>'inbox_issue_prefix', 'WS');   -- → number, prefix
+
+-- identifier = prefix || '-' || number(如 WS-7)
+INSERT INTO issues (id, workspace_id, project_id, number, identifier, ...)
+VALUES ($uuid, $workspace_id, NULL, $number, $prefix || '-' || $number, ...);
+COMMIT;
+```
+
+- `UPDATE … RETURNING` 取得行级锁,保证同一计数器(项目行 / 工作区行)并发创建串行化、不重号;多数团队规模下性能够用,计数器行是潜在热点。
+- **方案 2(规模化演进)**:独立序列表 `issue_number_seq(workspace_id, project_id NULL, last_number)`,对计数器行 `FOR UPDATE` 原子自增(`project_id IS NULL` 行即工作区级计数),与主表解耦,降低行锁竞争。
+- **方案 3(可选)**:每项目 / 每工作区一个 PostgreSQL `SEQUENCE`,`nextval` 取号;并发友好但多序列管理较繁。
+- **绝不复用**:删除 issue 仅置 `deleted_at`,不回退 `issue_seq` / `inbox_issue_seq`;对应 `(project_id, number)` / `(workspace_id, identifier)` 行作为墓碑保留,引用不失效。**已删除 issue 的 `identifier` 永不被重新分配**。
+- **编号不可变**:`identifier` 一经生成永不改变——无项目 issue(`WS-7`)归入项目、或 issue 在项目间迁移,**均不重编号**,沿用原 `identifier`(README §6.3)。
 
 ### 2.5 服务层一致性约束
 
 1. **`state_category` 同步**:写入/更新 `status_id` 时,服务层读取对应 `issue_statuses.category` 写入 `issues.state_category`;或用数据库触发器维护。禁止二者不一致落库。
 2. **`completed_at` 维护**:进入 `category='done'` 时写 `completed_at=now()`;离开 `done` 时清空为 NULL。
-3. **父子防环**:设置/变更 `parent_id` 时,从目标父节点向上遍历祖先链,若命中当前 issue 则拒绝(409 `circular_parent`)。`CHECK (parent_id <> id)` 仅防自环,深层环靠服务层。
-4. **依赖防环**:新增依赖边时,从 `depends_on_id` 出发做有向图可达性遍历(DFS/BFS,可用递归 CTE),若能到达 `issue_id` 则拒绝(409 `circular_dependency`)。
+3. **父子防环(串行化)**:设置/变更 `parent_id` 时,**先取工作区级 advisory 事务锁**串行化图变更,再做可达性检查:
+   ```sql
+   -- 同一工作区的父子/依赖图变更串行化(事务结束自动释放),消除并发成环窗口
+   SELECT pg_advisory_xact_lock(hashtext('issue_dep_graph:' || $workspace_id::text));
+   -- 然后从目标父节点向上遍历祖先链(递归 CTE),命中当前 issue 则拒绝 409 circular_parent
+   ```
+   `CHECK (parent_id <> id)` 仅防自环,深层环靠上述串行化 + 祖先链遍历。**等价方案**:对涉及的两条 issue 行按**确定性 id 升序** `SELECT ... FOR UPDATE`(避免死锁)再向上遍历祖先链。并发成环必须有集成测试覆盖(README §9 T12)。
+4. **依赖防环(串行化)**:新增依赖边时,同样**先取** `pg_advisory_xact_lock(hashtext('issue_dep_graph:' || $workspace_id::text))`,**再**从 `depends_on_id` 出发做有向图可达性遍历(DFS/BFS,递归 CTE),若能到达 `issue_id` 则拒绝(409 `circular_dependency`)。锁先于检查取得是关键——否则两事务并发插入 A→B 与 B→A 会双双通过检查形成环。并发测试见 README §9 T12。
 5. **assignee 有效性**:`assignee_id`/`reporter_id` 必须是该工作区 `members` 中 `status='active'` 的成员(人或 agent 均可),否则 422 `assignee_not_member`。
 6. **乐观并发**:更新携带 `version`(或 `If-Match`),`WHERE id=$1 AND version=$expected`;不匹配返回 409 `conflict`,客户端重取再改。
 
-### 2.6 跨模块外键
+### 2.6 跨模块外键(一律复合 FK,README §6.2)
 
-| 字段 | 引用 | ON DELETE | 说明 |
+所有跨模块引用均**同时存 `workspace_id` 并建复合外键** `(workspace_id, <ref>_id) → 目标表 (workspace_id, id)`,使"引用了别的工作区的对象"在 INSERT 时即被数据库拒绝;目标表(`projects`/`members`/`issue_statuses`/`milestones`/`cycles`/`issues`/`labels`/`custom_field_defs`)均建 `UNIQUE (workspace_id, id)` 供引用。
+
+| 字段 | 复合 FK 引用 | ON DELETE | 说明 |
 |------|------|-----------|------|
 | `issues.workspace_id` | `workspaces(id)` | CASCADE | 隔离键(workspace.md) |
-| `issues.project_id` | `projects(id)` | SET NULL | 归属项目(project.md) |
-| `issues.status_id` | `issue_statuses(id)` | RESTRICT | 当前状态 |
-| `issues.assignee_id` / `reporter_id` | `members(id)` | SET NULL | 人或 agent(member.md) |
-| `issues.milestone_id` | `milestones(id)` | SET NULL | project.md |
-| `issues.cycle_id` | `cycles(id)` | SET NULL | project.md |
-| `issues.parent_id` | `issues(id)` | CASCADE | 自引用树 |
-| `issue_dependencies.issue_id` / `depends_on_id` | `issues(id)` | CASCADE | 有向图 |
-| `issue_activity.actor_member_id` | `members(id)` | SET NULL | member.md |
-| `issue_custom_field_values.field_def_id` | `custom_field_defs(id)` | CASCADE | label-property.md |
-| `issue_labels.label_id` | `labels(id)` | CASCADE | label-property.md |
+| `issues.project_id` | `(workspace_id, project_id)→projects(workspace_id, id)` | SET NULL | 归属项目(project.md) |
+| `issues.status_id` | `(workspace_id, status_id)→issue_statuses(workspace_id, id)` | RESTRICT | 当前状态 |
+| `issues.assignee_id` / `reporter_id` | `(workspace_id, assignee_id/reporter_id)→members(workspace_id, id)` | SET NULL | 人或 agent(member.md) |
+| `issues.milestone_id` | `(workspace_id, milestone_id)→milestones(workspace_id, id)` | SET NULL | project.md |
+| `issues.cycle_id` | `(workspace_id, cycle_id)→cycles(workspace_id, id)` | SET NULL | project.md |
+| `issues.parent_id` | `issues(id)`(同表自引用,天然同租户) | CASCADE | 自引用树 |
+| `issue_dependencies.issue_id` / `depends_on_id` | `(workspace_id, issue_id/depends_on_id)→issues(workspace_id, id)` | CASCADE | 有向图(依赖两端强制同工作区) |
+| `issue_dependencies.created_by` | `(workspace_id, created_by)→members(workspace_id, id)` | SET NULL | member.md |
+| `issue_activity.issue_id` | `(workspace_id, issue_id)→issues(workspace_id, id)` | CASCADE | 留痕 |
+| `issue_activity.actor_member_id` | `(workspace_id, actor_member_id)→members(workspace_id, id)` | SET NULL | member.md |
+| `issue_custom_field_values.*` / `issue_labels.*` | 见 label-property.md(均带 `workspace_id` + 复合 FK → issues / custom_field_defs / labels / members) | CASCADE | label-property.md |
 
 ### 2.7 SQLAlchemy 2.x 声明式约定(核心表示例)
 
 ```python
+from sqlalchemy import ForeignKeyConstraint, Index
+
 class IssueStatus(Base):
     __tablename__ = "issue_statuses"
     __table_args__ = (
         CheckConstraint(
             "category IN ('backlog','todo','in_progress','in_review',"
             "'blocked','done','cancelled')", name="ck_issue_statuses_category"),
+        # 复合 FK:project_id 引用 projects(workspace_id, id)(README §6.2)
+        ForeignKeyConstraint(["workspace_id", "project_id"],
+                             ["projects.workspace_id", "projects.id"], ondelete="CASCADE"),
+        UniqueConstraint("workspace_id", "id", name="uq_issue_statuses_ws_id"),
+        # 部分表达式唯一索引(COALESCE 不能写进表级 UNIQUE,README §6.3)
+        Index("uq_issue_statuses_name", "workspace_id",
+              text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000')"),
+              "name", unique=True),
+        Index("uq_issue_statuses_default", "workspace_id",
+              text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000')"),
+              unique=True, postgresql_where=text("is_default")),
     )
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True,
                                     server_default=text("gen_random_uuid()"))
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
-    project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    project_id: Mapped[Optional[str]] = mapped_column()  # 复合 FK 见 __table_args__
     name: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[float] = mapped_column(server_default="0")
@@ -325,24 +398,39 @@ class Issue(Base):
     __tablename__ = "issues"
     __table_args__ = (
         UniqueConstraint("project_id", "number", name="uq_issue_number"),
+        UniqueConstraint("workspace_id", "identifier", name="uq_issues_identifier"),  # 工作区级编号唯一
+        UniqueConstraint("workspace_id", "id", name="uq_issues_ws_id"),              # 供复合 FK 引用
         CheckConstraint("parent_id <> id", name="ck_issues_no_self_parent"),
+        # 复合 FK(README §6.2):各跨模块引用均带 workspace_id
+        ForeignKeyConstraint(["workspace_id", "project_id"],
+                             ["projects.workspace_id", "projects.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["workspace_id", "status_id"],
+                             ["issue_statuses.workspace_id", "issue_statuses.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["workspace_id", "assignee_id"],
+                             ["members.workspace_id", "members.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["workspace_id", "reporter_id"],
+                             ["members.workspace_id", "members.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["workspace_id", "milestone_id"],
+                             ["milestones.workspace_id", "milestones.id"], ondelete="SET NULL"),
+        ForeignKeyConstraint(["workspace_id", "cycle_id"],
+                             ["cycles.workspace_id", "cycles.id"], ondelete="SET NULL"),
     )
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True,
                                     server_default=text("gen_random_uuid()"))
     workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
-    project_id: Mapped[Optional[str]] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    project_id: Mapped[Optional[str]] = mapped_column()      # 复合 FK 见 __table_args__
     number: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    identifier: Mapped[str] = mapped_column(Text, nullable=False)
+    identifier: Mapped[str] = mapped_column(Text, nullable=False)  # 一经生成永不改变
     title: Mapped[str] = mapped_column(Text, nullable=False)
-    status_id: Mapped[str] = mapped_column(ForeignKey("issue_statuses.id"))
+    status_id: Mapped[str] = mapped_column()                 # 复合 FK 见 __table_args__
     state_category: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(Text, nullable=False, server_default="none")
-    assignee_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("members.id", ondelete="SET NULL"))
-    reporter_id: Mapped[Optional[str]] = mapped_column(
-        ForeignKey("members.id", ondelete="SET NULL"))
+    assignee_id: Mapped[Optional[str]] = mapped_column()     # 复合 FK 见 __table_args__
+    reporter_id: Mapped[Optional[str]] = mapped_column()     # 复合 FK 见 __table_args__
+    milestone_id: Mapped[Optional[str]] = mapped_column()
+    cycle_id: Mapped[Optional[str]] = mapped_column()
     parent_id: Mapped[Optional[str]] = mapped_column(ForeignKey("issues.id", ondelete="CASCADE"))
-    position: Mapped[float] = mapped_column(server_default="0")
+    position: Mapped[float] = mapped_column(server_default="0")  # 规范默认排序;视图内手工排序见 kanban view_issue_positions
     completed_at: Mapped[Optional[datetime]] = mapped_column()
     version: Mapped[int] = mapped_column(server_default="1")
     deleted_at: Mapped[Optional[datetime]] = mapped_column()
@@ -385,9 +473,10 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 ### 3.2 列表查询参数(统一,看板/列表/我的任务复用)
 
 - **过滤**:`status`(status_id)、`state_category`、`priority`、`assignee_id`、`reporter_id`、`project_id`、`cycle_id`、`milestone_id`、`label`(label_id)、`parent_id`、`due_before`/`due_after`、`q`(搜索 title/identifier)、自定义字段过滤(如 `cf_severity=opt_major`)。
+- **过滤限制(README §6.14)**:filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底。超限返回 **`400 filter_too_complex`**;成本超限返回 **`422 query_cost_exceeded`**(建议收窄条件)。
 - **排序**:`sort=position|created_at|priority|due_date&order=asc|desc`。
 - **分组**:`group_by=state_category|assignee|priority|project|label|cycle`(看板/分组列表用)。
-- **分页**:`limit`、`cursor`。
+- **分页**:`limit`、`cursor`;**分组查询统一整体游标**(见 §3.5,README §6.14)。
 
 ### 3.3 请求/响应示例
 
@@ -493,7 +582,8 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 
 ### 3.5 分页与鉴权
 
-- **分页**:游标分页,游标编码 `(position 或 created_at, id)`。分组查询推荐**整体游标 + group 元信息**(而非每组独立 cursor),`groups[].count` 为该组总数,`data` 为当前页该组切片,`next_cursor` 驱动下一页。
+- **分页(README §6.14 整体游标契约)**:游标分页,游标编码 `(position 或 created_at, id)`。**分组查询统一为整体游标**:响应顶层为 `{"groups": [{key,label,count,wip?,data}], "next_cursor": ...}`,`count` 为组内总数,`data` 为当前页该组切片,`next_cursor` 驱动下一页;**不得**在响应中给每组独立 `cursor`(与 kanban.md 统一此契约)。
+- **过滤限制(README §6.14)**:filters 嵌套深度 ≤3、条件数 ≤20;`statement_timeout`(默认 3s)+ 成本估算兜底;超限 `400 filter_too_complex` / `422 query_cost_exceeded`。
 - **鉴权**:
   - 读:工作区成员可读可见 issue;`private` 项目的 issue 需项目成员或 admin。
   - 写:项目写权限或工作区 `member` 及以上;改他人 issue 需项目 `member`/`lead` 或 admin。
@@ -503,8 +593,10 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 
 ### 3.6 WebSocket 事件
 
-- **频道订阅**:`workspace:{ws}:issues`(列表级)、`issue:{id}`(详情级)。
-- **seq 与断线重放**:每条事件带频道内单调 `seq`;重连传 `last_seq`,服务端自该点重放。
+> 实时契约**以 README §6.7 为唯一权威**(频道内单调 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`、订阅逐资源授权、payload 携带完整变更字段与可见性水位)。本节仅列出 issue 模块的频道与事件名,不重复定义 seq 语义。
+
+- **频道订阅**:`workspace:{ws}:issues`(列表级)、`issue:{id}`(详情级);订阅时按 README §6.7 重新做资源级授权(工作区成员资格 / 项目可见性)。
+- **seq 与断线重放**:频道内单调 `seq`(README §6.7);重连传 `resume_from=<last_seq+1>`,服务端自 `realtime_events` 重放;游标过旧下发 `resync_required` + REST 对账水位。
 - **事件清单**(`<entity>.<action>`):
 
 | 事件 | 触发时机 | payload 关键字段 |
@@ -522,7 +614,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 
 ### 3.7 分派给 agent 的执行入口(与 agent.md 衔接)
 
-当 `assignee_id` 指向 `member_type='agent'` 的成员,或评论中 @提及 agent 时,本模块在事务提交后发出**分派/提及领域事件**(经 `issue.updated`/`comment.added` 携带 assignee/mention 信息)。agent 运行时订阅该事件并入队一次执行 run,以 agent 自己的成员身份接管该 issue(改状态、发评论、产出结果)。**执行运行时、技能、模型、sandbox 等细节归 `agent.md`**,本 Spec 仅保证:分派对人与 agent 走同一接口、同一事件、同一成员引用,体验对称。
+当 `assignee_id` 指向 `member_type='agent'` 的成员,或评论中 @提及 agent 时,触发语义**以 README §6.9 触发矩阵为唯一权威**(分派 → `trigger='assign'`;再次选择同一 assignee = no-op;字段值无变化 = no-op;@提及 = 发布后入队一次执行)。本模块在**同一业务事务内**经 **transactional outbox**(README §6.6)写入派生事件(`issue.assigned` / `execution.enqueue`),由 outbox relay 分发到统一 agent 编排入口创建 `task_executions`(**运行真源实体,不存在 `agent_runs`**;execution/attempt 分层与长任务状态词汇见 README §6.4),agent 以自己的成员身份接管该 issue(改状态、发评论、产出结果)。**执行运行时、技能、模型、sandbox 等细节归 `agent.md` / `runtime.md`**,本 Spec 仅保证:分派对人与 agent 走同一接口、同一 outbox 事件、同一成员引用,体验对称;且"业务已提交但任务未入队"的永久丢失被 outbox 杜绝。
 
 ---
 
@@ -598,11 +690,13 @@ Issue 详情(全屏或右侧抽屉)
 ### 5.1 功能性 —— 编号体系
 
 - [ ] 创建 issue 自动生成 `identifier = <project.key>-<number>`,`number` 项目内单调递增。
-- [ ] 并发(≥10)在同一项目创建 issue,编号无重复、无跳号(命中 `uq_issue_number`,`issue_seq` 原子自增)。
+- [ ] 并发(≥10)在同一项目创建 issue,编号无重复、无跳号(命中 `uq_issue_number`,`projects.issue_seq` 原子自增)。
+- [ ] **编号并发(README §9 T15)**:同项目 / 无项目并发创建 issue(≥10),`UNIQUE (workspace_id, identifier)`(`uq_issues_identifier`)下无重号、无跳号(除失败回滚)。
 - [ ] 不同项目计数相互独立,新项目从 1 开始。
-- [ ] 软删除 issue 后编号**不复用**:新项目仍取下一个 `issue_seq`,被删编号不可再分配。
+- [ ] 无项目 issue 使用**工作区级计数器 `workspaces.inbox_issue_seq`**(行锁自增,模式同 `projects.issue_seq`)+ 工作区保留前缀(默认 `WS`,可配),编号形如 `WS-N`。
+- [ ] **编号不可变**:issue 在项目间迁移(归入/移出项目)`identifier` 保持不变,不重编号。
+- [ ] 软删除 issue 后编号**不复用**:新项目仍取下一个计数器值,被删 `identifier` 永不再分配;项目前缀永久保留(软删除项目后前缀不可复用,README §6.3)。
 - [ ] 支持 `GET /issues/by-identifier/WEB-123` 与 UUID 两种寻址,均返回同一 issue。
-- [ ] 无项目 issue 使用工作区保留前缀(如 `WS-N`)与独立序列。
 
 ### 5.2 功能性 —— 双层状态
 
@@ -611,15 +705,18 @@ Issue 详情(全屏或右侧抽屉)
 - [ ] 进度/燃尽聚合基于 `state_category='done'`,与具体 status 名无关。
 - [ ] 进入 done 自动写 `completed_at`,离开 done 清空。
 - [ ] 严格模式下,配置外的状态转换返回 409 `invalid_status_transition`;默认模式自由流转。
-- [ ] 每个作用域存在唯一 `is_default=true` 状态;新建 issue 未指定 status 时落入默认状态。
+- [ ] 每个作用域存在**唯一** `is_default=true` 状态(由部分表达式唯一索引 `uq_issue_statuses_default` 强制,COALESCE 不写进表级 UNIQUE);新建 issue 未指定 status 时落入默认状态。
+- [ ] **至少一个默认状态由事务保证**:取消某状态默认必须与设置新默认在同一事务;工作区/项目创建事务播种默认状态集;服务层自检发现缺失即报警并修复(README §6.3)。
+- [ ] 作用域内状态名唯一由 `uq_issue_statuses_name` 部分表达式唯一索引强制(README §6.3)。
 - [ ] 删除被引用的 status 前需迁移其下 issue,否则拒绝。
 
 ### 5.3 功能性 —— 父子与依赖
 
 - [ ] 父子通过 `parent_id` 自引用建模;`GET /issues/{id}/children` 返回直接子项;父进度 = 子 done 占比。
 - [ ] `parent_id = id` 被 `CHECK` 拒绝;设置祖先为子(深层环)返回 409 `circular_parent`。
+- [ ] **并发成环(README §9 T12)**:两事务并发插入 A→B 与 B→A 依赖(或并发设置互为父子),在 `pg_advisory_xact_lock(hashtext('issue_dep_graph:' || workspace_id))` 串行化下**恰一条被拒** `circular_dependency` / `circular_parent`,无环漏网。
 - [ ] 父被删除时子级联处理(ON DELETE CASCADE),符合产品策略。
-- [ ] 依赖通过 `issue_dependencies` 有向图建模,与父子表分离。
+- [ ] 依赖通过 `issue_dependencies` 有向图建模,与父子表分离;依赖两端经复合 FK 强制同工作区(跨租户依赖 INSERT 被拒,README §9 T1)。
 - [ ] 新增依赖成环返回 409 `circular_dependency`,且 `details.path` 给出环路径。
 - [ ] `blocks`/`blocked_by` 语义对称,查询双向展开;`UNIQUE(issue_id,depends_on_id,type)` 防重复边。
 - [ ] 删除 issue 时其依赖边级联清除(ON DELETE CASCADE)。
@@ -642,7 +739,8 @@ Issue 详情(全屏或右侧抽屉)
 ### 5.6 功能性 —— 查询与留痕
 
 - [ ] 列表接口支持 §3.2 全部过滤/排序/分组参数,看板/列表/我的任务复用同一端点。
-- [ ] 分组查询返回 `groups[].{key,label,count,data}` 与整体 `next_cursor`。
+- [ ] 分组查询返回 `groups[].{key,label,count,data}` 与整体 `next_cursor`;**响应不含每组独立 cursor**(README §6.14 整体游标契约)。
+- [ ] **过滤限制(README §6.14)**:嵌套深度 >3 或条件数 >20 返回 `400 filter_too_complex`;估算成本/`statement_timeout`(默认 3s)超限返回 `422 query_cost_exceeded`。
 - [ ] 自定义字段可作为过滤/分组/排序条件(经 label-property.md 值表)。
 - [ ] 每次成功 PATCH 写入 `issue_activity` diff(field/old/new/actor)。
 - [ ] 乐观并发:携带过期 `version` 的更新返回 409 `conflict`。
@@ -653,9 +751,10 @@ Issue 详情(全屏或右侧抽屉)
 - [ ] 所有错误响应使用统一信封 `{"error":{"code","message","details"}}`;错误消息不泄露堆栈/内部敏感信息。
 - [ ] 主键 UUID(`gen_random_uuid()`),表名 snake_case 复数,软删除 `deleted_at` 保留编号。
 - [ ] 鉴权中间件校验工作区成员资格 + 项目可见性 + 角色;跨工作区/越权访问被拒(403/404)。
-- [ ] WebSocket 事件带频道内单调 `seq`,断线 `last_seq` 重放不漏不重;客户端按 id 增量合并,不整页刷新。
+- [ ] **跨租户隔离(README §9 T1)**:构造跨 workspace 的复合 FK 插入(如 issue 引用别区 status/member/project)被数据库约束拒绝;A 区凭证访问 B 区 issue 返回 403/404。
+- [ ] WebSocket 事件遵循 README §6.7(频道内单调 `seq`、`realtime_events` 重放、`resume_from` / `resync_required`),断线重放不漏不重;客户端按 id 增量合并,不整页刷新。
 - [ ] WS 不可用降级为 30s 增量轮询(`since=updated_at`),功能不中断。
 - [ ] 写端点限流生效,超限 429 `rate_limited`。
-- [ ] 关键查询命中索引(`idx_issues_project_status`/`idx_issues_assignee` 等);1 万级 issue 项目下列表/分组延迟可接受。
+- [ ] 关键查询命中索引(`idx_issues_project_status`/`idx_issues_assignee` 等);列表/分组延迟在 **README §10 基准下**(10 万 issue,热缓存 P95 < 500ms)构成验收标准。
 - [ ] 所有用户输入(标题、描述、过滤参数)经 schema 校验,防注入;富文本输出经净化防 XSS。
 - [ ] 编号生成、依赖/父子环检测、批量操作均有单元 + 集成测试,核心路径覆盖率 ≥ 80%。

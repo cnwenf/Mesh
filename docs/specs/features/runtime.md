@@ -8,13 +8,14 @@
 
 ---
 
-## 全局一致性锚点（本 Spec 一律遵循）
+## 全局一致性锚点（一律引用 README §6，本 Spec 不重复定义）
 
-1. **存储**：PostgreSQL；表名 snake_case 复数；主键 `UUID`（`gen_random_uuid()`）；所有表含 `created_at` / `updated_at`（`TIMESTAMPTZ`，默认 `now()`，UTC）；软删除统一 `deleted_at TIMESTAMPTZ NULL`。
-2. **成员**：执行的归属 / 取消者引用 `members.id`；执行者引用 `agents.id`。
-3. **接口**：基础路径 `/api/v1`；`Authorization: Bearer <token>`；游标分页响应 `{"data": [...], "next_cursor": <opaque|null>}`；统一错误信封 `{"error": {"code","message","details"}}`；**供 runtime / CLI 使用的 API token 只存哈希、显式 scope**。
-4. **实时**：单一 WebSocket 端点 `/ws`，按频道订阅，事件携带单调递增 `seq` 支持断线重放；**日志流可降级 SSE**；事件名 `<entity>.<action>`。
-5. **ORM**：SQLAlchemy 2.x 约定。
+1. **存储**：PostgreSQL 16+；表名 snake_case 复数；主键 `UUID`（`gen_random_uuid()`）；所有表含 `created_at` / `updated_at`（`TIMESTAMPTZ`，默认 `now()`，UTC）；软删除统一 `deleted_at TIMESTAMPTZ NULL`。
+2. **成员**：执行的归属 / 取消者引用 `members.id`（复合 FK，README §6.1/§6.2）；执行者引用 `agents.id`。
+3. **接口**：基础路径 `/api/v1`；包络 / 分页 / 错误信封见 README §6.14；**供 runtime / CLI 使用的 API token 只存哈希、显式 scope**。
+4. **实时**：统一实时契约见 README §6.7（频道内 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`）；流式输出见 README §6.8；**日志流可降级 SSE**；事件名 `<entity>.<action>`。
+5. **队列 / 投递**：**execution / attempt 分层、at-least-once、幂等键、凭证 fencing 以 README §6.4–§6.5 为唯一权威**；业务侧入队经 transactional outbox（§6.6）；审批挂起 `awaiting_approval` 见 §6.10。
+6. **ORM**：SQLAlchemy 2.x 约定。
 
 ---
 
@@ -72,20 +73,23 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 
 ### 2.1 实体清单与关系概览
 
+> **逻辑 execution 与物理 attempt 分层（R1，README §6.4 权威）**：`task_executions` 是一次逻辑执行（触发后只有一行，承载幂等键、入队快照、最终结果）；`execution_attempts` 是一次物理尝试（领取、租约、runtime、分支、日志、结果都挂在 attempt 上）。**requeue 创建新 attempt，不复用/覆盖旧行**，审计链完整。
+
 ```mermaid
 erDiagram
     workspaces ||--o{ runtimes : "拥有"
-    runtimes ||--o{ task_executions : "领取执行"
+    runtimes ||--o{ execution_attempts : "领取执行"
     workspaces ||--o{ task_executions : "发起"
     agents ||--o{ task_executions : "执行者"
     issues ||--o{ task_executions : "触发来源"
-    task_executions ||--o{ task_log_segments : "产生日志"
-    task_executions ||--o| repo_checkouts : "对应代码检出"
-    task_executions }o--o{ runtime_credentials : "注入凭证"
-    task_executions ||--o{ execution_credentials : "注入记录"
+    task_executions ||--o{ execution_attempts : "物理尝试(1..N)"
+    execution_attempts ||--o{ task_log_segments : "产生日志"
+    execution_attempts ||--o| repo_checkouts : "对应代码检出"
+    execution_attempts ||--o{ execution_credentials : "凭证注入(attempt 绑定)"
     runtime_credentials ||--o{ execution_credentials : "被注入"
     workspaces ||--o{ runtime_credentials : "保管"
     runtimes ||--o{ runtime_heartbeats : "上报心跳"
+    task_executions ||--o{ approvals : "高风险工具审批(README 6.10)"
 
     runtimes {
         uuid id PK
@@ -94,6 +98,7 @@ erDiagram
         text kind
         text status
         text activation_token_hash
+        timestamptz activation_expires_at
         timestamptz activated_at
         uuid runtime_token_id FK "api_tokens(scope=runtime)"
         text runtime_token_hash
@@ -113,32 +118,45 @@ erDiagram
     task_executions {
         uuid id PK
         uuid workspace_id FK
-        uuid runtime_id FK
         uuid agent_id FK
         uuid issue_id FK
         text trigger
-        text status
+        text status "含 awaiting_approval"
         text idempotency_key
         int priority
         jsonb task_spec
         jsonb label_requirements
-        uuid claimed_by_runtime_id
-        timestamptz lease_expires_at
-        int lease_seq
+        uuid trigger_event_id
+        jsonb config_snapshot "README 6.11"
+        int max_attempts
         timestamptz queued_at
-        timestamptz claimed_at
-        timestamptz started_at
         timestamptz finished_at
         int timeout_seconds
         uuid cancel_requested_by
         timestamptz cancel_requested_at
         jsonb result
         text failure_reason
-        int retry_count
+    }
+    execution_attempts {
+        uuid id PK
+        uuid workspace_id FK
+        uuid execution_id FK
+        int attempt_number
+        uuid runtime_id FK
+        text status
+        uuid claimed_by_runtime_id
+        timestamptz lease_expires_at
+        int lease_seq
+        timestamptz claimed_at
+        timestamptz started_at
+        timestamptz finished_at
+        text working_branch
+        jsonb result
+        text failure_reason
     }
     task_log_segments {
         uuid id PK
-        uuid execution_id FK
+        uuid attempt_id FK
         bigint start_offset
         bigint end_offset
         text storage_ref
@@ -147,7 +165,7 @@ erDiagram
     }
     repo_checkouts {
         uuid id PK
-        uuid execution_id FK
+        uuid attempt_id FK
         text repo_url
         text base_ref
         text working_branch
@@ -168,9 +186,11 @@ erDiagram
         boolean redact_in_logs
     }
     execution_credentials {
-        uuid execution_id PK
+        uuid attempt_id PK
         uuid credential_id PK
+        text envelope_ref
         timestamptz injected_at
+        timestamptz revoked_at
     }
     runtime_heartbeats {
         uuid id PK
@@ -193,7 +213,8 @@ erDiagram
 | kind | text | NOT NULL, CHECK IN (`'platform_managed'`,`'self_hosted'`) | `'self_hosted'` | runtime 类型 |
 | status | text | NOT NULL, CHECK（见下） | `'pending'` | 生命周期状态 |
 | activation_token_hash | text | NULL | - | 一次性激活码哈希（激活后置空 / 作废） |
-| activated_at | timestamptz | NULL | - | 激活时间 |
+| activation_expires_at | timestamptz | NULL | - | **激活码过期时间（R1 补齐，默认创建后 15 分钟）；过期后激活返回 `410`** |
+| activated_at | timestamptz | NULL | - | 激活时间（**即激活码 used_at**：非空表示激活码已使用，不可再用） |
 | runtime_token_id | uuid | NULL, FK→api_tokens.id | - | 长期 runtime API token（auth 模块 owns，`scope='runtime'`，只存哈希） |
 | runtime_token_hash | text | NULL | - | runtime token 哈希冗余（快速校验，可轮换） |
 | capabilities | jsonb | NOT NULL | `'[]'` | 已安装工具 / 能力列表，如 `["version_control","python","node"]` |
@@ -213,34 +234,53 @@ erDiagram
 
 `status` 取值：`pending`（已建未激活）、`online`（在线可派）、`unavailable`（心跳超时 / 环境异常）、`paused`（人工暂停）、`draining`（排空中，不接新任务）、`decommissioned`（已下线）。
 
-#### `task_executions`
+#### `task_executions`（逻辑执行，README §6.4 权威）
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
-| id | uuid | PK | `gen_random_uuid()` | 主键（执行实例） |
+| id | uuid | PK | `gen_random_uuid()` | 主键（逻辑执行实例） |
 | workspace_id | uuid | NOT NULL, FK→workspaces.id | - | 所属工作区 |
-| runtime_id | uuid | NULL, FK→runtimes.id | - | 最终执行的 runtime（领取后填） |
-| agent_id | uuid | NULL, FK→agents.id | - | 执行该任务的 agent（跨模块外键 → agent） |
-| issue_id | uuid | NULL, FK→issues.id | - | 触发来源 issue（跨模块外键 → issue，支撑「分派即开工」可观测） |
-| trigger | text | NOT NULL DEFAULT `'assign'`, CHECK IN (`'assign'`,`'mention'`,`'autopilot'`,`'manual'`) | `'assign'` | 触发方式 |
-| status | text | NOT NULL | `'queued'` | 状态机当前态（见 5.2） |
-| idempotency_key | text | NULL, UNIQUE（可空唯一） | - | 幂等键，防重复创建 / 领取 |
+| agent_id | uuid | NULL | - | 执行该任务的 agent；**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`**（README §6.2） |
+| issue_id | uuid | NULL | - | 触发来源 issue；**复合 FK `(workspace_id, issue_id) → issues(workspace_id, id)`**（支撑「分派即开工」可观测） |
+| trigger | text | NOT NULL DEFAULT `'assign'`, CHECK IN (`'assign'`,`'mention'`,`'autopilot'`,`'manual'`,`'chat'`) | `'assign'` | 触发方式 |
+| status | text | NOT NULL | `'queued'` | 逻辑状态机当前态（见 4.7；含 `awaiting_approval`，README §6.4/§6.10） |
+| idempotency_key | text | NULL, UNIQUE（可空唯一） | - | 幂等键 `sha256(agent_id|issue_id|trigger_event_id)`（README §6.5），防重复入队 |
 | priority | int | NOT NULL | 100 | 数值越小越优先 |
 | task_spec | jsonb | NOT NULL | `'{}'` | 任务定义（命令、镜像要求、env 声明、需要哪些 secret） |
 | label_requirements | jsonb | NOT NULL | `'{}'` | 要求 runtime 具备的标签 |
-| claimed_by_runtime_id | uuid | NULL | - | 领取者（=runtime_id，显式表达领取动作） |
-| lease_expires_at | timestamptz | NULL | - | 租约到期时间 |
-| lease_seq | int | NOT NULL | 0 | 租约序号，每次续租 +1（乐观并发） |
+| trigger_event_id | uuid | NULL | - | 触发来源的 outbox 事件 id（审计 / 幂等键输入，README §6.11） |
+| config_snapshot | jsonb | NOT NULL | `'{}'` | **入队可复现快照**：agent_config_version_id、skill 版本、tool grants、repo/base SHA、trigger_event_id（README §6.11） |
+| max_attempts | int | NOT NULL, CHECK(>=1) | 3 | 最大物理尝试次数（超出转 `failed(max_retries)`） |
 | queued_at | timestamptz | NOT NULL | `now()` | 入队时间 |
+| finished_at | timestamptz | NULL | - | 逻辑结束时间 |
+| timeout_seconds | int | NOT NULL | 1800 | 单 attempt 任务级超时 |
+| cancel_requested_by | uuid | NULL, FK→members.id | - | 谁请求取消（成员 / 系统）；复合 FK `(workspace_id, cancel_requested_by) → members(workspace_id, id)` |
+| cancel_requested_at | timestamptz | NULL | - | 取消请求时间 |
+| result | jsonb | NULL | - | 最终结果摘要（来自成功 attempt） |
+| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / approval_rejected / approval_expired） |
+| created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
+
+> **领取 / 租约 / 分支 / 日志 / 单次结果等物理字段不在本表**——全部下沉到 `execution_attempts`；`retry_count` 由 `COUNT(execution_attempts)-1` 派生，不再存冗余列。
+
+#### `execution_attempts`（物理尝试，R1 新增，README §6.4 权威）
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|---|---|---|---|---|
+| id | uuid | PK | `gen_random_uuid()` | 主键（物理尝试实例） |
+| workspace_id | uuid | NOT NULL, FK→workspaces.id | - | 所属工作区 |
+| execution_id | uuid | NOT NULL | - | 所属逻辑执行；**复合 FK `(workspace_id, execution_id) → task_executions(workspace_id, id)`** |
+| attempt_number | int | NOT NULL, CHECK(>=1) | - | 第几次尝试；`UNIQUE (execution_id, attempt_number)` |
+| runtime_id | uuid | NULL | - | 领取该尝试的 runtime；**复合 FK `(workspace_id, runtime_id) → runtimes(workspace_id, id)`** |
+| claimed_by_runtime_id | uuid | NULL | - | 领取者（=runtime_id，显式表达领取动作） |
+| status | text | NOT NULL | `'claimed'`, CHECK IN (`'claimed'`,`'running'`,`'completed'`,`'failed'`,`'timeout'`,`'cancelled'`,`'reclaimed'`) | - | 尝试状态：`reclaimed` = 被 reaper 回收（租约过期 / 失联），其审计信息原样保留 |
+| lease_expires_at | timestamptz | NULL | - | 租约到期时间 |
+| lease_seq | int | NOT NULL | 0 | 租约序号，每次领取 / 续租 +1（fencing，防诈尸覆盖） |
 | claimed_at | timestamptz | NULL | - | 领取时间 |
 | started_at | timestamptz | NULL | - | 实际开始执行时间 |
-| finished_at | timestamptz | NULL | - | 结束时间 |
-| timeout_seconds | int | NOT NULL | 1800 | 任务级超时 |
-| cancel_requested_by | uuid | NULL, FK→members.id | - | 谁请求取消（成员 / 系统） |
-| cancel_requested_at | timestamptz | NULL | - | 取消请求时间 |
-| result | jsonb | NULL | - | 结果摘要（exit code、diff 摘要、产物引用） |
-| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries） |
-| retry_count | int | NOT NULL | 0 | 已重试次数 |
+| finished_at | timestamptz | NULL | - | 尝试结束时间 |
+| working_branch | text | NULL | - | **本 attempt 专属工作分支 `agent/<execution_id>/a<attempt_number>`**（按 attempt 唯一，避免两个 runtime/attempt 推同一分支，README §6.5） |
+| result | jsonb | NULL | - | 本次尝试结果（exit code、diff 摘要、产物引用） |
+| failure_reason | text | NULL | - | 本次失败分类 |
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
 #### `task_log_segments`（日志索引表，内容在对象存储）
@@ -248,15 +288,16 @@ erDiagram
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | uuid | PK | `gen_random_uuid()` | 主键 |
-| execution_id | uuid | NOT NULL, FK→task_executions.id | - | 所属执行 |
-| start_offset | bigint | NOT NULL | - | 本段起始字节偏移（全局单调） |
+| workspace_id | uuid | NOT NULL, FK→workspaces.id | - | 所属工作区 |
+| attempt_id | uuid | NOT NULL | - | 所属物理尝试；**复合 FK `(workspace_id, attempt_id) → execution_attempts(workspace_id, id)`**（日志按 attempt 留存，requeue 后新 attempt 日志独立，续传不串流） |
+| start_offset | bigint | NOT NULL | - | 本段起始字节偏移（该 attempt 内单调） |
 | end_offset | bigint | NOT NULL | - | 本段结束字节偏移 |
 | storage_ref | text | NOT NULL | - | 对象存储对象键（指向真实日志内容） |
 | line_count | int | NOT NULL | 0 | 本段行数 |
 | sealed | boolean | NOT NULL | false | 段是否已封口（不再追加） |
 | created_at | timestamptz | NOT NULL | `now()` | 创建时间 |
 
-唯一约束：`UNIQUE(execution_id, start_offset)`，保证偏移连续不重叠。
+唯一约束：`UNIQUE(attempt_id, start_offset)`，保证偏移连续不重叠。
 
 #### `runtime_credentials`（secret）
 
@@ -273,25 +314,33 @@ erDiagram
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 | deleted_at | timestamptz | NULL | - | 软删除 |
 
-#### `execution_credentials`（执行 ↔ 凭证多对多，注入审计）
+#### `execution_credentials`（attempt ↔ 凭证多对多，注入审计 + 凭证 fencing）
 
 | 字段 | 类型 | 约束 | 说明 |
 |---|---|---|---|
-| execution_id | uuid | PK, FK→task_executions.id | 复合主键 |
+| attempt_id | uuid | PK, 复合 FK→execution_attempts(workspace_id, id) | 复合主键（**凭证按 attempt 绑定**，README §6.5） |
 | credential_id | uuid | PK, FK→runtime_credentials.id | 复合主键 |
+| workspace_id | uuid | NOT NULL, FK→workspaces.id | 隔离 |
+| envelope_ref | text | NOT NULL | 短期凭证信封引用（envelope id；值本身只经 claim/refetch 响应一次性下发） |
 | injected_at | timestamptz | NOT NULL DEFAULT `now()` | 注入时间 |
+| revoked_at | timestamptz | NULL | 撤销时间（freeze / 轮换 / attempt 终态后置位） |
 
-> 记录「本次执行实际注入了哪些 secret」，用于审计与脱敏对账。
+> 记录「本次尝试实际注入了哪些 secret」，用于审计与脱敏对账。**凭证协议（R1，README §6.5/§6.11）**：
+> - 凭证仅在 `claim` 响应中随 attempt 一次性下发（短期 envelope，默认 TTL ≤ 2h，绑定 attempt_id 与 lease_seq）；
+> - **网络响应丢失 / requeue / freeze 后的重取**：daemon 可 `POST /api/v1/daemon/attempts/{attempt_id}/credentials:refetch`——仅当该 attempt 仍 `claimed/running` 且 `lease_seq` 匹配时返回**新 envelope**（旧 envelope 立即撤销，`revoked_at` 置位），每 attempt 重取次数有上限（默认 3），超限转人工 freeze 审查；
+> - **轮换 / 撤销**：控制台轮换 `runtime_credentials` 时，在途 envelope 于下次心跳被下行指令要求重取；`POST /executions/{id}:freeze` 立即撤销该执行所有 attempt 的 envelope（`revoked_at`）；
+> - attempt 终态（completed/failed/timeout/cancelled/reclaimed）即撤销其全部 envelope，服务端永不回显明文。
 
 #### `repo_checkouts`
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
 | id | uuid | PK | `gen_random_uuid()` | 主键 |
-| execution_id | uuid | NOT NULL, FK→task_executions.id, UNIQUE | - | 一次执行对应一次 checkout |
+| workspace_id | uuid | NOT NULL, FK→workspaces.id | - | 隔离 |
+| attempt_id | uuid | NOT NULL, UNIQUE | - | 一次物理尝试对应一次 checkout；**复合 FK `(workspace_id, attempt_id) → execution_attempts(workspace_id, id)`** |
 | repo_url | text | NOT NULL | - | 仓库地址 |
-| base_ref | text | NOT NULL | - | 基线分支 / SHA |
-| working_branch | text | NOT NULL | - | 为本任务创建的专属分支，如 `agent/<execution-id>` |
+| base_ref | text | NOT NULL | - | 基线分支 / SHA（取自 `config_snapshot.repo.base_sha`） |
+| working_branch | text | NOT NULL | - | **本 attempt 专属分支 `agent/<execution_id>/a<attempt_number>`**（按 attempt 唯一，README §6.5） |
 | commit_sha | text | NULL | - | 结束时 HEAD commit |
 | local_path | text | NULL | - | runtime 本地工作目录（仅 runtime 内有效，非交付物） |
 | status | text | NOT NULL | `'cloning'` | `cloning` / `ready` / `diff_ready` / `recycled` / `failed` |
@@ -323,19 +372,19 @@ erDiagram
 ### 2.4 关键索引（重点）
 
 ```sql
--- 队列领取核心索引：按 (status, priority, queued_at) 让 SKIP LOCKED 领取走索引
+-- 队列领取核心索引：逻辑执行可领取（queued，含 requeue 回落到 queued 的）
 CREATE INDEX idx_executions_claimable
-  ON task_executions (status, priority, queued_at)
-  WHERE status IN ('queued','requeued');
+  ON task_executions (workspace_id, priority, queued_at)
+  WHERE status = 'queued';
 
--- 租约回收：找出租约过期的已领取任务
-CREATE INDEX idx_executions_lease_expired
-  ON task_executions (lease_expires_at)
+-- 租约回收：找出租约过期的在途 attempt
+CREATE INDEX idx_attempts_lease_expired
+  ON execution_attempts (lease_expires_at)
   WHERE status IN ('claimed','running','cancelling');
 
--- 离线回收：按 runtime 找其在途任务
-CREATE INDEX idx_executions_runtime_inflight
-  ON task_executions (runtime_id)
+-- 离线回收：按 runtime 找其在途 attempt
+CREATE INDEX idx_attempts_runtime_inflight
+  ON execution_attempts (runtime_id)
   WHERE status IN ('claimed','running','cancelling');
 
 -- runtime 列表：在线 + 负载
@@ -343,52 +392,92 @@ CREATE INDEX idx_runtimes_status
   ON runtimes (status, last_heartbeat_at)
   WHERE deleted_at IS NULL;
 
+-- 供引用方复合 FK（README §6.2）
+CREATE UNIQUE INDEX uq_runtimes_ws_id ON runtimes (workspace_id, id);
+CREATE UNIQUE INDEX uq_task_executions_ws_id ON task_executions (workspace_id, id);
+CREATE UNIQUE INDEX uq_attempts_ws_id ON execution_attempts (workspace_id, id);
+
 -- 任务历史按 agent / issue / 时间检索（分派即开工可观测）
 CREATE INDEX idx_executions_agent_time ON task_executions (agent_id, queued_at DESC);
 CREATE INDEX idx_executions_issue_time ON task_executions (issue_id, queued_at DESC);
+CREATE INDEX idx_attempts_execution ON execution_attempts (execution_id, attempt_number);
 
--- 日志段按执行 + 偏移定位续传起点
-CREATE INDEX idx_log_segments_exec_offset
-  ON task_log_segments (execution_id, start_offset);
+-- 日志段按 attempt + 偏移定位续传起点
+CREATE INDEX idx_log_segments_attempt_offset
+  ON task_log_segments (attempt_id, start_offset);
 ```
 
-### 2.5 claim 原子性设计（重点）
+### 2.5 claim 原子性与跨租户安全（重点，R1 权威版）
 
-领取必须是「检查可领取 + 改状态为 claimed + 发放租约」的**单事务原子操作**，核心 SQL：
+领取必须是「**同租户校验 + 服务端标签/能力匹配 + 原子容量扣减 + 建 attempt 发租约**」的**单事务原子操作**。
+
+**安全红线（评审硬约束）：**
+- claim SQL **必须带** `e.workspace_id = :runtime_workspace_id`（runtime token 解析出的归属工作区），杜绝跨租户领取；
+- 标签 / 能力匹配**只能使用服务端保存的** `runtimes.labels` / `runtimes.capabilities`（claim 事务内 `SELECT ... FOR UPDATE` 读出），**绝不信任 daemon 请求体里的 `labels` / `capacity_remaining`**（请求体仅作诊断参考）；
+- agent 设置了 `default_runtime_id` 时，仅该 runtime 可领取（`AND (a.default_runtime_id IS NULL OR a.default_runtime_id = :runtime_id)`）；
+- 容量扣减在**同一事务内对 runtime 行加锁并原子更新**（`current_load + 1 WHERE current_load < max_concurrent`），不做"前置校验后再写"的 TOCTOU 模式。
+
+核心 SQL：
 
 ```sql
--- 单事务内：锁定一条满足标签约束、最高优先级、最早入队的可领取任务
+BEGIN;
+
+-- 1) 锁定本 runtime 行：校验在线 + 原子容量扣减（防超卖）
+UPDATE runtimes
+   SET current_load = current_load + 1,
+       last_heartbeat_at = now(),
+       updated_at = now()
+ WHERE id = :runtime_id
+   AND workspace_id = :runtime_workspace_id
+   AND status = 'online'
+   AND deleted_at IS NULL
+   AND current_load < max_concurrent
+RETURNING labels, capabilities;            -- 服务端保存的标签/能力（匹配只用它）
+
+-- 若上一步 0 行：回滚，返回 204（满载/离线/越权）
+
+-- 2) 在同租户、标签满足、（默认 runtime 约束）下锁定一条最高优先级、最早入队的任务
 WITH picked AS (
-  SELECT id
-  FROM task_executions
-  WHERE status IN ('queued','requeued')
-    AND label_requirements <@ :runtime_labels   -- 标签满足（jsonb 包含）
-  ORDER BY priority ASC, queued_at ASC
+  SELECT e.id
+  FROM task_executions e
+  JOIN agents a ON a.id = e.agent_id
+  WHERE e.status = 'queued'
+    AND e.workspace_id = :runtime_workspace_id               -- 跨租户领取防护
+    AND e.label_requirements <@ :server_runtime_labels       -- 服务端标签（jsonb 包含）
+    AND (a.default_runtime_id IS NULL OR a.default_runtime_id = :runtime_id)
+  ORDER BY e.priority ASC, e.queued_at ASC
   LIMIT 1
-  FOR UPDATE SKIP LOCKED                        -- 关键：跳过已被其它事务锁住的行
+  FOR UPDATE OF e SKIP LOCKED                                -- 跳过已被其它事务锁住的行
 )
+-- 3) 逻辑执行转 claimed，并建物理 attempt #N（租约挂在 attempt 上）
 UPDATE task_executions e
-SET status                = 'claimed',
-    runtime_id            = :runtime_id,
-    claimed_by_runtime_id = :runtime_id,
-    claimed_at            = now(),
-    lease_expires_at      = now() + (:lease_seconds || ' seconds')::interval,
-    lease_seq             = lease_seq + 1,
-    updated_at            = now()
-FROM picked
-WHERE e.id = picked.id
-RETURNING e.id, e.task_spec, e.timeout_seconds, e.lease_expires_at, e.lease_seq;
+   SET status = 'claimed', updated_at = now()
+  FROM picked
+ WHERE e.id = picked.id
+RETURNING e.id;
+
+INSERT INTO execution_attempts
+  (workspace_id, execution_id, attempt_number, runtime_id, claimed_by_runtime_id,
+   status, lease_expires_at, lease_seq, claimed_at)
+SELECT :runtime_workspace_id, e.id,
+       COALESCE((SELECT MAX(attempt_number) FROM execution_attempts WHERE execution_id = e.id), 0) + 1,
+       :runtime_id, :runtime_id, 'claimed',
+       now() + (:lease_seconds || ' seconds')::interval, 1, now()
+FROM task_executions e
+WHERE e.id = :picked_id
+RETURNING id, attempt_number, lease_expires_at, lease_seq;
+
+COMMIT;
 ```
 
 要点：
-- `FOR UPDATE SKIP LOCKED`：多台 runtime 并发领取时，被某事务锁住的行直接被其它事务跳过，**零锁等待、零重复领取**，是 PostgreSQL 实现工作队列的业界标准做法。
-- 领取与服务端 `current_load < max_concurrent` 校验、runtime `status='online'` 校验放在同一事务 / 前置校验中。
-- `lease_seq` 每次领取 / 续租自增，作为乐观并发令牌：续租与上报必须带正确 `lease_seq`，防止「旧持有者诈尸」覆盖新持有者（见 5.3）。
-- `idempotency_key` 唯一约束兜底，防同一逻辑任务被重复入队。
+- `FOR UPDATE SKIP LOCKED`：多台 runtime 并发领取时，被某事务锁住的行直接被其它事务跳过，**零锁等待、零重复领取**。
+- **容量幂等释放**：attempt 进入任一终态（completed/failed/timeout/cancelled）或被 reaper 置 `reclaimed` 时，**在状态迁移的同一事务内**对 `runtimes.current_load` 做 `GREATEST(current_load - 1, 0)`；每个 attempt 只释放一次（由 attempt 状态迁移守卫，终态 → 终态 的重复上报为 no-op），防止泄漏或扣成负数。
+- `lease_seq` 每次领取 / 续租自增，作为 fencing 令牌：续租与一切上报必须带正确 `lease_seq`，旧持有者「诈尸」回写因不匹配被 `409` 拒绝（脑裂防护）。
+- `idempotency_key` 唯一约束兜底，防同一逻辑触发被重复入队（README §6.5）。
+- requeue = reaper 把过期 attempt 置 `reclaimed` 并把逻辑执行回落 `queued`；下一次领取**新建 attempt #N+1**，旧 attempt 的 runtime / claimed_at / 日志 / 分支 / 失败原因原样保留（审计不覆盖）。
 
-**乐观锁备选**：对不适合长事务的场景，可用 `UPDATE ... WHERE id=:id AND version=:expected_version` 的版本号乐观锁实现领取 / 状态迁移，更新影响行数为 0 即代表竞争失败。两种方案二选一，推荐 SKIP LOCKED（吞吐与公平性更好）。
-
-SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order_by(...).limit(1)` 取出候选行，再在同一 `async` 事务内 `update()` 改状态并 `RETURNING`，全程一个事务提交。
+SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `UPDATE runtimes ... RETURNING` → `select(...).with_for_update(of=..., skip_locked=True)` → `update()` → `insert()` attempt，全程一个事务提交。
 
 ---
 
@@ -440,14 +529,24 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
     "status": "pending",
     "activation": {
       "code": "ACT-9F3K-2M7Q-XB4Z",
-      "install_command": "curl -sSL https://get.mesh.internal/runtime | sh -s -- --workspace mesh-ws --activation ACT-9F3K-2M7Q-XB4Z",
-      "expires_at": "2026-07-24T10:15:00Z"
+      "expires_at": "2026-07-24T10:15:00Z",
+      "release": {
+        "artifact_url": "https://releases.mesh.example/runtime/1.4.2/mesh-runtime_1.4.2_linux_x86_64.tar.gz",
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "signature_url": "https://releases.mesh.example/runtime/1.4.2/mesh-runtime_1.4.2_linux_x86_64.tar.gz.sig",
+        "signing_key_url": "https://releases.mesh.example/mesh-release.pub"
+      },
+      "activate_hint": "mesh-runtime activate --activation-file ./activation.txt   # 激活码经受限文件/stdin 读取，勿放入命令行参数"
     }
   }
 }
 ```
 
-> 激活码一次性、短 TTL（默认 15 分钟）、服务端只存 `activation_token_hash`。安装命令中的 `get.mesh.internal` 为占位分发地址，部署时替换为实际内网 / 公网分发端点。
+> **R1 安装安全（评审硬约束）**：
+> - **废弃 `curl | sh`** 与"激活码出现在命令参数/历史"的做法。安装 = 下载**签名发布包** → 本地校验 `sha256` 与签名（minisign/cosign 兼容，公钥 `mesh-release.pub` 随产品发布）→ 解包到可审阅目录 → 执行 `mesh-runtime activate`。
+> - **激活码不进命令行参数**：经受限 stdin 或仅本人可读的文件读取（`--activation-file <path>`，建议权限 `0600`；或 `MESH_ACTIVATION_CODE` 环境变量经受控环境注入），避免进程列表 / shell 历史泄露。
+> - 提供**可审阅的手动安装路径**：文档给出逐步命令（下载、校验、解包、systemd 单元示例），用户可逐条审查后再执行；一键脚本仅为上述步骤的封装且默认 dry-run 打印。
+> - 激活码一次性、短 TTL（默认 15 分钟，落库 `activation_expires_at`）、服务端只存 `activation_token_hash`；`activated_at` 非空即已用，重复激活返回 `410 activation_expired`。`releases.mesh.example` 为占位分发地址，部署时替换为实际内网 / 公网分发端点。
 
 **取消执行**：
 
@@ -466,15 +565,17 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/v1/daemon/runtimes:activate` | 用一次性激活码换取 runtime API token + 上报元数据 |
-| POST | `/api/v1/daemon/runtimes/{id}:heartbeat` | 心跳 + 健康指标 + 拉取下行指令（如取消） |
-| POST | `/api/v1/daemon/runtimes/{id}/executions:claim` | 原子领取一条任务（凭证随响应一次性下发） |
-| PATCH | `/api/v1/daemon/executions/{id}` | 状态迁移（claimed→running→completed/failed/timeout） |
-| POST | `/api/v1/daemon/executions/{id}/logs` | 追加日志段（带 offset） |
-| POST | `/api/v1/daemon/executions/{id}/checkouts` | 上报 checkout / diff 结果 |
-| POST | `/api/v1/daemon/executions/{id}:renew-lease` | 租约续期 |
+| POST | `/api/v1/daemon/runtimes:activate` | 用一次性激活码换取 runtime API token + 上报元数据（激活码经请求体传入，**仅由 daemon 从受限 stdin/文件读入后组装请求**，不落 shell 历史） |
+| POST | `/api/v1/daemon/runtimes/{id}:heartbeat` | 心跳 + 健康指标 + 拉取下行指令（如取消、凭证轮换重取） |
+| POST | `/api/v1/daemon/runtimes/{id}/executions:claim` | 原子领取一条任务（服务端按 §2.5 校验；凭证随响应按 attempt 一次性下发） |
+| PATCH | `/api/v1/daemon/attempts/{attempt_id}` | attempt 状态迁移（claimed→running→completed/failed/timeout），带 `lease_seq` |
+| POST | `/api/v1/daemon/attempts/{attempt_id}/logs` | 追加日志段（带 offset） |
+| POST | `/api/v1/daemon/attempts/{attempt_id}/checkouts` | 上报 checkout / diff 结果 |
+| POST | `/api/v1/daemon/attempts/{attempt_id}:renew-lease` | 租约续期 |
+| POST | `/api/v1/daemon/attempts/{attempt_id}/credentials:refetch` | **凭证重取**（响应丢失/网络抖动后；仅租约有效且 attempt 在途时可调用，发新 envelope 撤旧，每 attempt 上限 3 次，见 §2.2 凭证协议） |
+| POST | `/api/v1/daemon/executions/{id}/approvals` | **高风险工具审批请求**：运行中工具命中 `confirm_required` 时创建统一 `approvals`（README §6.10），逻辑执行转 `awaiting_approval`；批准/拒绝结果经心跳下行或轮询回传 |
 
-> 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配，且仅允许操作本 runtime 与其领取的执行。
+> 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配、`workspace_id` 由 token 解析注入（**不以请求体为准**），且仅允许操作本 runtime 与其领取的 attempt。
 
 **激活**：
 
@@ -529,9 +630,10 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 
 ```json
 // POST /api/v1/daemon/runtimes/5f1c.../executions:claim  — 请求
+// 注意：labels / capacity_remaining 仅作诊断参考，服务端匹配与容量判定
+// 一律使用服务端保存的 runtime 标签/能力/负载（§2.5 安全红线），不信任请求体。
 {
-  "labels": {"region": "intranet", "gpu": "false"},
-  "capacity_remaining": 2
+  "diagnostics": {"labels": {"region": "intranet"}, "capacity_remaining": 2}
 }
 // 响应 200（领到）
 {
@@ -539,56 +641,70 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
     "execution": {
       "id": "8f3a1d2c-4e5b-4a2c-9d1e-3b7c8a0f1e2d",
       "status": "claimed",
+      "config_snapshot": {
+        "agent_config_version_id": "v-uuid-7",
+        "skill_versions": {"s-uuid-1": "sv-3"},
+        "tool_grants": [{"tool_id": "t-uuid-exec", "permission": "confirm_required"}],
+        "repo": {"url": "https://code.intranet.example/team/web-app.git", "base_ref": "main", "base_sha": "c0ffee..."},
+        "trigger_event_id": "evt-uuid-1"
+      },
       "task_spec": {
         "image": "agent-sandbox:py312",
         "command": ["mesh-agent", "run", "--task", "fix-login-bug"],
-        "repo": {"url": "https://code.intranet.example/team/web-app.git", "base_ref": "main"},
         "env_declarations": ["REPO_TOKEN", "CI_API_KEY"],
         "credential_ids": ["cr-001", "cr-002"]
       },
-      "timeout_seconds": 1800,
+      "timeout_seconds": 1800
+    },
+    "attempt": {
+      "id": "att-uuid-1",
+      "attempt_number": 1,
+      "working_branch": "agent/8f3a1d2c-4e5b-4a2c-9d1e-3b7c8a0f1e2d/a1",
       "lease_expires_at": "2026-07-24T09:43:30Z",
       "lease_seq": 1,
       "credentials": [
-        {"id": "cr-001", "kind": "repo_token", "env": "REPO_TOKEN", "value": "rot-xxxx", "expires_at": "2026-07-24T11:41:00Z"},
-        {"id": "cr-002", "kind": "env", "env": "CI_API_KEY", "value": "sk-xxxx"}
+        {"id": "cr-001", "kind": "repo_token", "env": "REPO_TOKEN", "value": "rot-xxxx", "envelope": "env-1", "expires_at": "2026-07-24T11:41:00Z"},
+        {"id": "cr-002", "kind": "env", "env": "CI_API_KEY", "value": "sk-xxxx", "envelope": "env-2", "expires_at": "2026-07-24T11:41:00Z"}
       ]
     }
   }
 }
-// 响应 204（队列空或无满足约束的任务，无 body）
+// 响应 204（队列空、无满足约束的任务、或容量已满，无 body）
 ```
 
-> **凭证只在 `claim` 响应中随任务一次性下发**（短期、最小权限）；之后任何接口都不再返回明文。`credentials[].value` 命中脱敏黑名单，日志中出现即替换为 `***`。
+> **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。`credentials[].value` 命中脱敏黑名单，日志中出现即替换为 `***`。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
 
 **追加日志（带 offset，幂等）**：
 
 ```json
-// POST /api/v1/daemon/executions/8f3a.../logs  — 请求
+// POST /api/v1/daemon/attempts/att-uuid-1/logs  — 请求
 {
   "lease_seq": 1,
   "stream": "stdout",
   "start_offset": 1048576,
-  "lines": ["$ mesh-agent run --task fix-login-bug", "> 检出仓库基线 main → 专属分支 agent/8f3a1d2c", "..."],
+  "lines": ["$ mesh-agent run --task fix-login-bug", "> 检出仓库基线 main → 专属分支 agent/8f3a1d2c-.../a1", "..."],
   "sealed": false
 }
 // 响应 200
 { "data": {"accepted_end_offset": 1049012, "redacted_hits": 1} }
 ```
 
-**租约续期 / 状态上报**：
+**租约续期 / 状态上报（均按 attempt，带 lease_seq fencing）**：
 
 ```json
-// POST /api/v1/daemon/executions/8f3a...:renew-lease
-{ "lease_seq": 1, "current_load": 2 }
+// POST /api/v1/daemon/attempts/att-uuid-1:renew-lease
+{ "lease_seq": 1 }
 // 响应 200
 { "data": {"lease_expires_at": "2026-07-24T09:45:30Z", "lease_seq": 2} }
 
-// PATCH /api/v1/daemon/executions/8f3a...
+// PATCH /api/v1/daemon/attempts/att-uuid-1
 { "lease_seq": 2, "status": "completed", "result": {"exit_code": 0, "diff_summary": "+34 -7 in 3 files"} }
-// 响应 200
-{ "data": {"id": "8f3a1d2c-...", "status": "completed", "finished_at": "2026-07-24T09:50:01Z"} }
+// 响应 200（同事务内逻辑执行转 completed 并幂等释放 runtime 容量，§2.5）
+{ "data": {"id": "att-uuid-1", "execution_id": "8f3a1d2c-...", "status": "completed",
+           "execution_status": "completed", "finished_at": "2026-07-24T09:50:01Z"} }
 ```
+
+> `lease_seq` 不匹配（attempt 已被 reaper 回收并改派）→ `409 conflict`，旧持有者的一切上报被拒（脑裂防护）。
 
 ### 3.3 日志流式端点（WebSocket 主 / SSE 降级，含续传）
 
@@ -604,7 +720,7 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 {"type": "end", "status": "completed", "final_offset": 1200340}
 ```
 
-续传协议：客户端记录已处理的最大 offset，断线重连时把它作为 `?offset=` 传入；服务端先从对象存储补发 `[offset, 已封口)` 历史，再接上实时尾部，保证**不丢、不重、单调递增**。客户端按 `offset` 去重以防补发与实时流边界重叠。`/ws` 全局 `seq` 与日志 `offset` 并存：`seq` 用于事件重放，`offset` 用于日志字节续传。
+续传协议：客户端记录已处理的最大 offset，断线重连时把它作为 `?offset=` 传入；服务端先从对象存储补发 `[offset, 已封口)` 历史，再接上实时尾部，保证**不丢、不重、单调递增**。客户端按 `offset` 去重以防补发与实时流边界重叠。频道内事件 `seq`（README §6.7，用于事件重放）与日志 `offset`（用于字节续传）并存、互不混用；日志频道为 `execution:{id}:logs`，其 `seq` 作用域即该频道。
 
 ### 3.4 错误码表
 
@@ -692,17 +808,28 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 ├──────────────────────────────────────────────────────────────────────────┤
 │ 1) 基本信息                                                               │
 │    名称: [intranet-build-01]   并发上限: [4]   标签: [region=intranet +]  │
-│ 2) 在你的机器上执行下面的命令(一次性激活码,15 分钟内有效):                │
+│ 2) 在你的机器上安装(签名发布包 + 校验,可逐步审阅):                        │
 │    ┌─────────────────────────────────────────────────────────────┐ [复制] │
-│    │ curl -sSL https://get.mesh.internal/runtime | sh -s -- \    │        │
-│    │   --workspace mesh-ws --activation ACT-9F3K-2M7Q-XB4Z        │        │
+│    │ # a. 下载签名发布包与公钥(占位分发地址,部署时替换)            │        │
+│    │ curl -fsSLO https://releases.mesh.example/runtime/1.4.2/\    │        │
+│    │   mesh-runtime_1.4.2_linux_x86_64.tar.gz{,.sig}              │        │
+│    │ curl -fsSLO https://releases.mesh.example/mesh-release.pub   │        │
+│    │ # b. 校验 checksum 与签名                                     │        │
+│    │ sha256sum -c <(echo "9f86d0… mesh-runtime_1.4.2…tar.gz")     │        │
+│    │ minisign -Vm mesh-runtime_1.4.2…tar.gz -p mesh-release.pub   │        │
+│    │ # c. 解包到可审阅目录(无隐式执行)                             │        │
+│    │ tar -xzf mesh-runtime_1.4.2…tar.gz -C ~/.local/opt/mesh      │        │
+│    │ # d. 激活码写入仅本人可读的文件,再激活(不进命令行参数)        │        │
+│    │ umask 077 && printf '%s' "ACT-9F3K-2M7Q-XB4Z" > activation.txt│       │
+│    │ ~/.local/opt/mesh/mesh-runtime activate \                    │        │
+│    │   --activation-file ./activation.txt && shred -u activation.txt│      │
 │    └─────────────────────────────────────────────────────────────┘        │
 │ 3) 等待激活…  ⏳ 正在等待守护进程上线                                       │
 │    ✅ 已激活!build-node-7 (8核/32GB) 已上线         [前往详情 →]          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-要点：三步式；激活码大字展示 + 一键复制；第 3 步用 `/ws` 监听 `runtime.activated` 事件，守护进程一上线即由 ⏳ 变 ✅，无需手动刷新。
+要点：三步式（下载校验 → 解包 → 受限激活）；**不提供 `curl | sh` 一键管道**，所有命令逐条可见可审；激活码经 `0600` 文件/stdin 传入、用后即毁，不进入命令行参数与 shell 历史；第 3 步用 `/ws` 监听 `runtime.activated` 事件，守护进程一上线即由 ⏳ 变 ✅，无需手动刷新。
 
 ### 4.4 单个任务执行详情页（任务实时日志流）
 
@@ -772,42 +899,47 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
  │ 任务完成收到通知       │<═══════════════════│<────────────────────│
 ```
 
-### 4.7 task 状态机
+### 4.7 双层状态机（逻辑 execution + 物理 attempt，README §6.4 权威）
+
+**逻辑层 `task_executions.status`**：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: 创建/入队
-    queued --> claimed: runtime 原子领取<br/>(SKIP LOCKED + 发租约)
-    claimed --> running: 守护进程开始执行<br/>(checkout 完成)
-    running --> completed: 退出码 0
+    [*] --> queued: 创建/入队(outbox)
+    queued --> awaiting_approval: 需审批(README 6.10)
+    awaiting_approval --> queued: 批准
+    awaiting_approval --> cancelled: 拒绝/过期
+    queued --> claimed: runtime 原子领取(建 attempt #N)
+    claimed --> running: attempt 开始执行
+    running --> completed: 退出码 0(终态)
     running --> failed: 非零退出/沙箱违规
     running --> timeout: 超时(优雅→强制)
-    claimed --> requeued: 租约过期/领取后失联
-    running --> requeued: 心跳超时且租约过期
-    requeued --> claimed: 被其它 runtime 重新领取<br/>(retry_count++)
-    queued --> cancelled: 排队中被取消
+    claimed --> queued: attempt 被 reclaimed 且 attempt 数 < max_attempts
+    running --> queued: 同上(requeue = 新建下一个 attempt)
+    queued --> cancelling: 排队中被取消
     claimed --> cancelling: 用户请求取消
     running --> cancelling: 用户请求取消
-    cancelling --> cancelled: 宽限期内退出
-    cancelling --> cancelled: 宽限期满强制 kill
-    requeued --> failed: 超过最大重试次数
+    cancelling --> cancelled: 宽限退出或强制 kill(终态)
+    queued --> failed: attempt 数 ≥ max_attempts(max_retries)
     completed --> [*]
     failed --> [*]
     timeout --> [*]
     cancelled --> [*]
 ```
 
+**物理层 `execution_attempts.status`**：`claimed → running → completed/failed/timeout/cancelled`，或被 reaper 置 `reclaimed`（租约过期 / 失联回收）。**attempt 行永不删除或改写**：每次 requeue 新建 `attempt_number+1` 行，旧行的 runtime / claimed_at / 日志 / 分支 / 失败原因原样保留（审计不覆盖，`retry_count = COUNT(attempts)-1`）。
+
 要点说明：
-- 核心三终态为 `completed` / `failed` / `cancelled`；`timeout` 是失败类的独立终态（UX 上单独呈现，`failure_reason='timeout'`）。
-- `cancelling` 是显式中间态，让「取消请求已发出但进程未退」这段时间可见、可观测。
-- `requeued` 与 `queued` 区别在于携带 `retry_count`；超过 `max_retries` 则转 `failed(failure_reason=max_retries)` 而非无限重派。
-- 所有迁移走 `PATCH` 带 `lease_seq` / 状态前置校验，非法迁移返回 `409` / `422`。
+- 核心终态为 `completed` / `failed` / `cancelled`；`timeout` 是失败类的独立终态（UX 上单独呈现，`failure_reason='timeout'`）。
+- `cancelling` 是显式中间态，让「取消请求已发出但进程未退」这段时间可见；取消两段式：SIGTERM + 宽限期 → SIGKILL，取消幂等（对已结束执行为 no-op）。
+- 失败分类新增 `superseded`（被替换分派取消）、`agent_paused`（agent 暂停取消在途）、`approval_rejected` / `approval_expired`（README §6.9/§6.10）。
+- 所有 daemon 迁移走 `PATCH` 带 `lease_seq` / 状态前置校验，非法迁移返回 `409` / `422`。
 
 ### 4.8 claim 竞争、租约续期与失联自愈
 
 - **竞争**：纯数据库 `SKIP LOCKED` 解决，无需分布式锁。多 runtime 并发 claim 时彼此不阻塞，各拿各的任务，公平按 `(priority, queued_at)` 排序。
 - **租约（lease）**：领取 / 续租都设 `lease_expires_at`；守护进程在租约到期前（如剩余 1/3 时）主动 `:renew-lease`。
-- **失联回收（reaper）**：平台后台定时任务周期扫描 `idx_executions_lease_expired`，对租约过期且近期无心跳的执行执行回收：`retry_count < max` → `requeued`；否则 → `failed`。回收时 `lease_seq++`，使旧持有者后续上报因 `lease_seq` 不匹配被 `409` 拒绝——**防止「诈尸」runtime 覆盖新持有者的结果**（脑裂防护）。
+- **失联回收（reaper）**：平台后台任务（README §2.2 拓扑）周期扫描 `idx_attempts_lease_expired`，对租约过期且近期无心跳的 **attempt** 执行回收：该 attempt 置 `reclaimed`（审计信息保留），逻辑执行若 `COUNT(attempts) < max_attempts` → 回落 `queued`（等待新建 attempt #N+1）；否则 → `failed(max_retries)`。回收同事务**幂等释放** runtime 容量（`GREATEST(current_load-1,0)`），并回收时 `lease_seq++`，使旧持有者后续上报因 `lease_seq` 不匹配被 `409` 拒绝——**防止「诈尸」runtime 覆盖新持有者的结果**（脑裂防护）。
 - **实时性**：心跳与续租共用一条心跳通道降低连接数；取消等下行指令搭载心跳响应即时下发（默认 15s 内必达），需要更快可叠加 `/ws` 下行通道。
 
 ### 4.9 日志流式推送方案
@@ -826,7 +958,7 @@ stateDiagram-v2
 人类干预点：
 - **取消运行中任务**：一键取消，优雅终止 + 保留 diff 供排查。
 - **暂停 / 恢复 runtime**：`paused` 后不接新任务，在跑的排空，用于维护窗口。
-- **冻结可疑执行**：对疑似失控 / 越权的执行，立即吊销其短期凭证、收紧网络策略、保留现场（工作目录与日志）供取证，而非简单 kill。
+- **冻结可疑执行**：对疑似失控 / 越权的执行，**立即撤销其所有 attempt 的短期凭证 envelope**（`execution_credentials.revoked_at` 置位，§2.2 凭证协议）、收紧网络策略、保留现场（工作目录与日志）供取证，而非简单 kill。
 - **凭证可见性**：详情页「凭证」标签只展示元信息（名称 / 种类），值恒为 `***`，并提供「本任务用到哪些凭证」的审计视图。
 - **并发与超时旋钮**：用户可调 `max_concurrent` 与任务 `timeout_seconds`，在「跑得快」与「机器不被拖垮」间自行权衡。
 
@@ -836,29 +968,31 @@ stateDiagram-v2
 
 ### 5.1 功能验收
 
-- [ ] 创建 runtime 生成 `status='pending'` 记录 + 一次性激活码（只存哈希、默认 15 分钟 TTL）+ 安装命令。
-- [ ] 守护进程凭激活码激活：上报元数据 → 换取 runtime API token（`scope='runtime'`，只存哈希）→ runtime 置 `online`，激活码作废；过期 / 已用激活码返回 `410`。
+- [ ] 创建 runtime 生成 `status='pending'` 记录 + 一次性激活码（只存哈希、`activation_expires_at` 默认 15 分钟）+ **签名发布包安装信息**（artifact URL + sha256 + 签名 + 公钥；无 `curl | sh`，激活码不进命令行参数，README/§3.1 安装安全）。
+- [ ] 守护进程凭激活码（受限 stdin/`0600` 文件读入）激活：上报元数据 → 换取 runtime API token（`scope='runtime'`，只存哈希）→ runtime 置 `online`，`activated_at` 置位（激活码作废）；过期 / 已用激活码返回 `410`。
 - [ ] 平台托管与自托管走同一套「注册—心跳—领取—上报」机器接口，调度器不区分二者。
 - [ ] 心跳每 15s（可配）上报；超过 `心跳间隔 × 容忍倍数`（默认 45s）未收到判离线置 `unavailable`；`degraded` 时停止派新任务但保留排障窗口。
-- [ ] runtime 标签 / 能力匹配：claim 仅返回 `label_requirements <@ runtime_labels` 的任务。
-- [ ] 并发上限：守护进程领取前自检 + 服务端领取时校验 `current_load < max_concurrent`，双重保险。
+- [ ] **claim 跨租户安全**：claim SQL 带 `workspace_id = :runtime_workspace_id`（token 解析，不信请求体）；标签/能力匹配只用服务端保存值；`default_runtime_id` 约束生效（集成测试 T1/T2）。
+- [ ] **容量防超卖**：claim 事务内原子扣减 `current_load`（`WHERE current_load < max_concurrent`）；attempt 终态/回收幂等释放，并发 5 抢 2 容量恰成功 2（集成测试 T3）。
 - [ ] 取消为两段式：先 SIGTERM + 宽限期，宽限期满 SIGKILL；`cancelling` 中间态可见；取消幂等，对已结束任务为 no-op。
 - [ ] 任务级超时：守护进程本地计时 + 服务端租约 / 看门狗双重兜底；超时置 `timeout`，`failure_reason='timeout'`。
-- [ ] 日志按行 / 块上报带单调 `offset`；前端实时滚动；断线凭最后 offset 无缝续传，不丢不重。
-- [ ] checkout 为每任务创建专属工作分支 `agent/<execution-id>`，多任务并行不互相污染；结束产出差异（diff）回报，工作目录超期回收。
-- [ ] 凭证仅在 claim 响应一次性下发；`execution_credentials` 记录注入审计；UI 凭证标签值恒为 `***`。
-- [ ] 状态机按 4.7 实现；`requeued` 携带 `retry_count`，超过 `max_retries` 转 `failed`；非法迁移返回 `409`/`422`。
-- [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封；机器 API token 越权访问其它 runtime 返回 `403`。
+- [ ] 日志按行 / 块上报带单调 `offset`（按 attempt）；前端实时滚动；断线凭最后 offset 无缝续传，不丢不重。
+- [ ] checkout 为每 **attempt** 创建专属工作分支 `agent/<execution-id>/a<attempt>`（按 attempt 唯一，README §6.5），多任务/多尝试并行不互相污染；结束产出差异（diff）回报，工作目录超期回收。
+- [ ] 凭证仅在 claim / refetch 响应按 attempt 一次性下发（短期 envelope）；`credentials:refetch` 仅租约有效且在途时可用、发新撤旧、上限 3 次；freeze 立即撤销 envelope；`execution_credentials` 记录注入/撤销审计；UI 凭证标签值恒为 `***`。
+- [ ] **execution/attempt 分层**（README §6.4）：requeue 新建 attempt 行，旧 attempt 审计信息不被覆盖（集成测试 T4）；`retry_count` 由 attempts 数派生，超 `max_attempts` 转 `failed(max_retries)`；非法迁移返回 `409`/`422`。
+- [ ] 高风险工具执行前经 `/daemon/executions/{id}/approvals` 创建统一 `approvals`（README §6.10），执行转 `awaiting_approval`，reaper 不回收该态，批准后续跑、拒绝/过期转 cancelled（集成测试 T8）。
+- [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封（README §6.14）；机器 API token 越权访问其它 runtime 返回 `403`。
+- [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重。
 
 ### 5.2 非功能验收（重点红线）
 
 - [ ] **任务不重复领取**：多 runtime 并发 claim 同一任务时，`FOR UPDATE SKIP LOCKED` 保证恰有一台抢到，其余立即抢下一条；零锁等待、零重复执行；`idempotency_key` 唯一约束兜底防重复入队。
-- [ ] **失联自愈**：runtime 失联后，其上 `claimed/running` 且租约过期的任务由 reaper 自动 `requeued`（或超 `max_retries` 转 `failed`），改由其它 runtime 接手，无需人工；回收时 `lease_seq++` 防「诈尸」覆盖（脑裂防护）。
-- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；日志全链路脱敏，命中即 `***`；短期凭证执行结束即失效。
+- [ ] **失联自愈**：runtime 失联后，其上 `claimed/running` 且租约过期的 **attempt** 由 reaper 置 `reclaimed`、逻辑执行回落 `queued` 新建下一个 attempt（或超 `max_attempts` 转 `failed`），改由其它 runtime 接手，无需人工；回收时 `lease_seq++` 防「诈尸」覆盖（脑裂防护），容量幂等释放。
+- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；日志全链路脱敏，命中即 `***`；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2）。
 - [ ] **日志时延**：日志尾部增量从守护进程产生到前端可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 offset 补发不丢不重；封口段落对象存储读取续传 P95 ≤ 1s。
 - [ ] **沙箱隔离**：每任务独立容器 / 命名空间，cgroup CPU / 内存 / 磁盘 / 时长配额；单任务 OOM 被终止标 `failed(sandbox/oom)`，同机其它任务与宿主机不受影响；非特权用户运行，不挂宿主机 root。
 - [ ] **无永久卡死**：任何任务最终都到达终态（completed/failed/timeout/cancelled），无状态永久悬而未决（租约 + 看门狗 + reaper 共同保证）。
 - [ ] **队列背压可观测**：队列深度、负载、心跳新鲜度在列表 / 详情实时可见；`queue.depth_changed` 事件推送。
 - [ ] **限流与退避**：机器 API 与控制台 API 接入限流，超限返回 `429` 带 `Retry-After`。
 - [ ] **错误信息不泄漏**：错误响应无堆栈 / 无 SQL / 无凭证明文，仅含字段级 `details`。
-- [ ] **性能**：claim 走 `idx_executions_claimable`，1000 台 runtime 并发领取下 P95 ≤ 100ms；租约回收扫描走 `idx_executions_lease_expired`。
+- [ ] **性能**：claim 走 `idx_executions_claimable`，1000 台 runtime 并发领取下 P95 ≤ 100ms（README §10 基准）；租约回收扫描走 `idx_attempts_lease_expired`。

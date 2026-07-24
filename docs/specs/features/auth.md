@@ -17,7 +17,7 @@
 - **认证**:注册/登录/邮箱验证/密码重置、第三方 OAuth 登录、会话(短期 access JWT + 可撤销 refresh)、API token(个人/agent 访问令牌)、可选 2FA、登录保护。
 - **授权**:工作区角色 RBAC、资源级权限、权限校验中间件、最小权限的 agent 角色、审计日志、速率限制。
 
-**统一 principal 模型(Mesh 特色)**:人类用户与 AI agent 都是 principal,RBAC 与审计对二者一致处理,仅以 `actor_type`/`owner_type` 区分。agent runtime 与 CLI 通过 agent 专属 API token 代表 agent 读写资源,所有动作留痕审计。
+**统一 principal 模型(Mesh 特色)**:人类用户与 AI agent 都是 principal,RBAC 与审计对二者一致处理。人类/agent 判别**一律 JOIN `members.member_type`**(README §6.1),**存储层不设 `owner_type`/`actor_type` 之类冗余判别列**:API token 的持有者统一为 `owner_member_id`(指向 agent 的 member 行),审计行为者统一为 `actor_member_id` + `actor_kind∈('member','system')`。agent runtime 与 CLI 通过 agent 专属 API token 代表 agent 读写资源,所有动作留痕审计。
 
 **会话模型取舍**:采用"短期无状态 access JWT(便于横向扩展)+ 服务端可撤销 refresh token(支撑撤销与多设备管理)"混合模型,比纯 JWT 或纯 session cookie 更平衡。access TTL 短(如 15min),使撤销最长延迟 = access TTL。
 
@@ -62,6 +62,8 @@
 
 ## 2. 数据模型
 
+> **全局契约引用**:本模块的成员模型、同租户约束、实时、API 包络/错误/分页一律以 [README.md](../README.md) §6「全局权威契约」为准,本 Spec 仅引用、不重复定义(成员模型 README §6.1、同租户复合 FK README §6.2、实时 README §6.7、API/错误/分页 README §6.14)。
+
 ### 2.1 ER 概览(文字图)
 
 ```
@@ -69,9 +71,9 @@ users 1─* oauth_identities          (第三方登录绑定)
 users 1─* sessions                  (refresh token / 会话,可撤销)
 users 1─* members *─1 workspaces    (统一名册,member.md;角色来源)
 agents 1─* members *─1 workspaces   (AI 成员资格同样走 members,不单设表)
-workspaces 1─* api_tokens           (owner_type=member|agent;agent 运行凭证)
+workspaces 1─* api_tokens           (owner_member_id → 持有者 member 行;agent 运行凭证)
 roles *─* permissions               (可选自定义 RBAC;内置角色硬编码)
-(所有敏感动作) ─→ audit_logs        (append-only)
+(所有敏感动作) ─→ audit_logs        (append-only;actor_member_id + actor_kind)
 ```
 
 ### 2.2 表:`users`(全局用户 / 跨工作区登录身份)
@@ -92,6 +94,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL,`now()` | |
 
 索引:`uq_users_email`(唯一);`idx_users_status`。
+
+> **`users` 不设 `member_id` 列(README §6.1)**:`users` 是全局登录身份,**不含任何 `member_id` 反向列**(尤其禁止 `member_id UNIQUE` 这类 1:1 关联——它会令同一用户无法加入多个工作区)。工作区成员资格与角色**完全落在 `members`**:关联方向恒为 `members.user_id → users.id`,一个 `users.id` 可在多个工作区各有一条 `members` 行(每区角色独立)。
 
 ### 2.3 表:`oauth_identities`(第三方登录绑定)
 
@@ -130,8 +134,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 |------|------|-------------|------|
 | `id` | UUID | PK | token ID |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | 归属工作区 |
-| `owner_type` | TEXT | NOT NULL,CHECK IN ('member','agent') | 持有者类型;agent 令牌即 agent 身份凭证 |
-| `owner_id` | UUID | NOT NULL | 持有者 ID(`owner_type=member`→`members.id`;`agent`→`agents.id`) |
+| `owner_member_id` | UUID | NOT NULL,复合 FK `(workspace_id, owner_member_id) → members(workspace_id, id)` | 持有者名册条目(统一 `members.id`;agent 令牌由 agent 的 member 行持有,README §6.1/§6.2) |
 | `name` | TEXT | NOT NULL | 人类可读名称 |
 | `token_hash` | TEXT | NOT NULL,UNIQUE | 明文令牌的 SHA-256 哈希(**仅存哈希**) |
 | `prefix` | TEXT | NOT NULL | 令牌前缀(如 `mesh_pat_` 前 8~12 位,列表展示,不含秘密) |
@@ -143,11 +146,12 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `revoked_at` | TIMESTAMPTZ | NULL | 撤销时间 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | |
 
-索引:`uq_api_token_hash (token_hash)`;`idx_api_tokens_owner (workspace_id, owner_type, owner_id) WHERE revoked_at IS NULL`。
+索引:`uq_api_token_hash (token_hash)`;`idx_api_tokens_owner (workspace_id, owner_member_id) WHERE revoked_at IS NULL`。
 
 **设计要点**:
 - 创建时生成高熵随机串(`mesh_pat_` + ≥32 字节 base64url),**只在创建响应里返回一次明文**,之后数据库仅存 `token_hash`,UI 只显示 `prefix` + 掩码。
-- 校验:客户端 `Authorization: Bearer <明文>` → 服务端算哈希 → 查 `token_hash` → 命中且未撤销未过期 → 解析 `owner_type/owner_id/scopes/workspace_id` 注入请求上下文。
+- **持有者统一为 `owner_member_id`(去多态,README §6.1)**:不再用 `owner_type/owner_id` 二元组。人类 PAT 指向本人的 member 行;**agent 运行凭证指向该 agent 的 member 行**(`members.member_type='agent'`),由复合 FK `(workspace_id, owner_member_id) → members(workspace_id, id)` 保证同租户;人类/agent 判别一律 JOIN `members.member_type`,**不存冗余 `owner_type` 列**。
+- 校验:客户端 `Authorization: Bearer <明文>` → 服务端算哈希 → 查 `token_hash` → 命中且未撤销未过期 → 解析 `owner_member_id/scopes/workspace_id` 注入请求上下文(经 `members` 解析 principal 类型与角色)。
 - 令牌自带可校验前缀/类型位,便于区分 PAT / agent token / refresh token。
 
 ### 2.6 表:`audit_logs`(审计日志,append-only)
@@ -156,8 +160,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 |------|------|-------------|------|
 | `id` | UUID | PK | |
 | `workspace_id` | UUID | NULL,FK→workspaces(id) | 账号级事件可为 NULL |
-| `actor_type` | TEXT | NOT NULL,CHECK IN ('member','agent','system') | 行为者类型 |
-| `actor_id` | UUID | NULL | 行为者 ID(member→`members.id`,agent→`agents.id`) |
+| `actor_member_id` | UUID | NULL,复合 FK `(workspace_id, actor_member_id) → members(workspace_id, id)`(非空时校验) | 行为者名册条目(人或 agent;系统动作为 NULL,README §6.1/§6.2) |
+| `actor_kind` | TEXT | NOT NULL,CHECK IN ('member','system') | 行为者类别:`member`=名册成员(人/agent 由 JOIN `members.member_type` 判别,**不存冗余 `actor_type`**),`system`=系统(允许 `actor_member_id` 为 NULL) |
 | `action` | TEXT | NOT NULL | 如 `auth.login`、`auth.login_failed`、`token.created`、`token.revoked`、`member.role_changed`、`member.removed`、`issue.deleted` |
 | `resource_type` | TEXT | NULL | 目标资源类型 |
 | `resource_id` | UUID | NULL | 目标资源 ID |
@@ -166,8 +170,11 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `metadata` | JSONB | NOT NULL DEFAULT '{}' | 变更前后值等上下文 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | |
 
-索引:`idx_audit_ws_time (workspace_id, created_at DESC)`;`idx_audit_actor (actor_type, actor_id, created_at DESC)`;`idx_audit_action (workspace_id, action, created_at DESC)`。
-**只追加**:不允许 UPDATE/DELETE(合规);可定期归档冷存储。
+索引:`idx_audit_ws_time (workspace_id, created_at DESC)`;`idx_audit_actor (workspace_id, actor_member_id, created_at DESC)`;`idx_audit_action (workspace_id, action, created_at DESC)`。
+
+> **行为者去多态(README §6.1)**:不再用 `actor_type('member','agent','system') + actor_id`。`actor_kind` 仅二值——`member`(名册成员,人类/agent 之分由 JOIN `members.member_type` 得出,不另存)与 `system`(系统动作,`actor_member_id` 为 NULL)。`actor_member_id` 的复合 FK 在 `workspace_id` 非空时生效;账号级事件(如登录,`workspace_id` 为 NULL)按 SQL 复合 FK 语义不校验,行为者信息落在 `metadata`。
+>
+> **只追加**:不允许 UPDATE/DELETE(合规);可定期归档冷存储。
 
 ### 2.7 RBAC(角色 / 权限)
 
@@ -201,11 +208,14 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `oauth_identities.user_id` | → `users.id` | 本模块 | |
 | `sessions.user_id` | → `users.id` | 本模块 | |
 | `api_tokens.workspace_id` | → `workspaces.id` | workspace.md | |
-| `api_tokens.owner_id` | → `members.id` / `agents.id` | member.md / agent.md | 多态,由 `owner_type` 判别 |
-| `members.user_id` / `role` | ← `users.id` | member.md | RBAC 角色来源 |
+| `api_tokens.owner_member_id` | 复合 FK `(workspace_id, owner_member_id)` → `members(workspace_id, id)` | member.md | 持有者名册条目(人或 agent 的 member 行;README §6.1/§6.2) |
+| `audit_logs.actor_member_id` | 复合 FK `(workspace_id, actor_member_id)` → `members(workspace_id, id)`(非空时) | member.md | 行为者名册条目;`system` 动作为 NULL |
+| `members.user_id` | `members.user_id → users.id`(关联方向恒为 members → users,**`users` 不设 `member_id` 反向列**) | member.md / 本模块 | RBAC 角色来源(README §6.1) |
 | `audit_logs.workspace_id` | → `workspaces.id` | workspace.md | |
 
 > agent 在 workspace 的成员资格与角色统一落在 `members`(`member_type='agent'`),**不再单独维护 `workspace_agents` 表**;agent 的 `role` 受 `member.md` 的"agent 不可为 owner、通常 ≤ member"约束。
+>
+> **同租户复合 FK 约定(README §6.2)**:本模块凡引用 `members` 的列(`api_tokens.owner_member_id`、`audit_logs.actor_member_id`)均**同时存 `workspace_id` 并建复合 FK** `(workspace_id, <ref>_id) → members(workspace_id, id)`,使"引用别的工作区的成员"在 INSERT 时即被数据库拒绝(集成测试 T1);`members` 表建有 `UNIQUE(workspace_id, id)` 供此引用(member.md)。
 
 ---
 
@@ -267,9 +277,9 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 **创建 API token** `POST /api/v1/workspaces/{ws}/api-tokens`
 ```json
-// Request
+// Request(agent 运行凭证:owner_member_id 指向该 agent 的 member 行,README §6.1)
 { "name": "code-reviewer runtime", "scopes": ["issue:read","comment:write","attachment:write"],
-  "expires_at": "2027-01-01T00:00:00Z", "owner_type": "agent", "owner_id": "agt-222" }
+  "expires_at": "2027-01-01T00:00:00Z", "owner_member_id": "mem-agent-222" }
 // 201 Response(明文仅此一次)
 { "data": { "id": "tok-1", "name": "code-reviewer runtime", "prefix": "mesh_pat_Ab3",
             "token": "mesh_pat_Ab3Xy9...完整明文...", "scopes": ["issue:read","comment:write","attachment:write"],
@@ -304,8 +314,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 ### 3.7 WebSocket 鉴权与实时
 
-- `/ws` 连接建立时用 token 鉴权(握手携带或首条消息认证),服务端校验后按 `workspace_id + principal` 注册频道;频道订阅 + 单调递增 `seq` + 断线重放(见各模块 Spec 事件表)。
-- **会话/token 撤销实时生效**:撤销落库后经内部事件总线通知网关,使相关连接失效或下次心跳鉴权失败重连被拒;access JWT 短期,撤销最长延迟 = 其 TTL。
+- `/ws` 连接建立时用 token 鉴权(握手携带或首条消息认证),服务端校验后按 `workspace_id + principal` 注册频道。**统一实时契约见 README §6.7**:`seq` 一律为**频道内**单调递增(持久化于 `realtime_events`,无"全局 seq");断线重连带 `resume_from`、游标过旧收 `resync_required`;**每次订阅频道时重新做资源级授权**(见各模块 Spec 事件表)。
+- **会话/token 撤销实时生效**:撤销落库后同事务写 outbox(README §6.6),经 realtime 网关广播使相关连接失效或下次心跳鉴权失败重连被拒(**不用进程内事件总线**);access JWT 短期,撤销最长延迟 = 其 TTL。
 - 异常登录提醒经 WebSocket 站内 + 邮件双通道。
 
 ---
@@ -343,7 +353,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh` → 校验哈希未撤销未过期 → 颁新 access(可轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
 4. **登出**:撤销当前 refresh;「登出所有」批量撤销;**密码变更**使该用户全部 refresh 会话失效(PAT 单独管理)。
 5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。
-6. **API token / agent 凭证**:创建→存哈希、一次性明文→CLI/runtime 从环境变量读取(绝不硬编码)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作 `actor_type=agent` 留痕;agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
+6. **API token / agent 凭证**:创建→存哈希、一次性明文→CLI/runtime 从环境变量读取(绝不硬编码)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`,人类/agent 经 JOIN `members.member_type` 判别);agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
 
 ### 4.6 每请求授权校验流程
 
@@ -374,9 +384,11 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 ### 5.2 功能性(API token / agent)**[Mesh 特色]**
 
 - [ ] 创建 token 仅在响应中返回一次明文,数据库只存哈希,UI 仅显示 prefix+掩码。
+- [ ] **token 持有者统一为 `owner_member_id`**(无 `owner_type/owner_id` 二元组):人类 PAT 指向本人 member 行;agent 运行凭证指向该 agent 的 member 行(README §6.1)。
+- [ ] **`owner_member_id` 为复合 FK** `(workspace_id, owner_member_id) → members(workspace_id, id)`,跨工作区指定持有者被数据库拒绝(README §6.2 / §9 T1)。
 - [ ] token 可设 scope 与过期时间;撤销立即生效,后续请求 401。
 - [ ] token scope 与持有者角色权限**取交集**,不能超越角色权限(最小权限)。
-- [ ] 可为 agent 创建运行凭证;agent 用其代表自身读写,所有动作 `actor_type=agent` 留痕。
+- [ ] 可为 agent 创建运行凭证;agent 用其代表自身读写,所有动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`)。
 - [ ] agent token 默认不授予 `agent:trigger`(防 agent-to-agent 回环),除非显式授权。
 - [ ] token 前缀/类型位可区分 PAT / agent token / refresh。
 
@@ -386,6 +398,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 非授权访问返回 403;guest 仅可见被显式共享资源。
 - [ ] 唯一 owner 不可移除/降级(409,衔接 member.md)。
 - [ ] 登录/token 创建撤销/角色变更/敏感写均写 append-only `audit_logs`;审计表禁止 UPDATE/DELETE。
+- [ ] **审计行为者去多态**:`audit_logs` 仅存 `actor_member_id`(复合 FK → `members(workspace_id, id)`,非空时校验)+ `actor_kind∈('member','system')`;**无 `actor_type`/`actor_id` 列**,人类/agent 之分由 JOIN `members.member_type` 得出;`system` 动作 `actor_member_id` 为 NULL(README §6.1)。
 - [ ] 审计日志可按行为者、动作、时间范围查询(游标分页)。
 
 ### 5.4 性能
@@ -408,7 +421,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 ### 5.6 实时
 
-- [ ] WebSocket 连接握手鉴权,按 `workspace_id + principal` 注册频道。
-- [ ] 会话/token 撤销后,相关连接在下次心跳被拒;access 撤销延迟 ≤ 其 TTL(15min)。
+- [ ] WebSocket 连接握手鉴权,按 `workspace_id + principal` 注册频道;**每次订阅频道重新做资源级授权**(README §6.7)。
+- [ ] 会话/token 撤销后,相关连接在下次心跳被拒;access 撤销延迟 ≤ 其 TTL(15min);撤销经 outbox→realtime 广播,不用进程内事件总线(README §6.6)。
 - [ ] 异常登录提醒经站内 + 邮件双通道送达。
-- [ ] 频道事件携带单调递增 `seq`,断线重放无丢失无重复。
+- [ ] 频道事件携带**频道内**单调递增 `seq`(无"全局 seq"),断线凭 `resume_from` 重放、游标过旧收 `resync_required`,无丢失无重复(README §6.7)。
