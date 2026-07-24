@@ -5,12 +5,21 @@
 > - `issue.md`(Issue 工作项)——视图投影的原子对象;状态机、`state_category`、`position`、`PATCH /issues/{id}` 均来自此。
 > - `label-property.md`(标签与自定义属性)——提供可作为筛选/分组/排序依据的 `label` 与自定义字段。
 > - `project.md`(项目)、`member.md`(统一成员抽象,含 AI agent)。
-> **全局一致性锚点**(本 Spec 全程遵守):
-> 1. PostgreSQL;snake_case 复数表名;UUID 主键;`created_at` / `updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`。
-> 2. issue 状态双层:`issue_statuses.category`(稳定语义)+ `issue_statuses.name`(可自定义展示名),冗余到 `issues.state_category`。**看板列默认按 `state_category` 分组,可切换为按具体 `status_id` 分组**(映射见 §2.4)。
-> 3. API 基础路径 `/api/v1`;`Authorization: Bearer <token>`;游标分页响应统一为 `{ "data": [...], "next_cursor": "..." }`;统一错误信封(见 §3.4)。
-> 4. WebSocket 路径 `/ws`;每条事件携带单调递增 `seq`,客户端断线后凭 `resume_from=<seq>` 重放;事件类型命名 `<entity>.<action>`。
-> 5. ORM 采用 SQLAlchemy 2.x 约定(`DeclarativeBase` / `Mapped` / `mapped_column`)。
+> **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
+
+---
+
+## 全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)
+
+1. **存储**:PostgreSQL 16+;snake_case 复数表名;UUID 主键(`gen_random_uuid()`);所有表含 `created_at` / `updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`,UTC)。
+2. **成员**:`views.owner_member_id` 等成员引用一律指向 `members.id`,模型以 README §6.1 为唯一权威;存储层不设冗余 `*_type` 判别列。
+3. **多租户**:`views` / `view_issue_positions` 等持有跨模块引用的表一律按 README §6.2 存 `workspace_id` 并建**复合 FK + 目标表 `UNIQUE(workspace_id, id)`**(views/issues/members 均建该唯一键供引用)。
+4. **issue 状态双层**:`issue_statuses.category`(稳定语义)+ `issue_statuses.name`(可自定义展示名),冗余到 `issues.state_category`(issue.md owns)。**看板列默认按 `state_category` 分组,可切换为按具体 `status_id` 分组**(映射见 §2.4)。
+5. **接口**:基础路径 `/api/v1`;`Authorization: Bearer <token>`;包络 / 游标分页(**分组查询统一整体游标,不给每组独立 cursor**)/ 错误信封 / 乐观并发 / **过滤限制(嵌套 ≤3、条件 ≤20、`filter_too_complex` / `query_cost_exceeded`)** 见 README §6.14。
+6. **实时**:统一实时契约见 README §6.7(**频道内**单调 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`、订阅逐资源授权);事件名 `<entity>.<action>`。
+7. **性能基准**:一切 P95 / 时延指标仅在 README §10 基准下构成验收标准。
+8. **集成测试**:跨租户复合 FK 拒绝、并发拖入 WIP 列、乐观冲突等按 README §9 矩阵(T1/T9 等)必测。
+9. **ORM**:SQLAlchemy 2.x 约定(`DeclarativeBase` / `Mapped` / `mapped_column`)。
 
 ---
 
@@ -88,13 +97,15 @@
 ```
 workspaces ──1:N──► views ◄──N:1── projects(可选;project_id 可空=工作区级视图)
                      │
-                     ├── owner: members(创建者)
+                     ├── owner: members(创建者,复合 FK)
                      ├── 1:N──► board_wip_limits(可选独立表;亦可内嵌 board_settings.wip)
                      ├── 1:N──► view_subscriptions(在线订阅游标,可选)
+                     ├── 1:N──► view_issue_positions(每视图手工排序,见 §2.7)
                      └── 查询期按 filters/group/sort 投影 issues —— 无持久外键,合成结果
                                         │
                                         ▼
-                                   issues(见 issue.md;卡片列内手动排序写 issues.position)
+                                   issues(见 issue.md;`issues.position` 是规范默认排序,
+                                          视图内手工拖拽排序写 view_issue_positions,不写 issues.position)
 ```
 
 ### 2.2 `views`(保存的视图)
@@ -103,8 +114,8 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
 | `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键 |
-| `project_id` | UUID | NULL, FK→projects(id) ON DELETE CASCADE | NULL | NULL=工作区级视图 |
-| `owner_member_id` | UUID | NOT NULL, FK→members(id) ON DELETE CASCADE | — | 创建者 |
+| `project_id` | UUID | NULL,**复合 FK** `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE CASCADE | NULL | NULL=工作区级视图 |
+| `owner_member_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, owner_member_id)→members(workspace_id, id)` ON DELETE CASCADE | — | 创建者 |
 | `name` | TEXT | NOT NULL, CHECK (`char_length(name) BETWEEN 1 AND 100`) | — | 视图名 |
 | `layout` | TEXT | NOT NULL, CHECK IN (`'board'`,`'list'`,`'timeline'`,`'table'`) | `'board'` | 视图类型 |
 | `visibility` | TEXT | NOT NULL, CHECK IN (`'private'`,`'shared'`) | `'private'` | 私有/共享 |
@@ -118,8 +129,9 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
 | `is_default` | BOOLEAN | NOT NULL | `false` | 是否默认视图 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**约束**:
-- 同一作用域内默认视图唯一(服务层 + 部分唯一索引):`UNIQUE (workspace_id, project_id) WHERE is_default`,用 `COALESCE(project_id, NIL_UUID)` 处理 NULL。
+**约束**(可执行 DDL,见 §2.8;COALESCE 表达式不能写进表级 `UNIQUE`,一律用部分表达式唯一索引,README §6.3):
+- 同一作用域内默认视图唯一:`CREATE UNIQUE INDEX uq_views_default ON views (workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000')) WHERE is_default;`(服务层在同事务内保证"取消旧默认 + 设新默认")。
+- 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `view_issue_positions.view_id` 等复合 FK 引用,README §6.2)。
 - `layout IN ('timeline','table')` 可写入但本期 UI 不渲染(返回 501 由前端兜底为 board/list)。
 
 ### 2.3 `filters` / `sort` / `board_settings` 结构
@@ -203,7 +215,28 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
 
 > 服务端推送优先走 WebSocket 内存订阅(见 §3.5);此表用于断线重连时确定 `resume_from`,以及(可选)离线期间的增量补推。
 
-### 2.7 关键索引
+### 2.7 `view_issue_positions`(每视图手工排序,README §6.14)
+
+**单一 `issues.position` 会跨视图互相污染**(一个视图的拖拽改变所有视图的顺序)。为此引入**每视图、每 issue 的手工排序表**:每个视图各自保存其卡片顺序,互不影响。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键(复合 FK 本地列) |
+| `view_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, view_id)→views(workspace_id, id)` ON DELETE CASCADE | — | 所属视图 |
+| `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE | — | 卡片对应 issue |
+| `group_key` | TEXT | NOT NULL | `''` | 卡片所在分组键(对齐 §2.4;空串=未分组/默认) |
+| `position` | REAL | NOT NULL | `0` | 该视图内、该分组内的手工排序值(浮点中点法,见 §4.3) |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| UNIQUE | `(view_id, issue_id)` | | | 每视图每 issue 至多一条排序记录 |
+
+**语义**:
+- `view_issue_positions` 记录的是**某个视图内**某 issue 的手工顺序;**视图 A 的拖拽只写视图 A 的行,不影响视图 B**(README §6.14 排序契约)。
+- **未保存排序记录的视图**(或某 issue 在当前视图无行)回退到 `issues.position` **规范默认排序** / 视图 `sort` 配置;即"手工排序优先,缺省回退规范顺序"。
+- **`issues.position` 不再被视图拖拽写入**——它只是全局规范默认排序(由 issue 创建/规范排序维护),视图内拖拽一律 upsert 本表。
+- 视图删除时其排序行级联清除(ON DELETE CASCADE);issue 删除同理。
+
+### 2.8 关键索引
 
 ```sql
 CREATE INDEX idx_views_workspace  ON views(workspace_id, position);
@@ -213,17 +246,22 @@ CREATE INDEX idx_views_visibility ON views(workspace_id, visibility);
 CREATE UNIQUE INDEX uq_views_default
   ON views(workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'))
   WHERE is_default;
+CREATE UNIQUE INDEX uq_views_ws_id ON views(workspace_id, id);   -- 供复合 FK 引用(README §6.2)
 CREATE INDEX idx_board_wip_view ON board_wip_limits(view_id);
+-- 每视图手工排序
+CREATE UNIQUE INDEX uq_vip_view_issue ON view_issue_positions(view_id, issue_id);
+CREATE INDEX idx_vip_view_group_pos ON view_issue_positions(view_id, group_key, position);
 -- 视图内 issue 查询命中 issue.md 既有索引(idx_issues_project_status / idx_issues_position 等);
 -- 自定义字段筛选命中 label-property.md 的 idx_icfv_value_json (GIN)。
 ```
 
-### 2.8 SQLAlchemy 2.x 模型(节选)
+### 2.9 SQLAlchemy 2.x 模型(节选)
 
 ```python
 import uuid
 from datetime import datetime
-from sqlalchemy import String, Text, REAL, Boolean, ForeignKey, CheckConstraint, text
+from sqlalchemy import String, Text, REAL, Boolean, ForeignKey, ForeignKeyConstraint, \
+    UniqueConstraint, Index, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB, TIMESTAMPTZ
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -235,15 +273,23 @@ class View(Base):
     __table_args__ = (
         CheckConstraint("layout IN ('board','list','timeline','table')", name="ck_views_layout"),
         CheckConstraint("visibility IN ('private','shared')", name="ck_views_visibility"),
+        UniqueConstraint("workspace_id", "id", name="uq_views_ws_id"),  # 供复合 FK 引用
+        # 复合 FK(README §6.2)
+        ForeignKeyConstraint(["workspace_id", "project_id"],
+                             ["projects.workspace_id", "projects.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "owner_member_id"],
+                             ["members.workspace_id", "members.id"], ondelete="CASCADE"),
+        # 部分表达式唯一索引:每作用域唯一默认视图(README §6.3)
+        Index("uq_views_default", "workspace_id",
+              text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000')"),
+              unique=True, postgresql_where=text("is_default")),
     )
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True,
                                           server_default=text("gen_random_uuid()"))
     workspace_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
-    project_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
-    owner_member_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)  # 复合 FK 见 __table_args__
+    owner_member_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)   # 复合 FK 见 __table_args__
     name: Mapped[str] = mapped_column(Text, nullable=False)
     layout: Mapped[str] = mapped_column(Text, nullable=False, server_default="board")
     visibility: Mapped[str] = mapped_column(Text, nullable=False, server_default="private")
@@ -260,6 +306,29 @@ class View(Base):
         server_default=text("now()"), onupdate=text("now()"))
     wip_limits: Mapped[list["BoardWipLimit"]] = relationship(
         back_populates="view", cascade="all, delete-orphan")
+
+class ViewIssuePosition(Base):
+    """每视图手工排序(README §6.14):视图 A 的拖拽不污染视图 B。"""
+    __tablename__ = "view_issue_positions"
+    __table_args__ = (
+        UniqueConstraint("view_id", "issue_id", name="uq_vip_view_issue"),
+        Index("idx_vip_view_group_pos", "view_id", "group_key", "position"),
+        ForeignKeyConstraint(["workspace_id", "view_id"],
+                             ["views.workspace_id", "views.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "issue_id"],
+                             ["issues.workspace_id", "issues.id"], ondelete="CASCADE"),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True,
+                                          server_default=text("gen_random_uuid()"))
+    workspace_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    view_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)    # 复合 FK 见 __table_args__
+    issue_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)   # 复合 FK 见 __table_args__
+    group_key: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
+    position: Mapped[float] = mapped_column(REAL, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False, server_default=text("now()"))
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False,
+        server_default=text("now()"), onupdate=text("now()"))
 ```
 
 > 写入路径(JSONB 配置)用 Pydantic v2 schema 严格校验后再 `jsonb` 落库;`filters` 校验失败返回 `400 validation_error`,绝不把未校验 JSON 直接交给查询编译器(防注入,见 §3.4)。
@@ -282,10 +351,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | POST | `/views/{id}/duplicate` | 复制视图(新 owner = 当前成员) |
 | GET | `/views/{id}/issues` | 执行视图配置,返回分组/排序后的 issue |
 | PATCH | `/views/{id}/wip` | 设置某列 WIP 限制 |
-| POST | `/views/{id}/reorder` | 调整卡片列内顺序(亦可走 `PATCH /issues/{id}` 改 `position`) |
+| POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + WIP 校验 + 状态变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3) |
+| POST | `/views/{id}/reorder` | 仅调整某视图内卡片顺序(不改状态、不跨列;走 `view_issue_positions`) |
 | PATCH | `/workspaces/{ws}/views/reorder` | 调整视图在侧栏的顺序(`position`) |
 
-> 拖拽改状态/排序的写操作复用 issue.md 的 `PATCH /issues/{id}`(带 `status_id` / `position`),不在本模块新增写实体接口。
+> **拖拽必须走 move 命令**:`POST /views/{id}/moves` 是唯一能执行**视图级 WIP 限制**的写路径(它带 `view_id`,服务端可在事务内按视图 filters 计数目标列并强制 WIP)。**不带 `view_id` 的 `PATCH /issues/{id}`(issue.md)无法感知视图,不能执行视图级 WIP**——因此 UI 跨列拖拽**必须**用 move 命令;`PATCH /issues/{id}` 仅用于**非拖拽**的字段编辑(详情侧栏改 assignee/priority/状态等)。列内纯排序亦可走 `POST /views/{id}/reorder`。
 
 ### 3.2 请求/响应示例
 
@@ -308,30 +378,41 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 **执行视图** `GET /api/v1/views/{id}/issues?limit=100`
 ```jsonc
+// 分组查询统一整体游标(README §6.14):每组只给 count(组内总数)+ data(当前页切片),
+// 顶层 next_cursor 驱动下一页;响应中【不含每组独立 cursor】。
 {
   "layout": "board",
   "group_by": "state_category",
   "column_target_status": { "todo": "st_todo", "in_progress": "st_in_progress", "done": "st_done" },
   "groups": [
-    { "key": "todo", "label": "Todo", "count": 3, "wip": null, "cursor": "g1_c...",
+    { "key": "todo", "label": "Todo", "count": 3, "wip": null,
       "data": [ { "id": "iss_1", "identifier": "WEB-124", "title": "...", "position": 1.0,
                  "status": { "id": "st_todo", "name": "Todo", "category": "todo" } } ] },
     { "key": "in_progress", "label": "In Progress", "count": 4,
-      "wip": { "limit": 5, "enforcement": "warn" }, "cursor": "g2_c...", "data": [ /* ... */ ] }
+      "wip": { "limit": 5, "enforcement": "warn" }, "data": [ /* ... */ ] }
   ],
   "next_cursor": null
 }
 ```
 
-**拖拽改状态 + 排序** `PATCH /api/v1/issues/{id}`(走 issue.md)
+**看板拖拽(原子 move)** `POST /api/v1/views/{id}/moves`
 ```jsonc
-// Request —— 带乐观并发头
-// If-Match: "2026-07-24T10:00:00.123456Z"
-{ "status_id": "st_in_progress", "position": 2.5 }
-// 200:返回更新后的 issue(含新 updated_at)
-// 目标列 enforcement=block 且已满 → 422 wip_limit_exceeded
-// If-Match 与服务端 updated_at 不符 → 409 conflict
+// Request —— 一次拖拽 = 一个事务(乐观锁 + advisory lock + WIP 计数 + 状态变更 + 排序 upsert)
+{ "issue_id": "iss_1", "to_group_key": "in_progress", "position": 2.5, "version": 7 }
+// 服务端在同一事务内:
+//  (a) 乐观锁 issue(WHERE id=$1 AND version=$version;不匹配 → 409 conflict)
+//  (b) SELECT pg_advisory_xact_lock(hashtext('wip:' || view_id || ':' || to_group_key))  -- 串行化目标列
+//  (c) 按视图 filters 计数目标分组当前成员数
+//  (d) 强制 WIP:block 且 count>=limit → 422 wip_limit_exceeded;warn → 放行并发 wip_exceeded 事件
+//  (e) 按 column_target_status[to_group_key] 改 status_id + upsert view_issue_positions(view_id,issue_id,group_key,position)
+// 200 Response
+{ "data": { "id": "iss_1", "status": { "id": "st_in_progress", "category": "in_progress" },
+            "position": 2.5, "version": 8, "updated_at": "2026-07-24T10:00:01Z" } }
+// 目标列 enforcement=block 且已满 → 422 wip_limit_exceeded(details: group_key/limit/count)
+// version 与服务端不符 → 409 conflict
 ```
+
+> **不要再用 `PATCH /issues/{id}` 拖拽**:不带 `view_id` 的 PATCH 无法执行视图级 WIP(见 §3.1)。`PATCH /issues/{id}` 仅供详情侧栏等**非拖拽**字段编辑。
 
 **设置 WIP** `PATCH /api/v1/views/{id}/wip`
 ```jsonc
@@ -344,17 +425,20 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | HTTP | code | 场景 |
 |------|------|------|
 | 400 | `validation_error` | 非法 filters/layout/op;字段类型与 op 不匹配 |
+| 400 | `filter_too_complex` | filters 嵌套深度 >3 或条件数 >20(README §6.14) |
 | 401 | `unauthorized` | 缺失/失效 token |
 | 403 | `forbidden` | 编辑他人私有视图;对共享视图无写权限 |
 | 404 | `not_found` | 视图不存在或不可见 |
-| 409 | `conflict` | 乐观并发版本不符;默认视图重复设置 |
+| 409 | `conflict` | 乐观并发版本不符(move `version` / `If-Match`);默认视图重复设置 |
 | 422 | `wip_limit_exceeded` | 硬 WIP 限制下拖入已满列(`details` 含 `group_key`/`limit`/`count`) |
+| 422 | `query_cost_exceeded` | 视图查询估算成本/`statement_timeout` 超限(README §6.14,建议收窄条件) |
 | 429 | `rate_limited` | 限流 |
 | 501 | `not_implemented` | 请求 `layout IN ('timeline','table')` 的渲染 |
 
 ### 3.4 分页、鉴权与安全
 
-- **分页**:视图列表游标分页,游标编码 `(position, id)`;视图内 issue 执行后亦游标分页——分组场景用**整体游标 + 每组 `cursor`/`count` 元信息**(与 issue.md 列表一致),响应顶层为 `{ "groups": [...], "next_cursor": ... }`。
+- **分页(README §6.14 整体游标契约)**:视图列表游标分页,游标编码 `(position, id)`;视图内 issue 执行后亦游标分页——**分组场景统一整体游标**:响应顶层为 `{ "groups": [{key,label,count,wip?,data}], "next_cursor": ... }`,`count` 为组内总数,`data` 为当前页切片;**不得**在响应中给每组独立 `cursor`(与 issue.md 统一此契约)。
+- **过滤限制(README §6.14)**:视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底;超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded`(建议收窄条件)。
 - **鉴权**:私有视图仅 `owner_member_id` 可见可写;`shared` 视图工作区成员可读,写需 owner 或具备共享视图写权限(工作区 admin / 项目 lead)。执行视图(`GET /views/{id}/issues`)时,服务端**再次**按成员可见范围裁剪 issues(不暴露其无权 issue)。
 - **乐观并发**:`PATCH /views/{id}` 与拖拽 `PATCH /issues/{id}` 支持 `If-Match: <updated_at>`;版本不符返回 `409 conflict`,客户端拉取最新后重试或提示。
 - **JSONB 安全**:`filters`/`sort` 经白名单 Pydantic schema 校验,`field` 必须落在内置字段集或为合法 `field_def_id`;查询编译时一律参数化绑定,杜绝从 JSON 拼接 SQL。
@@ -367,13 +451,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 ### 3.5 WebSocket 增量合并事件
 
-- **连接**:`wss://<host>/ws?token=<bearer>`;建立后服务端推送的所有帧统一为:
+> 实时契约**以 README §6.7 为唯一权威**:`seq` 为**频道内**单调递增(非全局)、`realtime_events` 持久重放、`resume_from` 重连补齐、游标过旧下发 `resync_required` + REST 对账水位、订阅逐资源授权。本节仅描述看板视图的频道与增量合并动作,不重复定义 seq 语义。
+
+- **连接**:`wss://<host>/ws`(握手鉴权;**禁止在 URL query 中传 token**,使用 WebSocket 子协议或首帧认证,README §6.7/auth.md);建立后服务端推送的所有帧统一为(`seq` 为频道内单调,README §6.7):
 ```jsonc
 { "seq": 1042, "type": "issue.updated", "topic": "view:{view_id}",
   "ts": "2026-07-24T10:00:01Z", "data": { /* 见各事件 */ } }
 ```
 - **订阅**:客户端发 `{ "op": "subscribe", "topic": "view:{view_id}" }`;亦可订阅底层 `workspace:{ws}:issues` 由客户端自行按视图过滤。
-- **重放**:客户端记录最大 `seq`;断线重连后发 `{ "op": "resume", "resume_from": <last_seq+1> }`,服务端从事件日志补发缺口;缺口过旧(超出保留窗口)则回 `{ "op": "resync" }`,客户端整板重拉 `GET /views/{id}/issues`。
+- **重放(README §6.7)**:客户端记录频道内最大 `seq`;断线重连后发 `{ "op": "resume", "resume_from": <last_seq+1> }`,服务端从 `realtime_events` 顺序补发缺口;`resume_from` 早于保留窗口则回 `{ "op": "resync_required", "watermark": <最大 seq>, "rest": "<对账 REST URL>" }`,客户端整板重拉 `GET /views/{id}/issues` 对账后无感恢复。
 - **事件清单**(`<entity>.<action>`):
 
 | 事件 | data(关键字段) | 客户端增量动作 |
@@ -385,7 +471,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | `view.updated` | 视图配置 diff | 配置变更:若 filters/group/sort 变 → 整板重拉;仅 card_fields 变 → 局部刷新 |
 | `presence` | `view_id`、成员列表(可选) | 渲染协作者头像 |
 
-- **增量合并原则**:收到 `issue.*` 后,客户端用**当前视图 filters** 在本地重判该 issue 归属,做单卡插入/移动/移除,**禁止整板刷新**(仅 `view.updated` 改到投影规则或 `resync` 时才整板重拉)。
+- **增量合并原则**:收到 `issue.*` 后,客户端用**当前视图 filters** 在本地重判该 issue 归属,做单卡插入/移动/移除,**禁止整板刷新**(仅 `view.updated` 改到投影规则或收到 `resync_required` 时才整板重拉)。
 - **降级**:WS 断开 → 30s 轮询 `GET /views/{id}/issues?since=<最大 updated_at>` 增量拉取。
 
 ---
@@ -425,25 +511,25 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 **跨列拖拽(改状态)**
 1. 鼠标按住卡片 → 拖向目标列(目标列高亮;若 WIP 将超限,列头实时预警:warn 黄色、block 红色 + 禁用落点)。
 2. 松手 → **乐观落位**:UI 立即把卡片渲染进目标列。
-3. 计算 `position`(列内插入点)→ 发 `PATCH /issues/{id}` 携 `status_id`(=`column_target_status[to_group]`)+ `position` + `If-Match: <卡片 updated_at>`。
-4. 成功 → 用响应的新 `updated_at` 更新本地版本;失败处理:
+3. 计算 `position`(列内插入点)→ 发 **`POST /views/{id}/moves`** 携 `{ issue_id, to_group_key, position, version }`(原子 move 命令,见 §3.2;服务端单事务完成乐观锁 + advisory lock + WIP 计数 + `status_id` 变更 + `view_issue_positions` upsert)。**不再用 `PATCH /issues/{id}` 拖拽**——它不带 `view_id`,无法执行视图级 WIP。
+4. 成功 → 用响应的新 `version`/`updated_at` 更新本地版本;失败处理:
    - `422 wip_limit_exceeded`(block)→ **卡片弹回原列** + toast 提示。
    - `409 conflict`(他人同时改了该卡)→ 拉最新 issue,按服务端结果收敛(后到事件覆盖)。
 
-**列内排序(浮点中点法)**
+**列内排序(浮点中点法,写入 `view_issue_positions`)**
 - 拖到两张相邻卡片 `A`(position=pA)与 `B`(pB)之间 → 新 `position = (pA + pB) / 2`。
 - 拖到列顶 → `position = first.position - 1.0`;拖到列底 → `position = last.position + 1.0`。
-- 仅 `PATCH position`(状态不变);服务端广播 `issue.moved`。
-- **精度耗尽**:当 `|pB - pA|` 小于阈值(如 `1e-6`,REAL 精度逼近)时,触发该列**整列重排**——服务端按当前顺序重新分配整数间隔序列(如 1.0, 2.0, 3.0 …),广播全列 `issue.moved`。
+- 经 `POST /views/{id}/moves`(同列,`to_group_key` 不变)或 `POST /views/{id}/reorder` upsert **当前视图的** `view_issue_positions(view_id, issue_id, group_key, position)`;**不写 `issues.position`**——一个视图的排序不污染其它视图(README §6.14)。服务端广播 `issue.moved`(payload 带 `view_id`)。
+- **精度耗尽**:当 `|pB - pA|` 小于阈值(如 `1e-6`,REAL 精度逼近)时,触发该视图该列**整列重排**——服务端按当前顺序重新分配整数间隔序列(如 1.0, 2.0, 3.0 …)写回 `view_issue_positions`,广播全列 `issue.moved`。
 
-**实时一致性**:服务端按 `updated_at` 版本仲裁;客户端丢弃 `updated_at` 旧于本地缓存的事件,保证多人同时拖同一卡片时 UI 平滑收敛到最新写。
+**实时一致性**:服务端按 `version`/`updated_at` 版本仲裁;客户端丢弃 `updated_at` 旧于本地缓存的事件,保证多人同时拖同一卡片时 UI 平滑收敛到最新写。
 
 ### 4.4 WIP 软警告 / 硬阻止
 
 | enforcement | 拖入将超限时 | 落位后超限 | 视觉 |
 |-------------|--------------|-----------|------|
 | `warn`(软) | 允许拖入,列头预警 | 卡片正常落位 | 列头红色徽章 `6/5` + 顶部 toast 提示 |
-| `block`(硬) | 落点禁用,提示"已达上限" | `PATCH` 返回 `422` → 卡片弹回 | 列头红色 + 拖拽过程禁用高亮 |
+| `block`(硬) | 落点禁用,提示"已达上限" | move 命令(`POST /views/{id}/moves`)在事务内计数后返回 `422 wip_limit_exceeded` → 卡片弹回 | 列头红色 + 拖拽过程禁用高亮 |
 
 - 列头计数实时 = 当前可见卡片数 / WIP `limit`;超限 warn 黄、block 红。
 - (可选)超限时通知列负责人——属通知模块,本模块只发事件。
@@ -466,11 +552,13 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 - [ ] 可创建/读取/更新/删除/复制视图;`layout`/`visibility` 取值受 CHECK 约束,非法值返回 `400`。
 - [ ] 视图配置(filters/group_by/sub_group_by/sort/display_fields/board_settings)以 JSONB 持久化,**不持久化任何 issue 集合**。
-- [ ] `GET /views/{id}/issues` 按配置实时合成结果,返回 `groups` + 每组 `count`/`wip`/`cursor` + 顶层 `next_cursor`。
+- [ ] `GET /views/{id}/issues` 按配置实时合成结果,返回 `groups` + 每组 `count`/`wip` + **顶层整体 `next_cursor`**;**响应不含每组独立 cursor**(README §6.14)。
+- [ ] **过滤限制(README §6.14)**:视图 filters 嵌套 >3 或条件 >20 返回 `400 filter_too_complex`;成本/`statement_timeout` 超限返回 `422 query_cost_exceeded`。
 - [ ] 看板默认按 `state_category` 分列;可切换 `group_by=status/assignee/priority/project/label/自定义字段`,列 key/label/拖入改写目标符合 §2.4 映射表。
 - [ ] 拖拽 `group_by=state_category` 时,`status_id` 改为目标 category 的默认 status(`column_target_status` 映射正确)。
-- [ ] 列内拖拽用浮点中点法计算 `position`;精度耗尽触发整列重排且 UI 收敛正确。
-- [ ] WIP `warn`:超限允许拖入 + 红色徽章 + toast;WIP `block`:超限拖入返回 `422 wip_limit_exceeded` 且卡片弹回原列。
+- [ ] **看板拖拽走原子 move 命令** `POST /views/{id}/moves`(乐观锁 + advisory lock + WIP 计数 + 状态变更 + `view_issue_positions` upsert,单事务);`PATCH /issues/{id}` 不用于拖拽。
+- [ ] **每视图排序隔离(README §6.14)**:列内拖拽用浮点中点法计算 `position` 并写入**当前视图**的 `view_issue_positions`;**在视图 A 拖动卡片不改变视图 B 的顺序**;无保存排序的视图回退 `issues.position` 规范顺序;精度耗尽触发该视图整列重排且 UI 收敛正确。
+- [ ] WIP `warn`:超限允许拖入 + 红色徽章 + toast + `wip_exceeded` 事件;WIP `block`:超限拖入(move 命令事务内计数)返回 `422 wip_limit_exceeded` 且卡片弹回原列。
 - [ ] 折叠列、卡片字段显示(`card_fields`)、列底快速创建均生效;快速创建的 issue 继承该列分组值。
 - [ ] 列表视图支持可配置列、列头排序、行内编辑、多选批量(走 `POST /issues/bulk`)。
 - [ ] 视图作用域鉴权:私有仅 owner 可见;共享工作区成员可读;写需 owner/共享写权限;执行视图时按成员可见范围裁剪 issues。
@@ -480,7 +568,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 ### 5.2 实时一致性验收
 
-- [ ] WebSocket 帧含单调递增 `seq`;断线重连 `resume_from` 可重放缺口,过旧触发 `resync` 整板重拉。
+- [ ] WebSocket 遵循 README §6.7(频道内单调 `seq`、`realtime_events` 重放);断线重连 `resume_from` 可重放缺口,过旧触发 `resync_required` + REST 对账水位后整板重拉。
 - [ ] 他人改状态/拖拽/改字段/新建/删除,本地看板按视图 filters **增量合并单卡**(插入/移动/移除),非整板刷新。
 - [ ] `issue.updated` 触发本地按 filters 重判:仍命中就地更新/跨列移动,不再命中移除。
 - [ ] 拖拽乐观更新 + `If-Match: <updated_at>` 版本校验;`409` 时拉最新收敛,多人同拖同卡 UI 平滑收敛到最新写。
@@ -490,9 +578,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 ### 5.3 非功能验收
 
-- [ ] **拖拽性能**:单次拖拽从松手到乐观落位 < 50ms(本地);服务端 `PATCH` P95 < 200ms;1000 张卡片的列滚动帧率 ≥ 50fps(虚拟滚动)。
+- [ ] **拖拽性能**(README §10 基准下构成验收标准):单次拖拽从松手到乐观落位 < 50ms(本地);服务端 move 命令 P95 指标按 README §10 标注冷/热缓存;1000 张卡片的列滚动帧率 ≥ 50fps(虚拟滚动)。
 - [ ] **增量合并性能**:单条实时事件本地处理 < 16ms,不触发整板 re-render。
-- [ ] **查询性能**:执行视图(命中 issue.md 索引)在 10 万 issue 工作区下 P95 < 500ms;自定义字段筛选命中 GIN 索引。
-- [ ] **一致性**:并发拖拽同一卡片最终一致(服务端 `updated_at` 仲裁,无丢失更新)。
+- [ ] **查询性能**(README §10 基准):执行视图(命中 issue.md 索引)在 10 万 issue 工作区、热缓存下 P95 < 500ms;自定义字段筛选命中 GIN 索引。
+- [ ] **WIP 并发不穿透(集成测试)**:`enforcement=block`、`limit=N` 的列,并发(>N)拖入同一列时,move 命令经 `pg_advisory_xact_lock(hashtext('wip:'||view_id||':'||group_key))` 串行化 + 事务内计数,**最终列内成员数 ≤ N**,多余拖入返回 `422 wip_limit_exceeded`,无并发穿透(README §9 乐观冲突 T9 同类)。
+- [ ] **一致性**:并发拖拽同一卡片最终一致(服务端 `version`/`updated_at` 仲裁,无丢失更新,README §9 T9)。
+- [ ] **跨租户隔离(README §9 T1)**:`view_issue_positions` / `views` 的复合 FK 拒绝跨 workspace 引用(视图引用别区 issue/member 在 INSERT 被拒);A 区凭证访问 B 区视图返回 403/404。
 - [ ] **安全**:filters/sort 经白名单校验 + 参数化绑定,无 SQL 注入;跨工作区/越权访问返回 `403`/`404`。
 - [ ] **限流**:视图执行接口有 rate limit,超限返回 `429`。

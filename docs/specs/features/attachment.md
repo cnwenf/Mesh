@@ -9,19 +9,23 @@
 | 技术栈 | FastAPI + SQLAlchemy 2.x + PostgreSQL + 对象存储(私有桶 + 预签名 URL) |
 | 状态 | Draft |
 
-> **全局一致性锚点(本 Spec 全程遵循)**
-> 1. PostgreSQL;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。
-> 2. 附件 `uploader_id` 引用**统一 `members.id`**(人类与 agent 同表,以 `members.member_type ∈ {human, agent}` 区分);另存冗余 `uploader_kind` 便于免 JOIN 渲染。
-> 3. REST 前缀 `/api/v1`;`Authorization: Bearer <token>`;游标分页响应统一 `{"data": [...], "next_cursor": "...", "has_more": bool}`;统一错误信封 `{"error": {"code","message","details"}}`。
-> 4. 实时走 WebSocket `/ws`,事件名 `<entity>.<action>`,带 `seq` 重放;附件处理结果以 `attachment.processed` 事件下发。
-> 5. ORM 采用 SQLAlchemy 2.x 声明式约定(`Mapped` / `mapped_column`)。
+> **全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)**
+> 1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。
+> 2. **成员**:成员模型以 README §6.1 为唯一权威——附件 `uploader_id` 引用**统一 `members.id`**(人类与 agent 同册,人类/agent 由 `members.member_type` 判别)。**本模块不存 `uploader_kind` 等 `*_type`/`*_kind` 判别列**;API 响应可携带服务端 JOIN `members` 计算出的 `member_type` 快照(标注"快照,真源为 members")。
+> 3. **多租户**:跨模块外键一律按 README §6.2 建复合 FK + 目标表 `UNIQUE(workspace_id, id)`(`attachments` 建 `UNIQUE(workspace_id, id)`,`attachment_links.attachment_id` 复合引用)。
+> 4. **接口**:REST 前缀 `/api/v1`;`Authorization: Bearer <token>`;**成功包络 / 游标分页 / 错误信封 / 幂等写 / HTTP 语义以 README §6.14 为唯一权威**(列表 `{"data":[...],"next_cursor":<opaque|null>}`,`next_cursor=null` 表示末页;错误 `{"error":{"code","message","details"}}`),本 Spec 仅列本模块具名错误码。
+> 5. **实时**:统一实时契约见 README §6.7(频道内 `seq`、`realtime_events` 持久重放、`resume_from`/`resync_required`);事件名 `<entity>.<action>`;附件处理结果以 `attachment.processed` 事件下发。
+> 6. **队列 / 投递**:隔离区扫描经 transactional outbox(README §6.6)移交附件处理 worker;副作用幂等键见 README §6.5。
+> 7. **ORM**:SQLAlchemy 2.x 声明式约定(`Mapped` / `mapped_column`)。
 
 > **核心设计(必须采纳)**
 > - **三阶段直传**:申请签名 URL → 客户端直传对象存储 → 回调 `complete`;字节流**不经过应用服务器**。
-> - **两阶段状态机**:`upload_status: pending → completed`(另有 `uploading`/`failed`/`expired`),配合 `expires_at` 清理「传了没确认」的孤儿对象。
-> - **MIME/大小以服务端嗅探为准**:客户端声明仅作预校验,安全判定一律服务端 + 对象存储探测。
+> - **两条正交状态机**:`upload_status`(直传:`pending → uploading → completed`,另有 `failed`/`expired`,配合 `expires_at` 清理孤儿对象)与 `scan_status`(隔离区:`pending → clean | infected | error | skipped`)。
+> - **隔离区闸门(CRITICAL)**:`complete` **不代表附件可用**——它只置 `upload_status='completed'` 并把对象移交**隔离区管线**(`scan_status='pending'` 即隔离中);真正的 MIME 嗅探(magic bytes)、全量 SHA-256 校验、病毒扫描由**附件处理 worker**(README §2.2)服务端读取对象字节后完成。**下载/预览/缩略图仅在 `scan_status IN ('clean','skipped')` 时开放**,否则按 §3.4 拒绝。
+> - **MIME/大小/哈希以服务端为准**:客户端声明仅作预校验;真实 MIME 由 worker 从 magic bytes 嗅探(不信客户端头、不靠 HEAD),SHA-256 由 worker 全量计算并与客户端声明比对。
 > - **私有对象 + 短时效签名下载**:桶私有,任何访问经签名 URL 或后端代理;签名时效 60s 量级、绑定方法与对象键。
-> - **agent 与人类共用模型**:仅以 `uploader_kind`(镜像 `members.member_type`)区分,agent runtime 用 API token 走同一套接口。
+> - **去重独立记录**:内容去重只**共享 blob**(同 `storage_key`,按 `content_hash` 内容寻址),但**始终新建独立 `attachments` 行与独立 `attachment_links`**,绝不复用同一附件记录(见 §3.2 / §4.6)。
+> - **agent 与人类共用模型**:`uploader_id` 统一指向 `members.id`,agent runtime 用 API token 走同一套接口;人类/agent 区分仅为 API 响应中的计算 `member_type` 快照(README §6.1),不落库。
 
 ---
 
@@ -70,11 +74,13 @@
 ### 2.1 ER 关系
 
 ```
-workspaces 1─* attachments 1─* attachment_links *─1 (issues | comments)
+workspaces 1─* attachments 1─* attachment_links *─1 (issues | comments | chat_messages)
 attachments 1─1 upload_sessions (可选,分块上传台账)
 workspaces 1─1 attachment_quotas (可选,配额)
 
-attachments.uploader_id → members.id (member_type ∈ {human, agent})
+attachments.uploader_id ─复合 FK─► members(workspace_id, id)   (人类/agent 同册,判别 JOIN members.member_type)
+attachment_links.attachment_id ─复合 FK─► attachments(workspace_id, id)
+attachments(scan_status='pending') ──outbox/ SKIP LOCKED──► 附件处理 worker(README §2.2:magic-byte 嗅探 + 全量 SHA-256 + AV 扫描)
 ```
 
 ### 2.2 `attachments` — 附件主表
@@ -83,18 +89,18 @@ attachments.uploader_id → members.id (member_type ∈ {human, agent})
 |------|------|-------------|------|
 | `id` | uuid | PK | 附件 ID |
 | `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 多租户隔离 |
-| `uploader_id` | uuid | NOT NULL, FK→members.id | 上传者(人类/agent,源为 `members.member_type`) |
-| `uploader_kind` | text | NOT NULL, CHECK in ('human','agent') | 冗余镜像 `members.member_type`,免 JOIN 渲染(核心差异:agent 与人类共用模型,仅以此区分) |
+| `uploader_id` | uuid | NOT NULL,**复合 FK `(workspace_id, uploader_id) → members(workspace_id, id)`** | 上传者(人类/agent 同册;人类/agent 判别 JOIN `members.member_type`,本表不存判别列,README §6.1/§6.2) |
 | `file_name` | text | NOT NULL | 原始文件名(含扩展名) |
-| `file_size` | bigint | NOT NULL, CHECK (file_size > 0) | 字节数(以 complete 时对象存储探测为准) |
-| `mime_type` | text | NOT NULL | **服务端嗅探/对象存储探测**的真实 MIME,非客户端声明 |
-| `extension` | text | NULL | 归一化扩展名 |
-| `content_hash` | text | NULL | SHA-256(去重 + 完整性校验) |
+| `file_size` | bigint | NOT NULL, CHECK (file_size > 0) | 字节数(以**附件处理 worker 服务端读取对象字节核验**为准;`complete` 的 HEAD 仅作存在性/大小初校验) |
+| `mime_type` | text | NULL | **worker 从 magic bytes 嗅探**的真实 MIME(非客户端声明、非 HEAD);隔离期可为 NULL,放行后写回 |
+| `extension` | text | NULL | 归一化扩展名(worker 写回) |
+| `content_hash` | text | NULL | SHA-256;**秒传/去重的内容寻址键**(同 hash 共享同一 `storage_key`);worker 服务端全量计算并与客户端声明比对 |
 | `storage_provider` | text | NOT NULL DEFAULT 's3' | 对象存储提供商标识(中性命名,不绑定厂商) |
 | `storage_bucket` | text | NOT NULL | 桶名 |
 | `storage_key` | text | NOT NULL | 对象键(`ws/<workspace_id>/<uuid>/<sanitized-name>`,含 UUID 段不可枚举) |
-| `upload_status` | text | NOT NULL DEFAULT 'pending', CHECK in ('pending','uploading','completed','failed','expired') | 直传两阶段状态机 |
-| `scan_status` | text | NOT NULL DEFAULT 'pending', CHECK in ('pending','clean','infected','error','skipped') | 扫描状态(可选) |
+| `upload_status` | text | NOT NULL DEFAULT 'pending', CHECK in ('pending','uploading','completed','failed','expired') | 直传状态机(字节是否传完);**`completed` 仅代表直传完成,不代表可用** |
+| `scan_status` | text | NOT NULL DEFAULT 'pending', CHECK in ('pending','clean','infected','error','skipped') | **隔离区状态机(必选)**:`pending`=隔离中(不可下载),`clean`/`skipped`=放行可见,`infected`=永久拒绝,`error`=嗅探/校验/扫描失败(重试上限)。`skipped` 仅限策略显式放行的纯文本类(如 `.txt`/`.log`/`.csv`,见 §3.6) |
+| `scan_detail` | jsonb | NULL | 扫描结果明细 `{sniffed_mime, sha256, hash_matches, av_engine, av_result, error_code}`;`error` 时含 `HASH_MISMATCH` 等码 |
 | `is_image` | boolean | NOT NULL DEFAULT false | 冗余,加速渲染分支 |
 | `image_width` | int | NULL | 图片宽(像素) |
 | `image_height` | int | NULL | 图片高 |
@@ -103,18 +109,34 @@ attachments.uploader_id → members.id (member_type ∈ {human, agent})
 | `deleted_at` | timestamptz | NULL | 软删除 |
 | `created_at` / `updated_at` | timestamptz | NOT NULL DEFAULT now() | |
 
-**状态机(必须实现):**
+**两条正交状态机(必须实现):**
+
+`upload_status`(直传是否完成):
 ```
-pending ──(客户端开始直传)──> uploading ──(complete 校验通过)──> completed
+pending ──(客户端开始直传)──> uploading ──(complete:HEAD 存在性/大小初校验通过)──> completed
    │                            │
    └──(超时未确认 expires_at)──> expired(后台清理任务置位并删对象)
-                                └──(complete 校验失败 / abort)──> failed
+                                └──(complete 初校验失败 / abort)──> failed
 ```
-- `complete` 仅允许从 `pending`/`uploading` 进入 `completed`;对已 `completed` 再 `complete` 返回 `CONFLICT`。
+- `complete` 仅允许从 `pending`/`uploading` 进入 `completed`;对已 `completed` 再 `complete` 返回 `409 conflict`。
+- **`upload_status='completed'` 不代表附件可用**:`complete` 同时把对象移交隔离区管线,可用性由 `scan_status` 决定。
 
-**关键索引:**
+`scan_status`(隔离区 → 放行,由附件处理 worker 驱动,README §2.2):
+```
+                      ┌─(magic-byte 嗅探 + 全量 SHA-256 比对一致 + AV clean)─> clean(放行,可见)
+pending(隔离中)──────┼─(纯文本白名单类,策略显式免扫)─────────────────────> skipped(放行,可见)
+  由 complete 置入     ├─(命中恶意内容)───────────────────────────────────> infected(永久拒绝 + 告警)
+                      └─(HASH_MISMATCH / 嗅探失败 / 扫描异常,重试上限)─────> error(拒绝,可重投)
+```
+- **可见性闸门(CRITICAL)**:下载 / 预览 / 缩略图端点**仅当 `scan_status IN ('clean','skipped')` 才放行**;`pending`(隔离中)→ `403 scan_pending`,`infected` → `403 scan_infected`(并通知上传者与管理员),`error` → `403 scan_pending`(扫描未完成,语义同隔离中,明细见 `scan_detail`)。
+- worker 以 `FOR UPDATE SKIP LOCKED` 扫 `attachments(scan_status='pending')`(README §2.2);崩溃后重扫,`error` 重试上限后告警。
+
+**关键索引与约束:**
+- **`UNIQUE (workspace_id, id)`** — 供 `attachment_links.attachment_id` 复合 FK 引用(README §6.2)。
 - `idx_attachments_uploader (workspace_id, uploader_id, created_at)`。
-- `idx_attachments_hash (workspace_id, content_hash)` — 去重/秒传查询。
+- `idx_attachments_hash (workspace_id, content_hash)` — 去重/秒传查询(按 `content_hash` 找同 blob)。
+- `idx_attachments_storage_key (workspace_id, storage_key)` — GC 时按 `storage_key` 统计仍引用该 blob 的存活行(见 §4.6)。
+- 部分索引 `idx_attachments_quarantine ON attachments(created_at) WHERE scan_status = 'pending'` — 附件处理 worker SKIP LOCKED 扫隔离区(README §2.2)。
 - 部分索引 `idx_attachments_pending ON attachments(expires_at) WHERE upload_status <> 'completed'` — 清理任务扫描未完成上传。
 - 部分索引 `idx_attachments_active ON attachments(workspace_id, created_at) WHERE deleted_at IS NULL`。
 
@@ -125,23 +147,24 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `id` | uuid | PK | |
-| `workspace_id` | uuid | NOT NULL, FK→workspaces.id | |
-| `attachment_id` | uuid | NOT NULL, FK→attachments.id | |
-| `linked_type` | text | NOT NULL, CHECK in ('issue','comment') | 关联实体类型 |
+| `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 隔离(逻辑外键行也必须携带,README §6.2) |
+| `attachment_id` | uuid | NOT NULL,**复合 FK `(workspace_id, attachment_id) → attachments(workspace_id, id)`** | 引用附件(README §6.2) |
+| `linked_type` | text | NOT NULL, CHECK in ('issue','comment','chat_message') | 关联实体类型(issue / comment / 聊天消息,统一关联表;chat-session.md 引用) |
 | `linked_id` | uuid | NOT NULL | 关联实体 ID |
 | `display` | text | NOT NULL DEFAULT 'card', CHECK in ('inline','card') | 图片内联 / 文件卡片 |
 | `position` | int | NOT NULL DEFAULT 0 | 排序 |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() | |
 
 **唯一约束:** `uq_attachment_link (attachment_id, linked_type, linked_id)`。
-**关键索引:** `idx_links_target (workspace_id, linked_type, linked_id, position)` — 拉取某 issue/comment 的附件。
+**关键索引:** `idx_links_target (workspace_id, linked_type, linked_id, position)` — 拉取某 issue/comment/chat_message 的附件。
 
 ### 2.4 `upload_sessions` — 分块上传台账(可选)
 
 | 字段 | 类型 | 约束 | 说明 |
 |------|------|------|------|
 | `id` | uuid | PK | |
-| `attachment_id` | uuid | NOT NULL, FK→attachments.id | |
+| `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 隔离(供复合 FK,README §6.2) |
+| `attachment_id` | uuid | NOT NULL,**复合 FK `(workspace_id, attachment_id) → attachments(workspace_id, id)`** | |
 | `upload_id` | text | NOT NULL | 对象存储侧 multipart upload id |
 | `part_size` | int | NOT NULL | 分片大小(字节) |
 | `parts` | jsonb | NOT NULL DEFAULT '[]' | 各分片状态 `[{part_number, etag, uploaded}]` |
@@ -162,8 +185,9 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 
 ### 2.6 跨模块外键说明
 
-- `uploader_id` → `members.id`(member Spec);`uploader_kind` 在 `complete` 落库时由服务端读 `members.member_type` 填充,作为渲染快照(真源仍是 members)。
-- `workspace_id` → `workspaces.id`(workspace Spec);`attachment_links.linked_id` 逻辑指向 `issues.id`/`comments.id`(以 `linked_type` 区分;跨模块逻辑外键,不建物理 FK 以避免多态约束复杂度,删除一致性由应用层 + 软删除保证)。
+- `uploader_id` → **复合 FK `members(workspace_id, id)`**(member Spec,README §6.1/§6.2)。人类/agent 判别一律 JOIN `members.member_type`;**本模块不存 `uploader_kind` 判别列**,API 响应中的 `member_type` 为服务端计算快照(真源为 members)。
+- `attachment_links.attachment_id` → **复合 FK `attachments(workspace_id, id)`**;`upload_sessions.attachment_id` 同理。
+- `workspace_id` → `workspaces.id`(workspace Spec);`attachment_links.linked_id` 为**多态逻辑外键**,指向 `issues.id` / `comments.id` / `chat_messages.id`(以 `linked_type` 区分;不建物理 FK 以避免多态约束复杂度)。**逻辑外键行必须携带 `workspace_id`**,删除一致性由软删除 + 服务层保证,跨租户用例纳入集成测试矩阵(README §9 T1)。
 
 ---
 
@@ -174,18 +198,18 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 
 ### 3.0 分页与鉴权约定
 
-- **游标分页**:列表端点(`GET /issues/{id}/attachments`、`GET /comments/{id}/attachments`)统一返回 `{"data": [...], "next_cursor": "...", "has_more": bool}`;游标为不透明字符串(内部基于 `position + id` 的 keyset)。
-- **鉴权**:读附件需对宿主 issue/comment 有读权限;写(申请上传/删除)需对应写权限;agent runtime 用 API token,权限以其所属 agent 身份校验。
-- **幂等**:`complete`/`abort` 以 `upload_status` 状态机做并发保护;同一 `upload-request` 可携带客户端生成的幂等键避免重复建记录(可选)。
-- **速率限制**:`upload-requests` 与 `download` 按用户/IP 限流(见 auth Spec),触发返回 `RATE_LIMITED` 含 `Retry-After`。
+- **包络 / 分页 / 错误信封**:统一以 README §6.14 为唯一权威。列表端点(`GET /issues/{id}/attachments`、`GET /comments/{id}/attachments`)返回 `{"data": [...], "next_cursor": <opaque|null>}`,`next_cursor=null` 表示末页;游标为不透明字符串(内部基于 `position + id` 的 keyset);错误信封 `{"error":{"code","message","details"}}`。
+- **鉴权**:读附件需对宿主 issue/comment/chat_message 有读权限;写(申请上传/删除)需对应写权限;agent runtime 用 API token,权限以其所属 agent 身份校验。
+- **幂等**:`complete`/`abort` 以 `upload_status` 状态机做并发保护;创建/动作类端点支持 `Idempotency-Key` 请求头(README §6.5/§6.14),同一 `upload-request` 可携带客户端生成的幂等键避免重复建记录。
+- **速率限制**:`upload-requests` 与 `download` 按用户/IP 限流(见 auth Spec),触发返回 `429 rate_limited` 含 `Retry-After`(README §6.14)。
 
 ### 3.1 端点清单
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/attachments/upload-requests` | 申请上传:校验类型/大小/配额,建 `pending` 记录,返回签名 PUT URL(或一组分片签名 URL) |
-| POST | `/api/v1/attachments/{id}/complete` | 直传成功后回调:校验对象存在与大小、嗅探 MIME、触发缩略图/扫描,置 `completed` |
-| POST | `/api/v1/attachments/{id}/abort` | 取消上传,清理对象 |
+| POST | `/api/v1/attachments/{id}/complete` | 直传成功后回调:校验对象存在与大小、嗅探 MIME、触发缩略图/扫描,置 `completed`(**仅上传申请者本人可操作**,服务端校验 `uploader_id` = 当前 principal) |
+| POST | `/api/v1/attachments/{id}/abort` | 取消上传,清理对象(**仅上传申请者本人可操作**) |
 | GET | `/api/v1/attachments/{id}` | 取附件元数据 |
 | DELETE | `/api/v1/attachments/{id}` | 软删除附件 |
 | GET | `/api/v1/attachments/{id}/download` | 获取**短时效签名下载 URL**,或 302 重定向;亦可后端代理流式下载 |
@@ -229,7 +253,7 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 **服务端签发前校验(必须实现):**
 - 扩展名/MIME 是否在允许清单;MIME 与扩展名是否匹配(防伪造)。
 - `file_size` 是否超单文件上限与 workspace 剩余配额(配额前置校验,避免传完才发现超限浪费带宽)。
-- `content_hash` 命中已有附件 → 「秒传」(直接复用对象、建关联,返回 `upload_status='completed'`)。
+- `content_hash` 命中同 workspace 已有 blob → **「秒传」:复用同一对象(同 `storage_key`,按 `content_hash` 内容寻址),跳过字节直传;但始终新建一条独立 `attachments` 行(独立 `id`、独立 `uploader_id`)与独立 `attachment_links`,绝不复用/改写已有附件记录**。新行 `upload_status='completed'`;`scan_status` 沿用该 `content_hash` blob 的既有扫描结论(已 `clean` 直接放行,否则随隔离区管线置 `pending` 待扫)。
 - 校验调用者对 `link_to` 目标有写权限。
 - 写 `pending` 记录并设 `expires_at`(默认 15 分钟)。
 
@@ -241,67 +265,80 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 ```
 
 **服务端动作(必须实现,以对象存储为准,不信客户端):**
-1. 向对象存储 HEAD 对象,确认存在且大小一致。
-2. 服务端**嗅探真实 MIME**(不信客户端 `Content-Type`),写回 `mime_type`/`extension`/`is_image`;读 `members.member_type` 填 `uploader_kind`。
-3. 校验 `content_hash`(若提供)匹配,不匹配返回 `HASH_MISMATCH`。
-4. 图片:异步生成缩略图(sm/md/lg)写入 `thumbnail_keys`。
-5. 触发病毒扫描(异步,`scan_status`)。
-6. `upload_status='completed'`,清空 `expires_at`;若带 `link_to`,建立 `attachment_links`。
+1. 向对象存储 **HEAD 对象,仅作存在性与大小初校验**(HEAD **无法**做真实 MIME 嗅探或 SHA-256 校验)。大小不符返回 `422 hash_mismatch`/`409 conflict` 视情形。
+2. 置 `upload_status='completed'`,清空 `expires_at`;若带 `link_to`,建立 `attachment_links`(独立行)。
+3. **移交隔离区管线**:`scan_status` 保持/置为 `'pending'`(隔离中),`complete` **不声明附件可用、不写最终 MIME/缩略图**。同事务写 `outbox_events`(`attachment.scan_requested`,README §6.6),由**附件处理 worker**(README §2.2)以 SKIP LOCKED 领取处理。
+4. **附件处理 worker(服务端读取对象字节,异步)**:
+   - 从 **magic bytes 嗅探真实 MIME**(不信客户端 `Content-Type`、不靠 HEAD),写回 `mime_type`/`extension`/`is_image`;
+   - **全量计算 SHA-256** 并与客户端声明 `content_hash` 比对:不匹配 → `scan_status='error'`,`scan_detail.error_code='HASH_MISMATCH'`(告警 + 经 `attachment.processed` 下发);
+   - 运行病毒扫描 → `scan_status ∈ clean | infected | error | skipped`(`skipped` 仅限 §3.6 策略显式放行的纯文本白名单类);
+   - 图片在 `scan_status` 放行后生成缩略图(sm/md/lg)写入 `thumbnail_keys`。
+5. 处理完成经 `attachment.processed`(README §6.7)下发最终 `mime_type`/`scan_status`/`thumbnail_url`。
+6. API 响应中的上传者 `member_type` 为服务端 JOIN `members` 计算的快照(不落库,README §6.1)。
 
-**响应体(200):**
+**响应体(200,仅代表直传完成、对象进入隔离区):**
 ```json
 {
   "data": {
     "id": "att-1",
     "upload_status": "completed",
-    "mime_type": "image/png",
-    "is_image": true,
-    "image_width": 1280, "image_height": 800,
-    "thumbnail_url": "https://<object-storage>/.../md.png?<signature>",
-    "links": [{"type": "comment", "id": "c-abc"}]
+    "scan_status": "pending",
+    "member_type": "human",
+    "links": [{"type": "comment", "id": "c-abc"}],
+    "note": "扫描中,完成后开放下载"
   }
 }
 ```
+> `mime_type`/`is_image`/`thumbnail_url` 等由 worker 异步写回,经 `attachment.processed` 下发;`member_type` 为计算快照(真源为 members)。
 
 ### 3.4 下载鉴权(私有对象 + 短时效签名)
 
-两种方式(默认 A):
-- **A:签名下载 URL**:`GET /attachments/{id}/download` 校验调用者读权限 → 生成短时效(默认 60s)签名 GET URL → 返回或 302。客户端直连对象存储下载,省后端带宽。
-- **B:后端代理**:后端校验权限后流式返回字节(便于精确审计、兼容不支持重定向的客户端,但占后端带宽)。
+**可见性闸门(CRITICAL,先于一切)**:下载 / 预览 / 缩略图端点(`download` / `thumbnail` / 内联原图)**仅当 `scan_status IN ('clean','skipped')` 才放行**;否则按隔离状态拒绝:
+- `scan_status='pending'` 或 `'error'`(扫描未完成)→ **`403 scan_pending`**(语义:扫描中,稍后重试);
+- `scan_status='infected'` → **`403 scan_infected`**,并通知上传者与 workspace 管理员(安全事件,README §6.13 critical 分级)。
+
+两种下载方式(默认 A,均须先过可见性闸门):
+- **A:签名下载 URL**:`GET /attachments/{id}/download` 校验调用者读权限 + `scan_status` 放行 → 生成短时效(默认 60s)签名 GET URL → 返回或 302。客户端直连对象存储下载,省后端带宽。
+- **B:后端代理**:后端校验权限 + `scan_status` 放行后流式返回字节(便于精确审计、兼容不支持重定向的客户端,但占后端带宽)。
 - 对象本身**私有**,绝不公开读;签名 URL 时效短、单次用途、绑定 HTTP 方法与对象键。
-- 图片/缩略图同理用短时效签名 URL;前端在过期前刷新。
-- 下载按真实 MIME 设 `Content-Disposition`;未知/可执行类型强制 `attachment` 下载而非内联渲染。
+- 图片/缩略图同理用短时效签名 URL(同样要求 `scan_status` 放行);前端在过期前刷新。
+- 下载按 worker 嗅探的真实 MIME 设 `Content-Disposition`;未知/可执行类型强制 `attachment` 下载而非内联渲染。
 
 ### 3.5 错误码
 
-统一错误信封:`{"error": {"code": "...", "message": "...", "details": {}}}`。
+统一错误信封以 README §6.14 为权威:`{"error": {"code": "<snake_case>", "message": "...", "details": {}}}`。本模块具名错误码:
 
 | HTTP | code | 场景 |
 |------|------|------|
-| 400 | `VALIDATION_ERROR` | 字段非法、MIME 与扩展名不符 |
-| 401 | `UNAUTHENTICATED` | token 缺失/失效 |
-| 403 | `FORBIDDEN` | 无目标 issue/comment 写权限或附件读权限 |
-| 404 | `NOT_FOUND` | 附件不存在 |
-| 409 | `CONFLICT` | 重复 complete、状态不允许(如对 completed 再 complete) |
-| 413 | `FILE_TOO_LARGE` | 超单文件上限 |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | MIME/扩展名不在允许清单 |
-| 422 | `HASH_MISMATCH` | 内容哈希与实际对象不符 |
-| 423 | `QUOTA_EXCEEDED` | 超 workspace 配额 |
-| 429 | `RATE_LIMITED` | 上传申请/下载触发限流(见 auth Spec) |
-| 502 | `STORAGE_ERROR` | 对象存储不可达(不泄露内部细节) |
+| 400 | `validation_error` | 字段非法、MIME 与扩展名不符 |
+| 401 | `unauthorized` | token 缺失/失效 |
+| 403 | `forbidden` | 无目标 issue/comment/chat_message 写权限或附件读权限 |
+| 403 | `scan_pending` | 附件尚在隔离区(`scan_status` 为 `pending`/`error`),扫描未完成,拒绝下载/预览/缩略图(README §9 T14) |
+| 403 | `scan_infected` | 扫描命中恶意内容(`scan_status='infected'`),永久拒绝并告警(README §9 T14) |
+| 404 | `not_found` | 附件不存在 |
+| 409 | `conflict` | 重复 complete、状态不允许(如对 completed 再 complete) |
+| 413 | `file_too_large` | 超单文件上限 |
+| 415 | `unsupported_media_type` | MIME/扩展名不在允许清单 |
+| 422 | `hash_mismatch` | `complete` 阶段大小/初校验不符;**真实 SHA-256 比对由隔离区 worker 异步完成,不匹配置 `scan_status='error'`(`scan_detail.error_code='HASH_MISMATCH'`)经 `attachment.processed` 下发** |
+| 423 | `quota_exceeded` | 超 workspace 配额 |
+| 429 | `rate_limited` | 上传申请/下载触发限流(见 auth Spec,带 `Retry-After`) |
+| 502 | `storage_error` | 对象存储不可达(不泄露内部细节) |
 
 ### 3.6 大小与类型限制(默认值,可配置)
 
 - 单文件上限:默认 100 MB(图片可单独设 25 MB),企业版可调高;以 `attachment_quotas.max_file_bytes` 为准。
 - 允许类型:图片(png/jpg/gif/webp/svg*)、文档(pdf/txt/md/csv/xlsx/docx)、压缩包(zip/tar.gz)、日志/文本、代码文本等;禁止可执行文件(exe/dll/sh/…)直接上传,或下载时强制 `attachment` 并强提示。
 - *SVG 含脚本风险:渲染前净化或以 `<img>` 隔离上下文,不内联执行。
-- workspace 总配额按套餐;接近上限时上传申请返回 `QUOTA_EXCEEDED`。
+- **纯文本免扫白名单(`scan_status='skipped'` 的唯一来源)**:仅 `text/plain`、`.log`、`.csv`、`.md`、`.txt` 等**无宏、不可执行**的纯文本类,经工作区策略显式列入白名单后,worker 可跳过 AV 扫描置 `skipped`(仍做 magic-byte 嗅探与 SHA-256 校验);其余一律走完整扫描。白名单默认保守,由 admin 配置。
+- workspace 总配额按套餐;接近上限时上传申请返回 `quota_exceeded`。
 
 ### 3.7 WebSocket 事件
 
+**实时契约以 README §6.7 为唯一权威**:事件名 `<entity>.<action>`,携带**频道内**单调递增 `seq`(业务事务内自 `realtime_channels.last_seq` 分配),断线凭 `resume_from` 从 `realtime_events` 重放,游标过旧下发 `resync_required`;Redis 仅做 fan-out。
+
 | 事件 | 载荷要点 | 触发 |
 |------|----------|------|
-| `attachment.processed` | 附件 id + `thumbnail_url` + `scan_status` | 缩略图/扫描异步完成 |
+| `attachment.processed` | 附件 id + `scan_status` + `mime_type` + `thumbnail_url`(放行时) | 隔离区 worker 完成嗅探/校验/扫描(放行或拒绝) |
 | `attachment.deleted` | 附件 id | 软删除 |
 
 > 上传/下载本身走 HTTP(非实时通道)。评论携带附件发布后,经 `comment.created`(comment-inbox Spec)推送,附件元数据随评论载荷下发;接收端用缩略图签名 URL 渲染。缩略图/扫描异步完成可用 `attachment.processed` 更新,或前端打开灯箱时按需拉取。长上传进度是客户端本地态,无需走 WebSocket。
@@ -329,7 +366,7 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 
 ### 4.4 agent 产出物(核心差异)
 
-- agent 评论里的附件带 agent 头像与「来自 code-reviewer 运行」标记(`uploader_kind='agent'`),区别于人类上传。
+- agent 评论里的附件带 agent 头像与「来自 code-reviewer 运行」标记(上传者人类/agent 由 API 响应中 JOIN `members` 计算的 `member_type` 快照判别,README §6.1;无存储判别列),区别于人类上传。
 - 截图类产出物默认内联预览(`display='inline'`);报告/日志类以文件卡片呈现(`display='card'`)。
 
 ### 4.5 关键交互流程
@@ -352,14 +389,14 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 ### 4.6 安全与可靠性细节(必须实现)
 
 - **私有对象 + 短时效签名**:桶私有,任何访问经签名 URL 或后端代理;签名 60s 量级、绑定方法与对象键。
-- **MIME 以服务端为准**:不信客户端声明;下载按真实 MIME 设 `Content-Disposition`,未知/可执行强制 `attachment`。
+- **隔离区可见性闸门(CRITICAL)**:`complete` 后对象进隔离区(`scan_status='pending'`),**下载/预览/缩略图仅在 `scan_status IN ('clean','skipped')` 开放**;隔离中 → `403 scan_pending`,感染 → `403 scan_infected`(永久拒绝 + 通知上传者与管理员,README §6.13 critical)。**扫描完成前附件占位呈现「扫描中,完成后开放下载」**(README §6.12 异常态矩阵),不暴露下载按钮。
+- **MIME / 哈希以服务端为准**:真实 MIME 由附件处理 worker 从 **magic bytes** 嗅探(不信客户端头、不靠 HEAD);SHA-256 由 worker 全量计算并与客户端声明比对,不匹配置 `scan_status='error'`(`HASH_MISMATCH`,告警 + `attachment.processed` 下发)。下载按真实 MIME 设 `Content-Disposition`,未知/可执行强制 `attachment`。
 - **存储键不可枚举**:对象键含 UUID 段,避免遍历猜测。
-- **哈希去重与完整性**:`content_hash` 既去重又校验完整性;不匹配返回 `HASH_MISMATCH`。
-- **软删除 + 延迟回收**:删除先软删,对象由后台任务延迟(默认 7 天)清理,防误删;回收前确认无其他 `attachment_links` 引用。
-- **扫描隔离**:命中恶意内容置 `scan_status='infected'`,下载被拒并提示,通知上传者与管理员。
+- **去重独立记录(CRITICAL)**:`content_hash` 既去重又校验完整性。秒传/去重**只共享 blob**(同 `storage_key`,内容寻址),**始终新建独立 `attachments` 行与独立 `attachment_links`**,绝不复用同一附件记录——每条附件有独立的上传者、关联、生命周期与删除。
+- **软删除 + 延迟回收(GC 按 storage_key)**:删除先软删附件行,对象由后台任务延迟(默认 7 天)清理。**回收对象的唯一条件是:无任何存活(未软删)`attachments` 行仍引用该 `storage_key`(按 `storage_key` 统计,而非按 attachment id)**;只要还有一个附件记录共享该 blob,对象就保留。**删除某一附件永不影响共享同一 blob 的其它附件记录**。
 - **限流**:`upload-requests` 与 `download` 按用户/IP 限流(见 auth Spec)。
 - **配额前置校验**:签发 URL 前校验配额。
-- **孤儿对象清理**:后台任务按 `idx_attachments_pending` 扫描 `expires_at` 已过且未 `completed` 的记录,置 `expired` 并删对象。
+- **孤儿对象清理**:后台任务按 `idx_attachments_pending` 扫描 `expires_at` 已过且未 `completed` 的记录,置 `expired` 并删对象(同样受 storage_key 引用计数约束)。
 
 ---
 
@@ -368,26 +405,30 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 ### 5.1 功能 — 上传 / 下载
 
 - [ ] 三阶段直传闭环:`upload-request` → 客户端 PUT 直传 → `complete`;字节流不经应用服务器。
-- [ ] `upload_status` 状态机正确:仅 `pending`/`uploading` 可 `complete`;对 `completed` 再 `complete` 返回 `CONFLICT`;`abort` 置 `failed` 并清理对象。
-- [ ] `complete` 以对象存储 HEAD 结果为准校验大小;嗅探真实 MIME 写回,客户端伪造 `Content-Type` 无效。
-- [ ] `content_hash` 不匹配返回 `HASH_MISMATCH`;命中已有附件走「秒传」复用对象。
-- [ ] 图片异步生成 sm/md/lg 缩略图;`attachment.processed` 事件下发 `thumbnail_url`。
+- [ ] `upload_status` 状态机正确:仅 `pending`/`uploading` 可 `complete`;对 `completed` 再 `complete` 返回 `409 conflict`;`abort` 置 `failed` 并清理对象。
+- [ ] `complete` **仅以 HEAD 做存在性/大小初校验并置 `upload_status='completed'`、移交隔离区**(`scan_status='pending'`);`complete` 不声明附件可用、不写最终 MIME/缩略图。
+- [ ] **隔离区管线(附件处理 worker,README §2.2)**:worker 服务端读取对象字节,从 magic bytes 嗅探真实 MIME 写回(客户端伪造 `Content-Type` 无效、HEAD 不足以判定);全量计算 SHA-256 与客户端声明比对,不匹配置 `scan_status='error'`(`HASH_MISMATCH`);AV 扫描后 `scan_status ∈ clean|infected|error|skipped`(`skipped` 仅限 §3.6 纯文本白名单)。
+- [ ] **可见性闸门(README §9 T14,逐条)**:① 上传完成(`scan_status='pending'`)即请求下载 → 拒绝 `403 scan_pending`;② worker 置 `clean` 后可下载;③ `infected` 时永久拒绝 `403 scan_infected` 并告警(通知上传者与管理员);④ 缩略图/预览同样受闸门约束;⑤ 扫描完成前 UI 占位「扫描中,完成后开放下载」(README §6.12)。
+- [ ] **去重独立记录**:秒传/去重共享同一 blob(同 `storage_key`,按 `content_hash` 内容寻址),但**始终新建独立 `attachments` 行与独立 `attachment_links`**,绝不复用同一附件记录;两条共享 blob 的附件各自有独立上传者/关联/删除。
+- [ ] 图片在 `scan_status` 放行后异步生成 sm/md/lg 缩略图;`attachment.processed` 事件下发 `scan_status`/`mime_type`/`thumbnail_url`。
 - [ ] 下载走短时效(60s)签名 URL 或 302;对象私有,无公开读;过期可重新申请。
 - [ ] 未知/可执行类型下载强制 `Content-Disposition: attachment`,不内联渲染。
 - [ ] 分块上传:分片签名、并发 PUT、断点续传(`upload_sessions.parts`)、合并完成。
 
 ### 5.2 功能 — 限制 / 关联 / 删除
 
-- [ ] 超单文件上限返回 `FILE_TOO_LARGE`;MIME/扩展名不在白名单返回 `UNSUPPORTED_MEDIA_TYPE`;MIME 与扩展名不符返回 `VALIDATION_ERROR`。
-- [ ] 配额前置校验,超限返回 `QUOTA_EXCEEDED`(签发 URL 前)。
-- [ ] `attachment_links` 正确建立:同一附件可挂多个 issue/comment;`uq_attachment_link` 生效;`display`/`position` 正确。
+- [ ] 超单文件上限返回 `413 file_too_large`;MIME/扩展名不在白名单返回 `415 unsupported_media_type`;MIME 与扩展名不符返回 `400 validation_error`。
+- [ ] 配额前置校验,超限返回 `423 quota_exceeded`(签发 URL 前)。
+- [ ] `attachment_links` 正确建立:`linked_type ∈ {issue, comment, chat_message}`;同一附件可挂多个宿主;`uq_attachment_link` 生效;`display`/`position` 正确。
 - [ ] 列出 issue/comment 附件按 `position` 排序;图片内联、文件卡片展示正确。
-- [ ] 软删除后对象延迟(7 天)回收;回收前确认无其他 `attachment_links` 引用;无权限删除返回 `FORBIDDEN`。
-- [ ] 后台清理任务回收 `expires_at` 超时的孤儿对象,置 `expired`。
+- [ ] **多租户复合 FK(README §6.2 / §9 T1)**:`attachments` 建 `UNIQUE(workspace_id, id)`;`uploader_id` → `members(workspace_id,id)`、`attachment_links.attachment_id`/`upload_sessions.attachment_id` → `attachments(workspace_id,id)` 均为复合 FK;`attachment_links` 逻辑外键行携带 `workspace_id`;构造跨 workspace 复合 FK 插入被数据库约束拒绝,A 区凭证访问 B 区附件 → 403/404。
+- [ ] **去重独立性(删除其一不影响共享 blob 的其它附件记录)**:两条共享同一 `storage_key` 的附件,删除其中一条(软删)后,另一条仍可下载、元数据完整;GC 仅在**无任何存活 `attachments` 行引用该 `storage_key`(按 storage_key 统计)**时才物理删对象。
+- [ ] 软删除后对象延迟(7 天)回收;无权限删除返回 `403 forbidden`。
+- [ ] 后台清理任务回收 `expires_at` 超时的孤儿对象,置 `expired`(受 storage_key 引用计数约束)。
 
 ### 5.3 功能 — agent 产出物(核心差异)
 
-- [ ] agent runtime 用 API token 走同一套 `upload-requests`/`complete`/关联接口;`uploader_kind='agent'` 正确填充。
+- [ ] agent runtime 用 API token 走同一套 `upload-requests`/`complete`/关联接口;`uploader_id` 指向该 agent 的 `members.id`,API 响应中计算的 `member_type='agent'` 快照正确(无存储判别列,README §6.1)。
 - [ ] agent 评论附件 UI 带 agent 头像与「来自 <agent> 运行」标记,区别于人类上传。
 - [ ] 截图类默认 `display='inline'`,报告/日志类 `display='card'`。
 
@@ -396,7 +437,9 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 - [ ] **上传大小限制**:单文件上限以 `attachment_quotas.max_file_bytes` 为准(默认 100 MB,图片 25 MB);超限在签发前拒绝,不浪费带宽。
 - [ ] **直传性能**:大文件直传不占用应用服务器带宽;`upload-request`/`complete` 接口 P95 < 300ms。
 - [ ] **下载时延**:签名 URL 签发 P95 < 200ms;缩略图渲染走对象存储 CDN/直连。
-- [ ] **安全**:桶私有、签名短时效绑定方法与键;MIME 服务端嗅探;SVG 净化/隔离;存储键不可枚举;扫描命中隔离;错误信息不泄露内部细节。
+- [ ] **安全**:桶私有、签名短时效绑定方法与键;MIME 由 worker magic-byte 嗅探;SVG 净化/隔离;存储键不可枚举;隔离区可见性闸门(未放行不可下载);错误信息不泄露内部细节。
+- [ ] **属主校验**:`complete`/`abort` 仅上传申请者本人可操作(服务端校验 `uploader_id` = 当前 principal),非属主返回 403。
+- [ ] **签名 URL 尺寸约束**:签名 PUT URL 绑定声明的 `file_size` 上限(如通过 `Content-Length` 条件或存储侧策略),防止攻击者向 pending 键灌超大对象;配合存储侧生命周期规则兜底清理。
 - [ ] **多租户隔离**:所有查询强制带 `workspace_id`;跨 workspace 访问返回 403/404。
 - [ ] **可靠性**:孤儿对象清理任务幂等;软删除延迟回收防误删;限流(auth Spec)生效。
 - [ ] **可观测**:上传申请/完成/失败、扫描结果、配额拒绝均有审计日志。
