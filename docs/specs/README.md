@@ -1,10 +1,12 @@
 # Mesh 整体项目 Spec
 
-> 状态:Draft v3(R2 修订) | 本文件是 Mesh 所有开发的唯一入口:先读本文建立全局认知,再按「功能 Spec 索引」进入具体模块。各功能 Spec(`features/*.md`)是各模块实现的唯一依据;`../research/*.md` 是设计调研原始记录,仅供溯源,不作为实现依据。
+> 状态:Draft v3(R3 修订) | 本文件是 Mesh 所有开发的唯一入口:先读本文建立全局认知,再按「功能 Spec 索引」进入具体模块。各功能 Spec(`features/*.md`)是各模块实现的唯一依据;`../research/*.md` 是设计调研原始记录,仅供溯源,不作为实现依据。
 >
 > **修订说明**:本文件 §2.2–2.3、§6、§7、§9、§10 为**全局唯一权威契约(canonical contracts)**。所有功能 Spec 中的 schema、API 包络、错误码、分页、状态枚举、事件词汇、幂等/重试语义**一律引用本文定义,不再重复定义**;功能 Spec 与本文冲突时以本文为准。
 >
 > **R2 修订要点**(v2 复审 ❌ 项收口):复合 FK `ON DELETE SET NULL` 改为 PG16 列级写法并补真实 DELETE 行为测试(§6.2/§9 T18);补齐同租户/同父域约束与 realtime 租户键(§6.2/§6.7);不可变编号命名空间与工作区级前缀注册(§6.3);claim 无任务容量回滚 + capability 匹配(§6.4);审批续跑**唯一协议**写死(§6.4/§6.10);outbox → realtime **唯一写入路径**与事件词汇注册表(§6.6/§6.7);每频道游标(§6.7);跨项目迁移字段映射(issue.md/kanban.md);小队 active assignment 唯一身份(squad.md `issue_squad_assignments`);approval 强约束(§6.10);blob 真源与秒传 possession 规则(attachment.md);唯一通知优先级矩阵(§6.13)。
+>
+> **R3 修订要点**(v3 架构/UX 复审 HIGH×9 收口 + 3 项非阻断建议):agent 配置版本补 `workspace_id`/同租户复合 FK/`UNIQUE(workspace_id,agent_id,id)` 与 active 指针重叠复合 FK(§6.2/agent.md,T27);**调度能力与授权能力严格分型**——`required_capabilities` 纯字符串数组 + `capability_grants` 对象数组,入队归一算法写死(§6.4/§6.11/agent.md/skill.md/runtime.md,T28);集成外部身份规范化 + **跨 workspace 全局唯一键** + scope 精确异或 + 删除策略 + `vcs_links` 真源表(integrations.md,T29);IM 投递台账结构化多目的地键(§6.13/comment-inbox.md,T30);data job 源附件 RESTRICT + source hash + checkpoint/`data_job_rows` 逐批幂等恢复协议(import-export.md,T31);**§6.13 扩充 data job 三行为唯一通知矩阵**,模块只引用不自定义(T25 扩展/T32);`users.settings`/`timezone` 登记 + `PATCH /api/v1/users/me` + workspace locale 单一真源(默认 `en`,弃用 `default_language` 不双写,auth.md/i18n.md/workspace.md,T32);Analytics 工作区聚合按请求者项目可见性过滤(admin 全量;协同 MES-4 HIGH-2 安全修复)+ `scope_key` 可见性缓存键 + 「当前归属」口径 + `calendar_timezone` 分桶(analytics.md,T33);Onboarding 入册播种/全量 reconcile + 末步阅读证据 + 成员名册唯一入口(onboarding.md,T34);**词汇校验脚本 `tests/docs/check_event_vocab.py` + CI 落地**(§6.7/T26);`chat_sessions.is_pinned` 快照删除,置顶真源唯一为 favorites(§6.19)。
 
 ---
 
@@ -84,7 +86,7 @@ Mesh 服务端由以下**独立可部署单元**组成。起步可合并进程�
 | **Outbox relay** | 轮询 `outbox_events(status='pending')` → 分发到对应处理器(执行入队 / 通知 fan-out / autopilot 事件 / **realtime projector**)→ 置 `published` | `FOR UPDATE SKIP LOCKED` 抢占,多副本不重复处理;`UNIQUE(idempotency_key)` 兜底 | 崩溃后未发布事件由其他副本/重启后继续投递(at-least-once);`delivery_attempts` 超限进 `failed` 告警 | 加副本即提高吞吐 |
 | **调度 worker(autopilot/scheduler)** | 扫描到期 `autopilots.next_run_at` 与一次性定时,原子抢占创建 run | `FOR UPDATE SKIP LOCKED` + `next_run_at` 前移,多副本不重复触发 | 崩溃后下一扫描周期补发(misfire_policy 决定补发策略) | 加副本;按 workspace 哈希分片(规模化时) |
 | **租约 reaper** | 扫描 `execution_attempts` 租约过期/心跳失联 → 回收 attempt(requeue 新 attempt 或转 failed);扫描过期 approval(§6.10) | 单 leader(数据库 advisory lock)或多副本 SKIP LOCKED 分行 | reaper 全挂 → 任务卡 claimed;由监控告警;恢复后批量回收 | 一般单副本足够;分行扫描可多副本 |
-| **通知 fan-out worker** | 消费 outbox 中通知类事件 → 写 `notifications` + 邮件摘要队列(通知的实时推送**不直接写 `realtime_events`**,而是产生 outbox 的 `realtime.publish` 事件交 realtime projector 统一登记,§6.6/§6.7) | SKIP LOCKED;`notification_delivery.UNIQUE(notification_id,channel)` 幂等 | 崩溃后由 outbox 重投;邮件失败重试 | 加副本 |
+| **通知 fan-out worker** | 消费 outbox 中通知类事件 → 写 `notifications` + 邮件摘要队列(通知的实时推送**不直接写 `realtime_events`**,而是产生 outbox 的 `realtime.publish` 事件交 realtime projector 统一登记,§6.6/§6.7) | SKIP LOCKED;`notification_delivery.UNIQUE(notification_id,channel,destination_key)` 幂等(R3:目的地粒度,IM 多目的地并发投递,§6.13/comment-inbox.md §2.8) | 崩溃后由 outbox 重投;邮件失败重试 | 加副本 |
 | **Realtime projector** | 消费 outbox 中实时类事件(`event_type='realtime.publish'`)→ **以 outbox 事件 id 为唯一去重键**写 `realtime_events` 并在同事务分配频道 `seq` → 经 Redis pub/sub 通知各网关发布(§6.7 唯一写入路径) | SKIP LOCKED 抢占 outbox 行;`realtime_events.UNIQUE(outbox_event_id)` 保证"至少一次投递 → 恰好一次登记" | 崩溃后未登记事件由其他副本/重启后继续登记;重复投递被唯一键去重,不产生重复事件/乱序 seq | 加副本即提高吞吐 |
 | **附件处理 worker** | 隔离区对象的 MIME 嗅探(读 magic bytes)、SHA-256 校验、病毒扫描、缩略图 | SKIP LOCKED 扫 `attachments(scan_status='pending')` | 崩溃后重扫;`scan_status='error'` 重试上限 | 加副本 |
 | **实时网关(WebSocket)** | 客户端长连接;订阅频道时**逐资源授权**;从 `realtime_events` 重放 + Redis fan-out 实时推送 | 每连接单线程;多网关经 Redis pub/sub 广播 | 网关崩溃 → 客户端重连,凭 `resume_from` 从 `realtime_events` 补齐;游标过旧 → `resync_required` | 水平加网关,Redis pub/sub 联通 |
@@ -177,7 +179,7 @@ Mesh 由 **20 个功能模块**组成,分五层:
 | 模块 | 定位 |
 | --- | --- |
 | **onboarding(上手引导)** | 首次使用引导:上手清单数据模型(`onboarding_states`,member×workspace 进度持久化)、Mesh 激活路径(建区 → 邀请/加 agent → 建首 issue → 分派/@ 触发首个运行 → 收件箱见 agent 回评 = aha moment)、成体系空状态规范 |
-| **integrations(集成平台)** | 统一第三方集成抽象:集成注册/绑定模型、入站事件摄取(签名 + 去重 + 审计,复用 autopilot `webhook_events` 范式)、出站渠道适配(IM 通知渠道)、出向 Webhook 订阅(开发者平台);落地 飞书/Lark、Slack、GitHub/GitLab(VCS)三连接器。owns `integrations`/`integration_bindings`/`integration_events`/`webhook_subscriptions` |
+| **integrations(集成平台)** | 统一第三方集成抽象:集成注册/绑定模型、入站事件摄取(签名 + 去重 + 审计,复用 autopilot `webhook_events` 范式)、出站渠道适配(IM 通知渠道)、出向 Webhook 订阅(开发者平台);落地 飞书/Lark、Slack、GitHub/GitLab(VCS)三连接器。owns `integrations`/`integration_bindings`/`integration_events`/`webhook_subscriptions`/`vcs_links`/`external_identities` |
 | **import-export(数据导入导出)** | issue/project 的 CSV/JSON 导入(字段映射/校验/错误行报告,支持从其它工具迁移)+ 异步导出任务与签名下载(走统一附件通道)。owns `data_jobs` |
 | **analytics(统计报表)** | cycle time / velocity / 吞吐量 / workload / burndown、项目与工作区仪表盘、按 agent 维度的运行统计;数据源为 `issues`/`task_executions` 聚合,明确口径与时间窗 |
 | **i18n(国际化与时区)** | locale 协商、字符串外部化、本地化日期/数字渲染、`users.timezone` 展示层时区化(存储仍 UTC);与主题/暗色(§6.12)共同构成前端呈现契约 |
@@ -273,7 +275,7 @@ agents(agent.md owns,AI 身份与配置)──1:N──┘      ▲
 
 | 表 | 语义 | 关键字段 |
 | --- | --- | --- |
-| `task_executions` | 一次**逻辑执行**(由分派/@提及/autopilot/外部集成触发产生,生命周期内只有一行) | `id, workspace_id, agent_id FK→agents, issue_id NULL, trigger CHECK IN('assign','mention','autopilot','manual','chat','integration')`(R2:`integration` = 外部 IM/VCS 集成触发,§6.17/integrations.md)`, status, idempotency_key UNIQUE NULL, priority, task_spec JSONB, label_requirements JSONB, required_capabilities JSONB NOT NULL DEFAULT '[]'`(R2:权威能力需求字段,claim 时与服务端 runtime 能力匹配)`, trigger_event_id NULL(触发来源事件,审计), config_snapshot JSONB(入队快照,§6.11), timeout_seconds, max_attempts, result, failure_reason, queued_at, finished_at` |
+| `task_executions` | 一次**逻辑执行**(由分派/@提及/autopilot/外部集成触发产生,生命周期内只有一行) | `id, workspace_id, agent_id FK→agents, issue_id NULL, trigger CHECK IN('assign','mention','autopilot','manual','chat','integration')`(R2:`integration` = 外部 IM/VCS 集成触发,§6.17/integrations.md)`, status, idempotency_key UNIQUE NULL, priority, task_spec JSONB, label_requirements JSONB, required_capabilities JSONB NOT NULL DEFAULT '[]'`(R2:权威能力需求字段,claim 时与服务端 runtime 能力匹配;**R3:严格类型为「字符串数组」,schema CHECK 拒绝任何非字符串元素**——调度字段只接受 capability key 集合,`{capability,permission}` 对象一律只进 `config_snapshot.capability_grants` 授权快照)`, trigger_event_id NULL(触发来源事件,审计), config_snapshot JSONB(入队快照,§6.11), timeout_seconds, max_attempts, result, failure_reason, queued_at, finished_at` |
 | `execution_attempts` | 一次**物理尝试**(领取、租约、runtime、分支、日志、结果都挂在 attempt 上) | `id, workspace_id, execution_id FK→task_executions, attempt_number, runtime_id FK(复合→runtimes(workspace_id,id)), status CHECK IN('claimed','running','cancelling','completed','failed','timeout','cancelled','reclaimed')`(R2:`cancelling` 为物理层两段式取消中间态,与逻辑层词汇统一;`cancelled(failure_reason='awaiting_approval')` 为审批挂起时当前 attempt 的终态)`, claimed_by_runtime_id, lease_expires_at, lease_seq, claimed_at, started_at, finished_at, working_branch, result, failure_reason`;`UNIQUE (execution_id, attempt_number)` |
 
 **执行状态机(逻辑层,全系统统一长任务词汇)**:
@@ -406,7 +408,7 @@ CREATE POLICY mesh_rt_events_tenant ON realtime_events
 | 平台能力(R2 新增模块) | `onboarding.progress` · `onboarding.completed` · `integration.updated` · `integration.event_ingested` · `data_job.updated` · `favorites.changed` |
 | 聊天流式(§6.8 流内事件) | `message.created` · `message.delta` · `message.done` · `message.interrupted` · `error` · `ping` |
 
-> **词汇漂移零容忍**(R2):如 `agent.md` 曾出现的帧示例 `agent.run_started` 与表内 `execution.started` 不一致,一律以本注册表为准修正;新事件必须先进本表再在模块 Spec 引用。
+> **词汇漂移零容忍**(R2):如 agent.md 曾出现的帧示例 "agent.run_started"(未登记运行起始帧名,与本表 `execution.started` 冲突)一律以本注册表为准修正;新事件必须先进本表再在模块 Spec 引用。**R3:文档级词汇校验脚本与 CI 已落地**——`tests/docs/check_event_vocab.py` 扫描 `docs/specs/**/*.md` 的事件名引用并与本注册表比对,未登记即 CI 失败(`.github/workflows/spec-checks.yml`;此前本节约定在校验脚本缺位下以人工评审兜底,R3 起为自动化硬关卡)。
 
 ### 6.8 流式输出协议(唯一权威)
 
@@ -516,6 +518,8 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 ```
 
 > **R2:`tool_id` 真源已删除**(`tools`/`agent_tool_bindings` 表于 MES-2 删除,不再有工具目录主键可冻结)。工具权限统一以**版本化 capability key + permission** 表达并冻结进 `capability_grants`——与 skill.md 的 `required_capabilities`/`granted_capabilities` 条目结构一致(`{"capability": "<key>", "permission": "read_only|write|confirm_required"}`,未标注 permission 默认 `confirm_required`);`/agents/{id}/tools` 系列端点为 capability 条目的薄封装(agent.md),**任何 Spec 与示例不得再出现 `tool_id` / `tool_grants`**。
+>
+> **R3:声明层与调度层严格分离(硬约束)**:skill.md 的 `required_capabilities`/`granted_capabilities` 允许「字符串 key」与「`{capability,permission}` 对象」混用——那是**授权声明层**表达,绝不得原样写入调度字段。入队时由编排入口执行**归一算法**(权威定义见 agent.md §3.3)派生严格类型的两套字段:① **调度字段** `task_executions.required_capabilities` = 纯 capability key **字符串数组**(对象条目只取其 `capability` key;去重、字典序排序;schema CHECK 拒绝非字符串元素);② **授权快照** `config_snapshot.capability_grants` = 严格 **`[{capability, permission}]` 对象数组**(字符串条目补默认 `confirm_required`;同一 capability 取最严格 permission:`confirm_required > write > read_only`)。对象进入调度字段会使 claim 的 JSONB `<@` 匹配永不命中、任务永久无法领取;两套字段的类型约束由 validation 脚本实测,集成测试 T28 覆盖归一算法与 claim 联动。
 
 配置/技能/能力授权在运行期间变更**不影响在途执行**,只对后续入队生效。
 
@@ -564,8 +568,11 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | **审批请求**(approval.created,工具/squad 计划/autopilot 动作) | **critical** | 是(统一"待我审批"入口) | **是** | **是** | realtime |
 | **安全隔离**(freeze / 扫描命中 infected / 凭证撤销告警) | **critical** | 是(上传者 + admin) | **是** | **是** | realtime |
 | **被分派 / 被 @**(assigned / mentioned) | **critical** | 是 | **是** | **是** | mentioned=realtime;assigned 可配 digest |
+| **data job 成功**(data_jobs `completed`,import/export 无失败行,R3 新增) | normal | **否——默认留数据作业页**(toast + 下载入口);仅当 `requested_by` 显式订阅 `data_job_finished` 时进收件箱 | 否 | 否 | none;订阅后 digest |
+| **data job 部分成功**(data_jobs `completed_with_errors`,存在失败行需人工处理,R3 新增) | normal | 是(收件人 `requested_by`;有失败行需处理,故默认进箱) | 否 | 否(计数累加) | digest |
+| **data job 失败**(data_jobs `failed`,任务级故障,R3 新增) | **critical** | 是(收件人 `requested_by`) | **是** | **是** | realtime |
 | 评论新增 / 状态变更 / 订阅更新 | normal | 是(按 `group_key` 聚合组) | 否 | 否(计数累加) | digest |
-| 普通日志 / 阶段进度 / presence 变化 / 执行 `queued`/`claimed`/`started` | —(非通知事件) | 否(留运行页/实时频道) | — | — | — |
+| 普通日志 / 阶段进度 / presence 变化 / 执行 `queued`/`claimed`/`started` / data_jobs 中间进度(`data_job.updated` 进度帧) | —(非通知事件) | 否(留运行页/作业页/实时频道) | — | — | — |
 
 | 规则 | 内容 |
 | --- | --- |
@@ -576,7 +583,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | quiet hours | 用户级免打扰时段(站内不弹窗、邮件合并到时段后摘要);**仅 critical 事件穿透免打扰** |
 | 聚合窗口 | 同 `group_key` 60s 窗口内合并为一条(`payload.count` 递增),避免通知风暴 |
 | 自我抑制 | 动作发起者不给自己生成通知;agent 永不接收会再触发自己的通知(回环防护) |
-| 模块对齐(R2) | runtime.md 的"终态触发通知"改为**按本矩阵分发**(成功→运行页,失败/超时→收件箱 + 可选 Webhook);comment-inbox.md 的 `execution_finished` 类型**默认不投递成功事件**(preferences 显式订阅后才进箱),失败/超时按 critical 投递;各模块 Spec 不得另行定义事件分级 |
+| 模块对齐(R2/R3) | runtime.md 的"终态触发通知"改为**按本矩阵分发**(成功→运行页,失败/超时→收件箱 + 可选 Webhook);comment-inbox.md 的 `execution_finished` 类型**默认不投递成功事件**(preferences 显式订阅后才进箱),失败/超时按 critical 投递;**import-export.md 的 data job 通知只引用本矩阵的 data job 三行(R3),不得自行定义成功/失败分级**;**任何模块 Spec 不得另行定义事件分级或无条件成功通知**("触发者收到 execution_finished""agent 完成均生成通知"之类表述一律以本矩阵为准修正) |
 | 投递渠道(R2) | `notification_delivery.channel` 取值扩展为 `in_app`/`email`/`websocket`/**`im`**(comment-inbox.md owns);`channel='im'` 时在投递台账记录具体 IM 平台(`feishu`/`slack`)与目标外部身份;IM 投递经 §6.17 集成平台出站适配器发送(失败重试/幂等与其余渠道一致,台账为 `notification_delivery`)。**IM 渠道仅为出站增强,站内收件箱永远是通知真源**(推送是增强,不是唯一依据) |
 
 ### 6.14 API / 错误 / 分页 词汇(唯一权威)
@@ -619,7 +626,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 
 | 规则 | 内容 |
 | --- | --- |
-| 注册与绑定 | `integrations`(集成定义:`kind ∈ ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')`、启用状态、配置)+ `integration_bindings`(工作区/项目级绑定:外部租户/仓库/频道 ↔ Mesh 工作区,携带匹配规则如"该 IM 群消息 @agent 时触发谁")。绑定经复合 FK 同租户(§6.2);一个外部身份可绑定到至多一个工作区(外部侧唯一键) |
+| 注册与绑定 | `integrations`(集成定义:`kind ∈ ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')`、启用状态、配置)+ `integration_bindings`(工作区/项目级绑定:外部租户/仓库/频道 ↔ Mesh 工作区,携带匹配规则如"该 IM 群消息 @agent 时触发谁")。绑定经复合 FK 同租户(§6.2);**一个外部身份可绑定到至多一个工作区——规范化 `(provider, provider_tenant_key, external_ref)` 全局唯一键(R3)**;VCS 对象 ↔ Mesh 实体关联真源为 `vcs_links`(R3);**外部用户身份 ↔ Mesh 成员映射真源为 `external_identities`(R3 协同 MES-4 HIGH-1:IM 卡片回调点击者须经映射 + §6.10 权限再校验,未映射/无权限 → 403 审批状态不变)** |
 | 入站事件摄取 | **复用 autopilot `webhook_events` 范式**(autopilot.md):HMAC/签名校验(恒定时间比较 + 时间戳防重放)→ `integration_events.UNIQUE(integration_id, external_event_id)` 去重(重复事件幂等 200 不再分发)→ 全程审计 → **签名无效/缺失一律拒绝(401),绝不分发**。`integration_events` 由 integrations.md owns,与 autopilot 的 `webhook_events` 同构但相互独立 |
 | 入站 → 触发 | 入站消息/事件经 §6.9 触发矩阵的「外部 IM 消息触发」行入队执行(`trigger='integration'`);**入站内容一律按不可信数据处理**(§6.15:结构化隔离,不当指令执行);VCS 事件(merge/close/comment)经 autopilot 规则或内置联动规则映射到 issue 状态流转/评论 |
 | 出站渠道 | 通知的 IM 投递(§6.13 `channel='im'`)、审批/交互卡片推送(§6.10 approvals 的卡片化呈现与回调)经集成平台**出站适配器**统一发送;适配器负责平台令牌(如 `tenant_access_token`)的缓存与刷新、速率退避、失败重试(台账见 `notification_delivery` / 卡片回调记 approvals `decision_comment`) |
@@ -632,7 +639,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 规则 | 内容 |
 | --- | --- |
 | 存储层 | **一切时间戳存储与传输一律 UTC RFC3339**(不变);用户/工作区的 locale 与 timezone 是**展示层偏好**,不落业务字段 |
-| locale 协商 | 优先级:请求显式参数(`?locale=`/`Accept-Language`)→ 用户偏好 `users.settings.locale` → 工作区默认 `workspaces.settings.default_locale` → 系统回退 `en`;locale 取值 BCP-47(如 `zh-CN`/`en-US`),首发语言 `zh-CN` + `en` |
+| locale 协商 | 优先级:请求显式参数(`?locale=`/`Accept-Language`)→ 用户偏好 `users.settings.locale` → 工作区默认 `workspaces.settings.default_locale`(**唯一工作区 locale 真源,默认 `en`,R3**) → 系统回退 `en`;locale 取值 BCP-47(如 `zh-CN`/`en-US`),首发语言 `zh-CN` + `en`(指支持清单,不等于默认值)。**偏好真源与写接口(R3)**:`users.settings`(locale/theme)与 `users.timezone` 由 auth.md §2.2 登记,经 `PATCH /api/v1/users/me`(auth.md §3.1)写入;`workspaces.settings.default_locale` 经 workspace.md PATCH 写入;**`workspaces.default_language` 旧列只迁移/弃用,不长期双写** |
 | 字符串外部化 | **UI 文案一律经 i18n 消息目录外部化**,禁止界面硬编码可见文案;错误码(§6.14)为稳定 key,面向用户的 message 由前端按 locale 渲染(后端 message 保持英文/中性,不泄漏内部细节的原则不变) |
 | 本地化渲染 | 日期/时间/数字/相对时间("3 分钟前")按 locale + 用户 timezone 渲染;**时区化仅发生在展示层**——`users.timezone`(IANA)决定用户看到的本地时间,输入的时间值解析回 UTC 存储;跨时区协作场景(截止日/周期)UI 同时标注时区 |
 | 服务端职责 | API 不做文案翻译(返回稳定 key + 结构化数据);邮件摘要(comment-inbox)按收件人 locale 渲染模板;导出/报表(import-export.md/analytics.md)的本地化格式在导出时声明 locale |
@@ -655,7 +662,7 @@ CREATE TABLE favorites (
 CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created_at DESC);
 ```
 
-- **语义**:收藏是**成员私有**视图(他人不可见),用于"我的任务/收件箱"侧栏的固定区与快速入口;`chat_sessions.is_pinned` **并入本模型**(`target_type='chat_session'`,chat-session.md 保留字段作兼容快照,真源为 favorites);issue/project/view 的收藏均经本表。
+- **语义**:收藏是**成员私有**视图(他人不可见),用于"我的任务/收件箱"侧栏的固定区与快速入口;**会话置顶并入本模型且不再保留快照(R3:`chat_sessions.is_pinned` 列已删除)**——`target_type='chat_session'` 的 favorites 行是置顶的**唯一真源**,chat-session.md 不存 `is_pinned` 兼容快照(此前"真源 + 快照"并存却无原子同步/修复协议,双真源必然漂移;列表"置顶优先"排序由服务层对请求者 favorites 计算,响应 `pinned` 为服务端快照字段,标注真源为 favorites);issue/project/view 的收藏均经本表。
 - **端点**:`PUT /api/v1/favorites/{target_type}/{target_id}`(收藏,幂等)/ `DELETE` 同路径(取消)/ `GET /api/v1/favorites?target_type=`(列表,游标分页,README §6.14)。
 - **目标删除**:目标软删除/物理删除后 favorites 行由服务层清理(多态逻辑外键不建物理 FK,§6.2 第 4 条);列表接口对失效目标不返回。
 
@@ -704,13 +711,16 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 - [x] **(R2)** 复合 FK `ON DELETE SET NULL` 一律 PG16 列级写法(§6.2 第 6 条),补齐同租户/同父域约束与 realtime 租户键(§6.2 第 7/8 条、§6.7),并以**真实 DELETE 行为与跨租户约束测试**证明(§9 T18/T1)。
 - [x] **(R2)** 不可变编号命名空间与工作区级前缀注册落地(§6.3),跨项目迁移为单事务 + 字段映射预览(issue.md/kanban.md,§9 T19/T22)。
 - [x] **(R2)** claim 无任务容量回滚、capability 权威匹配、审批 attempt/租约/容量**唯一续跑协议**写死(§6.4/§6.10,§9 T20/T21)。
-- [x] **(R2)** outbox → realtime **唯一写入路径**与 canonical 事件词汇注册表(§6.6/§6.7,§9 T26);bare response / `unauthenticated` / `agent.run_started` / `tool_id` 等 canonical 冲突清零(§6.11/§6.14/auth.md)。
+- [x] **(R2)** outbox → realtime **唯一写入路径**与 canonical 事件词汇注册表(§6.6/§6.7,§9 T26);bare response / `unauthenticated` / "agent.run_started" / `tool_id` 等 canonical 冲突清零(§6.11/§6.14/auth.md)。**R3:词汇校验脚本 `tests/docs/check_event_vocab.py` + CI 落地**(§6.7/T26 声称兑现)。
 - [x] **(R2)** 每频道游标(§6.7/kanban.md)、小队 active assignment 唯一身份(squad.md)、approval 强约束与 blob 真源/秒传 possession(§6.10/attachment.md,§9 T23/T24)。
 - [x] **(R2)** 唯一通知优先级矩阵(§6.13,§9 T25);MES-4 LOW-2/LOW-3 硬化一并处理(workspace.md/§6.16)。
 - [x] **(R2·MES-2 强化轮必修)** 5 份新功能 Spec 五章齐备:onboarding.md / integrations.md(飞书·Slack·GitHub/GitLab 三连接器 + 出向 Webhook 订阅)/ import-export.md / analytics.md / i18n.md;集成平台/i18n/收藏契约先入 §6.17–§6.19;主题暗色与键盘快捷键入 §6.12;触发枚举扩 `integration`、投递渠道扩 `im`(§6.4/§6.13)。
 - [x] **(R2·MES-2 建议项处置)** 7–11 转正为正式条款(§6.12 快捷键 / §6.19 收藏 / §6.17 出向 Webhook / issue·project 模板 / §11 开发者平台含 CLI 规格与 OpenAPI 版本策略);12–16 显式声明为未来规划/可选增强(§12)。
 - [x] **(R2)** §4/§5 模块总览与索引更新至 20 个模块,链接有效;新增表 DDL(favorites/integrations/integration_bindings/integration_events/webhook_subscriptions/onboarding_states/data_jobs)与枚举扩展在 PostgreSQL 16 验证脚本中实际执行通过。
-- [ ] **(持续)** §9 全部集成测试(含 R2 新增 T18–T26)在开发阶段作为各模块验收的必测项落实。
+- [x] **(R3)** v3 复审 HIGH-1～HIGH-9 全部修订落地:agent 配置版本同租户/同 agent 重叠 FK(§6.2/agent.md,T27);调度能力与授权能力严格分型 + 入队归一算法写死(§6.4/§6.11/agent.md/skill.md/runtime.md,T28);集成外部身份全局唯一键 + scope 精确异或 + `vcs_links` 真源表(integrations.md §2.3/§2.8/§3.3,T29);IM 投递台账结构化多目的地 + error 分离(comment-inbox.md §2.8,T30);data job 源附件 RESTRICT + source hash + checkpoint + `data_job_rows` 行台账 + 逐批幂等恢复协议(import-export.md §2.2/§2.5/§3.4/§3.8,T31);§6.13 扩充为含 data job 三行的**唯一**通知矩阵,各模块只引用不自定义(comment-inbox.md/import-export.md,T25 扩至 data job/T32);`users.settings`/`users.timezone` 登记 + `PATCH /api/v1/users/me` + workspace locale 单一真源默认 `en`(auth.md/i18n.md/workspace.md,T32);Analytics 工作区聚合按请求者项目可见性过滤(private 项目不泄露,admin 全量;与 MES-4 v3 安全复审 HIGH-2 修复协同保留)+ `scope_key` 可见性缓存键(禁跨权限缓存)+ 历史指标「当前归属」口径 + `calendar_timezone` 分桶(analytics.md,T33);Onboarding 入册播种/全量 reconcile + 末步阅读证据 + 成员名册唯一入口(onboarding.md/member.md/workspace.md,T34)。
+- [x] **(R3)** 3 项非阻断建议一并处理:① `tests/docs/check_event_vocab.py` 词汇校验脚本 + CI 实际落地(§6.7/T26 声称兑现,此前主干无此文件);② `chat_sessions.is_pinned` 快照列删除,置顶唯一真源为 §6.19 favorites(不再保留无同步协议的双真源);③ Analytics 明确 `calendar_timezone` 本地日历分桶语义(本地自然日不跨桶,§6.18/analytics.md §2.2.3/§2.4)。
+- [x] **(R3)** §9 集成测试矩阵扩充 T27–T34;全部 R3 新增/修订 DDL、CHECK、重叠 FK 与真实 DELETE/CASCADE/RESTRICT 行为在 PostgreSQL 16 验证脚本中实跑通过(75 项断言全绿);MES-2 canonical 一致性保持(单一 owner Spec、统一词汇/错误码/分页包络、§6.13 唯一矩阵),未引入新跨 Spec 冲突。
+- [ ] **(持续)** §9 全部集成测试(含 R2 T18–T26 与 R3 T27–T34)在开发阶段作为各模块验收的必测项落实。
 
 ---
 
@@ -744,8 +754,16 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 | T22 | **跨项目迁移事务(R2)** | 看板 `group_by=project` 拖拽:无确认的 move 返回 422 要求确认;确认后单事务完成 `project_id` 变更 + 项目私有 status 映射(→ 目标项目同 category 默认 status)/ 项目私有 milestone/cycle/label/自定义字段值清除,工作区级字段保留;迁移后不存在"当前项目 + 旧项目私有字段"脏状态;`issue.project_changed` 事件携带映射/清除清单 |
 | T23 | **小队 active assignment 唯一身份(R2)** | 同一 leader 领导 S1/S2 两小队:issue 先派给 S1 再派给 S2(assignee 值不变)→ S1 根任务级联取消、S2 根任务建立(**不是 no-op**);重复派给 S1 = no-op 返回既有分派;`issue_squad_assignments` 部分唯一索引保证每 issue 至多一条 active;leader 更换 → active 分派与 `issues.assignee_id` 同事务更新;leader 离队且无替补 → 根任务 blocked 并通知 |
 | T24 | **blob 真源与秒传 possession(R2)** | ① 调用者对某 `content_hash` 无任何可读 attachment 时,"秒传"短路被拒(必须完整上传,上传本身即持有证明);② 对已可读 blob 秒传成功(新建独立 attachments 行指向同一 `attachment_blobs` 行);③ `ref_count` 原子维护:删除共享 blob 的其中一条附件,另一条不受影响;`ref_count=0` 后对象才被 GC;④ 并发秒传/上传同一 hash 由 `UNIQUE(workspace_id, content_hash)` 串行化,不产生重复 blob 行 |
-| T25 | **通知优先级矩阵(R2)** | 执行成功默认**不进收件箱**(留运行页),失败/超时进收件箱且**穿透 quiet hours** 并重置同组未读;执行成功订阅后才进箱且不重置已读组;审批请求/安全隔离为 critical;cancelled 不通知发起者;runtime.md/comment-inbox.md 的分发与本矩阵逐事件一致 |
-| T26 | **realtime 唯一路径与词汇(R2)** | ① 业务提交后、projector 登记前杀 projector → 重启后事件仍被登记且**频道 seq 无缺口/无重复**(`UNIQUE(outbox_event_id)` 去重);② 跨 workspace 的频道订阅/事件读取被 RLS 与复合 FK 拒绝;③ 文档级词汇校验:`docs/specs/**/*.md` 引用的全部事件名命中 §6.7 注册表,无未登记名(如 `agent.run_started` 不允许存在) |
+| T25 | **通知优先级矩阵(R2;R3 扩至 data job)** | 执行成功默认**不进收件箱**(留运行页),失败/超时进收件箱且**穿透 quiet hours** 并重置同组未读;执行成功订阅后才进箱且不重置已读组;审批请求/安全隔离为 critical;cancelled 不通知发起者;**data job 成功默认不进收件箱、`completed_with_errors` 进箱(normal)、`failed` 为 critical(穿透 + 重置)**(R3);runtime.md/comment-inbox.md/import-export.md 的分发与本矩阵逐事件一致,各模块 Spec 无自定义分级 |
+| T26 | **realtime 唯一路径与词汇(R2)** | ① 业务提交后、projector 登记前杀 projector → 重启后事件仍被登记且**频道 seq 无缺口/无重复**(`UNIQUE(outbox_event_id)` 去重);② 跨 workspace 的频道订阅/事件读取被 RLS 与复合 FK 拒绝;③ 文档级词汇校验:`docs/specs/**/*.md` 引用的全部事件名命中 §6.7 注册表,无未登记名("agent.run_started" 之类未登记运行起始帧名不允许存在);**校验脚本 `tests/docs/check_event_vocab.py` 随 CI 常跑(R3 落地),不通过即 CI 失败** |
+| T27 | **agent 配置版本同租户/同 agent 约束(R3,HIGH-1)** | `agent_config_versions` 携带 `workspace_id`,`agent_id`/`changed_by` 为同租户复合 FK:跨租户 agent 版本、跨租户审计成员 INSERT 被拒;`agents.active_config_version_id` 经重叠复合 FK `(workspace_id, id, active_config_version_id) → agent_config_versions(workspace_id, agent_id, id)` 强制同父域——**把 A agent 的 active 指针指向 B agent 的版本、或指向别工作区的版本,均被数据库拒绝** |
+| T28 | **能力字段严格类型与入队归一(R3,HIGH-2)** | ① `task_executions.required_capabilities` schema CHECK 拒绝任何非字符串元素(对象混入 → 拒绝,杜绝 claim `<@` 永不命中导致任务永久无法领取);② `config_snapshot.capability_grants` CHECK 强制 `[{capability,permission}]` 对象数组(permission ∈ read_only/write/confirm_required);③ 入队归一算法(agent.md §3.3)把字符串/对象声明统一派生为「字符串数组(调度)+ 对象数组(授权快照)」,归一后 `required_capabilities <@ runtimes.capabilities` claim 命中;④ 混用声明直接写调度字段在测试中判失败 |
+| T29 | **集成外部身份全局唯一 + scope 异或 + vcs_links(R3,HIGH-3)** | ① 两个工作区各自的集成实例抢绑同一外部身份(同 provider + 平台租户 + 外部对象)→ 全局键 `UNIQUE(provider, provider_tenant_key, external_ref)` 拒绝;② `scope='workspace'` 带 `project_id`、`scope='project'` 缺 `project_id` 均被精确异或 CHECK 拒绝;③ **删除项目 → 项目级绑定 `ON DELETE CASCADE` 一并删除**,不产生置空后违反 CHECK 的不可达态,项目删除不因绑定存在而失败;④ `vcs_links` 外部对象 active 部分唯一键(同 PR 重复 active 关联被拒)、同租户复合 FK(集成删除级联删关联)、状态索引可用 |
+| T30 | **IM 投递台账多目的地(R3,HIGH-4)** | 同一通知可并发投递多个 IM 目的地(Slack + 飞书 + 同平台多绑定),每目的地一行 `notification_delivery`(`UNIQUE(notification_id, channel, destination_key)` 幂等);`in_app`/`websocket` 的 `destination_key=''` 保持每通知每渠道一行;**IM 平台/外部目标由结构化列(`provider`/`external_target`/`integration_id`/`binding_id`)表达,`error` 字段只记失败原因**(扫描确认不含路由数据);集成/绑定删除经列级 SET NULL 置空路由列、台账保留 |
+| T31 | **data job 删除与故障恢复协议(R3,HIGH-5)** | ① 作业存续期间删除导入源附件被 `ON DELETE RESTRICT` 拒绝(409;消除 SET NULL 与「import 必有源」CHECK 互斥);② 导入分批执行中杀 worker → reaper 在 `lease_expires_at` 过期后回收租约(作业**不因 running 守卫永久卡住**),新 worker 凭 `checkpoint.last_committed_batch` 续跑;③ 重放已提交批次经 `data_job_rows.UNIQUE(job_id, row_key)` upsert 幂等——**不重复创建 issue/project**,计数与台账、实体一致;④ 源文件在 validate 后被替换 → `source_content_hash` 校验失败拒绝续跑;⑤ `data_job_rows` CHECK:created/updated 必带 target、failed 必带 error |
+| T32 | **偏好真源与 locale 单一权威(R3,HIGH-7)** | ① `users.settings`(`locale`/`theme`)与 `users.timezone` 可经 `PATCH /api/v1/users/me` 写入并回读(校验:非法 timezone `422 invalid_timezone`、不支持 locale `422 unsupported_locale`、theme ∈ light/dark/system);② workspace locale 唯一真源 `workspaces.settings.default_locale`(默认 `en`,与 i18n.md/§6.18 一致),**`default_language` 列已删除(只迁移/弃用,无长期双写)**;③ locale 协商链按 §6.18 逐级回退 |
+| T33 | **Analytics 可见性缓存键与口径(R3,HIGH-8;协同 MES-4 HIGH-2)** | ① 工作区级聚合(含 `/dashboards/workspace`)**按请求者项目可见性过滤**——非 private 项目成员得不到该项目统计量(admin/owner 见全工作区聚合);显式多项目聚合含不可见项目 → 整体 403(不部分返回);② `analytics_snapshots.scope_key` 纳入缓存唯一键:`ws_admin`(admin 全量)与 `projects:<hash>`(成员可见集合)快照分行并存,**跨权限缓存绝不共享**(普通成员查询不命中 ws_admin 行,可见性变更后旧键自然失效);③ burndown/velocity 按**当前归属口径**计算(响应 `scope_caliber='current_attribution'`),issue 移入/移出按当前集合重算,不声称还原历史归属;④ `calendar_timezone` 入维度指纹(不同时区分桶缓存不共享,本地自然日不跨桶) |
+| T34 | **Onboarding 证据与末步判定(R3,HIGH-9)** | ① 人类成员入册事务同事务播种清单(受邀进入成熟工作区 → 建状态时全量 reconcile 历史事实,步骤 2–4 带证据直接完成,**不永久 pending**;agent 成员不播种);② 末步完成条件 = 该成员触发的执行有 agent 回评 **且** 相关收件箱通知被该成员打开/标读(`notification.read` 驱动),`evidence` 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}`;③ **未读不宣告 aha**——不再凭「workspace 存在 completed 执行 + agent 评论」对全体成员批量完成;④ agent 创建入口唯一为成员名册(README §6.12,Settings 无独立 Agents 名册) |
 
 ---
 
@@ -808,4 +826,4 @@ Mesh 提供官方命令行工具 `mesh`(与 Web 同源 REST API,经 `api_tokens`
 
 ---
 
-*文档版本:Draft v3 / R2 修订(2026-07-25,含 MES-2 强化轮必修 A–F 与建议 7–16 处置)。后续任何 Spec 变更须在对应功能文件内修订;涉及公共契约的变更必须先改本章并同步引用方。*
+*文档版本:Draft v3 / R3 修订(2026-07-25,含 v3 架构/UX 复审 HIGH×9 收口与 3 项非阻断建议处置;R2 修订与 MES-2 强化轮必修 A–F、建议 7–16 处置见上方要点)。后续任何 Spec 变更须在对应功能文件内修订;涉及公共契约的变更必须先改本章并同步引用方。*

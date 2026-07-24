@@ -130,7 +130,6 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 | `context_issue_id` | UUID | NULL,复合 FK `(workspace_id, context_issue_id) → issues(workspace_id, id)` | NULL | 上下文关联 issue |
 | `context_project_id` | UUID | NULL,复合 FK `(workspace_id, context_project_id) → projects(workspace_id, id)` | NULL | 上下文关联项目 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','archived','deleted') | `'active'` | 会话状态 |
-| `is_pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶(**R2:置顶真源为 README §6.19 统一 `favorites` 表,`target_type='chat_session'`;本字段保留为兼容快照,由服务层与 favorites 双向同步,读取以 favorites 为准**) |
 | `last_message_at` | TIMESTAMPTZ | NULL | NULL | 最近一条消息时间(排序用) |
 | `last_message_preview` | TEXT | NULL | NULL | 最近消息摘要(列表展示) |
 | `message_count` | INT | NOT NULL,CHECK (>= 0) | `0` | 消息数 |
@@ -185,9 +184,13 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 ### 2.8 索引与约束
 
 ```sql
--- 会话:列表(置顶优先 + 时间倒序)/ 按 agent 筛选 / 反查 issue 关联会话
+-- 会话:列表(时间倒序)/ 按 agent 筛选 / 反查 issue 关联会话
+-- R3:置顶(is_pinned)快照列已删除——置顶真源唯一为 README §6.19 `favorites`(target_type='chat_session');
+-- 列表「置顶优先」排序由服务层对请求者 favorites 做 LEFT JOIN(EXISTS 子查询计算 pinned 排序键)再按
+-- (pinned DESC, last_message_at DESC) 输出,不在本表冗余快照(消除双真源漂移:此前保留 is_pinned 快照
+-- 却无原子同步/修复协议)
 CREATE INDEX idx_chat_sessions_owner_list
-  ON chat_sessions(owner_id, is_pinned DESC, last_message_at DESC) WHERE deleted_at IS NULL;
+  ON chat_sessions(owner_id, last_message_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_chat_sessions_owner_agent ON chat_sessions(owner_id, agent_id, last_message_at DESC);
 CREATE INDEX idx_chat_sessions_context_issue ON chat_sessions(context_issue_id) WHERE context_issue_id IS NOT NULL;
 
@@ -261,16 +264,18 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
     "id": "ses-b7e4...", "workspace_id": "ws-001", "owner_id": "mem-1111...",
     "agent_id": "agt-3f2b...", "title": "登录重定向 bug 讨论", "title_is_auto": false,
     "context_issue_id": "iss-9a1c...", "context_project_id": null,
-    "status": "active", "is_pinned": false, "last_message_at": null,
+    "status": "active", "pinned": false, "last_message_at": null,
     "last_message_preview": null, "message_count": 0,
     "created_at": "2026-07-24T09:00:00Z", "updated_at": "2026-07-24T09:00:00Z" } }
 ```
+
+> **R3:`pinned` 为服务端计算字段,非存储列**——置顶真源唯一为 README §6.19 `favorites`(`target_type='chat_session'`,成员私有);响应中的 `pinned` 是"请求者是否收藏该会话"的服务端快照(同 README §6.1 `member_type` 响应快照模式,标注"真源为 favorites"),`chat_sessions` 上**不再有 `is_pinned` 列**(删除快照,消除双真源);置顶/取消置顶经 `PUT/DELETE /api/v1/favorites/chat_session/{id}`(README §6.19 端点),本模块不提供独立 pin 端点。
 
 **会话列表(游标分页 + 筛选)** `GET /api/v1/workspaces/{ws}/chat-sessions?agent_id=agt-3f2b...&status=active&limit=20`
 ```json
 { "data": [
     { "id": "ses-b7e4...", "agent_id": "agt-3f2b...", "title": "登录重定向 bug 讨论",
-      "status": "active", "is_pinned": true, "last_message_at": "2026-07-24T10:12:33Z",
+      "status": "active", "pinned": true, "last_message_at": "2026-07-24T10:12:33Z",
       "last_message_preview": "我已定位到 3 个可能原因…", "message_count": 12,
       "context_issue_id": "iss-9a1c..." }
   ],

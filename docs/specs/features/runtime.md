@@ -252,9 +252,9 @@ erDiagram
 | priority | int | NOT NULL | 100 | 数值越小越优先 |
 | task_spec | jsonb | NOT NULL | `'{}'` | 任务定义（命令、镜像要求、env 声明、需要哪些 secret） |
 | label_requirements | jsonb | NOT NULL | `'{}'` | 要求 runtime 具备的标签 |
-| required_capabilities | jsonb | NOT NULL | `'[]'` | 所需 runtime 能力清单（如 `["ffmpeg","gpu"]`）；claim 时与服务端保存的 `runtimes.capabilities` 匹配（§2.5，README §6.4 R2 权威字段，不能只在文字里声称已校验） |
+| required_capabilities | jsonb | NOT NULL | `'[]'` | 所需 runtime 能力清单（如 `["ffmpeg","gpu"]`）；**严格类型为「字符串数组」**——schema CHECK 拒绝任何非字符串元素（R3：调度字段只接受 capability key 集合，`{capability,permission}` 对象条目在入队归一算法中只取其 key，见 README §6.4/§6.11、agent.md §3.3；对象一旦混入,claim 的 JSONB `<@` 匹配永不命中、任务永久无法领取）；claim 时与服务端保存的 `runtimes.capabilities`（同为字符串数组）匹配（§2.5，README §6.4 权威字段，不能只在文字里声称已校验） |
 | trigger_event_id | uuid | NULL | - | 触发来源的 outbox 事件 id（审计 / 幂等键输入，README §6.11） |
-| config_snapshot | jsonb | NOT NULL | `'{}'` | **入队可复现快照**：agent_config_version_id、skill 版本、capability_grants、repo/base SHA、trigger_event_id（README §6.11） |
+| config_snapshot | jsonb | NOT NULL | `'{}'` | **入队可复现快照**：agent_config_version_id、skill 版本、capability_grants（**严格 `[{capability,permission}]` 对象数组**——授权语义只进快照,不进 `required_capabilities` 调度字段,R3）、repo/base SHA、trigger_event_id（README §6.11） |
 | max_attempts | int | NOT NULL, CHECK(>=1) | 3 | 最大物理尝试次数（超出转 `failed(max_retries)`） |
 | queued_at | timestamptz | NOT NULL | `now()` | 入队时间 |
 | finished_at | timestamptz | NULL | - | 逻辑结束时间 |
@@ -485,7 +485,7 @@ COMMIT;
 
 要点：
 - **容量防超卖 + 无任务必回滚**（R2 硬约束，T20）：claim 是「选任务 + 扣容量 + 建 attempt」的**单一原子成功分支**——先 `SELECT ... FOR UPDATE` 锁 runtime 行校验在线/越权/容量（**仅校验，不预扣**；行锁串行化同一 runtime 的并发 claim），再 `FOR UPDATE SKIP LOCKED` 选出匹配任务；**选中任务后**才 `current_load + 1`、转 `claimed`、建 attempt，一次提交。**有容量但无匹配任务时事务必须整体回滚（`current_load` 保持不变）再返回 204**，绝不「先 +1 再找任务」后带着 0 行结果 COMMIT（那会造成容量永久泄漏）。
-- **能力匹配为权威条件**（R2）：`e.required_capabilities <@ :server_runtime_capabilities` 与标签条件并行生效，能力清单取自步骤 1 锁定的服务端 `runtimes.capabilities`（不信 daemon 请求体）；缺所需能力的 runtime 跳过该任务（集成测试 T20）。
+- **能力匹配为权威条件**（R2/R3）：`e.required_capabilities <@ :server_runtime_capabilities` 与标签条件并行生效，能力清单取自步骤 1 锁定的服务端 `runtimes.capabilities`（不信 daemon 请求体）；缺所需能力的 runtime 跳过该任务（集成测试 T20）。**两侧均为严格字符串数组**（R3）：`runtimes.capabilities` 为 capability key 字符串数组；`e.required_capabilities` 由入队归一算法派生为纯 key 集合并由 schema CHECK 兜底（`{capability,permission}` 对象只进 `config_snapshot.capability_grants` 授权快照，绝不进调度字段——否则 `<@` 永不命中、任务永久无法领取，README §6.4/§6.11、agent.md §3.3、集成测试 T28）。
 - `FOR UPDATE SKIP LOCKED`：多台 runtime 并发领取时，被某事务锁住的行直接被其它事务跳过，**零锁等待、零重复领取**。
 - **容量幂等释放**：attempt 进入任一终态（completed/failed/timeout/cancelled）或被 reaper 置 `reclaimed` 时，**在状态迁移的同一事务内**对 `runtimes.current_load` 做 `GREATEST(current_load - 1, 0)`；每个 attempt 只释放一次（由 attempt 状态迁移守卫，终态 → 终态 的重复上报为 no-op），防止泄漏或扣成负数。
 - `lease_seq` 每次领取 / 续租自增，作为 fencing 令牌：续租与一切上报必须带正确 `lease_seq`，旧持有者「诈尸」回写因不匹配被 `409` 拒绝（脑裂防护）。
