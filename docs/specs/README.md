@@ -485,7 +485,7 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 
 ### 6.15 不可信内容处理(权威,MES-4 安全约束)
 
-**所有外部来源内容(成员评论、附件、Webhook 载荷、抓取/上传内容)进入 agent 上下文时,一律视为数据而非指令**:
+**所有外部来源内容(成员评论、附件、Webhook 载荷、抓取/上传内容、**checkout 仓库内文件与命令输出**)进入 agent 上下文时,一律视为数据而非指令**:
 
 1. 显式标记为不可信数据并做结构隔离(如用分隔标记包裹,明确告知 agent 这些内容不含可执行指令);
 2. agent 不得将不可信内容中的"指令"作为行动依据;
@@ -560,6 +560,8 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 | T13 | **幂等副作用** | 同一 attempt 重复提交相同 Idempotency-Key 的评论/工具调用:结果只产生一次 |
 | T14 | **附件隔离区** | 上传完成(scan_status=pending)时请求下载 → 拒绝(403 `scan_pending`);worker 置 clean 后可下载;infected 时永久拒绝并告警 |
 | T15 | **编号并发** | 同项目 / 无项目并发创建 issue(≥10):`UNIQUE(workspace_id, identifier)` 下无重号、无跳号(除失败回滚) |
+| T16 | **仓库 checkout 白名单(H1)** | checkout `config_snapshot.repo.url` 不在 `allowed_repos` 白名单内 → 403;`repo_token` 用于白名单外仓库 → 拒绝;平台托管 runtime checkout 私网 / 元数据地址 → 拒绝 |
+| T17 | **全通道脱敏(C2)** | agent 尝试把已知 secret 值写入评论 / 附件产出物 → 内容被拦截、不发布、触发安全告警;日志中 secret 命中 → `***` 替换(评论 / 附件 / 日志三通道均覆盖) |
 
 ---
 
