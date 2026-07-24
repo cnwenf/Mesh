@@ -236,13 +236,21 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `id` | uuid | PK | |
 | `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 多租户隔离(README §6.2) |
 | `notification_id` | uuid | NOT NULL,复合 FK `(workspace_id, notification_id) → notifications(workspace_id, id)` | |
-| `channel` | text | NOT NULL, CHECK in ('in_app','email','websocket','im') | `channel='im'` 时具体 IM 平台(`feishu`/`slack`)与目标外部身份记入 `error`/台账扩展字段;经集成平台出站适配器投递(README §6.13/§6.17) |
+| `channel` | text | NOT NULL, CHECK in ('in_app','email','websocket','im') | 投递渠道;`im` 经集成平台出站适配器投递(README §6.13/§6.17) |
+| `destination_key` | text | NOT NULL DEFAULT `''` | **规范化目的地键(R3)**:同一 `(notification_id, channel)` 下区分多个并发目的地的稳定键。`in_app`/`websocket` 恒为 `''`(单一目的地:站内收件箱/该用户的实时连接聚合);`email` 为收件地址(同一通知发往多个邮箱时逐地址一行);**`im` 为 `<provider>:<binding_id>:<external_target>` 的规范化串**(如 `feishu:<binding-uuid>:oc_xxx`、`slack:<binding-uuid>:C0xxx`)——一个通知可同时投递 Slack + 飞书 + 同平台多绑定,**每个目的地一行台账** |
+| `provider` | text | NULL, CHECK in ('feishu','slack','email_smtp') | **结构化路由字段(R3)**:`channel='im'` 时必填(IM 平台);`channel='email'` 时为投递通道标识(可空=默认 SMTP);其余渠道为 NULL |
+| `external_target` | text | NULL | **结构化路由字段(R3)**:`channel='im'` 时必填(外部目标身份:飞书 `chat_id`/用户 `open_id`、Slack `channel_id`/`user_id`);`email` 时为收件地址;其余为 NULL |
+| `integration_id` | uuid | NULL,复合 FK `(workspace_id, integration_id) → integrations(workspace_id, id)` ON DELETE SET NULL (integration_id) | `channel='im'` 时经哪个集成实例投递(integrations.md owns;集成删除后置空,台账保留供排障) |
+| `binding_id` | uuid | NULL,复合 FK `(workspace_id, binding_id) → integration_bindings(workspace_id, id)` ON DELETE SET NULL (binding_id) | `channel='im'` 时经哪个绑定投递(integrations.md owns;解绑后置空,台账保留供排障) |
 | `state` | text | NOT NULL, CHECK in ('pending','sent','failed') | |
 | `sent_at` | timestamptz | NULL | |
-| `error` | text | NULL | |
+| `error` | text | NULL | **仅记录失败原因(R3)**(如 `timeout`/`rate_limited`/`invalid_token`/`channel_unreachable` + 摘要),**绝不混入路由数据**——IM 平台与目标身份一律由 `provider`/`external_target`/`integration_id`/`binding_id`/`destination_key` 结构化表达;排障台账(README §6.12 集成排障台账)按本组字段筛选与重试 |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() | |
 
-**唯一约束:** `uq_delivery (notification_id, channel)` — 邮件摘要任务幂等投递、失败重试。
+**唯一约束(R3 修订):** `uq_delivery (notification_id, channel, destination_key)` — 幂等投递/失败重试的去重键**至少到目的地粒度**:
+- 此前 `UNIQUE(notification_id, channel)`:同一通知**无法并发投递多个 IM 目的地**(Slack + 飞书、或一个 agent 绑定的多个群),第二次 INSERT 撞唯一键;且为区分目的地被迫把「平台 + 目标身份」塞进 `error` 文本,失败字段混入正常路由数据(违背 README §6.13/§6.17)。
+- R3 后:`in_app`/`websocket` 的 `destination_key=''`,行为与旧键等价(每通知每渠道一行);`im`/多地址 `email` 每目的地一行,同目的地重投经唯一键幂等(at-least-once → 恰好一次副作用,README §6.5)。
+- `integration_id`/`binding_id` 为列级 `SET NULL`(集成/绑定删除不毁投递审计,README §6.2 第 6 条);`channel='im'` 行的路由四元组(`provider` + `external_target` + `integration_id` + `binding_id`)在投递建立时由出站适配器写入,建立后不改(重试只更新 `state`/`attempts`/`error`)。
 
 ### 2.9 跨模块外键说明
 
@@ -406,7 +414,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 2. 编辑时与上一版本提及集合做 **diff**,仅对**新增**且 JOIN `members` 得 `member_type='agent'` 的提及走触发流程。
 3. 入队经 **transactional outbox(README §6.6)** 写 `execution.enqueue` 事件 → relay 创建 `task_executions`(`queued`,`trigger='mention'`,入队快照见 README §6.11,幂等键见 §6.5),落 `comment_mentions.triggered_execution_id`。业务事务与 outbox 同提交,接口同步返回;即使派发组件短暂不可用,事件也不丢(outbox 补投,集成测试 T5)。
 4. 请求体 `suppress_triggers: true` → **仅发通知、不入队执行**(README §6.9 显式抑制)。
-5. 执行结果由 agent runtime 以 **agent 评论**形式回流到**原线程**(`parent_id`=原评论所属线程根),并把触发者加入订阅(reason=`participated`/`mentioned`),触发者收到 `execution_finished` 通知;执行事件词汇(`execution.queued` / `execution.completed` 等)见 runtime.md。
+5. 执行结果由 agent runtime 以 **agent 评论**形式回流到**原线程**(`parent_id`=原评论所属线程根),并把触发者加入订阅(reason=`participated`/`mentioned`);**是否进收件箱一律按 README §6.13 唯一通知矩阵**——执行**成功**默认**不进收件箱**(留运行页/时间线,仅当触发者在 `notification_preferences` 显式订阅 `execution_finished` 时才进箱,且不重置已读组);执行**失败/超时**按 critical 进收件箱并穿透 quiet hours;agent 回流评论本身按「评论新增」normal 档聚合进箱(订阅者可见)。本模块**不另行定义成功通知**(`execution_finished` 类型默认不投递成功事件,preferences 显式订阅后才进箱);执行事件词汇(`execution.queued` / `execution.completed` 等)见 runtime.md。
 
 **权限校验:** 无触发权限 → 该提及返回 `mention_invalid`/`forbidden`,不入队;其余合法提及正常处理。
 
@@ -522,7 +530,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - [ ] `@`agent 且调用者有触发权限:入队**一次**执行(`task_executions`,`trigger='mention'`),`triggered_execution_ids` 回填,`triggered_execution_id` 落库(复合 FK)。
 - [ ] `@`agent 无触发权限:返回 `forbidden`/`mention_invalid`,不入队。
 - [ ] 一条评论 @ 同一 agent 两次:仅入队一次执行(`uq_mentions`)。
-- [ ] 执行结果以 agent 评论回流**原线程**,触发者加入订阅并收到 `execution_finished` 通知与 `execution.completed` 事件。
+- [ ] 执行结果以 agent 评论回流**原线程**,触发者加入订阅;通知分发**按 README §6.13 唯一矩阵**:执行成功默认**不进收件箱**(仅显式订阅 `execution_finished` 才进箱),失败/超时按 critical 进箱;`execution.completed` 实时事件照常推送运行页/issue 频道(实时事件 ≠ 收件箱通知)。
 - [ ] 回复 agent 评论但不再 @ 它:不触发新执行(不提及即结束)。
 - [ ] agent 不接收会再触发自己的通知;agent 互 @ 受 `MAX_AGENT_CHAIN_DEPTH` 保护,超限静默丢弃并审计。
 - [ ] 执行失败:评论区失败占位卡片 + 通知触发者;不自动重试入队。**失败/超时按 critical 通知**(进收件箱 + 穿透 quiet hours + 重置同组未读,README §6.13)。
@@ -530,7 +538,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 
 ### 5.3 功能 — 收件箱 / 通知(README §6.13)
 
-- [ ] 被分派/被提及/订阅更新/我创建的 issue 更新/agent 执行完成 均正确生成通知。
+- [ ] 被分派/被提及/订阅更新/我创建的 issue 更新 均正确生成通知;**agent 执行完成按 README §6.13 矩阵分发**——成功默认不进收件箱(留运行页;显式订阅 `execution_finished` 才进箱),失败/超时 critical 进箱;**不存在无条件成功通知**。
 - [ ] **默认订阅**正确:creator/assignee 自动订阅,participated(发过评论)、mentioned(被 @)自动订阅,可手动订阅/取消。
 - [ ] **按 issue 静音**:`muted=true` 保留订阅但不出通知;「不再关注此 issue」一键静音可用。
 - [ ] **重新置未读**:已读组仅新的 **critical 事件(执行失败/超时、审批请求、安全隔离、被分派、被 @)**重新置未读;**执行成功不重置未读**;**同类计数累加不重新置未读**。
@@ -545,6 +553,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - [ ] 偏好矩阵生效:`in_app=false` 不出站内;`email` 策略(none/realtime/digest)正确;`muted` 订阅不出通知。
 - [ ] **自我抑制**:发起者不给自己生成通知;agent 不接收会再触发自己的通知。
 - [ ] 邮件摘要任务幂等(`uq_delivery`),失败可重试。
+- [ ] **IM 多目的地投递台账(R3,集成测试 T30)**:同一通知可**并发**投递多个 IM 目的地(Slack + 飞书 + 同平台多绑定),每目的地一行 `notification_delivery`(`destination_key` 区分,`UNIQUE(notification_id, channel, destination_key)` 幂等);IM 平台与目标身份由结构化字段(`provider`/`external_target`/`integration_id`/`binding_id`)表达,**`error` 字段只记失败原因**(扫描确认不含路由数据);单目的地失败不影响其他目的地投递;集成/绑定删除后经列级 SET NULL 置空引用、台账保留供排障(README §6.12 集成排障台账)。
 - [ ] 点击通知直达评论锚点并高亮,自动标已读。
 
 ### 5.4 非功能

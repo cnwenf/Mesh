@@ -123,7 +123,7 @@ WHERE i.workspace_id = $ws
 | 周期窗 | `cycles.starts_at`/`ends_at`(均为 `DATE`,project.md §2.2)。窗为 DATE,落窗判定将 DATE 边界按 `display_timezone`(默认工作区时区)展开为 UTC 区间 `[starts_at 00:00, (ends_at+1) 00:00)`(含末日全天)。 |
 | 点数 | `SUM(issues.estimate)`(`estimate_unit` 为 `points`/`hours`,响应分别标注单位;NULL estimate 计 0)。 |
 | 时间窗 | 查询参数 `cycle_ids`(显式周期列表)或 `from`/`to`(筛 `starts_at` 与之相交的周期)。 |
-| 归属 | issue 与 cycle 经 `issues.cycle_id` 关联;**未挂 cycle 的 done issue 不计入任何周期 velocity**(诚实口径,可在工作区仪表盘单列「未规划周期」)。 |
+| 归属(**当前归属口径,R3 写死**) | issue 与 cycle 经 `issues.cycle_id` 关联(查询时刻的当前归属);**未挂 cycle 的 done issue 不计入任何周期 velocity**(诚实口径,可在工作区仪表盘单列「未规划周期」)。**issue 在周期间移动会改变移出/移入双方的历史 velocity**(与 burndown §2.2.5 同口径:按当前归属重算,不还原历史归属);响应 meta 标注 `"scope_caliber": "current_attribution"`。 |
 
 ```sql
 -- velocity:逐周期完成数与点数(cycle_ids 显式给定)
@@ -149,30 +149,33 @@ ORDER BY c.starts_at;
 |----|------|
 | 定义 | 单位时间内 `created` 与 `completed` 的 issue 数(两条序列)。 |
 | 桶粒度 | `granularity ∈ {day, week, month}`,对应 PG `date_trunc`。 |
-| 桶边界 | **一律 UTC**(`date_trunc($g, ts)`,ts 为 UTC timestamptz);展示层按 `display_timezone` 重渲染桶标签(§2.4)。默认不给「按用户时区日界」的服务端桶,以保桶边界唯一真源;如确需,实现可 `date_trunc($g, ts AT TIME ZONE $tz)` 但仍以 UTC 锚点返回。 |
+| 桶边界(**按 `calendar_timezone` 本地日历分桶,R3 写死**) | 桶边界**按 `calendar_timezone` 的本地日历对齐**(§2.4):day 桶 = 该时区当地 `[00:00, 次日00:00)`、week 桶 = 当地周一 00:00 起、month 桶 = 当地月初 00:00 起,经 `date_trunc($g, ts AT TIME ZONE $cal_tz)` 计算;每个桶以**本地日历周期标签**(如 `2026-07-25`)+ 其对应的 **UTC 瞬间区间**(`window_start`/`window_end`,= 本地边界 `AT TIME ZONE $cal_tz` 转 UTC)一并返回——**日期标签与统计边界恒一致,本地自然日不跨桶**。R3 前的「UTC 分桶 + 展示层换时区标签」做法废弃:那会让 UTC+8 用户的"7 月 25 日"桶实际覆盖当地 7/25 08:00–7/26 08:00,时区切换后标签与边界错位。`calendar_timezone` 缺省取请求者 `users.timezone` → 工作区 `timezone` → `UTC`(§2.4);显式 `calendar_timezone='UTC'` 即 UTC 分桶(供跨时区统一报表);不同 `calendar_timezone` 的分桶结果维度不同(`dimensions.calendar_timezone` 入 `dim_hash`,缓存不跨时区共享,§2.5)。 |
 | created 序列 | `issues.created_at ∈ [from, to)` 且 `deleted_at IS NULL`。 |
 | completed 序列 | `state_category='done'` 且 `completed_at ∈ [from, to)`。 |
 | 净流量 | 响应附 `net = created - completed`(派生,前端可绘积压趋势)。 |
 
 ```sql
--- throughput:created vs completed 按 UTC 桶
-SELECT bucket,
+-- throughput:created vs completed 按 calendar_timezone 本地日历分桶(R3)
+SELECT bucket_local,
+       (bucket_local AT TIME ZONE $cal_tz)            AS window_start_utc,  -- 本地桶起点的 UTC 瞬间
        COUNT(*) FILTER (WHERE kind='created')   AS created,
        COUNT(*) FILTER (WHERE kind='completed') AS completed
 FROM (
-  SELECT date_trunc($granularity, created_at) AS bucket, 'created' AS kind
+  SELECT date_trunc($granularity, created_at AT TIME ZONE $cal_tz) AS bucket_local, 'created' AS kind
     FROM issues
    WHERE workspace_id=$ws AND deleted_at IS NULL
      AND created_at >= $from AND created_at < $to
   UNION ALL
-  SELECT date_trunc($granularity, completed_at) AS bucket, 'completed' AS kind
+  SELECT date_trunc($granularity, completed_at AT TIME ZONE $cal_tz) AS bucket_local, 'completed' AS kind
     FROM issues
    WHERE workspace_id=$ws AND deleted_at IS NULL
      AND state_category='done' AND completed_at IS NOT NULL
      AND completed_at >= $from AND completed_at < $to
 ) t
-GROUP BY bucket
-ORDER BY bucket;
+GROUP BY bucket_local
+ORDER BY bucket_local;
+-- 响应每桶:{label: <bucket_local 本地日历标签>, window_start/window_end: <UTC 瞬间>, created, completed}
+-- 跨 DST 的时区/日期由 AT TIME ZONE 按当日实际偏移处理,桶宽可能为 23h/25h(day 粒度),标签与边界仍一致(§5.2)。
 ```
 
 #### 2.2.4 Workload(负荷)
@@ -215,7 +218,7 @@ GROUP BY e.agent_id;
 | 定义 | 周期或里程碑内**剩余工作量随时间**的曲线,含**理想线**(线性递减至 0)与**实际线**。 |
 | 作用域(二选一) | `cycle_id`(窗 = `cycles.starts_at..ends_at`)或 `milestone_id`(窗 = 里程碑创建/起始日至 `milestones.target_date`;起始日取该项目 `min(start_date)` 或里程碑 `created_at`,实现按 project.md 校准)。两者**恰好一个**,同传或皆缺为 `400`。 |
 | 工作量度量 | `metric ∈ {count, points}`:count = issue 数;points = `SUM(estimate)`(NULL 计 0)。 |
-| scope 集合 | 周期:`issues.cycle_id = $cycle_id`;里程碑:`issues.milestone_id = $milestone_id`(`deleted_at IS NULL`)。**曾进入该 scope 的 issue 全部计入初始总量**(含已完成)。 |
+| scope 集合(**当前归属口径,R3 写死**) | 周期:`issues.cycle_id = $cycle_id`;里程碑:`issues.milestone_id = $milestone_id`(`deleted_at IS NULL`)。**scope = 查询时刻归属该 cycle/milestone 的 issue 集合**——R3 明确降级为「当前归属」口径(不再声称「曾进入 scope 全部计入」:本 SQL 只读当前 `cycle_id`/`milestone_id`,无法还原历史归属,继续声称"曾进入"会让移入/移出 issue 静默改写历史曲线、口径不可复核)。据此口径:**issue 移入/移出 cycle/milestone 会改变该 scope 的历史燃尽曲线**(总量与已完成量随当前集合重算),这是口径的明确语义而非缺陷;响应 meta 标注 `"scope_caliber": "current_attribution"` 供 UI 提示「曲线按当前归属计算」。未来如需「曾进入 scope」历史口径,须消费 `issue_activity` 的规范化 scope 变更事实(cycle/milestone 字段变更留痕,issue.md owns)重建历史归属,立项后再扩展,不在本期声称。 |
 | 剩余量(实际线) | 截至日期 d 的剩余 = scope 总量 − 在 d 日界(按 `display_timezone` 展开为 UTC)之前(含)完成的工作量,即 `completed_at < (d+1) AT TIME ZONE $tz` 视为「d 日及以前已完成」。仅输出 `d < today` 的过去日(未来日无实际值)。 |
 | 理想线 | 从窗起点总量 `total` 线性递减到窗终点 `0`:第 d 天理想剩余 = `total × (剩余日历天数 / 总日历天数)`。 |
 | 时区处理 | DATE 日界按 `display_timezone` 展开为 UTC 比较;曲线点以 UTC 日锚点返回,展示层时区化。跨 DST 时日界仍按该时区当日 00:00 的 UTC 瞬间计算,不错位(§5.2 验收)。 |
@@ -310,7 +313,7 @@ WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
 | 约定 | 内容 |
 |------|------|
 | 参数 | `from`/`to` 一律 **RFC3339 UTC**;缺省窗由端点定义(如仪表盘默认近 30 天 `[now()-30d, now())`)。窗语义左闭右开 `[from, to)`。 |
-| 桶边界 | throughput 等分桶**以 UTC `date_trunc` 计算**,桶边界唯一真源为 UTC。 |
+| 桶边界(**`calendar_timezone` 分桶语义,R3**) | throughput/仪表盘等分桶**按 `calendar_timezone` 的本地日历对齐**:day = 当地自然日 `[00:00, 次日00:00)`、week = 当地周一起、month = 当地月初起(`date_trunc($g, ts AT TIME ZONE $cal_tz)`,§2.2.3)。每桶返回**本地日历标签 + 对应 UTC 瞬间窗**(`window_start`/`window_end`),标签与统计边界恒一致、本地自然日不跨桶;`calendar_timezone` 缺省 = 请求 `?tz=`/`calendar_timezone=` → 请求者 `users.timezone` → 工作区 `timezone` → `UTC`,显式 `UTC` 即 UTC 分桶;**时区切换(用户改 `users.timezone`)后日期标签与桶边界同步变化、不出现错位**(不再使用"UTC 分桶 + 展示层换标签")。`calendar_timezone` 纳入聚合 `dimensions`(入 `dim_hash`),不同时区的分桶缓存分行、不共享(§2.5)。 |
 | 日界展开 | cycle/milestone 的 `DATE` 边界、burndown 的「日」按 `display_timezone` 展开为 UTC 瞬间(`d AT TIME ZONE $tz`)参与比较。 |
 | `display_timezone` | 取请求 `?tz=`(IANA)→ 请求者 `users.timezone` → 工作区默认 → `UTC`;**仅用于响应中时间锚点/桶标签的展示层时区化与日界展开**,不改存储与桶真源。每个含时间序列的响应在 `meta.display_timezone` 回显所用时区。 |
 | 跨 DST | 日界按该 IANA 时区**当日 00:00 的 UTC 瞬间**计算(`AT TIME ZONE` 自动处理偏移切换),序列点不因 DST 错位或重复;验收见 §5.2。 |
@@ -320,39 +323,42 @@ WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
 
 **默认按需查询**:六类指标均可以上聚合 SQL 直接计算,命中源表既有索引——`idx_issues_project_status`/`idx_issues_assignee`/`idx_issues_cycle`/`idx_issues_milestone`/`idx_issue_activity_issue`(issue.md §2.3)、`idx_executions_agent_time`/`idx_executions_issue_time`/`idx_attempts_execution`(runtime.md §2.4)、`idx_run_autopilot_started`(autopilot.md)。
 
-**可选物化缓存**:对高频/重计算指标(如工作区仪表盘吞吐量、大项目 burndown)可写入 `analytics_snapshots`,后台 worker 周期刷新 + 查询时过期重算。**缓存非真源**:任何缓存值与真源不一致时以重算为准(§2.6)。
+**可选物化缓存**:对高频/重计算指标(如工作区仪表盘吞吐量、大项目 burndown)可写入 `analytics_snapshots`,后台 worker 周期刷新 + 查询时过期重算。**缓存非真源**:任何缓存值与真源不一致时以重算为准(§2.6)。**可见性版本纳入缓存键(R3)**:快照携带 `scope_key`——计算该聚合所用的**可见性集合指纹**,查询命中必须 scope_key 与请求者权限匹配,**禁止跨权限复用缓存**(private project 聚合不得经共享缓存泄露给非成员,§3.1/§4.3)。
 
 ```sql
 CREATE TABLE analytics_snapshots (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   metric_key   TEXT NOT NULL,                 -- 'cycle_time'/'velocity'/'throughput'/'workload'/'burndown'/'agent_stats'
-  dimensions   JSONB NOT NULL DEFAULT '{}',   -- {project_id?, cycle_id?, milestone_id?, agent_id?, granularity?, from_category?, tz?}
+  scope_key    TEXT NOT NULL DEFAULT 'ws_admin',  -- R3:可见性集合指纹(缓存键一部分,禁跨权限缓存)
+  dimensions   JSONB NOT NULL DEFAULT '{}',   -- {project_id?, cycle_id?, milestone_id?, agent_id?, granularity?, from_category?, tz?, calendar_timezone?}
   dim_hash     TEXT GENERATED ALWAYS AS (md5(dimensions::text)) STORED,  -- 维度指纹,供唯一键/查找(避免 JSONB 直接入唯一索引)
   window_start TIMESTAMPTZ NOT NULL,          -- UTC
   window_end   TIMESTAMPTZ NOT NULL,          -- UTC
-  value        JSONB NOT NULL,                -- 聚合结果(指标值 + 必要 meta,如 sample_size/token_coverage)
+  value        JSONB NOT NULL,                -- 聚合结果(指标值 + 必要 meta,如 sample_size/token_coverage/scope_caliber)
   computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  -- 同一 (工作区, 指标, 维度, 窗) 仅一份快照(覆盖式刷新)
-  UNIQUE (workspace_id, metric_key, dim_hash, window_start, window_end)
+  -- 同一 (工作区, 指标, 可见性集合, 维度, 窗) 仅一份快照(覆盖式刷新)——scope_key 入键即"跨权限不共享"
+  UNIQUE (workspace_id, metric_key, scope_key, dim_hash, window_start, window_end)
 );
 
 CREATE INDEX idx_snapshots_lookup
-  ON analytics_snapshots (workspace_id, metric_key, dim_hash, window_start, window_end);
+  ON analytics_snapshots (workspace_id, metric_key, scope_key, dim_hash, window_start, window_end);
 CREATE INDEX idx_snapshots_stale
   ON analytics_snapshots (computed_at);        -- 供 worker 找过期快照重算
 ```
 
 > **多租户**:`analytics_snapshots.workspace_id` 为隔离键,查询/刷新必带 `workspace_id`(README §6.2);不存任何跨工作区聚合。
+>
+> **`scope_key` 取值(R3 写死)**:① `ws_admin` —— 工作区全量聚合(仅 admin/owner 可查的端点使用,§3.1/§4.3,聚合 SQL 不过滤项目可见性,因为请求者本身即有权看全工作区);② `projects:<sha256(sorted project_id 列表)>` —— 按请求者可见项目集合聚合(请求者可见项目 = `visibility='public'` 的项目 ∪ 其 `project_members`/`member_project_access` 行覆盖的 private 项目;集合 id 排序后 sha256);③ `project:<project_id>` —— 单项目聚合。**查询时**:服务端先算请求者 scope_key,**只命中 scope_key 相等的快照行**;不命中则按该 scope 重算并写入。**绝不**把 `ws_admin` 快照返回给非 admin(即"全量聚合"与"可见集合聚合"物理分行、键不共享),杜绝经缓存侧信道泄露 private project 统计。
 
 ### 2.6 缓存一致性与失效
 
 | 规则 | 内容 |
 |------|------|
 | 非真源 | `analytics_snapshots` 仅为加速副本;真源永远是 `issues`/`task_executions` 等。 |
-| 命中条件 | 查询命中需 `metric_key`/`dim_hash`/窗匹配**且** `computed_at` 新于 TTL(默认 15 分钟,可配)。 |
+| 命中条件 | 查询命中需 `metric_key`/`dim_hash`/窗匹配**且** **`scope_key` 与请求者可见性集合一致(R3,禁跨权限复用)** **且** `computed_at` 新于 TTL(默认 15 分钟,可配)。 |
 | 过期重算 | `computed_at` 老于 TTL → **stale-while-revalidate**:返回旧值并触发后台重算;或按端点配置同步重算后返回(仪表盘首屏可同步)。 |
 | 周期刷新 | 后台 worker 按 TTL 周期扫描 `idx_snapshots_stale` 刷新热点快照;worker 失败不阻塞查询(回退按需查询)。 |
 | 强制重算 | 端点支持 `?refresh=true` 跳过缓存同步重算(管理/排障用,受 §6.14 限流)。 |
@@ -376,14 +382,16 @@ CREATE INDEX idx_snapshots_stale
 | GET | `/analytics/burndown` | 燃尽曲线(`cycle_id?` \| `milestone_id?` 恰好一个、`metric=count\|points`、`tz?`) |
 | GET | `/analytics/agents/stats` | 单/多 agent 运行统计(`agent_id?`、`from`、`to`) |
 | GET | `/dashboards/project/{project_id}` | 项目仪表盘聚合(velocity + burndown + cycle time,`from`/`to`、`cycle_id?`) |
-| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`) |
+| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`);**全体工作区成员可用,聚合按请求者项目可见性过滤**(private 项目不可见者其数据被剔除,MES-4 HIGH-2/R3);admin/owner 见全工作区聚合 |
 
 > 项目级端点(`/analytics/*?project_id=`、`/dashboards/project/{id}`)须过 `project_members` 可见性校验(project.md);无可见性返回 `403 project_not_visible`。
 >
-> **私有项目可见性过滤(HIGH-2,全端点覆盖)**:
+> **私有项目可见性过滤(MES-4 HIGH-2,全端点覆盖;R3 协同保留)**:
 > - **工作区级聚合**(不传 `project_id` 的 cycle time / throughput / workload / `/dashboards/workspace`):**按请求者项目可见性过滤,剔除其不可见的私有项目数据**(即 `WHERE project_id IS NULL OR project_id IN (请求者可见项目集)`),非私有项目成员的普通工作区成员看不到私有项目的计数/曲线/成员负荷;
 > - **按 `cycle_id`/`milestone_id` 的查询**(velocity / burndown):先解析归属项目并过 `project_members` 可见性校验,不满足 → `403 project_not_visible`;
-> - 工作区仪表盘受众为全体工作区成员,但**聚合数据按上述可见性过滤**(产品口径:数据过滤而非端点限 admin)。
+> - 工作区仪表盘受众为全体工作区成员,但**聚合数据按上述可见性过滤**(产品口径:数据过滤而非端点限 admin);**admin/owner 可见全工作区聚合(含 private 项目)**。
+>
+> **R3 可见性缓存边界(与上述过滤协同,硬约束)**:① **缓存不跨权限共享**:`analytics_snapshots.scope_key` 纳入缓存键(§2.5)——普通成员的聚合快照 scope_key 为 `projects:<sha256(请求者可见项目 id 排序)>`,admin/owner 全量聚合为 `ws_admin`;查询**只命中请求者 scope_key 相等的快照**,`ws_admin` 快照绝不返回给非 admin(过滤口径变化即新键,无跨权限泄露窗口,集成测试 T33)。② 单项目聚合 scope_key 为 `project:<id>`;显式多项目(`project_ids`)聚合请求者对其中任一项目不可见 → 整体 `403`(不部分返回,避免集合推断泄露)。③ 可见项目集合变化(项目转 private/成员移除)后旧 scope_key 快照不再命中,自然失效。
 
 ### 3.2 公共查询参数
 
@@ -497,6 +505,8 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 
 ### 4.3 工作区仪表盘
 
+> **可见性过滤(R3,协同 MES-4 HIGH-2)**:工作区仪表盘对全体工作区成员开放,但聚合**按请求者项目可见性过滤**——非 private 项目成员看不到该项目的计数/曲线/成员负荷(§3.1 可见性边界);admin/owner 见全工作区聚合(含 private 项目)。UI 对过滤口径给出轻提示(如"按你的项目可见范围统计"),避免把"过滤后数值"误读为全量。
+
 - **吞吐量趋势**:created vs completed 双折线(或柱),按 granularity 切换;附净流量(积压)趋势。
 - **workload 排行**:成员/agent 列表,列 = 名称(含 `member_type` 图标:人/agent)、open issues、运行中/排队/需审批(agent 行);按 open issues 降序;agent 行的「运行中 N/排队 M/需审批 K」呈现与 README §6.12 容量呈现一致。
 - **agent 统计区**:网格卡片,每 agent 显示成功率(语义色)、平均时长、重试率、近 30 天执行趋势 sparkline;token 覆盖率 <100% 时卡片标注「token 仅覆盖 autopilot 运行」。
@@ -528,16 +538,17 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 ### 5.1 功能性 —— 指标口径与 §2 一致(可 SQL 复核)
 
 - [ ] **cycle time**:仅统计 `state_category='done'` 且 `completed_at ∈ [from,to)` 的 issue;起始时间取 `issue_activity` 中目标 category=`from_category` 的最早 `created_at`;P50/P90 经 `percentile_cont` 计算;无留痕/负时长样本不计入且计入 `meta.insufficient_data`(§2.2.1)。给定固定数据集,接口结果与 §2.2.1 SQL 逐值一致。
-- [ ] **velocity**:完成判定 = `state_category='done'` 且 `completed_at` 落周期窗(DATE 边界按 `display_timezone` 展开为 UTC);点数为 `SUM(estimate)`;未挂 cycle 的 done issue 不计入任何周期(§2.2.2)。
-- [ ] **吞吐量**:created/completed 双序列按 UTC `date_trunc` 分桶,窗 `[from,to)`;`net = created - completed`;`granularity` day/week/month 桶边界正确(§2.2.3)。
+- [ ] **velocity**:完成判定 = `state_category='done'` 且 `completed_at` 落周期窗(DATE 边界按 `display_timezone` 展开为 UTC);点数为 `SUM(estimate)`;未挂 cycle 的 done issue 不计入任何周期(§2.2.2);**当前归属口径(R3)**:issue 在周期间移动后 velocity 按当前归属重算(响应 meta `scope_caliber='current_attribution'`),不声称还原历史归属。
+- [ ] **吞吐量**:created/completed 双序列按 **`calendar_timezone` 本地日历分桶**(R3),窗 `[from,to)`;`net = created - completed`;`granularity` day/week/month 桶边界为当地日历边界(每桶本地标签与 UTC 瞬间窗一致,§2.2.3);`calendar_timezone='UTC'` 退化为 UTC 分桶;**UTC+8 下"某本地日"桶覆盖当地 00:00–24:00(= UTC 前日 16:00–当日 16:00),不以 UTC 日界切割**。
 - [ ] **workload**:open issue = `assignee_id` 非空且 `state_category NOT IN (done,cancelled)`;agent 执行「运行中/排队/需审批」分别对应 `claimed|running|cancelling`/`queued`/`awaiting_approval`,与 README §6.12 容量呈现一致;成员维度经 `members` 统一,`member_type` 为快照(§2.2.4)。
-- [ ] **burndown**:`cycle_id`/`milestone_id` 恰好一个(否则 400);实际线 = scope 总量 − 截至各日完成量;理想线线性递减至 0;`metric=count|points` 切换正确(§2.2.5)。
+- [ ] **burndown**:`cycle_id`/`milestone_id` 恰好一个(否则 400);实际线 = scope 总量 − 截至各日完成量;理想线线性递减至 0;`metric=count|points` 切换正确;**当前归属口径(R3)**:scope = 当前归属该 cycle/milestone 的 issue 集合(不再声称「曾进入 scope 全部计入」),移入/移出会按当前集合重算曲线,响应 meta `scope_caliber='current_attribution'`(§2.2.5)。
 - [ ] **agent 统计**:成功率 = `completed/(completed+failed+timeout)`(cancelled 不入分母但披露 `cancelled_count`);超时率/重试率(`COUNT(attempts)-1` 派生)/平均端到端时长口径与 §2.3 一致;**token 仅来自 `autopilot_runs`**,`token_coverage` 正确返回且 <1 时 UI 标注。
+- [ ] **可见性与缓存隔离(R3,协同 §5.6,集成测试 T33)**:① 工作区级聚合(含 `/dashboards/workspace`)按请求者项目可见性过滤——非 private 项目成员得不到该项目的计数/曲线/负荷(§5.6);admin/owner 见全工作区聚合;② 非成员无法经任何聚合端点获得不可见 private project 的统计量(显式多项目聚合含不可见项目 → 整体 `403`,不部分返回,避免集合推断泄露);③ `analytics_snapshots.scope_key` 纳入缓存键:普通成员查询**绝不命中** `ws_admin` 快照(跨权限缓存复用被判失败);不同可见项目集合的请求者各自缓存(scope_key = `projects:<hash>`)、互不串读;④ 项目可见性变更后,旧 scope_key 快照不再被命中(自然失效,无跨权限泄露窗口)。
 
 ### 5.2 功能性 —— 时间窗与时区(跨 DST 不错位)
 
 - [ ] 一切 `from`/`to` 为 RFC3339 UTC,窗左闭右开;`from>=to` 返回 `400 invalid_time_range`。
-- [ ] 桶边界以 UTC 计算;响应 `meta.display_timezone` 回显所用 IANA 时区;DATE 日界按该时区展开为 UTC。
+- [ ] 桶边界按 `calendar_timezone` 本地日历对齐(R3),响应回显 `meta.calendar_timezone`(所用 IANA 时区)与每桶 `window_start/window_end`(UTC);DATE 日界按该时区展开为 UTC。
 - [ ] **跨 DST 测试**:取一个含 DST 切换的时区(如 `America/New_York` 春进/秋退日)与跨该日的窗,验证 burndown/throughput 的日序列点**按当日 00:00 的 UTC 瞬间**对齐,无重复日、无缺失日、无 23h/25h 错位。
 - [ ] 非法 IANA 时区返回 `400 invalid_timezone`。
 
