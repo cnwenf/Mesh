@@ -5,12 +5,22 @@
 > - `issue.md`(Issue 工作项)——标签/字段值挂载于 issue;`PATCH /issues/{id}`、状态流转、批量操作复用此。
 > - `kanban.md`(看板与视图)——消费标签/自定义字段作为 `filters` / `group_by` / `sort` 输入。
 > - `member.md`(统一成员抽象,`member` 类型字段引用人或 AI agent)、`project.md`(作用域)。
-> **全局一致性锚点**(本 Spec 全程遵守):
-> 1. PostgreSQL;snake_case 复数表名;UUID 主键;`created_at` / `updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`。
-> 2. issue 状态双层 category/status(本模块不直接处理状态机;但**必填字段可在状态流转时校验**,见 §4.5)。
-> 3. API 基础路径 `/api/v1`;`Authorization: Bearer <token>`;游标分页响应统一为 `{ "data": [...], "next_cursor": "..." }`;统一错误信封(见 §3.4)。
-> 4. WebSocket 路径 `/ws`;每条事件携带单调递增 `seq`,断线凭 `resume_from=<seq>` 重放;事件类型命名 `<entity>.<action>`。
-> 5. ORM 采用 SQLAlchemy 2.x 约定(`DeclarativeBase` / `Mapped` / `mapped_column`)。
+> **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
+
+---
+
+## 全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)
+
+1. **存储**:PostgreSQL 16+;snake_case 复数表名;UUID 主键(`gen_random_uuid()`);所有表含 `created_at` / `updated_at`(`TIMESTAMPTZ NOT NULL DEFAULT now()`,UTC)。
+2. **成员**:`value_member_id`(member 类型字段值)引用 `members.id`,模型以 README §6.1 为唯一权威(人或 agent);存储层不设冗余 `*_type` 判别列。
+3. **多租户**:`labels` / `custom_field_defs` / `custom_field_options` / `issue_labels` / `issue_custom_field_values` 持有跨模块引用的表一律按 README §6.2 存 `workspace_id` 并建**复合 FK + 目标表 `UNIQUE(workspace_id, id)`**(issues/labels/custom_field_defs/members 均建该唯一键供引用)。
+4. **命名唯一**:`labels.name`、`custom_field_defs.field_key` 的"工作区级 OR 项目级"唯一一律用**部分表达式唯一索引**(COALESCE 不写进表级 UNIQUE,README §6.3)。
+5. **issue 状态双层**:本模块不直接处理状态机;但**必填字段可在状态流转时校验**(见 §4.5),状态语义见 issue.md。
+6. **接口**:基础路径 `/api/v1`;`Authorization: Bearer <token>`;包络 / 游标分页(分组整体游标)/ 错误信封 / **过滤限制** 见 README §6.14。
+7. **实时**:统一实时契约见 README §6.7(频道内单调 `seq`、`realtime_events` 重放、`resume_from` / `resync_required`);事件名 `<entity>.<action>`。
+8. **性能基准**:P95 / 时延指标仅在 README §10 基准下构成验收标准;关键自定义字段过滤查询须附真实 `EXPLAIN (ANALYZE, BUFFERS)`(见 §2.8)。
+9. **集成测试**:跨租户复合 FK 拒绝等按 README §9 矩阵(T1)必测。
+10. **ORM**:SQLAlchemy 2.x 约定(`DeclarativeBase` / `Mapped` / `mapped_column`)。
 
 ---
 
@@ -108,20 +118,23 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
 | `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键 |
-| `project_id` | UUID | NULL, FK→projects(id) ON DELETE CASCADE | NULL | NULL=工作区级;非空=项目级 |
+| `project_id` | UUID | NULL,**复合 FK** `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE CASCADE | NULL | NULL=工作区级;非空=项目级 |
 | `name` | TEXT | NOT NULL, CHECK (`char_length(name) BETWEEN 1 AND 50`) | — | 标签名 |
 | `color` | TEXT | NOT NULL, CHECK (`color ~ '^#[0-9a-fA-F]{6}$'`) | — | 十六进制色 |
 | `description` | TEXT | NULL | NULL | |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**约束**:`UNIQUE (workspace_id, COALESCE(project_id, NIL_UUID), name)`(部分/表达式唯一索引,处理 NULL project_id)。
+**约束**(可执行 DDL 见 §2.7;COALESCE 表达式不能写进表级 `UNIQUE`,一律用**部分表达式唯一索引**,README §6.3):
+- 作用域内标签名唯一(工作区级 OR 项目级):`CREATE UNIQUE INDEX uq_labels_name ON labels (workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), name);`
+- 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `issue_labels.label_id` 复合 FK 引用,README §6.2)。
 
 ### 2.3 `issue_labels`(issue-标签 多对多)
 
 | 字段 | 类型 | 约束 |
 |------|------|------|
-| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE |
-| `label_id` | UUID | NOT NULL, FK→labels(id) ON DELETE CASCADE |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE(复合 FK 本地列,README §6.2) |
+| `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE |
+| `label_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, label_id)→labels(workspace_id, id)` ON DELETE CASCADE |
 | `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT `now()` |
 | PRIMARY KEY | `(issue_id, label_id)` | |
 
@@ -133,7 +146,7 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
 | `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键 |
-| `project_id` | UUID | NULL, FK→projects(id) ON DELETE CASCADE | NULL | 作用域(NULL=工作区级) |
+| `project_id` | UUID | NULL,**复合 FK** `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE CASCADE | NULL | 作用域(NULL=工作区级) |
 | `name` | TEXT | NOT NULL, CHECK (`char_length(name) BETWEEN 1 AND 100`) | — | 字段显示名 |
 | `field_key` | TEXT | NOT NULL, CHECK (`field_key ~ '^[a-z][a-z0-9_]{0,49}$'`) | — | 稳定标识(用于 API/筛选),如 `severity` |
 | `type` | TEXT | NOT NULL, CHECK IN (`'text'`,`'textarea'`,`'number'`,`'date'`,`'datetime'`,`'single_select'`,`'multi_select'`,`'member'`,`'boolean'`,`'url'`) | — | 字段类型 |
@@ -145,14 +158,17 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 | `is_active` | BOOLEAN | NOT NULL | `true` | 停用而非删 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**约束**:`UNIQUE (workspace_id, COALESCE(project_id, NIL_UUID), field_key)`。
+**约束**(可执行 DDL 见 §2.7;部分表达式唯一索引,README §6.3):
+- 作用域内 `field_key` 唯一:`CREATE UNIQUE INDEX uq_cfdefs_key ON custom_field_defs (workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), field_key);`
+- 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `custom_field_options.field_def_id`、`issue_custom_field_values.field_def_id` 复合 FK 引用,README §6.2)。
 
 ### 2.5 `custom_field_options`(枚举可选项,single_select / multi_select)
 
 | 字段 | 类型 | 约束 | 默认值 |
 |------|------|------|--------|
 | `id` | UUID | PK | `gen_random_uuid()` |
-| `field_def_id` | UUID | NOT NULL, FK→custom_field_defs(id) ON DELETE CASCADE | — |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE(复合 FK 本地列) | — |
+| `field_def_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, field_def_id)→custom_field_defs(workspace_id, id)` ON DELETE CASCADE | — |
 | `name` | TEXT | NOT NULL | — |
 | `color` | TEXT | NULL | NULL |
 | `position` | REAL | NOT NULL | `0` |
@@ -167,12 +183,13 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 | 字段 | 类型 | 约束 | 适用类型 |
 |------|------|------|----------|
 | `id` | UUID | PK | |
-| `issue_id` | UUID | NOT NULL, FK→issues(id) ON DELETE CASCADE | |
-| `field_def_id` | UUID | NOT NULL, FK→custom_field_defs(id) ON DELETE CASCADE | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE(复合 FK 本地列,README §6.2) | |
+| `issue_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, issue_id)→issues(workspace_id, id)` ON DELETE CASCADE | |
+| `field_def_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, field_def_id)→custom_field_defs(workspace_id, id)` ON DELETE CASCADE | |
 | `value_text` | TEXT | NULL | text / textarea / url |
 | `value_number` | NUMERIC | NULL | number |
 | `value_date` | TIMESTAMPTZ | NULL | date / datetime |
-| `value_member_id` | UUID | NULL, FK→members(id) ON DELETE SET NULL | member(人或 agent) |
+| `value_member_id` | UUID | NULL,**复合 FK** `(workspace_id, value_member_id)→members(workspace_id, id)` ON DELETE SET NULL | member(人或 agent) |
 | `value_boolean` | BOOLEAN | NULL | boolean |
 | `value_json` | JSONB | NULL | single_select(option_id)/ multi_select(option_id 数组)/ 其它结构化值 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT `now()` | |
@@ -191,33 +208,82 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 ```sql
 -- 标签
 CREATE UNIQUE INDEX uq_labels_name
-  ON labels(workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), name);
+  ON labels(workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), name);  -- 部分表达式唯一(README §6.3)
+CREATE UNIQUE INDEX uq_labels_ws_id ON labels(workspace_id, id);     -- 供复合 FK 引用(README §6.2)
 CREATE INDEX idx_labels_workspace ON labels(workspace_id);
 CREATE INDEX idx_issue_labels_issue ON issue_labels(issue_id);
 CREATE INDEX idx_issue_labels_label ON issue_labels(label_id);        -- 反查"哪些 issue 带某标签"
 
 -- 自定义字段
 CREATE UNIQUE INDEX uq_cfdefs_key
-  ON custom_field_defs(workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), field_key);
+  ON custom_field_defs(workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000'), field_key);  -- 部分表达式唯一(README §6.3)
+CREATE UNIQUE INDEX uq_cfdefs_ws_id ON custom_field_defs(workspace_id, id);  -- 供复合 FK 引用(README §6.2)
 CREATE INDEX idx_cfdefs_workspace_active ON custom_field_defs(workspace_id) WHERE is_active;
 CREATE INDEX idx_cfopts_def ON custom_field_options(field_def_id, position);
 CREATE INDEX idx_icfv_issue ON issue_custom_field_values(issue_id);
-CREATE INDEX idx_icfv_field ON issue_custom_field_values(field_def_id);
-CREATE INDEX idx_icfv_value_json ON issue_custom_field_values USING GIN (value_json);  -- 枚举值筛选
-CREATE INDEX idx_icfv_number ON issue_custom_field_values(value_number) WHERE value_number IS NOT NULL;  -- 数值排序/范围
-CREATE INDEX idx_icfv_date   ON issue_custom_field_values(value_date)   WHERE value_date   IS NOT NULL;  -- 日期排序/范围
-CREATE INDEX idx_icfv_member ON issue_custom_field_values(value_member_id) WHERE value_member_id IS NOT NULL;
+
+-- 值索引一律以 (field_def_id, value_*) 复合/部分索引(README §6.14 性能契约):
+-- 过滤总是"某字段 = 某值/范围",field_def_id 作前导列把扫描收窄到单字段的值集。
+CREATE INDEX idx_icfv_number ON issue_custom_field_values (field_def_id, value_number) WHERE value_number IS NOT NULL;  -- 数值范围/排序
+CREATE INDEX idx_icfv_date   ON issue_custom_field_values (field_def_id, value_date)   WHERE value_date   IS NOT NULL;  -- 日期范围/排序
+CREATE INDEX idx_icfv_member ON issue_custom_field_values (field_def_id, value_member_id) WHERE value_member_id IS NOT NULL;  -- 成员值
+
+-- 枚举/结构化值(JSONB):复合 GIN 需 btree_gin 支持"标量 field_def_id + jsonb value_json"混合索引
+CREATE EXTENSION IF NOT EXISTS btree_gin;
+CREATE INDEX idx_icfv_value_json ON issue_custom_field_values USING GIN (field_def_id, value_json);  -- 枚举值筛选 field_def_id=… AND value_json @> …
 ```
 
-> 视图按自定义字段筛选/分组/排序时:枚举命中 `idx_icfv_value_json`(GIN);数值/日期命中对应部分索引;`issue_id` JOIN 回 issues 后再套用 kanban.md / issue.md 的视图过滤。
+> 视图按自定义字段筛选/分组/排序时:枚举命中 `idx_icfv_value_json`(GIN,`field_def_id=… AND value_json @> …`);数值/日期/成员命中对应 `(field_def_id, value_*)` 部分索引;再经 `issue_id` JOIN 回 issues 套用 kanban.md / issue.md 的视图过滤。代表性执行计划与数据分布见 §2.8。
 
-### 2.8 SQLAlchemy 2.x 模型(节选)
+### 2.8 代表性 EXPLAIN 与数据分布(README §10 基准,验收依据)
+
+自定义字段过滤是看板/列表的关键查询路径。以下在 **README §10 基准**(单工作区 10 万 issue,热缓存)下给出预期执行计划形态与数据分布假设;实现侧必须随 PR 附**真实 `EXPLAIN (ANALYZE, BUFFERS)`** 输出,证明命中本节定义的复合/部分索引(README §10「代表性 EXPLAIN」)。
+
+**数据分布假设**(10 万 issue,设 20 个活跃自定义字段;以 `severity` single_select 为例):
+
+| 选项 | 占比 | 说明 |
+|------|------|------|
+| Major | 10% | 高选择性(命中约 1 万行) |
+| Minor | 40% | 中选择性 |
+| Trivial | 50% | 低选择性(命中约 5 万行) |
+| NULL(未填) | 20% | 无值行不计入上述选项分布 |
+
+**枚举过滤 + JOIN issues 的预期计划形态**(`field_def_id=… AND value_json @> '"opt_major"'`):
+
+```
+Nested Loop
+  ->  Bitmap Heap Scan on issue_custom_field_values
+        Recheck Cond: ((field_def_id = 'cf_sev') AND (value_json @> '"opt_major"'::jsonb))
+        ->  Bitmap Index Scan on idx_icfv_value_json        -- GIN(field_def_id, value_json) 命中
+              Index Cond: ((field_def_id = 'cf_sev') AND (value_json @> '"opt_major"'::jsonb))
+  ->  Index Scan using issues_pkey on issues                -- 经 issue_id 回表
+        Index Cond: (id = issue_custom_field_values.issue_id)
+        Filter: (deleted_at IS NULL AND <视图 filters>)
+```
+
+**数值范围过滤的预期计划形态**(`field_def_id=… AND value_number >= 1000`):
+
+```
+Nested Loop
+  ->  Index Scan on idx_icfv_number                         -- (field_def_id, value_number) 部分索引命中
+        Index Cond: ((field_def_id = 'cf_users') AND (value_number >= 1000))
+  ->  Index Scan using issues_pkey on issues
+        Index Cond: (id = issue_custom_field_values.issue_id)
+```
+
+**验收口径**:
+- "按自定义字段过滤 + JOIN issues" 在上述 README §10 基准(10 万 issue、20 活跃字段、给定值分布)与**热缓存**下 **P95 < 500ms** 方构成验收标准;脱离该基准的裸 P95 承诺无效。
+- 计划必须命中 `idx_icfv_value_json`(GIN)/ `idx_icfv_number` / `idx_icfv_date` / `idx_icfv_member` 对应索引,不出现对 `issue_custom_field_values` 的全表 Seq Scan。
+- 低选择性条件(如 Trivial 50%)若优化器改走 Bitmap Heap Scan + 回表,仍须满足上述 P95;实现可结合 `work_mem` 与视图 filters 收窄。
+
+### 2.9 SQLAlchemy 2.x 模型(节选)
 
 ```python
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import String, Text, REAL, Boolean, Numeric, ForeignKey, CheckConstraint, text
+from sqlalchemy import String, Text, REAL, Boolean, Numeric, ForeignKey, ForeignKeyConstraint, \
+    UniqueConstraint, Index, CheckConstraint, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB, TIMESTAMPTZ
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -230,13 +296,19 @@ class CustomFieldDef(Base):
         CheckConstraint(
             "type IN ('text','textarea','number','date','datetime','single_select',"
             "'multi_select','member','boolean','url')", name="ck_cfdefs_type"),
+        UniqueConstraint("workspace_id", "id", name="uq_cfdefs_ws_id"),  # 供复合 FK 引用
+        ForeignKeyConstraint(["workspace_id", "project_id"],
+                             ["projects.workspace_id", "projects.id"], ondelete="CASCADE"),
+        # 部分表达式唯一索引(README §6.3)
+        Index("uq_cfdefs_key", "workspace_id",
+              text("COALESCE(project_id, '00000000-0000-0000-0000-000000000000')"),
+              "field_key", unique=True),
     )
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True,
                                           server_default=text("gen_random_uuid()"))
     workspace_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
-    project_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)  # 复合 FK 见 __table_args__
     name: Mapped[str] = mapped_column(Text, nullable=False)
     field_key: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -259,18 +331,25 @@ class IssueCustomFieldValue(Base):
         CheckConstraint("num_nonnulls(value_text, value_number, value_date, "
                         "value_member_id, value_boolean, value_json) <= 1",
                         name="ck_icfv_single_value_col"),  # 至多一个值列非空(布尔 false 计非空)
+        UniqueConstraint("issue_id", "field_def_id", name="uq_icfv_issue_field"),
+        # 复合 FK(README §6.2):跨租户值在 INSERT 即被拒
+        ForeignKeyConstraint(["workspace_id", "issue_id"],
+                             ["issues.workspace_id", "issues.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "field_def_id"],
+                             ["custom_field_defs.workspace_id", "custom_field_defs.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["workspace_id", "value_member_id"],
+                             ["members.workspace_id", "members.id"], ondelete="SET NULL"),
     )
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True,
                                           server_default=text("gen_random_uuid()"))
-    issue_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("issues.id", ondelete="CASCADE"), nullable=False)
-    field_def_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("custom_field_defs.id", ondelete="CASCADE"), nullable=False)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False)
+    issue_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)        # 复合 FK 见 __table_args__
+    field_def_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)    # 复合 FK 见 __table_args__
     value_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     value_number: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     value_date: Mapped[datetime | None] = mapped_column(TIMESTAMPTZ, nullable=True)
-    value_member_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True),
-        ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    value_member_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)  # 复合 FK 见 __table_args__
     value_boolean: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     value_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMPTZ, nullable=False, server_default=text("now()"))
@@ -386,7 +465,7 @@ GET /api/v1/workspaces/{ws}/issues?label=lbl_1&cf_severity=opt_major
 
 ### 3.5 WebSocket 增量合并事件
 
-- **连接与重放**:同 kanban.md §3.5——`wss://<host>/ws`,帧含 `seq`,`resume_from` 重放,过旧 `resync`。
+- **连接与重放(README §6.7)**:同 kanban.md §3.5——`wss://<host>/ws`,帧含**频道内**单调 `seq`,`resume_from` 从 `realtime_events` 重放,游标过旧下发 `resync_required` + REST 对账水位。
 - **事件清单**(`<entity>.<action>`):
 
 | 事件 | data(关键字段) | 客户端增量动作 |
@@ -474,26 +553,28 @@ Issue 详情侧栏
 ### 5.1 功能验收 —— 标签
 
 - [ ] 可创建/编辑/删除标签;name 1–50、颜色 `#RRGGBB` 校验生效,非法返回 `400`。
-- [ ] 作用域生效:`project_id=NULL` 为工作区级全区可用;项目级仅在该项目可用;`UNIQUE (workspace_id, COALESCE(project_id,NIL), name)` 防同作用域重名(重名返回 `409 label_name_taken`)。
+- [ ] 作用域生效:`project_id=NULL` 为工作区级全区可用;项目级仅在该项目可用;**部分表达式唯一索引 `uq_labels_name`**(`(workspace_id, COALESCE(project_id,'0000…'), name)`,README §6.3)防同作用域重名(重名返回 `409 label_name_taken`)。
 - [ ] issue 多对多打标签:增/删单个、整体替换均正确;项目级标签打给异项目 issue 返回 `422 label_scope_mismatch`。
+- [ ] **跨租户隔离(README §9 T1)**:`issue_labels` 复合 FK 拒绝跨 workspace 引用(给 A 区 issue 打 B 区 label 在 INSERT 被数据库约束拒绝)。
 - [ ] 合并标签:源标签 issue 迁到目标(去重),源标签删除,返回迁移计数。
 - [ ] 标签选择器联想命中、就地新建、彩色 chip、卡片色点(溢出 `+N`)均生效。
 - [ ] 删除标签级联清 `issue_labels`,卡片色点实时消失。
 
 ### 5.2 功能验收 —— 自定义字段
 
-- [ ] 可创建 10 种类型字段;`field_key` 格式与同作用域唯一性校验生效(重名返回 `409 field_key_taken`)。
+- [ ] 可创建 10 种类型字段;`field_key` 格式校验生效,同作用域唯一由**部分表达式唯一索引 `uq_cfdefs_key`**(`(workspace_id, COALESCE(project_id,'0000…'), field_key)`,README §6.3)强制(重名返回 `409 field_key_taken`)。
 - [ ] 枚举字段选项 CRUD:增删改、拖拽排序、配色、停用;`UNIQUE (field_def_id, name)` 生效。
 - [ ] 在 issue 上填值:`PUT /issues/{id}/custom-field-values` 整体提交;按类型只填对应值列,填错列返回 `422 invalid_field_value`。
 - [ ] 枚举值必须属于该字段 active 选项;member 必须为工作区成员;非法返回 `422 invalid_field_value`。
 - [ ] 必填校验:依 `required_on` 在保存 / 状态流转(如 `status:done`)时校验,缺失返回 `422 required_field_missing` 并阻断。
 - [ ] 停用字段:隐藏但保留数据,重新启用恢复;给 inactive 字段写值返回 `422 field_inactive`。
 - [ ] 删除字段级联清值与选项;`num_nonnulls(...) <= 1` 兜底无跨类型脏值。
-- [ ] 字段值可作为视图筛选/分组/排序依据:枚举命中 GIN、数值/日期命中部分索引;在 kanban.md 视图执行中返回正确分组/排序。
+- [ ] 字段值可作为视图筛选/分组/排序依据:枚举命中 `idx_icfv_value_json`(GIN `(field_def_id, value_json)`)、数值/日期/成员命中 `(field_def_id, value_*)` 复合部分索引;在 kanban.md 视图执行中返回正确分组/排序。
+- [ ] **跨租户隔离(README §9 T1)**:`issue_custom_field_values` 复合 FK 拒绝跨 workspace 引用(给 A 区 issue 写 B 区 field_def 或 member 值在 INSERT 被拒)。
 
 ### 5.3 实时一致性验收
 
-- [ ] WebSocket 帧含 `seq`,`resume_from` 重放、过旧 `resync` 与 kanban.md 一致。
+- [ ] WebSocket 遵循 README §6.7(频道内单调 `seq`、`realtime_events` 重放、`resume_from` / `resync_required`),与 kanban.md 一致。
 - [ ] `label.*` / `custom_field.updated` / `custom_field_option.updated` 广播后,所有缓存客户端的标签选择器/字段控件/筛选器同步刷新。
 - [ ] `issue.labels_changed` / `issue.custom_field_changed` 触发卡片色点/单元格即时刷新,并按当前视图 filters 增量进出,不整板刷新。
 - [ ] 枚举选项停用/删除后,所有打开该字段下拉的客户端即时更新选项列表。
@@ -501,8 +582,9 @@ Issue 详情侧栏
 
 ### 5.4 非功能验收
 
-- [ ] **查询性能**:按自定义字段筛选/分组在 10 万 issue 工作区下 P95 < 500ms;枚举筛选命中 `idx_icfv_value_json`,数值/日期命中部分索引(有 EXPLAIN 证据)。
-- [ ] **写入性能**:单次 `PUT custom-field-values`(≤20 字段)P95 < 200ms;打标签单操作 P95 < 100ms。
+- [ ] **查询性能(README §10 基准)**:按自定义字段筛选/分组在 10 万 issue、20 活跃字段、给定值分布(§2.8)与**热缓存**下 P95 < 500ms 方构成验收标准;枚举筛选命中 `idx_icfv_value_json`(GIN),数值/日期/成员命中 `(field_def_id, value_*)` 复合部分索引。
+- [ ] **代表性 EXPLAIN(README §10)**:实现须随附真实 `EXPLAIN (ANALYZE, BUFFERS)` 输出,证明计划形态符合 §2.8(Bitmap Index Scan on `idx_icfv_value_json` → Bitmap Heap Scan → issues_pkey Nested Loop;数值走 `idx_icfv_number` Index Scan),**无 `issue_custom_field_values` 全表 Seq Scan**。
+- [ ] **写入性能**(README §10 基准下标注冷/热):单次 `PUT custom-field-values`(≤20 字段)与打标签单操作的 P95 指标按 README §10 方法测定。
 - [ ] **一致性**:并发写同一 issue 的同一字段最终一致(走 issue.md 乐观并发 `updated_at` 仲裁),无丢失更新。
 - [ ] **缓存**:标签/字段定义/选项支持客户端缓存 + 事件失效;枚举选项变更必触发失效广播。
 - [ ] **安全**:颜色/名称/field_key/URL/数值范围在服务层强制校验;枚举与 member 值校验归属关系;越权访问返回 `403`/`404`;所有写入参数化绑定无 SQL 注入。

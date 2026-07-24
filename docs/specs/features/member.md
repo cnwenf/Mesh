@@ -58,8 +58,9 @@ users(人类登录身份,auth.md)──1:N──┐
                                    │         │  └─ members.id 被以下统一引用:
                                    │         │      • issues.assignee_id / reporter_id
                                    │         │      • comments.author_id
-                                   │         │      • mentions.target_member_id
-                                   │         │      • notifications.recipient_member_id
+                                   │         │      • comment_mentions.mentioned_id
+                                   │         │      • notifications.recipient_id
+                                   │         │      • api_tokens.owner_member_id
                                    └─────────┘
                                          │ N:1
                                          ▼
@@ -72,6 +73,8 @@ members ──1:N──► member_project_access(guest 项目级可见性)──
 
 ### 2.2 表:`members`(统一成员名册 —— 核心)
 
+> **本表为全系统成员模型的唯一权威定义(README §6.1)**;`users`/`agents` **不设 `member_id` 反向列**,关联方向恒为 `members.user_id → users.id` / `members.agent_id → agents.id`(尤其禁止 `users.member_id UNIQUE` 这类 1:1 反向关联——它不支持同一 user 加入多个工作区)。
+>
 > `members.id` 是**统一引用键**。一个工作区的名册条目,要么指向一个 user,要么指向一个 agent。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
@@ -79,8 +82,8 @@ members ──1:N──► member_project_access(guest 项目级可见性)──
 | `id` | UUID | PK | `gen_random_uuid()` | **成员 ID(统一引用键)** |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 所属工作区 |
 | `member_type` | TEXT | NOT NULL,CHECK IN ('human','agent') | `'human'` | 类型判别器 |
-| `user_id` | UUID | NULL,FK→users(id) ON DELETE CASCADE | — | 人类成员指向 users |
-| `agent_id` | UUID | NULL,FK→agents(id) ON DELETE CASCADE | — | AI agent 成员指向 agents |
+| `user_id` | UUID | NULL,FK→users(id) ON DELETE CASCADE | — | 人类成员指向 users(`users` 为全局表,无 workspace_id,故为简单 FK) |
+| `agent_id` | UUID | NULL,复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` ON DELETE CASCADE | — | AI agent 成员指向 agents(同工作区强制,README §6.2) |
 | `role` | TEXT | NOT NULL,CHECK IN ('owner','admin','member','guest') | `'member'` | 工作区角色 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled','removed') | `'active'` | |
 | `display_override` | TEXT | NULL | NULL | 工作区内显示名覆盖 |
@@ -108,13 +111,14 @@ CHECK (member_type = 'human' OR role <> 'owner')
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
-| `member_id` | UUID | NOT NULL,FK→members(id) ON DELETE CASCADE | — | |
-| `project_id` | UUID | NOT NULL,FK→projects(id) ON DELETE CASCADE | — | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 隔离键(供复合 FK,README §6.2) |
+| `member_id` | UUID | NOT NULL,复合 FK `(workspace_id, member_id) → members(workspace_id, id)` ON DELETE CASCADE | — | guest 成员 |
+| `project_id` | UUID | NOT NULL,复合 FK `(workspace_id, project_id) → projects(workspace_id, id)` ON DELETE CASCADE | — | 被共享项目 |
 | `permission` | TEXT | NOT NULL,CHECK IN ('read','write') | `'read'` | |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-约束:`UNIQUE (member_id, project_id)`。
+约束:`UNIQUE (member_id, project_id)`。复合 FK 保证成员与项目同属一工作区(README §6.2,集成测试 T1)。
 
 ### 2.4 引用的身份表(由其它 Spec 定义,此处仅列名册消费字段)
 
@@ -139,6 +143,9 @@ CREATE INDEX idx_members_user ON members(user_id);
 CREATE INDEX idx_members_agent ON members(agent_id);
 CREATE INDEX idx_members_type ON members(workspace_id, member_type);
 
+-- 供引用方复合 FK(README §6.2):issues.assignee_id 等据此同租户引用 members
+CREATE UNIQUE INDEX uq_members_ws_id ON members(workspace_id, id);
+
 -- 多态唯一:同一 user / agent 在同一工作区仅一条
 CREATE UNIQUE INDEX uq_members_ws_user ON members(workspace_id, user_id) WHERE user_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_members_ws_agent ON members(workspace_id, agent_id) WHERE agent_id IS NOT NULL;
@@ -151,16 +158,19 @@ CREATE UNIQUE INDEX uq_member_access ON member_project_access(member_id, project
 
 | 来源(引用方) | 外键 | 目标 | 说明 |
 |----------------|------|------|------|
-| `issues.assignee_id` / `reporter_id` | → `members.id` | 统一名册 | 分派/上报,人或 agent 对称 |
-| `comments.author_id` | → `members.id` | 统一名册 | 发言者 |
-| `mentions.target_member_id` | → `members.id` | 统一名册 | @提及目标 |
-| `notifications.recipient_member_id` | → `members.id` | 统一名册 | 通知收件 |
-| `workspace_invitations.invited_by` | → `members.id` | 统一名册 | 邀请人 |
+| `issues.assignee_id` / `reporter_id` | 复合 FK `(workspace_id, …) → members(workspace_id, id)` | 统一名册 | 分派/上报,人或 agent 对称(README §6.2) |
+| `comments.author_id` | 复合 FK `(workspace_id, author_id) → members(workspace_id, id)` | 统一名册 | 发言者 |
+| `comment_mentions.mentioned_id` | 复合 FK `(workspace_id, mentioned_id) → members(workspace_id, id)` | 统一名册 | @提及目标(comment-inbox.md owns) |
+| `notifications.recipient_id` | 复合 FK `(workspace_id, recipient_id) → members(workspace_id, id)` | 统一名册 | 通知收件(comment-inbox.md owns) |
+| `api_tokens.owner_member_id` | 复合 FK `(workspace_id, owner_member_id) → members(workspace_id, id)` | 统一名册 | 令牌持有者(auth.md owns) |
+| `workspace_invitations.invited_by` | 复合 FK `(workspace_id, invited_by) → members(workspace_id, id)` | 统一名册 | 邀请人(workspace.md owns) |
 | `members.workspace_id` | → `workspaces.id` | workspace.md | |
-| `members.user_id` | → `users.id` | auth.md | 人类身份 |
-| `members.agent_id` | → `agents.id` | agent.md | AI 身份 |
+| `members.user_id` | → `users.id` | auth.md | 人类身份(关联方向 members → users,`users` 不设反向列) |
+| `members.agent_id` | → `agents.id`(复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`,仅可加入同工作区名册) | agent.md | AI 身份(README §6.2) |
 
-> 引用方对 `members.id` 一般采用 `ON DELETE` 保护(RESTRICT)或置空,避免历史 issue/评论悬空;移除成员通过 `status='removed'` 软处理而非物理删除。
+> **同租户复合 FK(README §6.2)**:一切引用方均**同时存 `workspace_id` 并建复合 FK** `(workspace_id, <ref>_id) → members(workspace_id, id)`(本表 §2.5 建有 `UNIQUE(workspace_id, id)` 供引用),使跨工作区引用在 INSERT 时即被拒绝(集成测试 T1)。
+>
+> 引用方对 `members.id` 一般采用 `ON DELETE` 保护(RESTRICT)或置空(SET NULL),避免历史 issue/评论悬空;移除成员通过 `status='removed'` 软处理而非物理删除,故 RESTRICT 不阻塞正常移除。
 
 ---
 
@@ -246,6 +256,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 { "member_type": "agent", "agent_id": "agt-9", "role": "member" }
 // 201 Response:返回新名册条目(member_type=agent, role=member)
 ```
+> **agent 必须同工作区**:加入名册的 agent 须满足 `agents.workspace_id = ws`(agent.md 定义 `agents.workspace_id`),由 `members.agent_id` 的**复合 FK** `(workspace_id, agent_id) → agents(workspace_id, id)` 在数据库层强制(README §6.2);把别工作区的 agent 加入本区名册会被拒绝(集成测试 T1)。**跨工作区共享 agent 不在本期范围(YAGNI)**。
 
 **获取单个成员** `GET /api/v1/workspaces/{ws}/members/{id}`
 ```json
@@ -296,7 +307,9 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 
 ### 3.5 WebSocket 实时事件
 
-订阅频道 `workspace:{ws}:members`。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `seq` 重放。
+> **统一实时契约见 README §6.7**(本 Spec 不重复定义):`seq` **一律为频道内单调递增**(持久化于 `realtime_events`,无"全局 seq");断线重连带 `resume_from=<last_seq+1>`,游标过旧收 `resync_required` + REST 对账水位;订阅 `workspace:{ws}:members` 频道时**重新做资源级授权**。
+
+订阅频道 `workspace:{ws}:members`。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `resume_from` 重放(README §6.7)。
 
 | 事件 | 触发时机 | payload 关键字段 |
 |------|----------|------------------|
@@ -369,6 +382,9 @@ disabled ──移除──► removed
 - [ ] 降级/移除最后一个 owner 被拒,返回 409 `last_owner`。
 - [ ] `GET /members` 同时返回人类与 agent,可按 `member_type`、`status`、`role` 过滤,`q` 模糊搜索。
 - [ ] issue.assignee、评论 author、@提及、通知均可统一引用 `members.id`,且对人与 agent 表现一致。
+- [ ] **成员模型权威(README §6.1)**:`users`/`agents` 表**不含 `member_id` 反向列**;关联方向恒为 `members.user_id → users.id` / `members.agent_id → agents.id`;同一 user 可在多个工作区各有一条 `members` 行。
+- [ ] **同租户复合 FK(README §6.2 / §9 T1)**:`members` 建有 `UNIQUE(workspace_id, id)`;引用方(issues.assignee_id/reporter_id、comments.author_id、comment_mentions.mentioned_id、notifications.recipient_id、api_tokens.owner_member_id 等)均以复合 FK `(workspace_id, <ref>_id) → members(workspace_id, id)` 引用;构造跨工作区引用(把 A 区成员设为 B 区 issue 负责人)被数据库约束拒绝。
+- [ ] 把别工作区的 agent 加入本区名册被复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` 拒绝(README §6.2 / §9 T1)。
 - [ ] 停用成员后其无法操作,但历史评论/issue 保留;启用后恢复。
 - [ ] 移除成员时 `?reassign_to=` 把其未完成 issue 批量转派,返回转派数量;转派目标非法返回 422。
 - [ ] guest 仅可见 `member_project_access` 中共享的项目/issue,其它返回 404。
@@ -388,13 +404,14 @@ disabled ──移除──► removed
 
 - [ ] 改角色/状态/移除/加入端点强制 `admin` 校验,不足返回 403。
 - [ ] `last_owner` 与 `agent_owner_not_allowed` 在服务端强校验,绕过前端亦被拒。
-- [ ] 角色变更、移除、停用、转派均写 auth.md 的 append-only 审计日志(`actor_type` 区分人/agent)。
+- [ ] 角色变更、移除、停用、转派均写 auth.md 的 append-only 审计日志(行为者以 `actor_member_id` 落 member 行,人/agent 经 JOIN `members.member_type` 判别;`actor_kind∈('member','system')`,无 `actor_type` 列,见 auth.md §2.6)。
 - [ ] 移除/停用受 auth.md 限流约束。
 - [ ] guest 的项目级可见性在服务端逐资源校验,不依赖前端隐藏。
+- [ ] **用户可控 URL scheme 校验**:`avatar_url` 等用户可控 URL 字段在服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,仅允许 `https`(及可选 `http`);`members`/`users`/`agents` 相关端点写入时统一校验。
 
 ### 5.4 实时
 
 - [ ] 入册/角色变更/状态变更/移除分别触发 `member.added`/`member.updated`/`member.removed`,在线成员 1s 内收到。
 - [ ] @提及人类触发站内+邮件;@提及 agent 触发运行事件(衔接 agent.md)。
 - [ ] 分派给 agent 触发其接管事件。
-- [ ] 客户端断线重连凭 `seq` 重放,名册状态最终一致,无丢失无重复。
+- [ ] 客户端断线重连凭 `resume_from` 重放、游标过旧收 `resync_required`(README §6.7),名册状态最终一致,无丢失无重复。
