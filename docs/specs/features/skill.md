@@ -518,7 +518,7 @@ installed / updated_available ──安装级停用──► disabled ──恢�
 installed ──卸载──► (deleted_at 置位)
 ```
 
-> 升级默认需显式确认;`auto_update=true` 时仅自动跟进非破坏性 PATCH 版本。绑定级停用保留绑定但对该 agent 暂停注入。三档停用均为软状态,可一键熔断后随时恢复。
+> 升级默认需显式确认;`auto_update=true` 时仅自动跟进**纯指令文案/资料变更且所有脚本 `content_hash` 不变**的非破坏性 PATCH 版本;**含脚本的技能,新版本只要任一脚本 `content_hash` 发生变化,无论 SemVer 级别(MAJOR/MINOR/PATCH)一律重新进入人工审批**(否则返回 422 `approval_required`),杜绝以 PATCH 版本号绕过审核闸门。绑定级停用保留绑定但对该 agent 暂停注入。三档停用均为软状态,可一键熔断后随时恢复。
 
 ### 4.5 自动触发机制(基于任务上下文的匹配策略)
 
@@ -572,6 +572,7 @@ installed ──卸载──► (deleted_at 置位)
 - [ ] **权限最小化**:`granted_capabilities ⊆ required_capabilities`,授予未声明权限返回 422 `capability_not_declared`;脚本只能拿到被授予的权限。
 - [ ] **沙箱执行边界**:脚本默认无网络、无任意写、无特权;越权调用被运行时拦截并告警(衔接 runtime.md)。
 - [ ] **凭据安全**:`skill_sources.auth_ref` 仅存 secret manager 引用键,绝不存明文;响应/日志不回显凭据。
+- [ ] **SSRF 防护**:服务端拉取用户提供的技能来源 URI(git 仓库 / URL)时,禁止访问私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254` 等),仅允许公网地址或配置的主机白名单;来源地址校验失败返回 502 `source_unreachable` 并不暴露内部错误。
 - [ ] **一键熔断**:发现风险可立即定义级/安装级/绑定级停用,即时停止注入。
 - [ ] 安装/绑定/权限授予/脚本执行均写 auth.md 的 append-only 审计日志;审批/安装类端点强制角色校验,不足返回 403;写端点受限流约束,超限 429。
 
