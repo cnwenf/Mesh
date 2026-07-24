@@ -170,7 +170,7 @@ CREATE UNIQUE INDEX uq_member_access ON member_project_access(member_id, project
 
 > **同租户复合 FK(README §6.2)**:一切引用方均**同时存 `workspace_id` 并建复合 FK** `(workspace_id, <ref>_id) → members(workspace_id, id)`(本表 §2.5 建有 `UNIQUE(workspace_id, id)` 供引用),使跨工作区引用在 INSERT 时即被拒绝(集成测试 T1)。
 >
-> 引用方对 `members.id` 一般采用 `ON DELETE` 保护(RESTRICT)或置空(SET NULL),避免历史 issue/评论悬空;移除成员通过 `status='removed'` 软处理而非物理删除,故 RESTRICT 不阻塞正常移除。
+> 引用方对 `members.id` 的删除策略按 **README §6.2 第 6 条**统一:需要"删除时置空引用"的复合 FK 一律采用 PG16 列级写法 **`ON DELETE SET NULL (<引用列>)`**(仅置空引用列,不连带 `workspace_id`);对"不可悬空"的引用(如留痕作者)采用**软删除 + `ON DELETE RESTRICT`**。移除成员通过 `status='removed'` 软处理而非物理删除,故 RESTRICT 不阻塞正常移除;真实 DELETE 行为(而非仅建表成功)必须有集成测试覆盖(README §9 T18)。
 
 ---
 
@@ -407,7 +407,7 @@ disabled ──移除──► removed
 - [ ] 角色变更、移除、停用、转派均写 auth.md 的 append-only 审计日志(行为者以 `actor_member_id` 落 member 行,人/agent 经 JOIN `members.member_type` 判别;`actor_kind∈('member','system')`,无 `actor_type` 列,见 auth.md §2.6)。
 - [ ] 移除/停用受 auth.md 限流约束。
 - [ ] guest 的项目级可见性在服务端逐资源校验,不依赖前端隐藏。
-- [ ] **用户可控 URL scheme 校验**:`avatar_url` 等用户可控 URL 字段在服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,仅允许 `https`(及可选 `http`);`members`/`users`/`agents` 相关端点写入时统一校验。
+- [ ] **用户可控 URL scheme 校验**:`avatar_url` 等用户可控 URL 字段在服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,**仅允许 `https`**(README §6.16 R2 统一 https-only,明文 `http` 的用户可控头像 URL 是混合内容弱攻击面);`members`/`users`/`agents` 相关端点写入时统一校验。
 
 ### 5.4 实时
 

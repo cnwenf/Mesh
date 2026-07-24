@@ -7,7 +7,7 @@
 | 依赖 Spec | `workspace`(多租户)、`member`(统一 `members.id`,human\|agent)、`auth`(Bearer/RBAC/限流)、`issue`(评论宿主与订阅路由)、`attachment`(评论内附件,统一 `attachments`/`attachment_links`)、`agent` / `runtime`(提及 agent 入队执行 `task_executions`) |
 | 被依赖 | `agent` / `runtime`(执行结果以 agent 评论回流)、`chat-session`(形态 B 的评论/提及/通知**引用本 Spec 权威表**)、邮件摘要任务(消费 `notifications`) |
 | 技术栈 | FastAPI + SQLAlchemy 2.x + PostgreSQL 16 + WebSocket |
-| 状态 | Draft v2(R1 修订) |
+| 状态 | Draft v3(R2 修订) |
 
 > **全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)**
 > 1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。
@@ -109,20 +109,21 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `id` | uuid | PK;`UNIQUE (workspace_id, id)`(供复合 FK 引用,README §6.2) | 评论 ID |
 | `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 多租户隔离,所有查询强制带 |
 | `issue_id` | uuid | NOT NULL,复合 FK `(workspace_id, issue_id) → issues(workspace_id, id)` | 所属 issue |
-| `parent_id` | uuid | NULL,复合 FK `(workspace_id, parent_id) → comments(workspace_id, id)` | 父评论;`NULL` 表示顶层。约束:仅可指向同 `issue_id` 的顶层评论(限深度=1) |
-| `thread_root_id` | uuid | NULL,复合 FK `(workspace_id, thread_root_id) → comments(workspace_id, id)` | 线程根(冗余加速聚合);顶层为 `NULL`,回复指向所属顶层评论 |
+| `parent_id` | uuid | NULL,**同 issue 复合 FK `(workspace_id, issue_id, parent_id) → comments(workspace_id, issue_id, id) ON DELETE CASCADE`**(README §6.2 第 7 条:父评论必须同 issue,重叠复合 FK 数据库层强制;深度=1 仍由服务层/CHECK 保证) | 父评论;`NULL` 表示顶层 |
+| `thread_root_id` | uuid | NULL,**同 issue 复合 FK `(workspace_id, issue_id, thread_root_id) → comments(workspace_id, issue_id, id) ON DELETE CASCADE`**(README §6.2 第 7 条:线程根必须同 issue) | 线程根(冗余加速聚合);顶层为 `NULL`,回复指向所属顶层评论 |
 | `author_kind` | text | NOT NULL, CHECK in ('member','system') | `member`=人类/agent 作者;`system`=活动流(系统作者需 NULL member FK,为 README §6.1 允许的 CHECK + NULL FK 例外;**不是** human\|agent 判别列) |
-| `author_id` | uuid | NULL,复合 FK `(workspace_id, author_id) → members(workspace_id, id)` | 作者;`author_kind='member'` 时 NOT NULL,`'system'` 时 NULL。人类/agent 由 JOIN `members.member_type` 区分 |
+| `author_id` | uuid | NULL,复合 FK `(workspace_id, author_id) → members(workspace_id, id)` **ON DELETE RESTRICT**(成员一律经 `status='removed'` 软删除,历史不悬空,README §6.2 第 6 条) | 作者;`author_kind='member'` 时 NOT NULL,`'system'` 时 NULL。人类/agent 由 JOIN `members.member_type` 区分 |
 | `body_markdown` | text | NOT NULL, CHECK (char_length > 0) | 原始 Markdown(真源,编辑以此为准) |
 | `body_html` | text | NULL | 服务端渲染并**净化后**的 HTML 缓存(白名单标签/属性,防 XSS) |
 | `body_text` | text | NULL | 纯文本(搜索/摘要/邮件用) |
 | `edited_at` | timestamptz | NULL | 最近编辑时间(NULL=从未编辑) |
 | `resolved_at` | timestamptz | NULL | 线程被解决时间(仅顶层有意义) |
-| `resolved_by_id` | uuid | NULL,复合 FK `(workspace_id, resolved_by_id) → members(workspace_id, id)` | 解决人 |
+| `resolved_by_id` | uuid | NULL,复合 FK `(workspace_id, resolved_by_id) → members(workspace_id, id)` **ON DELETE RESTRICT**(成员软删除,历史不悬空,README §6.2 第 6 条) | 解决人 |
 | `deleted_at` | timestamptz | NULL | 软删除 |
 | `created_at` / `updated_at` | timestamptz | NOT NULL DEFAULT now() | 时间戳 |
 
 **关系与约束:**
+- **表级约束**:`UNIQUE (workspace_id, issue_id, id)`(供 `parent_id`/`thread_root_id` 的同 issue 重叠复合 FK 引用,README §6.2 第 7 条)。
 - `parent_id` 自引用构成线程;应用层 + CHECK/触发器保证**回复深度=1**(回复不能再被回复,新回复一律挂到线程根下),业界主流「单层回复折叠」。
 - `thread_root_id` 为冗余字段:写入回复时由服务端填充为顶层评论 id,用于免递归聚合 `reply_count` 与拉取整线程。
 - 删除采用软删除以保线程完整;issue 删除时级联软删除其评论。
@@ -131,6 +132,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 
 **关键索引:**
 - `idx_comments_issue_created (workspace_id, issue_id, created_at)` — 按时间拉取某 issue 评论(主路径)。
+- `uq_comments_ws_issue_id (workspace_id, issue_id, id)`(`CREATE UNIQUE INDEX uq_comments_ws_issue_id ON comments(workspace_id, issue_id, id);`)— 重叠唯一键,供 `parent_id`/`thread_root_id` 同 issue 复合 FK 引用(README §6.2 第 7 条)。
 - `idx_comments_thread (workspace_id, thread_root_id, created_at)` — 拉取某线程全部回复。
 - `idx_comments_author (workspace_id, author_id, created_at)` — 「我发过的评论」。
 - 部分索引 `idx_comments_active ON comments(issue_id, created_at) WHERE deleted_at IS NULL`。
@@ -187,7 +189,8 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `id` | uuid | PK;`UNIQUE (workspace_id, id)`(供 `notification_delivery` 复合 FK 引用,README §6.2) | 通知 ID |
 | `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 多租户隔离 |
 | `recipient_id` | uuid | NOT NULL,复合 FK `(workspace_id, recipient_id) → members(workspace_id, id)` | 接收者(收件箱主要面向 human) |
-| `type` | text | NOT NULL | 枚举:`assigned`/`mentioned`/`subscribed_update`/`comment_created`/`status_changed`/`execution_finished`/`review_requested`/`due_soon`(执行词汇对齐 README §6.4) |
+| `type` | text | NOT NULL | 枚举:`assigned`/`mentioned`/`subscribed_update`/`comment_created`/`status_changed`/`execution_finished`/`review_requested`/`due_soon`(执行词汇对齐 README §6.4)。`execution_finished` 投递与优先级按 README §6.13 矩阵:执行**成功默认不生成该通知**(仅当 `notification_preferences` 显式订阅 `execution_finished` 时生成,`priority=normal`);失败/超时生成且 `priority=critical` |
+| `priority` | text | NOT NULL,CHECK IN ('critical','normal') | 通知优先级,服务端按 README §6.13 唯一优先级矩阵派生(critical:执行失败/超时、审批请求、安全隔离、被分派、被 @;normal:其余) |
 | `actor_kind` | text | NULL, CHECK in ('member','system') | 触发者种类(系统触发需 NULL member FK,为 README §6.1 允许的 CHECK + NULL FK 例外;**不是** human\|agent 判别列) |
 | `actor_id` | uuid | NULL,复合 FK `(workspace_id, actor_id) → members(workspace_id, id)` | 触发者(`actor_kind='system'` 时为 NULL;human/agent 由 JOIN `members.member_type` 区分) |
 | `issue_id` | uuid | NULL,复合 FK `(workspace_id, issue_id) → issues(workspace_id, id)` | 关联 issue(按 issue 分组) |
@@ -224,7 +227,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `created_at` / `updated_at` | timestamptz | NOT NULL DEFAULT now() | |
 
 **唯一约束:** `uq_notif_pref (workspace_id, member_id, event_type)`。
-> 缺省:用户未显式设置的 `event_type` 走默认策略(提及/分派=站内+实时邮件;订阅更新=站内+日摘要;agent 执行完成=站内+实时邮件)。
+> 缺省:用户未显式设置的 `event_type` 走默认策略(提及/分派=站内+实时邮件;订阅更新=站内+日摘要)。**agent 执行成功默认不投递**(留运行页;显式订阅 `execution_finished` 后为站内 + digest);**执行失败/超时按 critical 站内 + realtime 邮件(穿透 quiet hours,README §6.13)**。
 
 ### 2.8 `notification_delivery` — 投递/去重台账
 
@@ -430,7 +433,8 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `notification.created` | 通知对象 | fan-out 生成新通知(直接进收件箱) |
 | `notification.read` | 通知 id + read_at | 标已读(多端同步) |
 | `inbox.unread_count` | count | 未读计数变更(多端同步红点) |
-| `execution.queued` / `execution.completed` | execution id + status + comment_id | 提及 agent 入队/回流(事件词汇见 runtime.md,核心差异) |
+| `execution.queued` / `execution.completed` | execution id + status + comment_id | 提及 agent 入队/回流(事件词汇见 README §6.7 注册表与 runtime.md,核心差异) |
+| `execution.failed` / `execution.awaiting_approval` | execution id + status + reason/comment_id | 执行失败/超时与工具审批挂起回流(README §6.7 注册表;失败/超时按 critical 进收件箱,见 §4.4) |
 
 **可靠性兜底:**
 - 重连凭 `resume_from` 从 `realtime_events` 重放(README §6.7);并额外拉一次 `unread-count` 与增量列表对账,防丢事件。
@@ -487,10 +491,11 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - **投递经 outbox**:评论创建/提及/分派/状态变更在业务事务内**同事务写 `outbox_events`**(README §6.6),relay 分发至通知 fan-out worker,**不阻塞主请求**,杜绝「业务已提交但通知未登记」的丢失(集成测试 T5)。
 - **默认订阅**:创建者(reason=`creator`)、assignee(reason=`assignee`)自动订阅;发过评论者自动订阅(`participated`);被 @ 自动订阅(`mentioned`);可手动订阅/取消(`manual`)。
 - **按 issue 静音**:`issue_subscriptions.muted=true` 保留订阅但不出通知;收件箱提供「不再关注此 issue」一键静音。
-- **重新置未读**:同组通知已读后,**仅新的高优事件(mention/assign/agent 执行结束)重新置未读**;同类计数累加(如又多了 3 条评论)**不重新置未读**。
+- **重新置未读**:同组通知已读后,**仅新的 critical 事件(执行失败/超时、审批请求、安全隔离、被分派、被 @)重新置未读**;**执行成功不重置未读**;同类计数累加(如又多了 3 条评论)**不重新置未读**。
 - **分组与归档**:按 `group_key`(issue+type)折叠;已读 + 过期组自动归档;`archived_at` 语义为移出主视图,可回查。
 - **quiet hours**:用户级免打扰时段(站内不弹窗、邮件合并到时段后摘要);**critical 事件穿透免打扰**。
-- **事件分级**:**critical(进收件箱 + 可选推送)**:执行失败/超时、审批请求、安全隔离(freeze/扫描命中)、被分派、被 @;**normal(留在运行页/时间线,不进收件箱)**:普通日志、阶段进度、presence 变化。
+- **事件分级(引用 README §6.13 唯一权威)**:critical/normal 分级与「进收件箱 / 穿透 quiet hours / 重置未读」规则以 **README §6.13 唯一优先级矩阵**为唯一权威,本模块按其生成与分发,不另行定义(摘要:critical=执行失败/超时、审批请求、安全隔离、被分派、被 @;normal=其余;普通日志/阶段进度/presence 为非通知事件,留运行页/实时频道)。
+- **执行成功默认不进收件箱(README §6.13 R2)**:`execution_finished` 成功事件仅在 `notification_preferences` 显式订阅时投递(进箱后亦按普通事件不重置已读组);runtime.md 终态通知分发与本模块同源(均按 §6.13 矩阵),不再各自定义。
 - **聚合窗口**:同 `group_key` **60s 窗口**内合并为一条(`payload.count` 递增),避免通知风暴。
 - **自我抑制**:动作发起者不给自己生成通知;agent 永不接收会再触发自己的通知(回环防护)。
 - **邮件摘要**:定时任务扫描 `email='digest'` 且未投递的站内通知,聚合摘要邮件,写 `notification_delivery` 防重(`uq_delivery`);点邮件链接回站内并标已读。**邮件中的评论预览内容必须做 HTML 转义**(防邮件端注入),摘要模板使用纯文本或严格净化后的 HTML。
@@ -520,7 +525,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - [ ] 执行结果以 agent 评论回流**原线程**,触发者加入订阅并收到 `execution_finished` 通知与 `execution.completed` 事件。
 - [ ] 回复 agent 评论但不再 @ 它:不触发新执行(不提及即结束)。
 - [ ] agent 不接收会再触发自己的通知;agent 互 @ 受 `MAX_AGENT_CHAIN_DEPTH` 保护,超限静默丢弃并审计。
-- [ ] 执行失败:评论区失败占位卡片 + 通知触发者;不自动重试入队。
+- [ ] 执行失败:评论区失败占位卡片 + 通知触发者;不自动重试入队。**失败/超时按 critical 通知**(进收件箱 + 穿透 quiet hours + 重置同组未读,README §6.13)。
 - [ ] **README §6.9 触发矩阵逐行可测(集成测试 T7)**:重复 @ 同一评论仅一次执行;**编辑评论新增 @ 仅为新增者入队**;无关文字编辑**不重复触发**;移除 @ **不取消在途执行**(提及记录软删除);`suppress_triggers: true` 仅通知不运行;运行中新评论 @ 同一 agent 入队新执行。
 
 ### 5.3 功能 — 收件箱 / 通知(README §6.13)
@@ -528,8 +533,10 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - [ ] 被分派/被提及/订阅更新/我创建的 issue 更新/agent 执行完成 均正确生成通知。
 - [ ] **默认订阅**正确:creator/assignee 自动订阅,participated(发过评论)、mentioned(被 @)自动订阅,可手动订阅/取消。
 - [ ] **按 issue 静音**:`muted=true` 保留订阅但不出通知;「不再关注此 issue」一键静音可用。
-- [ ] **重新置未读**:已读组仅新的**高优事件(mention/assign/agent 执行结束)**重新置未读;**同类计数累加不重新置未读**。
-- [ ] **事件分级**:critical(执行失败/超时、审批请求、安全隔离、被分派、被 @)进收件箱;normal(普通日志、阶段进度、presence)不进收件箱,留在运行页/时间线。
+- [ ] **重新置未读**:已读组仅新的 **critical 事件(执行失败/超时、审批请求、安全隔离、被分派、被 @)**重新置未读;**执行成功不重置未读**;**同类计数累加不重新置未读**。
+- [ ] **事件分级**:按 **README §6.13 唯一矩阵(§9 T25)**——成功默认留运行页、失败/超时 critical 穿透 quiet hours 并重置未读、审批 critical、cancelled 不通知发起者;本模块不另行定义分级。
+- [ ] **`notifications.priority` 字段按矩阵派生**:每条通知落库携带服务端按 README §6.13 派生的 `priority ∈ {critical, normal}`,分发(进箱/穿透/重读)以该字段为准。
+- [ ] **同 issue 父评论约束(README §6.2 第 7 条)**:跨 issue 的 `parent_id`/`thread_root_id` INSERT 被重叠复合 FK `(workspace_id, issue_id, parent_id/thread_root_id)` 拒绝(`UNIQUE (workspace_id, issue_id, id)` 供引用)。
 - [ ] **quiet hours** 生效(站内不弹窗、邮件合并到时段后摘要),且 **critical 事件穿透免打扰**。
 - [ ] **聚合窗口 = 60s**:同 `group_key` 60s 窗口内合并为一条,`payload.count` 递增。
 - [ ] `payload` 快照完整:删除源评论/issue 后通知仍可读,跳转目标缺失时提示「原内容已删除」。
@@ -548,5 +555,6 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - [ ] **多端一致**:一端标已读,其余端红点消除(`notification.read` + `inbox.unread_count` 广播)。
 - [ ] **性能**:issue 评论列表(顶层 + 预览回复)在万级评论量下 P95 < 300ms;未读计数走部分索引,P95 < 50ms;基准按 README §10(标注冷/热缓存)。
 - [ ] **多租户隔离与复合 FK(集成测试 T1)**:`comment_mentions` / `comment_reactions` / `issue_subscriptions` / `notifications` / `notification_delivery` 等均携带 `workspace_id`,跨模块引用一律复合 FK `(workspace_id, x_id)`;A 区凭证访问 B 区评论/通知返回 403/404;构造跨 workspace 的复合 FK 插入被数据库约束拒绝。
+- [ ] **真实 DELETE 行为(README §9 T18)**:`comments.author_id`/`resolved_by_id` 为 `ON DELETE RESTRICT`——成员一律经 `status='removed'` 软删除、不物理删,历史评论与解决留痕不悬空;误试物理删除被引用成员行时 DELETE 被 RESTRICT 拒绝。
 - [ ] **安全**:Markdown 净化防 XSS;提及/触发权限校验;限流(auth Spec)生效;错误信息不泄露堆栈。
 - [ ] **可观测**:agent 执行入队/回流/失败、回环抑制丢弃均有审计日志。
