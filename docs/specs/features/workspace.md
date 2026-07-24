@@ -110,8 +110,10 @@ users(人类登录身份,auth.md)──┐
 | `inbox_issue_prefix` | string | `"WS"` | 无项目 issue 编号保留前缀(README §6.3,大写,格式同项目前缀);**变更经 §2.6 前缀注册表:旧前缀置 `retired` 永久保留**,历史 identifier 不重编号 |
 | `invitation_max_uses_cap` | int | `100` | 邀请 `max_uses` 可配置上限(LOW-2 硬化:显式值超过上限拒绝,见 §2.3) |
 | `invitation_max_lifetime_hours_cap` | int | `720` | 邀请有效期小时数可配置上限(LOW-2 硬化,默认 30 天:显式 `expires_in_hours` 超过上限拒绝,见 §2.3) |
+| `default_locale` | string | `"zh-CN"` | 工作区默认 locale(BCP-47,README §6.18 / i18n.md:locale 协商链的第三级;**locale 权威为本键**,既有 `default_language` 列仅作建区时的初始播种值,协商一律走 `default_locale`) |
+| `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户未设 `users.settings.theme` 时生效) |
 | `seat_limit` | int \| null | `null` | 席位上限(null=不限,供计费展示) |
-| `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}` |
+| `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}`(产品级 Feature Flags 系统为未来规划,README §12) |
 
 > 写入 `settings` 采用**按键浅合并**(PATCH 语义):仅覆盖请求中出现的键,未出现的键保持原值;未知键允许透传以支持前向兼容,但服务端对已知键做类型校验,非法返回 400。
 

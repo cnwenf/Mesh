@@ -246,7 +246,7 @@ erDiagram
 | workspace_id | uuid | NOT NULL, FK→workspaces.id | - | 所属工作区 |
 | agent_id | uuid | NULL | - | 执行该任务的 agent；**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`**（README §6.2） |
 | issue_id | uuid | NULL | - | 触发来源 issue；**复合 FK `(workspace_id, issue_id) → issues(workspace_id, id)`**（支撑「分派即开工」可观测） |
-| trigger | text | NOT NULL DEFAULT `'assign'`, CHECK IN (`'assign'`,`'mention'`,`'autopilot'`,`'manual'`,`'chat'`) | `'assign'` | 触发方式 |
+| trigger | text | NOT NULL DEFAULT `'assign'`, CHECK IN (`'assign'`,`'mention'`,`'autopilot'`,`'manual'`,`'chat'`,`'integration'`) | `'assign'` | 触发方式(R2:`'integration'` = 外部 IM/VCS 集成触发,README §6.9/§6.17、integrations.md) |
 | status | text | NOT NULL | `'queued'` | 逻辑状态机当前态（见 4.7；含 `awaiting_approval`，README §6.4/§6.10） |
 | idempotency_key | text | NULL, UNIQUE（可空唯一） | - | 幂等键 `sha256(agent_id|issue_id|trigger_event_id)`（README §6.5），防重复入队 |
 | priority | int | NOT NULL | 100 | 数值越小越优先 |

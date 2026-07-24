@@ -490,6 +490,11 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 | PATCH | `/statuses/{id}` | 更新状态 |
 | DELETE | `/statuses/{id}` | 删除状态(需迁移其下 issue) |
 | GET | `/issues/{id}/activity` | 变更历史 |
+| GET | `/workspaces/{ws}/issue-templates` | 列出 issue 模板(R2,建议-10,§3.9) |
+| POST | `/workspaces/{ws}/issue-templates` | 创建 issue 模板 |
+| PATCH | `/issue-templates/{id}` | 更新模板 |
+| DELETE | `/issue-templates/{id}` | 删除模板 |
+| POST | `/issue-templates/{id}/instantiate` | 由模板创建 issue |
 
 ### 3.2 列表查询参数(统一,看板/列表/我的任务复用)
 
@@ -706,6 +711,28 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 - 看板 `group_by=project` 拖拽经 `POST /views/{id}/moves`(`confirm=true`)调用同一事务契约(与 kanban.md §3.2 统一,README §6.14)。
 
 ---
+
+### 3.9 issue 模板(R2,建议-10 转正)
+
+**数据模型**(`issue_templates`,本 Spec owns):
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE;UNIQUE(workspace_id, id) | 隔离(README §6.2) |
+| `project_id` | UUID | NULL,复合 FK `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE SET NULL (project_id) | NULL=工作区级模板;非空=项目私有模板 |
+| `name` | TEXT | NOT NULL | 模板名,1–120;`UNIQUE (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), name)`(部分表达式唯一索引,README §6.3) |
+| `description` | TEXT | NULL | 模板用途说明 |
+| `template_body` | JSONB | NOT NULL | 预填字段集:`{title_prefix, description, state_category/status_id, priority, label_ids[], custom_field_values{}, estimate/estimate_unit, parent_strategy}`;引用型字段(status/label/自定义字段)按 README §6.2 复合 FK 语义校验同租户 |
+| `created_by` | UUID | NOT NULL,复合 FK `(workspace_id, created_by)→members(workspace_id, id)` ON DELETE RESTRICT | 创建者(成员软删除,不悬空) |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | |
+
+**实例化语义** `POST /api/v1/issue-templates/{id}/instantiate`(请求 `{title, overrides?}`):
+- 以 `template_body` 为基线、请求 `overrides` 覆盖,走**与 `POST /workspaces/{ws}/issues` 完全相同的创建链路**(编号生成 §2.4、必填字段校验 label-property.md §4.5、分派触发 README §6.9),返回 201 issue 对象;
+- 模板引用的 status/label/自定义字段若已失效(删除/停用)→ 该字段回退默认值并在响应 `details.skipped_fields` 列出(**不整体失败**);
+- 模板本身不产生编号、不触发 agent;仅实例化产生的 issue 走正常触发矩阵。
+
+**验收**:模板 CRUD 与项目/工作区作用域唯一生效;由模板创建的 issue 字段与模板一致(除 overrides);失效引用字段优雅降级;跨租户模板引用被复合 FK 拒绝(README §9 T1 同类)。
 
 ## 4. UI/UX 设计
 
