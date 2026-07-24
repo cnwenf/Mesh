@@ -184,7 +184,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 |------|------|------|----------|
 | GET | `/workspaces/{ws}/members` | 列出名册(人+agent;可按 `member_type`、`status`、`role` 过滤,`q` 搜索) | 成员 |
 | GET | `/workspaces/{ws}/members/{id}` | 获取单个成员(含 user/agent 详情) | 成员 |
-| POST | `/workspaces/{ws}/members` | 把已有 user/agent 加入名册 | admin |
+| POST | `/workspaces/{ws}/members` | 把已有 user/agent 加入名册;**人类成员入册同事务播种 onboarding 清单(R3,onboarding.md §3.5:入册播种为主路径,含历史事实全量 reconcile;agent 成员不播种)** | admin |
 | PATCH | `/workspaces/{ws}/members/{id}` | 改角色 / 状态(启用、停用)/ 显示名 | admin(改自己资料除外) |
 | DELETE | `/workspaces/{ws}/members/{id}` | 移除成员(可选 `?reassign_to=<member_id>`) | admin |
 | POST | `/workspaces/{ws}/members/reassign` | 批量转派某成员未完成 issue 给另一成员 | admin |

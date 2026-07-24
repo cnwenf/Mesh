@@ -120,7 +120,7 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 | model_config | jsonb | NOT NULL DEFAULT `'{}'::jsonb` | 模型与推理参数（结构见 2.4） |
 | default_runtime_id | uuid | NULL | 默认运行时；**复合 FK `(workspace_id, default_runtime_id) → runtimes(workspace_id, id) ON DELETE SET NULL (default_runtime_id)`**（PG16 列级，仅置空引用列、`workspace_id` 保持不动，README §6.2 第 6 条） |
 | trigger_on_assign | boolean | NOT NULL DEFAULT true | 被分派 issue 时是否自动触发运行 `[Mesh 特色]` |
-| active_config_version_id | uuid | NULL, FK `agent_config_versions(id)` | 当前生效配置版本指针（见 2.7） |
+| active_config_version_id | uuid | NULL，**同 agent 重叠复合 FK `(workspace_id, id, active_config_version_id) → agent_config_versions(workspace_id, agent_id, id) ON DELETE SET NULL (active_config_version_id)`** | 当前生效配置版本指针（见 2.7）；**active 指针必须属于本 agent 自己的配置版本——由重叠复合 FK 在数据库层强制**（被引用表建 `UNIQUE(workspace_id, agent_id, id)`，README §6.2 第 7 条）；置空仅 `active_config_version_id` 列、`workspace_id` 保持不动（PG16 列级 SET NULL，README §6.2 第 6 条） |
 | created_at | timestamptz | NOT NULL DEFAULT `now()` | |
 | updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
 | deleted_at | timestamptz | NULL | 软删除 |
@@ -184,14 +184,19 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 | 字段 | 类型 | 约束 / 默认 | 说明 |
 |------|------|-------------|------|
 | id | uuid | PK | 版本 id |
-| agent_id | uuid | NOT NULL, FK `agents(id)` ON DELETE CASCADE | |
+| workspace_id | uuid | NOT NULL, FK `workspaces(id)` ON DELETE CASCADE | 冗余隔离列（与所属 `agents` 同 workspace），供同租户复合 FK 与重叠唯一键引用（README §6.2） |
+| agent_id | uuid | NOT NULL，**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` ON DELETE CASCADE** | 所属 agent（跨租户指向别区 agent 的版本在 INSERT 即被拒绝，README §6.2 第 2 条） |
 | snapshot | jsonb | NOT NULL | 该版本完整配置快照（system_instructions + model_config + 绑定清单） |
 | change_summary | text | NULL | 变更摘要（可服务端自动生成） |
-| changed_by | uuid | NOT NULL, FK `members(id)` | 操作者成员 id |
+| changed_by | uuid | NOT NULL，**复合 FK `(workspace_id, changed_by) → members(workspace_id, id)`** | 操作者成员 id（**审计成员必须与本版本同属一个工作区**——跨租户成员写入在 INSERT 即被拒绝，README §6.2 第 2/3 条；成员软删除不物理删，该引用不置空） |
 | created_at | timestamptz | NOT NULL DEFAULT `now()` | 版本生成时间（仅插入，不更新） |
 
-索引：`idx_config_versions_agent_time`：`(agent_id, created_at DESC)`。
-> `agents.active_config_version_id` 指向当前生效版本；回滚 = 复制旧快照写新版本并把指针指过去（不可变快照，符合 immutable 原则，不抹除历史）。
+约束 / 索引：
+- `UNIQUE (workspace_id, agent_id, id)` —— **重叠唯一键**：供 `agents.active_config_version_id` 的同 agent 重叠复合 FK 引用，在数据库层强制「active 指针只能指向本 agent 的版本」（README §6.2 第 7 条）。
+- `UNIQUE (workspace_id, id)` —— 供跨表复合 FK 引用的通用前提（README §6.2 第 1 条）。
+- `idx_config_versions_agent_time`：`(agent_id, created_at DESC)`。
+
+> `agents.active_config_version_id` 指向当前生效版本，以重叠复合 FK `(workspace_id, id, active_config_version_id) → agent_config_versions(workspace_id, agent_id, id)` 引用（见 2.3）——把 A agent 的 active 指针指向 B agent 的版本、或指向别的工作区的版本，均在写入时被拒绝（集成测试 T27）；回滚 = 复制旧快照写新版本并把指针指过去（不可变快照，符合 immutable 原则，不抹除历史）。
 
 ### 2.8 实体关系（ER 图）
 
@@ -241,14 +246,16 @@ erDiagram
     }
     agent_config_versions {
         uuid id PK
-        uuid agent_id FK
+        uuid workspace_id FK "同租户隔离列"
+        uuid agent_id FK "复合 FK → agents(ws,id)"
         jsonb snapshot
-        uuid changed_by FK
+        uuid changed_by FK "复合 FK → members(ws,id)"
     }
 ```
 
 跨模块外键与唯一约束要点（同租户约束一律按 README §6.2）：
 - `members.agent_id` 复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` → 一个工作区名册条目至多对应一个 agent；`agents.UNIQUE(workspace_id, id)` 供引用。
+- `agent_config_versions` 携带 `workspace_id` 并以复合 FK 引用 `agents(workspace_id, id)` 与 `members(workspace_id, id)`（`changed_by` 审计不跨租户）；`UNIQUE(workspace_id, agent_id, id)` + `agents` 上的重叠复合 FK 保证 active 配置指针不跨 agent/跨租户串指（README §6.2 第 7 条，集成测试 T27）。
 - agent ↔ 技能 / 工具绑定与授权见 skill.md `agent_skills` / `skill_installations`（唯一权威，本模块不重复建表；`agent_tool_bindings`/`tools` 表已删除，工具权限并入 `granted_capabilities` 语义）。
 - `issues.assignee_id` / `comments.author_id` / 提及目标 → `members.id`（复合 FK `(workspace_id, …) → members(workspace_id, id)`）；**不冗余 `assignee_type`/`author_type` 存储列**——AI 徽章渲染所需的 `member_type` 由 API 响应携带服务端计算快照（README §6.1）。
 - `task_executions.agent_id` → `agents.id`（runtime 模块 owns，本模块只读引用以展示运行历史）。
@@ -430,9 +437,31 @@ erDiagram
   1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
   3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
-  4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（capability key + permission 的能力授权清单，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
-  5. 创建 `task_executions`（`status='queued'`，`agent_id`；写入权威 **`label_requirements`** 与 **`required_capabilities`**——后者取自绑定技能声明的 runtime 能力需求，为 claim 时与服务端 runtime 能力匹配的权威字段，README §6.4；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
+  4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（**严格对象数组** `[{capability, permission}]`，由下述归一算法从绑定技能声明派生，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
+  5. 创建 `task_executions`（`status='queued'`，`agent_id`；写入权威 **`label_requirements`** 与 **`required_capabilities`**——后者为**严格 capability key 字符串数组**（如 `["ffmpeg","exec:shell"]`），由下述**入队归一算法**（README §6.4 权威定义）从绑定技能声明派生，为 claim 时与服务端 runtime 能力匹配的权威字段，README §6.4；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
   6. 发出 `execution.queued` 事件（outbox → `realtime_events`，README §6.7）。
+
+> **能力入队归一算法（R3 写死，README §6.4/§6.11 权威）**：技能声明（skill.md `required_capabilities`/`granted_capabilities`）允许「字符串 key」或「`{capability, permission}` 对象」两种条目形态（授权语义的声明层表达）；入队时**必须**归一为严格类型的两套字段，**任何对象形态都不得进入 `task_executions.required_capabilities`**（否则 claim 的 JSONB `<@` 匹配永不命中，任务永久无法领取）：
+>
+> ```text
+> normalize_capabilities(declared) -> (required_capabilities, capability_grants)
+>   required := []            -- 字符串数组:scheduling 用
+>   grants   := []            -- 对象数组:授权快照用
+>   for item in declared:
+>     if item 是字符串 k:
+>       required.append(k)
+>       grants.append({"capability": k, "permission": "confirm_required"})  -- 未标注默认高风险闸门
+>     else if item 是 {"capability": k, "permission": p}:
+>       required.append(k)
+>       grants.append({"capability": k, "permission": p})
+>     else: 拒绝入队并告警(422 capability_invalid,声明层校验应已拦截)
+>   required := 去重后按字典序排序的字符串数组   -- 稳定序列化,便于匹配与审计比对
+>   grants   := 按 capability 字典序排序;同一 capability 取声明中**最严格** permission
+>               (confirm_required > write > read_only)
+>   return (required, grants)
+> ```
+>
+> `task_executions.required_capabilities` 与 `config_snapshot.capability_grants` 的严格类型由 schema CHECK 兜底（字符串数组 / `{capability,permission}` 对象数组，validation 脚本实测，集成测试 T28）；runtime claim 只做 `e.required_capabilities <@ runtimes.capabilities`（双方均为纯字符串数组，README §6.4）。
 
 > 幂等键 + 状态机校验保证同一逻辑触发不会重复入队；领取原子性与跨租户安全见 runtime.md §2.5。
 
@@ -701,7 +730,7 @@ stateDiagram-v2
 - [ ] `members.id` 是 issue 负责人 / 评论作者 / @提及的唯一引用键；agent 与人类在同一候选集中可被分派与提及。
 - [ ] agent 发评论 / 改状态以自身 `member_id` 署名，时间线显示为 agent 身份且带 AI 徽章。
 - [ ] 模型与推理参数保存前完成范围校验（temperature ∈ [0,2]、top_p ∈ [0,1]、max_tokens ≥ 1），越界返回 `422`。
-- [ ] 每次 `PATCH /config` 生成新的不可变 `agent_config_versions` 快照并更新 `active_config_version_id`；可列出历史、对比、回滚。
+- [ ] 每次 `PATCH /config` 生成新的不可变 `agent_config_versions` 快照并更新 `active_config_version_id`；可列出历史、对比、回滚。`agent_config_versions` 携带 `workspace_id`，`agent_id`/`changed_by` 均为同租户复合 FK，`UNIQUE(workspace_id, agent_id, id)` + `agents` 的重叠复合 FK 保证 **active 指针不跨 agent / 不跨租户串指、审计成员不来自别的工作区**（README §6.2 第 2/7 条，集成测试 T27）。
 - [ ] 技能 / 工具可逐项启停；绑定与授权全部走 skill.md（`agent_skills`/`skill_installations`/`granted_capabilities`，不重复建表；`agent_skill_bindings`/`agent_tool_bindings`/`tools` 已删除）；**工具权限统一为 capability 条目语义**（`{"capability": "<key>", "permission": "read_only|write|confirm_required"}`，**无工具主键**），`/agents/{id}/tools` 系列端点为 `skill_installations.granted_capabilities` 能力条目的薄封装（README §6.11）；高风险能力默认 `permission='confirm_required'`，执行时经统一 `approvals`（README §6.10）；入队快照含绑定版本与 `capability_grants` 授权清单（README §6.11）。
 - [ ] 可见性 `workspace`/`private` 生效：private agent 非所有者 / 非 admin 不可见、不可触发。
 - [ ] 生命周期状态机按 4.8 实现；非法迁移返回 `409`；`disable` 时 `members.status` 联动置 `disabled`。
@@ -712,7 +741,7 @@ stateDiagram-v2
 - [ ] **触发语义符合 README §6.9 矩阵（可逐行测试）**：再选同一 assignee = no-op；无字段变化的保存 = no-op；同评论重复 @ = 仅一次执行；编辑评论仅为新增提及入队、无关文字修改不重复触发；新评论再次 @ 运行中的 agent = 新执行（频率护栏兜底）；替换分派取消前任在途执行（`superseded`）。
 - [ ] **入队经 transactional outbox**（README §6.6）：业务提交与事件入队同事务，kill relay 后重启不丢触发（集成测试 T5）。
 - [ ] **入队快照**（README §6.11）：`task_executions.config_snapshot` 冻结 agent_config_version、skill 版本、`capability_grants`（capability key + permission，**无工具主键**）、repo/base SHA、trigger_event_id；配置变更不影响在途执行。
-- [ ] **入队写权威能力需求**（README §6.4）：创建 `task_executions` 时写入权威 `label_requirements` 与 `required_capabilities`（取自绑定技能声明的 runtime 能力需求），claim 时以 `e.required_capabilities <@ runtimes.capabilities` 做服务端能力匹配。
+- [ ] **入队写权威能力需求**（README §6.4）：创建 `task_executions` 时写入权威 `label_requirements` 与 `required_capabilities`（**严格 capability key 字符串数组**，经 §3.3 入队归一算法从绑定技能声明派生——字符串条目与 `{capability,permission}` 对象条目一律归一为纯 key 集合，**任何对象形态不得进入 `required_capabilities`**，否则 claim 的 JSONB `<@` 匹配永不命中），claim 时以 `e.required_capabilities <@ runtimes.capabilities` 做服务端能力匹配；授权快照 `config_snapshot.capability_grants` 为严格 `[{capability,permission}]` 对象数组（集成测试 T28）。
 - [ ] **暂停 / 停用拦截**：agent 处于 paused/disabled 时分派 / @ 不触发运行，发 `agent.trigger_skipped` 并提示。
 - [ ] **运行状态回流**：运行开始 / 进行 / 完成 / 失败实时回写 issue（卡片忙碌指示、进度、评论），agent 接单自动置「进行中」、产出置「待评审」。
 - [ ] 全场景 AI 徽章不可关闭：列表、卡片、评论、@候选、分派选择器均显示；@候选提示为「**发布后将触发一次运行**」，提交前有 trigger preview 与显式抑制开关（README §6.9）。

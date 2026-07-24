@@ -88,6 +88,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `display_name` | TEXT | NOT NULL | 显示名 |
 | `avatar_url` | TEXT | NULL | 头像 |
 | `status` | TEXT | NOT NULL DEFAULT 'active',CHECK IN ('active','invited','disabled','deleted') | 账号状态 |
+| `timezone` | TEXT | NULL | **用户展示层时区**(IANA 名,如 `Asia/Shanghai`;R3 补登记——此前 README §6.18/i18n.md 依赖本列而 users 模型未登记)。**仅影响展示层本地化渲染**,一切时间戳存储/传输仍 UTC RFC3339(README §6.18);NULL 时回退工作区 `timezone` 再回退 `UTC` |
+| `settings` | JSONB | NOT NULL DEFAULT `'{}'` | **账号级展示偏好真源(R3 新增,此前 README §6.12/§6.18 与 i18n.md 依赖本字段而 users 模型缺失)**:`{"locale": "<BCP-47>", "theme": "light\|dark\|system"}`——`locale` 为用户界面语言偏好(取值 BCP-47,首发 `zh-CN`/`en`,应用层校验在支持清单内,非法值 422);`theme` 为主题模式(README §6.12 主题切换契约,`system` = 跟随 `prefers-color-scheme`);未设置的键走 locale 协商回退链(README §6.18)与主题回退(工作区 `settings.default_theme` → `system`)。**写接口为 `PATCH /api/v1/users/me`(§3.1)** |
 | `mfa_secret` | TEXT | NULL | TOTP 密钥(加密存储) |
 | `mfa_enabled_at` | TIMESTAMPTZ | NULL | |
 | `last_login_at` | TIMESTAMPTZ | NULL | |
@@ -259,6 +261,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | GET | `/api/v1/sessions` | 列出我的活跃会话 | |
 | DELETE | `/api/v1/sessions/{id}` | 撤销指定会话 | |
 | GET | `/api/v1/me` | 当前用户与所属工作区列表 | |
+| PATCH | `/api/v1/users/me` | **修改当前账号资料与展示偏好(R3 新增)**:`{display_name?, avatar_url?, timezone?, settings?: {locale?, theme?}}`——仅接受列出字段(未知字段 `400 invalid_request`);`settings` 为**键级浅合并**(只覆盖传入键,其余保留);校验:`display_name` 1–80 字符;`avatar_url` 仅 `https` scheme(README §6.16);`timezone` 为合法 IANA 名(否则 `422 invalid_timezone`);`settings.locale` 在首发支持清单(`zh-CN`/`en`,扩展经 i18n.md 消息目录注册)内(否则 `422 unsupported_locale`);`settings.theme ∈ {light, dark, system}`(否则 `422 validation_error`);成功 `200` 返回更新后的完整用户对象(`{"data": {...}}`,含合并后 `settings`);变更写 `audit_logs`。**迁移(R3)**:存量用户的 locale/theme 偏好由迁移脚本一次性写入 `users.settings`(无旧列双写——本字段为新增真源,不存在长期双写期) | |
 
 ### 3.2 API token 端点 **[Mesh 特色]**
 
@@ -400,6 +403,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 忘记密码恒返回成功(防枚举);重置链接短时效,重置后旧会话失效。
 - [ ] OAuth 登录用 state + PKCE;首次自动建号并绑定;解绑保留至少一种登录方式。
 - [ ] 可选 2FA(TOTP)启用需验证码确认,并提供备用码。
+- [ ] **账号展示偏好真源(R3)**:`users` 登记 `timezone`(IANA)与 `settings` JSONB(`locale` BCP-47 / `theme light|dark|system`),为 README §6.12/§6.18 与 i18n.md 的偏好真源;`PATCH /api/v1/users/me` 可写 `display_name`/`avatar_url`/`timezone`/`settings.locale`/`settings.theme`(键级浅合并),非法 timezone → `422 invalid_timezone`、不支持 locale → `422 unsupported_locale`、非法 theme/未知字段 → `422`/`400`;`GET /api/v1/me` 返回合并后 `settings`;偏好变更写 `audit_logs`;迁移脚本一次性补登记存量偏好,无双写期(集成测试 T32)。
 
 ### 5.2 功能性(API token / agent)**[Mesh 特色]**
 

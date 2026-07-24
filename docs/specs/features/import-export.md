@@ -104,12 +104,16 @@ outbox relay ──SKIP LOCKED──► 数据作业 worker(README §2.2):
 | `status` | text | NOT NULL DEFAULT 'pending', CHECK IN ('pending','validating','running','completed','completed_with_errors','failed') | 作业状态机(§2.3) |
 | `mapping` | jsonb | NOT NULL DEFAULT '{}' | **字段映射**(导入:源列→Mesh 字段 + 值转换规则;导出:字段选择/列顺序,§2.4) |
 | `params` | jsonb | NOT NULL DEFAULT '{}' | **任务参数**:导入 `{target_project_id, options, validated_at}`;导出 `{scope, filters, locale, options}`(§2.4) |
-| `source_attachment_id` | uuid | NULL,**复合 FK `(workspace_id, source_attachment_id) → attachments(workspace_id, id)` `ON DELETE SET NULL (source_attachment_id)`** | 导入源文件(README §6.2 第 6 条列级置空);export 恒 NULL |
-| `result_attachment_id` | uuid | NULL,**复合 FK `(workspace_id, result_attachment_id) → attachments(workspace_id, id)` `ON DELETE SET NULL (result_attachment_id)`** | 导出产物 / 导入错误报告(§2.4) |
+| `source_attachment_id` | uuid | NULL,**复合 FK `(workspace_id, source_attachment_id) → attachments(workspace_id, id)` `ON DELETE RESTRICT`** | 导入源文件;**R3:源附件 `RESTRICT` 不可物理删除**——源文件是导入作业审计与幂等重跑的依据,作业存续期间删除源附件被数据库拒绝(409 `source_in_use`,附件仍可经 `deleted_at` 软删除与界面隐藏;此前 `SET NULL` 与「import 必有源文件」CHECK 互斥,实际删除永远被 CHECK 拒绝且语义混乱);export 恒 NULL |
+| `source_content_hash` | text | NULL | **R3:源文件内容 sha256**(validate 首次成功时写入并冻结);重跑/恢复时校验源文件未被替换,哈希不一致 → 拒绝续跑并 `422 source_changed`,要求重新 validate(幂等恢复的前提:同一份源) |
+| `result_attachment_id` | uuid | NULL,**复合 FK `(workspace_id, result_attachment_id) → attachments(workspace_id, id)` `ON DELETE SET NULL (result_attachment_id)`** | 导出产物 / 导入错误报告(§2.4);产物删除仅置空引用列(列级 SET NULL,README §6.2 第 6 条),作业历史保留 |
 | `total_rows` | int | NOT NULL DEFAULT 0, CHECK (total_rows >= 0) | 源文件数据行总数(validate/run 时写入) |
-| `succeeded_rows` | int | NOT NULL DEFAULT 0, CHECK (succeeded_rows >= 0) | 成功落库行数 |
-| `failed_rows` | int | NOT NULL DEFAULT 0, CHECK (failed_rows >= 0) | 失败(跳过)行数 |
+| `succeeded_rows` | int | NOT NULL DEFAULT 0, CHECK (succeeded_rows >= 0) | 成功落库行数(**由 `data_job_rows` 台账聚合驱动,§2.5**) |
+| `failed_rows` | int | NOT NULL DEFAULT 0, CHECK (failed_rows >= 0) | 失败(跳过)行数(同上) |
 | `error_report` | jsonb | NOT NULL DEFAULT '[]' | 逐行错误**预览**(前 N 条,默认 1000):`[{row, field, code, message}]`(§2.4);完整明细在错误报告附件 |
+| `checkpoint` | jsonb | NOT NULL DEFAULT '{}' | **R3:持久恢复点**`{last_committed_batch: <int>, last_row_key: <text>, batch_size: <int>, resumed_count: <int>, resumed_at: <ts>}`——每批提交事务内推进(§3.8);worker 崩溃后新 worker 凭此从**最后一个已提交批次之后**续跑,不重跑已提交批次(幂等兜底见 `data_job_rows`) |
+| `lease_owner` | text | NULL | **R3:在途 worker 标识**(worker 实例 id);与 `lease_expires_at` 构成租约,过期作业由 reaper 回收 |
+| `lease_expires_at` | timestamptz | NULL | **R3:租约过期时刻**(每批提交时续租);`status='running'` 且租约过期 → reaper 置 `lease_owner=NULL` 并经 outbox 重投恢复事件,新 worker 从 `checkpoint` 续跑——**消除「running 守卫导致崩溃后永久卡住」**(§3.8) |
 | `requested_by` | uuid | NOT NULL,**复合 FK `(workspace_id, requested_by) → members(workspace_id, id)` `ON DELETE RESTRICT`** | 发起人(成员软删除,RESTRICT 不悬空,README §6.2) |
 | `started_at` | timestamptz | NULL | 进入 running 的时间 |
 | `finished_at` | timestamptz | NULL | 到达终态的时间 |
@@ -194,11 +198,15 @@ CREATE TABLE data_jobs (
   mapping              JSONB NOT NULL DEFAULT '{}',
   params               JSONB NOT NULL DEFAULT '{}',
   source_attachment_id UUID NULL,
+  source_content_hash  TEXT NULL,                          -- R3:源文件 sha256(幂等恢复前提)
   result_attachment_id UUID NULL,
   total_rows           INT NOT NULL DEFAULT 0 CHECK (total_rows >= 0),
   succeeded_rows       INT NOT NULL DEFAULT 0 CHECK (succeeded_rows >= 0),
   failed_rows          INT NOT NULL DEFAULT 0 CHECK (failed_rows >= 0),
   error_report         JSONB NOT NULL DEFAULT '[]',
+  checkpoint           JSONB NOT NULL DEFAULT '{}',        -- R3:持久恢复点(最后已提交批次/行键)
+  lease_owner          TEXT NULL,                          -- R3:在途 worker 租约
+  lease_expires_at     TIMESTAMPTZ NULL,
   requested_by         UUID NOT NULL,
   started_at           TIMESTAMPTZ NULL,
   finished_at          TIMESTAMPTZ NULL,
@@ -209,8 +217,9 @@ CREATE TABLE data_jobs (
   CHECK (succeeded_rows + failed_rows <= total_rows),
   CHECK ((kind = 'import' AND source_attachment_id IS NOT NULL)
       OR (kind = 'export' AND source_attachment_id IS NULL)),
+  -- R3:源附件 RESTRICT——作业存续期间源文件不可物理删除(审计 + 幂等重跑依据)
   FOREIGN KEY (workspace_id, source_attachment_id)
-      REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (source_attachment_id),
+      REFERENCES attachments(workspace_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, result_attachment_id)
       REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (result_attachment_id),
   FOREIGN KEY (workspace_id, requested_by)
@@ -222,9 +231,43 @@ CREATE INDEX idx_data_jobs_requester    ON data_jobs (workspace_id, requested_by
 -- 在途作业(监控/补偿扫描,非 worker 领取路径——领取经 outbox)
 CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
   WHERE status NOT IN ('completed','completed_with_errors','failed');
+-- R3:租约过期作业回收扫描(reaper)
+CREATE INDEX idx_data_jobs_lease_expired ON data_jobs (lease_expires_at)
+  WHERE status = 'running';
+
+-- ============ data_job_rows(R3 新增:逐行结果台账 —— 行级幂等键 + 恢复真源)============
+CREATE TABLE data_job_rows (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  job_id       UUID NOT NULL,
+  row_number   INT NOT NULL CHECK (row_number >= 1),       -- 源文件物理行号(定位/排障)
+  row_key      TEXT NOT NULL,                              -- 行级稳定幂等键(见下)
+  status       TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending','created','updated','skipped','failed')),
+  target_type  TEXT NULL CHECK (target_type IN ('issue','project')),
+  target_id    UUID NULL,                                  -- 落库实体 id(created/updated 时必填)
+  error        JSONB NULL,                                 -- {field, code, message}(failed 时必填)
+  attempts     INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, id),
+  CONSTRAINT uq_data_job_rows_job_row_key UNIQUE (job_id, row_key),   -- R3:行级幂等键——重放已提交批次不重复建实体
+  CHECK ((status IN ('created','updated') AND target_type IS NOT NULL AND target_id IS NOT NULL)
+      OR (status = 'failed' AND error IS NOT NULL)
+      OR (status IN ('pending','skipped'))),
+  CONSTRAINT fk_data_job_rows_job FOREIGN KEY (workspace_id, job_id)
+    REFERENCES data_jobs(workspace_id, id) ON DELETE CASCADE
+);
+-- 续跑扫描:定位作业内未完成行;台账聚合:按作业统计各状态行数
+CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 ```
 
-> **复合 FK 删除语义(README §6.2 第 6 条)**:`source_attachment_id`/`result_attachment_id` 用 PG16 列级 `ON DELETE SET NULL (<引用列>)`——附件被物理清理时仅置空引用列,`workspace_id` 保持非空、行不报错(真实 DELETE 行为见 §5 / README §9 T18 同类)。`requested_by` 用 `ON DELETE RESTRICT`:成员一律软删除(`members.status='removed'`),物理 DELETE 不发生,RESTRICT 永不阻塞且发起人署名不悬空。
+> **复合 FK 删除语义(R3 修订,README §6.2 第 6 条)**:
+> - `source_attachment_id` 用 **`ON DELETE RESTRICT`**:源文件是导入作业审计与幂等重跑的依据,作业存续期间物理删除源附件被数据库拒绝(API 层先译 `409 source_in_use`;附件仍可软删除 `deleted_at` 从界面隐藏)。此前 `SET NULL (source_attachment_id)` 与「import 必有源文件」CHECK 直接互斥——删除附件会先把列置空再被 CHECK 拒绝,实际永远删不掉且错误信息误导。
+> - `result_attachment_id` 仍用 PG16 列级 `ON DELETE SET NULL (result_attachment_id)`:产物/错误报告附件物理清理时仅置空引用列,`workspace_id` 保持非空、作业历史行不报错(真实 DELETE 行为见 §5 / README §9 T18 同类)。
+> - `requested_by` 用 `ON DELETE RESTRICT`:成员一律软删除(`members.status='removed'`),物理 DELETE 不发生,RESTRICT 永不阻塞且发起人署名不悬空。
+>
+> **行级稳定键 `row_key`(R3 写死)**:优先取映射出的 `external_ref`(源工具的业务键,如 `JIRA-123`,跨重跑天然稳定);无 `external_ref` 映射或值不唯一时,`row_key = 'row:' || row_number || ':' || sha256(该行全部源字段的规范化 JSON)`——**内容寻址**,同一份源文件(经 `source_content_hash` 校验)重跑得同一键集。`UNIQUE(job_id, row_key)` 使「重放已提交批次」成为幂等操作:台账 upsert(`ON CONFLICT (job_id, row_key) DO UPDATE` 仅在 `status NOT IN ('created','updated')` 时改写)不会重复创建 issue/project(集成测试 T31)。
 
 ### 2.6 跨模块外键说明
 
@@ -301,13 +344,14 @@ CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
 
 ### 3.4 确认执行(POST /data-jobs/import/{id}/run)
 
-**前置校验:** `params.validated_at` 非空(已 dry-run),否则 `422 validation_required`;status 须为 `pending`,否则 `409 conflict`;源附件已放行,否则 `422 source_not_ready`。
+**前置校验:** `params.validated_at` 非空(已 dry-run),否则 `422 validation_required`;status 须为 `pending`,否则 `409 conflict`;源附件已放行,否则 `422 source_not_ready`;**R3:写入/校验 `source_content_hash`**——validate 后源文件内容被替换(哈希与冻结值不一致)→ `422 source_changed`,要求重新 validate(保证落库内容与 dry-run 预览为同一份源)。
 
-**动作(经 outbox/worker,§3.8,部分成功):** status `pending → running`(`started_at`),worker 流式重读源文件,对每行:
-- 合法 → 经**实体服务层**创建 issue/project(复用正常落库路径:编号生成 §3.7、状态解析、成员引用、标签/自定义字段、父子二次解析);`succeeded_rows + 1`。
-- 非法 → 跳过,记入错误报告;`failed_rows + 1`。
-- 每批(默认 500 行)增量更新计数 + `data_job.updated` 推进度;完整错误明细**流式**写入错误报告附件(`result_attachment_id`),`error_report` 行内仅前 N 条。
-- 终态:`failed_rows = 0 → completed`;`failed_rows > 0 → completed_with_errors`(含全部失败);任务级故障 → `failed`。置 `finished_at`。
+**动作(经 outbox/worker,§3.8,部分成功,逐批幂等):** status `pending → running`(`started_at`,**领取租约** `lease_owner`/`lease_expires_at`),worker 流式重读源文件,**按 `batch_size`(默认 500 行)分批,每批一个数据库事务**(R3 崩溃恢复协议,§3.8):
+- 合法行 → 经**实体服务层**创建 issue/project(复用正常落库路径:编号生成 §3.7、状态解析、成员引用、标签/自定义字段、父子二次解析);同事务写 `data_job_rows` 台账行(`status='created'`,`target_type/target_id` 指向新实体,`UNIQUE(job_id, row_key)` 幂等)。
+- 非法行 → 跳过,台账行 `status='failed'` + `error` 明细;计入错误报告。
+- **批事务末尾同事务推进** `checkpoint`(`last_committed_batch`/`last_row_key`)与 `succeeded_rows`/`failed_rows` 计数、续租(`lease_expires_at = now() + 5min`),并发出 `data_job.updated` 进度;**批间崩溃 = 最后提交的批之前全部落库、之后全部未动**(计数/checkpoint 与实体同事务,不存在"计数已加但实体未建"的漂移)。
+- **崩溃后恢复**:新 worker 领取该作业(租约过期回收,§3.8)→ 校验 `source_content_hash` → 从 `checkpoint.last_committed_batch` 之后续跑;重放已提交批次时台账 `ON CONFLICT (job_id, row_key)` upsert 幂等(已 `created` 的行不重复建 issue/project),恢复路径不产生重复实体(集成测试 T31)。
+- 终态:全部台账行到终态后,`failed_rows = 0 → completed`;`failed_rows > 0 → completed_with_errors`(含全部失败);任务级故障(源不可解析/存储不可达/被取消)→ `failed`。置 `finished_at`、清空租约;完整错误明细**流式**写入错误报告附件(`result_attachment_id`),`error_report` 行内仅前 N 条。
 
 **响应体(202,异步执行已启动):**
 ```json
@@ -348,7 +392,10 @@ CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
 
 - 建作业事务**同事务** INSERT `outbox_events`(`event_type='data_job.enqueue'`,payload 含 `data_job_id`/`kind`/动作,幂等键 `sha256(data_job_id \| action)`,README §6.5)。
 - outbox relay `FOR UPDATE SKIP LOCKED` 领取 → 分发数据作业 worker;worker 以 `SELECT … WHERE id=$1 AND status IN (期望前置态) FOR UPDATE SKIP LOCKED` 锁定作业行**幂等推进**(重复投递因状态守卫无副作用)。
-- worker 崩溃 → 未发布 outbox 事件由其他副本/重启补投(at-least-once);作业停在 `validating`/`running` 由补偿扫描(`idx_data_jobs_active`)+ outbox 重投恢复;`delivery_attempts` 超限置 outbox `failed` 告警。
+- **R3 领取即租约**:worker 锁定作业行的同事务写 `lease_owner=<worker-id>`、`lease_expires_at=now()+5min`、`checkpoint.resumed_count+1`(非首次领取时);每批事务续租。**不存在无租约的 `running`**——崩溃后卡 `running` 的作业必然租约过期。
+- **R3 租约回收(reaper)**:补偿扫描 `idx_data_jobs_lease_expired`(`status='running' AND lease_expires_at < now()`)→ 同事务置 `lease_owner=NULL`(状态保持 `running`,**不回退计数**——计数与 checkpoint 与实体同事务提交,天然一致)+ 经 outbox 重投 `data_job.resume`(幂等键 `sha256(data_job_id \| 'resume' \| 上次 checkpoint 批次号)`)→ 新 worker 领取后从 `checkpoint.last_committed_batch` 续跑。**消除两类永久故障**:①「`running` 守卫使重投不再执行 → 作业永久卡住」(租约过期即可被新 worker 领取);②「重跑已提交批次 → 重复建 issue/project」(checkpoint 跳过 + `data_job_rows.UNIQUE(job_id, row_key)` upsert 幂等双保险)。
+- worker 崩溃在**批事务提交前** → 该批整体未落库,新 worker 重跑该批(幂等);崩溃在**提交后、outbox 进度事件发布前** → 进度事件由 outbox 补投(at-least-once),`data_job.updated` 可能重复推送,客户端按 `checkpoint`/计数收敛。
+- **R3 源文件校验**:领取时(首次与恢复皆然)重算源附件内容 sha256 与 `source_content_hash` 比对,不一致 → 作业 `failed(failure_reason='source_changed')`(源在 validate 后被替换,不可安全续跑)。
 - **禁止**在业务事务外"顺手"解析文件或写实体(评审硬约束,README §6.6)。
 
 ### 3.9 产物登记为附件(经 attachment.md 统一通道)
@@ -357,15 +404,18 @@ CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
 - csv/json 属 attachment.md §3.6 **纯文本免扫白名单** → blob `scan_status='skipped'` 即放行,产物**默认可下载**(无"扫描中"等待);魔数嗅探 + SHA-256 校验仍由附件 worker 完成。
 - 下载经 attachment.md 私有签名 URL(短时效、绑定方法与对象键);**未放行不放行**(纯文本白名单产物默认 `skipped` 放行,语义与 attachment.md 可见性闸门一致)。
 
-### 3.10 通知(复用 README §6.13 矩阵分级)
+### 3.10 通知(只引用 README §6.13 唯一矩阵,不自定义分级)
 
-| 作业结果 | 分级 | 行为(按 §6.13 对应行语义) |
-|----------|------|------------------------------|
-| `completed` / `completed_with_errors` | **normal** | 进收件箱(收件人 `requested_by`),**不穿透** quiet hours,**不重置**同组未读,邮件 digest;`completed_with_errors` 文案附"成功 N / 失败 M,下载错误报告" |
-| `failed` | **critical** | 进收件箱(`requested_by`),**穿透** quiet hours,**重置**同组未读,邮件 realtime;附 `failure_reason` |
+> **R3 修订**:此前本模块为 data job 自行定义成功/失败分级,而 README §6.13 canonical 矩阵没有 data job 行——违反「§6.13 为唯一通知矩阵」。R3 先在 README §6.13 补入 **data job 三行**(失败 critical / 部分成功 normal 进箱 / 成功默认不进箱),本模块**只引用不定义**:
 
-- 通知 fan-out 经 outbox(README §6.6)→ notifications(comment-inbox.md owns,携带 `priority`);实时推送经 §6.7 唯一写入路径。
-- **本模块不另行定义事件分级**——成功=normal、失败=critical,直接落在 §6.13 既有两级。
+| 作业结果 | 矩阵行(README §6.13) | 行为 |
+|----------|------------------------|------|
+| `completed`(成功) | **data job 成功 = normal,默认不进收件箱** | 留数据作业页(toast + 下载入口);仅当 `requested_by` 在 `notification_preferences` 显式订阅 `data_job_finished` 时进箱;不穿透 quiet hours、不重置未读;邮件 none→订阅后 digest |
+| `completed_with_errors`(部分成功) | **data job 部分成功 = normal,进收件箱** | 收件人 `requested_by`(有失败行需人工处理,故默认进箱);不穿透 quiet hours、不重置同组未读;邮件 digest;文案附"成功 N / 失败 M,下载错误报告" |
+| `failed`(任务级失败) | **data job 失败 = critical** | 进收件箱(`requested_by`),**穿透** quiet hours,**重置**同组未读,邮件 realtime;附 `failure_reason` |
+
+- 通知 fan-out 经 outbox(README §6.6)→ notifications(comment-inbox.md owns,携带服务端按 §6.13 派生的 `priority`);实时推送经 §6.7 唯一写入路径。
+- **本模块不得另行定义事件分级**;data job 通知的进箱/穿透/重置语义以 README §6.13 矩阵为唯一实现依据(集成测试 T25 扩至 data job,T32)。
 
 ### 3.11 实时事件(README §6.7 注册表)
 
@@ -451,15 +501,16 @@ CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
 
 ### 5.3 通知 / 实时
 
-- [ ] **任务失败通知(critical)**:`failed` 按 §6.13 critical 进 `requested_by` 收件箱、穿透 quiet hours、重置同组未读、邮件 realtime;`completed`/`completed_with_errors` 按 normal(不穿透、不重置、digest);通知 `priority` 字段与 §6.13 矩阵逐事件一致(README §9 T25 同类)。
+- [ ] **data job 通知按 README §6.13 唯一矩阵分发(R3,T25 扩至 data job / T32)**:`failed` = critical(进 `requested_by` 收件箱、穿透 quiet hours、重置同组未读、邮件 realtime);`completed_with_errors` = normal 进箱(不穿透、不重置、digest,文案附成功/失败数 + 错误报告下载);**`completed`(成功)默认不进收件箱**(留数据作业页;仅显式订阅 `data_job_finished` 才进箱且不重置已读组);通知 `priority` 字段由服务端按 §6.13 派生,本模块**无任何自定义分级表述**(§3.10 只引用矩阵)。
 - [ ] **实时**:`data_job.updated` 经 outbox→projector 唯一写入路径登记,频道内 seq 单调;订阅逐资源授权(非属主/admin 订阅被拒)。
 
 ### 5.4 多租户 / 安全 / 内存
 
 - [ ] **跨租户 job/附件复合 FK 拒绝(README §9 T1 同类)**:`data_jobs` 建 `UNIQUE(workspace_id, id)`;`source/result_attachment_id → attachments(workspace_id,id)`、`requested_by → members(workspace_id,id)` 均复合 FK;构造跨 workspace 复合 FK 插入被数据库约束拒绝;A 区凭证访问 B 区 job/download → 403/404。
-- [ ] **真实 DELETE 行为(README §9 T18 同类)**:物理清理某 attachment 时,`data_jobs.source/result_attachment_id` 经列级 `ON DELETE SET NULL (<引用列>)` 仅置空引用列,`workspace_id` 保持非空、行不报错;删除 workspace 级联其 data_jobs。
-- [ ] **大文件分片/内存安全(流式读写,不全量载入)**:源文件解析(CSV 逐行 / JSON 流式)与导出生成(游标分批查询 + 流式写出)全程流式;在 README §10 数据规模(单作业 10 万行)下内存占用平稳,不因单作业 OOM;错误报告流式写附件,行内 `error_report` 有上限。
-- [ ] **幂等**:重复 `run`/`validate` 经状态守卫无副作用;`Idempotency-Key` 重复建作业返回首次结果;outbox 重投不产生重复落库(幂等键 + 状态守卫,README §6.5/§6.6)。
+- [ ] **真实 DELETE 行为(R3 修订,README §9 T18 同类)**:物理清理某 attachment 时,**`data_jobs.source_attachment_id` 经 `ON DELETE RESTRICT` 拒绝删除**(作业存续期间源文件不可物理删,API 层 `409 source_in_use`;软删除不受影响);`result_attachment_id` 经列级 `ON DELETE SET NULL (result_attachment_id)` 仅置空引用列,`workspace_id` 保持非空、行不报错;删除 workspace 级联其 data_jobs 与 `data_job_rows`(集成测试 T31)。
+- [ ] **崩溃恢复与行级幂等(R3,集成测试 T31)**:① import 执行中(第 K 批提交后)杀 worker → reaper 在 `lease_expires_at` 过期后回收租约,新 worker 领取并**从 `checkpoint.last_committed_batch` 续跑**;② 前 K 批已建实体**不重复创建**(`data_job_rows.UNIQUE(job_id, row_key)` upsert 幂等 + checkpoint 跳过双保险),最终 `succeeded_rows` = 台账 `created` 行数、与实体实际数量一致;③ 源文件在 validate 后被替换 → 恢复领取时 `source_content_hash` 校验失败,作业 `failed(source_changed)`;④ 作业不会因「`running` 守卫」永久卡住(租约过期即可被重新领取);⑤ 删除源附件被 RESTRICT 拒绝。
+- [ ] **大文件分片/内存安全(流式读写,不全量载入)**:源文件解析(CSV 逐行 / JSON 流式)与导出生成(游标分批查询 + 流式写出)全程流式;在 README §10 数据规模(单作业 10 万行)下内存占用平稳,不因单作业 OOM;错误报告流式写附件,行内 `error_report` 有上限;`data_job_rows` 台账逐批写入,内存不随文件总行数增长。
+- [ ] **幂等**:重复 `run`/`validate` 经状态守卫无副作用;`Idempotency-Key` 重复建作业返回首次结果;outbox 重投不产生重复落库(幂等键 + 状态守卫 + 行台账,README §6.5/§6.6)。
 - [ ] **属主/权限**:非 requested_by/admin 无法查看/下载他人作业(`403`);导入需目标写权限、导出需范围读权限。
 - [ ] **源附件属主校验(M-2)**:`source_attachment_id` 必须是调用者已上传(`uploader_id` = 调用者)或调用者对附件链接目标有读权限的附件,否则 `403`;不可凭附件 ID 引入他人上传的文件(与 attachment.md complete/abort 属主校验先例一致)。
 - [ ] **可观测**:建作业/校验/执行/失败/下载均有审计日志;错误信息不泄露堆栈/SQL/内部 ID(README §6.14)。

@@ -1,11 +1,38 @@
 -- ============================================================================
--- Mesh Spec R2 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
--- 依据:docs/specs/README.md(Draft v3 / R2)§6 全局权威契约 + 15 份功能 Spec
--- 用法:psql -v ON_ERROR_STOP=1 -f schema_r2_validation.sql
+-- Mesh Spec R2+R3 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
+-- 依据:docs/specs/README.md(Draft v3 / R2 + R3 修订)§6 全局权威契约 + 20 份功能 Spec
+-- R3(MES-7,HIGH-1～HIGH-9 + 3 建议):agent_config_versions 同租户/重叠 FK(T27);
+--   能力字段严格类型与归一(T28);集成外部身份全局唯一 + scope 异或 + vcs_links(T29);
+--   IM 投递台账多目的地(T30);data job RESTRICT/checkpoint/行台账恢复协议(T31);
+--   users.settings 偏好真源 + locale 单一权威(T32);analytics 可见性缓存键(T33);
+--   onboarding evidence(T34);chat_sessions.is_pinned 快照删除(建议-2)。
+-- 用法:psql -v ON_ERROR_STOP=1 -f schema_r2_validation.sql(空库执行)
 -- 期望失败断言以 EXCEPTION 块包裹(拒绝即 PASS);ASSERT 失败 = Spec/DDL 缺陷,脚本中止。
 -- ============================================================================
 \set ON_ERROR_STOP on
 CREATE EXTENSION IF NOT EXISTS btree_gin;
+
+-- ----------------------------------------------------------------------------
+-- R3 辅助函数(HIGH-2:调度能力与授权能力严格类型校验,供 CHECK 约束引用)
+-- ----------------------------------------------------------------------------
+-- 调度字段 required_capabilities 必须为「纯字符串数组」(capability key 集合,README §6.4 R3)
+CREATE OR REPLACE FUNCTION jsonb_is_string_array(v JSONB) RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(v) = 'array'
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v) e WHERE jsonb_typeof(e) <> 'string')
+$$;
+-- 授权快照 capability_grants 必须为「[{capability, permission?}] 对象数组」(README §6.11 R3)
+CREATE OR REPLACE FUNCTION jsonb_is_capability_grants(v JSONB) RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(v) = 'array'
+     AND NOT EXISTS (
+       SELECT 1 FROM jsonb_array_elements(v) e
+        WHERE jsonb_typeof(e) <> 'object'
+           OR jsonb_typeof(e->'capability') <> 'string'
+           OR ((e->'permission') IS NOT NULL
+               AND NOT (e->>'permission' IN ('read_only','write','confirm_required')))
+     )
+$$;
 
 -- ----------------------------------------------------------------------------
 -- 基础层:workspaces / users / agents / members
@@ -16,8 +43,9 @@ CREATE TABLE workspaces (
   slug               TEXT NOT NULL,
   logo_url           TEXT NULL,
   timezone           TEXT NOT NULL DEFAULT 'UTC',
-  default_language   TEXT NOT NULL DEFAULT 'en',
-  settings           JSONB NOT NULL DEFAULT '{}',
+  -- R3(HIGH-7):default_language 列已弃用删除——locale 唯一真源为 settings.default_locale(默认 'en',
+  -- 与 i18n.md §2.1/§2.3 一致;存量值经迁移一次性写入 settings 后删列,不长期双写)
+  settings           JSONB NOT NULL DEFAULT '{"default_locale": "en"}',
   inbox_issue_seq    BIGINT NOT NULL DEFAULT 0 CHECK (inbox_issue_seq >= 0),
   deleted_at         TIMESTAMPTZ NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -35,7 +63,8 @@ CREATE TABLE users (
   full_name           TEXT NULL,
   avatar_url          TEXT NULL,
   bio                 TEXT NULL,
-  timezone            TEXT NULL,
+  timezone            TEXT NULL,                            -- 展示层时区(IANA;R3 于 auth.md §2.2 登记,存储仍 UTC)
+  settings            JSONB NOT NULL DEFAULT '{}',          -- R3(HIGH-7):账号级展示偏好真源 {locale, theme}(PATCH /api/v1/users/me 写入)
   status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','invited','disabled','deleted')),
   mfa_secret          TEXT NULL,
   mfa_enabled_at      TIMESTAMPTZ NULL,
@@ -92,19 +121,31 @@ CREATE UNIQUE INDEX uq_members_ws_id ON members(workspace_id, id);           -- 
 CREATE UNIQUE INDEX uq_members_ws_user ON members(workspace_id, user_id) WHERE user_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_members_ws_agent ON members(workspace_id, agent_id) WHERE agent_id IS NOT NULL;
 
--- agent_config_versions:agent 下模块内叶表,隔离经 agent 父链传递;changed_by → members.id(agent.md §2.7)
+-- agent_config_versions:R3 修订(HIGH-1)——补 workspace_id + 同租户复合 FK + 重叠唯一键,
+-- 审计成员 changed_by 同租户复合 FK;active 指针以重叠复合 FK 强制同 agent 同租户(README §6.2 第 2/7 条)
 CREATE TABLE agent_config_versions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  agent_id       UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  agent_id       UUID NOT NULL,
   snapshot       JSONB NOT NULL,
   change_summary TEXT NULL,
-  changed_by     UUID NOT NULL REFERENCES members(id),
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  changed_by     UUID NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_config_versions_ws_id UNIQUE (workspace_id, id),
+  -- 重叠唯一键:供 agents.active_config_version_id 的同 agent 重叠复合 FK 引用(README §6.2 第 7 条)
+  CONSTRAINT uq_config_versions_ws_agent_id UNIQUE (workspace_id, agent_id, id),
+  CONSTRAINT fk_config_versions_agent FOREIGN KEY (workspace_id, agent_id)
+    REFERENCES agents(workspace_id, id) ON DELETE CASCADE,
+  -- 审计成员必须与版本同属一个工作区(跨租户 changed_by 在 INSERT 即被拒绝)
+  CONSTRAINT fk_config_versions_changed_by FOREIGN KEY (workspace_id, changed_by)
+    REFERENCES members(workspace_id, id)
 );
 CREATE INDEX idx_config_versions_agent_time ON agent_config_versions(agent_id, created_at DESC);
--- agents.active_config_version_id → agent_config_versions(回指,建表后 ALTER)
+-- agents.active_config_version_id → agent_config_versions(R3:重叠复合 FK,active 指针只能指向本 agent 的版本)
 ALTER TABLE agents ADD CONSTRAINT fk_agents_active_config
-  FOREIGN KEY (active_config_version_id) REFERENCES agent_config_versions(id);
+  FOREIGN KEY (workspace_id, id, active_config_version_id)
+  REFERENCES agent_config_versions(workspace_id, agent_id, id)
+  ON DELETE SET NULL (active_config_version_id);
 
 -- ----------------------------------------------------------------------------
 -- 项目管理层:projects / milestones / cycles / issue_statuses / issues
@@ -607,6 +648,13 @@ CREATE TABLE task_executions (
 );
 CREATE UNIQUE INDEX uq_task_executions_ws_id ON task_executions(workspace_id, id);
 CREATE INDEX idx_executions_claimable ON task_executions (workspace_id, priority, queued_at) WHERE status = 'queued';
+-- R3(HIGH-2):调度字段严格字符串数组(对象进调度字段 → claim 的 <@ 永不命中、任务永久无法领取);
+-- 授权快照 capability_grants 严格对象数组(README §6.4/§6.11,集成测试 T28)
+ALTER TABLE task_executions ADD CONSTRAINT ck_executions_required_capabilities
+  CHECK (jsonb_is_string_array(required_capabilities));
+ALTER TABLE task_executions ADD CONSTRAINT ck_executions_capability_grants
+  CHECK ((config_snapshot->'capability_grants') IS NULL
+      OR jsonb_is_capability_grants(config_snapshot->'capability_grants'));
 
 CREATE TABLE execution_attempts (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -716,16 +764,23 @@ CREATE TABLE notification_preferences (
   FOREIGN KEY (workspace_id, member_id) REFERENCES members(workspace_id, id) ON DELETE CASCADE
 );
 
+-- notification_delivery:R3 修订(HIGH-4)——结构化多目的地(IM 平台/绑定/外部目标独立成列),
+-- 唯一键到目的地粒度 (notification_id, channel, destination_key);error 只记失败原因
 CREATE TABLE notification_delivery (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   notification_id UUID NOT NULL,
   channel         TEXT NOT NULL CHECK (channel IN ('in_app','email','websocket')),
+  destination_key TEXT NOT NULL DEFAULT '',                 -- R3:稳定目的地键(in_app/websocket 恒 '';im = provider:binding_id:external_target)
+  provider        TEXT NULL CHECK (provider IN ('feishu','slack','email_smtp')),  -- R3:结构化路由(不再塞 error)
+  external_target TEXT NULL,                                -- R3:外部目标身份(飞书 chat_id/open_id、Slack channel_id/user_id、邮件地址)
+  integration_id  UUID NULL,                                -- R3:IM 集成实例(composite FK 于 integrations 建表后 ALTER 添加)
+  binding_id      UUID NULL,                                -- R3:IM 绑定(composite FK 于 integration_bindings 建表后 ALTER 添加)
   state           TEXT NOT NULL CHECK (state IN ('pending','sent','failed')),
   sent_at         TIMESTAMPTZ NULL,
-  error           TEXT NULL,
+  error           TEXT NULL,                                -- R3:仅失败原因,不混入路由数据
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (notification_id, channel),
+  UNIQUE (notification_id, channel, destination_key),       -- R3:多目的地幂等(取代 (notification_id, channel))
   FOREIGN KEY (workspace_id, notification_id) REFERENCES notifications(workspace_id, id) ON DELETE CASCADE
 );
 
@@ -801,7 +856,7 @@ CREATE TABLE chat_sessions (
   context_issue_id      UUID NULL,
   context_project_id    UUID NULL,
   status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','deleted')),
-  is_pinned             BOOLEAN NOT NULL DEFAULT false,
+  -- R3(建议-2):is_pinned 快照列已删除——置顶唯一真源为 README §6.19 favorites(target_type='chat_session')
   last_message_at       TIMESTAMPTZ NULL,
   last_message_preview  TEXT NULL,
   message_count         INT NOT NULL DEFAULT 0 CHECK (message_count >= 0),
@@ -1792,8 +1847,13 @@ BEGIN
 END $$;
 
 -- ③ RLS:非 owner 角色仅见当前 mesh.workspace_id 的频道与事件
-DROP ROLE IF EXISTS mesh_app;   -- 幂等:角色为集群级,跨库重跑先清理
-CREATE ROLE mesh_app NOLOGIN;
+-- 幂等:角色为集群级,不 DROP(跨库重跑时旧库对象可能仍依赖该角色);存在即复用,授权幂等
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mesh_app') THEN
+    CREATE ROLE mesh_app NOLOGIN;
+  END IF;
+END $$;
 GRANT SELECT ON realtime_channels, realtime_events TO mesh_app;
 SET mesh.workspace_id = '11111111-1111-1111-1111-111111111111';
 SET ROLE mesh_app;
@@ -1845,6 +1905,7 @@ CREATE TABLE onboarding_state_steps (
   status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','completed','skipped')),
   completed_via TEXT NULL CHECK (completed_via IN ('auto','manual')),
   completed_at  TIMESTAMPTZ NULL,
+  evidence      JSONB NOT NULL DEFAULT '{}',   -- R3(HIGH-9):完成证据 {execution_id?, comment_id?, notification_id?, trigger_member_id?, ...}
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (workspace_id, state_id, step_key),
@@ -1887,26 +1948,32 @@ CREATE TABLE integrations (
 CREATE UNIQUE INDEX uq_integrations_ws_name ON integrations(workspace_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_integrations_ws_kind ON integrations(workspace_id, kind) WHERE deleted_at IS NULL;
 
--- ============ integration_bindings ============
+-- ============ integration_bindings(R3 修订 HIGH-3:规范化外部身份 + 全局唯一 + scope 精确异或)============
 CREATE TABLE integration_bindings (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  integration_id UUID NOT NULL,
-  scope          TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
-  project_id     UUID NULL,
-  external_ref   TEXT NOT NULL,
-  match_config   JSONB NOT NULL DEFAULT '{}',
-  bound_agent_id UUID NULL,
-  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id      UUID NOT NULL,
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab','webhook')),
+  provider_tenant_key TEXT NOT NULL DEFAULT '',                                       -- R3:规范化外部平台租户(team_id/tenant_key/installation_id/实例主机)
+  scope               TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
+  project_id          UUID NULL,
+  external_ref        TEXT NOT NULL,                                                 -- R3:规范化外部对象 ID(chat_id/channel_id/owner/repo)
+  match_config        JSONB NOT NULL DEFAULT '{}',
+  bound_agent_id      UUID NULL,
+  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_integration_bindings_ws_id UNIQUE (workspace_id, id),                -- 复合 FK 引用前提(§6.2)
-  CONSTRAINT uq_binding_external_ref UNIQUE (integration_id, external_ref),          -- 外部侧唯一绑定
-  CONSTRAINT ck_binding_scope CHECK (scope = 'workspace' OR project_id IS NOT NULL),
+  -- R3:外部身份跨 workspace 唯一绑定(全局键,取代仅 integration 实例内的 UNIQUE(integration_id, external_ref))
+  CONSTRAINT uq_binding_external_identity UNIQUE (provider, provider_tenant_key, external_ref),
+  -- R3:scope/project 精确异或(workspace 不得带 project;project 必带 project)
+  CONSTRAINT ck_binding_scope CHECK ((scope = 'workspace' AND project_id IS NULL)
+                                  OR (scope = 'project' AND project_id IS NOT NULL)),
   CONSTRAINT fk_binding_integration FOREIGN KEY (workspace_id, integration_id)
     REFERENCES integrations(workspace_id, id) ON DELETE CASCADE,
+  -- R3:项目级绑定随项目物理删除级联(不再 SET NULL——置空会违反上面的精确异或 CHECK)
   CONSTRAINT fk_binding_project FOREIGN KEY (workspace_id, project_id)
-    REFERENCES projects(workspace_id, id) ON DELETE SET NULL (project_id),           -- §6.2 第 6 条列级 SET NULL
+    REFERENCES projects(workspace_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_binding_agent FOREIGN KEY (workspace_id, bound_agent_id)
     REFERENCES agents(workspace_id, id) ON DELETE SET NULL (bound_agent_id)
 );
@@ -1976,7 +2043,71 @@ CREATE INDEX idx_delivery_retry ON webhook_subscription_deliveries(next_retry_at
   WHERE state = 'pending';
 CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscription_id, created_at DESC);
 
--- ---- import-export.md DDL ----
+-- ============ external_identities(R3 协同 MES-4 HIGH-1:外部用户身份 ↔ Mesh 成员,卡片回调鉴权真源)============
+CREATE TABLE external_identities (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id      UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  provider          TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  external_user_key TEXT NOT NULL,
+  member_id         UUID NOT NULL,
+  verified_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_external_identities_ws_id UNIQUE (workspace_id, id),
+  CONSTRAINT uq_external_identity UNIQUE (provider, external_user_key),   -- 全局:一个外部用户至多映射一个成员
+  CONSTRAINT fk_external_identity_member FOREIGN KEY (workspace_id, member_id)
+    REFERENCES members(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_external_identities_member ON external_identities(workspace_id, member_id);
+
+-- ============ vcs_links(R3 新增 HIGH-3:VCS 对象 ↔ Mesh 实体 关联真源表)============
+CREATE TABLE vcs_links (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id         UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id       UUID NOT NULL,
+  provider             TEXT NOT NULL CHECK (provider IN ('github','gitlab')),
+  provider_tenant_key  TEXT NOT NULL DEFAULT '',
+  external_object_type TEXT NOT NULL
+                       CHECK (external_object_type IN ('repository','pull_request','merge_request','issue','commit','branch')),
+  external_object_ref  TEXT NOT NULL,
+  mesh_entity_type     TEXT NOT NULL CHECK (mesh_entity_type IN ('issue','project')),
+  mesh_entity_id       UUID NOT NULL,
+  link_source          TEXT NOT NULL DEFAULT 'manual'
+                       CHECK (link_source IN ('manual','auto_keyword','auto_branch','auto_commit')),
+  status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','stale','deleted')),
+  external_state       JSONB NOT NULL DEFAULT '{}',
+  created_by           UUID NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_vcs_links_ws_id UNIQUE (workspace_id, id),                           -- 复合 FK 引用前提(§6.2)
+  -- R3:同租户复合 FK(集成删除 → 其 VCS 关联级联删除)
+  CONSTRAINT fk_vcs_links_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_vcs_links_created_by FOREIGN KEY (workspace_id, created_by)
+    REFERENCES members(workspace_id, id) ON DELETE SET NULL (created_by)
+);
+-- R3:外部对象唯一键(active 部分唯一:外部对象至多一条 active 关联;stale/deleted 允许历史重关联)
+CREATE UNIQUE INDEX uq_vcs_links_external_object
+  ON vcs_links(provider, provider_tenant_key, external_object_type, external_object_ref)
+  WHERE status = 'active';
+CREATE UNIQUE INDEX uq_vcs_links_mesh_entity
+  ON vcs_links(workspace_id, mesh_entity_type, mesh_entity_id, external_object_ref)
+  WHERE status = 'active';
+-- R3:状态索引(issue 侧栏「关联的 PR/MR」与陈旧关联清理扫描)
+CREATE INDEX idx_vcs_links_entity_status
+  ON vcs_links(workspace_id, mesh_entity_type, mesh_entity_id, status);
+CREATE INDEX idx_vcs_links_integration_status ON vcs_links(integration_id, status);
+
+-- R3(HIGH-4):notification_delivery 的 IM 路由列复合 FK(integrations/integration_bindings 建表后补挂;
+-- 集成/绑定删除仅置空路由列,台账保留供排障——列级 SET NULL,README §6.2 第 6 条)
+ALTER TABLE notification_delivery ADD CONSTRAINT fk_delivery_integration
+  FOREIGN KEY (workspace_id, integration_id) REFERENCES integrations(workspace_id, id)
+  ON DELETE SET NULL (integration_id);
+ALTER TABLE notification_delivery ADD CONSTRAINT fk_delivery_binding
+  FOREIGN KEY (workspace_id, binding_id) REFERENCES integration_bindings(workspace_id, id)
+  ON DELETE SET NULL (binding_id);
+
+-- ---- import-export.md DDL(R3 修订 HIGH-5:源附件 RESTRICT + 源哈希 + 检查点/租约 + 行台账)----
 CREATE TABLE data_jobs (
   id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id         UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -1988,11 +2119,15 @@ CREATE TABLE data_jobs (
   mapping              JSONB NOT NULL DEFAULT '{}',
   params               JSONB NOT NULL DEFAULT '{}',
   source_attachment_id UUID NULL,
+  source_content_hash  TEXT NULL,                          -- R3:源文件 sha256(validate 冻结;续跑前校验源未变)
   result_attachment_id UUID NULL,
   total_rows           INT NOT NULL DEFAULT 0 CHECK (total_rows >= 0),
   succeeded_rows       INT NOT NULL DEFAULT 0 CHECK (succeeded_rows >= 0),
   failed_rows          INT NOT NULL DEFAULT 0 CHECK (failed_rows >= 0),
   error_report         JSONB NOT NULL DEFAULT '[]',
+  checkpoint           JSONB NOT NULL DEFAULT '{}',        -- R3:持久恢复点 {last_committed_batch,last_row_key,batch_size,resumed_count,resumed_at}
+  lease_owner          TEXT NULL,                          -- R3:在途 worker 租约(消除 running 守卫永久卡住)
+  lease_expires_at     TIMESTAMPTZ NULL,
   requested_by         UUID NOT NULL,
   started_at           TIMESTAMPTZ NULL,
   finished_at          TIMESTAMPTZ NULL,
@@ -2003,8 +2138,9 @@ CREATE TABLE data_jobs (
   CHECK (succeeded_rows + failed_rows <= total_rows),
   CHECK ((kind = 'import' AND source_attachment_id IS NOT NULL)
       OR (kind = 'export' AND source_attachment_id IS NULL)),
+  -- R3:源附件 RESTRICT——作业存续期间源文件不可物理删除(此前 SET NULL 与上面的 CHECK 互斥,删除永远被 CHECK 拒绝)
   FOREIGN KEY (workspace_id, source_attachment_id)
-      REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (source_attachment_id),
+      REFERENCES attachments(workspace_id, id) ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, result_attachment_id)
       REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (result_attachment_id),
   FOREIGN KEY (workspace_id, requested_by)
@@ -2016,13 +2152,42 @@ CREATE INDEX idx_data_jobs_requester    ON data_jobs (workspace_id, requested_by
 -- 在途作业(监控/补偿扫描,非 worker 领取路径——领取经 outbox)
 CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
   WHERE status NOT IN ('completed','completed_with_errors','failed');
+-- R3:租约过期作业回收扫描(reaper)
+CREATE INDEX idx_data_jobs_lease_expired ON data_jobs (lease_expires_at)
+  WHERE status = 'running';
+
+-- ---- data_job_rows(R3 新增 HIGH-5:逐行结果台账——行级幂等键 + 崩溃恢复真源)----
+CREATE TABLE data_job_rows (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  job_id       UUID NOT NULL,
+  row_number   INT NOT NULL CHECK (row_number >= 1),
+  row_key      TEXT NOT NULL,                              -- 行级稳定幂等键(external_ref 或 row:<n>:<sha256(行内容)>)
+  status       TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending','created','updated','skipped','failed')),
+  target_type  TEXT NULL CHECK (target_type IN ('issue','project')),
+  target_id    UUID NULL,
+  error        JSONB NULL,
+  attempts     INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, id),
+  CONSTRAINT uq_data_job_rows_job_row_key UNIQUE (job_id, row_key),   -- R3:重放已提交批次不重复建实体
+  CHECK ((status IN ('created','updated') AND target_type IS NOT NULL AND target_id IS NOT NULL)
+      OR (status = 'failed' AND error IS NOT NULL)
+      OR (status IN ('pending','skipped'))),
+  CONSTRAINT fk_data_job_rows_job FOREIGN KEY (workspace_id, job_id)
+    REFERENCES data_jobs(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 
 -- ---- analytics.md DDL ----
 CREATE TABLE analytics_snapshots (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   metric_key   TEXT NOT NULL,                 -- 'cycle_time'/'velocity'/'throughput'/'workload'/'burndown'/'agent_stats'
-  dimensions   JSONB NOT NULL DEFAULT '{}',   -- {project_id?, cycle_id?, milestone_id?, agent_id?, granularity?, from_category?, tz?}
+  scope_key    TEXT NOT NULL DEFAULT 'ws_admin',  -- R3(HIGH-8):可见性集合指纹(缓存键一部分,禁跨权限缓存)
+  dimensions   JSONB NOT NULL DEFAULT '{}',   -- {project_id?, cycle_id?, milestone_id?, agent_id?, granularity?, from_category?, calendar_timezone?, scope_caliber?}
   dim_hash     TEXT GENERATED ALWAYS AS (md5(dimensions::text)) STORED,  -- 维度指纹,供唯一键/查找(避免 JSONB 直接入唯一索引)
   window_start TIMESTAMPTZ NOT NULL,          -- UTC
   window_end   TIMESTAMPTZ NOT NULL,          -- UTC
@@ -2030,12 +2195,12 @@ CREATE TABLE analytics_snapshots (
   computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  -- 同一 (工作区, 指标, 维度, 窗) 仅一份快照(覆盖式刷新)
-  UNIQUE (workspace_id, metric_key, dim_hash, window_start, window_end)
+  -- R3:同一 (工作区, 指标, 可见性集合, 维度, 窗) 仅一份快照——scope_key 入键即"跨权限不共享"
+  UNIQUE (workspace_id, metric_key, scope_key, dim_hash, window_start, window_end)
 );
 
 CREATE INDEX idx_snapshots_lookup
-  ON analytics_snapshots (workspace_id, metric_key, dim_hash, window_start, window_end);
+  ON analytics_snapshots (workspace_id, metric_key, scope_key, dim_hash, window_start, window_end);
 CREATE INDEX idx_snapshots_stale
   ON analytics_snapshots (computed_at);        -- 供 worker 找过期快照重算
 
@@ -2083,15 +2248,15 @@ BEGIN
     RAISE NOTICE 'PASS P2-2: integration_events 按 (integration_id, external_event_id) 去重';
   END;
 
-  -- 绑定外部侧唯一:同 integration 同 external_ref 不可重复绑定
-  INSERT INTO integration_bindings (workspace_id, integration_id, external_ref, status)
-  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'chat-oc-1', 'active');
+  -- 绑定外部身份全局唯一(R3:同 provider+tenant+external_ref 不可重复绑定)
+  INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-1', 'active');
   BEGIN
-    INSERT INTO integration_bindings (workspace_id, integration_id, external_ref, status)
-    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'chat-oc-1', 'active');
+    INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-1', 'active');
     RAISE EXCEPTION 'P2 FAIL: 同外部身份重复绑定未被拒绝';
   EXCEPTION WHEN unique_violation THEN
-    RAISE NOTICE 'PASS P2-3: 外部侧唯一绑定 UNIQUE(integration_id, external_ref)';
+    RAISE NOTICE 'PASS P2-3: 外部身份唯一绑定 UNIQUE(provider, provider_tenant_key, external_ref)(R3 全局键)';
   END;
 
   -- favorites:同成员同目标至多一条;跨租户 member 复合 FK 拒绝
@@ -2136,6 +2301,419 @@ BEGIN
   END;
 END $$;
 
+-- ============================================================================
+-- R3 修订行为验证(HIGH-1～HIGH-9 + 建议项;测试编号顺延 T27～T34,README §9)
+-- ============================================================================
+
+-- ===================== T27:agent 配置版本同租户/同 agent 约束(HIGH-1)=====================
+DO $$
+DECLARE
+  v_ver UUID;
+BEGIN
+  -- 合法:本工作区 agent 的版本 + 本工作区 changed_by + active 指针指回本 agent
+  INSERT INTO agent_config_versions (id, workspace_id, agent_id, snapshot, changed_by)
+  VALUES ('e1e1e1e1-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+          'bbbbbbbb-0000-0000-0000-000000000001', '{}', 'cccccccc-0000-0000-0000-000000000001')
+  RETURNING id INTO v_ver;
+  UPDATE agents SET active_config_version_id = v_ver WHERE id = 'bbbbbbbb-0000-0000-0000-000000000001';
+  RAISE NOTICE 'PASS T27-1: 同租户同 agent 配置版本与 active 指针正常写入';
+
+  -- ① 跨租户 changed_by(别工作区成员)→ 复合 FK 拒绝
+  BEGIN
+    INSERT INTO agent_config_versions (workspace_id, agent_id, snapshot, changed_by)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001', '{}',
+            'cccccccc-0000-0000-0000-000000000009');   -- WS-B 的成员
+    RAISE EXCEPTION 'T27 FAIL: 跨租户 changed_by 未被拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T27-2: changed_by 跨租户被复合 FK (workspace_id, changed_by) 拒绝';
+  END;
+
+  -- ② 跨租户 agent_id → 复合 FK 拒绝
+  BEGIN
+    INSERT INTO agent_config_versions (workspace_id, agent_id, snapshot, changed_by)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000002', '{}',
+            'cccccccc-0000-0000-0000-000000000001');   -- agent 属于 WS-B
+    RAISE EXCEPTION 'T27 FAIL: 跨租户 agent_id 未被拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T27-3: agent_id 跨租户被复合 FK (workspace_id, agent_id) 拒绝';
+  END;
+
+  -- ③ active 指针指向别 agent 的版本 → 重叠复合 FK 拒绝(同父域,README §6.2 第 7 条)
+  INSERT INTO agent_config_versions (id, workspace_id, agent_id, snapshot, changed_by)
+  VALUES ('e1e1e1e1-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111',
+          'bbbbbbbb-0000-0000-0000-000000000001', '{}', 'cccccccc-0000-0000-0000-000000000001');
+  BEGIN
+    -- 造一个 WS-B 的 agent 版本,再让 WS-A 的 agent 指过去
+    INSERT INTO agent_config_versions (id, workspace_id, agent_id, snapshot, changed_by)
+    VALUES ('e1e1e1e1-0000-0000-0000-000000000009', '22222222-2222-2222-2222-222222222222',
+            'bbbbbbbb-0000-0000-0000-000000000002', '{}', 'cccccccc-0000-0000-0000-000000000009');
+    UPDATE agents SET active_config_version_id = 'e1e1e1e1-0000-0000-0000-000000000009'
+     WHERE id = 'bbbbbbbb-0000-0000-0000-000000000001';
+    RAISE EXCEPTION 'T27 FAIL: active 指针跨 agent/跨租户串指未被拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T27-4: active_config_version_id 重叠复合 FK 拒绝跨 agent/跨租户串指';
+  END;
+  -- 同工作区但别 agent 的版本(非跨租户)同样被拒:重叠键要求 agent_id 一致
+  BEGIN
+    UPDATE agents SET active_config_version_id = 'e1e1e1e1-0000-0000-0000-000000000002'
+     WHERE id = 'bbbbbbbb-0000-0000-0000-000000000002';  -- WS-B 的 agent 指 WS-A agent 的版本
+    RAISE EXCEPTION 'T27 FAIL: active 指针指向别 agent 版本未被拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T27-5: active 指针指向别 agent 的版本被重叠复合 FK (ws, id, active) → (ws, agent_id, id) 拒绝';
+  END;
+END $$;
+
+-- ===================== T28:能力字段严格类型 + 归一(HIGH-2)=====================
+DO $$
+BEGIN
+  -- ① 字符串数组合法(调度字段)
+  INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+          '["ffmpeg","version_control"]',
+          '{"capability_grants":[{"capability":"ffmpeg","permission":"write"},{"capability":"version_control"}]}',
+          'queued');
+  RAISE NOTICE 'PASS T28-1: 调度字段纯字符串数组 + 授权快照对象数组写入合法';
+
+  -- ② 对象混入调度字段 → CHECK 拒绝(否则 claim 的 <@ 永不命中,任务永久无法领取)
+  BEGIN
+    INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+            '[{"capability":"exec:shell","permission":"write"}]', 'queued');
+    RAISE EXCEPTION 'T28 FAIL: 对象进入调度字段未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T28-2: required_capabilities 拒绝对象元素(jsonb_is_string_array CHECK)';
+  END;
+
+  -- ③ 授权快照非对象数组(字符串)→ CHECK 拒绝
+  BEGIN
+    INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+            '["exec:shell"]', '{"capability_grants":["exec:shell"]}', 'queued');
+    RAISE EXCEPTION 'T28 FAIL: capability_grants 字符串数组未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T28-3: config_snapshot.capability_grants 拒绝非 {capability,permission} 对象元素';
+  END;
+
+  -- ④ 非法 permission 值 → CHECK 拒绝
+  BEGIN
+    INSERT INTO task_executions (workspace_id, agent_id, required_capabilities, config_snapshot, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001',
+            '["net:outbound"]', '{"capability_grants":[{"capability":"net:outbound","permission":"admin"}]}', 'queued');
+    RAISE EXCEPTION 'T28 FAIL: 非法 permission 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T28-4: capability_grants.permission 取值受 read_only|write|confirm_required 约束';
+  END;
+
+  -- ⑤ 归一后 claim 联动:纯字符串 required_capabilities <@ runtimes.capabilities 命中
+  INSERT INTO runtimes (id, workspace_id, name, status, capabilities, max_concurrent)
+  VALUES ('abababab-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111', 'rt-t28', 'online',
+          '["ffmpeg","version_control","python"]', 1);
+  PERFORM 1
+    FROM task_executions e
+   WHERE e.workspace_id = '11111111-1111-1111-1111-111111111111'
+     AND e.status = 'queued'
+     AND e.required_capabilities <@ '["ffmpeg","version_control","python"]'::jsonb
+     AND e.required_capabilities @> '["ffmpeg"]'::jsonb;
+  ASSERT FOUND, 'T28 FAIL: 归一后的字符串数组应可被 claim <@ 匹配命中';
+  RAISE NOTICE 'PASS T28-5: 归一为字符串数组后 claim 能力匹配 (<@) 命中';
+END $$;
+
+-- ===================== T29:集成外部身份全局唯一 + scope 异或 + vcs_links(HIGH-3)=====================
+DO $$
+BEGIN
+  -- 夹具:WS-B 的另一个 feishu 集成实例(模拟两工作区各装一个飞书应用)
+  INSERT INTO integrations (id, workspace_id, kind, name, status, created_by)
+  VALUES ('abababab-2222-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', 'im_feishu', 'feishu-b', 'active',
+          'cccccccc-0000-0000-0000-000000000009');
+
+  -- ① 跨 workspace 抢绑同一外部身份 → 全局唯一键拒绝
+  BEGIN
+    INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, status)
+    VALUES ('22222222-2222-2222-2222-222222222222', 'abababab-2222-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-1', 'active');
+    RAISE EXCEPTION 'T29 FAIL: 跨 workspace 重复绑定同一外部身份未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T29-1: 外部身份跨 workspace 唯一 UNIQUE(provider, provider_tenant_key, external_ref)';
+  END;
+
+  -- ② workspace scope 携带 project_id → 精确异或 CHECK 拒绝
+  BEGIN
+    INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, scope, project_id, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-2',
+            'workspace', 'dddddddd-0000-0000-0000-000000000001', 'active');
+    RAISE EXCEPTION 'T29 FAIL: workspace scope 带 project_id 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T29-2: scope/project 精确异或(workspace 不得带 project)';
+  END;
+
+  -- ③ project scope 缺 project_id → CHECK 拒绝
+  BEGIN
+    INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, scope, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-3',
+            'project', 'active');
+    RAISE EXCEPTION 'T29 FAIL: project scope 缺 project_id 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T29-3: scope/project 精确异或(project 必带 project)';
+  END;
+
+  -- ④ 项目级绑定:删除项目 → 绑定经 CASCADE 一并删除(不产生违反 CHECK 的置空行)
+  INSERT INTO projects (id, workspace_id, name, key) VALUES
+    ('dddddddd-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111', 'T29 项目', 'T29');
+  INSERT INTO integration_bindings (workspace_id, integration_id, provider, provider_tenant_key, external_ref, scope, project_id, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'feishu', 'tenant-a', 'chat-oc-4',
+          'project', 'dddddddd-0000-0000-0000-000000000099', 'active');
+  DELETE FROM projects WHERE id = 'dddddddd-0000-0000-0000-000000000099';
+  ASSERT NOT EXISTS (SELECT 1 FROM integration_bindings WHERE external_ref = 'chat-oc-4'),
+         'T29 FAIL: 项目删除应级联删除项目级绑定';
+  RAISE NOTICE 'PASS T29-4: 删除项目 → 项目级绑定 ON DELETE CASCADE(无 SET NULL 违反 CHECK 的不可达态)';
+
+  -- ⑤ vcs_links:外部对象 active 唯一 + 同租户复合 FK + 集成删除级联
+  INSERT INTO integrations (id, workspace_id, kind, name, status, created_by)
+  VALUES ('abababab-3333-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'vcs_github', 'gh-1', 'active',
+          'cccccccc-0000-0000-0000-000000000001');
+  INSERT INTO vcs_links (workspace_id, integration_id, provider, provider_tenant_key, external_object_type,
+                         external_object_ref, mesh_entity_type, mesh_entity_id, link_source, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-3333-0000-0000-000000000001', 'github', 'inst-1',
+          'pull_request', 'acme/web#123', 'issue', '99999999-0000-0000-0000-000000000001', 'auto_keyword', 'active');
+  BEGIN
+    INSERT INTO vcs_links (workspace_id, integration_id, provider, provider_tenant_key, external_object_type,
+                           external_object_ref, mesh_entity_type, mesh_entity_id, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-3333-0000-0000-000000000001', 'github', 'inst-1',
+            'pull_request', 'acme/web#123', 'issue', '99999999-0000-0000-0000-000000000002', 'active');
+    RAISE EXCEPTION 'T29 FAIL: 同一外部 PR 重复 active 关联未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T29-5: vcs_links 外部对象 active 部分唯一键生效';
+  END;
+  DELETE FROM integrations WHERE id = 'abababab-3333-0000-0000-000000000001';
+  ASSERT NOT EXISTS (SELECT 1 FROM vcs_links WHERE external_object_ref = 'acme/web#123'),
+         'T29 FAIL: 集成删除应级联删除其 vcs_links';
+  RAISE NOTICE 'PASS T29-6: vcs_links 同租户复合 FK,集成删除级联删关联';
+
+  -- ⑥ external_identities:外部用户身份 → 成员映射,全局唯一(卡片回调点击者鉴权真源,协同 MES-4 HIGH-1)
+  INSERT INTO external_identities (workspace_id, provider, external_user_key, member_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'feishu', 'ou_user_1', 'cccccccc-0000-0000-0000-000000000001');
+  BEGIN
+    INSERT INTO external_identities (workspace_id, provider, external_user_key, member_id)
+    VALUES ('22222222-2222-2222-2222-222222222222', 'feishu', 'ou_user_1', 'cccccccc-0000-0000-0000-000000000009');
+    RAISE EXCEPTION 'T29 FAIL: 同一外部用户跨 workspace 重复映射未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T29-7: external_identities 全局唯一(一个外部平台用户至多映射一个 Mesh 成员)';
+  END;
+END $$;
+
+-- ===================== T30:IM 投递台账多目的地 + error 分离(HIGH-4)=====================
+DO $$
+DECLARE
+  v_notif UUID;
+BEGIN
+  INSERT INTO notifications (id, workspace_id, recipient_id, type, priority)
+  VALUES ('16161616-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+          'cccccccc-0000-0000-0000-000000000001', 'comment_created', 'normal')
+  RETURNING id INTO v_notif;
+
+  -- ① 同一通知并发投递两个 IM 目的地(不同 destination_key)→ 两行台账并存
+  INSERT INTO notification_delivery (workspace_id, notification_id, channel, destination_key, provider, external_target, state)
+  VALUES ('11111111-1111-1111-1111-111111111111', v_notif, 'im', 'feishu:bind-1:oc_1', 'feishu', 'oc_1', 'pending'),
+         ('11111111-1111-1111-1111-111111111111', v_notif, 'im', 'slack:bind-2:C01', 'slack', 'C01', 'pending');
+  ASSERT (SELECT COUNT(*) = 2 FROM notification_delivery WHERE notification_id = v_notif AND channel = 'im'),
+         'T30 FAIL: 同一通知应可并发投递多个 IM 目的地';
+  RAISE NOTICE 'PASS T30-1: 同一通知多 IM 目的地并存((notification_id, channel, destination_key) 唯一)';
+
+  -- ② 同目的地重复投递 → 唯一键拒绝(幂等)
+  BEGIN
+    INSERT INTO notification_delivery (workspace_id, notification_id, channel, destination_key, provider, external_target, state)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_notif, 'im', 'feishu:bind-1:oc_1', 'feishu', 'oc_1', 'pending');
+    RAISE EXCEPTION 'T30 FAIL: 同目的地重复投递未被唯一键拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T30-2: 同目的地重投经 UNIQUE(notification_id, channel, destination_key) 幂等';
+  END;
+
+  -- ③ in_app/websocket 单一目的地 destination_key='' 行为与旧键等价
+  INSERT INTO notification_delivery (workspace_id, notification_id, channel, state)
+  VALUES ('11111111-1111-1111-1111-111111111111', v_notif, 'in_app', 'sent');
+  BEGIN
+    INSERT INTO notification_delivery (workspace_id, notification_id, channel, state)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_notif, 'in_app', 'sent');
+    RAISE EXCEPTION 'T30 FAIL: in_app 重复投递未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T30-3: in_app/websocket destination_key=空串,每通知每渠道一行(旧语义保持)';
+  END;
+
+  -- ④ 路由数据不进 error:provider/external_target 为独立列,失败只记原因
+  UPDATE notification_delivery SET state = 'failed', error = 'timeout'
+   WHERE notification_id = v_notif AND destination_key = 'slack:bind-2:C01';
+  ASSERT (SELECT provider = 'slack' AND external_target = 'C01' AND error = 'timeout'
+            FROM notification_delivery WHERE notification_id = v_notif AND destination_key = 'slack:bind-2:C01'),
+         'T30 FAIL: 路由字段应结构化独立,error 只记失败原因';
+  RAISE NOTICE 'PASS T30-4: 路由数据结构化(provider/external_target 列),error 只记失败原因';
+END $$;
+
+-- ===================== T31:data job 删除/恢复协议(HIGH-5)=====================
+DO $$
+DECLARE
+  v_job UUID;
+BEGIN
+  -- 夹具:导入源附件(clean blob)
+  INSERT INTO attachment_blobs (id, workspace_id, content_hash, storage_bucket, storage_key, file_size, scan_status, ref_count)
+  VALUES ('14141414-0000-0000-0000-000000000099', '11111111-1111-1111-1111-111111111111', 'sha256:src-t31', 'bkt', 'ws/11/src.csv', 200, 'clean', 1);
+  INSERT INTO attachments (id, workspace_id, uploader_id, blob_id, file_name, file_size, upload_status)
+  VALUES ('8c8c8c8c-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001',
+          '14141414-0000-0000-0000-000000000099', 'src.csv', 200, 'completed');
+  INSERT INTO data_jobs (id, workspace_id, kind, entity_type, format, status, source_attachment_id, source_content_hash,
+                         total_rows, requested_by)
+  VALUES ('d1d1d1d1-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'import', 'issues', 'csv', 'running',
+          '8c8c8c8c-0000-0000-0000-000000000001', 'sha256:src-t31', 1000, 'cccccccc-0000-0000-0000-000000000001')
+  RETURNING id INTO v_job;
+
+  -- ① 源附件 RESTRICT:作业存续期间删除源附件被拒
+  BEGIN
+    DELETE FROM attachments WHERE id = '8c8c8c8c-0000-0000-0000-000000000001';
+    RAISE EXCEPTION 'T31 FAIL: 作业存续期间源附件删除应被 RESTRICT 拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T31-1: 源附件 ON DELETE RESTRICT(作业存续期间不可物理删,消除 SET NULL 与 CHECK 互斥)';
+  END;
+
+  -- ② 逐批幂等:前两批已提交(台账 created),第 3 批进行中 worker 崩溃 → 重放已提交行幂等
+  UPDATE data_jobs SET checkpoint = '{"last_committed_batch": 2, "batch_size": 500}'::jsonb,
+                       succeeded_rows = 2, lease_owner = 'worker-1', lease_expires_at = now() - interval '1 minute'
+   WHERE id = v_job;
+  INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'created', 'issue', '99999999-0000-0000-0000-000000000001'),
+         ('11111111-1111-1111-1111-111111111111', v_job, 2, 'row:2:h2', 'created', 'issue', '99999999-0000-0000-0000-000000000002');
+  -- 重放第 1 行(upsert:已 created 的行不重复写 target)
+  INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status, target_type, target_id, attempts)
+  VALUES ('11111111-1111-1111-1111-111111111111', v_job, 1, 'row:1:h1', 'created', 'issue', '99999999-0000-0000-0000-000000000001', 1)
+  ON CONFLICT (job_id, row_key) DO UPDATE SET attempts = data_job_rows.attempts + 1;
+  ASSERT (SELECT COUNT(*) = 1 FROM data_job_rows WHERE job_id = v_job AND row_key = 'row:1:h1'),
+         'T31 FAIL: 重放已提交行应保持台账唯一(不重复建实体)';
+  ASSERT (SELECT target_id = '99999999-0000-0000-0000-000000000001' FROM data_job_rows WHERE job_id = v_job AND row_key = 'row:1:h1'),
+         'T31 FAIL: 重放不得覆盖已落库的 target_id(幂等)';
+  RAISE NOTICE 'PASS T31-2: data_job_rows UNIQUE(job_id, row_key) + upsert 保证重放已提交批次不重复建实体';
+
+  -- ③ 行台账 CHECK:created 必带 target;failed 必带 error
+  BEGIN
+    INSERT INTO data_job_rows (workspace_id, job_id, row_number, row_key, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', v_job, 3, 'row:3:h3', 'created');
+    RAISE EXCEPTION 'T31 FAIL: created 行缺 target 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T31-3: 台账行 CHECK(created/updated 必带 target;failed 必带 error)';
+  END;
+
+  -- ④ 租约回收:过期 running 作业可被 reaper 置空租约(新 worker 凭 checkpoint 续跑)
+  UPDATE data_jobs SET lease_owner = NULL WHERE id = v_job AND status = 'running' AND lease_expires_at < now();
+  ASSERT (SELECT lease_owner IS NULL AND status = 'running' AND checkpoint->>'last_committed_batch' = '2'
+            FROM data_jobs WHERE id = v_job),
+         'T31 FAIL: 租约过期作业应可回收租约且 checkpoint 保留';
+  RAISE NOTICE 'PASS T31-4: 租约过期回收 + checkpoint 保留(消除 running 守卫永久卡住;续跑从第 2 批后开始)';
+
+  -- 清理:作业级联删台账;源附件在作业删除后可删
+  DELETE FROM data_jobs WHERE id = v_job;
+  DELETE FROM attachments WHERE id = '8c8c8c8c-0000-0000-0000-000000000001';
+  RAISE NOTICE 'PASS T31-5: data_jobs 删除级联 data_job_rows;作业删除后源附件 RESTRICT 解除';
+END $$;
+
+-- ===================== T32:偏好真源 + locale 单一权威(HIGH-7)=====================
+DO $$
+DECLARE
+  v_ws UUID := '11111111-1111-1111-1111-111111111111';
+BEGIN
+  -- ① users.settings 真源存在且可写(locale/theme)
+  UPDATE users SET settings = '{"locale":"zh-CN","theme":"dark"}'::jsonb, timezone = 'Asia/Shanghai'
+   WHERE id = 'aaaaaaaa-0000-0000-0000-000000000001';
+  ASSERT (SELECT settings->>'locale' = 'zh-CN' AND settings->>'theme' = 'dark' AND timezone = 'Asia/Shanghai'
+            FROM users WHERE id = 'aaaaaaaa-0000-0000-0000-000000000001'),
+         'T32 FAIL: users.settings(locale/theme)与 timezone 应可写可回读';
+  RAISE NOTICE 'PASS T32-1: users.settings locale/theme 真源列存在(PATCH /api/v1/users/me 的落库字段)';
+
+  -- ② workspace locale 单一真源:settings.default_locale 默认 en;default_language 列已不存在
+  ASSERT (SELECT settings->>'default_locale' = 'en' FROM workspaces WHERE id = v_ws),
+         'T32 FAIL: workspaces.settings.default_locale 默认应为 en(与 i18n.md 一致)';
+  ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'workspaces' AND column_name = 'default_language'),
+         'T32 FAIL: default_language 双真源列应已删除(只迁移/弃用,不长期双写)';
+  RAISE NOTICE 'PASS T32-2: workspace locale 唯一真源 settings.default_locale(默认 en);default_language 列已删';
+END $$;
+
+-- ===================== T33:Analytics 可见性缓存键 + 当前归属口径(HIGH-8)=====================
+DO $$
+DECLARE
+  v_ws UUID := '11111111-1111-1111-1111-111111111111';
+BEGIN
+  -- ① 同指标同维度、不同可见性集合 → scope_key 不同可并存(跨权限不共享)
+  INSERT INTO analytics_snapshots (workspace_id, metric_key, scope_key, dimensions, window_start, window_end, value)
+  VALUES (v_ws, 'throughput', 'ws_admin', '{"granularity":"day","calendar_timezone":"UTC"}',
+          '2026-07-01', '2026-07-02', '{"created": 5, "completed": 3}'),
+         (v_ws, 'throughput', 'projects:7f2a', '{"granularity":"day","calendar_timezone":"UTC"}',
+          '2026-07-01', '2026-07-02', '{"created": 2, "completed": 1}');
+  ASSERT (SELECT COUNT(*) = 2 FROM analytics_snapshots
+           WHERE workspace_id = v_ws AND metric_key = 'throughput'
+             AND dim_hash = md5('{"granularity":"day","calendar_timezone":"UTC"}'::jsonb::text)),
+         'T33 FAIL: 不同 scope_key 的快照应并存(可见性版本纳入缓存键)';
+  RAISE NOTICE 'PASS T33-1: analytics_snapshots.scope_key 纳入缓存唯一键(跨权限缓存不共享)';
+
+  -- ② 同 scope_key 同维度同窗覆盖式刷新(唯一键)
+  BEGIN
+    INSERT INTO analytics_snapshots (workspace_id, metric_key, scope_key, dimensions, window_start, window_end, value)
+    VALUES (v_ws, 'throughput', 'ws_admin', '{"granularity":"day","calendar_timezone":"UTC"}',
+            '2026-07-01', '2026-07-02', '{"created": 9, "completed": 9}');
+    RAISE EXCEPTION 'T33 FAIL: 同 (ws, metric, scope, dim, 窗) 重复快照未被唯一键拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T33-2: 同权限同维度同窗仅一份快照(覆盖式刷新语义)';
+  END;
+
+  -- ③ calendar_timezone 分桶:不同时区入维度 → 不同 dim_hash(时区切换后边界随变,不错位)
+  INSERT INTO analytics_snapshots (workspace_id, metric_key, scope_key, dimensions, window_start, window_end, value)
+  VALUES (v_ws, 'throughput', 'ws_admin', '{"granularity":"day","calendar_timezone":"Asia/Shanghai"}',
+          '2026-06-30T16:00:00Z', '2026-07-01T16:00:00Z', '{"created": 1}');
+  ASSERT (SELECT dim_hash <> md5('{"granularity":"day","calendar_timezone":"UTC"}'::jsonb::text)
+            FROM analytics_snapshots
+           WHERE workspace_id = v_ws AND dimensions->>'calendar_timezone' = 'Asia/Shanghai' LIMIT 1),
+         'T33 FAIL: 不同 calendar_timezone 应产生不同 dim_hash(缓存不跨时区共享)';
+  RAISE NOTICE 'PASS T33-3: calendar_timezone 入维度指纹(本地日历分桶,标签与边界一致,建议-3)';
+END $$;
+
+-- ===================== T34:Onboarding 证据与末步判定(HIGH-9)=====================
+DO $$
+DECLARE
+  v_state UUID;
+  v_step UUID;
+BEGIN
+  INSERT INTO onboarding_states (id, workspace_id, member_id, checklist)
+  VALUES ('cdcdcdcd-3333-0000-0000-000000000099', '22222222-2222-2222-2222-222222222222',
+          'cccccccc-0000-0000-0000-000000000009', 'activation')
+  RETURNING id INTO v_state;
+  INSERT INTO onboarding_state_steps (id, workspace_id, state_id, step_key, status)
+  VALUES ('cdcdcdcd-4444-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', v_state,
+          'see_agent_reply_in_inbox', 'pending')
+  RETURNING id INTO v_step;
+
+  -- ① evidence 列存在且可持久化关联事实
+  UPDATE onboarding_state_steps
+     SET status = 'completed', completed_via = 'auto', completed_at = now(),
+         evidence = '{"execution_id":"cdcdcdcd-0000-0000-0000-000000000001","comment_id":"66666666-0000-0000-0000-000000000001","notification_id":"16161616-0000-0000-0000-000000000001","trigger_member_id":"cccccccc-0000-0000-0000-000000000009"}'::jsonb
+   WHERE id = v_step AND status = 'pending';
+  ASSERT (SELECT evidence ? 'notification_id' AND evidence ? 'execution_id' AND evidence ? 'comment_id'
+            FROM onboarding_state_steps WHERE id = v_step),
+         'T34 FAIL: 末步完成应持久化 execution/comment/notification 证据';
+  RAISE NOTICE 'PASS T34-1: onboarding_state_steps.evidence 持久化末步关联事实(末步完成 = 成员读过相关收件箱项)';
+
+  -- ② CHECK 一致性:completed 必有 completed_at(既有约束不被 evidence 破坏)
+  ASSERT (SELECT (status = 'completed') = (completed_at IS NOT NULL) FROM onboarding_state_steps WHERE id = v_step),
+         'T34 FAIL: 状态与完成时间一致性 CHECK';
+  RAISE NOTICE 'PASS T34-2: 步骤状态机 CHECK 与 evidence 共存';
+END $$;
+
+-- ===================== 建议-2:is_pinned 快照删除验证 =====================
+DO $$
+BEGIN
+  ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name = 'chat_sessions' AND column_name = 'is_pinned'),
+         'S2 FAIL: chat_sessions.is_pinned 快照列应已删除(置顶唯一真源为 favorites)';
+  INSERT INTO favorites (workspace_id, member_id, target_type, target_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'chat_session',
+          '44444444-0000-0000-0000-000000000001');
+  RAISE NOTICE 'PASS S2: chat_sessions.is_pinned 已删除;会话置顶经 favorites(target_type=chat_session)唯一表达';
+END $$;
+
 \echo '============================================================'
-\echo 'ALL R2 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'

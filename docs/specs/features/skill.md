@@ -165,7 +165,9 @@ agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents
 
 **CHECK(应用层 + 触发器)**:`scope='agent'` 时 `agent_id` 必须非空;`granted_capabilities ⊆ skill_versions.required_capabilities`(只授予声明过的权限子集)。
 
-> **工具权限语义(MES-2 必修-3:工具权限并入能力语义,不再另设 `tools`/`agent_tool_bindings` 表)**:`required_capabilities`/`granted_capabilities` 数组的每一项既可以是纯字符串能力键(如 `"exec:shell"`),也可以是对象 `{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}`;**工具级权限分级(read_only / write / confirm_required)即在此表达**:未标注 `permission` 的能力默认按 `confirm_required` 处理(高风险默认需人工确认);执行时命中 `confirm_required` 的工具调用经统一 `approvals` 闸门(README §6.10)批准后方可执行。入队时授权清单(含 permission)冻结进 `task_executions.config_snapshot.capability_grants`(README §6.11,工具目录主键真源已删除,统一为版本化 capability key + permission)。
+> **工具权限语义(MES-2 必修-3:工具权限并入能力语义,不再另设 `tools`/`agent_tool_bindings` 表)**:`required_capabilities`/`granted_capabilities` 是**授权声明层**字段,数组的每一项既可以是纯字符串能力键(如 `"exec:shell"`),也可以是对象 `{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}`;**工具级权限分级(read_only / write / confirm_required)即在此表达**:未标注 `permission` 的能力默认按 `confirm_required` 处理(高风险默认需人工确认);执行时命中 `confirm_required` 的工具调用经统一 `approvals` 闸门(README §6.10)批准后方可执行。
+>
+> **声明层 ≠ 调度层(R3 硬约束,README §6.4/§6.11)**:本表的混合格式**仅供声明与授权**,绝不得原样写入调度字段。任务入队时由 agent 编排入口执行**入队归一算法**(agent.md §3.3,README §6.4 权威定义)派生出严格类型的两套字段:① 调度用 `task_executions.required_capabilities` = **纯 capability key 字符串数组**(对象条目取其 `capability` 键,去重排序;schema CHECK 禁止任何非字符串元素——对象一旦进入调度字段,runtime claim 的 JSONB `<@` 匹配永不命中,任务永久无法领取);② 授权快照 `task_executions.config_snapshot.capability_grants` = **严格 `[{capability, permission}]` 对象数组**(字符串条目补默认 `confirm_required`)。入队归一算法与两套字段的 schema/集成测试见 README §6.4/§6.11 与 T28;工具目录主键真源已删除,统一为版本化 capability key + permission(README §6.11,**任何 Spec 与示例不得再出现 `tool_id`**)。
 
 > **复合 FK 引用前提(README §6.2)**:`skill_installations` 被 `agent_skills.skill_installation_id` 引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
 
@@ -589,6 +591,7 @@ installed ──卸载──► (deleted_at 置位)
 
 - [ ] **来源信任分级**:`builtin > user > marketplace > url`;`marketplace`/`url` 含脚本的技能首次安装**强制人工逐一审阅**脚本与权限,未审批安装返回 422 `approval_required`。
 - [ ] **权限最小化**:`granted_capabilities ⊆ required_capabilities`,授予未声明权限返回 422 `capability_not_declared`;脚本只能拿到被授予的权限。
+- [ ] **声明层与调度层严格分离(R3)**:`required_capabilities`/`granted_capabilities` 的混合格式(字符串 / `{capability,permission}` 对象)仅在声明与授权端点流通;入队一律经归一算法(README §6.4、agent.md §3.3)派生 `task_executions.required_capabilities`(**纯字符串数组**,schema CHECK 拒绝对象元素)与 `config_snapshot.capability_grants`(严格 `[{capability,permission}]` 对象数组);混用声明直接写入调度字段在集成测试 T28 被判定失败。
 - [ ] **沙箱执行边界**:脚本默认无网络、无任意写、无特权;越权调用被运行时拦截并告警(衔接 runtime.md)。
 - [ ] **凭据安全**:`skill_sources.auth_ref` 仅存 secret manager 引用键,绝不存明文;响应/日志不回显凭据。
 - [ ] **SSRF 防护**:服务端拉取用户提供的技能来源 URI(git 仓库 / URL)时,禁止访问私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254` 等),仅允许公网地址或配置的主机白名单;来源地址校验失败返回 502 `source_unreachable` 并不暴露内部错误。

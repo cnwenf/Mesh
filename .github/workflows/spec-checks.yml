@@ -1,0 +1,55 @@
+# Mesh Spec 文档级硬关卡(R3 落地,README §6.7/T26):
+# 1) 事件词汇零漂移:tests/docs/check_event_vocab.py 比对 README §6.7 注册表,未登记即失败;
+# 2) DDL 可执行性 + 行为验证:docs/specs/validation/schema_r2_validation.sql 在 PostgreSQL 16 实跑。
+name: spec-checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/specs/**"
+      - "tests/docs/**"
+      - ".github/workflows/spec-checks.yml"
+  pull_request:
+    paths:
+      - "docs/specs/**"
+      - "tests/docs/**"
+      - ".github/workflows/spec-checks.yml"
+
+jobs:
+  event-vocab:
+    name: 事件词汇校验(§6.7 注册表)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: check_event_vocab.py
+        run: python3 tests/docs/check_event_vocab.py docs/specs
+
+  schema-validation:
+    name: DDL 与行为验证(PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run schema_r2_validation.sql
+        env:
+          PGPASSWORD: mesh
+        run: |
+          psql -h 127.0.0.1 -U postgres -d mesh_validation \
+            -v ON_ERROR_STOP=1 \
+            -f docs/specs/validation/schema_r2_validation.sql
