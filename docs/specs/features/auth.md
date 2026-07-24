@@ -128,6 +128,25 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 索引:`idx_sessions_user (user_id) WHERE revoked_at IS NULL`;`uq_token_hash (token_hash)`。
 
+### 2.4.1 表:`password_reset_tokens` 与 `email_verification_tokens`(一次性令牌)
+
+> 密码重置令牌与邮箱验证令牌同样**仅存哈希**,需独立落库表支撑 TTL 与单次消费约束。
+
+**`password_reset_tokens`**:
+
+| 字段 | 类型 | 约束 / 默认 | 说明 |
+|------|------|-------------|------|
+| `id` | UUID | PK | |
+| `user_id` | UUID | NOT NULL,FK→users(id) ON DELETE CASCADE | |
+| `token_hash` | TEXT | NOT NULL,UNIQUE | 重置令牌的 SHA-256 哈希(不存明文) |
+| `expires_at` | TIMESTAMPTZ | NOT NULL | 过期时间(默认创建后 1 小时) |
+| `consumed_at` | TIMESTAMPTZ | NULL | 消费时间(单次消费,消费后不可重用) |
+| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | |
+
+**`email_verification_tokens`**:结构同上(`user_id`、`token_hash` UNIQUE、`expires_at` 默认 24 小时、`consumed_at`、`created_at`)。
+
+> **约束**:两类令牌均为**单次消费**(`consumed_at IS NULL` 方可使用,消费即置位);过期(`expires_at < now()`)或已消费的令牌一律拒绝;创建新令牌时作废旧的同类未完成令牌。
+
 ### 2.5 表:`api_tokens`(个人 / agent 访问令牌)**[Mesh 特色]**
 
 | 字段 | 类型 | 约束 / 默认 | 说明 |
@@ -139,7 +158,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `token_hash` | TEXT | NOT NULL,UNIQUE | 明文令牌的 SHA-256 哈希(**仅存哈希**) |
 | `prefix` | TEXT | NOT NULL | 令牌前缀(如 `mesh_pat_` 前 8~12 位,列表展示,不含秘密) |
 | `scopes` | TEXT[] | NOT NULL DEFAULT '{}' | 权限范围(最小权限),如 `issue:read`、`comment:write` |
-| `role_override` | TEXT | NULL | 可选:等效角色(不高于持有者角色) |
+| `role_override` | TEXT | NULL | 可选:等效角色(**服务端强校验:不得高于持有者当前角色,创建/使用时双重校验**,违反返回 422) |
 | `last_used_at` | TIMESTAMPTZ | NULL | 最近使用 |
 | `last_used_ip` | INET | NULL | |
 | `expires_at` | TIMESTAMPTZ | NULL | 过期时间(建议强制设置) |
@@ -304,7 +323,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 | 端点类 | 限制 | 维度 |
 |--------|------|------|
-| 登录 / 注册 / 重置 | 5 次/分钟,超出锁定 15 分钟 | IP + 邮箱 |
+| 登录 / 注册 / 重置 | 5 次/分钟,超出锁定 15 分钟 | **(IP, 邮箱) 二元组**(避免按纯邮箱维度锁定导致攻击者对任意受害者账号刷失败造成锁定 DoS;保留验证码解锁路径) |
 | 通用 API 读 | 300 req/分钟 | token / 用户 |
 | 通用 API 写 | 120 req/分钟 | token / 用户 |
 | 附件上传/下载 | 60 req/分钟 | token / IP |
@@ -358,7 +377,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 ### 4.6 每请求授权校验流程
 
 1. 解析 Bearer → 区分 JWT / API token / refresh。
-2. 认证:验签(JWT)或查哈希(PAT)→ 得 principal(user 或 agent)+ 工作区角色 + scopes。
+2. 认证:验签(JWT,**必须固定 `alg` 为预期算法(如 HS256 或 RS256),显式拒绝 `alg=none`,防 HS/RS 混淆攻击**)或查哈希(PAT)→ 得 principal(user 或 agent)+ 工作区角色 + scopes。
 3. 授权:端点声明所需权限(如 `@require("issue:write")`)→ 比对「角色权限矩阵 ∩ token scopes」→ 不足 403。
 4. 资源级:校验对具体 issue/project 的可见性(guest 仅可见被共享资源)。
 5. 审计:敏感写操作与认证事件异步写 `audit_logs`(不阻塞主流程)。
@@ -417,6 +436,12 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 防 XSS 窃取:refresh 优先 httpOnly + Secure cookie,access 放内存;API token 由 CLI/runtime 从环境变量读取。
 - [ ] 全站 HTTPS/HSTS;签名 URL 短时效。
 - [ ] 支持 JWT 签名密钥与加密密钥轮换;密钥不出现在代码/仓库。
+- [ ] **JWT 验签固定 `alg`**:验签时必须固定预期算法(如 HS256 或 RS256),显式拒绝 `alg=none`,防 HS/RS 混淆攻击(服务端不使用 token 头部声明的算法,仅用配置的固定算法验签)。
+- [ ] **密码重置/邮箱验证令牌落库**:两类令牌均有独立表(`password_reset_tokens`/`email_verification_tokens`),仅存 SHA-256 哈希,带 TTL(重置 1h / 验证 24h)与单次消费约束(`consumed_at`)。
+- [ ] **`role_override` 服务端强校验**:创建 token 时与每次请求鉴权时均校验 `role_override` 不高于持有者当前角色,违反返回 422;不能仅靠文字描述。
+- [ ] **登录锁定维度为 (IP, 邮箱) 二元组**:避免纯邮箱维度锁定导致 DoS;保留验证码解锁路径。
+- [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。
+- [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),应使用子协议或首帧认证。
 - [ ] 各端点限流生效,超限 429 + `Retry-After`;登录类叠加失败锁定。
 
 ### 5.6 实时
