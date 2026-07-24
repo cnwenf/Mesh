@@ -369,6 +369,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 | POST | `/projects/{id}/members` | 添加项目成员 |
 | PATCH | `/projects/{id}/members/{member_id}` | 变更项目成员角色 |
 | DELETE | `/projects/{id}/members/{member_id}` | 移除项目成员 |
+| GET | `/workspaces/{ws}/project-templates` | 列出项目模板(R2,建议-10) |
+| POST | `/workspaces/{ws}/project-templates` | 创建项目模板 |
+| PATCH | `/project-templates/{id}` | 更新模板 |
+| DELETE | `/project-templates/{id}` | 删除模板 |
+| POST | `/project-templates/{id}/instantiate` | 由模板创建项目(可携初始里程碑/周期/默认视图) |
 
 ### 3.2 请求/响应示例
 
@@ -461,6 +466,23 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 ```json
 { "error": { "code": "project_key_taken", "message": "前缀 WEB 已被占用", "details": { "key": "WEB" } } }
 ```
+
+### 3.2b 项目模板(R2,建议-10 转正)
+
+**数据模型**(`project_templates`,本 Spec owns):
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE;UNIQUE(workspace_id, id) | 隔离(README §6.2) |
+| `name` | TEXT | NOT NULL | 模板名;`UNIQUE(workspace_id, name)` |
+| `template_body` | JSONB | NOT NULL | 预填集:`{description, default_visibility, key_suggestion, initial_milestones[], initial_cycles[], default_view_config(看板列/WIP), status_set_seed}` |
+| `created_by` | UUID | NOT NULL,复合 FK `(workspace_id, created_by)→members(workspace_id, id)` ON DELETE RESTRICT | 创建者 |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | |
+
+**实例化语义** `POST /api/v1/project-templates/{id}/instantiate`(请求 `{name, key, overrides?}`):同事务创建 `projects`(key 经前缀注册表排他校验,§2.3/README §6.3,冲突 409 `project_key_taken`)+ 播种 `issue_statuses` 状态集 + 可选初始里程碑/周期 + 默认视图;返回 201 项目对象(含已建子里程碑/周期 id)。模板引用的预置项失效时优雅降级(响应 `details.skipped` 列出),不整体失败。
+
+**验收**:模板 CRUD 与工作区级唯一名生效;由模板创建的项目含预置状态集/里程碑/周期/默认视图;key 冲突经注册表拒绝;跨租户引用被复合 FK 拒绝(README §9 T1 同类)。
 
 ### 3.3 错误码
 
