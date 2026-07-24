@@ -322,7 +322,7 @@ erDiagram
 | 字段 | 类型 | 约束 | 说明 |
 |---|---|---|---|
 | attempt_id | uuid | PK, 复合 FK→execution_attempts(workspace_id, id) | 复合主键（**凭证按 attempt 绑定**，README §6.5） |
-| credential_id | uuid | PK, FK→runtime_credentials.id | 复合主键 |
+| credential_id | uuid | PK, **复合 FK `(workspace_id, credential_id) → runtime_credentials(workspace_id, id)`**（README §6.2 多租户红线：跨租户凭证引用在 INSERT 时即被数据库拒绝） | 复合主键 |
 | workspace_id | uuid | NOT NULL, FK→workspaces.id | 隔离 |
 | envelope_ref | text | NOT NULL | 短期凭证信封引用（envelope id；值本身只经 claim/refetch 响应一次性下发） |
 | injected_at | timestamptz | NOT NULL DEFAULT `now()` | 注入时间 |
@@ -352,7 +352,7 @@ erDiagram
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
 > **仓库 checkout 安全约定（H1）：**
-> - **workspace 级 `allowed_repos` 白名单**：`task_spec.repo.url` 必须在所属 workspace 配置的 `allowed_repos`（`workspaces.settings` 或独立配置表中的仓库 URL 白名单）内，checkout 请求到达服务端时强制校验，不在白名单内返回 `403 forbidden`。
+> - **workspace 级 `allowed_repos` 白名单**：**`config_snapshot.repo.url`**（入队时冻结、可审计，README §6.11）必须在所属 workspace 配置的 `allowed_repos`（`workspaces.settings` 或独立配置表中的仓库 URL 白名单）内，checkout 请求到达服务端时强制校验，不在白名单内返回 `403 forbidden`。
 > - **凭证按仓库最小化签发**：`repo_token` 类凭证（`runtime_credentials.kind='repo_token'`）必须限定于目标仓库（仅对该仓库有读/写权限的短期 token），防止持有 token 后 clone 白名单外的其他仓库。
 > - **平台托管 runtime 出站限制**：平台托管（`kind='platform_managed'`）runtime 上的 checkout 操作禁止访问私网地址段（RFC1918、link-local、云元数据 `169.254.169.254` 等），防 SSRF（与 H4 出站策略合并落实）。（心跳明细，可选保留窗口）
 
@@ -402,6 +402,7 @@ CREATE INDEX idx_runtimes_status
 CREATE UNIQUE INDEX uq_runtimes_ws_id ON runtimes (workspace_id, id);
 CREATE UNIQUE INDEX uq_task_executions_ws_id ON task_executions (workspace_id, id);
 CREATE UNIQUE INDEX uq_attempts_ws_id ON execution_attempts (workspace_id, id);
+CREATE UNIQUE INDEX uq_runtime_credentials_ws_id ON runtime_credentials (workspace_id, id);
 
 -- 任务历史按 agent / issue / 时间检索（分派即开工可观测）
 CREATE INDEX idx_executions_agent_time ON task_executions (agent_id, queued_at DESC);
@@ -679,6 +680,8 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `UPDATE runtimes ... RETU
 ```
 
 > **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。`credentials[].value` 命中脱敏黑名单，日志中出现即替换为 `***`。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
+>
+> **注入环境变量名安全约束（NEW-M1）**：`env_declarations` 与 `credentials[].env` 中的环境变量名须经服务端白名单校验——**拒绝 `LD_*`、`PATH`、`PYTHON*`、`NODE_OPTIONS`、`DYLD_*` 及平台保留前缀（`MESH_DAEMON_*`、`MESH_INTERNAL_*`）等敏感名**，防止覆盖进程加载器 / 运行时 / daemon 认证变量；仅允许匹配 `^[A-Z][A-Z0-9_]{0,63}$` 且不在拒绝清单内的名称，校验在 claim 组装时执行，非法名返回 `422`。
 
 **追加日志（带 offset，幂等）**：
 
@@ -746,6 +749,8 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `UPDATE runtimes ... RETU
 
 - 控制台 API：用户 Bearer token（会话 / JWT），按 workspace + 角色鉴权。
 - 机器 API：runtime Bearer token（`api_tokens.scope='runtime'`，只存哈希），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
+- **机器 API 强制 TLS（红线）**：runtime 协议（machine API）**仅经 TLS（HTTPS）提供，拒绝明文 HTTP**；claim / refetch 响应携带凭证明文，传输层降级即导致凭证裸露。所有 `/api/v1/daemon/` 端点强制 `Strict-Transport-Security`，非 TLS 请求返回 `403`。
+- **runtime 状态与 token 联动**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**停用其 `runtime_token`**（`api_tokens.revoked_at` 置位）；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，下线后的 token 不可调用任何机器 API。
 - 分页：`GET /api/v1/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
 
 ### 3.6 WebSocket 事件清单（`/ws`，`<entity>.<action>`，带 seq）
@@ -988,13 +993,17 @@ stateDiagram-v2
 - [ ] **execution/attempt 分层**（README §6.4）：requeue 新建 attempt 行，旧 attempt 审计信息不被覆盖（集成测试 T4）；`retry_count` 由 attempts 数派生，超 `max_attempts` 转 `failed(max_retries)`；非法迁移返回 `409`/`422`。
 - [ ] 高风险工具执行前经 `/daemon/executions/{id}/approvals` 创建统一 `approvals`（README §6.10），执行转 `awaiting_approval`，reaper 不回收该态，批准后续跑、拒绝/过期转 cancelled（集成测试 T8）。
 - [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封（README §6.14）；机器 API token 越权访问其它 runtime 返回 `403`。
+- [ ] **仓库 checkout 白名单验收（H1）**：checkout 命中 `allowed_repos` 白名单外 URL → `403`；`repo_token` 不可用于白名单外仓库；平台托管 runtime checkout 私网 / 元数据地址被拒（集成测试覆盖）。
+- [ ] **注入环境变量名安全（NEW-M1）**：`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 平台保留前缀等敏感名 → `422` 拒绝。
+- [ ] **机器 API 强制 TLS（NEW-M3）**：非 TLS 请求到 `/api/v1/daemon/` 返回 `403`。
+- [ ] **runtime 下线即吊销 token（NEW-L2）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token` 同步停用；下线后 token 调用任何机器 API 返回 `401`。
 - [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重。
 
 ### 5.2 非功能验收（重点红线）
 
 - [ ] **任务不重复领取**：多 runtime 并发 claim 同一任务时，`FOR UPDATE SKIP LOCKED` 保证恰有一台抢到，其余立即抢下一条；零锁等待、零重复执行；`idempotency_key` 唯一约束兜底防重复入队。
 - [ ] **失联自愈**：runtime 失联后，其上 `claimed/running` 且租约过期的 **attempt** 由 reaper 置 `reclaimed`、逻辑执行回落 `queued` 新建下一个 attempt（或超 `max_attempts` 转 `failed`），改由其它 runtime 接手，无需人工；回收时 `lease_seq++` 防「诈尸」覆盖（脑裂防护），容量幂等释放。
-- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；日志全链路脱敏，命中即 `***`；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2）。
+- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；**全通道脱敏——日志、评论、附件产出物均做 secret 命中检测，命中即拦截该内容写出并触发安全告警**（验收须覆盖评论 / 附件通道，非仅日志）；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2）。
 - [ ] **日志时延**：日志尾部增量从守护进程产生到前端可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 offset 补发不丢不重；封口段落对象存储读取续传 P95 ≤ 1s。
 - [ ] **沙箱隔离**：每任务独立容器 / 命名空间，cgroup CPU / 内存 / 磁盘 / 时长配额；单任务 OOM 被终止标 `failed(sandbox/oom)`，同机其它任务与宿主机不受影响；非特权用户运行，不挂宿主机 root。
 - [ ] **沙箱出站默认 deny**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）；被注入任务无法将凭证经外联外泄或扫描内网。
