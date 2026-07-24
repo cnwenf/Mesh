@@ -199,13 +199,34 @@ WHERE i.workspace_id=$ws AND i.deleted_at IS NULL
   AND ($project_id IS NULL OR i.project_id = $project_id)
 GROUP BY i.assignee_id;
 
--- workload-B:每 agent 在途执行(运行中/排队/需审批,呼应 §6.12)
+-- workload-B:每 agent 在途执行(运行中/排队/需审批,呼应 §6.12;R5 写死:先过统一可见执行 CTE)
+WITH visible_executions AS (                    -- §2.3.1 权威构件,逐字复用(不得改写或省略可见性过滤)
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = $ws
+    AND (a.visibility = 'workspace'             -- ① agent 可见性先行
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = $requester_user_id OR $requester_role IN ('owner','admin'))))
+    AND (i.id IS NULL                           -- ② 关联 issue 继承项目可见性;无 issue 归属 agent
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR $requester_role IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                       AND pm.member_id = $requester_member_id)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                       AND mx.member_id = $requester_member_id))
+)
 SELECT e.agent_id,
   COUNT(*) FILTER (WHERE e.status IN ('claimed','running','cancelling')) AS running,
   COUNT(*) FILTER (WHERE e.status = 'queued')                            AS queued,
   COUNT(*) FILTER (WHERE e.status = 'awaiting_approval')                 AS awaiting_approval
-FROM task_executions e
-WHERE e.workspace_id=$ws AND e.agent_id IS NOT NULL
+FROM visible_executions e
+WHERE e.agent_id IS NOT NULL
   AND e.status IN ('queued','claimed','running','cancelling','awaiting_approval')
 GROUP BY e.agent_id;
 -- 服务层:workload-B 经 agents→members 并入 workload-A 的成员维度;member_type 经 JOIN members 取得(快照)。
@@ -262,7 +283,28 @@ ORDER BY days.d;
 | token 消耗 `total_tokens` 等 | **仅 autopilot 触发的执行有 token 数据**:`SUM(autopilot_runs.prompt_tokens/completion_tokens/total_tokens)`,经 `autopilot_runs.execution_id → task_executions.id` 关联。**`task_executions` 本身无 token 字段**;非 autopilot 触发(`assign`/`mention`/`manual`/`chat`/`integration` 直派)的执行 token **未知**,不估算。响应必返回 `token_coverage = runs_with_token_data / executions`,口径诚实(coverage<1 时 UI 标注「token 仅覆盖 autopilot 运行」) | `autopilot_runs`(autopilot.md §2.3) |
 
 ```sql
--- agent 统计主查询(执行数/成功率/超时率/平均端到端时长)
+-- agent 统计主查询(执行数/成功率/超时率/平均端到端时长;R5 写死:先过统一可见执行 CTE)
+WITH visible_executions AS (                    -- §2.3.1 权威构件,逐字复用
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = $ws
+    AND (a.visibility = 'workspace'             -- ① agent 可见性先行
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = $requester_user_id OR $requester_role IN ('owner','admin'))))
+    AND (i.id IS NULL                           -- ② 关联 issue 继承项目可见性;无 issue 归属 agent
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR $requester_role IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                       AND pm.member_id = $requester_member_id)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                       AND mx.member_id = $requester_member_id))
+)
 SELECT
   e.agent_id,
   COUNT(*)                                                              AS executions,
@@ -276,32 +318,74 @@ SELECT
   AVG(EXTRACT(EPOCH FROM (e.finished_at - e.queued_at)))
         FILTER (WHERE e.status IN ('completed','failed','timeout')
                 AND e.finished_at IS NOT NULL)                          AS avg_duration_seconds
-FROM task_executions e
-WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
+FROM visible_executions e
+WHERE e.agent_id=$agent_id
   AND e.queued_at >= $from AND e.queued_at < $to
 GROUP BY e.agent_id;
 
--- 重试率(retry_count = COUNT(attempts)-1,派生自 execution_attempts)
+-- 重试率(retry_count = COUNT(attempts)-1,派生自 execution_attempts;R5 写死:attempts 关联先过同一可见执行 CTE)
+WITH visible_executions AS (                    -- §2.3.1 权威构件,逐字复用(同上)
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = $ws
+    AND (a.visibility = 'workspace'
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = $requester_user_id OR $requester_role IN ('owner','admin'))))
+    AND (i.id IS NULL
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR $requester_role IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                       AND pm.member_id = $requester_member_id)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                       AND mx.member_id = $requester_member_id))
+)
 SELECT ROUND(COUNT(*) FILTER (WHERE n > 1) * 1.0 / NULLIF(COUNT(*),0), 4) AS retry_rate
 FROM (
   SELECT e.id, COUNT(att.id) AS n
-  FROM task_executions e
+  FROM visible_executions e
   LEFT JOIN execution_attempts att
     ON att.execution_id = e.id AND att.workspace_id = e.workspace_id
-  WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
+  WHERE e.agent_id=$agent_id
     AND e.queued_at >= $from AND e.queued_at < $to
   GROUP BY e.id
 ) r;
 
--- token 消耗(仅 autopilot 触发执行有数据;coverage 诚实披露)
+-- token 消耗(仅 autopilot 触发执行有数据;coverage 诚实披露;R5 写死:autopilot_runs 关联先过同一可见执行 CTE)
+WITH visible_executions AS (                    -- §2.3.1 权威构件,逐字复用(同上)
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = $ws
+    AND (a.visibility = 'workspace'
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = $requester_user_id OR $requester_role IN ('owner','admin'))))
+    AND (i.id IS NULL
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR $requester_role IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                       AND pm.member_id = $requester_member_id)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                       AND mx.member_id = $requester_member_id))
+)
 SELECT SUM(r.prompt_tokens)     AS prompt_tokens,
        SUM(r.completion_tokens) AS completion_tokens,
        SUM(r.total_tokens)      AS total_tokens,
        COUNT(r.id)              AS runs_with_token_data
 FROM autopilot_runs r
-JOIN task_executions e
+JOIN visible_executions e
   ON e.id = r.execution_id AND e.workspace_id = r.workspace_id
-WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
+WHERE e.agent_id=$agent_id
   AND r.started_at >= $from AND r.started_at < $to;
 -- token_coverage = runs_with_token_data / executions(主查询)。
 ```
@@ -337,6 +421,40 @@ visible(e, m) :=
 | private agent | **先过 agent 可见性**(`agents.visibility='private'` 仅 owner 与 admin/owner 角色可见,agent.md §3.5):其**一切**执行(无论是否关联 issue)对非 owner/非 admin 不可见,统计不呈现。 |
 | 端点覆盖 | `/analytics/agents/stats`(单/多 agent)、`/analytics/workload` 的 workload-B 执行部分、`/dashboards/workspace` 的 agent 统计区一律先按本谓词过滤 `task_executions` 再聚合;`/analytics/agents/stats?agent_id=` 对 private agent 额外校验请求者可见性,不可见 → `403 agent_not_visible`(不泄露统计存在性)。 |
 | 缓存键协同(R4) | execution 类指标(`agent_stats`、workload 执行部分)的 `analytics_snapshots.scope_key` 在 admin/owner 全量时为 `ws_admin`,普通成员为 **`exec:p<sha256(可见项目 id 排序)>:a<sha256(可见 agent id 排序)>`**(可见项目集同 §3.1 口径;可见 agent 集 = workspace 可见 agents ∪ 请求者拥有的 private agents)。查询只命中 scope_key 相等的快照,`ws_admin` 绝不返回给非 admin;可见性变化(项目转 private/agent 转 private/成员变更)后旧键不再命中,自然失效。 |
+
+**权威聚合构件(R5 写死,T33)**:上述谓词的 SQL 级权威实现为下述 **`visible_executions` 统一 CTE**——**§2.2.4 的 workload-B、§2.3 的 agent 主统计 / 重试率子查询 / token 聚合(含 `execution_attempts`、`autopilot_runs` 关联),以及 `/dashboards/workspace` 的 agent 统计区与 workload 执行部分,一律逐字复用同一构件**;任何端点**不得**另写仅按 `workspace_id + agent_id + 时间窗` 直接聚合 `task_executions`、不经本 CTE 的落地 SQL(那会让私有项目执行数 / 失败率 / 时长 / 重试 / token 泄入普通成员的 agent stats / workload / dashboard——T33 以真实聚合断言永久堵住此缺口):
+
+```sql
+-- visible_executions:统一可见执行 CTE(R5 权威构件;全部 execution 指标聚合的前置过滤,逐字复用)
+-- 请求者参数:$requester_member_id(成员行)/ $requester_user_id(成员行解析的全局身份)/ $requester_role(成员行角色)
+WITH visible_executions AS (
+  SELECT e.*
+  FROM task_executions e
+  JOIN agents a        ON a.id = e.agent_id AND a.workspace_id = e.workspace_id
+  LEFT JOIN issues i   ON i.id = e.issue_id AND i.workspace_id = e.workspace_id
+  LEFT JOIN projects p ON p.id = i.project_id AND p.workspace_id = i.workspace_id
+  WHERE e.workspace_id = $ws
+    -- ① agent 可见性先行(private agent 的统计不泄露给非 owner/非 admin)
+    AND (a.visibility = 'workspace'
+         OR (a.visibility = 'private'
+             AND (a.owner_user_id = $requester_user_id OR $requester_role IN ('owner','admin'))))
+    -- ② 关联 issue 的执行继承项目可见性;无 issue 的执行(manual/chat/integration)归属 agent、无项目侧信道
+    AND (i.id IS NULL
+         OR p.id IS NULL
+         OR p.visibility = 'public'
+         OR $requester_role IN ('owner','admin')
+         OR EXISTS (SELECT 1 FROM project_members pm
+                     WHERE pm.workspace_id = e.workspace_id AND pm.project_id = p.id
+                       AND pm.member_id = $requester_member_id)
+         OR EXISTS (SELECT 1 FROM member_project_access mx
+                     WHERE mx.workspace_id = e.workspace_id AND mx.project_id = p.id
+                       AND mx.member_id = $requester_member_id))
+)
+-- 聚合查询从 visible_executions 取数(见 §2.2.4 workload-B、§2.3 三段权威 SQL),绝不直接 FROM task_executions 旁路本 CTE
+SELECT ... FROM visible_executions e WHERE ...;
+```
+
+> validation 脚本的同名辅助函数 `analytics_exec_visible_to(execution_id, member_id)` 是本谓词的**逐执行布尔形态**(单行判定与结构负向测试的可执行参照);**聚合落地的权威形态是上述 CTE,二者语义逐条等价**。T33 以**同一聚合 SQL 文本**(仅代入请求者三参数与聚合维度)对**普通成员 / 项目成员 / private-agent owner / admin** 四类请求者断言**最终统计值**(执行数 / 成功数 / 重试率 / token / 在途 running·queued)——**仅断言 helper 返回值不构成闭环(R5 写死)**。
 
 ### 2.4 时间窗与时区统一约定(落地 README §6.18)
 
@@ -412,7 +530,7 @@ CREATE INDEX idx_snapshots_stale
 | GET | `/analytics/burndown` | 燃尽曲线(`cycle_id?` \| `milestone_id?` 恰好一个、`metric=count\|points`、`tz?`) |
 | GET | `/analytics/agents/stats` | 单/多 agent 运行统计(`agent_id?`、`from`、`to`);**R4:聚合前按统一 execution 可见性 scope 过滤(§2.3.1)**——关联不可见 private project 的执行被剔除,private agent 先过 agent 可见性;`agent_id` 指向 private agent 且请求者非 owner/非 admin → `403 agent_not_visible` |
 | GET | `/dashboards/project/{project_id}` | 项目仪表盘聚合(velocity + burndown + cycle time,`from`/`to`、`cycle_id?`) |
-| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`);**全体工作区成员可用,聚合按请求者项目可见性过滤**(private 项目不可见者其数据被剔除,MES-4 HIGH-2/R3);**R4:workload 执行部分与 agent 统计区同样按统一 execution 可见性 scope 过滤(§2.3.1),普通成员无法经执行计数/成本推断不可见 private project 活动**;admin/owner 见全工作区聚合 |
+| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`);**全体工作区成员可用,聚合按请求者项目可见性过滤**(private 项目不可见者其数据被剔除,MES-4 HIGH-2/R3);**R4:workload 执行部分与 agent 统计区同样按统一 execution 可见性 scope 过滤(§2.3.1),普通成员无法经执行计数/成本推断不可见 private project 活动**;**R5 写死:agent 统计区与 workload 执行部分逐字复用 §2.3.1 `visible_executions` 权威 CTE(即 §2.3 同一组聚合 SQL,仅聚合维度不同),不为仪表盘另写一套不过滤可见性的聚合 SQL**;admin/owner 见全工作区聚合 |
 
 > 项目级端点(`/analytics/*?project_id=`、`/dashboards/project/{id}`)须过 `project_members` 可见性校验(project.md);无可见性返回 `403 project_not_visible`。
 >
@@ -606,6 +724,7 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 - [ ] **工作区级聚合按请求者项目可见性过滤**:非私有项目 P 成员的普通工作区成员查询 throughput / workload / cycle time(不传 `project_id`)/ `/dashboards/workspace` 时,返回数据**不含项目 P 的 issue 计数/点数/成员负荷/曲线样本**;聚合结果与「手动剔除 P 后重算」一致。
 - [ ] **cycle/milestone 直引按归属项目可见性校验**:`velocity?cycle_ids=` / `burndown?cycle_id=` / `burndown?milestone_id=` 引用的 cycle/milestone 归属私有项目时,非该项目成员 → `403 project_not_visible`;不满足可见性的 cycle/milestone 不出现在任何聚合结果中。
 - [ ] **私有项目执行负向测试(R4,HIGH-6,集成测试 T33)**:agent A 在私有项目 P 的 issue 上有执行(执行数/失败率/时长/token)——非 P 成员的普通成员查询 `/analytics/agents/stats?agent_id=A` / workload 执行部分 / `/dashboards/workspace` agent 统计区时,**这些执行全部被剔除**(聚合结果与「手动剔除关联 P 的执行后重算」一致),无法经执行计数/成本推断 P 的活动;admin/owner 见全量;P 的成员见含 P 执行的聚合。
+- [ ] **权威聚合 SQL 真实聚合断言(R5 写死,HIGH-3,集成测试 T33)**:§2.2.4 workload-B 与 §2.3 agent 主统计 / 重试率子查询 / token 聚合四段 SQL **均已内联 §2.3.1 `visible_executions` 统一 CTE**(复核权威 SQL 文本,不存在仅 `workspace_id + agent_id + 时间窗` 的旁路聚合);T33 以**同一聚合 SQL 文本**对四类请求者断言**最终统计值**而非仅 helper 返回:① **普通成员**(非私有项目成员、非 private agent owner):私有项目执行与 private agent 执行全部剔除(executions/succeeded/retry_rate/total_tokens/running/queued 与「手动剔除后重算」逐值一致);② **项目成员**:含该私有项目执行的聚合;③ **private-agent owner**:含自家 private agent 执行、仍不含不可见私有项目执行;④ **admin/owner**:全量(含私有项目与 private agent);workload-B 的 running/queued 在途计数同样按 CTE 剔除(堵执行计数侧信道)。
 - [ ] **private agent 负向测试(R4,HIGH-6)**:`visibility='private'` 的 agent X(非请求者拥有)——普通成员查询 `/analytics/agents/stats?agent_id=X` → `403 agent_not_visible`;workload / workspace dashboard agent 统计区**不呈现** X 的任何统计(其执行无论是否关联 issue 均不可见);X 的 owner 与 admin/owner 可见 X 的统计。
 - [ ] **无 issue 执行归属(R4)**:`trigger ∈ (manual, chat, integration)` 且 `issue_id IS NULL` 的执行归属 agent 本身——workspace 可见 agent 的此类执行计入全体工作区成员可见的聚合(不携带项目侧信道);private agent 的此类执行仅 owner/admin 可见。
 - [ ] **execution 缓存键隔离(R4)**:`agent_stats` 快照 `ws_admin` 与 `exec:p<hash>:a<hash>` 物理分行,普通成员查询**绝不命中** `ws_admin` 行;项目可见性或 agent 可见性(转 private)变更后,旧 scope_key 快照不再命中(自然失效,无跨权限泄露窗口)。
