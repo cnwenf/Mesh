@@ -182,7 +182,7 @@ approvals(README §6.10):subject_type='autopilot_action',经 approvals.subject_r
 | `id` | UUID | PK | `gen_random_uuid()` | |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 归属 |
 | `autopilot_id` | UUID | NULL,**复合 FK `(workspace_id, autopilot_id) → autopilot(workspace_id, id)`** | NULL | 路由到的规则(空=未匹配,README §6.2) |
-| `idempotency_key` | TEXT | NOT NULL | — | 去重键(事件 ID 或签名/内容哈希) |
+| `idempotency_key` | TEXT | NOT NULL | — | 去重键(**签名校验通过的事件**:用事件 ID 或内容哈希;**被拒事件**:用 `rejected:<raw-hash>` 前缀,不占用合法事件的去重命名空间,防未签名请求预占键导致合法事件被静默去重) |
 | `event_type` | TEXT | NOT NULL | — | 事件类型(由来源/载荷解析) |
 | `headers` | JSONB | NULL | NULL | 入站请求头(脱敏后) |
 | `payload` | JSONB | NOT NULL | — | 原始载荷 |
@@ -414,7 +414,8 @@ X-Event-Id: evt_9f2a...
 // 签名失败 401
 { "error": {"code": "invalid_signature", "message": "Webhook 签名校验失败", "details": {}} }
 ```
-**处理流程**:接收 → 落库 `webhook_events`(`received`)→ 校验签名(`signature_status`)→ **签名 `invalid`/`missing` 一律置 `process_status='rejected'` 并返回 401,绝不分发不路由** → 计算/读取 `idempotency_key` 尝试去重插入(命中则 `deduped` 直接返回)→ 路由匹配规则 → 频率/护栏检查 → 创建 `autopilot_runs`(`dispatched`)→ 异步执行。
+**处理流程**:接收 → 校验签名(`signature_status`)→ **签名 `invalid`/`missing` 一律落库 `webhook_events`(`process_status='rejected'`,`idempotency_key='rejected:<raw-body-hash>'`——使用独立前缀命名空间,不占用合法事件的去重键)并返回 401,绝不分发不路由** → 签名通过后落库(`received`)→ 计算/读取 `idempotency_key`(事件 ID 或内容哈希)尝试去重插入(命中则 `deduped` 直接返回)→ 路由匹配规则 → 频率/护栏检查 → 创建 `autopilot_runs`(`dispatched`)→ 异步执行。
+> **去重防预占(可用性保护)**:被拒(签名无效/缺失)事件的 `idempotency_key` 使用 `rejected:` 前缀 + 原始请求体哈希,与合法事件的去重键命名空间隔离——攻击者无法用伪造的未签名请求预占 `X-Event-Id`,使后续同 ID 的合法签名事件被静默去重丢弃。
 > **Webhook 触发器强制配置签名密钥**:创建 `trigger_type='webhook_received'` 的规则时,必须已配置有效的签名密钥(服务端创建时校验,未配置返回 422);`skipped` 状态仅限 `is_test=true` 的 test-run 场景;**无有效签名的事件永不产生 `autopilot_runs`**。
 
 ### 3.3 错误码表
