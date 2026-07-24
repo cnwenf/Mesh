@@ -493,7 +493,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 - **事件分级**:**critical(进收件箱 + 可选推送)**:执行失败/超时、审批请求、安全隔离(freeze/扫描命中)、被分派、被 @;**normal(留在运行页/时间线,不进收件箱)**:普通日志、阶段进度、presence 变化。
 - **聚合窗口**:同 `group_key` **60s 窗口**内合并为一条(`payload.count` 递增),避免通知风暴。
 - **自我抑制**:动作发起者不给自己生成通知;agent 永不接收会再触发自己的通知(回环防护)。
-- **邮件摘要**:定时任务扫描 `email='digest'` 且未投递的站内通知,聚合摘要邮件,写 `notification_delivery` 防重(`uq_delivery`);点邮件链接回站内并标已读。
+- **邮件摘要**:定时任务扫描 `email='digest'` 且未投递的站内通知,聚合摘要邮件,写 `notification_delivery` 防重(`uq_delivery`);点邮件链接回站内并标已读。**邮件中的评论预览内容必须做 HTML 转义**(防邮件端注入),摘要模板使用纯文本或严格净化后的 HTML。
 
 ---
 

@@ -407,6 +407,7 @@ disabled ──移除──► removed
 - [ ] 角色变更、移除、停用、转派均写 auth.md 的 append-only 审计日志(行为者以 `actor_member_id` 落 member 行,人/agent 经 JOIN `members.member_type` 判别;`actor_kind∈('member','system')`,无 `actor_type` 列,见 auth.md §2.6)。
 - [ ] 移除/停用受 auth.md 限流约束。
 - [ ] guest 的项目级可见性在服务端逐资源校验,不依赖前端隐藏。
+- [ ] **用户可控 URL scheme 校验**:`avatar_url` 等用户可控 URL 字段在服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,仅允许 `https`(及可选 `http`);`members`/`users`/`agents` 相关端点写入时统一校验。
 
 ### 5.4 实时
 

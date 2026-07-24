@@ -124,9 +124,9 @@ users(人类登录身份,auth.md)──┐
 | `token_prefix` | TEXT | NOT NULL | — | 令牌前缀,用于列表展示与快速定位(不含秘密) |
 | `role` | TEXT | NOT NULL,CHECK IN ('admin','member','guest') | `'member'` | 接受后赋予的角色(不可直接邀请为 owner) |
 | `invited_by` | UUID | NOT NULL,复合 FK `(workspace_id, invited_by) → members(workspace_id, id)` | — | 邀请人(统一名册条目;README §6.2) |
-| `max_uses` | INT | NULL,CHECK (max_uses > 0) | NULL | 最大使用次数(NULL=不限) |
+| `max_uses` | INT | NOT NULL,CHECK (max_uses > 0) | `10` | 最大使用次数(**创建时未指定默认 10,不允许 NULL 不限次**——链接一旦泄漏即有次数上限,MES-4 安全约束) |
 | `used_count` | INT | NOT NULL,CHECK (used_count >= 0) | `0` | 已使用次数(由数据库原子递增,见 §3.2) |
-| `expires_at` | TIMESTAMPTZ | NULL | NULL | 过期时间(NULL=永不过期) |
+| `expires_at` | TIMESTAMPTZ | NOT NULL | `now() + interval '7 days'` | 过期时间(**创建时未指定默认 7 天后过期,不允许 NULL 永不过期**——链接泄漏后有失效兜底,MES-4 安全约束) |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','revoked','expired','exhausted') | `'active'` | **链接生命周期**状态(见 §4.4):`active`=可用(含原"pending"语义,创建即可用)、`revoked`=管理员撤销、`expired`=到期、`exhausted`=`used_count` 达 `max_uses`。**不再使用 `accepted`/`pending`**——多次使用链接不得翻转为单一终态(兑换记录另见 §2.4) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -483,6 +483,7 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] 删除/归档等危险操作仅 owner 可触发,且需二次确认。
 - [ ] 邀请创建、工作区创建受 auth.md 限流约束,超限返回 429 + `Retry-After`。
 - [ ] 错误信息不泄露其它工作区存在性或内部细节。
+- [ ] **用户可控 URL scheme 校验**:`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:`,仅允许 `https`。
 
 ### 5.4 实时
 

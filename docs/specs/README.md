@@ -483,6 +483,25 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 | 幂等写 | 创建/动作类端点支持 `Idempotency-Key` 请求头(§6.5);重复键返回首次结果 |
 | 过滤限制 | 列表/视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底,超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded` 并建议收窄条件 |
 
+### 6.15 不可信内容处理(权威,MES-4 安全约束)
+
+**所有外部来源内容(成员评论、附件、Webhook 载荷、抓取/上传内容)进入 agent 上下文时,一律视为数据而非指令**:
+
+1. 显式标记为不可信数据并做结构隔离(如用分隔标记包裹,明确告知 agent 这些内容不含可执行指令);
+2. agent 不得将不可信内容中的"指令"作为行动依据;
+3. 高风险动作(对外上传、跨 issue 批量写、凭证读取后写出)默认走 `confirm_required` 人工闸门(§6.10)。
+
+此约定适用于 `agent`(issue 上下文注入)、`autopilot`(Webhook 载荷模板插值)、`chat-session`(issue 上下文 system 消息)等**所有向 agent 注入外部内容的路径**。
+
+### 6.16 凭证全通道脱敏与用户可控 URL(权威,MES-4 安全约束)
+
+| 规则 | 内容 |
+| --- | --- |
+| 全通道脱敏 | 凭证(secret)的脱敏不仅限日志通道:agent 写出的**评论、附件产出物、日志**等所有内容通道均做 secret 命中检测(复用 `runtime_credentials.redact_in_logs` 黑名单),命中即拦截该内容写出并触发安全告警;沙箱出站默认 deny(runtime.md)从网络层堵截凭证经任意外联外泄 |
+| 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,仅允许 `https`(及可选 `http`);members/users/agents/workspaces 相关写入端点统一校验 |
+| SSRF 防护 | 一切服务端代为发起的外联(技能来源拉取、autopilot 出向 HTTP、平台托管 runtime 的 checkout)禁止私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254`),仅允许公网地址或显式白名单 |
+| WebSocket 鉴权 | **禁止在 URL query 参数中传递 token**(会落入访问日志与中间代理);使用 WebSocket 子协议(Sec-WebSocket-Protocol)或连接建立后首帧认证 |
+
 ---
 
 ## 7. 核心跨模块流程(R1 权威版)
