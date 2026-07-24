@@ -41,9 +41,9 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 | R7 | 租约 + lease_seq | 领取即发租约，周期续租；租约过期视为持有者已死可回收；`lease_seq` 防「诈尸 / 脑裂」覆盖 |
 | R8 | 并发上限与背压 | 每 runtime `max_concurrent`（默认 1）；满载时新任务停留 `queued`，队列深度即背压信号 |
 | R9 | 日志流式 + 续传 | stdout/stderr 按行追加上报，带单调 `offset`；前端实时滚动，断线凭最后 offset 无缝续看，不丢不重 |
-| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离，cgroup 资源配额，非特权用户，结束即销毁 |
+| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离（**出站默认 deny**，按 task_spec 声明域名白名单放行），cgroup 资源配额，非特权用户，结束即销毁 |
 | R11 | 代码仓库专属分支 checkout | 每任务创建专属工作分支 `agent/<execution-id>`，多任务并行不互相污染；产出差异（diff）回报供 review |
-| R12 | 凭证注入（不落盘） | secret 仅在 claim 时随任务一次性下发、短期、最小权限；能走环境变量就不落盘；日志全链路脱敏 |
+| R12 | 凭证注入（不落盘） | secret 仅在 claim 时随任务一次性下发、短期、最小权限；能走环境变量就不落盘；**全通道脱敏（日志 + 评论 + 附件产出物）**；**runtime_token 仅存于 daemon 受信进程，任务沙箱不可见** |
 | R13 | 超时与取消（两段式） | 任务级超时 + 用户主动取消；先优雅终止（SIGTERM + 宽限期）再强制 kill（SIGKILL）；`cancelling` 显式中间态 |
 | R14 | 运维可观测 | 队列深度 / 负载 / 心跳新鲜度作为一等可见信号；暂停 / 冻结 / 隔离等人类干预点 |
 
@@ -63,7 +63,10 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 - 底层模型供应商接入（统一以「主流大语言模型」抽象）。
 
 **约束红线：**
-- **凭证安全是红线而非功能**：secret 仅 claim 时一次性下发、短期、最小权限、能走环境变量就不落盘、日志全链路脱敏、服务端永不回显明文、执行结束即失效。
+- **凭证安全是红线而非功能**：secret 仅 claim 时一次性下发、短期、最小权限、能走环境变量就不落盘、**全通道脱敏（日志 + 评论 + 附件产出物均做 secret 命中检测，命中即拦截并告警）**、服务端永不回显明文、执行结束即失效。
+- **工作区隔离是红线**：claim SQL 与领取端点强制 `workspace_id` 等值过滤（从 runtime 记录读取，不接受客户端传入），跨 workspace 领取不可能发生。
+- **沙箱出站默认 deny 是红线**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）。
+- **daemon token 隔离是红线**：`runtime_token`（长期凭证，可 claim 任务、换取其他任务的一次性凭证明文）**仅存于 daemon 受信进程**，任务沙箱无法读取 daemon 的环境变量、进程内存或控制套接字；`max_concurrent>1` 时恶意任务即使攻破沙箱也无法窃取 daemon token 冒充 runtime。
 - 没有任务会永远卡住，也没有状态会永远悬而未决（超时 / 取消 / 失联回收均有「优雅→强制」两段式与显式中间态）。
 
 ---
@@ -289,7 +292,7 @@ erDiagram
 |---|---|---|---|---|
 | id | uuid | PK | `gen_random_uuid()` | 主键 |
 | execution_id | uuid | NOT NULL, FK→task_executions.id, UNIQUE | - | 一次执行对应一次 checkout |
-| repo_url | text | NOT NULL | - | 仓库地址 |
+| repo_url | text | NOT NULL | - | 仓库地址（**必须在 workspace 级 `allowed_repos` 白名单内**，checkout 前服务端校验，见下方安全约定） |
 | base_ref | text | NOT NULL | - | 基线分支 / SHA |
 | working_branch | text | NOT NULL | - | 为本任务创建的专属分支，如 `agent/<execution-id>` |
 | commit_sha | text | NULL | - | 结束时 HEAD commit |
@@ -299,7 +302,10 @@ erDiagram
 | recycled_at | timestamptz | NULL | - | 回收时间 |
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
-#### `runtime_heartbeats`（心跳明细，可选保留窗口）
+> **仓库 checkout 安全约定（H1）：**
+> - **workspace 级 `allowed_repos` 白名单**：`task_spec.repo.url` 必须在所属 workspace 配置的 `allowed_repos`（`workspaces.settings` 或独立配置表中的仓库 URL 白名单）内，checkout 请求到达服务端时强制校验，不在白名单内返回 `403 forbidden`。
+> - **凭证按仓库最小化签发**：`repo_token` 类凭证（`runtime_credentials.kind='repo_token'`）必须限定于目标仓库（仅对该仓库有读/写权限的短期 token），防止持有 token 后 clone 白名单外的其他仓库。
+> - **平台托管 runtime 出站限制**：平台托管（`kind='platform_managed'`）runtime 上的 checkout 操作禁止访问私网地址段（RFC1918、link-local、云元数据 `169.254.169.254` 等），防 SSRF（与 H4 出站策略合并落实）。（心跳明细，可选保留窗口）
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |---|---|---|---|---|
@@ -358,10 +364,12 @@ CREATE INDEX idx_log_segments_exec_offset
 
 ```sql
 -- 单事务内：锁定一条满足标签约束、最高优先级、最早入队的可领取任务
+-- 【安全红线】必须强制 workspace_id 等值过滤，runtime 只能领取本工作区的任务
 WITH picked AS (
   SELECT id
   FROM task_executions
   WHERE status IN ('queued','requeued')
+    AND workspace_id = :runtime_workspace_id     -- 【必须】工作区隔离：从 runtime 记录上取 workspace_id
     AND label_requirements <@ :runtime_labels   -- 标签满足（jsonb 包含）
   ORDER BY priority ASC, queued_at ASC
   LIMIT 1
@@ -382,6 +390,7 @@ RETURNING e.id, e.task_spec, e.timeout_seconds, e.lease_expires_at, e.lease_seq;
 
 要点：
 - `FOR UPDATE SKIP LOCKED`：多台 runtime 并发领取时，被某事务锁住的行直接被其它事务跳过，**零锁等待、零重复领取**，是 PostgreSQL 实现工作队列的业界标准做法。
+- **`workspace_id` 等值过滤是安全红线**：`:runtime_workspace_id` 从 runtime 记录（`runtimes.workspace_id`）上读取，**不接受客户端传入**；确保 runtime 只能领取本工作区的在队任务，杜绝跨租户领取与凭证泄漏。
 - 领取与服务端 `current_load < max_concurrent` 校验、runtime `status='online'` 校验放在同一事务 / 前置校验中。
 - `lease_seq` 每次领取 / 续租自增，作为乐观并发令牌：续租与上报必须带正确 `lease_seq`，防止「旧持有者诈尸」覆盖新持有者（见 5.3）。
 - `idempotency_key` 唯一约束兜底，防同一逻辑任务被重复入队。
@@ -447,7 +456,7 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 }
 ```
 
-> 激活码一次性、短 TTL（默认 15 分钟）、服务端只存 `activation_token_hash`。安装命令中的 `get.mesh.internal` 为占位分发地址，部署时替换为实际内网 / 公网分发端点。
+> 激活码一次性、短 TTL（默认 15 分钟）、服务端只存 `activation_token_hash`。安装命令中的 `get.mesh.internal` 为占位分发地址，部署时替换为实际内网 / 公网分发端点。**安装脚本分发必须提供完整性校验（SHA-256 checksum 或 GPG 签名），安装命令中应包含校验步骤，防止中间人篡改分发内容。**
 
 **取消执行**：
 
@@ -474,7 +483,9 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 | POST | `/api/v1/daemon/executions/{id}/checkouts` | 上报 checkout / diff 结果 |
 | POST | `/api/v1/daemon/executions/{id}:renew-lease` | 租约续期 |
 
-> 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配，且仅允许操作本 runtime 与其领取的执行。
+> 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。
+>
+> **【安全红线 — 工作区隔离】claim 端点必须从 `runtimes.workspace_id`（服务端记录，非客户端入参）读取工作区归属，claim SQL 强制 `task_executions.workspace_id = runtimes.workspace_id` 等值过滤（见 §2.5），杜绝跨租户领取。心跳 `inflight` 上报的执行 ID 列表同样按归属校验：任何不属于该 runtime 所属 workspace 的 execution_id 一律拒绝并记录审计告警。**
 
 **激活**：
 
@@ -623,7 +634,7 @@ SQLAlchemy 2.x 落地：用 `select(...).with_for_update(skip_locked=True).order
 ### 3.5 鉴权与分页
 
 - 控制台 API：用户 Bearer token（会话 / JWT），按 workspace + 角色鉴权。
-- 机器 API：runtime Bearer token（`api_tokens.scope='runtime'`，只存哈希），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作本 runtime 与其领取的执行。
+- 机器 API：runtime Bearer token（`api_tokens.scope='runtime'`，只存哈希），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
 - 分页：`GET /api/v1/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
 
 ### 3.6 WebSocket 事件清单（`/ws`，`<entity>.<action>`，带 seq）
@@ -847,6 +858,8 @@ stateDiagram-v2
 - [ ] 日志按行 / 块上报带单调 `offset`；前端实时滚动；断线凭最后 offset 无缝续传，不丢不重。
 - [ ] checkout 为每任务创建专属工作分支 `agent/<execution-id>`，多任务并行不互相污染；结束产出差异（diff）回报，工作目录超期回收。
 - [ ] 凭证仅在 claim 响应一次性下发；`execution_credentials` 记录注入审计；UI 凭证标签值恒为 `***`。
+- [ ] **跨 workspace 领取不可能发生**：claim SQL 强制 `workspace_id = :runtime_workspace_id`（从 runtime 记录服务端读取）；有回归测试覆盖「工作区 A 的 runtime 无法领取工作区 B 的在队任务」；心跳 `inflight` 上报按归属校验，非本 workspace 的 execution_id 被拒绝并审计告警。
+- [ ] **仓库 checkout 白名单**：`task_spec.repo.url` 必须在 workspace 级 `allowed_repos` 白名单内，不在白名单返回 `403`；`repo_token` 凭证按仓库最小化签发。
 - [ ] 状态机按 4.7 实现；`requeued` 携带 `retry_count`，超过 `max_retries` 转 `failed`；非法迁移返回 `409`/`422`。
 - [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封；机器 API token 越权访问其它 runtime 返回 `403`。
 
@@ -857,6 +870,8 @@ stateDiagram-v2
 - [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；日志全链路脱敏，命中即 `***`；短期凭证执行结束即失效。
 - [ ] **日志时延**：日志尾部增量从守护进程产生到前端可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 offset 补发不丢不重；封口段落对象存储读取续传 P95 ≤ 1s。
 - [ ] **沙箱隔离**：每任务独立容器 / 命名空间，cgroup CPU / 内存 / 磁盘 / 时长配额；单任务 OOM 被终止标 `failed(sandbox/oom)`，同机其它任务与宿主机不受影响；非特权用户运行，不挂宿主机 root。
+- [ ] **沙箱出站默认 deny**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）；被注入任务无法将凭证经外联外泄或扫描内网。
+- [ ] **daemon token 与任务沙箱隔离（红线）**：`runtime_token` 仅存于 daemon 受信进程的环境 / 内存中，任务沙箱无法读取 daemon 的 env / 进程内存 / 控制套接字；`max_concurrent>1` 时恶意任务窃取 daemon token 的攻击路径不存在；此约束写入部署规范文档。
 - [ ] **无永久卡死**：任何任务最终都到达终态（completed/failed/timeout/cancelled），无状态永久悬而未决（租约 + 看门狗 + reaper 共同保证）。
 - [ ] **队列背压可观测**：队列深度、负载、心跳新鲜度在列表 / 详情实时可见；`queue.depth_changed` 事件推送。
 - [ ] **限流与退避**：机器 API 与控制台 API 接入限流，超限返回 `429` 带 `Retry-After`。
