@@ -118,7 +118,7 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 | visibility | varchar(16) | NOT NULL DEFAULT `'workspace'`, CHECK IN (`'workspace'`,`'private'`) | 可见性级别 |
 | system_instructions | text | NULL | 系统指令（岗位说明书） |
 | model_config | jsonb | NOT NULL DEFAULT `'{}'::jsonb` | 模型与推理参数（结构见 2.4） |
-| default_runtime_id | uuid | NULL | 默认运行时；**复合 FK `(workspace_id, default_runtime_id) → runtimes(workspace_id, id)` ON DELETE SET NULL**（README §6.2） |
+| default_runtime_id | uuid | NULL | 默认运行时；**复合 FK `(workspace_id, default_runtime_id) → runtimes(workspace_id, id) ON DELETE SET NULL (default_runtime_id)`**（PG16 列级，仅置空引用列、`workspace_id` 保持不动，README §6.2 第 6 条） |
 | trigger_on_assign | boolean | NOT NULL DEFAULT true | 被分派 issue 时是否自动触发运行 `[Mesh 特色]` |
 | active_config_version_id | uuid | NULL, FK `agent_config_versions(id)` | 当前生效配置版本指针（见 2.7） |
 | created_at | timestamptz | NOT NULL DEFAULT `now()` | |
@@ -175,9 +175,9 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 
 > **agent 与技能、工具的绑定与授权唯一权威定义在 skill.md**（四层解耦：定义—版本—安装—绑定；绑定携带具体 `skill_version_id`，支持灰度/回滚）。本模块**不重复建表**（R1/MES-2 必修-3：`agent_skill_bindings`、`agent_tool_bindings`、`tools` 表已全部删除）：
 > - 技能绑定 = skill.md 的 `agent_skills`（经 `skill_installations` 引用版本）；
-> - **工具权限并入 skill 的能力语义**：工具由技能声明（`required_capabilities`），安装时按最小权限授予（`granted_capabilities`），**权限分级（`read_only`/`write`/`confirm_required`）作为能力条目上的 `permission` 字段表达**（见 skill.md），高风险能力默认 `confirm_required`，执行时经统一 `approvals` 闸门（README §6.10）；
-> - `GET/POST/DELETE /agents/{id}/skills`、`/agents/{id}/tools` 等端点操作的均为 skill.md 的安装/绑定/授权实体（薄封装，不新增数据模型）；
-> - 入队时绑定版本与授权清单冻结进 `task_executions.config_snapshot`（`skill_versions` + `tool_grants`，README §6.11）。
+> - **工具权限并入 skill 的能力语义**：工具由技能声明（`required_capabilities`），安装时按最小权限授予（`skill_installations.granted_capabilities`），**权限分级（`read_only`/`write`/`confirm_required`）作为能力条目上的 `permission` 字段表达**（见 skill.md），**不存在独立的工具目录主键（`tools`/`agent_tool_bindings` 表已删除，无工具主键可冻结）**；高风险能力默认 `confirm_required`，执行时经统一 `approvals` 闸门（README §6.10）；
+> - `GET/POST/DELETE /agents/{id}/skills`、`/agents/{id}/tools` 等端点操作的均为 skill.md 的安装/绑定/授权实体（薄封装，不新增数据模型）；其中 `/agents/{id}/tools` 系列端点操作的为 `skill_installations.granted_capabilities` 的**能力条目**（`capability` key + `permission` 的薄封装，**无工具主键**）；
+> - 入队时绑定版本与授权清单冻结进 `task_executions.config_snapshot`（`skill_versions` + `capability_grants`，README §6.11）。
 
 ### 2.7 `agent_config_versions` — 配置版本快照（审计 / 回滚）
 
@@ -302,10 +302,10 @@ erDiagram
 | POST | `/api/v1/agents/{id}/skills` | 绑定技能（批量） |
 | DELETE | `/api/v1/agents/{id}/skills/{skill_id}` | 解绑技能 |
 | PATCH | `/api/v1/agents/{id}/skills/{skill_id}` | 启用 / 停用单项 |
-| GET | `/api/v1/agents/{id}/tools` | 列出绑定工具 |
-| POST | `/api/v1/agents/{id}/tools` | 绑定工具（带 permission） |
-| DELETE | `/api/v1/agents/{id}/tools/{tool_id}` | 解绑工具 |
-| PATCH | `/api/v1/agents/{id}/tools/{tool_id}` | 改权限 / 启停单项 |
+| GET | `/api/v1/agents/{id}/tools` | 列出绑定的能力条目（`skill_installations.granted_capabilities`，capability key + permission，**无工具主键**） |
+| POST | `/api/v1/agents/{id}/tools` | 绑定能力条目（`{"capability": "<key>", "permission": "..."}`，带 permission） |
+| DELETE | `/api/v1/agents/{id}/tools/{capability_key}` | 解绑该能力条目 |
+| PATCH | `/api/v1/agents/{id}/tools/{capability_key}` | 改该 capability 条目的 permission / 启停 |
 | GET | `/api/v1/agents/{id}/config-versions` | 配置版本历史 |
 | POST | `/api/v1/agents/{id}/config-versions/{version_id}:rollback` | 回滚到指定版本 |
 | GET | `/api/v1/agents/{id}/executions` | 该 agent 的运行历史（只读，源自 runtime 模块） |
@@ -336,9 +336,9 @@ erDiagram
   "default_runtime_id": "8b2c1f0e-4a7d-4c9b-9e1a-2f3b4c5d6e7f",
   "trigger_on_assign": true,
   "skill_ids": ["s-uuid-1", "s-uuid-2"],
-  "tools": [
-    { "tool_id": "t-uuid-exec", "permission": "confirm_required" },
-    { "tool_id": "t-uuid-read", "permission": "read_only" }
+  "capabilities": [
+    { "capability": "exec:shell", "permission": "confirm_required" },
+    { "capability": "read:code", "permission": "read_only" }
   ]
 }
 ```
@@ -403,10 +403,10 @@ erDiagram
 
 响应 `200 OK` 返回新的 `active_config_version_id` 与生效配置；`change_summary` 由服务端自动生成。配置变更对进行中运行不生效，对后续运行生效。
 
-**绑定工具 — `POST /api/v1/agents/{id}/tools`**
+**绑定能力条目 — `POST /api/v1/agents/{id}/tools`**（`/tools` 为 `granted_capabilities` 能力条目的薄封装，无工具主键）
 
 ```json
-{ "tools": [ { "tool_id": "t-uuid-web", "permission": "read_only" } ] }
+{ "capabilities": [ { "capability": "net:fetch", "permission": "read_only" } ] }
 ```
 
 **生命周期 — `POST /api/v1/agents/{id}:pause`**
@@ -430,8 +430,8 @@ erDiagram
   1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
   3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
-  4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、tool grants、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
-  5. 创建 `task_executions`（`status='queued'`，`agent_id`、`label_requirements` 取自 agent 绑定；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
+  4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（capability key + permission 的能力授权清单，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
+  5. 创建 `task_executions`（`status='queued'`，`agent_id`；写入权威 **`label_requirements`** 与 **`required_capabilities`**——后者取自绑定技能声明的 runtime 能力需求，为 claim 时与服务端 runtime 能力匹配的权威字段，README §6.4；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
   6. 发出 `execution.queued` 事件（outbox → `realtime_events`，README §6.7）。
 
 > 幂等键 + 状态机校验保证同一逻辑触发不会重复入队；领取原子性与跨租户安全见 runtime.md §2.5。
@@ -470,14 +470,14 @@ erDiagram
 | `workspace:{ws}:agents` | `agent.created` / `agent.updated` / `agent.deleted` | 列表与候选实时刷新 |
 | `workspace:{ws}:agents` | `agent.lifecycle_changed` | 暂停 / 停用 / 归档 / 恢复，含前后状态 |
 | `agent:{id}:presence` | `agent.presence` | 容量三元组「运行中 N / 排队 M / 需审批 K」（README §6.12，由 `task_executions` 聚合 + `approvals` 计数推导） |
-| `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致），卡片忙碌指示与进度条 |
+| `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.awaiting_approval` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致，均取自 README §6.7 注册表），卡片忙碌指示与进度条 |
 | `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 因 paused/disabled 未触发 |
 | `workspace:{ws}:approvals` / `execution:{id}` | `approval.created` / `approval.decided` | 高风险工具需人工确认——**统一 `approvals` 实体**（README §6.10），带内联批准 / 拒绝与过期时间 |
 
 帧示例：
 
 ```json
-{ "seq": 48213, "channel": "issue:{id}:runs", "event": "agent.run_started",
+{ "seq": 48213, "channel": "issue:{id}:runs", "event": "execution.started",
   "data": { "agent_id": "a1b2...0001", "execution_id": "e-uuid", "issue_id": "i-uuid", "started_at": "2026-07-24T12:00:05Z" } }
 ```
 
@@ -671,15 +671,17 @@ stateDiagram-v2
 
 ### 4.10 通知与人类监督
 
-通知（进收件箱，可按类型开关，含「agent 运行通知」总开关）：
+通知（进收件箱，可按类型开关，含「agent 运行通知」总开关）。**事件分级以 README §6.13 唯一通知优先级矩阵为准，本表为其 agent 视角摘录**——是否进收件箱、是否穿透 quiet hours、是否重置未读，一律以 §6.13 矩阵为唯一依据：
 
-| 事件 | 通知对象 | 渠道 |
-|------|----------|------|
-| 我分派的 issue 由 agent 完成 / 失败 | 分派者 / 订阅者 | 站内 + 可选邮件 |
-| 我 `@` 触发的 agent 运行结束 | 触发者 | 站内 |
-| 我创建 / 拥有的 agent 被停用 / 归档 / 转移 | 所有者 | 站内 |
-| agent 运行需要人工确认（高风险工具）`[Mesh 特色]` | 分派者 / 所有者 | 站内（critical 级，进「待我审批」统一入口，README §6.10） |
-| agent 长时间无心跳 / 运行卡死 | 所有者 / 管理员 | 站内 |
+| 事件 | priority | 通知对象 | 渠道 |
+|------|----------|----------|------|
+| 我分派的 issue 由 agent **完成（成功）** | normal | 分派者 / 订阅者 | 默认留运行页 / 时间线，**不进收件箱**；仅当在 `notification_preferences` 显式订阅「执行结果」后进收件箱；**不穿透 quiet hours、不重置未读** |
+| 我分派的 issue 由 agent **失败 / 超时** | critical | 分派者 / 订阅者 | 进收件箱 + **穿透 quiet hours + 重置未读**，站内 + 实时邮件 |
+| 我 `@` 触发的 agent 运行**成功**结束 | normal | 触发者 | 默认不进收件箱（留运行页；仅订阅后入箱，不穿透、不重置未读） |
+| 我 `@` 触发的 agent 运行**失败 / 超时** | critical | 触发者 | 进收件箱 + 穿透 quiet hours + 重置未读，站内 |
+| 我创建 / 拥有的 agent 被停用 / 归档 / 转移 | normal | 所有者 | 站内 |
+| agent 运行需要人工确认（高风险工具）`[Mesh 特色]` | critical | 分派者 / 所有者 | 站内（进「待我审批」统一入口，穿透 quiet hours + 重置未读，README §6.10） |
+| agent 长时间无心跳 / 运行卡死 | critical | 所有者 / 管理员 | 站内 |
 
 人类干预矩阵（自主性以「人类随时可踩刹车」为前提）：
 1. **暂停一个正在工作的 agent**：选 `cancel_current` 立即取消在途执行（runtime 无 pause/resume 执行态，README §6.4），或 `finish_current` 让它跑完手头执行再停（见 §3.2 修订说明）。
@@ -700,7 +702,7 @@ stateDiagram-v2
 - [ ] agent 发评论 / 改状态以自身 `member_id` 署名，时间线显示为 agent 身份且带 AI 徽章。
 - [ ] 模型与推理参数保存前完成范围校验（temperature ∈ [0,2]、top_p ∈ [0,1]、max_tokens ≥ 1），越界返回 `422`。
 - [ ] 每次 `PATCH /config` 生成新的不可变 `agent_config_versions` 快照并更新 `active_config_version_id`；可列出历史、对比、回滚。
-- [ ] 技能 / 工具可逐项启停；绑定与授权全部走 skill.md（`agent_skills`/`skill_installations`/`granted_capabilities`，不重复建表；`agent_skill_bindings`/`agent_tool_bindings`/`tools` 已删除）；高风险工具能力默认 `permission='confirm_required'`，执行时经统一 `approvals`（README §6.10）；入队快照含绑定版本与授权清单（README §6.11）。
+- [ ] 技能 / 工具可逐项启停；绑定与授权全部走 skill.md（`agent_skills`/`skill_installations`/`granted_capabilities`，不重复建表；`agent_skill_bindings`/`agent_tool_bindings`/`tools` 已删除）；**工具权限统一为 capability 条目语义**（`{"capability": "<key>", "permission": "read_only|write|confirm_required"}`，**无工具主键**），`/agents/{id}/tools` 系列端点为 `skill_installations.granted_capabilities` 能力条目的薄封装（README §6.11）；高风险能力默认 `permission='confirm_required'`，执行时经统一 `approvals`（README §6.10）；入队快照含绑定版本与 `capability_grants` 授权清单（README §6.11）。
 - [ ] 可见性 `workspace`/`private` 生效：private agent 非所有者 / 非 admin 不可见、不可触发。
 - [ ] 生命周期状态机按 4.8 实现；非法迁移返回 `409`；`disable` 时 `members.status` 联动置 `disabled`。
 - [ ] 软删除置 `deleted_at` 后从所有列表 / 候选隐藏；历史评论以「已停用 agent」占位渲染，外键不报错。
@@ -709,11 +711,13 @@ stateDiagram-v2
 - [ ] **@提及触发**：评论 @agent 与分派共用同一 `enqueue_agent_run` 入口。
 - [ ] **触发语义符合 README §6.9 矩阵（可逐行测试）**：再选同一 assignee = no-op；无字段变化的保存 = no-op；同评论重复 @ = 仅一次执行；编辑评论仅为新增提及入队、无关文字修改不重复触发；新评论再次 @ 运行中的 agent = 新执行（频率护栏兜底）；替换分派取消前任在途执行（`superseded`）。
 - [ ] **入队经 transactional outbox**（README §6.6）：业务提交与事件入队同事务，kill relay 后重启不丢触发（集成测试 T5）。
-- [ ] **入队快照**（README §6.11）：`task_executions.config_snapshot` 冻结 agent_config_version、skill 版本、tool grants、repo/base SHA、trigger_event_id；配置变更不影响在途执行。
+- [ ] **入队快照**（README §6.11）：`task_executions.config_snapshot` 冻结 agent_config_version、skill 版本、`capability_grants`（capability key + permission，**无工具主键**）、repo/base SHA、trigger_event_id；配置变更不影响在途执行。
+- [ ] **入队写权威能力需求**（README §6.4）：创建 `task_executions` 时写入权威 `label_requirements` 与 `required_capabilities`（取自绑定技能声明的 runtime 能力需求），claim 时以 `e.required_capabilities <@ runtimes.capabilities` 做服务端能力匹配。
 - [ ] **暂停 / 停用拦截**：agent 处于 paused/disabled 时分派 / @ 不触发运行，发 `agent.trigger_skipped` 并提示。
 - [ ] **运行状态回流**：运行开始 / 进行 / 完成 / 失败实时回写 issue（卡片忙碌指示、进度、评论），agent 接单自动置「进行中」、产出置「待评审」。
 - [ ] 全场景 AI 徽章不可关闭：列表、卡片、评论、@候选、分派选择器均显示；@候选提示为「**发布后将触发一次运行**」，提交前有 trigger preview 与显式抑制开关（README §6.9）。
-- [ ] 高风险工具执行前创建统一 `approvals` 审批（README §6.10），执行进入 `awaiting_approval`；批准后续跑、拒绝/过期转 `cancelled`；「待我审批」入口聚合展示动作/权限/影响范围/成本/过期时间。
+- [ ] 高风险能力（`confirm_required`）执行前创建统一 `approvals` 审批（README §6.10 唯一协议）：执行进入 `awaiting_approval` 时**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量幂等释放**（无在途租约，reaper 无需特殊处理）；批准后执行回 `queued`，下一次领取建 attempt #N+1，凭审批请求时冻结的 `resume_context`（检查点引用 + 已完成步骤水位 + 待执行工具调用参数）**从审批点续跑**；拒绝/过期转 `cancelled`；「待我审批」入口聚合展示动作/权限（capability + permission）/影响范围/成本/过期时间。
+- [ ] **实时事件词汇（README §6.7 注册表）**：本 Spec 所有 WebSocket 帧示例与事件表统一使用注册表内事件名——运行状态回流为 `execution.*`（`queued`/`started`/`progress`/`awaiting_approval`/`completed`/`failed`），agent 域为 `agent.*`，审批为 `approval.created`/`approval.decided`；**帧示例与事件表已统一为 `execution.*`，无任何未登记的运行起始事件名**。
 - [ ] agent 容量呈现为「运行中 N / 排队 M / 需审批 K」（README §6.12），非二元空闲/处理中。
 - [ ] 跨模块外键按 README §6.2 建复合 FK（`agents(workspace_id,id)` UNIQUE 等），跨租户引用被数据库拒绝（集成测试 T1）。
 

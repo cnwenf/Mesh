@@ -189,7 +189,7 @@ workspaces ──1:N──► custom_field_defs ──1:N──► custom_field_
 | `value_text` | TEXT | NULL | text / textarea / url |
 | `value_number` | NUMERIC | NULL | number |
 | `value_date` | TIMESTAMPTZ | NULL | date / datetime |
-| `value_member_id` | UUID | NULL,**复合 FK** `(workspace_id, value_member_id)→members(workspace_id, id)` ON DELETE SET NULL | member(人或 agent) |
+| `value_member_id` | UUID | NULL,**复合 FK** `(workspace_id, value_member_id)→members(workspace_id, id)` **ON DELETE SET NULL (value_member_id)**(PG16 列级,仅置空引用列,`workspace_id` 保持非空,README §6.2 第 6 条) | member(人或 agent) |
 | `value_boolean` | BOOLEAN | NULL | boolean |
 | `value_json` | JSONB | NULL | single_select(option_id)/ multi_select(option_id 数组)/ 其它结构化值 |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT `now()` | |
@@ -338,7 +338,7 @@ class IssueCustomFieldValue(Base):
         ForeignKeyConstraint(["workspace_id", "field_def_id"],
                              ["custom_field_defs.workspace_id", "custom_field_defs.id"], ondelete="CASCADE"),
         ForeignKeyConstraint(["workspace_id", "value_member_id"],
-                             ["members.workspace_id", "members.id"], ondelete="SET NULL"),
+                             ["members.workspace_id", "members.id"], ondelete="SET NULL (value_member_id)"),  # PG16 列级:仅置空引用列(README §6.2 第 6 条)
     )
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True,
                                           server_default=text("gen_random_uuid()"))
@@ -393,15 +393,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 ```jsonc
 // Request
 { "name": "bug", "color": "#e5484d", "project_id": null }
-// 201 Response
-{ "id": "lbl_1", "name": "bug", "color": "#e5484d", "description": null,
-  "project_id": null, "scope": "workspace", "created_at": "2026-07-24T10:00:00Z" }
+// 201 Response(成功包络 README §6.14)
+{ "data": { "id": "lbl_1", "name": "bug", "color": "#e5484d", "description": null,
+  "project_id": null, "scope": "workspace", "created_at": "2026-07-24T10:00:00Z" } }
 ```
 
 **合并标签** `POST /api/v1/labels/lbl_defect/merge`
 ```jsonc
 { "target_label_id": "lbl_bug" }
-// 200:{ "merged_issue_count": 12, "target_label": { "id": "lbl_bug", "name": "bug" } }
+// 200:{ "data": { "merged_issue_count": 12, "target_label": { "id": "lbl_bug", "name": "bug" } } }
 // 源标签 lbl_defect 删除,其 issue 改挂 lbl_bug(去重)
 ```
 
@@ -412,7 +412,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
   "options": [ { "name": "Minor", "color": "#888888" },
                { "name": "Major", "color": "#f5a623" },
                { "name": "Critical", "color": "#e5484d" } ] }
-// 201 Response —— 返回字段定义,options 各带生成的 id
+// 201 Response —— 返回字段定义(成功包络 {"data": {...}},README §6.14),options 各带生成的 id
 ```
 
 **给 issue 设置字段值** `PUT /api/v1/issues/{id}/custom-field-values`
@@ -421,12 +421,12 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 { "values": [
   { "field_def_id": "cf_sev", "value_json": "opt_major" },
   { "field_def_id": "cf_users", "value_number": 1500 } ] }
-// 200 Response —— 返回该 issue 全部字段值(含字段定义快照)
+// 200 Response —— 返回该 issue 全部字段值(成功包络 {"data": [...]},含字段定义快照,README §6.14)
 ```
 
 **给 issue 打标签** `POST /api/v1/issues/{id}/labels/lbl_1`
 ```jsonc
-// 200:{ "labels": [ { "id": "lbl_1", "name": "bug", "color": "#e5484d" } ] }
+// 200:{ "data": { "labels": [ { "id": "lbl_1", "name": "bug", "color": "#e5484d" } ] } }
 ```
 
 **按标签/字段筛选 issue**(走 issue.md 列表 / kanban.md 视图执行):
@@ -571,6 +571,7 @@ Issue 详情侧栏
 - [ ] 删除字段级联清值与选项;`num_nonnulls(...) <= 1` 兜底无跨类型脏值。
 - [ ] 字段值可作为视图筛选/分组/排序依据:枚举命中 `idx_icfv_value_json`(GIN `(field_def_id, value_json)`)、数值/日期/成员命中 `(field_def_id, value_*)` 复合部分索引;在 kanban.md 视图执行中返回正确分组/排序。
 - [ ] **跨租户隔离(README §9 T1)**:`issue_custom_field_values` 复合 FK 拒绝跨 workspace 引用(给 A 区 issue 写 B 区 field_def 或 member 值在 INSERT 被拒)。
+- [ ] **真实 DELETE 行为(README §9 T18)**:物理删除被 member 类型字段值引用的成员行时,`value_member_id` 经 `ON DELETE SET NULL (value_member_id)` 仅置空引用列,`workspace_id` 保持非空、行不报错。
 
 ### 5.3 实时一致性验收
 
