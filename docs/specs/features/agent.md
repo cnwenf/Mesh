@@ -1,20 +1,23 @@
 # Agent（Agent 管理）功能 Spec
 
 > 所属层：AI 队友与智能体编排（AI Agent Core）
-> 依赖 Spec：`member`（统一成员名册）、`auth`（鉴权 / API token）、`runtime`（运行时）、`skill`（技能 / 工具）、`issue`（看板 / 分派）、`comment-inbox`（评论 / 收件箱）
+> 依赖 Spec：`member`（统一成员名册）、`auth`（鉴权 / API token）、`runtime`（运行时）、`skills`（技能 / 工具）、`issue`（看板 / 分派）、`comment-inbox`（评论 / 收件箱）
 > 被依赖：`issue`（分派即触发）、`comment-inbox`（@提及触发）、`squad`（智能体小队）、`autopilot`（定时 / 事件自动化）
 > 技术栈基准：Python 异步 Web 框架（FastAPI）+ SQLAlchemy 2.x（`DeclarativeBase` / `Mapped` / `mapped_column`）+ PostgreSQL + WebSocket
-> 文档性质：可直接指导开发的实现规格。所有命名、约束、端点、事件均以此为准则；与全局约定冲突时以《全局一致性锚点》为准。
+> 文档性质：可直接指导开发的实现规格。所有命名、约束、端点、事件均以此为准则；与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
 
 ---
 
-## 全局一致性锚点（本 Spec 一律遵循）
+## 全局一致性锚点（一律引用 README §6，本 Spec 不重复定义）
 
-1. **存储**：PostgreSQL；表名 snake_case 复数；主键 `UUID`（`gen_random_uuid()`）；所有表含 `created_at` / `updated_at`（`TIMESTAMPTZ`，默认 `now()`，UTC）；软删除统一 `deleted_at TIMESTAMPTZ NULL`。
-2. **成员**：统一 `members` 名册（`member_type = 'human' | 'agent'`）；`issue.assignee_id`、`comment.author_id`、提及目标一律引用 `members.id`。
-3. **接口**：基础路径 `/api/v1`；`Authorization: Bearer <token>`；游标分页响应 `{"data": [...], "next_cursor": <opaque|null>}`；统一错误信封 `{"error": {"code","message","details"}}`；供 runtime / CLI 使用的 API token 只存哈希、显式 scope。
-4. **实时**：单一 WebSocket 端点 `/ws`，按频道订阅，事件携带单调递增 `seq` 支持断线重放；日志 / 长任务进度可降级 SSE；事件名 `<entity>.<action>`。
-5. **ORM**：SQLAlchemy 2.x 约定（类型注解映射、`select()` 查询、异步会话）。
+1. **存储**：PostgreSQL 16+；表名 snake_case 复数；主键 `UUID`（`gen_random_uuid()`）；所有表含 `created_at` / `updated_at`（`TIMESTAMPTZ`，默认 `now()`，UTC）；软删除统一 `deleted_at TIMESTAMPTZ NULL`。
+2. **成员**：**成员模型以 README §6.1 为唯一权威**——统一 `members` 名册（`member_type = 'human' | 'agent'`，多态外键 `members.user_id` / `members.agent_id`）；`issue.assignee_id`、`comment.author_id`、提及目标一律引用 `members.id`。**本 Spec owns `agents` 表；`agents` 不设 `member_id` 列，关联方向为 `members.agent_id → agents.id`**（`users.member_id UNIQUE` 这类 1:1 反向关联被明确禁止，因其不支持同一 user 加入多个 workspace）。
+3. **多租户**：跨模块外键一律按 README §6.2 建复合 FK + 目标表 `UNIQUE(workspace_id, id)`。
+4. **接口**：基础路径 `/api/v1`；包络 / 分页 / 错误信封 / 过滤限制见 README §6.14；供 runtime / CLI 使用的 API token 只存哈希、显式 scope（auth.md）。
+5. **实时**：统一实时契约见 README §6.7（频道内 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`）；流式输出见 README §6.8；事件名 `<entity>.<action>`。
+6. **队列 / 投递**：transactional outbox（README §6.6）、at-least-once + 幂等键（§6.5）、execution/attempt 分层（§6.4）、入队快照（§6.11）。
+7. **审批**：高风险工具确认统一走 `approvals` 实体（README §6.10）。
+8. **ORM**：SQLAlchemy 2.x 约定（类型注解映射、`select()` 查询、异步会话）。
 
 ---
 
@@ -60,7 +63,7 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 **本模块不负责（非目标）：**
 - 人类成员的认证、邮箱、邀请流程（属 `member` / `auth` 模块，本模块只复用 `members` 名册）；
 - 任务的实际领取、沙箱、日志、凭证注入（属 `runtime` 模块，本模块只投递 `task_executions`）；
-- 技能 / 工具的定义与实现（属 `skill` 模块，本模块只做绑定与授权）；
+- 技能 / 工具的定义与实现（属 `skills` 模块，本模块只做绑定与授权）；
 - issue 的字段、看板泳道、状态机定义（属 `issue` / `kanban`，本模块只在被分派时订阅其事件）；
 - 模型注册表与底层模型供应商接入细节（统一以「主流大语言模型」抽象，具体接入属平台基础设施，不在本 Spec 范围）。
 
@@ -72,76 +75,66 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 
 ## 2. 数据模型
 
-### 2.0 关键设计决策：统一名册 + 类表继承
+### 2.0 关键设计决策：统一名册 + 多态外键（权威模型见 README §6.1）
 
-采用 **「统一 `members` 名册 + `users` / `agents` 子表」的类表继承（class-table inheritance）**：`members` 是「workspace 内的一个身份」，`member_type` 决定其专有属性挂在 `users` 还是 `agents`；子表通过 `member_id` 1:1 反向关联回 `members`。所有协作实体（issue 负责人、评论作者、提及对象）外键统一指向 `members.id`，从根本上支撑「agent 与人类同为一等成员」。
+采用 **「统一 `members` 名册 + 多态外键 `user_id`/`agent_id`」模型**（member.md owns `members` 表，README §6.1 为唯一权威）：`members` 是「workspace 内的一个身份」，`member_type` 判别其指向 `users`（人类登录身份，auth.md owns）还是 `agents`（AI 身份，本模块 owns）。关联方向永远是 **`members.user_id → users.id`** / **`members.agent_id → agents.id`**；**`users` 与 `agents` 均不设 `member_id` 反向列**——原「类表继承（`users.member_id UNIQUE`）」方案会使同一人类用户无法加入多个 workspace，已废弃。所有协作实体（issue 负责人、评论作者、提及对象）外键统一指向 `members.id`，从根本上支撑「agent 与人类同为一等成员」。
 
-> 与 `member` 模块共建：`members` / `users` 表由 `member` 模块定义并owns 其迁移；本模块 owns `agents` 及其绑定 / 版本表。两模块共享同一 `members.member_type` 判别器（`'human' | 'agent'`）与 `members.id` 统一引用键，禁止任何引用点私自带 `(id, type)` 多态二元组。
+> 与 `member` 模块共建：`members` 表由 `member` 模块 owns 其迁移；`users` 由 auth.md owns；本模块 owns `agents` 及其绑定 / 版本表。共享同一 `members.member_type` 判别器（`'human' | 'agent'`）与 `members.id` 统一引用键，**禁止任何引用点私自带 `(id, type)` 多态二元组**（README §6.1「类型冗余」规则：存储层不得有 `*_type`/`*_kind` 判别列，API 响应中的 `member_type` 为服务端计算快照）。
 
-### 2.1 `members` — 统一成员名册（身份层，与 member 模块共建）
+### 2.1 `members` — 统一成员名册（member.md owns，此处仅列本模块消费字段）
 
-| 字段 | 类型 | 约束 / 默认 | 说明 |
-|------|------|-------------|------|
-| id | uuid | PK, default `gen_random_uuid()` | 成员唯一身份（统一引用键） |
-| workspace_id | uuid | NOT NULL, FK `workspaces(id)` ON DELETE CASCADE | 所属 workspace |
-| member_type | varchar(16) | NOT NULL, CHECK IN (`'human'`,`'agent'`) | 成员类型判别器 |
-| display_name | varchar(120) | NOT NULL | 显示名（允许重名） |
-| avatar_url | text | NULL | 头像 URL |
-| role_tag | varchar(64) | NULL | 角色标签（如「测试工程师」），用于列表辨识与筛选 |
-| role | varchar(16) | NOT NULL DEFAULT `'member'`, CHECK IN (`'owner'`,`'admin'`,`'member'`,`'guest'`) | 工作区级角色（沿用 member 模块） |
-| status | varchar(16) | NOT NULL DEFAULT `'active'`, CHECK IN (`'active'`,`'disabled'`,`'removed'`) | 名册状态（与 member 模块一致） |
-| created_by | uuid | NULL, FK `members(id)` | 创建 / 邀请者成员 id |
-| created_at | timestamptz | NOT NULL DEFAULT `now()` | |
-| updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
-| deleted_at | timestamptz | NULL | 软删除 |
+> 表结构、约束、索引的**唯一权威定义在 member.md §2.2 与 README §6.1**。本模块仅消费以下字段，不重复建表、不改写约束：
 
-约束 / 索引：
-- `CHECK (member_type = 'human' OR role <> 'owner')` —— agent 不得担任 owner。
-- 子表关联：`member_type='human'` 对应一行 `users.member_id`；`member_type='agent'` 对应一行 `agents.member_id`（均 UNIQUE）。
-- `idx_members_ws_type_status`：`(workspace_id, member_type, status)` WHERE `deleted_at IS NULL` —— 支撑成员列表 / @候选 / 分派候选主查询。
-- `idx_members_ws_name`：`(workspace_id, lower(display_name))` —— 加速搜索（不做名称强唯一）。
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | uuid | 成员唯一身份（统一引用键） |
+| workspace_id | uuid | 所属 workspace |
+| member_type | varchar(16) | `'human'` / `'agent'` 判别器 |
+| agent_id | uuid NULL | `member_type='agent'` 时 FK→`agents(id)`，与 `user_id` 恰好一个非空（CHECK 见 member.md） |
+| role | varchar(16) | 工作区级角色；`CHECK (member_type='human' OR role <> 'owner')` |
+| status | varchar(16) | 名册状态 `active/disabled/removed` |
+| display_override | text NULL | 工作区内显示名覆盖 |
 
-### 2.2 `users` — 人类账号子表（节选，由 member / auth 模块 owns）
+显示名解析顺序（README §6.1）：`members.display_override`（非空）→ agent：`agents.name`；人类：`users.display_name` → `users.full_name`。
 
-| 字段 | 类型 | 约束 / 默认 | 说明 |
-|------|------|-------------|------|
-| id | uuid | PK | 人类账号 id |
-| member_id | uuid | NOT NULL UNIQUE, FK `members(id)` ON DELETE CASCADE | 对应成员身份（1:1） |
-| email | citext | NOT NULL UNIQUE | 登录邮箱 |
-| auth_provider | varchar(32) | NOT NULL DEFAULT `'password'` | 认证方式 |
-| created_at / updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
+### 2.2 `users` — 人类账号（auth.md owns，此处仅说明关联方式）
 
-> 人类成员 = `members` 一行 + `users` 一行；认证、邮箱等人类专有属性放这里，不污染统一身份层。
+> 权威定义在 auth.md §2.2。`users` 是**全局登录身份**（跨工作区），**不含 `member_id` 列**；与名册的关联经 `members.user_id → users.id`（一个 user 可在多个工作区各有一条 `members` 行）。本模块创建 agent 成员时不写 `users`。
 
 ### 2.3 `agents` — agent 专有配置表（本模块 owns）
 
 | 字段 | 类型 | 约束 / 默认 | 说明 |
 |------|------|-------------|------|
 | id | uuid | PK, default `gen_random_uuid()` | agent id |
-| member_id | uuid | NOT NULL UNIQUE, FK `members(id)` ON DELETE CASCADE | 对应统一成员身份（1:1） |
+| workspace_id | uuid | NOT NULL, FK `workspaces(id)` ON DELETE CASCADE | 归属工作区（agent 为工作区级实体） |
+| name | varchar(120) | NOT NULL | 显示名（名册显示名解析的 agent 分支，README §6.1） |
+| avatar_url | text | NULL | 头像 URL |
+| role_tag | varchar(64) | NULL | 角色标签（如「测试工程师」），用于列表辨识与筛选 |
 | owner_user_id | uuid | NOT NULL, FK `users(id)` | 创建者 / 所有者（人类） |
 | slug | varchar(64) | NULL | 可选短标识，用于提及简写 |
 | bio | text | NULL | 个人简介（markdown） |
 | badge_kind | varchar(32) | NOT NULL DEFAULT `'ai'` | AI 身份徽章类型（渲染区分用，不可置空隐藏） |
-| lifecycle_status | varchar(16) | NOT NULL DEFAULT `'active'`, CHECK IN (`'active'`,`'paused'`,`'disabled'`,`'archived'`) | 生命周期状态（见 5.2） |
+| lifecycle_status | varchar(16) | NOT NULL DEFAULT `'active'`, CHECK IN (`'active'`,`'paused'`,`'disabled'`,`'archived'`) | 生命周期状态（见 4.8） |
 | visibility | varchar(16) | NOT NULL DEFAULT `'workspace'`, CHECK IN (`'workspace'`,`'private'`) | 可见性级别 |
 | system_instructions | text | NULL | 系统指令（岗位说明书） |
 | model_config | jsonb | NOT NULL DEFAULT `'{}'::jsonb` | 模型与推理参数（结构见 2.4） |
-| default_runtime_id | uuid | NULL, FK `runtimes(id)` ON DELETE SET NULL | 默认运行时（被分派后在此执行；跨模块外键 → runtime） |
+| default_runtime_id | uuid | NULL | 默认运行时；**复合 FK `(workspace_id, default_runtime_id) → runtimes(workspace_id, id)` ON DELETE SET NULL**（README §6.2） |
 | trigger_on_assign | boolean | NOT NULL DEFAULT true | 被分派 issue 时是否自动触发运行 `[Mesh 特色]` |
 | active_config_version_id | uuid | NULL, FK `agent_config_versions(id)` | 当前生效配置版本指针（见 2.7） |
 | created_at | timestamptz | NOT NULL DEFAULT `now()` | |
 | updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
 | deleted_at | timestamptz | NULL | 软删除 |
 
-> `members.status`（名册级 `active/disabled/removed`）与 `agents.lifecycle_status`（agent 级 `active/paused/disabled/archived`）是两个正交维度：前者管「是否还在名册里」，后者管「agent 运营状态」。停用 agent 时两者联动（见 5.2）。
+> **入册关联**：agent 进入某工作区名册 = 插入一行 `members(member_type='agent', agent_id=本行 id, workspace_id=同工作区)`（member.md owns 该流程）。**agent 仅可加入其 `workspace_id` 所属工作区的名册**（`members.agent_id` 的复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` 强制，README §6.2）；跨工作区共享 agent 不在本期范围（YAGNI）。
+>
+> `members.status`（名册级 `active/disabled/removed`）与 `agents.lifecycle_status`（agent 级 `active/paused/disabled/archived`）是两个正交维度：前者管「是否还在名册里」，后者管「agent 运营状态」。停用 agent 时两者联动（见 4.8）。
 
-索引：
+约束 / 索引：
+- `UNIQUE (workspace_id, id)` —— 供引用方复合 FK（README §6.2）。
 - `idx_agents_owner`：`(owner_user_id)` —— 「我创建的 agent」。
-- `idx_agents_lifecycle`：`(lifecycle_status)` WHERE `deleted_at IS NULL`。
-- `idx_agents_visibility`：`(visibility)` —— 可见性过滤。
+- `idx_agents_lifecycle`：`(workspace_id, lifecycle_status)` WHERE `deleted_at IS NULL`。
+- `idx_agents_visibility`：`(workspace_id, visibility)` —— 可见性过滤。
 - `idx_agents_default_runtime`：`(default_runtime_id)` —— runtime 删除前检查引用。
-- `member_id` 已 UNIQUE，关联查询走主键。
 
 ### 2.4 `model_config` JSONB 结构（模型与推理参数）
 
@@ -178,36 +171,13 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 - 按需对特定键建表达式 GIN 索引（如统计某档位 agent 数）：`CREATE INDEX idx_agents_model_tier ON agents USING gin ((model_config->'model_tier'))`。
 - 重大变更同步写入 `agent_config_versions` 快照（2.7），实现可回滚（immutable，不原地改写历史快照）。
 
-### 2.5 `agent_skill_bindings` — agent ↔ 技能绑定
+### 2.5 agent ↔ 技能 / 工具绑定（skill.md owns，本 Spec 仅引用）
 
-| 字段 | 类型 | 约束 / 默认 | 说明 |
-|------|------|-------------|------|
-| id | uuid | PK | |
-| agent_id | uuid | NOT NULL, FK `agents(id)` ON DELETE CASCADE | |
-| skill_id | uuid | NOT NULL, FK `skills(id)` ON DELETE CASCADE | 绑定的技能（跨模块外键 → skill） |
-| enabled | boolean | NOT NULL DEFAULT true | 单项启用开关 |
-| created_at | timestamptz | NOT NULL DEFAULT `now()` | |
-| updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
-
-约束 / 索引：
-- `UNIQUE (agent_id, skill_id)` —— 防重复绑定。
-- `idx_skill_bindings_agent`：`(agent_id)` WHERE `enabled = true` —— 取某 agent 的可用技能。
-
-### 2.6 `agent_tool_bindings` — agent ↔ 工具绑定（带权限）
-
-| 字段 | 类型 | 约束 / 默认 | 说明 |
-|------|------|-------------|------|
-| id | uuid | PK | |
-| agent_id | uuid | NOT NULL, FK `agents(id)` ON DELETE CASCADE | |
-| tool_id | uuid | NOT NULL, FK `tools(id)` ON DELETE CASCADE | 绑定的工具（跨模块外键 → skill / tool） |
-| permission | varchar(16) | NOT NULL DEFAULT `'confirm_required'`, CHECK IN (`'read_only'`,`'write'`,`'confirm_required'`) | 权限级别，高风险默认需人工确认 `[Mesh 特色]` |
-| enabled | boolean | NOT NULL DEFAULT true | |
-| created_at | timestamptz | NOT NULL DEFAULT `now()` | |
-| updated_at | timestamptz | NOT NULL DEFAULT `now()` | |
-
-约束 / 索引：
-- `UNIQUE (agent_id, tool_id)`。
-- `idx_tool_bindings_agent`：`(agent_id)` WHERE `enabled = true`。
+> **agent 与技能、工具的绑定与授权唯一权威定义在 skill.md**（四层解耦：定义—版本—安装—绑定；绑定携带具体 `skill_version_id`，支持灰度/回滚）。本模块**不重复建表**（R1/MES-2 必修-3：`agent_skill_bindings`、`agent_tool_bindings`、`tools` 表已全部删除）：
+> - 技能绑定 = skill.md 的 `agent_skills`（经 `skill_installations` 引用版本）；
+> - **工具权限并入 skill 的能力语义**：工具由技能声明（`required_capabilities`），安装时按最小权限授予（`granted_capabilities`），**权限分级（`read_only`/`write`/`confirm_required`）作为能力条目上的 `permission` 字段表达**（见 skill.md），高风险能力默认 `confirm_required`，执行时经统一 `approvals` 闸门（README §6.10）；
+> - `GET/POST/DELETE /agents/{id}/skills`、`/agents/{id}/tools` 等端点操作的均为 skill.md 的安装/绑定/授权实体（薄封装，不新增数据模型）；
+> - 入队时绑定版本与授权清单冻结进 `task_executions.config_snapshot`（`skill_versions` + `tool_grants`，README §6.11）。
 
 ### 2.7 `agent_config_versions` — 配置版本快照（审计 / 回滚）
 
@@ -228,31 +198,31 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 ```mermaid
 erDiagram
     workspaces ||--o{ members : "has"
-    members ||--o| users : "member_type=human"
-    members ||--o| agents : "member_type=agent"
+    users ||--o{ members : "member_type=human (members.user_id)"
+    agents ||--o{ members : "member_type=agent (members.agent_id)"
     users ||--o{ agents : "owns"
-    agents ||--o{ agent_skill_bindings : "has"
-    agents ||--o{ agent_tool_bindings : "has"
     agents ||--o{ agent_config_versions : "has"
-    skills ||--o{ agent_skill_bindings : "bound"
-    tools ||--o{ agent_tool_bindings : "bound"
+    agents ||--o{ agent_skills : "bound (skill.md owns, 含工具能力授权)"
     runtimes ||--o{ agents : "default_runtime"
     members ||--o{ issues : "assignee_id (统一负责人)"
     members ||--o{ comments : "author_id (统一作者)"
     agents ||--o{ task_executions : "执行者 (runtime 模块)"
+    task_executions ||--o{ approvals : "高风险工具审批 (README 6.10)"
 
     members {
         uuid id PK
         uuid workspace_id FK
         varchar member_type "human|agent"
-        varchar display_name
+        uuid user_id FK "NULL, 多态"
+        uuid agent_id FK "NULL, 多态"
         varchar role
         varchar status
-        timestamptz deleted_at
+        text display_override
     }
     agents {
         uuid id PK
-        uuid member_id FK "UNIQUE"
+        uuid workspace_id FK
+        varchar name
         uuid owner_user_id FK
         varchar lifecycle_status
         varchar visibility
@@ -262,17 +232,11 @@ erDiagram
         boolean trigger_on_assign
         uuid active_config_version_id FK
     }
-    agent_skill_bindings {
+    agent_skills {
         uuid id PK
-        uuid agent_id FK
-        uuid skill_id FK
-        boolean enabled
-    }
-    agent_tool_bindings {
-        uuid id PK
-        uuid agent_id FK
-        uuid tool_id FK
-        varchar permission
+        uuid agent_id FK "skill.md owns"
+        uuid skill_installation_id FK
+        uuid skill_version_id FK "入队时冻结进快照"
         boolean enabled
     }
     agent_config_versions {
@@ -283,11 +247,12 @@ erDiagram
     }
 ```
 
-跨模块外键与唯一约束要点：
-- `agents.member_id` UNIQUE → 一个成员身份至多对应一个 agent（1:1）。
-- `agent_skill_bindings.UNIQUE(agent_id, skill_id)`、`agent_tool_bindings.UNIQUE(agent_id, tool_id)`。
-- `issues.assignee_id` / `comments.author_id` / 提及目标 → `members.id`，并冗余 `assignee_type` / `author_type`（`'human'|'agent'`）以便无 join 渲染 AI 徽章。
+跨模块外键与唯一约束要点（同租户约束一律按 README §6.2）：
+- `members.agent_id` 复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)` → 一个工作区名册条目至多对应一个 agent；`agents.UNIQUE(workspace_id, id)` 供引用。
+- agent ↔ 技能 / 工具绑定与授权见 skill.md `agent_skills` / `skill_installations`（唯一权威，本模块不重复建表；`agent_tool_bindings`/`tools` 表已删除，工具权限并入 `granted_capabilities` 语义）。
+- `issues.assignee_id` / `comments.author_id` / 提及目标 → `members.id`（复合 FK `(workspace_id, …) → members(workspace_id, id)`）；**不冗余 `assignee_type`/`author_type` 存储列**——AI 徽章渲染所需的 `member_type` 由 API 响应携带服务端计算快照（README §6.1）。
 - `task_executions.agent_id` → `agents.id`（runtime 模块 owns，本模块只读引用以展示运行历史）。
+- 运行中高风险工具确认创建 `approvals` 行（README §6.10），执行进入 `awaiting_approval`（README §6.4）。
 
 ---
 
@@ -450,23 +415,26 @@ erDiagram
 { "reason": "临时维护", "in_flight_policy": "finish_current" }
 ```
 
-`in_flight_policy` 取值 `finish_current`（让进行中任务跑完）/ `pause_now`（一并暂停）。响应返回最新 `lifecycle_status` 与被影响的运行数。非法状态迁移返回 `409 conflict`。
+`in_flight_policy` 取值 `finish_current`（让进行中任务跑完）/ **`cancel_current`（取消在途执行）**。响应返回最新 `lifecycle_status` 与被影响的运行数。非法状态迁移返回 `409 conflict`。
+
+> **R1 修订（A7）**：原 `pause_now`（"冻结运行、稍后恢复"）**已废弃**。runtime 的执行状态机（README §6.4）**不含 pause/resume 执行态**，"冻结并可恢复单次执行"无法实现，故不保留该承诺：`cancel_current` 即对 agent 所有 `queued/claimed/running` 执行发起取消（`failure_reason='agent_paused'`，走 runtime.md 两段式取消）；`finish_current` 等在途执行自然终态。paused 期间不入队新执行；resume 回 active 后由新触发重新入队。
 
 **软删除 — `DELETE /api/v1/agents/{id}`** → `204 No Content`；后续列表中不再出现，历史评论以「已停用 agent」占位渲染。
 
-### 3.3 分派即触发的内部接口（事件驱动，非公开 REST）
+### 3.3 分派即触发的内部契约（outbox 驱动，非公开 REST）
 
-「分派即触发」不通过新增公开 REST，而是订阅 `issue` 模块的领域事件并入队执行，与 `@提及` 共用同一执行入口：
+「分派即触发」不通过新增公开 REST，而是经 **transactional outbox**（README §6.6）消费领域事件并入队执行，与 `@提及`、autopilot 共用同一执行入口。**触发语义的唯一权威为 README §6.9 触发矩阵**（再选同一 assignee = no-op；字段无变化的保存 = no-op；编辑评论新增/移除 @ 的触发规则；运行中在新评论再次 @ = 新排队、由频率护栏兜底——不允许"合并或排队"之类不可开发不可测试的表述）。
 
-- 订阅事件：`issue.assigned`（assignee 为 agent 且 `trigger_on_assign=true`）、`comment.created`（正文提及某 agent）。
-- 处理器 `enqueue_agent_run(agent_id, issue_id, trigger)`：
+- 事件来源：`issue.assigned`（assignee 为 agent 且 `trigger_on_assign=true`）、`comment.created` / `comment.updated`（评论模块按 §6.9 对提及集合 diff 后产生 `mention.added` 派生事件）。**业务写库与 outbox 事件在同一事务提交**，杜绝"业务已提交但任务未入队"的永久丢失。
+- 处理器 `enqueue_agent_run(agent_id, issue_id, trigger, trigger_event_id)`（由 outbox relay 调用）：
   1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
-  2. 去重 / 防抖（见 5.1 A4）：以 `(agent_id, issue_id)` 为键，若已有 `queued/claimed/running` 的执行则按策略合并或排队；
-  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_seq)`；
-  4. 调用 runtime 模块创建 `task_executions`（`status='queued'`，`agent_id`、`label_requirements` 取自 agent 绑定）；
-  5. 发出 `agent.run_enqueued` 事件。
+  2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
+  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
+  4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、tool grants、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
+  5. 创建 `task_executions`（`status='queued'`，`agent_id`、`label_requirements` 取自 agent 绑定；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
+  6. 发出 `execution.queued` 事件（outbox → `realtime_events`，README §6.7）。
 
-> 幂等键 + 状态机校验保证同一逻辑触发不会重复入队（详见 runtime Spec 的 claim 原子性）。
+> 幂等键 + 状态机校验保证同一逻辑触发不会重复入队；领取原子性与跨租户安全见 runtime.md §2.5。
 
 ### 3.4 错误码体系
 
@@ -493,18 +461,18 @@ erDiagram
   - 触发（分派 / @）：与可见性一致；`private` agent 仅所有者可触发。
   - 转移所有权：仅当前所有者或 admin。
 
-### 3.6 WebSocket 事件（`/ws`，`<entity>.<action>`，带 seq 重放）
+### 3.6 WebSocket 事件（统一实时契约，README §6.7）
 
-客户端连 `/ws` 后订阅频道，每个事件含全局单调 `seq`，断线重连时带 `?since_seq=N` 补发。
+客户端连 `/ws` 后订阅频道；每条事件带**频道内**单调 `seq`（持久化于 `realtime_events`），断线重连带 `resume_from=<last_seq+1>` 补发，游标过旧收 `resync_required`（README §6.7）。
 
 | 频道 | 事件 | 说明 |
 |------|------|------|
 | `workspace:{ws}:agents` | `agent.created` / `agent.updated` / `agent.deleted` | 列表与候选实时刷新 |
 | `workspace:{ws}:agents` | `agent.lifecycle_changed` | 暂停 / 停用 / 归档 / 恢复，含前后状态 |
-| `agent:{id}:presence` | `agent.presence` | 空闲 / 处理中（由 runtime 心跳与运行状态推导） |
-| `issue:{id}:runs` | `agent.run_enqueued` / `agent.run_started` / `agent.run_progress` / `agent.run_completed` / `agent.run_failed` | 运行状态回流，卡片忙碌指示与进度条 |
+| `agent:{id}:presence` | `agent.presence` | 容量三元组「运行中 N / 排队 M / 需审批 K」（README §6.12，由 `task_executions` 聚合 + `approvals` 计数推导） |
+| `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致），卡片忙碌指示与进度条 |
 | `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 因 paused/disabled 未触发 |
-| `agent:{id}:confirm` | `agent.confirm_requested` | 高风险工具需人工确认（带内联批准 / 拒绝） |
+| `workspace:{ws}:approvals` / `execution:{id}` | `approval.created` / `approval.decided` | 高风险工具需人工确认——**统一 `approvals` 实体**（README §6.10），带内联批准 / 拒绝与过期时间 |
 
 帧示例：
 
@@ -519,19 +487,19 @@ erDiagram
 
 ### 4.1 信息架构
 
-agent 管理有两个入口：
+> 全局导航 / 面包屑 / 角色可见性矩阵以 **README §6.12** 为权威。agent 在导航中**只有一个名册入口（成员页）**；Settings 不再维护重复的 agent 名册列表。
 
 ```
-设置 Settings
-└── Agents
-    ├── 列表页（筛选 / 搜索 / 新建）
-    └── 详情页
+成员 Members（人与 agent 统一名册 —— agent 的唯一名册入口）
+    └── agent 行 → agent 详情页
         ├── Tab：概览 Profile
         ├── Tab：配置 Configuration（模型 + 指令 + 参数）
         ├── Tab：技能与工具 Skills & Tools
         ├── Tab：可见性与权限 Visibility & Access
         └── Tab：历史 History（配置版本 / 审计）
-成员 Members（人与 agent 统一名册）
+设置 Settings（admin+）
+└── Agents 策略（仅工作区级：默认 runtime、触发护栏、审批策略；不重复罗列 agent 名册）
+自动化 → Agents 运行视图（全员可见的运行与结果，渐进披露）
 ```
 
 ### 4.2 Agent 列表页
@@ -642,8 +610,8 @@ agent 管理有两个入口：
 
 - 卡片：负责人位显示 agent 头像（右下 AI 角标），处理中加动态指示（脉冲 / 进度）。
 - 评论：agent 评论恒带 `[AI]` 标签与徽章，署名是 agent 自身；产物（报告 / 补丁）作为附件挂在该评论下。
-- `@` 候选弹层：agent 项带 AI 图标 + 副文案「提及将触发一次运行」，避免误触发。
-- 分派人选择器：人与 agent 分组或加图标区分；选中 agent 时浮出提示「分派后它将自动开始工作」。
+- `@` 候选弹层：agent 项带 AI 图标 + 副文案「**发布后将触发一次运行**」（不得写"选中将立即触发"——触发发生在评论提交后，README §6.9）；composer 提交前展示 **trigger preview**（将被触发的 agent 清单）并提供「本次不触发」抑制开关（`suppress_triggers: true`，README §6.9）。
+- 分派人选择器：人与 agent 分组或加图标区分；选中 agent 时浮出提示「**保存后将自动开始工作**」；再次选择同一 assignee 为 no-op（README §6.9）。
 
 ### 4.7 关键交互流程：创建 → 配置 → 分派 → 观察自动工作
 
@@ -695,7 +663,7 @@ stateDiagram-v2
 
 ### 4.9 实时性方案
 
-- **在线 / 忙碌状态**：agent 的「空闲 / 处理中」由 runtime 心跳与运行状态推导，经 `agent:{id}:presence` 频道推送；列表与卡片上的指示点即时变化（脉冲动画表示处理中）。
+- **在线 / 容量状态**：agent 呈现从二元「空闲 / 处理中」改为 **「运行中 N / 排队 M / 需审批 K」**（README §6.12），由 `task_executions` 按 agent 聚合 + `approvals` 计数推导，经 `agent:{id}:presence` 频道推送；列表与卡片上的指示即时变化（处理中辅以脉冲动画，但**动画/颜色不作为唯一状态信号**，恒有文字/图标，README §6.12）。
 - **运行进度**：每次运行有独立事件流，把「开始 / 阶段进展 / 完成 / 失败」推给订阅了该 issue 或该 agent 的客户端，卡片与详情页实时刷新。
 - **配置 / 状态变更**：agent 的生命周期与配置变更经 workspace 级频道广播，多端同步。
 - **降级**：`/ws` 断线时回退到带 `updated_at` 的轮询（如每 5s 拉一次相关 agent 的轻量状态），重连后凭 `since_seq` 增量补齐。
@@ -710,15 +678,15 @@ stateDiagram-v2
 | 我分派的 issue 由 agent 完成 / 失败 | 分派者 / 订阅者 | 站内 + 可选邮件 |
 | 我 `@` 触发的 agent 运行结束 | 触发者 | 站内 |
 | 我创建 / 拥有的 agent 被停用 / 归档 / 转移 | 所有者 | 站内 |
-| agent 运行需要人工确认（高风险工具）`[Mesh 特色]` | 分派者 / 所有者 | 站内（强提醒，带内联批准 / 拒绝） |
+| agent 运行需要人工确认（高风险工具）`[Mesh 特色]` | 分派者 / 所有者 | 站内（critical 级，进「待我审批」统一入口，README §6.10） |
 | agent 长时间无心跳 / 运行卡死 | 所有者 / 管理员 | 站内 |
 
 人类干预矩阵（自主性以「人类随时可踩刹车」为前提）：
-1. **暂停一个正在工作的 agent**：选 `pause_now` 立即冻结当前运行，或 `finish_current` 让它跑完手头这步再停。
+1. **暂停一个正在工作的 agent**：选 `cancel_current` 立即取消在途执行（runtime 无 pause/resume 执行态，README §6.4），或 `finish_current` 让它跑完手头执行再停（见 §3.2 修订说明）。
 2. **取消单次运行**：在 issue 的运行进度条上「停止本次运行」，不影响 agent 整体生命周期。
 3. **复核产出**：agent 完成后 issue 置「待评审」，产物以评论附件呈现；人类可批准（转「完成」）、打回（评论补充意见，重新 `@` 或再次分派触发返工）。
-4. **高风险操作闸门**：绑定为 `confirm_required` 的工具在执行前发「需人工确认」通知，批准后才继续——写操作 / 外部调用的默认护栏。
-5. **配置回滚**：发现行为异常可回滚到上一个配置版本，快速止损。
+4. **高风险操作闸门**：绑定为 `confirm_required` 的工具在执行前创建统一 `approvals` 审批（README §6.10），执行进入 `awaiting_approval`，批准后才继续、拒绝/过期则取消——写操作 / 外部调用的默认护栏；三套审批（工具 / squad 计划 / autopilot 动作）统一进入「待我审批」入口。
+5. **配置回滚**：发现行为异常可回滚到上一个配置版本，快速止损（在途执行不受影响，快照已冻结，README §6.11）。
 6. **审计可追溯**：所有配置变更、生命周期操作、绑定变更留有版本与操作者记录。
 
 ---
@@ -727,23 +695,27 @@ stateDiagram-v2
 
 ### 5.1 功能验收
 
-- [ ] 创建 agent 在同一事务写入 `members`（`member_type='agent'`）+ `agents` + 绑定 + 首个配置版本，缺一即整体回滚。
+- [ ] 创建 agent 在同一事务写入 `agents` + `members`（`member_type='agent'`，`agent_id` 指向上行）+ 绑定 + 首个配置版本，缺一即整体回滚；`agents` 不含 `member_id` 列（关联方向为 `members.agent_id → agents.id`，README §6.1）。
 - [ ] `members.id` 是 issue 负责人 / 评论作者 / @提及的唯一引用键；agent 与人类在同一候选集中可被分派与提及。
 - [ ] agent 发评论 / 改状态以自身 `member_id` 署名，时间线显示为 agent 身份且带 AI 徽章。
 - [ ] 模型与推理参数保存前完成范围校验（temperature ∈ [0,2]、top_p ∈ [0,1]、max_tokens ≥ 1），越界返回 `422`。
 - [ ] 每次 `PATCH /config` 生成新的不可变 `agent_config_versions` 快照并更新 `active_config_version_id`；可列出历史、对比、回滚。
-- [ ] 技能 / 工具可逐项启停；工具默认 `permission='confirm_required'`；`UNIQUE(agent_id, skill_id/tool_id)` 阻止重复绑定。
+- [ ] 技能 / 工具可逐项启停；绑定与授权全部走 skill.md（`agent_skills`/`skill_installations`/`granted_capabilities`，不重复建表；`agent_skill_bindings`/`agent_tool_bindings`/`tools` 已删除）；高风险工具能力默认 `permission='confirm_required'`，执行时经统一 `approvals`（README §6.10）；入队快照含绑定版本与授权清单（README §6.11）。
 - [ ] 可见性 `workspace`/`private` 生效：private agent 非所有者 / 非 admin 不可见、不可触发。
 - [ ] 生命周期状态机按 4.8 实现；非法迁移返回 `409`；`disable` 时 `members.status` 联动置 `disabled`。
 - [ ] 软删除置 `deleted_at` 后从所有列表 / 候选隐藏；历史评论以「已停用 agent」占位渲染，外键不报错。
 - [ ] 所有权转移仅所有者 / admin 可操作；转移后 `owner_user_id` 更新并发 `agent.updated`。
 - [ ] **分派即触发**：把 agent 设为 issue 负责人发出 `issue.assigned` → 自动入队一次运行，无需人工点「开始」；`trigger_on_assign=false` 时不触发。
 - [ ] **@提及触发**：评论 @agent 与分派共用同一 `enqueue_agent_run` 入口。
-- [ ] **触发去重 / 防抖**：同一 `(agent_id, issue_id)` 已有 `queued/claimed/running` 执行时按策略合并 / 排队，不重复入队（幂等键兜底）。
+- [ ] **触发语义符合 README §6.9 矩阵（可逐行测试）**：再选同一 assignee = no-op；无字段变化的保存 = no-op；同评论重复 @ = 仅一次执行；编辑评论仅为新增提及入队、无关文字修改不重复触发；新评论再次 @ 运行中的 agent = 新执行（频率护栏兜底）；替换分派取消前任在途执行（`superseded`）。
+- [ ] **入队经 transactional outbox**（README §6.6）：业务提交与事件入队同事务，kill relay 后重启不丢触发（集成测试 T5）。
+- [ ] **入队快照**（README §6.11）：`task_executions.config_snapshot` 冻结 agent_config_version、skill 版本、tool grants、repo/base SHA、trigger_event_id；配置变更不影响在途执行。
 - [ ] **暂停 / 停用拦截**：agent 处于 paused/disabled 时分派 / @ 不触发运行，发 `agent.trigger_skipped` 并提示。
 - [ ] **运行状态回流**：运行开始 / 进行 / 完成 / 失败实时回写 issue（卡片忙碌指示、进度、评论），agent 接单自动置「进行中」、产出置「待评审」。
-- [ ] 全场景 AI 徽章不可关闭：列表、卡片、评论、@候选、分派选择器均显示；@候选与分派选择器带「将触发一次运行」提示。
-- [ ] 高风险工具执行前发「需人工确认」通知，批准后才继续；拒绝则中止该工具调用。
+- [ ] 全场景 AI 徽章不可关闭：列表、卡片、评论、@候选、分派选择器均显示；@候选提示为「**发布后将触发一次运行**」，提交前有 trigger preview 与显式抑制开关（README §6.9）。
+- [ ] 高风险工具执行前创建统一 `approvals` 审批（README §6.10），执行进入 `awaiting_approval`；批准后续跑、拒绝/过期转 `cancelled`；「待我审批」入口聚合展示动作/权限/影响范围/成本/过期时间。
+- [ ] agent 容量呈现为「运行中 N / 排队 M / 需审批 K」（README §6.12），非二元空闲/处理中。
+- [ ] 跨模块外键按 README §6.2 建复合 FK（`agents(workspace_id,id)` UNIQUE 等），跨租户引用被数据库拒绝（集成测试 T1）。
 
 ### 5.2 非功能验收
 

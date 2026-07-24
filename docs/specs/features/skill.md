@@ -2,13 +2,27 @@
 
 > **所属层**:智能体编排层(为 agent 注入领域知识 / SOP / 可复用工作流的"可安装结构化指令包")。
 > **依赖的其他 Spec**:
-> - `workspace.md`:`skill.workspace_id` / `skill_source.workspace_id` 外键回 `workspaces.id`,资源以 workspace 为隔离边界。
+> - `workspace.md`:`skills.workspace_id` / `skill_sources.workspace_id` 外键回 `workspaces.id`,资源以 workspace 为隔离边界。
 > - `member.md`:技能创建者、安装者、审批者引用 `members.id`(统一名册);agent 绑定引用 `agents.id`。
 > - `agent.md`:绑定终点是某个 agent 定义(`agents.id`);技能的运行时能力声明对应 agent 的工具/权限配置。
-> - `runtime.md`:技能脚本在受控沙箱内由 agent 运行执行,执行实例为 runtime 的运行记录;越权调用由运行时拦截。
+> - `runtime.md`:技能脚本在受控沙箱内由 agent 运行执行,执行实例为 runtime 的 `task_executions`(README §6.4);越权调用由运行时拦截。
 > - `auth.md`:安装 / 审批 / 绑定类操作的 RBAC 校验、审计、限流;来源凭据存于 secret manager。
 > - `attachment.md`:脚本正文与引用资料以对象存储引用承载(`content_ref`)。
 > **被依赖方**:`agent.md`(agent 的能力 = 运行时 + 已绑定技能集合)、`autopilot.md`(执行 agent 的能力边界受其绑定技能影响)。
+
+---
+
+## 全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)
+
+1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `UUID`(`gen_random_uuid()`);所有表含 `created_at` / `updated_at`(`TIMESTAMPTZ`,默认 `now()`,UTC);软删除统一 `deleted_at TIMESTAMPTZ NULL`;`skill_versions` 为不可变快照(无 `updated_at`)。
+2. **成员**:成员模型以 README §6.1 为唯一权威——技能创建者 / 安装者 / 审批者为人类成员,引用 `members.id`(复合 FK,README §6.1/§6.2);agent 绑定明确指向某 agent 定义,引用 `agents.id`(复合 FK)。**存储层不设任何 `*_type`/`*_kind` 判别列**;人类/agent 判别一律 JOIN `members.member_type`,API 响应可携带服务端计算的 `member_type` 快照(标注"快照,真源为 members")。
+3. **多租户**:跨模块外键一律按 README §6.2 建复合 FK + 目标表 `UNIQUE(workspace_id, id)`。
+4. **接口**:基础路径 `/api/v1`;包络 / 分页 / 错误信封 / 过滤限制见 README §6.14;安装 / 审批 / 绑定类 API token 只存哈希、显式 scope(auth.md)。
+5. **实时**:统一实时契约见 README §6.7(频道内 `seq`、`realtime_events` 持久重放、`resume_from` / `resync_required`);事件名 `<entity>.<action>`。
+6. **队列 / 投递**:导入为长任务,遵循 README §6.4 execution/attempt 分层;入队时按 README §6.11 冻结技能版本快照;脚本越权拦截见 runtime.md。
+7. **ORM**:SQLAlchemy 2.x 约定(类型注解映射、`select()` 查询、异步会话)。
+
+> 本 Spec 的第三方技能脚本/权限审批是**技能导入域内的前置闸门**(以导入任务状态机承载,见 §3.1 `import` / `approve`),与 README §6.10 统一审批实体所聚合的三类运行时审批(tool_call / autopilot_action / squad_plan)语义对齐但**不复用 `approvals` 表**(subject_type 不含技能导入)。
 
 ---
 
@@ -24,14 +38,14 @@
 
 模块的核心设计是 **「定义—版本—安装—绑定」四层解耦**:
 
-- **定义(`skill`)**:逻辑实体,承载名称、摘要、来源、生命周期状态等元信息;
-- **版本(`skill_version`)**:某一时刻的**不可变快照**(指令正文 + 脚本 + 资料),支撑回滚与灰度;
-- **安装(`skill_installation`)**:把某版本引入某作用域(workspace 级 / agent 级)的记录;
-- **绑定(`agent_skill`)**:把已安装技能与具体 agent 关联,使其对该 agent 可用。
+- **定义(`skills`)**:逻辑实体,承载名称、摘要、来源、生命周期状态等元信息;
+- **版本(`skill_versions`)**:某一时刻的**不可变快照**(指令正文 + 脚本 + 资料),支撑回滚与灰度;
+- **安装(`skill_installations`)**:把某版本引入某作用域(workspace 级 / agent 级)的记录;
+- **绑定(`agent_skills`)**:把已安装技能与具体 agent 关联,使其对该 agent 可用。
 
 四层分离使"版本回滚 / 灰度发布 / workspace 共享 / agent 专属"互不干扰。**安全是技能系统的头号约束,必须前置而非补丁**:技能是"可执行的提示词包",一旦放松,等于给 agent 开了不受控的副作用通道。
 
-> **全局名册约定(与 member.md 一致)**:人与 agent 统一登记在 `members` 名册(`member_type ∈ {human, agent}`,`members.id` 为统一引用键)。本 Spec 中:技能创建者 / 安装者 / 审批者为人类成员,引用 `members.id`(`member_type='human'`);agent 绑定明确指向某 agent 定义,引用 `agents.id`。
+> **全局名册约定(以 README §6.1 为唯一权威)**:人与 agent 统一登记在 `members` 名册(`members.id` 为统一引用键,人类/agent 由 `members.member_type` 判别)。本 Spec 中:技能创建者 / 安装者 / 审批者为人类成员,引用 `members.id`(复合 FK);agent 绑定明确指向某 agent 定义,引用 `agents.id`(复合 FK)。**本模块各表不存 `*_type`/`*_kind` 判别列**,类型判别一律 JOIN `members`(见顶部锚点 §2)。
 
 ### 1.2 功能点 + 用户场景表
 
@@ -61,28 +75,28 @@
 
 ## 2. 数据模型
 
-四层关系:**`skill`(定义)→ `skill_version`(版本)→ `skill_installation`(安装)→ `agent_skill`(绑定)**;`skill_source` 描述来源与信任级别;`skill_script` / `skill_reference` / `skill_trigger` 挂靠在版本下。
+四层关系:**`skills`(定义)→ `skill_versions`(版本)→ `skill_installations`(安装)→ `agent_skills`(绑定)**;`skill_sources` 描述来源与信任级别;`skill_scripts` / `skill_references` / `skill_triggers` 挂靠在版本下。
 
 ### 2.1 ER 概览(文字图)
 
 ```
-skill_source(来源/信任级)──1:N──┐
+skill_sources(来源/信任级)──1:N──┐
                                 ▼
-                          skill(定义)──1:N──► skill_version(不可变快照)
-                                                  │  ├─1:N─► skill_script(脚本)
-                                                  │  ├─1:N─► skill_reference(资料)
-                                                  │  └─1:N─► skill_trigger(触发条件)
+                          skill(定义)──1:N──► skill_versions(不可变快照)
+                                                  │  ├─1:N─► skill_scripts(脚本)
+                                                  │  ├─1:N─► skill_references(资料)
+                                                  │  └─1:N─► skill_triggers(触发条件)
                                                   ▼ 1:N
-                                          skill_installation(安装:scope=workspace|agent)
+                                          skill_installations(安装:scope=workspace|agent)
                                                   │ 1:N
                                                   ▼
-workspaces ──隔离──► (以上全部携带 workspace_id)   agent_skill(绑定)──N:1──► agents(agent.md)
+workspaces ──隔离──► (以上全部携带 workspace_id)   agent_skills(绑定)──N:1──► agents(agent.md)
 
-members(member.md):skill.created_by / skill_installation.installed_by / 审批者 → members.id(human)
-agents(agent.md):skill_installation.agent_id / agent_skill.agent_id → agents.id
+members(member.md):skill.created_by / skill_installations.installed_by / 审批者 → members.id(human)
+agents(agent.md):skill_installations.agent_id / agent_skills.agent_id → agents.id
 ```
 
-### 2.2 表:`skill`(技能定义)
+### 2.2 表:`skills`(技能定义)
 
 > SQLAlchemy 2.x 声明式约定;字段名 snake_case;主键 UUID v4。
 
@@ -90,26 +104,29 @@ agents(agent.md):skill_installation.agent_id / agent_skill.agent_id → agents.i
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 所属 workspace(`builtin` 技能归系统 workspace) |
-| `source_id` | UUID | NOT NULL,FK→skill_source(id) | — | 来源 |
+| `source_id` | UUID | NOT NULL,**复合 FK `(workspace_id, source_id) → skill_sources(workspace_id, id)`** | — | 来源(README §6.2) |
 | `name` | TEXT | NOT NULL | — | 显示名 |
 | `slug` | TEXT | NOT NULL,CHECK (`^[a-z0-9][a-z0-9-]*$`) | — | URL / 匹配用短名 |
 | `summary` | TEXT | NOT NULL | — | 一句话摘要(用于发现与匹配) |
 | `status` | TEXT | NOT NULL,CHECK IN ('draft','published','deprecated','disabled') | `'draft'` | 生命周期状态 |
-| `current_version_id` | UUID | NULL,FK→skill_version(id) | NULL | 当前指向版本(NULL=尚无版本) |
+| `current_version_id` | UUID | NULL,FK→skill_versions(id) | NULL | 当前指向版本(NULL=尚无版本);`skill_versions` 经 `skill_id` 隶属同一 workspace(隔离随 skill 传递) |
 | `required_capabilities` | JSONB | NOT NULL | `'[]'` | 所需工具/权限声明数组 |
 | `tags` | TEXT[] | NOT NULL | `'{}'` | 标签,用于发现 |
 | `icon` | TEXT | NULL | NULL | 图标标识 |
-| `created_by` | UUID | NOT NULL,FK→members(id) | — | 创建者(人类成员) |
+| `created_by` | UUID | NOT NULL,**复合 FK `(workspace_id, created_by) → members(workspace_id, id)`** | — | 创建者(人类成员,README §6.1/§6.2) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除 |
 
-### 2.3 表:`skill_version`(版本快照 —— 不可变)
+> **复合 FK 引用前提(README §6.2)**:`skills` 为可被跨表引用的工作区级实体,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**(供 `skill_versions.skill_id`、`skill_installations.skill_id`、`agent_skills`(经安装)等复合引用)。
+
+### 2.3 表:`skill_versions`(版本快照 —— 不可变)
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
-| `skill_id` | UUID | NOT NULL,FK→skill(id) | — | 所属技能 |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 冗余隔离列(与所属 `skills` 同 workspace),供复合 FK 引用(README §6.2) |
+| `skill_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_id) → skill(workspace_id, id)`** | — | 所属技能 |
 | `version` | TEXT | NOT NULL | — | SemVer 字符串,如 `1.2.0` |
 | `instructions` | TEXT | NOT NULL | — | markdown 指令正文 |
 | `status` | TEXT | NOT NULL,CHECK IN ('draft','published','deprecated') | `'draft'` | 版本状态 |
@@ -118,50 +135,58 @@ agents(agent.md):skill_installation.agent_id / agent_skill.agent_id → agents.i
 | `required_capabilities` | JSONB | NOT NULL | `'[]'` | 该版本所需权限(可与定义级不同) |
 | `manifest` | JSONB | NOT NULL | `'{}'` | 解析后的原始清单文件,留档 |
 | `content_hash` | TEXT | NOT NULL | — | 指令正文 + 脚本的内容哈希(去重 / 变更检测) |
-| `created_by` | UUID | NOT NULL,FK→members(id) | — | 创建者 |
+| `created_by` | UUID | NOT NULL,**复合 FK `(workspace_id, created_by) → members(workspace_id, id)`** | — | 创建者(README §6.1/§6.2) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | 创建时间(版本不可变,**无 updated_at**) |
 
 > **不可变约束**:版本一旦 `status='published'` 即冻结,任何修改必须新建版本。`content_hash` 用于检测来源是否真的有变化(避免重复发版)。
+>
+> **复合 FK 引用前提(README §6.2)**:`skill_versions` 被 `skills.current_version_id`、`skill_installations.skill_version_id`、`agent_skills.skill_version_id` 跨表引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
+>
+> **入队版本快照(README §6.11,必须实现)**:技能版本不可变。任务入队时,该 agent 当时绑定的各技能版本被冻结进 `task_executions.config_snapshot.skill_versions`(`{"<skill_id>": "<skill_version_id>", ...}`);**绑定变更、安装版本切换、回滚、灰度都只影响后续入队,不改动在途执行**——在途执行永远运行其入队时刻快照里的版本,保证可复现、可审计。
 
-### 2.4 表:`skill_installation`(安装记录)
+### 2.4 表:`skill_installations`(安装记录)
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 安装到的 workspace |
-| `skill_id` | UUID | NOT NULL,FK→skill(id) | — | 安装的技能 |
-| `skill_version_id` | UUID | NOT NULL,FK→skill_version(id) | — | 当前安装的版本 |
+| `skill_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_id) → skill(workspace_id, id)`** | — | 安装的技能(README §6.2) |
+| `skill_version_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_version_id) → skill_versions(workspace_id, id)`** | — | 当前安装的版本 |
 | `scope` | TEXT | NOT NULL,CHECK IN ('workspace','agent') | `'workspace'` | 安装范围 |
-| `agent_id` | UUID | NULL,FK→agents(id) | NULL | `scope='agent'` 时指定的 agent |
+| `agent_id` | UUID | NULL,**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`** | NULL | `scope='agent'` 时指定的 agent(README §6.2) |
 | `install_status` | TEXT | NOT NULL,CHECK IN ('installed','updated_available','disabled') | `'installed'` | 安装状态 |
 | `auto_update` | BOOLEAN | NOT NULL | `false` | 是否自动跟随新版本(仅跟非破坏性 PATCH) |
 | `granted_capabilities` | JSONB | NOT NULL | `'[]'` | 实际被授予的权限(审批后) |
-| `installed_by` | UUID | NOT NULL,FK→members(id) | — | 安装者 |
+| `installed_by` | UUID | NOT NULL,**复合 FK `(workspace_id, installed_by) → members(workspace_id, id)`** | — | 安装者(README §6.1/§6.2) |
 | `installed_at` | TIMESTAMPTZ | NOT NULL | `now()` | 安装时间 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除(卸载) |
 
-**CHECK(应用层 + 触发器)**:`scope='agent'` 时 `agent_id` 必须非空;`granted_capabilities ⊆ skill_version.required_capabilities`(只授予声明过的权限子集)。
+**CHECK(应用层 + 触发器)**:`scope='agent'` 时 `agent_id` 必须非空;`granted_capabilities ⊆ skill_versions.required_capabilities`(只授予声明过的权限子集)。
 
-### 2.5 表:`agent_skill`(绑定关系)
+> **工具权限语义(MES-2 必修-3:工具权限并入能力语义,不再另设 `tools`/`agent_tool_bindings` 表)**:`required_capabilities`/`granted_capabilities` 数组的每一项既可以是纯字符串能力键(如 `"exec:shell"`),也可以是对象 `{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}`;**工具级权限分级(read_only / write / confirm_required)即在此表达**:未标注 `permission` 的能力默认按 `confirm_required` 处理(高风险默认需人工确认);执行时命中 `confirm_required` 的工具调用经统一 `approvals` 闸门(README §6.10)批准后方可执行。入队时授权清单(含 permission)冻结进 `task_executions.config_snapshot.tool_grants`(README §6.11)。
 
-> 与 `skill_installation` 分开:安装记录"哪些技能进了库",绑定记录"哪些 agent 真正使用"。workspace 级安装的技能可被多个 agent 绑定。
+> **复合 FK 引用前提(README §6.2)**:`skill_installations` 被 `agent_skills.skill_installation_id` 引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
+
+### 2.5 表:`agent_skills`(绑定关系)
+
+> 与 `skill_installations` 分开:安装记录"哪些技能进了库",绑定记录"哪些 agent 真正使用"。workspace 级安装的技能可被多个 agent 绑定。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离 |
-| `agent_id` | UUID | NOT NULL,FK→agents(id) | — | agent |
-| `skill_installation_id` | UUID | NOT NULL,FK→skill_installation(id) | — | 指向安装记录 |
-| `skill_version_id` | UUID | NOT NULL,FK→skill_version(id) | — | 绑定的具体版本(可与安装当前版本不同,支持灰度/回滚) |
+| `agent_id` | UUID | NOT NULL,**复合 FK `(workspace_id, agent_id) → agents(workspace_id, id)`** | — | agent(README §6.2) |
+| `skill_installation_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_installation_id) → skill_installations(workspace_id, id)`** | — | 指向安装记录 |
+| `skill_version_id` | UUID | NOT NULL,**复合 FK `(workspace_id, skill_version_id) → skill_versions(workspace_id, id)`** | — | 绑定的具体版本(可与安装当前版本不同,支持灰度/回滚);**入队时此版本 id 被冻结进 `task_executions.config_snapshot.skill_versions`(README §6.11)** |
 | `enabled` | BOOLEAN | NOT NULL | `true` | 绑定级启用开关 |
 | `auto_trigger` | BOOLEAN | NOT NULL | `true` | 是否允许自动触发 |
 | `priority` | INT | NOT NULL,CHECK (priority BETWEEN 0 AND 1000) | `100` | 自动触发优先级,数值大者优先 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-### 2.6 表:`skill_source`(来源)
+### 2.6 表:`skill_sources`(来源)
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -176,14 +201,16 @@ agents(agent.md):skill_installation.agent_id / agent_skill.agent_id → agents.i
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除 |
 
-### 2.7 表:`skill_script` / `skill_reference` / `skill_trigger`(版本子项)
+> **复合 FK 引用前提(README §6.2)**:`skill_sources` 被 `skill.source_id` 复合引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
 
-**`skill_script`**
+### 2.7 表:`skill_scripts` / `skill_references` / `skill_triggers`(版本子项)
+
+**`skill_scripts`**
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
-| `skill_version_id` | UUID | NOT NULL,FK→skill_version(id) | — | 所属版本 |
+| `skill_version_id` | UUID | NOT NULL,FK→skill_versions(id) | — | 所属版本 |
 | `path` | TEXT | NOT NULL | — | 文件相对路径 |
 | `runtime` | TEXT | NOT NULL | `'shell'` | 运行时:shell / python / … |
 | `entrypoint` | BOOLEAN | NOT NULL | `false` | 是否入口脚本 |
@@ -192,40 +219,48 @@ agents(agent.md):skill_installation.agent_id / agent_skill.agent_id → agents.i
 | `required_capabilities` | JSONB | NOT NULL | `'[]'` | 该脚本申请的权限 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**`skill_reference`**:`id`、`skill_version_id`(FK)、`path`、`media_type`(默认 `'text/markdown'`)、`content_ref`、`summary`(供检索)、`created_at`。
+**`skill_references`**:`id`、`skill_version_id`(FK)、`path`、`media_type`(默认 `'text/markdown'`)、`content_ref`、`summary`(供检索)、`created_at`。
 
-**`skill_trigger`**:`id`、`skill_version_id`(FK)、`trigger_type`(CHECK IN 'keyword','semantic','tag',默认 `'keyword'`)、`pattern`(关键词/标签值/语义描述)、`weight`(NUMERIC(5,2),默认 `1.0`)、`created_at`。
+**`skill_triggers`**:`id`、`skill_version_id`(FK)、`trigger_type`(CHECK IN 'keyword','semantic','tag',默认 `'keyword'`)、`pattern`(关键词/标签值/语义描述)、`weight`(NUMERIC(5,2),默认 `1.0`)、`created_at`。
+
+> **叶表隔离说明**:`skill_scripts` / `skill_references` / `skill_triggers` 为版本下的模块内叶表,仅经 `skill_version_id` 单一父链可达,不被其它模块跨表引用,故无需自身 `workspace_id` 与 `UNIQUE(workspace_id, id)`;其工作区隔离经 `skill_versions → skill` 父链传递(README §6.2 的复合 FK 约束作用于跨模块引用点)。
 
 ### 2.8 索引与约束
 
 ```sql
+-- 复合 FK 引用前提(README §6.2):被跨表引用的工作区级表建 UNIQUE(workspace_id, id)
+ALTER TABLE skills ADD CONSTRAINT uq_skill_ws_id UNIQUE (workspace_id, id);
+ALTER TABLE skill_versions ADD CONSTRAINT uq_skill_version_ws_id UNIQUE (workspace_id, id);
+ALTER TABLE skill_sources ADD CONSTRAINT uq_skill_source_ws_id UNIQUE (workspace_id, id);
+ALTER TABLE skill_installations ADD CONSTRAINT uq_skill_installation_ws_id UNIQUE (workspace_id, id);
+
 -- 同 workspace 内 slug 唯一(软删除范围内)
-CREATE UNIQUE INDEX uq_skill_workspace_slug ON skill(workspace_id, slug) WHERE deleted_at IS NULL;
-CREATE INDEX idx_skill_workspace_status ON skill(workspace_id, status);
-CREATE INDEX idx_skill_source ON skill(source_id);
+CREATE UNIQUE INDEX uq_skill_workspace_slug ON skills(workspace_id, slug) WHERE deleted_at IS NULL;
+CREATE INDEX idx_skill_workspace_status ON skills(workspace_id, status);
+CREATE INDEX idx_skill_sources ON skills(source_id);
 CREATE INDEX idx_skill_tags ON skill USING GIN (tags);
 
 -- 同一技能版本号唯一(不可变快照)
-CREATE UNIQUE INDEX uq_skill_version ON skill_version(skill_id, version);
-CREATE INDEX idx_skill_version_skill ON skill_version(skill_id, created_at DESC);
+CREATE UNIQUE INDEX uq_skill_versions ON skill_versions(skill_id, version);
+CREATE INDEX idx_skill_version_skill ON skill_versions(skill_id, created_at DESC);
 
 -- 同作用域内一个技能只装一次(软删除范围内)
 CREATE UNIQUE INDEX uq_install_scope
-  ON skill_installation(workspace_id, skill_id, scope, agent_id) WHERE deleted_at IS NULL;
-CREATE INDEX idx_install_workspace ON skill_installation(workspace_id, install_status);
-CREATE INDEX idx_install_skill_version ON skill_installation(skill_version_id);
-CREATE INDEX idx_install_updated ON skill_installation(install_status) WHERE install_status = 'updated_available';
+  ON skill_installations(workspace_id, skill_id, scope, agent_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_install_workspace ON skill_installations(workspace_id, install_status);
+CREATE INDEX idx_install_skill_versions ON skill_installations(skill_version_id);
+CREATE INDEX idx_install_updated ON skill_installations(install_status) WHERE install_status = 'updated_available';
 
 -- 一个 agent 对同一安装只绑一次
-CREATE UNIQUE INDEX uq_agent_skill ON agent_skill(agent_id, skill_installation_id);
-CREATE INDEX idx_agent_skill_agent ON agent_skill(agent_id, enabled);
-CREATE INDEX idx_agent_skill_install ON agent_skill(skill_installation_id);
+CREATE UNIQUE INDEX uq_agent_skills ON agent_skills(agent_id, skill_installation_id);
+CREATE INDEX idx_agent_skill_agent ON agent_skills(agent_id, enabled);
+CREATE INDEX idx_agent_skill_install ON agent_skills(skill_installation_id);
 
-CREATE INDEX idx_source_workspace_type ON skill_source(workspace_id, source_type);
-CREATE UNIQUE INDEX uq_script_version_path ON skill_script(skill_version_id, path);
-CREATE INDEX idx_trigger_version ON skill_trigger(skill_version_id);
+CREATE INDEX idx_source_workspace_type ON skill_sources(workspace_id, source_type);
+CREATE UNIQUE INDEX uq_script_version_path ON skill_scripts(skill_version_id, path);
+CREATE INDEX idx_trigger_version ON skill_triggers(skill_version_id);
 -- 关键词匹配可额外建 GIN / 全文索引:
-CREATE INDEX idx_trigger_keyword ON skill_trigger USING GIN (to_tsvector('simple', pattern))
+CREATE INDEX idx_trigger_keyword ON skill_triggers USING GIN (to_tsvector('simple', pattern))
   WHERE trigger_type = 'keyword';
 ```
 
@@ -233,17 +268,18 @@ CREATE INDEX idx_trigger_keyword ON skill_trigger USING GIN (to_tsvector('simple
 
 | 来源(引用方) | 外键 | 目标 | 说明 |
 |----------------|------|------|------|
-| `skill.workspace_id` / `skill_source.workspace_id` / `skill_installation.workspace_id` | → `workspaces.id` | workspace.md | 隔离 |
-| `skill.created_by` / `skill_version.created_by` / `skill_installation.installed_by` | → `members.id` | member.md | 创建/安装/审批者(人类成员) |
-| `skill_installation.agent_id` / `agent_skill.agent_id` | → `agents.id` | agent.md | 明确指向某 agent 定义 |
-| `skill_script.content_ref` / `skill_reference.content_ref` | → 对象存储 | attachment.md | 脚本/资料正文 |
-| `agent_skill`(运行时消费) | — | runtime.md | agent 执行任务时按绑定注入指令正文;脚本越权由运行时拦截 |
+| `skills.workspace_id` / `skill_sources.workspace_id` / `skill_installations.workspace_id` | → `workspaces.id` | workspace.md | 隔离 |
+| `skill.created_by` / `skill_versions.created_by` / `skill_installations.installed_by` | 复合 FK → `members(workspace_id, id)` | member.md | 创建/安装/审批者(人类成员;README §6.1/§6.2) |
+| `skill_installations.agent_id` / `agent_skills.agent_id` | 复合 FK → `agents(workspace_id, id)` | agent.md | 明确指向某 agent 定义(README §6.2) |
+| `skill_sources.id` / `skills.id` / `skill_versions.id` / `skill_installations.id` | 被引用方建 `UNIQUE(workspace_id, id)` | 本模块 | 供上述复合 FK 引用(README §6.2) |
+| `skill_scripts.content_ref` / `skill_references.content_ref` | → 对象存储 | attachment.md | 脚本/资料正文 |
+| `agent_skills.skill_version_id`(入队快照) | → `task_executions.config_snapshot.skill_versions` | runtime.md | 入队时冻结绑定版本(README §6.11);脚本越权由运行时拦截 |
 
 ---
 
 ## 3. 接口设计
 
-REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authorization: Bearer <token>`(见 auth.md);时间一律 RFC3339 UTC。统一错误信封 `{"error":{"code","message","details"}}`;列表游标分页 `{"data":[...],"next_cursor"}`(`next_cursor` 为 null 表示末页);单资源端点直接返回资源对象本体。
+REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authorization: Bearer <token>`(见 auth.md)。**成功包络 / 游标分页 / 错误信封 / 乐观并发 / HTTP 语义 / 幂等写 / 过滤限制一律以 README §6.14 为唯一权威**(单对象 `{"data":{...}}`、列表 `{"data":[...],"next_cursor":<opaque|null>}`,`next_cursor=null` 表示末页;错误 `{"error":{"code","message","details"}}`),本 Spec 不重复定义,仅在下方列出本模块具名错误码。
 
 ### 3.1 REST 端点清单
 
@@ -422,7 +458,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 
 ### 3.5 WebSocket 实时事件
 
-连接 `/ws`(握手鉴权见 auth.md),订阅频道 `workspace:{ws}:skills`。事件命名 `<entity>.<action>`,携带频道内单调递增 `seq`,断线凭 `seq` 重放。
+连接 `/ws`(握手鉴权见 auth.md),订阅频道 `workspace:{ws}:skills`。**实时契约以 README §6.7 为唯一权威**:事件命名 `<entity>.<action>`,携带**频道内**单调递增 `seq`(业务事务内自 `realtime_channels.last_seq` 分配),断线凭 `resume_from=<last_seq+1>` 从 `realtime_events` 重放,游标过旧下发 `resync_required`;Redis 仅做 fan-out。
 
 | 事件 | 触发时机 | payload 关键字段 |
 |------|----------|------------------|
@@ -512,14 +548,17 @@ installed ──卸载──► (deleted_at 置位)
 
 ### 5.1 功能性
 
-- [ ] 「定义—版本—安装—绑定」四层独立建模;版本不可变,`published` 后任何修改必须新建版本(`uq_skill_version` 保证版本号唯一)。
+- [ ] 「定义—版本—安装—绑定」四层独立建模;版本不可变,`published` 后任何修改必须新建版本(`uq_skill_versions` 保证版本号唯一)。
 - [ ] 同 workspace 内 slug 唯一(部分唯一索引),重复创建返回 409 `conflict`。
 - [ ] 导入流程为异步多阶段(解析→校验→沙箱预览→审批→安装),进度可查询;校验失败返回 422 `manifest_invalid`,来源不可达返回 502 `source_unreachable`。
 - [ ] workspace 级安装可被多个 agent 绑定;agent 级安装必须携带 `agent_id`(否则 400);同作用域重复安装返回 409。
-- [ ] 绑定可独立指向某历史版本,支持灰度;一个 agent 对同一安装只绑一次(`uq_agent_skill`)。
+- [ ] 绑定可独立指向某历史版本,支持灰度;一个 agent 对同一安装只绑一次(`uq_agent_skills`)。
 - [ ] 升级默认不自动覆盖,需显式确认;`auto_update=true` 仅跟非破坏性 PATCH;回滚把安装当前版本指针指向任意历史版本,历史版本永不删除。
 - [ ] 自动触发"可解释、可裁剪、可关闭":返回本次注入的技能清单;Top-N 裁剪;绑定级可一键关闭 `auto_trigger`;显式指定技能强制注入。
 - [ ] 三档停用(定义/安装/绑定)为软状态,停用即停止注入,可随时恢复。
+- [ ] **入队版本快照(README §6.11)**:任务入队时把该 agent 当时绑定的技能版本冻结进 `task_executions.config_snapshot.skill_versions`(`{skill_id: skill_version_id}`);入队后变更绑定 / 切换安装版本 / 回滚 / 灰度**均不影响在途执行**,仅对后续入队生效;在途执行恒运行其入队快照里的版本,可复现、可审计。
+- [ ] **多租户复合 FK(README §6.2 / §9 T1)**:`skills` / `skill_versions` / `skill_sources` / `skill_installations` 各建 `UNIQUE(workspace_id, id)`;`created_by`/`installed_by` → `members(workspace_id,id)`、`agent_id` → `agents(workspace_id,id)`、`skill_id`/`source_id`/`skill_version_id`/`skill_installation_id` 均为复合 FK;构造跨 workspace 的复合 FK 插入被数据库约束拒绝(A 区凭证访问 B 区 skill → 403/404)。
+- [ ] **存储层无 `*_type`/`*_kind` 判别列**:人类/agent 判别一律 JOIN `members.member_type`,API 响应中的 `member_type` 为服务端计算快照(README §6.1)。
 
 ### 5.2 性能
 
@@ -532,7 +571,7 @@ installed ──卸载──► (deleted_at 置位)
 - [ ] **来源信任分级**:`builtin > user > marketplace > url`;`marketplace`/`url` 含脚本的技能首次安装**强制人工逐一审阅**脚本与权限,未审批安装返回 422 `approval_required`。
 - [ ] **权限最小化**:`granted_capabilities ⊆ required_capabilities`,授予未声明权限返回 422 `capability_not_declared`;脚本只能拿到被授予的权限。
 - [ ] **沙箱执行边界**:脚本默认无网络、无任意写、无特权;越权调用被运行时拦截并告警(衔接 runtime.md)。
-- [ ] **凭据安全**:`skill_source.auth_ref` 仅存 secret manager 引用键,绝不存明文;响应/日志不回显凭据。
+- [ ] **凭据安全**:`skill_sources.auth_ref` 仅存 secret manager 引用键,绝不存明文;响应/日志不回显凭据。
 - [ ] **一键熔断**:发现风险可立即定义级/安装级/绑定级停用,即时停止注入。
 - [ ] 安装/绑定/权限授予/脚本执行均写 auth.md 的 append-only 审计日志;审批/安装类端点强制角色校验,不足返回 403;写端点受限流约束,超限 429。
 
