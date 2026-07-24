@@ -79,7 +79,7 @@
 | 卡片实时移动 | 他人改状态/拖拽,本地即时反映 | 看到同事把卡片拖进 Done |
 | 字段实时刷新 | 改 assignee/优先级,所有打开该视图者即时看到 | 分派后头像立刻更新 |
 | 新建/删除实时 | 新 issue 出现、删除消失 | 新建卡片即刻出现在 Todo 列 |
-| 协作感知(可选) | `presence` 显示谁也在这个看板上 | 看到谁也在这个看板上 |
+| 协作感知(可选) | `view.presence` 显示谁也在这个看板上 | 看到谁也在这个看板上 |
 
 ### 1.3 边界与非目标
 
@@ -99,13 +99,15 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
                      │
                      ├── owner: members(创建者,复合 FK)
                      ├── 1:N──► board_wip_limits(可选独立表;亦可内嵌 board_settings.wip)
-                     ├── 1:N──► view_subscriptions(在线订阅游标,可选)
                      ├── 1:N──► view_issue_positions(每视图手工排序,见 §2.7)
                      └── 查询期按 filters/group/sort 投影 issues —— 无持久外键,合成结果
                                         │
                                         ▼
                                    issues(见 issue.md;`issues.position` 是规范默认排序,
                                           视图内手工拖拽排序写 view_issue_positions,不写 issues.position)
+
+realtime_channel_cursors(每频道游标,可选,见 §2.6)—— 工作区/成员级,非视图所有:
+   按 (workspace_id, member_id, channel) 记录跨设备断线续传游标;真源为 realtime_events。
 ```
 
 ### 2.2 `views`(保存的视图)
@@ -182,7 +184,7 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
 | `status` | `issue_statuses` 行 | `status_id` | status.name | `status_id` → 该列 status |
 | `assignee` | 成员 | `member_id`(含 `__none__`) | 成员名 | `assignee_id` |
 | `priority` | 5 档 | priority 值 | 档位名 | `priority` |
-| `project` | 项目 | `project_id`(含 `__none__`) | 项目名 | `project_id` |
+| `project` | 项目 | `project_id`(含 `__none__`) | 项目名 | `project_id`(**跨项目迁移协议**:迁移前预览并要求确认 + 单事务完成字段映射/清除,见 §3.2 与 issue.md §3.8,README §6.14 跨项目迁移契约;**不是裸改 `project_id`**) |
 | `label` | 标签 | `label_id` | 标签名 | 增/删 `issue_labels` |
 | 自定义字段(`field_def_id`) | 字段值 | 序列化值(枚举为 option_id) | 值显示名 | 该字段值 |
 
@@ -202,18 +204,25 @@ workspaces ──1:N──► views ◄──N:1── projects(可选;project_i
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` |
 | UNIQUE | `(view_id, group_key)` | | |
 
-### 2.6 `view_subscriptions`(在线订阅游标,可选)
+### 2.6 每频道游标 `realtime_channel_cursors`(在线订阅游标,可选)
 
-| 字段 | 类型 | 约束 | 说明 |
-|------|------|------|------|
-| `id` | UUID | PK | |
-| `view_id` | UUID | NOT NULL, FK→views(id) ON DELETE CASCADE | |
-| `member_id` | UUID | NOT NULL, FK→members(id) ON DELETE CASCADE | |
-| `last_seen_seq` | BIGINT | NOT NULL DEFAULT `0` | 增量推送/重放游标 |
-| `updated_at` | TIMESTAMPTZ | NOT NULL | |
-| UNIQUE | `(view_id, member_id)` | | |
+> **R2 修正**:原"单视图单游标"的视图级在线订阅游标(每视图记一个 last-seen seq)**已删除**。`seq` 一律**按频道**单调(README §6.7),而一个视图会同时消费 `workspace:{ws}:issues` / `project:{id}` / `issue:{id}` 等多个频道——"单视图单游标"对这些跨频道事件**没有语义**,故废除"每视图一个总游标"的设计。
+>
+> **默认方案**:客户端**按频道各自**记录 `last_seq`,断线重连带 `resume_from=<last_seq+1>` 逐频道补齐(README §6.7);服务端无需为在线订阅持久化游标。
 
-> 服务端推送优先走 WebSocket 内存订阅(见 §3.5);此表用于断线重连时确定 `resume_from`,以及(可选)离线期间的增量补推。
+下表为**可选**的服务端跨设备游标持久化(同一成员在多设备间共享断点续传定位),非在线订阅所必需:
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE | — | 隔离键(复合 FK 本地列) |
+| `member_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, member_id)→members(workspace_id, id)` ON DELETE CASCADE | — | 游标所属成员(同租户复合 FK,README §6.2) |
+| `channel` | TEXT | NOT NULL | — | 频道名(如 `issue:{id}`,对齐 README §6.7) |
+| `last_seq` | BIGINT | NOT NULL | `0` | 该成员在该频道已确认消费的最大 `seq` |
+| `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+| UNIQUE | `(workspace_id, member_id, channel)` | | | 每成员每频道至多一条游标 |
+
+> 本表**仅用于跨设备断线续传定位**,**不是真源**——重放真源为 `realtime_events`(README §6.7);游标过旧(早于保留窗口)仍按 §3.5 / README §6.7 下发 `resync_required` 走 REST 对账。
 
 ### 2.7 `view_issue_positions`(每视图手工排序,README §6.14)
 
@@ -351,7 +360,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | POST | `/views/{id}/duplicate` | 复制视图(新 owner = 当前成员) |
 | GET | `/views/{id}/issues` | 执行视图配置,返回分组/排序后的 issue |
 | PATCH | `/views/{id}/wip` | 设置某列 WIP 限制 |
-| POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + WIP 校验 + 状态变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3) |
+| POST | `/views/{id}/moves` | **看板拖拽的原子 move 命令**(乐观锁 + advisory lock + WIP 校验 + 状态变更 + 每视图排序 upsert,单事务,见 §3.2/§4.3;`to_group_key` 为 project 分组值时触发**跨项目迁移协议**:预览→确认→单事务映射/清除,见 §3.2) |
 | POST | `/views/{id}/reorder` | 仅调整某视图内卡片顺序(不改状态、不跨列;走 `view_issue_positions`) |
 | PATCH | `/workspaces/{ws}/views/reorder` | 调整视图在侧栏的顺序(`position`) |
 
@@ -414,6 +423,30 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 > **不要再用 `PATCH /issues/{id}` 拖拽**:不带 `view_id` 的 PATCH 无法执行视图级 WIP(见 §3.1)。`PATCH /issues/{id}` 仅供详情侧栏等**非拖拽**字段编辑。
 
+**跨项目拖拽(`group_by=project`)** `POST /api/v1/views/{id}/moves`
+
+> `group_by=project` 视图把卡片拖到**另一项目**列时,`to_group_key` 即目标 `project_id`,本命令为 issue.md §3.8 跨项目迁移契约的**视图侧入口**:先预览并要求确认,再单事务完成迁移(README §6.14 两步式契约)。
+```jsonc
+// Request —— group_by=project 视图,把卡片拖到另一项目列
+{ "issue_id": "iss_1", "to_group_key": "prj_app", "position": 1.5, "version": 7 }
+// 未确认 → 422(客户端先展示预览并要求确认)
+{ "error": { "code": "move_confirmation_required",
+  "message": "跨项目迁移将影响以下字段,请确认后重试",
+  "details": { "preview": { "mapped_fields": [ {"field":"status","from":"st_web_dev","to":"st_app_todo"} ],
+    "cleared_fields": [ {"field":"milestone_id"}, {"field":"cycle_id"},
+      {"field":"labels","items":["lbl_web_only"]}, {"field":"custom_field_values","items":["cf_web_severity"]} ],
+    "kept_fields": ["priority","due_date","assignee_id","workspace 级标签/字段"] } } } }
+// 确认(携 confirm:true)→ 单事务迁移(乐观锁 + project_id 变更 + status 映射 + 清除项目私有字段 + 排序 upsert)
+{ "issue_id": "iss_1", "to_group_key": "prj_app", "position": 1.5, "version": 7, "confirm": true }
+// 200 Response
+{ "data": { "id": "iss_1", "project_id": "prj_app",
+            "status": { "id": "st_app_todo", "category": "todo" },
+            "position": 1.5, "version": 8,
+            "move_result": { "mapped_fields": [...], "cleared_fields": [...] } } }
+```
+
+> **迁移语义以 issue.md §3.8 为权威**:项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留;迁移产生 `issue.project_changed` 事件携带映射/清除清单(经 outbox → realtime 唯一写入路径,README §6.6/§6.7)。本节 moves 命令在 `group_by=project` 时为其视图侧入口,未确认返回 422 `move_confirmation_required`;`dry_run: true` 等价 issue.md 的 `move-preview`(仅返回预览不落库)。
+
 **设置 WIP** `PATCH /api/v1/views/{id}/wip`
 ```jsonc
 { "group_key": "in_progress", "limit": 5, "enforcement": "block" }
@@ -431,6 +464,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | 404 | `not_found` | 视图不存在或不可见 |
 | 409 | `conflict` | 乐观并发版本不符(move `version` / `If-Match`);默认视图重复设置 |
 | 422 | `wip_limit_exceeded` | 硬 WIP 限制下拖入已满列(`details` 含 `group_key`/`limit`/`count`) |
+| 422 | `move_confirmation_required` | 跨项目拖拽未确认(`details` 含字段映射/清除预览,README §6.14;见 §3.2 与 issue.md §3.8) |
 | 422 | `query_cost_exceeded` | 视图查询估算成本/`statement_timeout` 超限(README §6.14,建议收窄条件) |
 | 429 | `rate_limited` | 限流 |
 | 501 | `not_implemented` | 请求 `layout IN ('timeline','table')` 的渲染 |
@@ -459,7 +493,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
   "ts": "2026-07-24T10:00:01Z", "data": { /* 见各事件 */ } }
 ```
 - **订阅**:客户端发 `{ "op": "subscribe", "topic": "view:{view_id}" }`;亦可订阅底层 `workspace:{ws}:issues` 由客户端自行按视图过滤。
-- **重放(README §6.7)**:客户端记录频道内最大 `seq`;断线重连后发 `{ "op": "resume", "resume_from": <last_seq+1> }`,服务端从 `realtime_events` 顺序补发缺口;`resume_from` 早于保留窗口则回 `{ "op": "resync_required", "watermark": <最大 seq>, "rest": "<对账 REST URL>" }`,客户端整板重拉 `GET /views/{id}/issues` 对账后无感恢复。
+- **重放(README §6.7)**:客户端**按频道**记录 `last_seq`(每频道游标,§2.6);断线重连后发 `{ "op": "resume", "resume_from": <last_seq+1> }`,服务端从 `realtime_events` 顺序补发缺口;`resume_from` 早于保留窗口则回 `{ "op": "resync_required", "watermark": <最大 seq>, "rest": "<对账 REST URL>" }`,客户端整板重拉 `GET /views/{id}/issues` 对账后无感恢复。
 - **事件清单**(`<entity>.<action>`):
 
 | 事件 | data(关键字段) | 客户端增量动作 |
@@ -469,7 +503,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 | `issue.moved` | `id`、`from_group`、`to_group`、`position` | 精确移动单卡;`updated_at` 旧于本地则丢弃(防回退) |
 | `issue.deleted` | `id` | 若在视图内 → 移除卡片 |
 | `view.updated` | 视图配置 diff | 配置变更:若 filters/group/sort 变 → 整板重拉;仅 card_fields 变 → 局部刷新 |
-| `presence` | `view_id`、成员列表(可选) | 渲染协作者头像 |
+| `view.presence` | `view_id`、成员列表(可选) | 渲染协作者头像(事件名取 README §6.7 词汇注册表) |
 
 - **增量合并原则**:收到 `issue.*` 后,客户端用**当前视图 filters** 在本地重判该 issue 归属,做单卡插入/移动/移除,**禁止整板刷新**(仅 `view.updated` 改到投影规则或收到 `resync_required` 时才整板重拉)。
 - **降级**:WS 断开 → 30s 轮询 `GET /views/{id}/issues?since=<最大 updated_at>` 增量拉取。
@@ -516,6 +550,11 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
    - `422 wip_limit_exceeded`(block)→ **卡片弹回原列** + toast 提示。
    - `409 conflict`(他人同时改了该卡)→ 拉最新 issue,按服务端结果收敛(后到事件覆盖)。
 
+**跨项目拖拽(`group_by=project`)**
+1. 在 `group_by=project` 视图把卡片拖向**另一项目**列 → 松手后**不直接落位**,而是弹出**迁移预览模态**:列出将被**映射**的 status(项目私有 status → 目标项目同 category 默认 status)、将被**清除**的项目私有 milestone/cycle/标签/自定义字段值,以及保留的工作区级字段(预览来自 `moves` 未确认返回的 422 `details.preview`,或先以 `dry_run: true` 取预览,见 §3.2 / issue.md §3.8)。
+2. 用户确认 → 发 `POST /views/{id}/moves` 携 `{ issue_id, to_group_key:<目标 project_id>, position, version, confirm: true }` → 服务端**单事务**完成 `project_id` 变更 + status 映射 + 清除项目私有字段 + 排序 upsert。
+3. 成功 → 卡片落位目标项目列,响应携带 `move_result`(映射/清除清单),UI 明确呈现"拖入项目后哪些字段为何变化"对用户可见;`422 move_confirmation_required`(未确认)→ **卡片弹回原列** + 重新展示预览;`409 conflict` → 拉最新收敛。迁移语义以 issue.md §3.8 为权威(README §6.14 两步式契约),迁移产生 `issue.project_changed` 事件。
+
 **列内排序(浮点中点法,写入 `view_issue_positions`)**
 - 拖到两张相邻卡片 `A`(position=pA)与 `B`(pB)之间 → 新 `position = (pA + pB) / 2`。
 - 拖到列顶 → `position = first.position - 1.0`;拖到列底 → `position = last.position + 1.0`。
@@ -557,6 +596,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 - [ ] 看板默认按 `state_category` 分列;可切换 `group_by=status/assignee/priority/project/label/自定义字段`,列 key/label/拖入改写目标符合 §2.4 映射表。
 - [ ] 拖拽 `group_by=state_category` 时,`status_id` 改为目标 category 的默认 status(`column_target_status` 映射正确)。
 - [ ] **看板拖拽走原子 move 命令** `POST /views/{id}/moves`(乐观锁 + advisory lock + WIP 计数 + 状态变更 + `view_issue_positions` upsert,单事务);`PATCH /issues/{id}` 不用于拖拽。
+- [ ] **跨项目拖拽(R2,README §9 T22)**:`group_by=project` 视图把卡片拖入另一项目列,未确认的 `moves` 返回 `422 move_confirmation_required` 且 `details.preview` 携带字段映射/清除预览;携 `confirm: true` 后**单事务**完成 `project_id` 变更 + 项目私有 status 映射 + 项目私有 milestone/cycle/label/自定义字段值清除(工作区级保留),迁移后不存在"当前项目 + 旧项目私有字段"脏状态;`issue.project_changed` 事件正确携带映射/清除清单(迁移语义以 issue.md §3.8 为权威,README §6.14)。
 - [ ] **每视图排序隔离(README §6.14)**:列内拖拽用浮点中点法计算 `position` 并写入**当前视图**的 `view_issue_positions`;**在视图 A 拖动卡片不改变视图 B 的顺序**;无保存排序的视图回退 `issues.position` 规范顺序;精度耗尽触发该视图整列重排且 UI 收敛正确。
 - [ ] WIP `warn`:超限允许拖入 + 红色徽章 + toast + `wip_exceeded` 事件;WIP `block`:超限拖入(move 命令事务内计数)返回 `422 wip_limit_exceeded` 且卡片弹回原列。
 - [ ] 折叠列、卡片字段显示(`card_fields`)、列底快速创建均生效;快速创建的 issue 继承该列分组值。
@@ -569,6 +609,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 ### 5.2 实时一致性验收
 
 - [ ] WebSocket 遵循 README §6.7(频道内单调 `seq`、`realtime_events` 重放);断线重连 `resume_from` 可重放缺口,过旧触发 `resync_required` + REST 对账水位后整板重拉。
+- [ ] **每频道游标(R2)**:原"单视图单游标"设计已删除;断线重放按**频道** `last_seq`(客户端每频道各自记录,§2.6 / §3.5),不存在"每视图一个总游标";可选的服务端 `realtime_channel_cursors` 经复合 FK `(workspace_id, member_id)→members(workspace_id, id)` 强制同租户(README §9 T1 同类),且仅作跨设备断线续传定位、真源为 `realtime_events`。
 - [ ] 他人改状态/拖拽/改字段/新建/删除,本地看板按视图 filters **增量合并单卡**(插入/移动/移除),非整板刷新。
 - [ ] `issue.updated` 触发本地按 filters 重判:仍命中就地更新/跨列移动,不再命中移除。
 - [ ] 拖拽乐观更新 + `If-Match: <updated_at>` 版本校验;`409` 时拉最新收敛,多人同拖同卡 UI 平滑收敛到最新写。
