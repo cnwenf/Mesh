@@ -236,7 +236,7 @@ members 为统一身份表（member_type ∈ {human, agent}），由 member Spec
 | `id` | uuid | PK | |
 | `workspace_id` | uuid | NOT NULL, FK→workspaces.id | 多租户隔离(README §6.2) |
 | `notification_id` | uuid | NOT NULL,复合 FK `(workspace_id, notification_id) → notifications(workspace_id, id)` | |
-| `channel` | text | NOT NULL, CHECK in ('in_app','email','websocket') | |
+| `channel` | text | NOT NULL, CHECK in ('in_app','email','websocket','im') | `channel='im'` 时具体 IM 平台(`feishu`/`slack`)与目标外部身份记入 `error`/台账扩展字段;经集成平台出站适配器投递(README §6.13/§6.17) |
 | `state` | text | NOT NULL, CHECK in ('pending','sent','failed') | |
 | `sent_at` | timestamptz | NULL | |
 | `error` | text | NULL | |

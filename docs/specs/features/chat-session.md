@@ -130,7 +130,7 @@ members（member.md，README §6.1）──owns──► chat_sessions ──ser
 | `context_issue_id` | UUID | NULL,复合 FK `(workspace_id, context_issue_id) → issues(workspace_id, id)` | NULL | 上下文关联 issue |
 | `context_project_id` | UUID | NULL,复合 FK `(workspace_id, context_project_id) → projects(workspace_id, id)` | NULL | 上下文关联项目 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','archived','deleted') | `'active'` | 会话状态 |
-| `is_pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶 |
+| `is_pinned` | BOOLEAN | NOT NULL | `false` | 是否置顶(**R2:置顶真源为 README §6.19 统一 `favorites` 表,`target_type='chat_session'`;本字段保留为兼容快照,由服务层与 favorites 双向同步,读取以 favorites 为准**) |
 | `last_message_at` | TIMESTAMPTZ | NULL | NULL | 最近一条消息时间(排序用) |
 | `last_message_preview` | TEXT | NULL | NULL | 最近消息摘要(列表展示) |
 | `message_count` | INT | NOT NULL,CHECK (>= 0) | `0` | 消息数 |

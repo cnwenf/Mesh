@@ -1817,6 +1817,325 @@ BEGIN
 END $$;
 RESET ROLE;
 
+
+-- ============================================================================
+-- R2 第二阶段(MES-2 强化轮必修 A–E)新表与枚举扩展验证
+-- ============================================================================
+
+-- ---- onboarding.md DDL ----
+CREATE TABLE onboarding_states (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  member_id      UUID NOT NULL,
+  checklist      TEXT NOT NULL DEFAULT 'activation' CHECK (char_length(checklist) BETWEEN 1 AND 40),
+  aha_reached_at TIMESTAMPTZ NULL,
+  dismissed_at   TIMESTAMPTZ NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, id),
+  UNIQUE (workspace_id, member_id, checklist),
+  FOREIGN KEY (workspace_id, member_id) REFERENCES members(workspace_id, id) ON DELETE CASCADE
+);
+
+CREATE TABLE onboarding_state_steps (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  state_id      UUID NOT NULL,
+  step_key      TEXT NOT NULL CHECK (step_key IN ('create_workspace','invite_member_or_add_agent','create_first_issue','dispatch_or_mention_agent','see_agent_reply_in_inbox')),
+  status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','completed','skipped')),
+  completed_via TEXT NULL CHECK (completed_via IN ('auto','manual')),
+  completed_at  TIMESTAMPTZ NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, state_id, step_key),
+  UNIQUE (workspace_id, id),
+  CHECK ((status = 'completed') = (completed_at IS NOT NULL)),
+  FOREIGN KEY (workspace_id, state_id) REFERENCES onboarding_states(workspace_id, id) ON DELETE CASCADE
+);
+-- 主记录:每成员每工作区每清单唯一(幂等创建/获取基础);供步骤子表复合 FK 引用
+CREATE UNIQUE INDEX uq_onboarding_states_ws_member_checklist
+  ON onboarding_states(workspace_id, member_id, checklist);
+-- 管理员重置/统计:按工作区检索未达成 aha 的清单
+CREATE INDEX idx_onboarding_states_ws_aha
+  ON onboarding_states(workspace_id, created_at) WHERE aha_reached_at IS NULL;
+
+-- 步骤子表:供复合 FK 引用;每清单一行一步骤;
+CREATE UNIQUE INDEX uq_onboarding_steps_ws_state_step
+  ON onboarding_state_steps(workspace_id, state_id, step_key);
+-- 自动检测:定位工作区内某步骤未完成的清单(领域事件消费时的精准 UPDATE 范围)
+CREATE INDEX idx_onboarding_steps_pending
+  ON onboarding_state_steps(workspace_id, step_key) WHERE status <> 'completed';
+
+-- ---- integrations.md DDL ----
+-- ============ integrations ============
+CREATE TABLE integrations (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')),
+  name         TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  config       JSONB NOT NULL DEFAULT '{}',
+  secret_ref   TEXT NULL,
+  created_by   UUID NOT NULL,
+  deleted_at   TIMESTAMPTZ NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_integrations_ws_id UNIQUE (workspace_id, id),                       -- 复合 FK 引用前提(§6.2)
+  CONSTRAINT fk_integrations_created_by FOREIGN KEY (workspace_id, created_by)
+    REFERENCES members(workspace_id, id) ON DELETE RESTRICT                          -- 作者不悬空(软删除)
+);
+CREATE UNIQUE INDEX uq_integrations_ws_name ON integrations(workspace_id, name) WHERE deleted_at IS NULL;
+CREATE INDEX idx_integrations_ws_kind ON integrations(workspace_id, kind) WHERE deleted_at IS NULL;
+
+-- ============ integration_bindings ============
+CREATE TABLE integration_bindings (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id UUID NOT NULL,
+  scope          TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
+  project_id     UUID NULL,
+  external_ref   TEXT NOT NULL,
+  match_config   JSONB NOT NULL DEFAULT '{}',
+  bound_agent_id UUID NULL,
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_integration_bindings_ws_id UNIQUE (workspace_id, id),                -- 复合 FK 引用前提(§6.2)
+  CONSTRAINT uq_binding_external_ref UNIQUE (integration_id, external_ref),          -- 外部侧唯一绑定
+  CONSTRAINT ck_binding_scope CHECK (scope = 'workspace' OR project_id IS NOT NULL),
+  CONSTRAINT fk_binding_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_binding_project FOREIGN KEY (workspace_id, project_id)
+    REFERENCES projects(workspace_id, id) ON DELETE SET NULL (project_id),           -- §6.2 第 6 条列级 SET NULL
+  CONSTRAINT fk_binding_agent FOREIGN KEY (workspace_id, bound_agent_id)
+    REFERENCES agents(workspace_id, id) ON DELETE SET NULL (bound_agent_id)
+);
+CREATE INDEX idx_binding_integration ON integration_bindings(integration_id, status);
+CREATE INDEX idx_binding_agent ON integration_bindings(workspace_id, bound_agent_id) WHERE bound_agent_id IS NOT NULL;
+
+-- ============ integration_events(同构 autopilot.webhook_events)============
+CREATE TABLE integration_events (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id      UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id    UUID NOT NULL,
+  external_event_id TEXT NOT NULL,
+  event_type        TEXT NOT NULL,
+  payload           JSONB NOT NULL,
+  signature_status  TEXT NOT NULL CHECK (signature_status IN ('valid','invalid','missing')),
+  process_status    TEXT NOT NULL DEFAULT 'received'
+                    CHECK (process_status IN ('received','matched','dispatched','deduped','rejected','processed','failed')),
+  received_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_integration_events_ws_id UNIQUE (workspace_id, id),                  -- 供 trigger_event_id 引用(§6.2)
+  CONSTRAINT uq_integration_event_dedup UNIQUE (integration_id, external_event_id),  -- 入站去重(§6.9)
+  CONSTRAINT fk_event_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_event_integration_status ON integration_events(integration_id, process_status, received_at DESC);
+CREATE INDEX idx_event_ws_received ON integration_events(workspace_id, received_at DESC);
+
+-- ============ webhook_subscriptions ============
+CREATE TABLE webhook_subscriptions (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id UUID NULL,
+  url            TEXT NOT NULL,
+  secret_ref     TEXT NOT NULL,
+  event_types    TEXT[] NOT NULL DEFAULT '{}',
+  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused','disabled')),
+  fail_count     INT NOT NULL DEFAULT 0 CHECK (fail_count >= 0),
+  created_by     UUID NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_webhook_subscriptions_ws_id UNIQUE (workspace_id, id),               -- 复合 FK 引用前提(§6.2)
+  CONSTRAINT fk_subscription_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE SET NULL (integration_id),
+  CONSTRAINT fk_subscription_created_by FOREIGN KEY (workspace_id, created_by)
+    REFERENCES members(workspace_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_subscription_ws_status ON webhook_subscriptions(workspace_id, status);
+
+-- ============ webhook_subscription_deliveries ============
+CREATE TABLE webhook_subscription_deliveries (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  subscription_id UUID NOT NULL,
+  event_ref       TEXT NOT NULL,
+  state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
+  attempts        INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  next_retry_at   TIMESTAMPTZ NULL,
+  response_status INT NULL,
+  last_error      TEXT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_delivery_subscription_event UNIQUE (subscription_id, event_ref),     -- 出向投递幂等(§6.5)
+  CONSTRAINT fk_delivery_subscription FOREIGN KEY (workspace_id, subscription_id)
+    REFERENCES webhook_subscriptions(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_delivery_retry ON webhook_subscription_deliveries(next_retry_at)
+  WHERE state = 'pending';
+CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscription_id, created_at DESC);
+
+-- ---- import-export.md DDL ----
+CREATE TABLE data_jobs (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id         UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  kind                 TEXT NOT NULL CHECK (kind IN ('import','export')),
+  entity_type          TEXT NOT NULL CHECK (entity_type IN ('issues','projects')),
+  format               TEXT NOT NULL CHECK (format IN ('csv','json')),
+  status               TEXT NOT NULL DEFAULT 'pending'
+                       CHECK (status IN ('pending','validating','running','completed','completed_with_errors','failed')),
+  mapping              JSONB NOT NULL DEFAULT '{}',
+  params               JSONB NOT NULL DEFAULT '{}',
+  source_attachment_id UUID NULL,
+  result_attachment_id UUID NULL,
+  total_rows           INT NOT NULL DEFAULT 0 CHECK (total_rows >= 0),
+  succeeded_rows       INT NOT NULL DEFAULT 0 CHECK (succeeded_rows >= 0),
+  failed_rows          INT NOT NULL DEFAULT 0 CHECK (failed_rows >= 0),
+  error_report         JSONB NOT NULL DEFAULT '[]',
+  requested_by         UUID NOT NULL,
+  started_at           TIMESTAMPTZ NULL,
+  finished_at          TIMESTAMPTZ NULL,
+  failure_reason       TEXT NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, id),
+  CHECK (succeeded_rows + failed_rows <= total_rows),
+  CHECK ((kind = 'import' AND source_attachment_id IS NOT NULL)
+      OR (kind = 'export' AND source_attachment_id IS NULL)),
+  FOREIGN KEY (workspace_id, source_attachment_id)
+      REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (source_attachment_id),
+  FOREIGN KEY (workspace_id, result_attachment_id)
+      REFERENCES attachments(workspace_id, id) ON DELETE SET NULL (result_attachment_id),
+  FOREIGN KEY (workspace_id, requested_by)
+      REFERENCES members(workspace_id, id) ON DELETE RESTRICT
+);
+-- 我的作业 / 工作区作业列表
+CREATE INDEX idx_data_jobs_ws_created   ON data_jobs (workspace_id, created_at DESC);
+CREATE INDEX idx_data_jobs_requester    ON data_jobs (workspace_id, requested_by, created_at DESC);
+-- 在途作业(监控/补偿扫描,非 worker 领取路径——领取经 outbox)
+CREATE INDEX idx_data_jobs_active       ON data_jobs (created_at)
+  WHERE status NOT IN ('completed','completed_with_errors','failed');
+
+-- ---- analytics.md DDL ----
+CREATE TABLE analytics_snapshots (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  metric_key   TEXT NOT NULL,                 -- 'cycle_time'/'velocity'/'throughput'/'workload'/'burndown'/'agent_stats'
+  dimensions   JSONB NOT NULL DEFAULT '{}',   -- {project_id?, cycle_id?, milestone_id?, agent_id?, granularity?, from_category?, tz?}
+  dim_hash     TEXT GENERATED ALWAYS AS (md5(dimensions::text)) STORED,  -- 维度指纹,供唯一键/查找(避免 JSONB 直接入唯一索引)
+  window_start TIMESTAMPTZ NOT NULL,          -- UTC
+  window_end   TIMESTAMPTZ NOT NULL,          -- UTC
+  value        JSONB NOT NULL,                -- 聚合结果(指标值 + 必要 meta,如 sample_size/token_coverage)
+  computed_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- 同一 (工作区, 指标, 维度, 窗) 仅一份快照(覆盖式刷新)
+  UNIQUE (workspace_id, metric_key, dim_hash, window_start, window_end)
+);
+
+CREATE INDEX idx_snapshots_lookup
+  ON analytics_snapshots (workspace_id, metric_key, dim_hash, window_start, window_end);
+CREATE INDEX idx_snapshots_stale
+  ON analytics_snapshots (computed_at);        -- 供 worker 找过期快照重算
+
+-- ---- README §6.19 favorites ----
+CREATE TABLE favorites (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  member_id    UUID NOT NULL,
+  target_type  TEXT NOT NULL CHECK (target_type IN ('issue','project','view','chat_session')),
+  target_id    UUID NOT NULL,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (member_id, target_type, target_id),
+  FOREIGN KEY (workspace_id, member_id) REFERENCES members(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created_at DESC);
+
+-- ---- R2 第二阶段枚举更新 ----
+-- task_executions.trigger 扩 'integration'(README §6.4/§6.9、runtime.md)
+ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_trigger_check;
+ALTER TABLE task_executions ADD CONSTRAINT task_executions_trigger_check
+  CHECK (trigger IN ('assign','mention','autopilot','manual','chat','integration'));
+-- notification_delivery.channel 扩 'im'(README §6.13、comment-inbox.md)
+ALTER TABLE notification_delivery DROP CONSTRAINT IF EXISTS notification_delivery_channel_check;
+ALTER TABLE notification_delivery ADD CONSTRAINT notification_delivery_channel_check
+  CHECK (channel IN ('in_app','email','websocket','im'));
+
+-- ---- 第二阶段行为验证 ----
+DO $$
+BEGIN
+  -- trigger='integration' 入队合法(外部 IM 触发,README §6.9)
+  INSERT INTO task_executions (workspace_id, agent_id, trigger, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'bbbbbbbb-0000-0000-0000-000000000001', 'integration', 'queued');
+  RAISE NOTICE 'PASS P2-1: trigger=integration 合法(外部 IM 触发源)';
+
+  -- 入站事件去重:integration_events.UNIQUE(integration_id, external_event_id)
+  INSERT INTO integrations (id, workspace_id, kind, name, status, created_by)
+  VALUES ('abababab-1111-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'im_feishu', 'feishu-1', 'active', 'cccccccc-0000-0000-0000-000000000001');
+  INSERT INTO integration_events (workspace_id, integration_id, external_event_id, event_type, payload, signature_status, process_status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'evt-ext-1', 'im.message', '{}', 'valid', 'processed');
+  BEGIN
+    INSERT INTO integration_events (workspace_id, integration_id, external_event_id, event_type, payload, signature_status, process_status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'evt-ext-1', 'im.message', '{}', 'valid', 'processed');
+    RAISE EXCEPTION 'P2 FAIL: 重复 external_event_id 未被去重拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS P2-2: integration_events 按 (integration_id, external_event_id) 去重';
+  END;
+
+  -- 绑定外部侧唯一:同 integration 同 external_ref 不可重复绑定
+  INSERT INTO integration_bindings (workspace_id, integration_id, external_ref, status)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'chat-oc-1', 'active');
+  BEGIN
+    INSERT INTO integration_bindings (workspace_id, integration_id, external_ref, status)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'abababab-1111-0000-0000-000000000001', 'chat-oc-1', 'active');
+    RAISE EXCEPTION 'P2 FAIL: 同外部身份重复绑定未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS P2-3: 外部侧唯一绑定 UNIQUE(integration_id, external_ref)';
+  END;
+
+  -- favorites:同成员同目标至多一条;跨租户 member 复合 FK 拒绝
+  INSERT INTO favorites (workspace_id, member_id, target_type, target_id)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'issue', '99999999-0000-0000-0000-000000000001');
+  BEGIN
+    INSERT INTO favorites (workspace_id, member_id, target_type, target_id)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'issue', '99999999-0000-0000-0000-000000000001');
+    RAISE EXCEPTION 'P2 FAIL: 重复收藏未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS P2-4: favorites 幂等唯一(member, target_type, target_id)';
+  END;
+  BEGIN
+    INSERT INTO favorites (workspace_id, member_id, target_type, target_id)
+    VALUES ('22222222-2222-2222-2222-222222222222', 'cccccccc-0000-0000-0000-000000000001', 'issue', '99999999-0000-0000-0000-000000000009');
+    RAISE EXCEPTION 'P2 FAIL: 跨租户 member 收藏未被拒绝';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS P2-5: favorites 复合 FK 拒绝跨租户 member';
+  END;
+
+  -- onboarding:同成员同清单至多一条 + 步骤状态机 CHECK
+  INSERT INTO onboarding_states (id, workspace_id, member_id, checklist)
+  VALUES ('cdcdcdcd-2222-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'activation');
+  BEGIN
+    INSERT INTO onboarding_states (workspace_id, member_id, checklist)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'cccccccc-0000-0000-0000-000000000001', 'activation');
+    RAISE EXCEPTION 'P2 FAIL: 重复 onboarding 主记录未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS P2-6: onboarding_states UNIQUE(workspace_id, member_id, checklist)';
+  END;
+
+  -- data_jobs:导入必带源附件 CHECK
+  INSERT INTO data_jobs (workspace_id, kind, entity_type, format, status, requested_by)
+  VALUES ('11111111-1111-1111-1111-111111111111', 'export', 'issues', 'csv', 'pending', 'cccccccc-0000-0000-0000-000000000001');
+  RAISE NOTICE 'PASS P2-7: data_jobs export 无源附件合法';
+  BEGIN
+    INSERT INTO data_jobs (workspace_id, kind, entity_type, format, status, requested_by)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'import', 'issues', 'csv', 'pending', 'cccccccc-0000-0000-0000-000000000001');
+    RAISE EXCEPTION 'P2 FAIL: import 无源附件未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS P2-8: data_jobs import 必带 source_attachment_id CHECK 生效';
+  END;
+END $$;
+
 \echo '============================================================'
 \echo 'ALL R2 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'
