@@ -130,7 +130,7 @@ workspaces ──1:N──► cycles(周期常为工作区级,可绑定项目)
 | `status` | TEXT | NOT NULL, CHECK IN ('planning','active','paused','completed','cancelled') | `'planning'` | 项目状态 |
 | `health` | TEXT | NULL, CHECK IN ('on_track','at_risk','off_track') | NULL | 健康度 |
 | `visibility` | TEXT | NOT NULL, CHECK IN ('public','private') | `'public'` | 可见性 |
-| `lead_member_id` | UUID | NULL,复合 FK `(workspace_id, lead_member_id) → members(workspace_id, id)` ON DELETE SET NULL | NULL | 项目负责人(人或 agent;README §6.2) |
+| `lead_member_id` | UUID | NULL,复合 FK `(workspace_id, lead_member_id) → members(workspace_id, id)` ON DELETE SET NULL (lead_member_id)(PG16 列级,仅置空引用列,README §6.2 第 6 条) | NULL | 项目负责人(人或 agent;README §6.2) |
 | `start_date` | DATE | NULL | NULL | 计划开始日 |
 | `target_date` | DATE | NULL | NULL | 目标完成日 |
 | `progress_cache` | REAL | NULL | NULL | 进度物化缓存(0.0–1.0,可选,见 §2.4) |
@@ -238,6 +238,8 @@ CREATE INDEX idx_project_members_member ON project_members(member_id);
 ```
 
 > **`uq_projects_key` 为普通(非部分)唯一索引,前缀永久保留**(README §6.3):**不带** `WHERE deleted_at IS NULL`——项目前缀 `key` 一经使用即在该工作区内**永久占用**,软删除/归档项目后**不可被新项目复用**。这是 identifier 不可变语义的基石:`identifier = <key> || '-' || number` 永不改变,删除项目仅把 `issues.project_id` 置 NULL(`identifier` 随 issue 保留),历史 `WEB-123` 永远指向同一 issue,杜绝歧义;项目亦不得跨工作区迁移。
+>
+> **与前缀注册表的衔接(R2)**:创建项目在**同一事务**内向工作区级前缀注册表 `identifier_prefix_registry`(workspace.md owns,README §6.3)登记 `kind='project'` 条目;新 `key` 与任一在册前缀冲突(含已软删除/归档项目的历史前缀、`retired` 历史收件箱前缀与当前收件箱前缀)即返回 409 `project_key_taken`。**软删除项目的 key 仍永久保留**——`uq_projects_key` 非部分唯一索引与注册表**双重保证**,杜绝 identifier 前缀复用(README §6.3)。
 
 ### 2.4 项目进度聚合(派生)
 
@@ -260,7 +262,7 @@ WHERE i.project_id = $1 AND i.deleted_at IS NULL;
 | 字段 | 引用 | 说明 |
 |------|------|------|
 | `projects.workspace_id` | `workspaces(id)` | 隶属工作区(workspace.md) |
-| `projects.lead_member_id` | 复合 FK `(workspace_id, lead_member_id) → members(workspace_id, id)`,ON DELETE SET NULL | 负责人,人或 agent(member.md;README §6.2) |
+| `projects.lead_member_id` | 复合 FK `(workspace_id, lead_member_id) → members(workspace_id, id)`,ON DELETE SET NULL (lead_member_id) | 负责人,人或 agent(member.md;PG16 列级,README §6.2 第 6 条) |
 | `project_members.member_id` | 复合 FK `(workspace_id, member_id) → members(workspace_id, id)`,ON DELETE CASCADE | 项目成员(member.md;README §6.2) |
 | `project_updates.author_member_id` | 复合 FK `(workspace_id, author_member_id) → members(workspace_id, id)`,ON DELETE RESTRICT | 留痕作者(member.md;成员软删除,RESTRICT 保历史) |
 | `project_updates.project_id` | 复合 FK `(workspace_id, project_id) → projects(workspace_id, id)`,ON DELETE CASCADE | 所属项目 |
@@ -268,9 +270,9 @@ WHERE i.project_id = $1 AND i.deleted_at IS NULL;
 | `milestones.project_id` | 复合 FK `(workspace_id, project_id) → projects(workspace_id, id)`,ON DELETE CASCADE | 所属项目 |
 | `cycles.workspace_id` | `workspaces(id)` | 周期隶属工作区 |
 | `cycles.project_id` | 复合 FK `(workspace_id, project_id) → projects(workspace_id, id)`,ON DELETE CASCADE | 可选绑定项目 |
-| `issues.project_id` | 复合 FK `(workspace_id, project_id) → projects(workspace_id, id)`,ON DELETE SET NULL | 下游引用(issue.md;删项目编号保留) |
-| `issues.milestone_id` | 复合 FK `(workspace_id, milestone_id) → milestones(workspace_id, id)`,ON DELETE SET NULL | 下游引用(issue.md) |
-| `issues.cycle_id` | 复合 FK `(workspace_id, cycle_id) → cycles(workspace_id, id)`,ON DELETE SET NULL | 下游引用(issue.md) |
+| `issues.project_id` | 复合 FK `(workspace_id, project_id) → projects(workspace_id, id)`,ON DELETE SET NULL (project_id) | 下游引用(issue.md;删项目编号保留;PG16 列级,README §6.2 第 6 条;**迁移只改 `project_id`,`identifier` 不变**,README §6.3) |
+| `issues.milestone_id` | 复合 FK `(workspace_id, milestone_id) → milestones(workspace_id, id)`,ON DELETE SET NULL (milestone_id) | 下游引用(issue.md;PG16 列级,README §6.2 第 6 条) |
+| `issues.cycle_id` | 复合 FK `(workspace_id, cycle_id) → cycles(workspace_id, id)`,ON DELETE SET NULL (cycle_id) | 下游引用(issue.md;PG16 列级,README §6.2 第 6 条) |
 
 > **同租户约束约定(README §6.2)**:凡引用 `members`/`projects`/`milestones`/`cycles` 的表,均**同时存 `workspace_id` 并建复合 FK** `(workspace_id, <ref>_id) → 目标表(workspace_id, id)`;被引用的 `projects`/`milestones`/`cycles` 均建 `UNIQUE(workspace_id, id)`(见 §2.3)。如此"引用了别的工作区的对象"在 INSERT 时即被数据库拒绝(集成测试 T1),并在其上加 PostgreSQL RLS 纵深防御。
 
@@ -306,7 +308,7 @@ class Project(Base):
             ["workspace_id", "lead_member_id"],
             ["members.workspace_id", "members.id"],
             name="fk_projects_lead_member",
-            ondelete="SET NULL",
+            ondelete="SET NULL (lead_member_id)",  # (PG16 列级 SET NULL,README §6.2 第 6 条)
         ),
     )
 
@@ -377,38 +379,42 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 
 // 201 Response
 {
-  "id": "0d6f1a2e-0000-0000-0000-000000000001",
-  "name": "官网改版",
-  "key": "WEB",
-  "status": "planning",
-  "health": null,
-  "visibility": "public",
-  "progress": 0.0,
-  "issue_seq": 0,
-  "target_date": "2026-08-31",
-  "created_at": "2026-07-24T10:00:00Z",
-  "updated_at": "2026-07-24T10:00:00Z"
+  "data": {
+    "id": "0d6f1a2e-0000-0000-0000-000000000001",
+    "name": "官网改版",
+    "key": "WEB",
+    "status": "planning",
+    "health": null,
+    "visibility": "public",
+    "progress": 0.0,
+    "issue_seq": 0,
+    "target_date": "2026-08-31",
+    "created_at": "2026-07-24T10:00:00Z",
+    "updated_at": "2026-07-24T10:00:00Z"
+  }
 }
 ```
 
 **获取项目(含进度)** `GET /api/v1/projects/{id}`
 ```json
 {
-  "id": "0d6f1a2e-0000-0000-0000-000000000001",
-  "name": "官网改版",
-  "key": "WEB",
-  "status": "active",
-  "health": "at_risk",
-  "progress": 0.62,
-  "open_issues": 15,
-  "done_issues": 25,
-  "lead": { "id": "mem_uuid_a1", "name": "Jane Doe", "member_type": "human" },
-  "milestones": [
-    { "id": "ms_uuid_1", "title": "v1.0 上线", "target_date": "2026-08-31", "state": "open", "overdue": false }
-  ],
-  "target_date": "2026-08-31",
-  "created_at": "2026-07-24T10:00:00Z",
-  "updated_at": "2026-07-24T11:00:00Z"
+  "data": {
+    "id": "0d6f1a2e-0000-0000-0000-000000000001",
+    "name": "官网改版",
+    "key": "WEB",
+    "status": "active",
+    "health": "at_risk",
+    "progress": 0.62,
+    "open_issues": 15,
+    "done_issues": 25,
+    "lead": { "id": "mem_uuid_a1", "name": "Jane Doe", "member_type": "human" },
+    "milestones": [
+      { "id": "ms_uuid_1", "title": "v1.0 上线", "target_date": "2026-08-31", "state": "open", "overdue": false }
+    ],
+    "target_date": "2026-08-31",
+    "created_at": "2026-07-24T10:00:00Z",
+    "updated_at": "2026-07-24T11:00:00Z"
+  }
 }
 ```
 
@@ -419,13 +425,15 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 
 // 201 Response(返回留痕记录;同时回写 projects.health)
 {
-  "id": "pu_uuid_1",
-  "project_id": "0d6f1a2e-0000-0000-0000-000000000001",
-  "author": { "id": "mem_uuid_a1", "name": "Jane Doe", "member_type": "human" },
-  "health": "at_risk",
-  "status": null,
-  "message": "第三方接口延期,存在上线风险",
-  "created_at": "2026-07-24T11:00:00Z"
+  "data": {
+    "id": "pu_uuid_1",
+    "project_id": "0d6f1a2e-0000-0000-0000-000000000001",
+    "author": { "id": "mem_uuid_a1", "name": "Jane Doe", "member_type": "human" },
+    "health": "at_risk",
+    "status": null,
+    "message": "第三方接口延期,存在上线风险",
+    "created_at": "2026-07-24T11:00:00Z"
+  }
 }
 ```
 
@@ -446,7 +454,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 { "member_id": "mem_uuid_b2", "role": "member" }
 
 // 201 Response
-{ "id": "pm_uuid_1", "project_id": "0d6f1a2e-...", "member_id": "mem_uuid_b2", "role": "member" }
+{ "data": { "id": "pm_uuid_1", "project_id": "0d6f1a2e-...", "member_id": "mem_uuid_b2", "role": "member" } }
 ```
 
 **错误响应(统一信封)**
@@ -462,7 +470,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 | 401 | `unauthorized` | token 缺失/失效 |
 | 403 | `forbidden` | 私有项目非成员访问;写操作角色不足 |
 | 404 | `not_found` | 项目不存在或不可见 |
-| 409 | `project_key_taken` | 前缀在工作区内已被占用(**含已软删除/归档项目——前缀永久保留,不可复用**,README §6.3) |
+| 409 | `project_key_taken` | 前缀在工作区内已被占用(**含已软删除/归档项目——前缀永久保留,不可复用**;含与已软删除/归档项目、`retired` 历史前缀、当前收件箱前缀的冲突——前缀注册表排他,README §6.3) |
 | 409 | `cycle_overlap`(可选) | 同范围周期重叠 |
 | 422 | `project_archived` | 对已归档项目写入 |
 | 429 | `rate_limited` | 触发限流 |
@@ -532,7 +540,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 
 **周期排期**:进入周期页 → 从"待办/未排期"区把 issue 拖入本周期 → 周期进度与燃尽实时更新 → 周期结束触发"未完成 issue 顺延下一周期"提示。
 
-**归档/删除**:头部 `···` → 归档(项目变只读,从活跃列表移除)或删除(二次确认,软删除,**前缀永久保留、不可复用**,README §6.3)。删除项目仅把其 issue 的 `project_id` 置 NULL,issue 的 `identifier` 保持不变(编号随 issue 走)。
+**归档/删除**:头部 `···` → 归档(项目变只读,从活跃列表移除)或删除(二次确认,软删除,**前缀永久保留、不可复用**,README §6.3)。删除项目仅把其 issue 的 `project_id` 置 NULL(`ON DELETE SET NULL (project_id)` 列级,仅置空归属列,README §6.2 第 6 条,经 §9 T18 实测),issue 的 `identifier` 保持不变(编号随 issue 走)。
 
 ### 4.4 状态机
 
@@ -566,7 +574,8 @@ planning ──启动──► active ──完成──► completed
 - [ ] 创建项目时 `key` 经实时与服务端双重去重校验;同工作区项目前缀**永久唯一**(含已软删除/归档项目),占用返回 409 `project_key_taken`。
 - [ ] `key` 格式校验生效:仅大写字母/数字/下划线,2–12 字符,首字符为字母;非法返回 400 `validation_error`。
 - [ ] **前缀永久保留、不可复用(README §6.3)**:`uq_projects_key` 为**普通(非部分)唯一索引** `ON projects(workspace_id, key)`(不带 `WHERE deleted_at IS NULL`);软删除/归档项目后,以同前缀新建项目被数据库拒绝(409 `project_key_taken`)。
-- [ ] **identifier 语义不可变**:删除项目仅把其 issue 的 `project_id` 置 NULL(ON DELETE SET NULL),issue 的 `identifier`(`<key>-<number>`)**保持不变**;项目不得跨工作区迁移;历史 `WEB-123` 永远指向同一 issue,无歧义。
+- [ ] **前缀注册表登记(R2,关联 README §9 T19)**:创建项目在同事务内向 `identifier_prefix_registry`(workspace.md owns)登记 `kind='project'`;与任一在册前缀(含已软删除/归档项目、`retired` 历史前缀、当前收件箱前缀)冲突即 409 `project_key_taken`(README §6.3)。
+- [ ] **identifier 语义不可变**:删除项目仅把其 issue 的 `project_id` 置 NULL(`issues.project_id` 复合 FK `ON DELETE SET NULL (project_id)` 列级,仅置空归属列,`workspace_id` 保持非空,README §6.2 第 6 条,经 §9 T18 实测),issue 的 `identifier`(`<key>-<number>`)**保持不变**;项目不得跨工作区迁移;issue 跨项目迁移只改 `project_id`(identifier 不变,README §6.3);历史 `WEB-123` 永远指向同一 issue,无歧义。
 - [ ] 归档后项目只读:对已归档项目的写操作返回 422 `project_archived`;取消归档后恢复可写。
 - [ ] `private` 项目仅 `project_members` 命中者或工作区 admin 可见;其他成员访问返回 403/404。
 - [ ] 提交健康度更新会:(a) 写入 `project_updates` 留痕,(b) 回写 `projects.health`,(c) 广播 `project_update.added` 与 `project.updated`。
@@ -575,7 +584,7 @@ planning ──启动──► active ──完成──► completed
 - [ ] 里程碑逾期判定:`state='open' AND target_date < CURRENT_DATE` 时响应含 `overdue=true`,UI 标红。
 - [ ] 里程碑/周期 CRUD 正常;周期校验 `ends_at >= starts_at`,违反返回 400。
 - [ ] 周期结束时,未完成 issue 按配置顺延下一周期或退回待办,并通知相关成员。
-- [ ] 项目负责人 / 项目成员 / 留痕作者均以**复合 FK** `(workspace_id, …) → members(workspace_id, id)` 引用 `members.id`,可选人类或 agent;`lead_member_id` 可空(ON DELETE SET NULL),`project_updates.author_member_id` 为 NOT NULL + ON DELETE RESTRICT(成员经 `status='removed'` 软删除,署名永久保留,无悬空)。
+- [ ] 项目负责人 / 项目成员 / 留痕作者均以**复合 FK** `(workspace_id, …) → members(workspace_id, id)` 引用 `members.id`,可选人类或 agent;`lead_member_id` 可空(`ON DELETE SET NULL (lead_member_id)` 列级,README §6.2 第 6 条),`project_updates.author_member_id` 为 NOT NULL + ON DELETE RESTRICT(成员经 `status='removed'` 软删除,署名永久保留,无悬空)。
 - [ ] **同租户复合 FK(README §6.2 / §9 T1)**:`projects`/`milestones`/`cycles` 均建 `UNIQUE(workspace_id, id)`;构造跨工作区的复合 FK 插入(如把 A 区成员设为 B 区项目负责人、把 issue 挂到别区里程碑)被数据库约束拒绝。
 - [ ] 所有列表端点支持游标分页,响应形如 `{"data":[...],"next_cursor":...}`,末页 `next_cursor=null`。
 
@@ -589,5 +598,5 @@ planning ──启动──► active ──完成──► completed
 - [ ] 写端点限流生效,超限返回 429 `rate_limited`。
 - [ ] `projects.issue_seq` 在并发创建 issue 下保证项目内编号单调不重号(与 issue.md 编号生成联调通过)。
 - [ ] 进度聚合在 1 万级 issue 项目下查询延迟可接受(命中 `idx_issues_project_status`),或启用 `progress_cache` 物化字段。
-- [ ] 软删除保留历史:删除项目不级联硬删 issue(下游 `issues.project_id` 复合 FK ON DELETE SET NULL),且 issue 的 `identifier` 保持不变。
+- [ ] 软删除保留历史:删除项目不级联硬删 issue(下游 `issues.project_id` 复合 FK `ON DELETE SET NULL (project_id)` 列级,仅置空归属列,README §6.2 第 6 条,T18 实测),且 issue 的 `identifier` 保持不变。
 - [ ] 错误消息不泄露敏感数据(堆栈/内部 ID 不外泄)。

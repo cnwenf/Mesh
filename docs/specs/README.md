@@ -1,8 +1,10 @@
 # Mesh 整体项目 Spec
 
-> 状态:Draft v2(R1 修订) | 本文件是 Mesh 所有开发的唯一入口:先读本文建立全局认知,再按「功能 Spec 索引」进入具体模块。各功能 Spec(`features/*.md`)是各模块实现的唯一依据;`../research/*.md` 是设计调研原始记录,仅供溯源,不作为实现依据。
+> 状态:Draft v3(R2 修订) | 本文件是 Mesh 所有开发的唯一入口:先读本文建立全局认知,再按「功能 Spec 索引」进入具体模块。各功能 Spec(`features/*.md`)是各模块实现的唯一依据;`../research/*.md` 是设计调研原始记录,仅供溯源,不作为实现依据。
 >
-> **R1 修订说明**:本文件 §2.2–2.3、§6、§7、§9、§10 为**全局唯一权威契约(canonical contracts)**。所有功能 Spec 中的 schema、API 包络、错误码、分页、状态枚举、事件词汇、幂等/重试语义**一律引用本文定义,不再重复定义**;功能 Spec 与本文冲突时以本文为准。
+> **修订说明**:本文件 §2.2–2.3、§6、§7、§9、§10 为**全局唯一权威契约(canonical contracts)**。所有功能 Spec 中的 schema、API 包络、错误码、分页、状态枚举、事件词汇、幂等/重试语义**一律引用本文定义,不再重复定义**;功能 Spec 与本文冲突时以本文为准。
+>
+> **R2 修订要点**(v2 复审 ❌ 项收口):复合 FK `ON DELETE SET NULL` 改为 PG16 列级写法并补真实 DELETE 行为测试(§6.2/§9 T18);补齐同租户/同父域约束与 realtime 租户键(§6.2/§6.7);不可变编号命名空间与工作区级前缀注册(§6.3);claim 无任务容量回滚 + capability 匹配(§6.4);审批续跑**唯一协议**写死(§6.4/§6.10);outbox → realtime **唯一写入路径**与事件词汇注册表(§6.6/§6.7);每频道游标(§6.7);跨项目迁移字段映射(issue.md/kanban.md);小队 active assignment 唯一身份(squad.md `issue_squad_assignments`);approval 强约束(§6.10);blob 真源与秒传 possession 规则(attachment.md);唯一通知优先级矩阵(§6.13)。
 
 ---
 
@@ -68,7 +70,7 @@
 | 任务队列 | **不引入外部 MQ;采用 PostgreSQL outbox / job queue**(`outbox_events` 表 + relay worker,§6.6;`task_executions` + `FOR UPDATE SKIP LOCKED` 领取,§6.4),**不是进程内事件总线** | 少一个基础设施;"业务提交"与"事件/任务入队"同事务原子,可靠领取与失联自愈由数据库事务保证 |
 | Agent 触发 | 「被分派」「被 @ 提及」「autopilot 派单」三条路径汇入**同一任务入口**,触发语义以 §6.9 触发矩阵为唯一权威 | 触发语义统一、可测试,护栏与审计只需建一处 |
 | 附件传输 | 签名 URL 客户端直传对象存储,字节流不经应用服务器;**隔离区 → 异步扫描/嗅探 → clean 后可见**(attachment.md) | 应用层无带宽瓶颈;安全扫描完成前不开放下载 |
-| 实时 | WebSocket 频道订阅 + **频道内**单调递增 `seq` + 持久化 `realtime_events` 重放(§6.7);Redis 仅作 fan-out;降级为轮询 | 增量合并而非整页刷新;重放真源在数据库,不依赖内存缓冲 |
+| 实时 | WebSocket 频道订阅 + **频道内**单调递增 `seq` + 持久化 `realtime_events` 重放(§6.7);Redis 仅作 fan-out;降级为轮询。**唯一写入路径**:业务事务只写 outbox,realtime projector 以 outbox 唯一键幂等落 `realtime_events` 并分配频道 seq(§6.6/§6.7) | 增量合并而非整页刷新;重放真源在数据库,不依赖内存缓冲;单一路径消除原子性/排序/去重分歧 |
 | 状态建模 | issue 双层状态:`category`(稳定语义,用于聚合/看板)+ `status`(可自定义,用于展示) | 自定义状态不破坏统计与看板列的稳定性 |
 | 投递语义 | 任务/通知/实时事件统一 **at-least-once**;外部副作用(工具调用/推送/评论/提交)以**稳定幂等键**去重(§6.5) | 分布式下 exactly-once 不可得;幂等键使"至少一次"对客户端表现为"恰好一次" |
 
@@ -79,10 +81,11 @@ Mesh 服务端由以下**独立可部署单元**组成。起步可合并进程�
 | 单元 | 职责 | 竞争/并发模型 | 故障责任与自愈 | 扩容方式 |
 | --- | --- | --- | --- | --- |
 | **API(FastAPI/uvicorn)** | REST + 鉴权 + 业务写入;所有业务事务**同事务写 `outbox_events`** | 多 worker 无状态 | 单 worker 崩溃仅丢 in-flight 请求,客户端重试(幂等键兜底) | 水平加 worker/实例 |
-| **Outbox relay** | 轮询 `outbox_events(status='pending')` → 分发到对应处理器(通知 fan-out / 执行入队 / 实时事件登记 / autopilot 事件)→ 置 `published` | `FOR UPDATE SKIP LOCKED` 抢占,多副本不重复处理;`UNIQUE(idempotency_key)` 兜底 | 崩溃后未发布事件由其他副本/重启后继续投递(at-least-once);`delivery_attempts` 超限进 `failed` 告警 | 加副本即提高吞吐 |
+| **Outbox relay** | 轮询 `outbox_events(status='pending')` → 分发到对应处理器(执行入队 / 通知 fan-out / autopilot 事件 / **realtime projector**)→ 置 `published` | `FOR UPDATE SKIP LOCKED` 抢占,多副本不重复处理;`UNIQUE(idempotency_key)` 兜底 | 崩溃后未发布事件由其他副本/重启后继续投递(at-least-once);`delivery_attempts` 超限进 `failed` 告警 | 加副本即提高吞吐 |
 | **调度 worker(autopilot/scheduler)** | 扫描到期 `autopilots.next_run_at` 与一次性定时,原子抢占创建 run | `FOR UPDATE SKIP LOCKED` + `next_run_at` 前移,多副本不重复触发 | 崩溃后下一扫描周期补发(misfire_policy 决定补发策略) | 加副本;按 workspace 哈希分片(规模化时) |
 | **租约 reaper** | 扫描 `execution_attempts` 租约过期/心跳失联 → 回收 attempt(requeue 新 attempt 或转 failed);扫描过期 approval(§6.10) | 单 leader(数据库 advisory lock)或多副本 SKIP LOCKED 分行 | reaper 全挂 → 任务卡 claimed;由监控告警;恢复后批量回收 | 一般单副本足够;分行扫描可多副本 |
-| **通知 fan-out worker** | 消费 outbox 中通知类事件 → 写 `notifications` + 邮件摘要队列 + 实时推送登记 | SKIP LOCKED;`notification_delivery.UNIQUE(notification_id,channel)` 幂等 | 崩溃后由 outbox 重投;邮件失败重试 | 加副本 |
+| **通知 fan-out worker** | 消费 outbox 中通知类事件 → 写 `notifications` + 邮件摘要队列(通知的实时推送**不直接写 `realtime_events`**,而是产生 outbox 的 `realtime.publish` 事件交 realtime projector 统一登记,§6.6/§6.7) | SKIP LOCKED;`notification_delivery.UNIQUE(notification_id,channel)` 幂等 | 崩溃后由 outbox 重投;邮件失败重试 | 加副本 |
+| **Realtime projector** | 消费 outbox 中实时类事件(`event_type='realtime.publish'`)→ **以 outbox 事件 id 为唯一去重键**写 `realtime_events` 并在同事务分配频道 `seq` → 经 Redis pub/sub 通知各网关发布(§6.7 唯一写入路径) | SKIP LOCKED 抢占 outbox 行;`realtime_events.UNIQUE(outbox_event_id)` 保证"至少一次投递 → 恰好一次登记" | 崩溃后未登记事件由其他副本/重启后继续登记;重复投递被唯一键去重,不产生重复事件/乱序 seq | 加副本即提高吞吐 |
 | **附件处理 worker** | 隔离区对象的 MIME 嗅探(读 magic bytes)、SHA-256 校验、病毒扫描、缩略图 | SKIP LOCKED 扫 `attachments(scan_status='pending')` | 崩溃后重扫;`scan_status='error'` 重试上限 | 加副本 |
 | **实时网关(WebSocket)** | 客户端长连接;订阅频道时**逐资源授权**;从 `realtime_events` 重放 + Redis fan-out 实时推送 | 每连接单线程;多网关经 Redis pub/sub 广播 | 网关崩溃 → 客户端重连,凭 `resume_from` 从 `realtime_events` 补齐;游标过旧 → `resync_required` | 水平加网关,Redis pub/sub 联通 |
 
@@ -232,15 +235,19 @@ agents(agent.md owns,AI 身份与配置)──1:N──┘      ▲
 2. **引用方**:凡持有上述引用的表必须**同时存 `workspace_id` 并建复合外键** `FK (workspace_id, <ref>_id) → 目标表 (workspace_id, id)`,使"引用了别的工作区的对象"在 INSERT 时即被拒绝。
 3. **成员引用**:`issues.assignee_id` 等对 `members.id` 的引用同理——引用表存 `(workspace_id, assignee_id)` 复合 FK → `members(workspace_id, id)`。
 4. **多态逻辑外键**(如 `attachment_links.linked_id` 指向 issues 或 comments):不建物理 FK,但引用行必须存 `workspace_id`,删除一致性由软删除 + 服务层保证,并在集成测试矩阵(§9)覆盖跨租户用例。
-5. **纵深防御**:在以上约束之上启用 **PostgreSQL RLS**:业务表按 `workspace_id = current_setting('mesh.workspace_id')::uuid` 建策略,API 事务开始时设置该 GUC;RLS 作为程序遗漏的兜底而非替代复合 FK。
+5. **纵深防御**:在以上约束之上启用 **PostgreSQL RLS**:业务表(含 `realtime_channels`/`realtime_events`)按 `workspace_id = current_setting('mesh.workspace_id')::uuid` 建策略,API 事务开始时设置该 GUC;RLS 作为程序遗漏的兜底而非替代复合 FK。
+6. **复合 FK 的 `ON DELETE SET NULL` 必须列级显式**(R2 硬约束):PostgreSQL 默认把复合 FK 的**所有**引用列一起置 NULL,会连带把 `NOT NULL` 的 `workspace_id` 置空,导致删除实际失败——**建表成功 ≠ 删除语义可用**。一切需要"删除时置空引用"的复合 FK 一律采用 PostgreSQL 16 列级语法 **`ON DELETE SET NULL (<引用列>)`**(仅置空引用列,`workspace_id` 保持不动),迁移层显式 DDL;对"不可悬空"的引用(如留痕作者)采用**软删除 + `ON DELETE RESTRICT`**。真实 DELETE 行为(而非仅建表)必须有集成测试覆盖(§9 T18)。
+7. **同父域约束**(R2 硬约束):自引用与"同属一个父对象"的多引用(父评论/父消息/引用消息/当前版本指针等),仅同租户**不够**,还必须以**重叠唯一键 + 复合 FK** 在数据库层保证"引用行与被引用行属于同一父对象":被引用表建形如 `UNIQUE (workspace_id, <parent>_id, id)` 的唯一键,引用方以 `(workspace_id, <parent>_id, <ref>_id) → 目标表 (workspace_id, <parent>_id, id)` 复合 FK 引用(如评论的 parent 必须同 issue、聊天消息的 parent/quote 必须同会话、`skills.current_version_id` 必须属于同一 skill、skill 安装/绑定的版本必须属于所装技能)。
+8. **realtime 表也是租户资源**(R2 硬约束):`realtime_channels`/`realtime_events` 必须携带 `workspace_id` 并建复合 FK/唯一键与 RLS(§6.7),使租户隔离在数据库层可执行;**频道字符串(如 `issue:{id}`)不得充当租户隔离边界**。
 
 ### 6.3 编号、前缀与默认状态约束(唯一权威)
 
 | 项 | 权威规则 |
 | --- | --- |
-| issue 编号 | 项目内 `number` 由 `projects.issue_seq` 行锁自增;**无项目 issue** 使用工作区级计数器 `workspaces.inbox_issue_seq`(同发行锁自增),前缀为工作区保留前缀(默认 `WS`,可配);`identifier = <前缀> || '-' || number` |
-| 编号唯一 | `issues` 上同时建 **`UNIQUE (project_id, number)`**(项目内,仅 project_id 非空行有效)与 **`UNIQUE (workspace_id, identifier)`**(工作区级,兜住无项目 issue 与一切重复),后者为普通唯一索引 |
-| 编号不可复用/不可变 | issue 软删除编号永久废弃;`identifier` 一经生成**永不改变**(issue 在项目间迁移不重编号);项目前缀 `key` **永久保留**——`projects` 上建 **`UNIQUE (workspace_id, key)`(不带 `WHERE deleted_at IS NULL`)**,软删除/归档项目后前缀不可复用;项目不得跨工作区迁移;删除项目时其 issue 的 `identifier` 保持不变(`issues.project_id` ON DELETE SET NULL,编号随 issue 走) |
+| 编号命名空间(R2:与当前归属项目解耦) | `issues` 上 `identifier_namespace_key TEXT NOT NULL`(创建时取所属项目的 `key`,无项目 issue 取工作区收件箱保留前缀,默认 `WS`)与 `number BIGINT NOT NULL`(创建时在该命名空间内自增),**两者一经生成永不改变、不随项目迁移**;`identifier = identifier_namespace_key || '-' || number` 亦不可变。`project_id` **仅表示当前归属项目**,跨项目迁移时改变的是 `project_id`,命名空间与编号保持不变。有项目 issue 的 `number` 由 `projects.issue_seq` 行锁自增(计数器绑定于"创建时所属项目"的 key 命名空间);**无项目 issue** 使用工作区级计数器 `workspaces.inbox_issue_seq`(同发行锁自增)+ 收件箱保留前缀。**`UNIQUE (project_id, number)` 已废除**——它与"不可变编号 + 跨项目迁移"直接冲突(`WEB-1` 移入已有 `APP-1` 的项目会违约,看板 `group_by=project` 拖拽因此不可实现) |
+| 编号唯一 | `issues` 上同时建 **`UNIQUE (workspace_id, identifier_namespace_key, number)`**(命名空间级,取代原 `UNIQUE(project_id, number)`)与 **`UNIQUE (workspace_id, identifier)`**(工作区级,兜住无项目 issue 与一切重复) |
+| 前缀注册(R2:工作区级排他) | 一切 identifier 前缀——项目 `key`、**当前与历史的**收件箱前缀——统一登记在工作区级前缀注册表 `identifier_prefix_registry`(workspace.md owns):`UNIQUE (workspace_id, key)`,含 `kind ∈ ('project','inbox','retired')` 与可选 `project_id`。创建项目占用 `key`、变更 `settings.inbox_issue_prefix` 都必须先经注册表排他校验:新前缀与任一在册前缀(含 `retired`)冲突即拒绝;收件箱前缀变更时旧前缀置 `retired` **永久保留**(历史 identifier 不重编号)。如此 `UNIQUE(workspace_id, identifier)` 不再在创建 issue 时"随机"被违反 |
+| 编号不可复用/不可变 | issue 软删除编号永久废弃;`identifier` 一经生成**永不改变**(issue 在项目间迁移只改 `project_id`,不重编号);项目前缀 `key` **永久保留**——`projects` 上建 **`UNIQUE (workspace_id, key)`(不带 `WHERE deleted_at IS NULL`)** 并与前缀注册表一致,软删除/归档项目后前缀不可复用;项目不得跨工作区迁移;删除项目时其 issue 的 `identifier` 保持不变(`issues.project_id` 复合 FK `ON DELETE SET NULL (project_id)`,仅置空归属列,§6.2 第 6 条) |
 | 默认状态唯一 | "每作用域唯一默认状态"用**部分表达式唯一索引**(COALESCE 表达式不能写进表级 UNIQUE 约束):`CREATE UNIQUE INDEX uq_issue_statuses_default ON issue_statuses (workspace_id, COALESCE(project_id, '00000000-0000-0000-0000-000000000000')) WHERE is_default;` |
 | 至少一个默认 | 由事务保证:任何"取消某状态默认"的写操作必须与"设置新默认"在同一事务;工作区/项目创建事务内播种默认状态集;服务层自检校验每作用域恰有一个默认,缺失即报警并修复 |
 | 其他 NULL 作用域唯一 | labels/custom_field_defs/views 等"工作区级 OR 项目级"命名唯一,一律用上同款**部分表达式唯一索引**写法,不得写表级 `UNIQUE (ws, COALESCE(project_id,…), name)` |
@@ -251,8 +258,8 @@ agents(agent.md owns,AI 身份与配置)──1:N──┘      ▲
 
 | 表 | 语义 | 关键字段 |
 | --- | --- | --- |
-| `task_executions` | 一次**逻辑执行**(由分派/@提及/autopilot 触发产生,生命周期内只有一行) | `id, workspace_id, agent_id FK→agents, issue_id NULL, trigger CHECK IN('assign','mention','autopilot','manual','chat'), status, idempotency_key UNIQUE NULL, priority, task_spec JSONB, label_requirements JSONB, trigger_event_id NULL(触发来源事件,审计), config_snapshot JSONB(入队快照,§6.11), timeout_seconds, max_attempts, result, failure_reason, queued_at, finished_at` |
-| `execution_attempts` | 一次**物理尝试**(领取、租约、runtime、分支、日志、结果都挂在 attempt 上) | `id, workspace_id, execution_id FK→task_executions, attempt_number, runtime_id FK(复合→runtimes(workspace_id,id)), status CHECK IN('claimed','running','completed','failed','timeout','cancelled','reclaimed'), claimed_by_runtime_id, lease_expires_at, lease_seq, claimed_at, started_at, finished_at, working_branch, result, failure_reason`;`UNIQUE (execution_id, attempt_number)` |
+| `task_executions` | 一次**逻辑执行**(由分派/@提及/autopilot 触发产生,生命周期内只有一行) | `id, workspace_id, agent_id FK→agents, issue_id NULL, trigger CHECK IN('assign','mention','autopilot','manual','chat'), status, idempotency_key UNIQUE NULL, priority, task_spec JSONB, label_requirements JSONB, required_capabilities JSONB NOT NULL DEFAULT '[]'`(R2:权威能力需求字段,claim 时与服务端 runtime 能力匹配)`, trigger_event_id NULL(触发来源事件,审计), config_snapshot JSONB(入队快照,§6.11), timeout_seconds, max_attempts, result, failure_reason, queued_at, finished_at` |
+| `execution_attempts` | 一次**物理尝试**(领取、租约、runtime、分支、日志、结果都挂在 attempt 上) | `id, workspace_id, execution_id FK→task_executions, attempt_number, runtime_id FK(复合→runtimes(workspace_id,id)), status CHECK IN('claimed','running','cancelling','completed','failed','timeout','cancelled','reclaimed')`(R2:`cancelling` 为物理层两段式取消中间态,与逻辑层词汇统一;`cancelled(failure_reason='awaiting_approval')` 为审批挂起时当前 attempt 的终态)`, claimed_by_runtime_id, lease_expires_at, lease_seq, claimed_at, started_at, finished_at, working_branch, result, failure_reason`;`UNIQUE (execution_id, attempt_number)` |
 
 **执行状态机(逻辑层,全系统统一长任务词汇)**:
 
@@ -263,15 +270,20 @@ running ──► failed / timeout(失败终态;可重试则见下)
 claimed/running ──租约过期/失联──► requeued(当前 attempt 置 reclaimed,逻辑回 queued)
 requeued ──► claimed(建 attempt #N+1,不复用旧行)
 queued/claimed/running ──用户取消──► cancelling ──► cancelled(终态)
-queued ──需审批(§6.10)──► awaiting_approval ──批准──► queued/claimed 续跑
+running ──工具命中 confirm_required(§6.10)──► awaiting_approval
+    (当前 attempt 置 cancelled(failure_reason='awaiting_approval'),租约结束、容量幂等释放,审计行保留)
+awaiting_approval ──批准──► queued(新 attempt #N+1 携带审批上下文从审批点续跑,见 §6.10)
 awaiting_approval ──拒绝/过期──► cancelled(失败终态,failure_reason=approval_rejected/approval_expired)
 ```
 
+> **审批挂起只能从 `running` 进入**(工具调用发生在执行中);不存在 `queued → awaiting_approval` 迁移(入队前的人工确认由 autopilot/squad 各自的编排层审批承载,见对应 Spec)。
+
 规则:
 - **requeue 不覆盖审计**:旧 attempt 行保留(runtime/claimed_at/日志/分支/失败原因),`retry_count = COUNT(attempts)-1`;超过 `max_attempts` 转 `failed(failure_reason='max_retries')`。
-- **claim 安全**(claim SQL 权威版本见 runtime.md):必须带 `WHERE e.workspace_id = :runtime_workspace_id`;标签/能力匹配只用**服务端保存的** `runtimes.labels/capabilities`,**不信任 daemon 请求里的 labels/capacity**;agent 设了 `default_runtime_id` 时仅该 runtime 可领取。
-- **容量防超卖**:claim 事务内对 `runtimes` 行做**原子容量扣减**(`UPDATE runtimes SET current_load = current_load + 1 WHERE id=:rid AND status='online' AND current_load < max_concurrent RETURNING …`),而非前置校验;attempt 终态/回收时**幂等释放**(每个 attempt 只释放一次,由 attempt 状态迁移守卫,`current_load = GREATEST(current_load - 1, 0)`)。
-- **租约 fencing**:`lease_seq` 每次领取/续租 +1;旧持有者的一切上报因 `lease_seq` 不匹配被 409 拒绝;`awaiting_approval` 期间 reaper 不回收、租约暂停推进。
+- **claim 安全**(claim SQL 权威版本见 runtime.md):必须带 `WHERE e.workspace_id = :runtime_workspace_id`;**标签与能力匹配**只用**服务端保存的** `runtimes.labels/capabilities`(`e.label_requirements <@ runtimes.labels` **且** `e.required_capabilities <@ runtimes.capabilities`,R2 补齐能力条件),**不信任 daemon 请求里的 labels/capacity**;agent 设了 `default_runtime_id` 时仅该 runtime 可领取。
+- **容量防超卖 + 无任务必回滚**(R2 硬约束):claim 是「选任务 + 扣容量 + 建 attempt」的**单一原子成功分支**——先锁 runtime 行校验在线/容量(不预扣),`FOR UPDATE SKIP LOCKED` 选出匹配任务;**选中任务后**才 `current_load + 1`、转 `claimed`、建 attempt,一次提交。**有容量但无匹配任务时,事务必须整体回滚(`current_load` 保持不变)再返回 204**,不得"先 +1 再找任务"后带着 0 行结果 COMMIT(那会造成容量永久泄漏)。attempt 终态/回收时**幂等释放**(每个 attempt 只释放一次,由 attempt 状态迁移守卫,`current_load = GREATEST(current_load - 1, 0)`)。集成测试见 §9 T3/T20。
+- **租约 fencing**:`lease_seq` 每次领取/续租 +1;旧持有者的一切上报因 `lease_seq` 不匹配被 409 拒绝。
+- **审批续跑唯一协议**(R2 写死,取代"新 attempt 或原 runtime 续跑"的互斥双方案):进入 `awaiting_approval` 时当前 attempt 置 `cancelled(awaiting_approval)`——**attempt 不保留在途态**(审计行保留)、**租约不继续**(随 attempt 终态结束,reaper 无需特殊处理该态)、**容量不占用**(幂等释放);runtime 失联不产生回收问题(无在途租约);批准后执行回 `queued`,由(可能不同的)runtime 领取并建 attempt #N+1,凭审批请求时冻结的 `resume_context`(检查点引用 + 已完成步骤水位 + 待执行工具调用参数,§6.10)从审批点恢复上下文;拒绝/过期 → `cancelled`。该协议任何一环皆可测试(§9 T21),且不存在"租约暂停导致永久卡死"的路径。
 
 ### 6.5 投递语义与幂等键(唯一权威)
 
@@ -282,7 +294,7 @@ awaiting_approval ──拒绝/过期──► cancelled(失败终态,failure_re
   | --- | --- |
   | 执行入队 | `sha256(agent_id \| issue_id \| trigger_event_id)`(同一触发事件不重复入队) |
   | agent 发评论/回流 | `sha256(execution_id \| attempt_number \| 'comment' \| client_seq)` |
-  | 工具调用 | `sha256(execution_id \| attempt_number \| tool_id \| stable_args_hash)` |
+  | 工具调用 | `sha256(execution_id \| attempt_number \| capability_key \| stable_args_hash)`(R2:`tool_id` 真源已删除,统一为版本化 capability key,§6.11) |
   | 出向 Webhook/推送 | `sha256(execution_id \| attempt_number \| target \| event)` |
   | git 推送 | 重试分支名 **按 attempt 唯一**:`agent/<execution_id>/a<attempt_number>`,杜绝两个 runtime/attempt 推同一分支 |
 
@@ -310,6 +322,7 @@ CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pe
 
 - 业务事务**同事务 INSERT outbox_events**(与业务行同提交);relay worker `FOR UPDATE SKIP LOCKED` 领取并分发,成功后置 `published`;失败退避重试,`delivery_attempts` 超限置 `failed` 并告警。
 - **禁止**在业务事务外"顺手"创建 execution/notification/realtime 事件(进程内总线、直接调下游)——此为评审硬约束。
+- **实时事件的唯一登记路径(R2 硬约束)**:一切实时事件(含各模块 §3.x/§4.x 所列 WebSocket 事件、`notification.created`、执行状态回流)一律为:业务事务写 `outbox_events`(`event_type='realtime.publish'`,payload 含频道、事件名、完整变更字段)→ **realtime projector**(§2.2)以 outbox 事件 id 为唯一去重键写 `realtime_events` 并**在投影事务内分配频道 `seq`**(§6.7)→ 经 Redis pub/sub 通知网关发布。**禁止业务事务直接 INSERT `realtime_events` 或直接分配 `seq`**——两条路径会产生不同的原子性/排序/去重实现乃至重复事件;projector 崩溃后重启经 outbox 补投,`realtime_events.UNIQUE(outbox_event_id)` 保证不重复登记(§9 T5/T26)。
 
 ### 6.7 实时事件契约(唯一权威)
 
@@ -317,32 +330,67 @@ CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pe
 
 ```sql
 CREATE TABLE realtime_channels (
-  channel   TEXT PRIMARY KEY,        -- 如 workspace:{ws}:issues / issue:{id} / execution:{id}:logs
-  last_seq  BIGINT NOT NULL DEFAULT 0
+  channel      TEXT NOT NULL,          -- 如 workspace:{ws}:issues / issue:{id} / execution:{id}:logs
+  workspace_id UUID NOT NULL REFERENCES workspaces(id),  -- R2:租户键(频道字符串不得充当隔离边界,§6.2 第 8 条)
+  last_seq     BIGINT NOT NULL DEFAULT 0,
+  PRIMARY KEY (channel),
+  UNIQUE (workspace_id, channel)
 );
 CREATE TABLE realtime_events (
-  id          BIGINT GENERATED ALWAYS AS IDENTITY,
-  channel     TEXT NOT NULL REFERENCES realtime_channels(channel),
-  seq         BIGINT NOT NULL,       -- 频道内单调递增(消除"全局 seq"与"频道内 seq"混用)
-  event       TEXT NOT NULL,         -- <entity>.<action>
-  payload     JSONB NOT NULL,        -- 完整变更字段 + 可见性水位(见下)
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  published_at TIMESTAMPTZ NULL,
-  UNIQUE (channel, seq)
+  id            BIGINT GENERATED ALWAYS AS IDENTITY,
+  workspace_id  UUID NOT NULL REFERENCES workspaces(id),  -- R2:租户键 + RLS 可执行
+  channel       TEXT NOT NULL,
+  seq           BIGINT NOT NULL,       -- 频道内单调递增(消除"全局 seq"与"频道内 seq"混用)
+  event         TEXT NOT NULL,         -- <entity>.<action>,必须命中下方「事件词汇注册表」
+  payload       JSONB NOT NULL,        -- 完整变更字段 + 可见性水位(见下)
+  outbox_event_id UUID NOT NULL,       -- R2:唯一写入路径——来自 outbox_events.id(§6.6),幂等去重
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at  TIMESTAMPTZ NULL,
+  UNIQUE (channel, seq),
+  UNIQUE (outbox_event_id),            -- at-least-once 投递 → 恰好一次登记(projector 重投不产生重复事件)
+  FOREIGN KEY (workspace_id, channel) REFERENCES realtime_channels(workspace_id, channel)
 );
 CREATE INDEX idx_realtime_events_replay ON realtime_events (channel, seq);
+CREATE INDEX idx_realtime_events_ws_created ON realtime_events (workspace_id, created_at);  -- 保留期归档清理
+
+-- RLS 纵深防御(§6.2 第 5 条):realtime 表同样是租户资源
+ALTER TABLE realtime_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE realtime_events  ENABLE ROW LEVEL SECURITY;
+CREATE POLICY mesh_rt_channels_tenant ON realtime_channels
+  USING (workspace_id = current_setting('mesh.workspace_id')::uuid);
+CREATE POLICY mesh_rt_events_tenant ON realtime_events
+  USING (workspace_id = current_setting('mesh.workspace_id')::uuid);
 ```
 
 | 规则 | 内容 |
 | --- | --- |
-| seq 作用域 | **一律为频道内单调**;分配方式:业务事务内 `UPDATE realtime_channels SET last_seq = last_seq + 1 WHERE channel=$1 RETURNING last_seq`,与事件行同事务写入(持久真源) |
-| 发布 | relay/网关 worker 把未发布事件经 **Redis pub/sub 仅做 fan-out** 推给各 realtime 网关;Redis 不是真源,丢消息由重放兜底 |
-| 保留期 | `realtime_events` 默认保留 **7 天**(可配),到期归档清理 |
-| 重连 | 客户端记频道内 `last_seq`,重连带 `resume_from=<last_seq+1>`;网关从 `realtime_events` 顺序补发 |
+| seq 作用域 | **一律为频道内单调**;分配方式:**realtime projector**(§2.2/§6.6)在写事件行的**同一事务**内 `UPDATE realtime_channels SET last_seq = last_seq + 1 WHERE channel=$1 RETURNING last_seq`(持久真源)。**业务事务不分配 seq、不直接写 `realtime_events`**——业务事务只写 outbox 的 `realtime.publish` 事件 |
+| 唯一写入路径 | 业务事务 → `outbox_events(realtime.publish)` → realtime projector 以 `outbox_event_id` 去重落库并分配频道 seq → Redis pub/sub 通知网关发布(§6.6)。projector 崩溃重启后经 outbox 补投,`UNIQUE(outbox_event_id)` 保证不重复登记;事件在频道内的顺序以 projector 分配的 `seq` 为准,payload 携带 `updated_at`/`version` 供客户端收敛 |
+| 发布 | projector/网关把未发布事件经 **Redis pub/sub 仅做 fan-out** 推给各 realtime 网关;Redis 不是真源,丢消息由重放兜底 |
+| 保留期 | `realtime_events` 默认保留 **7 天**(可配),到期按 `(workspace_id, created_at)` 归档清理 |
+| 重连 | 客户端记**每频道** `last_seq`,重连带 `resume_from=<last_seq+1>`(频道级游标);网关从 `realtime_events` 顺序补发。可选的服务端跨设备游标持久化见 kanban.md `realtime_channel_cursors`(`(workspace_id, member_id, channel)`);**不存在"单个视图一个总游标"的设计**(一个视图消费多个频道,单游标无语义,R2 已删除 `view_subscriptions.last_seen_seq`) |
 | 游标过旧 | `resume_from` 早于保留窗口 → 下发 `{ "op": "resync_required", "watermark": <当前最大 seq>, "rest": "<对账 REST URL, 带 since=…>" }`;客户端整拉对账后无感恢复 |
-| 订阅授权 | **每个频道订阅时重新做资源级授权**(workspace 成员资格 / project 可见性 / issue 可见性);**私有项目事件只进 `project:{id}` 频道,不得先广播给 `workspace:{ws}:*` 再靠前端过滤** |
+| 订阅授权 | **每个频道订阅时重新做资源级授权**(workspace 成员资格 / project 可见性 / issue 可见性),并以 `realtime_channels.workspace_id` 在数据库层校验频道归属;**私有项目事件只进 `project:{id}` 频道,不得先广播给 `workspace:{ws}:*` 再靠前端过滤** |
 | 可见性水位 | 事件 payload 必须携带**完整变更字段**(不只 diff 指针)与 `visibility`(如 issue 当前所属 project/状态),供客户端判定归属;**复杂嵌套 filters 下允许客户端按 id 轻量 refetch**,不得要求前端仅凭 diff 本地重算任意嵌套条件 |
 | 断线体验 | 重连/重放过期时 UI 显示"正在重新同步",对账成功后无感恢复(§6.12 异常态) |
+
+**事件词汇注册表(唯一权威,R2)**:所有实时/SSE 事件名必须取自下表(`<entity>.<action>` 形式;`message.*` 与流控帧 `error`/`ping` 为 README §6.8 流式协议的流内事件名,一并登记)。各功能 Spec 只可引用本表事件名,**禁止使用未登记事件名**;仓库提供文档级词汇校验脚本 `tests/docs/check_event_vocab.py`(扫描 `docs/specs/**/*.md` 中的事件名引用并与本注册表比对,不通过即 CI 失败):
+
+| 域 | 登记事件名 |
+| --- | --- |
+| workspace / 成员 / 邀请 | `workspace.updated` · `workspace.deleted` · `member.added` · `member.updated` · `member.removed` · `member.role_changed` · `member.presence` · `invitation.redeemed` |
+| 项目 / 里程碑 / 周期 | `project.created` · `project.updated` · `project.archived` · `project.unarchived` · `project.deleted` · `project_update.added` · `milestone.created` · `milestone.updated` · `milestone.deleted` · `cycle.updated` |
+| issue / 依赖 / 视图 | `issue.created` · `issue.updated` · `issue.deleted` · `issue.moved` · `issue.project_changed`(跨项目迁移,R2 新增) · `issue.labels_changed` · `issue.custom_field_changed` · `dependency.changed` · `view.updated` · `view.presence` |
+| 评论 / 反应 / 通知 | `comment.created` · `comment.updated` · `comment.deleted` · `comment.resolved` · `reaction.changed` · `notification.created` · `notification.read` · `inbox.unread_count` |
+| 标签 / 自定义字段 | `label.created` · `label.updated` · `label.deleted` · `custom_field.updated` · `custom_field_option.updated` |
+| agent | `agent.created` · `agent.updated` · `agent.deleted` · `agent.lifecycle_changed` · `agent.presence` · `agent.trigger_skipped` |
+| 执行 / 审批 / 队列 / runtime | `execution.queued` · `execution.claimed` · `execution.started` · `execution.progress` · `execution.completed` · `execution.failed` · `execution.timeout` · `execution.cancelled` · `execution.requeued` · `execution.awaiting_approval`(R2 新增:工具审批挂起) · `execution.log` · `approval.created` · `approval.decided` · `queue.depth_changed` · `runtime.activated` · `runtime.online` · `runtime.offline` · `runtime.degraded` · `runtime.paused` |
+| 技能 / 附件 | `skill_import.progress` · `skill.changed` · `skill.update_available` · `skill.approval_required` · `attachment.processed` · `attachment.deleted` |
+| 小队 | `squad.updated` · `squad.archived` · `squad_member.changed` · `squad_task.status_changed` · `squad_activity.created` · `squad_message.created` · `squad_assignment.changed`(R2 新增:小队分派建立/取消,squad.md) |
+| 自动化 | `autopilot.updated` · `autopilot.rate_limited` · `autopilot_runs.status_changed` · `autopilot_runs.approval_required` · `webhook_events.received` |
+| 聊天流式(§6.8 流内事件) | `message.created` · `message.delta` · `message.done` · `message.interrupted` · `error` · `ping` |
+
+> **词汇漂移零容忍**(R2):如 `agent.md` 曾出现的帧示例 `agent.run_started` 与表内 `execution.started` 不一致,一律以本注册表为准修正;新事件必须先进本表再在模块 Spec 引用。
 
 ### 6.8 流式输出协议(唯一权威)
 
@@ -371,6 +419,8 @@ CREATE INDEX idx_realtime_events_replay ON realtime_events (channel, seq);
 
 **UI 配套**:@ 候选提示语为"**发布后将触发一次运行**"(不得写"选中将立即触发");composer 提交前展示 **trigger preview**(列出将被触发的 agent 清单),并提供**显式抑制**开关(请求体 `suppress_triggers: true` → 仅通知不运行);聊天"沉淀为评论"须展示目标 issue、最终正文、附件与 @agent 副作用预览,确认后**一次提交**。
 
+> **小队分派不走"assignee 值比较"(R2)**:「把 issue 分派给小队」经**显式小队分派端点**(squad.md `issue_squad_assignments`)而非 PATCH assignee 值——因为同一 leader 可领导多支小队,`issues.assignee_id=leader` 无法区分哪支小队。因此"再次选择同一 assignee = no-op"**仅适用于个人 assignee**;小队改派(即使目标小队 leader 与现任相同)永远不是 no-op:取消旧小队根任务、建立新分派(详见 squad.md §1.2 S4 / §2.x / §4.4)。
+
 ### 6.10 统一审批实体 approvals(唯一权威,A7/B2 硬约束)
 
 高风险工具确认(`confirm_required`)、squad 拆解方案审批、autopilot 高风险动作审批**共用同一实体与入口**:
@@ -380,11 +430,12 @@ CREATE TABLE approvals (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id      UUID NOT NULL REFERENCES workspaces(id),
   subject_type      TEXT NOT NULL CHECK (subject_type IN ('tool_call','autopilot_action','squad_plan')),
-  subject_execution_id UUID NULL,          -- 关联 task_executions(复合 FK → task_executions(workspace_id,id))
-  subject_run_id    UUID NULL,             -- autopilot_runs.id(逻辑关联)
-  subject_task_id   UUID NULL,             -- squad_tasks.id(逻辑关联)
-  requested_by_member_id UUID NOT NULL,    -- 复合 FK → members(workspace_id,id)
-  action_summary    JSONB NOT NULL,        -- {action, tool/permission, impact_scope, estimated_cost, detail}
+  subject_execution_id UUID NULL,          -- tool_call 主题 → task_executions
+  subject_run_id    UUID NULL,             -- autopilot_action 主题 → autopilot_runs
+  subject_task_id   UUID NULL,             -- squad_plan 主题 → squad_tasks
+  requested_by_member_id UUID NOT NULL,
+  action_summary    JSONB NOT NULL,        -- {action, capability+permission, impact_scope, estimated_cost,
+                                           --  resume_context:{checkpoint_ref, completed_steps, pending_tool_call}, detail}
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending','approved','rejected','expired','cancelled')),
   requested_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -392,22 +443,46 @@ CREATE TABLE approvals (
   decided_by_member_id UUID NULL,
   decided_at        TIMESTAMPTZ NULL,
   decision_comment  TEXT NULL,
-  idempotency_key   TEXT NULL UNIQUE
+  idempotency_key   TEXT NULL UNIQUE,
+  -- R2:subject 同租户复合 FK(主题真源表均已建 UNIQUE(workspace_id, id))
+  FOREIGN KEY (workspace_id, subject_execution_id) REFERENCES task_executions(workspace_id, id),
+  FOREIGN KEY (workspace_id, subject_run_id)       REFERENCES autopilot_runs(workspace_id, id),
+  FOREIGN KEY (workspace_id, subject_task_id)      REFERENCES squad_tasks(workspace_id, id),
+  FOREIGN KEY (workspace_id, requested_by_member_id) REFERENCES members(workspace_id, id),
+  FOREIGN KEY (workspace_id, decided_by_member_id)   REFERENCES members(workspace_id, id),
+  -- R2:按 subject_type 恰好一个 subject 列非空
+  CHECK (
+       (subject_type = 'tool_call'        AND subject_execution_id IS NOT NULL
+                                         AND subject_run_id IS NULL AND subject_task_id IS NULL)
+    OR (subject_type = 'autopilot_action' AND subject_run_id IS NOT NULL
+                                         AND subject_execution_id IS NULL AND subject_task_id IS NULL)
+    OR (subject_type = 'squad_plan'       AND subject_task_id IS NOT NULL
+                                         AND subject_execution_id IS NULL AND subject_run_id IS NULL)
+  )
 );
 CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHERE status = 'pending';
+-- R2:同一 subject 仅一个 pending approval(部分唯一索引)
+CREATE UNIQUE INDEX uq_approvals_pending_execution
+  ON approvals (workspace_id, subject_execution_id)
+  WHERE status = 'pending' AND subject_type = 'tool_call';
+CREATE UNIQUE INDEX uq_approvals_pending_run
+  ON approvals (workspace_id, subject_run_id)
+  WHERE status = 'pending' AND subject_type = 'autopilot_action';
+CREATE UNIQUE INDEX uq_approvals_pending_task
+  ON approvals (workspace_id, subject_task_id)
+  WHERE status = 'pending' AND subject_type = 'squad_plan';
 ```
 
 | 规则 | 内容 |
 | --- | --- |
-| 运行时挂起 | 需审批的执行进入 `task_executions.status='awaiting_approval'`(§6.4);reaper 不回收该态;批准后回到队列续跑(新 attempt 或原 runtime 续租继续),拒绝/过期 → `cancelled` |
+| 运行时挂起与续跑(**唯一协议,R2 写死**) | 工具命中 `confirm_required` 时,runtime 经机器 API 创建 approval,逻辑执行进入 `task_executions.status='awaiting_approval'`,同时**当前 attempt 置 `cancelled(failure_reason='awaiting_approval')`**(审计行保留)、**租约随 attempt 终态结束、容量幂等释放**(不存在"租约暂停/reaper 不回收"的在途态,因而不可能永久卡死);reaper 对 `awaiting_approval` 无需特殊处理。**批准后**执行回 `queued`,下一次领取建 attempt #N+1,凭 `action_summary.resume_context`(审批请求时由 runtime 冻结:检查点对象存储引用 + 已完成步骤水位 + 待执行工具调用参数)**从审批点恢复上下文续跑**;**拒绝/过期** → `cancelled(approval_rejected/approval_expired)`。该协议每个环节可测试(§9 T21) |
 | API | `GET /api/v1/approvals?role=mine`(**统一"待我审批"收件箱**,聚合三类审批) / `GET /approvals/{id}` / `POST /approvals/{id}/approve` / `POST /approvals/{id}/reject` |
-| 展示 | 每条审批显示:动作、所需权限、影响范围、预估成本、过期时间、**批准后的续跑结果**(关联执行深链) |
+| 展示 | 每条审批显示:动作、所需权限(capability + permission)、影响范围、预估成本、过期时间、**批准后的续跑结果**(关联执行深链 + 「将从审批点以新尝试恢复:已完成 N 步,待执行 <工具调用摘要>」) |
 | 过期 | 到期由 reaper/scheduler 惰性或定时置 `expired`,关联执行转 `cancelled(approval_expired)` 并通知请求者 |
 | 权限 | 人类成员且满足:subject 的触发者/分派者、agent owner、或 workspace admin;agent **不可**审批(防自批) |
-| 幂等 | 对同一 approval 重复 approve/reject 为 no-op,返回当前状态;`idempotency_key` 兜底重复请求 |
-| 租约行为 | 见 §6.4(awaiting_approval 期间租约暂停推进) |
+| 幂等 | 对同一 approval 重复 approve/reject 为 no-op,返回当前状态;`idempotency_key` 兜底重复请求;同一 subject 重复发起 pending 审批被部分唯一索引拒绝(取既有 pending 审批返回) |
 
-`confirm_required` 不再只是 UI 文案/事件:工具执行前由 runtime 经机器 API 创建 approval 并把执行挂起,批准响应经心跳下行/轮询回传后才继续。
+`confirm_required` 不再只是 UI 文案/事件:工具执行前由 runtime 经机器 API 创建 approval 并把执行按上述唯一协议挂起,批准结果经心跳下行/轮询回传,执行以新 attempt 从审批点续跑。
 
 ### 6.11 入队可复现快照(唯一权威)
 
@@ -417,13 +492,15 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 {
   "agent_config_version_id": "<agent_config_versions.id>",
   "skill_versions": {"<skill_id>": "<version_id>", "...": "..."},
-  "tool_grants": [{"tool_id": "...", "permission": "read_only|write|confirm_required"}],
+  "capability_grants": [{"capability": "exec:shell", "permission": "read_only|write|confirm_required"}, "..."],
   "repo": {"url": "...", "base_ref": "main", "base_sha": "<commit-sha>"},
   "trigger_event_id": "<outbox_events.id 或领域事件 id>"
 }
 ```
 
-配置/技能/工具绑定在运行期间变更**不影响在途执行**,只对后续入队生效。
+> **R2:`tool_id` 真源已删除**(`tools`/`agent_tool_bindings` 表于 MES-2 删除,不再有工具目录主键可冻结)。工具权限统一以**版本化 capability key + permission** 表达并冻结进 `capability_grants`——与 skill.md 的 `required_capabilities`/`granted_capabilities` 条目结构一致(`{"capability": "<key>", "permission": "read_only|write|confirm_required"}`,未标注 permission 默认 `confirm_required`);`/agents/{id}/tools` 系列端点为 capability 条目的薄封装(agent.md),**任何 Spec 与示例不得再出现 `tool_id` / `tool_grants`**。
+
+配置/技能/能力授权在运行期间变更**不影响在途执行**,只对后续入队生效。
 
 ### 6.12 设计系统与体验基线(唯一权威,B1/B3 硬约束)
 
@@ -458,16 +535,29 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 
 ### 6.13 通知与实时体验(唯一权威,B4 硬约束)
 
+> **R2:唯一通知优先级矩阵**。全系统(README / runtime.md / comment-inbox.md / 各模块)对"什么事件进收件箱、是否穿透 quiet hours、是否重置未读"**只以本表为准**;此前"execution completed 三处互相冲突"(§6.13 critical 不含成功 / runtime 所有终态进通知 / comment-inbox 默认实时邮件并重置未读)统一收口如下。`notifications` 表携带服务端按本矩阵派生的 `priority TEXT NOT NULL CHECK IN ('critical','normal')` 字段(comment-inbox.md owns)。
+
+| 事件 | priority | 进收件箱 | 穿透 quiet hours | 重置同组未读 | 邮件默认 |
+| --- | --- | --- | --- | --- | --- |
+| **执行成功**(execution `completed`) | normal | **否——默认留运行页/时间线**;仅当用户在 `notification_preferences` 显式订阅 `execution_finished`,或该执行由本人 @/分派触发且开启"执行结果"订阅时进收件箱 | 否 | 否(即使订阅进箱,也按普通事件不重置已读组) | none;订阅后 digest |
+| **执行失败/超时**(execution `failed`/`timeout`) | **critical** | 是(触发者/分派者/订阅者) | **是** | **是** | realtime |
+| **执行取消**(execution `cancelled`,含 superseded/agent_paused) | normal | 否(留运行页;取消发起者本人不通知) | 否 | 否 | none |
+| **审批请求**(approval.created,工具/squad 计划/autopilot 动作) | **critical** | 是(统一"待我审批"入口) | **是** | **是** | realtime |
+| **安全隔离**(freeze / 扫描命中 infected / 凭证撤销告警) | **critical** | 是(上传者 + admin) | **是** | **是** | realtime |
+| **被分派 / 被 @**(assigned / mentioned) | **critical** | 是 | **是** | **是** | mentioned=realtime;assigned 可配 digest |
+| 评论新增 / 状态变更 / 订阅更新 | normal | 是(按 `group_key` 聚合组) | 否 | 否(计数累加) | digest |
+| 普通日志 / 阶段进度 / presence 变化 / 执行 `queued`/`claimed`/`started` | —(非通知事件) | 否(留运行页/实时频道) | — | — | — |
+
 | 规则 | 内容 |
 | --- | --- |
 | 默认订阅 | 创建者、assignee 自动订阅(reason=creator/assignee);发过评论者自动订阅(participated);被 @ 自动订阅(mentioned);可手动订阅/取消 |
 | 按 issue 静音 | `issue_subscriptions.muted=true` 保留订阅但不出通知;收件箱提供"不再关注此 issue"一键静音 |
-| 重新置未读 | 同组通知已读后,**仅新的高优事件(mention/assign/agent 运行结束)重新置未读**;同类计数累加(如又多了 3 条评论)**不重新置未读** |
+| 重新置未读 | 同组通知已读后,**仅新的 critical 事件(执行失败/超时、审批请求、安全隔离、被分派、被 @)重新置未读**;**执行成功不重置未读**;同类计数累加(如又多了 3 条评论)**不重新置未读** |
 | 分组与归档 | 按 `group_key`(issue+type)折叠;已读 + 过期组自动归档;`archived_at` 语义为移出主视图,可回查 |
-| quiet hours | 用户级免打扰时段(站内不弹窗、邮件合并到时段后摘要);**critical 事件穿透免打扰** |
-| 事件分级 | **critical(进收件箱 + 可选推送)**:运行失败/超时、审批请求、安全隔离(freeze/扫描命中)、被分派、被 @;**normal(留在运行页/时间线,不进收件箱)**:普通日志、阶段进度、presence 变化 |
+| quiet hours | 用户级免打扰时段(站内不弹窗、邮件合并到时段后摘要);**仅 critical 事件穿透免打扰** |
 | 聚合窗口 | 同 `group_key` 60s 窗口内合并为一条(`payload.count` 递增),避免通知风暴 |
 | 自我抑制 | 动作发起者不给自己生成通知;agent 永不接收会再触发自己的通知(回环防护) |
+| 模块对齐(R2) | runtime.md 的"终态触发通知"改为**按本矩阵分发**(成功→运行页,失败/超时→收件箱 + 可选 Webhook);comment-inbox.md 的 `execution_finished` 类型**默认不投递成功事件**(preferences 显式订阅后才进箱),失败/超时按 critical 投递;各模块 Spec 不得另行定义事件分级 |
 
 ### 6.14 API / 错误 / 分页 词汇(唯一权威)
 
@@ -482,6 +572,7 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 | HTTP 语义 | 400 validation_error(含 `filter_too_complex`)/ 401 unauthorized / 403 forbidden / 404 not_found / 409 conflict(唯一约束、乐观锁、状态冲突)/ 410 gone / 413 payload_too_large / 415 unsupported_media_type / 422 业务校验失败(具名 code)/ 423 locked / 429 rate_limited(带 `Retry-After`)/ 500 internal_error / 502 storage_error |
 | 幂等写 | 创建/动作类端点支持 `Idempotency-Key` 请求头(§6.5);重复键返回首次结果 |
 | 过滤限制 | 列表/视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底,超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded` 并建议收窄条件 |
+| 跨项目迁移(R2) | 跨项目移动 issue(看板 `group_by=project` 拖拽或显式 move 端点)为**两步式契约**:`POST /api/v1/issues/{id}/move-preview`(或 move 命令 `dry_run`)返回将被**映射/清除**的字段清单(项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留)→ 客户端展示并要求确认 → `POST /api/v1/issues/{id}/move`(或 `POST /views/{id}/moves`,`confirm=true`)在**单事务**完成迁移;未确认的 move 返回 `422 move_confirmation_required`(详见 issue.md §3.8 / kanban.md §3.2) |
 
 ### 6.15 不可信内容处理(权威,MES-4 安全约束)
 
@@ -498,29 +589,37 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 | 规则 | 内容 |
 | --- | --- |
 | 全通道脱敏 | 凭证(secret)的脱敏不仅限日志通道:agent 写出的**评论、附件产出物、日志**等所有内容通道均做 secret 命中检测(复用 `runtime_credentials.redact_in_logs` 黑名单),命中即拦截该内容写出并触发安全告警;沙箱出站默认 deny(runtime.md)从网络层堵截凭证经任意外联外泄 |
-| 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,仅允许 `https`(及可选 `http`);members/users/agents/workspaces 相关写入端点统一校验 |
+| 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,**仅允许 `https`**(R2:统一 https-only,明文 `http` 的用户可控头像/Logo URL 是混合内容弱攻击面,不再提供可选 http);members/users/agents/workspaces/squads 相关写入端点统一校验 |
 | SSRF 防护 | 一切服务端代为发起的外联(技能来源拉取、autopilot 出向 HTTP、平台托管 runtime 的 checkout)禁止私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254`),仅允许公网地址或显式白名单 |
 | WebSocket 鉴权 | **禁止在 URL query 参数中传递 token**(会落入访问日志与中间代理);使用 WebSocket 子协议(Sec-WebSocket-Protocol)或连接建立后首帧认证 |
 
 ---
 
-## 7. 核心跨模块流程(R1 权威版)
+## 7. 核心跨模块流程(R2 权威版)
 
 **「分派给 agent」端到端**(贯穿 member / issue / agent / runtime / comment-inbox):
 
 ```
 人类把 issue.assignee 改为 agent(触发语义按 §6.9)
-  → issue 服务在【同一事务】写 issues + issue_activity + outbox_events(issue.assigned)
-     + realtime_events(issue.updated, 频道内 seq 同事务分配)
+  → issue 服务在【同一事务】写 issues + issue_activity
+     + outbox_events(issue.assigned)
+     + outbox_events(realtime.publish,载荷 issue.updated)      ← 业务事务只写 outbox,不直接写 realtime_events(§6.6)
   → outbox relay 分发:
       ① agent 编排入口(与 @提及、autopilot 共用)按 §6.9 校验护栏/去重后,
-         创建 task_executions(queued, config_snapshot 冻结 §6.11, 幂等键 §6.5)
-      ② 通知 fan-out(按 §6.13 订阅/去噪规则写 notifications)
-      ③ realtime 网关经 Redis fan-out 推 issue.updated / execution.queued
-  → runtime 以 FOR UPDATE SKIP LOCKED 领取(§6.4:workspace 校验 + 服务端标签/能力 +
-     原子容量扣减,建 execution_attempts #1,一次性下发 attempt 绑定凭证)
+         创建 task_executions(queued, config_snapshot 冻结 §6.11:
+         agent_config_version + skill_versions + capability_grants + repo/base SHA + trigger_event_id,
+         幂等键 §6.5;label_requirements + required_capabilities 为权威匹配字段 §6.4)
+      ② 通知 fan-out(按 §6.13 订阅/去噪 + 唯一优先级矩阵写 notifications,带 priority)
+  → realtime projector 消费 realtime.publish:以 outbox 事件 id 去重写 realtime_events
+     (同事务分配频道 seq),经 Redis pub/sub 通知网关推 issue.updated / execution.queued(§6.7)
+  → runtime 以 FOR UPDATE SKIP LOCKED 领取(§6.4:workspace 校验 + 服务端标签与能力匹配 +
+     原子容量扣减;无匹配任务则整体回滚、容量不泄漏;建 execution_attempts #1,一次性下发 attempt 绑定凭证)
   → runtime checkout 专属分支 agent/<execution-id>/a<attempt>,沙箱执行(running,日志经 WS 流式回传)
-  → 完成:agent 以成员身份在 issue 发结果评论(幂等键)、改状态(execution completed)
+  → 工具命中 confirm_required:经机器 API 创建 approval(§6.10),当前 attempt 置
+     cancelled(awaiting_approval)、租约结束、容量释放;批准 → queued → attempt #N+1
+     凭 resume_context 从审批点续跑;拒绝/过期 → cancelled
+  → 完成:agent 以成员身份在 issue 发结果评论(幂等键)、改状态(execution.completed;
+     成功默认留运行页,失败/超时按 §6.13 critical 进收件箱)
   → 失败/超时/失联:租约 reaper 把当前 attempt 置 reclaimed,逻辑回 queued 建下一个 attempt
      (at-least-once + 幂等副作用),超 max_attempts 转 failed
 ```
@@ -534,8 +633,15 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 - [x] 每份功能 Spec 含可逐条验证的验收标准,数据模型 + 接口 + UI/UX 齐全,可直接指导开发。
 - [x] 全部产出物已提交到 Mesh 仓库主干(`main`)。
 - [x] 无任何暴露外部出处的内容(全部文档经品牌词/URL 扫描,仅含占位地址)。
-- [ ] **(R1)** §6 全部权威契约已在各功能 Spec 中以引用方式落地,各 Spec 无重复/冲突定义;全部 DDL 在本地 PostgreSQL 16+ 实际执行通过。
-- [ ] **(R1)** §9 集成测试矩阵作为各模块验收的必测项。
+- [x] **(R1)** §6 全部权威契约已在各功能 Spec 中以引用方式落地,各 Spec 无重复/冲突定义;全部 DDL 在本地 PostgreSQL 16+ 实际执行通过。
+- [x] **(R1)** §9 集成测试矩阵作为各模块验收的必测项。
+- [x] **(R2)** 复合 FK `ON DELETE SET NULL` 一律 PG16 列级写法(§6.2 第 6 条),补齐同租户/同父域约束与 realtime 租户键(§6.2 第 7/8 条、§6.7),并以**真实 DELETE 行为与跨租户约束测试**证明(§9 T18/T1)。
+- [x] **(R2)** 不可变编号命名空间与工作区级前缀注册落地(§6.3),跨项目迁移为单事务 + 字段映射预览(issue.md/kanban.md,§9 T19/T22)。
+- [x] **(R2)** claim 无任务容量回滚、capability 权威匹配、审批 attempt/租约/容量**唯一续跑协议**写死(§6.4/§6.10,§9 T20/T21)。
+- [x] **(R2)** outbox → realtime **唯一写入路径**与 canonical 事件词汇注册表(§6.6/§6.7,§9 T26);bare response / `unauthenticated` / `agent.run_started` / `tool_id` 等 canonical 冲突清零(§6.11/§6.14/auth.md)。
+- [x] **(R2)** 每频道游标(§6.7/kanban.md)、小队 active assignment 唯一身份(squad.md)、approval 强约束与 blob 真源/秒传 possession(§6.10/attachment.md,§9 T23/T24)。
+- [x] **(R2)** 唯一通知优先级矩阵(§6.13,§9 T25);MES-4 LOW-2/LOW-3 硬化一并处理(workspace.md/§6.16)。
+- [ ] **(持续)** §9 全部集成测试(含 R2 新增 T18–T26)在开发阶段作为各模块验收的必测项落实。
 
 ---
 
@@ -562,6 +668,15 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 | T15 | **编号并发** | 同项目 / 无项目并发创建 issue(≥10):`UNIQUE(workspace_id, identifier)` 下无重号、无跳号(除失败回滚) |
 | T16 | **仓库 checkout 白名单(H1)** | checkout `config_snapshot.repo.url` 不在 `allowed_repos` 白名单内 → 403;`repo_token` 用于白名单外仓库 → 拒绝;平台托管 runtime checkout 私网 / 元数据地址 → 拒绝 |
 | T17 | **全通道脱敏(C2)** | agent 尝试把已知 secret 值写入评论 / 附件产出物 → 内容被拦截、不发布、触发安全告警;日志中 secret 命中 → `***` 替换(评论 / 附件 / 日志三通道均覆盖) |
+| T18 | **真实 DELETE 行为(R2)** | 不止建表成功——实际执行 DELETE 并断言:① 物理删除/软清理 member 行时,`issues.assignee_id` 经 `ON DELETE SET NULL (assignee_id)` 仅置空引用列,`workspace_id` 保持非空、行不报错;② 删除 project 时 `issues.project_id` 置空而 `identifier` 不变;③ 删除被 `issues.status_id` 引用的状态被 `RESTRICT` 拒绝;④ 删除父 issue 级联子 issue;⑤ 删除 workspace 级联其全部租户数据。所有 `ON DELETE SET NULL` 复合 FK 逐一覆盖 |
+| T19 | **不可变编号与跨项目迁移(R2)** | `WEB-1` 迁入已有 `APP-1` 的项目:`identifier_namespace_key/number/identifier` 不变、`project_id` 变更、`UNIQUE(workspace_id, identifier_namespace_key, number)` 不违约;迁入/迁出/删除项目后历史 identifier 指向不变;前缀注册表排他:项目 key 与收件箱前缀(含 `retired` 历史前缀)冲突被拒,变更收件箱前缀后旧前缀永久保留、历史 issue 不重编号 |
+| T20 | **claim 容量回滚与能力匹配(R2)** | ① runtime 有容量但队列中**无匹配任务** → claim 返回 204 且 `current_load` **保持不变**(事务整体回滚,无泄漏);② `required_capabilities=["ffmpeg"]` 的执行仅被 `capabilities` 含 `ffmpeg` 的 runtime 领取(能力不匹配的 runtime 跳过该任务,标签条件并行生效);③ 并发 5 抢 2 容量恰成功 2,终态后 `current_load` 幂等归零 |
+| T21 | **审批续跑唯一协议(R2)** | running 执行命中 `confirm_required` → 创建 approval(同 subject 仅一个 pending,部分唯一索引兜底)+ 当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、`current_load` 释放;批准后执行回 `queued`,新 attempt #N+1 凭 `resume_context` 从审批点续跑(已完成步骤不重做);拒绝/过期 → `cancelled(approval_rejected/approval_expired)`;审批挂起期间 runtime 失联不产生卡死(无在途租约) |
+| T22 | **跨项目迁移事务(R2)** | 看板 `group_by=project` 拖拽:无确认的 move 返回 422 要求确认;确认后单事务完成 `project_id` 变更 + 项目私有 status 映射(→ 目标项目同 category 默认 status)/ 项目私有 milestone/cycle/label/自定义字段值清除,工作区级字段保留;迁移后不存在"当前项目 + 旧项目私有字段"脏状态;`issue.project_changed` 事件携带映射/清除清单 |
+| T23 | **小队 active assignment 唯一身份(R2)** | 同一 leader 领导 S1/S2 两小队:issue 先派给 S1 再派给 S2(assignee 值不变)→ S1 根任务级联取消、S2 根任务建立(**不是 no-op**);重复派给 S1 = no-op 返回既有分派;`issue_squad_assignments` 部分唯一索引保证每 issue 至多一条 active;leader 更换 → active 分派与 `issues.assignee_id` 同事务更新;leader 离队且无替补 → 根任务 blocked 并通知 |
+| T24 | **blob 真源与秒传 possession(R2)** | ① 调用者对某 `content_hash` 无任何可读 attachment 时,"秒传"短路被拒(必须完整上传,上传本身即持有证明);② 对已可读 blob 秒传成功(新建独立 attachments 行指向同一 `attachment_blobs` 行);③ `ref_count` 原子维护:删除共享 blob 的其中一条附件,另一条不受影响;`ref_count=0` 后对象才被 GC;④ 并发秒传/上传同一 hash 由 `UNIQUE(workspace_id, content_hash)` 串行化,不产生重复 blob 行 |
+| T25 | **通知优先级矩阵(R2)** | 执行成功默认**不进收件箱**(留运行页),失败/超时进收件箱且**穿透 quiet hours** 并重置同组未读;执行成功订阅后才进箱且不重置已读组;审批请求/安全隔离为 critical;cancelled 不通知发起者;runtime.md/comment-inbox.md 的分发与本矩阵逐事件一致 |
+| T26 | **realtime 唯一路径与词汇(R2)** | ① 业务提交后、projector 登记前杀 projector → 重启后事件仍被登记且**频道 seq 无缺口/无重复**(`UNIQUE(outbox_event_id)` 去重);② 跨 workspace 的频道订阅/事件读取被 RLS 与复合 FK 拒绝;③ 文档级词汇校验:`docs/specs/**/*.md` 引用的全部事件名命中 §6.7 注册表,无未登记名(如 `agent.run_started` 不允许存在) |
 
 ---
 
@@ -582,4 +697,4 @@ CREATE INDEX idx_approvals_pending ON approvals (workspace_id, requested_at) WHE
 
 ---
 
-*文档版本:Draft v2 / R1 修订(2026-07-24)。后续任何 Spec 变更须在对应功能文件内修订;涉及公共契约的变更必须先改本章并同步引用方。*
+*文档版本:Draft v3 / R2 修订(2026-07-25)。后续任何 Spec 变更须在对应功能文件内修订;涉及公共契约的变更必须先改本章并同步引用方。*

@@ -143,7 +143,7 @@ approvals(README §6.10):subject_type='autopilot_action',经 approvals.subject_r
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-> **审批关联(取此方案,README §6.10)**:autopilot_runs **不冗余 approval 列**;待决审批经统一 `approvals` 实体的 **`approvals.subject_run_id → autopilot_runs.id`(逻辑关联)** 反查,`subject_type='autopilot_action'`。当存在 `status='pending'` 的关联 approval 时,`autopilot_runs.status='waiting_approval'`;approve/reject 经 `POST /api/v1/approvals/{id}/approve|reject` 收口(本模块 `runs/{run_id}/approve|reject` 为其薄封装,见 §3.1)。
+> **审批关联(取此方案,README §6.10)**:autopilot_runs **不冗余 approval 列**;待决审批经统一 `approvals` 实体的 **`approvals.subject_run_id` 复合 FK `(workspace_id, subject_run_id) → autopilot_runs(workspace_id, id)`** 反查,`subject_type='autopilot_action'`(README §6.10 R2:**已由逻辑关联升级为物理复合 FK**,并有「按 `subject_type` 恰好一个 subject 列非空」CHECK 与「同 subject 仅一个 pending」的部分唯一索引 `uq_approvals_pending_run`)。当存在 `status='pending'` 的关联 approval 时,`autopilot_runs.status='waiting_approval'`;**同一 run 仅一个 pending 审批**(重复发起取既有 pending 返回);approve/reject 经 `POST /api/v1/approvals/{id}/approve|reject` 收口(本模块 `runs/{run_id}/approve|reject` 为其薄封装,见 §3.1)。
 
 ### 2.4 表:`autopilot_run_attempts`(重试明细)与 `autopilot_artifacts`(产物)
 
@@ -289,7 +289,7 @@ CREATE INDEX idx_webhook_event_route ON webhook_events(autopilot_id, process_sta
 | `autopilot_runs.autopilot_id` / `webhook_events.autopilot_id` | 复合 FK → `autopilot(workspace_id, id)` | 本模块 | 规则归属(README §6.2) |
 | `autopilot_runs.webhook_event_id` | 复合 FK → `webhook_events(workspace_id, id)` | 本模块 | 关联入站事件(README §6.2) |
 | `autopilot_runs.execution_id` / `autopilot_run_attempts.execution_id` | 复合 FK / 逻辑关联 → `task_executions(workspace_id, id)` | runtime.md | `run_agent_prompt` 派发的逻辑执行(README §6.4) |
-| `approvals.subject_run_id` | 逻辑关联 → `autopilot_runs.id` | README §6.10 | `subject_type='autopilot_action'` 的高风险动作审批 |
+| `approvals.subject_run_id` | 复合 FK → `autopilot_runs(workspace_id, id)` | README §6.10 | `subject_type='autopilot_action'` 的高风险动作审批(R2:已升为物理复合 FK,不再是逻辑关联;同 subject 仅一个 pending,部分唯一索引 `uq_approvals_pending_run`) |
 | `autopilot_artifacts.ref_id`(`ref_table='comments'/'issues'`) | 多态逻辑外键(行带 `workspace_id`) | comment-inbox.md / issue.md | 动作产物(README §6.2 逻辑外键规则) |
 
 ---
@@ -341,16 +341,17 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
   "executor_agent_id": "a9e2...", "max_retries": 3, "retry_backoff": "exponential",
   "rate_limit_max": 5, "rate_limit_window_seconds": 3600, "require_approval": false }
 // 201 Response
-{ "id": "3b7d1f0e-2c4a-4e1b-9f8a-1d2e3f4a5b6c", "workspace_id": "7ea1...",
-  "name": "每日站会前汇总进展", "trigger_type": "schedule",
-  "trigger_config": {"cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai", "misfire_policy": "run_once"},
-  "filter_config": {"project_ids": ["6f1c..."]}, "action_config": [ ],
-  "executor_agent_id": "a9e2...", "status": "active",
-  "guardrails": {"rate_limit_overflow": "drop", "dedup_window_seconds": 300, "cascade_max_depth": 3, "agent_loop_detection": true},
-  "max_retries": 3, "retry_backoff": "exponential", "rate_limit_max": 5,
-  "rate_limit_window_seconds": 3600, "concurrency_limit": 1, "require_approval": false,
-  "next_run_at": "2026-07-27T01:00:00Z",
-  "created_at": "2026-07-24T12:00:00Z", "updated_at": "2026-07-24T12:00:00Z" }
+{ "data": {
+    "id": "3b7d1f0e-2c4a-4e1b-9f8a-1d2e3f4a5b6c", "workspace_id": "7ea1...",
+    "name": "每日站会前汇总进展", "trigger_type": "schedule",
+    "trigger_config": {"cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai", "misfire_policy": "run_once"},
+    "filter_config": {"project_ids": ["6f1c..."]}, "action_config": [ ],
+    "executor_agent_id": "a9e2...", "status": "active",
+    "guardrails": {"rate_limit_overflow": "drop", "dedup_window_seconds": 300, "cascade_max_depth": 3, "agent_loop_detection": true},
+    "max_retries": 3, "retry_backoff": "exponential", "rate_limit_max": 5,
+    "rate_limit_window_seconds": 3600, "concurrency_limit": 1, "require_approval": false,
+    "next_run_at": "2026-07-27T01:00:00Z",
+    "created_at": "2026-07-24T12:00:00Z", "updated_at": "2026-07-24T12:00:00Z" } }
 ```
 
 **列表(分页 + 过滤)** `GET /api/v1/workspaces/{ws}/autopilots?status=active&trigger_type=schedule&limit=20`
@@ -368,25 +369,26 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 // Request
 { "simulate_trigger_payload": {"issue": {"title": "登录报错"}}, "dry_run": false }
 // 202 Response
-{ "run_id": "c0a8...", "status": "pending", "autopilot_id": "3b7d...", "is_test": true }
-// dry_run=true → 200:{"would_run": true, "matched_filters": {"labels": ["bug"]}}
+{ "data": { "run_id": "c0a8...", "status": "pending", "autopilot_id": "3b7d...", "is_test": true } }
+// dry_run=true → 200:{"data": {"would_run": true, "matched_filters": {"labels": ["bug"]}}}
 ```
 
 **单次运行详情** `GET /api/v1/workspaces/{ws}/autopilot-runs/{run_id}`
 ```json
-{ "id": "c0a8...", "autopilot_id": "3b7d...", "status": "succeeded",
-  "trigger_type": "agent_mentioned", "cascade_depth": 0,
-  "trigger_snapshot": { "event_id": "evt_9f2...",
-    "issue": {"id": "i1", "title": "登录报错"},
-    "comment": {"id": "cm1", "body": "@值班agent 帮忙看下"},
-    "actor": {"id": "mem-u7", "name": "张三"} },
-  "started_at": "2026-07-24T03:12:00Z", "finished_at": "2026-07-24T03:12:35Z",
-  "duration_ms": 35000, "retry_count": 0,
-  "prompt_tokens": 8200, "completion_tokens": 1300, "total_tokens": 9500,
-  "attempts": [ {"attempt_number": 1, "status": "succeeded", "started_at": "2026-07-24T03:12:00Z",
-                 "finished_at": "2026-07-24T03:12:35Z", "error": null} ],
-  "artifacts": [ {"artifact_type": "comment", "ref_table": "comments", "ref_id": "cm9", "summary": "已发布诊断结论"} ],
-  "error": null }
+{ "data": {
+    "id": "c0a8...", "autopilot_id": "3b7d...", "status": "succeeded",
+    "trigger_type": "agent_mentioned", "cascade_depth": 0,
+    "trigger_snapshot": { "event_id": "evt_9f2...",
+      "issue": {"id": "i1", "title": "登录报错"},
+      "comment": {"id": "cm1", "body": "@值班agent 帮忙看下"},
+      "actor": {"id": "mem-u7", "name": "张三"} },
+    "started_at": "2026-07-24T03:12:00Z", "finished_at": "2026-07-24T03:12:35Z",
+    "duration_ms": 35000, "retry_count": 0,
+    "prompt_tokens": 8200, "completion_tokens": 1300, "total_tokens": 9500,
+    "attempts": [ {"attempt_number": 1, "status": "succeeded", "started_at": "2026-07-24T03:12:00Z",
+                   "finished_at": "2026-07-24T03:12:35Z", "error": null} ],
+    "artifacts": [ {"artifact_type": "comment", "ref_table": "comments", "ref_id": "cm9", "summary": "已发布诊断结论"} ],
+    "error": null } }
 ```
 
 **全局 kill switch** `POST /api/v1/workspaces/{ws}/autopilots/kill-switch`
@@ -394,7 +396,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 // Request
 { "enabled": true, "reason": "紧急止血:批量异常" }
 // 200 Response
-{ "kill_switch": true, "paused_autopilots": 14, "updated_at": "2026-07-24T04:00:00Z" }
+{ "data": { "kill_switch": true, "paused_autopilots": 14, "updated_at": "2026-07-24T04:00:00Z" } }
 ```
 > 恢复时 `enabled: false`,逐条恢复原状态(active 的重新参与调度)。
 
@@ -407,7 +409,7 @@ X-Event-Id: evt_9f2a...
 ```
 > 签名计算 `v1 = HMAC_SHA256(secret, "{t}.{raw_body}")`,服务端用密钥重算并**恒定时间比较**;同时校验时间戳 `t` 在容差窗口(±300s)内防重放。
 ```json
-// 200(幂等,重复事件同样 200)
+// 200(幂等,重复事件同样 200;**入站 Webhook 为非 Bearer 外部端点,以下响应为与外部系统约定的裸 JSON,不套 README §6.14 成功包络**)
 { "received": true, "event_id": "evt_9f2a...", "process_status": "dispatched", "run_id": "c0a8..." }
 // 重复事件
 { "received": true, "event_id": "evt_9f2a...", "process_status": "deduped", "run_id": null }
@@ -533,15 +535,17 @@ succeeded / failed / cancelled ──► [*]
 
 ### 4.6 实时性与通知
 
-| 时机 | 通知对象 | 通道 |
-|------|----------|------|
-| 运行成功(可选) | 规则所有者 | 站内 inbox |
-| 运行失败 / 连续失败 | 所有者 + 配置接收人 | inbox + 可选出向 Webhook / 邮件 |
-| 命中频率上限被熔断 | 所有者 | inbox + 告警 |
-| 需人工确认(审批门) | 所有者 / 指定审批人 | inbox + 推送,run 进 `waiting_approval` |
-| kill switch 触发 | workspace 管理员 | inbox |
+> **通知分发一律按 README §6.13 唯一通知优先级矩阵**(本表为其在 autopilot 域的对齐,不另行定义分级;`notifications.priority` 由服务端按矩阵派生)。
 
-> 通知带深链直达 run 详情页。**告警去重与静默窗口**:同规则同类告警在窗口内合并,避免风暴;连续失败计数在成功后清零。
+| 时机 | priority | 通知对象 | 通道 / 行为(README §6.13) |
+|------|----------|----------|------|
+| 运行成功(可选) | **normal** | 规则所有者 | **默认留运行页/时间线,不进收件箱**;仅当所有者在 `notification_preferences` 显式订阅"执行结果"时才进收件箱;**不穿透 quiet hours、不重置同组未读**;邮件默认 none(订阅后 digest) |
+| 运行失败 / 连续失败 | **critical** | 所有者 + 配置接收人 | **进收件箱 + 穿透 quiet hours + 重置同组未读**;可选出向 Webhook / 邮件(realtime) |
+| 命中频率上限被熔断 | **critical** | 所有者 | 进收件箱 + 告警(穿透 quiet hours、重置未读) |
+| 需人工确认(审批门) | **critical** | 所有者 / 指定审批人 | **进统一"待我审批"收件箱 + 穿透 quiet hours + 重置同组未读**(realtime 邮件),run 进 `waiting_approval`(README §6.10) |
+| kill switch 触发 | normal | workspace 管理员 | 站内 inbox(管理员操作回执,不穿透 quiet hours) |
+
+> 通知带深链直达 run 详情页。**告警去重与静默窗口**:同规则同类告警在窗口内合并,避免风暴;连续失败计数在成功后清零。**自我抑制**:动作发起者不给自己生成通知(README §6.13);**执行成功不重置未读**,仅 critical 事件(失败/熔断/审批)重新置未读。
 
 ---
 
@@ -574,8 +578,9 @@ succeeded / failed / cancelled ──► [*]
 - [ ] **频率上限(默认开启)**:单规则窗口内超限按 `rate_limit_overflow` 处理(默认 `drop` + 告警),并产生审计记录通知所有者。
 - [ ] **去重/幂等(默认开启)**:同一事件(`idempotency_key`)在去重窗口内只执行一次,防重复投递/回调。
 - [ ] **并发上限**:单规则同时运行 run 数受 `concurrency_limit` 约束(默认 1 串行),防慢任务堆积。
-- [ ] **人工确认点(统一审批,README §6.10)**:`require_approval=true` 或动作命中 `approval_required_actions`(出向 HTTP、建 issue)时,在 `approvals` 建 `subject_type='autopilot_action'` 行(经 `approvals.subject_run_id` 关联),run 停在 `waiting_approval`;approve/reject 经 `POST /api/v1/approvals/{id}/approve|reject` 收口(`runs/{run_id}/approve|reject` 为薄封装),批准续跑、拒绝 → `cancelled`。
+- [ ] **人工确认点(统一审批,README §6.10)**:`require_approval=true` 或动作命中 `approval_required_actions`(出向 HTTP、建 issue)时,在 `approvals` 建 `subject_type='autopilot_action'` 行(经 `approvals.subject_run_id` **复合 FK `(workspace_id, subject_run_id) → autopilot_runs(workspace_id, id)`** 关联,R2 已升为物理复合 FK),run 停在 `waiting_approval`;**同一 run 仅一个 pending approval**(README §6.10 部分唯一索引 `uq_approvals_pending_run`,重复发起取既有 pending 返回);approve/reject 经 `POST /api/v1/approvals/{id}/approve|reject` 收口(`runs/{run_id}/approve|reject` 为薄封装),批准续跑、拒绝 → `cancelled`。
 - [ ] **审批过期(README §9 T8)**:创建 approval → 到期 → 关联 run 转 `cancelled(approval_expired)` + 触发者/创建者收通知;过期后再 approve → no-op/`410 gone`;重复 approve/reject 对同一 approval 幂等(返回当前状态)。
+- [ ] **通知按唯一优先级矩阵分发(README §6.13 / §9 T25)**:运行**成功**为 normal、默认留运行页(仅订阅时进收件箱,**不穿透 quiet hours、不重置未读**);运行**失败/连续失败**与**审批门**为 critical(进收件箱 + **穿透 quiet hours** + **重置同组未读**);熔断告警为 critical;`notifications.priority` 由服务端按矩阵派生,与 README §6.13 逐事件一致,不另行定义分级。
 - [ ] **全局 kill switch**:workspace 管理员一键暂停所有 autopilot(紧急止血),恢复时按各规则原状态还原;规则级、agent 级暂停同样可用。
 - [ ] **防回环(agent↔agent)**:`agent_loop_detection` + `agent_loop_window_seconds` 对同一 `(executor_agent, 触发对象)` 对在时间窗内 run 去重;`cascade_depth` 超 `cascade_max_depth` 拒绝创建下游 run(返回 422 `cascade_depth_exceeded`),切断 agent 互提成环。
 - [ ] **预算护栏**:单 run/单规则/单日 token 与运行次数预算,超限熔断,防 agent 失控刷量。
