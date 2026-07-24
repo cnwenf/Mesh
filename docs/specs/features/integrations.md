@@ -127,18 +127,21 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 | `id` | UUID | PK,`UNIQUE (workspace_id, id)`(供复合 FK 引用,README §6.2) | `gen_random_uuid()` | 主键 |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) `ON DELETE CASCADE` | — | 归属工作区 |
 | `integration_id` | UUID | NOT NULL,**复合 FK `(workspace_id, integration_id) → integrations(workspace_id, id)` `ON DELETE CASCADE`** | — | 所属集成(README §6.2) |
+| `provider` | TEXT | NOT NULL,CHECK IN ('feishu','slack','github','gitlab','webhook') | — | **规范化提供商标识**(R3:从 `integrations.kind` 归一,服务层在插入时校验与所属集成 kind 一致;跨 workspace 外部身份唯一键的第一维) |
+| `provider_tenant_key` | TEXT | NOT NULL DEFAULT `''` | `''` | **规范化外部平台租户标识**(R3):Slack `team_id`、飞书 `tenant_key`、GitHub `installation_id`(或 org 登录名)、GitLab 实例主机(如 `gitlab.com`)、`webhook_outbound` 恒为 `''`;创建时从 `integrations.config` 归一写入,绑定生命周期内不变 |
 | `scope` | TEXT | NOT NULL,CHECK IN ('workspace','project') | `'workspace'` | 绑定作用域 |
-| `project_id` | UUID | NULL,**复合 FK `(workspace_id, project_id) → projects(workspace_id, id)` `ON DELETE SET NULL (project_id)`** | NULL | `scope='project'` 时必填(见 CHECK);项目软删除,硬删仅工作区拆解时发生(README §6.2 第 6 条列级 SET NULL) |
-| `external_ref` | TEXT | NOT NULL | — | 外部身份标识(IM 群/频道 ID、VCS 仓库全名 `owner/repo`);**同一集成内唯一**(见唯一索引) |
+| `project_id` | UUID | NULL,**复合 FK `(workspace_id, project_id) → projects(workspace_id, id)` `ON DELETE CASCADE`** | NULL | **`scope='project'` 时必填、`scope='workspace'` 时必须为 NULL(精确异或 CHECK,见下)**;项目物理删除时其项目级绑定随之级联删除(绑定是项目私有配置,不保留悬空行;R3 删除策略) |
+| `external_ref` | TEXT | NOT NULL | — | **规范化外部对象标识**(R3):IM 群/频道 ID(飞书 `chat_id`、Slack `channel_id`)、VCS 仓库全名 `owner/repo`;与 `provider` + `provider_tenant_key` 共同构成**跨 workspace 全局唯一键**(见唯一索引) |
 | `match_config` | JSONB | NOT NULL | `'{}'` | 匹配规则(见 §2.6:如 @某 agent 触发、关键词、分支模式、事件类型过滤) |
 | `bound_agent_id` | UUID | NULL,**复合 FK `(workspace_id, bound_agent_id) → agents(workspace_id, id)` `ON DELETE SET NULL (bound_agent_id)`** | NULL | 匹配成功后触发的目标 agent;为空时仅审计不触发(README §6.9) |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled') | `'active'` | 绑定状态 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
-**唯一约束**:
-- `UNIQUE (integration_id, external_ref)` —— **外部侧唯一绑定**:同一集成内一个外部身份只能绑定一次。由于一个集成隶属唯一工作区、且一个外部平台应用安装对应一个集成,该键与"一个外部身份至多绑定一个工作区"(README §6.17)共同生效:同一外部群/频道/仓库不会被重复绑定。
-- `CHECK (scope = 'workspace' OR project_id IS NOT NULL)` —— `project` 作用域必带项目;`workspace` 作用域 `project_id` 为 NULL。项目/agent 均为软删除,该 CHECK 在软删除模型下恒成立(硬删仅发生在工作区拆解,绑定行同时被 `workspace_id` CASCADE 删除)。
+**唯一约束与 CHECK(R3 修订:外部身份全局唯一 + scope 精确异或)**:
+- **`UNIQUE (provider, provider_tenant_key, external_ref)`(全局,不带 workspace_id)—— 外部身份跨 workspace 唯一绑定**:一个外部平台上的同一个身份(同一提供商、同一平台租户下的同一群/频道/仓库)**至多绑定到一个 Mesh 工作区的一条绑定行**。此前仅 `UNIQUE(integration_id, external_ref)`:两个不同工作区各自安装一个集成实例(两行 `integrations`)时,同一外部群可被两边重复绑定,违反 README §6.17「一个外部身份可绑定到至多一个工作区」。规范化三元组把唯一性从「集成实例内」提升到「全外部平台」,跨 workspace 抢绑在 INSERT 即被拒绝(集成测试 T29);`status='disabled'` 的绑定仍占位(防止绕过:先停用 A 区绑定再把外部身份绑到 B 区需先**删除** A 区绑定行)。
+- **`CHECK ((scope = 'workspace' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL))`(精确异或)**:workspace 作用域**不得**携带 project_id(此前 `scope='workspace' OR project_id IS NOT NULL` 允许 workspace 绑定带项目,语义不明);project 作用域必带项目。配合 `fk_binding_project ON DELETE CASCADE`:项目物理删除时项目级绑定一并删除,**不存在 `SET NULL` 后违反自身 CHECK 的不可达状态**(R3:此前 `ON DELETE SET NULL(project_id)` 会把 `scope='project'` 行打成 `project_id IS NULL` 从而违反 CHECK,导致项目实际删不掉)。
+- agent 为软删除;`bound_agent_id` 列级 `SET NULL` 后绑定退化为「仅审计不触发」,合法。
 
 ### 2.4 表:`integration_events`(入站事件摄取台账:签名 / 去重 / 审计)
 
@@ -159,6 +162,25 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **去重唯一键**:`UNIQUE (integration_id, external_event_id)` —— 入站先尝试插入,命中唯一冲突即视为重复,幂等返回 200 `deduped` 不再分发(README §6.9「外部 IM 消息触发」行的去重保证)。
+
+### 2.4.1 表:`external_identities`(外部用户身份 ↔ Mesh 成员映射;R3 协同 MES-4 HIGH-1 补真源)
+
+> IM 审批/交互卡片回调的点击者鉴权(§3.2/§4.3)需要把外部平台的点击者身份映射到 Mesh 成员再按 README §6.10 权限行校验;本表是该映射的**唯一真源**(此前卡片回调直接转发 approve/reject,无点击者身份核验——MES-4 v3 安全复审 HIGH-1 修复引入本映射要求,R3 补表与约束)。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK,`UNIQUE (workspace_id, id)`(README §6.2) | `gen_random_uuid()` | 主键 |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 归属工作区 |
+| `provider` | TEXT | NOT NULL,CHECK IN ('feishu','slack','github','gitlab') | — | 外部平台(与 bindings 同口径) |
+| `external_user_key` | TEXT | NOT NULL | — | 规范化外部用户标识(飞书 `open_id`、Slack `user_id`、GitHub/GitLab 用户 login/id) |
+| `member_id` | UUID | NOT NULL,**复合 FK `(workspace_id, member_id) → members(workspace_id, id)` ON DELETE CASCADE** | — | 映射到的 Mesh 成员(成员移除 → 映射级联删除,卡片点击回落到「未映射 → 403」) |
+| `verified_at` | TIMESTAMPTZ | NOT NULL | `now()` | 经**认证的连接流程**建立的时间(见下) |
+| `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
+
+**约束与建立流程**:
+- `UNIQUE (provider, external_user_key)`(**全局**):一个外部平台用户至多映射到一个 Mesh 成员(跨 workspace 唯一,与 bindings 外部身份全局键同构)。
+- **映射只能经认证流程建立**:成员在站内「连接外部账号」流程中完成平台侧 OAuth 确认(服务端核对 OAuth 返回的平台用户身份与请求者会话)后写入;**禁止**经卡片回调/入站事件隐式创建映射(否则攻击者可借他人点击伪造身份绑定)。
+- 卡片回调鉴权链(§3.2):提取点击者外部身份 → 查本表映射成员 → 按 README §6.10 权限行再校验 → 未映射/无权限 → 403,审批状态不变,审计留痕。
 
 ### 2.5 表:`webhook_subscriptions`(出向 Webhook 订阅)
 
@@ -259,24 +281,30 @@ CREATE INDEX idx_integrations_ws_kind ON integrations(workspace_id, kind) WHERE 
 
 -- ============ integration_bindings ============
 CREATE TABLE integration_bindings (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id   UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  integration_id UUID NOT NULL,
-  scope          TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
-  project_id     UUID NULL,
-  external_ref   TEXT NOT NULL,
-  match_config   JSONB NOT NULL DEFAULT '{}',
-  bound_agent_id UUID NULL,
-  status         TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id      UUID NOT NULL,
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab','webhook')),
+  provider_tenant_key TEXT NOT NULL DEFAULT '',                                      -- R3:规范化外部平台租户(team_id/tenant_key/installation_id/实例主机)
+  scope               TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
+  project_id          UUID NULL,
+  external_ref        TEXT NOT NULL,                                                 -- R3:规范化外部对象 ID(chat_id/channel_id/owner/repo)
+  match_config        JSONB NOT NULL DEFAULT '{}',
+  bound_agent_id      UUID NULL,
+  status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_integration_bindings_ws_id UNIQUE (workspace_id, id),                -- 复合 FK 引用前提(§6.2)
-  CONSTRAINT uq_binding_external_ref UNIQUE (integration_id, external_ref),          -- 外部侧唯一绑定
-  CONSTRAINT ck_binding_scope CHECK (scope = 'workspace' OR project_id IS NOT NULL),
+  -- R3:外部身份跨 workspace 唯一绑定(全局键,README §6.17;取代仅 integration 实例内的旧键)
+  CONSTRAINT uq_binding_external_identity UNIQUE (provider, provider_tenant_key, external_ref),
+  -- R3:scope/project 精确异或(workspace 不带 project;project 必带 project)
+  CONSTRAINT ck_binding_scope CHECK ((scope = 'workspace' AND project_id IS NULL)
+                                  OR (scope = 'project' AND project_id IS NOT NULL)),
   CONSTRAINT fk_binding_integration FOREIGN KEY (workspace_id, integration_id)
     REFERENCES integrations(workspace_id, id) ON DELETE CASCADE,
+  -- R3:项目级绑定随项目物理删除级联(不再 SET NULL——置空会违反上面的精确异或 CHECK)
   CONSTRAINT fk_binding_project FOREIGN KEY (workspace_id, project_id)
-    REFERENCES projects(workspace_id, id) ON DELETE SET NULL (project_id),           -- §6.2 第 6 条列级 SET NULL
+    REFERENCES projects(workspace_id, id) ON DELETE CASCADE,
   CONSTRAINT fk_binding_agent FOREIGN KEY (workspace_id, bound_agent_id)
     REFERENCES agents(workspace_id, id) ON DELETE SET NULL (bound_agent_id)
 );
@@ -304,6 +332,24 @@ CREATE TABLE integration_events (
 );
 CREATE INDEX idx_event_integration_status ON integration_events(integration_id, process_status, received_at DESC);
 CREATE INDEX idx_event_ws_received ON integration_events(workspace_id, received_at DESC);
+
+-- ============ external_identities(R3 协同 MES-4 HIGH-1:外部用户身份 ↔ Mesh 成员,卡片回调鉴权真源)============
+CREATE TABLE external_identities (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id      UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  provider          TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  external_user_key TEXT NOT NULL,                       -- 飞书 open_id / Slack user_id / VCS 用户 login
+  member_id         UUID NOT NULL,
+  verified_at       TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 经认证的「连接外部账号」流程建立
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_external_identities_ws_id UNIQUE (workspace_id, id),
+  -- 一个外部平台用户至多映射一个 Mesh 成员(全局唯一,与 bindings 外部身份全局键同构)
+  CONSTRAINT uq_external_identity UNIQUE (provider, external_user_key),
+  CONSTRAINT fk_external_identity_member FOREIGN KEY (workspace_id, member_id)
+    REFERENCES members(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_external_identities_member ON external_identities(workspace_id, member_id);
 
 -- ============ webhook_subscriptions ============
 CREATE TABLE webhook_subscriptions (
@@ -345,6 +391,47 @@ CREATE TABLE webhook_subscription_deliveries (
 CREATE INDEX idx_delivery_retry ON webhook_subscription_deliveries(next_retry_at)
   WHERE state = 'pending';
 CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscription_id, created_at DESC);
+
+-- ============ vcs_links(R3 新增:VCS 对象 ↔ Mesh 实体 关联真源表)============
+-- §3.3 的 VCS link CRUD / 自动关联 / issue 侧栏展示一律以本表为真源(此前只有端点与 UI,无真源表)
+CREATE TABLE vcs_links (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id          UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id        UUID NOT NULL,                                               -- 必须为 vcs_github/vcs_gitlab 集成(服务层校验 kind)
+  provider              TEXT NOT NULL CHECK (provider IN ('github','gitlab')),        -- 规范化提供商
+  provider_tenant_key   TEXT NOT NULL DEFAULT '',                                    -- GitHub installation_id/org、GitLab 实例主机(与 bindings 同口径)
+  external_object_type  TEXT NOT NULL CHECK (external_object_type IN ('repository','pull_request','merge_request','issue','commit','branch')),
+  external_object_ref   TEXT NOT NULL,                                               -- 规范化稳定引用:仓库 `owner/repo`;PR/MR `owner/repo#<number>`;commit 全 sha;branch `owner/repo@<ref>`
+  mesh_entity_type      TEXT NOT NULL CHECK (mesh_entity_type IN ('issue','project')),
+  mesh_entity_id        UUID NOT NULL,                                               -- 多态逻辑外键(§6.2 第 4 条:携带 workspace_id,软删除一致性由服务层保证)
+  link_source           TEXT NOT NULL DEFAULT 'manual'
+                        CHECK (link_source IN ('manual','auto_keyword','auto_branch','auto_commit')),
+  status                TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','stale','deleted')),  -- stale=外部对象已关闭/合并后的陈旧标记
+  external_state        JSONB NOT NULL DEFAULT '{}',                                 -- 外部对象状态快照(如 PR open/merged/closed、commit sha 列表)
+  created_by            UUID NULL,                                                   -- 人工关联时的成员;自动关联为 NULL
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_vcs_links_ws_id UNIQUE (workspace_id, id),                           -- 复合 FK 引用前提(§6.2)
+  -- R3:外部对象唯一键——同一外部对象在一个工作区内至多一条 active 关联(跨 workspace 的唯一性由 bindings 的
+  -- 外部身份全局键保证:一个仓库所属平台租户至多绑定一个工作区,故此处工作区内唯一即全局有效)
+  CONSTRAINT fk_vcs_links_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE CASCADE,                     -- 集成删除 → 其 VCS 关联一并删除
+  CONSTRAINT fk_vcs_links_created_by FOREIGN KEY (workspace_id, created_by)
+    REFERENCES members(workspace_id, id) ON DELETE SET NULL (created_by)             -- 关联人离册仅置空,关联本身保留
+);
+-- R3:外部对象唯一键(部分唯一索引:仅 active 占位,stale/deleted 允许历史重关联)
+CREATE UNIQUE INDEX uq_vcs_links_external_object
+  ON vcs_links(provider, provider_tenant_key, external_object_type, external_object_ref)
+  WHERE status = 'active';
+-- R3:同租户复合 FK 前提 + Mesh 实体侧唯一(active)
+CREATE UNIQUE INDEX uq_vcs_links_mesh_entity
+  ON vcs_links(workspace_id, mesh_entity_type, mesh_entity_id, external_object_ref)
+  WHERE status = 'active';
+-- R3:状态索引——issue 侧栏「关联的 PR/MR」与陈旧关联清理扫描
+CREATE INDEX idx_vcs_links_entity_status
+  ON vcs_links(workspace_id, mesh_entity_type, mesh_entity_id, status);
+CREATE INDEX idx_vcs_links_integration_status
+  ON vcs_links(integration_id, status);
 ```
 
 ### 2.9 与其他模块的外键关系
@@ -354,8 +441,12 @@ CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscr
 | `integrations.workspace_id` 等 | → `workspaces.id` | workspace.md | 隔离 |
 | `integrations.created_by` / `webhook_subscriptions.created_by` | 复合 FK → `members(workspace_id, id)` | member.md | 创建者(人或 agent;判别 JOIN members,README §6.1/§6.2) |
 | `integration_bindings.integration_id` / `integration_events.integration_id` / `webhook_subscriptions.integration_id` | 复合 FK → `integrations(workspace_id, id)` | 本模块 | 集成归属(README §6.2) |
-| `integration_bindings.project_id` | 复合 FK → `projects(workspace_id, id)` | project.md | `scope='project'` 时下放绑定(列级 SET NULL,README §6.2 第 6 条) |
+| `integration_bindings.project_id` | 复合 FK → `projects(workspace_id, id)` `ON DELETE CASCADE` | project.md | `scope='project'` 时下放绑定(精确异或 CHECK 下项目删除级联删绑定,R3) |
 | `integration_bindings.bound_agent_id` | 复合 FK → `agents(workspace_id, id)` | agent.md | 匹配后触发的目标 agent(README §6.2) |
+| `vcs_links.integration_id` | 复合 FK → `integrations(workspace_id, id)` `ON DELETE CASCADE` | 本模块 | VCS 关联真源表归属的 VCS 集成(R3,§2.8;集成删除级联删关联) |
+| `external_identities.member_id` | 复合 FK → `members(workspace_id, id)` `ON DELETE CASCADE` | member.md | 外部用户身份 → Mesh 成员映射(R3 协同 MES-4 HIGH-1,§2.4.1;成员移除级联删映射,卡片点击回落 403) |
+| `vcs_links.created_by` | 复合 FK → `members(workspace_id, id)` `ON DELETE SET NULL (created_by)` | member.md | 人工关联者(自动关联为 NULL;离册仅置空) |
+| `vcs_links.mesh_entity_id` | 多态逻辑外键 → `issues`/`projects`(携带 `workspace_id`,README §6.2 第 4 条) | issue.md / project.md | 关联的 Mesh 实体(软删除一致性由服务层保证) |
 | `webhook_subscription_deliveries.subscription_id` | 复合 FK → `webhook_subscriptions(workspace_id, id)` | 本模块 | 投递台账归属(README §6.2) |
 | `task_executions.trigger` / `trigger_event_id` | `trigger='integration'`;`trigger_event_id` 逻辑引用 `integration_events.id` | runtime.md / README §6.4 | 入站触发的执行(幂等键 §6.9) |
 | `notification_delivery.channel='im'` | 出站适配器写入(台账为 comment-inbox.md owns) | comment-inbox.md / README §6.13 | IM 出站投递台账 |
@@ -449,16 +540,18 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 
 ### 3.3 VCS 关联端点
 
+> **真源表(R3 补齐)**:本节全部 CRUD / 自动关联 / issue 侧栏展示一律读写 **`vcs_links` 表**(§2.8 新增:同租户复合 FK、外部对象唯一键、状态索引)。此前仅有端点与 UI 而无真源表,关联无处落库;R3 起 `vcs_links` 是唯一权威,侧栏「关联的 PR/MR」即 `vcs_links WHERE mesh_entity_type='issue' AND mesh_entity_id=:id AND status='active'`。
+
 | 方法 | 路径 | 说明 | 最低角色 |
 |------|------|------|----------|
-| POST | `/api/v1/integrations/vcs/links` | **显式关联** PR/commit/branch ↔ issue(请求体 `{integration_id, vcs_ref:{type, url, id}, issue_id}`) | 成员(对 issue 有写权限) |
-| DELETE | `/api/v1/integrations/vcs/links/{id}` | 解除关联 | 成员 |
-| GET | `/api/v1/issues/{issue_id}/vcs-links` | 列出某 issue 的 VCS 关联(PR/commit/branch + 状态) | 成员 |
-| POST | `/api/v1/integrations/vcs/resolve` | **identifier 解析**:从文本/分支/PR 标题提取 `WEB-123` 自动关联(请求体 `{integration_id, source_text, vcs_ref}`) | 成员 / 入站摄取内部调用 |
+| POST | `/api/v1/integrations/vcs/links` | **显式关联** PR/commit/branch ↔ issue(请求体 `{integration_id, vcs_ref:{type, url, id}, mesh_entity_type:'issue', issue_id}`)→ INSERT `vcs_links`(`link_source='manual'`,`created_by`=当前成员) | 成员(对 issue 有写权限) |
+| DELETE | `/api/v1/integrations/vcs/links/{id}` | 解除关联(置 `status='deleted'`,保留审计;唯一键为部分索引,释放外部对象占位) | 成员 |
+| GET | `/api/v1/issues/{issue_id}/vcs-links` | 列出某 issue 的 VCS 关联(PR/commit/branch + `external_state` 状态快照) | 成员 |
+| POST | `/api/v1/integrations/vcs/resolve` | **identifier 解析**:从文本/分支/PR 标题提取 `WEB-123` 自动关联(请求体 `{integration_id, source_text, vcs_ref}`)→ 命中写 `vcs_links`(`link_source='auto_keyword'\|'auto_branch'\|'auto_commit'`) | 成员 / 入站摄取内部调用 |
 
-**identifier 自动关联**:VCS 入站事件(`pull_request`/`merge_request`/`push`/`commit_comment`)的标题、正文、分支名、commit message 中匹配 `<前缀>-<号>`(issue.md `identifier`,如 `WEB-123`)→ 经 `UNIQUE(workspace_id, identifier)` 解析到 issue → 自动建立 VCS 关联;解析不到(前缀不存在/已软删)→ 仅审计不报错(`identifier_not_resolved` 留痕)。
+**identifier 自动关联**:VCS 入站事件(`pull_request`/`merge_request`/`push`/`commit_comment`)的标题、正文、分支名、commit message 中匹配 `<前缀>-<号>`(issue.md `identifier`,如 `WEB-123`)→ 经 `UNIQUE(workspace_id, identifier)` 解析到 issue → 自动建立 `vcs_links` 行(命中 `uq_vcs_links_external_object` 部分唯一索引即幂等跳过,重复事件不重复建关联);解析不到(前缀不存在/已软删)→ 仅审计不报错(`identifier_not_resolved` 留痕)。**仓库必须属于已绑定工作区的 VCS 集成**:`integration_bindings` 的外部身份全局唯一键(§2.3)保证一个仓库至多归属一个工作区,摄取时经 `(provider, provider_tenant_key, external_ref=owner/repo)` 反查绑定定工作区;无绑定 → 仅审计不分发。
 
-**自动状态流转**:VCS 绑定 `match_config.auto_status_map`(如 `{"merged":"done","closed":"cancelled"}`)在对应事件入站且成功关联 issue 后,经 issue.md 状态流转端点把 issue 置目标状态(服务层校验目标状态存在且迁移合法;以摄取事件幂等,重复事件不重复改状态),并在 issue 发评论留痕("PR #N 已合并,自动置为 done",经 comment-inbox.md,幂等键 §6.5)。
+**自动状态流转**:VCS 绑定 `match_config.auto_status_map`(如 `{"merged":"done","closed":"cancelled"}`)在对应事件入站且成功关联 issue 后,经 issue.md 状态流转端点把 issue 置目标状态(服务层校验目标状态存在且迁移合法;以摄取事件幂等,重复事件不重复改状态),同步刷新 `vcs_links.external_state`(如 `{"pr_state":"merged"}`,状态变 `stale` 表示已合并/关闭的陈旧关联),并在 issue 发评论留痕("PR #N 已合并,自动置为 done",经 comment-inbox.md,幂等键 §6.5)。
 
 ### 3.4 出向订阅投递(经 outbox,README §6.6)
 
@@ -490,7 +583,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | 401 | `unauthorized` | 管理端点缺少/无效 Bearer token |
 | 403 | `forbidden` | 无权限操作该集成/绑定/订阅 |
 | 404 | `not_found` | 集成/绑定/订阅/投递不存在 |
-| 409 | `binding_conflict` | `UNIQUE(integration_id, external_ref)` 冲突——该外部身份已绑定 |
+| 409 | `binding_conflict` | `UNIQUE(provider, provider_tenant_key, external_ref)` 冲突(R3 全局键)——该外部身份已被(可能另一工作区的)绑定占用 |
 | 409 | `conflict` | 名称重复 / 乐观锁冲突 |
 | 409 | `duplicate_event` | 入站去重命中(通常作 200 `deduped`,内部用) |
 | 410 | `integration_disabled` | 集成 `status='disabled'`,入站拒绝分发 / 出站停发 |
@@ -599,8 +692,8 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **飞书/Slack 审批卡片闭环**:审批产生 → 推审批卡片(字段同 §4.4)→ 卡片点"批准/拒绝" → 回调转发 `POST /approvals/{id}/approve|reject`(README §6.10)→ 运行从审批点续跑/取消;回调记 approvals `decision_comment` + `notification_delivery(channel='im')`;**重复回点幂等**(README §6.10 重复 approve/reject no-op)。
 - [ ] **IM 卡片回调点击者鉴权(HIGH-1)**:卡片回调必须从载荷提取点击者外部身份(飞书 `open_id`/Slack `user_id`)→ 经 `external_identities`(`(平台, 外部用户 id) ↔ member_id`,经认证的「连接外部账号」流程建立)映射到 Mesh 成员 → **服务端按 README §6.10 权限行再校验**;**未映射/无权限的 IM 用户点卡片批准 → 403 拒绝,审批状态不变,审计记录**;卡片决定路径与站内审批权限校验等价;兜底:高危动作审批的卡片可只呈现不提供按钮,强制站内「待我审批」决。
 - [ ] **Slack 同构**:Events API 事件回调(`message.channels` 等)经 `X-Slack-Signature` 校验后触发;Block Kit 卡片推送/回调与飞书语义对齐(同一抽象,不同适配点)。
-- [ ] **VCS 关联**:commit/PR/branch ↔ issue 经 `POST /integrations/vcs/links` 显式关联,或经 identifier(`WEB-123`)自动解析关联(`UNIQUE(workspace_id, identifier)`);`GET /issues/{id}/vcs-links` 返回关联列表。
-- [ ] **VCS 自动状态流转**:PR merge/close 事件入站并关联 issue 后,按 `auto_status_map` 经 issue.md 状态流转置目标状态(校验目标状态存在 + 迁移合法)+ 发评论留痕;**重复事件幂等不重复改状态**。
+- [ ] **VCS 关联(真源 `vcs_links`,R3)**:commit/PR/branch ↔ issue 经 `POST /integrations/vcs/links` 显式关联,或经 identifier(`WEB-123`)自动解析关联(`UNIQUE(workspace_id, identifier)`),**一律落 `vcs_links` 表**(§2.8:同租户复合 FK `(workspace_id, integration_id) → integrations(workspace_id, id)`、外部对象部分唯一键 `uq_vcs_links_external_object`、状态索引);`GET /issues/{id}/vcs-links` 返回该 issue 的 active 关联列表;同一外部 PR 重复关联幂等(部分唯一索引命中跳过),外部对象已存在 active 关联时异工作区/异 issue 抢关被拒 409。
+- [ ] **VCS 自动状态流转**:PR merge/close 事件入站并关联 issue 后,按 `auto_status_map` 经 issue.md 状态流转置目标状态(校验目标状态存在 + 迁移合法)+ 刷新 `vcs_links.external_state`/`status='stale'` + 发评论留痕;**重复事件幂等不重复改状态**。
 - [ ] **边界:runtime git ≠ VCS 集成**:agent 运行时经 runtime 协议 checkout/push(runtime.md)是执行工具,与本模块 VCS 连接器(产品级事件摄取 + issue 联动)互不替代;Spec/代码不混淆二者。
 
 ### 5.3 出向 Webhook 订阅
@@ -616,8 +709,9 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 
 - [ ] **凭据脱敏(README §6.16)**:集成凭据(app secret/bot token/OAuth refresh token)只存加密密文(`secret_ref`,同 `runtime_credentials.encrypted_value` 契约);`GET` 集成/订阅响应与日志**永不回显明文**;`config` JSONB 经扫描确认不含明文 secret;凭据轮换后旧密文失效。
 - [ ] **跨租户复合 FK 拒绝(README §6.2/§9 T1 同类)**:`integrations`/`integration_bindings`/`integration_events`/`webhook_subscriptions` 均建 `UNIQUE(workspace_id, id)`;`integration_id`→`integrations(workspace_id,id)`、`project_id`→`projects(workspace_id,id)`、`bound_agent_id`→`agents(workspace_id,id)`、`created_by`→`members(workspace_id,id)`、`subscription_id`→`webhook_subscriptions(workspace_id,id)` 均为复合 FK;**构造跨 workspace 复合 FK 插入被数据库约束拒绝**;A 区凭证访问 B 区集成/绑定/订阅/事件 → 403/404。
-- [ ] **外部侧唯一绑定**:`UNIQUE(integration_id, external_ref)` 下重复绑定同一外部群/频道/仓库 → 409 `binding_conflict`。**平台 + 外部租户 + `external_ref` 维度的全局唯一约束**(防同一外部群/仓库跨集成/跨工作区重复绑定导致入站路由歧义);多绑定命中时仅审计 + 告警,不触发运行。
-- [ ] **真实 DELETE 行为(README §6.2 第 6 条/§9 T18 同类)**:删除 agent 时 `integration_bindings.bound_agent_id` 经列级 `ON DELETE SET NULL (bound_agent_id)` 仅置空引用列、`workspace_id` 保持非空;删除项目时 `project_id` 置空而绑定行不报错;硬删集成级联其 bindings/events;软删除集成后绑定/事件保留。
+- [ ] **外部身份跨 workspace 唯一绑定(R3,合并 MES-4 HIGH 加固)**:`UNIQUE(provider, provider_tenant_key, external_ref)` **全局键**(规范化 平台 + 外部租户 + 外部对象 三维度)下,两个工作区各自的集成实例抢绑同一外部群/频道/仓库 → 第二者 **409 `binding_conflict`**(INSERT 即被数据库拒绝,防同一外部群/仓库跨集成/跨工作区重复绑定导致入站路由歧义);同工作区同集成重复绑定同样被拒;**入站事件匹配到多个绑定时仅审计 + 告警,不触发运行**(集成测试 T29)。
+- [ ] **scope 精确异或与删除策略(R3)**:`scope='workspace'` 携带 `project_id` 的绑定创建被 CHECK 拒绝(422);`scope='project'` 缺 `project_id` 被拒;**物理删除项目时其项目级绑定经 `ON DELETE CASCADE` 一并删除**——不产生 `project_id` 被置空而违反 CHECK 的不可达状态,项目删除不因绑定存在而失败(集成测试 T29)。
+- [ ] **真实 DELETE 行为(README §6.2 第 6 条/§9 T18 同类)**:删除 agent 时 `integration_bindings.bound_agent_id` 经列级 `ON DELETE SET NULL (bound_agent_id)` 仅置空引用列、`workspace_id` 保持非空;硬删集成级联其 bindings/events/**vcs_links**;软删除集成后绑定/事件保留。
 
 ### 5.5 实时与可观测
 
