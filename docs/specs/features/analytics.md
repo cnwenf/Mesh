@@ -379,6 +379,11 @@ CREATE INDEX idx_snapshots_stale
 | GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`) |
 
 > 项目级端点(`/analytics/*?project_id=`、`/dashboards/project/{id}`)须过 `project_members` 可见性校验(project.md);无可见性返回 `403 project_not_visible`。
+>
+> **私有项目可见性过滤(HIGH-2,全端点覆盖)**:
+> - **工作区级聚合**(不传 `project_id` 的 cycle time / throughput / workload / `/dashboards/workspace`):**按请求者项目可见性过滤,剔除其不可见的私有项目数据**(即 `WHERE project_id IS NULL OR project_id IN (请求者可见项目集)`),非私有项目成员的普通工作区成员看不到私有项目的计数/曲线/成员负荷;
+> - **按 `cycle_id`/`milestone_id` 的查询**(velocity / burndown):先解析归属项目并过 `project_members` 可见性校验,不满足 → `403 project_not_visible`;
+> - 工作区仪表盘受众为全体工作区成员,但**聚合数据按上述可见性过滤**(产品口径:数据过滤而非端点限 admin)。
 
 ### 3.2 公共查询参数
 
@@ -553,3 +558,8 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 - [ ] **一致性测试**:先查得某指标缓存值 → 修改真源(如把某 issue 置 done / 新增一次 execution)→ 以 `refresh=true` 或待 TTL 过期后重查,结果与**直接聚合(绕过缓存)**逐值一致;`analytics_snapshots` 旧值被覆盖(`UNIQUE(workspace_id, metric_key, dim_hash, window_start, window_end)`)。
 - [ ] `workload` 默认不缓存,任意源变更后下次查询即反映最新状态。
 - [ ] `analytics_snapshots` 查询/刷新必带 `workspace_id`,跨工作区不可见(多租户隔离,README §6.2)。
+
+### 5.6 安全性 —— 私有项目可见性过滤(HIGH-2)
+
+- [ ] **工作区级聚合按请求者项目可见性过滤**:非私有项目 P 成员的普通工作区成员查询 throughput / workload / cycle time(不传 `project_id`)/ `/dashboards/workspace` 时,返回数据**不含项目 P 的 issue 计数/点数/成员负荷/曲线样本**;聚合结果与「手动剔除 P 后重算」一致。
+- [ ] **cycle/milestone 直引按归属项目可见性校验**:`velocity?cycle_ids=` / `burndown?cycle_id=` / `burndown?milestone_id=` 引用的 cycle/milestone 归属私有项目时,非该项目成员 → `403 project_not_visible`;不满足可见性的 cycle/milestone 不出现在任何聚合结果中。
