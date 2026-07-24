@@ -169,7 +169,7 @@ runtime.md:run_agent_prompt 动作派发为 agent_runs(经 run 关联),终态 co
 | `event_type` | TEXT | NOT NULL | — | 事件类型(由来源/载荷解析) |
 | `headers` | JSONB | NULL | NULL | 入站请求头(脱敏后) |
 | `payload` | JSONB | NOT NULL | — | 原始载荷 |
-| `signature_status` | TEXT | NOT NULL,CHECK IN ('valid','invalid','missing','skipped') | — | 签名校验结果 |
+| `signature_status` | TEXT | NOT NULL,CHECK IN ('valid','invalid','missing','skipped') | — | 签名校验结果(**`invalid`/`missing` 一律 `rejected` + 401,绝不分发**;`skipped` 仅限 test-run 场景,不产生 `autopilot_run`) |
 | `process_status` | TEXT | NOT NULL,CHECK IN ('received','matched','dispatched','deduped','rejected','processed','failed') | `'received'` | 处理状态 |
 | `received_at` | TIMESTAMPTZ | NOT NULL | `now()` | 接收时间 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -202,6 +202,7 @@ runtime.md:run_agent_prompt 动作派发为 agent_runs(经 run 关联),终态 co
 ```
 
 **`action_config`**(数组,顺序执行;prompt 支持模板变量 `{{trigger.issue.title}}` / `{{trigger.comment.body}}` / `{{trigger.actor.name}}` / `{{trigger.webhook.payload.*}}` / `{{steps.N.output}}` / `{{run.id}}` / `{{now}}`):
+> **不可信内容处理(见 README §6)**:`{{trigger.webhook.payload.*}}` 等来自外部的模板变量插值进 agent prompt 时,必须显式标记为不可信数据并做结构隔离,防止外部 Webhook 载荷中的恶意指令劫持 agent。
 ```json
 [
   {"type": "run_agent_prompt", "executor_agent_id": "<uuid>",
@@ -382,7 +383,8 @@ X-Event-Id: evt_9f2a...
 // 签名失败 401
 { "error": {"code": "invalid_signature", "message": "Webhook 签名校验失败", "details": {}} }
 ```
-**处理流程**:接收 → 落库 `webhook_event`(`received`)→ 校验签名(`signature_status`)→ 计算/读取 `idempotency_key` 尝试去重插入(命中则 `deduped` 直接返回)→ 路由匹配规则 → 频率/护栏检查 → 创建 `autopilot_run`(`dispatched`)→ 异步执行。
+**处理流程**:接收 → 落库 `webhook_event`(`received`)→ 校验签名(`signature_status`)→ **签名 `invalid`/`missing` 一律置 `process_status='rejected'` 并返回 401,绝不分发不路由** → 计算/读取 `idempotency_key` 尝试去重插入(命中则 `deduped` 直接返回)→ 路由匹配规则 → 频率/护栏检查 → 创建 `autopilot_run`(`dispatched`)→ 异步执行。
+> **Webhook 触发器强制配置签名密钥**:创建 `trigger_type='webhook_received'` 的规则时,必须已配置有效的签名密钥(服务端创建时校验,未配置返回 422);`skipped` 状态仅限 `is_test=true` 的 test-run 场景;**无有效签名的事件永不产生 `autopilot_run`**。
 
 ### 3.3 错误码表
 
@@ -520,7 +522,7 @@ succeeded / failed / cancelled ──► [*]
 - [ ] 多动作顺序执行;prompt 模板变量运行时填充;`{{steps.N.output}}` 引用前序动作产物。
 - [ ] 每次触发生成 `autopilot_run`,含触发快照/状态/耗时/产物/token/错误/重试计数;`autopilot_run_attempt` 记录每次尝试明细;`autopilot_artifact` 解耦关联产物。
 - [ ] 失败重试区分可重试/不可重试错误;指数退避 + 抖动 + 封顶;达最大重试标记 `failed` 并告警。
-- [ ] 入站 Webhook:HMAC 签名恒定时间比较 + 时间戳防重放;去重唯一键命中返回 200 `deduped` 不再分发;`webhook_event` 全程留痕。
+- [ ] 入站 Webhook:HMAC 签名恒定时间比较 + 时间戳防重放;去重唯一键命中返回 200 `deduped` 不再分发;`webhook_event` 全程留痕。**签名 `invalid`/`missing` 一律 `rejected` + 401,不分发不路由;`skipped` 仅限 test-run;Webhook 触发器创建时强制配置签名密钥(未配置返回 422);无有效签名的事件永不产生 `autopilot_run`。**
 - [ ] 调度以 PostgreSQL 为唯一事实源,原子抢占(`UPDATE ... WHERE next_run_at=? RETURNING`)杜绝多实例重复触发。
 
 ### 5.2 性能
@@ -541,6 +543,7 @@ succeeded / failed / cancelled ──► [*]
 - [ ] **预算护栏**:单 run/单规则/单日 token 与运行次数预算,超限熔断,防 agent 失控刷量。
 - [ ] **作用域/最小权限**:规则只能在创建者权限范围内操作;agent 动作受 agent 自身权限约束。
 - [ ] Webhook 密钥仅存哈希/引用,创建后仅显示一次,响应/日志不回显;签名失败返回 401;状态切换与护栏命中均写 auth.md 审计日志。
+- [ ] **出向 HTTP 动作 SSRF 防护**:`http_request` 类出向动作禁止访问私网地址段(RFC1918 / link-local / 云元数据),仅允许公网地址或配置的主机白名单;出向请求受 agent 权限与 `confirm_required` 人工确认门约束。
 
 ### 5.4 实时
 

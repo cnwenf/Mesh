@@ -118,9 +118,9 @@ users(人类登录身份,auth.md)──┐
 | `token_prefix` | TEXT | NOT NULL | — | 令牌前缀,用于列表展示与快速定位(不含秘密) |
 | `role` | TEXT | NOT NULL,CHECK IN ('admin','member','guest') | `'member'` | 接受后赋予的角色(不可直接邀请为 owner) |
 | `invited_by` | UUID | NOT NULL,FK→members(id) | — | 邀请人(统一名册条目) |
-| `max_uses` | INT | NULL,CHECK (max_uses > 0) | NULL | 最大使用次数(NULL=不限) |
+| `max_uses` | INT | NULL,CHECK (max_uses > 0) | `10` | 最大使用次数(**创建时未指定则默认 10,不允许 NULL 不限次**;链接一旦泄漏即有次数上限) |
 | `used_count` | INT | NOT NULL,CHECK (used_count >= 0) | `0` | 已使用次数 |
-| `expires_at` | TIMESTAMPTZ | NULL | NULL | 过期时间(NULL=永不过期) |
+| `expires_at` | TIMESTAMPTZ | NULL | `now() + 7 days` | 过期时间(**创建时未指定则默认 7 天后过期,不允许 NULL 永不过期**;链接泄漏后有失效兜底) |
 | `status` | TEXT | NOT NULL,CHECK IN ('pending','accepted','revoked','expired') | `'pending'` | |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -402,6 +402,7 @@ pending ──到期(定时/惰性)─► expired(终态)
 - [ ] 过期/已撤销/超次数邀请接受返回 422 `invitation_invalid`。
 - [ ] 撤销邀请后该 token 立即失效。
 - [ ] 邀请的 `role` 不可为 `owner`。
+- [ ] **邀请链接默认过期与次数上限**:链接模式邀请创建时 `max_uses` 未指定默认 10、`expires_at` 未指定默认 7 天;不允许创建不限次 + 永不过期的邀请链接,链接泄漏后有失效兜底。
 - [ ] 非成员访问任意工作区资源返回 404(不泄露存在性)。
 - [ ] 所有业务查询隐式按 `workspace_id` 过滤,跨工作区不可读。
 
@@ -419,6 +420,7 @@ pending ──到期(定时/惰性)─► expired(终态)
 - [ ] 删除/归档等危险操作仅 owner 可触发,且需二次确认。
 - [ ] 邀请创建、工作区创建受 auth.md 限流约束,超限返回 429 + `Retry-After`。
 - [ ] 错误信息不泄露其它工作区存在性或内部细节。
+- [ ] **用户可控 URL scheme 校验**:`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:`,仅允许 `https`。
 
 ### 5.4 实时
 

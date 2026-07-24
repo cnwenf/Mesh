@@ -453,7 +453,7 @@ members 为统一身份表(member_type ∈ {human, agent}),由 member Spec 定�
 - **去重合并**:同 `group_key`(同 issue 同类型短窗口)合并为一条,更新 `payload.count` 与 `updated_at`。
 - **自我抑制**:发起者不给自己生成通知;agent 不接收会再触发自己的通知(防 agent-to-agent 死循环)。
 - **偏好过滤**:fan-out 按 `notification_preferences` 决定站内/邮件;`muted` 订阅不出通知。
-- **邮件摘要**:定时任务扫描 `email='digest'` 且未投递的站内通知,聚合摘要邮件,写 `notification_delivery` 防重;点邮件链接回站内并标已读。
+- **邮件摘要**:定时任务扫描 `email='digest'` 且未投递的站内通知,聚合摘要邮件,写 `notification_delivery` 防重;点邮件链接回站内并标已读。**邮件中的评论预览内容必须做 HTML 转义**(防邮件端注入),摘要模板使用纯文本或严格净化后的 HTML。
 
 ---
 
