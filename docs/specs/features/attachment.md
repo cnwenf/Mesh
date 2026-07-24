@@ -184,8 +184,8 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/api/v1/attachments/upload-requests` | 申请上传:校验类型/大小/配额,建 `pending` 记录,返回签名 PUT URL(或一组分片签名 URL) |
-| POST | `/api/v1/attachments/{id}/complete` | 直传成功后回调:校验对象存在与大小、嗅探 MIME、触发缩略图/扫描,置 `completed` |
-| POST | `/api/v1/attachments/{id}/abort` | 取消上传,清理对象 |
+| POST | `/api/v1/attachments/{id}/complete` | 直传成功后回调:校验对象存在与大小、嗅探 MIME、触发缩略图/扫描,置 `completed`(**仅上传申请者本人可操作**,服务端校验 `uploader_id` = 当前 principal) |
+| POST | `/api/v1/attachments/{id}/abort` | 取消上传,清理对象(**仅上传申请者本人可操作**) |
 | GET | `/api/v1/attachments/{id}` | 取附件元数据 |
 | DELETE | `/api/v1/attachments/{id}` | 软删除附件 |
 | GET | `/api/v1/attachments/{id}/download` | 获取**短时效签名下载 URL**,或 302 重定向;亦可后端代理流式下载 |
@@ -397,6 +397,8 @@ pending ──(客户端开始直传)──> uploading ──(complete 校验通
 - [ ] **直传性能**:大文件直传不占用应用服务器带宽;`upload-request`/`complete` 接口 P95 < 300ms。
 - [ ] **下载时延**:签名 URL 签发 P95 < 200ms;缩略图渲染走对象存储 CDN/直连。
 - [ ] **安全**:桶私有、签名短时效绑定方法与键;MIME 服务端嗅探;SVG 净化/隔离;存储键不可枚举;扫描命中隔离;错误信息不泄露内部细节。
+- [ ] **属主校验**:`complete`/`abort` 仅上传申请者本人可操作(服务端校验 `uploader_id` = 当前 principal),非属主返回 403。
+- [ ] **签名 URL 尺寸约束**:签名 PUT URL 绑定声明的 `file_size` 上限(如通过 `Content-Length` 条件或存储侧策略),防止攻击者向 pending 键灌超大对象;配合存储侧生命周期规则兜底清理。
 - [ ] **多租户隔离**:所有查询强制带 `workspace_id`;跨 workspace 访问返回 403/404。
 - [ ] **可靠性**:孤儿对象清理任务幂等;软删除延迟回收防误删;限流(auth Spec)生效。
 - [ ] **可观测**:上传申请/完成/失败、扫描结果、配额拒绝均有审计日志。

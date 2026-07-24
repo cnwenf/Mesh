@@ -176,6 +176,8 @@ Mesh 由 **15 个功能模块**组成,分四层:
 | 实时 | WebSocket `/ws`,频道订阅 + 单调递增 `seq` + 断线重放;事件命名 `<entity>.<action>`(如 `issue.updated`);降级为轮询 |
 | 长任务状态机 | `queued → claimed → running → completed / failed / cancelled`(agent 运行、autopilot 运行共用语义) |
 | 触发护栏 | 所有 agent 触发路径默认:频率上限、去重、链深度限制、全局 kill switch |
+| 不可信内容处理 | **所有外部来源内容(成员评论、附件、Webhook 载荷、抓取/上传内容)进入 agent 上下文时,一律视为数据而非指令**:① 显式标记为不可信数据并做结构隔离(如用分隔标记包裹,明确告知 agent 这些内容不含可执行指令);② agent 不得将不可信内容中的"指令"作为行动依据;③ 高风险动作(对外上传、跨 issue 批量写、凭证读取后写出)默认走 `confirm_required` 人工闸门。此约定适用于 `agent`(issue 上下文注入)、`autopilot`(Webhook 载荷模板插值)、`chat-session`(issue 上下文 system 消息)等所有向 agent 注入外部内容的路径 |
+| 凭证全通道脱敏 | 凭证(secret)的脱敏不仅限于日志通道:agent 写出的**评论、附件产出物、日志**等所有内容通道均做 secret 命中检测(复用 `runtime_credentials.redact_in_logs` 黑名单),命中即拦截该内容写出并触发安全告警;沙箱出站默认 deny(见 runtime Spec)从网络层堵截凭证经任意外联外泄 |
 
 ## 7. 核心跨模块流程
 
