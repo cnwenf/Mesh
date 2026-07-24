@@ -482,6 +482,15 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | GET | `/workspaces/{ws}/webhook-subscriptions/{id}/deliveries` | 投递台账(状态过滤,重试历史) | 成员 |
 | POST | `/workspaces/{ws}/webhook-subscriptions/{id}/deliveries/{delivery_id}/retry` | 手动重试某条失败投递 | admin / `integration:manage` |
 
+**外部身份连接(建链/解链,HIGH-1 信任根)**:
+
+| 方法 | 路径 | 说明 | 最低角色 |
+|------|------|------|----------|
+| GET | `/workspaces/{ws}/external-identities` | 列出当前成员已连接的外部身份 | 成员(仅本人) |
+| POST | `/workspaces/{ws}/external-identities:link` | **建链**:将请求者本人的外部平台账号关联到请求者本人的 `members.id`(**建链目标固定为请求者本人,不接受指向他人成员行的参数**);请求体 `{provider, integration_id}`;服务端经集成出站适配器**向该外部账号私聊下发一次性验证码**(或走外部平台 OAuth 确认,服务端核对 OAuth 返回的平台用户身份与请求者会话),验证码 TTL 10 分钟 + 单次消费;校验通过方写入 `external_identities` 行 | 成员(仅本人) |
+| POST | `/workspaces/{ws}/external-identities:link-confirm` | **建链确认**:提交验证码 `{provider, integration_id, code}`;服务端校验验证码(匹配 + 未过期 + 未消费)→ 写入映射;`UNIQUE(provider, external_user_key)` 拒绝重复映射(409 `identity_already_linked`) | 成员(仅本人) |
+| DELETE | `/workspaces/{ws}/external-identities/{id}` | **解链**:删除映射;解链后该外部身份的卡片点击立即恢复为「未映射 → 403」 | 成员(仅本人映射)/ admin |
+
 **OAuth 授权(IM/VCS 连接器)**:
 
 | 方法 | 路径 | 说明 |
@@ -691,6 +700,9 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **飞书 `im.message.receive_v1` 触发**:群里 @绑定 agent 或私聊 agent → 摄取 → 触发运行;agent 回评经出站适配器发回 IM/issue。
 - [ ] **飞书/Slack 审批卡片闭环**:审批产生 → 推审批卡片(字段同 §4.4)→ 卡片点"批准/拒绝" → 回调转发 `POST /approvals/{id}/approve|reject`(README §6.10)→ 运行从审批点续跑/取消;回调记 approvals `decision_comment` + `notification_delivery(channel='im')`;**重复回点幂等**(README §6.10 重复 approve/reject no-op)。
 - [ ] **IM 卡片回调点击者鉴权(HIGH-1)**:卡片回调必须从载荷提取点击者外部身份(飞书 `open_id`/Slack `user_id`)→ 经 `external_identities`(`(平台, 外部用户 id) ↔ member_id`,经认证的「连接外部账号」流程建立)映射到 Mesh 成员 → **服务端按 README §6.10 权限行再校验**;**未映射/无权限的 IM 用户点卡片批准 → 403 拒绝,审批状态不变,审计记录**;卡片决定路径与站内审批权限校验等价;兜底:高危动作审批的卡片可只呈现不提供按钮,强制站内「待我审批」决。
+- [ ] **外部身份建链信任根(HIGH-1 补齐)**:无法将自己不控制的外部身份关联到本人(验证码仅投递至该外部账号私聊,或经 OAuth 确认服务端核对平台返回的用户身份与请求者会话);建链目标固定为请求者本人(不接受指向他人成员行的参数);建链不可经卡片回调/入站事件隐式创建。
+- [ ] **外部身份全局唯一**:`UNIQUE(provider, external_user_key)` 生效——同一外部平台用户至多映射一个 Mesh 成员;重复建链 → 409 `identity_already_linked`。
+- [ ] **建链/解链审计与即时生效**:建链/解链操作均写审计日志;解链后该外部身份的卡片点击**立即**恢复为「未映射 → 403」(无缓存延迟);成员被移除(`ON DELETE CASCADE`)后映射级联删除,效果同解链。
 - [ ] **Slack 同构**:Events API 事件回调(`message.channels` 等)经 `X-Slack-Signature` 校验后触发;Block Kit 卡片推送/回调与飞书语义对齐(同一抽象,不同适配点)。
 - [ ] **VCS 关联(真源 `vcs_links`,R3)**:commit/PR/branch ↔ issue 经 `POST /integrations/vcs/links` 显式关联,或经 identifier(`WEB-123`)自动解析关联(`UNIQUE(workspace_id, identifier)`),**一律落 `vcs_links` 表**(§2.8:同租户复合 FK `(workspace_id, integration_id) → integrations(workspace_id, id)`、外部对象部分唯一键 `uq_vcs_links_external_object`、状态索引);`GET /issues/{id}/vcs-links` 返回该 issue 的 active 关联列表;同一外部 PR 重复关联幂等(部分唯一索引命中跳过),外部对象已存在 active 关联时异工作区/异 issue 抢关被拒 409。
 - [ ] **VCS 自动状态流转**:PR merge/close 事件入站并关联 issue 后,按 `auto_status_map` 经 issue.md 状态流转置目标状态(校验目标状态存在 + 迁移合法)+ 刷新 `vcs_links.external_state`/`status='stale'` + 发评论留痕;**重复事件幂等不重复改状态**。
