@@ -184,7 +184,7 @@ ORDER BY bucket_local;
 |----|------|
 | 定义 | 每成员/agent 的**当前 open issue 数** + agent 的**运行中/排队/需审批执行数**。 |
 | open issue | `assignee_id IS NOT NULL` 且 `state_category NOT IN ('done','cancelled')` 且 `deleted_at IS NULL`,按 `assignee_id`(→ `members.id`)分组计数。 |
-| agent 执行(呼应 README §6.12「运行中 N / 排队 M / 需审批 K」) | 按 `task_executions.agent_id` 聚合在途执行:**运行中** = `status IN ('claimed','running','cancelling')`;**排队** = `status='queued'`;**需审批** = `status='awaiting_approval'`。 |
+| agent 执行(呼应 README §6.12「运行中 N / 排队 M / 需审批 K」) | 按 `task_executions.agent_id` 聚合在途执行:**运行中** = `status IN ('claimed','running','cancelling')`;**排队** = `status='queued'`;**需审批** = `status='awaiting_approval'`。**R4(HIGH-6):workload-B 与 agent stats / workspace dashboard 共用统一 execution 可见性 scope(§2.3.1)**——聚合 `task_executions` 前先过 `analytics_exec_visible_to(execution, 请求者)` 谓词:关联 issue 的执行继承项目可见性(普通成员看不到不可见 private project 的执行数,堵执行计数侧信道),private agent 的执行先过 agent 可见性(仅 owner/admin)。 |
 | 维度统一 | open issue 以 `assignee_id`(members)为键;agent 执行以 `task_executions.agent_id`(agents)为键,经 `agents.id → members.agent_id` JOIN 统一到成员维度。响应每行携带服务端计算的 `member_type` 快照与 `display_name`(README §6.1);人类行 executions 字段为 null。 |
 | 时间窗 | **当前快照**,无时间窗(反映此刻状态);可选 `project_id` 收窄到项目内 issue。 |
 | 排行 | 服务端按 `open_issues DESC, running DESC` 排序返回(列表分页见 §6.14 整体游标)。 |
@@ -308,6 +308,36 @@ WHERE e.workspace_id=$ws AND e.agent_id=$agent_id
 
 > **口径诚实性声明**:执行时长/成功率/超时率/重试率来自 `task_executions`/`execution_attempts`,**覆盖全部执行**;token 消耗**仅覆盖 autopilot 触发的执行**(`autopilot_runs` 是唯一 token 真源),二者口径不同源,响应分别标注覆盖范围,不得把 token 数据外推到无 token 的执行。
 
+### 2.3.1 execution 指标统一可见性 scope(R4 写死,HIGH-6)
+
+**问题**:R3 的私有项目可见性过滤只覆盖 issue 型工作区聚合与 cycle/milestone;workload-B 与 `/analytics/agents/stats` 仍按 `workspace_id + agent_id` 聚合**全部** `task_executions`(执行数/失败率/时长/token),而 `/dashboards/workspace` 含 agent 统计区——普通成员可经执行计数/成本**侧信道推断不可见 private project 的活动**(如某 private 项目下 agent 执行量突增)。R4 为**一切 execution 指标**定义统一可见性 scope,workload-B / agent stats / workspace dashboard agent 统计区**共用同一谓词**,不得各端点各写一套。
+
+**谓词 `analytics_exec_visible_to(execution e, 请求者 m)`(两层串联,validation 脚本同名函数为可执行参照,T33)**:
+
+```text
+visible(e, m) :=
+  -- ① agent 可见性先行(private agent 的统计不泄露给非 owner/非 admin)
+  (e.agent.visibility = 'workspace'
+   OR (e.agent.visibility = 'private'
+       AND (e.agent.owner_user_id = m.user_id OR m.role IN ('owner','admin'))))
+  AND
+  -- ② 关联 issue 的执行继承项目可见性;无 issue 的执行归属 agent、无项目侧信道
+  (e.issue_id IS NULL                                        -- manual/chat/integration 等无 issue 执行
+   OR e.issue.project_id IS NULL                             -- 收件箱 issue(工作区级可见)
+   OR e.issue.project.visibility = 'public'
+   OR m.role IN ('owner','admin')                            -- admin/owner 见全工作区(含 private 项目)
+   OR m ∈ project_members(e.issue.project)
+   OR m ∈ member_project_access(e.issue.project))
+```
+
+| 规则 | 内容 |
+|------|------|
+| 关联 issue 的执行 | **继承关联 issue 当前所属项目的可见性**(「当前归属」口径,与 §2.2.2/§2.2.5 一致):private 项目的执行仅项目成员与 admin/owner 可见,非成员的任何 execution 聚合(执行数/成功率/时长/token)均剔除这些执行。issue 在项目间移动后,执行可见性随**当前**归属变化。 |
+| 无 issue 的执行(`manual`/`chat`/`integration` 直派等) | **归属 agent 本身,经 ① agent 可见性即可见**——这类执行不关联任何项目,不携带项目侧信道;workspace 可见 agent 的无 issue 执行对全体工作区成员可见,private agent 的仅 owner/admin 可见。 |
+| private agent | **先过 agent 可见性**(`agents.visibility='private'` 仅 owner 与 admin/owner 角色可见,agent.md §3.5):其**一切**执行(无论是否关联 issue)对非 owner/非 admin 不可见,统计不呈现。 |
+| 端点覆盖 | `/analytics/agents/stats`(单/多 agent)、`/analytics/workload` 的 workload-B 执行部分、`/dashboards/workspace` 的 agent 统计区一律先按本谓词过滤 `task_executions` 再聚合;`/analytics/agents/stats?agent_id=` 对 private agent 额外校验请求者可见性,不可见 → `403 agent_not_visible`(不泄露统计存在性)。 |
+| 缓存键协同(R4) | execution 类指标(`agent_stats`、workload 执行部分)的 `analytics_snapshots.scope_key` 在 admin/owner 全量时为 `ws_admin`,普通成员为 **`exec:p<sha256(可见项目 id 排序)>:a<sha256(可见 agent id 排序)>`**(可见项目集同 §3.1 口径;可见 agent 集 = workspace 可见 agents ∪ 请求者拥有的 private agents)。查询只命中 scope_key 相等的快照,`ws_admin` 绝不返回给非 admin;可见性变化(项目转 private/agent 转 private/成员变更)后旧键不再命中,自然失效。 |
+
 ### 2.4 时间窗与时区统一约定(落地 README §6.18)
 
 | 约定 | 内容 |
@@ -351,7 +381,7 @@ CREATE INDEX idx_snapshots_stale
 
 > **多租户**:`analytics_snapshots.workspace_id` 为隔离键,查询/刷新必带 `workspace_id`(README §6.2);不存任何跨工作区聚合。
 >
-> **`scope_key` 取值(R3 写死)**:① `ws_admin` —— 工作区全量聚合(仅 admin/owner 可查的端点使用,§3.1/§4.3,聚合 SQL 不过滤项目可见性,因为请求者本身即有权看全工作区);② `projects:<sha256(sorted project_id 列表)>` —— 按请求者可见项目集合聚合(请求者可见项目 = `visibility='public'` 的项目 ∪ 其 `project_members`/`member_project_access` 行覆盖的 private 项目;集合 id 排序后 sha256);③ `project:<project_id>` —— 单项目聚合。**查询时**:服务端先算请求者 scope_key,**只命中 scope_key 相等的快照行**;不命中则按该 scope 重算并写入。**绝不**把 `ws_admin` 快照返回给非 admin(即"全量聚合"与"可见集合聚合"物理分行、键不共享),杜绝经缓存侧信道泄露 private project 统计。
+> **`scope_key` 取值(R3 写死;R4 扩充)**:① `ws_admin` —— 工作区全量聚合(仅 admin/owner 可查的端点使用,§3.1/§4.3,聚合 SQL 不过滤项目可见性,因为请求者本身即有权看全工作区);② `projects:<sha256(sorted project_id 列表)>` —— 按请求者可见项目集合聚合的 **issue 型指标**(请求者可见项目 = `visibility='public'` 的项目 ∪ 其 `project_members`/`member_project_access` 行覆盖的 private 项目;集合 id 排序后 sha256);③ `project:<project_id>` —— 单项目聚合;④ **R4:`exec:p<sha256(可见项目集)>:a<sha256(可见 agent 集)>` —— execution 类指标(`agent_stats`、workload 执行部分)的统一可见性 scope**:可见项目集同 ②;可见 agent 集 = `visibility='workspace'` 的 agents ∪ 请求者 `owner_user_id` 名下的 private agents(集合 id 排序后 sha256,§2.3.1)。**查询时**:服务端先算请求者 scope_key,**只命中 scope_key 相等的快照行**;不命中则按该 scope 重算并写入。**绝不**把 `ws_admin` 快照返回给非 admin(即"全量聚合"与"可见集合聚合"物理分行、键不共享),杜绝经缓存侧信道泄露 private project 统计与 private agent 统计。
 
 ### 2.6 缓存一致性与失效
 
@@ -380,9 +410,9 @@ CREATE INDEX idx_snapshots_stale
 | GET | `/analytics/throughput` | created vs completed 桶序列(`project_id?`、`from`、`to`、`granularity=day\|week\|month`、`tz?`) |
 | GET | `/analytics/workload` | 成员/agent 负荷排行(`project_id?`、`member_type=human\|agent?`、游标分页) |
 | GET | `/analytics/burndown` | 燃尽曲线(`cycle_id?` \| `milestone_id?` 恰好一个、`metric=count\|points`、`tz?`) |
-| GET | `/analytics/agents/stats` | 单/多 agent 运行统计(`agent_id?`、`from`、`to`) |
+| GET | `/analytics/agents/stats` | 单/多 agent 运行统计(`agent_id?`、`from`、`to`);**R4:聚合前按统一 execution 可见性 scope 过滤(§2.3.1)**——关联不可见 private project 的执行被剔除,private agent 先过 agent 可见性;`agent_id` 指向 private agent 且请求者非 owner/非 admin → `403 agent_not_visible` |
 | GET | `/dashboards/project/{project_id}` | 项目仪表盘聚合(velocity + burndown + cycle time,`from`/`to`、`cycle_id?`) |
-| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`);**全体工作区成员可用,聚合按请求者项目可见性过滤**(private 项目不可见者其数据被剔除,MES-4 HIGH-2/R3);admin/owner 见全工作区聚合 |
+| GET | `/dashboards/workspace` | 工作区仪表盘聚合(throughput + workload + agent 统计,`from`/`to`、`granularity?`);**全体工作区成员可用,聚合按请求者项目可见性过滤**(private 项目不可见者其数据被剔除,MES-4 HIGH-2/R3);**R4:workload 执行部分与 agent 统计区同样按统一 execution 可见性 scope 过滤(§2.3.1),普通成员无法经执行计数/成本推断不可见 private project 活动**;admin/owner 见全工作区聚合 |
 
 > 项目级端点(`/analytics/*?project_id=`、`/dashboards/project/{id}`)须过 `project_members` 可见性校验(project.md);无可见性返回 `403 project_not_visible`。
 >
@@ -391,7 +421,7 @@ CREATE INDEX idx_snapshots_stale
 > - **按 `cycle_id`/`milestone_id` 的查询**(velocity / burndown):先解析归属项目并过 `project_members` 可见性校验,不满足 → `403 project_not_visible`;
 > - 工作区仪表盘受众为全体工作区成员,但**聚合数据按上述可见性过滤**(产品口径:数据过滤而非端点限 admin);**admin/owner 可见全工作区聚合(含 private 项目)**。
 >
-> **R3 可见性缓存边界(与上述过滤协同,硬约束)**:① **缓存不跨权限共享**:`analytics_snapshots.scope_key` 纳入缓存键(§2.5)——普通成员的聚合快照 scope_key 为 `projects:<sha256(请求者可见项目 id 排序)>`,admin/owner 全量聚合为 `ws_admin`;查询**只命中请求者 scope_key 相等的快照**,`ws_admin` 快照绝不返回给非 admin(过滤口径变化即新键,无跨权限泄露窗口,集成测试 T33)。② 单项目聚合 scope_key 为 `project:<id>`;显式多项目(`project_ids`)聚合请求者对其中任一项目不可见 → 整体 `403`(不部分返回,避免集合推断泄露)。③ 可见项目集合变化(项目转 private/成员移除)后旧 scope_key 快照不再命中,自然失效。
+> **R3 可见性缓存边界(与上述过滤协同,硬约束;R4 扩至 execution 指标)**:① **缓存不跨权限共享**:`analytics_snapshots.scope_key` 纳入缓存键(§2.5)——普通成员的 issue 型聚合快照 scope_key 为 `projects:<sha256(请求者可见项目 id 排序)>`,admin/owner 全量聚合为 `ws_admin`;查询**只命中请求者 scope_key 相等的快照**,`ws_admin` 快照绝不返回给非 admin(过滤口径变化即新键,无跨权限泄露窗口,集成测试 T33)。② 单项目聚合 scope_key 为 `project:<id>`;显式多项目(`project_ids`)聚合请求者对其中任一项目不可见 → 整体 `403`(不部分返回,避免集合推断泄露)。③ 可见项目集合变化(项目转 private/成员移除)后旧 scope_key 快照不再命中,自然失效。④ **R4(HIGH-6):execution 类指标(`agent_stats`、workload 执行部分)scope_key 纳入同一可见性 scope——普通成员为 `exec:p<可见项目集 hash>:a<可见 agent 集 hash>`**(可见 agent 集 = workspace 可见 agents ∪ 请求者拥有的 private agents,§2.3.1),admin/owner 为 `ws_admin`;聚合一律先过 `analytics_exec_visible_to` 谓词再落快照,workload-B / agent stats / workspace dashboard agent 统计区共用,跨权限绝不共享。
 
 ### 3.2 公共查询参数
 
@@ -472,6 +502,7 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 | 401 | `unauthorized` | 未鉴权/令牌失效(README §6.14) |
 | 403 | `forbidden` | 非工作区成员 |
 | 403 | `project_not_visible` | 项目级端点但请求者无该项目可见性(project.md `project_members`) |
+| 403 | `agent_not_visible` | `agent_id` 指向 private agent 且请求者非其 owner/非 admin(R4:private agent 统计不可见,不泄露统计存在性,§2.3.1) |
 | 404 | `not_found` | 指定 project/cycle/milestone/agent 不存在或不属于该工作区 |
 | 422 | `query_cost_exceeded` | 聚合估算成本超限(README §6.14),建议收窄窗/维度 |
 | 429 | `rate_limited` | 触发限流(带 `Retry-After`) |
@@ -509,7 +540,7 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 
 - **吞吐量趋势**:created vs completed 双折线(或柱),按 granularity 切换;附净流量(积压)趋势。
 - **workload 排行**:成员/agent 列表,列 = 名称(含 `member_type` 图标:人/agent)、open issues、运行中/排队/需审批(agent 行);按 open issues 降序;agent 行的「运行中 N/排队 M/需审批 K」呈现与 README §6.12 容量呈现一致。
-- **agent 统计区**:网格卡片,每 agent 显示成功率(语义色)、平均时长、重试率、近 30 天执行趋势 sparkline;token 覆盖率 <100% 时卡片标注「token 仅覆盖 autopilot 运行」。
+- **agent 统计区**:网格卡片,每 agent 显示成功率(语义色)、平均时长、重试率、近 30 天执行趋势 sparkline;token 覆盖率 <100% 时卡片标注「token 仅覆盖 autopilot 运行」。**R4 可见性**:统计区按统一 execution 可见性 scope 过滤(§2.3.1)——普通成员只见 workspace 可见 agent 的统计(private agent 不呈现),各 agent 的执行计数/时长/token 已剔除其不可见 private project 的执行;UI 与 workload 同给轻提示「按你的可见范围统计」。
 
 ### 4.4 agent 详情统计卡
 
@@ -540,7 +571,7 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 - [ ] **cycle time**:仅统计 `state_category='done'` 且 `completed_at ∈ [from,to)` 的 issue;起始时间取 `issue_activity` 中目标 category=`from_category` 的最早 `created_at`;P50/P90 经 `percentile_cont` 计算;无留痕/负时长样本不计入且计入 `meta.insufficient_data`(§2.2.1)。给定固定数据集,接口结果与 §2.2.1 SQL 逐值一致。
 - [ ] **velocity**:完成判定 = `state_category='done'` 且 `completed_at` 落周期窗(DATE 边界按 `display_timezone` 展开为 UTC);点数为 `SUM(estimate)`;未挂 cycle 的 done issue 不计入任何周期(§2.2.2);**当前归属口径(R3)**:issue 在周期间移动后 velocity 按当前归属重算(响应 meta `scope_caliber='current_attribution'`),不声称还原历史归属。
 - [ ] **吞吐量**:created/completed 双序列按 **`calendar_timezone` 本地日历分桶**(R3),窗 `[from,to)`;`net = created - completed`;`granularity` day/week/month 桶边界为当地日历边界(每桶本地标签与 UTC 瞬间窗一致,§2.2.3);`calendar_timezone='UTC'` 退化为 UTC 分桶;**UTC+8 下"某本地日"桶覆盖当地 00:00–24:00(= UTC 前日 16:00–当日 16:00),不以 UTC 日界切割**。
-- [ ] **workload**:open issue = `assignee_id` 非空且 `state_category NOT IN (done,cancelled)`;agent 执行「运行中/排队/需审批」分别对应 `claimed|running|cancelling`/`queued`/`awaiting_approval`,与 README §6.12 容量呈现一致;成员维度经 `members` 统一,`member_type` 为快照(§2.2.4)。
+- [ ] **workload**:open issue = `assignee_id` 非空且 `state_category NOT IN (done,cancelled)`(open issue 部分按请求者项目可见性过滤,R3);agent 执行「运行中/排队/需审批」分别对应 `claimed|running|cancelling`/`queued`/`awaiting_approval`,与 README §6.12 容量呈现一致,**执行部分按统一 execution 可见性 scope 过滤(R4,§2.3.1:私有项目执行/private agent 执行对不可见者剔除)**;成员维度经 `members` 统一,`member_type` 为快照(§2.2.4)。
 - [ ] **burndown**:`cycle_id`/`milestone_id` 恰好一个(否则 400);实际线 = scope 总量 − 截至各日完成量;理想线线性递减至 0;`metric=count|points` 切换正确;**当前归属口径(R3)**:scope = 当前归属该 cycle/milestone 的 issue 集合(不再声称「曾进入 scope 全部计入」),移入/移出会按当前集合重算曲线,响应 meta `scope_caliber='current_attribution'`(§2.2.5)。
 - [ ] **agent 统计**:成功率 = `completed/(completed+failed+timeout)`(cancelled 不入分母但披露 `cancelled_count`);超时率/重试率(`COUNT(attempts)-1` 派生)/平均端到端时长口径与 §2.3 一致;**token 仅来自 `autopilot_runs`**,`token_coverage` 正确返回且 <1 时 UI 标注。
 - [ ] **可见性与缓存隔离(R3,协同 §5.6,集成测试 T33)**:① 工作区级聚合(含 `/dashboards/workspace`)按请求者项目可见性过滤——非 private 项目成员得不到该项目的计数/曲线/负荷(§5.6);admin/owner 见全工作区聚合;② 非成员无法经任何聚合端点获得不可见 private project 的统计量(显式多项目聚合含不可见项目 → 整体 `403`,不部分返回,避免集合推断泄露);③ `analytics_snapshots.scope_key` 纳入缓存键:普通成员查询**绝不命中** `ws_admin` 快照(跨权限缓存复用被判失败);不同可见项目集合的请求者各自缓存(scope_key = `projects:<hash>`)、互不串读;④ 项目可见性变更后,旧 scope_key 快照不再被命中(自然失效,无跨权限泄露窗口)。
@@ -570,7 +601,11 @@ GET /api/v1/analytics/agents/stats?agent_id=<uuid>&from=2026-06-01T00:00:00Z&to=
 - [ ] `workload` 默认不缓存,任意源变更后下次查询即反映最新状态。
 - [ ] `analytics_snapshots` 查询/刷新必带 `workspace_id`,跨工作区不可见(多租户隔离,README §6.2)。
 
-### 5.6 安全性 —— 私有项目可见性过滤(HIGH-2)
+### 5.6 安全性 —— 私有项目可见性过滤(HIGH-2;R4 HIGH-6 扩展:execution 指标)
 
 - [ ] **工作区级聚合按请求者项目可见性过滤**:非私有项目 P 成员的普通工作区成员查询 throughput / workload / cycle time(不传 `project_id`)/ `/dashboards/workspace` 时,返回数据**不含项目 P 的 issue 计数/点数/成员负荷/曲线样本**;聚合结果与「手动剔除 P 后重算」一致。
 - [ ] **cycle/milestone 直引按归属项目可见性校验**:`velocity?cycle_ids=` / `burndown?cycle_id=` / `burndown?milestone_id=` 引用的 cycle/milestone 归属私有项目时,非该项目成员 → `403 project_not_visible`;不满足可见性的 cycle/milestone 不出现在任何聚合结果中。
+- [ ] **私有项目执行负向测试(R4,HIGH-6,集成测试 T33)**:agent A 在私有项目 P 的 issue 上有执行(执行数/失败率/时长/token)——非 P 成员的普通成员查询 `/analytics/agents/stats?agent_id=A` / workload 执行部分 / `/dashboards/workspace` agent 统计区时,**这些执行全部被剔除**(聚合结果与「手动剔除关联 P 的执行后重算」一致),无法经执行计数/成本推断 P 的活动;admin/owner 见全量;P 的成员见含 P 执行的聚合。
+- [ ] **private agent 负向测试(R4,HIGH-6)**:`visibility='private'` 的 agent X(非请求者拥有)——普通成员查询 `/analytics/agents/stats?agent_id=X` → `403 agent_not_visible`;workload / workspace dashboard agent 统计区**不呈现** X 的任何统计(其执行无论是否关联 issue 均不可见);X 的 owner 与 admin/owner 可见 X 的统计。
+- [ ] **无 issue 执行归属(R4)**:`trigger ∈ (manual, chat, integration)` 且 `issue_id IS NULL` 的执行归属 agent 本身——workspace 可见 agent 的此类执行计入全体工作区成员可见的聚合(不携带项目侧信道);private agent 的此类执行仅 owner/admin 可见。
+- [ ] **execution 缓存键隔离(R4)**:`agent_stats` 快照 `ws_admin` 与 `exec:p<hash>:a<hash>` 物理分行,普通成员查询**绝不命中** `ws_admin` 行;项目可见性或 agent 可见性(转 private)变更后,旧 scope_key 快照不再命中(自然失效,无跨权限泄露窗口)。

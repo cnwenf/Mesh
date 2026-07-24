@@ -462,6 +462,8 @@ erDiagram
 > ```
 >
 > `task_executions.required_capabilities` 与 `config_snapshot.capability_grants` 的严格类型由 schema CHECK 兜底（字符串数组 / `{capability,permission}` 对象数组，validation 脚本实测，集成测试 T28）；runtime claim 只做 `e.required_capabilities <@ runtimes.capabilities`（双方均为纯字符串数组，README §6.4）。
+>
+> **R4 写死（授权快照 permission 必填 + 归一唯一实现）**：归一**产物** `capability_grants` 的每个条目 **`permission` 必须存在、必须为字符串、取值必须为 `read_only|write|confirm_required`**——schema CHECK 对缺失/非字符串/非法枚举的 permission 一律拒绝（「未标注 permission」只是**声明层**形态，归一时补 `confirm_required`，绝不以缺 permission 形态落进快照）。本算法的**唯一可执行参照实现**为 validation 脚本的 `normalize_capability_declarations(declared)`（输入混合字符串/对象声明，输出 `{"required": [...], "grants": [...]}`；非法 permission / 非法条目形态 / 非数组输入抛 `capability_invalid`，API 层 422）；后端编排入口的实现必须与其逐条等价，集成测试 T28 以**同一实现**处理混合声明并断言「字符串补 `confirm_required` / 去重 / 最严格权限 / 字典序排序 / claim 联动 / 非法声明拒绝」全部语义。
 
 > 幂等键 + 状态机校验保证同一逻辑触发不会重复入队；领取原子性与跨租户安全见 runtime.md §2.5。
 
@@ -645,7 +647,8 @@ erDiagram
 ### 4.7 关键交互流程：创建 → 配置 → 分派 → 观察自动工作
 
 ```
-1. 用户在 设置→Agents 点「+ 新建」，走向导：
+1. 用户在 成员名册页（人与 agent 统一名册 —— agent 的**唯一**创建入口，README §6.12；
+   Settings→Agents 仅承载工作区级 agent 策略，不维护 agent 名册与「+ 新建」入口）点「+ 新建 Agent」，走向导：
    ① 起名「小测」、传头像、填角色标签
    ② 选「均衡」模型档位、套用「严谨工程」预设、写岗位说明书
    ③ 绑定「回归测试」技能 + 「代码执行(需确认)」工具
@@ -749,6 +752,7 @@ stateDiagram-v2
 - [ ] **实时事件词汇（README §6.7 注册表）**：本 Spec 所有 WebSocket 帧示例与事件表统一使用注册表内事件名——运行状态回流为 `execution.*`（`queued`/`started`/`progress`/`awaiting_approval`/`completed`/`failed`），agent 域为 `agent.*`，审批为 `approval.created`/`approval.decided`；**帧示例与事件表已统一为 `execution.*`，无任何未登记的运行起始事件名**。
 - [ ] agent 容量呈现为「运行中 N / 排队 M / 需审批 K」（README §6.12），非二元空闲/处理中。
 - [ ] 跨模块外键按 README §6.2 建复合 FK（`agents(workspace_id,id)` UNIQUE 等），跨租户引用被数据库拒绝（集成测试 T1）。
+- [ ] **agent 创建入口唯一为成员名册页（R4，README §6.12）**：创建向导仅从成员名册「+ 新建 Agent」进入（§4.5/§4.7）；Settings→Agents 仅承载工作区级 agent 策略（默认 runtime、触发护栏、审批策略），**不维护 agent 名册列表与「+ 新建」入口**；Spec 全文（含 §4.x 交互流程）不存在「设置→Agents 创建 agent」的表述（与 onboarding.md §1.2.1 唯一入口一致）。
 
 ### 5.2 非功能验收
 

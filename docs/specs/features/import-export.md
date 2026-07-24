@@ -113,7 +113,8 @@ outbox relay ──SKIP LOCKED──► 数据作业 worker(README §2.2):
 | `error_report` | jsonb | NOT NULL DEFAULT '[]' | 逐行错误**预览**(前 N 条,默认 1000):`[{row, field, code, message}]`(§2.4);完整明细在错误报告附件 |
 | `checkpoint` | jsonb | NOT NULL DEFAULT '{}' | **R3:持久恢复点**`{last_committed_batch: <int>, last_row_key: <text>, batch_size: <int>, resumed_count: <int>, resumed_at: <ts>}`——每批提交事务内推进(§3.8);worker 崩溃后新 worker 凭此从**最后一个已提交批次之后**续跑,不重跑已提交批次(幂等兜底见 `data_job_rows`) |
 | `lease_owner` | text | NULL | **R3:在途 worker 标识**(worker 实例 id);与 `lease_expires_at` 构成租约,过期作业由 reaper 回收 |
-| `lease_expires_at` | timestamptz | NULL | **R3:租约过期时刻**(每批提交时续租);`status='running'` 且租约过期 → reaper 置 `lease_owner=NULL` 并经 outbox 重投恢复事件,新 worker 从 `checkpoint` 续跑——**消除「running 守卫导致崩溃后永久卡住」**(§3.8) |
+| `lease_seq` | bigint | NOT NULL DEFAULT 0 | **R4:单调 fencing token**——每次领取/恢复(含 reaper 回收后的重新领取)`+ 1`;worker 领取时记下当时序号,**每批提交事务内校验 `lease_owner = 本 worker AND lease_seq = 领取序号 AND lease_expires_at > now()`,不符即整批拒绝回滚**——过期旧 worker「复活」后的一切批提交因 owner/seq 不匹配被拒,杜绝新旧 worker 并发提交产生重复实体(同 README §6.4 `lease_seq` fencing 范式) |
+| `lease_expires_at` | timestamptz | NULL | **R3:租约过期时刻**(每批提交时续租);`status='running'` 且租约过期 → reaper 置 `lease_owner=NULL` 并经 outbox 重投恢复事件,新 worker 从 `checkpoint` 续跑(领取时 `lease_seq + 1`,R4)——**消除「running 守卫导致崩溃后永久卡住」**(§3.8) |
 | `requested_by` | uuid | NOT NULL,**复合 FK `(workspace_id, requested_by) → members(workspace_id, id)` `ON DELETE RESTRICT`** | 发起人(成员软删除,RESTRICT 不悬空,README §6.2) |
 | `started_at` | timestamptz | NULL | 进入 running 的时间 |
 | `finished_at` | timestamptz | NULL | 到达终态的时间 |
@@ -206,6 +207,7 @@ CREATE TABLE data_jobs (
   error_report         JSONB NOT NULL DEFAULT '[]',
   checkpoint           JSONB NOT NULL DEFAULT '{}',        -- R3:持久恢复点(最后已提交批次/行键)
   lease_owner          TEXT NULL,                          -- R3:在途 worker 租约
+  lease_seq            BIGINT NOT NULL DEFAULT 0,          -- R4:单调 fencing token(每次领取 +1,批提交校验,杜绝旧 worker 并发提交)
   lease_expires_at     TIMESTAMPTZ NULL,
   requested_by         UUID NOT NULL,
   started_at           TIMESTAMPTZ NULL,
@@ -267,7 +269,7 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 > - `result_attachment_id` 仍用 PG16 列级 `ON DELETE SET NULL (result_attachment_id)`:产物/错误报告附件物理清理时仅置空引用列,`workspace_id` 保持非空、作业历史行不报错(真实 DELETE 行为见 §5 / README §9 T18 同类)。
 > - `requested_by` 用 `ON DELETE RESTRICT`:成员一律软删除(`members.status='removed'`),物理 DELETE 不发生,RESTRICT 永不阻塞且发起人署名不悬空。
 >
-> **行级稳定键 `row_key`(R3 写死)**:优先取映射出的 `external_ref`(源工具的业务键,如 `EXT-123`,跨重跑天然稳定);无 `external_ref` 映射或值不唯一时,`row_key = 'row:' || row_number || ':' || sha256(该行全部源字段的规范化 JSON)`——**内容寻址**,同一份源文件(经 `source_content_hash` 校验)重跑得同一键集。`UNIQUE(job_id, row_key)` 使「重放已提交批次」成为幂等操作:台账 upsert(`ON CONFLICT (job_id, row_key) DO UPDATE` 仅在 `status NOT IN ('created','updated')` 时改写)不会重复创建 issue/project(集成测试 T31)。
+> **行级稳定键 `row_key`(R3 写死;R4 强化为实体创建幂等的原子占用键)**:优先取映射出的 `external_ref`(源工具的业务键,如 `EXT-123`,跨重跑天然稳定);无 `external_ref` 映射或值不唯一时,`row_key = 'row:' || row_number || ':' || sha256(该行全部源字段的规范化 JSON)`——**内容寻址**,同一份源文件(经 `source_content_hash` 校验)重跑得同一键集。`UNIQUE(job_id, row_key)` 使「重放已提交批次」成为幂等操作,且**实体创建前先原子占用 row_key(R4 写死)**:每行先以 `INSERT INTO data_job_rows (…, status='pending', target_type, target_id=<预分配 UUID>) ON CONFLICT (job_id, row_key) DO NOTHING` 尝试占用——**占用成功(1 行)者才用预分配的 `target_id` 创建 issue/project**,占用冲突(0 行,该行已被此前的提交创建)即跳过实体创建、复用既有 `target_id`。如此「先经实体服务创建实体再写台账、`UNIQUE(job_id,row_key)` 冲突发生在实体创建之后」的旧次序被废除——唯一约束在实体创建**之前**裁决,重放/并发都不可能为同一 row_key 产生第二个实体(集成测试 T31)。
 
 ### 2.6 跨模块外键说明
 
@@ -346,11 +348,12 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 
 **前置校验:** `params.validated_at` 非空(已 dry-run),否则 `422 validation_required`;status 须为 `pending`,否则 `409 conflict`;源附件已放行,否则 `422 source_not_ready`;**R3:写入/校验 `source_content_hash`**——validate 后源文件内容被替换(哈希与冻结值不一致)→ `422 source_changed`,要求重新 validate(保证落库内容与 dry-run 预览为同一份源)。
 
-**动作(经 outbox/worker,§3.8,部分成功,逐批幂等):** status `pending → running`(`started_at`,**领取租约** `lease_owner`/`lease_expires_at`),worker 流式重读源文件,**按 `batch_size`(默认 500 行)分批,每批一个数据库事务**(R3 崩溃恢复协议,§3.8):
-- 合法行 → 经**实体服务层**创建 issue/project(复用正常落库路径:编号生成 §3.7、状态解析、成员引用、标签/自定义字段、父子二次解析);同事务写 `data_job_rows` 台账行(`status='created'`,`target_type/target_id` 指向新实体,`UNIQUE(job_id, row_key)` 幂等)。
+**动作(经 outbox/worker,§3.8,部分成功,逐批幂等 + fencing):** status `pending → running`(`started_at`,**领取租约** `lease_owner`/`lease_expires_at`,**R4:领取即 `lease_seq = lease_seq + 1`,worker 记下领取序号作为本次租约的 fencing token**),worker 流式重读源文件,**按 `batch_size`(默认 500 行)分批,每批一个数据库事务**(R3 崩溃恢复协议 + R4 fencing/原子占用,§3.8):
+- **批事务开始:锁 job 行并校验 fencing(R4)**——`SELECT … FROM data_jobs WHERE id=$job FOR UPDATE` 后校验 `lease_owner = 本 worker AND lease_seq = 领取序号 AND lease_expires_at > now()`;**任一不符(租约已被 reaper 回收并被新 worker 领取)即整批拒绝、事务回滚**——过期旧 worker「复活」后的批提交(即使已走到实体创建)随回滚一并撤销,新旧 worker 不可能并发提交同一作业。
+- **合法行:先原子占用 row_key、再创建实体(R4 次序写死)**——每行先 `INSERT INTO data_job_rows (…, status='pending', target_type, target_id=<预分配 UUID>) ON CONFLICT (job_id, row_key) DO NOTHING`:**占用成功(1 行)才经实体服务层用预分配的 `target_id` 创建 issue/project**(复用正常落库路径:编号生成 §3.7、状态解析、成员引用、标签/自定义字段、父子二次解析),随后台账置 `status='created'`;**占用冲突(0 行 = 该行已在此前提交的批次创建)即跳过实体创建**,直接复用既有 `target_id`(重放已提交批次不重复建实体)。唯一约束在实体创建**之前**裁决——「先建实体后写台账、冲突发生在实体创建之后」的旧次序已废除。
 - 非法行 → 跳过,台账行 `status='failed'` + `error` 明细;计入错误报告。
-- **批事务末尾同事务推进** `checkpoint`(`last_committed_batch`/`last_row_key`)与 `succeeded_rows`/`failed_rows` 计数、续租(`lease_expires_at = now() + 5min`),并发出 `data_job.updated` 进度;**批间崩溃 = 最后提交的批之前全部落库、之后全部未动**(计数/checkpoint 与实体同事务,不存在"计数已加但实体未建"的漂移)。
-- **崩溃后恢复**:新 worker 领取该作业(租约过期回收,§3.8)→ 校验 `source_content_hash` → 从 `checkpoint.last_committed_batch` 之后续跑;重放已提交批次时台账 `ON CONFLICT (job_id, row_key)` upsert 幂等(已 `created` 的行不重复建 issue/project),恢复路径不产生重复实体(集成测试 T31)。
+- **批事务末尾同事务推进** `checkpoint`(`last_committed_batch`/`last_row_key`)与 `succeeded_rows`/`failed_rows` 计数、续租(`lease_expires_at = now() + 5min`,`lease_seq`/`lease_owner` 保持本租约值),并发出 `data_job.updated` 进度;**批间崩溃 = 最后提交的批之前全部落库、之后全部未动**(fencing 校验、实体创建、台账、计数/checkpoint 全在同一事务,不存在"计数已加但实体未建"或"实体已建但台账未记"的漂移)。
+- **崩溃后恢复**:新 worker 领取该作业(租约过期回收,§3.8;**领取即 `lease_seq + 1`,旧 worker 的 fencing token 随即失效**)→ 校验 `source_content_hash` → 从 `checkpoint.last_committed_batch` 之后续跑;重放已提交批次时 row_key 原子占用冲突即跳过实体创建(幂等),恢复路径不产生重复实体;**旧 worker 若「复活」并尝试提交,其 fencing 校验失败、整批回滚**(集成测试 T31 模拟旧 worker 重新领取后提交被拒,并断言真实 issue/project 最终每行恰一条、计数/checkpoint/台账一致)。
 - 终态:全部台账行到终态后,`failed_rows = 0 → completed`;`failed_rows > 0 → completed_with_errors`(含全部失败);任务级故障(源不可解析/存储不可达/被取消)→ `failed`。置 `finished_at`、清空租约;完整错误明细**流式**写入错误报告附件(`result_attachment_id`),`error_report` 行内仅前 N 条。
 
 **响应体(202,异步执行已启动):**
@@ -392,8 +395,8 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 
 - 建作业事务**同事务** INSERT `outbox_events`(`event_type='data_job.enqueue'`,payload 含 `data_job_id`/`kind`/动作,幂等键 `sha256(data_job_id \| action)`,README §6.5)。
 - outbox relay `FOR UPDATE SKIP LOCKED` 领取 → 分发数据作业 worker;worker 以 `SELECT … WHERE id=$1 AND status IN (期望前置态) FOR UPDATE SKIP LOCKED` 锁定作业行**幂等推进**(重复投递因状态守卫无副作用)。
-- **R3 领取即租约**:worker 锁定作业行的同事务写 `lease_owner=<worker-id>`、`lease_expires_at=now()+5min`、`checkpoint.resumed_count+1`(非首次领取时);每批事务续租。**不存在无租约的 `running`**——崩溃后卡 `running` 的作业必然租约过期。
-- **R3 租约回收(reaper)**:补偿扫描 `idx_data_jobs_lease_expired`(`status='running' AND lease_expires_at < now()`)→ 同事务置 `lease_owner=NULL`(状态保持 `running`,**不回退计数**——计数与 checkpoint 与实体同事务提交,天然一致)+ 经 outbox 重投 `data_job.resume`(幂等键 `sha256(data_job_id \| 'resume' \| 上次 checkpoint 批次号)`)→ 新 worker 领取后从 `checkpoint.last_committed_batch` 续跑。**消除两类永久故障**:①「`running` 守卫使重投不再执行 → 作业永久卡住」(租约过期即可被新 worker 领取);②「重跑已提交批次 → 重复建 issue/project」(checkpoint 跳过 + `data_job_rows.UNIQUE(job_id, row_key)` upsert 幂等双保险)。
+- **R3 领取即租约(R4:含单调 fencing token)**:worker 锁定作业行的同事务写 `lease_owner=<worker-id>`、**`lease_seq = lease_seq + 1`(单调 fencing token,每次领取/恢复递增,worker 记下领取序号)**、`lease_expires_at=now()+5min`、`checkpoint.resumed_count+1`(非首次领取时);每批事务**先锁 job 行(`FOR UPDATE`)校验 `lease_owner + lease_seq + 未过期` 再写副作用**,批末续租。**不存在无租约的 `running`**——崩溃后卡 `running` 的作业必然租约过期;**旧 worker 过期后「复活」也无法提交任何批——其持有的 fencing token(旧 `lease_seq`)与新租约不符,整批事务在校验处即被拒绝回滚(R4,与 README §6.4 attempt `lease_seq` fencing 同构)**。
+- **R3 租约回收(reaper)**:补偿扫描 `idx_data_jobs_lease_expired`(`status='running' AND lease_expires_at < now()`)→ 同事务置 `lease_owner=NULL`(状态保持 `running`,**不回退计数**——计数与 checkpoint 与实体同事务提交,天然一致;**`lease_seq` 不清零、不递减**,下次领取递增后旧持有者的一切 token 即失效)+ 经 outbox 重投 `data_job.resume`(幂等键 `sha256(data_job_id \| 'resume' \| 上次 checkpoint 批次号)`)→ 新 worker 领取后从 `checkpoint.last_committed_batch` 续跑。**消除三类永久故障**:①「`running` 守卫使重投不再执行 → 作业永久卡住」(租约过期即可被新 worker 领取);②「重跑已提交批次 → 重复建 issue/project」(checkpoint 跳过 + row_key 原子占用「先占后建」幂等双保险,R4:唯一约束在实体创建**之前**裁决);③「过期旧 worker 复活并与新 worker 并发提交 → 重复实体」(单调 `lease_seq` fencing 拒绝一切旧 token 的批提交,R4)。
 - worker 崩溃在**批事务提交前** → 该批整体未落库,新 worker 重跑该批(幂等);崩溃在**提交后、outbox 进度事件发布前** → 进度事件由 outbox 补投(at-least-once),`data_job.updated` 可能重复推送,客户端按 `checkpoint`/计数收敛。
 - **R3 源文件校验**:领取时(首次与恢复皆然)重算源附件内容 sha256 与 `source_content_hash` 比对,不一致 → 作业 `failed(failure_reason='source_changed')`(源在 validate 后被替换,不可安全续跑)。
 - **禁止**在业务事务外"顺手"解析文件或写实体(评审硬约束,README §6.6)。
@@ -508,7 +511,7 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 
 - [ ] **跨租户 job/附件复合 FK 拒绝(README §9 T1 同类)**:`data_jobs` 建 `UNIQUE(workspace_id, id)`;`source/result_attachment_id → attachments(workspace_id,id)`、`requested_by → members(workspace_id,id)` 均复合 FK;构造跨 workspace 复合 FK 插入被数据库约束拒绝;A 区凭证访问 B 区 job/download → 403/404。
 - [ ] **真实 DELETE 行为(R3 修订,README §9 T18 同类)**:物理清理某 attachment 时,**`data_jobs.source_attachment_id` 经 `ON DELETE RESTRICT` 拒绝删除**(作业存续期间源文件不可物理删,API 层 `409 source_in_use`;软删除不受影响);`result_attachment_id` 经列级 `ON DELETE SET NULL (result_attachment_id)` 仅置空引用列,`workspace_id` 保持非空、行不报错;删除 workspace 级联其 data_jobs 与 `data_job_rows`(集成测试 T31)。
-- [ ] **崩溃恢复与行级幂等(R3,集成测试 T31)**:① import 执行中(第 K 批提交后)杀 worker → reaper 在 `lease_expires_at` 过期后回收租约,新 worker 领取并**从 `checkpoint.last_committed_batch` 续跑**;② 前 K 批已建实体**不重复创建**(`data_job_rows.UNIQUE(job_id, row_key)` upsert 幂等 + checkpoint 跳过双保险),最终 `succeeded_rows` = 台账 `created` 行数、与实体实际数量一致;③ 源文件在 validate 后被替换 → 恢复领取时 `source_content_hash` 校验失败,作业 `failed(source_changed)`;④ 作业不会因「`running` 守卫」永久卡住(租约过期即可被重新领取);⑤ 删除源附件被 RESTRICT 拒绝。
+- [ ] **崩溃恢复与行级幂等(R3;R4 强化:fencing + 实体创建幂等,集成测试 T31)**:① import 执行中(第 K 批提交后)杀 worker → reaper 在 `lease_expires_at` 过期后回收租约,新 worker 领取(**`lease_seq + 1`**)并**从 `checkpoint.last_committed_batch` 续跑**;② 前 K 批已建实体**不重复创建**——每行**先原子占用 `row_key`(`ON CONFLICT DO NOTHING` + 预分配 `target_id`)再创建实体**,占用冲突即跳过实体创建(唯一约束在实体创建**之前**裁决,R4),最终 `succeeded_rows` = 台账 `created` 行数 = 真实 issue/project 行数(每 row_key 恰一条);③ **R4 fencing:每批事务锁 job 行校验 `lease_owner + lease_seq + 未过期`——模拟过期旧 worker 重新领取后「复活」提交,其批事务(含实体创建)被整体拒绝回滚,不产生重复实体,计数/checkpoint 不被其推进**;④ 源文件在 validate 后被替换 → 恢复领取时 `source_content_hash` 校验失败,作业 `failed(source_changed)`;⑤ 作业不会因「`running` 守卫」永久卡住(租约过期即可被重新领取);⑥ 删除源附件被 RESTRICT 拒绝。
 - [ ] **大文件分片/内存安全(流式读写,不全量载入)**:源文件解析(CSV 逐行 / JSON 流式)与导出生成(游标分批查询 + 流式写出)全程流式;在 README §10 数据规模(单作业 10 万行)下内存占用平稳,不因单作业 OOM;错误报告流式写附件,行内 `error_report` 有上限;`data_job_rows` 台账逐批写入,内存不随文件总行数增长。
 - [ ] **幂等**:重复 `run`/`validate` 经状态守卫无副作用;`Idempotency-Key` 重复建作业返回首次结果;outbox 重投不产生重复落库(幂等键 + 状态守卫 + 行台账,README §6.5/§6.6)。
 - [ ] **属主/权限**:非 requested_by/admin 无法查看/下载他人作业(`403`);导入需目标写权限、导出需范围读权限。
