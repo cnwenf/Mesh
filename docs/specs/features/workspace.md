@@ -97,7 +97,7 @@ users(人类登录身份,auth.md)──┐
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | 触发器自动维护 |
 
-> **无项目 issue 编号**(README §6.3):无项目 issue 的 `number` 由本表 `inbox_issue_seq` **行锁自增**(`UPDATE workspaces SET inbox_issue_seq = inbox_issue_seq + 1 WHERE id=$1 RETURNING inbox_issue_seq`,与 `projects.issue_seq` 同一机制),`identifier = <工作区保留前缀> || '-' || number`;保留前缀默认 `WS`(可经 `settings.inbox_issue_prefix` 配置)。工作区级 `UNIQUE(workspace_id, identifier)` 在 `issues` 上兜住一切重号(见 issue.md / README §6.3)。
+> **无项目 issue 编号**(README §6.3):无项目 issue 的 `number` 由本表 `inbox_issue_seq` **行锁自增**(`UPDATE workspaces SET inbox_issue_seq = inbox_issue_seq + 1 WHERE id=$1 RETURNING inbox_issue_seq`,与 `projects.issue_seq` 同一机制),`identifier = <工作区保留前缀> || '-' || number`;保留前缀默认 `WS`(可经 `settings.inbox_issue_prefix` 配置)。**前缀的占用/变更/保留语义见 §2.6 `identifier_prefix_registry`**(README §6.3)。工作区级 `UNIQUE(workspace_id, identifier)` 在 `issues` 上兜住一切重号(见 issue.md / README §6.3)。
 
 **`settings` JSONB 已知键约定**(非穷尽,缺失键取默认;读写均按 key 校验类型):
 
@@ -107,9 +107,13 @@ users(人类登录身份,auth.md)──┐
 | `default_priorities` | string[] | `["none","low","medium","high","urgent"]` | 默认优先级枚举 |
 | `default_project_visibility` | string | `"private"` | 新建项目默认可见性 |
 | `new_member_default_role` | string | `"member"` | 邀请/加入成员的默认角色 |
-| `inbox_issue_prefix` | string | `"WS"` | 无项目 issue 编号保留前缀(README §6.3,大写,格式同项目前缀) |
+| `inbox_issue_prefix` | string | `"WS"` | 无项目 issue 编号保留前缀(README §6.3,大写,格式同项目前缀);**变更经 §2.6 前缀注册表:旧前缀置 `retired` 永久保留**,历史 identifier 不重编号 |
+| `invitation_max_uses_cap` | int | `100` | 邀请 `max_uses` 可配置上限(LOW-2 硬化:显式值超过上限拒绝,见 §2.3) |
+| `invitation_max_lifetime_hours_cap` | int | `720` | 邀请有效期小时数可配置上限(LOW-2 硬化,默认 30 天:显式 `expires_in_hours` 超过上限拒绝,见 §2.3) |
+| `default_locale` | string | `"zh-CN"` | 工作区默认 locale(BCP-47,README §6.18 / i18n.md:locale 协商链的第三级;**locale 权威为本键**,既有 `default_language` 列仅作建区时的初始播种值,协商一律走 `default_locale`) |
+| `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户未设 `users.settings.theme` 时生效) |
 | `seat_limit` | int \| null | `null` | 席位上限(null=不限,供计费展示) |
-| `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}` |
+| `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}`(产品级 Feature Flags 系统为未来规划,README §12) |
 
 > 写入 `settings` 采用**按键浅合并**(PATCH 语义):仅覆盖请求中出现的键,未出现的键保持原值;未知键允许透传以支持前向兼容,但服务端对已知键做类型校验,非法返回 400。
 
@@ -124,9 +128,9 @@ users(人类登录身份,auth.md)──┐
 | `token_prefix` | TEXT | NOT NULL | — | 令牌前缀,用于列表展示与快速定位(不含秘密) |
 | `role` | TEXT | NOT NULL,CHECK IN ('admin','member','guest') | `'member'` | 接受后赋予的角色(不可直接邀请为 owner) |
 | `invited_by` | UUID | NOT NULL,复合 FK `(workspace_id, invited_by) → members(workspace_id, id)` | — | 邀请人(统一名册条目;README §6.2) |
-| `max_uses` | INT | NOT NULL,CHECK (max_uses > 0) | `10` | 最大使用次数(**创建时未指定默认 10,不允许 NULL 不限次**——链接一旦泄漏即有次数上限,MES-4 安全约束) |
+| `max_uses` | INT | NOT NULL,CHECK (max_uses > 0) | `10` | 最大使用次数(**创建时未指定默认 10,不允许 NULL 不限次**——链接一旦泄漏即有次数上限,MES-4 安全约束)。**显式值受工作区可配置上限约束**(`settings.invitation_max_uses_cap`,默认 100 次):超限创建返回 422 `invitation_limits_exceeded`(LOW-2 硬化;NOT NULL 语义不变,不存在"无限") |
 | `used_count` | INT | NOT NULL,CHECK (used_count >= 0) | `0` | 已使用次数(由数据库原子递增,见 §3.2) |
-| `expires_at` | TIMESTAMPTZ | NOT NULL | `now() + interval '7 days'` | 过期时间(**创建时未指定默认 7 天后过期,不允许 NULL 永不过期**——链接泄漏后有失效兜底,MES-4 安全约束) |
+| `expires_at` | TIMESTAMPTZ | NOT NULL | `now() + interval '7 days'` | 过期时间(**创建时未指定默认 7 天后过期,不允许 NULL 永不过期**——链接泄漏后有失效兜底,MES-4 安全约束)。**显式 `expires_in_hours` 受工作区可配置上限约束**(`settings.invitation_max_lifetime_hours_cap`,默认 720 小时=30 天):超限创建返回 422 `invitation_limits_exceeded`(LOW-2 硬化;NOT NULL 语义不变,不存在"无限") |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','revoked','expired','exhausted') | `'active'` | **链接生命周期**状态(见 §4.4):`active`=可用(含原"pending"语义,创建即可用)、`revoked`=管理员撤销、`expired`=到期、`exhausted`=`used_count` 达 `max_uses`。**不再使用 `accepted`/`pending`**——多次使用链接不得翻转为单一终态(兑换记录另见 §2.4) |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -140,7 +144,7 @@ users(人类登录身份,auth.md)──┐
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `id` | UUID | PK | `gen_random_uuid()` | |
-| `invitation_id` | UUID | NOT NULL,FK→workspace_invitations(id) ON DELETE CASCADE | — | 被兑换的邀请链接 |
+| `invitation_id` | UUID | NOT NULL,**复合 FK `(workspace_id, invitation_id) → workspace_invitations(workspace_id, id)`** ON DELETE CASCADE | — | 被兑换的邀请链接(同租户复合 FK,引用 `uq_ws_invitations_ws_id`,见 §2.7;README §6.2) |
 | `user_id` | UUID | NOT NULL,FK→users(id) | — | 兑换者(人类登录身份) |
 | `member_id` | UUID | NOT NULL,复合 FK `(workspace_id, member_id) → members(workspace_id, id)` | — | 兑换生成的名册条目(README §6.2) |
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 冗余存储以满足复合 FK 同租户约束(README §6.2) |
@@ -157,7 +161,28 @@ users(人类登录身份,auth.md)──┐
 | `old_slug` | TEXT | NOT NULL,UNIQUE | — | 被释放的旧 slug |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | 释放时间 |
 
-### 2.6 索引与约束
+### 2.6 表:`identifier_prefix_registry`(工作区级 identifier 前缀注册表)
+
+> **本表由本 Spec owns**,是 README §6.3「前缀注册(工作区级排他)」的实现载体:一切 identifier 前缀——项目 `key`、**当前与历史的**收件箱前缀——统一登记于此,工作区级永久排他。如此 `issues` 上 `UNIQUE(workspace_id, identifier)` 不再在创建 issue 时被"随机"违反(README §6.3)。
+
+| 字段 | 类型 | 约束 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `id` | UUID | PK | `gen_random_uuid()` | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) ON DELETE CASCADE | — | 所属工作区 |
+| `key` | TEXT | NOT NULL | — | 前缀,格式同项目前缀 `^[A-Z][A-Z0-9_]{1,11}$` |
+| `kind` | TEXT | NOT NULL,CHECK IN ('project','inbox','retired') | — | `project`=项目前缀;`inbox`=当前收件箱前缀;`retired`=已退役前缀(永久保留) |
+| `project_id` | UUID | NULL,复合 FK `(workspace_id, project_id) → projects(workspace_id, id)` ON DELETE SET NULL (project_id) | — | 前缀当前/历史归属项目(**创建 `kind='project'` 行时由服务层保证非空**;项目物理清理后由列级 `ON DELETE SET NULL (project_id)` 置空,前缀仍永久占用——此时 `kind='project' AND project_id IS NULL` 即"前缀随项目清理转为永久保留"后态;列级置空见 README §6.2 第 6 条) |
+| `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | 占用时间 |
+
+**表级约束**:`CHECK (kind IN ('project','inbox','retired'))`(不用 `kind='project' → project_id NOT NULL` 的强 CHECK——项目物理清理时列级 `ON DELETE SET NULL (project_id)` 会把 `project_id` 置空,该后态合法且前缀依旧永久占用;创建时 `kind='project'` 行 `project_id` 非空由服务层保证,见语义 ①);`UNIQUE (workspace_id, key)`——前缀工作区级**永久排他**(DDL 见 §2.7)。
+
+**语义(逐条,README §6.3)**:
+1. **创建项目占用 `key`**:同事务 INSERT 一条 `kind='project'` 注册行;与任一在册 `key`(含 `retired` 与当前 `inbox` 前缀)冲突 → 409 `project_key_taken`(project.md §3.3)。
+2. **变更 `settings.inbox_issue_prefix`**:旧 inbox 行 `UPDATE ... SET kind='retired'`(**永久保留,历史 identifier 不重编号**)+ INSERT 新 `kind='inbox'` 行;新 `key` 与任一在册行(含 `retired`)冲突 → 422 `prefix_reserved`(§3.3)。
+3. **工作区创建时**:以默认/配置的收件箱前缀(默认 `WS`)播种首行 `kind='inbox'`(随工作区创建事务同提交)。
+4. **软删除/归档项目**:注册行保留(或置 `retired` 并保留 `project_id`),`key` 永不释放——与 `projects` 上**非部分唯一索引** `uq_projects_key`(即 `UNIQUE (workspace_id, key)`,不带 `WHERE deleted_at IS NULL`,project.md §2.3)**双重保证**前缀不可复用(README §6.3)。
+
+### 2.7 索引与约束
 
 ```sql
 -- slug 唯一性只在未软删除时生效,允许删除后释放
@@ -166,6 +191,7 @@ CREATE INDEX idx_workspaces_deleted_at ON workspaces(deleted_at);
 
 CREATE INDEX idx_ws_invitations_workspace ON workspace_invitations(workspace_id, status);
 CREATE UNIQUE INDEX uq_ws_invitations_token_hash ON workspace_invitations(token_hash);
+CREATE UNIQUE INDEX uq_ws_invitations_ws_id ON workspace_invitations(workspace_id, id);  -- 供 redemptions 复合 FK 引用(README §6.2)
 CREATE INDEX idx_ws_invitations_email ON workspace_invitations(workspace_id, email)
   WHERE email IS NOT NULL;
 
@@ -176,6 +202,10 @@ CREATE INDEX idx_ws_inv_redemptions_member
   ON workspace_invitation_redemptions(workspace_id, member_id);
 
 CREATE UNIQUE INDEX uq_slug_history_old_slug ON workspace_slug_history(old_slug);
+
+-- 前缀注册表(§2.6):前缀工作区级永久排他 + 按工作区/kind 检索(README §6.3)
+CREATE UNIQUE INDEX uq_prefix_registry_ws_key ON identifier_prefix_registry(workspace_id, key);
+CREATE INDEX idx_prefix_registry_ws ON identifier_prefix_registry(workspace_id, kind);
 ```
 
 应用层 CHECK(亦可建 partial unique 防止同邮箱重复 active):同一 `workspace_id + email` 不允许同时存在多条 `status='active'` 的邀请(应用层校验 + 事务,冲突返回 409):
@@ -185,14 +215,16 @@ CREATE UNIQUE INDEX uq_ws_invitations_active_email
   WHERE email IS NOT NULL AND status = 'active';
 ```
 
-### 2.7 与其他模块的外键关系
+### 2.8 与其他模块的外键关系
 
 | 来源表 | 外键 | 目标 | 说明 |
 |--------|------|------|------|
 | `members`(member.md) | `workspace_id` | `workspaces.id` | 名册隶属工作区 |
 | `workspace_invitations.invited_by` | 复合 FK `(workspace_id, invited_by)` → `members(workspace_id, id)` | 统一名册 | 邀请人(README §6.2) |
+| `workspace_invitation_redemptions.invitation_id` | 复合 FK `(workspace_id, invitation_id)` → `workspace_invitations(workspace_id, id)` | 邀请链接 | 被兑换邀请(同租户复合 FK,README §6.2) |
 | `workspace_invitation_redemptions.member_id` | 复合 FK `(workspace_id, member_id)` → `members(workspace_id, id)` | 统一名册 | 兑换生成的名册条目(README §6.2) |
 | `workspace_invitation_redemptions.user_id` | → `users.id` | auth.md | 兑换者登录身份 |
+| `identifier_prefix_registry.project_id` | 复合 FK `(workspace_id, project_id)` → `projects(workspace_id, id)` ON DELETE SET NULL (project_id) | projects(project.md) | 前缀归属项目(列级置空,README §6.2 第 6 条) |
 | `projects` / `issues` / `labels` / `custom_field_defs` | `workspace_id` | `workspaces.id` | 业务隔离 |
 | `api_tokens`(auth.md) | `workspace_id` | `workspaces.id` | 令牌归属工作区 |
 | `audit_logs`(auth.md) | `workspace_id` | `workspaces.id` | 工作区级审计 |
@@ -270,6 +302,8 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 { "emails": ["jane@acme.com", "john@acme.com"], "role": "member", "expires_in_hours": 72 }
 // Request(链接模式)
 { "role": "member", "max_uses": 10, "expires_in_hours": 168 }
+// 显式 max_uses / expires_in_hours 受工作区可配置上限约束(settings.invitation_max_uses_cap 默认 100、
+// invitation_max_lifetime_hours_cap 默认 720 小时);超限返回 422 invitation_limits_exceeded(§2.3/§3.3)
 
 // 201 Response
 {
@@ -297,14 +331,14 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 > UPDATE workspace_invitations
 >    SET used_count = used_count + 1, updated_at = now()
 >  WHERE id = $invitation_id AND status = 'active'
->    AND (max_uses IS NULL OR used_count < max_uses)
->    AND (expires_at IS NULL OR expires_at > now())
+>    AND used_count < max_uses
+>    AND expires_at > now()
 > RETURNING used_count, max_uses, workspace_id, role;
 > ```
 >
 > - **0 行返回** → 邀请不可用(已撤销 / 已过期 / 已用尽 / 不存在),返回 `422 invitation_invalid`。
 > - **递增成功** → 同事务内 INSERT `workspace_invitation_redemptions`(一行)与 `members`(一行,角色取邀请预设值);`UNIQUE(invitation_id, user_id)` 命中冲突即视为**同一用户重复接受**,回滚本次递增并返回既有名册条目(no-op,见下"幂等性")。
-> - **递增后 `used_count = max_uses`** → 同事务把 `status` 惰性/显式置为 `exhausted`(链接生命周期终态,见 §4.4);`max_uses IS NULL` 的链接永不进入 `exhausted`。
+> - **递增后 `used_count = max_uses`** → 同事务把 `status` 惰性/显式置为 `exhausted`(链接生命周期终态,见 §4.4)。`max_uses`/`expires_at` 恒 NOT NULL,WHERE 不含 `IS NULL` 死分支(§2.3)。
 
 **获取单个工作区** `GET /api/v1/workspaces/{id}`(UUID 或 `by-slug/{slug}` 等价)
 ```json
@@ -339,7 +373,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 
 **幂等性**:接受邀请与创建邀请均做幂等保护——
 - **接受邀请**:`workspace_invitation_redemptions.UNIQUE(invitation_id, user_id)` 保证同一用户对同一链接至多一行;并发或重复接受同一链接,先成者建名册,后成者命中唯一约束 → **no-op,直接返回既有名册条目**(不重复递增 `used_count`、不重复建名册)。
-- **创建邀请**:同工作区同邮箱重复 `active` 邀请返回 409(见 §2.6 partial unique)。
+- **创建邀请**:同工作区同邮箱重复 `active` 邀请返回 409(见 §2.7 partial unique)。
 
 ### 3.3 错误码表
 
@@ -352,6 +386,8 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 | 409 | `slug_taken` | slug 已被占用 |
 | 409 | `conflict` | 同邮箱已存在 `active` 邀请 |
 | 422 | `invitation_invalid` | 邀请不可用:已过期(`expired`)/已撤销(`revoked`)/已用尽(`exhausted`,即原子递增 0 行)/不存在 |
+| 422 | `invitation_limits_exceeded` | 显式 `max_uses`/`expires_in_hours` 超过工作区可配置上限(`settings.invitation_max_uses_cap`/`invitation_max_lifetime_hours_cap`,默认 100 / 720;LOW-2 硬化,§2.3) |
+| 422 | `prefix_reserved` | 收件箱前缀变更与在册前缀(含 `retired` 历史前缀)冲突(§2.6 注册表,README §6.3) |
 | 429 | `rate_limited` | 触发限流(见 auth.md) |
 
 ### 3.4 分页 / 鉴权 / 限流
@@ -427,7 +463,7 @@ active ──撤销(管理员)──────────────► revo
 active ──到期(定时/惰性)───────────► expired(终态)
 ```
 > - `active` = 可用(覆盖旧"pending"语义,创建即可用);**已无 `pending`/`accepted` 状态**。
-> - `max_uses IS NULL` 的链接永不进入 `exhausted`,仅在到期/撤销时终态。
+> - `max_uses`/`expires_at` 恒 NOT NULL(§2.3):链接仅在 `exhausted`(用尽)/`expired`(到期)/`revoked`(撤销)进入终态,不存在"无限"分支。
 > - 定向邮箱邀请(`max_uses` 通常为 1)被兑换一次后即 `exhausted`,效果等价于旧"已接受",但语义统一为"用量耗尽"。
 
 工作区自身:`active`(默认)→ `deleted`(软删除,`deleted_at` 非空)→ 保留期内 `restore` 回到 `active`,超保留期硬删除。
@@ -454,18 +490,21 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] 修改 slug 后,旧 slug 写入 `workspace_slug_history`,`GET /workspaces/by-slug/{旧slug}` 解析到新工作区(或 301 重定向)。
 - [ ] 软删除的工作区不出现在列表;保留期内 owner 可 `restore`。
 - [ ] 仅 `owner` 可删除工作区;`admin`/`member` 删除返回 403。
-- [ ] 邮箱邀请:同工作区同邮箱已有 `active` 邀请时返回 409 `conflict`(§2.6 partial unique 兜底)。
+- [ ] 邮箱邀请:同工作区同邮箱已有 `active` 邀请时返回 409 `conflict`(§2.7 partial unique 兜底)。
 - [ ] 邀请令牌仅存 SHA-256 哈希,创建响应/邮件返回明文;`token_prefix` 可展示。
 - [ ] 邀请 `status` 枚举为 `active`/`revoked`/`expired`/`exhausted`,创建即为 `active`;**不存在 `pending`/`accepted` 状态**(链接生命周期与兑换记录分离,§2.3/§2.4/§4.4)。
 - [ ] 接受有效邀请在**单一事务**内:条件 UPDATE 原子递增 `used_count`(§3.2 SQL,无应用层 check-then-write)+ INSERT 一条 `workspace_invitation_redemptions` + INSERT 一条 `members`(角色为邀请预设值)。
 - [ ] **接受邀请幂等**:`UNIQUE(invitation_id, user_id)` 下,同一用户重复/并发接受同一链接 = no-op,返回既有名册条目,`used_count` 不重复递增。
 - [ ] **并发最后一名额(README §9 T11)**:`max_uses=1` 链接被两用户同时接受,恰一人成功入册、另一人 `422 invitation_invalid`;`used_count` 永不超 `max_uses`。
-- [ ] `used_count` 递增到 `max_uses` 后链接 `status` 惰性/显式置 `exhausted`;`max_uses IS NULL` 链接永不 `exhausted`。
+- [ ] `used_count` 递增到 `max_uses` 后链接 `status` 惰性/显式置 `exhausted`;`max_uses`/`expires_at` 恒 NOT NULL,无"无限"分支;接受 SQL 的 `IS NULL` 死分支已删除(§2.3/§3.2)。
 - [ ] 不可用邀请(已 `expired`/`revoked`/`exhausted`/不存在,即原子递增返回 0 行)接受返回 422 `invitation_invalid`。
+- [ ] **邀请上限硬化(LOW-2)**:显式 `max_uses`/`expires_in_hours` 超过 `settings.invitation_max_uses_cap`/`invitation_max_lifetime_hours_cap`(默认 100 / 720,可调)时创建返回 422 `invitation_limits_exceeded`;未指定时取默认值(10 次 / 7 天)且不被上限拒绝。
 - [ ] 撤销邀请(`revoked`)后该 token 立即失效。
 - [ ] 邀请的 `role` 不可为 `owner`。
 - [ ] `workspaces.inbox_issue_seq` 行锁自增,并发创建无项目 issue(≥10)在 `UNIQUE(workspace_id, identifier)` 下无重号(README §6.3 / §9 T15);保留前缀默认 `WS`。
 - [ ] `workspace_invitations.invited_by` 与 `workspace_invitation_redemptions.member_id` 为复合 FK → `members(workspace_id, id)`,跨工作区引用被数据库拒绝(README §6.2 / §9 T1)。
+- [ ] **redemption 同租户复合 FK(README §6.2 / §9 T1)**:`workspace_invitation_redemptions.invitation_id` 以复合 FK `(workspace_id, invitation_id) → workspace_invitations(workspace_id, id)` 引用(§2.4,引用 `uq_ws_invitations_ws_id`),跨工作区兑换插入被数据库拒绝。
+- [ ] **前缀注册表(README §6.3 / §9 T19)**:`identifier_prefix_registry.UNIQUE(workspace_id, key)` 使项目 `key` 与收件箱前缀(含 `retired` 历史前缀)工作区级排他——冲突分别返回 409 `project_key_taken`(project.md §3.3)/ 422 `prefix_reserved`;变更收件箱前缀后旧前缀置 `retired` 永久保留、历史 identifier 不重编号;工作区创建时播种默认 `WS` 的 `kind='inbox'` 首行。
 - [ ] 非成员访问任意工作区资源返回 404(不泄露存在性)。
 - [ ] 所有业务查询隐式按 `workspace_id` 过滤,跨工作区不可读。
 
@@ -483,7 +522,7 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] 删除/归档等危险操作仅 owner 可触发,且需二次确认。
 - [ ] 邀请创建、工作区创建受 auth.md 限流约束,超限返回 429 + `Retry-After`。
 - [ ] 错误信息不泄露其它工作区存在性或内部细节。
-- [ ] **用户可控 URL scheme 校验**:`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:`,仅允许 `https`。
+- [ ] **用户可控 URL scheme 校验**:`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:`,**仅允许 `https`**(README §6.16:统一 https-only)。
 
 ### 5.4 实时
 
