@@ -3,6 +3,26 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.0] - 2026-07-25
+
+auth 增量 2 第二切片(MES-12):OAuth 提供商往返(auth.md §1.2 A5/A6)、会话/令牌撤销 realtime 广播(§3.7/§5.6,C4)、生产 SMTP mailer(A1/A4)、审计时间范围过滤(§5.3)。至此 auth.md **后端**全量落地(余 §4 前端页面与 `POST /agents/{id}/tokens` 便捷端点)。
+
+### Added
+
+- **OAuth 提供商往返(§1.2 A5/A6,§3.1,§4.5)**:vendor 中立 `OAuthProvider` 接口(authorization-code + **PKCE S256**,RFC 7636);`GET /auth/oauth/{provider}/start`·`/bind` 302 携一次性 `state`(Redis,TTL 600s,防 CSRF)+ `code_challenge`;`GET/POST /auth/oauth/{provider}/callback` 校验 state、换 code——**首登自动建号并绑定**(`password_hash=NULL`、邮箱视为已验证)、已知邮箱绑定既有账号、二次登录复用;`GET /auth/oauth/identities` 列绑定;`DELETE /auth/oauth/{provider}` 解绑(**删最后一种登录方式 → 422 `last_login_method`**,绑定至他人身份 → 409)。dev 内置 `MockOAuthProvider` 使完整 code+PKCE 往返 e2e 真实跑通;**零厂商绑定、零外部出处**,生产提供商运营方配置。
+- **C4 撤销广播(§3.7/§5.6)**:登出/全端登出/撤销会话/refresh 重放/密码重置/PAT 撤销,均于**同事务**经 outbox → projector 唯一写入路径发新登记事件 `session.revoked`(词汇 96→97,§6.7 注册表 + CI 校验同步),于持有者活跃工作区频道(`workspace:{id}`,经 SECURITY DEFINER `mesh_my_workspaces` 解析)广播使相关连接下次心跳鉴权失败重连被拒;不用进程内事件总线;access 撤销延迟 ≤ 其 TTL。
+- **生产 SMTP mailer(A1/A4)**:`auth/mailer.py` 统一 `Delivery`——dev 走 Redis dev-mailbox(测试路径,键格式不变)、production 走真实 SMTP(`MESH_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/USE_TLS`,阻塞 `smtplib` 经 `asyncio.to_thread` 不卡事件循环)、未配置则日志 no-op(API 仍可启动,运营方配置后闭环);邮件正文 vendor 中立;compose 透传 + `.env.example` 说明 + `MESH_APP_BASE_URL` 验证/重置链接。
+- **§5.3 审计时间范围**:`GET /workspaces/{ws}/audit-logs` 增 `before`/`after`(RFC3339 半开区间 `(after, before)`,naive 输入归一 UTC),非法时间戳 400,供 §4.4 审计页消费。
+
+### Quality
+
+- 后端单测 + 进程内路由 + 真实 e2e(uvicorn 子进程、mesh_app 受限角色 RLS live)全绿;pytest-cov **95.88%**(≥90% 门禁;oauth_routes/mailer/realtime 100%、oauth 92%,整体与新增代码双达标);ruff 全绿;main CI 六项全绿。
+- 验收独立实测(真实 API + psql 核对,35 项 + worker 投影验证):OAuth 全往返(首登建号/复用/已知邮箱绑定/state 一次性/坏 state 400/未知 provider 404)、bind/unbind(鉴权门控/409 冲突/422 最后登录方式保护)、`session.revoked` 同事务落 outbox 并经 worker 投影至 `realtime_events`(logout/logout-all/PAT 撤销三路均验)、审计 before/after 半开区间与 400、dev-mailbox 无回归。
+
+### Fixed
+
+- `backend/README.md` 事件词汇计数 96→97(随 `session.revoked` 登记,验收时一并修正)。
+
 ## [0.8.0] - 2026-07-25
 
 workspace §4 前端 UI 接通(MES-26):把已合入 main 的 workspace 后端 v0.4.0 与前端脚手架 v0.3.0 连接到真实 UI,完成 MES-13 的 UI 收尾;并补齐 realtime 会话 JWT 鉴权管道使前端能以真实登录消费实时事件。

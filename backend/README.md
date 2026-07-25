@@ -29,7 +29,7 @@ Layering inside `src/mesh/`:
 
 - **Error envelope** `{"error": {"code", "message", "details"}}` — 500s are sanitized, never leaking internals (§6.14).
 - **Success envelopes** — single `{"data": {...}}`; list `{"data": [...], "next_cursor"}`; keyset cursors are opaque base64 `(sort_value, id)`.
-- **Event vocabulary** — 96 registered realtime event names; unregistered names are rejected at write time and projection time.
+- **Event vocabulary** — 97 registered realtime event names; unregistered names are rejected at write time and projection time.
 - **Outbox → realtime single write path** — `UNIQUE(outbox_event_id)` gives exactly-once registration under at-least-once delivery; seqs are gapless per channel.
 - **Multi-tenancy** — composite-FK migration templates; `realtime_channels/realtime_events` and every workspace tenant table (`members`, `workspace_invitations`, `workspace_invitation_redemptions`, `workspace_slug_history`, `identifier_prefix_registry`, `member_project_access`, `audit_logs`) carry the tenant key with fail-closed RLS policies; `users`/`external_identities` are exempt global tables (§6.1). Workspace-unknown reads (token accept, my-workspaces list, old-slug redirect) go through narrow `SECURITY DEFINER` functions so the policies stay strict everywhere else.
 
