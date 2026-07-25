@@ -93,6 +93,17 @@
 - 项目级标签/自定义字段的定义 → `label-property.md`。
 - agent 被分派后的执行运行时 → `agent.md`(本模块仅负责把负责人指向统一成员)。
 
+**跨模块延期 / 归属(MES-30 验收收口,owner + 增量显式登记,与 README §12 #17–#21 对齐)**:
+
+| 能力 | Owner Spec | 增量 | 本模块现状 |
+| --- | --- | --- | --- |
+| 周期结束未完成 issue 顺延/退回待办(§1.2.5/§4.4/§5.1) | `issue.md` | issue 增量 | 仅实现 `cycles.auto_roll` 生成下一周期;未完成项的实际搬运需 issue 的 `cycle_id` 与状态流转 |
+| 项目通知触发点事件登记(§4.5:health 变差/里程碑临近逾期/周期开始结束/加入项目) | `comment-inbox.md` | comment-inbox 增量 | 仅产出 outbox 业务事件;通知类型码与订阅/去噪矩阵由通知 owner 登记到 §6.7 |
+| 项目分组(§1.2.1「项目分组(可选)」) | `label-property.md` | label-property 增量 | 不另建 `project_groups` 表;分组语义复用标签/分组作用域 |
+| 里程碑时间线/甘特可视化(§1.2.3/§4.2) | `kanban.md` | kanban 增量(同 README §12 #15/#20) | 仅提供里程碑数据 + `overdue` 派生态;时间线/甘特 UI 延后(数据先行、视图延后,与 §12 不矛盾) |
+
+> 上述项均为**跨模块延期**,本模块不视为缺陷:数据/接口侧已为下游预留挂载点(`cycles.auto_roll`、里程碑 `overdue`、outbox 业务事件、标签作用域),具体机制/视图/通知登记由 owner Spec 在各自增量收口。
+
 ---
 
 ## 2. 数据模型

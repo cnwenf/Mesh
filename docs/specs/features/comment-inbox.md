@@ -19,6 +19,7 @@
 > 7. **触发语义**:@提及 agent 的确定语义以 **README §6.9** 触发矩阵为唯一权威。
 > 8. **通知去噪**:订阅 / 静音 / 重读 / 分级 / 聚合规则以 **README §6.13** 为唯一权威。
 > 9. **ORM**:SQLAlchemy 2.x 声明式约定(`Mapped` / `mapped_column`)。
+> 10. **项目相关通知(MES-30 验收收口,本 Spec 为通知唯一 owner)**:project.md §4.5 列出的四类项目通知触发点(健康度变 `at_risk`/`off_track` 通知负责人与关注者、里程碑临近/逾期提醒负责人、周期开始/结束通知周期内相关成员、被设为负责人/加入项目)的**通知类型码与订阅/去噪/分级**由本 Spec 登记到 README §6.7 注册表与 §6.13 矩阵;project 模块仅产出对应 outbox 业务事件(已注册的 `project.updated` / `project.created` / `milestone.updated` / `cycle.updated` 等),不直接登记通知类型码——若某触发点需新事件名,须先入 §6.7 注册表再由本 Spec 登记通知。**owner = comment-inbox.md;增量 = 通知类型码登记增量**(随 project 模块事件落地逐项补齐,跨模块延期,与 README §12 #18 对齐)。
 
 ---
 
