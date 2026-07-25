@@ -3,6 +3,31 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.0] - 2026-07-25
+
+project 项目模块(MES-30,阶段 4·核心工作与协作首个模块):project.md 五章全量落地——项目/健康度留痕/里程碑/迭代周期/前缀计数器,后端 + 前端 + 真实 e2e。
+
+### Added
+
+- **数据模型(§2)**:`projects`(含 `issue_seq` 项目级编号计数器、`key` 前缀)、`project_updates`(追加式健康度/状态留痕,作者 NOT NULL + ON DELETE RESTRICT,成员软删除保历史署名)、`milestones`、`cycles`、`project_members`、`project_templates`;全表 `UNIQUE(workspace_id, id)` + 同租户复合 FK(README §6.2),`lead_member_id` 采用 PG16 列级 `ON DELETE SET NULL (lead_member_id)`;迁移 0006 含 fail-closed RLS 策略与 `mesh_app` 授权,并补齐 0004 延迟登记的 `identifier_prefix_registry.project_id` / `member_project_access.project_id` → `projects` 复合 FK(前者列级 SET NULL:物理删项目后注册行保留、前缀永久占用)。
+- **前缀永久保留与注册表排他(§6.3)**:`uq_projects_key` 为**普通(非部分)唯一索引**,软删除/归档后前缀不可复用;创建项目在同事务内经 `identifier_prefix_registry` 排他登记 `kind='project'`,与任一在册前缀(含 inbox 当前前缀与 retired 历史前缀)冲突 → 409 `project_key_taken`(README §9 T19 实测)。
+- **接口(§3.1 全部端点)**:项目 CRUD / 归档恢复 / 软删除、健康度留痕端点(写入同时回写 `projects.health/status`)、里程碑 CRUD(逾期为派生态:`open` 且过 target_date)、周期 CRUD(状态切换;`auto_roll` 周期完成时同事务生成下一周期)、项目成员管理、模板 CRUD 与实例化(§3.2b:同事务建项目 + 初始里程碑/周期,issue 状态集/默认视图等待建模块项优雅降级入 `skipped`);§6.14 成功包络 / 游标分页 / `If-Match` 乐观并发(409 `conflict`)/ 错误码表(`project_key_taken` / `project_name_taken` / `project_archived` / `project_member_exists` / `template_name_taken`);归档项目写入 422;workspace-less 路径(`/projects/{id}` 等)经窄 SECURITY DEFINER 函数解析租户后走成员资格 + 资源级授权闸门;写端点限流(120/min)。
+- **鉴权与可见性(§3.4)**:公开项目工作区成员可读;私有项目仅 `project_members` 命中者或 admin 可见(其他成员 403、guest 无授权 404);写入需项目成员/lead 或 admin,删除/归档/成员管理需 lead 或 admin;创建者自动成为项目 lead 成员。
+- **实时(§3.5/§6.7)**:`project.created/updated/archived/unarchived/deleted` · `project_update.added` · `milestone.created/updated/deleted` · `cycle.updated` 全经 outbox → projector 唯一写入路径;**私有项目事件仅进 `project:{id}` 频道**(不广播 `workspace:{ws}:projects`);`project:{id}` 订阅经资源级授权 checker 每次订阅重验可见性;实时投影经 worker 实机验证(seq 频道内单调)。
+- **前端页面(§4,v0.3.0 脚手架)**:项目列表(状态/已归档/我参与筛选、新建对话框含 key 自动建议与格式校验、状态徽章 + 健康度灯 + 进度条 + 负责人头像卡片、游标加载、实时增量合并)、项目详情(头部状态/健康度灯/进度 + 状态更新留痕对话框、概览/里程碑/更新动态 Tab、里程碑逾期标红与开合删除、归档/删除二次确认)、项目设置(字段编辑经 `useOptimisticMutation` 乐观更新 + 409 收敛、成员管理、危险区)、周期页(创建/状态切换/自动滚动提示);文案全量 i18n 外部化(en + zh-CN)。
+
+### Deferred(随后续增量)
+
+- 进度实时聚合(`GET /projects/{id}` 的 `progress/open_issues/done_issues` 现回退 `progress_cache` 或 0)与删除项目置空 `issues.project_id`(列级 SET NULL,identifier 不变,T18②)随 issue.md 增量接通——DDL 与验证脚本(`schema_r2_validation.sql` T18-2/2b)已按同款列级 SET NULL 实跑通过;周期未完成 issue 顺延/退回待办与相关成员通知随 issue.md / comment-inbox.md 增量;模板 `status_set_seed` / `default_view_config` 预置随 issue.md / kanban.md 增量(实例化时入 `skipped` 优雅降级)。
+
+### Quality
+
+- 后端单测(服务层直调 + 进程内 API)+ 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验)全绿;pytest-cov **94.57%**(≥90% 门禁;project 模块 schemas 100%、routes 98%、channels 97%、service 91%,整体与新增代码双达标);ruff 全绿。
+- README §9 集成测试实测:**T1** 跨租户复合 FK(milestones/cycles/lead)INSERT 被数据库拒绝 + 跨工作区 API 同一 404;**T18** 真实 DELETE 语义(lead_member_id 列级 SET NULL 且 workspace_id 保持非空、物理删项目注册行 project_id 列级置空前缀保留、子表 CASCADE、留痕作者 RESTRICT);**T19** 前缀注册表排他(项目 key 撞 inbox/retired 前缀拒绝、软删除/归档后前缀不可复用)。`schema_r2_validation.sql` 100 项断言在 PostgreSQL 16 实跑全绿。
+- docker compose Quick Start 实机验证:`alembic upgrade head` 应用 0006,注册/登录 → 建区 → 建项目 → 409 冲突 → 归档只读 422 全链路通过,`project.created` 经 outbox → projector 投影至双频道(seq 单调)。
+- 前端质量 FRONTEND_QUALITY_PLACEHOLDER。
+- 文档门 `check_event_vocab.py`(§6.7,事件零漂移)与 `check_roster_entry.py`(§6.12/T35)继续全绿。
+
 ## [0.9.1] - 2026-07-25
 
 安全硬化(MES-37,MES-36 v0.8.0 增量安全审核闭环):修复 CRITICAL RT-C1——realtime 网关缺生产 JWT 签名密钥 fail-safe,连同其根因 MEDIUM RT-M2 一并修复。

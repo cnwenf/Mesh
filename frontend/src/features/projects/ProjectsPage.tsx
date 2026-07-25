@@ -1,0 +1,270 @@
+/**
+ * 项目列表页(project.md §4.1):筛选(状态 / 已归档 / 我参与的,URL 同源)+
+ * 卡片网格(名称 / 状态徽章 / 健康度灯 / 进度条 / 负责人 / 目标日)+ 游标 Load more。
+ * 实时经 workspace:{ws}:projects 频道按可见性水位合并(§3.5/§6.7)。
+ * 状态渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 空态 → 内容(对齐 MembersPage)。
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { MeshApiClient, getToken } from '../../api';
+import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
+import { env } from '../../env';
+import { useT } from '../../i18n';
+import { useRealtimeContext } from '../../shell/AppShell';
+import { activeWorkspace, fetchMe } from '../members/api';
+import type { Membership } from '../members/types';
+import { listProjects, workspaceProjectsChannel } from './api';
+import { CreateProjectDialog } from './CreateProjectDialog';
+import { applyProjectListFrame } from './realtime';
+import type { ProjectStatus, ProjectSummary } from './types';
+import { PROJECT_STATUS_ORDER } from './types';
+import { AvatarInitial, HealthIndicator, ProgressBar, StatusBadge } from './widgets';
+import './projects.css';
+
+const PAGE_LIMIT = 20;
+const STATUS_ALL = 'all';
+
+function matchesListFilters(
+  project: ProjectSummary,
+  status: string,
+  archived: boolean,
+): boolean {
+  if (project.archived !== archived) return false;
+  if (status !== STATUS_ALL && project.status !== status) return false;
+  return true;
+}
+
+interface ProjectCardProps {
+  readonly project: ProjectSummary;
+}
+
+function ProjectCard(props: ProjectCardProps): React.JSX.Element {
+  const t = useT();
+  const { project } = props;
+  const total = project.done_issues + project.open_issues;
+  const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  return (
+    <Link
+      to={`/projects/${project.id}`}
+      className="mesh-projects__card"
+      data-testid={`project-card-${project.id}`}
+    >
+      <div className="mesh-projects__card-head">
+        <span className="mesh-projects__card-name">{project.name}</span>
+        <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
+      </div>
+      <div className="mesh-projects__card-meta">
+        <HealthIndicator health={project.health} />
+        {project.lead !== null ? (
+          <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
+        ) : null}
+        {project.target_date !== null ? (
+          <span className="mesh-projects__card-date" data-testid={`project-date-${project.id}`}>
+            {t('projects.card.due', { date: project.target_date })}
+          </span>
+        ) : null}
+      </div>
+      <ProgressBar progress={project.progress} title={progressTitle} />
+    </Link>
+  );
+}
+
+export function ProjectsPage(): React.JSX.Element {
+  const t = useT();
+  const toast = useToast();
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const realtime = useRealtimeContext();
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusFilter = searchParams.get('status') ?? STATUS_ALL;
+  const showArchived = searchParams.get('archived') === 'true';
+  const mineOnly = searchParams.get('mine') === 'true';
+
+  const [workspace, setWorkspace] = useState<Membership | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe(client)
+      .then((me) => {
+        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
+      })
+      .catch(() => {
+        if (!cancelled) setError(t('state.errorDescription'));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, t]);
+
+  const loadProjects = useCallback(() => {
+    if (workspace === null) {
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    listProjects(client, workspace.workspace_id, {
+      status: statusFilter === STATUS_ALL ? undefined : (statusFilter as ProjectStatus),
+      archived: showArchived,
+      mine: mineOnly,
+      limit: PAGE_LIMIT,
+    })
+      .then((page) => {
+        setProjects([...page.data]);
+        setNextCursor(page.nextCursor);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : t('state.errorDescription')))
+      .finally(() => setIsLoading(false));
+  }, [client, workspace, statusFilter, showArchived, mineOnly, t]);
+
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects, reloadKey]);
+
+  // 实时合并:belongs 按当前筛选判定可见性水位;ref 避免随筛选重订阅
+  const belongsRef = useRef<(project: ProjectSummary) => boolean>(() => true);
+  belongsRef.current = (project) => matchesListFilters(project, statusFilter, showArchived);
+
+  useEffect(() => {
+    if (realtime === null || workspace === null) return;
+    const channel = workspaceProjectsChannel(workspace.workspace_id);
+    realtime.client.subscribe(channel);
+    const unsubscribe = realtime.client.onFrame((frame) => {
+      setProjects((prev) => applyProjectListFrame(prev, frame, belongsRef.current));
+    });
+    return () => {
+      unsubscribe();
+      realtime.client.unsubscribe(channel);
+    };
+  }, [realtime, workspace]);
+
+  const handleLoadMore = (): void => {
+    if (workspace === null || nextCursor === null || isFetchingMore) return;
+    setIsFetchingMore(true);
+    listProjects(client, workspace.workspace_id, {
+      status: statusFilter === STATUS_ALL ? undefined : (statusFilter as ProjectStatus),
+      archived: showArchived,
+      mine: mineOnly,
+      limit: PAGE_LIMIT,
+      cursor: nextCursor,
+    })
+      .then((page) => {
+        setProjects((prev) => [...prev, ...page.data]);
+        setNextCursor(page.nextCursor);
+      })
+      .catch(() => {
+        toast.addToast(t('common.unknownError'), { tone: 'danger', closeLabel: t('common.close') });
+      })
+      .finally(() => setIsFetchingMore(false));
+  };
+
+  const updateParam = (key: string, value: string | null): void => {
+    const params = new URLSearchParams(searchParams);
+    if (value === null) params.delete(key);
+    else params.set(key, value);
+    setSearchParams(params, { replace: true });
+  };
+
+  return (
+    <main className="mesh-projects">
+      <div className="mesh-projects__header">
+        <h1 className="mesh-projects__title">{t('projects.title')}</h1>
+        {workspace !== null ? (
+          <Button
+            variant="primary"
+            data-testid="new-project-button"
+            onClick={() => setCreateOpen(true)}
+          >
+            {t('projects.new')}
+          </Button>
+        ) : null}
+      </div>
+
+      <div className="mesh-projects__toolbar" role="group" aria-label={t('projects.filterLabel')}>
+        <Select
+          label={t('projects.filter.status')}
+          value={statusFilter}
+          data-testid="projects-status-filter"
+          onChange={(event) =>
+            updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
+          }
+        >
+          <option value={STATUS_ALL}>{t('projects.status.all')}</option>
+          {PROJECT_STATUS_ORDER.map((status) => (
+            <option key={status} value={status}>
+              {t(`projects.status.${status}`)}
+            </option>
+          ))}
+        </Select>
+        <label className="mesh-projects__check">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            data-testid="projects-archived-filter"
+            onChange={(event) => updateParam('archived', event.target.checked ? 'true' : null)}
+          />
+          {t('projects.filter.archived')}
+        </label>
+        <label className="mesh-projects__check">
+          <input
+            type="checkbox"
+            checked={mineOnly}
+            data-testid="projects-mine-filter"
+            onChange={(event) => updateParam('mine', event.target.checked ? 'true' : null)}
+          />
+          {t('projects.filter.mine')}
+        </label>
+      </div>
+
+      {workspace === null && !isLoading && error === null ? (
+        <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
+      ) : error !== null ? (
+        <ErrorState
+          title={t('state.errorTitle')}
+          description={error}
+          retryLabel={t('common.retry')}
+          onRetry={() => setReloadKey((key) => key + 1)}
+        />
+      ) : isLoading ? (
+        <Skeleton loadingLabel={t('common.loading')} />
+      ) : projects.length === 0 ? (
+        <EmptyState title={t('state.emptyTitle')} description={t('projects.empty')} />
+      ) : (
+        <>
+          <div className="mesh-projects__grid" data-testid="projects-grid">
+            {projects.map((project) => (
+              <ProjectCard key={project.id} project={project} />
+            ))}
+          </div>
+          {nextCursor !== null ? (
+            <Button
+              variant="secondary"
+              data-testid="projects-load-more"
+              disabled={isFetchingMore}
+              onClick={handleLoadMore}
+            >
+              {t('projects.loadMore')}
+            </Button>
+          ) : null}
+        </>
+      )}
+
+      {workspace !== null ? (
+        <CreateProjectDialog
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          client={client}
+          workspaceId={workspace.workspace_id}
+          onCreated={() => setReloadKey((key) => key + 1)}
+        />
+      ) : null}
+    </main>
+  );
+}
