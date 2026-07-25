@@ -7,6 +7,7 @@ export type { MeshApiErrorOptions } from './errors';
 export { AUTH_HEADER, bearerHeader, getToken, useAuthStore } from './tokenStore';
 export { MeshApiClient } from './client';
 export type { ClientOptions, HttpMethod, RequestOptions } from './client';
+export { getApiClient, resetApiClient } from './instance';
 export { fetchAllPages, useCursorPagination } from './pagination';
 export type { CursorPage } from './pagination';
 export { optimisticUpdate, useOptimisticMutation } from './optimistic';
@@ -24,3 +25,12 @@ export {
   validateFilters,
 } from './filters';
 export type { FilterCondition, FilterGroup, FilterMeasurement, FilterNode } from './filters';
+export {
+  ERROR_INVALID_TIMEZONE,
+  ERROR_UNSUPPORTED_LOCALE,
+  fetchCurrentUserPreferences,
+  updatePreferences,
+} from './userPreferences';
+export type { ServerUserPreferences, UpdatePreferencesPayload } from './userPreferences';
+export { fetchWorkspaceDefaultLocale, fetchWorkspaceById, fetchWorkspaces } from './workspace';
+export type { WorkspaceDetail, WorkspaceListItem, WorkspaceSettings } from './workspace';
