@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     realtime_replay_page_size: int = Field(default=200, ge=1, le=1000)
     ws_ping_interval: float = Field(default=30.0, gt=0)
 
+    # Invitation expiry sweep (workspace.md §4.4 timed expiry complement to the
+    # lazy checks on accept/preview).
+    invitation_sweep_interval: float = Field(default=300.0, gt=0)
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""

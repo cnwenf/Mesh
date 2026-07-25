@@ -42,7 +42,6 @@ from mesh.errors import (
     ConflictError,
     NotFoundError,
     UnauthorizedError,
-    ValidationError,
 )
 
 MFA_ISSUER = "Mesh"
@@ -89,50 +88,28 @@ DeliverToken = Callable[[str, str, str], None]
 
 def _validate_timezone(value: str) -> None:
     """Raise 422 ``invalid_timezone`` unless ``value`` is a valid IANA name."""
-    try:
-        from zoneinfo import ZoneInfo
+    from mesh.validation import validate_iana_timezone
 
-        ZoneInfo(value)
-    except Exception as exc:  # ZoneInfoNotFoundError / ValueError
-        raise BusinessRuleError(
-            "unsupported timezone",
-            code="invalid_timezone",
-            details={"timezone": value},
-        ) from exc
+    validate_iana_timezone(value)
 
 
 def _validate_locale(value: str) -> None:
-    from mesh.config import SUPPORTED_LOCALES
+    from mesh.validation import validate_locale
 
-    if value not in SUPPORTED_LOCALES:
-        raise BusinessRuleError(
-            "unsupported locale",
-            code="unsupported_locale",
-            details={"locale": value, "supported": list(SUPPORTED_LOCALES)},
-        )
+    validate_locale(value)
 
 
 def _validate_theme(value: str) -> None:
-    from mesh.config import SUPPORTED_THEMES
+    from mesh.validation import validate_theme
 
-    if value not in SUPPORTED_THEMES:
-        # auth.md §3.1/§5.1 + README §9 T32: invalid theme is auth-canonical
-        # 422 validation_error (NOT 400).
-        raise BusinessRuleError(
-            "unsupported theme",
-            code="validation_error",
-            details={"theme": value, "supported": list(SUPPORTED_THEMES)},
-        )
+    validate_theme(value)
 
 
 def _validate_avatar_url(value: str) -> None:
-    # README §6.16: only https URLs are acceptable for user-supplied links.
-    if not value.startswith("https://"):
-        raise ValidationError(
-            "avatar_url must be an https URL",
-            code="validation_error",
-            details={"avatar_url": value[:128]},
-        )
+    # README §6.16: user-controlled URL fields are https-only.
+    from mesh.validation import validate_https_url
+
+    validate_https_url(value, field="avatar_url")
 
 
 def user_to_dict(user: User) -> dict:
