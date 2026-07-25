@@ -20,10 +20,8 @@ from mesh.auth.deps import get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_by_slug
 from mesh.db.models.user import User
 from mesh.workspace.invitations import InvitationService
-from mesh.workspace.members import change_member_role
 from mesh.workspace.schemas import (
     AcceptInvitationRequest,
-    ChangeRoleRequest,
     CreateInvitationRequest,
     CreateWorkspaceRequest,
     DeleteWorkspaceRequest,
@@ -290,33 +288,9 @@ async def preview_invitation(request: Request, token: str) -> dict:
     return {"data": await service.preview_invitation(token=token)}
 
 
-# --- member role changes (member.md extends the roster endpoints later) ----------
-
-
-@router.patch("/workspaces/{workspace_id}/members/{member_id}")
-async def update_member_role(
-    body: ChangeRoleRequest,
-    request: Request,
-    member_id: str,
-    context: WorkspaceContext = Depends(require_workspace("workspace:manage_members")),
-) -> dict:
-    import uuid
-
-    from mesh.errors import ValidationError
-
-    try:
-        parsed = uuid.UUID(member_id)
-    except ValueError as exc:
-        raise ValidationError("invalid member id") from exc
-    result = await change_member_role(
-        request.app.state.session_factory,
-        actor=context.member,
-        workspace_id=context.workspace.id,
-        member_id=parsed,
-        new_role=body.role,
-        **_client_meta(request),
-    )
-    return {"data": result}
+# Member roster endpoints (list/detail/add/update/remove/reassign/project-access)
+# live in the member module (mesh.member.routes) — member.md owns them; this
+# module keeps workspace + invitation routes only.
 
 
 __all__ = ["router"]
