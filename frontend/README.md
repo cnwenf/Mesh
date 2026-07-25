@@ -1,0 +1,111 @@
+# Mesh 前端
+
+Mesh 的 Web 单页应用(SPA)。本目录是阶段 1·B 的前端地基:工程脚手架、API/实时客户端契约层、设计系统与体验基线骨架、i18n 基线、路由/布局/状态骨架。**契约语义以 `../docs/specs/README.md` §3.2/§6.5/§6.7/§6.12/§6.14/§6.16/§6.18 与 `../docs/specs/features/i18n.md` 为唯一权威。**
+
+## 选型理由
+
+Spec(§3.2)不约束前端框架,仅要求 SPA、乐观更新 + 服务端版本校验、WebSocket 增量合并、离线降级轮询。选型与理由:
+
+| 选型 | 理由 |
+| --- | --- |
+| **React 18 + TypeScript 5** | 生态最成熟、类型安全的组件模型;团队招聘与社区资料成本最低 |
+| **Vite 6** | 开发启动/HMR 快,生产构建(Rollup)成熟;Vitest 同源配置 |
+| **react-router-dom 6** | 事实标准路由;支持规范深链(§6.12 深链模式) |
+| **zustand 5** | 轻量全局状态(偏好/鉴权/实时状态),无 Provider 嵌套负担,易测试 |
+| **react-intl 7** | 原生 ICU MessageFormat,直接满足 §6.18 的 CLDR 复数/占位符要求 |
+| **原生 Intl API** | 日期/数字/相对时间/时区本地化零依赖(§6.18 时区化仅展示层) |
+| **原生 CSS 自定义属性(设计 token)** | 「暗色 = 整组语义 token 替换」(§6.12)与 CSS 变量模型天然同构,无运行时开销 |
+| **Vitest + Testing Library** | 与 Vite 同源;jsdom 组件测试;v8 覆盖率 ≥90% 门禁 |
+| **Playwright** | 真实浏览器 e2e(主题/语言/快捷键/增量合并/断线重放逐项真实操作验证) |
+
+数据获取不引入额外库:§6.14 的包络解析、游标分页、乐观并发与 409 收敛由 `src/api` 的自研契约层实现(机制骨架 + 测试,业务接入在各模块 Issue)。
+
+## Quick Start
+
+```bash
+cd frontend
+npm install
+npm run dev          # http://127.0.0.1:5173
+```
+
+开发默认连接本地 mock 契约服务端(`e2e/mock-server.mjs`,实现 §6.14 包络与 §6.7 实时协议,供骨架演示与 e2e 使用):
+
+```bash
+node e2e/mock-server.mjs   # http://127.0.0.1:8901
+```
+
+连接真实后端(阶段 1·A 就绪后)用 `.env.local` 覆盖:
+
+```
+VITE_MESH_API_BASE_URL=http://127.0.0.1:8000
+VITE_MESH_WS_BASE_URL=ws://127.0.0.1:8000
+```
+
+## 质量命令
+
+```bash
+npm run lint            # ESLint 9(flat config)
+npm run typecheck       # tsc --noEmit
+npm run test            # vitest 单元/组件测试
+npm run test:coverage   # 覆盖率(整体 lines/functions/branches/statements ≥90% 门禁)
+node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆盖率 ≥90% 校验
+npm run build           # 生产构建(tsc -b + vite build)
+npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与 dev server)
+```
+
+CI:`.github/workflows/frontend.yml` 在 `frontend/**` 变更时跑 lint → typecheck → test:coverage → 新增代码覆盖率校验 → build → e2e。
+
+## 目录结构
+
+```
+frontend/
+├── e2e/                      # Playwright e2e + 契约 mock 服务端(mock-server.mjs)
+├── scripts/verify-coverage.mjs   # 新增代码覆盖率校验(git diff × coverage 交集)
+├── index.html                # 入口(内联防主题闪烁脚本)
+└── src/
+    ├── main.tsx / App.tsx    # 入口与 Provider 组装
+    ├── env.ts                # 运行时配置(VITE_MESH_API_BASE_URL / VITE_MESH_WS_BASE_URL)
+    ├── types/                # 共享契约类型:包络(§6.14)/实时帧(§6.7)/骨架实体
+    ├── api/                  # API 客户端契约层(§6.14)
+    │   ├── client.ts         #   Bearer 鉴权、三类包络解析、If-Match、Idempotency-Key(§6.5)
+    │   ├── errors.ts         #   统一错误信封 → MeshApiError(code 具名分发)
+    │   ├── pagination.ts     #   keyset 游标分页 hook
+    │   ├── optimistic.ts     #   乐观更新 + 服务端版本校验 + 409 收敛
+    │   └── filters.ts        #   过滤限制(深度 3 / 条件 20)与 filter_too_complex / query_cost_exceeded
+    ├── realtime/             # 实时客户端(§6.7/§6.16)
+    │   ├── RealtimeClient.ts #   子协议鉴权(token 绝不进 URL query)、每频道 last_seq、
+    │   │                     #   resume_from 重放、resync_required → REST 对账、指数退避重连
+    │   ├── channelCursors.ts #   每频道游标持久化
+    │   ├── merge.ts          #   增量合并(完整变更字段 + visibility 归属 + updated_at 防回退)
+    │   ├── pollingFallback.ts#   WS 断开 → since= 轮询降级(§3.2)
+    │   └── useRealtime.ts    #   React 绑定(连接状态机)
+    ├── i18n/                 # i18n 基线(§6.18)
+    │   ├── catalogs/         #   ICU MessageFormat 消息目录(en 权威源 + zh-CN)
+    │   ├── negotiate.ts      #   协商链:显式参数 → users.settings.locale → 工作区默认 → en
+    │   ├── catalogLoader.ts  #   ETag 版本缓存 + 缺 key 三级回退
+    │   ├── format.ts         #   日期/数字/相对时间本地化 + 时区化展示 + 输入解析回 UTC
+    │   └── I18nProvider.tsx  #   react-intl 接线 + 开发期缺译可见标记
+    ├── design/               # 设计系统与体验基线骨架(§6.12)
+    │   ├── tokens*.css       #   语义 token(亮/暗两套,均过 WCAG 2.1 AA 4.5:1)
+    │   ├── contrast.ts       #   对比度计算(token AA 自证)
+    │   ├── ThemeProvider.tsx #   light/dark/system 即时切换(无刷新)
+    │   └── components/       #   Button/Input/Select/Skeleton/EmptyState/ErrorState/Banner/
+    │                         #   Toast/Dialog(焦点圈养)/Kbd/StatusDot
+    ├── shortcuts/            # 快捷键体系(§6.12)
+    │   ├── registry.ts       #   分组命令/快捷键注册表(上下文感知)
+    │   ├── ShortcutProvider.tsx  # 输入框豁免(除 Ctrl/Cmd 组合)、序列键 G→I/B/M/A
+    │   ├── CommandPalette.tsx#   Ctrl/Cmd+K 命令面板(命令注册接口)
+    │   └── ShortcutHelp.tsx  #   ? 快捷键帮助层
+    ├── state/                # 全局状态
+    │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地持久化;阶段 2 接 PATCH /users/me)
+    │   └── authStore.ts      #   Bearer token 存取
+    └── shell/                # App shell 与占位页
+        ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重新同步横幅,§6.12 异常态矩阵)
+        └── pages/            #   登录占位页、404、错误页、首页骨架演示区
+```
+
+## 阶段 1·B 边界
+
+- 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。
+- 偏好写入当前为本地持久化;阶段 2 接通 `PATCH /api/v1/users/me`(auth.md §3.1)与 `PATCH /api/v1/workspaces/{id}`(workspace.md)。
+- 前端容器化在后续 Issue 集成(本阶段以 dev server + 生产构建验证)。
