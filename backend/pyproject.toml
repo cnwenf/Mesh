@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=68"]
+# PYSEC-2026-3447: setuptools sdist exclusion rules lacked Unicode normalization
+# (NFD file names bypassed NFC exclusion rules and leaked into source dists);
+# fixed in 83.0.0. Build-time only — Mesh ships wheels/images, never sdists.
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
