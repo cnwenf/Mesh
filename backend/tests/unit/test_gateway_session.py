@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
 from sqlalchemy import text
 
@@ -20,6 +21,7 @@ from mesh.realtime.session import (
 
 TOKEN = "test-token"
 PRINCIPAL = Principal(subject="tester", workspace_ids=frozenset())
+ALLOW_WS = uuid.UUID("33333333-3333-3333-3333-333333333333")
 
 
 class FixedAuthenticator:
@@ -32,12 +34,12 @@ class FixedAuthenticator:
 
 class AllowAuthorizer:
     async def authorize(self, principal, channel):
-        return True
+        return ALLOW_WS
 
 
 class DenyAuthorizer:
     async def authorize(self, principal, channel):
-        return False
+        return None
 
 
 class FakeSubscriber:

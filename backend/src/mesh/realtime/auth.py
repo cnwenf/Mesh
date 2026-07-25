@@ -19,6 +19,7 @@ from typing import Protocol, runtime_checkable
 from sqlalchemy import select
 
 from mesh.db.models.realtime import RealtimeChannel
+from mesh.db.tenant import set_tenant_context
 from mesh.realtime.channels import parse_channel
 
 DEV_TOKEN_PREFIX = "mesh-dev:"
@@ -74,9 +75,13 @@ PrefixChecker = Callable[[Principal, str], Awaitable[bool]]
 
 @runtime_checkable
 class ChannelAuthorizer(Protocol):
-    """Decides whether a principal may subscribe to a channel."""
+    """Decides whether a principal may subscribe to a channel.
 
-    async def authorize(self, principal: Principal, channel: str) -> bool: ...
+    Returns the owning workspace id when authorized (callers use it to scope
+    tenant-bound queries), or ``None`` when the subscription is denied.
+    """
+
+    async def authorize(self, principal: Principal, channel: str) -> uuid.UUID | None: ...
 
 
 class DefaultChannelAuthorizer:
@@ -90,17 +95,36 @@ class DefaultChannelAuthorizer:
         """Register a resource-level checker for channels with ``entity:<key>``."""
         self._prefix_checkers[entity] = checker
 
-    async def authorize(self, principal: Principal, channel: str) -> bool:
+    async def authorize(self, principal: Principal, channel: str) -> uuid.UUID | None:
+        """Return the owning workspace when the principal may subscribe, else None.
+
+        Channel ownership is resolved by probing each workspace the principal can
+        access, with the tenant GUC set and an explicit ``workspace_id`` filter,
+        so the query is correct whether the connection role is the table owner or
+        a restricted (RLS-enforced) role. RLS is the backstop on the restricted
+        path; the channel string is never the isolation boundary (§6.2 rule 8).
+        """
         info = parse_channel(channel)
         if info is None:
-            return False
-        async with self._session_factory() as session:
-            owner_workspace = await session.scalar(
-                select(RealtimeChannel.workspace_id).where(RealtimeChannel.channel == channel)
-            )
-        if owner_workspace is None or not principal.can_access_workspace(owner_workspace):
-            return False
+            return None
+        owner = await self._owning_workspace(principal, channel)
+        if owner is None:
+            return None
         checker = self._prefix_checkers.get(info.entity)
-        if checker is None:
-            return True
-        return await checker(principal, channel)
+        if checker is not None and not await checker(principal, channel):
+            return None
+        return owner
+
+    async def _owning_workspace(self, principal: Principal, channel: str) -> uuid.UUID | None:
+        for workspace_id in sorted(principal.workspace_ids):
+            async with self._session_factory() as session:
+                await set_tenant_context(session, workspace_id)
+                owner = await session.scalar(
+                    select(RealtimeChannel.workspace_id).where(
+                        RealtimeChannel.channel == channel,
+                        RealtimeChannel.workspace_id == workspace_id,
+                    )
+                )
+            if owner is not None:
+                return owner
+        return None

@@ -19,7 +19,7 @@ from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.api.realtime_routes import router as realtime_router
 from mesh.config import Settings, load_settings
-from mesh.db.engine import create_engine_from_settings, create_session_factory
+from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
     BusinessRuleError,
     ConflictError,
@@ -69,7 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     app = FastAPI(title="Mesh API", version=__version__, lifespan=lifespan)
 
-    engine = create_engine_from_settings(settings)
+    engine = create_app_engine_from_settings(settings)
     session_factory = create_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine

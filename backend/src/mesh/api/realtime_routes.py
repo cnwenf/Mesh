@@ -16,6 +16,7 @@ from mesh.api.deps import current_principal, get_session
 from mesh.api.envelope import ListEnvelope
 from mesh.api.pagination import Page, paginate
 from mesh.db.models.realtime import RealtimeEvent
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, ValidationError
 from mesh.realtime.auth import Principal
 from mesh.realtime.channels import is_valid_channel
@@ -46,8 +47,12 @@ async def reconcile_events(
     if not is_valid_channel(channel):
         raise ValidationError("invalid channel name", code="invalid_channel")
     authorizer = request.app.state.authorizer
-    if not await authorizer.authorize(principal, channel):
+    owner = await authorizer.authorize(principal, channel)
+    if owner is None:
         raise ForbiddenError("not authorized for channel")
+    # Scope the read to the owning tenant so it is correct under the restricted
+    # (RLS-enforced) app role (M1, §6.2 rule 5).
+    await set_tenant_context(session, owner)
 
     stmt = select(RealtimeEvent).where(
         RealtimeEvent.channel == channel, RealtimeEvent.seq > since

@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     # tokens and must be set explicitly (docker compose sets it for local dev).
     auth_mode: Literal["dev", "production"] = "production"
 
+    # The API/gateway application connects with a restricted, non-owner role
+    # (mesh_app) so PostgreSQL RLS applies to the app path (M1, §6.2 rule 5) —
+    # RLS never applies to the table owner (mesh, also a superuser). Optional:
+    # when unset the app falls back to database_url (owner) for backward
+    # compatibility; compose sets it to the mesh_app role. Migrations and the
+    # worker always use database_url (owner — cross-tenant relay/projector/
+    # retention).
+    app_database_url: str | None = None
+
     # Process bind addresses.
     api_host: str = "0.0.0.0"
     api_port: int = DEFAULT_API_PORT
