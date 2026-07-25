@@ -26,6 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.audit import write_audit
+from mesh.db.constraints import violates as _violates
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.db.models.workspace import (
@@ -41,7 +42,7 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_realtime
-from mesh.workspace.service import WORKSPACE_CHANNEL, _violates
+from mesh.workspace.service import WORKSPACE_CHANNEL
 
 TOKEN_LITERAL_PREFIX = "invtk_"
 # Display prefix length — long enough to locate an invitation in a list,
@@ -57,8 +58,6 @@ DEFAULT_LIFETIME_HOURS = 168  # 7 days
 FALLBACK_MAX_USES_CAP = 100
 FALLBACK_LIFETIME_HOURS_CAP = 720  # 30 days
 MAX_BATCH_EMAILS = 50
-
-WORKSPACE_CHANNEL_TEMPLATE = WORKSPACE_CHANNEL
 
 
 class _DuplicateAcceptance(Exception):
@@ -307,8 +306,14 @@ class InvitationService:
             return {"valid": False, "reason": reason}
         async with self._factory() as session:
             workspace = await session.scalar(
-                select(Workspace).where(Workspace.id == row.workspace_id)
+                select(Workspace).where(
+                    Workspace.id == row.workspace_id, Workspace.deleted_at.is_(None)
+                )
             )
+        if workspace is None:
+            # Links of a soft-deleted workspace are not usable; the tenant's
+            # existence is not disclosed through the invitation surface.
+            return {"valid": False, "reason": "not_found"}
         return {
             "valid": True,
             "workspace_name": workspace.name if workspace else None,
@@ -362,14 +367,28 @@ class InvitationService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
 
+            # A soft-deleted workspace is gone: its links must not admit
+            # anyone (no member would ever pass the membership gate, and the
+            # use would be silently consumed). Same 404-equivalent reason as
+            # an unknown workspace — existence of a deleted tenant is not
+            # disclosed through invitations.
+            workspace = await session.scalar(
+                select(Workspace).where(
+                    Workspace.id == workspace_id, Workspace.deleted_at.is_(None)
+                )
+            )
+            if workspace is None:
+                raise BusinessRuleError(
+                    "invitation is not valid",
+                    code="invitation_invalid",
+                    details={"reason": "not_found"},
+                )
+
             # Idempotency fast path: this user already redeemed THIS link.
             existing = await self._existing_redemption_member(
                 session, invitation_id=invitation_id, user_id=user.id
             )
             if existing is not None:
-                workspace = await session.scalar(
-                    select(Workspace).where(Workspace.id == workspace_id)
-                )
                 return self._accept_response(existing, workspace)
 
             # Atomic conditional increment — the §3.2 SQL, verbatim contract.
@@ -387,6 +406,15 @@ class InvitationService:
                 )
             ).first()
             if incremented is None:
+                # Race-tolerant idempotency (§3.2/§5.1): when the winner of a
+                # same-user concurrent accept committed after our fast-path
+                # check, the link may now be exhausted — but THIS user's
+                # redemption exists, so the call is a no-op, not a failure.
+                raced = await self._existing_redemption_member(
+                    session, invitation_id=invitation_id, user_id=user.id
+                )
+                if raced is not None:
+                    return self._accept_response(raced, workspace)
                 raise BusinessRuleError(
                     "invitation is not valid",
                     code="invitation_invalid",
@@ -395,13 +423,17 @@ class InvitationService:
             used_count, max_uses, role = incremented
 
             # Roster entry: reuse an existing row for this user (one row per
-            # user per workspace — uq_members_ws_user).
+            # user per workspace — uq_members_ws_user). A disabled/removed
+            # row is reactivated by the fresh admin-issued grant (role taken
+            # from the invitation) so the accepted use always yields access —
+            # never a silently consumed slot.
             member = await session.scalar(
                 select(Member).where(
                     Member.workspace_id == workspace_id, Member.user_id == user.id
                 )
             )
             member_created = False
+            member_rejoined = False
             if member is None:
                 member = Member(
                     workspace_id=workspace_id,
@@ -413,6 +445,13 @@ class InvitationService:
                 session.add(member)
                 await session.flush()
                 member_created = True
+            elif member.status != "active":
+                member.status = "active"
+                member.disabled_at = None
+                member.role = role
+                if member.joined_at is None:
+                    member.joined_at = datetime.now(UTC)
+                member_rejoined = True
             member_id = member.id
             member_role = member.role
             member_status = member.status
@@ -446,8 +485,8 @@ class InvitationService:
                     {"invitation_id": invitation_id},
                 )
 
-            channel = WORKSPACE_CHANNEL_TEMPLATE.format(workspace_id=workspace_id)
-            if member_created:
+            channel = WORKSPACE_CHANNEL.format(workspace_id=workspace_id)
+            if member_created or member_rejoined:
                 await emit_realtime(
                     session,
                     workspace_id=workspace_id,
@@ -484,9 +523,6 @@ class InvitationService:
             # Onboarding checklist seeding for new human members lands with the
             # onboarding increment (onboarding.md §3.5 R3) — same transaction
             # hook point as here.
-            workspace = await session.scalar(
-                select(Workspace).where(Workspace.id == workspace_id)
-            )
             response = self._accept_response(
                 {"id": member_id, "role": member_role, "status": member_status},
                 workspace,

@@ -28,12 +28,12 @@ async def invitation_sweep_loop(
 ) -> None:
     """Sweep expired invitations every ``interval`` seconds until ``stop``."""
     service = InvitationService(session_factory)
-    moment = clock() if clock is not None else datetime.now(UTC)
     logger.info("invitation sweep loop started (interval=%.1fs)", interval)
     while not stop.is_set():
         try:
             swept = await service.sweep_expired()
             if swept:
+                moment = clock() if clock is not None else datetime.now(UTC)
                 logger.info("invitation sweep expired %d link(s) at %s", swept, moment)
         except Exception:
             logger.exception("invitation sweep iteration failed")

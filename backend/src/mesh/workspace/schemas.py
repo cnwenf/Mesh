@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-SLUG_PATTERN = r"^[a-z0-9-]{2,32}$"
-MAX_BATCH_EMAILS = 50
+from mesh.workspace.invitations import MAX_BATCH_EMAILS
+from mesh.workspace.service import SLUG_PATTERN
 
 
 class CreateWorkspaceRequest(BaseModel):

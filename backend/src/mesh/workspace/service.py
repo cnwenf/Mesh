@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
+from mesh.db.constraints import violates as _violates
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.db.models.workspace import (
@@ -53,24 +54,6 @@ _NOT_FOUND_MESSAGE = "workspace not found"
 
 def _now(clock: Callable[[], datetime] | None) -> datetime:
     return clock() if clock is not None else datetime.now(UTC)
-
-
-def _constraint_name(exc: IntegrityError) -> str | None:
-    """The violated constraint/index name, when the driver exposes it."""
-    return getattr(exc.orig, "constraint_name", None)
-
-
-def _violates(exc: IntegrityError, name: str) -> bool:
-    """True when the integrity error comes from the named constraint/index.
-
-    PostgreSQL reports unique-index violations without a constraint name
-    (only true constraints carry one), so the driver attribute is backed by a
-    message scan — the violated index name appears in the error text.
-    """
-    if _constraint_name(exc) == name:
-        return True
-    orig = getattr(exc, "orig", None)
-    return orig is not None and name in str(orig)
 
 
 def _validate_slug(slug: str) -> None:
@@ -328,6 +311,17 @@ class WorkspaceService:
                     "role": "owner",
                 },
             )
+            # Tenant creation is a sensitive write (auth.md §5.3).
+            await write_audit(
+                session,
+                workspace_id=workspace.id,
+                actor_member_id=member.id,
+                actor_kind="member",
+                action="workspace.created",
+                resource_type="workspace",
+                resource_id=workspace.id,
+                metadata={"slug": workspace.slug},
+            )
             result = workspace_to_dict(workspace, my_role="owner")
         return result
 
@@ -355,7 +349,8 @@ class WorkspaceService:
             query += "AND (w.created_at, w.id) < (:sv, :cid) "
             params["sv"] = position.sort_value
             params["cid"] = position.id
-        query += "ORDER BY w.created_at DESC, w.id LIMIT :lim"
+        # id DESC to match the (created_at, id) < cursor predicate on ties.
+        query += "ORDER BY w.created_at DESC, w.id DESC LIMIT :lim"
 
         async with self._factory() as session:
             rows = (await session.execute(text(query), params)).all()
@@ -450,13 +445,29 @@ class WorkspaceService:
             ws.updated_at = _now(self._clock)
 
             if "slug" in changes:
-                # Keep the first mapping when the old slug was released before
-                # (ON CONFLICT DO NOTHING — the history row already exists).
+                # An old slug maps to the workspace that released it; when the
+                # same slug was released before (A releases, B takes, B
+                # releases), the mapping follows the most recent releaser (W6).
                 await session.execute(
                     pg_insert(WorkspaceSlugHistory)
                     .values(workspace_id=ws.id, old_slug=old_slug)
-                    .on_conflict_do_nothing(index_elements=["old_slug"])
+                    .on_conflict_do_update(
+                        index_elements=["old_slug"],
+                        set_={"workspace_id": ws.id},
+                    )
                 )
+            try:
+                # Explicit flush: a concurrent slug grab loses the pre-check
+                # race but must still surface as 409, not a 500 at commit.
+                await session.flush()
+            except IntegrityError as exc:
+                if _violates(exc, "uq_workspaces_slug"):
+                    raise ConflictError(
+                        "slug is already taken",
+                        code="slug_taken",
+                        details={"slug": changes.get("slug", ws.slug)},
+                    ) from exc
+                raise
             await emit_realtime(
                 session,
                 workspace_id=ws.id,

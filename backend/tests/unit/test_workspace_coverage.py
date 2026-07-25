@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from mesh.db.constraints import violates
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.errors import (
@@ -22,7 +23,6 @@ from mesh.workspace.invitations import InvitationService, _effective_status
 from mesh.workspace.service import (
     WorkspacePatch,
     WorkspaceService,
-    _violates,
     change_inbox_prefix,
     occupy_project_prefix,
 )
@@ -247,10 +247,10 @@ async def test_prefix_helpers_reraise_foreign_integrity_errors(session_factory):
 
 def test_violates_matches_constraint_name_and_message():
     named = SimpleNamespace(constraint_name="uq_workspaces_slug")
-    assert _violates(IntegrityError("stmt", {}, None), "x") is False
-    assert _violates(SimpleNamespace(orig=named), "uq_workspaces_slug") is True
+    assert violates(IntegrityError("stmt", {}, None), "x") is False
+    assert violates(SimpleNamespace(orig=named), "uq_workspaces_slug") is True
     unnamed = SimpleNamespace(orig=None)
-    assert _violates(unnamed, "uq_workspaces_slug") is False
+    assert violates(unnamed, "uq_workspaces_slug") is False
 
 
 # --- invitation list cursor + scoped sweep + effective status ----------------------
