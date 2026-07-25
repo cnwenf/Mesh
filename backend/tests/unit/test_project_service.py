@@ -1432,3 +1432,115 @@ async def test_update_template_conflict_and_noop(session_factory):
             template_id=uuid.UUID(first["id"]),
             body=UpdateProjectTemplateRequest(name="B", template_body={}),
         )
+
+
+# --- P2: If-Match lost-update guard (CWE-362) + public→private removal frame ---
+
+
+async def _raw_bump_updated_at(session_factory, project_id: uuid.UUID) -> None:
+    """Simulate a concurrent writer advancing updated_at outside our transaction."""
+    from sqlalchemy import text
+
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text("UPDATE projects SET updated_at = updated_at + interval '1 second' "
+                 "WHERE id = :pid"),
+            {"pid": project_id},
+        )
+
+
+async def test_update_project_if_match_detects_concurrent_write(session_factory):
+    """A concurrent write that advances updated_at between reading the version and
+    the locked PATCH must be rejected 409 (row lock + version re-check)."""
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=member, workspace_id=workspace.id, body=CreateProjectRequest(name="A", key="IFM")
+    )
+    project_id = uuid.UUID(created["id"])
+    stale_version = created["updated_at"].isoformat().replace("+00:00", "Z")
+    # A concurrent writer advances the row version before our locked PATCH runs.
+    await _raw_bump_updated_at(session_factory, project_id)
+    with pytest.raises(ConflictError) as excinfo:
+        await service.update_project(
+            actor=member,
+            workspace_id=workspace.id,
+            project_id=project_id,
+            patch=ProjectPatch(name="A2"),
+            if_match=stale_version,
+        )
+    assert excinfo.value.code == "conflict"
+
+
+async def test_update_project_if_match_succeeds_without_concurrent_write(session_factory):
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=member, workspace_id=workspace.id, body=CreateProjectRequest(name="B", key="IFK")
+    )
+    project_id = uuid.UUID(created["id"])
+    version = created["updated_at"].isoformat().replace("+00:00", "Z")
+    updated = await service.update_project(
+        actor=member,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        patch=ProjectPatch(name="B2"),
+        if_match=version,
+    )
+    assert updated["name"] == "B2"
+
+
+async def test_public_to_private_emits_workspace_list_removal(session_factory):
+    """Flipping public→private must drop the card from non-members' lists now,
+    not wait for a reload: emit a removal frame on the workspace list channel."""
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=member,
+        workspace_id=workspace.id,
+        body=CreateProjectRequest(name="C", key="VIS", visibility="public"),
+    )
+    project_id = uuid.UUID(created["id"])
+    await service.update_project(
+        actor=member,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        patch=ProjectPatch(visibility="private"),
+    )
+    async with session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == "realtime.publish")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    removals = [
+        r for r in rows
+        if r.payload.get("event") == "project.deleted"
+        and r.payload.get("channel") == f"workspace:{workspace.id}:projects"
+        and r.payload.get("data", {}).get("id") == str(project_id)
+    ]
+    assert len(removals) == 1
+    # private → public must NOT emit a removal (the project re-appears via updated).
+    await service.update_project(
+        actor=member,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        patch=ProjectPatch(visibility="public"),
+    )
+    async with session_factory() as session:
+        rows2 = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == "realtime.publish")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    removals2 = [
+        r for r in rows2
+        if r.payload.get("event") == "project.deleted"
+        and r.payload.get("channel") == f"workspace:{workspace.id}:projects"
+    ]
+    assert len(removals2) == 1  # unchanged: no new removal on private→public

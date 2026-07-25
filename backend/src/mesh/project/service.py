@@ -361,15 +361,25 @@ class ProjectService:
     # ------------------------------------------------------------------
 
     async def _load_project(
-        self, session: AsyncSession, *, workspace_id: uuid.UUID, project_id: uuid.UUID
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        project_id: uuid.UUID,
+        for_update: bool = False,
     ) -> Project:
-        project = await session.scalar(
-            select(Project).where(
-                Project.id == project_id,
-                Project.workspace_id == workspace_id,
-                Project.deleted_at.is_(None),
-            )
+        stmt = select(Project).where(
+            Project.id == project_id,
+            Project.workspace_id == workspace_id,
+            Project.deleted_at.is_(None),
         )
+        if for_update:
+            # Row lock for write paths: serialises the If-Match version check
+            # against the UPDATE so two concurrent PATCHes carrying the same
+            # valid If-Match cannot both pass and silently lose an update
+            # (CWE-362). Under READ COMMITTED the lock is held until commit.
+            stmt = stmt.with_for_update()
+        project = await session.scalar(stmt)
         if project is None:
             raise NotFoundError(_PROJECT_NOT_FOUND)
         return project
@@ -829,8 +839,13 @@ class ProjectService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
+            # Lock the row when an If-Match precondition is supplied so the
+            # version check + UPDATE are atomic (CWE-362 lost-update guard).
             project = await self._load_project(
-                session, workspace_id=workspace_id, project_id=project_id
+                session,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                for_update=if_match is not None,
             )
             await self.assert_can_write(session, viewer=actor, project=project)
             if if_match is not None and not self._matches_version(project, if_match):
@@ -839,6 +854,7 @@ class ProjectService:
                     code="conflict",
                     details={"id": str(project.id)},
                 )
+            previous_visibility = project.visibility
 
             changes: dict = {}
             if not isinstance(patch.name, _Unset) and patch.name != project.name:
@@ -937,6 +953,17 @@ class ProjectService:
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
+            # public → private: the workspace-list channel only carries public
+            # summaries, so non-members would keep a stale card until reload.
+            # Emit a list-removal frame so their lists drop it immediately.
+            if previous_visibility == "public" and project.visibility == "private":
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=_workspace_projects_channel(workspace_id),
+                    event="project.deleted",
+                    data={"id": str(project.id)},
+                )
             return self.render_project(project, lead=lead)
 
     @staticmethod
