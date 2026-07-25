@@ -42,7 +42,8 @@ async def _oauth_login(client, *, sub: str, email: str, name: str = "OAuth User"
     )
     assert start.status_code == 302, start.text
     state = _state_from_location(start.headers["location"])
-    code = encode_mock_code(sub=sub, email=email, name=name)
+    # H1: the provider must have verified the email for auto-register/link.
+    code = encode_mock_code(sub=sub, email=email, name=name, email_verified=True)
     cb = await client.get(
         "/api/v1/auth/oauth/mock/callback", params={"code": code, "state": state}
     )
@@ -124,3 +125,32 @@ async def test_oauth_callback_bad_state_400(api_client):
 async def test_oauth_start_requires_redirect_uri(api_client):
     resp = await api_client.get("/api/v1/auth/oauth/mock/start")
     assert resp.status_code == 400
+
+
+async def test_unverified_email_cannot_take_over_account(api_client):
+    """H1: an unverified email must not link to / register an account."""
+    # Register a password account first.
+    await api_client.post(
+        "/api/v1/auth/register",
+        json={"email": "victim@corp.com", "password": "a-strong-passw0rd", "display_name": "V"},
+    )
+    start = await api_client.get(
+        "/api/v1/auth/oauth/mock/start", params={"redirect_uri": CALLBACK}
+    )
+    state = _state_from_location(start.headers["location"])
+    # Attacker holds an UNVERIFIED victim@corp.com on the provider.
+    code = encode_mock_code(sub="attacker", email="victim@corp.com", email_verified=False)
+    cb = await api_client.get(
+        "/api/v1/auth/oauth/mock/callback", params={"code": code, "state": state}
+    )
+    assert cb.status_code == 422
+    assert cb.json()["error"]["code"] == "oauth_email_not_verified"
+
+
+async def test_redirect_uri_outside_allowlist_rejected(api_client):
+    """M1: a redirect_uri outside the exact-match allowlist is rejected (422)."""
+    resp = await api_client.get(
+        "/api/v1/auth/oauth/mock/start", params={"redirect_uri": "http://evil.example/cb"}
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "redirect_uri_not_allowed"

@@ -88,6 +88,9 @@ class Session(Base):
     last_active_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    # Last primary authentication (password / TOTP); forwarded across silent
+    # refreshes to back step-up re-authentication (auth.md §5.5).
+    authenticated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
 
     __table_args__ = (
         CheckConstraint(f"type IN {SESSION_TYPE_VALUES!r}", name="type"),
