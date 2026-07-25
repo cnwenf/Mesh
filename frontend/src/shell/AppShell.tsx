@@ -8,7 +8,7 @@
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { MeshApiError, getToken } from '../api';
@@ -136,6 +136,8 @@ export interface OfflinePollingOptions {
   /** 有 token 才轮询(对账端点需 Bearer 鉴权) */
   enabled: boolean;
   channel: string;
+  /** 额外需轮询的频道(如页面已订阅的 project:/workspace: 频道);与 channel 去重 */
+  extraChannels?: readonly string[];
   intervalMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -144,15 +146,20 @@ export interface OfflinePollingOptions {
  * §3.2 离线降级轮询机制编排:WS 处于 reconnecting/resyncing/offline(非 idle)
  * 时启动 PollingFallback,按频道 seq 水位轮询 REST 对账端点,帧经
  * client.ingestReconciledEvent 与实时帧同路径合并(游标守卫天然去重);
- * 恢复 connected/idle 后自动停止。
+ * 恢复 connected/idle 后自动停止。轮询覆盖演示频道 + 调用方已订阅的频道,
+ * 使 WS 不可用时(含首订阅竞态重试耗尽后)项目/工作区列表仍能增量更新。
  */
 export function useOfflinePolling(opts: OfflinePollingOptions): void {
   const { client, state, enabled, channel } = opts;
+  const extraChannels = opts.extraChannels ?? [];
   const intervalMs = opts.intervalMs ?? env.pollingIntervalMs;
   const fetchImpl = opts.fetchImpl ?? fetch;
+  // 稳定化频道集合,避免每次渲染重建依赖
+  const channelsKey = [channel, ...extraChannels].join('|');
   useEffect(() => {
     if (!enabled) return;
     if (state === 'connected' || state === 'idle') return;
+    const channels = Array.from(new Set([channel, ...extraChannels]));
     const fallback = new PollingFallback({
       source: {
         fetch: async (ch: string, since: number) => ({
@@ -161,18 +168,21 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
       },
       intervalMs,
     });
-    const cursor = client.getCursor(channel);
-    if (cursor !== undefined) fallback.seedSince(channel, cursor);
     const offFrame = fallback.onFrame((frame) => {
       client.ingestReconciledEvent(frame);
     });
-    fallback.subscribe(channel);
+    for (const ch of channels) {
+      const cursor = client.getCursor(ch);
+      if (cursor !== undefined) fallback.seedSince(ch, cursor);
+      fallback.subscribe(ch);
+    }
     fallback.start();
     return () => {
       offFrame();
       fallback.stop();
     };
-  }, [state, enabled, client, channel, intervalMs, fetchImpl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- channelsKey 稳定化频道集合
+  }, [state, enabled, client, channelsKey, intervalMs, fetchImpl]);
 }
 
 export function AppShell(): React.JSX.Element {
@@ -194,6 +204,13 @@ export function AppShell(): React.JSX.Element {
   });
   reconcilerRef.current = createReconciler(client);
 
+  // 跟踪已订阅频道,供离线轮询覆盖页面订阅的 project:/workspace: 频道。
+  const [subscribedChannels, setSubscribedChannels] = useState<readonly string[]>([]);
+  useEffect(() => {
+    setSubscribedChannels(client.getSubscribedChannels());
+    return client.onSubscribeChange(setSubscribedChannels);
+  }, [client]);
+
   // §3.2 离线降级轮询:WS 未连通时自动按频道 seq 水位轮询 REST 事件并经实时
   // 同路径注入;恢复 connected 后自动停止(见 useOfflinePolling)。
   useOfflinePolling({
@@ -201,6 +218,7 @@ export function AppShell(): React.JSX.Element {
     state,
     enabled: hasToken,
     channel: env.demoChannel,
+    extraChannels: subscribedChannels,
     intervalMs: env.pollingIntervalMs,
   });
 

@@ -53,6 +53,8 @@ export interface ErrorFrame {
   op: 'error';
   code: string;
   message: string;
+  /** Present on channel-scoped errors so the client can correlate + retry. */
+  channel?: string;
 }
 
 export interface PingFrame {
