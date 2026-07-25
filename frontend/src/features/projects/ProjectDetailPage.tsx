@@ -55,6 +55,7 @@ export function ProjectDetailPage(): React.JSX.Element {
   const activeTab = tabFromParam(searchParams.get('tab'));
 
   const [workspace, setWorkspace] = useState<Membership | null>(null);
+  const [meResolved, setMeResolved] = useState(false);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [updates, setUpdates] = useState<ProjectUpdateEntry[]>([]);
@@ -75,6 +76,9 @@ export function ProjectDetailPage(): React.JSX.Element {
       })
       .catch(() => {
         if (!cancelled) setError(t('state.errorDescription'));
+      })
+      .finally(() => {
+        if (!cancelled) setMeResolved(true);
       });
     return () => {
       cancelled = true;
@@ -179,7 +183,7 @@ export function ProjectDetailPage(): React.JSX.Element {
     }
   };
 
-  if (workspace === null && !isLoading && error === null) {
+  if (meResolved && workspace === null && error === null) {
     return (
       <main className="mesh-projects">
         <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
