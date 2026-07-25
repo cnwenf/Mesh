@@ -148,12 +148,15 @@ class AuthService:
 
     # -- token issuance --------------------------------------------------------
 
-    def _issue_access(self, user_id: uuid.UUID) -> tuple[str, int]:
+    def _issue_access(
+        self, user_id: uuid.UUID, *, auth_time: datetime | None = None
+    ) -> tuple[str, int]:
         token, _jti = jwt_mod.encode_access_token(
             subject=user_id,
             secret=self._settings.jwt_secret,
             algorithm=self._settings.jwt_algorithm,
             ttl=self._settings.access_token_ttl,
+            auth_time=auth_time,
         )
         return token, int(self._settings.access_token_ttl.total_seconds())
 
@@ -167,8 +170,14 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
+        authenticated_at: datetime | None = None,
     ) -> str:
-        """Persist a refresh session (hash only) and return the plaintext token."""
+        """Persist a refresh session (hash only) and return the plaintext token.
+
+        ``authenticated_at`` records the last primary authentication (password /
+        TOTP); silent refresh forwards the original value so step-up re-auth
+        (§5.5) reflects the real authentication age.
+        """
         refresh_plain = security.generate_token()
         ttl = (
             self._settings.remember_refresh_token_ttl
@@ -184,6 +193,7 @@ class AuthService:
                 user_agent=user_agent,
                 expires_at=now + ttl,
                 last_active_at=now,
+                authenticated_at=authenticated_at or now,
             )
         )
         return refresh_plain
@@ -198,8 +208,10 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
+        authenticated_at: datetime | None = None,
     ) -> TokenResult:
-        access_token, expires_in = self._issue_access(user.id)
+        auth_moment = authenticated_at or now
+        access_token, expires_in = self._issue_access(user.id, auth_time=auth_moment)
         refresh_token = await self._create_session(
             session,
             user,
@@ -208,6 +220,7 @@ class AuthService:
             user_agent=user_agent,
             remember=remember,
             now=now,
+            authenticated_at=auth_moment,
         )
         return TokenResult(
             access_token=access_token, refresh_token=refresh_token, expires_in=expires_in
@@ -432,6 +445,8 @@ class AuthService:
                     outcome = ("invalid", None)
                 else:
                     # Rotate: revoke the presented token, issue a fresh pair.
+                    # Forward the original authentication time so step-up re-auth
+                    # (§5.5) reflects the real authentication age, not the refresh.
                     row.revoked_at = now
                     outcome = (
                         "tokens",
@@ -443,6 +458,7 @@ class AuthService:
                             user_agent=user_agent,
                             remember=False,
                             now=now,
+                            authenticated_at=row.authenticated_at,
                         ),
                     )
         kind, payload = outcome

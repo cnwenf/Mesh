@@ -56,6 +56,8 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     env["MESH_REDIS_URL"] = get_test_redis_url()
     env["MESH_AUTH_MODE"] = "dev"
     env["MESH_APP_DATABASE_URL"] = _app_role_url(get_test_database_url())
+    # M1: the dev mock provider only accepts this exact callback redirect URI.
+    env["MESH_OAUTH_MOCK_REDIRECT_URIS"] = "http://api.test/api/v1/auth/oauth/mock/callback"
     return subprocess.Popen(
         [
             sys.executable,

@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     # Base URL used to build verification/reset links in outgoing email.
     app_base_url: str | None = None
 
+    # OAuth (auth.md §1.2 A5/A6). Comma-separated exact-match allowlist of
+    # redirect URIs for the dev ``mock`` provider (M1: open-redirect prevention).
+    # Production providers carry their own allowlist; empty disables the mock.
+    oauth_mock_redirect_uris: str | None = None
+
     # Process bind addresses.
     api_host: str = "0.0.0.0"
     api_port: int = DEFAULT_API_PORT
