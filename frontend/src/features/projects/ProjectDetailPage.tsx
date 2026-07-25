@@ -217,9 +217,26 @@ export function ProjectDetailPage(): React.JSX.Element {
     <main className="mesh-projects">
       <div className="mesh-projects__detail-header" data-testid="project-detail-header">
         <div className="mesh-projects__detail-title-row">
+          {project.color !== null ? (
+            <span
+              className="mesh-projects__color-swatch"
+              data-testid="project-color"
+              style={{ background: project.color }}
+              aria-hidden="true"
+            />
+          ) : null}
+          {project.icon !== null ? (
+            <span className="mesh-projects__icon" data-testid="project-icon" aria-hidden="true">
+              {project.icon}
+            </span>
+          ) : null}
           <h1 className="mesh-projects__title">{project.name}</h1>
           <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
-          <HealthIndicator health={project.health} />
+          {/* §4.2 健康度灯可点击更新;归档只读时不可点 */}
+          <HealthIndicator
+            health={project.health}
+            onClick={project.archived ? undefined : () => setHealthOpen(true)}
+          />
         </div>
         <div className="mesh-projects__detail-meta">
           <ProgressBar progress={project.progress} title={progressTitle} />

@@ -480,3 +480,36 @@
   background: var(--color-border);
   color: var(--color-text);
 }
+
+/* §4.1/§4.2 项目 icon / 主题色 / 可点击健康度灯 */
+.mesh-projects__color-swatch {
+  display: inline-block;
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+
+.mesh-projects__icon {
+  font-size: var(--font-size-base, 1rem);
+  line-height: 1;
+}
+
+.mesh-projects__health-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font: inherit;
+}
+
+.mesh-projects__health-button:focus-visible {
+  outline: 2px solid var(--color-primary, #2563eb);
+  outline-offset: 2px;
+}

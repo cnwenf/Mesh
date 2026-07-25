@@ -5,7 +5,7 @@
  * 状态渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 空态 → 内容(对齐 MembersPage)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
@@ -15,6 +15,7 @@ import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
 import { listProjects, workspaceProjectsChannel } from './api';
 import { CreateProjectDialog } from './CreateProjectDialog';
+import { HealthUpdateDialog } from './HealthUpdateDialog';
 import { applyProjectListFrame } from './realtime';
 import type { ProjectStatus, ProjectSummary } from './types';
 import { PROJECT_STATUS_ORDER } from './types';
@@ -36,11 +37,12 @@ function matchesListFilters(
 
 interface ProjectCardProps {
   readonly project: ProjectSummary;
+  readonly onHealthClick: (project: ProjectSummary) => void;
 }
 
 function ProjectCard(props: ProjectCardProps): React.JSX.Element {
   const t = useT();
-  const { project } = props;
+  const { project, onHealthClick } = props;
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
   return (
@@ -50,11 +52,34 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
       data-testid={`project-card-${project.id}`}
     >
       <div className="mesh-projects__card-head">
+        {project.color !== null ? (
+          <span
+            className="mesh-projects__color-swatch"
+            data-testid={`project-color-${project.id}`}
+            style={{ background: project.color }}
+            aria-hidden="true"
+          />
+        ) : null}
+        {project.icon !== null ? (
+          <span className="mesh-projects__icon" data-testid={`project-icon-${project.id}`} aria-hidden="true">
+            {project.icon}
+          </span>
+        ) : null}
         <span className="mesh-projects__card-name">{project.name}</span>
         <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
       </div>
       <div className="mesh-projects__card-meta">
-        <HealthIndicator health={project.health} />
+        {/* §4.2 健康度灯可点击:阻止卡片导航,打开页面级更新对话框 */}
+        <span
+          role="presentation"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onHealthClick(project);
+          }}
+        >
+          <HealthIndicator health={project.health} />
+        </span>
         {project.lead !== null ? (
           <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
         ) : null}
@@ -72,6 +97,7 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
 export function ProjectsPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
+  const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
 
@@ -88,6 +114,8 @@ export function ProjectsPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
+  /** 列表卡片健康度灯点击 → 页面级更新对话框的目标项目(§4.2 点击更新) */
+  const [healthTarget, setHealthTarget] = useState<ProjectSummary | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -240,7 +268,11 @@ export function ProjectsPage(): React.JSX.Element {
         <>
           <div className="mesh-projects__grid" data-testid="projects-grid">
             {projects.map((project) => (
-              <ProjectCard key={project.id} project={project} />
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onHealthClick={(p) => setHealthTarget(p)}
+              />
             ))}
           </div>
           {nextCursor !== null ? (
@@ -262,7 +294,23 @@ export function ProjectsPage(): React.JSX.Element {
           onClose={() => setCreateOpen(false)}
           client={client}
           workspaceId={workspace.workspace_id}
-          onCreated={() => setReloadKey((key) => key + 1)}
+          onCreated={(projectId) => {
+            setReloadKey((key) => key + 1);
+            navigate(`/projects/${projectId}`); // §4.3 创建后进入新项目
+          }}
+        />
+      ) : null}
+
+      {workspace !== null && healthTarget !== null ? (
+        <HealthUpdateDialog
+          open
+          onClose={() => setHealthTarget(null)}
+          client={client}
+          projectId={healthTarget.id}
+          onSaved={() => {
+            setHealthTarget(null);
+            setReloadKey((key) => key + 1);
+          }}
         />
       ) : null}
     </main>
