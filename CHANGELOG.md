@@ -3,6 +3,28 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-07-25
+
+阶段 2 前端延后接通项全量落地(MES-24):i18n 协商链「工作区默认」级接通、账号偏好写入服务端同步、§6.16 WebSocket 鉴权收紧为首帧单一机制(前后端事实上收敛 + Spec 明文收口)。本版本包含此前随主干合入但尚未打标的 [0.4.1] 安全修复(MES-28 cryptography 升级)。
+
+### Added
+
+- **i18n 协商链「工作区默认」级接通(README §6.18 第三级)**:新增 `api/workspace.ts` 两步获取——列表 `GET /workspaces`(list_view 按 workspace.md §3.2 不含 settings)→ 单对象 `GET /workspaces/{id}` 读 `settings.default_locale`,经 `useWorkspaceLocale` 注入 `I18nProvider` 的 `workspaceDefaultLocale`(骨架期传 null,本级正式生效)。协商链端到端:**用户无偏好 + 工作区默认 zh-CN → UI 中文**;用户偏好优先于工作区默认(显式参数 → `users.settings.locale` → 工作区默认 → 系统候选 → `en`)。工作区 API 不可达/无工作区静默降级(协商链跳过本级)。
+- **账号偏好写入接通 `PATCH /api/v1/users/me`(auth.md §3.1)**:`settingsStore` 的 theme/locale/timezone 写入经 `preferencesSync` fire-and-forget 同步服务端(乐观更新,本地状态即时生效);网络错误静默降级、本地持久化作为降级镜像(离线可用)。
+- **偏好清除语义(前后端协同)**:「跟随工作区默认」(locale 置 null)发送**显式 null**,后端 `update_user` 对显式 null 执行 `merged.pop`(此前 null 被忽略保留旧值);theme 同款语义。
+- **422 具名错误 UI 可见(§6.14 → §6.18 前端渲染)**:`SettingsPage` 消费 `lastSyncError`,`unsupported_locale` / `invalid_timezone` / network / server 四类按 error code 渲染 i18n 文案的 `role="alert"` danger 横幅,可关闭(`clearSyncError`)。
+- **全局 API 客户端单例**(`api/instance.ts`):组装 `MeshApiClient`(env + authStore token),供 Provider 树与偏好同步共用。
+
+### Changed
+
+- **§6.16 WebSocket 鉴权收紧为「连接建立后首帧认证」单一机制**(Leader 决策):删除「子协议(Sec-WebSocket-Protocol)」可选项,注明 v0.1.0 起实现基线(前后端已于 MES-11/MES-16 收敛于首帧 `{op:'auth',token}` → `auth_ok`);README §6.16 正文修订随代码同 PR,下游 `kanban.md` / `auth.md` / `chat-session.md` 及 `RealtimeClient.ts` / `types/realtime.ts` 注释同步对齐,全项目无旧双选项表述残留。
+
+### Quality
+
+- **真实后端 + 真实浏览器验收(非 mock)**:docker compose 实机起服(v0.4.0 后端 + 本 PR 构建),真实 API 链路实测(locale 设 zh-CN → 显式 null 清除 → 回读 `{}`;fr-FR → 422 `unsupported_locale`;工作区 `default_locale` PATCH/回读/两步读取);Chromium 实操验证协商链端到端与 422 alert 横幅(附截图证据)。
+- 前端 UT **601 全量通过**,整体覆盖率 **99.23%**;`SettingsPage.tsx` 100%(含 6 个 banner 场景)、新增模块均 ≥97.97%。后端 service 层直调补测覆盖 null-pop 分支(`auth/service.py` L636/L642 覆盖率实测入账),路由层 in-process + 真实 HTTP 子进程 e2e 双护栏;auth 相关用例 73 项通过,后端整体 pytest-cov **95.33%**(≥90% 门禁)。CI 8 项全绿(quality/e2e/backend-ci/spec-checks/DDL/词汇校验)。
+- 验收过程三轮打回闭环:① 真实 e2e 发现「locale 清除必 422」「列表响应无 settings 致协商链死代码」「422 无 UI 提示」+ §6.16 下游残留;② 覆盖率必查项打回(SettingsPage 新代码 83%、后端 pop 分支 0 覆盖);③ 终验补回 service 层直调用例后入账;合并时另发现并补回一处被误删的既有断言(`test_settings_invalid_theme` status_code,行为在路由/e2e 层仍有断言,不阻断)。
+
 ## [0.4.1] - 2026-07-25
 
 ### Security
