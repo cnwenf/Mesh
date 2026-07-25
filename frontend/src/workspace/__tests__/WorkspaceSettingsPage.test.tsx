@@ -214,4 +214,28 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     await waitFor(() => screen.getByTestId('ws-save'));
     expect((screen.getByTestId('ws-save') as HTMLButtonElement).disabled).toBe(true);
   });
+  it('保存返回 invalid_timezone → 具名错误态(覆盖 catch 分支)', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({ status: 422, body: { error: { code: 'invalid_timezone', message: 'bad tz' } } });
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
+    const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Acme3');
+    await user.click(screen.getByTestId('ws-save'));
+    await waitFor(() => expect(screen.getByTestId('ws-basic-error')).toBeTruthy());
+  });
+
+  it('保存返回 slug_taken → 具名错误态(覆盖 catch 分支)', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({ status: 409, body: { error: { code: 'slug_taken', message: 'taken' } } });
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
+    const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Acme4');
+    await user.click(screen.getByTestId('ws-save'));
+    await waitFor(() => expect(screen.getByTestId('ws-basic-error')).toBeTruthy());
+  });
+
 });
