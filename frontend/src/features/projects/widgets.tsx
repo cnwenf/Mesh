@@ -24,6 +24,9 @@ export function StatusBadge(props: StatusBadgeProps): React.JSX.Element {
 
 export interface HealthIndicatorProps {
   readonly health: ProjectHealth | null;
+  /** 提供时整灯可点击(§4.2 点击健康度灯更新状态);渲染为 button */
+  readonly onClick?: () => void;
+  readonly updateLabel?: string;
 }
 
 const HEALTH_TONES: Record<ProjectHealth, 'success' | 'warn' | 'danger'> = {
@@ -32,14 +35,29 @@ const HEALTH_TONES: Record<ProjectHealth, 'success' | 'warn' | 'danger'> = {
   off_track: 'danger',
 };
 
-/** 健康度灯(§4.2):三色圆点 + 必填文字标签;未设置时中性点 + 「未设置」文案。 */
+/** 健康度灯(§4.2):三色圆点 + 必填文字标签;未设置时中性点 + 「未设置」文案。
+ *  传 onClick 时整灯包成 button,点击打开「更新状态」(颜色从不作为唯一信号,label 仍在)。 */
 export function HealthIndicator(props: HealthIndicatorProps): React.JSX.Element {
   const t = useT();
-  const { health } = props;
-  if (health === null) {
-    return <StatusDot tone="neutral" label={t('projects.health.none')} />;
-  }
-  return <StatusDot tone={HEALTH_TONES[health]} label={t(`projects.health.${health}`)} />;
+  const { health, onClick, updateLabel } = props;
+  const dot =
+    health === null ? (
+      <StatusDot tone="neutral" label={t('projects.health.none')} />
+    ) : (
+      <StatusDot tone={HEALTH_TONES[health]} label={t(`projects.health.${health}`)} />
+    );
+  if (onClick === undefined) return dot;
+  return (
+    <button
+      type="button"
+      className="mesh-projects__health-button"
+      data-testid="health-light-button"
+      onClick={onClick}
+      aria-label={updateLabel ?? t('projects.detail.updateStatus')}
+    >
+      {dot}
+    </button>
+  );
 }
 
 export interface AvatarInitialProps {

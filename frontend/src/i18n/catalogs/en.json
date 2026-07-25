@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "8eb8f617",
+  "version": "800b4740",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -67,6 +67,7 @@
     "danger.sectionTitle": "Danger zone",
     "danger.title": "Delete this workspace",
     "demo.commentCount": "{count, plural, =0 {No comments} one {# comment} other {# comments}}",
+    "demo.countLabel": "Comment count (ICU plural demo)",
     "demo.duration": "Took {minutes, plural, one {# minute} other {# minutes}}",
     "demo.joined": "{name} joined on {date, date, medium}",
     "demo.position": "Item {n, number} of {total, number}",
@@ -114,6 +115,7 @@
     "home.demoShortcuts": "Shortcuts",
     "home.demoStates": "States",
     "home.demoTheme": "Theme",
+    "home.demoUnavailable": "Live demo data is only available against the scaffold mock backend; the realtime channel stays active.",
     "home.loadMore": "Load more",
     "home.newIssueTitle": "Issue title",
     "home.realtimeLoginHint": "Sign in to see live updates in this workspace.",

@@ -107,7 +107,7 @@ function LocaleDemo(): React.JSX.Element {
           data-testid="demo-count"
           type="number"
           min={0}
-          label={t('demo.commentCount', { count })}
+          label={t('demo.countLabel')}
           value={count}
           onChange={handleCountChange}
         />
@@ -265,6 +265,17 @@ function RealtimeDemo(props: RealtimeDemoProps): React.JSX.Element {
   };
 
   const rows = [...issues.values()];
+
+  // 真实后端无 /demo/issues 演示端点 → 404;此时不渲染交互式演示表单(避免全局
+  // 首页出现误导性的错误/空态),仅保留实时频道订阅并提示(§4.5 实时仍可用)。
+  const demoUnavailable = page.error !== null && rows.length === 0;
+  if (demoUnavailable) {
+    return (
+      <p className="mesh-home__hint" data-testid="demo-realtime-unavailable">
+        {t('home.demoUnavailable')}
+      </p>
+    );
+  }
 
   return (
     <div className="mesh-home__realtime">

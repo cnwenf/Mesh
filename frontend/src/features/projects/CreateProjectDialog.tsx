@@ -19,8 +19,8 @@ export interface CreateProjectDialogProps {
   readonly onClose: () => void;
   readonly client: MeshApiClient;
   readonly workspaceId: string;
-  /** 创建成功后的回调(重载列表) */
-  readonly onCreated: () => void;
+  /** 创建成功后的回调(传入新项目 id,供列表跳入新项目 §4.3) */
+  readonly onCreated: (projectId: string) => void;
 }
 
 export function CreateProjectDialog(props: CreateProjectDialogProps): React.JSX.Element {
@@ -54,7 +54,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.JSX.
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      await createProject(props.client, props.workspaceId, {
+      const created = await createProject(props.client, props.workspaceId, {
         name: name.trim(),
         key: effectiveKey,
         description: description.trim() === '' ? undefined : description.trim(),
@@ -65,7 +65,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.JSX.
         tone: 'success',
         closeLabel: t('common.close'),
       });
-      props.onCreated();
+      props.onCreated(created.id);
       props.onClose();
     } catch (err) {
       const errorKey =
