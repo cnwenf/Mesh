@@ -1,0 +1,87 @@
+@import './tokens.css';
+@import './tokens-dark.css';
+
+/*
+ * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +
+ * prefers-reduced-motion 降级 + 逻辑属性(RTL 预留,见 i18n.md §1.3)。
+ */
+
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* 最小 reset */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img,
+svg {
+  display: block;
+  max-inline-size: 100%;
+}
+
+/* 焦点可见(全键盘可达,§6.12) */
+:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* 尊重 prefers-reduced-motion(§6.12) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 尊重 prefers-contrast:边界退回更高对比的语义 token */
+@media (prefers-contrast: more) {
+  :root {
+    --color-border: var(--color-text-muted);
+  }
+}
+
+/* 仅读屏可见的文本(live region 文案等) */
+.sr-only {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
