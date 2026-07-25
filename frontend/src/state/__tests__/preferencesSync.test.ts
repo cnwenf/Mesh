@@ -170,7 +170,7 @@ describe('preferencesSync(偏好服务端同步,auth.md §3.1)', () => {
       expect(body.settings.locale).toBe('zh-CN');
     });
 
-    it('locale=null 发送空字符串(清除服务端偏好)', async () => {
+    it('locale=null 发送显式 null(清除服务端偏好,后端 pop 语义)', async () => {
       const fetchImpl = successFetch();
       const client = createMockClient(fetchImpl);
 
@@ -181,7 +181,7 @@ describe('preferencesSync(偏好服务端同步,auth.md §3.1)', () => {
         RequestInit,
       ];
       const body = JSON.parse(options.body as string);
-      expect(body.settings.locale).toBe('');
+      expect(body.settings.locale).toBeNull();
     });
 
     it('422 unsupported_locale 经 onError 上报', async () => {

@@ -104,8 +104,9 @@ export async function syncLocaleToServer(
   options: SyncPreferencesOptions = {},
 ): Promise<void> {
   const payload: UpdatePreferencesPayload = { settings: {} };
-  // locale=null 表示"恢复跟随默认",向服务端写入空字符串以清除
-  payload.settings!.locale = locale ?? '';
+  // locale=null 表示"恢复跟随默认",向服务端发送显式 null 以清除偏好
+  // (后端 PATCH 对显式 null 执行 merged.pop('locale'),auth.md §3.1 清除语义)
+  payload.settings!.locale = locale;
   try {
     await updatePreferences(client, payload);
   } catch (err: unknown) {

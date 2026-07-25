@@ -487,7 +487,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 
 > 实时契约**以 README §6.7 为唯一权威**:`seq` 为**频道内**单调递增(非全局)、`realtime_events` 持久重放、`resume_from` 重连补齐、游标过旧下发 `resync_required` + REST 对账水位、订阅逐资源授权。本节仅描述看板视图的频道与增量合并动作,不重复定义 seq 语义。
 
-- **连接**:`wss://<host>/ws`(握手鉴权;**禁止在 URL query 中传 token**,使用 WebSocket 子协议或首帧认证,README §6.7/auth.md);建立后服务端推送的所有帧统一为(`seq` 为频道内单调,README §6.7):
+- **连接**:`wss://<host>/ws`(握手鉴权;**禁止在 URL query 中传 token**,使用连接建立后首帧认证单一机制,README §6.16/§6.7/auth.md);建立后服务端推送的所有帧统一为(`seq` 为频道内单调,README §6.7):
 ```jsonc
 { "seq": 1042, "type": "issue.updated", "topic": "view:{view_id}",
   "ts": "2026-07-24T10:00:01Z", "data": { /* 见各事件 */ } }
