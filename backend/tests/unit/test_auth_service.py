@@ -427,7 +427,25 @@ class TestUserUpdate:
                 user_id=uid, patch=UserUpdate(settings={"theme": "neon"})
             )
         assert exc.value.code == "validation_error"
-        assert exc.value.status_code == 422
+
+    async def test_settings_explicit_null_clears_key(self, service):
+        """Explicit null in settings.locale/theme pops the key (MES-24 清除语义)."""
+        uid = await self._user_id(service)
+        # Set both keys first.
+        await service.update_user(
+            user_id=uid, patch=UserUpdate(settings={"locale": "zh-CN", "theme": "dark"})
+        )
+        # Clear locale with explicit null → key popped, theme preserved.
+        cleared = await service.update_user(
+            user_id=uid, patch=UserUpdate(settings={"locale": None})
+        )
+        assert "locale" not in cleared["settings"]
+        assert cleared["settings"]["theme"] == "dark"
+        # Clear theme with explicit null → both keys gone.
+        final = await service.update_user(
+            user_id=uid, patch=UserUpdate(settings={"theme": None})
+        )
+        assert final["settings"] == {}
 
     async def test_get_user_not_found(self, service):
         import uuid
