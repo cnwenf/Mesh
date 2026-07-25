@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from mesh.auth.deps import get_auth_service, get_current_user
+from mesh.auth.deps import get_auth_service, get_current_user, require_recent_auth
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.schemas import (
     ForgotPasswordRequest,
@@ -34,6 +34,10 @@ LOGIN_LIMIT = 5
 LOGIN_WINDOW_SECONDS = 60
 REGISTER_LIMIT = 5
 REGISTER_WINDOW_SECONDS = 60
+# H2: the MFA second factor is a 6-digit TOTP, so its verify endpoint is tightly
+# limited per (IP, ticket) — a leaked password cannot brute-force the code.
+MFA_VERIFY_LIMIT = 5
+MFA_VERIFY_WINDOW_SECONDS = 60
 
 
 def _client_ip(request: Request) -> str | None:
@@ -109,7 +113,16 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
 
 
 @router.post("/auth/mfa/verify")
-async def mfa_verify(body: MfaVerifyRequest, request: Request) -> dict:
+async def mfa_verify(body: MfaVerifyRequest, request: Request, response: Response) -> dict:
+    # H2: bound TOTP brute force — limited per (IP, ticket); the ticket is
+    # short-lived and single-purpose, so this caps attempts per challenge.
+    await _rate_limit(
+        request,
+        f"mfa-verify:{_client_ip(request)}:{body.mfa_ticket}",
+        limit=MFA_VERIFY_LIMIT,
+        window=MFA_VERIFY_WINDOW_SECONDS,
+        response=response,
+    )
     service: AuthService = get_auth_service(request)
     result = await service.verify_mfa(
         mfa_ticket=body.mfa_ticket,
@@ -237,8 +250,9 @@ async def mfa_setup(request: Request, user: User = Depends(get_current_user)) ->
 
 @router.post("/auth/mfa/enable")
 async def mfa_enable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(get_current_user)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
 ) -> dict:
+    # §5.5: enabling 2FA is sensitive — requires a recent re-authentication.
     service: AuthService = get_auth_service(request)
     await service.mfa_enable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": True}}
@@ -246,8 +260,9 @@ async def mfa_enable(
 
 @router.post("/auth/mfa/disable")
 async def mfa_disable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(get_current_user)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
 ) -> dict:
+    # §5.5: disabling 2FA is sensitive — requires a recent re-authentication.
     service: AuthService = get_auth_service(request)
     await service.mfa_disable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": False}}
