@@ -85,6 +85,12 @@ export function ProjectSettingsPage(): React.JSX.Element {
     client,
     path: projectId !== undefined ? `/api/v1/projects/${projectId}` : '/api/v1/projects/unknown',
     getServerVersion: (value) => value.updated_at,
+    // 409 收敛:重放前先把表单对齐到服务端最新态,避免下一次保存拿陈旧 form
+    // 重新 diff 把他人编辑覆盖回去(CWE-362 表单侧收敛)。
+    onConflict: async (server) => {
+      setForm(formFromProject(server));
+      return server;
+    },
   });
 
   useEffect(() => {

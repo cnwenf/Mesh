@@ -114,8 +114,13 @@ class RealtimeSession:
         async with self._send_lock:
             await self._transport.send_json(frame)
 
-    async def _send_error(self, code: str, message: str) -> None:
-        await self._send({"op": FRAME_ERROR, "code": code, "message": message})
+    async def _send_error(self, code: str, message: str, *, channel: str | None = None) -> None:
+        frame: dict[str, Any] = {"op": FRAME_ERROR, "code": code, "message": message}
+        # Channel-scoped errors carry the channel so the client can correlate the
+        # error to the subscription it answers (e.g. retry a forbidden subscribe).
+        if channel is not None:
+            frame["channel"] = channel
+        await self._send(frame)
 
     async def run(self) -> None:
         """Run the connection until it closes."""
@@ -200,7 +205,7 @@ class RealtimeSession:
             return
         owner = await self._authorizer.authorize(principal, channel)
         if owner is None:
-            await self._send_error("forbidden", f"not authorized for channel: {channel}")
+            await self._send_error("forbidden", f"not authorized for channel: {channel}", channel=channel)
             return
 
         # Subscribe the pump FIRST so events projected during replay are not

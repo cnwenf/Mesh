@@ -89,12 +89,15 @@ function makeProject(overrides: Record<string, unknown> = {}) {
 interface StubOptions {
   /** 前 N 次 PATCH /projects/prj-1 返回 409 conflict(乐观并发收敛路径) */
   readonly conflictPatchTimes?: number;
+  /** 409 重取时服务端返回的并发编辑后的 name */
+  readonly serverNameAfterConflict?: string;
 }
 
 function stubFetch(opts: StubOptions = {}) {
   const calls: RecordedCall[] = [];
   let project = makeProject();
   let patchFailures = opts.conflictPatchTimes ?? 0;
+  let conflictHappened = false;
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -133,6 +136,7 @@ function stubFetch(opts: StubOptions = {}) {
     if (method === 'PATCH' && url.match(/\/projects\/[^/]+$/)) {
       if (patchFailures > 0) {
         patchFailures -= 1;
+        conflictHappened = true;
         return fakeResponse({
           status: 409,
           body: { error: { code: 'conflict', message: 'conflict' } },
@@ -150,7 +154,11 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({ body: { data: { id: 'prj-1', deleted: true } } });
     }
     if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
-      return fakeResponse({ body: { data: project } });
+      const served =
+        opts.serverNameAfterConflict !== undefined && conflictHappened
+          ? { ...project, name: opts.serverNameAfterConflict }
+          : project;
+      return fakeResponse({ body: { data: served } });
     }
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
   }) as typeof fetch;
@@ -223,8 +231,8 @@ describe('ProjectSettingsPage', () => {
     await user.type(nameInput, 'Apollo III');
     await user.click(screen.getByTestId('settings-save'));
     await waitFor(() => {
-      // 409 → GET 重取 → 以服务端版本重放 PATCH,共 2 次 PATCH
-      expect(patchProjectCalls(calls).length).toBe(2);
+      // 409 → GET 重取 → onConflict 收敛(不再盲重放陈旧 changes),故仅 1 次 PATCH
+      expect(patchProjectCalls(calls).length).toBe(1);
     });
     expect(await screen.findByText(/changed elsewhere/)).toBeDefined();
   });
@@ -414,3 +422,28 @@ describe('ProjectSettingsPage', () => {
     });
   });
 });
+
+  it('409 收敛后表单对齐服务端态,下次保存不覆盖他人编辑', async () => {
+    const calls = stubFetch({ conflictPatchTimes: 1, serverNameAfterConflict: 'Server Edit' });
+    const user = userEvent.setup();
+    renderSettings();
+    const nameInput = (await screen.findByTestId('settings-name')) as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Stale Edit');
+    await user.click(screen.getByTestId('settings-save'));
+    // 409 → 重取(返回 Server Edit)→ onConflict 把表单对齐到服务端态(不盲重放)
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+    await waitFor(() =>
+      expect((screen.getByTestId('settings-name') as HTMLInputElement).value).toBe('Server Edit'),
+    );
+    // 下一次保存:陈旧值已被服务端态覆盖;改成 Final 后 diff 仅含 Final
+    const nameInput2 = screen.getByTestId('settings-name') as HTMLInputElement;
+    await user.clear(nameInput2);
+    await user.type(nameInput2, 'Final');
+    await user.click(screen.getByTestId('settings-save'));
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(2));
+    const lastBody = String(patchProjectCalls(calls)[1].init?.body);
+    expect(lastBody).toContain('"name":"Final"');
+    expect(lastBody).not.toContain('Stale Edit');
+  });
+

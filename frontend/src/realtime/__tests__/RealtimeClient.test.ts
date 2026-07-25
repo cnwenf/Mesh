@@ -574,3 +574,54 @@ describe('listeners', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 });
+
+describe('channel-level subscribe-error retry (first-subscribe race)', () => {
+  it('resubscribes a channel after an authenticated forbidden error frame', () => {
+    const { client, socket, sched } = connectClient();
+    client.subscribe('project:p1');
+    const sentBefore = socket.sentOps().filter((o) => o.op === 'subscribe').length;
+    expect(sentBefore).toBe(1);
+    // Gateway answers the subscribe with a channel-scoped forbidden (race).
+    socket.message({ op: 'error', code: 'forbidden', message: 'nope', channel: 'project:p1' });
+    // A retry must be scheduled (in addition to the keepalive tick).
+    const retryTick = sched.pending.find(
+      (t) => t.ms >= 800 && t.ms <= 1300,
+    );
+    expect(retryTick).toBeDefined();
+    retryTick?.fn();
+    const sentAfter = socket.sentOps().filter((o) => o.op === 'subscribe').length;
+    expect(sentAfter).toBe(2);
+  });
+
+  it('does not retry an unauthenticated error (teardown/reconnect path)', () => {
+    const { client, sched } = makeClient();
+    client.connect();
+    const s = FakeWebSocket.last;
+    s.open();
+    // Not yet authenticated: an error must NOT schedule a channel retry.
+    client.subscribe('project:p1');
+    const pendingBefore = sched.pending.length;
+    s.message({ op: 'error', code: 'unauthorized', message: 'no auth', channel: 'project:p1' });
+    // Only the reconnect path runs; no channel-retry tick with ~1s delay added.
+    const retry = sched.pending
+      .slice(pendingBefore)
+      .find((t) => t.ms >= 800 && t.ms <= 1300);
+    expect(retry).toBeUndefined();
+  });
+
+  it('emits subscribe-change and clears retry on ack / unsubscribe', () => {
+    const { client, socket } = connectClient();
+    const changes: Array<readonly string[]> = [];
+    client.onSubscribeChange((chs) => changes.push([...chs]));
+    client.subscribe('project:p1');
+    expect(changes.at(-1)).toEqual(['project:p1']);
+    expect(client.getSubscribedChannels()).toEqual(['project:p1']);
+    // Trigger a retry, then ack clears the attempt counter.
+    socket.message({ op: 'error', code: 'forbidden', message: 'nope', channel: 'project:p1' });
+    socket.message({ op: 'subscribed', channel: 'project:p1', last_seq: 0 });
+    // Unsubscribe emits a change with the channel removed.
+    client.unsubscribe('project:p1');
+    expect(changes.at(-1)).toEqual([]);
+    expect(client.getSubscribedChannels()).toEqual([]);
+  });
+});
