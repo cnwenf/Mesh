@@ -95,6 +95,16 @@ function errorEnvelope(code, message, details) {
   return { error: { code, message, ...(details ? { details } : {}) } };
 }
 
+/** auth §3.1 会话凭证:access 带 mesh-dev: 前缀(与鉴权端点/WS 首帧一致) */
+function sessionTokens(refreshToken) {
+  return {
+    access_token: DEV_TOKEN_PREFIX + 'ws-1',
+    token_type: 'Bearer',
+    expires_in: 900,
+    refresh_token: refreshToken,
+  };
+}
+
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -173,6 +183,88 @@ async function handleRequest(req, res, url) {
 
   if (path === '/healthz') {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // ---- auth REST(auth.md §3.1 / §4.1 e2e 冒烟:真实账号登录 / MFA / OAuth 往返)----
+  // 会话凭证统一签 mesh-dev: 前缀,与其余鉴权端点/WS 首帧鉴权一致。
+  if (path === '/api/v1/auth/login' && req.method === 'POST') {
+    const body = await readBody(req);
+    const email = String(body?.email ?? '');
+    if (email === 'mfa@corp.com') {
+      sendJson(res, 200, envelope({ mfa_required: true, mfa_ticket: 'mfa-ticket-1' }));
+      return;
+    }
+    if (email === 'locked@corp.com') {
+      sendJson(res, 423, errorEnvelope('account_locked', 'too many failed attempts'));
+      return;
+    }
+    sendJson(res, 200, envelope(sessionTokens('rt-login')));
+    return;
+  }
+
+  if (path === '/api/v1/auth/register' && req.method === 'POST') {
+    const body = await readBody(req);
+    sendJson(
+      res,
+      201,
+      envelope({
+        id: 'u-e2e',
+        email: String(body?.email ?? 'new@corp.com'),
+        email_verified: false,
+        display_name: String(body?.display_name ?? 'New User'),
+        avatar_url: null,
+        status: 'active',
+        timezone: 'UTC',
+        settings: {},
+        mfa_enabled: false,
+        last_login_at: null,
+        created_at: new Date().toISOString(),
+      }),
+    );
+    return;
+  }
+
+  if (path === '/api/v1/auth/mfa/verify' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (body?.code === '123456') {
+      sendJson(res, 200, envelope(sessionTokens('rt-mfa')));
+      return;
+    }
+    sendJson(res, 422, errorEnvelope('invalid_credentials', 'invalid MFA code'));
+    return;
+  }
+
+  // OAuth 登录往返(§4.5 step 5;mock 提供商即刻"授权"回跳前端回调路由)。
+  const oauthStartMatch = /^\/api\/v1\/auth\/oauth\/([^/]+)\/start$/.exec(path);
+  if (oauthStartMatch !== null && req.method === 'GET') {
+    const redirectUri = url.searchParams.get('redirect_uri');
+    if (!redirectUri) {
+      sendJson(
+        res,
+        400,
+        errorEnvelope('validation_error', 'redirect_uri is required', { field: 'redirect_uri' }),
+      );
+      return;
+    }
+    const sep = redirectUri.includes('?') ? '&' : '?';
+    res.writeHead(302, {
+      Location: `${redirectUri}${sep}code=mockcode&state=mockstate`,
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end();
+    return;
+  }
+
+  const oauthCallbackMatch = /^\/api\/v1\/auth\/oauth\/([^/]+)\/callback$/.exec(path);
+  if (oauthCallbackMatch !== null && req.method === 'GET') {
+    const code = url.searchParams.get('code');
+    const callbackState = url.searchParams.get('state');
+    if (!code || callbackState !== 'mockstate') {
+      sendJson(res, 400, errorEnvelope('invalid_oauth_state', 'invalid or expired OAuth state'));
+      return;
+    }
+    sendJson(res, 200, envelope(sessionTokens('rt-oauth')));
     return;
   }
 
