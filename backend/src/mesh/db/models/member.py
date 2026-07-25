@@ -99,7 +99,7 @@ class MemberProjectAccess(Base):
 
     The hook the project module consults to decide whether a guest may see a
     project. The ``project_id`` composite FK to ``projects(workspace_id, id)``
-    is added by the project.md increment once the projects table exists.
+    (ON DELETE CASCADE) was added by the project.md increment.
     """
 
     __tablename__ = "member_project_access"
@@ -113,7 +113,6 @@ class MemberProjectAccess(Base):
         nullable=False,
     )
     member_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    # Deferred composite FK → projects(workspace_id, id) (project.md increment).
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     permission: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'read'"))
     created_at: Mapped[datetime] = mapped_column(
@@ -136,5 +135,11 @@ class MemberProjectAccess(Base):
             ("members.workspace_id", "members.id"),
             ondelete="CASCADE",
             name="member_access_member_id_members",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "project_id"),
+            ("projects.workspace_id", "projects.id"),
+            ondelete="CASCADE",
+            name="member_access_project_id_projects",
         ),
     )

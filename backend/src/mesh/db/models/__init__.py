@@ -4,6 +4,14 @@ from mesh.db.models.api_token import ApiToken
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.project import (
+    Cycle,
+    Milestone,
+    Project,
+    ProjectMember,
+    ProjectTemplate,
+    ProjectUpdate,
+)
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
 from mesh.db.models.user import (
     EmailVerificationToken,
@@ -24,14 +32,20 @@ from mesh.db.models.workspace import (
 __all__ = [
     "ApiToken",
     "AuditLog",
+    "Cycle",
     "EmailVerificationToken",
     "IdentifierPrefixRegistry",
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",
+    "Milestone",
     "OAuthIdentity",
     "OutboxEvent",
     "PasswordResetToken",
+    "Project",
+    "ProjectMember",
+    "ProjectTemplate",
+    "ProjectUpdate",
     "RealtimeChannel",
     "RealtimeEvent",
     "Session",

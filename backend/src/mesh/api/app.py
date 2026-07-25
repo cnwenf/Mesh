@@ -40,6 +40,9 @@ from mesh.errors import (
 )
 from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
+from mesh.project.channels import make_project_channel_checker
+from mesh.project.routes import router as project_router
+from mesh.project.service import ProjectService
 from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
@@ -117,6 +120,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.invitation_service = InvitationService(session_factory)
     app.state.member_service = MemberService(session_factory)
     app.state.token_service = TokenService(session_factory)
+    app.state.project_service = ProjectService(session_factory)
+    # Resource-level subscription authorization for project:{id} channels
+    # (README §6.7): visibility re-checked on every subscribe.
+    app.state.authorizer.register_prefix_checker(
+        "project", make_project_channel_checker(session_factory)
+    )
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -126,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(workspace_router)
     app.include_router(member_router)
     app.include_router(token_router)
+    app.include_router(project_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

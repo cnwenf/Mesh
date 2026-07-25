@@ -329,9 +329,18 @@ async def test_physical_delete_behavior(session_factory):
                 action="member.role_changed", resource_type="member", resource_id=guest_id,
             )
         )
+        project_id = (
+            await session.execute(
+                text(
+                    "INSERT INTO projects (workspace_id, name, key) "
+                    "VALUES (:ws, 'Del', :k) RETURNING id"
+                ),
+                {"ws": ws_id, "k": f"DL{uuid.uuid4().hex[:4].upper()}"},
+            )
+        ).scalar_one()
         session.add(
             MemberProjectAccess(
-                workspace_id=ws_id, member_id=guest_id, project_id=uuid.uuid4(),
+                workspace_id=ws_id, member_id=guest_id, project_id=project_id,
                 permission="read",
             )
         )
@@ -360,7 +369,13 @@ async def test_guest_project_access_and_users_me(api_client, session_factory):
     owner = await _register_and_login(api_client, "ro-pa@corp.com")
     ws = await _create_workspace(api_client, owner, "ro-pa")
     guest_id, _guest = await _invite_accept(api_client, owner, ws["id"], "ro-pa-g@corp.com", role="guest")
-    project_id = str(uuid.uuid4())
+    created = await api_client.post(
+        f"/api/v1/workspaces/{ws['id']}/projects",
+        json={"name": "Shared", "key": "ROPA"},
+        headers=_auth(owner),
+    )
+    assert created.status_code == 201, created.text
+    project_id = created.json()["data"]["id"]
 
     granted = await api_client.post(
         f"/api/v1/workspaces/{ws['id']}/members/{guest_id}/project-access",
