@@ -24,11 +24,23 @@ from tests.conftest import get_test_database_url, get_test_redis_url
 
 SERVER_READY_TIMEOUT_SECONDS = 30.0
 
+# Restricted app role created by migration 0002 (M1). The api/gateway servers
+# connect as this non-owner role so PostgreSQL RLS is enforced on the app path.
+APP_ROLE = "mesh_app"
+
 
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _app_role_url(db_url: str) -> str:
+    """Restricted-role URL mirroring compose's MESH_APP_DATABASE_URL (M1)."""
+    password = os.environ.get("MESH_APP_DB_PASSWORD", "mesh_app")
+    without_scheme = db_url.split("://", 1)[1]
+    host_and_db = without_scheme.split("@", 1)[1]
+    return f"postgresql+asyncpg://{APP_ROLE}:{password}@{host_and_db}"
 
 
 @dataclass
@@ -43,6 +55,7 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     env["MESH_DATABASE_URL"] = get_test_database_url()
     env["MESH_REDIS_URL"] = get_test_redis_url()
     env["MESH_AUTH_MODE"] = "dev"
+    env["MESH_APP_DATABASE_URL"] = _app_role_url(get_test_database_url())
     return subprocess.Popen(
         [
             sys.executable,
