@@ -362,7 +362,7 @@ describe('ProjectsPage', () => {
 
   it('Load more 失败时提示错误 toast', async () => {
     const user = userEvent.setup();
-    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const impl = (async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/users/me')) {
         return fakeResponse({ body: { data: ME } });
