@@ -60,7 +60,7 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
         ) : null}
         {project.target_date !== null ? (
           <span className="mesh-projects__card-date" data-testid={`project-date-${project.id}`}>
-            {t('projects.card.due', { date: project.target_date })}
+            {t('projects.card.due', { date: new Date(project.target_date) })}
           </span>
         ) : null}
       </div>
