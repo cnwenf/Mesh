@@ -22,10 +22,10 @@ project 项目模块(MES-30,阶段 4·核心工作与协作首个模块):project
 
 ### Quality
 
-- 后端单测(服务层直调 + 进程内 API)+ 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验)全绿;pytest-cov **94.57%**(≥90% 门禁;project 模块 schemas 100%、routes 98%、channels 97%、service 91%,整体与新增代码双达标);ruff 全绿。
+- 后端单测(服务层直调 + 进程内 API)+ 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验)全绿;pytest-cov **95.27%**(≥90% 门禁;project 模块 schemas 100%、routes 98%、channels 97%、service 91%,整体与新增代码双达标);ruff 全绿。
 - README §9 集成测试实测:**T1** 跨租户复合 FK(milestones/cycles/lead)INSERT 被数据库拒绝 + 跨工作区 API 同一 404;**T18** 真实 DELETE 语义(lead_member_id 列级 SET NULL 且 workspace_id 保持非空、物理删项目注册行 project_id 列级置空前缀保留、子表 CASCADE、留痕作者 RESTRICT);**T19** 前缀注册表排他(项目 key 撞 inbox/retired 前缀拒绝、软删除/归档后前缀不可复用)。`schema_r2_validation.sql` 100 项断言在 PostgreSQL 16 实跑全绿。
 - docker compose Quick Start 实机验证:`alembic upgrade head` 应用 0006,注册/登录 → 建区 → 建项目 → 409 冲突 → 归档只读 422 全链路通过,`project.created` 经 outbox → projector 投影至双频道(seq 单调)。
-- 前端质量 FRONTEND_QUALITY_PLACEHOLDER。
+- 前端 909 项单测/组件测试全绿,覆盖率 语句 97.31% / 分支 90.34% / 函数 93.43%(门禁 ≥90%),变更行 96.7%(verify-coverage ≥90%);typecheck / lint / 生产构建全绿;Playwright e2e 23/23 全绿;真实后端(v0.10.0 compose 栈,`--disable-web-security` 联调)以真实浏览器走查注册/登录→建区→项目 CRUD / 健康度留痕回写 / 更新动态 / 里程碑逾期 / 设置 If-Match 乐观并发 / 归档只读 422 / 周期 auto_roll 顺延 / T19 前缀冲突 409 全链路通过(截图存证);zh-CN 目录补齐 129 键,键集与 en 完全一致。
 - 文档门 `check_event_vocab.py`(§6.7,事件零漂移)与 `check_roster_entry.py`(§6.12/T35)继续全绿。
 
 ## [0.9.1] - 2026-07-25
@@ -61,6 +61,10 @@ auth 增量 2 第二切片(MES-12):OAuth 提供商往返(auth.md §1.2 A5/A6)、
 ### Fixed
 
 - `backend/README.md` 事件词汇计数 96→97(随 `session.revoked` 登记,验收时一并修正)。
+=======
+- 前端 909 项单测/组件测试全绿,覆盖率语句 97.31% / 分支 90.34% / 函数 93.43%(门禁 ≥90%),变更行覆盖率 96.7%(verify-coverage 门禁 ≥90%);typecheck / lint / 生产构建全绿;Playwright e2e 23/23 全绿;真实后端(v0.9.0 compose 栈,`--disable-web-security` 联调)以真实浏览器走查注册/登录→建区→项目 CRUD / 健康度留痕回写 / 更新动态 / 里程碑逾期 / 设置 If-Match 乐观并发 / 归档只读 422 / 周期 auto_roll 顺延 / T19 前缀冲突 409 全链路通过(附截图存证);zh-CN 目录补齐 129 键,键集与 en 完全一致。
+- 文档门 `check_event_vocab.py`(§6.7,96 事件零漂移)与 `check_roster_entry.py`(§6.12/T35)继续全绿。
+>>>>>>> 66da23d (docs: CHANGELOG v0.9.0 收尾——补齐 project 模块前端质量与实机验收数据(MES-30))
 
 ## [0.8.0] - 2026-07-25
 
