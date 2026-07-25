@@ -19,6 +19,7 @@ Layering inside `src/mesh/`:
 - `auth/` — authentication & authorization core (`docs/specs/features/auth.md`): argon2id password hashing, register/login/logout, short-lived access JWT (fixed `alg`, rejects `none`/HS-RS confusion) + revocable refresh (SHA-256 hash only, rotation with replay detection), single-use reset/verification tokens, TOTP MFA (encrypted secret + one-time backup codes), `(IP, email)` login lockout, Redis sliding-window rate limiting, `users.settings`/`timezone` preferences (`PATCH /api/v1/users/me`), PAT / agent access tokens (`api_tokens`: hash-only, `role_override` double-validated against the holder role, scope∩role least privilege, agent `agent:trigger` default-deny), vendor-neutral OAuth login/bind (`oauth.py`: authorization-code + PKCE, mock provider in dev), session/token-revocation realtime broadcast (`realtime.py`: `session.revoked` via outbox), transactional email (`mailer.py`: Redis dev-mailbox / SMTP), and the append-only audit query with `before`/`after` time-range.
 - `db/` — SQLAlchemy 2.x models, Alembic migrations, multi-tenant infrastructure (§6.2: `UNIQUE(workspace_id, id)` + composite-FK templates, RLS GUC `mesh.workspace_id`, global-table exemption list).
 - `events/vocab.py` — canonical realtime event vocabulary (§6.7, kept in sync with the README registry by tests + CI).
+- `project/` — project module (`docs/specs/features/project.md`): project CRUD + archive/restore + soft delete, health/status trail with writeback, milestones (derived overdue), cycles (auto-roll), project members + private visibility, project templates + instantiation (§3.2b); same-transaction prefix-registry occupation with permanent reservation (README §6.3), workspace-less paths resolved through narrow SECURITY DEFINER lookups, `project:{id}` channel resource-level subscription checker.
 - `outbox/` — transactional outbox (§6.6): `emit_event`/`emit_realtime` write in the business transaction; the relay claims `FOR UPDATE SKIP LOCKED`; the projector is the ONLY writer of `realtime_events` and allocates per-channel `seq` in the same transaction.
 - `realtime/` — gateway protocol, channel auth hooks, Redis fan-out (Redis is fan-out only; replay truth is in `realtime_events`).
 - `validation.py` — shared validators (IANA timezone, supported locale/theme, https-only user-controlled URLs; auth-canonical 422 codes, §6.16/§6.18).
@@ -73,6 +74,23 @@ production — see `auth/mailer.py`).
 | POST | `/api/v1/invitations/accept` | logged-in; atomic + idempotent |
 | GET | `/api/v1/invitations/preview` | public, limited fields |
 | PATCH | `/api/v1/workspaces/{ws}/members/{id}` | admin; role change (last-owner / agent-owner guards, audited) |
+
+## Project endpoints (`docs/specs/features/project.md`)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| POST / GET | `/api/v1/workspaces/{ws}/projects` | create (key registered in prefix registry same-txn; 409 `project_key_taken` / `project_name_taken`) / list (status/visibility/archived/mine/lead filters, keyset cursor) |
+| GET / PATCH / DELETE | `/api/v1/projects/{id}` | detail (progress + milestones) / update (`If-Match` optimistic concurrency → 409 `conflict`; tri-state fields) / soft delete (prefix stays reserved) |
+| POST | `/api/v1/projects/{id}/archive` · `/unarchive` | lead/admin; archived projects are read-only (writes → 422 `project_archived`) |
+| POST / GET | `/api/v1/projects/{id}/updates` | health/status trail (writes back to project; `project_update.added` event) / history |
+| GET / POST | `/api/v1/projects/{id}/milestones` | list (overdue derived: `open` + past target) / create |
+| PATCH / DELETE | `/api/v1/milestones/{id}` | update (title/description/target_date/state) / delete |
+| GET / POST | `/api/v1/workspaces/{ws}/cycles` | list (state/project filters) / create (`ends_at >= starts_at`) |
+| PATCH | `/api/v1/cycles/{id}` | update incl. state transitions; completing an `auto_roll` cycle creates the next one (returned as `next_cycle`) |
+| POST / GET | `/api/v1/projects/{id}/members` · PATCH / DELETE `/members/{member_id}` | project membership (lead/member/viewer), lead/admin managed |
+| GET / POST | `/api/v1/workspaces/{ws}/project-templates` · PATCH / DELETE `/api/v1/project-templates/{id}` · POST `/instantiate` | templates (§3.2b): CRUD + instantiate (key registry-checked; prefill for not-yet-built modules degrades into `skipped`) |
+
+Writes are rate limited per principal+IP (120/min). Private-project realtime events only hit the `project:{id}` channel; public ones additionally hit `workspace:{ws}:projects` (§6.7).
 
 ## Security notes
 

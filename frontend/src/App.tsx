@@ -21,6 +21,10 @@ import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
 import { MembersPage } from './features/members/MembersPage';
+import { CyclesPage } from './features/projects/CyclesPage';
+import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
+import { ProjectsPage } from './features/projects/ProjectsPage';
+import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
@@ -95,9 +99,12 @@ function ShellProviders(): React.JSX.Element {
                 {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
                 <Route path="invite/:token" element={<InviteAcceptPage />} />
                 <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
-                <Route path="projects" element={<PlaceholderPage kind="projects" />} />
+                <Route path="projects" element={<ProjectsPage />} />
+                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+                <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
                 <Route path="board" element={<PlaceholderPage kind="board" />} />
                 <Route path="members" element={<MembersPage />} />
+                <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
                 <Route path="automation" element={<PlaceholderPage kind="automation" />} />
               </Route>
