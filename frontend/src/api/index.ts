@@ -85,18 +85,49 @@ export type {
   MemberType,
 } from './members';
 export {
+  ERROR_ACCOUNT_LOCKED,
   ERROR_INVALID_CREDENTIALS,
   ERROR_WEAK_PASSWORD,
   fetchMe,
+  forgotPassword,
   isSessionTokens,
+  listSessions,
   login,
+  logout,
+  logoutAll,
+  mfaDisable,
+  mfaEnable,
+  mfaSetup,
+  mfaVerify,
+  refresh,
   register,
+  resetPassword,
+  revokeSession,
+  verifyEmail,
 } from './auth';
 export type {
   CurrentUser,
   LoginInput,
   LoginResult,
   MfaChallenge,
+  MfaSetupInfo,
   RegisterInput,
+  SessionInfo,
   SessionTokens,
 } from './auth';
+export { createToken, listTokens, revokeToken, tokenWhoami } from './tokens';
+export type { ApiTokenInfo, CreateTokenInput, CreatedApiToken, TokenPrincipal } from './tokens';
+export {
+  ERROR_INVALID_OAUTH_STATE,
+  ERROR_REDIRECT_NOT_ALLOWED,
+  OAUTH_NEXT_STORAGE_KEY,
+  listIdentities,
+  oauthBindUrl,
+  oauthCallbackLogin,
+  oauthLoginUrl,
+  oauthRedirectUri,
+  unbindIdentity,
+} from './oauth';
+export type { OAuthIdentity } from './oauth';
+export { listAuditLogs } from './audit';
+export type { AuditLogEntry, AuditLogQuery } from './audit';

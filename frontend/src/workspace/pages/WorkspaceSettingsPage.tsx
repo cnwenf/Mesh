@@ -9,9 +9,11 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MeshApiError, errorToI18nKey } from '../../api/errors';
+import { getApiClient } from '../../api/instance';
 import type { WorkspacePatch } from '../../api/workspace';
 import { Button, Input, Select } from '../../design';
 import { useToast } from '../../design';
+import { ApiTokensSettings, AuditSettings } from '../../features/auth';
 import { SUPPORTED_LOCALES, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
 import { DangerZone } from '../DangerZone';
@@ -75,6 +77,9 @@ function SettingsSections(): React.JSX.Element {
         <h2>{t('roles.sectionTitle')}</h2>
         <RolesMatrix workspaceId={workspace.id} />
       </section>
+      {/* auth.md §4.3 API Tokens(明文仅一次)与 §4.4 审计(admin+) */}
+      <ApiTokensSettings client={getApiClient()} workspaceId={workspace.id} />
+      <AuditSettings client={getApiClient()} workspaceId={workspace.id} />
       {isOwner ? (
         <section aria-label={t('danger.sectionTitle')}>
           <DangerZone workspaceId={workspace.id} workspaceSlug={workspace.slug} />
