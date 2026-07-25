@@ -6,6 +6,17 @@
 #   gateway   — realtime WebSocket gateway (independent process)
 #   frontend  — static placeholder page + /api and /ws reverse proxy
 #
+# SECURITY — LOCAL DEVELOPMENT ONLY (M2):
+#   * Published ports bind 127.0.0.1 by default — the stack is reachable from
+#     this machine only, never the network. Exposing it requires an explicit,
+#     deliberate edit below (a .env value alone cannot change the bind address).
+#   * MESH_AUTH_MODE defaults to "dev" (any mesh-dev:<workspace-id> token grants
+#     that workspace). That is safe ONLY because the ports are loopback-bound.
+#     For ANY non-local use you MUST set MESH_AUTH_MODE=production explicitly.
+#   * The API/gateway connect as the restricted non-owner role mesh_app so
+#     PostgreSQL RLS is enforced on the app path (M1, README §6.2 rule 5); the
+#     worker keeps the owner role for cross-tenant relay/projector/retention.
+#
 # Local development values only — every secret is an environment variable;
 # supply real values via .env (see .env.example) for anything beyond local dev.
 name: mesh
@@ -39,11 +50,17 @@ services:
       sh -c "alembic upgrade head &&
              uvicorn mesh.api.app:create_app --factory --host 0.0.0.0 --port 8000"
     environment:
+      # Owner role: runs migrations (alembic upgrade head) and is available to
+      # the app as a fallback; the app itself connects via MESH_APP_DATABASE_URL.
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      # Restricted non-owner role the API app connects as → RLS applies (M1).
+      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      # Read by migration 0002 to create/alter the mesh_app login role.
+      MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
       MESH_REDIS_URL: redis://redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
     ports:
-      - "${MESH_API_PORT:-8000}:8000"
+      - "127.0.0.1:${MESH_API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,10 +85,12 @@ services:
     command: uvicorn mesh.realtime.app:create_app --factory --host 0.0.0.0 --port 8081
     environment:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      # Restricted non-owner role the gateway app connects as → RLS applies (M1).
+      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       MESH_REDIS_URL: redis://redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
     ports:
-      - "${MESH_WS_PORT:-8081}:8081"
+      - "127.0.0.1:${MESH_WS_PORT:-8081}:8081"
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,7 +103,7 @@ services:
       - ./frontend/placeholder:/usr/share/nginx/html:ro
       - ./frontend/placeholder/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "${MESH_FRONTEND_PORT:-3001}:80"
+      - "127.0.0.1:${MESH_FRONTEND_PORT:-3001}:80"
     depends_on:
       - api
       - gateway

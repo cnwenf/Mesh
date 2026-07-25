@@ -34,7 +34,7 @@ Layering inside `src/mesh/`:
 
 - **Secrets are env-only** (`MESH_*`); startup validates required values and fails fast.
 - **Auth mode defaults to `production`** (fail-safe). `MESH_AUTH_MODE=dev` enables the development token authenticator (`mesh-dev:<workspace-uuid>` grants access to that workspace) — docker compose sets it for local development only.
-- **RLS is defense-in-depth** (§6.2 rule 5): policies are installed on `realtime_channels`/`realtime_events` using the `mesh.workspace_id` GUC (set via `mesh.db.tenant.set_tenant_context`). PostgreSQL bypasses RLS for table owners, so production deployments must connect with a non-owner database role; the auth/API module wires the per-request GUC as tenant-scoped endpoints land. Composite FKs remain the primary tenant guard.
+- **RLS is defense-in-depth** (§6.2 rule 5): policies are installed on `realtime_channels`/`realtime_events` using the `mesh.workspace_id` GUC (set via `mesh.db.tenant.set_tenant_context`). PostgreSQL bypasses RLS for table owners (and superusers), so the **API and realtime gateway connect as the restricted, non-owner role `mesh_app`** (created by migration `0002`), which makes RLS enforce on the app path; the app sets the tenant GUC at the start of every tenant-scoped request (channel authorization, replay, reconciliation). The **worker keeps the owner role** for the inherently cross-tenant relay / projector / retention loops. `MESH_APP_DATABASE_URL` carries the restricted-role URL (falls back to `MESH_DATABASE_URL` when unset); the `mesh_app` password is `MESH_APP_DB_PASSWORD`. Composite FKs remain the primary tenant guard.
 
 ## Local development
 
