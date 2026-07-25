@@ -310,8 +310,8 @@ async def test_gateway_private_project_subscribe_forbidden_for_non_member(
     from sqlalchemy import select
 
     from mesh.db.models.member import Member
-    from mesh.project.service import ProjectService
     from mesh.project.schemas import AddProjectMemberRequest, CreateProjectRequest
+    from mesh.project.service import ProjectService
 
     owner_token = await _register_and_login(api_client, "gw-owner@corp.com")
     ws = (
