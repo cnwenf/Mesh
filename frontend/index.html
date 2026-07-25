@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mesh</title>
+    <script>
+      // 防主题闪烁(FOUC):首帧前同步解析主题偏好并落到 <html data-theme>。
+      // 偏好真源为 localStorage['mesh.settings.v1'](zustand persist),镜像键 mesh.theme 仅存 'light|dark|system'。
+      (function () {
+        var theme = 'system';
+        try {
+          var mirror = localStorage.getItem('mesh.theme');
+          if (mirror === 'light' || mirror === 'dark' || mirror === 'system') theme = mirror;
+        } catch (_e) {
+          /* 存储不可用时回退 system */
+        }
+        var resolved = theme;
+        if (theme === 'system') {
+          resolved =
+            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', resolved);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
