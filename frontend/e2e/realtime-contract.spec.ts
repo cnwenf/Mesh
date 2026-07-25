@@ -206,6 +206,12 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
 
     // 恢复 → resume_from 过旧 → 服务端下发 resync_required →
     // UI 显示「正在重新同步」→ REST 对账 → 恢复 connected
+    // 延迟对账请求,使「正在重新同步」横幅可被稳定断言(否则 localhost 对账
+    // 亚帧完成,resyncing 态一闪而过,toBeVisible 轮询会漏 —— 时序竞态)。
+    await page.route('**/api/v1/realtime/events**', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue();
+    });
     await page.context().setOffline(false);
     await expect(page.getByTestId('status-banner-resyncing')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 20_000 });
