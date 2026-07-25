@@ -9,8 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, Index, String, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy import BigInteger, CheckConstraint, Index, text
+from sqlalchemy.dialects.postgresql import JSONB, TEXT, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mesh.db.base import Base
@@ -28,10 +28,10 @@ class Workspace(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    name: Mapped[str] = mapped_column(String)
-    slug: Mapped[str] = mapped_column(String)
-    logo_url: Mapped[str | None] = mapped_column(String, default=None)
-    timezone: Mapped[str] = mapped_column(String, server_default=text("'UTC'"))
+    name: Mapped[str] = mapped_column(TEXT)
+    slug: Mapped[str] = mapped_column(TEXT)
+    logo_url: Mapped[str | None] = mapped_column(TEXT, default=None)
+    timezone: Mapped[str] = mapped_column(TEXT, server_default=text("'UTC'"))
     settings: Mapped[dict] = mapped_column(
         JSONB, server_default=text(f"'{DEFAULT_WORKSPACE_SETTINGS}'")
     )

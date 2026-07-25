@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, text
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, text
+from sqlalchemy.dialects.postgresql import JSONB, TEXT, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mesh.db.base import Base
@@ -33,12 +33,12 @@ class OutboxEvent(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False
     )
-    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    event_type: Mapped[str] = mapped_column(TEXT, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # Processor de-duplication key (§6.5). NULL never conflicts.
-    idempotency_key: Mapped[str | None] = mapped_column(String, unique=True, default=None)
+    idempotency_key: Mapped[str | None] = mapped_column(TEXT, unique=True, default=None)
     status: Mapped[str] = mapped_column(
-        String, nullable=False, server_default=text(f"'{OUTBOX_STATUS_PENDING}'")
+        TEXT, nullable=False, server_default=text(f"'{OUTBOX_STATUS_PENDING}'")
     )
     delivery_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")

@@ -129,6 +129,19 @@ async def test_bad_token_rejected(session_factory):
     assert transport.closed
 
 
+async def test_undecodable_first_frame_is_auth_failed_not_timeout(session_factory):
+    class GarbageTransport(FakeTransport):
+        async def receive_json(self):
+            raise ValueError("invalid json")
+
+    transport = GarbageTransport([])
+    await _session(transport, session_factory).run()
+    assert transport.sent[0]["op"] == FRAME_ERROR
+    assert transport.sent[0]["code"] == "unauthorized"
+    assert transport.sent[0]["message"] == "authentication failed"
+    assert transport.closed
+
+
 async def test_auth_ok_then_subscribe_replays_from_resume(session_factory, workspace_factory):
     workspace = await workspace_factory()
     await _seed_events(session_factory, workspace.id, "issue:play", 3)
