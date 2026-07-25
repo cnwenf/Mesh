@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { RealtimeFrame } from '../../types/realtime';
+import type { RealtimeEventFrame } from '../../types/realtime';
 import { mergeEntityFrame } from '../merge';
 import type { MergeContext } from '../merge';
 
 interface Entity {
   id: string;
   updated_at?: string;
+  version?: number;
   title?: string;
   status?: string;
 }
 
-function frame(type: string, data: Record<string, unknown>): RealtimeFrame {
-  return { seq: 1, type, topic: 'view:1', ts: '2026-07-25T00:00:00Z', data };
+/** 构造后端 v0.1.0 形态的数据帧 {op:'event', channel, seq, event, payload} */
+function frame(event: string, payload: Record<string, unknown>): RealtimeEventFrame {
+  return { op: 'event', channel: 'view:1', seq: 1, event, payload };
 }
 
 const alwaysBelongs: MergeContext<Entity> = { belongs: () => true };
@@ -167,5 +169,29 @@ describe('mergeEntityFrame', () => {
       neverBelongs,
     );
     expect(result).toBe(initial);
+  });
+  it('version 兜底防回退:无 updated_at 时按 version 比较(§6.14 替代关系)', () => {
+    const initial = new Map<string, Entity>([['a', { id: 'a', version: 5, status: 'done' }]]);
+    const stale = mergeEntityFrame<Entity>(
+      initial,
+      frame('issue.updated', { id: 'a', version: 3, status: 'todo' }),
+      alwaysBelongs,
+    );
+    expect(stale).toBe(initial);
+    const fresh = mergeEntityFrame<Entity>(
+      initial,
+      frame('issue.updated', { id: 'a', version: 6, status: 'todo' }),
+      alwaysBelongs,
+    );
+    expect(fresh.get('a')?.status).toBe('todo');
+    expect(fresh.get('a')?.version).toBe(6);
+  });
+
+  it('payload 以浅拷贝存入:本地状态不与帧对象共享引用(不可变纯粹性)', () => {
+    const payload = { id: 'a', title: 'hello' };
+    const result = mergeEntityFrame<Entity>(new Map(), frame('issue.created', payload), alwaysBelongs);
+    const stored = result.get('a');
+    expect(stored).toEqual({ id: 'a', title: 'hello' });
+    expect(stored).not.toBe(payload); // 不同引用
   });
 });

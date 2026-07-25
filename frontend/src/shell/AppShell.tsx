@@ -8,15 +8,16 @@
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
-import { createContext, useCallback, useContext, useEffect, useMemo } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { MeshApiError, getToken } from '../api';
 import { env } from '../env';
 import { useT } from '../i18n';
-import { useRealtime } from '../realtime';
+import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
 import { useAuthStore } from '../state/authStore';
+import type { RealtimeEventFrame } from '../types/realtime';
 import { registerShellShortcuts } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
 import { StatusBanner } from './StatusBanner';
@@ -59,20 +60,118 @@ export function OverlayControlsProvider(props: OverlayControlsProviderProps): Re
   );
 }
 
+/** 频道事件 REST 拉取(§6.7 对账端点同形):带 Bearer、按 next_cursor 翻页,聚合为事件帧 */
+export async function fetchRestEvents(
+  url: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<RealtimeEventFrame[]> {
+  const token = getToken();
+  const frames: RealtimeEventFrame[] = [];
+  let cursor: string | null = null;
+  let pageUrl = url;
+  do {
+    const response = await fetchImpl(pageUrl, {
+      headers: token !== null ? { Authorization: 'Bearer ' + token } : {},
+    });
+    if (!response.ok) {
+      throw new MeshApiError({
+        status: response.status,
+        code: 'internal_error',
+        message: 'HTTP ' + String(response.status),
+      });
+    }
+    const body = (await response.json()) as {
+      data: Array<{ channel: string; seq: number; event: string; payload: Record<string, unknown> }>;
+      next_cursor: string | null;
+    };
+    for (const item of body.data) {
+      frames.push({
+        op: 'event',
+        channel: item.channel,
+        seq: item.seq,
+        event: item.event,
+        payload: item.payload,
+      });
+    }
+    cursor = body.next_cursor;
+    if (cursor !== null) {
+      pageUrl = url + (url.includes('?') ? '&' : '?') + 'cursor=' + encodeURIComponent(cursor);
+    }
+  } while (cursor !== null);
+  return frames;
+}
+
 /**
- * resync REST 对账:整拉 rest URL;非 2xx 抛 MeshApiError(客户端退避重试)。
+ * resync REST 对账器工厂:整拉 rest URL 的事件并经 client.ingestReconciledEvent
+ * 注入(与实时帧同路径:游标守卫 + 派发);非 2xx 抛错由客户端退避重试。
  * 导出以供单测直接驱动(真实 resync 经 WS 触发,属 e2e 覆盖)。
  */
-export async function reconcile(req: ResyncRequest): Promise<void> {
-  const response = await fetch(env.apiBaseUrl + req.rest);
-  if (!response.ok) {
-    throw new MeshApiError({
-      status: response.status,
-      code: 'internal_error',
-      message: 'HTTP ' + String(response.status),
+export function createReconciler(
+  client: RealtimeClient,
+  fetchImpl: typeof fetch = fetch,
+): (req: ResyncRequest) => Promise<void> {
+  return async (req: ResyncRequest): Promise<void> => {
+    const frames = await fetchRestEvents(env.apiBaseUrl + req.rest, fetchImpl);
+    for (const frame of frames) {
+      client.ingestReconciledEvent(frame);
+    }
+  };
+}
+
+/** 频道事件拉取 URL(对账/轮询共用) */
+export function channelEventsUrl(channel: string, since: number): string {
+  return (
+    env.apiBaseUrl +
+    '/api/v1/realtime/events?channel=' +
+    encodeURIComponent(channel) +
+    '&since=' +
+    String(since)
+  );
+}
+
+export interface OfflinePollingOptions {
+  client: Pick<RealtimeClient, 'getCursor' | 'ingestReconciledEvent'>;
+  state: ConnectionState;
+  /** 有 token 才轮询(对账端点需 Bearer 鉴权) */
+  enabled: boolean;
+  channel: string;
+  intervalMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * §3.2 离线降级轮询机制编排:WS 处于 reconnecting/resyncing/offline(非 idle)
+ * 时启动 PollingFallback,按频道 seq 水位轮询 REST 对账端点,帧经
+ * client.ingestReconciledEvent 与实时帧同路径合并(游标守卫天然去重);
+ * 恢复 connected/idle 后自动停止。
+ */
+export function useOfflinePolling(opts: OfflinePollingOptions): void {
+  const { client, state, enabled, channel } = opts;
+  const intervalMs = opts.intervalMs ?? env.pollingIntervalMs;
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  useEffect(() => {
+    if (!enabled) return;
+    if (state === 'connected' || state === 'idle') return;
+    const fallback = new PollingFallback({
+      source: {
+        fetch: async (ch: string, since: number) => ({
+          frames: await fetchRestEvents(channelEventsUrl(ch, since), fetchImpl),
+        }),
+      },
+      intervalMs,
     });
-  }
-  await response.text();
+    const cursor = client.getCursor(channel);
+    if (cursor !== undefined) fallback.seedSince(channel, cursor);
+    const offFrame = fallback.onFrame((frame) => {
+      client.ingestReconciledEvent(frame);
+    });
+    fallback.subscribe(channel);
+    fallback.start();
+    return () => {
+      offFrame();
+      fallback.stop();
+    };
+  }, [state, enabled, client, channel, intervalMs, fetchImpl]);
 }
 
 export function AppShell(): React.JSX.Element {
@@ -80,11 +179,28 @@ export function AppShell(): React.JSX.Element {
   const t = useT();
   const hasToken = useAuthStore((state) => state.token !== null);
 
+  // reconciler 依赖 client 实例,而 useRealtime 的 options 在首渲染定型:
+  // 以稳定包装函数 + ref 延迟委派到绑定真实 client 的实现。
+  const reconcilerRef = useRef<((req: ResyncRequest) => Promise<void>) | null>(null);
   const { state, client } = useRealtime({
     url: env.wsBaseUrl + '/ws',
     getToken,
     enabled: hasToken,
-    reconciler: reconcile,
+    reconciler: (req: ResyncRequest) => {
+      const impl = reconcilerRef.current;
+      return impl ? impl(req) : Promise.resolve();
+    },
+  });
+  reconcilerRef.current = createReconciler(client);
+
+  // §3.2 离线降级轮询:WS 未连通时自动按频道 seq 水位轮询 REST 事件并经实时
+  // 同路径注入;恢复 connected 后自动停止(见 useOfflinePolling)。
+  useOfflinePolling({
+    client,
+    state,
+    enabled: hasToken,
+    channel: env.demoChannel,
+    intervalMs: env.pollingIntervalMs,
   });
 
   useEffect(

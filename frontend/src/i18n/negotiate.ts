@@ -100,6 +100,12 @@ export interface NegotiateLocaleInput {
   readonly userLocale?: string | null;
   /** workspaces.settings.default_locale;null → 跳过本级 */
   readonly workspaceDefaultLocale?: string | null;
+  /**
+   * 系统级候选(浏览器 navigator.languages,Accept-Language 的 SPA 等价物);
+   * 位于工作区默认之后、fallback 之前 —— 账号偏好与工作区默认优先于浏览器语言,
+   * 否则账号级语言偏好(i18n.md L1)将永不生效。
+   */
+  readonly systemLocales?: readonly string[] | null;
   /** 受支持清单;缺省 SUPPORTED_LOCALES */
   readonly supported?: readonly string[];
   /** 系统回退;缺省 'en' */
@@ -107,7 +113,7 @@ export interface NegotiateLocaleInput {
 }
 
 /**
- * 协商链:requested → userLocale → workspaceDefault → fallback。
+ * 协商链:requested → userLocale → workspaceDefault → systemLocales → fallback。
  * 任一级缺省或非法即跳到下一级;绝不抛错(协商失败回退 fallback)。
  */
 export function negotiateLocale(input: NegotiateLocaleInput): string {
@@ -117,6 +123,7 @@ export function negotiateLocale(input: NegotiateLocaleInput): string {
     toCandidates(input.requested),
     input.userLocale,
     input.workspaceDefaultLocale,
+    input.systemLocales ?? null,
   ];
   for (const level of levels) {
     if (level === null || level === undefined || level.length === 0) continue;

@@ -154,3 +154,31 @@ describe('negotiateLocale(§6.18 协商链)', () => {
     expect(negotiateLocale({ workspaceDefaultLocale: 'ja-JP' })).toBe('en');
   });
 });
+
+describe('negotiateLocale systemLocales(系统级候选,Accept-Language 的 SPA 等价物)', () => {
+  it('账号偏好与工作区默认皆无时,尝试浏览器语言', () => {
+    expect(negotiateLocale({ systemLocales: ['zh-CN', 'en'] })).toBe('zh-CN');
+  });
+
+  it('账号偏好优先于浏览器语言(否则账号级偏好永不生效)', () => {
+    expect(
+      negotiateLocale({ userLocale: 'en', systemLocales: ['zh-CN'] }),
+    ).toBe('en');
+  });
+
+  it('工作区默认优先于浏览器语言', () => {
+    expect(
+      negotiateLocale({ workspaceDefaultLocale: 'en', systemLocales: ['zh-CN'] }),
+    ).toBe('en');
+  });
+
+  it('显式请求参数仍为最高优先', () => {
+    expect(
+      negotiateLocale({ requested: 'zh-CN', userLocale: 'en', systemLocales: ['en'] }),
+    ).toBe('zh-CN');
+  });
+
+  it('浏览器语言不受支持 → 回退 en', () => {
+    expect(negotiateLocale({ systemLocales: ['fr-FR', 'de'] })).toBe('en');
+  });
+});

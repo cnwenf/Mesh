@@ -1,14 +1,27 @@
 /**
- * 实时 WebSocket 客户端(README §6.7 / §6.16,kanban §3.5)。
- * - 子协议鉴权:`new WebSocket(url, [AUTH_SUBPROTOCOL, token])`;token 绝不进 URL query(§6.16)
+ * 实时 WebSocket 客户端 — 线缆协议与后端 v0.1.0(`backend/src/mesh/realtime/session.py`)
+ * 逐帧对齐;契约权威 docs/specs/README.md §6.7 / §6.16,kanban §3.5。
+ *
+ * - 首帧鉴权(§6.16 允许「子协议或首帧」;已发版后端实现首帧):连接建立后发送
+ *   `{op:'auth', token}`,等待 `{op:'auth_ok'}`(默认 10s 超时按断线重连处理);
+ *   token 绝不进 URL query。
  * - 每频道 last_seq 游标;订阅带 resume_from=last_seq+1;seq≤游标的重复帧幂等丢弃
- * - resync_required → resyncing 态 + onResync;reconciler 对账成功 → 对齐水位重订阅恢复;失败退避重试
- * - 断线 → reconnecting,指数退避(base×2^n,上限,±20% 抖动)无界重连,重连后按游标重订阅
- * - keepalive:连接态下 pingIntervalMs 无入站帧则发 ping
+ * - `{op:'subscribed', channel, last_seq}` 确认订阅并对齐服务端水位
+ * - resync_required → resyncing 态 + onResync;reconciler 对账成功 → 对齐水位、
+ *   以 resume_from=watermark+1 重订阅恢复;失败退避重试
+ * - 断线 → reconnecting,指数退避(base×2^n,上限,±20% 抖动)无界重连,重连后
+ *   重新鉴权并按游标重订阅;浏览器 online/offline 事件主动感知网络层断线
+ * - keepalive:连接态下 pingIntervalMs 无入站帧则发 ping(服务端亦主动心跳)
  * - disconnect() 为主动断开 → idle,不自动重连,取消挂起定时器
  */
-import { AUTH_SUBPROTOCOL, isControlFrame, isDataFrame } from '../types/realtime';
-import type { ClientOp, RealtimeFrame, ServerControlFrame, SubscribeOp } from '../types/realtime';
+import { isEventFrame, isServerFrame } from '../types/realtime';
+import type {
+  ClientOp,
+  ErrorFrame,
+  RealtimeEventFrame,
+  ResyncRequiredFrame,
+  SubscribedFrame,
+} from '../types/realtime';
 import { ChannelCursors } from './channelCursors';
 
 export type ConnectionState =
@@ -20,7 +33,7 @@ export type ConnectionState =
   | 'offline';
 
 export interface ResyncRequest {
-  topic: string;
+  channel: string;
   watermark: number;
   rest: string;
 }
@@ -31,7 +44,7 @@ export interface RealtimeClientOptions {
   getToken: () => string | null;
   /** 测试注入 FakeWebSocket */
   WebSocketImpl?: typeof WebSocket;
-  /** resync REST 对账;成功后客户端重置游标到 watermark 并重订阅 */
+  /** resync REST 对账(拉取 rest 并合并);成功后客户端对齐水位重订阅 */
   reconciler?: (req: ResyncRequest) => Promise<void>;
   /** 可注入时钟(测试用) */
   now?: () => number;
@@ -40,18 +53,21 @@ export interface RealtimeClientOptions {
   baseDelayMs?: number;
   maxDelayMs?: number;
   pingIntervalMs?: number;
+  /** 首帧鉴权超时(后端为 10s);超时按断线处理 */
+  authTimeoutMs?: number;
 }
 
 const DEFAULT_BASE_DELAY_MS = 500;
 const DEFAULT_MAX_DELAY_MS = 30_000;
 const DEFAULT_PING_INTERVAL_MS = 30_000;
+const DEFAULT_AUTH_TIMEOUT_MS = 10_000;
 const JITTER_RATIO = 0.2;
 const WS_OPEN = 1;
 
-type FrameListener = (frame: RealtimeFrame) => void;
+type FrameListener = (frame: RealtimeEventFrame) => void;
 type StateListener = (state: ConnectionState) => void;
 type ResyncListener = (req: ResyncRequest) => void;
-type ErrorListener = (frame: ServerControlFrame) => void;
+type ErrorListener = (frame: ErrorFrame) => void;
 
 export class RealtimeClient {
   private readonly url: string;
@@ -72,9 +88,11 @@ export class RealtimeClient {
 
   private readonly pingIntervalMs: number;
 
+  private readonly authTimeoutMs: number;
+
   private readonly cursors = new ChannelCursors();
 
-  private readonly subscribedTopics = new Set<string>();
+  private readonly subscribedChannels = new Set<string>();
 
   private readonly frameListeners = new Set<FrameListener>();
 
@@ -91,6 +109,8 @@ export class RealtimeClient {
   private active = false;
 
   private intentionalClose = false;
+
+  private authenticated = false;
 
   private reconnectPending = false;
 
@@ -128,6 +148,7 @@ export class RealtimeClient {
     this.baseDelayMs = opts.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
     this.maxDelayMs = opts.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
     this.pingIntervalMs = opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
+    this.authTimeoutMs = opts.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
   }
 
   get state(): ConnectionState {
@@ -152,28 +173,32 @@ export class RealtimeClient {
     this.active = false;
     this.intentionalClose = true;
     this.reconnectPending = false;
+    this.authenticated = false;
     this.timerEpoch += 1;
     this.keepaliveEpoch += 1;
     this.detachBrowserWatch();
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      this.socket.close();
-      this.socket = null;
-    }
+    this.teardownSocket();
     this.setState('idle');
   }
 
-  subscribe(topic: string): void {
-    this.subscribedTopics.add(topic);
-    if (this.currentState === 'connected') this.sendSubscribe(topic, true);
+  subscribe(channel: string): void {
+    this.subscribedChannels.add(channel);
+    if (this.authenticated) this.sendSubscribe(channel);
   }
 
-  unsubscribe(topic: string): void {
-    this.subscribedTopics.delete(topic);
-    if (this.currentState === 'connected') this.sendOp({ op: 'unsubscribe', topic });
+  unsubscribe(channel: string): void {
+    this.subscribedChannels.delete(channel);
+    if (this.authenticated) this.sendOp({ op: 'unsubscribe', channel });
+  }
+
+  /** 当前频道游标(供轮询降级等读取 since 水位) */
+  getCursor(channel: string): number | undefined {
+    return this.cursors.get(channel);
+  }
+
+  /** 注入 REST 对账拉回的事件(与实时帧同路径:游标守卫 + 派发) */
+  ingestReconciledEvent(frame: RealtimeEventFrame): void {
+    this.handleEventFrame(frame);
   }
 
   onFrame(cb: FrameListener): () => void {
@@ -210,11 +235,13 @@ export class RealtimeClient {
       this.setState('offline');
       return;
     }
-    // 子协议鉴权(§6.16):url 原样传入,绝不追加 query 参数;token 经子协议传递
-    const socket = new this.WebSocketImpl(this.url, [AUTH_SUBPROTOCOL, token]);
+    this.authenticated = false;
+    // §6.16:token 绝不进 URL;按已发版后端协议以首帧鉴权(不用子协议)
+    const socket = new this.WebSocketImpl(this.url);
     this.socket = socket;
     socket.onopen = (): void => {
-      this.handleOpen();
+      this.sendOp({ op: 'auth', token });
+      this.armAuthTimeout();
     };
     socket.onmessage = (ev: MessageEvent): void => {
       this.handleMessage(ev.data);
@@ -227,13 +254,38 @@ export class RealtimeClient {
     };
   }
 
-  private handleOpen(): void {
+  private teardownSocket(): void {
+    if (!this.socket) return;
+    this.socket.onopen = null;
+    this.socket.onmessage = null;
+    this.socket.onclose = null;
+    this.socket.onerror = null;
+    try {
+      this.socket.close();
+    } catch {
+      /* 关闭失败不影响后续重连 */
+    }
+    this.socket = null;
+  }
+
+  /** 首帧鉴权超时(与服务端 10s 对齐):按断线处理,走退避重连 */
+  private armAuthTimeout(): void {
+    this.scheduleGuarded(() => {
+      if (!this.authenticated) {
+        this.teardownSocket();
+        this.handleDisconnect();
+      }
+    }, this.authTimeoutMs);
+  }
+
+  private handleAuthOk(): void {
+    this.authenticated = true;
     this.reconnectAttempts = 0;
     this.resyncAttempts = 0;
     this.reconnectPending = false;
     this.lastInboundAt = this.now();
     this.setState('connected');
-    for (const topic of this.subscribedTopics) this.sendSubscribe(topic, true);
+    for (const channel of this.subscribedChannels) this.sendSubscribe(channel);
     this.armKeepalive();
   }
 
@@ -245,75 +297,84 @@ export class RealtimeClient {
     } catch {
       return; // 非法 JSON:忽略,不崩溃
     }
+    if (!isServerFrame(parsed)) return;
     this.lastInboundAt = this.now();
-    if (isDataFrame(parsed)) {
-      this.handleDataFrame(parsed);
-      return;
+    switch (parsed.op) {
+      case 'auth_ok':
+        this.handleAuthOk();
+        return;
+      case 'event':
+        if (isEventFrame(parsed)) this.handleEventFrame(parsed);
+        return;
+      case 'subscribed':
+        this.handleSubscribed(parsed);
+        return;
+      case 'resync_required':
+        this.handleResyncRequested(parsed);
+        return;
+      case 'error':
+        this.handleErrorFrame(parsed);
+        return;
+      case 'ping':
+        return; // 服务端心跳:lastInboundAt 已更新
     }
-    if (isControlFrame(parsed)) this.handleControlFrame(parsed);
   }
 
-  private handleDataFrame(frame: RealtimeFrame): void {
-    const cursor = this.cursors.get(frame.topic);
+  private handleEventFrame(frame: RealtimeEventFrame): void {
+    const cursor = this.cursors.get(frame.channel);
     if (cursor !== undefined && frame.seq <= cursor) return; // at-least-once 幂等去重
-    this.cursors.set(frame.topic, frame.seq);
+    this.cursors.set(frame.channel, frame.seq);
     this.dispatch(this.frameListeners, frame);
   }
 
-  private handleControlFrame(frame: ServerControlFrame): void {
-    switch (frame.op) {
-      case 'subscribed':
-      case 'pong':
-        // ack / keepalive 应答:lastInboundAt 已在 handleMessage 更新
-        break;
-      case 'resync_required':
-        this.handleResync({ topic: frame.topic, watermark: frame.watermark, rest: frame.rest });
-        break;
-      case 'error':
-        this.dispatch(this.errorListeners, frame);
-        break;
+  private handleSubscribed(frame: SubscribedFrame): void {
+    // 订阅/重放完成确认:对齐服务端频道水位(仅前进)
+    this.cursors.set(frame.channel, frame.last_seq);
+  }
+
+  private handleErrorFrame(frame: ErrorFrame): void {
+    this.dispatch(this.errorListeners, frame);
+    if (!this.authenticated) {
+      // 鉴权失败:服务端将关闭连接;主动拆除并按断线重连(退避)
+      this.teardownSocket();
+      this.handleDisconnect();
     }
   }
 
-  private handleResync(req: ResyncRequest): void {
+  private handleResyncRequested(frame: ResyncRequiredFrame): void {
+    const req: ResyncRequest = {
+      channel: frame.channel,
+      watermark: frame.watermark,
+      rest: frame.rest,
+    };
     this.setState('resyncing');
     this.dispatch(this.resyncListeners, req);
-    const reconciler = this.reconciler;
-    if (!reconciler) {
-      this.completeResync(req);
+    const complete = (): void => {
+      this.cursors.setWatermark(frame.channel, frame.watermark);
+      // 服务端已丢弃该订阅(resync 时 discard):以 watermark+1 重新订阅
+      this.subscribedChannels.add(frame.channel);
+      if (this.authenticated) this.sendSubscribe(frame.channel);
+      this.resyncAttempts = 0;
+      this.setState('connected');
+    };
+    if (!this.reconciler) {
+      complete();
       return;
     }
-    this.resyncAttempts = 0;
-    void this.runReconciler(req, reconciler);
-  }
-
-  private runReconciler(
-    req: ResyncRequest,
-    reconciler: (r: ResyncRequest) => Promise<void>,
-  ): Promise<void> {
-    return reconciler(req)
-      .then(() => {
-        this.resyncAttempts = 0;
-        this.completeResync(req);
-      })
-      .catch(() => {
-        const delay = this.backoffDelay(this.resyncAttempts);
-        this.resyncAttempts += 1;
-        this.scheduleGuarded(() => {
-          void this.runReconciler(req, reconciler);
-        }, delay);
-      });
-  }
-
-  private completeResync(req: ResyncRequest): void {
-    this.cursors.setWatermark(req.topic, req.watermark);
-    this.sendSubscribe(req.topic, false); // 重订阅,不带 resume_from(整拉对账后无感恢复)
-    this.setState('connected');
+    this.reconciler(req).then(complete, () => {
+      // 对账失败:退避重试(与重连共享上限,独立计数)
+      const delay = this.backoffDelay(this.resyncAttempts);
+      this.resyncAttempts += 1;
+      this.scheduleGuarded(() => {
+        this.handleResyncRequested(frame);
+      }, delay);
+    });
   }
 
   private handleDisconnect(): void {
     if (this.intentionalClose || !this.active) return;
     if (this.reconnectPending) return; // error+close 只排一次重连
+    this.authenticated = false;
     this.reconnectPending = true;
     this.setState('reconnecting');
     const delay = this.backoffDelay(this.reconnectAttempts);
@@ -331,18 +392,7 @@ export class RealtimeClient {
    */
   private handleBrowserOffline(): void {
     if (!this.active || this.intentionalClose) return;
-    if (this.socket) {
-      this.socket.onopen = null;
-      this.socket.onmessage = null;
-      this.socket.onclose = null;
-      this.socket.onerror = null;
-      try {
-        this.socket.close();
-      } catch {
-        /* 关闭失败不影响后续重连 */
-      }
-      this.socket = null;
-    }
+    this.teardownSocket();
     this.handleDisconnect();
   }
 
@@ -376,7 +426,11 @@ export class RealtimeClient {
     this.keepaliveEpoch = gen;
     const tick = (): void => {
       if (gen !== this.keepaliveEpoch) return;
-      if (this.currentState === 'connected' && this.now() - this.lastInboundAt >= this.pingIntervalMs) {
+      if (
+        this.authenticated &&
+        this.currentState === 'connected' &&
+        this.now() - this.lastInboundAt >= this.pingIntervalMs
+      ) {
         this.sendOp({ op: 'ping' });
       }
       this.scheduleGuarded(tick, this.pingIntervalMs);
@@ -398,12 +452,10 @@ export class RealtimeClient {
     return Math.round(base * jitter);
   }
 
-  private sendSubscribe(topic: string, withResume: boolean): void {
-    const op: SubscribeOp = { op: 'subscribe', topic };
-    if (withResume) {
-      const cursor = this.cursors.get(topic);
-      if (cursor !== undefined) op.resume_from = cursor + 1;
-    }
+  private sendSubscribe(channel: string): void {
+    const op: ClientOp = { op: 'subscribe', channel };
+    const cursor = this.cursors.get(channel);
+    if (cursor !== undefined) (op as { resume_from?: number }).resume_from = cursor + 1;
     this.sendOp(op);
   }
 

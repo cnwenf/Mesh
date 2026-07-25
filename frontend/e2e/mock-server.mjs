@@ -4,23 +4,27 @@
  * 实现 docs/specs/README.md 的权威契约:
  * - §6.14 三类成功包络 / 游标分页(keyset)/ 乐观并发(If-Match→409 conflict)/
  *         Idempotency-Key 去重(§6.5)/ 统一错误信封与具名 code / 过滤限制错误码
- * - §6.7  WebSocket 实时契约:子协议鉴权(Sec-WebSocket-Protocol,token 绝不进 URL query,§6.16)、
- *         频道内单调 seq、subscribe/resume_from 重放、resync_required + REST 对账水位、ping/pong
+ * - §6.7  WebSocket 实时契约 —— **与后端 v0.1.0(`backend/src/mesh/realtime/session.py`)
+ *         逐帧对齐的忠实镜像**:首帧鉴权 {op:'auth',token} → {op:'auth_ok'}(token 绝不进
+ *         URL query,§6.16)、频道内单调 seq、{op:'event',channel,seq,event,payload}、
+ *         {op:'subscribed',channel,last_seq}、resume_from 重放、resync_required +
+ *         对账 REST(/api/v1/realtime/events?channel=&since=)、ping/pong
  * - §6.18 i18n 目录端点(ETag/304 版本缓存语义)
  *
- * 仅用于前端自测;不是后端实现(后端归阶段 1·A)。
+ * 仅用于前端自测;不是后端实现(后端归阶段 1·A,已发版 v0.1.0)。
  */
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 
 const PORT = Number(process.env.MESH_MOCK_PORT ?? 8901);
-export const AUTH_SUBPROTOCOL = 'mesh.auth.v1';
+const AUTH_TIMEOUT_MS = 10_000;
+const EVENTS_PAGE_SIZE = 50;
+const DEV_TOKEN_PREFIX = 'mesh-dev:';
 
 // ---------------------------------------------------------------------------
 // 内存数据(单进程测试用,可随时 reset)
 // ---------------------------------------------------------------------------
 
-const DAY = 24 * 60 * 60 * 1000;
 const BASE_TIME = Date.UTC(2026, 6, 25, 8, 0, 0); // 2026-07-25T08:00:00Z
 
 function isoAt(offsetMs) {
@@ -43,8 +47,8 @@ function seedIssues() {
 const state = {
   issues: seedIssues(),
   idempotency: new Map(), // key → { status, body }
-  eventLog: new Map(), // topic → [{ seq, type, topic, ts, data }]
-  seqs: new Map(), // topic → last seq
+  eventLog: new Map(), // channel → [{ op:'event', channel, seq, event, payload }]
+  seqs: new Map(), // channel → last seq
 };
 
 function resetState() {
@@ -125,22 +129,28 @@ function decodeCursor(cursor) {
   }
 }
 
+/** 与后端同形的 dev 鉴权:mesh-dev:<workspace-uuid> */
+function isAuthorized(req) {
+  const auth = req.headers['authorization'] ?? '';
+  return auth.startsWith('Bearer ' + DEV_TOKEN_PREFIX);
+}
+
 // ---------------------------------------------------------------------------
-// 实时事件广播
+// 实时事件广播(§6.7,帧形态对齐后端 v0.1.0)
 // ---------------------------------------------------------------------------
 
 const wsClients = new Set();
 
-function emitEvent(topic, type, data) {
-  const last = state.seqs.get(topic) ?? 0;
+function emitEvent(channel, event, payload) {
+  const last = state.seqs.get(channel) ?? 0;
   const seq = last + 1;
-  state.seqs.set(topic, seq);
-  const frame = { seq, type, topic, ts: new Date().toISOString(), data };
-  const log = state.eventLog.get(topic) ?? [];
+  state.seqs.set(channel, seq);
+  const frame = { op: 'event', channel, seq, event, payload };
+  const log = state.eventLog.get(channel) ?? [];
   log.push(frame);
-  state.eventLog.set(topic, log);
+  state.eventLog.set(channel, log);
   for (const client of wsClients) {
-    if (client.mesh?.topics?.has(topic) && client.readyState === 1) {
+    if (client.mesh?.authenticated && client.mesh?.channels?.has(channel) && client.readyState === 1) {
       client.send(JSON.stringify(frame));
     }
   }
@@ -169,6 +179,31 @@ async function handleRequest(req, res, url) {
   if (path === '/api/v1/demo/reset' && req.method === 'POST') {
     resetState();
     sendJson(res, 200, envelope({ reset: true }));
+    return;
+  }
+
+  // ---- 实时对账端点(§6.7,与后端 /api/v1/realtime/events 同形)-----------
+  // seq > since,keyset 分页;Bearer 鉴权(与真实后端一致)。
+  if (path === '/api/v1/realtime/events' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const channel = url.searchParams.get('channel') ?? '';
+    const since = Number(url.searchParams.get('since') ?? '0') || 0;
+    const log = (state.eventLog.get(channel) ?? []).filter((frame) => frame.seq > since);
+    const cursor = url.searchParams.get('cursor');
+    const offset = cursor ? decodeCursor(cursor) : 0;
+    const page = log.slice(offset, offset + EVENTS_PAGE_SIZE);
+    const nextOffset = offset + EVENTS_PAGE_SIZE;
+    const nextCursor = nextOffset < log.length ? encodeCursor(nextOffset) : null;
+    const data = page.map((frame) => ({
+      channel: frame.channel,
+      seq: frame.seq,
+      event: frame.event,
+      payload: frame.payload,
+    }));
+    sendJson(res, 200, { data, next_cursor: nextCursor });
     return;
   }
 
@@ -245,7 +280,15 @@ async function handleRequest(req, res, url) {
         updated_at: new Date().toISOString(),
       };
       state.issues = state.issues.map((i) => (i.id === id ? updated : i));
-      emitEvent('workspace:ws-1:issues', 'issue.updated', updated);
+      // 变更经实时频道广播(演示增量合并)
+      const channel = url.searchParams.get('channel') ?? defaultChannelForIssue();
+      emitEvent(channel, 'issue.updated', {
+        id: updated.id,
+        identifier: updated.identifier,
+        title: updated.title,
+        status_category: updated.status_category,
+        updated_at: updated.updated_at,
+      });
       sendJson(res, 200, envelope(updated));
       return;
     }
@@ -274,7 +317,13 @@ async function handleRequest(req, res, url) {
       visibility: { workspace_id: 'ws-1', project_id: null },
     };
     state.issues = [...state.issues, issue];
-    emitEvent('workspace:ws-1:issues', 'issue.created', issue);
+    emitEvent(defaultChannelForIssue(), 'issue.created', {
+      id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      status_category: issue.status_category,
+      updated_at: issue.updated_at,
+    });
     const responseBody = envelope(issue);
     if (typeof idemKey === 'string') {
       state.idempotency.set(idemKey, { status: 201, body: responseBody });
@@ -283,15 +332,30 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 事件注入(e2e 与演示区触发实时帧)---------------------------------
-  if (path === '/api/v1/demo/emit' && req.method === 'POST') {
+  // ---- 保留窗口清理(模拟后端 retention purge;后端 e2e 以 SQL DELETE 达成)---
+  if (path === '/api/v1/demo/purge' && req.method === 'POST') {
     const body = (await readBody(req)) ?? {};
-    const { topic, type, data } = body;
-    if (typeof topic !== 'string' || typeof type !== 'string') {
-      sendJson(res, 400, errorEnvelope('validation_error', 'topic and type are required'));
+    const { channel, before_seq } = body;
+    if (typeof channel !== 'string' || typeof before_seq !== 'number') {
+      sendJson(res, 400, errorEnvelope('validation_error', 'channel and before_seq are required'));
       return;
     }
-    const frame = emitEvent(topic, type, data ?? {});
+    const log = state.eventLog.get(channel) ?? [];
+    const kept = log.filter((frame) => frame.seq >= before_seq);
+    state.eventLog.set(channel, kept);
+    sendJson(res, 200, envelope({ kept: kept.length }));
+    return;
+  }
+
+  // ---- 事件注入(e2e 触发实时帧;经唯一写入路径广播)----------------------
+  if (path === '/api/v1/demo/emit' && req.method === 'POST') {
+    const body = (await readBody(req)) ?? {};
+    const { channel, event, payload } = body;
+    if (typeof channel !== 'string' || typeof event !== 'string') {
+      sendJson(res, 400, errorEnvelope('validation_error', 'channel and event are required'));
+      return;
+    }
+    const frame = emitEvent(channel, event, payload ?? {});
     sendJson(res, 201, envelope(frame));
     return;
   }
@@ -374,9 +438,16 @@ async function handleRequest(req, res, url) {
   sendJson(res, 404, errorEnvelope('not_found', `no mock route for ${req.method} ${path}`));
 }
 
+/** 演示 CRUD 广播的默认频道(e2e helpers 显式指定频道时以 emit 端点为准) */
+function defaultChannelForIssue() {
+  return process.env.MESH_MOCK_DEMO_CHANNEL ?? 'workspace:ws-1:issues';
+}
+
 // ---------------------------------------------------------------------------
-// 启动
+// WebSocket 网关(§6.7,协议逐帧对齐后端 v0.1.0 session.py)
 // ---------------------------------------------------------------------------
+
+const wss = new WebSocketServer({ server: undefined, noServer: true });
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
@@ -386,29 +457,30 @@ const server = createServer((req, res) => {
   });
 });
 
-// §6.16 硬约束:token 只经子协议传递,绝不进 URL query。
-// handleProtocols 收到客户端提供的子协议集合 ['mesh.auth.v1', <token>];
-// 缺少鉴权子协议 → 拒绝握手(false)。
-const wss = new WebSocketServer({
-  server,
-  path: '/ws',
-  handleProtocols(protocols) {
-    if (!protocols.has(AUTH_SUBPROTOCOL)) return false;
-    return AUTH_SUBPROTOCOL;
-  },
-  verifyClient(info) {
-    const offered = String(info.req.headers['sec-websocket-protocol'] ?? '');
-    return offered.split(',').map((s) => s.trim()).includes(AUTH_SUBPROTOCOL);
-  },
+// §6.16:token 绝不进 URL;upgrade 不经子协议协商(与后端 websocket.accept() 一致),
+// 鉴权在连接建立后的首帧 {op:'auth', token} 完成。
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
+  if (url.pathname !== '/ws') {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    wss.emit('connection', ws, req);
+  });
 });
 
-wss.on('connection', (socket, req) => {
-  const offered = String(req.headers['sec-websocket-protocol'] ?? '')
-    .split(',')
-    .map((s) => s.trim());
-  const token = offered.find((p) => p !== AUTH_SUBPROTOCOL);
-  socket.mesh = { topics: new Set(), token };
+wss.on('connection', (socket) => {
+  socket.mesh = { authenticated: false, channels: new Set(), authTimer: null };
   wsClients.add(socket);
+
+  // 首帧鉴权超时(与后端 AUTH_TIMEOUT_SECONDS 对齐)
+  socket.mesh.authTimer = setTimeout(() => {
+    if (!socket.mesh.authenticated) {
+      socket.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authentication timed out' }));
+      socket.close();
+    }
+  }, AUTH_TIMEOUT_MS);
 
   socket.on('message', (raw) => {
     let msg;
@@ -417,46 +489,75 @@ wss.on('connection', (socket, req) => {
     } catch {
       return;
     }
-    if (msg.op === 'ping') {
-      socket.send(JSON.stringify({ op: 'pong' }));
+
+    // ---- 首帧鉴权 -------------------------------------------------------
+    if (!socket.mesh.authenticated) {
+      if (msg.op === 'auth' && typeof msg.token === 'string' && msg.token.startsWith(DEV_TOKEN_PREFIX)) {
+        socket.mesh.authenticated = true;
+        clearTimeout(socket.mesh.authTimer);
+        socket.send(JSON.stringify({ op: 'auth_ok' }));
+      } else {
+        socket.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'first frame must be auth' }));
+        socket.close();
+      }
       return;
     }
-    if (msg.op === 'subscribe' && typeof msg.topic === 'string') {
-      socket.mesh.topics.add(msg.topic);
-      socket.send(JSON.stringify({ op: 'subscribed', topic: msg.topic }));
-      const log = state.eventLog.get(msg.topic) ?? [];
-      const channelMax = state.seqs.get(msg.topic) ?? 0;
+
+    // ---- 订阅:重放 + subscribed 确认 / resync_required --------------------
+    if (msg.op === 'subscribe' && typeof msg.channel === 'string') {
+      const channel = msg.channel;
+      socket.mesh.channels.add(channel);
+      const log = state.eventLog.get(channel) ?? [];
+      const watermark = state.seqs.get(channel) ?? 0;
+      const minSeq = log.length > 0 ? log[0].seq : null;
+      const resumeFrom = typeof msg.resume_from === 'number' ? msg.resume_from : 0;
+
       // 游标过旧(早于保留窗口)→ resync_required + 对账水位(§6.7)
-      // mock 语义:保留窗口 = 最近 100 条;resume_from 早于窗口起点即过旧。
-      const retentionStart = Math.max(1, channelMax - 99);
-      if (typeof msg.resume_from === 'number' && msg.resume_from < retentionStart) {
-        socket.send(
-          JSON.stringify({
-            op: 'resync_required',
-            topic: msg.topic,
-            watermark: channelMax,
-            rest: `/api/v1/demo/issues?since=`,
-          }),
-        );
-        return;
+      if (resumeFrom > 0) {
+        const stale =
+          (minSeq !== null && resumeFrom < minSeq) || (minSeq === null && resumeFrom <= watermark);
+        if (stale) {
+          socket.mesh.channels.delete(channel);
+          socket.send(
+            JSON.stringify({
+              op: 'resync_required',
+              channel,
+              watermark,
+              rest: `/api/v1/realtime/events?channel=${encodeURIComponent(channel)}&since=${resumeFrom}`,
+            }),
+          );
+          return;
+        }
       }
+
       // 顺序补发缺口(重放真源,§6.7)
       for (const frame of log) {
-        if (typeof msg.resume_from !== 'number' || frame.seq >= msg.resume_from) {
+        if (frame.seq >= resumeFrom) {
           socket.send(JSON.stringify(frame));
         }
       }
+      socket.send(JSON.stringify({ op: 'subscribed', channel, last_seq: watermark }));
       return;
     }
-    if (msg.op === 'unsubscribe' && typeof msg.topic === 'string') {
-      socket.mesh.topics.delete(msg.topic);
+
+    if (msg.op === 'unsubscribe' && typeof msg.channel === 'string') {
+      socket.mesh.channels.delete(msg.channel);
+      return;
+    }
+
+    if (msg.op === 'ping') {
+      socket.send(JSON.stringify({ op: 'ping' }));
     }
   });
 
-  socket.on('close', () => wsClients.delete(socket));
-  socket.on('error', () => wsClients.delete(socket));
+  const cleanup = () => {
+    clearTimeout(socket.mesh.authTimer);
+    wsClients.delete(socket);
+  };
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[mock-server] listening on http://127.0.0.1:${PORT} (ws: /ws)`);
+  console.log(`[mock-server] listening on http://127.0.0.1:${PORT} (ws: /ws, first-frame auth)`);
 });

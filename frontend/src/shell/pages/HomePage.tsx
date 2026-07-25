@@ -30,7 +30,8 @@ import { formatCombo } from '../../shortcuts';
 import { useRealtimeContext } from '../AppShell';
 
 const DEMO_ISSUES_PATH = '/api/v1/demo/issues';
-const DEMO_TOPIC = 'workspace:ws-1:issues';
+/** 演示频道:真实后端联调时经 VITE_MESH_DEMO_CHANNEL 指向 workspace:<uuid>:issues */
+const DEMO_CHANNEL = env.demoChannel;
 const RELATIVE_SAMPLE_OFFSET_MS = 3 * 60 * 1000;
 
 export function HomePage(): React.JSX.Element {
@@ -224,13 +225,13 @@ function RealtimeDemo(props: RealtimeDemoProps): React.JSX.Element {
 
   // 订阅演示频道;帧经 mergeEntityFrame 增量合并(演示频道 belongs 恒真)
   useEffect(() => {
-    client.subscribe(DEMO_TOPIC);
+    client.subscribe(DEMO_CHANNEL);
     const unsubscribeFrame = client.onFrame((frame) => {
       setIssues((prev) => mergeEntityFrame(prev, frame, { belongs: () => true }));
     });
     return () => {
       unsubscribeFrame();
-      client.unsubscribe(DEMO_TOPIC);
+      client.unsubscribe(DEMO_CHANNEL);
     };
   }, [client]);
 

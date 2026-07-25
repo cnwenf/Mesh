@@ -1,52 +1,45 @@
 /**
- * 离线降级轮询(kanban §3.5 降级:WS 断开 → since= 增量拉取)。
- * - 与 RealtimeClient 同形接口(subscribe/unsubscribe/onFrame/onState)
- * - 每次轮询传 `since = 该频道已见最大 updated_at`;结果合成 RealtimeFrame 形状
- * - seq 按频道递增;type 默认 'poll.sync'(调用方可传 eventType);ts 取 item.updated_at,缺省用 now
+ * 离线降级轮询(§3.2 离线降级轮询机制 / kanban §3.5:WS 断开 → 增量拉取)。
+ * - 与 RealtimeClient 同形接口(subscribe/unsubscribe/onFrame/onState/onError)
+ * - 数据源为后端对账端点同形的频道事件拉取:`GET /api/v1/realtime/events?channel=&since=<seq>`
+ *   (§6.7),返回 seq 大于水位的事件帧;轮询按频道维护 seq 水位,派发真实帧
+ *   (与 WS 帧同路径合并,游标守卫天然去重)
+ * - 可用 `seedSince(channel, seq)` 以 WS 客户端游标初始化水位,避免重复拉取
  * - 出错不停,经 onError 上报,下一拍重试
  */
-import type { RealtimeFrame } from '../types/realtime';
+import type { RealtimeEventFrame } from '../types/realtime';
 
-export interface PollingSource<T> {
-  fetch: (topic: string, since: string | undefined) => Promise<{ items: T[] }>;
+export interface PollingSource {
+  /** 拉取频道内 seq > since 的事件帧(按 seq 升序) */
+  fetch: (channel: string, since: number) => Promise<{ frames: RealtimeEventFrame[] }>;
 }
 
 /** 轮询即「降级的 connected」;未启动为 offline */
 export type PollingState = 'offline' | 'connected';
 
-export interface PollingFallbackOptions<T> {
-  source: PollingSource<T>;
-  /** 轮询间隔,默认 30000ms */
+export interface PollingFallbackOptions {
+  source: PollingSource;
+  /** 轮询间隔,默认 30000ms(kanban §3.5) */
   intervalMs?: number;
-  /** 合成帧的事件名,默认 'poll.sync' */
-  eventType?: string;
   schedule?: (fn: () => void, ms: number) => void;
-  now?: () => number;
 }
 
 const DEFAULT_INTERVAL_MS = 30_000;
-const DEFAULT_EVENT_TYPE = 'poll.sync';
 
-type FrameListener = (frame: RealtimeFrame) => void;
+type FrameListener = (frame: RealtimeEventFrame) => void;
 type StateListener = (state: PollingState) => void;
 type ErrorListener = (err: unknown) => void;
 
-export class PollingFallback<T extends { updated_at?: string }> {
-  private readonly source: PollingSource<T>;
+export class PollingFallback {
+  private readonly source: PollingSource;
 
   private readonly intervalMs: number;
 
-  private readonly eventType: string;
-
   private readonly schedule: (fn: () => void, ms: number) => void;
 
-  private readonly now: () => number;
+  private readonly subscribedChannels = new Set<string>();
 
-  private readonly subscribedTopics = new Set<string>();
-
-  private readonly sinceByTopic = new Map<string, string>();
-
-  private readonly seqByTopic = new Map<string, number>();
+  private readonly sinceByChannel = new Map<string, number>();
 
   private readonly frameListeners = new Set<FrameListener>();
 
@@ -60,16 +53,14 @@ export class PollingFallback<T extends { updated_at?: string }> {
 
   private epoch = 0;
 
-  constructor(opts: PollingFallbackOptions<T>) {
+  constructor(opts: PollingFallbackOptions) {
     this.source = opts.source;
     this.intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
-    this.eventType = opts.eventType ?? DEFAULT_EVENT_TYPE;
     this.schedule =
       opts.schedule ??
       ((fn: () => void, ms: number): void => {
         setTimeout(fn, ms);
       });
-    this.now = opts.now ?? ((): number => Date.now());
   }
 
   get state(): PollingState {
@@ -89,12 +80,18 @@ export class PollingFallback<T extends { updated_at?: string }> {
     this.setState('offline');
   }
 
-  subscribe(topic: string): void {
-    this.subscribedTopics.add(topic);
+  subscribe(channel: string): void {
+    this.subscribedChannels.add(channel);
   }
 
-  unsubscribe(topic: string): void {
-    this.subscribedTopics.delete(topic);
+  unsubscribe(channel: string): void {
+    this.subscribedChannels.delete(channel);
+  }
+
+  /** 以 WS 客户端游标初始化频道水位(仅前进),避免重复拉取已见事件 */
+  seedSince(channel: string, seq: number): void {
+    const current = this.sinceByChannel.get(channel) ?? 0;
+    if (seq > current) this.sinceByChannel.set(channel, seq);
   }
 
   onFrame(cb: FrameListener): () => void {
@@ -133,38 +130,21 @@ export class PollingFallback<T extends { updated_at?: string }> {
   }
 
   private async pollRound(): Promise<void> {
-    for (const topic of [...this.subscribedTopics]) {
+    for (const channel of [...this.subscribedChannels]) {
       if (!this.active) return;
-      const since = this.sinceByTopic.get(topic);
+      const since = this.sinceByChannel.get(channel) ?? 0;
       try {
-        const { items } = await this.source.fetch(topic, since);
-        this.emitItems(topic, items);
+        const { frames } = await this.source.fetch(channel, since);
+        for (const frame of frames) {
+          this.dispatch(this.frameListeners, frame);
+          if (frame.seq > (this.sinceByChannel.get(channel) ?? 0)) {
+            this.sinceByChannel.set(channel, frame.seq);
+          }
+        }
       } catch (err) {
         this.dispatch(this.errorListeners, err); // 保持 started,下一拍重试
       }
     }
-  }
-
-  private emitItems(topic: string, items: T[]): void {
-    let seq = this.seqByTopic.get(topic) ?? 0;
-    let since = this.sinceByTopic.get(topic);
-    for (const item of items) {
-      seq += 1;
-      const ts = item.updated_at ?? new Date(this.now()).toISOString();
-      if (item.updated_at && (!since || item.updated_at > since)) {
-        since = item.updated_at;
-      }
-      const frame: RealtimeFrame = {
-        seq,
-        type: this.eventType,
-        topic,
-        ts,
-        data: item as Record<string, unknown>,
-      };
-      this.dispatch(this.frameListeners, frame);
-    }
-    this.seqByTopic.set(topic, seq);
-    if (since !== undefined) this.sinceByTopic.set(topic, since);
   }
 
   private setState(next: PollingState): void {
