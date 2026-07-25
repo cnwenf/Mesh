@@ -502,18 +502,13 @@ class MemberService:
                 raise NotFoundError(_NOT_FOUND)
 
             if member.role == "owner":
-                active_owners = await session.scalar(
-                    select(func.count(Member.id)).where(
-                        Member.workspace_id == workspace_id,
-                        Member.role == "owner",
-                        Member.status == "active",
-                    )
+                # Owner invariant: count under FOR UPDATE row locks so
+                # concurrent demote/remove/disable attempts serialize.
+                await ensure_not_last_active_owner(
+                    session,
+                    workspace_id=workspace_id,
+                    error_message="cannot remove the last owner of the workspace",
                 )
-                if active_owners <= 1:
-                    raise ConflictError(
-                        "cannot remove the last owner of the workspace",
-                        code="last_owner",
-                    )
 
             reassigned = 0
             if reassign_to is not None:

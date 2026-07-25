@@ -14,7 +14,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from mesh.auth.audit import write_audit
@@ -22,6 +21,7 @@ from mesh.auth.rbac import role_satisfies
 from mesh.db.models.member import MEMBER_ROLE_VALUES, Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from mesh.member.owner_guard import ensure_not_last_active_owner
 from mesh.outbox.service import emit_realtime
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
@@ -77,18 +77,13 @@ async def change_member_role(
             )
 
         if target.role == "owner" and new_role != "owner":
-            active_owners = await session.scalar(
-                select(func.count(Member.id)).where(
-                    Member.workspace_id == workspace_id,
-                    Member.role == "owner",
-                    Member.status == "active",
-                )
+            # Owner invariant: count under FOR UPDATE row locks so concurrent
+            # demote/remove/disable attempts serialize (owner_guard.py).
+            await ensure_not_last_active_owner(
+                session,
+                workspace_id=workspace_id,
+                error_message="cannot demote the last owner of the workspace",
             )
-            if active_owners <= 1:
-                raise ConflictError(
-                    "cannot demote the last owner of the workspace",
-                    code="last_owner",
-                )
 
         old_role = target.role
         target.role = new_role
