@@ -38,6 +38,9 @@ from mesh.realtime.auth import (
     DevTokenAuthenticator,
     NullAuthenticator,
 )
+from mesh.workspace.invitations import InvitationService
+from mesh.workspace.routes import router as workspace_router
+from mesh.workspace.service import WorkspaceService
 
 _DEV_ERROR_RAISERS = {
     400: lambda: ValidationError("debug bad request"),
@@ -108,11 +111,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     delivery = _dev_mail_delivery(app.state.redis) if settings.auth_mode == "dev" else None
     app.state.auth_service = AuthService(session_factory, settings, deliver=delivery)
     app.state.rate_limiter = RateLimiter(app.state.redis)
+    app.state.workspace_service = WorkspaceService(session_factory)
+    app.state.invitation_service = InvitationService(session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
+    app.include_router(workspace_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

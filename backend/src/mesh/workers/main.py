@@ -24,6 +24,7 @@ from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
+from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.retention import retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
@@ -65,6 +66,15 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     retention=settings.realtime_event_retention,
                     interval=settings.realtime_retention_interval,
+                    stop=stop,
+                    clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "invitation-sweep",
+                lambda: invitation_sweep_loop(
+                    session_factory,
+                    interval=settings.invitation_sweep_interval,
                     stop=stop,
                     clock=_utcnow,
                 ),
