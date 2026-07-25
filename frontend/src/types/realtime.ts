@@ -3,8 +3,8 @@
  * 权威契约见 docs/specs/README.md §6.7 / §6.16。
  *
  * 鉴权:连接建立后**首帧** `{op:'auth', token}` → 服务端回 `{op:'auth_ok'}`(10s 超时)。
- * token 绝不进 URL query(§6.16 明确允许「子协议或首帧」两种机制;已发版后端 v0.1.0
- * 实现首帧鉴权,前端与其对齐,同样满足「token 不进 URL」核心约束)。
+ * token 绝不进 URL query(§6.16 首帧认证单一机制;已发版后端 v0.1.0
+ * 实现首帧鉴权,前端与其对齐,满足「token 不进 URL」核心约束)。
  *
  * 客户端 → 服务端:
  *   {op:'auth', token} / {op:'subscribe', channel, resume_from?} /

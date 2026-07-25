@@ -2,7 +2,7 @@
  * 实时 WebSocket 客户端 — 线缆协议与后端 v0.1.0(`backend/src/mesh/realtime/session.py`)
  * 逐帧对齐;契约权威 docs/specs/README.md §6.7 / §6.16,kanban §3.5。
  *
- * - 首帧鉴权(§6.16 允许「子协议或首帧」;已发版后端实现首帧):连接建立后发送
+ * - 首帧鉴权(§6.16 首帧认证单一机制;v0.1.0 起实现基线):连接建立后发送
  *   `{op:'auth', token}`,等待 `{op:'auth_ok'}`(默认 10s 超时按断线重连处理);
  *   token 绝不进 URL query。
  * - 每频道 last_seq 游标;订阅带 resume_from=last_seq+1;seq≤游标的重复帧幂等丢弃
@@ -236,7 +236,7 @@ export class RealtimeClient {
       return;
     }
     this.authenticated = false;
-    // §6.16:token 绝不进 URL;按已发版后端协议以首帧鉴权(不用子协议)
+    // §6.16:token 绝不进 URL;首帧认证单一机制(v0.1.0 起实现基线)
     const socket = new this.WebSocketImpl(this.url);
     this.socket = socket;
     socket.onopen = (): void => {
