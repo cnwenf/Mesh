@@ -3,6 +3,25 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.7.0] - 2026-07-25
+
+auth 增量 2 第一切片(MES-12):PAT / API token(auth.md §2.5/§3.2)+ 审计查询端点(§3.3),复用 v0.4.0 的 RBAC 裁决器 / append-only `audit_logs` 与 v0.6.0 的统一名册。
+
+### Added
+
+- **`api_tokens` 表(迁移 0005,auth.md §2.5)**:持有者统一 `owner_member_id` **复合 FK→`members(workspace_id, id)`**(README §6.1 去多态 + §6.2 同租户,跨工作区持有者数据库层拒绝);**仅存 SHA-256 哈希**,明文仅创建响应返回一次;`mesh_pat_` / `mesh_agt_` 可区分前缀 + 非秘密 `prefix` 展示;fail-closed RLS + `mesh_app` 授权;SECURITY DEFINER `mesh_api_token_by_hash()` 做先于租户上下文的 bootstrap 查询(对齐邀请链路,EXECUTE 仅授 mesh_app)。
+- **TokenService(§5.2/§5.5)**:创建(明文一次性)/ 列出(member 仅自己、admin/owner 全部,不含哈希与明文)/ 撤销(即时失效);**`role_override` 创建 + 使用双重强校验**——高于持有者当前角色 → `422 role_override_too_high`,持有者事后被降级则使用时拒绝而非提权;**scope∩角色矩阵最小权限**(token 永不越权);**agent 运行凭证默认剥离 `agent:trigger`**(Z5 防回环);创建/撤销同事务写 append-only 审计(`token.created` / `token.revoked`,`actor_kind='member'`)。
+- **端点(§3.2/§3.3)**:`GET/POST/DELETE /workspaces/{ws}/api-tokens[/{id}]`(`token:manage` 门控,跨持有者创建需 admin+)、`GET /api-tokens/whoami`(PAT/agent 凭证自身鉴权,解析有效 principal:工作区/角色/scopes/成员类型)、`GET /workspaces/{ws}/audit-logs`(admin+,action/actor 过滤 + keyset 游标分页)。写端点按 principal+IP 限流(120/min,§3.6)。
+
+### Quality
+
+- 后端单测 + 进程内路由 + 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS live)全绿;pytest-cov **95.91%**(≥90% 门禁;token_routes 95% / tokens 98% / token_schemas 100%,整体与新增代码双达标);ruff 全绿;main CI 三 job 全绿。
+- 验收独立实测(真实 API + psql 落库核对,50 项):明文仅一次与行内零明文、list 无明文、whoami 鉴权(JWT/伪 token 拒绝)、scope∩角色最小权限、role_override 创建与使用双路径 422(降级后使用不提权)、撤销即时 401 与持有者/admin 权限、跨持有者创建门控、agent 凭证前缀与 `agent:trigger` 剥离、过期即 401、审计落库 + 过滤 + 权限门控 + UPDATE/DELETE 触发器拒绝、RLS fail-closed(无 GUC 拒绝 / 异租户 0 行)、跨工作区持有者复合 FK 拒绝。
+
+### Deferred(增量 2 余项,本 Issue 续做)
+
+- OAuth 提供商往返(§1.2 A5/A6)、C4 会话撤销 outbox→realtime 广播、生产 SMTP mailer、auth 前端页面(§4,含 step-up 再认证交互与审计页**时间范围**过滤——审计端点现支持 action/actor + 游标分页,§5.3 时间范围随审计 UI 补齐)、`POST /agents/{agent_id}/tokens` 便捷端点(待 agents 表;agent 凭证逻辑已在 service 层落地并经 seeded agent member 验证)。
+
 ## [0.6.0] - 2026-07-25
 
 member 统一成员名册(MES-14,阶段 3):member.md 五章在 v0.4.0 已落地的 `members` / `member_project_access` 表之上全量落地功能层 + 名册前端页面。`members.id` 作为全系统统一引用键(README §6.1),人与 agent 对称同册。
