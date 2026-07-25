@@ -37,8 +37,10 @@ SUPPORTED_LOCALES: tuple[str, ...] = ("zh-CN", "en")
 SUPPORTED_THEMES: tuple[str, ...] = ("light", "dark", "system")
 
 # A clearly-marked development signing key. Production MUST override
-# ``MESH_JWT_SECRET``: ``load_settings`` refuses this default when
-# ``auth_mode=production`` (fail-safe, mirroring the auth_mode pattern).
+# ``MESH_JWT_SECRET``: :func:`validate_auth_settings` refuses this default when
+# ``auth_mode=production``, and every app factory that signs or verifies tokens
+# (``mesh.api.app.create_app``, ``mesh.realtime.app.create_app``) calls it at
+# startup (fail-safe, mirroring the auth_mode pattern).
 DEV_JWT_SECRET = "mesh-dev-insecure-signing-key-do-not-use-in-production"
 
 
@@ -79,6 +81,8 @@ class Settings(BaseSettings):
     # tokens; the Fernet key for at-rest secrets (MFA) is derived from it so a
     # single env var drives both. ``jwt_algorithm`` is fixed at the config
     # boundary — verification never trusts the token header's ``alg`` (§5.5).
+    # The default is a public dev key: ``validate_auth_settings`` refuses it at
+    # app-factory startup when ``auth_mode=production``.
     jwt_secret: str = DEV_JWT_SECRET
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
     access_token_ttl: timedelta = DEFAULT_ACCESS_TOKEN_TTL
@@ -139,3 +143,23 @@ def load_settings(**overrides: object) -> Settings:
             sorted({str(err["loc"][0]) for err in exc.errors() if err["type"] == "missing"})
         )
         raise ConfigError(missing, str(exc)) from exc
+
+
+def validate_auth_settings(settings: Settings) -> None:
+    """Fail-safe shared by every app factory that signs or verifies tokens.
+
+    Production must never run on the well-known dev signing key (auth.md §5.5 —
+    keys not in code/repo): the default is public in this repository, so any
+    token forged with it would pass verification. Both ``mesh.api.app`` and
+    ``mesh.realtime.app`` call this at startup — the gateway is an independently
+    deployable unit (README §2.2) whose configuration can be incomplete even
+    when the API's is fine, so the check must not live in a single factory.
+
+    :raises ConfigError: when ``auth_mode=production`` and ``jwt_secret`` is
+        still the public development default.
+    """
+    if settings.auth_mode == "production" and settings.jwt_secret == DEV_JWT_SECRET:
+        raise ConfigError(
+            ("jwt_secret",),
+            "MESH_JWT_SECRET must be set to a strong secret in production",
+        )

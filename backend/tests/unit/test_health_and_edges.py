@@ -29,8 +29,21 @@ def test_create_app_refuses_dev_signing_key_in_production(db_url, redis_url):
     settings = load_settings(
         database_url=db_url, redis_url=redis_url, auth_mode="production"
     )  # default dev jwt_secret
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError) as excinfo:
         create_app(settings)
+    assert excinfo.value.missing_fields == ("jwt_secret",)
+    assert "MESH_JWT_SECRET" in excinfo.value.detail
+
+
+async def test_create_app_accepts_dev_mode_default_key(db_url, redis_url):
+    """Regression: the production fail-safe never fires on the dev path."""
+    settings = load_settings(
+        database_url=db_url, redis_url=redis_url, auth_mode="dev"
+    )  # default DEV_JWT_SECRET is fine in dev
+    app = create_app(settings)
+    assert app.state.authenticator is not None
+    await app.state.redis.aclose()
+    await app.state.engine.dispose()
 
 
 async def test_readyz_reports_database_unavailable(db_url, redis_url):
