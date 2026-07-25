@@ -107,6 +107,8 @@ interface FetchOptions {
   readonly createError?: { readonly code: string; readonly message: string };
   /** GET 列表首次失败(错误态重试用) */
   readonly failListOnce?: boolean;
+  /** POST 创建以网络错误 reject(非 MeshApiError 分支) */
+  readonly createRejects?: boolean;
 }
 
 function makeFetch(projects: readonly ListProjectsProject[], opts: FetchOptions = {}) {
@@ -120,6 +122,9 @@ function makeFetch(projects: readonly ListProjectsProject[], opts: FetchOptions 
       return fakeResponse({ body: { data: ME } });
     }
     if (method === 'POST' && url.includes('/projects')) {
+      if (opts.createRejects === true) {
+        throw new TypeError('network down');
+      }
       if (opts.createStatus !== undefined && opts.createStatus >= 400) {
         return fakeResponse({
           status: opts.createStatus,
@@ -555,5 +560,28 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     expect(body).toContain('"name":"Tiny"');
     expect(body).toContain('"key":"TINY"');
     expect(body).not.toContain('description');
+  });
+
+  it('新建失败(网络错误)就地呈现 unknownError 文案', async () => {
+    stub([], { createRejects: true });
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+    await user.click(await screen.findByTestId('new-project-button'));
+    const nameInput = await screen.findByLabelText('Name');
+    await user.type(nameInput, 'Broken');
+    await user.click(screen.getByTestId('create-project-submit'));
+    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeDefined();
+  });
+
+  it('名称为空时提交被禁用,不发请求', async () => {
+    const calls = stub([]);
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+    await user.click(await screen.findByTestId('new-project-button'));
+    const submit = await screen.findByTestId('create-project-submit');
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      calls.filter((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.includes('/projects')),
+    ).toHaveLength(0);
   });
 });

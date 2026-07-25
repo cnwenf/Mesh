@@ -310,4 +310,107 @@ describe('ProjectSettingsPage', () => {
     });
     expect(await screen.findByTestId('projects-list-page')).toBeDefined();
   });
+
+  it('renders the error state when the project fails to load', async () => {
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
+
+  it('shows a danger toast when archiving fails', async () => {
+    const calls: RecordedCall[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, init });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/members')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method === 'POST' && url.includes('/archive')) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    const user = userEvent.setup();
+    await screen.findByTestId('settings-name');
+    await user.click(screen.getByTestId('settings-archive-toggle'));
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+  });
+
+  it('shows a danger toast and closes the dialog when deleting fails', async () => {
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/members')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method === 'DELETE' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    const user = userEvent.setup();
+    await screen.findByTestId('settings-name');
+    await user.click(screen.getByTestId('settings-delete'));
+    await user.click(await screen.findByTestId('settings-delete-confirm'));
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+    expect(screen.queryByTestId('projects-list-page')).toBeNull();
+  });
+
+  it('shows danger toasts when member add, role change and remove fail', async () => {
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/members')) {
+        if (url.includes('/projects/')) {
+          return fakeResponse({ body: { data: [PROJECT_MEMBER_ENTRY], next_cursor: null } });
+        }
+        return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
+      }
+      if (method !== 'GET' && url.includes('/members')) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    const user = userEvent.setup();
+    await screen.findByTestId('project-member-list');
+    // 改角色失败
+    await user.selectOptions(screen.getByTestId('member-role-mem-2'), 'viewer');
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+    // 添加失败
+    await user.selectOptions(screen.getByTestId('add-member-select'), 'mem-lead');
+    await user.click(screen.getByTestId('add-member-submit'));
+    await waitFor(() => {
+      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+    });
+    // 移除失败
+    await user.click(screen.getByTestId('member-remove-mem-2'));
+    await waitFor(() => {
+      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+    });
+  });
 });

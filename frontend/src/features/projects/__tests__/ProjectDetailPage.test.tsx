@@ -316,4 +316,114 @@ describe('ProjectDetailPage', () => {
       await screen.findByText('You are not a member of any workspace yet.'),
     ).toBeDefined();
   });
+
+  it('shows the dialog error when posting a health update fails', async () => {
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'POST' && url.includes('/updates')) {
+        return fakeResponse({
+          status: 422,
+          body: { error: { code: 'project_archived', message: 'archived' } },
+        });
+      }
+      if (method === 'GET' && url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('update-status-button'));
+    const dialog = await screen.findByTestId('health-update-form');
+    await user.selectOptions(within(dialog).getByTestId('health-select'), 'at_risk');
+    await user.click(within(dialog).getByTestId('health-update-submit'));
+    expect(await screen.findByTestId('health-update-error')).toBeDefined();
+  });
+
+  it('surfaces errors from milestone create, toggle and delete', async () => {
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method !== 'GET' && url.includes('/milestones')) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('tab-milestones'));
+    // 创建失败 → 对话框内错误
+    await user.click(await screen.findByTestId('create-milestone-button'));
+    await user.type(screen.getByTestId('milestone-title-input'), 'Doomed');
+    await user.click(screen.getByTestId('create-milestone-submit'));
+    expect(await screen.findByTestId('create-milestone-error')).toBeDefined();
+    await user.keyboard('{Escape}');
+    // 开合失败 → danger toast
+    await user.click(await screen.findByTestId('milestone-toggle-ms-1'));
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+    // 删除失败 → danger toast
+    await user.click(screen.getByTestId('milestone-delete-ms-1'));
+    await user.click(await screen.findByTestId('milestone-delete-confirm'));
+    await waitFor(() => {
+      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('shows the update submit error when posting an update fails', async () => {
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'POST' && url.includes('/updates')) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      }
+      if (method === 'GET' && url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject() } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('tab-updates'));
+    await user.type(await screen.findByLabelText('What changed?'), 'note');
+    await user.click(screen.getByTestId('update-submit'));
+    expect(await screen.findByTestId('update-submit-error')).toBeDefined();
+  });
+
+  it('renders placeholders for a project without lead, description or milestones', async () => {
+    stubFetch({
+      project: makeProject({ lead: null, lead_member_id: null, description: null, milestones: [] }),
+    });
+    renderDetail();
+    expect(await screen.findByText('No description yet.')).toBeDefined();
+    await screen.findByText('No milestones yet.');
+  });
+
+  it('keeps the delete failure visible without navigating', async () => {
+    stubFetch({ deleteStatus: 500 });
+    renderDetail();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('delete-project-button'));
+    await user.click(await screen.findByTestId('delete-confirm'));
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+    expect(screen.queryByTestId('projects-list-page')).toBeNull();
+  });
 });
