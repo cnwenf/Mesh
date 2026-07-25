@@ -21,6 +21,8 @@ from mesh.api.realtime_routes import router as realtime_router
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
+from mesh.auth.token_routes import router as token_router
+from mesh.auth.tokens import TokenService
 from mesh.config import DEV_JWT_SECRET, ConfigError, Settings, load_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
@@ -116,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.workspace_service = WorkspaceService(session_factory)
     app.state.invitation_service = InvitationService(session_factory)
     app.state.member_service = MemberService(session_factory)
+    app.state.token_service = TokenService(session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -123,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(workspace_router)
     app.include_router(member_router)
+    app.include_router(token_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:
