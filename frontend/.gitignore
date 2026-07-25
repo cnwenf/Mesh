@@ -6,3 +6,4 @@ test-results
 .env.local
 *.log
 tsconfig.tsbuildinfo
+e2e/.members-context.json
