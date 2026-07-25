@@ -1,0 +1,103 @@
+# Mesh backend CI:
+# 1) docs-checks — event vocabulary (§6.7) + roster-entry (§6.12/T35) doc gates on backend PRs too;
+# 2) test — unit + real e2e (real server processes, real PostgreSQL 16, real Redis) with a ≥90% coverage gate;
+# 3) schema-validation — docs/specs/validation/schema_r2_validation.sql runs green on a disposable PG16.
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "tests/docs/**"
+      - "docs/specs/validation/**"
+      - ".github/workflows/backend-ci.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "tests/docs/**"
+      - "docs/specs/validation/**"
+      - ".github/workflows/backend-ci.yml"
+
+jobs:
+  docs-checks:
+    name: 文档词汇/结构校验(§6.7, §6.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: check_event_vocab.py
+        run: python3 tests/docs/check_event_vocab.py docs/specs
+      - name: check_roster_entry.py
+        run: python3 tests/docs/check_roster_entry.py docs/specs
+
+  test:
+    name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_USER: mesh
+          POSTGRES_DB: mesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mesh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend
+        run: pip install -e "backend/[dev]"
+      - name: Lint (ruff)
+        run: ruff check backend/src backend/tests
+      - name: Run unit + e2e with coverage gate
+        env:
+          MESH_TEST_DATABASE_URL: postgresql+asyncpg://mesh:mesh@127.0.0.1:5432/mesh_test
+          MESH_TEST_REDIS_URL: redis://127.0.0.1:6379/1
+        run: |
+          cd backend
+          pytest --cov=mesh --cov-report=term-missing --cov-fail-under=90
+
+  schema-validation:
+    name: DDL 与行为验证(PostgreSQL 16,100 条断言)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: mesh
+          POSTGRES_DB: mesh_validation
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run schema_r2_validation.sql
+        env:
+          PGPASSWORD: mesh
+        run: |
+          psql -h 127.0.0.1 -U postgres -d mesh_validation \
+            -v ON_ERROR_STOP=1 \
+            -f docs/specs/validation/schema_r2_validation.sql
