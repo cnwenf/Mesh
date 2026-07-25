@@ -480,3 +480,93 @@ class TestSessions:
         user = await _get_user(service._sf, EMAIL)
         with pytest.raises(NotFoundError):
             await service.revoke_session(user_id=user.id, session_id=uuid.uuid4())
+
+
+# --- C4: session revocation realtime broadcast (§3.7/§5.6) -------------------
+
+
+class TestSessionRevocationBroadcast:
+    async def _user_with_workspace(self, service, session_factory, email="c4@corp.com"):
+        import uuid
+
+        from sqlalchemy import text
+
+        user, _ = await service.register(email=email, password=PASSWORD, display_name="C4")
+        user_id = user["id"]
+        async with session_factory() as session, session.begin():
+            ws_id = (
+                await session.execute(
+                    text("INSERT INTO workspaces (name, slug) VALUES ('W', :s) RETURNING id"),
+                    {"s": f"ws-{uuid.uuid4().hex[:12]}"},
+                )
+            ).scalar_one()
+            await session.execute(
+                text(
+                    "INSERT INTO members (workspace_id, member_type, user_id, role, status) "
+                    "VALUES (:ws, 'human', :u, 'member', 'active')"
+                ),
+                {"ws": ws_id, "u": user_id},
+            )
+        return user_id, ws_id
+
+    async def _broadcasts(self, session_factory, ws_id):
+        from mesh.db.models.outbox import OutboxEvent
+
+        async with session_factory() as session:
+            events = (
+                (
+                    await session.execute(
+                        select(OutboxEvent).where(OutboxEvent.workspace_id == ws_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            e
+            for e in events
+            if e.event_type == "realtime.publish" and e.payload.get("event") == "session.revoked"
+        ]
+
+    async def test_logout_all_broadcasts(self, service, session_factory):
+        user_id, ws_id = await self._user_with_workspace(service, session_factory)
+        await service.login(email="c4@corp.com", password=PASSWORD)
+        await service.logout_all(user_id=user_id)
+        broadcasts = await self._broadcasts(session_factory, ws_id)
+        assert broadcasts
+        assert broadcasts[0].payload["channel"] == f"workspace:{ws_id}"
+        assert broadcasts[0].payload["data"]["user_id"] == str(user_id)
+
+    async def test_single_logout_broadcasts(self, service, session_factory):
+        user_id, ws_id = await self._user_with_workspace(
+            service, session_factory, email="c4b@corp.com"
+        )
+        tokens = await service.login(email="c4b@corp.com", password=PASSWORD)
+        await service.logout(user_id=user_id, refresh_token=tokens.refresh_token)
+        assert await self._broadcasts(session_factory, ws_id)
+
+    async def test_revoke_session_broadcasts(self, service, session_factory):
+        user_id, ws_id = await self._user_with_workspace(
+            service, session_factory, email="c4c@corp.com"
+        )
+        await service.login(email="c4c@corp.com", password=PASSWORD)
+        sessions = await service.list_sessions(user_id=user_id)
+        await service.revoke_session(user_id=user_id, session_id=sessions[0]["id"])
+        assert await self._broadcasts(session_factory, ws_id)
+
+    async def test_reset_password_broadcasts(self, service, session_factory):
+        user_id, ws_id = await self._user_with_workspace(
+            service, session_factory, email="c4d@corp.com"
+        )
+        await service.login(email="c4d@corp.com", password=PASSWORD)
+        token = await service.request_password_reset(email="c4d@corp.com")
+        await service.reset_password(token=token, new_password="a-new-passw0rd")
+        assert await self._broadcasts(session_factory, ws_id)
+
+    async def test_no_broadcast_when_no_active_session(self, service, session_factory):
+        _user_id, ws_id = await self._user_with_workspace(
+            service, session_factory, email="c4e@corp.com"
+        )
+        # No login → logout_all revokes nothing → no broadcast.
+        await service.logout_all(user_id=_user_id)
+        assert not await self._broadcasts(session_factory, ws_id)

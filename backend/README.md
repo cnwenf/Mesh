@@ -16,7 +16,7 @@ Three independently deployable units, all stateless except PostgreSQL:
 Layering inside `src/mesh/`:
 
 - `api/` — FastAPI factory, error/pagination contracts (§6.14), health, deps.
-- `auth/` — authentication & authorization core (`docs/specs/features/auth.md`): argon2id password hashing, register/login/logout, short-lived access JWT (fixed `alg`, rejects `none`/HS-RS confusion) + revocable refresh (SHA-256 hash only, rotation with replay detection), single-use reset/verification tokens, TOTP MFA (encrypted secret + one-time backup codes), `(IP, email)` login lockout, Redis sliding-window rate limiting, `users.settings`/`timezone` preferences (`PATCH /api/v1/users/me`), and PAT / agent access tokens (`api_tokens`: hash-only, `role_override` double-validated against the holder role, scope∩role least privilege, agent `agent:trigger` default-deny).
+- `auth/` — authentication & authorization core (`docs/specs/features/auth.md`): argon2id password hashing, register/login/logout, short-lived access JWT (fixed `alg`, rejects `none`/HS-RS confusion) + revocable refresh (SHA-256 hash only, rotation with replay detection), single-use reset/verification tokens, TOTP MFA (encrypted secret + one-time backup codes), `(IP, email)` login lockout, Redis sliding-window rate limiting, `users.settings`/`timezone` preferences (`PATCH /api/v1/users/me`), PAT / agent access tokens (`api_tokens`: hash-only, `role_override` double-validated against the holder role, scope∩role least privilege, agent `agent:trigger` default-deny), vendor-neutral OAuth login/bind (`oauth.py`: authorization-code + PKCE, mock provider in dev), session/token-revocation realtime broadcast (`realtime.py`: `session.revoked` via outbox), transactional email (`mailer.py`: Redis dev-mailbox / SMTP), and the append-only audit query with `before`/`after` time-range.
 - `db/` — SQLAlchemy 2.x models, Alembic migrations, multi-tenant infrastructure (§6.2: `UNIQUE(workspace_id, id)` + composite-FK templates, RLS GUC `mesh.workspace_id`, global-table exemption list).
 - `events/vocab.py` — canonical realtime event vocabulary (§6.7, kept in sync with the README registry by tests + CI).
 - `outbox/` — transactional outbox (§6.6): `emit_event`/`emit_realtime` write in the business transaction; the relay claims `FOR UPDATE SKIP LOCKED`; the projector is the ONLY writer of `realtime_events` and allocates per-channel `seq` in the same transaction.
@@ -44,13 +44,21 @@ Layering inside `src/mesh/`:
 | GET / DELETE | `/api/v1/sessions[/{id}]` | active-session list / revoke |
 | GET / POST / DELETE | `/api/v1/workspaces/{ws}/api-tokens[/{id}]` | PAT / agent credentials — hash-only, plaintext returned once on create; `role_override` ≤ holder role (422, validated at create **and** use); agent tokens drop `agent:trigger` (anti-loop); create/list/revoke gated by `token:manage`, cross-holder create needs admin |
 | GET | `/api/v1/api-tokens/whoami` | authenticate a Bearer PAT/agent token, resolve its effective principal (workspace/role/scopes) |
-| GET | `/api/v1/workspaces/{ws}/audit-logs` | append-only audit query (filter by action/actor, cursor pagination; admin+) |
+| GET | `/api/v1/workspaces/{ws}/audit-logs` | append-only audit query (filter by action/actor + `before`/`after` time-range, cursor pagination; admin+) |
+| GET | `/api/v1/auth/oauth/{provider}/start` · `/bind` | OAuth authorization-code + PKCE start (302 to provider); `/bind` is authenticated |
+| GET / POST | `/api/v1/auth/oauth/{provider}/callback` | exchange code (validates `state`), login-or-register-and-bind (A5) or bind to caller (A6) |
+| GET / DELETE | `/api/v1/auth/oauth/identities` · `/api/v1/auth/oauth/{provider}` | list bound providers / unbind (keeps ≥1 login method) |
 
-The OAuth provider round-trip, session-revocation realtime broadcast and
-production SMTP delivery land with later increments; the global identity tables
-(`users`, `sessions`, one-time tokens, `oauth_identities`, `login_attempts`),
-`api_tokens`, the append-only `audit_logs` table + query endpoint and the RBAC
-adjudicator are in place now.
+The auth backend is feature-complete for `docs/specs/features/auth.md` except the
+§4 frontend pages and the `POST /agents/{agent_id}/tokens` convenience endpoint
+(awaiting the agents table). In place now: the global identity tables (`users`,
+`sessions`, one-time tokens, `oauth_identities`, `login_attempts`), `api_tokens`,
+the append-only `audit_logs` table + query endpoint, the RBAC adjudicator, the
+vendor-neutral OAuth round-trip (mock provider in dev for a real code+PKCE
+round-trip; production providers operator-configured), session/token-revocation
+realtime broadcast (`session.revoked` via outbox → projector, §3.7/§5.6), and
+transactional email (Redis dev-mailbox in dev; SMTP via `MESH_SMTP_*` in
+production — see `auth/mailer.py`).
 
 ## Workspace endpoints (`docs/specs/features/workspace.md`)
 

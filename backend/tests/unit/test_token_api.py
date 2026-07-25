@@ -9,7 +9,7 @@ authenticated with freshly minted access JWTs.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 import httpx
 import pytest
@@ -244,6 +244,69 @@ async def test_audit_logs_invalid_actor_400(client, ctx):
         headers=_auth(ctx["owner_token"]),
     )
     assert resp.status_code == 400
+
+
+async def _seed_audit_rows(app, ws, *, actor_member_id):
+    """Three audit rows at distinct, known timestamps for time-range tests."""
+    from datetime import datetime
+
+    from mesh.db.models.audit import AuditLog
+
+    moments = [
+        datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC),
+        datetime(2026, 1, 2, 12, 0, 0, tzinfo=UTC),
+        datetime(2026, 1, 3, 12, 0, 0, tzinfo=UTC),
+    ]
+    async with app.state.session_factory() as session, session.begin():
+        for i, m in enumerate(moments):
+            session.add(
+                AuditLog(
+                    workspace_id=ws,
+                    actor_member_id=actor_member_id,
+                    actor_kind="member",
+                    action=f"test.event_{i}",
+                    created_at=m,
+                )
+            )
+    return moments
+
+
+async def test_audit_logs_time_range_before_after(app, client, ctx):
+    moments = await _seed_audit_rows(app, ctx["ws"], actor_member_id=ctx["owner_member"])
+    h = _auth(ctx["owner_token"])
+    base = f"/api/v1/workspaces/{ctx['ws']}/audit-logs"
+
+    # after 2026-01-01T12:00 → the two later rows (strictly greater).
+    after = await client.get(
+        base, params={"after": "2026-01-01T12:00:00Z"}, headers=h
+    )
+    assert after.status_code == 200
+    assert {r["action"] for r in after.json()["data"]} == {"test.event_1", "test.event_2"}
+
+    # before 2026-01-03T12:00 → the two earlier rows (strictly less).
+    before = await client.get(
+        base, params={"before": "2026-01-03T12:00:00Z"}, headers=h
+    )
+    assert {r["action"] for r in before.json()["data"]} == {"test.event_0", "test.event_1"}
+
+    # bounded window (after day1, before day3) → only the middle row.
+    window = await client.get(
+        base,
+        params={"after": "2026-01-01T12:00:00Z", "before": "2026-01-03T12:00:00Z"},
+        headers=h,
+    )
+    assert {r["action"] for r in window.json()["data"]} == {"test.event_1"}
+    assert moments  # referenced
+
+
+async def test_audit_logs_invalid_timestamp_400(client, ctx):
+    h = _auth(ctx["owner_token"])
+    base = f"/api/v1/workspaces/{ctx['ws']}/audit-logs"
+    bad_before = await client.get(base, params={"before": "not-a-date"}, headers=h)
+    assert bad_before.status_code == 400
+    assert bad_before.json()["error"]["code"] == "validation_error"
+    bad_after = await client.get(base, params={"after": "2026-99-99"}, headers=h)
+    assert bad_after.status_code == 400
 
 
 # --- workspace gating --------------------------------------------------------
