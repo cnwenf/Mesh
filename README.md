@@ -79,6 +79,7 @@ API 启动时自动执行 `alembic upgrade head`(建表 + RLS 策略);worker 进
 ```bash
 cd backend
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock   # 可复现安装(lockfile 为权威来源,CI/Docker 同源)
+pip install -e . --no-deps
 pytest --cov=mesh --cov-report=term-missing   # 单测 + 真实 e2e(需本地 PostgreSQL 16 与 Redis)
 ```
