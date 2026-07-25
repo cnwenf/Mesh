@@ -190,3 +190,80 @@ async def test_reconciliation_rest_requires_auth_and_tenant_match(
         assert len(body["data"]) == 1
         assert body["data"][0]["seq"] == 1
         assert body["next_cursor"] is None  # only one event exists
+
+
+async def test_jwt_session_first_frame_auth_subscribe_and_cross_tenant(
+    gateway_server, api_server, session_factory, workspace_factory, redis_client
+):
+    """Session JWT first-frame auth (auth.md §3.1 credentials, README §6.16).
+
+    A real logged-in user authenticates with the access JWT, subscribes to
+    their own workspace channel, is denied a foreign tenant's channel, and
+    reconciles over REST with the same Bearer token.
+    """
+    import uuid
+    from datetime import timedelta
+
+    import httpx
+
+    from mesh.auth.jwt import encode_access_token
+    from mesh.config import DEV_JWT_SECRET
+    from mesh.db.models.member import Member
+    from mesh.db.models.user import User
+
+    ws_a = await workspace_factory(name="A", slug="gw-jwt-a")
+    ws_b = await workspace_factory(name="B", slug="gw-jwt-b")
+    user_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        session.add(User(id=user_id, email="jwt-gw@corp.com", display_name="J"))
+    async with session_factory() as session, session.begin():
+        session.add(Member(workspace_id=ws_a.id, member_type="human", user_id=user_id))
+    token, _ = encode_access_token(
+        subject=user_id, secret=DEV_JWT_SECRET, algorithm="HS256", ttl=timedelta(minutes=5)
+    )
+
+    channel_a = f"workspace:{ws_a.id}"
+    await _publish_via_relay(
+        session_factory, ws_a.id, channel_a, "workspace.updated", {"v": 1}, redis_client
+    )
+
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": token}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+
+        await ws.send(json.dumps({"op": "subscribe", "channel": channel_a}))
+        frame = await _recv_frame(ws)
+        assert frame["op"] == "event"
+        assert frame["event"] == "workspace.updated"
+        subscribed = await _recv_frame(ws)
+        assert subscribed["op"] == "subscribed"
+        assert subscribed["channel"] == channel_a
+
+        # Non-member tenant channel → forbidden, connection stays up.
+        await ws.send(json.dumps({"op": "subscribe", "channel": f"workspace:{ws_b.id}"}))
+        denied = await _recv_frame(ws)
+        assert denied["op"] == "error"
+        assert denied["code"] == "forbidden"
+    finally:
+        await ws.close()
+
+    # REST reconciliation accepts the same session JWT.
+    async with httpx.AsyncClient(base_url=api_server.base_url, timeout=10) as client:
+        response = await client.get(
+            "/api/v1/realtime/events",
+            params={"channel": channel_a, "since": 0},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["event"] for event in body["data"]] == ["workspace.updated"]
+
+    # Invalid JWT → 401 on the REST path.
+    async with httpx.AsyncClient(base_url=api_server.base_url, timeout=10) as client:
+        unauthorized = await client.get(
+            "/api/v1/realtime/events",
+            params={"channel": channel_a, "since": 0},
+            headers={"Authorization": "Bearer not-a-jwt"},
+        )
+    assert unauthorized.status_code == 401

@@ -17,8 +17,7 @@ from mesh.db.engine import create_app_engine_from_settings, create_session_facto
 from mesh.realtime.auth import (
     ChannelAuthorizer,
     DefaultChannelAuthorizer,
-    DevTokenAuthenticator,
-    NullAuthenticator,
+    build_authenticator,
 )
 from mesh.realtime.gateway import realtime_ws_endpoint
 
@@ -45,8 +44,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    app.state.authenticator = (
-        DevTokenAuthenticator() if settings.auth_mode == "dev" else NullAuthenticator()
+    app.state.authenticator = build_authenticator(
+        auth_mode=settings.auth_mode,
+        jwt_secret=settings.jwt_secret,
+        jwt_algorithm=settings.jwt_algorithm,
+        session_factory=session_factory,
     )
     app.state.authorizer = build_authorizer(session_factory)
 

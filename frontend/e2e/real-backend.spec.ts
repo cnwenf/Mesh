@@ -64,6 +64,10 @@ function watermark(): number {
 
 async function loginReal(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/login');
+  // dev-token 直填入口在 <details> 内(MES-26 起默认折叠),展开后填写
+  await page.locator('.mesh-login__dev').evaluate((el) => {
+    (el as HTMLDetailsElement).open = true;
+  });
   await page.getByTestId('login-token').fill(TOKEN);
   await page.getByTestId('login-submit').click();
   await page.waitForURL('**/');
@@ -81,6 +85,11 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
       timeout: 20_000,
     });
     await page.screenshot({ path: 'test-results/real-01-connected.png' });
+
+    // settle:`Connected` 仅表示 auth_ok 握手完成;客户端随后才发 subscribe,网关侧
+    // 订阅注册经 Redis fan-out 有短暂传播窗口。冷库下若立即 publishEvent 会抢在订阅
+    // 注册之前而丢首帧(暖库/已持久化时由重放补齐)。等待订阅就绪使 live fan-out 稳定。
+    await page.waitForTimeout(800);
 
     // 经真实生产路径注入事件 → 增量合并出行
     publishEvent('REAL-1', '真实后端实时帧');

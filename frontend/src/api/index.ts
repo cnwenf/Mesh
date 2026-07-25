@@ -32,5 +32,71 @@ export {
   updatePreferences,
 } from './userPreferences';
 export type { ServerUserPreferences, UpdatePreferencesPayload } from './userPreferences';
-export { fetchWorkspaceDefaultLocale, fetchWorkspaceById, fetchWorkspaces } from './workspace';
-export type { WorkspaceDetail, WorkspaceListItem, WorkspaceSettings } from './workspace';
+export {
+  createWorkspace,
+  deleteWorkspace,
+  fetchAllWorkspaceSummaries,
+  fetchWorkspaceDefaultLocale,
+  fetchWorkspaces,
+  getWorkspace,
+  getWorkspaceBySlug,
+  listWorkspaces,
+  restoreWorkspace,
+  updateWorkspace,
+} from './workspace';
+export type {
+  CreateWorkspaceInput,
+  WorkspaceDetail,
+  WorkspaceListQuery,
+  WorkspacePatch,
+  WorkspaceRole,
+  WorkspaceSettings,
+  WorkspaceSummary,
+} from './workspace';
+export {
+  ERROR_INVITATION_INVALID,
+  ERROR_INVITATION_LIMITS_EXCEEDED,
+  acceptInvitation,
+  createInvitations,
+  listInvitations,
+  previewInvitation,
+  revokeInvitation,
+} from './invitations';
+export type {
+  AcceptInvitationResult,
+  CreateInvitationInput,
+  Invitation,
+  InvitationListQuery,
+  InvitationRejectReason,
+  InvitationRole,
+  InvitationPreview,
+  InvitationStatus,
+} from './invitations';
+export {
+  ERROR_AGENT_OWNER_NOT_ALLOWED,
+  ERROR_LAST_OWNER,
+  listMembers,
+  updateMemberRole,
+} from './members';
+export type {
+  MemberListQuery,
+  MemberStatus,
+  MemberSummary,
+  MemberType,
+} from './members';
+export {
+  ERROR_INVALID_CREDENTIALS,
+  ERROR_WEAK_PASSWORD,
+  fetchMe,
+  isSessionTokens,
+  login,
+  register,
+} from './auth';
+export type {
+  CurrentUser,
+  LoginInput,
+  LoginResult,
+  MfaChallenge,
+  RegisterInput,
+  SessionTokens,
+} from './auth';

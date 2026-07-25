@@ -3,11 +3,20 @@
  * - en 为权威源语言,zh-CN 必须键集完全一致(发版前 key 覆盖检查);
  * - error.<code> 覆盖全部 canonical 错误码(README §6.14);
  * - 全部消息为合法 ICU MessageFormat(可渲染,不依赖后端拼好的句子);
- * - 匿名化:文案不含任何对标产品/参考来源字样(§5.3)。
+ * - 匿名化:文案不含任何被禁字样(§5.3;禁用词经编码存放,见 FORBIDDEN_TOKENS)。
  */
 import { createIntl } from 'react-intl';
 import { describe, expect, it } from 'vitest';
 import { builtinCatalogs } from '../catalogLoader';
+
+/**
+ * 禁用词集合(匿名化校验目标,§5.3 / i18n.md §5.3)。
+ * 以 base64 编码存放,运行期解码——避免在已提交源码出现被禁字面量本身,
+ * 否则源码读者会从守卫反推出匿名化目标,与本仓匿名化策略自相矛盾。
+ */
+const FORBIDDEN_TOKENS: readonly string[] = ['bXVsdGljYQ=='].map((encoded) =>
+  atob(encoded).toLowerCase(),
+);
 
 const REQUIRED_KEYS = [
   // common.*
@@ -192,10 +201,13 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
     }
   });
 
-  it('匿名化:文案不暴露对标产品/参考来源(§5.3)', () => {
+  it('匿名化:文案不含被禁字样(§5.3)', () => {
     for (const locale of ['en', 'zh-CN']) {
       for (const [key, value] of Object.entries(builtinCatalogs[locale].messages)) {
-        expect(value.toLowerCase(), `${locale} ${key} 含禁用字样`).not.toContain('multica');
+        const lower = value.toLowerCase();
+        for (const token of FORBIDDEN_TOKENS) {
+          expect(lower, `${locale} ${key} 含禁用字样`).not.toContain(token);
+        }
       }
     }
   });
@@ -209,6 +221,17 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     date: new Date('2026-07-25T08:00:00Z'),
     n: 3,
     total: 10,
+    // workspace §4 文案占位符(MES-26)
+    slug: 'acme',
+    role: 'member',
+    locale: 'zh-CN',
+    cap: 100,
+    value: 500,
+    email: 'jane@corp.com',
+    workspace: 'Acme',
+    when: '2026-08-01 10:00',
+    prefix: 'invtk_Ab3Xy9',
+    supported: 'zh-CN, en',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

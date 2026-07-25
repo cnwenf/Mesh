@@ -5,6 +5,7 @@
  */
 import { NavLink } from 'react-router-dom';
 import { useT } from '../i18n';
+import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
 
 export type NavKey =
   | 'home'
@@ -38,6 +39,12 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 
 export function Sidebar(): React.JSX.Element {
   const t = useT();
+  // 工作区上下文内 admin+ 呈现「工作区设置」入口(§6.12 角色可见性;member/guest 不可见)
+  const workspaceContext = useOptionalWorkspace();
+  const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
+  const showWorkspaceSettings =
+    workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
+
   return (
     <nav className="mesh-sidebar" aria-label={t('a11y.sidebar')}>
       <ul className="mesh-sidebar__list">
@@ -48,6 +55,17 @@ export function Sidebar(): React.JSX.Element {
             </NavLink>
           </li>
         ))}
+        {showWorkspaceSettings && workspace !== null ? (
+          <li className="mesh-sidebar__item">
+            <NavLink
+              to={`/w/${workspace.slug}/settings`}
+              data-testid="nav-workspace-settings"
+              className={navLinkClassName}
+            >
+              {t('nav.workspaceSettings')}
+            </NavLink>
+          </li>
+        ) : null}
       </ul>
     </nav>
   );

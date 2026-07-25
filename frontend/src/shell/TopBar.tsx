@@ -7,6 +7,7 @@ import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { useT } from '../i18n';
 import type { ConnectionState } from '../realtime';
+import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher';
 
 export interface TopBarProps {
   state: ConnectionState;
@@ -36,6 +37,7 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
   return (
     <header className="mesh-topbar" aria-label={t('a11y.topbar')}>
       <span className="mesh-topbar__brand">Mesh</span>
+      <WorkspaceSwitcher />
       <input
         data-testid="topbar-search"
         className="mesh-topbar__search"

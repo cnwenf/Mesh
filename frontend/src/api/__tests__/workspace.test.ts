@@ -1,20 +1,42 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../client';
-import { fetchWorkspaceById, fetchWorkspaceDefaultLocale, fetchWorkspaces } from '../workspace';
-import type { WorkspaceDetail, WorkspaceListItem } from '../workspace';
+import {
+  createWorkspace,
+  deleteWorkspace,
+  fetchAllWorkspaceSummaries,
+  fetchWorkspaceDefaultLocale,
+  fetchWorkspaces,
+  getWorkspace,
+  getWorkspaceBySlug,
+  listWorkspaces,
+  restoreWorkspace,
+  updateWorkspace,
+} from '../workspace';
+import type { WorkspaceDetail, WorkspaceSummary } from '../workspace';
 
-function createMockFetch(responses: Array<{ status: number; body: unknown }>): typeof fetch {
-  let callIndex = 0;
-  return vi.fn().mockImplementation(() => {
-    const response = responses[callIndex] ?? responses[responses.length - 1];
-    callIndex += 1;
-    return Promise.resolve(
-      new Response(JSON.stringify(response.body), {
-        status: response.status,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+function createMockFetch(status: number, body: unknown): typeof fetch {
+  return vi.fn().mockResolvedValue(
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  ) as unknown as typeof fetch;
+}
+
+/** 按调用次序返回不同响应的 fetch 桩 */
+function sequenceFetch(...responses: Array<{ status: number; body: unknown }>): typeof fetch {
+  const impl = vi.fn();
+  responses.forEach((response) => {
+    impl.mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(response.body), {
+          status: response.status,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
     );
-  }) as unknown as typeof fetch;
+  });
+  return impl as unknown as typeof fetch;
 }
 
 function createClient(fetchImpl: typeof fetch): MeshApiClient {
@@ -25,112 +47,185 @@ function createClient(fetchImpl: typeof fetch): MeshApiClient {
   });
 }
 
-describe('workspace API(workspace.md 工作区列表与设置)', () => {
-  it('fetchWorkspaces 返回列表(不含 settings,list_view)', async () => {
-    const workspaces: WorkspaceListItem[] = [
-      { id: 'ws-1', name: 'Test WS', slug: 'test-ws', logo_url: null, my_role: 'admin', created_at: '2026-01-01T00:00:00Z' },
-    ];
-    const fetchImpl = createMockFetch([{ status: 200, body: { data: workspaces, next_cursor: null } }]);
+const SUMMARY: WorkspaceSummary = {
+  id: 'ws-1',
+  name: 'Test WS',
+  slug: 'test-ws',
+  logo_url: null,
+  my_role: 'owner',
+  created_at: '2026-07-24T10:00:00Z',
+};
+
+const DETAIL: WorkspaceDetail = {
+  ...SUMMARY,
+  timezone: 'UTC',
+  settings: { default_locale: 'zh-CN' },
+  updated_at: '2026-07-24T11:00:00Z',
+};
+
+function calledUrl(fetchImpl: typeof fetch, call = 0): string {
+  return ((fetchImpl as ReturnType<typeof vi.fn>).mock.calls[call] as [string])[0];
+}
+
+function calledInit(fetchImpl: typeof fetch, call = 0): RequestInit {
+  return ((fetchImpl as ReturnType<typeof vi.fn>).mock.calls[call] as [string, RequestInit])[1];
+}
+
+describe('workspace API(workspace.md §3 工作区全量端点)', () => {
+  it('listWorkspaces 返回短项列表与游标', async () => {
+    const fetchImpl = createMockFetch(200, { data: [SUMMARY], next_cursor: 'c1' });
     const client = createClient(fetchImpl);
 
-    const result = await fetchWorkspaces(client);
+    const result = await listWorkspaces(client, { limit: 10, cursor: 'c0' });
 
-    expect(result).toEqual(workspaces);
-    const [url] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
-    expect(url).toContain('/api/v1/workspaces');
+    expect(result).toEqual({ data: [SUMMARY], next_cursor: 'c1' });
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/workspaces?limit=10&cursor=c0');
   });
 
-  it('fetchWorkspaceById 返回完整工作区(含 settings)', async () => {
-    const detail: WorkspaceDetail = {
-      id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC',
-      settings: { default_locale: 'zh-CN' }, my_role: 'admin',
-      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
-    };
-    const fetchImpl = createMockFetch([{ status: 200, body: { data: detail } }]);
+  it('fetchWorkspaces 返回首页数据', async () => {
+    const fetchImpl = createMockFetch(200, { data: [SUMMARY], next_cursor: null });
     const client = createClient(fetchImpl);
 
-    const result = await fetchWorkspaceById(client, 'ws-1');
-
-    expect(result.settings.default_locale).toBe('zh-CN');
-    const [url] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
-    expect(url).toContain('/api/v1/workspaces/ws-1');
+    await expect(fetchWorkspaces(client)).resolves.toEqual([SUMMARY]);
   });
 
-  it('fetchWorkspaceDefaultLocale 两步获取:列表→单对象(含 settings)', async () => {
-    const listResponse = {
-      status: 200,
-      body: { data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null },
-    };
-    const detailResponse = {
-      status: 200,
-      body: { data: { id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC', settings: { default_locale: 'zh-CN' }, my_role: 'admin', created_at: '', updated_at: '' } },
-    };
-    const fetchImpl = createMockFetch([listResponse, detailResponse]);
+  it('fetchAllWorkspaceSummaries 自动翻页至末页', async () => {
+    const fetchImpl = sequenceFetch(
+      { status: 200, body: { data: [SUMMARY], next_cursor: 'c1' } },
+      {
+        status: 200,
+        body: { data: [{ ...SUMMARY, id: 'ws-2', slug: 'ws-2' }], next_cursor: null },
+      },
+    );
     const client = createClient(fetchImpl);
 
-    const locale = await fetchWorkspaceDefaultLocale(client);
+    const all = await fetchAllWorkspaceSummaries(client);
 
-    expect(locale).toBe('zh-CN');
-    // 验证两次调用:列表 + 单对象
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    const [url1] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
-    const [url2] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[1] as [string];
-    expect(url1).toContain('/api/v1/workspaces');
-    expect(url2).toContain('/api/v1/workspaces/ws-1');
+    expect(all.map((workspace) => workspace.id)).toEqual(['ws-1', 'ws-2']);
+    expect(calledUrl(fetchImpl, 1)).toContain('cursor=c1');
+  });
+
+  it('getWorkspace 读 UUID detail', async () => {
+    const fetchImpl = createMockFetch(200, { data: DETAIL });
+    const client = createClient(fetchImpl);
+
+    await expect(getWorkspace(client, 'ws-1')).resolves.toEqual(DETAIL);
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/workspaces/ws-1');
+  });
+
+  it('getWorkspaceBySlug 编码 slug 路径', async () => {
+    const fetchImpl = createMockFetch(200, { data: DETAIL });
+    const client = createClient(fetchImpl);
+
+    await expect(getWorkspaceBySlug(client, 'a b')).resolves.toEqual(DETAIL);
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/workspaces/by-slug/a%20b');
+  });
+
+  it('createWorkspace POST 请求体与 201 解析', async () => {
+    const fetchImpl = createMockFetch(201, { data: DETAIL });
+    const client = createClient(fetchImpl);
+
+    const result = await createWorkspace(client, { name: 'Acme', slug: 'acme' });
+
+    expect(result).toEqual(DETAIL);
+    expect(calledInit(fetchImpl).method).toBe('POST');
+    expect(JSON.parse(String(calledInit(fetchImpl).body))).toEqual({ name: 'Acme', slug: 'acme' });
+  });
+
+  it('updateWorkspace PATCH 携带浅合并 patch', async () => {
+    const updated = { ...DETAIL, settings: { default_locale: 'en' } };
+    const fetchImpl = createMockFetch(200, { data: updated });
+    const client = createClient(fetchImpl);
+
+    const result = await updateWorkspace(client, 'ws-1', {
+      settings: { default_locale: 'en' },
+    });
+
+    expect(result.settings.default_locale).toBe('en');
+    expect(calledInit(fetchImpl).method).toBe('PATCH');
+  });
+
+  it('deleteWorkspace 携带 confirm_slug 请求体', async () => {
+    const fetchImpl = createMockFetch(200, { data: { status: 'deleted' } });
+    const client = createClient(fetchImpl);
+
+    await expect(deleteWorkspace(client, 'ws-1', 'test-ws')).resolves.toEqual({
+      status: 'deleted',
+    });
+    expect(calledInit(fetchImpl).method).toBe('DELETE');
+    expect(JSON.parse(String(calledInit(fetchImpl).body))).toEqual({ confirm_slug: 'test-ws' });
+  });
+
+  it('restoreWorkspace POST restore', async () => {
+    const fetchImpl = createMockFetch(200, { data: DETAIL });
+    const client = createClient(fetchImpl);
+
+    await expect(restoreWorkspace(client, 'ws-1')).resolves.toEqual(DETAIL);
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/workspaces/ws-1/restore');
+  });
+
+  it('fetchWorkspaceDefaultLocale 经 detail 读取 settings(列表不含 settings)', async () => {
+    const fetchImpl = sequenceFetch(
+      { status: 200, body: { data: [SUMMARY], next_cursor: null } },
+      { status: 200, body: { data: DETAIL } },
+    );
+    const client = createClient(fetchImpl);
+
+    await expect(fetchWorkspaceDefaultLocale(client)).resolves.toBe('zh-CN');
+    expect(calledUrl(fetchImpl, 1)).toContain('/api/v1/workspaces/ws-1');
   });
 
   it('fetchWorkspaceDefaultLocale 无工作区时返回 null', async () => {
-    const fetchImpl = createMockFetch([{ status: 200, body: { data: [], next_cursor: null } }]);
+    const fetchImpl = createMockFetch(200, { data: [], next_cursor: null });
     const client = createClient(fetchImpl);
 
-    const locale = await fetchWorkspaceDefaultLocale(client);
-
-    expect(locale).toBeNull();
-    // 仅一次调用(列表为空,不发第二次请求)
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(fetchWorkspaceDefaultLocale(client)).resolves.toBeNull();
   });
 
-  it('fetchWorkspaceDefaultLocale settings 无 default_locale 时返回 null', async () => {
-    const listResponse = {
-      status: 200,
-      body: { data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null },
-    };
-    const detailResponse = {
-      status: 200,
-      body: { data: { id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC', settings: {}, my_role: 'admin', created_at: '', updated_at: '' } },
-    };
-    const fetchImpl = createMockFetch([listResponse, detailResponse]);
+  it('fetchWorkspaceDefaultLocale detail 缺省/空串时返回 null', async () => {
+    const noLocale = sequenceFetch(
+      { status: 200, body: { data: [SUMMARY], next_cursor: null } },
+      { status: 200, body: { data: { ...DETAIL, settings: {} } } },
+    );
+    await expect(fetchWorkspaceDefaultLocale(createClient(noLocale))).resolves.toBeNull();
+
+    const emptyLocale = sequenceFetch(
+      { status: 200, body: { data: [SUMMARY], next_cursor: null } },
+      { status: 200, body: { data: { ...DETAIL, settings: { default_locale: '' } } } },
+    );
+    await expect(fetchWorkspaceDefaultLocale(createClient(emptyLocale))).resolves.toBeNull();
+  });
+
+  it('fetchWorkspaceDefaultLocale detail 读取失败时静默降级为 null', async () => {
+    const fetchImpl = sequenceFetch(
+      { status: 200, body: { data: [SUMMARY], next_cursor: null } },
+      { status: 404, body: { error: { code: 'not_found', message: 'workspace not found' } } },
+    );
     const client = createClient(fetchImpl);
 
-    const locale = await fetchWorkspaceDefaultLocale(client);
-
-    expect(locale).toBeNull();
+    await expect(fetchWorkspaceDefaultLocale(client)).resolves.toBeNull();
   });
 
-  it('fetchWorkspaceDefaultLocale default_locale 为空字符串时返回 null', async () => {
-    const listResponse = {
-      status: 200,
-      body: { data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null },
-    };
-    const detailResponse = {
-      status: 200,
-      body: { data: { id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC', settings: { default_locale: '' }, my_role: 'admin', created_at: '', updated_at: '' } },
-    };
-    const fetchImpl = createMockFetch([listResponse, detailResponse]);
-    const client = createClient(fetchImpl);
-
-    const locale = await fetchWorkspaceDefaultLocale(client);
-
-    expect(locale).toBeNull();
-  });
-
-  it('网络错误时抛出 MeshApiError', async () => {
+  it('列表网络错误时抛出 MeshApiError', async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error('network')) as unknown as typeof fetch;
     const client = createClient(fetchImpl);
 
     await expect(fetchWorkspaceDefaultLocale(client)).rejects.toMatchObject({
       status: 0,
       code: 'network',
+    });
+  });
+
+  it('409 slug_taken 透传具名码与 details', async () => {
+    const fetchImpl = createMockFetch(409, {
+      error: { code: 'slug_taken', message: 'slug taken', details: { slug: 'acme' } },
+    });
+    const client = createClient(fetchImpl);
+
+    await expect(createWorkspace(client, { name: 'Acme', slug: 'acme' })).rejects.toMatchObject({
+      status: 409,
+      code: 'slug_taken',
+      details: { slug: 'acme' },
     });
   });
 });

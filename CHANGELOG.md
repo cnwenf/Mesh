@@ -3,6 +3,25 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.8.0] - 2026-07-25
+
+workspace §4 前端 UI 接通(MES-26):把已合入 main 的 workspace 后端 v0.4.0 与前端脚手架 v0.3.0 连接到真实 UI,完成 MES-13 的 UI 收尾;并补齐 realtime 会话 JWT 鉴权管道使前端能以真实登录消费实时事件。
+
+### Added
+
+- **工作区上下文路由与切换器**(workspace.md §4.1/§4.2):`/w/:workspaceSlug/*` 路由 + `WorkspaceProvider`(by-slug 加载、历史 slug 规范化重定向 W6、非成员与不存在同一 404 无泄漏、PATCH 就地更新);TopBar 工作区切换器(列全部工作区 + 当前标记)+ 三步创建向导(名称 → slug 实时格式校验与占用探测 → 可选邮箱邀请,409 `slug_taken`/400 `validation_error` 具名呈现)。
+- **工作区设置页**(§4.1/§4.2,admin+ 门控,member 直达呈「无权限」态 §6.12):基本信息表单(名称 / slug「旧链接自动重定向」提示 / logo https-only 即时校验 §6.16 / 时区 / 工作区默认 locale,422 `unsupported_locale`/`invalid_timezone`、409 `slug_taken` 具名呈现);邀请面板(邮箱 chip 批量 / 链接模式、角色预设、`max_uses`/`expires_in_hours` 上限提示与 422 `invitation_limits_exceeded` 具名呈现、一次性 `invite_link` 复制卡);邀请列表(四状态徽标 + 用量 + 时区化过期时间 + 撤销 + realtime `invitation.redeemed` 合并);角色能力矩阵(owner/admin/member/guest × 设置/邀请/成员/删除)+ 名册消费(member.md §3 契约,端点缺失优雅降级,行内角色变更 `last_owner`/`agent_owner_not_allowed` 具名呈现);危险区(owner-only,slug 二次确认删除 W10)。
+- **邀请接受页**(§4.3/§4.4):公开 `preview` → 登录门控(`?next=` 回跳,防开放重定向)→ `accept`;四 reason(`not_found`/`expired`/`exhausted`/`revoked`)各呈 UI 态;重加入同成功态(Leader 裁决 pin@MES-14);token 仅经路径传递,不落入 UI 文案。
+- **账号登录接通**(auth.md §3.1,auth v0.2.0):邮箱/密码登录 + 注册切换,具名错误(`invalid_credentials` / `weak_password` 三 reason / `conflict` / MFA 质询);保留 dev-token 直填入口(默认折叠,联调/CI 兼容)。
+- **realtime 会话 JWT 鉴权管道**(backend,README §6.16):`JwtPrincipalAuthenticator` + `ChainedAuthenticator`,经 `mesh_my_workspaces` 引导函数取 active 名册构建 principal;api/gateway 两端 production = JWT、dev = JWT + dev-token 链——使前端能以真实会话经首帧鉴权消费 WS 实时事件(§6.16 单机制不变,生产 placeholder 被替换)。
+- **实时与降级消费**(§4.5/§6.7):设置页/工作区页订阅 `workspace:{id}`,`workspace.updated` 浅合并、`workspace.deleted` 回首页;WS 未连通时按频道水位轮询 REST 对账端点降级。
+- **i18n 文案**(i18n.md §2.4):zh-CN + en 消息目录各 +167 键(键集一致、内容哈希 version 重算),覆盖全部 §4 文案;locale 协商链「工作区默认」级经 v0.8.0 设置页写入生效。
+
+### Verified
+
+- 单测 729 项全绿;覆盖率 97.7% 行 / 92.3% 分支 / 96.8% 函数(全局 90/90/90/90 门槛 + 变更行 97.9% 全过)。
+- 真实后端 e2e(workspace-flow)15 项全绿:注册/登录、向导建区、设置保存、邀请创建/复制/接受(登录回跳)/次数耗尽/过期/撤销/伪造 token、重加入、越权无权限态、跨租户 404、工作区默认 locale 协商、zh-CN/en 切换、realtime 用量更新、危险区删除;MES-16 实时契约 e2e 3 项全绿;mock e2e 23 项全绿。
+
 ## [0.7.0] - 2026-07-25
 
 auth 增量 2 第一切片(MES-12):PAT / API token(auth.md §2.5/§3.2)+ 审计查询端点(§3.3),复用 v0.4.0 的 RBAC 裁决器 / append-only `audit_logs` 与 v0.6.0 的统一名册。

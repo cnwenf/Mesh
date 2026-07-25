@@ -12,14 +12,16 @@ visibility, ...) via :meth:`DefaultChannelAuthorizer.register_prefix_checker`.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from mesh.db.models.realtime import RealtimeChannel
+from mesh.db.models.user import User
 from mesh.db.tenant import set_tenant_context
+from mesh.errors import UnauthorizedError
 from mesh.realtime.channels import parse_channel
 
 DEV_TOKEN_PREFIX = "mesh-dev:"
@@ -128,3 +130,82 @@ class DefaultChannelAuthorizer:
             if owner is not None:
                 return owner
         return None
+
+
+class JwtPrincipalAuthenticator:
+    """Session access JWT → principal (auth.md §3.1 credentials, README §6.16).
+
+    Verifies the access JWT (the expected algorithm is fixed; the token header
+    is never trusted), then resolves the user's ``active`` roster entries to
+    ``workspace_ids`` via the ``mesh_my_workspaces`` SECURITY DEFINER function
+    (the caller's workspaces are not known up front, so no tenant GUC can be
+    set first — RLS stays fail-closed everywhere else, workspace.md §5.1).
+    Invalid / expired / foreign-signed tokens return ``None`` so a chained
+    authenticator can try its remaining candidates.
+    """
+
+    def __init__(self, session_factory, *, jwt_secret: str, jwt_algorithm: str) -> None:
+        self._session_factory = session_factory
+        self._jwt_secret = jwt_secret
+        self._jwt_algorithm = jwt_algorithm
+
+    async def authenticate(self, token: str) -> Principal | None:
+        # Deferred import: mesh.auth.__init__ pulls auth.deps → api.deps →
+        # realtime.auth (this module), so a top-level import would cycle.
+        from mesh.auth.jwt import decode_access_token
+
+        try:
+            claims = decode_access_token(
+                token, secret=self._jwt_secret, algorithm=self._jwt_algorithm
+            )
+        except UnauthorizedError:
+            return None
+        async with self._session_factory() as session:
+            user = await session.scalar(select(User).where(User.id == claims.subject))
+            if user is None or user.status != "active":
+                return None
+            rows = (
+                await session.execute(
+                    text("SELECT workspace_id FROM mesh_my_workspaces(:uid) WHERE status = 'active'"),
+                    {"uid": claims.subject},
+                )
+            ).all()
+        return Principal(
+            subject=str(claims.subject),
+            workspace_ids=frozenset(row.workspace_id for row in rows),
+        )
+
+
+class ChainedAuthenticator:
+    """Try authenticators in order; the first principal wins (dev: JWT + dev token)."""
+
+    def __init__(self, authenticators: Sequence[Authenticator]) -> None:
+        self._authenticators = tuple(authenticators)
+
+    async def authenticate(self, token: str) -> Principal | None:
+        for authenticator in self._authenticators:
+            principal = await authenticator.authenticate(token)
+            if principal is not None:
+                return principal
+        return None
+
+
+def build_authenticator(
+    *,
+    auth_mode: str,
+    jwt_secret: str,
+    jwt_algorithm: str,
+    session_factory,
+) -> Authenticator:
+    """Build the token → principal authenticator for an app (README §6.16).
+
+    ``production``: session access JWTs only. ``dev``: JWTs plus the
+    loopback-only ``mesh-dev:<workspace-id>`` token, so both real sessions
+    and scripted fixtures authenticate against the local stack.
+    """
+    jwt_authenticator = JwtPrincipalAuthenticator(
+        session_factory, jwt_secret=jwt_secret, jwt_algorithm=jwt_algorithm
+    )
+    if auth_mode == "dev":
+        return ChainedAuthenticator((jwt_authenticator, DevTokenAuthenticator()))
+    return jwt_authenticator

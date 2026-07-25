@@ -26,6 +26,9 @@ import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
 import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
+import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
+import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
+import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
 
 /**
  * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
@@ -86,6 +89,11 @@ function ShellProviders(): React.JSX.Element {
               <Route path="/" element={<AppShell />}>
                 <Route index element={<HomePage />} />
                 <Route path="settings" element={<SettingsPage />} />
+                {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
+                <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
+                <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
+                {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
+                <Route path="invite/:token" element={<InviteAcceptPage />} />
                 <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
                 <Route path="projects" element={<PlaceholderPage kind="projects" />} />
                 <Route path="board" element={<PlaceholderPage kind="board" />} />

@@ -11,29 +11,39 @@ function createMockClient(fetchImpl: typeof fetch): MeshApiClient {
   });
 }
 
-/** 模拟两步请求:列表 → 单对象(含 settings) */
-function twoStepFetch(defaultLocale: string | undefined): typeof fetch {
-  let callIndex = 0;
-  return vi.fn().mockImplementation(() => {
-    callIndex += 1;
-    if (callIndex === 1) {
-      // 列表响应(不含 settings)
-      return Promise.resolve(
-        new Response(JSON.stringify({ data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-    }
-    // 单对象响应(含 settings)
-    const settings = defaultLocale !== undefined ? { default_locale: defaultLocale } : {};
-    return Promise.resolve(
-      new Response(JSON.stringify({ data: { id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC', settings, my_role: 'admin', created_at: '', updated_at: '' } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-  }) as unknown as typeof fetch;
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+/**
+ * 列表(短项,无 settings)→ detail(全量,含 settings)两步响应桩。
+ * 列表响应不含 settings(后端 v0.4.0 契约),default_locale 必须经 detail 读取。
+ */
+function workspaceResponse(defaultLocale: string | undefined): typeof fetch {
+  const list = {
+    data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'owner', created_at: '2026-07-25T00:00:00Z' }],
+    next_cursor: null,
+  };
+  const detail = {
+    data: {
+      id: 'ws-1',
+      name: 'WS',
+      slug: 'ws',
+      logo_url: null,
+      timezone: 'UTC',
+      settings: defaultLocale !== undefined ? { default_locale: defaultLocale } : {},
+      my_role: 'owner',
+      created_at: '2026-07-25T00:00:00Z',
+      updated_at: '2026-07-25T00:00:00Z',
+    },
+  };
+  const impl = vi.fn();
+  impl.mockResolvedValueOnce(jsonResponse(200, list));
+  impl.mockResolvedValueOnce(jsonResponse(200, detail));
+  return impl as unknown as typeof fetch;
 }
 
 describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)', () => {
@@ -42,19 +52,40 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     expect(result.current).toBeNull();
   });
 
-  it('成功获取工作区 default_locale(两步:列表→单对象)', async () => {
-    const client = createMockClient(twoStepFetch('zh-CN'));
+  it('成功获取工作区 default_locale(经列表→detail 两步)', async () => {
+    const client = createMockClient(workspaceResponse('zh-CN'));
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
     await waitFor(() => expect(result.current).toBe('zh-CN'));
   });
 
   it('工作区无 default_locale 时返回 null', async () => {
-    const client = createMockClient(twoStepFetch(undefined));
+    const fetchImpl = workspaceResponse(undefined);
+    const client = createMockClient(fetchImpl);
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
-    // 等待两步请求完成
-    await new Promise((r) => setTimeout(r, 50));
+    await waitFor(() => {
+      // 两步请求均已发出且加载完成(仍为 null = 无 default_locale)
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+    expect(result.current).toBeNull();
+  });
+
+  it('detail 读取失败时静默降级返回 null', async () => {
+    const impl = vi.fn();
+    impl.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'owner', created_at: '2026-07-25T00:00:00Z' }],
+        next_cursor: null,
+      }),
+    );
+    impl.mockResolvedValueOnce(
+      jsonResponse(404, { error: { code: 'not_found', message: 'workspace not found' } }),
+    );
+    const client = createMockClient(impl as unknown as typeof fetch);
+    const { result } = renderHook(() => useWorkspaceLocale(client));
+
+    await waitFor(() => expect(impl).toHaveBeenCalledTimes(2));
     expect(result.current).toBeNull();
   });
 
@@ -63,9 +94,11 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     const client = createMockClient(fetchImpl);
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
+    // 等待 effect 执行完毕
     await waitFor(() => {
       expect(fetchImpl).toHaveBeenCalled();
     });
+    // 错误后仍为 null(静默降级)
     expect(result.current).toBeNull();
   });
 
@@ -81,30 +114,24 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     const { result, unmount } = renderHook(() => useWorkspaceLocale(client));
     expect(result.current).toBeNull();
 
+    // 卸载后再 resolve
     unmount();
-    resolvePromise(
-      new Response(JSON.stringify({ data: [{ id: '1', name: 'W', slug: 'w', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
+    resolvePromise(jsonResponse(200, { data: [], next_cursor: null }));
 
+    // 等待一个 tick 确保不会抛错
     await new Promise((r) => setTimeout(r, 10));
   });
 
-  it('空工作区列表返回 null', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ data: [], next_cursor: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    ) as unknown as typeof fetch;
-    const client = createMockClient(fetchImpl);
+  it('空工作区列表返回 null(不发起 detail 请求)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { data: [], next_cursor: null }));
+    const client = createMockClient(fetchImpl as unknown as typeof fetch);
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
     await waitFor(() => {
       expect(fetchImpl).toHaveBeenCalled();
     });
     expect(result.current).toBeNull();
+    // 无工作区则不读 detail(仅一次请求)
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

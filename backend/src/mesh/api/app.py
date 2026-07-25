@@ -39,8 +39,7 @@ from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
 from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
-    DevTokenAuthenticator,
-    NullAuthenticator,
+    build_authenticator,
 )
 from mesh.workspace.invitations import InvitationService
 from mesh.workspace.routes import router as workspace_router
@@ -105,8 +104,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
-    app.state.authenticator = (
-        DevTokenAuthenticator() if settings.auth_mode == "dev" else NullAuthenticator()
+    app.state.authenticator = build_authenticator(
+        auth_mode=settings.auth_mode,
+        jwt_secret=settings.jwt_secret,
+        jwt_algorithm=settings.jwt_algorithm,
+        session_factory=session_factory,
     )
     app.state.authorizer = DefaultChannelAuthorizer(session_factory)
 
