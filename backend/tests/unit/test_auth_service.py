@@ -427,6 +427,7 @@ class TestUserUpdate:
                 user_id=uid, patch=UserUpdate(settings={"theme": "neon"})
             )
         assert exc.value.code == "validation_error"
+        assert exc.value.status_code == 422
 
     async def test_settings_explicit_null_clears_key(self, service):
         """Explicit null in settings.locale/theme pops the key (MES-24 清除语义)."""
