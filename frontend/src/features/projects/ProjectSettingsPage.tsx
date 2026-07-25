@@ -211,6 +211,12 @@ export function ProjectSettingsPage(): React.JSX.Element {
     );
   }
 
+  // 改派负责人是 lead/admin 专属操作(project.md §3.4,后端为权威校验):
+  // 非 lead/admin 的选择器只读,避免暴露无权限操作。
+  const canManageLead =
+    project.my_role === 'lead' ||
+    (workspace !== null && (workspace.role === 'owner' || workspace.role === 'admin'));
+
   return (
     <main className="mesh-projects">
       <h1 className="mesh-projects__title">{t('projects.settings.title', { name: project.name })}</h1>
@@ -273,6 +279,7 @@ export function ProjectSettingsPage(): React.JSX.Element {
           label={t('projects.settings.lead')}
           value={form.leadMemberId}
           data-testid="settings-lead"
+          disabled={!canManageLead}
           onChange={(event) => updateForm({ leadMemberId: event.target.value })}
         >
           <option value="">{t('projects.settings.leadNone')}</option>
@@ -282,6 +289,11 @@ export function ProjectSettingsPage(): React.JSX.Element {
             </option>
           ))}
         </Select>
+        {canManageLead ? null : (
+          <p className="mesh-field__hint" data-testid="settings-lead-hint">
+            {t('projects.settings.leadReadOnly')}
+          </p>
+        )}
         <div className="mesh-projects__form-actions">
           <Button
             type="submit"

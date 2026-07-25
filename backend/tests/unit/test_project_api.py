@@ -287,6 +287,69 @@ async def test_patch_project_tri_state_and_validation(client):
     assert resp.status_code == 400
 
 
+async def test_patch_project_lead_change_requires_lead_or_admin(client):
+    """PJ-H1: PATCH lead_member_id is gated to lead/admin — no self-escalation."""
+    owner = await _register_and_login(client, "owner-h1@corp.com")
+    ws = await _create_workspace(client, owner, "prj-h1")
+    created = await _create_project(client, owner, ws["id"])
+    pid = created["id"]
+    member_id, member = await _invite_accept(client, owner, ws["id"], "mem-h1@corp.com")
+    resp = await client.post(
+        f"/api/v1/projects/{pid}/members",
+        json={"member_id": member_id, "role": "member"},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 201
+    # The creator's own member id comes from the project roster (role=lead).
+    roster = (await client.get(f"/api/v1/projects/{pid}/members", headers=_auth(owner))).json()[
+        "data"
+    ]
+    owner_member_id = next(entry["member_id"] for entry in roster if entry["role"] == "lead")
+
+    # Lead sets the initial lead → 200.
+    resp = await client.patch(
+        f"/api/v1/projects/{pid}",
+        json={"lead_member_id": owner_member_id},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["lead_member_id"] == owner_member_id
+
+    # Member self-assignment → 403.
+    resp = await client.patch(
+        f"/api/v1/projects/{pid}",
+        json={"lead_member_id": member_id},
+        headers=_auth(member),
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+    # Member clearing the lead → 403.
+    resp = await client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": None}, headers=_auth(member)
+    )
+    assert resp.status_code == 403
+    # Escalation regression: the failed self-assignment buys no delete power.
+    resp = await client.delete(f"/api/v1/projects/{pid}", headers=_auth(member))
+    assert resp.status_code == 403
+    # Lead unchanged on the server.
+    detail = (await client.get(f"/api/v1/projects/{pid}", headers=_auth(owner))).json()["data"]
+    assert detail["lead_member_id"] == owner_member_id
+
+    # Lead may reassign → 200; the new lead may then clear it → 200.
+    resp = await client.patch(
+        f"/api/v1/projects/{pid}",
+        json={"lead_member_id": member_id},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["lead_member_id"] == member_id
+    resp = await client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": None}, headers=_auth(member)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["lead_member_id"] is None
+
+
 # --- archive / delete -------------------------------------------------------
 
 

@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "2f0bd16a",
+  "version": "d6bc5e32",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
@@ -307,6 +307,7 @@
     "projects.settings.description": "描述",
     "projects.settings.lead": "负责人",
     "projects.settings.leadNone": "无负责人",
+    "projects.settings.leadReadOnly": "仅现任负责人或工作区管理员可改派负责人。",
     "projects.settings.members.add": "添加",
     "projects.settings.members.added": "已把成员加入项目。",
     "projects.settings.members.empty": "暂无项目成员。",

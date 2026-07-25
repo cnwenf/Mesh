@@ -186,6 +186,76 @@ async def test_project_full_flow_durable(api_client, session_factory):
     assert registry_after == 1  # prefix permanently reserved
 
 
+async def test_pj_h1_lead_self_assign_forbidden_real_service(api_client, session_factory):
+    """PJ-H1 over the real service: member lead self-assignment is 403 and the
+    database row is untouched; lead/admin reassignment still works."""
+    owner = await _register_and_login(api_client, "owner-h1@corp.com")
+    ws = await _create_workspace(api_client, owner, "e2e-h1")
+    created = await _create_project(api_client, owner, ws["id"])
+    pid = created["id"]
+    member_id = await _invite_accept(api_client, owner, ws["id"], "mem-h1@corp.com")
+    member = await _register_and_login(api_client, "mem-h1@corp.com")
+    resp = await api_client.post(
+        f"/api/v1/projects/{pid}/members",
+        json={"member_id": member_id, "role": "member"},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 201
+    resp = await api_client.get(f"/api/v1/projects/{pid}/members", headers=_auth(owner))
+    roster = resp.json()["data"]
+    owner_member_id = next(entry["member_id"] for entry in roster if entry["role"] == "lead")
+
+    # Lead sets the initial lead — durable in PostgreSQL.
+    resp = await api_client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": owner_member_id}, headers=_auth(owner)
+    )
+    assert resp.status_code == 200
+    async with session_factory() as session:
+        lead = (
+            await session.execute(
+                text("SELECT lead_member_id FROM projects WHERE id = :id"),
+                {"id": uuid.UUID(pid)},
+            )
+        ).scalar_one()
+    assert lead == uuid.UUID(owner_member_id)
+
+    # Member self-assignment → 403, and the row stays at the owner's member id.
+    resp = await api_client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": member_id}, headers=_auth(member)
+    )
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "forbidden"
+    async with session_factory() as session:
+        lead_after = (
+            await session.execute(
+                text("SELECT lead_member_id FROM projects WHERE id = :id"),
+                {"id": uuid.UUID(pid)},
+            )
+        ).scalar_one()
+    assert lead_after == uuid.UUID(owner_member_id)
+    # The failed escalation buys no delete power.
+    resp = await api_client.delete(f"/api/v1/projects/{pid}", headers=_auth(member))
+    assert resp.status_code == 403
+
+    # Lead reassigns to the member — durable; the new lead may clear it.
+    resp = await api_client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": member_id}, headers=_auth(owner)
+    )
+    assert resp.status_code == 200
+    async with session_factory() as session:
+        lead_moved = (
+            await session.execute(
+                text("SELECT lead_member_id FROM projects WHERE id = :id"),
+                {"id": uuid.UUID(pid)},
+            )
+        ).scalar_one()
+    assert lead_moved == uuid.UUID(member_id)
+    resp = await api_client.patch(
+        f"/api/v1/projects/{pid}", json={"lead_member_id": None}, headers=_auth(member)
+    )
+    assert resp.status_code == 200
+
+
 # --- T1: cross-tenant isolation ------------------------------------------------
 
 
