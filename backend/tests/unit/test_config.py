@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from mesh.config import ConfigError, load_settings
+from mesh.config import DEV_JWT_SECRET, ConfigError, load_settings, validate_auth_settings
 
 REQUIRED = {"database_url": "postgresql+asyncpg://u:p@h:5432/db", "redis_url": "redis://h:6379/0"}
 
@@ -73,3 +73,36 @@ def test_app_database_url_override():
         **REQUIRED, app_database_url="postgresql+asyncpg://app:pw@h:5432/db"
     )
     assert settings.app_database_url == "postgresql+asyncpg://app:pw@h:5432/db"
+
+
+# --- Shared auth fail-safe (auth.md §5.5: keys not in code/repo) -------------
+# validate_auth_settings is the single guard every app factory that signs or
+# verifies tokens calls at startup — the API and the realtime gateway (an
+# independently deployable unit, README §2.2) must not drift apart.
+
+
+def test_validate_auth_settings_rejects_dev_key_in_production():
+    settings = load_settings(**REQUIRED, auth_mode="production")  # default DEV_JWT_SECRET
+    assert settings.jwt_secret == DEV_JWT_SECRET
+    with pytest.raises(ConfigError) as excinfo:
+        validate_auth_settings(settings)
+    assert excinfo.value.missing_fields == ("jwt_secret",)
+    assert "MESH_JWT_SECRET" in excinfo.value.detail
+
+
+def test_validate_auth_settings_accepts_strong_secret_in_production():
+    settings = load_settings(
+        **REQUIRED, auth_mode="production", jwt_secret="a-real-production-secret-0123456789"
+    )
+    validate_auth_settings(settings)  # does not raise
+
+
+def test_validate_auth_settings_accepts_dev_key_in_dev_mode():
+    # Regression: the guard is production-only — dev keeps the default key.
+    settings = load_settings(**REQUIRED, auth_mode="dev")  # default DEV_JWT_SECRET
+    validate_auth_settings(settings)  # does not raise
+
+
+def test_validate_auth_settings_accepts_strong_secret_in_dev_mode():
+    settings = load_settings(**REQUIRED, auth_mode="dev", jwt_secret="custom-dev-secret")
+    validate_auth_settings(settings)  # does not raise
