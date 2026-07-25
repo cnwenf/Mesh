@@ -17,6 +17,16 @@ def create_engine_from_settings(settings: Settings) -> AsyncEngine:
     return create_async_engine(settings.database_url, pool_pre_ping=True)
 
 
+def app_database_url(settings: Settings) -> str:
+    """DB URL for the API/gateway app path: restricted role when configured (M1)."""
+    return settings.app_database_url or settings.database_url
+
+
+def create_app_engine_from_settings(settings: Settings) -> AsyncEngine:
+    """Engine for the API/gateway app path (restricted role → RLS applies)."""
+    return create_async_engine(app_database_url(settings), pool_pre_ping=True)
+
+
 def create_engine(database_url: str) -> AsyncEngine:
     """Create an async engine from a raw URL (used by tests and tools)."""
     return create_async_engine(database_url, pool_pre_ping=True)

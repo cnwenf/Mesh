@@ -60,3 +60,16 @@ def test_settings_are_immutable():
     settings = load_settings(**REQUIRED)
     with pytest.raises(ValidationError):
         settings.auth_mode = "production"  # type: ignore[misc]
+
+
+def test_app_database_url_defaults_to_none():
+    # Unset → the app path falls back to the owner URL (backward compatible).
+    settings = load_settings(**REQUIRED)
+    assert settings.app_database_url is None
+
+
+def test_app_database_url_override():
+    settings = load_settings(
+        **REQUIRED, app_database_url="postgresql+asyncpg://app:pw@h:5432/db"
+    )
+    assert settings.app_database_url == "postgresql+asyncpg://app:pw@h:5432/db"
