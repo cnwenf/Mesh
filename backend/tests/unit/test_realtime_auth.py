@@ -66,6 +66,24 @@ async def test_authorizer_rejects_invalid_channel_syntax(session_factory):
     assert not await authorizer.authorize(principal, "Not A Channel")
 
 
+async def test_authorizer_returns_owning_workspace(session_factory, workspace_factory):
+    ws_a = await workspace_factory(name="A", slug="own-a")
+    await _seed_channel(session_factory, "issue:own", ws_a.id)
+    authorizer = DefaultChannelAuthorizer(session_factory)
+    principal = Principal(subject="u", workspace_ids=frozenset({ws_a.id}))
+    owner = await authorizer.authorize(principal, "issue:own")
+    assert owner == ws_a.id
+
+
+async def test_authorizer_returns_none_for_other_tenant(session_factory, workspace_factory):
+    ws_a = await workspace_factory(name="A", slug="none-a")
+    ws_b = await workspace_factory(name="B", slug="none-b")
+    await _seed_channel(session_factory, "issue:other", ws_a.id)
+    authorizer = DefaultChannelAuthorizer(session_factory)
+    only_b = Principal(subject="u", workspace_ids=frozenset({ws_b.id}))
+    assert await authorizer.authorize(only_b, "issue:other") is None
+
+
 async def test_prefix_checker_can_veto(session_factory, workspace_factory):
     ws_a = await workspace_factory(name="A", slug="veto-a")
     await _seed_channel(session_factory, "project:p1", ws_a.id)

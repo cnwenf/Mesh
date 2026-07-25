@@ -33,6 +33,7 @@ from urllib.parse import quote
 from sqlalchemy import func, select
 
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
+from mesh.db.tenant import set_tenant_context
 from mesh.realtime.auth import Authenticator, ChannelAuthorizer, Principal
 from mesh.realtime.pubsub import RedisSubscriber
 
@@ -197,7 +198,8 @@ class RealtimeSession:
         if principal is None:
             await self._send_error("unauthorized", "not authenticated")
             return
-        if not await self._authorizer.authorize(principal, channel):
+        owner = await self._authorizer.authorize(principal, channel)
+        if owner is None:
             await self._send_error("forbidden", f"not authorized for channel: {channel}")
             return
 
@@ -205,15 +207,18 @@ class RealtimeSession:
         # dropped (at-least-once: clients merge by channel seq — §6.7 allows
         # duplicates, never gaps).
         self._state.subscriptions.add(channel)
-        await self._replay(channel, resume_from or 0)
+        await self._replay(channel, resume_from or 0, owner)
 
-    async def _replay(self, channel: str, resume_from: int) -> None:
+    async def _replay(self, channel: str, resume_from: int, owner_workspace) -> None:
         """Replay stored events from ``resume_from``; emit resync_required when stale.
 
         Pages through the whole backlog (not a single page) so a large backlog
-        can never silently drop events, then confirms with ``subscribed``.
+        can never silently drop events, then confirms with ``subscribed``. The
+        owning workspace's tenant GUC is set on every session so the queries work
+        under the restricted (RLS-enforced) app role (M1, §6.2 rule 5).
         """
         async with self._session_factory() as session:
+            await set_tenant_context(session, owner_workspace)
             watermark = await session.scalar(
                 select(RealtimeChannel.last_seq).where(RealtimeChannel.channel == channel)
             )
@@ -241,6 +246,7 @@ class RealtimeSession:
         next_seq = resume_from
         while True:
             async with self._session_factory() as session:
+                await set_tenant_context(session, owner_workspace)
                 rows = (
                     await session.execute(
                         select(RealtimeEvent.seq, RealtimeEvent.event, RealtimeEvent.payload)
@@ -264,6 +270,7 @@ class RealtimeSession:
             next_seq = rows[-1][0] + 1
 
         async with self._session_factory() as session:
+            await set_tenant_context(session, owner_workspace)
             last_seq = (
                 await session.scalar(
                     select(RealtimeChannel.last_seq).where(RealtimeChannel.channel == channel)
