@@ -81,6 +81,18 @@ async def test_http_exception_non_string_detail_uses_default_message():
     assert response.json() == {"error": {"code": "not_found", "message": "resource not found"}}
 
 
+async def test_405_maps_to_method_not_allowed_code(db_url, redis_url):
+    app = create_app(_settings(db_url, redis_url))
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        response = await client.delete("/api/v1/ping")  # only GET is defined
+    assert response.status_code == 405
+    body = response.json()
+    assert body["error"]["code"] == "method_not_allowed"
+    await app.state.redis.aclose()
+    await app.state.engine.dispose()
+
+
 async def test_run_forever_without_stop_event_polls(session_factory, workspace_factory):
     from mesh.outbox.relay import OutboxRelay
     from mesh.outbox.service import emit_event
@@ -141,10 +153,11 @@ async def test_pump_error_is_contained_and_subscriber_closed():
         subscriber_factory=ErroringSubscriber,
         ping_interval=3600,
     )
-    # A crashing fan-out subscriber is contained and always closed...
+    # A crashing fan-out subscriber is always closed...
     await session._pump()
     assert closed == [True]
-    # ...and the connection keeps serving: ping is still answered.
-    await session.run()
-    ops = [frame.get("op") for frame in transport.sent]
-    assert "ping" in ops
+    # ...and the client is told and disconnected (never left silently stuck):
+    # it reconnects with resume_from and replays (§6.7 recovery path).
+    errors = [f for f in transport.sent if f.get("op") == "error"]
+    assert errors and errors[0]["code"] == "service_unavailable"
+    assert transport.closed

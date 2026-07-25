@@ -140,9 +140,14 @@ class RealtimeSession:
             first = await asyncio.wait_for(
                 self._transport.receive_json(), timeout=self._auth_timeout
             )
-        except (TimeoutError, Exception):
+        except TimeoutError:
             with contextlib.suppress(Exception):
                 await self._send_error("unauthorized", "authentication timed out")
+            return False
+        except Exception:
+            # Client disconnected or sent an undecodable first frame.
+            with contextlib.suppress(Exception):
+                await self._send_error("unauthorized", "authentication failed")
             return False
 
         if not isinstance(first, dict) or first.get("op") != OP_AUTH:
@@ -280,7 +285,17 @@ class RealtimeSession:
         except asyncio.CancelledError:
             raise
         except Exception:
+            # Fan-out death must not leave the client silently stuck on a live
+            # connection: surface an error and close so the client reconnects
+            # with resume_from and replays from realtime_events (§6.7 recovery).
             logger.exception("fan-out pump failed")
+            with contextlib.suppress(Exception):
+                await self._send_error(
+                    "service_unavailable", "realtime fan-out failed; please reconnect"
+                )
+            self._closed.set()
+            with contextlib.suppress(Exception):
+                await self._transport.close()
         finally:
             with contextlib.suppress(Exception):
                 await subscriber.close()
