@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "608a5f81",
+  "version": "81c861e8",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -373,6 +373,14 @@
     "security.oauthUnbind": "解绑",
     "security.oauthUnbound": "已解绑账号。",
     "security.oauthLastMethod": "不能移除最后一种登录方式。",
+    "security.changePassword": "修改密码",
+    "security.oldPasswordLabel": "当前密码",
+    "security.newPasswordLabel": "新密码",
+    "security.confirmPasswordLabel": "确认新密码",
+    "security.changePasswordSubmit": "更新密码",
+    "security.changePasswordSuccess": "密码已更新，其它会话已登出。",
+    "security.wrongOldPassword": "当前密码不正确。",
+    "security.confirmMismatch": "两次输入的新密码不一致。",
     "tokens.title": "API 令牌",
     "tokens.description": "用于 CLI 与脚本的个人访问令牌。完整令牌仅显示一次。",
     "tokens.create": "新建令牌",

@@ -1,12 +1,17 @@
 /**
- * 设置 → 安全(auth.md §4.2):活跃会话(列出/撤销/全端登出)、两步验证
- * (TOTP 密钥 + 备用码 + 验证码确认启用/停用)、第三方账号绑定(列出/解绑,
- * 保留至少一种登录方式)。用户级(非工作区上下文)。
+ * 设置 → 安全(auth.md §4.2):修改密码(旧+新+确认+强度条,实时校验)、
+ * 活跃会话(列出/撤销/全端登出)、两步验证(TOTP 密钥 + 备用码 + 验证码确认
+ * 启用/停用)、第三方账号绑定(列出/解绑,保留至少一种登录方式)。
+ * 用户级(非工作区上下文)。
  */
 import { useCallback, useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
 import {
+  ERROR_INVALID_CREDENTIALS,
+  ERROR_WEAK_PASSWORD,
+  changePassword,
   listIdentities,
   listSessions,
   logoutAll,
@@ -19,6 +24,8 @@ import {
 import type { CurrentUser, MfaSetupInfo, OAuthIdentity, SessionInfo } from '../../api';
 import { Button, Input } from '../../design';
 import { useT } from '../../i18n';
+import { useAuthStore } from '../../state/authStore';
+import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 
 export interface SecuritySettingsProps {
   client: MeshApiClient;
@@ -40,6 +47,15 @@ export function SecuritySettings(props: SecuritySettingsProps): React.JSX.Elemen
   const [setup, setSetup] = useState<MfaSetupInfo | null>(null);
   const [mfaCode, setMfaCode] = useState('');
   const [disabling, setDisabling] = useState(false);
+
+  // 修改密码(§4.2):折叠表单(旧+新+确认+强度条);呈递当前会话 refresh 使其保留。
+  const [changing, setChanging] = useState(false);
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [submittingPassword, setSubmittingPassword] = useState(false);
+  const refreshToken = useAuthStore((state) => state.refreshToken);
+  const confirmMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
 
   const reload = useCallback(() => {
     void listSessions(client)
@@ -141,6 +157,45 @@ export function SecuritySettings(props: SecuritySettingsProps): React.JSX.Elemen
     }
   };
 
+  const handleChangePassword = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    setErrorKey(null);
+    // 确认密码不一致时客户端拦截(服务端不接收确认值);强度由服务端权威裁定,
+    // 故不据客户端评估禁用提交(与 PasswordStrengthMeter 策略一致)。
+    if (newPassword !== confirmPassword) {
+      setErrorKey('security.confirmMismatch');
+      return;
+    }
+    setSubmittingPassword(true);
+    try {
+      await changePassword(client, { oldPassword, newPassword, refreshToken });
+      setNotice(t('security.changePasswordSuccess'));
+      setChanging(false);
+      setOldPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      reload(); // 其它会话已失效,刷新会话列表使其收敛(§4.2)
+      onUserChanged?.();
+    } catch (err) {
+      if (err instanceof MeshApiError && err.code === ERROR_INVALID_CREDENTIALS) {
+        setErrorKey('security.wrongOldPassword');
+      } else if (err instanceof MeshApiError && err.code === ERROR_WEAK_PASSWORD) {
+        const reason = (err.details ?? {}).reason;
+        setErrorKey(
+          reason === 'too_short'
+            ? 'auth.weakPasswordShort'
+            : reason === 'needs_letter_and_digit'
+              ? 'auth.weakPasswordLetterDigit'
+              : 'auth.weakPasswordCommon',
+        );
+      } else {
+        setErrorKey('common.unknownError');
+      }
+    } finally {
+      setSubmittingPassword(false);
+    }
+  };
+
   return (
     <div className="mesh-settings__group">
       {notice !== null ? (
@@ -153,6 +208,69 @@ export function SecuritySettings(props: SecuritySettingsProps): React.JSX.Elemen
           {t(errorKey)}
         </p>
       ) : null}
+
+      {/* 修改密码(auth.md §4.2:旧+新+强度条) */}
+      <section aria-label={t('security.changePassword')}>
+        <h3 className="mesh-settings__heading">{t('security.changePassword')}</h3>
+        {!changing ? (
+          <Button
+            variant="secondary"
+            data-testid="change-password-toggle"
+            aria-expanded={false}
+            onClick={() => {
+              setErrorKey(null);
+              setChanging(true);
+            }}
+          >
+            {t('security.changePassword')}
+          </Button>
+        ) : (
+          <form
+            className="mesh-security__change-password"
+            data-testid="change-password-form"
+            onSubmit={(event) => void handleChangePassword(event)}
+          >
+            <Input
+              data-testid="cp-old"
+              label={t('security.oldPasswordLabel')}
+              type="password"
+              autoComplete="current-password"
+              value={oldPassword}
+              onChange={(event) => setOldPassword(event.target.value)}
+            />
+            <Input
+              data-testid="cp-new"
+              label={t('security.newPasswordLabel')}
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+            />
+            <PasswordStrengthMeter password={newPassword} />
+            <Input
+              data-testid="cp-confirm"
+              label={t('security.confirmPasswordLabel')}
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+            {confirmMismatch ? (
+              <p role="alert" data-testid="cp-mismatch">
+                {t('security.confirmMismatch')}
+              </p>
+            ) : null}
+            <Button
+              data-testid="cp-submit"
+              type="submit"
+              disabled={confirmMismatch}
+              isLoading={submittingPassword}
+            >
+              {t('security.changePasswordSubmit')}
+            </Button>
+          </form>
+        )}
+      </section>
 
       {/* 活跃会话 */}
       <section aria-label={t('security.sessions')}>

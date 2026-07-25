@@ -88,6 +88,7 @@ export {
   ERROR_ACCOUNT_LOCKED,
   ERROR_INVALID_CREDENTIALS,
   ERROR_WEAK_PASSWORD,
+  changePassword,
   fetchMe,
   forgotPassword,
   isSessionTokens,
@@ -106,6 +107,7 @@ export {
   verifyEmail,
 } from './auth';
 export type {
+  ChangePasswordInput,
   CurrentUser,
   LoginInput,
   LoginResult,

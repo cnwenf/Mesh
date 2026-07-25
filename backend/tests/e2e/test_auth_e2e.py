@@ -241,6 +241,152 @@ async def test_email_verification_via_dev_mailer(api_client, redis_client):
     assert again.status_code == 401
 
 
+# --- authenticated password change (auth.md §3.1/§4.2,MES-39) -----------------
+
+
+async def test_change_password_requires_auth_real_e2e(api_client):
+    resp = await api_client.post(
+        "/api/v1/auth/change-password",
+        json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
+async def test_change_password_full_flow_real_e2e(api_client, db_session):
+    """§4.2 端到端:旧密码错 422 / 弱密码 400 三 reason / 成功后其它会话失效
+    (DB 实测)/ 当前会话仍有效 / 审计落库。"""
+    from sqlalchemy import select
+
+    from mesh.auth.security import hash_token
+    from mesh.db.models.audit import AuditLog
+    from mesh.db.models.user import Session, User
+
+    tokens = await _register_and_login(api_client)
+    h = _auth(tokens["access_token"])
+    other = (await _login(api_client)).json()["data"]  # a second device
+
+    # 旧密码错 → 422 invalid_credentials。
+    wrong = await api_client.post(
+        "/api/v1/auth/change-password",
+        headers=h,
+        json={"old_password": "wrong-pass-1", "new_password": "a-new-passw0rd"},
+    )
+    assert wrong.status_code == 422
+    assert wrong.json()["error"]["code"] == "invalid_credentials"
+
+    # 弱密码 → 400 weak_password,三 reason(复用注册强度策略)。
+    for weak, reason in [
+        ("short1", "too_short"),
+        ("lettersonlyx", "needs_letter_and_digit"),
+        ("password123", "too_common"),
+    ]:
+        resp = await api_client.post(
+            "/api/v1/auth/change-password",
+            headers=h,
+            json={"old_password": PASSWORD, "new_password": weak},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["error"]
+        assert error["code"] == "weak_password"
+        assert error["details"]["reason"] == reason
+
+    # 成功:携带当前会话 refresh → 保留当前会话,其它会话失效。
+    ok = await api_client.post(
+        "/api/v1/auth/change-password",
+        headers=h,
+        json={
+            "old_password": PASSWORD,
+            "new_password": "a-new-passw0rd",
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+    assert ok.status_code == 200
+    assert ok.json()["data"]["status"] == "ok"
+
+    # DB 实测:password_changed_at 已 bump;其它会话 revoked、当前会话未 revoked;
+    # 审计行 user.password_changed 落库(账号级:workspace_id 为 NULL)。
+    user = (
+        (await db_session.execute(select(User).where(User.email == EMAIL))).scalars().one()
+    )
+    assert user.password_changed_at is not None
+    rows = {
+        row.token_hash: row
+        for row in (
+            (await db_session.execute(select(Session).where(Session.user_id == user.id)))
+            .scalars()
+            .all()
+        )
+    }
+    assert rows[hash_token(tokens["refresh_token"])].revoked_at is None  # 当前会话保留
+    assert rows[hash_token(other["refresh_token"])].revoked_at is not None  # 其它失效
+    audits = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(AuditLog.action == "user.password_changed")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(audits) == 1
+    assert audits[0].workspace_id is None
+    assert audits[0].resource_id == user.id
+
+    # 行为实测:当前会话 refresh 仍有效;其它会话旧 refresh 失效。
+    # (存活断言在前:呈递已撤销令牌会触发重放检测并撤销整个会话族,故置最后。)
+    alive = await api_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert alive.status_code == 200
+    dead = await api_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
+    )
+    assert dead.status_code == 401
+
+    # 旧密码不再可登录;新密码可以。
+    old_login = await _login(api_client, password=PASSWORD)
+    assert old_login.status_code == 422
+    assert old_login.json()["error"]["code"] == "invalid_credentials"
+    assert (await _login(api_client, password="a-new-passw0rd")).status_code == 200
+
+
+async def test_change_password_without_refresh_revokes_all_real_e2e(api_client, db_session):
+    """未呈递当前会话凭证 → 全部会话失效(§4.5 安全默认)。"""
+    from sqlalchemy import select
+
+    from mesh.db.models.user import Session, User
+
+    tokens = await _register_and_login(api_client)
+    ok = await api_client.post(
+        "/api/v1/auth/change-password",
+        headers=_auth(tokens["access_token"]),
+        json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
+    )
+    assert ok.status_code == 200
+
+    reused = await api_client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert reused.status_code == 401
+
+    user = (
+        (await db_session.execute(select(User).where(User.email == EMAIL))).scalars().one()
+    )
+    active = (
+        (
+            await db_session.execute(
+                select(Session).where(
+                    Session.user_id == user.id, Session.revoked_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert active == []
+
+
 # --- PATCH /users/me ---------------------------------------------------------
 
 
