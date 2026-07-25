@@ -5,10 +5,16 @@
  * useT 须在 I18nProvider 内,故内层 ShellProviders 负责取本地化文案并喂给
  * ToastProvider(regionLabel)与命令面板/帮助层;二者的 open 态以 useState 持有于本层,
  * ShortcutProvider 回调开启,OverlayControls 下达 TopBar。路由树经 ErrorBoundary 兜底。
+ *
+ * 阶段 2 接通(MES-24):
+ * - workspaceDefaultLocale 经 useWorkspaceLocale 从工作区 API 异步获取;
+ * - 偏好写入经 settingsStore 同步到 PATCH /api/v1/users/me。
  */
 import { useCallback, useMemo, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { getApiClient } from './api/instance';
 import { ThemeProvider, ToastProvider } from './design';
+import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
 import { I18nProvider, useT } from './i18n';
 import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
@@ -25,8 +31,6 @@ import { SettingsPage } from './shell/pages/SettingsPage';
  * 最高优先;浏览器语言(navigator.languages,Accept-Language 的 SPA 等价物)
  * 作为「系统回退」级经 systemLocales 传入 —— 排在账号偏好/工作区默认之后、
  * en 回退之前(否则账号级语言偏好永不生效,违背 i18n.md L1)。
- * 工作区默认级(workspaces.settings.default_locale)待阶段 2 工作区 API 落地接通,
- * 当前传 null(已建跟踪,见 Issue 说明)。
  */
 function useLocaleInputs(): { requested: string | null; systemLocales: readonly string[] } {
   // 纯浏览器 SPA(入口 main.tsx 仅在浏览器执行),无需 SSR 守卫
@@ -39,10 +43,16 @@ function useLocaleInputs(): { requested: string | null; systemLocales: readonly 
 
 export default function App(): React.JSX.Element {
   const { requested, systemLocales } = useLocaleInputs();
+  // 阶段 2 接通(MES-24):工作区默认 locale 经 workspace API 异步获取
+  const workspaceDefaultLocale = useWorkspaceLocale(getApiClient());
   return (
     <BrowserRouter>
       <ThemeProvider>
-        <I18nProvider requested={requested} systemLocales={systemLocales} workspaceDefaultLocale={null}>
+        <I18nProvider
+          requested={requested}
+          systemLocales={systemLocales}
+          workspaceDefaultLocale={workspaceDefaultLocale}
+        >
           <ShellProviders />
         </I18nProvider>
       </ThemeProvider>

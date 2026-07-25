@@ -446,7 +446,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] **`role_override` 服务端强校验**:创建 token 时与每次请求鉴权时均校验 `role_override` 不高于持有者当前角色,违反返回 422;不能仅靠文字描述。
 - [ ] **登录锁定维度为 (IP, 邮箱) 二元组**:避免纯邮箱维度锁定导致 DoS;保留验证码解锁路径。
 - [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。
-- [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),应使用子协议或首帧认证。
+- [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),使用连接建立后首帧认证单一机制(README §6.16,v0.1.0 起实现基线)。
 - [ ] 各端点限流生效,超限 429 + `Retry-After`;登录类叠加失败锁定。
 - [ ] **敏感操作 step-up 再认证**:修改密码、换绑/解绑 OAuth、创建/撤销 PAT、启用/禁用 2FA 等高危操作要求**近期再认证**(如最近 15 分钟内重新输入密码或 TOTP 验证码),否则返回 `403 reauth_required`;防止会话被劫持后直接执行敏感操作。
 

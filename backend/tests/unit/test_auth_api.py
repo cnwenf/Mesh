@@ -115,6 +115,35 @@ async def test_update_me_validation_errors_inprocess(client):
     assert unknown.status_code == 400 and unknown.json()["error"]["code"] == "validation_error"
 
 
+async def test_update_me_explicit_null_clears_settings_key_inprocess(client):
+    """Explicit null in settings.locale/theme pops the key (MES-24 清除语义)."""
+    tokens = await _register_and_login(client)
+    h = _auth(tokens["access_token"])
+
+    # Set locale and theme.
+    set_resp = await client.patch(
+        "/api/v1/users/me", headers=h, json={"settings": {"locale": "zh-CN", "theme": "dark"}}
+    )
+    assert set_resp.status_code == 200
+    assert set_resp.json()["data"]["settings"] == {"locale": "zh-CN", "theme": "dark"}
+
+    # Clear locale with explicit null → key popped, theme preserved.
+    clear_locale = await client.patch(
+        "/api/v1/users/me", headers=h, json={"settings": {"locale": None}}
+    )
+    assert clear_locale.status_code == 200
+    after = clear_locale.json()["data"]["settings"]
+    assert "locale" not in after
+    assert after["theme"] == "dark"
+
+    # Clear theme with explicit null → both keys gone.
+    clear_theme = await client.patch(
+        "/api/v1/users/me", headers=h, json={"settings": {"theme": None}}
+    )
+    assert clear_theme.status_code == 200
+    assert clear_theme.json()["data"]["settings"] == {}
+
+
 async def test_sessions_and_logout_all_inprocess(client):
     tokens = await _register_and_login(client)
     h = _auth(tokens["access_token"])
