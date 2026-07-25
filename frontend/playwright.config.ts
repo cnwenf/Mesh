@@ -26,7 +26,9 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: 'npm run dev -- --port 5173 --strictPort',
+      // --host 127.0.0.1 显式绑 IPv4:CI(GitHub runner)上 vite 默认 host=localhost
+      // 可能解析到 ::1,导致 Playwright 对 http://127.0.0.1:5173 的就绪探测超时。
+      command: 'npm run dev -- --port 5173 --strictPort --host 127.0.0.1',
       url: 'http://127.0.0.1:5173',
       reuseExistingServer: true,
       timeout: 90_000,
