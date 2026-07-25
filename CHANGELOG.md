@@ -3,19 +3,28 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.9.1] - 2026-07-25
+## [0.9.1] - 2026-07-26
 
-安全硬化(MES-37,MES-36 v0.8.0 增量安全审核闭环):修复 CRITICAL RT-C1——realtime 网关缺生产 JWT 签名密钥 fail-safe,连同其根因 MEDIUM RT-M2 一并修复。
+auth 增量2 全量闭环(MES-12 / MES-38 / MES-39)+ realtime 网关生产密钥 fail-safe(MES-37):auth.md **§4 前端页面全量接通**(登录 / MFA / 重置 / 安全设置,切片3)、**§5.5 安全验收 H1/H2/H3/M1 修复**,以及复验新发现 §4.2 漏项**已登录态修改密码**端到端补齐;并入 v0.8.0 增量安全审核的 CRITICAL RT-C1 / MEDIUM RT-M2 修复。至此 auth.md 全量落地,§3 与 §4.2 自相矛盾消除。
+
+### Added
+
+- **auth §4 前端页面全量接通(auth.md §4,切片3,MES-38)**:`frontend/src/api/auth.ts` 统一鉴权 API 层(登录 / MFA 质询 / 忘记密码 / 重置 / 会话与第三方绑定列表 / 全端登出,具名错误码映射);登录页(登录 / 注册双模 + 邮箱验证态 + MFA 二次验证码 + OAuth 入口)、忘记密码 / 重置页、`Settings → 安全`(`SecuritySettings`:活跃会话列出 / 撤销 / 全端登出、TOTP 两步验证启用 / 停用、第三方账号解绑保留至少一种登录方式);文案全 i18n 外部化(zh-CN / en 键集一致 + 版本哈希)。
+- **已登录态修改密码(auth.md §3.1 / §4.2 / §4.5 / §5.1,MES-39)**:后端 `POST /api/v1/auth/change-password`(鉴权态)——旧密码 argon2id 恒定时间校验(错 → `422 invalid_credentials`;OAuth-only NULL hash 走哑哈希同路径防时序泄漏)→ 新密码强度复用注册策略(弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 轮换 `password_hash` + bump `password_changed_at` → 使**其它** refresh 会话失效(呈递当前 refresh 则保留并重 stamp `authenticated_at` 支撑 §5.5 step-up;未呈递则全部失效)→ 撤销经 outbox→realtime `session.revoked` 广播 → 账号级审计 `user.password_changed`(§2.6,`workspace_id` NULL、行为者落 metadata);叠加登录类 (IP, 邮箱) 5 次/分钟限流防在线爆破。前端 `SecuritySettings`「修改密码」折叠表单(§4.2 顺序置首):旧 + 新 + 确认 + 复用注册强度条实时评估 + 确认不一致实时提示 / 灰化提交 + 具名错误映射 + 成功后刷新会话态。Spec §3.1 / §3.5 / §2.6 / §4.5 / §5.1 同步补齐。
 
 ### Security
 
+- **§5.5 安全验收 H1/H2/H3/M1 修复(auth.md §5.5 闭环项,MES-38)**:对应 PR #24,auth.md §5.5 敏感操作再认证 / 会话失效语义闭环。
 - **RT-C1 realtime 网关生产 JWT 签名密钥 fail-safe(auth.md §5.5,README §2.2/§6.16)**:v0.8.0 增量把网关接到真实会话 JWT 验签路径,却未镜像 API 工厂已有的生产守卫——网关以独立部署单元单独启动时,`auth_mode=production` 漏配 `MESH_JWT_SECRET` 会静默启动并以仓库公开的默认开发密钥验签,攻击者可以公开密钥自签 JWT 冒充任意活跃用户的 realtime 身份(v0.7.0 网关 production 拒绝一切鉴权属 fail-closed,该误配置于 v0.8.0 翻转为 fail-open)。现 `mesh.realtime.app.create_app` 在 production + 默认开发密钥时拒启动(`ConfigError`),恢复 fail-closed;其余鉴权行为(首帧认证 / 算法固定 / fail-closed 语义)保持现状。
 - **RT-M2 守卫共享化 + 注释对齐(根因修复)**:「production + 公开默认密钥 → 拒启动」抽为单一共享校验 `mesh.config.validate_auth_settings`,`mesh.api.app` 与 `mesh.realtime.app` 两个工厂启动时均调用,消除 `api/app.py` 内联复制,杜绝两个工厂再漂移;`config.py` 中 `DEV_JWT_SECRET` 与 `jwt_secret` 字段注释改为与实现一致(原注释声称 `load_settings` 负责该校验,实现中并不存在)。
 
 ### Quality
 
-- TDD:两工厂 production + 默认开发密钥 → `ConfigError`(断言 `missing_fields` 与 detail)单测、dev 路径不受影响回归测试(默认密钥 dev 模式正常启动)、共享校验函数四分支全覆盖;真实 e2e 89 项全绿(生产网关进程以真实密钥启动正常、漏配密钥拒启动均实测);609 项全绿,pytest-cov **95.89%**(≥90% 门禁;config 100% / realtime.app 100%,整体与新增代码双达标);ruff 全绿。
-- 文档同步:auth.md 安全清单新增「生产拒用公开默认签名密钥(fail-closed)」项;backend README 安全说明明确守卫为两工厂共享且网关独立校验自身配置。
+- 后端:单测 + 进程内路由 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真,**含 DB 实测**——`password_changed_at` 已 bump / 其它会话 `revoked_at` 非空而当前为空 / `user.password_changed` 审计落库 / outbox `session.revoked` 入队)611+ 项全绿,pytest-cov **96.01%**(≥90% 门禁;auth routes / schemas / security / audit 100%、service 93%,整体与新增代码双达标);ruff、docs 词汇 / 名册校验全绿;含 realtime 网关 production + 默认密钥 → `ConfigError` 守卫回归。
+- 前端:93 文件 844 项全绿,新增 / 变更代码覆盖率 **92.9%**(≥90%);tsc / eslint / build / Playwright e2e 全绿。
+- 验收独立实测(真实 uvicorn + PG16 + Redis,30 项断言全绿):旧密码错 422 / 弱密码三 reason 400 / 成功 200 / 当前 refresh 200 而其它 401 / 旧密码登录 422 新密码 200 / 限流 429 / 保留会话 token_hash 与 `authenticated_at` 实测 / 审计与 outbox 实测;另含 refresh 重放防盗用全量失效路径实测。真人式浏览器实操(Chromium + 构建产物 + 真实后端)5 帧截图:登录 → 安全区(修改密码置首、会话列表)→ 错旧密码具名错误 → 强度条弱实时态 → 确认不一致灰化 → 成功提示且会话 5→1 收敛。
+- 文档同步:auth.md §3.1 / §3.5 / §2.6 / §4.5 / §5.1 补齐修改密码契约与安全清单「生产拒用公开默认签名密钥(fail-closed)」项;backend README 安全说明明确守卫为两工厂共享且网关独立校验自身配置。
+- 纪律:提交身份 `cnwenf <cnwenf@outlook.com>`、无 Co-Authored-By、单提交、全程匿名化(无外部出处泄漏)。
 
 ## [0.9.0] - 2026-07-25
 
