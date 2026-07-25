@@ -15,6 +15,25 @@ interface FramePayload {
   readonly id?: unknown;
   readonly updated_at?: unknown;
   readonly changes?: unknown;
+  readonly archived?: unknown;
+  readonly project?: unknown;
+  readonly milestone?: unknown;
+  readonly update?: unknown;
+  readonly cycle?: unknown;
+}
+
+/**
+ * §3.5 载荷形态:实体事件把实体嵌在键下(project.created → `{project: 摘要}`,
+ * milestone.* → `{milestone}`,project_update.added → `{update}`);
+ * project.updated/archived/unarchived/deleted 为扁平 `{id, ...}`。
+ * 嵌套缺失时回退到 payload 自身(兼容扁平形态)。
+ */
+function unwrapEntity(
+  payload: FramePayload,
+  key: 'project' | 'milestone' | 'update' | 'cycle',
+): FramePayload {
+  const nested = payload[key];
+  return typeof nested === 'object' && nested !== null ? (nested as FramePayload) : payload;
 }
 
 /** 取 `<entity>.<action>` 的动作后缀。 */
@@ -33,10 +52,7 @@ function payloadOf(frame: RealtimeEventFrame): FramePayload {
 }
 
 /** 防回退:两侧 updated_at 皆存在且帧更旧 → 丢弃。 */
-function isStale(
-  existingUpdatedAt: string | undefined,
-  payload: FramePayload,
-): boolean {
+function isStale(existingUpdatedAt: string | undefined, payload: FramePayload): boolean {
   const frameUpdatedAt = typeof payload.updated_at === 'string' ? payload.updated_at : undefined;
   if (existingUpdatedAt === undefined || frameUpdatedAt === undefined) return false;
   return frameUpdatedAt < existingUpdatedAt;
@@ -60,8 +76,8 @@ export function applyProjectListFrame(
   belongs: (project: ProjectSummary) => boolean,
 ): ProjectSummary[] {
   if (entityOf(frame.event) !== 'project') return projects as ProjectSummary[];
-  const payload = payloadOf(frame);
-  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  const source = unwrapEntity(payloadOf(frame), 'project');
+  const id = typeof source.id === 'string' ? source.id : undefined;
   if (id === undefined) return projects as ProjectSummary[];
   const action = actionOf(frame.event);
 
@@ -75,20 +91,20 @@ export function applyProjectListFrame(
 
   if (action === 'archived' || action === 'unarchived') {
     if (existing === undefined) return projects as ProjectSummary[];
-    if (isStale(existing.updated_at, payload)) return projects as ProjectSummary[];
+    if (isStale(existing.updated_at, source)) return projects as ProjectSummary[];
     const updated: ProjectSummary = mergedFields(existing, {
-      ...payload,
+      ...source,
       archived: action === 'archived',
     });
     return replaceAt(projects, index, updated, belongs);
   }
 
   // created / updated:防回退后 upsert,再按 belongs 决定去留
-  if (existing !== undefined && isStale(existing.updated_at, payload)) {
+  if (existing !== undefined && isStale(existing.updated_at, source)) {
     return projects as ProjectSummary[];
   }
   const merged = (
-    existing !== undefined ? mergedFields(existing, payload) : (payload as ProjectSummary)
+    existing !== undefined ? mergedFields(existing, source) : (source as ProjectSummary)
   ) as ProjectSummary;
   if (!belongs(merged)) {
     if (existing === undefined) return projects as ProjectSummary[];
@@ -121,8 +137,8 @@ export function applyMilestoneFrame(
   frame: RealtimeEventFrame,
 ): Milestone[] {
   if (entityOf(frame.event) !== 'milestone') return milestones as Milestone[];
-  const payload = payloadOf(frame);
-  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  const source = unwrapEntity(payloadOf(frame), 'milestone');
+  const id = typeof source.id === 'string' ? source.id : undefined;
   if (id === undefined) return milestones as Milestone[];
   const action = actionOf(frame.event);
 
@@ -133,11 +149,11 @@ export function applyMilestoneFrame(
 
   const index = milestones.findIndex((milestone) => milestone.id === id);
   const existing = index === -1 ? undefined : milestones[index];
-  if (existing !== undefined && isStale(existing.updated_at, payload)) {
+  if (existing !== undefined && isStale(existing.updated_at, source)) {
     return milestones as Milestone[];
   }
   const merged = (
-    existing !== undefined ? mergedFields(existing, payload) : (payload as Milestone)
+    existing !== undefined ? mergedFields(existing, source) : (source as Milestone)
   ) as Milestone;
   if (existing !== undefined) {
     return milestones.map((milestone, i) => (i === index ? merged : milestone));
@@ -153,11 +169,11 @@ export function applyUpdateFrame(
   frame: RealtimeEventFrame,
 ): ProjectUpdateEntry[] {
   if (frame.event !== 'project_update.added') return updates as ProjectUpdateEntry[];
-  const payload = payloadOf(frame);
-  const id = typeof payload.id === 'string' ? payload.id : undefined;
+  const source = unwrapEntity(payloadOf(frame), 'update');
+  const id = typeof source.id === 'string' ? source.id : undefined;
   if (id === undefined) return updates as ProjectUpdateEntry[];
   if (updates.some((update) => update.id === id)) return updates as ProjectUpdateEntry[];
-  return [payload as ProjectUpdateEntry, ...updates];
+  return [source as ProjectUpdateEntry, ...updates];
 }
 
 /**

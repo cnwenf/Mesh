@@ -85,7 +85,7 @@ export function MilestonesPanel(props: MilestonesPanelProps): React.JSX.Element 
                 <span className="mesh-projects__milestone-sub">
                   {t(`projects.milestones.state.${milestone.state}`)}
                   {milestone.target_date !== null
-                    ? ` · ${t('projects.card.due', { date: milestone.target_date })}`
+                    ? ` · ${t('projects.card.due', { date: new Date(milestone.target_date) })}`
                     : ''}
                   {milestone.overdue ? ` · ${t('projects.milestones.overdue')}` : ''}
                 </span>
