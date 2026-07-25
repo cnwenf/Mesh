@@ -441,6 +441,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 防 XSS 窃取:refresh 优先 httpOnly + Secure cookie,access 放内存;API token 由 CLI/runtime 从环境变量读取。
 - [ ] 全站 HTTPS/HSTS;签名 URL 短时效。
 - [ ] 支持 JWT 签名密钥与加密密钥轮换;密钥不出现在代码/仓库。
+- [ ] **生产拒用公开默认签名密钥(fail-closed)**:一切签名/验签令牌的应用工厂(API 与 realtime 网关两个独立部署单元)必须在启动时共享同一校验(`validate_auth_settings`)拒绝 `auth_mode=production` + 仓库公开的默认开发密钥,违者拒启动(`ConfigError`);网关不得依赖 API 侧配置,漏配 `MESH_JWT_SECRET` 必须 fail-closed 而非以公开默认密钥验签。
 - [ ] **JWT 验签固定 `alg`**:验签时必须固定预期算法(如 HS256 或 RS256),显式拒绝 `alg=none`,防 HS/RS 混淆攻击(服务端不使用 token 头部声明的算法,仅用配置的固定算法验签)。
 - [ ] **密码重置/邮箱验证令牌落库**:两类令牌均有独立表(`password_reset_tokens`/`email_verification_tokens`),仅存 SHA-256 哈希,带 TTL(重置 1h / 验证 24h)与单次消费约束(`consumed_at`)。
 - [ ] **`role_override` 服务端强校验**:创建 token 时与每次请求鉴权时均校验 `role_override` 不高于持有者当前角色,违反返回 422;不能仅靠文字描述。
