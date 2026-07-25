@@ -1,0 +1,94 @@
+/*
+ * 命令面板与快捷键帮助层样式(README §6.12):仅引用语义 token,方向性间距用逻辑属性。
+ */
+
+/* ===== CommandPalette ===== */
+.mesh-palette {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-palette__input {
+  inline-size: 100%;
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+}
+
+.mesh-palette__input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-block-size: 20rem;
+  overflow: auto;
+}
+
+.mesh-palette__option {
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.mesh-palette__option--active {
+  background-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.mesh-palette__empty {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* ===== ShortcutHelp ===== */
+.mesh-shortcut-help__group {
+  margin-block-end: var(--space-5);
+}
+
+.mesh-shortcut-help__group:last-child {
+  margin-block-end: 0;
+}
+
+.mesh-shortcut-help__group-title {
+  margin-block-end: var(--space-2);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.mesh-shortcut-help__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-shortcut-help__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  color: var(--color-text);
+}
+
+.mesh-shortcut-help__combo {
+  display: inline-flex;
+  gap: var(--space-1);
+}
