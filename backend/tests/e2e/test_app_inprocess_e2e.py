@@ -149,6 +149,9 @@ def test_gateway_production_auth_mode_rejects_dev_tokens(settings):
         database_url=settings.database_url,
         redis_url=settings.redis_url,
         auth_mode="production",
+        # A real signing secret so the production fail-safe lets the app boot;
+        # dev-token rejection below is independent of the secret's value.
+        jwt_secret="gateway-inprocess-e2e-signing-secret",
     )
     gateway_app = create_gateway_app(production_settings)
     with TestClient(gateway_app) as client:

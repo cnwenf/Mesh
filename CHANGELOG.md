@@ -3,6 +3,20 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.1] - 2026-07-25
+
+安全硬化(MES-37,MES-36 v0.8.0 增量安全审核闭环):修复 CRITICAL RT-C1——realtime 网关缺生产 JWT 签名密钥 fail-safe,连同其根因 MEDIUM RT-M2 一并修复。
+
+### Security
+
+- **RT-C1 realtime 网关生产 JWT 签名密钥 fail-safe(auth.md §5.5,README §2.2/§6.16)**:v0.8.0 增量把网关接到真实会话 JWT 验签路径,却未镜像 API 工厂已有的生产守卫——网关以独立部署单元单独启动时,`auth_mode=production` 漏配 `MESH_JWT_SECRET` 会静默启动并以仓库公开的默认开发密钥验签,攻击者可以公开密钥自签 JWT 冒充任意活跃用户的 realtime 身份(v0.7.0 网关 production 拒绝一切鉴权属 fail-closed,该误配置于 v0.8.0 翻转为 fail-open)。现 `mesh.realtime.app.create_app` 在 production + 默认开发密钥时拒启动(`ConfigError`),恢复 fail-closed;其余鉴权行为(首帧认证 / 算法固定 / fail-closed 语义)保持现状。
+- **RT-M2 守卫共享化 + 注释对齐(根因修复)**:「production + 公开默认密钥 → 拒启动」抽为单一共享校验 `mesh.config.validate_auth_settings`,`mesh.api.app` 与 `mesh.realtime.app` 两个工厂启动时均调用,消除 `api/app.py` 内联复制,杜绝两个工厂再漂移;`config.py` 中 `DEV_JWT_SECRET` 与 `jwt_secret` 字段注释改为与实现一致(原注释声称 `load_settings` 负责该校验,实现中并不存在)。
+
+### Quality
+
+- TDD:两工厂 production + 默认开发密钥 → `ConfigError`(断言 `missing_fields` 与 detail)单测、dev 路径不受影响回归测试(默认密钥 dev 模式正常启动)、共享校验函数四分支全覆盖;真实 e2e 89 项全绿(生产网关进程以真实密钥启动正常、漏配密钥拒启动均实测);609 项全绿,pytest-cov **95.89%**(≥90% 门禁;config 100% / realtime.app 100%,整体与新增代码双达标);ruff 全绿。
+- 文档同步:auth.md 安全清单新增「生产拒用公开默认签名密钥(fail-closed)」项;backend README 安全说明明确守卫为两工厂共享且网关独立校验自身配置。
+
 ## [0.9.0] - 2026-07-25
 
 auth 增量 2 第二切片(MES-12):OAuth 提供商往返(auth.md §1.2 A5/A6)、会话/令牌撤销 realtime 广播(§3.7/§5.6,C4)、生产 SMTP mailer(A1/A4)、审计时间范围过滤(§5.3)。至此 auth.md **后端**全量落地(余 §4 前端页面与 `POST /agents/{id}/tokens` 便捷端点)。

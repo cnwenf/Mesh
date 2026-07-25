@@ -26,7 +26,7 @@ from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
 from mesh.auth.token_routes import router as token_router
 from mesh.auth.tokens import TokenService
-from mesh.config import DEV_JWT_SECRET, ConfigError, Settings, load_settings
+from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
     BusinessRuleError,
@@ -81,11 +81,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     # Fail-safe: the API signs/verifies tokens, so production must never run on
     # the well-known dev signing key (auth.md §5.5 — keys not in code/repo).
-    if settings.auth_mode == "production" and settings.jwt_secret == DEV_JWT_SECRET:
-        raise ConfigError(
-            ("jwt_secret",),
-            "MESH_JWT_SECRET must be set to a strong secret in production",
-        )
+    # Shared with the realtime gateway factory so the two cannot drift apart.
+    validate_auth_settings(settings)
     app = FastAPI(title="Mesh API", version=__version__, lifespan=lifespan)
 
     engine = create_app_engine_from_settings(settings)

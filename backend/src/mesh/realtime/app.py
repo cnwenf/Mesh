@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from mesh import __version__
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
-from mesh.config import Settings, load_settings
+from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.realtime.auth import (
     ChannelAuthorizer,
@@ -36,6 +36,12 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the realtime gateway FastAPI app."""
     settings = settings or load_settings()
+    # Fail-safe: the gateway verifies session JWTs on the first frame (§6.16),
+    # so production must never run on the well-known dev signing key — it is
+    # public in the repository and would let a forged token pass first-frame
+    # auth. Shared with the API factory (the gateway deploys independently,
+    # README §2.2, so its configuration is validated on its own startup path).
+    validate_auth_settings(settings)
     app = FastAPI(title="Mesh Realtime Gateway", version=__version__, lifespan=lifespan)
 
     engine = create_app_engine_from_settings(settings)
