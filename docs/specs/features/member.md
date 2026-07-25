@@ -122,7 +122,7 @@ CHECK (member_type = 'human' OR role <> 'owner')
 
 ### 2.4 引用的身份表(由其它 Spec 定义,此处仅列名册消费字段)
 
-**`users`**(auth.md 拥有):`id`、`email`、`full_name`、`display_name`、`avatar_url`、`bio`、`timezone`、`is_active`、`last_seen_at`。
+**`users`**(auth.md 拥有,真源见 auth.md §2.2):名册 JOIN 消费的展示字段为 `id`、`email`、`display_name`、`avatar_url`(users 仅有单一 `display_name` 名列,**无 `full_name`/`bio`/`is_active`/`last_seen_at` 列**;账号 `status`、展示偏好 `timezone`/`settings` 等其余字段归 auth.md)。
 
 **`agents`**(agent.md 拥有):`id`、`name`、`avatar_url`、`description`、`owner_user_id`、`runtime_ref`、`config`(JSONB)、`is_active`。
 
@@ -130,8 +130,8 @@ CHECK (member_type = 'human' OR role <> 'owner')
 
 **显示名解析顺序**(所有 UI 与 API 统一,避免各处不一致):
 1. `members.display_override`(工作区内覆盖,若非空)→
-2. 人类:`users.display_name`(若非空)→ `users.full_name`;
-   agent:`agents.name`。
+2. 人类:`users.display_name`(若非空)→ 邮箱本地段(`users.email` 的 `@` 前缀)→ 成员短 id(`member-<id 前 8 位>`)兜底;
+   agent:`agents.name`(若非空)→ agent 短 id(`agent-<agent_id 前 8 位>`)兜底。
 解析在服务端完成,接口统一返回单一 `display_name` 字段;`member_type` 与类型徽章独立返回供前端渲染。
 
 ### 2.5 索引与约束
