@@ -349,7 +349,13 @@ async def test_project_access_flow(client):
     owner = await _register_and_login(client, "owner-pa@corp.com")
     ws = await _create_workspace(client, owner, "mem-pa")
     guest_id, _guest = await _invite_accept(client, owner, ws["id"], "guest-pa@corp.com", role="guest")
-    project_id = str(uuid.uuid4())
+    project = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/projects",
+        json={"name": "Shared", "key": "SHA"},
+        headers=_auth(owner),
+    )
+    assert project.status_code == 201, project.text
+    project_id = project.json()["data"]["id"]
 
     granted = await client.post(
         f"/api/v1/workspaces/{ws['id']}/members/{guest_id}/project-access",
