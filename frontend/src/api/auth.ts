@@ -136,6 +136,29 @@ export async function resetPassword(
   });
 }
 
+/** 已登录态修改密码输入(§3.1 POST /auth/change-password,MES-39) */
+export interface ChangePasswordInput {
+  oldPassword: string;
+  newPassword: string;
+  /** 当前会话 refresh:呈递则保留当前会话,其它会话失效;缺省则全部失效 */
+  refreshToken?: string | null;
+}
+
+/** 已登录态修改密码(§4.2):旧密码校验(422 invalid_credentials)+ 新密码强度
+ * (400 weak_password,三 reason)。成功使其它会话失效,当前会话保留。 */
+export async function changePassword(
+  client: MeshApiClient,
+  input: ChangePasswordInput,
+): Promise<void> {
+  await client.request('POST', '/api/v1/auth/change-password', {
+    body: {
+      old_password: input.oldPassword,
+      new_password: input.newPassword,
+      ...(input.refreshToken != null ? { refresh_token: input.refreshToken } : {}),
+    },
+  });
+}
+
 /** 验证邮箱(凭验证令牌)。 */
 export async function verifyEmail(client: MeshApiClient, token: string): Promise<void> {
   await client.request('POST', '/api/v1/auth/verify-email', { body: { token } });

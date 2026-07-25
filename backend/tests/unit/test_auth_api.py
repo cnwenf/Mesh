@@ -334,6 +334,111 @@ async def test_get_current_user_returns_active_user_directly(app):
     assert user.id == uid
 
 
+# --- change password (auth.md §3.1/§4.2: 已登录态修改密码) ---------------------
+
+
+async def test_change_password_success_keeps_current_session_inprocess(client):
+    tokens = await _register_and_login(client)
+    h = _auth(tokens["access_token"])
+    other = await _login(client)  # a second session (other device)
+
+    changed = await client.post(
+        "/api/v1/auth/change-password",
+        headers=h,
+        json={
+            "old_password": PASSWORD,
+            "new_password": "a-new-passw0rd",
+            "refresh_token": tokens["refresh_token"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["data"]["status"] == "ok"
+
+    # The presenting session survives; the other session's refresh is dead.
+    # (Alive-first: presenting a revoked token triggers replay detection,
+    # which revokes the whole family — so the dead check goes last.)
+    alive = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    )
+    assert alive.status_code == 200
+    dead = await client.post(
+        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
+    )
+    assert dead.status_code == 401
+
+    # Old password rejected with the uniform named code; the new one logs in.
+    old = await client.post(
+        "/api/v1/auth/login", json={"email": EMAIL, "password": PASSWORD}
+    )
+    assert old.status_code == 422
+    assert old.json()["error"]["code"] == "invalid_credentials"
+    new = await client.post(
+        "/api/v1/auth/login", json={"email": EMAIL, "password": "a-new-passw0rd"}
+    )
+    assert new.status_code == 200
+
+
+async def test_change_password_wrong_old_422_inprocess(client):
+    tokens = await _register_and_login(client)
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        headers=_auth(tokens["access_token"]),
+        json={"old_password": "wrong-pass-1", "new_password": "a-new-passw0rd"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "invalid_credentials"
+
+
+async def test_change_password_weak_new_400_three_reasons_inprocess(client):
+    tokens = await _register_and_login(client)
+    h = _auth(tokens["access_token"])
+    cases = [
+        ("short1", "too_short"),
+        ("lettersonlyx", "needs_letter_and_digit"),
+        ("password123", "too_common"),
+    ]
+    for weak, reason in cases:
+        resp = await client.post(
+            "/api/v1/auth/change-password",
+            headers=h,
+            json={"old_password": PASSWORD, "new_password": weak},
+        )
+        assert resp.status_code == 400
+        error = resp.json()["error"]
+        assert error["code"] == "weak_password"
+        assert error["details"]["reason"] == reason
+
+
+async def test_change_password_requires_auth_401_inprocess(client):
+    resp = await client.post(
+        "/api/v1/auth/change-password",
+        json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["error"]["code"] == "unauthorized"
+
+
+async def test_change_password_rate_limited_on_ip_email_inprocess(client):
+    """§3.6: the password-verifying endpoint shares the login-class throttle."""
+    tokens = await _register_and_login(client)
+    h = _auth(tokens["access_token"])
+    for _ in range(5):  # CHANGE_PASSWORD_LIMIT = 5/min on (IP, email)
+        wrong = await client.post(
+            "/api/v1/auth/change-password",
+            headers=h,
+            json={"old_password": "wrong-pass-1", "new_password": "a-new-passw0rd"},
+        )
+        assert wrong.status_code == 422  # wrong old password, not throttled yet
+    sixth = await client.post(
+        "/api/v1/auth/change-password",
+        headers=h,
+        json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
+    )
+    assert sixth.status_code == 429
+    assert sixth.json()["error"]["code"] == "rate_limited"
+    assert "Retry-After" in sixth.headers
+
+
 # --- C6: register/reset rate limiting is keyed on the (IP, email) tuple ------
 # (auth.md §3.6, consistent with the login lockout dimension). Regression guard:
 # exhausting one email's bucket must NOT rate-limit a different email from the

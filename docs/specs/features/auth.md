@@ -183,7 +183,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `workspace_id` | UUID | NULL,FK→workspaces(id) | 账号级事件可为 NULL |
 | `actor_member_id` | UUID | NULL,复合 FK `(workspace_id, actor_member_id) → members(workspace_id, id)`(非空时校验) | 行为者名册条目(人或 agent;系统动作为 NULL,README §6.1/§6.2) |
 | `actor_kind` | TEXT | NOT NULL,CHECK IN ('member','system') | 行为者类别:`member`=名册成员(人/agent 由 JOIN `members.member_type` 判别,**不存冗余 `actor_type`**),`system`=系统(允许 `actor_member_id` 为 NULL) |
-| `action` | TEXT | NOT NULL | 如 `auth.login`、`auth.login_failed`、`token.created`、`token.revoked`、`member.role_changed`、`member.removed`、`issue.deleted` |
+| `action` | TEXT | NOT NULL | 如 `auth.login`、`auth.login_failed`、`token.created`、`token.revoked`、`user.password_changed`(已登录态修改密码,账号级事件:`workspace_id` 为 NULL,行为者落 `metadata.user_id`)、`member.role_changed`、`member.removed`、`issue.deleted` |
 | `resource_type` | TEXT | NULL | 目标资源类型 |
 | `resource_id` | UUID | NULL | 目标资源 ID |
 | `ip_address` | INET | NULL | |
@@ -255,6 +255,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | POST | `/api/v1/auth/logout-all` | 撤销该用户全部会话 | |
 | POST | `/api/v1/auth/forgot-password` | 发起重置(恒返回成功,防枚举) | ✅ |
 | POST | `/api/v1/auth/reset-password` | 凭重置令牌设新密码并使旧会话失效 | ✅ |
+| POST | `/api/v1/auth/change-password` | **已登录态修改密码(§4.2)**:body `{old_password, new_password, refresh_token?}`——校验旧密码(argon2id 恒定时间比较;错误 → `422 invalid_credentials`)。**旧密码重输即 §5.5 敏感操作 step-up 再认证**(「近期重新输入密码」由本表单天然满足,不另设再认证门槛)→ 校验新密码强度(复用注册策略 §5.1;弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 更新 `password_hash` + `password_changed_at=now()` → **使该用户其它 refresh 会话失效**(发起会话在 body 呈递其 `refresh_token` 且可识别时保留,并刷新其 `authenticated_at` 为本次认证时刻;未呈递或不可识别则全部失效;PAT 单独管理;撤销经 §3.7/§5.6 outbox→realtime 广播)→ 写账号级审计 `user.password_changed`(§2.6)。限流同登录类(§3.6,(IP, 邮箱) 5 次/分钟);成功 `200 {"data": {"status": "ok"}}` | |
 | POST | `/api/v1/auth/verify-email` | 验证邮箱 | ✅ |
 | GET | `/api/v1/auth/oauth/{provider}/start` | 发起第三方登录(302,state + PKCE) | ✅ |
 | GET/POST | `/api/v1/auth/oauth/{provider}/callback` | 回调:登录或自动注册并绑定 | ✅ |
@@ -312,7 +313,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 | HTTP | code | 场景 |
 |------|------|------|
-| 400 | `validation_error` | 字段非法、密码太弱 |
+| 400 | `validation_error` | 字段非法 |
+| 400 | `weak_password` | 密码强度不足(`details.reason ∈ too_short/needs_letter_and_digit/too_common`;注册/重置/修改密码共用) |
 | 401 | `unauthorized` | 凭证缺失/无效/过期(README §6.14 canonical code) |
 | 401 | `unauthorized` | 邮箱未验证(`details.reason='email_not_verified'`;README §6.14 canonical code) |
 | 403 | `forbidden` | 角色/scope 不足 |
@@ -374,7 +376,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 1. **注册**:校验强度与唯一性 → argon2id 哈希 → 建 `users` → 发验证邮件;未验证可登录但受限。
 2. **登录**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功颁发短期 access JWT(含 `sub`/`exp`/`jti`)+ 长期 refresh(存哈希入 `sessions`)。`remember=true` 延长 refresh。
 3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh` → 校验哈希未撤销未过期 → 颁新 access(可轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
-4. **登出**:撤销当前 refresh;「登出所有」批量撤销;**密码变更**使该用户全部 refresh 会话失效(PAT 单独管理)。
+4. **登出**:撤销当前 refresh;「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——修改密码时发起会话呈递其 refresh 则保留并刷新其近期再认证时刻,未呈递则全部失效(PAT 单独管理)。
 5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。
 6. **API token / agent 凭证**:创建→存哈希、一次性明文→CLI/runtime 从环境变量读取(绝不硬编码)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`,人类/agent 经 JOIN `members.member_type` 判别);agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
 
@@ -399,7 +401,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] **401 canonical code(README §6.14)**:凭证缺失/无效/过期与邮箱未验证统一返回 401 `unauthorized`(未验证以 `details.reason='email_not_verified'` 区分,不另立 code)。
 - [ ] 失败计数达阈值返回 423 `account_locked`。
 - [ ] access 过期可用 refresh 静默续期;refresh 轮换后旧的立即失效(防重放)。
-- [ ] 登出撤销当前 refresh;登出所有批量撤销;密码变更使全部 refresh 会话失效。
+- [ ] 登出撤销当前 refresh;登出所有批量撤销;密码变更使其它 refresh 会话失效(已登录态修改密码时发起会话呈递 refresh 则保留,未呈递则全部失效)。
+- [ ] **已登录态修改密码(§4.2)**:`POST /api/v1/auth/change-password`(鉴权态)校验旧密码(错误 → `422 invalid_credentials`)与新密码强度(弱 → `400 weak_password`,三 reason 复用注册策略),成功更新 `password_hash` + `password_changed_at` 并使其它会话失效、写审计 `user.password_changed`;前端「设置 → 安全」提供旧+新+确认+强度条的实时校验表单。
 - [ ] 会话列表展示设备/UA/IP/最近活跃,可撤销指定会话。
 - [ ] 忘记密码恒返回成功(防枚举);重置链接短时效,重置后旧会话失效。
 - [ ] OAuth 登录用 state + PKCE;首次自动建号并绑定;解绑保留至少一种登录方式。
