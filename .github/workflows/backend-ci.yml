@@ -77,6 +77,11 @@ jobs:
         run: |
           pip install -r backend/requirements-dev.lock
           pip install -e backend/ --no-deps
+      - name: Verify lockfile satisfies pyproject (drift gate)
+        # Fails if pyproject.toml gained a dependency the lockfile does not
+        # cover (mesh-backend's Requires-Dist would be unsatisfied) — catches
+        # "bumped pyproject, forgot to regenerate the lockfile" before tests.
+        run: pip check
       - name: Lint (ruff)
         run: ruff check backend/src backend/tests
       - name: Run unit + e2e with coverage gate
