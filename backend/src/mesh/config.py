@@ -17,6 +17,30 @@ DEFAULT_REALTIME_RETENTION_DAYS = 7
 DEFAULT_API_PORT = 8000
 DEFAULT_WS_PORT = 8081
 
+# Auth defaults (auth.md §3.4/§4.5/§3.6). The access TTL bounds the maximum
+# revocation latency for stateless access JWTs; refresh TTL is extended when
+# the user ticks "remember me".
+DEFAULT_ACCESS_TOKEN_TTL = timedelta(minutes=15)
+DEFAULT_REFRESH_TOKEN_TTL = timedelta(days=14)
+DEFAULT_REMEMBER_REFRESH_TOKEN_TTL = timedelta(days=30)
+DEFAULT_PASSWORD_RESET_TTL = timedelta(hours=1)
+DEFAULT_EMAIL_VERIFICATION_TTL = timedelta(hours=24)
+DEFAULT_REAUTH_WINDOW = timedelta(minutes=15)
+
+# Login protection thresholds (auth.md §3.6 — (IP, email) tuple dimension).
+DEFAULT_LOGIN_MAX_FAILURES = 5
+DEFAULT_LOGIN_LOCK_DURATION = timedelta(minutes=15)
+
+# Supported UI locales (auth.md §5.1 R3 — first-release list; extensions are
+# registered through the i18n.md message catalog).
+SUPPORTED_LOCALES: tuple[str, ...] = ("zh-CN", "en")
+SUPPORTED_THEMES: tuple[str, ...] = ("light", "dark", "system")
+
+# A clearly-marked development signing key. Production MUST override
+# ``MESH_JWT_SECRET``: ``load_settings`` refuses this default when
+# ``auth_mode=production`` (fail-safe, mirroring the auth_mode pattern).
+DEV_JWT_SECRET = "mesh-dev-insecure-signing-key-do-not-use-in-production"
+
 
 class ConfigError(RuntimeError):
     """Raised when required settings are missing or invalid at startup."""
@@ -50,6 +74,23 @@ class Settings(BaseSettings):
     # worker always use database_url (owner — cross-tenant relay/projector/
     # retention).
     app_database_url: str | None = None
+
+    # Auth signing / encryption (auth.md §5.5). The JWT secret signs access
+    # tokens; the Fernet key for at-rest secrets (MFA) is derived from it so a
+    # single env var drives both. ``jwt_algorithm`` is fixed at the config
+    # boundary — verification never trusts the token header's ``alg`` (§5.5).
+    jwt_secret: str = DEV_JWT_SECRET
+    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = "HS256"
+    access_token_ttl: timedelta = DEFAULT_ACCESS_TOKEN_TTL
+    refresh_token_ttl: timedelta = DEFAULT_REFRESH_TOKEN_TTL
+    remember_refresh_token_ttl: timedelta = DEFAULT_REMEMBER_REFRESH_TOKEN_TTL
+    password_reset_ttl: timedelta = DEFAULT_PASSWORD_RESET_TTL
+    email_verification_ttl: timedelta = DEFAULT_EMAIL_VERIFICATION_TTL
+    reauth_window: timedelta = DEFAULT_REAUTH_WINDOW
+
+    # Login protection (auth.md §3.6).
+    login_max_failures: int = Field(default=DEFAULT_LOGIN_MAX_FAILURES, ge=1)
+    login_lock_duration: timedelta = DEFAULT_LOGIN_LOCK_DURATION
 
     # Process bind addresses.
     api_host: str = "0.0.0.0"

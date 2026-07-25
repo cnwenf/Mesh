@@ -16,7 +16,21 @@ from mesh.errors import INTERNAL_ERROR_MESSAGE
 
 
 def _settings(db_url, redis_url, **overrides):
+    # Provide a signing secret so create_app's production fail-safe passes; these
+    # tests exercise health/edge cases, not auth.
+    overrides.setdefault("jwt_secret", "health-edge-test-signing-secret-00")
     return load_settings(database_url=db_url, redis_url=redis_url, **overrides)
+
+
+def test_create_app_refuses_dev_signing_key_in_production(db_url, redis_url):
+    """auth.md §5.5: production must never serve on the well-known dev key."""
+    from mesh.config import ConfigError
+
+    settings = load_settings(
+        database_url=db_url, redis_url=redis_url, auth_mode="production"
+    )  # default dev jwt_secret
+    with pytest.raises(ConfigError):
+        create_app(settings)
 
 
 async def test_readyz_reports_database_unavailable(db_url, redis_url):

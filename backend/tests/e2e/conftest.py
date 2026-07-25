@@ -128,6 +128,7 @@ async def api_client(api_server) -> httpx.AsyncClient:
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables_after_each_e2e_test(provision_database):
     """TRUNCATE every table before each e2e test for isolation."""
+    import mesh.db.models  # noqa: F401 — register all models on Base.metadata
     from mesh.db.base import Base
 
     tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
@@ -138,3 +139,19 @@ async def clean_tables_after_each_e2e_test(provision_database):
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
     await engine.dispose()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def flush_redis_each_e2e_test():
+    """Reset Redis (rate-limit buckets + dev mailer) before each e2e test.
+
+    The API server keeps rate-limit counters in Redis; without a per-test flush
+    the login/register buckets leak across tests and trip the limiter.
+    """
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(get_test_redis_url(), decode_responses=True)
+    await client.flushdb()
+    yield
+    await client.flushdb()
+    await client.aclose()

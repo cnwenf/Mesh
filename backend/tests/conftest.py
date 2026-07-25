@@ -99,6 +99,7 @@ def session_factory(db_url: str):
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables(db_url: str):
     """TRUNCATE all tables before each test — isolation regardless of fixtures used."""
+    import mesh.db.models  # noqa: F401 — register all models on Base.metadata
     from mesh.db.base import Base
 
     engine = create_async_engine(db_url)
