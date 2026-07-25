@@ -10,7 +10,7 @@
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { MeshApiError, getToken } from '../api';
 import { env } from '../env';
 import { useT } from '../i18n';
@@ -18,6 +18,7 @@ import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
 import { useAuthStore } from '../state/authStore';
 import type { RealtimeEventFrame } from '../types/realtime';
+import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
 import { registerShellShortcuts } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
 import { StatusBanner } from './StatusBanner';
@@ -238,18 +239,31 @@ export function AppShell(): React.JSX.Element {
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
 
+  // 工作区上下文(workspace.md §4.1):/w/:workspaceSlug/* 命中时以 WorkspaceProvider
+  // 包裹整个布局子树(TopBar 切换器 / Sidebar 设置入口 / 页面共享当前工作区)。
+  const workspaceMatch = useMatch('/w/:workspaceSlug/*');
+  const workspaceSlug = workspaceMatch?.params.workspaceSlug;
+
+  const layout = (
+    <div className="mesh-shell">
+      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
+      <div className="mesh-shell__banner">
+        <StatusBanner state={state} />
+      </div>
+      <Sidebar />
+      <main className="mesh-shell__main">
+        <Outlet />
+      </main>
+    </div>
+  );
+
   return (
     <RealtimeContext.Provider value={realtimeValue}>
-      <div className="mesh-shell">
-        <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
-        <div className="mesh-shell__banner">
-          <StatusBanner state={state} />
-        </div>
-        <Sidebar />
-        <main className="mesh-shell__main">
-          <Outlet />
-        </main>
-      </div>
+      {workspaceSlug !== undefined ? (
+        <WorkspaceProvider slug={workspaceSlug}>{layout}</WorkspaceProvider>
+      ) : (
+        layout
+      )}
     </RealtimeContext.Provider>
   );
 }

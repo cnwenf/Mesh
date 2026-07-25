@@ -27,9 +27,15 @@ export async function emit(
   return body.data;
 }
 
-/** 占位登录:粘帖 token → 写入 authStore → 跳转首页(真实 auth 在阶段 2) */
+/**
+ * dev-token 直填登录:展开登录页的开发用入口(<details>,MES-26 起默认折叠)→
+ * 粘帖 token → 写入 authStore → 跳转首页。邮箱/密码登录走 UI 用例自行驱动。
+ */
 export async function login(page: Page, token: string = DEV_TOKEN): Promise<void> {
   await page.goto('/login');
+  await page.locator('.mesh-login__dev').evaluate((el) => {
+    (el as HTMLDetailsElement).open = true;
+  });
   await page.getByTestId('login-token').fill(token);
   await page.getByTestId('login-submit').click();
   await page.waitForURL('**/');

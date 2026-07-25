@@ -122,6 +122,10 @@ test.describe('路由与占位页', () => {
     await expect(page.getByTestId('demo-theme')).toBeVisible();
     await page.goto('/login');
     await expect(page.getByRole('heading', { name: 'Sign in to Mesh' })).toBeVisible();
+    // dev-token 直填入口在 <details> 内(MES-26 起默认折叠),展开后填写
+    await page.locator('.mesh-login__dev').evaluate((el) => {
+      (el as HTMLDetailsElement).open = true;
+    });
     await page.getByTestId('login-token').fill('e2e-token');
     await page.getByTestId('login-submit').click();
     await page.waitForURL('**/');

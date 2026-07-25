@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
+from mesh.auth.jwt import encode_access_token
+from mesh.config import DEV_JWT_SECRET
+from mesh.db.models.member import Member
 from mesh.db.models.realtime import RealtimeChannel
+from mesh.db.models.user import User
 from mesh.realtime.auth import (
+    ChainedAuthenticator,
     DefaultChannelAuthorizer,
     DevTokenAuthenticator,
+    JwtPrincipalAuthenticator,
     NullAuthenticator,
     Principal,
 )
@@ -98,3 +105,106 @@ async def test_prefix_checker_can_veto(session_factory, workspace_factory):
 
 async def _deny() -> bool:
     return False
+
+
+# --- JWT principal authenticator (session credentials, README §6.16) ---------
+
+JWT_SECRET = DEV_JWT_SECRET
+JWT_ALGORITHM = "HS256"
+
+
+def _issue_token(user_id) -> str:
+    token, _jti = encode_access_token(
+        subject=user_id,
+        secret=JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+        ttl=timedelta(minutes=15),
+    )
+    return token
+
+
+async def _seed_user(session_factory, user_id, *, status="active") -> None:
+    async with session_factory() as session, session.begin():
+        session.add(User(id=user_id, email=f"{user_id}@corp.com", display_name="U", status=status))
+
+
+async def _seed_membership(session_factory, user_id, workspace_id, *, status="active") -> None:
+    async with session_factory() as session, session.begin():
+        session.add(
+            Member(workspace_id=workspace_id, member_type="human", user_id=user_id, status=status)
+        )
+
+
+def _jwt_authenticator(session_factory) -> JwtPrincipalAuthenticator:
+    return JwtPrincipalAuthenticator(
+        session_factory, jwt_secret=JWT_SECRET, jwt_algorithm=JWT_ALGORITHM
+    )
+
+
+async def test_jwt_authenticator_maps_active_memberships_to_workspaces(
+    session_factory, workspace_factory
+):
+    user_id = uuid.uuid4()
+    ws_a = await workspace_factory(name="A", slug="jwt-a")
+    ws_b = await workspace_factory(name="B", slug="jwt-b")
+    await _seed_user(session_factory, user_id)
+    await _seed_membership(session_factory, user_id, ws_a.id)
+    await _seed_membership(session_factory, user_id, ws_b.id)
+
+    principal = await _jwt_authenticator(session_factory).authenticate(_issue_token(user_id))
+
+    assert principal is not None
+    assert principal.subject == str(user_id)
+    assert principal.workspace_ids == frozenset({ws_a.id, ws_b.id})
+
+
+async def test_jwt_authenticator_ignores_inactive_memberships(session_factory, workspace_factory):
+    user_id = uuid.uuid4()
+    ws_a = await workspace_factory(name="A", slug="jwt-inactive-a")
+    ws_b = await workspace_factory(name="B", slug="jwt-inactive-b")
+    await _seed_user(session_factory, user_id)
+    await _seed_membership(session_factory, user_id, ws_a.id)
+    await _seed_membership(session_factory, user_id, ws_b.id, status="removed")
+
+    principal = await _jwt_authenticator(session_factory).authenticate(_issue_token(user_id))
+
+    assert principal is not None
+    assert principal.workspace_ids == frozenset({ws_a.id})
+
+
+async def test_jwt_authenticator_rejects_invalid_tokens(session_factory):
+    authenticator = _jwt_authenticator(session_factory)
+    assert await authenticator.authenticate("not-a-jwt") is None
+    assert await authenticator.authenticate(f"mesh-dev:{WS_A}") is None
+    assert await authenticator.authenticate("") is None
+    # Valid JWT shape but signed with a different secret.
+    foreign, _ = encode_access_token(
+        subject=uuid.uuid4(), secret="other-secret", algorithm=JWT_ALGORITHM, ttl=timedelta(minutes=5)
+    )
+    assert await authenticator.authenticate(foreign) is None
+
+
+async def test_jwt_authenticator_rejects_unknown_or_inactive_user(session_factory):
+    authenticator = _jwt_authenticator(session_factory)
+    # No users row for this subject.
+    assert await authenticator.authenticate(_issue_token(uuid.uuid4())) is None
+    # Inactive user.
+    disabled = uuid.uuid4()
+    await _seed_user(session_factory, disabled, status="disabled")
+    assert await authenticator.authenticate(_issue_token(disabled)) is None
+
+
+async def test_chained_authenticator_returns_first_principal(session_factory, workspace_factory):
+    user_id = uuid.uuid4()
+    await _seed_user(session_factory, user_id)
+    jwt = _jwt_authenticator(session_factory)
+    chain = ChainedAuthenticator((jwt, DevTokenAuthenticator()))
+
+    # JWT path.
+    via_jwt = await chain.authenticate(_issue_token(user_id))
+    assert via_jwt is not None and via_jwt.subject == str(user_id)
+    # Falls through to dev token when the JWT decode fails.
+    via_dev = await chain.authenticate(f"mesh-dev:{WS_A}")
+    assert via_dev is not None and via_dev.workspace_ids == frozenset({WS_A})
+    # Both fail.
+    assert await chain.authenticate("garbage") is None
