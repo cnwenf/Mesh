@@ -1,5 +1,7 @@
 """SQLAlchemy models for the Mesh schema."""
 
+from mesh.db.models.audit import AuditLog
+from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
 from mesh.db.models.user import (
@@ -10,11 +12,21 @@ from mesh.db.models.user import (
     Session,
     User,
 )
-from mesh.db.models.workspace import Workspace
+from mesh.db.models.workspace import (
+    IdentifierPrefixRegistry,
+    Workspace,
+    WorkspaceInvitation,
+    WorkspaceInvitationRedemption,
+    WorkspaceSlugHistory,
+)
 
 __all__ = [
+    "AuditLog",
     "EmailVerificationToken",
+    "IdentifierPrefixRegistry",
     "LoginAttempt",
+    "Member",
+    "MemberProjectAccess",
     "OAuthIdentity",
     "OutboxEvent",
     "PasswordResetToken",
@@ -23,4 +35,7 @@ __all__ = [
     "Session",
     "User",
     "Workspace",
+    "WorkspaceInvitation",
+    "WorkspaceInvitationRedemption",
+    "WorkspaceSlugHistory",
 ]
