@@ -7,8 +7,12 @@
  * - 偏好同步错误(MES-24):422 unsupported_locale/invalid_timezone 等经
  *   lastSyncError 消费,按 error code 渲染 i18n 错误文案 + 可关闭(§6.14/§6.18)。
  */
-import { useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { fetchMe } from '../../api/auth';
+import type { CurrentUser } from '../../api/auth';
+import { getApiClient } from '../../api/instance';
 import { Banner, Select } from '../../design';
+import { SecuritySettings } from '../../features/auth';
 import { formatWithZoneAnnotation, SUPPORTED_LOCALES, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
 import type { ThemeMode } from '../../state/settingsStore';
@@ -44,6 +48,18 @@ export function SettingsPage(): React.JSX.Element {
   const setTimezone = useSettingsStore((state) => state.setTimezone);
   const lastSyncError = useSettingsStore((state) => state.lastSyncError);
   const clearSyncError = useSettingsStore((state) => state.clearSyncError);
+
+  // 当前用户(供安全设置:会话/两步验证/第三方绑定)。未登录时不渲染安全区。
+  const [user, setUser] = useState<CurrentUser | null>(null);
+  const client = getApiClient();
+  const reloadUser = useCallback(() => {
+    void fetchMe(client)
+      .then(setUser)
+      .catch(() => setUser(null));
+  }, [client]);
+  useEffect(() => {
+    reloadUser();
+  }, [reloadUser]);
 
   const timezoneOptions = useMemo(() => {
     const options = [...BASE_TIMEZONES];
@@ -126,6 +142,14 @@ export function SettingsPage(): React.JSX.Element {
           {zoneSample}
         </p>
       </section>
+
+      {/* auth.md §4.2 安全:会话 / 两步验证 / 第三方绑定(仅登录态) */}
+      {user !== null ? (
+        <section className="mesh-settings__section" aria-label={t('security.title')}>
+          <h2 className="mesh-settings__heading">{t('security.title')}</h2>
+          <SecuritySettings client={client} user={user} onUserChanged={reloadUser} />
+        </section>
+      ) : null}
     </div>
   );
 }
