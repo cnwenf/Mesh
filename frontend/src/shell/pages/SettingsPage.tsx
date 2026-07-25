@@ -3,13 +3,16 @@
  * - 外观:theme light/dark/system,即时切换无刷新(ThemeProvider 落 <html data-theme>);
  * - 语言:首项「跟随工作区默认」(值 ''→setLocale(null)),其余为 SUPPORTED_LOCALES;
  * - 时区:候选 + 当前检测时区去重;helper 文案标注浏览器默认;
- * - tz-sample 以 formatWithZoneAnnotation 渲染固定 UTC 时刻,切换时区/语言即时更新。
+ * - tz-sample 以 formatWithZoneAnnotation 渲染固定 UTC 时刻,切换时区/语言即时更新;
+ * - 偏好同步错误(MES-24):422 unsupported_locale/invalid_timezone 等经
+ *   lastSyncError 消费,按 error code 渲染 i18n 错误文案 + 可关闭(§6.14/§6.18)。
  */
 import { useMemo } from 'react';
-import { Select } from '../../design';
+import { Banner, Select } from '../../design';
 import { formatWithZoneAnnotation, SUPPORTED_LOCALES, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
 import type { ThemeMode } from '../../state/settingsStore';
+import type { PreferenceSyncError } from '../../state/preferencesSync';
 
 const BASE_TIMEZONES: ReadonlyArray<string> = [
   'UTC',
@@ -22,12 +25,25 @@ const SAMPLE_INSTANT = '2026-07-25T18:00:00Z';
 
 const THEME_OPTIONS: ReadonlyArray<ThemeMode> = ['light', 'dark', 'system'];
 
+/** 将 PreferenceSyncError 映射为 i18n 消息键(§6.14 具名 code → 前端渲染) */
+function syncErrorToI18nKey(error: PreferenceSyncError): string {
+  if (error.code === 'unsupported_locale' || error.code === 'invalid_timezone') {
+    return `error.${error.code}`;
+  }
+  if (error.code === 'network') {
+    return 'error.network';
+  }
+  return 'settings.syncErrorServer';
+}
+
 export function SettingsPage(): React.JSX.Element {
   const t = useT();
   const preferences = useSettingsStore((state) => state.preferences);
   const setTheme = useSettingsStore((state) => state.setTheme);
   const setLocale = useSettingsStore((state) => state.setLocale);
   const setTimezone = useSettingsStore((state) => state.setTimezone);
+  const lastSyncError = useSettingsStore((state) => state.lastSyncError);
+  const clearSyncError = useSettingsStore((state) => state.clearSyncError);
 
   const timezoneOptions = useMemo(() => {
     const options = [...BASE_TIMEZONES];
@@ -46,6 +62,18 @@ export function SettingsPage(): React.JSX.Element {
   return (
     <div className="mesh-page">
       <h1 className="mesh-page__title">{t('settings.title')}</h1>
+
+      {lastSyncError !== null && (
+        <Banner
+          tone="danger"
+          politeness="assertive"
+          data-testid="sync-error-banner"
+          onDismiss={clearSyncError}
+          dismissLabel={t('settings.syncErrorDismiss')}
+        >
+          {t(syncErrorToI18nKey(lastSyncError))}
+        </Banner>
+      )}
 
       <section className="mesh-settings__section" aria-label={t('settings.appearance')}>
         <h2 className="mesh-settings__heading">{t('settings.appearance')}</h2>

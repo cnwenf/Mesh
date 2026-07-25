@@ -32,5 +32,5 @@ export {
   updatePreferences,
 } from './userPreferences';
 export type { ServerUserPreferences, UpdatePreferencesPayload } from './userPreferences';
-export { fetchWorkspaceDefaultLocale, fetchWorkspaces } from './workspace';
-export type { WorkspaceSettings, WorkspaceSummary } from './workspace';
+export { fetchWorkspaceDefaultLocale, fetchWorkspaceById, fetchWorkspaces } from './workspace';
+export type { WorkspaceDetail, WorkspaceListItem, WorkspaceSettings } from './workspace';

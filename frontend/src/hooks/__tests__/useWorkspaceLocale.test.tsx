@@ -11,14 +11,29 @@ function createMockClient(fetchImpl: typeof fetch): MeshApiClient {
   });
 }
 
-function workspaceResponse(defaultLocale: string | undefined): typeof fetch {
-  const data = [{ id: 'ws-1', name: 'WS', slug: 'ws', settings: defaultLocale !== undefined ? { default_locale: defaultLocale } : {} }];
-  return vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ data, next_cursor: null }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }),
-  ) as unknown as typeof fetch;
+/** 模拟两步请求:列表 → 单对象(含 settings) */
+function twoStepFetch(defaultLocale: string | undefined): typeof fetch {
+  let callIndex = 0;
+  return vi.fn().mockImplementation(() => {
+    callIndex += 1;
+    if (callIndex === 1) {
+      // 列表响应(不含 settings)
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: [{ id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+    }
+    // 单对象响应(含 settings)
+    const settings = defaultLocale !== undefined ? { default_locale: defaultLocale } : {};
+    return Promise.resolve(
+      new Response(JSON.stringify({ data: { id: 'ws-1', name: 'WS', slug: 'ws', logo_url: null, timezone: 'UTC', settings, my_role: 'admin', created_at: '', updated_at: '' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+  }) as unknown as typeof fetch;
 }
 
 describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)', () => {
@@ -27,22 +42,20 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     expect(result.current).toBeNull();
   });
 
-  it('成功获取工作区 default_locale', async () => {
-    const client = createMockClient(workspaceResponse('zh-CN'));
+  it('成功获取工作区 default_locale(两步:列表→单对象)', async () => {
+    const client = createMockClient(twoStepFetch('zh-CN'));
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
     await waitFor(() => expect(result.current).toBe('zh-CN'));
   });
 
   it('工作区无 default_locale 时返回 null', async () => {
-    const client = createMockClient(workspaceResponse(undefined));
+    const client = createMockClient(twoStepFetch(undefined));
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
-    await waitFor(() => {
-      // 加载完成后仍为 null(无 default_locale)
-      expect(result.current).toBeNull();
-    });
-    // 确保请求已发出(effect 已执行)
+    // 等待两步请求完成
+    await new Promise((r) => setTimeout(r, 50));
+    expect(result.current).toBeNull();
   });
 
   it('网络错误时静默降级返回 null', async () => {
@@ -50,11 +63,9 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     const client = createMockClient(fetchImpl);
     const { result } = renderHook(() => useWorkspaceLocale(client));
 
-    // 等待 effect 执行完毕
     await waitFor(() => {
       expect(fetchImpl).toHaveBeenCalled();
     });
-    // 错误后仍为 null(静默降级)
     expect(result.current).toBeNull();
   });
 
@@ -70,16 +81,14 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     const { result, unmount } = renderHook(() => useWorkspaceLocale(client));
     expect(result.current).toBeNull();
 
-    // 卸载后再 resolve
     unmount();
     resolvePromise(
-      new Response(JSON.stringify({ data: [{ id: '1', name: 'W', slug: 'w', settings: { default_locale: 'en' } }], next_cursor: null }), {
+      new Response(JSON.stringify({ data: [{ id: '1', name: 'W', slug: 'w', logo_url: null, my_role: 'admin', created_at: '' }], next_cursor: null }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
     );
 
-    // 等待一个 tick 确保不会抛错
     await new Promise((r) => setTimeout(r, 10));
   });
 

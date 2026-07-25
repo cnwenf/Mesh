@@ -1,6 +1,6 @@
 /**
  * Bearer token 存取(会话 JWT / API token,README §6.14 鉴权)。
- * 供 MeshApiClient.getToken 与 RealtimeClient 子协议鉴权(§6.16)共用。
+ * 供 MeshApiClient.getToken 与 RealtimeClient 首帧鉴权(§6.16)共用。
  * 骨架阶段 token 经登录占位页粘帖写入;阶段 2 接真实 auth 流程(auth.md)。
  */
 import { create } from 'zustand';

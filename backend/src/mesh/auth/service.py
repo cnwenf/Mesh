@@ -631,12 +631,18 @@ class AuthService:
                 user.timezone = patch.timezone
             if patch.settings is not None:
                 merged = dict(user.settings or {})  # key-level shallow merge
-                if "locale" in patch.settings and patch.settings["locale"] is not None:
-                    _validate_locale(patch.settings["locale"])
-                    merged["locale"] = patch.settings["locale"]
-                if "theme" in patch.settings and patch.settings["theme"] is not None:
-                    _validate_theme(patch.settings["theme"])
-                    merged["theme"] = patch.settings["theme"]
+                if "locale" in patch.settings:
+                    if patch.settings["locale"] is None:
+                        merged.pop("locale", None)  # explicit null = clear preference
+                    else:
+                        _validate_locale(patch.settings["locale"])
+                        merged["locale"] = patch.settings["locale"]
+                if "theme" in patch.settings:
+                    if patch.settings["theme"] is None:
+                        merged.pop("theme", None)  # explicit null = clear preference
+                    else:
+                        _validate_theme(patch.settings["theme"])
+                        merged["theme"] = patch.settings["theme"]
                 user.settings = merged
             user.updated_at = _now(self._clock)
             result = user_to_dict(user)

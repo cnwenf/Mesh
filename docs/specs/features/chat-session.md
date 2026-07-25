@@ -410,7 +410,7 @@ Content-Type: application/json
 
 #### WebSocket 实时网关(统一实时通道,README §6.7)
 
-连接 `/ws`(握手鉴权见 auth.md;**禁止在 URL query 参数中传递 token**,应使用 WebSocket 子协议(Sec-WebSocket-Protocol)或连接建立后首帧认证,避免 token 落入访问日志与中间代理);按频道订阅(频道命名遵循 README §6.7,如 `chat_session:ses-b7e4...` / `issue:iss-9a1c...`,订阅时逐资源授权):
+连接 `/ws`(握手鉴权见 auth.md;**禁止在 URL query 参数中传递 token**,使用连接建立后首帧认证单一机制(README §6.16,v0.1.0 起实现基线),避免 token 落入访问日志与中间代理);按频道订阅(频道命名遵循 README §6.7,如 `chat_session:ses-b7e4...` / `issue:iss-9a1c...`,订阅时逐资源授权):
 ```json
 {"type": "subscribe", "channel": "chat_session:ses-b7e4..."}
 {"type": "subscribe", "channel": "issue:iss-9a1c..."}
