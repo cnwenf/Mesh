@@ -26,6 +26,7 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.member.service import UNSET, MemberPatch, MemberService
+from mesh.workspace.members import change_member_role
 from mesh.workspace.service import WorkspaceService
 
 pytestmark = pytest.mark.unit
@@ -370,6 +371,60 @@ async def test_update_status_requires_admin(session_factory):
         await service.update_member(
             actor=plain, workspace_id=ws, member_id=plain.id, patch=MemberPatch(status="disabled")
         )
+
+
+async def test_update_status_disable_last_owner_conflicts(session_factory):
+    """MB-M1: disabling the only active owner is 409 last_owner (member.md §5.3).
+
+    Workspace entry is gated on status='active', so disabling the last active
+    owner would orphan the workspace — the status branch must enforce the same
+    invariant as the demote/remove paths.
+    """
+    service, ws, owner, _plain, *_ = await _setup(session_factory)
+    with pytest.raises(ConflictError) as excinfo:
+        await service.update_member(
+            actor=owner, workspace_id=ws, member_id=owner.id, patch=MemberPatch(status="disabled")
+        )
+    assert excinfo.value.code == "last_owner"
+
+    # 落库未变:仍是 active owner,无 disabled_at,无 status_changed 审计/事件。
+    async with session_factory() as session:
+        fresh = await session.scalar(select(Member).where(Member.id == owner.id))
+    assert fresh.status == "active"
+    assert fresh.role == "owner"
+    assert fresh.disabled_at is None
+    assert await _audits(session_factory, "member.status_changed") == []
+    assert await _events(session_factory, "member.updated") == []
+
+
+async def test_update_status_disable_owner_allowed_with_second_owner(session_factory):
+    service, ws, owner, plain, *_ = await _setup(session_factory)
+    await change_member_role(
+        session_factory, actor=owner, workspace_id=ws, member_id=plain.id, new_role="owner"
+    )
+    result = await service.update_member(
+        actor=owner, workspace_id=ws, member_id=owner.id, patch=MemberPatch(status="disabled")
+    )
+    assert result["status"] == "disabled"
+    async with session_factory() as session:
+        fresh = await session.scalar(select(Member).where(Member.id == owner.id))
+    assert fresh.status == "disabled"
+    assert fresh.disabled_at is not None
+
+
+async def test_update_status_reenable_owner_not_blocked_by_guard(session_factory):
+    """The guard fires only on active→disabled; re-enabling increases the count."""
+    service, ws, owner, plain, *_ = await _setup(session_factory)
+    await change_member_role(
+        session_factory, actor=owner, workspace_id=ws, member_id=plain.id, new_role="owner"
+    )
+    await service.update_member(
+        actor=owner, workspace_id=ws, member_id=owner.id, patch=MemberPatch(status="disabled")
+    )
+    result = await service.update_member(
+        actor=owner, workspace_id=ws, member_id=owner.id, patch=MemberPatch(status="active")
+    )
+    assert result["status"] == "active"
 
 
 async def test_update_display_override_self_service(session_factory):
