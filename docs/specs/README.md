@@ -399,6 +399,7 @@ CREATE POLICY mesh_rt_events_tenant ON realtime_events
 | 域 | 登记事件名 |
 | --- | --- |
 | workspace / 成员 / 邀请 | `workspace.updated` · `workspace.deleted` · `member.added` · `member.updated` · `member.removed` · `member.role_changed` · `member.presence` · `invitation.redeemed` |
+| 会话 / 鉴权 | `session.revoked`(auth.md §3.7/§5.6:会话/令牌撤销广播,使相关连接下次心跳鉴权失败重连被拒) |
 | 项目 / 里程碑 / 周期 | `project.created` · `project.updated` · `project.archived` · `project.unarchived` · `project.deleted` · `project_update.added` · `milestone.created` · `milestone.updated` · `milestone.deleted` · `cycle.updated` |
 | issue / 依赖 / 视图 | `issue.created` · `issue.updated` · `issue.deleted` · `issue.moved` · `issue.project_changed`(跨项目迁移,R2 新增) · `issue.labels_changed` · `issue.custom_field_changed` · `dependency.changed` · `view.updated` · `view.presence` |
 | 评论 / 反应 / 通知 | `comment.created` · `comment.updated` · `comment.deleted` · `comment.resolved` · `reaction.changed` · `notification.created` · `notification.read` · `inbox.unread_count` |

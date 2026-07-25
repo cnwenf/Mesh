@@ -18,6 +18,9 @@ from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.api.realtime_routes import router as realtime_router
+from mesh.auth.mailer import build_mailer
+from mesh.auth.oauth import MockOAuthProvider, OAuthService
+from mesh.auth.oauth_routes import router as oauth_router
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
@@ -66,19 +69,6 @@ def _raise_debug_error(status: int) -> None:
     raise raiser()
 
 
-def _dev_mail_delivery(redis):
-    """Dev/test delivery: stash one-time tokens in Redis instead of emailing.
-
-    Lets real e2e tests fetch the verification/reset token (the database stores
-    only the SHA-256 hash). Never used when ``auth_mode=production``.
-    """
-
-    async def _deliver(email: str, kind: str, token: str) -> None:
-        await redis.set(f"mesh:devmail:{kind}:{email}", token, ex=3600)
-
-    return _deliver
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -112,11 +102,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.authorizer = DefaultChannelAuthorizer(session_factory)
 
-    # Auth: service + rate limiter. Dev mode delivers one-time tokens to Redis so
-    # real e2e tests can fetch them; production delivery is wired to a mailer.
-    delivery = _dev_mail_delivery(app.state.redis) if settings.auth_mode == "dev" else None
-    app.state.auth_service = AuthService(session_factory, settings, deliver=delivery)
+    # Auth: service + rate limiter + email delivery. Dev mode stashes one-time
+    # tokens in a Redis dev-mailbox (real e2e fetches them); production sends via
+    # SMTP when MESH_SMTP_HOST is set, else a logged no-op (see auth/mailer.py).
+    mailer = build_mailer(settings, app.state.redis)
+    app.state.mailer = mailer
+    app.state.auth_service = AuthService(session_factory, settings, deliver=mailer.deliver)
     app.state.rate_limiter = RateLimiter(app.state.redis)
+    # OAuth: vendor-neutral provider registry. Dev registers an in-process mock
+    # provider so the full code+PKCE round-trip is testable without a vendor;
+    # production providers are operator-configured (none hardcoded).
+    oauth_service = OAuthService(session_factory, app.state.auth_service, app.state.redis)
+    if settings.auth_mode == "dev":
+        oauth_service.register_provider(MockOAuthProvider())
+    app.state.oauth_service = oauth_service
     app.state.workspace_service = WorkspaceService(session_factory)
     app.state.invitation_service = InvitationService(session_factory)
     app.state.member_service = MemberService(session_factory)
@@ -126,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
+    app.include_router(oauth_router)
     app.include_router(workspace_router)
     app.include_router(member_router)
     app.include_router(token_router)

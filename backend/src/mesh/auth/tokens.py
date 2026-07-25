@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from mesh.auth import security
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import PERMISSION_MATRIX, ROLE_RANK
+from mesh.auth.realtime import SESSION_REVOKED_EVENT
 from mesh.db.models.api_token import (
     AGENT_TOKEN_PREFIX,
     DISPLAY_PREFIX_LEN,
@@ -38,6 +39,7 @@ from mesh.db.models.api_token import (
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError, ValidationError
+from mesh.outbox.service import emit_realtime
 
 TOKEN_NAME_MAX = 120
 ROLE_OVERRIDE_TOO_HIGH = "role_override_too_high"
@@ -259,6 +261,18 @@ class TokenService:
                     metadata={"name": row.name},
                     ip_address=ip_address,
                     user_agent=user_agent,
+                )
+                # C4: broadcast revocation on the workspace channel so any live
+                # connection bearing this token fails re-auth (outbox → realtime).
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=f"workspace:{workspace_id}",
+                    event=SESSION_REVOKED_EVENT,
+                    data={
+                        "token_id": str(row.id),
+                        "owner_member_id": str(row.owner_member_id),
+                    },
                 )
 
     # -- validation (Bearer → principal) ---------------------------------------
