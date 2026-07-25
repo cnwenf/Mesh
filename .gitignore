@@ -18,3 +18,11 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Sample env template is safe to commit (no real secrets)
+!.env.example
+
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

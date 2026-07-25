@@ -1,0 +1,93 @@
+# Mesh local stack (README §2.2 deployment shape):
+#   postgres  — PostgreSQL 16: main storage + outbox + job queue
+#   redis     — Redis 7: cache / rate limit / presence / realtime fan-out (NOT a source of truth)
+#   api       — FastAPI REST API (stateless)
+#   worker    — outbox relay + realtime projector + retention purge (independent asyncio tasks)
+#   gateway   — realtime WebSocket gateway (independent process)
+#   frontend  — static placeholder page + /api and /ws reverse proxy
+#
+# Local development values only — every secret is an environment variable;
+# supply real values via .env (see .env.example) for anything beyond local dev.
+name: mesh
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${MESH_POSTGRES_DB:-mesh}
+      POSTGRES_USER: ${MESH_POSTGRES_USER:-mesh}
+      POSTGRES_PASSWORD: ${MESH_POSTGRES_PASSWORD:-mesh}
+    volumes:
+      - mesh_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MESH_POSTGRES_USER:-mesh} -d ${MESH_POSTGRES_DB:-mesh}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn mesh.api.app:create_app --factory --host 0.0.0.0 --port 8000"
+    environment:
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+    ports:
+      - "${MESH_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: python -m mesh.workers
+    environment:
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build: ./backend
+    command: uvicorn mesh.realtime.app:create_app --factory --host 0.0.0.0 --port 8081
+    environment:
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+    ports:
+      - "${MESH_WS_PORT:-8081}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend/placeholder:/usr/share/nginx/html:ro
+      - ./frontend/placeholder/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "${MESH_FRONTEND_PORT:-3001}:80"
+    depends_on:
+      - api
+      - gateway
+
+volumes:
+  mesh_pgdata:
