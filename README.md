@@ -14,7 +14,17 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 ## 技术栈
 
 - **后端**:Python(FastAPI + SQLAlchemy 2.x + Alembic + PostgreSQL 16 + Redis),实时通信走 WebSocket
+- **前端**:React 18 + TypeScript + Vite 单页应用,契约层 / 实时客户端 / 设计系统 / i18n 基线见 [frontend/](frontend/)(选型理由、Quick Start、目录结构见 [frontend/README.md](frontend/README.md))
 - **Agent 运行时**:可自托管的执行环境,负责任务领取、代码执行与日志回传
+
+## 仓库结构
+
+| 目录 | 说明 |
+| --- | --- |
+| [docs/specs/](docs/specs/) | Spec 文档(所有实现的唯一依据) |
+| [backend/](backend/) | Python 后端(FastAPI REST + realtime 网关 + outbox/projector worker) |
+| [frontend/](frontend/) | Web 前端(阶段 1·B 骨架:工程脚手架、API/实时契约层、设计系统与体验基线、i18n 基线) |
+| [tests/](tests/) | 文档级校验脚本(事件词汇、名册入口等) |
 
 开发任何功能前,请先阅读对应的功能 Spec;Spec 是本仓库所有实现的唯一依据。
 
