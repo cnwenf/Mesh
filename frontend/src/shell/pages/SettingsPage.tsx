@@ -67,7 +67,6 @@ export function SettingsPage(): React.JSX.Element {
         <Banner
           tone="danger"
           politeness="assertive"
-          data-testid="sync-error-banner"
           onDismiss={clearSyncError}
           dismissLabel={t('settings.syncErrorDismiss')}
         >
