@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "61717489",
+  "version": "d6808f25",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -373,6 +373,14 @@
     "security.oauthUnbind": "Unlink",
     "security.oauthUnbound": "Account unlinked.",
     "security.oauthLastMethod": "Cannot remove your last sign-in method.",
+    "security.changePassword": "Change password",
+    "security.oldPasswordLabel": "Current password",
+    "security.newPasswordLabel": "New password",
+    "security.confirmPasswordLabel": "Confirm new password",
+    "security.changePasswordSubmit": "Update password",
+    "security.changePasswordSuccess": "Password updated. Other sessions were signed out.",
+    "security.wrongOldPassword": "Current password is incorrect.",
+    "security.confirmMismatch": "New passwords do not match.",
     "tokens.title": "API tokens",
     "tokens.description": "Personal access tokens for the CLI and scripts. The full token is shown only once.",
     "tokens.create": "New token",
