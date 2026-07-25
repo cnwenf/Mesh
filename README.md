@@ -35,6 +35,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |
 | auth 认证核心(auth.md 增量 1) | ✅ v0.2.0 | 注册/登录/会话/MFA/一次性令牌/账号偏好 + 应用路径 RLS 加固 |
 | workspace 工作区与多租户基础(workspace.md) | ✅ v0.4.0 | 工作区 CRUD 与 slug 重定向、邀请全生命周期与兑换分离、RBAC 裁决与审计、前缀注册表、租户表 fail-closed RLS;前端设置/邀请页面待前端脚手架增量接通 |
+| member 统一成员名册(member.md) | ✅ v0.6.0 | 名册查询/筛选投影(「仅 Agent」为同路由投影)、服务端显示名解析、角色/状态管理与移除转派、guest 项目级可见性、成员事件;名册前端页面(单一 `[ + 新建 Agent ]` 入口);agent 实际创建/issue 转派落库待 agent.md / issue.md 增量 |
 
 ## Quick Start
 

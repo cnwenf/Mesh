@@ -20,6 +20,7 @@ import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
+import { MembersPage } from './features/members/MembersPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
@@ -88,7 +89,7 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
                 <Route path="projects" element={<PlaceholderPage kind="projects" />} />
                 <Route path="board" element={<PlaceholderPage kind="board" />} />
-                <Route path="members" element={<PlaceholderPage kind="members" />} />
+                <Route path="members" element={<MembersPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
                 <Route path="automation" element={<PlaceholderPage kind="automation" />} />
               </Route>

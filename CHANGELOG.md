@@ -3,6 +3,32 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-07-25
+
+member 统一成员名册(MES-14,阶段 3):member.md 五章在 v0.4.0 已落地的 `members` / `member_project_access` 表之上全量落地功能层 + 名册前端页面。`members.id` 作为全系统统一引用键(README §6.1),人与 agent 对称同册。
+
+### Added
+
+- **名册查询与筛选投影(member.md §3.1/§3.2)**:`GET /workspaces/{ws}/members` 人与 agent 同册返回,支持 `member_type`(all/human/agent)、`status`(默认隐藏 removed 软终态)、`role`、`q` 模糊搜索(命中 display_override / users.display_name / email)与 `(joined_at,id)` keyset 游标分页;`member_type=agent` 是同一端点的**筛选投影**,非第二套名册。`GET /workspaces/{ws}/members/{id}` 返回 profile + `counts.open_issues_assigned`(issue 模块落地前为 0)。
+- **显示名权威解析(member.md §2.4)**:服务端单一 `resolve_display_name`,`display_override` → `users.display_name`(auth.md 单一名字段,即 spec 的 full_name)→ 邮箱本地段 / agent 短 id 兜底,接口统一返回单一 `display_name`,前端仅渲染并叠加 AI 徽章,杜绝各处漂移。
+- **成员管理(§3.3/§3.4)**:`POST /members`(admin;人类按 user_id 入册,已存在 active → 409 `already_member`,disabled/removed 行以新授予角色复活,镜像邀请兑换;agent 入册 422 `agents_not_available`——agents 表与创建流程随 agent.md 增量)、`PATCH /members/{id}`(role 复用 workspace 既有审计+事件路径,status 仅 active↔disabled、`removed` 仅经 DELETE,`display_override` 支持本人自助或 admin;no-change 不发事件/不写审计 §6.9)、`DELETE /members/{id}?reassign_to=`(软删 `status='removed'` 保留历史引用,可选转派,目标须同工作区活跃成员否则 422 `reassign_target_invalid`)、`POST /members/reassign`(批量转派钩子)。last_owner / agent_owner_not_allowed 服务端强校验(不信任前端禁用)。
+- **guest 项目级可见性(M12)**:`member_project_access` 授予/变更(ON CONFLICT upsert)/撤销,仅对 `role='guest'` 生效(其它角色 422 `not_guest_member`),permission 限 read/write;撤销经 `assert_guest_project_visible` 即时生效。
+- **实时事件(§3.5/§6.6/§6.7)**:`member.added` / `member.updated`(changes) / `member.removed` / `member.role_changed` 全经 outbox → realtime 唯一写入路径(词汇注册表已登记);角色变更、状态变更、移除、转派、入册均写 append-only 审计(`actor_member_id` + `actor_kind='member'`)。
+- **`GET /users/me`**:返回当前登录用户 + 其在各工作区的成员身份(经 `mesh_my_workspaces` definer 函数)。
+- **名册前端页面(§4,README §6.12/T35)**:`/members` 单一页面,人与 agent 同表 + AI 徽章;「仅 Agent」为 `?member_type=agent` 的**同路由/同组件筛选投影**(同一 `[ + 新建 Agent ]` 入口,不形成独立 Agents 列表页/第二导航/第二创建入口,`check_roster_entry.py` 继续通过);角色行内下拉(agent 行 owner 选项禁用)、停用/启用、移除(带转派目标选择器)、邀请人类 Tab、成员详情抽屉;文案经 i18n 外部化(en + zh-CN,目录重算版本哈希)。
+- **REST 端点(§3.1)**:名册列表/详情/加入/更新/移除/批量转派/可用 agent/项目共享四端点 + `GET /users/me`;写端点按 principal+IP 限流(120/min)。
+
+### Deferred(随后续增量)
+
+- `members.agent_id → agents` 复合 FK 与 agent 实际创建(POST agent 入册现返回 422 占位、前端 `[ + 新建 Agent ]` 为「即将上线」占位态),待 agent.md 增量;issue 转派实际落库与 `counts.open_issues_assigned` 真实计数,待 issue.md 增量(现经 `NullReassigner` 钩子返回 0);`member_project_access.project_id → projects` 复合 FK 与项目存在性校验,待 project.md 增量;`/members/{id}/presence` 为 spec 可选项,无在线态来源前暂不实现(`member.presence` 词汇保留)。
+
+### Quality
+
+- 后端单测 + 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验)全绿;pytest-cov **95.75%**(≥90% 门禁;member 模块 display/reassign/schemas 100%、routes 98%、service 97%,整体与新增代码双达标);ruff 全绿。
+- 真实 DELETE 行为与约束负向(T18/T1):审计 actor 成员物理删除被 RESTRICT(NO ACTION)拒绝、guest 项目共享行随成员物理删除 CASCADE、多态身份 CHECK(user_id/agent_id 恰一非空)与 agent-owner CHECK 经原始 SQL 负向验证;跨工作区成员读取/变更同一 404(无存在性泄漏);停用成员被成员资格门拦出、启用恢复。
+- 前端 lint / typecheck / prettier 全绿,574 项单测通过,生产构建成功,新增代码覆盖率 **96.2%**(verify-coverage 门禁 ≥90%);真实浏览器 e2e(Chromium → vite → 真实 API/RLS → mesh_test)走查名册渲染 + AI 徽章 + 仅 Agent 同路由投影 + 单一新建入口 + 角色/停用/移除真实落库。
+- 文档门 `check_roster_entry.py`(§6.12/T35)与 `check_event_vocab.py`(§6.7)继续全绿;`schema_r2_validation.sql` 无新增 DDL 不受影响。
+
 ## [0.5.0] - 2026-07-25
 
 阶段 2 前端延后接通项全量落地(MES-24):i18n 协商链「工作区默认」级接通、账号偏好写入服务端同步、§6.16 WebSocket 鉴权收紧为首帧单一机制(前后端事实上收敛 + Spec 明文收口)。本版本包含此前随主干合入但尚未打标的 [0.4.1] 安全修复(MES-28 cryptography 升级)。

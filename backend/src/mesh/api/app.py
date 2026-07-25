@@ -33,6 +33,8 @@ from mesh.errors import (
     UnauthorizedError,
     ValidationError,
 )
+from mesh.member.routes import router as member_router
+from mesh.member.service import MemberService
 from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     DevTokenAuthenticator,
@@ -113,12 +115,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = RateLimiter(app.state.redis)
     app.state.workspace_service = WorkspaceService(session_factory)
     app.state.invitation_service = InvitationService(session_factory)
+    app.state.member_service = MemberService(session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
     app.include_router(workspace_router)
+    app.include_router(member_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:
