@@ -306,10 +306,27 @@ def upgrade() -> None:
         $$
         """
     )
+    # Old-slug redirect resolution (workspace.md W6): the accepting/redirecting
+    # caller has no tenant context yet, so the history read is a narrow
+    # owner-executed bypass; the workspace/membership gate afterwards still
+    # runs under the fail-closed policies.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION mesh_workspace_id_by_old_slug(p_slug text)
+        RETURNS uuid
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+          SELECT h.workspace_id
+            FROM workspace_slug_history h
+           WHERE h.old_slug = p_slug
+        $$
+        """
+    )
     op.execute("REVOKE EXECUTE ON FUNCTION mesh_invitation_by_token_hash(text) FROM PUBLIC")
     op.execute("REVOKE EXECUTE ON FUNCTION mesh_my_workspaces(uuid) FROM PUBLIC")
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_workspace_id_by_old_slug(text) FROM PUBLIC")
     op.execute(f"GRANT EXECUTE ON FUNCTION mesh_invitation_by_token_hash(text) TO {APP_ROLE}")
     op.execute(f"GRANT EXECUTE ON FUNCTION mesh_my_workspaces(uuid) TO {APP_ROLE}")
+    op.execute(f"GRANT EXECUTE ON FUNCTION mesh_workspace_id_by_old_slug(text) TO {APP_ROLE}")
 
     # -- app-role privileges ----------------------------------------------------
     # Default privileges (0002) already cover new tables for role mesh; make the
@@ -325,8 +342,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_workspace_id_by_old_slug(text) FROM mesh_app")
     op.execute("REVOKE EXECUTE ON FUNCTION mesh_my_workspaces(uuid) FROM mesh_app")
     op.execute("REVOKE EXECUTE ON FUNCTION mesh_invitation_by_token_hash(text) FROM mesh_app")
+    op.execute("DROP FUNCTION IF EXISTS mesh_workspace_id_by_old_slug(text)")
     op.execute("DROP FUNCTION IF EXISTS mesh_my_workspaces(uuid)")
     op.execute("DROP FUNCTION IF EXISTS mesh_invitation_by_token_hash(text)")
     op.execute("DROP POLICY IF EXISTS mesh_audit_logs_tenant ON audit_logs")

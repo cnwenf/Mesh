@@ -193,9 +193,12 @@ async def _request_actor(request: Request, workspace_id, user: User):
     from sqlalchemy import select
 
     from mesh.db.models.member import Member
+    from mesh.db.tenant import set_tenant_context
 
     factory = request.app.state.session_factory
     async with factory() as session:
+        # members is RLS-protected; scope the read to this tenant up front.
+        await set_tenant_context(session, workspace_id)
         member = await session.scalar(
             select(Member).where(
                 Member.workspace_id == workspace_id,

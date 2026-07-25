@@ -26,14 +26,14 @@ import uuid
 from dataclasses import dataclass
 
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
 from mesh.auth.deps import get_current_user
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.user import User
-from mesh.db.models.workspace import Workspace, WorkspaceSlugHistory
+from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, NotFoundError
 
@@ -114,17 +114,23 @@ async def resolve_workspace_by_slug(
     slug: str,
     permission: str | None = None,
 ) -> WorkspaceContext:
-    """Resolve a workspace by current slug or a historic slug (W6 redirect)."""
+    """Resolve a workspace by current slug or a historic slug (W6 redirect).
+
+    The historic-slug read goes through the SECURITY DEFINER function: the
+    caller has no tenant context yet (the workspace is the unknown), and the
+    RLS policy on ``workspace_slug_history`` is fail-closed without the GUC.
+    The membership gate afterwards runs under the policies as usual.
+    """
     workspace_id = await session.scalar(
         select(Workspace.id).where(Workspace.slug == slug, Workspace.deleted_at.is_(None))
     )
     if workspace_id is None:
         # Old slugs redirect to the workspace that released them (§2.5).
-        workspace_id = await session.scalar(
-            select(WorkspaceSlugHistory.workspace_id).where(
-                WorkspaceSlugHistory.old_slug == slug
+        workspace_id = (
+            await session.execute(
+                text("SELECT mesh_workspace_id_by_old_slug(:slug)"), {"slug": slug}
             )
-        )
+        ).scalar()
     if workspace_id is None:
         raise NotFoundError(_WORKSPACE_NOT_FOUND)
     return await resolve_workspace_context(
