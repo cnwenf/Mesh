@@ -17,7 +17,7 @@
 - WebSocket 鉴权禁止 URL query 传 token(§6.16):连接建立后首帧认证;订阅逐频道资源级授权,以 `realtime_channels.workspace_id` 数据库层校验频道归属;`resume_from` 早于保留窗口 → `{"op":"resync_required","watermark":<当前最大 seq>,"rest":"<对账 REST URL>"}`。
 - 部署形态(§2.2):API / worker(relay 等独立 asyncio 任务,看门狗 + 独立取消域)/ realtime gateway 三个独立入口;Redis 仅 fan-out,非持久真源;`realtime_events` 默认保留 7 天(可配)。
 - 配置:secrets 一律环境变量,启动校验必需项(`DATABASE_URL`/`REDIS_URL` 等),缺失即快速失败并给出清晰错误。
-- 提交规范:author/committer = `cnwenf <cnwenf@gmail.com>`;绝无 `Co-Authored-By`;conventional commits。
+- 提交规范:author/committer = `cnwenf <cnwenf@outlook.com>`;绝无 `Co-Authored-By`;conventional commits。
 - 覆盖率:pytest-cov 实测整体与新增代码 ≥90%。
 - 绝不暴露外部出处(代码/注释/文档/提交/分支)。
 
@@ -279,7 +279,7 @@ Mesh/
 ## Task 14: 覆盖率收口 + 代码评审 + PR + 完工评论
 
 - [ ] Step 1: `pytest --cov=mesh --cov-report=term-missing` 全绿且 ≥90%;缺口补测试(分支/异常路径)。
-- [ ] Step 2: 全仓扫描外部出处痕迹(品牌词/URL)清零;`git log --format=%B` 无 co-author;`git log --format='%an <%ae> | %cn <%ce>'` 均为 `cnwenf <cnwenf@gmail.com>`。
+- [ ] Step 2: 全仓扫描外部出处痕迹(品牌词/URL)清零;`git log --format=%B` 无 co-author;`git log --format='%an <%ae> | %cn <%ce>'` 均为 `cnwenf <cnwenf@outlook.com>`。
 - [ ] Step 3: 用 requesting-code-review / code-reviewer agent 评审,修 CRITICAL/HIGH。
 - [ ] Step 4: `gh pr create` 合入 main;完工评论(覆盖率报告 + e2e 结果 + schema 100 PASS 证据 + PR 链接),状态置 `in_review`。
 

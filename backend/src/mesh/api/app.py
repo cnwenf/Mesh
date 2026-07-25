@@ -18,7 +18,10 @@ from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.api.realtime_routes import router as realtime_router
-from mesh.config import Settings, load_settings
+from mesh.auth.ratelimit import RateLimiter
+from mesh.auth.routes import router as auth_router
+from mesh.auth.service import AuthService
+from mesh.config import DEV_JWT_SECRET, ConfigError, Settings, load_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
     BusinessRuleError,
@@ -57,6 +60,19 @@ def _raise_debug_error(status: int) -> None:
     raise raiser()
 
 
+def _dev_mail_delivery(redis):
+    """Dev/test delivery: stash one-time tokens in Redis instead of emailing.
+
+    Lets real e2e tests fetch the verification/reset token (the database stores
+    only the SHA-256 hash). Never used when ``auth_mode=production``.
+    """
+
+    async def _deliver(email: str, kind: str, token: str) -> None:
+        await redis.set(f"mesh:devmail:{kind}:{email}", token, ex=3600)
+
+    return _deliver
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -67,6 +83,13 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Create the Mesh API FastAPI app."""
     settings = settings or load_settings()
+    # Fail-safe: the API signs/verifies tokens, so production must never run on
+    # the well-known dev signing key (auth.md §5.5 — keys not in code/repo).
+    if settings.auth_mode == "production" and settings.jwt_secret == DEV_JWT_SECRET:
+        raise ConfigError(
+            ("jwt_secret",),
+            "MESH_JWT_SECRET must be set to a strong secret in production",
+        )
     app = FastAPI(title="Mesh API", version=__version__, lifespan=lifespan)
 
     engine = create_app_engine_from_settings(settings)
@@ -80,9 +103,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.authorizer = DefaultChannelAuthorizer(session_factory)
 
+    # Auth: service + rate limiter. Dev mode delivers one-time tokens to Redis so
+    # real e2e tests can fetch them; production delivery is wired to a mailer.
+    delivery = _dev_mail_delivery(app.state.redis) if settings.auth_mode == "dev" else None
+    app.state.auth_service = AuthService(session_factory, settings, deliver=delivery)
+    app.state.rate_limiter = RateLimiter(app.state.redis)
+
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(realtime_router)
+    app.include_router(auth_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:
