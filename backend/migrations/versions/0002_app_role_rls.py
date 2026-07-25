@@ -44,7 +44,9 @@ def upgrade() -> None:
         f"DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') "
         f"THEN CREATE ROLE {role}; END IF; END $$"
     )
-    op.execute(f"ALTER ROLE {role} LOGIN PASSWORD {password}")
+    op.execute(
+        f"ALTER ROLE {role} NOSUPERUSER NOCREATEDB NOCREATEROLE LOGIN PASSWORD {password}"
+    )
     op.execute(f"GRANT USAGE ON SCHEMA public TO {role}")
     # Realtime tables: the app reads only (writes go through the worker/projector,
     # which connects as the owner).
