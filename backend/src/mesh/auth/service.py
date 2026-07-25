@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth import jwt as jwt_mod
 from mesh.auth import security
+from mesh.auth.audit import write_audit
 from mesh.auth.ratelimit import assert_not_locked_out
 from mesh.auth.realtime import broadcast_user_revocation
 from mesh.config import Settings
@@ -543,6 +544,86 @@ class AuthService:
             user.password_hash = security.hash_password(new_password)
             user.password_changed_at = now
             await self._revoke_all(session, user.id, now)
+
+    async def change_password(
+        self,
+        *,
+        user_id: uuid.UUID,
+        old_password: str,
+        new_password: str,
+        current_refresh_token: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        """Change the password of an authenticated user (auth.md §3.1/§4.2/§4.5).
+
+        Verifying the old password (argon2id, constant-time) *is* the §5.5
+        step-up re-authentication — "recently re-entered the password" is
+        exactly what that clause demands, so no additional recent-auth gate is
+        applied. The new password is held to the registration strength policy;
+        the hash and ``password_changed_at`` are rotated, every *other* refresh
+        session is revoked (the session that presented ``current_refresh_token``
+        is kept and re-stamped as recently authenticated; an absent or
+        unrecognised token falls back to revoking all), the revocation is
+        broadcast (§3.7/§5.6), and an account-level ``user.password_changed``
+        audit row is written (§2.6: ``workspace_id`` NULL, actor in metadata).
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            user = await session.get(User, user_id)
+            if user is None or user.status != "active":
+                raise UnauthorizedError("invalid or expired token")
+            # Uniform timing for OAuth-only accounts (NULL hash): verify against
+            # the dummy hash so failure is indistinguishable from a wrong password.
+            password_hash = user.password_hash if user.password_hash else _DUMMY_HASH
+            if not security.verify_password(old_password, password_hash):
+                raise BusinessRuleError("incorrect password", code="invalid_credentials")
+            security.validate_password_strength(new_password)
+            user.password_hash = security.hash_password(new_password)
+            user.password_changed_at = now
+
+            # Keep the presenting session when identifiable; revoke everything else.
+            keep_session_id: uuid.UUID | None = None
+            if current_refresh_token is not None:
+                row = await session.scalar(
+                    select(Session).where(
+                        Session.token_hash == security.hash_token(current_refresh_token),
+                        Session.user_id == user_id,
+                        Session.revoked_at.is_(None),
+                        Session.expires_at >= now,
+                    )
+                )
+                if row is not None:
+                    keep_session_id = row.id
+                    # A primary authentication just happened — refresh the step-up
+                    # marker (§5.5) so silent refreshes forward a fresh auth_time.
+                    row.authenticated_at = now
+                    row.last_active_at = now
+            revoke_stmt = update(Session).where(
+                Session.user_id == user_id, Session.revoked_at.is_(None)
+            )
+            if keep_session_id is not None:
+                revoke_stmt = revoke_stmt.where(Session.id != keep_session_id)
+            result = await session.execute(revoke_stmt.values(revoked_at=now))
+            revoked = result.rowcount or 0
+            if revoked:
+                # C4: the other devices must drop (outbox → realtime, §3.7/§5.6).
+                await broadcast_user_revocation(session, user_id=user_id)
+
+            # Account-level audit (§2.6): no workspace context; members are
+            # workspace-scoped rows, so the actor falls into metadata.
+            await write_audit(
+                session,
+                workspace_id=None,
+                actor_member_id=None,
+                actor_kind="member",
+                action="user.password_changed",
+                resource_type="user",
+                resource_id=user.id,
+                metadata={"user_id": str(user.id)},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
 
     async def verify_email(self, *, token: str) -> None:
         now = _now(self._clock)

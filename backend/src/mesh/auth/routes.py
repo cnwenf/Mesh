@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from mesh.auth.deps import get_auth_service, get_current_user, require_recent_auth
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.schemas import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     LogoutRequest,
@@ -38,6 +39,10 @@ REGISTER_WINDOW_SECONDS = 60
 # limited per (IP, ticket) — a leaked password cannot brute-force the code.
 MFA_VERIFY_LIMIT = 5
 MFA_VERIFY_WINDOW_SECONDS = 60
+# MES-39: change-password verifies the old password server-side, so it carries
+# the login-class (IP, email) throttle (§3.6) against online brute force.
+CHANGE_PASSWORD_LIMIT = 5
+CHANGE_PASSWORD_WINDOW_SECONDS = 60
 
 
 def _client_ip(request: Request) -> str | None:
@@ -191,6 +196,36 @@ async def logout_all(request: Request, user: User = Depends(get_current_user)) -
     service: AuthService = get_auth_service(request)
     revoked = await service.logout_all(user_id=user.id)
     return {"data": {"revoked": revoked}}
+
+
+@router.post("/auth/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
+) -> dict:
+    # §4.2/§5.5: authenticated password change. Re-entering the old password IS
+    # the sensitive-operation step-up re-authentication ("近期重新输入密码"), so
+    # no separate recent-auth gate; the (IP, email) throttle (§3.6) bounds
+    # online brute force of the old password by a hijacked session.
+    await _rate_limit(
+        request,
+        f"change-password:{_client_ip(request)}:{user.email.lower()}",
+        limit=CHANGE_PASSWORD_LIMIT,
+        window=CHANGE_PASSWORD_WINDOW_SECONDS,
+        response=response,
+    )
+    service: AuthService = get_auth_service(request)
+    await service.change_password(
+        user_id=user.id,
+        old_password=body.old_password,
+        new_password=body.new_password,
+        current_refresh_token=body.refresh_token,
+        ip_address=_client_ip(request),
+        user_agent=_user_agent(request),
+    )
+    return {"data": {"status": "ok"}}
 
 
 @router.get("/me")
