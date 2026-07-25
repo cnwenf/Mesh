@@ -22,9 +22,12 @@ import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
 import { MembersPage } from './features/members/MembersPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
+import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
 import { NotFoundPage } from './shell/pages/NotFoundPage';
+import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
+import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
@@ -86,6 +89,10 @@ function ShellProviders(): React.JSX.Element {
           <ErrorBoundary>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/forgot" element={<ForgotPasswordPage />} />
+              <Route path="/reset" element={<ResetPasswordPage />} />
+              {/* OAuth 登录回调(§4.1/§4.5):提供商回跳 code+state,交换会话凭证后回跳 */}
+              <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />
               <Route path="/" element={<AppShell />}>
                 <Route index element={<HomePage />} />
                 <Route path="settings" element={<SettingsPage />} />
