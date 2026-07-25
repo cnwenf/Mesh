@@ -1,0 +1,31 @@
+/*
+ * 语义 token — 暗色集(README §6.12 主题契约)。
+ * 暗色模式 = 整组 token 取值替换(非逐组件改写):颜色 token 与亮色集一一对应,
+ * 同样满足 WCAG 2.1 AA(4.5:1)。单一事实源:src/design/tokenValues.ts(DARK_TOKENS)。
+ */
+:root[data-theme='dark'] {
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-raised: #334155;
+  --color-text: #f8fafc;
+  --color-text-muted: #94a3b8;
+  --color-border: #334155;
+
+  --color-primary: #3b82f6;
+  --color-primary-contrast: #0f172a;
+
+  --color-danger: #f87171;
+  --color-danger-contrast: #450a0a;
+  --color-warn: #fbbf24;
+  --color-warn-contrast: #451a03;
+  --color-success: #4ade80;
+  --color-success-contrast: #052e16;
+  --color-info: #38bdf8;
+  --color-info-contrast: #082f49;
+
+  --color-focus-ring: #60a5fa;
+
+  --color-scrim: rgba(0, 0, 0, 0.6);
+
+  --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
