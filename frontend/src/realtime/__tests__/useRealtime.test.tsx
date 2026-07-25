@@ -24,6 +24,11 @@ describe('useRealtime', () => {
     act(() => {
       FakeWebSocket.last.open();
     });
+    // 首帧鉴权:auth_ok 前仍为 connecting
+    expect(result.current.state).toBe('connecting');
+    act(() => {
+      FakeWebSocket.last.message({ op: 'auth_ok' });
+    });
     expect(result.current.state).toBe('connected');
   });
 
@@ -67,6 +72,7 @@ describe('useRealtime', () => {
     const { result } = renderHook(() => useRealtime(baseOptions()), { wrapper });
     act(() => {
       FakeWebSocket.last.open();
+      FakeWebSocket.last.message({ op: 'auth_ok' });
     });
     expect(result.current.state).toBe('connected');
   });

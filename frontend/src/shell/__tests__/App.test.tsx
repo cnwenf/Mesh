@@ -75,4 +75,18 @@ describe('App 路由', () => {
     fireEvent.click(screen.getByTestId('open-help'));
     expect(screen.getByText('Keyboard shortcuts')).toBeInTheDocument();
   });
+
+  it('URL ?locale= 显式请求参数为最高优先(§6.18 请求显式参数级)', () => {
+    navigateTo('/?locale=zh-CN');
+    render(<App />);
+    expect(screen.getByText('欢迎使用 Mesh')).toBeInTheDocument();
+  });
+
+  it('navigator.languages 不可用时系统级候选为空,回退 en', () => {
+    const spy = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(undefined as never);
+    navigateTo('/');
+    render(<App />);
+    expect(screen.getByText('Welcome to Mesh')).toBeInTheDocument();
+    spy.mockRestore();
+  });
 });

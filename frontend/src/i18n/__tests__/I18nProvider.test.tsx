@@ -71,6 +71,34 @@ describe('I18nProvider + useT(§6.18 协商链接线 + §4.2 即时切换)', () 
     expect(screen.getByTestId('msg')).toHaveTextContent('Save');
   });
 
+  it('请求显式参数级(?locale= / Accept-Language 等价物)优先于账号偏好与工作区默认', () => {
+    act(() => useSettingsStore.getState().setLocale('en'));
+    render(
+      <I18nProvider requested={['zh-CN']} workspaceDefaultLocale="en">
+        <Probe messageKey="common.save" />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId('msg')).toHaveTextContent('保存');
+  });
+
+  it('requested 候选含不支持值时按协商规则忽略,落到后续级别', () => {
+    render(
+      <I18nProvider requested={['xx-YY', 'zh-CN']}>
+        <Probe messageKey="common.save" />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId('msg')).toHaveTextContent('保存');
+  });
+
+  it('requested 为字符串(单值)时同样生效', () => {
+    render(
+      <I18nProvider requested="zh-CN">
+        <Probe messageKey="common.save" />
+      </I18nProvider>,
+    );
+    expect(screen.getByTestId('msg')).toHaveTextContent('保存');
+  });
+
   it('settingsStore 偏好变化 → 文案就地更新,组件不重挂载(§4.2 无刷新)', () => {
     render(
       <I18nProvider>

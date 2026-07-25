@@ -1,5 +1,6 @@
 /**
- * StatusBanner — offline/reconnecting 共用离线横幅(§6.12),resyncing 独立横幅,其余 null。
+ * StatusBanner — offline → 离线横幅(§6.12);reconnecting/resyncing → 「正在重新同步」
+ * 横幅(§6.7:重连/重放过期显示「正在重新同步」);其余 null。
  */
 import { screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
@@ -15,9 +16,10 @@ describe('StatusBanner', () => {
     expect(banner.textContent).toContain('offline');
   });
 
-  it('reconnecting 同样呈现离线横幅(掉线转重连,§6.12 共用 testid)', () => {
+  it('reconnecting 呈现「正在重新同步」横幅(§6.7:重连时显示重新同步)', () => {
     renderWithProviders(<StatusBanner state="reconnecting" />);
-    expect(screen.getByTestId('status-banner-offline')).toBeInTheDocument();
+    expect(screen.getByTestId('status-banner-resyncing')).toBeInTheDocument();
+    expect(screen.queryByTestId('status-banner-offline')).not.toBeInTheDocument();
   });
 
   it('resyncing 呈现重新同步横幅(polite)', () => {

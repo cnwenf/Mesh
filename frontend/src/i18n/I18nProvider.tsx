@@ -29,8 +29,21 @@ const I18nContext = createContext<I18nContextValue | null>(null);
 
 export interface I18nProviderProps {
   readonly children: ReactNode;
-  /** workspaces.settings.default_locale(协商链"工作区默认"级) */
+  /**
+   * 协商链"请求显式参数"级(§6.18):?locale= / Accept-Language 等价物
+   * (浏览器环境为 navigator.languages)。BCP-47 候选数组,非法值被协商忽略。
+   */
+  readonly requested?: string | readonly string[] | null;
+  /**
+   * workspaces.settings.default_locale(协商链"工作区默认"级)。
+   * 骨架阶段工作区 API 未落地(阶段 2),由调用方传 null;协商自动落到系统回退 en。
+   */
   readonly workspaceDefaultLocale?: string | null;
+  /**
+   * 系统级候选(浏览器 navigator.languages):工作区默认之后、en 回退之前尝试。
+   * 账号偏好/工作区默认优先于浏览器语言(否则账号级偏好永不生效,i18n.md L1)。
+   */
+  readonly systemLocales?: readonly string[] | null;
   /** 缺失上报器注入(测试与自定义上报策略) */
   readonly reporter?: MissingReporter;
 }
@@ -67,11 +80,12 @@ export function I18nProvider(props: I18nProviderProps): JSX.Element {
   const locale = useMemo(
     () =>
       negotiateLocale({
-        requested: null,
+        requested: props.requested ?? null,
         userLocale,
         workspaceDefaultLocale: props.workspaceDefaultLocale,
+        systemLocales: props.systemLocales ?? null,
       }),
-    [userLocale, props.workspaceDefaultLocale],
+    [props.requested, userLocale, props.workspaceDefaultLocale, props.systemLocales],
   );
   // 不变式:negotiateLocale 的返回值必在受支持清单内,内置目录静态包含全部受支持
   // locale(含回退 en),故 builtinCatalogs[locale] 必然存在(negotiate/catalogs 测试保证)。

@@ -28,18 +28,40 @@ npm install
 npm run dev          # http://127.0.0.1:5173
 ```
 
-开发默认连接本地 mock 契约服务端(`e2e/mock-server.mjs`,实现 §6.14 包络与 §6.7 实时协议,供骨架演示与 e2e 使用):
+开发默认连接本地 mock 契约服务端(`e2e/mock-server.mjs`,与后端 v0.1.0 线缆协议
+逐帧对齐的忠实镜像:§6.14 包络、§6.7 实时契约——首帧鉴权 `{op:'auth',token}` →
+`auth_ok`、`{op:'event',channel,seq,event,payload}`、`subscribed{channel,last_seq}`、
+resume_from 重放、resync_required + REST 对账),供骨架演示与 e2e 使用:
 
 ```bash
-node e2e/mock-server.mjs   # http://127.0.0.1:8901
+node e2e/mock-server.mjs   # http://127.0.0.1:8901(dev 鉴权:mesh-dev:<workspace-uuid>)
 ```
 
-连接真实后端(阶段 1·A 就绪后)用 `.env.local` 覆盖:
+连接真实后端(v0.1.0 已合入 main)用 `.env.local` 覆盖:
 
 ```
 VITE_MESH_API_BASE_URL=http://127.0.0.1:8000
-VITE_MESH_WS_BASE_URL=ws://127.0.0.1:8000
+VITE_MESH_WS_BASE_URL=ws://127.0.0.1:8081
+VITE_MESH_DEMO_CHANNEL=workspace:<workspace-uuid>:issues   # 演示区订阅频道
+VITE_MESH_POLLING_INTERVAL_MS=30000                        # 离线降级轮询间隔
 ```
+
+## 真实后端联调验证
+
+`e2e/real-backend.spec.ts` 对真实后端栈(postgres + redis + api + worker + gateway,
+`MESH_AUTH_MODE=dev`,token `mesh-dev:<workspace-uuid>`)以真实浏览器验证:首帧鉴权、
+经真实 outbox → relay → projector → Redis fan-out 的实时帧增量合并、断线重连
+`resume_from` 重放补齐、游标过旧 → `resync_required` → REST `/api/v1/realtime/events`
+对账 → 无感恢复。事件注入经真实生产路径(INSERT `outbox_events` → worker 投影),
+保留窗口清理经 SQL DELETE(与后端 e2e T6 同法)。
+
+```bash
+# 前置:仓库根目录起后端栈(docker compose up postgres redis api worker gateway,MESH_AUTH_MODE=dev)
+npx playwright test --config playwright.real.config.ts
+```
+
+> 注:后端 v0.1.0 未开 CORS(生产经 nginx 反代同源部署),该联调配置以
+> `--disable-web-security` 启动浏览器,仅联调验证用途。
 
 ## 质量命令
 
@@ -73,15 +95,16 @@ frontend/
     │   ├── optimistic.ts     #   乐观更新 + 服务端版本校验 + 409 收敛
     │   └── filters.ts        #   过滤限制(深度 3 / 条件 20)与 filter_too_complex / query_cost_exceeded
     ├── realtime/             # 实时客户端(§6.7/§6.16)
-    │   ├── RealtimeClient.ts #   子协议鉴权(token 绝不进 URL query)、每频道 last_seq、
-    │   │                     #   resume_from 重放、resync_required → REST 对账、指数退避重连
+    │   ├── RealtimeClient.ts #   首帧鉴权 auth/auth_ok(token 绝不进 URL query,对齐后端
+    │   │                     #   v0.1.0)、每频道 last_seq、resume_from 重放、
+    │   │                     #   resync_required → REST 对账、指数退避重连、online/offline 感知
     │   ├── channelCursors.ts #   每频道游标持久化
     │   ├── merge.ts          #   增量合并(完整变更字段 + visibility 归属 + updated_at 防回退)
-    │   ├── pollingFallback.ts#   WS 断开 → since= 轮询降级(§3.2)
+    │   ├── pollingFallback.ts#   WS 断开 → seq 水位轮询对账端点降级(§3.2,AppShell 自动编排)
     │   └── useRealtime.ts    #   React 绑定(连接状态机)
     ├── i18n/                 # i18n 基线(§6.18)
     │   ├── catalogs/         #   ICU MessageFormat 消息目录(en 权威源 + zh-CN)
-    │   ├── negotiate.ts      #   协商链:显式参数 → users.settings.locale → 工作区默认 → en
+    │   ├── negotiate.ts      #   协商链:显式参数 → users.settings.locale → 工作区默认 → 系统语言 → en
     │   ├── catalogLoader.ts  #   ETag 版本缓存 + 缺 key 三级回退
     │   ├── format.ts         #   日期/数字/相对时间本地化 + 时区化展示 + 输入解析回 UTC
     │   └── I18nProvider.tsx  #   react-intl 接线 + 开发期缺译可见标记
@@ -100,7 +123,7 @@ frontend/
     │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地持久化;阶段 2 接 PATCH /users/me)
     │   └── authStore.ts      #   Bearer token 存取
     └── shell/                # App shell 与占位页
-        ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重新同步横幅,§6.12 异常态矩阵)
+        ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
         └── pages/            #   登录占位页、404、错误页、首页骨架演示区
 ```
 

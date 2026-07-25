@@ -20,11 +20,29 @@ import { LoginPage } from './shell/pages/LoginPage';
 import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
 
+/**
+ * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
+ * 最高优先;浏览器语言(navigator.languages,Accept-Language 的 SPA 等价物)
+ * 作为「系统回退」级经 systemLocales 传入 —— 排在账号偏好/工作区默认之后、
+ * en 回退之前(否则账号级语言偏好永不生效,违背 i18n.md L1)。
+ * 工作区默认级(workspaces.settings.default_locale)待阶段 2 工作区 API 落地接通,
+ * 当前传 null(已建跟踪,见 Issue 说明)。
+ */
+function useLocaleInputs(): { requested: string | null; systemLocales: readonly string[] } {
+  // 纯浏览器 SPA(入口 main.tsx 仅在浏览器执行),无需 SSR 守卫
+  return useMemo(() => {
+    const requested = new URLSearchParams(window.location.search).get('locale');
+    const systemLocales = Array.isArray(navigator.languages) ? [...navigator.languages] : [];
+    return { requested, systemLocales };
+  }, []);
+}
+
 export default function App(): React.JSX.Element {
+  const { requested, systemLocales } = useLocaleInputs();
   return (
     <BrowserRouter>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null}>
+        <I18nProvider requested={requested} systemLocales={systemLocales} workspaceDefaultLocale={null}>
           <ShellProviders />
         </I18nProvider>
       </ThemeProvider>

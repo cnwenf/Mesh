@@ -11,7 +11,7 @@ import { HomePage } from '../pages/HomePage';
 import { RealtimeContext } from '../AppShell';
 import type { RealtimeContextValue } from '../AppShell';
 import type { IssueSummary } from '../../types/entities';
-import type { RealtimeFrame } from '../../types/realtime';
+import type { RealtimeEventFrame } from '../../types/realtime';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -24,21 +24,21 @@ interface StubClient {
   subscribe: ReturnType<typeof vi.fn>;
   unsubscribe: ReturnType<typeof vi.fn>;
   onFrame: ReturnType<typeof vi.fn>;
-  emit: (frame: RealtimeFrame) => void;
+  emit: (frame: RealtimeEventFrame) => void;
 }
 
 function createStubClient(): StubClient {
-  const frameListeners = new Set<(frame: RealtimeFrame) => void>();
+  const frameListeners = new Set<(frame: RealtimeEventFrame) => void>();
   return {
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
-    onFrame: vi.fn((cb: (frame: RealtimeFrame) => void) => {
+    onFrame: vi.fn((cb: (frame: RealtimeEventFrame) => void) => {
       frameListeners.add(cb);
       return () => {
         frameListeners.delete(cb);
       };
     }),
-    emit: (frame: RealtimeFrame) => {
+    emit: (frame: RealtimeEventFrame) => {
       for (const cb of frameListeners) cb(frame);
     },
   };
@@ -222,12 +222,12 @@ describe('HomePage 实时演示(桩 client + mock fetch)', () => {
     renderWithRealtime(client);
     await waitFor(() => expect(screen.getByTestId('demo-issue-DEM-1')).toBeInTheDocument());
 
-    const frame: RealtimeFrame = {
+    const frame: RealtimeEventFrame = {
+      op: 'event',
+      channel: 'workspace:ws-1:issues',
       seq: 1,
-      type: 'issue.created',
-      topic: 'workspace:ws-1:issues',
-      ts: '2026-07-25T10:05:00Z',
-      data: { id: 'id-3', identifier: 'DEM-3', title: 'From frame', status_category: 'todo', updated_at: '2026-07-25T10:05:00Z' },
+      event: 'issue.created',
+      payload: { id: 'id-3', identifier: 'DEM-3', title: 'From frame', status_category: 'todo', updated_at: '2026-07-25T10:05:00Z' },
     };
     client.emit(frame);
     await waitFor(() => expect(screen.getByTestId('demo-issue-DEM-3')).toBeInTheDocument());
