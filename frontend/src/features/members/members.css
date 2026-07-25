@@ -1,0 +1,218 @@
+/*
+ * 成员名册页样式(README §6.12 设计系统:一切颜色经语义 token,无硬编码色值)。
+ */
+.mesh-members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  max-inline-size: 960px;
+  margin-inline: auto;
+  inline-size: 100%;
+}
+
+.mesh-members__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-members__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+.mesh-members__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-members__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-members__tabs {
+  display: flex;
+  gap: var(--space-1);
+  border-block-end: 1px solid var(--color-border);
+}
+
+.mesh-members__tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-block-end: 2px solid transparent;
+}
+
+.mesh-members__tab[aria-selected='true'] {
+  color: var(--color-primary);
+  border-block-end-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.mesh-members__search {
+  min-inline-size: 220px;
+}
+
+.mesh-members__table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.mesh-members__table th,
+.mesh-members__table td {
+  text-align: start;
+  padding: var(--space-3);
+  border-block-end: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+
+.mesh-members__table th {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.mesh-members__row:last-child td {
+  border-block-end: none;
+}
+
+.mesh-members__row--removed {
+  opacity: 0.6;
+}
+
+.mesh-members__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-members__avatar {
+  inline-size: 32px;
+  block-size: 32px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  flex: none;
+}
+
+.mesh-members__avatar--agent {
+  background: var(--color-info);
+  color: var(--color-info-contrast);
+  border-color: transparent;
+}
+
+.mesh-members__name {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.mesh-members__badge {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-info);
+  color: var(--color-info-contrast);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.mesh-members__sub {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-members__role-select {
+  font: inherit;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.mesh-members__row-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.mesh-members__drawer {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  inline-size: min(360px, 90vw);
+  background: var(--color-surface-raised);
+  border-inline-start: 1px solid var(--color-border);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  z-index: 40;
+}
+
+.mesh-members__drawer-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.mesh-members__drawer-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+}
+
+.mesh-members__drawer-dl dt {
+  color: var(--color-text-muted);
+}
+
+.mesh-members__drawer-dl dd {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.mesh-members__dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-members__dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.mesh-members__placeholder {
+  padding: var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+}
+
+.mesh-members__error {
+  color: var(--color-danger);
+}
