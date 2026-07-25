@@ -421,6 +421,69 @@ describe('ProjectSettingsPage', () => {
       expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
     });
   });
+
+  it('disables the lead selector for non-lead, non-admin viewers (PJ-H1)', async () => {
+    // 工作区 member + 项目 member(非 lead):后端对 lead 改派返回 403,
+    // 选择器只读并给出提示(§3.4 / §4.2,后端为权威校验)。
+    const meMember = {
+      ...ME,
+      user: { id: 'usr-mem', email: 'member@acme.com', display_name: 'Member' },
+      memberships: [{ ...ME.memberships[0], role: 'member' }],
+    };
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: meMember } });
+      if (method === 'GET' && url.includes('/members')) {
+        if (url.includes('/projects/')) {
+          return fakeResponse({ body: { data: [PROJECT_MEMBER_ENTRY], next_cursor: null } });
+        }
+        return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject({ my_role: 'member' }) } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    const leadSelect = (await screen.findByTestId('settings-lead')) as HTMLSelectElement;
+    expect(leadSelect.disabled).toBe(true);
+    expect(await screen.findByTestId('settings-lead-hint')).toBeDefined();
+  });
+
+  it('keeps the lead selector editable for workspace admins (PJ-H1)', async () => {
+    stubFetch(); // 工作区 owner + 项目 my_role 'lead'
+    renderSettings();
+    const leadSelect = (await screen.findByTestId('settings-lead')) as HTMLSelectElement;
+    expect(leadSelect.disabled).toBe(false);
+    expect(screen.queryByTestId('settings-lead-hint')).toBeNull();
+  });
+
+  it('keeps the lead selector editable for a project lead without admin role (PJ-H1)', async () => {
+    // 工作区角色仅 member,但项目内是 lead → 仍可改派(§3.4:现 lead 或 admin)。
+    const meMember = { ...ME, memberships: [{ ...ME.memberships[0], role: 'member' }] };
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: meMember } });
+      if (method === 'GET' && url.includes('/members')) {
+        if (url.includes('/projects/')) {
+          return fakeResponse({ body: { data: [PROJECT_MEMBER_ENTRY], next_cursor: null } });
+        }
+        return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
+      }
+      if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+        return fakeResponse({ body: { data: makeProject({ my_role: 'lead' }) } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+    const leadSelect = (await screen.findByTestId('settings-lead')) as HTMLSelectElement;
+    expect(leadSelect.disabled).toBe(false);
+    expect(screen.queryByTestId('settings-lead-hint')).toBeNull();
+  });
 });
 
   it('409 收敛后表单对齐服务端态,下次保存不覆盖他人编辑', async () => {

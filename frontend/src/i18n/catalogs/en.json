@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "800b4740",
+  "version": "dd64459b",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -307,6 +307,7 @@
     "projects.settings.description": "Description",
     "projects.settings.lead": "Lead",
     "projects.settings.leadNone": "No lead",
+    "projects.settings.leadReadOnly": "Only the current lead or a workspace admin can change the lead.",
     "projects.settings.members.add": "Add",
     "projects.settings.members.added": "Member added to the project.",
     "projects.settings.members.empty": "No project members yet.",

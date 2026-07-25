@@ -820,7 +820,10 @@ class ProjectService:
             .all()
         )
         my_role = await self._project_role(session, project_id=project.id, member_id=viewer.id)
-        if my_role is None and project.lead_member_id == viewer.id:
+        # Effective role: being the lead via lead_member_id outranks a plain
+        # member/viewer row, so the UI gates (e.g. lead reassignment) see the
+        # viewer as lead even when they also hold a project_members row.
+        if project.lead_member_id == viewer.id:
             my_role = "lead"
         return self.render_project(
             project, lead=lead, milestones=list(milestones), my_role=my_role
@@ -879,6 +882,11 @@ class ProjectService:
             if not isinstance(patch.lead_member_id, _Unset) and (
                 patch.lead_member_id != project.lead_member_id
             ):
+                # Reassigning (or clearing) the lead is a lead/admin act
+                # (project.md §3.4): the plain write gate would let a project
+                # member — or a guest with a write grant — self-assign the
+                # lead and thereby unlock delete/archive/member management.
+                await self.assert_is_lead(session, viewer=actor, project=project)
                 if patch.lead_member_id is not None:
                     await self._lead_member(
                         session,

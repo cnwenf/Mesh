@@ -590,6 +590,168 @@ async def test_update_project_lead_change(session_factory):
     assert updated["lead_member_id"] is None
 
 
+async def test_update_project_lead_reassignment_requires_lead_or_admin(session_factory):
+    """PJ-H1: changing lead_member_id (incl. nulling) is a lead/admin-only act.
+
+    A plain project member must NOT escalate by self-assigning the lead
+    (project.md §3.4 authorization matrix): reassignment and clearing the
+    lead require the current lead or a workspace admin, while ordinary
+    field edits stay at the member write gate.
+    """
+    # Arrange
+    workspace, creator, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=creator,
+        workspace_id=workspace.id,
+        body=_body(lead_member_id=str(creator.id)),
+    )
+    project_id = uuid.UUID(created["id"])
+    member = await _second_member(session_factory, workspace)
+    other = await _second_member(session_factory, workspace)
+    await service.add_project_member(
+        actor=creator,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        body=AddProjectMemberRequest(member_id=str(member.id), role="member"),
+    )
+
+    # Act / Assert — member self-assignment → 403.
+    with pytest.raises(ForbiddenError):
+        await service.update_project(
+            actor=member, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(lead_member_id=member.id),
+        )
+    # Member reassigning the lead to someone else → 403.
+    with pytest.raises(ForbiddenError):
+        await service.update_project(
+            actor=member, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(lead_member_id=other.id),
+        )
+    # Member clearing the lead → 403.
+    with pytest.raises(ForbiddenError):
+        await service.update_project(
+            actor=member, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(lead_member_id=None),
+        )
+    # A gate failure aborts the whole patch — the in-flight name edit in the
+    # same request must not persist either (single transaction rollback).
+    with pytest.raises(ForbiddenError):
+        await service.update_project(
+            actor=member, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(name="Hacked", lead_member_id=member.id),
+        )
+
+    # State is intact: lead unchanged, and the escalation loop stays closed —
+    # the failed self-assignment grants no delete/archive powers.
+    detail = await service.get_project(
+        viewer=creator, workspace_id=workspace.id, project_id=project_id
+    )
+    assert detail["lead_member_id"] == str(creator.id)
+    assert detail["name"] == "Site Revamp"
+    with pytest.raises(ForbiddenError):
+        await service.delete_project(
+            actor=member, workspace_id=workspace.id, project_id=project_id
+        )
+
+    # Current lead may reassign → 200.
+    reassigned = await service.update_project(
+        actor=creator, workspace_id=workspace.id, project_id=project_id,
+        patch=ProjectPatch(lead_member_id=member.id),
+    )
+    assert reassigned["lead_member_id"] == str(member.id)
+    # The new lead (member role, lead via lead_member_id) may clear it → 200.
+    nulled = await service.update_project(
+        actor=member, workspace_id=workspace.id, project_id=project_id,
+        patch=ProjectPatch(lead_member_id=None),
+    )
+    assert nulled["lead_member_id"] is None
+    # Workspace admin may reassign → 200.
+    admin = await _second_member(session_factory, workspace, role="admin")
+    by_admin = await service.update_project(
+        actor=admin, workspace_id=workspace.id, project_id=project_id,
+        patch=ProjectPatch(lead_member_id=creator.id),
+    )
+    assert by_admin["lead_member_id"] == str(creator.id)
+
+
+async def test_get_project_reports_lead_role_when_also_a_member(session_factory):
+    """A member reassigned to lead via lead_member_id reports my_role=lead.
+
+    The frontend lead-reassignment gate (§4.2) keys off my_role, so a viewer
+    who is the lead — even while holding a project_members member row — must
+    see my_role=lead, else the UI wrongly locks them out of reassigning.
+    """
+    workspace, creator, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=creator,
+        workspace_id=workspace.id,
+        body=_body(lead_member_id=str(creator.id)),
+    )
+    project_id = uuid.UUID(created["id"])
+    member = await _second_member(session_factory, workspace)
+    await service.add_project_member(
+        actor=creator,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        body=AddProjectMemberRequest(member_id=str(member.id), role="member"),
+    )
+    await service.update_project(
+        actor=creator,
+        workspace_id=workspace.id,
+        project_id=project_id,
+        patch=ProjectPatch(lead_member_id=member.id),
+    )
+    detail = await service.get_project(
+        viewer=member, workspace_id=workspace.id, project_id=project_id
+    )
+    assert detail["my_role"] == "lead"
+
+
+async def test_update_project_guest_write_cannot_self_assign_lead(session_factory):
+    """PJ-H1 guest path: a write grant is project editing, not lead powers."""
+    # Arrange
+    workspace, creator, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=creator,
+        workspace_id=workspace.id,
+        body=_body(lead_member_id=str(creator.id)),
+    )
+    project_id = uuid.UUID(created["id"])
+    guest = await _second_member(session_factory, workspace, role="guest")
+    async with session_factory() as session, session.begin():
+        session.add(
+            MemberProjectAccess(
+                workspace_id=workspace.id,
+                member_id=guest.id,
+                project_id=project_id,
+                permission="write",
+            )
+        )
+
+    # Sanity: the write grant covers ordinary field edits.
+    edited = await service.update_project(
+        actor=guest, workspace_id=workspace.id, project_id=project_id,
+        patch=ProjectPatch(name="Guest Edit"),
+    )
+    assert edited["name"] == "Guest Edit"
+
+    # Act / Assert — guest self-assigning the lead → 403.
+    with pytest.raises(ForbiddenError):
+        await service.update_project(
+            actor=guest, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(lead_member_id=guest.id),
+        )
+    # Lead unchanged; no escalation to delete.
+    detail = await service.get_project(
+        viewer=guest, workspace_id=workspace.id, project_id=project_id
+    )
+    assert detail["lead_member_id"] == str(creator.id)
+    with pytest.raises(ForbiddenError):
+        await service.delete_project(
+            actor=guest, workspace_id=workspace.id, project_id=project_id
+        )
+
+
 # --- archive / delete -------------------------------------------------------
 
 
