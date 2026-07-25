@@ -15,6 +15,7 @@ projects are visible to them once workspace ownership matches.
 from __future__ import annotations
 
 import uuid
+from typing import Protocol
 
 from sqlalchemy import select
 
@@ -24,6 +25,24 @@ from mesh.db.models.project import Project, ProjectMember
 from mesh.db.tenant import set_tenant_context
 from mesh.realtime.auth import PrefixChecker, Principal
 from mesh.realtime.channels import parse_channel
+
+
+class _CheckerRegistrar(Protocol):
+    def register_prefix_checker(self, entity: str, checker: PrefixChecker) -> None: ...
+
+
+def register_resource_checkers(
+    authorizer: _CheckerRegistrar, session_factory
+) -> None:
+    """Register every project-module resource checker on ``authorizer``.
+
+    Single source of truth shared by the API and the realtime gateway factories
+    (README §2.2) so the two independently-deployed processes can never drift:
+    the gateway must enforce the same resource-level visibility as the API, else
+    a private ``project:{id}`` channel leaks on the production ``/ws`` path
+    (CWE-862). Adding a new resource entity here registers it everywhere at once.
+    """
+    authorizer.register_prefix_checker("project", make_project_channel_checker(session_factory))
 
 
 def make_project_channel_checker(session_factory) -> PrefixChecker:
@@ -96,4 +115,4 @@ async def _private_project_allowed(
     return grant is not None
 
 
-__all__ = ["make_project_channel_checker"]
+__all__ = ["make_project_channel_checker", "register_resource_checkers"]

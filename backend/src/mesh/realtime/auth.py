@@ -74,6 +74,20 @@ class NullAuthenticator:
 # Resource-level checker for one channel entity prefix (e.g. "issue", "project").
 PrefixChecker = Callable[[Principal, str], Awaitable[bool]]
 
+# Channels whose key is itself a workspace id (``workspace:{ws}[:…]``). Their
+# privacy boundary is workspace membership alone, so authorization parses the
+# workspace straight from the key and needs no resource checker or channel row.
+WORKSPACE_SCOPED_ENTITY = "workspace"
+
+# Resource-scoped entities: their privacy boundary is finer than workspace
+# membership (e.g. a *private* project inside a workspace), so they MUST have a
+# registered checker. If such an entity is subscribed without a checker we deny
+# fail-closed (CWE-862) — a missing registration must never silently disclose a
+# private resource. Entities NOT listed here (e.g. not-yet-implemented modules)
+# keep the workspace-membership floor until they opt into resource-level checks
+# by adding themselves here AND registering a checker.
+RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project"})
+
 
 @runtime_checkable
 class ChannelAuthorizer(Protocol):
@@ -100,20 +114,51 @@ class DefaultChannelAuthorizer:
     async def authorize(self, principal: Principal, channel: str) -> uuid.UUID | None:
         """Return the owning workspace when the principal may subscribe, else None.
 
-        Channel ownership is resolved by probing each workspace the principal can
-        access, with the tenant GUC set and an explicit ``workspace_id`` filter,
-        so the query is correct whether the connection role is the table owner or
-        a restricted (RLS-enforced) role. RLS is the backstop on the restricted
-        path; the channel string is never the isolation boundary (§6.2 rule 8).
+        Authorization is layered so a missing projector row can never lock a
+        legitimate owner out, and an unregistered resource entity can never leak
+        (CWE-862 fail-closed):
+
+        * **Workspace-scoped channels** (``workspace:{ws}[:…]``): the workspace is
+          parsed straight from the channel key and checked against the principal's
+          memberships — independent of any ``realtime_channels`` row, so the very
+          first subscribe (before the projector has materialised the row) succeeds
+          for a member instead of racing to ``forbidden``.
+        * **Resource-scoped channels** (``project:{id}``, …): the workspace is
+          resolved from the persisted channel row (the row carries the authoritative
+          ``workspace_id``), then a registered *resource checker* re-verifies
+          resource-level visibility (e.g. private-project membership) on top of the
+          workspace floor.
+        * **Fail-closed**: a resource entity that has *no* registered checker is
+          denied. Without a checker we cannot enforce resource-level privacy, so we
+          refuse rather than fall back to the workspace floor — a missing
+          registration must never silently disclose a private resource.
         """
         info = parse_channel(channel)
         if info is None:
             return None
+
+        if info.entity == WORKSPACE_SCOPED_ENTITY:
+            # The key may carry sub-paths (``workspace:{ws}:projects``); the
+            # workspace id is always the leading colon-delimited segment.
+            try:
+                owner = uuid.UUID(info.key.split(":", 1)[0])
+            except ValueError:
+                return None
+            if owner not in principal.workspace_ids:
+                return None
+            return owner
+
         owner = await self._owning_workspace(principal, channel)
         if owner is None:
             return None
         checker = self._prefix_checkers.get(info.entity)
-        if checker is not None and not await checker(principal, channel):
+        if checker is None:
+            # Fail-closed for declared resource entities lacking a checker
+            # (CWE-862); unknown entities keep the workspace-membership floor.
+            if info.entity in RESOURCE_SCOPED_ENTITIES:
+                return None
+            return owner
+        if not await checker(principal, channel):
             return None
         return owner
 
