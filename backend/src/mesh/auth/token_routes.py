@@ -13,6 +13,7 @@ and so the PAT path is exercised end-to-end.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import select
@@ -71,6 +72,21 @@ def _path_uuid(value: str) -> uuid.UUID:
         return uuid.UUID(value)
     except ValueError as exc:
         raise NotFoundError("token not found") from exc
+
+
+def _parse_timestamp(value: str, *, field: str) -> datetime:
+    """Parse an RFC3339 timestamp (auth.md §5.3 audit time-range filter)."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValidationError(
+            f"invalid {field}", code="validation_error", details={field: value[:64]}
+        ) from exc
+    # Normalise naive inputs to UTC so comparisons against TIMESTAMPTZ are sound.
+    if parsed.tzinfo is None:
+
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 # --- PAT / agent credential management (§3.2) --------------------------------
@@ -177,6 +193,8 @@ async def list_audit_logs(
     request: Request,
     action: str | None = None,
     actor_member_id: str | None = None,
+    before: str | None = None,
+    after: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
     context: WorkspaceContext = Depends(require_workspace()),
@@ -194,6 +212,12 @@ async def list_audit_logs(
                 "invalid actor_member_id", details={"actor_member_id": actor_member_id[:64]}
             ) from exc
         stmt = stmt.where(AuditLog.actor_member_id == actor_uuid)
+    # §5.3 time-range filter (consumed by the §4.4 audit page): created_at in
+    # (after, before). Half-open bounds keep cursor pagination consistent.
+    if before is not None:
+        stmt = stmt.where(AuditLog.created_at < _parse_timestamp(before, field="before"))
+    if after is not None:
+        stmt = stmt.where(AuditLog.created_at > _parse_timestamp(after, field="after"))
     page = await paginate(
         session,
         stmt,

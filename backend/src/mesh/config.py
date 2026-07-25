@@ -92,6 +92,20 @@ class Settings(BaseSettings):
     login_max_failures: int = Field(default=DEFAULT_LOGIN_MAX_FAILURES, ge=1)
     login_lock_duration: timedelta = DEFAULT_LOGIN_LOCK_DURATION
 
+    # Transactional email (verification / reset). In ``auth_mode=dev`` tokens go
+    # to the Redis dev-mailbox (test path); in production a real SMTP server is
+    # used when ``smtp_host`` is set, else delivery is a logged no-op so the API
+    # still boots (operator must configure SMTP for closed-loop email).
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str = "noreply@mesh.local"
+    smtp_use_tls: bool = True
+    smtp_timeout: float = Field(default=10.0, gt=0)
+    # Base URL used to build verification/reset links in outgoing email.
+    app_base_url: str | None = None
+
     # Process bind addresses.
     api_host: str = "0.0.0.0"
     api_port: int = DEFAULT_API_PORT

@@ -372,3 +372,62 @@ class TestResolvePat:
         with pytest.raises(BusinessRuleError) as exc:
             await tokens.resolve_pat(token=data["token"])
         assert exc.value.code == "role_override_too_high"
+
+
+# --- C4: token revocation realtime broadcast (§3.7/§5.6) ---------------------
+
+
+class TestRevocationBroadcast:
+    async def test_revoke_token_emits_session_revoked_outbox(self, tokens, session_factory):
+        from mesh.db.models.outbox import OutboxEvent
+
+        ws = await _seed_workspace(session_factory)
+        member = await _seed_member(session_factory, ws, "member")
+        data = await tokens.create_token(
+            actor=member, workspace_id=ws, name="ci", scopes=["issue:read"]
+        )
+        await tokens.revoke_token(actor=member, workspace_id=ws, token_id=data["id"])
+
+        async with session_factory() as session:
+            events = (
+                (
+                    await session.execute(
+                        select(OutboxEvent).where(OutboxEvent.workspace_id == ws)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        realtime = [e for e in events if e.event_type == "realtime.publish"]
+        assert realtime, "token revocation must publish a realtime outbox event"
+        payload = realtime[0].payload
+        assert payload["event"] == "session.revoked"
+        assert payload["channel"] == f"workspace:{ws}"
+        assert payload["data"]["token_id"] == str(data["id"])
+
+    async def test_revoke_idempotent_no_duplicate_broadcast(self, tokens, session_factory):
+        from mesh.db.models.outbox import OutboxEvent
+
+        ws = await _seed_workspace(session_factory)
+        member = await _seed_member(session_factory, ws, "member")
+        data = await tokens.create_token(actor=member, workspace_id=ws, name="ci")
+        await tokens.revoke_token(actor=member, workspace_id=ws, token_id=data["id"])
+        # Second revoke is a no-op (already revoked) → no second broadcast.
+        await tokens.revoke_token(actor=member, workspace_id=ws, token_id=data["id"])
+        async with session_factory() as session:
+            events = (
+                (
+                    await session.execute(
+                        select(OutboxEvent).where(OutboxEvent.workspace_id == ws)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        broadcasts = [
+            e
+            for e in events
+            if e.event_type == "realtime.publish"
+            and e.payload.get("event") == "session.revoked"
+        ]
+        assert len(broadcasts) == 1

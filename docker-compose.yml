@@ -59,6 +59,16 @@ services:
       MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
       MESH_REDIS_URL: redis://redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # Transactional email (production). In dev mode tokens go to the Redis
+      # dev-mailbox regardless of these; SMTP is used only when AUTH_MODE is
+      # production AND MESH_SMTP_HOST is set (see .env.example).
+      MESH_SMTP_HOST: ${MESH_SMTP_HOST:-}
+      MESH_SMTP_PORT: ${MESH_SMTP_PORT:-587}
+      MESH_SMTP_USERNAME: ${MESH_SMTP_USERNAME:-}
+      MESH_SMTP_PASSWORD: ${MESH_SMTP_PASSWORD:-}
+      MESH_SMTP_FROM: ${MESH_SMTP_FROM:-noreply@mesh.local}
+      MESH_SMTP_USE_TLS: ${MESH_SMTP_USE_TLS:-true}
+      MESH_APP_BASE_URL: ${MESH_APP_BASE_URL:-}
     ports:
       - "127.0.0.1:${MESH_API_PORT:-8000}:8000"
     depends_on:

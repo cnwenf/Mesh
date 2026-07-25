@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from mesh.auth import jwt as jwt_mod
 from mesh.auth import security
 from mesh.auth.ratelimit import assert_not_locked_out
+from mesh.auth.realtime import broadcast_user_revocation
 from mesh.config import Settings
 from mesh.db.models.user import (
     EmailVerificationToken,
@@ -372,6 +373,36 @@ class AuthService:
             )
         return tokens
 
+    async def issue_session(
+        self,
+        *,
+        user_id: uuid.UUID,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+        remember: bool = False,
+        session_type: str = "web",
+    ) -> TokenResult:
+        """Issue access+refresh for an already-authenticated user (OAuth login).
+
+        The caller has established the user's identity out-of-band (e.g. a
+        verified OAuth provider); this stamps last_login and mints tokens.
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            user = await session.get(User, user_id)
+            if user is None or user.status != "active":
+                raise UnauthorizedError("invalid or expired token")
+            user.last_login_at = now
+            return await self._issue_tokens(
+                session,
+                user,
+                session_type=session_type,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                remember=remember,
+                now=now,
+            )
+
     # -- refresh / logout ------------------------------------------------------
 
     async def refresh(
@@ -430,6 +461,8 @@ class AuthService:
             )
             if row is not None and row.revoked_at is None:
                 row.revoked_at = now
+                # C4: notify live connections (outbox → realtime, §3.7/§5.6).
+                await broadcast_user_revocation(session, user_id=user_id)
 
     async def logout_all(self, *, user_id: uuid.UUID) -> int:
         now = _now(self._clock)
@@ -442,7 +475,11 @@ class AuthService:
             .where(Session.user_id == user_id, Session.revoked_at.is_(None))
             .values(revoked_at=now)
         )
-        return result.rowcount or 0
+        revoked = result.rowcount or 0
+        if revoked:
+            # C4: bulk revocation (logout-all / refresh replay / password change).
+            await broadcast_user_revocation(session, user_id=user_id)
+        return revoked
 
     # -- password reset / email verification -----------------------------------
 
@@ -689,6 +726,8 @@ class AuthService:
                 raise NotFoundError("session not found")
             if row.revoked_at is None:
                 row.revoked_at = now
+                # C4: notify live connections (outbox → realtime, §3.7/§5.6).
+                await broadcast_user_revocation(session, user_id=user_id)
                 await session.commit()
 
 

@@ -179,6 +179,13 @@ CHAT_STREAM_EVENTS: frozenset[str] = frozenset(
     }
 )
 
+# session / auth (auth.md §3.7/§5.6 — revocation broadcast)
+SESSION_AUTH_EVENTS: frozenset[str] = frozenset(
+    {
+        "session.revoked",
+    }
+)
+
 EVENT_VOCABULARY: frozenset[str] = frozenset().union(
     WORKSPACE_EVENTS,
     PROJECT_EVENTS,
@@ -192,6 +199,7 @@ EVENT_VOCABULARY: frozenset[str] = frozenset().union(
     AUTOPILOT_EVENTS,
     PLATFORM_EVENTS,
     CHAT_STREAM_EVENTS,
+    SESSION_AUTH_EVENTS,
 )
 
 # Internal outbox event_type vocabulary (README §6.6 domain events — these are
