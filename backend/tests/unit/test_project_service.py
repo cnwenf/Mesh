@@ -416,6 +416,60 @@ async def test_get_project_detail_and_private_access(session_factory):
         )
 
 
+async def test_assert_can_write_guest_matrix(session_factory):
+    """L8:guest 写门三分支,与视图门(assert_can_view)口径一致——
+    无授权 → 404(项目不可见,写门不成存在性 oracle);
+    read 授权 → 403(可见但不可写);write 授权 → 放行。"""
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=member, workspace_id=workspace.id, body=_body(visibility="private")
+    )
+    project_id = uuid.UUID(created["id"])
+    guest = await _second_member(session_factory, workspace, role="guest")
+
+    async def _load_project():
+        async with session_factory() as session:
+            return await session.get(Project, project_id)
+
+    # ① 无授权 → 404(不是 403)
+    with pytest.raises(NotFoundError) as not_found:
+        async with session_factory() as session:
+            await service.assert_can_write(
+                session, viewer=guest, project=await _load_project()
+            )
+    assert not_found.value.code == "not_found"
+
+    # ② read 授权 → 403
+    async with session_factory() as session, session.begin():
+        session.add(
+            MemberProjectAccess(
+                workspace_id=workspace.id,
+                member_id=guest.id,
+                project_id=project_id,
+                permission="read",
+            )
+        )
+    with pytest.raises(ForbiddenError):
+        async with session_factory() as session:
+            await service.assert_can_write(
+                session, viewer=guest, project=await _load_project()
+            )
+
+    # ③ write 授权 → 放行
+    async with session_factory() as session, session.begin():
+        access = await session.scalar(
+            select(MemberProjectAccess).where(
+                MemberProjectAccess.member_id == guest.id,
+                MemberProjectAccess.project_id == project_id,
+            )
+        )
+        access.permission = "write"
+    async with session_factory() as session:
+        await service.assert_can_write(
+            session, viewer=guest, project=await _load_project()
+        )  # no raise
+
+
 async def test_get_project_progress_cache_fallback(session_factory):
     workspace, member, service = await _setup(session_factory)
     created = await service.create_project(
