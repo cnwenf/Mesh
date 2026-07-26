@@ -3,6 +3,23 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.1] - 2026-07-26
+
+member v0.6.0 安全审核(MES-29)池内优先项 MB-M1 / MB-M2 闭环:owner 不变式加固(工作区须恒有 ≥1 个 `role='owner' AND status='active'` 成员)。
+
+### Security
+
+- **MB-M1 停用最后 active owner 保护(member.md §3.3/§5.1/§5.3,MES-35)**:`PATCH /members/{id}` 状态分支此前仅角色降级与移除有 last-owner 保护,将唯一 active owner 置 `status='disabled'` 不拦截;因成员门控要求 `status='active'` 才能进入工作区,停用唯一 active owner 后若操作者再移除自身 → 工作区无主,只能 DB 介入恢复。现状态分支对 `role='owner'` 且 active→disabled 触发与降级/移除同款的 409 `last_owner`(消息 "cannot disable the last owner of the workspace");re-enable 不受影响。
+- **MB-M2 last-owner 校验 TOCTOU 串行化(member.md §5.3,MES-35)**:降级/移除/停用三条路径的 active owner 计数原为 READ COMMITTED 下无锁 `SELECT count`,两个 admin 并发削减两个不同 owner 时两事务同读 count=2 可同时成功 → 0 个 active owner。新增 `mesh/member/owner_guard.py` 作为唯一强制点:一条 `SELECT ... FOR UPDATE` 语句同时锁定**目标行 + 全部 active owner 行**(按 id 升序单遍获取,跨事务无死锁),gate 判定与计数均基于锁后状态(`populate_existing` 刷新会话内旧实体)。并发竞态被串行化,败者在胜者提交后经 EPQ 重读削减后的计数而被拒。
+- **评审整改:stale-read gate-skip 闭环**:代码评审 + 安全评审(双通道独立发现)指出"是否调用守卫"若取决于未加锁的旧读,target 被并发提升为 owner 时 reduce 操作可整体跳过守卫仍致 0 active owner。整改后三条路径一律先执行合并锁扫描再判定(no-op / agent-owner / last_owner / removed 重判全部基于锁后状态),并发提升会阻塞 reduce 的锁扫描并在提交后被重读,守卫不可绕过。
+- **语义修正**:移除/降级**已停用**的 owner 不削减 active owner 计数,不再误报 409 `last_owner`(原实现对 disabled co-owner 的移除/降级会被错误拦截且消息失真);并发移除后对同一目标的停用/移除经锁后重判返回 404,杜绝复活已移除行与双写审计。
+
+### Quality
+
+- 后端:单测 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真,含 DB 落库校验与 HTTP 并发竞态)755 项全绿;新增/重写测试:守卫单测 6 项、并发回归 9 项(remove×2 / demote×2 / disable×2 / 混合 / 跨工作区隔离 / 确定性锁阻塞-刷新 / 在途移除 → 404 ×2 / promote+disable+remove 三方 barrier 压力 10 轮)、MB-M1 用例 3 项、disabled co-owner 放行 2 项、e2e 3 项(停用唯一 owner 409 + 落库未变 / 双 owner 停用放行 / 并发停用+移除其一 409 且 DB 恰剩 1 active owner)。pytest-cov **95.65%**(≥90% 门禁;`owner_guard.py` 与 `workspace/members.py` 100%,整体与新增代码双达标)。修复前并发回归稳定复现双成功 / 0 active owner,修复后 5 连跑零 flake。
+- 文档同步:member.md §3.3 错误表 / §5.1 / §5.3 补「停用」路径、锁后判定与串行化措辞;实施计划归档 `docs/superpowers/plans/2026-07-26-owner-invariant-hardening.md`。
+- 后续建议(不在本 Issue 范围):owner 不变式目前由服务层单点强制,可考虑数据库级延迟约束触发器兜底(防未来新写入方绕过),另 `users.status` 停用能力落地时需同步扩展本不变式。
+
 ## [0.10.0] - 2026-07-25
 
 project 项目模块(MES-30,阶段 4·核心工作与协作首个模块):project.md 五章全量落地——项目/健康度留痕/里程碑/迭代周期/前缀计数器,后端 + 前端 + 真实 e2e。

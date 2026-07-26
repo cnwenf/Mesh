@@ -9,15 +9,17 @@ real physical-DELETE behavior (T18-style).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.user import User
 
 PASSWORD = "a-strong-passw0rd"
 
@@ -71,6 +73,16 @@ async def _outbox_events(session_factory, name):
         e for e in rows
         if e.event_type == "realtime.publish" and e.payload["event"] == name
     ]
+
+
+async def _find_member_by_email(session_factory, workspace_id, email: str):
+    """Resolve the members.id for a human roster row by users.email."""
+    async with session_factory() as session:
+        return await session.scalar(
+            select(Member.id)
+            .join(User, Member.user_id == User.id)
+            .where(Member.workspace_id == workspace_id, User.email == email)
+        )
 
 
 # --- roster query + durable membership ----------------------------------------
@@ -405,3 +417,112 @@ async def test_guest_project_access_and_users_me(api_client, session_factory):
     # /users/me aggregates memberships across workspaces.
     me = (await api_client.get("/api/v1/users/me", headers=_auth(owner))).json()["data"]
     assert [str(m["workspace_id"]) for m in me["memberships"]] == [str(ws["id"])]
+
+
+# --- owner invariant hardening (MES-35 MB-M1/MB-M2) ---------------------------
+
+
+async def test_disable_last_active_owner_conflicts_over_http(api_client, session_factory):
+    """MB-M1: PATCH status=disabled on the only active owner → 409 last_owner,
+    and the roster row stays untouched in the database."""
+    owner = await _register_and_login(api_client, "oi-owner@corp.com")
+    ws = await _create_workspace(api_client, owner, "oi-disable")
+    owner_member_id = await _find_member_by_email(
+        session_factory, ws["id"], "oi-owner@corp.com"
+    )
+
+    resp = await api_client.patch(
+        f"/api/v1/workspaces/{ws['id']}/members/{owner_member_id}",
+        json={"status": "disabled"},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["error"]["code"] == "last_owner"
+
+    async with session_factory() as session:
+        row = await session.scalar(select(Member).where(Member.id == owner_member_id))
+    assert row.status == "active"
+    assert row.role == "owner"
+    assert row.disabled_at is None
+
+
+async def test_disable_owner_allowed_when_second_owner_exists_over_http(
+    api_client, session_factory
+):
+    owner = await _register_and_login(api_client, "oi-two@corp.com")
+    ws = await _create_workspace(api_client, owner, "oi-two")
+    second_id, _second = await _invite_accept(
+        api_client, owner, ws["id"], "oi-second@corp.com", role="admin"
+    )
+    # Promote the second member to owner, then disable the first: allowed.
+    promote = await api_client.patch(
+        f"/api/v1/workspaces/{ws['id']}/members/{second_id}",
+        json={"role": "owner"},
+        headers=_auth(owner),
+    )
+    assert promote.status_code == 200, promote.text
+    first_id = await _find_member_by_email(session_factory, ws["id"], "oi-two@corp.com")
+
+    resp = await api_client.patch(
+        f"/api/v1/workspaces/{ws['id']}/members/{first_id}",
+        json={"status": "disabled"},
+        headers=_auth(owner),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["status"] == "disabled"
+    async with session_factory() as session:
+        row = await session.scalar(select(Member).where(Member.id == first_id))
+    assert row.status == "disabled"
+    assert row.disabled_at is not None
+
+
+async def test_concurrent_disable_and_remove_keep_one_active_owner_over_http(
+    api_client, session_factory
+):
+    """MB-M2 over real HTTP: racing disable + remove on the two owners yields
+    exactly one 409 last_owner and the database keeps exactly one active owner."""
+    owner = await _register_and_login(api_client, "oi-race@corp.com")
+    ws = await _create_workspace(api_client, owner, "oi-race")
+    second_id, _second = await _invite_accept(
+        api_client, owner, ws["id"], "oi-race-2@corp.com", role="admin"
+    )
+    promote = await api_client.patch(
+        f"/api/v1/workspaces/{ws['id']}/members/{second_id}",
+        json={"role": "owner"},
+        headers=_auth(owner),
+    )
+    assert promote.status_code == 200, promote.text
+    first_id = await _find_member_by_email(session_factory, ws["id"], "oi-race@corp.com")
+
+    barrier = asyncio.Barrier(2)
+
+    async def disable_first():
+        await barrier.wait()
+        return await api_client.patch(
+            f"/api/v1/workspaces/{ws['id']}/members/{first_id}",
+            json={"status": "disabled"},
+            headers=_auth(owner),
+        )
+
+    async def remove_second():
+        await barrier.wait()
+        return await api_client.delete(
+            f"/api/v1/workspaces/{ws['id']}/members/{second_id}",
+            headers=_auth(owner),
+        )
+
+    resp_disable, resp_remove = await asyncio.gather(disable_first(), remove_second())
+    codes = sorted([resp_disable.status_code, resp_remove.status_code])
+    assert codes == [200, 409], (resp_disable.text, resp_remove.text)
+    conflict = resp_disable if resp_disable.status_code == 409 else resp_remove
+    assert conflict.json()["error"]["code"] == "last_owner"
+
+    async with session_factory() as session:
+        active_owners = await session.scalar(
+            select(func.count(Member.id)).where(
+                Member.workspace_id == ws["id"],
+                Member.role == "owner",
+                Member.status == "active",
+            )
+        )
+    assert active_owners == 1
