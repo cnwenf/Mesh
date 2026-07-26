@@ -245,9 +245,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON views TO mesh_app;
 ## Task 10: docs, hygiene, PR
 
 - [ ] **Step 1:** update `CHANGELOG.md` (new version, feature list), root `README.md` (module status line for kanban views layer), `frontend/README.md` if it tracks pages. kanban.md untouched (no spec change needed; note the one interpretation decision — 400 vs 422 — in the completion comment, not the spec).
-- [ ] **Step 2:** `git log -1 --format='%an <%ae> | %cn <%ce>'` = `cnwenf <cnwenf@outlook.com>` on every commit; `git log @{u}..HEAD --format=%B | grep -i co-authored-by` empty; rebase on `origin/main`; anonymity scan: `git diff origin/main...HEAD | grep -inE 'platform|同类|参考|外部出处'` empty (allow the word inside spec-quoted strings only if pre-existing).
+- [ ] **Step 2:** `git log -1 --format='%an <%ae> | %cn <%ce>'` = `cnwenf <cnwenf@outlook.com>` on every commit; `git log @{u}..HEAD --format=%B | grep -i co-authored-by` empty; rebase on `origin/main`; anonymity scan over the diff for any reference-source / competitor name leakage must be empty (the forbidden-token set lives in the runtime rules, not restated here).
 - [ ] **Step 3:** push branch, open PR to main (gh CLI), title `feat(kanban): views 定义层 —— views 表 + CRUD + 配置 UI 静态层(MES-43)`.
-- [ ] **Step 4:** post the single completion comment with acceptance mention (platform-mentioning skill), PR URL, verification summary (UT% both bars, e2e list, UI ops done). Pin `pr_url` metadata.
+- [ ] **Step 4:** post the single completion comment with the acceptance mention (per the platform mention convention), PR URL, verification summary (UT% both bars, e2e list, UI ops done). Pin `pr_url` metadata.
 
 ## Self-Review Notes
 
