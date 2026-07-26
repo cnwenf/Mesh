@@ -182,6 +182,30 @@ describe('IssuesPage', () => {
     expect(rt.subscribe).toHaveBeenCalledWith('workspace:ws-1:issues');
   });
 
+  it('renders due dates localized via Intl, not raw ISO strings (LOW-2)', async () => {
+    queueInitialLoad();
+    const rt = makeFakeRealtime();
+    renderPage(rt.value);
+    await screen.findByText('WS-1');
+    // en + UTC + dateStyle medium → "Aug 15, 2026"(纯日期值锁 UTC,日历日不随时区漂移)
+    expect(screen.getAllByText('Aug 15, 2026').length).toBe(2);
+    expect(screen.queryByText('2026-08-15')).toBeNull();
+  });
+
+  it('falls back to the raw value for an unparsable due date without breaking the row (LOW-2)', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [{ ...ISSUE_1, due_date: 'not-a-date' }], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const rt = makeFakeRealtime();
+    renderPage(rt.value);
+    await screen.findByText('WS-1');
+    expect(screen.getByText('not-a-date')).toBeTruthy();
+  });
+
   it('shows the error state with retry when the list request fails', async () => {
     const stub = stubFetch(
       fakeResponse({ body: { data: ME } }),

@@ -221,3 +221,18 @@ export interface MovePreview {
   readonly cleared_fields: readonly MovePreviewField[];
   readonly kept_fields: readonly string[];
 }
+
+/**
+ * MovePreview 运行时结构守卫(边界处校验,不信任外部载荷):
+ * 422 move_confirmation_required 的 err.details.preview 经此校验后才回显(LOW-3)。
+ */
+export function isMovePreview(value: unknown): value is MovePreview {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.issue_id === 'string' &&
+    typeof candidate.identifier === 'string' &&
+    Array.isArray(candidate.mapped_fields) &&
+    Array.isArray(candidate.cleared_fields)
+  );
+}
