@@ -1,6 +1,13 @@
 """SQLAlchemy models for the Mesh schema."""
 
 from mesh.db.models.api_token import ApiToken
+from mesh.db.models.attachment import (
+    Attachment,
+    AttachmentBlob,
+    AttachmentLink,
+    AttachmentQuota,
+    UploadSession,
+)
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.issue import (
     Issue,
@@ -47,6 +54,10 @@ from mesh.db.models.workspace import (
 
 __all__ = [
     "ApiToken",
+    "Attachment",
+    "AttachmentBlob",
+    "AttachmentLink",
+    "AttachmentQuota",
     "AuditLog",
     "CustomFieldDef",
     "CustomFieldOption",
@@ -75,6 +86,7 @@ __all__ = [
     "RealtimeChannel",
     "RealtimeEvent",
     "Session",
+    "UploadSession",
     "User",
     "View",
     "ViewIssuePosition",

@@ -167,6 +167,50 @@ class Settings(BaseSettings):
     # lazy checks on accept/preview).
     invitation_sweep_interval: float = Field(default=300.0, gt=0)
 
+    # Object storage for the attachment module (attachment.md §3). The bucket
+    # is PRIVATE; every access goes through short-lived presigned URLs and the
+    # byte stream never transits the API process (three-stage direct upload).
+    # ``storage_endpoint`` is what the server process can reach (compose
+    # network); ``storage_public_endpoint`` is what browsers/CLIs can reach —
+    # presigned URLs are signed against the public endpoint because clients
+    # talk to object storage directly. When unset it falls back to
+    # ``storage_endpoint`` (single-NIC deployments).
+    storage_endpoint: str = "http://127.0.0.1:9000"
+    storage_public_endpoint: str | None = None
+    storage_region: str = "us-east-1"
+    storage_access_key: str = "mesh"
+    storage_secret_key: str = "mesh_minio_secret"
+    storage_bucket: str = "mesh-attachments"
+
+    # Attachment limits & lifecycles (attachment.md §3.6/§4.6 — defaults are
+    # configurable; per-workspace overrides live in ``attachment_quotas``).
+    attachment_max_file_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    attachment_max_image_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    attachment_total_bytes: int = Field(default=10 * 1024 * 1024 * 1024, gt=0)
+    # Signed PUT URLs expire with the upload record; signed GET URLs are
+    # short-lived (~60s, single purpose, bound to method + object key).
+    attachment_upload_ttl: timedelta = Field(default=timedelta(minutes=15), gt=0)
+    attachment_download_url_ttl: timedelta = Field(default=timedelta(seconds=60), gt=0)
+    # Soft-deleted attachments hard-delete after this window; orphaned uploads
+    # past ``expires_at`` are reaped regardless of retention (§4.6).
+    attachment_soft_delete_retention: timedelta = Field(default=timedelta(days=7), ge=0)
+    # Multipart uploads (attachment.md §2.5/§3.1): files at or above the
+    # threshold are split into ``multipart_part_bytes`` parts, signed in
+    # batches of ``multipart_part_batch``.
+    attachment_multipart_threshold: int = Field(default=64 * 1024 * 1024, gt=0)
+    attachment_multipart_part_bytes: int = Field(default=8 * 1024 * 1024, ge=5 * 1024 * 1024)
+    attachment_multipart_part_batch: int = Field(default=4, ge=1, le=100)
+    # Quarantine pipeline tuning (attachment.md §3.3 — the processing worker).
+    attachment_scan_interval: float = Field(default=5.0, gt=0)
+    attachment_scan_batch_size: int = Field(default=10, ge=1, le=100)
+    attachment_orphan_sweep_interval: float = Field(default=300.0, gt=0)
+    attachment_gc_interval: float = Field(default=3600.0, gt=0)
+    # Plain-text scan-skip whitelist (attachment.md §3.6): when enabled the
+    # worker sets blob scan_status='skipped' for macro-free plain-text types
+    # (still magic-byte sniffed and SHA-256 verified). Disable to force a full
+    # AV pass on every upload.
+    attachment_scan_skip_text: bool = True
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""

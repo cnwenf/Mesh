@@ -7,7 +7,7 @@
 | 依赖 Spec | `workspace`(多租户、配额)、`member`(统一 members.id,human\|agent)、`auth`(Bearer/RBAC/限流)、`issue`(关联宿主)、`comment-inbox`(评论内附件引用 `attachment_ids`) |
 | 被依赖 | `comment-inbox`(评论载荷引用附件)、`agent`(agent 运行产出物经 API token 上传) |
 | 技术栈 | FastAPI + SQLAlchemy 2.x + PostgreSQL + 对象存储(私有桶 + 预签名 URL) |
-| 状态 | Draft |
+| 状态 | Implemented(v0.12.1,MES-59) |
 
 > **全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)**
 > 1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。

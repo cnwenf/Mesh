@@ -13,18 +13,29 @@ import contextlib
 import logging
 import signal
 import sys
+import uuid
 from datetime import UTC, datetime
 
 import redis.asyncio as aioredis
+from sqlalchemy import select
 
+from mesh.attachment.processing import process_blob
+from mesh.attachment.scanner import HeuristicScanner
+from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
+from mesh.attachment.storage import ObjectStorage
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
+from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE, assign_trigger_handler
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
+from mesh.workers.attachment_processor import (
+    attachment_maintenance_loop,
+    attachment_scan_loop,
+)
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
@@ -36,7 +47,42 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def build_relay(settings: Settings, session_factory, fanout: RedisFanOut) -> OutboxRelay:
+def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
+    """Low-latency quarantine trigger (attachment.md §3.3 step 3).
+
+    ``complete`` writes ``attachment.scan_requested`` in its business
+    transaction; this handler processes the referenced blob immediately
+    (owner role, cross-tenant). The attachment-scan loop is the crash-
+    recovery sweep over the same pending set — the two are idempotent via
+    the blob's scan_status.
+    """
+    scanner = HeuristicScanner()
+
+    async def _handle(session, event) -> None:
+        payload = event.payload or {}
+        raw_blob_id = payload.get("blob_id")
+        if not raw_blob_id:
+            return None
+        try:
+            blob_id = uuid.UUID(str(raw_blob_id))
+        except ValueError:
+            return None
+        blob = await session.scalar(
+            select(AttachmentBlob)
+            .where(AttachmentBlob.id == blob_id)
+            .with_for_update(skip_locked=True)
+        )
+        if blob is None or blob.scan_status != "pending":
+            return None  # already processed / claimed by the sweep loop
+        await process_blob(session, blob, storage=storage, settings=settings, scanner=scanner)
+        return None
+
+    return _handle
+
+
+def build_relay(
+    settings: Settings, session_factory, fanout: RedisFanOut, storage: ObjectStorage
+) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
     ``issue.assigned`` is consumed by a bridge handler until the agent.md
@@ -49,6 +95,7 @@ def build_relay(settings: Settings, session_factory, fanout: RedisFanOut) -> Out
         handlers={
             REALTIME_PUBLISH: project_realtime_event,
             ASSIGN_EVENT_TYPE: assign_trigger_handler,
+            SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
         },
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
@@ -64,7 +111,17 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     session_factory = create_session_factory(engine)
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     fanout = RedisFanOut(redis_client)
-    relay = build_relay(settings, session_factory, fanout)
+    # Attachment quarantine pipeline shares the API's storage settings; the
+    # worker reads quarantine objects server-side (MIME sniff / SHA-256 / AV /
+    # thumbnails, attachment.md §3.3) over the internal endpoint.
+    from mesh.api.app import build_object_storage
+
+    storage = build_object_storage(settings)
+    try:
+        await storage.ensure_bucket()
+    except Exception:  # noqa: BLE001 — storage may join late; loops retry
+        logger.warning("attachment bucket not ready at worker startup")
+    relay = build_relay(settings, session_factory, fanout, storage)
     stop = stop or asyncio.Event()
 
     supervisor = Supervisor(
@@ -97,6 +154,18 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     interval=settings.invitation_sweep_interval,
                     stop=stop,
                     clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "attachment-scan",
+                lambda: attachment_scan_loop(
+                    session_factory, storage=storage, settings=settings, stop=stop
+                ),
+            ),
+            TaskSpec(
+                "attachment-maintenance",
+                lambda: attachment_maintenance_loop(
+                    session_factory, storage=storage, settings=settings, stop=stop
                 ),
             ),
         ]
