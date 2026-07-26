@@ -142,6 +142,27 @@ describe('applyIssueListFrame', () => {
   });
 });
 
+it('strips frame meta fields from merged rows (F11)', () => {
+  const merged = applyIssueListFrame(
+    [BASE],
+    frame('issue.project_changed', {
+      id: 'iss-1',
+      from_project_id: 'prj-1',
+      to_project_id: 'prj-2',
+      mapped_fields: [{ field: 'status' }],
+      cleared_fields: [{ field: 'milestone_id' }],
+      updated_at: '2026-07-03T00:00:00Z',
+    }),
+    always,
+  );
+  const row = merged[0] as unknown as Record<string, unknown>;
+  expect(row.from_project_id).toBeUndefined();
+  expect(row.to_project_id).toBeUndefined();
+  expect(row.mapped_fields).toBeUndefined();
+  expect(row.cleared_fields).toBeUndefined();
+  expect(row.id).toBe('iss-1');
+});
+
 describe('applyIssueDetailFrame', () => {
   it('merges frames for the same issue id only', () => {
     const merged = applyIssueDetailFrame(

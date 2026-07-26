@@ -132,6 +132,7 @@ function detailResponses(): ReturnType<typeof fakeResponse>[] {
             id: 'dep-1',
             issue_id: 'iss-1',
             depends_on_id: 'iss-7',
+            depends_on_identifier: 'WS-7',
             type: 'blocked_by',
             created_by: null,
             created_at: '2026-07-01T00:00:00Z',
@@ -203,7 +204,7 @@ describe('IssueDetailPage', () => {
       'Detailed description',
     );
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
-    expect(screen.getByText('iss-7')).toBeTruthy();
+    expect(screen.getByText('WS-7')).toBeTruthy();
     expect(screen.getByTestId('issue-detail-activity')).toBeTruthy();
   });
 
@@ -238,7 +239,9 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
-    fireEvent.change(screen.getByTestId('dep-target-input'), { target: { value: 'iss-7' } });
+    fireEvent.change(screen.getByTestId('dep-target-input'), {
+      target: { value: '22222222-2222-2222-2222-222222222222' },
+    });
     fireEvent.click(screen.getByText('Add dependency'));
     await screen.findByTestId('dep-error');
     const posts = stub.calls.filter((c) => c.init?.method === 'POST');
@@ -250,11 +253,11 @@ describe('IssueDetailPage', () => {
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
     );
     renderDetail();
-    await screen.findByText('iss-7');
+    await screen.findByText('WS-7');
     fireEvent.click(screen.getByText('Remove'));
     // rolled back after the failed DELETE
     await waitFor(() => {
-      expect(screen.getByText('iss-7')).toBeTruthy();
+      expect(screen.getByText('WS-7')).toBeTruthy();
     });
   });
 
@@ -363,6 +366,38 @@ describe('IssueDetailPage', () => {
     fireEvent.click(screen.getByTestId('move-cancel'));
     await waitFor(() => expect(screen.queryByTestId('move-dialog')).toBeNull());
     expect(stub.calls.filter((c) => String(c.url).endsWith('/move')).length).toBe(0);
+  });
+
+  it('resolves a dependency target by identifier and posts its UUID (M7)', async () => {
+    const dep = {
+      id: 'dep-2',
+      issue_id: 'iss-1',
+      depends_on_id: 'iss-9',
+      depends_on_identifier: 'WS-9',
+      type: 'blocked_by',
+      created_by: null,
+      created_at: '2026-07-01T00:00:00Z',
+    };
+    const stub = queue(
+      // 标识符解析:WS-9 → iss-9
+      fakeResponse({ body: { data: { ...DETAIL, id: 'iss-9', identifier: 'WS-9' } } }),
+      // 依赖创建
+      fakeResponse({ status: 201, body: { data: dep } }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    // 类型选择器存在(§4.2/§4.3:选类型)
+    expect(screen.getByTestId('dep-type-select')).toBeTruthy();
+    fireEvent.change(screen.getByTestId('dep-target-input'), { target: { value: 'WS-9' } });
+    fireEvent.click(screen.getByText('Add dependency'));
+    await waitFor(() => {
+      const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+      expect(posts.length).toBe(1);
+      expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+        depends_on_id: 'iss-9',
+        type: 'blocked_by',
+      });
+    });
   });
 
   it('shows the error state with retry when the detail request fails', async () => {

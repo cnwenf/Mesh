@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "9070c55d",
+  "version": "93fa1d1e",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -616,7 +616,7 @@
     "issues.detail.reporter": "报告人",
     "issues.detail.project": "项目",
     "issues.detail.inbox": "收件箱(无项目)",
-    "issues.deps.targetPlaceholder": "目标工作项 UUID",
+    "issues.deps.targetPlaceholder": "目标编号(如 WEB-12)或 UUID",
     "issues.deps.add": "添加依赖",
     "issues.deps.remove": "移除",
     "issues.deps.type.blocks": "阻塞",
@@ -651,6 +651,7 @@
     "issues.move.keptNote": "编号、标题、描述、优先级、负责人、日期与工作区级字段保留不变。",
     "issues.move.confirm": "确认迁移",
     "issues.move.cancel": "取消",
-    "issues.move.success": "工作项已迁移"
+    "issues.move.success": "工作项已迁移",
+    "issues.deps.typeLabel": "关系类型"
   }
 }

@@ -17,7 +17,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from mesh.db.constraints import violates as _violates
-from mesh.db.models.issue import DEPENDENCY_TYPE_VALUES, IssueDependency
+from mesh.db.models.issue import DEPENDENCY_TYPE_VALUES, Issue, IssueDependency
 from mesh.db.models.member import Member
 from mesh.errors import ConflictError, NotFoundError, ValidationError
 from mesh.issue.graph import detect_dependency_cycle, lock_issue_graph
@@ -26,19 +26,27 @@ from mesh.issue.service import IssueService, _isoformat
 DEPENDENCY_NOT_FOUND = "dependency not found"
 
 
-def _render_edge(edge: IssueDependency, *, perspective: uuid.UUID) -> dict:
+def _render_edge(
+    edge: IssueDependency,
+    *,
+    perspective: uuid.UUID,
+    identifiers: dict[uuid.UUID, str] | None = None,
+) -> dict:
     """Render an edge from ``perspective``'s point of view (§2.2 note).
 
     Stored ``blocks`` edges read as ``blocked_by`` from the other end;
     symmetric types (relates_to/duplicates) keep their type both ways.
     ``created_at`` is an RFC3339 string so the dict is both API- and
-    outbox-JSONB-safe.
+    outbox-JSONB-safe; ``depends_on_identifier`` carries the human-readable
+    identifier so the UI shows ``WEB-12`` instead of a bare UUID (§4.2/§4.3).
     """
+    ids = identifiers or {}
     if edge.issue_id == perspective:
         return {
             "id": str(edge.id),
             "issue_id": str(perspective),
             "depends_on_id": str(edge.depends_on_id),
+            "depends_on_identifier": ids.get(edge.depends_on_id),
             "type": edge.type,
             "created_by": str(edge.created_by) if edge.created_by is not None else None,
             "created_at": _isoformat(edge.created_at),
@@ -48,6 +56,7 @@ def _render_edge(edge: IssueDependency, *, perspective: uuid.UUID) -> dict:
         "id": str(edge.id),
         "issue_id": str(perspective),
         "depends_on_id": str(edge.issue_id),
+        "depends_on_identifier": ids.get(edge.issue_id),
         "type": inverted,
         "created_by": str(edge.created_by) if edge.created_by is not None else None,
         "created_at": _isoformat(edge.created_at),
@@ -93,7 +102,24 @@ class DependencyService:
                 .scalars()
                 .all()
             )
-            return [_render_edge(edge, perspective=issue.id) for edge in edges]
+            other_ids = {
+                edge.depends_on_id if edge.issue_id == issue.id else edge.issue_id
+                for edge in edges
+            }
+            identifiers: dict[uuid.UUID, str] = {}
+            if other_ids:
+                rows = (
+                    await session.execute(
+                        select(Issue.id, Issue.identifier).where(
+                            Issue.workspace_id == workspace_id, Issue.id.in_(other_ids)
+                        )
+                    )
+                ).all()
+                identifiers = {row[0]: row[1] for row in rows}
+            return [
+                _render_edge(edge, perspective=issue.id, identifiers=identifiers)
+                for edge in edges
+            ]
 
     async def add_dependency(
         self,

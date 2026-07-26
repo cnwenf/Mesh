@@ -103,7 +103,7 @@ class BulkRequest(BaseModel):
     ``confirm: true`` (the §3.8 two-step contract applies per issue).
     """
 
-    issue_ids: list[str] = Field(min_length=1)
+    issue_ids: list[str] = Field(min_length=1, max_length=100)
     changes: BulkChanges | None = None
     delete: bool = False
     confirm: bool = False

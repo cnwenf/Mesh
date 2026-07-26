@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "cf8b9066",
+  "version": "a453d6cb",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -616,7 +616,7 @@
     "issues.detail.reporter": "Reporter",
     "issues.detail.project": "Project",
     "issues.detail.inbox": "Inbox (no project)",
-    "issues.deps.targetPlaceholder": "Target issue UUID",
+    "issues.deps.targetPlaceholder": "Target identifier (e.g. WEB-12) or UUID",
     "issues.deps.add": "Add dependency",
     "issues.deps.remove": "Remove",
     "issues.deps.type.blocks": "blocks",
@@ -651,6 +651,7 @@
     "issues.move.keptNote": "Identifier, title, description, priority, assignee, dates and workspace-level fields are kept.",
     "issues.move.confirm": "Confirm move",
     "issues.move.cancel": "Cancel",
-    "issues.move.success": "Issue moved"
+    "issues.move.success": "Issue moved",
+    "issues.deps.typeLabel": "Relation type"
   }
 }

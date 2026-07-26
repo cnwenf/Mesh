@@ -201,16 +201,11 @@ describe('IssuesPage', () => {
 
   it('creates an issue via the quick create form', async () => {
     const created = issueFixture('iss-3', 'WS-3', 'Brand new');
-    const stub = queueInitialLoad(
-      // the quick-create form resolves the workspace on its own:
-      fakeResponse({ body: { data: ME } }),
-      fakeResponse({ status: 201, body: { data: created } }),
-    );
+    const stub = queueInitialLoad(fakeResponse({ status: 201, body: { data: created } }));
+    void stub;
     renderPage(makeFakeRealtime().value);
     await screen.findByText('WS-1');
     fireEvent.click(screen.getByTestId('issue-open-create'));
-    // the form fetches /users/me on mount — wait for it before submitting
-    await waitFor(() => expect(stub.calls.length).toBe(5));
     fireEvent.change(screen.getByTestId('issue-create-title'), {
       target: { value: 'Brand new' },
     });
@@ -304,30 +299,27 @@ describe('IssuesPage', () => {
 
   it('expands the quick create form with project and assignee (§4.3 MEDIUM-3)', async () => {
     const created = { ...issueFixture('iss-4', 'WS-4', 'Expanded create'), project_id: 'prj-9' };
+    const projectsResp = fakeResponse({
+      body: {
+        data: [
+          { id: 'prj-9', name: 'Apollo', key: 'APL', status: 'active', health: null,
+            visibility: 'public', lead: null, lead_member_id: null, start_date: null,
+            target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
+            archived: false, archived_at: null, my_role: 'lead',
+            created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z' },
+        ],
+        next_cursor: null,
+      },
+    });
     const stub = queueInitialLoad(
-      // form's own /users/me:
-      fakeResponse({ body: { data: ME } }),
-      // expand → projects + members (parallel):
-      fakeResponse({
-        body: {
-          data: [
-            { id: 'prj-9', name: 'Apollo', key: 'APL', status: 'active', health: null,
-              visibility: 'public', lead: null, lead_member_id: null, start_date: null,
-              target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
-              archived: false, archived_at: null, my_role: 'lead',
-              created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z' },
-          ],
-          next_cursor: null,
-        },
-      }),
-      fakeResponse({ body: MEMBERS }),
-      // create:
+      // 展开按需加载项目名册(成员名册由页面下传);created 收尾,
+      // 无论展开 effect 触发一次还是两次,创建调用都落在 created 上(stub 复用末尾)
+      projectsResp,
       fakeResponse({ status: 201, body: { data: created } }),
     );
     renderPage(makeFakeRealtime().value);
     await screen.findByText('WS-1');
     fireEvent.click(screen.getByTestId('issue-open-create'));
-    await waitFor(() => expect(stub.calls.length).toBe(5));
     fireEvent.click(screen.getByTestId('issue-create-expand'));
     await screen.findByTestId('issue-create-project');
     await screen.findByTestId('issue-create-assignee');
@@ -344,6 +336,111 @@ describe('IssuesPage', () => {
       project_id: 'prj-9',
       assignee_id: 'mem-1',
     });
+  });
+
+  it('passes assignee_id on first load under ?mine=true (B4)', async () => {
+    const mine = { ...ISSUE_1, assignee_id: 'mem-1' };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: MEMBERS }),
+      fakeResponse({ body: { data: [mine], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    render(
+      <MemoryRouter initialEntries={['/issues?mine=true']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <IssuesPage />
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('WS-1');
+    // 首载 issues 请求即携带 assignee_id(修复前首载无过滤参数)
+    const issueCalls = stub.calls.filter((c) => String(c.url).includes('/issues?'));
+    expect(issueCalls.length).toBeGreaterThan(0);
+    expect(String(issueCalls[0].url)).toContain('assignee_id=mem-1');
+  });
+
+  it('quick create under a priority filter respects the watermark (F3)', async () => {
+    const created = issueFixture('iss-5', 'WS-5', 'Off-filter create');
+    const stub = queueInitialLoad(
+      fakeResponse({ status: 201, body: { data: created } }),
+      // F3:不匹配当前过滤 → 触发重拉而非前置渲染
+      fakeResponse({ body: { data: [ISSUE_1, ISSUE_2], next_cursor: null } }),
+      fakeResponse({ body: { data: [STATUS_TODO], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    render(
+      <MemoryRouter initialEntries={['/issues?priority=urgent']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <IssuesPage />
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    fireEvent.change(screen.getByTestId('issue-create-title'), { target: { value: 'Off-filter create' } });
+    fireEvent.submit(screen.getByTestId('issue-create-form'));
+    await waitFor(() => {
+      expect(stub.calls.filter((c) => c.init?.method === 'POST').length).toBe(1);
+    });
+    // 创建的 WS-5(priority none)不匹配 priority=urgent 过滤,不前置渲染
+    expect(screen.queryByText('WS-5')).toBeNull();
+  });
+
+  it('opens the quick create form via ?create=1 (M12)', async () => {
+    queueInitialLoad();
+    render(
+      <MemoryRouter initialEntries={['/issues?create=1']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <RealtimeContext.Provider value={makeFakeRealtime().value}>
+                <IssuesPage />
+              </RealtimeContext.Provider>
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByTestId('issue-create-form');
+  });
+
+  it('bulk partial failure toast surfaces per-item codes (F4)', async () => {
+    queueInitialLoad(
+      fakeResponse({
+        status: 422,
+        body: {
+          error: {
+            code: 'bulk_partial_failure',
+            message: 'partial',
+            details: {
+              succeeded: 1,
+              failed: 1,
+              errors: [{ issue_id: 'iss-2', code: 'forbidden', message: 'no' }],
+            },
+          },
+        },
+      }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-select-iss-1'));
+    await screen.findByTestId('issue-bulkbar');
+    fireEvent.click(screen.getByText('Delete'));
+    await screen.findByText(/forbidden/);
   });
 
   it('renders the empty state when there are no issues', async () => {
