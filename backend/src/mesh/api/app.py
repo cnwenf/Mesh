@@ -33,6 +33,10 @@ from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
 from mesh.auth.token_routes import router as token_router
 from mesh.auth.tokens import TokenService
+from mesh.comment_inbox.channels import register_inbox_checkers
+from mesh.comment_inbox.inbox import InboxService
+from mesh.comment_inbox.routes import router as comment_inbox_router
+from mesh.comment_inbox.service import CommentService
 from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
@@ -199,12 +203,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # upload; the processing worker shares the same storage settings.
     app.state.storage = build_object_storage(settings)
     app.state.attachment_service = AttachmentService(session_factory, settings, app.state.storage)
+    # Comment & inbox module (comment-inbox.md): comments, §6.9 mention
+    # triggers, §6.13 notification fan-out (relay side), inbox operations.
+    app.state.comment_service = CommentService(
+        session_factory, max_agent_chain_depth=settings.max_agent_chain_depth
+    )
+    app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
     register_resource_checkers(app.state.authorizer, session_factory)
     register_issue_checkers(app.state.authorizer, session_factory)
+    register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
@@ -221,6 +232,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(label_association_router)
     app.include_router(view_router)
     app.include_router(attachment_router)
+    app.include_router(comment_inbox_router)
     app.include_router(agent_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
