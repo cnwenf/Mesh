@@ -3,6 +3,28 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.10] - 2026-07-27
+
+MES-46 终局排期 MEDIUM×7 硬化池收口(MES-54):issue 模块 OCC 契约、留痕一致性、输入上限、状态机一致性与迁移事件脱敏。不回退 MES-48(H1/H2 鉴权 + 负向矩阵)与 MES-50(M1/M2 隔离)的任何修复。
+
+### Security
+
+- **M-7 私有→公开迁移事件广播脱敏**:`issue.project_changed` 经 `issue:{id}` 与 `workspace:{ws}:issues` 频道广播时,payload 的 `mapped_fields`/`cleared_fields` 携带**源侧可读元数据副本**(私有状态名、里程碑 title、周期 name);私有源迁往公开目标后,无源项目读权限的成员也能从事件读到。修复:新增 `redact_move_payload`——源项目非 public 时两条频道副本统一脱敏(`mapped_fields[].from` 仅留 category 标记、`cleared_fields[]` 不带 `items`),`from_project_id`/`to_project_id`、目标侧 `to` 快照与结构化 reason 保留;完整清单仅存于受读权限保护的 `issue_activity` 留痕。move 与 bulk 两条路径共用同一脱敏函数。
+- **M-4 长文本/JSONB 输入字节上限(存储 DoS 护栏)**:`description`(issue create/update、模板 create/update)与 `template_body`(JSONB 按规范化序列化尺寸)此前无上限。修复:schema 边界统一 1 MiB 字节上限(按 UTF-8 字节计,多字节内容同样受限),超限 422 `field_too_large`(`details` 仅回 field + max_bytes,不回显超限内容);模板实例化的 overrides 经同一创建链路自动受限。
+- **M-1 move 确认请求 `version` 必填(MES-48 临时 400 收口转正)**:`MoveRequest.version` 可选时省略即绕过乐观锁。修复:**请求 schema 边界**强制——`confirm:true` 缺 `version` → 422 `move_version_required`(命名 code,details 携 field/hint);服务层保留同一 422 校验作纵深防御(MES-48 的 400 `validation_error` 临时收口同步转正)。未确认(`confirm` 缺省)路径不受约束——它是 §3.8 的 422 预览回退,`details.preview.version` 正是客户端回传的来源(MES-48 H1 鉴权前置路径不变)。前端 `MoveProjectDialog`/`moveIssue` 已于 MES-46 收口携带 version(本次核实 typecheck 与 59 例 issue 前端测试全绿)。
+
+### Changed
+
+- **M-5 状态改 category 全量联动**:`PATCH /statuses/{id}` 改 category 此前仅裸 UPDATE `state_category`,不维护 `completed_at`、不递增 `issue.version`(OCC 语义漏洞)、无事件与留痕。修复:受影响 issue 逐条获得与单条状态变更完全一致的契约——`state_category` + `completed_at` 维护(进 done 打戳/离 done 清空)+ `version+1` + `issue_activity` 留痕行 + `issue.updated`/`issue.moved` 事件(私有项目 issue 仅发 `issue:{id}` 明细频道);行锁 + 主键分页(`CATEGORY_RESCAN_BATCH_SIZE=500`)保证批量路径性能与并发 PATCH 无丢失更新。
+- **M-6 作用域最后一个默认状态不可删除**:此前可删到零默认,之后该作用域新建 issue 持续 422。修复:`DELETE /statuses/{id}` 删作用域内最后一个 `is_default` 状态 → 409 `last_default_status`(错误码语义与既有 `status_in_use` 一致;被引用状态的 in-use 判定保持优先)。先经同事务移交默认后旧默认方可删除(README §6.3 至少一默认保证闭环)。
+- **M-2 / M-3 核实收口**:bulk 迁移留痕(`move_activity_rows` 逐条写 project_id + 映射/清除清单行)与状态映射 `completed_at` 同步(`apply_move_plan` 进出 done 双向)已由 MES-48 落地;本次补 entering-done 方向打戳的 bulk 一致性测试,确认两条路径语义完全对齐。
+
+### Quality
+
+- 后端:新增 `test_issue_move_version_contract.py`(schema 边界 4 例)、`test_issue_api_hardening.py`(真实 ASGI + PG + Redis 路由级 4 例:422 `move_version_required`/409/200 三段、预览回退保留、`field_too_large` ×3)、`test_issue_input_limits.py`(10 例:字节/多字节/模板体/实例化 overrides)、`test_issue_status_category_consistency.py`(9 例:进出 done 双向、私有项目频道可见性、601 条跨分页全量联动、M-6 五态)、`test_issue_move_event_redaction.py`(6 例:纯函数脱敏、move/bulk 私有→公开双频道负向、公开→公开全量保留、M-3 entering-done);MES-48 既有 version 契约测试同步收紧至 422 命名 code。`pytest-cov` 整体 **94%**(变更模块 schemas 100% / bulk 98% / move 95% / statuses 94%,≥90% 门禁);ruff 全绿(仓库既有 7 条与本次无关);mypy 变更文件零新增。全量单测四段全绿(MES-48/50 用例不回退)。
+- 前端:vitest **1257 例全绿**,typecheck 0 错(迁移对话框已携带 version,本次无代码变更)。
+- 文档同步:`docs/specs/features/issue.md` §2.2 description 字节上限、§1.2.3 状态定义变更传播契约、§3.4 新增三个错误码、§3.8 version schema 强制条款与广播脱敏条款、§3.9 模板字段上限、§5.2 验收三项。
+
 ## [0.11.11] - 2026-07-27
 
 MES-46 终局排期 issue 模块 LOW×8 + 文档瑕疵×1 收口(MES-51):统一约定 / 收敛口径 / 补实测类硬化,均无泄露(复合 FK + RLS + 外层 workspace 过滤兜底)。
