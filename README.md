@@ -39,6 +39,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | auth 增量2:PAT/API token + 审计查询端点(auth.md §2.5/§3.2/§3.3) | ✅ v0.7.0 | 长期 PAT/API token(独立于会话 JWT、可吊销、可限定 scope/过期)、token 审计与查询端点;补 MES-12 文档欠账,与 CHANGELOG [0.7.0] 对齐 |
 | workspace §4 前端 UI 接通(workspace.md §4) | ✅ v0.8.0 | 工作区切换器/创建向导、设置页(基本信息/邀请全生命周期/角色矩阵/危险区)、邀请接受页(四 reason UI 态)、账号登录接通、realtime 会话 JWT 鉴权管道;i18n 全外部化(zh-CN+en) |
 | project 项目(project.md) | ✅ v0.10.0 | 项目 CRUD/归档恢复/软删除、健康度与状态留痕(回写 + 事件)、里程碑 CRUD(逾期派生态)、迭代周期 CRUD(auto_roll 自动滚动)、项目成员与私有可见性、项目模板与实例化;前缀注册表同事务排他登记、前缀永久保留(`UNIQUE(workspace_id, key)` 非部分唯一索引 + 注册表双重保证);`UNIQUE(workspace_id, id)` + 同租户复合 FK + RLS;§3.1 全部端点(包络/游标分页/If-Match 乐观并发/错误码);project 前端页面(列表/详情/设置/周期)与实时增量合并;进度聚合与 issue 顺延待 issue.md 增量 |
+| label-property 标签与自定义属性定义层(label-property.md §2–§4 定义层) | ✅ v0.11.0 | 标签 + 自定义字段定义 + 枚举选项三表;作用域内命名唯一用 README §6.3 部分表达式唯一索引(`COALESCE(project_id,…)`,禁表级 UNIQUE)、`UNIQUE(workspace_id, id)` + 同租户复合 FK + RLS;定义层独立 CRUD(包络/游标分页/If-Match 乐观并发)与具名错误码(`label_name_taken`/`field_key_taken`/`invalid_field_config`/`field_inactive`)、十种字段类型 + 按类型 config/default 校验;事件 `label.*`/`custom_field.updated`/`custom_field_option.updated` 经 outbox → projector 唯一路径(§6.7 注册表已有);工作区/项目设置管理 UI(列表/新建/编辑/删除/颜色选择/枚举选项编辑器,i18n 全外部化);issue 关联(`issue_labels`/字段值/选择器/合并)与 issue 侧事件随 issue.md 增量 |
 
 ## Quick Start
 

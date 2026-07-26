@@ -10,6 +10,7 @@ import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMut
 import { Button, Dialog, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import { CustomFieldsPanel, LabelsPanel } from '../labels';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
 import { archiveProject, deleteProject, getProject, unarchiveProject } from './api';
@@ -307,6 +308,26 @@ export function ProjectSettingsPage(): React.JSX.Element {
       </form>
 
       <ProjectMembersSection client={client} projectId={project.id} roster={roster} />
+
+      {/* label-property.md §4.1 项目设置:项目级标签与自定义字段定义管理 */}
+      <section
+        className="mesh-projects__settings-section"
+        aria-label={t('labels.sectionTitle')}
+      >
+        <h2 className="mesh-projects__settings-subtitle">{t('labels.sectionTitle')}</h2>
+        <LabelsPanel client={client} workspaceId={project.workspace_id} projectId={project.id} />
+      </section>
+      <section
+        className="mesh-projects__settings-section"
+        aria-label={t('fields.sectionTitle')}
+      >
+        <h2 className="mesh-projects__settings-subtitle">{t('fields.sectionTitle')}</h2>
+        <CustomFieldsPanel
+          client={client}
+          workspaceId={project.workspace_id}
+          projectId={project.id}
+        />
+      </section>
 
       <section
         className="mesh-projects__settings-section mesh-projects__danger-zone"
