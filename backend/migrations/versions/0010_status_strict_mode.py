@@ -10,7 +10,7 @@ Spec §4.4「严格模式可在状态定义上配置『允许的下一步』」�
   仅当前状态 ``allowed_transitions`` 中列出的目标可达,违规 409
   ``invalid_status_transition``(issue.md §3.4 错误码表 / §5.2 验收项)。
 
-Revision ID: 0009
+Revision ID: 0010
 Revises: 0009
 Create Date: 2026-07-26
 """
