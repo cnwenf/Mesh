@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "55b7a2b1",
+  "version": "b8e25f2b",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -861,6 +861,24 @@
     "board.listPlaceholderTitle": "List layout",
     "board.listPlaceholderDescription": "The list table renders with the issue projection increment; the view configuration above is already active.",
     "board.notImplementedTitle": "Layout not implemented",
-    "board.notImplementedDescription": "Timeline and table layouts are reserved enum values in this release (kanban §2.2)."
+    "board.notImplementedDescription": "Timeline and table layouts are reserved enum values in this release (kanban §2.2).",
+    "attachments.title": "Attachments",
+    "attachments.empty": "No attachments yet",
+    "attachments.scanning": "Scanning. Download will be available when complete.",
+    "attachments.rejected": "This file was blocked by security scanning.",
+    "attachments.download": "Download",
+    "attachments.delete": "Delete",
+    "attachments.copyLink": "Copy link",
+    "attachments.aiBadge": "AI",
+    "attachments.openImage": "Open image",
+    "attachments.copiedToast": "Download link copied",
+    "attachments.unknownUploader": "Unknown",
+    "attachments.addFiles": "Add attachments",
+    "attachments.dropHint": "Drag files here, paste a screenshot, or click the paperclip to browse",
+    "attachments.confirm": "Confirm",
+    "error.scan_infected": "This file was flagged as malicious and cannot be downloaded.",
+    "error.file_too_large": "This file is larger than the allowed limit.",
+    "error.quota_exceeded": "Storage quota exceeded. Free up space and try again.",
+    "error.hash_mismatch": "The file content did not match its checksum. Please re-upload."
   }
 }
