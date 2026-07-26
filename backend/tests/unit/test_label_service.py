@@ -34,7 +34,6 @@ from mesh.labels.service import (
     LabelPatch,
     LabelService,
     OptionPatch,
-    UNSET,
 )
 
 pytestmark = pytest.mark.unit
