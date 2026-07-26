@@ -4,7 +4,7 @@
  */
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
 import { getApiClient } from '../../api/instance';

@@ -6,7 +6,7 @@
  * 并提供「返回登录」入口。vendor 中立:provider 仅作为 URL 安全 slug 透传。
  */
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
 import { getApiClient } from '../../api/instance';

@@ -7,7 +7,7 @@
  * 422 unsupported_locale / invalid_timezone、409 slug_taken、400 validation_error 具名呈现。
  */
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { MeshApiError, errorToI18nKey } from '../../api/errors';
 import { getApiClient } from '../../api/instance';
 import type { WorkspacePatch } from '../../api/workspace';

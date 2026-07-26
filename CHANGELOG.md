@@ -3,6 +3,30 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.12.0] - 2026-07-27
+
+安全硬化·依赖收口续(MES-56,MES-55 审计例外后续):React 18 → 19 与 react-router 7 → 8 迁移,`npm audit --omit=dev` 对 GHSA-qwww-vcr4-c8h2 清零,审计残留项全部收口。仅前端依赖与 import 路径,无后端/数据模型/接口变更。
+
+### Security
+
+- **react-router 7.18.1 → 8.3.0(GHSA-qwww-vcr4-c8h2,high,清零)**:该公告为 RSC 模式 CSRF,明示「仅影响使用 unstable RSC API 的应用」;本站为纯客户端 SPA(声明式 `BrowserRouter` 库模式,全仓无 `unstable_` / `serverLoader` / `serverAction` / RSC 用法),攻击面不存在——MES-55 已按已记录例外处理。修复版 8.3.0 要求 React ≥19.2.7 / Node ≥22.22.0,本 Issue 作为独立迁移评估并落地:随修复版收口使 `npm audit --omit=dev` **全清(0 vulnerabilities)**,moderate / high / critical 均归零。
+
+### Changed
+
+- **React 18.3.1 → 19.2.8(精确 pin)**:react-router 8 peer 要求 `react`/`react-dom` ≥19.2.7,19.2.8 为满足该约束的当前发行版。回归面评估极小且实测为零:入口已用 `createRoot`(19 移除的 `ReactDOM.render` 从未使用);测试 `act` 全部来自 `@testing-library/react`(不经 19 移除的 `react-dom/test-utils`);全仓 `React.JSX.Element`(19 类型移除全局 JSX 命名空间,本站写法即新规范);无字符串 ref / 箭头 ref 回调(19 ref 清理函数语义无影响)、无函数组件 `defaultProps` / `propTypes` / `findDOMNode`;`forwardRef` 4 处(19 仍支持,仅软弃用)。依赖矩阵 peer 全部兼容:react-intl 7(peer 含 19)、zustand 5(peer `>=18`)、@testing-library/react 16.3(peer `^18||^19`)、@vitejs/plugin-react ^4.5.2。`@types/react` / `@types/react-dom` 同步升 19。
+- **react-router-dom 包移除,import 统一为 `react-router`**:v8 起 `react-router-dom` 不再发行(v7 已是纯再导出)。全仓 43 文件(页面 / shell / workspace / features / 测试工具)`from 'react-router-dom'` 机械替换为 `from 'react-router'`;所用全部为声明式库模式 API(`BrowserRouter` / `MemoryRouter` / `Routes` / `Route` / `Link` / `NavLink` / `Navigate` / `Outlet` / `useNavigate` / `useLocation` / `useParams` / `useMatch` / `useSearchParams`),v8 全兼容,typecheck 一次通过、零行为变更。
+- **Node 引擎 ≥20.19 → ≥22.22.0**:react-router 8 `engines` 要求。CI(`.github/workflows/frontend.yml` quality + e2e 两 job)`node-version` 20 → 22;docker compose 前端服务为 `nginx:alpine` 静态挂载(无容器内 Node 构建)、后端镜像为 Python,部署基线不受影响,Quick Start / docker compose 一键部署照旧。
+
+### Fixed
+
+- `IssueDetailPage` 侧栏连改测试的时序假设(测试缺陷,非实现回归):原用例在两次 PATCH 间假设每次都独立触发一轮整轮重取副作用并以同步 `getByTestId` 断言;React 19 被动副作用调度下两次 `reloadKey` 更新可合并为单次副作用执行(0→2),响应队列错位致误报。改为以可观察请求数同步收敛(第一轮落定后再发第二次变更),末态断言改异步 `findByTestId`。实现语义不丢:末次成功 PATCH 后必有收敛重取(reloadKey 终值触发副作用),仅省略冗余中间轮次。
+
+### Quality
+
+- 前端:vitest **1274 例全绿**(126 文件),全局覆盖率 **97.26% / 90.87% / 92.92% / 97.26%**(语句/分支/函数/行,≥90% 门禁不破);typecheck / lint(0 error,8 warning 均为存量 react-refresh/exhaustive-deps 与本次无关)/ 生产构建全绿;`npm audit --omit=dev` **0 vulnerabilities**。
+- 真实 e2e(真实 chromium):① mock 契约服务端 + dev server,CI e2e 套件 **30/30**(登录/路由/404/主题/i18n/快捷键/命令面板/实时增量合并/断线重放);② 真实后端全栈(docker compose:PostgreSQL 16 全新库 `alembic upgrade head` 0001→0012 + Redis 7 + 真实 uvicorn API/gateway,dev 鉴权)真实浏览器走查——注册(邮件校验门经 dev-mailbox 真实放行)→ 登录进壳 → 侧栏 `/issues` `/projects` `/members` 逐页点击 URL 随动 → 404 兜底,全程通过。联调专用 real-* 规约中 6 例失败经迁移前主干对照复现一致(规约早于邮件校验门、CI 不跑的存量失修项),与本次迁移无关。
+- 文档同步:README 状态表新增 MES-56 行并将 MES-55 残留备注标记为 v0.12.0 已清零;frontend/README 选型表 react-router-dom 7 → react-router 8(含 React ≥19.2.7 / Node ≥22.22.0 约束说明)、React 18 → 19、Quick Start 补 Node 版本要求。
+
 ## [0.11.12] - 2026-07-27
 
 MES-46 终局排期 MEDIUM×7 硬化池收口(MES-54):issue 模块 OCC 契约、留痕一致性、输入上限、状态机一致性与迁移事件脱敏。不回退 MES-48(H1/H2 鉴权 + 负向矩阵)与 MES-50(M1/M2 隔离)的任何修复。

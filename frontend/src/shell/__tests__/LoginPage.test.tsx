@@ -5,7 +5,7 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { beforeEach } from 'vitest';
 import { describe, expect, it } from 'vitest';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { useAuthStore } from '../../state/authStore';
 import { renderWithProviders } from '../../test-utils/render';
 import { LoginPage } from '../pages/LoginPage';

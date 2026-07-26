@@ -9,7 +9,7 @@
  * 状态渲染序:错误态(可重试)→ 骨架 → 内容。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
 import { Button, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

@@ -5,7 +5,7 @@
  * 创建入口打开 CreateWorkspaceWizard。工作区上下文内按钮显示当前工作区名。
  */
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../api/client';
 import { getApiClient } from '../api/instance';
 import { fetchAllWorkspaceSummaries } from '../api/workspace';

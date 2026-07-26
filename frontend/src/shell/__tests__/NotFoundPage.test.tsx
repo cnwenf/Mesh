@@ -3,7 +3,7 @@
  */
 import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../../test-utils/render';
 import { NotFoundPage } from '../pages/NotFoundPage';
 
