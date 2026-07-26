@@ -360,6 +360,20 @@ def _validate_wip(wip: Any) -> dict:
     return normalized
 
 
+def validate_display_fields(value: Any) -> list[str]:
+    """Validate display_fields: an array of non-empty column/field keys."""
+    if not isinstance(value, list):
+        raise _invalid("invalid_display_fields", "display_fields must be an array", path="$")
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            raise _invalid(
+                "invalid_display_fields",
+                "display_fields entries must be non-empty strings",
+                path=f"$.[{index}]",
+            )
+    return list(value)
+
+
 def validate_board_settings(value: Any) -> dict:
     """Validate board_settings (columns / collapsed / card_fields / wip)."""
     if not isinstance(value, dict):

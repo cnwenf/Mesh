@@ -18,9 +18,11 @@ from mesh.views.config import (
     PRIORITY_KEYS,
     STATE_CATEGORY_KEYS,
     validate_board_settings,
+    validate_display_fields,
     validate_filters,
     validate_group_by,
     validate_layout,
+    validate_name,
     validate_sort,
     validate_visibility,
 )
@@ -397,3 +399,26 @@ def test_column_key_constants() -> None:
         "cancelled",
     )
     assert PRIORITY_KEYS == ("urgent", "high", "medium", "low", "none")
+
+
+# ---------------------------------------------------------------------------
+# display_fields / name
+# ---------------------------------------------------------------------------
+
+
+def test_display_fields_valid_and_invalid() -> None:
+    assert validate_display_fields([]) == []
+    assert validate_display_fields(["status", "assignee"]) == ["status", "assignee"]
+    for bad in ("status", [1], [""], [None]):
+        with pytest.raises(ValidationError) as excinfo:
+            validate_display_fields(bad)
+        assert _error_code(excinfo) == "invalid_display_fields"
+
+
+def test_name_bounds() -> None:
+    assert validate_name("  Board  ") == "Board"
+    assert validate_name("x" * 100) == "x" * 100
+    for bad in ("", "   ", "x" * 101, None, 5):
+        with pytest.raises(ValidationError) as excinfo:
+            validate_name(bad)
+        assert _error_code(excinfo) == "invalid_name"
