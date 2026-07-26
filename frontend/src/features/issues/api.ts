@@ -212,11 +212,12 @@ export async function movePreview(
   });
 }
 
-/** 确认迁移:未携带 confirm:true → 422 move_confirmation_required(携带预览)。 */
+/** 确认迁移:未携带 confirm:true → 422 move_confirmation_required(携带预览)。
+ * `version` 必填(§3.8 乐观锁,回传 move-preview 返回的 version)。 */
 export async function moveIssue(
   client: MeshApiClient,
   issueId: string,
-  body: { target_project_id: string | null; confirm: boolean; version?: number },
+  body: { target_project_id: string | null; confirm: boolean; version: number },
 ): Promise<IssueSummary> {
   return client.request<IssueSummary>('POST', `${issuePath(issueId)}/move`, { body });
 }

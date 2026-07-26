@@ -217,6 +217,8 @@ export interface MovePreview {
   readonly identifier: string;
   readonly from_project_id: string | null;
   readonly target_project_id: string | null;
+  /** 确认迁移(第二步)必须回传的当前 version(§3.8)。 */
+  readonly version: number;
   readonly mapped_fields: readonly MovePreviewField[];
   readonly cleared_fields: readonly MovePreviewField[];
   readonly kept_fields: readonly string[];

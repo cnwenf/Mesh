@@ -19,8 +19,14 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.db.models.member import Member
-from mesh.errors import BusinessRuleError, MeshError, NotFoundError, ValidationError
-from mesh.issue.move import MoveService
+from mesh.errors import (
+    BusinessRuleError,
+    ForbiddenError,
+    MeshError,
+    NotFoundError,
+    ValidationError,
+)
+from mesh.issue.move import MoveService, apply_move_plan, move_activity_rows
 from mesh.issue.schemas import BulkRequest
 from mesh.issue.service import (
     UNSET,
@@ -74,6 +80,21 @@ class BulkService:
                             session, workspace_id=workspace_id, issue_id=uuid.UUID(raw_id)
                         )
                     except (ValueError, NotFoundError):
+                        previews.append({"issue_id": raw_id, "error": "not_found"})
+                        continue
+                    # MES-46 H2: the preview carries each issue's field
+                    # manifest, so every item is gated on the read permission
+                    # exactly like GET /issues/{id} — invisible issues land
+                    # as error markers (404→not_found for guests,
+                    # 403→forbidden for members), NEVER as a plan.
+                    try:
+                        await self._issues.assert_can_view_issue(
+                            session, viewer=actor, issue=issue
+                        )
+                    except ForbiddenError:
+                        previews.append({"issue_id": raw_id, "error": "forbidden"})
+                        continue
+                    except NotFoundError:
                         previews.append({"issue_id": raw_id, "error": "not_found"})
                         continue
                     previews.append(
@@ -171,17 +192,23 @@ class BulkService:
             from_project_id = issue.project_id
             source_project = await self._issues._project_of(session, issue)
             issue.project_id = target.id if target is not None else None
-            for mapped in plan["mapped_fields"]:
-                if mapped["field"] == "status":
-                    issue.status_id = uuid.UUID(mapped["to"]["id"])
-                    issue.state_category = mapped["to"]["category"]
-            for cleared in plan["cleared_fields"]:
-                if cleared["field"] == "milestone_id":
-                    issue.milestone_id = None
-                elif cleared["field"] == "cycle_id":
-                    issue.cycle_id = None
+            now = _now(self._issues._clock)
+            # Same single-transaction application semantics as the explicit
+            # move (status mapping with completed_at sync, cleared private
+            # fields — L3 parity) and the same §3.8 ⑥ audit trail with the
+            # mapping/clearing manifest (M3/L2 parity).
+            apply_move_plan(issue, plan, now=now)
             issue.version += 1
-            issue.updated_at = _now(self._issues._clock)
+            issue.updated_at = now
+            session.add_all(
+                move_activity_rows(
+                    workspace_id=workspace_id,
+                    issue=issue,
+                    actor=actor,
+                    from_project_id=from_project_id,
+                    plan=plan,
+                )
+            )
             await session.flush()
             payload = {
                 "id": str(issue.id),

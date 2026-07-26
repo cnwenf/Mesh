@@ -446,7 +446,13 @@ class ProjectService:
     async def assert_can_write(
         self, session: AsyncSession, *, viewer: Member, project: Project
     ) -> None:
-        """Write gate: project member/lead or workspace admin (project.md §3.4)."""
+        """Write gate: project member/lead or workspace admin (project.md §3.4).
+
+        Guests follow the view-gate convention (§3.3): a project without a
+        grant is INVISIBLE → 404, so the write gate cannot double as a
+        project-existence oracle; a visible (read-granted) project they
+        cannot write is 403.
+        """
         if project.archived_at is not None:
             raise BusinessRuleError("project is archived", code="project_archived")
         if self._is_workspace_manager(viewer):
@@ -457,6 +463,8 @@ class ProjectService:
             )
             if permission == "write":
                 return
+            if permission is None:
+                raise NotFoundError(_PROJECT_NOT_FOUND)
             raise ForbiddenError("not a project member")
         role = await self._project_role(session, project_id=project.id, member_id=viewer.id)
         if role in ("lead", "member"):

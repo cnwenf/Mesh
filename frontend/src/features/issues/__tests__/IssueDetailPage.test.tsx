@@ -323,6 +323,7 @@ describe('IssueDetailPage', () => {
       ],
       cleared_fields: [{ field: 'milestone_id', reason: '项目私有里程碑' }],
       kept_fields: ['title', 'identifier'],
+      version: 3,
     };
     const moved = { ...DETAIL, project_id: 'prj-2', version: 4 };
     const stub = queue(
@@ -361,6 +362,7 @@ describe('IssueDetailPage', () => {
       mapped_fields: [],
       cleared_fields: [],
       kept_fields: [],
+      version: 3,
     };
     const stub = queue(fakeResponse({ body: { data: preview } }));
     renderDetail();
@@ -425,6 +427,7 @@ describe('IssueDetailPage', () => {
       mapped_fields: [],
       cleared_fields: [{ field: 'milestone_id', reason: '项目私有里程碑' }],
       kept_fields: ['title', 'identifier'],
+      version: 3,
     };
     queue(fakeResponse({ body: { data: preview } }));
     renderDetail();
