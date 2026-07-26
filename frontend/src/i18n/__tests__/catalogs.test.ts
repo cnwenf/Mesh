@@ -235,6 +235,10 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     when: '2026-08-01 10:00',
     prefix: 'invtk_Ab3Xy9',
     supported: 'zh-CN, en',
+    // issue §4 文案占位符(MES-31)
+    succeeded: 9,
+    failed: 1,
+    field: 'priority',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

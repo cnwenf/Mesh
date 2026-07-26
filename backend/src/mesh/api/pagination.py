@@ -12,7 +12,7 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import Select, tuple_
@@ -24,6 +24,7 @@ DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 1000
 
 _TYPE_DATETIME = "dt"
+_TYPE_DATE = "date"
 _TYPE_STRING = "str"
 _TYPE_INT = "int"
 _TYPE_FLOAT = "float"
@@ -48,6 +49,8 @@ class Page:
 def _encode_sort_value(value: Any) -> tuple[str, Any]:
     if isinstance(value, datetime):
         return _TYPE_DATETIME, value.isoformat()
+    if isinstance(value, date):  # plain DATE sort keys (due_date, start_date)
+        return _TYPE_DATE, value.isoformat()
     if isinstance(value, bool):  # bool is an int subclass — reject explicitly
         raise ValueError("bool is not a supported cursor sort value")
     if isinstance(value, int):
@@ -62,6 +65,8 @@ def _encode_sort_value(value: Any) -> tuple[str, Any]:
 def _decode_sort_value(tag: str, raw: Any) -> Any:
     if tag == _TYPE_DATETIME:
         return datetime.fromisoformat(raw)
+    if tag == _TYPE_DATE:
+        return date.fromisoformat(raw)
     if tag == _TYPE_STRING:
         return str(raw)
     if tag == _TYPE_INT:

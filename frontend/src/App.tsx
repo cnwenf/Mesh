@@ -22,6 +22,8 @@ import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
+import { IssueDetailPage } from './features/issues/IssueDetailPage';
+import { IssuesPage } from './features/issues/IssuesPage';
 import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
 import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
@@ -109,6 +111,8 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="projects" element={<ProjectsPage />} />
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
+                <Route path="issues" element={<IssuesPage />} />
+                <Route path="issues/:issueId" element={<IssueDetailPage />} />
                 <Route path="board" element={<PlaceholderPage kind="board" />} />
                 <Route path="members" element={<MembersPage />} />
                 <Route path="cycles" element={<CyclesPage />} />

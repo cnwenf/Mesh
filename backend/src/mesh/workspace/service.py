@@ -299,6 +299,13 @@ class WorkspaceService:
                     workspace_id=workspace.id, key=prefix_key, kind="inbox"
                 )
             )
+            # Seed the canonical issue status set in the SAME transaction
+            # (issue.md §1.2.3 / README §6.3: at-least-one default per scope,
+            # guaranteed transactionally). Lazy import keeps the dependency
+            # direction workspace → issue one-way at module load.
+            from mesh.issue.statuses import seed_default_statuses
+
+            await seed_default_statuses(session, workspace_id=workspace.id)
             await session.flush()
             await emit_realtime(
                 session,

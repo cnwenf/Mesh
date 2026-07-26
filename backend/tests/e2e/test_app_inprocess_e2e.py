@@ -70,7 +70,7 @@ async def test_api_debug_error_sanitizes_500_inprocess(api):
 
 async def test_reconciliation_endpoint_inprocess(api, settings, workspace_factory, session_factory):
     workspace = await workspace_factory()
-    channel = f"issue:{workspace.id}"
+    channel = f"workspace:{workspace.id}:issues"
     for i in range(1, 3):
         await _publish(session_factory, workspace.id, channel, "issue.updated", {"v": i})
 
@@ -115,7 +115,7 @@ def test_gateway_websocket_flow_inprocess(settings, workspace_factory, session_f
 
     async def _seed():
         workspace = await workspace_factory()
-        channel = f"issue:{workspace.id}"
+        channel = f"workspace:{workspace.id}:issues"
         await _publish(session_factory, workspace.id, channel, "issue.updated", {"v": 1})
         return workspace, channel
 

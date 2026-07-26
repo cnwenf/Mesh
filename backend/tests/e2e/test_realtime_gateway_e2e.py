@@ -49,7 +49,7 @@ async def test_full_flow_auth_subscribe_replay_live_and_resync(
     gateway_server, api_server, session_factory, workspace_factory, redis_client
 ):
     workspace = await workspace_factory()
-    channel = f"issue:{workspace.id}"
+    channel = f"workspace:{workspace.id}:issues"
     token = f"mesh-dev:{workspace.id}"
 
     # Seed 3 events through the real outbox → projector → Redis fan-out path.
@@ -134,7 +134,7 @@ async def test_cross_tenant_subscription_is_forbidden(
 ):
     workspace_a = await workspace_factory(name="A", slug="gw-a")
     workspace_b = await workspace_factory(name="B", slug="gw-b")
-    channel = f"issue:{workspace_a.id}"
+    channel = f"workspace:{workspace_a.id}:issues"
     await _publish_via_relay(
         session_factory, workspace_a.id, channel, "issue.updated", {"v": 1}
     )
@@ -157,7 +157,7 @@ async def test_reconciliation_rest_requires_auth_and_tenant_match(
 ):
     workspace_a = await workspace_factory(name="A", slug="rest-a")
     workspace_b = await workspace_factory(name="B", slug="rest-b")
-    channel = f"issue:{workspace_a.id}"
+    channel = f"workspace:{workspace_a.id}:issues"
     await _publish_via_relay(
         session_factory, workspace_a.id, channel, "issue.updated", {"v": 1}
     )
