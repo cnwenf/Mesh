@@ -626,6 +626,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,**仅允许 `https`**(R2:统一 https-only,明文 `http` 的用户可控头像/Logo URL 是混合内容弱攻击面,不再提供可选 http);members/users/agents/workspaces/squads 相关写入端点统一校验 |
 | SSRF 防护 | 一切服务端代为发起的外联(技能来源拉取、autopilot 出向 HTTP、平台托管 runtime 的 checkout)禁止私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254`),仅允许公网地址或显式白名单 |
 | WebSocket 鉴权 | **禁止在 URL query 参数中传递 token**(会落入访问日志与中间代理);使用**连接建立后首帧认证**单一机制(客户端连接成功后发送 `{op:'auth',token}` → 服务端回复 `auth_ok`;v0.1.0 起实现基线,前后端已收敛于首帧,不再保留子协议可选项) |
+| WebSocket DoS 硬化 | 每连接资源护栏(M4):**首帧认证超时 5s**(`MESH_WS_AUTH_TIMEOUT`,未认证连接快速释放);**入站帧限速 30/滚动秒**,超限回 `rate_limited` 错误帧后断开;**单连接订阅上限 256**(`MESH_WS_MAX_SUBSCRIPTIONS`),超限对新频道回 `too_many_subscriptions` 错误帧(不断开,已订阅频道重订阅幂等放行);**传输层帧上限 64KB**(uvicorn `--ws-max-size`,与 `MESH_WS_MAX_SIZE_BYTES` 一致,compose 已内置);**错误帧不回显客户端原始内容**(unknown-op / forbidden 消息为固定文案,频道关联仅走结构化 `channel` 字段) |
 
 ### 6.17 集成平台契约(唯一权威,R2 必修-B;详 Spec 见 integrations.md)
 

@@ -40,5 +40,8 @@ async def realtime_ws_endpoint(websocket: WebSocket) -> None:
         subscriber_factory=lambda: RedisSubscriber(state.redis),
         replay_page_size=state.settings.realtime_replay_page_size,
         ping_interval=state.settings.ws_ping_interval,
+        auth_timeout=state.settings.ws_auth_timeout,
+        max_subscriptions=state.settings.ws_max_subscriptions,
+        max_frames_per_second=state.settings.ws_max_frames_per_second,
     )
     await session.run()

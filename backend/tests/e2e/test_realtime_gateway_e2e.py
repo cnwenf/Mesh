@@ -7,6 +7,7 @@ Covers §9 T6 (stale cursor → resync_required → REST reconciliation) and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 
@@ -153,6 +154,59 @@ async def test_bool_and_negative_resume_from_rejected_over_real_ws(
         assert (await _recv_frame(ws))["op"] == "ping"
     finally:
         await ws.close()
+
+
+# --- M4: DoS hardening over a real socket ---
+
+
+async def test_frame_flood_is_rate_limited_and_connection_closed(
+    gateway_server, workspace_factory
+):
+    """A client flooding frames past the per-second budget gets one
+    rate_limited error frame and is dropped — not serviced indefinitely."""
+    workspace = await workspace_factory()
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+
+        # Default budget is 30 frames/rolling second — flood well past it.
+        for _ in range(60):
+            await ws.send(json.dumps({"op": "ping"}))
+
+        saw_rate_limited = False
+        with contextlib.suppress(websockets.ConnectionClosed):
+            for _ in range(100):
+                frame = await _recv_frame(ws, timeout=10)
+                if frame.get("code") == "rate_limited":
+                    saw_rate_limited = True
+                    break
+        assert saw_rate_limited
+
+        # The server closes the connection right after the error frame.
+        with pytest.raises(websockets.ConnectionClosed):
+            while True:
+                await _recv_frame(ws, timeout=10)
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close()
+
+
+async def test_oversized_frame_is_rejected_at_transport(gateway_server, workspace_factory):
+    """A frame over the transport ceiling (--ws-max-size 65536, mirroring
+    compose) kills the connection at the transport layer."""
+    workspace = await workspace_factory()
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+        await ws.send(json.dumps({"op": "ping", "filler": "x" * 100_000}))
+        with pytest.raises(websockets.ConnectionClosed):
+            for _ in range(10):
+                await _recv_frame(ws, timeout=10)
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close()
 
 
 async def test_cross_tenant_subscription_is_forbidden(
