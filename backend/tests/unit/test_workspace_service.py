@@ -485,6 +485,19 @@ async def test_restore_slug_conflict_409(session_factory):
 
 async def test_occupy_project_prefix_conflicts(session_factory, workspace_factory):
     workspace = await workspace_factory()
+
+    async def _project(key: str) -> uuid.UUID:
+        async with session_factory() as session, session.begin():
+            return (
+                await session.execute(
+                    text(
+                        "INSERT INTO projects (workspace_id, name, key) "
+                        "VALUES (:ws, :n, :k) RETURNING id"
+                    ),
+                    {"ws": workspace.id, "n": f"P{key}", "k": key},
+                )
+            ).scalar_one()
+
     async with session_factory() as session, session.begin():
         await session.execute(
             text(
@@ -499,7 +512,8 @@ async def test_occupy_project_prefix_conflicts(session_factory, workspace_factor
         with pytest.raises(Conflict) as excinfo:
             async with session.begin():
                 await occupy_project_prefix(
-                    session, workspace_id=workspace.id, key="APP", project_id=uuid.uuid4()
+                    session, workspace_id=workspace.id, key="APP",
+                    project_id=await _project("APX"),
                 )
         assert excinfo.value.code == "project_key_taken"
 
@@ -507,7 +521,7 @@ async def test_occupy_project_prefix_conflicts(session_factory, workspace_factor
     # via the inbox row; retired is just another registered kind).
     async with session_factory() as session, session.begin():
         await occupy_project_prefix(
-            session, workspace_id=workspace.id, key="WEB", project_id=uuid.uuid4()
+            session, workspace_id=workspace.id, key="WEB", project_id=await _project("WEB")
         )
 
 

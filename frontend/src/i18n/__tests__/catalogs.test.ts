@@ -221,6 +221,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     date: new Date('2026-07-25T08:00:00Z'),
     n: 3,
     total: 10,
+    // project §4 文案占位符(MES-30)
+    done: 5,
+    title: 'v1.0',
     // workspace §4 文案占位符(MES-26)
     slug: 'acme',
     role: 'member',

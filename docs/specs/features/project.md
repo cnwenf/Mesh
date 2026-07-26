@@ -93,6 +93,17 @@
 - 项目级标签/自定义字段的定义 → `label-property.md`。
 - agent 被分派后的执行运行时 → `agent.md`(本模块仅负责把负责人指向统一成员)。
 
+**跨模块延期 / 归属(MES-30 验收收口,owner + 增量显式登记,与 README §12 #17–#21 对齐)**:
+
+| 能力 | Owner Spec | 增量 | 本模块现状 |
+| --- | --- | --- | --- |
+| 周期结束未完成 issue 顺延/退回待办(§1.2.5/§4.4/§5.1) | `issue.md` | issue 增量 | 仅实现 `cycles.auto_roll` 生成下一周期;未完成项的实际搬运需 issue 的 `cycle_id` 与状态流转 |
+| 项目通知触发点事件登记(§4.5:health 变差/里程碑临近逾期/周期开始结束/加入项目) | `comment-inbox.md` | comment-inbox 增量 | 仅产出 outbox 业务事件;通知类型码与订阅/去噪矩阵由通知 owner 登记到 §6.7 |
+| 项目分组(§1.2.1「项目分组(可选)」) | `label-property.md` | label-property 增量 | 不另建 `project_groups` 表;分组语义复用标签/分组作用域 |
+| 里程碑时间线/甘特可视化(§1.2.3/§4.2) | `kanban.md` | kanban 增量(同 README §12 #15/#20) | 仅提供里程碑数据 + `overdue` 派生态;时间线/甘特 UI 延后(数据先行、视图延后,与 §12 不矛盾) |
+
+> 上述项均为**跨模块延期**,本模块不视为缺陷:数据/接口侧已为下游预留挂载点(`cycles.auto_roll`、里程碑 `overdue`、outbox 业务事件、标签作用域),具体机制/视图/通知登记由 owner Spec 在各自增量收口。
+
 ---
 
 ## 2. 数据模型
@@ -502,7 +513,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 - **分页**:项目列表、更新历史、里程碑、周期均游标分页;请求 `?limit=&cursor=`,响应 `{"data","next_cursor"}`(末页 `next_cursor=null`)。默认按 `created_at DESC, id` 排序,游标内部为 base64 编码的 `(sort_key, id)`。**包络 / 游标 / 错误信封以 README §6.14 为权威。**
 - **鉴权**:
   - 读:工作区成员可读 `public` 项目;`private` 项目需 `project_members` 命中(或工作区 admin 及以上)。
-  - 写:项目 `member`/`lead` 或工作区 `admin` 及以上;删除/归档需 `lead` 或 `admin`;成员管理需 `lead` 或 `admin`。
+  - 写:项目 `member`/`lead` 或工作区 `admin` 及以上;删除/归档需 `lead` 或 `admin`;成员管理需 `lead` 或 `admin`;**改派负责人(`lead_member_id` 变更或置空)需现 `lead` 或工作区 `admin` 及以上**——普通 `member`/guest `write` 授权不得自指派或改派 lead(否则经 lead 提权解锁删除/归档/成员管理,即垂直越权)。
 - **限流**:写端点按工作区维度限流,超限返回 429。
 
 ### 3.5 WebSocket 事件
@@ -552,7 +563,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。**成
 - **里程碑时间线**:横向时间轴,节点=里程碑,标注目标日与完成度,逾期(`open` 且过 target_date)标红。
 - **周期切换器**:看板/列表上方下拉,选"第 12 迭代"即按周期过滤 issue;周期页头部显示燃尽与点数。
 - **项目状态徽章**:`planning`/`active`/`paused`/`completed`/`cancelled` 用不同颜色标签。
-- **负责人选择器**:混合列出人类与 agent(各带类型图标),复用统一成员选择器(见 member.md)。
+- **负责人选择器**:混合列出人类与 agent(各带类型图标),复用统一成员选择器(见 member.md)。**仅现 `lead` 或工作区 `admin` 及以上可改派/置空(§3.4,后端为权威校验);非 lead/admin 的项目设置页该选择器只读(禁用),避免暴露无权限操作。**
 
 ### 4.3 关键交互流程
 
@@ -600,6 +611,7 @@ planning ──启动──► active ──完成──► completed
 - [ ] **identifier 语义不可变**:删除项目仅把其 issue 的 `project_id` 置 NULL(`issues.project_id` 复合 FK `ON DELETE SET NULL (project_id)` 列级,仅置空归属列,`workspace_id` 保持非空,README §6.2 第 6 条,经 §9 T18 实测),issue 的 `identifier`(`<key>-<number>`)**保持不变**;项目不得跨工作区迁移;issue 跨项目迁移只改 `project_id`(identifier 不变,README §6.3);历史 `WEB-123` 永远指向同一 issue,无歧义。
 - [ ] 归档后项目只读:对已归档项目的写操作返回 422 `project_archived`;取消归档后恢复可写。
 - [ ] `private` 项目仅 `project_members` 命中者或工作区 admin 可见;其他成员访问返回 403/404。
+- [ ] **改派负责人鉴权(§3.4,PJ-H1 回归)**:普通项目 `member`、持 `write` 授权的 guest `PATCH /projects/{id}` 变更或置空 `lead_member_id`(含自指派)返回 403 `forbidden` 且数据库行不变;同一请求内夹带的其他字段修改一并回滚;失败自指派后 `DELETE /projects/{id}` 仍 403(提权环闭合);现 `lead` 改派/置空、工作区 `admin` 改派正常 200。
 - [ ] 提交健康度更新会:(a) 写入 `project_updates` 留痕,(b) 回写 `projects.health`,(c) 广播 `project_update.added` 与 `project.updated`。
 - [ ] 项目进度 = 子 issue `state_category='done'` 占比,`cancelled` 不计入未完成;`GET /projects/{id}` 返回 `progress`/`open_issues`/`done_issues`。
 - [ ] issue 状态变更经 `project.updated` 广播进度,项目页进度条实时刷新。

@@ -13,6 +13,7 @@ export type NavKey =
   | 'projects'
   | 'board'
   | 'members'
+  | 'cycles'
   | 'chat'
   | 'automation'
   | 'settings';
@@ -28,6 +29,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'projects', to: '/projects' },
   { key: 'board', to: '/board' },
   { key: 'members', to: '/members' },
+  { key: 'cycles', to: '/cycles' },
   { key: 'chat', to: '/chat' },
   { key: 'automation', to: '/automation' },
   { key: 'settings', to: '/settings' },

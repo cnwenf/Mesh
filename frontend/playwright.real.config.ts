@@ -10,7 +10,7 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['real-backend.spec.ts', 'workspace-flow.spec.ts'],
+  testMatch: ['real-backend.spec.ts', 'workspace-flow.spec.ts', 'real-projects.spec.ts', 'real-lead-gate.spec.ts'],
   timeout: 120_000,
   retries: 0,
   workers: 1,

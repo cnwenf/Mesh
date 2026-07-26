@@ -72,9 +72,25 @@ async def _setup(session_factory):
     return service, ws, owner, guest
 
 
+async def _add_project(session_factory, ws):
+    """Create a real project row (the access FK references projects)."""
+    from sqlalchemy import text
+
+    async with session_factory() as session, session.begin():
+        return (
+            await session.execute(
+                text(
+                    "INSERT INTO projects (workspace_id, name, key) "
+                    "VALUES (:ws, :n, :k) RETURNING id"
+                ),
+                {"ws": ws, "n": f"P{uuid.uuid4().hex[:6]}", "k": uuid.uuid4().hex[:6].upper()},
+            )
+        ).scalar_one()
+
+
 async def test_grant_and_list_project_access(session_factory):
     service, ws, owner, guest = await _setup(session_factory)
-    project_id = uuid.uuid4()
+    project_id = await _add_project(session_factory, ws)
     created = await service.grant_project_access(
         actor=owner, workspace_id=ws, member_id=guest.id,
         project_id=project_id, permission="read",
@@ -108,7 +124,7 @@ async def test_grant_invalid_permission(session_factory):
 
 async def test_grant_upsert_updates_permission(session_factory):
     service, ws, owner, guest = await _setup(session_factory)
-    project_id = uuid.uuid4()
+    project_id = await _add_project(session_factory, ws)
     await service.grant_project_access(
         actor=owner, workspace_id=ws, member_id=guest.id,
         project_id=project_id, permission="read",
@@ -125,7 +141,7 @@ async def test_grant_upsert_updates_permission(session_factory):
 
 async def test_revoke_is_immediate_and_idempotent(session_factory):
     service, ws, owner, guest = await _setup(session_factory)
-    project_id = uuid.uuid4()
+    project_id = await _add_project(session_factory, ws)
     await service.grant_project_access(
         actor=owner, workspace_id=ws, member_id=guest.id,
         project_id=project_id, permission="read",
@@ -172,5 +188,14 @@ async def test_cross_workspace_member_not_found(session_factory):
     with pytest.raises(NotFoundError):
         await service.grant_project_access(
             actor=owner, workspace_id=ws, member_id=owner_b.id,
+            project_id=uuid.uuid4(), permission="read",
+        )
+
+
+async def test_grant_missing_project_not_found(session_factory):
+    service, ws, owner, guest = await _setup(session_factory)
+    with pytest.raises(NotFoundError):
+        await service.grant_project_access(
+            actor=owner, workspace_id=ws, member_id=guest.id,
             project_id=uuid.uuid4(), permission="read",
         )
