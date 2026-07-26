@@ -592,6 +592,23 @@ async def test_remove_last_owner_conflicts(session_factory):
     assert excinfo.value.code == "last_owner"
 
 
+async def test_remove_disabled_co_owner_is_allowed(session_factory):
+    """Removing a DISABLED owner cannot reduce the active-owner count, so the
+    guard must not fire (invariant is about ACTIVE owners, review MB-M2)."""
+    service, ws, owner, plain, *_ = await _setup(session_factory)
+    await change_member_role(
+        session_factory, actor=owner, workspace_id=ws, member_id=plain.id, new_role="owner"
+    )
+    await service.update_member(
+        actor=owner, workspace_id=ws, member_id=plain.id, patch=MemberPatch(status="disabled")
+    )
+    result = await service.remove_member(actor=owner, workspace_id=ws, member_id=plain.id)
+    assert result["removed"] is True
+    async with session_factory() as session:
+        fresh = await session.scalar(select(Member).where(Member.id == plain.id))
+    assert fresh.status == "removed"
+
+
 async def test_remove_already_removed_404(session_factory):
     service, ws, owner, plain, *_ = await _setup(session_factory)
     await service.remove_member(actor=owner, workspace_id=ws, member_id=plain.id)
