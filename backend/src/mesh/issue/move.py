@@ -172,7 +172,10 @@ class MoveService:
 
         mapped_fields: list[dict] = []
         status = await session.scalar(
-            select(IssueStatus).where(IssueStatus.id == issue.status_id)
+            select(IssueStatus).where(
+                IssueStatus.id == issue.status_id,
+                IssueStatus.workspace_id == workspace_id,
+            )
         )
         if (
             status is not None
@@ -198,7 +201,10 @@ class MoveService:
         cleared_fields: list[dict] = []
         if issue.milestone_id is not None:
             milestone = await session.scalar(
-                select(Milestone).where(Milestone.id == issue.milestone_id)
+                select(Milestone).where(
+                    Milestone.id == issue.milestone_id,
+                    Milestone.workspace_id == workspace_id,
+                )
             )
             if milestone is not None:
                 cleared_fields.append(
@@ -209,7 +215,11 @@ class MoveService:
                     }
                 )
         if issue.cycle_id is not None:
-            cycle = await session.scalar(select(Cycle).where(Cycle.id == issue.cycle_id))
+            cycle = await session.scalar(
+                select(Cycle).where(
+                    Cycle.id == issue.cycle_id, Cycle.workspace_id == workspace_id
+                )
+            )
             if cycle is not None and cycle.project_id is not None:
                 cleared_fields.append(
                     {

@@ -57,7 +57,7 @@ from mesh.issue.filters import (
     LIST_STATEMENT_TIMEOUT_MS,
     coerce_date,
     compile_filter_tree,
-    validate_flat_condition_count,
+    validate_combined_condition_count,
 )
 from mesh.issue.graph import detect_parent_cycle, lock_issue_graph
 from mesh.issue.schemas import CreateIssueRequest
@@ -151,6 +151,15 @@ def _limit_page(limit: int | None) -> int:
     return min(limit, MAX_PAGE_LIMIT)
 
 
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so ``q`` matches as a literal substring (§3.2).
+
+    The query stays parameterised (no injection surface) — this only stops
+    user-supplied ``%`` / ``_`` / ``\\`` from widening the match set.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _parse_uuid(raw: str | uuid.UUID | None, *, field: str) -> uuid.UUID | None:
     """Request schemas carry UUIDs as strings; normalize with a 400 on junk."""
     if raw is None:
@@ -214,7 +223,10 @@ class IssueService:
         self, session: AsyncSession, issue: Issue, *, with_children_progress: bool = False
     ) -> dict:
         status = await session.scalar(
-            select(IssueStatus).where(IssueStatus.id == issue.status_id)
+            select(IssueStatus).where(
+                IssueStatus.id == issue.status_id,
+                IssueStatus.workspace_id == issue.workspace_id,
+            )
         )
         project = None
         if issue.project_id is not None:
@@ -735,13 +747,19 @@ class IssueService:
     # list (filter / sort / group, §3.2 / §3.5 / §6.14)
     # ------------------------------------------------------------------
 
-    def _base_visibility_clause(self, viewer: Member, session: AsyncSession):
-        """SQL filter restricting rows to what the viewer may read."""
+    def _base_visibility_clause(self, viewer: Member, workspace_id: uuid.UUID):
+        """SQL filter restricting rows to what the viewer may read.
+
+        Every subquery is anchored on ``workspace_id`` (README §6.2 rule 5/6):
+        the outer ``Issue.workspace_id`` filter plus RLS already guarantee
+        correctness — this also keeps the subqueries off cross-tenant scans.
+        """
         if role_satisfies(viewer.role, "project:manage"):
             return None
         if viewer.role == "guest":
             granted = select(MemberProjectAccess.project_id).where(
-                MemberProjectAccess.member_id == viewer.id
+                MemberProjectAccess.member_id == viewer.id,
+                MemberProjectAccess.workspace_id == workspace_id,
             )
             return or_(
                 Issue.project_id.in_(granted),
@@ -749,10 +767,13 @@ class IssueService:
                 Issue.reporter_id == viewer.id,
             )
         member_projects = select(ProjectMember.project_id).where(
-            ProjectMember.member_id == viewer.id
+            ProjectMember.member_id == viewer.id,
+            ProjectMember.workspace_id == workspace_id,
         )
         visible_projects = select(Project.id).where(
-            Project.visibility == "public", Project.deleted_at.is_(None)
+            Project.workspace_id == workspace_id,
+            Project.visibility == "public",
+            Project.deleted_at.is_(None),
         )
         return or_(
             Issue.project_id.is_(None),
@@ -812,7 +833,9 @@ class IssueService:
             )
             if value is not None
         )
-        validate_flat_condition_count(flat_conditions)
+        # §6.14: flat query params and the structured tree share ONE
+        # 20-condition budget (MES-51 L6 — counting them apart allowed 32).
+        validate_combined_condition_count(flat_conditions, filters)
         page_limit = _limit_page(limit)
 
         async with self._factory() as session:
@@ -823,7 +846,7 @@ class IssueService:
             stmt = select(Issue).where(
                 Issue.workspace_id == workspace_id, Issue.deleted_at.is_(None)
             )
-            visibility = self._base_visibility_clause(viewer, session)
+            visibility = self._base_visibility_clause(viewer, workspace_id)
             if visibility is not None:
                 stmt = stmt.where(visibility)
             if status_id is not None:
@@ -849,9 +872,12 @@ class IssueService:
             if due_after is not None:
                 stmt = stmt.where(Issue.due_date >= due_after)
             if q is not None:
-                pattern = f"%{q.strip()}%"
+                pattern = f"%{_escape_like(q.strip())}%"
                 stmt = stmt.where(
-                    or_(Issue.title.ilike(pattern), Issue.identifier.ilike(pattern))
+                    or_(
+                        Issue.title.ilike(pattern, escape="\\"),
+                        Issue.identifier.ilike(pattern, escape="\\"),
+                    )
                 )
             if filters is not None:
                 compiled = compile_filter_tree(
@@ -1067,11 +1093,17 @@ class IssueService:
             return summary["name"] if summary is not None else key
         if group_by == "project" and key != "no_project":
             name = await session.scalar(
-                select(Project.name).where(Project.id == uuid.UUID(key))
+                select(Project.name).where(
+                    Project.id == uuid.UUID(key), Project.workspace_id == workspace_id
+                )
             )
             return name or key
         if group_by == "cycle" and key != "no_cycle":
-            name = await session.scalar(select(Cycle.name).where(Cycle.id == uuid.UUID(key)))
+            name = await session.scalar(
+                select(Cycle.name).where(
+                    Cycle.id == uuid.UUID(key), Cycle.workspace_id == workspace_id
+                )
+            )
             return name or key
         return key.replace("_", " ").title()
 
@@ -1212,7 +1244,10 @@ class IssueService:
         if not bool(settings.get("status_strict_mode", False)):
             return
         current = await session.scalar(
-            select(IssueStatus).where(IssueStatus.id == current_status_id)
+            select(IssueStatus).where(
+                IssueStatus.id == current_status_id,
+                IssueStatus.workspace_id == workspace_id,
+            )
         )
         allowed = [str(t) for t in (current.allowed_transitions or [])] if current else []
         if str(target_status.id) not in allowed:

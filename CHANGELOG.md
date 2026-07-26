@@ -3,8 +3,30 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.11.10] - 2026-07-27
+## [0.11.11] - 2026-07-27
 
+MES-46 终局排期 issue 模块 LOW×8 + 文档瑕疵×1 收口(MES-51):统一约定 / 收敛口径 / 补实测类硬化,均无泄露(复合 FK + RLS + 外层 workspace 过滤兜底)。
+
+### Security
+
+- **L1 单 id 查询统一补 workspace_id 谓词**:`render_issue` 状态渲染、分组 `project`/`cycle` 标签、严格模式当前状态读取,以及 `compute_plan` 的 status/milestone/cycle 解析共七处按裸 id 查询补 `workspace_id` 谓词。复合 FK(§6.2)与 RLS 已保正确性,此处统一「租户查询必带 workspace_id」约定,owner 回退形态(未配置 app 角色)下亦不发生跨租读取。
+- **L2 可见性子查询补 workspace_id 谓词**:`_base_visibility_clause` 的 member_projects / granted / visible_projects 三个子查询补租户锚(外层 `Issue.workspace_id` 过滤 + RLS 之外的扫描面收敛,避免跨租全表扫描)。
+- **L3 无前缀端点统一 404 口径**:`/issues/{id}`、`/statuses/{id}`、`/issue-templates/{id}`、`/issues/bulk` 经 SECURITY DEFINER 解析器定位 workspace 后走成员门;非成员原回 "workspace not found",与「资源不存在」的 "xxx not found" 构成两态存在性 oracle(UUIDv4 不可盲扫、不泄露内容,但可判定任意 UUID 是否为真实资源,含软删除)。`_context_for` 将成员门 404 统一转写为资源级消息(16 个调用点),两态不可区分(对照 workspace.md §5.3)。
+- **L5 搜索 q 转义 LIKE 通配符**:列表搜索 `q` 中的 `%` / `_` / `\` 转义后按字面子串匹配(`ilike ... escape`),查询保持参数化(无注入面),消除用户注入通配符展宽可见域内匹配面的契约偏差(issue.md §3.2)。
+- **L6 过滤条件合并计数**:扁平查询参数(最多 12)与 `filters` 树(≤20)原各自独立校验、合计最多 32,与 §6.14「最大条件数 20」口径偏差。改为共享单一 20 条件预算(`validate_combined_condition_count`),超限 `400 filter_too_complex`;issue.md §3.2/§5 同步合并计数口径。
+- **L7 bulk 未确认预览全量化**:`POST /issues/bulk` 未确认聚合预览原截断前 20 条而确认应用最多 100 条,第 21–100 项的映射/清除清单确认前不可见(§3.8 预览→确认契约偏差)。改为覆盖全部条目(schema 上限 100,开销可控);MES-48 逐条读门负向矩阵不回退。issue.md §3.8 同步全量口径。
+- **L8 guest 写门负向测试补齐**:guest 无授权项目 → 404(而非 403,消除写门存在性 oracle)、只读授权 → 403、写授权放行的三分支负向测试补齐(实现已由 0.11.9 H1/H2 批次落地,与 `assert_can_view` 口径一致)。
+
+### Quality
+
+- **L4 issue 五表 RLS 实测补齐**:新增 `tests/e2e/test_issue_rls_e2e.py`——mesh_app 角色对 `issues` / `issue_statuses` / `issue_dependencies` / `issue_activity` / `issue_templates` 五表真实 PostgreSQL 16 实测:GUC 未设 fail-closed(查询即报错)、设 GUC 仅见本租行、跨租 INSERT 被拒;新增 `tests/unit/test_issue_rls_schema.py` rowsecurity 启用 + `mesh_<table>_tenant` 策略锚定 `mesh.workspace_id` 断言(与 realtime / workspace 域实测同层)。
+- 回归:新增 `tests/unit/test_issue_tenant_predicates.py`(owner 回退形态跨租不可见回归:分组标签回退 key、严格模式视异租当前状态为空、可见性子查询谓词断言);L3 跨租/不存在/软删统一 404 实测;L5 通配符字面匹配实测;L6 合并计数 21→400 / 20→放行实测;L7 25 条预览全量实测。既有 T1/T18/T19/T22 与全量单测、真实 e2e 不回退;ruff 全绿;`pytest-cov` ≥90% 门禁。
+
+### Fixed
+
+- **迁移 0010 docstring 瑕疵**:`0010_status_strict_mode.py` docstring 的 Revision ID / Revises 误写 0009(代码 `revision="0010"` / `down_revision="0009"` 正确,迁移链不受影响),修正为 `Revision ID: 0010` / `Revises: 0009`。
+
+## [0.11.10] - 2026-07-27
 安全硬化·依赖收口(MES-46 终局独立扫描项,MES-55,两轮验收合并交付):react-router 审计项清零 + 登录回跳守卫升级为浏览器 URL 解析器等价校验(堵 TAB/LF/CR 控制字符归一化开放重定向绕过,CVE-2025-68470 同族)。仅前端依赖与 auth 页面/守卫,无后端/数据模型变更。
 
 ### Security
