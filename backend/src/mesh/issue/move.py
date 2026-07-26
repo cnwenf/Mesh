@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.issue import Issue, IssueActivity
 from mesh.db.models.member import Member
 from mesh.db.models.project import Cycle, Milestone, Project
-from mesh.errors import BusinessRuleError, ConflictError, ValidationError
+from mesh.errors import BusinessRuleError, ConflictError
 from mesh.issue.service import (
     IssueService,
     _isoformat,
@@ -114,6 +114,37 @@ def move_activity_rows(
     return rows
 
 
+def redact_move_payload(payload: dict) -> dict:
+    """A ``project_changed`` payload safe for channels non-source-members read.
+
+    A private→public move reaches every workspace member, but the plan's
+    source-side copies carry private-project readable metadata: the source
+    status ``name`` inside ``mapped_fields[].from`` and the milestone /
+    cycle titles inside ``cleared_fields[].items``. The redacted copy keeps
+    the structural markers (field, reason, category, ``from_project_id``,
+    ``to_project_id``) and the target-side ``to`` snapshot (the destination
+    is public, so its statuses are readable by everyone anyway), and drops
+    every source-owned readable value. The full manifest remains in the
+    permission-gated ``issue_activity`` trail (§3.8 ⑥) — realtime consumers
+    that need it refetch through the authorized read path.
+    """
+    redacted_mapped = []
+    for entry in payload.get("mapped_fields") or []:
+        item: dict = {"field": entry.get("field"), "reason": entry.get("reason")}
+        if entry.get("to") is not None:
+            item["to"] = entry["to"]
+        source = entry.get("from")
+        if isinstance(source, dict) and source.get("category") is not None:
+            # category marker only — never the private status name/color
+            item["from"] = {"category": source["category"]}
+        redacted_mapped.append(item)
+    redacted_cleared = [
+        {"field": entry.get("field"), "reason": entry.get("reason")}
+        for entry in payload.get("cleared_fields") or []
+    ]
+    return {**payload, "mapped_fields": redacted_mapped, "cleared_fields": redacted_cleared}
+
+
 def _jsonify_status(rendered: dict) -> dict:
     """Make a rendered status plain-JSON-safe (the move plan travels inside
     error ``details`` envelopes, which the §6.14 handler serializes without
@@ -123,6 +154,7 @@ def _jsonify_status(rendered: dict) -> dict:
         "created_at": _isoformat(rendered.get("created_at")),
         "updated_at": _isoformat(rendered.get("updated_at")),
     }
+
 
 KEPT_FIELDS = [
     "title",
@@ -261,17 +293,13 @@ class MoveService:
             from mesh.db.tenant import set_tenant_context
 
             await set_tenant_context(session, workspace_id)
-            issue = await self._issues._load_issue(
-                session, workspace_id=workspace_id, issue_id=issue_id
-            )
+            issue = await self._issues._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
             await self._issues.assert_can_view_issue(session, viewer=viewer, issue=issue)
             target = await self._target_project(
                 session, workspace_id=workspace_id, target_project_id=target_project_id
             )
             if target is not None:
-                await self._issues._projects.assert_can_write(
-                    session, viewer=viewer, project=target
-                )
+                await self._issues._projects.assert_can_write(session, viewer=viewer, project=target)
             return await self.compute_plan(
                 session, workspace_id=workspace_id, issue=issue, target_project=target
             )
@@ -288,9 +316,13 @@ class MoveService:
     ) -> dict:
         if confirm and expected_version is None:
             # §3.8 step 2: a confirmed move must carry the current version
-            # (optimistic lock). The preview hands the version out.
-            raise ValidationError(
-                "move requires the current version",
+            # (optimistic lock). The preview hands the version out. Defense
+            # in depth under the schema boundary (MoveRequest enforces the
+            # same rule → 422 move_version_required at the API edge); direct
+            # service callers get the identical named-code 422.
+            raise BusinessRuleError(
+                "confirmed move requires the current version",
+                code="move_version_required",
                 details={"field": "version", "hint": "echo preview.version back"},
             )
         factory = self._issues._factory
@@ -299,9 +331,7 @@ class MoveService:
                 from mesh.db.tenant import set_tenant_context
 
                 await set_tenant_context(session, workspace_id)
-                issue = await self._issues._load_issue(
-                    session, workspace_id=workspace_id, issue_id=issue_id
-                )
+                issue = await self._issues._load_issue(session, workspace_id=workspace_id, issue_id=issue_id)
                 # MES-46 H1: the 422 preview envelope carries the full field
                 # manifest, so it is authorized exactly like the preview
                 # endpoint and the confirming transaction — AND in the same
@@ -316,9 +346,7 @@ class MoveService:
                     session, workspace_id=workspace_id, target_project_id=target_project_id
                 )
                 if target is not None:
-                    await self._issues._projects.assert_can_write(
-                        session, viewer=actor, project=target
-                    )
+                    await self._issues._projects.assert_can_write(session, viewer=actor, project=target)
                 plan = await self.compute_plan(
                     session, workspace_id=workspace_id, issue=issue, target_project=target
                 )
@@ -339,13 +367,8 @@ class MoveService:
                 session, workspace_id=workspace_id, target_project_id=target_project_id
             )
             if target is not None:
-                await self._issues._projects.assert_can_write(
-                    session, viewer=actor, project=target
-                )
-            if (
-                expected_version is not None
-                and issue.version != expected_version
-            ):
+                await self._issues._projects.assert_can_write(session, viewer=actor, project=target)
+            if expected_version is not None and issue.version != expected_version:
                 raise ConflictError(
                     "issue was modified concurrently",
                     code="conflict",
@@ -390,12 +413,20 @@ class MoveService:
                 "version": issue.version,
                 "updated_at": _isoformat(issue.updated_at),
             }
+            # Private source → the plan carries source-owned readable
+            # metadata (status names, milestone/cycle titles). Once the
+            # issue is readable by the whole workspace (the public-target
+            # broadcast below, or the issue channel any member may join now
+            # that the card is public) that copy must be redacted; the
+            # full manifest stays in the permission-gated activity trail.
+            source_private = source_project is not None and source_project.visibility != "public"
+            broadcast_payload = redact_move_payload(payload) if source_private else payload
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
                 channel=_issue_channel(issue.id),
                 event="issue.project_changed",
-                data=payload,
+                data=broadcast_payload,
             )
             target_public = target is None or target.visibility == "public"
             if target_public:
@@ -404,7 +435,7 @@ class MoveService:
                     workspace_id=workspace_id,
                     channel=_workspace_issues_channel(workspace_id),
                     event="issue.project_changed",
-                    data=payload,
+                    data=broadcast_payload,
                 )
             # Source was public, destination is not: non-members' lists must
             # drop the card (same convergence frame project.md uses).
@@ -420,4 +451,4 @@ class MoveService:
             return rendered
 
 
-__all__ = ["MoveService", "apply_move_plan", "move_activity_rows"]
+__all__ = ["MoveService", "apply_move_plan", "move_activity_rows", "redact_move_payload"]
