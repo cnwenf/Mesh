@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # retention).
     app_database_url: str | None = None
 
+    # Per-statement timeout backstop for the API/gateway app path (L7): a
+    # runaway query is cancelled by PostgreSQL instead of holding a connection
+    # indefinitely. Applies only to the app engine — the worker's cross-tenant
+    # maintenance loops are exempt. 0 disables the timeout.
+    app_statement_timeout: timedelta = Field(default=timedelta(seconds=30), ge=0)
+
     # Auth signing / encryption (auth.md §5.5). The JWT secret signs access
     # tokens; the Fernet key for at-rest secrets (MFA) is derived from it so a
     # single env var drives both. ``jwt_algorithm`` is fixed at the config
