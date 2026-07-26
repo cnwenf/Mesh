@@ -3,6 +3,24 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.7] - 2026-07-26
+
+MES-46 issue 页面维度安全审核收口:1 项 MEDIUM + 2 项 LOW 修复 + 1 项 LOW i18n 补齐(LOW-4 为信息项,无需改动)。
+
+### Security
+
+- **resync `rest` 同源校验(MEDIUM-1)**:`createReconciler` 不再无条件拼接并 Bearer 请求服务端下发的 `rest`;新增 `resolveResyncUrl`,经 `new URL(rest, apiBaseUrl)` 解析后断言与 API 基同源(同源部署 `apiBaseUrl` 为 `''` 时以页面 origin 为基)且路径以 `/api/v1/` 开头,绝对 URL 跨源 / 协议相对 / 反斜杠绕过 / 前缀越界 / 不可解析一律拒绝(抛 `MeshApiError` 走 reconciler 既有错误路径退避重试),杜绝 WS 服务端被攻陷或遭 MITM 时把 token 发往攻击者主机;`fetchRestEvents` 翻页循环加上限(`MAX_RESYNC_PAGES`,超限即停),防恶意 `next_cursor` 死循环。README §6.7 同步补充客户端纵深防御条款。
+- **实时合并原型污染 sink(LOW-1)**:`mergedFields` 对帧载荷顶层 `__proto__` / `constructor` / `prototype` 键一律跳过,并以 null 原型对象承载合并中间态(双重隔离),杜绝经 `JSON.parse` 自有 `__proto__` 属性改写 `Object.prototype`。
+
+### Fixed
+
+- **422 `move_confirmation_required` 预览回显(LOW-3)**:迁移确认失败若为 `move_confirmation_required` 且 `err.details.preview` 经结构守卫(`isMovePreview`)校验合法,则以最新预览重渲染并**保持对话框**(契约完整性,issue.md §3.8/README §6.14),不再一律降级为通用 toast + 关闭;无合法预览时保持原错误路径。
+- **i18n 外部化残留(LOW-2)**:估算单位选项(points/hours)、迁移预览字段技术键(`status`/`milestone_id`/`cycle_id`/`labels`/`custom_field_values`)与清除原因(含 `*_pending` 占位码)改经 i18n 键渲染(未知键回退原值);列表页截止日经原生 `Intl` 按 locale 本地化(纯日期值锁 UTC 避免日历日漂移,非法值降级回显)。双语目录新增 16 键(键集仍完全一致),版本哈希同步重算。
+
+### Quality
+
+- 前端:vitest **1257 项全绿**(新增 resync 同源校验/翻页上限、原型污染防护、422 预览回显、迁移预览可读映射、截止日本地化等用例);全局四项(语句/分支/函数/行)**97.26% / 90.84% / 92.92% / 97.26%** 门禁全绿,新增代码分支全覆盖;typecheck / lint(0 错)/ 生产构建全绿;全前端 `dangerouslySetInnerHTML` / `innerHTML` 保持零命中(无新增 HTML 注入 sink)。LOW-4(token 持久化于 localStorage)为 auth.md §4.5 Bearer SPA 模型既定取舍,仅记录不改。
+
 ## [0.11.6] - 2026-07-26
 
 kanban 看板与视图的 **views 定义层**(issue 无耦合独立切片,MES-43,阶段 4·核心工作):`views` 表 + 视图 CRUD + 配置 PATCH + WIP 配置 + 侧栏排序 + `view.updated` 事件 + 看板页面 shell。投影执行 / 每视图排序 / 原子 move + WIP 强制 / 实时增量合并属 issue 耦合增量(MES-33 余量)。

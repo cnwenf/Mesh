@@ -390,7 +390,7 @@ CREATE POLICY mesh_rt_events_tenant ON realtime_events
 | 发布 | projector/网关把未发布事件经 **Redis pub/sub 仅做 fan-out** 推给各 realtime 网关;Redis 不是真源,丢消息由重放兜底 |
 | 保留期 | `realtime_events` 默认保留 **7 天**(可配),到期按 `(workspace_id, created_at)` 归档清理 |
 | 重连 | 客户端记**每频道** `last_seq`,重连带 `resume_from=<last_seq+1>`(频道级游标);网关从 `realtime_events` 顺序补发。可选的服务端跨设备游标持久化见 kanban.md `realtime_channel_cursors`(`(workspace_id, member_id, channel)`);**不存在"单个视图一个总游标"的设计**(一个视图消费多个频道,单游标无语义,R2 已删除 `view_subscriptions.last_seen_seq`) |
-| 游标过旧 | `resume_from` 早于保留窗口 → 下发 `{ "op": "resync_required", "watermark": <当前最大 seq>, "rest": "<对账 REST URL, 带 since=…>" }`;客户端整拉对账后无感恢复 |
+| 游标过旧 | `resume_from` 早于保留窗口 → 下发 `{ "op": "resync_required", "watermark": <当前最大 seq>, "rest": "<对账 REST URL, 带 since=…>" }`;客户端整拉对账后无感恢复。**客户端纵深防御**:`rest` 先经 `new URL(rest, apiBaseUrl)` 解析并断言与 API 基同源(同源部署 `apiBaseUrl` 为空时以页面 origin 为基)且路径在 `/api/v1/` 之下,不满足即拒发对账请求(走 reconciler 错误路径退避重试,绝不发出携带 Bearer 的外泄请求);对账翻页设上限,超限即停(防恶意 `next_cursor` 死循环) |
 | 订阅授权 | **每个频道订阅时重新做资源级授权**(workspace 成员资格 / project 可见性 / issue 可见性),并以 `realtime_channels.workspace_id` 在数据库层校验频道归属;**私有项目事件只进 `project:{id}` 频道,不得先广播给 `workspace:{ws}:*` 再靠前端过滤** |
 | 可见性水位 | 事件 payload 必须携带**完整变更字段**(不只 diff 指针)与 `visibility`(如 issue 当前所属 project/状态),供客户端判定归属;**复杂嵌套 filters 下允许客户端按 id 轻量 refetch**,不得要求前端仅凭 diff 本地重算任意嵌套条件 |
 | 断线体验 | 重连/重放过期时 UI 显示"正在重新同步",对账成功后无感恢复(§6.12 异常态) |

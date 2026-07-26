@@ -497,4 +497,139 @@ describe('IssueDetailPage', () => {
     // zh-CN 须显示中文译文,而非原始 key / 硬编码英文
     expect(await screen.findByText('严格模式下不允许该状态转换')).toBeTruthy();
   });
+
+  it('renders move preview field/reason with readable i18n labels, not technical keys (LOW-2)', async () => {
+    const preview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: 'prj-2',
+      mapped_fields: [
+        {
+          field: 'status',
+          from: { name: 'Dev' },
+          to: { name: 'Todo' },
+          reason: '项目私有 status → 目标项目同 category 默认 status',
+        },
+      ],
+      cleared_fields: [
+        { field: 'milestone_id', reason: '项目私有里程碑' },
+        { field: 'cycle_id', reason: '项目绑定的周期' },
+        // 未知键/原因:回退原值渲染(后端新增词汇不中断 UI)
+        { field: 'labels_v2', reason: 'brand_new_reason' },
+      ],
+      kept_fields: [],
+    };
+    queue(fakeResponse({ body: { data: preview } }));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await screen.findByTestId('move-dialog');
+    const mapped = screen.getByTestId('move-mapped').textContent ?? '';
+    const cleared = screen.getByTestId('move-cleared').textContent ?? '';
+    // 字段技术键 → 本地化字段名
+    expect(mapped).toContain('Status: Dev → Todo');
+    expect(mapped).not.toContain('status:');
+    expect(cleared).toContain('Milestone(Project-private milestone)');
+    expect(cleared).toContain('Cycle(Project-bound cycle)');
+    expect(cleared).not.toContain('milestone_id');
+    expect(cleared).not.toContain('cycle_id');
+    // 未知键回退原始值
+    expect(cleared).toContain('labels_v2(brand_new_reason)');
+  });
+
+  it('localizes estimate unit options (LOW-2:points/hours 不再硬编码英文)', async () => {
+    queue();
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    const options = (screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement)
+      .options;
+    expect(options[1].value).toBe('points');
+    expect(options[1].text).toBe('Points');
+    expect(options[2].value).toBe('hours');
+    expect(options[2].text).toBe('Hours');
+  });
+
+  it('refreshes the preview and keeps the dialog open on 422 move_confirmation_required (LOW-3)', async () => {
+    const stalePreview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: 'prj-2',
+      mapped_fields: [],
+      cleared_fields: [{ field: 'milestone_id', reason: '项目私有里程碑' }],
+      kept_fields: [],
+    };
+    // 预览过期:服务端以 details.preview 下发最新清单(issue.md §3.8/README §6.14)
+    const freshPreview = {
+      ...stalePreview,
+      cleared_fields: [{ field: 'cycle_id', reason: '项目绑定的周期' }],
+    };
+    const moved = { ...DETAIL, project_id: 'prj-2', version: 4 };
+    const stub = queue(
+      fakeResponse({ body: { data: stalePreview } }),
+      fakeResponse({
+        status: 422,
+        body: {
+          error: {
+            code: 'move_confirmation_required',
+            message: 'confirm required',
+            details: { preview: freshPreview },
+          },
+        },
+      }),
+      fakeResponse({ body: { data: moved } }),
+      ...reloadRound(moved),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await screen.findByTestId('move-dialog');
+    fireEvent.click(screen.getByTestId('move-confirm'));
+    // 对话框保持,预览按 details.preview 重渲染(清除清单由 milestone 更新为 cycle)
+    await waitFor(() =>
+      expect(screen.getByTestId('move-cleared').textContent).toContain(
+        'Cycle(Project-bound cycle)',
+      ),
+    );
+    expect(screen.getByTestId('move-dialog')).toBeTruthy();
+    // 再次确认成功落库
+    fireEvent.click(screen.getByTestId('move-confirm'));
+    await waitFor(() => {
+      const movePosts = stub.calls.filter(
+        (c) => c.init?.method === 'POST' && String(c.url).endsWith('/move'),
+      );
+      expect(movePosts.length).toBe(2);
+    });
+    await waitFor(() => expect(screen.queryByTestId('move-dialog')).toBeNull());
+  });
+
+  it('falls back to toast and closes the dialog when 422 carries no usable preview (LOW-3)', async () => {
+    const preview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: 'prj-2',
+      mapped_fields: [],
+      cleared_fields: [],
+      kept_fields: [],
+    };
+    queue(
+      fakeResponse({ body: { data: preview } }),
+      // details 缺合法 preview → 走既有错误路径(toast + 关闭),不静默吞错
+      fakeResponse({
+        status: 422,
+        body: { error: { code: 'move_confirmation_required', message: 'confirm required' } },
+      }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await screen.findByTestId('move-dialog');
+    fireEvent.click(screen.getByTestId('move-confirm'));
+    await waitFor(() => expect(screen.queryByTestId('move-dialog')).toBeNull());
+    expect(
+      await screen.findByText('Moving this item changes some fields. Please review and confirm the move.'),
+    ).toBeTruthy();
+  });
 });
