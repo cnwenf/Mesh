@@ -7,11 +7,48 @@ assembled in the routes). Field names mirror the API contract verbatim
 
 from __future__ import annotations
 
+import json
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from mesh.errors import BusinessRuleError
+
+# Storage-DoS guard (issue.md §3.3 / §3.9): long-text and JSON body fields
+# carry a byte ceiling at the schema boundary — 1 MiB each. Bytes (not
+# characters) so multibyte payloads cannot outgrow the storage budget, and
+# a named-code 422 (not a request-shape 400) because the oversize body is a
+# business-limit violation (§6.14 vocabulary). The envelope echoes ONLY the
+# field name + limit, never the offending content.
+LONG_TEXT_MAX_BYTES = 1_048_576
+TEMPLATE_BODY_MAX_BYTES = 1_048_576
+
+
+def _check_text_bytes(value: str | None, *, field: str, max_bytes: int) -> None:
+    """Raise 422 ``field_too_large`` when ``value`` exceeds ``max_bytes`` UTF-8."""
+    if value is not None and len(value.encode("utf-8")) > max_bytes:
+        raise BusinessRuleError(
+            f"{field} exceeds the {max_bytes}-byte limit",
+            code="field_too_large",
+            details={"field": field, "max_bytes": max_bytes},
+        )
+
+
+def _check_json_bytes(value: dict | None, *, field: str, max_bytes: int) -> None:
+    """Raise 422 ``field_too_large`` when the canonical JSON encoding of
+    ``value`` exceeds ``max_bytes`` (JSONB bodies are capped by their
+    serialized size)."""
+    if value is None:
+        return
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    if len(encoded) > max_bytes:
+        raise BusinessRuleError(
+            f"{field} exceeds the {max_bytes}-byte limit",
+            code="field_too_large",
+            details={"field": field, "max_bytes": max_bytes},
+        )
 
 
 def _uuid_or_none(raw: str | None, *, field: str) -> str | None:  # pragma: no cover
@@ -36,6 +73,11 @@ class CreateIssueRequest(BaseModel):
     cycle_id: str | None = None
     parent_id: str | None = None
     position: float | None = None
+
+    @model_validator(mode="after")
+    def _check_field_limits(self) -> CreateIssueRequest:
+        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        return self
 
 
 class UpdateIssueRequest(BaseModel):
@@ -63,6 +105,11 @@ class UpdateIssueRequest(BaseModel):
     position: float | None = None
     version: int | None = None
 
+    @model_validator(mode="after")
+    def _check_field_limits(self) -> UpdateIssueRequest:
+        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        return self
+
 
 class CreateDependencyRequest(BaseModel):
     """POST /issues/{id}/dependencies (issue.md §3.3)."""
@@ -78,11 +125,30 @@ class MovePreviewRequest(BaseModel):
 
 
 class MoveRequest(BaseModel):
-    """POST /issues/{id}/move — requires ``confirm: true`` (issue.md §3.8)."""
+    """POST /issues/{id}/move — requires ``confirm: true`` (issue.md §3.8).
+
+    A CONFIRMED move must carry the current ``version`` (§3.8 step 2 乐观锁);
+    the schema boundary enforces it (422 ``move_version_required``) so the
+    OCC expectation can never be silently omitted. The unconfirmed path
+    stays version-free on purpose: ``confirm`` defaulted away is the §3.8
+    422-preview fallback (auth-first, returns ``details.preview``), and that
+    envelope is exactly how clients that skipped step 1 learn the version to
+    echo back.
+    """
 
     target_project_id: str | None = None
     confirm: bool = False
     version: int | None = None
+
+    @model_validator(mode="after")
+    def _confirmed_move_requires_version(self) -> MoveRequest:
+        if self.confirm and self.version is None:
+            raise BusinessRuleError(
+                "confirmed move requires the current version",
+                code="move_version_required",
+                details={"field": "version", "hint": "echo preview.version back"},
+            )
+        return self
 
 
 class BulkChanges(BaseModel):
@@ -141,6 +207,12 @@ class CreateIssueTemplateRequest(BaseModel):
     template_body: dict[str, Any] = Field(default_factory=dict)
     project_id: str | None = None
 
+    @model_validator(mode="after")
+    def _check_field_limits(self) -> CreateIssueTemplateRequest:
+        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        _check_json_bytes(self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES)
+        return self
+
 
 class UpdateIssueTemplateRequest(BaseModel):
     """PATCH /issue-templates/{id}."""
@@ -148,6 +220,12 @@ class UpdateIssueTemplateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = None
     template_body: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _check_field_limits(self) -> UpdateIssueTemplateRequest:
+        _check_text_bytes(self.description, field="description", max_bytes=LONG_TEXT_MAX_BYTES)
+        _check_json_bytes(self.template_body, field="template_body", max_bytes=TEMPLATE_BODY_MAX_BYTES)
+        return self
 
 
 class InstantiateIssueTemplateRequest(BaseModel):
@@ -158,6 +236,8 @@ class InstantiateIssueTemplateRequest(BaseModel):
 
 
 __all__ = [
+    "LONG_TEXT_MAX_BYTES",
+    "TEMPLATE_BODY_MAX_BYTES",
     "BulkChanges",
     "BulkRequest",
     "CreateDependencyRequest",

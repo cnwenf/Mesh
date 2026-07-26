@@ -32,7 +32,6 @@ from mesh.errors import (
     BusinessRuleError,
     ForbiddenError,
     NotFoundError,
-    ValidationError,
 )
 from mesh.issue.bulk import BulkService
 from mesh.issue.move import MoveService
@@ -93,21 +92,15 @@ async def _make_member(session_factory, workspace, *, role="member") -> Member:
     from mesh.db.models.user import User
 
     async with session_factory() as session, session.begin():
-        user = User(
-            email=f"{uuid.uuid4().hex[:12]}@corp.com", password_hash="x", display_name="Sec"
-        )
+        user = User(email=f"{uuid.uuid4().hex[:12]}@corp.com", password_hash="x", display_name="Sec")
         session.add(user)
         await session.flush()
-        member = Member(
-            workspace_id=workspace.id, member_type="human", user_id=user.id, role=role
-        )
+        member = Member(workspace_id=workspace.id, member_type="human", user_id=user.id, role=role)
         session.add(member)
     return member
 
 
-async def _make_project(
-    project_service, *, actor, workspace, key=None, visibility="public"
-) -> dict:
+async def _make_project(project_service, *, actor, workspace, key=None, visibility="public") -> dict:
     return await project_service.create_project(
         actor=actor,
         workspace_id=workspace.id,
@@ -136,9 +129,7 @@ async def _join_project(project_service, *, actor, workspace, project, member) -
     )
 
 
-async def _grant(
-    member_service, *, actor, workspace, member, project, permission="read"
-) -> None:
+async def _grant(member_service, *, actor, workspace, member, project, permission="read") -> None:
     await member_service.grant_project_access(
         actor=actor,
         workspace_id=workspace.id,
@@ -160,9 +151,7 @@ def _assert_no_plan(exc: BusinessRuleError | ForbiddenError | NotFoundError) -> 
 # ---------------------------------------------------------------------------
 
 
-async def _private_source_setup(
-    session_factory, issue_service, project_service
-):
+async def _private_source_setup(session_factory, issue_service, project_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     outsider = await _make_member(session_factory, workspace, role="member")
@@ -310,9 +299,7 @@ async def test_move_unconfirmed_invisible_target_member_forbidden(
     private_target = await _make_project(
         project_service, actor=owner, workspace=workspace, key="HID", visibility="private"
     )
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     with pytest.raises(ForbiddenError) as exc_info:
         await move_service.move(
             actor=member,
@@ -336,12 +323,8 @@ async def test_move_unconfirmed_invisible_target_guest_not_found(
         project_service, actor=owner, workspace=workspace, key="GHID", visibility="private"
     )
     # Guest can see the source issue via an explicit read grant…
-    await _grant(
-        member_service, actor=owner, workspace=workspace, member=guest, project=source
-    )
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    await _grant(member_service, actor=owner, workspace=workspace, member=guest, project=source)
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     # …but the target project is invisible to them → 404, not 403 (no oracle).
     with pytest.raises(NotFoundError) as exc_info:
         await move_service.move(
@@ -364,14 +347,10 @@ async def test_move_unconfirmed_target_other_workspace_not_found(
     # Issue created while this is the ONLY workspace in the database: the
     # default-status fallback query relies on RLS for tenant filtering and
     # the unit session connects as the superuser (which bypasses RLS).
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     other_ws = await _make_workspace(session_factory)
     other_owner = await _make_member(session_factory, other_ws, role="owner")
-    foreign = await _make_project(
-        project_service, actor=other_owner, workspace=other_ws, key="FOR"
-    )
+    foreign = await _make_project(project_service, actor=other_owner, workspace=other_ws, key="FOR")
     with pytest.raises(NotFoundError):
         await move_service.move(
             actor=owner,
@@ -389,9 +368,7 @@ async def test_move_preview_target_other_workspace_not_found(
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     source = await _make_project(project_service, actor=owner, workspace=workspace, key="HM")
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     other_ws = await _make_workspace(session_factory)
     other_owner = await _make_member(session_factory, other_ws, role="owner")
     foreign = await _make_project(project_service, actor=other_owner, workspace=other_ws, key="FX")
@@ -413,9 +390,7 @@ async def test_move_unconfirmed_authorized_owner_still_gets_preview(
     owner = await _make_member(session_factory, workspace, role="owner")
     source = await _make_project(project_service, actor=owner, workspace=workspace, key="SA")
     target = await _make_project(project_service, actor=owner, workspace=workspace, key="TA")
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     with pytest.raises(BusinessRuleError) as exc_info:
         await move_service.move(
             actor=owner,
@@ -445,20 +420,14 @@ async def test_bulk_unconfirmed_mixed_ids_forbidden_marker_not_plan(
         project_service, actor=owner, workspace=workspace, key="THRS", visibility="private"
     )
     target = await _make_project(project_service, actor=owner, workspace=workspace, key="DST")
-    my_issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=mine["id"]
-    )
+    my_issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=mine["id"])
     secret_issue = await _make_issue(
         issue_service, actor=owner, workspace=workspace, title="secret", project_id=theirs["id"]
     )
     # the actor may write their own project and the destination — but is NOT
     # a member of the private "theirs" project
-    await _join_project(
-        project_service, actor=owner, workspace=workspace, project=mine, member=member
-    )
-    await _join_project(
-        project_service, actor=owner, workspace=workspace, project=target, member=member
-    )
+    await _join_project(project_service, actor=owner, workspace=workspace, project=mine, member=member)
+    await _join_project(project_service, actor=owner, workspace=workspace, project=target, member=member)
     with pytest.raises(BusinessRuleError) as exc_info:
         await bulk_service.execute(
             actor=member,
@@ -491,9 +460,7 @@ async def test_bulk_unconfirmed_private_issue_guest_not_found_marker(
     )
     target = await _make_project(project_service, actor=owner, workspace=workspace, key="BDST")
     # guest: read on source (sees own card), write on target (allowed destination)
-    await _grant(
-        member_service, actor=owner, workspace=workspace, member=guest, project=source
-    )
+    await _grant(member_service, actor=owner, workspace=workspace, member=guest, project=source)
     await _grant(
         member_service,
         actor=owner,
@@ -502,9 +469,7 @@ async def test_bulk_unconfirmed_private_issue_guest_not_found_marker(
         project=target,
         permission="write",
     )
-    visible = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    visible = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     secret = await _make_issue(
         issue_service, actor=owner, workspace=workspace, title="secret", project_id=theirs["id"]
     )
@@ -558,12 +523,8 @@ async def test_bulk_unconfirmed_invisible_target_guest_not_found(
     private_target = await _make_project(
         project_service, actor=owner, workspace=workspace, key="BGH", visibility="private"
     )
-    await _grant(
-        member_service, actor=owner, workspace=workspace, member=guest, project=source
-    )
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    await _grant(member_service, actor=owner, workspace=workspace, member=guest, project=source)
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     with pytest.raises(NotFoundError) as exc_info:
         await bulk_service.execute(
             actor=guest,
@@ -605,15 +566,11 @@ async def test_bulk_unconfirmed_unknown_id_marker_unchanged(
 
 
 @pytest.mark.unit
-async def test_assert_can_write_guest_invisible_project_not_found(
-    session_factory, project_service
-):
+async def test_assert_can_write_guest_invisible_project_not_found(session_factory, project_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     guest = await _make_member(session_factory, workspace, role="guest")
-    private = await _make_project(
-        project_service, actor=owner, workspace=workspace, visibility="private"
-    )
+    private = await _make_project(project_service, actor=owner, workspace=workspace, visibility="private")
     async with session_factory() as session:
         from mesh.db.tenant import set_tenant_context
 
@@ -626,18 +583,12 @@ async def test_assert_can_write_guest_invisible_project_not_found(
 
 
 @pytest.mark.unit
-async def test_assert_can_write_guest_read_grant_forbidden(
-    session_factory, project_service, member_service
-):
+async def test_assert_can_write_guest_read_grant_forbidden(session_factory, project_service, member_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     guest = await _make_member(session_factory, workspace, role="guest")
-    private = await _make_project(
-        project_service, actor=owner, workspace=workspace, visibility="private"
-    )
-    await _grant(
-        member_service, actor=owner, workspace=workspace, member=guest, project=private
-    )
+    private = await _make_project(project_service, actor=owner, workspace=workspace, visibility="private")
+    await _grant(member_service, actor=owner, workspace=workspace, member=guest, project=private)
     async with session_factory() as session:
         from mesh.db.tenant import set_tenant_context
 
@@ -650,15 +601,11 @@ async def test_assert_can_write_guest_read_grant_forbidden(
 
 
 @pytest.mark.unit
-async def test_assert_can_write_guest_write_grant_allowed(
-    session_factory, project_service, member_service
-):
+async def test_assert_can_write_guest_write_grant_allowed(session_factory, project_service, member_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     guest = await _make_member(session_factory, workspace, role="guest")
-    private = await _make_project(
-        project_service, actor=owner, workspace=workspace, visibility="private"
-    )
+    private = await _make_project(project_service, actor=owner, workspace=workspace, visibility="private")
     await _grant(
         member_service,
         actor=owner,
@@ -690,9 +637,7 @@ async def test_preview_plan_carries_current_version(
     owner = await _make_member(session_factory, workspace, role="owner")
     source = await _make_project(project_service, actor=owner, workspace=workspace, key="VS")
     target = await _make_project(project_service, actor=owner, workspace=workspace, key="VT")
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
     preview = await move_service.preview(
         viewer=owner,
         workspace_id=workspace.id,
@@ -714,17 +659,16 @@ async def test_preview_plan_carries_current_version(
 
 
 @pytest.mark.unit
-async def test_confirmed_move_requires_version(
-    session_factory, issue_service, move_service, project_service
-):
+async def test_confirmed_move_requires_version(session_factory, issue_service, move_service, project_service):
     workspace = await _make_workspace(session_factory)
     owner = await _make_member(session_factory, workspace, role="owner")
     source = await _make_project(project_service, actor=owner, workspace=workspace, key="RS")
     target = await _make_project(project_service, actor=owner, workspace=workspace, key="RT")
-    issue = await _make_issue(
-        issue_service, actor=owner, workspace=workspace, project_id=source["id"]
-    )
-    with pytest.raises(ValidationError) as exc_info:
+    issue = await _make_issue(issue_service, actor=owner, workspace=workspace, project_id=source["id"])
+    # MES-54 M-1: the confirmed move without a version is a business-rule
+    # violation (422 named code), at the schema boundary AND in the service
+    # (defense in depth for direct callers) — not a request-shape 400.
+    with pytest.raises(BusinessRuleError) as exc_info:
         await move_service.move(
             actor=owner,
             workspace_id=workspace.id,
@@ -732,7 +676,8 @@ async def test_confirmed_move_requires_version(
             target_project_id=uuid.UUID(target["id"]),
             confirm=True,
         )
-    assert exc_info.value.code == "validation_error"
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "move_version_required"
 
 
 # ---------------------------------------------------------------------------
@@ -868,9 +813,7 @@ async def test_bulk_move_syncs_completed_at_like_explicit_move(
     async def _stale_completed(issue_id: str) -> None:
         async with session_factory() as session, session.begin():
             await session.execute(
-                text(
-                    "UPDATE issues SET completed_at = :ts WHERE id = :id"
-                ),
+                text("UPDATE issues SET completed_at = :ts WHERE id = :id"),
                 {"ts": datetime(2026, 7, 1, tzinfo=UTC), "id": uuid.UUID(issue_id)},
             )
 

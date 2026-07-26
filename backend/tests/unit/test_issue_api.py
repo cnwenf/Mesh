@@ -360,6 +360,18 @@ async def test_status_update_and_default_handoff(client):
     )
     assert unset.status_code == 422
     assert unset.json()["error"]["code"] == "default_status_required"
+    # M-6 (MES-54): the scope's LAST default cannot be deleted — doing so
+    # would 422 every future issue creation in the scope
+    blocked = await client.delete(f"/api/v1/statuses/{sid}", headers=_auth(owner))
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "last_default_status"
+    # hand the default off (same-transaction guarantee, README §6.3) →
+    # the now-non-default status becomes deletable
+    seeded_todo = [s for s in statuses if s["name"] == "Todo"][0]
+    handoff = await client.patch(
+        f"/api/v1/statuses/{seeded_todo['id']}", json={"is_default": True}, headers=_auth(owner)
+    )
+    assert handoff.status_code == 200
     # delete unreferenced status OK; unknown status 404
     ok = await client.delete(f"/api/v1/statuses/{sid}", headers=_auth(owner))
     assert ok.status_code == 200
