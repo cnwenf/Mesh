@@ -456,10 +456,10 @@ async def test_dependency_validation_and_move_to_inbox(client):
     assert moved.status_code == 200
     data = moved.json()["data"]
     assert data["project_id"] is None and data["identifier"] == "DEP-1"
-    # move to the same project is a no-op
+    # move to the same project is a no-op (§3.8: version still mandatory)
     again = await client.post(
         f"/api/v1/issues/{a['id']}/move",
-        json={"target_project_id": None, "confirm": True},
+        json={"target_project_id": None, "confirm": True, "version": data["version"]},
         headers=_auth(owner),
     )
     assert again.status_code == 200

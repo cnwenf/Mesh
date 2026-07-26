@@ -673,6 +673,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
     "identifier": "WEB-124",
     "from_project_id": "prj_uuid_1",
     "target_project_id": "prj_uuid_9",
+    "version": 3,
     "mapped_fields": [
       { "field": "status",
         "from": { "id": "st_uuid_dev", "name": "开发中", "category": "in_progress" },
@@ -695,6 +696,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 - **status 映射规则**:映射为目标项目**同 category 的默认 status**(`is_default=true`);目标项目该 category 下无自定义 status 时,取该 category 下 `position` 最小者。
 - **清除规则**:项目私有 milestone/cycle、项目级 label、项目级自定义字段值一律清除(置 NULL / 删除值行);**工作区级** label、自定义字段值及其余工作区级字段保留。
 - **编号不变**:迁移只改 `project_id`;`identifier_namespace_key`/`number`/`identifier` 保持不变(README §6.3)。
+- **鉴权前置(安全契约)**:预览与未确认(`confirm` 缺省)请求携带完整字段清单,**先鉴权、后出清单**:源 issue 走读门(不可见 → guest 404 `not_found` / 其他成员 403 `forbidden`,与 `GET /issues/{id}` 同矩阵);`target_project_id` 非空时走项目写门(不可见 → guest 404 / 403,不存在/跨工作区 → 404)。任何鉴权失败**只回错误信封,不携带 `preview`**。`POST /issues/bulk` 未确认聚合预览同理**逐条**过源 issue 读门:越权项仅回 error marker(`{"issue_id", "error": "forbidden"|"not_found"}`),**不回 plan**;目标项目写门在聚合前整体校验(失败即整体 403/404)。
 
 **第二步:确认迁移** `POST /api/v1/issues/{id}/move`
 ```json
