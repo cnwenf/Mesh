@@ -504,7 +504,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 ### 3.2 列表查询参数(统一,看板/列表/我的任务复用)
 
 - **过滤**:`status`(status_id)、`state_category`、`priority`、`assignee_id`、`reporter_id`、`project_id`、`cycle_id`、`milestone_id`、`label`(label_id)、`parent_id`、`due_before`/`due_after`、`q`(搜索 title/identifier)、自定义字段过滤(如 `cf_severity=opt_major`)。
-- **过滤限制(README §6.14)**:filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底。超限返回 **`400 filter_too_complex`**;成本超限返回 **`422 query_cost_exceeded`**(建议收窄条件)。
+- **过滤限制(README §6.14)**:filters **最大嵌套深度 3、最大条件数 20**(**扁平查询参数与 `filters` 树条件合并计数**,合计 ≤20);服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底。超限返回 **`400 filter_too_complex`**;成本超限返回 **`422 query_cost_exceeded`**(建议收窄条件)。
 - **排序**:`sort=position|created_at|priority|due_date&order=asc|desc`。
 - **分组**:`group_by=state_category|assignee|priority|project|label|cycle`(看板/分组列表用)。
 - **分页**:`limit`、`cursor`;**分组查询统一整体游标**(见 §3.5,README §6.14)。
@@ -623,7 +623,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 ### 3.5 分页与鉴权
 
 - **分页(README §6.14 整体游标契约)**:游标分页,游标编码 `(position 或 created_at, id)`。**分组查询统一为整体游标**:响应顶层为 `{"groups": [{key,label,count,wip?,data}], "next_cursor": ...}`,`count` 为组内总数,`data` 为当前页该组切片,`next_cursor` 驱动下一页;**不得**在响应中给每组独立 `cursor`(与 kanban.md 统一此契约)。
-- **过滤限制(README §6.14)**:filters 嵌套深度 ≤3、条件数 ≤20;`statement_timeout`(默认 3s)+ 成本估算兜底;超限 `400 filter_too_complex` / `422 query_cost_exceeded`。
+- **过滤限制(README §6.14)**:filters 嵌套深度 ≤3、条件数 ≤20(扁平查询参数与 `filters` 树合并计数);`statement_timeout`(默认 3s)+ 成本估算兜底;超限 `400 filter_too_complex` / `422 query_cost_exceeded`。
 - **鉴权**:
   - 读:工作区成员可读可见 issue;`private` 项目的 issue 需项目成员或 admin。
   - 写:项目写权限或工作区 `member` 及以上;改他人 issue 需项目 `member`/`lead` 或 admin。
@@ -696,7 +696,7 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 - **status 映射规则**:映射为目标项目**同 category 的默认 status**(`is_default=true`);目标项目该 category 下无自定义 status 时,取该 category 下 `position` 最小者。
 - **清除规则**:项目私有 milestone/cycle、项目级 label、项目级自定义字段值一律清除(置 NULL / 删除值行);**工作区级** label、自定义字段值及其余工作区级字段保留。
 - **编号不变**:迁移只改 `project_id`;`identifier_namespace_key`/`number`/`identifier` 保持不变(README §6.3)。
-- **鉴权前置(安全契约)**:预览与未确认(`confirm` 缺省)请求携带完整字段清单,**先鉴权、后出清单**:源 issue 走读门(不可见 → guest 404 `not_found` / 其他成员 403 `forbidden`,与 `GET /issues/{id}` 同矩阵);`target_project_id` 非空时走项目写门(不可见 → guest 404 / 403,不存在/跨工作区 → 404)。任何鉴权失败**只回错误信封,不携带 `preview`**。`POST /issues/bulk` 未确认聚合预览同理**逐条**过源 issue 读门:越权项仅回 error marker(`{"issue_id", "error": "forbidden"|"not_found"}`),**不回 plan**;目标项目写门在聚合前整体校验(失败即整体 403/404)。
+- **鉴权前置(安全契约)**:预览与未确认(`confirm` 缺省)请求携带完整字段清单,**先鉴权、后出清单**:源 issue 走读门(不可见 → guest 404 `not_found` / 其他成员 403 `forbidden`,与 `GET /issues/{id}` 同矩阵);`target_project_id` 非空时走项目写门(不可见 → guest 404 / 403,不存在/跨工作区 → 404)。任何鉴权失败**只回错误信封,不携带 `preview`**。`POST /issues/bulk` 未确认聚合预览同理**逐条**过源 issue 读门:越权项仅回 error marker(`{"issue_id", "error": "forbidden"|"not_found"}`),**不回 plan**;目标项目写门在聚合前整体校验(失败即整体 403/404)。**聚合预览覆盖全部条目**(`issue_ids` 上限 100,不截断),确认前每一项的映射/清除清单可见。
 
 **第二步:确认迁移** `POST /api/v1/issues/{id}/move`
 ```json

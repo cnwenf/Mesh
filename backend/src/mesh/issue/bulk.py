@@ -74,7 +74,10 @@ class BulkService:
                     await self._issues._projects.assert_can_write(
                         session, viewer=actor, project=target
                     )
-                for raw_id in body.issue_ids[:20]:
+                # §3.8 preview→confirm: the preview covers EVERY item
+                # (schema caps issue_ids at 100) — no truncated manifests
+                # hidden from the caller before confirmation (MES-51 L7).
+                for raw_id in body.issue_ids:
                     try:
                         issue = await self._issues._load_issue(
                             session, workspace_id=workspace_id, issue_id=uuid.UUID(raw_id)

@@ -573,6 +573,34 @@ async def test_bulk_project_change_requires_confirm(
     assert got["identifier"] == "WS-1"  # numbering immutable across move
 
 
+@pytest.mark.unit
+async def test_bulk_move_preview_covers_every_item(
+    session_factory, issue_service, bulk_service, project_service
+):
+    """L7(issue.md §3.8):未确认聚合预览覆盖全部 issue_ids(schema 上限
+    100),确认前映射/清除清单对每一项可见,不截断。"""
+    total = 25  # 旧实现截断前 20,第 21–25 项确认前不可见
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    target = await _make_project(project_service, actor=owner, workspace=workspace, key="BULKP")
+    ids = [
+        (await _make_issue(issue_service, actor=owner, workspace=workspace, title=f"m{n}"))["id"]
+        for n in range(total)
+    ]
+    with pytest.raises(BusinessRuleError) as exc_info:
+        await bulk_service.execute(
+            actor=owner,
+            workspace_id=workspace.id,
+            body=BulkRequest(issue_ids=ids, changes=BulkChanges(project_id=target["id"])),
+        )
+    assert exc_info.value.code == "move_confirmation_required"
+    previews = exc_info.value.details["previews"]
+    assert len(previews) == total
+    assert {preview["issue_id"] for preview in previews} == set(ids)
+    # 全部为 plan(无截断、无 error marker):owner 对每项可读
+    assert all("mapped_fields" in preview for preview in previews)
+
+
 # ---------------------------------------------------------------------------
 # real DELETE behaviors (README §9 T18)
 # ---------------------------------------------------------------------------
