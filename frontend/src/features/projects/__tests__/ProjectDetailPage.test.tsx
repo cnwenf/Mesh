@@ -3,13 +3,20 @@
  * 头部(状态/健康度/进度)、Tab 切换(概览/里程碑/更新动态)、健康度留痕对话框、
  * 里程碑创建/开合/删除(二次确认)、归档切换、删除(二次确认 + 回列表)、错误态。
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Routes, Route } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import type { RecordedCall } from '../../../api/__tests__/fetchStub';
+import { ThemeProvider, ToastProvider } from '../../../design';
+import { I18nProvider, useT } from '../../../i18n';
+import type { MissingReporter } from '../../../i18n';
+import type { RealtimeClient } from '../../../realtime';
+import { RealtimeContext } from '../../../shell/AppShell';
+import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
+import type { RealtimeEventFrame } from '../../../types/realtime';
 import { ProjectDetailPage } from '../ProjectDetailPage';
 
 const ME = {
@@ -425,5 +432,321 @@ describe('ProjectDetailPage', () => {
     await user.click(await screen.findByTestId('delete-confirm'));
     expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
     expect(screen.queryByTestId('projects-list-page')).toBeNull();
+  });
+
+  it('渲染项目 icon 与色块;健康度灯可点击打开更新对话框', async () => {
+    stubFetch({ project: makeProject({ icon: '🛰️', color: '#00ff88' }) });
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByTestId('project-detail-header');
+
+    expect(screen.getByTestId('project-icon').textContent).toBe('🛰️');
+    expect(screen.getByTestId('project-color')).toBeDefined();
+
+    await user.click(screen.getByTestId('health-light-button'));
+    expect(await screen.findByTestId('health-update-form')).toBeDefined();
+  });
+
+  it('从里程碑 Tab 点回概览 Tab 移除 tab 参数', async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1?tab=milestones' },
+    );
+    await screen.findByTestId('project-detail-header');
+    expect(screen.getByTestId('create-milestone-button')).toBeDefined();
+
+    await user.click(screen.getByTestId('tab-overview'));
+
+    await waitFor(() => expect(screen.queryByTestId('create-milestone-button')).toBeNull());
+  });
+
+  it('概览 Tab 里程碑:有目标日渲染日期,无目标日省略', async () => {
+    stubFetch({
+      project: makeProject({
+        milestones: [
+          MILESTONE_OPEN,
+          { ...MILESTONE_OPEN, id: 'ms-3', title: 'No date', target_date: null, overdue: false },
+        ],
+      }),
+    });
+    const { container } = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByTestId('project-detail-header');
+
+    const rows = container.querySelectorAll('.mesh-projects__milestone');
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain('2026-09-30');
+    expect(rows[1].textContent).not.toContain('2026-09-30');
+  });
+
+  it('已归档项目头部按钮为 Unarchive 并调用 unarchive 端点', async () => {
+    const calls = stubFetch({
+      project: makeProject({ archived: true, archived_at: '2026-06-01T00:00:00Z' }),
+    });
+    const user = userEvent.setup();
+    renderDetail();
+    const toggle = await screen.findByTestId('archive-toggle-button');
+    expect(toggle.textContent).toBe('Unarchive');
+
+    await user.click(toggle);
+
+    await waitFor(() => expect(callsTo(calls, 'POST', '/unarchive').length).toBe(1));
+  });
+
+  it('删除二次确认对话框可取消且不发起 DELETE', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByTestId('project-detail-header');
+
+    await user.click(screen.getByTestId('delete-project-button'));
+    expect(screen.getByTestId('delete-confirm-text')).toBeDefined();
+    await user.click(screen.getByText('Cancel'));
+
+    expect(screen.queryByTestId('delete-confirm')).toBeNull();
+    expect(callsTo(calls, 'DELETE', '/projects/').length).toBe(0);
+  });
+
+});
+
+// ---- 实时帧合并(project:{id} 频道,§3.5/§6.7)----
+
+const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
+
+function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
+  const t = useT();
+  return <ToastProvider regionLabel={t('a11y.notifications')}>{props.children}</ToastProvider>;
+}
+
+interface FakeRealtime {
+  readonly value: RealtimeContextValue;
+  readonly client: { subscribe: ReturnType<typeof vi.fn>; unsubscribe: ReturnType<typeof vi.fn> };
+  readonly emit: (frame: RealtimeEventFrame) => void;
+}
+
+function makeFakeRealtime(): FakeRealtime {
+  const listeners: Array<(frame: RealtimeEventFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((cb: (frame: RealtimeEventFrame) => void) => {
+      listeners.push(cb);
+      return () => undefined;
+    }),
+  };
+  return {
+    value: { state: 'connected', client: client as unknown as RealtimeClient },
+    client,
+    emit: (frame) => {
+      for (const listener of listeners) listener(frame);
+    },
+  };
+}
+
+function renderDetailWithRealtime(realtime: FakeRealtime): void {
+  render(
+    <MemoryRouter initialEntries={['/projects/prj-1']}>
+      <ThemeProvider>
+        <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+          <ToastLayer>
+            <RealtimeContext.Provider value={realtime.value}>
+              <Routes>
+                <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+                <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+              </Routes>
+            </RealtimeContext.Provider>
+          </ToastLayer>
+        </I18nProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+describe('ProjectDetailPage 实时帧合并(MES-30 覆盖加固)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('订阅 project:{id} 频道,project.updated 帧合并头部字段', async () => {
+    stubFetch();
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByTestId('project-detail-header');
+    expect(realtime.client.subscribe).toHaveBeenCalledWith('project:prj-1');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 1,
+        event: 'project.updated',
+        payload: { id: 'prj-1', name: 'Apollo Renamed', updated_at: '2026-07-02T00:00:00Z' },
+      });
+    });
+
+    expect(await screen.findByText('Apollo Renamed')).toBeDefined();
+  });
+
+  it('project.archived 帧把头部切为 Unarchive', async () => {
+    stubFetch();
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByTestId('project-detail-header');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 2,
+        event: 'project.archived',
+        payload: {},
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('archive-toggle-button').textContent).toBe('Unarchive'),
+    );
+  });
+
+  it('project.deleted 帧导航回项目列表', async () => {
+    stubFetch();
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByTestId('project-detail-header');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 3,
+        event: 'project.deleted',
+        payload: {},
+      });
+    });
+
+    expect(await screen.findByTestId('projects-list-page')).toBeDefined();
+  });
+
+  it('milestone.created 帧并入概览里程碑列表', async () => {
+    stubFetch();
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByTestId('project-detail-header');
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 4,
+        event: 'milestone.created',
+        payload: {
+          milestone: { ...MILESTONE_OPEN, id: 'ms-rt', title: 'Realtime Milestone' },
+        },
+      });
+    });
+
+    expect(await screen.findByText('Realtime Milestone')).toBeDefined();
+  });
+
+  it('project_update.added 帧并入更新动态 Tab', async () => {
+    stubFetch();
+    const realtime = makeFakeRealtime();
+    const user = userEvent.setup();
+    renderDetailWithRealtime(realtime);
+    await screen.findByTestId('project-detail-header');
+    await user.click(screen.getByTestId('tab-updates'));
+
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 5,
+        event: 'project_update.added',
+        payload: { update: { ...UPDATE_1, id: 'upd-rt', message: 'realtime note' } },
+      });
+    });
+
+    expect(await screen.findByText('realtime note')).toBeDefined();
+  });
+});
+
+describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('组件卸载后到达的加载结果被丢弃(cancelled 守卫)', async () => {
+    // 场景一:成功结果在卸载后到达
+    let resolveProject: (response: Response) => void = () => undefined;
+    const pendingOk = new Promise<Response>((resolve) => {
+      resolveProject = resolve;
+    });
+    const implOk = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingOk;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implOk);
+    const first = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByText('Loading…');
+    first.unmount();
+    await act(async () => {
+      resolveProject(fakeResponse({ body: { data: makeProject() } }));
+    });
+    expect(first.container.innerHTML).toBe('');
+
+    // 场景二:失败结果在卸载后到达
+    let rejectProject: (err: Error) => void = () => undefined;
+    const pendingErr = new Promise<Response>((_, reject) => {
+      rejectProject = reject;
+    });
+    const implErr = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingErr;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implErr);
+    const second = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByText('Loading…');
+    second.unmount();
+    await act(async () => {
+      rejectProject(new Error('late failure'));
+      await Promise.resolve();
+    });
+    expect(second.container.innerHTML).toBe('');
   });
 });

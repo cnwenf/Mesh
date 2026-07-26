@@ -3,6 +3,15 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.2] - 2026-07-26
+
+MES-30 收尾(project 模块 QA 加固,PR #23 残余):前端 project 组件分支级覆盖加固 + 文档版本一致性。project 模块本体(CHANGELOG [0.10.0])已随 MES-41 合入主干,本版仅含其后的质量加固。
+
+### Quality
+
+- **前端 project 组件分支级覆盖加固(验收必修项)**:为 `frontend/src/features/projects` 的 10 个组件补错误/校验/边界路径的分支级单测——对话框(CreateMilestoneDialog / HealthUpdateDialog / CreateCycleDialog / CreateProjectDialog 的成功与失败分支、空字段提交守卫、API 错误内联与非 API 错误回退)、面板(MilestonesPanel 删除二次确认取消/确认/失败三分支与逾期/无目标日渲染、UpdatesPanel 空态与 null 作者/健康度/消息回退与在途重复提交守卫、ProjectMembersSection 多成员角色切换/候选过滤/移除失败)、页面(ProjectsPage 卡片 icon/色块渲染 + 状态筛选重置 + 卡片健康度灯页面级对话框;ProjectDetailPage 头部 icon/色块、Tab 切回概览、概览里程碑日期分支、unarchive、删除取消、实时帧合并 5 场景(project.updated/archived/deleted、milestone.created、project_update.added)、加载竞态 cancelled 守卫;ProjectSettingsPage 三态全字段保存/清空发 null、null 预填回退、无操作保存守卫、加载失败与无工作区守卫、竞态守卫)。`features/projects` 目录分支覆盖 84.79% → **93.72%**(语句 98.65%、函数 95.65%),不再有 78% 以下分支覆盖组件(最低 ProjectSettingsPage 85.14%,残余为 UI 不可达的防御性分支);前端全局分支覆盖 90.17% → **92.24%**,语句/分支/函数/行四项 ≥90% 门禁全绿,1064 项测试全绿,typecheck / lint / 生产构建全绿。
+- **文档版本一致性(验收必修项)**:顶层 README 实现状态表 project 行 `✅ v0.9.0` 修正为 `✅ v0.10.0`(与 CHANGELOG [0.10.0] 一致);PR #23 标题版本号同步修正。
+
 ## [0.10.1] - 2026-07-26
 
 member v0.6.0 安全审核(MES-29)池内优先项 MB-M1 / MB-M2 闭环:owner 不变式加固(工作区须恒有 ≥1 个 `role='owner' AND status='active'` 成员)。
