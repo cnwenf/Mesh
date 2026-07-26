@@ -27,6 +27,7 @@ const NAV_COMMAND_ROUTES: ReadonlyArray<{ key: string; to: string }> = [
   { key: 'home', to: '/' },
   { key: 'inbox', to: '/inbox' },
   { key: 'projects', to: '/projects' },
+  { key: 'issues', to: '/issues' },
   { key: 'board', to: '/board' },
   { key: 'members', to: '/members' },
   { key: 'chat', to: '/chat' },

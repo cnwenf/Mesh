@@ -3,6 +3,30 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.0] - 2026-07-26
+
+issue 模块全功能实现(MES-31,issue.md 五章:数据模型 / 接口 / UI/UX / 实时 / 验收,全系统核心实体)。
+
+### Added
+
+- **数据模型(issue.md §2,migration 0008)**:`issue_statuses`(双层状态的展示层;`category` 稳定语义;部分表达式唯一索引 `uq_issue_statuses_name` / `uq_issue_statuses_default`(COALESCE 作用域)+ `uq_issue_statuses_ws_id` 复合 FK 引用键)、`issues`(不可变编号三元组 `identifier_namespace_key`/`number`/`identifier` + 双重唯一 `uq_issue_namespace_number` / `uq_issues_identifier`、乐观并发 `version`、软删除保留编号、§2.3 全部性能索引)、`issue_dependencies`(有向图,`UNIQUE(issue_id,depends_on_id,type)` 防重边)、`issue_activity`(逐字段 old/new 留痕)、`issue_templates`(§3.9,作用域内名称唯一 + 创建者 RESTRICT)。全部跨模块引用为同租户复合 FK(README §6.2),可空引用一律 PG16 列级 `ON DELETE SET NULL (<列>)`(§6.2 第 6 条),`status_id` RESTRICT,父子为复合自引用 FK(§6.2 第 7 条);5 张表启用 fail-closed RLS + SECURITY DEFINER 工作区解析函数(无工作区前缀路径)。
+- **编号(§2.4 / §5.1 / T15)**:有项目 issue 行锁自增 `projects.issue_seq`(绑定创建时所属项目的 key 命名空间),无项目 issue 行锁自增 `workspaces.inbox_issue_seq` + 收件箱保留前缀(`workspaces.settings.inbox_issue_prefix`,默认 WS);`identifier` 一经生成永不改变——跨项目迁移只改 `project_id`,不重编号、不占用目标计数器;删除仅置 `deleted_at`,计数器不回退,编号永不复用。
+- **双层状态(§1.2.3 / §5.2)**:状态 CRUD(作用域内名称唯一、每作用域唯一默认);创建/更新 issue 时服务层同步 `state_category` 冗余列;进入 done 写 `completed_at`、离开清空;工作区创建事务播种 7 个规范状态(默认 Todo),项目创建事务自检补齐(每作用域恰一默认,README §6.3)。
+- **接口(§3.1 全端点)**:CRUD(UUID 与 `by-identifier/<编号>` 双寻址)/ 子项与进度 / 依赖图增删查 / 跨项目迁移两步式(`move-preview` 返回映射/清除/保留清单 → `move` 携 `confirm:true` 单事务完成,未确认 422 `move_confirmation_required` 携带预览)/ 批量(`POST /issues/bulk`,SAVEPOINT 逐项隔离,部分失败 422 `bulk_partial_failure` 逐条列因;项目变更要求确认)/ 状态定义 CRUD / issue 模板 CRUD + 实例化(失效引用优雅降级 `skipped_fields`)。§6.14 全契约:包络、游标分页(分组查询整体游标)、`version` + `If-Match` 乐观并发(409 `conflict`)、错误码(circular_dependency/circular_parent/assignee_not_member/filter_too_complex/query_cost_exceeded…)。
+- **过滤限制(§6.14)**:结构化 filters 嵌套深度 ≤3、条件数 ≤20(超限 400 `filter_too_complex`);列表查询 `SET LOCAL statement_timeout` 兜底,超预算 422 `query_cost_exceeded`;列表支持 q 搜索(title/identifier ILIKE)、全量扁平过滤、语义优先级排序、group_by(state_category/assignee/priority/project/cycle)整体游标分组。
+- **父子与依赖防环(§2.5 / §5.3 / T12)**:设置父项与新增依赖边一律先取工作区级 `pg_advisory_xact_lock`(锁先于检查),再做递归 CTE 可达性遍历;成环 409 携带 `details.path`;`blocks`/`blocked_by` 规范化为单边 `blocks` 存储、查询双向展开(同关系重复边 409 `dependency_exists`)。并发对插 A→B / B→A 恰一条被拒。
+- **跨项目迁移(§3.8 / §5.7 / T19/T22)**:预览计算项目私有 status → 目标同 category 默认(无则 position 最小)映射、项目私有 milestone / 项目绑定 cycle 清除、工作区级字段保留;确认迁移单事务完成 `project_id` 变更 + 映射/清除 + version+1 + 留痕,并发版本不符 409;编号三元组迁移前后不变。
+- **§6.9 触发矩阵预留**:PATCH diff 为空 = no-op(不发事件、不入队);assignee 变更为 agent 成员时同事务经 outbox 写 `issue.assigned`(幂等键 §6.5),relay 桥接处理器标记已发布并记录挂起交接——真实 agent 编排(创建 `task_executions`、supersede 前任)待 agent.md 增量接通。
+- **实时(§3.6 / §6.6/§6.7)**:`issue.created/updated/deleted/moved/project_changed` 与 `dependency.changed` 一律经 outbox `realtime.publish` 唯一写入路径;私有项目 issue 事件仅走 `issue:{id}` 详情频道,公开/无项目另走 `workspace:{ws}:issues` 列表频道;`issue.project_changed` 载荷携带 `from/to_project_id` + `mapped_fields` + `cleared_fields`;`issue:{id}` 频道订阅经资源级授权 checker(私有项目成员/授权/涉及者放行,API 与独立网关共享同一注册,§6.7)。
+- **前端(issue.md §4)**:`features/issues` 列表页(过滤 URL 同源:q/类别/优先级/分派给我;快速创建支持连续新建;行表格 + 状态色条 + 负责人;勾选浮出批量工具条:改优先级/状态/删除 + 成功失败计数 toast;游标 Load more)与详情页(可编辑标题、按 category 分组的状态选择器、优先级/负责人(人与 agent 同列)/截止日属性栏、子项区(完成进度 3/5)、依赖区(新增成环就地报错、乐观移除 + 失败回滚)、活动流);乐观更新 + version/If-Match 冲突收敛(§3.4/T9,冲突 toast + 收敛服务端最新写);实时增量合并按 id 合并且遵循当前过滤水位(含 q 搜索);异常态矩阵(骨架/空态/错误重试);侧边栏「工作项」入口 + 命令面板导航;i18n 双语 75 键(zh-CN/en 一致性门禁通过)。
+
+### Quality
+
+- 后端:单测 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真)全绿;pytest-cov **95%**(≥90% 门禁;issue 模块各文件 90–100%,双达标);ruff 全绿。e2e 覆盖 T1(跨租户复合 FK 拒绝 + API 404)、T9(乐观并发 409 收敛)、T12(并发成环恰一被拒)、T15(≥10 并发创建无重号无跳号)、T18(真实 DELETE 行为:列级 SET NULL 仅置空引用列、RESTRICT、父删级联)、T19(迁移编号不变 + 前缀注册表排他)、T22(迁移单事务 + 映射/清除清单 + 事件载荷)。
+- 前端:vitest **1099 项全绿**,语句 97.01% / 分支 90.85%(≥90% 门禁);typecheck / lint / 生产构建全绿。
+- 真实 UI 实操(Playwright + chromium,真实 API + 真实数据库):登录 → 列表空态 → 连续快速创建(WS-1/WS-2)→ 搜索过滤 → 详情(改标题版本收敛 v1→v2、状态 → Done、优先级 → urgent)→ 依赖新增 + 成环就地报错 → 批量改优先级(服务端落库校验)→ 3 连跑零 flake,截图留证。实操中发现并修复实时帧合并未遵循搜索水位的缺陷(迟到 `issue.created` 帧会把被搜掉的行重新塞回列表),补回归测试。
+- 文档同步:README 实现状态表新增 issue 行;CHANGELOG 本版;issue.md Spec 无缺漏,实现与之一致(标签/自定义字段值表与 `labels_changed`/`custom_field_changed` 事件按 Spec 归属 label-property.md 增量,模板预填相应字段以 `*_module_pending` 优雅降级)。
+
 ## [0.10.2] - 2026-07-26
 
 MES-30 收尾(project 模块 QA 加固,PR #23 残余):前端 project 组件分支级覆盖加固 + 文档版本一致性。project 模块本体(CHANGELOG [0.10.0])已随 MES-41 合入主干,本版仅含其后的质量加固。

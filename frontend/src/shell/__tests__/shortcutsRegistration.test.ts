@@ -39,8 +39,8 @@ describe('registerShellShortcuts', () => {
   it('注册导航命令、主题命令与快捷键', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS);
     const state = useShortcutRegistry.getState();
-    // 8 导航 + 3 主题 + 1 切换 = 12 命令
-    expect(state.commands).toHaveLength(12);
+    // 9 导航(含 issues,MES-31) + 3 主题 + 1 切换 = 13 命令
+    expect(state.commands).toHaveLength(13);
     // g i / g b / g m / g a / c / / = 6 快捷键
     expect(state.shortcuts).toHaveLength(6);
     unregister();

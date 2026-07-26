@@ -21,6 +21,7 @@ from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
+from mesh.issue.triggers import ASSIGN_EVENT_TYPE, assign_trigger_handler
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
@@ -36,10 +37,19 @@ def _utcnow() -> datetime:
 
 
 def build_relay(settings: Settings, session_factory, fanout: RedisFanOut) -> OutboxRelay:
-    """Assemble the relay with the skeleton-phase handler set."""
+    """Assemble the relay with the current handler set.
+
+    ``issue.assigned`` is consumed by a bridge handler until the agent.md
+    increment provides the unified orchestration entry point (issue.md §3.7):
+    the producing side already carries the §6.9 trigger payload, so the swap
+    is handler-local.
+    """
     return OutboxRelay(
         session_factory,
-        handlers={REALTIME_PUBLISH: project_realtime_event},
+        handlers={
+            REALTIME_PUBLISH: project_realtime_event,
+            ASSIGN_EVENT_TYPE: assign_trigger_handler,
+        },
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,

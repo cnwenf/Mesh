@@ -22,6 +22,7 @@ from mesh.auth.mailer import build_mailer
 from mesh.auth.oauth import MockOAuthProvider, OAuthService
 from mesh.auth.oauth_routes import router as oauth_router
 from mesh.auth.ratelimit import RateLimiter
+from mesh.auth.rbac import role_satisfies
 from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
 from mesh.auth.token_routes import router as token_router
@@ -38,6 +39,14 @@ from mesh.errors import (
     UnauthorizedError,
     ValidationError,
 )
+from mesh.issue.bulk import BulkService
+from mesh.issue.channels import register_issue_checkers
+from mesh.issue.dependencies import DependencyService
+from mesh.issue.move import MoveService
+from mesh.issue.routes import router as issue_router
+from mesh.issue.service import IssueService
+from mesh.issue.statuses import StatusService
+from mesh.issue.templates import TemplateService
 from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
 from mesh.project.channels import register_resource_checkers
@@ -126,10 +135,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.member_service = MemberService(session_factory)
     app.state.token_service = TokenService(session_factory)
     app.state.project_service = ProjectService(session_factory)
+    # Issue module (issue.md): core entity services. Stateless orchestrators
+    # sharing the session factory; resource-level authorization lives in the
+    # service layer, route plumbing stays thin.
+    app.state.issue_service = IssueService(session_factory)
+    app.state.status_service = StatusService(
+        session_factory,
+        is_workspace_manager=lambda member: role_satisfies(member.role, "project:manage"),
+    )
+    app.state.dependency_service = DependencyService(app.state.issue_service)
+    app.state.move_service = MoveService(app.state.issue_service)
+    app.state.bulk_service = BulkService(app.state.issue_service, app.state.move_service)
+    app.state.template_service = TemplateService(app.state.issue_service)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
     register_resource_checkers(app.state.authorizer, session_factory)
+    register_issue_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -140,6 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(member_router)
     app.include_router(token_router)
     app.include_router(project_router)
+    app.include_router(issue_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

@@ -11,6 +11,7 @@ export type NavKey =
   | 'home'
   | 'inbox'
   | 'projects'
+  | 'issues'
   | 'board'
   | 'members'
   | 'cycles'
@@ -27,6 +28,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'home', to: '/' },
   { key: 'inbox', to: '/inbox' },
   { key: 'projects', to: '/projects' },
+  { key: 'issues', to: '/issues' },
   { key: 'board', to: '/board' },
   { key: 'members', to: '/members' },
   { key: 'cycles', to: '/cycles' },

@@ -634,6 +634,14 @@ class ProjectService:
                     details={"name": project.name},
                 ) from exc
             raise
+        # Guarantee the workspace-level issue status default set exists in
+        # this transaction (README §6.3 self-heal: workspaces created before
+        # the issue increment get seeded on first project creation). Runs
+        # AFTER the project flush so its autoflush-free SELECT cannot surface
+        # the key-conflict IntegrityError outside the mapping above.
+        from mesh.issue.statuses import ensure_scope_seeded
+
+        await ensure_scope_seeded(session, workspace_id=workspace_id)
         if project.lead_member_id is not None:
             session.add(
                 ProjectMember(

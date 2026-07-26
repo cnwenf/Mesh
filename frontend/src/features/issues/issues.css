@@ -1,0 +1,290 @@
+/**
+ * Issue 模块样式(issue.md §4)。颜色一律经语义 token(design/tokens.css),
+ * 暗色模式由 token 集整体替换实现(README §6.12)。
+ */
+
+.mesh-issues {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.mesh-issues__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-issues__head h1 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+.mesh-issues__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mesh-issues__filters input[type='search'] {
+  min-width: 14rem;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-issues__mine {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-issues__create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.mesh-issues__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-issues__field input {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-issues__create-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-issues__create-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.mesh-issues__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-issues__table th,
+.mesh-issues__table td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.mesh-issues__table th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.mesh-issues__identifier {
+  font-family: monospace;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.mesh-issues__title-link {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.mesh-issues__title-link:hover {
+  text-decoration: underline;
+}
+
+.mesh-issues__status-chip {
+  display: inline-block;
+  padding: 0.1rem var(--space-2);
+  border: 1px solid var(--color-border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  white-space: nowrap;
+}
+
+.mesh-issues__more {
+  display: flex;
+  justify-content: center;
+}
+
+.mesh-issues__bulkbar {
+  position: sticky;
+  bottom: var(--space-3);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+/* ---- 详情页 ---- */
+
+.mesh-issues-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.mesh-issues-detail__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mesh-issues-detail__identifier {
+  font-family: monospace;
+  color: var(--color-text-muted);
+}
+
+.mesh-issues-detail__title {
+  flex: 1;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+}
+
+.mesh-issues-detail__title:hover,
+.mesh-issues-detail__title:focus {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  outline: none;
+}
+
+.mesh-issues-detail__version {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-issues-detail__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: var(--space-4);
+}
+
+@media (max-width: 1023px) {
+  .mesh-issues-detail__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mesh-issues-detail__main h2 {
+  font-size: var(--font-size-md);
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--color-text);
+}
+
+.mesh-issues-detail__description {
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+}
+
+.mesh-issues-detail__empty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-issues-detail__children,
+.mesh-issues-detail__deps,
+.mesh-issues-detail__activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.mesh-issues-detail__children li,
+.mesh-issues-detail__deps li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.mesh-issues-detail__activity li {
+  display: flex;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.mesh-issues-detail__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  align-self: start;
+}
+
+.mesh-issues-detail__meta {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-issues__dep-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.mesh-issues__dep-add input {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-issues__dep-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  margin: 0;
+  flex-basis: 100%;
+}
