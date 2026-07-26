@@ -682,3 +682,71 @@ describe('ProjectDetailPage 实时帧合并(MES-30 覆盖加固)', () => {
     expect(await screen.findByText('realtime note')).toBeDefined();
   });
 });
+
+describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('组件卸载后到达的加载结果被丢弃(cancelled 守卫)', async () => {
+    // 场景一:成功结果在卸载后到达
+    let resolveProject: (response: Response) => void = () => undefined;
+    const pendingOk = new Promise<Response>((resolve) => {
+      resolveProject = resolve;
+    });
+    const implOk = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingOk;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implOk);
+    const first = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByText('Loading…');
+    first.unmount();
+    await act(async () => {
+      resolveProject(fakeResponse({ body: { data: makeProject() } }));
+    });
+    expect(first.container.innerHTML).toBe('');
+
+    // 场景二:失败结果在卸载后到达
+    let rejectProject: (err: Error) => void = () => undefined;
+    const pendingErr = new Promise<Response>((_, reject) => {
+      rejectProject = reject;
+    });
+    const implErr = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingErr;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implErr);
+    const second = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByText('Loading…');
+    second.unmount();
+    await act(async () => {
+      rejectProject(new Error('late failure'));
+      await Promise.resolve();
+    });
+    expect(second.container.innerHTML).toBe('');
+  });
+});
