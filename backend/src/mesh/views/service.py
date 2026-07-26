@@ -702,10 +702,12 @@ class ViewService:
                 await session.flush()
             except IntegrityError as exc:
                 if _violates(exc, "uq_views_name"):
+                    # NOTE: view.name would lazy-refresh inside the aborted
+                    # transaction — report the known pending value instead.
                     raise ConflictError(
                         "a view with this name already exists in this scope",
                         code="view_name_taken",
-                        details={"name": view.name},
+                        details={"name": changes.get("name")},
                     ) from exc
                 if _violates(exc, "uq_views_default"):
                     raise ConflictError(
