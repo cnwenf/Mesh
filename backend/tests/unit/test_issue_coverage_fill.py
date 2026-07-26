@@ -520,6 +520,7 @@ async def test_move_clears_project_cycle_keeps_workspace_cycle(
     moved1 = await move_service.move(
         actor=owner, workspace_id=ws.id, issue_id=uuid.UUID(i1["id"]),
         target_project_id=uuid.UUID(target["id"]), confirm=True,
+        expected_version=i1["version"],
     )
     assert moved1["cycle_id"] is None
     # workspace-level cycle is KEPT
@@ -533,6 +534,7 @@ async def test_move_clears_project_cycle_keeps_workspace_cycle(
     moved2 = await move_service.move(
         actor=owner, workspace_id=ws.id, issue_id=uuid.UUID(i2["id"]),
         target_project_id=uuid.UUID(target["id"]), confirm=True,
+        expected_version=i2["version"],
     )
     assert moved2["cycle_id"] == workspace_cycle["id"]
 
@@ -555,6 +557,7 @@ async def test_move_status_mapping_into_done_sets_completed_at(
     moved = await move_service.move(
         actor=owner, workspace_id=ws.id, issue_id=uuid.UUID(issue["id"]),
         target_project_id=uuid.UUID(target["id"]), confirm=True,
+        expected_version=issue["version"],
     )
     # mapped to target-scope done default; completed_at stays set
     assert moved["state_category"] == "done"
@@ -573,6 +576,7 @@ async def test_move_from_deleted_project_to_inbox(
     moved = await move_service.move(
         actor=owner, workspace_id=ws.id, issue_id=uuid.UUID(issue["id"]),
         target_project_id=None, confirm=True,
+        expected_version=issue["version"],
     )
     assert moved["project_id"] is None and moved["identifier"] == issue["identifier"]
 
