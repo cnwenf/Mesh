@@ -3,7 +3,7 @@
  * 全部为 NavLink(鼠标可达);快捷键仅为加速器(§6.12:所有快捷键有等价鼠标路径)。
  * 激活态经 className 回调应用,首页链接 `end` 精确匹配。
  */
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
 
@@ -43,6 +43,7 @@ function navLinkClassName({ isActive }: { isActive: boolean }): string {
 
 export function Sidebar(): React.JSX.Element {
   const t = useT();
+  const location = useLocation();
   // 工作区上下文内 admin+ 呈现「工作区设置」入口(§6.12 角色可见性;member/guest 不可见)
   const workspaceContext = useOptionalWorkspace();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
@@ -54,7 +55,17 @@ export function Sidebar(): React.JSX.Element {
       <ul className="mesh-sidebar__list">
         {NAV_ITEMS.map((item) => (
           <li key={item.key} className="mesh-sidebar__item">
-            <NavLink to={item.to} end={item.to === '/'} data-testid={'nav-' + item.key} className={navLinkClassName}>
+            {/* 「看板」入口在选中视图路由 /views/{id} 下保持激活(§4.2 视图 URL 同步) */}
+            <NavLink
+              to={item.to}
+              end={item.to === '/'}
+              data-testid={'nav-' + item.key}
+              className={({ isActive }) =>
+                navLinkClassName({
+                  isActive: isActive || (item.key === 'board' && location.pathname.startsWith('/views/')),
+                })
+              }
+            >
               {t('nav.' + item.key)}
             </NavLink>
           </li>

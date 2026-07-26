@@ -54,12 +54,12 @@ from mesh.member.service import MemberService
 from mesh.project.channels import register_resource_checkers
 from mesh.project.routes import router as project_router
 from mesh.project.service import ProjectService
-from mesh.views.routes import router as view_router
-from mesh.views.service import ViewService
 from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
 )
+from mesh.views.routes import router as view_router
+from mesh.views.service import ViewService
 from mesh.workspace.invitations import InvitationService
 from mesh.workspace.routes import router as workspace_router
 from mesh.workspace.service import WorkspaceService

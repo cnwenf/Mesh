@@ -577,7 +577,12 @@ async def test_update_view_invalid_config_rejected(session_factory) -> None:
             actor=member,
             workspace_id=workspace.id,
             view_id=uuid.UUID(created["id"]),
-            fields={"filters": {"operator": "AND", "conditions": [{"field": "nope", "op": "eq", "value": 1}]}},
+            fields={
+                "filters": {
+                    "operator": "AND",
+                    "conditions": [{"field": "nope", "op": "eq", "value": 1}],
+                }
+            },
         )
     assert excinfo.value.code == "invalid_filters"
 

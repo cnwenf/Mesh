@@ -6,7 +6,7 @@
  * 空态呈现,投影查询属 issue 耦合增量(MES-33 余量)。
  *
  * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(主操作:新建视图)
- * → 内容(对齐 ProjectsPage)。URL 同步 /board/{viewId}(§4.2 可分享)。
+ * → 内容(对齐 ProjectsPage)。选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -170,7 +170,8 @@ export function BoardPage(): React.JSX.Element {
 
   const selectView = useCallback(
     (nextId: string) => {
-      navigate(`/board/${nextId}`);
+      // §4.2:切换视图 URL 同步 /views/{id}(可分享/收藏)
+      navigate(`/views/${nextId}`);
     },
     [navigate],
   );

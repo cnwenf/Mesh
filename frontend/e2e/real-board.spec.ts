@@ -69,8 +69,8 @@ test('看板视图定义层真实走查 + 截图存证', async ({ page }) => {
     await expect(page.getByTestId(`board-column-${key}`)).toBeVisible();
   }
   await expect(page.getByTestId('board-title')).toContainText('冲刺看板');
-  // URL 同步 /board/{viewId}(§4.2 可分享)
-  await expect(page).toHaveURL(/\/board\/[0-9a-f-]+$/, { timeout: 10_000 });
+  // URL 同步 /views/{id}(§4.2 可分享/收藏)
+  await expect(page).toHaveURL(/\/views\/[0-9a-f-]+$/, { timeout: 10_000 });
   await page.screenshot({ path: `${EVIDENCE_DIR}/02-board-columns.png` });
 
   // 3. 切换 group_by=priority → 5 档列 + 保存条(§4.2 未保存提示)→ 保存持久化
@@ -115,7 +115,7 @@ test('看板视图定义层真实走查 + 截图存证', async ({ page }) => {
   await page.screenshot({ path: `${EVIDENCE_DIR}/06-saved-reloaded.png` });
 
   // 7. 视图菜单:复制 → 新视图「(copy)」出现并被选中
-  const viewId = (page.url().match(/\/board\/([0-9a-f-]+)$/) ?? [])[1];
+  const viewId = (page.url().match(/\/views\/([0-9a-f-]+)$/) ?? [])[1];
   expect(viewId).toBeTruthy();
   await page.getByTestId(`view-menu-${viewId}`).click();
   await page.getByTestId(`view-menu-list-${viewId}`).getByText('Duplicate').click();

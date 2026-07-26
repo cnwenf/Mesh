@@ -122,9 +122,9 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="issues" element={<IssuesPage />} />
                 <Route path="issues/:issueId" element={<IssueDetailPage />} />
                 {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
-                    /board/{viewId} URL 同步可分享,§4.2) */}
+                    选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}
                 <Route path="board" element={<BoardPage />} />
-                <Route path="board/:viewId" element={<BoardPage />} />
+                <Route path="views/:viewId" element={<BoardPage />} />
                 <Route path="members" element={<MembersPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
