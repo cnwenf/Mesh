@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from mesh.realtime.auth import Principal
 from mesh.realtime.session import (
+    AUTH_TIMEOUT_SECONDS,
     FRAME_AUTH_OK,
     FRAME_ERROR,
     FRAME_EVENT,
@@ -312,6 +313,42 @@ async def test_invalid_subscribe_payloads(session_factory):
     assert all(e["code"] == "validation_error" for e in errors)
 
 
+async def test_subscribe_resume_from_bool_rejected_without_disconnect(session_factory):
+    # JSON `true` decodes to a Python bool — an int subclass. It must be
+    # rejected as validation_error, never reach the replay SQL (which would
+    # abort the connection), and leave the connection usable.
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": True},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": False},
+            {"op": "ping"},
+        ]
+    )
+    await _session(transport, session_factory).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert len(errors) == 2
+    assert all(e["code"] == "validation_error" for e in errors)
+    assert not transport.closed
+    assert _ops(transport)[-1] == FRAME_PING  # connection still answers
+
+
+async def test_subscribe_negative_resume_from_rejected(session_factory):
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": -1},
+            {"op": "ping"},
+        ]
+    )
+    await _session(transport, session_factory).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "validation_error"
+    assert not transport.closed
+    assert _ops(transport)[-1] == FRAME_PING
+
+
 class BlockingTransport(FakeTransport):
     """Serves queued frames, then blocks forever (silent client)."""
 
@@ -365,3 +402,141 @@ async def test_heartbeat_sends_ping_frames(session_factory):
 def test_resync_rest_url_encoding():
     url = resync_rest_url("workspace:ws-1:issues", 12)
     assert url == "/api/v1/realtime/events?channel=workspace%3Aws-1%3Aissues&since=12"
+
+
+# --- M4: WS/DoS hardening ---
+
+
+class FakeClock:
+    """Deterministic monotonic clock for rate-limit tests."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.t = start
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class ClockAdvancingTransport(FakeTransport):
+    """Jumps the fake clock forward after serving ``advance_after`` frames."""
+
+    def __init__(self, incoming, clock: FakeClock, advance_after: int) -> None:
+        super().__init__(incoming)
+        self._clock = clock
+        self._advance_after = advance_after
+        self._served = 0
+
+    async def receive_json(self):
+        frame = await super().receive_json()
+        self._served += 1
+        if self._served == self._advance_after:
+            self._clock.t += 5.0  # well past the 1s rate-limit window
+        return frame
+
+
+def test_default_auth_timeout_is_hardened():
+    # Unauthenticated sockets must be closed quickly (M4); was 10s pre-hardening.
+    assert AUTH_TIMEOUT_SECONDS == 5.0
+
+
+async def test_unknown_op_error_does_not_echo_client_content(session_factory):
+    huge_op = "x" * 10_000
+    transport = FakeTransport([{"op": "auth", "token": TOKEN}, {"op": huge_op}])
+    await _session(transport, session_factory).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert errors[0]["code"] == "validation_error"
+    assert errors[0]["message"] == "unknown op"
+    assert huge_op not in str(transport.sent)  # nothing is echoed back
+
+
+async def test_forbidden_error_message_is_fixed_text(session_factory, workspace_factory):
+    await workspace_factory()
+    channel = "issue:secret-" + "y" * 500
+    transport = FakeTransport(
+        [{"op": "auth", "token": TOKEN}, {"op": "subscribe", "channel": channel}]
+    )
+    await _session(transport, session_factory, authorizer=DenyAuthorizer()).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert errors[0]["code"] == "forbidden"
+    assert errors[0]["message"] == "not authorized for channel"  # fixed, no echo
+    assert errors[0]["channel"] == channel  # structured correlation only
+
+
+async def test_subscription_cap_refuses_new_channels_but_keeps_connection(session_factory):
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": "issue:one"},
+            {"op": "subscribe", "channel": "issue:two"},
+            {"op": "subscribe", "channel": "issue:three"},  # over the cap of 2
+            {"op": "subscribe", "channel": "issue:one"},  # idempotent re-subscribe
+            {"op": "ping"},
+        ]
+    )
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=AllowAuthorizer(),
+        subscriber_factory=FakeSubscriber,
+        replay_page_size=100,
+        ping_interval=3600,
+        max_subscriptions=2,
+    )
+    await session.run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "too_many_subscriptions"
+    assert errors[0]["channel"] == "issue:three"
+    subscribed = [f for f in transport.sent if f["op"] == FRAME_SUBSCRIBED]
+    assert {f["channel"] for f in subscribed} == {"issue:one", "issue:two"}
+    assert not transport.closed
+    assert _ops(transport)[-1] == FRAME_PING
+
+
+async def test_inbound_frame_rate_limit_closes_flooding_client(session_factory):
+    clock = FakeClock()  # frozen: every frame lands in the same 1s window
+    transport = FakeTransport([{"op": "auth", "token": TOKEN}] + [{"op": "ping"}] * 5)
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=AllowAuthorizer(),
+        subscriber_factory=FakeSubscriber,
+        ping_interval=3600,
+        max_frames_per_second=3,
+        clock=clock,
+    )
+    await session.run()
+    pings = [f for f in transport.sent if f["op"] == FRAME_PING]
+    assert len(pings) == 3  # budget honored before the drop
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert errors[-1]["code"] == "rate_limited"
+    assert transport.closed
+
+
+async def test_rate_limit_window_recovers_after_silence(session_factory):
+    clock = FakeClock()
+    # auth + ping1 at t=0; receiving ping2 advances the clock past the window,
+    # so ping2..ping4 get a fresh budget and only ping5 trips the limit.
+    transport = ClockAdvancingTransport(
+        [{"op": "auth", "token": TOKEN}] + [{"op": "ping"}] * 5, clock, advance_after=3
+    )
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=AllowAuthorizer(),
+        subscriber_factory=FakeSubscriber,
+        ping_interval=3600,
+        max_frames_per_second=3,
+        clock=clock,
+    )
+    await session.run()
+    pings = [f for f in transport.sent if f["op"] == FRAME_PING]
+    # ping1 (t=0) + ping2,ping3,ping4 (fresh window) = 4 — more than the budget
+    # of 3, proving expired frames were evicted; ping5 then trips the limit.
+    assert len(pings) == 4
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert errors[-1]["code"] == "rate_limited"
+    assert transport.closed

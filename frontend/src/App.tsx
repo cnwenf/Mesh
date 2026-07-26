@@ -38,6 +38,7 @@ import { SettingsPage } from './shell/pages/SettingsPage';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
+import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
 
 /**
  * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
@@ -105,6 +106,12 @@ function ShellProviders(): React.JSX.Element {
                 {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
                 <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
                 <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
+                {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
+                <Route path="w/:workspaceSlug/settings/labels" element={<WorkspaceLabelsPage />} />
+                <Route
+                  path="w/:workspaceSlug/settings/custom-fields"
+                  element={<WorkspaceCustomFieldsPage />}
+                />
                 {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
                 <Route path="invite/:token" element={<InviteAcceptPage />} />
                 <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />

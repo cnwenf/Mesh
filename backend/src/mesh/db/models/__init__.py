@@ -9,6 +9,7 @@ from mesh.db.models.issue import (
     IssueStatus,
     IssueTemplate,
 )
+from mesh.db.models.label import CustomFieldDef, CustomFieldOption, Label
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
@@ -39,6 +40,8 @@ from mesh.db.models.workspace import (
 __all__ = [
     "ApiToken",
     "AuditLog",
+    "CustomFieldDef",
+    "CustomFieldOption",
     "Cycle",
     "EmailVerificationToken",
     "IdentifierPrefixRegistry",
@@ -47,6 +50,7 @@ __all__ = [
     "IssueDependency",
     "IssueStatus",
     "IssueTemplate",
+    "Label",
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",

@@ -47,6 +47,8 @@ from mesh.issue.routes import router as issue_router
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import StatusService
 from mesh.issue.templates import TemplateService
+from mesh.labels.routes import router as label_router
+from mesh.labels.service import LabelService
 from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
 from mesh.project.channels import register_resource_checkers
@@ -147,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.move_service = MoveService(app.state.issue_service)
     app.state.bulk_service = BulkService(app.state.issue_service, app.state.move_service)
     app.state.template_service = TemplateService(app.state.issue_service)
+    app.state.label_service = LabelService(session_factory)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -163,6 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(token_router)
     app.include_router(project_router)
     app.include_router(issue_router)
+    app.include_router(label_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

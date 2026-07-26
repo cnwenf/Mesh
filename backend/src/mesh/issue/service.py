@@ -443,7 +443,7 @@ class IssueService:
         )
 
     async def resolve_issue_workspace(self, issue_id: uuid.UUID) -> uuid.UUID | None:
-        """Narrow SECURITY DEFINER lookup (migration 0008) — no tenant GUC yet."""
+        """Narrow SECURITY DEFINER lookup (migration 0009) — no tenant GUC yet."""
         async with self._factory() as session:
             return await session.scalar(
                 text("SELECT mesh_issue_workspace_id(:id)"), {"id": issue_id}
@@ -1197,7 +1197,7 @@ class IssueService:
         current_status_id: uuid.UUID,
         target_status,
     ) -> None:
-        """Strict-mode transition gate (issue.md §3.4/§4.4/§5.2, migration 0009).
+        """Strict-mode transition gate (issue.md §3.4/§4.4/§5.2, migration 0010).
 
         The workspace setting ``status_strict_mode`` (default false) enables
         strict mode; the per-status ``allowed_transitions`` list (JSONB array
