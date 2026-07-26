@@ -3,6 +3,26 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.10] - 2026-07-27
+
+安全硬化·依赖收口(MES-46 终局独立扫描项,MES-55,两轮验收合并交付):react-router 审计项清零 + 登录回跳守卫升级为浏览器 URL 解析器等价校验(堵 TAB/LF/CR 控制字符归一化开放重定向绕过,CVE-2025-68470 同族)。仅前端依赖与 auth 页面/守卫,无后端/数据模型变更。
+
+### Security
+
+- **react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零)**:收口 GHSA-wrjc-x8rr-h8h6(`<Link>`/`useNavigate` 反斜杠开放重定向,CVE-2025-68470 绕过同族,本站可达)与 GHSA-337j-9hxr-rhxg(SSR hydration `deserializeErrors()` 构造器注入;本站为纯客户端 SPA、未用 SSR,不可达但随升级一并收口)。lockfile 变更仅 react-router / react-router-dom 与 v7 运行时依赖(`@remix-run/router` 移除、`cookie` + `set-cookie-parser` 引入),无其他依赖被 major 升级;路由 API 全兼容(v7 `react-router-dom` 为 `react-router` 再导出),1254 例单测无行为回归。
+- **回跳守卫统一并升级为解析器等价校验**:`LoginPage` `?next=` 与 `OAuthCallbackPage` 往返的回跳目标守卫统一为 `features/auth/safeNextPath` 单一实现(此前两页面各自内联、仅拒 `//`),对「浏览器将如何解析目标」做等价校验(CVE-2025-68470 的根本教训:校验「浏览器如何解析」而非对原始串枚举黑字符):①控制字符/空白预检(C0 0x00–0x1F + DEL + 空白,经字符码构造)——WHATWG 解析器会从 special-scheme 输入串任意位置删除 TAB/LF/CR(`/<TAB>/<钓鱼站>` 删除后即协议相对 `//<钓鱼站>`,与反斜杠形态同族),凡含控制字符/空白的目标视为异常载荷拒绝;②解析器等价——以站点 origin 为 base 经 `new URL()` 解析,仅放行 origin 与本站一致者并返回归一化形态(pathname+search+hash);协议相对 `//`、归一化后成外站的反斜杠变体、绝对 URL、`javascript:` 伪协议、不可解析输入(如 `http://[`)统一拒绝回落首页。第一轮仅堵反斜杠,第二轮验收于真实 chromium 复现 TAB/LF/CR 载荷登录后真实重定向外站(与目标 CVE 同族),修复后三类载荷全部回落本站首页、已登录 `<Navigate replace>` 分支同守卫(静默不跳稳健性瑕疵随之消除)。
+- **审计口径备注**:7.18.1 上 `npm audit --omit=dev` 残留 GHSA-qwww-vcr4-c8h2(high,RSC 模式 CSRF)。该公告明示「仅影响使用 unstable RSC API 的应用」,本站为纯客户端 SPA(声明式 `BrowserRouter` 库模式,无 SSR / RSC / server actions),攻击面不存在;修复版 8.3.0 要求 React ≥19.2.7(连带 React major 升级),超出本次「无其他依赖被意外 major 升级」收口范围,已由 MES-56 独立跟踪 React 19 迁移评估。
+
+### Added
+
+- `features/auth/safeNextPath.ts` 与全套单测(`//`、`/\` 反斜杠变体、TAB/LF/CR 夹带、控制字符/空白异常、绝对 URL / 伪协议、不可解析输入拒绝;站内相对路径含查询串与 hash 放行);桶导出同步。页面级守卫用例:LoginPage(`/\` 变体、`/%09`、`/%0A`、绝对 URL、已登录 Navigate 分支)、OAuthCallbackPage(sessionStorage `/\`、TAB 夹带、绝对 URL)。
+- 覆盖率门禁加固:`vite.config.ts` 为 `src/features/auth/**` 增 perFile 90 阈值(比照既有 `src/features/labels/**` 先例),安全守卫文件覆盖缺口永久可见、不被全局门禁掩盖。
+- Spec 同步:auth.md §4.1 增补「回跳目标守卫(防开放重定向)」解析器等价校验策略条目;frontend/README 选型表 react-router-dom 6 → 7。
+
+### Quality
+
+- 前端:rebase 后主干合并树 vitest **1274 例全绿**(126 文件),全局覆盖率 **97.26% / 90.89% / 92.92% / 97.26%**(语句/分支/函数/行,≥90% 门禁);`safeNextPath.ts` 四项 **100%**(catch 分支由 `http://[` 畸形输入覆盖,死分支三元已删);门禁工具 `scripts/verify-coverage.mjs --base origin/main` 实测变更语句行 26/26 = **100%** PASS;typecheck / lint(0 error)/ 生产构建全绿;`npm audit --omit=dev` moderate / critical 归零。
+- 真实 e2e(production 形态:静态构建 + 同源反代 + 真实后端 uvicorn 全栈 + PostgreSQL 16 + Redis 7 + 真实 chromium,14/14):注册结果页回跳、账密登录(会话落库)、`//` / `/\` / TAB / LF / CR / 绝对 URL 一律回落本站首页(独立外站落地页对照下强断言 URL origin 永不离站;修复前构建对 TAB/LF/CR 三类载荷复现 BYPASS、修复后构建全堵口)、`/issues` 站内回跳照常、超限登录 429 具名限流、OAuth mock 提供商真实往返(`oauth_identities` 落库)。
 ## [0.11.9] - 2026-07-27
 
 MES-46 安全审核 HIGH×2 修复(MES-48):issue 跨项目迁移路径越权信息泄露闭环。
