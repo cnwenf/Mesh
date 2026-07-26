@@ -296,6 +296,35 @@ async def test_jwt_session_first_frame_auth_subscribe_and_cross_tenant(
     assert unauthorized.status_code == 401
 
 
+async def test_reconciliation_foreign_typed_cursor_is_400_not_500(
+    api_server, session_factory, workspace_factory
+):
+    """L5: a well-formed cursor from another endpoint (datetime + UUID keyset
+    against the int-seq + BIGINT-id reconcile listing) must answer 400
+    invalid_cursor over real HTTP, not a neutral 500 from the DB layer."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from mesh.api.pagination import encode_cursor
+
+    workspace = await workspace_factory()
+    channel = f"workspace:{workspace.id}"
+    await _publish_via_relay(
+        session_factory, workspace.id, channel, "workspace.updated", {"v": 1}
+    )
+    foreign_cursor = encode_cursor(datetime(2026, 7, 25, tzinfo=UTC), uuid.uuid4())
+    async with httpx.AsyncClient(base_url=api_server.base_url, timeout=10) as client:
+        response = await client.get(
+            "/api/v1/realtime/events",
+            params={"channel": channel, "since": 0, "cursor": foreign_cursor},
+            headers={"Authorization": f"Bearer mesh-dev:{workspace.id}"},
+        )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["code"] == "invalid_cursor"
+
+
 # --- P1 regression: standalone gateway must not leak private-project events ---
 
 
