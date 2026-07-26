@@ -520,8 +520,8 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('字段为 null 的项目预填回退空串(三态)', async () => {
-    stubFetch({
+  it('字段为 null 的项目预填回退空串(三态),改名保存 diff 仅含 name', async () => {
+    const calls = stubFetch({
       project: makeProject({
         description: null,
         start_date: null,
@@ -530,6 +530,7 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
         lead_member_id: null,
       }),
     });
+    const user = userEvent.setup();
     renderSettings();
     await screen.findByTestId('settings-form');
 
@@ -537,6 +538,19 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
     expect((screen.getByTestId('settings-start-date') as HTMLInputElement).value).toBe('');
     expect((screen.getByTestId('settings-target-date') as HTMLInputElement).value).toBe('');
     expect((screen.getByTestId('settings-lead') as HTMLSelectElement).value).toBe('');
+
+    // null 字段经 ?? '' 预填后未改动 → diff 不含三态字段,仅含 name
+    const nameInput = screen.getByTestId('settings-name');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Apollo Named');
+    await user.click(screen.getByTestId('settings-save'));
+
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+    const body = JSON.parse(String(patchProjectCalls(calls)[0].init?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toEqual({ name: 'Apollo Named' });
   });
 
   it('一次保存涵盖状态/可见性/日期/负责人变更', async () => {
