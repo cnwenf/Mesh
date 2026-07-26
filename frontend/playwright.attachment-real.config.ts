@@ -16,7 +16,7 @@ const DEV_PORT = process.env.MESH_E2E_FRONTEND_PORT ?? '5199';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['attachment-real.spec.ts'],
+  testMatch: ['real-attachment.spec.ts'],
   timeout: 300_000,
   retries: 0,
   workers: 1,

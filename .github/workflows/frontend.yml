@@ -146,17 +146,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      # 注意:本 workflow 顶层 defaults.working-directory=frontend,
+      # 后端步骤一律经 ../backend 相对路径。
       - name: Install backend (pinned, from lockfile)
         run: |
-          pip install -r backend/requirements-dev.lock
-          pip install -e backend/ --no-deps
+          pip install -r ../backend/requirements-dev.lock
+          pip install -e ../backend/ --no-deps
 
       - name: Migrate database
-        working-directory: backend
+        working-directory: ../backend
         run: alembic upgrade head
 
       - name: Start api / gateway / worker
-        working-directory: backend
+        working-directory: ../backend
         run: |
           nohup python -m uvicorn mesh.api.app:create_app --factory --host 127.0.0.1 --port 8000 > /tmp/mesh-api.log 2>&1 &
           nohup python -m uvicorn mesh.realtime.app:create_app --factory --host 127.0.0.1 --port 8081 --ws-max-size 65536 > /tmp/mesh-gateway.log 2>&1 &
