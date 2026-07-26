@@ -162,8 +162,8 @@ async def test_bool_and_negative_resume_from_rejected_over_real_ws(
 async def test_frame_flood_is_rate_limited_and_connection_closed(
     gateway_server, workspace_factory
 ):
-    """A client flooding frames past the per-second budget is served exactly
-    the budget, then gets one rate_limited error frame and is dropped."""
+    """A client flooding frames past the per-second budget is served at most
+    the budget and then dropped (rate_limited error frame on the normal path)."""
     workspace = await workspace_factory()
     ws = await _ws_connect(gateway_server)
     try:
@@ -193,11 +193,15 @@ async def test_frame_flood_is_rate_limited_and_connection_closed(
 
         codes = [f.get("code") for f in received if f.get("op") == "error"]
         pongs = sum(1 for f in received if f.get("op") == "ping")
-        # The flood is NOT fully serviced: roughly the per-second budget (30,
-        # exact semantics pinned by the fake-clock unit tests) and then the
-        # drop. A small band tolerates the rolling window sliding under load.
-        assert codes == ["rate_limited"], f"codes={codes} pongs={pongs}"
+        # Defense contract: the flood is NOT fully serviced — roughly the
+        # per-second budget (30; exact semantics, including the error frame,
+        # are pinned by the fake-clock unit tests) and then the drop. The
+        # rate_limited frame is the normal path, but the still-flooding
+        # client's in-flight frames can make the transport abort before it
+        # is read — that is still a drop, so both observations are valid.
         assert 25 <= pongs <= 40, f"pongs={pongs}"
+        assert codes in ([], ["rate_limited"]), f"codes={codes} pongs={pongs}"
+        assert closed.is_set()
     finally:
         with contextlib.suppress(Exception):
             await ws.close()
