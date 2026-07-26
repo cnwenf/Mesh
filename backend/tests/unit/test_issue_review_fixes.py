@@ -237,6 +237,44 @@ async def test_list_dependencies_carries_identifiers(session_factory, issue_serv
     assert listing[0]["depends_on_identifier"] == b["identifier"]
 
 
+async def test_add_dependency_response_carries_identifier(session_factory, issue_service):
+    """MES-45: POST response must resolve ``depends_on_identifier`` like GET.
+
+    Without creation-path resolution the UI shows a bare UUID fragment for
+    the freshly added edge until a refetch. Covers both the plain edge and
+    the inverted (blocked_by stored as blocks) rendering branch.
+    """
+    from mesh.issue.dependencies import DependencyService
+
+    ws = await _ws(session_factory)
+    owner = await _member(session_factory, ws)
+    a = await _issue(issue_service, actor=owner, ws=ws)
+    b = await _issue(issue_service, actor=owner, ws=ws)
+    c = await _issue(issue_service, actor=owner, ws=ws)
+    deps = DependencyService(issue_service)
+
+    plain = await deps.add_dependency(
+        actor=owner,
+        workspace_id=ws.id,
+        issue_id=uuid.UUID(a["id"]),
+        depends_on_id=uuid.UUID(b["id"]),
+        dep_type="relates_to",
+    )
+    assert plain["depends_on_id"] == b["id"]
+    assert plain["depends_on_identifier"] == b["identifier"]
+
+    inverted = await deps.add_dependency(
+        actor=owner,
+        workspace_id=ws.id,
+        issue_id=uuid.UUID(a["id"]),
+        depends_on_id=uuid.UUID(c["id"]),
+        dep_type="blocked_by",
+    )
+    assert inverted["type"] == "blocked_by"
+    assert inverted["depends_on_id"] == c["id"]
+    assert inverted["depends_on_identifier"] == c["identifier"]
+
+
 # ---------------------------------------------------------------------------
 # 必修4 — bulk issue_ids capped
 # ---------------------------------------------------------------------------

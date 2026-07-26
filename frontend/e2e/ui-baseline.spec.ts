@@ -94,6 +94,20 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   });
 
+  test('Ctrl+K 搜索任意关键词均出结果且 Issues 导航命令可命中跳转(MES-45 回归)', async ({ page }) => {
+    await page.goto('/');
+    await page.keyboard.press('Control+k');
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    const input = palette.getByRole('combobox');
+    // 上一轮回归:任一导航命令 label 缺失 → 输入即抛错,结果塌成 0 条
+    await input.fill('home');
+    await expect(palette.getByRole('option').first()).toBeVisible();
+    await input.fill('Issues');
+    await expect(palette.getByRole('option', { name: 'Issues' })).toBeVisible();
+    await page.keyboard.press('Enter');
+    await page.waitForURL('**/issues');
+  });
+
   test('G 然后 I 序列键跳转收件箱;输入框聚焦时不触发裸键', async ({ page }) => {
     await page.goto('/');
     await page.keyboard.press('g');

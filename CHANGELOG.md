@@ -3,6 +3,23 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.4] - 2026-07-26
+
+MES-31 验收第四轮修复(MES-45 隔离派发):命令面板搜索全瘫一行修复 + 导航标签映射编译期防呆 + 依赖创建路径标识符解析。
+
+### Fixed
+
+- **命令面板搜索全瘫(阻塞)**:`AppShell` 传给 `registerShellShortcuts` 的 `nav` 标签映射缺 `issues` 键,使 `nav.issues` 以 `label: undefined` 注册;用户在命令面板(Ctrl/Cmd+K)输入任意关键词时,过滤逻辑在 `undefined.toLowerCase()` 抛 TypeError,结果塌成 0 条、Enter 无反应。补 `issues: t('nav.issues')`(双语键已存在),恢复 Ctrl+K 搜索与 Enter 跳转;`ui-baseline.spec.ts` 的 Ctrl 回归用例 + 真实 UI 截图佐证。
+- **导航标签映射编译期防呆**:`ShellShortcutLabels.nav` 由 `Record<string,string>` 收紧为显式键联合 `Record<NavKey, string>`(与 `NAV_COMMAND_ROUTES` 一一对应),此后映射缺任一键即编译失败,从类型层杜绝同类回归。补 shell/AppShell 集成回归用例断言全部命令带本地化非空 label。
+- **依赖创建路径标识符解析(附带·非阻塞)**:`POST /issues/{id}/dependencies` 响应现回填解析后的 `depends_on_identifier`(此前为 `null`,仅 GET 列表解析),新增依赖当场显示人类可读标识符而非 UUID 片段,与 GET 列表一致;补单测覆盖普通边与 `blocked_by` 反向边两条渲染分支。
+- **e2e 默认配置真实后端用例漏忽略(顺带修正)**:`real-mes44-regression.spec.ts` 走独立配置(真实后端栈),原未列入 `playwright.config.ts` 的 `testIgnore`,导致 `npm run test:e2e` 在 mock 栈下必败;已与其他真实后端用例对齐,默认 e2e 全绿。
+
+### Quality
+
+- 前端:vitest **1115 项全绿**(新增 2 项 shell 回归),变更行覆盖率 ≥90% 门禁 PASS;typecheck/lint/生产构建全绿;`ui-baseline.spec.ts -g "Ctrl"` 全绿,`npm run test:e2e` 全绿(30 项)。
+- 后端:ruff `backend/src backend/tests` 全绿;`pytest --cov --cov-fail-under=90` 全绿,**整体覆盖率 95.28%**;真实 PostgreSQL 16 + Redis 下含依赖 POST 标识符解析回归。
+- 真实 UI 实操(Playwright + chromium):Ctrl+K 输入 `issues`/`home` 实时命中、Enter 跳 `/issues`,零 console error,截图留证于 `frontend/e2e/evidence/`(mes45-palette-search-issues / mes45-palette-nav-issues / mes45-palette-search-home)。
+
 ## [0.11.3] - 2026-07-26
 
 MES-31 验收第三轮整改(MES-44 隔离派发):跨项目迁移预览完整性 + 严格模式被禁流转的就地回滚/i18n 闭环。

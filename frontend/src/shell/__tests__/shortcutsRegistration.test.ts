@@ -12,6 +12,7 @@ const LABELS: ShellShortcutLabels = {
     home: 'Home',
     inbox: 'Inbox',
     projects: 'Projects',
+    issues: 'Issues',
     board: 'Board',
     members: 'Members',
     chat: 'Chat',
@@ -53,6 +54,23 @@ describe('registerShellShortcuts', () => {
     expect(navigate).toHaveBeenCalledWith('/inbox');
     useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.home')?.run();
     expect(navigate).toHaveBeenCalledWith('/');
+    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.issues')?.run();
+    expect(navigate).toHaveBeenCalledWith('/issues');
+    unregister();
+  });
+
+  it('全部命令均带非空字符串 label(label undefined 会使命令面板搜索整体崩溃,MES-45)', () => {
+    const unregister = registerShellShortcuts(vi.fn(), LABELS);
+    const state = useShortcutRegistry.getState();
+    expect(state.commands.length).toBeGreaterThan(0);
+    for (const command of state.commands) {
+      expect(typeof command.label).toBe('string');
+      expect(command.label.length).toBeGreaterThan(0);
+    }
+    // issues 导航命令必须带映射文案,而非 undefined
+    expect(useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.issues')?.label).toBe(
+      'Issues',
+    );
     unregister();
   });
 

@@ -200,7 +200,16 @@ class DependencyService:
                         },
                     ) from exc
                 raise
-            rendered = _render_edge(edge, perspective=subject_id)
+            # Resolve the identifier on the creation path so the POST response
+            # matches the GET listing (MES-45): without it the UI renders a
+            # bare UUID fragment for the freshly added edge until a refetch.
+            # ``target`` is the "other" issue from ``perspective=subject_id``
+            # in both the plain and the inverted (blocked_by → blocks) cases.
+            rendered = _render_edge(
+                edge,
+                perspective=subject_id,
+                identifiers={target.id: target.identifier},
+            )
             # Both detail channels + workspace list when visible (README §6.7).
             for channel_issue in (issue, target):
                 project = await self._issues._project_of(session, channel_issue)

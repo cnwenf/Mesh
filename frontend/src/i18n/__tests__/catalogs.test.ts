@@ -69,6 +69,7 @@ const REQUIRED_KEYS = [
   'nav.home',
   'nav.inbox',
   'nav.projects',
+  'nav.issues',
   'nav.board',
   'nav.members',
   'nav.chat',
