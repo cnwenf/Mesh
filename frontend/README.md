@@ -10,7 +10,7 @@ Spec(§3.2)不约束前端框架,仅要求 SPA、乐观更新 + 服务端版本�
 | --- | --- |
 | **React 18 + TypeScript 5** | 生态最成熟、类型安全的组件模型;团队招聘与社区资料成本最低 |
 | **Vite 6** | 开发启动/HMR 快,生产构建(Rollup)成熟;Vitest 同源配置 |
-| **react-router-dom 6** | 事实标准路由;支持规范深链(§6.12 深链模式) |
+| **react-router-dom 7** | 事实标准路由;支持规范深链(§6.12 深链模式);v7 收口 6.x 开放重定向审计项(GHSA-wrjc-x8rr-h8h6 / GHSA-337j-9hxr-rhxg) |
 | **zustand 5** | 轻量全局状态(偏好/鉴权/实时状态),无 Provider 嵌套负担,易测试 |
 | **react-intl 7** | 原生 ICU MessageFormat,直接满足 §6.18 的 CLDR 复数/占位符要求 |
 | **原生 Intl API** | 日期/数字/相对时间/时区本地化零依赖(§6.18 时区化仅展示层) |
