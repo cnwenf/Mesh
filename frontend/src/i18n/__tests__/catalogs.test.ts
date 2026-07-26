@@ -260,6 +260,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     groupBy: 'status',
     // kanban 投影层 §4 文案占位符(MES-33):WIP 超限 toast 的列 key
     group: 'in_progress',
+    // comment-inbox §4 文案占位符(触发预览的 agent 名单)
+    names: 'code-reviewer, test-runner',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

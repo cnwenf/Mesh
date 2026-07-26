@@ -99,6 +99,9 @@ export class RealtimeClient {
 
   private readonly subscribedChannels = new Set<string>();
 
+  /** 频道本地订阅者引用计数(subscribe/unsubscribe 成对计数) */
+  private readonly channelSubscribers = new Map<string, number>();
+
   private readonly frameListeners = new Set<FrameListener>();
 
   private readonly stateListeners = new Set<StateListener>();
@@ -192,6 +195,12 @@ export class RealtimeClient {
   }
 
   subscribe(channel: string): void {
+    // 引用计数:多个组件共享同一频道(如顶栏铃铛与收件箱页共享
+    // member:{me}:inbox)时,任一订阅者 unsubscribe 不得中断其他订阅者
+    // 的频道(否则共享频道被单方 effect 重跑打断,其余组件永久收不到
+    // 后续帧)。重复 subscribe 仍照发(带最新游标,幂等再同步)。
+    const count = (this.channelSubscribers.get(channel) ?? 0) + 1;
+    this.channelSubscribers.set(channel, count);
     const added = !this.subscribedChannels.has(channel);
     this.subscribedChannels.add(channel);
     this.channelSubscribeAttempts.delete(channel);
@@ -200,6 +209,13 @@ export class RealtimeClient {
   }
 
   unsubscribe(channel: string): void {
+    const count = this.channelSubscribers.get(channel) ?? 0;
+    if (count === 0) return;
+    if (count > 1) {
+      this.channelSubscribers.set(channel, count - 1);
+      return;
+    }
+    this.channelSubscribers.delete(channel);
     const had = this.subscribedChannels.delete(channel);
     this.channelSubscribeAttempts.delete(channel);
     if (this.authenticated) this.sendOp({ op: 'unsubscribe', channel });

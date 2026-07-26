@@ -10,9 +10,11 @@
  * - workspaceDefaultLocale 经 useWorkspaceLocale 从工作区 API 异步获取;
  * - 偏好写入经 settingsStore 同步到 PATCH /api/v1/users/me。
  */
-import { useCallback, useMemo, useState } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
+import { activeWorkspace, fetchMe } from './features/members/api';
+import { getIssueByIdentifier } from './features/issues/api';
 import { ThemeProvider, ToastProvider } from './design';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
 import { I18nProvider, useT } from './i18n';
@@ -41,6 +43,7 @@ import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
 import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
+import { InboxPage } from './features/inbox';
 
 /**
  * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
@@ -74,6 +77,39 @@ export default function App(): React.JSX.Element {
       </ThemeProvider>
     </BrowserRouter>
   );
+}
+
+/**
+ * C6 深链:`#IDENTIFIER` 链接解析为同工作区 issue。后端渲染 `#MES-123` 为
+ * `/issues/by-identifier/MES-123`;此路由用当前活跃工作区解析 identifier 后跳详情。
+ */
+function IssueByIdentifierRedirect(): React.JSX.Element {
+  const { identifier } = useParams<{ identifier: string }>();
+  const [target, setTarget] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    const client = getApiClient();
+    void (async () => {
+      try {
+        const me = await fetchMe(client);
+        const active = activeWorkspace(me.memberships);
+        if (active === null || identifier === undefined) {
+          if (!cancelled) setTarget(null);
+          return;
+        }
+        const detail = await getIssueByIdentifier(client, active.workspace_id, identifier);
+        if (!cancelled) setTarget(detail.id);
+      } catch {
+        if (!cancelled) setTarget(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [identifier]);
+  if (target === undefined) return <></>;
+  if (target === null) return <Navigate to="/not-found" replace />;
+  return <Navigate to={`/issues/${target}`} replace />;
 }
 
 function ShellProviders(): React.JSX.Element {
@@ -116,11 +152,16 @@ function ShellProviders(): React.JSX.Element {
                 />
                 {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
                 <Route path="invite/:token" element={<InviteAcceptPage />} />
-                <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
+                <Route path="inbox" element={<InboxPage />} />
                 <Route path="projects" element={<ProjectsPage />} />
                 <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                 <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
                 <Route path="issues" element={<IssuesPage />} />
+                {/* C6 深链:#IDENTIFIER 链接 → 解析当前工作区 issue 后跳详情 */}
+                <Route
+                  path="issues/by-identifier/:identifier"
+                  element={<IssueByIdentifierRedirect />}
+                />
                 <Route path="issues/:issueId" element={<IssueDetailPage />} />
                 {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
                     选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}

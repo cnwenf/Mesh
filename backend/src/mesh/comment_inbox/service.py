@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.auth.rbac import assert_guest_project_visible
@@ -45,6 +46,7 @@ from mesh.errors import (
     ForbiddenError,
     GoneError,
     NotFoundError,
+    PayloadTooLargeError,
     ValidationError,
 )
 from mesh.member.display import resolve_display_name
@@ -158,7 +160,27 @@ class CommentService:
                 idempotency_key=idempotency_key,
             )
             session.add(comment)
-            await session.flush()
+            # L3 / §6.14: the SELECT-then-INSERT above is not race-free; a
+            # concurrent create with the same Idempotency-Key can lose the
+            # race on uq_comments_idempotency. Catch it in a savepoint and
+            # return the winner's row instead of surfacing a 500.
+            try:
+                async with session.begin_nested():
+                    await session.flush()
+            except IntegrityError:
+                if idempotency_key is None:
+                    raise
+                winner = await session.scalar(
+                    select(Comment).where(
+                        Comment.workspace_id == workspace_id,
+                        Comment.idempotency_key == idempotency_key,
+                    )
+                )
+                if winner is None:
+                    raise  # some other integrity violation
+                return await self._render_comment(
+                    session, winner, viewer_member_id=author_member.id
+                )
 
             await self._insert_mentions(
                 session, workspace_id=workspace_id, comment_id=comment.id, members=mentioned
@@ -864,6 +886,11 @@ class CommentService:
                 preview=preview,
                 extra={"issue_identifier": issue.identifier},
             )
+        # I4: the reporter/creator is a seeded subscriber (reason=creator, see
+        # issue service _create_issue_tx), so they receive comment_created like
+        # every other subscriber — the handler's author self-suppression keeps
+        # the author from notifying themselves. subscribed_update is reserved
+        # for status/field changes (emit_issue_change_notifications).
 
     async def _reaction_aggregation(
         self,
@@ -1081,10 +1108,10 @@ class CommentService:
 
 
 def _check_body_bytes(body: str) -> None:
+    # L1: align with README §6.14 (413 payload_too_large) / §3.3 vocabulary.
     if len(body.encode("utf-8")) > LONG_TEXT_MAX_BYTES:
-        raise BusinessRuleError(
+        raise PayloadTooLargeError(
             "comment body exceeds the 1 MiB limit",
-            code="field_too_large",
             details={"max_bytes": LONG_TEXT_MAX_BYTES},
         )
 

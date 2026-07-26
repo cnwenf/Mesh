@@ -21,6 +21,8 @@
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts"
   },
   "dependencies": {
+    "dompurify": "^3.4.12",
+    "marked": "^18.0.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-intl": "^7.0.4",
@@ -34,6 +36,7 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.2.0",
     "@testing-library/user-event": "^14.6.1",
+    "@types/dompurify": "^3.0.5",
     "@types/node": "^22.10.5",
     "@types/react": "^19.2.16",
     "@types/react-dom": "^19.2.3",
