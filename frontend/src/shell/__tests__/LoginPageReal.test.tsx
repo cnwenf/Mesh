@@ -124,6 +124,54 @@ describe('LoginPage 真实账号登录(auth.md §3.1 接通)', () => {
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
   });
 
+  it('next 反斜杠变体 /\\evil.example(协议相对绕过)→ 拒绝并回落首页', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?next=/\\evil.example');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
+  it('next 控制字符变体 /%09(TAB)/evil.example(WHATWG 解析器归一化绕过)→ 拒绝并回落首页', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?next=/%09/evil.example');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
+  it('next 控制字符变体 /%0A(LF)/evil.example → 拒绝并回落首页', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?next=/%0A/evil.example');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
+  it('next 绝对 URL(https://evil.example)→ 拒绝并回落首页', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?next=https://evil.example');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
   it('422 invalid_credentials → 具名错误文案', async () => {
     const user = userEvent.setup();
     const fetchImpl = stubFetch({
@@ -324,5 +372,11 @@ describe('LoginPage 真实账号登录(auth.md §3.1 接通)', () => {
     useAuthStore.getState().setToken('existing');
     renderLogin(stubFetch(), '/login?next=/invite/invtk_x');
     expect(screen.getByTestId('at-invite')).toBeTruthy();
+  });
+
+  it('已登录时 next 反斜杠变体 → 拒绝并回落首页(Navigate 分支同守卫)', () => {
+    useAuthStore.getState().setToken('existing');
+    renderLogin(stubFetch(), '/login?next=/\\evil.example');
+    expect(screen.getByTestId('at-home')).toBeTruthy();
   });
 });

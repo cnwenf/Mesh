@@ -15,3 +15,4 @@ export {
   assessPasswordStrength,
 } from './passwordStrength';
 export type { PasswordAssessment, PasswordRule } from './passwordStrength';
+export { DEFAULT_POST_AUTH_PATH, safeNextPath } from './safeNextPath';
