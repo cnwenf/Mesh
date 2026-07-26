@@ -3,6 +3,26 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.10.3] - 2026-07-26
+
+安全建议排期池(MES-23)首批落地:M3 / M4 两项 MEDIUM 与 L1 / L2 / L3 / L5 / L7 五项 LOW 逐项闭环(M5 已由 MES-34 闭环,L4 / L6 为已知行为记录不动)。每项独立小步提交、单测 + 真实 e2e 全覆盖。
+
+### Security
+
+- **M3 outbox 终态行保留期清理**:`published`/`failed` 的 `outbox_events` 行(含 `idempotency_key` 唯一索引项)此前从不清理、无限膨胀。新增 worker 监督循环 `outbox-retention`,按保留期(默认 7 天,`MESH_OUTBOX_EVENT_RETENTION` 可配)分批(每次 ≤10k 行,短事务)删除终态行;`pending` 行永不触碰(清理即静默丢任务);`failed` 行需整段保留期过后才可删,远大于 relay 重试预算,§6.6 永久失败告警必然先于清理发出。worker 进程级 e2e 实测过期终态行被真实清理。
+- **M4 WebSocket/DoS 硬化**:①入站帧限速(默认 30/滚动秒,`MESH_WS_MAX_FRAMES_PER_SECOND`),超限回 `rate_limited` 错误帧后断开(真实 socket e2e 实测洪泛被丢弃);②单连接订阅上限(默认 256,`MESH_WS_MAX_SUBSCRIPTIONS`),超限对新频道回 `too_many_subscriptions` 错误帧、不断开,已订阅频道重订阅幂等放行;③错误帧不再回显客户端原始内容——unknown-op / forbidden 改为固定消息(频道关联仅走结构化 `channel` 字段);④未认证连接首帧认证超时 10s → 5s(`MESH_WS_AUTH_TIMEOUT`),静默连接更快释放;⑤传输层帧上限显式化:compose 以 `--ws-max-size 65536` 启动 uvicorn(默认 16MB),与 `MESH_WS_MAX_SIZE_BYTES` 单一真源一致,compose 回归测试守护(真实 socket e2e 实测超大帧被传输层拒绝)。
+- **L1 outbox 幂等键按工作区作用域化**:幂等去重查找此前全局匹配 `idempotency_key`;当前键均由工作区级实体 ID 派生碰撞不可达,但未来模块若直传客户端 `Idempotency-Key` 可跨租户去重并回传他租户行。助手层现强制键含工作区上下文(存储键 `ws:<workspace_id>:<key>`)且查找按 `workspace_id` 过滤,同名客户端键跨工作区互不去重。
+- **L2 WS `resume_from` 严格校验**:JSON `true`/`false` 解码为 Python bool(int 子类)可穿过 `isinstance(int)` 进入重放 SQL 致连接中断;改为严格类型检查 + 非负约束,非法值回 `validation_error`、连接保持可用(真实 socket e2e 覆盖)。
+- **L3 compose Redis AUTH**:Redis 此前无认证,同网络容器可发命令/伪造 fan-out 帧(DB 为真源可恢复,纵深防御)。现 `--requirepass`(`MESH_REDIS_PASSWORD`,与 Postgres 凭据同模式)且 api/worker/gateway 连接 URL 带凭据;**实机验证**:未认证 NOAUTH 拒绝、认证 PONG、healthcheck 绿、应用镜像在 compose 网络内带凭据连通;compose 回归测试守护 requirepass 与 URL 凭据。
+- **L5 分页游标类型不匹配 → 400**:来自其他端点的良构游标(如 datetime+UUID 键集用于字符串排序 / int-seq+BIGINT-id 列表)可解码但在 DB 层键集比较失败、以中性 500 回出。执行前校验解码位置与排序/tie-break 列类型兼容性,不匹配回 400 `invalid_cursor`;未映射列类型保持宽松(真实 HTTP e2e 覆盖)。
+- **L7 API 会话层 `statement_timeout` 兜底**:API/网关应用引擎经 asyncpg `server_settings` 设置 PostgreSQL `statement_timeout`(默认 30s,`MESH_APP_STATEMENT_TIMEOUT`,`0` 禁用),失控查询由数据库取消而非无限占用连接与客户端请求;worker 跨租户维护循环(relay/projector/retention)有意豁免。真实 PG 行为测试:`SHOW statement_timeout` 反映设置、超限查询被取消。
+
+### Quality
+
+- 后端单测 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真,无 mock)全绿;pytest-cov ≥90% 门禁达标。每项硬化均配确定性单测(注入假时钟的限速窗口恢复、订阅上限幂等重订阅、游标类型矩阵、幂等键跨工作区隔离、保留期 pending 豁免与批量上限)+ 真实服务 e2e(WS 洪泛断连 / 超大帧传输层拒绝 / bool 游标 / 异型游标 400 / worker 进程级 outbox 清理 / PG statement_timeout 取消)。
+- 文档同步:docs/specs/README.md §6.6(outbox 终态行保留期清理)与 §6.16(WebSocket DoS 硬化行);backend/README.md(worker 循环清单、app 路径 statement_timeout 安全注记)。
+- 池内其余项(M4 关联的 §6.14 IP 维度限流链 W2、PJ 系列实时/输入硬化、审计补全等)按既定排期随对应模块批次继续拆发,不在本版。
+
 ## [0.10.2] - 2026-07-26
 
 MES-30 收尾(project 模块 QA 加固,PR #23 残余):前端 project 组件分支级覆盖加固 + 文档版本一致性。project 模块本体(CHANGELOG [0.10.0])已随 MES-41 合入主干,本版仅含其后的质量加固。

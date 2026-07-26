@@ -138,6 +138,8 @@ async def test_outbox_purge_deletes_only_terminal_expired_rows(session_factory, 
     assert deleted == 2
     remaining = await _outbox_ids(session_factory)
     assert remaining == {old_pending, fresh_published}
+    assert old_published not in remaining
+    assert old_failed not in remaining
 
 
 async def test_outbox_purge_respects_batch_limit(session_factory, workspace_factory):
