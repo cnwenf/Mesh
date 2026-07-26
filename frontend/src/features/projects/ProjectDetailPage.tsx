@@ -5,7 +5,7 @@
  * project_update.added 头插动态,archived/unarchived 置位,deleted 回列表页(§3.5/§4.5)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Button, Dialog, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

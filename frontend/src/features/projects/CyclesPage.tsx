@@ -4,7 +4,7 @@
  * 完成 auto_roll 周期时响应附带 next_cycle,toast 提示顺延出的新周期名。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

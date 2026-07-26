@@ -11,7 +11,7 @@
  * - 偏好写入经 settingsStore 同步到 PATCH /api/v1/users/me。
  */
 import { useCallback, useMemo, useState } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router';
 import { getApiClient } from './api/instance';
 import { ThemeProvider, ToastProvider } from './design';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';

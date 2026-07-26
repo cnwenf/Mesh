@@ -6,7 +6,7 @@
  */
 /* eslint-disable react-refresh/only-export-components -- 模块契约:组件与同域纯函数/常量同文件共存 */
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../api/client';
 import { MeshApiError } from '../api/errors';
 import { getApiClient } from '../api/instance';

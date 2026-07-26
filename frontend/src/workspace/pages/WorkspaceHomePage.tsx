@@ -3,7 +3,7 @@
  *
  * 呈现工作区名称/slug/我的角色/默认 locale;admin+ 提供设置入口(§6.12 角色可见性)。
  */
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useT } from '../../i18n';
 import { useWorkspace, WorkspaceGate } from '../WorkspaceProvider';
 
