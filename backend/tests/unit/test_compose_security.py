@@ -49,3 +49,21 @@ def test_gateway_bounds_websocket_frame_size():
     start with an explicit, small ``--ws-max-size`` (Settings.ws_max_size_bytes)."""
     command = str(_load()["services"]["gateway"]["command"])
     assert "--ws-max-size" in command
+
+
+def test_redis_requires_authentication():
+    """L3: Redis must run with requirepass — an unauthenticated instance lets
+    any container on the compose network forge realtime fan-out frames."""
+    command = _load()["services"]["redis"].get("command") or []
+    assert "--requirepass" in [str(part) for part in command]
+
+
+def test_all_mesh_redis_urls_carry_credentials():
+    """Every service's MESH_REDIS_URL must authenticate (redis://:pass@host)."""
+    for name, service in _load()["services"].items():
+        url = (service.get("environment") or {}).get("MESH_REDIS_URL")
+        if url is None:
+            continue
+        scheme, _, rest = url.partition("://")
+        assert scheme == "redis" and "@" in rest, f"{name} MESH_REDIS_URL lacks credentials"
+        assert "MESH_REDIS_PASSWORD" in rest.split("@", 1)[0]
