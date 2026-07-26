@@ -4,7 +4,7 @@ Each public method owns its transaction (``session_factory() + begin()``) and
 sets the ``mesh.workspace_id`` GUC up front, so every read/write is correct
 under RLS (restricted app role) and without it (owner role). Workspace-less
 paths resolve the tenant through the narrow SECURITY DEFINER lookup
-``mesh_view_workspace_id`` (migration 0009) BEFORE the membership gate runs.
+``mesh_view_workspace_id`` (migration 0011) BEFORE the membership gate runs.
 
 Contract anchors (kanban.md + README §6):
 - config JSONB is whitelist-validated before storage (kanban §2.9); failures
@@ -127,7 +127,7 @@ class ViewService:
     # ------------------------------------------------------------------
 
     async def resolve_view_workspace(self, view_id: uuid.UUID) -> uuid.UUID | None:
-        """Narrow SECURITY DEFINER lookup (migration 0009) — no tenant GUC yet."""
+        """Narrow SECURITY DEFINER lookup (migration 0011) — no tenant GUC yet."""
         async with self._factory() as session:
             return await session.scalar(
                 text("SELECT mesh_view_workspace_id(:id)"), {"id": view_id}
