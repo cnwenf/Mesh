@@ -21,6 +21,7 @@ from mesh.db.models.project import (
     ProjectUpdate,
 )
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
+from mesh.db.models.view import View
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -66,6 +67,7 @@ __all__ = [
     "RealtimeEvent",
     "Session",
     "User",
+    "View",
     "Workspace",
     "WorkspaceInvitation",
     "WorkspaceInvitationRedemption",
