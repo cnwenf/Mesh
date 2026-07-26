@@ -106,4 +106,4 @@
 - 前端 `node scripts/verify-coverage.mjs --base origin/main` → **99.6% PASS**。
 - 前端 `real-labels` Playwright 真实后端 → 1 passed;12 截图肉眼为真实渲染;SQL 复核落库 + `realtime_events` 投影。
 - docker compose `up --build -d` → api/worker/gateway/frontend/pg/redis 起;`alembic` 应用 0008;curl 注册/登录/建区/标签+字段 CRUD + 409 + 422 全通。
-- 匿名化 grep `multica/linear(产品义)/…` 无泄漏;提交 author+committer 均 `cnwenf`,无 co-author。
+- 匿名化:对全仓 tracked 内容(代码/注释/文档/提交说明/分支名)不区分大小写 grep 参考/对标产品名与竞品名,当前树零命中;余下的无关同形词(如退避策略的线性递增、CSS 线性动画、键盘快捷键)均非产品点名且非本切片引入;提交 author+committer 均 cnwenf,无 co-author。
