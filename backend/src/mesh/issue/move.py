@@ -24,6 +24,7 @@ the contract honest.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.issue import Issue, IssueActivity
 from mesh.db.models.member import Member
 from mesh.db.models.project import Cycle, Milestone, Project
-from mesh.errors import BusinessRuleError, ConflictError
+from mesh.errors import BusinessRuleError, ConflictError, ValidationError
 from mesh.issue.service import (
     IssueService,
     _isoformat,
@@ -42,6 +43,75 @@ from mesh.issue.statuses import render_status, resolve_default_status
 from mesh.outbox.service import emit_realtime
 
 MOVE_NOT_CONFIRMED = "move requires confirmation"
+
+
+def apply_move_plan(issue: Issue, plan: dict, *, now: datetime) -> None:
+    """Apply a §3.8 plan to the issue row (shared by move and bulk paths).
+
+    Status mapping syncs ``completed_at`` exactly like a direct status
+    change would: entering a done category stamps it, leaving one clears
+    it. Cleared project-private fields go NULL.
+    """
+    for mapped in plan["mapped_fields"]:
+        if mapped["field"] == "status":
+            new_status = mapped["to"]
+            issue.status_id = uuid.UUID(new_status["id"])
+            issue.state_category = new_status["category"]
+            if new_status["category"] == "done" and issue.completed_at is None:
+                issue.completed_at = now
+            elif new_status["category"] != "done" and issue.completed_at is not None:
+                issue.completed_at = None
+    for cleared in plan["cleared_fields"]:
+        if cleared["field"] == "milestone_id":
+            issue.milestone_id = None
+        elif cleared["field"] == "cycle_id":
+            issue.cycle_id = None
+
+
+def move_activity_rows(
+    *,
+    workspace_id: uuid.UUID,
+    issue: Issue,
+    actor: Member,
+    from_project_id: uuid.UUID | None,
+    plan: dict,
+) -> list[IssueActivity]:
+    """The §3.8 ⑥ audit trail: the project change PLUS one row per mapped
+    or cleared field, so the trail carries the mapping/clearing manifest."""
+    rows = [
+        IssueActivity(
+            workspace_id=workspace_id,
+            issue_id=issue.id,
+            actor_member_id=actor.id,
+            field="project_id",
+            old_value=str(from_project_id) if from_project_id is not None else None,
+            new_value=str(issue.project_id) if issue.project_id is not None else None,
+        )
+    ]
+    for mapped in plan["mapped_fields"]:
+        rows.append(
+            IssueActivity(
+                workspace_id=workspace_id,
+                issue_id=issue.id,
+                actor_member_id=actor.id,
+                field=mapped["field"],
+                old_value=mapped.get("from", {}).get("id"),
+                new_value=mapped.get("to", {}).get("id"),
+            )
+        )
+    for cleared in plan["cleared_fields"]:
+        items = cleared.get("items") or []
+        rows.append(
+            IssueActivity(
+                workspace_id=workspace_id,
+                issue_id=issue.id,
+                actor_member_id=actor.id,
+                field=cleared["field"],
+                old_value=items[0]["id"] if items else None,
+                new_value=None,
+            )
+        )
+    return rows
 
 
 def _jsonify_status(rendered: dict) -> dict:
@@ -159,6 +229,9 @@ class MoveService:
             "identifier": issue.identifier,
             "from_project_id": str(issue.project_id) if issue.project_id is not None else None,
             "target_project_id": str(target_project.id) if target_project else None,
+            # §3.8 step 2 requires the current version — step 1 hands it over
+            # so clients that start from the unconfirmed 422 can echo it back.
+            "version": issue.version,
             "mapped_fields": mapped_fields,
             "cleared_fields": cleared_fields,
             "kept_fields": list(KEPT_FIELDS),
@@ -203,18 +276,39 @@ class MoveService:
         confirm: bool,
         expected_version: int | None = None,
     ) -> dict:
+        if confirm and expected_version is None:
+            # §3.8 step 2: a confirmed move must carry the current version
+            # (optimistic lock). The preview hands the version out.
+            raise ValidationError(
+                "move requires the current version",
+                details={"field": "version", "hint": "echo preview.version back"},
+            )
         factory = self._issues._factory
-        async with factory() as session:
-            from mesh.db.tenant import set_tenant_context
+        if not confirm:
+            async with factory() as session:
+                from mesh.db.tenant import set_tenant_context
 
-            await set_tenant_context(session, workspace_id)
-            issue = await self._issues._load_issue(
-                session, workspace_id=workspace_id, issue_id=issue_id
-            )
-            target = await self._target_project(
-                session, workspace_id=workspace_id, target_project_id=target_project_id
-            )
-            if not confirm:
+                await set_tenant_context(session, workspace_id)
+                issue = await self._issues._load_issue(
+                    session, workspace_id=workspace_id, issue_id=issue_id
+                )
+                # MES-46 H1: the 422 preview envelope carries the full field
+                # manifest, so it is authorized exactly like the preview
+                # endpoint and the confirming transaction — AND in the same
+                # order: the source read gate runs BEFORE the target is even
+                # resolved, so a caller holding an invisible issue UUID can
+                # neither read the manifest nor probe project existence by
+                # sweeping target_project_id (message-identical 404/403
+                # regardless of the target). Confirmed moves skip straight
+                # to the authorizing transaction below (no redundant load).
+                await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
+                target = await self._target_project(
+                    session, workspace_id=workspace_id, target_project_id=target_project_id
+                )
+                if target is not None:
+                    await self._issues._projects.assert_can_write(
+                        session, viewer=actor, project=target
+                    )
                 plan = await self.compute_plan(
                     session, workspace_id=workspace_id, issue=issue, target_project=target
                 )
@@ -259,34 +353,19 @@ class MoveService:
 
             # Single-transaction application (§3.8 step 2):
             issue.project_id = target.id if target is not None else None
-            for mapped in plan["mapped_fields"]:
-                if mapped["field"] == "status":
-                    new_status = mapped["to"]
-                    issue.status_id = uuid.UUID(new_status["id"])
-                    issue.state_category = new_status["category"]
-                    if new_status["category"] == "done" and issue.completed_at is None:
-                        from mesh.issue.service import _now
-
-                        issue.completed_at = _now(self._issues._clock)
-                    elif new_status["category"] != "done" and issue.completed_at is not None:
-                        issue.completed_at = None
-            for cleared in plan["cleared_fields"]:
-                if cleared["field"] == "milestone_id":
-                    issue.milestone_id = None
-                elif cleared["field"] == "cycle_id":
-                    issue.cycle_id = None
-            issue.version = issue.version + 1
             from mesh.issue.service import _now
 
-            issue.updated_at = _now(self._issues._clock)
-            session.add(
-                IssueActivity(
+            now = _now(self._issues._clock)
+            apply_move_plan(issue, plan, now=now)
+            issue.version = issue.version + 1
+            issue.updated_at = now
+            session.add_all(
+                move_activity_rows(
                     workspace_id=workspace_id,
-                    issue_id=issue.id,
-                    actor_member_id=actor.id,
-                    field="project_id",
-                    old_value=str(from_project_id) if from_project_id is not None else None,
-                    new_value=str(issue.project_id) if issue.project_id is not None else None,
+                    issue=issue,
+                    actor=actor,
+                    from_project_id=from_project_id,
+                    plan=plan,
                 )
             )
             await session.flush()
@@ -331,4 +410,4 @@ class MoveService:
             return rendered
 
 
-__all__ = ["MoveService"]
+__all__ = ["MoveService", "apply_move_plan", "move_activity_rows"]
