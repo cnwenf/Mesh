@@ -3,6 +3,20 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.8] - 2026-07-26
+
+MES-46 多租户隔离维度安全审核收口(MES-50):2 项 MEDIUM 补丁,放行不受阻后的尽快修复项。
+
+### Security
+
+- **M1 默认状态回退补租户过滤**:`resolve_default_status` 的无 category 末路回退查询 `scope_filter` 缺 `workspace_id`,违反 `db/tenant.py`「所有租户查询必带 workspace_id」约定。标准部署(mesh_app + RLS)被 fail-closed 兜底;但 `MESH_APP_DATABASE_URL` 未配置、回退 owner 角色时,该查询返回**全租户**第一个默认状态,move-preview 响应可泄露他租状态名(写入被复合 FK 拒,500)。`scope_filter` 补 `IssueStatus.workspace_id == workspace_id`(同时命中 `idx_issue_statuses_scope`)。
+- **M2 issue_activity 收权 append-only**:迁移 0009 对 `issue_activity` 一括授予 `mesh_app` `SELECT, INSERT, UPDATE, DELETE`;该表是 issue 变更审计轨迹,服务层对它只有 INSERT。新增迁移 `0012` `REVOKE UPDATE, DELETE ON issue_activity FROM mesh_app`(对齐 `audit_logs`,auth.md §5.5 最小权限)。**不**复用 `audit_logs` 的拒 UPDATE/DELETE 触发器:`issue_activity` 有 `ON DELETE CASCADE`(issue_id)与 `ON DELETE SET NULL`(actor_member_id)两类系统强制参照动作,触发器会误伤、破坏 issue 删除与 member 物理删除(§9 T18);权限回收单独即可堵口(FK 参照动作不校验表级授权)。
+
+### Quality
+
+- 后端:M1 补单测(两 workspace 各建默认状态,含 workspace 级与 project 级 scope,断言各自解析到自己的默认状态、互不串租,对 buggy 代码 RED / 修复后 GREEN);M2 补 schema 实测(`has_table_privilege` 断言 `mesh_app` 仅 `SELECT + INSERT`,对未迁移库 RED / 迁移后 GREEN)。ruff 全绿;全量单测 + 真实 e2e **1113 通过**、`pytest-cov` **整体 95.10%**(≥90% 门禁,`issue/statuses.py` 95%);T1/T18/T19/T22 既有测试不受影响(含 T18 issue 删除级联 / member 物理删除 SET NULL 实测)。全新库 `alembic upgrade head` 0001→0012 单 head 线性链实测。
+- 文档同步:`docs/specs/features/issue.md` §2.2 `issue_activity` 增补「DB 级最小权限」说明(REVOKE 范围 + 不加触发器的原因)。
+
 ## [0.11.7] - 2026-07-26
 
 MES-46 issue 页面维度安全审核收口:1 项 MEDIUM + 2 项 LOW 修复 + 1 项 LOW i18n 补齐(LOW-4 为信息项,无需改动)。

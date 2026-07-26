@@ -174,6 +174,33 @@ async def test_audit_logs_is_append_only_at_db_level(db_session):
             await db_session.execute(text("DELETE FROM audit_logs"))
 
 
+async def test_issue_activity_app_role_cannot_update_or_delete(db_session):
+    """MES-46 M2: mesh_app keeps only SELECT + INSERT on issue_activity.
+
+    audit_logs is additionally guarded by a reject trigger (0004), but that
+    second layer is deliberately omitted for issue_activity: its ``ON DELETE
+    CASCADE`` (issue_id) / ``ON DELETE SET NULL`` (actor_member_id) FK actions
+    would trip such a trigger and break issue deletion / member physical-delete
+    (T18). The append-only guarantee is the privilege revocation (0012),
+    asserted here via the same catalog check PostgreSQL enforces at runtime.
+    """
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT "
+                "has_table_privilege('mesh_app', 'issue_activity', 'SELECT') AS can_select, "
+                "has_table_privilege('mesh_app', 'issue_activity', 'INSERT') AS can_insert, "
+                "has_table_privilege('mesh_app', 'issue_activity', 'UPDATE') AS can_update, "
+                "has_table_privilege('mesh_app', 'issue_activity', 'DELETE') AS can_delete"
+            )
+        )
+    ).one()
+    assert row.can_select is True
+    assert row.can_insert is True
+    assert row.can_update is False
+    assert row.can_delete is False
+
+
 async def test_member_polymorphic_check_enforced(db_session, workspace_factory):
     workspace = await workspace_factory()
     # human member without user_id is rejected by the CHECK.
