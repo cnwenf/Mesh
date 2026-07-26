@@ -20,6 +20,7 @@ import {
 } from '../api';
 import { applyAttachmentDeleted, applyAttachmentProcessed } from '../realtime';
 import type { Attachment } from '../types';
+import { AttachmentComposer } from './AttachmentComposer';
 import { FileIcon } from './FileIcon';
 import { Lightbox } from './Lightbox';
 import '../attachments.css';
@@ -277,6 +278,14 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
       <h2>
         {t('attachments.title')}（{attachments.length}）
       </h2>
+      {/* 上传入口(§4.1):回形针 / 拖拽 / 粘贴,直传完成后经 link_to 挂到本 issue;
+          放行态经 attachment.processed 实时合并刷新。 */}
+      <AttachmentComposer
+        workspaceId={props.workspaceId}
+        linkTo={{ type: 'issue', id: props.issueId }}
+        client={client}
+        onUploaded={() => setReloadKey((key) => key + 1)}
+      />
       {!isLoading && attachments.length === 0 ? (
         <p className="mesh-attachments__empty" data-testid="attachments-empty">
           {t('attachments.empty')}
