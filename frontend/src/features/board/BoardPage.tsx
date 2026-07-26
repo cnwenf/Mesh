@@ -1,12 +1,16 @@
 /**
- * 看板页面 shell(kanban.md §4.1/§4.2,README §6.12 异常态矩阵)。
+ * 看板页面(kanban.md §4.1/§4.2/§4.3/§4.4,README §6.12 异常态矩阵)。
  *
- * 定义层静态切片(MES-43):视图切换器 + 工具条(分组/筛选/排序/WIP/显示字段
- * 配置)+ 按 group_by 配置派生的列骨架;不接真实 issue 数据 —— 列体按 §6.12
- * 空态呈现,投影查询属 issue 耦合增量(MES-33 余量)。
+ * 投影层(MES-33):在视图定义层 shell 上接真实 issue 数据 ——
+ * - GET /views/{id}/issues 执行视图配置 → 分组整体游标 → 渲染真实卡片;
+ * - 拖拽 = POST /views/{id}/moves 原子 move(乐观更新 + 409 收敛 + WIP 弹回 +
+ *   跨项目预览确认,§4.3/§4.4);
+ * - 实时增量合并(workspace:{ws}:issues + view:{id} 频道,单卡插入/移动/移除,
+ *   禁整板刷新;view.updated/投影规则变更才重拉,§3.5);
+ * - 重连/重放过期 → 「正在重新同步」横幅(§6.12 stale/resync)。
  *
- * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(主操作:新建视图)
- * → 内容(对齐 ProjectsPage)。选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
+ * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(新建视图)→ 内容。
+ * 选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -14,6 +18,9 @@ import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
 import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
 import { useT } from '../../i18n';
+import { useRealtimeContext } from '../../shell/AppShell';
+import { createIssue, workspaceIssuesChannel } from '../issues/api';
+import type { CreateIssueBody, IssuePriority } from '../issues/types';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
 import {
@@ -23,10 +30,14 @@ import {
   listViews,
   setViewWip,
   updateView,
+  viewChannel,
 } from './api';
 import { BoardColumns } from './BoardColumns';
-import { columnsForView } from './columns';
+import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
+import { columnsForView, deriveColumns } from './columns';
 import { FilterConfigPanel } from './FilterConfigPanel';
+import { fetchViewIssues, moveCard } from './projection';
+import type { BoardCard, BoardGroup, MovePlan, ViewProjection } from './projection';
 import { SortConfigPanel } from './SortConfigPanel';
 import { ViewSaveBar } from './ViewSaveBar';
 import { ViewSwitcher } from './ViewSwitcher';
@@ -73,7 +84,7 @@ function draftDiffers(view: View, draft: ViewDraft): boolean {
 
 type PanelKey = 'filter' | 'sort' | 'wip' | 'display';
 
-const GROUP_BY_OPTIONS: readonly (GroupByField)[] = [
+const GROUP_BY_OPTIONS: readonly GroupByField[] = [
   'state_category',
   'status',
   'assignee',
@@ -82,15 +93,44 @@ const GROUP_BY_OPTIONS: readonly (GroupByField)[] = [
   'label',
 ];
 
+/** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
+export async function loadAllGroups(
+  client: ReturnType<typeof getApiClient>,
+  viewId: string,
+): Promise<ViewProjection> {
+  const first = await fetchViewIssues(client, viewId, { limit: 200 });
+  if (first.next_cursor === null) return first;
+  const byKey = new Map<string, BoardGroup>();
+  for (const group of first.groups) {
+    byKey.set(group.key, group);
+  }
+  let cursor: string | null = first.next_cursor;
+  while (cursor !== null) {
+    const page = await fetchViewIssues(client, viewId, { limit: 200, cursor });
+    for (const incoming of page.groups) {
+      const existing = byKey.get(incoming.key);
+      byKey.set(
+        incoming.key,
+        existing === undefined
+          ? incoming
+          : { ...existing, data: [...existing.data, ...incoming.data] },
+      );
+    }
+    cursor = page.next_cursor;
+  }
+  return { ...first, groups: [...byKey.values()] };
+}
+
 export function BoardPage(): React.JSX.Element {
   const t = useT();
   const navigate = useNavigate();
   const { viewId } = useParams<{ viewId: string }>();
   const toast = useToast();
   const client = useMemo(() => getApiClient(), []);
+  const realtime = useRealtimeContext();
 
-  // addToast 经 ref 持有:避免 toast 上下文对象每次渲染换引用而让 toastError/
-  // load* 回调失效,进而触发挂载 effect 在加载失败路径上无限重跑(§6.12 错误态)。
+  // addToast 经 ref 持有:避免 toast 上下文对象每次渲染换引用而让回调失效,
+  // 进而触发挂载 effect 在加载失败路径上无限重跑(§6.12 错误态)。
   const addToastRef = useRef(toast.addToast);
   addToastRef.current = toast.addToast;
 
@@ -104,12 +144,35 @@ export function BoardPage(): React.JSX.Element {
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [saveAsName, setSaveAsName] = useState('');
 
+  // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
+  const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
+  const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>({});
+  const [boardStatus, setBoardStatus] = useState<LoadStatus>('loading');
+  const [resyncing, setResyncing] = useState(false);
+  const [movePreview, setMovePreview] = useState<{
+    plan: MovePlan;
+    issueId: string;
+    toGroupKey: string;
+    position: number;
+    version: number;
+  } | null>(null);
+
+  const boardGroupsRef = useRef(boardGroups);
+  boardGroupsRef.current = boardGroups;
+
+  // 当前生效分组(草稿 group_by;须在早期返回之前的 hooks 区计算,§ Rules of Hooks)。
+  const effectiveGroupBy = draft?.group_by ?? 'state_category';
+  // 已加载卡片按生效 group_by 本地重分桶(§4.2 分组切换即时反映);
+  // 组标签由服务端按工作区 locale 本地化后下发(含无负责人/无项目列),客户端不再硬编码。
+  const displayGroups = useMemo(
+    () => rebucketGroups(boardGroups, effectiveGroupBy),
+    [boardGroups, effectiveGroupBy],
+  );
+
   const toastError = useCallback(
     (error: unknown) => {
       const message =
-        error instanceof MeshApiError
-          ? `${t('error.' + error.code)}`
-          : t('common.unknownError');
+        error instanceof MeshApiError ? `${t('error.' + error.code)}` : t('common.unknownError');
       addToastRef.current(message, { tone: 'danger', closeLabel: t('common.close') });
     },
     [t],
@@ -162,19 +225,89 @@ export function BoardPage(): React.JSX.Element {
     return views.find((view) => view.is_default) ?? views[0] ?? null;
   }, [views, viewId]);
 
-  // 选中视图变化时以其配置重置草稿(切换视图丢弃未保存改动前由 UI 提示;
-  // 本切片切换即重置,保存条在脏态呈现 —— §4.2 保存/另存/丢弃)。
   useEffect(() => {
     setDraft(selectedView === null ? null : draftFromView(selectedView));
   }, [selectedView]);
 
   const selectView = useCallback(
     (nextId: string) => {
-      // §4.2:切换视图 URL 同步 /views/{id}(可分享/收藏)
       navigate(`/views/${nextId}`);
     },
     [navigate],
   );
+
+  // 投影加载:选中视图变化 → 执行视图配置拉取整板(§3.2)。
+  const loadBoard = useCallback(
+    async (view: View) => {
+      setBoardStatus('loading');
+      try {
+        const projection = await loadAllGroups(client, view.id);
+        setBoardGroups(projection.groups);
+        setColumnTargetStatus(projection.column_target_status);
+        setBoardStatus('ready');
+      } catch (error) {
+        setBoardStatus('error');
+        toastError(error);
+      }
+    },
+    [client, toastError],
+  );
+
+  useEffect(() => {
+    if (selectedView !== null && selectedView.layout === 'board') {
+      void loadBoard(selectedView);
+    } else {
+      setBoardGroups([]);
+      setBoardStatus('ready');
+    }
+  }, [selectedView, loadBoard]);
+
+  // 实时增量合并(§3.5):订阅工作区 issue 频道 + 视图频道,单卡插入/移动/移除。
+  const filtersRef = useRef<Filters>(selectedView?.filters ?? {});
+  filtersRef.current = selectedView?.filters ?? {};
+  useEffect(() => {
+    if (realtime === null || selectedView === null || membership === null) return;
+    if (selectedView.layout !== 'board') return;
+    const wsChannel = workspaceIssuesChannel(membership.workspace_id);
+    const vChannel = viewChannel(selectedView.id);
+    realtime.client.subscribe(wsChannel);
+    realtime.client.subscribe(vChannel);
+    const offFrame = realtime.client.onFrame((frame) => {
+      if (frame.channel !== wsChannel && frame.channel !== vChannel) return;
+      if (frame.event === 'view.presence') return;
+      // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
+      // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
+      if (frame.event === 'view.wip_exceeded') {
+        const d = frame.payload as { group_key?: unknown; limit?: unknown; count?: unknown };
+        addToastRef.current(
+          t('board.wipExceededToast', {
+            group: String(d.group_key ?? ''),
+            limit: d.limit ?? 0,
+            count: d.count ?? 0,
+          }),
+          { tone: 'warn', closeLabel: t('common.close') },
+        );
+      }
+      const result = applyBoardFrame(boardGroupsRef.current, frame, {
+        groupBy: selectedView.group_by ?? 'state_category',
+        belongs: (card) => cardBelongsToView(card, filtersRef.current),
+      });
+      if (result.refetch) {
+        void loadBoard(selectedView);
+      } else {
+        setBoardGroups(result.groups);
+      }
+    });
+    const offState = realtime.client.onState((state) => {
+      setResyncing(state === 'resyncing' || state === 'reconnecting');
+    });
+    return () => {
+      offFrame();
+      offState();
+      realtime.client.unsubscribe(wsChannel);
+      realtime.client.unsubscribe(vChannel);
+    };
+  }, [realtime, selectedView, membership, loadBoard, t]);
 
   if (wsStatus === 'loading') {
     return (
@@ -298,7 +431,12 @@ export function BoardPage(): React.JSX.Element {
           title={t('board.emptyTitle')}
           description={t('board.emptyDescription')}
           action={
-            <Button data-testid="board-empty-create" onClick={() => document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()}>
+            <Button
+              data-testid="board-empty-create"
+              onClick={() =>
+                document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()
+              }
+            >
               + {t('board.newView')}
             </Button>
           }
@@ -309,7 +447,6 @@ export function BoardPage(): React.JSX.Element {
 
   const dirty = draftDiffers(selectedView, draft);
   const canWrite = selectedView.can_write === true;
-  // 列派生以「草稿覆盖后的视图」计算,配置改动即时反映到列骨架。
   const previewView: View = {
     ...selectedView,
     group_by: draft.group_by,
@@ -318,7 +455,14 @@ export function BoardPage(): React.JSX.Element {
     sort: draft.sort,
     board_settings: draft.board_settings,
   };
-  const columns = columnsForView(previewView);
+  // 投影层:已加载卡片按「草稿 group_by」本地重分桶(displayGroups,见上方 hooks),
+  // 再与列骨架合并(§3.2)。拖拽仅在非脏态启用(此时草稿=已保存,与服务端一致)。
+  const derived = deriveColumns(previewView, displayGroups);
+  const columns =
+    selectedView.layout === 'board' && boardStatus === 'ready'
+      ? derived.columns
+      : columnsForView(previewView);
+  const cardsByKey = derived.cardsByKey;
 
   const toggleCollapse = (key: string): void => {
     const collapsed = new Set(draft.board_settings.collapsed_columns ?? []);
@@ -351,7 +495,6 @@ export function BoardPage(): React.JSX.Element {
       await loadViews(workspaceId);
     } catch (error) {
       if (error instanceof MeshApiError && error.code === 'conflict') {
-        // §6.14:409 → 拉最新收敛(服务端最新写为准)
         await loadViews(workspaceId);
       }
       toastError(error);
@@ -393,12 +536,140 @@ export function BoardPage(): React.JSX.Element {
     enforcement: WipEnforcement,
   ): Promise<void> => {
     try {
-      await setViewWip(client, selectedView.id, {
-        group_key: groupKey,
-        limit,
-        enforcement,
-      });
+      await setViewWip(client, selectedView.id, { group_key: groupKey, limit, enforcement });
       await loadViews(workspaceId);
+      await loadBoard(selectedView);
+    } catch (error) {
+      toastError(error);
+    }
+  };
+
+  // 拖拽原子 move(§4.3/§4.4):乐观落位 → 服务端 move → 失败收敛/弹回。
+  const moveCardInGroups = (
+    groups: readonly BoardGroup[],
+    issueId: string,
+    toGroupKey: string,
+    position: number,
+    patch: Partial<BoardCard>,
+  ): BoardGroup[] => {
+    let moved: BoardCard | null = null;
+    const stripped = groups.map((group) => {
+      const card = group.data.find((item) => item.id === issueId);
+      if (card === undefined) return group;
+      moved = card;
+      return { ...group, count: Math.max(0, group.count - 1), data: group.data.filter((item) => item.id !== issueId) };
+    });
+    if (moved === null) return groups as BoardGroup[];
+    const updated: BoardCard = { ...(moved as BoardCard), ...patch, position };
+    return stripped.map((group) =>
+      group.key === toGroupKey
+        ? { ...group, count: group.count + 1, data: [...group.data, updated] }
+        : group,
+    );
+  };
+
+  const targetPatchFor = (toGroupKey: string): Partial<BoardCard> => {
+    const groupBy = effectiveGroupBy;
+    if (groupBy === 'status') {
+      return { status_id: toGroupKey };
+    }
+    if (groupBy === 'assignee') {
+      return { assignee_id: toGroupKey === '__none__' ? null : toGroupKey };
+    }
+    if (groupBy === 'priority') {
+      return { priority: toGroupKey };
+    }
+    if (groupBy === 'project') {
+      return { project_id: toGroupKey === '__none__' ? null : toGroupKey };
+    }
+    // state_category:状态改为该列默认 status(§2.4 column_target_status)。
+    const statusId = columnTargetStatus[toGroupKey];
+    return {
+      state_category: toGroupKey,
+      status_id: statusId ?? undefined,
+      status: statusId !== undefined ? { id: statusId, name: toGroupKey, category: toGroupKey } : undefined,
+    };
+  };
+
+  const handleDropCard = async (
+    issueId: string,
+    toGroupKey: string,
+    position: number,
+  ): Promise<void> => {
+    if (selectedView === null) return;
+    const snapshot = boardGroupsRef.current;
+    const card = snapshot.flatMap((group) => group.data).find((item) => item.id === issueId);
+    if (card === undefined) return;
+
+    // 乐观落位(§4.3)。
+    setBoardGroups(moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)));
+
+    try {
+      const result = await moveCard(client, selectedView.id, {
+        issue_id: issueId,
+        to_group_key: toGroupKey,
+        position,
+        version: card.version,
+      });
+      // 用服务端最新字段/版本收敛。
+      setBoardGroups((current) => moveCardInGroups(current, issueId, toGroupKey, position, result));
+    } catch (error) {
+      if (error instanceof MeshApiError && error.code === 'move_confirmation_required') {
+        // 跨项目拖拽:弹回 + 展示迁移预览要求确认(§4.3/T22)。
+        setBoardGroups(snapshot);
+        const plan = (error.details?.preview ?? {}) as MovePlan;
+        setMovePreview({ plan, issueId, toGroupKey, position, version: card.version });
+        return;
+      }
+      // WIP block / 其它失败 → 弹回原列 + 提示(§4.4)。
+      setBoardGroups(snapshot);
+      if (error instanceof MeshApiError && error.code === 'conflict') {
+        await loadBoard(selectedView); // 409 → 拉最新收敛(T9)。
+      }
+      toastError(error);
+    }
+  };
+
+  const confirmMove = async (): Promise<void> => {
+    if (movePreview === null || selectedView === null) return;
+    const { issueId, toGroupKey, position, version } = movePreview;
+    setMovePreview(null);
+    try {
+      const result = await moveCard(client, selectedView.id, {
+        issue_id: issueId,
+        to_group_key: toGroupKey,
+        position,
+        version,
+        confirm: true,
+      });
+      setBoardGroups((current) => moveCardInGroups(current, issueId, toGroupKey, position, result));
+    } catch (error) {
+      if (error instanceof MeshApiError && error.code === 'conflict') {
+        await loadBoard(selectedView);
+      }
+      toastError(error);
+    }
+  };
+
+  const handleQuickCreate = async (groupKey: string, title: string): Promise<void> => {
+    if (selectedView === null) return;
+    const groupBy = effectiveGroupBy;
+    // 继承该列分组值(§4.5)。
+    const inherited: Partial<CreateIssueBody> =
+      groupBy === 'status'
+        ? { status_id: groupKey }
+        : groupBy === 'state_category'
+          ? { status_id: columnTargetStatus[groupKey] }
+          : groupBy === 'priority'
+            ? { priority: groupKey as IssuePriority }
+            : groupBy === 'assignee'
+              ? { assignee_id: groupKey === '__none__' ? null : groupKey }
+              : groupBy === 'project'
+                ? { project_id: groupKey === '__none__' ? null : groupKey }
+                : {};
+    try {
+      await createIssue(client, workspaceId, { title, ...inherited });
+      await loadBoard(selectedView);
     } catch (error) {
       toastError(error);
     }
@@ -427,9 +698,7 @@ export function BoardPage(): React.JSX.Element {
             label={t('board.groupByLabel')}
             value={draft.group_by ?? 'state_category'}
             disabled={!canWrite}
-            onChange={(event) =>
-              setDraft({ ...draft, group_by: event.target.value as GroupByField })
-            }
+            onChange={(event) => setDraft({ ...draft, group_by: event.target.value as GroupByField })}
             data-testid="group-by-select"
           >
             {GROUP_BY_OPTIONS.map((field) => (
@@ -479,6 +748,12 @@ export function BoardPage(): React.JSX.Element {
           </div>
         </header>
 
+        {resyncing ? (
+          <div className="mesh-board__resync" role="status" data-testid="board-resync-banner">
+            {t('board.resyncing')}
+          </div>
+        ) : null}
+
         <ViewSaveBar
           dirty={dirty}
           busy={busy}
@@ -492,25 +767,37 @@ export function BoardPage(): React.JSX.Element {
         />
 
         {panel === 'filter' ? (
-          <FilterConfigPanel
-            filters={draft.filters}
-            onChange={(filters) => setDraft({ ...draft, filters })}
-          />
+          <FilterConfigPanel filters={draft.filters} onChange={(filters) => setDraft({ ...draft, filters })} />
         ) : null}
         {panel === 'sort' ? (
-          <SortConfigPanel
-            rules={draft.sort}
-            onChange={(sort) => setDraft({ ...draft, sort })}
-          />
+          <SortConfigPanel rules={draft.sort} onChange={(sort) => setDraft({ ...draft, sort })} />
         ) : null}
         {panel === 'wip' ? <WipConfigPanel columns={columns} onSave={handleWipSave} /> : null}
 
         {selectedView.layout === 'board' ? (
-          <BoardColumns
-            columns={columns}
-            groupBy={draft.group_by}
-            onToggleCollapse={toggleCollapse}
-          />
+          boardStatus === 'loading' ? (
+            <Skeleton loadingLabel={t('common.loading')} className="mesh-board__skeleton" />
+          ) : boardStatus === 'error' ? (
+            <ErrorState
+              title={t('state.errorTitle')}
+              description={t('state.errorDescription')}
+              retryLabel={t('common.retry')}
+              onRetry={() => void loadBoard(selectedView)}
+            />
+          ) : (
+            <BoardColumns
+              columns={columns}
+              groupBy={effectiveGroupBy}
+              cardsByKey={cardsByKey}
+              canWrite={canWrite}
+              dragEnabled={canWrite && !dirty}
+              onToggleCollapse={toggleCollapse}
+              onDropCard={(issueId, toGroupKey, position) =>
+                void handleDropCard(issueId, toGroupKey, position)
+              }
+              onQuickCreate={(groupKey, title) => void handleQuickCreate(groupKey, title)}
+            />
+          )
         ) : selectedView.layout === 'list' ? (
           <EmptyState
             title={t('board.listPlaceholderTitle')}
@@ -542,8 +829,41 @@ export function BoardPage(): React.JSX.Element {
             <Button variant="secondary" onClick={() => setSaveAsOpen(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={() => void handleSaveAs()} disabled={saveAsName.trim() === '' || busy} data-testid="save-as-submit">
+            <Button
+              onClick={() => void handleSaveAs()}
+              disabled={saveAsName.trim() === '' || busy}
+              data-testid="save-as-submit"
+            >
               {t('common.save')}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={movePreview !== null}
+        onClose={() => setMovePreview(null)}
+        title={t('board.movePreviewTitle')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-board__dialog" data-testid="move-preview-dialog">
+          <p>{t('board.movePreviewDescription')}</p>
+          {movePreview !== null && movePreview.plan.mapped_fields.length > 0 ? (
+            <p data-testid="move-preview-mapped">
+              {t('board.movePreviewMapped', { count: movePreview.plan.mapped_fields.length })}
+            </p>
+          ) : null}
+          {movePreview !== null && movePreview.plan.cleared_fields.length > 0 ? (
+            <p data-testid="move-preview-cleared">
+              {t('board.movePreviewCleared', { count: movePreview.plan.cleared_fields.length })}
+            </p>
+          ) : null}
+          <div className="mesh-board__dialog-actions">
+            <Button variant="secondary" onClick={() => setMovePreview(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={() => void confirmMove()} data-testid="move-preview-confirm">
+              {t('board.moveConfirm')}
             </Button>
           </div>
         </div>

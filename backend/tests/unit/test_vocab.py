@@ -30,8 +30,8 @@ def _load_checker_module():
     return module
 
 
-def test_vocabulary_baseline_is_97_events():
-    assert len(EVENT_VOCABULARY) == 97
+def test_vocabulary_baseline_is_98_events():
+    assert len(EVENT_VOCABULARY) == 98
 
 
 def test_vocabulary_matches_readme_registry_exactly():

@@ -5,6 +5,7 @@
  * board_settings.columns / collapsed_columns / wip)派生,卡片计数恒为 0,
  * 投影查询落地后计数由执行响应填充。
  */
+import type { BoardCard, BoardGroup } from './projection';
 import type { BoardColumn, View, WipLimit } from './types';
 
 /** 7 个固定状态类别(issue.md §2.2;看板默认列)。 */
@@ -93,4 +94,45 @@ export function columnsForView(view: View): readonly BoardColumn[] {
 /** 视图是否可切换为看板渲染(layout board;list 复用 shell,timeline/table 预留)。 */
 export function isRenderableLayout(layout: View['layout']): boolean {
   return layout === 'board' || layout === 'list';
+}
+
+export interface DerivedBoard {
+  readonly columns: readonly BoardColumn[];
+  readonly cardsByKey: Readonly<Record<string, readonly BoardCard[]>>;
+}
+
+/**
+ * 把投影响应(分组 + 卡片)与视图列骨架合并为可渲染看板(投影层):
+ * - group_by = state_category/priority(含默认)→ 固定列骨架 + 各组 count/wip/卡片;
+ * - group_by = status/assignee/project → 列直接来自投影响应的动态分组。
+ */
+export function deriveColumns(view: View, groups: readonly BoardGroup[]): DerivedBoard {
+  const cardsByKey: Record<string, readonly BoardCard[]> = {};
+  for (const group of groups) {
+    cardsByKey[group.key] = group.data;
+  }
+  const collapsed = new Set(view.board_settings.collapsed_columns ?? []);
+  const groupBy = view.group_by;
+
+  if (groupBy === null || groupBy === 'state_category' || groupBy === 'priority') {
+    const columns = columnsForView(view).map((column) => {
+      const group = groups.find((item) => item.key === column.key);
+      return {
+        ...column,
+        count: group?.count ?? 0,
+        wip: group?.wip ?? column.wip,
+      };
+    });
+    return { columns, cardsByKey };
+  }
+
+  const columns: BoardColumn[] = groups.map((group) => ({
+    key: group.key,
+    label: group.label,
+    collapsed: collapsed.has(group.key),
+    wip: group.wip,
+    count: group.count,
+    placeholder: false,
+  }));
+  return { columns, cardsByKey };
 }

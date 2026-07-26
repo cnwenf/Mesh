@@ -59,3 +59,31 @@ class ReorderViewsRequest(BaseModel):
     """PATCH /workspaces/{ws}/views/reorder body — ordered view ids."""
 
     view_ids: list[str] = Field(min_length=1)
+
+
+class MoveRequest(BaseModel):
+    """POST /views/{id}/moves body — one atomic board drag (kanban §3.2).
+
+    ``to_group_key`` names the destination column for the view's ``group_by``
+    (a state_category / status_id / member_id|__none__ / priority value, or a
+    project_id when ``group_by=project``). ``version`` is the issue's optimistic
+    lock; ``confirm``/``dry_run`` drive the cross-project two-step contract.
+    """
+
+    issue_id: str
+    to_group_key: str = Field(min_length=1, max_length=120)
+    position: float = 0.0
+    version: int | None = None
+    confirm: bool = False
+    dry_run: bool = False
+
+
+class ReorderCardsRequest(BaseModel):
+    """POST /views/{id}/reorder body — in-column card order only (kanban §4.3).
+
+    Never changes status; writes the per-view ``view_issue_positions`` row.
+    """
+
+    issue_id: str
+    to_group_key: str = Field(min_length=1, max_length=120)
+    position: float = 0.0

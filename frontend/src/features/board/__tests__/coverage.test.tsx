@@ -41,6 +41,17 @@ function stubMeAndViews(views: readonly View[], opts: { failWs?: boolean } = {})
       }
       return fakeResponse({ body: { data: ME } });
     }
+    if (method === 'GET' && url.includes('/issues')) {
+      return fakeResponse({
+        body: {
+          layout: 'board',
+          group_by: views[0]?.group_by ?? 'state_category',
+          column_target_status: {},
+          groups: [],
+          next_cursor: null,
+        },
+      });
+    }
     if (method === 'GET' && url.includes('/views')) {
       return fakeResponse({ body: { data: views, next_cursor: null } });
     }
@@ -126,6 +137,11 @@ describe('BoardPage 覆盖补强', () => {
       const method = init?.method ?? 'GET';
       calls.push(method);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/issues')) {
+        return fakeResponse({
+          body: { layout: 'board', group_by: 'state_category', column_target_status: {}, groups: [], next_cursor: null },
+        });
+      }
       if (method === 'GET' && url.includes('/views')) {
         return fakeResponse({ body: { data: [view()], next_cursor: null } });
       }
