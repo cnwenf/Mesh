@@ -63,11 +63,18 @@ def code_challenge_s256(verifier: str) -> str:
 
 @dataclass(frozen=True)
 class OAuthUserInfo:
-    """The identity a provider vouches for after the code exchange."""
+    """The identity a provider vouches for after the code exchange.
+
+    ``email_verified`` is load-bearing for security (H1): an identity may only be
+    auto-linked to an existing account by email when the provider has actually
+    verified that email — otherwise an attacker holding an unverified
+    ``victim@corp.com`` on some provider could take over the victim's account.
+    """
 
     provider_subject: str
     email: str | None = None
     name: str | None = None
+    email_verified: bool = False
 
 
 @runtime_checkable
@@ -86,17 +93,36 @@ class OAuthProvider(Protocol):
         """Exchange the authorization code (+ PKCE verifier) for the identity."""
         ...
 
+    def is_redirect_allowed(self, redirect_uri: str) -> bool:
+        """Whether ``redirect_uri`` is on this provider's exact-match allowlist (M1)."""
+        ...
+
 
 class MockOAuthProvider:
     """In-process provider for tests/dev — same interface, no network.
 
-    ``exchange_code`` interprets the code as base64url(JSON ``{sub,email,name}``)
-    so a single provider instance can simulate arbitrary identities; a malformed
-    code falls back to a fixed default identity.
+    ``exchange_code`` interprets the code as base64url(JSON
+    ``{sub,email,name,email_verified}``) so a single provider instance can
+    simulate arbitrary identities (``email_verified`` defaults to False —
+    callers opt in, exactly like a real provider that may or may not have
+    verified the email). A malformed code — e.g. the placeholder ``code=mock``
+    emitted by ``authorization_url`` in the dev browser round-trip — falls back
+    to a fixed default identity whose email the mock vouches for
+    (``email_verified=True``): H1 guards against *real* providers forwarding
+    unverified emails, while the dev/test mock is itself the authority for its
+    own default identity — otherwise dev third-party login could never succeed.
+    ``allowed_redirect_uris`` is an exact-match allowlist (M1) — empty denies
+    all redirect URIs.
     """
 
-    def __init__(self, name: str = "mock") -> None:
+    def __init__(
+        self, name: str = "mock", *, allowed_redirect_uris: frozenset[str] = frozenset()
+    ) -> None:
         self.name = name
+        self._allowed_redirect_uris = allowed_redirect_uris
+
+    def is_redirect_allowed(self, redirect_uri: str) -> bool:
+        return redirect_uri in self._allowed_redirect_uris
 
     def authorization_url(self, *, state: str, code_challenge: str, redirect_uri: str) -> str:
         # The mock "authorizes" instantly, redirecting straight back to the
@@ -114,18 +140,25 @@ class MockOAuthProvider:
                 provider_subject=str(payload["sub"]),
                 email=payload.get("email"),
                 name=payload.get("name"),
+                email_verified=bool(payload.get("email_verified", False)),
             )
         except (ValueError, KeyError, json.JSONDecodeError):
             return OAuthUserInfo(
                 provider_subject="mock-subject-1",
                 email="mock-user@example.com",
                 name="Mock User",
+                email_verified=True,  # mock vouches for its own default identity
             )
 
 
-def encode_mock_code(*, sub: str, email: str, name: str | None = None) -> str:
+def encode_mock_code(
+    *, sub: str, email: str, name: str | None = None, email_verified: bool = False
+) -> str:
     """Helper for tests: build a mock-provider code carrying an identity."""
-    payload = json.dumps({"sub": sub, "email": email, "name": name}, separators=(",", ":"))
+    payload = json.dumps(
+        {"sub": sub, "email": email, "name": name, "email_verified": email_verified},
+        separators=(",", ":"),
+    )
     return base64.urlsafe_b64encode(payload.encode("ascii")).decode("ascii").rstrip("=")
 
 
@@ -179,6 +212,13 @@ class OAuthService:
             raise ValidationError("invalid mode", details={"mode": mode})
         if mode == "bind" and user_id is None:
             raise ValidationError("bind mode requires an authenticated user")
+        # M1: exact-match redirect_uri allowlist (OAuth 2.0 security BCP) — the
+        # app never 302s to an arbitrary URI with code+state (open redirect).
+        if not provider.is_redirect_allowed(redirect_uri):
+            raise BusinessRuleError(
+                "redirect_uri is not allowed for this provider",
+                code="redirect_uri_not_allowed",
+            )
         state = security.generate_token()
         verifier = generate_code_verifier()
         challenge = code_challenge_s256(verifier)
@@ -255,7 +295,13 @@ class OAuthService:
     async def _login_or_register(
         self, *, provider_name: str, userinfo: OAuthUserInfo
     ) -> uuid.UUID:
-        """A5: existing binding logs in; known email binds; else auto-register."""
+        """A5: existing binding logs in; verified email links/registers; else reject.
+
+        H1: an identity is only linked to an existing account by email when the
+        provider has *verified* that email (``email_verified=True``). An
+        unverified email never auto-links (account-takeover prevention) — the
+        user must instead sign in with their password and bind explicitly.
+        """
         now = _now()
         async with self._sf() as session, session.begin():
             identity = await session.scalar(
@@ -267,17 +313,21 @@ class OAuthService:
             if identity is not None:
                 return identity.user_id
 
-            user: User | None = None
-            if userinfo.email:
-                user = await session.scalar(
-                    select(User).where(User.email == userinfo.email.lower())
+            if not userinfo.email:
+                raise BusinessRuleError(
+                    "provider did not supply an email; cannot auto-register",
+                    code="oauth_email_required",
                 )
+            if not userinfo.email_verified:
+                raise BusinessRuleError(
+                    "provider has not verified this email; sign in and link manually",
+                    code="oauth_email_not_verified",
+                )
+
+            user = await session.scalar(
+                select(User).where(User.email == userinfo.email.lower())
+            )
             if user is None:
-                if not userinfo.email:
-                    raise BusinessRuleError(
-                        "provider did not supply an email; cannot auto-register",
-                        code="oauth_email_required",
-                    )
                 user = User(
                     email=userinfo.email.lower(),
                     display_name=userinfo.name or userinfo.email,

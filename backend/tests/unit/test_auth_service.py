@@ -13,10 +13,12 @@ import pyotp
 import pytest
 from sqlalchemy import select
 
-from mesh.auth.security import decrypt_secret
+from mesh.auth.security import decrypt_secret, hash_token
 from mesh.auth.service import AuthService, MfaRequiredResult, TokenResult, UserUpdate
 from mesh.config import load_settings
-from mesh.db.models.user import PasswordResetToken, User
+from mesh.db.models.audit import AuditLog
+from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.user import PasswordResetToken, Session, User
 from mesh.errors import (
     BusinessRuleError,
     ConflictError,
@@ -288,6 +290,255 @@ class TestResetAndVerify:
                 ).scalars().all()
             )
         assert count == 1
+
+
+# --- authenticated password change (auth.md §3.1/§4.2/§4.5) -------------------
+
+
+class TestChangePassword:
+    NEW_PASSWORD = "a-new-passw0rd"
+
+    async def _setup(self, service):
+        await service.register(email=EMAIL, password=PASSWORD, display_name="x")
+        tokens = await service.login(email=EMAIL, password=PASSWORD, user_agent="UA-current")
+        user = await _get_user(service._sf, EMAIL)
+        return user, tokens
+
+    async def test_change_rotates_hash_and_bumps_changed_at(self, service, clock, session_factory):
+        user, _tokens = await self._setup(service)
+        old_hash = user.password_hash
+        old_changed_at = user.password_changed_at
+        clock.advance(minutes=5)
+
+        await service.change_password(
+            user_id=user.id, old_password=PASSWORD, new_password=self.NEW_PASSWORD
+        )
+
+        stored = await _get_user(session_factory, EMAIL)
+        assert stored.password_hash != old_hash
+        assert stored.password_hash.startswith("$argon2id$")
+        assert stored.password_changed_at == clock.now
+        assert stored.password_changed_at != old_changed_at
+        # The new password authenticates; the old one no longer does.
+        assert isinstance(
+            await service.login(email=EMAIL, password=self.NEW_PASSWORD), TokenResult
+        )
+        with pytest.raises(BusinessRuleError) as exc:
+            await service.login(email=EMAIL, password=PASSWORD)
+        assert exc.value.code == "invalid_credentials"
+
+    async def test_change_wrong_old_password_422_leaves_password_untouched(
+        self, service, session_factory
+    ):
+        user, _tokens = await self._setup(service)
+        old_hash = (await _get_user(session_factory, EMAIL)).password_hash
+        with pytest.raises(BusinessRuleError) as exc:
+            await service.change_password(
+                user_id=user.id, old_password="wrong-pass-1", new_password=self.NEW_PASSWORD
+            )
+        assert exc.value.code == "invalid_credentials"
+        assert exc.value.status_code == 422
+        assert (await _get_user(session_factory, EMAIL)).password_hash == old_hash
+        assert isinstance(await service.login(email=EMAIL, password=PASSWORD), TokenResult)
+
+    async def test_change_weak_new_password_400_three_reasons(self, service):
+        user, _tokens = await self._setup(service)
+        cases = [
+            ("short1", "too_short"),
+            ("alllettersnodigit", "needs_letter_and_digit"),
+            ("password123", "too_common"),
+        ]
+        for weak, reason in cases:
+            with pytest.raises(ValidationError) as exc:
+                await service.change_password(
+                    user_id=user.id, old_password=PASSWORD, new_password=weak
+                )
+            assert exc.value.code == "weak_password"
+            assert exc.value.status_code == 400
+            assert exc.value.details["reason"] == reason
+        # Rejected attempts leave the password untouched.
+        assert isinstance(await service.login(email=EMAIL, password=PASSWORD), TokenResult)
+
+    async def test_change_revokes_other_sessions_keeps_current(self, service):
+        user, current = await self._setup(service)
+        other = await service.login(email=EMAIL, password=PASSWORD, user_agent="UA-other")
+
+        await service.change_password(
+            user_id=user.id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token=current.refresh_token,
+        )
+
+        # The presenting session survives the password change.
+        assert isinstance(
+            await service.refresh(refresh_token=current.refresh_token), TokenResult
+        )
+        assert len(await service.list_sessions(user_id=user.id)) == 1
+        # The other session's refresh is dead. Asserted LAST: presenting a
+        # revoked token is replay detection and revokes the whole family.
+        with pytest.raises(UnauthorizedError):
+            await service.refresh(refresh_token=other.refresh_token)
+
+    async def test_change_without_token_revokes_every_session(self, service):
+        user, current = await self._setup(service)
+        await service.change_password(
+            user_id=user.id, old_password=PASSWORD, new_password=self.NEW_PASSWORD
+        )
+        with pytest.raises(UnauthorizedError):
+            await service.refresh(refresh_token=current.refresh_token)
+        assert await service.list_sessions(user_id=user.id) == []
+
+    async def test_change_unknown_token_falls_back_to_revoke_all(self, service):
+        user, current = await self._setup(service)
+        await service.change_password(
+            user_id=user.id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token="stale-or-forged-token",
+        )
+        with pytest.raises(UnauthorizedError):
+            await service.refresh(refresh_token=current.refresh_token)
+
+    async def test_change_re_stamps_current_session_auth_time(
+        self, service, clock, session_factory
+    ):
+        user, current = await self._setup(service)
+        clock.advance(hours=2)  # the original authentication grows stale...
+        moment = clock.now
+
+        await service.change_password(
+            user_id=user.id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token=current.refresh_token,
+        )
+
+        async with session_factory() as session:
+            row = await session.scalar(
+                select(Session).where(Session.token_hash == hash_token(current.refresh_token))
+            )
+        # ...so the kept session is re-stamped: step-up (§5.5) sees a fresh auth.
+        assert row.revoked_at is None
+        assert row.authenticated_at == moment
+        assert row.last_active_at == moment
+
+    async def test_change_writes_account_level_audit(self, service, session_factory):
+        user, current = await self._setup(service)
+        await service.change_password(
+            user_id=user.id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token=current.refresh_token,
+            ip_address="203.0.113.7",
+            user_agent="UA-current",
+        )
+        async with session_factory() as session:
+            rows = (await session.execute(select(AuditLog))).scalars().all()
+        assert len(rows) == 1
+        entry = rows[0]
+        assert entry.action == "user.password_changed"
+        assert entry.workspace_id is None  # account-level event (§2.6)
+        assert entry.actor_member_id is None  # actor falls into metadata (§2.6)
+        assert entry.actor_kind == "member"
+        assert entry.resource_type == "user"
+        assert entry.resource_id == user.id
+        assert entry.metadata_["user_id"] == str(user.id)
+        assert str(entry.ip_address) == "203.0.113.7"
+        assert entry.user_agent == "UA-current"
+
+    async def test_change_wrong_old_writes_no_audit(self, service, session_factory):
+        user, _tokens = await self._setup(service)
+        with pytest.raises(BusinessRuleError):
+            await service.change_password(
+                user_id=user.id, old_password="wrong-pass-1", new_password=self.NEW_PASSWORD
+            )
+        async with session_factory() as session:
+            assert (await session.execute(select(AuditLog))).scalars().all() == []
+
+    async def test_change_unknown_user_401(self, service):
+        import uuid
+
+        with pytest.raises(UnauthorizedError):
+            await service.change_password(
+                user_id=uuid.uuid4(),
+                old_password=PASSWORD,
+                new_password=self.NEW_PASSWORD,
+            )
+
+    # -- C4-style revocation broadcast (§3.7/§5.6) -----------------------------
+
+    async def _user_in_workspace(self, service, session_factory, email="cp-bc@corp.com"):
+        import uuid
+
+        from sqlalchemy import text
+
+        user, _ = await service.register(email=email, password=PASSWORD, display_name="BC")
+        async with session_factory() as session, session.begin():
+            ws_id = (
+                await session.execute(
+                    text("INSERT INTO workspaces (name, slug) VALUES ('W', :s) RETURNING id"),
+                    {"s": f"ws-{uuid.uuid4().hex[:12]}"},
+                )
+            ).scalar_one()
+            await session.execute(
+                text(
+                    "INSERT INTO members (workspace_id, member_type, user_id, role, status) "
+                    "VALUES (:ws, 'human', :u, 'member', 'active')"
+                ),
+                {"ws": ws_id, "u": user["id"]},
+            )
+        return user["id"], ws_id
+
+    async def _broadcasts(self, session_factory, ws_id):
+        async with session_factory() as session:
+            events = (
+                (
+                    await session.execute(
+                        select(OutboxEvent).where(OutboxEvent.workspace_id == ws_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            e
+            for e in events
+            if e.event_type == "realtime.publish" and e.payload.get("event") == "session.revoked"
+        ]
+
+    async def test_change_broadcasts_when_other_sessions_revoked(self, service, session_factory):
+        user_id, ws_id = await self._user_in_workspace(service, session_factory)
+        current = await service.login(email="cp-bc@corp.com", password=PASSWORD)
+        await service.login(email="cp-bc@corp.com", password=PASSWORD)  # other device
+
+        await service.change_password(
+            user_id=user_id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token=current.refresh_token,
+        )
+
+        broadcasts = await self._broadcasts(session_factory, ws_id)
+        assert broadcasts
+        assert broadcasts[0].payload["channel"] == f"workspace:{ws_id}"
+        assert broadcasts[0].payload["data"]["user_id"] == str(user_id)
+
+    async def test_change_no_broadcast_when_only_current_session(self, service, session_factory):
+        user_id, ws_id = await self._user_in_workspace(
+            service, session_factory, email="cp-bc2@corp.com"
+        )
+        current = await service.login(email="cp-bc2@corp.com", password=PASSWORD)
+
+        # Nothing is revoked (the only session is the kept one) → no broadcast.
+        await service.change_password(
+            user_id=user_id,
+            old_password=PASSWORD,
+            new_password=self.NEW_PASSWORD,
+            current_refresh_token=current.refresh_token,
+        )
+
+        assert not await self._broadcasts(session_factory, ws_id)
 
 
 # --- MFA ---------------------------------------------------------------------

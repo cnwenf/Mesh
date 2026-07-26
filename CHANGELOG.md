@@ -29,19 +29,52 @@ project 项目模块(MES-30,阶段 4·核心工作与协作首个模块):project
 - **验收打回修复轮(MES-30)**:🔴P1 实时网关私有项目泄漏 CWE-862(共享 `register_resource_checkers` + 资源实体未挂 checker fail-closed + 网关 e2e 复测)、干净 checkout lint/build 红(未用参数 / 误提交 vite 缓存 / 根 `.gitignore` 补 `node_modules/`)、rebase 至 main v0.9.1 改 v0.10.0 解 CHANGELOG/词汇冲突;🟠P2 If-Match 丢失更新竞态 CWE-362(`SELECT ... FOR UPDATE` 行锁)、public→private 列表移除帧、首订阅竞态(授权不依赖频道行 + 客户端频道错误退避重订阅 + 离线轮询覆盖已订阅频道)、409 表单收敛(onConflict 对齐服务端态);🔵§4 偏差(卡片 icon/色块、健康度灯可点击更新、创建后跳详情)+ 全局首页演示容错(stray ICU 复数 label 修正 + 真实后端无 demo 端点降级)+ 提交 project 真实浏览器走查与截图;spec 跨模块延期/归属显式登记(project.md / comment-inbox.md / README §12 #17–#21)。
 - 文档门 `check_event_vocab.py`(§6.7,97 事件零漂移)与 `check_roster_entry.py`(§6.12/T35)继续全绿。
 
-## [0.9.1] - 2026-07-25
+## [0.9.2] - 2026-07-26
 
-安全硬化(MES-37,MES-36 v0.8.0 增量安全审核闭环):修复 CRITICAL RT-C1——realtime 网关缺生产 JWT 签名密钥 fail-safe,连同其根因 MEDIUM RT-M2 一并修复。
+依赖卫生与供应链硬化(MES-23 排期池 M5 / W1 拆出,基于 MES-28 的 cryptography 修复成果):后端依赖从「宽松范围、即时解析」转为「lockfile 权威可复现」,并把 pip-audit 纳入 CI 常跑门禁,防供应链回归。
 
 ### Security
 
+- **M5 — 后端 lockfile 可复现**:`backend/requirements.lock`(运行时,37 包)与 `backend/requirements-dev.lock`(运行时+dev,52 包)由 `uv pip compile --universal --generate-hashes` 生成并提交,锁定全部传递依赖并附 hash 校验;dev lock 以 `-c requirements.lock` 约束,共享包 pin 与运行时完全一致。`pyproject.toml` 保留语义化版本范围,lockfile 为权威安装来源——CI(test job)、Docker 镜像(运行时)、本地 venv 三处同源安装,消除「同代码不同环境装出不同依赖」。`cryptography` 锁 49.0.0(满足 MES-28 `>=48.0.1`,GHSA-537c-gmf6-5ccf 修复区间内)。
+- **W1 — 构建后端加固**:`[build-system] requires` setuptools `>=68` → `>=83.0.0`,修复 PYSEC-2026-3447(CVSS 6.1 MEDIUM:sdist 打包排除规则缺 Unicode 归一化,NFD 文件名可绕过 NFC 排除规则被打进源码分发包)。仅构建期、Mesh 不发布 sdist,实际暴露极低,随本批一并提升。
+- **pip-audit 纳入 CI 常跑**:`backend-ci` 新增 `supply-chain` job,`pip-audit --strict`(锁 2.10.1)分别审计两个 lockfile,命中已知 CVE 即失败;并在每周一 03:19 UTC 定时复跑(CVE 库更新可命中旧 pin,无新提交亦防回归)。ignore 策略当前为空(双 lockfile 审计均 `No known vulnerabilities found`);workflow 内明文规定未来任何 `--ignore-vuln` 必须带缘由 + 复核日期注释,禁止静默放过。
+
+### Changed
+
+- `backend/Dockerfile` 运行时依赖改从 `requirements.lock` 安装(hash 校验),项目本体 `--no-deps` 安装,镜像构建可复现。
+- `backend-ci` test job 改从 `requirements-dev.lock` 安装(编辑安装 `--no-deps`),CI 跑的就是锁定的精确依赖。
+
+### Docs
+
+- backend README 新增「Dependency management (lockfile)」:lockfile 分工表、再生成命令(uv pip compile)、pip-audit 门禁说明;本地开发改 lockfile 安装。根 README Quick Start 本地测试片段同步。
+
+### Quality
+
+- lockfile 安装下全量回归:单测 + 真实 e2e(PostgreSQL 16 + Redis 全真)全绿,pytest-cov ≥90% 门禁不退化;ruff、docs 词汇 / 名册校验全绿;`docker compose up --build` 一键部署实测跑通(healthz / readyz / ping 冒烟全绿)。
+- 纪律:提交身份 `cnwenf <cnwenf@outlook.com>`、无 Co-Authored-By、全程匿名化;改动面仅后端构建 / 依赖 / CI 与文档,未触碰业务模块。
+
+## [0.9.1] - 2026-07-26
+
+auth 增量2 全量闭环(MES-12 / MES-38 / MES-39)+ realtime 网关生产密钥 fail-safe(MES-37):auth.md **§4 前端页面全量接通**(登录 / MFA / 重置 / 安全设置,切片3)、**§5.5 安全验收 H1/H2/H3/M1 修复**,以及复验新发现 §4.2 漏项**已登录态修改密码**端到端补齐;并入 v0.8.0 增量安全审核的 CRITICAL RT-C1 / MEDIUM RT-M2 修复。至此 auth.md 全量落地,§3 与 §4.2 自相矛盾消除。
+
+### Added
+
+- **auth §4 前端页面全量接通(auth.md §4,切片3,MES-38)**:`frontend/src/api/auth.ts` 统一鉴权 API 层(登录 / MFA 质询 / 忘记密码 / 重置 / 会话与第三方绑定列表 / 全端登出,具名错误码映射);登录页(登录 / 注册双模 + 邮箱验证态 + MFA 二次验证码 + OAuth 入口)、忘记密码 / 重置页、`Settings → 安全`(`SecuritySettings`:活跃会话列出 / 撤销 / 全端登出、TOTP 两步验证启用 / 停用、第三方账号解绑保留至少一种登录方式);文案全 i18n 外部化(zh-CN / en 键集一致 + 版本哈希)。
+- **已登录态修改密码(auth.md §3.1 / §4.2 / §4.5 / §5.1,MES-39)**:后端 `POST /api/v1/auth/change-password`(鉴权态)——旧密码 argon2id 恒定时间校验(错 → `422 invalid_credentials`;OAuth-only NULL hash 走哑哈希同路径防时序泄漏)→ 新密码强度复用注册策略(弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 轮换 `password_hash` + bump `password_changed_at` → 使**其它** refresh 会话失效(呈递当前 refresh 则保留并重 stamp `authenticated_at` 支撑 §5.5 step-up;未呈递则全部失效)→ 撤销经 outbox→realtime `session.revoked` 广播 → 账号级审计 `user.password_changed`(§2.6,`workspace_id` NULL、行为者落 metadata);叠加登录类 (IP, 邮箱) 5 次/分钟限流防在线爆破。前端 `SecuritySettings`「修改密码」折叠表单(§4.2 顺序置首):旧 + 新 + 确认 + 复用注册强度条实时评估 + 确认不一致实时提示 / 灰化提交 + 具名错误映射 + 成功后刷新会话态。Spec §3.1 / §3.5 / §2.6 / §4.5 / §5.1 同步补齐。
+
+### Security
+
+- **§5.5 安全验收 H1/H2/H3/M1 修复(auth.md §5.5 闭环项,MES-38)**:对应 PR #24,auth.md §5.5 敏感操作再认证 / 会话失效语义闭环。
 - **RT-C1 realtime 网关生产 JWT 签名密钥 fail-safe(auth.md §5.5,README §2.2/§6.16)**:v0.8.0 增量把网关接到真实会话 JWT 验签路径,却未镜像 API 工厂已有的生产守卫——网关以独立部署单元单独启动时,`auth_mode=production` 漏配 `MESH_JWT_SECRET` 会静默启动并以仓库公开的默认开发密钥验签,攻击者可以公开密钥自签 JWT 冒充任意活跃用户的 realtime 身份(v0.7.0 网关 production 拒绝一切鉴权属 fail-closed,该误配置于 v0.8.0 翻转为 fail-open)。现 `mesh.realtime.app.create_app` 在 production + 默认开发密钥时拒启动(`ConfigError`),恢复 fail-closed;其余鉴权行为(首帧认证 / 算法固定 / fail-closed 语义)保持现状。
 - **RT-M2 守卫共享化 + 注释对齐(根因修复)**:「production + 公开默认密钥 → 拒启动」抽为单一共享校验 `mesh.config.validate_auth_settings`,`mesh.api.app` 与 `mesh.realtime.app` 两个工厂启动时均调用,消除 `api/app.py` 内联复制,杜绝两个工厂再漂移;`config.py` 中 `DEV_JWT_SECRET` 与 `jwt_secret` 字段注释改为与实现一致(原注释声称 `load_settings` 负责该校验,实现中并不存在)。
 
 ### Quality
 
-- TDD:两工厂 production + 默认开发密钥 → `ConfigError`(断言 `missing_fields` 与 detail)单测、dev 路径不受影响回归测试(默认密钥 dev 模式正常启动)、共享校验函数四分支全覆盖;真实 e2e 89 项全绿(生产网关进程以真实密钥启动正常、漏配密钥拒启动均实测);609 项全绿,pytest-cov **95.89%**(≥90% 门禁;config 100% / realtime.app 100%,整体与新增代码双达标);ruff 全绿。
-- 文档同步:auth.md 安全清单新增「生产拒用公开默认签名密钥(fail-closed)」项;backend README 安全说明明确守卫为两工厂共享且网关独立校验自身配置。
+- 后端:单测 + 进程内路由 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真,**含 DB 实测**——`password_changed_at` 已 bump / 其它会话 `revoked_at` 非空而当前为空 / `user.password_changed` 审计落库 / outbox `session.revoked` 入队)611+ 项全绿,pytest-cov **96.01%**(≥90% 门禁;auth routes / schemas / security / audit 100%、service 93%,整体与新增代码双达标);ruff、docs 词汇 / 名册校验全绿;含 realtime 网关 production + 默认密钥 → `ConfigError` 守卫回归。
+- 前端:93 文件 844 项全绿,新增 / 变更代码覆盖率 **92.9%**(≥90%);tsc / eslint / build / Playwright e2e 全绿。
+- 验收独立实测(真实 uvicorn + PG16 + Redis,30 项断言全绿):旧密码错 422 / 弱密码三 reason 400 / 成功 200 / 当前 refresh 200 而其它 401 / 旧密码登录 422 新密码 200 / 限流 429 / 保留会话 token_hash 与 `authenticated_at` 实测 / 审计与 outbox 实测;另含 refresh 重放防盗用全量失效路径实测。真人式浏览器实操(Chromium + 构建产物 + 真实后端)5 帧截图:登录 → 安全区(修改密码置首、会话列表)→ 错旧密码具名错误 → 强度条弱实时态 → 确认不一致灰化 → 成功提示且会话 5→1 收敛。
+- 文档同步:auth.md §3.1 / §3.5 / §2.6 / §4.5 / §5.1 补齐修改密码契约与安全清单「生产拒用公开默认签名密钥(fail-closed)」项;backend README 安全说明明确守卫为两工厂共享且网关独立校验自身配置。
+- 纪律:提交身份 `cnwenf <cnwenf@outlook.com>`、无 Co-Authored-By、单提交、全程匿名化(无外部出处泄漏)。
 
 ## [0.9.0] - 2026-07-25
 
@@ -62,10 +95,6 @@ auth 增量 2 第二切片(MES-12):OAuth 提供商往返(auth.md §1.2 A5/A6)、
 ### Fixed
 
 - `backend/README.md` 事件词汇计数 96→97(随 `session.revoked` 登记,验收时一并修正)。
-=======
-- 前端 909 项单测/组件测试全绿,覆盖率语句 97.31% / 分支 90.34% / 函数 93.43%(门禁 ≥90%),变更行覆盖率 96.7%(verify-coverage 门禁 ≥90%);typecheck / lint / 生产构建全绿;Playwright e2e 23/23 全绿;真实后端(v0.9.0 compose 栈,`--disable-web-security` 联调)以真实浏览器走查注册/登录→建区→项目 CRUD / 健康度留痕回写 / 更新动态 / 里程碑逾期 / 设置 If-Match 乐观并发 / 归档只读 422 / 周期 auto_roll 顺延 / T19 前缀冲突 409 全链路通过(附截图存证);zh-CN 目录补齐 129 键,键集与 en 完全一致。
-- 文档门 `check_event_vocab.py`(§6.7,96 事件零漂移)与 `check_roster_entry.py`(§6.12/T35)继续全绿。
->>>>>>> 66da23d (docs: CHANGELOG v0.9.0 收尾——补齐 project 模块前端质量与实机验收数据(MES-30))
 
 ## [0.8.0] - 2026-07-25
 
