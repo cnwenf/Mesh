@@ -334,6 +334,11 @@
   margin: 0;
 }
 
+.mesh-issues__move-target {
+  font-size: var(--font-size-sm);
+  margin: var(--space-1) 0 0;
+}
+
 .mesh-issues__move-kept {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);

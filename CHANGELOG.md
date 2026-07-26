@@ -3,6 +3,20 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.3] - 2026-07-26
+
+MES-31 验收第三轮整改(MES-44 隔离派发):跨项目迁移预览完整性 + 严格模式被禁流转的就地回滚/i18n 闭环。
+
+### Fixed
+
+- **跨项目迁移预览完整性(§4.3/§3.8)**:迁移确认对话框新增「目标项目」标明(自已加载项目列表解析目标名,目标为收件箱时取收件箱本地化文案);确有状态映射时 `mapped` 清单(源状态 → 目标同 category 默认状态)与 `cleared` 清单并列呈现,「保留字段」说明与 Spec 一致。补真实 UI 回归(含「确有映射」与「仅清除」两场景,对照截图 ev-m5)。
+- **严格模式被禁流转回滚与一致性(§4.4/§5.2/§3.4)**:`patchAndToast` 改为真乐观更新 + 失败就地回滚 —— 被拒后 status `<select>` 回落原值、不保留被禁目标值,且**不再触发整页 reload / 骨架闪烁**(失败路径不重取),无 unhandled rejection;危险 toast 经 i18n key(`error.invalid_status_transition`),zh-CN 显示中文。补真实 UI 回归(strict 开/关两态 + zh-CN 文案,对照截图 ev-b5)。
+
+### Quality
+
+- 前端:vitest **1113 项全绿**,变更行覆盖率 **92.1%**(≥90% 门禁 PASS),typecheck/lint/生产构建全绿。
+- 真实 UI 实操(Playwright + chromium,真实当前源码后端 + 真实 DB):迁移预览(标明目标项目 + 映射/清除并列、仅清除两场景)、严格模式(zh-CN 中文 toast + select 就地回滚 + strict 关闭放行),零 console error,截图留证于 `frontend/e2e/evidence/`。
+
 ## [0.11.2] - 2026-07-26
 
 MES-31 验收第二轮整改:阻塞项 B1–B6 与必修 MEDIUM 全量闭环。
