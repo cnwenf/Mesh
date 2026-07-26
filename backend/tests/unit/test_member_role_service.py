@@ -170,6 +170,32 @@ async def test_last_owner_cannot_be_demoted(session_factory):
     assert result["role"] == "admin"
 
 
+async def test_demote_disabled_co_owner_is_allowed(session_factory):
+    """Demoting a DISABLED co-owner cannot reduce the ACTIVE owner count, so
+    the guard must not fire (invariant is about active owners, review MB-M2)."""
+    workspace_id, owner, member = await _setup(session_factory, "role-disabled-co")
+    await change_member_role(
+        session_factory,
+        actor=owner,
+        workspace_id=workspace_id,
+        member_id=member.id,
+        new_role="owner",
+    )
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text("UPDATE members SET status = 'disabled' WHERE id = :id"),
+            {"id": member.id},
+        )
+    result = await change_member_role(
+        session_factory,
+        actor=owner,
+        workspace_id=workspace_id,
+        member_id=member.id,
+        new_role="member",
+    )
+    assert result["role"] == "member"
+
+
 async def test_agent_cannot_become_owner(session_factory):
     """Server-side guard + DB CHECK backstop (member.md §2.2)."""
     workspace_id, owner, _member = await _setup(session_factory, "role-agent")

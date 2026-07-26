@@ -21,7 +21,7 @@ from mesh.auth.rbac import role_satisfies
 from mesh.db.models.member import MEMBER_ROLE_VALUES, Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
-from mesh.member.owner_guard import ensure_not_last_active_owner
+from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.outbox.service import emit_realtime
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
@@ -59,12 +59,15 @@ async def change_member_role(
         if not role_satisfies(actor.role, "workspace:manage_members"):
             raise ForbiddenError("managing members requires the admin role")
 
-        target = await session.get(Member, member_id)
-        if (
-            target is None
-            or target.workspace_id != workspace_id
-            or target.status == "removed"
-        ):
+        # One ascending-id FOR UPDATE sweep locks the target plus every active
+        # owner and refreshes the target under lock: the no-op / agent-owner /
+        # last-owner decisions below all see post-lock state, so a concurrent
+        # promotion of the target can never slip past an unguarded demotion
+        # (owner_guard.py — TOCTOU serialization).
+        active_owners, target = await lock_active_owner_set(
+            session, workspace_id=workspace_id, target_id=member_id
+        )
+        if target is None or target.status == "removed":
             raise NotFoundError("member not found")
 
         if target.role == new_role:
@@ -76,13 +79,12 @@ async def change_member_role(
                 code="agent_owner_not_allowed",
             )
 
-        if target.role == "owner" and new_role != "owner":
-            # Owner invariant: count under FOR UPDATE row locks so concurrent
-            # demote/remove/disable attempts serialize (owner_guard.py).
-            await ensure_not_last_active_owner(
-                session,
-                workspace_id=workspace_id,
-                error_message="cannot demote the last owner of the workspace",
+        if target.role == "owner" and target.status == "active" and active_owners <= 1:
+            # Demoting a disabled owner cannot reduce the ACTIVE count; only
+            # an active owner needs the last-owner protection here.
+            raise ConflictError(
+                "cannot demote the last owner of the workspace",
+                code=LAST_OWNER_CODE,
             )
 
         old_role = target.role
