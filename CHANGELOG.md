@@ -3,6 +3,34 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.14.0] - 2026-07-27
+
+阶段 5·协作层 A:comment-inbox 全功能实现(MES-58)。按 `docs/specs/features/comment-inbox.md` 五章落地评论与收件箱模块,本模块 owns 七张表(`comments`/`comment_mentions`/`comment_reactions`/`issue_subscriptions`/`notifications`/`notification_preferences`/`notification_delivery`),是通知类型码与去噪矩阵的唯一权威。
+
+### Added — 后端
+
+- **数据模型(§2)**:七表全量落地(迁移 0017,链于 main 0016 之后),`UNIQUE(workspace_id, id)` + 跨模块复合 FK + fail-closed RLS(`mesh_<table>_tenant` 策略)+ `mesh_app` 授权;`comments` 同父域约束(README §6.2 第 7 条:重叠唯一键 `UNIQUE(workspace_id, issue_id, id)` + 重叠复合自引用 FK `(workspace_id, issue_id, parent_id/thread_root_id)`,跨 issue 挂父 INSERT 被数据库拒绝);成员引用一律 `ON DELETE RESTRICT`(历史不悬空,T18 实测);存储层无 human|agent 判别列,`author_kind ∈ {member,system}` 为 §6.1 允许的 CHECK + NULL FK 例外;`notification_delivery` R3 目的地粒度台账(`UNIQUE(notification_id, channel, destination_key)`,结构化路由列 `provider`/`external_target`,`error` 仅记失败原因)。
+- **评论端点(§3.1)**:发表/编辑(If-Match 乐观并发 409 `conflict`)/软删除(占位保线程完整)/线程解决·重开/表情回应(`uq_reaction` 重复 409)/回复列表(游标分页);列表仅顶层 + `reply_count` + 前 3 条预览回复(采纳 A 拉取策略);回复深度恒为 1(422 `reply_depth_exceeded`);系统活动评论 `author_kind='system'` 仅内部写入、API 只读;`Idempotency-Key` 请求头幂等写(§6.14,`uq_comments_idempotency` 部分唯一索引,duplicate 返回首次结果);body 1 MiB 字节护栏(422 `field_too_large`)。
+- **服务端 Markdown 管线**:markdown-it-py 渲染(表格/任务清单/代码块语言类)+ 标准库白名单 sanitizer 双重防护(原始 HTML 转义 + 标签/属性白名单 + URL scheme 校验,script/iframe/svg 等整棵子树丢弃)+ 纯文本投影;`body_html` 为服务端净化后的渲染缓存,前端可安全直出。
+- **@提及 agent = 入队一次执行(§3.5 核心差异,README §6.9 触发矩阵逐行)**:提及一律服务端从 Markdown 解析为准(`[name](mention://member/<uuid>)` 结构链接 + `@Name` 精确显示名解析,代码块/链接语法内不扫描,客户端伪造无效);agent 提及经 transactional outbox 写 `execution.enqueue`(幂等键 §6.5 `sha256(agent_id|issue_id|trigger_event_id)`,同评论同 agent 仅一次 —— `uq_mentions` + 幂等键双保险),`execution.queued` 实时事件同事务登记;编辑 diff 仅为新增提及入队、无关文字编辑不重复触发、移除 @ 提及记录软删除且不取消在途执行、`suppress_triggers: true` 仅通知不运行、新评论 @ 同一 agent 入队新执行;回环抑制:自我提及不触发、agent 链深度超 `MESH_MAX_AGENT_CHAIN_DEPTH`(默认 5)静默丢弃并留审计(`agent_trigger_skipped_chain_depth`);无 `agent:trigger` 权限 → 422 `mention_invalid`。`task_executions` 复合 FK 随 runtime.md 增量 deferred(同 `members.agent_id` 先例),入队 outbox 事件 id 为骨架执行 id(落 `comment_mentions.triggered_execution_id`、回填响应 `triggered_execution_ids`)。
+- **收件箱/通知(§3.2 + §4.4 + README §6.13 唯一权威)**:`notification.fanout` outbox 事件 → relay 处理器生成通知(业务事务不阻塞、不丢失);§6.13 矩阵逐行落地为 `policy_for()`:`assigned`/`mentioned`/审批 critical(穿透 quiet hours + 重置同组未读),执行成功默认不进收件箱(仅 `notification_preferences` 显式订阅 `execution_finished` 后进箱且不重置已读组),执行失败/超时 critical,cancelled 不通知(无该类型码);路由 = 订阅者 ∪ 提及者 ∪ reporter/assignee 去重,自我抑制(发起者不收)、agent 不收(收件箱面向 human)、`muted` 静音抑制;同 `group_key` 60s 聚合窗口合并(`payload.count` 递增,`MESH_NOTIFICATION_AGGREGATION_WINDOW` 可配);`payload` 快照保证源实体删除后通知可读;投递台账:in_app 即发(`destination_key=''`)、email realtime 经 mailer 发送/digest 延迟至摘要 sweep(`MESH_NOTIFICATION_DIGEST_INTERVAL`,worker 监督循环,邮件预览 HTML 转义防注入,`uq_delivery` 幂等);收件箱端点:游标分页列表(扁平/按 issue 分组·整体游标)、筛选(unread/mentions/assigned/agent/type)、未读计数(部分索引)、单条/全部已读·未读、归档·归档已读、按 issue 一键静音、偏好矩阵 CRUD(站内开关 + 邮件策略 + quiet hours)。
+- **实时事件(§3.6)**:`comment.created/updated/deleted/resolved`、`reaction.changed` 经 outbox → projector 唯一路径登记 `issue:{id}` 频道;`notification.created`/`notification.read`/`inbox.unread_count` 登记 `member:{member_id}:inbox` 频道(多端已读同步);频道级资源授权(网关注册 `member` 前缀 checker:仅本人可订阅自己收件箱,CWE-862 fail-closed)。
+- **配置**:`MESH_MAX_AGENT_CHAIN_DEPTH`(默认 5)、`MESH_NOTIFICATION_AGGREGATION_WINDOW`(默认 60s)、`MESH_NOTIFICATION_DIGEST_INTERVAL`(默认 6h)。
+- **依赖**:新增 `markdown-it-py>=4.2`(lockfile 同步,无其他版本扰动)。
+
+### Added — 前端
+
+- **issue 详情评论区(§4.1)**:混合时间线(系统活动 + 评论卡片,人类/agent 身份徽标)、单层折叠线程(「N 条回复」展开/解决态)、表情回应 chip、深链锚点高亮、composer(`@` 补全人/agent 混排 + agent 项「发布后将触发一次运行」提示语 + 选中 agent 常驻副作用提示条 + 提交前 trigger preview 清单 + 「仅通知,不触发运行」显式抑制开关 + Cmd+Enter + 按 issue 草稿本地暂存)、agent 执行占位卡片;服务端净化 `body_html` 直出,编辑预览经 marked + dompurify。
+- **收件箱(§4.2)**:顶栏铃铛(未读徽标 + 下拉预览 + 查看全部)、收件箱页(筛选 tabs 全部/未读/提及/分派/Agent、按 issue 分组 + 组头一键静音、行操作已读/归档/跳转、全部已读/归档已读、空态)、点击通知直达评论锚点并自动标已读、`member:{me}:inbox` 实时增量合并(多端红点同步)。
+- **通知偏好(Settings → Notifications)**:事件类型 × 站内/邮件(无/实时/摘要)矩阵、Agent 执行通知分区、全局免打扰时段(标注 critical 穿透)。
+- i18n 全外部化(zh-CN + en 键集对齐)。
+
+### Quality
+
+- 后端:新增单测 `test_comment_markdown.py`(XSS 向量矩阵/提及提取/任务清单)、`test_notification_matrix.py`(§6.13 矩阵逐行/quiet hours 跨午夜/邮件转义)、`test_comment_service.py`(CRUD/线程/回应/§6.9 触发矩阵各行/链深度审计/跨 issue 父约束)、`test_inbox_service.py`(fan-out 路由/聚合窗口/重读重置/quiet hours 穿透/投递台账 R3/摘要幂等/收件箱操作/偏好)、`test_comment_inbox_api.py`(ASGI 路由面 + 包络 + 幂等头 + If-Match + guest 触发拒绝 + 跨租 404);真实 e2e `test_comment_inbox_e2e.py`(真实 uvicorn(mesh_app 角色 RLS)+ 真实 relay/projector + 真实 WS 网关:评论生命周期实时投影、§6.9 触发矩阵经真实 outbox(幂等键字节级断言)、§6.13 fan-out → 收件箱 + 投递台账、WS 重放 + 实时送达、外人订阅他人收件箱被拒、跨租复合 FK 拒绝、成员 RESTRICT 删除拒绝)。`pytest-cov` ≥90% 门禁;ruff 全绿。
+- 文档同步:`docs/specs/features/comment-inbox.md` 状态与实现注记(deferred FK/骨架执行 id/提及语法/附件占位);README 实现状态表新增本模块行。
+- 已知占位:评论附件(`attachment_ids`)待 MES-59 attachment 模块合入后接通(当前非空 422 `attachments_not_available`,issue 明确允许占位);`execution.enqueue` 消费为桥接处理器(记录审计、保持 relay 健康),`task_executions` 落库待 runtime.md 增量。
+
 ## [0.13.3] - 2026-07-27
 
 阶段 6 智能体层首个模块:agent 模块核心实现(MES-60,agent.md 核心五章)。agents + agent_config_versions 双表、REST 全套、分派即触发 outbox 契约(§3.3/§6.9/§6.11/§6.5)、agent.* 实时事件、四步创建/编辑向导与 Agent 详情页。执行生命周期消费端(task_executions/claim/租约)、技能绑定与 autopilot/squad 触发路径属后续模块。

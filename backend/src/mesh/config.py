@@ -210,6 +210,13 @@ class Settings(BaseSettings):
     # (still magic-byte sniffed and SHA-256 verified). Disable to force a full
     # AV pass on every upload.
     attachment_scan_skip_text: bool = True
+    # Comment & inbox tuning (comment-inbox.md §3.5 / README §6.9 & §6.13).
+    # Agent-to-agent mention chains deeper than this are silently dropped with
+    # an audit record (A↔B @-loop protection); same-group notifications inside
+    # the aggregation window merge into one row (payload.count increments).
+    max_agent_chain_depth: int = Field(default=5, ge=1)
+    notification_aggregation_window: float = Field(default=60.0, gt=0)
+    notification_digest_interval: float = Field(default=21600.0, gt=0)
 
 
 def load_settings(**overrides: object) -> Settings:

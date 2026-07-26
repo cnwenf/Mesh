@@ -24,9 +24,13 @@ from mesh.attachment.processing import process_blob
 from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
 from mesh.attachment.storage import ObjectStorage
+from mesh.auth.mailer import build_mailer
+from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT
+from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
+from mesh.db.models.outbox import OutboxEvent
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
@@ -38,10 +42,33 @@ from mesh.workers.attachment_processor import (
     attachment_scan_loop,
 )
 from mesh.workers.invitation_sweep import invitation_sweep_loop
+from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
 logger = logging.getLogger("mesh.workers")
+
+
+async def execution_enqueue_bridge_handler(session, event: OutboxEvent) -> None:
+    """Bridge for ``execution.enqueue`` until runtime.md lands task_executions.
+
+    The mention path (comment-inbox.md §3.5) already carries every field the
+    orchestrator needs (agent, issue, trigger='mention', §6.5 idempotency
+    key); the producing side stored this event's id as the skeleton
+    ``triggered_execution_id``. Consuming the event here keeps the relay
+    healthy and the audit trail visible until the handler creates real
+    ``task_executions`` rows (runtime.md increment).
+    """
+    payload = event.payload or {}
+    logger.info(
+        "execution.enqueue received (runtime orchestration pending runtime.md): "
+        "issue=%s agent_member=%s trigger=%s comment=%s",
+        payload.get("issue_id"),
+        payload.get("agent_member_id"),
+        payload.get("trigger"),
+        payload.get("comment_id"),
+    )
+    return None
 
 
 def _utcnow() -> datetime:
@@ -82,15 +109,23 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
 
 
 def build_relay(
-    settings: Settings, session_factory, fanout: RedisFanOut, storage: ObjectStorage
+    settings: Settings,
+    session_factory,
+    fanout: RedisFanOut,
+    storage: ObjectStorage,
+    mailer=None,
 ) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
-    ``issue.assigned`` is consumed by the unified agent orchestration entry
-    (agent.md §3.3): guardrail gate → §6.11 snapshot freeze →
-    ``execution.enqueue`` outbox event (consumed by the runtime.md
-    increment) with the README §6.5 idempotency key, or
-    ``agent.trigger_skipped`` when a guardrail denies the trigger.
+    ``issue.assigned`` / field & status changes produce ``notification.fanout``
+    (comment-inbox.md = single notification authority, README §6.13 matrix);
+    ``execution.enqueue`` for mentions is consumed by a bridge handler until the
+    runtime.md increment provides the unified orchestration entry, while
+    ``issue.assigned``-triggered execution is handled by the unified agent
+    orchestration entry (agent.md §3.3: guardrail gate → §6.11 snapshot freeze →
+    ``execution.enqueue`` with the README §6.5 idempotency key, or
+    ``agent.trigger_skipped`` when a guardrail denies). The producing sides carry
+    the §6.9 trigger payloads, so remaining swaps are handler-local.
     """
     return OutboxRelay(
         session_factory,
@@ -98,6 +133,11 @@ def build_relay(
             REALTIME_PUBLISH: project_realtime_event,
             ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
+            EXECUTION_ENQUEUE_EVENT: execution_enqueue_bridge_handler,
+            FANOUT_EVENT_TYPE: NotificationFanoutHandler(
+                aggregation_window_seconds=settings.notification_aggregation_window,
+                mailer=mailer,
+            ),
         },
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
@@ -123,12 +163,22 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         await storage.ensure_bucket()
     except Exception:  # noqa: BLE001 — storage may join late; loops retry
         logger.warning("attachment bucket not ready at worker startup")
-    relay = build_relay(settings, session_factory, fanout, storage)
+    mailer = build_mailer(settings, redis_client)
+    relay = build_relay(settings, session_factory, fanout, storage, mailer=mailer)
     stop = stop or asyncio.Event()
 
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
+            TaskSpec(
+                "notification-digest",
+                lambda: notification_digest_loop(
+                    session_factory,
+                    mailer=mailer,
+                    interval=settings.notification_digest_interval,
+                    stop=stop,
+                ),
+            ),
             TaskSpec(
                 "realtime-retention",
                 lambda: retention_loop(

@@ -7,7 +7,16 @@
 | 依赖 Spec | `workspace`(多租户)、`member`(统一 `members.id`,human\|agent)、`auth`(Bearer/RBAC/限流)、`issue`(评论宿主与订阅路由)、`attachment`(评论内附件,统一 `attachments`/`attachment_links`)、`agent` / `runtime`(提及 agent 入队执行 `task_executions`) |
 | 被依赖 | `agent` / `runtime`(执行结果以 agent 评论回流)、`chat-session`(形态 B 的评论/提及/通知**引用本 Spec 权威表**)、邮件摘要任务(消费 `notifications`) |
 | 技术栈 | FastAPI + SQLAlchemy 2.x + PostgreSQL 16 + WebSocket |
-| 状态 | Draft v3(R2 修订) |
+| 状态 | Implemented v1(v0.12.0,MES-58) |
+
+> **实现注记(v0.12.0)**
+> 1. **提及语法(§3.5 服务端解析)**:结构提及为 Markdown 链接 `[显示名](mention://member/<uuid>)`(composer 选人的芯片序列化形态);散文中的 `@Name` 按工作区内**精确显示名**(member.md §2.4 解析序)解析,歧义名解析为空;代码块/行内代码/链接语法内的 `@` 不扫描。客户端显式提交的提及字段不被接受(解析以服务端为准)。
+> 2. **`task_executions` deferred FK**:`comment_mentions.triggered_execution_id` / `notifications.execution_id` 的物理复合 FK 随 runtime.md 增量补齐(同 `members.agent_id` → `agents` 先例);入队骨架为 `execution.enqueue` outbox 事件(§6.5 幂等键齐全),其事件 id 作为骨架执行 id 落 `triggered_execution_id` 并回填响应;relay 侧为桥接处理器(审计留痕、保持 relay 健康),`task_executions` 落库与完整执行生命周期待 runtime.md。
+> 3. **`comments.idempotency_key`**:为落实 README §6.14「创建/动作类端点支持 `Idempotency-Key` 请求头」与 §6.5 agent 回流防重键,`comments` 表增设 `idempotency_key TEXT NULL`(部分唯一索引 `uq_comments_idempotency`,NULL 不冲突);重复键返回首次结果。
+> 4. **同父域约束(§2.2 / README §6.2 第 7 条)**:已按重叠唯一键 `UNIQUE(workspace_id, issue_id, id)` + 重叠复合自引用 FK `(workspace_id, issue_id, parent_id/thread_root_id)` 落地,跨 issue 挂父 INSERT 被数据库拒绝(集成测试实测)。
+> 5. **评论附件(C11)**:`attachment_ids` 字段已预留于请求 schema;attachments/attachment_links 随 attachment.md 增量合入后接通,合入前非空附件列表返回 422 `attachments_not_available`(占位,与派发说明一致)。
+> 6. **quiet hours 时区**:`notification_preferences.quiet_hours_*` 按 UTC 墙上时间比较(§2.7 用户级;critical 穿透不变)。
+> 7. **执行成功通知**:按 §6.13 R2 实现——`execution_finished` 成功仅在 `notification_preferences` 显式订阅该 `event_type`(`in_app=true`)时进箱,且按普通事件不重置已读组;失败/超时 critical 穿透 quiet hours 并重置同组未读。runtime.md 终态分发届时经同一 `notification.fanout` 路径(同一矩阵)。
 
 > **全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)**
 > 1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。
