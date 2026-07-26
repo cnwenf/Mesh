@@ -10,6 +10,7 @@ from mesh.db.models.attachment import (
     UploadSession,
 )
 from mesh.db.models.audit import AuditLog
+from mesh.db.models.comment import Comment, CommentMention, CommentReaction
 from mesh.db.models.issue import (
     Issue,
     IssueActivity,
@@ -25,6 +26,12 @@ from mesh.db.models.label import (
     Label,
 )
 from mesh.db.models.member import Member, MemberProjectAccess
+from mesh.db.models.notification import (
+    IssueSubscription,
+    Notification,
+    NotificationDelivery,
+    NotificationPreference,
+)
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
     Cycle,
@@ -62,6 +69,9 @@ __all__ = [
     "AttachmentLink",
     "AttachmentQuota",
     "AuditLog",
+    "Comment",
+    "CommentMention",
+    "CommentReaction",
     "CustomFieldDef",
     "CustomFieldOption",
     "Cycle",
@@ -73,12 +83,16 @@ __all__ = [
     "IssueDependency",
     "IssueLabel",
     "IssueStatus",
+    "IssueSubscription",
     "IssueTemplate",
     "Label",
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",
     "Milestone",
+    "Notification",
+    "NotificationDelivery",
+    "NotificationPreference",
     "OAuthIdentity",
     "OutboxEvent",
     "PasswordResetToken",
