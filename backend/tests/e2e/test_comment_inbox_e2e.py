@@ -512,6 +512,40 @@ async def test_inbox_ws_delivery_e2e(env, relay, gateway_server):
     assert "notification.created" in events
 
 
+async def test_inbox_ws_first_notification_live_e2e(env, relay, gateway_server):
+    """Regression: subscribing BEFORE any inbox event exists must succeed —
+    the channel row is absent until the first projection, but the owner must
+    still receive the very first notification live (§3.6 / I9 badge)."""
+    client, alice_token, bob_token, issue = (
+        env["client"], env["alice_token"], env["bob_token"], env["issue"],
+    )
+    ws_url = gateway_server.base_url.replace("http://", "ws://") + "/ws"
+    async with websockets.connect(ws_url, open_timeout=10) as ws:
+        await ws.send(json.dumps({"op": "auth", "token": alice_token}))
+        assert (json.loads(await asyncio.wait_for(ws.recv(), timeout=5)))["op"] == "auth_ok"
+        channel = f"member:{env['alice_member']}:inbox"
+        await ws.send(json.dumps({"op": "subscribe", "channel": channel}))
+        subscribed = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        assert subscribed["op"] == "subscribed", subscribed  # was 'error' pre-fix
+
+        resp = await client.post(
+            f"/api/v1/issues/{issue['id']}/comments",
+            json={"body_markdown": "first live notification"},
+            headers=_auth(bob_token),
+        )
+        assert resp.status_code == 201
+        await _drain(relay)
+
+        frames = []
+        for _ in range(4):
+            try:
+                frames.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=10)))
+            except asyncio.TimeoutError:
+                break
+    events = {frame["event"] for frame in frames if frame.get("op") == "event"}
+    assert "notification.created" in events
+
+
 async def test_inbox_ws_rejects_foreign_member(env, gateway_server, owner_factory):
     """member:{id}:inbox is subscribable only by the owning user (CWE-862)."""
     bob_token = env["bob_token"]

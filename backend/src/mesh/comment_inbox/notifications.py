@@ -333,6 +333,7 @@ def _notification_payload(fanout: dict[str, Any]) -> dict[str, Any]:
         "actor_avatar_url": fanout.get("actor_avatar_url"),
         "actor_member_type": fanout.get("actor_member_type"),
         "title": fanout.get("title"),
+        "issue_identifier": fanout.get("issue_identifier"),
         "preview": fanout.get("preview"),
         "count": 1,
         "changes": fanout.get("changes"),
@@ -681,13 +682,26 @@ def _uuid_or_none(raw: Any) -> uuid.UUID | None:
 
 
 def _render_notification_frame(notification: Notification) -> dict[str, Any]:
-    """The wire shape for notification.created / inbox list rows."""
+    """The wire shape for notification.created / inbox list rows.
+
+    ``issue`` is rendered from the payload snapshot (§2.6 — stays readable
+    after the issue is deleted); ``identifier``/``title`` may be None for
+    legacy rows or non-issue notifications.
+    """
     payload = notification.payload or {}
+    issue: dict[str, Any] | None = None
+    if notification.issue_id is not None:
+        issue = {
+            "id": str(notification.issue_id),
+            "identifier": payload.get("issue_identifier"),
+            "title": payload.get("title"),
+        }
     return {
         "id": str(notification.id),
         "type": notification.type,
         "priority": notification.priority,
         "issue_id": str(notification.issue_id) if notification.issue_id else None,
+        "issue": issue,
         "comment_id": str(notification.comment_id) if notification.comment_id else None,
         "execution_id": str(notification.execution_id) if notification.execution_id else None,
         "group_key": notification.group_key,
