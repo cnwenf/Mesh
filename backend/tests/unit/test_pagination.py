@@ -6,9 +6,10 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import column, select, text
 
-from mesh.api.pagination import decode_cursor, encode_cursor, paginate
+from mesh.api.pagination import _compatible_with_column, decode_cursor, encode_cursor, paginate
+from mesh.db.models.realtime import RealtimeEvent
 from mesh.db.models.workspace import Workspace
 from mesh.errors import ValidationError
 
@@ -130,3 +131,76 @@ async def test_paginate_rejects_bad_limit(db_session):
             limit=0,
         )
     assert excinfo.value.code == "invalid_limit"
+
+
+async def test_paginate_datetime_cursor_on_string_column_is_invalid_cursor(db_session):
+    """L5: a well-formed cursor aimed at the wrong endpoint (datetime position
+    on a string-sorted column) must be a 400 invalid_cursor, not a DB-layer
+    type error surfacing as a neutral 500."""
+    foreign_cursor = encode_cursor(datetime(2026, 7, 25, tzinfo=UTC), uuid.uuid4())
+    with pytest.raises(ValidationError) as excinfo:
+        await paginate(
+            db_session,
+            select(Workspace),
+            sort_column=Workspace.slug,  # TEXT — datetime can never compare
+            id_column=Workspace.id,
+            sort_value_of=lambda row: row.slug,
+            id_of=lambda row: row.id,
+            cursor=foreign_cursor,
+        )
+    assert excinfo.value.code == "invalid_cursor"
+    assert excinfo.value.status_code == 400
+
+
+async def test_paginate_uuid_cursor_id_on_integer_id_column_is_invalid_cursor(
+    db_session, session_factory, workspace_factory
+):
+    """A UUID tie-breaker against a BIGINT identity id column is a mismatch."""
+    workspace = await workspace_factory()
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO realtime_channels (channel, workspace_id, last_seq) "
+                "VALUES ('page:ch', :ws, 1)"
+            ),
+            {"ws": workspace.id},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO realtime_events (workspace_id, channel, seq, event, payload, outbox_event_id) "
+                "VALUES (:ws, 'page:ch', 1, 'issue.updated', '{}', gen_random_uuid())"
+            ),
+            {"ws": workspace.id},
+        )
+    foreign_cursor = encode_cursor(1, uuid.uuid4())  # int sort, UUID id
+    with pytest.raises(ValidationError) as excinfo:
+        await paginate(
+            db_session,
+            select(RealtimeEvent),
+            sort_column=RealtimeEvent.seq,
+            id_column=RealtimeEvent.id,  # BIGINT identity — not a UUID
+            sort_value_of=lambda row: row.seq,
+            id_of=lambda row: row.id,
+            cursor=foreign_cursor,
+        )
+    assert excinfo.value.code == "invalid_cursor"
+
+
+def test_compatible_with_column_type_matrix():
+    moment = datetime(2026, 7, 25, tzinfo=UTC)
+    # Matched pairs.
+    assert _compatible_with_column(moment, Workspace.created_at) is True
+    assert _compatible_with_column("slug", Workspace.slug) is True
+    assert _compatible_with_column(uuid.uuid4(), Workspace.id) is True
+    assert _compatible_with_column(3, RealtimeEvent.seq) is True
+    assert _compatible_with_column(7, RealtimeEvent.id) is True
+    # Mismatches.
+    assert _compatible_with_column(moment, Workspace.slug) is False
+    assert _compatible_with_column("x", Workspace.created_at) is False
+    assert _compatible_with_column(uuid.uuid4(), RealtimeEvent.id) is False
+    assert _compatible_with_column(3, Workspace.id) is False
+    # bool is not an int cursor value.
+    assert _compatible_with_column(True, RealtimeEvent.seq) is False
+    # Unmapped column type → permissive (None).
+    assert _compatible_with_column(5, column("opaque")) is None
+    assert _compatible_with_column(5, object()) is None
