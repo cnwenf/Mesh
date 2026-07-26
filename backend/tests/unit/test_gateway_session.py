@@ -312,6 +312,42 @@ async def test_invalid_subscribe_payloads(session_factory):
     assert all(e["code"] == "validation_error" for e in errors)
 
 
+async def test_subscribe_resume_from_bool_rejected_without_disconnect(session_factory):
+    # JSON `true` decodes to a Python bool — an int subclass. It must be
+    # rejected as validation_error, never reach the replay SQL (which would
+    # abort the connection), and leave the connection usable.
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": True},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": False},
+            {"op": "ping"},
+        ]
+    )
+    await _session(transport, session_factory).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert len(errors) == 2
+    assert all(e["code"] == "validation_error" for e in errors)
+    assert not transport.closed
+    assert _ops(transport)[-1] == FRAME_PING  # connection still answers
+
+
+async def test_subscribe_negative_resume_from_rejected(session_factory):
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": "issue:x", "resume_from": -1},
+            {"op": "ping"},
+        ]
+    )
+    await _session(transport, session_factory).run()
+    errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "validation_error"
+    assert not transport.closed
+    assert _ops(transport)[-1] == FRAME_PING
+
+
 class BlockingTransport(FakeTransport):
     """Serves queued frames, then blocks forever (silent client)."""
 

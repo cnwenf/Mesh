@@ -195,8 +195,13 @@ class RealtimeSession:
             await self._send_error("validation_error", "channel is required")
             return
         resume_from = frame.get("resume_from")
-        if resume_from is not None and not isinstance(resume_from, int):
-            await self._send_error("validation_error", "resume_from must be an integer")
+        # Strict type check: JSON `true`/`false` are bools, an int subclass in
+        # Python — isinstance would let them through to the replay SQL, where
+        # they abort the connection. Negative seq values are meaningless.
+        if resume_from is not None and (type(resume_from) is not int or resume_from < 0):
+            await self._send_error(
+                "validation_error", "resume_from must be a non-negative integer"
+            )
             return
 
         principal = self._state.principal
