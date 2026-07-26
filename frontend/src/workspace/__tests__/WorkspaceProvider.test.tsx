@@ -1,5 +1,5 @@
 import { act, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useParams } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { MeshApiError } from '../../api/errors';

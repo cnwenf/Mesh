@@ -9,7 +9,7 @@
  * 叠加「AI」徽章。角色/状态/显示名变更经 REST(乐观刷新后重拉名册)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

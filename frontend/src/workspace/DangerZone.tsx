@@ -5,7 +5,7 @@
  * 删除成功经 realtime workspace.deleted 全员收到;本端删除后返回首页。
  */
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../api/client';
 import { MeshApiError, errorToI18nKey } from '../api/errors';
 import { getApiClient } from '../api/instance';

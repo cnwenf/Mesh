@@ -3,7 +3,7 @@
  * 全部为 NavLink(鼠标可达);快捷键仅为加速器(§6.12:所有快捷键有等价鼠标路径)。
  * 激活态经 className 回调应用,首页链接 `end` 精确匹配。
  */
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
 

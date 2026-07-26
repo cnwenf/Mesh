@@ -7,7 +7,7 @@
  * 状态渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 空态 → 内容。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { useIntl } from 'react-intl';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';

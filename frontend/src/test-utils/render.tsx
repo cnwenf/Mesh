@@ -7,7 +7,7 @@
 import type { ReactElement, ReactNode } from 'react';
 import { render } from '@testing-library/react';
 import type { RenderResult } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { ThemeProvider, ToastProvider } from '../design';
 import { I18nProvider, useT } from '../i18n';
 import type { MissingReporter } from '../i18n';

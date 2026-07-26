@@ -5,7 +5,7 @@
  * 成员区(ProjectMembersSection)。归档项目写操作 422 project_archived 经 toast 呈现。
  */
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
 import { Button, Dialog, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

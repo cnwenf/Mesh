@@ -20,7 +20,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { getApiClient } from '../api/instance';
 import type { MeshApiClient } from '../api/client';
 import { MeshApiError } from '../api/errors';

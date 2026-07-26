@@ -4,7 +4,7 @@
  */
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { getApiClient } from '../../api/instance';
 import { forgotPassword } from '../../api/auth';
