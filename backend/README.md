@@ -10,7 +10,7 @@ Three independently deployable units, all stateless except PostgreSQL:
 | Unit | Entrypoint | Responsibility |
 | --- | --- | --- |
 | API | `uvicorn mesh.api.app:create_app --factory` | REST `/api/v1`, §6.14 envelopes, health checks |
-| Worker | `python -m mesh.workers` | Outbox relay, realtime projector, retention purge — each an isolated supervised asyncio task (§2.2) |
+| Worker | `python -m mesh.workers` | Outbox relay, realtime projector, realtime + outbox retention purges, invitation sweep — each an isolated supervised asyncio task (§2.2) |
 | Realtime gateway | `uvicorn mesh.realtime.app:create_app --factory` | WebSocket `/ws`: first-frame auth, per-channel authorization, `resume_from` replay, `resync_required` (§6.7/§6.16) |
 
 Layering inside `src/mesh/`:
@@ -100,6 +100,7 @@ Writes are rate limited per principal+IP (120/min). Private-project realtime eve
 - **Tokens at rest are hashes** — refresh / reset / verification tokens store only SHA-256; the MFA TOTP secret is Fernet-encrypted; plaintext exists only at creation. Login failures are counted on the `(IP, email)` tuple (not email alone) to avoid a lockout DoS, and login/register/reset are rate limited (Redis sliding window, `429` + `Retry-After`).
 - **RLS is defense-in-depth** (§6.2 rule 5): policies are installed on `realtime_channels`/`realtime_events` and on every workspace tenant table (migration `0004`) using the `mesh.workspace_id` GUC (set via `mesh.db.tenant.set_tenant_context`). Without the GUC the policies cannot even be evaluated — reads fail closed. PostgreSQL bypasses RLS for table owners (and superusers), so the **API and realtime gateway connect as the restricted, non-owner role `mesh_app`** (created by migration `0002`), which makes RLS enforce on the app path; the app sets the tenant GUC at the start of every tenant-scoped request (membership gate, channel authorization, replay, reconciliation). The **worker keeps the owner role** for the inherently cross-tenant relay / projector / retention / invitation-sweep loops. `MESH_APP_DATABASE_URL` carries the restricted-role URL (falls back to `MESH_DATABASE_URL` when unset); the `mesh_app` password is `MESH_APP_DB_PASSWORD`. Composite FKs remain the primary tenant guard — cross-workspace references are rejected at INSERT time.
 - **Invitation tokens are hashes** — only the SHA-256 of an invitation token is stored; the plaintext exists only in the create response. `max_uses`/`expires_at` are never NULL (no unlimited/never-expiring links), and explicit values are bounded by workspace-configurable caps.
+- **App-path statement timeout** — API/gateway sessions set PostgreSQL `statement_timeout` (default 30s, `MESH_APP_STATEMENT_TIMEOUT`; `0` disables) so a runaway query is cancelled instead of holding a connection and client request indefinitely. The worker path (relay / projector / retention) is exempt — its loops run long-lived cross-tenant maintenance.
 
 ## Local development
 

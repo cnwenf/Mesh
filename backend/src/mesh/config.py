@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_REALTIME_RETENTION_DAYS = 7
+DEFAULT_OUTBOX_RETENTION_DAYS = 7
 DEFAULT_API_PORT = 8000
 DEFAULT_WS_PORT = 8081
 
@@ -77,6 +78,12 @@ class Settings(BaseSettings):
     # retention).
     app_database_url: str | None = None
 
+    # Per-statement timeout backstop for the API/gateway app path (L7): a
+    # runaway query is cancelled by PostgreSQL instead of holding a connection
+    # indefinitely. Applies only to the app engine — the worker's cross-tenant
+    # maintenance loops are exempt. 0 disables the timeout.
+    app_statement_timeout: timedelta = Field(default=timedelta(seconds=30), ge=0)
+
     # Auth signing / encryption (auth.md §5.5). The JWT secret signs access
     # tokens; the Fernet key for at-rest secrets (MFA) is derived from it so a
     # single env var drives both. ``jwt_algorithm`` is fixed at the config
@@ -126,6 +133,16 @@ class Settings(BaseSettings):
     outbox_poll_interval: float = Field(default=1.0, gt=0)
     outbox_max_attempts: int = Field(default=5, ge=1)
 
+    # Outbox retention (§6.6): terminal (published/failed) rows are purged once
+    # older than this window so outbox_events and its idempotency_key unique
+    # index do not grow without bound. Pending rows are never purged. The
+    # window far exceeds the relay retry budget, so the permanent-failure
+    # alert fires long before a failed row is eligible for cleanup.
+    outbox_event_retention: timedelta = Field(
+        default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS)
+    )
+    outbox_retention_interval: float = Field(default=3600.0, gt=0)
+
     # Realtime retention window (README §6.7: default 7 days, configurable).
     realtime_event_retention: timedelta = Field(
         default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS)
@@ -133,6 +150,18 @@ class Settings(BaseSettings):
     realtime_retention_interval: float = Field(default=3600.0, gt=0)
     realtime_replay_page_size: int = Field(default=200, ge=1, le=1000)
     ws_ping_interval: float = Field(default=30.0, gt=0)
+
+    # Realtime gateway DoS hardening (README §6.16). Unauthenticated sockets
+    # are closed after the auth window; inbound frames are limited per rolling
+    # second and per-connection subscriptions are capped (a flooding or
+    # over-subscribing client is answered with an error, not serviced).
+    # ``ws_max_size_bytes`` is the single source of truth for the transport
+    # frame ceiling: deployments must start uvicorn with the matching
+    # ``--ws-max-size`` (docker-compose does this).
+    ws_auth_timeout: float = Field(default=5.0, gt=0)
+    ws_max_subscriptions: int = Field(default=256, ge=1)
+    ws_max_frames_per_second: int = Field(default=30, ge=1)
+    ws_max_size_bytes: int = Field(default=65536, ge=1024)
 
     # Invitation expiry sweep (workspace.md §4.4 timed expiry complement to the
     # lazy checks on accept/preview).

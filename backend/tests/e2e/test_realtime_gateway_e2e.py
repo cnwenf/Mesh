@@ -7,6 +7,7 @@ Covers §9 T6 (stale cursor → resync_required → REST reconciliation) and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 
@@ -127,6 +128,100 @@ async def test_unauthenticated_first_frame_is_rejected(gateway_server):
         assert frame["code"] == "unauthorized"
     finally:
         await ws.close()
+
+
+async def test_bool_and_negative_resume_from_rejected_over_real_ws(
+    gateway_server, workspace_factory
+):
+    """L2: JSON `true` (bool is an int subclass) and negative resume_from must
+    be answered with a validation_error over a real socket — never crash the
+    replay query — and the connection must stay usable afterwards."""
+    workspace = await workspace_factory()
+    channel = f"issue:{workspace.id}"
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+
+        for bad in (True, False, -5):
+            await ws.send(json.dumps({"op": "subscribe", "channel": channel, "resume_from": bad}))
+            frame = await _recv_frame(ws)
+            assert frame["op"] == "error"
+            assert frame["code"] == "validation_error"
+
+        # Connection survives the rejections and still answers pings.
+        await ws.send(json.dumps({"op": "ping"}))
+        assert (await _recv_frame(ws))["op"] == "ping"
+    finally:
+        await ws.close()
+
+
+# --- M4: DoS hardening over a real socket ---
+
+
+async def test_frame_flood_is_rate_limited_and_connection_closed(
+    gateway_server, workspace_factory
+):
+    """A client flooding frames past the per-second budget is served at most
+    the budget and then dropped (rate_limited error frame on the normal path)."""
+    workspace = await workspace_factory()
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+
+        # A real client reads while it writes — drain concurrently so the
+        # server's pongs and the final error frame are consumed as they land.
+        received: list[dict] = []
+        closed = asyncio.Event()
+
+        async def _reader() -> None:
+            with contextlib.suppress(websockets.ConnectionClosed):
+                while True:
+                    received.append(await _recv_frame(ws, timeout=15))
+            closed.set()
+
+        reader = asyncio.create_task(_reader())
+        with contextlib.suppress(websockets.ConnectionClosed):
+            for _ in range(200):  # default budget is 30/rolling second
+                await ws.send(json.dumps({"op": "ping"}))
+                await asyncio.sleep(0)
+        await asyncio.wait_for(closed.wait(), timeout=15)
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reader
+
+        codes = [f.get("code") for f in received if f.get("op") == "error"]
+        pongs = sum(1 for f in received if f.get("op") == "ping")
+        # Defense contract: the flood is NOT fully serviced — roughly the
+        # per-second budget (30; exact semantics, including the error frame,
+        # are pinned by the fake-clock unit tests) and then the drop. The
+        # rate_limited frame is the normal path, but the still-flooding
+        # client's in-flight frames can make the transport abort before it
+        # is read — that is still a drop, so both observations are valid.
+        assert 25 <= pongs <= 40, f"pongs={pongs}"
+        assert codes in ([], ["rate_limited"]), f"codes={codes} pongs={pongs}"
+        assert closed.is_set()
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close()
+
+
+async def test_oversized_frame_is_rejected_at_transport(gateway_server, workspace_factory):
+    """A frame over the transport ceiling (--ws-max-size 65536, mirroring
+    compose) kills the connection at the transport layer."""
+    workspace = await workspace_factory()
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+        await ws.send(json.dumps({"op": "ping", "filler": "x" * 100_000}))
+        with pytest.raises(websockets.ConnectionClosed):
+            for _ in range(10):
+                await _recv_frame(ws, timeout=10)
+    finally:
+        with contextlib.suppress(Exception):
+            await ws.close()
 
 
 async def test_cross_tenant_subscription_is_forbidden(
@@ -268,6 +363,35 @@ async def test_jwt_session_first_frame_auth_subscribe_and_cross_tenant(
             headers={"Authorization": "Bearer not-a-jwt"},
         )
     assert unauthorized.status_code == 401
+
+
+async def test_reconciliation_foreign_typed_cursor_is_400_not_500(
+    api_server, session_factory, workspace_factory
+):
+    """L5: a well-formed cursor from another endpoint (datetime + UUID keyset
+    against the int-seq + BIGINT-id reconcile listing) must answer 400
+    invalid_cursor over real HTTP, not a neutral 500 from the DB layer."""
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from mesh.api.pagination import encode_cursor
+
+    workspace = await workspace_factory()
+    channel = f"workspace:{workspace.id}"
+    await _publish_via_relay(
+        session_factory, workspace.id, channel, "workspace.updated", {"v": 1}
+    )
+    foreign_cursor = encode_cursor(datetime(2026, 7, 25, tzinfo=UTC), uuid.uuid4())
+    async with httpx.AsyncClient(base_url=api_server.base_url, timeout=10) as client:
+        response = await client.get(
+            "/api/v1/realtime/events",
+            params={"channel": channel, "since": 0, "cursor": foreign_cursor},
+            headers={"Authorization": f"Bearer mesh-dev:{workspace.id}"},
+        )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["code"] == "invalid_cursor"
 
 
 # --- P1 regression: standalone gateway must not leak private-project events ---

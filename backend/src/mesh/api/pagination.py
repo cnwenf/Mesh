@@ -13,9 +13,10 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Select, tuple_
+from sqlalchemy import DateTime, Integer, Numeric, Select, String, Uuid, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.errors import ValidationError
@@ -100,6 +101,43 @@ def decode_cursor(raw: str) -> CursorPosition:
     return CursorPosition(sort_value=sort_value, id=row_id)
 
 
+def _compatible_with_column(value: Any, column: Any) -> bool | None:
+    """Check a decoded cursor value against the column's SQL type.
+
+    Returns ``False`` on a definite mismatch (a well-formed cursor aimed at a
+    different endpoint — e.g. a datetime cursor on a string-sorted list — which
+    would otherwise fail the keyset comparison at the DB layer and surface as
+    a neutral 500), ``True`` when compatible, ``None`` when the column type is
+    not one we can check (remain permissive).
+    """
+    column_type = getattr(column, "type", None)
+    if column_type is None:
+        return None
+    if isinstance(column_type, DateTime):  # TIMESTAMP subclasses DateTime
+        return isinstance(value, datetime)
+    if isinstance(column_type, String):  # TEXT/VARCHAR subclass String
+        return isinstance(value, str)
+    if isinstance(column_type, Integer):  # bool is an int subclass — exclude it
+        return type(value) is int
+    if isinstance(column_type, Numeric):  # Float subclasses Numeric
+        return isinstance(value, (int, float, Decimal)) and type(value) is not bool
+    if isinstance(column_type, Uuid):  # postgresql.UUID subclasses Uuid
+        return isinstance(value, uuid.UUID)
+    return None
+
+
+def _validate_cursor_for_columns(cursor: str, position: CursorPosition, sort_column, id_column) -> None:
+    """Reject a well-formed cursor whose types do not match the keyset columns."""
+    compatible_sort = _compatible_with_column(position.sort_value, sort_column)
+    compatible_id = _compatible_with_column(position.id, id_column)
+    if compatible_sort is False or compatible_id is False:
+        raise ValidationError(
+            "invalid pagination cursor",
+            details={"cursor": cursor[:64]},
+            code="invalid_cursor",
+        )
+
+
 async def paginate(
     session: AsyncSession,
     stmt: Select,
@@ -127,6 +165,7 @@ async def paginate(
         ordered = stmt.order_by(sort_column.desc(), id_column.desc())
         if cursor is not None:
             position = decode_cursor(cursor)
+            _validate_cursor_for_columns(cursor, position, sort_column, id_column)
             ordered = ordered.where(
                 tuple_(sort_column, id_column) < (position.sort_value, position.id)
             )
@@ -134,6 +173,7 @@ async def paginate(
         ordered = stmt.order_by(sort_column.asc(), id_column.asc())
         if cursor is not None:
             position = decode_cursor(cursor)
+            _validate_cursor_for_columns(cursor, position, sort_column, id_column)
             ordered = ordered.where(
                 tuple_(sort_column, id_column) > (position.sort_value, position.id)
             )

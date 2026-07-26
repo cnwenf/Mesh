@@ -26,6 +26,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import quote
@@ -40,7 +43,19 @@ from mesh.realtime.pubsub import RedisSubscriber
 logger = logging.getLogger("mesh.realtime")
 
 RECONCILIATION_PATH = "/api/v1/realtime/events"
-AUTH_TIMEOUT_SECONDS = 10.0
+# Unauthenticated connections are closed after this window: short enough that
+# silent sockets cannot occupy gateway resources for long (M4 DoS hardening),
+# long enough for a real client to send the first-frame auth (§6.16).
+AUTH_TIMEOUT_SECONDS = 5.0
+
+# Per-connection DoS limits (M4): subscriptions are capped so one connection
+# cannot fan out an unbounded channel set, and inbound frames are limited per
+# rolling second so a flooding client is dropped instead of saturating the
+# gateway. The frame-size ceiling is enforced at the transport layer
+# (uvicorn ``--ws-max-size``, docker-compose).
+DEFAULT_MAX_SUBSCRIPTIONS = 256
+DEFAULT_MAX_FRAMES_PER_SECOND = 30
+RATE_LIMIT_WINDOW_SECONDS = 1.0
 
 OP_AUTH = "auth"
 OP_SUBSCRIBE = "subscribe"
@@ -97,6 +112,9 @@ class RealtimeSession:
         replay_page_size: int = 200,
         ping_interval: float = 30.0,
         auth_timeout: float = AUTH_TIMEOUT_SECONDS,
+        max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS,
+        max_frames_per_second: int = DEFAULT_MAX_FRAMES_PER_SECOND,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._transport = transport
         self._session_factory = session_factory
@@ -106,6 +124,10 @@ class RealtimeSession:
         self._replay_page_size = replay_page_size
         self._ping_interval = ping_interval
         self._auth_timeout = auth_timeout
+        self._max_subscriptions = max_subscriptions
+        self._max_frames_per_second = max_frames_per_second
+        self._clock = clock or time.monotonic
+        self._frame_times: deque[float] = deque()
         self._state = ConnectionState()
         self._send_lock = asyncio.Lock()
         self._closed = asyncio.Event()
@@ -168,12 +190,37 @@ class RealtimeSession:
         await self._send({"op": FRAME_AUTH_OK})
         return True
 
+    def _inbound_rate_limited(self) -> bool:
+        """True when the client exceeded the per-second inbound frame budget.
+
+        Rolling window: timestamps older than ``RATE_LIMIT_WINDOW_SECONDS`` are
+        evicted, then the frame count within the window is compared against the
+        limit. A sustained flood trips it immediately; a burst followed by
+        silence recovers once the window clears (M4 DoS hardening).
+        """
+        now = self._clock()
+        times = self._frame_times
+        times.append(now)
+        while times and times[0] <= now - RATE_LIMIT_WINDOW_SECONDS:
+            times.popleft()
+        return len(times) > self._max_frames_per_second
+
     async def _message_loop(self) -> None:
         while not self._closed.is_set():
             try:
                 frame = await self._transport.receive_json()
             except Exception:
                 return  # client disconnected
+            if self._inbound_rate_limited():
+                # A flooding client is dropped, not serviced: answer once,
+                # close, and let a well-behaved client reconnect (§6.7
+                # resume_from recovery).
+                self._closed.set()
+                with contextlib.suppress(Exception):
+                    await self._send_error("rate_limited", "frame rate limit exceeded")
+                with contextlib.suppress(Exception):
+                    await self._transport.close()
+                return
             if not isinstance(frame, dict):
                 await self._send_error("validation_error", "frame must be an object")
                 continue
@@ -187,7 +234,9 @@ class RealtimeSession:
             elif op == OP_PING:
                 await self._send({"op": FRAME_PING})
             else:
-                await self._send_error("validation_error", f"unknown op: {op!r}")
+                # Never echo the raw op content back (M4): attacker-controlled
+                # bytes would be amplified into the error frame.
+                await self._send_error("validation_error", "unknown op")
 
     async def _handle_subscribe(self, frame: dict[str, Any]) -> None:
         channel = frame.get("channel")
@@ -195,8 +244,27 @@ class RealtimeSession:
             await self._send_error("validation_error", "channel is required")
             return
         resume_from = frame.get("resume_from")
-        if resume_from is not None and not isinstance(resume_from, int):
-            await self._send_error("validation_error", "resume_from must be an integer")
+        # Strict type check: JSON `true`/`false` are bools, an int subclass in
+        # Python — isinstance would let them through to the replay SQL, where
+        # they abort the connection. Negative seq values are meaningless.
+        if resume_from is not None and (type(resume_from) is not int or resume_from < 0):
+            await self._send_error(
+                "validation_error", "resume_from must be a non-negative integer"
+            )
+            return
+
+        # Per-connection subscription cap (M4): re-subscribing an already
+        # active channel stays allowed (idempotent replay), new channels past
+        # the cap are refused without closing the connection.
+        if (
+            channel not in self._state.subscriptions
+            and len(self._state.subscriptions) >= self._max_subscriptions
+        ):
+            await self._send_error(
+                "too_many_subscriptions",
+                f"subscription limit reached ({self._max_subscriptions})",
+                channel=channel,
+            )
             return
 
         principal = self._state.principal
@@ -205,7 +273,9 @@ class RealtimeSession:
             return
         owner = await self._authorizer.authorize(principal, channel)
         if owner is None:
-            await self._send_error("forbidden", f"not authorized for channel: {channel}", channel=channel)
+            # The structured ``channel`` field carries correlation; the message
+            # itself is fixed so no client-controlled text is echoed (M4).
+            await self._send_error("forbidden", "not authorized for channel", channel=channel)
             return
 
         # Subscribe the pump FIRST so events projected during replay are not

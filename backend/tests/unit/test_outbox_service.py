@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mesh.db.models.outbox import OUTBOX_STATUS_PENDING, OutboxEvent
 from mesh.errors import BusinessRuleError
 from mesh.events.vocab import REALTIME_PUBLISH, UnregisteredEventError
-from mesh.outbox.service import emit_event, emit_realtime
+from mesh.outbox.service import emit_event, emit_realtime, scope_idempotency_key
 
 
 async def test_emit_event_inserts_pending_row_in_caller_transaction(session_factory, workspace_factory):
@@ -51,11 +51,58 @@ async def test_emit_event_duplicate_idempotency_key_returns_existing(session_fac
         count = len(
             (
                 await other.execute(
-                    select(OutboxEvent).where(OutboxEvent.idempotency_key == "k-1")
+                    select(OutboxEvent).where(
+                        OutboxEvent.idempotency_key
+                        == scope_idempotency_key(workspace.id, "k-1")
+                    )
                 )
             ).all()
         )
         assert count == 1
+
+
+async def test_emit_event_stored_key_carries_workspace_scope(session_factory, workspace_factory):
+    """L1: the helper forces workspace context into the stored key so dedup
+    can never match a row from another tenant."""
+    workspace = await workspace_factory()
+    async with session_factory() as session, session.begin():
+        event = await emit_event(
+            session,
+            workspace_id=workspace.id,
+            event_type="execution.enqueue",
+            payload={},
+            idempotency_key="client-key",
+        )
+    assert event.idempotency_key == f"ws:{workspace.id}:client-key"
+    assert event.idempotency_key.endswith(":client-key")
+
+
+async def test_emit_event_same_key_in_different_workspaces_is_not_deduped(
+    session_factory, workspace_factory
+):
+    """L1: the same client-supplied key in two workspaces must create two rows —
+    global de-duplication would return a foreign tenant's row."""
+    workspace_a = await workspace_factory(name="A")
+    workspace_b = await workspace_factory(name="B")
+    async with session_factory() as session, session.begin():
+        event_a = await emit_event(
+            session,
+            workspace_id=workspace_a.id,
+            event_type="execution.enqueue",
+            payload={"w": "a"},
+            idempotency_key="shared-key",
+        )
+        event_b = await emit_event(
+            session,
+            workspace_id=workspace_b.id,
+            event_type="execution.enqueue",
+            payload={"w": "b"},
+            idempotency_key="shared-key",
+        )
+        assert event_b.id != event_a.id
+    async with session_factory() as other:
+        total = await other.scalar(select(func.count()).select_from(OutboxEvent))
+        assert total == 2
 
 
 async def test_emit_realtime_writes_realtime_publish_envelope(session_factory, workspace_factory):

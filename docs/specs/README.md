@@ -341,6 +341,7 @@ CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pe
 ```
 
 - 业务事务**同事务 INSERT outbox_events**(与业务行同提交);relay worker `FOR UPDATE SKIP LOCKED` 领取并分发,成功后置 `published`;失败退避重试,`delivery_attempts` 超限置 `failed` 并告警。
+- **终态行保留期清理(防无限膨胀)**:`published`/`failed` 行(含 `idempotency_key` 唯一索引项)由 worker 的 outbox-retention 循环按保留期(默认 7 天,`MESH_OUTBOX_EVENT_RETENTION` 可配)分批删除;`pending` 行**永不**清理(清理即静默丢任务)。`failed` 行需整段保留期过后才可删,远大于 relay 重试预算,故 §6.6 永久失败告警必然先于清理发出。
 - **禁止**在业务事务外"顺手"创建 execution/notification/realtime 事件(进程内总线、直接调下游)——此为评审硬约束。
 - **实时事件的唯一登记路径(R2 硬约束)**:一切实时事件(含各模块 §3.x/§4.x 所列 WebSocket 事件、`notification.created`、执行状态回流)一律为:业务事务写 `outbox_events`(`event_type='realtime.publish'`,payload 含频道、事件名、完整变更字段)→ **realtime projector**(§2.2)以 outbox 事件 id 为唯一去重键写 `realtime_events` 并**在投影事务内分配频道 `seq`**(§6.7)→ 经 Redis pub/sub 通知网关发布。**禁止业务事务直接 INSERT `realtime_events` 或直接分配 `seq`**——两条路径会产生不同的原子性/排序/去重实现乃至重复事件;projector 崩溃后重启经 outbox 补投,`realtime_events.UNIQUE(outbox_event_id)` 保证不重复登记(§9 T5/T26)。
 
@@ -625,6 +626,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 用户可控 URL | `avatar_url`、`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:` 等非安全 scheme,**仅允许 `https`**(R2:统一 https-only,明文 `http` 的用户可控头像/Logo URL 是混合内容弱攻击面,不再提供可选 http);members/users/agents/workspaces/squads 相关写入端点统一校验 |
 | SSRF 防护 | 一切服务端代为发起的外联(技能来源拉取、autopilot 出向 HTTP、平台托管 runtime 的 checkout)禁止私网地址段(RFC1918 / link-local / 云元数据 `169.254.169.254`),仅允许公网地址或显式白名单 |
 | WebSocket 鉴权 | **禁止在 URL query 参数中传递 token**(会落入访问日志与中间代理);使用**连接建立后首帧认证**单一机制(客户端连接成功后发送 `{op:'auth',token}` → 服务端回复 `auth_ok`;v0.1.0 起实现基线,前后端已收敛于首帧,不再保留子协议可选项) |
+| WebSocket DoS 硬化 | 每连接资源护栏(M4):**首帧认证超时 5s**(`MESH_WS_AUTH_TIMEOUT`,未认证连接快速释放);**入站帧限速 30/滚动秒**,超限回 `rate_limited` 错误帧后断开;**单连接订阅上限 256**(`MESH_WS_MAX_SUBSCRIPTIONS`),超限对新频道回 `too_many_subscriptions` 错误帧(不断开,已订阅频道重订阅幂等放行);**传输层帧上限 64KB**(uvicorn `--ws-max-size`,与 `MESH_WS_MAX_SIZE_BYTES` 一致,compose 已内置);**错误帧不回显客户端原始内容**(unknown-op / forbidden 消息为固定文案,频道关联仅走结构化 `channel` 字段) |
 
 ### 6.17 集成平台契约(唯一权威,R2 必修-B;详 Spec 见 integrations.md)
 
