@@ -426,4 +426,88 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
     expect(screen.queryByTestId('projects-list-page')).toBeNull();
   });
+
+  it('渲染项目 icon 与色块;健康度灯可点击打开更新对话框', async () => {
+    stubFetch({ project: makeProject({ icon: '🛰️', color: '#00ff88' }) });
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByTestId('project-detail-header');
+
+    expect(screen.getByTestId('project-icon').textContent).toBe('🛰️');
+    expect(screen.getByTestId('project-color')).toBeDefined();
+
+    await user.click(screen.getByTestId('health-light-button'));
+    expect(await screen.findByTestId('health-update-form')).toBeDefined();
+  });
+
+  it('从里程碑 Tab 点回概览 Tab 移除 tab 参数', async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1?tab=milestones' },
+    );
+    await screen.findByTestId('project-detail-header');
+    expect(screen.getByTestId('create-milestone-button')).toBeDefined();
+
+    await user.click(screen.getByTestId('tab-overview'));
+
+    await waitFor(() => expect(screen.queryByTestId('create-milestone-button')).toBeNull());
+  });
+
+  it('概览 Tab 里程碑:有目标日渲染日期,无目标日省略', async () => {
+    stubFetch({
+      project: makeProject({
+        milestones: [
+          MILESTONE_OPEN,
+          { ...MILESTONE_OPEN, id: 'ms-3', title: 'No date', target_date: null, overdue: false },
+        ],
+      }),
+    });
+    const { container } = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+      </Routes>,
+      { route: '/projects/prj-1' },
+    );
+    await screen.findByTestId('project-detail-header');
+
+    const rows = container.querySelectorAll('.mesh-projects__milestone');
+    expect(rows.length).toBe(2);
+    expect(rows[0].textContent).toContain('2026-09-30');
+    expect(rows[1].textContent).not.toContain('2026-09-30');
+  });
+
+  it('已归档项目头部按钮为 Unarchive 并调用 unarchive 端点', async () => {
+    const calls = stubFetch({
+      project: makeProject({ archived: true, archived_at: '2026-06-01T00:00:00Z' }),
+    });
+    const user = userEvent.setup();
+    renderDetail();
+    const toggle = await screen.findByTestId('archive-toggle-button');
+    expect(toggle.textContent).toBe('Unarchive');
+
+    await user.click(toggle);
+
+    await waitFor(() => expect(callsTo(calls, 'POST', '/unarchive').length).toBe(1));
+  });
+
+  it('删除二次确认对话框可取消且不发起 DELETE', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByTestId('project-detail-header');
+
+    await user.click(screen.getByTestId('delete-project-button'));
+    expect(screen.getByTestId('delete-confirm-text')).toBeDefined();
+    await user.click(screen.getByText('Cancel'));
+
+    expect(screen.queryByTestId('delete-confirm')).toBeNull();
+    expect(callsTo(calls, 'DELETE', '/projects/').length).toBe(0);
+  });
+
 });
