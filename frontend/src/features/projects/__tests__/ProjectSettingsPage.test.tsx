@@ -4,7 +4,7 @@
  * 自动收敛(重取 + 重放)并提示 conflictToast;成员管理(列表/添加/改角色/移除);
  * 危险区归档切换与删除二次确认。
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Routes, Route } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -91,11 +91,13 @@ interface StubOptions {
   readonly conflictPatchTimes?: number;
   /** 409 重取时服务端返回的并发编辑后的 name */
   readonly serverNameAfterConflict?: string;
+  /** 覆盖默认项目 fixture(如字段全 null 的三态预填场景) */
+  readonly project?: ReturnType<typeof makeProject>;
 }
 
 function stubFetch(opts: StubOptions = {}) {
   const calls: RecordedCall[] = [];
-  let project = makeProject();
+  let project = opts.project === undefined ? makeProject() : opts.project;
   let patchFailures = opts.conflictPatchTimes ?? 0;
   let conflictHappened = false;
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -510,3 +512,128 @@ describe('ProjectSettingsPage', () => {
     expect(lastBody).not.toContain('Stale Edit');
   });
 
+describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('字段为 null 的项目预填回退空串(三态)', async () => {
+    stubFetch({
+      project: makeProject({
+        description: null,
+        start_date: null,
+        target_date: null,
+        lead: null,
+        lead_member_id: null,
+      }),
+    });
+    renderSettings();
+    await screen.findByTestId('settings-form');
+
+    expect((screen.getByLabelText('Description') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('settings-start-date') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('settings-target-date') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('settings-lead') as HTMLSelectElement).value).toBe('');
+  });
+
+  it('一次保存涵盖状态/可见性/日期/负责人变更', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByTestId('settings-form');
+
+    await user.selectOptions(screen.getByTestId('settings-status'), 'paused');
+    await user.selectOptions(screen.getByTestId('settings-visibility'), 'private');
+    fireEvent.change(screen.getByTestId('settings-start-date'), {
+      target: { value: '2026-02-01' },
+    });
+    fireEvent.change(screen.getByTestId('settings-target-date'), {
+      target: { value: '2026-12-31' },
+    });
+    await user.selectOptions(screen.getByTestId('settings-lead'), 'mem-2');
+    await user.click(screen.getByTestId('settings-save'));
+
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+    const body = JSON.parse(String(patchProjectCalls(calls)[0].init?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toEqual({
+      status: 'paused',
+      visibility: 'private',
+      start_date: '2026-02-01',
+      target_date: '2026-12-31',
+      lead_member_id: 'mem-2',
+    });
+    expect(await screen.findByText('Settings saved.')).toBeDefined();
+  });
+
+  it('清空日期与负责人发送 null(三态)', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByTestId('settings-form');
+
+    fireEvent.change(screen.getByTestId('settings-start-date'), { target: { value: '' } });
+    fireEvent.change(screen.getByTestId('settings-target-date'), { target: { value: '' } });
+    await user.selectOptions(screen.getByTestId('settings-lead'), '');
+    await user.click(screen.getByTestId('settings-save'));
+
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+    const body = JSON.parse(String(patchProjectCalls(calls)[0].init?.body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body).toEqual({ start_date: null, target_date: null, lead_member_id: null });
+  });
+
+  it('无变更点击保存不发 PATCH', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByTestId('settings-form');
+
+    await user.click(screen.getByTestId('settings-save'));
+
+    expect(patchProjectCalls(calls).length).toBe(0);
+    expect(screen.queryByText('Settings saved.')).toBeNull();
+  });
+
+  it('/users/me 失败显示错误态', async () => {
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+
+    expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
+
+  it('无活动工作区时不请求项目(加载守卫)', async () => {
+    const calls: RecordedCall[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/users/me')) {
+        return fakeResponse({ body: { data: { ...ME, memberships: [] } } });
+      }
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderSettings();
+
+    await screen.findByText('Loading…');
+    expect(calls.some((c) => c.url.includes('/users/me'))).toBe(true);
+    expect(calls.some((c) => c.url.includes('/projects/'))).toBe(false);
+  });
+});
