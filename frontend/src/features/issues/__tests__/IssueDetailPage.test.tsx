@@ -5,7 +5,7 @@
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -281,7 +281,12 @@ describe('IssueDetailPage', () => {
   });
 
   it('edits estimate and start date from the sidebar (§4.2 MEDIUM-1)', async () => {
-    // 每次 PATCH 消耗 1 个响应,随后整轮重取消耗 9 个
+    // 每次 PATCH 消耗 1 个响应,随后整轮重取消耗 9 个。
+    // 连续变更以「可观察请求数」同步收敛,不依赖被动副作用的逐次刷新时序:
+    // React 19 下两次 reloadKey 更新可能在同一批处理中合并(0→2 单次副作用执行),
+    // 第一轮整轮重取未发出就触发第二次变更会使响应队列错位;先等第一轮落定
+    // (9 初始 + 1 PATCH + 9 重取 = 19)再发第二次变更。末次成功后必有收敛重取
+    // (reloadKey 终值触发一次副作用),不丢最终一致性。
     const stub = queue(
       fakeResponse({ body: { data: DETAIL } }),
       ...reloadRound(),
@@ -296,6 +301,9 @@ describe('IssueDetailPage', () => {
       expect(patchCalls.length).toBe(1);
       expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({ estimate: 5, version: 3 });
     });
+    await waitFor(() => {
+      expect(stub.calls.length).toBeGreaterThanOrEqual(19);
+    });
     fireEvent.change(screen.getByTestId('issue-detail-start'), {
       target: { value: '2026-08-01' },
     });
@@ -307,9 +315,9 @@ describe('IssueDetailPage', () => {
         version: 3,
       });
     });
-    // milestone / cycle selects are present with options
-    expect(screen.getByTestId('issue-detail-milestone')).toBeTruthy();
-    expect(screen.getByTestId('issue-detail-cycle')).toBeTruthy();
+    // milestone / cycle selects are present with options(第二轮整轮重取收敛后)
+    expect(await screen.findByTestId('issue-detail-milestone')).toBeTruthy();
+    expect(await screen.findByTestId('issue-detail-cycle')).toBeTruthy();
   });
 
   it('opens the move preview dialog on project change and confirms (§4.3 MEDIUM-2)', async () => {

@@ -14,7 +14,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 ## 技术栈
 
 - **后端**:Python(FastAPI + SQLAlchemy 2.x + Alembic + PostgreSQL 16 + Redis),实时通信走 WebSocket
-- **前端**:React 18 + TypeScript + Vite 单页应用,契约层 / 实时客户端 / 设计系统 / i18n 基线见 [frontend/](frontend/)(选型理由、Quick Start、目录结构见 [frontend/README.md](frontend/README.md))
+- **前端**:React 19 + TypeScript + Vite 单页应用,契约层 / 实时客户端 / 设计系统 / i18n 基线见 [frontend/](frontend/)(选型理由、Quick Start、目录结构见 [frontend/README.md](frontend/README.md))
 - **Agent 运行时**:可自托管的执行环境,负责任务领取、代码执行与日志回传
 
 ## 仓库结构
@@ -45,7 +45,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | MES-46 issue 页面维度安全审核收口(实时客户端加固) | ✅ v0.11.7 | resync `rest` 同源校验(跨源 / 协议相对 / 反斜杠绕过 / 前缀越界 / 不可解析一律拒绝,防 WS 被攻陷或 MITM 时 token 外发)+ 翻页循环上限;实时合并原型污染 sink 隔离(`__proto__`/`constructor`/`prototype` 键跳过 + null 原型载体);422 迁移预览回显与 i18n 外部化补齐 |
 | MES-46 多租户隔离维度安全审核收口(MES-50) | ✅ v0.11.8 | M1 默认状态回退补租户过滤(`resolve_default_status` 末路回退补 `workspace_id`,堵 owner 角色回退下的跨租状态名泄露);M2 `issue_activity` 收权 append-only(迁移 0012 REVOKE `mesh_app` UPDATE/DELETE,最小权限对齐 `audit_logs`;不加触发器以免误伤 FK 参照动作) |
 | MES-46 安全审核 HIGH×2 修复(MES-48,issue 迁移越权收口) | ✅ v0.11.9 | H1 `POST /issues/{id}/move` 未确认路径补与确认事务完全对称的源/目标鉴权(任何鉴权失败不携带 preview);H2 `POST /issues/bulk` 未确认预览逐条过源读门(越权/不可见项仅回 error marker,不回 plan);L1 项目写门 guest 分支统一 404 堵存在性 oracle;确认迁移强制 `version` 乐观锁 + 迁移清单审计留痕(issue.md §3.8) |
-| 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,清零待 React 19 迁移独立评估(MES-56) |
+| 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,已于 v0.12.0 随 React 19 / react-router 8 迁移清零(MES-56) |
+| 安全硬化·依赖收口续:React 19 / react-router 8 迁移(MES-56,MES-55 审计例外清零) | ✅ v0.12.0 | react-router 7.18.1 → 8.3.0 清零 GHSA-qwww-vcr4-c8h2(high,RSC CSRF;本站纯客户端 SPA 无该攻击面,随修复版收口使 `npm audit --omit=dev` 全清);连带 React 18.3.1 → 19.2.8(react-router 8 peer 要求 ≥19.2.7)、`@types/react`(-dom)19、Node 引擎 ≥22.22.0(CI Node 20 → 22);v8 移除 `react-router-dom` 包,全仓 43 文件 import 统一为 `react-router`(纯声明式库模式,所用 API 全兼容,零行为变更);typecheck / lint / 构建 / 1274 例单测全绿(覆盖率 97.26%),真实浏览器 e2e 30/30 + 真实后端全栈走查通过 |
 
 ## Quick Start
 

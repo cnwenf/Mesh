@@ -5,7 +5,7 @@
  * 状态渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 空态 → 内容(对齐 MembersPage)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';

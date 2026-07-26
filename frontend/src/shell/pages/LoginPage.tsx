@@ -15,7 +15,7 @@
  */
 import { useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
 import { getApiClient } from '../../api/instance';

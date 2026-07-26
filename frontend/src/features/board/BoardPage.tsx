@@ -9,7 +9,7 @@
  * → 内容(对齐 ProjectsPage)。选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
 import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';

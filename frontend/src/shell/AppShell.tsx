@@ -10,7 +10,7 @@
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Outlet, useMatch, useNavigate } from 'react-router-dom';
+import { Outlet, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
 import { env } from '../env';
 import { useT } from '../i18n';

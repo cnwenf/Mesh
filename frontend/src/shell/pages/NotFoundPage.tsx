@@ -1,7 +1,7 @@
 /**
  * 404 页(路由 `*`):标题/说明 + 回首页链接。
  */
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useT } from '../../i18n';
 
 export function NotFoundPage(): React.JSX.Element {

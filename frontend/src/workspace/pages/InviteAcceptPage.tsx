@@ -8,7 +8,7 @@
  * 不泄漏工作区存在性(not_found 与不存在同形)。token 仅经路径传递,不落入 UI 文案/日志。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
 import { getApiClient } from '../../api/instance';

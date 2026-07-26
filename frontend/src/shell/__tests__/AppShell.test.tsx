@@ -3,7 +3,7 @@
  */
 import { act, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { MeshApiError } from '../../api';
 import { env } from '../../env';
 import { useAuthStore } from '../../state/authStore';
