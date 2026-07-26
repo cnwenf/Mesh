@@ -244,6 +244,8 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | `created_at` | TIMESTAMPTZ | NOT NULL | 时间 |
 
 > 追加式;由服务层在每次成功 PATCH 后写入 diff。高频字段(如 position 拖拽)可选择不留痕以免噪声。
+>
+> **DB 级最小权限**:对齐 `audit_logs`(auth.md §5.5),`mesh_app` 角色对本表仅授 `SELECT, INSERT`,迁移 0012 已 `REVOKE UPDATE, DELETE`——被陷的 app 角色无法改写/删除留痕。`issue_id` 的 `ON DELETE CASCADE` 与 `actor_member_id` 的 `ON DELETE SET NULL` 属系统强制的 FK 参照动作(不校验表级授权),不受影响;因此**不**像 `audit_logs` 那样再加拒 UPDATE/DELETE 的触发器——那会误伤这两类参照动作、破坏 issue 删除与 member 物理删除(§9 T18)。
 
 #### `issue_custom_field_values` / `issue_labels`(跨模块,见 label-property.md)
 
