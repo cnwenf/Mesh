@@ -129,6 +129,32 @@ async def test_unauthenticated_first_frame_is_rejected(gateway_server):
         await ws.close()
 
 
+async def test_bool_and_negative_resume_from_rejected_over_real_ws(
+    gateway_server, workspace_factory
+):
+    """L2: JSON `true` (bool is an int subclass) and negative resume_from must
+    be answered with a validation_error over a real socket — never crash the
+    replay query — and the connection must stay usable afterwards."""
+    workspace = await workspace_factory()
+    channel = f"issue:{workspace.id}"
+    ws = await _ws_connect(gateway_server)
+    try:
+        await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
+        assert (await _recv_frame(ws))["op"] == "auth_ok"
+
+        for bad in (True, False, -5):
+            await ws.send(json.dumps({"op": "subscribe", "channel": channel, "resume_from": bad}))
+            frame = await _recv_frame(ws)
+            assert frame["op"] == "error"
+            assert frame["code"] == "validation_error"
+
+        # Connection survives the rejections and still answers pings.
+        await ws.send(json.dumps({"op": "ping"}))
+        assert (await _recv_frame(ws))["op"] == "ping"
+    finally:
+        await ws.close()
+
+
 async def test_cross_tenant_subscription_is_forbidden(
     gateway_server, session_factory, workspace_factory
 ):
