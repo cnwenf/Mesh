@@ -30,11 +30,18 @@ ACCESS_TOKEN_TYPE = "access"
 
 @dataclass(frozen=True)
 class AccessToken:
-    """Decoded, validated access-token claims."""
+    """Decoded, validated access-token claims.
+
+    ``authenticated_at`` is when the user last performed a primary
+    authentication (password / TOTP) — carried across silent refreshes — and
+    backs step-up re-authentication (§5.5): sensitive operations require it to be
+    recent.
+    """
 
     subject: uuid.UUID
     jti: str
     expires_at: datetime
+    authenticated_at: datetime
 
 
 def _now() -> datetime:
@@ -48,9 +55,16 @@ def encode_access_token(
     algorithm: str,
     ttl: timedelta,
     now: datetime | None = None,
+    auth_time: datetime | None = None,
 ) -> tuple[str, str]:
-    """Issue an access JWT; returns ``(token, jti)``."""
+    """Issue an access JWT; returns ``(token, jti)``.
+
+    ``auth_time`` records the last primary authentication (defaults to now);
+    silent refresh forwards the original value so step-up re-auth (§5.5) reflects
+    the real authentication age, not the token re-issue time.
+    """
     moment = now or _now()
+    auth_moment = auth_time or moment
     jti = uuid.uuid4().hex
     claims = {
         "sub": str(subject),
@@ -58,6 +72,7 @@ def encode_access_token(
         "exp": int((moment + ttl).timestamp()),
         "jti": jti,
         "typ": ACCESS_TOKEN_TYPE,
+        "auth_time": int(auth_moment.timestamp()),
     }
     token = jwt.encode(claims, secret, algorithm=algorithm)
     # PyJWT returns str for HS* algorithms; normalise for type safety.
@@ -94,8 +109,11 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> AccessTok
     except (ValueError, KeyError) as exc:
         raise UnauthorizedError("invalid or expired token") from exc
 
+    # auth_time falls back to iat for tokens issued before step-up existed.
+    auth_time_raw = claims.get("auth_time", claims["iat"])
     return AccessToken(
         subject=subject,
         jti=str(claims.get("jti", "")),
         expires_at=datetime.fromtimestamp(claims["exp"], tz=UTC),
+        authenticated_at=datetime.fromtimestamp(int(auth_time_raw), tz=UTC),
     )

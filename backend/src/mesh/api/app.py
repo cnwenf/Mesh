@@ -114,7 +114,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # production providers are operator-configured (none hardcoded).
     oauth_service = OAuthService(session_factory, app.state.auth_service, app.state.redis)
     if settings.auth_mode == "dev":
-        oauth_service.register_provider(MockOAuthProvider())
+        allowed = frozenset(
+            uri.strip()
+            for uri in (settings.oauth_mock_redirect_uris or "").split(",")
+            if uri.strip()
+        )
+        oauth_service.register_provider(MockOAuthProvider(allowed_redirect_uris=allowed))
     app.state.oauth_service = oauth_service
     app.state.workspace_service = WorkspaceService(session_factory)
     app.state.invitation_service = InvitationService(session_factory)

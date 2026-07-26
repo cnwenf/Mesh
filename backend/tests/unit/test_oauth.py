@@ -39,7 +39,10 @@ def auth_service(session_factory, settings):
 @pytest.fixture
 def oauth(session_factory, auth_service, redis_client):
     service = OAuthService(session_factory, auth_service, redis_client)
-    service.register_provider(MockOAuthProvider())
+    # M1: the mock provider only accepts whitelisted redirect URIs.
+    service.register_provider(
+        MockOAuthProvider(allowed_redirect_uris=frozenset({"http://cb"}))
+    )
     return service
 
 
@@ -97,7 +100,7 @@ async def test_bind_mode_requires_user(oauth):
 
 async def test_callback_auto_registers_and_issues_tokens(oauth, session_factory):
     start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
-    code = encode_mock_code(sub="sub-1", email="new@corp.com", name="New User")
+    code = encode_mock_code(sub="sub-1", email="new@corp.com", name="New User", email_verified=True)
     result = await oauth.callback(provider_name="mock", code=code, state=start["state"])
     assert result["access_token"] and result["refresh_token"]
     # User created (OAuth-only, verified) + identity bound.
@@ -112,7 +115,7 @@ async def test_callback_auto_registers_and_issues_tokens(oauth, session_factory)
 
 
 async def test_callback_second_login_reuses_user(oauth, session_factory):
-    code = encode_mock_code(sub="sub-2", email="reuse@corp.com")
+    code = encode_mock_code(sub="sub-2", email="reuse@corp.com", email_verified=True)
     s1 = await oauth.start(provider_name="mock", redirect_uri="http://cb")
     await oauth.callback(provider_name="mock", code=code, state=s1["state"])
     s2 = await oauth.start(provider_name="mock", redirect_uri="http://cb")
@@ -127,7 +130,7 @@ async def test_callback_second_login_reuses_user(oauth, session_factory):
 async def test_callback_binds_to_existing_email_user(oauth, auth_service, session_factory):
     # A password user already exists with this email.
     await auth_service.register(email="existing@corp.com", password=PASSWORD, display_name="E")
-    code = encode_mock_code(sub="sub-3", email="existing@corp.com")
+    code = encode_mock_code(sub="sub-3", email="existing@corp.com", email_verified=True)
     start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
     await oauth.callback(provider_name="mock", code=code, state=start["state"])
     async with session_factory() as session:
@@ -149,7 +152,7 @@ async def test_callback_bad_state_rejected(oauth):
 
 
 async def test_state_is_one_time(oauth):
-    code = encode_mock_code(sub="sub-once", email="once@corp.com")
+    code = encode_mock_code(sub="sub-once", email="once@corp.com", email_verified=True)
     start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
     await oauth.callback(provider_name="mock", code=code, state=start["state"])
     with pytest.raises(ValidationError):
@@ -181,7 +184,7 @@ async def test_bind_and_unbind_keeps_password_method(oauth, auth_service, sessio
 
 async def test_unbind_refuses_last_login_method(oauth, session_factory):
     # OAuth-only user (no password) — the identity is the sole login method.
-    code = encode_mock_code(sub="sub-only", email="only@corp.com")
+    code = encode_mock_code(sub="sub-only", email="only@corp.com", email_verified=True)
     start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
     await oauth.callback(provider_name="mock", code=code, state=start["state"])
     async with session_factory() as session:
@@ -219,3 +222,45 @@ async def test_unbind_unknown_identity_404(oauth, auth_service):
     )
     with pytest.raises(NotFoundError):
         await oauth.unbind_identity(user_id=uuid.UUID(str(user_dict["id"])), provider_name="mock")
+
+
+# --- security: H1 email_verified gate + M1 redirect_uri allowlist ------------
+
+
+async def test_unverified_email_does_not_autolink_existing_account(oauth, auth_service):
+    """H1: an unverified email must NOT link to an existing account (takeover)."""
+    await auth_service.register(email="victim@corp.com", password=PASSWORD, display_name="V")
+    # Attacker holds an UNVERIFIED victim@corp.com on the provider.
+    code = encode_mock_code(sub="attacker", email="victim@corp.com", email_verified=False)
+    start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
+    with pytest.raises(BusinessRuleError) as exc:
+        await oauth.callback(provider_name="mock", code=code, state=start["state"])
+    assert exc.value.code == "oauth_email_not_verified"
+
+
+async def test_unverified_email_does_not_autoregister(oauth, session_factory):
+    """H1: an unverified email must NOT auto-register either."""
+    code = encode_mock_code(sub="sub-unv", email="fresh@corp.com", email_verified=False)
+    start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
+    with pytest.raises(BusinessRuleError) as exc:
+        await oauth.callback(provider_name="mock", code=code, state=start["state"])
+    assert exc.value.code == "oauth_email_not_verified"
+    async with session_factory() as session:
+        assert (
+            await session.scalar(select(User).where(User.email == "fresh@corp.com"))
+        ) is None
+
+
+async def test_missing_email_cannot_autoregister(oauth):
+    code = encode_mock_code(sub="sub-noemail", email="", email_verified=True)
+    start = await oauth.start(provider_name="mock", redirect_uri="http://cb")
+    with pytest.raises(BusinessRuleError) as exc:
+        await oauth.callback(provider_name="mock", code=code, state=start["state"])
+    assert exc.value.code == "oauth_email_required"
+
+
+async def test_redirect_uri_not_in_allowlist_rejected(oauth):
+    """M1: a redirect_uri outside the exact-match allowlist is rejected (422)."""
+    with pytest.raises(BusinessRuleError) as exc:
+        await oauth.start(provider_name="mock", redirect_uri="http://evil.example/cb")
+    assert exc.value.code == "redirect_uri_not_allowed"

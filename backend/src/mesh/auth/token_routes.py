@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from mesh.api.deps import extract_bearer_token, get_session
 from mesh.api.pagination import paginate
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import require_recent_auth
 from mesh.auth.rbac import WorkspaceContext, require_workspace
 from mesh.auth.token_schemas import CreateTokenRequest
 from mesh.auth.tokens import AGENT_TOKEN_PREFIX, PAT_TOKEN_PREFIX, ResolvedToken, TokenService
@@ -97,7 +97,7 @@ async def create_token(
     body: CreateTokenRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_recent_auth),  # §5.5 step-up: creating a PAT is sensitive
     context: WorkspaceContext = Depends(require_workspace("token:manage")),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -141,7 +141,7 @@ async def revoke_token(
     token_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_recent_auth),  # §5.5 step-up: revoking a PAT is sensitive
     context: WorkspaceContext = Depends(require_workspace("token:manage")),
 ) -> dict:
     await _rate_limit_write(request, user, response)

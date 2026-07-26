@@ -1,7 +1,10 @@
 # Mesh backend CI:
 # 1) docs-checks — event vocabulary (§6.7) + roster-entry (§6.12/T35) doc gates on backend PRs too;
-# 2) test — unit + real e2e (real server processes, real PostgreSQL 16, real Redis) with a ≥90% coverage gate;
-# 3) schema-validation — docs/specs/validation/schema_r2_validation.sql runs green on a disposable PG16.
+# 2) test — unit + real e2e (real server processes, real PostgreSQL 16, real Redis) with a ≥90% coverage gate,
+#    installed from the committed lockfile (backend/requirements-dev.lock) so CI runs the exact pinned deps;
+# 3) schema-validation — docs/specs/validation/schema_r2_validation.sql runs green on a disposable PG16;
+# 4) supply-chain — pip-audit against both lockfiles; any known CVE fails the build. Also re-runs weekly so
+#    newly disclosed CVEs in pinned versions are caught even without new commits.
 name: backend-ci
 
 on:
@@ -18,11 +21,16 @@ on:
       - "tests/docs/**"
       - "docs/specs/validation/**"
       - ".github/workflows/backend-ci.yml"
+  schedule:
+    # Weekly supply-chain re-audit (Mondays 03:19 UTC). Only the supply-chain
+    # job runs on schedule; the other jobs gate themselves out below.
+    - cron: "19 3 * * 1"
 
 jobs:
   docs-checks:
     name: 文档词汇/结构校验(§6.7, §6.12)
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,8 +42,9 @@ jobs:
         run: python3 tests/docs/check_roster_entry.py docs/specs
 
   test:
-    name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%)
+    name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%,lockfile 安装)
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     services:
       postgres:
         image: postgres:16
@@ -64,8 +73,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install backend
-        run: pip install -e "backend/[dev]"
+      - name: Install backend (pinned, from lockfile)
+        run: |
+          pip install -r backend/requirements-dev.lock
+          pip install -e backend/ --no-deps
+      - name: Verify lockfile satisfies pyproject (drift gate)
+        # Fails if pyproject.toml gained a dependency the lockfile does not
+        # cover (mesh-backend's Requires-Dist would be unsatisfied) — catches
+        # "bumped pyproject, forgot to regenerate the lockfile" before tests.
+        run: pip check
       - name: Lint (ruff)
         run: ruff check backend/src backend/tests
       - name: Run unit + e2e with coverage gate
@@ -79,6 +95,7 @@ jobs:
   schema-validation:
     name: DDL 与行为验证(PostgreSQL 16,100 条断言)
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     services:
       postgres:
         image: postgres:16
@@ -101,3 +118,22 @@ jobs:
           psql -h 127.0.0.1 -U postgres -d mesh_validation \
             -v ON_ERROR_STOP=1 \
             -f docs/specs/validation/schema_r2_validation.sql
+
+  supply-chain:
+    name: 供应链审计(pip-audit 对 lockfile,命中已知 CVE 即失败)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        # Pinned; bump deliberately (verify against both lockfiles before raising).
+        run: pip install "pip-audit==2.10.1"
+      # Ignore policy: NONE today — both lockfiles audit clean. Any future
+      # --ignore-vuln <ID> MUST carry an inline comment with the reason and a
+      # review-by date; silently ignoring findings is forbidden (MES-34).
+      - name: pip-audit runtime lockfile (backend/requirements.lock)
+        run: pip-audit --strict --progress-spinner off -r backend/requirements.lock
+      - name: pip-audit dev lockfile (backend/requirements-dev.lock)
+        run: pip-audit --strict --progress-spinner off -r backend/requirements-dev.lock

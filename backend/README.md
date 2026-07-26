@@ -105,7 +105,8 @@ Writes are rate limited per principal+IP (120/min). Private-project realtime eve
 
 ```bash
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.lock   # reproducible: the lockfile is the authoritative install source
+pip install -e . --no-deps
 
 # PostgreSQL 16 + Redis (or use the repo-root docker-compose stack)
 export MESH_DATABASE_URL=postgresql+asyncpg://mesh:mesh@127.0.0.1:5432/mesh
@@ -121,3 +122,29 @@ Tests (real PostgreSQL 16 + Redis required; `MESH_TEST_DATABASE_URL` /
 ```bash
 pytest --cov=mesh --cov-report=term-missing   # unit + real e2e, coverage ≥90%
 ```
+
+## Dependency management (lockfile)
+
+`pyproject.toml` carries semantic version ranges; the committed lockfiles are
+the **authoritative reproducible install source** for CI, Docker and local
+venvs — same pins everywhere:
+
+| File | Contents | Consumed by |
+| --- | --- | --- |
+| `requirements.lock` | runtime deps, hash-pinned | `backend/Dockerfile`, production images |
+| `requirements-dev.lock` | runtime + dev deps, hash-pinned (constrained to `requirements.lock`) | CI `test` job, local development |
+
+Both are universal (cross-platform) resolutions generated with Python 3.12.
+After any dependency change in `pyproject.toml`, regenerate both and commit:
+
+```bash
+pip install uv
+uv pip compile pyproject.toml --universal --generate-hashes --no-emit-package mesh-backend -o requirements.lock
+uv pip compile pyproject.toml --all-extras -c requirements.lock --universal --generate-hashes --no-emit-package mesh-backend -o requirements-dev.lock
+pip-audit --strict -r requirements.lock && pip-audit --strict -r requirements-dev.lock
+```
+
+The CI `supply-chain` job runs `pip-audit --strict` on both lockfiles on every
+push/PR (and weekly), failing the build on any known CVE. Ignore policy: none
+today — a future `--ignore-vuln` requires an inline comment with the reason
+and a review-by date; silent ignores are forbidden.

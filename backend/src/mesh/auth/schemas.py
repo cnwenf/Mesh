@@ -68,6 +68,19 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(min_length=1, max_length=256)
 
 
+class ChangePasswordRequest(BaseModel):
+    """Authenticated password change (auth.md §3.1/§4.2, MES-39).
+
+    ``refresh_token`` identifies the caller's *current* session so it survives
+    the change while every other session is revoked; omit it (or present an
+    unrecognised token) to revoke them all.
+    """
+
+    old_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+    refresh_token: str | None = None
+
+
 class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=1)
 

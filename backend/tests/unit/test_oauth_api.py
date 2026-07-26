@@ -25,7 +25,12 @@ CALLBACK = "http://api.test/api/v1/auth/oauth/mock/callback"
 @pytest.fixture
 def app(db_url, redis_url):
     settings = load_settings(
-        database_url=db_url, redis_url=redis_url, auth_mode="dev", jwt_secret=JWT_SECRET
+        database_url=db_url,
+        redis_url=redis_url,
+        auth_mode="dev",
+        jwt_secret=JWT_SECRET,
+        # M1: the dev mock provider only accepts this exact callback redirect URI.
+        oauth_mock_redirect_uris=CALLBACK,
     )
     return create_app(settings)
 
@@ -75,7 +80,8 @@ async def _login_via_oauth(client, *, sub: str, email: str) -> dict:
     )
     assert start.status_code == 302
     state = _state(start.headers["location"])
-    code = encode_mock_code(sub=sub, email=email)
+    # H1: auto-register/link by email requires a provider-verified email.
+    code = encode_mock_code(sub=sub, email=email, email_verified=True)
     cb = await client.get(
         "/api/v1/auth/oauth/mock/callback", params={"code": code, "state": state}
     )
@@ -125,7 +131,7 @@ async def test_bind_flow_and_identities_and_unbind(client):
     )
     assert start.status_code == 302
     state = _state(start.headers["location"])
-    code = encode_mock_code(sub="bind-sub", email="b@corp.com")
+    code = encode_mock_code(sub="bind-sub", email="b@corp.com", email_verified=True)
     cb = await client.get(
         "/api/v1/auth/oauth/mock/callback", params={"code": code, "state": state}
     )

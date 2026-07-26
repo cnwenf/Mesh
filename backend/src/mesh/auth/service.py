@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth import jwt as jwt_mod
 from mesh.auth import security
+from mesh.auth.audit import write_audit
 from mesh.auth.ratelimit import assert_not_locked_out
 from mesh.auth.realtime import broadcast_user_revocation
 from mesh.config import Settings
@@ -148,12 +149,15 @@ class AuthService:
 
     # -- token issuance --------------------------------------------------------
 
-    def _issue_access(self, user_id: uuid.UUID) -> tuple[str, int]:
+    def _issue_access(
+        self, user_id: uuid.UUID, *, auth_time: datetime | None = None
+    ) -> tuple[str, int]:
         token, _jti = jwt_mod.encode_access_token(
             subject=user_id,
             secret=self._settings.jwt_secret,
             algorithm=self._settings.jwt_algorithm,
             ttl=self._settings.access_token_ttl,
+            auth_time=auth_time,
         )
         return token, int(self._settings.access_token_ttl.total_seconds())
 
@@ -167,8 +171,14 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
+        authenticated_at: datetime | None = None,
     ) -> str:
-        """Persist a refresh session (hash only) and return the plaintext token."""
+        """Persist a refresh session (hash only) and return the plaintext token.
+
+        ``authenticated_at`` records the last primary authentication (password /
+        TOTP); silent refresh forwards the original value so step-up re-auth
+        (§5.5) reflects the real authentication age.
+        """
         refresh_plain = security.generate_token()
         ttl = (
             self._settings.remember_refresh_token_ttl
@@ -184,6 +194,7 @@ class AuthService:
                 user_agent=user_agent,
                 expires_at=now + ttl,
                 last_active_at=now,
+                authenticated_at=authenticated_at or now,
             )
         )
         return refresh_plain
@@ -198,8 +209,10 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
+        authenticated_at: datetime | None = None,
     ) -> TokenResult:
-        access_token, expires_in = self._issue_access(user.id)
+        auth_moment = authenticated_at or now
+        access_token, expires_in = self._issue_access(user.id, auth_time=auth_moment)
         refresh_token = await self._create_session(
             session,
             user,
@@ -208,6 +221,7 @@ class AuthService:
             user_agent=user_agent,
             remember=remember,
             now=now,
+            authenticated_at=auth_moment,
         )
         return TokenResult(
             access_token=access_token, refresh_token=refresh_token, expires_in=expires_in
@@ -432,6 +446,8 @@ class AuthService:
                     outcome = ("invalid", None)
                 else:
                     # Rotate: revoke the presented token, issue a fresh pair.
+                    # Forward the original authentication time so step-up re-auth
+                    # (§5.5) reflects the real authentication age, not the refresh.
                     row.revoked_at = now
                     outcome = (
                         "tokens",
@@ -443,6 +459,7 @@ class AuthService:
                             user_agent=user_agent,
                             remember=False,
                             now=now,
+                            authenticated_at=row.authenticated_at,
                         ),
                     )
         kind, payload = outcome
@@ -527,6 +544,86 @@ class AuthService:
             user.password_hash = security.hash_password(new_password)
             user.password_changed_at = now
             await self._revoke_all(session, user.id, now)
+
+    async def change_password(
+        self,
+        *,
+        user_id: uuid.UUID,
+        old_password: str,
+        new_password: str,
+        current_refresh_token: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        """Change the password of an authenticated user (auth.md §3.1/§4.2/§4.5).
+
+        Verifying the old password (argon2id, constant-time) *is* the §5.5
+        step-up re-authentication — "recently re-entered the password" is
+        exactly what that clause demands, so no additional recent-auth gate is
+        applied. The new password is held to the registration strength policy;
+        the hash and ``password_changed_at`` are rotated, every *other* refresh
+        session is revoked (the session that presented ``current_refresh_token``
+        is kept and re-stamped as recently authenticated; an absent or
+        unrecognised token falls back to revoking all), the revocation is
+        broadcast (§3.7/§5.6), and an account-level ``user.password_changed``
+        audit row is written (§2.6: ``workspace_id`` NULL, actor in metadata).
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            user = await session.get(User, user_id)
+            if user is None or user.status != "active":
+                raise UnauthorizedError("invalid or expired token")
+            # Uniform timing for OAuth-only accounts (NULL hash): verify against
+            # the dummy hash so failure is indistinguishable from a wrong password.
+            password_hash = user.password_hash if user.password_hash else _DUMMY_HASH
+            if not security.verify_password(old_password, password_hash):
+                raise BusinessRuleError("incorrect password", code="invalid_credentials")
+            security.validate_password_strength(new_password)
+            user.password_hash = security.hash_password(new_password)
+            user.password_changed_at = now
+
+            # Keep the presenting session when identifiable; revoke everything else.
+            keep_session_id: uuid.UUID | None = None
+            if current_refresh_token is not None:
+                row = await session.scalar(
+                    select(Session).where(
+                        Session.token_hash == security.hash_token(current_refresh_token),
+                        Session.user_id == user_id,
+                        Session.revoked_at.is_(None),
+                        Session.expires_at >= now,
+                    )
+                )
+                if row is not None:
+                    keep_session_id = row.id
+                    # A primary authentication just happened — refresh the step-up
+                    # marker (§5.5) so silent refreshes forward a fresh auth_time.
+                    row.authenticated_at = now
+                    row.last_active_at = now
+            revoke_stmt = update(Session).where(
+                Session.user_id == user_id, Session.revoked_at.is_(None)
+            )
+            if keep_session_id is not None:
+                revoke_stmt = revoke_stmt.where(Session.id != keep_session_id)
+            result = await session.execute(revoke_stmt.values(revoked_at=now))
+            revoked = result.rowcount or 0
+            if revoked:
+                # C4: the other devices must drop (outbox → realtime, §3.7/§5.6).
+                await broadcast_user_revocation(session, user_id=user_id)
+
+            # Account-level audit (§2.6): no workspace context; members are
+            # workspace-scoped rows, so the actor falls into metadata.
+            await write_audit(
+                session,
+                workspace_id=None,
+                actor_member_id=None,
+                actor_kind="member",
+                action="user.password_changed",
+                resource_type="user",
+                resource_id=user.id,
+                metadata={"user_id": str(user.id)},
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
 
     async def verify_email(self, *, token: str) -> None:
         now = _now(self._clock)

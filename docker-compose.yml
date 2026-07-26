@@ -59,6 +59,11 @@ services:
       MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
       MESH_REDIS_URL: redis://redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # OAuth dev mock provider redirect_uri allowlist (M1: exact-match, open-
+      # redirect prevention). Dev default: the frontend dev server's OAuth
+      # callback (both localhost spellings); production leaves it unset/empty
+      # (mock disabled) and operators configure real providers' allowlists.
+      MESH_OAUTH_MOCK_REDIRECT_URIS: ${MESH_OAUTH_MOCK_REDIRECT_URIS:-http://localhost:5173/auth/oauth/callback/mock,http://127.0.0.1:5173/auth/oauth/callback/mock}
       # Transactional email (production). In dev mode tokens go to the Redis
       # dev-mailbox regardless of these; SMTP is used only when AUTH_MODE is
       # production AND MESH_SMTP_HOST is set (see .env.example).

@@ -214,6 +214,51 @@
   gap: var(--space-3);
 }
 
+/* 密码强度条(§4.1:注册/重置共用;文字档位不以颜色单独表意) */
+.mesh-password-strength {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-password-strength__bar {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.mesh-password-strength__segment {
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-border);
+}
+
+.mesh-password-strength__segment.is-filled {
+  background: var(--color-info);
+}
+
+/* 按档位着色(文字档位为真源,颜色仅增强):weak 警示 / fair·good 信息 / strong 成功 */
+.mesh-password-strength__bar[data-score='1'] .is-filled {
+  background: var(--color-danger);
+}
+
+.mesh-password-strength__bar[data-score='4'] .is-filled {
+  background: var(--color-success);
+}
+
+.mesh-password-strength__label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.mesh-password-strength__rules {
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+  margin: 0;
+  padding-inline-start: var(--space-4);
+}
+
 /* ── 首页演示区 ───────────────────────────────────────── */
 
 .mesh-home__hero {

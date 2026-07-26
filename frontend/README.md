@@ -44,7 +44,14 @@ VITE_MESH_API_BASE_URL=http://127.0.0.1:8000
 VITE_MESH_WS_BASE_URL=ws://127.0.0.1:8081
 VITE_MESH_DEMO_CHANNEL=workspace:<workspace-uuid>:issues   # 演示区订阅频道
 VITE_MESH_POLLING_INTERVAL_MS=30000                        # 离线降级轮询间隔
+VITE_MESH_OAUTH_PROVIDERS=mock                             # 第三方登录按钮组(逗号分隔 ID;dev 默认 mock,生产默认空)
 ```
+
+第三方登录(auth.md §4.1/§4.5):登录页按 `VITE_MESH_OAUTH_PROVIDERS` 渲染「使用第三方
+账号登录」按钮组(vendor 中立,不绑定厂商);点击经后端 `/auth/oauth/<id>/start` 302
+往返,提供商回跳前端 `/auth/oauth/callback/<id>` 交换会话凭证。与真实后端联调 dev
+`mock` 提供商时,后端须将该回调 URI 列入精确白名单(`MESH_OAUTH_MOCK_REDIRECT_URIS`,
+如 `http://localhost:5173/auth/oauth/callback/mock`,开放重定向防护 M1)。
 
 ## 真实后端联调验证
 
@@ -86,7 +93,7 @@ frontend/
 ├── index.html                # 入口(内联防主题闪烁脚本)
 └── src/
     ├── main.tsx / App.tsx    # 入口与 Provider 组装
-    ├── env.ts                # 运行时配置(VITE_MESH_API_BASE_URL / VITE_MESH_WS_BASE_URL)
+    ├── env.ts                # 运行时配置(VITE_MESH_API_BASE_URL / VITE_MESH_WS_BASE_URL / VITE_MESH_OAUTH_PROVIDERS)
     ├── types/                # 共享契约类型:包络(§6.14)/实时帧(§6.7)/骨架实体
     ├── api/                  # API 客户端契约层(§6.14)
     │   ├── client.ts         #   Bearer 鉴权、三类包络解析、If-Match、Idempotency-Key(§6.5)
