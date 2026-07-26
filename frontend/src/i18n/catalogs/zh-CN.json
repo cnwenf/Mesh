@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "93fa1d1e",
+  "version": "70d88897",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -646,6 +646,7 @@
     "issues.detail.cycle": "迭代周期",
     "issues.detail.noneOption": "无",
     "issues.move.title": "迁移到其他项目",
+    "issues.move.targetProject": "目标项目：{name}",
     "issues.move.mapped": "将被映射的字段",
     "issues.move.cleared": "将被清除的字段",
     "issues.move.keptNote": "编号、标题、描述、优先级、负责人、日期与工作区级字段保留不变。",

@@ -131,6 +131,8 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
 
 interface MoveDialogProps {
   readonly preview: MovePreview;
+  /** 解析后的目标项目显示名(null 目标 = 工作区收件箱);对话框须标明迁移去向(§4.3/§3.8)。 */
+  readonly targetProjectName: string;
   readonly version: number;
   readonly onCancel: () => void;
   readonly onDone: () => void;
@@ -168,6 +170,9 @@ function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
       <div className="mesh-issues__move-dialog" role="dialog" aria-label={t('issues.move.title')}>
         <h3>{t('issues.move.title')}</h3>
         <p className="mesh-issues__move-identifier">{preview.identifier}</p>
+        <p className="mesh-issues__move-target" data-testid="move-target">
+          {t('issues.move.targetProject', { name: props.targetProjectName })}
+        </p>
         {preview.mapped_fields.length > 0 ? (
           <section data-testid="move-mapped">
             <h4>{t('issues.move.mapped')}</h4>
@@ -315,20 +320,28 @@ export function IssueDetailPage(): React.JSX.Element {
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
+      // 乐观更新:让受控 <select>/输入立即反映所选值。受控组件只在 re-render 时
+      // 才会把显示值收敛回 value 属性;若不在此同步 setState,异步等待间隙里
+      // <select> 会悬停在用户所选的(严格模式下可能被禁的)目标值上(§4.4/§5.2)。
+      const snapshot = issue;
+      setIssue({ ...issue, ...changes });
       try {
-        const { conflicted } = await mutation.mutate(issue, changes);
+        const { conflicted } = await mutation.mutate(snapshot, changes);
         toast.addToast(t(conflicted ? 'issues.conflictToast' : 'issues.savedToast'), {
           tone: conflicted ? 'warn' : 'success',
           closeLabel: t('common.close'),
         });
+        // 成功:重取以收敛 version / children_progress / activity 等服务端派生数据。
+        setReloadKey((k) => k + 1);
       } catch (err: unknown) {
-        // 非乐观锁冲突的服务端拒绝(如严格模式 409 invalid_status_transition):
-        // 显示具名错误并重取回滚乐观状态
+        // 被服务端拒绝(如严格模式 409 invalid_status_transition):就地回滚到快照,
+        // select 回落原值、不保留被禁目标值,且不触发整页 reload / 骨架闪烁(§4.4/§5.2)。
+        setIssue(snapshot);
+        setTitleDraft(snapshot.title);
+        setDescriptionDraft(snapshot.description ?? '');
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
-      // 重取以刷新 version/status 等服务端派生字段(冲突时 onConflict 已收敛)
-      setReloadKey((k) => k + 1);
     },
     [issue, mutation, toast, t],
   );
@@ -694,6 +707,12 @@ export function IssueDetailPage(): React.JSX.Element {
       {movePreviewData !== null ? (
         <MoveProjectDialog
           preview={movePreviewData}
+          targetProjectName={
+            movePreviewData.target_project_id === null
+              ? t('issues.detail.inbox')
+              : (projects.find((project) => project.id === movePreviewData.target_project_id)
+                  ?.name ?? movePreviewData.target_project_id)
+          }
           version={issue.version}
           onCancel={() => setMovePreviewData(null)}
           onDone={() => {

@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "a453d6cb",
+  "version": "07193366",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -646,6 +646,7 @@
     "issues.detail.cycle": "Cycle",
     "issues.detail.noneOption": "None",
     "issues.move.title": "Move to another project",
+    "issues.move.targetProject": "Target project: {name}",
     "issues.move.mapped": "Fields to be mapped",
     "issues.move.cleared": "Fields to be cleared",
     "issues.move.keptNote": "Identifier, title, description, priority, assignee, dates and workspace-level fields are kept.",

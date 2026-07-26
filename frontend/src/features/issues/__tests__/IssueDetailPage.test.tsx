@@ -4,7 +4,7 @@
  * 依赖乐观移除 + 失败回滚 / 错误态重试。
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch, headersOf } from '../../../api/__tests__/fetchStub';
@@ -12,6 +12,7 @@ import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
 import type { MissingReporter } from '../../../i18n';
+import { useSettingsStore } from '../../../state/settingsStore';
 import { IssueDetailPage } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
@@ -191,6 +192,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  useSettingsStore.getState().setLocale(null);
 });
 
 describe('IssueDetailPage', () => {
@@ -334,6 +336,8 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('move-dialog');
     expect(screen.getByTestId('move-mapped')).toBeTruthy();
     expect(screen.getByTestId('move-cleared')).toBeTruthy();
+    // §4.3/§3.8:对话框须标明迁移去向(目标项目名,自 projects 列表解析)
+    expect(screen.getByTestId('move-target').textContent).toContain('Borealis');
     fireEvent.click(screen.getByTestId('move-confirm'));
     await waitFor(() => {
       const movePosts = stub.calls.filter(
@@ -410,5 +414,87 @@ describe('IssueDetailPage', () => {
     const retry = await screen.findByText('Retry');
     fireEvent.click(retry);
     await screen.findByTestId('issue-detail');
+  });
+
+  it('labels the workspace inbox as the move target when target is null (§4.3)', async () => {
+    const preview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: null,
+      mapped_fields: [],
+      cleared_fields: [{ field: 'milestone_id', reason: '项目私有里程碑' }],
+      kept_fields: ['title', 'identifier'],
+    };
+    queue(fakeResponse({ body: { data: preview } }));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: '' } });
+    await screen.findByTestId('move-dialog');
+    // 目标为收件箱(null)时,目标名取收件箱本地化文案而非空/原始 id
+    expect(screen.getByTestId('move-target').textContent).toContain('Inbox');
+    // 仅清除场景:mapped 区不渲染,cleared 区渲染(与截图 ev-m5 同形态)
+    expect(screen.queryByTestId('move-mapped')).toBeNull();
+    expect(screen.getByTestId('move-cleared')).toBeTruthy();
+  });
+
+  it('rolls the status select back in place on a strict-mode rejection, no reload/skeleton (§4.4/§5.2)', async () => {
+    // 严格模式 409 invalid_status_transition:仅返回错误,不排队任何 reload 响应 ——
+    // 若实现仍整页重取,fetch 桩会复用本错误响应并把它当 issue 渲染而崩溃。
+    const stub = queue(
+      fakeResponse({
+        status: 409,
+        body: {
+          error: {
+            code: 'invalid_status_transition',
+            message: 'strict',
+            details: { from: 'st-todo', to: 'st-wip', allowed: [] },
+          },
+        },
+      }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    const statusSelect = screen.getByTestId('issue-detail-status') as HTMLSelectElement;
+    expect(statusSelect.value).toBe('st-todo');
+    fireEvent.change(statusSelect, { target: { value: 'st-wip' } });
+    // 经 i18n key 渲染的危险 toast(en)
+    expect(
+      await screen.findByText('This status transition is not allowed (strict mode)'),
+    ).toBeTruthy();
+    // 就地回落原值、不保留被禁目标值
+    await waitFor(() =>
+      expect((screen.getByTestId('issue-detail-status') as HTMLSelectElement).value).toBe(
+        'st-todo',
+      ),
+    );
+    // 不触发整页 reload:除首轮加载 + 被拒的 PATCH 外无其它请求(无骨架闪烁来源)
+    expect(stub.calls.length).toBe(10);
+    expect(stub.calls.filter((c) => c.init?.method === 'PATCH').length).toBe(1);
+  });
+
+  it('shows the strict-mode rejection toast in Chinese under zh-CN (§4.4 i18n)', async () => {
+    act(() => {
+      useSettingsStore.getState().setLocale('zh-CN');
+    });
+    queue(
+      fakeResponse({
+        status: 409,
+        body: {
+          error: {
+            code: 'invalid_status_transition',
+            message: 'strict',
+            details: { from: 'st-todo', to: 'st-wip', allowed: [] },
+          },
+        },
+      }),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-status') as HTMLSelectElement, {
+      target: { value: 'st-wip' },
+    });
+    // zh-CN 须显示中文译文,而非原始 key / 硬编码英文
+    expect(await screen.findByText('严格模式下不允许该状态转换')).toBeTruthy();
   });
 });
