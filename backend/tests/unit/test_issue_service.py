@@ -655,6 +655,33 @@ async def test_list_filters_and_search(session_factory, issue_service, project_s
 
 
 @pytest.mark.unit
+async def test_q_search_escapes_like_wildcards(session_factory, issue_service):
+    """L5:q 中的 % _ 按字面匹配(LIKE 转义),不再充当通配符。"""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    for title in ("100%", "100X", "a_b", "axb"):
+        await issue_service.create_issue(
+            actor=owner, workspace_id=workspace.id, body=CreateIssueRequest(title=title)
+        )
+
+    percent = await issue_service.list_issues(
+        viewer=owner, workspace_id=workspace.id, q="100%"
+    )
+    assert [item["title"] for item in percent["data"]] == ["100%"]
+
+    underscore = await issue_service.list_issues(
+        viewer=owner, workspace_id=workspace.id, q="a_b"
+    )
+    assert [item["title"] for item in underscore["data"]] == ["a_b"]
+
+    # 旧实现 `_` 通配会命中 "100%"("1_0" ~ "100");转义后零命中
+    wildcard = await issue_service.list_issues(
+        viewer=owner, workspace_id=workspace.id, q="1_0"
+    )
+    assert wildcard["data"] == []
+
+
+@pytest.mark.unit
 async def test_filter_condition_limit_returns_filter_too_complex(session_factory, issue_service):
     from mesh.issue.filters import FilterTooComplexError
 
