@@ -359,96 +359,128 @@ class MoveService:
             from mesh.db.tenant import set_tenant_context
 
             await set_tenant_context(session, workspace_id)
-            issue = await self._issues._load_issue(
-                session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
+            rendered, _plan = await self.apply_confirmed_move_in_session(
+                session,
+                actor=actor,
+                workspace_id=workspace_id,
+                issue_id=issue_id,
+                target_project_id=target_project_id,
+                expected_version=expected_version,
             )
-            await self._issues.assert_can_write_issue(session, actor=actor, issue=issue)
-            target = await self._target_project(
-                session, workspace_id=workspace_id, target_project_id=target_project_id
+            return rendered
+
+    async def apply_confirmed_move_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        issue_id: uuid.UUID,
+        target_project_id: uuid.UUID | None,
+        expected_version: int | None,
+    ) -> tuple[dict, dict]:
+        """Apply the confirmed cross-project migration inside the CALLER's
+        transaction (caller owns ``begin`` + the tenant GUC, §3.8 step 2).
+
+        Returns ``(rendered_issue, plan)``. Exposed so the kanban board move
+        (kanban.md §3.2) can include the per-view ``view_issue_positions``
+        upsert in the SAME transaction as the migration (the Spec's single-txn
+        contract); the standalone REST confirm path (``move`` above) wraps this
+        in its own transaction. ``plan`` is ``{}`` on the no-op
+        (already-at-destination) case.
+        """
+        issue = await self._issues._load_issue(
+            session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
+        )
+        await self._issues.assert_can_write_issue(session, actor=actor, issue=issue)
+        target = await self._target_project(
+            session, workspace_id=workspace_id, target_project_id=target_project_id
+        )
+        if target is not None:
+            await self._issues._projects.assert_can_write(
+                session, viewer=actor, project=target
             )
-            if target is not None:
-                await self._issues._projects.assert_can_write(session, viewer=actor, project=target)
-            if expected_version is not None and issue.version != expected_version:
-                raise ConflictError(
-                    "issue was modified concurrently",
-                    code="conflict",
-                    details={"id": str(issue.id), "current_version": issue.version},
-                )
-            if issue.project_id == (target.id if target is not None else None):
-                # Already there — no-op (identical destination).
-                return await self._issues.render_issue(session, issue)
-
-            plan = await self.compute_plan(
-                session, workspace_id=workspace_id, issue=issue, target_project=target
+        if expected_version is not None and issue.version != expected_version:
+            raise ConflictError(
+                "issue was modified concurrently",
+                code="conflict",
+                details={"id": str(issue.id), "current_version": issue.version},
             )
-            from_project_id = issue.project_id
-            source_project = await self._issues._project_of(session, issue)
+        if issue.project_id == (target.id if target is not None else None):
+            # Already there — no-op (identical destination).
+            return await self._issues.render_issue(session, issue), {}
 
-            # Single-transaction application (§3.8 step 2):
-            issue.project_id = target.id if target is not None else None
-            from mesh.issue.service import _now
+        plan = await self.compute_plan(
+            session, workspace_id=workspace_id, issue=issue, target_project=target
+        )
+        from_project_id = issue.project_id
+        source_project = await self._issues._project_of(session, issue)
 
-            now = _now(self._issues._clock)
-            apply_move_plan(issue, plan, now=now)
-            issue.version = issue.version + 1
-            issue.updated_at = now
-            session.add_all(
-                move_activity_rows(
-                    workspace_id=workspace_id,
-                    issue=issue,
-                    actor=actor,
-                    from_project_id=from_project_id,
-                    plan=plan,
-                )
+        # Single-transaction application (§3.8 step 2):
+        issue.project_id = target.id if target is not None else None
+        from mesh.issue.service import _now
+
+        now = _now(self._issues._clock)
+        apply_move_plan(issue, plan, now=now)
+        issue.version = issue.version + 1
+        issue.updated_at = now
+        session.add_all(
+            move_activity_rows(
+                workspace_id=workspace_id,
+                issue=issue,
+                actor=actor,
+                from_project_id=from_project_id,
+                plan=plan,
             )
-            await session.flush()
+        )
+        await session.flush()
 
-            rendered = await self._issues.render_issue(session, issue)
-            payload = {
-                "id": str(issue.id),
-                "from_project_id": plan["from_project_id"],
-                "to_project_id": plan["target_project_id"],
-                "mapped_fields": plan["mapped_fields"],
-                "cleared_fields": plan["cleared_fields"],
-                "version": issue.version,
-                "updated_at": _isoformat(issue.updated_at),
-            }
-            # Private source → the plan carries source-owned readable
-            # metadata (status names, milestone/cycle titles). Once the
-            # issue is readable by the whole workspace (the public-target
-            # broadcast below, or the issue channel any member may join now
-            # that the card is public) that copy must be redacted; the
-            # full manifest stays in the permission-gated activity trail.
-            source_private = source_project is not None and source_project.visibility != "public"
-            broadcast_payload = redact_move_payload(payload) if source_private else payload
+        rendered = await self._issues.render_issue(session, issue)
+        payload = {
+            "id": str(issue.id),
+            "from_project_id": plan["from_project_id"],
+            "to_project_id": plan["target_project_id"],
+            "mapped_fields": plan["mapped_fields"],
+            "cleared_fields": plan["cleared_fields"],
+            "version": issue.version,
+            "updated_at": _isoformat(issue.updated_at),
+        }
+        # Private source → the plan carries source-owned readable metadata
+        # (status names, milestone/cycle titles). Once the issue is readable by
+        # the whole workspace (the public-target broadcast below, or the issue
+        # channel any member may join now that the card is public) that copy must
+        # be redacted; the full manifest stays in the permission-gated trail
+        # (MES-48 H1).
+        source_private = source_project is not None and source_project.visibility != "public"
+        broadcast_payload = redact_move_payload(payload) if source_private else payload
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=_issue_channel(issue.id),
+            event="issue.project_changed",
+            data=broadcast_payload,
+        )
+        target_public = target is None or target.visibility == "public"
+        if target_public:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_issue_channel(issue.id),
+                channel=_workspace_issues_channel(workspace_id),
                 event="issue.project_changed",
                 data=broadcast_payload,
             )
-            target_public = target is None or target.visibility == "public"
-            if target_public:
-                await emit_realtime(
-                    session,
-                    workspace_id=workspace_id,
-                    channel=_workspace_issues_channel(workspace_id),
-                    event="issue.project_changed",
-                    data=broadcast_payload,
-                )
-            # Source was public, destination is not: non-members' lists must
-            # drop the card (same convergence frame project.md uses).
-            source_public = source_project is None or source_project.visibility == "public"
-            if source_public and not target_public:
-                await emit_realtime(
-                    session,
-                    workspace_id=workspace_id,
-                    channel=_workspace_issues_channel(workspace_id),
-                    event="issue.deleted",
-                    data={"id": str(issue.id)},
-                )
-            return rendered
+        # Source was public, destination is not: non-members' lists must
+        # drop the card (same convergence frame project.md uses).
+        source_public = source_project is None or source_project.visibility == "public"
+        if source_public and not target_public:
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=_workspace_issues_channel(workspace_id),
+                event="issue.deleted",
+                data={"id": str(issue.id)},
+            )
+        return rendered, plan
 
 
 __all__ = ["MoveService", "apply_move_plan", "move_activity_rows", "redact_move_payload"]

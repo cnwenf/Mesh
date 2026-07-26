@@ -30,6 +30,7 @@ from mesh.db.models.user import (
     User,
 )
 from mesh.db.models.view import View
+from mesh.db.models.view_position import ViewIssuePosition
 from mesh.db.models.workspace import (
     IdentifierPrefixRegistry,
     Workspace,
@@ -68,6 +69,7 @@ __all__ = [
     "Session",
     "User",
     "View",
+    "ViewIssuePosition",
     "Workspace",
     "WorkspaceInvitation",
     "WorkspaceInvitationRedemption",

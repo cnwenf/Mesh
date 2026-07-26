@@ -2,13 +2,16 @@
  * 看板列派生逻辑测试(kanban.md §2.4 映射表,纯函数)。
  */
 import { describe, expect, it } from 'vitest';
+import { computeDropPosition } from '../BoardColumns';
 import {
   PRIORITY_KEYS,
   STATE_CATEGORY_KEYS,
   columnLabelKey,
   columnsForView,
+  deriveColumns,
   isRenderableLayout,
 } from '../columns';
+import type { BoardCard, BoardGroup } from '../projection';
 import type { View } from '../types';
 
 function makeView(overrides: Partial<View> = {}): View {
@@ -107,5 +110,56 @@ describe('isRenderableLayout', () => {
     expect(isRenderableLayout('list')).toBe(true);
     expect(isRenderableLayout('timeline')).toBe(false);
     expect(isRenderableLayout('table')).toBe(false);
+  });
+});
+
+function makeCard(overrides: Partial<BoardCard> = {}): BoardCard {
+  return {
+    id: 'i1', identifier: 'WEB-1', title: 'C', state_category: 'todo',
+    status: { id: 'st', name: 'Todo', category: 'todo' }, status_id: 'st', priority: 'high',
+    assignee: null, assignee_id: null, project_id: null, position: 1, version: 1,
+    updated_at: '', ...overrides,
+  };
+}
+
+describe('computeDropPosition(浮点中点法,§4.3)', () => {
+  it('空列 = 1;列底 = 末张+1;列顶 = 首张-1;中间 = 相邻中点', () => {
+    const cards = [makeCard({ id: 'a', position: 2 }), makeCard({ id: 'b', position: 4 })];
+    expect(computeDropPosition([], null)).toBe(1);
+    expect(computeDropPosition(cards, null)).toBe(5);
+    expect(computeDropPosition(cards, 0)).toBe(1);
+    expect(computeDropPosition(cards, 1)).toBe(3);
+    expect(computeDropPosition(cards, 99)).toBe(5);
+  });
+});
+
+describe('deriveColumns(投影分组 → 列,§3.2)', () => {
+  it('固定分组(state_category):骨架列 + 各组 count/卡片', () => {
+    const v = makeView({ group_by: 'state_category' });
+    const groups: BoardGroup[] = [
+      { key: 'todo', label: 'Todo', count: 1, wip: { limit: 2, enforcement: 'warn' }, data: [makeCard()] },
+    ];
+    const { columns, cardsByKey } = deriveColumns(v, groups);
+    expect(columns.map((c) => c.key)).toEqual([...STATE_CATEGORY_KEYS]);
+    const todo = columns.find((c) => c.key === 'todo');
+    expect(todo?.count).toBe(1);
+    expect(todo?.wip).toEqual({ limit: 2, enforcement: 'warn' });
+    expect(cardsByKey.todo).toHaveLength(1);
+  });
+
+  it('动态分组(project):列直接来自投影分组', () => {
+    const v = makeView({ group_by: 'project' });
+    const groups: BoardGroup[] = [
+      { key: 'p1', label: 'Proj', count: 1, wip: null, data: [makeCard({ project_id: 'p1' })] },
+    ];
+    const { columns } = deriveColumns(v, groups);
+    expect(columns).toHaveLength(1);
+    expect(columns[0]).toMatchObject({ key: 'p1', label: 'Proj', count: 1 });
+  });
+
+  it('priority 分组呈现 5 档', () => {
+    const v = makeView({ group_by: 'priority' });
+    const { columns } = deriveColumns(v, []);
+    expect(columns.map((c) => c.key)).toEqual([...PRIORITY_KEYS]);
   });
 });

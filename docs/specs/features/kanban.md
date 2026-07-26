@@ -6,6 +6,7 @@
 > - `label-property.md`(标签与自定义属性)——提供可作为筛选/分组/排序依据的 `label` 与自定义字段。
 > - `project.md`(项目)、`member.md`(统一成员抽象,含 AI agent)。
 > **文档性质**:可直接指导开发的实现规格;与全局约定冲突时以 [README.md](../README.md) §6「全局权威契约」为准。
+> **实现状态**:`views` 定义层(v0.11.6)+ issue 投影层(v0.12.0:分组投影整体游标 / 原子 move + WIP 强制 / 每视图手工排序 / 实时增量合并 / `view.presence` / 跨项目迁移视图侧入口 / 前端真实数据看板)已落地。**label / 自定义字段的分组与筛选**依赖 `issue_labels` / `issue_custom_field_values` 关联层(并行线,尚未合入 main),本层对其按 issue 模块同口径门控(`group_by=label` → 400;label/自定义字段筛选 → `projection_field_pending`),待关联层落地后接通——属分阶段交付,非本 Spec 设计缺陷。
 
 ---
 

@@ -43,5 +43,6 @@ async def realtime_ws_endpoint(websocket: WebSocket) -> None:
         auth_timeout=state.settings.ws_auth_timeout,
         max_subscriptions=state.settings.ws_max_subscriptions,
         max_frames_per_second=state.settings.ws_max_frames_per_second,
+        redis=state.redis,
     )
     await session.run()

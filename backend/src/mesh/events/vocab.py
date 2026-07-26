@@ -54,6 +54,7 @@ ISSUE_EVENTS: frozenset[str] = frozenset(
         "dependency.changed",
         "view.updated",
         "view.presence",
+        "view.wip_exceeded",
     }
 )
 
