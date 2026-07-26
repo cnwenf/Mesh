@@ -584,4 +584,50 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
       calls.filter((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.includes('/projects')),
     ).toHaveLength(0);
   });
+
+  it('卡片渲染项目 icon 与主题色色块(§4)', async () => {
+    stub([
+      { ...PROJECT_A, id: 'prj-9', icon: '🚀', color: '#ff0044' },
+    ] as unknown as readonly ListProjectsProject[]);
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+    expect(await screen.findByTestId('project-card-prj-9')).toBeDefined();
+    expect(screen.getByTestId('project-icon-prj-9').textContent).toBe('🚀');
+    expect(screen.getByTestId('project-color-prj-9').style.background).not.toBe('');
+  });
+
+  it('状态筛选重置为 All 时移除 URL 参数并重拉全量列表', async () => {
+    const calls = stub([PROJECT_A, PROJECT_B] as unknown as readonly ListProjectsProject[]);
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectsPage />, { route: '/projects?status=active' });
+    await screen.findByTestId('project-card-prj-1');
+    expect(screen.queryByTestId('project-card-prj-2')).toBeNull();
+
+    await user.selectOptions(screen.getByTestId('projects-status-filter'), 'all');
+
+    await waitFor(() => {
+      expect(listCalls(calls).some((c) => !new URL(c.url).searchParams.has('status'))).toBe(true);
+    });
+    expect(await screen.findByTestId('project-card-prj-2')).toBeDefined();
+  });
+
+  it('卡片健康度灯打开页面级更新对话框,留痕成功后重载列表并关闭', async () => {
+    const calls = stub([PROJECT_A] as unknown as readonly ListProjectsProject[]);
+    const user = userEvent.setup();
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+    await screen.findByTestId('project-card-prj-1');
+    const listCountBefore = listCalls(calls).length;
+
+    const card = screen.getByTestId('project-card-prj-1');
+    const healthZone = card.querySelector('span[role="presentation"]');
+    expect(healthZone).not.toBeNull();
+    await user.click(healthZone as HTMLElement);
+    expect(await screen.findByTestId('health-update-form')).toBeDefined();
+
+    await user.click(screen.getByTestId('health-update-submit'));
+
+    expect(await screen.findByText('Status update posted.')).toBeDefined();
+    await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(listCountBefore));
+    await waitFor(() => expect(screen.queryByText('Update status')).toBeNull());
+  });
+
 });
