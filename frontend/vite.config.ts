@@ -32,6 +32,14 @@ export default defineConfig({
         functions: 90,
         branches: 90,
         statements: 90,
+        // 验收 REJECT #3:为新增管理面板加目录级阈值,防止新增代码的分支/函数
+        // 覆盖率被全局门禁掩盖(整体过线而单文件不过)。
+        'src/features/labels/**/*.tsx': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
       },
     },
   },
