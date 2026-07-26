@@ -16,6 +16,9 @@
 #   * The API/gateway connect as the restricted non-owner role mesh_app so
 #     PostgreSQL RLS is enforced on the app path (M1, README §6.2 rule 5); the
 #     worker keeps the owner role for cross-tenant relay/projector/retention.
+#   * Redis requires a password (MESH_REDIS_PASSWORD) — another container on
+#     the compose network cannot forge fan-out frames or issue commands
+#     without credentials (L3). The DB remains the source of truth.
 #
 # Local development values only — every secret is an environment variable;
 # supply real values via .env (see .env.example) for anything beyond local dev.
@@ -38,8 +41,12 @@ services:
 
   redis:
     image: redis:7
+    # L3: require authentication — an unauthenticated Redis lets any container
+    # on the compose network forge realtime fan-out frames. LOCAL DEV default
+    # password; production sets MESH_REDIS_PASSWORD via .env.
+    command: ["redis-server", "--requirepass", "${MESH_REDIS_PASSWORD:-mesh}"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${MESH_REDIS_PASSWORD:-mesh}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -57,7 +64,7 @@ services:
       MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Read by migration 0002 to create/alter the mesh_app login role.
       MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
-      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
       # OAuth dev mock provider redirect_uri allowlist (M1: exact-match, open-
       # redirect prevention). Dev default: the frontend dev server's OAuth
@@ -87,7 +94,7 @@ services:
     command: python -m mesh.workers
     environment:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
-      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
     depends_on:
       postgres:
@@ -104,7 +111,7 @@ services:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Restricted non-owner role the gateway app connects as → RLS applies (M1).
       MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
-      MESH_REDIS_URL: redis://redis:6379/0
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
     ports:
       - "127.0.0.1:${MESH_WS_PORT:-8081}:8081"
