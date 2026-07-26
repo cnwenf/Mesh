@@ -99,6 +99,11 @@ class IssueStatus(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    # 严格模式「允许的下一步」目标状态 id 列表(§4.4;JSON 字符串数组,
+    # 空数组 = 未配置;迁移 0009,README §6.14 invalid_status_transition)
+    allowed_transitions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'")
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -113,6 +118,10 @@ class IssueStatus(Base):
         CheckConstraint(
             f"char_length(name) BETWEEN {STATUS_NAME_MIN_LENGTH} AND {STATUS_NAME_MAX_LENGTH}",
             name="ck_issue_statuses_name_len",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(allowed_transitions) = 'array'",
+            name="ck_issue_statuses_allowed_transitions",
         ),
         # Composite-FK reference target for issues.status_id (README §6.2).
         Index("uq_issue_statuses_ws_id", "workspace_id", "id", unique=True),

@@ -302,6 +302,50 @@ describe('IssuesPage', () => {
     await screen.findByText('Ship the docs v2');
   });
 
+  it('expands the quick create form with project and assignee (§4.3 MEDIUM-3)', async () => {
+    const created = { ...issueFixture('iss-4', 'WS-4', 'Expanded create'), project_id: 'prj-9' };
+    const stub = queueInitialLoad(
+      // form's own /users/me:
+      fakeResponse({ body: { data: ME } }),
+      // expand → projects + members (parallel):
+      fakeResponse({
+        body: {
+          data: [
+            { id: 'prj-9', name: 'Apollo', key: 'APL', status: 'active', health: null,
+              visibility: 'public', lead: null, lead_member_id: null, start_date: null,
+              target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
+              archived: false, archived_at: null, my_role: 'lead',
+              created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z' },
+          ],
+          next_cursor: null,
+        },
+      }),
+      fakeResponse({ body: MEMBERS }),
+      // create:
+      fakeResponse({ status: 201, body: { data: created } }),
+    );
+    renderPage(makeFakeRealtime().value);
+    await screen.findByText('WS-1');
+    fireEvent.click(screen.getByTestId('issue-open-create'));
+    await waitFor(() => expect(stub.calls.length).toBe(5));
+    fireEvent.click(screen.getByTestId('issue-create-expand'));
+    await screen.findByTestId('issue-create-project');
+    await screen.findByTestId('issue-create-assignee');
+    fireEvent.change(screen.getByTestId('issue-create-title'), { target: { value: 'Expanded create' } });
+    fireEvent.change(screen.getByTestId('issue-create-project'), { target: { value: 'prj-9' } });
+    fireEvent.change(screen.getByTestId('issue-create-assignee'), { target: { value: 'mem-1' } });
+    fireEvent.submit(screen.getByTestId('issue-create-form'));
+    await screen.findByText('WS-4');
+    const posts = stub.calls.filter((c) => c.init?.method === 'POST');
+    expect(posts.length).toBe(1);
+    expect(JSON.parse(String(posts[0].init?.body))).toEqual({
+      title: 'Expanded create',
+      priority: 'none',
+      project_id: 'prj-9',
+      assignee_id: 'mem-1',
+    });
+  });
+
   it('renders the empty state when there are no issues', async () => {
     const stub = stubFetch(
       fakeResponse({ body: { data: ME } }),

@@ -400,6 +400,7 @@ CREATE TABLE issue_statuses (
   color        TEXT NULL,
   position     REAL NOT NULL DEFAULT 0,
   is_default   BOOLEAN NOT NULL DEFAULT false,
+  allowed_transitions JSONB NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(allowed_transitions) = 'array'),
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   FOREIGN KEY (workspace_id, project_id) REFERENCES projects(workspace_id, id) ON DELETE CASCADE

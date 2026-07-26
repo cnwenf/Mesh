@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "1964e0e8",
+  "version": "9070c55d",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -633,6 +633,24 @@
     "error.status_name_taken": "该作用域已存在同名状态",
     "error.status_in_use": "状态仍被工作项引用",
     "error.default_status_required": "作用域必须保留一个默认状态",
-    "error.dependency_exists": "该依赖已存在"
+    "error.dependency_exists": "该依赖已存在",
+    "error.invalid_status_transition": "严格模式下不允许该状态转换",
+    "issues.create.expand": "展开更多字段",
+    "issues.create.collapse": "收起",
+    "issues.create.project": "项目",
+    "issues.create.assignee": "负责人",
+    "issues.detail.estimate": "估算",
+    "issues.detail.estimateUnit": "估算单位",
+    "issues.detail.start": "开始日",
+    "issues.detail.milestone": "里程碑",
+    "issues.detail.cycle": "迭代周期",
+    "issues.detail.noneOption": "无",
+    "issues.move.title": "迁移到其他项目",
+    "issues.move.mapped": "将被映射的字段",
+    "issues.move.cleared": "将被清除的字段",
+    "issues.move.keptNote": "编号、标题、描述、优先级、负责人、日期与工作区级字段保留不变。",
+    "issues.move.confirm": "确认迁移",
+    "issues.move.cancel": "取消",
+    "issues.move.success": "工作项已迁移"
   }
 }

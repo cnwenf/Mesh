@@ -163,6 +163,7 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | `color` | TEXT | NULL | NULL | 颜色 |
 | `position` | REAL | NOT NULL | `0` | 同 category 内排序 |
 | `is_default` | BOOLEAN | NOT NULL | `false` | 是否为新建默认状态 |
+| `allowed_transitions` | JSONB | NOT NULL, `CHECK (jsonb_typeof(allowed_transitions) = 'array')` | `'[]'` | 严格模式「允许的下一步」:目标状态 id 字符串数组(§4.4;空数组 = 未配置任何允许的下一步;严格模式总开关为工作区设置 `workspaces.settings.status_strict_mode`,bool,默认 `false`) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **约束**(可执行 DDL,见 §2.3;COALESCE 表达式不能写进表级 `UNIQUE` 约束,一律用**部分表达式唯一索引**,README §6.3):
@@ -172,6 +173,8 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 - 目标表唯一键:`UNIQUE (workspace_id, id)`(供 `issues.status_id` 等复合 FK 引用,README §6.2)。
 
 > **category → status 映射**:一个 category 下可挂 0..N 个自定义 status;每个 status 必属且仅属一个 category。系统保证每个 `(workspace, project)` 作用域内至少有一个 `is_default=true` 的状态用于新建 issue(见上)。看板默认按 category 分列,列内按 status `position` 排序。
+>
+> **严格模式状态流转(§3.4/§4.4/§5.2)**:默认自由流转(任意状态可切任意状态)。工作区设置 `status_strict_mode=true` 开启严格模式:状态变更仅允许切到**当前状态** `allowed_transitions` 列出的目标状态;空数组表示该状态未配置任何允许的下一步(严格模式下不可转出);违规返回 409 `invalid_status_transition`(details 携带 from/to/allowed)。系统驱动的跨项目迁移状态映射(§3.8)不受严格模式约束。
 
 #### `issues`(工作项)
 

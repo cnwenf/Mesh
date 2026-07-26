@@ -569,3 +569,70 @@ async def test_filter_too_complex_over_http(api_client):
     )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "filter_too_complex"
+
+
+@pytest.mark.e2e
+async def test_strict_mode_status_transition_real_http(api_client, session_factory):
+    """严格模式真实 e2e(§3.4/§4.4/§5.2):开严格 → 未配置转换 409,配置后放行。"""
+    owner = await _register_and_login(api_client, "strict-owner@corp.com")
+    ws = await _create_workspace(api_client, owner, "strict-ws")
+    ws_id = ws["id"]
+
+    statuses = (
+        await api_client.get(f"/api/v1/workspaces/{ws_id}/statuses", headers=_auth(owner))
+    ).json()["data"]
+    by_cat = {s["category"]: s for s in statuses}
+
+    # Todo 的允许下一步配置为 In Progress
+    patched = await api_client.patch(
+        f"/api/v1/statuses/{by_cat['todo']['id']}",
+        json={"allowed_transitions": [by_cat["in_progress"]["id"]]},
+        headers=_auth(owner),
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["allowed_transitions"] == [by_cat["in_progress"]["id"]]
+
+    # 开启严格模式(工作区设置)
+    toggled = await api_client.patch(
+        f"/api/v1/workspaces/{ws_id}",
+        json={"settings": {"status_strict_mode": True}},
+        headers=_auth(owner),
+    )
+    assert toggled.status_code == 200
+    assert toggled.json()["data"]["settings"]["status_strict_mode"] is True
+
+    issue = await _create_issue(api_client, owner, ws_id, title="strict flow")
+
+    # 未配置的转换(todo → done)→ 409 invalid_status_transition
+    denied = await api_client.patch(
+        f"/api/v1/issues/{issue['id']}",
+        json={"status_id": by_cat["done"]["id"]},
+        headers=_auth(owner),
+    )
+    assert denied.status_code == 409
+    body = denied.json()["error"]
+    assert body["code"] == "invalid_status_transition"
+    assert by_cat["in_progress"]["id"] in body["details"]["allowed"]
+
+    # 配置的转换(todo → in_progress)→ 200
+    allowed = await api_client.patch(
+        f"/api/v1/issues/{issue['id']}",
+        json={"status_id": by_cat["in_progress"]["id"]},
+        headers=_auth(owner),
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["data"]["state_category"] == "in_progress"
+
+    # 关闭严格模式 → 自由流转恢复
+    await api_client.patch(
+        f"/api/v1/workspaces/{ws_id}",
+        json={"settings": {"status_strict_mode": False}},
+        headers=_auth(owner),
+    )
+    free = await api_client.patch(
+        f"/api/v1/issues/{issue['id']}",
+        json={"status_id": by_cat["done"]["id"]},
+        headers=_auth(owner),
+    )
+    assert free.status_code == 200
+    assert free.json()["data"]["state_category"] == "done"

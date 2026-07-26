@@ -3,6 +3,29 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.1] - 2026-07-26
+
+MES-31 验收打回整改:HIGH-1 严格模式状态流转 + MEDIUM-1/2/3 详情页 UI 补全。
+
+### Added
+
+- **严格模式状态流转(HIGH-1,issue.md §3.4/§4.4/§5.2,迁移 0009)**:
+  - `issue_statuses.allowed_transitions JSONB NOT NULL DEFAULT '[]'`(「允许的下一步」目标状态 id 数组;`CHECK jsonb_typeof='array'`)——§4.4「严格模式可在状态定义上配置允许的下一步」的存储载体(Spec §2.2 原未给出存储列,本次补齐并同步修订 Spec §2.2 与 validation SQL)。
+  - 工作区设置 `settings.status_strict_mode`(bool,默认 false)为总开关(workspace 设置键类型校验同步接入)。
+  - PATCH issue 状态变更在严格模式下校验:目标须在当前状态 `allowed_transitions` 列表中(空数组 = 不可转出),违规 409 `invalid_status_transition`(details 携带 from/to/allowed);默认模式自由流转不变;系统驱动的迁移状态映射(§3.8)不受约束。
+  - status CRUD 支持 `allowed_transitions` 读写(非法条目/非数组 400),渲染回显。
+  - 测试:严格模式单测 6 项(默认自由/配置放行/未配置拒绝/空数组拒绝/开关回退/CRUD 校验)+ 真实 e2e(开严格 → 409、配置后 200、关严格恢复)+ 前端单测 + 真实 UI 实操(禁止转换具名错误 toast、允许转换放行)。
+- **详情页属性侧栏补全(MEDIUM-1,§4.1/§4.2)**:估算(数值 + 单位 points/hours)、开始日、里程碑(项目里程碑下拉)、迭代周期(工作区周期下拉)均可点击编辑,经 PATCH 落库。
+- **跨项目迁移 UI 入口(MEDIUM-2,§4.3)**:侧栏项目下拉改项目 → 拉取 move-preview → 预览确认对话框(映射清单:私有状态→目标同 category 默认;清除清单:项目私有 milestone 等;保留说明)→ 确认后单事务迁移;取消不迁移。
+- **描述可编辑 + 快速创建展开(MEDIUM-3,§4.1/§4.2/§4.3)**:详情页描述 textarea 失焦保存;快速创建「展开更多字段」补项目 + 负责人选择(按需加载名册)。
+- **错误具名呈现**:PATCH 非乐观锁冲突的服务端拒绝(如严格模式 409)显示具名错误 toast 并重取回滚乐观状态(不再静默失败)。
+
+### Quality
+
+- 后端:pytest-cov 95%(双达标),含迁移 0009 的全链单测/e2e 全绿,ruff 全绿。
+- 前端:vitest 1104 项全绿(语句 96.91% / 分支 90.48%,≥90% 门禁),typecheck/lint/构建全绿。
+- 真实 UI 实操(Playwright + chromium,真实 API + 真实 DB,两轮):v1 全流程(登录/空态/连续创建/搜索/详情编辑/依赖成环/批量)+ v2 整改面(描述/估算/起始日编辑、迁移预览对话框确认迁移且编号不变、快速创建展开、严格模式 UI 双向),均零 flake,截图留证(迁移对话框 + 严格模式 toast)。
+
 ## [0.11.0] - 2026-07-26
 
 issue 模块全功能实现(MES-31,issue.md 五章:数据模型 / 接口 / UI/UX / 实时 / 验收,全系统核心实体)。

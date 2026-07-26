@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "e43fa8b5",
+  "version": "cf8b9066",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -633,6 +633,24 @@
     "error.status_name_taken": "A status with this name already exists",
     "error.status_in_use": "Status is still referenced by issues",
     "error.default_status_required": "A scope must keep one default status",
-    "error.dependency_exists": "This dependency already exists"
+    "error.dependency_exists": "This dependency already exists",
+    "error.invalid_status_transition": "This status transition is not allowed (strict mode)",
+    "issues.create.expand": "More fields",
+    "issues.create.collapse": "Fewer fields",
+    "issues.create.project": "Project",
+    "issues.create.assignee": "Assignee",
+    "issues.detail.estimate": "Estimate",
+    "issues.detail.estimateUnit": "Estimate unit",
+    "issues.detail.start": "Start date",
+    "issues.detail.milestone": "Milestone",
+    "issues.detail.cycle": "Cycle",
+    "issues.detail.noneOption": "None",
+    "issues.move.title": "Move to another project",
+    "issues.move.mapped": "Fields to be mapped",
+    "issues.move.cleared": "Fields to be cleared",
+    "issues.move.keptNote": "Identifier, title, description, priority, assignee, dates and workspace-level fields are kept.",
+    "issues.move.confirm": "Confirm move",
+    "issues.move.cancel": "Cancel",
+    "issues.move.success": "Issue moved"
   }
 }

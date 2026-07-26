@@ -273,6 +273,7 @@ def render_status(status: IssueStatus) -> dict:
         "color": status.color,
         "position": status.position,
         "is_default": status.is_default,
+        "allowed_transitions": [str(t) for t in (status.allowed_transitions or [])],
         "created_at": status.created_at,
         "updated_at": status.updated_at,
     }
@@ -281,6 +282,25 @@ def render_status(status: IssueStatus) -> dict:
 def validate_category(category: str) -> None:
     if category not in STATE_CATEGORY_VALUES:
         raise ValidationError("invalid category", details={"category": category})
+
+
+def validate_allowed_transitions(value: object) -> list[str]:
+    """严格模式「允许的下一步」:目标状态 id 的字符串数组(§4.4,迁移 0009)。"""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValidationError(
+            "allowed_transitions must be an array of status id strings",
+            details={"allowed_transitions": str(value)[:64]},
+        )
+    normalized: list[str] = []
+    for item in value:
+        try:
+            normalized.append(str(uuid.UUID(item)))
+        except ValueError as exc:
+            raise ValidationError(
+                "allowed_transitions entries must be status UUIDs",
+                details={"entry": item[:64]},
+            ) from exc
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -292,6 +312,7 @@ class StatusPatch:
     position: float | object | None = None
     category: str | object | None = None
     is_default: bool | object | None = None
+    allowed_transitions: list | object | None = None
 
 
 class StatusService:
@@ -337,8 +358,10 @@ class StatusService:
         position: float = 0.0,
         is_default: bool = False,
         project_id: uuid.UUID | None = None,
+        allowed_transitions: list | None = None,
     ) -> dict:
         validate_category(category)
+        transitions = validate_allowed_transitions(allowed_transitions or [])
         if not isinstance(name, str) or not 1 <= len(name) <= 50:
             raise ValidationError("name must be 1-50 characters")
         if actor.role == "guest":
@@ -380,6 +403,7 @@ class StatusService:
                 color=color,
                 position=position,
                 is_default=is_default,
+                allowed_transitions=transitions,
             )
             session.add(status)
             try:
@@ -438,6 +462,10 @@ class StatusService:
                 status.color = patch.color
             if not is_unset(patch.position) and patch.position != status.position:
                 status.position = float(patch.position)  # type: ignore[arg-type]
+            if not is_unset(patch.allowed_transitions):
+                transitions = validate_allowed_transitions(patch.allowed_transitions)
+                if transitions != [str(t) for t in (status.allowed_transitions or [])]:
+                    status.allowed_transitions = transitions
             if not is_unset(patch.category) and patch.category != status.category:
                 validate_category(patch.category)  # type: ignore[arg-type]
                 status.category = patch.category  # type: ignore[assignment]

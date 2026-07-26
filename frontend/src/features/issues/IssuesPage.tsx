@@ -14,7 +14,9 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
-import type { Membership } from '../members/types';
+import type { MemberSummary, Membership } from '../members/types';
+import { listProjects } from '../projects/api';
+import type { ProjectSummary } from '../projects/types';
 import { bulkIssues, createIssue, listIssues, listStatuses, workspaceIssuesChannel } from './api';
 import { applyIssueListFrame } from './realtime';
 import type { IssuePriority, IssueSummary, IssueStatusRef, StateCategory } from './types';
@@ -53,15 +55,20 @@ interface QuickCreateProps {
   readonly onClose: () => void;
 }
 
-/** 快速创建(§4.3:回车快速创建,支持连续创建)。 */
+/** 快速创建(§4.3:回车快速创建,支持连续创建;「展开更多」补项目/负责人字段)。 */
 function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
   const t = useT();
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<IssuePriority>('none');
+  const [projectId, setProjectId] = useState('');
+  const [assigneeId, setAssigneeId] = useState('');
+  const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [workspace, setWorkspace] = useState<Membership | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [members, setMembers] = useState<MemberSummary[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +81,24 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
     };
   }, [client]);
 
+  // 展开更多字段时按需加载项目与成员名册(§4.2/§4.3)
+  useEffect(() => {
+    if (!expanded || workspace === null) return;
+    let cancelled = false;
+    void (async () => {
+      const [projectPage, memberPage] = await Promise.all([
+        listProjects(client, workspace.workspace_id, { limit: 100 }),
+        listMembers(client, workspace.workspace_id, { limit: 100 }),
+      ]);
+      if (cancelled) return;
+      setProjects([...projectPage.data]);
+      setMembers(memberPage.data.filter((m) => m.status === 'active'));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, workspace, client]);
+
   const submit = useCallback(
     async (keepOpen: boolean) => {
       if (workspace === null || title.trim() === '') return;
@@ -83,6 +108,8 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
         const created = await createIssue(client, workspace.workspace_id, {
           title: title.trim(),
           priority,
+          project_id: projectId === '' ? undefined : projectId,
+          assignee_id: assigneeId === '' ? undefined : assigneeId,
         });
         props.onCreated(created);
         if (keepOpen) {
@@ -97,7 +124,7 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
         setIsSaving(false);
       }
     },
-    [client, workspace, title, priority, props, t],
+    [client, workspace, title, priority, projectId, assigneeId, props, t],
   );
 
   return (
@@ -130,6 +157,45 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
           </option>
         ))}
       </Select>
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="issue-create-expand"
+      >
+        {expanded ? t('issues.create.collapse') : t('issues.create.expand')}
+      </Button>
+      {expanded ? (
+        <>
+          <Select
+            label={t('issues.create.project')}
+            value={projectId}
+            data-testid="issue-create-project"
+            onChange={(event) => setProjectId(event.target.value)}
+          >
+            <option value="">{t('issues.detail.inbox')}</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}（{p.key}）
+              </option>
+            ))}
+          </Select>
+          <Select
+            label={t('issues.create.assignee')}
+            value={assigneeId}
+            data-testid="issue-create-assignee"
+            onChange={(event) => setAssigneeId(event.target.value)}
+          >
+            <option value="">{t('issues.unassigned')}</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.display_name}
+                {m.member_type === 'agent' ? ` (${t('issues.agentBadge')})` : ''}
+              </option>
+            ))}
+          </Select>
+        </>
+      ) : null}
       {error !== null ? (
         <p className="mesh-issues__create-error" role="alert">
           {error}
