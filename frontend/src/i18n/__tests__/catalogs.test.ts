@@ -250,6 +250,10 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     succeeded: 9,
     failed: 1,
     field: 'priority',
+    // kanban 视图 §4 文案占位符(MES-43)
+    limit: 5,
+    enforcement: 'warn',
+    groupBy: 'status',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {
