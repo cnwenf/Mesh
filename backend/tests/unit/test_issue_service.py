@@ -108,6 +108,41 @@ async def _default_status(session_factory, workspace) -> IssueStatus:
         )
 
 
+async def _make_status(
+    session_factory,
+    workspace,
+    *,
+    project_id=None,
+    name: str,
+    category: str = "todo",
+    position: float = 0.0,
+    is_default: bool = False,
+) -> IssueStatus:
+    """Insert a status row directly (deterministic positions, no auto-seeding)."""
+    async with session_factory() as session, session.begin():
+        status = IssueStatus(
+            workspace_id=workspace.id,
+            project_id=project_id,
+            name=name,
+            category=category,
+            position=position,
+            is_default=is_default,
+            color="#4c9aff",
+        )
+        session.add(status)
+    return status
+
+
+async def _make_project_row(session_factory, workspace, *, key: str):
+    """Insert a project row directly (bypasses ProjectService status seeding)."""
+    from mesh.db.models.project import Project
+
+    async with session_factory() as session, session.begin():
+        project = Project(workspace_id=workspace.id, name=f"Project {key}", key=key)
+        session.add(project)
+    return project
+
+
 # ---------------------------------------------------------------------------
 # numbering (§2.4 / §5.1 / T15)
 # ---------------------------------------------------------------------------
@@ -395,6 +430,75 @@ def _status_patch(**kwargs):
     base = {"name": None, "color": None, "position": None, "category": None, "is_default": None}
     base.update(kwargs)
     return StatusPatch(**base)
+
+
+@pytest.mark.unit
+async def test_resolve_default_status_fallback_is_workspace_scoped(session_factory):
+    """MES-46 M1: the no-category fallback must resolve the caller's own default.
+
+    Two workspaces each carry a single workspace-level default at a distinct
+    position (B sorts first globally). Without the ``workspace_id`` predicate
+    the fallback query returns B's default for A — a cross-tenant leak.
+    """
+    from mesh.issue.statuses import resolve_default_status
+
+    ws_a = await _make_workspace(session_factory)
+    ws_b = await _make_workspace(session_factory)
+    default_a = await _make_status(
+        session_factory, ws_a, name="A Default", position=10.0, is_default=True
+    )
+    default_b = await _make_status(
+        session_factory, ws_b, name="B Default", position=1.0, is_default=True
+    )
+
+    async with session_factory() as session:
+        resolved_a = await resolve_default_status(session, workspace_id=ws_a.id, project_id=None)
+    assert resolved_a.id == default_a.id
+    assert resolved_a.workspace_id == ws_a.id
+
+    async with session_factory() as session:
+        resolved_b = await resolve_default_status(session, workspace_id=ws_b.id, project_id=None)
+    assert resolved_b.id == default_b.id
+    assert resolved_b.workspace_id == ws_b.id
+
+
+@pytest.mark.unit
+async def test_resolve_default_status_project_scope_is_workspace_scoped(session_factory):
+    """MES-46 M1: the project-scope fallback must not leak another tenant's row.
+
+    A has a workspace-level default (pos 5.0) and a project-private default
+    (pos 8.0); B has a workspace-level default at pos 0.5 that matches the
+    ``project_id IS NULL`` arm of the filter. Unfiltered, B's row wins the
+    ORDER BY for A's resolution.
+    """
+    from mesh.issue.statuses import resolve_default_status
+
+    ws_a = await _make_workspace(session_factory)
+    ws_b = await _make_workspace(session_factory)
+    project_a = await _make_project_row(session_factory, ws_a, key=f"K{uuid.uuid4().hex[:4].upper()}")
+    default_a_ws = await _make_status(
+        session_factory, ws_a, name="A WS Default", position=5.0, is_default=True
+    )
+    await _make_status(
+        session_factory,
+        ws_a,
+        project_id=project_a.id,
+        name="A Proj Default",
+        position=8.0,
+        is_default=True,
+    )
+    default_b_ws = await _make_status(
+        session_factory, ws_b, name="B WS Default", position=0.5, is_default=True
+    )
+
+    async with session_factory() as session:
+        resolved = await resolve_default_status(
+            session, workspace_id=ws_a.id, project_id=project_a.id
+        )
+    # Lowest position within A's own rows (5.0) — never B's 0.5.
+    assert resolved.id == default_a_ws.id
+    assert resolved.workspace_id == ws_a.id
+    assert resolved.id != default_b_ws.id
 
 
 @pytest.mark.unit

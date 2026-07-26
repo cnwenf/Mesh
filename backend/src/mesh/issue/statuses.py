@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -194,10 +194,15 @@ async def resolve_default_status(
     position. Without a category: the scope default (self-healing first).
     """
     await ensure_scope_seeded(session, workspace_id=workspace_id, project_id=None)
-    scope_filter = (
+    # The tenant predicate MUST be part of the scope filter: every tenant query
+    # carries ``workspace_id`` (db/tenant.py). Omitting it here would let the
+    # no-category fallback resolve another workspace's default status (MES-46
+    # M1). Leading with the equality also hits ``idx_issue_statuses_scope``.
+    scope_filter = and_(
+        IssueStatus.workspace_id == workspace_id,
         IssueStatus.project_id.is_(None)
         if project_id is None
-        else IssueStatus.project_id.in_((project_id,)) | IssueStatus.project_id.is_(None)
+        else IssueStatus.project_id.in_((project_id,)) | IssueStatus.project_id.is_(None),
     )
     if category is not None:
         if project_id is not None:
