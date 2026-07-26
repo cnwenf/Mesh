@@ -101,11 +101,27 @@ def _tri(value, present: bool):
 
 
 async def _context_for(
-    session: AsyncSession, user: User, workspace_id: uuid.UUID
+    session: AsyncSession,
+    user: User,
+    workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
 ) -> WorkspaceContext:
-    return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=None
-    )
+    """Run the membership gate for a workspace-less path (workspace.md §5.3).
+
+    The resolver already proved the resource exists SOMEWHERE; if the caller
+    is not a member of that workspace the gate raises "workspace not found".
+    That message differs from the "resource not found" an unknown id gets —
+    a two-message existence oracle for arbitrary UUIDs. Rewriting the gate
+    404 to the resource message makes the two cases indistinguishable; no
+    content leaks either way (the service-layer read gate still runs).
+    """
+    try:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=None
+        )
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
 
 
 # ----------------------------------------------------------------------
@@ -227,7 +243,9 @@ async def get_issue(
     workspace_id = await service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.get_issue(
         viewer=context.member, workspace_id=workspace_id, issue_id=parsed
     )
@@ -282,7 +300,9 @@ async def update_issue(
     workspace_id = await service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     patch, version = _issue_patch_from(body)
     data = await service.update_issue(
         actor=context.member,
@@ -310,7 +330,9 @@ async def delete_issue(
     workspace_id = await service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.delete_issue(
         actor=context.member,
         workspace_id=workspace_id,
@@ -334,7 +356,9 @@ async def list_children(
     workspace_id = await service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     items, next_cursor = await service.list_children(
         viewer=context.member,
         workspace_id=workspace_id,
@@ -359,7 +383,9 @@ async def list_activity(
     workspace_id = await service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     items, next_cursor = await service.list_activity(
         viewer=context.member,
         workspace_id=workspace_id,
@@ -387,7 +413,9 @@ async def list_dependencies(
     workspace_id = await _issues(request).resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     items = await service.list_dependencies(
         viewer=context.member, workspace_id=workspace_id, issue_id=parsed
     )
@@ -409,7 +437,9 @@ async def add_dependency(
     workspace_id = await _issues(request).resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     depends_on = _body_uuid(body.depends_on_id, field="depends_on_id")
     data = await service.add_dependency(
         actor=context.member,
@@ -437,7 +467,9 @@ async def remove_dependency(
     workspace_id = await _issues(request).resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.remove_dependency(
         actor=context.member,
         workspace_id=workspace_id,
@@ -465,7 +497,9 @@ async def move_preview(
     workspace_id = await _issues(request).resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.preview(
         viewer=context.member,
         workspace_id=workspace_id,
@@ -490,7 +524,9 @@ async def move_issue(
     workspace_id = await _issues(request).resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.move(
         actor=context.member,
         workspace_id=workspace_id,
@@ -521,7 +557,9 @@ async def bulk_issues(
     workspace_id = await _issues(request).resolve_issue_workspace(first)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND
+    )
     data = await service.execute(
         actor=context.member, workspace_id=workspace_id, body=body
     )
@@ -590,7 +628,9 @@ async def update_status(
         )
     if workspace_id is None:
         raise NotFoundError(_STATUS_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_STATUS_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = StatusPatch(
         name=_tri(body.name, "name" in fields),
@@ -631,7 +671,9 @@ async def delete_status(
         )
     if workspace_id is None:
         raise NotFoundError(_STATUS_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_STATUS_NOT_FOUND
+    )
     data = await service.delete_status(
         actor=context.member, workspace_id=workspace_id, status_id=parsed
     )
@@ -697,7 +739,9 @@ async def update_template(
         )
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.update_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed, body=body
     )
@@ -723,7 +767,9 @@ async def delete_template(
         )
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.delete_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed
     )
@@ -750,7 +796,9 @@ async def instantiate_template(
         )
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(
+        session, user, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.instantiate(
         actor=context.member,
         workspace_id=workspace_id,
