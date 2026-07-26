@@ -16,16 +16,16 @@ and atomic moves land with the issue-coupled increment.
   workspace resolver for the workspace-less ``/views/{id}`` paths (same
   pattern as migration 0006's project resolvers).
 
-Revision ID: 0008
-Revises: 0007
+Revision ID: 0009
+Revises: 0008
 Create Date: 2026-07-26
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0008"
-down_revision = "0007"
+revision = "0009"
+down_revision = "0008"
 branch_labels = None
 depends_on = None
 
