@@ -1165,6 +1165,43 @@ class IssueService:
             return False
         return parsed == issue.updated_at
 
+    async def _assert_transition_allowed(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        current_status_id: uuid.UUID,
+        target_status,
+    ) -> None:
+        """Strict-mode transition gate (issue.md §3.4/§4.4/§5.2, migration 0009).
+
+        The workspace setting ``status_strict_mode`` (default false) enables
+        strict mode; the per-status ``allowed_transitions`` list (JSONB array
+        of target status ids) then defines the ONLY legal next steps — an
+        empty list allows no transition at all. Violations raise 409
+        ``invalid_status_transition`` with from/to/allowed details.
+        """
+        workspace = await session.scalar(
+            select(Workspace).where(Workspace.id == workspace_id)
+        )
+        settings = (workspace.settings if workspace is not None else None) or {}
+        if not bool(settings.get("status_strict_mode", False)):
+            return
+        current = await session.scalar(
+            select(IssueStatus).where(IssueStatus.id == current_status_id)
+        )
+        allowed = [str(t) for t in (current.allowed_transitions or [])] if current else []
+        if str(target_status.id) not in allowed:
+            raise ConflictError(
+                "status transition not allowed under strict mode",
+                code="invalid_status_transition",
+                details={
+                    "from": str(current_status_id),
+                    "to": str(target_status.id),
+                    "allowed": allowed,
+                },
+            )
+
     async def _apply_patch_tx(
         self,
         session: AsyncSession,
@@ -1201,6 +1238,16 @@ class IssueService:
                 workspace_id=issue.workspace_id,
                 project_id=issue.project_id,
                 status_id=patch.status_id,
+            )
+            # 严格模式状态流转校验(issue.md §3.4/§4.4/§5.2,README §6.14):
+            # 工作区设置 status_strict_mode 开启时,仅允许当前状态
+            # allowed_transitions 列出的目标;违规 409 invalid_status_transition。
+            # 默认模式自由流转。系统驱动的迁移映射(move.py)不受此约束。
+            await self._assert_transition_allowed(
+                session,
+                workspace_id=issue.workspace_id,
+                current_status_id=issue.status_id,
+                target_status=status,
             )
             changes["_prev_category"] = issue.state_category
             old_status, old_category = issue.status_id, issue.state_category

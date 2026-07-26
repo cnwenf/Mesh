@@ -118,6 +118,8 @@ class CreateStatusRequest(BaseModel):
     position: float = 0.0
     is_default: bool = False
     project_id: str | None = None
+    # 严格模式「允许的下一步」目标状态 id 列表(§4.4,迁移 0009)
+    allowed_transitions: list[str] = Field(default_factory=list)
 
 
 class UpdateStatusRequest(BaseModel):
@@ -128,6 +130,7 @@ class UpdateStatusRequest(BaseModel):
     position: float | None = None
     category: str | None = None
     is_default: bool | None = None
+    allowed_transitions: list[str] | None = None
 
 
 class CreateIssueTemplateRequest(BaseModel):

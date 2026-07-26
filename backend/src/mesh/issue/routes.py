@@ -565,6 +565,7 @@ async def create_status(
         position=body.position,
         is_default=body.is_default,
         project_id=_body_uuid(body.project_id, field="project_id"),
+        allowed_transitions=body.allowed_transitions,
     )
     return {"data": data}
 
@@ -597,6 +598,7 @@ async def update_status(
         position=_tri(body.position, "position" in fields),
         category=_tri(body.category, "category" in fields),
         is_default=_tri(body.is_default, "is_default" in fields),
+        allowed_transitions=_tri(body.allowed_transitions, "allowed_transitions" in fields),
     )
     from mesh.issue.service import _Unset
 

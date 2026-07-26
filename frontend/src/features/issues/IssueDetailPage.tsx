@@ -1,8 +1,9 @@
 /**
  * Issue 详情页(issue.md §4.1/§4.2/§4.3):
  * 头部(编号 / 可编辑标题 / 状态选择器按 category 分组 / 删除)+
- * 属性侧栏(优先级 / 负责人(人与 agent 同列)/ 截止日)+
- * 子 issue 区(进度 3/5 + 列表)+ 依赖区(blocked_by,成环就地报错)+ 活动流。
+ * 主体(可编辑描述、子 issue 区(进度 3/5)、依赖区(成环就地报错)、活动流)+
+ * 属性侧栏(每字段点击即编辑,§4.2:状态/优先级/负责人/估算/起止日/项目/里程碑/周期)+
+ * 跨项目迁移两步式(§4.3:改项目 → 预览映射/清除清单 → 确认单事务迁移)。
  * 乐观更新 + version 冲突收敛(§3.4/T9:useOptimisticMutation,If-Match: updated_at)。
  * 实时经 issue:{id} 频道按 id 合并(§3.6/§6.7)。
  * 状态渲染序:错误态(可重试)→ 骨架 → 内容。
@@ -16,6 +17,8 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { listMembers } from '../members/api';
 import type { MemberSummary } from '../members/types';
+import { listCycles, listMilestones, listProjects } from '../projects/api';
+import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
 import {
   addDependency,
   deleteIssue,
@@ -25,6 +28,8 @@ import {
   listChildren,
   listDependencies,
   listStatuses,
+  moveIssue,
+  movePreview,
   removeDependency as removeDependencyApi,
 } from './api';
 import { applyIssueDetailFrame } from './realtime';
@@ -35,6 +40,7 @@ import type {
   IssuePriority,
   IssueStatusRef,
   IssueSummary,
+  MovePreview,
 } from './types';
 import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
 import './issues.css';
@@ -92,6 +98,87 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
   );
 }
 
+interface MoveDialogProps {
+  readonly preview: MovePreview;
+  readonly version: number;
+  readonly onCancel: () => void;
+  readonly onDone: () => void;
+}
+
+/** 跨项目迁移预览确认对话框(§4.3/§3.8 两步式契约第二步)。 */
+function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
+  const t = useT();
+  const toast = useToast();
+  const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  const [isBusy, setIsBusy] = useState(false);
+  const { preview } = props;
+
+  const confirm = useCallback(async () => {
+    setIsBusy(true);
+    try {
+      await moveIssue(client, preview.issue_id, {
+        target_project_id: preview.target_project_id,
+        confirm: true,
+        version: props.version,
+      });
+      toast.addToast(t('issues.move.success'), { tone: 'success', closeLabel: t('common.close') });
+      props.onDone();
+    } catch (err: unknown) {
+      const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+      toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+      props.onCancel();
+    } finally {
+      setIsBusy(false);
+    }
+  }, [client, preview, props, toast, t]);
+
+  return (
+    <div className="mesh-issues__move-overlay" data-testid="move-dialog">
+      <div className="mesh-issues__move-dialog" role="dialog" aria-label={t('issues.move.title')}>
+        <h3>{t('issues.move.title')}</h3>
+        <p className="mesh-issues__move-identifier">{preview.identifier}</p>
+        {preview.mapped_fields.length > 0 ? (
+          <section data-testid="move-mapped">
+            <h4>{t('issues.move.mapped')}</h4>
+            <ul>
+              {preview.mapped_fields.map((field) => {
+                const from = field.from as { name?: string } | undefined;
+                const to = field.to as { name?: string } | undefined;
+                return (
+                  <li key={field.field}>
+                    {field.field}: {from?.name ?? '?'} → {to?.name ?? '?'}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
+        {preview.cleared_fields.length > 0 ? (
+          <section data-testid="move-cleared">
+            <h4>{t('issues.move.cleared')}</h4>
+            <ul>
+              {preview.cleared_fields.map((field) => (
+                <li key={field.field}>
+                  {field.field}({field.reason})
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <p className="mesh-issues__move-kept">{t('issues.move.keptNote')}</p>
+        <div className="mesh-issues__move-actions">
+          <Button variant="ghost" onClick={props.onCancel} data-testid="move-cancel">
+            {t('issues.move.cancel')}
+          </Button>
+          <Button onClick={() => void confirm()} disabled={isBusy} data-testid="move-confirm">
+            {t('issues.move.confirm')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -103,10 +190,15 @@ export function IssueDetailPage(): React.JSX.Element {
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
   const [members, setMembers] = useState<MemberSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
+  const [cycles, setCycles] = useState<Cycle[]>([]);
   const [children, setChildren] = useState<IssueSummary[]>([]);
   const [dependencies, setDependencies] = useState<DependencyEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [titleDraft, setTitleDraft] = useState('');
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [movePreviewData, setMovePreviewData] = useState<MovePreview | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -123,6 +215,7 @@ export function IssueDetailPage(): React.JSX.Element {
       // 收敛到服务端最新写(T9:不丢更新,冲突 toast 提示)
       setIssue(server);
       setTitleDraft(server.title);
+      setDescriptionDraft(server.description ?? '');
       return server;
     },
   });
@@ -135,21 +228,31 @@ export function IssueDetailPage(): React.JSX.Element {
     void (async () => {
       try {
         const detail = await getIssue(client, issueId);
-        const [defs, kids, deps, acts, roster] = await Promise.all([
+        const [defs, kids, deps, acts, roster, projectPage, cyclePage] = await Promise.all([
           listStatuses(client, detail.workspace_id, detail.project_id ?? undefined),
           listChildren(client, issueId),
           listDependencies(client, issueId),
           listActivity(client, issueId),
           listMembers(client, detail.workspace_id, { limit: 100 }),
+          listProjects(client, detail.workspace_id, { limit: 100 }),
+          listCycles(client, detail.workspace_id, { limit: 100 }),
         ]);
+        const milestonePage =
+          detail.project_id !== null
+            ? await listMilestones(client, detail.project_id, { limit: 100 })
+            : { data: [] };
         if (cancelled) return;
         setIssue(detail);
         setTitleDraft(detail.title);
+        setDescriptionDraft(detail.description ?? '');
         setStatuses([...defs]);
         setChildren([...kids.data]);
         setDependencies([...deps]);
         setActivity([...acts.data]);
         setMembers(roster.data);
+        setProjects([...projectPage.data]);
+        setMilestones([...milestonePage.data]);
+        setCycles([...cyclePage.data]);
       } catch (err: unknown) {
         if (cancelled) return;
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -181,11 +284,18 @@ export function IssueDetailPage(): React.JSX.Element {
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
-      const { conflicted } = await mutation.mutate(issue, changes);
-      toast.addToast(t(conflicted ? 'issues.conflictToast' : 'issues.savedToast'), {
-        tone: conflicted ? 'warn' : 'success',
-        closeLabel: t('common.close'),
-      });
+      try {
+        const { conflicted } = await mutation.mutate(issue, changes);
+        toast.addToast(t(conflicted ? 'issues.conflictToast' : 'issues.savedToast'), {
+          tone: conflicted ? 'warn' : 'success',
+          closeLabel: t('common.close'),
+        });
+      } catch (err: unknown) {
+        // 非乐观锁冲突的服务端拒绝(如严格模式 409 invalid_status_transition):
+        // 显示具名错误并重取回滚乐观状态
+        const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+        toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+      }
       // 重取以刷新 version/status 等服务端派生字段(冲突时 onConflict 已收敛)
       setReloadKey((k) => k + 1);
     },
@@ -196,6 +306,13 @@ export function IssueDetailPage(): React.JSX.Element {
     if (issue === null || titleDraft.trim() === '' || titleDraft === issue.title) return;
     await patchAndToast({ title: titleDraft.trim(), version: issue.version });
   }, [issue, titleDraft, patchAndToast]);
+
+  const saveDescription = useCallback(async () => {
+    if (issue === null) return;
+    const next = descriptionDraft.trim() === '' ? null : descriptionDraft;
+    if (next === issue.description) return;
+    await patchAndToast({ description: next, version: issue.version });
+  }, [issue, descriptionDraft, patchAndToast]);
 
   const remove = useCallback(async () => {
     if (issue === null) return;
@@ -219,6 +336,23 @@ export function IssueDetailPage(): React.JSX.Element {
         setDependencies((prev) => [...prev, entry]);
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+      }
+    },
+    [client, issue, toast, t],
+  );
+
+  // 跨项目迁移第一步:拉取预览,弹确认对话框(§4.3/§3.8)
+  const requestMove = useCallback(
+    async (targetProjectId: string | null) => {
+      if (issue === null) return;
+      if (targetProjectId === issue.project_id) return;
+      try {
+        const preview = await movePreview(client, issue.id, targetProjectId);
+        setMovePreviewData(preview);
+      } catch (err: unknown) {
+        const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+        toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+        setReloadKey((k) => k + 1);
       }
     },
     [client, issue, toast, t],
@@ -272,9 +406,16 @@ export function IssueDetailPage(): React.JSX.Element {
       <div className="mesh-issues-detail__body">
         <section className="mesh-issues-detail__main">
           <h2>{t('issues.detail.description')}</h2>
-          <p className="mesh-issues-detail__description" data-testid="issue-detail-description">
-            {issue.description != null ? issue.description : t('issues.detail.noDescription')}
-          </p>
+          <textarea
+            className="mesh-issues-detail__description"
+            value={descriptionDraft}
+            onChange={(event) => setDescriptionDraft(event.target.value)}
+            onBlur={() => void saveDescription()}
+            placeholder={t('issues.detail.noDescription')}
+            aria-label={t('issues.detail.description')}
+            data-testid="issue-detail-description"
+            rows={4}
+          />
 
           <h2>
             {t('issues.detail.children')}（{doneChildren}/{children.length}）
@@ -322,9 +463,9 @@ export function IssueDetailPage(): React.JSX.Element {
             <p className="mesh-issues-detail__empty">{t('issues.detail.noActivity')}</p>
           ) : (
             <ul className="mesh-issues-detail__activity" data-testid="issue-detail-activity">
-              {activity.map((entry) => (
-                <li key={entry.id}>
-                  <strong>{entry.actor !== null ? entry.actor.name : t('issues.systemActor')}</strong>
+              {activity.map((entry, index) => (
+                <li key={entry.id ?? `act-${index}`}>
+                  <strong>{entry.actor != null ? entry.actor.name : t('issues.systemActor')}</strong>
                   {t('issues.activity.changed', { field: entry.field })}
                   <time>{new Date(entry.created_at).toLocaleString()}</time>
                 </li>
@@ -392,6 +533,53 @@ export function IssueDetailPage(): React.JSX.Element {
               ))}
           </Select>
           <label className="mesh-issues__field">
+            <span>{t('issues.detail.estimate')}</span>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={issue.estimate ?? ''}
+              onChange={(event) =>
+                void patchAndToast({
+                  estimate: event.target.value === '' ? null : Number(event.target.value),
+                  version: issue.version,
+                })
+              }
+              aria-label={t('issues.detail.estimate')}
+              data-testid="issue-detail-estimate"
+            />
+          </label>
+          <Select
+            label={t('issues.detail.estimateUnit')}
+            value={issue.estimate_unit ?? ''}
+            data-testid="issue-detail-estimate-unit"
+            onChange={(event) =>
+              void patchAndToast({
+                estimate_unit: event.target.value === '' ? null : event.target.value,
+                version: issue.version,
+              } as Partial<IssueDetail>)
+            }
+          >
+            <option value="">{t('issues.detail.noneOption')}</option>
+            <option value="points">points</option>
+            <option value="hours">hours</option>
+          </Select>
+          <label className="mesh-issues__field">
+            <span>{t('issues.detail.start')}</span>
+            <input
+              type="date"
+              value={issue.start_date ?? ''}
+              onChange={(event) =>
+                void patchAndToast({
+                  start_date: event.target.value === '' ? null : event.target.value,
+                  version: issue.version,
+                })
+              }
+              aria-label={t('issues.detail.start')}
+              data-testid="issue-detail-start"
+            />
+          </label>
+          <label className="mesh-issues__field">
             <span>{t('issues.columns.due')}</span>
             <input
               type="date"
@@ -406,19 +594,75 @@ export function IssueDetailPage(): React.JSX.Element {
               data-testid="issue-detail-due"
             />
           </label>
+          <Select
+            label={t('issues.detail.milestone')}
+            value={issue.milestone_id ?? ''}
+            data-testid="issue-detail-milestone"
+            onChange={(event) =>
+              void patchAndToast({
+                milestone_id: event.target.value === '' ? null : event.target.value,
+                version: issue.version,
+              } as Partial<IssueDetail>)
+            }
+          >
+            <option value="">{t('issues.detail.noneOption')}</option>
+            {milestones.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.title}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label={t('issues.detail.cycle')}
+            value={issue.cycle_id ?? ''}
+            data-testid="issue-detail-cycle"
+            onChange={(event) =>
+              void patchAndToast({
+                cycle_id: event.target.value === '' ? null : event.target.value,
+                version: issue.version,
+              } as Partial<IssueDetail>)
+            }
+          >
+            <option value="">{t('issues.detail.noneOption')}</option>
+            {cycles.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+          <Select
+            label={t('issues.detail.project')}
+            value={issue.project_id ?? ''}
+            data-testid="issue-detail-project"
+            onChange={(event) =>
+              void requestMove(event.target.value === '' ? null : event.target.value)
+            }
+          >
+            <option value="">{t('issues.detail.inbox')}</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}（{p.key}）
+              </option>
+            ))}
+          </Select>
           <p className="mesh-issues-detail__meta">
             {t('issues.detail.reporter')}:{' '}
-            {issue.reporter != null ? issue.reporter.name : t('issues.unassigned')}
+            {issue.reporter !== null ? issue.reporter.name : t('issues.unassigned')}
           </p>
-          {issue.project != null ? (
-            <p className="mesh-issues-detail__meta">
-              {t('issues.detail.project')}: {issue.project.name}（{issue.project.key}）
-            </p>
-          ) : (
-            <p className="mesh-issues-detail__meta">{t('issues.detail.inbox')}</p>
-          )}
         </aside>
       </div>
+
+      {movePreviewData !== null ? (
+        <MoveProjectDialog
+          preview={movePreviewData}
+          version={issue.version}
+          onCancel={() => setMovePreviewData(null)}
+          onDone={() => {
+            setMovePreviewData(null);
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

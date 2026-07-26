@@ -51,6 +51,8 @@ export interface IssueStatusRef {
   readonly color: string | null;
   readonly position: number;
   readonly is_default: boolean;
+  /** 严格模式「允许的下一步」目标状态 id(§4.4;严格开关在工作区设置) */
+  readonly allowed_transitions: readonly string[];
   readonly created_at: string;
   readonly updated_at: string;
 }

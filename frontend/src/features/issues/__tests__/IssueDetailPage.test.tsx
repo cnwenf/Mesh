@@ -92,7 +92,34 @@ function renderDetail(): void {
   );
 }
 
-/** 首轮加载 6 个响应:issue + (statuses, children, deps, activity, members)。 */
+const PROJECT_A = {
+  id: 'prj-1', name: 'Apollo', key: 'APL', status: 'active', health: null,
+  visibility: 'public', lead: null, lead_member_id: null, start_date: null,
+  target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
+  archived: false, archived_at: null, my_role: 'lead',
+  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+};
+const PROJECT_B = { ...PROJECT_A, id: 'prj-2', name: 'Borealis', key: 'BOR' };
+const CYCLE_1 = {
+  id: 'cyc-1', project_id: null, name: 'Sprint 1', starts_at: '2026-08-01',
+  ends_at: '2026-08-14', state: 'active', auto_roll: false,
+  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+};
+const MILESTONE_1 = {
+  id: 'ms-1', project_id: 'prj-1', title: 'v1.0', description: null,
+  target_date: '2026-09-30', state: 'open', overdue: false,
+  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+};
+const MEMBERS_PAGE = {
+  data: [
+    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active',
+      display_name: 'Owner', joined_at: null,
+      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null } },
+  ],
+  next_cursor: null,
+};
+
+/** 首轮加载 9 个响应:issue → (statuses, children, deps, activity, members, projects, cycles) → milestones。 */
 function detailResponses(): ReturnType<typeof fakeResponse>[] {
   return [
     fakeResponse({ body: { data: DETAIL } }),
@@ -129,7 +156,25 @@ function detailResponses(): ReturnType<typeof fakeResponse>[] {
         next_cursor: null,
       },
     }),
+    fakeResponse({ body: MEMBERS_PAGE }),
+    fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
+    fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
+    fakeResponse({ body: { data: [MILESTONE_1], next_cursor: null } }),
+  ];
+}
+
+/** PATCH 后的整轮重取响应(issue → 7 并行 → milestones)。 */
+function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
+  return [
+    fakeResponse({ body: { data: issue } }),
+    fakeResponse({ body: { data: [DETAIL.status, STATUS_IN_PROGRESS], next_cursor: null } }),
     fakeResponse({ body: { data: [], next_cursor: null } }),
+    fakeResponse({ body: { data: [], next_cursor: null } }),
+    fakeResponse({ body: { data: [], next_cursor: null } }),
+    fakeResponse({ body: MEMBERS_PAGE }),
+    fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
+    fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
+    fakeResponse({ body: { data: [MILESTONE_1], next_cursor: null } }),
   ];
 }
 
@@ -154,7 +199,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     expect(screen.getByTestId('issue-detail-identifier').textContent).toBe('APL-1');
     expect(screen.getByTestId('issue-detail-version').textContent).toBe('v3');
-    expect(screen.getByTestId('issue-detail-description').textContent).toBe(
+    expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe(
       'Detailed description',
     );
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
@@ -164,16 +209,7 @@ describe('IssueDetailPage', () => {
 
   it('patches the title with version and If-Match on blur (§3.4/§6.14)', async () => {
     const updated = { ...DETAIL, title: 'Renamed', version: 4 };
-    const stub = queue(
-      fakeResponse({ body: { data: updated } }),
-      // reload round after the patch:
-      fakeResponse({ body: { data: updated } }),
-      fakeResponse({ body: { data: [DETAIL.status, STATUS_IN_PROGRESS], next_cursor: null } }),
-      fakeResponse({ body: { data: [], next_cursor: null } }),
-      fakeResponse({ body: { data: [], next_cursor: null } }),
-      fakeResponse({ body: { data: [], next_cursor: null } }),
-      fakeResponse({ body: { data: [], next_cursor: null } }),
-    );
+    const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));
     renderDetail();
     const title = await screen.findByTestId('issue-detail-title');
     fireEvent.change(title, { target: { value: 'Renamed' } });
@@ -222,10 +258,116 @@ describe('IssueDetailPage', () => {
     });
   });
 
+  it('saves the description on blur (§4.1 描述可编辑)', async () => {
+    // PATCH 响应 + 整轮重取
+    const stub = queue(fakeResponse({ body: { data: DETAIL } }), ...reloadRound());
+    renderDetail();
+    const textarea = await screen.findByTestId('issue-detail-description');
+    fireEvent.change(textarea, { target: { value: 'New description body' } });
+    fireEvent.blur(textarea);
+    await waitFor(() => {
+      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+      expect(patchCalls.length).toBe(1);
+      expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({
+        description: 'New description body',
+        version: 3,
+      });
+    });
+  });
+
+  it('edits estimate and start date from the sidebar (§4.2 MEDIUM-1)', async () => {
+    // 每次 PATCH 消耗 1 个响应,随后整轮重取消耗 9 个
+    const stub = queue(
+      fakeResponse({ body: { data: DETAIL } }),
+      ...reloadRound(),
+      fakeResponse({ body: { data: DETAIL } }),
+      ...reloadRound(),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-estimate'), { target: { value: '5' } });
+    await waitFor(() => {
+      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+      expect(patchCalls.length).toBe(1);
+      expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({ estimate: 5, version: 3 });
+    });
+    fireEvent.change(screen.getByTestId('issue-detail-start'), {
+      target: { value: '2026-08-01' },
+    });
+    await waitFor(() => {
+      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+      expect(patchCalls.length).toBe(2);
+      expect(JSON.parse(String(patchCalls[1].init?.body))).toEqual({
+        start_date: '2026-08-01',
+        version: 3,
+      });
+    });
+    // milestone / cycle selects are present with options
+    expect(screen.getByTestId('issue-detail-milestone')).toBeTruthy();
+    expect(screen.getByTestId('issue-detail-cycle')).toBeTruthy();
+  });
+
+  it('opens the move preview dialog on project change and confirms (§4.3 MEDIUM-2)', async () => {
+    const preview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: 'prj-2',
+      mapped_fields: [
+        { field: 'status', from: { name: 'Dev' }, to: { name: 'Todo' }, reason: 'private' },
+      ],
+      cleared_fields: [{ field: 'milestone_id', reason: '项目私有里程碑' }],
+      kept_fields: ['title', 'identifier'],
+    };
+    const moved = { ...DETAIL, project_id: 'prj-2', version: 4 };
+    const stub = queue(
+      fakeResponse({ body: { data: preview } }),
+      fakeResponse({ body: { data: moved } }),
+      ...reloadRound(moved),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await screen.findByTestId('move-dialog');
+    expect(screen.getByTestId('move-mapped')).toBeTruthy();
+    expect(screen.getByTestId('move-cleared')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('move-confirm'));
+    await waitFor(() => {
+      const movePosts = stub.calls.filter(
+        (c) => c.init?.method === 'POST' && String(c.url).endsWith('/move'),
+      );
+      expect(movePosts.length).toBe(1);
+      expect(JSON.parse(String(movePosts[0].init?.body))).toEqual({
+        target_project_id: 'prj-2',
+        confirm: true,
+        version: 3,
+      });
+    });
+  });
+
+  it('cancels the move dialog without calling move', async () => {
+    const preview = {
+      issue_id: 'iss-1',
+      identifier: 'APL-1',
+      from_project_id: 'prj-1',
+      target_project_id: 'prj-2',
+      mapped_fields: [],
+      cleared_fields: [],
+      kept_fields: [],
+    };
+    const stub = queue(fakeResponse({ body: { data: preview } }));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await screen.findByTestId('move-dialog');
+    fireEvent.click(screen.getByTestId('move-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('move-dialog')).toBeNull());
+    expect(stub.calls.filter((c) => String(c.url).endsWith('/move')).length).toBe(0);
+  });
+
   it('shows the error state with retry when the detail request fails', async () => {
     const stub = stubFetch(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
-      // retry round:
       ...detailResponses(),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);

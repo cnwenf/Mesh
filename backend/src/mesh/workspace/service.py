@@ -102,6 +102,10 @@ def _validate_settings_keys(patch: dict) -> None:
         elif key == "inbox_issue_prefix":
             if not isinstance(value, str):
                 raise _type_error(key, "a string")
+        elif key == "status_strict_mode":
+            # issue.md §3.4/§4.4:严格模式状态流转总开关(bool,默认 false)
+            if not isinstance(value, bool):
+                raise _type_error(key, "a boolean")
         elif key in ("invitation_max_uses_cap", "invitation_max_lifetime_hours_cap"):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise _type_error(key, "a positive integer")
