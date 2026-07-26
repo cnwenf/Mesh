@@ -54,6 +54,22 @@ describe('AppShell', () => {
       fireEvent.click(screen.getByTestId('open-help'));
     }).not.toThrow();
   });
+
+  it('命令面板导航命令均带本地化 label(映射缺键会致搜索整体崩溃,MES-45 回归)', () => {
+    renderShell('/');
+    const commands = useShortcutRegistry.getState().commands;
+    expect(commands.length).toBeGreaterThan(0);
+    for (const command of commands) {
+      expect(typeof command.label).toBe('string');
+      expect(command.label.length).toBeGreaterThan(0);
+      // 缺失映射的兜底是原始 key 或 undefined,均不应出现
+      expect(command.label).not.toBe(command.id);
+    }
+    // 上一轮回归点:nav 映射缺 issues 键 → label undefined → 输入即抛 TypeError
+    const issues = commands.find((command) => command.id === 'nav.issues');
+    expect(issues).toBeDefined();
+    expect(issues?.label).toBe('Issues');
+  });
 });
 
 describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {

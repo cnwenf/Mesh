@@ -14,16 +14,32 @@ import type { ThemeMode } from '../state/settingsStore';
 
 export const TOPBAR_SEARCH_SELECTOR = '[data-testid="topbar-search"]';
 
+/**
+ * 导航命令键联合(与 NAV_COMMAND_ROUTES 显式一一对应)。
+ * 标签映射收紧为该键的 Record:映射缺任一键即编译失败,
+ * 防 label undefined 注册进命令面板导致搜索整体崩溃(MES-45 回归守卫)。
+ */
+export type NavKey =
+  | 'home'
+  | 'inbox'
+  | 'projects'
+  | 'issues'
+  | 'board'
+  | 'members'
+  | 'chat'
+  | 'automation'
+  | 'settings';
+
 export interface ShellShortcutLabels {
-  /** nav.<key> 文案(home/inbox/projects/board/members/chat/automation/settings) */
-  nav: Record<string, string>;
+  /** nav.<key> 文案(必须覆盖全部 NavKey,缺一编译报错) */
+  nav: Record<NavKey, string>;
   /** theme.<mode> 文案(light/dark/system) */
   theme: Record<string, string>;
   /** 动作类文案(themeToggle/newIssue/focusSearch/goInbox/goBoard/goMembers/goAutomation) */
   actions: Record<string, string>;
 }
 
-const NAV_COMMAND_ROUTES: ReadonlyArray<{ key: string; to: string }> = [
+const NAV_COMMAND_ROUTES: ReadonlyArray<{ key: NavKey; to: string }> = [
   { key: 'home', to: '/' },
   { key: 'inbox', to: '/inbox' },
   { key: 'projects', to: '/projects' },

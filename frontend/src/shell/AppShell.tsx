@@ -229,6 +229,7 @@ export function AppShell(): React.JSX.Element {
           home: t('nav.home'),
           inbox: t('nav.inbox'),
           projects: t('nav.projects'),
+          issues: t('nav.issues'),
           board: t('nav.board'),
           members: t('nav.members'),
           chat: t('nav.chat'),
