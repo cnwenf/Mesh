@@ -3,6 +3,28 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.9] - 2026-07-27
+
+MES-46 安全审核 HIGH×2 修复(MES-48):issue 跨项目迁移路径越权信息泄露闭环。
+
+### Security
+
+- **H1 move 未确认路径鉴权缺失(越权信息泄露)**:`POST /issues/{id}/move` 的未确认(`confirm` 缺省)路径此前在只读 session 中**不做任何源/目标鉴权**即计算 §3.8 迁移清单并以 422 `move_confirmation_required` 的 `details.preview` 抛出——任意工作区成员(含 guest)可读取无权 issue 的完整字段清单(identifier / status 全渲染含 `allowed_transitions` / 项目私有 milestone title / cycle name),并以 `target_project_id` 探测枚举私有项目。修复:第一个 session 在 `compute_plan` 前补齐与预览端点及确认事务**完全对称**的鉴权——源 issue 读门(`assert_can_view_issue`:不可见 guest 404 / 成员 403)、目标项目写门(`assert_can_write`);任何鉴权失败只回错误信封,**不携带 preview**。
+- **H2 bulk 未确认预览逐条无源鉴权**:`POST /issues/bulk` 未确认聚合预览循环此前逐条加载即出 plan,一次请求可探测 ≤20 个任意 issue。修复:逐条过源 issue 读门,越权/不可见项仅回 error marker(`forbidden` / `not_found`),**不回 plan**;目标项目写门维持聚合前整体校验。
+- **L1 项目写门 guest 存在性 oracle**:`ProjectService.assert_can_write` 的 guest 分支对无授权项目抛 403,与视图门「不可见 → 404」约定不一致(project.md §3.3),可被用作私有项目存在性探针。修复:无授权 → 404 `not_found`,只读授权 → 403,写授权放行;move/bulk 目标鉴权随之对 guest 不可见目标统一回 404。
+
+### Changed
+
+- **§3.8 契约对齐(M1)**:`POST /issues/{id}/move` 确认迁移(`confirm:true`)现**强制携带 `version`**(乐观锁,缺失 → 400 `validation_error`);预览(第一步 200 与未确认 422 的 `details.preview`)新增 `version` 字段,客户端可直接回传。前端 `MovePreview` / `moveIssue` 类型同步收紧(`version` 必填)。
+- **§3.8 ⑥ 审计留痕(M3/L2)**:批量迁移(`POST /issues/bulk` 改 `project_id`)此前不写 `issue_activity`(审计缺口),且迁移活动仅记 `project_id` 旧/新值。修复:move 与 bulk 迁移共用 `move_activity_rows`——`project_id` 行之外,按预览清单逐条写 status 映射行(旧/新 status id)与 milestone/cycle 清除行(旧值 → null),留痕含完整映射/清除清单。
+- **completed_at 同步抽取(L3)**:move 与 bulk 迁移共用 `apply_move_plan`——状态映射进入 done category 补打 `completed_at`、离开 done category 清除,两条路径语义完全一致(此前 bulk 不同步)。
+
+### Quality
+
+- 后端:新增 `tests/unit/test_issue_move_auth.py`(24 例:私有源 403/404 无 plan、不可见目标 403/404、跨工作区目标 404、bulk 混合 id error marker、guest 写门三态、version 契约、审计清单、completed_at 对齐、目标存在性 oracle message 不可区分);新增真实 e2e `tests/e2e/test_issue_move_security_e2e.py`(8 例:真 uvicorn 子进程 + 真 HTTP + 邀请制 member/guest 全负向矩阵 + 授权双步流回归 + 审计留痕);`pytest-cov` 变更模块 move.py 94% / bulk.py 98% / project service 93%(整体 93.5%,≥90% 门禁);ruff 全绿;既有 move/bulk 正向用例全绿。
+- 前端:vitest 1237 例全绿(迁移预览 fixture 补 `version`),typecheck / eslint 0 错。
+- 文档同步:`docs/specs/features/issue.md` §3.8 增补「鉴权前置(安全契约)」条款与预览 `version` 示例。
+
 ## [0.11.8] - 2026-07-26
 
 MES-46 多租户隔离维度安全审核收口(MES-50):2 项 MEDIUM 补丁,放行不受阻后的尽快修复项。
