@@ -3,12 +3,8 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-<<<<<<< HEAD
-## [0.11.10] - 2026-07-27
-=======
 ## [0.11.11] - 2026-07-27
 
->>>>>>> b71fd2d (chore: 移除内部实施计划文档 + CHANGELOG 版本避让为 0.11.11(0.11.10 已由 MES-55 占用))
 MES-46 终局排期 issue 模块 LOW×8 + 文档瑕疵×1 收口(MES-51):统一约定 / 收敛口径 / 补实测类硬化,均无泄露(复合 FK + RLS + 外层 workspace 过滤兜底)。
 
 ### Security
