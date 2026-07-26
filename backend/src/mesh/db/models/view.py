@@ -9,7 +9,7 @@ increment; this model is the issue-decoupled definition layer).
 Multi-tenancy follows README §6.2: ``UNIQUE (workspace_id, id)`` exposes the
 composite-FK reference target (``view_issue_positions.view_id`` etc.), both
 cross-module references (project, owner member) are same-tenant composite
-FKs with ON DELETE CASCADE, and RLS (migration 0008) adds defense-in-depth.
+FKs with ON DELETE CASCADE, and RLS (migration 0009) adds defense-in-depth.
 
 Scope uniqueness (README §6.3): "workspace-level OR project-level" name and
 default-view uniqueness use partial EXPRESSION unique indexes over

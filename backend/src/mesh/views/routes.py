@@ -2,7 +2,7 @@
 
 Workspace-scoped paths use the ``require_workspace`` membership gate;
 workspace-less paths (``/views/{id}`` + actions) resolve the tenant workspace
-through the narrow SECURITY DEFINER lookup (migration 0008) and then run the
+through the narrow SECURITY DEFINER lookup (migration 0009) and then run the
 same membership gate. Resource-level authorization (private/shared visibility,
 write gates) lives in the service layer.
 
