@@ -42,3 +42,10 @@ def test_api_and_gateway_connect_as_restricted_app_role():
 def test_api_provisions_app_role_password():
     env = _load()["services"]["api"]["environment"]
     assert "MESH_APP_DB_PASSWORD" in env
+
+
+def test_gateway_bounds_websocket_frame_size():
+    """M4: uvicorn's default WebSocket frame ceiling is 16MB — the gateway must
+    start with an explicit, small ``--ws-max-size`` (Settings.ws_max_size_bytes)."""
+    command = str(_load()["services"]["gateway"]["command"])
+    assert "--ws-max-size" in command

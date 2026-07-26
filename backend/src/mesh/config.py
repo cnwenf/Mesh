@@ -145,6 +145,18 @@ class Settings(BaseSettings):
     realtime_replay_page_size: int = Field(default=200, ge=1, le=1000)
     ws_ping_interval: float = Field(default=30.0, gt=0)
 
+    # Realtime gateway DoS hardening (README §6.16). Unauthenticated sockets
+    # are closed after the auth window; inbound frames are limited per rolling
+    # second and per-connection subscriptions are capped (a flooding or
+    # over-subscribing client is answered with an error, not serviced).
+    # ``ws_max_size_bytes`` is the single source of truth for the transport
+    # frame ceiling: deployments must start uvicorn with the matching
+    # ``--ws-max-size`` (docker-compose does this).
+    ws_auth_timeout: float = Field(default=5.0, gt=0)
+    ws_max_subscriptions: int = Field(default=256, ge=1)
+    ws_max_frames_per_second: int = Field(default=30, ge=1)
+    ws_max_size_bytes: int = Field(default=65536, ge=1024)
+
     # Invitation expiry sweep (workspace.md §4.4 timed expiry complement to the
     # lazy checks on accept/preview).
     invitation_sweep_interval: float = Field(default=300.0, gt=0)

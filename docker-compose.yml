@@ -97,7 +97,9 @@ services:
 
   gateway:
     build: ./backend
-    command: uvicorn mesh.realtime.app:create_app --factory --host 0.0.0.0 --port 8081
+    # --ws-max-size bounds a single WebSocket frame at the transport layer
+    # (uvicorn default is 16MB); keep it in sync with Settings.ws_max_size_bytes.
+    command: uvicorn mesh.realtime.app:create_app --factory --host 0.0.0.0 --port 8081 --ws-max-size 65536
     environment:
       MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Restricted non-owner role the gateway app connects as → RLS applies (M1).
