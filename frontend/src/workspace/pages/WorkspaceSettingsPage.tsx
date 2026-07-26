@@ -7,7 +7,7 @@
  * 422 unsupported_locale / invalid_timezone、409 slug_taken、400 validation_error 具名呈现。
  */
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { MeshApiError, errorToI18nKey } from '../../api/errors';
 import { getApiClient } from '../../api/instance';
 import type { WorkspacePatch } from '../../api/workspace';
@@ -76,6 +76,20 @@ function SettingsSections(): React.JSX.Element {
       <section aria-label={t('roles.sectionTitle')}>
         <h2>{t('roles.sectionTitle')}</h2>
         <RolesMatrix workspaceId={workspace.id} />
+      </section>
+      {/* label-property.md §4.1:标签与自定义字段管理入口(独立设置子页) */}
+      <section aria-label={t('labels.sectionTitle')}>
+        <h2>{t('labels.sectionTitle')}</h2>
+        <p>
+          <Link to={`/w/${workspace.slug}/settings/labels`} data-testid="ws-labels-link">
+            {t('labels.pageTitle')}
+          </Link>
+        </p>
+        <p>
+          <Link to={`/w/${workspace.slug}/settings/custom-fields`} data-testid="ws-fields-link">
+            {t('fields.pageTitle')}
+          </Link>
+        </p>
       </section>
       {/* auth.md §4.3 API Tokens(明文仅一次)与 §4.4 审计(admin+) */}
       <ApiTokensSettings client={getApiClient()} workspaceId={workspace.id} />

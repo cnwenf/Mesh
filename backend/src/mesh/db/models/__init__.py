@@ -2,6 +2,7 @@
 
 from mesh.db.models.api_token import ApiToken
 from mesh.db.models.audit import AuditLog
+from mesh.db.models.label import CustomFieldDef, CustomFieldOption, Label
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
@@ -32,9 +33,12 @@ from mesh.db.models.workspace import (
 __all__ = [
     "ApiToken",
     "AuditLog",
+    "CustomFieldDef",
+    "CustomFieldOption",
     "Cycle",
     "EmailVerificationToken",
     "IdentifierPrefixRegistry",
+    "Label",
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",

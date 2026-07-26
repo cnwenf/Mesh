@@ -3,6 +3,30 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.0] - 2026-07-26
+
+label-property 标签与自定义属性**定义层**(label-property.md §2–§4 定义层切片,MES-42,阶段 4·核心工作,与 issue 模块修复并行):标签、自定义字段定义、枚举选项三张表的模型 / 接口 / 实时 / 管理 UI 全量落地,issue 关联随后续增量。
+
+### Added
+
+- **数据模型(§2 定义层)**:`labels`(工作区级 OR 项目级视觉标签)、`custom_field_defs`(十种封闭字段类型 + 按类型 JSONB `config`/`default_value`)、`custom_field_options`(枚举选项);作用域内命名唯一一律用 README §6.3 **部分表达式唯一索引**(`CREATE UNIQUE INDEX … ON …(workspace_id, COALESCE(project_id, '0000…'), name|field_key)`——COALESCE 不写进表级 `UNIQUE`),三表均 `UNIQUE(workspace_id, id)` 供复合 FK 引用、`project_id`/`field_def_id` 同租户复合 FK、fail-closed RLS;迁移 0008 为 workspace-less 路径(`/labels/{id}`、`/custom-fields/{id}`…)登记窄 SECURITY DEFINER 解析函数并授予 `mesh_app`。
+- **接口(§3.1 定义层端点)**:标签与字段定义的列表(游标分页 + `project_id`/`is_active` 过滤、列表含工作区级)、创建、PATCH(If-Match 乐观并发)、删除;字段定义创建可携初始枚举选项;选项增删改与停用;§6.14 成功包络 / 错误信封;具名错误码 `400 validation_error`、`409 label_name_taken` / `field_key_taken` / `conflict`、`422 invalid_field_config`(按类型 config/default 非法)/ `field_inactive`(向已停用字段写值或加选项)、`403`(非 admin 且非该项目 lead)。写端点限流(120/min)。
+- **类型校验(§1.3/§2.4)**:十种字段类型注册;number 校验 `config` 的 precision/unit/min/max、date 的 format、url 的 require_https;`default_value` 按类型校验形状(含 number 边界与精度、枚举默认须为 active 选项 id、member 不允许默认);`required_on` 元素须匹配 `save|status:<category>`。
+- **实时(§3.5/§6.7)**:`label.created/updated/deleted` · `custom_field.updated`(含 created/updated/deleted 的 change 标记)· `custom_field_option.updated`——事件名取自 §6.7 注册表(已登记),经 outbox → realtime projector 唯一写入路径;工作区级走 `workspace:{ws}:labels`/`workspace:{ws}:custom_fields`,项目级走 `project:{id}`(私有项目事件只进该频道,公开项目双发),与 project 模块同款资源级订阅授权。
+- **鉴权(§3.4)**:读需工作区成员;定义写需工作区 admin/owner 或(项目级时)该项目 lead;guest 列表仅见公开项目与已授权项目定义。
+- **前端管理 UI(§4)**:工作区设置新增标签 / 自定义字段两个子页(`/w/:slug/settings/labels`、`/w/:slug/settings/custom-fields`),项目设置内嵌项目级标签 / 字段面板;列表(色点 + hex 文本 + 作用域/必填/状态徽章 + 操作)、新建/编辑对话框(颜色选择器 = 预设色板单选 + 自定义 hex,色块不作唯一信号)、枚举选项编辑器(增删改/配色/停用)、删除二次确认;设计系统就地实现颜色选择器;错误经 `errorToI18nKey` 映射;`label.*`/`custom_field*` 实时帧失效列表缓存;i18n 全外部化(en + zh-CN,新增 83 键含 4 个具名错误码)。
+
+### Deferred(issue 关联,随 issue.md 增量,门控 MES-31 合入)
+
+- `issue_labels` 多对多、`issue_custom_field_values` EAV 与 §2.7 值索引(`(field_def_id, value_*)` 部分索引 / GIN)、issue 详情侧栏标签选择器与自定义字段编辑器、`POST /labels/{id}/merge`、`issue.labels_changed` / `issue.custom_field_changed` 事件、必填字段在状态流转的校验钩子、§2.8 代表性 EXPLAIN 性能验收;删除选项时按 §4.5 对既有值的解析(multi 移除/single 置空)随值层一并落地。
+
+### Quality
+
+- 后端:单测(服务层直调)+ 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验 + outbox → projector 投影)全绿;pytest-cov **95%**(≥90% 门禁;`mesh/labels` 服务 94%、路由/模型整体双达标);ruff 全绿;`tests/unit/test_model_migration_drift.py` 证明 ORM 模型与迁移(含 §6.3 表达式唯一索引)无漂移,`tests/docs/check_event_vocab.py` 词汇零漂移。
+- README §9 集成测试实测:**T1** 跨租户复合 FK 在 INSERT 即拒(labels 跨工作区引用项目、options 跨工作区引用字段定义)+ 跨工作区 API 404;**RLS 纵深**在 `mesh_app` 角色下跨租户读为空、写被拒;`schema_r2_validation.sql` 在 PostgreSQL 16 实跑全绿。
+- 前端:1111 项单测/组件测试全绿,覆盖率 语句 97.47% / 分支 91.71% / 函数 94.41%(门禁 ≥90%);typecheck / lint / 生产构建全绿;`real-labels` 真实后端 Playwright 走查(注册/登录 → 建区 → 工作区设置标签 CRUD + 重名 409 + 编辑 → 字段创建带枚举选项 + 非法 key 校验 + 停用 + 选项编辑器 → 项目设置项目级标签/字段 → 删除二次确认)全绿,12 张截图随 PR 提交至 `frontend/e2e/evidence/labels/`(可复现),且经 SQL 复核落库 + 实时投影(seq 单调);zh-CN 目录补齐 83 键,键集与 en 完全一致。
+- docker compose Quick Start 实机验证:本地 compose 栈 `alembic upgrade head` 应用 0008,注册/登录 → 建区 → 标签/字段定义 CRUD 全链路通过,`label.created` 经 outbox → projector 投影至双频道。
+
 ## [0.10.3] - 2026-07-26
 
 安全建议排期池(MES-23)首批落地:M3 / M4 两项 MEDIUM 与 L1 / L2 / L3 / L5 / L7 五项 LOW 逐项闭环(M5 已由 MES-34 闭环,L4 / L6 为已知行为记录不动)。每项独立小步提交、单测 + 真实 e2e 全覆盖。
