@@ -33,6 +33,12 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('nav-home').className).not.toContain('mesh-sidebar__link--active');
   });
 
+  it('选中视图路由 /views/{id} 下看板入口保持激活(§4.2 URL 同步)', () => {
+    renderWithProviders(<Sidebar />, { route: '/views/v1' });
+    expect(screen.getByTestId('nav-board').className).toContain('mesh-sidebar__link--active');
+    expect(screen.getByTestId('nav-home').className).not.toContain('mesh-sidebar__link--active');
+  });
+
   it('根路由下仅首页激活(精确匹配,不吞并子路由)', () => {
     renderWithProviders(<Sidebar />, { route: '/' });
     expect(screen.getByTestId('nav-home').className).toContain('mesh-sidebar__link--active');

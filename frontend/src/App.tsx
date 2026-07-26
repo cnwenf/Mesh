@@ -20,6 +20,7 @@ import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
+import { BoardPage } from './features/board/BoardPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
 import { IssueDetailPage } from './features/issues/IssueDetailPage';
@@ -120,7 +121,10 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
                 <Route path="issues" element={<IssuesPage />} />
                 <Route path="issues/:issueId" element={<IssueDetailPage />} />
-                <Route path="board" element={<PlaceholderPage kind="board" />} />
+                {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
+                    选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}
+                <Route path="board" element={<BoardPage />} />
+                <Route path="views/:viewId" element={<BoardPage />} />
                 <Route path="members" element={<MembersPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />

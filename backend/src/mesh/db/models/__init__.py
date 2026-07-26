@@ -29,6 +29,7 @@ from mesh.db.models.user import (
     Session,
     User,
 )
+from mesh.db.models.view import View
 from mesh.db.models.workspace import (
     IdentifierPrefixRegistry,
     Workspace,
@@ -66,6 +67,7 @@ __all__ = [
     "RealtimeEvent",
     "Session",
     "User",
+    "View",
     "Workspace",
     "WorkspaceInvitation",
     "WorkspaceInvitationRedemption",

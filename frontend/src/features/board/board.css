@@ -1,0 +1,358 @@
+/* 看板页面 shell 样式(kanban.md §4):颜色一律经语义 token(README §6.12,
+   暗色模式以暗色 token 集整体替换)。 */
+
+.mesh-board {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: var(--space-4);
+  align-items: start;
+  min-height: 60vh;
+}
+
+.mesh-board__skeleton {
+  min-height: 40vh;
+}
+
+/* --- 视图切换器(左栏) --- */
+.mesh-view-switcher__list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-view-switcher__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mesh-view-switcher__entry {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: start;
+  font: inherit;
+}
+
+.mesh-view-switcher__entry:hover {
+  background: var(--color-surface);
+}
+
+.mesh-view-switcher__entry--active {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  font-weight: 600;
+}
+
+.mesh-view-switcher__default {
+  color: var(--color-warn);
+}
+
+.mesh-view-switcher__menu-trigger {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.mesh-view-switcher__menu {
+  position: absolute;
+  inset-inline-start: var(--space-4);
+  top: 100%;
+  z-index: 10;
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+}
+
+.mesh-view-switcher__menu button {
+  display: block;
+  width: 100%;
+  text-align: start;
+  border: none;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.mesh-view-switcher__menu button:hover {
+  background: var(--color-surface);
+}
+
+.mesh-view-switcher__danger {
+  color: var(--color-danger) !important;
+}
+
+.mesh-view-switcher__dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 320px;
+}
+
+.mesh-view-switcher__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-view-switcher__dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* --- 主区工具条 --- */
+.mesh-board__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.mesh-board__title {
+  font-size: var(--font-size-lg);
+  margin: 0;
+}
+
+.mesh-board__layout-chip {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
+.mesh-board__toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+/* --- 保存条 --- */
+.mesh-board__save-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-warn);
+  border-radius: var(--radius-md);
+}
+
+.mesh-board__save-hint {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+  margin-inline-end: auto;
+}
+
+.mesh-board__dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 320px;
+}
+
+.mesh-board__dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* --- 配置面板 --- */
+.mesh-filter-panel,
+.mesh-sort-panel,
+.mesh-wip-panel {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.mesh-filter-panel__group {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  margin: 0 0 var(--space-2);
+}
+
+.mesh-filter-panel__legend select {
+  font: inherit;
+}
+
+.mesh-filter-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.mesh-filter-panel__nested {
+  margin: var(--space-2) 0 var(--space-2) var(--space-4);
+}
+
+.mesh-filter-panel__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-filter-panel__meta {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin: var(--space-2) 0 0;
+}
+
+.mesh-sort-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.mesh-sort-panel__empty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-wip-panel__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.mesh-wip-panel__label {
+  min-width: 10rem;
+  font-weight: 600;
+}
+
+/* --- 列容器 --- */
+.mesh-board__columns {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  margin-top: var(--space-4);
+  padding-bottom: var(--space-3);
+}
+
+.mesh-board__column {
+  min-width: 260px;
+  max-width: 300px;
+  flex: 1 0 260px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.mesh-board__column-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.mesh-board__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-info);
+}
+
+/* 状态类别语义色(经语义 token;暗色集整体替换) */
+.mesh-board__dot--backlog { background: var(--color-text-muted); }
+.mesh-board__dot--todo { background: var(--color-info); }
+.mesh-board__dot--in_progress { background: var(--color-primary); }
+.mesh-board__dot--in_review { background: var(--color-warn); }
+.mesh-board__dot--blocked { background: var(--color-danger); }
+.mesh-board__dot--done { background: var(--color-success); }
+.mesh-board__dot--cancelled { background: var(--color-text-muted); }
+.mesh-board__dot--urgent { background: var(--color-danger); }
+.mesh-board__dot--high { background: var(--color-warn); }
+.mesh-board__dot--medium { background: var(--color-info); }
+.mesh-board__dot--low { background: var(--color-text-muted); }
+.mesh-board__dot--none { background: var(--color-border); }
+
+.mesh-board__column-name {
+  font-weight: 600;
+}
+
+.mesh-board__count {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-board__wip {
+  font-size: var(--font-size-sm);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+  color: var(--color-text-muted);
+}
+
+/* WIP 超限:颜色不作为唯一信号(徽章文字 count/limit 始终呈现,§6.12) */
+.mesh-board__wip--warn {
+  background: var(--color-warn);
+  color: var(--color-warn-contrast);
+}
+
+.mesh-board__wip--block {
+  background: var(--color-danger);
+  color: var(--color-danger-contrast);
+}
+
+.mesh-board__collapse {
+  margin-inline-start: auto;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.mesh-board__column-body {
+  padding: var(--space-3);
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-board__quick-add {
+  margin-top: auto;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: var(--space-2);
+  cursor: not-allowed;
+  font: inherit;
+}

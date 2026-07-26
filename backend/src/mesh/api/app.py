@@ -58,6 +58,8 @@ from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
 )
+from mesh.views.routes import router as view_router
+from mesh.views.service import ViewService
 from mesh.workspace.invitations import InvitationService
 from mesh.workspace.routes import router as workspace_router
 from mesh.workspace.service import WorkspaceService
@@ -150,6 +152,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.bulk_service = BulkService(app.state.issue_service, app.state.move_service)
     app.state.template_service = TemplateService(app.state.issue_service)
     app.state.label_service = LabelService(session_factory)
+    app.state.view_service = ViewService(session_factory)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -167,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(project_router)
     app.include_router(issue_router)
     app.include_router(label_router)
+    app.include_router(view_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

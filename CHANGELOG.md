@@ -3,6 +3,24 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.6] - 2026-07-26
+
+kanban 看板与视图的 **views 定义层**(issue 无耦合独立切片,MES-43,阶段 4·核心工作):`views` 表 + 视图 CRUD + 配置 PATCH + WIP 配置 + 侧栏排序 + `view.updated` 事件 + 看板页面 shell。投影执行 / 每视图排序 / 原子 move + WIP 强制 / 实时增量合并属 issue 耦合增量(MES-33 余量)。
+
+### Added
+
+- **数据模型(kanban.md §2.2/§2.8,README §6.2/§6.3)**:`views` 表以 JSONB 持久化投影配置(filters / group_by / sub_group_by / sort / display_fields / board_settings),不持久化任何 issue 集合;`CHECK` 约束 layout / visibility / name 长度;`UNIQUE(workspace_id, id)` 复合 FK 引用目标;同租户复合 FK `(workspace_id, project_id)→projects`、`(workspace_id, owner_member_id)→members`(均 ON DELETE CASCADE);作用域命名唯一 `uq_views_name` 与每作用域默认视图唯一 `uq_views_default` 均为 **部分表达式唯一索引**(`COALESCE(project_id, nil-uuid)`,§6.3 禁止 COALESCE 写进表级 UNIQUE);RLS 纵深防御 `mesh_views_tenant` + 窄 SECURITY DEFINER 解析器 `mesh_view_workspace_id`(无工作区前缀路径)。Alembic 迁移 `0011_views`(后合入方重编号:0009/0010 已由 issue 模块占用,0001→0011 单 head 线性链)。
+- **REST 端点(kanban.md §3.1 独立子集,README §6.14)**:`GET/POST /workspaces/{ws}/views`、`GET/PATCH/DELETE /views/{id}`、`POST /views/{id}/duplicate`、`PATCH /views/{id}/wip`、`PATCH /workspaces/{ws}/views/reorder`;列表游标分页 `(position, id)`;写操作 `If-Match: <updated_at>` 乐观并发(`409 conflict`);配置 JSONB 落库前白名单校验(filters 字段/操作符矩阵、嵌套 ≤3 / 条件 ≤20 → `filter_too_complex`、group_by/sort/board_settings/display_fields 具名码);私有视图仅 owner 可见(他人读 404 / 写 403),共享视图读=工作区成员(项目作用域叠加项目可见性)、写=owner/admin/项目 lead;写路径限流。
+- **实时事件(§6.6/§6.7)**:`view.updated` 经 outbox → realtime projector 唯一写入路径,广播 `view:{id}` + `workspace:{ws}:views` 频道;删除以 `view.updated` + `deleted:true` 帧广播(注册表无 `view.deleted`)。
+- **前端看板页面 shell(kanban.md §4,README §6.12/§6.18)**:`features/board` —— 视图切换器(列表/新建对话框/重命名/复制/设默认/删除菜单)、按 `group_by` + `board_settings` 派生列骨架(state_category 7 列 / priority 5 列 / 动态分组占位,列体按 §6.12 空态呈现,不接真实 issue 数据)、筛选配置面板(AND/OR 嵌套)、排序配置面板、WIP 配置面板(limit + warn/block 即时持久化)、未保存改动保存条(保存/另存/丢弃)、URL 同步 `/views/{id}`、§6.12 全异常态(loading/empty/error/permission);i18n 文案全外部化 en + zh-CN(846 键,版本哈希同步)。
+
+### Quality
+
+- 后端:新增 `mesh/views` 模块单测(配置校验器 / 服务层 / 进程内 API)+ 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真:CRUD 落库 / 配置校验 / T1 跨租户 404 + 复合 FK INSERT 拒绝 / RLS fail-closed 与租户可见 / `view.updated` outbox / If-Match 409 / 默认视图唯一);`pytest-cov` 新增模块 93–100%、整体 95.09%(≥90% 门禁,整体与新增代码双达标);全新库 `alembic upgrade head` 0001→0011 单 head 链实测通过;ruff(lockfile 0.16.0)全绿;文档词汇 / 名册守卫、`schema_r2_validation.sql` 全新库全绿。
+- 前端:board 组件单测(vitest)+ Playwright 真实后端走查(注册/登录 → 建区 → 空态 → 新建视图 → 列骨架 → 分组切换持久化 → WIP 徽章 → 筛选 → 保存/重载保留 → 复制 → 折叠,8 张截图存证 `e2e/evidence/board`,切换后 URL 为 `/views/{id}`);vitest 1237 例全绿,全局四项(语句/分支/函数/行)**97.22% / 90.81% / 92.89% / 97.22%** 门禁全绿,board 模块语句 **96.21%**;typecheck / lint 0 错、生产构建全绿;mock e2e 门禁套件 30 通过(`real-board` 经独立 `playwright.mes43.config.ts` 运行,不占 mock 配置)。
+- 缺陷修复:BoardPage 在工作区加载失败路径因 `toastError` 依赖 toast 上下文引用导致挂载 effect 无限渲染循环,改经 `addToastRef` 持有 `addToast` 切断依赖闭环。
+- 文档同步:README 实现状态表新增 kanban views 定义层行(issue 模块行并存);实施计划归档 `docs/superpowers/plans/2026-07-26-kanban-views-definition-layer.md`。
+
 ## [0.11.5] - 2026-07-26
 
 MES-31 验收第四轮修复(MES-45 隔离派发):命令面板搜索全瘫一行修复 + 导航标签映射编译期防呆 + 依赖创建路径标识符解析。
@@ -137,6 +155,7 @@ label-property 标签与自定义属性**定义层**(label-property.md §2–§4
 - README §9 集成测试实测:**T1** 跨租户复合 FK 在 INSERT 即拒(labels 跨工作区引用项目、options 跨工作区引用字段定义)+ 跨工作区 API 404;**RLS 纵深**在 `mesh_app` 角色下跨租户读为空、写被拒;`schema_r2_validation.sql` 在 PostgreSQL 16 实跑全绿。
 - 前端:1111 项单测/组件测试全绿,覆盖率 语句 97.47% / 分支 91.71% / 函数 94.41%(门禁 ≥90%);typecheck / lint / 生产构建全绿;`real-labels` 真实后端 Playwright 走查(注册/登录 → 建区 → 工作区设置标签 CRUD + 重名 409 + 编辑 → 字段创建带枚举选项 + 非法 key 校验 + 停用 + 选项编辑器 → 项目设置项目级标签/字段 → 删除二次确认)全绿,12 张截图随 PR 提交至 `frontend/e2e/evidence/labels/`(可复现),且经 SQL 复核落库 + 实时投影(seq 单调);zh-CN 目录补齐 83 键,键集与 en 完全一致。
 - docker compose Quick Start 实机验证:本地 compose 栈 `alembic upgrade head` 应用 0008,注册/登录 → 建区 → 标签/字段定义 CRUD 全链路通过,`label.created` 经 outbox → projector 投影至双频道。
+
 
 ## [0.10.3] - 2026-07-26
 
