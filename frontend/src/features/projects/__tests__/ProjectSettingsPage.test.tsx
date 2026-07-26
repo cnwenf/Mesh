@@ -4,7 +4,7 @@
  * 自动收敛(重取 + 重放)并提示 conflictToast;成员管理(列表/添加/改角色/移除);
  * 危险区归档切换与删除二次确认。
  */
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Routes, Route } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -649,5 +649,70 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
     await screen.findByText('Loading…');
     expect(calls.some((c) => c.url.includes('/users/me'))).toBe(true);
     expect(calls.some((c) => c.url.includes('/projects/'))).toBe(false);
+  });
+});
+
+describe('ProjectSettingsPage 加载竞态守卫(MES-30 覆盖加固)', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('组件卸载后到达的 /users/me 与项目加载结果被丢弃(cancelled 守卫)', async () => {
+    // 场景一:/users/me 成功结果在卸载后到达
+    let resolveMe: (response: Response) => void = () => undefined;
+    const pendingMe = new Promise<Response>((resolve) => {
+      resolveMe = resolve;
+    });
+    const implMe = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return pendingMe;
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implMe);
+    const first = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
+      </Routes>,
+      { route: '/projects/prj-1/settings' },
+    );
+    await screen.findByText('Loading…');
+    first.unmount();
+    await act(async () => {
+      resolveMe(fakeResponse({ body: { data: ME } }));
+    });
+    expect(first.container.innerHTML).toBe('');
+
+    // 场景二:项目加载失败结果在卸载后到达
+    let rejectProject: (err: Error) => void = () => undefined;
+    const pendingProject = new Promise<Response>((_, reject) => {
+      rejectProject = reject;
+    });
+    const implProject = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) {
+        return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
+      }
+      return pendingProject;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', implProject);
+    const second = renderWithProviders(
+      <Routes>
+        <Route path="/projects" element={<div data-testid="projects-list-page" />} />
+        <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
+      </Routes>,
+      { route: '/projects/prj-1/settings' },
+    );
+    await screen.findByText('Loading…');
+    second.unmount();
+    await act(async () => {
+      rejectProject(new Error('late failure'));
+      await Promise.resolve();
+    });
+    expect(second.container.innerHTML).toBe('');
   });
 });
