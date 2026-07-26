@@ -162,31 +162,42 @@ async def test_bool_and_negative_resume_from_rejected_over_real_ws(
 async def test_frame_flood_is_rate_limited_and_connection_closed(
     gateway_server, workspace_factory
 ):
-    """A client flooding frames past the per-second budget gets one
-    rate_limited error frame and is dropped — not serviced indefinitely."""
+    """A client flooding frames past the per-second budget is served exactly
+    the budget, then gets one rate_limited error frame and is dropped."""
     workspace = await workspace_factory()
     ws = await _ws_connect(gateway_server)
     try:
         await ws.send(json.dumps({"op": "auth", "token": f"mesh-dev:{workspace.id}"}))
         assert (await _recv_frame(ws))["op"] == "auth_ok"
 
-        # Default budget is 30 frames/rolling second — flood well past it.
-        for _ in range(60):
-            await ws.send(json.dumps({"op": "ping"}))
+        # A real client reads while it writes — drain concurrently so the
+        # server's pongs and the final error frame are consumed as they land.
+        received: list[dict] = []
+        closed = asyncio.Event()
 
-        saw_rate_limited = False
+        async def _reader() -> None:
+            with contextlib.suppress(websockets.ConnectionClosed):
+                while True:
+                    received.append(await _recv_frame(ws, timeout=15))
+            closed.set()
+
+        reader = asyncio.create_task(_reader())
         with contextlib.suppress(websockets.ConnectionClosed):
-            for _ in range(100):
-                frame = await _recv_frame(ws, timeout=10)
-                if frame.get("code") == "rate_limited":
-                    saw_rate_limited = True
-                    break
-        assert saw_rate_limited
+            for _ in range(200):  # default budget is 30/rolling second
+                await ws.send(json.dumps({"op": "ping"}))
+                await asyncio.sleep(0)
+        await asyncio.wait_for(closed.wait(), timeout=15)
+        reader.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reader
 
-        # The server closes the connection right after the error frame.
-        with pytest.raises(websockets.ConnectionClosed):
-            while True:
-                await _recv_frame(ws, timeout=10)
+        codes = [f.get("code") for f in received if f.get("op") == "error"]
+        pongs = sum(1 for f in received if f.get("op") == "ping")
+        # The flood is NOT fully serviced: roughly the per-second budget (30,
+        # exact semantics pinned by the fake-clock unit tests) and then the
+        # drop. A small band tolerates the rolling window sliding under load.
+        assert codes == ["rate_limited"], f"codes={codes} pongs={pongs}"
+        assert 25 <= pongs <= 40, f"pongs={pongs}"
     finally:
         with contextlib.suppress(Exception):
             await ws.close()
