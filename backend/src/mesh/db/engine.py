@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -31,6 +32,21 @@ def falls_back_to_owner(settings: Settings) -> bool:
     return settings.app_database_url is None
 
 
+def statement_timeout_connect_args(settings: Settings) -> dict[str, Any]:
+    """asyncpg connect args enforcing a per-statement timeout on app sessions.
+
+    Backstop for the API/gateway request path (L7): a runaway query is
+    cancelled by PostgreSQL instead of holding a connection and a client
+    request indefinitely. The worker path (relay / projector / retention) is
+    deliberately exempt — its loops run long-lived cross-tenant maintenance.
+    ``0`` disables the timeout.
+    """
+    timeout_ms = int(settings.app_statement_timeout.total_seconds() * 1000)
+    if timeout_ms <= 0:
+        return {}
+    return {"server_settings": {"statement_timeout": str(timeout_ms)}}
+
+
 def create_app_engine_from_settings(settings: Settings) -> AsyncEngine:
     """Engine for the API/gateway app path (restricted role → RLS applies)."""
     if falls_back_to_owner(settings):
@@ -41,7 +57,11 @@ def create_app_engine_from_settings(settings: Settings) -> AsyncEngine:
             "database role, so PostgreSQL RLS will not be enforced on app "
             "connections. Set it to the restricted mesh_app role URL."
         )
-    return create_async_engine(app_database_url(settings), pool_pre_ping=True)
+    return create_async_engine(
+        app_database_url(settings),
+        pool_pre_ping=True,
+        connect_args=statement_timeout_connect_args(settings),
+    )
 
 
 def create_engine(database_url: str) -> AsyncEngine:

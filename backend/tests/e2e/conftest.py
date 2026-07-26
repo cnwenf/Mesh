@@ -71,6 +71,10 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
             str(port),
             "--log-level",
             "warning",
+            # Mirror the compose gateway deployment (Settings.ws_max_size_bytes):
+            # the transport-level frame ceiling is part of the contract under test.
+            "--ws-max-size",
+            "65536",
         ],
         env=env,
         stdout=subprocess.PIPE,

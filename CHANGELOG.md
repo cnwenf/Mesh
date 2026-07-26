@@ -3,7 +3,7 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.11.4] - 2026-07-26
+## [0.11.5] - 2026-07-26
 
 MES-31 验收第四轮修复(MES-45 隔离派发):命令面板搜索全瘫一行修复 + 导航标签映射编译期防呆 + 依赖创建路径标识符解析。
 
@@ -20,7 +20,7 @@ MES-31 验收第四轮修复(MES-45 隔离派发):命令面板搜索全瘫一行
 - 后端:ruff `backend/src backend/tests` 全绿;`pytest --cov --cov-fail-under=90` 全绿,**整体覆盖率 95.28%**;真实 PostgreSQL 16 + Redis 下含依赖 POST 标识符解析回归。
 - 真实 UI 实操(Playwright + chromium):Ctrl+K 输入 `issues`/`home` 实时命中、Enter 跳 `/issues`,零 console error,截图留证于 `frontend/e2e/evidence/`(mes45-palette-search-issues / mes45-palette-nav-issues / mes45-palette-search-home)。
 
-## [0.11.3] - 2026-07-26
+## [0.11.4] - 2026-07-26
 
 MES-31 验收第三轮整改(MES-44 隔离派发):跨项目迁移预览完整性 + 严格模式被禁流转的就地回滚/i18n 闭环。
 
@@ -34,7 +34,7 @@ MES-31 验收第三轮整改(MES-44 隔离派发):跨项目迁移预览完整性
 - 前端:vitest **1113 项全绿**,变更行覆盖率 **92.1%**(≥90% 门禁 PASS),typecheck/lint/生产构建全绿。
 - 真实 UI 实操(Playwright + chromium,真实当前源码后端 + 真实 DB):迁移预览(标明目标项目 + 映射/清除并列、仅清除两场景)、严格模式(zh-CN 中文 toast + select 就地回滚 + strict 关闭放行),零 console error,截图留证于 `frontend/e2e/evidence/`。
 
-## [0.11.2] - 2026-07-26
+## [0.11.3] - 2026-07-26
 
 MES-31 验收第二轮整改:阻塞项 B1–B6 与必修 MEDIUM 全量闭环。
 
@@ -45,7 +45,7 @@ MES-31 验收第二轮整改:阻塞项 B1–B6 与必修 MEDIUM 全量闭环。
 - **B3 · sort=due_date 分页 500**:NULL due_date 的 keyset 分页改为方向相关哨兵(`COALESCE(due_date, sentinel)`,两方向 NULL 均排末尾),游标编解码 NULL 安全;补回归(跨 NULL 边界翻页、全 NULL 页边界)。
 - **B4 · ?mine=true 首载竞态**:load 等待本人 member id 解析后再发请求(member id 未解析时不发过滤请求),`matchesFilters` 水位在 id 未知时排除全部;首载请求即携带 `assignee_id`(补回归断言请求 URL)。
 - **B5 · 详情页非 409 PATCH 错误静默**:`patchAndToast` 捕获非乐观锁冲突(403/422/409 `invalid_status_transition` 等),显示具名错误 toast 并重取回滚乐观状态。
-- **B6 · 严格模式状态流转**:见 [0.11.1] —— 迁移 0009 `issue_statuses.allowed_transitions` + 工作区设置 `status_strict_mode` + 409 `invalid_status_transition`;真实 e2e + 真实 UI 实操(禁止转换具名 toast、配置转换放行)。
+- **B6 · 严格模式状态流转**:见 [0.11.2] —— 迁移 0010 `issue_statuses.allowed_transitions` + 工作区设置 `status_strict_mode` + 409 `invalid_status_transition`;真实 e2e + 真实 UI 实操(禁止转换具名 toast、配置转换放行)。
 - **必修1 · 批量畸形 UUID 500**:changes 内 status_id/assignee_id/cycle_id/project_id 统一经 `_parse_uuid` 映射为逐条 422 `validation_error`(非 500 毒化整事务);project_id 畸形在预览分支请求级 400。补回归。
 - **必修2 · list_children 游标不一致**:排序与游标统一为 `(created_at, id)`,翻页无跳行/重复。补回归(5 子项 limit 2 全量无重无漏)。
 - **必修3 · 非 OCC PATCH 丢更新**:`update_issue` 一律 `FOR UPDATE` 行锁(不再仅限带 version/If-Match),关闭裸 PATCH 并发的 version+1 丢写窗口。
@@ -66,15 +66,15 @@ MES-31 验收第二轮整改:阻塞项 B1–B6 与必修 MEDIUM 全量闭环。
 - 后端:pytest-cov **95%**(双达标),全量单测 + 真实 e2e 全绿,`ruff check backend/src backend/tests` 全绿。
 - 前端:vitest **1110 项全绿**(语句 97.06% / 分支 90.53%,≥90% 门禁),变更行覆盖率 91.8%,typecheck/lint/生产构建全绿。
 - 真实 UI 实操(Playwright + chromium,真实 API + 真实 DB,两轮):v1 全流程 + R2 整改面(描述/估算/起始日编辑、迁移预览对话框确认迁移且编号不变、快速创建展开、严格模式 UI 双向、依赖标识符解析),均零 flake;迁移对话框与严格模式 toast 截图留证。
-- 纠错:[0.11.0] 完工评论「ruff 全绿」声明以 `backend/src` 为范围,未覆盖 `backend/tests`(CI 原命令含 tests),本版修复后 CI 原命令全绿。
+- 纠错:[0.11.1] 完工评论「ruff 全绿」声明以 `backend/src` 为范围,未覆盖 `backend/tests`(CI 原命令含 tests),本版修复后 CI 原命令全绿。
 
-## [0.11.1] - 2026-07-26
+## [0.11.2] - 2026-07-26
 
 MES-31 验收打回整改:HIGH-1 严格模式状态流转 + MEDIUM-1/2/3 详情页 UI 补全。
 
 ### Added
 
-- **严格模式状态流转(HIGH-1,issue.md §3.4/§4.4/§5.2,迁移 0009)**:
+- **严格模式状态流转(HIGH-1,issue.md §3.4/§4.4/§5.2,迁移 0010)**:
   - `issue_statuses.allowed_transitions JSONB NOT NULL DEFAULT '[]'`(「允许的下一步」目标状态 id 数组;`CHECK jsonb_typeof='array'`)——§4.4「严格模式可在状态定义上配置允许的下一步」的存储载体(Spec §2.2 原未给出存储列,本次补齐并同步修订 Spec §2.2 与 validation SQL)。
   - 工作区设置 `settings.status_strict_mode`(bool,默认 false)为总开关(workspace 设置键类型校验同步接入)。
   - PATCH issue 状态变更在严格模式下校验:目标须在当前状态 `allowed_transitions` 列表中(空数组 = 不可转出),违规 409 `invalid_status_transition`(details 携带 from/to/allowed);默认模式自由流转不变;系统驱动的迁移状态映射(§3.8)不受约束。
@@ -87,17 +87,17 @@ MES-31 验收打回整改:HIGH-1 严格模式状态流转 + MEDIUM-1/2/3 详情�
 
 ### Quality
 
-- 后端:pytest-cov 95%(双达标),含迁移 0009 的全链单测/e2e 全绿,ruff 全绿。
+- 后端:pytest-cov 95%(双达标),含迁移 0010 的全链单测/e2e 全绿,ruff 全绿。
 - 前端:vitest 1104 项全绿(语句 96.91% / 分支 90.48%,≥90% 门禁),typecheck/lint/构建全绿。
 - 真实 UI 实操(Playwright + chromium,真实 API + 真实 DB,两轮):v1 全流程(登录/空态/连续创建/搜索/详情编辑/依赖成环/批量)+ v2 整改面(描述/估算/起始日编辑、迁移预览对话框确认迁移且编号不变、快速创建展开、严格模式 UI 双向),均零 flake,截图留证(迁移对话框 + 严格模式 toast)。
 
-## [0.11.0] - 2026-07-26
+## [0.11.1] - 2026-07-26
 
 issue 模块全功能实现(MES-31,issue.md 五章:数据模型 / 接口 / UI/UX / 实时 / 验收,全系统核心实体)。
 
 ### Added
 
-- **数据模型(issue.md §2,migration 0008)**:`issue_statuses`(双层状态的展示层;`category` 稳定语义;部分表达式唯一索引 `uq_issue_statuses_name` / `uq_issue_statuses_default`(COALESCE 作用域)+ `uq_issue_statuses_ws_id` 复合 FK 引用键)、`issues`(不可变编号三元组 `identifier_namespace_key`/`number`/`identifier` + 双重唯一 `uq_issue_namespace_number` / `uq_issues_identifier`、乐观并发 `version`、软删除保留编号、§2.3 全部性能索引)、`issue_dependencies`(有向图,`UNIQUE(issue_id,depends_on_id,type)` 防重边)、`issue_activity`(逐字段 old/new 留痕)、`issue_templates`(§3.9,作用域内名称唯一 + 创建者 RESTRICT)。全部跨模块引用为同租户复合 FK(README §6.2),可空引用一律 PG16 列级 `ON DELETE SET NULL (<列>)`(§6.2 第 6 条),`status_id` RESTRICT,父子为复合自引用 FK(§6.2 第 7 条);5 张表启用 fail-closed RLS + SECURITY DEFINER 工作区解析函数(无工作区前缀路径)。
+- **数据模型(issue.md §2,migration 0009)**:`issue_statuses`(双层状态的展示层;`category` 稳定语义;部分表达式唯一索引 `uq_issue_statuses_name` / `uq_issue_statuses_default`(COALESCE 作用域)+ `uq_issue_statuses_ws_id` 复合 FK 引用键)、`issues`(不可变编号三元组 `identifier_namespace_key`/`number`/`identifier` + 双重唯一 `uq_issue_namespace_number` / `uq_issues_identifier`、乐观并发 `version`、软删除保留编号、§2.3 全部性能索引)、`issue_dependencies`(有向图,`UNIQUE(issue_id,depends_on_id,type)` 防重边)、`issue_activity`(逐字段 old/new 留痕)、`issue_templates`(§3.9,作用域内名称唯一 + 创建者 RESTRICT)。全部跨模块引用为同租户复合 FK(README §6.2),可空引用一律 PG16 列级 `ON DELETE SET NULL (<列>)`(§6.2 第 6 条),`status_id` RESTRICT,父子为复合自引用 FK(§6.2 第 7 条);5 张表启用 fail-closed RLS + SECURITY DEFINER 工作区解析函数(无工作区前缀路径)。
 - **编号(§2.4 / §5.1 / T15)**:有项目 issue 行锁自增 `projects.issue_seq`(绑定创建时所属项目的 key 命名空间),无项目 issue 行锁自增 `workspaces.inbox_issue_seq` + 收件箱保留前缀(`workspaces.settings.inbox_issue_prefix`,默认 WS);`identifier` 一经生成永不改变——跨项目迁移只改 `project_id`,不重编号、不占用目标计数器;删除仅置 `deleted_at`,计数器不回退,编号永不复用。
 - **双层状态(§1.2.3 / §5.2)**:状态 CRUD(作用域内名称唯一、每作用域唯一默认);创建/更新 issue 时服务层同步 `state_category` 冗余列;进入 done 写 `completed_at`、离开清空;工作区创建事务播种 7 个规范状态(默认 Todo),项目创建事务自检补齐(每作用域恰一默认,README §6.3)。
 - **接口(§3.1 全端点)**:CRUD(UUID 与 `by-identifier/<编号>` 双寻址)/ 子项与进度 / 依赖图增删查 / 跨项目迁移两步式(`move-preview` 返回映射/清除/保留清单 → `move` 携 `confirm:true` 单事务完成,未确认 422 `move_confirmation_required` 携带预览)/ 批量(`POST /issues/bulk`,SAVEPOINT 逐项隔离,部分失败 422 `bulk_partial_failure` 逐条列因;项目变更要求确认)/ 状态定义 CRUD / issue 模板 CRUD + 实例化(失效引用优雅降级 `skipped_fields`)。§6.14 全契约:包络、游标分页(分组查询整体游标)、`version` + `If-Match` 乐观并发(409 `conflict`)、错误码(circular_dependency/circular_parent/assignee_not_member/filter_too_complex/query_cost_exceeded…)。
@@ -114,6 +114,49 @@ issue 模块全功能实现(MES-31,issue.md 五章:数据模型 / 接口 / UI/UX
 - 前端:vitest **1099 项全绿**,语句 97.01% / 分支 90.85%(≥90% 门禁);typecheck / lint / 生产构建全绿。
 - 真实 UI 实操(Playwright + chromium,真实 API + 真实数据库):登录 → 列表空态 → 连续快速创建(WS-1/WS-2)→ 搜索过滤 → 详情(改标题版本收敛 v1→v2、状态 → Done、优先级 → urgent)→ 依赖新增 + 成环就地报错 → 批量改优先级(服务端落库校验)→ 3 连跑零 flake,截图留证。实操中发现并修复实时帧合并未遵循搜索水位的缺陷(迟到 `issue.created` 帧会把被搜掉的行重新塞回列表),补回归测试。
 - 文档同步:README 实现状态表新增 issue 行;CHANGELOG 本版;issue.md Spec 无缺漏,实现与之一致(标签/自定义字段值表与 `labels_changed`/`custom_field_changed` 事件按 Spec 归属 label-property.md 增量,模板预填相应字段以 `*_module_pending` 优雅降级)。
+## [0.11.0] - 2026-07-26
+
+label-property 标签与自定义属性**定义层**(label-property.md §2–§4 定义层切片,MES-42,阶段 4·核心工作,与 issue 模块修复并行):标签、自定义字段定义、枚举选项三张表的模型 / 接口 / 实时 / 管理 UI 全量落地,issue 关联随后续增量。
+
+### Added
+
+- **数据模型(§2 定义层)**:`labels`(工作区级 OR 项目级视觉标签)、`custom_field_defs`(十种封闭字段类型 + 按类型 JSONB `config`/`default_value`)、`custom_field_options`(枚举选项);作用域内命名唯一一律用 README §6.3 **部分表达式唯一索引**(`CREATE UNIQUE INDEX … ON …(workspace_id, COALESCE(project_id, '0000…'), name|field_key)`——COALESCE 不写进表级 `UNIQUE`),三表均 `UNIQUE(workspace_id, id)` 供复合 FK 引用、`project_id`/`field_def_id` 同租户复合 FK、fail-closed RLS;迁移 0008 为 workspace-less 路径(`/labels/{id}`、`/custom-fields/{id}`…)登记窄 SECURITY DEFINER 解析函数并授予 `mesh_app`。
+- **接口(§3.1 定义层端点)**:标签与字段定义的列表(游标分页 + `project_id`/`is_active` 过滤、列表含工作区级)、创建、PATCH(If-Match 乐观并发)、删除;字段定义创建可携初始枚举选项;选项增删改与停用;§6.14 成功包络 / 错误信封;具名错误码 `400 validation_error`、`409 label_name_taken` / `field_key_taken` / `conflict`、`422 invalid_field_config`(按类型 config/default 非法)/ `field_inactive`(向已停用字段写值或加选项)、`403`(非 admin 且非该项目 lead)。写端点限流(120/min)。
+- **类型校验(§1.3/§2.4)**:十种字段类型注册;number 校验 `config` 的 precision/unit/min/max、date 的 format、url 的 require_https;`default_value` 按类型校验形状(含 number 边界与精度、枚举默认须为 active 选项 id、member 不允许默认);`required_on` 元素须匹配 `save|status:<category>`。
+- **实时(§3.5/§6.7)**:`label.created/updated/deleted` · `custom_field.updated`(含 created/updated/deleted 的 change 标记)· `custom_field_option.updated`——事件名取自 §6.7 注册表(已登记),经 outbox → realtime projector 唯一写入路径;工作区级走 `workspace:{ws}:labels`/`workspace:{ws}:custom_fields`,项目级走 `project:{id}`(私有项目事件只进该频道,公开项目双发),与 project 模块同款资源级订阅授权。
+- **鉴权(§3.4)**:读需工作区成员;定义写需工作区 admin/owner 或(项目级时)该项目 lead;guest 列表仅见公开项目与已授权项目定义。
+- **前端管理 UI(§4)**:工作区设置新增标签 / 自定义字段两个子页(`/w/:slug/settings/labels`、`/w/:slug/settings/custom-fields`),项目设置内嵌项目级标签 / 字段面板;列表(色点 + hex 文本 + 作用域/必填/状态徽章 + 操作)、新建/编辑对话框(颜色选择器 = 预设色板单选 + 自定义 hex,色块不作唯一信号)、枚举选项编辑器(增删改/配色/停用)、删除二次确认;设计系统就地实现颜色选择器;错误经 `errorToI18nKey` 映射;`label.*`/`custom_field*` 实时帧失效列表缓存;i18n 全外部化(en + zh-CN,新增 83 键含 4 个具名错误码)。
+
+### Deferred(issue 关联,随 issue.md 增量,门控 MES-31 合入)
+
+- `issue_labels` 多对多、`issue_custom_field_values` EAV 与 §2.7 值索引(`(field_def_id, value_*)` 部分索引 / GIN)、issue 详情侧栏标签选择器与自定义字段编辑器、`POST /labels/{id}/merge`、`issue.labels_changed` / `issue.custom_field_changed` 事件、必填字段在状态流转的校验钩子、§2.8 代表性 EXPLAIN 性能验收;删除选项时按 §4.5 对既有值的解析(multi 移除/single 置空)随值层一并落地。
+
+### Quality
+
+- 后端:单测(服务层直调)+ 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接、RLS 生效,真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验 + outbox → projector 投影)全绿;pytest-cov **95%**(≥90% 门禁;`mesh/labels` 服务 94%、路由/模型整体双达标);ruff 全绿;`tests/unit/test_model_migration_drift.py` 证明 ORM 模型与迁移(含 §6.3 表达式唯一索引)无漂移,`tests/docs/check_event_vocab.py` 词汇零漂移。
+- README §9 集成测试实测:**T1** 跨租户复合 FK 在 INSERT 即拒(labels 跨工作区引用项目、options 跨工作区引用字段定义)+ 跨工作区 API 404;**RLS 纵深**在 `mesh_app` 角色下跨租户读为空、写被拒;`schema_r2_validation.sql` 在 PostgreSQL 16 实跑全绿。
+- 前端:1111 项单测/组件测试全绿,覆盖率 语句 97.47% / 分支 91.71% / 函数 94.41%(门禁 ≥90%);typecheck / lint / 生产构建全绿;`real-labels` 真实后端 Playwright 走查(注册/登录 → 建区 → 工作区设置标签 CRUD + 重名 409 + 编辑 → 字段创建带枚举选项 + 非法 key 校验 + 停用 + 选项编辑器 → 项目设置项目级标签/字段 → 删除二次确认)全绿,12 张截图随 PR 提交至 `frontend/e2e/evidence/labels/`(可复现),且经 SQL 复核落库 + 实时投影(seq 单调);zh-CN 目录补齐 83 键,键集与 en 完全一致。
+- docker compose Quick Start 实机验证:本地 compose 栈 `alembic upgrade head` 应用 0008,注册/登录 → 建区 → 标签/字段定义 CRUD 全链路通过,`label.created` 经 outbox → projector 投影至双频道。
+
+## [0.10.3] - 2026-07-26
+
+安全建议排期池(MES-23)首批落地:M3 / M4 两项 MEDIUM 与 L1 / L2 / L3 / L5 / L7 五项 LOW 逐项闭环(M5 已由 MES-34 闭环,L4 / L6 为已知行为记录不动)。每项独立小步提交、单测 + 真实 e2e 全覆盖。
+
+### Security
+
+- **M3 outbox 终态行保留期清理**:`published`/`failed` 的 `outbox_events` 行(含 `idempotency_key` 唯一索引项)此前从不清理、无限膨胀。新增 worker 监督循环 `outbox-retention`,按保留期(默认 7 天,`MESH_OUTBOX_EVENT_RETENTION` 可配)分批(每次 ≤10k 行,短事务)删除终态行;`pending` 行永不触碰(清理即静默丢任务);`failed` 行需整段保留期过后才可删,远大于 relay 重试预算,§6.6 永久失败告警必然先于清理发出。worker 进程级 e2e 实测过期终态行被真实清理。
+- **M4 WebSocket/DoS 硬化**:①入站帧限速(默认 30/滚动秒,`MESH_WS_MAX_FRAMES_PER_SECOND`),超限回 `rate_limited` 错误帧后断开(真实 socket e2e 实测洪泛被丢弃);②单连接订阅上限(默认 256,`MESH_WS_MAX_SUBSCRIPTIONS`),超限对新频道回 `too_many_subscriptions` 错误帧、不断开,已订阅频道重订阅幂等放行;③错误帧不再回显客户端原始内容——unknown-op / forbidden 改为固定消息(频道关联仅走结构化 `channel` 字段);④未认证连接首帧认证超时 10s → 5s(`MESH_WS_AUTH_TIMEOUT`),静默连接更快释放;⑤传输层帧上限显式化:compose 以 `--ws-max-size 65536` 启动 uvicorn(默认 16MB),与 `MESH_WS_MAX_SIZE_BYTES` 单一真源一致,compose 回归测试守护(真实 socket e2e 实测超大帧被传输层拒绝)。
+- **L1 outbox 幂等键按工作区作用域化**:幂等去重查找此前全局匹配 `idempotency_key`;当前键均由工作区级实体 ID 派生碰撞不可达,但未来模块若直传客户端 `Idempotency-Key` 可跨租户去重并回传他租户行。助手层现强制键含工作区上下文(存储键 `ws:<workspace_id>:<key>`)且查找按 `workspace_id` 过滤,同名客户端键跨工作区互不去重。
+- **L2 WS `resume_from` 严格校验**:JSON `true`/`false` 解码为 Python bool(int 子类)可穿过 `isinstance(int)` 进入重放 SQL 致连接中断;改为严格类型检查 + 非负约束,非法值回 `validation_error`、连接保持可用(真实 socket e2e 覆盖)。
+- **L3 compose Redis AUTH**:Redis 此前无认证,同网络容器可发命令/伪造 fan-out 帧(DB 为真源可恢复,纵深防御)。现 `--requirepass`(`MESH_REDIS_PASSWORD`,与 Postgres 凭据同模式)且 api/worker/gateway 连接 URL 带凭据;**实机验证**:未认证 NOAUTH 拒绝、认证 PONG、healthcheck 绿、应用镜像在 compose 网络内带凭据连通;compose 回归测试守护 requirepass 与 URL 凭据。
+- **L5 分页游标类型不匹配 → 400**:来自其他端点的良构游标(如 datetime+UUID 键集用于字符串排序 / int-seq+BIGINT-id 列表)可解码但在 DB 层键集比较失败、以中性 500 回出。执行前校验解码位置与排序/tie-break 列类型兼容性,不匹配回 400 `invalid_cursor`;未映射列类型保持宽松(真实 HTTP e2e 覆盖)。
+- **L7 API 会话层 `statement_timeout` 兜底**:API/网关应用引擎经 asyncpg `server_settings` 设置 PostgreSQL `statement_timeout`(默认 30s,`MESH_APP_STATEMENT_TIMEOUT`,`0` 禁用),失控查询由数据库取消而非无限占用连接与客户端请求;worker 跨租户维护循环(relay/projector/retention)有意豁免。真实 PG 行为测试:`SHOW statement_timeout` 反映设置、超限查询被取消。
+
+### Quality
+
+- 后端单测 + 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真,无 mock)全绿;pytest-cov ≥90% 门禁达标。每项硬化均配确定性单测(注入假时钟的限速窗口恢复、订阅上限幂等重订阅、游标类型矩阵、幂等键跨工作区隔离、保留期 pending 豁免与批量上限)+ 真实服务 e2e(WS 洪泛断连 / 超大帧传输层拒绝 / bool 游标 / 异型游标 400 / worker 进程级 outbox 清理 / PG statement_timeout 取消)。
+- 文档同步:docs/specs/README.md §6.6(outbox 终态行保留期清理)与 §6.16(WebSocket DoS 硬化行);backend/README.md(worker 循环清单、app 路径 statement_timeout 安全注记)。
+- 池内其余项(M4 关联的 §6.14 IP 维度限流链 W2、PJ 系列实时/输入硬化、审计补全等)按既定排期随对应模块批次继续拆发,不在本版。
 
 ## [0.10.2] - 2026-07-26
 

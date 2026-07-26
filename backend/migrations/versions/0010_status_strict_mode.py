@@ -11,15 +11,15 @@ Spec §4.4「严格模式可在状态定义上配置『允许的下一步』」�
   ``invalid_status_transition``(issue.md §3.4 错误码表 / §5.2 验收项)。
 
 Revision ID: 0009
-Revises: 0008
+Revises: 0009
 Create Date: 2026-07-26
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0009"
-down_revision = "0008"
+revision = "0010"
+down_revision = "0009"
 branch_labels = None
 depends_on = None
 

@@ -3,7 +3,7 @@
 Workspace-scoped paths use the ``require_workspace`` membership gate;
 workspace-less paths (``/issues/{id}``, ``/statuses/{id}``,
 ``/issue-templates/{id}``, ``/issues/bulk``) resolve the tenant workspace
-through the narrow SECURITY DEFINER lookups (migration 0008) and then run the
+through the narrow SECURITY DEFINER lookups (migration 0009) and then run the
 same membership gate. Resource-level authorization (project visibility,
 project write gates) lives in the service layer.
 """

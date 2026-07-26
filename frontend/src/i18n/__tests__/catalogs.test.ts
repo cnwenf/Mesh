@@ -65,6 +65,10 @@ const REQUIRED_KEYS = [
   'error.wip_limit_exceeded',
   'error.scan_pending',
   'error.circular_dependency',
+  'error.label_name_taken',
+  'error.field_key_taken',
+  'error.invalid_field_config',
+  'error.field_inactive',
   // nav.*
   'nav.home',
   'nav.inbox',
@@ -191,6 +195,10 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
       'wip_limit_exceeded',
       'scan_pending',
       'circular_dependency',
+      'label_name_taken',
+      'field_key_taken',
+      'invalid_field_config',
+      'field_inactive',
     ];
     for (const locale of ['en', 'zh-CN']) {
       const messages = builtinCatalogs[locale].messages;
@@ -225,6 +233,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     // project §4 文案占位符(MES-30)
     done: 5,
     title: 'v1.0',
+    // label-property §4 文案占位符(选项序号)
+    index: 1,
     // workspace §4 文案占位符(MES-26)
     slug: 'acme',
     role: 'member',
