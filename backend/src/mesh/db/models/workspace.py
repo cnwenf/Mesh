@@ -222,10 +222,10 @@ class IdentifierPrefixRegistry(Base):
     ``UNIQUE(workspace_id, identifier)`` on issues can never be "randomly"
     violated. Retired prefixes are never re-issued.
 
-    The ``project_id`` composite FK to ``projects(workspace_id, id)`` (with
-    column-level ``ON DELETE SET NULL (project_id)``) is added by the
-    project.md increment once the projects table exists — the validation
-    script's own deferred-FK pattern.
+    The ``project_id`` composite FK to ``projects(workspace_id, id)`` uses
+    column-level ``ON DELETE SET NULL (project_id)`` (added by the project.md
+    increment, README §6.2 rule 6): physically deleting a project keeps the
+    registry row — the prefix stays permanently reserved with a NULL pointer.
     """
 
     __tablename__ = "identifier_prefix_registry"
@@ -250,4 +250,13 @@ class IdentifierPrefixRegistry(Base):
         # Prefixes are workspace-level permanently exclusive (README §6.3).
         Index("uq_prefix_registry_ws_key", "workspace_id", "key", unique=True),
         Index("idx_prefix_registry_ws", "workspace_id", "kind"),
+        # Same-tenant project reference; column-level SET NULL keeps the row
+        # (prefix permanently reserved) when a project is physically deleted
+        # (project.md §2.5, README §6.2 rule 6).
+        ForeignKeyConstraint(
+            ("workspace_id", "project_id"),
+            ("projects.workspace_id", "projects.id"),
+            ondelete="SET NULL (project_id)",
+            name="prefix_registry_project_id_projects",
+        ),
     )

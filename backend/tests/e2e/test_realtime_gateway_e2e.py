@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 
 import pytest
 import websockets
@@ -267,3 +268,131 @@ async def test_jwt_session_first_frame_auth_subscribe_and_cross_tenant(
             headers={"Authorization": "Bearer not-a-jwt"},
         )
     assert unauthorized.status_code == 401
+
+
+# --- P1 regression: standalone gateway must not leak private-project events ---
+
+
+async def _register_and_login(client, email: str) -> str:
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": "a-strong-passw0rd", "display_name": email.split("@")[0]},
+    )
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": "a-strong-passw0rd"}
+    )
+    return login.json()["data"]["access_token"]
+
+
+async def _invite_accept(client, owner_token, ws_id, email):
+    inv = await client.post(
+        f"/api/v1/workspaces/{ws_id}/invitations",
+        json={"emails": [email], "role": "member"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    token = inv.json()["data"][0]["invite_link"].rsplit("/", 1)[1]
+    joiner = await _register_and_login(client, email)
+    accepted = await client.post(
+        "/api/v1/invitations/accept",
+        json={"token": token},
+        headers={"Authorization": f"Bearer {joiner}"},
+    )
+    return accepted.json()["data"]["member"]["id"], joiner
+
+
+async def test_gateway_private_project_subscribe_forbidden_for_non_member(
+    gateway_server, api_client, session_factory, redis_client
+):
+    """CWE-862 regression: on the standalone gateway /ws a workspace member who is
+    NOT a member of a *private* project must be forbidden from its ``project:{id}``
+    channel, while a real project member is allowed. The gateway shares the same
+    resource checker as the API factory (register_resource_checkers)."""
+    from sqlalchemy import select
+
+    from mesh.db.models.member import Member
+    from mesh.project.schemas import AddProjectMemberRequest, CreateProjectRequest
+    from mesh.project.service import ProjectService
+
+    owner_token = await _register_and_login(api_client, "gw-owner@corp.com")
+    ws = (
+        await api_client.post(
+            "/api/v1/workspaces",
+            json={"name": "GW", "slug": f"gw-{uuid.uuid4().hex[:8]}"},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+    ).json()["data"]
+    ws_id = uuid.UUID(ws["id"])
+    member_a_id, token_a = await _invite_accept(api_client, owner_token, ws["id"], "gw-a@corp.com")
+    member_b_id, token_b = await _invite_accept(api_client, owner_token, ws["id"], "gw-b@corp.com")
+
+    # Owner's roster row = actor for project writes (owner is the project lead).
+    async with session_factory() as session:
+        owner_user_id = (
+            await session.execute(
+                text("SELECT id FROM users WHERE email = 'gw-owner@corp.com'")
+            )
+        ).scalar_one()
+        owner_member = (
+            await session.execute(
+                select(Member).where(
+                    Member.workspace_id == ws_id, Member.user_id == owner_user_id
+                )
+            )
+        ).scalar_one()
+
+    service = ProjectService(session_factory)
+    project = await service.create_project(
+        actor=owner_member,
+        workspace_id=ws_id,
+        body=CreateProjectRequest(name="Secret", key="SEC", visibility="private"),
+    )
+    project_id = uuid.UUID(project["id"])
+    await service.add_project_member(
+        actor=owner_member,
+        workspace_id=ws_id,
+        project_id=project_id,
+        body=AddProjectMemberRequest(member_id=member_a_id, role="member"),
+    )
+
+    # Seed the channel row through the real outbox → projector path so the
+    # row-probe path has something to find (the leak is on the checker, not the
+    # row probe).
+    await _publish_via_relay(
+        session_factory,
+        ws_id,
+        f"project:{project_id}",
+        "project.created",
+        {"project": {"id": str(project_id)}},
+        redis_client,
+    )
+
+    # Non-member (B) on the gateway → forbidden.
+    ws_b = await _ws_connect(gateway_server)
+    try:
+        await ws_b.send(json.dumps({"op": "auth", "token": token_b}))
+        assert (await _recv_frame(ws_b))["op"] == "auth_ok"
+        await ws_b.send(json.dumps({"op": "subscribe", "channel": f"project:{project_id}"}))
+        frame_b = await _recv_frame(ws_b)
+        assert frame_b["op"] == "error"
+        assert frame_b["code"] == "forbidden"
+    finally:
+        await ws_b.close()
+
+    # Real project member (A) on the gateway → subscribed.
+    ws_a = await _ws_connect(gateway_server)
+    try:
+        await ws_a.send(json.dumps({"op": "auth", "token": token_a}))
+        assert (await _recv_frame(ws_a))["op"] == "auth_ok"
+        await ws_a.send(json.dumps({"op": "subscribe", "channel": f"project:{project_id}"}))
+        # The pump subscribes before replay, so the seeded event may arrive before
+        # the ``subscribed`` ack; drain until the ack, asserting no ``forbidden``.
+        got_subscribed = False
+        for _ in range(5):
+            frame_a = await _recv_frame(ws_a)
+            assert frame_a.get("code") != "forbidden", frame_a
+            if frame_a["op"] == "subscribed":
+                got_subscribed = True
+                break
+        assert got_subscribed
+    finally:
+        await ws_a.close()

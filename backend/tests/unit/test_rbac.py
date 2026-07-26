@@ -216,7 +216,16 @@ async def test_guest_project_visibility_hook(db_session, workspace_factory):
     guest_id = await _seed_member(db_session, workspace.id, guest_user.id, "guest")
     member_user = await _seed_user(db_session, "regular@corp.com")
     member_id = await _seed_member(db_session, workspace.id, member_user.id, "member")
-    project_id = uuid.uuid4()  # projects table lands later; the hook only checks grants
+    async with db_session.begin():
+        project_id = (
+            await db_session.execute(
+                text(
+                    "INSERT INTO projects (workspace_id, name, key) "
+                    "VALUES (:ws, 'Hook', :k) RETURNING id"
+                ),
+                {"ws": workspace.id, "k": f"HK{uuid.uuid4().hex[:4].upper()}"},
+            )
+        ).scalar_one()
 
     member = Member(id=member_id, workspace_id=workspace.id, member_type="human", role="member")
     # Non-guest roles are unrestricted by the hook.

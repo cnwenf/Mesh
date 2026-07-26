@@ -33,6 +33,7 @@ from mesh.db.models.member import (
     Member,
     MemberProjectAccess,
 )
+from mesh.db.models.project import Project
 from mesh.db.models.user import User
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
@@ -688,9 +689,18 @@ class MemberService:
                     code="not_guest_member",
                     details={"role": member.role},
                 )
-            # projects table lands with the project.md increment; until then the
-            # composite FK to projects(workspace_id, id) is deferred, so project
-            # existence is validated by that increment (hook point here).
+            # The composite FK to projects(workspace_id, id) is live since the
+            # project.md increment — validate the project exists (and is not
+            # soft-deleted) so grants fail with a clean 404, not an FK error.
+            exists = await session.scalar(
+                select(Project.id).where(
+                    Project.id == project_id,
+                    Project.workspace_id == workspace_id,
+                    Project.deleted_at.is_(None),
+                )
+            )
+            if exists is None:
+                raise NotFoundError("project not found")
             stmt = (
                 pg_insert(MemberProjectAccess)
                 .values(

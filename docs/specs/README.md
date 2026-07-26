@@ -834,6 +834,11 @@ Mesh 提供官方命令行工具 `mesh`(与 Web 同源 REST API,经 `api_tokens`
 | 14 | 提醒 Snooze / 重新提醒 | 可选增强,默认不实现 | due_date/里程碑/邀请过期提醒已有(issue/project/workspace);Snooze 保持 comment-inbox §1 已声明的可选增强 |
 | 15 | 路线图 / 时间线 / 甘特视图 | **确认本期不做**(Leader 决定) | 维持 kanban.md 已声明的 YAGNI 延期;`views.layout` 保留 `timeline` 枚举占位,不实现 UI;后续立项时基于既有视图投影模型扩展 |
 | 16 | Triage / 分诊队列 | 可选增强 | `backlog` 状态 + 收件箱(issue.md/comment-inbox.md)已覆盖入队与待分类语义;专门分诊队列保持可选 |
+| 17 | 周期结束未完成 issue 顺延/退回待办机制 | 跨模块延期 → **issue.md** | project.md §1.2.5/§4.4/§5.1 承诺的周期结束处理依赖 issue 的 `cycle_id` 与状态流转;project 模块仅承载 `cycles.auto_roll` 生成下一周期(已实现),未完成项的实际搬运属 issue.md 增量,通知随 comment-inbox.md |
+| 18 | 项目相关通知事件登记(health 变差 / 里程碑临近逾期 / 周期开始结束 / 加入项目) | 跨模块延期 → **comment-inbox.md** | project.md §4.5 列出的四类通知触发点的事件类型码与订阅/去噪矩阵由 comment-inbox.md(通知唯一 owner)登记到 §6.7 注册表;project 模块仅产出 outbox 业务事件,不直接登记通知类型码 |
+| 19 | 项目分组(项目分组/分组数据模型) | 跨模块延期 → **label-property.md** | project.md §1.2.1「项目分组(可选)」无独立数据模型;分组语义复用 label-property.md 的标签/分组作用域(`project` 作用域),不另建 `project_groups` 表 |
+| 20 | 里程碑时间线/甘特可视化 | 确认延期 → **kanban.md**(与 §12#15 同口径) | project.md §1.2.3/§4.2 的里程碑「时间线展示」与 kanban.md §12#15 的路线图/甘特 YAGNI 延期统一:project 仅提供里程碑数据 + `overdue` 派生态,时间线/甘特 UI 待 kanban.md 立项,二者不矛盾(数据先行、视图延后) |
+| 21 | docs / 静态站点 / 公开文档能力 | 未来规划(工程基建) | 无产品级 docs 站点能力;Spec 即文档(`docs/specs`),公开文档站点偏工程基建,未产品化 |
 
 ---
 

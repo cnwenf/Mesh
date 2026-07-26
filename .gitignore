@@ -26,3 +26,6 @@ venv/
 .coverage
 .coverage.*
 htmlcov/
+
+# Node — never commit dependencies or build caches
+node_modules/

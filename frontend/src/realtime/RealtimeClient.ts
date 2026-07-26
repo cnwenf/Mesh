@@ -68,6 +68,11 @@ type FrameListener = (frame: RealtimeEventFrame) => void;
 type StateListener = (state: ConnectionState) => void;
 type ResyncListener = (req: ResyncRequest) => void;
 type ErrorListener = (frame: ErrorFrame) => void;
+type SubscribeChangeListener = (channels: readonly string[]) => void;
+
+// Channel-level subscribe-error retry (first-subscribe race / transient forbid).
+const CHANNEL_SUBSCRIBE_MAX_ATTEMPTS = 5;
+const CHANNEL_SUBSCRIBE_BASE_DELAY_MS = 1000;
 
 export class RealtimeClient {
   private readonly url: string;
@@ -101,6 +106,11 @@ export class RealtimeClient {
   private readonly resyncListeners = new Set<ResyncListener>();
 
   private readonly errorListeners = new Set<ErrorListener>();
+
+  private readonly subscribeChangeListeners = new Set<SubscribeChangeListener>();
+
+  /** Per-channel subscribe-error retry counters (CWE / first-subscribe race). */
+  private readonly channelSubscribeAttempts = new Map<string, number>();
 
   private socket: WebSocket | null = null;
 
@@ -182,13 +192,18 @@ export class RealtimeClient {
   }
 
   subscribe(channel: string): void {
+    const added = !this.subscribedChannels.has(channel);
     this.subscribedChannels.add(channel);
+    this.channelSubscribeAttempts.delete(channel);
     if (this.authenticated) this.sendSubscribe(channel);
+    if (added) this.emitSubscribeChange();
   }
 
   unsubscribe(channel: string): void {
-    this.subscribedChannels.delete(channel);
+    const had = this.subscribedChannels.delete(channel);
+    this.channelSubscribeAttempts.delete(channel);
     if (this.authenticated) this.sendOp({ op: 'unsubscribe', channel });
+    if (had) this.emitSubscribeChange();
   }
 
   /** 当前频道游标(供轮询降级等读取 since 水位) */
@@ -227,6 +242,24 @@ export class RealtimeClient {
     return (): void => {
       this.errorListeners.delete(cb);
     };
+  }
+
+  /** Snapshot of currently-subscribed channels (for the offline polling fallback). */
+  getSubscribedChannels(): readonly string[] {
+    return [...this.subscribedChannels];
+  }
+
+  /** Notified whenever the subscribed-channel set changes (subscribe/unsubscribe). */
+  onSubscribeChange(cb: SubscribeChangeListener): () => void {
+    this.subscribeChangeListeners.add(cb);
+    return (): void => {
+      this.subscribeChangeListeners.delete(cb);
+    };
+  }
+
+  private emitSubscribeChange(): void {
+    const channels = this.getSubscribedChannels();
+    for (const cb of [...this.subscribeChangeListeners]) cb(channels);
   }
 
   private openSocket(): void {
@@ -330,6 +363,7 @@ export class RealtimeClient {
   private handleSubscribed(frame: SubscribedFrame): void {
     // 订阅/重放完成确认:对齐服务端频道水位(仅前进)
     this.cursors.set(frame.channel, frame.last_seq);
+    this.channelSubscribeAttempts.delete(frame.channel); // 订阅成功,清零重试
   }
 
   private handleErrorFrame(frame: ErrorFrame): void {
@@ -338,6 +372,24 @@ export class RealtimeClient {
       // 鉴权失败:服务端将关闭连接;主动拆除并按断线重连(退避)
       this.teardownSocket();
       this.handleDisconnect();
+      return;
+    }
+    // 已鉴权下的频道级错误(如首订阅竞态:投影尚未建行 → forbidden):退避重订阅,
+    // 上限内反复尝试;超限后停止,由离线/降级轮询兜底(§3.2)。
+    const channel = frame.channel;
+    if (channel && this.subscribedChannels.has(channel)) {
+      const attempt = this.channelSubscribeAttempts.get(channel) ?? 0;
+      if (attempt < CHANNEL_SUBSCRIBE_MAX_ATTEMPTS) {
+        this.channelSubscribeAttempts.set(channel, attempt + 1);
+        const delay = Math.round(
+          CHANNEL_SUBSCRIBE_BASE_DELAY_MS * 2 ** attempt * (1 + (Math.random() * 2 - 1) * JITTER_RATIO),
+        );
+        this.scheduleGuarded(() => {
+          if (this.authenticated && this.subscribedChannels.has(channel)) {
+            this.sendSubscribe(channel);
+          }
+        }, delay);
+      }
     }
   }
 
