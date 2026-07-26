@@ -360,13 +360,15 @@ async def test_authorized_two_step_move_and_audit_trail(api_client):
     )
     assert unconfirmed.status_code == 422
     assert unconfirmed.json()["error"]["details"]["preview"]["version"] == issue["version"]
-    # confirmed without version → 400 (§3.8: version mandatory)
+    # confirmed without version → 422 move_version_required
+    # (MES-54 M-1: §3.8 version mandatory, enforced at the request schema)
     no_version = await api_client.post(
         f"/api/v1/issues/{issue['id']}/move",
         json={"target_project_id": ctx["dst"], "confirm": True},
         headers=_auth(ctx["member"]),
     )
-    assert no_version.status_code == 400
+    assert no_version.status_code == 422
+    assert no_version.json()["error"]["code"] == "move_version_required"
     # step 2 — confirmed move applies
     moved = await api_client.post(
         f"/api/v1/issues/{issue['id']}/move",

@@ -3,7 +3,7 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.11.10] - 2026-07-27
+## [0.11.12] - 2026-07-27
 
 MES-46 终局排期 MEDIUM×7 硬化池收口(MES-54):issue 模块 OCC 契约、留痕一致性、输入上限、状态机一致性与迁移事件脱敏。不回退 MES-48(H1/H2 鉴权 + 负向矩阵)与 MES-50(M1/M2 隔离)的任何修复。
 
