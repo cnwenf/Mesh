@@ -587,7 +587,8 @@ async def test_body_too_large(env):
             workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
             body_markdown="x" * (1024 * 1024 + 1),
         )
-    assert exc.value.code == "field_too_large"
+    assert exc.value.code == "payload_too_large"
+    assert exc.value.status_code == 413
 
 
 async def test_cross_issue_parent_rejected_by_db(env):

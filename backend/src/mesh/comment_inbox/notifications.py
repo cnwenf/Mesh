@@ -44,6 +44,7 @@ from mesh.db.models.comment import CommentMention
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
 from mesh.db.models.notification import (
+    NOTIFICATION_TYPE_VALUES,
     IssueSubscription,
     Notification,
     NotificationDelivery,
@@ -51,6 +52,7 @@ from mesh.db.models.notification import (
 )
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.user import User
+from mesh.db.tenant import set_tenant_context
 from mesh.outbox.service import emit_event, emit_realtime
 
 logger = logging.getLogger("mesh.comment_inbox.notifications")
@@ -144,6 +146,74 @@ def inbox_channel(recipient_id: uuid.UUID) -> str:
     return f"member:{recipient_id}:inbox"
 
 
+# §2.7: a preference row's event_type must be 'all' or a real notification type.
+ALLOWED_PREFERENCE_EVENT_TYPES: frozenset[str] = frozenset(
+    {"all", *NOTIFICATION_TYPE_VALUES}
+)
+
+
+async def emit_issue_change_notifications(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    issue: Issue,
+    actor: Member,
+    actor_name: str,
+    actor_member_type: str,
+    assigned_to: uuid.UUID | None = None,
+    status_changed: bool = False,
+    subscribed_update: bool = False,
+    comment_id: uuid.UUID | None = None,
+    preview: str | None = None,
+) -> None:
+    """Produce §6.13 fan-outs for issue activity (H1 / I1/I3/I4).
+
+    The issue module calls this in the SAME transaction as the write so the
+    outbox rows commit atomically with the change (README §4.4). The matrix /
+    de-noise live in the fan-out handler — here we only pick the type(s) and
+    the explicit recipients the matrix rows need:
+
+    * ``assigned_to`` → ``assigned`` to the new assignee (critical, I1);
+    * ``status_changed`` → ``status_changed`` to subscribers/reporter (I3);
+    * ``subscribed_update`` → ``subscribed_update`` to subscribers/reporter,
+      excluding the comment author (their own comment fan-out already covers
+      them) — this also carries the reporter/creator activity (I4).
+    """
+    common = dict(
+        workspace_id=workspace_id,
+        actor_member_id=actor.id,
+        actor_name=actor_name,
+        actor_member_type=actor_member_type,
+        issue_id=issue.id,
+        title=issue.title,
+        preview=preview,
+    )
+    if assigned_to is not None:
+        await emit_notification_fanout(
+            session,
+            **common,
+            notification_type="assigned",
+            recipient_ids=[assigned_to],
+            group_key=f"issue:{issue.id}:assigned",
+        )
+    if status_changed:
+        await emit_notification_fanout(
+            session,
+            **common,
+            notification_type="status_changed",
+            group_key=f"issue:{issue.id}:status_changed",
+        )
+    if subscribed_update:
+        await emit_notification_fanout(
+            session,
+            **common,
+            notification_type="subscribed_update",
+            exclude_ids=[actor.id],
+            comment_id=comment_id,
+            group_key=f"issue:{issue.id}:subscribed_update",
+        )
+
+
 async def emit_notification_fanout(
     session: AsyncSession,
     *,
@@ -158,6 +228,7 @@ async def emit_notification_fanout(
     execution_id: uuid.UUID | None = None,
     execution_status: str | None = None,
     recipient_ids: Sequence[uuid.UUID] | None = None,
+    exclude_ids: Sequence[uuid.UUID] | None = None,
     group_key: str | None = None,
     title: str | None = None,
     preview: str | None = None,
@@ -176,6 +247,7 @@ async def emit_notification_fanout(
         "execution_id": str(execution_id) if execution_id else None,
         "execution_status": execution_status,
         "recipient_ids": [str(r) for r in (recipient_ids or ())],
+        "exclude_ids": [str(r) for r in (exclude_ids or ())],
         "group_key": group_key,
         "title": title,
         "preview": preview,
@@ -374,12 +446,17 @@ class NotificationFanoutHandler:
             notification_type, execution_status=fanout.get("execution_status")
         )
         workspace_id = event.workspace_id
+        # The outbox relay dispatches handlers WITHOUT the tenant GUC set; under
+        # the RLS app role the recipient/subscription queries would see nothing.
+        # Set it from the event's workspace so the §6.13 routing is visible.
+        await set_tenant_context(session, workspace_id)
         issue_id = _uuid_or_none(fanout.get("issue_id"))
         comment_id = _uuid_or_none(fanout.get("comment_id"))
         execution_id = _uuid_or_none(fanout.get("execution_id"))
         actor_raw = fanout.get("actor_member_id")
         actor_id = uuid.UUID(actor_raw) if actor_raw else None
         explicit = {uuid.UUID(raw) for raw in fanout.get("recipient_ids") or ()}
+        exclude = {uuid.UUID(raw) for raw in fanout.get("exclude_ids") or ()}
         group_key = fanout.get("group_key")
 
         candidates, _muted = await _candidate_recipient_ids(
@@ -391,6 +468,7 @@ class NotificationFanoutHandler:
         )
         if actor_id is not None:
             candidates.discard(actor_id)  # self-suppression (§6.13)
+        candidates -= exclude  # explicit exclusions (e.g. author on subscribed_update)
         recipients = await _human_active_members(
             session, workspace_id=workspace_id, member_ids=candidates
         )
@@ -480,15 +558,18 @@ class NotificationFanoutHandler:
                 quiet=quiet,
             )
 
-        if suppressed_push:
-            return  # quiet hours: badge/inbox truth persists, no popup/push
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=inbox_channel(recipient.id),
-            event="notification.created",
-            data=_render_notification_frame(notification),
-        )
+        # §6.13 quiet hours = suppress the popup/push only, NOT the badge sync
+        # (§5.4 multi-device badge sync). So unread_count always emits when the
+        # unread state changed; the per-notification created frame (the toast
+        # source) is the only thing quiet hours silence.
+        if not suppressed_push:
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=inbox_channel(recipient.id),
+                event="notification.created",
+                data=_render_notification_frame(notification),
+            )
         if unread_changed:
             count = await _unread_count(
                 session, workspace_id=workspace_id, recipient_id=recipient.id
@@ -532,6 +613,7 @@ class NotificationFanoutHandler:
                     Notification.workspace_id == workspace_id,
                     Notification.recipient_id == recipient_id,
                     Notification.group_key == group_key,
+                    Notification.archived_at.is_(None),  # M2: never merge into an archived group
                     Notification.created_at >= window_start,
                 )
                 .order_by(Notification.created_at.desc())

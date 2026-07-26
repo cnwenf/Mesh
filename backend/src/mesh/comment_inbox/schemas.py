@@ -33,6 +33,7 @@ class AddReactionRequest(BaseModel):
 
 class ReadAllRequest(BaseModel):
     filter: str | None = None
+    type: str | None = None
 
 
 class PreferenceEntry(BaseModel):

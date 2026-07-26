@@ -119,6 +119,16 @@ const MEMBERS_PAGE = {
   ],
   next_cursor: null,
 };
+/** 当前用户(comments 集成:解析 currentMember 用)。 */
+const ME_PAGE = {
+  user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+  memberships: [
+    { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner',
+      status: 'active', joined_at: null },
+  ],
+};
+/** 评论区首屏(comments 集成:面板挂载后拉取,空列表)。 */
+const COMMENTS_EMPTY = { data: [], next_cursor: null };
 
 /** 关联编辑器在 issue 加载后消费的 3 个列表请求(标签 / 标签目录 / 字段值)。 */
 function associationResponses(): ReturnType<typeof fakeResponse>[] {
@@ -129,7 +139,9 @@ function associationResponses(): ReturnType<typeof fakeResponse>[] {
   ];
 }
 
-/** 首轮加载 9 个响应:issue → (statuses, children, deps, activity, members, projects, cycles) → milestones;随后关联编辑器再消费 3 个列表请求。 */
+/** 首轮加载 10 个响应:issue → (statuses, children, deps, activity, members, projects, cycles, me)
+ * → milestones;随后关联编辑器消费 3 个列表请求、评论区首屏(comments 集成)消费 1 个
+ * (同形空页,顺序不敏感;附件列表由 URL 感知桩带外供给,不消耗队列)。 */
 function detailResponses(): ReturnType<typeof fakeResponse>[] {
   return [
     fakeResponse({ body: { data: DETAIL } }),
@@ -170,14 +182,17 @@ function detailResponses(): ReturnType<typeof fakeResponse>[] {
     fakeResponse({ body: MEMBERS_PAGE }),
     fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
     fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
+    fakeResponse({ body: { data: ME_PAGE } }),
     fakeResponse({ body: { data: [MILESTONE_1], next_cursor: null } }),
     ...associationResponses(),
+    fakeResponse({ body: COMMENTS_EMPTY }),
   ];
 }
 
 /**
- * PATCH 后的整轮重取响应(页面 9 个)。关联编辑器不随 reloadKey 重取——它由
- * issue.updated_at 变化驱动,桩响应 updated_at 恒定,故重取轮不含编辑器请求。
+ * PATCH 后的整轮重取响应(issue → 8 并行含 me → milestones)。关联编辑器不随
+ * reloadKey 重取(由 issue.updated_at 变化驱动,桩响应 updated_at 恒定);
+ * 评论区亦不随页面 reload 重取——故重取轮不含这两组请求。
  */
 function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
   return [
@@ -189,6 +204,7 @@ function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
     fakeResponse({ body: MEMBERS_PAGE }),
     fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
     fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
+    fakeResponse({ body: { data: ME_PAGE } }),
     fakeResponse({ body: { data: [MILESTONE_1], next_cursor: null } }),
   ];
 }
@@ -605,9 +621,12 @@ describe('IssueDetailPage', () => {
         'st-todo',
       ),
     );
-    // 不触发整页 reload:除首轮加载 9 + 关联编辑器 3 个列表请求 + 附件区首次
-    // 拉取(1)+ 被拒的 PATCH(1)外无其它请求(无骨架闪烁来源)。
-    expect(stub.calls.length).toBe(14);
+    // 不触发整页 reload:详情 GET 仅首轮一次(关联编辑器/评论区/附件拉取不计入
+    // 详情请求),被拒 PATCH 一次(无骨架闪烁来源)。
+    const detailGets = stub.calls.filter(
+      (c) => String(c.url).endsWith('/issues/iss-1') && (c.init?.method ?? 'GET') === 'GET',
+    );
+    expect(detailGets.length).toBe(1);
     expect(stub.calls.filter((c) => c.init?.method === 'PATCH').length).toBe(1);
   });
 

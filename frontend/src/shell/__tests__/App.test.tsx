@@ -19,9 +19,20 @@ describe('App 路由', () => {
     useAuthStore.getState().clearToken();
     useSettingsStore.getState().resetPreferences();
     useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+    // /users/me 返回一个合法成员身份(供收件箱/通知偏好解析 workspace);其余默认空列表包络。
+    const me = {
+      user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+      memberships: [
+        { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner', status: 'active', joined_at: null },
+      ],
+    };
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 })),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const body = url.includes('/users/me') ? { data: me } : { data: [], next_cursor: null };
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
     );
   });
   afterEach(() => {
@@ -48,11 +59,11 @@ describe('App 路由', () => {
     expect(screen.getByTestId('timezone-select')).toBeInTheDocument();
   });
 
-  it('/inbox 渲染占位页', () => {
+  it('/inbox 渲染收件箱页(空态)', async () => {
     navigateTo('/inbox');
     render(<App />);
-    // 占位空态描述(侧栏 nav 项不含此文案,避免多匹配)
-    expect(screen.getByText('Items you create or follow will show up here.')).toBeInTheDocument();
+    // 收件箱页解析到工作区后拉取通知;mock 返回空列表 → 呈现空态文案。
+    await waitFor(() => expect(screen.getByText('Inbox zero')).toBeInTheDocument());
   });
 
   it('未知路由渲染 404', () => {

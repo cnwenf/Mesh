@@ -13,6 +13,7 @@ import type { CurrentUser } from '../../api/auth';
 import { getApiClient } from '../../api/instance';
 import { Banner, Select } from '../../design';
 import { SecuritySettings } from '../../features/auth';
+import { NotificationPreferencesSection } from '../../features/inbox';
 import { formatWithZoneAnnotation, SUPPORTED_LOCALES, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
 import type { ThemeMode } from '../../state/settingsStore';
@@ -163,6 +164,12 @@ export function SettingsPage(): React.JSX.Element {
           <SecuritySettings client={client} user={user} onUserChanged={reloadUser} />
         </section>
       ) : null}
+
+      {/* comment-inbox.md §4.2 通知偏好:矩阵 + Agent 执行通知分区 + 免打扰 */}
+      <section className="mesh-settings__section" aria-label={t('notifications.title')}>
+        <h2 className="mesh-settings__heading">{t('notifications.title')}</h2>
+        <NotificationPreferencesSection />
+      </section>
     </div>
   );
 }

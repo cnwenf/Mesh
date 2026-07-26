@@ -7,9 +7,9 @@
 | 依赖 Spec | `workspace`(多租户)、`member`(统一 `members.id`,human\|agent)、`auth`(Bearer/RBAC/限流)、`issue`(评论宿主与订阅路由)、`attachment`(评论内附件,统一 `attachments`/`attachment_links`)、`agent` / `runtime`(提及 agent 入队执行 `task_executions`) |
 | 被依赖 | `agent` / `runtime`(执行结果以 agent 评论回流)、`chat-session`(形态 B 的评论/提及/通知**引用本 Spec 权威表**)、邮件摘要任务(消费 `notifications`) |
 | 技术栈 | FastAPI + SQLAlchemy 2.x + PostgreSQL 16 + WebSocket |
-| 状态 | Implemented v1(v0.12.0,MES-58) |
+| 状态 | Implemented v1(v0.14.0,MES-58) |
 
-> **实现注记(v0.12.0)**
+> **实现注记(v0.14.0)**
 > 1. **提及语法(§3.5 服务端解析)**:结构提及为 Markdown 链接 `[显示名](mention://member/<uuid>)`(composer 选人的芯片序列化形态);散文中的 `@Name` 按工作区内**精确显示名**(member.md §2.4 解析序)解析,歧义名解析为空;代码块/行内代码/链接语法内的 `@` 不扫描。客户端显式提交的提及字段不被接受(解析以服务端为准)。
 > 2. **`task_executions` deferred FK**:`comment_mentions.triggered_execution_id` / `notifications.execution_id` 的物理复合 FK 随 runtime.md 增量补齐(同 `members.agent_id` → `agents` 先例);入队骨架为 `execution.enqueue` outbox 事件(§6.5 幂等键齐全),其事件 id 作为骨架执行 id 落 `triggered_execution_id` 并回填响应;relay 侧为桥接处理器(审计留痕、保持 relay 健康),`task_executions` 落库与完整执行生命周期待 runtime.md。
 > 3. **`comments.idempotency_key`**:为落实 README §6.14「创建/动作类端点支持 `Idempotency-Key` 请求头」与 §6.5 agent 回流防重键,`comments` 表增设 `idempotency_key TEXT NULL`(部分唯一索引 `uq_comments_idempotency`,NULL 不冲突);重复键返回首次结果。
@@ -17,6 +17,16 @@
 > 5. **评论附件(C11)**:`attachment_ids` 字段已预留于请求 schema;attachments/attachment_links 随 attachment.md 增量合入后接通,合入前非空附件列表返回 422 `attachments_not_available`(占位,与派发说明一致)。
 > 6. **quiet hours 时区**:`notification_preferences.quiet_hours_*` 按 UTC 墙上时间比较(§2.7 用户级;critical 穿透不变)。
 > 7. **执行成功通知**:按 §6.13 R2 实现——`execution_finished` 成功仅在 `notification_preferences` 显式订阅该 `event_type`(`in_app=true`)时进箱,且按普通事件不重置已读组;失败/超时 critical 穿透 quiet hours 并重置同组未读。runtime.md 终态分发届时经同一 `notification.fanout` 路径(同一矩阵)。
+> 8. **通知生产者(H1 / I1/I3/I4)**:issue 模块在 assign / 状态变更 / 字段变更的**同一事务**内调用 `emit_issue_change_notifications`(comment-inbox 为通知唯一权威,仅选择类型与显式收件人,矩阵/去噪仍在 fan-out 处理器):`assigned` → 新 assignee(critical,I1);`status_changed` → 订阅者∪reporter(I3);字段变更 → `subscribed_update`(I3)。创建 issue 时播种 `creator`/`assignee` 订阅行(§2.5,L2),且 assignee 在创建即分派时收 `assigned`。评论创建时,reporter/creator 作为已播种订阅者随其余订阅者收 `comment_created`(I4;作者经处理器自我抑制),`subscribed_update` 仅保留给状态/字段变更。
+> 9. **C6 智能链接**:`#IDENTIFIER`(如 `#MES-123`)在服务端渲染前经 token 化 linkify(跳过围栏/行内代码)为 `mesh-issue://` 链接,sanitizer 改写为同工作区相对链 `/issues/by-identifier/<id>` + `data-issue-identifier`,前端可 hydrate 为带标题+状态的引用卡片;词边界避免 `C#9`/`issue#5` 误命中。**延期项**:粘贴完整 issue URL 的跨工作区探测+卡片渲染(需异步解析 identifier→title/status)未在本轮实现,仅 `#IDENTIFIER` 简写成链;列入后续增量。
+> 10. **聚合排除已归档(M2)**:`_store_or_aggregate` 的 60s 窗口聚合查询加 `archived_at IS NULL`,避免新通知并入已归档组而被默认收件箱隐藏。
+> 11. **quiet hours 不抑制徽标(M1)**:quiet hours 仅抑制弹窗/`notification.created` 帧;`inbox.unread_count` 在未读数变化时**无论是否 quiet 都发**(§5.4 多端徽标同步)。
+> 12. **偏好 event_type 校验(M3)**:`PUT /notification-preferences` 的 `event_type` 须 ∈ `{all} ∪ notifications.type`,否则 400(§2.7),避免持久化永不命中的取值。
+> 13. **幂等创建竞态(L3)**:评论 `Idempotency-Key` 的 SELECT-then-INSERT 在 savepoint 内 flush,撞 `uq_comments_idempotency` 时回退返回胜出者行(§6.14),不再 500。
+> 14. **`read_all` 过滤(L6)**:`POST /inbox/read-all` 接受并应用与列表相同的 `filter`(含 `agent`)/`type`,不再跨过滤误标全部已读(§3.2)。
+> 15. **sanitizer 加固(L5)**:拒绝协议相对 URL `//host`;不安全非 mention 链接丢弃孤立 `</a>`。
+> 16. **body 体积词汇(L1)**:超 1 MiB 返回 413 `payload_too_large`(对齐 §6.14/§3.3)。
+> 17. **dev 收件箱频道授权(L7 备忘)**:dev(`mesh-dev:` 令牌)下 `member:{id}:inbox` 授权为工作区级(loopback only);生产 JWT 路径为 owner 级(`member.user_id == subject`)且正确。
 
 > **全局一致性锚点(一律引用 README §6,本 Spec 不重复定义)**
 > 1. **存储**:PostgreSQL 16+;表名 snake_case 复数;主键 `uuid`(默认 `gen_random_uuid()`);`created_at`/`updated_at` 为 `TIMESTAMPTZ NOT NULL DEFAULT now()`;软删除统一 `deleted_at TIMESTAMPTZ NULL`。

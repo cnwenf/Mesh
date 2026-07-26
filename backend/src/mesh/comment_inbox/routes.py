@@ -493,10 +493,14 @@ async def inbox_read_all(
 ) -> dict:
     context = await _inbox_context(workspace_id, user, session)
     inbox_filter = body.filter if body is not None else None
+    notification_type = body.type if body is not None else None
     if inbox_filter is not None and inbox_filter not in INBOX_FILTERS:
         raise ValidationError("invalid filter", details={"filter": inbox_filter[:32]})
     updated = await _inbox(request).read_all(
-        workspace_id=context.workspace.id, member=context.member, inbox_filter=inbox_filter
+        workspace_id=context.workspace.id,
+        member=context.member,
+        inbox_filter=inbox_filter,
+        notification_type=notification_type,
     )
     return {"data": {"updated": updated}}
 

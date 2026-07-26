@@ -111,6 +111,37 @@ describe('首帧鉴权(§6.16,对齐后端 v0.1.0)', () => {
     expect(socket.sentOps()).toContainEqual({ op: 'subscribe', channel: 'issue:1' });
   });
 
+  it('共享频道引用计数:两个订阅者时单方 unsubscribe 不中断服务端订阅', () => {
+    const { client } = makeClient();
+    client.connect();
+    const socket = FakeWebSocket.last;
+    socket.open();
+    socket.message({ op: 'auth_ok' });
+    // 两个组件订阅同一频道(如铃铛 + 收件箱页共享 member:{me}:inbox)
+    client.subscribe('member:1:inbox');
+    client.subscribe('member:1:inbox');
+    expect(client.getSubscribedChannels()).toContain('member:1:inbox');
+    // 其中一个组件卸载/effect 重跑 → 不得发送 unsubscribe
+    client.unsubscribe('member:1:inbox');
+    expect(socket.sentOps().filter((op) => op.op === 'unsubscribe')).toHaveLength(0);
+    expect(client.getSubscribedChannels()).toContain('member:1:inbox');
+    // 最后一个订阅者离开 → 发送 unsubscribe
+    client.unsubscribe('member:1:inbox');
+    expect(socket.sentOps().filter((op) => op.op === 'unsubscribe')).toHaveLength(1);
+    expect(client.getSubscribedChannels()).not.toContain('member:1:inbox');
+  });
+
+  it('未订阅频道的 unsubscribe 为幂等空操作', () => {
+    const { client } = makeClient();
+    client.connect();
+    const socket = FakeWebSocket.last;
+    socket.open();
+    socket.message({ op: 'auth_ok' });
+    client.unsubscribe('member:9:inbox');
+    client.unsubscribe('member:9:inbox');
+    expect(socket.sentOps().filter((op) => op.op === 'unsubscribe')).toHaveLength(0);
+  });
+
   it('无 token 时不建连,状态 offline', () => {
     const { client } = makeClient({ getToken: () => null });
     client.connect();

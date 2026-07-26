@@ -5,6 +5,7 @@
  */
 import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
+import { InboxBell } from '../features/inbox';
 import { useT } from '../i18n';
 import type { ConnectionState } from '../realtime';
 import { WorkspaceSwitcher } from '../workspace/WorkspaceSwitcher';
@@ -49,6 +50,7 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
         <StatusDot tone={TONE_BY_STATE[state]} label={t('status.' + state)} pulse={PULSING_STATES.has(state)} />
       </span>
       <span className="mesh-topbar__actions">
+        <InboxBell />
         <IconButton data-testid="open-palette" label={t('a11y.openPalette')} onClick={onOpenPalette}>
           ⌘
         </IconButton>
