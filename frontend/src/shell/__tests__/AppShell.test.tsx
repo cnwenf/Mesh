@@ -10,7 +10,7 @@ import { useAuthStore } from '../../state/authStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useShortcutRegistry } from '../../shortcuts';
 import { renderWithProviders } from '../../test-utils/render';
-import { AppShell, channelEventsUrl, createReconciler, fetchRestEvents, useOfflinePolling } from '../AppShell';
+import { AppShell, MAX_RESYNC_PAGES, channelEventsUrl, createReconciler, fetchRestEvents, resolveResyncUrl, useOfflinePolling } from '../AppShell';
 import { PlaceholderPage } from '../PlaceholderPage';
 
 function renderShell(route = '/'): ReturnType<typeof renderWithProviders> {
@@ -136,8 +136,57 @@ describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
       env.apiBaseUrl + '/api/v1/realtime/events?channel=workspace%3Aws-1%3Aissues&since=41',
     );
   });
+
+  it('next_cursor 永不为空时翻页到达上限即停(防恶意游标死循环,MEDIUM-1)', async () => {
+    const page = { data: [EVENT_BODY.data[0]], next_cursor: 'never-null' };
+    const fetchMock = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      new Response(JSON.stringify(page), { status: 200 }),
+    );
+    const frames = await fetchRestEvents('http://api/api/v1/realtime/events?since=1', fetchMock);
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_RESYNC_PAGES); // 不无限翻页
+    expect(frames).toHaveLength(MAX_RESYNC_PAGES); // 已聚合帧照常返回
+  });
 });
 
+describe('resolveResyncUrl / createReconciler 同源校验(MEDIUM-1:token 不得发往非预期主机)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useAuthStore.getState().clearToken();
+  });
+
+  const REST = '/api/v1/realtime/events?channel=issue%3A1&since=7';
+
+  it('合法相对 rest 解析为 apiBaseUrl 同源绝对 URL', () => {
+    expect(resolveResyncUrl(REST)).toBe(env.apiBaseUrl + REST);
+  });
+
+  it('apiBaseUrl 为空(同源部署)时以页面 origin 为基,相对路径照常通过', () => {
+    expect(resolveResyncUrl(REST, '')).toBe(window.location.origin + REST);
+  });
+
+  it.each([
+    ['绝对 URL 跨源', 'https://evil.example/api/v1/realtime/events?since=1'],
+    ['协议相对 URL', '//evil.example/api/v1/realtime/events?since=1'],
+    ['反斜杠绕过', '/\\evil.example/api/v1/realtime/events'],
+    ['非 /api/v1/ 前缀', '/other/path/events?since=1'],
+    ['前缀形似但越界', '/api/v1.evil.example/events?since=1'],
+    ['不可解析 URL', 'http://'],
+  ])('%s 的 rest 被拒绝(MeshApiError)', (_name, rest) => {
+    expect(() => resolveResyncUrl(rest)).toThrow(MeshApiError);
+  });
+
+  it('拒绝的 rest 经 reconciler 抛错且不发出任何携带 token 的请求', async () => {
+    useAuthStore.getState().setToken('secret-token');
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const client = { ingestReconciledEvent: vi.fn() } as never;
+    const reconciler = createReconciler(client, fetchMock);
+    await expect(
+      reconciler({ channel: 'issue:1', watermark: 9, rest: 'https://evil.example/api/v1/x' }),
+    ).rejects.toBeInstanceOf(MeshApiError);
+    expect(fetchMock).not.toHaveBeenCalled(); // token 绝无外泄
+    expect((client as { ingestReconciledEvent: ReturnType<typeof vi.fn> }).ingestReconciledEvent).not.toHaveBeenCalled();
+  });
+});
 
 describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
   afterEach(() => {

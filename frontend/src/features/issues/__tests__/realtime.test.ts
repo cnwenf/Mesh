@@ -163,6 +163,34 @@ it('strips frame meta fields from merged rows (F11)', () => {
   expect(row.id).toBe('iss-1');
 });
 
+it('skips __proto__/constructor/prototype keys from frame payloads (LOW-1 原型污染防护)', () => {
+  // JSON.parse 使 `__proto__` 成为帧载荷的自有属性(真实 WS 帧即经 JSON.parse),
+  // 若合并时按下标赋值进普通对象将触发 Object.prototype setter 改写原型。
+  const hostile = JSON.parse(
+    '{"id":"iss-1","__proto__":{"polluted":"list"},"constructor":{"polluted":"list"},' +
+      '"prototype":{"polluted":"list"},"changes":{"title":"safe"},' +
+      '"updated_at":"2026-07-03T00:00:00Z"}',
+  ) as unknown;
+  const merged = applyIssueListFrame([BASE], frame('issue.updated', hostile), always);
+  // Object.prototype 未被改写:全新空对象不含攻击者植入的属性
+  expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  // 攻击键不作为字段并入行对象,合法字段照常合并
+  const row = merged[0] as unknown as Record<string, unknown>;
+  expect(row.polluted).toBeUndefined();
+  expect(row.title).toBe('safe');
+  expect(row.id).toBe('iss-1');
+  // 详情级合并同路径防护
+  const detailHostile = JSON.parse(
+    '{"id":"iss-1","__proto__":{"polluted":"detail"},"updated_at":"2026-07-03T00:00:00Z"}',
+  ) as unknown;
+  const detail = applyIssueDetailFrame(
+    BASE,
+    frame('issue.updated', detailHostile),
+  ) as unknown as Record<string, unknown>;
+  expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  expect(detail.polluted).toBeUndefined();
+});
+
 describe('applyIssueDetailFrame', () => {
   it('merges frames for the same issue id only', () => {
     const merged = applyIssueDetailFrame(

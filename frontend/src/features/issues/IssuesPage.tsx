@@ -8,10 +8,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { useIntl } from 'react-intl';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
-import { useT } from '../../i18n';
+import { formatDate, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
 import type { MemberSummary, Membership } from '../members/types';
@@ -25,6 +26,21 @@ import './issues.css';
 
 const PAGE_LIMIT = 25;
 const ALL = 'all';
+
+/**
+ * 截止日本地化(LOW-2,i18n.md §4.4):due_date 为纯日期值(后端 DATE,'YYYY-MM-DD',
+ * 无时分语义),渲染锁定 UTC 解析/格式化,避免按展示时区换算时日历日漂移;
+ * 仅格式经 Intl 按 locale 呈现(如 en「Aug 15, 2026」/ zh-CN「2026年8月15日」)。
+ * 非法值降级回显原值,单条坏数据不中断整页列表。
+ */
+function formatDueDate(dueDate: string | null, locale: string): string {
+  if (dueDate === null) return '';
+  try {
+    return formatDate(dueDate, { locale, timeZone: 'UTC', dateStyle: 'medium' });
+  } catch {
+    return dueDate;
+  }
+}
 
 function matchesFilters(
   issue: IssueSummary,
@@ -315,6 +331,7 @@ function BulkBar(props: BulkBarProps): React.JSX.Element {
 
 export function IssuesPage(): React.JSX.Element {
   const t = useT();
+  const intl = useIntl();
   const toast = useToast();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
@@ -670,7 +687,7 @@ export function IssuesPage(): React.JSX.Element {
                     ? `${issue.assignee.name}${issue.assignee.member_type === 'agent' ? ` (${t('issues.agentBadge')})` : ''}`
                     : t('issues.unassigned')}
                 </td>
-                <td>{issue.due_date ?? ''}</td>
+                <td>{formatDueDate(issue.due_date, intl.locale)}</td>
               </tr>
             ))}
           </tbody>

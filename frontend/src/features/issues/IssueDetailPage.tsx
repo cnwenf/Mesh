@@ -43,8 +43,9 @@ import type {
   IssueStatusRef,
   IssueSummary,
   MovePreview,
+  MovePreviewField,
 } from './types';
-import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
+import { PRIORITY_ORDER, STATE_CATEGORY_ORDER, isMovePreview } from './types';
 import './issues.css';
 
 interface AddDependencyFormProps {
@@ -129,6 +130,42 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
   );
 }
 
+/**
+ * 迁移预览字段技术键 → 可读文案映射键(LOW-2):后端 `field` 为 snake_case 技术键
+ * (issue.md §3.8),UI 以本地化字段名呈现;未知键回退原始值(不中断渲染)。
+ */
+const MOVE_FIELD_LABEL_KEYS: Readonly<Record<string, string>> = {
+  status: 'issues.move.field.status',
+  milestone_id: 'issues.move.field.milestone_id',
+  cycle_id: 'issues.move.field.cycle_id',
+  labels: 'issues.move.field.labels',
+  custom_field_values: 'issues.move.field.custom_field_values',
+};
+
+/**
+ * 迁移预览 reason → 可读文案映射键(LOW-2):reason 取自 issue.md §3.8 契约词汇
+ * (含后端模块未就绪占位码);未知 reason 回退原始值(后端新增词汇前不中断渲染)。
+ */
+const MOVE_REASON_LABEL_KEYS: Readonly<Record<string, string>> = {
+  '项目私有 status → 目标项目同 category 默认 status': 'issues.move.reason.statusMapped',
+  项目私有里程碑: 'issues.move.reason.projectMilestone',
+  项目绑定的周期: 'issues.move.reason.projectCycle',
+  项目级标签: 'issues.move.reason.projectLabels',
+  项目级自定义字段值: 'issues.move.reason.projectCustomFields',
+  label_module_pending: 'issues.move.reason.labelModulePending',
+  custom_field_module_pending: 'issues.move.reason.customFieldModulePending',
+};
+
+function moveFieldLabel(t: (key: string) => string, field: string): string {
+  const key = MOVE_FIELD_LABEL_KEYS[field];
+  return key !== undefined ? t(key) : field;
+}
+
+function moveReasonLabel(t: (key: string) => string, reason: string): string {
+  const key = MOVE_REASON_LABEL_KEYS[reason];
+  return key !== undefined ? t(key) : reason;
+}
+
 interface MoveDialogProps {
   readonly preview: MovePreview;
   /** 解析后的目标项目显示名(null 目标 = 工作区收件箱);对话框须标明迁移去向(§4.3/§3.8)。 */
@@ -136,6 +173,8 @@ interface MoveDialogProps {
   readonly version: number;
   readonly onCancel: () => void;
   readonly onDone: () => void;
+  /** LOW-3:422 move_confirmation_required 携最新预览时回写父级(保持对话框,重渲染预览)。 */
+  readonly onPreviewRefresh: (preview: MovePreview) => void;
 }
 
 /** 跨项目迁移预览确认对话框(§4.3/§3.8 两步式契约第二步)。 */
@@ -157,6 +196,15 @@ function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
       toast.addToast(t('issues.move.success'), { tone: 'success', closeLabel: t('common.close') });
       props.onDone();
     } catch (err: unknown) {
+      // LOW-3:预览过期 → 422 move_confirmation_required(契约:details.preview 携最新预览)。
+      // 以最新预览重渲染并保持对话框,不降级为通用 toast + 关闭(issue.md §3.8/README §6.14)。
+      if (err instanceof MeshApiError && err.code === 'move_confirmation_required') {
+        const freshPreview = err.details?.preview;
+        if (isMovePreview(freshPreview)) {
+          props.onPreviewRefresh(freshPreview);
+          return;
+        }
+      }
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       props.onCancel();
@@ -177,12 +225,12 @@ function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
           <section data-testid="move-mapped">
             <h4>{t('issues.move.mapped')}</h4>
             <ul>
-              {preview.mapped_fields.map((field) => {
+              {preview.mapped_fields.map((field: MovePreviewField) => {
                 const from = field.from as { name?: string } | undefined;
                 const to = field.to as { name?: string } | undefined;
                 return (
                   <li key={field.field}>
-                    {field.field}: {from?.name ?? '?'} → {to?.name ?? '?'}
+                    {moveFieldLabel(t, field.field)}: {from?.name ?? '?'} → {to?.name ?? '?'}
                   </li>
                 );
               })}
@@ -193,9 +241,9 @@ function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
           <section data-testid="move-cleared">
             <h4>{t('issues.move.cleared')}</h4>
             <ul>
-              {preview.cleared_fields.map((field) => (
+              {preview.cleared_fields.map((field: MovePreviewField) => (
                 <li key={field.field}>
-                  {field.field}({field.reason})
+                  {moveFieldLabel(t, field.field)}({moveReasonLabel(t, field.reason)})
                 </li>
               ))}
             </ul>
@@ -613,8 +661,8 @@ export function IssueDetailPage(): React.JSX.Element {
             }
           >
             <option value="">{t('issues.detail.noneOption')}</option>
-            <option value="points">points</option>
-            <option value="hours">hours</option>
+            <option value="points">{t('issues.detail.estimateUnit.points')}</option>
+            <option value="hours">{t('issues.detail.estimateUnit.hours')}</option>
           </Select>
           <label className="mesh-issues__field">
             <span>{t('issues.detail.start')}</span>
@@ -719,6 +767,7 @@ export function IssueDetailPage(): React.JSX.Element {
             setMovePreviewData(null);
             setReloadKey((k) => k + 1);
           }}
+          onPreviewRefresh={setMovePreviewData}
         />
       ) : null}
     </div>
