@@ -794,3 +794,68 @@ async def test_patch_with_body_version_and_bulk_bad_first_id(client):
             headers=_auth(owner),
         )
     ).status_code == 404
+
+
+async def test_prefixless_endpoints_uniform_404_message(client):
+    """L3 (workspace.md §5.3): /issues/{id}、/statuses/{id}、
+    /issue-templates/{id} 对「不存在」与「存在但非成员」返回同一 404
+    消息,消除资源存在性 oracle。"""
+    owner_a = await _register_and_login(client, "l3-a@corp.com")
+    owner_b = await _register_and_login(client, "l3-b@corp.com")
+    await _create_workspace(client, owner_a, "l3-a")
+    ws_b = await _create_workspace(client, owner_b, "l3-b")
+    issue_b = await _create_issue(client, owner_b, ws_b["id"])
+    status_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/statuses",
+            json={"name": "Extra", "category": "todo"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    template_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/issue-templates",
+            json={"name": "Tmpl"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    random_id = str(uuid.uuid4())
+
+    probes = (
+        # (existing-id 探测, 不存在探测, 资源消息)
+        (
+            lambda target: client.get(f"/api/v1/issues/{target}", headers=_auth(owner_a)),
+            issue_b["id"],
+            "issue not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/statuses/{target}", json={}, headers=_auth(owner_a)
+            ),
+            status_b["id"],
+            "issue status not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/issue-templates/{target}", json={}, headers=_auth(owner_a)
+            ),
+            template_b["id"],
+            "issue template not found",
+        ),
+    )
+    for call, existing_id, message in probes:
+        existing = await call(existing_id)  # 存在但 owner_a 非成员
+        missing = await call(random_id)  # 完全不存在
+        assert existing.status_code == 404, existing.text
+        assert missing.status_code == 404, missing.text
+        # 两态消息不可区分,且为该资源的 not-found 口径
+        assert existing.json()["error"]["message"] == message
+        assert missing.json()["error"]["message"] == message
+
+    # 软删除 + 非成员 → 同一消息(解析器不过滤 deleted_at,消息统一兜住)
+    await client.delete(f"/api/v1/issues/{issue_b['id']}", headers=_auth(owner_b))
+    deleted_probe = await client.get(
+        f"/api/v1/issues/{issue_b['id']}", headers=_auth(owner_a)
+    )
+    assert deleted_probe.status_code == 404
+    assert deleted_probe.json()["error"]["message"] == "issue not found"
