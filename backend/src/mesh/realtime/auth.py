@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select, text
 
+from mesh.db.models.member import Member
 from mesh.db.models.realtime import RealtimeChannel
 from mesh.db.models.user import User
 from mesh.db.tenant import set_tenant_context
@@ -78,6 +79,8 @@ PrefixChecker = Callable[[Principal, str], Awaitable[bool]]
 # privacy boundary is workspace membership alone, so authorization parses the
 # workspace straight from the key and needs no resource checker or channel row.
 WORKSPACE_SCOPED_ENTITY = "workspace"
+MEMBER_INBOX_ENTITY = "member"
+MEMBER_INBOX_SUFFIX = ":inbox"
 
 # Resource-scoped entities: their privacy boundary is finer than workspace
 # membership (e.g. a *private* project inside a workspace), so they MUST have a
@@ -148,6 +151,20 @@ class DefaultChannelAuthorizer:
                 return None
             return owner
 
+        if info.entity == MEMBER_INBOX_ENTITY and info.key.endswith(MEMBER_INBOX_SUFFIX):
+            # member:{member_id}:inbox — ownership is resolved from the
+            # ROSTER, not from realtime_channels: an inbox that has never
+            # received a notification has no channel row yet, and the owner
+            # must still be able to subscribe to receive the FIRST one live
+            # (comment-inbox.md §3.6 / I9 realtime badge).
+            owner = await self._member_inbox_workspace(principal, info.key)
+            if owner is None:
+                return None
+            checker = self._prefix_checkers.get(info.entity)
+            if checker is not None and not await checker(principal, channel):
+                return None
+            return owner
+
         owner = await self._owning_workspace(principal, channel)
         if owner is None:
             return None
@@ -161,6 +178,42 @@ class DefaultChannelAuthorizer:
         if not await checker(principal, channel):
             return None
         return owner
+
+    async def _member_inbox_workspace(
+        self, principal: Principal, key: str
+    ) -> uuid.UUID | None:
+        """Resolve the owning workspace of a ``member:{id}:inbox`` channel.
+
+        The member row must exist (active) in one of the principal's
+        workspaces AND belong to the principal's user (dev principals —
+        non-UUID subjects — are workspace-scoped by definition, matching the
+        dev convention elsewhere in this module).
+        """
+        member_raw = key[: -len(MEMBER_INBOX_SUFFIX)]
+        try:
+            member_id = uuid.UUID(member_raw)
+        except ValueError:
+            return None
+        try:
+            user_id = uuid.UUID(principal.subject)
+        except ValueError:
+            user_id = None
+        for workspace_id in sorted(principal.workspace_ids):
+            async with self._session_factory() as session:
+                await set_tenant_context(session, workspace_id)
+                member = await session.scalar(
+                    select(Member).where(
+                        Member.id == member_id,
+                        Member.workspace_id == workspace_id,
+                        Member.status == "active",
+                    )
+                )
+            if member is None:
+                continue
+            if user_id is not None and member.user_id != user_id:
+                return None  # someone else's inbox — never leak existence
+            return workspace_id
+        return None
 
     async def _owning_workspace(self, principal: Principal, channel: str) -> uuid.UUID | None:
         for workspace_id in sorted(principal.workspace_ids):
