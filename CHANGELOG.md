@@ -3,6 +3,30 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.2] - 2026-07-26
+
+依赖卫生与供应链硬化(MES-23 排期池 M5 / W1 拆出,基于 MES-28 的 cryptography 修复成果):后端依赖从「宽松范围、即时解析」转为「lockfile 权威可复现」,并把 pip-audit 纳入 CI 常跑门禁,防供应链回归。
+
+### Security
+
+- **M5 — 后端 lockfile 可复现**:`backend/requirements.lock`(运行时,37 包)与 `backend/requirements-dev.lock`(运行时+dev,52 包)由 `uv pip compile --universal --generate-hashes` 生成并提交,锁定全部传递依赖并附 hash 校验;dev lock 以 `-c requirements.lock` 约束,共享包 pin 与运行时完全一致。`pyproject.toml` 保留语义化版本范围,lockfile 为权威安装来源——CI(test job)、Docker 镜像(运行时)、本地 venv 三处同源安装,消除「同代码不同环境装出不同依赖」。`cryptography` 锁 49.0.0(满足 MES-28 `>=48.0.1`,GHSA-537c-gmf6-5ccf 修复区间内)。
+- **W1 — 构建后端加固**:`[build-system] requires` setuptools `>=68` → `>=83.0.0`,修复 PYSEC-2026-3447(CVSS 6.1 MEDIUM:sdist 打包排除规则缺 Unicode 归一化,NFD 文件名可绕过 NFC 排除规则被打进源码分发包)。仅构建期、Mesh 不发布 sdist,实际暴露极低,随本批一并提升。
+- **pip-audit 纳入 CI 常跑**:`backend-ci` 新增 `supply-chain` job,`pip-audit --strict`(锁 2.10.1)分别审计两个 lockfile,命中已知 CVE 即失败;并在每周一 03:19 UTC 定时复跑(CVE 库更新可命中旧 pin,无新提交亦防回归)。ignore 策略当前为空(双 lockfile 审计均 `No known vulnerabilities found`);workflow 内明文规定未来任何 `--ignore-vuln` 必须带缘由 + 复核日期注释,禁止静默放过。
+
+### Changed
+
+- `backend/Dockerfile` 运行时依赖改从 `requirements.lock` 安装(hash 校验),项目本体 `--no-deps` 安装,镜像构建可复现。
+- `backend-ci` test job 改从 `requirements-dev.lock` 安装(编辑安装 `--no-deps`),CI 跑的就是锁定的精确依赖。
+
+### Docs
+
+- backend README 新增「Dependency management (lockfile)」:lockfile 分工表、再生成命令(uv pip compile)、pip-audit 门禁说明;本地开发改 lockfile 安装。根 README Quick Start 本地测试片段同步。
+
+### Quality
+
+- lockfile 安装下全量回归:单测 + 真实 e2e(PostgreSQL 16 + Redis 全真)全绿,pytest-cov ≥90% 门禁不退化;ruff、docs 词汇 / 名册校验全绿;`docker compose up --build` 一键部署实测跑通(healthz / readyz / ping 冒烟全绿)。
+- 纪律:提交身份 `cnwenf <cnwenf@outlook.com>`、无 Co-Authored-By、全程匿名化;改动面仅后端构建 / 依赖 / CI 与文档,未触碰业务模块。
+
 ## [0.9.1] - 2026-07-26
 
 auth 增量2 全量闭环(MES-12 / MES-38 / MES-39)+ realtime 网关生产密钥 fail-safe(MES-37):auth.md **§4 前端页面全量接通**(登录 / MFA / 重置 / 安全设置,切片3)、**§5.5 安全验收 H1/H2/H3/M1 修复**,以及复验新发现 §4.2 漏项**已登录态修改密码**端到端补齐;并入 v0.8.0 增量安全审核的 CRITICAL RT-C1 / MEDIUM RT-M2 修复。至此 auth.md 全量落地,§3 与 §4.2 自相矛盾消除。

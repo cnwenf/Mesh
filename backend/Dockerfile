@@ -7,12 +7,22 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md requirements.lock ./
+
+# Reproducible image: runtime deps come from the committed, hash-pinned
+# lockfile; the project itself is then installed without re-resolving.
+# Dependency install is ordered before the source copies so routine source
+# edits reuse the cached dependency layer.
+RUN pip install --no-cache-dir -r requirements.lock
+
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
 
-RUN pip install --no-cache-dir .
+# --no-deps: the lockfile above is authoritative; pip check then fails the
+# build if the lockfile ever stops satisfying pyproject (drift gate).
+RUN pip install --no-cache-dir --no-deps . \
+ && pip check
 
 # Run as a non-root user.
 RUN useradd --create-home mesh
