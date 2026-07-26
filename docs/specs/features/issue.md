@@ -95,6 +95,8 @@ Issue 是整个产品的**原子工作单元**。需求、任务、缺陷、史�
 
 > **category 与 status 分离(核心设计)**:`category` 是系统稳定语义(用于聚合、看板默认列、自动化触发);`status` 是用户可自定义的展示层。用户自由命名状态,而进度计算、看板分组等逻辑稳定不变。`issues.state_category` 冗余自 `issue_statuses.category`,加速聚合/筛选。
 
+> **状态定义变更的传播契约**:① 修改某 status 的 category 时,服务层在**同事务**内对所有引用该 status 的 issue 做与单条状态变更**完全一致**的联动——`state_category` 改写、`completed_at` 维护(进入 done 打戳 / 离开 done 清空)、`version` 递增(OCC)、`issue_activity` 留痕与 `issue.updated`/`issue.moved` 事件(私有项目 issue 仅发 `issue:{id}` 明细频道);批量路径按主键分页处理。② 每个作用域**至少一个默认状态**:PATCH 裸取消默认拒绝(422 `default_status_required`),**DELETE 删除作用域内最后一个 `is_default` 状态同样拒绝**(409 `last_default_status`)——否则该作用域后续新建 issue 将持续 422。
+
 #### 1.2.4 父子(sub-issues)与依赖关系(分开建模)
 
 | 功能点 | 说明 | 典型场景 |
@@ -187,7 +189,7 @@ workspaces ──1:N──► issue_statuses(工作区级 / 项目级)
 | `number` | BIGINT | NOT NULL | — | 命名空间内自增号(有项目:项目 key 命名空间 / 无项目:收件箱前缀命名空间),创建时固定、永不改变 |
 | `identifier` | TEXT | NOT NULL | — | 人类编号 `WEB-123` / `WS-7`(= `identifier_namespace_key || '-' || number`,搜索/展示);**一经生成永不改变** |
 | `title` | TEXT | NOT NULL | — | 1–255 |
-| `description` | TEXT | NULL | NULL | 富文本/Markdown |
+| `description` | TEXT | NULL | NULL | 富文本/Markdown;**字节上限 1 MiB**(超限 422 `field_too_large`,存储 DoS 护栏,§3.4) |
 | `status_id` | UUID | NOT NULL,**复合 FK** `(workspace_id, status_id)→issue_statuses(workspace_id, id)` ON DELETE RESTRICT | — | 当前状态 |
 | `state_category` | TEXT | NOT NULL, CHECK IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled') | — | 冗余自 status.category |
 | `priority` | TEXT | NOT NULL, CHECK IN ('none','low','medium','high','urgent') | `'none'` | |
@@ -614,10 +616,13 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 | 409 | `circular_parent` | 父子成环 |
 | 409 | `invalid_status_transition` | 启用流转限制且该转换不允许 |
 | 409 | `conflict` | 乐观并发版本不匹配 |
+| 409 | `last_default_status` | 删除作用域内最后一个 `is_default` 状态(§6.3:每作用域至少一个默认) |
 | 422 | `assignee_not_member` | assignee/reporter 非该工作区有效活跃成员 |
 | 422 | `bulk_partial_failure` | 批量部分失败(详情在 errors) |
 | 422 | `required_field_missing` | 状态流转时必填自定义字段未填(label-property.md) |
 | 422 | `move_confirmation_required` | 跨项目迁移未携带 `confirm:true`(`details.preview` 携带预览清单,§3.8) |
+| 422 | `move_version_required` | 确认迁移(`confirm:true`)缺失 `version`(§3.8 第二步乐观锁必填) |
+| 422 | `field_too_large` | 长文本 / JSONB 正文字段(description / template_body)超字节上限(§3.3 / §3.9) |
 | 429 | `rate_limited` | 限流 |
 
 ### 3.5 分页与鉴权
@@ -711,7 +716,9 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 }
 ```
 
-在**单事务**内完成:① 乐观锁校验(`version` 匹配,否则 409 `conflict`);② `project_id` 变更;③ 按预览做 status 映射;④ 清除项目私有 milestone/cycle、项目级 label、项目级自定义字段值(工作区级保留);⑤ `version + 1`;⑥ 写 `issue_activity` 留痕(含映射/清除清单);⑦ 同事务写 `outbox_events` `issue.project_changed` 事件(payload 含 `from_project_id`/`to_project_id`、`mapped_fields`、`cleared_fields`,README §6.6),经 outbox relay → realtime projector 唯一路径登记并推送(README §6.7)。
+- **`version` 必填(请求 schema 强制)**:`confirm:true` 的请求缺失 `version` 在**请求 schema 边界**即被拒——422 `move_version_required`(`details.field='version'`),不进入服务层,杜绝省略即绕过乐观锁。未确认(`confirm` 缺省)路径**不受此约束**——它正是第一步的 422 预览回退,其 `details.preview.version` 是客户端回传 version 的来源。
+
+在**单事务**内完成:① 乐观锁校验(`version` 匹配,否则 409 `conflict`);② `project_id` 变更;③ 按预览做 status 映射;④ 清除项目私有 milestone/cycle、项目级 label、项目级自定义字段值(工作区级保留);⑤ `version + 1`;⑥ 写 `issue_activity` 留痕(含映射/清除清单);⑦ 同事务写 `outbox_events` `issue.project_changed` 事件(payload 含 `from_project_id`/`to_project_id`、`mapped_fields`、`cleared_fields`,README §6.6),经 outbox relay → realtime projector 唯一路径登记并推送(README §6.7)。**广播脱敏(私有源)**:源项目为私有(`visibility != 'public'`)时,发往 `issue:{id}` 与 `workspace:{ws}:issues` 频道的 payload 副本对**源侧可读元数据脱敏**——`mapped_fields[].from` 仅保留 category 标记(不含私有状态名/颜色),`cleared_fields[]` 不含 `items`(私有里程碑 title / 周期 name 一律不带);`from_project_id`/`to_project_id`、目标侧 `to` 快照与结构化 reason 保留。完整清单仅存于受读权限保护的 `issue_activity` 留痕(⑥),实时消费方需要时经授权读路径回取。批量迁移(`POST /issues/bulk` 改 `project_id`)同口径脱敏。
 
 - **未携带 `confirm: true`** → 422 `move_confirmation_required`,`details.preview` 返回第一步的预览清单(客户端必须展示并要求确认,README §6.14)。
 - 版本不符 → 409 `conflict`;目标项目不存在/不可见 → 404 `not_found` / 403 `forbidden`。
@@ -729,8 +736,8 @@ REST 基础路径 `/api/v1`,Bearer token,游标分页。
 | `workspace_id` | UUID | NOT NULL, FK→workspaces(id) ON DELETE CASCADE;UNIQUE(workspace_id, id) | 隔离(README §6.2) |
 | `project_id` | UUID | NULL,复合 FK `(workspace_id, project_id)→projects(workspace_id, id)` ON DELETE SET NULL (project_id) | NULL=工作区级模板;非空=项目私有模板 |
 | `name` | TEXT | NOT NULL | 模板名,1–120;`UNIQUE (workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), name)`(部分表达式唯一索引,README §6.3) |
-| `description` | TEXT | NULL | 模板用途说明 |
-| `template_body` | JSONB | NOT NULL | 预填字段集:`{title_prefix, description, state_category/status_id, priority, label_ids[], custom_field_values{}, estimate/estimate_unit, parent_strategy}`;引用型字段(status/label/自定义字段)按 README §6.2 复合 FK 语义校验同租户 |
+| `description` | TEXT | NULL | 模板用途说明;**字节上限 1 MiB**(超限 422 `field_too_large`,§3.4) |
+| `template_body` | JSONB | NOT NULL | 预填字段集:`{title_prefix, description, state_category/status_id, priority, label_ids[], custom_field_values{}, estimate/estimate_unit, parent_strategy}`;引用型字段(status/label/自定义字段)按 README §6.2 复合 FK 语义校验同租户;**序列化字节上限 1 MiB**(超限 422 `field_too_large`,存储 DoS 护栏) |
 | `created_by` | UUID | NOT NULL,复合 FK `(workspace_id, created_by)→members(workspace_id, id)` ON DELETE RESTRICT | 创建者(成员软删除,不悬空) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | |
 
@@ -837,6 +844,9 @@ Issue 详情(全屏或右侧抽屉)
 - [ ] **至少一个默认状态由事务保证**:取消某状态默认必须与设置新默认在同一事务;工作区/项目创建事务播种默认状态集;服务层自检发现缺失即报警并修复(README §6.3)。
 - [ ] 作用域内状态名唯一由 `uq_issue_statuses_name` 部分表达式唯一索引强制(README §6.3)。
 - [ ] 删除被引用的 status 前需迁移其下 issue,否则拒绝。
+- [ ] **删除作用域内最后一个默认状态被拒**(409 `last_default_status`);先移交默认(PATCH/创建时 `is_default:true` 同事务切换)后,旧默认方可删除。
+- [ ] **改 status 的 category 全量联动**:受影响 issue 的 `state_category`/`completed_at`/`version`/留痕/事件与单条状态变更同契约,无脏 `completed_at`、无 OCC 语义漏洞(§1.2.3 传播契约)。
+- [ ] 长文本输入护栏:`description`(issue 与模板)、`template_body`(JSONB 序列化尺寸)超 1 MiB → 422 `field_too_large`,错误信封不回显超限内容。
 
 ### 5.3 功能性 —— 父子与依赖
 
