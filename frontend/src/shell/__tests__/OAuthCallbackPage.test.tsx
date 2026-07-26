@@ -114,6 +114,37 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
   });
 
+  it('next 反斜杠变体 /\\evil.example(协议相对绕过)→ 回落首页', async () => {
+    sessionStorage.setItem('mesh.oauth.next', '/\\evil.example');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
+  it('next 控制字符变体 TAB 夹带(WHATWG 解析器归一化绕过)→ 回落首页', async () => {
+    // 不在源码中书写控制字符字面量:经字符码构造 `/<TAB>/evil.example`
+    sessionStorage.setItem('mesh.oauth.next', '/' + String.fromCharCode(9) + '/evil.example');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
+  it('next 绝对 URL(https://evil.example)→ 回落首页', async () => {
+    sessionStorage.setItem('mesh.oauth.next', 'https://evil.example');
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
   it('缺少 code/state → 具名错误 + 返回登录入口', async () => {
     const fetchImpl = vi.fn();
     renderCallback(fetchImpl, '/auth/oauth/callback/mock');

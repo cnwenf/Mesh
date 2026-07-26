@@ -25,6 +25,7 @@ import { OAUTH_NEXT_STORAGE_KEY, oauthLoginUrl, oauthRedirectUri } from '../../a
 import { Button, Input } from '../../design';
 import { env } from '../../env';
 import { PasswordStrengthMeter } from '../../features/auth/PasswordStrengthMeter';
+import { safeNextPath } from '../../features/auth/safeNextPath';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
 
@@ -81,9 +82,8 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   // 同步重渲(真实浏览器无 act 批处理),守卫读 ref 防止 <Navigate> 抢先跳走。
   const registeredResultActive = useRef(false);
 
-  const nextPath = searchParams.get('next');
-  const target =
-    nextPath !== null && nextPath.startsWith('/') && !nextPath.startsWith('//') ? nextPath : '/';
+  // 回跳目标站内路径守卫(防开放重定向,`//` 与 `/\` 反斜杠变体同款拒绝)。
+  const target = safeNextPath(searchParams.get('next'));
 
   if (token !== null && !registeredResultActive.current) {
     return <Navigate to={target} replace />;

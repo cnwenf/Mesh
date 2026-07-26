@@ -16,19 +16,12 @@ import {
   OAUTH_NEXT_STORAGE_KEY,
   oauthCallbackLogin,
 } from '../../api/oauth';
+import { safeNextPath } from '../../features/auth/safeNextPath';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
 
 export interface OAuthCallbackPageProps {
   client?: MeshApiClient;
-}
-
-/** 站内路径校验(与 LoginPage 同策:仅 `/` 开头且非协议相对,防开放重定向) */
-function safeNext(raw: string | null): string {
-  if (raw !== null && raw.startsWith('/') && !raw.startsWith('//')) {
-    return raw;
-  }
-  return '/';
 }
 
 export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Element {
@@ -54,7 +47,7 @@ export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Elem
     void oauthCallbackLogin(client, provider, code, state)
       .then((tokens) => {
         setSession({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token });
-        const next = safeNext(sessionStorage.getItem(OAUTH_NEXT_STORAGE_KEY));
+        const next = safeNextPath(sessionStorage.getItem(OAUTH_NEXT_STORAGE_KEY));
         sessionStorage.removeItem(OAUTH_NEXT_STORAGE_KEY);
         navigate(next, { replace: true });
       })

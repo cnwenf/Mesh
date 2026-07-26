@@ -40,6 +40,14 @@ export default defineConfig({
           branches: 90,
           statements: 90,
         },
+        // MES-55 验收建议:安全守卫目录(防开放重定向的 safeNextPath 等)
+        // 比照 labels 先例设 perFile 阈值,覆盖缺口永久可见、不被全局门禁掩盖。
+        'src/features/auth/**/*.ts': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
       },
     },
   },
