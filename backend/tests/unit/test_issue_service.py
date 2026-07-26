@@ -693,6 +693,46 @@ async def test_filter_condition_limit_returns_filter_too_complex(session_factory
 
 
 @pytest.mark.unit
+async def test_flat_and_tree_conditions_share_one_budget(session_factory, issue_service):
+    """L6:扁平查询参数与 filters 树条件合计 ≤20(§6.14 单一预算)。"""
+    from datetime import date
+
+    from mesh.issue.filters import FilterTooComplexError
+
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    flat = {
+        "status_id": uuid.uuid4(),
+        "state_category": "todo",
+        "priority": "low",
+        "assignee_id": uuid.uuid4(),
+        "reporter_id": uuid.uuid4(),
+        "project_id": uuid.uuid4(),
+        "cycle_id": uuid.uuid4(),
+        "milestone_id": uuid.uuid4(),
+        "parent_id": uuid.uuid4(),
+        "due_before": date(2026, 1, 2),
+        "due_after": date(2026, 1, 1),
+        "q": "x",
+    }  # 扁平 12 条(全部槽位)
+    assert len(flat) == 12
+
+    # 12 + 9 = 21 → 400 filter_too_complex(旧实现两者独立计数,各自不超)
+    tree_9 = {"and": [{"field": "priority", "op": "eq", "value": "low"}] * 9}
+    with pytest.raises(FilterTooComplexError):
+        await issue_service.list_issues(
+            viewer=owner, workspace_id=workspace.id, filters=tree_9, **flat
+        )
+
+    # 12 + 8 = 20 → 通过条件数闸门(随机 UUID 谓词无命中属预期)
+    tree_8 = {"and": [{"field": "priority", "op": "eq", "value": "low"}] * 8}
+    result = await issue_service.list_issues(
+        viewer=owner, workspace_id=workspace.id, filters=tree_8, **flat
+    )
+    assert result["data"] == []
+
+
+@pytest.mark.unit
 async def test_filter_depth_limit(session_factory, issue_service):
     from mesh.issue.filters import FilterTooComplexError
 

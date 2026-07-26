@@ -79,10 +79,23 @@ def _walk(node: Any, depth: int, counter: list[int]) -> None:
         )
 
 
-def validate_filter_tree(filters: Any) -> None:
-    """Depth/count-validate a structured filter tree (§6.14)."""
-    counter = [0]
+def validate_filter_tree(filters: Any, *, extra_conditions: int = 0) -> None:
+    """Depth/count-validate a structured filter tree (§6.14).
+
+    ``extra_conditions`` seeds the counter with the same request's flat
+    query-parameter conditions, so flat params and the tree share ONE
+    20-condition budget (MES-51 L6; §6.14 「最大条件数 20」).
+    """
+    counter = [extra_conditions]
     _walk(filters, 1, counter)
+
+
+def validate_combined_condition_count(flat_count: int, filters: Any | None) -> None:
+    """§6.14 condition budget over flat params + structured tree combined."""
+    if filters is None:
+        validate_flat_condition_count(flat_count)
+        return
+    validate_filter_tree(filters, extra_conditions=flat_count)
 
 
 def compile_filter_tree(
@@ -169,6 +182,7 @@ __all__ = [
     "MAX_FILTER_DEPTH",
     "coerce_date",
     "compile_filter_tree",
+    "validate_combined_condition_count",
     "validate_filter_tree",
     "validate_flat_condition_count",
 ]

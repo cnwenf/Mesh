@@ -57,7 +57,7 @@ from mesh.issue.filters import (
     LIST_STATEMENT_TIMEOUT_MS,
     coerce_date,
     compile_filter_tree,
-    validate_flat_condition_count,
+    validate_combined_condition_count,
 )
 from mesh.issue.graph import detect_parent_cycle, lock_issue_graph
 from mesh.issue.schemas import CreateIssueRequest
@@ -833,7 +833,9 @@ class IssueService:
             )
             if value is not None
         )
-        validate_flat_condition_count(flat_conditions)
+        # §6.14: flat query params and the structured tree share ONE
+        # 20-condition budget (MES-51 L6 — counting them apart allowed 32).
+        validate_combined_condition_count(flat_conditions, filters)
         page_limit = _limit_page(limit)
 
         async with self._factory() as session:
