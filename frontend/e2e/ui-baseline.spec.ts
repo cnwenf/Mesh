@@ -152,13 +152,16 @@ test.describe('路由与占位页', () => {
     await page.waitForURL('**/');
   });
 
-  test('侧栏导航占位页渲染空状态(同一 EmptyState 基线)', async ({ page }) => {
+  test('侧栏导航基线:看板为数据页(MES-43)呈 §6.12 错误态,成员页呈标题', async ({ page }) => {
     await page.goto('/');
     const main = page.locator('main');
+    // 看板已由占位页升级为视图定义层数据页:mock 契约不提供 /users/me,
+    // 页面按 README §6.12 呈现错误态基线(错误标题 + 重试入口)
     await page.getByTestId('nav-board').click();
     await page.waitForURL('**/board');
-    await expect(main.getByText('Board')).toBeVisible();
-    await expect(main.getByText('Items you create or follow will show up here.')).toBeVisible();
+    await expect(page.getByTestId('board-page')).toBeVisible();
+    await expect(main.getByText('Something went wrong')).toBeVisible();
+    await expect(main.getByRole('button', { name: /retry/i })).toBeVisible();
     await page.getByTestId('nav-members').click();
     await page.waitForURL('**/members');
     await expect(main.getByText('Members')).toBeVisible();

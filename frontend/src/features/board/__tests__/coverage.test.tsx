@@ -65,7 +65,7 @@ describe('BoardPage 覆盖补强', () => {
 
   it('另存为:对话框提交 createView 并选中新视图', async () => {
     const calls = stubMeAndViews([view()]);
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     fireEvent.change(screen.getByTestId('group-by-select'), { target: { value: 'priority' } });
     await waitFor(() => expect(screen.getByTestId('view-save-bar')).toBeInTheDocument());
@@ -81,7 +81,7 @@ describe('BoardPage 覆盖补强', () => {
 
   it('list 布局呈现列表占位;timmeline/table 预留呈现未实现态', async () => {
     stubMeAndViews([view({ layout: 'list' })]);
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     expect(await screen.findByText('List layout')).toBeInTheDocument();
   });
 
@@ -110,7 +110,7 @@ describe('BoardPage 覆盖补强', () => {
 
   it('折叠列切换(工具条列头折叠按钮)', async () => {
     stubMeAndViews([view()]);
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     const doneColumn = screen.getByTestId('board-column-done');
     const toggle = within(doneColumn).getByRole('button', { name: /Collapse column|折叠列/ });
@@ -136,7 +136,7 @@ describe('BoardPage 覆盖补强', () => {
       return fakeResponse({ status: 404 });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     fireEvent.change(screen.getByTestId('group-by-select'), { target: { value: 'priority' } });
     await waitFor(() => expect(screen.getByTestId('view-save-bar')).toBeInTheDocument());
@@ -157,7 +157,7 @@ describe('BoardPage 视图切换器/操作回调经页面接线', () => {
 
   it('切换器新建对话框经 BoardPage.handleCreate 提交并选中新视图', async () => {
     const calls = stubMeAndViews(twoViews());
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     fireEvent.click(screen.getByTestId('view-create-open'));
     fireEvent.change(screen.getByTestId('view-create-name'), { target: { value: '新视图' } });
@@ -170,7 +170,7 @@ describe('BoardPage 视图切换器/操作回调经页面接线', () => {
 
   it('菜单复制/设默认/删除经 BoardPage 对应 handler 调用 API', async () => {
     const calls = stubMeAndViews(twoViews());
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
 
     fireEvent.click(screen.getByTestId('view-menu-v1'));
@@ -191,7 +191,7 @@ describe('BoardPage 视图切换器/操作回调经页面接线', () => {
 
   it('菜单重命名对话框经 handleRename 调用 PATCH', async () => {
     const calls = stubMeAndViews(twoViews());
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     fireEvent.click(screen.getByTestId('view-menu-v1'));
     fireEvent.click(within(screen.getByTestId("view-menu-list-v1")).getByText('Rename'));
@@ -204,7 +204,7 @@ describe('BoardPage 视图切换器/操作回调经页面接线', () => {
 
   it('WIP 面板保存经 handleWipSave 调用 PATCH /wip', async () => {
     const calls = stubMeAndViews([view()]);
-    renderWithProviders(<BoardPage />, { route: '/board/v1' });
+    renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-columns');
     fireEvent.click(screen.getByTestId('panel-toggle-wip'));
     fireEvent.change(screen.getByTestId('wip-limit-todo'), { target: { value: '3' } });

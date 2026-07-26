@@ -561,7 +561,10 @@ class ViewService:
                 visible.append(view)
             views = visible
             items = [
-                self.render_view(view, can_write=await self._can_write_quick(session, viewer=viewer, view=view))
+                self.render_view(
+                    view,
+                    can_write=await self._can_write_quick(session, viewer=viewer, view=view),
+                )
                 for view in views
             ]
             return items, page.next_cursor
