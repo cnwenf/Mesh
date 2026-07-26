@@ -180,8 +180,13 @@ function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
   ];
 }
 
+/** 附件区于详情加载后就位即拉一次 issue 附件列表(空):占位于首轮 9 响应之后。 */
+function attachmentsEmpty(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [], next_cursor: null } });
+}
+
 function queue(...extra: ReturnType<typeof fakeResponse>[]): FetchStub {
-  const stub = stubFetch(...detailResponses(), ...extra);
+  const stub = stubFetch(...detailResponses(), attachmentsEmpty(), ...extra);
   vi.stubGlobal('fetch', stub.fetchImpl);
   return stub;
 }
@@ -410,6 +415,7 @@ describe('IssueDetailPage', () => {
     const stub = stubFetch(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
       ...detailResponses(),
+      attachmentsEmpty(),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
@@ -471,8 +477,8 @@ describe('IssueDetailPage', () => {
         'st-todo',
       ),
     );
-    // 不触发整页 reload:除首轮加载 + 被拒的 PATCH 外无其它请求(无骨架闪烁来源)
-    expect(stub.calls.length).toBe(10);
+    // 不触发整页 reload:除首轮加载(9)+ 附件区首次拉取(1)+ 被拒的 PATCH(1)外无其它请求。
+    expect(stub.calls.length).toBe(11);
     expect(stub.calls.filter((c) => c.init?.method === 'PATCH').length).toBe(1);
   });
 
