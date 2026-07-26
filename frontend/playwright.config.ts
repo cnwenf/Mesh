@@ -8,7 +8,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   // 真实后端联调用例走独立配置(playwright.real.config.ts / playwright.members.config.ts),不对 mock 运行
-  testIgnore: ['real-backend.spec.ts', 'real-members.spec.ts', 'workspace-flow.spec.ts', 'real-projects.spec.ts'],
+  testIgnore: ['real-backend.spec.ts', 'real-members.spec.ts', 'workspace-flow.spec.ts', 'real-projects.spec.ts', 'real-lead-gate.spec.ts'],
   timeout: 90_000,
   retries: 0,
   workers: 1,
