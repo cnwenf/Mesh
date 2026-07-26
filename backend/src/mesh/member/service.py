@@ -44,6 +44,7 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.member.display import resolve_display_name
+from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.member.reassign import DEFAULT_REASSIGN_STATUSES, IssueReassigner, NullReassigner
 from mesh.outbox.service import emit_realtime
 from mesh.workspace.service import WORKSPACE_CHANNEL
@@ -418,12 +419,35 @@ class MemberService:
                         details={"status": new_status},
                     )
                 if new_status != member.status:
-                    now = _now(self._clock)
-                    member.status = new_status
-                    member.disabled_at = now if new_status == "disabled" else None
-                    member.updated_at = now
-                    changes["status"] = new_status
-                    audit_action = "member.status_changed"
+                    # Lock the target + active owners and re-read the target
+                    # from post-lock state (owner_guard.py — TOCTOU): the role
+                    # gate and owner count below come from the locked snapshot,
+                    # so a concurrent promotion of the target cannot slip past
+                    # an unguarded disable, and a concurrent removal becomes a
+                    # 404 instead of a double write.
+                    active_owners, _locked = await lock_active_owner_set(
+                        session, workspace_id=workspace_id, target_id=member.id
+                    )
+                    if member.status == "removed":
+                        raise NotFoundError(_NOT_FOUND)
+                    if new_status != member.status:
+                        if new_status == "disabled" and member.role == "owner":
+                            # Owner invariant (member.md §3.3/§5.3): disabling
+                            # the last ACTIVE owner orphans the workspace —
+                            # entry is gated on status='active', so zero active
+                            # owners can only be fixed by DB intervention.
+                            # Same 409 as the demote/remove paths.
+                            if active_owners <= 1:
+                                raise ConflictError(
+                                    "cannot disable the last owner of the workspace",
+                                    code=LAST_OWNER_CODE,
+                                )
+                        now = _now(self._clock)
+                        member.status = new_status
+                        member.disabled_at = now if new_status == "disabled" else None
+                        member.updated_at = now
+                        changes["status"] = new_status
+                        audit_action = "member.status_changed"
             if has_display:
                 is_self = actor.id == member.id
                 if not is_self:
@@ -488,19 +512,22 @@ class MemberService:
             if member.status == "removed":
                 raise NotFoundError(_NOT_FOUND)
 
-            if member.role == "owner":
-                active_owners = await session.scalar(
-                    select(func.count(Member.id)).where(
-                        Member.workspace_id == workspace_id,
-                        Member.role == "owner",
-                        Member.status == "active",
-                    )
+            # Lock the target + active owners and decide from post-lock state
+            # (owner_guard.py — TOCTOU): a concurrent promotion of the target
+            # cannot slip past the guard, and a concurrent removal becomes a
+            # 404 instead of a double removal.
+            active_owners, _locked = await lock_active_owner_set(
+                session, workspace_id=workspace_id, target_id=member.id
+            )
+            if member.status == "removed":
+                raise NotFoundError(_NOT_FOUND)
+            if member.role == "owner" and member.status == "active" and active_owners <= 1:
+                # Removing a disabled owner cannot reduce the ACTIVE count;
+                # only an active owner needs the last-owner protection.
+                raise ConflictError(
+                    "cannot remove the last owner of the workspace",
+                    code=LAST_OWNER_CODE,
                 )
-                if active_owners <= 1:
-                    raise ConflictError(
-                        "cannot remove the last owner of the workspace",
-                        code="last_owner",
-                    )
 
             reassigned = 0
             if reassign_to is not None:

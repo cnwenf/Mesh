@@ -293,7 +293,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 | 401 | `unauthorized` | token 缺失/失效 |
 | 403 | `forbidden` | 非 admin 改他人角色;非 admin 移除成员 |
 | 404 | `not_found` | 成员不存在或不可见 |
-| 409 | `last_owner` | 试图移除/降级最后一个 owner |
+| 409 | `last_owner` | 试图移除/降级/停用最后一个 active owner(工作区须恒有 ≥1 个 `role='owner' AND status='active'` 成员;校验在行锁下串行化,并发安全) |
 | 409 | `agent_owner_not_allowed` | 试图把 agent 设为 owner |
 | 409 | `already_member` | 该 user/agent 已在名册 |
 | 422 | `reassign_target_invalid` | 转派目标不是有效活跃成员 |
@@ -379,7 +379,7 @@ disabled ──移除──► removed
 - [ ] 名册条目通过 `member_type` + 多态外键指向 user 或 agent,CHECK 约束保证 user_id/agent_id 恰好一个非空。
 - [ ] 同一 user / agent 在同一工作区仅一条名册(部分唯一索引),重复加入返回 409 `already_member`。
 - [ ] 把 agent 设为 `owner` 被拒,返回 409 `agent_owner_not_allowed`(前端禁用 + 后端强校验)。
-- [ ] 降级/移除最后一个 owner 被拒,返回 409 `last_owner`。
+- [ ] 降级/移除/停用最后一个 active owner 被拒,返回 409 `last_owner`;校验先锁定 active owner 行再计数(FOR UPDATE,id 升序),并发竞态中恰有一个操作被拒,任何时刻 ≥1 个 active owner。移除/降级已停用的 owner 不削减 active 计数,不受此限。
 - [ ] `GET /members` 同时返回人类与 agent,可按 `member_type`、`status`、`role` 过滤,`q` 模糊搜索。
 - [ ] issue.assignee、评论 author、@提及、通知均可统一引用 `members.id`,且对人与 agent 表现一致。
 - [ ] **成员模型权威(README §6.1)**:`users`/`agents` 表**不含 `member_id` 反向列**;关联方向恒为 `members.user_id → users.id` / `members.agent_id → agents.id`;同一 user 可在多个工作区各有一条 `members` 行。
@@ -403,7 +403,7 @@ disabled ──移除──► removed
 ### 5.3 安全
 
 - [ ] 改角色/状态/移除/加入端点强制 `admin` 校验,不足返回 403。
-- [ ] `last_owner` 与 `agent_owner_not_allowed` 在服务端强校验,绕过前端亦被拒。
+- [ ] `last_owner` 与 `agent_owner_not_allowed` 在服务端强校验,绕过前端亦被拒。`last_owner` 覆盖降级/移除/停用三条削减 active owner 的路径,且 gate 判定与计数均基于锁后状态(目标行 + active owner 行同一条 FOR UPDATE 语句按 id 升序加锁并刷新),并发提升/削减交错下不可绕过,TOCTOU 安全。
 - [ ] 角色变更、移除、停用、转派均写 auth.md 的 append-only 审计日志(行为者以 `actor_member_id` 落 member 行,人/agent 经 JOIN `members.member_type` 判别;`actor_kind∈('member','system')`,无 `actor_type` 列,见 auth.md §2.6)。
 - [ ] 移除/停用受 auth.md 限流约束。
 - [ ] guest 的项目级可见性在服务端逐资源校验,不依赖前端隐藏。

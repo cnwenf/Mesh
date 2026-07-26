@@ -14,7 +14,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from mesh.auth.audit import write_audit
@@ -22,6 +21,7 @@ from mesh.auth.rbac import role_satisfies
 from mesh.db.models.member import MEMBER_ROLE_VALUES, Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
+from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.outbox.service import emit_realtime
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
@@ -59,12 +59,15 @@ async def change_member_role(
         if not role_satisfies(actor.role, "workspace:manage_members"):
             raise ForbiddenError("managing members requires the admin role")
 
-        target = await session.get(Member, member_id)
-        if (
-            target is None
-            or target.workspace_id != workspace_id
-            or target.status == "removed"
-        ):
+        # One ascending-id FOR UPDATE sweep locks the target plus every active
+        # owner and refreshes the target under lock: the no-op / agent-owner /
+        # last-owner decisions below all see post-lock state, so a concurrent
+        # promotion of the target can never slip past an unguarded demotion
+        # (owner_guard.py — TOCTOU serialization).
+        active_owners, target = await lock_active_owner_set(
+            session, workspace_id=workspace_id, target_id=member_id
+        )
+        if target is None or target.status == "removed":
             raise NotFoundError("member not found")
 
         if target.role == new_role:
@@ -76,19 +79,13 @@ async def change_member_role(
                 code="agent_owner_not_allowed",
             )
 
-        if target.role == "owner" and new_role != "owner":
-            active_owners = await session.scalar(
-                select(func.count(Member.id)).where(
-                    Member.workspace_id == workspace_id,
-                    Member.role == "owner",
-                    Member.status == "active",
-                )
+        if target.role == "owner" and target.status == "active" and active_owners <= 1:
+            # Demoting a disabled owner cannot reduce the ACTIVE count; only
+            # an active owner needs the last-owner protection here.
+            raise ConflictError(
+                "cannot demote the last owner of the workspace",
+                code=LAST_OWNER_CODE,
             )
-            if active_owners <= 1:
-                raise ConflictError(
-                    "cannot demote the last owner of the workspace",
-                    code="last_owner",
-                )
 
         old_role = target.role
         target.role = new_role
