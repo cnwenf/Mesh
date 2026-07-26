@@ -26,7 +26,7 @@ from mesh.errors import (
     NotFoundError,
     ValidationError,
 )
-from mesh.issue.move import MoveService, apply_move_plan, move_activity_rows
+from mesh.issue.move import MoveService, apply_move_plan, move_activity_rows, redact_move_payload
 from mesh.issue.schemas import BulkRequest
 from mesh.issue.service import (
     UNSET,
@@ -66,9 +66,7 @@ class BulkService:
                 target = await self._moves._target_project(
                     session,
                     workspace_id=workspace_id,
-                    target_project_id=_parse_uuid(
-                        body.changes.project_id, field="project_id"
-                    ),
+                    target_project_id=_parse_uuid(body.changes.project_id, field="project_id"),
                 )
                 if target is not None:
                     await self._issues._projects.assert_can_write(
@@ -91,9 +89,7 @@ class BulkService:
                     # as error markers (404→not_found for guests,
                     # 403→forbidden for members), NEVER as a plan.
                     try:
-                        await self._issues.assert_can_view_issue(
-                            session, viewer=actor, issue=issue
-                        )
+                        await self._issues.assert_can_view_issue(session, viewer=actor, issue=issue)
                     except ForbiddenError:
                         previews.append({"issue_id": raw_id, "error": "forbidden"})
                         continue
@@ -122,9 +118,7 @@ class BulkService:
                 try:
                     issue_id = uuid.UUID(raw_id)
                 except ValueError:
-                    errors.append(
-                        {"issue_id": raw_id, "code": "not_found", "message": "invalid issue id"}
-                    )
+                    errors.append({"issue_id": raw_id, "code": "not_found", "message": "invalid issue id"})
                     continue
                 try:
                     async with session.begin_nested():
@@ -137,9 +131,7 @@ class BulkService:
                         )
                     succeeded += 1
                 except MeshError as exc:
-                    errors.append(
-                        {"issue_id": str(issue_id), "code": exc.code, "message": exc.message}
-                    )
+                    errors.append({"issue_id": str(issue_id), "code": exc.code, "message": exc.message})
         if errors:
             raise BusinessRuleError(
                 "bulk operation partially failed",
@@ -186,9 +178,7 @@ class BulkService:
                 target_project_id=_parse_uuid(changes.project_id, field="project_id"),
             )
             if target is not None:
-                await self._issues._projects.assert_can_write(
-                    session, viewer=actor, project=target
-                )
+                await self._issues._projects.assert_can_write(session, viewer=actor, project=target)
             plan = await self._moves.compute_plan(
                 session, workspace_id=workspace_id, issue=issue, target_project=target
             )
@@ -215,20 +205,23 @@ class BulkService:
             await session.flush()
             payload = {
                 "id": str(issue.id),
-                "from_project_id": str(from_project_id)
-                if from_project_id is not None
-                else None,
+                "from_project_id": str(from_project_id) if from_project_id is not None else None,
                 "to_project_id": plan["target_project_id"],
                 "mapped_fields": plan["mapped_fields"],
                 "cleared_fields": plan["cleared_fields"],
                 "version": issue.version,
             }
+            # Private-source redaction parity with the explicit move (M-7):
+            # the plan's source-side copies carry private readable metadata
+            # that workspace-wide readers were never granted.
+            source_private = source_project is not None and source_project.visibility != "public"
+            broadcast_payload = redact_move_payload(payload) if source_private else payload
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
                 channel=_issue_channel(issue.id),
                 event="issue.project_changed",
-                data=payload,
+                data=broadcast_payload,
             )
             if target is None or target.visibility == "public":
                 await emit_realtime(
@@ -236,7 +229,7 @@ class BulkService:
                     workspace_id=workspace_id,
                     channel=_workspace_issues_channel(workspace_id),
                     event="issue.project_changed",
-                    data=payload,
+                    data=broadcast_payload,
                 )
             source_public = source_project is None or source_project.visibility == "public"
             target_public = target is None or target.visibility == "public"
@@ -251,14 +244,10 @@ class BulkService:
             return
 
         patch = IssuePatch(
-            status_id=_parse_uuid(changes.status_id, field="status_id")
-            if changes.status_id
-            else UNSET,
+            status_id=_parse_uuid(changes.status_id, field="status_id") if changes.status_id else UNSET,
             priority=changes.priority if changes.priority is not None else UNSET,
             assignee_id=(
-                _parse_uuid(changes.assignee_id, field="assignee_id")
-                if changes.assignee_id
-                else None
+                _parse_uuid(changes.assignee_id, field="assignee_id") if changes.assignee_id else None
             )
             if changes.assignee_id is not None
             else UNSET,

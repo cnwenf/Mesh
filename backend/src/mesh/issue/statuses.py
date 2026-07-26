@@ -14,7 +14,15 @@ README §6.3) and AT LEAST one, guaranteed transactionally:
 
 Unsetting a default is only legal together with setting a new one in the SAME
 transaction (README §6.3); the PATCH API refuses a bare unset (422
-``default_status_required``).
+``default_status_required``) — and DELETE refuses the scope's LAST default
+(409 ``last_default_status``), so a scope can never be drained to zero
+defaults (which would 422 every future issue creation in it).
+
+Recategorizing a status flips the state-machine semantics of every issue on
+it: the service resyncs each referencing issue in-transaction (denormalized
+``state_category`` + ``completed_at`` maintenance + OCC ``version`` bump +
+``issue_activity`` trail + ``issue.updated``/``issue.moved`` events), exactly
+like a direct per-issue status change, paged by primary key.
 """
 
 from __future__ import annotations
@@ -30,11 +38,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.db.constraints import violates as _violates
-from mesh.db.models.issue import STATE_CATEGORY_VALUES, IssueStatus
+from mesh.db.models.issue import STATE_CATEGORY_VALUES, Issue, IssueActivity, IssueStatus
 from mesh.db.models.member import Member
+from mesh.db.models.project import Project
 from mesh.errors import BusinessRuleError, ConflictError, NotFoundError, ValidationError
+from mesh.outbox.service import emit_realtime
 
 logger = logging.getLogger("mesh.issue.statuses")
+
+# Category-resync page size: a hot status can back thousands of issues; the
+# lock/update/event batch is kept bounded so one recategorization cannot
+# build a single gigantic write set (issue.md §2.5 rule 1, M-5).
+CATEGORY_RESCAN_BATCH_SIZE = 500
 
 # Canonical seed set: one status per category, positions follow the state
 # machine order, ``Todo`` is the creation default (issue.md §1.2.3).
@@ -60,9 +75,7 @@ async def scope_status_count(
     session: AsyncSession, *, workspace_id: uuid.UUID, project_id: uuid.UUID | None
 ) -> int:
     """Number of statuses defined exactly in this scope (no inheritance)."""
-    stmt = select(func.count()).select_from(IssueStatus).where(
-        IssueStatus.workspace_id == workspace_id
-    )
+    stmt = select(func.count()).select_from(IssueStatus).where(IssueStatus.workspace_id == workspace_id)
     if project_id is None:
         stmt = stmt.where(IssueStatus.project_id.is_(None))
     else:
@@ -263,9 +276,7 @@ async def resolve_default_status(
         .limit(1)
     )
     if default is None:  # pragma: no cover — seeding guarantees a default
-        raise BusinessRuleError(
-            "no default status in scope", code="default_status_required"
-        )
+        raise BusinessRuleError("no default status in scope", code="default_status_required")
     return default
 
 
@@ -347,9 +358,7 @@ class StatusService:
 
             await set_tenant_context(session, workspace_id)
             await ensure_scope_seeded(session, workspace_id=workspace_id, project_id=None)
-            statuses = await visible_statuses(
-                session, workspace_id=workspace_id, project_id=project_id
-            )
+            statuses = await visible_statuses(session, workspace_id=workspace_id, project_id=project_id)
             return [render_status(status) for status in statuses]
 
     async def create_status(
@@ -429,14 +438,20 @@ class StatusService:
             return render_status(status)
 
     async def _load_status(
-        self, session: AsyncSession, *, workspace_id: uuid.UUID, status_id: uuid.UUID
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        status_id: uuid.UUID,
+        for_update: bool = False,
     ) -> IssueStatus:
-        status = await session.scalar(
-            select(IssueStatus).where(
-                IssueStatus.id == status_id,
-                IssueStatus.workspace_id == workspace_id,
-            )
+        stmt = select(IssueStatus).where(
+            IssueStatus.id == status_id,
+            IssueStatus.workspace_id == workspace_id,
         )
+        if for_update:
+            stmt = stmt.with_for_update()
+        status = await session.scalar(stmt)
         if status is None:
             raise NotFoundError(STATUS_NOT_FOUND)
         return status
@@ -456,9 +471,7 @@ class StatusService:
             from mesh.db.tenant import set_tenant_context
 
             await set_tenant_context(session, workspace_id)
-            status = await self._load_status(
-                session, workspace_id=workspace_id, status_id=status_id
-            )
+            status = await self._load_status(session, workspace_id=workspace_id, status_id=status_id)
             if not is_unset(patch.name) and patch.name != status.name:
                 if not isinstance(patch.name, str) or not 1 <= len(patch.name) <= 50:
                     raise ValidationError("name must be 1-50 characters")
@@ -473,17 +486,19 @@ class StatusService:
                     status.allowed_transitions = transitions
             if not is_unset(patch.category) and patch.category != status.category:
                 validate_category(patch.category)  # type: ignore[arg-type]
+                old_category = status.category
                 status.category = patch.category  # type: ignore[assignment]
-                # Keep the denormalized issues.state_category in lockstep
-                # (issue.md §2.5 rule 1 forbids the two drifting apart).
-                from sqlalchemy import update
-
-                from mesh.db.models.issue import Issue
-
-                await session.execute(
-                    update(Issue)
-                    .where(Issue.workspace_id == workspace_id, Issue.status_id == status.id)
-                    .values(state_category=status.category, updated_at=_now(self._clock))
+                # Keep EVERY derivation of the category in lockstep (issue.md
+                # §2.5 rule 1 forbids the two drifting apart): the plain
+                # state_category copy PLUS completed_at maintenance, the OCC
+                # version bump and the event/audit trail — the full contract
+                # a direct per-issue status change honors (M-5).
+                await self._resync_issues_for_category_change(
+                    session,
+                    actor=actor,
+                    workspace_id=workspace_id,
+                    status=status,
+                    old_category=old_category,
                 )
             if not is_unset(patch.is_default) and patch.is_default != status.is_default:
                 if patch.is_default:
@@ -533,6 +548,126 @@ class StatusService:
                 raise
             return render_status(status)
 
+    async def _resync_issues_for_category_change(
+        self,
+        session: AsyncSession,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        status: IssueStatus,
+        old_category: str,
+    ) -> int:
+        """Propagate a status category flip to every referencing issue.
+
+        Each affected issue gets exactly what a direct status change would
+        (§3.4 semantics): the denormalized ``state_category``, the
+        ``completed_at`` stamp (entering ``done``) or clear (leaving it),
+        an OCC ``version`` bump, one ``issue_activity`` trail row and the
+        ``issue.updated`` / ``issue.moved`` realtime events — emitted with
+        the same visibility rule as the issue path (private-project issues
+        hit ONLY their detail channel). Rows are processed in primary-key
+        pages under row locks: bounded write sets (M-5 performance note)
+        and no lost update against a concurrent per-issue PATCH, which
+        locks the same rows (README §9 T12 lock-before-write). Returns the
+        number of issues resynchronized.
+        """
+        # mesh.issue.service imports this module — import at call time.
+        from mesh.issue.service import (
+            _isoformat,
+            _issue_channel,
+            _workspace_issues_channel,
+        )
+
+        now = _now(self._clock)
+        new_category = status.category
+        visibility_cache: dict[uuid.UUID, str] = {}
+        resynced = 0
+        last_id: uuid.UUID | None = None
+        while True:
+            stmt = (
+                select(Issue)
+                .where(Issue.workspace_id == workspace_id, Issue.status_id == status.id)
+                .order_by(Issue.id.asc())
+                .limit(CATEGORY_RESCAN_BATCH_SIZE)
+                .with_for_update()
+            )
+            if last_id is not None:
+                stmt = stmt.where(Issue.id > last_id)
+            batch = list((await session.execute(stmt)).scalars().all())
+            if not batch:
+                break
+            unknown = {
+                issue.project_id
+                for issue in batch
+                if issue.project_id is not None and issue.project_id not in visibility_cache
+            }
+            if unknown:
+                rows = await session.execute(
+                    select(Project.id, Project.visibility).where(
+                        Project.workspace_id == workspace_id, Project.id.in_(unknown)
+                    )
+                )
+                visibility_cache.update({pid: vis for pid, vis in rows.all()})
+            for issue in batch:
+                issue.state_category = new_category
+                if new_category == "done" and issue.completed_at is None:
+                    issue.completed_at = now
+                elif new_category != "done" and issue.completed_at is not None:
+                    issue.completed_at = None
+                issue.version = issue.version + 1
+                issue.updated_at = now
+                session.add(
+                    IssueActivity(
+                        workspace_id=workspace_id,
+                        issue_id=issue.id,
+                        actor_member_id=actor.id,
+                        field="state_category",
+                        old_value=old_category,
+                        new_value=new_category,
+                    )
+                )
+                project_public = (
+                    issue.project_id is None or visibility_cache.get(issue.project_id) == "public"
+                )
+                updated_payload = {
+                    "id": str(issue.id),
+                    "changes": {"state_category": new_category},
+                    "version": issue.version,
+                    "visibility": {
+                        "project_id": str(issue.project_id) if issue.project_id is not None else None,
+                        "state_category": new_category,
+                    },
+                    "updated_at": _isoformat(issue.updated_at),
+                }
+                moved_payload = {
+                    "id": str(issue.id),
+                    "from": {"state_category": old_category},
+                    "to": {"state_category": new_category},
+                }
+                for event, data in (
+                    ("issue.updated", updated_payload),
+                    ("issue.moved", moved_payload),
+                ):
+                    await emit_realtime(
+                        session,
+                        workspace_id=workspace_id,
+                        channel=_issue_channel(issue.id),
+                        event=event,
+                        data=data,
+                    )
+                    if project_public:
+                        await emit_realtime(
+                            session,
+                            workspace_id=workspace_id,
+                            channel=_workspace_issues_channel(workspace_id),
+                            event=event,
+                            data=data,
+                        )
+                resynced += 1
+            last_id = batch[-1].id
+            await session.flush()
+        return resynced
+
     async def delete_status(
         self,
         *,
@@ -547,14 +682,52 @@ class StatusService:
 
             await set_tenant_context(session, workspace_id)
             status = await self._load_status(
-                session, workspace_id=workspace_id, status_id=status_id
+                session, workspace_id=workspace_id, status_id=status_id, for_update=True
             )
+            # issues.status_id ON DELETE RESTRICT: referenced statuses must
+            # be emptied first (issue.md §5.2). Checked explicitly so the
+            # in-use error precedes the last-default guard (and a concurrent
+            # reference still trips the IntegrityError backstop below).
+            references = await session.scalar(
+                select(func.count())
+                .select_from(Issue)
+                .where(Issue.workspace_id == workspace_id, Issue.status_id == status.id)
+            )
+            if references:
+                raise ConflictError(
+                    "status is still referenced by issues; migrate them first",
+                    code="status_in_use",
+                    details={"status_id": str(status_id)},
+                )
+            if status.is_default:
+                other_defaults = await session.scalar(
+                    select(func.count())
+                    .select_from(IssueStatus)
+                    .where(
+                        IssueStatus.workspace_id == workspace_id,
+                        IssueStatus.project_id.is_(None)
+                        if status.project_id is None
+                        else IssueStatus.project_id == status.project_id,
+                        IssueStatus.is_default.is_(True),
+                        IssueStatus.id != status.id,
+                    )
+                )
+                if not other_defaults:
+                    # README §6.3: every scope keeps at least one default
+                    # status (M-6). Deleting the last one would fail every
+                    # future issue creation in the scope with 422 — refuse
+                    # the delete instead, in the status_in_use 409 style.
+                    raise ConflictError(
+                        "cannot delete the last default status of a scope",
+                        code="last_default_status",
+                        details={"status_id": str(status_id)},
+                    )
             await session.delete(status)
             try:
                 await session.flush()
             except IntegrityError as exc:
-                # issues.status_id ON DELETE RESTRICT: referenced statuses must
-                # be emptied first (issue.md §5.2).
+                # Defense in depth: an issue can grab the status between the
+                # reference check above and the DELETE.
                 raise ConflictError(
                     "status is still referenced by issues; migrate them first",
                     code="status_in_use",
@@ -564,6 +737,7 @@ class StatusService:
 
 
 __all__ = [
+    "CATEGORY_RESCAN_BATCH_SIZE",
     "DEFAULT_STATUS_SEED",
     "StatusPatch",
     "StatusService",
