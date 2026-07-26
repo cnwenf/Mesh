@@ -16,8 +16,12 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { AttachmentPanel } from '../attachments';
-import { listMembers } from '../members/api';
-import type { MemberSummary } from '../members/types';
+import { useSettingsStore } from '../../state/settingsStore';
+import { CommentsPanel } from '../comments';
+import type { CommentMemberRef } from '../comments';
+import type { MentionCandidate } from '../comments/mentions';
+import { fetchMe, listMembers } from '../members/api';
+import type { HumanProfile, MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
 import { IssueCustomFieldsEditor } from '../labels/IssueCustomFieldsEditor';
@@ -266,6 +270,29 @@ function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
   );
 }
 
+/** 从名册解析当前用户的成员引用(人类档案 profile.id 即 users.id,邮箱兜底)。 */
+function resolveCurrentMember(
+  members: readonly MemberSummary[],
+  userId: string,
+  userEmail: string,
+): CommentMemberRef | null {
+  for (const member of members) {
+    if (member.member_type !== 'human') continue;
+    const profile = member.profile as HumanProfile | null;
+    if (profile !== null && (profile.id === userId || profile.email === userEmail)) {
+      return { id: member.id, member_type: member.member_type, name: member.display_name };
+    }
+  }
+  return null;
+}
+
+/** 名册 → @提及候选(人/agent 混排;member_type 供 UI 区分与触发预览)。 */
+function toMentionCandidates(members: readonly MemberSummary[]): MentionCandidate[] {
+  return members
+    .filter((member) => member.status === 'active')
+    .map((member) => ({ id: member.id, name: member.display_name, member_type: member.member_type }));
+}
+
 export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -273,6 +300,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const { issueId } = useParams<{ issueId: string }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
@@ -283,6 +311,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const [children, setChildren] = useState<IssueSummary[]>([]);
   const [dependencies, setDependencies] = useState<DependencyEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [currentMember, setCurrentMember] = useState<CommentMemberRef | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [movePreviewData, setMovePreviewData] = useState<MovePreview | null>(null);
@@ -315,7 +344,7 @@ export function IssueDetailPage(): React.JSX.Element {
     void (async () => {
       try {
         const detail = await getIssue(client, issueId);
-        const [defs, kids, deps, acts, roster, projectPage, cyclePage] = await Promise.all([
+        const [defs, kids, deps, acts, roster, projectPage, cyclePage, me] = await Promise.all([
           listStatuses(client, detail.workspace_id, detail.project_id ?? undefined),
           listChildren(client, issueId),
           listDependencies(client, issueId),
@@ -323,6 +352,7 @@ export function IssueDetailPage(): React.JSX.Element {
           listMembers(client, detail.workspace_id, { limit: 100 }),
           listProjects(client, detail.workspace_id, { limit: 100 }),
           listCycles(client, detail.workspace_id, { limit: 100 }),
+          fetchMe(client),
         ]);
         const milestonePage =
           detail.project_id !== null
@@ -340,6 +370,7 @@ export function IssueDetailPage(): React.JSX.Element {
         setProjects([...projectPage.data]);
         setMilestones([...milestonePage.data]);
         setCycles([...cyclePage.data]);
+        setCurrentMember(resolveCurrentMember(roster.data, me.user.id, me.user.email));
       } catch (err: unknown) {
         if (cancelled) return;
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -580,6 +611,15 @@ export function IssueDetailPage(): React.JSX.Element {
               ))}
             </ul>
           )}
+
+          {/* 评论与协作时间线(comment-inbox.md §4.1):系统活动 + 评论卡片 + 线程 + 执行占位 */}
+          <CommentsPanel
+            issueId={issue.id}
+            workspaceId={issue.workspace_id}
+            locale={locale}
+            candidates={toMentionCandidates(members)}
+            currentMember={currentMember}
+          />
         </section>
 
         <aside className="mesh-issues-detail__sidebar" aria-label={t('issues.detail.properties')}>

@@ -1,0 +1,390 @@
+/**
+ * 评论模块样式(comment-inbox.md §4.1)。颜色一律经语义 token(design/tokens.css),
+ * 暗色模式由 token 集整体替换实现(README §6.12)。
+ */
+
+.mesh-comments {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.mesh-comments__heading {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+.mesh-comments__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-comments__empty {
+  color: var(--color-text-muted);
+}
+
+.mesh-comments__skeleton {
+  min-height: 6rem;
+}
+
+/* 系统活动行(灰色小字) */
+.mesh-comments__activity {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  padding-inline: var(--space-2);
+}
+
+/* 评论卡片 */
+.mesh-comments__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-comments__card--highlight {
+  outline: 2px solid var(--color-focus-ring);
+  animation: mesh-comments-flash var(--duration-slow) ease-out;
+}
+
+.mesh-comments__card--resolved {
+  opacity: 0.8;
+}
+
+@keyframes mesh-comments-flash {
+  from {
+    background: var(--color-surface);
+  }
+  to {
+    background: var(--color-surface-raised);
+  }
+}
+
+.mesh-comments__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-comments__author {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-comments__badge {
+  font-size: var(--font-size-sm);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.mesh-comments__badge--agent {
+  background: var(--color-info);
+  color: var(--color-info-contrast);
+}
+
+.mesh-comments__time,
+.mesh-comments__edited,
+.mesh-comments__resolved-tag {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-comments__resolved-tag {
+  color: var(--color-success);
+}
+
+.mesh-comments__body {
+  color: var(--color-text);
+}
+
+.mesh-comments__body :is(h1, h2, h3, h4) {
+  margin: var(--space-2) 0;
+}
+
+.mesh-comments__body pre {
+  background: var(--color-surface);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.mesh-comments__deleted {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* 反应区 */
+.mesh-comments__reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  position: relative;
+}
+
+.mesh-comments__reaction,
+.mesh-comments__reaction-add {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-comments__reaction--mine {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.mesh-comments__reaction-picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  display: flex;
+  gap: var(--space-1);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  padding: var(--space-1);
+  z-index: 5;
+}
+
+.mesh-comments__reaction-picker button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--font-size-md);
+}
+
+/* 操作条 */
+.mesh-comments__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-comments__actions button {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  padding: 0;
+}
+
+.mesh-comments__actions button:hover {
+  color: var(--color-primary);
+}
+
+.mesh-comments__action-danger:hover {
+  color: var(--color-danger);
+}
+
+/* 线程折叠 */
+.mesh-comments__thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-comments__thread-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-comments__thread-replies {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-inline-start: var(--space-5);
+  border-inline-start: 2px solid var(--color-border);
+}
+
+/* 执行占位卡片 */
+.mesh-comments__executing {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--color-text-muted);
+}
+
+/* composer */
+.mesh-comments__composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--color-surface-raised);
+}
+
+.mesh-comments__reply-hint,
+.mesh-comments__trigger-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-comments__trigger-hint {
+  color: var(--color-info);
+}
+
+.mesh-comments__composer-toolbar {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-comments__composer-toolbar button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  padding: 0 var(--space-2);
+}
+
+.mesh-comments__composer-input,
+.mesh-comments__edit-input {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: var(--space-2);
+  font-family: var(--font-family);
+  resize: vertical;
+}
+
+.mesh-comments__composer-preview {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  min-height: 3rem;
+  color: var(--color-text);
+}
+
+.mesh-comments__mention-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+}
+
+.mesh-comments__mention-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.mesh-comments__mention-item--active {
+  background: var(--color-surface);
+}
+
+.mesh-comments__mention-hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-info);
+  margin-inline-start: auto;
+}
+
+.mesh-comments__composer-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.mesh-comments__suppress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-comments__trigger-preview {
+  font-size: var(--font-size-sm);
+  color: var(--color-info);
+}
+
+.mesh-comments__composer-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.mesh-comments__edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-comments__edit-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-comments__edit-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-comments__edit-actions button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  padding: 0 var(--space-2);
+}
+
+/* C6 智能链接:服务端 #IDENTIFIER 链接水合后的引用卡片 */
+.mesh-issue-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border, var(--color-text-muted));
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2, transparent);
+  font-size: var(--text-sm, 0.875rem);
+  vertical-align: baseline;
+}
+.mesh-issue-card__id {
+  font-weight: 600;
+  color: var(--color-accent, var(--color-text));
+}
+.mesh-issue-card__title {
+  color: var(--color-text);
+}
+.mesh-issue-card__status {
+  color: var(--color-text-muted);
+}

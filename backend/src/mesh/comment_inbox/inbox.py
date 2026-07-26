@@ -22,7 +22,11 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.comment_inbox import subscriptions
-from mesh.comment_inbox.notifications import _render_notification_frame, inbox_channel
+from mesh.comment_inbox.notifications import (
+    ALLOWED_PREFERENCE_EVENT_TYPES,
+    _render_notification_frame,
+    inbox_channel,
+)
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
 from mesh.db.models.notification import (
@@ -327,7 +331,10 @@ class InboxService:
         workspace_id: uuid.UUID,
         member: Member,
         inbox_filter: str | None = None,
+        notification_type: str | None = None,
     ) -> int:
+        if inbox_filter is not None and inbox_filter not in INBOX_FILTERS:
+            raise ValidationError("invalid filter", details={"filter": inbox_filter[:32]})
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             stmt = (
@@ -340,10 +347,16 @@ class InboxService:
                 )
                 .values(read_at=self._clock(), updated_at=self._clock())
             )
+            # L6 / §3.2: honour the same filter set as the list endpoint so
+            # "mark all read" never silently reads across an active filter.
             if inbox_filter == "mentions":
                 stmt = stmt.where(Notification.type == "mentioned")
             elif inbox_filter == "assigned":
                 stmt = stmt.where(Notification.type == "assigned")
+            elif inbox_filter == "agent":
+                stmt = stmt.where(Notification.payload["actor_member_type"].astext == "agent")
+            if notification_type is not None:
+                stmt = stmt.where(Notification.type == notification_type)
             result = await session.execute(stmt)
             await self._broadcast_unread_count(
                 session, workspace_id=workspace_id, member=member
@@ -493,6 +506,14 @@ class InboxService:
             event_type = entry.get("event_type")
             if not event_type or not isinstance(event_type, str) or len(event_type) > 64:
                 raise ValidationError("invalid event_type", code="validation_error")
+            # M3 / §2.7: event_type must be 'all' or a real notification type,
+            # else it would persist and never match any fan-out.
+            if event_type not in ALLOWED_PREFERENCE_EVENT_TYPES:
+                raise ValidationError(
+                    "unknown notification event_type",
+                    code="validation_error",
+                    details={"event_type": event_type},
+                )
             email = entry.get("email", "digest")
             if email not in EMAIL_POLICY_VALUES:
                 raise ValidationError(
