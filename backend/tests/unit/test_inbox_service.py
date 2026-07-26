@@ -679,6 +679,12 @@ async def test_list_filters_and_pagination(env):
         workspace_id=env["workspace"].id, member=env["bob"], inbox_filter="assigned",
     )
     assert [item["type"] for item in assigned["data"]] == ["assigned"]
+    # §3.2: rows carry the issue snapshot (group headers render from it)
+    comment_row = next(
+        item for item in listing["data"] if item["type"] == "comment_created"
+    )
+    assert comment_row["issue"]["id"] == str(env["issue"].id)
+    assert comment_row["issue"]["title"] == "Login broken"
     # pagination: limit 2 → cursor → next page
     page1 = await inbox.list_notifications(
         workspace_id=env["workspace"].id, member=env["bob"], limit=2,

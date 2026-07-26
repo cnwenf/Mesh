@@ -845,6 +845,7 @@ class CommentService:
                 group_key=f"issue:{issue.id}:comment_created",
                 title=issue.title,
                 preview=preview,
+                extra={"issue_identifier": issue.identifier},
             )
         human_mentioned = [m for m in newly_mentioned if m.member_type == "human"]
         if human_mentioned:
@@ -861,6 +862,7 @@ class CommentService:
                 group_key=f"issue:{issue.id}:mentioned",
                 title=issue.title,
                 preview=preview,
+                extra={"issue_identifier": issue.identifier},
             )
 
     async def _reaction_aggregation(
