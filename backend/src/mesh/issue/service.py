@@ -926,6 +926,7 @@ class IssueService:
         descending = order == "desc"
         if sort == "priority":
             rank = self._priority_rank_case()
+            sort_column = rank
             if descending:
                 # urgent-first = rank ASC; keyset "after" is row > cursor.
                 ordered = stmt.order_by(rank.asc(), Issue.id.asc())
@@ -935,17 +936,29 @@ class IssueService:
                 ordered = stmt.order_by(rank.desc(), Issue.id.desc())
                 cursor_after = False
             sort_value_of = lambda row: _PRIORITY_RANK.get(row.priority, 4)  # noqa: E731
-        else:
-            column = getattr(Issue, sort)
+        elif sort == "due_date":
+            # NULL-safe keyset (B3): sentinel pushes NULL due dates last in
+            # BOTH directions; cursor encodes the sentinel for NULL rows.
+            sentinel = date(9999, 12, 31) if not descending else date(1, 1, 1)
+            sort_column = func.coalesce(Issue.due_date, sentinel)
             ordered = stmt.order_by(
-                column.desc() if descending else column.asc(),
+                sort_column.desc() if descending else sort_column.asc(),
+                Issue.id.desc() if descending else Issue.id.asc(),
+            )
+            cursor_after = not descending
+            sort_value_of = (  # noqa: E731
+                lambda row: row.due_date if row.due_date is not None else sentinel
+            )
+        else:
+            sort_column = getattr(Issue, sort)
+            ordered = stmt.order_by(
+                sort_column.desc() if descending else sort_column.asc(),
                 Issue.id.desc() if descending else Issue.id.asc(),
             )
             cursor_after = not descending
             sort_value_of = lambda row: getattr(row, sort)  # noqa: E731
         if cursor is not None:
             position = decode_cursor(cursor)
-            sort_column = self._sort_expression(sort)
             if cursor_after:
                 ordered = ordered.where(
                     func.row(sort_column, Issue.id)
@@ -1080,9 +1093,10 @@ class IssueService:
     ) -> dict:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            lock = expected_version is not None or if_match is not None
+            # Always row-lock: closes the non-OCC lost-update window where two
+            # bare PATCHes race version+1 (必修3); OCC checks still apply on top.
             issue = await self._load_issue(
-                session, workspace_id=workspace_id, issue_id=issue_id, for_update=lock
+                session, workspace_id=workspace_id, issue_id=issue_id, for_update=True
             )
             await self.assert_can_write_issue(session, actor=actor, issue=issue)
             if expected_version is not None and issue.version != expected_version:
@@ -1104,6 +1118,16 @@ class IssueService:
                 # §6.9: empty diff → no event, no trail, no trigger.
                 return await self.render_issue(session, updated)
             rendered = await self.render_issue(session, updated)
+            # F5: include rendered snapshots so realtime consumers can update
+            # display names without a refetch (assignee/status objects).
+            if "assignee_id" in changes:
+                changes["assignee"] = rendered["assignee"]
+            if "status_id" in changes and rendered["status"] is not None:
+                changes["status"] = {
+                    **rendered["status"],
+                    "created_at": _isoformat(rendered["status"]["created_at"]),
+                    "updated_at": _isoformat(rendered["status"]["updated_at"]),
+                }
             project = await self._project_of(session, updated)
             payload = {
                 "id": str(updated.id),
@@ -1454,7 +1478,7 @@ class IssueService:
                     Issue.parent_id == parent.id,
                     Issue.deleted_at.is_(None),
                 )
-                .order_by(Issue.position.asc(), Issue.created_at.asc(), Issue.id.asc())
+                .order_by(Issue.created_at.asc(), Issue.id.asc())
             )
             if cursor is not None:
                 position = decode_cursor(cursor)

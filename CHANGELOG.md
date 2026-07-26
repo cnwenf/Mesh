@@ -3,6 +3,40 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.2] - 2026-07-26
+
+MES-31 验收第二轮整改:阻塞项 B1–B6 与必修 MEDIUM 全量闭环。
+
+### Fixed
+
+- **B1 · CI ruff**:修复 `backend/tests` 的 ruff 错误(E501/I001/F401/B007);`ruff check backend/src backend/tests`(CI 原命令)全绿。
+- **B2 · 新增代码覆盖率门禁**:补齐前端分支测试后 `scripts/verify-coverage.mjs --base origin/main` 变更语句行覆盖率 **91.8%**(≥90% 门禁 PASS);前端整体 97.06%/分支 90.53%。
+- **B3 · sort=due_date 分页 500**:NULL due_date 的 keyset 分页改为方向相关哨兵(`COALESCE(due_date, sentinel)`,两方向 NULL 均排末尾),游标编解码 NULL 安全;补回归(跨 NULL 边界翻页、全 NULL 页边界)。
+- **B4 · ?mine=true 首载竞态**:load 等待本人 member id 解析后再发请求(member id 未解析时不发过滤请求),`matchesFilters` 水位在 id 未知时排除全部;首载请求即携带 `assignee_id`(补回归断言请求 URL)。
+- **B5 · 详情页非 409 PATCH 错误静默**:`patchAndToast` 捕获非乐观锁冲突(403/422/409 `invalid_status_transition` 等),显示具名错误 toast 并重取回滚乐观状态。
+- **B6 · 严格模式状态流转**:见 [0.11.1] —— 迁移 0009 `issue_statuses.allowed_transitions` + 工作区设置 `status_strict_mode` + 409 `invalid_status_transition`;真实 e2e + 真实 UI 实操(禁止转换具名 toast、配置转换放行)。
+- **必修1 · 批量畸形 UUID 500**:changes 内 status_id/assignee_id/cycle_id/project_id 统一经 `_parse_uuid` 映射为逐条 422 `validation_error`(非 500 毒化整事务);project_id 畸形在预览分支请求级 400。补回归。
+- **必修2 · list_children 游标不一致**:排序与游标统一为 `(created_at, id)`,翻页无跳行/重复。补回归(5 子项 limit 2 全量无重无漏)。
+- **必修3 · 非 OCC PATCH 丢更新**:`update_issue` 一律 `FOR UPDATE` 行锁(不再仅限带 version/If-Match),关闭裸 PATCH 并发的 version+1 丢写窗口。
+- **必修4 · 批量 issue_ids 无上限**:`BulkRequest.issue_ids` 上限 100(pydantic 校验)。
+- **F3 · 快速创建绕过过滤水位**:新建结果经 `matchesFilters` 水位判定,不匹配则重拉而非错误前置。补回归。
+- **F4 · 批量部分失败逐条原因**:422 `bulk_partial_failure` 的 `details.errors` 逐条呈现于 toast(可定位失败项)。补回归。
+- **F5 · 实时合并显示名**:assignee/status 变更后事件 `changes` 携带渲染快照对象(`assignee`/`status`),列表实时改派显示名即时更新免 refetch;后端 list_dependencies 携带 `depends_on_identifier`(UI 显示人类可读编号 + 跳转,替代裸 UUID)。补回归。
+- **F6 · 属性编辑全量重载骨架闪烁**:重取不再触发骨架屏(仅首载显示骨架)。
+- **F7 · 子项进度截断**:详情页子项进度以服务端 `children_progress` 为准(不受本地分页截断)。
+- **F8 · loadMore 错误处理**:翻页失败 toast 呈现(不再静默/误导性空态)。
+- **F9 · 搜索防抖**:q 输入 300ms 防抖后写 URL(避免逐键重拉/重订阅)。
+- **F11 · 帧杂字段扩散**:实时帧合并剥离事件元字段(from_project_id/to_project_id/mapped_fields/cleared_fields/visibility),仅保留 IssueSummary 合法字段。补回归。
+- **M7 · 依赖交互(§4.2/§4.3)**:新增依赖支持标识符(如 `WEB-12`)或 UUID 搜索选目标(标识符经 `by-identifier` 解析)+ 关系类型选择(blocks/blocked_by/relates_to/duplicates);依赖列表渲染对端标识符 + 可点击跳转。
+- **M12 · `c` 快捷键(§4.2)**:`c` 打开 issues 页并展开快速创建表单(`?create=1`),替代原骨架占位跳首页。
+
+### Quality
+
+- 后端:pytest-cov **95%**(双达标),全量单测 + 真实 e2e 全绿,`ruff check backend/src backend/tests` 全绿。
+- 前端:vitest **1110 项全绿**(语句 97.06% / 分支 90.53%,≥90% 门禁),变更行覆盖率 91.8%,typecheck/lint/生产构建全绿。
+- 真实 UI 实操(Playwright + chromium,真实 API + 真实 DB,两轮):v1 全流程 + R2 整改面(描述/估算/起始日编辑、迁移预览对话框确认迁移且编号不变、快速创建展开、严格模式 UI 双向、依赖标识符解析),均零 flake;迁移对话框与严格模式 toast 截图留证。
+- 纠错:[0.11.0] 完工评论「ruff 全绿」声明以 `backend/src` 为范围,未覆盖 `backend/tests`(CI 原命令含 tests),本版修复后 CI 原命令全绿。
+
 ## [0.11.1] - 2026-07-26
 
 MES-31 验收打回整改:HIGH-1 严格模式状态流转 + MEDIUM-1/2/3 详情页 UI 补全。

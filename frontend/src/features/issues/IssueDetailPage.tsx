@@ -23,6 +23,7 @@ import {
   addDependency,
   deleteIssue,
   getIssue,
+  getIssueByIdentifier,
   issueChannel,
   listActivity,
   listChildren,
@@ -36,6 +37,7 @@ import { applyIssueDetailFrame } from './realtime';
 import type {
   ActivityEntry,
   DependencyEntry,
+  DependencyType,
   IssueDetail,
   IssuePriority,
   IssueStatusRef,
@@ -47,25 +49,35 @@ import './issues.css';
 
 interface AddDependencyFormProps {
   readonly issueId: string;
+  readonly workspaceId: string;
   readonly onAdded: (entry: DependencyEntry) => void;
 }
 
-/** 建立依赖(§4.3:输入目标 + 类型;成环就地报错,不创建)。 */
+/** 建立依赖(§4.2/§4.3:搜索标识符/UUID 选目标 + 选类型;成环就地报错,不创建)。 */
 function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
   const t = useT();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [target, setTarget] = useState('');
+  const [depType, setDepType] = useState<DependencyType>('blocked_by');
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
 
   const submit = useCallback(async () => {
-    if (target.trim() === '') return;
+    const value = target.trim();
+    if (value === '') return;
     setIsBusy(true);
     setError(null);
     try {
+      // 目标是人类可读编号(如 WEB-12)时先解析为 UUID;否则按 UUID 解析
+      let dependsOnId = value;
+      const uuidRe = /^[0-9a-fA-F-]{36}$/;
+      if (!uuidRe.test(value)) {
+        const resolved = await getIssueByIdentifier(client, props.workspaceId, value);
+        dependsOnId = resolved.id;
+      }
       const entry = await addDependency(client, props.issueId, {
-        depends_on_id: target.trim(),
-        type: 'blocked_by',
+        depends_on_id: dependsOnId,
+        type: depType,
       });
       props.onAdded(entry);
       setTarget('');
@@ -75,7 +87,7 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
     } finally {
       setIsBusy(false);
     }
-  }, [client, props, target, t]);
+  }, [client, props, target, depType, t]);
 
   return (
     <div className="mesh-issues__dep-add">
@@ -86,6 +98,25 @@ function AddDependencyForm(props: AddDependencyFormProps): React.JSX.Element {
         aria-label={t('issues.deps.targetPlaceholder')}
         data-testid="dep-target-input"
       />
+      <Select
+        label={t('issues.deps.typeLabel')}
+        value={depType}
+        data-testid="dep-type-select"
+        onChange={(event) => setDepType(event.target.value as DependencyType)}
+      >
+        {(
+          [
+            ['blocked_by', t('issues.deps.type.blocked_by')],
+            ['blocks', t('issues.deps.type.blocks')],
+            ['relates_to', t('issues.deps.type.relates_to')],
+            ['duplicates', t('issues.deps.type.duplicates')],
+          ] as const
+        ).map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </Select>
       <Button size="sm" disabled={isBusy || target.trim() === ''} onClick={() => void submit()}>
         {t('issues.deps.add')}
       </Button>
@@ -376,7 +407,9 @@ export function IssueDetailPage(): React.JSX.Element {
     category,
     items: statuses.filter((s) => s.category === category),
   })).filter((group) => group.items.length > 0);
-  const doneChildren = children.filter((c) => c.state_category === 'done').length;
+  // F7:进度以服务端 children_progress 为准(不受本地分页截断影响)
+  const doneChildren = issue.children_progress.done;
+  const totalChildren = issue.children_progress.total;
 
   return (
     <div className="mesh-issues-detail" data-testid="issue-detail">
@@ -418,7 +451,7 @@ export function IssueDetailPage(): React.JSX.Element {
           />
 
           <h2>
-            {t('issues.detail.children')}（{doneChildren}/{children.length}）
+            {t('issues.detail.children')}（{doneChildren}/{totalChildren}）
           </h2>
           {children.length === 0 ? (
             <p className="mesh-issues-detail__empty">{t('issues.detail.noChildren')}</p>
@@ -445,7 +478,12 @@ export function IssueDetailPage(): React.JSX.Element {
                   <span data-testid={`dep-type-${dep.id}`}>
                     {t(`issues.deps.type.${dep.type}`)}
                   </span>
-                  <code>{dep.depends_on_id}</code>
+                  <Link
+                    to={`/issues/${dep.depends_on_id}`}
+                    data-testid={`dep-link-${dep.id}`}
+                  >
+                    {dep.depends_on_identifier ?? dep.depends_on_id.slice(0, 8)}
+                  </Link>
                   <Button size="sm" variant="ghost" onClick={() => void removeDependency(dep)}>
                     {t('issues.deps.remove')}
                   </Button>
@@ -455,6 +493,7 @@ export function IssueDetailPage(): React.JSX.Element {
           )}
           <AddDependencyForm
             issueId={issue.id}
+            workspaceId={issue.workspace_id}
             onAdded={(entry) => setDependencies((prev) => [...prev, entry])}
           />
 

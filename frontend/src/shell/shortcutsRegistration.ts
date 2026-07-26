@@ -3,8 +3,8 @@
  *
  * - 命令面板条目:导航(首页/收件箱/项目/看板/成员/聊天/自动化/设置)+
  *   主题(light/dark/system/循环切换);主题经 settingsStore.getState() 直接写入;
- * - 快捷键:G→I/B/M/A 序列跳收件箱/看板/成员/自动化;`c` 新建工作项(骨架阶段导航首页,
- *   真实新建归阶段 2);`/` 聚焦顶栏搜索;
+ * - 快捷键:G→I/B/M/A 序列跳收件箱/看板/成员/自动化;`c` 打开 issues 页展开快速创建
+ *   (issue.md §4.2);`/` 聚焦顶栏搜索;
  * - 所有快捷键均有等价鼠标路径(§6.12);返回合并注销函数。
  */
 import { useShortcutRegistry } from '../shortcuts';
@@ -105,8 +105,8 @@ export function registerShellShortcuts(
       group: 'global',
       run: goTo('/automation'),
     },
-    // 骨架阶段:`c` 导航首页(真实「新建工作项」归阶段 2)
-    { id: 'new.issue', combo: 'c', label: labels.actions.newIssue, group: 'global', run: goTo('/') },
+    // `c` 打开 issues 页并展开快速创建(issue.md §4.2)
+    { id: 'new.issue', combo: 'c', label: labels.actions.newIssue, group: 'global', run: goTo('/issues?create=1') },
     { id: 'focus.search', combo: '/', label: labels.actions.focusSearch, group: 'global', run: focusTopbarSearch },
   ];
   unregisters.push(registry.registerShortcuts(shortcutDefs));

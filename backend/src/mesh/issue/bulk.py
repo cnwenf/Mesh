@@ -28,6 +28,7 @@ from mesh.issue.service import (
     IssueService,
     _issue_channel,
     _now,
+    _parse_uuid,
     _workspace_issues_channel,
 )
 from mesh.outbox.service import emit_realtime
@@ -59,7 +60,9 @@ class BulkService:
                 target = await self._moves._target_project(
                     session,
                     workspace_id=workspace_id,
-                    target_project_id=uuid.UUID(body.changes.project_id),  # type: ignore[arg-type]
+                    target_project_id=_parse_uuid(
+                        body.changes.project_id, field="project_id"
+                    ),
                 )
                 if target is not None:
                     await self._issues._projects.assert_can_write(
@@ -156,7 +159,7 @@ class BulkService:
             target = await self._moves._target_project(
                 session,
                 workspace_id=workspace_id,
-                target_project_id=uuid.UUID(changes.project_id),
+                target_project_id=_parse_uuid(changes.project_id, field="project_id"),
             )
             if target is not None:
                 await self._issues._projects.assert_can_write(
@@ -218,14 +221,18 @@ class BulkService:
             return
 
         patch = IssuePatch(
-            status_id=uuid.UUID(changes.status_id) if changes.status_id else UNSET,
+            status_id=_parse_uuid(changes.status_id, field="status_id")
+            if changes.status_id
+            else UNSET,
             priority=changes.priority if changes.priority is not None else UNSET,
             assignee_id=(
-                uuid.UUID(changes.assignee_id) if changes.assignee_id else None
+                _parse_uuid(changes.assignee_id, field="assignee_id")
+                if changes.assignee_id
+                else None
             )
             if changes.assignee_id is not None
             else UNSET,
-            cycle_id=(uuid.UUID(changes.cycle_id) if changes.cycle_id else None)
+            cycle_id=_parse_uuid(changes.cycle_id, field="cycle_id")
             if changes.cycle_id is not None
             else UNSET,
         )

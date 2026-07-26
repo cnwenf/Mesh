@@ -36,7 +36,7 @@ function matchesFilters(
 ): boolean {
   if (category !== ALL && issue.state_category !== category) return false;
   if (priority !== ALL && issue.priority !== priority) return false;
-  if (mineOnly && issue.assignee_id !== currentMemberId) return false;
+  if (mineOnly && (currentMemberId === null || issue.assignee_id !== currentMemberId)) return false;
   if (q !== '') {
     // 与服务端 ILIKE 一致:标题或编号包含搜索词(实时帧合并的可见性水位)
     const needle = q.toLowerCase();
@@ -51,6 +51,8 @@ function matchesFilters(
 }
 
 interface QuickCreateProps {
+  readonly workspace: Membership | null;
+  readonly members: readonly MemberSummary[];
   readonly onCreated: (issue: IssueSummary) => void;
   readonly onClose: () => void;
 }
@@ -66,33 +68,17 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
-  const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [members, setMembers] = useState<MemberSummary[]>([]);
+  const { workspace, members } = props;
 
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const me = await fetchMe(client);
-      if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [client]);
-
-  // 展开更多字段时按需加载项目与成员名册(§4.2/§4.3)
+  // 展开更多字段时按需加载项目名册(成员名册由页面下传,§4.2/§4.3)
   useEffect(() => {
     if (!expanded || workspace === null) return;
     let cancelled = false;
     void (async () => {
-      const [projectPage, memberPage] = await Promise.all([
-        listProjects(client, workspace.workspace_id, { limit: 100 }),
-        listMembers(client, workspace.workspace_id, { limit: 100 }),
-      ]);
+      const projectPage = await listProjects(client, workspace.workspace_id, { limit: 100 });
       if (cancelled) return;
       setProjects([...projectPage.data]);
-      setMembers(memberPage.data.filter((m) => m.status === 'active'));
     })();
     return () => {
       cancelled = true;
@@ -187,12 +173,14 @@ function QuickCreateForm(props: QuickCreateProps): React.JSX.Element {
             onChange={(event) => setAssigneeId(event.target.value)}
           >
             <option value="">{t('issues.unassigned')}</option>
-            {members.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.display_name}
-                {m.member_type === 'agent' ? ` (${t('issues.agentBadge')})` : ''}
-              </option>
-            ))}
+            {members
+              .filter((m) => m.status === 'active')
+              .map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name}
+                  {m.member_type === 'agent' ? ` (${t('issues.agentBadge')})` : ''}
+                </option>
+              ))}
           </Select>
         </>
       ) : null}
@@ -249,14 +237,23 @@ function BulkBar(props: BulkBarProps): React.JSX.Element {
       } catch (err: unknown) {
         if (err instanceof MeshApiError && err.code === 'bulk_partial_failure') {
           const details = err.details as
-            | { succeeded?: number; failed?: number }
+            | {
+                succeeded?: number;
+                failed?: number;
+                errors?: { issue_id: string; code: string; message: string }[];
+              }
             | undefined;
           const summary = {
             succeeded: details?.succeeded ?? 0,
             failed: details?.failed ?? props.selected.length,
           };
           props.onDone(summary);
-          toast.addToast(t('issues.bulk.result', summary), {
+          // F4:逐条失败原因可定位(§5.5)
+          const perItem = (details?.errors ?? [])
+            .slice(0, 5)
+            .map((e) => `${e.issue_id.slice(0, 8)}: ${e.code}`)
+            .join('; ');
+          toast.addToast(`${t('issues.bulk.result', summary)}${perItem ? ` — ${perItem}` : ''}`, {
             tone: 'warn',
             closeLabel: t('common.close'),
           });
@@ -318,6 +315,7 @@ function BulkBar(props: BulkBarProps): React.JSX.Element {
 
 export function IssuesPage(): React.JSX.Element {
   const t = useT();
+  const toast = useToast();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
 
@@ -326,17 +324,39 @@ export function IssuesPage(): React.JSX.Element {
   const categoryFilter = searchParams.get('category') ?? ALL;
   const priorityFilter = searchParams.get('priority') ?? ALL;
   const mineOnly = searchParams.get('mine') === 'true';
+  // F9:本地搜索输入 300ms 防抖后写 URL(避免逐键重拉/重订阅)
+  const [qInput, setQInput] = useState(qFilter);
+  useEffect(() => setQInput(qFilter), [qFilter]);
+  useEffect(() => {
+    if (qInput === qFilter) return;
+    const timer = setTimeout(() => setParamLater('q', qInput === '' ? null : qInput), 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qInput]);
+  // setParam 的延后引用(effect 先于 setParam 定义,用 ref 规避依赖)
+  const setParamRef = useRef<(key: string, value: string | null) => void>(() => undefined);
+  function setParamLater(key: string, value: string | null): void {
+    setParamRef.current(key, value);
+  }
+  // M12:`?create=1` 展开快速创建(快捷键 `c` 入口)
+  const createParam = searchParams.get('create');
 
   const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [currentMemberId, setCurrentMemberId] = useState<string | null>(null);
+  const [roster, setRoster] = useState<MemberSummary[]>([]);
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(createParam === '1');
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+
+  useEffect(() => {
+    if (createParam === '1') setCreateOpen(true);
+  }, [createParam]);
 
   // 本人 member id 变化不触发重新拉取(仅 mineOnly 时需要);经 ref 读取,
   // 避免无谓的重复请求(mineOnly 切换本身在依赖中,会重拉)。
@@ -358,6 +378,7 @@ export function IssuesPage(): React.JSX.Element {
       setWorkspace(ws);
       if (ws !== null) {
         const roster = await listMembers(client, ws.workspace_id, { limit: 100 });
+        setRoster(roster.data);
         if (cancelled) return;
         const mine = roster.data.find(
           (m) =>
@@ -379,6 +400,8 @@ export function IssuesPage(): React.JSX.Element {
       setIsLoading(false);
       return;
     }
+    // B4:mine 过滤需等本人 member id 解析完成,否则首载显示全量
+    if (mineOnly && currentMemberId === null) return;
     setIsLoading(true);
     setError(null);
     const seq = ++loadSeqRef.current;
@@ -408,9 +431,14 @@ export function IssuesPage(): React.JSX.Element {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       setError(tRef.current(key));
     } finally {
-      if (seq === loadSeqRef.current) setIsLoading(false);
+      if (seq === loadSeqRef.current) {
+        setIsLoading(false);
+        setHasLoaded(true);
+      }
     }
-  }, [client, workspace, qFilter, categoryFilter, priorityFilter, mineOnly]);
+    // currentMemberId 仅在 mine 过滤时影响结果,避免无关的重拉(首载竞态 B4)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, workspace, qFilter, categoryFilter, priorityFilter, mineOnly, mineOnly ? currentMemberId : null]);
 
   useEffect(() => {
     void load();
@@ -437,6 +465,7 @@ export function IssuesPage(): React.JSX.Element {
   const loadMore = useCallback(async (): Promise<void> => {
     if (workspace === null || nextCursor === null) return;
     const seq = ++loadSeqRef.current;
+    try {
     const page = await listIssues(client, workspace.workspace_id, {
       q: qFilter === '' ? undefined : qFilter,
       state_category: categoryFilter === ALL ? undefined : (categoryFilter as StateCategory),
@@ -451,11 +480,16 @@ export function IssuesPage(): React.JSX.Element {
       cursor: nextCursor,
     });
     if (seq !== loadSeqRef.current) return;
+    if (seq !== loadSeqRef.current) return;
     setIssues((prev) => {
       const seen = new Set(prev.map((issue) => issue.id));
       return [...prev, ...page.data.filter((issue) => !seen.has(issue.id))];
     });
     setNextCursor(page.nextCursor);
+    } catch (err: unknown) {
+      const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+      toast.addToast(tRef.current(key), { tone: 'danger', closeLabel: tRef.current('common.close') });
+    }
   }, [client, workspace, nextCursor, qFilter, categoryFilter, priorityFilter, mineOnly]);
 
   const setParam = useCallback(
@@ -467,6 +501,7 @@ export function IssuesPage(): React.JSX.Element {
     },
     [searchParams, setSearchParams],
   );
+  setParamRef.current = setParam;
 
   const toggleSelect = useCallback((id: string) => {
     setSelected((prev) => {
@@ -490,7 +525,7 @@ export function IssuesPage(): React.JSX.Element {
       />
     );
   }
-  if (isLoading) {
+  if (isLoading && !hasLoaded) {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
@@ -505,18 +540,37 @@ export function IssuesPage(): React.JSX.Element {
 
       {createOpen ? (
         <QuickCreateForm
+          workspace={workspace}
+          members={roster}
           onCreated={(created) => {
-            setIssues((prev) => [created, ...prev.filter((i) => i.id !== created.id)]);
+            // F3:新建结果遵循当前过滤水位;不匹配则重拉(而非错误前置)
+            if (
+              matchesFilters(
+                created,
+                categoryFilter,
+                priorityFilter,
+                mineOnly,
+                currentMemberId,
+                qFilter,
+              )
+            ) {
+              setIssues((prev) => [created, ...prev.filter((i) => i.id !== created.id)]);
+            } else {
+              setReloadKey((k) => k + 1);
+            }
           }}
-          onClose={() => setCreateOpen(false)}
+          onClose={() => {
+            setCreateOpen(false);
+            if (createParam === '1') setParam('create', null);
+          }}
         />
       ) : null}
 
       <div className="mesh-issues__filters" role="search">
         <input
           type="search"
-          value={qFilter}
-          onChange={(event) => setParam('q', event.target.value)}
+          value={qInput}
+          onChange={(event) => setQInput(event.target.value)}
           placeholder={t('issues.filters.search')}
           aria-label={t('issues.filters.search')}
           data-testid="issue-filter-q"

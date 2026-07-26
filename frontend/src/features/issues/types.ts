@@ -111,6 +111,8 @@ export interface DependencyEntry {
   readonly id: string;
   readonly issue_id: string;
   readonly depends_on_id: string;
+  /** 对端人类可读编号(服务端解析;UI 显示与跳转,§4.2/§4.3) */
+  readonly depends_on_identifier: string | null;
   readonly type: DependencyType;
   readonly created_by: string | null;
   readonly created_at: string;

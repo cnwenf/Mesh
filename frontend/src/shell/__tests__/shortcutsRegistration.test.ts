@@ -66,14 +66,14 @@ describe('registerShellShortcuts', () => {
     unregister();
   });
 
-  it('序列/裸键快捷键定义正确(g i 跳收件箱,c 导航首页)', () => {
+  it('序列/裸键快捷键定义正确(g i 跳收件箱,c 打开 issues 快速创建)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS);
     const shortcuts = useShortcutRegistry.getState().shortcuts;
     shortcuts.find((def) => def.id === 'go.inbox')?.run();
     expect(navigate).toHaveBeenCalledWith('/inbox');
     shortcuts.find((def) => def.id === 'new.issue')?.run();
-    expect(navigate).toHaveBeenCalledWith('/');
+    expect(navigate).toHaveBeenCalledWith('/issues?create=1');
     unregister();
   });
 

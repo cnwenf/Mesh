@@ -10,11 +10,9 @@ import uuid
 from datetime import date
 
 import pytest
-from sqlalchemy import select
 
-from mesh.db.models.issue import Issue, IssueStatus
+from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member, MemberProjectAccess
-from mesh.db.models.project import Cycle
 from mesh.db.models.user import User
 from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError, ValidationError
 from mesh.issue.bulk import BulkService
@@ -143,17 +141,6 @@ async def test_list_all_flat_filters(session_factory, issue_service, project_ser
     )
     await _issue(issue_service, actor=owner, ws=ws)  # noise
 
-    async with session_factory() as session:
-        any_status = (
-            (
-                await session.execute(
-                    select(IssueStatus).where(IssueStatus.workspace_id == ws.id)
-                )
-            )
-            .scalars()
-            .first()
-        )
-
     result = await issue_service.list_issues(
         viewer=owner,
         workspace_id=ws.id,
@@ -245,9 +232,9 @@ async def test_group_by_assignee_project_cycle_labels(session_factory, issue_ser
 
 @pytest.mark.unit
 async def test_query_cost_exceeded_backstop(session_factory, issue_service, monkeypatch):
-    import mesh.issue.service as svc
-
     from sqlalchemy import insert
+
+    import mesh.issue.service as svc
 
     ws = await _ws(session_factory)
     owner = await _member(session_factory, ws, role="owner")
@@ -576,7 +563,9 @@ async def test_move_status_mapping_into_done_sets_completed_at(
 
 
 @pytest.mark.unit
-async def test_move_from_deleted_project_to_inbox(session_factory, issue_service, move_service, project_service):
+async def test_move_from_deleted_project_to_inbox(
+    session_factory, issue_service, move_service, project_service
+):
     ws = await _ws(session_factory)
     owner = await _member(session_factory, ws, role="owner")
     source = await _project(project_service, actor=owner, ws=ws)
@@ -608,7 +597,9 @@ async def test_bulk_no_changes_no_delete_per_item_error(session_factory, issue_s
 
 
 @pytest.mark.unit
-async def test_bulk_assignee_and_project_confirm(session_factory, issue_service, bulk_service, project_service):
+async def test_bulk_assignee_and_project_confirm(
+    session_factory, issue_service, bulk_service, project_service
+):
     ws = await _ws(session_factory)
     owner = await _member(session_factory, ws, role="owner")
     member = await _member(session_factory, ws)
@@ -823,7 +814,6 @@ async def test_channel_checker_involvement_and_deleted_project(
     session_factory, issue_service, project_service
 ):
     from mesh.issue.channels import make_issue_channel_checker
-    from mesh.db.models.realtime import RealtimeChannel
     from mesh.realtime.auth import Principal
 
     ws = await _ws(session_factory)

@@ -42,11 +42,26 @@ function isStale(existing: IssueSummary, payload: FramePayload): boolean {
 }
 
 /** 合并顶层字段与嵌套 `changes`(浅层;changes 为服务端字段 diff)。 */
+/** 帧载荷中的事件元字段(F11:不得扩散到行对象)。 */
+const FRAME_META_KEYS = new Set([
+  'changes',
+  'issue',
+  'from_project_id',
+  'to_project_id',
+  'mapped_fields',
+  'cleared_fields',
+  'visibility',
+]);
+
 function mergedFields(existing: IssueSummary, payload: FramePayload): IssueSummary {
   const { changes, issue: _issue, ...top } = payload;
+  const topFields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(top)) {
+    if (!FRAME_META_KEYS.has(key)) topFields[key] = value;
+  }
   const changeFields =
     typeof changes === 'object' && changes !== null ? (changes as Record<string, unknown>) : {};
-  return { ...existing, ...top, ...changeFields } as IssueSummary;
+  return { ...existing, ...topFields, ...changeFields } as IssueSummary;
 }
 
 /**
