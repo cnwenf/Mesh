@@ -151,6 +151,15 @@ def _limit_page(limit: int | None) -> int:
     return min(limit, MAX_PAGE_LIMIT)
 
 
+def _escape_like(term: str) -> str:
+    """Escape LIKE wildcards so ``q`` matches as a literal substring (§3.2).
+
+    The query stays parameterised (no injection surface) — this only stops
+    user-supplied ``%`` / ``_`` / ``\\`` from widening the match set.
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _parse_uuid(raw: str | uuid.UUID | None, *, field: str) -> uuid.UUID | None:
     """Request schemas carry UUIDs as strings; normalize with a 400 on junk."""
     if raw is None:
@@ -861,9 +870,12 @@ class IssueService:
             if due_after is not None:
                 stmt = stmt.where(Issue.due_date >= due_after)
             if q is not None:
-                pattern = f"%{q.strip()}%"
+                pattern = f"%{_escape_like(q.strip())}%"
                 stmt = stmt.where(
-                    or_(Issue.title.ilike(pattern), Issue.identifier.ilike(pattern))
+                    or_(
+                        Issue.title.ilike(pattern, escape="\\"),
+                        Issue.identifier.ilike(pattern, escape="\\"),
+                    )
                 )
             if filters is not None:
                 compiled = compile_filter_tree(
