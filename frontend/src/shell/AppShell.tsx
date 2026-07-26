@@ -61,6 +61,45 @@ export function OverlayControlsProvider(props: OverlayControlsProviderProps): Re
   );
 }
 
+/** resync 对账 REST 允许的路径前缀(后端唯一对账端点 /api/v1/realtime/events,README §6.7) */
+const RESYNC_PATH_PREFIX = '/api/v1/';
+
+/**
+ * resync 翻页上限:恶意/异常的 next_cursor 永不为空时,无上限会死循环拉取。
+ * 超限即停(返回已聚合帧),由后续重连/轮询兜底补齐(MEDIUM-1)。
+ */
+export const MAX_RESYNC_PAGES = 50;
+
+/**
+ * resync rest URL 同源校验(MEDIUM-1):rest 来自 WS 帧(服务端被攻陷或遭 MITM 时不可信),
+ * 直接拼接并附 Bearer 会把 token 发往攻击者主机。解析为绝对 URL 后断言与 apiBaseUrl
+ * 同源(同源部署 apiBaseUrl 为 '' 时以页面 origin 为基)且路径在 /api/v1/ 之下,
+ * 不满足即抛错拒绝 resync(走 reconciler 既有错误路径:客户端退避重试)。
+ */
+export function resolveResyncUrl(rest: string, base: string = env.apiBaseUrl): string {
+  const effectiveBase = base !== '' ? base : window.location.origin;
+  let parsed: URL;
+  let baseOrigin: string;
+  try {
+    parsed = new URL(rest, effectiveBase);
+    baseOrigin = new URL(effectiveBase).origin;
+  } catch {
+    throw new MeshApiError({
+      status: 0,
+      code: 'network',
+      message: 'Rejected resync rest URL: unparsable',
+    });
+  }
+  if (parsed.origin !== baseOrigin || !parsed.pathname.startsWith(RESYNC_PATH_PREFIX)) {
+    throw new MeshApiError({
+      status: 0,
+      code: 'network',
+      message: 'Rejected resync rest URL: cross-origin or outside ' + RESYNC_PATH_PREFIX,
+    });
+  }
+  return parsed.toString();
+}
+
 /** 频道事件 REST 拉取(§6.7 对账端点同形):带 Bearer、按 next_cursor 翻页,聚合为事件帧 */
 export async function fetchRestEvents(
   url: string,
@@ -70,7 +109,9 @@ export async function fetchRestEvents(
   const frames: RealtimeEventFrame[] = [];
   let cursor: string | null = null;
   let pageUrl = url;
+  let pages = 0;
   do {
+    pages += 1;
     const response = await fetchImpl(pageUrl, {
       headers: token !== null ? { Authorization: 'Bearer ' + token } : {},
     });
@@ -98,13 +139,15 @@ export async function fetchRestEvents(
     if (cursor !== null) {
       pageUrl = url + (url.includes('?') ? '&' : '?') + 'cursor=' + encodeURIComponent(cursor);
     }
-  } while (cursor !== null);
+  } while (cursor !== null && pages < MAX_RESYNC_PAGES);
   return frames;
 }
 
 /**
  * resync REST 对账器工厂:整拉 rest URL 的事件并经 client.ingestReconciledEvent
  * 注入(与实时帧同路径:游标守卫 + 派发);非 2xx 抛错由客户端退避重试。
+ * rest 先经 resolveResyncUrl 同源校验(MEDIUM-1):跨源/非 /api/v1/ 前缀的 rest
+ * 直接拒绝,绝不发出携带 Bearer 的请求。
  * 导出以供单测直接驱动(真实 resync 经 WS 触发,属 e2e 覆盖)。
  */
 export function createReconciler(
@@ -112,7 +155,7 @@ export function createReconciler(
   fetchImpl: typeof fetch = fetch,
 ): (req: ResyncRequest) => Promise<void> {
   return async (req: ResyncRequest): Promise<void> => {
-    const frames = await fetchRestEvents(env.apiBaseUrl + req.rest, fetchImpl);
+    const frames = await fetchRestEvents(resolveResyncUrl(req.rest), fetchImpl);
     for (const frame of frames) {
       client.ingestReconciledEvent(frame);
     }

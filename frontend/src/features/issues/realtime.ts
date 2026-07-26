@@ -53,10 +53,19 @@ const FRAME_META_KEYS = new Set([
   'visibility',
 ]);
 
+/**
+ * 原型污染防护键(LOW-1):帧载荷顶层出现这些键时一律跳过。
+ * JSON.parse('{"__proto__": ...}') 产生自有 `__proto__` 属性,经 Object.entries
+ * 枚举后若下标赋值进普通对象会触发 Object.prototype 的 setter 改写原型;
+ * 跳过 + null 原型承载双重隔离,杜绝该 sink(帧来源为已鉴权服务端,仍纵深防御)。
+ */
+const PROTO_POLLUTION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function mergedFields(existing: IssueSummary, payload: FramePayload): IssueSummary {
   const { changes, issue: _issue, ...top } = payload;
-  const topFields: Record<string, unknown> = {};
+  const topFields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [key, value] of Object.entries(top)) {
+    if (PROTO_POLLUTION_KEYS.has(key)) continue;
     if (!FRAME_META_KEYS.has(key)) topFields[key] = value;
   }
   const changeFields =
