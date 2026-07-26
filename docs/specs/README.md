@@ -341,6 +341,7 @@ CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pe
 ```
 
 - 业务事务**同事务 INSERT outbox_events**(与业务行同提交);relay worker `FOR UPDATE SKIP LOCKED` 领取并分发,成功后置 `published`;失败退避重试,`delivery_attempts` 超限置 `failed` 并告警。
+- **终态行保留期清理(防无限膨胀)**:`published`/`failed` 行(含 `idempotency_key` 唯一索引项)由 worker 的 outbox-retention 循环按保留期(默认 7 天,`MESH_OUTBOX_EVENT_RETENTION` 可配)分批删除;`pending` 行**永不**清理(清理即静默丢任务)。`failed` 行需整段保留期过后才可删,远大于 relay 重试预算,故 §6.6 永久失败告警必然先于清理发出。
 - **禁止**在业务事务外"顺手"创建 execution/notification/realtime 事件(进程内总线、直接调下游)——此为评审硬约束。
 - **实时事件的唯一登记路径(R2 硬约束)**:一切实时事件(含各模块 §3.x/§4.x 所列 WebSocket 事件、`notification.created`、执行状态回流)一律为:业务事务写 `outbox_events`(`event_type='realtime.publish'`,payload 含频道、事件名、完整变更字段)→ **realtime projector**(§2.2)以 outbox 事件 id 为唯一去重键写 `realtime_events` 并**在投影事务内分配频道 `seq`**(§6.7)→ 经 Redis pub/sub 通知网关发布。**禁止业务事务直接 INSERT `realtime_events` 或直接分配 `seq`**——两条路径会产生不同的原子性/排序/去重实现乃至重复事件;projector 崩溃后重启经 outbox 补投,`realtime_events.UNIQUE(outbox_event_id)` 保证不重复登记(§9 T5/T26)。
 

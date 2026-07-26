@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_REALTIME_RETENTION_DAYS = 7
+DEFAULT_OUTBOX_RETENTION_DAYS = 7
 DEFAULT_API_PORT = 8000
 DEFAULT_WS_PORT = 8081
 
@@ -125,6 +126,16 @@ class Settings(BaseSettings):
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)
     outbox_poll_interval: float = Field(default=1.0, gt=0)
     outbox_max_attempts: int = Field(default=5, ge=1)
+
+    # Outbox retention (§6.6): terminal (published/failed) rows are purged once
+    # older than this window so outbox_events and its idempotency_key unique
+    # index do not grow without bound. Pending rows are never purged. The
+    # window far exceeds the relay retry budget, so the permanent-failure
+    # alert fires long before a failed row is eligible for cleanup.
+    outbox_event_retention: timedelta = Field(
+        default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS)
+    )
+    outbox_retention_interval: float = Field(default=3600.0, gt=0)
 
     # Realtime retention window (README §6.7: default 7 days, configurable).
     realtime_event_retention: timedelta = Field(

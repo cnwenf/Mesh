@@ -10,7 +10,7 @@ Three independently deployable units, all stateless except PostgreSQL:
 | Unit | Entrypoint | Responsibility |
 | --- | --- | --- |
 | API | `uvicorn mesh.api.app:create_app --factory` | REST `/api/v1`, §6.14 envelopes, health checks |
-| Worker | `python -m mesh.workers` | Outbox relay, realtime projector, retention purge — each an isolated supervised asyncio task (§2.2) |
+| Worker | `python -m mesh.workers` | Outbox relay, realtime projector, realtime + outbox retention purges, invitation sweep — each an isolated supervised asyncio task (§2.2) |
 | Realtime gateway | `uvicorn mesh.realtime.app:create_app --factory` | WebSocket `/ws`: first-frame auth, per-channel authorization, `resume_from` replay, `resync_required` (§6.7/§6.16) |
 
 Layering inside `src/mesh/`:
