@@ -8,7 +8,7 @@
  * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(主操作:新建视图)
  * → 内容(对齐 ProjectsPage)。URL 同步 /board/{viewId}(§4.2 可分享)。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
@@ -89,6 +89,11 @@ export function BoardPage(): React.JSX.Element {
   const toast = useToast();
   const client = useMemo(() => getApiClient(), []);
 
+  // addToast 经 ref 持有:避免 toast 上下文对象每次渲染换引用而让 toastError/
+  // load* 回调失效,进而触发挂载 effect 在加载失败路径上无限重跑(§6.12 错误态)。
+  const addToastRef = useRef(toast.addToast);
+  addToastRef.current = toast.addToast;
+
   const [membership, setMembership] = useState<Membership | null>(null);
   const [wsStatus, setWsStatus] = useState<LoadStatus>('loading');
   const [views, setViews] = useState<readonly View[]>([]);
@@ -105,9 +110,9 @@ export function BoardPage(): React.JSX.Element {
         error instanceof MeshApiError
           ? `${t('error.' + error.code)}`
           : t('common.unknownError');
-      toast.addToast(message, { tone: 'danger', closeLabel: t('common.close') });
+      addToastRef.current(message, { tone: 'danger', closeLabel: t('common.close') });
     },
-    [t, toast],
+    [t],
   );
 
   const loadWorkspace = useCallback(async () => {
