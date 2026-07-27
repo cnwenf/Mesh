@@ -343,6 +343,57 @@ describe('AgentWizard 编辑流程', () => {
     expect(patchBody.body.avatar_url).toBe(null);
   });
 
+  it('从现有 agent 复制:稀疏源字段回退默认值(?? 分支)', async () => {
+    const user = userEvent.setup();
+    const { client, list, request } = makeClient();
+    request.mockImplementation(async (m) => {
+      if (m === 'GET') {
+        return {
+          ...DETAIL,
+          name: '稀疏源',
+          avatar_url: null,
+          role_tag: null,
+          bio: null,
+          system_instructions: null,
+          model_config: {},
+          visibility: 'workspace',
+          trigger_on_assign: true,
+        };
+      }
+      return { id: 'a-new' };
+    });
+    renderWizard(client);
+    await waitFor(() => expect(list).toHaveBeenCalled());
+    await screen.findByRole('option', { name: '源 agent' });
+    await user.selectOptions(screen.getByTestId('agent-wizard-copy-from'), 'src-1');
+    await waitFor(() =>
+      expect((screen.getByTestId('agent-wizard-name') as HTMLInputElement).value).toBe('稀疏源'),
+    );
+    // 各 ?? 回退:role_tag/bio 空串(基本步)。
+    expect((screen.getByTestId('agent-wizard-role-tag') as HTMLInputElement).value).toBe('');
+    expect((screen.getByTestId('agent-wizard-bio') as HTMLInputElement).value).toBe('');
+    // 模型步:model_config {} → temperature 0.2、top_p 1、max_tokens 8192。
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    expect((screen.getByTestId('agent-wizard-temperature') as HTMLInputElement).value).toBe('0.2');
+    expect((screen.getByTestId('agent-wizard-top-p') as HTMLInputElement).value).toBe('1');
+    expect((screen.getByTestId('agent-wizard-max-tokens') as HTMLInputElement).value).toBe('8192');
+  });
+
+  it('可见性步:private 切回 workspace 触发 onChange', async () => {
+    const user = userEvent.setup();
+    const { client } = makeClient();
+    renderWizard(client);
+    await user.type(screen.getByTestId('agent-wizard-name'), '小测');
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-visibility-private'));
+    await user.click(screen.getByTestId('agent-wizard-visibility-workspace'));
+    expect(
+      (screen.getByTestId('agent-wizard-visibility-workspace') as HTMLInputElement).checked,
+    ).toBe(true);
+  });
+
   it('创建失败(MeshApiError)映射 error.* 文案', async () => {
     const user = userEvent.setup();
     const { client, request } = makeClient({ failCreateApi: true });

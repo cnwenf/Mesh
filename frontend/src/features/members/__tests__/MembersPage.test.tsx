@@ -76,6 +76,9 @@ function makeFetch(members: unknown[]) {
     if (method === 'POST' && url.includes('/invitations')) {
       return fakeResponse({ body: { data: [{ invite_link: '/invite/tok' }] } });
     }
+    if (method === 'POST' && url.endsWith('/agents')) {
+      return fakeResponse({ body: { data: { id: 'agt-new' } } });
+    }
     if (method === 'GET' && /\/members\/[^?]/.test(url)) {
       // member detail
       return fakeResponse({
@@ -92,9 +95,15 @@ function makeFetch(members: unknown[]) {
     if (method === 'GET' && url.includes('/members')) {
       // honour the member_type projection so the same endpoint serves the
       // "agents only" filter (README §6.12).
-      const requested = url.includes('member_type=agent')
+      let requested = url.includes('member_type=agent')
         ? members.filter((m) => (m as { member_type: string }).member_type === 'agent')
         : members;
+      const q = new URL(url, 'http://x').searchParams.get('q');
+      if (q) {
+        requested = requested.filter((m) =>
+          String((m as { display_name: string }).display_name).toLowerCase().includes(q.toLowerCase()),
+        );
+      }
       return fakeResponse({ body: { data: requested, next_cursor: null } });
     }
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
@@ -337,5 +346,119 @@ describe('MembersPage', () => {
     );
     expect(screen.queryByTestId(`remove-${HUMAN.id}`)).not.toBeInTheDocument();
     expect(screen.queryByTestId(`disable-${HUMAN.id}`)).not.toBeInTheDocument();
+  });
+
+  it('邀请人类:打开弹窗,填邮箱选角色后发送(invite 全链路)', async () => {
+    const user = userEvent.setup();
+    const calls = stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    await user.click(screen.getByTestId('invite-human-button'));
+    await user.type(screen.getByTestId('invite-email'), 'new@acme.com');
+    await user.selectOptions(screen.getByTestId('invite-role'), 'admin');
+    await user.click(screen.getByTestId('invite-submit'));
+    await screen.findByTestId('invite-done');
+    expect(
+      calls.some(
+        (c) => (c.init?.method ?? 'GET') === 'POST' && c.url.includes('/invitations'),
+      ),
+    ).toBe(true);
+  });
+
+  it('邀请弹窗:邮箱为空禁用发送;取消按钮关闭(onClose)', async () => {
+    const user = userEvent.setup();
+    stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    await user.click(screen.getByTestId('invite-human-button'));
+    expect((screen.getByTestId('invite-submit') as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByTestId('invite-email')).not.toBeInTheDocument());
+  });
+
+  it('新建 Agent:向导关闭(onClose)与完成创建(onSaved 重拉名册)', async () => {
+    const user = userEvent.setup();
+    const calls = stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    // 打开后以对话框关闭按钮关闭 → onClose。
+    await user.click(screen.getByTestId('new-agent-button'));
+    expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close dialog' }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument(),
+    );
+    // 重开并走完四步创建 → POST /agents → onSaved 重拉。
+    await user.click(screen.getByTestId('new-agent-button'));
+    await user.type(screen.getByTestId('agent-wizard-name'), '名册小测');
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-finish'));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => (c.init?.method ?? 'GET') === 'POST' && c.url.endsWith('/agents')),
+      ).toBe(true),
+    );
+  });
+
+  it('搜索框输入按名筛选(debounce 后生效)', async () => {
+    const user = userEvent.setup();
+    stub([HUMAN, AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    await user.type(screen.getByTestId('member-search'), 'Code');
+    await waitFor(
+      () => expect(screen.queryByText('Jane Doe')).not.toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    expect(screen.getByText('Code Bot')).toBeInTheDocument();
+  });
+
+  it('名册加载失败后点击重试恢复', async () => {
+    let failedOnce = false;
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'GET' && url.includes('/members') && !/\/members\/[^?]/.test(url)) {
+        if (!failedOnce) {
+          failedOnce = true;
+          return fakeResponse({
+            status: 500,
+            body: { error: { code: 'internal_error', message: 'server error' } },
+          });
+        }
+        return fakeResponse({ body: { data: [HUMAN], next_cursor: null } });
+      }
+      return fakeResponse({ status: 404 });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    const user = userEvent.setup();
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Jane Doe')).toBeInTheDocument();
+  });
+
+  it('成员抽屉:打开后可经关闭按钮关闭', async () => {
+    const user = userEvent.setup();
+    stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    await user.click(screen.getByTestId(`member-open-${HUMAN.id}`));
+    expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('member-drawer')).not.toBeInTheDocument());
+  });
+
+  it('agent 行无 profile 时点击开抽屉(非深链);详情获取失败不崩溃', async () => {
+    const agentNoProfile = { ...AGENT, id: 'mem-anp', profile: null };
+    const user = userEvent.setup();
+    stub([agentNoProfile]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Code Bot');
+    await user.click(screen.getByTestId('member-open-mem-anp'));
+    expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
   });
 });

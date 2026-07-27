@@ -16,7 +16,7 @@
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage && node scripts/verify-perfile-coverage.mjs",
     "test:e2e": "playwright test",
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts"
   },

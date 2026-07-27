@@ -17,6 +17,7 @@ import type {
   AgentSummary,
   AgentVisibility,
   ModelTier,
+  ReasoningEffort,
 } from './types';
 import { MODEL_TIER_ORDER, PLATFORM_MODELS } from './types';
 import './agents.css';
@@ -25,31 +26,32 @@ type WizardStep = 'basic' | 'model' | 'skills' | 'visibility';
 
 const STEP_ORDER: readonly WizardStep[] = ['basic', 'model', 'skills', 'visibility'];
 
-/** 预设(agent.md §2.4 preset):一键起步参数,新手无需逐项调参。 */
-const PRESETS: Record<string, AgentModelConfig> = {
+/** §2.4 参数预设:一键套用的模板值(字段全必填,运行期恒有定义)。 */
+interface PresetParams {
+  readonly model_tier: ModelTier;
+  readonly temperature: number;
+  readonly max_tokens: number;
+  readonly reasoning_effort: ReasoningEffort;
+}
+
+const PRESETS: Record<string, PresetParams> = {
   strict_engineering: {
     model_tier: 'balanced',
     temperature: 0.2,
-    top_p: 1.0,
     max_tokens: 8192,
     reasoning_effort: 'medium',
-    preset: 'strict_engineering',
   },
   creative_draft: {
     model_tier: 'strong_reasoning',
     temperature: 0.9,
-    top_p: 1.0,
     max_tokens: 8192,
     reasoning_effort: 'high',
-    preset: 'creative_draft',
   },
   fast_triage: {
     model_tier: 'lightweight_fast',
     temperature: 0.3,
-    top_p: 1.0,
     max_tokens: 2048,
     reasoning_effort: 'low',
-    preset: 'fast_triage',
   },
 };
 
@@ -220,11 +222,9 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
     temperature >= TEMPERATURE_MIN &&
     temperature <= TEMPERATURE_MAX;
   const maxTokens = Number(state.maxTokens);
-  const maxTokensValid =
-    state.maxTokens !== '' && Number.isInteger(maxTokens) && maxTokens >= 1;
+  const maxTokensValid = state.maxTokens !== '' && Number.isInteger(maxTokens) && maxTokens >= 1;
   const topPNum = Number(state.topP);
-  const topPValid =
-    state.topP !== '' && Number.isFinite(topPNum) && topPNum >= 0 && topPNum <= 1;
+  const topPValid = state.topP !== '' && Number.isFinite(topPNum) && topPNum >= 0 && topPNum <= 1;
   const avatarValid = state.avatarUrl === '' || state.avatarUrl.startsWith('https://');
 
   const stepIndex = STEP_ORDER.indexOf(step);
@@ -239,10 +239,10 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
     if (values === undefined) return;
     patch({
       preset,
-      modelTier: values.model_tier ?? 'balanced',
-      temperature: String(values.temperature ?? 0.2),
-      maxTokens: String(values.max_tokens ?? 8192),
-      reasoningEffort: values.reasoning_effort ?? 'medium',
+      modelTier: values.model_tier,
+      temperature: String(values.temperature),
+      maxTokens: String(values.max_tokens),
+      reasoningEffort: values.reasoning_effort,
     });
   };
 
@@ -272,8 +272,7 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
         });
         await updateAgentConfig(client, workspaceId, agent.id, {
           model_config: buildModelConfig(),
-          system_instructions:
-            state.systemInstructions === '' ? null : state.systemInstructions,
+          system_instructions: state.systemInstructions === '' ? null : state.systemInstructions,
         });
         addToast(t('agents.toast.updated'), { tone: 'success', closeLabel: t('common.close') });
         onSaved(agent.id);
@@ -285,8 +284,7 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
           bio: state.bio === '' ? null : state.bio,
           visibility: state.visibility,
           trigger_on_assign: state.triggerOnAssign,
-          system_instructions:
-            state.systemInstructions === '' ? null : state.systemInstructions,
+          system_instructions: state.systemInstructions === '' ? null : state.systemInstructions,
           model_config: buildModelConfig(),
         });
         addToast(t('agents.toast.created'), { tone: 'success', closeLabel: t('common.close') });

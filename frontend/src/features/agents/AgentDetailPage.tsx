@@ -282,9 +282,18 @@ export function AgentDetailPage(): React.JSX.Element {
   };
 
   /** §2.4 预设套用:一键填充模型参数(与向导同源)。 */
-  const PRESETS: Record<string, { tier: string; temp: string; top: string; max: string; effort: 'low' | 'medium' | 'high' }> = {
+  const PRESETS: Record<
+    string,
+    { tier: string; temp: string; top: string; max: string; effort: 'low' | 'medium' | 'high' }
+  > = {
     strict_engineering: { tier: 'balanced', temp: '0.2', top: '1', max: '8192', effort: 'medium' },
-    creative_draft: { tier: 'strong_reasoning', temp: '0.9', top: '1', max: '8192', effort: 'high' },
+    creative_draft: {
+      tier: 'strong_reasoning',
+      temp: '0.9',
+      top: '1',
+      max: '8192',
+      effort: 'high',
+    },
     fast_triage: { tier: 'lightweight_fast', temp: '0.3', top: '1', max: '2048', effort: 'low' },
   };
   const applyPreset = (key: string): void => {
@@ -394,13 +403,14 @@ export function AgentDetailPage(): React.JSX.Element {
   return (
     <main className="mesh-agents-detail" data-testid="agent-detail-page">
       <div className="mesh-agents-detail__header">
-        <Button variant="ghost" data-testid="agent-detail-back" onClick={() => navigate('/members')}>
+        <Button
+          variant="ghost"
+          data-testid="agent-detail-back"
+          onClick={() => navigate('/members')}
+        >
           {t('agents.detail.back')}
         </Button>
-        <span
-          className="mesh-members__avatar mesh-members__avatar--agent"
-          aria-hidden="true"
-        >
+        <span className="mesh-members__avatar mesh-members__avatar--agent" aria-hidden="true">
           {agent.name.slice(0, 1).toUpperCase()}
         </span>
         <h1 className="mesh-agents-detail__title" data-testid="agent-detail-name">
@@ -769,7 +779,11 @@ export function AgentDetailPage(): React.JSX.Element {
             data-testid="agent-pause-reason"
             onChange={(event) => setPauseReason(event.target.value)}
           />
-          <Button variant="secondary" data-testid="agent-pause-cancel-btn" onClick={() => setPauseOpen(false)}>
+          <Button
+            variant="secondary"
+            data-testid="agent-pause-cancel-btn"
+            onClick={() => setPauseOpen(false)}
+          >
             {t('common.cancel')}
           </Button>
           <Button data-testid="agent-pause-confirm" onClick={() => void confirmPause()}>
