@@ -2,7 +2,10 @@
 
 Stage-6 agent-layer increment B (runtime.md §2 / README §6.4 / §6.5 / §6.10).
 DDL mirrors docs/specs/validation/schema_r2_validation.sql (runtime section)
-and runtime.md §2.1–§2.5.
+and runtime.md §2.1–§2.5. Renumbered 0018 → 0019: the comment-inbox
+increment (MES-58) occupies 0018 on main (same avoidance pattern as the
+attachment 0015/0016 and agent 0017 renumberings); single-head chain
+0001 → 0019 verified on a fresh database.
 
 Tables (all tenant-scoped, RLS fail-closed per README §6.2 rule 5):
 
@@ -43,16 +46,16 @@ Bootstrap reads (RLS is fail-closed; workspace unknown until the lookup):
 - ``mesh_runtime_by_token_hash`` — daemon bearer token → runtime row.
 - ``mesh_runtime_by_activation_hash`` — one-shot activation code → runtime row.
 
-Revision ID: 0018
-Revises: 0017
+Revision ID: 0019
+Revises: 0018
 Create Date: 2026-07-27
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0018"
-down_revision = "0017"
+revision = "0019"
+down_revision = "0018"
 branch_labels = None
 depends_on = None
 

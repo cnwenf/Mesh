@@ -30,7 +30,6 @@ from mesh.runtime.redaction import (
     scan_text_for_secrets,
 )
 from mesh.runtime.service import RuntimeService
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
@@ -51,7 +50,6 @@ async def app_client_factory(db_url, redis_url):
     """Yields a factory: suffix → (client, owner_jwt, ws_id, agent_id)."""
     from mesh.api.app import create_app
     from mesh.config import load_settings
-
     from tests.unit.test_runtime_routes import _settings_kwargs, _world
 
     app = create_app(load_settings(**_settings_kwargs(db_url, redis_url)))
@@ -323,10 +321,6 @@ async def test_issue_creator_may_decide_h4(app_client_factory, session_factory):
             json={"email": email, "password": "Cov-User-12345", "display_name": tag},
         )
         assert reg.status_code == 201, reg.text
-        login = await app_client.post(
-            "/api/v1/auth/login", json={"email": email, "password": "Cov-User-12345"}
-        )
-        jwt = login.json()["data"]["access_token"]
         member_id = uuid.uuid4()
         async with session_factory() as session, session.begin():
             user_id = (
