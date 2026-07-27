@@ -86,7 +86,11 @@ async def activate_runtime(
     settings = request.app.state.settings
     from mesh.runtime.daemon_auth import assert_daemon_tls
 
-    assert_daemon_tls(request, tls_required=settings.daemon_tls_required)
+    assert_daemon_tls(
+        request,
+        tls_required=settings.daemon_tls_required,
+        trusted_proxies=settings.daemon_trusted_proxies,
+    )
     limiter = request.app.state.rate_limiter
     remaining, reset_in = await limiter.check(
         f"daemon-activate:{_client_ip(request)}", limit=30, window_seconds=300
@@ -265,28 +269,27 @@ async def refetch_credentials(
     session_factory = request.app.state.session_factory
     parsed = _attempt_uuid(attempt_id)
 
-    # Fencing pre-check: only the current lease holder may refetch.
+    # Fence + refetch in ONE transaction: the attempt row is locked FOR UPDATE
+    # while lease_seq / status are validated and the envelopes rotate, closing
+    # the TOCTOU window between check and issue (review M1).
     from mesh.db.tenant import set_tenant_context
 
     from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt
 
-    async with session_factory() as session:
-        await set_tenant_context(session, runtime.workspace_id)
-        attempt = await _load_daemon_attempt(
-            session, attempt_id=parsed, runtime=runtime, for_update=False
-        )
-        if attempt.status not in ("claimed", "running"):
-            raise ConflictError(
-                "attempt not in flight",
-                code="attempt_terminal",
-                details={"status": attempt.status},
-            )
-        _assert_lease(attempt, body.lease_seq)
-        execution_id = attempt.execution_id
-
     try:
         async with session_factory() as session, session.begin():
             await set_tenant_context(session, runtime.workspace_id)
+            attempt = await _load_daemon_attempt(
+                session, attempt_id=parsed, runtime=runtime
+            )
+            if attempt.status not in ("claimed", "running"):
+                raise ConflictError(
+                    "attempt not in flight",
+                    code="attempt_terminal",
+                    details={"status": attempt.status},
+                )
+            _assert_lease(attempt, body.lease_seq)
+            execution_id = attempt.execution_id
             delivered = await refetch_envelopes(
                 session,
                 workspace_id=runtime.workspace_id,

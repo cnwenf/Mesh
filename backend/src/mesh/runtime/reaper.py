@@ -125,9 +125,33 @@ async def _reclaim_one(
     attempt_id: uuid.UUID,
     workspace_id: uuid.UUID,
 ) -> str | None:
-    """Reclaim a single expired attempt; returns the execution outcome."""
+    """Reclaim a single expired attempt; returns the execution outcome.
+
+    Unified lock order — execution row first, then the attempt row — matching
+    transition_attempt / cancel_execution / request_tool_approval so sweeps
+    never deadlock against concurrent daemon reports (review M2).
+    """
+    async with session_factory() as session:
+        execution_ref = (
+            await session.execute(
+                select(ExecutionAttempt.execution_id).where(
+                    ExecutionAttempt.id == attempt_id
+                )
+            )
+        ).scalar_one_or_none()
+    if execution_ref is None:
+        return None
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
+        locked_exec = (
+            await session.execute(
+                select(TaskExecution.id)
+                .where(TaskExecution.id == execution_ref)
+                .with_for_update(skip_locked=True)
+            )
+        ).scalar_one_or_none()
+        if locked_exec is None:
+            return None  # execution locked elsewhere — sweep it next pass
         attempt = (
             await session.execute(
                 select(ExecutionAttempt)

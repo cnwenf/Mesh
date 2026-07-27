@@ -415,7 +415,12 @@ class RuntimeService:
             if kind:
                 stmt = stmt.where(Runtime.kind == kind)
             if search:
-                stmt = stmt.where(Runtime.name.ilike(f"%{search.strip()}%"))
+                # Escape LIKE metacharacters (review L1): user search terms
+                # must match literally, not as wildcards.
+                escaped = (
+                    search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                )
+                stmt = stmt.where(Runtime.name.ilike(f"%{escaped}%", escape="\\"))
             if cursor:
                 decoded = _decode_cursor(cursor)
                 if decoded is not None:

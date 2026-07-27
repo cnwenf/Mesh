@@ -66,18 +66,25 @@ def validate_env_names(names: list[str] | None) -> None:
         validate_env_name(name)
 
 
-def assert_daemon_tls(request: Request, *, tls_required: bool) -> None:
+def assert_daemon_tls(
+    request: Request, *, tls_required: bool, trusted_proxies: str = "127.0.0.1,::1"
+) -> None:
     """NEW-M3 red line: machine API is TLS-only.
 
     Plaintext transport of claim/refetch responses would expose credential
-    material; refuse anything that is not HTTPS (directly terminated or via a
-    trusted proxy's ``X-Forwarded-Proto``).
+    material; refuse anything that is not HTTPS — directly terminated, or
+    reported via ``X-Forwarded-Proto`` BY A TRUSTED PROXY ONLY (review M3:
+    the raw header from an arbitrary client is spoofable and must not bypass
+    the gate).
     """
     if not tls_required:
         return
-    scheme = request.url.scheme
+    if request.url.scheme == "https":
+        return
     forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
-    if scheme == "https" or forwarded == "https":
+    peer = request.client.host if request.client else None
+    trusted = {p.strip() for p in trusted_proxies.split(",") if p.strip()}
+    if forwarded == "https" and peer in trusted:
         return
     raise ForbiddenError(
         "the machine API requires TLS",
@@ -139,7 +146,11 @@ async def resolve_runtime_token(
 async def require_runtime(request: Request) -> Runtime:
     """FastAPI dependency for every ``/api/v1/daemon/`` endpoint."""
     settings = request.app.state.settings
-    assert_daemon_tls(request, tls_required=settings.daemon_tls_required)
+    assert_daemon_tls(
+        request,
+        tls_required=settings.daemon_tls_required,
+        trusted_proxies=settings.daemon_trusted_proxies,
+    )
     authorization = request.headers.get("authorization") or ""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:

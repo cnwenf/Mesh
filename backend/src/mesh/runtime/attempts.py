@@ -20,6 +20,7 @@ from mesh.db.models.runtime import (
     ATTEMPT_INFLIGHT_STATUSES,
     ATTEMPT_TERMINAL_STATUSES,
     EXECUTION_TERMINAL_STATUSES,
+    FAILURE_REASONS,
     ExecutionAttempt,
     Runtime,
     TaskExecution,
@@ -223,9 +224,45 @@ async def transition_attempt(
     Idempotent on terminal re-report (same status → no-op, no double release);
     conflicting terminal re-report → 409; illegal edge → 422.
     """
+    # ``awaiting_approval`` is reserved for the approvals module's internal
+    # path (it moves the execution to awaiting_approval in ONE transaction).
+    # A daemon supplying it here would strand the execution in ``running``
+    # with no in-flight attempt — rejected outright. The vocabulary is
+    # enforced too: arbitrary reasons must not reach storage/events/UI.
+    if failure_reason == "awaiting_approval":
+        raise BusinessRuleError(
+            "reserved failure reason",
+            code="reserved_failure_reason",
+            details={"failure_reason": failure_reason},
+        )
+    if failure_reason is not None and failure_reason not in FAILURE_REASONS:
+        raise BusinessRuleError(
+            "unknown failure reason",
+            code="invalid_failure_reason",
+            details={"failure_reason": failure_reason},
+        )
     workspace_id = runtime.workspace_id
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
+        # Unified lock order: EXECUTION row first, then the attempt row —
+        # identical to cancel_execution / request_tool_approval / the reaper,
+        # so concurrent daemon reports and console cancels cannot deadlock.
+        peek = (
+            await session.execute(
+                select(ExecutionAttempt.execution_id).where(
+                    ExecutionAttempt.id == attempt_id
+                )
+            )
+        ).scalar_one_or_none()
+        if peek is None:
+            raise NotFoundError("attempt not found")
+        execution = (
+            await session.execute(
+                select(TaskExecution)
+                .where(TaskExecution.id == peek)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         attempt = await _load_daemon_attempt(session, attempt_id=attempt_id, runtime=runtime)
 
         if attempt.status in ATTEMPT_TERMINAL_STATUSES:
@@ -261,13 +298,7 @@ async def transition_attempt(
             if was_inflight:
                 await _release_capacity(session, attempt.runtime_id)
 
-        execution = (
-            await session.execute(
-                select(TaskExecution)
-                .where(TaskExecution.id == attempt.execution_id)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
+        # Execution row already locked above (unified lock order).
         execution_status = None
         if execution is not None:
             execution_status = await _sync_execution_status(

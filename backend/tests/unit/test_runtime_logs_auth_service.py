@@ -262,22 +262,31 @@ def test_tls_guard_refuses_plaintext_when_required():
     from mesh.runtime.daemon_auth import assert_daemon_tls
     from types import SimpleNamespace
 
-    request = SimpleNamespace(
-        url=SimpleNamespace(scheme="http"), headers={}
-    )
+    def req(scheme, headers=None, peer="203.0.113.9"):
+        return SimpleNamespace(
+            url=SimpleNamespace(scheme=scheme),
+            headers=headers or {},
+            client=SimpleNamespace(host=peer),
+        )
+
     with pytest.raises(ForbiddenError):
-        assert_daemon_tls(request, tls_required=True)
-    # HTTPS direct or via trusted proxy passes.
+        assert_daemon_tls(req("http"), tls_required=True)
+    # HTTPS direct passes.
+    assert_daemon_tls(req("https"), tls_required=True)
+    # M3: X-Forwarded-Proto from a TRUSTED proxy (loopback default) passes...
     assert_daemon_tls(
-        SimpleNamespace(url=SimpleNamespace(scheme="https"), headers={}), tls_required=True
+        req("http", {"x-forwarded-proto": "https"}, peer="127.0.0.1"), tls_required=True
     )
+    # ...but the same header from an arbitrary client is spoofed → 403.
+    with pytest.raises(ForbiddenError):
+        assert_daemon_tls(req("http", {"x-forwarded-proto": "https"}), tls_required=True)
+    # Configured proxy list is honored.
     assert_daemon_tls(
-        SimpleNamespace(
-            url=SimpleNamespace(scheme="http"), headers={"x-forwarded-proto": "https"}
-        ),
+        req("http", {"x-forwarded-proto": "https"}, peer="10.9.8.7"),
         tls_required=True,
+        trusted_proxies="10.9.8.7",
     )
-    assert_daemon_tls(request, tls_required=False)
+    assert_daemon_tls(req("http"), tls_required=False)
 
 
 # ---------------------------------------------------------------------------

@@ -280,3 +280,64 @@ async def test_freeze_revokes_envelopes(session_factory):
             await session.execute(select(ExecutionCredential))
         ).scalar_one()
     assert binding.revoked_at is not None
+
+
+async def test_daemon_cannot_inject_awaiting_approval_reason(session_factory):
+    """Review H1: ``awaiting_approval`` is approvals-module-internal. A daemon
+    injecting it via PATCH must be rejected — otherwise the attempt goes
+    terminal while the execution stays ``running`` forever (no in-flight
+    attempt left for the reaper to sweep)."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    result = await _claim_one(session_factory, runtime)
+    await _transition(session_factory, runtime, result, new_status="running")
+
+    with pytest.raises(BusinessRuleError) as exc:
+        await _transition(
+            session_factory,
+            runtime,
+            result,
+            new_status="cancelled",
+            failure_reason="awaiting_approval",
+        )
+    assert exc.value.code == "reserved_failure_reason"
+
+    # Execution is untouched: still running, still completable.
+    async with session_factory() as session:
+        executions = (
+            await session.execute(select(TaskExecution))
+        ).scalars().all()
+    assert executions[0].status == "running"
+    await _transition(
+        session_factory, runtime, result, new_status="completed", result={"exit_code": 0}
+    )
+    async with session_factory() as session:
+        executions = (
+            await session.execute(select(TaskExecution))
+        ).scalars().all()
+    assert executions[0].status == "completed"
+
+
+async def test_daemon_failure_reason_vocabulary_enforced(session_factory):
+    """Review M4: arbitrary failure reasons never reach storage/events/UI."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    result = await _claim_one(session_factory, runtime)
+    await _transition(session_factory, runtime, result, new_status="running")
+    with pytest.raises(BusinessRuleError) as exc:
+        await _transition(
+            session_factory,
+            runtime,
+            result,
+            new_status="failed",
+            failure_reason="made_up_reason",
+        )
+    assert exc.value.code == "invalid_failure_reason"
+    # A valid reason passes.
+    await _transition(
+        session_factory,
+        runtime,
+        result,
+        new_status="failed",
+        failure_reason="sandbox_violation",
+    )

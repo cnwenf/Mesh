@@ -251,6 +251,10 @@ class Settings(BaseSettings):
     # Local dev / compose (plain HTTP loopback) sets this to false; production
     # keeps the secure default.
     daemon_tls_required: bool = True
+    # X-Forwarded-Proto is trusted ONLY from these direct peers (review M3:
+    # a spoofed header from anywhere else must not bypass the TLS gate).
+    # Configure your TLS-terminating LB's address here in production.
+    daemon_trusted_proxies: str = "127.0.0.1,::1"
     # Signed release package metadata served by the registration wizard
     # (§3.1 — placeholder distribution endpoints; deployers replace them).
     runtime_release_version: str = "1.0.0"
