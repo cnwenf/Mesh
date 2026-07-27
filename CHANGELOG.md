@@ -3,6 +3,32 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.15.1] - 2026-07-28
+
+安全硬化债清偿(MES-57):MES-51 验收发现的 L3/L5 同族口径债产品级收敛,无行为破坏、无接口变更。
+
+### Security
+
+- **无前缀端点存在性 oracle 消除(产品级统一,workspace.md §5.3)**:所有经 SECURITY DEFINER 解析租户的无前缀资源端点,成员门 404 在路由层统一转写为资源级消息,「id 不存在」「存在但非成员」「软删除」三态返回同一 404 文本、不可区分,消除任意 UUID 的资源存在性探测:
+  - `/projects/{id}`、`/milestones/{id}`、`/cycles/{id}`、`/project-templates/{id}`(含 updates / milestones / members 子路径与 instantiate)→ 对应资源消息;
+  - `/labels/{id}`、`/labels/{id}/merge`、`/custom-fields/{id}[/options[/{opt_id}]]` → `label not found` / `custom field not found`;
+  - `/views/{id}`(含 `/issues` 执行路径)→ `view not found`;
+  - `/attachments/{id}`(含 `/complete`、`/abort`、`/download`、`/thumbnail`)、`/multipart/{id}/parts|complete` → `attachment not found`;`/issues|comments/{id}/attachments` → `{linked_type} not found`;
+  - `POST /attachments/upload-requests` 的 `link_to` 派生租户分支取宿主资源消息;显式 `workspace_id` 分支与 token 自身工作区保持 `workspace not found`(与 `require_workspace` 一致,指名即无存在性推断)。
+- **名册搜索 LIKE 通配符转义**:`GET /workspaces/{id}/members` 的 `q` 为字面子串匹配,经共享 `escape_like` + `ILIKE ... ESCAPE '\'`(与 issue 列表搜索同一实现),`q=%` 不再命中全名册。
+- **RLS fail-closed e2e 断言收窄**:fail-closed 锚定 `undefined_object`(42704)、跨租 INSERT 锚定 RLS WITH CHECK 拒绝(42501),逐表探针独立连接,不再可被无关语句级错误满足。
+
+### Fixed
+
+- **comment 租户解析 fail-closed 修复**:`resolve_host_workspace` 的 comment 分支改经 SECURITY DEFINER `mesh_comment_workspace_id`(迁移 0018);应用角色 fail-closed RLS 下直连查表无 GUC 即错(42704),原使 `/comments/{id}/attachments` 对已存在 comment 返回 500 而非契约 404。
+
+### Docs
+
+- workspace.md §5.3 补全无前缀端点清单并增「调用方指名工作区保持 workspace 404」例外句;project / label-property / kanban / member / attachment spec 同步实现口径。
+
+门槛:ruff 净;全量单测 + 真实 e2e(PostgreSQL 16 + Redis + MinIO,零 mock)全绿;覆盖率 93.69%(≥90%),改动文件均 ≥90%。
+
+
 ## [0.15.0] - 2026-07-28
 
 阶段 6 智能体层 B:runtime 模块全功能实现(MES-62,runtime.md 五章)。执行双层状态机(task_executions 逻辑层 + execution_attempts 物理层)、§2.5 原子 claim(SKIP LOCKED + 容量无泄漏)、租约 fencing 与 reaper 失联自愈、日志流式(WS 主/SSE 降级/offset 续传/全通道脱敏)、凭证 fencing(一次性 envelope + 重取上限)、checkout 白名单与 SSRF 防护、统一审批唯一续跑协议(§6.10),并闭环 MES-60 的 `execution.enqueue` outbox 消费端。红线集成测试 T2/T3/T4/T10/T16/T20/T21 真实起服 + 真实 worker 并发实测全绿。
