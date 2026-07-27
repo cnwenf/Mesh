@@ -14,6 +14,10 @@ and independent cancel domains:
   soft-delete / terminal retention hard-deletes, blob GC (the ONLY object
   deletion condition: ``ref_count = 0`` AND no referencing rows) and the
   quota usage cache refresh.
+
+The per-pass bodies are exposed as ``run_scan_pass`` / ``run_maintenance_pass``
+so tests drive a single deterministic pass synchronously instead of racing a
+background loop task against the per-test TRUNCATE isolation.
 """
 
 from __future__ import annotations
@@ -22,12 +26,47 @@ import asyncio
 import logging
 
 from mesh.attachment.processing import claim_pending_blobs, process_blob
-from mesh.attachment.scanner import HeuristicScanner
+from mesh.attachment.scanner import HeuristicScanner, VirusScanner
 from mesh.attachment.service import AttachmentService
 from mesh.attachment.storage import ObjectStorage
 from mesh.config import Settings
 
 logger = logging.getLogger("mesh.workers.attachment_processor")
+
+
+async def run_scan_pass(
+    session_factory,
+    *,
+    storage: ObjectStorage,
+    settings: Settings,
+    scanner: VirusScanner | None = None,
+) -> int:
+    """One quarantine sweep pass; returns the number of blobs processed."""
+    scanner = scanner or HeuristicScanner()
+    processed = 0
+    async with session_factory() as session, session.begin():
+        blobs = await claim_pending_blobs(
+            session, batch=settings.attachment_scan_batch_size
+        )
+        for blob in blobs:
+            await process_blob(
+                session, blob, storage=storage, settings=settings, scanner=scanner
+            )
+            processed += 1
+    return processed
+
+
+async def run_maintenance_pass(
+    service: AttachmentService, *, run_gc: bool
+) -> tuple[int, int, int]:
+    """One maintenance pass; returns (swept, reaped, collected)."""
+    swept = await service.sweep_expired_uploads()
+    reaped = await service.run_retention()
+    collected = 0
+    if run_gc:
+        collected = await service.gc_unreferenced_blobs()
+        await service.refresh_quota_caches()
+    return swept, reaped, collected
 
 
 async def attachment_scan_loop(
@@ -46,16 +85,9 @@ async def attachment_scan_loop(
     )
     while not stop.is_set():
         try:
-            processed = 0
-            async with session_factory() as session, session.begin():
-                blobs = await claim_pending_blobs(
-                    session, batch=settings.attachment_scan_batch_size
-                )
-                for blob in blobs:
-                    await process_blob(
-                        session, blob, storage=storage, settings=settings, scanner=scanner
-                    )
-                    processed += 1
+            processed = await run_scan_pass(
+                session_factory, storage=storage, settings=settings, scanner=scanner
+            )
             if processed:
                 logger.info("attachment scan processed %d blob(s)", processed)
         except Exception:
@@ -81,18 +113,16 @@ async def attachment_maintenance_loop(
     logger.info("attachment maintenance loop started (interval=%.1fs)", interval)
     while not stop.is_set():
         try:
-            swept = await service.sweep_expired_uploads()
+            ticks += 1
+            swept, reaped, collected = await run_maintenance_pass(
+                service, run_gc=(ticks % gc_every == 0)
+            )
             if swept:
                 logger.info("attachment orphan sweep expired %d upload(s)", swept)
-            reaped = await service.run_retention()
             if reaped:
                 logger.info("attachment retention hard-deleted %d record(s)", reaped)
-            ticks += 1
-            if ticks % gc_every == 0:
-                collected = await service.gc_unreferenced_blobs()
-                if collected:
-                    logger.info("attachment GC deleted %d blob(s)", collected)
-                await service.refresh_quota_caches()
+            if collected:
+                logger.info("attachment GC deleted %d blob(s)", collected)
         except Exception:
             logger.exception("attachment maintenance iteration failed")
         try:

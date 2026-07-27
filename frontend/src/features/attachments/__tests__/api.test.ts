@@ -117,6 +117,8 @@ interface MockXHRInstance {
   onerror: (() => void) | null;
   onabort: (() => void) | null;
   status: number;
+  sent: Blob | null;
+  abortCalled: boolean;
   open: (method: string, url: string) => void;
   setRequestHeader: (name: string, value: string) => void;
   getResponseHeader: (name: string) => string | null;
@@ -124,6 +126,12 @@ interface MockXHRInstance {
   abort: () => void;
 }
 
+/**
+ * 真实浏览器语义的 XHR 桩(M1 回归的关键):
+ * - abort() 作用于**未 send** 的请求时不触发任何事件(旧桩无条件 fire onabort,
+ *   把「预中止 promise 永不 settle」的真实 bug 盖住了);
+ * - 已 settle(成功/失败/中止)后再 abort() 不再重复 fire。
+ */
 function installXhrMock(): { instances: MockXHRInstance[] } {
   const instances: MockXHRInstance[] = [];
   class MockXHR {
@@ -137,6 +145,8 @@ function installXhrMock(): { instances: MockXHRInstance[] } {
     headers: Record<string, string> = {};
     responseHeaders: Record<string, string> = {};
     sent: Blob | null = null;
+    settled = false;
+    abortCalled = false;
     constructor() {
       instances.push(this as unknown as MockXHRInstance);
     }
@@ -154,6 +164,9 @@ function installXhrMock(): { instances: MockXHRInstance[] } {
       this.sent = body;
     }
     abort() {
+      this.abortCalled = true;
+      if (this.sent === null || this.settled) return;
+      this.settled = true;
       this.onabort?.();
     }
   }
@@ -200,18 +213,36 @@ describe('putBytesWithProgress', () => {
     await expect(network).rejects.toThrow('network error');
   });
 
-  it('aborts via signal (already aborted and mid-flight)', async () => {
+  it('rejects promptly with AbortError for a PRE-ABORTED signal without relying on XHR events (M1)', async () => {
     const { instances } = installXhrMock();
     const preAborted = new AbortController();
     preAborted.abort();
     const pre = putBytesWithProgress('http://s', new Blob(['x']), {}, undefined, preAborted.signal);
-    await expect(pre).rejects.toThrow('aborted');
+    // 若实现把预中止交给 xhr.abort() 收敛,真实浏览器(与本桩)对未 send 的
+    // XHR 不 fire 任何事件,promise 永不 settle,本断言将挂到超时——这正是 M1 回归点。
+    await expect(pre).rejects.toMatchObject({ name: 'AbortError' });
+    expect(instances).toHaveLength(0); // 直接 reject,连 XHR 都不必构造
+  });
 
+  it('aborts a mid-flight upload via the signal listener', async () => {
+    const { instances } = installXhrMock();
     const controller = new AbortController();
     const mid = putBytesWithProgress('http://s', new Blob(['x']), {}, undefined, controller.signal);
+    expect(instances).toHaveLength(1);
     controller.abort();
-    await expect(mid).rejects.toThrow('aborted');
-    expect(instances.length).toBeGreaterThanOrEqual(1);
+    expect(instances[0].abortCalled).toBe(true);
+    await expect(mid).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('removes the abort listener once the XHR settles (no dangling signal reference)', async () => {
+    const { instances } = installXhrMock();
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+    const promise = putBytesWithProgress('http://s', new Blob(['x']), {}, undefined, controller.signal);
+    instances[0].status = 200;
+    instances[0].onload?.();
+    await expect(promise).resolves.toEqual({ etag: null });
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
   });
 });
 

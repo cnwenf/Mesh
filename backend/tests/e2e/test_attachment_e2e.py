@@ -86,12 +86,18 @@ def _storage_env() -> dict[str, str]:
     }
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def attachment_worker(provision_database):
     """A REAL worker subprocess — relay + quarantine pipeline (README §2.2).
 
     Scan-skip is disabled so the EICAR test exercises the infected verdict
     instead of the plain-text whitelist.
+
+    MODULE scope (not session): the outbox relay polls the shared test
+    database while alive; a session-scoped relay would overlap the
+    between-test TRUNCATE isolation of LATER, unrelated e2e files, and the
+    relay's outbox row locks cycle with TRUNCATE's realtime_events lock
+    (deadlock). Module scope keeps the worker alive exactly for this file.
     """
     env = os.environ.copy()
     env["MESH_DATABASE_URL"] = get_test_database_url()

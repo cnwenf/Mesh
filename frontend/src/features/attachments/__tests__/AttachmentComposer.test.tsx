@@ -13,6 +13,7 @@ import { DEFAULT_MAX_FILE_BYTES } from '../useAttachmentUploader';
 
 /* ---- 桩:XHR(可控自动完成)+ crypto.subtle ---- */
 
+/** 真实浏览器语义:abort() 作用于未 send 的请求不 fire 任何事件;已 settle 不重复 fire。 */
 function installXhr(autoRespond: boolean): void {
   class Xhr {
     upload = { onprogress: null as null | ((e: unknown) => void) };
@@ -21,20 +22,27 @@ function installXhr(autoRespond: boolean): void {
     onabort: (() => void) | null = null;
     status = 200;
     responseHeaders: Record<string, string> = {};
+    sent = false;
+    settled = false;
     open() {}
     setRequestHeader() {}
     getResponseHeader(name: string) {
       return this.responseHeaders[name] ?? null;
     }
     send() {
+      this.sent = true;
       if (autoRespond) {
         queueMicrotask(() => {
+          if (this.settled) return;
+          this.settled = true;
           this.responseHeaders.ETag = '"e"';
           this.onload?.();
         });
       }
     }
     abort() {
+      if (!this.sent || this.settled) return;
+      this.settled = true;
       this.onabort?.();
     }
   }
@@ -49,10 +57,21 @@ function installCrypto(): void {
   });
 }
 
-if (typeof Blob.prototype.arrayBuffer !== 'function') {
-  Blob.prototype.arrayBuffer = function arrayBuffer(this: Blob): Promise<ArrayBuffer> {
-    return Promise.resolve(new ArrayBuffer(this.size));
-  };
+// LOW 回归:arrayBuffer 垫片按测试装卸,绝不模块级永久补丁 Blob.prototype(跨文件泄漏)。
+const HAS_BLOB_ARRAY_BUFFER = typeof Blob.prototype.arrayBuffer === 'function';
+function installBlobArrayBuffer(): void {
+  if (HAS_BLOB_ARRAY_BUFFER) return;
+  Object.defineProperty(Blob.prototype, 'arrayBuffer', {
+    configurable: true,
+    writable: true,
+    value: function arrayBuffer(this: Blob): Promise<ArrayBuffer> {
+      return Promise.resolve(new ArrayBuffer(this.size));
+    },
+  });
+}
+function removeBlobArrayBuffer(): void {
+  if (HAS_BLOB_ARRAY_BUFFER) return;
+  delete (Blob.prototype as { arrayBuffer?: unknown }).arrayBuffer;
 }
 
 interface Route {
@@ -60,15 +79,18 @@ interface Route {
   response: () => Response;
 }
 
-function makeFetch(routes: Route[]): typeof fetch {
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+function makeFetch(routes: Route[]): { impl: typeof fetch; calls: Array<{ url: string; method: string }> } {
+  const calls: Array<{ url: string; method: string }> = [];
+  const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
+    calls.push({ url, method });
     const route = routes.find((r) => r.match(url, method));
     return route
       ? route.response()
       : fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'x' } } });
   }) as typeof fetch;
+  return { impl, calls };
 }
 
 const uploadRequestRoute: Route = {
@@ -119,9 +141,14 @@ const completeRoute: Route = {
     }),
 };
 
-function renderComposer(autoRespond: boolean, onUploaded?: (a: unknown) => void) {
+function renderComposerRoutes(
+  routes: Route[],
+  onUploaded?: (a: unknown) => void,
+  autoRespond = true,
+): { calls: Array<{ url: string; method: string }> } {
   installXhr(autoRespond);
-  vi.stubGlobal('fetch', makeFetch([uploadRequestRoute, completeRoute]));
+  const { impl, calls } = makeFetch(routes);
+  vi.stubGlobal('fetch', impl);
   const client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
   renderWithProviders(
     <AttachmentComposer
@@ -131,6 +158,11 @@ function renderComposer(autoRespond: boolean, onUploaded?: (a: unknown) => void)
       onUploaded={onUploaded as never}
     />,
   );
+  return { calls };
+}
+
+function renderComposer(autoRespond: boolean, onUploaded?: (a: unknown) => void): void {
+  renderComposerRoutes([uploadRequestRoute, completeRoute], onUploaded, autoRespond);
 }
 
 function pngFile(name = 'a.png'): File {
@@ -141,8 +173,12 @@ beforeEach(() => {
   vi.unstubAllGlobals();
   uuidCounter = 0;
   installCrypto();
+  installBlobArrayBuffer();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  removeBlobArrayBuffer();
+});
 
 describe('AttachmentComposer', () => {
   it('selecting a file via the picker starts an upload card', async () => {
@@ -198,6 +234,92 @@ describe('AttachmentComposer', () => {
     const retry = await screen.findAllByText(/.+/);
     expect(retry.length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button').some((b) => b.getAttribute('data-testid')?.startsWith('upload-retry-'))).toBe(true);
+  });
+
+  it('a 409 conflict on complete is retryable and re-submitting the same file succeeds (H1 wedging regression)', async () => {
+    // 真实后端行为:complete 撞 409(附件已 completed);重试同文件命中秒传
+    // (upload=null, upload_status='completed')——秒传路径绝不再打 /complete,
+    // 否则「失败→重试→同秒传→同 409」会把提交按钮永久焊死。
+    let uploadRequests = 0;
+    let completeCalls = 0;
+    const routes: Route[] = [
+      {
+        match: (url) => url.includes('/upload-requests'),
+        response: () => {
+          uploadRequests += 1;
+          if (uploadRequests === 1) {
+            return fakeResponse({
+              status: 201,
+              body: {
+                data: {
+                  id: 'att-1',
+                  upload_status: 'pending',
+                  blob_id: null,
+                  scan_status: 'pending',
+                  mime_type: 'image/png',
+                  is_image: true,
+                  upload: { method: 'PUT', url: 'http://storage/put', headers: {}, expires_at: 'x' },
+                  limits: { max_file_bytes: DEFAULT_MAX_FILE_BYTES },
+                },
+              },
+            });
+          }
+          return fakeResponse({
+            status: 201,
+            body: {
+              data: {
+                id: 'att-1',
+                upload_status: 'completed',
+                blob_id: 'blob-1',
+                scan_status: 'clean',
+                mime_type: 'image/png',
+                is_image: true,
+                upload: null,
+                limits: { max_file_bytes: DEFAULT_MAX_FILE_BYTES },
+              },
+            },
+          });
+        },
+      },
+      {
+        match: (url) => url.includes('/complete'),
+        response: () => {
+          completeCalls += 1;
+          return fakeResponse({
+            status: 409,
+            body: { error: { code: 'conflict', message: 'already completed' } },
+          });
+        },
+      },
+      {
+        match: (url) => url.includes('/abort'),
+        response: () => fakeResponse({ body: { data: { id: 'att-1', upload_status: 'failed' } } }),
+      },
+    ];
+    const onUploaded = vi.fn();
+    renderComposerRoutes(routes, onUploaded);
+
+    const input = screen.getByTestId('attachment-file-input') as HTMLInputElement;
+    await userEvent.upload(input, pngFile());
+    // complete 409 → 错误卡片 + 提交禁用(但非永久)。
+    await screen.findByRole('alert');
+    expect((screen.getByTestId('attachment-submit') as HTMLButtonElement).disabled).toBe(true);
+
+    // 重试:移除失败条目并以同一文件重新加入 → 秒传直接就绪 → 提交恢复可用。
+    const retry = screen
+      .getAllByRole('button')
+      .find((b) => b.getAttribute('data-testid')?.startsWith('upload-retry-'));
+    expect(retry).toBeTruthy();
+    fireEvent.click(retry as HTMLButtonElement);
+    await waitFor(() =>
+      expect((screen.getByTestId('attachment-submit') as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId('attachment-submit'));
+    expect(onUploaded).toHaveBeenCalledTimes(1);
+    const emitted = onUploaded.mock.calls[0][0] as Array<{ id: string }>;
+    expect(emitted[0].id).toBe('att-1');
+    // /complete 只在失败的首轮打过一次;秒传路径未重放。
+    expect(completeCalls).toBe(1);
   });
 
   it('cancelling an upload removes its card', async () => {

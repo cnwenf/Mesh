@@ -53,10 +53,28 @@ def issue_channel(issue_id: Any) -> str:
 
 
 async def claim_pending_blobs(session: AsyncSession, *, batch: int) -> list[AttachmentBlob]:
-    """SKIP LOCKED claim of quarantine rows (README §2.2 decoupling)."""
+    """SKIP LOCKED claim of quarantine rows (README §2.2 decoupling).
+
+    F1 guard: only blobs with at least one LIVE COMPLETED attachment
+    referencing them are claimable. A blob created at upload-request time has
+    no bytes in storage yet — scanning it before ``complete`` would place it
+    terminally in error/OBJECT_MISSING and permanently brick the upload
+    (sweep pre-race). In-flight uploads are invisible to the sweep; the
+    complete hand-off (scan_requested + scan_status reset) admits them.
+    """
+    completed_reference = (
+        select(Attachment.id)
+        .where(
+            Attachment.blob_id == AttachmentBlob.id,
+            Attachment.upload_status == "completed",
+            Attachment.deleted_at.is_(None),
+        )
+        .exists()
+    )
     rows = await session.scalars(
         select(AttachmentBlob)
         .where(AttachmentBlob.scan_status == "pending")
+        .where(completed_reference)
         .order_by(AttachmentBlob.created_at)
         .limit(batch)
         .with_for_update(skip_locked=True)
@@ -198,17 +216,26 @@ async def process_blob(
         return
 
     # -- 5. thumbnails (after the gate opens, §3.3) -------------------------------
+    # F3: 缩略图失败不是安全裁决(AV 已 clean)——§2.2 的 error 语义限于嗅探/
+    # 哈希/扫描异常。降级为非终态告警:scan_status 保持 clean、thumbnail_keys
+    # 留空(前端回落文件卡片 / thumbnail 端点 404 not ready),原始文件可下载。
     if is_thumbnailable(sniffed):
         try:
             info = await make_thumbnails(data, source_mime=sniffed)
         except ThumbnailError as exc:
-            await _mark_error(
-                session,
-                blob,
-                {**scan_detail, "thumbnail_error": str(exc)},
-                error_code="THUMBNAIL_FAILED",
-                emit=True,
+            logger.warning(
+                "thumbnail generation failed for blob %s (original stays downloadable): %s",
+                blob.id,
+                exc,
             )
+            scan_detail["thumbnail_error"] = str(exc)
+            info = None
+        if info is None:
+            blob.scan_status = "clean"
+            blob.scan_detail = scan_detail
+            blob.updated_at = datetime.now(UTC)
+            await session.flush()
+            await _emit_processed_for_blob(session, blob)
             return
         blob.image_width = info.width
         blob.image_height = info.height

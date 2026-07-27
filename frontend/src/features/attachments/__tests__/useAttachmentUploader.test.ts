@@ -29,6 +29,8 @@ interface MockXHR {
   method: string;
   url: string;
   headers: Record<string, string>;
+  sent: boolean;
+  abortCalled: boolean;
   open: (m: string, u: string) => void;
   setRequestHeader: (n: string, v: string) => void;
   getResponseHeader: (n: string) => string | null;
@@ -36,6 +38,10 @@ interface MockXHR {
   abort: () => void;
 }
 
+/**
+ * 真实浏览器语义的 XHR 桩:abort() 作用于未 send 的请求不 fire 任何事件,
+ * 已 settle 后不重复 fire(旧实现无条件 fire onabort,会掩盖 M1 悬挂 bug)。
+ */
 function installXhr(autoRespond: boolean): MockXHR[] {
   const instances: MockXHR[] = [];
   class Xhr {
@@ -48,6 +54,9 @@ function installXhr(autoRespond: boolean): MockXHR[] {
     method = '';
     url = '';
     headers: Record<string, string> = {};
+    sent = false;
+    settled = false;
+    abortCalled = false;
     constructor() {
       instances.push(this as unknown as MockXHR);
     }
@@ -62,8 +71,11 @@ function installXhr(autoRespond: boolean): MockXHR[] {
       return this.responseHeaders[n] ?? null;
     }
     send() {
+      this.sent = true;
       if (autoRespond) {
         queueMicrotask(() => {
+          if (this.settled) return;
+          this.settled = true;
           this.responseHeaders.ETag = '"etag"';
           this.status = 200;
           this.onload?.();
@@ -71,6 +83,9 @@ function installXhr(autoRespond: boolean): MockXHR[] {
       }
     }
     abort() {
+      this.abortCalled = true;
+      if (!this.sent || this.settled) return;
+      this.settled = true;
       this.onabort?.();
     }
   }
@@ -78,11 +93,23 @@ function installXhr(autoRespond: boolean): MockXHR[] {
   return instances;
 }
 
-// jsdom 的 Blob/File 未实现 arrayBuffer;补最小垫片以驱动 sha256Hex 纯逻辑。
-if (typeof Blob.prototype.arrayBuffer !== 'function') {
-  Blob.prototype.arrayBuffer = function arrayBuffer(this: Blob): Promise<ArrayBuffer> {
-    return Promise.resolve(new ArrayBuffer(this.size));
-  };
+// jsdom 的 Blob/File 可能未实现 arrayBuffer;补最小垫片以驱动 sha256Hex 纯逻辑。
+// LOW 回归:绝不模块级永久补丁(Blob.prototype 跨测试文件共享,泄漏会污染
+// 其他套件)——beforeEach 按需装上、afterEach 必拆除。
+const HAS_BLOB_ARRAY_BUFFER = typeof Blob.prototype.arrayBuffer === 'function';
+function installBlobArrayBuffer(): void {
+  if (HAS_BLOB_ARRAY_BUFFER) return;
+  Object.defineProperty(Blob.prototype, 'arrayBuffer', {
+    configurable: true,
+    writable: true,
+    value: function arrayBuffer(this: Blob): Promise<ArrayBuffer> {
+      return Promise.resolve(new ArrayBuffer(this.size));
+    },
+  });
+}
+function removeBlobArrayBuffer(): void {
+  if (HAS_BLOB_ARRAY_BUFFER) return;
+  delete (Blob.prototype as { arrayBuffer?: unknown }).arrayBuffer;
 }
 
 let uuidCounter = 0;
@@ -112,6 +139,30 @@ function uploadRequestResponse(upload: unknown, id = 'att-1') {
         mime_type: 'image/png',
         is_image: true,
         upload,
+        limits: { max_file_bytes: DEFAULT_MAX_FILE_BYTES },
+      },
+    },
+  });
+}
+
+/**
+ * 秒传响应 —— 按后端**真实形态** mock(与 service.py 状态机逐字对齐):
+ * 内容命中已可读 blob → upload_status='completed'、upload=null、附件行 + links
+ * 已落库;前端对 completed 再 complete 必 409。旧测试把秒传 mock 成
+ * pending + complete 成功,与自家后端行为相反,故必须按此形态回归。
+ */
+function instantUploadResponse(scanStatus: 'clean' | 'pending', id = 'att-1') {
+  return fakeResponse({
+    status: 201,
+    body: {
+      data: {
+        id,
+        upload_status: 'completed',
+        blob_id: 'blob-1',
+        scan_status: scanStatus,
+        mime_type: 'image/png',
+        is_image: true,
+        upload: null,
         limits: { max_file_bytes: DEFAULT_MAX_FILE_BYTES },
       },
     },
@@ -148,9 +199,13 @@ beforeEach(() => {
   vi.unstubAllGlobals();
   uuidCounter = 0;
   installCrypto();
+  installBlobArrayBuffer();
 });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  removeBlobArrayBuffer();
+});
 
 describe('validateFile (client pre-validation)', () => {
   it('accepts allowlisted mime types and exposes the allowlist', () => {
@@ -179,9 +234,9 @@ describe('validateFile (client pre-validation)', () => {
 });
 
 describe('pipeline', () => {
-  it('instant upload (upload=null) goes straight to ready when scan is clean', async () => {
+  it('instant upload (upload=null, completed) goes straight to ready WITHOUT calling /complete (H1)', async () => {
     installXhr(true);
-    stub = stubFetch(uploadRequestResponse(null), completeResponse('clean'));
+    stub = stubFetch(instantUploadResponse('clean'));
     vi.stubGlobal('fetch', stub.fetchImpl);
     client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
     const { result } = renderHook(() => useAttachmentUploader({ client }));
@@ -189,10 +244,12 @@ describe('pipeline', () => {
     act(() => result.current.addFiles([pngFile()], { type: 'issue', id: 'iss-1' }));
     await waitFor(() => expect(result.current.uploads[0].phase).toBe('ready'));
     expect(result.current.uploads[0].attachment?.scan_status).toBe('clean');
+    expect(result.current.uploads[0].attachment?.id).toBe('att-1');
+    // 服务端已 completed:全程只有 upload-requests 一次调用,绝不打 /complete(重放必 409)。
     expect(stub.calls.map((c) => c.url)).toEqual([
       'http://api/api/v1/attachments/upload-requests',
-      'http://api/api/v1/attachments/att-1/complete',
     ]);
+    expect(stub.calls.some((c) => c.url.includes('/complete'))).toBe(false);
   });
 
   it('single PUT reports progress then completes to ready', async () => {
@@ -217,9 +274,9 @@ describe('pipeline', () => {
     expect(result.current.uploads[0].progress).toBe(1);
   });
 
-  it('lands in scanning when the scan is still pending after complete', async () => {
+  it('instant upload with a pending scan lands in scanning WITHOUT calling /complete (H1)', async () => {
     installXhr(true);
-    stub = stubFetch(uploadRequestResponse(null), completeResponse('pending'));
+    stub = stubFetch(instantUploadResponse('pending'));
     vi.stubGlobal('fetch', stub.fetchImpl);
     client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
     const { result } = renderHook(() => useAttachmentUploader({ client }));
@@ -227,6 +284,86 @@ describe('pipeline', () => {
     act(() => result.current.addFiles([pngFile()]));
     await waitFor(() => expect(result.current.uploads[0].phase).toBe('scanning'));
     expect(result.current.uploads[0].attachment?.scan_status).toBe('pending');
+    expect(stub.calls.some((c) => c.url.includes('/complete'))).toBe(false);
+  });
+
+  it('lands in scanning when the scan is still pending after a normal complete', async () => {
+    installXhr(true);
+    stub = stubFetch(
+      uploadRequestResponse({
+        method: 'PUT',
+        url: 'http://storage/put',
+        headers: {},
+        expires_at: '2026-01-01T01:00:00Z',
+      }),
+      completeResponse('pending'),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
+    const { result } = renderHook(() => useAttachmentUploader({ client }));
+
+    act(() => result.current.addFiles([pngFile()]));
+    await waitFor(() => expect(result.current.uploads[0].phase).toBe('scanning'));
+    expect(result.current.uploads[0].attachment?.scan_status).toBe('pending');
+  });
+
+  it('surfaces a 409 conflict from /complete as an error entry without wedging later uploads (H1 regression)', async () => {
+    installXhr(true);
+    stub = stubFetch(
+      // 第一次:普通单段直传,complete 撞 409(对 completed 附件重放 complete 的真实后端行为)。
+      uploadRequestResponse({
+        method: 'PUT',
+        url: 'http://storage/put',
+        headers: {},
+        expires_at: '2026-01-01T01:00:00Z',
+      }),
+      fakeResponse({ status: 409, body: { error: { code: 'conflict', message: 'already completed' } } }),
+      // 第二次:同文件重试命中秒传(服务端此前已建好附件),直接 completed。
+      instantUploadResponse('clean'),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
+    const { result } = renderHook(() => useAttachmentUploader({ client }));
+
+    act(() => result.current.addFiles([pngFile()]));
+    await waitFor(() => expect(result.current.uploads[0].phase).toBe('error'));
+    expect(result.current.uploads[0].errorKey).toBe('error.conflict');
+
+    // 失败条目不得焊死流水线:同文件重新加入走秒传,直接就绪。
+    act(() => result.current.addFiles([pngFile()]));
+    await waitFor(() => expect(result.current.uploads[1].phase).toBe('ready'));
+    expect(result.current.uploads[1].attachment?.id).toBe('att-1');
+    // /complete 只被调用过一次(失败那次);秒传路径未再重放。
+    expect(stub.calls.filter((c) => c.url.includes('/complete'))).toHaveLength(1);
+  });
+
+  it('aborts in-flight XHRs and attempts a server-side abort on unmount (M2)', async () => {
+    const xhrs = installXhr(false); // XHR 挂起,保持上传中
+    stub = stubFetch(
+      uploadRequestResponse({
+        method: 'PUT',
+        url: 'http://storage/put',
+        headers: {},
+        expires_at: '2026-01-01T01:00:00Z',
+      }),
+      fakeResponse({ body: { data: { id: 'att-1', upload_status: 'failed' } } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    client = new MeshApiClient({ baseUrl: 'http://api', getToken: () => null });
+    const { result, unmount } = renderHook(() => useAttachmentUploader({ client }));
+
+    act(() => result.current.addFiles([pngFile()]));
+    await waitFor(() => expect(result.current.uploads[0].phase).toBe('uploading'));
+    expect(result.current.uploads[0].attachmentId).toBe('att-1');
+
+    unmount();
+
+    // 在途 XHR 经 AbortController 收到 abort()(signal aborted → xhr.abort())。
+    expect(xhrs[0].abortCalled).toBe(true);
+    // 已拿到 attachmentId 且 pre-complete:尽力通知服务端中止(fire-and-forget)。
+    await waitFor(() =>
+      expect(stub.calls.some((c) => c.url.includes('/attachments/att-1/abort'))).toBe(true),
+    );
   });
 
   it('multipart upload puts each part, completes, then finalizes', async () => {

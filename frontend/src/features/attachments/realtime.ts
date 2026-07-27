@@ -38,8 +38,16 @@ interface DeletedPayload {
   readonly id?: unknown;
 }
 
-function payloadOf(frame: RealtimeEventFrame): Record<string, unknown> {
-  return frame.payload as Record<string, unknown>;
+/**
+ * M4:帧载荷防御。上游 isEventFrame 不校验 payload,真实链路可能出现
+ * `payload: null / undefined / 非对象` 的帧;在 setAttachments updater 内
+ * 访问其属性会抛 TypeError 崩掉整棵组件树。非对象载荷一律视为无操作,
+ * 合并函数返回原引用(纯函数契约:无变化不改引用)。
+ */
+function payloadOf(frame: RealtimeEventFrame): Record<string, unknown> | null {
+  const payload: unknown = frame.payload;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null;
+  return payload as Record<string, unknown>;
 }
 
 function actionOf(event: string): string {
@@ -64,7 +72,8 @@ export function applyAttachmentProcessed(
   if (entityOf(frame.event) !== 'attachment' || actionOf(frame.event) !== 'processed') {
     return attachments as Attachment[];
   }
-  const payload = payloadOf(frame) as ProcessedPayload;
+  const payload = payloadOf(frame) as ProcessedPayload | null;
+  if (payload === null) return attachments as Attachment[];
   const id = typeof payload.id === 'string' ? payload.id : undefined;
   if (id === undefined) return attachments as Attachment[];
   const existing = attachments.find((item) => item.id === id);
@@ -87,7 +96,8 @@ export function applyAttachmentDeleted(
   if (entityOf(frame.event) !== 'attachment' || actionOf(frame.event) !== 'deleted') {
     return attachments as Attachment[];
   }
-  const payload = payloadOf(frame) as DeletedPayload;
+  const payload = payloadOf(frame) as DeletedPayload | null;
+  if (payload === null) return attachments as Attachment[];
   const id = typeof payload.id === 'string' ? payload.id : undefined;
   if (id === undefined) return attachments as Attachment[];
   if (!attachments.some((item) => item.id === id)) return attachments as Attachment[];

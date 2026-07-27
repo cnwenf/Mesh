@@ -172,20 +172,17 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
   await expect(page.getByTestId('lightbox-image')).toHaveCount(0);
 
   // ---------- 8. 秒传 T24:同 hash 已可读 → 免传;他人探测 → 不得短路 ----------
-  const probe = (await apiJson(
-    'POST',
-    '/api/v1/attachments/upload-requests',
-    {
-      workspace_id: workspaceId,
-      file_name: 'instant.png',
-      file_size: PNG_BYTES.length,
-      mime_type: 'image/png',
-      content_hash: await sha256Hex(PNG_BYTES),
-      link_to: { type: 'issue', id: issueId },
-    },
-    token,
-  )).data as { upload: unknown; id: string };
-  expect(probe.upload).toBeNull(); // possession 成立 → 跳过字节直传
+  // H1 回归(真实浏览器):经 composer 重传同一内容 → upload-request 命中秒传
+  // (upload=null,服务端已 completed);前端必须**不再调 /complete**(再 complete
+  // 撞 409 → entry 卡 error、提交按钮永久禁用的历史 defect),确认按钮可用且第二
+  // 张缩略图(独立记录、共享 blob)并入网格。
+  await page.getByTestId('attachment-file-input').setInputFiles(PNG_PATH);
+  const instantConfirm = page.getByTestId('attachment-submit');
+  await expect(instantConfirm).toBeEnabled({ timeout: 60_000 });
+  await instantConfirm.click();
+  await expect(page.locator('[data-testid^="attachment-thumb-"]')).toHaveCount(2, {
+    timeout: 60_000,
+  });
 
   // 另一个工作区的凭据探测同一 hash:必须签发完整上传(不得凭 hash 短路)。
   const otherEmail = `attach-other-${RUN}@corp.example`;

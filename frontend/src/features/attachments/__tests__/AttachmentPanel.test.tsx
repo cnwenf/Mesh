@@ -112,16 +112,70 @@ describe('AttachmentPanel', () => {
     await waitFor(() => expect((img as HTMLImageElement).src).toBe('http://cdn/thumb.png'));
   });
 
-  it('hides the download action while scanning and shows the placeholder', async () => {
+  it('recovers the thumbnail when the first signed-url request fails (M6: retry once)', async () => {
+    let failures = 0;
+    const flakyThumb: Route = {
+      match: (url) => url.includes('/thumbnail'),
+      response: () => {
+        if (failures === 0) {
+          failures += 1;
+          return fakeResponse({ status: 502, body: { error: { code: 'storage_error', message: 'x' } } });
+        }
+        return fakeResponse({ body: { data: { url: 'http://cdn/thumb.png', size: 'md', expires_at: 'x' } } });
+      },
+    };
+    renderPanel([
+      listRoute([att({ id: 'img-1', file_name: 'shot.png', is_image: true, mime_type: 'image/png', extension: 'png', thumbnail_url: '/x' })]),
+      flakyThumb,
+    ]);
+    // 首取失败不再永久占位:重试一次后图片出现。
+    const img = await screen.findByAltText('shot.png');
+    await waitFor(() => expect((img as HTMLImageElement).src).toBe('http://cdn/thumb.png'));
+    expect(failures).toBe(1);
+  });
+
+  it('refetches a fresh signed url when the image fails to load (M6: onError refetch, capped)', async () => {
+    const { calls } = renderPanel([
+      listRoute([att({ id: 'img-1', file_name: 'shot.png', is_image: true, mime_type: 'image/png', extension: 'png', thumbnail_url: '/x' })]),
+      thumbRoute,
+    ]);
+    const img = await screen.findByAltText('shot.png');
+    await waitFor(() => expect((img as HTMLImageElement).src).toBe('http://cdn/thumb.png'));
+    const thumbCallsBefore = calls.filter((c) => c.url.includes('/thumbnail')).length;
+    // 签名 URL 过期 → 浏览器 img error → 重新拉取新鲜签名 URL。
+    fireEvent.error(img);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.url.includes('/thumbnail')).length).toBe(thumbCallsBefore + 1),
+    );
+  });
+
+  it('hides download/copy while scanning but keeps DELETE available (M3, §4.6)', async () => {
     renderPanel([listRoute([att({ id: 'file-1', scan_status: 'pending' })])]);
     expect(await screen.findByTestId('attachment-scanning-file-1')).toBeTruthy();
     expect(screen.queryByTestId('attachment-download-file-1')).toBeNull();
+    expect(screen.queryByTestId('attachment-copy-file-1')).toBeNull();
+    // 扫描中文件必须仍可删除(隔离区清理入口,权限由服务端 403 兜底)。
+    expect(screen.getByTestId('attachment-delete-file-1')).toBeTruthy();
   });
 
-  it('shows a rejected note and no download for infected files', async () => {
+  it('shows a rejected note for infected files with delete but NO download/copy (M3, §4.6)', async () => {
     renderPanel([listRoute([att({ id: 'file-1', scan_status: 'infected' })])]);
     expect(await screen.findByTestId('attachment-rejected-file-1')).toBeTruthy();
     expect(screen.queryByTestId('attachment-download-file-1')).toBeNull();
+    expect(screen.queryByTestId('attachment-copy-file-1')).toBeNull();
+    expect(screen.getByTestId('attachment-delete-file-1')).toBeTruthy();
+  });
+
+  it('offers delete but no download/copy for an infected image in the grid (M3)', async () => {
+    renderPanel([
+      listRoute([
+        att({ id: 'img-1', file_name: 'i.png', is_image: true, mime_type: 'image/png', extension: 'png', scan_status: 'infected' }),
+      ]),
+    ]);
+    expect(await screen.findByTestId('attachment-scanning-img-1')).toBeTruthy();
+    expect(screen.queryByTestId('attachment-download-img-1')).toBeNull();
+    expect(screen.queryByTestId('attachment-copy-img-1')).toBeNull();
+    expect(screen.getByTestId('attachment-delete-img-1')).toBeTruthy();
   });
 
   it('marks agent uploads with an AI badge, source marker and avatar (§4.4)', async () => {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 
@@ -191,14 +192,22 @@ async def test_complete_missing_object_fails_with_hash_mismatch(service, tenant)
     assert excinfo.value.code == "hash_mismatch"
 
 
-async def test_complete_size_mismatch_marks_failed(service, tenant, object_storage):
+async def test_oversized_put_rejected_by_signature_binding_then_complete_fails(
+    service, tenant, object_storage
+):
+    """F4 (§5.4): the signed PUT binds the declared Content-Length, so object
+    storage rejects a wrong-size upload (SignatureDoesNotMatch) — the bytes
+    never land; complete then fails hash_mismatch on the missing object."""
     workspace, member = tenant
     response = await service.request_upload(
         actor=member, workspace_id=workspace.id, file_name="shot.png",
         file_size=len(PNG), mime_type="image/png",
     )
     url = response["data"]["upload"]["url"]
-    await _put_signed(url, PNG + b"extra", "image/png")  # wrong size
+    async with httpx.AsyncClient() as client:
+        oversized = await client.put(url, content=PNG + b"extra",
+                                     headers={"Content-Type": "image/png"})
+    assert oversized.status_code == 403  # storage-side size binding rejects
     with pytest.raises(BusinessRuleError) as excinfo:
         await service.complete_upload(
             actor=member, workspace_id=workspace.id,
@@ -734,3 +743,446 @@ async def test_quota_cache_refresh(service, tenant, session_factory):
     async with session_factory() as session:
         quota = await session.scalar(select(AttachmentQuota))
         assert quota.used_bytes == len(PNG)
+
+
+# ----------------------------------------------------------------------
+# F1 — sweep pre-race guard: in-flight uploads are invisible to the sweep
+# ----------------------------------------------------------------------
+
+
+async def test_sweep_skips_blobs_without_completed_references(
+    session_factory, object_storage, service, workspace_factory, member_factory
+):
+    """request→(sweep tick)→PUT→complete must still yield a downloadable file.
+
+    The old claim set grabbed every pending blob — a sweep tick between
+    upload-request and complete terminally errored the blob (OBJECT_MISSING)
+    and permanently bricked the upload. The claim set now requires a live
+    completed attachment referencing the blob.
+    """
+    from mesh.attachment.processing import claim_pending_blobs, process_blob
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    settings = service._settings
+
+    response = await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="slow.png",
+        file_size=len(PNG), mime_type="image/png", content_hash=sha256_hex(PNG),
+    )
+    attachment_id = uuid.UUID(response["data"]["id"])
+    storage_key = None
+    async with session_factory() as session:
+        from mesh.db.models.attachment import Attachment
+
+        row = await session.get(Attachment, attachment_id)
+        from mesh.db.models.attachment import AttachmentBlob
+
+        blob = await session.get(AttachmentBlob, row.blob_id)
+        storage_key = blob.storage_key
+        assert blob.scan_status == "pending"
+
+    # Sweep tick BEFORE the bytes arrive: nothing claimable.
+    async with session_factory() as session, session.begin():
+        claimed = await claim_pending_blobs(session, batch=10)
+        assert claimed == []
+
+    # Client finishes normally afterwards.
+    async with httpx.AsyncClient() as client:
+        put = await client.put(response["data"]["upload"]["url"], content=PNG,
+                               headers={"Content-Type": "image/png"})
+        assert put.status_code == 200
+    await service.complete_upload(actor=member, workspace_id=workspace.id, attachment_id=attachment_id)
+
+    # Now the blob is claimable and processes to clean; download opens.
+    async with session_factory() as session, session.begin():
+        claimed = await claim_pending_blobs(session, batch=10)
+        assert len(claimed) == 1
+        await process_blob(session, claimed[0], storage=object_storage, settings=settings)
+    download = await service.download_attachment(
+        viewer=member, workspace_id=workspace.id, attachment_id=attachment_id
+    )
+    async with httpx.AsyncClient() as client:
+        got = await client.get(download["data"]["url"])
+        assert got.status_code == 200
+        assert got.content == PNG
+    assert storage_key is not None
+
+
+async def test_complete_resets_errored_blob_for_rescan(
+    session_factory, object_storage, service, workspace_factory, member_factory
+):
+    """§3.3 step 3: complete explicitly (re-)places the blob in quarantine.
+
+    Self-heal for any blob left terminally errored (e.g. by a sweep before
+    the F1 guard, or an earlier failed scan pass): complete resets
+    scan_status to pending and re-emits scan_requested, so a perfect upload
+    is never permanently 403.
+    """
+    from mesh.attachment.processing import claim_pending_blobs, process_blob
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+
+    response = await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="heal.png",
+        file_size=len(PNG), mime_type="image/png", content_hash=sha256_hex(PNG),
+    )
+    attachment_id = uuid.UUID(response["data"]["id"])
+    # Simulate a stale terminal error state on the blob.
+    async with session_factory() as session, session.begin():
+        from mesh.db.models.attachment import Attachment, AttachmentBlob
+
+        row = await session.get(Attachment, attachment_id)
+        blob = await session.get(AttachmentBlob, row.blob_id)
+        blob.scan_status = "error"
+        blob.scan_detail = {"error_code": "OBJECT_MISSING"}
+        blob_id = blob.id
+
+    async with httpx.AsyncClient() as client:
+        put = await client.put(response["data"]["upload"]["url"], content=PNG,
+                               headers={"Content-Type": "image/png"})
+        assert put.status_code == 200
+    done = await service.complete_upload(
+        actor=member, workspace_id=workspace.id, attachment_id=attachment_id
+    )
+    assert done["data"]["scan_status"] == "pending"  # reset, not the stale error
+    async with session_factory() as session:
+        from mesh.db.models.attachment import AttachmentBlob
+
+        blob = await session.get(AttachmentBlob, blob_id)
+        assert blob.scan_status == "pending"
+        assert (blob.scan_detail or {}).get("error_code") is None  # stale state cleared
+    # Reclaim + process → clean → download opens.
+    async with session_factory() as session, session.begin():
+        claimed = await claim_pending_blobs(session, batch=10)
+        assert len(claimed) == 1
+        await process_blob(session, claimed[0], storage=object_storage, settings=service._settings)
+    download = await service.download_attachment(
+        viewer=member, workspace_id=workspace.id, attachment_id=attachment_id
+    )
+    assert download["data"]["url"].startswith("http")
+
+
+# ----------------------------------------------------------------------
+# F2 — complete failure releases ref_count and the residual object
+# ----------------------------------------------------------------------
+
+
+async def test_complete_size_mismatch_releases_ref_count_and_object(
+    session_factory, object_storage, service, workspace_factory, member_factory
+):
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    response = await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="bad.png",
+        file_size=len(PNG), mime_type="image/png", content_hash=sha256_hex(PNG),
+    )
+    attachment_id = uuid.UUID(response["data"]["id"])
+    async with session_factory() as session:
+        from mesh.db.models.attachment import Attachment, AttachmentBlob
+
+        row = await session.get(Attachment, attachment_id)
+        blob = await session.get(AttachmentBlob, row.blob_id)
+        storage_key = blob.storage_key
+        assert blob.ref_count == 1
+
+    # PUT a DIFFERENT size than declared → complete HEAD check fails.
+    async with httpx.AsyncClient() as client:
+        await client.put(
+            response["data"]["upload"]["url"],
+            content=PNG + b"extra-bytes",
+            headers={"Content-Type": "image/png"},
+        )
+    # The size-bound signature rejects the oversized PUT at the storage side
+    # (§5.4 / F4) — either way the object must not persist as referenced.
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await service.complete_upload(
+            actor=member, workspace_id=workspace.id, attachment_id=attachment_id
+        )
+    assert excinfo.value.code == "hash_mismatch"
+    async with session_factory() as session:
+        from mesh.db.models.attachment import Attachment, AttachmentBlob
+
+        row = await session.get(Attachment, attachment_id)
+        blob = await session.get(AttachmentBlob, row.blob_id)
+        assert row.upload_status == "failed"
+        assert blob.ref_count == 0  # F2: released, no permanent leak
+    assert await object_storage.object_exists(storage_key) is False  # residual object deleted
+
+
+async def test_failed_upload_retention_then_gc_reclaims_blob_row(
+    session_factory, object_storage, service, workspace_factory, member_factory
+):
+    """Full leak chain regression: failed complete → retention hard-deletes
+    the row → GC reclaims the blob row (ref_count=0 path)."""
+    from datetime import UTC, datetime, timedelta
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    response = await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="leak.png",
+        file_size=len(PNG), mime_type="image/png", content_hash=sha256_hex(PNG),
+    )
+    attachment_id = uuid.UUID(response["data"]["id"])
+    # Fail it: complete with the object missing.
+    with pytest.raises(BusinessRuleError):
+        await service.complete_upload(
+            actor=member, workspace_id=workspace.id, attachment_id=attachment_id
+        )
+    # Age the failed row past retention.
+    async with session_factory() as session, session.begin():
+        from mesh.db.models.attachment import Attachment
+
+        row = await session.get(Attachment, attachment_id)
+        row.updated_at = datetime.now(UTC) - timedelta(days=30)
+    reaped = await service.run_retention()
+    assert reaped == 1
+    async with session_factory() as session:
+        from mesh.db.models.attachment import Attachment, AttachmentBlob
+
+        assert await session.get(Attachment, attachment_id) is None
+        blob_count = (await session.execute(
+            select(func.count()).select_from(AttachmentBlob)
+        )).scalar()
+        assert blob_count == 1  # blob row still present until GC
+    # Age the blob past the GC grace window → collected.
+    async with session_factory() as session, session.begin():
+        from mesh.db.models.attachment import AttachmentBlob
+
+        blob = await session.scalar(select(AttachmentBlob))
+        blob.created_at = datetime.now(UTC) - timedelta(hours=2)
+    collected = await service.gc_unreferenced_blobs()
+    assert collected == 1
+    async with session_factory() as session:
+        from mesh.db.models.attachment import AttachmentBlob
+
+        blob_count = (await session.execute(
+            select(func.count()).select_from(AttachmentBlob)
+        )).scalar()
+        assert blob_count == 0
+
+
+# ----------------------------------------------------------------------
+# F6 — Idempotency-Key scoped per uploader + concurrent replay
+# ----------------------------------------------------------------------
+
+
+async def test_idempotency_key_is_scoped_per_uploader(
+    session_factory, service, workspace_factory, member_factory
+):
+    """Member B replaying member A's client key gets B's own record, never
+    A's (info-leak fix); A replaying its own key replays the first record."""
+    workspace = await workspace_factory()
+    alice = await member_factory(workspace)
+    bob = await member_factory(workspace)
+
+    first = await service.request_upload(
+        actor=alice, workspace_id=workspace.id, file_name="a.png",
+        file_size=len(PNG), mime_type="image/png", idempotency_key="shared-key-1",
+    )
+    # Alice replay → same record.
+    replay = await service.request_upload(
+        actor=alice, workspace_id=workspace.id, file_name="a.png",
+        file_size=len(PNG), mime_type="image/png", idempotency_key="shared-key-1",
+    )
+    assert replay["data"]["id"] == first["data"]["id"]
+    # Bob with the SAME key → a distinct record of his own (no leak of Alice's).
+    bob_record = await service.request_upload(
+        actor=bob, workspace_id=workspace.id, file_name="b.png",
+        file_size=len(PNG), mime_type="image/png", idempotency_key="shared-key-1",
+    )
+    assert bob_record["data"]["id"] != first["data"]["id"]
+    assert bob_record["data"]["uploader"]["id"] == str(bob.id)
+
+
+# ----------------------------------------------------------------------
+# F7 — quota pre-check serialized without a quota row (advisory lock)
+# ----------------------------------------------------------------------
+
+
+async def test_quota_default_path_serializes_concurrent_requests(
+    session_factory, object_storage, attachment_settings_kwargs,
+    workspace_factory, member_factory
+):
+    """Two concurrent oversized requests against the deployment default quota
+    (no quota row) must not both pass: the advisory lock serializes the
+    pre-check so exactly one gets quota_exceeded."""
+
+    tight_kwargs = {**attachment_settings_kwargs, "attachment_total_bytes": 1000}
+    tight_service = build_service(session_factory, object_storage, tight_kwargs)
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+
+    async def _request(name: str):
+        try:
+            await tight_service.request_upload(
+                actor=member, workspace_id=workspace.id, file_name=name,
+                file_size=600, mime_type="image/png",
+            )
+            return "ok"
+        except LockedError as exc:
+            assert exc.code == "quota_exceeded"
+            return "quota"
+
+    results = await asyncio.gather(_request("x1.png"), _request("x2.png"))
+    assert sorted(results) == ["ok", "quota"]  # exactly one exceeds the total
+
+
+# ----------------------------------------------------------------------
+# complete HEAD-check failure branches + multipart lifecycle coverage
+# ----------------------------------------------------------------------
+
+
+async def test_complete_head_size_mismatch_releases_ref_count(
+    session_factory, object_storage, service, tenant, monkeypatch
+):
+    """complete HEAD returns a different size → failed + ref_count released
+    (F2 failure branch, forced via a lying HEAD since §5.4 signature binding
+    rejects mismatched PUTs before they land)."""
+    workspace, member = tenant
+    response = await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="shot.png",
+        file_size=len(PNG), mime_type="image/png",
+    )
+    await _put_signed(response["data"]["upload"]["url"], PNG, "image/png")
+
+    real_head = object_storage.head_size
+
+    async def _lying_head(key):
+        size = await real_head(key)
+        return None if size is None else size + 99
+
+    monkeypatch.setattr(object_storage, "head_size", _lying_head)
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await service.complete_upload(
+            actor=member, workspace_id=workspace.id,
+            attachment_id=uuid.UUID(response["data"]["id"]),
+        )
+    assert excinfo.value.code == "hash_mismatch"
+    async with session_factory() as session:
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.ref_count == 0  # F2 released
+
+
+async def _multipart_request(session_factory, object_storage, attachment_settings_kwargs, member, workspace):
+    """Request a multipart upload (threshold lowered under the PNG size)."""
+    mp_service = build_service(session_factory, object_storage,
+                               {**attachment_settings_kwargs, "attachment_multipart_threshold": 100})
+    response = await mp_service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="big.png",
+        file_size=len(PNG), mime_type="image/png",
+    )
+    return mp_service, response["data"]
+
+
+async def test_multipart_complete_size_failure_releases_ref_count(
+    session_factory, object_storage, attachment_settings_kwargs,
+    workspace_factory, member_factory, monkeypatch
+):
+    """Merged object fails the HEAD size check → failed + ref_count released."""
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    mp_service, data = await _multipart_request(
+        session_factory, object_storage, attachment_settings_kwargs, member, workspace
+    )
+    assert "upload_id" in data["upload"]
+    async with httpx.AsyncClient() as client:
+        part = await client.put(data["upload"]["part_urls"][0]["url"], content=PNG)
+        assert part.status_code == 200
+        etag = part.headers["ETag"]
+
+    real_head = mp_service._storage.head_size
+
+    async def _lying_head(key):
+        size = await real_head(key)
+        return None if size is None else size + 1
+
+    monkeypatch.setattr(mp_service._storage, "head_size", _lying_head)
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await mp_service.complete_multipart(
+            actor=member, workspace_id=workspace.id,
+            attachment_id=uuid.UUID(data["id"]),
+            parts=[{"part_number": 1, "etag": etag}],
+        )
+    assert excinfo.value.code == "hash_mismatch"
+    async with session_factory() as session:
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.ref_count == 0
+
+
+async def test_multipart_abort_cleans_session_and_object(
+    session_factory, object_storage, attachment_settings_kwargs, workspace_factory, member_factory
+):
+    """Abort on a multipart upload deletes the session row and releases ref."""
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    mp_service, data = await _multipart_request(
+        session_factory, object_storage, attachment_settings_kwargs, member, workspace
+    )
+    assert "upload_id" in data["upload"]
+    result = await mp_service.abort_upload(
+        actor=member, workspace_id=workspace.id, attachment_id=uuid.UUID(data["id"])
+    )
+    assert result["data"]["upload_status"] == "failed"
+    async with session_factory() as session:
+        from mesh.db.models.attachment import UploadSession
+
+        assert await session.scalar(select(func.count()).select_from(UploadSession)) == 0
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.ref_count == 0
+
+
+async def test_comment_link_paths_with_table_present(monkeypatch):
+    """Host-authorization branches for comment/chat_message links (the tables
+    land with MES-58/chat; cover the code paths with a stubbed registry)."""
+    from mesh.attachment import service as service_module
+
+    class _FakeMeta:
+        tables = {"comments": object(), "chat_messages": object()}
+
+    class _FakeBase:
+        metadata = _FakeMeta()
+
+    monkeypatch.setattr(service_module, "Base", _FakeBase)
+
+    ws_id = uuid.uuid4()
+    linked_id = uuid.uuid4()
+    svc = service_module.AttachmentService.__new__(service_module.AttachmentService)
+
+    class _StubSession:
+        def __init__(self, exists: bool):
+            self._exists = exists
+
+        async def scalar(self, *args, **kwargs):
+            return linked_id if self._exists else None
+
+        async def execute(self, *args, **kwargs):
+            class _Result:
+                def __init__(self, value):
+                    self._value = value
+
+                def scalar(self):
+                    return self._value
+
+            return _Result(linked_id if self._exists else None)
+
+    # resolve_host_workspace: table present → existence query result.
+    assert await svc.resolve_host_workspace(_StubSession(True), "comment", linked_id) == linked_id
+    assert await svc.resolve_host_workspace(_StubSession(False), "chat_message", linked_id) is None
+
+    import types
+
+    member = types.SimpleNamespace(role="member", id=uuid.uuid4())
+
+    # _can_read_host: exists → True; missing → False.
+    assert await svc._can_read_host(_StubSession(True), member, ws_id, "comment", linked_id) is True
+    assert await svc._can_read_host(_StubSession(False), member, ws_id, "comment", linked_id) is False
+    assert await svc._can_read_host(_StubSession(True), member, ws_id, "chat_message", linked_id) is True
+
+    # _assert_host_write: exists passes; missing → NotFoundError.
+    await svc._assert_host_write(_StubSession(True), member, ws_id,
+                                 {"type": "comment", "id": linked_id})
+    with pytest.raises(NotFoundError):
+        await svc._assert_host_write(_StubSession(False), member, ws_id,
+                                     {"type": "chat_message", "id": linked_id})

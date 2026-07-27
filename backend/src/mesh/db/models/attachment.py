@@ -205,10 +205,14 @@ class Attachment(Base):
             "created_at",
             postgresql_where=text("deleted_at IS NULL"),
         ),
-        # Idempotent upload-request (README §6.5/§6.14).
+        # Idempotent upload-request (README §6.5/§6.14). F6: scoped per
+        # UPLOADER — replaying another member's client key must not return
+        # their record; the service replays per uploader and converts a
+        # concurrent same-key insert conflict into a first-result replay.
         Index(
             "uq_attachments_idem",
             "workspace_id",
+            "uploader_id",
             "idempotency_key",
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
