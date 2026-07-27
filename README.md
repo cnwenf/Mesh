@@ -48,6 +48,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | MES-46 安全审核 HIGH×2 修复(MES-48,issue 迁移越权收口) | ✅ v0.11.9 | H1 `POST /issues/{id}/move` 未确认路径补与确认事务完全对称的源/目标鉴权(任何鉴权失败不携带 preview);H2 `POST /issues/bulk` 未确认预览逐条过源读门(越权/不可见项仅回 error marker,不回 plan);L1 项目写门 guest 分支统一 404 堵存在性 oracle;确认迁移强制 `version` 乐观锁 + 迁移清单审计留痕(issue.md §3.8) |
 | 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,已于 v0.12.0 随 React 19 / react-router 8 迁移清零(MES-56) |
 | 安全硬化·依赖收口续:React 19 / react-router 8 迁移(MES-56,MES-55 审计例外清零) | ✅ v0.12.0 | react-router 7.18.1 → 8.3.0 清零 GHSA-qwww-vcr4-c8h2(high,RSC CSRF;本站纯客户端 SPA 无该攻击面,随修复版收口使 `npm audit --omit=dev` 全清);连带 React 18.3.1 → 19.2.8(react-router 8 peer 要求 ≥19.2.7)、`@types/react`(-dom)19、Node 引擎 ≥22.22.0(CI Node 20 → 22);v8 移除 `react-router-dom` 包,全仓 43 文件 import 统一为 `react-router`(纯声明式库模式,所用 API 全兼容,零行为变更);typecheck / lint / 构建 / 1274 例单测全绿(覆盖率 97.26%),真实浏览器 e2e 30/30 + 真实后端全栈走查通过 |
+| 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,清零待 React 19 迁移独立评估(MES-56) |
+| attachment 附件(attachment.md 五章,阶段 5 协作层) | ✅ v0.13.2 | 三阶段签名直传(upload-request 签发短时效 PUT → 客户端直传对象存储 → complete 仅 HEAD 初校验并移交隔离区,字节流不经应用服务器);**blob 真源表 `attachment_blobs`**(内容寻址 `UNIQUE(workspace_id, content_hash)` 并发去重串行化、`ref_count` 同事务原子计数、隔离区 `scan_status` 内容级状态机,扫一次全体共享者可见)+ 独立附件记录 `attachments`(会话级 `upload_status`)+ 多态逻辑外键 `attachment_links` + 分块台账 `upload_sessions` + 配额 `attachment_quotas`(§2);隔离区管线 worker(SKIP LOCKED 领取:magic-byte MIME 嗅探 + 全量 SHA-256 校验 + AV 扫描钩子 + sm/md/lg 缩略图,纯文本白名单 `skipped`,§3.3/README §2.2);**可见性闸门**(未放行下载/预览/缩略图 403 `scan_pending`,感染永久拒绝 403 `scan_infected` + critical 审计,README §9 T14);**秒传 possession**(RED LINE:仅已可读该 blob 方可凭 hash 短路,否则强制完整上传 + 服务端后置去重,T24);私有桶短时效签名下载(60s 级、绑定方法与键、未知/可执行强制 attachment);`attachment.processed`/`attachment.deleted` 经 outbox 唯一写入路径;孤儿清理 / 延迟回收 / GC 仅 `ref_count=0`;§3.1 全部端点(§6.14 包络/游标分页/幂等键/限流,人类 JWT 与 agent API token 同一套接口);`UNIQUE(workspace_id, id)` + 同租户复合 FK + RLS;前端附件功能(composer 拖拽/粘贴/进度上传、issue 详情附件区、缩略图网格/灯箱/文件卡片/扫描中占位/agent 产出物标记,i18n 全外部化) |
 
 ## Quick Start
 
@@ -64,6 +66,7 @@ docker compose up --build -d
 | 前端占位页 | http://localhost:3001 | nginx 静态页,反代 `/api` 与 `/ws` |
 | API | http://localhost:8000 | FastAPI REST(`/api/v1`),健康检查 `/healthz`、`/readyz` |
 | Realtime 网关 | ws://localhost:8081/ws | WebSocket(连接后首帧认证,详见 docs/specs/README.md §6.16) |
+| MinIO 对象存储 | http://localhost:9000(控制台 :9001) | 附件私有桶,仅经短时效预签名 URL 访问(attachment.md §3) |
 | PostgreSQL 16 / Redis 7 | 内部网络 | 数据与 fan-out(Redis 非持久真源) |
 
 > **安全提示(务必阅读)**:本 compose 栈**仅限本机开发**。

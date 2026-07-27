@@ -3,7 +3,7 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.13.1] - 2026-07-27
+## [0.13.2] - 2026-07-27
 label-property 的 **issue 关联层**(MES-32 余量切片,阶段 4·核心工作·C):定义层(v0.11.0)之上,把标签与带类型自定义字段的值挂到 issue 上 —— 关联数据模型、关联端点(按类型校验 + 必填阻断)、issue 侧实时事件、issue 详情页标签 picker 与字段编辑面板。
 
 ### Added
@@ -24,7 +24,7 @@ label-property 的 **issue 关联层**(MES-32 余量切片,阶段 4·核心工�
 
 ### Fixed(验收第 2 轮复验:rebase 冲突解决 + 版本号避让)
 
-- **rebase 到最新 main(78b6d8e,含 PR #38/MES-33 kanban v0.13.0 + PR #40/MES-54 + CI 修复)**:`move.py` 冲突互补全保留(MES-33 抽出共用的 `apply_confirmed_move_in_session` 原子 move/鉴权/脱敏,本 PR §3.8 的 `clear_cleared_associations` / `emit_association_cleared_events` 接入同一事务;MES-54 的 `redact_move_payload` 脱敏 + `move_version_required` 422 转正同在);`bulk.py` 同区互补;`playwright.config.ts` 保留 `real-*.spec.ts` glob 排除(本 PR 的 `real-assoc.spec.ts` 自然纳入,不重进默认 mock 门禁);i18n `en.json` / `zh-CN.json` 键集与 main kanban 键取并集(886 键,双语 parity 与 djb2 版本哈希重算);`README.md` / `CHANGELOG.md` 版本号避让至 **v0.13.1**(main 顶已发 v0.13.0,沿用 0.12.1 将致 semver 倒挂)。
+- **rebase 到最新 main(8e67e2c,含 PR #38/MES-33 kanban v0.13.0 + PR #39/MES-32 label 关联层 v0.13.1 + PR #40/MES-54 + CI 修复)**:`move.py` 冲突互补全保留(MES-33 抽出共用的 `apply_confirmed_move_in_session` 原子 move/鉴权/脱敏,本 PR §3.8 的 `clear_cleared_associations` / `emit_association_cleared_events` 接入同一事务;MES-54 的 `redact_move_payload` 脱敏 + `move_version_required` 422 转正同在);`bulk.py` 同区互补;`playwright.config.ts` 保留 `real-*.spec.ts` glob 排除(本 PR 的 `real-assoc.spec.ts` 自然纳入,不重进默认 mock 门禁);i18n `en.json` / `zh-CN.json` 键集与 main(kanban + MES-32 label 关联层)键取并集(912 键,双语 parity 与 djb2 版本哈希重算);`README.md` / `CHANGELOG.md` 版本号避让至 **v0.13.2**(main 顶已发 v0.13.1/MES-32,沿用旧号将致 semver 倒挂)。
 - **React 19 兼容(MES-56 合入后)**:`JSX.Element` → `React.JSX.Element`;关联编辑器重取改由 `issue.updated_at` 变化驱动(不随 reloadKey,避免子组件 effect 抢跑页面重取的请求时序)+ 异常包络防御 + 详情页测试等待编辑器挂载请求落定;vitest.setup 异步断言超时 1s→5s 消抖。
 
 ### Fixed(验收 🟡 项随轮处理)
@@ -64,6 +64,26 @@ kanban 看板与视图的 **issue 投影层**(issue 耦合余量切片,MES-33,�
 - 文档同步:README 实现状态表 kanban 行升级为「定义层 + 投影层」(v0.13.0);kanban.md 投影增量落地标注 + label/自定义字段分组随 MES-32 增量说明。
 - 范围说明:label / 自定义字段的分组与筛选依赖 `issue_labels` / `issue_custom_field_values` 关联层,该关联层属并行线 MES-32,尚未合入 main;投影层对该两类分组/筛选按 issue 模块同口径门控(`projection_field_pending` / `group_by=label` 400),待 MES-32 落地后接通,非缺陷。
 
+## [0.13.1] - 2026-07-27
+
+attachment 附件模块全量落地(MES-59,阶段 5·协作层):attachment.md 五章逐项实现——三阶段签名直传、隔离区扫描管线、blob 真源与秒传 possession、私有桶短时效签名下载,以及前端附件功能。
+
+### Added
+
+- **数据模型(§2,迁移 0014/0015)**:`attachment_blobs`(blob 真源:内容寻址 `UNIQUE(workspace_id, content_hash)` 并发去重串行化 T24、`ref_count` 原子计数、内容级隔离区状态机 `scan_status` pending→clean/infected/error/skipped、magic-byte MIME/缩略图键写回)、`attachments`(独立附件记录,会话级 `upload_status` 状态机,复合 FK 引用 blob 真源与统一 members 名册)、`attachment_links`(多态逻辑外键 issue/comment/chat_message,行携带 `workspace_id`,§6.2 第 4 条不建物理 FK)、`upload_sessions`(分块上传台账)、`attachment_quotas`(可选配额覆盖)。全表 `UNIQUE(workspace_id, id)` + 同租户复合 FK + fail-closed RLS + SECURITY DEFINER 无前缀路径解析器。
+- **三阶段签名直传(§3.1–§3.3)**:`POST /attachments/upload-requests` 前置校验(类型/MIME-扩展名匹配防伪造/单文件与图片上限/workspace 配额前置 423 `quota_exceeded`)后签发短时效 PUT,字节流客户端直传对象存储、不经应用服务器;`complete` 仅以 HEAD 做存在性/大小初校验(不符 422 `hash_mismatch` 并置 failed)、置 `completed` 并同事务写 outbox `attachment.scan_requested` 移交隔离区——**complete 不代表可用**;`abort` 置 failed 并清理对象。`complete`/`abort` 属主校验(非上传者 403),创建端点支持 `Idempotency-Key`(工作区级部分唯一索引,重复键返回首次记录)。
+- **隔离区管线(§3.3/README §2.2)**:worker 独立监督任务 `attachment-scan` 以 `FOR UPDATE SKIP LOCKED` 领取 `attachment_blobs(scan_status='pending')`,服务端读取对象字节:全量 SHA-256 与客户端声明比对(不匹配置 `error`/`HASH_MISMATCH`)、命中同 workspace 既有 blob 则后置去重(改指真源、ref_count 归并、删重复对象)、magic-byte MIME 嗅探写回(不信客户端头/不靠 HEAD)、AV 扫描钩子(EICAR 与可执行容器伪装命中 → `infected` + critical 审计留痕)、纯文本白名单 `skipped`(唯一来源,仍嗅探与校验)、图片 sm/md/lg 缩略图。relay 同名 handler 提供低延迟触发,sweep 循环兜底崩溃重扫;`attachment-maintenance` 任务做孤儿清理(过期未完成上传置 `expired` 删对象,不受 ref_count 约束)、软删除/终态 7 天延迟回收、GC(**物理删对象的唯一条件:ref_count=0 且无引用行**)与配额缓存刷新。
+- **下载鉴权与可见性闸门(§3.4,README §9 T14)**:私有桶 + 60s 级短时效签名 GET(绑定方法与键);下载/预览/缩略图仅 blob `scan_status IN (clean, skipped)` 放行——隔离中/错误态 403 `scan_pending`,感染 403 `scan_infected` 永久拒绝并记 critical 审计;下载按嗅探真源 MIME 设 `Content-Disposition`,未知/可执行强制 attachment;对象键含 UUID 段不可枚举。
+- **秒传与去重(§2.2/T24,RED LINE)**:`content_hash` 命中且调用者**已可读**该 blob(引用该 blob 的存活附件之上传者或宿主读权限)→ 秒传:新建独立 `attachments` 行 + 独立 links 指向同 blob,`ref_count` 同事务 +1,跳过字节直传;**无 possession 不得凭客户端 hash 短路**(防内容探测/越权复用),强制完整上传 + 服务端后置去重收敛。删除共享 blob 的某一附件永不影响其余附件。
+- **端点全量(§3.1)**:upload-requests / complete / abort / get / delete(软删)/ download / thumbnail / issue 与 comment 附件列表(游标分页按 position)/ multipart parts 与 complete(分片签名、ETag 合并);人类会话 JWT 与 agent API token 走同一套接口(§5.3,`member_type` 为 JOIN members 计算快照,不落判别列);upload-requests 与 download 按用户/IP 限流;错误码全对齐 §3.5(`file_too_large`/`unsupported_media_type`/`quota_exceeded`/`hash_mismatch`/`scan_pending`/`scan_infected`/`storage_error` 中性 502)。
+- **compose MinIO 服务**:私有桶对象存储加入本地栈(回环端口 9000/控制台 9001、健康检查、数据卷),API/worker 注入 `MESH_STORAGE_*`(内网端点 + 浏览器可达 public 端点双客户端签名)。
+- **前端附件功能(§4)**:`src/features/attachments` —— composer 附件上传(文件选择/拖拽/粘贴截图、逐文件进度卡片与取消、全部 completed 方可提交的提交门控、MIME/大小客户端预校验 + SHA-256 秒传探测、分块上传)、issue 详情「附件」区(图片缩略图网格 + 灯箱、文件卡片、扫描中占位不暴露下载按钮、agent 产出物标记、下载/删除/复制链接)、`attachment.processed`/`attachment.deleted` 实时合并、i18n 全外部化(zh-CN + en);composer 组件经 barrel 导出供 comment-inbox 增量消费。
+
+### Quality
+
+- 后端:`pytest-cov` 附件模块 **91.6%**(≥90% 门禁;policy/mime/scanner/schemas 100%),ruff 全绿,`pip-audit --strict` 双 lockfile 零已知漏洞(新增 boto3/Pillow 已重生成 hash 锁定)。单测覆盖:策略/嗅探/扫描/缩略图纯函数、真实 MinIO 存储往返与失败中性化、服务层(校验矩阵/状态机/配额/幂等/链接/分页/T14 闸门各态/T24 possession 正负例/ref_count 原子性/孤儿-回收-GC-配额缓存/分块)、隔离区管线(clean/skipped/infected+critical 审计/HASH_MISMATCH/对象丢失/瞬时失败重试上限/后置去重收敛/staging 冲突回退)、监督循环真实跑一轮、HTTP 层(包络/404 统一口径/401/JWT+PAT 双凭据/幂等键重放/限流头/分块全流程/扫描放行后下载与缩略图)。
+- 真实 e2e(真起 uvicorn API 子进程 + **真起 worker 子进程** + 真 MinIO + 真 PG,零 mock):三阶段直传 → 真 worker 经 relay 完成隔离区放行(嗅探/缩略图/签名下载逐字节核验)、T14 隔离拒绝、EICAR 感染永久拒绝 + critical 审计落库、T24 possession 正负例与共享 blob ref_count 原子性、跨租户统一 404。
+- 文档同步:README 实现状态表与 Quick Start(MinIO 服务行)、attachment.md 状态标记、.env.example 存储变量。
 ## [0.12.0] - 2026-07-27
 
 安全硬化·依赖收口续(MES-56,MES-55 审计例外后续):React 18 → 19 与 react-router 7 → 8 迁移,`npm audit --omit=dev` 对 GHSA-qwww-vcr4-c8h2 清零,审计残留项全部收口。仅前端依赖与 import 路径,无后端/数据模型/接口变更。

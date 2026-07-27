@@ -7,7 +7,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fakeResponse, stubFetch, headersOf } from '../../../api/__tests__/fetchStub';
+import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
@@ -193,8 +193,37 @@ function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
   ];
 }
 
+/** 附件列表固定响应(空页)。 */
+function attachmentsEmpty(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [], next_cursor: null } });
+}
+
+/** issue 附件列表 GET:面板挂载/确认后重取各一次,与详情并行,到达顺序不确定。 */
+function isAttachmentListCall(url: string, init?: RequestInit): boolean {
+  return url.endsWith('/attachments') && (init?.method ?? 'GET') === 'GET';
+}
+
+/**
+ * URL 感知的顺序桩:附件列表请求恒定回空页、**不消耗队列**(消除与并行详情
+ * 请求的到达顺序竞争 —— 盲队列在附件 fetch 插队时会整体错位,CI 上间歇红);
+ * 其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
+ */
+function detailStub(...responses: Response[]): FetchStub {
+  const calls: FetchStub['calls'] = [];
+  let index = 0;
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (isAttachmentListCall(url, init)) return attachmentsEmpty();
+    const response = responses[Math.min(index, responses.length - 1)];
+    index += 1;
+    return response;
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
 function queue(...extra: ReturnType<typeof fakeResponse>[]): FetchStub {
-  const stub = stubFetch(...detailResponses(), ...extra);
+  const stub = detailStub(...detailResponses(), ...extra);
   vi.stubGlobal('fetch', stub.fetchImpl);
   return stub;
 }
@@ -226,6 +255,35 @@ describe('IssueDetailPage', () => {
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
     expect(screen.getByText('WS-7')).toBeTruthy();
     expect(screen.getByTestId('issue-detail-activity')).toBeTruthy();
+  });
+
+  it('renders with a malformed children_progress envelope instead of blanking the page (defensive default)', async () => {
+    // 回归:children_progress 缺失/为 null 的畸形信封曾在渲染期抛 TypeError,
+    // 无错误边界兜底时整页空白。防御默认值后仅该计数回退 0,页面照常渲染。
+    for (const malformed of [null, { total: 'x' }, 'garbage']) {
+      const stub = detailStub(
+        fakeResponse({ body: { data: { ...DETAIL, children_progress: malformed } } }),
+        ...detailResponses().slice(1),
+      );
+      vi.stubGlobal('fetch', stub.fetchImpl);
+      const { unmount } = render(
+        <MemoryRouter initialEntries={['/issues/iss-1']}>
+          <ThemeProvider>
+            <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+              <ToastLayer>
+                <Routes>
+                  <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+                </Routes>
+              </ToastLayer>
+            </I18nProvider>
+          </ThemeProvider>
+        </MemoryRouter>,
+      );
+      expect(await screen.findByTestId('issue-detail')).toBeTruthy();
+      expect((screen.getByTestId('issue-detail-title') as HTMLInputElement).value).toBe('First issue');
+      unmount();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('patches the title with version and If-Match on blur (§3.4/§6.14)', async () => {
@@ -468,7 +526,7 @@ describe('IssueDetailPage', () => {
   });
 
   it('shows the error state with retry when the detail request fails', async () => {
-    const stub = stubFetch(
+    const stub = detailStub(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
       ...detailResponses(),
     );
@@ -531,7 +589,7 @@ describe('IssueDetailPage', () => {
     await screen.findByTestId('issue-detail');
     // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
     // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
-    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(13), {
       timeout: 5000,
     });
     const statusSelect = screen.getByTestId('issue-detail-status') as HTMLSelectElement;
@@ -547,9 +605,9 @@ describe('IssueDetailPage', () => {
         'st-todo',
       ),
     );
-    // 不触发整页 reload:除首轮加载 9 + 关联编辑器 3 个列表请求 + 被拒的
-    // PATCH 外无其它请求(无骨架闪烁来源)。
-    expect(stub.calls.length).toBe(13);
+    // 不触发整页 reload:除首轮加载 9 + 关联编辑器 3 个列表请求 + 附件区首次
+    // 拉取(1)+ 被拒的 PATCH(1)外无其它请求(无骨架闪烁来源)。
+    expect(stub.calls.length).toBe(14);
     expect(stub.calls.filter((c) => c.init?.method === 'PATCH').length).toBe(1);
   });
 

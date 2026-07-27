@@ -58,6 +58,14 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     env["MESH_APP_DATABASE_URL"] = _app_role_url(get_test_database_url())
     # M1: the dev mock provider only accepts this exact callback redirect URI.
     env["MESH_OAUTH_MOCK_REDIRECT_URIS"] = "http://api.test/api/v1/auth/oauth/mock/callback"
+    # Attachment module: real MinIO, same endpoint for server I/O and presigns
+    # (e2e clients run on the loopback, like the compose public endpoint).
+    storage_endpoint = os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000")
+    env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
+    env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
+    env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
+    env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
+    env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
     return subprocess.Popen(
         [
             sys.executable,

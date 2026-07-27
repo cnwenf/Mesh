@@ -48,6 +48,20 @@ export default defineConfig({
           branches: 90,
           statements: 90,
         },
+        // MES-59:附件模块(签名直传流水线 / 隔离区可见性闸门 / 实时合并)
+        // 比照 labels/auth 先例设目录级阈值,新增代码覆盖率不被全局门禁掩盖。
+        'src/features/attachments/**/*.ts': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
+        'src/features/attachments/**/*.tsx': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
       },
     },
   },
