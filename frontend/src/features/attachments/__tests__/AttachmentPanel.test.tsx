@@ -6,6 +6,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api';
+import { env } from '../../../env';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { AttachmentPanel } from '../components/AttachmentPanel';
@@ -123,13 +124,23 @@ describe('AttachmentPanel', () => {
     expect(screen.queryByTestId('attachment-download-file-1')).toBeNull();
   });
 
-  it('marks agent uploads with an AI badge', async () => {
+  it('marks agent uploads with an AI badge, source marker and avatar (§4.4)', async () => {
     renderPanel([
       listRoute([
-        att({ id: 'file-1', uploader: { id: 'mem-2', member_type: 'agent', display_name: 'code-reviewer' } }),
+        att({
+          id: 'file-1',
+          file_size: 2 * 1024 * 1024,
+          uploader: { id: 'mem-2', member_type: 'agent', display_name: 'code-reviewer' },
+        }),
       ]),
     ]);
     expect(await screen.findByTestId('attachment-ai-file-1')).toBeTruthy();
+    // 「来自 <agent> 运行」来源标记 + 头像占位(首字符)。
+    const source = screen.getByTestId('attachment-agent-source-file-1');
+    expect(source.textContent).toContain('from code-reviewer run');
+    expect(screen.getByTestId('attachment-avatar-file-1').textContent).toBe('C');
+    // M2:人性化大小(不裸渲染字节数)。
+    expect(screen.getByText(/2.0 MB/)).toBeTruthy();
   });
 
   it('renders the empty state when there are no attachments', async () => {
@@ -154,13 +165,16 @@ describe('AttachmentPanel', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(true);
   });
 
-  it('copies the signed download link to the clipboard', async () => {
+  it('copies the STABLE download endpoint (not the short-lived signed URL) to the clipboard (L1)', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     renderPanel([listRoute([att({ id: 'file-1' })]), downloadRoute]);
     const button = await screen.findByTestId('attachment-copy-file-1');
     fireEvent.click(button);
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('http://cdn/dl'));
+    // 稳定鉴权路径:点击时重新鉴权 + 重过扫描闸门;60s 签名 URL 不进剪贴板。
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(`${env.apiBaseUrl}/api/v1/attachments/att-1/download`),
+    );
   });
 
   it('opens the lightbox with the original image and closes it', async () => {

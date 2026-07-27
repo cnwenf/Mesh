@@ -355,6 +355,15 @@ class AttachmentService:
                 user = await session.get(User, member.user_id)
                 if user is not None:
                     uploader["display_name"] = user.display_name
+            elif member.agent_id is not None and "agents" in Base.metadata.tables:
+                # agent 产出物来源名(§4.4「来自 <agent> 运行」):agent 模块
+                # 合入后按 (workspace_id, agent_id) 取名;表未就位时留空。
+                agent_name = await session.scalar(
+                    text("SELECT name FROM agents WHERE workspace_id = :ws AND id = :id"),
+                    {"ws": attachment.workspace_id, "id": member.agent_id},
+                )
+                if agent_name is not None:
+                    uploader["display_name"] = agent_name
         released = blob.scan_status in SCAN_GATE_OPEN
         return {
             "id": str(attachment.id),

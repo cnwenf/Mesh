@@ -68,22 +68,29 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-      # S3-compatible object storage: the attachment module's real e2e runs
-      # the three-stage direct upload against a genuine MinIO (no mocks).
-      minio:
-        image: minio/minio:RELEASE.2025-06-13T11-33-47Z
-        env:
-          MINIO_ROOT_USER: mesh
-          MINIO_ROOT_PASSWORD: mesh_minio_secret
-        ports:
-          - 9000:9000
-        options: >-
-          --health-cmd "mc ready local"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    # MinIO 不作为 service 声明:GitHub services 无法给 minio/minio 镜像传
+    # `server /data` 启动命令(默认 entrypoint 无参即退出),故以独立步骤
+    # docker run 起真实 MinIO(附件真实 e2e 的三阶段直传对象存储,零 mock)。
     steps:
       - uses: actions/checkout@v4
+      - name: Start MinIO (attachment real e2e object storage)
+        run: |
+          docker run -d --name mesh-ci-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=mesh \
+            -e MINIO_ROOT_PASSWORD=mesh_minio_secret \
+            minio/minio:RELEASE.2025-06-13T11-33-47Z \
+            server /data
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null 2>&1; then
+              echo "MinIO ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become ready" >&2
+          docker logs mesh-ci-minio >&2 || true
+          exit 1
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

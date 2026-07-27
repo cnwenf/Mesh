@@ -5,7 +5,7 @@
  * infected/error → 拒绝态。agent 上传者带「AI」徽标(§4.4)。
  * 数据:listIssueAttachments 初载 + issue:{id} 频道 attachment.processed/deleted 帧合并。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../../api';
 import { IconButton, useToast } from '../../../design';
 import { env } from '../../../env';
@@ -25,8 +25,17 @@ import { FileIcon } from './FileIcon';
 import { Lightbox } from './Lightbox';
 import '../attachments.css';
 
-/** 经签名 URL 触发浏览器下载(§4.5:直连对象存储)。 */
+/** 经签名 URL 触发浏览器下载(§4.5:直连对象存储)。
+ *  纵深防御:仅放行 http/https 协议,杜绝服务端被攻陷时下发的
+ *  javascript:/data: URL 经 anchor 执行。 */
 function triggerDownload(url: string, fileName: string): void {
+  let protocol = '';
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return;
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') return;
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fileName;
@@ -34,6 +43,20 @@ function triggerDownload(url: string, fileName: string): void {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
+}
+
+/** 人性化文件大小(M2:不裸渲染字节数)。 */
+export function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = unit === 0 ? String(Math.round(value)) : value.toFixed(value >= 100 ? 0 : 1);
+  return `${rounded} ${units[unit]}`;
 }
 
 /** 放行态:clean/skipped 开放下载/预览(§2.2)。 */
@@ -47,6 +70,13 @@ function isRejected(attachment: Attachment): boolean {
 
 function uploaderName(attachment: Attachment, fallback: string): string {
   return attachment.uploader?.display_name ?? fallback;
+}
+
+/** 头像占位:显示名首字符(人类/agent 一致;无显示名退化为 A)。 */
+function avatarInitial(attachment: Attachment): string {
+  const name = attachment.uploader?.display_name;
+  if (name !== null && name !== undefined && name.trim() !== '') return name.trim().charAt(0).toUpperCase();
+  return attachment.uploader?.member_type === 'agent' ? 'A' : '?';
 }
 
 interface ThumbnailProps {
@@ -108,6 +138,7 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
 
   const [attachments, setAttachments] = useState<readonly Attachment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasLoadError, setHasLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [lightbox, setLightbox] = useState<Attachment | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -115,12 +146,17 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
+    setHasLoadError(false);
     void listIssueAttachments(client, props.issueId)
       .then((page) => {
         if (!cancelled) setAttachments([...page.data]);
       })
       .catch(() => {
-        if (!cancelled) setAttachments([]);
+        // M1:加载失败不静默吞掉——呈现错误态 + 重试入口。
+        if (!cancelled) {
+          setAttachments([]);
+          setHasLoadError(true);
+        }
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);
@@ -147,16 +183,26 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
     };
   }, [realtime, props.issueId]);
 
+  // L3:快速切换附件时,A 的慢响应不得落进 B 的弹窗——以 ref 记录当前灯箱
+  // 附件 id,异步签名 URL 回来时校验归属,过期响应直接丢弃。
+  const lightboxIdRef = useRef<string | null>(null);
   const openLightbox = useCallback(
     (attachment: Attachment) => {
+      lightboxIdRef.current = attachment.id;
       setLightbox(attachment);
       setLightboxUrl(null);
       void getDownloadUrl(client, attachment.id)
-        .then((descriptor) => setLightboxUrl(descriptor.url))
-        .catch(() => setLightboxUrl(null));
+        .then((descriptor) => {
+          if (lightboxIdRef.current === attachment.id) setLightboxUrl(descriptor.url);
+        })
+        .catch(() => undefined);
     },
     [client],
   );
+  const closeLightbox = useCallback(() => {
+    lightboxIdRef.current = null;
+    setLightbox(null);
+  }, []);
 
   const download = useCallback(
     async (attachment: Attachment) => {
@@ -174,8 +220,9 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
   const copyLink = useCallback(
     async (attachment: Attachment) => {
       try {
-        const descriptor = await getDownloadUrl(client, attachment.id);
-        await navigator.clipboard.writeText(descriptor.url);
+        // L1:复制稳定的鉴权端点路径(而非 60s 短时效签名 URL)——
+        // 粘贴分享的链接在点击时重新鉴权 + 重过扫描闸门,过期即废的问题也不复存在。
+        await navigator.clipboard.writeText(`${env.apiBaseUrl}${attachment.download_url}`);
         toast.addToast(t('attachments.copiedToast'), {
           tone: 'success',
           closeLabel: t('common.close'),
@@ -185,7 +232,7 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
     },
-    [client, toast, t],
+    [toast, t],
   );
 
   const remove = useCallback(
@@ -250,11 +297,24 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
         <span className="mesh-attachments__file-meta">
           <span className="mesh-attachments__file-name">{attachment.file_name}</span>
           <span className="mesh-attachments__file-sub">
-            {attachment.file_size} · {uploaderName(attachment, t('attachments.unknownUploader'))}
+            <span
+              className="mesh-attachments__avatar"
+              data-testid={`attachment-avatar-${attachment.id}`}
+              aria-hidden="true"
+            >
+              {avatarInitial(attachment)}
+            </span>
+            {formatFileSize(attachment.file_size)} · {uploaderName(attachment, t('attachments.unknownUploader'))}
             {attachment.uploader?.member_type === 'agent' ? (
-              <span className="mesh-attachments__ai-badge" data-testid={`attachment-ai-${attachment.id}`}>
-                {t('attachments.aiBadge')}
-              </span>
+              <>
+                <span className="mesh-attachments__ai-badge" data-testid={`attachment-ai-${attachment.id}`}>
+                  {t('attachments.aiBadge')}
+                </span>
+                {/* §4.4:agent 产出物来源标记「来自 <agent> 运行」。 */}
+                <span className="mesh-attachments__agent-source" data-testid={`attachment-agent-source-${attachment.id}`}>
+                  {t('attachments.agentFrom', { name: uploaderName(attachment, t('attachments.aiBadge')) })}
+                </span>
+              </>
             ) : null}
           </span>
           {!released && !rejected ? (
@@ -286,7 +346,20 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
         client={client}
         onUploaded={() => setReloadKey((key) => key + 1)}
       />
-      {!isLoading && attachments.length === 0 ? (
+      {hasLoadError ? (
+        <p className="mesh-attachments__error" role="alert" data-testid="attachments-error">
+          {t('attachments.loadError')}
+          <button
+            type="button"
+            className="mesh-attachments__retry"
+            data-testid="attachments-retry"
+            onClick={() => setReloadKey((key) => key + 1)}
+          >
+            {t('attachments.retry')}
+          </button>
+        </p>
+      ) : null}
+      {!isLoading && !hasLoadError && attachments.length === 0 ? (
         <p className="mesh-attachments__empty" data-testid="attachments-empty">
           {t('attachments.empty')}
         </p>
@@ -329,10 +402,26 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
         loadingLabel={t('common.loading')}
         downloadLabel={t('attachments.download')}
         closeLabel={t('common.close')}
+        zoomInLabel={t('attachments.zoomIn')}
+        zoomOutLabel={t('attachments.zoomOut')}
+        rotateLabel={t('attachments.rotate')}
+        resetLabel={t('attachments.reset')}
+        locateLabel={t('attachments.locate')}
         onDownload={() => {
           if (lightbox !== null) void download(lightbox);
         }}
-        onClose={() => setLightbox(null)}
+        onLocate={() => {
+          // §4.3「在附件区定位」:关闭灯箱并滚动到对应附件条目。
+          if (lightbox === null) return;
+          const id = lightbox.id;
+          closeLightbox();
+          requestAnimationFrame(() => {
+            document
+              .querySelector(`[data-testid="attachment-thumb-${id}"], [data-testid="attachment-file-${id}"]`)
+              ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          });
+        }}
+        onClose={closeLightbox}
       />
     </section>
   );

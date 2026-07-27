@@ -142,14 +142,23 @@ beforeEach(() => vi.unstubAllGlobals());
 afterEach(() => vi.unstubAllGlobals());
 
 describe('AttachmentPanel coverage', () => {
-  it('collapses to the empty state when the list request fails', async () => {
+  it('shows an error state with retry when the list request fails (M1, not a silent empty list)', async () => {
+    let calls = 0;
     renderPanel([
       {
         match: (url) => url.includes('/attachments'),
-        response: () => fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
+        response: () => {
+          calls += 1;
+          return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        },
       },
     ]);
-    expect(await screen.findByTestId('attachments-empty')).toBeTruthy();
+    const error = await screen.findByTestId('attachments-error');
+    expect(error).toBeTruthy();
+    expect(screen.queryByTestId('attachments-empty')).toBeNull();
+    // 重试重新拉取列表。
+    fireEvent.click(screen.getByTestId('attachments-retry'));
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2));
   });
 
   it('merges realtime processed/deleted frames on the issue channel', async () => {
