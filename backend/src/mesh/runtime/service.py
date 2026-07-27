@@ -268,9 +268,10 @@ class RuntimeService:
             runtime.labels = merged_labels
             runtime.version = str(meta.get("version") or runtime.version)
             runtime.status = "online"
-            runtime.activated_at = now
+            runtime.activated_at = now  # non-null = code consumed (replay → 410)
             runtime.last_heartbeat_at = now
-            runtime.activation_token_hash = None  # code consumed
+            # The hash stays (used codes resolve to a 410, §5.1; plaintext is
+            # never stored and the row can no longer be activated).
             runtime.updated_at = now
 
             # Issue the long-lived daemon token (hash-only storage).
@@ -730,6 +731,11 @@ class RuntimeService:
         redact_in_logs: bool,
         expires_in_seconds: int | None,
     ) -> dict:
+        if env_name is not None:
+            # NEW-M1: reserved loader/runtime names are rejected at the gate.
+            from mesh.runtime.daemon_auth import validate_env_name
+
+            validate_env_name(env_name)
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             credential = RuntimeCredential(

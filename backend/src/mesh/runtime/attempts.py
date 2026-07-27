@@ -11,7 +11,7 @@ prevents negatives).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -312,11 +312,11 @@ async def renew_lease(
                 details={"status": attempt.status},
             )
         _assert_lease(attempt, lease_seq)
+        now = _now()
         attempt.lease_seq = attempt.lease_seq + 1
-        attempt.lease_expires_at = func.now() + func.make_interval(secs=lease_seconds)
-        attempt.updated_at = _now()
+        attempt.lease_expires_at = now + timedelta(seconds=lease_seconds)
+        attempt.updated_at = now
         await session.flush()
-        await session.refresh(attempt)
         return {
             "lease_expires_at": attempt.lease_expires_at.isoformat(),
             "lease_seq": attempt.lease_seq,

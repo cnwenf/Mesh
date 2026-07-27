@@ -177,10 +177,10 @@ async def claim_execution(
                                          WHERE execution_id = :eid), 0) + 1,
                                :rid, :rid, 'claimed',
                                now() + make_interval(secs => :lease_seconds), 1, now(),
-                               'agent/' || :eid::text || '/a' ||
-                                 (COALESCE((SELECT MAX(attempt_number)
-                                            FROM execution_attempts
-                                            WHERE execution_id = :eid), 0) + 1)::text
+                               'agent/' || CAST(:eid AS text) || '/a' ||
+                                 CAST(COALESCE((SELECT MAX(attempt_number)
+                                                FROM execution_attempts
+                                                WHERE execution_id = :eid), 0) + 1 AS text)
                         RETURNING id, attempt_number, lease_expires_at, lease_seq,
                                   working_branch, claimed_at
                         """

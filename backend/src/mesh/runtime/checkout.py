@@ -207,7 +207,9 @@ async def report_checkout(
         diff_ref = checkout.diff_ref
         if diff and status == "diff_ready" and storage is not None:
             key = f"logs/{workspace_id}/diffs/{attempt.id.hex}.diff"
-            await storage.put_bytes(key, diff.encode("utf-8"))  # type: ignore[attr-defined]
+            await storage.put_bytes(  # type: ignore[attr-defined]
+                key, diff.encode("utf-8"), content_type="text/x-diff"
+            )
             checkout.diff_ref = key
             diff_ref = key
 

@@ -116,7 +116,9 @@ async def append_log_lines(
         storage_ref = f"logs/{workspace_id}/{attempt.id.hex}/{start_offset}-{end_offset}.json"
         try:
             await storage.put_bytes(  # type: ignore[attr-defined]
-                storage_ref, json.dumps(records).encode("utf-8")
+                storage_ref,
+                json.dumps(records).encode("utf-8"),
+                content_type="application/json",
             )
         except StorageError:
             raise
@@ -216,7 +218,9 @@ async def read_execution_logs(
         if storage is not None:
             for segment in segments:
                 try:
-                    raw = await storage.get_bytes(segment.storage_ref)  # type: ignore[attr-defined]
+                    raw = await storage.get_bytes(  # type: ignore[attr-defined]
+                        segment.storage_ref, max_bytes=16 * 1024 * 1024
+                    )
                 except Exception:  # noqa: BLE001 — unreadable segment: skip
                     continue
                 try:

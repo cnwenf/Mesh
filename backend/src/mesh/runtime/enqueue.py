@@ -116,12 +116,27 @@ async def enqueue_execution_handler(
     session.add(execution)
     try:
         await session.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         # Concurrent delivery of the same trigger: the unique idempotency key
-        # already won elsewhere — treat as handled.
-        return None
+        # already won elsewhere — treat as handled. Any OTHER constraint
+        # violation is a real defect and must surface (relay → failed + alert).
+        if idempotency_key and _is_idempotency_conflict(exc):
+            return None
+        raise
     await _emit_queue_depth(session, workspace_id=event.workspace_id)
     return None
+
+
+def _is_idempotency_conflict(exc: IntegrityError) -> bool:
+    """True only for the ``uq_task_executions_idem`` partial unique index
+    (unique-index violations carry no constraint name — scan the text)."""
+    from mesh.db.constraints import constraint_name
+
+    name = constraint_name(exc)
+    if name == "uq_task_executions_idem":
+        return True
+    text = str(getattr(exc.orig, "constraint_name", "") or "")
+    return "uq_task_executions_idem" in (text or str(exc.orig))
 
 
 async def queue_depth(session: AsyncSession, workspace_id: uuid.UUID) -> int:
