@@ -41,6 +41,9 @@ jobs:
 
       - name: Unit & component tests (coverage >= 90% gate)
         run: npm run test:coverage
+        env:
+          # i18n 文案守卫词表(§5.3):仓库外注入;secret 未配置时为空,守卫退化为空校验
+          MESH_COPY_DENYLIST: ${{ secrets.MESH_COPY_DENYLIST }}
 
       - name: Verify new/changed code coverage >= 90%
         run: node scripts/verify-coverage.mjs --base origin/${{ github.base_ref || 'main' }}
