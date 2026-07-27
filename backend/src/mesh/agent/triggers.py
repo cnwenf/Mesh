@@ -97,8 +97,8 @@ def register_skill_context_resolver(fn: SkillContextResolver) -> None:
 # via ``register_skill_matching_resolver`` to compute, for the issue being
 # enqueued, the skills whose instructions should be injected into the agent
 # context (trusted SOP, NOT §6.15 untrusted data) plus the per-skill evidence
-# that is persisted into ``config_snapshot.injected_skills`` for audit. The
-# resolver receives the raw issue title / description / label names.
+# persisted into ``config_snapshot.injected_skills`` for audit. The resolver
+# receives the raw issue title / description / label names.
 SkillMatchingResolver = Callable[
     [AsyncSession, uuid.UUID, uuid.UUID, str, str | None, list[str]],
     Awaitable[list[dict]],
@@ -297,10 +297,10 @@ async def assign_orchestration_handler(
             )
         except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
             logger.exception("skill context resolution failed; enqueuing without skills")
-    # HIGH-2: build_config_snapshot normalizes the declared capabilities
-    # (R3). A persisted malformed declaration must NEVER crash the handler
-    # (that would poison the outbox event and stall the agent's dispatch
-    # until max_attempts) — degrade to empty grants instead.
+    # HIGH-2: build_config_snapshot normalizes the declared capabilities (R3).
+    # A persisted malformed declaration must NEVER crash the handler (that
+    # would poison the outbox event and stall the agent's dispatch until
+    # max_attempts) — degrade to empty grants instead.
     try:
         snapshot_parts = build_config_snapshot(
             agent_config_version_id=agent.active_config_version_id,
@@ -321,31 +321,29 @@ async def assign_orchestration_handler(
 
     issue_context = await _issue_context(session, workspace_id=workspace_id, issue_id=issue_id)
 
-    # §4.5 / K7: auto-trigger matching → inject the matched skills' SOP into
-    # the agent context (TRUSTED instructions, distinct from the §6.15
-    # untrusted issue context) and record the injection for audit. Failures
-    # degrade to no injection (never lose the trigger).
+    # §4.5 / K7: auto-trigger matching → inject the matched skills' SOP into the
+    # agent context (TRUSTED instructions, distinct from the §6.15 untrusted
+    # issue context) and record the injection for audit. Failures degrade to no
+    # injection (never lose the trigger). The raw issue fields feed the matcher.
     injected_skills: list[dict] = []
     skill_instructions: str | None = None
     if _SKILL_MATCHING_RESOLVER is not None:
         try:
-            issue = await session.scalar(
-                select(Issue).where(Issue.id == issue_id)
-            )
-            label_names = (
+            issue_row = await session.scalar(select(Issue).where(Issue.id == issue_id))
+            label_rows = (
                 await session.execute(
                     select(Label.name)
                     .join(IssueLabel, IssueLabel.label_id == Label.id)
                     .where(IssueLabel.issue_id == issue_id)
                 )
-            ).scalars().all() if issue is not None else []
+            ).scalars().all()
             matches = await _SKILL_MATCHING_RESOLVER(
                 session,
                 workspace_id,
                 agent.id,
-                issue.title if issue is not None else "",
-                issue.description if issue is not None else None,
-                list(label_names),
+                issue_row.title if issue_row is not None else "",
+                issue_row.description if issue_row is not None else None,
+                list(label_rows),
             )
             if matches:
                 injected_skills = [

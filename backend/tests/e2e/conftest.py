@@ -66,10 +66,14 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
     env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
-    # Skill imports (skill.md §5.3 / README §6.16): the e2e source fixture
-    # server listens on loopback, which the SSRF guard only reaches through
-    # the explicit host allowlist — the documented operator escape hatch.
-    env["MESH_SKILL_SOURCE_HOST_ALLOWLIST"] = "127.0.0.1,localhost"
+    # Runtime machine API: e2e servers run plaintext loopback (TLS termination
+    # is a deployment concern; the 403 gate is unit-covered) and a short lease
+    # keeps the reaper red-line tests fast.
+    env.setdefault("MESH_DAEMON_TLS_REQUIRED", "false")
+    env.setdefault("MESH_RUNTIME_LEASE_SECONDS", "3")
+    # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
+    # source server, which the SSRF guard only permits via the allowlist.
+    env.setdefault("MESH_SKILL_SOURCE_HOST_ALLOWLIST", "127.0.0.1,localhost")
     return subprocess.Popen(
         [
             sys.executable,
@@ -143,6 +147,26 @@ async def api_client(api_server) -> httpx.AsyncClient:
         yield client
 
 
+async def _truncate_all(engine, tables: str) -> None:
+    """TRUNCATE with deadlock retry: background worker processes (relay /
+    reaper) hold brief locks that can deadlock against AccessExclusive
+    TRUNCATE (40P01); their transactions are short, so a retry resolves it."""
+    import asyncio
+
+    from sqlalchemy.exc import DBAPIError
+
+    for attempt in range(6):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+            return
+        except DBAPIError as exc:
+            if getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01" and attempt < 5:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+            raise
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables_after_each_e2e_test(provision_database):
     """TRUNCATE every table before each e2e test for isolation."""
@@ -151,11 +175,9 @@ async def clean_tables_after_each_e2e_test(provision_database):
 
     tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
     engine = create_async_engine(get_test_database_url())
-    async with engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+    await _truncate_all(engine, tables)
     yield
-    async with engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+    await _truncate_all(engine, tables)
     await engine.dispose()
 
 

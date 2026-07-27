@@ -35,7 +35,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'skills', to: '/skills' },
   { key: 'cycles', to: '/cycles' },
   { key: 'chat', to: '/chat' },
-  { key: 'automation', to: '/automation' },
+  // 自动化入口指向 Runtimes 模块(runtime.md §4);nav.automation 文案保持不变。
+  { key: 'automation', to: '/runtimes' },
   { key: 'settings', to: '/settings' },
 ];
 

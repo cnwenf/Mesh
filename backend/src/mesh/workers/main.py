@@ -19,15 +19,13 @@ from datetime import UTC, datetime
 import redis.asyncio as aioredis
 from sqlalchemy import select
 
-from mesh.agent.triggers import (
-    assign_orchestration_handler,
-    register_skill_context_resolver,
-    register_skill_matching_resolver,
-)
+from mesh.agent.triggers import assign_orchestration_handler, register_skill_matching_resolver
 from mesh.attachment.processing import process_blob
 from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
 from mesh.attachment.storage import ObjectStorage
+from mesh.auth.mailer import build_mailer
+from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
@@ -37,14 +35,16 @@ from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
-from mesh.skill.bindings import BindingService
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportSettings, skill_import_sweep_loop
+from mesh.skill.resolvers import make_matching_resolver
 from mesh.workers.attachment_processor import (
     attachment_maintenance_loop,
     attachment_scan_loop,
 )
+from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
+from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
@@ -89,15 +89,23 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
 
 
 def build_relay(
-    settings: Settings, session_factory, fanout: RedisFanOut, storage: ObjectStorage
+    settings: Settings,
+    session_factory,
+    fanout: RedisFanOut,
+    storage: ObjectStorage,
+    mailer=None,
 ) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
-    ``issue.assigned`` is consumed by the unified agent orchestration entry
-    (agent.md §3.3): guardrail gate → §6.11 snapshot freeze →
-    ``execution.enqueue`` outbox event (consumed by the runtime.md
-    increment) with the README §6.5 idempotency key, or
-    ``agent.trigger_skipped`` when a guardrail denies the trigger.
+    ``issue.assigned`` / field & status changes produce ``notification.fanout``
+    (comment-inbox.md = single notification authority, README §6.13 matrix);
+    ``execution.enqueue`` for mentions is consumed by a bridge handler until the
+    runtime.md increment provides the unified orchestration entry, while
+    ``issue.assigned``-triggered execution is handled by the unified agent
+    orchestration entry (agent.md §3.3: guardrail gate → §6.11 snapshot freeze →
+    ``execution.enqueue`` with the README §6.5 idempotency key, or
+    ``agent.trigger_skipped`` when a guardrail denies). The producing sides carry
+    the §6.9 trigger payloads, so remaining swaps are handler-local.
     """
     return OutboxRelay(
         session_factory,
@@ -105,6 +113,12 @@ def build_relay(
             REALTIME_PUBLISH: project_realtime_event,
             ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
+            # runtime.md consumer (enqueue_execution_handler) belongs to MES-62
+            # (not yet merged); the comment-inbox fan-out handler is active.
+            FANOUT_EVENT_TYPE: NotificationFanoutHandler(
+                aggregation_window_seconds=settings.notification_aggregation_window,
+                mailer=mailer,
+            ),
         },
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
@@ -130,29 +144,35 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         await storage.ensure_bucket()
     except Exception:  # noqa: BLE001 — storage may join late; loops retry
         logger.warning("attachment bucket not ready at worker startup")
-    relay = build_relay(settings, session_factory, fanout, storage)
-    # §6.11 enqueue seam for the relay process: freeze the skill module's
-    # bound versions + grants into config_snapshot (mirrors app.py).
-    register_skill_context_resolver(
-        BindingService(session_factory).collect_enqueue_context
-    )
-    from mesh.skill.resolvers import make_matching_resolver
+    mailer = build_mailer(settings, redis_client)
+    relay = build_relay(settings, session_factory, fanout, storage, mailer=mailer)
+    stop = stop or asyncio.Event()
 
+    # skill.md §4.5 / §6.11: matching resolver feeds the enqueue handler; the
+    # crash-recovery sweep drains import tasks left mid-pipeline by a crash.
     register_skill_matching_resolver(make_matching_resolver())
     skill_content_store = ObjectStorageContentStore(storage)
     skill_import_settings = ImportSettings(
         host_allowlist=frozenset(
-            host.strip().lower()
-            for host in (settings.skill_source_host_allowlist or "").split(",")
-            if host.strip()
+            h.strip().lower()
+            for h in (settings.skill_source_host_allowlist or "").split(",")
+            if h.strip()
         ),
         marketplace_url=settings.skill_marketplace_url,
     )
-    stop = stop or asyncio.Event()
 
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
+            TaskSpec(
+                "notification-digest",
+                lambda: notification_digest_loop(
+                    session_factory,
+                    mailer=mailer,
+                    interval=settings.notification_digest_interval,
+                    stop=stop,
+                ),
+            ),
             TaskSpec(
                 "realtime-retention",
                 lambda: retention_loop(
@@ -178,6 +198,16 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                 lambda: invitation_sweep_loop(
                     session_factory,
                     interval=settings.invitation_sweep_interval,
+                    stop=stop,
+                    clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "due-soon-sweep",
+                lambda: due_soon_sweep_loop(
+                    session_factory,
+                    interval=settings.due_soon_sweep_interval,
+                    horizon_hours=settings.due_soon_horizon_hours,
                     stop=stop,
                     clock=_utcnow,
                 ),

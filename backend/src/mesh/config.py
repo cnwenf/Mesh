@@ -167,11 +167,13 @@ class Settings(BaseSettings):
     # lazy checks on accept/preview).
     invitation_sweep_interval: float = Field(default=300.0, gt=0)
 
-    # Skill import sources (skill.md §3.1 / §5.3, README §6.16). Server-side
-    # fetches only ever reach PUBLIC addresses; ``skill_source_host_allowlist``
-    # is the documented explicit-trust escape hatch (comma-separated hosts).
-    # ``skill_marketplace_url`` is the external marketplace listings API the
-    # module CONSUMES (skill.md §1.3 non-goal: Mesh does not run a market).
+    # Skill imports (skill.md §5.3 / §1.3 / §3.5). Server-side source fetches
+    # are SSRF-guarded (public addresses only); ``skill_source_host_allowlist``
+    # is the documented escape hatch (comma-separated hosts) for intranet
+    # registries / loopback fixtures. ``skill_marketplace_url`` is the external
+    # marketplace listings API the marketplace page consumes (empty = no
+    # market). ``skill_import_sweep_interval`` drives the crash-recovery sweep
+    # over in-flight import tasks.
     skill_source_host_allowlist: str | None = None
     skill_marketplace_url: str | None = None
     skill_import_sweep_interval: float = Field(default=1.0, gt=0)
@@ -219,6 +221,65 @@ class Settings(BaseSettings):
     # (still magic-byte sniffed and SHA-256 verified). Disable to force a full
     # AV pass on every upload.
     attachment_scan_skip_text: bool = True
+    # Comment & inbox tuning (comment-inbox.md §3.5 / README §6.9 & §6.13).
+    # Agent-to-agent mention chains deeper than this are silently dropped with
+    # an audit record (A↔B @-loop protection); same-group notifications inside
+    # the aggregation window merge into one row (payload.count increments).
+    max_agent_chain_depth: int = Field(default=5, ge=1)
+    notification_aggregation_window: float = Field(default=60.0, gt=0)
+    notification_digest_interval: float = Field(default=21600.0, gt=0)
+    # Due-soon reminder sweep (comment-inbox.md §2.2 ``due_soon`` producer):
+    # open issues whose due date falls inside the horizon get one fan-out
+    # per issue+due-date (relay-side matrix/routing applies).
+    due_soon_sweep_interval: float = Field(default=900.0, gt=0)
+    due_soon_horizon_hours: float = Field(default=24.0, gt=0)
+
+    # -- Runtime module (runtime.md) ------------------------------------------
+    # One-shot activation codes are short-lived (§3.1: default 15 min) and
+    # stored hash-only; expiry lands in runtimes.activation_expires_at.
+    runtime_activation_ttl: timedelta = Field(default=timedelta(minutes=15), gt=0)
+    # Lease granted at claim / renew (seconds). Daemons renew around 1/3 of the
+    # remaining lifetime (§4.8); expiry → reaper reclaim.
+    runtime_lease_seconds: int = Field(default=120, gt=0)
+    # Reaper sweep interval: lease-expired + heartbeat-lost recovery (§4.8).
+    runtime_reaper_interval: float = Field(default=5.0, gt=0)
+    # Heartbeat staleness window = interval × multiplier (§5.1: default 45s).
+    runtime_heartbeat_timeout_multiplier: int = Field(default=3, gt=0)
+    # Per-runtime heartbeat detail retention window (§2.2, optional detail).
+    runtime_heartbeat_retention: timedelta = Field(default=timedelta(hours=1), gt=0)
+    # Short-lived credential envelope TTL (§2.2 protocol: ≤2h).
+    runtime_envelope_ttl: timedelta = Field(default=timedelta(hours=2), gt=0)
+    # Per-attempt credential refetch cap; exceeding it freezes the execution
+    # for human review (§2.2).
+    runtime_credential_refetch_limit: int = Field(default=3, ge=1)
+    # Log segment sealing threshold in bytes (§2.3).
+    runtime_log_segment_bytes: int = Field(default=64 * 1024, gt=0)
+    # Log retention TTL (§2.3).
+    runtime_log_retention: timedelta = Field(default=timedelta(days=30), gt=0)
+    # Pending approval expiry (§6.10: reaper sweep expires, execution cancels).
+    runtime_approval_ttl: timedelta = Field(default=timedelta(hours=24), gt=0)
+    # Machine API TLS red line (§3.5): refuse non-TLS on /api/v1/daemon/.
+    # Local dev / compose (plain HTTP loopback) sets this to false; production
+    # keeps the secure default.
+    daemon_tls_required: bool = True
+    # X-Forwarded-Proto is trusted ONLY from these direct peers (review M3:
+    # a spoofed header from anywhere else must not bypass the TLS gate).
+    # Configure your TLS-terminating LB's address here in production.
+    daemon_trusted_proxies: str = "127.0.0.1,::1"
+    # Signed release package metadata served by the registration wizard
+    # (§3.1 — placeholder distribution endpoints; deployers replace them).
+    runtime_release_version: str = "1.0.0"
+    runtime_release_artifact_url: str = (
+        "https://releases.mesh.example/runtime/1.0.0/mesh-runtime_1.0.0_linux_x86_64.tar.gz"
+    )
+    runtime_release_sha256: str = (
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    )
+    runtime_release_signature_url: str = (
+        "https://releases.mesh.example/runtime/1.0.0/"
+        "mesh-runtime_1.0.0_linux_x86_64.tar.gz.sig"
+    )
+    runtime_release_signing_key_url: str = "https://releases.mesh.example/mesh-release.pub"
 
 
 def load_settings(**overrides: object) -> Settings:
