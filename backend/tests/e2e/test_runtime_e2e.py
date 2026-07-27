@@ -688,6 +688,7 @@ async def test_env_name_gate_and_credential_redaction(
     idem = await _enqueue(
         session_factory,
         ws_id,
+        agent_id=agent_id,
         task_spec={"credential_ids": [cred_id], "env_declarations": ["CI_KEY"]},
     )
     await _wait_queued(session_factory, ws_id, idem)
