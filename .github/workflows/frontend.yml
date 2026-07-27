@@ -45,6 +45,9 @@ jobs:
       - name: Verify new/changed code coverage >= 90%
         run: node scripts/verify-coverage.mjs --base origin/${{ github.base_ref || 'main' }}
 
+      - name: Evidence screenshots are unique (no duplicated step evidence)
+        run: node scripts/check-evidence-unique.mjs
+
       - name: Production build
         run: npm run build
 

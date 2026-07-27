@@ -356,3 +356,87 @@
   cursor: not-allowed;
   font: inherit;
 }
+
+/* 投影层:卡片 + 拖拽落点 + 快速创建 + 重同步横幅(kanban §4.2/§4.3,§6.12)。 */
+.mesh-board__card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-2) var(--space-3);
+  cursor: grab;
+}
+
+.mesh-board__card:active {
+  cursor: grabbing;
+}
+
+.mesh-board__card-id {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mesh-board__card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-board__card-priority {
+  font-size: 0.6875rem;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.mesh-board__card-priority--urgent,
+.mesh-board__card-priority--high {
+  color: var(--color-status-danger, var(--color-text));
+  border-color: currentcolor;
+}
+
+.mesh-board__card-assignee {
+  font-size: 0.6875rem;
+  color: var(--color-text-muted);
+}
+
+.mesh-board__column-empty {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+.mesh-board__column-body--blocked {
+  outline: 2px dashed var(--color-status-danger, var(--color-border));
+  outline-offset: -2px;
+}
+
+.mesh-board__quick-create {
+  margin-top: auto;
+}
+
+.mesh-board__quick-create-input {
+  width: 100%;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-text);
+  padding: var(--space-2);
+  font: inherit;
+}
+
+.mesh-board__resync {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+}

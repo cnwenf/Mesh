@@ -3,6 +3,26 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.13.0] - 2026-07-27
+
+kanban 看板与视图的 **issue 投影层**(issue 耦合余量切片,MES-33,阶段 4·核心工作):在 views 定义层之上接真实 issue 数据 —— 分组投影查询(整体游标)、每视图手工排序、原子拖拽 + WIP 强制、跨项目迁移视图侧入口、实时增量合并、`view.presence`,以及前端真实数据看板。
+
+### Added
+
+- **数据模型(kanban.md §2.7/§2.8,README §6.2)**:`view_issue_positions` 每视图手工排序表 —— 每视图每 issue 一行 `(view_id, issue_id)`(视图间排序隔离,§2.7 单视图拖拽不污染他视图);`UNIQUE(view_id, issue_id)` + `idx_vip_view_group_pos(view_id, group_key, position)`;同租户复合 FK `(workspace_id, view_id)→views`、`(workspace_id, issue_id)→issues`(均 ON DELETE CASCADE);RLS 纵深防御 + `mesh_app` 授权。Alembic 迁移 `0013_view_issue_positions`(0001→0013 单 head 线性链,全新库实测)。
+- **分组投影查询(kanban.md §3.2,README §6.14)**:`GET /views/{id}/issues` 执行视图配置,返回分组整体游标包络 `{layout, group_by, column_target_status, groups:[{key,label,count,wip?,data}], next_cursor}` —— `count`=组内总数、`data`=当前页切片、**顶层单一 next_cursor、无每组独立 cursor**;`column_target_status` 落点映射(state_category → 该 category 默认 status,status → 自身);按 `group_by`(state_category/status/assignee/priority/project)分桶,手工排序优先、规范顺序回退;过滤限制 depth≤3 / 条件 ≤20 → `filter_too_complex`,`statement_timeout` 兜底 → `query_cost_exceeded`;执行视图时按成员可见范围裁剪 issues。
+- **原子拖拽 + WIP(kanban.md §3.2/§4.3/§4.4,README §9 T9)**:`POST /views/{id}/moves` 单事务 —— 乐观锁(version)+ `pg_advisory_xact_lock(hashtext('wip:'||view_id||':'||group_key))` 串行目标列 + 事务内按视图 filters 计数 + WIP 强制(`block` 超限 → 422 `wip_limit_exceeded`,details 含 group_key/limit/count;`warn` 放行并广播 `view.wip_exceeded`)+ 状态/分组字段变更(复用 issue 写入器:严格模式/留痕/`issue.updated`)+ `view_issue_positions` upsert + `issue.moved`(载荷含 view_id);`group_by=project` 走跨项目迁移两步契约(§3.8/T22:未确认 422 `move_confirmation_required` + 预览,`confirm:true` 单事务迁移 + `issue.project_changed`,与 MES-48 鉴权/脱敏共用 `apply_confirmed_move_in_session`)。`POST /views/{id}/reorder` 列内排序 + 浮点中点法 + 精度耗尽整列重排(广播全列 `issue.moved`)。
+- **实时 + 协作(kanban.md §3.5,§6.7)**:前端按当前视图 filters 对 `issue.*` 帧单卡增量合并(插入/移动/移除,禁整板刷新;view.updated/重放过期才整板重拉);`view.presence` 在线协作事件(订阅/退订 view 频道经 Redis 在线集广播,§6.6/§6.7 唯一写入路径);§6.12 重连/重同步态横幅。
+- **视图执行接口限流(§5.3)**:`GET /views/{id}/issues` 读限流(桶 `view-read:{user}:{ip}`,超限 429 `rate_limited` + `X-RateLimit-*` 头)。
+- **前端真实数据看板(kanban.md §4)**:`features/board` —— 真实卡片渲染、跨列拖拽(乐观落位 + 409 收敛 + WIP block 服务端强制弹回 toast)、跨项目拖拽迁移预览确认模态、列底快速创建(继承分组值)、按草稿 group_by 本地重分桶(分组切换即时反映)、重连/重同步横幅;i18n 新增键 + djb2 版本哈希重算(en + zh-CN)。
+
+### Quality
+
+- 后端:`mesh/views` 投影层单测(投影编译器 / 投影服务 / 进程内 API / move / presence / 模型)+ 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真:分组整体游标 / 原子 move+WIP block·warn / T9 并发拖拽恰一 409 / WIP 并发不穿透 / T22 跨项目迁移 / T1 跨租户 404 + 复合 FK 拒绝 / T6 重放对账 / `view.presence` 广播 / 真实 HTTP `reorder` 落库+精度耗尽+RLS+401);`pytest-cov` 整体 **95.45%**(≥90% 门禁,新增模块 93–100%);全新库 0001→0013 单 head 实测;ruff 全绿;文档词汇 / 名册守卫 / `schema_r2_validation.sql` 全绿。
+- 前端:board 投影层单测(projection 契约 / boardRealtime 合并+重分桶+归属重判 / BoardColumns 拖拽落点+WIP+快速创建 / loadAllGroups 多页合并 / BoardPage 拖拽+WIP 弹回+跨项目预览+快速创建+实时接线+重同步)+ Playwright 真实后端走查(注册/登录 → 建区 → 真实卡片 → 拖拽持久化 → 快速创建 → WIP block → 断线重同步,6 张截图存证 `e2e/evidence/board-projection`,存证去重校验 `scripts/check-evidence-unique.mjs` 接入 CI);vitest **1324 例**全绿,全局四项 **97.14% / 90.33% / 92.86% / 97.14%**,变更语句行 **93.4%** 门禁全绿;typecheck / lint 0 错、生产构建全绿。
+- 文档同步:README 实现状态表 kanban 行升级为「定义层 + 投影层」(v0.13.0);kanban.md 投影增量落地标注 + label/自定义字段分组随 MES-32 增量说明。
+- 范围说明:label / 自定义字段的分组与筛选依赖 `issue_labels` / `issue_custom_field_values` 关联层,该关联层属并行线 MES-32,尚未合入 main;投影层对该两类分组/筛选按 issue 模块同口径门控(`projection_field_pending` / `group_by=label` 400),待 MES-32 落地后接通,非缺陷。
+
 ## [0.12.0] - 2026-07-27
 
 安全硬化·依赖收口续(MES-56,MES-55 审计例外后续):React 18 → 19 与 react-router 7 → 8 迁移,`npm audit --omit=dev` 对 GHSA-qwww-vcr4-c8h2 清零,审计残留项全部收口。仅前端依赖与 import 路径,无后端/数据模型/接口变更。

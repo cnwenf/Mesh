@@ -6,8 +6,10 @@ through the narrow SECURITY DEFINER lookup (migration 0011) and then run the
 same membership gate. Resource-level authorization (private/shared visibility,
 write gates) lives in the service layer.
 
-Excluded from this slice (issue-coupled remainder): ``GET /views/{id}/issues``,
-``POST /views/{id}/moves``, ``POST /views/{id}/reorder``.
+Excluded from the definition-layer slice (issue-coupled remainder, added by the
+projection increment): ``GET /views/{id}/issues`` (grouped projection, README
+§6.14 overall cursor), ``POST /views/{id}/moves`` (atomic drag + WIP), and
+``POST /views/{id}/reorder`` (per-view card order).
 """
 
 from __future__ import annotations
@@ -24,6 +26,8 @@ from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.views.schemas import (
     CreateViewRequest,
+    MoveRequest,
+    ReorderCardsRequest,
     ReorderViewsRequest,
     UpdateViewRequest,
     WipRequest,
@@ -34,12 +38,23 @@ router = APIRouter(prefix="/api/v1", tags=["views"])
 
 WRITE_LIMIT = 120
 WRITE_WINDOW_SECONDS = 60
+# View *execution* (GET /views/{id}/issues) read limit (kanban.md §5.3).
+READ_LIMIT = 600
+READ_WINDOW_SECONDS = 60
 
 _VIEW_NOT_FOUND = "view not found"
 
 
 def _view_service(request: Request) -> ViewService:
     return request.app.state.view_service
+
+
+def _projection_service(request: Request):
+    return request.app.state.projection_service
+
+
+def _board_move_service(request: Request):
+    return request.app.state.board_move_service
 
 
 def _client_meta(request: Request) -> dict:
@@ -58,6 +73,20 @@ async def _rate_limit_write(request: Request, user: User, response: Response) ->
         window_seconds=WRITE_WINDOW_SECONDS,
     )
     response.headers["X-RateLimit-Limit"] = str(WRITE_LIMIT)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(reset_in)
+
+
+async def _rate_limit_read(request: Request, user: User, response: Response) -> None:
+    """Rate-limit view execution reads (kanban.md §5.3 → 429 rate_limited)."""
+    limiter = request.app.state.rate_limiter
+    client_ip = request.client.host if request.client is not None else "unknown"
+    remaining, reset_in = await limiter.check(
+        f"view-read:{user.id}:{client_ip}",
+        limit=READ_LIMIT,
+        window_seconds=READ_WINDOW_SECONDS,
+    )
+    response.headers["X-RateLimit-Limit"] = str(READ_LIMIT)
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Reset"] = str(reset_in)
 
@@ -261,5 +290,92 @@ async def patch_view_wip(
         view_id=parsed,
         body=body,
         **_client_meta(request),
+    )
+    return {"data": data}
+
+
+# ----------------------------------------------------------------------
+# issue-coupled projection (kanban.md §3.2, README §6.14 overall cursor)
+# ----------------------------------------------------------------------
+
+
+@router.get("/views/{view_id}/issues")
+async def list_view_issues(
+    request: Request,
+    response: Response,
+    view_id: str,
+    limit: int | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Execute a view's config against issues → grouped overall-cursor envelope.
+
+    Returns ``{"layout","group_by","column_target_status","groups","next_cursor"}``
+    directly (NOT wrapped in ``data``) — the README §6.14 grouped contract,
+    same shape as the issue module's grouped list. Read rate-limited (§5.3).
+    """
+    await _rate_limit_read(request, user, response)
+    parsed = _path_uuid(view_id)
+    context = await _resolve_context(request, user, session, parsed)
+    return await _projection_service(request).execute_view(
+        viewer=context.member,
+        workspace_id=context.workspace.id,
+        view_id=parsed,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@router.post("/views/{view_id}/moves")
+async def move_view_card(
+    body: MoveRequest,
+    request: Request,
+    response: Response,
+    view_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Atomic board drag (kanban §3.2): optimistic lock + advisory lock + WIP
+    count + grouping-field change + per-view position upsert, one transaction.
+    ``group_by=project`` routes through the cross-project two-step contract.
+    """
+    await _rate_limit_write(request, user, response)
+    parsed = _path_uuid(view_id)
+    context = await _resolve_context(request, user, session, parsed)
+    data = await _board_move_service(request).move(
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        view_id=parsed,
+        issue_id=_query_uuid(body.issue_id, field="issue_id"),
+        to_group_key=body.to_group_key,
+        position=body.position,
+        version=body.version,
+        confirm=body.confirm,
+        dry_run=body.dry_run,
+    )
+    return {"data": data}
+
+
+@router.post("/views/{view_id}/reorder")
+async def reorder_view_cards(
+    body: ReorderCardsRequest,
+    request: Request,
+    response: Response,
+    view_id: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """In-column card reorder (kanban §4.3): per-view position only, no field change."""
+    await _rate_limit_write(request, user, response)
+    parsed = _path_uuid(view_id)
+    context = await _resolve_context(request, user, session, parsed)
+    data = await _board_move_service(request).reorder(
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        view_id=parsed,
+        issue_id=_query_uuid(body.issue_id, field="issue_id"),
+        to_group_key=body.to_group_key,
+        position=body.position,
     )
     return {"data": data}

@@ -65,6 +65,17 @@ function stubFetchByRoute(options: StubOptions = {}): RecordedCall[] {
     if (url.includes('/api/v1/users/me')) {
       return fakeResponse({ body: { data: ME } });
     }
+    if (method === 'GET' && url.includes('/issues')) {
+      return fakeResponse({
+        body: {
+          layout: 'board',
+          group_by: views[0]?.group_by ?? 'state_category',
+          column_target_status: {},
+          groups: [],
+          next_cursor: null,
+        },
+      });
+    }
     if (method === 'GET' && url.includes('/views')) {
       if (options.failListOnce === true && !listFailed) {
         listFailed = true;
@@ -181,9 +192,9 @@ describe('BoardPage', () => {
     const doneColumn = screen.getByTestId('board-column-done');
     expect(within(doneColumn).queryByTestId('quick-add-done')).not.toBeInTheDocument();
     expect(within(doneColumn).getByRole('button', { expanded: false })).toBeInTheDocument();
-    // 展开后出现快速创建占位(禁用)
+    // 展开后出现快速创建输入框(有写权限时可用)
     fireEvent.click(within(doneColumn).getByRole('button', { expanded: false }));
-    expect(within(doneColumn).getByTestId('quick-add-done')).toBeDisabled();
+    expect(within(doneColumn).getByTestId('quick-add-done')).toBeEnabled();
   });
 
   it('无视图时呈现空态与新建主操作(§6.12 empty)', async () => {

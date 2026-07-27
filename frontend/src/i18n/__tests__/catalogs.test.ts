@@ -254,6 +254,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     limit: 5,
     enforcement: 'warn',
     groupBy: 'status',
+    // kanban 投影层 §4 文案占位符(MES-33):WIP 超限 toast 的列 key
+    group: 'in_progress',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

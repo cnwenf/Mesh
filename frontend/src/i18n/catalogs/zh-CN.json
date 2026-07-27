@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "e3b683c1",
+  "version": "41a13895",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -840,9 +840,9 @@
     "board.discardChanges": "丢弃",
     "board.saveAsTitle": "另存为新视图",
     "board.columnEmptyTitle": "暂无卡片",
-    "board.columnEmptyDescription": "issue 投影落地后卡片将呈现于此。",
+    "board.columnEmptyDescription": "该列暂无匹配的卡片。",
     "board.quickAdd": "新增卡片",
-    "board.quickAddDisabled": "快速创建随 issue 投影增量落地",
+    "board.quickAddDisabled": "你没有在该视图新增卡片的权限",
     "board.expandColumn": "展开列 {name}",
     "board.collapseColumn": "折叠列 {name}",
     "board.category.backlog": "待规划",
@@ -857,10 +857,21 @@
     "board.priority.medium": "中",
     "board.priority.low": "低",
     "board.priority.none": "无",
-    "board.dynamicColumnsPlaceholder": "{groupBy} 的列随投影增量加载",
+    "board.dynamicColumnsPlaceholder": "{groupBy} 的列",
     "board.listPlaceholderTitle": "列表布局",
-    "board.listPlaceholderDescription": "列表表格随 issue 投影增量渲染;上方视图配置已生效。",
+    "board.listPlaceholderDescription": "列表表格布局在本期为保留取值；看板布局渲染实时投影。",
     "board.notImplementedTitle": "布局未实现",
-    "board.notImplementedDescription": "时间线与表格布局在本期仅保留枚举取值(kanban §2.2)。"
+    "board.notImplementedDescription": "时间线与表格布局在本期仅保留枚举取值(kanban §2.2)。",
+    "error.projection_field_pending": "标签与自定义字段投影随后续增量落地。",
+    "error.invalid_limit": "分页 limit 非法。",
+    "board.resyncing": "正在重新连接并同步看板…",
+    "board.movePreviewTitle": "移动到另一个项目",
+    "board.movePreviewDescription": "把该卡片移到另一个项目会变更部分字段，请确认后继续。",
+    "board.movePreviewMapped": "{count} 个字段将映射为目标项目的默认值。",
+    "board.movePreviewCleared": "{count} 个项目私有字段将被清除。",
+    "board.moveConfirm": "确认移动",
+    "board.wipExceededToast": "列 {group} 已超过在制品上限（{count}/{limit}）。",
+    "board.noAssignee": "无负责人",
+    "board.noProject": "无项目"
   }
 }

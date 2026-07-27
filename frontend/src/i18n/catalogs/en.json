@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "55b7a2b1",
+  "version": "04e465aa",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -840,9 +840,9 @@
     "board.discardChanges": "Discard",
     "board.saveAsTitle": "Save as new view",
     "board.columnEmptyTitle": "No cards",
-    "board.columnEmptyDescription": "Cards appear here once issue projection lands.",
+    "board.columnEmptyDescription": "No cards match this column.",
     "board.quickAdd": "New card",
-    "board.quickAddDisabled": "Quick create arrives with the issue projection increment",
+    "board.quickAddDisabled": "You do not have permission to add cards to this view",
     "board.expandColumn": "Expand column {name}",
     "board.collapseColumn": "Collapse column {name}",
     "board.category.backlog": "Backlog",
@@ -857,10 +857,21 @@
     "board.priority.medium": "Medium",
     "board.priority.low": "Low",
     "board.priority.none": "None",
-    "board.dynamicColumnsPlaceholder": "Columns for {groupBy} load with the projection increment",
+    "board.dynamicColumnsPlaceholder": "Columns for {groupBy}",
     "board.listPlaceholderTitle": "List layout",
-    "board.listPlaceholderDescription": "The list table renders with the issue projection increment; the view configuration above is already active.",
+    "board.listPlaceholderDescription": "The list table layout is a reserved value in this release; the board layout renders the live projection.",
     "board.notImplementedTitle": "Layout not implemented",
-    "board.notImplementedDescription": "Timeline and table layouts are reserved enum values in this release (kanban §2.2)."
+    "board.notImplementedDescription": "Timeline and table layouts are reserved enum values in this release (kanban §2.2).",
+    "error.projection_field_pending": "Label and custom-field projection arrives with a later increment.",
+    "error.invalid_limit": "The page limit is invalid.",
+    "board.resyncing": "Reconnecting — resyncing the board…",
+    "board.movePreviewTitle": "Move to another project",
+    "board.movePreviewDescription": "Moving this card to another project changes some fields. Review before confirming.",
+    "board.movePreviewMapped": "{count} field(s) will be mapped to the target project's defaults.",
+    "board.movePreviewCleared": "{count} project-specific field(s) will be cleared.",
+    "board.moveConfirm": "Confirm move",
+    "board.wipExceededToast": "Column {group} is over its WIP limit ({count}/{limit}).",
+    "board.noAssignee": "No assignee",
+    "board.noProject": "No project"
   }
 }

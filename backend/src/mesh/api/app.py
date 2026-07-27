@@ -58,6 +58,8 @@ from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
 )
+from mesh.views.moves import BoardMoveService
+from mesh.views.projection import ProjectionService
 from mesh.views.routes import router as view_router
 from mesh.views.service import ViewService
 from mesh.workspace.invitations import InvitationService
@@ -153,6 +155,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.template_service = TemplateService(app.state.issue_service)
     app.state.label_service = LabelService(session_factory)
     app.state.view_service = ViewService(session_factory)
+    app.state.projection_service = ProjectionService(
+        session_factory, app.state.issue_service, app.state.view_service
+    )
+    app.state.board_move_service = BoardMoveService(
+        session_factory,
+        app.state.issue_service,
+        app.state.move_service,
+        app.state.view_service,
+    )
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.

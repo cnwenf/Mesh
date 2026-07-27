@@ -115,6 +115,7 @@ class RealtimeSession:
         max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS,
         max_frames_per_second: int = DEFAULT_MAX_FRAMES_PER_SECOND,
         clock: Callable[[], float] | None = None,
+        redis: Any = None,
     ) -> None:
         self._transport = transport
         self._session_factory = session_factory
@@ -127,10 +128,14 @@ class RealtimeSession:
         self._max_subscriptions = max_subscriptions
         self._max_frames_per_second = max_frames_per_second
         self._clock = clock or time.monotonic
+        self._redis = redis
         self._frame_times: deque[float] = deque()
         self._state = ConnectionState()
         self._send_lock = asyncio.Lock()
         self._closed = asyncio.Event()
+        # view:{id} channels this connection is present on → owner workspace
+        # (kanban §3.5 view.presence); cleared on unsubscribe/disconnect.
+        self._presence_channels: dict[str, Any] = {}
 
     async def _send(self, frame: dict[str, Any]) -> None:
         async with self._send_lock:
@@ -143,6 +148,39 @@ class RealtimeSession:
         if channel is not None:
             frame["channel"] = channel
         await self._send(frame)
+
+    async def _note_view_presence(self, channel: str, owner: Any, *, joined: bool) -> None:
+        """Broadcast view.presence for view:{id} channels (kanban §3.5).
+
+        Best-effort and isolated: presence must never break the session. The
+        ``redis`` dependency is optional so sessions constructed without it
+        (e.g. older tests) simply skip presence.
+        """
+        if self._redis is None:
+            return
+        from mesh.views.presence import VIEW_CHANNEL_PREFIX, note_presence
+
+        if not channel.startswith(VIEW_CHANNEL_PREFIX):
+            return
+        principal = self._state.principal
+        subject = principal.subject if principal is not None else "anonymous"
+        if joined:
+            self._presence_channels[channel] = owner
+            effective_owner = owner
+        else:
+            # Leaving: use the owner recorded at join time (the caller may not
+            # have it handy on disconnect cleanup).
+            effective_owner = self._presence_channels.pop(channel, None)
+        if effective_owner is None:
+            return
+        await note_presence(
+            self._session_factory,
+            self._redis,
+            workspace_id=effective_owner,
+            channel=channel,
+            subject=subject,
+            joined=joined,
+        )
 
     async def run(self) -> None:
         """Run the connection until it closes."""
@@ -157,6 +195,10 @@ class RealtimeSession:
             await self._message_loop()
         finally:
             self._closed.set()
+            # Announce departure from any view channels still present on.
+            for channel in list(self._presence_channels):
+                with contextlib.suppress(Exception):
+                    await self._note_view_presence(channel, None, joined=False)
             pump_task.cancel()
             heartbeat_task.cancel()
             for task in (pump_task, heartbeat_task):
@@ -231,6 +273,7 @@ class RealtimeSession:
                 channel = frame.get("channel")
                 if isinstance(channel, str):
                     self._state.subscriptions.discard(channel)
+                    await self._note_view_presence(channel, None, joined=False)
             elif op == OP_PING:
                 await self._send({"op": FRAME_PING})
             else:
@@ -283,6 +326,10 @@ class RealtimeSession:
         # duplicates, never gaps).
         self._state.subscriptions.add(channel)
         await self._replay(channel, resume_from or 0, owner)
+        # Replay may drop the subscription (stale → resync_required); only
+        # announce presence when the channel is still subscribed.
+        if channel in self._state.subscriptions:
+            await self._note_view_presence(channel, owner, joined=True)
 
     async def _replay(self, channel: str, resume_from: int, owner_workspace) -> None:
         """Replay stored events from ``resume_from``; emit resync_required when stale.
