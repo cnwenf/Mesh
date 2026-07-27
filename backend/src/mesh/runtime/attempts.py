@@ -11,7 +11,7 @@ prevents negatives).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -46,7 +46,7 @@ _TERMINAL_NOTIFICATION_KINDS = frozenset({"failed", "timeout"})
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _load_daemon_attempt(

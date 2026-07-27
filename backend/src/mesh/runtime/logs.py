@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -142,20 +141,24 @@ async def append_log_lines(
                 select(TaskExecution).where(TaskExecution.id == attempt.execution_id)
             )
         ).scalar_one()
-        await emit_realtime(
-            session,
-            workspace_id=workspace_id,
-            channel=f"execution:{execution.id}:logs",
-            event="execution.log",
-            data={
-                "stream": stream,
-                "start_offset": start_offset,
-                "end_offset": end_offset,
-                "lines": redacted_lines[:MAX_PUSH_LINES],
-                "attempt_id": str(attempt.id),
-            },
-            idempotency_key=f"log:{attempt.id}:{start_offset}:{end_offset}",
-        )
+        # F11 (§3.3): one frame PER LINE on the logs channel — the documented
+        # wire shape {"type":"log","stream","offset","line"}; clients dedupe
+        # by byte offset against their resume position.
+        for record in records[:MAX_PUSH_LINES]:
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=f"execution:{execution.id}:logs",
+                event="execution.log",
+                data={
+                    "type": "log",
+                    "stream": record["s"],
+                    "offset": record["o"],
+                    "line": record["l"],
+                    "attempt_id": str(attempt.id),
+                },
+                idempotency_key=f"log:{attempt.id}:{record['o']}",
+            )
         return {"accepted_end_offset": end_offset, "redacted_hits": total_hits}
 
 
@@ -227,7 +230,7 @@ async def read_execution_logs(
                     records = json.loads(raw.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
-                for record in records:
+                for record in records[:MAX_PUSH_LINES]:
                     line_offset = int(record.get("o", 0))
                     record_stream = record.get("s", "stdout")
                     if line_offset < offset:

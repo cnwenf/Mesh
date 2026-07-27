@@ -172,6 +172,49 @@ async def process_blob(
         "hash_matches": True,
     }
 
+    # -- 2b. full-channel secret redaction red line (README §6.16 / runtime.md
+    # §5.2): textual payloads must not carry workspace secrets. A hit BLOCKS
+    # the blob (the quarantine gate never opens → it is never written out) and
+    # raises the §6.13 critical security alert — same posture as AV infection.
+    from mesh.runtime.redaction import mime_is_textual, scan_bytes_for_secrets
+
+    if mime_is_textual(sniffed):
+        secret_hits = await scan_bytes_for_secrets(
+            session,
+            workspace_id=blob.workspace_id,
+            data=data,
+            signing_secret=settings.jwt_secret,
+        )
+        if secret_hits:
+            scan_detail["secret_scan_hits"] = secret_hits
+            blob.scan_status = "infected"
+            blob.scan_detail = scan_detail
+            blob.updated_at = datetime.now(UTC)
+            await session.flush()
+            from mesh.auth.audit import write_audit
+
+            await write_audit(
+                session,
+                workspace_id=blob.workspace_id,
+                actor_member_id=None,
+                actor_kind="system",
+                action="attachment.secret_detected",
+                resource_type="attachment_blob",
+                resource_id=blob.id,
+                metadata={
+                    "severity": "critical",
+                    "secret_scan_hits": secret_hits,
+                    "sha256": computed,
+                },
+            )
+            await _emit_processed_for_blob(session, blob)
+            logger.warning(
+                "blob %s blocked: %d workspace secret hit(s) in text content",
+                blob.id,
+                secret_hits,
+            )
+            return
+
     # -- 3. plain-text scan-skip whitelist (§3.6 — the ONLY skipped source) -----
     if settings.attachment_scan_skip_text and sniffed in TEXT_SCAN_SKIP_MIMES:
         scan_detail["av_engine"] = None

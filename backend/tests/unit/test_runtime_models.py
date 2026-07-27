@@ -12,7 +12,7 @@ constraints the last.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import text
@@ -430,7 +430,7 @@ async def test_approvals_new_pending_allowed_after_decision(db_session):
         member=ids["m1"],
         status="approved",
         decided_by_member_id=ids["m1"],
-        decided_at=datetime.now(timezone.utc),
+        decided_at=datetime.now(UTC),
     )
     # ...but after a decision a fresh pending approval may be raised.
     await _seed_approval(

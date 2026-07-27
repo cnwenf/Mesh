@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -25,12 +25,11 @@ from mesh.errors import (
 )
 from mesh.runtime.credentials import encrypt_credential_value
 from mesh.runtime.daemon_auth import (
-    validate_env_name,
     resolve_runtime_token,
+    validate_env_name,
 )
 from mesh.runtime.logs import append_log_lines, read_execution_logs
 from mesh.runtime.service import RuntimeService, hash_activation_code
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     issue_runtime_token,
@@ -259,8 +258,9 @@ async def test_resolve_runtime_token_paths(session_factory):
 
 
 def test_tls_guard_refuses_plaintext_when_required():
-    from mesh.runtime.daemon_auth import assert_daemon_tls
     from types import SimpleNamespace
+
+    from mesh.runtime.daemon_auth import assert_daemon_tls
 
     def req(scheme, headers=None, peer="203.0.113.9"):
         return SimpleNamespace(
@@ -360,7 +360,7 @@ async def test_activation_expired_and_used_410(session_factory):
         await session.execute(
             update(Runtime)
             .where(Runtime.id == uuid.UUID(created["id"]))
-            .values(activation_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+            .values(activation_expires_at=datetime.now(UTC) - timedelta(minutes=1))
         )
     with pytest.raises(GoneError) as exc:
         await service.activate_runtime(

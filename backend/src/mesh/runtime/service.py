@@ -11,9 +11,9 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.config import Settings
@@ -34,6 +34,7 @@ from mesh.errors import (
     GoneError,
     NotFoundError,
     UnauthorizedError,
+    ValidationError,
 )
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import encrypt_credential_value
@@ -57,7 +58,7 @@ MAX_CAPABILITIES = 64
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def generate_activation_code() -> str:
@@ -327,6 +328,18 @@ class RuntimeService:
         metrics: dict,
         inflight: list[str],
     ) -> dict:
+        # F8: daemon-reported inflight is DIAGNOSTIC (server-side attempt
+        # rows stay the capacity authority) — but validated and persisted in
+        # the heartbeat detail row for drift auditing, never ignored.
+        for entry in inflight:
+            try:
+                uuid.UUID(str(entry))
+            except (ValueError, TypeError):
+                raise ValidationError(
+                    "inflight entries must be attempt UUIDs",
+                    code="invalid_request",
+                    details={"inflight": entry},
+                ) from None
         now = _now()
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, runtime.workspace_id)
@@ -363,7 +376,7 @@ class RuntimeService:
                     workspace_id=row.workspace_id,
                     runtime_id=row.id,
                     current_load=current_load,
-                    metrics=metrics or {},
+                    metrics={**(metrics or {}), "inflight_reported": len(inflight)},
                     health=health,
                 )
             )
@@ -400,6 +413,7 @@ class RuntimeService:
         workspace_id: uuid.UUID,
         status: str | None = None,
         kind: str | None = None,
+        labels: dict | None = None,
         search: str | None = None,
         cursor: str | None = None,
         limit: int = 50,
@@ -414,6 +428,10 @@ class RuntimeService:
                 stmt = stmt.where(Runtime.status == status)
             if kind:
                 stmt = stmt.where(Runtime.kind == kind)
+            if labels:
+                # H3 (§3.1): runtime must carry ALL requested labels (JSONB
+                # containment — the same operator claim matching uses).
+                stmt = stmt.where(Runtime.labels.op("@>")(labels))
             if search:
                 # Escape LIKE metacharacters (review L1): user search terms
                 # must match literally, not as wildcards.

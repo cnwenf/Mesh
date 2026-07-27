@@ -24,7 +24,7 @@ sweep never touches it — there is no "paused lease → permanent stall" path.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -44,7 +44,7 @@ REAPER_BATCH_SIZE = 50
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def run_reaper_pass(
@@ -383,7 +383,7 @@ async def runtime_reaper_loop(
             pass
         try:
             await asyncio.wait_for(stop.wait(), timeout=settings.runtime_reaper_interval)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
 
 

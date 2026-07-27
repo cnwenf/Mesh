@@ -16,21 +16,20 @@ from __future__ import annotations
 
 import ipaddress
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.runtime import (
-    ExecutionAttempt,
     RepoCheckout,
     Runtime,
     TaskExecution,
 )
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
-from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from mesh.errors import BusinessRuleError, ForbiddenError
 
 # Hostnames that resolve to cloud metadata / internal services — forbidden
 # regardless of DNS (defense in depth alongside the IP-range check).
@@ -180,7 +179,7 @@ async def report_checkout(
         if runtime.kind == "platform_managed":
             assert_public_url(frozen_url)
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         working_branch = attempt.working_branch or f"agent/{execution.id}/a{attempt.attempt_number}"
         checkout = (
             await session.execute(

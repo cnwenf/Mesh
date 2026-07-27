@@ -273,7 +273,6 @@ async def refetch_credentials(
     # while lease_seq / status are validated and the envelopes rotate, closing
     # the TOCTOU window between check and issue (review M1).
     from mesh.db.tenant import set_tenant_context
-
     from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt
 
     try:

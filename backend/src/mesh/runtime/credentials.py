@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,7 @@ from mesh.db.models.runtime import (
     ExecutionCredential,
     RuntimeCredential,
 )
-from mesh.errors import BusinessRuleError, ConflictError
+from mesh.errors import ConflictError
 
 REDACTED = "***"
 
@@ -107,7 +107,7 @@ async def issue_envelopes(
     re-delivered with a FRESH envelope (the claim response is the sole
     plaintext channel; a lost response is recovered via refetch semantics).
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if not credential_ids:
         return []
     rows = (
@@ -174,7 +174,7 @@ async def refetch_envelopes(
     counter advances, and exceeding the cap raises — the caller freezes the
     execution for human review.
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     bindings = (
         await session.execute(
             select(ExecutionCredential).where(
@@ -234,7 +234,7 @@ async def revoke_attempt_envelopes(
     session: AsyncSession, *, attempt_id: uuid.UUID, now: datetime | None = None
 ) -> int:
     """Terminal-state / freeze revocation: set revoked_at on live envelopes."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     result = await session.execute(
         update(ExecutionCredential)
         .where(
@@ -252,7 +252,7 @@ async def revoke_execution_envelopes(
     """Freeze path (§4.10): revoke every envelope of every attempt at once."""
     from mesh.db.models.runtime import ExecutionAttempt
 
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     result = await session.execute(
         update(ExecutionCredential)
         .where(

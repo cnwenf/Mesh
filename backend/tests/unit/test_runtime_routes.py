@@ -14,9 +14,8 @@ import uuid
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
 
-from mesh.db.models.runtime import Approval, Runtime, TaskExecution
+from mesh.db.models.runtime import TaskExecution
 
 pytestmark = pytest.mark.unit
 
@@ -61,8 +60,8 @@ async def app_client(db_url, redis_url):
         yield client
 
 
-async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str]:
-    """Register + login + workspace; returns (jwt, ws_id)."""
+async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str, str]:
+    """Register + login + workspace + agent; returns (jwt, ws_id, agent_id)."""
     email = f"routes-{suffix}@example.com"
     await client.post(
         "/api/v1/auth/register",
@@ -79,7 +78,14 @@ async def _world(client: httpx.AsyncClient, suffix: str) -> tuple[str, str]:
             headers={"Authorization": f"Bearer {token}"},
         )
     ).json()["data"]
-    return token, ws["id"]
+    agent = (
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/agents",
+            json={"name": f"agent-{suffix}"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    ).json()["data"]
+    return token, ws["id"], agent["id"]
 
 
 async def _runtime(client, token, ws_id, name="rt-1", **body):
@@ -104,13 +110,14 @@ async def _daemon_token(client, created: dict) -> str:
     return resp.json()["data"]["runtime_token"]
 
 
-async def _enqueue_direct(session_factory, ws_id, **overrides) -> TaskExecution:
-    """Insert a queued execution directly (relay-independent route tests)."""
+async def _enqueue_direct(session_factory, ws_id, agent_id, **overrides) -> TaskExecution:
+    """Insert a queued execution directly (relay-independent route tests).
+    F7: claimable executions always carry an executor."""
     from mesh.db.models.runtime import TaskExecution as TE
 
     execution = TE(
         workspace_id=uuid.UUID(ws_id),
-        agent_id=None,
+        agent_id=uuid.UUID(agent_id),
         status="queued",
         **overrides,
     )
@@ -122,7 +129,7 @@ async def _enqueue_direct(session_factory, ws_id, **overrides) -> TaskExecution:
 
 
 async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
-    token, ws_id = await _world(app_client, "life")
+    token, ws_id, _agent = await _world(app_client, "life")
     created = await _runtime(app_client, token, ws_id)
     assert created["status"] == "pending"
     assert created["activation"]["code"].startswith("ACT-")
@@ -199,7 +206,7 @@ async def test_console_runtime_lifecycle_over_http(app_client, session_factory):
 
 
 async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
-    token, ws_id = await _world(app_client, "cycle")
+    token, ws_id, agent_id = await _world(app_client, "cycle")
     created = await _runtime(app_client, token, ws_id)
     daemon_token = await _daemon_token(app_client, created)
     dh = {"Authorization": f"Bearer {daemon_token}"}
@@ -212,7 +219,7 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
     )
     assert empty.status_code == 204
 
-    execution = await _enqueue_direct(session_factory, ws_id)
+    execution = await _enqueue_direct(session_factory, ws_id, agent_id)
     claimed = await app_client.post(
         f"/api/v1/daemon/runtimes/{rid}/executions:claim", json={"diagnostics": {}}, headers=dh
     )
@@ -316,7 +323,7 @@ async def test_daemon_tls_gate_403(db_url, redis_url, session_factory):
 async def test_console_executions_cancel_freeze_credentials_approvals(
     app_client, session_factory
 ):
-    token, ws_id = await _world(app_client, "exec")
+    token, ws_id, agent_id = await _world(app_client, "exec")
     auth = {"Authorization": f"Bearer {token}"}
     created = await _runtime(app_client, token, ws_id)
     daemon_token = await _daemon_token(app_client, created)
@@ -346,7 +353,7 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     # Claim an execution that carries the credential; refetch rotates; freeze
     # revokes; refetch after freeze → 409 envelope_revoked.
     execution = await _enqueue_direct(
-        session_factory, ws_id, task_spec={"credential_ids": [cred_id]}
+        session_factory, ws_id, agent_id, task_spec={"credential_ids": [cred_id]}
     )
     claimed = await app_client.post(
         f"/api/v1/daemon/runtimes/{created['id']}/executions:claim", json={}, headers=dh
@@ -398,7 +405,7 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     assert missing_exec.status_code == 404
 
     # Cancel a queued execution via console; cancel again → idempotent.
-    queued_exec = await _enqueue_direct(session_factory, ws_id)
+    queued_exec = await _enqueue_direct(session_factory, ws_id, agent_id)
     cancel1 = await app_client.post(
         f"/api/v1/workspaces/{ws_id}/executions/{queued_exec.id}:cancel", json={}, headers=auth
     )
@@ -423,24 +430,7 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     assert missing_appr.status_code == 404
 
     # Build a pending approval through the daemon protocol, then approve it.
-    agent_exec = await _enqueue_direct(session_factory, ws_id)
-    # The execution needs an agent roster member for the requester — create an
-    # agent through the console API.
-    agent = (
-        await app_client.post(
-            f"/api/v1/workspaces/{ws_id}/agents",
-            json={"name": "Approval Agent"},
-            headers=auth,
-        )
-    ).json()["data"]
-    async with session_factory() as session, session.begin():
-        from sqlalchemy import update
-
-        await session.execute(
-            update(TaskExecution)
-            .where(TaskExecution.id == agent_exec.id)
-            .values(agent_id=uuid.UUID(agent["id"]), status="queued")
-        )
+    agent_exec = await _enqueue_direct(session_factory, ws_id, agent_id)
     claimed2 = await app_client.post(
         f"/api/v1/daemon/runtimes/{created['id']}/executions:claim", json={}, headers=dh
     )
@@ -471,14 +461,14 @@ async def test_console_executions_cancel_freeze_credentials_approvals(
     )
     assert got.json()["data"]["status"] == "pending"
     approved = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}:approve",
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/approve",
         json={"comment": "ok"},
         headers=auth,
     )
     assert approved.json()["data"]["execution_status"] == "queued"
     # Idempotent re-decide.
     again = await app_client.post(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}:reject", json={}, headers=auth
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval_id}/reject", json={}, headers=auth
     )
     assert again.json()["data"]["status"] == "approved"
 

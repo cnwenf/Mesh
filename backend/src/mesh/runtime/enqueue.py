@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
+from mesh.outbox.service import emit_realtime
 from mesh.runtime.attempts import cancel_in_flight_for_agent
 from mesh.runtime.claim import _emit_queue_depth
 
@@ -123,6 +124,22 @@ async def enqueue_execution_handler(
         if idempotency_key and _is_idempotency_conflict(exc):
             return None
         raise
+    # §3.6: every enqueue is observable on the workspace executions channel
+    # (F10 — agent triggers additionally emit on issue:{id}:runs; integration
+    # / manual / issue-less triggers are covered here).
+    await emit_realtime(
+        session,
+        workspace_id=event.workspace_id,
+        channel=f"workspace:{event.workspace_id}:executions",
+        event="execution.queued",
+        data={
+            "execution_id": str(execution.id),
+            "agent_id": str(execution.agent_id) if execution.agent_id else None,
+            "issue_id": str(execution.issue_id) if execution.issue_id else None,
+            "trigger": execution.trigger,
+        },
+        idempotency_key=f"enqueue:{execution.id}:execution-queued",
+    )
     await _emit_queue_depth(session, workspace_id=event.workspace_id)
     return None
 

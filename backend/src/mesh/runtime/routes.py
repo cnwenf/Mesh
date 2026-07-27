@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse
 from mesh.auth.deps import get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace
 from mesh.db.models.user import User
-from mesh.errors import NotFoundError
+from mesh.errors import NotFoundError, ValidationError
 from mesh.runtime import approvals as approvals_mod
 from mesh.runtime import logs as logs_mod
 from mesh.runtime.attempts import cancel_execution, freeze_execution
@@ -81,15 +81,30 @@ async def list_runtimes(
     context: WorkspaceContext = Depends(require_workspace()),
     status: str | None = None,
     kind: str | None = None,
+    labels: str | None = None,
     search: str | None = None,
     cursor: str | None = None,
     limit: int = 50,
 ) -> dict:
+    # H3 (§3.1): labels filter "k1:v1,k2:v2" → JSONB containment match.
+    parsed_labels: dict[str, str] | None = None
+    if labels:
+        parsed_labels = {}
+        for pair in labels.split(","):
+            key, sep, value = pair.partition(":")
+            if not sep or not key:
+                raise ValidationError(
+                    "labels filter must be key:value pairs",
+                    code="invalid_request",
+                    details={"labels": labels},
+                )
+            parsed_labels[key.strip()] = value.strip()
     service = _service(request)
     result = await service.list_runtimes(
         workspace_id=context.workspace.id,
         status=status,
         kind=kind,
+        labels=parsed_labels,
         search=search,
         cursor=cursor,
         limit=limit,
@@ -373,7 +388,13 @@ async def stream_execution_logs(
             )
             for line in payload["lines"]:
                 cursor = max(cursor, line["offset"] + len(line["line"].encode("utf-8")) + 1)
-                yield f"data: {json.dumps({'type': 'log', 'stream': line['stream'], 'offset': line['offset'], 'line': line['line']})}\n\n"
+                frame = {
+                    "type": "log",
+                    "stream": line["stream"],
+                    "offset": line["offset"],
+                    "line": line["line"],
+                }
+                yield f"data: {json.dumps(frame)}\n\n"
             status = payload["execution_status"]
             terminal = status in ("completed", "failed", "timeout", "cancelled")
             if terminal and not payload["lines"]:
@@ -390,7 +411,7 @@ async def stream_execution_logs(
                 + json.dumps(
                     {
                         "type": "heartbeat",
-                        "server_time": datetime.now(timezone.utc).isoformat(),
+                        "server_time": datetime.now(UTC).isoformat(),
                     }
                 )
                 + "\n\n"
@@ -477,10 +498,9 @@ async def list_approvals(
         if status:
             stmt = stmt.where(Approval.status == status)
         if role == "mine":
-            stmt = stmt.where(
-                Approval.status == "pending",
-                Approval.requested_by_member_id != context.member.id,
-            )
+            # F9 (§6.10): "待我审批" unified inbox = pending approvals
+            # (decision permission is enforced on the decide endpoints).
+            stmt = stmt.where(Approval.status == "pending")
         stmt = stmt.order_by(Approval.requested_at.desc()).limit(100)
         rows = (await session.execute(stmt)).scalars().all()
         return {
@@ -516,7 +536,7 @@ async def get_approval(
         return {"data": approvals_mod._approval_response(approval, execution_status=None)}
 
 
-@router.post("/workspaces/{workspace_id}/approvals/{approval_id}:approve")
+@router.post("/workspaces/{workspace_id}/approvals/{approval_id}/approve")
 async def approve_approval(
     request: Request,
     response: Response,
@@ -538,7 +558,7 @@ async def approve_approval(
     return {"data": data}
 
 
-@router.post("/workspaces/{workspace_id}/approvals/{approval_id}:reject")
+@router.post("/workspaces/{workspace_id}/approvals/{approval_id}/reject")
 async def reject_approval(
     request: Request,
     response: Response,

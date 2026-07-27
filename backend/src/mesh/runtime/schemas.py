@@ -6,11 +6,20 @@ style, matches the agent module). Only REQUEST bodies live here.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 NAME_MAX = 120
+# L3: daemon-supplied JSONB payloads are size-capped (storage-bloat / DoS).
+MAX_JSON_FIELD_BYTES = 64 * 1024
+
+
+def _bounded_json(value: object, field: str) -> object:
+    if isinstance(value, dict) and len(json.dumps(value).encode("utf-8")) > MAX_JSON_FIELD_BYTES:
+        raise ValueError(f"{field} exceeds {MAX_JSON_FIELD_BYTES} bytes")
+    return value
 LABEL_KEY_MAX = 64
 LABEL_VALUE_MAX = 256
 LABELS_MAX = 32
@@ -32,7 +41,7 @@ class CreateRuntimeRequest(BaseModel):
     name: str = Field(min_length=1, max_length=NAME_MAX)
     kind: Literal["platform_managed", "self_hosted"] = "self_hosted"
     labels: dict[str, str] = Field(default_factory=dict)
-    max_concurrent: int = Field(default=1, ge=0, le=1024)
+    max_concurrent: int = Field(default=1, ge=1, le=1024)
 
 
 class PatchRuntimeRequest(BaseModel):
@@ -40,7 +49,7 @@ class PatchRuntimeRequest(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=NAME_MAX)
     labels: dict[str, str] | None = None
-    max_concurrent: int | None = Field(default=None, ge=0, le=1024)
+    max_concurrent: int | None = Field(default=None, ge=1, le=1024)
 
 
 class ActivateRuntimeRequest(BaseModel):
@@ -53,6 +62,11 @@ class ActivateRuntimeRequest(BaseModel):
     activation_code: str = Field(min_length=8, max_length=64)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("metadata")
+    @classmethod
+    def _bound_metadata(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_json(v, "metadata")  # type: ignore[return-value]
+
 
 class HeartbeatRequest(BaseModel):
     """POST /daemon/runtimes/{id}:heartbeat (§3.2)."""
@@ -61,6 +75,11 @@ class HeartbeatRequest(BaseModel):
     health: Literal["healthy", "degraded"] = "healthy"
     metrics: dict[str, Any] = Field(default_factory=dict)
     inflight: list[str] = Field(default_factory=list)
+
+    @field_validator("metrics")
+    @classmethod
+    def _bound_metrics(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_json(v, "metrics")  # type: ignore[return-value]
 
 
 class ClaimRequest(BaseModel):
@@ -123,6 +142,11 @@ class ApprovalCreateRequest(BaseModel):
     attempt_id: str
     action_summary: dict[str, Any]
     resume_context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("action_summary", "resume_context")
+    @classmethod
+    def _bound_approval_json(cls, v: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_json(v, "approval json")  # type: ignore[return-value]
 
 
 class ApprovalDecideRequest(BaseModel):

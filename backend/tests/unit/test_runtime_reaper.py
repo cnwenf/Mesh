@@ -8,19 +8,17 @@ runtimes flip unavailable; pending approvals expire their executions.
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 import pytest
 from sqlalchemy import select, text
 
 from mesh.db.models.runtime import Approval, ExecutionAttempt, Runtime, TaskExecution
 from mesh.runtime.reaper import run_reaper_pass
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
     make_runtime,
-    make_settings,
     seed_world,
 )
 
@@ -165,13 +163,13 @@ async def test_reaper_completes_cancelling_execution_as_cancelled(session_factor
 
 async def test_reaper_marks_stale_heartbeats_offline(session_factory):
     world = await seed_world(session_factory)
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     stale = await make_runtime(
         session_factory,
         world["ws_id"],
         name="stale",
-        last_heartbeat_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        last_heartbeat_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
     fresh = await make_runtime(session_factory, world["ws_id"], name="fresh")
 

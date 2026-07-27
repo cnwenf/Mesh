@@ -12,16 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import os
 import subprocess
 import sys
 import uuid
 
-import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text
 
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
@@ -99,10 +97,12 @@ async def _create_workspace(client, token: str, slug: str) -> dict:
     return resp.json()["data"]
 
 
-async def _setup_world(api_client, suffix: str) -> tuple[str, str]:
+async def _setup_world(api_client, suffix: str) -> tuple[str, str, str]:
     token = await _register_and_login(api_client, f"rt-{suffix}@e2e.mesh")
     ws = await _create_workspace(api_client, token, f"rt-{suffix}")
-    return token, ws["id"]
+    # F7: claimable executions require an executor (INNER JOIN agents).
+    agent = await _create_agent(api_client, token, ws["id"], name=f"agent-{suffix}")
+    return token, ws["id"], agent
 
 
 async def _create_runtime(
@@ -222,7 +222,7 @@ async def _claim(api_client, runtime_id, daemon_token):
 
 
 async def test_activation_flow_and_replay_410(api_client, runtime_worker):
-    token, ws_id = await _setup_world(api_client, "act")
+    token, ws_id, agent_id = await _setup_world(api_client, "act")
     created = await _create_runtime(api_client, token, ws_id)
     assert created["status"] == "pending"
     code = created["activation"]["code"]
@@ -254,7 +254,7 @@ async def test_activation_flow_and_replay_410(api_client, runtime_worker):
 
 
 async def test_daemon_auth_rejects_foreign_and_invalid_tokens(api_client, runtime_worker):
-    token, ws_id = await _setup_world(api_client, "dauth")
+    token, ws_id, agent_id = await _setup_world(api_client, "dauth")
     created_a, token_a = await _activated_runtime(api_client, token, ws_id, name="a")
     created_b, token_b = await _activated_runtime(api_client, token, ws_id, name="b")
 
@@ -290,7 +290,7 @@ async def test_daemon_auth_rejects_foreign_and_invalid_tokens(api_client, runtim
 async def test_t20_no_match_claim_204_capacity_unchanged(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "t20")
+    token, ws_id, agent_id = await _setup_world(api_client, "t20")
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
 
     # Empty queue.
@@ -298,7 +298,7 @@ async def test_t20_no_match_claim_204_capacity_unchanged(
     assert empty.status_code == 204
 
     # Capability the runtime lacks → still 204, load provably unchanged.
-    idem = await _enqueue(session_factory, ws_id, capabilities=["quantum"])
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id, capabilities=["quantum"])
     await _wait_queued(session_factory, ws_id, idem)
     nomatch = await _claim(api_client, created["id"], daemon_token)
     assert nomatch.status_code == 204
@@ -315,11 +315,11 @@ async def test_t20_no_match_claim_204_capacity_unchanged(
 async def test_t2_three_runtimes_race_one_task_exactly_one_winner(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "t2")
+    token, ws_id, agent_id = await _setup_world(api_client, "t2")
     runtimes = [
         await _activated_runtime(api_client, token, ws_id, name=f"r{i}") for i in range(3)
     ]
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     await _wait_queued(session_factory, ws_id, idem)
 
     responses = await asyncio.gather(
@@ -358,12 +358,12 @@ async def test_t2_three_runtimes_race_one_task_exactly_one_winner(
 async def test_t3_five_parallel_claims_vs_capacity_two(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "t3")
+    token, ws_id, agent_id = await _setup_world(api_client, "t3")
     created, daemon_token = await _activated_runtime(
         api_client, token, ws_id, max_concurrent=2
     )
     for _ in range(5):
-        await _enqueue(session_factory, ws_id)
+        await _enqueue(session_factory, ws_id, agent_id=agent_id)
     await asyncio.sleep(2.5)  # relay drains the five enqueues
 
     responses = await asyncio.gather(
@@ -402,9 +402,9 @@ async def test_t3_five_parallel_claims_vs_capacity_two(
 
 
 async def test_t10_zombie_reports_rejected_409(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "t10")
+    token, ws_id, agent_id = await _setup_world(api_client, "t10")
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created["id"], daemon_token)
     assert claimed.status_code == 200
@@ -456,10 +456,10 @@ async def test_t10_zombie_reports_rejected_409(api_client, runtime_worker, sessi
 async def test_t4_lost_runtime_requeue_preserves_audit(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "t4")
+    token, ws_id, agent_id = await _setup_world(api_client, "t4")
     created_a, daemon_a = await _activated_runtime(api_client, token, ws_id, name="dies")
     created_b, daemon_b = await _activated_runtime(api_client, token, ws_id, name="takes-over")
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     execution = await _wait_queued(session_factory, ws_id, idem)
 
     first = await _claim(api_client, created_a["id"], daemon_a)
@@ -509,13 +509,14 @@ async def test_t4_lost_runtime_requeue_preserves_audit(
 async def test_t16_checkout_allowlist_and_ssrf_guards(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "t16")
+    token, ws_id, agent_id = await _setup_world(api_client, "t16")
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
 
     # 1) Repo not in the workspace allowlist → 403 repo_not_allowed.
     idem = await _enqueue(
         session_factory,
         ws_id,
+        agent_id=agent_id,
         config_snapshot={"repo": {"url": "https://code.example/team/app.git", "base_ref": "main"}},
     )
     await _wait_queued(session_factory, ws_id, idem)
@@ -545,6 +546,7 @@ async def test_t16_checkout_allowlist_and_ssrf_guards(
     idem2 = await _enqueue(
         session_factory,
         ws_id,
+        agent_id=agent_id,
         config_snapshot={"repo": {"url": meta_url, "base_ref": "main"}},
     )
     await _wait_queued(session_factory, ws_id, idem2)
@@ -566,7 +568,7 @@ async def test_t16_checkout_allowlist_and_ssrf_guards(
 
 
 async def test_t21_approval_suspend_approve_resume(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "t21")
+    token, ws_id, _seed_agent = await _setup_world(api_client, "t21")
     agent_id = await _create_agent(api_client, token, ws_id)  # approvals need the roster row
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
     idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
@@ -607,7 +609,7 @@ async def test_t21_approval_suspend_approve_resume(api_client, runtime_worker, s
 
     # Human approves via the console (workspace owner JWT).
     approve = await api_client.post(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval['id']}:approve",
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval['id']}/approve",
         json={"comment": "go ahead"},
         headers=_auth(token),
     )
@@ -621,7 +623,7 @@ async def test_t21_approval_suspend_approve_resume(api_client, runtime_worker, s
 
 
 async def test_t21_approval_reject_cancels(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "t21r")
+    token, ws_id, _seed_agent = await _setup_world(api_client, "t21r")
     agent_id = await _create_agent(api_client, token, ws_id)
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
     idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
@@ -642,7 +644,7 @@ async def test_t21_approval_reject_cancels(api_client, runtime_worker, session_f
     approval = approval_resp.json()["data"]
 
     reject = await api_client.post(
-        f"/api/v1/workspaces/{ws_id}/approvals/{approval['id']}:reject",
+        f"/api/v1/workspaces/{ws_id}/approvals/{approval['id']}/reject",
         json={},
         headers=_auth(token),
     )
@@ -661,7 +663,7 @@ async def test_t21_approval_reject_cancels(api_client, runtime_worker, session_f
 async def test_env_name_gate_and_credential_redaction(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "env")
+    token, ws_id, agent_id = await _setup_world(api_client, "env")
 
     # Credential creation with a loader-reserved env name → 422.
     bad = await api_client.post(
@@ -697,7 +699,7 @@ async def test_env_name_gate_and_credential_redaction(
 
     # An execution with a reserved env declaration fails claim assembly (422).
     idem_bad = await _enqueue(
-        session_factory, ws_id, task_spec={"env_declarations": ["LD_PRELOAD"]}
+        session_factory, ws_id, agent_id=agent_id, task_spec={"env_declarations": ["LD_PRELOAD"]}
     )
     await _wait_queued(session_factory, ws_id, idem_bad)
     # First claim takes the good execution (FIFO); finish it so the bad one
@@ -722,7 +724,7 @@ async def test_env_name_gate_and_credential_redaction(
 
 
 async def test_logs_redaction_and_rest_resume(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "logs")
+    token, ws_id, agent_id = await _setup_world(api_client, "logs")
     cred = await api_client.post(
         f"/api/v1/workspaces/{ws_id}/credentials",
         json={"name": "LEAKY", "kind": "env", "value": "ultra-secret-999", "env_name": "LEAKY"},
@@ -730,7 +732,7 @@ async def test_logs_redaction_and_rest_resume(api_client, runtime_worker, sessio
     )
     assert cred.status_code == 201
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     execution = await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created["id"], daemon_token)
     attempt = claimed.json()["data"]["attempt"]
@@ -784,7 +786,7 @@ async def test_logs_redaction_and_rest_resume(api_client, runtime_worker, sessio
 async def test_console_runtime_patch_and_executions_surface(
     api_client, runtime_worker, session_factory
 ):
-    token, ws_id = await _setup_world(api_client, "console")
+    token, ws_id, agent_id = await _setup_world(api_client, "console")
     created, daemon_token = await _activated_runtime(api_client, token, ws_id, name="patchme")
 
     # PATCH name / labels / max_concurrent.
@@ -806,7 +808,7 @@ async def test_console_runtime_patch_and_executions_surface(
     assert "queue_depth" in listing.json()
 
     # Claim one execution through the daemon, then read it via the console.
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     execution = await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created["id"], daemon_token)
     attempt = claimed.json()["data"]["attempt"]
@@ -849,7 +851,7 @@ async def test_console_runtime_patch_and_executions_surface(
 
 
 async def test_console_credentials_crud_and_freeze(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "creds")
+    token, ws_id, agent_id = await _setup_world(api_client, "creds")
     created = await api_client.post(
         f"/api/v1/workspaces/{ws_id}/credentials",
         json={"name": "API_KEY", "kind": "env", "value": "plain-value-1", "env_name": "API_KEY"},
@@ -867,7 +869,7 @@ async def test_console_credentials_crud_and_freeze(api_client, runtime_worker, s
     # Freeze an execution with that credential injected → envelope revoked.
     created_rt, daemon_token = await _activated_runtime(api_client, token, ws_id)
     idem = await _enqueue(
-        session_factory, ws_id, task_spec={"credential_ids": [cred_id]}
+        session_factory, ws_id, agent_id=agent_id, task_spec={"credential_ids": [cred_id]}
     )
     execution = await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created_rt["id"], daemon_token)
@@ -901,7 +903,7 @@ async def test_console_credentials_crud_and_freeze(api_client, runtime_worker, s
 
 
 async def test_daemon_refetch_rotates_envelope(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "refetch")
+    token, ws_id, agent_id = await _setup_world(api_client, "refetch")
     cred = await api_client.post(
         f"/api/v1/workspaces/{ws_id}/credentials",
         json={"name": "ROT_KEY", "kind": "env", "value": "rot-me-777", "env_name": "ROT_KEY"},
@@ -909,7 +911,7 @@ async def test_daemon_refetch_rotates_envelope(api_client, runtime_worker, sessi
     )
     cred_id = cred.json()["data"]["id"]
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
-    idem = await _enqueue(session_factory, ws_id, task_spec={"credential_ids": [cred_id]})
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id, task_spec={"credential_ids": [cred_id]})
     await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created["id"], daemon_token)
     attempt_id = claimed.json()["data"]["attempt"]["id"]
@@ -927,9 +929,9 @@ async def test_daemon_refetch_rotates_envelope(api_client, runtime_worker, sessi
 
 
 async def test_logs_sse_fallback_smoke(api_client, runtime_worker, session_factory):
-    token, ws_id = await _setup_world(api_client, "sse")
+    token, ws_id, agent_id = await _setup_world(api_client, "sse")
     created, daemon_token = await _activated_runtime(api_client, token, ws_id)
-    idem = await _enqueue(session_factory, ws_id)
+    idem = await _enqueue(session_factory, ws_id, agent_id=agent_id)
     execution = await _wait_queued(session_factory, ws_id, idem)
     claimed = await _claim(api_client, created["id"], daemon_token)
     attempt = claimed.json()["data"]["attempt"]

@@ -18,16 +18,16 @@ means no zombie path and nothing for the reaper to special-case.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.agent import Agent
+from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
     Approval,
-    ExecutionAttempt,
     Runtime,
     TaskExecution,
 )
@@ -43,7 +43,7 @@ from mesh.runtime.credentials import revoke_attempt_envelopes
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def request_tool_approval(
@@ -300,26 +300,43 @@ async def decide_approval(
 
 
 async def _assert_may_decide(session: AsyncSession, *, approval: Approval, member: Member) -> None:
+    """§6.10 permission: human member AND (workspace admin/owner, the subject
+    execution's trigger/dispatcher, or the agent's owner). H4: the dispatcher
+    of an issue-triggered execution is the issue creator (the member who
+    authored the work item assigned to the agent)."""
     if member.role in ("admin", "owner"):
         return
-    # Agent owner: the human owning the agent behind the subject execution.
     if approval.subject_execution_id is not None:
         execution = (
             await session.execute(
                 select(TaskExecution).where(TaskExecution.id == approval.subject_execution_id)
             )
         ).scalar_one_or_none()
-        if execution is not None and execution.agent_id is not None:
-            agent = (
-                await session.execute(
-                    select(Agent).where(
-                        Agent.id == execution.agent_id,
-                        Agent.workspace_id == approval.workspace_id,
+        if execution is not None:
+            # Trigger/dispatcher path: creator of the triggering issue.
+            if execution.issue_id is not None:
+                issue_created_by = (
+                    await session.execute(
+                        select(Issue.created_by).where(
+                            Issue.id == execution.issue_id,
+                            Issue.workspace_id == approval.workspace_id,
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-            if agent is not None and agent.owner_user_id == member.user_id:
-                return
+                ).scalar_one_or_none()
+                if issue_created_by is not None and issue_created_by == member.id:
+                    return
+            # Agent owner path.
+            if execution.agent_id is not None:
+                agent = (
+                    await session.execute(
+                        select(Agent).where(
+                            Agent.id == execution.agent_id,
+                            Agent.workspace_id == approval.workspace_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if agent is not None and agent.owner_user_id == member.user_id:
+                    return
     raise ForbiddenError("not permitted to decide this approval")
 
 

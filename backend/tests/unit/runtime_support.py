@@ -6,7 +6,7 @@ import hashlib
 import os
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from mesh.config import load_settings
 from mesh.db.models.agent import Agent
@@ -114,7 +114,7 @@ async def make_runtime(
         capabilities=capabilities or [],
         max_concurrent=max_concurrent,
         current_load=current_load,
-        last_heartbeat_at=last_heartbeat_at or datetime.now(timezone.utc),
+        last_heartbeat_at=last_heartbeat_at or datetime.now(UTC),
         created_by=created_by,
     )
     async with session_factory() as session, session.begin():

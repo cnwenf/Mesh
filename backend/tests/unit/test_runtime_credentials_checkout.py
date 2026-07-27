@@ -9,8 +9,8 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from mesh.db.models.runtime import ExecutionCredential, RuntimeCredential, TaskExecution
-from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError
+from mesh.db.models.runtime import ExecutionCredential, RuntimeCredential
+from mesh.errors import ConflictError, ForbiddenError, ValidationError
 from mesh.runtime.checkout import (
     assert_public_url,
     is_forbidden_host,
@@ -25,7 +25,6 @@ from mesh.runtime.credentials import (
     refetch_envelopes,
     revoke_attempt_envelopes,
 )
-
 from tests.unit.runtime_support import TEST_JWT_SECRET, seed_world
 
 pytestmark = pytest.mark.unit
@@ -40,7 +39,7 @@ async def test_encrypt_decrypt_roundtrip_and_tamper():
     ciphertext = encrypt_credential_value("s3cret-value", TEST_JWT_SECRET)
     assert "s3cret-value" not in ciphertext
     assert decrypt_credential_value(ciphertext, TEST_JWT_SECRET) == "s3cret-value"
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         decrypt_credential_value(ciphertext, "another-secret-key-0000000000000000")
 
 
@@ -64,8 +63,8 @@ def test_redact_text_ignores_empty_secrets():
 
 
 async def _seed_attempt(session_factory, world):
-    from tests.unit.runtime_support import make_execution, make_runtime
     from mesh.runtime.claim import claim_execution
+    from tests.unit.runtime_support import make_execution, make_runtime
 
     runtime = await make_runtime(session_factory, world["ws_id"])
     cred = RuntimeCredential(
@@ -129,7 +128,7 @@ async def test_refetch_rotates_and_counts_then_blocks(session_factory):
     world = await seed_world(session_factory)
     runtime, attempt_id, _ = await _seed_attempt(session_factory, world)
     seen_envelopes = set()
-    for i in range(3):
+    for _ in range(3):
         async with session_factory() as session, session.begin():
             delivered = await refetch_envelopes(
                 session,
@@ -222,8 +221,8 @@ def test_assert_public_url_scheme_and_host():
 
 async def test_t16_checkout_outside_allowlist_403(session_factory):
     world = await seed_world(session_factory)
-    from tests.unit.runtime_support import make_execution, make_runtime
     from mesh.runtime.claim import claim_execution
+    from tests.unit.runtime_support import make_execution, make_runtime
 
     runtime = await make_runtime(session_factory, world["ws_id"])
     await make_execution(
@@ -253,13 +252,14 @@ async def test_t16_checkout_outside_allowlist_403(session_factory):
 
 async def test_t16_platform_managed_private_address_rejected(session_factory):
     world = await seed_world(session_factory)
-    from tests.unit.runtime_support import make_execution, make_runtime
     from mesh.runtime.claim import claim_execution
+    from tests.unit.runtime_support import make_execution, make_runtime
 
     runtime = await make_runtime(session_factory, world["ws_id"], kind="platform_managed")
     private_repo = "http://192.168.10.5/internal/app.git"
     # Whitelisted (so the allowlist gate passes) but private → SSRF gate 403.
     from sqlalchemy import update
+
     from mesh.db.models.workspace import Workspace
 
     async with session_factory() as session, session.begin():
@@ -295,10 +295,11 @@ async def test_t16_platform_managed_private_address_rejected(session_factory):
 
 async def test_checkout_happy_path_and_url_mismatch(session_factory):
     world = await seed_world(session_factory)
-    from tests.unit.runtime_support import make_execution, make_runtime
-    from mesh.runtime.claim import claim_execution
     from sqlalchemy import update
+
     from mesh.db.models.workspace import Workspace
+    from mesh.runtime.claim import claim_execution
+    from tests.unit.runtime_support import make_execution, make_runtime
 
     repo = "https://code.example/team/app.git"
     async with session_factory() as session, session.begin():

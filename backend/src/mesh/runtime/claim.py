@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.agent import Agent
 from mesh.db.models.runtime import (
+    Approval,
     Runtime,
     TaskExecution,
 )
@@ -51,7 +52,14 @@ class ClaimResult:
     credentials: list[dict]
 
 
-def _execution_payload(row: TaskExecution) -> dict:
+def _execution_payload(row: TaskExecution, resume_context: dict | None = None) -> dict:
+    """Claim-time execution snapshot for the daemon.
+
+    ``resume_context`` (H1, §6.10): when this claim follows an APPROVED
+    high-risk-tool approval, the frozen resume context (checkpoint ref +
+    completed-steps watermark + pending tool call) is delivered so the new
+    attempt continues from the approval point instead of starting over.
+    """
     return {
         "id": str(row.id),
         "status": "claimed",
@@ -64,6 +72,7 @@ def _execution_payload(row: TaskExecution) -> dict:
         "label_requirements": row.label_requirements,
         "timeout_seconds": row.timeout_seconds,
         "max_attempts": row.max_attempts,
+        "resume_context": resume_context,
     }
 
 
@@ -111,11 +120,14 @@ async def claim_execution(
             server_labels, server_capabilities = locked
 
             # 2) Pick the highest-priority, oldest matching queued task.
+            # INNER JOIN agents per §2.5 — a claimable execution always has an
+            # executor (the enqueue path sets agent_id); agent-less rows are
+            # not dispatchable.
             picked_id = (
                 await session.execute(
                     select(TaskExecution.id)
                     .select_from(TaskExecution)
-                    .outerjoin(
+                    .join(
                         Agent,
                         and_(
                             Agent.id == TaskExecution.agent_id,
@@ -132,7 +144,6 @@ async def claim_execution(
                             bindparam("p_caps", type_=JSONB)
                         ),
                         or_(
-                            Agent.id.is_(None),
                             Agent.default_runtime_id.is_(None),
                             Agent.default_runtime_id == runtime_id,
                         ),
@@ -200,6 +211,28 @@ async def claim_execution(
                 )
             ).scalar_one()
 
+            # H1 (§6.10): if this claim resumes an APPROVED high-risk-tool
+            # approval, deliver the frozen resume_context so the new attempt
+            # continues from the approval point.
+            approved_summary = (
+                await session.execute(
+                    select(Approval.action_summary)
+                    .where(
+                        Approval.workspace_id == workspace_id,
+                        Approval.subject_type == "tool_call",
+                        Approval.subject_execution_id == execution.id,
+                        Approval.status == "approved",
+                    )
+                    .order_by(Approval.decided_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            resume_context = (
+                (approved_summary or {}).get("resume_context")
+                if isinstance(approved_summary, dict)
+                else None
+            )
+
             # Credential one-shot envelopes (NEW-M1: env names validated at
             # assembly; an illegal name fails the whole claim with 422).
             task_spec = execution.task_spec or {}
@@ -245,7 +278,7 @@ async def claim_execution(
 
         # Transaction committed — build the daemon response.
         return ClaimResult(
-            execution=_execution_payload(execution),
+            execution=_execution_payload(execution, resume_context=resume_context),
             attempt={
                 "id": str(attempt_row["id"]),
                 "attempt_number": attempt_row["attempt_number"],

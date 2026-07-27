@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 from mesh.runtime.attempts import (
@@ -21,7 +22,6 @@ from mesh.runtime.attempts import (
     transition_attempt,
 )
 from mesh.runtime.claim import claim_execution
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
@@ -33,7 +33,15 @@ pytestmark = pytest.mark.unit
 
 
 async def _claim_one(session_factory, runtime) -> dict:
-    await make_execution(session_factory, runtime.workspace_id, None)
+    # F7: claim requires an executor (INNER JOIN agents) — resolve the
+    # workspace's agent seeded by seed_world.
+    async with session_factory() as session:
+        agent_id = (
+            await session.execute(
+                select(Agent.id).where(Agent.workspace_id == runtime.workspace_id).limit(1)
+            )
+        ).scalar_one()
+    await make_execution(session_factory, runtime.workspace_id, agent_id)
     result = await claim_execution(
         session_factory,
         runtime=runtime,

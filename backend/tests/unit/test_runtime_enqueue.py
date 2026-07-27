@@ -15,7 +15,6 @@ from sqlalchemy import select
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler, queue_depth
-
 from tests.unit.runtime_support import make_execution, seed_world
 
 pytestmark = pytest.mark.unit
@@ -152,10 +151,10 @@ async def test_idempotency_conflict_detector_matches_only_idem_index():
 async def test_cancel_in_flight_supersedes_queued_and_running(session_factory):
     """README §6.9: reassigning cancels the previous agent's in-flight runs."""
     world = await seed_world(session_factory)
-    from mesh.runtime.claim import claim_execution
-
-    from tests.unit.runtime_support import TEST_JWT_SECRET, make_runtime
     from datetime import timedelta
+
+    from mesh.runtime.claim import claim_execution
+    from tests.unit.runtime_support import TEST_JWT_SECRET, make_runtime
 
     runtime = await make_runtime(session_factory, world["ws_id"])
     await make_execution(session_factory, world["ws_id"], world["agent_id"])  # stays queued

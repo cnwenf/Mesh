@@ -8,7 +8,6 @@ NEW-M1 env-name rejection).
 
 from __future__ import annotations
 
-import uuid
 from datetime import timedelta
 
 import pytest
@@ -18,12 +17,10 @@ from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.errors import BusinessRuleError
 from mesh.runtime.claim import claim_execution
 from mesh.runtime.credentials import encrypt_credential_value
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,
     make_runtime,
-    make_settings,
     seed_world,
 )
 

@@ -16,10 +16,6 @@ from mesh import __version__
 from mesh.agent.channels import register_agent_checkers
 from mesh.agent.routes import router as agent_router
 from mesh.agent.service import AgentService
-from mesh.runtime.channels import register_execution_checkers
-from mesh.runtime.daemon_routes import router as runtime_daemon_router
-from mesh.runtime.routes import router as runtime_router
-from mesh.runtime.service import RuntimeService
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -74,6 +70,10 @@ from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
 )
+from mesh.runtime.channels import register_execution_checkers
+from mesh.runtime.daemon_routes import router as runtime_daemon_router
+from mesh.runtime.routes import router as runtime_router
+from mesh.runtime.service import RuntimeService
 from mesh.views.moves import BoardMoveService
 from mesh.views.projection import ProjectionService
 from mesh.views.routes import router as view_router

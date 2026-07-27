@@ -22,7 +22,6 @@ from mesh.runtime.attempts import cancel_execution, freeze_execution, transition
 from mesh.runtime.claim import claim_execution
 from mesh.runtime.credentials import encrypt_credential_value
 from mesh.runtime.service import RuntimeService
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     issue_runtime_token,
@@ -89,7 +88,7 @@ async def test_decommission_revokes_token_and_hides_runtime(session_factory):
 async def test_list_executions_filters_and_cursor(session_factory):
     world = await seed_world(session_factory)
     service = _service(session_factory)
-    for i in range(3):
+    for _ in range(3):
         await make_execution(session_factory, world["ws_id"], world["agent_id"])
     other_agent_exec = await make_execution(session_factory, world["ws_id"], None)
 
@@ -354,7 +353,7 @@ async def test_cancel_awaiting_approval_execution_closes_approval(session_factor
     """User-cancel on an awaiting_approval execution → cancelled + the pending
     approval closed (attempts.py approval branch)."""
     from mesh.db.models.runtime import Approval
-    from mesh.runtime.approvals import decide_approval, request_tool_approval
+    from mesh.runtime.approvals import request_tool_approval
     from mesh.runtime.attempts import cancel_execution, transition_attempt
     from mesh.runtime.claim import claim_execution
 
@@ -476,10 +475,11 @@ async def test_log_read_mid_offset_and_stream_filter(session_factory, object_sto
 
 async def test_checkout_diff_upload_to_storage(session_factory, object_storage):
     """report_checkout with a diff stores it to object storage (diff_ref)."""
+    from sqlalchemy import update
+
+    from mesh.db.models.workspace import Workspace
     from mesh.runtime.checkout import report_checkout
     from mesh.runtime.claim import claim_execution
-    from sqlalchemy import update
-    from mesh.db.models.workspace import Workspace
 
     world = await seed_world(session_factory)
     repo = "https://code.example/team/diff.git"

@@ -16,7 +16,6 @@ from sqlalchemy import func, select
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
 from mesh.runtime.attempts import transition_attempt
 from mesh.runtime.claim import claim_execution
-
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
     make_execution,

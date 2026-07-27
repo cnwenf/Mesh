@@ -18,13 +18,13 @@ from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.issue.channels import register_issue_checkers
 from mesh.project.channels import register_resource_checkers
-from mesh.runtime.channels import register_execution_checkers
 from mesh.realtime.auth import (
     ChannelAuthorizer,
     DefaultChannelAuthorizer,
     build_authenticator,
 )
 from mesh.realtime.gateway import realtime_ws_endpoint
+from mesh.runtime.channels import register_execution_checkers
 
 
 def build_authorizer(session_factory) -> ChannelAuthorizer:
