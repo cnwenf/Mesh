@@ -58,6 +58,21 @@ async function bootstrapWorld(): Promise<void> {
 }
 
 function psql(sql: string): string {
+  // CI (GH service container): direct psql via env. Local compose: docker exec.
+  const host = process.env.RUNTIMES_PG_HOST;
+  if (host) {
+    return execFileSync(
+      'psql',
+      [
+        '-h', host,
+        '-p', process.env.RUNTIMES_PG_PORT ?? '5432',
+        '-U', process.env.RUNTIMES_PG_USER ?? 'mesh',
+        '-d', process.env.RUNTIMES_PG_DATABASE ?? 'mesh',
+        '-tAc', sql,
+      ],
+      { encoding: 'utf8', timeout: 30_000, env: { ...process.env, PGPASSWORD: process.env.RUNTIMES_PG_PASSWORD ?? 'mesh' } },
+    );
+  }
   return execFileSync(
     'docker',
     ['exec', '-i', PG_CONTAINER, 'psql', '-U', 'mesh', '-d', 'mesh', '-tAc', sql],

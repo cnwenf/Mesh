@@ -28,6 +28,7 @@ const PER_FILE_DIRS = [
   'src/features/members/',
   'src/features/comments/',
   'src/features/inbox/',
+  'src/features/runtimes/',
 ];
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
