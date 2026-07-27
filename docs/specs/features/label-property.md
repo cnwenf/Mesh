@@ -455,6 +455,7 @@ GET /api/v1/workspaces/{ws}/issues?label=lbl_1&cf_severity=opt_major
 
 - **分页**:标签/字段定义/选项均游标分页,游标编码 `(created_at, id)`;数量通常较小,亦支持 `?limit=200` 一次性返回 + 客户端缓存。issue 的字段值/标签随 issue 返回,不单独分页。
 - **鉴权**:读取需工作区成员;创建/编辑/删除标签与字段定义需工作区 admin(项目级标签/字段亦允许该项目 lead);给 issue 打标签/填值需对该 issue 有写权限(见 issue.md)。
+- **无前缀端点 404 口径(workspace.md §5.3)**:`/labels/{id}`、`/custom-fields/{id}` 及其选项路径先经窄 SECURITY DEFINER 查找解析租户,再过成员门;门的 404 在路由层转写为资源消息(`label not found` / `custom field not found`),「id 不存在」与「存在但跨租户」两态消息不可区分,无存在性 oracle。选项路径经父字段定义解析,口径统一为字段消息。
 - **输入校验**:颜色正则、name/field_key 长度与字符集、URL 合法性、数值精度范围在服务层强制;枚举/成员值校验归属关系。所有写入参数化绑定。
 - **统一错误信封**:
 ```jsonc

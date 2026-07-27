@@ -48,6 +48,7 @@ from mesh.member.display import resolve_display_name
 from mesh.member.owner_guard import LAST_OWNER_CODE, lock_active_owner_set
 from mesh.member.reassign import DEFAULT_REASSIGN_STATUSES, IssueReassigner, NullReassigner
 from mesh.outbox.service import emit_realtime
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.workspace.service import WORKSPACE_CHANNEL
 
 _NOT_FOUND = "member not found"
@@ -206,14 +207,16 @@ class MemberService:
         if role is not None:
             stmt = stmt.where(Member.role == role)
         if q:
-            pattern = f"%{q}%"
+            # Escaped so user-supplied wildcards match literally (member.md
+            # §5.1): a raw ``q=%`` would otherwise hit the whole roster.
+            pattern = f"%{escape_like(q)}%"
             stmt = stmt.where(
                 or_(
-                    Member.display_override.ilike(pattern),
-                    User.display_name.ilike(pattern),
-                    User.email.ilike(pattern),
-                    Agent.name.ilike(pattern),
-                    Agent.role_tag.ilike(pattern),
+                    Member.display_override.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    User.display_name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    User.email.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    Agent.name.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                    Agent.role_tag.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
                 )
             )
         if cursor is not None:
