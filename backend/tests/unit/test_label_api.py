@@ -258,12 +258,19 @@ async def test_label_cross_workspace_404(client):
         headers=_auth(owner_a),
     )
     label_id = created.json()["data"]["id"]
-    # Owner B resolves the tenant (SECURITY DEFINER), then fails the membership
-    # gate with the generic workspace 404 — label existence never leaks.
+    # Owner B resolves the tenant (SECURITY DEFINER), then fails the
+    # membership gate — rewritten to the resource 404, byte-identical to
+    # an unknown id, so label existence never leaks (§5.3).
     foreign = await client.patch(
         f"/api/v1/labels/{label_id}", json={"name": "hax"}, headers=_auth(owner_b)
     )
     assert foreign.status_code == 404
+    assert foreign.json()["error"]["message"] == "label not found"
+    unknown = await client.patch(
+        f"/api/v1/labels/{uuid.uuid4()}", json={"name": "hax"}, headers=_auth(owner_b)
+    )
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["message"] == "label not found"
 
 
 # ---------------------------------------------------------------------------
@@ -530,3 +537,91 @@ async def test_label_rate_limit_headers_present(client):
     assert resp.status_code == 201
     assert "x-ratelimit-remaining" in resp.headers
     assert "x-ratelimit-reset" in resp.headers
+
+
+async def test_prefixless_endpoints_uniform_404_message(client):
+    """L3 product-wide parity (workspace.md §5.3): label / custom-field /
+    custom-field-option workspace-less paths return the SAME 404 message for
+    "unknown id" and "exists in another tenant" — no existence oracle,
+    matching the issue module. Option paths resolve through the parent
+    field definition, so their resource message is the field's."""
+    owner_a = await _register_and_login(client, "l3l-a@corp.com")
+    owner_b = await _register_and_login(client, "l3l-b@corp.com")
+    await _create_workspace(client, owner_a, "l3l-a")
+    ws_b = await _create_workspace(client, owner_b, "l3l-b")
+
+    label_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/labels",
+            json={"name": "secret", "color": "#123456"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    field_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/custom-fields",
+            json={
+                "name": "Severity",
+                "field_key": "severity",
+                "type": "single_select",
+                "options": [{"name": "Minor", "color": "#888888"}],
+            },
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    option_b = field_b["options"][0]
+    random_id = str(uuid.uuid4())
+
+    probes = (
+        # (existing-id probe, existing id, resource message)
+        (
+            lambda target: client.patch(
+                f"/api/v1/labels/{target}", json={"name": "x"}, headers=_auth(owner_a)
+            ),
+            label_b["id"],
+            "label not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/custom-fields/{target}",
+                json={"name": "x"},
+                headers=_auth(owner_a),
+            ),
+            field_b["id"],
+            "custom field not found",
+        ),
+        (
+            lambda target: client.get(
+                f"/api/v1/custom-fields/{target}/options", headers=_auth(owner_a)
+            ),
+            field_b["id"],
+            "custom field not found",
+        ),
+        (
+            # option paths resolve through the parent field definition, so
+            # the gate rewrite carries the field's message either way
+            lambda target: client.patch(
+                f"/api/v1/custom-fields/{target}/options/{option_b['id']}",
+                json={"name": "x"},
+                headers=_auth(owner_a),
+            ),
+            field_b["id"],
+            "custom field not found",
+        ),
+    )
+    for call, existing_id, message in probes:
+        existing = await call(existing_id)  # exists, owner_a is NOT a member
+        missing = await call(random_id)  # does not exist anywhere
+        assert existing.status_code == 404, existing.text
+        assert missing.status_code == 404, missing.text
+        # Both states are indistinguishable and carry the resource message.
+        assert existing.json()["error"]["message"] == message
+        assert missing.json()["error"]["message"] == message
+
+    # Soft-deleted label + non-member → same message.
+    await client.delete(f"/api/v1/labels/{label_b['id']}", headers=_auth(owner_b))
+    deleted_probe = await client.patch(
+        f"/api/v1/labels/{label_b['id']}", json={"name": "x"}, headers=_auth(owner_a)
+    )
+    assert deleted_probe.status_code == 404
+    assert deleted_probe.json()["error"]["message"] == "label not found"

@@ -76,11 +76,27 @@ def _body_uuid(raw: str, *, field: str, index: int | None = None) -> uuid.UUID:
 
 
 async def _context_for(
-    session: AsyncSession, user: User, workspace_id: uuid.UUID
+    session: AsyncSession,
+    user: User,
+    workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
 ) -> WorkspaceContext:
-    return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=None
-    )
+    """Run the membership gate for a workspace-less path (workspace.md §5.3).
+
+    The resolver already proved the resource exists SOMEWHERE; if the caller
+    is not a member of that workspace the gate raises "workspace not found".
+    That message differs from the "<resource> not found" an unknown id gets —
+    a two-message existence oracle for arbitrary UUIDs. Rewriting the gate
+    404 to the resource message makes the two cases indistinguishable; no
+    content leaks either way (the service-layer read gate still runs).
+    """
+    try:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=None
+        )
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
 
 
 async def _issue_context(
@@ -90,7 +106,7 @@ async def _issue_context(
     workspace_id = await request.app.state.issue_service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND)
     return context, parsed
 
 
@@ -206,7 +222,7 @@ async def merge_label(
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id)
+    context = await _context_for(session, user, workspace_id, not_found_message=_LABEL_NOT_FOUND)
     data = await service.merge_label(
         actor=context.member,
         workspace_id=workspace_id,

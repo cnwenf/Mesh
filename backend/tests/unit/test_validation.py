@@ -6,6 +6,8 @@ import pytest
 
 from mesh.errors import BusinessRuleError, ValidationError
 from mesh.validation import (
+    LIKE_ESCAPE_CHAR,
+    escape_like,
     validate_https_url,
     validate_iana_timezone,
     validate_locale,
@@ -83,3 +85,24 @@ def test_url_field_name_shapes_details():
     with pytest.raises(ValidationError) as excinfo:
         validate_https_url("data:x", field="avatar_url")
     assert excinfo.value.details == {"avatar_url": "data:x"}
+
+
+def test_escape_like_neutralizes_wildcards():
+    """`%` / `_` become literals; every search path shares this one helper."""
+    assert escape_like("100%") == "100\\%"
+    assert escape_like("a_b") == "a\\_b"
+    # plain substrings pass through untouched
+    assert escape_like("plain text") == "plain text"
+
+
+def test_escape_like_doubles_existing_backslashes_first():
+    # A trailing backslash must not team up with the later escapes to form
+    # an unintended wildcard: escape it before touching % and _.
+    assert escape_like("a\\") == "a\\\\"
+    assert escape_like("%\\_") == "\\%\\\\\\_"
+
+
+def test_like_escape_char_is_backslash():
+    # The escape= clause on every ilike() must agree with escape_like's
+    # output character — pin the shared constant.
+    assert LIKE_ESCAPE_CHAR == "\\"

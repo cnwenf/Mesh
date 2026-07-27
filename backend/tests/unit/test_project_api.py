@@ -749,9 +749,11 @@ async def test_unknown_ids_return_404_on_every_workspaceless_path(client):
     resp = await client.patch(
         f"/api/v1/milestones/{mid}", json={"state": "closed"}, headers=_auth(other)
     )
-    # The milestone's workspace is not accessible to `other` → membership
-    # resolution fails with the standard workspace 404.
+    # The milestone's workspace is not accessible to `other` → the
+    # membership gate 404 is rewritten to the resource message, exactly
+    # like an unknown id (no existence oracle, §5.3).
     assert resp.status_code == 404
+    assert resp.json()["error"]["message"] == "milestone not found"
 
 
 async def test_malformed_query_uuids_are_400(client):
@@ -766,3 +768,93 @@ async def test_malformed_query_uuids_are_400(client):
         f"/api/v1/workspaces/{ws['id']}/cycles?project_id=garbage", headers=_auth(owner)
     )
     assert resp.status_code == 400
+
+
+async def test_prefixless_endpoints_uniform_404_message(client):
+    """L3 product-wide parity (workspace.md §5.3): the project module's
+    workspace-less paths return the SAME 404 message for "unknown id" and
+    "exists in another tenant" across all four resource types, killing the
+    existence oracle exactly like the issue module does."""
+    owner_a = await _register_and_login(client, "l3p-a@corp.com")
+    owner_b = await _register_and_login(client, "l3p-b@corp.com")
+    await _create_workspace(client, owner_a, "l3p-a")
+    ws_b = await _create_workspace(client, owner_b, "l3p-b")
+
+    project_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/projects",
+            json={"name": "Secret", "key": "SEC"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    milestone_b = (
+        await client.post(
+            f"/api/v1/projects/{project_b['id']}/milestones",
+            json={"title": "M1"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    cycle_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/cycles",
+            json={"name": "C1", "starts_at": "2026-08-01", "ends_at": "2026-08-14"},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    template_b = (
+        await client.post(
+            f"/api/v1/workspaces/{ws_b['id']}/project-templates",
+            json={"name": "Tmpl", "template_body": {}},
+            headers=_auth(owner_b),
+        )
+    ).json()["data"]
+    random_id = str(uuid.uuid4())
+
+    probes = (
+        # (existing-id probe, existing id, resource message)
+        (
+            lambda target: client.get(f"/api/v1/projects/{target}", headers=_auth(owner_a)),
+            project_b["id"],
+            "project not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/milestones/{target}", json={"title": "x"}, headers=_auth(owner_a)
+            ),
+            milestone_b["id"],
+            "milestone not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/cycles/{target}", json={"name": "x"}, headers=_auth(owner_a)
+            ),
+            cycle_b["id"],
+            "cycle not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/project-templates/{target}",
+                json={"name": "x"},
+                headers=_auth(owner_a),
+            ),
+            template_b["id"],
+            "project template not found",
+        ),
+    )
+    for call, existing_id, message in probes:
+        existing = await call(existing_id)  # exists, owner_a is NOT a member
+        missing = await call(random_id)  # does not exist anywhere
+        assert existing.status_code == 404, existing.text
+        assert missing.status_code == 404, missing.text
+        # Both states are indistinguishable and carry the resource message.
+        assert existing.json()["error"]["message"] == message
+        assert missing.json()["error"]["message"] == message
+
+    # Soft-deleted + non-member → same message (whichever layer answers,
+    # the contract is one 404 text).
+    await client.delete(f"/api/v1/projects/{project_b['id']}", headers=_auth(owner_b))
+    deleted_probe = await client.get(
+        f"/api/v1/projects/{project_b['id']}", headers=_auth(owner_a)
+    )
+    assert deleted_probe.status_code == 404
+    assert deleted_probe.json()["error"]["message"] == "project not found"

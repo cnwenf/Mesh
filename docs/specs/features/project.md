@@ -634,3 +634,4 @@ planning ──启动──► active ──完成──► completed
 - [ ] 进度聚合在 1 万级 issue 项目下查询延迟可接受(命中 `idx_issues_project_status`),或启用 `progress_cache` 物化字段。
 - [ ] 软删除保留历史:删除项目不级联硬删 issue(下游 `issues.project_id` 复合 FK `ON DELETE SET NULL (project_id)` 列级,仅置空归属列,README §6.2 第 6 条,T18 实测),且 issue 的 `identifier` 保持不变。
 - [ ] 错误消息不泄露敏感数据(堆栈/内部 ID 不外泄)。
+- [ ] **无前缀端点 404 口径统一(workspace.md §5.3)**:`/projects/{id}`、`/milestones/{id}`、`/cycles/{id}`、`/project-templates/{id}` 对「id 不存在」「存在但非成员」「软删除」返回同一资源级 404(`project not found` / `milestone not found` / `cycle not found` / `project template not found`),成员门 404 在路由层转写,无资源存在性 oracle。

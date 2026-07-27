@@ -102,10 +102,24 @@ async def _context_for(
     user: User,
     session: AsyncSession,
     workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
 ) -> WorkspaceContext:
-    return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=None
-    )
+    """Run the membership gate for a workspace-less path (workspace.md §5.3).
+
+    The resolver already proved the resource exists SOMEWHERE; if the caller
+    is not a member of that workspace the gate raises "workspace not found".
+    That message differs from the "<resource> not found" an unknown id gets —
+    a two-message existence oracle for arbitrary UUIDs. Rewriting the gate
+    404 to the resource message makes the two cases indistinguishable; no
+    content leaks either way (the service-layer read gate still runs).
+    """
+    try:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=None
+        )
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
 
 
 # ----------------------------------------------------------------------
@@ -171,7 +185,9 @@ async def get_project(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.get_project(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed
     )
@@ -194,7 +210,9 @@ async def update_project(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = ProjectPatch(
         name=_tri(body.name, "name" in fields),
@@ -238,7 +256,9 @@ async def delete_project(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.delete_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
         **_client_meta(request),
@@ -260,7 +280,9 @@ async def archive_project(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.archive_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
         **_client_meta(request),
@@ -282,7 +304,9 @@ async def unarchive_project(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.unarchive_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
         **_client_meta(request),
@@ -310,7 +334,9 @@ async def add_project_update(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.add_update(
         actor=context.member, workspace_id=workspace_id, project_id=parsed, body=body,
         **_client_meta(request),
@@ -332,7 +358,9 @@ async def list_project_updates(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     items, next_cursor = await service.list_updates(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
         limit=limit, cursor=cursor,
@@ -360,7 +388,9 @@ async def list_milestones(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     items, next_cursor = await service.list_milestones(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
         state=state, limit=limit, cursor=cursor,
@@ -383,7 +413,9 @@ async def create_milestone(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.create_milestone(
         actor=context.member, workspace_id=workspace_id, project_id=parsed, body=body,
         **_client_meta(request),
@@ -406,7 +438,9 @@ async def update_milestone(
     workspace_id = await service.resolve_milestone_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_MILESTONE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = MilestonePatch(
         title=_tri(body.title, "title" in fields),
@@ -435,7 +469,9 @@ async def delete_milestone(
     workspace_id = await service.resolve_milestone_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_MILESTONE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
+    )
     data = await service.delete_milestone(
         actor=context.member, workspace_id=workspace_id, milestone_id=parsed,
         **_client_meta(request),
@@ -501,7 +537,9 @@ async def update_cycle(
     workspace_id = await service.resolve_cycle_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_CYCLE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_CYCLE_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = CyclePatch(
         name=_tri(body.name, "name" in fields),
@@ -536,7 +574,9 @@ async def list_project_members(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     items, next_cursor = await service.list_project_members(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
         limit=limit, cursor=cursor,
@@ -559,7 +599,9 @@ async def add_project_member(
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     body.member_id = str(_body_uuid(body.member_id, field="member_id"))
     data = await service.add_project_member(
         actor=context.member, workspace_id=workspace_id, project_id=parsed, body=body,
@@ -585,7 +627,9 @@ async def update_project_member(
     workspace_id = await service.resolve_project_workspace(parsed_project)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.update_project_member(
         actor=context.member,
         workspace_id=workspace_id,
@@ -613,7 +657,9 @@ async def remove_project_member(
     workspace_id = await service.resolve_project_workspace(parsed_project)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+    )
     data = await service.remove_project_member(
         actor=context.member,
         workspace_id=workspace_id,
@@ -674,7 +720,9 @@ async def update_project_template(
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.update_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed, body=body,
         **_client_meta(request),
@@ -696,7 +744,9 @@ async def delete_project_template(
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.delete_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed,
         **_client_meta(request),
@@ -719,7 +769,9 @@ async def instantiate_project_template(
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+    )
     data = await service.instantiate_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed, body=body,
         **_client_meta(request),

@@ -277,6 +277,20 @@ async def test_link_to_issue_and_listing(service, tenant, session_factory):
     assert items[0]["links"][0]["position"] == 3
 
 
+async def test_resolve_host_workspace_per_linked_type(service, tenant, session_factory):
+    """link_to tenant resolution (§2.7): issue/comment go through the narrow
+    SECURITY DEFINER lookups (app-role RLS is fail-closed without the GUC);
+    chat_message resolves to None until its module ships; unknown types are
+    None so link-time validation rejects them."""
+    workspace, _member = tenant
+    issue = await seed_issue(session_factory, workspace)
+    async with session_factory() as session:
+        assert await service.resolve_host_workspace(session, "issue", issue.id) == workspace.id
+        assert await service.resolve_host_workspace(session, "issue", uuid.uuid4()) is None
+        assert await service.resolve_host_workspace(session, "chat_message", uuid.uuid4()) is None
+        assert await service.resolve_host_workspace(session, "bogus", uuid.uuid4()) is None
+
+
 async def test_link_duplicate_is_idempotent(service, tenant, session_factory):
     workspace, member = tenant
     issue = await seed_issue(session_factory, workspace)

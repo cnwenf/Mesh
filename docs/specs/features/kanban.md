@@ -475,6 +475,7 @@ REST 基础路径 `/api/v1`,`Authorization: Bearer <token>`,游标分页。
 - **分页(README §6.14 整体游标契约)**:视图列表游标分页,游标编码 `(position, id)`;视图内 issue 执行后亦游标分页——**分组场景统一整体游标**:响应顶层为 `{ "groups": [{key,label,count,wip?,data}], "next_cursor": ... }`,`count` 为组内总数,`data` 为当前页切片;**不得**在响应中给每组独立 `cursor`(与 issue.md 统一此契约)。
 - **过滤限制(README §6.14)**:视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底;超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded`(建议收窄条件)。
 - **鉴权**:私有视图仅 `owner_member_id` 可见可写;`shared` 视图工作区成员可读,写需 owner 或具备共享视图写权限(工作区 admin / 项目 lead)。执行视图(`GET /views/{id}/issues`)时,服务端**再次**按成员可见范围裁剪 issues(不暴露其无权 issue)。
+- **无前缀端点 404 口径(workspace.md §5.3)**:`/views/{id}` 各路径对「id 不存在」「存在但非成员」「软删除」返回同一 `view not found`,成员门 404 在路由层转写,无视图存在性 oracle。
 - **乐观并发**:`PATCH /views/{id}` 与拖拽 `PATCH /issues/{id}` 支持 `If-Match: <updated_at>`;版本不符返回 `409 conflict`,客户端拉取最新后重试或提示。
 - **JSONB 安全**:`filters`/`sort` 经白名单 Pydantic schema 校验,`field` 必须落在内置字段集或为合法 `field_def_id`;查询编译时一律参数化绑定,杜绝从 JSON 拼接 SQL。
 - **统一错误信封**:

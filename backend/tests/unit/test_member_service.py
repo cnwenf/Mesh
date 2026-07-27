@@ -185,6 +185,49 @@ async def test_list_role_filter_and_q_search(session_factory):
     assert [str(i["id"]) for i in hits2] == [str(plain.id)]
 
 
+async def test_list_q_search_escapes_like_wildcards(session_factory):
+    """L5 parity (member.md §3.4): ``%`` / ``_`` in ``q`` match literally.
+
+    Before the escape the roster search widened with user-supplied
+    wildcards — ``q=%`` enumerated the whole roster. The query stays
+    parameterised; only the match set must not widen.
+    """
+    service, ws, _owner, _plain, _uid = await _setup(session_factory)
+    named = {}
+    for display in ("100% Club", "100X Club", "a_b Lead", "axb Lead"):
+        uid = await _add_user(session_factory, display)
+        async with session_factory() as session, session.begin():
+            row = Member(
+                workspace_id=ws,
+                member_type="human",
+                user_id=uid,
+                role="member",
+                joined_at=None,
+            )
+            session.add(row)
+            await session.flush()
+            named[display] = row.id
+
+    def hit_ids(items):
+        return {str(i["id"]) for i in items}
+
+    # literal "%" only matches the display containing a real percent sign
+    percent, _ = await service.list_members(workspace_id=ws, q="100%")
+    assert hit_ids(percent) == {str(named["100% Club"])}
+
+    # literal "_" must not behave as a single-char wildcard
+    underscore, _ = await service.list_members(workspace_id=ws, q="a_b")
+    assert hit_ids(underscore) == {str(named["a_b Lead"])}
+
+    # the old `_` wildcard would have hit "100% Club" ("1_0" ~ "100")
+    wildcard, _ = await service.list_members(workspace_id=ws, q="1_0")
+    assert wildcard == []
+
+    # q=% no longer enumerates the roster — only literal-% rows match
+    bare, _ = await service.list_members(workspace_id=ws, q="%")
+    assert hit_ids(bare) == {str(named["100% Club"])}
+
+
 async def test_list_pagination_walks_all_rows_once(session_factory):
     service, ws, _owner, _plain, _uid = await _setup(session_factory)
     # add 5 more humans with distinct joined_at
