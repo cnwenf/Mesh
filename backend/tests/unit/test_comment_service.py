@@ -8,6 +8,7 @@ rows the business transaction writes).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
@@ -15,6 +16,7 @@ from sqlalchemy import select
 
 from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT
 from mesh.comment_inbox.service import CommentService
+from mesh.db.models.agent import Agent
 from mesh.db.models.comment import Comment, CommentMention
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.member import Member
@@ -27,6 +29,7 @@ from mesh.errors import (
     ForbiddenError,
     GoneError,
     NotFoundError,
+    PayloadTooLargeError,
 )
 
 pytestmark = pytest.mark.unit
@@ -53,10 +56,18 @@ async def _human(factory, workspace, name: str) -> Member:
 
 async def _agent(factory, workspace, name: str) -> Member:
     async with factory() as session, session.begin():
+        # 0017_agent enforces members.agent_id → agents; seed the agents row
+        # (with an owner user) before the roster row.
+        owner = User(email=f"agent-owner-{uuid.uuid4().hex[:8]}@x.io", display_name=name)
+        session.add(owner)
+        await session.flush()
+        agent = Agent(workspace_id=workspace.id, name=name, owner_user_id=owner.id)
+        session.add(agent)
+        await session.flush()
         member = Member(
             workspace_id=workspace.id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent.id,
             role="member",
             display_override=name,
         )
@@ -468,6 +479,42 @@ async def test_edit_add_mention_enqueues_only_added(env):
     assert agent_ids == {str(agent_a.id), str(agent_b.id)}
 
 
+async def test_edit_remove_then_readd_mention_enqueues_fresh_execution(env):
+    # L4: removing then RE-ADDing the same @agent on one comment must enqueue
+    # a NEW execution — the edit path anchors the §6.5 key on a per-edit epoch
+    # (comment.id + edited_at), so the old outbox row (still inside the
+    # retention window) is not returned in place of a fresh enqueue.
+    service, issue, author, agent = (
+        env["service"], env["issue"], env["author"], env["agent"],
+    )
+    created = await service.create_comment(
+        workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
+        body_markdown=_mention_link(agent.id),
+    )
+    first = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
+    assert len(first) == 1
+    assert len(created["triggered_execution_ids"]) == 1
+
+    # remove the mention — soft-delete, no enqueue, nothing cancelled (§6.9)
+    await service.update_comment(
+        workspace_id=env["workspace"].id, comment_id=uuid.UUID(created["id"]),
+        editor_member=author, is_manager=False,
+        body_markdown="no agent here anymore",
+    )
+    assert len(await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)) == 1
+
+    await asyncio.sleep(0.002)  # distinct edited_at epoch (µs clock resolution)
+    readded = await service.update_comment(
+        workspace_id=env["workspace"].id, comment_id=uuid.UUID(created["id"]),
+        editor_member=author, is_manager=False,
+        body_markdown=f"come back {_mention_link(agent.id)}",
+    )
+    rows = await _outbox_rows(env["factory"], EXECUTION_ENQUEUE_EVENT)
+    assert len(rows) == 2  # a brand-new enqueue, NOT the stale row replay
+    assert {row.id for row in rows} != {first[0].id}
+    assert first[0].id not in set(readded["triggered_execution_ids"])
+
+
 async def test_edit_unrelated_text_does_not_retrigger(env):
     service, issue, agent, author = env["service"], env["issue"], env["agent"], env["author"]
     created = await service.create_comment(
@@ -582,7 +629,7 @@ async def test_unknown_mention_id_is_422(env):
 
 async def test_body_too_large(env):
     service, issue, author = env["service"], env["issue"], env["author"]
-    with pytest.raises(BusinessRuleError) as exc:
+    with pytest.raises(PayloadTooLargeError) as exc:
         await service.create_comment(
             workspace_id=env["workspace"].id, issue_id=issue.id, author_member=author,
             body_markdown="x" * (1024 * 1024 + 1),

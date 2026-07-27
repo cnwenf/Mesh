@@ -32,16 +32,16 @@ drift guard compares them).
   SECURITY DEFINER workspace resolvers for the workspace-less paths
   (``/comments/{id}``, ``/inbox/{notification_id}``).
 
-Revision ID: 0014
-Revises: 0013
+Revision ID: 0018
+Revises: 0017
 Create Date: 2026-07-27
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0017"
-down_revision = "0016"
+revision = "0018"
+down_revision = "0017"
 branch_labels = None
 depends_on = None
 

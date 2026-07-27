@@ -35,6 +35,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
+from mesh.comment_inbox import subscriptions as inbox_subscriptions
+from mesh.comment_inbox.notifications import emit_issue_change_notifications
 from mesh.db.models.issue import (
     ISSUE_PRIORITY_VALUES,
     Issue,
@@ -662,6 +664,25 @@ class IssueService:
         session.add(issue)
         await session.flush()
 
+        # §2.5/§6.13 (L2): seed creator/assignee subscription rows so the issue
+        # appears in their subscription list and per-issue mute is meaningful
+        # from the start (implicit routing alone leaves the list empty).
+        await inbox_subscriptions.ensure_subscription(
+            session,
+            workspace_id=workspace_id,
+            issue_id=issue.id,
+            subscriber_id=reporter_id,
+            reason="creator",
+        )
+        if assignee_id is not None and assignee_id != reporter_id:
+            await inbox_subscriptions.ensure_subscription(
+                session,
+                workspace_id=workspace_id,
+                issue_id=issue.id,
+                subscriber_id=assignee_id,
+                reason="assignee",
+            )
+
         rendered = await self.render_issue(session, issue)
         # §6.9 trigger hook: assignment to an agent emits issue.assigned in
         # the SAME transaction (realtime event id as the trigger anchor).
@@ -690,6 +711,20 @@ class IssueService:
             ip_address=ip_address,
             user_agent=user_agent,
         )
+        # §5.3 I1: assignment at creation time notifies the assignee. The
+        # fan-out matrix (comment-inbox owns it) self-suppresses when the
+        # actor assigned themselves; we only register the outbox event in the
+        # SAME transaction (README §4.4) so commit ⇒ notification is atomic.
+        if assignee_id is not None:
+            await emit_issue_change_notifications(
+                session,
+                workspace_id=workspace_id,
+                issue=issue,
+                actor=actor,
+                actor_name=await self._actor_display_name(session, actor),
+                actor_member_type=actor.member_type,
+                assigned_to=assignee_id,
+            )
         if template_skipped:
             rendered["skipped_fields"] = template_skipped
         return rendered
@@ -1209,7 +1244,37 @@ class IssueService:
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
+            # §5.3 I1/I3/I4: register notification fan-outs for assign / status /
+            # field changes in the SAME transaction (comment-inbox is the single
+            # notification authority — this call only picks the type(s) and the
+            # explicit recipients its matrix rows need; routing/de-noise/quiet
+            # hours live in the relay-side fan-out handler). The actor is
+            # self-suppressed there; the reporter/creator receives via their
+            # seeded subscription (I4).
+            field_changed = any(
+                not key.startswith("_")
+                and key not in ("assignee_id", "status_id", "state_category", "assignee", "status")
+                for key in changes
+            )
+            await emit_issue_change_notifications(
+                session,
+                workspace_id=workspace_id,
+                issue=updated,
+                actor=actor,
+                actor_name=await self._actor_display_name(session, actor),
+                actor_member_type=actor.member_type,
+                assigned_to=updated.assignee_id if "assignee_id" in changes else None,
+                status_changed=("status_id" in changes or "state_category" in changes),
+                subscribed_update=field_changed,
+            )
             return rendered
+
+    async def _actor_display_name(self, session: AsyncSession, actor: Member) -> str:
+        """Display name for notification payloads (member.md §2.4 resolution)."""
+        actor_user = None
+        if actor.user_id is not None:
+            actor_user = await session.scalar(select(User).where(User.id == actor.user_id))
+        return resolve_display_name(member=actor, user=actor_user)
 
     @staticmethod
     def _matches_updated_at(issue: Issue, if_match: str) -> bool:
