@@ -180,8 +180,7 @@ function renderSettings(): void {
 
 const patchProjectCalls = (calls: RecordedCall[]): RecordedCall[] =>
   calls.filter(
-    (c) =>
-      (c.init?.method ?? 'GET') === 'PATCH' && /\/projects\/[^/]+$/.test(c.url.split('?')[0]),
+    (c) => (c.init?.method ?? 'GET') === 'PATCH' && /\/projects\/[^/]+$/.test(c.url.split('?')[0]),
   );
 
 describe('ProjectSettingsPage', () => {
@@ -198,9 +197,7 @@ describe('ProjectSettingsPage', () => {
     const nameInput = (await screen.findByTestId('settings-name')) as HTMLInputElement;
     expect(nameInput.value).toBe('Apollo');
     expect((screen.getByTestId('settings-status') as HTMLSelectElement).value).toBe('active');
-    expect((screen.getByTestId('settings-visibility') as HTMLSelectElement).value).toBe(
-      'public',
-    );
+    expect((screen.getByTestId('settings-visibility') as HTMLSelectElement).value).toBe('public');
     expect((screen.getByTestId('settings-lead') as HTMLSelectElement).value).toBe('mem-lead');
   });
 
@@ -314,7 +311,8 @@ describe('ProjectSettingsPage', () => {
       expect(
         calls.filter(
           (c) =>
-            (c.init?.method ?? 'GET') === 'DELETE' && /\/projects\/[^/]+$/.test(c.url.split('?')[0]),
+            (c.init?.method ?? 'GET') === 'DELETE' &&
+            /\/projects\/[^/]+$/.test(c.url.split('?')[0]),
         ).length,
       ).toBe(1);
     });
@@ -326,7 +324,10 @@ describe('ProjectSettingsPage', () => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (url.includes('/members')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderSettings();
@@ -344,7 +345,10 @@ describe('ProjectSettingsPage', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       }
       if (method === 'POST' && url.includes('/archive')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -368,7 +372,10 @@ describe('ProjectSettingsPage', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       }
       if (method === 'DELETE' && url.match(/\/projects\/[^/]+$/)) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -397,7 +404,10 @@ describe('ProjectSettingsPage', () => {
         return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
       }
       if (method !== 'GET' && url.includes('/members')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -415,12 +425,16 @@ describe('ProjectSettingsPage', () => {
     await user.selectOptions(screen.getByTestId('add-member-select'), 'mem-lead');
     await user.click(screen.getByTestId('add-member-submit'));
     await waitFor(() => {
-      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText('An internal error occurred. Please try again.').length,
+      ).toBeGreaterThan(0);
     });
     // 移除失败
     await user.click(screen.getByTestId('member-remove-mem-2'));
     await waitFor(() => {
-      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText('An internal error occurred. Please try again.').length,
+      ).toBeGreaterThan(0);
     });
   });
 
@@ -488,29 +502,29 @@ describe('ProjectSettingsPage', () => {
   });
 });
 
-  it('409 收敛后表单对齐服务端态,下次保存不覆盖他人编辑', async () => {
-    const calls = stubFetch({ conflictPatchTimes: 1, serverNameAfterConflict: 'Server Edit' });
-    const user = userEvent.setup();
-    renderSettings();
-    const nameInput = (await screen.findByTestId('settings-name')) as HTMLInputElement;
-    await user.clear(nameInput);
-    await user.type(nameInput, 'Stale Edit');
-    await user.click(screen.getByTestId('settings-save'));
-    // 409 → 重取(返回 Server Edit)→ onConflict 把表单对齐到服务端态(不盲重放)
-    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
-    await waitFor(() =>
-      expect((screen.getByTestId('settings-name') as HTMLInputElement).value).toBe('Server Edit'),
-    );
-    // 下一次保存:陈旧值已被服务端态覆盖;改成 Final 后 diff 仅含 Final
-    const nameInput2 = screen.getByTestId('settings-name') as HTMLInputElement;
-    await user.clear(nameInput2);
-    await user.type(nameInput2, 'Final');
-    await user.click(screen.getByTestId('settings-save'));
-    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(2));
-    const lastBody = String(patchProjectCalls(calls)[1].init?.body);
-    expect(lastBody).toContain('"name":"Final"');
-    expect(lastBody).not.toContain('Stale Edit');
-  });
+it('409 收敛后表单对齐服务端态,下次保存不覆盖他人编辑', async () => {
+  const calls = stubFetch({ conflictPatchTimes: 1, serverNameAfterConflict: 'Server Edit' });
+  const user = userEvent.setup();
+  renderSettings();
+  const nameInput = (await screen.findByTestId('settings-name')) as HTMLInputElement;
+  await user.clear(nameInput);
+  await user.type(nameInput, 'Stale Edit');
+  await user.click(screen.getByTestId('settings-save'));
+  // 409 → 重取(返回 Server Edit)→ onConflict 把表单对齐到服务端态(不盲重放)
+  await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+  await waitFor(() =>
+    expect((screen.getByTestId('settings-name') as HTMLInputElement).value).toBe('Server Edit'),
+  );
+  // 下一次保存:陈旧值已被服务端态覆盖;改成 Final 后 diff 仅含 Final
+  const nameInput2 = screen.getByTestId('settings-name') as HTMLInputElement;
+  await user.clear(nameInput2);
+  await user.type(nameInput2, 'Final');
+  await user.click(screen.getByTestId('settings-save'));
+  await waitFor(() => expect(patchProjectCalls(calls).length).toBe(2));
+  const lastBody = String(patchProjectCalls(calls)[1].init?.body);
+  expect(lastBody).toContain('"name":"Final"');
+  expect(lastBody).not.toContain('Stale Edit');
+});
 
 describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
   beforeEach(() => {
@@ -691,13 +705,26 @@ describe('ProjectSettingsPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     const pendingProject = new Promise<Response>((_, reject) => {
       rejectProject = reject;
     });
+    // 源头 promise 预挂空 catch:无论派生链时序如何,该 rejection 始终有承接者,
+    // 杜绝 CI 慢机器上 rejection 在测试结束后才被定结、被 vitest 记为 unhandled
+    // rejection(late failure,致 quality job 退出码 1)。组件侧行为不受影响:
+    // 每次 fetch 调用经 mock 的 async 包装取得独立派生链,仍由组件自身的
+    // cancelled 守卫 .catch 消费(下方断言验证卸载后结果被丢弃)。
+    pendingProject.catch(() => undefined);
     const implProject = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (url.includes('/members')) {
         return fakeResponse({ body: { data: ROSTER, next_cursor: null } });
       }
-      return pendingProject;
+      // 每次调用返回独立派生 promise 并预挂空 catch:即使组件链在任何时序下
+      // 尚未承接,该派生链也永不处于无处理器状态(同上,消除 late failure)。
+      const branch = pendingProject.then(
+        (response) => response,
+        (error: unknown) => Promise.reject(error),
+      );
+      branch.catch(() => undefined);
+      return branch;
     }) as typeof fetch;
     vi.stubGlobal('fetch', implProject);
     const second = renderWithProviders(
@@ -711,7 +738,12 @@ describe('ProjectSettingsPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     second.unmount();
     await act(async () => {
       rejectProject(new Error('late failure'));
-      await Promise.resolve();
+      // 充分排空微任务队列,让 rejection 在测试体内确定性地穿完全部派生链
+      // (mock async 包装 → client execute/request → Promise.all → 组件 cancelled
+      // 守卫 .catch → .finally),而非留到测试结束后才落定。
+      for (let i = 0; i < 16; i += 1) {
+        await Promise.resolve();
+      }
     });
     expect(second.container.innerHTML).toBe('');
   });
