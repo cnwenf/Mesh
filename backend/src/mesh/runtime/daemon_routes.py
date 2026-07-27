@@ -263,7 +263,7 @@ async def refetch_credentials(
 ) -> dict:
     """Lost-response recovery (§2.2): new envelopes, old ones revoked,
     per-attempt counter advances; exceeding the cap FREEZES the execution
-    (all envelopes revoked, critical alert) and returns 422."""
+    (all envelopes revoked, critical alert) and returns 409."""
     await _rate_limit_daemon(request, runtime, response)
     settings = request.app.state.settings
     session_factory = request.app.state.session_factory

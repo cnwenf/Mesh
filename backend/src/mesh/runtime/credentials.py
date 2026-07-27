@@ -185,6 +185,13 @@ async def refetch_envelopes(
     ).scalars().all()
     if not bindings:
         return []
+    # Revocation (freeze / terminal) is FINAL and takes precedence over the
+    # overuse cap: a dead attempt reports envelope_revoked, not the cap.
+    if any(b.revoked_at is not None for b in bindings):
+        raise ConflictError(
+            "attempt envelopes revoked",
+            code="envelope_revoked",
+        )
     if any(b.refetch_count >= refetch_limit for b in bindings):
         raise ConflictError(
             "credential refetch limit exceeded",

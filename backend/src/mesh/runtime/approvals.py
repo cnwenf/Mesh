@@ -301,9 +301,10 @@ async def decide_approval(
 
 async def _assert_may_decide(session: AsyncSession, *, approval: Approval, member: Member) -> None:
     """§6.10 permission: human member AND (workspace admin/owner, the subject
-    execution's trigger/dispatcher, or the agent's owner). H4: the dispatcher
-    of an issue-triggered execution is the issue creator (the member who
-    authored the work item assigned to the agent)."""
+    execution's trigger/dispatcher, or the agent's owner). H4: for an
+    issue-triggered execution the trigger is the issue REPORTER (the member
+    who filed the work item the agent was dispatched on — the persistent
+    trigger signal in the data model)."""
     if member.role in ("admin", "owner"):
         return
     if approval.subject_execution_id is not None:
@@ -313,17 +314,17 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
             )
         ).scalar_one_or_none()
         if execution is not None:
-            # Trigger/dispatcher path: creator of the triggering issue.
+            # Trigger/dispatcher path: reporter of the triggering issue.
             if execution.issue_id is not None:
-                issue_created_by = (
+                reporter = (
                     await session.execute(
-                        select(Issue.created_by).where(
+                        select(Issue.reporter_id).where(
                             Issue.id == execution.issue_id,
                             Issue.workspace_id == approval.workspace_id,
                         )
                     )
                 ).scalar_one_or_none()
-                if issue_created_by is not None and issue_created_by == member.id:
+                if reporter is not None and reporter == member.id:
                     return
             # Agent owner path.
             if execution.agent_id is not None:
