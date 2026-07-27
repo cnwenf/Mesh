@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "04e465aa",
+  "version": "25b3efe3",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -872,6 +872,21 @@
     "board.moveConfirm": "Confirm move",
     "board.wipExceededToast": "Column {group} is over its WIP limit ({count}/{limit}).",
     "board.noAssignee": "No assignee",
-    "board.noProject": "No project"
+    "board.noProject": "No project",
+    "common.create": "Create",
+    "error.invalid_field_value": "That value does not match the field type",
+    "error.required_field_missing": "Required fields must be filled before this change",
+    "error.label_scope_mismatch": "A project label can only be applied to issues in the same project",
+    "issueLabels.sectionTitle": "Labels",
+    "issueLabels.addPlaceholder": "Add a label…",
+    "issueLabels.remove": "Remove label {name}",
+    "issueLabels.createInline": "Create “{name}”",
+    "issueLabels.createTitle": "Create label “{name}”",
+    "issueLabels.colorLabel": "Color",
+    "issueLabels.colorHex": "Hex color",
+    "issueFields.sectionTitle": "Custom fields",
+    "issueFields.empty": "No custom fields apply to this issue yet",
+    "issueFields.memberNone": "No member",
+    "issueFields.selectNone": "Not set"
   }
 }

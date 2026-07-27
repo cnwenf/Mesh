@@ -47,6 +47,8 @@ from mesh.issue.routes import router as issue_router
 from mesh.issue.service import IssueService
 from mesh.issue.statuses import StatusService
 from mesh.issue.templates import TemplateService
+from mesh.labels.association import FieldValueService, IssueLabelService
+from mesh.labels.association_routes import router as label_association_router
 from mesh.labels.routes import router as label_router
 from mesh.labels.service import LabelService
 from mesh.member.routes import router as member_router
@@ -154,6 +156,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.bulk_service = BulkService(app.state.issue_service, app.state.move_service)
     app.state.template_service = TemplateService(app.state.issue_service)
     app.state.label_service = LabelService(session_factory)
+    # label-property issue-association layer (MES-32 remainder): composed on
+    # IssueService for the factory + issue-level authorization gates.
+    app.state.issue_label_service = IssueLabelService(app.state.issue_service)
+    app.state.field_value_service = FieldValueService(app.state.issue_service)
     app.state.view_service = ViewService(session_factory)
     app.state.projection_service = ProjectionService(
         session_factory, app.state.issue_service, app.state.view_service
@@ -181,6 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(project_router)
     app.include_router(issue_router)
     app.include_router(label_router)
+    app.include_router(label_association_router)
     app.include_router(view_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])

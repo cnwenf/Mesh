@@ -7,9 +7,10 @@ OR project lead for project-scoped definitions, §3.4), validates per-type
 config/default shapes (named 422 codes), emits the §6.7 registered events
 through the outbox's unique write path, and writes the audit trail.
 
-The issue-association surface (issue_labels / per-issue values, merge,
-``issue.labels_changed`` …) is deliberately NOT here — it lands with the
-issue-module increment (MES-32 remainder, gated on MES-31).
+The per-issue association surface (issue_labels links / per-issue values,
+``issue.labels_changed`` …) lives in ``mesh.labels.association``; label MERGE
+is a label-level operation (it ends by deleting the source label) and stays
+here, broadcasting ``issue.labels_changed`` for every migrated issue.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import Select, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -30,11 +32,13 @@ from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
 from mesh.db.constraints import violates
+from mesh.db.models.issue import Issue
 from mesh.db.models.label import (
     CUSTOM_FIELD_TYPE_VALUES,
     SELECT_FIELD_TYPES,
     CustomFieldDef,
     CustomFieldOption,
+    IssueLabel,
     Label,
 )
 from mesh.db.models.member import Member, MemberProjectAccess
@@ -55,6 +59,11 @@ PROJECT_CHANNEL = "project:{project_id}"
 
 DEFAULT_PAGE_LIMIT = 50
 MAX_PAGE_LIMIT = 200  # §3.4: collections are small; clients may one-shot ≤200
+
+# merge_label carrier budget: the merge holds both labels FOR UPDATE for the
+# whole transaction and writes one link + one broadcast per carrier; cap the
+# amplification and reject past the budget with 422 merge_too_large.
+MERGE_MAX_CARRIERS = 10_000
 
 LABEL_NAME_MAX = 50
 FIELD_NAME_MAX = 100
@@ -294,7 +303,9 @@ def _validate_default_value(
         if maximum is not None and default_value > maximum:
             raise _config_error("default_value is above config.max")
         precision = config.get("precision")
-        if precision is not None and round(abs(default_value), 10) != round(
+        # Same-sign comparison (abs() on one side only would reject every
+        # negative default that is within precision).
+        if precision is not None and round(float(default_value), 10) != round(
             float(default_value), precision
         ):
             raise _config_error(
@@ -954,6 +965,257 @@ class LabelService:
                 user_agent=user_agent,
             )
             return {"id": str(label_id), "deleted": True}
+
+    async def merge_label(
+        self,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        source_label_id: uuid.UUID,
+        target_label_id: uuid.UUID,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> dict:
+        """Merge ``source`` into ``target`` (§3.1 / §3.2 / §4.4 标签合并).
+
+        Every issue carrying the source label gains the target (de-duplicated)
+        and loses the source; the source label is then deleted. Broadcasts
+        ``issue.labels_changed`` for each migrated issue plus ``label.deleted``
+        for the source. Returns the migration count + target snapshot.
+        """
+        if source_label_id == target_label_id:
+            raise ConflictError(
+                "merge target must differ from the source label",
+                code="conflict",
+                details={"label_id": str(source_label_id)},
+            )
+        async with self._factory() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            # Lock both labels in id order — deterministic acquisition avoids
+            # deadlocks against concurrent merges of the same pair.
+            ordered = sorted([source_label_id, target_label_id])
+            locked = list(
+                (
+                    await session.execute(
+                        select(Label)
+                        .where(
+                            Label.workspace_id == workspace_id,
+                            Label.id.in_(ordered),
+                        )
+                        .with_for_update()
+                    )
+                ).scalars().all()
+            )
+            by_id = {label.id: label for label in locked}
+            source = by_id.get(source_label_id)
+            target = by_id.get(target_label_id)
+            if source is None or target is None:
+                raise NotFoundError(_LABEL_NOT_FOUND)
+            # Scope-level write gate on BOTH labels (§3.4).
+            source_project = None
+            if source.project_id is not None:
+                source_project = await self._load_scope_project(
+                    session, workspace_id=workspace_id, project_id=source.project_id
+                )
+            await self._assert_can_manage_scope(
+                session,
+                actor=actor,
+                workspace_id=workspace_id,
+                project_id=source.project_id,
+            )
+            await self._assert_can_manage_scope(
+                session,
+                actor=actor,
+                workspace_id=workspace_id,
+                project_id=target.project_id,
+            )
+
+            # Migrate the join rows: LIVE source carriers gain the target
+            # (de-duplicated). Soft-deleted issues' links are left to the
+            # label-delete cascade below — they get no event and must not be
+            # counted, keeping count == events == actual change (§3.2).
+            carrier_issue_ids = list(
+                (
+                    await session.execute(
+                        select(IssueLabel.issue_id)
+                        .join(Issue, Issue.id == IssueLabel.issue_id)
+                        .where(
+                            IssueLabel.workspace_id == workspace_id,
+                            IssueLabel.label_id == source.id,
+                            Issue.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+            # Documented carrier budget: a merge holds FOR UPDATE locks on
+            # both labels for the whole transaction and writes one link +
+            # one broadcast per carrier — cap the amplification (admin-only
+            # path; split hot labels before merging past the budget).
+            if len(carrier_issue_ids) > MERGE_MAX_CARRIERS:
+                raise BusinessRuleError(
+                    "label merge exceeds the carrier budget; split the label first",
+                    code="merge_too_large",
+                    details={
+                        "count": len(carrier_issue_ids),
+                        "budget": MERGE_MAX_CARRIERS,
+                    },
+                )
+            already_targeted = set(
+                (
+                    await session.execute(
+                        select(IssueLabel.issue_id).where(
+                            IssueLabel.workspace_id == workspace_id,
+                            IssueLabel.label_id == target.id,
+                            IssueLabel.issue_id.in_(carrier_issue_ids)
+                            if carrier_issue_ids
+                            else IssueLabel.issue_id.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+            to_insert = [i for i in carrier_issue_ids if i not in already_targeted]
+            if to_insert:
+                # ON CONFLICT DO NOTHING: a concurrent add/merge racing the
+                # dedupe window converges instead of raising a bare PK 500.
+                await session.execute(
+                    pg_insert(IssueLabel)
+                    .values(
+                        [
+                            {
+                                "workspace_id": workspace_id,
+                                "issue_id": issue_id,
+                                "label_id": target.id,
+                            }
+                            for issue_id in to_insert
+                        ]
+                    )
+                    .on_conflict_do_nothing()
+                )
+            await session.delete(source)  # cascades the remaining source links
+
+            # §5.4: every migrated issue's arbitration token advances so
+            # stale If-Match writers on those issues now get 409.
+            affected = list(
+                (
+                    await session.execute(
+                        select(Issue).where(
+                            Issue.workspace_id == workspace_id,
+                            Issue.id.in_(carrier_issue_ids)
+                            if carrier_issue_ids
+                            else Issue.id.is_(None),
+                            Issue.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            )
+            stamp = _now(self._clock)
+            for issue in affected:
+                issue.version = issue.version + 1
+                issue.updated_at = stamp
+            try:
+                await session.flush()
+            except IntegrityError as exc:
+                # Concurrent label deletion (FK) maps to 404, any residual
+                # PK race to 409 — never a bare 500 (review round 1).
+                if violates(exc, "issue_labels_label_id_labels"):
+                    raise NotFoundError(_LABEL_NOT_FOUND) from exc
+                if violates(exc, "issue_labels_pkey"):
+                    raise ConflictError(
+                        "label attachment changed concurrently", code="conflict"
+                    ) from exc
+                raise
+
+            # Per-affected-issue labels_changed on the issue channels (detail
+            # always; workspace list channel mirrors the issue module's
+            # visibility rule — see mesh.labels.association._emit_issue_event).
+            project_ids = {
+                issue.project_id for issue in affected if issue.project_id is not None
+            }
+            projects = {
+                project.id: project
+                for project in (
+                    await session.execute(
+                        select(Project).where(
+                            Project.workspace_id == workspace_id,
+                            Project.id.in_(project_ids),
+                        )
+                    )
+                ).scalars().all()
+            } if project_ids else {}
+            links = (
+                await session.execute(
+                    select(IssueLabel.issue_id, Label)
+                    .join(Label, Label.id == IssueLabel.label_id)
+                    .where(
+                        IssueLabel.workspace_id == workspace_id,
+                        IssueLabel.issue_id.in_(carrier_issue_ids)
+                        if carrier_issue_ids
+                        else IssueLabel.issue_id.is_(None),
+                    )
+                    .order_by(IssueLabel.created_at.asc(), IssueLabel.label_id.asc())
+                )
+            ).all()
+            labels_by_issue: dict[uuid.UUID, list[Label]] = {}
+            for link_issue_id, label in links:
+                labels_by_issue.setdefault(link_issue_id, []).append(label)
+            for issue in affected:
+                rendered = [
+                    self.render_label(label)
+                    for label in labels_by_issue.get(issue.id, [])
+                ]
+                data = {"issue_id": str(issue.id), "labels": rendered}
+                project = projects.get(issue.project_id) if issue.project_id else None
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=f"issue:{issue.id}",
+                    event="issue.labels_changed",
+                    data=data,
+                )
+                if project is None or project.visibility == "public":
+                    await emit_realtime(
+                        session,
+                        workspace_id=workspace_id,
+                        channel=f"workspace:{workspace_id}:issues",
+                        event="issue.labels_changed",
+                        data=data,
+                    )
+            await self._emit_label_event(
+                session,
+                workspace_id=workspace_id,
+                project=source_project,
+                event="label.deleted",
+                data={
+                    "id": str(source.id),
+                    "project_id": str(source.project_id)
+                    if source.project_id is not None
+                    else None,
+                    "name": source.name,
+                    "merged_into": str(target.id),
+                },
+            )
+            await self._audit(
+                session,
+                workspace_id=workspace_id,
+                actor=actor,
+                action="label.merged",
+                resource_type="label",
+                resource_id=source_label_id,
+                metadata={
+                    "target_label_id": str(target.id),
+                    "merged_issue_count": len(carrier_issue_ids),
+                },
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+            return {
+                "merged_issue_count": len(carrier_issue_ids),
+                "target_label": {
+                    "id": str(target.id),
+                    "name": target.name,
+                    "color": target.color,
+                },
+            }
 
     # ------------------------------------------------------------------
     # custom field definitions CRUD

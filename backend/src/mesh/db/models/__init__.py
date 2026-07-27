@@ -9,7 +9,13 @@ from mesh.db.models.issue import (
     IssueStatus,
     IssueTemplate,
 )
-from mesh.db.models.label import CustomFieldDef, CustomFieldOption, Label
+from mesh.db.models.label import (
+    CustomFieldDef,
+    CustomFieldOption,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
 from mesh.db.models.member import Member, MemberProjectAccess
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
@@ -49,7 +55,9 @@ __all__ = [
     "IdentifierPrefixRegistry",
     "Issue",
     "IssueActivity",
+    "IssueCustomFieldValue",
     "IssueDependency",
+    "IssueLabel",
     "IssueStatus",
     "IssueTemplate",
     "Label",
