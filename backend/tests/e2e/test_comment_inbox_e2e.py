@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT, enqueue_idempotency_key
 from mesh.config import load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
+from mesh.db.models.agent import Agent
 from mesh.db.models.comment import CommentMention
 from mesh.db.models.member import Member
 from mesh.db.models.notification import Notification, NotificationDelivery
@@ -94,12 +95,23 @@ async def _member_id_by_email(session_factory, email: str) -> uuid.UUID:
 async def _insert_agent_member(
     session_factory, workspace_id: uuid.UUID, name: str
 ) -> tuple[uuid.UUID, uuid.UUID]:
-    """(member_id, agent_id) — the §6.5 key uses agent_id when present."""
+    """(member_id, agent_id) — the §6.5 key uses agent_id when present.
+
+    main's ``0017_agent`` enforces ``members.agent_id → agents(workspace_id,id)``,
+    so a real ``agents`` row (with an owner user) must exist before the roster
+    row; a bare ``agent_id=uuid4()`` would now violate the composite FK.
+    """
     async with session_factory() as session, session.begin():
+        owner = User(email=f"agent-owner-{uuid.uuid4().hex[:8]}@x.io", display_name=name)
+        session.add(owner)
+        await session.flush()
+        agent = Agent(workspace_id=workspace_id, name=name, owner_user_id=owner.id)
+        session.add(agent)
+        await session.flush()
         member = Member(
             workspace_id=workspace_id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent.id,
             role="member",
             display_override=name,
         )
@@ -128,11 +140,16 @@ async def relay(db_url, redis_url):
     engine = create_engine_from_settings(settings)
     factory = create_session_factory(engine)
     redis_client = aioredis.from_url(redis_url, decode_responses=True)
+    from mesh.api.app import build_object_storage
     from mesh.auth.mailer import build_mailer
     from mesh.realtime.pubsub import RedisFanOut
 
     relay_instance = build_relay(
-        settings, factory, RedisFanOut(redis_client), mailer=build_mailer(settings, redis_client)
+        settings,
+        factory,
+        RedisFanOut(redis_client),
+        build_object_storage(settings),
+        mailer=build_mailer(settings, redis_client),
     )
     yield relay_instance
     await redis_client.aclose()
@@ -540,7 +557,7 @@ async def test_inbox_ws_first_notification_live_e2e(env, relay, gateway_server):
         for _ in range(4):
             try:
                 frames.append(json.loads(await asyncio.wait_for(ws.recv(), timeout=10)))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
     events = {frame["event"] for frame in frames if frame.get("op") == "event"}
     assert "notification.created" in events

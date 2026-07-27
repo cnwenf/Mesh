@@ -23,7 +23,12 @@ const METRICS = ['lines', 'functions', 'branches', 'statements'];
  * labels/auth 的同类先例为历史误配遗留的 per-file 缺口,随各自模块清偿后
  * 纳入本名单(见 MES-60 第 2 轮验收 R1)。
  */
-const PER_FILE_DIRS = ['src/features/agents/', 'src/features/members/'];
+const PER_FILE_DIRS = [
+  'src/features/agents/',
+  'src/features/members/',
+  'src/features/comments/',
+  'src/features/inbox/',
+];
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SUMMARY_PATH = resolve(ROOT, 'coverage/coverage-summary.json');

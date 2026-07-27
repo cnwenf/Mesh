@@ -822,6 +822,80 @@ def _email_body(notification: Notification) -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# due-soon sweep producer (H1 — §2.2 type enum ``due_soon``)
+# ---------------------------------------------------------------------------
+
+# Terminal categories never get due-soon reminders (no activity expected).
+_DUE_SOON_EXCLUDED_CATEGORIES = ("done", "cancelled")
+
+
+def due_soon_group_key(issue_id: uuid.UUID, due_date: object) -> str:
+    """Per-issue-per-due-date group so a rescheduled date re-notifies once."""
+    return f"issue:{issue_id}:due_soon:{due_date}"
+
+
+async def emit_due_soon_notifications(
+    session: AsyncSession,
+    *,
+    horizon: timedelta,
+    now: datetime | None = None,
+    batch_size: int = 200,
+) -> int:
+    """One sweep step: fan out ``due_soon`` for issues approaching their due
+    date. Returns the number of fan-out events registered.
+
+    Runs as the cross-tenant worker role (like the invitation sweep). De-dup
+    is two-layered: the scan skips issues whose ``due_soon`` notification row
+    for this due date already exists (persistent), and each emit carries an
+    ``idempotency_key`` so overlapping sweeps inside the outbox retention
+    window collapse to one event (README §6.5).
+    """
+    moment = now or datetime.now(UTC)
+    horizon_date = (moment + horizon).date()
+    notified_key = func.concat(
+        "issue:", Issue.id, ":due_soon:", Issue.due_date
+    )
+    already_notified = (
+        select(Notification.id)
+        .where(
+            Notification.workspace_id == Issue.workspace_id,
+            Notification.group_key == notified_key,
+        )
+        .exists()
+    )
+    due_issues = (
+        await session.execute(
+            select(Issue)
+            .where(
+                Issue.deleted_at.is_(None),
+                Issue.due_date.is_not(None),
+                Issue.due_date <= horizon_date,
+                Issue.state_category.not_in(_DUE_SOON_EXCLUDED_CATEGORIES),
+                ~already_notified,
+            )
+            .order_by(Issue.due_date.asc())
+            .limit(batch_size)
+        )
+    ).scalars().all()
+    for issue in due_issues:
+        key = due_soon_group_key(issue.id, issue.due_date.isoformat())
+        await emit_notification_fanout(
+            session,
+            workspace_id=issue.workspace_id,
+            notification_type="due_soon",
+            actor_kind="system",
+            issue_id=issue.id,
+            group_key=key,
+            title=issue.title,
+            preview=f"Due {issue.due_date.isoformat()}",
+            extra={"issue_identifier": issue.identifier},
+            idempotency_key=f"due_soon:{key}",
+        )
+    await session.flush()
+    return len(due_issues)
+
+
 async def send_digest_emails(
     session: AsyncSession,
     *,
@@ -886,6 +960,7 @@ __all__ = [
     "FANOUT_EVENT_TYPE",
     "NotificationFanoutHandler",
     "NotificationPolicy",
+    "emit_due_soon_notifications",
     "emit_notification_fanout",
     "in_quiet_hours",
     "inbox_channel",

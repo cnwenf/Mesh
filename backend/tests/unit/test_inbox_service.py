@@ -21,6 +21,7 @@ from mesh.comment_inbox.notifications import (
     inbox_channel,
     send_digest_emails,
 )
+from mesh.db.models.agent import Agent
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.member import Member
 from mesh.db.models.notification import (
@@ -66,10 +67,18 @@ async def _human(factory, workspace, name: str, email: str | None = None) -> Mem
 
 async def _agent(factory, workspace, name: str) -> Member:
     async with factory() as session, session.begin():
+        # 0017_agent enforces members.agent_id → agents; seed the agents row
+        # (with an owner user) before the roster row.
+        owner = User(email=f"agent-owner-{uuid.uuid4().hex[:8]}@x.io", display_name=name)
+        session.add(owner)
+        await session.flush()
+        agent = Agent(workspace_id=workspace.id, name=name, owner_user_id=owner.id)
+        session.add(agent)
+        await session.flush()
         member = Member(
             workspace_id=workspace.id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent.id,
             role="member",
             display_override=name,
         )
@@ -781,6 +790,38 @@ async def test_preferences_crud_and_quiet_hours_validation(env):
             workspace_id=env["workspace"].id, member=env["bob"],
             entries=[{"event_type": "assigned", "email": "carrier-pigeon"}],
         )
+
+
+async def test_m3_preference_event_type_domain_rejected(env):
+    # M3 / §2.7: event_type must be 'all' or a real notification type —
+    # an unknown value would persist and never match a fan-out.
+    inbox = env["inbox"]
+    with pytest.raises(ValidationError) as exc:
+        await inbox.put_preferences(
+            workspace_id=env["workspace"].id, member=env["bob"],
+            entries=[{"event_type": "not-a-real-type", "in_app": True, "email": "digest"}],
+        )
+    assert exc.value.code == "validation_error"
+    # empty event_type is rejected (the existence guard fires before the domain check)
+    with pytest.raises(ValidationError):
+        await inbox.put_preferences(
+            workspace_id=env["workspace"].id, member=env["bob"],
+            entries=[{"event_type": "", "in_app": True, "email": "digest"}],
+        )
+
+
+async def test_read_all_rejects_invalid_filter(env):
+    # L6 / §3.2: read-all honours the same filter set; an unknown filter raises
+    # so a typo can never silently mark everything read. A valid `type` filter is
+    # accepted (no matching rows → 0 updated).
+    inbox = env["inbox"]
+    with pytest.raises(ValidationError):
+        await inbox.read_all(
+            workspace_id=env["workspace"].id, member=env["bob"], inbox_filter="bogus",
+        )
+    assert await inbox.read_all(
+        workspace_id=env["workspace"].id, member=env["bob"], notification_type="mentioned",
+    ) == 0
 
 
 async def test_issue_mute_unmute(env):
