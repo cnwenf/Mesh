@@ -67,6 +67,7 @@ from mesh.issue.statuses import (
     resolve_status_in_scope,
 )
 from mesh.issue.triggers import apply_assign_triggers
+from mesh.labels.required_fields import validate_required_field_values
 from mesh.member.display import resolve_display_name
 from mesh.outbox.service import emit_realtime
 from mesh.project.service import ProjectService
@@ -1432,6 +1433,18 @@ class IssueService:
 
         if not changes:
             return issue, {}
+
+        # label-property.md §4.5 required-field gate: issue.md calls the
+        # label-property module's hook BEFORE the save/transition completes —
+        # "save" on every non-empty PATCH, plus "status:<category>" when the
+        # status moved. Raises 422 required_field_missing and aborts in place
+        # (validation, not notification). System-driven remaps (move.py) do
+        # not pass through _apply_patch_tx and stay exempt, mirroring the
+        # strict-mode transition gate above.
+        occasions = {"save"}
+        if "status_id" in changes and issue.state_category is not None:
+            occasions.add(f"status:{issue.state_category}")
+        await validate_required_field_values(session, issue=issue, occasions=occasions)
 
         # Optimistic version bump + activity trail (one row per field).
         issue.version = issue.version + 1

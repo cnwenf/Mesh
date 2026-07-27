@@ -201,3 +201,169 @@
 .mesh-labels__option-draft > :first-child {
   flex: 1 1 auto;
 }
+
+/* ---------------------------------------------------------------------------
+ * issue 详情侧栏:标签选择器 + 自定义字段面板(MES-32 关联层,§4.2/§4.3)
+ * ------------------------------------------------------------------------- */
+
+.mesh-issue-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mesh-issue-labels__chips {
+  list-style: none;
+  margin: 0;
+  padding: 0.125rem 0;
+  min-height: 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.mesh-issue-labels__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: 999px;
+  background: var(--mesh-color-surface-2, #f6f8fa);
+  font-size: 0.8125rem;
+}
+
+.mesh-issue-labels__chip-name {
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-issue-labels__chip-remove {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--mesh-color-text-2, #57606a);
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0 0.125rem;
+}
+
+.mesh-issue-labels__chip-remove:hover {
+  color: var(--mesh-color-danger, #cf222e);
+}
+
+.mesh-issue-labels__suggest {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: 0.375rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.mesh-issue-labels__suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.mesh-issue-labels__suggest-item:hover {
+  background: var(--mesh-color-surface-2, #f6f8fa);
+}
+
+.mesh-issue-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mesh-issue-fields__loading,
+.mesh-issue-fields__empty {
+  margin: 0;
+  color: var(--mesh-color-text-2, #57606a);
+  font-size: 0.8125rem;
+}
+
+.mesh-issue-fields__control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mesh-issue-fields__label {
+  font-size: 0.8125rem;
+  color: var(--mesh-color-text-2, #57606a);
+}
+
+.mesh-issue-fields__textarea {
+  min-height: 4rem;
+  resize: vertical;
+  font: inherit;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: 0.375rem;
+  background: var(--mesh-color-surface, #ffffff);
+  color: inherit;
+}
+
+.mesh-issue-fields__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.mesh-issue-fields__multi {
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.mesh-issue-fields__multi legend {
+  font-size: 0.8125rem;
+  color: var(--mesh-color-text-2, #57606a);
+  padding: 0 0.25rem;
+}
+
+.mesh-issue-fields__multi-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.mesh-issues-detail__sidebar-heading {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--mesh-color-text-2, #57606a);
+}
+
+.mesh-issue-fields__select-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.mesh-issue-fields__select-wrap > select {
+  flex: 1;
+}
+
+.mesh-issue-fields__select-dot {
+  flex-shrink: 0;
+}

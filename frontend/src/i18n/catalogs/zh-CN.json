@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "41a13895",
+  "version": "9ddcc79f",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -872,6 +872,21 @@
     "board.moveConfirm": "确认移动",
     "board.wipExceededToast": "列 {group} 已超过在制品上限（{count}/{limit}）。",
     "board.noAssignee": "无负责人",
-    "board.noProject": "无项目"
+    "board.noProject": "无项目",
+    "common.create": "创建",
+    "error.invalid_field_value": "该值与字段类型不匹配",
+    "error.required_field_missing": "完成此操作前需先填写必填字段",
+    "error.label_scope_mismatch": "项目级标签只能打给同一项目的 issue",
+    "issueLabels.sectionTitle": "标签",
+    "issueLabels.addPlaceholder": "添加标签…",
+    "issueLabels.remove": "移除标签 {name}",
+    "issueLabels.createInline": "新建 “{name}”",
+    "issueLabels.createTitle": "新建标签 “{name}”",
+    "issueLabels.colorLabel": "颜色",
+    "issueLabels.colorHex": "十六进制颜色",
+    "issueFields.sectionTitle": "自定义字段",
+    "issueFields.empty": "此 issue 暂无适用的自定义字段",
+    "issueFields.memberNone": "无成员",
+    "issueFields.selectNone": "未设置"
   }
 }

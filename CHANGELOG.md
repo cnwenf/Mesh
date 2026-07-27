@@ -3,6 +3,47 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.13.1] - 2026-07-27
+label-property 的 **issue 关联层**(MES-32 余量切片,阶段 4·核心工作·C):定义层(v0.11.0)之上,把标签与带类型自定义字段的值挂到 issue 上 —— 关联数据模型、关联端点(按类型校验 + 必填阻断)、issue 侧实时事件、issue 详情页标签 picker 与字段编辑面板。
+
+### Added
+
+- **数据模型(label-property.md §2.3/§2.6/§2.7,README §6.2)**:Alembic 迁移 `0014_issue_associations`(0001→0014 单 head 链;后合入重编号避开上游 0013_view_issue_positions(MES-33 kanban 投影层))。`issue_labels`(复合 PK `(issue_id, label_id)` + 同租户复合 FK → issues / labels 双向 CASCADE + 正反查索引 + RLS `mesh_issue_labels_tenant`);`issue_custom_field_values` EAV(按类型分列 + JSONB、`UNIQUE(issue_id, field_def_id)`、`num_nonnulls(value_*) ≤ 1` 数据库兜底、`value_member_id` PG16 列级 `ON DELETE SET NULL (value_member_id)` —— 删除成员仅置空引用列、行与工作区列保留,§9 T18);§2.7 值索引一律 `field_def_id` 前导:数值/日期/成员部分 B-Tree + `btree_gin` 复合 GIN `(field_def_id, value_json)` 承接枚举 `@>` 包含扫描;RLS `mesh_issue_custom_field_values_tenant`。
+- **REST 端点(label-property.md §3.1 关联子集,§6.14)**:`GET/PUT /issues/{id}/labels`、`POST/DELETE /issues/{id}/labels/{label_id}`(项目级标签跨项目 422 `label_scope_mismatch`、幂等增删)、`POST /labels/{id}/merge`(源标签 issue 迁移目标去重后删源,返回迁移计数)、`GET/PUT /issues/{id}/custom-field-values`(整体提交;按 `def.type` 逐条校验:值列唯一性/类型匹配/数值 min-max-precision/URL/日期/枚举 active 选项归属/成员工作区归属,具名 422 `invalid_field_value`、停用字段 422 `field_inactive`;`If-Match: <issue.updated_at>` 乐观并发);写路径限流;无工作区前缀路径经 SECURITY DEFINER 解析器 + 成员门(跨租户 404)。
+- **必填校验钩子(§4.5)**:issue 模块在保存(任意非空 PATCH)与状态流转时调用 label-property 的 `validate_required_field_values`;`required_on` 文法 `save` / `status:<category>`(空 = 保存即校验),缺失 422 `required_field_missing` 就地阻断并在 `details.missing` 列出字段;系统驱动的迁移映射(move.py)与创建路径豁免(值在详情页后填)。
+- **实时事件(§3.5/§6.6/§6.7)**:`issue.labels_changed`(issue_id + 新标签全集)/ `issue.custom_field_changed`(issue_id + field_def_id + 新值)经 outbox → projector 唯一路径;详情频道 `issue:{id}` 恒发、工作区频道 `workspace:{ws}:issues` 按可见性(私有项目仅详情频道),与 issue 模块发射规则一致;no-op 不发事件(§6.9)。
+- **跨项目迁移联动(§3.8)**:move-preview 清除清单新增项目私有标签/字段值条目,迁移单事务内清除对应关联行并广播收敛事件;工作区级标签/值保留(`KEPT_FIELDS`); interim `skipped_modules` 占位移除。
+- **筛选接点(§2.7/§3.2)**:`mesh/labels/filters.py` 提供标签 ANY/ALL、枚举 `@>`、数值/日期范围、成员、布尔的 EXISTS 子句构造器(投影消费由 MES-33 kanban 投影层 v0.13.0 接通),附真实 `EXPLAIN (ANALYZE, BUFFERS)` 计划断言命中 `idx_icfv_value_json`(GIN)/ `idx_icfv_number`,无 `issue_custom_field_values` 全表扫描。
+- **前端关联层 UI(§4.2/§4.3)**:issue 详情侧栏标签 picker(彩色 chip + 输入联想 + 就地新建(颜色选择)+ `issue.labels_changed` 增量合并)与自定义字段编辑面板(十类型控件:文本/多行/URL/数值/日期/日期时间/单选下拉/多选 chip/成员选择(人与 agent 混合)/布尔开关;必填 `*` 标记;422 码 toast 外部化);`features/labels` 关联 API/类型模块;i18n 文案全外部化 en + zh-CN(886 键,与 main kanban 键并集去重、双语 parity 与 djb2 版本哈希重算)。
+
+### Fixed(验收第 1 轮打回修复,B1/B2/B3 线上实测级)
+
+- **B1 乐观并发丢更新(§5.4)**:关联写(`PUT /issues/{id}/labels` 整体替换、`POST/DELETE` 单标签、`PUT /issues/{id}/custom-field-values`、merge 迁移)成功后**同事务推进 `issue.updated_at` + `version`**,使旧 `If-Match` 令牌的后续写返回 `409 conflict`(原实现令牌永久有效、并发写静默互覆)。no-op 写不推进(§6.9)。前端编辑器经 `onIssueChanged` 回调驱动详情页重取 issue 刷新令牌。补过期令牌 409 / 值不被覆写 / no-op 不推进回归。
+- **B2 负数精度误拒**:`round(abs(x),10) != round(float(x),precision)` 左右异号,精度内负数恒被拒;改同号比较 `round(float(x),10) != round(float(x),precision)`(关联写与定义层 default 校验同修)。补 `precision=2` 下 `-2.5` 放行、`-2.555` 拒绝、负 default 放行/拒绝回归。
+- **B3 datetime 墙钟时区错位**:`<input type="datetime-local">` 原把本地墙钟拼 `Z` 当 UTC 落库(UTC+8 用户 10:00 存成 10:00Z);改**提交 local→UTC**(`toISOString`)、**回显 UTC→local**;date 字段维持 UTC 日历日语义不变。补 `TZ=Asia/Shanghai` 下双向转换钉死回归。
+
+### Fixed(验收第 2 轮复验:rebase 冲突解决 + 版本号避让)
+
+- **rebase 到最新 main(78b6d8e,含 PR #38/MES-33 kanban v0.13.0 + PR #40/MES-54 + CI 修复)**:`move.py` 冲突互补全保留(MES-33 抽出共用的 `apply_confirmed_move_in_session` 原子 move/鉴权/脱敏,本 PR §3.8 的 `clear_cleared_associations` / `emit_association_cleared_events` 接入同一事务;MES-54 的 `redact_move_payload` 脱敏 + `move_version_required` 422 转正同在);`bulk.py` 同区互补;`playwright.config.ts` 保留 `real-*.spec.ts` glob 排除(本 PR 的 `real-assoc.spec.ts` 自然纳入,不重进默认 mock 门禁);i18n `en.json` / `zh-CN.json` 键集与 main kanban 键取并集(886 键,双语 parity 与 djb2 版本哈希重算);`README.md` / `CHANGELOG.md` 版本号避让至 **v0.13.1**(main 顶已发 v0.13.0,沿用 0.12.1 将致 semver 倒挂)。
+- **React 19 兼容(MES-56 合入后)**:`JSX.Element` → `React.JSX.Element`;关联编辑器重取改由 `issue.updated_at` 变化驱动(不随 reloadKey,避免子组件 effect 抢跑页面重取的请求时序)+ 异常包络防御 + 详情页测试等待编辑器挂载请求落定;vitest.setup 异步断言超时 1s→5s 消抖。
+
+### Fixed(验收 🟡 项随轮处理)
+
+- **merge 硬化**:迁移插入改 `INSERT … ON CONFLICT DO NOTHING`(并发打标/合并竞态收敛,消除裸 PK 500);并发 FK 违约映射 404;`merged_issue_count` 只计**存活** carrier(软删 issue 不迁移/不计入/不发事件,计数 == 事件 == 实际变更);carrier 预算 `MERGE_MAX_CARRIERS=10000`,超限 422 `merge_too_large`(details 带 count/budget);carrier 查询与 merge 内 Project 查询补 `workspace_id` 谓词纵深防御。补并发合并收敛 / 软删计数 / 预算拒绝回归。
+- **bulk-move 关联清除零测试**:补 BulkService 携私有标签+私有字段值迁移用例(断言私有清除、工作区级保留、收敛事件、issue 落目标项目)。
+- **字段面板非受控不一致**:文本/数值/日期/日期时间控件随 `entries` 值身份(key 含 `updated_at`)重挂载,实时重拉后显示他端新值;单选选中项补色点(LOW 保真)。补实时重拉刷新回归。
+- **测试严谨性(P3)**:`replace_labels`/`set_values` 上限测试改用 51 个**不同** id/dict 并断言 `details.count=51`(不再被重复检测分支顶替);关联写路由补第 121 次写 429 拒侧。
+- **文档漂移(P3)**:迁移注释 0012→0014;spec §4.5 增补「创建态不校验必填」澄清;前端 `test:e2e:mes32` 一键脚本。
+
+### Quality-Regression
+
+- **跨租户默认状态解析回归**:`resolve_default_status` 缺 `workspace_id` 谓词、多工作区并存时可解析到他租户默认状态(间歇 500)的缺陷已由上游 MES-46 M1(PR #36)收口;本增量独立发现同缺陷并补确定性回归(目标租户默认状态取最大 UUID,谓词缺失时必解析到另一租户)。
+
+### Quality
+
+- 后端:关联层服务/钩子/接点/路由单测(真实 PostgreSQL,含类型校验负向矩阵、事件通道与 no-op 抑制、迁移清除、B1/B2/B3 回归、merge 硬化、bulk-move 关联、T1/T18 复合 FK 与成员置空)+ 真实 e2e(uvicorn 子进程全真:关联 CRUD 落库、具名 422、必填阻断状态流转、T1 跨租户复合 FK INSERT 拒绝 + API 404 + RLS fail-closed、outbox 唯一路径 + projector seq 单调、限流第 121 写 429);全新库 `alembic upgrade head` 0001→0014 单 head 链与模型↔迁移漂移守卫全绿;ruff 全绿;覆盖率(整体与新增代码)≥90% 双达标。
+- 前端:关联 API 与两个编辑器组件单测(vitest **1316 例全绿** / 129 文件,含十类型控件 / 实时帧重拉 / 受控重挂载 / toast 引用闭环 / B3 时区钉死回归)+ 真实后端 Playwright 走查(注册/建区 → API 预置 → 详情页打标签:联想/选中/chip/就地新建/移除、字段面板按类型设值:单选/数值/布尔,刷新持久化,7 张截图存证 `e2e/evidence/assoc`);全局四项(语句/分支/函数/行)**97.29% / 90.59% / 92.98% / 97.29%** 门禁全绿,变更行覆盖率 **98.9%**(≥90% 门禁);typecheck/lint 0 错。
+- 文档同步:README 实现状态表 label-property 行升级 v0.13.1(定义层 + 关联层)、issue 行关联备注更新。
 ## [0.13.0] - 2026-07-27
 
 kanban 看板与视图的 **issue 投影层**(issue 耦合余量切片,MES-33,阶段 4·核心工作):在 views 定义层之上接真实 issue 数据 —— 分组投影查询(整体游标)、每视图手工排序、原子拖拽 + WIP 强制、跨项目迁移视图侧入口、实时增量合并、`view.presence`,以及前端真实数据看板。

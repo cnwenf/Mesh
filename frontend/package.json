@@ -17,7 +17,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts"
   },
   "dependencies": {
     "react": "19.2.8",

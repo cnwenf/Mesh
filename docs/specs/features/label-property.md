@@ -537,7 +537,7 @@ Issue 详情侧栏
 ```
 
 **必填校验时机**(由 `required_on` 配置):
-- `save`:issue 保存(`POST`/`PATCH /issues/{id}`)时校验。
+- `save`:issue 更新保存(`PATCH /issues/{id}` 非空变更)时校验。**创建态(`POST /issues`)不校验必填**——创建请求不携带字段值,值在详情页后填;若创建即校验,必填字段将永久阻塞创建。
 - `status:<category>`(如 `status:done`):状态流转到该 category 时校验;缺失返回 `422 required_field_missing` 并就地阻断(非通知,属校验)。issue.md 在状态流转前调用本模块校验钩子。
 
 ### 4.6 通知触发点
