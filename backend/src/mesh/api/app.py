@@ -16,6 +16,10 @@ from mesh import __version__
 from mesh.agent.channels import register_agent_checkers
 from mesh.agent.routes import router as agent_router
 from mesh.agent.service import AgentService
+from mesh.runtime.channels import register_execution_checkers
+from mesh.runtime.daemon_routes import router as runtime_daemon_router
+from mesh.runtime.routes import router as runtime_router
+from mesh.runtime.service import RuntimeService
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -210,6 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
+    app.state.runtime_service = RuntimeService(session_factory, settings)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -217,6 +222,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_issue_checkers(app.state.authorizer, session_factory)
     register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
+    register_execution_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -234,6 +240,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(attachment_router)
     app.include_router(comment_inbox_router)
     app.include_router(agent_router)
+    app.include_router(runtime_router)
+    app.include_router(runtime_daemon_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

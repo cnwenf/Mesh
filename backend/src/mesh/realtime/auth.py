@@ -89,7 +89,7 @@ MEMBER_INBOX_SUFFIX = ":inbox"
 # private resource. Entities NOT listed here (e.g. not-yet-implemented modules)
 # keep the workspace-membership floor until they opt into resource-level checks
 # by adding themselves here AND registering a checker.
-RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project", "agent"})
+RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project", "agent", "execution"})
 
 
 @runtime_checkable

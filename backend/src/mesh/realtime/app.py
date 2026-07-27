@@ -18,6 +18,7 @@ from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.issue.channels import register_issue_checkers
 from mesh.project.channels import register_resource_checkers
+from mesh.runtime.channels import register_execution_checkers
 from mesh.realtime.auth import (
     ChannelAuthorizer,
     DefaultChannelAuthorizer,
@@ -69,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_issue_checkers(app.state.authorizer, session_factory)
     register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
+    register_execution_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
