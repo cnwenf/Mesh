@@ -54,10 +54,29 @@ async def app_role_engine(db_url):
 async def _seed(session_factory, workspace_id, tag: str) -> uuid.UUID:
     """Seed one connected row-set of all five tables (owner connection)."""
     async with session_factory() as session, session.begin():
+        from mesh.db.models.agent import Agent
+        from mesh.db.models.user import User
+
+        # Agent roster rows reference a real agents row (composite FK); the
+        # agent needs a human owner (agents.owner_user_id NOT NULL).
+        agent_owner = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Agent Owner",
+        )
+        session.add(agent_owner)
+        await session.flush()
+        agent_row = Agent(
+            workspace_id=workspace_id,
+            name=f"RLS Agent {tag}",
+            owner_user_id=agent_owner.id,
+        )
+        session.add(agent_row)
+        await session.flush()
         actor = Member(
             workspace_id=workspace_id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent_row.id,
             role="member",
         )
         session.add(actor)

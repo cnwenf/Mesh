@@ -242,6 +242,10 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     cap: 100,
     value: 500,
     email: 'jane@corp.com',
+    // agent §4.9 presence 容量三元组占位符(MES-60)
+    running: 1,
+    queued: 2,
+    awaiting: 0,
     workspace: 'Acme',
     when: '2026-08-01 10:00',
     prefix: 'invtk_Ab3Xy9',

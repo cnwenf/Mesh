@@ -2,11 +2,11 @@
  * 成员名册真实后端 e2e 全局准备:
  * 1) 以受限 mesh_app 角色(RLS 生效)在 mesh_test 库上拉起真实 uvicorn API(8099);
  * 2) 经真实 REST 注册/登录/建工作区/邀请并兑换第二名人类成员;
- * 3) 直接 INSERT 一条 agent 名册行(agents 表尚未落地,以 display_override 提供显示名);
+ * 3) 经真实 REST(POST /agents,唯一创建入口的后端面)创建 agent「代码助手」;
  * 4) 把 owner token / workspace / 第二名成员写入上下文文件供用例登录与断言。
  * teardown 关闭 API 子进程。
  */
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,31 +14,16 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BACKEND = resolve(ROOT, '..', 'backend');
 const PYTHON = resolve(BACKEND, '.venv/bin/python');
-const API_PORT = 8099;
+// 端口同样可经环境变量切换(并行联调避免与其他分支互踩)。
+const API_PORT = Number(process.env.MESH_E2E_API_PORT ?? 8099);
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
-const DB = 'mesh_test';
+// 允许以环境变量切换目标库(并行开发期避免共享 mesh_test 被其他分支迁移互踩)。
+const DB = process.env.MESH_E2E_DB ?? 'mesh_test';
 const CONTEXT_FILE = resolve(ROOT, 'e2e', '.members-context.json');
 const PASSWORD = 'a-strong-passw0rd';
 
 const DB_URL = `postgresql+asyncpg://mesh:mesh@127.0.0.1:5432/${DB}`;
 const APP_DB_URL = `postgresql+asyncpg://mesh_app:mesh_app@127.0.0.1:5432/${DB}`;
-const SEED_DSN = `postgresql://mesh:mesh@127.0.0.1:5432/${DB}`;
-
-/** Directly seed an agent roster row via asyncpg (agents table is deferred). */
-function seedAgent(workspaceId) {
-  const script =
-    'import asyncio, asyncpg, sys\n' +
-    'async def main():\n' +
-    `    conn = await asyncpg.connect("${SEED_DSN}")\n` +
-    '    await conn.execute(\n' +
-    '        "INSERT INTO members (workspace_id, member_type, agent_id, role, display_override, joined_at) "\n' +
-    "        \"VALUES ($1, 'agent', gen_random_uuid(), 'member', '代码助手', now())\",\n" +
-    '        sys.argv[1],\n' +
-    '    )\n' +
-    '    await conn.close()\n' +
-    'asyncio.run(main())\n';
-  execFileSync(PYTHON, ['-c', script, workspaceId], { encoding: 'utf8', timeout: 30_000 });
-}
 
 async function waitReady(timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -113,8 +98,17 @@ export default async function globalSetup() {
     const accepted = await api('POST', '/api/v1/invitations/accept', joinerToken, { token: invToken });
     const joinerMemberId = accepted.data.member.id;
 
-    // Insert an agent roster row (agents table deferred; display_override supplies the name).
-    seedAgent(ws.id);
+    // Create the agent through the real REST surface (agent.md §3.1 — the
+    // backend half of the roster's single [+ New Agent] entry).
+    await api('POST', `/api/v1/workspaces/${ws.id}/agents`, ownerToken, {
+      name: '代码助手',
+      role_tag: '工程',
+      bio: '协助工程任务',
+      visibility: 'workspace',
+      system_instructions: '你是工程助手。',
+      model_config: { model_tier: 'balanced', temperature: 0.2, max_tokens: 8192 },
+      trigger_on_assign: true,
+    });
 
     writeFileSync(
       CONTEXT_FILE,

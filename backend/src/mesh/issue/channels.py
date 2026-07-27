@@ -41,8 +41,13 @@ def make_issue_channel_checker(session_factory) -> PrefixChecker:
         info = parse_channel(channel)
         if info is None:
             return False
+        key = info.key
+        # ``issue:{id}:runs`` carries the execution state stream (agent.md
+        # §3.6) — same visibility boundary as the issue detail channel.
+        if key.endswith(":runs"):
+            key = key[: -len(":runs")]
         try:
-            issue_id = uuid.UUID(info.key)
+            issue_id = uuid.UUID(key)
         except ValueError:
             return False
         for workspace_id in sorted(principal.workspace_ids):
