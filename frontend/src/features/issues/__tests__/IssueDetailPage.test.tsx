@@ -7,7 +7,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fakeResponse, stubFetch, headersOf } from '../../../api/__tests__/fetchStub';
+import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
@@ -193,13 +193,37 @@ function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
   ];
 }
 
-/** 附件区于详情加载后就位即拉一次 issue 附件列表(空):占位于首轮 9 响应之后。 */
+/** 附件列表固定响应(空页)。 */
 function attachmentsEmpty(): ReturnType<typeof fakeResponse> {
   return fakeResponse({ body: { data: [], next_cursor: null } });
 }
 
+/** issue 附件列表 GET:面板挂载/确认后重取各一次,与详情并行,到达顺序不确定。 */
+function isAttachmentListCall(url: string, init?: RequestInit): boolean {
+  return url.endsWith('/attachments') && (init?.method ?? 'GET') === 'GET';
+}
+
+/**
+ * URL 感知的顺序桩:附件列表请求恒定回空页、**不消耗队列**(消除与并行详情
+ * 请求的到达顺序竞争 —— 盲队列在附件 fetch 插队时会整体错位,CI 上间歇红);
+ * 其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
+ */
+function detailStub(...responses: Response[]): FetchStub {
+  const calls: FetchStub['calls'] = [];
+  let index = 0;
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init });
+    if (isAttachmentListCall(url, init)) return attachmentsEmpty();
+    const response = responses[Math.min(index, responses.length - 1)];
+    index += 1;
+    return response;
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
 function queue(...extra: ReturnType<typeof fakeResponse>[]): FetchStub {
-  const stub = stubFetch(...detailResponses(), attachmentsEmpty(), ...extra);
+  const stub = detailStub(...detailResponses(), ...extra);
   vi.stubGlobal('fetch', stub.fetchImpl);
   return stub;
 }
@@ -473,10 +497,9 @@ describe('IssueDetailPage', () => {
   });
 
   it('shows the error state with retry when the detail request fails', async () => {
-    const stub = stubFetch(
+    const stub = detailStub(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
       ...detailResponses(),
-      attachmentsEmpty(),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
