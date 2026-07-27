@@ -153,9 +153,14 @@ def upgrade() -> None:
           heartbeat_interval_seconds INT NOT NULL DEFAULT 15 CHECK (heartbeat_interval_seconds > 0),
           lease_grace_seconds        INT NOT NULL DEFAULT 45 CHECK (lease_grace_seconds > 0),
           version                    TEXT NULL,
+          created_by                 UUID NULL,
           created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
           updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
-          deleted_at                 TIMESTAMPTZ NULL
+          deleted_at                 TIMESTAMPTZ NULL,
+          -- registration actor (console); owns the daemon api_token issued at
+          -- activation (api_tokens.owner_member_id is NOT NULL)
+          FOREIGN KEY (workspace_id, created_by) REFERENCES members(workspace_id, id)
+            ON DELETE SET NULL (created_by)
         )
         """
     )
@@ -350,6 +355,7 @@ def upgrade() -> None:
                           CHECK (kind IN ('env','file','repo_token','ssh_key')),
           scope           TEXT NOT NULL DEFAULT 'execution',
           encrypted_value TEXT NOT NULL,
+          env_name        TEXT NULL CHECK (env_name IS NULL OR env_name ~ '^[A-Z][A-Z0-9_]{0,63}$'),
           redact_in_logs  BOOLEAN NOT NULL DEFAULT true,
           expires_at      TIMESTAMPTZ NULL,
           created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
