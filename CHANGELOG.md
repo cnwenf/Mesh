@@ -18,7 +18,7 @@ kanban 看板与视图的 **issue 投影层**(issue 耦合余量切片,MES-33,�
 
 ### Quality
 
-- 后端:`mesh/views` 投影层单测(投影编译器 / 投影服务 / 进程内 API / move / presence / 模型)+ 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真:分组整体游标 / 原子 move+WIP block·warn / T9 并发拖拽恰一 409 / WIP 并发不穿透 / T22 跨项目迁移 / T1 跨租户 404 + 复合 FK 拒绝 / T6 重放对账 / `view.presence` 广播 / 真实 HTTP `reorder` 落库+精度耗尽+RLS+401);`pytest-cov` 整体 **95.41%**(≥90% 门禁,新增模块 93–100%);全新库 0001→0013 单 head 实测;ruff 全绿;文档词汇 / 名册守卫 / `schema_r2_validation.sql` 全绿。
+- 后端:`mesh/views` 投影层单测(投影编译器 / 投影服务 / 进程内 API / move / presence / 模型)+ 真实 e2e(uvicorn 子进程 + PostgreSQL 16 + Redis 全真:分组整体游标 / 原子 move+WIP block·warn / T9 并发拖拽恰一 409 / WIP 并发不穿透 / T22 跨项目迁移 / T1 跨租户 404 + 复合 FK 拒绝 / T6 重放对账 / `view.presence` 广播 / 真实 HTTP `reorder` 落库+精度耗尽+RLS+401);`pytest-cov` 整体 **95.45%**(≥90% 门禁,新增模块 93–100%);全新库 0001→0013 单 head 实测;ruff 全绿;文档词汇 / 名册守卫 / `schema_r2_validation.sql` 全绿。
 - 前端:board 投影层单测(projection 契约 / boardRealtime 合并+重分桶+归属重判 / BoardColumns 拖拽落点+WIP+快速创建 / loadAllGroups 多页合并 / BoardPage 拖拽+WIP 弹回+跨项目预览+快速创建+实时接线+重同步)+ Playwright 真实后端走查(注册/登录 → 建区 → 真实卡片 → 拖拽持久化 → 快速创建 → WIP block → 断线重同步,6 张截图存证 `e2e/evidence/board-projection`,存证去重校验 `scripts/check-evidence-unique.mjs` 接入 CI);vitest **1324 例**全绿,全局四项 **97.14% / 90.33% / 92.86% / 97.14%**,变更语句行 **93.4%** 门禁全绿;typecheck / lint 0 错、生产构建全绿。
 - 文档同步:README 实现状态表 kanban 行升级为「定义层 + 投影层」(v0.13.0);kanban.md 投影增量落地标注 + label/自定义字段分组随 MES-32 增量说明。
 - 范围说明:label / 自定义字段的分组与筛选依赖 `issue_labels` / `issue_custom_field_values` 关联层,该关联层属并行线 MES-32,尚未合入 main;投影层对该两类分组/筛选按 issue 模块同口径门控(`projection_field_pending` / `group_by=label` 400),待 MES-32 落地后接通,非缺陷。
