@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "ddfd2339",
+  "version": "8954db49",
   "messages": {
     "common.save": "Save",
     "common.cancel": "Cancel",
@@ -1228,6 +1228,7 @@
     "runtimes.credential.kindValue.env": "Environment variable",
     "runtimes.credential.kindValue.file": "File",
     "runtimes.credential.kindValue.repo_token": "Repo token",
-    "runtimes.credential.kindValue.ssh_key": "SSH key"
+    "runtimes.credential.kindValue.ssh_key": "SSH key",
+    "error.secret_detected": "Content contains workspace secrets and was blocked"
   }
 }

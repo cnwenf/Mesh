@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "d9faf979",
+  "version": "c0bcdf52",
   "messages": {
     "common.save": "保存",
     "common.cancel": "取消",
@@ -1228,6 +1228,7 @@
     "runtimes.credential.kindValue.env": "环境变量",
     "runtimes.credential.kindValue.file": "文件",
     "runtimes.credential.kindValue.repo_token": "仓库 token",
-    "runtimes.credential.kindValue.ssh_key": "SSH 密钥"
+    "runtimes.credential.kindValue.ssh_key": "SSH 密钥",
+    "error.secret_detected": "内容包含工作区凭据,已被拦截"
   }
 }

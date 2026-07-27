@@ -29,7 +29,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **B2(CRITICAL)前端缺失**:前端 Runtimes UI 全量入库(此前只提交了 e2e spec 与存证);走查 spec 接入真实存在的 playwright 配置与 CI job;存证由已提交代码重新生成。
 - **B3(CRITICAL)CI 红**:ruff 全量清零(src + tests,60 项:I001/F401/UP017/UP041/B007/B017/E501)。
 - **H1**:claim 响应回传 `resume_context`(该执行最新 approved 审批冻结的检查点),批准后续跑端到端接通(§6.10)。
-- **H2**:全通道脱敏红线落地——`runtime/redaction.py` 统一守卫,附件处理管线对文本型上传做 secret 扫描,命中即阻断(`scan_status='infected'`,隔离闸门不放行)+ critical 安全审计;评论通道接入点就绪(评论模块 MES-58 合入后一行接通)。
+- **H2**:全通道脱敏红线**三通道全部接通**——`runtime/redaction.py` 统一守卫:日志(封口前替换 `***`)、附件(文本型上传命中即 `scan_status='infected'` 阻断 + critical 审计)、**评论(第 2 轮接通:`comment_inbox/service.py` 创建/编辑写路径在落库/广播前扫描 `body_markdown`/`body_text`,命中即 422 `secret_detected` 不写出 + critical 审计独立事务留存;`test_comment_secret_guard.py` 实测拒写/不改写/审计留存/无密钥惰性四路径)**。
 - **H3**:`GET /runtimes` 增 `labels=k:v,k2:v2` 过滤(JSONB `@>` 包含匹配)。
 - **H4**:审批裁决权补齐触发者路径(issue reporter,数据模型中的持久触发信号)。
 - **F7**:claim 改 INNER JOIN agents(§2.5 spec 语义,无执行者的执行不可领)。

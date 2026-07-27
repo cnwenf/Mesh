@@ -210,7 +210,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Comment & inbox module (comment-inbox.md): comments, §6.9 mention
     # triggers, §6.13 notification fan-out (relay side), inbox operations.
     app.state.comment_service = CommentService(
-        session_factory, max_agent_chain_depth=settings.max_agent_chain_depth
+        session_factory,
+        max_agent_chain_depth=settings.max_agent_chain_depth,
+        # §6.16 / runtime.md R12: comment write path secret scanning key.
+        signing_secret=settings.jwt_secret,
     )
     app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
