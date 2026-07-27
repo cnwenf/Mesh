@@ -35,6 +35,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TEXT, TIMESTAMP, UUID
@@ -117,13 +118,37 @@ class Runtime(Base):
 
     __tablename__ = "runtimes"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "created_by"],
+            ["members.workspace_id", "members.id"],
+            ondelete="SET NULL (created_by)",
+            name="runtimes_workspace_id_created_by_fkey",
+        ),
         CheckConstraint(
             f"kind IN {RUNTIME_KIND_VALUES!r}", name="runtimes_kind_check"
         ),
         CheckConstraint(
             f"status IN {RUNTIME_STATUS_VALUES!r}", name="runtimes_status_check"
         ),
-        Index("idx_runtimes_status", "status", "last_heartbeat_at"),
+        Index("uq_runtimes_ws_id", "workspace_id", "id", unique=True),
+        Index(
+            "idx_runtimes_status",
+            "status",
+            "last_heartbeat_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_runtimes_runtime_token_hash",
+            "runtime_token_hash",
+            unique=True,
+            postgresql_where=text("runtime_token_hash IS NOT NULL"),
+        ),
+        Index(
+            "uq_runtimes_activation_token_hash",
+            "activation_token_hash",
+            unique=True,
+            postgresql_where=text("activation_token_hash IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -164,6 +189,7 @@ class Runtime(Base):
     heartbeat_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
     lease_grace_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=45)
     version: Mapped[str | None] = mapped_column(TEXT, default=None)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -181,17 +207,20 @@ class TaskExecution(Base):
         ForeignKeyConstraint(
             ["workspace_id", "agent_id"],
             ["agents.workspace_id", "agents.id"],
-            ondelete="SET NULL",
+            ondelete="SET NULL (agent_id)",
+            name="task_executions_workspace_id_agent_id_fkey",
         ),
         ForeignKeyConstraint(
             ["workspace_id", "issue_id"],
             ["issues.workspace_id", "issues.id"],
-            ondelete="SET NULL",
+            ondelete="SET NULL (issue_id)",
+            name="task_executions_workspace_id_issue_id_fkey",
         ),
         ForeignKeyConstraint(
             ["workspace_id", "cancel_requested_by"],
             ["members.workspace_id", "members.id"],
-            ondelete="SET NULL",
+            ondelete="SET NULL (cancel_requested_by)",
+            name="task_executions_workspace_id_cancel_requested_by_fkey",
         ),
         CheckConstraint(
             f"trigger IN {EXECUTION_TRIGGER_VALUES!r}", name="task_executions_trigger_check"
@@ -199,7 +228,20 @@ class TaskExecution(Base):
         CheckConstraint(
             f"status IN {EXECUTION_STATUS_VALUES!r}", name="task_executions_status_check"
         ),
-        Index("idx_executions_claimable", "workspace_id", "priority", "queued_at"),
+        Index("uq_task_executions_ws_id", "workspace_id", "id", unique=True),
+        Index(
+            "uq_task_executions_idem",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+        Index(
+            "idx_executions_claimable",
+            "workspace_id",
+            "priority",
+            "queued_at",
+            postgresql_where=text("status = 'queued'"),
+        ),
         Index("idx_executions_agent_time", "agent_id", text("queued_at DESC")),
         Index("idx_executions_issue_time", "issue_id", text("queued_at DESC")),
     )
@@ -266,13 +308,25 @@ class ExecutionAttempt(Base):
         ForeignKeyConstraint(
             ["workspace_id", "runtime_id"],
             ["runtimes.workspace_id", "runtimes.id"],
-            ondelete="SET NULL",
+            ondelete="SET NULL (runtime_id)",
+            name="execution_attempts_workspace_id_runtime_id_fkey",
         ),
         CheckConstraint(
             f"status IN {ATTEMPT_STATUS_VALUES!r}", name="execution_attempts_status_check"
         ),
-        Index("idx_attempts_lease_expired", "lease_expires_at"),
-        Index("idx_attempts_runtime_inflight", "runtime_id"),
+        # Requeue never reuses an attempt number (audit chain, T4).
+        UniqueConstraint("execution_id", "attempt_number"),
+        Index("uq_attempts_ws_id", "workspace_id", "id", unique=True),
+        Index(
+            "idx_attempts_lease_expired",
+            "lease_expires_at",
+            postgresql_where=text("status IN ('claimed','running','cancelling')"),
+        ),
+        Index(
+            "idx_attempts_runtime_inflight",
+            "runtime_id",
+            postgresql_where=text("status IN ('claimed','running','cancelling')"),
+        ),
         Index("idx_attempts_execution", "execution_id", "attempt_number"),
     )
 
@@ -319,6 +373,9 @@ class TaskLogSegment(Base):
             ["execution_attempts.workspace_id", "execution_attempts.id"],
             ondelete="CASCADE",
         ),
+        # Offsets are contiguous and non-overlapping per attempt.
+        UniqueConstraint("attempt_id", "start_offset"),
+        Index("uq_task_log_segments_ws_id", "workspace_id", "id", unique=True),
         Index("idx_log_segments_attempt_offset", "attempt_id", "start_offset"),
     )
 
@@ -354,6 +411,7 @@ class RepoCheckout(Base):
         CheckConstraint(
             f"status IN {CHECKOUT_STATUS_VALUES!r}", name="repo_checkouts_status_check"
         ),
+        Index("uq_repo_checkouts_ws_id", "workspace_id", "id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -387,6 +445,11 @@ class RuntimeCredential(Base):
     __tablename__ = "runtime_credentials"
     __table_args__ = (
         CheckConstraint(f"kind IN {CREDENTIAL_KIND_VALUES!r}", name="runtime_credentials_kind_check"),
+        CheckConstraint(
+            "env_name IS NULL OR env_name ~ '^[A-Z][A-Z0-9_]{0,63}$'",
+            name="runtime_credentials_env_name_check",
+        ),
+        Index("uq_runtime_credentials_ws_id", "workspace_id", "id", unique=True),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -401,6 +464,7 @@ class RuntimeCredential(Base):
     kind: Mapped[str] = mapped_column(TEXT, nullable=False, default="env")
     scope: Mapped[str] = mapped_column(TEXT, nullable=False, default="execution")
     encrypted_value: Mapped[str] = mapped_column(TEXT, nullable=False)
+    env_name: Mapped[str | None] = mapped_column(TEXT, default=None)
     redact_in_logs: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
@@ -426,6 +490,13 @@ class ExecutionCredential(Base):
             ["workspace_id", "credential_id"],
             ["runtime_credentials.workspace_id", "runtime_credentials.id"],
             ondelete="CASCADE",
+        ),
+        Index(
+            "uq_execution_credentials_ws_attempt",
+            "workspace_id",
+            "attempt_id",
+            "credential_id",
+            unique=True,
         ),
     )
 
@@ -455,6 +526,7 @@ class RuntimeHeartbeat(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(f"health IN {HEALTH_VALUES!r}", name="runtime_heartbeats_health_check"),
+        Index("uq_runtime_heartbeats_ws_id", "workspace_id", "id", unique=True),
         Index("idx_runtime_heartbeats_runtime_time", "runtime_id", text("created_at DESC")),
     )
 
@@ -506,7 +578,41 @@ class Approval(Base):
             f"subject_type IN {APPROVAL_SUBJECT_TYPES!r}", name="approvals_subject_type_check"
         ),
         CheckConstraint(f"status IN {APPROVAL_STATUS_VALUES!r}", name="approvals_status_check"),
-        Index("idx_approvals_pending", "workspace_id", "requested_at"),
+        Index("uq_approvals_ws_id", "workspace_id", "id", unique=True),
+        Index(
+            "idx_approvals_pending",
+            "workspace_id",
+            "requested_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
+        # One pending approval per subject (README §6.10).
+        Index(
+            "uq_approvals_pending_execution",
+            "workspace_id",
+            "subject_execution_id",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND subject_type = 'tool_call'"),
+        ),
+        Index(
+            "uq_approvals_pending_run",
+            "workspace_id",
+            "subject_run_id",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND subject_type = 'autopilot_action'"),
+        ),
+        Index(
+            "uq_approvals_pending_task",
+            "workspace_id",
+            "subject_task_id",
+            unique=True,
+            postgresql_where=text("status = 'pending' AND subject_type = 'squad_plan'"),
+        ),
+        Index(
+            "uq_approvals_idem",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
