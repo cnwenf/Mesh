@@ -11,6 +11,11 @@ function frame(event: string, payload: Record<string, unknown>): RealtimeEventFr
   return { op: 'event', channel: 'issue:iss-1', seq: 1, event, payload };
 }
 
+/** 畸形帧构造器(M4):payload 在真实链路上可能不是对象。 */
+function malformedFrame(event: string, payload: unknown): RealtimeEventFrame {
+  return { op: 'event', channel: 'issue:iss-1', seq: 1, event, payload } as RealtimeEventFrame;
+}
+
 function attachment(overrides: Partial<Attachment> = {}): Attachment {
   return {
     id: 'att-1',
@@ -110,6 +115,14 @@ describe('applyAttachmentProcessed', () => {
     expect(next[0].scan_status).toBe('pending');
     expect(next[1].scan_status).toBe('clean');
   });
+
+  it('returns the list unchanged for null/undefined/non-object payloads (M4, no crash in updater)', () => {
+    const list = [attachment()];
+    expect(applyAttachmentProcessed(list, malformedFrame('attachment.processed', null))).toBe(list);
+    expect(applyAttachmentProcessed(list, malformedFrame('attachment.processed', undefined))).toBe(list);
+    expect(applyAttachmentProcessed(list, malformedFrame('attachment.processed', 'att-1'))).toBe(list);
+    expect(applyAttachmentProcessed(list, malformedFrame('attachment.processed', ['att-1']))).toBe(list);
+  });
 });
 
 describe('applyAttachmentDeleted', () => {
@@ -129,5 +142,12 @@ describe('applyAttachmentDeleted', () => {
     expect(applyAttachmentDeleted(list, frame('attachment.processed', { id: 'att-1' }))).toBe(list);
     expect(applyAttachmentDeleted(list, frame('attachment.deleted', {}))).toBe(list);
     expect(applyAttachmentDeleted(list, frame('comment.deleted', { id: 'att-1' }))).toBe(list);
+  });
+
+  it('returns the list unchanged for null/undefined/non-object payloads (M4, no crash in updater)', () => {
+    const list = [attachment()];
+    expect(applyAttachmentDeleted(list, malformedFrame('attachment.deleted', null))).toBe(list);
+    expect(applyAttachmentDeleted(list, malformedFrame('attachment.deleted', undefined))).toBe(list);
+    expect(applyAttachmentDeleted(list, malformedFrame('attachment.deleted', 42))).toBe(list);
   });
 });

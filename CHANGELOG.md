@@ -3,7 +3,7 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.13.1] - 2026-07-27
+## [0.13.2] - 2026-07-27
 label-property 的 **issue 关联层**(MES-32 余量切片,阶段 4·核心工作·C):定义层(v0.11.0)之上,把标签与带类型自定义字段的值挂到 issue 上 —— 关联数据模型、关联端点(按类型校验 + 必填阻断)、issue 侧实时事件、issue 详情页标签 picker 与字段编辑面板。
 
 ### Added
@@ -24,7 +24,7 @@ label-property 的 **issue 关联层**(MES-32 余量切片,阶段 4·核心工�
 
 ### Fixed(验收第 2 轮复验:rebase 冲突解决 + 版本号避让)
 
-- **rebase 到最新 main(78b6d8e,含 PR #38/MES-33 kanban v0.13.0 + PR #40/MES-54 + CI 修复)**:`move.py` 冲突互补全保留(MES-33 抽出共用的 `apply_confirmed_move_in_session` 原子 move/鉴权/脱敏,本 PR §3.8 的 `clear_cleared_associations` / `emit_association_cleared_events` 接入同一事务;MES-54 的 `redact_move_payload` 脱敏 + `move_version_required` 422 转正同在);`bulk.py` 同区互补;`playwright.config.ts` 保留 `real-*.spec.ts` glob 排除(本 PR 的 `real-assoc.spec.ts` 自然纳入,不重进默认 mock 门禁);i18n `en.json` / `zh-CN.json` 键集与 main kanban 键取并集(886 键,双语 parity 与 djb2 版本哈希重算);`README.md` / `CHANGELOG.md` 版本号避让至 **v0.13.1**(main 顶已发 v0.13.0,沿用 0.12.1 将致 semver 倒挂)。
+- **rebase 到最新 main(8e67e2c,含 PR #38/MES-33 kanban v0.13.0 + PR #39/MES-32 label 关联层 v0.13.1 + PR #40/MES-54 + CI 修复)**:`move.py` 冲突互补全保留(MES-33 抽出共用的 `apply_confirmed_move_in_session` 原子 move/鉴权/脱敏,本 PR §3.8 的 `clear_cleared_associations` / `emit_association_cleared_events` 接入同一事务;MES-54 的 `redact_move_payload` 脱敏 + `move_version_required` 422 转正同在);`bulk.py` 同区互补;`playwright.config.ts` 保留 `real-*.spec.ts` glob 排除(本 PR 的 `real-assoc.spec.ts` 自然纳入,不重进默认 mock 门禁);i18n `en.json` / `zh-CN.json` 键集与 main(kanban + MES-32 label 关联层)键取并集(912 键,双语 parity 与 djb2 版本哈希重算);`README.md` / `CHANGELOG.md` 版本号避让至 **v0.13.2**(main 顶已发 v0.13.1/MES-32,沿用旧号将致 semver 倒挂)。
 - **React 19 兼容(MES-56 合入后)**:`JSX.Element` → `React.JSX.Element`;关联编辑器重取改由 `issue.updated_at` 变化驱动(不随 reloadKey,避免子组件 effect 抢跑页面重取的请求时序)+ 异常包络防御 + 详情页测试等待编辑器挂载请求落定;vitest.setup 异步断言超时 1s→5s 消抖。
 
 ### Fixed(验收 🟡 项随轮处理)

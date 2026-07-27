@@ -7,7 +7,7 @@
  * scan_status ∈ clean/skipped → ready(可预览)。scanning→ready 的实时切换由消费侧
  * (AttachmentPanel)经 attachment.processed 帧合并完成。
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { env } from '../../env';
 import {
@@ -26,6 +26,7 @@ import type {
   MultipartUploadDescriptor,
   SingleUploadDescriptor,
   UploadEntry,
+  UploadPhase,
   UploadRequestResponse,
 } from './types';
 
@@ -131,6 +132,39 @@ function makeLocalId(): string {
   return typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
     : `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** complete 之前的上传阶段:这些阶段内服务端台账为 pending/uploading,可 abort(§3.5 状态机)。 */
+const PRE_COMPLETE_PHASES: ReadonlySet<UploadPhase> = new Set(['uploading', 'completing']);
+
+/**
+ * 秒传(upload=null)时由 upload-request 响应 + 本地文件元数据合成渲染对象:
+ * 服务端此刻**已建好附件行 + links**(upload_status='completed'),无需也不能再
+ * complete(重放 409,§3.5 状态机)。缺失的服务端字段(uploader/尺寸等)随后由
+ * 消费侧列表刷新 / attachment.processed 帧补齐。
+ */
+function attachmentFromInstantUpload(response: UploadRequestResponse, file: File): Attachment {
+  const extension = extensionOf(file.name);
+  const now = new Date().toISOString();
+  return {
+    id: response.id,
+    blob_id: response.blob_id ?? '',
+    file_name: file.name,
+    file_size: file.size,
+    mime_type: response.mime_type ?? (file.type === '' ? null : file.type),
+    extension: extension === '' ? null : extension,
+    is_image: response.is_image,
+    image_width: null,
+    image_height: null,
+    scan_status: response.scan_status,
+    upload_status: response.upload_status,
+    uploader: null,
+    links: [],
+    thumbnail_url: null,
+    download_url: `/api/v1/attachments/${response.id}/download`,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 export interface UseAttachmentUploaderOptions {
@@ -261,9 +295,23 @@ export function useAttachmentUploader(
           patchEntry(localId, { phase: 'uploading', progress: 0 });
           await runSingle(response.upload, file, localId, controller.signal);
         }
-        // upload === null → 秒传:服务端去重已完成,跳过直传。
 
         if (controller.signal.aborted) return;
+
+        // 秒传(upload=null,H1):服务端去重命中,附件行 + links 已落库且
+        // upload_status='completed'——**绝不能再调 /complete**(状态机仅允许
+        // pending/uploading complete,重放必 409)。直接用响应本身进入完成后的
+        // 阶段:scan_status pending → scanning,clean/skipped → ready。
+        if (response.upload === null) {
+          const attachment = attachmentFromInstantUpload(response, file);
+          patchEntry(localId, {
+            phase: isReleased(attachment) ? 'ready' : 'scanning',
+            progress: 1,
+            attachment,
+          });
+          return;
+        }
+
         patchEntry(localId, { phase: 'completing', progress: 1 });
         const attachment = await completeUpload(client, response.id);
         patchEntry(localId, {
@@ -318,6 +366,24 @@ export function useAttachmentUploader(
     },
     [client],
   );
+
+  // M2:卸载清理——中止所有在途 XHR(经各自 AbortController);对已拿到
+  // attachmentId 且仍在 complete 之前(pending/uploading)的条目,尽力通知服务端
+  // abort 以回收 pending 对象(fire-and-forget:错误吞掉、卸载后绝不 setState)。
+  useEffect(() => {
+    // 捕获 ref 当前值供清理函数使用(两个容器均为 useRef 初始实例,不重赋)。
+    const controllers = controllersRef.current;
+    const uploads = uploadsRef;
+    return () => {
+      for (const entry of uploads.current) {
+        if (entry.attachmentId !== null && PRE_COMPLETE_PHASES.has(entry.phase)) {
+          void abortUpload(client, entry.attachmentId).catch(() => undefined);
+        }
+      }
+      for (const controller of controllers.values()) controller.abort();
+      controllers.clear();
+    };
+  }, [client]);
 
   return { uploads, addFiles, cancel };
 }

@@ -84,12 +84,25 @@ async def test_run_worker_drains_outbox_until_stopped(
 
 
 def test_build_relay_registers_realtime_handler(session_factory):
+    from mesh.attachment.storage import ObjectStorage, StorageConfig
+
+    storage = ObjectStorage(
+        StorageConfig(
+            endpoint="http://127.0.0.1:1",
+            public_endpoint="http://127.0.0.1:1",
+            region="us-east-1",
+            access_key="x",
+            secret_key="y",
+            bucket="test-bucket",
+        )
+    )
     relay = build_relay(
         load_settings(
             database_url="postgresql+asyncpg://u:p@h:5432/db", redis_url="redis://h:6379/0"
         ),
         session_factory,
         fanout=None,
+        storage=storage,
     )
     assert "realtime.publish" in relay._handlers
 

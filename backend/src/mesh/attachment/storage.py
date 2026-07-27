@@ -77,15 +77,38 @@ class ObjectStorage:
             return
 
         def _ensure() -> None:
+            created = False
             try:
                 self._internal.head_bucket(Bucket=self._config.bucket)
-                return
             except Exception:  # noqa: BLE001 — any miss falls through to create
-                pass
+                try:
+                    self._internal.create_bucket(Bucket=self._config.bucket)
+                    created = True
+                except Exception as exc:  # noqa: BLE001 — map to neutral 502
+                    _raise_storage_error("bucket provisioning failed", exc)
+            # §5.4 storage-side backstop: aborted/orphaned multipart uploads
+            # are reclaimed after one day (never touches completed objects).
+            # Best-effort: a backend without lifecycle support still boots.
             try:
-                self._internal.create_bucket(Bucket=self._config.bucket)
-            except Exception as exc:  # noqa: BLE001 — map to neutral 502
-                _raise_storage_error("bucket provisioning failed", exc)
+                self._internal.put_bucket_lifecycle_configuration(
+                    Bucket=self._config.bucket,
+                    LifecycleConfiguration={
+                        "Rules": [
+                            {
+                                "ID": "mesh-abort-incomplete-multipart",
+                                "Status": "Enabled",
+                                "Filter": {"Prefix": ""},
+                                "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+                            }
+                        ]
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 — non-fatal backstop
+                logger.warning(
+                    "bucket lifecycle backstop not applied (%s): %s",
+                    "created" if created else "existing",
+                    type(exc).__name__,
+                )
 
         await asyncio.to_thread(_ensure)
         self._bucket_ready = True
@@ -98,17 +121,27 @@ class ObjectStorage:
         *,
         content_type: str,
         expires_in: int,
+        content_length: int | None = None,
     ) -> str:
-        """Short-lived signed PUT bound to method, key and declared Content-Type."""
+        """Short-lived signed PUT bound to method, key, Content-Type and size.
+
+        F4 (§5.4): when ``content_length`` is given it becomes part of the
+        S3v4 signature — object storage rejects any PUT whose Content-Length
+        differs (SignatureDoesNotMatch), so a signed URL cannot be abused to
+        dump an oversized object onto a pending key.
+        """
 
         def _sign() -> str:
+            params: dict[str, object] = {
+                "Bucket": self._config.bucket,
+                "Key": key,
+                "ContentType": content_type,
+            }
+            if content_length is not None:
+                params["ContentLength"] = content_length
             return self._public.generate_presigned_url(
                 "put_object",
-                Params={
-                    "Bucket": self._config.bucket,
-                    "Key": key,
-                    "ContentType": content_type,
-                },
+                Params=params,
                 HttpMethod="PUT",
                 ExpiresIn=expires_in,
             )
@@ -224,14 +257,16 @@ class ObjectStorage:
             try:
                 response = self._internal.head_object(Bucket=self._config.bucket, Key=key)
             except Exception as exc:  # noqa: BLE001 — botocore ClientError
-                status = getattr(getattr(exc, "response", None), "get", lambda *_: None)(
-                    "ResponseMetadata", {}
-                ).get("HTTPStatusCode")
-                if status == 404:
-                    return None
-                # MinIO also surfaces missing keys as 404 inside the error code.
-                code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
-                if code in {"404", "NoSuchKey", "NotFound"}:
+                # botocore raises ClientError (dict .response) for API errors
+                # and plain OSError for connection failures (no .response).
+                response = getattr(exc, "response", None)
+                status = None
+                code = ""
+                if isinstance(response, dict):
+                    status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                    # MinIO also surfaces missing keys inside the error code.
+                    code = response.get("Error", {}).get("Code", "")
+                if status == 404 or code in {"404", "NoSuchKey", "NotFound"}:
                     return None
                 _raise_storage_error("head failed", exc)
             return int(response["ContentLength"])

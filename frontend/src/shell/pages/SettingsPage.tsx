@@ -7,7 +7,7 @@
  * - 偏好同步错误(MES-24):422 unsupported_locale/invalid_timezone 等经
  *   lastSyncError 消费,按 error code 渲染 i18n 错误文案 + 可关闭(§6.14/§6.18)。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchMe } from '../../api/auth';
 import type { CurrentUser } from '../../api/auth';
 import { getApiClient } from '../../api/instance';
@@ -52,10 +52,23 @@ export function SettingsPage(): React.JSX.Element {
   // 当前用户(供安全设置:会话/两步验证/第三方绑定)。未登录时不渲染安全区。
   const [user, setUser] = useState<CurrentUser | null>(null);
   const client = getApiClient();
+  // 卸载守卫:fetchMe 在卸载后才落定时不得再 setState(调度竞态下会向已拆除
+  // 的渲染树派发更新,测试环境 teardown 后表现为 unhandled rejection)。
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
   const reloadUser = useCallback(() => {
     void fetchMe(client)
-      .then(setUser)
-      .catch(() => setUser(null));
+      .then((me) => {
+        if (isMountedRef.current) setUser(me);
+      })
+      .catch(() => {
+        if (isMountedRef.current) setUser(null);
+      });
   }, [client]);
   useEffect(() => {
     reloadUser();

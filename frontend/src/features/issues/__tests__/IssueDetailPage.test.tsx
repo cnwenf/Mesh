@@ -257,6 +257,35 @@ describe('IssueDetailPage', () => {
     expect(screen.getByTestId('issue-detail-activity')).toBeTruthy();
   });
 
+  it('renders with a malformed children_progress envelope instead of blanking the page (defensive default)', async () => {
+    // 回归:children_progress 缺失/为 null 的畸形信封曾在渲染期抛 TypeError,
+    // 无错误边界兜底时整页空白。防御默认值后仅该计数回退 0,页面照常渲染。
+    for (const malformed of [null, { total: 'x' }, 'garbage']) {
+      const stub = detailStub(
+        fakeResponse({ body: { data: { ...DETAIL, children_progress: malformed } } }),
+        ...detailResponses().slice(1),
+      );
+      vi.stubGlobal('fetch', stub.fetchImpl);
+      const { unmount } = render(
+        <MemoryRouter initialEntries={['/issues/iss-1']}>
+          <ThemeProvider>
+            <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+              <ToastLayer>
+                <Routes>
+                  <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+                </Routes>
+              </ToastLayer>
+            </I18nProvider>
+          </ThemeProvider>
+        </MemoryRouter>,
+      );
+      expect(await screen.findByTestId('issue-detail')).toBeTruthy();
+      expect((screen.getByTestId('issue-detail-title') as HTMLInputElement).value).toBe('First issue');
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('patches the title with version and If-Match on blur (§3.4/§6.14)', async () => {
     const updated = { ...DETAIL, title: 'Renamed', version: 4 };
     const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));

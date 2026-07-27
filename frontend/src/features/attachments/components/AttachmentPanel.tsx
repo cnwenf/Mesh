@@ -15,7 +15,6 @@ import {
   attachmentChannel,
   deleteAttachment,
   getDownloadUrl,
-  getThumbnailUrl,
   listIssueAttachments,
 } from '../api';
 import { applyAttachmentDeleted, applyAttachmentProcessed } from '../realtime';
@@ -23,6 +22,7 @@ import type { Attachment } from '../types';
 import { AttachmentComposer } from './AttachmentComposer';
 import { FileIcon } from './FileIcon';
 import { Lightbox } from './Lightbox';
+import { Thumbnail } from './Thumbnail';
 import '../attachments.css';
 
 /** 经签名 URL 触发浏览器下载(§4.5:直连对象存储)。
@@ -77,46 +77,6 @@ function avatarInitial(attachment: Attachment): string {
   const name = attachment.uploader?.display_name;
   if (name !== null && name !== undefined && name.trim() !== '') return name.trim().charAt(0).toUpperCase();
   return attachment.uploader?.member_type === 'agent' ? 'A' : '?';
-}
-
-interface ThumbnailProps {
-  readonly attachment: Attachment;
-  readonly client: MeshApiClient;
-  readonly openLabel: string;
-  readonly loadingLabel: string;
-  readonly onOpen: (attachment: Attachment) => void;
-}
-
-/** 缩略图单元:按需解析 md 签名 URL 后加载 <img>;解析前呈现占位。 */
-function Thumbnail(props: ThumbnailProps): React.JSX.Element {
-  const { attachment, client } = props;
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getThumbnailUrl(client, attachment.id, 'md')
-      .then((descriptor) => {
-        if (!cancelled) setUrl(descriptor.url);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [client, attachment.id]);
-  return (
-    <button
-      type="button"
-      className="mesh-attachments__thumb"
-      aria-label={`${props.openLabel}: ${attachment.file_name}`}
-      data-testid={`attachment-thumb-${attachment.id}`}
-      onClick={() => props.onOpen(attachment)}
-    >
-      {url !== null ? (
-        <img src={url} alt={attachment.file_name} loading="lazy" />
-      ) : (
-        <span className="mesh-attachments__thumb-placeholder" aria-hidden="true" />
-      )}
-    </button>
-  );
 }
 
 export interface AttachmentPanelProps {
@@ -253,24 +213,33 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
   const images = attachments.filter((item) => item.is_image);
   const files = attachments.filter((item) => !item.is_image);
 
-  const renderActions = (attachment: Attachment): React.JSX.Element => (
+  /**
+   * M3(§4.6):可见性闸门只限「下载」类入口——未放行(扫描中/感染/错误)隐藏
+   * 下载与复制链接;**删除始终可用**,否则感染文件在 UI 上永远清不掉。删除权限
+   * 由服务端按上传者鉴权(非上传者 → 403),前端不因闸门状态剥夺该入口。
+   */
+  const renderActions = (attachment: Attachment, released: boolean): React.JSX.Element => (
     <span className="mesh-attachments__actions">
-      <IconButton
-        label={`${t('attachments.download')}: ${attachment.file_name}`}
-        size="sm"
-        data-testid={`attachment-download-${attachment.id}`}
-        onClick={() => void download(attachment)}
-      >
-        <FileIcon mimeType={null} extension={null} isImage={false} className="mesh-attachments__action-glyph" />
-      </IconButton>
-      <IconButton
-        label={`${t('attachments.copyLink')}: ${attachment.file_name}`}
-        size="sm"
-        data-testid={`attachment-copy-${attachment.id}`}
-        onClick={() => void copyLink(attachment)}
-      >
-        <span aria-hidden="true">⧉</span>
-      </IconButton>
+      {released ? (
+        <>
+          <IconButton
+            label={`${t('attachments.download')}: ${attachment.file_name}`}
+            size="sm"
+            data-testid={`attachment-download-${attachment.id}`}
+            onClick={() => void download(attachment)}
+          >
+            <FileIcon mimeType={null} extension={null} isImage={false} className="mesh-attachments__action-glyph" />
+          </IconButton>
+          <IconButton
+            label={`${t('attachments.copyLink')}: ${attachment.file_name}`}
+            size="sm"
+            data-testid={`attachment-copy-${attachment.id}`}
+            onClick={() => void copyLink(attachment)}
+          >
+            <span aria-hidden="true">⧉</span>
+          </IconButton>
+        </>
+      ) : null}
       <IconButton
         label={`${t('attachments.delete')}: ${attachment.file_name}`}
         size="sm"
@@ -328,7 +297,7 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
             </span>
           ) : null}
         </span>
-        {released ? renderActions(attachment) : null}
+        {renderActions(attachment, released)}
       </li>
     );
   };
@@ -385,7 +354,7 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
                 </span>
               )}
               <span className="mesh-attachments__grid-name">{attachment.file_name}</span>
-              {isReleased(attachment) ? renderActions(attachment) : null}
+              {renderActions(attachment, isReleased(attachment))}
             </li>
           ))}
         </ul>

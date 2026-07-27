@@ -159,6 +159,10 @@ export interface PutBytesResult {
 /**
  * 直传字节到签名 URL(XMLHttpRequest 以取上传进度事件)。
  * 返回 ETag 头(分块上传需收集后 complete)。AbortSignal 触发即中止。
+ *
+ * M1:预中止信号必须立即 reject——真实浏览器对**未 send** 的 XHR 调 abort()
+ * 不触发任何事件,若把预中止交给 xhr.abort() 收敛,promise 永不 settle。
+ * XHR settle(成功/失败/中止)后移除 signal 的 abort 监听,避免悬挂引用泄漏。
  */
 export function putBytesWithProgress(
   url: string,
@@ -168,7 +172,17 @@ export function putBytesWithProgress(
   signal?: AbortSignal,
 ): Promise<PutBytesResult> {
   return new Promise<PutBytesResult>((resolve, reject) => {
+    if (signal !== undefined && signal.aborted) {
+      reject(new DOMException('upload aborted', 'AbortError'));
+      return;
+    }
     const xhr = new XMLHttpRequest();
+    let abortListener: (() => void) | null = null;
+    const settle = (): void => {
+      if (signal !== undefined && abortListener !== null) {
+        signal.removeEventListener('abort', abortListener);
+      }
+    };
     xhr.open('PUT', url, true);
     for (const [name, value] of Object.entries(headers)) {
       xhr.setRequestHeader(name, value);
@@ -179,20 +193,24 @@ export function putBytesWithProgress(
       }
     };
     xhr.onload = () => {
+      settle();
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve({ etag: xhr.getResponseHeader('ETag') });
         return;
       }
       reject(new Error(`upload failed with status ${xhr.status}`));
     };
-    xhr.onerror = () => reject(new Error('upload network error'));
-    xhr.onabort = () => reject(new DOMException('upload aborted', 'AbortError'));
+    xhr.onerror = () => {
+      settle();
+      reject(new Error('upload network error'));
+    };
+    xhr.onabort = () => {
+      settle();
+      reject(new DOMException('upload aborted', 'AbortError'));
+    };
     if (signal !== undefined) {
-      if (signal.aborted) {
-        xhr.abort();
-        return;
-      }
-      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+      abortListener = () => xhr.abort();
+      signal.addEventListener('abort', abortListener, { once: true });
     }
     xhr.send(body);
   });

@@ -421,11 +421,14 @@ class AttachmentService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
 
-            # Idempotent replay (README §6.5/§6.14): duplicate key → first record.
+            # Idempotent replay (README §6.5/§6.14): duplicate key → first
+            # record. F6: the key is scoped per UPLOADER — replaying another
+            # member's client key must not return their record (info leak).
             if idempotency_key is not None:
                 existing = await session.scalar(
                     select(Attachment).where(
                         Attachment.workspace_id == workspace_id,
+                        Attachment.uploader_id == actor.id,
                         Attachment.idempotency_key == idempotency_key,
                     )
                 )
@@ -438,11 +441,19 @@ class AttachmentService:
             )
 
             # Quota pre-check BEFORE any bytes move (§3.6 — fail early).
-            await session.scalar(
+            # With a quota row its FOR UPDATE lock serializes the check;
+            # without one (deployment defaults) take a workspace-keyed
+            # transaction advisory lock instead (F7: no unserialized window).
+            quota_row = await session.scalar(
                 select(AttachmentQuota)
                 .where(AttachmentQuota.workspace_id == workspace_id)
                 .with_for_update()
             )
+            if quota_row is None:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": f"mesh-attachment-quota:{workspace_id}"},
+                )
             used = await self._used_bytes(session, workspace_id)
             if used + file_size > limits.total_bytes:
                 raise LockedError(
@@ -519,7 +530,24 @@ class AttachmentService:
                 idempotency_key=idempotency_key,
             )
             session.add(attachment)
-            await session.flush()
+            try:
+                async with session.begin_nested():
+                    await session.flush()
+            except IntegrityError as exc:
+                if not (idempotency_key is not None and violates(exc, "uq_attachments_idem")):
+                    raise
+                # Concurrent same-key request won the race — replay its record
+                # (README §6.5: 重复投递返回首次结果, never a bare 500).
+                first = await session.scalar(
+                    select(Attachment).where(
+                        Attachment.workspace_id == workspace_id,
+                        Attachment.uploader_id == actor.id,
+                        Attachment.idempotency_key == idempotency_key,
+                    )
+                )
+                if first is not None:
+                    return await self._render_upload_response(session, first, workspace_id)
+                raise
             await self._ref_count(session, blob.id, +1)
             if link_to is not None:
                 await self._create_link(session, workspace_id, attachment, link_to)
@@ -713,8 +741,12 @@ class AttachmentService:
                 "part_count": part_count,
                 "expires_at": _iso(attachment.expires_at),
             }
+        # §5.4: 签名绑定声明大小(Content-Length 入签),存储侧拒收尺寸不符。
         url = await self._storage.presign_put(
-            blob.storage_key, content_type=declared_mime, expires_in=ttl
+            blob.storage_key,
+            content_type=declared_mime,
+            expires_in=ttl,
+            content_length=attachment.file_size,
         )
         return {
             "method": "PUT",
@@ -740,6 +772,7 @@ class AttachmentService:
     ) -> dict[str, Any]:
         failure: str | None = None
         details: dict[str, Any] | None = None
+        residual_key: str | None = None
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             attachment, blob = await self._load_owned(session, workspace_id, attachment_id, actor)
@@ -766,18 +799,37 @@ class AttachmentService:
             if size is None:
                 attachment.upload_status = "failed"
                 attachment.updated_at = self._now()
+                # F2: 失败路径同事务回退 ref_count(对齐 abort/过期),并清残留
+                # 对象——否则 blob 引用计数永久 ≥1,GC(唯一条件 ref_count=0)
+                # 永不回收对象,配额按 ref_count>0 求和永久虚高。
+                await self._ref_count(session, blob.id, -1)
+                residual_key = blob.storage_key
                 failure = "uploaded object not found in storage"
             elif size != attachment.file_size:
                 attachment.upload_status = "failed"
                 attachment.updated_at = self._now()
+                await self._ref_count(session, blob.id, -1)
+                residual_key = blob.storage_key
                 failure = "uploaded object size does not match the declared size"
                 details = {"expected": attachment.file_size, "actual": size}
             else:
                 attachment.upload_status = "completed"
                 attachment.expires_at = None
                 attachment.updated_at = self._now()
+                # §3.3 第 3 步:complete 把对象移交隔离区——显式保持/置为
+                # 'pending' 并清除陈旧终态(F1 自愈:若 sweep 曾抢跑置 error/
+                # OBJECT_MISSING,此处复位后 scan_requested 触发重扫)。
+                blob.scan_status = "pending"
+                fresh_detail = {
+                    key: value
+                    for key, value in (blob.scan_detail or {}).items()
+                    if key in ("declared_hash", "declared_mime")
+                }
+                blob.scan_detail = fresh_detail or None
+                blob.updated_at = self._now()
                 # Quarantine hand-off: the processing worker claims the blob
-                # with SKIP LOCKED (README §2.2 / §6.6 outbox).
+                # with SKIP LOCKED (README §2.2 / §6.6 outbox). Keyed per
+                # attempt so a reset after an earlier pass re-triggers the relay.
                 await emit_event(
                     session,
                     workspace_id=workspace_id,
@@ -787,7 +839,7 @@ class AttachmentService:
                         "blob_id": str(blob.id),
                         "workspace_id": str(workspace_id),
                     },
-                    idempotency_key=f"scan-requested:{attachment.id}",
+                    idempotency_key=f"scan-requested:{attachment.id}:{self._now().isoformat()}",
                 )
                 await self._audit(
                     session,
@@ -799,6 +851,8 @@ class AttachmentService:
                     user_agent=user_agent,
                 )
         if failure is not None:
+            if residual_key is not None:
+                await self._storage.delete_object(residual_key)
             raise BusinessRuleError(failure, code="hash_mismatch", details=details)
         return await self._render_complete_response(workspace_id, attachment_id)
 
@@ -814,6 +868,7 @@ class AttachmentService:
         user_agent: str | None = None,
     ) -> dict[str, Any]:
         failure: str | None = None
+        residual_key: str | None = None
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             attachment, blob = await self._load_owned(session, workspace_id, attachment_id, actor)
@@ -836,11 +891,23 @@ class AttachmentService:
             if size is None or size != attachment.file_size:
                 attachment.upload_status = "failed"
                 attachment.updated_at = self._now()
+                # F2: 同事务回退 ref_count + 清合并残留对象。
+                await self._ref_count(session, blob.id, -1)
+                residual_key = blob.storage_key
                 failure = "merged object failed the size check"
             else:
                 attachment.upload_status = "completed"
                 attachment.expires_at = None
                 attachment.updated_at = self._now()
+                # §3.3 第 3 步:显式置 'pending' 移交隔离区(F1 自愈)。
+                blob.scan_status = "pending"
+                fresh_detail = {
+                    key: value
+                    for key, value in (blob.scan_detail or {}).items()
+                    if key in ("declared_hash", "declared_mime")
+                }
+                blob.scan_detail = fresh_detail or None
+                blob.updated_at = self._now()
                 await emit_event(
                     session,
                     workspace_id=workspace_id,
@@ -850,7 +917,7 @@ class AttachmentService:
                         "blob_id": str(blob.id),
                         "workspace_id": str(workspace_id),
                     },
-                    idempotency_key=f"scan-requested:{attachment.id}",
+                    idempotency_key=f"scan-requested:{attachment.id}:{self._now().isoformat()}",
                 )
                 await self._audit(
                     session,
@@ -863,6 +930,8 @@ class AttachmentService:
                     user_agent=user_agent,
                 )
         if failure is not None:
+            if residual_key is not None:
+                await self._storage.delete_object(residual_key)
             raise BusinessRuleError(failure, code="hash_mismatch")
         return await self._render_complete_response(workspace_id, attachment_id)
 

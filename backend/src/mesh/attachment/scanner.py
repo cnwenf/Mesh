@@ -56,9 +56,13 @@ class HeuristicScanner:
             return ScanVerdict(
                 infected=True, engine=ENGINE_NAME, result="eicar-test-signature"
             )
-        if sniffed_mime not in EXECUTABLE_MIMES and _has_executable_magic(data):
+        # F5: 可执行容器一律判定 infected —— 上传白名单在 request 阶段即拒
+        # 可执行 MIME(415),因此任何可执行魔数抵达扫描器都意味着伪造内容
+        # (如 png 扩展名包裹的真 EXE:嗅探得到 x-msdownload,此前分支因嗅探
+        # 与魔数判定偏移一致而成为死代码)。下载侧仍强制 attachment(§3.6 兜底)。
+        if sniffed_mime in EXECUTABLE_MIMES or _has_executable_magic(data):
             logger.warning(
-                "AV hit: executable container under non-executable mime %s", sniffed_mime
+                "AV hit: executable container (sniffed %s)", sniffed_mime
             )
             return ScanVerdict(
                 infected=True, engine=ENGINE_NAME, result="executable-container"

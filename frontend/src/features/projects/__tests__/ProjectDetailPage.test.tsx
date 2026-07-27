@@ -725,6 +725,10 @@ describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     const pendingErr = new Promise<Response>((_, reject) => {
       rejectProject = reject;
     });
+    // 防 flake:reject 触发的瞬间组件的 fetch 链可能尚未挂上 handler
+    // (并行调度竞态),无兜底消费者会把本测试的有意延迟 reject 记成
+    // unhandled rejection 拖红整套件;兜底消费者不影响组件自身的 catch 链。
+    pendingErr.catch(() => undefined);
     const implErr = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });

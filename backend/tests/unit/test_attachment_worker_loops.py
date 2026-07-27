@@ -67,32 +67,20 @@ async def _stop_when(predicate, stop: asyncio.Event, *, timeout: float = 30.0):
     raise AssertionError("loop did not reach the expected state in time")
 
 
-async def test_scan_loop_processes_quarantine(
+async def test_scan_pass_processes_quarantine(
     session_factory, object_storage, settings, service, workspace_factory, member_factory
 ):
+    """One synchronous scan pass releases a completed upload's blob."""
+    from mesh.workers.attachment_processor import run_scan_pass
+
     workspace = await workspace_factory()
     member = await member_factory(workspace)
     attachment_id = await _seed_pending_upload(service, member, workspace)
 
-    stop = asyncio.Event()
-    loop_task = asyncio.create_task(
-        attachment_scan_loop(
-            session_factory, storage=object_storage, settings=settings, stop=stop
-        )
+    processed = await run_scan_pass(
+        session_factory, storage=object_storage, settings=settings
     )
-
-    async def _is_clean() -> bool:
-        async with session_factory() as session:
-            blob = await session.scalar(select(AttachmentBlob))
-            return blob is not None and blob.scan_status == "clean"
-
-    try:
-        await _stop_when(_is_clean, stop)
-        await asyncio.wait_for(loop_task, timeout=10)
-    finally:
-        stop.set()
-        loop_task.cancel()
-
+    assert processed == 1
     async with session_factory() as session:
         blob = await session.scalar(select(AttachmentBlob))
         assert blob.scan_status == "clean"
@@ -100,16 +88,19 @@ async def test_scan_loop_processes_quarantine(
         assert attachment.upload_status == "completed"
 
 
-async def test_maintenance_loop_sweeps_orphans_and_refreshes_quota(
+async def test_maintenance_pass_sweeps_orphans_and_refreshes_quota(
     session_factory, object_storage, settings, service, workspace_factory, member_factory
 ):
+    """One synchronous maintenance pass reaps an expired orphan upload."""
+    from mesh.workers.attachment_processor import run_maintenance_pass
+
     workspace = await workspace_factory()
     member = await member_factory(workspace)
     await service.request_upload(
         actor=member, workspace_id=workspace.id, file_name="stale.png",
         file_size=len(PNG), mime_type="image/png",
     )
-    # Backdate expires_at so the orphan sweep claims it on the first tick.
+    # Backdate expires_at so the orphan sweep claims it on this pass.
     async with session_factory() as session, session.begin():
         attachment = await session.scalar(select(Attachment))
         attachment.expires_at = datetime.now(UTC) - timedelta(hours=1)
@@ -120,25 +111,8 @@ async def test_maintenance_loop_sweeps_orphans_and_refreshes_quota(
             used_bytes=0,
         ))
 
-    stop = asyncio.Event()
-    loop_task = asyncio.create_task(
-        attachment_maintenance_loop(
-            session_factory, storage=object_storage, settings=settings, stop=stop
-        )
-    )
-
-    async def _expired() -> bool:
-        async with session_factory() as session:
-            row = await session.scalar(select(Attachment))
-            return row.upload_status == "expired"
-
-    try:
-        await _stop_when(_expired, stop)
-        await asyncio.wait_for(loop_task, timeout=10)
-    finally:
-        stop.set()
-        loop_task.cancel()
-
+    swept, _reaped, _collected = await run_maintenance_pass(service, run_gc=True)
+    assert swept == 1
     async with session_factory() as session:
         row = await session.scalar(select(Attachment))
         assert row.upload_status == "expired"
@@ -147,14 +121,131 @@ async def test_maintenance_loop_sweeps_orphans_and_refreshes_quota(
         assert await session.scalar(select(func.count()).select_from(AttachmentQuota)) == 1
 
 
-def test_storage_config_fallback_endpoint():
-    config = StorageConfig(
-        endpoint="http://internal:9000",
-        public_endpoint="http://internal:9000",
-        region="us-east-1",
-        access_key="a",
-        secret_key="b",
-        bucket="c",
+# ----------------------------------------------------------------------
+# F8 — worker pass robustness + loop-wrapper coverage
+# ----------------------------------------------------------------------
+
+
+async def test_scan_pass_errors_missing_object_without_dying(
+    session_factory, object_storage, settings, service, workspace_factory, member_factory
+):
+    """A missing object (deleted behind the API's back) terminally errors the
+    blob with OBJECT_MISSING — one poisoned blob must not wedge the pass."""
+    from mesh.workers.attachment_processor import run_scan_pass
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    attachment_id = await _seed_pending_upload(service, member, workspace)
+
+    async with session_factory() as session:
+        row = await session.get(Attachment, uuid.UUID(attachment_id))
+        blob = await session.get(AttachmentBlob, row.blob_id)
+        storage_key = blob.storage_key
+    await object_storage.delete_object(storage_key)
+
+    processed = await run_scan_pass(
+        session_factory, storage=object_storage, settings=settings
     )
-    storage = ObjectStorage(config)
-    assert storage.bucket == "c"
+    assert processed == 1
+    async with session_factory() as session:
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.scan_status == "error"
+        assert blob.scan_detail["error_code"] == "OBJECT_MISSING"
+
+
+async def test_scan_pass_survives_storage_outage_as_pending(
+    session_factory, settings, service, workspace_factory, member_factory
+):
+    """Storage UNREACHABLE (not object-missing): the pass raises (the loop
+    catches and retries next tick); the blob stays pending, never terminal."""
+    from mesh.errors import StorageError
+    from mesh.workers.attachment_processor import run_scan_pass
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    await _seed_pending_upload(service, member, workspace)
+
+    dead = ObjectStorage(
+        StorageConfig(
+            endpoint="http://127.0.0.1:1",
+            public_endpoint="http://127.0.0.1:1",
+            region="us-east-1",
+            access_key="x",
+            secret_key="y",
+            bucket="mesh-dead-bucket",
+        )
+    )
+    with pytest.raises(StorageError):
+        await run_scan_pass(session_factory, storage=dead, settings=settings)
+    async with session_factory() as session:
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.scan_status == "pending"  # retried on later passes
+
+
+async def test_scan_loop_wrapper_runs_pass_until_stopped(
+    session_factory, object_storage, settings, service, workspace_factory, member_factory,
+    monkeypatch,
+):
+    """Loop wrapper coverage: processes one pass then exits when stop is set —
+    driven deterministically (stop set right after the first pass)."""
+    import mesh.workers.attachment_processor as processor
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    await _seed_pending_upload(service, member, workspace)
+
+    stop = asyncio.Event()
+    real_pass = processor.run_scan_pass
+
+    async def _one_pass_then_stop(*args, **kwargs):
+        processed = await real_pass(*args, **kwargs)
+        stop.set()
+        return processed
+
+    monkeypatch.setattr(processor, "run_scan_pass", _one_pass_then_stop)
+    await asyncio.wait_for(
+        attachment_scan_loop(
+            session_factory, storage=object_storage, settings=settings, stop=stop
+        ),
+        timeout=15,
+    )
+    async with session_factory() as session:
+        blob = await session.scalar(select(AttachmentBlob))
+        assert blob.scan_status == "clean"
+
+
+async def test_maintenance_loop_wrapper_runs_pass_until_stopped(
+    session_factory, object_storage, settings, service, workspace_factory, member_factory,
+    monkeypatch,
+):
+    """Maintenance loop wrapper coverage: one pass then stop."""
+    import mesh.workers.attachment_processor as processor
+
+    workspace = await workspace_factory()
+    member = await member_factory(workspace)
+    await service.request_upload(
+        actor=member, workspace_id=workspace.id, file_name="stale2.png",
+        file_size=len(PNG), mime_type="image/png",
+    )
+    async with session_factory() as session, session.begin():
+        attachment = await session.scalar(select(Attachment))
+        attachment.expires_at = datetime.now(UTC) - timedelta(hours=1)
+
+    stop = asyncio.Event()
+    real_pass = processor.run_maintenance_pass
+
+    async def _one_pass_then_stop(*args, **kwargs):
+        result = await real_pass(*args, **kwargs)
+        stop.set()
+        return result
+
+    monkeypatch.setattr(processor, "run_maintenance_pass", _one_pass_then_stop)
+    await asyncio.wait_for(
+        attachment_maintenance_loop(
+            session_factory, storage=object_storage, settings=settings, stop=stop
+        ),
+        timeout=15,
+    )
+    async with session_factory() as session:
+        row = await session.scalar(select(Attachment))
+        assert row.upload_status == "expired"
