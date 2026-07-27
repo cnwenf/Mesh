@@ -26,7 +26,14 @@ from mesh.errors import (
     NotFoundError,
     ValidationError,
 )
-from mesh.issue.move import MoveService, apply_move_plan, move_activity_rows, redact_move_payload
+from mesh.issue.move import (
+    MoveService,
+    apply_move_plan,
+    clear_cleared_associations,
+    emit_association_cleared_events,
+    move_activity_rows,
+    redact_move_payload,
+)
 from mesh.issue.schemas import BulkRequest
 from mesh.issue.service import (
     UNSET,
@@ -191,6 +198,11 @@ class BulkService:
             # fields — L3 parity) and the same §3.8 ⑥ audit trail with the
             # mapping/clearing manifest (M3/L2 parity).
             apply_move_plan(issue, plan, now=now)
+            # label-property §3.8 (L3 parity): project-private labels / field
+            # values are deleted in the same transaction as the move.
+            cleared_label_ids, _cleared_value_ids = await clear_cleared_associations(
+                session, workspace_id=workspace_id, issue=issue, plan=plan
+            )
             issue.version += 1
             issue.updated_at = now
             session.add_all(
@@ -231,6 +243,14 @@ class BulkService:
                     event="issue.project_changed",
                     data=broadcast_payload,
                 )
+            await emit_association_cleared_events(
+                session,
+                workspace_id=workspace_id,
+                issue=issue,
+                plan=plan,
+                cleared_label_ids=cleared_label_ids,
+                target_visible=target is None or target.visibility == "public",
+            )
             source_public = source_project is None or source_project.visibility == "public"
             target_public = target is None or target.visibility == "public"
             if source_public and not target_public:

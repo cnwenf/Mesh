@@ -15,10 +15,9 @@ Status mapping: a project-PRIVATE current status maps to the target scope's
 SAME-CATEGORY default (fallback: lowest position in that category, §3.8);
 workspace-level statuses are visible everywhere and are KEPT. Project-private
 milestones and project-bound cycles are cleared; workspace-level cycles stay.
-Labels / custom-field values are owned by the label-property.md increment
-(MES-32); until those tables exist there is nothing to clear — the
-``label_module_pending`` / ``custom_field_module_pending`` skip markers keep
-the contract honest.
+label-property associations (MES-32): project-private labels and values of
+project-scoped field definitions are cleared on the way out (they cannot
+apply outside their project); workspace-level labels / values are KEPT.
 """
 
 from __future__ import annotations
@@ -26,10 +25,16 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.db.models.issue import Issue, IssueActivity
+from mesh.db.models.label import (
+    CustomFieldDef,
+    IssueCustomFieldValue,
+    IssueLabel,
+    Label,
+)
 from mesh.db.models.member import Member
 from mesh.db.models.project import Cycle, Milestone, Project
 from mesh.errors import BusinessRuleError, ConflictError
@@ -40,6 +45,7 @@ from mesh.issue.service import (
     _workspace_issues_channel,
 )
 from mesh.issue.statuses import render_status, resolve_default_status
+from mesh.labels.service import LabelService
 from mesh.outbox.service import emit_realtime
 
 MOVE_NOT_CONFIRMED = "move requires confirmation"
@@ -143,6 +149,118 @@ def redact_move_payload(payload: dict) -> dict:
         for entry in payload.get("cleared_fields") or []
     ]
     return {**payload, "mapped_fields": redacted_mapped, "cleared_fields": redacted_cleared}
+
+
+async def clear_cleared_associations(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    issue: Issue,
+    plan: dict,
+) -> tuple[list[uuid.UUID], list[uuid.UUID]]:
+    """Delete the plan's project-private labels / field values (label-property
+    §3.8). ``apply_move_plan`` only touches issue columns; the association
+    rows are deleted here, in the same transaction. Returns the cleared ids
+    so callers can broadcast the §3.5 convergence frames."""
+    cleared_label_ids: list[uuid.UUID] = []
+    cleared_field_def_ids: list[uuid.UUID] = []
+    for cleared in plan["cleared_fields"]:
+        if cleared["field"] == "labels":
+            cleared_label_ids = [uuid.UUID(item["id"]) for item in cleared["items"]]
+        elif cleared["field"] == "custom_field_values":
+            cleared_field_def_ids = [
+                uuid.UUID(item["field_def_id"]) for item in cleared["items"]
+            ]
+    if cleared_label_ids:
+        await session.execute(
+            delete(IssueLabel).where(
+                IssueLabel.workspace_id == workspace_id,
+                IssueLabel.issue_id == issue.id,
+                IssueLabel.label_id.in_(cleared_label_ids),
+            )
+        )
+    if cleared_field_def_ids:
+        await session.execute(
+            delete(IssueCustomFieldValue).where(
+                IssueCustomFieldValue.workspace_id == workspace_id,
+                IssueCustomFieldValue.issue_id == issue.id,
+                IssueCustomFieldValue.field_def_id.in_(cleared_field_def_ids),
+            )
+        )
+    return cleared_label_ids, cleared_field_def_ids
+
+
+async def emit_association_cleared_events(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    issue: Issue,
+    plan: dict,
+    cleared_label_ids: list[uuid.UUID],
+    target_visible: bool,
+) -> None:
+    """§3.5 convergence frames after a move cleared associations:
+    issue.labels_changed (surviving label set) and per-field
+    issue.custom_field_changed (null value). Detail channel always,
+    workspace list channel when the destination is visible."""
+    if cleared_label_ids:
+        remaining = list(
+            (
+                await session.execute(
+                    select(Label)
+                    .join(IssueLabel, IssueLabel.label_id == Label.id)
+                    .where(
+                        IssueLabel.workspace_id == workspace_id,
+                        IssueLabel.issue_id == issue.id,
+                    )
+                    .order_by(IssueLabel.created_at.asc(), IssueLabel.label_id.asc())
+                )
+            ).scalars().all()
+        )
+        labels_data = {
+            "issue_id": str(issue.id),
+            "labels": [LabelService.render_label(label) for label in remaining],
+        }
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=_issue_channel(issue.id),
+            event="issue.labels_changed",
+            data=labels_data,
+        )
+        if target_visible:
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=_workspace_issues_channel(workspace_id),
+                event="issue.labels_changed",
+                data=labels_data,
+            )
+    for cleared in plan["cleared_fields"]:
+        if cleared["field"] != "custom_field_values":
+            continue
+        for item in cleared["items"]:
+            value_data = {
+                "issue_id": str(issue.id),
+                "field_def_id": item["field_def_id"],
+                "field_key": item["field_key"],
+                "value": None,
+            }
+            await emit_realtime(
+                session,
+                workspace_id=workspace_id,
+                channel=_issue_channel(issue.id),
+                event="issue.custom_field_changed",
+                data=value_data,
+            )
+            if target_visible:
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=_workspace_issues_channel(workspace_id),
+                    event="issue.custom_field_changed",
+                    data=value_data,
+                )
 
 
 def _jsonify_status(rendered: dict) -> dict:
@@ -260,11 +378,67 @@ class MoveService:
                         "reason": "项目绑定的周期",
                     }
                 )
-        # Labels / custom fields clear once label-property.md (MES-32) lands.
-        skipped_modules = [
-            {"field": "labels", "reason": "label_module_pending"},
-            {"field": "custom_field_values", "reason": "custom_field_module_pending"},
-        ]
+        # label-property association layer: project-private labels and values
+        # of project-scoped field definitions cannot survive leaving their
+        # project — preview them as cleared (workspace-level ones are kept).
+        if issue.project_id is not None:
+            private_labels = list(
+                (
+                    await session.execute(
+                        select(Label)
+                        .join(IssueLabel, IssueLabel.label_id == Label.id)
+                        .where(
+                            IssueLabel.workspace_id == workspace_id,
+                            IssueLabel.issue_id == issue.id,
+                            Label.project_id == issue.project_id,
+                        )
+                    )
+                ).scalars().all()
+            )
+            if private_labels:
+                cleared_fields.append(
+                    {
+                        "field": "labels",
+                        "items": [
+                            {"id": str(label.id), "name": label.name}
+                            for label in private_labels
+                        ],
+                        "reason": "项目私有标签",
+                    }
+                )
+            private_value_defs = list(
+                (
+                    await session.execute(
+                        select(CustomFieldDef)
+                        .join(
+                            IssueCustomFieldValue,
+                            IssueCustomFieldValue.field_def_id == CustomFieldDef.id,
+                        )
+                        .where(
+                            IssueCustomFieldValue.workspace_id == workspace_id,
+                            IssueCustomFieldValue.issue_id == issue.id,
+                            CustomFieldDef.project_id == issue.project_id,
+                        )
+                    )
+                ).scalars().all()
+            )
+            if private_value_defs:
+                cleared_fields.append(
+                    {
+                        "field": "custom_field_values",
+                        "items": [
+                            # "id" 供 move_activity_rows 通用清单渲染;
+                            # field_def_id / field_key 供关联层收敛事件。
+                            {
+                                "id": str(definition.id),
+                                "field_def_id": str(definition.id),
+                                "field_key": definition.field_key,
+                            }
+                            for definition in private_value_defs
+                        ],
+                        "reason": "项目私有字段值",
+                    }
+                )
 
         return {
             "issue_id": str(issue.id),
@@ -277,7 +451,6 @@ class MoveService:
             "mapped_fields": mapped_fields,
             "cleared_fields": cleared_fields,
             "kept_fields": list(KEPT_FIELDS),
-            "skipped_modules": skipped_modules,
         }
 
     async def preview(
@@ -422,6 +595,12 @@ class MoveService:
 
         now = _now(self._issues._clock)
         apply_move_plan(issue, plan, now=now)
+        # label-property §3.8: delete the plan's project-private labels /
+        # field values in the same transaction (association rows are not
+        # issue columns, so apply_move_plan does not cover them).
+        cleared_label_ids, _cleared_field_def_ids = await clear_cleared_associations(
+            session, workspace_id=workspace_id, issue=issue, plan=plan
+        )
         issue.version = issue.version + 1
         issue.updated_at = now
         session.add_all(
@@ -434,6 +613,19 @@ class MoveService:
             )
         )
         await session.flush()
+
+        # Association-layer convergence frames (label-property.md §3.5):
+        # cleared labels / field values broadcast on the issue channels so
+        # open details and lists drop the stale chips/values.
+        target_visible = target is None or target.visibility == "public"
+        await emit_association_cleared_events(
+            session,
+            workspace_id=workspace_id,
+            issue=issue,
+            plan=plan,
+            cleared_label_ids=cleared_label_ids,
+            target_visible=target_visible,
+        )
 
         rendered = await self._issues.render_issue(session, issue)
         payload = {

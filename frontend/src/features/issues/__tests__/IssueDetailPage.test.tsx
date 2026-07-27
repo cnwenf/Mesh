@@ -120,7 +120,16 @@ const MEMBERS_PAGE = {
   next_cursor: null,
 };
 
-/** 首轮加载 9 个响应:issue → (statuses, children, deps, activity, members, projects, cycles) → milestones。 */
+/** 关联编辑器在 issue 加载后消费的 3 个列表请求(标签 / 标签目录 / 字段值)。 */
+function associationResponses(): ReturnType<typeof fakeResponse>[] {
+  return [
+    fakeResponse({ body: { data: [], next_cursor: null } }),
+    fakeResponse({ body: { data: [], next_cursor: null } }),
+    fakeResponse({ body: { data: [], next_cursor: null } }),
+  ];
+}
+
+/** 首轮加载 9 个响应:issue → (statuses, children, deps, activity, members, projects, cycles) → milestones;随后关联编辑器再消费 3 个列表请求。 */
 function detailResponses(): ReturnType<typeof fakeResponse>[] {
   return [
     fakeResponse({ body: { data: DETAIL } }),
@@ -162,10 +171,14 @@ function detailResponses(): ReturnType<typeof fakeResponse>[] {
     fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
     fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
     fakeResponse({ body: { data: [MILESTONE_1], next_cursor: null } }),
+    ...associationResponses(),
   ];
 }
 
-/** PATCH 后的整轮重取响应(issue → 7 并行 → milestones)。 */
+/**
+ * PATCH 后的整轮重取响应(页面 9 个)。关联编辑器不随 reloadKey 重取——它由
+ * issue.updated_at 变化驱动,桩响应 updated_at 恒定,故重取轮不含编辑器请求。
+ */
 function reloadRound(issue = DETAIL): ReturnType<typeof fakeResponse>[] {
   return [
     fakeResponse({ body: { data: issue } }),
@@ -197,9 +210,14 @@ afterEach(() => {
 
 describe('IssueDetailPage', () => {
   it('renders header, description, dependencies and activity', async () => {
-    queue();
+    const stub = queue();
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     expect(screen.getByTestId('issue-detail-identifier').textContent).toBe('APL-1');
     expect(screen.getByTestId('issue-detail-version').textContent).toBe('v3');
     expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe(
@@ -241,6 +259,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('dep-target-input'), {
       target: { value: '22222222-2222-2222-2222-222222222222' },
     });
@@ -251,11 +274,15 @@ describe('IssueDetailPage', () => {
   });
 
   it('removes a dependency optimistically and rolls back on failure', async () => {
-    queue(
+    const stub = queue(
       fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } }),
     );
     renderDetail();
     await screen.findByText('WS-7');
+    // 等关联编辑器挂载请求发出,避免后续操作抢跑导致响应队列错位。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.click(screen.getByText('Remove'));
     // rolled back after the failed DELETE
     await waitFor(() => {
@@ -285,7 +312,7 @@ describe('IssueDetailPage', () => {
     // 连续变更以「可观察请求数」同步收敛,不依赖被动副作用的逐次刷新时序:
     // React 19 下两次 reloadKey 更新可能在同一批处理中合并(0→2 单次副作用执行),
     // 第一轮整轮重取未发出就触发第二次变更会使响应队列错位;先等第一轮落定
-    // (9 初始 + 1 PATCH + 9 重取 = 19)再发第二次变更。末次成功后必有收敛重取
+    // (12 初始(9 页面 + 3 编辑器挂载) + 1 PATCH + 9 重取 = 22)再发第二次变更。末次成功后必有收敛重取
     // (reloadKey 终值触发一次副作用),不丢最终一致性。
     const stub = queue(
       fakeResponse({ body: { data: DETAIL } }),
@@ -295,29 +322,40 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-estimate'), { target: { value: '5' } });
+    await waitFor(
+      () => {
+        const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+        expect(patchCalls.length).toBe(1);
+        expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({ estimate: 5, version: 3 });
+      },
+      { timeout: 5000 },
+    );
     await waitFor(() => {
-      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
-      expect(patchCalls.length).toBe(1);
-      expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({ estimate: 5, version: 3 });
-    });
-    await waitFor(() => {
-      expect(stub.calls.length).toBeGreaterThanOrEqual(19);
-    });
+      expect(stub.calls.length).toBeGreaterThanOrEqual(22);
+    }, { timeout: 5000 });
     fireEvent.change(screen.getByTestId('issue-detail-start'), {
       target: { value: '2026-08-01' },
     });
-    await waitFor(() => {
-      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
-      expect(patchCalls.length).toBe(2);
-      expect(JSON.parse(String(patchCalls[1].init?.body))).toEqual({
-        start_date: '2026-08-01',
-        version: 3,
-      });
-    });
+    await waitFor(
+      () => {
+        const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+        expect(patchCalls.length).toBe(2);
+        expect(JSON.parse(String(patchCalls[1].init?.body))).toEqual({
+          start_date: '2026-08-01',
+          version: 3,
+        });
+      },
+      { timeout: 5000 },
+    );
     // milestone / cycle selects are present with options(第二轮整轮重取收敛后)
-    expect(await screen.findByTestId('issue-detail-milestone')).toBeTruthy();
-    expect(await screen.findByTestId('issue-detail-cycle')).toBeTruthy();
+    expect(await screen.findByTestId('issue-detail-milestone', {}, { timeout: 5000 })).toBeTruthy();
+    expect(await screen.findByTestId('issue-detail-cycle', {}, { timeout: 5000 })).toBeTruthy();
   });
 
   it('opens the move preview dialog on project change and confirms (§4.3 MEDIUM-2)', async () => {
@@ -341,6 +379,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
     await screen.findByTestId('move-dialog');
     expect(screen.getByTestId('move-mapped')).toBeTruthy();
@@ -375,6 +418,11 @@ describe('IssueDetailPage', () => {
     const stub = queue(fakeResponse({ body: { data: preview } }));
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
     await screen.findByTestId('move-dialog');
     fireEvent.click(screen.getByTestId('move-cancel'));
@@ -400,6 +448,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     // 类型选择器存在(§4.2/§4.3:选类型)
     expect(screen.getByTestId('dep-type-select')).toBeTruthy();
     fireEvent.change(screen.getByTestId('dep-target-input'), { target: { value: 'WS-9' } });
@@ -424,6 +477,11 @@ describe('IssueDetailPage', () => {
     const retry = await screen.findByText('Retry');
     fireEvent.click(retry);
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
   });
 
   it('labels the workspace inbox as the move target when target is null (§4.3)', async () => {
@@ -437,9 +495,14 @@ describe('IssueDetailPage', () => {
       kept_fields: ['title', 'identifier'],
       version: 3,
     };
-    queue(fakeResponse({ body: { data: preview } }));
+    const stub = queue(fakeResponse({ body: { data: preview } }));
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: '' } });
     await screen.findByTestId('move-dialog');
     // 目标为收件箱(null)时,目标名取收件箱本地化文案而非空/原始 id
@@ -466,6 +529,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     const statusSelect = screen.getByTestId('issue-detail-status') as HTMLSelectElement;
     expect(statusSelect.value).toBe('st-todo');
     fireEvent.change(statusSelect, { target: { value: 'st-wip' } });
@@ -479,8 +547,9 @@ describe('IssueDetailPage', () => {
         'st-todo',
       ),
     );
-    // 不触发整页 reload:除首轮加载 + 被拒的 PATCH 外无其它请求(无骨架闪烁来源)
-    expect(stub.calls.length).toBe(10);
+    // 不触发整页 reload:除首轮加载 9 + 关联编辑器 3 个列表请求 + 被拒的
+    // PATCH 外无其它请求(无骨架闪烁来源)。
+    expect(stub.calls.length).toBe(13);
     expect(stub.calls.filter((c) => c.init?.method === 'PATCH').length).toBe(1);
   });
 
@@ -488,7 +557,7 @@ describe('IssueDetailPage', () => {
     act(() => {
       useSettingsStore.getState().setLocale('zh-CN');
     });
-    queue(
+    const stub = queue(
       fakeResponse({
         status: 409,
         body: {
@@ -502,6 +571,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-status') as HTMLSelectElement, {
       target: { value: 'st-wip' },
     });
@@ -531,9 +605,14 @@ describe('IssueDetailPage', () => {
       ],
       kept_fields: [],
     };
-    queue(fakeResponse({ body: { data: preview } }));
+    const stub = queue(fakeResponse({ body: { data: preview } }));
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
     await screen.findByTestId('move-dialog');
     const mapped = screen.getByTestId('move-mapped').textContent ?? '';
@@ -550,9 +629,14 @@ describe('IssueDetailPage', () => {
   });
 
   it('localizes estimate unit options (LOW-2:points/hours 不再硬编码英文)', async () => {
-    queue();
+    const stub = queue();
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     const options = (screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement)
       .options;
     expect(options[1].value).toBe('points');
@@ -594,6 +678,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
     await screen.findByTestId('move-dialog');
     fireEvent.click(screen.getByTestId('move-confirm'));
@@ -625,7 +714,7 @@ describe('IssueDetailPage', () => {
       cleared_fields: [],
       kept_fields: [],
     };
-    queue(
+    const stub = queue(
       fakeResponse({ body: { data: preview } }),
       // details 缺合法 preview → 走既有错误路径(toast + 关闭),不静默吞错
       fakeResponse({
@@ -635,6 +724,11 @@ describe('IssueDetailPage', () => {
     );
     renderDetail();
     await screen.findByTestId('issue-detail');
+    // 等关联编辑器挂载时的 3 个列表请求发出(9 页面 + 3 编辑器 = 12),
+    // 避免后续操作抢跑编辑器请求导致响应队列错位(coverage 下 effect 调度更慢)。
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
+      timeout: 5000,
+    });
     fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
     await screen.findByTestId('move-dialog');
     fireEvent.click(screen.getByTestId('move-confirm'));

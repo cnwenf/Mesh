@@ -1,6 +1,10 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
+
+// 异步断言默认超时 1s → 5s:coverage instrumentation 下渲染/请求链整体变慢,
+// 1s 默认值在详情页多请求测试中产生时序抖动(MES-32 关联层编辑器挂载后尤甚)。
+configure({ asyncUtilTimeout: 5000 });
 
 // jsdom 不提供 matchMedia;ThemeProvider(system 模式)依赖它。
 // 提供可编程 stub:默认 matches=false,测试可覆盖 window.matchMedia。

@@ -19,6 +19,8 @@ import { listMembers } from '../members/api';
 import type { MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
+import { IssueCustomFieldsEditor } from '../labels/IssueCustomFieldsEditor';
+import { IssueLabelsEditor } from '../labels/IssueLabelsEditor';
 import {
   addDependency,
   deleteIssue,
@@ -745,6 +747,27 @@ export function IssueDetailPage(): React.JSX.Element {
               </option>
             ))}
           </Select>
+          {/* label-property.md §4.2/§4.3 关联层:标签 picker + 自定义字段面板 */}
+          <IssueLabelsEditor
+            client={client}
+            workspaceId={issue.workspace_id}
+            projectId={issue.project_id}
+            issueId={issue.id}
+            reloadKey={reloadKey}
+            issueUpdatedAt={issue.updated_at}
+            realtime={realtime}
+            onIssueChanged={() => setReloadKey((k) => k + 1)}
+          />
+          <IssueCustomFieldsEditor
+            client={client}
+            workspaceId={issue.workspace_id}
+            issueId={issue.id}
+            issueUpdatedAt={issue.updated_at}
+            members={members}
+            reloadKey={reloadKey}
+            realtime={realtime}
+            onIssueChanged={() => setReloadKey((k) => k + 1)}
+          />
           <p className="mesh-issues-detail__meta">
             {t('issues.detail.reporter')}:{' '}
             {issue.reporter !== null ? issue.reporter.name : t('issues.unassigned')}
