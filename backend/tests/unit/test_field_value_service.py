@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.label import IssueCustomFieldValue
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
@@ -74,15 +75,23 @@ async def _setup(session_factory) -> Ctx:
             status="active",
             joined_at=FIXED_NOW,
         )
+        # agent 名册行引用真实 agents 行(members.agent_id 复合 FK,agent.md §6.1/T1)。
+        agent_row = Agent(
+            workspace_id=workspace.id,
+            name="字段值助手",
+            owner_user_id=user_id,
+        )
+        session.add_all([admin, agent_row])
+        await session.flush()
         agent = Member(
             workspace_id=workspace.id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent_row.id,
             role="member",
             status="active",
             joined_at=FIXED_NOW,
         )
-        session.add_all([admin, agent])
+        session.add(agent)
     label_service = LabelService(session_factory, clock=_clock)
     issue_service = IssueService(session_factory, clock=_clock)
 

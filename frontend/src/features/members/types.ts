@@ -20,6 +20,8 @@ export interface AgentProfile {
   readonly description: string | null;
   readonly avatar_url: string | null;
   readonly is_active: boolean | null;
+  readonly role_tag?: string | null;
+  readonly lifecycle_status?: string | null;
 }
 
 export interface MemberSummary {

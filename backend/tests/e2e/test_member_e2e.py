@@ -109,11 +109,28 @@ async def test_agent_filter_projection_is_same_endpoint(api_client, session_fact
     ws = await _create_workspace(api_client, owner, "ro-proj")
     await _invite_accept(api_client, owner, ws["id"], "ro-proj-h@corp.com")
     async with session_factory() as session, session.begin():
+        from mesh.db.models.agent import Agent
+        from mesh.db.models.user import User
+
+        agent_owner = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Agent Owner",
+        )
+        session.add(agent_owner)
+        await session.flush()
+        agent_row = Agent(
+            workspace_id=uuid.UUID(ws["id"]),
+            name="投影助手",
+            owner_user_id=agent_owner.id,
+        )
+        session.add(agent_row)
+        await session.flush()
         session.add(
             Member(
                 workspace_id=uuid.UUID(ws["id"]),
                 member_type="agent",
-                agent_id=uuid.uuid4(),
+                agent_id=agent_row.id,
                 role="member",
             )
         )
@@ -128,7 +145,8 @@ async def test_agent_filter_projection_is_same_endpoint(api_client, session_fact
     assert {m["member_type"] for m in all_rows} == {"human", "agent"}
     assert len(agent_rows) == 1
     assert agent_rows[0]["member_type"] == "agent"
-    assert agent_rows[0]["display_name"].startswith("agent-")
+    # Display name resolves from agents.name (README §6.1 order).
+    assert agent_rows[0]["display_name"] == "投影助手"
 
 
 # --- role / status change durability + gating ---------------------------------

@@ -20,6 +20,7 @@ import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { PlaceholderPage } from './shell/PlaceholderPage';
+import { AgentDetailPage } from './features/agents/AgentDetailPage';
 import { BoardPage } from './features/board/BoardPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
@@ -126,6 +127,8 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="board" element={<BoardPage />} />
                 <Route path="views/:viewId" element={<BoardPage />} />
                 <Route path="members" element={<MembersPage />} />
+                {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
+                <Route path="agents/:agentId" element={<AgentDetailPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
                 <Route path="automation" element={<PlaceholderPage kind="automation" />} />

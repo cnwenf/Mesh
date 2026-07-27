@@ -13,9 +13,11 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
+from mesh.db.models.user import User
 from mesh.errors import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from mesh.workspace.members import change_member_role
 from mesh.workspace.service import WorkspaceService
@@ -199,13 +201,25 @@ async def test_demote_disabled_co_owner_is_allowed(session_factory):
 async def test_agent_cannot_become_owner(session_factory):
     """Server-side guard + DB CHECK backstop (member.md §2.2)."""
     workspace_id, owner, _member = await _setup(session_factory, "role-agent")
-    # No agents table yet (agent.md increment) — the deferred-FK model allows
-    # inserting an agent roster row directly for this test.
+    # Agent roster rows reference a real agents row (composite FK); the
+    # agent needs a human owner (agents.owner_user_id NOT NULL).
     async with session_factory() as session, session.begin():
+        agent_owner = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Agent Owner",
+        )
+        session.add(agent_owner)
+        await session.flush()
+        agent_row = Agent(
+            workspace_id=workspace_id, name="Role Agent", owner_user_id=agent_owner.id
+        )
+        session.add(agent_row)
+        await session.flush()
         agent_member = Member(
             workspace_id=workspace_id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent_row.id,
             role="member",
         )
         session.add(agent_member)

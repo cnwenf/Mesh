@@ -1,6 +1,6 @@
 /**
- * AddMemberDialog 测试(member.md §4.2):「邀请人类」Tab 经 invitations API;「AI agent」
- * Tab 为占位态(agents 表落地前)。单一创建入口,不形成第二套名册。
+ * AddMemberDialog 测试(member.md §4.2):邀请人类经 invitations API。
+ * Agent 创建不经本弹窗(唯一入口为名册页「+ 新建 Agent」向导,README §6.12 / T35)。
  */
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -25,7 +25,6 @@ describe('AddMemberDialog', () => {
         onClose={() => undefined}
         client={client}
         workspaceId="ws-1"
-        initialTab="human"
         onInvited={onInvited}
       />,
     );
@@ -52,29 +51,11 @@ describe('AddMemberDialog', () => {
         onClose={() => undefined}
         client={client}
         workspaceId="ws-1"
-        initialTab="human"
         onInvited={() => undefined}
       />,
     );
     await user.type(screen.getByTestId('invite-email'), 'x@corp.com');
     await user.click(screen.getByTestId('invite-submit'));
     expect(await screen.findByText('invite failed')).toBeInTheDocument();
-  });
-
-  it('AI agent Tab 显示「即将上线」占位态', async () => {
-    const user = userEvent.setup();
-    const { client } = makeClient();
-    renderWithProviders(
-      <AddMemberDialog
-        open
-        onClose={() => undefined}
-        client={client}
-        workspaceId="ws-1"
-        initialTab="agent"
-        onInvited={() => undefined}
-      />,
-    );
-    await user.click(screen.getByTestId('add-tab-agent'));
-    expect(screen.getByTestId('agent-coming-soon')).toBeInTheDocument();
   });
 });

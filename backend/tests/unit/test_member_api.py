@@ -116,13 +116,28 @@ async def test_list_and_agent_projection(client, session_factory):
     owner = await _register_and_login(client, "owner-p@corp.com")
     ws = await _create_workspace(client, owner, "mem-p")
     member_id, _joiner = await _invite_accept(client, owner, ws["id"], "joiner-p@corp.com")
-    # Insert an agent roster row directly (agents table is deferred).
+    # Insert an agent roster row directly (real agents row — composite FK).
     async with session_factory() as session, session.begin():
+        from mesh.db.models.agent import Agent
+        from mesh.db.models.user import User
+
+        agent_owner = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Agent Owner",
+        )
+        session.add(agent_owner)
+        await session.flush()
+        agent_row = Agent(
+            workspace_id=uuid.UUID(ws["id"]), name="Proj Agent", owner_user_id=agent_owner.id
+        )
+        session.add(agent_row)
+        await session.flush()
         session.add(
             Member(
                 workspace_id=uuid.UUID(ws["id"]),
                 member_type="agent",
-                agent_id=uuid.uuid4(),
+                agent_id=agent_row.id,
                 role="member",
             )
         )

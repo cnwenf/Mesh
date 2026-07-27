@@ -84,6 +84,24 @@ async def _seed_member(
                 )
             ).scalar_one()
         else:
+            owner_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO users (email, display_name) VALUES (:e, 'Owner') RETURNING id"
+                    ),
+                    {"e": f"{uuid.uuid4().hex[:12]}@corp.com"},
+                )
+            ).scalar_one()
+            # Agent roster rows reference a real agents row (composite FK).
+            agent_id = (
+                await session.execute(
+                    text(
+                        "INSERT INTO agents (workspace_id, name, owner_user_id) "
+                        "VALUES (:ws, 'Token Agent', :o) RETURNING id"
+                    ),
+                    {"ws": workspace_id, "o": owner_id},
+                )
+            ).scalar_one()
             member_id = (
                 await session.execute(
                     text(
@@ -92,7 +110,7 @@ async def _seed_member(
                     ),
                     {
                         "ws": workspace_id,
-                        "a": uuid.uuid4(),
+                        "a": agent_id,
                         "role": role,
                         "status": status,
                     },
