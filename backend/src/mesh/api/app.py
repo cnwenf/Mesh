@@ -74,6 +74,10 @@ from mesh.realtime.auth import (
     DefaultChannelAuthorizer,
     build_authenticator,
 )
+from mesh.runtime.channels import register_execution_checkers
+from mesh.runtime.daemon_routes import router as runtime_daemon_router
+from mesh.runtime.routes import router as runtime_router
+from mesh.runtime.service import RuntimeService
 from mesh.skill.bindings import BindingService
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportService, ImportSettings
@@ -217,7 +221,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Comment & inbox module (comment-inbox.md): comments, §6.9 mention
     # triggers, §6.13 notification fan-out (relay side), inbox operations.
     app.state.comment_service = CommentService(
-        session_factory, max_agent_chain_depth=settings.max_agent_chain_depth
+        session_factory,
+        max_agent_chain_depth=settings.max_agent_chain_depth,
+        # §6.16 / runtime.md R12: comment write path secret scanning key.
+        signing_secret=settings.jwt_secret,
     )
     app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
@@ -246,6 +253,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.skill_binding_service.collect_enqueue_context
     )
     register_skill_matching_resolver(make_matching_resolver())
+    app.state.runtime_service = RuntimeService(session_factory, settings)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -253,6 +261,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_issue_checkers(app.state.authorizer, session_factory)
     register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
+    register_execution_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -270,6 +279,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(attachment_router)
     app.include_router(comment_inbox_router)
     app.include_router(agent_router)
+    app.include_router(runtime_router)
+    app.include_router(runtime_daemon_router)
     app.include_router(skill_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])

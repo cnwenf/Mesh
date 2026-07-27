@@ -35,6 +35,8 @@ from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
+from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler
+from mesh.runtime.reaper import runtime_reaper_loop
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportSettings, skill_import_sweep_loop
 from mesh.skill.resolvers import make_matching_resolver
@@ -113,8 +115,11 @@ def build_relay(
             REALTIME_PUBLISH: project_realtime_event,
             ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
-            # runtime.md consumer (enqueue_execution_handler) belongs to MES-62
-            # (not yet merged); the comment-inbox fan-out handler is active.
+            # runtime.md consumer side of the MES-60 / comment-inbox contract:
+            # agent dispatch and @mention both enqueue; this handler
+            # materializes task_executions (README §6.4 logical layer,
+            # idempotent by §6.5 key) — replaces the stopgap bridge.
+            ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
             FANOUT_EVENT_TYPE: NotificationFanoutHandler(
                 aggregation_window_seconds=settings.notification_aggregation_window,
                 mailer=mailer,
@@ -234,6 +239,10 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     stop=stop,
                     clock=_utcnow,
                 ),
+            ),
+            TaskSpec(
+                "runtime-reaper",
+                lambda: runtime_reaper_loop(session_factory, settings=settings, stop=stop),
             ),
         ]
     )

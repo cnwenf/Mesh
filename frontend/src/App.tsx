@@ -34,6 +34,9 @@ import { IssuesPage } from './features/issues/IssuesPage';
 import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
 import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
+import { ExecutionDetailPage } from './features/runtimes/ExecutionDetailPage';
+import { RuntimeDetailPage } from './features/runtimes/RuntimeDetailPage';
+import { RuntimesPage } from './features/runtimes/RuntimesPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
@@ -179,8 +182,11 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="agents/:agentId" element={<AgentDetailPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
-                {/* runtime.md §4 Runtimes 模块属 MES-62(未合入);automation 暂回占位页 */}
-                <Route path="automation" element={<PlaceholderPage kind="automation" />} />
+                {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
+                <Route path="runtimes" element={<RuntimesPage />} />
+                <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
+                <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
+                <Route path="automation" element={<Navigate to="/runtimes" replace />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

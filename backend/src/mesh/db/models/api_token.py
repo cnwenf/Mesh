@@ -26,6 +26,10 @@ from mesh.db.base import Base
 # and the UI can label PAT vs agent credential (auth.md §2.5 design note).
 PAT_TOKEN_PREFIX = "mesh_pat_"
 AGENT_TOKEN_PREFIX = "mesh_agt_"
+# Runtime daemon tokens (runtime.md §3.2/§3.5): long-lived machine credentials
+# resolved via ``runtimes.runtime_token_hash`` — deliberately NOT in
+# TOKEN_PREFIXES so console PAT endpoints never accept them.
+RUNTIME_TOKEN_PREFIX = "mesh_rt_"
 TOKEN_PREFIXES = (PAT_TOKEN_PREFIX, AGENT_TOKEN_PREFIX)
 # Display prefix length stored for listing (non-secret fragment).
 DISPLAY_PREFIX_LEN = 12
