@@ -395,18 +395,30 @@ async def test_guest_cannot_trigger_agent_mention(env):
     guest_token = await _invite_accept(
         client, token, env["workspace"]["id"], "guest@mesh.example", role="guest"
     )
-    # Insert an agent roster row directly (the agent API lands later).
+    # Insert an agent roster row directly (the agent API lands later). main's
+    # 0017_agent enforces members.agent_id → agents, so seed a real agents row
+    # (with an owner user) before the member row.
+    from mesh.db.models.agent import Agent
     from mesh.db.models.member import Member
+    from mesh.db.models.user import User
 
     async with client._transport.app.state.session_factory() as session, session.begin():  # noqa: SLF001
+        owner = User(email=f"agent-owner-{uuid.uuid4().hex[:8]}@x.io", display_name="owner")
+        session.add(owner)
+        await session.flush()
+        ws_id = uuid.UUID(env["workspace"]["id"])
+        agent_row = Agent(workspace_id=ws_id, name="reviewer-bot", owner_user_id=owner.id)
+        session.add(agent_row)
+        await session.flush()
         agent = Member(
-            workspace_id=uuid.UUID(env["workspace"]["id"]),
+            workspace_id=ws_id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent_row.id,
             role="member",
             display_override="reviewer-bot",
         )
         session.add(agent)
+        await session.flush()
     resp = await _post_comment(
         client, guest_token, issue["id"],
         f"[@reviewer-bot](mention://member/{agent.id})",

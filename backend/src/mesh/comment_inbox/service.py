@@ -439,6 +439,17 @@ class CommentService:
 
             triggered_ids: tuple[uuid.UUID, ...] = ()
             if added_agents and not suppress_triggers:
+                # L4 / §6.5: the create path anchors the trigger key on
+                # comment.id (one enqueue per comment+agent, forever). An edit
+                # that REMOVES then RE-ADDs the same @agent must enqueue a NEW
+                # execution, so edits anchor on a deterministic per-edit epoch
+                # (comment.id + edited_at) — monotonic across edits, stable
+                # within one edit transaction (outbox retry returns the same
+                # event), and never collides with the create-path key.
+                edit_epoch = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"mesh:comment-edit:{comment.id}:{comment.edited_at.isoformat()}",
+                )
                 result = await enqueue_agent_executions(
                     session,
                     workspace_id=workspace_id,
@@ -446,7 +457,7 @@ class CommentService:
                     comment=comment,
                     author_member=editor_member,
                     agent_mentions=added_agents,
-                    trigger_event_id=comment.id,
+                    trigger_event_id=edit_epoch,
                     max_chain_depth=self._max_agent_chain_depth,
                 )
                 triggered_ids = result.triggered_execution_ids
