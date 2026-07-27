@@ -19,12 +19,32 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **checkout 安全(§2.2 H1)**:`config_snapshot.repo.url`(冻结真源)必须在 `workspaces.settings.allowed_repos` 白名单内(403 `repo_not_allowed`);平台托管 runtime 拒绝 RFC1918/环回/link-local/云元数据地址(403 `private_address_forbidden`,IPv4-mapped IPv6 展开复检)。
 - **审批唯一续跑协议(§6.10,T21)**:运行中工具命中 `confirm_required` → 当前 attempt 置 `cancelled(awaiting_approval)`(审计保留、租约结束、容量释放)、执行转 `awaiting_approval`;批准 → 回 `queued`,新 attempt #N+1 凭冻结 `resume_context` 续跑;拒绝 → `cancelled(approval_rejected)`;同 subject 单 pending(部分唯一索引,重复请求返回既有)。
 - **实时(§3.6)**:`execution.*`(queued/claimed/started/completed/failed/timeout/cancelled/requeued/awaiting_approval/log)、`runtime.*`(activated/online/offline/degraded/paused)、`queue.depth_changed`、`approval.*` 全经 outbox → projector 唯一路径;`execution:{id}[:logs]` 频道资源级订阅鉴权(API/网关双注册);终态通知按 §6.13 矩阵(失败/超时 critical 扇出,成功默认留运行页)。
-- **前端(§4.1–§4.5)**:Runtimes 列表(状态点 + 负载条 + 心跳新鲜度 + 队列深度背压,实时刷新)、详情页(监控 + 在途/历史 + 暂停/恢复 + token 轮换一次性展示)、三步注册向导(基本信息 → 签名发布包可审阅安装步骤(下载/校验 sha256+签名/解包/`--activation-file` 受限激活/用后即毁)→ 等待 `runtime.activated` ⏳→✅)、执行详情页(实时日志 WS 主通道 + offset 去重续传 + 跟随尾部,SSE 降级;凭证 Tab 值恒 `***`;两段式取消二次确认);`/automation` 入口接通;i18n 全外部化(zh-CN + en 各 +139 键)。
+- **前端(§4.1–§4.5)**:Runtimes 列表(状态点 + 负载条 + 心跳新鲜度 + 队列深度背压,实时刷新)、详情页(监控 + 在途/历史 + 暂停/恢复 + token 轮换一次性展示)、三步注册向导(基本信息 → 签名发布包可审阅安装步骤(下载/校验 sha256+签名/解包/`--activation-file` 受限激活/用后即毁)→ 等待 `runtime.activated` ⏳→✅)、执行详情页(实时日志 WS 主通道 + offset 去重续传 + 跟随尾部,SSE 降级;凭证 Tab 值恒 `***`;两段式取消二次确认);`/automation` 入口接通;i18n 全外部化(zh-CN + en 各 +139 键);真实浏览器走查 spec 接入 `runtimes-e2e` CI job(真 PG/Redis/MinIO/api/worker/gateway 全栈)。
+
+### Fixed
+
+验收第 1 轮打回整改(3 CRITICAL + 4 HIGH + MEDIUM/LOW,独立干净环境复测全绿):
+
+- **B1(CRITICAL)迁移漂移**:0018 补齐 `runtimes.created_by`(同租户复合 FK)与 `runtime_credentials.env_name`(含 CHECK)——此前这两处 DDL 只在 ORM 不在迁移(提交路径 `backend/migrations` 漏入库),从零迁移库 UndefinedColumn;现从零迁移库验证漂移门禁干净。
+- **B2(CRITICAL)前端缺失**:前端 Runtimes UI 全量入库(此前只提交了 e2e spec 与存证);走查 spec 接入真实存在的 playwright 配置与 CI job;存证由已提交代码重新生成。
+- **B3(CRITICAL)CI 红**:ruff 全量清零(src + tests,60 项:I001/F401/UP017/UP041/B007/B017/E501)。
+- **H1**:claim 响应回传 `resume_context`(该执行最新 approved 审批冻结的检查点),批准后续跑端到端接通(§6.10)。
+- **H2**:全通道脱敏红线落地——`runtime/redaction.py` 统一守卫,附件处理管线对文本型上传做 secret 扫描,命中即阻断(`scan_status='infected'`,隔离闸门不放行)+ critical 安全审计;评论通道接入点就绪(评论模块 MES-58 合入后一行接通)。
+- **H3**:`GET /runtimes` 增 `labels=k:v,k2:v2` 过滤(JSONB `@>` 包含匹配)。
+- **H4**:审批裁决权补齐触发者路径(issue reporter,数据模型中的持久触发信号)。
+- **F7**:claim 改 INNER JOIN agents(§2.5 spec 语义,无执行者的执行不可领)。
+- **F8**:heartbeat `inflight` 校验(UUID)并落心跳明细(`inflight_reported` 审计)。
+- **F9**:审批裁决端点改 `/approve` `/reject`(去冒号);`role=mine` = pending 待我审批收件箱。
+- **F10**:`execution.queued` 发至 `workspace:{ws}:executions` 频道(§3.6,issue-less/integration 触发亦可见)。
+- **F11**:`execution.log` 改逐行帧(§3.3 线上形状 `{type,stream,offset,line}`)。
+- **L3/L4**:daemon JSONB 载荷 64KB 上限;API 层 `max_concurrent ≥ 1`(迁移 CHECK 保持 spec 的 ≥0)。
+- **refetch 语义**:撤销(revoke)优先于上限报告——冻结后 refetch 报 `envelope_revoked` 而非上限。
 
 ### Quality
 
-- **红线 e2e(§5.2,真实起服 + 真实 worker)**:12 项——T2 三 runtime 并发抢一任务恰一胜者零重复、T3 五并发 vs 容量 2 恰成功 2 且终态归零、T4 租约过期 requeue 审计保留 + attempt #2 接管、T10 僵尸 lease_seq 全通道 409、T16 checkout 白名单 403 + 元数据地址拒绝、T20 无匹配 204 容量零写入、T21 审批挂起→批准→新 attempt 续跑全协议 + 拒绝路径;激活流(410/401)、daemon 鉴权(403/401)、NEW-M1 env 名 422、日志脱敏与 REST 续传。
-- **单元测试**:runtime 模块 112 项(claim 并发/状态机/fencing/reaper/审批/凭证/checkout/日志/注册生命周期),真实 PostgreSQL/MinIO 零 mock;model-migration 零漂移门禁通过。
+- **红线 e2e(§5.2,真实起服 + 真实 worker)**:16 项——T2 三 runtime 并发抢一任务恰一胜者零重复、T3 五并发 vs 容量 2 恰成功 2 且终态归零、T4 租约过期 requeue 审计保留 + attempt #2 接管、T10 僵尸 lease_seq 全通道 409、T16 checkout 白名单 403 + 元数据地址拒绝、T20 无匹配 204 容量零写入、T21 审批挂起→批准→新 attempt 续跑全协议 + 拒绝路径;激活流(410/401)、daemon 鉴权(403/401)、NEW-M1 env 名 422、日志脱敏与 REST/SSE 续传、console 全端点、refetch 轮换与冻结。
+- **单元测试**:runtime 模块 148 项(claim 并发/状态机/fencing/reaper/审批全错误路径/凭证/checkout/日志/注册生命周期/脱敏守卫/附件阻断),真实 PostgreSQL/MinIO 零 mock;model-migration 零漂移门禁通过(从零迁移库)。
+- **覆盖率**:后端总体 ≥92%(unit+e2e 合并,`--cov-fail-under=90` 通过);runtime 模块**各文件 90–100%**(approvals 96% / redaction 100% / claim 97%),模块总 92%。前端 1659 测试全绿(97.64%),runtimes 目录 per-file ≥90% 门禁通过。
 
 ## [0.14.0] - 2026-07-27
 
