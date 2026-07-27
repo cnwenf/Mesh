@@ -15,6 +15,7 @@ import { Button, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { AttachmentPanel } from '../attachments';
 import { listMembers } from '../members/api';
 import type { MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
@@ -470,9 +471,12 @@ export function IssueDetailPage(): React.JSX.Element {
     category,
     items: statuses.filter((s) => s.category === category),
   })).filter((group) => group.items.length > 0);
-  // F7:进度以服务端 children_progress 为准(不受本地分页截断影响)
-  const doneChildren = issue.children_progress.done;
-  const totalChildren = issue.children_progress.total;
+  // F7:进度以服务端 children_progress 为准(不受本地分页截断影响)。
+  // 防御性默认:服务端信封畸形(children_progress 缺失/字段非数)时不得在
+  // 渲染期抛错拖白整页——按 unknown 收窄后回退 0(单条坏响应只影响该计数)。
+  const progress = issue.children_progress as { done?: unknown; total?: unknown } | null | undefined;
+  const doneChildren = typeof progress?.done === 'number' ? progress.done : 0;
+  const totalChildren = typeof progress?.total === 'number' ? progress.total : 0;
 
   return (
     <div className="mesh-issues-detail" data-testid="issue-detail">
@@ -559,6 +563,8 @@ export function IssueDetailPage(): React.JSX.Element {
             workspaceId={issue.workspace_id}
             onAdded={(entry) => setDependencies((prev) => [...prev, entry])}
           />
+
+          <AttachmentPanel workspaceId={issue.workspace_id} issueId={issue.id} />
 
           <h2>{t('issues.detail.activity')}</h2>
           {activity.length === 0 ? (

@@ -7,7 +7,7 @@ the Bearer token into a principal via a pluggable authenticator (deps.py).
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, Query
@@ -18,6 +18,9 @@ from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.api.realtime_routes import router as realtime_router
+from mesh.attachment.routes import router as attachment_router
+from mesh.attachment.service import AttachmentService
+from mesh.attachment.storage import ObjectStorage, StorageConfig
 from mesh.auth.mailer import build_mailer
 from mesh.auth.oauth import MockOAuthProvider, OAuthService
 from mesh.auth.oauth_routes import router as oauth_router
@@ -91,9 +94,28 @@ def _raise_debug_error(status: int) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Attachment bucket bootstrap (private bucket; idempotent). Failures are
+    # logged, not fatal — the API still boots for non-attachment traffic and
+    # storage calls surface 502 storage_error until MinIO is reachable.
+    with suppress(Exception):
+        await app.state.storage.ensure_bucket()
     yield
     await app.state.redis.aclose()
     await app.state.engine.dispose()
+
+
+def build_object_storage(settings: Settings) -> ObjectStorage:
+    """S3-compatible client pair (internal I/O + public presign endpoint)."""
+    return ObjectStorage(
+        StorageConfig(
+            endpoint=settings.storage_endpoint,
+            public_endpoint=settings.storage_public_endpoint or settings.storage_endpoint,
+            region=settings.storage_region,
+            access_key=settings.storage_access_key,
+            secret_key=settings.storage_secret_key,
+            bucket=settings.storage_bucket,
+        )
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -170,6 +192,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.move_service,
         app.state.view_service,
     )
+    # Attachment module (attachment.md): private bucket + presigned direct
+    # upload; the processing worker shares the same storage settings.
+    app.state.storage = build_object_storage(settings)
+    app.state.attachment_service = AttachmentService(session_factory, settings, app.state.storage)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -189,6 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(label_router)
     app.include_router(label_association_router)
     app.include_router(view_router)
+    app.include_router(attachment_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

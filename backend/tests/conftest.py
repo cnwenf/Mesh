@@ -145,3 +145,104 @@ async def workspace_factory(
         return workspace
 
     return _create
+
+
+@pytest_asyncio.fixture
+async def member_factory(session_factory) -> Callable[..., Awaitable]:
+    """Create a human member (with its user) in a workspace."""
+    from mesh.db.models.member import Member
+    from mesh.db.models.user import User
+
+    async def _create(workspace, *, role: str = "member", name: str | None = None):
+        async with session_factory() as session, session.begin():
+            user = User(
+                email=f"u-{uuid.uuid4().hex[:12]}@mesh.test",
+                display_name=name or "Test Member",
+                password_hash="unused-in-tests",
+            )
+            session.add(user)
+            await session.flush()
+            member = Member(
+                workspace_id=workspace.id,
+                user_id=user.id,
+                member_type="human",
+                role=role,
+                status="active",
+            )
+            session.add(member)
+        return member
+
+    return _create
+
+
+# ---------------------------------------------------------------------------
+# Object storage (attachment module — real MinIO, skipped when unreachable)
+# ---------------------------------------------------------------------------
+
+DEFAULT_TEST_STORAGE_ENDPOINT = "http://127.0.0.1:9000"
+
+
+def get_test_storage_endpoint() -> str:
+    return os.environ.get("MESH_TEST_STORAGE_ENDPOINT", DEFAULT_TEST_STORAGE_ENDPOINT)
+
+
+def get_test_storage_credentials() -> tuple[str, str]:
+    return (
+        os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
+        os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+    )
+
+
+@pytest.fixture(scope="session")
+def storage_bucket_name() -> str:
+    """One bucket per test session — tests never share object namespaces."""
+    return f"mesh-test-{uuid.uuid4().hex[:12]}"
+
+
+@pytest_asyncio.fixture(scope="session")
+async def object_storage(storage_bucket_name: str):
+    """A real ObjectStorage bound to MinIO; skips the test when unreachable."""
+    import socket
+
+    from mesh.attachment.storage import ObjectStorage, StorageConfig
+
+    endpoint = get_test_storage_endpoint()
+    host, _, port = endpoint.split("://", 1)[1].partition(":")
+    try:
+        with socket.create_connection((host, int(port or 80)), timeout=2):
+            pass
+    except OSError:
+        pytest.skip(f"object storage not reachable at {endpoint}")
+    access_key, secret_key = get_test_storage_credentials()
+    storage = ObjectStorage(
+        StorageConfig(
+            endpoint=endpoint,
+            public_endpoint=endpoint,
+            region="us-east-1",
+            access_key=access_key,
+            secret_key=secret_key,
+            bucket=storage_bucket_name,
+        )
+    )
+    try:
+        await storage.ensure_bucket()
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"object storage bucket bootstrap failed: {exc}")
+    yield storage
+
+
+@pytest.fixture
+def attachment_settings_kwargs(db_url: str, redis_url: str, storage_bucket_name: str) -> dict:
+    """load_settings overrides wiring the API to the test services."""
+    access_key, secret_key = get_test_storage_credentials()
+    return {
+        "database_url": db_url,
+        "redis_url": redis_url,
+        "auth_mode": "dev",
+        "jwt_secret": "attachment-test-signing-secret-000000000000",
+        "storage_endpoint": get_test_storage_endpoint(),
+        "storage_public_endpoint": get_test_storage_endpoint(),
+        "storage_access_key": access_key,
+        "storage_secret_key": secret_key,
+        "storage_bucket": storage_bucket_name,
+    }
