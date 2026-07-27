@@ -62,6 +62,19 @@ export default defineConfig({
           branches: 90,
           statements: 90,
         },
+        // MES-60:agent 模块目录级阈值(第 2 轮 R1 改为真实 per-file 脚本后移除)。
+        'src/features/agents/**/*.tsx': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
+        'src/features/agents/**/*.ts': {
+          lines: 90,
+          functions: 90,
+          branches: 90,
+          statements: 90,
+        },
       },
     },
   },

@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 import redis.asyncio as aioredis
 from sqlalchemy import select
 
+from mesh.agent.triggers import assign_orchestration_handler
 from mesh.attachment.processing import process_blob
 from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
@@ -28,7 +29,7 @@ from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
-from mesh.issue.triggers import ASSIGN_EVENT_TYPE, assign_trigger_handler
+from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
@@ -85,16 +86,17 @@ def build_relay(
 ) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
-    ``issue.assigned`` is consumed by a bridge handler until the agent.md
-    increment provides the unified orchestration entry point (issue.md §3.7):
-    the producing side already carries the §6.9 trigger payload, so the swap
-    is handler-local.
+    ``issue.assigned`` is consumed by the unified agent orchestration entry
+    (agent.md §3.3): guardrail gate → §6.11 snapshot freeze →
+    ``execution.enqueue`` outbox event (consumed by the runtime.md
+    increment) with the README §6.5 idempotency key, or
+    ``agent.trigger_skipped`` when a guardrail denies the trigger.
     """
     return OutboxRelay(
         session_factory,
         handlers={
             REALTIME_PUBLISH: project_realtime_event,
-            ASSIGN_EVENT_TYPE: assign_trigger_handler,
+            ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
         },
         batch_size=settings.outbox_batch_size,

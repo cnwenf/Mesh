@@ -5,9 +5,9 @@ reference ``members``; the member.md increment builds roster CRUD on top.
 
 ``members.id`` is the system-wide reference key (assignee, author, recipient —
 all point here). The ``agent_id`` composite FK to ``agents(workspace_id, id)``
-is added by the agent.md increment once the agents table exists (the
+was added by the agent.md increment once the agents table existed (the
 validation script's own deferred-FK pattern); the polymorphic CHECK below
-already enforces the human/agent shape.
+enforces the human/agent shape.
 """
 
 from __future__ import annotations
@@ -44,7 +44,8 @@ class Member(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), default=None
     )
-    # Deferred composite FK → agents(workspace_id, id) (agent.md increment).
+    # Composite FK → agents(workspace_id, id) (agent.md increment, README §6.2):
+    # an agent roster row can only reference an agent of the SAME workspace.
     agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     role: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'member'"))
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
@@ -91,6 +92,15 @@ class Member(Base):
         Index("idx_members_user", "user_id"),
         Index("idx_members_agent", "agent_id"),
         Index("idx_members_type", "workspace_id", "member_type"),
+        # Same-tenant composite FK (README §6.1 / §6.2): agent roster rows
+        # reference an agent of THIS workspace; cross-workspace references
+        # fail at INSERT (T1).
+        ForeignKeyConstraint(
+            ("workspace_id", "agent_id"),
+            ("agents.workspace_id", "agents.id"),
+            ondelete="CASCADE",
+            name="members_agent_id_agents",
+        ),
     )
 
 

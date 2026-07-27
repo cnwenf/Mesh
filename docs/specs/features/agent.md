@@ -695,7 +695,7 @@ stateDiagram-v2
 - **archived**：从主列表隐藏，数据保留；restore 回 active。
 - **软删除**：置 `deleted_at`，默认从所有候选 / 列表隐藏；历史外键以「已停用 agent」占位渲染。
 - 非法迁移（如 archived 直接 pause）返回 `409 conflict`。状态变更经 `agent.lifecycle_changed` 广播，UI 即时刷新。
-- 与名册联动：`disable` 时 `members.status` 置 `disabled`；`enable/restore` 回 `active`；软删除时 `members.deleted_at` 同步置位。
+- 与名册联动：`disable` 时 `members.status` 置 `disabled`；`enable/restore` 回 `active`；软删除时 `members.status` 置 `removed`（权威 `members` 模型无 `deleted_at` 列，以 `status='removed'` 为名册软终态，与 README §6.1 一致；本句更正旧文案对 `members.deleted_at` 的误述）。
 
 ### 4.9 实时性方案
 

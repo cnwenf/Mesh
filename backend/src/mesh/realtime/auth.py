@@ -86,7 +86,7 @@ WORKSPACE_SCOPED_ENTITY = "workspace"
 # private resource. Entities NOT listed here (e.g. not-yet-implemented modules)
 # keep the workspace-membership floor until they opt into resource-level checks
 # by adding themselves here AND registering a checker.
-RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project"})
+RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project", "agent"})
 
 
 @runtime_checkable

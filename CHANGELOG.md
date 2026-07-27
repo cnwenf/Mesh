@@ -63,6 +63,39 @@ kanban 看板与视图的 **issue 投影层**(issue 耦合余量切片,MES-33,�
 - 前端:board 投影层单测(projection 契约 / boardRealtime 合并+重分桶+归属重判 / BoardColumns 拖拽落点+WIP+快速创建 / loadAllGroups 多页合并 / BoardPage 拖拽+WIP 弹回+跨项目预览+快速创建+实时接线+重同步)+ Playwright 真实后端走查(注册/登录 → 建区 → 真实卡片 → 拖拽持久化 → 快速创建 → WIP block → 断线重同步,6 张截图存证 `e2e/evidence/board-projection`,存证去重校验 `scripts/check-evidence-unique.mjs` 接入 CI);vitest **1324 例**全绿,全局四项 **97.14% / 90.33% / 92.86% / 97.14%**,变更语句行 **93.4%** 门禁全绿;typecheck / lint 0 错、生产构建全绿。
 - 文档同步:README 实现状态表 kanban 行升级为「定义层 + 投影层」(v0.13.0);kanban.md 投影增量落地标注 + label/自定义字段分组随 MES-32 增量说明。
 - 范围说明:label / 自定义字段的分组与筛选依赖 `issue_labels` / `issue_custom_field_values` 关联层,该关联层属并行线 MES-32,尚未合入 main;投影层对该两类分组/筛选按 issue 模块同口径门控(`projection_field_pending` / `group_by=label` 400),待 MES-32 落地后接通,非缺陷。
+## [0.12.1] - 2026-07-27
+
+阶段 6 智能体层首个模块:agent 模块核心实现(MES-60,agent.md 核心五章)。agents + agent_config_versions 双表、REST 全套、分派即触发 outbox 契约(§3.3/§6.9/§6.11/§6.5)、agent.* 实时事件、四步创建/编辑向导与 Agent 详情页。执行生命周期消费端(task_executions/claim/租约)、技能绑定与 autopilot/squad 触发路径属后续模块。
+
+### Added
+
+- **数据模型(§2.3/§2.7)**:`agents`(profile、`model_config` JSONB、`lifecycle_status` active/paused/disabled/archived、`visibility` workspace/private、`trigger_on_assign`、`default_runtime_id` 预留列)与 `agent_config_versions`(不可变配置快照、`change_summary`、审计 `changed_by`);迁移 0017 落地(附件模块占用 0015/0016,本模块避让重排,单一 alembic head)**同父域重叠复合 FK** `(workspace_id, id, active_config_version_id) → agent_config_versions(workspace_id, agent_id, id)`——active 指针指向他 agent/他工作区版本在 INSERT 即被拒(§6.2 第 7 条,T27),列级 `ON DELETE SET NULL (active_config_version_id)`(PG16,§6.2 第 6 条);`members.agent_id` 延迟复合 FK 补建(→ `agents(workspace_id, id)`,跨工作区引用即拒,T1);双表 fail-closed RLS + mesh_app 最小权限。
+- **REST(§3.1/§3.4/§3.5)**:`POST /workspaces/{ws}/agents`(创建同事务写 agents + members(member_type='agent')+ 首个配置版本,§5.1 原子性)、列表(status/visibility/owner/q 筛选,(lifecycle_status, created_at, id) 键集分页)、详情、profile PATCH、`PATCH /config`(合并校验 + 生成新版本 + 移动指针)、`GET /config-versions` + `:rollback`(复制旧快照为新版本,不可变历史)、生命周期 `:pause/:resume/:disable/:enable/:archive/:restore`(§4.8 状态机,非法迁移 409 `conflict`(§3.4 表);disable/enable 与 members.status 联动)、`:transfer`(仅所有者/admin,目标须为本工作区活跃人类成员)、软删除(204,联动 members.status='removed');model_config 应用层范围校验(temperature [0,2] / top_p [0,1] / max_tokens ≥1 / 枚举)422 `validation_error` 字段级 details;avatar_url https-only(§6.16);写类端点 120/min 限流 + 审计留痕。
+- **分派即触发 outbox 契约(§3.3,README §6.5/§6.9/§6.11)**:统一编排入口 `assign_orchestration_handler` 消费 `issue.assigned`(替换占位桥接),护栏闸门(生命周期非 active / 名册非 active / `trigger_on_assign=false` / 频率上限 / 链深度)拒绝即发 `agent.trigger_skipped`(幂等键防重投重复帧);放行则冻结 §6.11 可复现快照(agent_config_version + skill_versions + capability_grants + repo + trigger_event_id)并以 §6.5 幂等键 `sha256(agent_id|issue_id|trigger_event_id)` 写 `execution.enqueue`(runtime 模块消费),随后发 `execution.queued` 于 `issue:{id}:runs` 频道(§3.6);改派经 `intent='cancel_in_flight'`(`failure_reason='superseded'`,§6.9)。**能力入队归一算法** `normalize_capability_declarations`:混合字符串/对象声明 → 严格字符串数组 `required_capabilities` + permission 必填对象数组 `capability_grants`(字符串补 confirm_required、去重、同能力取最严格、字典序;非法声明 `capability_invalid`),与 validation SQL 参照实现逐条等价(T28);issue 上下文注入按 §6.15 不可信数据结构隔离。
+- **实时(§3.6/§6.7)**:`agent.created/updated/deleted/lifecycle_changed/trigger_skipped` 经 outbox → projector 唯一路径广播于 `workspace:{ws}:agents`;`agent:{id}[:presence]` 频道资源级订阅鉴权(private agent 仅所有者/admin,fail-closed);API 与网关两处注册同一 checker 防漂移。
+- **前端(agent.md §4.2–§4.5)**:四步创建/编辑向导(基本信息 → 模型与指令(预设/档位/推理强度/系统指令)→ 技能与工具(稍后配置占位)→ 可见性),仅从成员名册页「+ 新建 Agent」打开(唯一创建入口,T35);Agent 详情页(`/agents/:agentId`,概览/配置/技能占位/可见性与权限/历史五 Tab,配置保存生成新版本、历史回滚、生命周期动作按钮随状态机呈现,订阅 `workspace:{ws}:agents` 实时刷新);名册 agent 行深链详情页、AI 徽章与头像角标保持;`AddMemberDialog` 收敛为纯邀请人类(agent 占位 Tab 移除);i18n 全外部化(zh-CN + en 各 +85 键)。
+
+### Fixed
+
+验收第 1 轮打回整改(独立口径复核全部实跑通过):
+
+- **§3.5 可见性闸门(C2)**:非 admin 的「仅见 workspace 可见 + 自己私有」限定现在对**所有**筛选分支生效——显式 `?visibility=private` 不再绕过 owner 限定枚举他人私有 agent;补单元负向测试 + 真实 e2e 回归(`test_private_filter_cannot_enumerate_others_private_agents`)。
+- **权限模型(M1)**:创建 agent 为成员自助(非 guest 均可创建并成为所有者,§4.4/§4.5/F7);配置/生命周期/回滚/删除按 §3.5 收敛为**所有者或 admin**(`_assert_can_manage`),与 `:transfer` 口径一致。
+- **§3.4 错误码**:非法生命周期迁移 409 统一为 `conflict`(L1);`avatar_url` 非法 scheme 由 400 改为 422 `validation_error`(M-F4),与其余业务校验一致。
+- **§2.1/§6.1 显示名(M2)**:`render_agent` 经 `display_override → agents.name` 解析,与名册 `resolve_display_name` 同源。
+- **§3.3 入队上下文(M3)**:issue 上下文补评论/标签/附件槽位与 §6.15 不可信包裹,经 `register_issue_context_enricher` 由关联表所属模块(comment-inbox/label/attachment)插入;enricher 失败降级为空而不阻断入队。
+- **前端 §4**:名册行补「类型/生命周期/容量」列与 role_tag(H-F1);配置 Tab 补保存前越界红字拦截 + top_p/具体模型(平台模型注册表下拉)/预设套用(H-F2/H-F3,`buildModelConfig` 不再丢 `top_p`/`model`);历史 Tab 补「对比上一版」(H-F4);可见性 Tab 可编辑(单选即改)+ 所有权转移弹窗接线 `:transfer`(H-F5);暂停经弹窗选 `in_flight_policy`(cancel_current/finish_current)+ 原因(M-F1);`agent.presence` 订阅与容量三元组脚手架(M-F2,runtime 落地前渲染「—」);向导补「从模板创建/从现有 agent 复制」入口(M-F3)。
+- **覆盖率门禁(H-C1)**:`vite.config.ts` 为 `src/features/agents/**` 增加 perFile 90% 阈值;补齐详情页/向导交互测试(错误态/非管理态/实时帧/边界回退)。
+
+### Changed
+
+- issue 模块:`issue.assigned` 域事件载荷补 `trigger_event_id`(编排端派生 §6.5 键与 §6.11 快照锚点),域事件幂等键加用途标签避免与入队键碰撞;`issue:{id}:runs` 频道进入 issue 资源级订阅鉴权。
+- member 模块:名册渲染 JOIN agents(agent 显示名经 agents.name 解析,profile 承载 name/description/avatar/is_active);`agents/available` 由占位空列表改为真实查询(活跃未删除 agent)。
+
+### Quality
+
+- 后端:`test_agent_service.py`(39 例:创建原子性/校验/分页/可见性/配置版本/回滚/生命周期全状态机/转移/软删除)、`test_agent_capabilities.py`(16 例:T28 归一全语义)、`test_agent_triggers.py`(9 例:入队契约/幂等重投/跳过事件/改派 supersede)、`test_agent_schema_t27.py`(5 例:T27/T1 数据库层负向 + SET NULL 行为)、`test_agent_e2e.py`(9 例:真实起服 REST 全链路 + 落库断言)、`test_agent_trigger_e2e.py`(7 例:真实 relay 两轮分发 + §6.9 矩阵逐行 + realtime_events 断言);成员相关既有夹具同步真实 agents 行。`pytest-cov` 整体 **94%**(agent 模块 ≥90% 门禁);ruff 全绿;docs 门禁(`check_roster_entry.py` / `check_event_vocab.py`)与 PostgreSQL 16 validation SQL(T27/T28 含)全绿。
+- 前端:vitest **1298 例全绿**,typecheck 0 错,eslint 0 错;覆盖率 **97.12%**(branch 90.2%,≥90% 门禁);成员名册真实后端 Playwright 走查更新为向导真实创建 + 详情页走查。
 
 ## [0.13.1] - 2026-07-27
 
