@@ -15,6 +15,7 @@ import { Button, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { AttachmentPanel } from '../attachments';
 import { listMembers } from '../members/api';
 import type { MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
@@ -559,6 +560,8 @@ export function IssueDetailPage(): React.JSX.Element {
             workspaceId={issue.workspace_id}
             onAdded={(entry) => setDependencies((prev) => [...prev, entry])}
           />
+
+          <AttachmentPanel workspaceId={issue.workspace_id} issueId={issue.id} />
 
           <h2>{t('issues.detail.activity')}</h2>
           {activity.length === 0 ? (
