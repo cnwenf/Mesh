@@ -9,7 +9,10 @@ export default defineConfig({
   testDir: './e2e',
   // 真实后端联调用例走独立配置(playwright.real.config.ts / playwright.members.config.ts /
   // playwright.mes43.config.ts / playwright.mes44.config.ts),不对 mock 运行
-  testIgnore: ['real-backend.spec.ts', 'real-members.spec.ts', 'workspace-flow.spec.ts', 'real-projects.spec.ts', 'real-lead-gate.spec.ts', 'real-mes44-regression.spec.ts', 'real-labels.spec.ts', 'real-board.spec.ts'],
+  // 真实后端 spec 需各自专用 config(独立后端栈)运行,默认 mock 契约套件须排除。
+  // 真实后端 spec 一律以 real-*.spec.ts 命名(glob 兜底,杜绝新增漏配);
+  // workspace-flow.spec.ts 为历史命名特例,显式列出。
+  testIgnore: ['real-*.spec.ts', 'workspace-flow.spec.ts'],
   timeout: 90_000,
   retries: 0,
   workers: 1,
