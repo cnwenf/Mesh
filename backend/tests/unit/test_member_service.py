@@ -87,10 +87,25 @@ async def _setup(session_factory, slug=None):
 
 async def _add_agent_member(session_factory, workspace_id) -> uuid.UUID:
     async with session_factory() as session, session.begin():
+        from mesh.db.models.agent import Agent
+        from mesh.db.models.user import User
+
+        # Agent roster rows reference a real agents row (composite FK); the
+        # agent needs a human owner (agents.owner_user_id NOT NULL).
+        owner = User(
+            email=f"{uuid.uuid4().hex[:12]}@corp.com",
+            password_hash="x",
+            display_name="Agent Owner",
+        )
+        session.add(owner)
+        await session.flush()
+        agent_row = Agent(workspace_id=workspace_id, name="Roster Agent", owner_user_id=owner.id)
+        session.add(agent_row)
+        await session.flush()
         agent = Member(
             workspace_id=workspace_id,
             member_type="agent",
-            agent_id=uuid.uuid4(),
+            agent_id=agent_row.id,
             role="member",
             joined_at=None,
         )
@@ -248,8 +263,11 @@ async def test_render_agent_profile_and_display_fallback(session_factory):
     agent_id = await _add_agent_member(session_factory, ws)
     detail = await service.get_member(workspace_id=ws, member_id=agent_id)
     assert detail["member_type"] == "agent"
-    assert detail["profile"]["name"] is None
-    assert detail["display_name"].startswith("agent-")
+    # The agents table (agent.md) backs the profile; display name resolves
+    # from agents.name (README §6.1 order).
+    assert detail["profile"]["name"] == "Roster Agent"
+    assert detail["profile"]["is_active"] is True
+    assert detail["display_name"] == "Roster Agent"
 
 
 # --- add -----------------------------------------------------------------------

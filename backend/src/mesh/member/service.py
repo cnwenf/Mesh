@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
+from mesh.db.models.agent import Agent
 from mesh.db.models.member import (
     MEMBER_ROLE_VALUES,
     Member,
@@ -87,15 +88,29 @@ def _human_profile(user: User | None) -> dict | None:
     }
 
 
-def _agent_profile(member: Member) -> dict:
-    # The agents table lands with the agent.md increment; until then the roster
-    # row resolves display fields via display.py and exposes a null profile body.
+def _agent_profile(member: Member, agent: Agent | None = None) -> dict:
+    # Roster rows render the agent profile via the agents table (agent.md
+    # owns it); a missing agents row (defensive only — the composite FK
+    # guarantees it exists) falls back to a null profile body.
+    if agent is None:
+        return {
+            "id": member.agent_id,
+            "name": None,
+            "description": None,
+            "avatar_url": None,
+            "is_active": None,
+            "role_tag": None,
+            "lifecycle_status": None,
+        }
     return {
-        "id": member.agent_id,
-        "name": None,
-        "description": None,
-        "avatar_url": None,
-        "is_active": None,
+        "id": agent.id,
+        "name": agent.name,
+        "description": agent.bio,
+        "avatar_url": agent.avatar_url,
+        "is_active": agent.lifecycle_status == "active" and agent.deleted_at is None,
+        # H-F1:roster 行需要的生命周期与角色标签(§4.2/§4.5/§4.9)。
+        "role_tag": agent.role_tag,
+        "lifecycle_status": agent.lifecycle_status,
     }
 
 
@@ -124,7 +139,7 @@ class MemberService:
 
     # -- serialization ----------------------------------------------------------
 
-    def render_row(self, member: Member, user: User | None) -> dict:
+    def render_row(self, member: Member, user: User | None, agent: Agent | None = None) -> dict:
         """Render one roster list item (member.md §3.2)."""
         return {
             "id": member.id,
@@ -132,13 +147,13 @@ class MemberService:
             "role": member.role,
             "status": member.status,
             "display_name": resolve_display_name(
-                member=member, user=user, agent_name=None
+                member=member, user=user, agent_name=agent.name if agent is not None else None
             ),
             "joined_at": member.joined_at,
             "profile": (
                 _human_profile(user)
                 if member.member_type == "human"
-                else _agent_profile(member)
+                else _agent_profile(member, agent)
             ),
         }
 
@@ -176,8 +191,9 @@ class MemberService:
         # the (rare) row without a joined_at so keyset pagination never drops rows.
         sort_expr = func.coalesce(Member.joined_at, Member.created_at)
         stmt = (
-            select(Member, User)
+            select(Member, User, Agent)
             .outerjoin(User, Member.user_id == User.id)
+            .outerjoin(Agent, Member.agent_id == Agent.id)
             .where(Member.workspace_id == workspace_id)
         )
         if member_type != "all":
@@ -196,6 +212,8 @@ class MemberService:
                     Member.display_override.ilike(pattern),
                     User.display_name.ilike(pattern),
                     User.email.ilike(pattern),
+                    Agent.name.ilike(pattern),
+                    Agent.role_tag.ilike(pattern),
                 )
             )
         if cursor is not None:
@@ -209,10 +227,10 @@ class MemberService:
             await set_tenant_context(session, workspace_id)
             rows = (await session.execute(stmt)).all()
 
-        items = [self.render_row(member, user) for member, user in rows[:limit]]
+        items = [self.render_row(member, user, agent) for member, user, agent in rows[:limit]]
         next_cursor = None
         if len(rows) > limit:
-            last_member, _ = rows[limit - 1]
+            last_member, _, _ = rows[limit - 1]
             sort_value = last_member.joined_at or last_member.created_at
             next_cursor = encode_cursor(sort_value, last_member.id)
         return items, next_cursor
@@ -225,10 +243,11 @@ class MemberService:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             member, user = await self._load_row(session, workspace_id, member_id)
+            agent = await self._agent_for(session, member)
             open_issues = await self._reassigner.open_issues_assigned(
                 session, workspace_id=workspace_id, member_id=member_id
             )
-            detail = self.render_row(member, user)
+            detail = self.render_row(member, user, agent)
             detail.update(
                 {
                     "display_override": member.display_override,
@@ -237,6 +256,17 @@ class MemberService:
                 }
             )
         return detail
+
+    @staticmethod
+    async def _agent_for(session: AsyncSession, member: Member) -> Agent | None:
+        """Resolve the agents row for an agent roster entry (None for humans)."""
+        if member.member_type != "agent" or member.agent_id is None:
+            return None
+        return await session.scalar(
+            select(Agent).where(
+                Agent.workspace_id == member.workspace_id, Agent.id == member.agent_id
+            )
+        )
 
     async def _load_row(
         self, session: AsyncSession, workspace_id: uuid.UUID, member_id: uuid.UUID
@@ -664,10 +694,26 @@ class MemberService:
         self, *, actor: Member, workspace_id: uuid.UUID
     ) -> tuple[list[dict], str | None]:
         self._require_manage(actor)
-        # The agents table lands with the agent.md increment; until then there
-        # are no agents available to add (the roster [+ New Agent] entry shows a
-        # placeholder state — README §6.12 single entry point).
-        return [], None
+        # Active, non-deleted agents assignable from this roster (the picker
+        # projection of README §6.12's single entry point; creation still
+        # lives ONLY behind the roster [+ New Agent] wizard — agent.md §4.2).
+        async with self._factory() as session:
+            await set_tenant_context(session, workspace_id)
+            rows = (
+                await session.execute(
+                    select(Member, Agent)
+                    .join(Agent, Member.agent_id == Agent.id)
+                    .where(
+                        Member.workspace_id == workspace_id,
+                        Member.member_type == "agent",
+                        Member.status == "active",
+                        Agent.deleted_at.is_(None),
+                        Agent.lifecycle_status == "active",
+                    )
+                    .order_by(Agent.created_at.asc(), Agent.id.asc())
+                )
+            ).all()
+        return [self.render_row(member, None, agent) for member, agent in rows], None
 
     # -- M12: guest project-level visibility ------------------------------------
 

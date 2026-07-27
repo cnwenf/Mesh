@@ -10,6 +10,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 
 from mesh import __version__
+from mesh.agent.channels import register_agent_checkers
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.config import Settings, load_settings, validate_auth_settings
@@ -65,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # two processes cannot drift (README §2.2).
     register_resource_checkers(app.state.authorizer, session_factory)
     register_issue_checkers(app.state.authorizer, session_factory)
+    register_agent_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)

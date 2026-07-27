@@ -1,0 +1,180 @@
+/**
+ * Agent 详情页与创建/编辑向导样式(agent.md §4.3/§4.4)。
+ * 颜色/间距一律走设计 token(design/tokens.css),禁止硬编码色值(README §6.12)。
+ */
+
+.mesh-agents-wizard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 22rem;
+}
+
+.mesh-agents-wizard__steps {
+  display: flex;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mesh-agents-wizard__step {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.mesh-agents-wizard__step--active {
+  color: var(--color-primary-contrast);
+  background: var(--color-primary);
+}
+
+.mesh-agents-wizard__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-agents-wizard__label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-agents-wizard__textarea {
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  resize: vertical;
+}
+
+.mesh-agents-wizard__textarea:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.mesh-agents-wizard__fieldset {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-agents-wizard__radio {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-agents-wizard__placeholder {
+  color: var(--color-text-muted);
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.mesh-agents-wizard__error {
+  color: var(--color-danger);
+  margin: 0;
+}
+
+.mesh-agents-wizard__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* --- 详情页 ------------------------------------------------------------- */
+
+.mesh-agents-detail {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+.mesh-agents-detail__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-agents-detail__title {
+  font-size: var(--font-size-lg);
+  margin: 0;
+}
+
+.mesh-agents-detail__status {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+}
+
+.mesh-agents-detail__actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.mesh-agents-detail__subtitle {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.mesh-agents-detail__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.mesh-agents-detail__panel-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mesh-agents-detail__dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+
+.mesh-agents-detail__dl dt {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-agents-detail__dl dd {
+  margin: 0;
+}
+
+.mesh-agents-detail__hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-agents-detail__versions {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.mesh-agents-detail__versions th,
+.mesh-agents-detail__versions td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}

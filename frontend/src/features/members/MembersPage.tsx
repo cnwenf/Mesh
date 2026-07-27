@@ -9,14 +9,14 @@
  * 叠加「AI」徽章。角色/状态/显示名变更经 REST(乐观刷新后重拉名册)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import { AgentWizard } from '../agents/AgentWizard';
 import { activeWorkspace, fetchMe, getMember, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
-import type { AddMemberTab } from './AddMemberDialog';
 import { RemoveMemberDialog } from './RemoveMemberDialog';
 import type { RemoveMode } from './RemoveMemberDialog';
 import type { MemberDetail, MemberRole, MemberSummary, MemberType, Membership } from './types';
@@ -57,10 +57,10 @@ function memberSubtext(member: MemberSummary): string {
   }
   return '';
 }
-
 export function MembersPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
+  const navigate = useNavigate();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -78,7 +78,7 @@ export function MembersPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
 
   const [addOpen, setAddOpen] = useState(false);
-  const [addTab, setAddTab] = useState<AddMemberTab>('human');
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [confirm, setConfirm] = useState<{ mode: RemoveMode; member: MemberSummary } | null>(null);
 
@@ -168,6 +168,11 @@ export function MembersPage(): React.JSX.Element {
   };
 
   const openDetail = async (member: MemberSummary): Promise<void> => {
+    // Agent 行深链到 agent 详情页(README §6.12 名册详情深链);人类行开抽屉。
+    if (member.member_type === 'agent' && member.profile !== null && 'id' in member.profile) {
+      navigate(`/agents/${member.profile.id}`);
+      return;
+    }
     if (workspace === null) return;
     try {
       const full = await getMember(client, workspace.workspace_id, member.id);
@@ -175,11 +180,6 @@ export function MembersPage(): React.JSX.Element {
     } catch {
       setDetail(null);
     }
-  };
-
-  const openAdd = (tab: AddMemberTab): void => {
-    setAddTab(tab);
-    setAddOpen(true);
   };
 
   const reassignTargets = useMemo(
@@ -201,14 +201,14 @@ export function MembersPage(): React.JSX.Element {
               <Button
                 variant="secondary"
                 data-testid="invite-human-button"
-                onClick={() => openAdd('human')}
+                onClick={() => setAddOpen(true)}
               >
                 {t('members.invite')}
               </Button>
               <Button
                 variant="primary"
                 data-testid="new-agent-button"
-                onClick={() => openAdd('agent')}
+                onClick={() => setWizardOpen(true)}
               >
                 {t('members.newAgent')}
               </Button>
@@ -262,9 +262,11 @@ export function MembersPage(): React.JSX.Element {
           <thead>
             <tr>
               <th scope="col">{t('members.col.name')}</th>
+              <th scope="col">{t('agents.roster.type')}</th>
               <th scope="col">{t('members.col.contact')}</th>
               <th scope="col">{t('members.col.role')}</th>
-              <th scope="col">{t('members.col.status')}</th>
+              <th scope="col">{t('agents.roster.lifecycle')}</th>
+              <th scope="col">{t('agents.roster.presence')}</th>
               <th scope="col">{t('members.col.actions')}</th>
             </tr>
           </thead>
@@ -309,28 +311,53 @@ export function MembersPage(): React.JSX.Element {
                     ) : null}
                   </button>
                 </td>
+                <td className="mesh-members__sub" data-testid={`member-type-${member.id}`}>
+                  {member.member_type === 'agent'
+                    ? t('agents.roster.typeAgent')
+                    : t('agents.roster.typeHuman')}
+                </td>
                 <td className="mesh-members__sub">{memberSubtext(member)}</td>
                 <td>
-                  <select
-                    className="mesh-members__role-select"
-                    aria-label={t('members.col.role')}
-                    data-testid={`role-select-${member.id}`}
-                    value={member.role}
-                    disabled={!canManage}
-                    onChange={(event) => handleRoleChange(member, event.target.value as MemberRole)}
-                  >
-                    {ROLE_ORDER.map((role) => (
-                      <option
-                        key={role}
-                        value={role}
-                        disabled={member.member_type === 'agent' && role === 'owner'}
-                      >
-                        {t(`members.role.${role}`)}
-                      </option>
-                    ))}
-                  </select>
+                  {member.member_type === 'agent' ? (
+                    // H-F1:agent 行展示 role_tag(§4.2/§4.5),而非工作区角色下拉。
+                    <span data-testid={`member-role-tag-${member.id}`}>
+                      {member.profile && 'role_tag' in member.profile
+                        ? (member.profile as { role_tag?: string | null }).role_tag ?? ''
+                        : ''}
+                    </span>
+                  ) : (
+                    <select
+                      className="mesh-members__role-select"
+                      aria-label={t('members.col.role')}
+                      data-testid={`role-select-${member.id}`}
+                      value={member.role}
+                      disabled={!canManage}
+                      onChange={(event) =>
+                        handleRoleChange(member, event.target.value as MemberRole)
+                      }
+                    >
+                      {ROLE_ORDER.map((role) => (
+                        <option key={role} value={role}>
+                          {t(`members.role.${role}`)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </td>
-                <td className="mesh-members__sub">{t(`members.status.${member.status}`)}</td>
+                <td className="mesh-members__sub" data-testid={`member-lifecycle-${member.id}`}>
+                  {member.member_type === 'agent' &&
+                  member.profile &&
+                  'lifecycle_status' in member.profile &&
+                  (member.profile as { lifecycle_status?: string | null }).lifecycle_status
+                    ? t(
+                        `agents.lifecycle.${(member.profile as { lifecycle_status: string }).lifecycle_status}`,
+                      )
+                    : t(`members.status.${member.status}`)}
+                </td>
+                <td className="mesh-members__sub" data-testid={`member-presence-${member.id}`}>
+                  {/* §4.9 容量三元组脚手架:presence 帧由 runtime 落地后填充,暂为「—」。 */}
+                  {member.member_type === 'agent' ? t('agents.presence.unknown') : ''}
+                </td>
                 <td>
                   {canManage ? (
                     <div className="mesh-members__row-actions">
@@ -402,8 +429,14 @@ export function MembersPage(): React.JSX.Element {
             onClose={() => setAddOpen(false)}
             client={client}
             workspaceId={workspace.workspace_id}
-            initialTab={addTab}
             onInvited={() => setReloadKey((key) => key + 1)}
+          />
+          <AgentWizard
+            open={wizardOpen}
+            onClose={() => setWizardOpen(false)}
+            client={client}
+            workspaceId={workspace.workspace_id}
+            onSaved={() => setReloadKey((key) => key + 1)}
           />
           {confirm !== null ? (
             <RemoveMemberDialog

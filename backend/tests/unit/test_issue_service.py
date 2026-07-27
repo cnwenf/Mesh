@@ -68,10 +68,27 @@ async def _make_workspace(session_factory):
 async def _make_member(session_factory, workspace, *, role="member", agent=False) -> Member:
     async with session_factory() as session, session.begin():
         if agent:
+            from mesh.db.models.agent import Agent
+            from mesh.db.models.user import User
+
+            # Agent roster rows reference a real agents row (composite FK);
+            # the agent needs a human owner (agents.owner_user_id NOT NULL).
+            owner = User(
+                email=f"{uuid.uuid4().hex[:12]}@corp.com",
+                password_hash="x",
+                display_name="Agent Owner",
+            )
+            session.add(owner)
+            await session.flush()
+            agent_row = Agent(
+                workspace_id=workspace.id, name="Test Agent", owner_user_id=owner.id
+            )
+            session.add(agent_row)
+            await session.flush()
             member = Member(
                 workspace_id=workspace.id,
                 member_type="agent",
-                agent_id=uuid.uuid4(),
+                agent_id=agent_row.id,
                 role=role if role != "owner" else "member",
             )
         else:
@@ -889,7 +906,9 @@ async def test_assign_to_agent_emits_issue_assigned_outbox(session_factory, issu
         assert payload["trigger"] == "assign"
         assert payload["action"] == "enqueue"
         assert payload["agent_member_id"] == str(agent.id)
-        assert events[0].idempotency_key  # §6.5 key present
+        # The orchestration entry derives the §6.5 enqueue key from this.
+        assert payload["trigger_event_id"]
+        assert events[0].idempotency_key  # purpose-tagged domain event key
 
 
 @pytest.mark.unit
@@ -931,18 +950,20 @@ async def test_reassign_agent_supersedes_previous(session_factory, issue_service
 
 
 @pytest.mark.unit
-async def test_assign_trigger_handler_publishes(session_factory):
-    from mesh.db.models.outbox import OutboxEvent
-    from mesh.issue.triggers import assign_trigger_handler
+async def test_assign_event_key_is_purpose_tagged(session_factory):
+    """Domain event keys never collide with the pure §6.5 enqueue key."""
+    from mesh.agent.triggers import enqueue_idempotency_key
+    from mesh.issue.triggers import assign_event_idempotency_key
 
-    workspace = await _make_workspace(session_factory)
-    async with session_factory() as session, session.begin():
-        event = OutboxEvent(
-            workspace_id=workspace.id,
-            event_type="issue.assigned",
-            payload={"issue_id": str(uuid.uuid4()), "action": "enqueue"},
-        )
-        session.add(event)
-    async with session_factory() as session, session.begin():
-        row = await session.scalar(select(OutboxEvent).where(OutboxEvent.workspace_id == workspace.id))
-        await assign_trigger_handler(session, row)  # no raise → relay marks published
+    agent_id, issue_id, event_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    domain_key = assign_event_idempotency_key(
+        agent_key=agent_id, issue_id=issue_id, trigger_event_id=event_id
+    )
+    enqueue_key = enqueue_idempotency_key(
+        agent_id=agent_id, issue_id=issue_id, trigger_event_id=event_id
+    )
+    assert domain_key != enqueue_key
+    # The enqueue key is exactly the README §6.5 formula.
+    import hashlib
+
+    assert enqueue_key == hashlib.sha256(f"{agent_id}|{issue_id}|{event_id}".encode()).hexdigest()

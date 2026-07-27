@@ -1,8 +1,8 @@
 /**
  * 成员名册真实浏览器 e2e(验收:像真人一样实际操作)。
- * 前置:membros-global-setup.mjs 已拉起真实 API(mesh_app/RLS)+ 播种数据并写出上下文。
- * 走查:名册渲染(人+agent + AI 徽章)→「仅 Agent」同路由投影 → 单一 [+ 新建 Agent] 占位入口
- * → 角色变更 → 停用 → 移除(软删除后默认名册不再展示)。
+ * 前置:members-global-setup.mjs 已拉起真实 API(mesh_app/RLS)+ 播种数据并写出上下文。
+ * 走查:名册渲染(人+agent + AI 徽章)→「仅 Agent」同路由投影 → 单一 [+ 新建 Agent] 入口
+ * 打开四步向导并真实创建一个 agent → agent 行深链详情页 → 角色变更 → 停用 → 移除。
  */
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -18,6 +18,11 @@ const context = JSON.parse(readFileSync(resolve(ROOT, 'e2e', '.members-context.j
 
 async function login(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/login');
+  // 开发令牌表单位于折叠 <details> 内(登录页 OAuth 增量后),先展开再填写。
+  const devPanel = page.locator('details.mesh-login__dev');
+  if ((await devPanel.getAttribute('open')) === null) {
+    await devPanel.locator('summary').click();
+  }
   await page.getByTestId('login-token').fill(context.ownerToken);
   await page.getByTestId('login-submit').click();
   await page.waitForURL('**/');
@@ -43,11 +48,49 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
     // 同一 [+ 新建 Agent ] 入口仍在
     await expect(page.getByTestId('new-agent-button')).toBeVisible();
 
-    // [+ 新建 Agent] → 占位态(即将上线),不跳转第二页面
+    // [+ 新建 Agent] → 四步向导(唯一创建入口,agent.md §4.4),不跳转第二页面
     await page.getByTestId('new-agent-button').click();
-    await page.getByTestId('add-tab-agent').click();
-    await expect(page.getByTestId('agent-coming-soon')).toBeVisible();
-    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('agent-wizard-basic')).toBeVisible();
+
+    // ① 基本信息
+    await page.getByTestId('agent-wizard-name').fill('小测');
+    await page.getByTestId('agent-wizard-role-tag').fill('测试工程师');
+    await page.getByTestId('agent-wizard-next').click();
+
+    // ② 模型与指令
+    await expect(page.getByTestId('agent-wizard-model')).toBeVisible();
+    await page.getByTestId('agent-wizard-instructions').fill('你是测试工程师,收到 issue 先复现。');
+    await page.getByTestId('agent-wizard-next').click();
+
+    // ③ 技能与工具(稍后配置占位)
+    await expect(page.getByTestId('agent-wizard-skills')).toBeVisible();
+    await page.getByTestId('agent-wizard-next').click();
+
+    // ④ 可见性 → 完成:真实 POST /agents,新 agent 出现在同一名册
+    await expect(page.getByTestId('agent-wizard-visibility')).toBeVisible();
+    await page.getByTestId('agent-wizard-finish').click();
+    await expect(page.getByText('小测')).toBeVisible();
+  });
+
+  test('agent 行深链进入详情页(配置 / 历史 Tab 可用)', async ({ page }) => {
+    await login(page);
+    await page.goto('/members?member_type=agent');
+    await page.getByText('代码助手').first().click();
+    await expect(page.getByTestId('agent-detail-page')).toBeVisible();
+    await expect(page.getByTestId('agent-detail-name')).toContainText('代码助手');
+    await expect(page.getByTestId('agent-detail-badge')).toBeVisible();
+
+    // 配置 Tab:保存生成新版本
+    await page.getByTestId('agent-tab-config').click();
+    await expect(page.getByTestId('agent-panel-config')).toBeVisible();
+
+    // 历史 Tab:至少一个初始版本
+    await page.getByTestId('agent-tab-history').click();
+    await expect(page.getByTestId('agent-panel-history')).toContainText(/initial configuration/);
+
+    // 返回名册
+    await page.getByTestId('agent-detail-back').click();
+    await expect(page).toHaveURL(/\/members/);
   });
 
   test('角色变更 / 停用 / 移除走真实后端并反映到名册', async ({ page }) => {
