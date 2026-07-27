@@ -87,6 +87,10 @@ services:
       MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
       MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
+      # Machine API TLS red line (runtime.md §3.5): compose serves plaintext
+      # loopback, so dev defaults off; production leaves it unset and the
+      # secure default (true) applies — non-TLS /api/v1/daemon/ → 403.
+      MESH_DAEMON_TLS_REQUIRED: ${MESH_DAEMON_TLS_REQUIRED:-false}
       # OAuth dev mock provider redirect_uri allowlist (M1: exact-match, open-
       # redirect prevention). Dev default: the frontend dev server's OAuth
       # callback (both localhost spellings); production leaves it unset/empty

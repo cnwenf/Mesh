@@ -25,18 +25,18 @@ from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
 from mesh.attachment.storage import ObjectStorage
 from mesh.auth.mailer import build_mailer
-from mesh.comment_inbox.mentions import EXECUTION_ENQUEUE_EVENT
 from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
-from mesh.db.models.outbox import OutboxEvent
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
+from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler
+from mesh.runtime.reaper import runtime_reaper_loop
 from mesh.workers.attachment_processor import (
     attachment_maintenance_loop,
     attachment_scan_loop,
@@ -48,28 +48,6 @@ from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
 logger = logging.getLogger("mesh.workers")
-
-
-async def execution_enqueue_bridge_handler(session, event: OutboxEvent) -> None:
-    """Bridge for ``execution.enqueue`` until runtime.md lands task_executions.
-
-    The mention path (comment-inbox.md §3.5) already carries every field the
-    orchestrator needs (agent, issue, trigger='mention', §6.5 idempotency
-    key); the producing side stored this event's id as the skeleton
-    ``triggered_execution_id``. Consuming the event here keeps the relay
-    healthy and the audit trail visible until the handler creates real
-    ``task_executions`` rows (runtime.md increment).
-    """
-    payload = event.payload or {}
-    logger.info(
-        "execution.enqueue received (runtime orchestration pending runtime.md): "
-        "issue=%s agent_member=%s trigger=%s comment=%s",
-        payload.get("issue_id"),
-        payload.get("agent_member_id"),
-        payload.get("trigger"),
-        payload.get("comment_id"),
-    )
-    return None
 
 
 def _utcnow() -> datetime:
@@ -134,7 +112,11 @@ def build_relay(
             REALTIME_PUBLISH: project_realtime_event,
             ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
-            EXECUTION_ENQUEUE_EVENT: execution_enqueue_bridge_handler,
+            # runtime.md consumer side of the MES-60 / comment-inbox contract:
+            # agent dispatch and @mention both enqueue; this handler
+            # materializes task_executions (README §6.4 logical layer,
+            # idempotent by §6.5 key) — replaces the stopgap bridge.
+            ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
             FANOUT_EVENT_TYPE: NotificationFanoutHandler(
                 aggregation_window_seconds=settings.notification_aggregation_window,
                 mailer=mailer,
@@ -230,6 +212,10 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                 lambda: attachment_maintenance_loop(
                     session_factory, storage=storage, settings=settings, stop=stop
                 ),
+            ),
+            TaskSpec(
+                "runtime-reaper",
+                lambda: runtime_reaper_loop(session_factory, settings=settings, stop=stop),
             ),
         ]
     )

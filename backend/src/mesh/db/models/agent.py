@@ -148,6 +148,14 @@ class Agent(Base):
             ondelete="SET NULL (active_config_version_id)",
             name="agents_active_config_version_id_agent_config_versions",
         ),
+        # Default-runtime claim affinity (runtime.md §2.5): the deferred
+        # composite FK landed with the runtime increment (0018).
+        ForeignKeyConstraint(
+            ("workspace_id", "default_runtime_id"),
+            ("runtimes.workspace_id", "runtimes.id"),
+            ondelete="SET NULL (default_runtime_id)",
+            name="agents_default_runtime_id_runtimes",
+        ),
         Index("idx_agents_owner", "owner_user_id"),
         Index(
             "idx_agents_lifecycle",

@@ -42,6 +42,17 @@ from mesh.db.models.project import (
     ProjectUpdate,
 )
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
+from mesh.db.models.runtime import (
+    Approval,
+    ExecutionAttempt,
+    ExecutionCredential,
+    RepoCheckout,
+    Runtime,
+    RuntimeCredential,
+    RuntimeHeartbeat,
+    TaskExecution,
+    TaskLogSegment,
+)
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -64,6 +75,7 @@ __all__ = [
     "Agent",
     "AgentConfigVersion",
     "ApiToken",
+    "Approval",
     "Attachment",
     "AttachmentBlob",
     "AttachmentLink",
@@ -76,6 +88,8 @@ __all__ = [
     "CustomFieldOption",
     "Cycle",
     "EmailVerificationToken",
+    "ExecutionAttempt",
+    "ExecutionCredential",
     "IdentifierPrefixRegistry",
     "Issue",
     "IssueActivity",
@@ -102,7 +116,13 @@ __all__ = [
     "ProjectUpdate",
     "RealtimeChannel",
     "RealtimeEvent",
+    "RepoCheckout",
+    "Runtime",
+    "RuntimeCredential",
+    "RuntimeHeartbeat",
     "Session",
+    "TaskExecution",
+    "TaskLogSegment",
     "UploadSession",
     "User",
     "View",

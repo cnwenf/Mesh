@@ -13,7 +13,8 @@ const EXPECTED: ReadonlyArray<{ testid: string; label: string; href: string }> =
   { testid: 'nav-board', label: 'Board', href: '/board' },
   { testid: 'nav-members', label: 'Members', href: '/members' },
   { testid: 'nav-chat', label: 'Chat', href: '/chat' },
-  { testid: 'nav-automation', label: 'Automation', href: '/automation' },
+  // 自动化入口指向 Runtimes 模块(runtime.md §4);文案保持 nav.automation。
+  { testid: 'nav-automation', label: 'Automation', href: '/runtimes' },
   { testid: 'nav-settings', label: 'Settings', href: '/settings' },
 ];
 

@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mesh.auth.audit import write_audit
 from mesh.auth.rbac import assert_guest_project_visible
 from mesh.comment_inbox import subscriptions
 from mesh.comment_inbox.markdown import RenderedBody, preview_of, render_body
@@ -51,6 +52,7 @@ from mesh.errors import (
 )
 from mesh.member.display import resolve_display_name
 from mesh.outbox.service import emit_realtime
+from mesh.runtime.redaction import scan_text_for_secrets
 
 _ISSUE_NOT_FOUND = "issue not found"
 _COMMENT_NOT_FOUND = "comment not found"
@@ -80,10 +82,61 @@ class CommentService:
         *,
         clock: Callable[[], datetime] | None = None,
         max_agent_chain_depth: int = 5,
+        signing_secret: str | None = None,
     ) -> None:
         self._factory = session_factory
         self._clock = clock or (lambda: datetime.now(UTC))
         self._max_agent_chain_depth = max_agent_chain_depth
+        # §6.16 / runtime.md R12 red line: comment content is secret-scanned
+        # before it is persisted / broadcast. The app always wires
+        # settings.jwt_secret; without a key the guard is inert (unit scope).
+        self._signing_secret = signing_secret
+
+    async def _guard_secret_leak(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        body_markdown: str,
+        rendered_text: str,
+        actor_member_id: uuid.UUID,
+        resource_type: str,
+        resource_id: uuid.UUID | None,
+    ) -> None:
+        """Full-channel redaction on the comment write path: a workspace
+        secret hit blocks the write (422 ``secret_detected``, nothing
+        persisted or broadcast) and raises a critical audit trail — the same
+        posture as the attachment channel (runtime.md §5.2 / R12)."""
+        if self._signing_secret is None:
+            return
+        for content, channel in ((body_markdown, "comment"), (rendered_text, "comment_text")):
+            hits = await scan_text_for_secrets(
+                session,
+                workspace_id=workspace_id,
+                content=content,
+                signing_secret=self._signing_secret,
+            )
+            if hits:
+                # The blocking raise rolls the write transaction back, so the
+                # critical alert must be committed in its OWN transaction to
+                # survive (拦截 + 告警: content blocked, alert persisted).
+                async with self._factory() as audit_session, audit_session.begin():
+                    await set_tenant_context(audit_session, workspace_id)
+                    await write_audit(
+                        audit_session,
+                        workspace_id=workspace_id,
+                        actor_member_id=actor_member_id,
+                        actor_kind="member",
+                        action="comment.secret_detected",
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                        metadata={"severity": "critical", "hits": hits, "channel": channel},
+                    )
+                raise BusinessRuleError(
+                    "comment contains workspace secrets",
+                    code="secret_detected",
+                    details={"channel": channel, "hits": hits},
+                )
 
     # ------------------------------------------------------------------
     # create
@@ -133,6 +186,18 @@ class CommentService:
                     code="mention_invalid",
                     details={"permission": "agent:trigger"},
                 )
+
+            # §6.16 / R12: block workspace secrets before anything is
+            # persisted or broadcast (critical audit on hit).
+            await self._guard_secret_leak(
+                session,
+                workspace_id=workspace_id,
+                body_markdown=body_markdown,
+                rendered_text=rendered.text,
+                actor_member_id=author_member.id,
+                resource_type="issue",
+                resource_id=issue_id,
+            )
 
             thread_root_id: uuid.UUID | None = None
             if parent_id is not None:
@@ -380,6 +445,19 @@ class CommentService:
                 _assert_version_match(comment.updated_at, expected_updated_at)
 
             rendered = render_body(body_markdown)
+
+            # §6.16 / R12: block workspace secrets before the edit is
+            # persisted or re-broadcast (critical audit on hit).
+            await self._guard_secret_leak(
+                session,
+                workspace_id=workspace_id,
+                body_markdown=body_markdown,
+                rendered_text=rendered.text,
+                actor_member_id=editor_member.id,
+                resource_type="comment",
+                resource_id=comment.id,
+            )
+
             mentioned = await self._resolve_mentions(
                 session, workspace_id=workspace_id, rendered=rendered
             )

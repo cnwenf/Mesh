@@ -264,6 +264,13 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     group: 'in_progress',
     // comment-inbox §4 文案占位符(触发预览的 agent 名单)
     names: 'code-reviewer, test-runner',
+    // runtime §4 文案占位符:负载 / 心跳新鲜度 / 日志偏移 / 终态原因
+    load: 2,
+    max: 4,
+    offset: 1049012,
+    status: 'completed',
+    reason: 'nonzero_exit',
+    branch: 'agent/8f3a1d2c/a1',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

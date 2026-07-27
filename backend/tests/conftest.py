@@ -99,13 +99,28 @@ def session_factory(db_url: str):
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables(db_url: str):
     """TRUNCATE all tables before each test — isolation regardless of fixtures used."""
+    import asyncio
+
+    from sqlalchemy.exc import DBAPIError
+
     import mesh.db.models  # noqa: F401 — register all models on Base.metadata
     from mesh.db.base import Base
 
     engine = create_async_engine(db_url)
     tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
-    async with engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+    # E2e worker processes (relay / reaper) hold brief locks; TRUNCATE needs
+    # AccessExclusive on everything, so the two can deadlock (40P01). Retry —
+    # the worker transactions are short-lived and yield immediately.
+    for attempt in range(5):
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+            break
+        except DBAPIError as exc:
+            if getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01" and attempt < 4:
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+            raise
     yield
     await engine.dispose()
 
