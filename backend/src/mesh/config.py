@@ -167,6 +167,15 @@ class Settings(BaseSettings):
     # lazy checks on accept/preview).
     invitation_sweep_interval: float = Field(default=300.0, gt=0)
 
+    # Skill import sources (skill.md §3.1 / §5.3, README §6.16). Server-side
+    # fetches only ever reach PUBLIC addresses; ``skill_source_host_allowlist``
+    # is the documented explicit-trust escape hatch (comma-separated hosts).
+    # ``skill_marketplace_url`` is the external marketplace listings API the
+    # module CONSUMES (skill.md §1.3 non-goal: Mesh does not run a market).
+    skill_source_host_allowlist: str | None = None
+    skill_marketplace_url: str | None = None
+    skill_import_sweep_interval: float = Field(default=1.0, gt=0)
+
     # Object storage for the attachment module (attachment.md §3). The bucket
     # is PRIVATE; every access goes through short-lived presigned URLs and the
     # byte stream never transits the API process (three-stage direct upload).
@@ -210,18 +219,6 @@ class Settings(BaseSettings):
     # (still magic-byte sniffed and SHA-256 verified). Disable to force a full
     # AV pass on every upload.
     attachment_scan_skip_text: bool = True
-    # Comment & inbox tuning (comment-inbox.md §3.5 / README §6.9 & §6.13).
-    # Agent-to-agent mention chains deeper than this are silently dropped with
-    # an audit record (A↔B @-loop protection); same-group notifications inside
-    # the aggregation window merge into one row (payload.count increments).
-    max_agent_chain_depth: int = Field(default=5, ge=1)
-    notification_aggregation_window: float = Field(default=60.0, gt=0)
-    notification_digest_interval: float = Field(default=21600.0, gt=0)
-    # Due-soon reminder sweep (comment-inbox.md §2.2 ``due_soon`` producer):
-    # open issues whose due date falls inside the horizon get one fan-out
-    # per issue+due-date (relay-side matrix/routing applies).
-    due_soon_sweep_interval: float = Field(default=900.0, gt=0)
-    due_soon_horizon_hours: float = Field(default=24.0, gt=0)
 
 
 def load_settings(**overrides: object) -> Settings:

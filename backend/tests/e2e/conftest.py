@@ -66,6 +66,10 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
     env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
+    # Skill imports (skill.md §5.3 / README §6.16): the e2e source fixture
+    # server listens on loopback, which the SSRF guard only reaches through
+    # the explicit host allowlist — the documented operator escape hatch.
+    env["MESH_SKILL_SOURCE_HOST_ALLOWLIST"] = "127.0.0.1,localhost"
     return subprocess.Popen(
         [
             sys.executable,

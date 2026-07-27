@@ -10,7 +10,6 @@ from mesh.db.models.attachment import (
     UploadSession,
 )
 from mesh.db.models.audit import AuditLog
-from mesh.db.models.comment import Comment, CommentMention, CommentReaction
 from mesh.db.models.issue import (
     Issue,
     IssueActivity,
@@ -26,12 +25,6 @@ from mesh.db.models.label import (
     Label,
 )
 from mesh.db.models.member import Member, MemberProjectAccess
-from mesh.db.models.notification import (
-    IssueSubscription,
-    Notification,
-    NotificationDelivery,
-    NotificationPreference,
-)
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
     Cycle,
@@ -42,6 +35,17 @@ from mesh.db.models.project import (
     ProjectUpdate,
 )
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
+from mesh.db.models.skill import (
+    AgentSkill,
+    Skill,
+    SkillImportTask,
+    SkillInstallation,
+    SkillReference,
+    SkillScript,
+    SkillSource,
+    SkillTrigger,
+    SkillVersion,
+)
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -63,15 +67,13 @@ from mesh.db.models.workspace import (
 __all__ = [
     "Agent",
     "AgentConfigVersion",
+    "AgentSkill",
     "ApiToken",
     "Attachment",
     "AttachmentBlob",
     "AttachmentLink",
     "AttachmentQuota",
     "AuditLog",
-    "Comment",
-    "CommentMention",
-    "CommentReaction",
     "CustomFieldDef",
     "CustomFieldOption",
     "Cycle",
@@ -83,16 +85,12 @@ __all__ = [
     "IssueDependency",
     "IssueLabel",
     "IssueStatus",
-    "IssueSubscription",
     "IssueTemplate",
     "Label",
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",
     "Milestone",
-    "Notification",
-    "NotificationDelivery",
-    "NotificationPreference",
     "OAuthIdentity",
     "OutboxEvent",
     "PasswordResetToken",
@@ -103,6 +101,14 @@ __all__ = [
     "RealtimeChannel",
     "RealtimeEvent",
     "Session",
+    "Skill",
+    "SkillImportTask",
+    "SkillInstallation",
+    "SkillReference",
+    "SkillScript",
+    "SkillSource",
+    "SkillTrigger",
+    "SkillVersion",
     "UploadSession",
     "User",
     "View",

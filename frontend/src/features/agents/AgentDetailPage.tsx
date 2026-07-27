@@ -28,6 +28,7 @@ import {
   workspaceAgentsChannel,
 } from './api';
 import type { AgentLifecycleVerb } from './api';
+import { AgentSkillsTab } from '../skills/AgentSkillsTab';
 import { AgentWizard } from './AgentWizard';
 import type { AgentConfigVersion, AgentDetail } from './types';
 import { MODEL_TIER_ORDER, PLATFORM_MODELS, REASONING_EFFORT_ORDER } from './types';
@@ -611,14 +612,13 @@ export function AgentDetailPage(): React.JSX.Element {
         </section>
       ) : null}
 
-      {activeTab === 'skills' ? (
-        <section className="mesh-agents-detail__panel" data-testid="agent-panel-skills">
-          {/* skill.md 模块 owns 绑定表;详情页仅留占位与接口面(agent.md 范围说明)。 */}
-          <EmptyState
-            title={t('agents.skills.placeholderTitle')}
-            description={t('agents.skills.placeholderDescription')}
-          />
-        </section>
+      {activeTab === 'skills' && workspace !== null && agentId !== undefined ? (
+        <AgentSkillsTab
+          workspaceId={workspace.workspace_id}
+          agentId={agentId}
+          canManage={canManage}
+          reloadSignal={reloadKey}
+        />
       ) : null}
 
       {activeTab === 'visibility' ? (

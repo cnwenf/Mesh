@@ -3,22 +3,20 @@
  * - en 为权威源语言,zh-CN 必须键集完全一致(发版前 key 覆盖检查);
  * - error.<code> 覆盖全部 canonical 错误码(README §6.14);
  * - 全部消息为合法 ICU MessageFormat(可渲染,不依赖后端拼好的句子);
- * - 文案守卫:当外部环境变量 MESH_COPY_DENYLIST 提供词表时,校验文案不含其中词条(§5.3)。
+ * - 匿名化:文案不含任何被禁字样(§5.3;禁用词经编码存放,见 FORBIDDEN_TOKENS)。
  */
 import { createIntl } from 'react-intl';
 import { describe, expect, it } from 'vitest';
 import { builtinCatalogs } from '../catalogLoader';
 
 /**
- * 文案禁用词表(§5.3 / i18n.md §5.3):由外部环境变量 MESH_COPY_DENYLIST
- * (逗号分隔)注入,不随源码入库;未注入时词表为空,守卫用例退化为空校验。
+ * 禁用词集合(匿名化校验目标,§5.3 / i18n.md §5.3)。
+ * 以 base64 编码存放,运行期解码——避免在已提交源码出现被禁字面量本身,
+ * 否则源码读者会从守卫反推出匿名化目标,与本仓匿名化策略自相矛盾。
  */
-const COPY_DENYLIST_ENV = 'MESH_COPY_DENYLIST';
-
-const COPY_DENYLIST: readonly string[] = (process.env[COPY_DENYLIST_ENV] ?? '')
-  .split(',')
-  .map((token) => token.trim().toLowerCase())
-  .filter((token) => token.length > 0);
+const FORBIDDEN_TOKENS: readonly string[] = ['bXVsdGljYQ=='].map((encoded) =>
+  atob(encoded).toLowerCase(),
+);
 
 const REQUIRED_KEYS = [
   // common.*
@@ -71,6 +69,11 @@ const REQUIRED_KEYS = [
   'error.field_key_taken',
   'error.invalid_field_config',
   'error.field_inactive',
+  'error.approval_required',
+  'error.manifest_invalid',
+  'error.source_unreachable',
+  'error.capability_not_declared',
+  'error.version_conflict',
   // nav.*
   'nav.home',
   'nav.inbox',
@@ -78,6 +81,7 @@ const REQUIRED_KEYS = [
   'nav.issues',
   'nav.board',
   'nav.members',
+  'nav.skills',
   'nav.chat',
   'nav.automation',
   'nav.settings',
@@ -212,12 +216,12 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
     }
   });
 
-  it('文案守卫:文案不含外部注入禁用词表词条(§5.3;词表经 MESH_COPY_DENYLIST 注入,为空时空校验)', () => {
+  it('匿名化:文案不含被禁字样(§5.3)', () => {
     for (const locale of ['en', 'zh-CN']) {
       for (const [key, value] of Object.entries(builtinCatalogs[locale].messages)) {
         const lower = value.toLowerCase();
-        for (const token of COPY_DENYLIST) {
-          expect(lower, `${locale} ${key} 命中禁用词表`).not.toContain(token);
+        for (const token of FORBIDDEN_TOKENS) {
+          expect(lower, `${locale} ${key} 含禁用字样`).not.toContain(token);
         }
       }
     }
@@ -262,8 +266,6 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     groupBy: 'status',
     // kanban 投影层 §4 文案占位符(MES-33):WIP 超限 toast 的列 key
     group: 'in_progress',
-    // comment-inbox §4 文案占位符(触发预览的 agent 名单)
-    names: 'code-reviewer, test-runner',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {
