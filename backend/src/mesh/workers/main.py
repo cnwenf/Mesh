@@ -29,7 +29,6 @@ from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFano
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
-from mesh.db.models.outbox import OutboxEvent
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
