@@ -112,6 +112,10 @@ async def resolve_runtime_token(
             raise UnauthorizedError("invalid runtime token")
         if row["deleted_at"] is not None or row["status"] not in MACHINE_API_ALLOWED_STATUSES:
             raise UnauthorizedError("invalid runtime token")
+
+        # Tenant GUC before any RLS-guarded read (the bootstrap lookup above
+        # is SECURITY DEFINER; everything below runs under the policy).
+        await set_tenant_context(session, row["workspace_id"])
         # Token revocation backstop (NEW-L2): pause/decommission revokes the
         # api_tokens row; a cached runtime row must not outlive that.
         if row["runtime_token_id"] is not None:
@@ -123,7 +127,6 @@ async def resolve_runtime_token(
             if revoked is None or revoked[0] is not None:
                 raise UnauthorizedError("invalid runtime token")
 
-        await set_tenant_context(session, row["workspace_id"])
         runtime = await session.get(Runtime, row["id"])
         if runtime is None or runtime.runtime_token_hash != token_hash:
             raise UnauthorizedError("invalid runtime token")
