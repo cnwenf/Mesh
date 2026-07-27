@@ -78,6 +78,30 @@ async def _rate_limit(
     response.headers["X-RateLimit-Reset"] = str(reset_in)
 
 
+async def _gated_member(
+    session: AsyncSession,
+    caller: Caller,
+    workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
+) -> Member:
+    """Membership gate for a workspace-less path (workspace.md §5.3).
+
+    The SECURITY DEFINER resolver already proved the resource exists
+    SOMEWHERE; if the caller is not a member of that workspace the gate
+    raises "workspace not found". That message differs from the
+    "<resource> not found" an unknown id gets — a two-message existence
+    oracle for arbitrary UUIDs. Rewriting the gate 404 to the resource
+    message makes the two cases indistinguishable; no content leaks either
+    way. ``gate_workspace`` itself is shared (token callers too) and stays
+    untouched — the rewrite lives at the workspace-less call sites.
+    """
+    try:
+        return await gate_workspace(session, caller, workspace_id)
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
+
+
 async def _resolve_attachment_context(
     request: Request, session: AsyncSession, attachment_id: uuid.UUID
 ) -> tuple[Caller, Member, uuid.UUID]:
@@ -87,7 +111,9 @@ async def _resolve_attachment_context(
     if workspace_id is None:
         raise NotFoundError(_ATTACHMENT_NOT_FOUND)
     caller = await authenticate(request, get_session_factory(request))
-    member = await gate_workspace(session, caller, workspace_id)
+    member = await _gated_member(
+        session, caller, workspace_id, not_found_message=_ATTACHMENT_NOT_FOUND
+    )
     return caller, member, workspace_id
 
 
@@ -109,6 +135,7 @@ async def create_upload_request(
 
     # Tenant: explicit workspace_id, else derived from the link target (§3.2).
     workspace_id: uuid.UUID | None = None
+    derived_from_link = False
     if body.workspace_id is not None:
         workspace_id = _path_uuid(body.workspace_id, message="workspace not found")
     elif body.link_to is not None:
@@ -118,6 +145,7 @@ async def create_upload_request(
         )
         if workspace_id is None:
             raise NotFoundError(f"{body.link_to.type} not found")
+        derived_from_link = True
     elif caller.token is not None:
         workspace_id = caller.token.workspace_id
     if workspace_id is None:
@@ -127,7 +155,20 @@ async def create_upload_request(
         )
 
     await _rate_limit(request, caller, response, "attachments-upload", UPLOAD_REQUEST_LIMIT)
-    member = await gate_workspace(session, caller, workspace_id)
+    if derived_from_link:
+        # Workspace-less tenant: the gate 404 carries the host resource
+        # message, indistinguishable from an unknown link target (§5.3).
+        assert body.link_to is not None
+        member = await _gated_member(
+            session,
+            caller,
+            workspace_id,
+            not_found_message=f"{body.link_to.type} not found",
+        )
+    else:
+        # The caller named the workspace themselves (explicit id or token
+        # scope) — keep the workspace 404 verbatim, as require_workspace does.
+        member = await gate_workspace(session, caller, workspace_id)
 
     link_to: dict | None = None
     if body.link_to is not None:
@@ -284,7 +325,9 @@ async def _list_host_attachments(
     if workspace_id is None:
         raise NotFoundError(f"{linked_type} not found")
     caller = await authenticate(request, get_session_factory(request))
-    member = await gate_workspace(session, caller, workspace_id)
+    member = await _gated_member(
+        session, caller, workspace_id, not_found_message=f"{linked_type} not found"
+    )
     items, next_cursor = await service.list_for_host(
         viewer=member,
         workspace_id=workspace_id,

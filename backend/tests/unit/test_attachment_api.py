@@ -201,6 +201,68 @@ async def test_upload_request_requires_workspace_without_link(client):
     assert response.json()["error"]["code"] == "validation_error"
 
 
+async def test_workspace_less_gate_helper_contract(monkeypatch):
+    """Direct helper-level contract for the workspace-less attachment paths
+    (workspace.md §5.3): the membership gate runs AFTER the SECURITY
+    DEFINER resolver, its 404 is rewritten to the resource message, and a
+    passing gate returns (caller, member, workspace_id) untouched."""
+    import mesh.attachment.routes as routes
+    from mesh.errors import NotFoundError
+
+    workspace_id = uuid.uuid4()
+    sentinel_member = object()
+
+    class _FakeService:
+        def __init__(self, resolved):
+            self._resolved = resolved
+
+        async def resolve_attachment_workspace(self, attachment_id):
+            return self._resolved
+
+    class _FakeRequest:
+        def __init__(self, resolved):
+            self.app = type("_App", (), {"state": type("_S", (), {
+                "attachment_service": _FakeService(resolved),
+            })()})()
+
+    async def _fake_authenticate(request, session_factory):
+        return routes.Caller(user=object(), token=None)
+
+    def _fake_gate_factory(exc=None):
+        async def _fake_gate(session, caller, wid, permission=None):
+            assert wid == workspace_id
+            if exc is not None:
+                raise exc
+            return sentinel_member
+
+        return _fake_gate
+
+    monkeypatch.setattr(routes, "authenticate", _fake_authenticate)
+    monkeypatch.setattr(routes, "get_session_factory", lambda request: None)
+
+    # Passing gate → the resolved context is returned untouched.
+    monkeypatch.setattr(routes, "gate_workspace", _fake_gate_factory())
+    caller, member, resolved = await routes._resolve_attachment_context(
+        _FakeRequest(workspace_id), None, uuid.uuid4()
+    )
+    assert member is sentinel_member
+    assert resolved == workspace_id
+
+    # Gate 404 (exists somewhere, caller not a member) → resource message,
+    # indistinguishable from an unknown id.
+    monkeypatch.setattr(
+        routes, "gate_workspace", _fake_gate_factory(NotFoundError("workspace not found"))
+    )
+    with pytest.raises(NotFoundError) as excinfo:
+        await routes._resolve_attachment_context(_FakeRequest(workspace_id), None, uuid.uuid4())
+    assert excinfo.value.message == "attachment not found"
+
+    # Unknown attachment → resolver None → same resource message.
+    with pytest.raises(NotFoundError) as excinfo:
+        await routes._resolve_attachment_context(_FakeRequest(None), None, uuid.uuid4())
+    assert excinfo.value.message == "attachment not found"
+
+
 async def test_unknown_attachment_is_404_envelope(client):
     token = await _register_and_login(client, f"nf-{uuid.uuid4().hex[:8]}@x.io")
     response = await client.get(f"/api/v1/attachments/{uuid.uuid4()}", headers=_auth(token))
@@ -217,7 +279,9 @@ async def test_cross_workspace_read_is_uniform_404(client):
     attachment_id = response.json()["data"]["id"]
 
     # A user with no membership (another workspace's owner) sees a uniform
-    # 404 — invisible and missing are indistinguishable (§5.3).
+    # 404 — invisible and missing are indistinguishable (§5.3), down to the
+    # message text: the membership gate 404 is rewritten to the resource
+    # message, not "workspace not found".
     outsider_token = await _register_and_login(client, f"out-{uuid.uuid4().hex[:8]}@x.io")
     await _create_workspace(client, outsider_token, f"att-{uuid.uuid4().hex[:10]}")
     denied = await client.get(
@@ -225,6 +289,10 @@ async def test_cross_workspace_read_is_uniform_404(client):
     )
     assert denied.status_code == 404
     assert denied.json()["error"]["code"] == "not_found"
+    assert denied.json()["error"]["message"] == "attachment not found"
+    unknown = await client.get(f"/api/v1/attachments/{uuid.uuid4()}", headers=_auth(outsider_token))
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["message"] == "attachment not found"
     assert workspace_id
 
 
@@ -544,3 +612,106 @@ async def test_upload_request_link_to_missing_issue_is_404(client):
         headers=_auth(token),
     )
     assert response.status_code == 404
+
+
+async def test_prefixless_endpoints_uniform_404_message(client, session_factory):
+    """L3 product-wide parity (workspace.md §5.3): every attachment path
+    whose tenant is resolved from the resource itself returns the SAME 404
+    message for "unknown id" and "exists in another tenant" — the gate 404
+    is rewritten to the resource message, so no existence oracle survives.
+    The explicit-workspace branch of upload-request is the exception BY
+    DESIGN: the caller names the workspace, so it keeps "workspace not
+    found" exactly like require_workspace."""
+    from mesh.db.models.comment import Comment
+
+    owner_a = await _register_and_login(client, f"l3a-{uuid.uuid4().hex[:8]}@x.io")
+    owner_b = await _register_and_login(client, f"l3b-{uuid.uuid4().hex[:8]}@x.io")
+    await _create_workspace(client, owner_a, f"att-{uuid.uuid4().hex[:10]}")
+    ws_b = await _create_workspace(client, owner_b, f"att-{uuid.uuid4().hex[:10]}")
+
+    # Tenant-B resources: a pending attachment record, an issue, a comment.
+    attachment_b = (await _request_upload(client, owner_b, ws_b)).json()["data"]["id"]
+    issue_b = await _seed_issue(session_factory, uuid.UUID(ws_b))
+    async with session_factory() as session, session.begin():
+        # author_kind='system' satisfies the identity CHECK without needing
+        # a roster row; the resolver only cares that the row exists.
+        comment = Comment(
+            workspace_id=uuid.UUID(ws_b),
+            issue_id=issue_b,
+            author_kind="system",
+            body_markdown="x",
+        )
+        session.add(comment)
+        await session.flush()
+        comment_b = comment.id
+    random_id = str(uuid.uuid4())
+
+    def upload_body(link_id: str | None = None, workspace_id: str | None = None) -> dict:
+        body = {"file_name": "pic.png", "file_size": len(PNG), "mime_type": "image/png"}
+        if link_id is not None:
+            body["link_to"] = {"type": "issue", "id": link_id}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
+        return body
+
+    probes = (
+        # (existing-id probe, existing id, resource message)
+        (
+            lambda target: client.get(f"/api/v1/attachments/{target}", headers=_auth(owner_a)),
+            attachment_b,
+            "attachment not found",
+        ),
+        (
+            lambda target: client.get(
+                f"/api/v1/issues/{target}/attachments", headers=_auth(owner_a)
+            ),
+            str(issue_b),
+            "issue not found",
+        ),
+        (
+            lambda target: client.get(
+                f"/api/v1/comments/{target}/attachments", headers=_auth(owner_a)
+            ),
+            str(comment_b),
+            "comment not found",
+        ),
+        (
+            # upload-request with a link_to-derived tenant: gate 404 carries
+            # the host resource message
+            lambda target: client.post(
+                "/api/v1/attachments/upload-requests",
+                json=upload_body(link_id=target),
+                headers=_auth(owner_a),
+            ),
+            str(issue_b),
+            "issue not found",
+        ),
+    )
+    for call, existing_id, message in probes:
+        existing = await call(existing_id)  # exists, owner_a is NOT a member
+        missing = await call(random_id)  # does not exist anywhere
+        assert existing.status_code == 404, existing.text
+        assert missing.status_code == 404, missing.text
+        # Both states are indistinguishable and carry the resource message.
+        assert existing.json()["error"]["message"] == message
+        assert missing.json()["error"]["message"] == message
+
+    # Explicit-workspace branch keeps the workspace 404 (caller named the
+    # workspace — same contract as require_workspace).
+    explicit = await client.post(
+        "/api/v1/attachments/upload-requests",
+        json=upload_body(workspace_id=ws_b),
+        headers=_auth(owner_a),
+    )
+    assert explicit.status_code == 404
+    assert explicit.json()["error"]["message"] == "workspace not found"
+
+    # Deleted attachment + non-member → same message (whichever layer
+    # answers, the contract is one 404 text).
+    deleted = await client.delete(f"/api/v1/attachments/{attachment_b}", headers=_auth(owner_b))
+    assert deleted.status_code in (200, 204), deleted.text
+    deleted_probe = await client.get(
+        f"/api/v1/attachments/{attachment_b}", headers=_auth(owner_a)
+    )
+    assert deleted_probe.status_code == 404
+    assert deleted_probe.json()["error"]["message"] == "attachment not found"
