@@ -3,6 +3,29 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.15.0] - 2026-07-28
+
+阶段 6 智能体层 B:runtime 模块全功能实现(MES-62,runtime.md 五章)。执行双层状态机(task_executions 逻辑层 + execution_attempts 物理层)、§2.5 原子 claim(SKIP LOCKED + 容量无泄漏)、租约 fencing 与 reaper 失联自愈、日志流式(WS 主/SSE 降级/offset 续传/全通道脱敏)、凭证 fencing(一次性 envelope + 重取上限)、checkout 白名单与 SSRF 防护、统一审批唯一续跑协议(§6.10),并闭环 MES-60 的 `execution.enqueue` outbox 消费端。红线集成测试 T2/T3/T4/T10/T16/T20/T21 真实起服 + 真实 worker 并发实测全绿。
+
+### Added
+
+- **数据模型(runtime.md §2,迁移 0018)**:九张租户表——`runtimes`(注册/标签/能力/容量 `current_load`·`max_concurrent`/生命周期,服务端值为匹配唯一权威)、`task_executions`(逻辑执行:幂等键可空唯一、`config_snapshot` §6.11 冻结快照、`required_capabilities` **严格字符串数组 CHECK**——对象混入即拒,杜绝 `<@` 永久失配,T28 schema 兜底;`capability_grants` permission 必填枚举 CHECK,R4)、`execution_attempts`(物理尝试:`UNIQUE(execution_id, attempt_number)` 审计链不复用、`lease_expires_at`/`lease_seq` fencing、`cancelling`/`reclaimed` 状态)、`task_log_segments`(偏移索引,`UNIQUE(attempt_id, start_offset)` 连续不重叠,内容在对象存储)、`repo_checkouts`(每 attempt 一次,专属分支)、`runtime_credentials`(密文 only)、`execution_credentials`(attempt 绑定 envelope + 重取计数)、`runtime_heartbeats`、`approvals`(README §6.10 统一审批实体:subject 形状 CHECK + 单 pending 部分唯一索引;autopilot/squad 主题列预留、FK 随其模块落地);§2.4 全部索引(`idx_executions_claimable` 等)+ fail-closed RLS + 复合 FK 同租户红线(§6.2);`agents.default_runtime_id` 延迟复合 FK 落地(→ `runtimes(workspace_id, id)`,PG16 列级 SET NULL);两个 SECURITY DEFINER 引导函数(token/激活码哈希查找,RLS 前置)。
+- **claim 原子性(§2.5 R1 权威版)**:单事务「`FOR UPDATE` 锁 runtime 行校验在线/容量(**不预扣**)→ `FOR UPDATE OF e SKIP LOCKED` 选任务(租户等值 + 标签 `<@` + 能力 `<@` 双匹配,只信服务端存储值;`default_runtime_id` 亲和)→ 选中才 `current_load+1` + 转 claimed + 建 attempt(租约 + `agent/<execution_id>/a<N>` 分支)一次提交」;**有容量无匹配整体零写入**(T20 无泄漏);凭证随响应一次性下发(NEW-M1 env 名白名单校验,`LD_*`/`PATH`/`PYTHON*`/`NODE_OPTIONS`/`DYLD_*`/`MESH_DAEMON_*`/`MESH_INTERNAL_*` 拒绝 422)。
+- **双层状态机(§4.7)**:逻辑层 queued→claimed→running→completed/failed/timeout、cancelling 两段式、awaiting_approval;物理层 claimed→running→(cancelling)→终态/reclaimed;终态迁移守卫保证容量**恰释放一次**(`GREATEST(load-1,0)`),重复终态上报 no-op;`lease_seq` 每次领取/续租 +1,旧持有者一切上报 409 `lease_seq_mismatch`(T10 脑裂防护)。
+- **reaper 失联自愈(§4.8)**:worker `runtime-reaper` 任务——租约过期 attempt → `reclaimed`(审计原样保留 + `lease_seq++` 防诈尸)+ 容量幂等释放;执行按 attempt 数 requeue(新 attempt #N+1,审计链完整,T4)或 `failed(max_retries)`;心跳失联 runtime → `unavailable` + `runtime.offline`(按各 runtime 自身间隔×倍率);pending 审批过期 → `expired` + 执行 `cancelled(approval_expired)`;heartbeat 明细保留期清理。`awaiting_approval` 无在途 attempt,reaper 无需特殊处理(无"暂停租约永久卡死"路径)。
+- **机器 API(§3.2,`/api/v1/daemon/`)**:`runtimes:activate`(激活码一次性,过期/已用 410,明文 token 仅此一次返回,`scope='runtime'` 只存哈希)、`:heartbeat`(健康指标 + 取消下行指令搭载)、`executions:claim`(§2.5,204/200)、`PATCH attempts/{id}`(状态迁移 + lease fencing)、`:renew-lease`、`logs`(offset 连续 + 脱敏 + 段封口入对象存储)、`checkouts`(白名单 + SSRF 校验)、`credentials:refetch`(发新撤旧,上限 3 超限冻结审查)、`executions/{id}/approvals`(审批请求)。**鉴权**:`mesh_rt_` 令牌哈希 → runtime 行(workspace 永远服务端解析,不信请求体),token 吊销/runtime 下线联动 401(NEW-L2),跨 runtime 操作 403;**机器 API 强制 TLS**(NEW-M3,非 TLS 403 `tls_required`)。
+- **控制台 API(§3.1)**:runtime 列表(状态/类型/搜索筛选 + 队列深度)/详情(心跳明细)/创建(三段式注册:影子记录 + 15 分钟一次性激活码哈希 + **签名发布包**安装信息,无 `curl|sh`,激活码不进命令行参数)/PATCH/`:pause`·`:resume`(暂停即吊销 token)/`tokens:rotate`/软删除;执行列表(agent/issue/状态筛选)/详情(attempts 审计链 + 凭证元信息值恒 `***`)/`:cancel`(两段式幂等)/`:freeze`(立即吊销全部 envelope + critical 安全告警);日志 REST(`?offset=` 续传)+ SSE 降级流(§3.3 同 offset 协议);credentials CRUD(明文只进不出);统一审批收件箱(approve/reject,人类成员 + admin/owner 或 agent owner,agent 不可自批)。
+- **凭证 fencing 与全通道脱敏(§2.2/§6.16)**:Fernet 密文存储(jwt_secret 派生密钥);envelope 按 attempt 绑定、TTL ≤2h、claim/refetch 之外无明文;终态/冻结即撤销;脱敏扫描器(日志/评论/附件通道复用 `redact_in_logs` 黑名单,命中替换 `***` 计数)。
+- **checkout 安全(§2.2 H1)**:`config_snapshot.repo.url`(冻结真源)必须在 `workspaces.settings.allowed_repos` 白名单内(403 `repo_not_allowed`);平台托管 runtime 拒绝 RFC1918/环回/link-local/云元数据地址(403 `private_address_forbidden`,IPv4-mapped IPv6 展开复检)。
+- **审批唯一续跑协议(§6.10,T21)**:运行中工具命中 `confirm_required` → 当前 attempt 置 `cancelled(awaiting_approval)`(审计保留、租约结束、容量释放)、执行转 `awaiting_approval`;批准 → 回 `queued`,新 attempt #N+1 凭冻结 `resume_context` 续跑;拒绝 → `cancelled(approval_rejected)`;同 subject 单 pending(部分唯一索引,重复请求返回既有)。
+- **实时(§3.6)**:`execution.*`(queued/claimed/started/completed/failed/timeout/cancelled/requeued/awaiting_approval/log)、`runtime.*`(activated/online/offline/degraded/paused)、`queue.depth_changed`、`approval.*` 全经 outbox → projector 唯一路径;`execution:{id}[:logs]` 频道资源级订阅鉴权(API/网关双注册);终态通知按 §6.13 矩阵(失败/超时 critical 扇出,成功默认留运行页)。
+- **前端(§4.1–§4.5)**:Runtimes 列表(状态点 + 负载条 + 心跳新鲜度 + 队列深度背压,实时刷新)、详情页(监控 + 在途/历史 + 暂停/恢复 + token 轮换一次性展示)、三步注册向导(基本信息 → 签名发布包可审阅安装步骤(下载/校验 sha256+签名/解包/`--activation-file` 受限激活/用后即毁)→ 等待 `runtime.activated` ⏳→✅)、执行详情页(实时日志 WS 主通道 + offset 去重续传 + 跟随尾部,SSE 降级;凭证 Tab 值恒 `***`;两段式取消二次确认);`/automation` 入口接通;i18n 全外部化(zh-CN + en 各 +139 键)。
+
+### Quality
+
+- **红线 e2e(§5.2,真实起服 + 真实 worker)**:12 项——T2 三 runtime 并发抢一任务恰一胜者零重复、T3 五并发 vs 容量 2 恰成功 2 且终态归零、T4 租约过期 requeue 审计保留 + attempt #2 接管、T10 僵尸 lease_seq 全通道 409、T16 checkout 白名单 403 + 元数据地址拒绝、T20 无匹配 204 容量零写入、T21 审批挂起→批准→新 attempt 续跑全协议 + 拒绝路径;激活流(410/401)、daemon 鉴权(403/401)、NEW-M1 env 名 422、日志脱敏与 REST 续传。
+- **单元测试**:runtime 模块 112 项(claim 并发/状态机/fencing/reaper/审批/凭证/checkout/日志/注册生命周期),真实 PostgreSQL/MinIO 零 mock;model-migration 零漂移门禁通过。
+
 ## [0.14.0] - 2026-07-27
 
 阶段 5·协作层 A:comment-inbox 全功能实现(MES-58)。按 `docs/specs/features/comment-inbox.md` 五章落地评论与收件箱模块,本模块 owns 七张表(`comments`/`comment_mentions`/`comment_reactions`/`issue_subscriptions`/`notifications`/`notification_preferences`/`notification_delivery`),是通知类型码与去噪矩阵的唯一权威。
@@ -45,6 +68,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 - 后端:新增单测 `test_comment_markdown.py`(XSS 向量矩阵/提及提取/任务清单)、`test_notification_matrix.py`(§6.13 矩阵逐行/quiet hours 跨午夜/邮件转义)、`test_comment_service.py`(CRUD/线程/回应/§6.9 触发矩阵各行/链深度审计/跨 issue 父约束)、`test_inbox_service.py`(fan-out 路由/聚合窗口/重读重置/quiet hours 穿透/投递台账 R3/摘要幂等/收件箱操作/偏好)、`test_comment_inbox_api.py`(ASGI 路由面 + 包络 + 幂等头 + If-Match + guest 触发拒绝 + 跨租 404);真实 e2e `test_comment_inbox_e2e.py`(真实 uvicorn(mesh_app 角色 RLS)+ 真实 relay/projector + 真实 WS 网关:评论生命周期实时投影、§6.9 触发矩阵经真实 outbox(幂等键字节级断言)、§6.13 fan-out → 收件箱 + 投递台账、WS 重放 + 实时送达、外人订阅他人收件箱被拒、跨租复合 FK 拒绝、成员 RESTRICT 删除拒绝)。第 2 轮补:`test_comment_markdown_c6.py`(C6 linkify/L5 加固)、`test_issue_notification_producers.py`(H1 三路径 fan-out + 订阅播种 + no-op 抑制、due-soon sweep 去重/窗口/终态排除、M1 quiet 徽标、M2 已归档聚合)、`test_comment_inbox_producers_e2e.py`(真实服务 assign/status/M2/M3 端到端)。`pytest-cov` ≥90% 门禁;ruff 全绿。
 - 文档同步:`docs/specs/features/comment-inbox.md` 状态与实现注记(deferred FK/骨架执行 id/提及语法/附件占位);README 实现状态表新增本模块行。
 - 已知占位:评论附件(`attachment_ids`)待 MES-59 attachment 模块合入后接通(当前非空 422 `attachments_not_available`,issue 明确允许占位);`execution.enqueue` 消费为桥接处理器(记录审计、保持 relay 健康),`task_executions` 落库待 runtime.md 增量。
+
 
 ## [0.13.3] - 2026-07-27
 

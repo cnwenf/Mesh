@@ -773,3 +773,196 @@ async def test_logs_redaction_and_rest_resume(api_client, runtime_worker, sessio
         "password=***",
         "PASSED",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Console surface: patch / executions listing & detail / credential CRUD /
+# freeze / daemon refetch / SSE smoke
+# ---------------------------------------------------------------------------
+
+
+async def test_console_runtime_patch_and_executions_surface(
+    api_client, runtime_worker, session_factory
+):
+    token, ws_id = await _setup_world(api_client, "console")
+    created, daemon_token = await _activated_runtime(api_client, token, ws_id, name="patchme")
+
+    # PATCH name / labels / max_concurrent.
+    patched = await api_client.patch(
+        f"/api/v1/workspaces/{ws_id}/runtimes/{created['id']}",
+        json={"name": "renamed-rt", "labels": {"zone": "a"}, "max_concurrent": 3},
+        headers=_auth(token),
+    )
+    assert patched.status_code == 200
+    assert patched.json()["data"]["name"] == "renamed-rt"
+    assert patched.json()["data"]["max_concurrent"] == 3
+
+    # Runtimes listing shows queue depth + filters.
+    listing = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/runtimes?search=renamed", headers=_auth(token)
+    )
+    assert listing.status_code == 200
+    assert [r["name"] for r in listing.json()["data"]] == ["renamed-rt"]
+    assert "queue_depth" in listing.json()
+
+    # Claim one execution through the daemon, then read it via the console.
+    idem = await _enqueue(session_factory, ws_id)
+    execution = await _wait_queued(session_factory, ws_id, idem)
+    claimed = await _claim(api_client, created["id"], daemon_token)
+    attempt = claimed.json()["data"]["attempt"]
+    await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": 1, "status": "running"},
+        headers=_daemon(daemon_token),
+    )
+
+    execs = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/executions", headers=_auth(token)
+    )
+    assert execs.status_code == 200
+    assert [e["id"] for e in execs.json()["data"]] == [str(execution.id)]
+
+    detail = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}", headers=_auth(token)
+    )
+    assert detail.status_code == 200
+    body = detail.json()["data"]
+    assert body["status"] == "running"
+    assert body["attempts"][0]["status"] == "running"
+    assert body["retry_count"] == 0
+
+    # Cancel via console → cancelling; daemon finishes it → cancelled.
+    cancel = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}:cancel",
+        json={},
+        headers=_auth(token),
+    )
+    assert cancel.status_code == 200
+    assert cancel.json()["data"]["status"] == "cancelling"
+    done = await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": 1, "status": "cancelled"},
+        headers=_daemon(daemon_token),
+    )
+    assert done.status_code == 200
+    assert done.json()["data"]["execution_status"] == "cancelled"
+
+
+async def test_console_credentials_crud_and_freeze(api_client, runtime_worker, session_factory):
+    token, ws_id = await _setup_world(api_client, "creds")
+    created = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/credentials",
+        json={"name": "API_KEY", "kind": "env", "value": "plain-value-1", "env_name": "API_KEY"},
+        headers=_auth(token),
+    )
+    assert created.status_code == 201
+    cred_id = created.json()["data"]["id"]
+    assert created.json()["data"]["value"] == "***"
+
+    listing = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/credentials", headers=_auth(token)
+    )
+    assert [c["id"] for c in listing.json()["data"]] == [cred_id]
+
+    # Freeze an execution with that credential injected → envelope revoked.
+    created_rt, daemon_token = await _activated_runtime(api_client, token, ws_id)
+    idem = await _enqueue(
+        session_factory, ws_id, task_spec={"credential_ids": [cred_id]}
+    )
+    execution = await _wait_queued(session_factory, ws_id, idem)
+    claimed = await _claim(api_client, created_rt["id"], daemon_token)
+    assert claimed.json()["data"]["attempt"]["credentials"][0]["value"] == "plain-value-1"
+    freeze = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}:freeze",
+        json={},
+        headers=_auth(token),
+    )
+    assert freeze.status_code == 200
+    assert freeze.json()["data"]["revoked_envelopes"] == 1
+
+    # Refetch after freeze is refused (envelopes revoked).
+    attempt_id = claimed.json()["data"]["attempt"]["id"]
+    refetch = await api_client.post(
+        f"/api/v1/daemon/attempts/{attempt_id}/credentials:refetch",
+        json={"lease_seq": 1},
+        headers=_daemon(daemon_token),
+    )
+    assert refetch.status_code == 409
+    assert refetch.json()["error"]["code"] == "envelope_revoked"
+
+    deleted = await api_client.delete(
+        f"/api/v1/workspaces/{ws_id}/credentials/{cred_id}", headers=_auth(token)
+    )
+    assert deleted.status_code == 204
+    listing = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/credentials", headers=_auth(token)
+    )
+    assert listing.json()["data"] == []
+
+
+async def test_daemon_refetch_rotates_envelope(api_client, runtime_worker, session_factory):
+    token, ws_id = await _setup_world(api_client, "refetch")
+    cred = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/credentials",
+        json={"name": "ROT_KEY", "kind": "env", "value": "rot-me-777", "env_name": "ROT_KEY"},
+        headers=_auth(token),
+    )
+    cred_id = cred.json()["data"]["id"]
+    created, daemon_token = await _activated_runtime(api_client, token, ws_id)
+    idem = await _enqueue(session_factory, ws_id, task_spec={"credential_ids": [cred_id]})
+    await _wait_queued(session_factory, ws_id, idem)
+    claimed = await _claim(api_client, created["id"], daemon_token)
+    attempt_id = claimed.json()["data"]["attempt"]["id"]
+    first_envelope = claimed.json()["data"]["attempt"]["credentials"][0]["envelope"]
+
+    refetched = await api_client.post(
+        f"/api/v1/daemon/attempts/{attempt_id}/credentials:refetch",
+        json={"lease_seq": 1},
+        headers=_daemon(daemon_token),
+    )
+    assert refetched.status_code == 200
+    delivered = refetched.json()["data"]["credentials"][0]
+    assert delivered["value"] == "rot-me-777"
+    assert delivered["envelope"] != first_envelope  # new envelope, old revoked
+
+
+async def test_logs_sse_fallback_smoke(api_client, runtime_worker, session_factory):
+    token, ws_id = await _setup_world(api_client, "sse")
+    created, daemon_token = await _activated_runtime(api_client, token, ws_id)
+    idem = await _enqueue(session_factory, ws_id)
+    execution = await _wait_queued(session_factory, ws_id, idem)
+    claimed = await _claim(api_client, created["id"], daemon_token)
+    attempt = claimed.json()["data"]["attempt"]
+    await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": 1, "status": "running"},
+        headers=_daemon(daemon_token),
+    )
+    await api_client.post(
+        f"/api/v1/daemon/attempts/{attempt['id']}/logs",
+        json={"lease_seq": 1, "stream": "stdout", "start_offset": 0, "lines": ["sse-line-1"]},
+        headers=_daemon(daemon_token),
+    )
+    # Finish the attempt so the stream emits an end frame and closes.
+    await api_client.patch(
+        f"/api/v1/daemon/attempts/{attempt['id']}",
+        json={"lease_seq": 1, "status": "completed", "result": {}},
+        headers=_daemon(daemon_token),
+    )
+    seen_log = seen_end = False
+    async with api_client.stream(
+        "GET",
+        f"/api/v1/workspaces/{ws_id}/executions/{execution.id}/logs/stream?offset=0",
+        headers=_auth(token),
+        timeout=20,
+    ) as stream:
+        async for line in stream.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            frame = __import__("json").loads(line[len("data: "):])
+            if frame.get("type") == "log" and frame.get("line") == "sse-line-1":
+                seen_log = True
+            if frame.get("type") == "end":
+                seen_end = True
+                break
+    assert seen_log and seen_end
