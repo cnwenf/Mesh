@@ -121,7 +121,10 @@ function createFakeRealtime(state: RealtimeContextValue['state'] = 'connected'):
     unsubscribe: vi.fn(),
     onFrame: vi.fn((cb: (frame: unknown) => void) => {
       frames.push(cb);
-      return () => undefined;
+      return () => {
+        const index = frames.indexOf(cb);
+        if (index >= 0) frames.splice(index, 1);
+      };
     }),
     getCursor: vi.fn(() => undefined),
     ingestReconciledEvent: vi.fn(),
@@ -311,9 +314,14 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByTestId('probe-status').textContent).toBe('ready'));
+    // 等订阅 effect 登记完成再发射,消除「探针 ready 早于 onFrame 注册」的时序竞态。
+    await waitFor(() =>
+      expect(realtime.client.subscribe).toHaveBeenCalledWith(workspaceChannel('ws-1')),
+    );
+    await waitFor(() => expect(realtime.client.frames.length).toBeGreaterThan(0));
 
     act(() => {
-      for (const cb of realtime.client.frames) {
+      for (const cb of [...realtime.client.frames]) {
         cb({
           op: 'event',
           channel: workspaceChannel('ws-1'),

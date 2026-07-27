@@ -420,7 +420,17 @@ async def test_change_password_requires_auth_401_inprocess(client):
 
 async def test_change_password_rate_limited_on_ip_email_inprocess(client):
     """§3.6: the password-verifying endpoint shares the login-class throttle."""
-    tokens = await _register_and_login(client)
+    # 专属用户 + 每跑唯一邮箱:桶 (ip,email) 与全套其他用例及并行运行隔离,
+    # 测试与顺序/共享 Redis 残留键无关(MES-60 验收 R2b)。
+    uniq = uuid.uuid4().hex[:10]
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": f"rl-change-{uniq}@corp.com", "password": PASSWORD, "display_name": "RL"},
+    )
+    resp = await client.post(
+        "/api/v1/auth/login", json={"email": f"rl-change-{uniq}@corp.com", "password": PASSWORD}
+    )
+    tokens = resp.json()["data"]
     h = _auth(tokens["access_token"])
     for _ in range(5):  # CHANGE_PASSWORD_LIMIT = 5/min on (IP, email)
         wrong = await client.post(
@@ -453,7 +463,8 @@ async def _register(client, email: str):
 
 
 async def test_register_rate_limit_is_per_ip_email_tuple(client):
-    a, b = "rl-a@corp.com", "rl-b@corp.com"
+    _uniq = uuid.uuid4().hex[:10]
+    a, b = f"rl-a-{_uniq}@corp.com", f"rl-b-{_uniq}@corp.com"
     for _ in range(5):  # REGISTER_LIMIT = 5
         await _register(client, a)
     # 6th register of A → 429 (bucket exhausted).
@@ -465,7 +476,8 @@ async def test_register_rate_limit_is_per_ip_email_tuple(client):
 
 
 async def test_reset_rate_limit_is_per_ip_email_tuple(client):
-    a, b = "rl-reset-a@corp.com", "rl-reset-b@corp.com"
+    _uniq = uuid.uuid4().hex[:10]
+    a, b = f"rl-reset-a-{_uniq}@corp.com", f"rl-reset-b-{_uniq}@corp.com"
     for _ in range(5):
         r = await client.post("/api/v1/auth/forgot-password", json={"email": a})
         assert r.status_code == 200  # anti-enumeration: always ok until limited

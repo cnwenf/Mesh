@@ -32,49 +32,10 @@ export default defineConfig({
         functions: 90,
         branches: 90,
         statements: 90,
-        // 验收 REJECT #3:为新增管理面板加目录级阈值,防止新增代码的分支/函数
-        // 覆盖率被全局门禁掩盖(整体过线而单文件不过)。
-        'src/features/labels/**/*.tsx': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
-        // MES-55 验收建议:安全守卫目录(防开放重定向的 safeNextPath 等)
-        // 比照 labels 先例设 perFile 阈值,覆盖缺口永久可见、不被全局门禁掩盖。
-        'src/features/auth/**/*.ts': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
-        // MES-59:附件模块(签名直传流水线 / 隔离区可见性闸门 / 实时合并)
-        // 比照 labels/auth 先例设目录级阈值,新增代码覆盖率不被全局门禁掩盖。
-        'src/features/attachments/**/*.ts': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
-        'src/features/attachments/**/*.tsx': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
-        // MES-60:agent 模块目录级阈值(第 2 轮 R1 改为真实 per-file 脚本后移除)。
-        'src/features/agents/**/*.tsx': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
-        'src/features/agents/**/*.ts': {
-          lines: 90,
-          functions: 90,
-          branches: 90,
-          statements: 90,
-        },
+        // 目录级 per-file 门禁不在这里写 glob 键——vitest thresholds 只认
+        // 全局数值键 + perFile/100 布尔,glob 键会被静默忽略(MES-60 第 2 轮
+        // 验收 R1:labels/auth/attachments/agents 先例皆是此类空操作)。真实执行的逐文件
+        // 门禁见 scripts/verify-perfile-coverage.mjs(已接入 test:coverage)。
       },
     },
   },
