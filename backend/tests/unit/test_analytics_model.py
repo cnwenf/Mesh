@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select, text
@@ -13,8 +13,8 @@ from mesh.db.models.analytics import AnalyticsSnapshot
 pytestmark = pytest.mark.unit
 
 WIN = dict(
-    window_start=datetime(2026, 7, 1, tzinfo=timezone.utc),
-    window_end=datetime(2026, 7, 8, tzinfo=timezone.utc),
+    window_start=datetime(2026, 7, 1, tzinfo=UTC),
+    window_end=datetime(2026, 7, 8, tzinfo=UTC),
 )
 
 

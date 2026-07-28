@@ -349,6 +349,15 @@ class Settings(BaseSettings):
         default=timedelta(seconds=300), gt=0
     )
 
+    # -- Analytics module (analytics.md §2.5/§2.6) ------------------------------
+    # Snapshot freshness: a cached aggregate older than this is recomputed
+    # (§2.6 default 15 min; ``workload`` is never cached).
+    analytics_snapshot_ttl: timedelta = Field(default=timedelta(minutes=15), gt=timedelta(0))
+    # When a cached aggregate is stale: ``False`` recomputes synchronously and
+    # returns the fresh value (dashboard first paint); ``True`` returns the
+    # stale value and refreshes in the background (stale-while-revalidate).
+    analytics_stale_while_revalidate: bool = False
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""
