@@ -3,6 +3,76 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.17.1] - 2026-07-29
+
+平台能力层 A:数据导入导出全功能实现(MES-64,import-export.md 五章)。统一作业实体 `data_jobs` + 行台账 `data_job_rows`(迁移 0026);CSV/JSON 导入走「validate dry-run → run 部分成功」两段式,逐行值转换 + 逐行错误报告;异步导出经 outbox → worker 流式生成产物并经统一附件通道签名下载。T31 故障恢复红线全量实测:单调 `lease_seq` fencing 拒绝过期旧 worker 的批提交、`checkpoint` 续跑、`row_key` 原子占用「先占后建」杜绝重放重复建实体、源文件哈希冻结 + 替换拒绝、源附件 `ON DELETE RESTRICT`。§6.13 唯一通知矩阵补 data_job 三行(成功默认不进箱 / 部分成功 normal 进箱 / 失败 critical),仅引用不自定义分级;§6.7 `data_job.updated` 实时进度。前端导入向导(分步可回退 / 映射配置 / dry-run 错误表 / 进度)+ 数据管理页 + 项目页情境入口。真实起服 e2e 与真实浏览器 UI 走查全绿,模块单测覆盖率 ≥90%。
+
+### Added
+
+- **数据模型(import-export.md §2,迁移 0026)**:`data_jobs`(导入/导出共表,`kind/entity_type/format` CHECK、状态机 `pending→validating→running→completed/completed_with_errors/failed`、`mapping/params/checkpoint/error_report` JSONB、`source_content_hash` 冻结、`lease_owner/lease_seq/lease_expires_at` fencing、源附件 `ON DELETE RESTRICT` + 产物 `ON DELETE SET NULL (result_attachment_id)` 列级 + 发起人 `RESTRICT`、`UNIQUE(workspace_id,id)` 复合 FK 红线、fail-closed RLS、两个 SECURITY DEFINER 引导函数);`data_job_rows`(`UNIQUE(job_id,row_key)` 行级幂等键 + status 字段 CHECK:created/updated 必带 target、failed 必带 error)。
+- **导入两段式 + 部分成功(§3.2–§3.4/§3.7)**:建作业同事务写 `data_job.enqueue` outbox 事件(§6.6);`validate` worker 流式解析不落库,产出映射预览 + 逐行错误 + `predicted_failed_rows`,回置 `pending` 并冻结 `source_content_hash`;`run` 要求已 dry-run(否则 422 `validation_required`)+ 源哈希预检(替换 → 422 `source_changed`),逐批事务执行;行级转换覆盖 direct/value_map/status_by_name/member_by_email/date_parse/list_split/parent_by_external_ref + 自定义字段;`external_ref` 系统字段按工作区幂等创建;编号走正常命名空间计数器;父子经 external_ref 二次解析 + `detect_parent_cycle` 防环。
+- **T31 故障恢复与幂等(§3.8 R3/R4)**:每批事务 `FOR UPDATE` 锁 job 行校验 `lease_owner+lease_seq+未过期` 再写副作用,**fencing 同样作用于 `fail_job`**(杜绝过期旧 worker 把新 worker 的作业打成 failed);`checkpoint.last_committed_batch` 续跑;`row_key` 原子占用 `ON CONFLICT DO NOTHING` + 预分配 `target_id`「先占后建」,重放已提交批次不重复建实体;reaper 回收过期租约(清零 owner、**保留 lease_seq**)+ 重投 `data_job.resume`,并补偿卡死的 pending export / 无主 running;源完整性双校验(API 预检 + worker 领取)。
+- **异步导出 + 统一附件通道(§3.5/§3.9)**:`export` 建作业即返回,worker 游标分批查询 + 流式写出(不越 512 MB / 20 万行上限,超限 `export_too_large`),产物登记为 attachment(`scan_status='skipped'` 纯文本白名单即时可下载),下载经签名 URL;导出每页续租杜绝长导出 livelock(评审修复);filters 复用列表查询契约并参与创建时行数预检(评审修复)。
+- **通知 / 实时 / 错误码(§3.10/§3.11/§3.12)**:README §6.13 补 data_job 三行,`comment_inbox.notifications.policy_for` 新增 `data_job_finished` 分支(按 `data_job_status` 派生 normal/critical,仅引用矩阵);迁移 0026 重建 `notifications_type` CHECK;`data_job.updated` 经 outbox→projector 唯一写入路径,`data_job:{id}` 频道逐资源授权(非属主/admin 订阅被拒,§6.7);错误码齐 `mapping_invalid/validation_required/source_not_ready/source_changed/export_too_large` 等;创建端点限流 + `Idempotency-Key` 去重。
+- **前端 UI(§4)**:导入向导 `ImportWizard`(上传经签名直传 / 映射编辑器 / dry-run 错误表 / 确认 / 实时进度 + 结果 + 错误报告下载)、导出对话框 `ExportDialog`(范围/格式 + 异步进度 + 签名下载)、设置→数据管理页 `DataManagementPage`(作业表 + 空态/错误态/骨架 §6.12)、项目页情境入口(导出本项目 / 导入到本项目);i18n 中英双目录同步 + 新增占位符;`useAttachmentUploader` 支持未链接源上传的 `workspaceId`。
+
+### Fixed(验收第 1 轮深审整改)
+
+- **H1 部分成功语义**:行级问题(title 超 `TITLE_MAX_LENGTH`、`due_date < start_date`、project key 撞前缀/历史前缀)前移到 `transform_row` 记**行级失败**(`invalid_value` / `project_key_taken`),dry-run 与 run 同转换故可预测;运行时实体创建的 `ValueError`/`ConflictError` 在行级被捕获记失败行,**绝不**冒泡为任务级 `failed`(`_run_batch` 捕获放宽为 `Exception`,中性错误文案不泄露驱动/约束名,§5.4)。
+- **H2 恢复重投不卡死(T31⑤)**:reaper 重投 `data_job.resume` / `_redispatch_unclaimed` 的幂等键追加**亚租约时间窗分桶**,使不同恢复回合的 resume 键互异,不被历史「浪费」的 published 行去重,作业经真实 worker 续跑完成而非卡死至 outbox 保留期;新增「毒批次 resume 上限」`data_job_max_resumes` 兜底死循环。
+- **M1 警告行幂等**:`_resolve_parents` 警告台账行 INSERT 加 `ON CONFLICT (job_id,row_key) DO NOTHING`,续跑重跑该 pass 不重复;`_finalize_import` 错误报告**完全由台账重建**(failed + skipped-with-error),续跑产出一致去重的预览。
+- **M2 项目 key 冲突错误码**:`_create_project_row` 预检前缀注册表,撞键记 `project_key_taken`(非泛化 `invalid_value`)。
+- **M3 重新 validate 语义**:全新(非崩溃恢复)validate **不**校验冻结哈希、按当前源重新 dry-run 并重写 `source_content_hash`,使「源替换后重新 validate」可达;仅 resume 路径校验冻结哈希 → `failed(source_changed)`(spec §3.4/§3.8 同步澄清)。
+- **L1/L3/L4**:`row_key` 的 `ref:` 形态改用 `sha256(external_ref)` 定长键,杜绝超长 external_ref 触发 btree 行过大;续跑 skip 判定优先用 `checkpoint.batch_size`;`resumed`/`resumed_count` 仅按 action=`resume` 计(正常 validate→run 不计)。
+- **附件内容寻址去重(T24 对齐)**:`register_server_attachment` 复用同 `content_hash` 的既有 blob 行并清理孤儿对象,杜绝错误报告跨 dry-run/run 同内容时的 `uq_attachment_blobs_ws_hash` 冲突。
+
+### Verified
+
+- 模块单测覆盖率 **90.34%**;真实起服 e2e 全绿:两段式部分成功、validate 前 run 422、源替换 API 422 + worker critical 通知、T31 杀 worker 续跑/fencing 拒旧/重放不重复、源附件 RESTRICT、导出签名下载实测 MinIO,**+ 新增 H1 行级隔离(title 超长 / due<start / key 撞键 = 行级失败非任务 failed)+ M1 警告幂等 + H2「同 checkpoint 连续两次硬崩溃后 reaper 仍续跑不卡死」(真实 DB + 真实 MinIO)**;真实浏览器 UI 走查 12 步存证(登录→数据管理→导入向导全流程→作业表→导出下载)。
+
+
+
+阶段 6 智能体层 B:runtime 模块全功能实现(MES-62,runtime.md 五章)。执行双层状态机(task_executions 逻辑层 + execution_attempts 物理层)、§2.5 原子 claim(SKIP LOCKED + 容量无泄漏)、租约 fencing 与 reaper 失联自愈、日志流式(WS 主/SSE 降级/offset 续传/全通道脱敏)、凭证 fencing(一次性 envelope + 重取上限)、checkout 白名单与 SSRF 防护、统一审批唯一续跑协议(§6.10),并闭环 MES-60 的 `execution.enqueue` outbox 消费端。红线集成测试 T2/T3/T4/T10/T16/T20/T21 真实起服 + 真实 worker 并发实测全绿。
+
+### Added
+
+- **数据模型(runtime.md §2,迁移 0019,避让 comment-inbox 0018)**:九张租户表——`runtimes`(注册/标签/能力/容量 `current_load`·`max_concurrent`/生命周期,服务端值为匹配唯一权威)、`task_executions`(逻辑执行:幂等键可空唯一、`config_snapshot` §6.11 冻结快照、`required_capabilities` **严格字符串数组 CHECK**——对象混入即拒,杜绝 `<@` 永久失配,T28 schema 兜底;`capability_grants` permission 必填枚举 CHECK,R4)、`execution_attempts`(物理尝试:`UNIQUE(execution_id, attempt_number)` 审计链不复用、`lease_expires_at`/`lease_seq` fencing、`cancelling`/`reclaimed` 状态)、`task_log_segments`(偏移索引,`UNIQUE(attempt_id, start_offset)` 连续不重叠,内容在对象存储)、`repo_checkouts`(每 attempt 一次,专属分支)、`runtime_credentials`(密文 only)、`execution_credentials`(attempt 绑定 envelope + 重取计数)、`runtime_heartbeats`、`approvals`(README §6.10 统一审批实体:subject 形状 CHECK + 单 pending 部分唯一索引;autopilot/squad 主题列预留、FK 随其模块落地);§2.4 全部索引(`idx_executions_claimable` 等)+ fail-closed RLS + 复合 FK 同租户红线(§6.2);`agents.default_runtime_id` 延迟复合 FK 落地(→ `runtimes(workspace_id, id)`,PG16 列级 SET NULL);两个 SECURITY DEFINER 引导函数(token/激活码哈希查找,RLS 前置)。
+- **claim 原子性(§2.5 R1 权威版)**:单事务「`FOR UPDATE` 锁 runtime 行校验在线/容量(**不预扣**)→ `FOR UPDATE OF e SKIP LOCKED` 选任务(租户等值 + 标签 `<@` + 能力 `<@` 双匹配,只信服务端存储值;`default_runtime_id` 亲和)→ 选中才 `current_load+1` + 转 claimed + 建 attempt(租约 + `agent/<execution_id>/a<N>` 分支)一次提交」;**有容量无匹配整体零写入**(T20 无泄漏);凭证随响应一次性下发(NEW-M1 env 名白名单校验,`LD_*`/`PATH`/`PYTHON*`/`NODE_OPTIONS`/`DYLD_*`/`MESH_DAEMON_*`/`MESH_INTERNAL_*` 拒绝 422)。
+- **双层状态机(§4.7)**:逻辑层 queued→claimed→running→completed/failed/timeout、cancelling 两段式、awaiting_approval;物理层 claimed→running→(cancelling)→终态/reclaimed;终态迁移守卫保证容量**恰释放一次**(`GREATEST(load-1,0)`),重复终态上报 no-op;`lease_seq` 每次领取/续租 +1,旧持有者一切上报 409 `lease_seq_mismatch`(T10 脑裂防护)。
+- **reaper 失联自愈(§4.8)**:worker `runtime-reaper` 任务——租约过期 attempt → `reclaimed`(审计原样保留 + `lease_seq++` 防诈尸)+ 容量幂等释放;执行按 attempt 数 requeue(新 attempt #N+1,审计链完整,T4)或 `failed(max_retries)`;心跳失联 runtime → `unavailable` + `runtime.offline`(按各 runtime 自身间隔×倍率);pending 审批过期 → `expired` + 执行 `cancelled(approval_expired)`;heartbeat 明细保留期清理。`awaiting_approval` 无在途 attempt,reaper 无需特殊处理(无"暂停租约永久卡死"路径)。
+- **机器 API(§3.2,`/api/v1/daemon/`)**:`runtimes:activate`(激活码一次性,过期/已用 410,明文 token 仅此一次返回,`scope='runtime'` 只存哈希)、`:heartbeat`(健康指标 + 取消下行指令搭载)、`executions:claim`(§2.5,204/200)、`PATCH attempts/{id}`(状态迁移 + lease fencing)、`:renew-lease`、`logs`(offset 连续 + 脱敏 + 段封口入对象存储)、`checkouts`(白名单 + SSRF 校验)、`credentials:refetch`(发新撤旧,上限 3 超限冻结审查)、`executions/{id}/approvals`(审批请求)。**鉴权**:`mesh_rt_` 令牌哈希 → runtime 行(workspace 永远服务端解析,不信请求体),token 吊销/runtime 下线联动 401(NEW-L2),跨 runtime 操作 403;**机器 API 强制 TLS**(NEW-M3,非 TLS 403 `tls_required`)。
+- **控制台 API(§3.1)**:runtime 列表(状态/类型/搜索筛选 + 队列深度)/详情(心跳明细)/创建(三段式注册:影子记录 + 15 分钟一次性激活码哈希 + **签名发布包**安装信息,无 `curl|sh`,激活码不进命令行参数)/PATCH/`:pause`·`:resume`(暂停即吊销 token)/`tokens:rotate`/软删除;执行列表(agent/issue/状态筛选)/详情(attempts 审计链 + 凭证元信息值恒 `***`)/`:cancel`(两段式幂等)/`:freeze`(立即吊销全部 envelope + critical 安全告警);日志 REST(`?offset=` 续传)+ SSE 降级流(§3.3 同 offset 协议);credentials CRUD(明文只进不出);统一审批收件箱(approve/reject,人类成员 + admin/owner 或 agent owner,agent 不可自批)。
+- **凭证 fencing 与全通道脱敏(§2.2/§6.16)**:Fernet 密文存储(jwt_secret 派生密钥);envelope 按 attempt 绑定、TTL ≤2h、claim/refetch 之外无明文;终态/冻结即撤销;脱敏扫描器(日志/评论/附件通道复用 `redact_in_logs` 黑名单,命中替换 `***` 计数)。
+- **checkout 安全(§2.2 H1)**:`config_snapshot.repo.url`(冻结真源)必须在 `workspaces.settings.allowed_repos` 白名单内(403 `repo_not_allowed`);平台托管 runtime 拒绝 RFC1918/环回/link-local/云元数据地址(403 `private_address_forbidden`,IPv4-mapped IPv6 展开复检)。
+- **审批唯一续跑协议(§6.10,T21)**:运行中工具命中 `confirm_required` → 当前 attempt 置 `cancelled(awaiting_approval)`(审计保留、租约结束、容量释放)、执行转 `awaiting_approval`;批准 → 回 `queued`,新 attempt #N+1 凭冻结 `resume_context` 续跑;拒绝 → `cancelled(approval_rejected)`;同 subject 单 pending(部分唯一索引,重复请求返回既有)。
+- **实时(§3.6)**:`execution.*`(queued/claimed/started/completed/failed/timeout/cancelled/requeued/awaiting_approval/log)、`runtime.*`(activated/online/offline/degraded/paused)、`queue.depth_changed`、`approval.*` 全经 outbox → projector 唯一路径;`execution:{id}[:logs]` 频道资源级订阅鉴权(API/网关双注册);终态通知按 §6.13 矩阵(失败/超时 critical 扇出,成功默认留运行页)。
+- **前端(§4.1–§4.5)**:Runtimes 列表(状态点 + 负载条 + 心跳新鲜度 + 队列深度背压,实时刷新)、详情页(监控 + 在途/历史 + 暂停/恢复 + token 轮换一次性展示)、三步注册向导(基本信息 → 签名发布包可审阅安装步骤(下载/校验 sha256+签名/解包/`--activation-file` 受限激活/用后即毁)→ 等待 `runtime.activated` ⏳→✅)、执行详情页(实时日志 WS 主通道 + offset 去重续传 + 跟随尾部,SSE 降级;凭证 Tab 值恒 `***`;两段式取消二次确认);`/automation` 入口接通;i18n 全外部化(zh-CN + en 各 +139 键);真实浏览器走查 spec 接入 `runtimes-e2e` CI job(真 PG/Redis/MinIO/api/worker/gateway 全栈)。
+
+### Fixed
+
+验收第 1 轮打回整改(3 CRITICAL + 4 HIGH + MEDIUM/LOW,独立干净环境复测全绿):
+
+- **B1(CRITICAL)迁移漂移**:0018 补齐 `runtimes.created_by`(同租户复合 FK)与 `runtime_credentials.env_name`(含 CHECK)——此前这两处 DDL 只在 ORM 不在迁移(提交路径 `backend/migrations` 漏入库),从零迁移库 UndefinedColumn;现从零迁移库验证漂移门禁干净。
+- **B2(CRITICAL)前端缺失**:前端 Runtimes UI 全量入库(此前只提交了 e2e spec 与存证);走查 spec 接入真实存在的 playwright 配置与 CI job;存证由已提交代码重新生成。
+- **B3(CRITICAL)CI 红**:ruff 全量清零(src + tests,60 项:I001/F401/UP017/UP041/B007/B017/E501)。
+- **H1**:claim 响应回传 `resume_context`(该执行最新 approved 审批冻结的检查点),批准后续跑端到端接通(§6.10)。
+- **H2**:全通道脱敏红线**三通道全部接通**——`runtime/redaction.py` 统一守卫:日志(封口前替换 `***`)、附件(文本型上传命中即 `scan_status='infected'` 阻断 + critical 审计)、**评论(第 2 轮接通:`comment_inbox/service.py` 创建/编辑写路径在落库/广播前扫描 `body_markdown`/`body_text`,命中即 422 `secret_detected` 不写出 + critical 审计独立事务留存;`test_comment_secret_guard.py` 实测拒写/不改写/审计留存/无密钥惰性四路径)**。
+- **H3**:`GET /runtimes` 增 `labels=k:v,k2:v2` 过滤(JSONB `@>` 包含匹配)。
+- **H4**:审批裁决权补齐触发者路径(issue reporter,数据模型中的持久触发信号)。
+- **F7**:claim 改 INNER JOIN agents(§2.5 spec 语义,无执行者的执行不可领)。
+- **F8**:heartbeat `inflight` 校验(UUID)并落心跳明细(`inflight_reported` 审计)。
+- **F9**:审批裁决端点改 `/approve` `/reject`(去冒号);`role=mine` = pending 待我审批收件箱。
+- **F10**:`execution.queued` 发至 `workspace:{ws}:executions` 频道(§3.6,issue-less/integration 触发亦可见)。
+- **F11**:`execution.log` 改逐行帧(§3.3 线上形状 `{type,stream,offset,line}`)。
+- **L3/L4**:daemon JSONB 载荷 64KB 上限;API 层 `max_concurrent ≥ 1`(迁移 CHECK 保持 spec 的 ≥0)。
+- **refetch 语义**:撤销(revoke)优先于上限报告——冻结后 refetch 报 `envelope_revoked` 而非上限。
+
+### Quality
+
+- **红线 e2e(§5.2,真实起服 + 真实 worker)**:16 项——T2 三 runtime 并发抢一任务恰一胜者零重复、T3 五并发 vs 容量 2 恰成功 2 且终态归零、T4 租约过期 requeue 审计保留 + attempt #2 接管、T10 僵尸 lease_seq 全通道 409、T16 checkout 白名单 403 + 元数据地址拒绝、T20 无匹配 204 容量零写入、T21 审批挂起→批准→新 attempt 续跑全协议 + 拒绝路径;激活流(410/401)、daemon 鉴权(403/401)、NEW-M1 env 名 422、日志脱敏与 REST/SSE 续传、console 全端点、refetch 轮换与冻结。
+- **单元测试**:runtime 模块 148 项(claim 并发/状态机/fencing/reaper/审批全错误路径/凭证/checkout/日志/注册生命周期/脱敏守卫/附件阻断),真实 PostgreSQL/MinIO 零 mock;model-migration 零漂移门禁通过(从零迁移库)。
+- **覆盖率**:后端总体 ≥92%(unit+e2e 合并,`--cov-fail-under=90` 通过);runtime 模块**各文件 90–100%**(approvals 96% / redaction 100% / claim 97%),模块总 92%。前端 1659 测试全绿(97.64%),runtimes 目录 per-file ≥90% 门禁通过。
+
 ## [0.17.0] - 2026-07-28
 
 阶段 7·协作层 C:chat-session 模块全功能实现(MES-67,chat-session.md 五章)。与 agent 的实时对话(形态 A)完整落地:README §6.8 流式协议(POST 创建 generation → GET SSE 流 + `Last-Event-ID` 断点续传 + 独立幂等 stop)、候选回复分支、会话管理(置顶经 README §6.19 `favorites` 唯一真源)、issue 上下文注入(§6.15 不可信内容结构隔离)、沉淀为评论闭环(§6.9 trigger preview + 一次提交),agent 回复经 `execution.enqueue` 入队(trigger='chat',§6.5 幂等键)。
@@ -35,6 +105,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **M5**:模型上下文历史过滤 `selected_candidate=true`。
 - **M7**:`list_sessions` 改 DB 层 EXISTS 排序 + 分页;候选元数据改单窗口函数查询。
 - **L**:会话删除复用 `favorites_service.cleanup_for_target`;stop 接受 `Idempotency-Key`;streaming 卡死超时回收;§4.4 注明 `outbox_max_attempts` 上限与随机围栏 token。
+
 ## [0.16.6] - 2026-07-28
 
 autopilot 验收 R3 整改(验收员两轮合并清单 M1–M5 全闭合 + LOW 项并入;复验 salvaged 改动时发现并彻底修复 M1 自环防护在真实服务下的两层根因):

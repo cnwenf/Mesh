@@ -74,6 +74,15 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
     # source server, which the SSRF guard only permits via the allowlist.
     env.setdefault("MESH_SKILL_SOURCE_HOST_ALLOWLIST", "127.0.0.1,localhost")
+    # Force the code UNDER TEST onto PYTHONPATH so e2e subprocesses do not
+    # resolve `mesh` from a stale editable install of another workspace.
+    import re as _re
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _backend = os.path.dirname(_here)
+    _src = os.path.join(_backend, "src")
+    _existing = [x for x in env.get("PYTHONPATH", "").split(os.pathsep)
+                 if x and not _re.search(r"/workspaces/[^/]+/workdir/Mesh/backend", x)]
+    env["PYTHONPATH"] = os.pathsep.join([_src, _backend] + _existing)
     return subprocess.Popen(
         [
             sys.executable,

@@ -18,6 +18,10 @@ Matrix rows (README §6.13 — no module defines its own tiers):
   ``cancelled`` has no notification type at all (the initiator is never
   notified — producers simply do not fan out);
 * ``review_requested`` → critical;
+* ``data_job_finished`` (import-export.md §3.10, README §6.13 R3 three
+  rows) → ``failed`` critical (pierce/reset/realtime);
+  ``completed_with_errors`` normal, inbox, digest; ``completed`` normal
+  and default-OFF for the inbox (explicit subscription required);
 * everything else (``comment_created`` / ``status_changed`` /
   ``subscribed_update`` / ``due_soon``) → normal: inbox via group
   aggregation, digest email, never resets read state.
@@ -83,13 +87,24 @@ class NotificationPolicy:
 _CRITICAL_INBOX = dict(pierce_quiet_hours=True, reset_unread=True)
 
 
-def policy_for(notification_type: str, *, execution_status: str | None = None) -> NotificationPolicy:
+def policy_for(
+    notification_type: str,
+    *,
+    execution_status: str | None = None,
+    data_job_status: str | None = None,
+) -> NotificationPolicy:
     """Derive the §6.13 policy for a notification type.
 
     ``execution_finished`` branches on the execution's terminal status:
     failed/timeout → critical; completed → normal and default-OFF for the
-    inbox (explicit preference subscription required). Unknown types are a
-    producer bug and raise ``ValueError``.
+    inbox (explicit preference subscription required). ``data_job_finished``
+    branches the same way on the job's terminal status (import-export.md
+    §3.10 references the README §6.13 data-job three rows — this module
+    defines no tiers of its own): ``failed`` → critical (pierce quiet
+    hours, reset the group, realtime email); ``completed_with_errors`` →
+    normal, inbox, digest; ``completed`` → normal and default-OFF for the
+    inbox (explicit ``data_job_finished`` subscription required). Unknown
+    types are a producer bug and raise ``ValueError``.
     """
     if notification_type == "assigned":
         return NotificationPolicy(
@@ -134,6 +149,34 @@ def policy_for(notification_type: str, *, execution_status: str | None = None) -
             reset_unread=False,
             email_default="digest",
         )
+    if notification_type == "data_job_finished":
+        if data_job_status == "failed":
+            # data job 失败 = critical (README §6.13, T25/T32).
+            return NotificationPolicy(
+                priority="critical",
+                default_inbox=True,
+                email_default="realtime",
+                **_CRITICAL_INBOX,
+            )
+        if data_job_status == "completed_with_errors":
+            # data job 部分成功 = normal, inbox (failed rows need attention),
+            # no quiet-hours pierce, no read reset, digest email.
+            return NotificationPolicy(
+                priority="normal",
+                default_inbox=True,
+                pierce_quiet_hours=False,
+                reset_unread=False,
+                email_default="digest",
+            )
+        # completed (or unset): normal, stays on the data-jobs page unless
+        # explicitly subscribed; never resets the read group.
+        return NotificationPolicy(
+            priority="normal",
+            default_inbox=False,
+            pierce_quiet_hours=False,
+            reset_unread=False,
+            email_default="none",
+        )
     if notification_type in ("comment_created", "status_changed", "subscribed_update", "due_soon"):
         return NotificationPolicy(
             priority="normal",
@@ -161,9 +204,7 @@ def inbox_channel(recipient_id: uuid.UUID) -> str:
 
 
 # §2.7: a preference row's event_type must be 'all' or a real notification type.
-ALLOWED_PREFERENCE_EVENT_TYPES: frozenset[str] = frozenset(
-    {"all", *NOTIFICATION_TYPE_VALUES}
-)
+ALLOWED_PREFERENCE_EVENT_TYPES: frozenset[str] = frozenset({"all", *NOTIFICATION_TYPE_VALUES})
 
 
 async def emit_issue_change_notifications(
@@ -300,21 +341,23 @@ async def _load_preference_view(
     default_email: EmailPolicy,
 ) -> _PreferenceView:
     rows = (
-        await session.execute(
-            select(NotificationPreference).where(
-                NotificationPreference.workspace_id == workspace_id,
-                NotificationPreference.member_id == member_id,
+        (
+            await session.execute(
+                select(NotificationPreference).where(
+                    NotificationPreference.workspace_id == workspace_id,
+                    NotificationPreference.member_id == member_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_type = {row.event_type: row for row in rows}
     event_row = by_type.get(notification_type)
     all_row = by_type.get("all")
     chosen = event_row or all_row
     in_app = chosen.in_app if chosen is not None else True
-    email: EmailPolicy = (
-        chosen.email if chosen is not None else (default_email or "digest")
-    )
+    email: EmailPolicy = chosen.email if chosen is not None else (default_email or "digest")
     quiet_start: time | None = None
     quiet_end: time | None = None
     for row in rows:
@@ -352,13 +395,17 @@ async def _candidate_recipient_ids(
                 if implicit is not None:
                     candidates.add(implicit)
         subscriptions = (
-            await session.execute(
-                select(IssueSubscription).where(
-                    IssueSubscription.workspace_id == workspace_id,
-                    IssueSubscription.issue_id == issue_id,
+            (
+                await session.execute(
+                    select(IssueSubscription).where(
+                        IssueSubscription.workspace_id == workspace_id,
+                        IssueSubscription.issue_id == issue_id,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for subscription in subscriptions:
             if subscription.muted:
                 muted.add(subscription.subscriber_id)
@@ -366,14 +413,18 @@ async def _candidate_recipient_ids(
                 candidates.add(subscription.subscriber_id)
     if comment_id is not None:
         mentioned = (
-            await session.execute(
-                select(CommentMention.mentioned_id).where(
-                    CommentMention.workspace_id == workspace_id,
-                    CommentMention.comment_id == comment_id,
-                    CommentMention.deleted_at.is_(None),
+            (
+                await session.execute(
+                    select(CommentMention.mentioned_id).where(
+                        CommentMention.workspace_id == workspace_id,
+                        CommentMention.comment_id == comment_id,
+                        CommentMention.deleted_at.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         candidates.update(mentioned)
     return candidates - muted, muted
 
@@ -384,21 +435,23 @@ async def _human_active_members(
     if not member_ids:
         return []
     rows = (
-        await session.execute(
-            select(Member).where(
-                Member.workspace_id == workspace_id,
-                Member.id.in_(member_ids),
-                Member.status == "active",
-                Member.member_type == "human",
+        (
+            await session.execute(
+                select(Member).where(
+                    Member.workspace_id == workspace_id,
+                    Member.id.in_(member_ids),
+                    Member.status == "active",
+                    Member.member_type == "human",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
-async def _unread_count(
-    session: AsyncSession, *, workspace_id: uuid.UUID, recipient_id: uuid.UUID
-) -> int:
+async def _unread_count(session: AsyncSession, *, workspace_id: uuid.UUID, recipient_id: uuid.UUID) -> int:
     count = await session.scalar(
         select(func.count())
         .select_from(Notification)
@@ -457,7 +510,9 @@ class NotificationFanoutHandler:
         if notification_type is None:
             raise ValueError("notification.fanout payload missing 'type'")
         policy = policy_for(
-            notification_type, execution_status=fanout.get("execution_status")
+            notification_type,
+            execution_status=fanout.get("execution_status"),
+            data_job_status=fanout.get("data_job_status"),
         )
         workspace_id = event.workspace_id
         # The outbox relay dispatches handlers WITHOUT the tenant GUC set; under
@@ -483,9 +538,7 @@ class NotificationFanoutHandler:
         if actor_id is not None:
             candidates.discard(actor_id)  # self-suppression (§6.13)
         candidates -= exclude  # explicit exclusions (e.g. author on subscribed_update)
-        recipients = await _human_active_members(
-            session, workspace_id=workspace_id, member_ids=candidates
-        )
+        recipients = await _human_active_members(session, workspace_id=workspace_id, member_ids=candidates)
 
         now = self._clock()
         for recipient in recipients:
@@ -585,9 +638,7 @@ class NotificationFanoutHandler:
                 data=_render_notification_frame(notification),
             )
         if unread_changed:
-            count = await _unread_count(
-                session, workspace_id=workspace_id, recipient_id=recipient.id
-            )
+            count = await _unread_count(session, workspace_id=workspace_id, recipient_id=recipient.id)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
@@ -760,9 +811,7 @@ class NotificationFanoutHandler:
             state="pending",
         )
 
-    async def _recipient_email(
-        self, session: AsyncSession, recipient: Member
-    ) -> str | None:
+    async def _recipient_email(self, session: AsyncSession, recipient: Member) -> str | None:
         if recipient.user_id is None:
             return None
         return await session.scalar(select(User.email).where(User.id == recipient.user_id))
@@ -809,9 +858,7 @@ def _render_notification_frame(notification: Notification) -> dict[str, Any]:
         "preview": payload.get("preview"),
         "title": payload.get("title"),
         "count": payload.get("count") or 1,
-        "read_at": notification.read_at.isoformat().replace("+00:00", "Z")
-        if notification.read_at
-        else None,
+        "read_at": notification.read_at.isoformat().replace("+00:00", "Z") if notification.read_at else None,
         "archived_at": notification.archived_at.isoformat().replace("+00:00", "Z")
         if notification.archived_at
         else None,
@@ -867,9 +914,7 @@ async def emit_due_soon_notifications(
     """
     moment = now or datetime.now(UTC)
     horizon_date = (moment + horizon).date()
-    notified_key = func.concat(
-        "issue:", Issue.id, ":due_soon:", Issue.due_date
-    )
+    notified_key = func.concat("issue:", Issue.id, ":due_soon:", Issue.due_date)
     already_notified = (
         select(Notification.id)
         .where(
@@ -879,19 +924,23 @@ async def emit_due_soon_notifications(
         .exists()
     )
     due_issues = (
-        await session.execute(
-            select(Issue)
-            .where(
-                Issue.deleted_at.is_(None),
-                Issue.due_date.is_not(None),
-                Issue.due_date <= horizon_date,
-                Issue.state_category.not_in(_DUE_SOON_EXCLUDED_CATEGORIES),
-                ~already_notified,
+        (
+            await session.execute(
+                select(Issue)
+                .where(
+                    Issue.deleted_at.is_(None),
+                    Issue.due_date.is_not(None),
+                    Issue.due_date <= horizon_date,
+                    Issue.state_category.not_in(_DUE_SOON_EXCLUDED_CATEGORIES),
+                    ~already_notified,
+                )
+                .order_by(Issue.due_date.asc())
+                .limit(batch_size)
             )
-            .order_by(Issue.due_date.asc())
-            .limit(batch_size)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     for issue in due_issues:
         key = due_soon_group_key(issue.id, issue.due_date.isoformat())
         await emit_notification_fanout(
@@ -923,16 +972,20 @@ async def send_digest_emails(
     recorded as ``failed`` with the reason only (R3 — never routing data).
     """
     pending = (
-        await session.execute(
-            select(NotificationDelivery)
-            .where(
-                NotificationDelivery.channel == "email",
-                NotificationDelivery.state == "pending",
+        (
+            await session.execute(
+                select(NotificationDelivery)
+                .where(
+                    NotificationDelivery.channel == "email",
+                    NotificationDelivery.state == "pending",
+                )
+                .order_by(NotificationDelivery.created_at.asc())
+                .limit(batch_size)
             )
-            .order_by(NotificationDelivery.created_at.asc())
-            .limit(batch_size)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not pending:
         return 0
 
@@ -945,12 +998,14 @@ async def send_digest_emails(
     now = datetime.now(UTC)
     for target, rows in by_target.items():
         notifications = (
-            await session.execute(
-                select(Notification).where(
-                    Notification.id.in_([row.notification_id for row in rows])
+            (
+                await session.execute(
+                    select(Notification).where(Notification.id.in_([row.notification_id for row in rows]))
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         rendered = [_email_body(notification) for notification in notifications]
         body = f"Mesh notification digest ({len(rendered)} items)\n\n" + "\n---\n".join(rendered)
         try:

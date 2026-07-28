@@ -16,6 +16,7 @@ from mesh.api.health import router as health_router
 from mesh.chat.channels import register_chat_checkers
 from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.config import Settings, load_settings, validate_auth_settings
+from mesh.data_jobs.channels import register_data_job_checkers
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.issue.channels import register_issue_checkers
 from mesh.project.channels import register_resource_checkers
@@ -75,6 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_execution_checkers(app.state.authorizer, session_factory)
     register_squad_checkers(app.state.authorizer, session_factory)
     register_chat_checkers(app.state.authorizer, session_factory)
+    register_data_job_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)

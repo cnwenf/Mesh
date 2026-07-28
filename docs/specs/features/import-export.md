@@ -348,6 +348,10 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 
 **前置校验:** `params.validated_at` 非空(已 dry-run),否则 `422 validation_required`;status 须为 `pending`,否则 `409 conflict`;源附件已放行,否则 `422 source_not_ready`;**R3:写入/校验 `source_content_hash`**——validate 后源文件内容被替换(哈希与冻结值不一致)→ `422 source_changed`,要求重新 validate(保证落库内容与 dry-run 预览为同一份源)。
 
+> **行级隔离与可预测性(实现澄清,§5.1)**:行级问题(title 超 `TITLE_MAX_LENGTH`、`due_date < start_date`、project key 撞前缀/历史前缀等)在 `transform_row` 阶段即记为**行级失败**(`invalid_value` / `project_key_taken` 等),dry-run 与 run 用同一转换,故**dry-run 能预测**这些行,run 时它们成为 `failed_rows` 而**绝不**冒泡为任务级 `failed`——「行级失败不误判为任务 failed」红线对防御性运行时校验同样成立(运行时实体创建抛出的 `ValueError`/`ConflictError` 在行级被捕获并记失败行,不中断作业)。
+>
+> **重新 validate 的语义(实现澄清,M3)**:`validate` 是**重新建立快照**的操作——一次**全新的**(非崩溃恢复的)validate **不**校验冻结哈希,而是按当前源重新 dry-run 并在结束时**重写** `source_content_hash`,因此「源被替换后重新 validate」始终可达;只有**崩溃恢复(resume)** 路径在领取时校验冻结哈希,不一致才 `failed(source_changed)`(在途 dry-run 假设的是旧字节,不可安全续跑)。即:API `run` 预检 422 + worker resume 校验 failed 构成「同一份源」的双校验,而用户主动重新 validate 永远重新冻结快照。
+
 **动作(经 outbox/worker,§3.8,部分成功,逐批幂等 + fencing):** status `pending → running`(`started_at`,**领取租约** `lease_owner`/`lease_expires_at`,**R4:领取即 `lease_seq = lease_seq + 1`,worker 记下领取序号作为本次租约的 fencing token**),worker 流式重读源文件,**按 `batch_size`(默认 500 行)分批,每批一个数据库事务**(R3 崩溃恢复协议 + R4 fencing/原子占用,§3.8):
 - **批事务开始:锁 job 行并校验 fencing(R4)**——`SELECT … FROM data_jobs WHERE id=$job FOR UPDATE` 后校验 `lease_owner = 本 worker AND lease_seq = 领取序号 AND lease_expires_at > now()`;**任一不符(租约已被 reaper 回收并被新 worker 领取)即整批拒绝、事务回滚**——过期旧 worker「复活」后的批提交(即使已走到实体创建)随回滚一并撤销,新旧 worker 不可能并发提交同一作业。
 - **合法行:先原子占用 row_key、再创建实体(R4 次序写死)**——每行先 `INSERT INTO data_job_rows (…, status='pending', target_type, target_id=<预分配 UUID>) ON CONFLICT (job_id, row_key) DO NOTHING`:**占用成功(1 行)才经实体服务层用预分配的 `target_id` 创建 issue/project**(复用正常落库路径:编号生成 §3.7、状态解析、成员引用、标签/自定义字段、父子二次解析),随后台账置 `status='created'`;**占用冲突(0 行 = 该行已在此前提交的批次创建)即跳过实体创建**,直接复用既有 `target_id`(重放已提交批次不重复建实体)。唯一约束在实体创建**之前**裁决——「先建实体后写台账、冲突发生在实体创建之后」的旧次序已废除。
@@ -399,6 +403,7 @@ CREATE INDEX idx_data_job_rows_job_status ON data_job_rows (job_id, status);
 - **R3 租约回收(reaper)**:补偿扫描 `idx_data_jobs_lease_expired`(`status='running' AND lease_expires_at < now()`)→ 同事务置 `lease_owner=NULL`(状态保持 `running`,**不回退计数**——计数与 checkpoint 与实体同事务提交,天然一致;**`lease_seq` 不清零、不递减**,下次领取递增后旧持有者的一切 token 即失效)+ 经 outbox 重投 `data_job.resume`(幂等键 `sha256(data_job_id \| 'resume' \| 上次 checkpoint 批次号)`)→ 新 worker 领取后从 `checkpoint.last_committed_batch` 续跑。**消除三类永久故障**:①「`running` 守卫使重投不再执行 → 作业永久卡住」(租约过期即可被新 worker 领取);②「重跑已提交批次 → 重复建 issue/project」(checkpoint 跳过 + row_key 原子占用「先占后建」幂等双保险,R4:唯一约束在实体创建**之前**裁决);③「过期旧 worker 复活并与新 worker 并发提交 → 重复实体」(单调 `lease_seq` fencing 拒绝一切旧 token 的批提交,R4)。
 - worker 崩溃在**批事务提交前** → 该批整体未落库,新 worker 重跑该批(幂等);崩溃在**提交后、outbox 进度事件发布前** → 进度事件由 outbox 补投(at-least-once),`data_job.updated` 可能重复推送,客户端按 `checkpoint`/计数收敛。
 - **R3 源文件校验**:领取时(首次与恢复皆然)重算源附件内容 sha256 与 `source_content_hash` 比对,不一致 → 作业 `failed(failure_reason='source_changed')`(源在 validate 后被替换,不可安全续跑)。
+- **R3 恢复重投幂等键分桶(实现澄清,H2/T31⑤)**:reaper 重投 `data_job.resume` 的幂等键除 `data_job_id|resume|last_committed_batch` 外**追加一个亚租约时间窗分桶**(窗口 < 租约 TTL)。否则:worker 在某 checkpoint 硬崩溃 → 驱动事件回滚为 pending → relay 秒级重启在租约过期前重新消费却因 `lease_owner` 仍在而正常返回、把事件**置 published 浪费** → reaper 过期后清 owner 重投 resume,其键与被浪费行**同键** → `emit_event` 去重不再插新 pending → 作业卡死至 outbox 保留期(默认 7 天)。分桶使「不同恢复回合」的 resume 键互异,从而 reaper 重投总能插入新 pending、不被历史浪费行去重,作业经真实 worker 续跑完成而非永久卡住;同一时间窗内的重复重投仍借同桶键去重(幂等)。`_redispatch_unclaimed` 同此分桶。集成测试 T31 覆盖「同 checkpoint 连续两次硬崩溃后 reaper 仍续跑不卡死」。
 - **禁止**在业务事务外"顺手"解析文件或写实体(评审硬约束,README §6.6)。
 
 ### 3.9 产物登记为附件(经 attachment.md 统一通道)

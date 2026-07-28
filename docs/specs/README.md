@@ -317,6 +317,8 @@ awaiting_approval ──拒绝/过期──► cancelled(失败终态,failure_re
   | 工具调用 | `sha256(execution_id \| attempt_number \| capability_key \| stable_args_hash)`(R2:`tool_id` 真源已删除,统一为版本化 capability key,§6.11) |
   | 出向 Webhook/推送 | `sha256(execution_id \| attempt_number \| target \| event)` |
   | git 推送 | 重试分支名 **按 attempt 唯一**:`agent/<execution_id>/a<attempt_number>`,杜绝两个 runtime/attempt 推同一分支 |
+  | 数据作业入队(import/export) | `sha256(data_job_id \| action)`(`action ∈ {created, import-validate, import-run, export}`;同一作业同一动作不重复入队,import-export.md §3.8) |
+  | 数据作业恢复(reaper) | `sha256(data_job_id \| 'resume' \| last_committed_batch)`(按 checkpoint 批次去重,保证回收-重投幂等,import-export.md §3.8 R3) |
 
 - 接收方(评论 API、工具网关等)以 `Idempotency-Key` 落库去重,重复投递返回首次结果。
 
@@ -787,7 +789,7 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 | 维度 | 基准 |
 | --- | --- |
 | 硬件 | 8 vCPU / 32 GB RAM / NVMe SSD 单机;PostgreSQL 16、Redis 7,默认配置(shared_buffers=8GB) |
-| 数据规模 | 工作区 50 个;单工作区 issue 10 万、成员 1 万、评论 100 万、通知 500 万、task_executions 100 万(含 attempts 300 万)、附件 10 万 |
+| 数据规模 | 工作区 50 个;单工作区 issue 10 万、成员 1 万、评论 100 万、通知 500 万、task_executions 100 万(含 attempts 300 万)、附件 10 万;**数据作业(import-export.md §5)单作业 ≤ 10 万行、全程流式(源解析 / 导出生成 / 错误报告皆不全量载入内存),导出产物 ≤ 512 MB / ≤ 20 万行(`data_job_export_max_rows/bytes`)** |
 | 并发 | k6 50 VU 稳态 + 100 VU 峰值;WebSocket 2000 并发连接 |
 | 冷热缓存 | 冷:重启数据库后首跑;热:二跑取数;指标标注冷/热 |
 | 测试方法 | 压测脚本随仓库提供(`tests/perf/`),CI 夜间跑;P95 取 5 分钟窗口 |

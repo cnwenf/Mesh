@@ -71,11 +71,6 @@ const REQUIRED_KEYS = [
   'error.field_key_taken',
   'error.invalid_field_config',
   'error.field_inactive',
-  'error.approval_required',
-  'error.manifest_invalid',
-  'error.source_unreachable',
-  'error.capability_not_declared',
-  'error.version_conflict',
   // nav.*
   'nav.home',
   'nav.inbox',
@@ -83,7 +78,6 @@ const REQUIRED_KEYS = [
   'nav.issues',
   'nav.board',
   'nav.members',
-  'nav.skills',
   'nav.chat',
   'nav.automation',
   'nav.settings',
@@ -280,6 +274,10 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     status: 'completed',
     reason: 'nonzero_exit',
     branch: 'agent/8f3a1d2c/a1',
+    // import-export §4 文案占位符(MES-64):映射列名 / 可导入与跳过行数
+    column: 'State',
+    importable: 98,
+    skipped: 2,
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

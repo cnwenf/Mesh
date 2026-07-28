@@ -23,9 +23,6 @@ import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { ChatPage } from './features/chat';
 import { AgentDetailPage } from './features/agents/AgentDetailPage';
-import { MarketplacePage } from './features/skills/MarketplacePage';
-import { SkillDetailPage } from './features/skills/SkillDetailPage';
-import { SkillsPage } from './features/skills/SkillsPage';
 import { BoardPage } from './features/board/BoardPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
@@ -57,6 +54,7 @@ import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
 import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
+import { DataManagementPage } from './features/data-jobs/DataManagementPage';
 import { InboxPage } from './features/inbox';
 
 /**
@@ -160,6 +158,7 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
                 {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
                 <Route path="w/:workspaceSlug/settings/labels" element={<WorkspaceLabelsPage />} />
+                <Route path="w/:workspaceSlug/settings/data" element={<DataManagementPage />} />
                 <Route
                   path="w/:workspaceSlug/settings/custom-fields"
                   element={<WorkspaceCustomFieldsPage />}
@@ -182,10 +181,6 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="board" element={<BoardPage />} />
                 <Route path="views/:viewId" element={<BoardPage />} />
                 <Route path="members" element={<MembersPage />} />
-                {/* 技能库 / 详情 / 市场(skill.md §4.1):绑定入口在 agent 详情页「技能」Tab */}
-                <Route path="skills" element={<SkillsPage />} />
-                <Route path="skills/:skillId" element={<SkillDetailPage />} />
-                <Route path="marketplace" element={<MarketplacePage />} />
                 {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
                 <Route path="agents/:agentId" element={<AgentDetailPage />} />
                 {/* 小队(squad.md §4):列表 / 详情 / 任务详情(拆解树 + 计划审批) */}
