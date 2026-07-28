@@ -30,6 +30,16 @@ from mesh.autopilot.matcher import match_domain_event
 from mesh.autopilot.scheduler import autopilot_scheduler_loop
 from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings
+from mesh.data_jobs.reaper import data_job_reaper_loop
+from mesh.data_jobs.runner import (
+    ENQUEUE_EVENT_TYPE as DATA_JOB_ENQUEUE_EVENT_TYPE,
+)
+from mesh.data_jobs.runner import (
+    RESUME_EVENT_TYPE as DATA_JOB_RESUME_EVENT_TYPE,
+)
+from mesh.data_jobs.runner import (
+    DataJobWorker,
+)
 from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
@@ -91,9 +101,7 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
         except ValueError:
             return None
         blob = await session.scalar(
-            select(AttachmentBlob)
-            .where(AttachmentBlob.id == blob_id)
-            .with_for_update(skip_locked=True)
+            select(AttachmentBlob).where(AttachmentBlob.id == blob_id).with_for_update(skip_locked=True)
         )
         if blob is None or blob.scan_status != "pending":
             return None  # already processed / claimed by the sweep loop
@@ -109,6 +117,7 @@ def build_relay(
     fanout: RedisFanOut,
     storage: ObjectStorage,
     mailer=None,
+    data_job_worker=None,
 ) -> OutboxRelay:
     """Assemble the relay with the current handler set.
 
@@ -146,29 +155,36 @@ def build_relay(
             logger.exception("autopilot event matching failed for %s", event.id)
         return frames
 
+    handlers = {
+        REALTIME_PUBLISH: _realtime_publish_with_autopilot,
+        ASSIGN_EVENT_TYPE: assign_orchestration_handler,
+        SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
+        # runtime.md consumer side of the MES-60 / comment-inbox contract:
+        # agent dispatch and @mention both enqueue; this handler
+        # materializes task_executions (README §6.4 logical layer,
+        # idempotent by §6.5 key) — replaces the stopgap bridge.
+        ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
+        # chat-session.md §4.4 衔接: platform-driven chat generations
+        # finalize their trigger='chat' execution through the outbox.
+        CHAT_GENERATION_FINISHED_EVENT: chat_generation_finished_handler,
+        FANOUT_EVENT_TYPE: NotificationFanoutHandler(
+            aggregation_window_seconds=settings.notification_aggregation_window,
+            mailer=mailer,
+        ),
+        # squad.md: plan decisions (§6.10) and execution-terminal observation
+        # (§4.4) are applied relay-side, keeping runtime decoupled from squad.
+        SQUAD_PLAN_DECIDED_EVENT_TYPE: squad_plan_decided_handler,
+        "execution.finished": make_squad_execution_finished_handler(squad_comment_service),
+    }
+    if data_job_worker is not None:
+        # import-export.md §3.8: job execution flows through the outbox to
+        # the data-jobs worker (fenced claim → batched pipeline → terminal
+        # notification); ``data_job.resume`` is the reaper recovery path.
+        handlers[DATA_JOB_ENQUEUE_EVENT_TYPE] = data_job_worker.handle_enqueue
+        handlers[DATA_JOB_RESUME_EVENT_TYPE] = data_job_worker.handle_resume
     return OutboxRelay(
         session_factory,
-        handlers={
-            REALTIME_PUBLISH: _realtime_publish_with_autopilot,
-            ASSIGN_EVENT_TYPE: assign_orchestration_handler,
-            SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
-            # runtime.md consumer side of the MES-60 / comment-inbox contract:
-            # agent dispatch and @mention both enqueue; this handler
-            # materializes task_executions (README §6.4 logical layer,
-            # idempotent by §6.5 key) — replaces the stopgap bridge.
-            ENQUEUE_EVENT_TYPE: enqueue_execution_handler,
-            # chat-session.md §4.4 衔接: platform-driven chat generations
-            # finalize their trigger='chat' execution through the outbox.
-            CHAT_GENERATION_FINISHED_EVENT: chat_generation_finished_handler,
-            FANOUT_EVENT_TYPE: NotificationFanoutHandler(
-                aggregation_window_seconds=settings.notification_aggregation_window,
-                mailer=mailer,
-            ),
-            # squad.md: plan decisions (§6.10) and execution-terminal observation
-            # (§4.4) are applied relay-side, keeping runtime decoupled from squad.
-            SQUAD_PLAN_DECIDED_EVENT_TYPE: squad_plan_decided_handler,
-            "execution.finished": make_squad_execution_finished_handler(squad_comment_service),
-        },
+        handlers=handlers,
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,
@@ -215,7 +231,24 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     except Exception:  # noqa: BLE001 — storage may join late; loops retry
         logger.warning("attachment bucket not ready at worker startup")
     mailer = build_mailer(settings, redis_client)
-    relay = build_relay(settings, session_factory, fanout, storage, mailer=mailer)
+    # Data-jobs worker: import/export pipeline resident (import-export.md
+    # §3.8 — outbox-dispatched, fenced, checkpoint-resumable).
+    from mesh.attachment.service import AttachmentService
+
+    data_job_worker = DataJobWorker(
+        session_factory,
+        settings,
+        storage,
+        AttachmentService(session_factory, settings, storage),
+    )
+    relay = build_relay(
+        settings,
+        session_factory,
+        fanout,
+        storage,
+        mailer=mailer,
+        data_job_worker=data_job_worker,
+    )
     stop = stop or asyncio.Event()
 
     # skill.md §4.5 / §6.11: matching resolver feeds the enqueue handler; the
@@ -284,9 +317,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             ),
             TaskSpec(
                 "attachment-scan",
-                lambda: attachment_scan_loop(
-                    session_factory, storage=storage, settings=settings, stop=stop
-                ),
+                lambda: attachment_scan_loop(session_factory, storage=storage, settings=settings, stop=stop),
             ),
             TaskSpec(
                 "attachment-maintenance",
@@ -329,6 +360,10 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     approval_ttl=settings.autopilot_approval_ttl,
                     stop=stop,
                 ),
+            ),
+            TaskSpec(
+                "data-job-reaper",
+                lambda: data_job_reaper_loop(session_factory, settings=settings, stop=stop),
             ),
         ]
     )

@@ -16,6 +16,7 @@ message — internal endpoint/host/bucket details never reach the client.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -239,9 +240,7 @@ class ObjectStorage:
 
     async def abort_multipart_upload(self, key: str, *, upload_id: str) -> None:
         def _abort() -> None:
-            self._internal.abort_multipart_upload(
-                Bucket=self._config.bucket, Key=key, UploadId=upload_id
-            )
+            self._internal.abort_multipart_upload(Bucket=self._config.bucket, Key=key, UploadId=upload_id)
 
         try:
             await asyncio.to_thread(_abort)
@@ -283,9 +282,7 @@ class ObjectStorage:
             finally:
                 response["Body"].close()
             if len(data) > max_bytes:
-                raise StorageError(
-                    "object exceeds processing limit", code="storage_error"
-                )
+                raise StorageError("object exceeds processing limit", code="storage_error")
             return data
 
         try:
@@ -307,6 +304,69 @@ class ObjectStorage:
             await asyncio.to_thread(_put)
         except Exception as exc:  # noqa: BLE001
             _raise_storage_error("object write failed", exc)
+
+    async def put_fileobj(
+        self,
+        key: str,
+        fileobj: object,
+        *,
+        content_type: str,
+        content_length: int,
+    ) -> None:
+        """Streaming server-side write (import-export.md §5 memory RED LINE).
+
+        Uploads from a file-like object WITHOUT loading the payload into
+        memory — ``ContentLength`` is passed explicitly so sigv4 does not
+        fall back to chunked signing (not accepted by every MinIO setup).
+        The caller owns the file object; it is not closed here.
+        """
+
+        def _put() -> None:
+            self._internal.put_object(
+                Bucket=self._config.bucket,
+                Key=key,
+                Body=fileobj,
+                ContentType=content_type,
+                ContentLength=content_length,
+            )
+
+        try:
+            await asyncio.to_thread(_put)
+        except Exception as exc:  # noqa: BLE001
+            _raise_storage_error("object write failed", exc)
+
+    async def download_to_path(self, key: str, dest_path: str, *, max_bytes: int) -> tuple[int, str]:
+        """Stream an object to a local file without holding it in memory.
+
+        Returns ``(size, sha256_hex)`` — the hash is computed in-line so the
+        source-integrity check (import-export.md §3.8 R3) needs no second
+        read. Raises ``StorageError`` when the object exceeds ``max_bytes``
+        (the partial file is left for the caller to clean up).
+        """
+
+        def _download() -> tuple[int, str]:
+            digest = hashlib.sha256()
+            total = 0
+            response = self._internal.get_object(Bucket=self._config.bucket, Key=key)
+            body = response["Body"]
+            try:
+                with open(dest_path, "wb") as out:
+                    for chunk in body.iter_chunks(chunk_size=1024 * 1024):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise StorageError("object exceeds processing limit", code="storage_error")
+                        digest.update(chunk)
+                        out.write(chunk)
+            finally:
+                body.close()
+            return total, digest.hexdigest()
+
+        try:
+            return await asyncio.to_thread(_download)
+        except StorageError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            return _raise_storage_error("object read failed", exc)
 
     async def delete_object(self, key: str) -> None:
         """Best-effort delete (GC / orphan cleanup / post-dedup)."""

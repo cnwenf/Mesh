@@ -91,6 +91,15 @@ function SettingsSections(): React.JSX.Element {
           </Link>
         </p>
       </section>
+      {/* import-export.md §4.1:设置 → 数据管理(管理员区入口) */}
+      <section aria-label={t('dataJobs.settings.sectionTitle')}>
+        <h2>{t('dataJobs.settings.sectionTitle')}</h2>
+        <p>
+          <Link to={`/w/${workspace.slug}/settings/data`} data-testid="ws-data-link">
+            {t('dataJobs.page.title')}
+          </Link>
+        </p>
+      </section>
       {/* auth.md §4.3 API Tokens(明文仅一次)与 §4.4 审计(admin+) */}
       <ApiTokensSettings client={getApiClient()} workspaceId={workspace.id} />
       <AuditSettings client={getApiClient()} workspaceId={workspace.id} />

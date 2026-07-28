@@ -49,6 +49,9 @@ from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.routes import router as comment_inbox_router
 from mesh.comment_inbox.service import CommentService
 from mesh.config import Settings, load_settings, validate_auth_settings
+from mesh.data_jobs.channels import register_data_job_checkers
+from mesh.data_jobs.routes import router as data_jobs_router
+from mesh.data_jobs.service import DataJobService
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.errors import (
     BusinessRuleError,
@@ -189,9 +192,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     oauth_service = OAuthService(session_factory, app.state.auth_service, app.state.redis)
     if settings.auth_mode == "dev":
         allowed = frozenset(
-            uri.strip()
-            for uri in (settings.oauth_mock_redirect_uris or "").split(",")
-            if uri.strip()
+            uri.strip() for uri in (settings.oauth_mock_redirect_uris or "").split(",") if uri.strip()
         )
         oauth_service.register_provider(MockOAuthProvider(allowed_redirect_uris=allowed))
     app.state.oauth_service = oauth_service
@@ -233,6 +234,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # upload; the processing worker shares the same storage settings.
     app.state.storage = build_object_storage(settings)
     app.state.attachment_service = AttachmentService(session_factory, settings, app.state.storage)
+    # Data jobs module (import-export.md): CSV/JSON import (dry-run →
+    # partial-success run) and async export; execution via outbox → worker.
+    app.state.data_job_service = DataJobService(session_factory, settings, app.state.storage)
     # Comment & inbox module (comment-inbox.md): comments, §6.9 mention
     # triggers, §6.13 notification fan-out (relay side), inbox operations.
     comment_service = CommentService(
@@ -316,6 +320,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_squad_checkers(app.state.authorizer, session_factory)
     register_autopilot_checkers(app.state.authorizer, session_factory)
     register_chat_checkers(app.state.authorizer, session_factory)
+    register_data_job_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -331,6 +336,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(label_association_router)
     app.include_router(view_router)
     app.include_router(attachment_router)
+    app.include_router(data_jobs_router)
     app.include_router(comment_inbox_router)
     app.include_router(chat_router)
     app.include_router(favorites_router)

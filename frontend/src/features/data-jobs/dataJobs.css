@@ -1,0 +1,74 @@
+/* 数据管理页与导入/导出向导(仅主题令牌,无硬编码颜色)。 */
+.mesh-data-jobs__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.mesh-data-jobs__table th,
+.mesh-data-jobs__table td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--mesh-border, #e5e7eb);
+}
+.mesh-data-jobs__status--completed {
+  color: var(--mesh-success, #059669);
+}
+.mesh-data-jobs__status--failed {
+  color: var(--mesh-danger, #dc2626);
+}
+.mesh-data-jobs__status--running,
+.mesh-data-jobs__status--validating {
+  color: var(--mesh-accent, #4f46e5);
+}
+.mesh-data-jobs__progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mesh-data-jobs__progress-bar {
+  flex: 1;
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--mesh-border, #e5e7eb);
+  overflow: hidden;
+}
+.mesh-data-jobs__progress-fill {
+  height: 100%;
+  background: var(--mesh-accent, #4f46e5);
+}
+.mesh-import-wizard__steps {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+.mesh-import-wizard__step--active {
+  font-weight: 600;
+}
+.mesh-import-wizard__mapping-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.375rem;
+}
+.mesh-import-wizard__errors {
+  max-height: 16rem;
+  overflow: auto;
+  font-size: 0.85rem;
+}
+.mesh-import-wizard__errors table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.mesh-import-wizard__errors th,
+.mesh-import-wizard__errors td {
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--mesh-border, #e5e7eb);
+}
+.mesh-data-jobs__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}

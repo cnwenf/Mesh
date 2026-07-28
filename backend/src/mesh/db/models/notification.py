@@ -56,6 +56,11 @@ NOTIFICATION_TYPE_VALUES = (
     # two are its autopilot-domain rows.
     "autopilot_alert",
     "autopilot_notice",
+    # data job terminal notification — import-export.md §3.10 references the
+    # README §6.13 data-job three rows (success normal default-OFF /
+    # partial normal inbox / failed critical); ALLOWED_PREFERENCE_EVENT_TYPES
+    # picks this up automatically.
+    "data_job_finished",
 )
 NOTIFICATION_PRIORITY_VALUES = ("critical", "normal")
 ACTOR_KIND_VALUES = ("member", "system")
@@ -85,9 +90,7 @@ class IssueSubscription(Base):
     )
     issue_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     subscriber_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    reason: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("'manual'")
-    )
+    reason: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'manual'"))
     muted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
@@ -97,9 +100,7 @@ class IssueSubscription(Base):
     )
 
     __table_args__ = (
-        CheckConstraint(
-            f"reason IN {SUBSCRIPTION_REASON_VALUES!r}", name="issue_subscriptions_reason"
-        ),
+        CheckConstraint(f"reason IN {SUBSCRIPTION_REASON_VALUES!r}", name="issue_subscriptions_reason"),
         Index("uq_subscription", "issue_id", "subscriber_id", unique=True),
         Index(
             "idx_subscriptions_issue",
@@ -157,9 +158,7 @@ class Notification(Base):
 
     __table_args__ = (
         CheckConstraint(f"type IN {NOTIFICATION_TYPE_VALUES!r}", name="notifications_type"),
-        CheckConstraint(
-            f"priority IN {NOTIFICATION_PRIORITY_VALUES!r}", name="notifications_priority"
-        ),
+        CheckConstraint(f"priority IN {NOTIFICATION_PRIORITY_VALUES!r}", name="notifications_priority"),
         CheckConstraint(
             f"actor_kind IS NULL OR actor_kind IN {ACTOR_KIND_VALUES!r}",
             name="notifications_actor_kind",
@@ -241,9 +240,7 @@ class NotificationPreference(Base):
     member_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     event_type: Mapped[str] = mapped_column(TEXT, nullable=False)
     in_app: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
-    email: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("'digest'")
-    )
+    email: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'digest'"))
     quiet_hours_start: Mapped[time | None] = mapped_column(Time, default=None)
     quiet_hours_end: Mapped[time | None] = mapped_column(Time, default=None)
     created_at: Mapped[datetime] = mapped_column(
@@ -280,9 +277,7 @@ class NotificationDelivery(Base):
     )
     notification_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     channel: Mapped[str] = mapped_column(TEXT, nullable=False)
-    destination_key: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    destination_key: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     provider: Mapped[str | None] = mapped_column(TEXT, default=None)
     external_target: Mapped[str | None] = mapped_column(TEXT, default=None)
     # Deferred composite FKs → integrations / integration_bindings
@@ -297,16 +292,12 @@ class NotificationDelivery(Base):
     )
 
     __table_args__ = (
-        CheckConstraint(
-            f"channel IN {DELIVERY_CHANNEL_VALUES!r}", name="notification_delivery_channel"
-        ),
+        CheckConstraint(f"channel IN {DELIVERY_CHANNEL_VALUES!r}", name="notification_delivery_channel"),
         CheckConstraint(
             f"provider IS NULL OR provider IN {DELIVERY_PROVIDER_VALUES!r}",
             name="notification_delivery_provider",
         ),
-        CheckConstraint(
-            f"state IN {DELIVERY_STATE_VALUES!r}", name="notification_delivery_state"
-        ),
+        CheckConstraint(f"state IN {DELIVERY_STATE_VALUES!r}", name="notification_delivery_state"),
         # R3: idempotency at destination grain (README §6.5/§6.13).
         Index("uq_delivery", "notification_id", "channel", "destination_key", unique=True),
         Index("idx_delivery_pending", "state", "created_at"),

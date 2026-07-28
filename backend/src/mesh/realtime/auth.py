@@ -91,7 +91,7 @@ MEMBER_INBOX_SUFFIX = ":inbox"
 # keep the workspace-membership floor until they opt into resource-level checks
 # by adding themselves here AND registering a checker.
 RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset(
-    {"project", "agent", "execution", "chat_session"}
+    {"project", "agent", "execution", "chat_session", "data_job"}
 )
 
 
@@ -313,9 +313,7 @@ class JwtPrincipalAuthenticator:
         from mesh.auth.jwt import decode_access_token
 
         try:
-            claims = decode_access_token(
-                token, secret=self._jwt_secret, algorithm=self._jwt_algorithm
-            )
+            claims = decode_access_token(token, secret=self._jwt_secret, algorithm=self._jwt_algorithm)
         except UnauthorizedError:
             return None
         async with self._session_factory() as session:

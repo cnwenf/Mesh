@@ -147,9 +147,7 @@ class AttachmentService:
                 allowed_mimes=frozenset(_default_allowed_mimes()),
             )
         allowed = (
-            frozenset(quota.allowed_mimes)
-            if quota.allowed_mimes
-            else frozenset(_default_allowed_mimes())
+            frozenset(quota.allowed_mimes) if quota.allowed_mimes else frozenset(_default_allowed_mimes())
         )
         return UploadLimits(
             max_file_bytes=quota.max_file_bytes,
@@ -225,9 +223,7 @@ class AttachmentService:
             if not role_satisfies(member.role, "issue:write"):
                 raise ForbiddenError("insufficient role to attach files to this issue")
             if issue.project_id is not None:
-                await assert_guest_project_visible(
-                    session, member=member, project_id=issue.project_id
-                )
+                await assert_guest_project_visible(session, member=member, project_id=issue.project_id)
             return
         if linked_type in {"comment", "chat_message"}:
             table = "comments" if linked_type == "comment" else "chat_messages"
@@ -256,9 +252,7 @@ class AttachmentService:
                 if owner_id is None or owner_id != member.id:
                     raise NotFoundError("chat_message not found")
             return
-        raise ValidationError(
-            "invalid link_to.type", details={"linked_type": str(linked_type)[:32]}
-        )
+        raise ValidationError("invalid link_to.type", details={"linked_type": str(linked_type)[:32]})
 
     async def _can_read_host(
         self,
@@ -322,16 +316,12 @@ class AttachmentService:
         if attachment.uploader_id == member.id:
             return list(links)
         for link in links:
-            if await self._can_read_host(
-                session, member, workspace_id, link.linked_type, link.linked_id
-            ):
+            if await self._can_read_host(session, member, workspace_id, link.linked_type, link.linked_id):
                 return list(links)
         # Uniform 404 — invisible and missing are indistinguishable (§5.3).
         raise NotFoundError(_ATTACHMENT_NOT_FOUND)
 
-    async def _caller_can_read_blob(
-        self, session: AsyncSession, member: Member, blob_id: uuid.UUID
-    ) -> bool:
+    async def _caller_can_read_blob(self, session: AsyncSession, member: Member, blob_id: uuid.UUID) -> bool:
         """Possession predicate for instant upload (RED LINE, §3.2/§4.6)."""
         attachments = (
             await session.scalars(
@@ -469,9 +459,7 @@ class AttachmentService:
             # without one (deployment defaults) take a workspace-keyed
             # transaction advisory lock instead (F7: no unserialized window).
             quota_row = await session.scalar(
-                select(AttachmentQuota)
-                .where(AttachmentQuota.workspace_id == workspace_id)
-                .with_for_update()
+                select(AttachmentQuota).where(AttachmentQuota.workspace_id == workspace_id).with_for_update()
             )
             if quota_row is None:
                 await session.execute(
@@ -502,9 +490,7 @@ class AttachmentService:
                         AttachmentBlob.content_hash == declared,
                     )
                 )
-                if candidate is not None and await self._caller_can_read_blob(
-                    session, actor, candidate.id
-                ):
+                if candidate is not None and await self._caller_can_read_blob(session, actor, candidate.id):
                     shared_blob = candidate
             if shared_blob is not None:
                 attachment = Attachment(
@@ -694,12 +680,86 @@ class AttachmentService:
             )
         )
 
+    async def register_server_attachment(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        uploader_member_id: uuid.UUID,
+        file_name: str,
+        mime_type: str,
+        extension: str,
+        storage_key: str,
+        file_size: int,
+        content_hash: str,
+        idempotency_key: str | None = None,
+    ) -> Attachment:
+        """Register a server-generated object as an attachment (in-transaction).
+
+        Used by the data-jobs worker for export products and import error
+        reports (import-export.md §3.9): the bytes are already in the bucket
+        (streamed via ``ObjectStorage.put_fileobj``), so this creates the blob
+        row with a TERMINAL ``scan_status='skipped'`` (pure-text whitelist,
+        attachment.md §3.6 — products are immediately downloadable), the
+        completed attachment row attributed to the job's requester, and the
+        ref_count increment — all in the caller's transaction.
+        """
+        now = self._now()
+        # Content-addressed blob reuse (T24): identical server-generated content
+        # (e.g. an error report that is byte-identical across dry-run and run)
+        # shares one blob row; the freshly uploaded object becomes an orphan and
+        # is best-effort deleted.
+        existing_blob_id = await session.scalar(
+            select(AttachmentBlob.id).where(
+                AttachmentBlob.workspace_id == workspace_id,
+                AttachmentBlob.content_hash == content_hash,
+            )
+        )
+        if existing_blob_id is not None:
+            blob_id = existing_blob_id
+            if storage_key:
+                await self._storage.delete_object(storage_key)
+        else:
+            blob = AttachmentBlob(
+                workspace_id=workspace_id,
+                content_hash=content_hash,
+                storage_provider=STORAGE_PROVIDER,
+                storage_bucket=self._storage.bucket,
+                storage_key=storage_key,
+                file_size=file_size,
+                mime_type=mime_type,
+                extension=extension,
+                is_image=False,
+                scan_status="skipped",
+                scan_detail={"av_result": "server-generated-text-product"},
+                ref_count=0,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(blob)
+            await session.flush()
+            blob_id = blob.id
+        attachment = Attachment(
+            workspace_id=workspace_id,
+            uploader_id=uploader_member_id,
+            blob_id=blob_id,
+            file_name=file_name,
+            file_size=file_size,
+            upload_status="completed",
+            idempotency_key=idempotency_key,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(attachment)
+        await session.flush()
+        await self._ref_count(session, blob_id, +1)
+        return attachment
+
     async def _render_upload_response(
         self, session: AsyncSession, attachment: Attachment, workspace_id: uuid.UUID
     ) -> dict[str, Any]:
-        blob = await session.get(
-            AttachmentBlob, attachment.blob_id
-        )
+        blob = await session.get(AttachmentBlob, attachment.blob_id)
         assert blob is not None
         links = (
             await session.scalars(
@@ -714,9 +774,7 @@ class AttachmentService:
         if attachment.upload_status in {"pending", "uploading"}:
             upload_payload = await self._sign_upload(session, attachment, blob)
         rendered["upload"] = upload_payload
-        rendered["limits"] = {
-            "max_file_bytes": self._settings.attachment_max_file_bytes
-        }
+        rendered["limits"] = {"max_file_bytes": self._settings.attachment_max_file_bytes}
         return {"data": rendered}
 
     async def _sign_upload(
@@ -727,9 +785,7 @@ class AttachmentService:
             select(UploadSession).where(UploadSession.attachment_id == attachment.id)
         )
         declared_mime = (
-            (blob.scan_detail or {}).get("declared_mime")
-            if blob.scan_detail
-            else None
+            (blob.scan_detail or {}).get("declared_mime") if blob.scan_detail else None
         ) or "application/octet-stream"
         if session_row is None and attachment.file_size >= self._settings.attachment_multipart_threshold:
             upload_id = await self._storage.create_multipart_upload(
@@ -745,9 +801,7 @@ class AttachmentService:
             session.add(session_row)
             await session.flush()
         if session_row is not None:
-            part_count = max(
-                1, -(-attachment.file_size // session_row.part_size)
-            )  # ceil division
+            part_count = max(1, -(-attachment.file_size // session_row.part_size))  # ceil division
             batch = self._settings.attachment_multipart_part_batch
             part_urls = []
             for part_number in range(1, min(batch, part_count) + 1):
@@ -813,9 +867,7 @@ class AttachmentService:
                 select(UploadSession).where(UploadSession.attachment_id == attachment.id)
             )
             if multipart_session is not None:
-                raise ConflictError(
-                    "multipart upload must be completed via /multipart/{id}/complete"
-                )
+                raise ConflictError("multipart upload must be completed via /multipart/{id}/complete")
 
             # HEAD existence/size check ONLY — MIME sniffing and SHA-256 are the
             # quarantine worker's job (§3.3 CRITICAL: complete ≠ usable).
@@ -908,9 +960,7 @@ class AttachmentService:
             await self._storage.complete_multipart_upload(
                 blob.storage_key, upload_id=upload_session.upload_id, parts=parts
             )
-            await session.execute(
-                delete(UploadSession).where(UploadSession.id == upload_session.id)
-            )
+            await session.execute(delete(UploadSession).where(UploadSession.id == upload_session.id))
             size = await self._storage.head_size(blob.storage_key)
             if size is None or size != attachment.file_size:
                 attachment.upload_status = "failed"
@@ -1044,9 +1094,7 @@ class AttachmentService:
                 await self._storage.abort_multipart_upload(
                     blob.storage_key, upload_id=upload_session.upload_id
                 )
-                await session.execute(
-                    delete(UploadSession).where(UploadSession.id == upload_session.id)
-                )
+                await session.execute(delete(UploadSession).where(UploadSession.id == upload_session.id))
             await self._audit(
                 session,
                 workspace_id=workspace_id,
@@ -1237,9 +1285,7 @@ class AttachmentService:
             keys = blob.thumbnail_keys or {}
             key = keys.get(size)
             if key is None:
-                raise NotFoundError(
-                    "thumbnail not ready", details={"scan_status": blob.scan_status}
-                )
+                raise NotFoundError("thumbnail not ready", details={"scan_status": blob.scan_status})
             ttl = int(self._settings.attachment_download_url_ttl.total_seconds())
             url = await self._storage.presign_get(key, expires_in=ttl)
         expires_at = _iso(self._now() + self._settings.attachment_download_url_ttl)
@@ -1294,9 +1340,7 @@ class AttachmentService:
         page_limit = min(max(limit or DEFAULT_PAGE_LIMIT, 1), MAX_PAGE_LIMIT)
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            if not await self._can_read_host(
-                session, viewer, workspace_id, linked_type, linked_id
-            ):
+            if not await self._can_read_host(session, viewer, workspace_id, linked_type, linked_id):
                 raise NotFoundError(f"{linked_type} not found")
             stmt = (
                 select(Attachment, AttachmentLink)
@@ -1316,8 +1360,7 @@ class AttachmentService:
             if cursor is not None:
                 position = decode_cursor(cursor)
                 stmt = stmt.where(
-                    tuple_(AttachmentLink.position, Attachment.id)
-                    > (position.sort_value, position.id)
+                    tuple_(AttachmentLink.position, Attachment.id) > (position.sort_value, position.id)
                 )
             rows = (await session.execute(stmt.limit(page_limit + 1))).all()
             next_cursor = None
@@ -1329,9 +1372,7 @@ class AttachmentService:
             for attachment, link in rows:
                 blob = await session.get(AttachmentBlob, attachment.blob_id)
                 assert blob is not None
-                items.append(
-                    await self._render_attachment(session, attachment, blob, [link])
-                )
+                items.append(await self._render_attachment(session, attachment, blob, [link]))
         return items, next_cursor
 
     # ------------------------------------------------------------------
@@ -1366,17 +1407,27 @@ class AttachmentService:
                     select(UploadSession).where(UploadSession.attachment_id == attachment.id)
                 )
                 if upload_session is not None:
-                    await session.execute(
-                        delete(UploadSession).where(UploadSession.id == upload_session.id)
-                    )
+                    await session.execute(delete(UploadSession).where(UploadSession.id == upload_session.id))
         for key in expired_keys:  # best-effort, outside the transaction
             await self._storage.delete_object(key)
         return len(expired_keys)
 
     async def run_retention(self, *, batch: int = 500) -> int:
         """Hard-delete soft-deleted / terminal uploads past the retention window."""
+        from mesh.db.models.data_job import DataJob  # local: avoid import cycle
+
         cutoff = self._now() - self._settings.attachment_soft_delete_retention
         async with self._factory() as session, session.begin():
+            # Source attachments of live data jobs are ON DELETE RESTRICT
+            # (import-export.md §2.2 R3 — the audit / idempotent-rerun basis):
+            # exclude them so they cannot head-of-line-block the batch.
+            referenced_source = (
+                select(DataJob.id)
+                .where(DataJob.workspace_id == Attachment.workspace_id)
+                .where(DataJob.source_attachment_id == Attachment.id)
+                .correlate(Attachment)
+                .exists()
+            )
             ids = (
                 await session.scalars(
                     select(Attachment.id)
@@ -1387,6 +1438,7 @@ class AttachmentService:
                             Attachment.upload_status.in_(("failed", "expired")),
                         )
                     )
+                    .where(~referenced_source)
                     .limit(batch)
                 )
             ).all()
@@ -1427,9 +1479,7 @@ class AttachmentService:
                 keys = [blob.storage_key]
                 keys.extend((blob.thumbnail_keys or {}).values())
                 collected.append((str(blob.id), keys))
-                await session.execute(
-                    delete(AttachmentBlob).where(AttachmentBlob.id == blob.id)
-                )
+                await session.execute(delete(AttachmentBlob).where(AttachmentBlob.id == blob.id))
         for _, keys in collected:
             for key in keys:
                 await self._storage.delete_object(key)
@@ -1504,9 +1554,7 @@ class AttachmentService:
         # Owner-only operations (§5.4 属主校验): uploader == principal.
         if attachment.uploader_id != actor.id:
             raise ForbiddenError("only the upload requester can operate on this upload")
-        blob = await session.get(
-            AttachmentBlob, attachment.blob_id, with_for_update=True
-        )
+        blob = await session.get(AttachmentBlob, attachment.blob_id, with_for_update=True)
         assert blob is not None
         return attachment, blob
 
@@ -1521,9 +1569,7 @@ class AttachmentService:
             member = await session.get(Member, attachment.uploader_id)
             links = (
                 await session.scalars(
-                    select(AttachmentLink).where(
-                        AttachmentLink.attachment_id == attachment.id
-                    )
+                    select(AttachmentLink).where(AttachmentLink.attachment_id == attachment.id)
                 )
             ).all()
             rendered = await self._render_attachment(session, attachment, blob, list(links), member)

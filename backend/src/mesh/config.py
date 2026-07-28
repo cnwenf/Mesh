@@ -138,15 +138,11 @@ class Settings(BaseSettings):
     # index do not grow without bound. Pending rows are never purged. The
     # window far exceeds the relay retry budget, so the permanent-failure
     # alert fires long before a failed row is eligible for cleanup.
-    outbox_event_retention: timedelta = Field(
-        default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS)
-    )
+    outbox_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS))
     outbox_retention_interval: float = Field(default=3600.0, gt=0)
 
     # Realtime retention window (README §6.7: default 7 days, configurable).
-    realtime_event_retention: timedelta = Field(
-        default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS)
-    )
+    realtime_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS))
     realtime_retention_interval: float = Field(default=3600.0, gt=0)
     realtime_replay_page_size: int = Field(default=200, ge=1, le=1000)
     ws_ping_interval: float = Field(default=30.0, gt=0)
@@ -253,6 +249,41 @@ class Settings(BaseSettings):
     due_soon_sweep_interval: float = Field(default=900.0, gt=0)
     due_soon_horizon_hours: float = Field(default=24.0, gt=0)
 
+    # -- Data jobs module (import-export.md) ------------------------------------
+    # Rows per import batch — each batch is ONE database transaction carrying
+    # the fencing check, entity creation, ledger rows, counters/checkpoint
+    # advance, lease renewal and the progress event (§3.4 / §3.8).
+    data_job_batch_size: int = Field(default=500, ge=1, le=5000)
+    # Worker lease granted at claim and renewed at each batch commit (§3.8
+    # R3: default 5 min). Stuck jobs are reclaimed after expiry (reaper).
+    data_job_lease_ttl: timedelta = Field(default=timedelta(minutes=5), gt=0)
+    # Reaper sweep interval: lease-expired recovery + stuck-pending
+    # compensating re-enqueue (§3.8).
+    data_job_reaper_interval: float = Field(default=15.0, gt=0)
+    # A pending export (or a requested-but-unclaimed validate/run) older than
+    # this grace window is re-enqueued by the compensating sweep (§3.8 —
+    # eliminates permanently stuck jobs).
+    data_job_stuck_grace: timedelta = Field(default=timedelta(minutes=5), ge=0)
+    # Source file ceiling (streamed to scratch storage, never fully loaded;
+    # aligned with the attachment upload cap).
+    data_job_source_max_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    # Export product ceilings — estimated at create (413) and re-checked while
+    # streaming (failed export_too_large, §3.5 / §5.2).
+    data_job_export_max_rows: int = Field(default=200_000, gt=0)
+    data_job_export_max_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
+    # Inline error_report preview cap; the full detail streams into the error
+    # report attachment (§2.4 — JSONB must not bloat).
+    data_job_error_preview_max: int = Field(default=1000, ge=1)
+    # Mapping preview rows returned by validate (§3.3).
+    data_job_preview_rows: int = Field(default=10, ge=1, le=100)
+    # Create-endpoint rate limiting per user+workspace (§3.0, auth.md).
+    data_job_create_limit: int = Field(default=30, ge=1)
+    data_job_create_window_seconds: int = Field(default=60, gt=0)
+    # Crash-recovery resume cap: a deterministic poison batch that crashes on
+    # every resume is terminated (resume_limit_exceeded) instead of looping
+    # forever (T31⑤ / H2).
+    data_job_max_resumes: int = Field(default=50, ge=1)
+
     # -- Runtime module (runtime.md) ------------------------------------------
     # One-shot activation codes are short-lived (§3.1: default 15 min) and
     # stored hash-only; expiry lands in runtimes.activation_expires_at.
@@ -291,12 +322,9 @@ class Settings(BaseSettings):
     runtime_release_artifact_url: str = (
         "https://releases.mesh.example/runtime/1.0.0/mesh-runtime_1.0.0_linux_x86_64.tar.gz"
     )
-    runtime_release_sha256: str = (
-        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-    )
+    runtime_release_sha256: str = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     runtime_release_signature_url: str = (
-        "https://releases.mesh.example/runtime/1.0.0/"
-        "mesh-runtime_1.0.0_linux_x86_64.tar.gz.sig"
+        "https://releases.mesh.example/runtime/1.0.0/mesh-runtime_1.0.0_linux_x86_64.tar.gz.sig"
     )
     runtime_release_signing_key_url: str = "https://releases.mesh.example/mesh-release.pub"
 
@@ -327,9 +355,7 @@ def load_settings(**overrides: object) -> Settings:
     try:
         return Settings(**overrides)  # type: ignore[arg-type]
     except ValidationError as exc:
-        missing = tuple(
-            sorted({str(err["loc"][0]) for err in exc.errors() if err["type"] == "missing"})
-        )
+        missing = tuple(sorted({str(err["loc"][0]) for err in exc.errors() if err["type"] == "missing"}))
         raise ConfigError(missing, str(exc)) from exc
 
 

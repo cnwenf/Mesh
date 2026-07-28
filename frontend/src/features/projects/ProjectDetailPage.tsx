@@ -20,6 +20,8 @@ import {
   projectChannel,
   unarchiveProject,
 } from './api';
+import { ExportDialog } from '../data-jobs/ExportDialog';
+import { ImportWizard } from '../data-jobs/ImportWizard';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
 import { MilestonesPanel } from './MilestonesPanel';
 import { applyMilestoneFrame, applyUpdateFrame, mergeProjectHeader } from './realtime';
@@ -64,6 +66,8 @@ export function ProjectDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [healthOpen, setHealthOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
@@ -279,8 +283,44 @@ export function ProjectDetailPage(): React.JSX.Element {
           >
             {t('projects.detail.delete')}
           </Button>
+          {/* import-export.md §4.1 情境入口:导出本项目(读权限)/ 导入到本项目(写权限) */}
+          <Button
+            variant="secondary"
+            data-testid="export-project-button"
+            onClick={() => setExportOpen(true)}
+          >
+            {t('dataJobs.page.exportProject')}
+          </Button>
+          {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
+            <Button
+              variant="secondary"
+              data-testid="import-project-button"
+              onClick={() => setImportOpen(true)}
+            >
+              {t('dataJobs.page.importProject')}
+            </Button>
+          )}
         </div>
       </div>
+
+      {workspace !== null && (
+        <>
+          <ExportDialog
+            open={exportOpen}
+            onClose={() => setExportOpen(false)}
+            workspaceId={workspace.workspace_id}
+            defaultScope="project"
+            projectId={project.id}
+            filters={{ project_id: project.id }}
+          />
+          <ImportWizard
+            open={importOpen}
+            onClose={() => setImportOpen(false)}
+            workspaceId={workspace.workspace_id}
+            targetProjectId={project.id}
+          />
+        </>
+      )}
 
       <div className="mesh-members__tabs" role="tablist" aria-label={t('projects.tab.label')}>
         {TAB_KEYS.map((tab) => (

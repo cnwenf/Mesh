@@ -170,6 +170,8 @@ function attachmentFromInstantUpload(response: UploadRequestResponse, file: File
 export interface UseAttachmentUploaderOptions {
   /** 注入客户端(测试);缺省按 env.apiBaseUrl + getToken 构建。 */
   readonly client?: MeshApiClient;
+  /** 未链接到具体实体时的归属工作区(import-export.md §4.2 导入源上传)。 */
+  readonly workspaceId?: string;
 }
 
 export interface AttachmentUploader {
@@ -284,6 +286,7 @@ export function useAttachmentUploader(
           mime_type: file.type === '' ? null : file.type,
           content_hash: contentHash,
           link_to: linkTo,
+          ...(options.workspaceId !== undefined ? { workspace_id: options.workspaceId } : {}),
         });
         patchEntry(localId, { attachmentId: response.id });
 
