@@ -23,7 +23,7 @@ Contract anchors (issue.md + README §6):
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -186,10 +186,14 @@ class IssueService:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         clock: Callable[[], datetime] | None = None,
+        squad_assignee_watcher: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self._factory = session_factory
         self._clock = clock
         self._projects = ProjectService(session_factory, clock=clock)
+        # squad.md §2.5: when an issue's assignee moves away from its active
+        # squad leader, the squad module cancels that assignment (same txn).
+        self._squad_assignee_watcher = squad_assignee_watcher
 
     # ------------------------------------------------------------------
     # rendering
@@ -1226,6 +1230,18 @@ class IssueService:
                     previous_assignee_id=uuid.UUID(previous) if previous else None,
                     trigger_event_id=realtime_event.id,
                 )
+                # squad.md §2.5 (issue_reassigned): if the issue moved away from
+                # its active squad leader, cancel that squad assignment in the
+                # SAME transaction. Runs in-process (not via outbox) so the
+                # leader-change path's same-txn updates stay consistent.
+                if self._squad_assignee_watcher is not None:
+                    await self._squad_assignee_watcher(
+                        session,
+                        workspace_id=workspace_id,
+                        issue_id=updated.id,
+                        previous_assignee_id=uuid.UUID(previous) if previous else None,
+                        new_assignee_id=updated.assignee_id,
+                    )
             await self._audit(
                 session,
                 workspace_id=workspace_id,

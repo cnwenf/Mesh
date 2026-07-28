@@ -553,8 +553,9 @@ class Approval(Base):
     """Unified approval entity (README §6.10).
 
     ``tool_call`` subjects (high-risk tool confirmation) reference
-    ``task_executions``; ``autopilot_action`` / ``squad_plan`` subject columns
-    exist bare until their owning modules land the composite FKs.
+    ``task_executions``; ``squad_plan`` subjects reference ``squad_tasks``
+    (composite FK landed by the squad module, migration 0021); the
+    ``autopilot_action`` subject column stays bare until that module lands.
     """
 
     __tablename__ = "approvals"
@@ -563,6 +564,14 @@ class Approval(Base):
             ["workspace_id", "subject_execution_id"],
             ["task_executions.workspace_id", "task_executions.id"],
             ondelete="CASCADE",
+        ),
+        # Deferred composite FK landed by the squad module (migration 0021,
+        # README §6.10): squad_plan approvals reference squad_tasks physically.
+        ForeignKeyConstraint(
+            ["workspace_id", "subject_task_id"],
+            ["squad_tasks.workspace_id", "squad_tasks.id"],
+            ondelete="CASCADE",
+            name="approvals_subject_task_id_squad_tasks",
         ),
         ForeignKeyConstraint(
             ["workspace_id", "requested_by_member_id"],

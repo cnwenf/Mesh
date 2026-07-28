@@ -202,6 +202,20 @@ async def _sync_execution_status(
         await _emit_terminal_notification(
             session, workspace_id=execution.workspace_id, execution=execution
         )
+        # Domain hook (squad.md §4.4): orchestration layers observe the terminal
+        # state. The squad module correlates via task_spec.squad_task_id and maps
+        # completed→done / failed|timeout|cancelled→failed on its subtask.
+        await emit_event(
+            session,
+            workspace_id=execution.workspace_id,
+            event_type="execution.finished",
+            payload={
+                "execution_id": str(execution.id),
+                "status": new_status,
+                "failure_reason": execution.failure_reason,
+            },
+            idempotency_key=f"execution:{execution.id}:finished",
+        )
     return new_status
 
 

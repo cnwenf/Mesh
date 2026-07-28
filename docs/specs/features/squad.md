@@ -104,6 +104,7 @@ issue 责任主体:把 issue 分派给小队 ⇒ 同事务设 issues.assignee_id
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | — | 隔离(所有查询强制带) |
 | `name` | TEXT | NOT NULL,CHECK (char_length BETWEEN 1 AND 80) | — | 小队名称 |
 | `description` | TEXT | NULL | NULL | 目标 / 职责描述 |
+| `instructions` | TEXT | NULL | NULL | **leader 持久指令**:leader 每次接管任务时读取的常驻方针(区别于单次任务 brief 与置顶上下文消息);创建/编辑小队时设置,随 `render_squad` 返回 |
 | `avatar_url` | TEXT | NULL | NULL | 头像地址 |
 | `kind` | TEXT | NOT NULL,CHECK IN ('standing','adhoc','task_scoped') | `'standing'` | 形态:常设 / 临时 / 任务级 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','archived') | `'active'` | 状态;归档=软解散 |
@@ -258,7 +259,7 @@ issue 责任主体:把 issue 分派给小队 ⇒ 同事务设 issues.assignee_id
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | 活动只增不改 |
 | `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | 约定列 |
 
-**`action` 枚举**:`squad_created` / `squad_updated` / `squad_archived` / `squad_restored` / `member_added` / `member_removed` / `role_changed` / `task_received` / `decompose_started` / `plan_submitted` / `plan_approved` / `plan_rejected` / `task_decomposed` / `task_dispatched` / `task_started` / `task_blocked` / `task_finished` / `task_failed` / `task_cancelled` / `task_aggregated` / `message_sent`(仅关键消息可选入时间线)。
+**`action` 枚举**:`squad_created` / `squad_updated` / `squad_archived` / `squad_restored` / `member_added` / `member_removed` / `role_changed` / `task_received` / `decompose_started` / `plan_submitted` / `plan_approved` / `plan_rejected` / `task_decomposed` / `task_dispatched` / `task_started` / `task_blocked` / `task_finished` / `task_failed` / `task_cancelled` / `task_aggregated` / `message_sent`(仅关键消息可选入时间线)/ `leader_evaluated`(leader 触发-评估闭环结果,payload `result ∈ {action, no_action, failed}`,见 §4.4 注)。
 
 ### 2.9 索引与约束
 
@@ -337,7 +338,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 
 | 方法 | 路径 | 说明 | 最低角色 |
 |------|------|------|----------|
-| GET | `/workspaces/{ws}/squads` | 列出小队(`status`/`kind`/`q`) | 成员 |
+| GET | `/workspaces/{ws}/squads` | 列出小队(`status`/`kind`/`q`;`q` 为字面子串匹配,通配符 `%`/`_` 转义;每项响应含 `member_preview`(至多 8 名在队成员快照 `{member_id, member_type, name, role}`,供列表头像墙) | 成员 |
 | POST | `/workspaces/{ws}/squads` | 创建小队(可带初始成员) | 成员 |
 | GET | `/workspaces/{ws}/squads/{squad_id}` | 详情(含成员摘要、活跃任务计数) | 小队成员 / observer / admin |
 | PATCH | `/workspaces/{ws}/squads/{squad_id}` | 更新名称/描述/头像/编排开关 | 小队管理权限 / admin |
@@ -357,6 +358,8 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 | POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/plan/approve` | 人类批准拆解方案。**`POST /api/v1/approvals/{id}/approve` 的薄封装**:定位该任务的待决 `approvals`(`subject_task_id=task_id`,`subject_type='squad_plan'`)后转发(README §6.10);保留便捷路径 | 人类成员 / observer / admin |
 | POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/plan/reject` | 驳回方案(leader 重拆)。**`POST /api/v1/approvals/{id}/reject` 的薄封装**(README §6.10) | 人类成员 / observer / admin |
 | POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/dispatch` | 分派已就绪的子任务 | orchestrator agent / admin |
+| PATCH | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/status` | 人工改任务状态(看板拖拽落点,§4.2;body `{status, result_summary?}`;服务端按 §4.4 状态机校验,非法迁移 409 `conflict`;done/failed 触发依赖解锁与父任务聚合) | 小队成员 / observer / admin |
+| GET | `/workspaces/{ws}/squads/assignments/by-issue/{issue_id}` | 查询某 issue 当前的 active 小队分派(§2.5;返回 `{assignment_id, squad_id, squad_name, root_task_id, leader 快照}` 或 `data: null`;issue 头部单一责任主体呈现用,§4.3-2) | 成员 |
 | POST | `/workspaces/{ws}/squads/{squad_id}/tasks/{task_id}/cancel` | 取消(级联取消未完成子任务) | 发起人 / observer / admin |
 | GET | `/workspaces/{ws}/squads/{squad_id}/messages` | 列出消息(`task_id`/`kind`) | 小队成员 |
 | POST | `/workspaces/{ws}/squads/{squad_id}/messages` | 发送消息 | 小队成员 |
@@ -370,6 +373,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 ```json
 // Request
 { "name": "支付重构小队", "description": "负责支付链路的重构与回归验证",
+  "instructions": "所有改动必须附回归验证结论;涉及资金计算一律用 decimal。",
   "kind": "standing", "leader_mode": "single",
   "require_plan_approval": true, "max_decompose_depth": 2,
   "members": [
@@ -384,6 +388,10 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
     "description": "负责支付链路的重构与回归验证", "kind": "standing", "status": "active",
     "leader_mode": "single", "primary_leader_id": "mem-leader-01",
     "require_plan_approval": true, "max_decompose_depth": 2, "member_count": 4,
+    "member_preview": [
+      {"member_type": "agent", "member_id": "mem-leader-01", "name": "orchestrator", "role": "leader"},
+      {"member_type": "agent", "member_id": "mem-coder-02", "name": "coder", "role": "member"}
+    ],
     "leaders": [{"member_type": "agent", "member_id": "mem-leader-01", "name": "orchestrator"}],
     "created_at": "2026-07-24T09:00:00Z", "updated_at": "2026-07-24T09:00:00Z" } }
 ```
@@ -627,6 +635,7 @@ pending / decomposing / in_progress ──人为叫停──► cancelled(级联
 done / failed / cancelled ──► [*]
 ```
 > **计划审批统一(README §6.10)**:`awaiting_plan_approval` ↔ 统一 `approvals` 实体(`subject_type='squad_plan'`,经 `approvals.subject_task_id` 关联根任务);approve/reject 经 `POST /api/v1/approvals/{id}/approve|reject`(`plan/approve|reject` 为薄封装),approval `action_summary` 含方案摘要/影响范围/子任务数/过期时间;**审批过期 → 根任务 `failed(approval_expired)` + 通知 leader 与发起人**(README §9 T8)。
+> **leader 触发-评估闭环**:分派唤醒 leader 运行后,leader 先评估任务再决定动作,其运行终态落到时间线 `leader_evaluated`,payload `result` 三值:① `action` —— 已产出拆解(存在子任务),流程继续;② `no_action` —— 评估后认为无需动作(运行成功但零拆解),任务直接 `done`(经 `decomposing → done`,result_summary 记评估结论),走完成回写;③ `failed` —— 评估/拆解运行失败且无产出,任务 `failed`。三值均记 `squad_activity` 供追溯「leader 当时做了什么」。
 > **改派级联(经 `issue_squad_assignments` 判定,§1.2 S4 / §2.5,README §6.9 末段)**:小队分派的唯一权威身份是 `issue_squad_assignments` 的 active 行(而非 `issues.assignee_id` 值)。**当该 issue 的 active 分派行被取消时,服务端级联取消对应根 `squad_tasks`**(及其未完成子任务、相关 agent 执行),已完成结果保留。两种触发:① **改派给其它小队**(含同 leader 跨 squad —— 判定按分派行,assignee 值即使不变也**不为 no-op**,旧分派/旧根任务取消、新分派建立);② **issue 被 PATCH 改派给非小队成员**(assignee 离开 active 分派的 leader,`cancel_reason='issue_reassigned'`)。分派建立/取消均广播 **`squad_assignment.changed`**(README §6.7 事件词汇注册表)。
 > **leader 更换 / 离队协议(§2.5)**:`squads.primary_leader_id` 变更 → **同事务**把该小队所有 active 分派行的 `leader_member_id` 与对应 `issues.assignee_id` 更新为新 leader + 写 `squad_activity` 审计 + 广播 `squad_assignment.changed`,**根任务不取消**(承接小队未变);leader 离队且无替补 → active 分派保留但根任务置 `blocked`(`failure_reason='leader_lost'`)+ 通知发起人与管理员,补上 leader 后解除 blocked。
 
@@ -665,6 +674,8 @@ pending / dispatching ──父任务取消──► cancelled
 - [ ] 前置任务 done 时自动解锁后置子任务(全部前置 done 且 stage 允许 → `pending→dispatching`)。
 - [ ] **计划审批统一(README §6.10 / §9 T8)**:`require_plan_approval=true` 时拆解后在统一 `approvals` 建 `subject_type='squad_plan'` 行(经 `approvals.subject_task_id` **复合 FK `(workspace_id, subject_task_id) → squad_tasks(workspace_id, id)`** 关联根任务,R2 已升为物理复合 FK),根任务停在 `awaiting_plan_approval`;**同一根任务仅一个 pending 审批**(README §6.10 部分唯一索引 `uq_approvals_pending_task`,重复发起取既有 pending 返回);`plan/approve|reject` 为 `POST /approvals/{id}/approve|reject` 的薄封装,批准进分派、驳回 leader 重拆;approval `action_summary` 含方案摘要/影响范围/子任务数/过期时间;**审批过期 → 根任务 `failed(approval_expired)` + 通知**,过期后 approve → no-op/`410`。
 - [ ] 每个 active 小队至少一个 leader;变更后无 leader 返回 422 `no_leader`;分派非成员返回 422 `assignee_not_member`。
+- [ ] **leader 触发-评估闭环**:orchestrator 运行终态记 `leader_evaluated` 时间线(result ∈ action/no_action/failed);`no_action`(成功零拆解)→ 任务经 `decomposing → done` 完成并回写;`failed`(失败零拆解)→ 任务 failed。
+- [ ] **leader 汇总(§S8)**:全部直接子任务终态 → 父任务 `aggregating`;**agent leader 先经一次 summary 运行**(`squad_role='aggregator'` 唤醒)再结算,人类 leader 同步结算;根任务 `done` 后其 result_summary 由 leader **回写父 issue**(系统经 leader 身份发评论,幂等);父任务非根则继续向上聚合。
 - [ ] 取消级联取消未完成子任务、终止相关 agent 执行(`task_executions`),已完成结果保留。
 - [ ] **执行词汇对齐(README §6.4)**:agent 成员执行落地为 `task_executions`(经 `squad_tasks.execution_id` 复合关联),状态遵循全系统统一词汇 `queued→claimed→running→completed|failed|timeout|cancelled`;squad_task 观察 execution 终态映射 `done`/`failed`。
 - [ ] **多租户复合 FK(README §6.2 / §9 T1)**:`squads`/`squad_tasks` 建 `UNIQUE(workspace_id, id)`;member FK(`member_id`/`primary_leader_id`/`creator_id`/`orchestrator_id`/`assignee_id`/`sender_id`/`recipient_id`/`actor_id`/`added_by_id`)→ `members(workspace_id,id)`、`squad_id` → `squads(workspace_id,id)`、`issue_id` → `issues(workspace_id,id)`、parent/root/依赖 → `squad_tasks(workspace_id,id)` 均为复合 FK;构造跨 workspace 复合 FK 插入被数据库约束拒绝。
@@ -682,7 +693,7 @@ pending / dispatching ──父任务取消──► cancelled
 
 - [ ] **运行中改成员护栏**:不可移除持有 in_progress 子任务的 member(返回 422 `member_has_active_task`);新增 member 仅对后续分派生效,不追溯改写已分派任务。
 - [ ] **分派并发(R2,§2.5)**:同一 issue 的并发双派由 `uq_issue_squad_active` 部分唯一索引兜底——**恰一条 active 分派成功**,另一条被唯一约束拒绝(重试或返回 `409 conflict`),数据库层杜绝"一 issue 两条 active 分派"。
-- [ ] **防越权**:agent 不能自改所属小队成员构成(返回 403);leader 拆解/分派端点校验"调用 agent 确为该任务 orchestrator"。
+- [ ] **防越权**:agent 不能自改所属小队成员构成(返回 403);leader 拆解/分派端点校验"调用 agent 确为该任务 orchestrator"(非该任务 orchestrator 且非 admin/owner 调用 `subtasks`/`dispatch` 返回 403,仅有 workspace 级 `agent:trigger` 权限不足)。
 - [ ] **防回环**:leader↔member 的指令/汇报抑制"触发自身再运行"的通知;多 leader 模式设主 leader 收口汇总,避免分派冲突;默认推荐单 leader。
 - [ ] **频率上限**:agent runtime 的拆解/分派/汇报端点受限流约束,超限 429 + `Retry-After`,防 leader 高频刷派。
 - [ ] 状态迁移服务端集中校验,非法迁移返回 409;状态切换/分派/角色变更/叫停均写 auth.md 的 append-only 审计日志(行为主体经 `actor_kind ∈ {member,system}` + `actor_id → members.id` 记录,人/agent 由 JOIN `members.member_type` 解析,**不存 human/agent 判别列**)。

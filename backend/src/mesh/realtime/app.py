@@ -25,6 +25,7 @@ from mesh.realtime.auth import (
 )
 from mesh.realtime.gateway import realtime_ws_endpoint
 from mesh.runtime.channels import register_execution_checkers
+from mesh.squad.channels import register_squad_checkers
 
 
 def build_authorizer(session_factory) -> ChannelAuthorizer:
@@ -71,6 +72,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
     register_execution_checkers(app.state.authorizer, session_factory)
+    register_squad_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)

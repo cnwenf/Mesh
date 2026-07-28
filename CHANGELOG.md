@@ -3,8 +3,55 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.16.1] - 2026-07-28
+## [0.16.3] - 2026-07-28
+squad 模块验收重修(MES-65,B1–B15 全量收口):安全鉴权、状态机守卫、SSE 断点重放、leader 汇总回写、前端看板/分派/表单补齐。
 
+### Security
+
+- **orchestrator 身份校验(§3.4/§5.3)**:`subtasks`/`dispatch` 不再仅凭 workspace 级 `agent:trigger` RBAC(该权限全体 member 皆有)——服务端校验调用方为该任务 orchestrator 或 admin/owner,否则 403 `forbidden`,堵住任意普通成员拆解/分派任意小队任务的越权路径。
+- **搜索通配符转义(同 MES-57 L5 族)**:`list_squads` 的 `q` 参数经 `escape_like` 转义 `%`/`_`,字面子串匹配,杜绝通配符注入。
+
+### Fixed
+
+- **model↔migration 漂移门禁转绿**:`squads`/`squad_tasks`/`issue_squad_assignments` 的 `(workspace_id, id)` 由 `Index(unique=True)` 改为 `UniqueConstraint`(与 0020 的 `CONSTRAINT … UNIQUE` DDL 一致);`approvals.subject_task_id` 复合 FK(0020 ALTER 落地)补入 `Approval` 模型(`approvals_subject_task_id_squad_tasks`,ON DELETE CASCADE)。`test_model_migration_drift.py` 通过。
+- **状态机守卫生效(§4.4)**:`assert_transition` 接入全部状态写入路径(create_subtasks 的 leader 接管 `pending→decomposing` 跳板与方案提交、子任务分派 `pending→dispatching→in_progress` 双跳、人工改状态、取消、聚合、leader 离队/复归);API 侧非法迁移 409 `conflict`(对终态任务再分派/取消/拖拽皆拒)。
+- **leader 复归解 blocked(§2.5/§5.1⑤)**:补上 leader 后同事务扫描 `blocked(failure_reason='leader_lost')` 根任务解除 → `in_progress` + 清 failure_reason + 重唤 leader + 续派就绪子任务 + 补做滞留聚合;`_reconcile_primary_leader`(add_members/change_role 触发)改走 `change_primary_leader_tx` 统一传播路径(active 分派行 `leader_member_id` + `issues.assignee_id` + `squad_assignment.changed` 广播),消除「仅显式 PATCH 换 leader 才传播」的缺口。
+- **SSE 编排流(§3.2/§3.5/§5.4)**:由轮询合成帧改为**持久帧重放**——五类事件(`task.status`/`subtask.created`/`subtask.assigned`/`plan.submitted`/`task.aggregated`)经 outbox → projector 落 `realtime_events` 的 `squad_task:{id}` 频道(频道内单调 seq),GET 流按 `Last-Event-ID` 以 seq 重放缺口:跨进程(worker 发、API 读)无丢失无重复;终态且缓冲耗尽后关流,静默期 keepalive。
+- **错误码语义(§3.3)**:未知依赖引用/依赖任务不存在改报 400 `validation_error`(原误报 `dependency_cycle`,后者仅保留给真实成环与自依赖);`plan/approve|reject` body 改为可选(§6.10 comment 可空,空 POST 即通过)。
+- **消息/时间线游标分页(§3.4)**:`list_messages`/`list_activity` 由 `next_cursor` 恒 null 改为 `(created_at, id)` keyset 真分页。
+- **人工 leader 汇总回写收敛(C1,§S8/§4.3-7)**:`move_task_status` 同步聚合路径(人工 leader,无 `execution.finished` relay)在提交后以 leader 身份把聚合总结回写父 issue 评论,与 relay(agent aggregator)路径**复用同一幂等键** `squad-task:{root}:summary-writeback`——两路径先落者生效、后者 no-op,父 issue 永无重复评论;回写为 best-effort(失败仅记录,不阻断状态迁移)。补单测 + 真实 e2e(人工队完成后断言父 issue 出现总结评论)。
+
+### Added
+
+- **leader 汇总运行 + 父 issue 回写(§S8/§4.3-7)**:全部直接子任务终态 → 父任务 `aggregating`;agent leader 经一次 `squad_role='aggregator'` 汇总运行再结算(运行失败不滞留,回落子任务摘要拼接),人类 leader 同步结算;根任务 `done` 后由 relay 以 leader 身份向父 issue 回写汇总评论(幂等键去重)。
+- **leader 触发-评估闭环(§5.1)**:orchestrator 运行终态记 `leader_evaluated` 时间线,`result ∈ {action, no_action, failed}`;`no_action`(成功零拆解)→ 任务 `decomposing→done` 完成回写,`failed` → 任务 failed。
+- **小队 `instructions` 字段(§2.2,迁移 0022)**:leader 持久指令,创建/编辑可设、随渲染返回。
+- **`member_preview`(§3.1)**:小队渲染含至多 8 名在队成员快照(`{member_id, member_type, name, role}`),供列表头像墙。
+- **人工改任务状态端点(§4.2 看板落点)**:`PATCH …/tasks/{task_id}/status`(小队成员/observer/admin;状态机校验 409;done/failed 触发依赖解锁与父任务聚合)。
+- **issue→小队分派查询端点(§4.3-2)**:`GET …/squads/assignments/by-issue/{issue_id}`(active 分派 + leader 快照,issue 头部单一责任主体呈现用)。
+- **前端**:任务详情页 `[拆解树 | 看板]` 切换(按状态分列拖拽改状态,409 收敛)、issue 详情页「分派给小队」入口与单一责任主体头部徽章、新建/编辑小队表单(成员混排选人 + 逐个设角色 + leader 闸门 + leader_mode + instructions + 头像,`updateSquad` 接线)、任务详情 SSE 进度流消费(轮询降级保留)、卡片成员头像墙。
+- **Spec 同步**:squad.md 补 `instructions`/`leader_evaluated`/`member_preview`/两端点/评估闭环与汇总验收项;README §6.7 注册表登记五个 SSE 流帧事件。
+- **测试**:新增硬化单测(orchestrator 403、leader 复归解 blocked、终态冲突 409、汇总回写幂等、改角色传播、通配符转义与游标分页、无 body 审批、instructions/member_preview/leader_evaluated);e2e 补「非 orchestrator 403」「leader 复归解 blocked 同事务传播」「无 body 批准经 relay」三条真实起服断言。
+
+## [0.16.2] - 2026-07-28
+
+
+阶段 7 智能体层 A:squad 小队编排模块全功能实现(MES-65,squad.md 五章)。多智能体编排单元——leader 拆解、分派、汇总闭环;`issue_squad_assignments` 唯一 active 分派身份(§2.5/T23)、统一计划审批(§6.10/T8)、依赖 DAG 环检测、执行终态观察与父任务聚合。红线 e2e T23 + 审批流 + DAG 成环真实起服 + 真实 worker relay 实测全绿。
+
+### Added
+
+- **数据模型(squad.md §2,迁移 0021,链于 skill 0020 之后)**:七张租户表——`squads`(形态 standing/adhoc/task_scoped、单多 leader、`require_plan_approval` 干预开关、`max_decompose_depth` 1–4、软解散/软删除)、`squad_members`(leader/member/observer 三角色,`left_at` 软删除保留历史,在队 `(squad_id, member_id)` 部分唯一)、`squad_tasks`(编排核心:拆解树自引用 `parent_task_id` + 冗余 `root_task_id` 加速整树聚合、十态状态机 §4.4、`execution_id` 复合关联 `task_executions`、`stage` 粗粒度并行批次)、`issue_squad_assignments`(**唯一 active 分派身份**:部分唯一索引 `uq_issue_squad_active` 保证每 issue 至多一条 active、并发双派恰一条成功;`leader_member_id` 分派时快照;`cancel_reason` reassigned/leader_lost/issue_reassigned/done;active→cancelled/completed 历史行永久保留)、`squad_task_dependencies`(依赖 DAG 独立关系表,`task_id <> depends_on_task_id` CHECK + `(task_id, depends_on_task_id)` 唯一)、`squad_messages`(群聊式,指令/汇报/闲聊/系统/上下文,`kind='system'` 发送者可空)、`squad_activity`(只增不改协作时间线/审计,`actor_kind ∈ {member,system}` 系统主体 NULL FK);§2.9 全部索引 + fail-closed RLS + 复合 FK 同租户(README §6.2);**存储层零 `*_type`/`*_kind` 判别列**(README §6.1,人类/agent 一律 JOIN `members.member_type`,API 仅携带计算快照);`approvals.subject_task_id` **延迟复合 FK 落地**(→ `squad_tasks(workspace_id, id)`,README §6.10 物理外键,0019 预留列收口)。
+- **独占 assignee 模型 + 唯一分派身份(§1.2 S4 / §2.5,T23)**:把 issue 分派给小队 = 同一事务设 `issues.assignee_id = squads.primary_leader_id`(issue 头部单一责任主体)+ 建唯一 active `issue_squad_assignments` 行 + 建根 `squad_tasks`(`root_task_id` 双向回填)+ 唤醒 leader;无 leader 422 `squad_no_leader`(不改 issue/不建分派/不建根任务)。**改派按分派行判定而非 assignee 值**:同 leader 跨小队改派**永不为 no-op**(取消旧分派行 + 级联取消旧根任务及未完成子任务、建新分派);仅重复派给**同一小队**且 active 已存在才为 no-op(返回既有分派与根任务);并发双派由部分唯一索引兜住(恰一条成功,冲突 409)。**leader 更换**同事务传播该小队全部 active 分派行 `leader_member_id` 与对应 `issues.assignee_id` + 广播 `squad_assignment.changed`、根任务不取消;**leader 离队无替补** → active 分派保留但根任务 `blocked(failure_reason='leader_lost')` + 通知发起人与管理员,补上 leader 后解除。issue 被 PATCH 改派给非小队成员(经 `IssueService` 同事务 watcher)→ 取消 active 分派(`cancel_reason='issue_reassigned'`)+ 级联根任务。
+- **编排闭环(§4.4)**:leader 拆解 `POST .../tasks/{id}/subtasks`(批量建子任务 + `depends_on` 支持批内标题/`temp_ref`/既有 `task_id` 解析;递归 CTE 环检测 + `pg_advisory_xact_lock` 树级串行化,并发成环恰一被拒 `dependency_cycle` T12;越层 `decompose_depth_exceeded`;非成员 `assignee_not_member`)→ `require_plan_approval` 命中即**统一计划审批**(建 `subject_type='squad_plan'` 审批、根任务 `awaiting_plan_approval`,同根任务单 pending;approve/reject 为 `POST /approvals/{id}/approve|reject` 薄封装,经 outbox `squad.plan_decided` 由 relay 落根任务流转;reaper 过期 → 根任务 `failed(approval_expired)` + 通知 T8)→ 分派(依赖全 `done` + stage 门控自动解锁 `pending→dispatching→in_progress`;agent member 经统一编排入口入队 `task_executions` 并冻结 §6.11 快照、human member 通知)→ **执行终态观察**(`execution.finished` outbox → completed→`done` / failed·timeout→`failed`,级联解锁后置 + 父任务全终态后聚合 `aggregating→done|failed`)→ 根任务终态回写分派 `completed` + 通知发起人。取消级联取消未完成子任务并终止相关 agent 执行(queued→cancelled、claimed/running→cancelling),已完成结果保留。
+- **接口(§3.1–§3.5)**:REST 全套(小队 CRUD/归档恢复/成员增删改角色/任务树/单任务/状态/分派/`dispatch`/`cancel`/计划审批 approve·reject/消息收发/协作时间线;§6.14 包络·游标分页·写限流 + leader 拆解分派独立限流桶;§3.3 具名错误码;`squad:{id}` 频道级订阅鉴权 API/网关双注册);**SSE 编排进度流**(§6.8 GET 流,EventSource 兼容 + `Last-Event-ID` 续订,`task.status` 帧,非 POST SSE);`squad.updated`/`squad.archived`/`squad_member.changed`/`squad_task.status_changed`/`squad_activity.created`/`squad_message.created`/`squad_assignment.changed` 全经 outbox → projector 唯一路径(§6.7 注册表既有词汇,零漂移)。
+- **前端(§4)**:小队列表页(搜索/形态/状态筛选 + 新建向导 + 卡片成员墙/状态点/进行中任务计数)、小队详情页(成员管理 pane/当前任务/协作时间线按 action 过滤/消息区 kind 分 tab + composer,`squad:{id}` 实时刷新)、任务详情页(状态 + 进度条 + 审批横幅 approve/reject + 拆解树视图含 `blocked_by` + 取消,非终态轮询 status);`nav.squads` 入口 + 路由;i18n 全外部化(zh-CN + en 键对齐)。
+- **测试**:后端单元测试(squad 模块 ≥88% 分支覆盖,服务/路由/relay/频道/SSE 全路径)+ 真实 e2e(真实 uvicorn API + 真实 worker 进程):T23 唯一身份(S1→S2 改派级联取消 + 重复 no-op + leader 更换同事务 + leader 离队 blocked)、§6.10 审批流(approve → dispatching 经真实 relay)、DAG 成环 HTTP 拒绝、跨 workspace 404;共享模块(registry/approvals/reaper/attempts/agent-triggers/issue-service)既有测试 107 例回归全绿。
+
+### Notes
+
+- 与并行线(autopilot / chat-session)表集合不相交;`approvals` 表由 runtime(0019)创建、本模块以延迟复合 FK 收口 `squad_plan` 主题,不重复建表。
+
+## [0.16.1] - 2026-07-28
 MES-63 验收第 1 轮打回整改(Mesh 验收员独立核验 2 CRITICAL 安全绕过 + 1 CRITICAL 核心 UI 缺失 + HIGH/MEDIUM 全清单)。每条配「先失败的回归用例」。
 
 ### Fixed / Added(安全 + 核心能力)
@@ -35,6 +82,7 @@ MES-63 验收第 1 轮打回整改(Mesh 验收员独立核验 2 CRITICAL 安全�
 - **验收第 2 轮 CRITICAL(rebase 合并回归)**:重整分支时以旧基线覆盖 `config.py`/`api/app.py`/`workers/main.py`/`db/models/__init__.py`,丢失 main 新增的 21 个 Settings 字段(runtime / comment-inbox)与对应接线,API 进程 `AttributeError` 无法启动;本轮完整合入 `origin/main`(含 MES-62 runtime v0.15.0),逐文件冲突解决保留双方全量接线(runtime 路由/消费端/模型 + skill 路由/resolver/模型),技能迁移避让重编号 0019 → **`0020_skill`**(`down_revision="0019"`, 全新库 0001→0020 单 head 链),i18n 目录键集与 main 取并集(1383 键,双语 parity)。
 
 ## [0.16.0] - 2026-07-28
+
 
 阶段 6 智能体层 C:skill 模块全功能实现(MES-63,skill.md 五章)。「定义—版本—安装—绑定」四层解耦、不可变版本快照、来源信任分级与 SSRF 防护下的导入审批流水线、agent 绑定与 §6.11 入队快照联动。
 

@@ -59,7 +59,8 @@ def upgrade() -> None:
           workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           project_id   UUID NULL,
           name         TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 50),
-          category     TEXT NOT NULL CHECK (category IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled')),
+          category     TEXT NOT NULL CHECK (category IN
+            ('backlog','todo','in_progress','in_review','blocked','done','cancelled')),
           color        TEXT NULL,
           position     REAL NOT NULL DEFAULT 0,
           is_default   BOOLEAN NOT NULL DEFAULT false,
@@ -91,7 +92,8 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE INDEX idx_issue_statuses_scope
-          ON issue_statuses(workspace_id, COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), category)
+          ON issue_statuses(workspace_id,
+            COALESCE(project_id,'00000000-0000-0000-0000-000000000000'), category)
         """
     )
 
@@ -108,8 +110,10 @@ def upgrade() -> None:
           title                    TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 255),
           description              TEXT NULL,
           status_id                UUID NOT NULL,
-          state_category           TEXT NOT NULL CHECK (state_category IN ('backlog','todo','in_progress','in_review','blocked','done','cancelled')),
-          priority                 TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('none','low','medium','high','urgent')),
+          state_category           TEXT NOT NULL CHECK (state_category IN
+            ('backlog','todo','in_progress','in_review','blocked','done','cancelled')),
+          priority                 TEXT NOT NULL DEFAULT 'none' CHECK (priority IN
+            ('none','low','medium','high','urgent')),
           assignee_id              UUID NULL,
           reporter_id              UUID NULL,
           estimate                 NUMERIC NULL,
@@ -207,7 +211,8 @@ def upgrade() -> None:
           workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           issue_id      UUID NOT NULL,
           depends_on_id UUID NOT NULL,
-          type          TEXT NOT NULL DEFAULT 'relates_to' CHECK (type IN ('blocks','blocked_by','relates_to','duplicates')),
+          type          TEXT NOT NULL DEFAULT 'relates_to' CHECK (type IN
+            ('blocks','blocked_by','relates_to','duplicates')),
           created_by    UUID NULL,
           created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
           CHECK (issue_id <> depends_on_id),

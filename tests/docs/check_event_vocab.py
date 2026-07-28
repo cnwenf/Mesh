@@ -38,10 +38,12 @@ OUTBOX_EVENT_TYPES = frozenset(
         "issue.assigned",  # §6.6/§7/agent.md §3.3:分派领域事件(outbox event_type)
         "issue.status_changed",  # autopilot.md §3.x:issue 状态变更 outbox event_type(autopilot 事件驱动触发源)
         "execution.enqueue",  # §6.6:执行入队 outbox event_type
+        "execution.finished",  # squad.md §4.4:执行终态观察 outbox event_type(squad_task 映射 done/failed)
         "notification.fanout",  # §6.6:通知 fan-out outbox event_type
         "attachment.scan_requested",  # attachment.md §3.x:移交隔离区扫描 outbox event_type
         "data_job.enqueue",  # import-export.md §3.8:数据作业入队
         "data_job.resume",  # import-export.md §3.8:数据作业恢复重投
+        "squad.plan_decided",  # squad.md §6.10:计划审批决议 outbox event_type(approve/reject/expired → 根任务流转)
     }
 )
 

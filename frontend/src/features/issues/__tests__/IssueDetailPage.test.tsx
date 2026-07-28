@@ -219,10 +219,20 @@ function isAttachmentListCall(url: string, init?: RequestInit): boolean {
   return url.endsWith('/attachments') && (init?.method ?? 'GET') === 'GET';
 }
 
+/** 小队分派查询 GET(§4.3-2):挂载即发,与详情并行,到达顺序不确定。 */
+function isAssignmentCall(url: string, init?: RequestInit): boolean {
+  return url.includes('/squads/assignments/by-issue/') && (init?.method ?? 'GET') === 'GET';
+}
+
+/** 默认无活跃小队分派(data:null);分派相关测试自带专用桩,不经此 helper。 */
+function assignmentEmpty(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: null } });
+}
+
 /**
- * URL 感知的顺序桩:附件列表请求恒定回空页、**不消耗队列**(消除与并行详情
- * 请求的到达顺序竞争 —— 盲队列在附件 fetch 插队时会整体错位,CI 上间歇红);
- * 其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
+ * URL 感知的顺序桩:附件列表 / 小队分派查询恒定回固定响应、**不消耗队列**
+ * (消除与并行详情请求的到达顺序竞争 —— 盲队列在这些 fetch 插队时会整体错位,
+ * CI 上间歇红);其余请求按顺序消耗响应,超出后复用最后一个(与 stubFetch 语义一致)。
  */
 function detailStub(...responses: Response[]): FetchStub {
   const calls: FetchStub['calls'] = [];
@@ -231,6 +241,7 @@ function detailStub(...responses: Response[]): FetchStub {
     const url = String(input);
     calls.push({ url, init });
     if (isAttachmentListCall(url, init)) return attachmentsEmpty();
+    if (isAssignmentCall(url, init)) return assignmentEmpty();
     const response = responses[Math.min(index, responses.length - 1)];
     index += 1;
     return response;

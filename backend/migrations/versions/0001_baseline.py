@@ -84,7 +84,8 @@ def upgrade() -> None:
           published_at  TIMESTAMPTZ NULL,
           UNIQUE (channel, seq),
           UNIQUE (outbox_event_id),
-          FOREIGN KEY (workspace_id, channel) REFERENCES realtime_channels(workspace_id, channel) ON DELETE CASCADE
+          FOREIGN KEY (workspace_id, channel)
+            REFERENCES realtime_channels(workspace_id, channel) ON DELETE CASCADE
         )
         """
     )

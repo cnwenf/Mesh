@@ -35,11 +35,16 @@ from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
+from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler
 from mesh.runtime.reaper import runtime_reaper_loop
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportSettings, skill_import_sweep_loop
 from mesh.skill.resolvers import make_matching_resolver
+from mesh.squad.relay import (
+    make_squad_execution_finished_handler,
+    squad_plan_decided_handler,
+)
 from mesh.workers.attachment_processor import (
     attachment_maintenance_loop,
     attachment_scan_loop,
@@ -109,6 +114,15 @@ def build_relay(
     ``agent.trigger_skipped`` when a guardrail denies). The producing sides carry
     the §6.9 trigger payloads, so remaining swaps are handler-local.
     """
+    # squad.md §S8 / §4.3-7: the leader's aggregate summary is written back to
+    # the parent issue as a comment when a squad-assigned root finishes done.
+    from mesh.comment_inbox.service import CommentService
+
+    squad_comment_service = CommentService(
+        session_factory,
+        max_agent_chain_depth=settings.max_agent_chain_depth,
+        signing_secret=settings.jwt_secret,
+    )
     return OutboxRelay(
         session_factory,
         handlers={
@@ -124,6 +138,10 @@ def build_relay(
                 aggregation_window_seconds=settings.notification_aggregation_window,
                 mailer=mailer,
             ),
+            # squad.md: plan decisions (§6.10) and execution-terminal observation
+            # (§4.4) are applied relay-side, keeping runtime decoupled from squad.
+            SQUAD_PLAN_DECIDED_EVENT_TYPE: squad_plan_decided_handler,
+            "execution.finished": make_squad_execution_finished_handler(squad_comment_service),
         },
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,

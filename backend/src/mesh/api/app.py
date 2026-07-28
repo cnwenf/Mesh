@@ -85,6 +85,10 @@ from mesh.skill.installations import InstallationService
 from mesh.skill.resolvers import make_matching_resolver
 from mesh.skill.routes import router as skill_router
 from mesh.skill.service import SkillService
+from mesh.squad.channels import register_squad_checkers
+from mesh.squad.routes import router as squad_router
+from mesh.squad.service import SquadService
+from mesh.squad.tasks import SquadTaskService, make_issue_assignee_watcher
 from mesh.views.moves import BoardMoveService
 from mesh.views.projection import ProjectionService
 from mesh.views.routes import router as view_router
@@ -190,7 +194,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Issue module (issue.md): core entity services. Stateless orchestrators
     # sharing the session factory; resource-level authorization lives in the
     # service layer, route plumbing stays thin.
-    app.state.issue_service = IssueService(session_factory)
+    app.state.issue_service = IssueService(
+        session_factory, squad_assignee_watcher=make_issue_assignee_watcher()
+    )
     app.state.status_service = StatusService(
         session_factory,
         is_workspace_manager=lambda member: role_satisfies(member.role, "project:manage"),
@@ -220,12 +226,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.attachment_service = AttachmentService(session_factory, settings, app.state.storage)
     # Comment & inbox module (comment-inbox.md): comments, §6.9 mention
     # triggers, §6.13 notification fan-out (relay side), inbox operations.
-    app.state.comment_service = CommentService(
+    comment_service = CommentService(
         session_factory,
         max_agent_chain_depth=settings.max_agent_chain_depth,
         # §6.16 / runtime.md R12: comment write path secret scanning key.
         signing_secret=settings.jwt_secret,
     )
+    app.state.comment_service = comment_service
     app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
     # skill.md: four-layer skill module. Script/reference bodies live in the
@@ -254,6 +261,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     register_skill_matching_resolver(make_matching_resolver())
     app.state.runtime_service = RuntimeService(session_factory, settings)
+    # Squad module (squad.md): orchestration unit — leader decompose / dispatch /
+    # aggregate. SquadTaskService owns assignment (§2.5), the decomposition DAG,
+    # plan approval (§6.10) and execution observation (§4.4).
+    app.state.squad_service = SquadService(session_factory)
+    # comment_service injection: §S8/§4.3-7 parent-issue summary writeback on
+    # the synchronous (human-leader) aggregation path (shared idempotency key
+    # with the relay writeback — no duplicates across the two paths).
+    app.state.squad_task_service = SquadTaskService(
+        session_factory, comment_service=comment_service
+    )
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -262,6 +279,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_inbox_checkers(app.state.authorizer, session_factory)
     register_agent_checkers(app.state.authorizer, session_factory)
     register_execution_checkers(app.state.authorizer, session_factory)
+    register_squad_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -282,6 +300,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)
     app.include_router(skill_router)
+    app.include_router(squad_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

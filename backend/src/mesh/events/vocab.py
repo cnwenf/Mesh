@@ -142,6 +142,13 @@ SQUAD_EVENTS: frozenset[str] = frozenset(
         "squad_activity.created",
         "squad_message.created",
         "squad_assignment.changed",
+        # SSE orchestration progress stream frames (squad.md §3.2 / §3.5),
+        # persisted on the per-task channel ``squad_task:{id}``.
+        "task.status",
+        "subtask.created",
+        "subtask.assigned",
+        "plan.submitted",
+        "task.aggregated",
     }
 )
 
@@ -211,10 +218,12 @@ OUTBOX_INTERNAL_EVENT_TYPES: frozenset[str] = frozenset(
         "issue.assigned",
         "issue.status_changed",
         "execution.enqueue",
+        "execution.finished",
         "notification.fanout",
         "attachment.scan_requested",
         "data_job.enqueue",
         "data_job.resume",
+        "squad.plan_decided",
     }
 )
 

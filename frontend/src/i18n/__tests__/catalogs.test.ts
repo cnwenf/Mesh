@@ -243,6 +243,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     title: 'v1.0',
     // label-property §4 文案占位符(选项序号)
     index: 1,
+    // squad §4 文案占位符(issue 头部单一责任主体:小队名 + 组长名)
+    squad: '支付重构小队',
+    leader: 'orchestrator',
     // workspace §4 文案占位符(MES-26)
     slug: 'acme',
     role: 'member',
