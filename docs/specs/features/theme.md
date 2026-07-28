@@ -40,7 +40,7 @@
 | T9 | `color-scheme` 联动 | `:root` 声明 `color-scheme: light`,暗色声明 `dark`——原生滚动条/下拉/自动填充随主题 | 原生控件不刺眼 |
 | T10 | `prefers-reduced-motion` | 减少动效偏好下关过渡/动画;主题切换不做首帧渐变 | 无障碍 |
 | T11 | `prefers-contrast: more` | 高对比偏好下边界/文本增强(媒体查询增强,非独立第三套主题) | 无障碍 |
-| T12 | 对比度 AA 自证 | 文本/底色配对在亮/暗两套各 ≥4.5:1(正文),图形元件 ≥3:1;单一事实源 token 值代入公式自证 | 设计期保障 |
+| T12 | 对比度 AA 自证 | 文本/底色配对在亮/暗两套各 ≥4.5:1(正文),图形元件 ≥3:1;**大文本(WCAG 2.1 定义:≥24px,或 ≥18.66px 且加粗)阈值 ≥3:1(评审 T4 写死)**;单一事实源 token 值代入公式自证 | 设计期保障 |
 | T13 | CI 门禁(防回归) | 对比度校验独立 CI 关卡 + 硬编码色值扫描(白名单仅 token 源 + 显式登记的数据色例外) | 阻止回归 |
 | T14 | 组件硬编码禁令 | 组件层一律 `var(--token)`;覆盖 `color/background-color/border-color/outline/fill/stroke/box-shadow` 颜色位 | 暗色无死角 |
 | T15 | 数据色例外立约 | 标签色/头像底色属**数据**非主题,为合法例外:预设色板双主题对表面色满足对比,例外在 CI 白名单**逐文件登记并注释原因** | 标签彩色可用 |
@@ -50,8 +50,13 @@
 
 - **不做用户自定义品牌色 / 主题编辑器**:本期仅 `light/dark/system` 三态,token 是设计契约,品牌一致性优先于个性化。
 - **不做主题市场 / 分享**:无主题打包/导入/社区分享。
-- **不单列独立 `high-contrast` 主题集**:以 `@media (prefers-contrast: more)` 在亮/暗各自增强(避免「模式 × 对比」矩阵翻倍);待真实无障碍审计压力到位再升级。
+- **不单列独立 `high-contrast` 主题集**:以 `@media (prefers-contrast: more)` 在亮/暗各自增强(避免「模式 × 对比」矩阵翻倍);待真实无障碍审计压力到位再升级。**注意:此非目标不覆盖操作系统强制高对比 `@media (forced-colors: active)`**——后者是 OS 级强制行为(如 Windows 高对比/对比主题),作者配色被系统色覆盖、阴影失效、焦点环丢失,**必须适配而非规避**(§4.3 forced-colors 条款,评审 T1:无障碍底线,不得以本非目标豁免)。
 - **不做服务端 token 下发端点**(`GET /api/v1/theme/tokens`):token 是随构建分发的设计资产,纯前端静态;服务端化引入双真源漂移(正是 i18n `workspaces.default_language` 旧列被废的同类教训)、首帧阻塞与无谓攻击面,YAGNI。
+- **不做主题使用统计**(评审 T5 关联建议项表态:隐私灰色地带显式非目标——不统计各主题模式占比/切换频次,分析面归 analytics.md 且不含主题维度)。
+- **不做时间段自动切换 / `?theme=` URL 参数**(评审建议项表态:`system` 态跟随 OS 已覆盖按时间自动切换的需求;URL 参数嵌入主题与首帧精确注入链路(§2.3)冲突且可被用于闪错主题探测,显式非目标)。
+- **不承载邮件模板暗色**(评审建议项表态:邮件摘要的暗色适配——`color-scheme` meta、双 logo、透明 PNG 兜底——归 comment-inbox.md 邮件渲染,本 Spec 仅约束应用内 UI)。
+- **本地 stylelint 实时反馈列可选增强**(评审建议项表态:硬编码色值门禁基线在 CI(§5.4),开发者本地 stylelint 实时提示随工具链配置,不作 Spec 硬要求)。
+- **z-index 层级 token / placeholder 与 disabled 对比立约列可选增强**(评审建议项表态:暗色 overlay 透明度与层级耦合的 z-index token 化、WCAG 豁免但需可辨识的 placeholder/disabled 对比策略,待真实分化需求抽取,本期以语义 token 现有约束兜底)。
 - **不**新增业务表、**不**改存储层时间语义(UTC 不变)、**不**自定义角色/权限模型(沿用 auth.md RBAC)、**不**约束前端框架(README §3.2)。
 
 ---
@@ -110,6 +115,7 @@
 | 品牌 | `--color-primary` · `--color-primary-contrast` | 主色(文本/底两用)+ 配对文本 | 暗色向更亮偏移保对比 |
 | 状态 | `--color-danger` · `--color-warn` · `--color-success` · `--color-info` 各 + `-contrast` | 四态语义色 + 配对文本 | 降饱和/更亮变体;配对 ≥4.5:1 |
 | 交互 | `--color-focus-ring` · `--color-scrim` · `--shadow-raised` | 焦点环/弹层遮罩/浮起阴影 | 焦点色更亮;遮罩/阴影加深 |
+| 选区/强调(评审 T2) | `--color-selection-bg` · `--color-selection-text` · `--color-mark-bg` · `--color-mark-text` | `::selection` 文本选区 / `<mark>` 高亮文本 | **亮/暗各定义一一对应取值**(暗底默认选区色不可读为一线高频漏项):暗色选区底取品牌色暗变体 + 高对比文本;`<mark>` 底/文同族配对,两套均 ≥4.5:1 |
 | 尺度(两主题共用) | `--space-1…6`(4/8/12/16/24/32)· `--radius-sm/md/lg` · `--font-size-sm/md/lg` · `--font-family` · `--duration-fast/slow` | 间距/圆角/字号/字体/动效时长 | 非颜色,不替换 |
 
 - 命名规范:`--color-<语义>[-<状态>]`(kebab-case),**表意不表值**(禁 `--color-red` 式);状态色成对(`--color-<tone>` + `--color-<tone>-contrast`);
@@ -120,6 +126,7 @@
 标签预设色板(`ColorPicker`)与确定性头像底色是「禁硬编码」规则的**合法例外**,立约如下:
 
 - 预设色板在亮/暗两套主题下对各自表面色满足对比(文本/前景叠加对比由组件保证);自定义 hex `^#[0-9a-fA-F]{6}$` 在**服务端写入边界**(标签持久化,label-property.md 落地)与**渲染时同校验**——仅客户端校验无效(写入路径可绕过前端直达 API);
+- **自定义 hex 数据色的 on-color 自动配对(评审建议项吸收,防「白字白标签」)**:标签 chip 等数据色底上的前景色**按 WCAG 相对亮度阈值自动取黑/白**——计算底色 hex 的相对亮度 `L`,`L ≥ 0.179` → 黑色前景(`#000` 级语义黑),否则 → 白色前景;预设色板与自定义 hex 一律经此单一函数生成 on-color,不逐色手工指定;配对对比度随 §5.4 对比度门禁抽验;
 - 数据色**不进入全局 token**;例外文件须在 §5.4 CI 扫描白名单**逐文件登记并注释原因**,新增例外需评审,不默认豁免。
 
 ---
@@ -188,7 +195,9 @@
 ### 4.2 切换即时生效(无刷新、不重放动画)
 
 - 选项变更即落 `data-theme`,所见即所得,无「保存」按钮;
-- 主题过渡若启用须 gate 在首帧后(避免「白→暗慢 fade」替代闪烁的同源问题),且受 `prefers-reduced-motion` 约束(减少动效则无过渡)。
+- 主题过渡若启用须 gate 在首帧后(避免「白→暗慢 fade」替代闪烁的同源问题),且受 `prefers-reduced-motion` 约束(减少动效则无过渡);
+- **跨标签页同步(评审 T5② 写死:采用 storage 事件补齐)**:zustand persist 已使偏好经 localStorage 持久化(部分具备),但 persist 默认不监听跨标签页写入——本 Spec **显式选择补齐**:偏好 store 注册 `window.storage` 事件监听,同源其他标签页的主题/展示偏好写入即时同步到当前标签并应用 `data-theme`(不刷新);选择补齐而非「接受现状」的理由:多标签页是工作台常态,A 页切暗色 B 页刺眼白是高频体验缺陷,补齐成本仅一监听器;
+- **`meta theme-color` 双声明(评审建议项吸收)**:`<head>` 声明亮/暗两条 `<meta name="theme-color" media="(prefers-color-scheme: light|dark)">`,`system` 态下浏览器 UI/PWA 标题栏随系统配色;应用内显式切换(非 system)时由 JS 联动改写单条生效值——**仅改 meta,不引入新取色路径**(值仍来自语义 token 表面色)。
 
 ### 4.3 暗色模式细部
 
@@ -196,7 +205,13 @@
 - **焦点环**:暗色用更亮焦点色,`:focus-visible` 2px + offset;
 - **遮罩**:`scrim` 暗色加深;
 - **原生控件**:经 `color-scheme` 随主题;
-- **图片/头像**:用户头像为数据不主题化,暗色下加 1px 语义 border 或轻微降亮度;装饰 SVG 用 `currentColor`/`<picture media>`(可选增强)。
+- **图片/头像**:用户头像为数据不主题化,暗色下加 1px 语义 border 或轻微降亮度;装饰 SVG 用 `currentColor`/`<picture media>`(可选增强);
+- **选区与 `<mark>`(评审 T2)**:`::selection` 与 `<mark>` 一律经 `--color-selection-*` / `--color-mark-*` token(§2.4 选区/强调组),**亮/暗各定义**,禁浏览器默认色(暗底默认选区色不可读);
+- **自动填充暗色校正(评审 T3)**:`input:-webkit-autofill` 经 `-webkit-box-shadow: 0 0 0 1000px var(--color-surface) inset` 覆盖浏览器黄/蓝底、`-webkit-text-fill-color: var(--color-text)` 校正文本色(登录/注册/邀请表单均受影响),亮/暗两套表面色各自校正;
+- **操作系统强制高对比(评审 T1 写死,无障碍底线,不得以 §1.3「不单列 high-contrast 主题集」非目标规避)**:`@media (forced-colors: active)` 下——① 语义 token **重映射系统色**:`--color-bg→Canvas`、`--color-text→CanvasText`、`--color-border→CanvasText`(或 `ButtonBorder`)、`--color-focus-ring→Highlight`、`--color-text-muted→GrayText`、链接 `--color-primary→LinkText`,禁用态 `GrayText`;② 层级/结构**改靠显式 border** 表达(forced-colors 下 box-shadow 失效,raised 表面加 1px 实线 border);③ 图表/徽标等**自证对比区**声明 `forced-color-adjust: none` 并自保系统色板内可读(颜色不作唯一信号原则在此同样适用,§4.4);④ 按钮/输入框焦点环随系统 Highlight,不自绘;
+- **打印主题(评审 T5①)**:`@media print` 强制亮色呈现——`data-theme` 打印时一律按亮色 token 渲染(打印介质 `:root { color-scheme: light }` + 语义 token 落亮色值),去除暗底/装饰阴影/动效,链接保留 href 文本;**打印不产生主题偏好写入**;
+- **半透明降级(评审 T5④)**:`@media (prefers-reduced-transparency: reduce)` 下,scrim 等半透明表面(模态遮罩、悬浮层毛玻璃)**降级为不透明表面色**并补足文本对比(≥4.5:1),不依赖背后内容透出提供可读性;
+- **第三方嵌入与代码高亮双主题(评审 T5③)**:markdown 渲染的第三方内容(代码高亮块、嵌入卡片)以**主题感知的代码高亮色板**渲染(亮/暗各一套,经语义 token 登记进 §2.4 配对表);**UGC 内联 `style` 颜色在暗底不安全时兜底**——评论/描述内联色值不参与 token 体系,渲染层对其文本强制「与当前表面色对比不足 4.5:1 时回退 `--color-text`」,防暗底黑字不可读(与 §6.15 不可信内容处理同边界:样式亦不可信)。
 
 ### 4.4 数据可视化双色板
 
@@ -208,6 +223,7 @@
 
 - **未登录**:无账号偏好 → 工作区默认(邀请接受页经**公开 invitation preview** 读 `appearance.default_theme`,§2.2/§3.1;其他公开页无工作区上下文 → `system`);防闪烁脚本仅读**分区镜像键**(§2.3),冷缓存按 §2.3 首帧方案(入口注入 / 中性 skeleton),**不串用上一账号/工作区残留值**;
 - **跨设备一致性**:账号偏好经 `PATCH /users/me` 持久化服务端,登录即回填(`GET /me`);本地 persist 仅作降级镜像与防闪烁首帧用,**服务端为跨设备真源**;
+- **匿名→登录偏好合并裁决(评审建议项显式化)**:未登录(匿名)阶段的本地主题选择**仅为本地镜像,不具合并权重**——登录回填时**以服务端值覆盖本地同名镜像**(服务端有值 → 覆盖;服务端 absent/null → 保留本地镜像作为 §2.3 ② 防闪烁用途,但协商链按 §2.2 从第 2 级起解析,不以本地匿名值充当账号偏好);匿名写入无服务端端点(§3.1),不存在「匿名本地值推上服务端」路径,裁决无歧义;
 - **工作区默认变更联动(评审 M5 收口)**:**未设显式账号偏好(absent/null)的用户**订阅 `workspace.updated` 实时事件(workspace.md §3.5,§6.7 已登记),收到 `settings.default_theme` 变更后**重新解析默认主题**并即时应用;显式偏好用户忽略该事件;
 - **降级与乐观写失败处理(评审 M5 收口,写死)**:服务端同步失败**不当场回滚本地**(乐观),但失败偏好写入进入**持久 pending 队列**(localStorage **分区键** `mesh.settings.pending:{host}:{user_id}:{workspace_id}`,§2.3;每条含键值、请求基线 `updated_at`、重试计数,**重放前校验当前主体与分区三元组一致**),策略如下:
   - **联网重试**:`online` 事件 / 应用前台恢复 / 下次偏好写入时按序重放 pending;
@@ -229,6 +245,10 @@
 - [ ] **偏好写入**:用户偏好经 `PATCH /users/me`、工作区默认经 `PATCH /workspaces/{id}`,按键浅合并;非法值 → `422 invalid_theme_mode`(auth.md/workspace.md 错误码表已同步登记);**显式 `null` 为合法写入(清除),不报 422**。
 - [ ] **工作区默认入口与联动**:工作区设置含默认主题三态选择器(admin 可见),写入生效并触发 `workspace.updated`;**未设显式账号偏好的在线成员收到 `workspace.updated` 后即时重新解析并应用新默认**(显式偏好成员不受影响)。
 - [ ] **reduced-motion/contrast**:减少动效偏好下无过渡动画;高对比偏好下边界增强。
+- [ ] **选区/`<mark>`/autofill(评审 T2/T3)**:暗色下文本选区与 `<mark>` 经选区 token 渲染且可读(≥4.5:1,亮/暗各断言);登录/注册/邀请表单触发浏览器自动填充后,输入框背景/文本色为暗色表面色校正结果(无浏览器黄/蓝底)。
+- [ ] **跨标签页同步与 meta(评审 T5②/建议项)**:A 标签页切暗色,B 标签页经 `storage` 事件即时跟随(不刷新);`meta theme-color` 亮/暗双声明存在且 system 态随 OS、显式切换时 JS 联动更新。
+- [ ] **跨介质(评审 T5①③④)**:打印预览为强制亮色(无暗底/阴影);`prefers-reduced-transparency` 下 scrim 等半透明表面降级不透明且文本对比达标;markdown 代码高亮块亮/暗各一套且暗底可读,构造低对比 UGC 内联色文本断言回退 `--color-text`。
+- [ ] **匿名→登录合并(建议项显式化)**:匿名切暗色 → 登录服务端偏好为亮的账号 → 应用亮色(服务端覆盖本地匿名镜像);登录 absent/null 偏好账号 → 协商链按工作区默认解析(匿名本地值不充当账号偏好)。
 - [ ] **文案外部化**:切换入口/标注无硬编码可见文案(i18n.md)。
 
 ### 5.2 性能
@@ -248,7 +268,8 @@
 ### 5.4 验收门禁(CI,防回归)
 
 - [ ] **token 生成幂等门禁(评审 M4)**:`tokens.css`/`tokens-dark.css` 为 `tokenValues.ts` 的生成产物(§2.3);CI 运行生成步骤后断言 git 工作区**无 diff**(手改生成文件即失败);「解析 CSS 与 TS 逐项一致」测试保留为第二道防线。
-- [ ] **对比度 CI 关卡**:独立脚本 import 单一事实源(`LIGHT_TOKENS`/`DARK_TOKENS` + 配对表 + 对比度公式),正文/状态色文本 ≥4.5:1、图形元件 ≥3:1,亮/暗两套逐对校验,任一不达标 PR 失败;新增颜色 token 须先登记配对表。
+- [ ] **对比度 CI 关卡**:独立脚本 import 单一事实源(`LIGHT_TOKENS`/`DARK_TOKENS` + 配对表 + 对比度公式),正文/状态色文本 ≥4.5:1、图形元件 ≥3:1、**大文本(WCAG 2.1:≥24px,或 ≥18.66px 加粗)≥3:1(评审 T4:配对表登记字号/字重维度,CI 按大文本阈值校验对应配对并在校验报告中单列大文本组)**,亮/暗两套逐对校验,任一不达标 PR 失败;新增颜色 token 须先登记配对表。
+- [ ] **forced-colors 验收(评审 T1,§4.3)**:**仿真 + 真机双通道**——Playwright `page.emulateMedia({ forcedColors: 'active' })` 覆盖核心页面矩阵(§5.4 暗色视觉回归同一页面集),断言语义 token 落系统色(Canvas/CanvasText/Highlight/GrayText/LinkText)、结构边界可见(显式 border,阴影失效不破坏层级辨识)、自证对比区 `forced-color-adjust: none` 生效;**真机通道**:Windows 高对比/对比主题(Edge)手工核对清单随 PR 模板登记(仿真引擎与真实 Windows 强制色存在实现差,真机为最终依据)。
 - [ ] **硬编码色值扫描(AST 级,评审 M4)**:以 **CSS/TS AST 级规则**扫描(Stylelint 自定义规则覆盖 `*.css`;ESLint 自定义规则覆盖 `*.tsx`/`*.ts`),命中面包括 `#hex`/`rgb()/rgba()/hsl()/hsla()/oklch()/oklab()`/命名色/**内联 `style` 颜色属性**/**SVG `fill`/`stroke` 字面量**(白名单放行 `transparent/currentColor/inherit/initial/revert/unset`),颜色值必须 `var(--*)`;**不做整文件白名单**——豁免仅到「逐文件 + 行级注释原因」的显式登记数据色例外(§2.5),新增例外需评审。
 - [ ] **存量债务收口**:门禁上线同时完成既有组件硬编码色值迁移(`skills.css` ≈52 处、`autopilots.css` ≈18、`dataJobs.css` ≈7、`projects.css` ≈1,以扫描实际命中为准)——缺失语义 token 先在 token 源补,再替换;迁移后扫描零命中(登记例外除外)。
 - [ ] **暗色视觉回归(可失败门禁,评审 H9 写死)**:以 **Playwright `toHaveScreenshot()`(或等价基线比对断言)** 实现**基线比对门禁**——视觉变化必须让 CI 失败,**不接受「仅截图上传 evidence」的假门禁**:

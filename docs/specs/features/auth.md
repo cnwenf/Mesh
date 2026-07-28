@@ -442,7 +442,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 ### 3.7 WebSocket 鉴权与实时
 
 - `/ws` 连接建立时用 token 鉴权(握手携带或首条消息认证),服务端校验后按 `workspace_id + principal` 注册频道。**统一实时契约见 README §6.7**:`seq` 一律为**频道内**单调递增(持久化于 `realtime_events`,无"全局 seq");断线重连带 `resume_from`、游标过旧收 `resync_required`;**每次订阅频道时重新做资源级授权**(见各模块 Spec 事件表)。
-- **会话/token 撤销实时生效**:撤销落库后同事务写 outbox(README §6.6),经 realtime 网关广播使相关连接失效或下次心跳鉴权失败重连被拒(**不用进程内事件总线**);access JWT 短期,撤销最长延迟 = 其 TTL。
+- **会话/token 撤销实时生效**:撤销落库后同事务写 outbox(README §6.6),经 realtime 网关广播使相关连接失效或下次心跳鉴权失败重连被拒(**不用进程内事件总线**);access JWT 短期,撤销最长延迟 = 其 TTL。**广播事件名写死为 `session.revoked`**(README §6.7 注册表「会话 / 鉴权」域已登记;MES-77 事实核查建议项补注:事件名字面如此前仅存于后端代码,本节为 Spec 侧权威落点),按该用户所属各工作区频道逐一 fan-out。
 - 异常登录提醒经 WebSocket 站内 + 邮件双通道。
 
 ---

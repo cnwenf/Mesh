@@ -34,15 +34,15 @@
 |---|--------|------|--------------|
 | S1 | 命令面板触发 | `Ctrl/Cmd+K` 任意页面打开;`/` 聚焦顶栏搜索(回车或继续输入展开面板);顶栏搜索按钮为等价鼠标入口 | 随时呼出,不碰鼠标 |
 | S2 | 跨模块对象搜索 | 六类对象:issue(identifier/标题)、成员、agent、项目、视图、聊天会话(§6.12 全集) | 输入「登录」命中相关 issue/会话 |
-| S3 | 命令/动作条目 | 导航命令(各顶层入口)、新建 issue(等价 `C`)、主题切换(复用 theme.md 命令)、打开帮助层、复制当前深链、收藏/取消收藏(§6.19)、标记全部已读 | 不离开键盘完成动作 |
+| S3 | 命令/动作条目(**可枚举全集**,评审 P6 写死) | **命令全集固定枚举如下(不在清单内的命令不存在,新增命令须先修订本表)**:① **顶层导航(按 README §6.12 信息架构全集)**:收件箱/我的任务、项目列表、看板(默认视图)、成员名册、聊天、小队、自动化运营区(Autopilots / Runtimes / Skills 三入口);② **设置各子页**(工作区 / 成员角色 / 审批策略 / 状态与字段 / 危险操作);③ **待审批**(统一「待我审批」入口,§6.10);④ **新建 issue**(等价 `C`);⑤ **主题切换 ×4**(`theme.light` / `theme.dark` / `theme.system` / `theme.toggle` 循环切换,theme.md §4.1 既有注册延续;「恢复跟随工作区默认」为设置页 UI 动作写 `settings.theme=null`,theme.md §4.1,不单列面板命令);⑥ **复制当前深链**(规范深链,§3.4);⑦ **收藏 / 取消收藏**(对当前资源,§6.19);⑧ **标记全部已读**(**随当前视图 filter 口径**——`POST /inbox/read-all` 接受与收件箱列表相同 filter,命令携带当前视图 filter,comment-inbox.md);⑨ **打开帮助层**(`?`)。**命令注册按 README §6.12 角色可见性矩阵门控显隐**:设置各子页与危险操作命令仅对 admin/owner 注册并渲染,guest/agent 不可见——**无权命令根本不注册,不是「点击才报错」** | 不离开键盘完成动作 |
 | S4 | 分组与上下文 | 结果按类型分组;命令集随上下文(全局/看板/issue/聊天)动态增减;组头标注 | 看板页多出「新建卡片」「改状态」命令 |
 | S5 | 模糊匹配与排序 | 分层打分(§4.6),identifier 精确命中顶置;命中字符高亮(不以颜色为唯一信号) | 打 `saf cri` 命中「Safari 崩溃」 |
 | S6 | 最近使用与收藏区 | 空 query 展示 recents(前端本地)+ favorites(`GET /api/v1/favorites`,§6.19)+ 常用命令 | 打开面板即有可点项 |
 | S7 | 键盘导航 | ↑/↓ 移动、Enter 执行、Esc 关闭、Tab 补全选中文本到输入框;ARIA combobox/listbox | 纯键盘操作 |
 | S8 | 规范深链跳转 | 选中结果 Enter 直达 §3.4 规范深链;一切资源外链统一规范深链 | 搜索结果即入口 |
 | S9 | 全局快捷键组 | `mod+K` 面板 / `/` 搜索 / `C` 新建 issue / `?` 帮助层 / `G then I\|B\|M\|A` 跳转(§6.12 写死) | 肌肉记忆导航 |
-| S10 | 看板上下文组 | `C` 当前列新建卡片;`S` 改状态;`A` 改 assignee;`Enter` 打开选中卡片;`F` 筛选 | 看板页纯键盘流转 |
-| S11 | issue 详情上下文组 | `E` 编辑;`S` 改状态;`A` 改 assignee;`P` 改优先级;`Ctrl/Cmd+Enter` 提交评论;`Esc` 关闭 | 详情页快速处理 |
+| S10 | 看板上下文组 | `↑↓←→`(或 `J/K/H/L`)**二维网格移动选中卡片**(评审 P4:「选中」从此有键盘路径,与「纯键盘流转」自洽);`C` 当前列新建卡片;`S` 改状态;`A` 改 assignee;`Enter` 打开选中卡片;`F` 筛选 | 看板页纯键盘流转 |
+| S11 | issue 详情上下文组 | `E` 编辑;`S` 改状态;`A` 改 assignee;`P` 改优先级;`L` 打开标签选择器(评审 P5,label-property.md);`M` 设里程碑(建议项吸收,project.md);`Ctrl/Cmd+Enter` 提交评论;`Esc` 关闭 | 详情页快速处理 |
 | S12 | 聊天上下文组 | `Enter` 发送 / `Shift+Enter` 换行;`Ctrl/Cmd+↑` 编辑上一条;`Esc` 退出输入焦点 | 对话不离手 |
 | S13 | 序列键 | `G` 首键进入等待态(状态条提示),超时窗口 1000ms,超时/Esc 取消 | `G I` 跳收件箱 |
 | S14 | `?` 帮助层 | 按上下文分组列出**当前可用**全部快捷键,平台键自适应(`⌘` vs `Ctrl`) | 随时查键位 |
@@ -51,13 +51,30 @@
 
 ### 1.3 边界与非目标(明确不做什么)
 
-- **不做独立全文检索引擎**:起步 PostgreSQL(`pg_trgm` + GIN / 等值索引)满足标题 + identifier 检索;description/评论正文全文检索列**可选增强**(YAGNI,待真实需求)。
-- **不做 OCR / 附件内容搜索**:附件仅按文件名命中(attachment.md)。
+- **不做独立全文检索引擎**:起步 PostgreSQL(`pg_trgm` + GIN / 等值索引)满足标题 + identifier 检索;description/评论正文全文检索等待真实需求(逐项表态见下方「搜索对象边界」表)。
+- **不做 OCR / 附件内容搜索**(附件文件名匹配的表态见下方「搜索对象边界」表)。
 - **不做自定义快捷键编辑器(rebind)**:本期固定映射 + `?` 帮助层;`user_keybindings` 表列后续规划。
-- **不做跨设备 recents 同步**:recents 纯前端 localStorage(按 user 隔离);`recent_items` 表列可选增强,本期不建。
+- **不做跨设备 recents 同步**:recents 纯前端 localStorage(按 host + user + workspace 三元组隔离);`recent_items` 表列可选增强,本期不建。
 - **不做搜索分析/个性化排序模型**:仅 recency/frequency 封顶加权;不落服务端搜索日志(隐私,§5.3)。
 - **不新增实时事件/频道**:面板只读快照渲染,不扩 §6.7 事件词汇注册表。
 - **不**新增角色/权限模型(沿用 auth.md RBAC);**不**自定义 API 包络(§6.14)。
+
+**搜索对象边界(评审 P10 收口:六类搜索对象之外逐项表态,不留灰色地带)**:
+
+| 候选搜索对象 | 表态 | 说明 |
+|--------------|------|------|
+| 设置项检索 | **非目标(经命令表达)** | 设置各子页经 P6 命令注册表达成导航命令(§1.2 S3 枚举清单),不做设置项全文检索 |
+| 文档 / 帮助 | **非目标** | 无产品级文档站点(README §12#21);`?` 帮助层列出当前上下文键位,不是可检索文档内容 |
+| 标签 / 自定义字段值 | **可选增强** | 本期仅六类对象;按标签/自定义字段值检索待真实需求(与全文检索同 YAGNI 基线) |
+| 附件文件名 | **可选增强** | 附件不作独立搜索对象;文件名匹配留宿主页面的附件列表(attachment.md),不进全局搜索索引 |
+| 评论正文 | **可选增强** | 与 description 全文检索同口径,待真实需求 |
+| 迭代 / 里程碑 | **可选增强** | 周期/里程碑数据在 project.md,本期不入搜索对象;kanban.md 时间线视图立项时一并评估 |
+| 模板(issue / 项目模板) | **可选增强** | 模板选择在各创建流程内完成(issue.md / project.md),不进全局搜索 |
+| 作用域前缀语法(`>` 纯命令模式 / `type:` 类型过滤) | **可选增强** | 本期为混合输入(命令与对象合并打分分组,§4.6);服务端 `types` 参数提供类型过滤(§3.2),无客户端前缀语法 |
+| 结果计数与「加载更多」 | **可选增强** | 本期形态为分组列表 + 整体 cursor 翻页(§3.2/§6.14);各组「共 N 条」计数与组尾加载更多入口待可用性需求 |
+| 修饰键新标签打开 | **本期做** | 结果行 `mod+Enter` / `mod+click` 以新标签打开规范深链(§3.4),不破坏当前上下文;Enter/click 为当前页直达(§4.1) |
+
+**键盘体系可选增强(评审建议项表态,本期非目标)**:列表/收件箱导航键(`J/K` 或 `↑↓` 移动、`N/P` 翻页、`X` 选中 / `Shift` 区间选 / 条件全选——issue.md 批量操作的键盘路径)、`U` 返回、`mod+1..9` 直达、`Z` 撤销;收件箱上下文组(已读/未读键)与详情上一条/下一条;富文本格式化键(若评论编辑器演进为富文本);帮助层搜索过滤(键位规模 >50 后再评估)与屏幕阅读器单键导航开关(单字符键与读屏浏览模式冲突时的一等切换)。以上均待真实需求立项,不混入本期固定映射;详情 `M` 里程碑键已随 P5 一并补入(§4.3)。
 
 ---
 
@@ -71,10 +88,10 @@
 
 | 数据 | 载体 | 说明 |
 |------|------|------|
-| 命令注册表 | 前端常量(zustand registry) | `{ id, title, shortcut?, group, when(上下文谓词), keywords, handler }`;同 id 注册即替换,返回注销函数(既有实现延续) |
-| 快捷键定义 | 前端常量 | `{ id, combo, group, when, handler }`;combo 归一化(`mod`=mac `⌘`/其余 `Ctrl`;`space`/`esc` 别名);**同 combo 冲突按 §4.3 确定性仲裁(最具体 active context > global),同优先级冲突为编程错误(开发态报错 + CI 失败)** |
+| 命令注册表 | 前端常量(zustand registry) | **既有形状(与 `frontend/src/shortcuts/registry.ts` 实测一致,评审 P8 收口)**:`{ id, label, group, keywords?, combo?, run }`,`group ∈ 'global'\|'board'\|'issue'\|'chat'`;**上下文经 `group` 枚举 × `activeContexts` 表达,不存在 `when` 谓词字段**;同 id 注册即替换,返回注销函数。**目标形状(需重构,非现状)**:`{ …, title, shortcut?, when(上下文谓词) }`——引入 `when` 谓词须重构注册表与分发层并同步本 Spec,重构落地前一律按既有形状实现与验收 |
+| 快捷键定义 | 前端常量 | **既有形状(同 P8 实测)**:`{ id, combo, label, group, run }`;combo 归一化(`mod`=mac `⌘`/其余 `Ctrl`;`space`/`esc` 别名;归一化基准见 §4.5);**同 combo 冲突按 §4.3.1 确定性仲裁(最具体 active context > global),同优先级冲突为编程错误(开发态报错 + CI 失败)** |
 | 上下文集合 | 前端运行态 | `activeContexts: Set<'global'\|'board'\|'issue'\|'chat'>`;路由/页面挂载时 `setContexts`,卸载复位;**context 特异性序写死:`issue > board > global`,`chat` 页面独占(与 board/issue 不叠加)** |
-| recents | localStorage(**键按 host + user + workspace 三元组隔离**) | 最近访问对象 + 最近执行命令,上限 20 条,LRU 淘汰;**不进服务端**(键形如 `mesh.recents:{host}:{user_id}:{workspace_id}`,评审 M3 收口:防跨工作区/跨账号串用) |
+| recents | localStorage(**键按 host + user + workspace 三元组隔离**) | 最近访问对象 + 最近执行命令,上限 20 条,LRU 淘汰;**不进服务端**(键形如 `mesh.recents:{host}:{user_id}:{workspace_id}`,评审 M3 收口:防跨工作区/跨账号串用)。**与评审 P9「user id + workspace slug 隔离」的关系**:三元组中 workspace 维取 **id 而非 slug**——slug 可被 admin 改名,id 稳定;id 隔离强度 ⊇ slug,同时 host 维度覆盖多部署同浏览器场景,满足 P9 隐私/体验要求 |
 
 ### 2.2 服务端检索索引策略(可执行 DDL,评审 H3 收口)
 
@@ -241,7 +258,7 @@ CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (mes
 | `title` | ✓ | 主标题**原文**(issue 标题 / 成员 display_name / 项目名 / 视图名 / 会话标题;未归一化,供渲染与 highlight 映射) |
 | `context` | ✓ | **按类型的结构化上下文对象**(取代此前的拼接字符串 `subtitle`),前端据此组装本地化副标题:`issue` → `{identifier, project:{id,name}|null, status:{id,name,category}}`;`member`/`agent` → `{member_type, role, presence?, capacity?{running,queued,awaiting_approval}(agent 快照,§6.12 容量呈现)}`;`project` → `{visibility, key}`;`view` → `{scope:"project"\|"workspace", project?:{id,name}, owner_only?}`;`chat_session` → `{participants_count, agent?:{id,name}}`;所有枚举走稳定 key(status category / visibility / role),展示文案经消息目录 |
 | `icon` | ✓ | 类型图标键(语义键,前端映射图标) |
-| `url` | ✓ | 规范深链(§3.4),Enter 直达 |
+| `url` | ✓ | 规范深链(§3.4 九条清单),Enter 直达。**squad 不在结果 `type` 枚举**(六类对象不变),其规范深链在 §3.4 闭合,供通知/IM 卡片外链使用 |
 | `badge` | – | `{kind, label_key, label_params, color}`:徽章文案经**消息目录 key + 参数**(如 status 徽章 `label_key="issue.status.name"`,params 携带 status 原名);`color` 仅取语义 token 名(status/danger/warn/success/info) |
 | `highlight` | – | 命中区间 `{title: {"unit": "codepoint", "ranges": [[start,end], …]}}`:**offset 单位写死为原始 `title` 字符串的 Unicode code point**(半开区间 `[start,end)`;匹配命中标注在**原文**上计算——NFKD/去重音仅用于候选召回与排序,**不作用于 highlight 映射**,杜绝归一化后偏移无法映回原文;前端经 `Array.from(title)` 映射到渲染偏移);**只返回 offset 区间,不返回 HTML** |
 
@@ -266,7 +283,7 @@ CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (mes
 
 ### 3.4 规范深链(§6.12 权威清单的前端路由落地)
 
-README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前端实现对应的 workspace-scoped 路由。**清单对全部可搜索/可通知资源闭合(评审 H5 收口:补齐 member、view)**:
+README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前端实现对应的 workspace-scoped 路由。**清单对全部可搜索/可通知资源闭合(评审 H5 收口:补齐 member、view;MES-77 P7 补齐 squad)**:
 
 | 资源 | 规范深链 | 落地说明 |
 |------|----------|----------|
@@ -277,6 +294,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 | **视图(看板/列表投影)** | `/w/{ws}/views/{view_id}` | 视图深链(归属项目的视图进入即应用其投影;私有视图非 owner 访问 → §6.12 permission denied 异常态) |
 | 执行 | `/w/{ws}/executions/{id}` | 运行详情 |
 | 聊天会话 | `/w/{ws}/chat/{session_id}` | |
+| **小队(可通知资源)** | `/w/{ws}/squads/{squad_id}` | 小队详情页(squad.md);小队任务详情 `/w/{ws}/squads/{squad_id}/tasks/{task_id}`。**小队不在六类搜索对象内**(§3.2 `type` 枚举不变),以**可通知资源**身份入清单:通知(§6.13)、IM 卡片(§6.17)、邮件摘要中引用小队的链接一律按本行生成(MES-77 P7:IM 卡片/通知外链依赖此闭环) |
 | 审批 | `/w/{ws}/approvals` | 统一「待我审批」入口(§6.10/§6.13) |
 
 **与既有扁平路由的迁移契约(评审 H5 收口,逐条映射 + 执行层写死)**:当前前端为 SPA 扁平路由(`/inbox`、`/board`、`/members`…),本身不含 workspace——规范深链落地后:
@@ -292,6 +310,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
    | `/projects` · `/projects/{id}` | `/w/{ws}/projects` · `/w/{ws}/projects/{id}` | 项目列表/详情 |
    | `/issues/{id}` | `/w/{ws}/issues/by-identifier/{KEY-N}`(解析后) | issue 详情 |
    | `/chat` · `/chat/{session_id}` | `/w/{ws}/chat` · `/w/{ws}/chat/{session_id}` | 聊天 |
+   | `/squads` · `/squads/{id}` · `/squads/{id}/tasks/{task_id}` | `/w/{ws}/squads` · `/w/{ws}/squads/{id}` · `/w/{ws}/squads/{id}/tasks/{task_id}` | 小队(MES-77 P7) |
    | `/settings/*` | `/w/{ws}/settings/*` | 工作区设置(admin+) |
    | `/automations/*` | `/w/{ws}/automations/*` | 自动化运营区 |
 
@@ -337,7 +356,8 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 - 居中浮层(~640px),限高内滚动,选中行始终可视;复用既有 Dialog 与语义 token(theme.md);
 - 命中字符高亮以**字重/下划线**叠加,不以颜色为唯一信号(§6.12);
-- 命令条目右对齐显示快捷键(平台自适应);组头随上下文动态增减。
+- 命令条目右对齐显示快捷键(平台自适应);组头随上下文动态增减;
+- **新标签打开(§1.3 边界表「修饰键新标签打开」)**:结果行与命令条目支持 `mod+Enter` / `mod+click` 以新标签打开规范深链(§3.4),当前上下文不被破坏;普通 Enter/click 为当前页直达。
 
 ### 4.2.1 空态组装唯一数据流(评审 M3 收口,写死)
 
@@ -374,17 +394,30 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 | `G then M` | 跳成员 | 侧栏「成员」 |
 | `G then A` | 跳自动化 | 侧栏「自动化」 |
 
-**看板组**(看板页挂载时激活):`C` 当前列新建卡片(**复用全局新建弹窗并预填当前选中列,§4.3.1 仲裁**;无可用列回退全局新建)· `S` 改选中卡片状态 · `A` 改 assignee · `Enter` 打开选中卡片 · `F` 打开筛选。
-**issue 详情组**(详情挂载时激活):`E` 编辑 · `S` 状态 · `A` assignee · `P` 优先级 · `mod+Enter` 提交评论 · `Esc` 关闭。
+**看板组**(看板页挂载时激活):`↑↓←→`(或 `J/K/H/L`)**二维网格移动选中卡片**(评审 P4 补全:「选中」前提从此有键盘路径)——`↑↓`(或 `J/K`)在同列内切换上一/下一张卡(列首/列尾停留不循环);`←→`(或 `H/L`)跨列移动,落于**目标列纵向位置最近的卡**(目标列卡数更少时取末卡);**目标列为空则穿透至下一非空列**;全部列为空(或无卡)时保持原选中不变并忽略移动键;首次进入看板且无选中时,任一移动键选中首列首卡 · `C` 当前列新建卡片(**复用全局新建弹窗并预填当前选中列,§4.3.1 仲裁**;无可用列回退全局新建)· `S` 改选中卡片状态 · `A` 改 assignee · `Enter` 打开选中卡片 · `F` 打开筛选。
+**issue 详情组**(详情挂载时激活):`E` 编辑 · `S` 状态 · `A` assignee · `P` 优先级 · `L` 打开标签选择器(评审 P5,label-property.md 已实现核心功能)· `M` 设里程碑(建议项吸收,project.md)· `mod+Enter` 提交评论 · `Esc` 关闭。
 **聊天组**(会话页激活):`Enter` 发送 / `Shift+Enter` 换行 · `mod+↑` 编辑上一条 · `Esc` 退出输入焦点。
 
 > 上下文组命令同时注册进命令面板(§4.4 帮助层一致);上下文切换时 `setContexts` 更新,帮助层与面板实时反映。**一切快捷键均有等价鼠标路径**(§6.12);每个上下文组的具体等价路径随各模块 UI 落地(kanban.md / issue.md / chat-session.md),本 Spec 给出基线,各模块验收时核对。
 
 ### 4.3.1 快捷键冲突确定性仲裁(评审 H6 收口,写死)
 
+**按键分发总优先级链(评审 P2 写死,四层从高到低,高层覆盖低层)**:
+
+```
+输入控件(焦点在 input/textarea/select/contenteditable)
+  > 最上层弹层(命令面板/帮助层/modal/抽屉/子弹层,§4.5 Esc 分层栈栈顶)
+  > 页面上下文组(activeContexts 中特异性最高者)
+  > 全局组
+```
+
+- 焦点在输入控件时,只按 §4.5 豁免规则放行显式 `mod` 组合与表单语义键,其余一律不进入后续各层;
+- 有弹层打开时,背景页面上下文组与全局组的裸键全部屏蔽,仅弹层自身键绑定生效;
+- 页面上下文组内,多上下文同时激活且同键命中时取**最具体上下文**(下述特异性序)。
+
 同一 combo 被多个已注册 handler 匹配时,**每次按键只执行一个 handler**,仲裁规则如下(确定性、可测试):
 
-1. **优先级 = 最具体 active context > global**:特异性序 `issue > board > global`(`chat` 页面独占,其激活时不叠加 board/issue);按键到达时,在 `combo` 命中且 `when` 谓词为真的 handler 集合中取**特异性最高者执行**,其余被屏蔽;
+1. **页面上下文组内优先级 = 最具体 active context > global**:特异性序 `issue > board > global`(`chat` 页面独占,其激活时不叠加 board/issue);按键到达时,在 `combo` 命中且其 `group` 属当前激活上下文(global 组恒激活)的 handler 集合中取**特异性最高者执行**,其余被屏蔽(**注册表无 `when` 谓词字段,上下文门控即 `group` × `activeContexts`,§2.1 P8 收口**);
 2. **同优先级冲突 = 编程错误**:同一 active context 内两个 handler 声明相同 combo(如 board 组内两条 `C`)——**开发态抛错 + CI 注册表静态断言失败**(测试枚举全部注册快捷键,按 active context 组合检查 combo 唯一性),不静默「先注册者胜」;
 3. **看板 `C` 与全局 `C` 的关系**:看板上下文激活时 `C` 由看板 handler 执行(特异性更高)——**复用与全局新建相同的创建 issue 弹窗,并预填当前选中列(状态)**;仅当看板**无可用列**(如空视图/无状态可写)时回退执行全局新建(空弹窗);两者是同一弹窗组件的两种预填形态,不是两个弹窗;
 4. **异步结果补入保持当前选择**:对象搜索结果异步到达并插入列表时,**按稳定 `id` 维持当前选中项**——已选中的条目不因新结果插入上位而移位;用户按下 Enter 时以**按键瞬间选中项的 id** 为目标(捕获于 keydown),补入竞态不得把用户将要 Enter 的条目替换;
@@ -399,10 +432,13 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 ### 4.5 输入框豁免与序列键
 
-- 焦点在 `input`/`textarea`/`select`/`contenteditable` 时:**单字符快捷键一律不触发**;仅放行显式 `mod` 组合(`mod+K`、`mod+Enter`)与表单语义键(`Esc`/`Tab`/`Enter`)(§6.12);
-- **IME composition 期间**(`isComposing` 或 `compositionstart…compositionend` 之间):**一切裸键与序列键首键一律不触发**(候选词输入阶段的按键不是快捷键意图,§4.3.1);
+- 焦点在 `input`/`textarea`/`select`/`contenteditable` 时:**单字符快捷键一律不触发**;仅放行显式 `mod` 组合(`mod+K`、`mod+Enter`)与表单语义键(`Esc`/`Tab`/`Enter`)(§6.12;**此三键为浏览器原生表单语义,非快捷键放行**——评审 R4 注);
+- **IME 组合输入豁免(评审 P1 写死,首发语言 zh-CN 一线高频缺陷)**:`compositionstart`→`compositionend` 期间(`KeyboardEvent.isComposing` 为真),**一切快捷键均不触发——含单字符快捷键(如 `C` 新建)、序列键(含首键与等待态中的第二键)、以及聊天 `Enter` 发送**(候选词阶段的 `Enter` 是选词确认,不是发送/确认意图;实现上发送处理器同样检查 `isComposing`,不以「Enter 是表单语义键」绕过本豁免);组合结束后首个按键起恢复正常分发;
+- **弹层键位隔离与 Esc 分层关闭栈(评审 P3 写死)**:任一弹层(命令面板、帮助层、创建弹窗、详情抽屉、弹层内子弹层如状态/标签选择器)打开期间,**背景上下文快捷键全屏蔽、焦点圈定在弹层内**(Tab 循环不出弹层);`Esc` 语义为**每次只关最顶层**,分层关闭栈自顶向下为:**输入控件失焦**(弹层内输入框获焦时,首个 `Esc` 仅失焦输入控件,不关弹层)→ **顶层子弹层**(如选择器)→ **父弹层**(如命令面板/创建弹窗)→ **详情抽屉** → 回到列表;**每层关闭后焦点落点按 §6.12 焦点管理**:归还该层触发元素,触发元素已不存在(如对应卡片被删)时回落页面主区域首个可聚焦元素,**不得焦点丢失或落到 `body`**;多层叠加(抽屉内开选择器)时关闭栈严格 LIFO;
 - **modal/overlay 打开期间**(命令面板、帮助层、创建弹窗等):底层页面裸键快捷键**全屏蔽**,仅浮层自身键绑定与 `Esc` 生效(§4.3.1);
-- 序列键:`G` 按下进入等待态,状态条提示 `G —`;**超时窗口 1000ms**(既有 `SEQUENCE_WINDOW_MS` 延续),超时或 `Esc` 清缓冲;第二键到达即执行。
+- 序列键:`G` 按下进入等待态,状态条提示 `G —`;**超时窗口 1000ms**(既有 `SEQUENCE_WINDOW_MS` 延续),超时或 `Esc` 清缓冲;第二键到达即执行;
+- **键位归一化基准(评审建议项吸收)**:一律取 **`event.key`(字符语义)归一化,不取 `event.code`(物理位置)**——QWERTZ/AZERTY 布局下 Z/Y、A/Z 互换时,序列键与单字符键跟随用户实际输入的字符;`?` 按 `event.key === '?'`(即 `Shift+/`)识别,不硬编码物理键位;未来如需物理位置语义的快捷键(如编辑场景撤销)须在注册表独立以 `event.code` 维度登记,不与字符维度混用;
+- **浏览器保留键回避(评审建议项吸收)**:刻意**不占用** `mod+W`/`mod+N`/`mod+T`/`mod+R` 等浏览器/系统保留组合(拦截不可靠且破坏浏览器肌肉记忆);`/` 聚焦搜索在 keydown **必须 `preventDefault`**(避免部分浏览器内置快速查找冲突)。
 
 ### 4.6 模糊匹配排序(分层打分)
 
@@ -446,11 +482,15 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 - [ ] **workspace scope 与结果契约(评审 H4)**:搜索经 `/workspaces/{ws}/search` 唯一路径解析工作区(query/header 无第二来源;agent token 指名他区 → 403);响应**不含拼接好的可见句子**——`context` 为按类型结构化字段、`badge` 为消息目录 key + 参数(e2e 切换 locale 后副标题/徽章本地化正确,服务端响应体不变);`highlight` offset 以原始 title 的 Unicode code point 计(构造含多字节/组合字符标题的断言,前端高亮区间与命中词精确对齐)。
 - [ ] **游标稳定性(评审 H4 / R2-H4)**:同一 (q, types, workspace) 翻页经 cursor 无重复/无遗漏(10 万 issue 工作区遍历断言);**排序全序仅含数据库可计算因子**——同一请求在不同客户端(不同本地 recents/frequency 状态)下返回**相同顺序**(断言服务端排序不依赖客户端状态);cursor 换 q / 换 types / 换 workspace 复用 → `400 validation_error`;篡改 cursor 内部字段(HMAC 不符)→ `400`;空 `q` 服务端返回空 `data`(空态 favorites/recents/命令按 §4.2 唯一数据流本地组装,favorites 经 §6.19 端点)。
 - [ ] **identifier 精确命中顶置**:输入完整 `KEY-N` 时该 issue 为第一结果,Enter 直达规范深链。
-- [ ] **命令条目**:导航命令、新建 issue、主题切换、打开帮助层、复制深链、收藏/取消收藏均可经面板执行,且各有等价鼠标路径。
+- [ ] **命令条目(评审 P6 逐条覆盖核对)**:§1.2 S3 枚举清单**逐条**有测试核对——九组命令(顶层导航 × 按 §6.12 信息架构全集、设置各子页、待审批、新建 issue、主题 ×4、复制深链、收藏/取消收藏、标记全部已读、帮助层)均可经面板执行且各有等价鼠标路径;**角色门控断言**:以 guest/agent 身份打开面板,设置各子页与危险操作命令**不注册不渲染**(非「点击报错」);以 admin 打开则齐全;「标记全部已读」随当前收件箱视图 filter 发送(comment-inbox.md `POST /inbox/read-all` 同 filter,e2e 断言请求体 filter 与当前视图一致)。
 - [ ] **上下文分组生效**:看板/issue 详情/聊天页分别激活各自上下文组,帮助层与面板命令集实时反映;离开页面即复位(生产代码实际调用 `setContexts`,不再是死代码)。
 - [ ] **快捷键全集与仲裁(评审 H6)**:全局组 8 条 + 各上下文组按 §4.3 落地;序列键窗口 1000ms,超时/Esc 取消有 UI 提示;平台键渲染 mac/非 mac 各验;**看板页按 `C` 只触发看板新建(复用全局弹窗 + 预填当前列),全局 `C` 被屏蔽不并发执行;看板无可用列回退全局新建**;CI 静态断言全部注册快捷键在任一 active context 组合下无同优先级 combo 冲突;**异步结果补入不移位当前选中项**(e2e:选中第 2 条时插入新结果,Enter 打开的仍是原选中对象);**IME 输入中文时按候选键不触发裸键快捷键;modal 打开时底层页面裸键全屏蔽**;`?` 帮助层同 combo 只展示仲裁后有效键位。
 - [ ] **输入框豁免**:输入控件聚焦时单字符键不触发、`mod+K` 仍生效(回归用例)。
-- [ ] **规范深链(八条闭合,评审 H5 / R2-M1)**:八条规范深链(issue/项目/成员/agent 别名/视图/执行/聊天/审批)可直接访问并正确渲染;既有扁平路由按 §3.4 映射表经**前端路由器 replace navigation**(`navigate(target,{replace:true})`,断言触发数据加载,不称 302、不用裸 replaceState)至规范路由(query/hash 保留);多工作区无上下文 → 工作区选择页;**过期 slug 直接刷新由 SPA 入口文档处理器返回真实 HTTP 301**(cURL 级断言);§3.4 测试矩阵五场景逐条 e2e;认证内页面 `noindex` + canonical。
+- [ ] **IME 组合输入豁免(评审 P1)**:**中文(拼音)与日文(假名→汉字)候选词回归用例各一条**——组合输入中按 `Enter` 仅为候选词确认,**不触发聊天发送、不触发任何单字符/序列快捷键**(断言 `compositionstart`→`compositionend` 期间 handler 零调用,`KeyboardEvent.isComposing` 门控生效);组合结束后按键恢复正常分发。
+- [ ] **按键分发优先级链(评审 P2,单元测试)**:以**单元测试**逐层断言 §4.3.1 四层链——输入控件 > 最上层弹层 > 页面上下文组 > 全局组:同键在四层各有 handler 时,按键只执行最高层那一个;多页面上下文同时激活(如 board + issue 叠加场景)同键取最具体上下文;各层移除后回落下一层正确。
+- [ ] **弹层键位隔离与 Esc 分层关闭(评审 P3)**:e2e——抽屉内打开状态选择器(子弹层)后按背景看板键无反应(焦点圈定,Tab 不出弹层);连续 `Esc` 依次:子弹层关闭 → 抽屉关闭 → 回到列表,**每层关闭后焦点落在该层触发元素**(触发元素已删时落页面主区域,断言 `document.activeElement` 不为 `body`);弹层内输入框获焦时首个 `Esc` 仅失焦不关层。
+- [ ] **看板纯键盘流转(评审 P4 e2e,消除与 S10 的矛盾)**:无鼠标路径完成——移动键选中首卡 → `↑↓←→`(与 `J/K/H/L` 两组各验)二维遍历 → 跨列落于目标列纵向最近卡、**空列穿透至下一非空列**、全空列保持原选中 → `S` 改选中卡状态 / `A` 改 assignee → `Enter` 打开的正是当前选中卡。
+- [ ] **规范深链(九条闭合,评审 H5 / R2-M1;MES-77 P7 补 squad)**:九条规范深链(issue/项目/成员/agent 别名/视图/执行/聊天/**小队(含小队任务详情)**/审批)可直接访问并正确渲染;通知/IM 卡片中引用小队的链接生成为 `/w/{ws}/squads/{squad_id}` 规范形态;既有扁平路由按 §3.4 映射表经**前端路由器 replace navigation**(`navigate(target,{replace:true})`,断言触发数据加载,不称 302、不用裸 replaceState)至规范路由(query/hash 保留);多工作区无上下文 → 工作区选择页;**过期 slug 直接刷新由 SPA 入口文档处理器返回真实 HTTP 301**(cURL 级断言);§3.4 测试矩阵五场景逐条 e2e;认证内页面 `noindex` + canonical。
 - [ ] **异常态**:loading/empty/no-results/error/offline 五态按 §4.2 实现;no-results 提供「新建 issue "q"」动作——**仅有 `issue:write` 权限者可见(无权限者该动作不渲染),点击预填创建弹窗而非直接提交**(e2e 以 guest/无权限成员断言动作缺失)。
 - [ ] **空态(评审 M3)**:空 query 按 §4.2.1 唯一数据流展示 favorites(§6.19 端点)+ recents(本地)+ 常用命令;**favorites 与 recents 同 target 去重、各区排序正确**;**被删/失权对象的本地 recent 打开面板即被清理不再出现**;切换工作区后 recents 键隔离(不串用他区记录)。
 - [ ] **文案外部化**:面板/帮助层/错误提示无硬编码可见文案(i18n.md);颜色无硬编码(theme.md)。

@@ -504,29 +504,31 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 ### 3.1 控制台 API
 
+> **路径前缀（MES-77 跨 Spec 同步，配合 cli.md C1/C5，与后端 `runtime/routes.py` 实际实现逐端点对齐）**：控制台 API 一律为 workspace 作用域，路径均带 `/workspaces/{ws}/` 前缀（`{ws}` = workspace UUID 或 slug，鉴权中间件解析并校验成员资格，§6.2）；此前表内裸路径为文档漂移，以本表为准。daemon 命名空间 `/api/v1/daemon/*`（§3.5，机器域，`mesh_rt_` 令牌）不带工作区前缀——runtime 自身即工作区资源，激活时已绑定。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/runtimes` | runtime 列表（游标分页，可按 status/kind/labels 过滤） |
-| POST | `/api/v1/runtimes` | 创建 runtime（返回一次性激活码 + 安装命令） |
-| GET | `/api/v1/runtimes/{id}` | runtime 详情（元数据、负载、心跳） |
-| PATCH | `/api/v1/runtimes/{id}` | 更新（name、labels、max_concurrent） |
-| POST | `/api/v1/runtimes/{id}:pause` | 暂停（不再领新任务） |
-| POST | `/api/v1/runtimes/{id}:resume` | 恢复 |
-| POST | `/api/v1/runtimes/{id}/tokens:rotate` | 轮换 runtime API token |
-| DELETE | `/api/v1/runtimes/{id}` | 软删除 / 下线 |
-| GET | `/api/v1/runtimes/{id}/executions` | 该 runtime 的执行历史 |
-| GET | `/api/v1/executions/{id}` | 执行详情 |
-| POST | `/api/v1/executions/{id}:cancel` | 取消执行 |
-| POST | `/api/v1/executions/{id}:freeze` | 冻结可疑执行（吊销短期凭证、保留现场） |
-| GET | `/api/v1/executions/{id}/logs?offset=N&stream=stdout` | 拉取日志（续传，REST 轮询 / 补历史） |
-| GET(SSE) | `/api/v1/executions/{id}/logs/stream?offset=N` | 实时日志流（SSE 降级通道） |
-| WS | `/ws` 订阅 `execution:{id}:logs` | 实时日志流（WebSocket 主通道） |
-| GET/POST/DELETE | `/api/v1/credentials` | secret 管理（明文只进不出） |
+| GET | `/api/v1/workspaces/{ws}/runtimes` | runtime 列表（游标分页，可按 status/kind/labels 过滤） |
+| POST | `/api/v1/workspaces/{ws}/runtimes` | 创建 runtime（返回一次性激活码 + 安装命令；cli.md `mesh runtime register` 的控制台侧影子记录，cli.md §1.3） |
+| GET | `/api/v1/workspaces/{ws}/runtimes/{id}` | runtime 详情（元数据、负载、最近心跳；cli.md `mesh runtime status` 排障只读数据源） |
+| PATCH | `/api/v1/workspaces/{ws}/runtimes/{id}` | 更新（name、labels、max_concurrent） |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}:pause` | 暂停（不再领新任务） |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}:resume` | 恢复 |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}/tokens:rotate` | 轮换 runtime API token |
+| DELETE | `/api/v1/workspaces/{ws}/runtimes/{id}` | 软删除 / 下线 |
+| GET | `/api/v1/workspaces/{ws}/runtimes/{id}/executions` | 该 runtime 的执行历史 |
+| GET | `/api/v1/workspaces/{ws}/executions/{id}` | 执行详情 |
+| POST | `/api/v1/workspaces/{ws}/executions/{id}:cancel` | 取消执行 |
+| POST | `/api/v1/workspaces/{ws}/executions/{id}:freeze` | 冻结可疑执行（吊销短期凭证、保留现场） |
+| GET | `/api/v1/workspaces/{ws}/executions/{id}/logs?offset=N&stream=stdout` | 拉取日志（续传，REST 轮询 / 补历史；`stream=stdout\|stderr` 分流过滤） |
+| GET(SSE) | `/api/v1/workspaces/{ws}/executions/{id}/logs/stream?offset=N` | 实时日志流（SSE 降级通道，§3.3） |
+| WS | `/ws` 订阅 `execution:{id}:logs` | 实时日志流（WebSocket 主通道；频道名不含工作区段，订阅授权按 §6.7 资源级重校验） |
+| GET/POST/DELETE | `/api/v1/workspaces/{ws}/credentials` | secret 管理（明文只进不出） |
 
 **创建 runtime 请求 / 响应**：
 
 ```json
-// POST /api/v1/runtimes  — 请求
+// POST /api/v1/workspaces/{ws}/runtimes  — 请求
 {
   "name": "intranet-build-01",
   "kind": "self_hosted",
@@ -564,7 +566,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 **取消执行**：
 
 ```json
-// POST /api/v1/executions/8f3a1d2c-.../cancel  — 响应 200
+// POST /api/v1/workspaces/{ws}/executions/8f3a1d2c-.../cancel  — 响应 200
 {
   "data": {
     "id": "8f3a1d2c-4e5b-4a2c-9d1e-3b7c8a0f1e2d",
@@ -725,17 +727,19 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 ### 3.3 日志流式端点（WebSocket 主 / SSE 降级，含续传）
 
-连接：订阅 `/ws` 频道 `execution:{id}:logs`（可带初始 `offset`）；SSE 降级 `GET /api/v1/executions/{id}/logs/stream?offset=N`。两者共用同一 offset 协议。
+连接：订阅 `/ws` 频道 `execution:{id}:logs`（可带初始 `offset`）；SSE 降级 `GET /api/v1/workspaces/{ws}/executions/{id}/logs/stream?offset=N`（MES-77：补 workspace 前缀，与 §3.1 表一致）。两者共用同一 offset 协议。
 
 服务端帧（文本帧，JSON）：
 
 ```json
-{"type": "log", "stream": "stdout", "offset": 1049012, "line": "PASSED [ 41%]"}
-{"type": "log", "stream": "stderr", "offset": 1049120, "line": "warning: deprecated api"}
+{"type": "log", "stream": "stdout", "offset": 1049012, "ts": "2026-07-24T09:41:58Z", "line": "PASSED [ 41%]"}
+{"type": "log", "stream": "stderr", "offset": 1049120, "ts": "2026-07-24T09:41:59Z", "line": "warning: deprecated api"}
 {"type": "status", "status": "running"}
 {"type": "heartbeat", "server_time": "2026-07-24T09:42:00Z"}
 {"type": "end", "status": "completed", "final_offset": 1200340}
 ```
+
+> **`log` 帧 `ts` 字段（MES-77 增量，配合 cli.md C5 写死）**：RFC3339 UTC，取**服务端收口该日志段的时间**（服务端时钟，避免 daemon 时钟偏移进入日志时间轴）；同一 `POST /api/v1/daemon/attempts/{attempt_id}/logs` 追加段内的各帧共享该段收口时间（段级精度，非逐行）。「日志跟随」的时间维度以此为准；CLI `mesh execution logs` 默认行首渲染 `ts`（`--timestamps=false` 关闭，cli.md §1.2 C12）。WS 主通道与 SSE 降级通道帧形一致。
 
 续传协议：客户端记录已处理的最大 offset，断线重连时把它作为 `?offset=` 传入；服务端先从对象存储补发 `[offset, 已封口)` 历史，再接上实时尾部，保证**不丢、不重、单调递增**。客户端按 `offset` 去重以防补发与实时流边界重叠。频道内事件 `seq`（README §6.7，用于事件重放）与日志 `offset`（用于字节续传）并存、互不混用；日志频道为 `execution:{id}:logs`，其 `seq` 作用域即该频道。
 
@@ -759,7 +763,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 - 机器 API：runtime Bearer token（`mesh_rt_` 前缀，哈希唯一存于 `runtimes.runtime_token_hash`，R2-H2），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
 - **机器 API 强制 TLS（红线）**：runtime 协议（machine API）**仅经 TLS（HTTPS）提供，拒绝明文 HTTP**；claim / refetch 响应携带凭证明文，传输层降级即导致凭证裸露。所有 `/api/v1/daemon/` 端点强制 `Strict-Transport-Security`，非 TLS 请求返回 `403`。
 - **runtime 状态与 token 联动**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**停用其 `runtime_token`**（`api_tokens.revoked_at` 置位）；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，下线后的 token 不可调用任何机器 API。
-- 分页：`GET /api/v1/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
+- 分页：`GET /api/v1/workspaces/{ws}/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
 
 ### 3.6 WebSocket 事件清单（`/ws`，`<entity>.<action>`，带 seq）
 
