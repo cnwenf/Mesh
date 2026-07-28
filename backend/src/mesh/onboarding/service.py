@@ -423,7 +423,10 @@ async def _assign_trigger_member(
 
     Resolved from the append-only ``issue_activity`` trail: the latest
     ``field='assignee_id'`` row whose new value is this execution's agent
-    (member) and which predates the enqueue.
+    (member) and which predates the enqueue. When NO assignee-activity row
+    predates the enqueue, the agent was assigned AT ISSUE CREATION (the
+    create path writes no activity row) — the dispatching member is then
+    the issue creator (``reporter_id``), the one who chose the assignee.
     """
     if execution.agent_id is None or execution.issue_id is None:
         return None
@@ -436,7 +439,7 @@ async def _assign_trigger_member(
     )
     if agent_member is None:
         return None
-    return await session.scalar(
+    actor = await session.scalar(
         select(IssueActivity.actor_member_id)
         .where(
             IssueActivity.workspace_id == workspace_id,
@@ -449,6 +452,24 @@ async def _assign_trigger_member(
         .order_by(IssueActivity.created_at.desc())
         .limit(1)
     )
+    if actor is not None:
+        return actor
+    assignee_edits_before = await session.scalar(
+        select(func.count(IssueActivity.id)).where(
+            IssueActivity.workspace_id == workspace_id,
+            IssueActivity.issue_id == execution.issue_id,
+            IssueActivity.field == _ASSIGN_FIELD,
+            IssueActivity.created_at <= execution.queued_at,
+        )
+    )
+    if assignee_edits_before:
+        return None  # reassigned by others before this trigger — not creation
+    issue = await session.scalar(
+        select(Issue).where(
+            Issue.workspace_id == workspace_id, Issue.id == execution.issue_id
+        )
+    )
+    return issue.reporter_id if issue is not None else None
 
 
 async def resolve_execution_trigger_member(
@@ -507,6 +528,23 @@ async def evaluate_agent_reply_notification(
             Comment.id == notification.comment_id,
         )
     )
+    # Aggregated inbox groups keep the group's FIRST comment on the row and
+    # track the newest one under payload.latest_comment_id (comment-inbox.md
+    # §2.6 aggregation): when the latest comment is the agent reply, it is
+    # the evidence anchor (opening the group surfaces that reply).
+    latest_raw = (notification.payload or {}).get("latest_comment_id")
+    latest_id = _parse_uuid(latest_raw)
+    if latest_id is not None and latest_id != notification.comment_id:
+        latest = await session.scalar(
+            select(Comment).where(
+                Comment.workspace_id == workspace_id,
+                Comment.id == latest_id,
+            )
+        )
+        if latest is not None and latest.issue_id == (
+            comment.issue_id if comment is not None else latest.issue_id
+        ):
+            comment = latest
     if (
         comment is None
         or comment.author_kind != "member"
@@ -759,6 +797,57 @@ async def _historical_assign_evidence(
                 TaskExecution.agent_id == agent_member.agent_id,
                 TaskExecution.trigger == "assign",
                 TaskExecution.queued_at >= activity.created_at,
+            )
+            .order_by(TaskExecution.queued_at.asc())
+            .limit(1)
+        )
+        if execution is not None:
+            return {"execution_id": str(execution.id), "trigger_member_id": str(member_id)}
+    # Creation-time assignment leaves no activity trail: issues the member
+    # REPORTED with an agent assignee (and no assignee edits at all) dispatched
+    # their assign-triggered executions at creation — the reporter is the
+    # dispatching member (mirror of _assign_trigger_member's fallback).
+    reported = (
+        (
+            await session.execute(
+                select(Issue)
+                .where(
+                    Issue.workspace_id == workspace_id,
+                    Issue.reporter_id == member_id,
+                    Issue.assignee_id.is_not(None),
+                )
+                .order_by(Issue.created_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for issue in reported:
+        edits = await session.scalar(
+            select(func.count(IssueActivity.id)).where(
+                IssueActivity.workspace_id == workspace_id,
+                IssueActivity.issue_id == issue.id,
+                IssueActivity.field == _ASSIGN_FIELD,
+            )
+        )
+        if edits:
+            continue  # assignee changed post-creation — attribution is ambiguous
+        assignee = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == workspace_id,
+                Member.id == issue.assignee_id,
+                Member.member_type == "agent",
+            )
+        )
+        if assignee is None or assignee.agent_id is None:
+            continue
+        execution = await session.scalar(
+            select(TaskExecution)
+            .where(
+                TaskExecution.workspace_id == workspace_id,
+                TaskExecution.issue_id == issue.id,
+                TaskExecution.agent_id == assignee.agent_id,
+                TaskExecution.trigger == "assign",
             )
             .order_by(TaskExecution.queued_at.asc())
             .limit(1)

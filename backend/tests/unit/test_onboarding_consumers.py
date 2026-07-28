@@ -621,3 +621,43 @@ async def test_consumer_reconciles_legacy_member_on_next_get(
     step_map = {s["step_key"]: s for s in payload["steps"]}
     assert step_map[STEP_INVITE_MEMBER_OR_ADD_AGENT]["status"] == "completed"
     assert seed_for_new_member is not None  # import sanity
+
+
+async def test_execution_queued_assign_at_creation_attributes_reporter(
+    session_factory, workspace_factory, member_factory, owner_user
+):
+    """Assignment AT ISSUE CREATION writes no issue_activity trail; the
+    dispatching member is then the issue creator (reporter)."""
+    workspace = await workspace_factory()
+    creator = await member_factory(workspace)
+    s_creator = await _seed(session_factory, workspace, creator)
+    agent, agent_member = await make_agent_member(
+        session_factory, workspace, owner_user=owner_user
+    )
+    issue = await make_issue(
+        session_factory, workspace, reporter_id=creator.id, assignee_id=agent_member.id
+    )
+    execution = await make_execution(
+        session_factory, workspace, agent_id=agent.id, issue_id=issue.id, trigger="assign"
+    )
+
+    await _consume(
+        session_factory,
+        _event(
+            workspace.id,
+            "execution.queued",
+            {
+                "execution_id": str(execution.id),
+                "agent_id": str(agent.id),
+                "issue_id": str(issue.id),
+                "trigger": "assign",
+            },
+        ),
+    )
+
+    steps = await _steps(session_factory, s_creator.id)
+    assert steps[STEP_DISPATCH_OR_MENTION_AGENT].status == "completed"
+    assert steps[STEP_DISPATCH_OR_MENTION_AGENT].evidence == {
+        "execution_id": str(execution.id),
+        "trigger_member_id": str(creator.id),
+    }
