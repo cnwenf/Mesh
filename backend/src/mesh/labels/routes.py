@@ -101,10 +101,24 @@ async def _context_for(
     user: User,
     session: AsyncSession,
     workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
 ) -> WorkspaceContext:
-    return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=None
-    )
+    """Run the membership gate for a workspace-less path (workspace.md §5.3).
+
+    The resolver already proved the resource exists SOMEWHERE; if the caller
+    is not a member of that workspace the gate raises "workspace not found".
+    That message differs from the "<resource> not found" an unknown id gets —
+    a two-message existence oracle for arbitrary UUIDs. Rewriting the gate
+    404 to the resource message makes the two cases indistinguishable; no
+    content leaks either way (the service-layer read gate still runs).
+    """
+    try:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=None
+        )
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
 
 
 # ----------------------------------------------------------------------
@@ -168,7 +182,9 @@ async def update_label(
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = LabelPatch(
         name=_tri(body.name, "name" in fields),
@@ -200,7 +216,9 @@ async def delete_label(
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
+    )
     data = await service.delete_label(
         actor=context.member,
         workspace_id=workspace_id,
@@ -279,7 +297,9 @@ async def update_custom_field(
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = FieldDefPatch(
         name=_tri(body.name, "name" in fields),
@@ -315,7 +335,9 @@ async def delete_custom_field(
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     data = await service.delete_field_def(
         actor=context.member,
         workspace_id=workspace_id,
@@ -344,7 +366,9 @@ async def list_options(
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     items, next_cursor = await service.list_options(
         viewer=context.member,
         workspace_id=workspace_id,
@@ -370,7 +394,9 @@ async def create_option(
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     data = await service.create_option(
         actor=context.member,
         workspace_id=workspace_id,
@@ -401,7 +427,9 @@ async def update_option(
     workspace_id = await service.resolve_field_def_workspace(parsed_field)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     fields = body.model_fields_set
     patch = OptionPatch(
         name=_tri(body.name, "name" in fields),
@@ -437,7 +465,9 @@ async def delete_option(
     workspace_id = await service.resolve_field_def_workspace(parsed_field)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
-    context = await _context_for(request, user, session, workspace_id)
+    context = await _context_for(
+        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+    )
     data = await service.delete_option(
         actor=context.member,
         workspace_id=workspace_id,

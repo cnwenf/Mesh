@@ -381,6 +381,7 @@ disabled ──移除──► removed
 - [ ] 把 agent 设为 `owner` 被拒,返回 409 `agent_owner_not_allowed`(前端禁用 + 后端强校验)。
 - [ ] 降级/移除/停用最后一个 active owner 被拒,返回 409 `last_owner`;校验先锁定 active owner 行再计数(FOR UPDATE,id 升序),并发竞态中恰有一个操作被拒,任何时刻 ≥1 个 active owner。移除/降级已停用的 owner 不削减 active 计数,不受此限。
 - [ ] `GET /members` 同时返回人类与 agent,可按 `member_type`、`status`、`role` 过滤,`q` 模糊搜索。
+- [ ] **`q` 搜索通配符转义**:`q` 为字面子串匹配,搜索词中的 `%` / `_` / `\` 经共享 `escape_like` 工具转义后 `ILIKE ... ESCAPE '\'`,`q=%` 不扩大匹配集(不命中全名册);与 issue 列表搜索(issue.md §3.2)同语义同实现。
 - [ ] issue.assignee、评论 author、@提及、通知均可统一引用 `members.id`,且对人与 agent 表现一致。
 - [ ] **成员模型权威(README §6.1)**:`users`/`agents` 表**不含 `member_id` 反向列**;关联方向恒为 `members.user_id → users.id` / `members.agent_id → agents.id`;同一 user 可在多个工作区各有一条 `members` 行。
 - [ ] **同租户复合 FK(README §6.2 / §9 T1)**:`members` 建有 `UNIQUE(workspace_id, id)`;引用方(issues.assignee_id/reporter_id、comments.author_id、comment_mentions.mentioned_id、notifications.recipient_id、api_tokens.owner_member_id 等)均以复合 FK `(workspace_id, <ref>_id) → members(workspace_id, id)` 引用;构造跨工作区引用(把 A 区成员设为 B 区 issue 负责人)被数据库约束拒绝。

@@ -175,19 +175,28 @@ class AttachmentService:
     async def resolve_host_workspace(
         self, session: AsyncSession, linked_type: str, linked_id: uuid.UUID
     ) -> uuid.UUID | None:
-        """Workspace of a link target (pre-tenant-context, SECURITY DEFINER)."""
+        """Workspace of a link target (pre-tenant-context, SECURITY DEFINER).
+
+        The app role runs under fail-closed RLS, so the tenant must come
+        from a narrow SECURITY DEFINER lookup (migration 0006 / 0018) — a
+        direct ``SELECT workspace_id`` would error without the tenant GUC.
+        """
         if linked_type == "issue":
             return await session.scalar(
                 text("SELECT mesh_issue_workspace_id(:id)"), {"id": linked_id}
             )
-        # comment / chat_message tables land with their own modules; existence
-        # is validated per linked_type at link time (service layer, §2.7).
-        if linked_type in {"comment", "chat_message"}:
-            table = "comments" if linked_type == "comment" else "chat_messages"
-            if table not in Base.metadata.tables:
+        if linked_type == "comment":
+            return await session.scalar(
+                text("SELECT mesh_comment_workspace_id(:id)"), {"id": linked_id}
+            )
+        # chat_message lands with its own module (definer resolver included);
+        # existence is validated per linked_type at link time (§2.7).
+        if linked_type == "chat_message":
+            if "chat_messages" not in Base.metadata.tables:
                 return None
             result = await session.execute(
-                text(f"SELECT workspace_id FROM {table} WHERE id = :id"), {"id": linked_id}
+                text("SELECT workspace_id FROM chat_messages WHERE id = :id"),
+                {"id": linked_id},
             )
             return result.scalar()
         return None

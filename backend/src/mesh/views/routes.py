@@ -109,11 +109,27 @@ def _query_uuid(raw: str | None, *, field: str) -> uuid.UUID | None:
 
 
 async def _context_for(
-    user: User, session: AsyncSession, workspace_id: uuid.UUID
+    user: User,
+    session: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    not_found_message: str,
 ) -> WorkspaceContext:
-    return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=None
-    )
+    """Run the membership gate for a workspace-less path (workspace.md §5.3).
+
+    The resolver already proved the resource exists SOMEWHERE; if the caller
+    is not a member of that workspace the gate raises "workspace not found".
+    That message differs from the "<resource> not found" an unknown id gets —
+    a two-message existence oracle for arbitrary UUIDs. Rewriting the gate
+    404 to the resource message makes the two cases indistinguishable; no
+    content leaks either way (the service-layer read gate still runs).
+    """
+    try:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=None
+        )
+    except NotFoundError as exc:
+        raise NotFoundError(not_found_message) from exc
 
 
 async def _resolve_context(
@@ -124,7 +140,7 @@ async def _resolve_context(
     workspace_id = await service.resolve_view_workspace(view_id)
     if workspace_id is None:
         raise NotFoundError(_VIEW_NOT_FOUND)
-    return await _context_for(user, session, workspace_id)
+    return await _context_for(user, session, workspace_id, not_found_message=_VIEW_NOT_FOUND)
 
 
 # ----------------------------------------------------------------------

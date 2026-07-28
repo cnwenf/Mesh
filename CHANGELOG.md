@@ -45,6 +45,31 @@ MES-63 验收第 1 轮打回整改(Mesh 验收员独立核验 2 CRITICAL 安全�
 - **导入流水线与安全(skill.md §3.5/§5.3,README §6.16)**:`parsing→validating→sandbox_preview→(awaiting_review)→ready→installed` 异步状态机,逐阶段独立事务提交 + `skill_import.progress` 广播,worker 崩溃恢复扫描循环;**SSRF 防护**:拒绝 RFC1918/环回/链路本地(含云元数据 `169.254.169.254`)/IPv6 ULA 等非公网地址,仅公网或显式主机白名单(`MESH_SKILL_SOURCE_HOST_ALLOWLIST`),重定向逐跳重校验,凭据内嵌 URL 拒绝,全部拒绝原因收敛为中性 502 `source_unreachable`(不泄露内部拓扑);manifest 双层校验(结构 400 `validation_error` / 语义 422 `manifest_invalid`:缺指令正文、未知 runtime、非法 SemVer、路径穿越);**内容一次拉取即冻结**——预览所见即安装所得(无 TOCTOU 换包);**信任分级审批**:marketplace/url 含脚本强制人工逐项确认,权限最小化 `granted ⊆ required`(422 `capability_not_declared`),审批发布版本;§4.4 反绕过:脚本任一 `content_hash` 变化无论 SemVer 级别一律重入审批(升级切换返回 422),`auto_update` 仅跟随脚本哈希不变的纯 PATCH,其余标 `updated_available` + `skill.update_available`。
 - **事件与联动(§3.5/§4.5/§6.11)**:`skill.changed` / `skill_import.progress` / `skill.update_available` / `skill.approval_required` 经 outbox → projector 唯一路径广播于 `workspace:{ws}:skills`;**§6.11 入队快照联动**:绑定态产出 `{skill_id: version_id}` 映射 + 授权声明,经 `register_skill_context_resolver` 接入 agent 统一编排入口(MES-60 预留接缝),冻结进 `config_snapshot.skill_versions` / `capability_grants`,后续改绑/回滚只影响新入队;**自动触发匹配(§4.5)**:关键词/标签多策略打分 × 绑定优先级、Top-N 裁剪、per-skill 互斥、`matched_by` 可解释证据、显式指定强制注入、三档停用即停注入。
 - **前端(skill.md §4)**:技能库页(`/skills`:搜索/来源/状态筛选 + 卡片网格 + 信任徽标 + 「含脚本」角标 + 新建对话框 + 实时重拉)、技能详情页(概览/版本历史/脚本/资料/触发条件五 Tab;脚本正文展开 + 高危能力高亮;安装/启停/弃用操作区)、三步导入向导(来源 → 预览校验:**脚本强制逐项确认** + 权限最小化勾选 → 审批/安装;进度轮询退化)、技能市场页(下载量/评分/认证徽标,含脚本条目「需人工审批」提示)、agent 详情页「技能」Tab 绑定区(替换 MES-60 占位:启停复选/自动触发开关/优先级/解绑/从库绑定 + ⚠ 脚本提示)、侧栏「技能」入口;i18n 全外部化(zh-CN + en 各 +136 键,目录 djb2 版本哈希重算)。
+## [0.15.1] - 2026-07-28
+
+安全硬化债清偿(MES-57):MES-51 验收发现的 L3/L5 同族口径债产品级收敛,无行为破坏、无接口变更。
+
+### Security
+
+- **无前缀端点存在性 oracle 消除(产品级统一,workspace.md §5.3)**:所有经 SECURITY DEFINER 解析租户的无前缀资源端点,成员门 404 在路由层统一转写为资源级消息,「id 不存在」「存在但非成员」「软删除」三态返回同一 404 文本、不可区分,消除任意 UUID 的资源存在性探测:
+  - `/projects/{id}`、`/milestones/{id}`、`/cycles/{id}`、`/project-templates/{id}`(含 updates / milestones / members 子路径与 instantiate)→ 对应资源消息;
+  - `/labels/{id}`、`/labels/{id}/merge`、`/custom-fields/{id}[/options[/{opt_id}]]` → `label not found` / `custom field not found`;
+  - `/views/{id}`(含 `/issues` 执行路径)→ `view not found`;
+  - `/attachments/{id}`(含 `/complete`、`/abort`、`/download`、`/thumbnail`)、`/multipart/{id}/parts|complete` → `attachment not found`;`/issues|comments/{id}/attachments` → `{linked_type} not found`;
+  - `POST /attachments/upload-requests` 的 `link_to` 派生租户分支取宿主资源消息;显式 `workspace_id` 分支与 token 自身工作区保持 `workspace not found`(与 `require_workspace` 一致,指名即无存在性推断)。
+- **名册搜索 LIKE 通配符转义**:`GET /workspaces/{id}/members` 的 `q` 为字面子串匹配,经共享 `escape_like` + `ILIKE ... ESCAPE '\'`(与 issue 列表搜索同一实现),`q=%` 不再命中全名册。
+- **RLS fail-closed e2e 断言收窄**:fail-closed 锚定 `undefined_object`(42704)、跨租 INSERT 锚定 RLS WITH CHECK 拒绝(42501),逐表探针独立连接,不再可被无关语句级错误满足。
+
+### Fixed
+
+- **comment 租户解析 fail-closed 修复**:`resolve_host_workspace` 的 comment 分支改经 SECURITY DEFINER `mesh_comment_workspace_id`(迁移 0018);应用角色 fail-closed RLS 下直连查表无 GUC 即错(42704),原使 `/comments/{id}/attachments` 对已存在 comment 返回 500 而非契约 404。
+
+### Docs
+
+- workspace.md §5.3 补全无前缀端点清单并增「调用方指名工作区保持 workspace 404」例外句;project / label-property / kanban / member / attachment spec 同步实现口径。
+
+门槛:ruff 净;全量单测 + 真实 e2e(PostgreSQL 16 + Redis + MinIO,零 mock)全绿;覆盖率 93.69%(≥90%),改动文件均 ≥90%。
+
 
 ## [0.15.0] - 2026-07-28
 

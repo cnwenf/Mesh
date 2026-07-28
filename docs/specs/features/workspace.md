@@ -524,6 +524,7 @@ active ──到期(定时/惰性)───────────► expired(�
 - [ ] 删除/归档等危险操作仅 owner 可触发,且需二次确认。
 - [ ] 邀请创建、工作区创建受 auth.md 限流约束,超限返回 429 + `Retry-After`。
 - [ ] 错误信息不泄露其它工作区存在性或内部细节。
+- [ ] **无前缀端点 404 口径统一(产品级)**:所有经 SECURITY DEFINER 解析租户的无前缀资源端点(`/issues/{id}`、`/statuses/{id}`、`/issue-templates/{id}`、`/projects/{id}`、`/milestones/{id}`、`/cycles/{id}`、`/project-templates/{id}`、`/labels/{id}`、`/custom-fields/{id}[/options[/{opt_id}]]`、`/views/{id}`、`/attachments/{id}`(及 `/complete`、`/abort`、`/download`、`/thumbnail` 子路径)、`/multipart/{id}/parts|complete`、`/issues|comments/{id}/attachments`;`POST /attachments/upload-requests` 的 `link_to` 派生租户分支同口径,取宿主资源消息)对「id 不存在」「存在但非成员」「软删除」三态返回**同一资源级 404 消息**(如 `project not found`);成员门的 `workspace not found` 在路由层转写为资源消息,两态不可区分,消除任意 UUID 的资源存在性 oracle。**例外**:调用方指名工作区的路径(带 `/workspaces/{id}` 前缀、`upload-requests` 显式 `workspace_id` 分支、token 自身工作区)保持 `workspace not found` 口径(与 `require_workspace` 一致,指名即无存在性推断)。
 - [ ] **用户可控 URL scheme 校验**:`logo_url` 等用户可控 URL 字段服务端校验 scheme,禁止 `javascript:`/`data:`,**仅允许 `https`**(README §6.16:统一 https-only)。
 
 ### 5.4 实时

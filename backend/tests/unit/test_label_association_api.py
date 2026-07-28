@@ -204,19 +204,28 @@ async def test_cross_tenant_issue_paths_404(client, caplog):
     # Surface the server-side traceback if the intermittent 500 recurs.
     assert resp.status_code == 201, f"{resp.text}\nSERVER-LOG:\n{caplog.text}"
     issue = resp.json()["data"]
+    unknown = str(uuid.uuid4())
     for method, path in (
         ("GET", f"/api/v1/issues/{issue['id']}/labels"),
         ("PUT", f"/api/v1/issues/{issue['id']}/labels"),
         ("GET", f"/api/v1/issues/{issue['id']}/custom-field-values"),
         ("PUT", f"/api/v1/issues/{issue['id']}/custom-field-values"),
     ):
-        resp = await client.request(
-            method, path,
-            json={"label_ids": []} if method == "PUT" and "labels" in path
-            else {"values": []} if method == "PUT" else None,
-            headers=_auth(owner_b),
+        body = (
+            {"label_ids": []} if method == "PUT" and "labels" in path
+            else {"values": []} if method == "PUT" else None
         )
+        resp = await client.request(method, path, json=body, headers=_auth(owner_b))
         assert resp.status_code == 404, (method, path, resp.text)
+        # L3 parity: the membership-gate 404 is rewritten to the resource
+        # message — byte-identical to a totally unknown issue id, so the
+        # association paths carry no existence oracle either (§5.3).
+        assert resp.json()["error"]["message"] == "issue not found"
+        missing = await client.request(
+            method, path.replace(issue["id"], unknown), json=body, headers=_auth(owner_b)
+        )
+        assert missing.status_code == 404
+        assert missing.json()["error"]["message"] == "issue not found"
 
 
 async def test_unauthenticated_401(client):

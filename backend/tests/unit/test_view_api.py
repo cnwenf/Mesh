@@ -342,3 +342,51 @@ async def test_write_rate_limit_headers_present(client) -> None:
     assert resp.headers["x-ratelimit-limit"] == "120"
     assert "x-ratelimit-remaining" in resp.headers
     assert "x-ratelimit-reset" in resp.headers
+
+
+async def test_prefixless_endpoints_uniform_404_message(client) -> None:
+    """L3 product-wide parity (workspace.md §5.3): /views/{id} paths return
+    the SAME 404 message for "unknown id" and "exists in another tenant" —
+    no view-existence oracle, matching the issue module."""
+    owner_a = await _register_and_login(client, "l3v-a@corp.com")
+    owner_b = await _register_and_login(client, "l3v-b@corp.com")
+    await _create_workspace(client, owner_a, "l3v-a")
+    ws_b = await _create_workspace(client, owner_b, "l3v-b")
+    view_b = await _create_view(client, owner_b, ws_b["id"], name="Secret Board")
+    random_id = str(uuid.uuid4())
+
+    probes = (
+        # (existing-id probe, existing id, resource message)
+        (
+            lambda target: client.get(f"/api/v1/views/{target}", headers=_auth(owner_a)),
+            view_b["id"],
+            "view not found",
+        ),
+        (
+            lambda target: client.patch(
+                f"/api/v1/views/{target}", json={"name": "x"}, headers=_auth(owner_a)
+            ),
+            view_b["id"],
+            "view not found",
+        ),
+        (
+            # non-member DELETE is rejected by the gate — the view survives
+            lambda target: client.delete(f"/api/v1/views/{target}", headers=_auth(owner_a)),
+            view_b["id"],
+            "view not found",
+        ),
+    )
+    for call, existing_id, message in probes:
+        existing = await call(existing_id)  # exists, owner_a is NOT a member
+        missing = await call(random_id)  # does not exist anywhere
+        assert existing.status_code == 404, existing.text
+        assert missing.status_code == 404, missing.text
+        # Both states are indistinguishable and carry the resource message.
+        assert existing.json()["error"]["message"] == message
+        assert missing.json()["error"]["message"] == message
+
+    # Soft-deleted + non-member → same message.
+    await client.delete(f"/api/v1/views/{view_b['id']}", headers=_auth(owner_b))
+    deleted_probe = await client.get(f"/api/v1/views/{view_b['id']}", headers=_auth(owner_a))
+    assert deleted_probe.status_code == 404
+    assert deleted_probe.json()["error"]["message"] == "view not found"

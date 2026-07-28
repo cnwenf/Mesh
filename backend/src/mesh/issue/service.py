@@ -73,6 +73,7 @@ from mesh.labels.required_fields import validate_required_field_values
 from mesh.member.display import resolve_display_name
 from mesh.outbox.service import emit_realtime
 from mesh.project.service import ProjectService
+from mesh.validation import LIKE_ESCAPE_CHAR, escape_like
 from mesh.workspace.service import DEFAULT_INBOX_PREFIX, next_inbox_issue_number
 
 ISSUE_NOT_FOUND = "issue not found"
@@ -152,15 +153,6 @@ def _limit_page(limit: int | None) -> int:
     if limit < 1:
         raise ValidationError("limit must be >= 1", code="invalid_limit")
     return min(limit, MAX_PAGE_LIMIT)
-
-
-def _escape_like(term: str) -> str:
-    """Escape LIKE wildcards so ``q`` matches as a literal substring (§3.2).
-
-    The query stays parameterised (no injection surface) — this only stops
-    user-supplied ``%`` / ``_`` / ``\\`` from widening the match set.
-    """
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _parse_uuid(raw: str | uuid.UUID | None, *, field: str) -> uuid.UUID | None:
@@ -908,11 +900,11 @@ class IssueService:
             if due_after is not None:
                 stmt = stmt.where(Issue.due_date >= due_after)
             if q is not None:
-                pattern = f"%{_escape_like(q.strip())}%"
+                pattern = f"%{escape_like(q.strip())}%"
                 stmt = stmt.where(
                     or_(
-                        Issue.title.ilike(pattern, escape="\\"),
-                        Issue.identifier.ilike(pattern, escape="\\"),
+                        Issue.title.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
+                        Issue.identifier.ilike(pattern, escape=LIKE_ESCAPE_CHAR),
                     )
                 )
             if filters is not None:

@@ -18,6 +18,22 @@ from mesh.errors import BusinessRuleError, ValidationError
 # they are truncated so a pathological value cannot bloat the error envelope.
 _DETAIL_MAX_LENGTH = 128
 
+# Backslash is the LIKE/ILIKE escape character every search path agrees on
+# (issue list §3.2, roster search §3.4). Pair ``escape_like`` output with
+# ``ilike(pattern, escape=LIKE_ESCAPE_CHAR)`` — without the ``escape=`` clause
+# the doubled backslashes would themselves act as wildcards.
+LIKE_ESCAPE_CHAR = "\\"
+
+
+def escape_like(term: str) -> str:
+    """Escape LIKE wildcards so ``term`` matches as a literal substring.
+
+    The query stays parameterised (no injection surface) — this only stops
+    user-supplied ``%`` / ``_`` / ``\\`` from widening the match set (a raw
+    ``q=%`` would otherwise hit the whole table).
+    """
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 def validate_iana_timezone(value: str) -> None:
     """Raise 422 ``invalid_timezone`` unless ``value`` is a valid IANA name."""
