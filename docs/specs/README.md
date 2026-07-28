@@ -185,6 +185,9 @@ Mesh 由 **20 个功能模块**组成,分五层:
 | **import-export(数据导入导出)** | issue/project 的 CSV/JSON 导入(字段映射/校验/错误行报告,支持从其它工具迁移)+ 异步导出任务与签名下载(走统一附件通道)。owns `data_jobs` |
 | **analytics(统计报表)** | cycle time / velocity / 吞吐量 / workload / burndown、项目与工作区仪表盘、按 agent 维度的运行统计;数据源为 `issues`/`task_executions` 聚合,明确口径与时间窗 |
 | **i18n(国际化与时区)** | locale 协商、字符串外部化、本地化日期/数字渲染、`users.timezone` 展示层时区化(存储仍 UTC);与主题/暗色(§6.12)共同构成前端呈现契约 |
+| **search-command-palette(全局搜索 / 命令面板 / 快捷键体系)** | §6.12 详 Spec:`Ctrl/Cmd+K` 命令面板(跨模块搜 issue/成员/agent/项目/视图/聊天会话,服务端权限过滤)、规范深链(一切资源外链唯一形态)、power-user 快捷键四组(全局/看板/issue/聊天)+ `?` 上下文帮助层 + 输入框豁免;横切导航效率层,不新增业务表,不扩 §6.7 事件词汇 |
+| **cli(开发者平台 CLI)** | §11 详 Spec:`mesh` 官方命令行(REST 瘦客户端,经 `api_tokens`/设备码会话鉴权),工作项/项目/成员/agent/执行/日志流式(SSE)/导入导出全命令族,`--output table\|json` 双模式与退出码分类,OpenAPI 3.1 随仓库发布;服务端零新表(设备码授权为 auth.md 增量) |
+| **theme(主题与暗色模式)** | §6.12 主题段详 Spec:三态 `light/dark/system`、偏好协商链(用户→工作区默认→系统,镜像 §6.18 locale 链)、语义 token 单一取色路径与暗色 token 集整组替换、两套主题 WCAG AA 自证 + CI 门禁(对比度/硬编码扫描);设计系统级呈现契约,不新增业务表 |
 
 ---
 
@@ -214,6 +217,9 @@ Mesh 由 **20 个功能模块**组成,分五层:
 | 18 | [import-export.md](features/import-export.md) | 平台能力 | CSV/JSON 导入(映射/校验/错误行报告)、异步导出 + 签名下载(统一附件通道) |
 | 19 | [analytics.md](features/analytics.md) | 平台能力 | cycle time/velocity/吞吐量/workload/burndown、项目与工作区仪表盘、agent 运行统计 |
 | 20 | [i18n.md](features/i18n.md) | 平台能力 | locale 协商、字符串外部化、本地化渲染、时区化展示(存储 UTC) |
+| 21 | [search-command-palette.md](features/search-command-palette.md) | 平台能力 | 命令面板跨模块搜索(服务端权限过滤)、规范深链、power-user 快捷键四组 + `?` 上下文帮助层 + 输入框豁免 |
+| 22 | [cli.md](features/cli.md) | 平台能力 | `mesh` CLI 命令族(REST 瘦客户端)、PAT/设备码鉴权、日志 SSE 流式、导入导出联动、退出码契约、OpenAPI 3.1 |
+| 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令 |
 
 调研原始记录见 [`../research/`](../research/)(每模块一份,功能 / 数据模型 / 接口 / UI / UX 四维度)。
 
