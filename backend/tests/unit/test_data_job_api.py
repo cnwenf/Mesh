@@ -308,7 +308,7 @@ class TestExportEndpoints:
 
 
 class TestOwnershipAndDownload:
-    async def test_stranger_gets_404(self, client, app, session_factory):
+    async def test_stranger_gets_403(self, client, app, session_factory):
         token, ws_id, member_id = await _setup_admin(client, session_factory)
         source_id = await _seed_source(app.state.storage, session_factory, ws_id, member_id)
         created = await client.post(
@@ -322,7 +322,9 @@ class TestOwnershipAndDownload:
             headers=_auth(token),
         )
         job_id = created.json()["data"]["id"]
-        # another member of the SAME workspace (non-admin) → 404 not 403
+        # another member of the SAME workspace (non-admin) → 403 forbidden
+        # (§3.12 / §5.4: a same-tenant non-owner/admin is a permission failure;
+        # only a missing / cross-tenant job is 404).
         other_token = await _register_and_login(client, f"other-{uuid.uuid4().hex[:8]}@mesh.example")
         # join the workspace via invitation is complex; create a member row directly
         other_me = await client.get("/api/v1/me", headers=_auth(other_token))
@@ -336,7 +338,7 @@ class TestOwnershipAndDownload:
                 {"ws": ws_id, "u": other_user},
             )
         got = await client.get(f"/api/v1/data-jobs/{job_id}", headers=_auth(other_token))
-        assert got.status_code == 404
+        assert got.status_code == 403
 
     async def test_download_without_product_404(self, client, session_factory):
         token, ws_id, _m = await _setup_admin(client, session_factory)

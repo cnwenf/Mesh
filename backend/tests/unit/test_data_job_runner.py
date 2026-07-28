@@ -816,8 +816,8 @@ class TestReviewFixesH1M1M2:
         allocator = RowKeyAllocator()
         ext = await worker._ensure_external_ref_field(claim)
         await worker._run_batch(claim, rows, 1, context, ext, allocator, len(rows), skip=False)
-        await worker._resolve_parents(claim, context, source_path)
-        await worker._resolve_parents(claim, context, source_path)  # re-run = resume
+        await worker._resolve_parents(claim, context, source_path, ext)
+        await worker._resolve_parents(claim, context, source_path, ext)  # re-run = resume
         async with session_factory() as session:
             warning_rows = await session.scalar(
                 select(func.count())

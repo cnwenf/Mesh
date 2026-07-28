@@ -316,7 +316,7 @@ class TestTwoPhaseContract:
             await service.run_import(workspace_id=workspace.id, member=member, job_id=job_id)
         assert exc.value.code == "source_changed"
 
-    async def test_owner_gate_404_for_stranger(self, session_factory, workspace_factory, member_factory):
+    async def test_owner_gate_403_for_stranger(self, session_factory, workspace_factory, member_factory):
         workspace = await workspace_factory()
         stranger = await member_factory(workspace, role="member")
         admin = await member_factory(workspace, role="admin")
@@ -334,7 +334,9 @@ class TestTwoPhaseContract:
             ),
         )
         job_id = uuid.UUID(created["id"])
-        with pytest.raises(NotFoundError):
+        # §3.12 / §5.4: a same-tenant non-owner/admin is forbidden (403), not
+        # invisible — only a missing / cross-tenant job is 404.
+        with pytest.raises(ForbiddenError):
             await service.get_job(workspace_id=workspace.id, member=stranger, job_id=job_id)
         # the owner and any admin can see it
         assert (await service.get_job(workspace_id=workspace.id, member=admin, job_id=job_id))["id"] == str(

@@ -558,6 +558,68 @@ async def test_export_real_worker_product_download(api_client, data_job_worker, 
         assert "export me 0" in fetched.text and "WS-2" in fetched.text
 
 
+async def test_export_filtered_by_state_category_real_worker(
+    api_client, data_job_worker, session_factory
+):
+    """§3.5/E3 HIGH regression: a filtered export must actually filter.
+
+    The flat filter dict (§2.4) is translated onto ``list_issues`` typed
+    kwargs + a ``state_category`` ``in`` tree node. Before the fix the raw
+    flat dict was passed straight through as ``filters=`` and
+    ``compile_filter_tree`` rejected it, so every filtered export failed at
+    runtime as ``storage_error``. Real worker + real list query here.
+    """
+    token = await _register_and_login(api_client, f"e2e-fexport-{uuid.uuid4().hex[:8]}@x.io")
+    workspace_id = await _create_workspace(api_client, token)
+    from mesh.issue.statuses import ensure_scope_seeded
+
+    async with session_factory() as session, session.begin():
+        ws_uuid = uuid.UUID(workspace_id)
+        await ensure_scope_seeded(session, workspace_id=ws_uuid)
+        status_id = (
+            await session.execute(
+                select(__import__("mesh.db.models.issue", fromlist=["IssueStatus"]).IssueStatus.id).limit(1)
+            )
+        ).scalar_one()
+        for i, category in enumerate(["todo", "todo", "done"]):
+            session.add(
+                Issue(
+                    workspace_id=ws_uuid,
+                    identifier_namespace_key="WS",
+                    number=i + 1,
+                    identifier=f"WS-{i + 1}",
+                    title=f"filtered {i} {category}",
+                    status_id=status_id,
+                    state_category=category,
+                )
+            )
+    created = await api_client.post(
+        "/api/v1/data-jobs/export",
+        json={
+            "workspace_id": workspace_id,
+            "scope": "workspace",
+            "format": "csv",
+            "filters": {"state_category": ["todo"]},
+        },
+        headers=_auth(token),
+    )
+    assert created.status_code == 201, created.text
+    job_id = created.json()["data"]["id"]
+    final = await _wait_job_status(api_client, token, job_id, frozenset({"completed", "failed"}))
+    # A broken filter translation fails the job; the fix yields exactly the 2 todos.
+    assert final["status"] == "completed", final
+    assert final["total_rows"] == 2
+    download = await api_client.get(f"/api/v1/data-jobs/{job_id}/download", headers=_auth(token))
+    assert download.status_code == 200, download.text
+    url = download.json()["data"]["url"]
+    async with httpx.AsyncClient(timeout=30) as external:
+        fetched = await external.get(url)
+        assert fetched.status_code == 200, fetched.text
+        assert "filtered 0 todo" in fetched.text
+        assert "filtered 1 todo" in fetched.text
+        assert "filtered 2 done" not in fetched.text
+
+
 def _storage_settings_kwargs() -> dict:
     endpoint = os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000")
     return {
