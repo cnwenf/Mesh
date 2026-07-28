@@ -178,10 +178,10 @@ services:
         condition: service_healthy
 
   frontend:
-    image: nginx:alpine
-    volumes:
-      - ./frontend/placeholder:/usr/share/nginx/html:ro
-      - ./frontend/placeholder/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    # Real SPA front-door (H5): builds the bundle and serves it same-origin via
+    # nginx, reverse-proxying /api → api and /ws → gateway (no CORS needed).
+    build:
+      context: ./frontend
     ports:
       - "127.0.0.1:${MESH_FRONTEND_PORT:-3001}:80"
     depends_on:

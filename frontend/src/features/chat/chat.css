@@ -1,0 +1,583 @@
+/**
+ * 聊天模块样式(chat-session.md §4)。颜色一律经语义 token(design/tokens.css),
+ * 暗色模式由 token 集整体替换实现(README §6.12)。左列表 + 右会话响应式布局。
+ */
+
+.mesh-chat {
+  display: grid;
+  grid-template-columns: minmax(16rem, 20rem) 1fr;
+  gap: var(--space-4);
+  height: 100%;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .mesh-chat {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mesh-chat__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- 会话列表 ---- */
+
+.mesh-chat__sessions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  border-right: 1px solid var(--color-border);
+  padding-right: var(--space-3);
+}
+
+.mesh-chat__sessions-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-chat__sessions-scroll {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.mesh-chat__sessions-group {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-chat__session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.mesh-chat__session--selected {
+  border-color: var(--color-primary);
+  background: var(--color-surface-raised);
+}
+
+.mesh-chat__session-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.mesh-chat__session-title {
+  font-weight: 600;
+}
+
+.mesh-chat__session-agent {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__session-preview {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-chat__session-time {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- 会话面板 ---- */
+
+.mesh-chat__conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-2);
+}
+
+.mesh-chat__conversation-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-chat__conversation-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.mesh-chat__context-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__messages {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+.mesh-chat__message-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* ---- 消息气泡 ---- */
+
+.mesh-chat__bubble {
+  max-width: 70%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.mesh-chat__bubble--user {
+  align-self: flex-end;
+  background: var(--color-surface-raised);
+}
+
+.mesh-chat__bubble--agent {
+  align-self: flex-start;
+}
+
+.mesh-chat__bubble--failed {
+  border-color: var(--color-danger);
+}
+
+.mesh-chat__bubble-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__bubble-role {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-chat__ai-badge {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__bubble-time {
+  margin-left: auto;
+}
+
+.mesh-chat__quote {
+  margin: var(--space-1) 0;
+  padding-left: var(--space-2);
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__quote-label {
+  margin-right: var(--space-1);
+}
+
+.mesh-chat__bubble-body {
+  margin-top: var(--space-1);
+}
+
+.mesh-chat__bubble-error {
+  color: var(--color-danger);
+}
+
+.mesh-chat__bubble-interrupted {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__cursor {
+  display: inline-block;
+  width: 0.5ch;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-text);
+  animation: mesh-chat-blink var(--duration-slow) steps(1) infinite;
+}
+
+@keyframes mesh-chat-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.mesh-chat__attachments {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-chat__attachment {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__attachment-size {
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__bubble-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.mesh-chat__action {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 候选分支 ---- */
+
+.mesh-chat__candidates {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  align-self: flex-start;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- 输入框 ---- */
+
+.mesh-chat__composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-2);
+}
+
+.mesh-chat__composer-quote {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-surface-raised);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__composer-quote-text {
+  flex: 1;
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__composer-uploads {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-chat__composer-upload {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__composer-upload-name {
+  font-weight: 600;
+}
+
+.mesh-chat__composer-upload-meta {
+  flex: 1;
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__composer-input {
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family);
+}
+
+.mesh-chat__composer-file {
+  display: none;
+}
+
+.mesh-chat__composer-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-chat__composer-error {
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 新建会话 / 沉淀对话框 ---- */
+
+.mesh-chat__new-session,
+.mesh-chat__distill {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-chat__context-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.mesh-chat__context-result {
+  display: flex;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.mesh-chat__context-id {
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__context-selected {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-chat__new-session-actions,
+.mesh-chat__distill-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.mesh-chat__distill-body {
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family);
+}
+
+.mesh-chat__distill-trigger {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__distill-suppress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-chat__distill-attachments {
+  margin: 0;
+  padding-left: var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- 会话搜索(§4.1) ---- */
+
+.mesh-chat__sessions-search {
+  display: flex;
+}
+
+.mesh-chat__search-input {
+  flex: 1;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 会话 agent 头像(§4.1) ---- */
+
+.mesh-chat__avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  align-self: center;
+}
+
+.mesh-chat__avatar--fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 上下文条:项目 / 添加入口 / 空提示(§4.2) ---- */
+
+.mesh-chat__context-bar {
+  flex-wrap: wrap;
+}
+
+.mesh-chat__context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mesh-chat__context-prompt {
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__context-add {
+  margin-left: auto;
+}
+
+/* ---- system 消息:隐藏原始 fence,仅呈现提示 chip(§6.15) ---- */
+
+.mesh-chat__bubble--system {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.mesh-chat__context-linked-chip {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 候选分支:选用按钮 + 已选中标记(§4.2) ---- */
+
+.mesh-chat__candidate-use {
+  margin-left: var(--space-2);
+}
+
+.mesh-chat__candidate-selected {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--color-primary);
+}
+
+/* ---- 消息附件扫描闸门(§4.2 / attachment.md §3) ---- */
+
+.mesh-chat__attachment-body {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.mesh-chat__attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-chat__attachment-status {
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__attachment-status--blocked {
+  color: var(--color-danger);
+}
+
+.mesh-chat__attachment-thumb {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.mesh-chat__attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mesh-chat__attachment-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

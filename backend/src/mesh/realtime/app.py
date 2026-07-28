@@ -13,6 +13,7 @@ from mesh import __version__
 from mesh.agent.channels import register_agent_checkers
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
+from mesh.chat.channels import register_chat_checkers
 from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.config import Settings, load_settings, validate_auth_settings
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
@@ -73,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_agent_checkers(app.state.authorizer, session_factory)
     register_execution_checkers(app.state.authorizer, session_factory)
     register_squad_checkers(app.state.authorizer, session_factory)
+    register_chat_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)

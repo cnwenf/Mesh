@@ -240,6 +240,21 @@ class AttachmentService:
             )
             if exists is None:
                 raise NotFoundError(f"{linked_type} not found")
+            # L2: a chat_message host must belong to a session the actor owns;
+            # otherwise a member could attach files into another member's
+            # private conversation. Denial is a uniform 404 (no existence leak).
+            if linked_type == "chat_message":
+                owner_id = await session.scalar(
+                    text(
+                        "SELECT s.owner_id FROM chat_sessions s "
+                        "JOIN chat_messages m ON m.session_id = s.id "
+                        "AND m.workspace_id = s.workspace_id "
+                        "WHERE m.id = :id AND m.workspace_id = :ws"
+                    ),
+                    {"id": linked_id, "ws": workspace_id},
+                )
+                if owner_id is None or owner_id != member.id:
+                    raise NotFoundError("chat_message not found")
             return
         raise ValidationError(
             "invalid link_to.type", details={"linked_type": str(linked_type)[:32]}
@@ -1058,6 +1073,45 @@ class AttachmentService:
             blob = await session.get(AttachmentBlob, attachment.blob_id)
             assert blob is not None
             return {"data": await self._render_attachment(session, attachment, blob, links)}
+
+    async def link_attachment(
+        self,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        attachment_id: uuid.UUID,
+        linked_type: str,
+        linked_id: uuid.UUID,
+        display: str | None = None,
+        position: int = 0,
+    ) -> dict[str, Any]:
+        """Link an already-uploaded attachment to a host entity.
+
+        Server-side complement to the upload-request ``link_to`` path: chat
+        messages (chat-session.md §2.4) and comments are created first, then
+        their attachments are linked through the unified ``attachment_links``
+        (attachment.md §2.7). Re-linking an existing pair is an idempotent
+        no-op returning the existing link (``_create_link`` absorbs the
+        ``uq_attachment_link`` conflict).
+        """
+        link_to = {"type": linked_type, "id": linked_id, "position": position}
+        if display is not None:
+            link_to["display"] = display
+        async with self._factory() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            attachment = await self._load_visible(session, workspace_id, attachment_id)
+            await self._assert_host_write(session, actor, workspace_id, link_to)
+            link = await self._create_link(session, workspace_id, attachment, link_to)
+            return {
+                "id": str(link.id),
+                "attachment_id": str(attachment.id),
+                "linked_type": link.linked_type,
+                "linked_id": str(link.linked_id),
+                "file_name": attachment.file_name,
+                "mime_type": attachment.mime_type,
+                "byte_size": attachment.byte_size,
+                "scan_status": attachment.scan_status,
+            }
 
     async def delete_attachment(
         self,

@@ -224,6 +224,10 @@ OUTBOX_INTERNAL_EVENT_TYPES: frozenset[str] = frozenset(
         "data_job.enqueue",
         "data_job.resume",
         "squad.plan_decided",
+        # chat-session.md §4.4 衔接: finalize the trigger='chat' execution
+        # when the platform-driven generation terminates (relay handler:
+        # mesh.runtime.enqueue.chat_generation_finished_handler).
+        "chat.generation_finished",
     }
 )
 

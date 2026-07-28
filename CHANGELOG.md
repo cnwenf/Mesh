@@ -3,6 +3,38 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.17.0] - 2026-07-28
+
+阶段 7·协作层 C:chat-session 模块全功能实现(MES-67,chat-session.md 五章)。与 agent 的实时对话(形态 A)完整落地:README §6.8 流式协议(POST 创建 generation → GET SSE 流 + `Last-Event-ID` 断点续传 + 独立幂等 stop)、候选回复分支、会话管理(置顶经 README §6.19 `favorites` 唯一真源)、issue 上下文注入(§6.15 不可信内容结构隔离)、沉淀为评论闭环(§6.9 trigger preview + 一次提交),agent 回复经 `execution.enqueue` 入队(trigger='chat',§6.5 幂等键)。
+
+### Added
+
+- **数据模型(chat-session.md §2,迁移 0024/0025,链于 autopilot 0023 / squad 0021-0022 / skill 0020 之后)**:`chat_sessions`(owner→members / agent→agents / 上下文 issue·project 同租户复合 FK,可空上下文列级 `ON DELETE SET NULL (<列>)`(§6.2-6),`status`/`message_count` CHECK,§2.8 列表部分索引)+ `chat_messages`(role/generation_status 状态机 CHECK;**同会话父域重叠复合 FK**(§6.2-7):`parent_id`/`quote_message_id` 经 `(workspace_id, session_id, <ref>) → chat_messages(workspace_id, session_id, id)` 在 INSERT 层拒绝跨会话父消息/引用,列级 SET NULL 保留会话绑定;**`uq_chat_messages_one_streaming` UNIQUE 部分索引**强制单会话单并发;幂等键部分唯一**按 session 作用域**)+ `favorites`(README §6.19 统一收藏:成员私有、`UNIQUE(member_id, target_type, target_id)`、会话置顶唯一真源——`chat_sessions` 无 `is_pinned` 快照,双真源漂移从结构上消除);RLS fail-closed + `mesh_chat_session_workspace_id` SECURITY DEFINER 引导函数。
+- **REST(§3.1-§3.5)**:会话 CRUD(owner-only,非 owner 统一 404 不泄漏存在性;标题自动生成/手动重命名 `title_is_auto`;归档/软删除 + favorites 联动清理;agent/状态筛选;置顶优先 + 活跃时间倒序**DB 层**整体游标分页(EXISTS 计算 pinned,§5.2 万级 P95),`pinned` 为请求者 favorites 服务端快照;候选元数据单窗口函数查询无 N+1);消息游标分页(时间倒序;`?parent_id=` 候选模式返回全部候选 + `candidate_count`/`candidate_index`);发消息 201 `{message_id, generation_id, stream_url}`(§6.14 `Idempotency-Key` 幂等写;§3.5 单会话单并发 409 `generation_in_progress`;per-user-per-session 限流 429);regenerate(新增候选并切换选中,旧候选保留不覆盖)/ select(原子切换)/ stop(202,重复调用无副作用,接受 `Idempotency-Key`);`distill-preview`(目标 issue、正文、附件、@agent 副作用预览,无副作用);错误码 §3.4 全集;favorites PUT/DELETE/GET(幂等,失效目标剔除,**chat_session 目标 owner 校验**消除存在性 oracle)。
+- **流式协议(§3.3,README §6.8 唯一权威)**:POST 仅创建 generation(用户消息 + agent 占位同事务落库 + 触发入队),流式消费一律 **GET SSE**(EventSource 线格式;事件 `message.created/delta/done/interrupted` + `error` + 15s `ping` 心跳,**ping 帧不带 `id:`** 以免污染 `Last-Event-ID` 续传游标);`Last-Event-ID` 断点续传(Redis Stream 帧缓冲,MAXLEN + TTL);缓冲淘汰后迟到订阅者降级为「REST 整段正文 + 终态帧」;前端以 fetch streaming 消费并自实现重连 + `Last-Event-ID` 对账(§6.8 选项 4,仅对非 ping 帧推进游标)。**独立幂等 stop 端点**:stop 标志 + 条件更新双保险;`stop` 永不以空/截断缓冲覆盖更长的已持久化正文(取较长者);重复 stop 返回同一终态无副作用。
+- **生成引擎**:API 进程内 asyncio 任务驱动(上游推理为可替换 provider,本模块仅声明协议——§1.3 非目标);delta 同进程写 Redis Stream + pub/sub 广播,终态条件更新落库(首个写者胜:引擎/stop 端点竞态安全);首轮完成自动标题(取首问截断,`title_is_auto` 保持 true);**模型上下文历史仅取 `selected_candidate=true` 的回合**(非选中候选不污染);issue 上下文快照每会话一条 system 消息,**围栏结构隔离 + 每快照随机 token + 显式标注「数据而非指令」**(§6.15,L1 防伪造闭合分隔符逃逸);`streaming` 超过 `chat_streaming_stale_seconds` 视为失联,下次发送时单并发守卫就地回收(置 failed + 终结执行)。
+- **触发与执行衔接(§6.9/§6.5,§4.4 更新)**:agent 回复同事务经 outbox 写 `execution.enqueue`(`trigger='chat'`,幂等键 `sha256(agent_id|issue_id|trigger_event_id)`,上下文 issue 为空时稳定 `nil` 占位);**runtime claim 显式 `trigger != 'chat'`**,在线 runtime 不抢 chat 执行(否则平台快速路径终态回写永久丢失);生成终态经 outbox 内部事件 `chat.generation_finished`(relay handler `chat_generation_finished_handler`)把 `task_executions` 行落终态(`done→completed`/`interrupted→cancelled`/`failed→failed`),入队尚未物化时按 outbox 重试补投(受 `outbox_max_attempts` 上限,超限置 failed 告警)——chat 平台驱动快速路径(不经 claim/attempt 物理层),chat-session.md §4.4 与 runtime.md 同步标注。
+- **频道授权(§6.7, H2 修复)**:`chat_session:{id}` owner 级订阅鉴权 + **owner 私有 `chat_list:{owner_member_id}` 列表级频道**(仅承载本人会话预览字段,剥离 content/partial_content;移除原 workspace 全员广播以杜绝跨用户内容泄漏);API/网关双注册,不漂移;`chat_session` 纳入 RESOURCE_SCOPED_ENTITIES fail-closed;终态事件经 outbox → projector 唯一路径。
+- **跨模块复用**:`AttachmentService.link_attachment` 公开方法(聊天附件经统一 `attachment_links`,linked_type='chat_message',服务端关联,**宿主会话 owner 校验**防向他人会话注入文件);`CommentService.preview_triggers` 公开方法(沉淀 trigger preview 与发表共用同一提及解析管线,预览与提交不漂移)。
+- **前端 `/chat`(§4)**:会话列表面板(置顶区、agent/状态筛选、**搜索框**、**agent 头像**、新建对话框含 agent 选择 + 上下文 issue/**project** 选择器、预览与相对时间)、对话面板(**上下文关联条增/改/换入口**、用户/agent 气泡 + AI 徽章、**system 围栏原文不暴露(显示「已关联上下文」提示)**、流式打字机 + 光标、停止按钮全程可用、完成后重生成、**候选 ‹ i/n › 本地翻页 + 独立「使用此条」落库**、引用卡片、**附件扫描态门禁/下载/缩略图**)、沉淀为评论对话框(目标 issue/正文/附件/@agent 副作用预览 + 「发布后将触发一次运行」+ `suppress_triggers` 开关 → 一次提交)、fetch-streaming SSE 客户端(重连 + Last-Event-ID + **visibilitychange single-flight**)、`chat.*` i18n 双语全外部化 + 错误码键。
+- **测试**:chat/favorites 模块新增单测(服务层直测 + ASGI 路由 + SSE 生成器 + 模型约束 + 复审负向:H4 ping 无 id / L4 stop 不覆盖更长正文 / streaming 回收 / M5 历史排除非选中候选)覆盖率 ≥90%;真实 e2e(真 uvicorn 子进程 + 真 relay/projector + 真 PG/Redis):POST→SSE 全链路与执行落库、`Last-Event-ID` 真连接续传、mid-stream 幂等 stop(独立慢速服务器)、候选分支、沉淀为评论 §6.9 触发/抑制双路、不可信隔离 §6.15、T1 跨租户(404 + 复合 FK IntegrityError)、置顶成员私有——全绿。
+
+### 验收第 1 轮整改(round-2, Mesh 验收员 完整清单)
+
+- **C1 迁移撞号 + 版本**:chat 迁移重编号 **0024/0025**(`down_revision` 链于 autopilot `0023`,经 squad `0021-0022`、skill `0020`),版本改 **0.17.0**;`api/app.py`/`workers/main.py`/`db/models/__init__.py`/`config.py`/i18n 目录与 main 完整合入保留 skill+chat 双方全量接线,`alembic heads` 单 head。
+- **C2 CI**:rebase 最新 main 后推送触发 pull_request CI(本地全量门禁先绿)。
+- **H1**:`runtime/claim.py` claim 查询加 `trigger != 'chat'`;补「在线 runtime 不 claim chat 执行且终态仍 completed」回归。
+- **H2**:列表级终态改投 owner 私有 `chat_list` 频道并剥离正文;补跨成员订阅负向用例。
+- **H3**:`uq_chat_messages_one_streaming` UNIQUE 部分索引在 DB 层强制单并发;补并发双请求单胜出用例。
+- **H4**:ping 帧去 `id:`;前端仅对非 ping 帧推进续传游标;补「收 ping 后断线重连不重放」用例。
+- **H5**:`docker compose` frontend 改承载真实构建产物并经 nginx 同源反代 `/api`→api、`/ws`→gateway;README Quick Start 写明同源路径;补 compose 真栈 `/chat` 全链路冒烟。
+- **M1**:补 favorites routes 校验/DELETE 幂等用例(逐文件 ≥90%)。
+- **M2**:幂等键查找与唯一索引叠加 `session_id` 维度。
+- **M3**:favorites PUT 对 `chat_session` 目标补 owner 校验(404 统一)。
+- **M4**:guest 关联上下文补 `assert_guest_project_visible`(私有项目 404)+ engine 注入前复核。
+- **M5**:模型上下文历史过滤 `selected_candidate=true`。
+- **M7**:`list_sessions` 改 DB 层 EXISTS 排序 + 分页;候选元数据改单窗口函数查询。
+- **L**:会话删除复用 `favorites_service.cleanup_for_target`;stop 接受 `Idempotency-Key`;streaming 卡死超时回收;§4.4 注明 `outbox_max_attempts` 上限与随机围栏 token。
 ## [0.16.6] - 2026-07-28
 
 autopilot 验收 R3 整改(验收员两轮合并清单 M1–M5 全闭合 + LOW 项并入;复验 salvaged 改动时发现并彻底修复 M1 自环防护在真实服务下的两层根因):
