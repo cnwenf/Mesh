@@ -762,7 +762,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 - 控制台 API：用户 Bearer token（会话 / JWT），按 workspace + 角色鉴权。
 - 机器 API：runtime Bearer token（`mesh_rt_` 前缀，哈希唯一存于 `runtimes.runtime_token_hash`，R2-H2），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
 - **机器 API 强制 TLS（红线）**：runtime 协议（machine API）**仅经 TLS（HTTPS）提供，拒绝明文 HTTP**；claim / refetch 响应携带凭证明文，传输层降级即导致凭证裸露。所有 `/api/v1/daemon/` 端点强制 `Strict-Transport-Security`，非 TLS 请求返回 `403`。
-- **runtime 状态与 token 联动**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**停用其 `runtime_token`**（`api_tokens.revoked_at` 置位）；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，下线后的 token 不可调用任何机器 API。
+- **runtime 状态与 token 联动（R3-H4：mesh_rt_ 真源全链收口）**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**清除其 `runtimes.runtime_token_hash`（置 NULL——机器令牌唯一真源即失效，不存在可复用的已撤销令牌行；恢复服务经 `tokens:rotate` 重新签发新 `mesh_rt_` 令牌）**，**不经 `api_tokens`（runtime 令牌不入该表，R2-H2）**；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，且 token 哈希校验命中当前 `runtime_token_hash`——下线/停用后旧令牌调用任何机器 API 必然 401（哈希为空或状态门拒绝）。
 - 分页：`GET /api/v1/workspaces/{ws}/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
 
 ### 3.6 WebSocket 事件清单（`/ws`，`<entity>.<action>`，带 seq）
@@ -1014,7 +1014,7 @@ stateDiagram-v2
 - [ ] **仓库 checkout 白名单验收（H1）**：checkout 命中 `allowed_repos` 白名单外 URL → `403`；`repo_token` 不可用于白名单外仓库；平台托管 runtime checkout 私网 / 元数据地址被拒（集成测试覆盖）。
 - [ ] **注入环境变量名安全（NEW-M1）**：`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 平台保留前缀等敏感名 → `422` 拒绝。
 - [ ] **机器 API 强制 TLS（NEW-M3）**：非 TLS 请求到 `/api/v1/daemon/` 返回 `403`。
-- [ ] **runtime 下线即吊销 token（NEW-L2）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token` 同步停用；下线后 token 调用任何机器 API 返回 `401`。
+- [ ] **runtime 下线即吊销 token（NEW-L2；R3-H4 收口）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token_hash` 同步清除（置 NULL，`api_tokens` 无此令牌行）；下线后以旧令牌明文调用任何机器 API 返回 `401`；恢复服务经 `tokens:rotate` 签发新令牌，旧令牌永久失效。
 - [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重；事件名全部命中 README §6.7 词汇注册表（含 `execution.awaiting_approval`）。
 - [ ] **终态通知按矩阵分发**（README §6.13，T25）：失败/超时为 critical 进收件箱 + 可选 Webhook（穿透 quiet hours、重置同组未读）；成功默认留运行页/时间线（仅订阅 `execution_finished` 时进收件箱，不穿透、不重置未读）；取消不通知发起者。
 

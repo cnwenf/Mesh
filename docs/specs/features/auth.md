@@ -21,6 +21,8 @@
 
 **会话模型取舍**:采用"短期无状态 access JWT(便于横向扩展)+ 服务端可撤销 refresh token(支撑撤销与多设备管理)"混合模型,比纯 JWT 或纯 session cookie 更平衡。access TTL 短(如 15min),使撤销最长延迟 = access TTL。
 
+**无状态 access 的执行边界(评审 R3-H1 写死,全链唯一口径)**:常规 `/api/v1` 路由的 Bearer 中间件对会话 access JWT **只做验签 + `exp` + claims 解析,不逐请求查 `sessions` 表**(横向扩展与低延迟的既定取舍)——`sid` 查表**仅用于三处**:① 自省 `GET /auth/token`;② 自撤销 `DELETE /auth/token`;③ `/auth/refresh`(校验会话未撤销/未过期)。**撤销会话后的失效语义**:refresh **立即失效**(下一次 refresh/自省/自撤销命中 `revoked_at` 即拒),**已签发 access 最迟于 TTL(≤15min)自然失效**,窗口内已撤销会话的 access 在常规路由**仍可通过**——验收不得要求会话撤销对常规路由即时生效(PAT 无此窗口:`api_tokens.revoked_at` 逐请求查,撤销即时 401,长令牌对逐请求查表的负载可接受)。WebSocket 连接经 `session.revoked` 实时广播主动失效(§3.7),不等 TTL。全链不得出现「常规请求按 `sid` 逐请求查 session 即时 401」的表述(与无状态模型互斥)。
+
 ### 1.2 功能点 + 用户场景表
 
 | # | 功能点 | 典型用户场景 |
@@ -136,7 +138,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - `uq_token_hash (token_hash)`;`uq_sessions_device_auth (device_authorization_id)`(NULL 不冲突);
 - `idx_sessions_user (user_id) WHERE revoked_at IS NULL`。
 
-> **access JWT 声明(写死)**:`{sub: user_id, sid: session.id, jti: <本枚 access 唯一>, workspace_id?: <设备会话绑定值>, scope?: <固化 scope>, exp, iat}`。自省(`GET /auth/token`)与自撤销(`DELETE /auth/token`)**按 `sid` 定位 sessions 行**(PAT 按 `token_hash` 定位 `api_tokens` 行);`jti` 仅用于单枚 access 的审计/去重,不承担会话关联。撤销 session(refresh)后,已签发的 access 在 ≤ TTL 内过期,`sid` 命中 `revoked_at` 非空的行即拒绝(§3.7/§5.5)。
+> **access JWT 声明(写死)**:`{sub: user_id, sid: session.id, jti: <本枚 access 唯一>, workspace_id?: <设备会话绑定值>, scope?: <固化 scope>, exp, iat}`。**常规路由只验签 + `exp` + claims,不按 `sid` 查表**(R3-H1 无状态边界);自省(`GET /auth/token`)与自撤销(`DELETE /auth/token`)**按 `sid` 定位 sessions 行**(PAT 按 `token_hash` 定位 `api_tokens` 行);`/auth/refresh` 按 refresh `jti`(= session.id)校验会话未撤销;`jti` 仅用于单枚 access 的审计/去重,不承担会话关联。撤销 session 后 refresh 立即失效,已签发 access 最迟 TTL 自然失效(窗口内常规路由仍可通过,§1.1/§3.7/§5.5);WS 连接经 `session.revoked` 广播主动断开。
 
 ### 2.4.1 表:`password_reset_tokens` 与 `email_verification_tokens`(一次性令牌)
 
@@ -238,7 +240,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | `mesh_agt_` | agent 运行凭证 | `api_tokens.token_hash`(SHA-256) | agent 的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色;默认不含 `agent:trigger` 防回环) | 命中行 JOIN `members.member_type='agent'`,否则拒绝 |
 | `mesh_rt_` | runtime 守护进程令牌 | **`runtimes.runtime_token_hash`(SHA-256,runtime.md §2 owns;R2-H2 写死:不入 `api_tokens`——runtime 非名册成员,`owner_member_id NOT NULL` 无法承载)** | runtime(机器) | **仅 `/api/v1/daemon/*` 命名空间**(runtime.md §3.2),不得调控制台 API | 仅以 `runtimes` 表校验(哈希 + runtime_id 匹配);常规路由的 Bearer 依赖对 `mesh_rt_` 一律拒绝 |
 | `mesh_rft_` | 会话 refresh token | `sessions.token_hash`(SHA-256) | 用户会话 | **仅 `POST /api/v1/auth/refresh`** | 仅 refresh 端点受理;其他端点出现即拒绝 |
-| (无前缀,JWT 格式) | 会话 access JWT | 无状态(签名校验,`sid` → sessions) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min | `sid` 命中会话行且未撤销 |
+| (无前缀,JWT 格式) | 会话 access JWT | 无状态验签(**常规路由不查表**,R3-H1) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min | 验签 + exp + claims 有效;**`sid` 查表(撤销校验)仅限自省/自撤销/refresh 三处** |
 
 > **注册表校验 = 词形 + 类型语义(R2-H2 写死)**:校验链先按前缀路由到**对应存储表**(词形),再断言**持有者类型与使用边界**(类型语义)——`mesh_agt_` 前缀的令牌命中 human 成员行、`mesh_rt_` 出现在常规路由、`mesh_rft_` 出现在 refresh 以外端点,一律拒绝并告警。扫描/测试不止检查「前缀字符串存在」,还断言示例与实现中**前缀 ⇄ 存储表 ⇄ 持有者类型**三者绑定一致(§5.2)。
 
@@ -317,7 +319,11 @@ approved ──TTL 过期──► expired(未被消费即过期)
 
 鉴权:除登录/注册/重置等公开端点外均需 `Authorization: Bearer <token>`。token 可为 ① 会话 access JWT(短期);② API token(长期,供 **CLI/agent**,`mesh_pat_`/`mesh_agt_`);③ refresh(仅 `/auth/refresh`,`mesh_rft_`)。**runtime 机器令牌(`mesh_rt_`)不经本模块 API token 体系——仅存 `runtimes.runtime_token_hash`,仅 daemon 命名空间校验(runtime.md §3.5,R2-H2)**。服务端按令牌格式/前缀路由到对应校验逻辑(§2.5.1 类型语义)。游标分页,统一错误信封。
 
-> **HTML 文档请求的鉴权形态(R2-H5 写死)**:Web 应用的 **HTML 入口文档请求**(应用路由的 GET,非 XHR/fetch)以 **httpOnly + Secure cookie `mesh_session`**(承载会话 refresh,§5.5)鉴权——`<head>` 脚本无法读取该 cookie,但**服务端入口中间件可凭其解析请求者身份**,渲染入口 HTML 并注入非敏感协商结果(theme.md §2.3 首帧「精确注入」链路:appearance 主题模式、入口级公共配置);**`/api/v1` 的一切 API 调用仍以 Bearer 为唯一鉴权形态**(cookie 不用于 API 路由,避免 CSRF 面;入口注入数据仅为只读展示提示,权威数据经 API 复核)。邀请接受页等未登录入口不经 cookie,appearance 取公开 invitation preview(workspace.md §3.1)。
+> **Web / CLI 双客户端 refresh 契约(R3-H2 写死,可执行)**:
+> - **Web(浏览器 SPA)**:refresh 凭证**仅以 HttpOnly cookie `mesh_session` 存在**——属性 `Secure; HttpOnly; SameSite=Strict; Path=/`(Path 为 `/` 使 HTML 入口请求亦携带,供入口个性化注入;**HttpOnly 使 JS 永远读不到该值**)。**Web 登录响应体不把 refresh 明文返回给 JS**——`POST /auth/login` 对 Web 客户端(按 `Accept: text/html` 协商或登录端点的 `client=web` 形态)仅返回 access JWT + 元数据,refresh 经 `Set-Cookie: mesh_session=mesh_rft_…; Secure; HttpOnly; SameSite=Strict; Path=/` 下发;**`/api/v1/auth/refresh` 在 Web 形态认该 cookie**(浏览器自动携带,前端无需也无法组装 Bearer),CSRF 防护:**`SameSite=Strict` + 请求 `Origin`/`Referer` 与本站同源校验**(缺失/跨源 → 403),成功轮换经 `Set-Cookie` 下发新 refresh 并撤销旧的(防重放);前端把新 access 存**内存**(不进 localStorage),access 过期即自动调 `/auth/refresh`;
+> - **CLI / 非浏览器客户端**:`/auth/refresh` 认 `Authorization: Bearer mesh_rft_…`(设备码/PAT 流程同);**cookie 与 Bearer 按客户端形态分流,同一请求只认其一**(Web 形态不认 Bearer refresh,CLI 形态不认 cookie);
+> - **cookie 的能力面 = 仅 refresh**:`/api/v1` 其余一切路由**只认 Bearer,拒绝 cookie 鉴权**——即使 cookie 泄漏,攻击面也限于「为同一用户续期」,不构成任意 API 调用能力;
+> - **个性化入口缓存边界(R3-H2)**:HTML 入口文档凡含 `__MESH_APPEARANCE__` 或任何按请求者定制的内容(已登录入口 / 邀请入口,theme.md §2.3 精确注入链路),响应头**必须 `Cache-Control: private, no-store`**;**可缓存的静态 shell**(无个性化骨架 HTML、内容哈希命名的 JS/CSS/字体,长效缓存)与**个性化 HTML 物理分离**(入口文档仅含 shell 引用 + 注入脚本,不含可长期缓存的公共内容),杜绝共享 CDN/代理把 A 的注入结果发给 B;邀请预览为公开数据但按 token 个性化,同样 `no-store`。
 
 ### 3.1 认证端点
 
@@ -325,7 +331,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 |------|------|------|:---:|
 | POST | `/api/v1/auth/register` | 邮箱+密码注册 | ✅ |
 | POST | `/api/v1/auth/login` | 登录,返回 access + refresh | ✅ |
-| POST | `/api/v1/auth/refresh` | refresh 换新 access(可轮换 refresh)。**新 access 的 scope = 会话 `granted_scopes` 固化值 ∩ 持有者当前角色权限**(R2-H1:角色降权后旧 scope 不延续;`web` 会话 granted_scopes 为空,按角色实时计算);新 access 继承 `sid`、另发逐枚唯一 `jti`;设备会话 access 继承 `workspace_id` 声明 | ✅ |
+| POST | `/api/v1/auth/refresh` | refresh 换新 access(可轮换 refresh)。**凭证形态双客户端分流(R3-H2)**:Web 形态认 HttpOnly cookie `mesh_session`(SameSite=Strict + Origin/Referer 同源校验,轮换经 `Set-Cookie` 下发);CLI 形态认 `Authorization: Bearer mesh_rft_…`;同请求只认其一。**新 access 的 scope = 会话 `granted_scopes` 固化值 ∩ 持有者当前角色权限**(R2-H1:角色降权后旧 scope 不延续;`web` 会话 granted_scopes 为空,按角色实时计算);新 access 继承 `sid`、另发逐枚唯一 `jti`;设备会话 access 继承 `workspace_id` 声明;**校验按 refresh `jti`(= session.id)命中 sessions 行且 `revoked_at` 为空**(R3-H1 三处查表点之一) | ✅ |
 | POST | `/api/v1/auth/logout` | 登出当前会话(撤销 refresh) | |
 | POST | `/api/v1/auth/logout-all` | 撤销该用户全部会话 | |
 | POST | `/api/v1/auth/forgot-password` | 发起重置(恒返回成功,防枚举) | ✅ |
@@ -348,9 +354,9 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | 方法 | 路径 | 说明 | 公开 |
 |------|------|------|:---:|
 | POST | `/api/v1/auth/device/code` | 取码:`{client_id: "mesh-cli", scope: "<space-joined>"}` → `200 {"data": {device_code, user_code, verification_uri, verification_uri_complete, expires_in(默认 900), interval(默认 5)}}`;同事务落 `device_authorizations`(`status='pending'`,仅存 HMAC 哈希);写审计 `auth.device_code_issued`(account-less,`metadata` 落 client_id/request_ip/scope) | ✅ |
-| POST | `/api/v1/auth/device/token` | 轮询换令牌(量化爆破防护,§2.4.2):请求 `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`。`pending` → `400 authorization_pending`(具名 code,§6.14 信封);限速违规 → `429 slow_down`(`Retry-After`,客户端间隔 +5s);拒绝 → `400 access_denied`(终止);过期/作废 → `400 expired_token`/`invalid_grant`(重新发起)。**成功 200**(仅 `status='approved'` 且未过期,经 §2.4.2 原子条件更新单次消费):`{data: {access_token(会话 access JWT,含 sid/workspace_id/scope 声明), refresh_token(mesh_rft_…), token_type: "Bearer", expires_in, scope(= granted_scopes 实际签发值), workspace: {id, slug}(批准绑定工作区,CLI 直接采用为默认)}}`,同事务建 `sessions` 行(`type='cli'`,`workspace_id`/`granted_scopes` 取批准绑定值,`device_authorization_id` 指回本授权记录——UNIQUE 保证单码至多一会话,§2.4)+ 置 `consumed_at` + 审计 `auth.device_consumed` | ✅ |
+| POST | `/api/v1/auth/device/token` | 轮询换令牌(量化爆破防护,§2.4.2):请求 `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`。`pending` → `400 authorization_pending`(具名 code,§6.14 信封);限速违规 → `429 slow_down`(`Retry-After`,客户端间隔 +5s);拒绝 → `400 access_denied`(终止);过期/作废 → `400 expired_token`/`invalid_grant`(重新发起)。**成功 200**(仅 `status='approved'` 且未过期,经 §2.4.2 原子条件更新单次消费;**消费前重校验名册(R3-H5:处理「批准后、消费前被移除/降权」竞争**):重读 `members(workspace_id=authz.workspace_id, user_id=authz.approved_by_user_id)`——**已移除/停用(0 活跃行)→ 作废该授权(`status='invalidated'` + 审计 `auth.device_invalidated`),轮询返回 `400 access_denied`**,**绝不签发**;**角色被降权 → `签发 scope = authz.granted_scopes ∩ 当前角色权限`(只收窄不放宽)**,以重算值签发):`{data: {access_token(会话 access JWT,含 sid/workspace_id/scope 声明), refresh_token(mesh_rft_…), token_type: "Bearer", expires_in, scope(= 实际签发值), workspace: {id, slug}(批准绑定工作区,CLI 直接采用为默认)}}`,同事务建 `sessions` 行(`type='cli'`,`workspace_id`/`granted_scopes` 取最终签发值,`device_authorization_id` 指回本授权记录——UNIQUE 保证单码至多一会话,§2.4)+ 置 `consumed_at` + 审计 `auth.device_consumed` | ✅ |
 | GET | `/api/v1/auth/device?user_code=` | 确认页数据(Web 登录态):校验 `user_code` 命中 `status='pending'` 且未过期 → 返回 `{data: {client_name, requested_scopes(人类可读全量枚举), workspaces: [{id, slug, name, my_role}](批准者所属工作区列表,供 0/1/多分流)}};命中失败/过期返回通用 `404 not_found`(**不区分不存在/已消费/过期,防码探测**) | |
-| POST | `/api/v1/auth/device/approve` | 批准(Web 登录态 + **同源 CSRF 防护**):body `{user_code, workspace_id}`——**`user_code` 必须为确认页手工录入值,批准仅绑定所录入的码**(防 RFC 8628 §5.5 钓鱼:攻击者诱使受害者批准攻击者的码);`workspace_id` 由批准者显式选定(多工作区用户不默认)。状态迁移为**原子条件更新**:`UPDATE device_authorizations SET status='approved', granted_scopes=<请求 scope ∩ 批准者角色权限>, approved_by_user_id=$u, workspace_id=$ws, approved_at=now() WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,**影响行数恰为 1 方可继续**(并发批/拒/过期竞争下恰一方成功,0 行 → 当前状态回显,不覆盖他方迁移);**服务端强制 scope 取交**(token 端点兜底重算);写审计 `auth.device_approved`(含取交前后 scope);非法 user_code → `404 not_found` | |
+| POST | `/api/v1/auth/device/approve` | 批准(Web 登录态 + **同源 CSRF 防护**):body `{user_code, workspace_id}`——**`user_code` 必须为确认页手工录入值,批准仅绑定所录入的码**(防 RFC 8628 §5.5 钓鱼:攻击者诱使受害者批准攻击者的码);`workspace_id` 由批准者显式选定(多工作区用户不默认)。**事务内先锁定批准者在该工作区的名册行(R3-H5,防篡改 body 绑定非成员工作区)**:`SELECT role FROM members WHERE workspace_id=$ws AND user_id=$u AND status='active' FOR UPDATE`——**0 行 → `403 forbidden`**(批准者非该工作区活跃成员;仅 FK 到 workspaces 不足以授权,名册行才是授权依据);`granted_scopes = 请求 scope ∩ 该名册行角色权限`(服务端强制取交)。状态迁移为**原子条件更新**:`UPDATE device_authorizations SET status='approved', granted_scopes=<取交值>, approved_by_user_id=$u, workspace_id=$ws, approved_at=now() WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,**影响行数恰为 1 方可继续**(并发批/拒/过期竞争下恰一方成功,0 行 → 当前状态回显,不覆盖他方迁移);token 端点消费时兜底重校验(见下行);写审计 `auth.device_approved`(含取交前后 scope 与名册行 id);非法 user_code → `404 not_found` | |
 | POST | `/api/v1/auth/device/deny` | 拒绝(Web 登录态 + CSRF):body `{user_code}` → **同款原子条件更新**(`SET status='denied', denied_at=now(), approved_by_user_id=$u WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,行数 1 方为本次拒绝);写审计 `auth.device_denied`;已终态时幂等返回当前状态(0 行不报错、不覆盖) | |
 
 **授权确认页 UX(auth.md UI 增量,§4 衔接;0/1/多工作区分流在此完成,评审 R2-H1)**:
@@ -478,7 +484,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 ### 4.5 关键流程(UX)
 
 1. **注册**:校验强度与唯一性 → argon2id 哈希 → 建 `users` → 发验证邮件;未验证可登录但受限。
-2. **登录**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,设备会话另含 `workspace_id`/`scope` 声明,§2.4)+ 长期 refresh(存哈希入 `sessions`)。`remember=true` 延长 refresh。
+2. **登录**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,设备会话另含 `workspace_id`/`scope` 声明,§2.4)+ 长期 refresh(存哈希入 `sessions`);**refresh 下发按客户端形态分流(R3-H2):Web 经 `Set-Cookie: mesh_session=…; Secure; HttpOnly; SameSite=Strict; Path=/`,响应体不含 refresh 明文;CLI/非浏览器在响应体返回 `mesh_rft_…` 明文一次**。`remember=true` 延长 refresh。
 3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh` → 校验哈希未撤销未过期 → **从会话行取固化 `granted_scopes` 与当前角色权限取交**作为新 access 的 scope(R2-H1)→ 颁新 access(继承 `sid`、新 `jti`;可轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
 4. **登出**:撤销当前 refresh;「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——修改密码时发起会话呈递其 refresh 则保留并刷新其近期再认证时刻,未呈递则全部失效(PAT 单独管理)。
 5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。
@@ -513,7 +519,8 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] 可选 2FA(TOTP)启用需验证码确认,并提供备用码。
 - [ ] **账号展示偏好真源(R3;MES-76 H1 修订)**:`users` 登记 `timezone`(IANA)与 `settings` JSONB(`locale` BCP-47 / `theme` **`light|dark|system|null/absent`,默认 absent/null = 继承工作区默认**),为 README §6.12/§6.18 与 i18n.md/theme.md 的偏好真源;`PATCH /api/v1/users/me` 可写 `display_name`/`avatar_url`/`timezone`/`settings.locale`/`settings.theme`(键级浅合并),非法 timezone → `422 invalid_timezone`、不支持 locale → `422 unsupported_locale`、**非法 theme → `422 invalid_theme_mode`(三处 owner 契约统一码,与 theme.md §3.3 / workspace.md 一致)**、未知字段 → `400`;**显式 `theme: null` 为合法清除(不报 422),回读 `settings.theme` 为 null,协商落工作区默认**;`GET /api/v1/me` 返回合并后 `settings`;偏好变更写 `audit_logs`;迁移脚本一次性补登记存量偏好,无双写期(集成测试 T32)。
 - [ ] **设备码授权全链路(MES-76 H7 新增,§2.4.2/§3.1.1)**:取码 → 确认页手工录入 `user_code` + 选定工作区 + 批准(取交后 scope 展示)→ 轮询 `authorization_pending` → `200` 换取会话凭证(`granted_scopes` 为取交值,响应含绑定 `workspace`);拒绝分支 `access_denied`、过期分支 `expired_token` 各有 e2e;消费原子性:同一 approved 码并发/重复消费**恰好一次成功**(第二次 `invalid_grant`,不建第二条 sessions);批准绑定:录入 A 码的确认页提交 B 码被拒;`workspace_id` 未显式选择的多工作区批准被拒。
-- [ ] **设备会话持久化与续签边界(R2-H1)**:设备登录产生的 `sessions` 行携带 `workspace_id`/`granted_scopes`/`device_authorization_id`(`type='cli'` 且 workspace 为空的插入被 CHECK 拒绝;`device_authorization_id` UNIQUE 使单码至多一条会话);access JWT 含 `sid=session.id` + 逐枚唯一 `jti`,**自省/自撤销按 `sid` 命中会话行**(断言撤销后 `sid` 命中 revoked 行即 401);**refresh 续签 scope = 会话固化值 ∩ 当前角色权限**——批准后将用户角色降权,续签得到的 scope 相应收窄(e2e 断言);approve/deny 并发竞争(同码同时批准 + 拒绝)**恰一方成功、另一方不覆盖**(原子条件更新行数断言);确认页 0/1/多工作区分流各有一条用例(0 → 批准禁用、1 → 自动绑定、多 → 未选不可提交)。
+- [ ] **批准绑定越权与批准—消费竞争(R3-H5)**:**篡改 approve body `workspace_id` 为批准者非成员的工作区 → `403`**(名册行锁定校验,负向 e2e;仅工作区存在的 FK 不构成授权);**approve 后、consume 前批准者被移出该工作区 → 消费拒绝并作废授权**(`access_denied`,授权行 `status='invalidated'` + 审计 `auth.device_invalidated` 断言,不建 sessions 行);**approve 后、consume 前批准者降权(admin → member)→ 签发 scope = 批准时取交值 ∩ 当前角色权限,只收窄**(断言签发 scope 不含 admin 专有权限,确认页展示值与实际签发一致或更宽)。
+- [ ] **设备会话持久化与续签边界(R2-H1)**:设备登录产生的 `sessions` 行携带 `workspace_id`/`granted_scopes`/`device_authorization_id`(`type='cli'` 且 workspace 为空的插入被 CHECK 拒绝;`device_authorization_id` UNIQUE 使单码至多一条会话);access JWT 含 `sid=session.id` + 逐枚唯一 `jti`,**自省/自撤销按 `sid` 命中会话行**(断言撤销后自省/自撤销/refresh 命中 revoked 行即拒);**无状态边界断言(R3-H1)**:撤销会话后,**已签发 access 在 TTL 窗口内调常规 `/api/v1` 路由仍 200**(常规中间件不查 sessions 表——以中间件无 DB 调用的测试断言),窗口过后 401,且 `session.revoked` 广播使 WS 连接主动断开(不等 TTL);**refresh 续签 scope = 会话固化值 ∩ 当前角色权限**——批准后将用户角色降权,续签得到的 scope 相应收窄(e2e 断言);approve/deny 并发竞争(同码同时批准 + 拒绝)**恰一方成功、另一方不覆盖**(原子条件更新行数断言);确认页 0/1/多工作区分流各有一条用例(0 → 批准禁用、1 → 自动绑定、多 → 未选不可提交)。
 
 ### 5.2 功能性(API token / agent)**[Mesh 特色]**
 
@@ -551,6 +558,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] 防枚举:登录/忘记密码统一文案与耗时;注册可加人机校验。
 - [ ] 防 CSRF:OAuth 用 state + PKCE;cookie 会话用 `SameSite` + CSRF token。
 - [ ] 防 XSS 窃取:refresh 优先 httpOnly + Secure cookie,access 放内存;API token 由 CLI/runtime 从环境变量读取。
+- [ ] **Web refresh cookie 契约(R3-H2)**:Web 登录响应体**不含 refresh 明文**(断言 `document.cookie` 读不到 `mesh_session`、响应 JSON 无 refresh 字段);`/auth/refresh` Web 形态凭 cookie 成功续期并轮换 `Set-Cookie`;**跨源 Origin/Referer(或缺失)的 cookie refresh 请求 → 403**;`/api/v1` 其余路由仅携带 cookie 无 Bearer → 401(cookie 不构成 API 能力面);CLI 形态 `Bearer mesh_rft_…` 续期成功;**个性化入口 HTML(含 `__MESH_APPEARANCE__`)响应头为 `Cache-Control: private, no-store`**(已登录入口与邀请入口均断言),静态 shell/资产与个性化 HTML 分离。
 - [ ] 全站 HTTPS/HSTS;签名 URL 短时效。
 - [ ] 支持 JWT 签名密钥与加密密钥轮换;密钥不出现在代码/仓库。
 - [ ] **生产拒用公开默认签名密钥(fail-closed)**:一切签名/验签令牌的应用工厂(API 与 realtime 网关两个独立部署单元)必须在启动时共享同一校验(`validate_auth_settings`)拒绝 `auth_mode=production` + 仓库公开的默认开发密钥,违者拒启动(`ConfigError`);网关不得依赖 API 侧配置,漏配 `MESH_JWT_SECRET` 必须 fail-closed 而非以公开默认密钥验签。

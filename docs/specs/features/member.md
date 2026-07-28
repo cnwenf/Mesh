@@ -224,7 +224,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
       "status": "active",
       "display_name": "Jane Doe",
       "joined_at": "2026-01-10T08:00:00Z",
-      "profile": { "id": "usr-1", "full_name": "Jane Doe", "email": "jane@acme.com",
+      "profile": { "id": "usr-1", "display_name": "Jane Doe", "email": "jane@acme.com",
                    "avatar_url": "https://cdn.example/jane.png" }
     },
     {

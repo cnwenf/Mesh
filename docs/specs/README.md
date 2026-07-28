@@ -57,7 +57,7 @@
 │   Redis(缓存 / 限流 / 在线状态 / 事件 fan-out,不做持久真源)       │
 │   对象存储(附件 / 日志段,S3 兼容)                                 │
 └───────────────▲──────────────────────────────────────────────────┘
-                │ runtime 协议(注册 / 心跳 / 领取 / 上报,API token)
+                │ runtime 协议(注册 / 心跳 / 领取 / 上报,机器令牌 mesh_rt_)
 ┌───────────────┴──────────────────────────────────────────────────┐
 │              Agent Runtime 集群(平台托管 + 用户自托管)            │
 │   领取任务 → checkout 仓库专属分支 → 沙箱执行 → 流式日志 → 回传产物 │
@@ -133,7 +133,7 @@ Spec 不约束前端框架;要求:SPA、乐观更新 + 服务端版本校验、W
 
 ### 3.3 Agent 侧
 
-底层大语言模型经统一适配层接入,可替换不同模型供应商;runtime 与平台之间只依赖 runtime 协议(REST + API token),允许用户把自有机器/容器注册为 runtime。安装与激活安全见 runtime.md(签名发布包 + 校验,激活码不进命令行参数)。
+底层大语言模型经统一适配层接入,可替换不同模型供应商;runtime 与平台之间只依赖 runtime 协议(REST + 机器令牌 `mesh_rt_`,哈希唯一存 `runtimes.runtime_token_hash`,不入 `api_tokens`,auth.md §2.5.1),允许用户把自有机器/容器注册为 runtime。安装与激活安全见 runtime.md(签名发布包 + 校验,激活码不进命令行参数)。
 
 ---
 
@@ -147,7 +147,7 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | --- | --- |
 | **workspace(工作区)** | 多租户隔离根:工作区设置、全局唯一 slug、邀请机制 |
 | **member(成员)** | 统一成员名册:人类与 agent 同册,角色(owner/admin/member/guest)、停用/启用。**owns `members` 表(唯一权威)** |
-| **auth(认证与授权)** | 注册登录、第三方 OAuth、会话、API token(供 CLI 与 runtime)、RBAC、审计、限流。owns `users`/`sessions`/`api_tokens`/`audit_logs` |
+| **auth(认证与授权)** | 注册登录、第三方 OAuth、会话、API token(供 **CLI / agent**;**runtime 机器令牌 `mesh_rt_` 不入本表,唯一真源为 `runtimes.runtime_token_hash`**,runtime.md owns,auth.md §2.5.1 注册表)、RBAC、审计、限流。owns `users`/`sessions`/`api_tokens`/`audit_logs`/`device_authorizations` |
 
 ### 4.2 项目管理层
 
