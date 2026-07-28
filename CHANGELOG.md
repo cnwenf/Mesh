@@ -23,7 +23,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 - 模块单测覆盖率维持 **≥90%**;data_jobs 真实起服 e2e 9/9 全绿(T31 八条红线 + 新增过滤导出实测);前端导入向导/导出/数据管理单测、typecheck、生产构建全绿(前端无改动)。
 
-
+## [0.17.1] - 2026-07-29
 
 平台能力层 A:数据导入导出全功能实现(MES-64,import-export.md 五章)。统一作业实体 `data_jobs` + 行台账 `data_job_rows`(迁移 0026);CSV/JSON 导入走「validate dry-run → run 部分成功」两段式,逐行值转换 + 逐行错误报告;异步导出经 outbox → worker 流式生成产物并经统一附件通道签名下载。T31 故障恢复红线全量实测:单调 `lease_seq` fencing 拒绝过期旧 worker 的批提交、`checkpoint` 续跑、`row_key` 原子占用「先占后建」杜绝重放重复建实体、源文件哈希冻结 + 替换拒绝、源附件 `ON DELETE RESTRICT`。§6.13 唯一通知矩阵补 data_job 三行(成功默认不进箱 / 部分成功 normal 进箱 / 失败 critical),仅引用不自定义分级;§6.7 `data_job.updated` 实时进度。前端导入向导(分步可回退 / 映射配置 / dry-run 错误表 / 进度)+ 数据管理页 + 项目页情境入口。真实起服 e2e 与真实浏览器 UI 走查全绿,模块单测覆盖率 ≥90%。
 
