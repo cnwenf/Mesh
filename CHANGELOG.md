@@ -26,7 +26,8 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **后端单测 54 项全绿**:模型约束 11(跨租户复合 FK 拒绝 / completed_at 一致性 CHECK / 枚举守卫 / 级联 / 并发播种恰一行五步)、服务 20(播种幂等 / reconcile 各分支含建 issue 即分派归属 / 守卫 no-op / dismiss-restore 幂等 / reset 重建)、消费 17(四事件逐分支 + R4 仅触发者完成 + 未读不完成 + 错误触发者拒绝 + 重复消费幂等 + skeleton 跳过)、路由 7(包络形状 / 404 矩阵 / 422 / 403 / 防 IDOR)。
 - **T34 四真实场景 e2e 全绿**(真 uvicorn mesh_app RLS + 生产 relay 处理器集 + 真 PostgreSQL):① 入册播种(建区/邀请兑换同事务播种,agent 不播种);② 成熟工作区 reconcile(受邀者步骤 2-3 带证据完成、步骤 4 保持 pending);③ 未读不完成(回评通知已投递未标读 → 末步 pending、aha NULL);④ 错误触发者拒绝 + 触发者本人标读 → 四元组 evidence + `onboarding.completed` 经 outbox→projector 落 `realtime_events` 仅一次;执行链全真(daemon 激活/claim/attempt completed + 真实 agent 回评 + 真实 fanout)。
 - **真实浏览器 UI 走查**:docker compose 全栈(迁移 0027 随 api 启动自动应用)+ Vite 真前端——清单渲染/进度/CTA 深链跳转/六页空状态/dismiss-帮助菜单 restore/管理员重置,存证截图。
-- **覆盖率**:后端整体 `pytest --cov-fail-under=90` 通过;前端全局 L97.5/F94.5/B90.9/S97.5(onboarding 模块 L99.7),per-file 门禁通过;`tsc` 净、eslint 0 错;`check_event_vocab.py` / `check_roster_entry.py` CI 脚本通过。
+- **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 全量实测通过(TOTAL 92%,含全部 e2e);前端全局 L97.5/F94.5/B90.9/S97.5(onboarding 模块 L99.7),per-file 门禁通过;`tsc` 净、eslint 0 错;`check_event_vocab.py` / `check_roster_entry.py` CI 脚本通过。
+- **回归适配**:`test_workspace_e2e.py` 的 outbox 频道断言收窄为按事件名分道(invitation.redeemed / member.added 仍断言工作区频道;入册播种派生的 `onboarding.progress` 断言成员私有频道 `member:{id}:onboarding`,onboarding.md §3.7)。
 
 ## [0.17.2] - 2026-07-29
 
