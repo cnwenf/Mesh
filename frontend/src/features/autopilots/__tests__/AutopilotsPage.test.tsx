@@ -178,6 +178,9 @@ describe('AutopilotsPage', () => {
     const realtime = makeRealtime();
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('autopilot-name-ap-1')).toBeInTheDocument());
+    // wait for the subscription effect to register before emitting (otherwise
+    // the frame can arrive before the listener exists — full-suite load race)
+    await waitFor(() => expect(realtime.subscribed).toContain('workspace:ws-1:autopilots'));
     const initialListCalls = calls.filter((call) => call.url.includes('/autopilots?')).length;
     realtime.emit({
       channel: 'workspace:ws-1:autopilots',
