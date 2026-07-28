@@ -20,7 +20,7 @@ import {
   getAutopilot,
   listWebhookSecrets,
   patchAutopilot,
-  previewSchedule,
+  previewScheduleParams,
 } from './api';
 import type {
   ActionConfigItem,
@@ -34,6 +34,32 @@ import { ACTION_KINDS, TRIGGER_TYPES } from './types';
 import './autopilots.css';
 
 const TIMEZONE_SUGGESTIONS = ['Asia/Shanghai', 'UTC', 'America/New_York', 'Europe/Berlin'] as const;
+
+/** §4.2 cron 常用周期下拉(选中即填 cron;手填值显示「自定义」)。 */
+const CRON_PRESETS: ReadonlyArray<{ readonly key: string; readonly cron: string }> = [
+  { key: 'weekdays9', cron: '0 9 * * 1-5' },
+  { key: 'daily9', cron: '0 9 * * *' },
+  { key: 'hourly', cron: '0 * * * *' },
+  { key: 'monday9', cron: '0 9 * * 1' },
+  { key: 'monthly1', cron: '0 9 1 * *' },
+];
+
+/** §4.2 模板变量插入(run_agent_prompt 提示词辅助)。 */
+const TEMPLATE_VARIABLES: ReadonlyArray<string> = [
+  '{{trigger.issue.title}}',
+  '{{trigger.comment.body}}',
+  '{{trigger.actor.name}}',
+  '{{trigger.webhook.payload}}',
+  '{{steps.0.output}}',
+  '{{run.id}}',
+  '{{now}}',
+];
+
+/** IANA timezone candidates for the datalist (client-side validation aid). */
+const IANA_TIMEZONES: readonly string[] =
+  typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function'
+    ? Intl.supportedValuesOf('timeZone')
+    : TIMEZONE_SUGGESTIONS;
 type SectionKey = 'trigger' | 'filter' | 'actions' | 'guardrails';
 
 interface EditorState {
@@ -48,8 +74,11 @@ interface EditorState {
   toStatus: string;
   watchFields: string;
   targetAgentIds: string;
+  scopeProjectIds: string;
   secretId: string;
   eventTypes: string;
+  filterProjectIds: string;
+  filterActorIds: string;
   filterLabels: string;
   filterPriorities: string;
   filterKeywordInclude: string;
@@ -63,6 +92,7 @@ interface EditorState {
   retryMaxSeconds: number;
   rateLimitMax: number;
   rateLimitWindowSeconds: number;
+  rateLimitOverflow: 'drop' | 'queue' | 'alert_only';
   concurrencyLimit: number;
   requireApproval: boolean;
   dedupWindowSeconds: number;
@@ -86,8 +116,11 @@ const DEFAULT_STATE: EditorState = {
   toStatus: '',
   watchFields: '',
   targetAgentIds: '',
+  scopeProjectIds: '',
   secretId: '',
   eventTypes: '',
+  filterProjectIds: '',
+  filterActorIds: '',
   filterLabels: '',
   filterPriorities: '',
   filterKeywordInclude: '',
@@ -101,6 +134,7 @@ const DEFAULT_STATE: EditorState = {
   retryMaxSeconds: 1800,
   rateLimitMax: 10,
   rateLimitWindowSeconds: 3600,
+  rateLimitOverflow: 'drop',
   concurrencyLimit: 1,
   requireApproval: false,
   dedupWindowSeconds: 300,
@@ -138,8 +172,17 @@ function stateFromRule(rule: AutopilotRule): EditorState {
     targetAgentIds: Array.isArray(trigger.target_agent_ids)
       ? (trigger.target_agent_ids as string[]).join(', ')
       : '',
+    scopeProjectIds: Array.isArray(trigger.scope_project_ids)
+      ? (trigger.scope_project_ids as string[]).join(', ')
+      : '',
     secretId: typeof trigger.secret_id === 'string' ? trigger.secret_id : '',
     eventTypes: Array.isArray(trigger.event_types) ? (trigger.event_types as string[]).join(', ') : '',
+    filterProjectIds: Array.isArray(filter.project_ids)
+      ? (filter.project_ids as string[]).join(', ')
+      : '',
+    filterActorIds: Array.isArray(filter.actor_ids)
+      ? (filter.actor_ids as string[]).join(', ')
+      : '',
     filterLabels: Array.isArray(filter.labels) ? (filter.labels as string[]).join(', ') : '',
     filterPriorities: Array.isArray(filter.priorities) ? (filter.priorities as string[]).join(', ') : '',
     filterKeywordInclude: Array.isArray(filter.keyword_include)
@@ -159,6 +202,7 @@ function stateFromRule(rule: AutopilotRule): EditorState {
     retryMaxSeconds: rule.retry_max_seconds,
     rateLimitMax: rule.rate_limit_max,
     rateLimitWindowSeconds: rule.rate_limit_window_seconds,
+    rateLimitOverflow: guardrails.rate_limit_overflow,
     concurrencyLimit: rule.concurrency_limit,
     requireApproval: rule.require_approval,
     dedupWindowSeconds: guardrails.dedup_window_seconds,
@@ -190,8 +234,17 @@ function buildPayload(state: EditorState): Record<string, unknown> {
     triggerConfig.secret_id = state.secretId;
     if (splitCsv(state.eventTypes).length > 0) triggerConfig.event_types = splitCsv(state.eventTypes);
   }
+  // §2.6 event triggers: optional project scope
+  if (state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received') {
+    if (splitCsv(state.scopeProjectIds).length > 0)
+      triggerConfig.scope_project_ids = splitCsv(state.scopeProjectIds);
+  }
 
   const filterConfig: Record<string, unknown> = {};
+  if (splitCsv(state.filterProjectIds).length > 0)
+    filterConfig.project_ids = splitCsv(state.filterProjectIds);
+  if (splitCsv(state.filterActorIds).length > 0)
+    filterConfig.actor_ids = splitCsv(state.filterActorIds);
   if (splitCsv(state.filterLabels).length > 0) filterConfig.labels = splitCsv(state.filterLabels);
   if (splitCsv(state.filterPriorities).length > 0)
     filterConfig.priorities = splitCsv(state.filterPriorities);
@@ -229,6 +282,16 @@ function buildPayload(state: EditorState): Record<string, unknown> {
     return item;
   });
 
+  const guardrailsPayload: Record<string, unknown> = {
+    rate_limit_overflow: state.rateLimitOverflow,
+    dedup_window_seconds: state.dedupWindowSeconds,
+    daily_run_budget: state.dailyRunBudget,
+    daily_token_budget: state.dailyTokenBudget,
+    approval_required_actions: approvalRequiredActions,
+    cascade_max_depth: state.cascadeMaxDepth,
+    agent_loop_detection: state.agentLoopDetection,
+  };
+
   return {
     name: state.name.trim(),
     description: state.description.trim() || null,
@@ -237,14 +300,7 @@ function buildPayload(state: EditorState): Record<string, unknown> {
     filter_config: filterConfig,
     action_config: actions,
     executor_agent_id: state.executorAgentId || null,
-    guardrails: {
-      dedup_window_seconds: state.dedupWindowSeconds,
-      daily_run_budget: state.dailyRunBudget,
-      daily_token_budget: state.dailyTokenBudget,
-      approval_required_actions: approvalRequiredActions,
-      cascade_max_depth: state.cascadeMaxDepth,
-      agent_loop_detection: state.agentLoopDetection,
-    },
+    guardrails: guardrailsPayload,
     max_retries: state.maxRetries,
     retry_backoff: state.retryBackoff,
     retry_base_seconds: state.retryBaseSeconds,
@@ -331,14 +387,6 @@ export function AutopilotEditorPage(): React.JSX.Element {
           if (cancelled) return;
           setState(stateFromRule(rule));
           setLoading(false);
-          if (rule.trigger_type === 'schedule') {
-            try {
-              const schedule = await previewSchedule(client, workspace.workspace_id, rule.id, 5);
-              if (!cancelled) setPreview([...schedule.next_runs]);
-            } catch {
-              setPreview(null);
-            }
-          }
         }
       } catch (error) {
         if (cancelled) return;
@@ -350,6 +398,45 @@ export function AutopilotEditorPage(): React.JSX.Element {
       cancelled = true;
     };
   }, [isEdit, autopilotId]);
+
+  // §4.2 live cron preview: recompute on cron/timezone change (debounced),
+  // available in CREATE mode too (stateless preview endpoint, no rule id).
+  const [previewInvalid, setPreviewInvalid] = useState(false);
+  useEffect(() => {
+    if (membership === null || state.triggerType !== 'schedule') {
+      setPreview(null);
+      setPreviewInvalid(false);
+      return;
+    }
+    if (!state.cron.trim() || !state.timezone.trim()) {
+      setPreview(null);
+      setPreviewInvalid(false);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+      previewScheduleParams(client, membership.workspace_id, {
+        cron: state.cron,
+        timezone: state.timezone,
+        count: 5,
+      })
+        .then((result) => {
+          if (cancelled) return;
+          setPreview([...result.next_runs]);
+          setPreviewInvalid(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setPreview(null);
+          setPreviewInvalid(true);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [membership, state.triggerType, state.cron, state.timezone]);
 
   const updateAction = useCallback(
     (index: number, partial: Partial<ActionConfigItem>) => {
@@ -451,6 +538,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
         </h1>
       </div>
 
+      <datalist id="autopilot-tz-list">
+        {IANA_TIMEZONES.map((zone) => (
+          <option key={zone} value={zone} />
+        ))}
+      </datalist>
       <div className="mesh-autopilots__editor">
         <div className="mesh-autopilots__field">
           <Input
@@ -493,6 +585,22 @@ export function AutopilotEditorPage(): React.JSX.Element {
           {state.triggerType === 'schedule' && (
             <>
               <div className="mesh-autopilots__field-grid">
+                <Select
+                  label={t('autopilots.editor.cronPresetLabel')}
+                  data-testid="autopilot-editor-cron-preset"
+                  value={CRON_PRESETS.find((preset) => preset.cron === state.cron)?.key ?? 'custom'}
+                  onChange={(event) => {
+                    const preset = CRON_PRESETS.find((item) => item.key === event.target.value);
+                    if (preset) patch({ cron: preset.cron });
+                  }}
+                >
+                  <option value="custom">{t('autopilots.editor.preset.custom')}</option>
+                  {CRON_PRESETS.map((preset) => (
+                    <option key={preset.key} value={preset.key}>
+                      {t(`autopilots.editor.preset.${preset.key}`)}
+                    </option>
+                  ))}
+                </Select>
                 <Input
                   label={t('autopilots.editor.cronLabel')}
                   value={state.cron}
@@ -504,7 +612,8 @@ export function AutopilotEditorPage(): React.JSX.Element {
                   label={t('autopilots.editor.timezoneLabel')}
                   value={state.timezone}
                   onChange={(event) => patch({ timezone: event.target.value })}
-                  hint={TIMEZONE_SUGGESTIONS.join(' · ')}
+                  hint={t('autopilots.editor.timezoneHint')}
+                  list="autopilot-tz-list"
                   data-testid="autopilot-editor-timezone"
                 />
                 <Select
@@ -533,6 +642,11 @@ export function AutopilotEditorPage(): React.JSX.Element {
                       <li key={moment}>{new Date(moment).toLocaleString()}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {previewInvalid && (
+                <div className="mesh-autopilots__preview" data-testid="autopilot-preview-invalid">
+                  {t('autopilots.editor.previewInvalid')}
                 </div>
               )}
             </>
@@ -577,6 +691,16 @@ export function AutopilotEditorPage(): React.JSX.Element {
             />
           )}
 
+          {state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received' && (
+            <Input
+              label={t('autopilots.editor.scopeProjectsLabel')}
+              data-testid="autopilot-editor-scope-projects"
+              value={state.scopeProjectIds}
+              onChange={(event) => patch({ scopeProjectIds: event.target.value })}
+              hint={t('autopilots.editor.csvHint')}
+            />
+          )}
+
           {state.triggerType === 'webhook_received' && (
             <div className="mesh-autopilots__field-grid">
               <Select
@@ -611,6 +735,20 @@ export function AutopilotEditorPage(): React.JSX.Element {
           testId="autopilot-section-filter"
         >
           <div className="mesh-autopilots__field-grid">
+            <Input
+              label={t('autopilots.editor.filterProjects')}
+              data-testid="autopilot-editor-filter-projects"
+              value={state.filterProjectIds}
+              onChange={(event) => patch({ filterProjectIds: event.target.value })}
+              hint={t('autopilots.editor.csvHint')}
+            />
+            <Input
+              label={t('autopilots.editor.filterActors')}
+              data-testid="autopilot-editor-filter-actors"
+              value={state.filterActorIds}
+              onChange={(event) => patch({ filterActorIds: event.target.value })}
+              hint={t('autopilots.editor.csvHint')}
+            />
             <Input
               label={t('autopilots.editor.filterLabels')}
                   data-testid="autopilot-editor-filter-labels"
@@ -740,6 +878,26 @@ export function AutopilotEditorPage(): React.JSX.Element {
                   </Select>
                   <div className="mesh-autopilots__field">
                     <label htmlFor={`autopilot-prompt-${index}`}>{t('autopilots.editor.promptLabel')}</label>
+                    <div
+                      className="mesh-autopilots__template-vars"
+                      data-testid={`autopilot-template-vars-${index}`}
+                    >
+                      <span>{t('autopilots.editor.templateVarsLabel')}</span>
+                      {TEMPLATE_VARIABLES.map((variable) => (
+                        <button
+                          key={variable}
+                          type="button"
+                          className="mesh-autopilots__template-var"
+                          onClick={() =>
+                            updateAction(index, {
+                              prompt: `${action.prompt ?? ''}${variable}`,
+                            })
+                          }
+                        >
+                          {variable}
+                        </button>
+                      ))}
+                    </div>
                     <textarea
                       id={`autopilot-prompt-${index}`}
                       rows={3}
@@ -844,6 +1002,18 @@ export function AutopilotEditorPage(): React.JSX.Element {
               value={state.rateLimitWindowSeconds}
               onChange={(event) => patch({ rateLimitWindowSeconds: Number(event.target.value) })}
             />
+            <Select
+              label={t('autopilots.editor.overflowLabel')}
+              data-testid="autopilot-editor-overflow"
+              value={state.rateLimitOverflow}
+              onChange={(event) =>
+                patch({ rateLimitOverflow: event.target.value as 'drop' | 'queue' | 'alert_only' })
+              }
+            >
+              <option value="drop">{t('autopilots.editor.overflow.drop')}</option>
+              <option value="queue">{t('autopilots.editor.overflow.queue')}</option>
+              <option value="alert_only">{t('autopilots.editor.overflow.alert_only')}</option>
+            </Select>
             <Input
               label={t('autopilots.editor.concurrencyLabel')}
                   data-testid="autopilot-editor-concurrency"

@@ -25,6 +25,7 @@ from mesh.autopilot.schemas import (
     CreateWebhookSecretRequest,
     KillSwitchRequest,
     PatchAutopilotRequest,
+    PreviewScheduleRequest,
     RunDecisionRequest,
     TestRunRequest,
 )
@@ -222,6 +223,41 @@ async def resume_autopilot(
         rule_id=_path_uuid(autopilot_id, what="autopilot rule"),
     )
     return {"data": data}
+
+
+@router.post("/workspaces/{workspace_id}/autopilots/preview-schedule")
+async def preview_schedule_stateless(
+    request: Request,
+    workspace_id: str,
+    body: PreviewScheduleRequest,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    """Stateless cron preview — live "next 5 runs" in the editor, usable in
+    create mode before any rule exists (autopilot.md §4.2)."""
+    data = _service(request).preview_schedule_params(
+        cron=body.cron, timezone=body.timezone, count=body.count
+    )
+    return {"data": data}
+
+
+@router.get("/workspaces/{workspace_id}/webhook-events")
+async def list_webhook_events(
+    request: Request,
+    workspace_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+    autopilot_id: str | None = None,
+    process_status: str | None = None,
+    cursor: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """Inbound event audit trail (autopilot.md §4.1 最近事件)."""
+    return await _service(request).list_webhook_events(
+        workspace_id=context.workspace.id,
+        autopilot_id=_path_uuid(autopilot_id, what="autopilot rule") if autopilot_id else None,
+        process_status=process_status,
+        cursor=cursor,
+        limit=limit,
+    )
 
 
 @router.post("/workspaces/{workspace_id}/autopilots/{autopilot_id}/test-run")

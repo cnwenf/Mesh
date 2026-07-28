@@ -13,10 +13,11 @@ import type { Membership } from '../members/types';
 import {
   createWebhookSecret,
   inboundWebhookUrl,
+  listWebhookEvents,
   listWebhookSecrets,
   rotateWebhookSecret,
 } from './api';
-import type { WebhookSecretCreated, WebhookSecretPublic } from './types';
+import type { WebhookEventItem, WebhookSecretCreated, WebhookSecretPublic } from './types';
 
 /** Maps a caught error to its i18n key (API errors carry a stable code). */
 function errorKeyOf(error: unknown): string {
@@ -35,6 +36,7 @@ export function WebhookConfigPage(): React.JSX.Element {
   const [label, setLabel] = useState('default');
   const [busy, setBusy] = useState(false);
   const [freshCredential, setFreshCredential] = useState<WebhookSecretCreated | null>(null);
+  const [events, setEvents] = useState<WebhookEventItem[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,7 +51,12 @@ export function WebhookConfigPage(): React.JSX.Element {
           setSecrets([]);
           return;
         }
-        setSecrets(await listWebhookSecrets(client, workspace.workspace_id));
+        const [secretListing, eventListing] = await Promise.all([
+          listWebhookSecrets(client, workspace.workspace_id),
+          listWebhookEvents(client, workspace.workspace_id, { limit: 20 }),
+        ]);
+        setSecrets(secretListing);
+        setEvents(eventListing.data);
         setErrorKey(null);
       } catch (error) {
         if (cancelled) return;
@@ -125,7 +132,7 @@ export function WebhookConfigPage(): React.JSX.Element {
           </div>
           <div>
             <strong>{t('autopilots.webhook.signatureHelp')}</strong>
-            <code>v1 = HMAC_SHA256(secret, "&lt;t&gt;.&lt;raw_body&gt;") · X-Signature: t=&lt;unix_ts&gt;,v1=&lt;hex&gt;</code>
+            <code>{t('autopilots.webhook.signatureFormat')}</code>
           </div>
           <Button variant="secondary" size="sm" onClick={() => setFreshCredential(null)}>
             {t('autopilots.webhook.dismiss')}
@@ -182,6 +189,41 @@ export function WebhookConfigPage(): React.JSX.Element {
           </tbody>
         </table>
       )}
+
+      {/* §4.1 最近事件:入站审计(签名/处理状态/去重键) */}
+      <div className="mesh-autopilots__card">
+        <div className="mesh-autopilots__header">
+          <h3>{t('autopilots.webhook.recentEvents')}</h3>
+          <Button variant="ghost" size="sm" onClick={() => setReloadKey((key) => key + 1)}>
+            {t('autopilots.webhook.refresh')}
+          </Button>
+        </div>
+        {events !== null && events.length === 0 && <p>{t('autopilots.webhook.eventsEmpty')}</p>}
+        {events !== null && events.length > 0 && (
+          <table className="mesh-autopilots__runs-table" data-testid="webhook-events-table">
+            <thead>
+              <tr>
+                <th>{t('autopilots.webhook.eventType')}</th>
+                <th>{t('autopilots.webhook.eventSignature')}</th>
+                <th>{t('autopilots.webhook.eventProcess')}</th>
+                <th>{t('autopilots.webhook.eventReceived')}</th>
+                <th>{t('autopilots.webhook.eventKey')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((event) => (
+                <tr key={event.id} data-testid={`webhook-event-row-${event.id}`}>
+                  <td>{event.event_type}</td>
+                  <td>{t(`autopilots.webhook.signature.${event.signature_status}`)}</td>
+                  <td>{t(`autopilots.webhook.process.${event.process_status}`)}</td>
+                  <td>{new Date(event.received_at).toLocaleString()}</td>
+                  <td>{event.idempotency_key}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }

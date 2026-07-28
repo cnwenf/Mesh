@@ -532,3 +532,89 @@ async def test_cross_workspace_isolation_404(app_client) -> None:
         f"/api/v1/workspaces/{ws_b}/autopilots/{rule_id}", headers=_auth(token_a)
     )
     assert foreign.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# acceptance round 2: stateless preview endpoint + webhook events endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_stateless_preview_schedule_endpoint(app_client) -> None:
+    token, ws_id, _ = await _world(app_client, "ap-preview")
+    resp = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/autopilots/preview-schedule",
+        json={"cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai", "count": 5},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["data"]["next_runs"]) == 5
+    bad = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/autopilots/preview-schedule",
+        json={"cron": "not a cron", "timezone": "UTC"},
+        headers=_auth(token),
+    )
+    assert bad.status_code == 400
+    assert bad.json()["error"]["code"] == "invalid_cron"
+
+
+async def test_webhook_events_endpoint_lists_and_filters(app_client) -> None:
+    token, ws_id, agent_id = await _world(app_client, "ap-events")
+    secret = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/webhook-secrets", json={}, headers=_auth(token)
+    )
+    cred = secret.json()["data"]
+    rule_resp = await app_client.post(
+        f"/api/v1/workspaces/{ws_id}/autopilots",
+        json={
+            "name": "event-sink",
+            "trigger_type": "webhook_received",
+            "trigger_config": {"secret_id": cred["id"]},
+            "action_config": [
+                {"type": "run_agent_prompt", "executor_agent_id": agent_id, "prompt": "x"}
+            ],
+            "executor_agent_id": agent_id,
+            "concurrency_limit": 10,
+            "rate_limit_max": 100,
+        },
+        headers=_auth(token),
+    )
+    assert rule_resp.status_code == 201, rule_resp.text
+    import hashlib as _h
+    import hmac as _hm
+    import time as _t
+
+    body = b'{"severity": "critical"}'
+    ts = int(_t.time())
+    digest = _hm.new(cred["secret"].encode(), f"{ts}.".encode() + body, _h.sha256).hexdigest()
+    ok = await app_client.post(
+        f"/api/v1/webhooks/inbound/{cred['token']}",
+        content=body,
+        headers={
+            "X-Signature": f"t={ts},v1={digest}",
+            "X-Event-Id": "evt-route-1",
+            "X-Event-Type": "alert.triggered",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    bad = await app_client.post(
+        f"/api/v1/webhooks/inbound/{cred['token']}",
+        content=body,
+        headers={"X-Event-Id": "evt-route-2"},
+    )
+    assert bad.status_code == 401
+
+    listing = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/webhook-events", headers=_auth(token)
+    )
+    assert listing.status_code == 200
+    rows = listing.json()["data"]
+    assert len(rows) == 2
+    rejected = await app_client.get(
+        f"/api/v1/workspaces/{ws_id}/webhook-events?process_status=rejected",
+        headers=_auth(token),
+    )
+    rejected_rows = rejected.json()["data"]
+    assert len(rejected_rows) == 1
+    assert rejected_rows[0]["signature_status"] == "missing"
+    # payload is audited but auth headers are never persisted
+    assert "authorization" not in (rejected_rows[0]["headers"] or {})

@@ -33,6 +33,7 @@ import {
 } from './api';
 import {
   RULE_STATUS_TONE,
+  RUN_STATUS_TONE,
   formatRelativeTime,
   formatSuccessRate,
   scheduleSummary,
@@ -44,6 +45,17 @@ import './autopilots.css';
 const PAGE_LIMIT = 50;
 const STATUS_ALL = 'all';
 const TYPE_ALL = 'all';
+
+/** §4.1 触发器列「图标 + 文案」。 */
+const TRIGGER_ICONS: Record<string, string> = {
+  schedule: '⏰',
+  issue_status_changed: '🔀',
+  issue_created: '➕',
+  issue_field_changed: '📝',
+  comment_created: '💬',
+  agent_mentioned: '📣',
+  webhook_received: '🔗',
+};
 
 /** 监听即重拉的实时事件(§3.5)。 */
 const AUTOPILOT_LIST_EVENTS: ReadonlySet<string> = new Set([
@@ -80,13 +92,22 @@ function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
         {rule.name}
       </td>
       <td data-testid={`autopilot-trigger-${rule.id}`}>
+        <span aria-hidden="true">{TRIGGER_ICONS[rule.trigger_type] ?? '⚙️'} </span>
         {t(`autopilots.trigger.${rule.trigger_type}`)}
         {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
       </td>
       <td>
         <StatusDot tone={RULE_STATUS_TONE[rule.status]} label={t(`autopilots.status.${rule.status}`)} />
       </td>
-      <td>{formatRelativeTime(rule.last_run_at, nowMs, locale) ?? t('autopilots.runs.never')}</td>
+      <td data-testid={`autopilot-last-run-${rule.id}`}>
+        {rule.last_run_status !== null && rule.last_run_status !== undefined ? (
+          <StatusDot
+            tone={RUN_STATUS_TONE[rule.last_run_status]}
+            label={t(`autopilots.runStatus.${rule.last_run_status}`)}
+          />
+        ) : null}{' '}
+        {formatRelativeTime(rule.last_run_at, nowMs, locale) ?? t('autopilots.runs.never')}
+      </td>
       <td data-testid={`autopilot-success-${rule.id}`}>
         {successRate ?? t('autopilots.stats.none')}
         {rule.stats ? ` (${rule.stats.runs_30d})` : ''}
@@ -422,6 +443,7 @@ export function AutopilotsPage(): React.JSX.Element {
             label={t('autopilots.killSwitch.reasonLabel')}
             value={killReason}
             onChange={(event) => setKillReason(event.target.value)}
+            hint={t('autopilots.killSwitch.reasonHint')}
             data-testid="autopilot-kill-reason"
           />
         )}
@@ -432,6 +454,7 @@ export function AutopilotsPage(): React.JSX.Element {
           <Button
             variant="danger"
             isLoading={killBusy}
+            disabled={killSwitchOn !== true && killReason.trim().length === 0}
             onClick={() => void applyKillSwitch(killSwitchOn !== true)}
             data-testid="autopilot-kill-confirm"
           >

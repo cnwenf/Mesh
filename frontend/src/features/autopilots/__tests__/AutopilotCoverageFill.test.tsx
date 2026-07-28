@@ -1020,3 +1020,186 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
   });
 });
 
+
+describe('acceptance round 2: new editor/list/run/webhook controls', () => {
+  function renderEditorAt(route: string, stubFn: (url: string, method: string) => Response | null) {
+    stub(stubFn);
+    return renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/new" element={<AutopilotEditorPage />} />
+        <Route path="/autopilots/:autopilotId" element={<div>detail-page</div>} />
+      </Routes>,
+      { route },
+    );
+  }
+
+  const baseStub = (preview: 'ok' | 'fail' | 'none') => (url: string, method: string) => {
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/agents'))
+      return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+    if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+    if (method === 'POST' && url.includes('/preview-schedule')) {
+      if (preview === 'fail')
+        return fakeResponse({ status: 400, body: { error: { code: 'invalid_cron', message: 'x' } } });
+      return fakeResponse({
+        body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } },
+      });
+    }
+    if (method === 'POST') return fakeResponse({ body: { data: { ...RULE, id: 'ap-new' } } });
+    return fakeResponse({ body: { data: [], next_cursor: null } });
+  };
+
+  it('cron preset fills the cron field; custom shows manual value', async () => {
+    renderEditorAt('/autopilots/new', baseStub('ok'));
+    await waitFor(() => expect(screen.getByTestId('autopilot-editor-cron-preset')).toBeInTheDocument());
+    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-cron-preset'), 'daily9');
+    await waitFor(() =>
+      expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 9 * * *'),
+    );
+    // custom option keeps the manual value
+    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-cron-preset'), 'custom');
+    expect(screen.getByTestId('autopilot-editor-cron')).toBeInTheDocument();
+  });
+
+  it('live preview renders next runs (create mode) and invalid state on error', async () => {
+    renderEditorAt('/autopilots/new', baseStub('ok'));
+    await waitFor(() => expect(screen.getByTestId('autopilot-schedule-preview')).toBeInTheDocument());
+    // failing preview → invalid hint
+    renderEditorAt('/autopilots/new', baseStub('fail'));
+    await waitFor(() => expect(screen.getByTestId('autopilot-preview-invalid')).toBeInTheDocument());
+  });
+
+  it('template variable buttons append to the prompt', async () => {
+    renderEditorAt('/autopilots/new', baseStub('none'));
+    await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
+    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'run_agent_prompt');
+    const vars = screen.getByTestId('autopilot-template-vars-0');
+    const firstVar = vars.querySelector('button');
+    expect(firstVar).not.toBeNull();
+    await userEvent.click(firstVar as HTMLElement);
+    expect((screen.getByTestId('autopilot-action-prompt-0') as HTMLTextAreaElement).value).toContain(
+      '{{trigger.',
+    );
+  });
+
+  it('exposes scope/filter project+actor inputs and overflow control', async () => {
+    renderEditorAt('/autopilots/new', baseStub('none'));
+    await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
+    // event trigger shows scope projects
+    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_created');
+    await userEvent.type(screen.getByTestId('autopilot-editor-scope-projects'), 'p1, p2');
+    // filter section: projects + actors
+    await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
+    await userEvent.type(screen.getByTestId('autopilot-editor-filter-projects'), 'p1');
+    await userEvent.type(screen.getByTestId('autopilot-editor-filter-actors'), 'm1');
+    // guardrails: overflow control
+    await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
+    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-overflow'), 'queue');
+    expect((screen.getByTestId('autopilot-editor-overflow') as HTMLSelectElement).value).toBe('queue');
+    // timezone datalist present
+    expect(document.getElementById('autopilot-tz-list')).not.toBeNull();
+  });
+
+  it('list renders last-run result and trigger icons; kill reason gates confirm', async () => {
+    stub((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/kill-switch') && method === 'GET')
+        return fakeResponse({ body: { data: { kill_switch: false } } });
+      if (method === 'GET')
+        return fakeResponse({
+          body: {
+            data: [
+              { ...RULE, id: 'ap-a', last_run_status: 'failed', last_run_at: '2026-07-27T00:00:00Z' },
+            ],
+            next_cursor: null,
+          },
+        });
+      return fakeResponse({ body: { data: RULE } });
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots" element={<AutopilotsPage />} />
+      </Routes>,
+      { route: '/autopilots' },
+    );
+    await waitFor(() => expect(screen.getByTestId('autopilot-last-run-ap-a')).toBeInTheDocument());
+    expect(screen.getByTestId('autopilot-last-run-ap-a').textContent).toMatch(/failed|失败/i);
+    // trigger icon present (schedule → ⏰)
+    expect(screen.getByTestId('autopilot-trigger-ap-a').textContent).toContain('⏰');
+    // kill dialog: confirm disabled until reason typed
+    await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
+    const confirm = screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    await userEvent.type(screen.getByTestId('autopilot-kill-reason'), 'reason');
+    expect((screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('run detail artifacts link to app routes', async () => {
+    const issueId = '22222222-2222-2222-2222-222222222201';
+    stub((url) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      return fakeResponse({
+        body: {
+          data: {
+            ...RUN,
+            status: 'succeeded',
+            trigger_snapshot: { issue: { id: issueId } },
+            artifacts: [
+              { id: 'art-1', artifact_type: 'comment', ref_table: 'comments', ref_id: 'c-1', summary: 'ok', created_at: '2026-07-27T00:00:00Z' },
+              { id: 'art-2', artifact_type: 'issue', ref_table: 'issues', ref_id: issueId, summary: 'created', created_at: '2026-07-27T00:00:00Z' },
+            ],
+          },
+        },
+      });
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+        <Route path="/issues/:issueId" element={<div>issue-page</div>} />
+      </Routes>,
+      { route: '/autopilots/runs/run-1' },
+    );
+    await waitFor(() => expect(screen.getByTestId('autopilot-artifact-link-art-2')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('autopilot-artifact-link-art-2'));
+    await waitFor(() => expect(screen.getByText('issue-page')).toBeInTheDocument());
+  });
+
+  it('webhook page renders the recent events table', async () => {
+    stub((url) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/webhook-events'))
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'we-1',
+                autopilot_id: null,
+                idempotency_key: 'rejected:abc',
+                event_type: 'alert.triggered',
+                headers: null,
+                payload: { a: 1 },
+                signature_status: 'missing',
+                process_status: 'rejected',
+                received_at: '2026-07-27T00:00:00Z',
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      return fakeResponse({ body: { data: {} } });
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/webhooks" element={<WebhookConfigPage />} />
+      </Routes>,
+      { route: '/webhooks' },
+    );
+    await waitFor(() => expect(screen.getByTestId('webhook-event-row-we-1')).toBeInTheDocument());
+    expect(screen.getByTestId('webhook-events-table').textContent).toMatch(/rejected|已拒绝/i);
+    // refresh button reloads the listing
+    await userEvent.click(screen.getByRole('button', { name: /Refresh|刷新/ }));
+    await waitFor(() => expect(screen.getByTestId('webhook-event-row-we-1')).toBeInTheDocument());
+  });
+});

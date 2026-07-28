@@ -433,3 +433,93 @@ async def test_get_missing_rule_404(session_factory, service) -> None:
     with pytest.raises(NotFoundError):
         await service.get_run(workspace_id=world["ws_id"], run_id=uuid.uuid4())
     del rule
+
+
+# ---------------------------------------------------------------------------
+# acceptance round 2: stateless preview / webhook events / last_run_status
+# ---------------------------------------------------------------------------
+
+
+async def test_preview_schedule_params_stateless(session_factory, service) -> None:
+    data = service.preview_schedule_params(cron="0 9 * * 1-5", timezone="Asia/Shanghai", count=5)
+    assert len(data["next_runs"]) == 5
+    assert data["timezone"] == "Asia/Shanghai"
+    with pytest.raises(ValidationError):
+        service.preview_schedule_params(cron="bad", timezone="UTC")
+    with pytest.raises(ValidationError):
+        service.preview_schedule_params(cron="0 9 * * *", timezone="Mars/Olympus")
+
+
+async def test_list_webhook_events_filters(session_factory, service) -> None:
+    from mesh.autopilot import webhook as webhook_mod
+    from tests.unit.autopilot_support import TEST_SIGNING_SECRET
+
+    world = await seed_world(session_factory)
+    async with session_factory() as session:
+        member = await session.scalar(select(Member).where(Member.id == world["member_id"]))
+    async with session_factory() as session, session.begin():
+        created = await webhook_mod.create_secret(
+            session, workspace_id=world["ws_id"], member=member,
+            signing_secret=TEST_SIGNING_SECRET,
+        )
+        token, secret = created["token"], created["secret"]
+    await make_rule(
+        session_factory, world["ws_id"], created_by=world["member_id"],
+        trigger_type="webhook_received", trigger_config={"secret_id": created["id"]},
+        concurrency_limit=10, rate_limit_max=100,
+    )
+    import hashlib as _hashlib
+    import hmac as _hmac
+    from datetime import UTC, datetime
+
+    now_ts = int(datetime.now(UTC).timestamp())
+    body = b'{"a": 1}'
+    digest = _hmac.new(secret.encode(), f"{now_ts}.".encode() + body, _hashlib.sha256).hexdigest()
+    async with session_factory() as session, session.begin():
+        status, resp = await webhook_mod.process_inbound(
+            session, token=token, raw_body=body,
+            headers={"x-signature": f"t={now_ts},v1={digest}", "x-event-id": "evt-list-1"},
+            signing_secret=TEST_SIGNING_SECRET, now=datetime.now(UTC),
+            tolerance=__import__("datetime").timedelta(seconds=300),
+        )
+    assert status == 200 and resp["process_status"] == "dispatched"
+    # a rejected event too
+    async with session_factory() as session, session.begin():
+        status2, _ = await webhook_mod.process_inbound(
+            session, token=token, raw_body=body, headers={"x-event-id": "evt-list-2"},
+            signing_secret=TEST_SIGNING_SECRET, now=datetime.now(UTC),
+            tolerance=__import__("datetime").timedelta(seconds=300),
+        )
+    assert status2 == 401
+
+    listing = await service.list_webhook_events(workspace_id=world["ws_id"])
+    assert len(listing["data"]) == 2
+    statuses = {row["signature_status"] for row in listing["data"]}
+    assert statuses == {"valid", "missing"}
+    rejected_only = await service.list_webhook_events(
+        workspace_id=world["ws_id"], process_status="rejected"
+    )
+    assert len(rejected_only["data"]) == 1
+    assert rejected_only["data"][0]["signature_status"] == "missing"
+
+
+async def test_list_rules_includes_last_run_status(session_factory, service) -> None:
+    world = await seed_world(session_factory)
+    async with session_factory() as session:
+        member = await session.scalar(select(Member).where(Member.id == world["member_id"]))
+    rule = await make_rule(
+        session_factory, world["ws_id"], created_by=world["member_id"], name="with-runs"
+    )
+    await make_run(session_factory, rule, status="failed")
+    await make_run(session_factory, rule, status="succeeded")
+    listing = await service.list_rules(workspace_id=world["ws_id"])
+    row = next(r for r in listing["data"] if r["id"] == str(rule.id))
+    # latest run (created last) wins
+    assert row["last_run_status"] == "succeeded"
+    # a rule without runs → None
+    rule2 = await make_rule(
+        session_factory, world["ws_id"], created_by=world["member_id"], name="no-runs"
+    )
+    listing2 = await service.list_rules(workspace_id=world["ws_id"])
+    row2 = next(r for r in listing2["data"] if r["id"] == str(rule2.id))
+    assert row2["last_run_status"] is None

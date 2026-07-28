@@ -3,6 +3,19 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.16.5] - 2026-07-28
+
+autopilot 前端验收整改(验收员第 1 轮 3 HIGH + MEDIUM + LOW 全修):
+
+### Fixed / Added
+
+- **HIGH-1 cron 预览实时化**:编辑器新增**无状态预览端点** `POST /workspaces/{ws}/autopilots/preview-schedule`(正文 `{cron, timezone, count}`),cron/时区变更即防抖重算,**新建态(无规则 id)亦可用**;非法 cron/时区显示「无效」提示。另增 cron **常用周期下拉**(工作日/每天/每小时/每周一/每月 1 号 + 自定义手填)与时区 IANA datalist 辅助校验(§4.2 / 流程 A)。
+- **HIGH-2 过滤七维补齐**:编辑器过滤区补 `project_ids`、`actor_ids` 两维(§2.6 七维齐全);事件触发器暴露 `scope_project_ids` 作用域。
+- **HIGH-3 Webhook 最近事件**:新增 `GET /workspaces/{ws}/webhook-events`(游标分页 + `autopilot_id`/`process_status` 过滤;载荷原样可审,请求头仅存脱敏白名单);Webhook 配置页增「最近事件」表格(事件类型/签名/处理状态/接收时间/幂等键)+ 刷新;签名格式串 i18n 外部化。
+- **MEDIUM**:`rate_limit_overflow` 超限行为控件(drop/queue/alert_only);prompt **模板变量插入**按钮行({{trigger.*}}/{{steps.N.output}}/{{run.id}}/{{now}});列表「上次运行**结果**」列(StatusDot + 相对时间,后端列表响应补 `last_run_status` 批量窗口函数);WS 降级轮询默认 30s → **4s**(§3.5 3~5s);产物列表**带跳转**(issue/execution/inbox/评论回触发 issue)。
+- **LOW**:触发器列图标;kill switch 启用时**理由必填**(二次确认,确认按钮禁能直到填写)。
+- autopilot.md §3.1 同步补两条端点;前后端测试同步更新(前端 1998 测试全绿 + per-file 门禁通过;后端路由/服务新增端点测试)。
+
 ## [0.16.4] - 2026-07-28
 
 阶段 7 智能体层 B:autopilot 自动化模块全功能实现(MES-66,autopilot.md 五章)。规则 = 触发器 + 过滤 + 顺序动作 + 默认开启护栏;定时以 PostgreSQL 为唯一调度事实源(原子抢占,多副本不重复触发),事件触发经 outbox relay 链式消费(崩溃恢复不丢事件);入站 Webhook HMAC 恒定时间校验 + 防重放 + 去重审计(被拒事件独立命名空间防预占);高风险动作经统一审批实体(§6.10,`approvals.subject_run_id` 物理复合 FK 落地)。

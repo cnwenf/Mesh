@@ -21,7 +21,19 @@ import {
   rejectRun,
 } from './api';
 import { RUN_STATUS_TONE, errorSummary, formatDurationMs } from './format';
-import type { AutopilotRun } from './types';
+import type { AutopilotRun, RunArtifact } from './types';
+
+/** §4.2 产物列表「带跳转」:按 ref_table 映射到应用内路由。 */
+function artifactLink(run: AutopilotRun, artifact: RunArtifact): string | null {
+  if (artifact.ref_table === 'issues') return `/issues/${artifact.ref_id}`;
+  if (artifact.ref_table === 'task_executions') return `/executions/${artifact.ref_id}`;
+  if (artifact.ref_table === 'notifications') return '/inbox';
+  if (artifact.ref_table === 'comments') {
+    const issue = run.trigger_snapshot.issue as { id?: string } | undefined;
+    return issue !== undefined && typeof issue.id === 'string' ? `/issues/${issue.id}` : null;
+  }
+  return null;
+}
 import './autopilots.css';
 
 /** 可审批 / 可取消的状态集(§4.4 状态机)。 */
@@ -278,15 +290,31 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {run.artifacts.map((artifact) => (
-                <tr key={artifact.id}>
-                  <td>{t(`autopilots.artifact.${artifact.artifact_type}`)}</td>
-                  <td>
-                    {artifact.ref_table}:{artifact.ref_id}
-                  </td>
-                  <td>{artifact.summary ?? '—'}</td>
-                </tr>
-              ))}
+              {run.artifacts.map((artifact) => {
+                const link = artifactLink(run, artifact);
+                return (
+                  <tr key={artifact.id}>
+                    <td>{t(`autopilots.artifact.${artifact.artifact_type}`)}</td>
+                    <td>
+                      {link !== null ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(link)}
+                          data-testid={`autopilot-artifact-link-${artifact.id}`}
+                        >
+                          {artifact.ref_table}:{artifact.ref_id}
+                        </Button>
+                      ) : (
+                        <>
+                          {artifact.ref_table}:{artifact.ref_id}
+                        </>
+                      )}
+                    </td>
+                    <td>{artifact.summary ?? '—'}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

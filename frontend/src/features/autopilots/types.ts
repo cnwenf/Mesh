@@ -107,6 +107,7 @@ export interface AutopilotRule {
   readonly require_approval: boolean;
   readonly next_run_at: string | null;
   readonly last_run_at: string | null;
+  readonly last_run_status: AutopilotRunStatus | null;
   readonly created_by: string;
   readonly created_at: string;
   readonly updated_at: string;
@@ -208,4 +209,24 @@ export interface InboundWebhookResponse {
   readonly process_status?: string;
   readonly run_id?: string | null;
   readonly error?: { readonly code: string; readonly message: string };
+}
+
+/** Inbound webhook event audit row (autopilot.md §2.5 / §4.1 最近事件). */
+export interface WebhookEventItem {
+  readonly id: string;
+  readonly autopilot_id: string | null;
+  readonly idempotency_key: string;
+  readonly event_type: string;
+  readonly headers: Readonly<Record<string, string>> | null;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly signature_status: 'valid' | 'invalid' | 'missing' | 'skipped';
+  readonly process_status:
+    | 'received'
+    | 'matched'
+    | 'dispatched'
+    | 'deduped'
+    | 'rejected'
+    | 'processed'
+    | 'failed';
+  readonly received_at: string;
 }

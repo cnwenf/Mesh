@@ -15,6 +15,7 @@ import type {
   RunArtifact,
   SchedulePreview,
   TestRunResult,
+  WebhookEventItem,
   WebhookSecretCreated,
   WebhookSecretPublic,
 } from './types';
@@ -262,4 +263,44 @@ export async function rotateWebhookSecret(
     `${secretsPath(workspaceId)}/${secretId}/rotate`,
     { body: {} },
   );
+}
+
+/** Stateless cron preview (autopilot.md §4.2 live preview; usable before a rule exists). */
+export async function previewScheduleParams(
+  client: MeshApiClient,
+  workspaceId: string,
+  params: { cron: string; timezone: string; count?: number },
+): Promise<SchedulePreview> {
+  return client.request<SchedulePreview>(
+    'POST',
+    `/api/v1/workspaces/${workspaceId}/autopilots/preview-schedule`,
+    { body: params },
+  );
+}
+
+export interface ListWebhookEventsParams {
+  readonly autopilotId?: string;
+  readonly processStatus?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+/** Inbound event audit trail (autopilot.md §4.1 最近事件). */
+export async function listWebhookEvents(
+  client: MeshApiClient,
+  workspaceId: string,
+  params: ListWebhookEventsParams = {},
+): Promise<{ data: WebhookEventItem[]; nextCursor: string | null }> {
+  const envelope = await client.list<WebhookEventItem>(
+    `/api/v1/workspaces/${workspaceId}/webhook-events`,
+    {
+      query: {
+        autopilot_id: params.autopilotId,
+        process_status: params.processStatus,
+        cursor: params.cursor,
+        limit: params.limit,
+      },
+    },
+  );
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
 }

@@ -283,10 +283,19 @@ class AutopilotService:
             rules = rows[:limit]
 
             # 30-day stats per rule (§3.2 list shape).
-            stats = await self._run_stats(
-                session, workspace_id=workspace_id, rule_ids=[rule.id for rule in rules]
+            rule_ids = [rule.id for rule in rules]
+            stats = await self._run_stats(session, workspace_id=workspace_id, rule_ids=rule_ids)
+            last_statuses = await self._last_run_statuses(
+                session, workspace_id=workspace_id, rule_ids=rule_ids
             )
-            data = [self._rule_response(rule, stats=stats.get(rule.id)) for rule in rules]
+            data = [
+                self._rule_response(
+                    rule,
+                    stats=stats.get(rule.id),
+                    last_run_status=last_statuses.get(rule.id),
+                )
+                for rule in rules
+            ]
             next_cursor = None
             if has_more and rules:
                 last = rules[-1]
@@ -470,6 +479,66 @@ class AutopilotService:
                 "timezone": config.get("timezone"),
                 "next_runs": [moment.isoformat() for moment in upcoming],
             }
+
+    def preview_schedule_params(self, *, cron: str, timezone: str, count: int = 5) -> dict:
+        """Stateless cron preview (autopilot.md §4.2 live preview, usable in
+        create mode before any rule exists). Validation errors surface as
+        400 invalid_cron / invalid_trigger_config from cron_mod."""
+        upcoming = cron_mod.preview_schedule(cron, timezone, count=min(max(count, 1), 10))
+        return {"cron": cron, "timezone": timezone, "next_runs": [m.isoformat() for m in upcoming]}
+
+    async def list_webhook_events(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        autopilot_id: uuid.UUID | None = None,
+        process_status: str | None = None,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """Inbound event audit trail (autopilot.md §4.1 最近事件)."""
+        from mesh.api.pagination import decode_cursor, encode_cursor
+
+        limit = max(1, min(limit, 100))
+        async with self._factory() as session:
+            await set_tenant_context(session, workspace_id)
+            stmt = select(WebhookEvent).where(WebhookEvent.workspace_id == workspace_id)
+            if autopilot_id is not None:
+                stmt = stmt.where(WebhookEvent.autopilot_id == autopilot_id)
+            if process_status:
+                stmt = stmt.where(WebhookEvent.process_status == process_status)
+            stmt = stmt.order_by(WebhookEvent.received_at.desc(), WebhookEvent.id.desc())
+            if cursor:
+                position = decode_cursor(cursor)
+                stmt = stmt.where(
+                    (WebhookEvent.received_at < position.sort_value)
+                    | (
+                        (WebhookEvent.received_at == position.sort_value)
+                        & (WebhookEvent.id < position.id)
+                    )
+                )
+            rows = list((await session.execute(stmt.limit(limit + 1))).scalars().all())
+            has_more = len(rows) > limit
+            kept = rows[:limit]
+            data = [
+                {
+                    "id": str(event.id),
+                    "autopilot_id": str(event.autopilot_id) if event.autopilot_id else None,
+                    "idempotency_key": event.idempotency_key,
+                    "event_type": event.event_type,
+                    "headers": event.headers,
+                    "payload": event.payload,
+                    "signature_status": event.signature_status,
+                    "process_status": event.process_status,
+                    "received_at": _iso(event.received_at),
+                }
+                for event in kept
+            ]
+            next_cursor = None
+            if has_more and kept:
+                last = kept[-1]
+                next_cursor = encode_cursor(last.received_at, last.id)
+            return {"data": data, "next_cursor": next_cursor}
 
     # ------------------------------------------------------------------
     # Test run
@@ -863,7 +932,9 @@ class AutopilotService:
             idempotency_key=f"autopilot:{rule.id}:updated:{int(now.timestamp() * 1000)}",
         )
 
-    def _rule_response(self, rule: Autopilot, *, stats: dict | None) -> dict:
+    def _rule_response(
+        self, rule: Autopilot, *, stats: dict | None, last_run_status: str | None = None
+    ) -> dict:
         return {
             "id": str(rule.id),
             "workspace_id": str(rule.workspace_id),
@@ -886,11 +957,39 @@ class AutopilotService:
             "require_approval": rule.require_approval,
             "next_run_at": _iso(rule.next_run_at),
             "last_run_at": _iso(rule.last_run_at),
+            "last_run_status": last_run_status,
             "created_by": str(rule.created_by),
             "created_at": _iso(rule.created_at),
             "updated_at": _iso(rule.updated_at),
             "stats": stats,
         }
+
+    async def _last_run_statuses(
+        self, session: AsyncSession, *, workspace_id: uuid.UUID, rule_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, str]:
+        """Latest run status per rule (§4.1 列表「上次运行时间与结果」)."""
+        if not rule_ids:
+            return {}
+        ranked = (
+            select(
+                AutopilotRun.autopilot_id,
+                AutopilotRun.status,
+                func.row_number()
+                .over(
+                    partition_by=AutopilotRun.autopilot_id,
+                    order_by=(AutopilotRun.created_at.desc(), AutopilotRun.id.desc()),
+                ).label("rn"),
+            )
+            .where(
+                AutopilotRun.workspace_id == workspace_id,
+                AutopilotRun.autopilot_id.in_(rule_ids),
+            )
+            .subquery()
+        )
+        rows = (
+            (await session.execute(select(ranked).where(ranked.c.rn == 1))).all()
+        )
+        return {row[0]: row[1] for row in rows}
 
     def _run_response(self, run: AutopilotRun) -> dict:
         return {

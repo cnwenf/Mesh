@@ -66,6 +66,14 @@ class PatchAutopilotRequest(BaseModel):
     require_approval: bool | None = None
 
 
+class PreviewScheduleRequest(BaseModel):
+    """POST /workspaces/{ws}/autopilots/preview-schedule (stateless, §4.2)."""
+
+    cron: str = Field(min_length=1, max_length=120)
+    timezone: str = Field(min_length=1, max_length=64)
+    count: int = Field(default=5, ge=1, le=10)
+
+
 class TestRunRequest(BaseModel):
     """POST /workspaces/{ws}/autopilots/{id}/test-run (§3.2)."""
 
@@ -94,6 +102,7 @@ class RunDecisionRequest(BaseModel):
 
 __all__ = [
     "CreateAutopilotRequest",
+    "PreviewScheduleRequest",
     "CreateWebhookSecretRequest",
     "KillSwitchRequest",
     "PatchAutopilotRequest",
