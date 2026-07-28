@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "c71736a2",
+  "version": "0f0886da",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -429,7 +429,7 @@
     "autopilots.webhook.signature.missing": "missing",
     "autopilots.webhook.signature.skipped": "skipped (test)",
     "autopilots.webhook.signature.valid": "valid",
-    "autopilots.webhook.signatureFormat": "v1 = HMAC_SHA256(secret, \"<t>.<raw_body>\") · X-Signature: t=<unix_ts>,v1=<hex>",
+    "autopilots.webhook.signatureFormat": "v1 = HMAC_SHA256(secret, \"[timestamp].[raw_body]\") · X-Signature: t=[unix_ts], v1=[hex]",
     "autopilots.webhook.signatureHelp": "Signature",
     "autopilots.webhook.title": "Inbound webhooks",
     "autopilots.webhook.tokenLabel": "URL token",

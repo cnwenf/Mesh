@@ -18,7 +18,7 @@ from tests.unit.runtime_support import seed_world
 async def _seed_issue(session_factory, world, *, title="登录报错", priority="high", labels=("bug",)) -> Issue:
     async with session_factory() as session, session.begin():
         status = IssueStatus(
-            workspace_id=world["ws_id"], name="Todo", category="todo"
+            workspace_id=world["ws_id"], name="Todo", category="todo", is_default=True
         )
         session.add(status)
         await session.flush()
@@ -283,7 +283,9 @@ async def test_cascade_lineage_from_agent_produced_comment(session_factory) -> N
     downstream = await make_rule(
         session_factory, world["ws_id"], created_by=world["member_id"],
         trigger_type="comment_created",
-        guardrails={"cascade_max_depth": 3},
+        # dedup window off: the refire below replays the SAME logical event
+        # to exercise the cascade gate, not the dedup window
+        guardrails={"cascade_max_depth": 3, "dedup_window_seconds": 0},
     )
     del downstream
     event = await _outbox_event(
@@ -373,7 +375,9 @@ async def test_cascade_lineage_from_autopilot_created_issue(session_factory) -> 
         world["ws_id"],
         created_by=world["member_id"],
         trigger_type="issue_created",
-        guardrails={"cascade_max_depth": 3},
+        # dedup window off: the second event replays the SAME logical
+        # event to exercise the cascade gate, not the dedup window
+        guardrails={"cascade_max_depth": 3, "dedup_window_seconds": 0},
     )
     event = await _outbox_event(
         session_factory,
@@ -407,3 +411,107 @@ async def test_cascade_lineage_from_autopilot_created_issue(session_factory) -> 
     async with session_factory() as session, session.begin():
         await match_domain_event(session, event2)
     assert len(await _runs(session_factory)) == len(runs)  # chain cut
+
+
+async def test_create_issue_loop_lineage_accumulates_through_dispatch(session_factory) -> None:
+    """M1 full-chain regression (the piece the artifact-only unit test cannot
+    see): the executor's ``create_issue`` action must commit the new issue,
+    its ``issue.created`` outbox row and the issue artifact in ONE
+    transaction. Otherwise the relay matches the event before the lineage
+    anchor exists, ``cascade_depth`` resets to zero every round, and the
+    ``create_issue ↔ issue_created`` self-loop escapes the cascade guard.
+
+    Drives the REAL executor dispatch + REAL issue service + matcher in
+    sequence and asserts the depth chain 0→1→2→3 and the cut at 4.
+    """
+    from datetime import timedelta
+
+    from mesh.autopilot.executor import dispatch_run
+    from mesh.comment_inbox.service import CommentService
+    from mesh.issue.service import IssueService
+
+    services = {
+        "session_factory": session_factory,
+        "comment_service": CommentService(session_factory, signing_secret="x" * 40),
+        "issue_service": IssueService(session_factory),
+    }
+    world = await seed_world(session_factory)
+    rule = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        trigger_type="issue_created",
+        action_config=[{"type": "create_issue", "title": "spawn {{run.id}}"}],
+        guardrails={"approval_required_actions": [], "cascade_max_depth": 3},
+    )
+
+    async def _match_latest_issue_event(processed: set) -> None:
+        async with session_factory() as session, session.begin():
+            rows = (
+                (
+                    await session.execute(
+                        select(OutboxEvent).where(
+                            OutboxEvent.workspace_id == world["ws_id"],
+                            OutboxEvent.payload["event"].astext == "issue.created",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for event in rows:
+                if event.id in processed:
+                    continue
+                processed.add(event.id)
+                await match_domain_event(session, event)
+
+    processed: set = set()
+    # seed issue → run at depth 0
+    seed_issue = await _seed_issue(session_factory, world)
+    async with session_factory() as session, session.begin():
+        outbox = OutboxEvent(
+            workspace_id=world["ws_id"],
+            event_type="realtime.publish",
+            payload={
+                "channel": f"workspace:{world['ws_id']}:issues",
+                "event": "issue.created",
+                "data": {"issue": {"id": str(seed_issue.id), "title": seed_issue.title}},
+            },
+        )
+        session.add(outbox)
+        processed.add(outbox.id)
+        await match_domain_event(session, outbox)
+    runs = await _runs(session_factory)
+    assert len(runs) == 1 and runs[0].cascade_depth == 0
+
+    # chain: dispatch(d-1 run) creates issue+artifact+event atomically →
+    # match creates the run at depth d; depth 4 is refused by the gate
+    for depth in (1, 2, 3):
+        parent = next(r for r in await _runs(session_factory) if r.cascade_depth == depth - 1)
+        await dispatch_run(
+            session_factory,
+            run_id=parent.id,
+            workspace_id=world["ws_id"],
+            services=services,
+            approval_ttl=timedelta(hours=1),
+        )
+        await _match_latest_issue_event(processed)
+        runs = await _runs(session_factory)
+        assert len(runs) == depth + 1
+        child = next(r for r in runs if r.cascade_depth == depth)
+        assert child.parent_run_id == parent.id
+
+    # dispatch the depth-3 run → creates issue I4; its event is depth 4 > 3
+    # → the guardrail gate refuses the downstream run: chain cut
+    last = next(r for r in await _runs(session_factory) if r.cascade_depth == 3)
+    await dispatch_run(
+        session_factory,
+        run_id=last.id,
+        workspace_id=world["ws_id"],
+        services=services,
+        approval_ttl=timedelta(hours=1),
+    )
+    await _match_latest_issue_event(processed)
+    runs = await _runs(session_factory)
+    assert len(runs) == 4  # no depth-4 run — the loop is cut
+    assert max(r.cascade_depth for r in runs) == 3

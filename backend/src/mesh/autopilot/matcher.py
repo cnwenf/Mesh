@@ -33,6 +33,8 @@ instead of resetting to zero each round.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import uuid
 from typing import Any
@@ -71,6 +73,31 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return uuid.UUID(str(value)) if value else None
     except (ValueError, AttributeError, TypeError):
         return None
+
+
+def _logical_dedup_key(
+    *, event_id: uuid.UUID, trigger_type: str, data: dict[str, Any], entity_id: uuid.UUID | None
+) -> str:
+    """Dedup key of the LOGICAL domain event, not the outbox row.
+
+    One business event fans out to several realtime channels (the issue
+    detail channel AND the workspace list channel — ``_emit_issue_event``
+    writes one outbox row per channel; comments likewise), so the same
+    domain event arrives as MULTIPLE rows with different row ids but
+    identical payloads. Keying the guardrail gate on the row id would fire
+    every rule once per channel copy — an N-fold trigger amplification that
+    turns e.g. the create_issue loop into an exponential fan-out. Keying on
+    ``(trigger type, entity id, payload signature)`` collapses the channel
+    copies to ONE trigger while still distinguishing genuinely different
+    events on the same entity inside the dedup window. Relay redelivery of
+    the same row dedups through the same key.
+    """
+    if entity_id is None:
+        return str(event_id)  # no entity anchor — fall back to row identity
+    signature = hashlib.sha256(
+        json.dumps(data, sort_keys=True, default=str).encode()
+    ).hexdigest()[:16]
+    return f"{trigger_type}:{entity_id}:{signature}"
 
 
 async def _candidate_rules(
@@ -396,7 +423,17 @@ async def match_domain_event(session: AsyncSession, event: OutboxEvent) -> None:
                 )
                 loop_target = str(issue_id)
 
-            dedup_key = f"{event.id}:{rule.id}"
+            # Channel copies of the same domain event collapse to ONE
+            # trigger (see _logical_dedup_key); the gate scopes the key per
+            # rule, so distinct rules still each fire on the same event.
+            entity_id = (
+                comment_id
+                if trigger_type in ("comment_created", "agent_mentioned")
+                else issue_id
+            )
+            dedup_key = _logical_dedup_key(
+                event_id=event.id, trigger_type=trigger_type, data=data, entity_id=entity_id
+            )
             decision = await evaluate_trigger(
                 session,
                 rule=rule,

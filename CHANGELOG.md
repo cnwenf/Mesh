@@ -3,6 +3,36 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.16.6] - 2026-07-28
+
+autopilot 验收 R3 整改(验收员两轮合并清单 M1–M5 全闭合 + LOW 项并入;复验 salvaged 改动时发现并彻底修复 M1 自环防护在真实服务下的两层根因):
+
+### Fixed
+
+- **M1 create_issue↔issue_created 自环切断(双重修复,实测生效)**:
+  - **谱系原子性**:`create_issue` 动作改在派发事务内写新 issue、其 `issue.created` outbox 行与 issue 产物(`IssueService.create_issue_in_session`,与 `apply_confirmed_move_in_session` 同式共享会话;SAVEPOINT 隔离使创建被拒时派发事务仍可用于失败记账)。修复前业务事务先提交事件、产物后记,relay 可在谱系锚点存在前匹配事件,`cascade_depth` 每轮归零。
+  - **触发级逻辑去重键**:一个领域事件会广播到多个 realtime 频道(issue 详情频道 + 工作区列表频道,各一行 outbox),修复前闸门按键 outbox **行 ID** 使每个频道副本各触发一次(N 倍放大,实测 25 issue/50 事件/24 run 的指数扇出);改按 `(触发类型, 实体 ID, 载荷签名)`(`_logical_dedup_key`)将频道副本聚合为一次触发;relay 重投递去重复用同键,多规则仍按规则各自触发(闸门按规则定界)。
+  - 回归:全链路单测(真实 dispatch → 真实 issue service → matcher,深度链 0→1→2→3、深度 4 截断)+ 真实 e2e(`rate_limit_max=50` 排除兜底干扰,断言恰 4 run 且稳定后不再增长——级联截断而非频率兜底)。
+- **M3 run_all 补跑**:`evaluate_trigger(bypass_concurrency)`——scheduler 的 run_all catch-up 槽仅豁免**触发期**并发闸门(同事务已建 pending 行曾被在途计数,默认 `concurrency_limit=1` 下 run_all 只产 1 run,§4.5「每个错过槽位一次运行」名存实亡);频率/去重/成环/级联/预算护栏照常,执行期仍串行。实测默认并发下 4 个到期槽产 4 run。
+- **M4 成环检测键**:`_loop_hit` 改经规则 JOIN 按 `executor_agent_id` 过滤(键 = `(executor_agent, target)`,§2.6/§5.3),跨规则同 executor×同目标成环漏检已堵(跨规则用例实测),不同 executor 不误伤。
+- **M5 覆盖率回正**:补 `list_webhook_events` 游标/`has_more` 分支用例(>limit 行 → `next_cursor` → 跟翻页 <limit 行 → `None`),`service.py` 回 90%,autopilot 逐文件 ≥90%(pytest --cov 实测)。
+- **Webhook 签名格式串 ICU 解析失败修复**:`autopilots.webhook.signatureFormat` 的尖括号触发 formatjs `UNCLOSED_TAG`,运行时回退显示原始 key;改写方括号记法,并对双语目录全量键做 ICU 解析普查(0 失败)+ 版本哈希重算。
+
+### Changed / Added(LOW 项并入)
+
+- scheduler 去除坏配置静默回退 `UTC`:缺/非法 cron 或时区 → 抢占置 `next_run_at=NULL` 停泊 + error 日志(§5.1 显式 IANA 时区不变量),补单测。
+- 非 dry test-run 前置 kill switch 闸门(`kill_switch_paused` → 409 `kill_switch`);dry_run 保持无副作用可用。
+- autopilot.md §3.3 对齐实现:`executor_busy` 注明为**执行层**可重试错误分类(动作失败归因运行时繁忙按指数退避重试),触发期并发满走 429 `concurrency_limited`。
+- 编辑器 `payload_match` 非法 JSON/非数组 → `PayloadMatchInvalidError` → 专用 i18n toast(`autopilots.editor.payloadMatchInvalid`,双语)+ 不提交(组件用例);编辑器头注与新预览行为(无状态端点、新建可用、非法式提示无效)一致。
+- `dedup_key_template` 契约注释固化于 `DEFAULT_GUARDRAILS`:默认 `{{trigger.event_id}}` 由各触发路径实例化(matcher 逻辑键 / scheduler slot 键 / webhook 事件 ID 或 `rejected:` 命名空间),规则作用域由闸门 `autopilot_id` 过滤保证。
+- **M2 rebase**:rebase 最新 `origin/main`(PR MERGEABLE);迁移按后合方惯例 `0020 → 0021`(链于 `0020_skill`,单 head 0001→0021),README/CHANGELOG/代码注释迁移号同步;i18n 键集取并集 + djb2 重算、en/zh parity。
+- **writing-plans 归档**:`docs/superpowers/plans/2026-07-28-autopilot-r3-fixes.md`(必查项 1 证据)。
+
+### 取舍说明(如实)
+
+- 出向 SSRF DNS-rebinding TOCTOU 保留为后续加固项:§5.3 仅要求拒私网段(已满足:私网/环回/link-local/元数据/多播/保留全拒 + https-only + 白名单 + 禁重定向),钉死解析 IP 需移植 runtime 模块 pinned-connection 设施。
+- 入队幂等键含 `attempt` 维持 §4.4 重试语义(重试需新 execution),代码注释说明,不改构造。
+
 ## [0.16.5] - 2026-07-28
 
 autopilot 前端验收整改(验收员第 1 轮 3 HIGH + MEDIUM + LOW 全修):

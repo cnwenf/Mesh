@@ -130,19 +130,15 @@ describe('AutopilotEditorPage', () => {
     const calls = setup(false);
     renderEditor('/autopilots/new');
     await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
-    console.log('STEP editor-ready');
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), '过滤坏JSON');
-    console.log('STEP name-typed');
+    // make the save gate pass (the default prompt action needs an executor)
+    await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
+    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-executor'), 'ag-1');
     // open the filter section and type invalid JSON into payload_match
     await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
-    console.log('STEP filter-toggled');
-    expect(screen.getByTestId('autopilot-section-filter-body')).toBeInTheDocument();
-    console.log('STEP filter-body-open');
     await userEvent.type(screen.getByTestId('autopilot-editor-payload-match'), 'not-json');
-    console.log('STEP payload-typed');
-    expect((screen.getByTestId('autopilot-editor-payload-match') as HTMLTextAreaElement).value).toBe('not-json');
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
-    console.log('STEP save-clicked');
+    // dedicated validation toast, not the generic error
     await waitFor(() =>
       expect(
         screen.getByText('Payload match rules must be a valid JSON array'),

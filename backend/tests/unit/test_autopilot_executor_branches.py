@@ -255,7 +255,7 @@ class _FakeIssueService:
         self._exc = exc
         self.last_body = None
 
-    async def create_issue(self, *, actor, workspace_id, body, **kwargs):
+    async def create_issue_in_session(self, session, *, actor, workspace_id, body, **kwargs):
         self.last_body = body
         if self._exc is not None:
             raise self._exc

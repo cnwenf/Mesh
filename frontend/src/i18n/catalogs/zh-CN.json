@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "1bd61f0d",
+  "version": "2facec05",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
@@ -429,7 +429,7 @@
     "autopilots.webhook.signature.missing": "缺失",
     "autopilots.webhook.signature.skipped": "跳过(测试)",
     "autopilots.webhook.signature.valid": "有效",
-    "autopilots.webhook.signatureFormat": "v1 = HMAC_SHA256(secret, \"<t>.<raw_body>\") · X-Signature: t=<unix_ts>,v1=<hex>",
+    "autopilots.webhook.signatureFormat": "v1 = HMAC_SHA256(secret, \"[timestamp].[raw_body]\") · X-Signature: t=[unix_ts], v1=[hex]",
     "autopilots.webhook.signatureHelp": "签名算法",
     "autopilots.webhook.title": "入站 Webhook",
     "autopilots.webhook.tokenLabel": "URL 令牌",

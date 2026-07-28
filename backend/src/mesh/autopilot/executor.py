@@ -655,10 +655,16 @@ async def _step_create_issue(
         steps=steps,
         run_id=run.id,
     )
-    # NB: do NOT shadow the pipeline ``session`` parameter here — the
-    # artifact below must be recorded in the dispatch transaction (its FK
-    # key-share on the run row would deadlock with the dispatch's FOR UPDATE
-    # from any other connection).
+    # NB: do NOT shadow the pipeline ``session`` parameter here — the issue
+    # creation AND the artifact below must commit in the dispatch
+    # transaction: the relay matches the new issue's ``issue.created`` event
+    # through the issue artifact (cascade lineage, §5.3), so the event row
+    # and its lineage anchor must become visible ATOMICALLY — creating the
+    # issue in its own transaction would let the relay match the event
+    # before the artifact exists and the create_issue ↔ issue_created loop
+    # would escape the cascade-depth guard. (The creator lookup stays on a
+    # separate session: its FK key-share on the roster row would deadlock
+    # with the dispatch's FOR UPDATE from any other connection.)
     async with session_factory() as lookup_session:
         await set_tenant_context(lookup_session, run.workspace_id)
         creator = await lookup_session.scalar(
@@ -675,9 +681,12 @@ async def _step_create_issue(
         request_fields["priority"] = str(action["priority"])
     body = CreateIssueRequest(**request_fields)
     try:
-        created = await issue_service.create_issue(
-            actor=creator, workspace_id=run.workspace_id, body=body
-        )
+        # SAVEPOINT so a rejected creation leaves the dispatch transaction
+        # usable for the failure/retry bookkeeping that follows.
+        async with session.begin_nested():
+            created = await issue_service.create_issue_in_session(
+                session, actor=creator, workspace_id=run.workspace_id, body=body
+            )
     except Exception as exc:
         raise ActionError("transient", f"issue creation failed: {exc}", retryable=True) from exc
     issue_uuid = uuid.UUID(str(created.get("id") or run.id))
