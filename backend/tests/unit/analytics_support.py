@@ -74,6 +74,7 @@ def make_issue(
     assignee=None,
     state_category: str = "todo",
     estimate=None,
+    estimate_unit=None,
     completed_at=None,
     created_at=None,
 ) -> Issue:
@@ -94,6 +95,7 @@ def make_issue(
         milestone_id=milestone.id if milestone is not None else None,
         assignee_id=assignee.id if assignee is not None else None,
         estimate=estimate,
+        estimate_unit=estimate_unit,
         completed_at=completed_at,
         **kwargs,
     )

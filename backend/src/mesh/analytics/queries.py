@@ -72,7 +72,11 @@ VELOCITY_SQL = """
 SELECT c.id AS cycle_id, c.name AS name, c.starts_at AS starts_at,
        c.ends_at AS ends_at, c.state AS state,
        COUNT(i.id) AS completed_issues,
-       COALESCE(SUM(i.estimate), 0) AS completed_points
+       COALESCE(SUM(i.estimate), 0) AS completed_points,
+       COALESCE(SUM(i.estimate) FILTER (WHERE i.estimate_unit = 'points'), 0)
+         AS completed_points_unit,
+       COALESCE(SUM(i.estimate) FILTER (WHERE i.estimate_unit = 'hours'), 0)
+         AS completed_hours_unit
 FROM cycles c
 LEFT JOIN issues i
   ON i.cycle_id = c.id
@@ -91,24 +95,27 @@ ORDER BY c.starts_at
 THROUGHPUT_SQL = """
 SELECT bucket_local,
        (bucket_local AT TIME ZONE :calendar_tz) AS window_start_utc,
-       ((bucket_local + CAST(:bucket_step AS interval)) AT TIME ZONE :calendar_tz)
+       ((bucket_local + CASE :granularity
+             WHEN 'day' THEN INTERVAL '1 day'
+             WHEN 'week' THEN INTERVAL '1 week'
+             ELSE INTERVAL '1 month' END) AT TIME ZONE :calendar_tz)
          AS window_end_utc,
        COUNT(*) FILTER (WHERE kind = 'created')   AS created,
        COUNT(*) FILTER (WHERE kind = 'completed') AS completed
 FROM (
-  SELECT date_trunc(:granularity, created_at AT TIME ZONE :calendar_tz) AS bucket_local,
+  SELECT date_trunc(:granularity, i.created_at AT TIME ZONE :calendar_tz) AS bucket_local,
          'created' AS kind
-    FROM issues
-   WHERE workspace_id = :ws AND deleted_at IS NULL
-     AND created_at >= :win_from AND created_at < :win_to
+    FROM issues i
+   WHERE i.workspace_id = :ws AND i.deleted_at IS NULL
+     AND i.created_at >= :win_from AND i.created_at < :win_to
      {project_filter}
   UNION ALL
-  SELECT date_trunc(:granularity, completed_at AT TIME ZONE :calendar_tz) AS bucket_local,
+  SELECT date_trunc(:granularity, i.completed_at AT TIME ZONE :calendar_tz) AS bucket_local,
          'completed' AS kind
-    FROM issues
-   WHERE workspace_id = :ws AND deleted_at IS NULL
-     AND state_category = 'done' AND completed_at IS NOT NULL
-     AND completed_at >= :win_from AND completed_at < :win_to
+    FROM issues i
+   WHERE i.workspace_id = :ws AND i.deleted_at IS NULL
+     AND i.state_category = 'done' AND i.completed_at IS NOT NULL
+     AND i.completed_at >= :win_from AND i.completed_at < :win_to
      {project_filter}
 ) t
 GROUP BY bucket_local
@@ -131,9 +138,12 @@ SELECT CAST(days.d AS date) AS date,
          - COALESCE(SUM(scope.pts) FILTER (
              WHERE scope.completed_at IS NOT NULL
                AND scope.completed_at
-                   < (CAST(days.d + 1 AS timestamp) AT TIME ZONE :display_tz)), 0)
-         AS remaining
-FROM generate_series(CAST(:day_from AS date), CAST(:day_to AS date), '1 day') AS days(d)
+                   < (CAST((CAST(days.d AS date) + 1) AS timestamp)
+                      AT TIME ZONE :display_tz)), 0)
+         AS remaining,
+       (SELECT v FROM total) AS total
+FROM generate_series(CAST(:day_from AS timestamp), CAST(:day_to AS timestamp),
+                     INTERVAL '1 day') AS days(d)
 LEFT JOIN scope ON TRUE
 GROUP BY days.d
 ORDER BY days.d
@@ -235,13 +245,16 @@ GROUP BY e.agent_id
 # ---------------------------------------------------------------------------
 
 
-def project_visibility_fragment(visible_ids, *, alias: str = "i") -> tuple[str, dict]:
+def project_visibility_fragment(visible_ids, *, alias: str = "i", project_id=None) -> tuple[str, dict]:
     """Issue-metric visibility fragment (§3.1 R3).
 
-    ``visible_ids is None`` → admin/owner, no fragment. Otherwise keep
-    inbox issues (``project_id IS NULL``, workspace-level visible) plus the
-    requester's visible project set.
+    ``project_id`` → single-project filter (the endpoint already passed the
+    project visibility gate). ``visible_ids is None`` → admin/owner, no
+    fragment. Otherwise keep inbox issues (``project_id IS NULL``,
+    workspace-level visible) plus the requester's visible project set.
     """
+    if project_id is not None:
+        return f"AND {alias}.project_id = :project_id", {"project_id": project_id}
     if visible_ids is None:
         return "", {}
     return (
@@ -250,13 +263,13 @@ def project_visibility_fragment(visible_ids, *, alias: str = "i") -> tuple[str, 
     )
 
 
-def build_cycle_time_sql(*, visible_ids) -> tuple[str, dict]:
-    fragment, params = project_visibility_fragment(visible_ids)
+def build_cycle_time_sql(*, visible_ids, project_id=None) -> tuple[str, dict]:
+    fragment, params = project_visibility_fragment(visible_ids, project_id=project_id)
     return CYCLE_TIME_SQL.format(project_filter=fragment), params
 
 
-def build_cycle_insufficient_sql(*, visible_ids) -> tuple[str, dict]:
-    fragment, params = project_visibility_fragment(visible_ids)
+def build_cycle_insufficient_sql(*, visible_ids, project_id=None) -> tuple[str, dict]:
+    fragment, params = project_visibility_fragment(visible_ids, project_id=project_id)
     return CYCLE_INSUFFICIENT_SQL.format(project_filter=fragment), params
 
 
@@ -278,8 +291,8 @@ def build_velocity_sql(*, visible_ids, cycle_ids=None, project_id=None) -> tuple
     return VELOCITY_SQL.format(cycle_filter=cycle_filter, project_filter=fragment), params
 
 
-def build_throughput_sql(*, visible_ids) -> tuple[str, dict]:
-    fragment, params = project_visibility_fragment(visible_ids)
+def build_throughput_sql(*, visible_ids, project_id=None) -> tuple[str, dict]:
+    fragment, params = project_visibility_fragment(visible_ids, project_id=project_id)
     return THROUGHPUT_SQL.format(project_filter=fragment), params
 
 
