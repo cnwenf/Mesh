@@ -229,5 +229,5 @@
 - [ ] **Step 3: Real UI verification** — `docker compose up --build -d`; drive pages like a human (chrome-devtools): create integration, binding, view event ledger, create subscription (one-time secret), issue sidebar VCS block; screenshots attached to final report; dark-mode spot check.
 - [ ] **Step 4: Coverage** — `pytest --cov=mesh --cov-report=term-missing` ≥90% overall AND new-code; frontend gate ≥90% per file.
 - [ ] **Step 5: Docs** — README.md implementation-status row for integrations v0.18.0; backend/README.md module bullet + endpoint table; CHANGELOG entry; spec fix-ups ONLY if genuine gaps (report in issue comment, don't silently change requirements).
-- [ ] **Step 6:** Anonymization scan: `git grep -in "multica\|对标\|参考.*产品"` on diff → clean. Full test suite green. Commit `test(integrations): T29 + §5 红线真实 e2e 全绿`, `docs(integrations): 文档同步 v0.18.0`.
+- [ ] **Step 6:** Anonymization scan on diff (reference-product names, benchmarking language) → clean. Full test suite green. Commit `test(integrations): T29 + §5 红线真实 e2e 全绿`, `docs(integrations): 文档同步 v0.18.0`.
 - [ ] **Step 7:** Push branch, create PR (gh), request code review (requesting-code-review skill), post final issue comment with acceptor mention.
