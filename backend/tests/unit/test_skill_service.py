@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 from skill_test_support import make_member, make_workspace
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.outbox import OutboxEvent
@@ -428,3 +428,35 @@ class TestSlugify:
 
     def test_empty_fallback(self) -> None:
         assert slugify("!!!").startswith("skill-")
+
+
+class TestListSessionHygiene:
+    async def test_list_skills_leaves_no_open_transaction(
+        self, skill_service, session_factory
+    ) -> None:
+        """Regression: ``list_skills`` once ran ``_card_extras`` on the session
+        AFTER its ``async with`` block closed. The closed session silently
+        re-acquired a connection for the card queries and was then abandoned
+        with its implicit transaction still open (``idle in transaction``),
+        holding AccessShare on ``skill_installations``. That starves the
+        per-test ``TRUNCATE`` (clean_tables) of AccessExclusive and stalls the
+        whole suite nondeterministically (GC-paced). Assert that a
+        lock-timeout-bounded TRUNCATE succeeds immediately after a list.
+        """
+        workspace = await make_workspace(session_factory)
+        admin = await make_member(session_factory, workspace, role="admin")
+        await skill_service.create_skill(
+            actor=admin,
+            workspace_id=workspace.id,
+            name="会话卫生",
+            summary="list path session hygiene",
+            tags=[],
+            required_capabilities=[],
+        )
+        items, _ = await skill_service.list_skills(workspace_id=workspace.id)
+        assert len(items) == 1
+
+        async with session_factory() as session:
+            await session.execute(text("SET lock_timeout = '2s'"))
+            await session.execute(text("TRUNCATE skill_installations CASCADE"))
+            await session.rollback()

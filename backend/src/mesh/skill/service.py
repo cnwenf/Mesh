@@ -426,11 +426,14 @@ class SkillService:
                 )
             stmt = stmt.order_by(Skill.created_at.asc(), Skill.id.asc()).limit(limit + 1)
             rows = (await session.execute(stmt)).all()
+            page = rows[:limit]
+            # Card extras MUST run inside the session block: executing on the
+            # closed session silently re-acquires a connection and abandons an
+            # open transaction (idle-in-transaction lock starvation).
+            extras = await self._card_extras(
+                session, workspace_id, [skill.id for skill, _ in page]
+            )
 
-        page = rows[:limit]
-        extras = await self._card_extras(
-            session, workspace_id, [skill.id for skill, _ in page]
-        )
         items = [
             self.render_skill(skill, source, **extras.get(skill.id, {}))
             for skill, source in page
