@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -169,4 +169,73 @@ async def queue_depth(session: AsyncSession, workspace_id: uuid.UUID) -> int:
                 )
             )
         ).scalar_one()
+    )
+
+
+CHAT_GENERATION_FINISHED_EVENT = "chat.generation_finished"
+
+_CHAT_FINISH_STATUS_MAP = {
+    "done": "completed",
+    "interrupted": "cancelled",
+    "failed": "failed",
+}
+
+
+class _ExecutionNotMaterialized(Exception):
+    """The enqueue event has not been relayed yet — retry delivery."""
+
+
+async def chat_generation_finished_handler(
+    session: AsyncSession, event: OutboxEvent
+) -> list[tuple[str, dict]] | None:
+    """Finalize a chat-triggered execution when its generation terminates.
+
+    Chat generations are platform-driven (no runtime claim — chat-session.md
+    §4.4 衔接): the API-side engine / stop endpoint emits this event with the
+    §6.5 idempotency key, and the relay writes the terminal state onto the
+    ``task_executions`` row the ``execution.enqueue`` handler materialized.
+    Going through the outbox (instead of a direct UPDATE from the API
+    process) keeps the two writes ordered and self-healing: if the enqueue
+    has not been relayed yet, delivery is retried until the row exists.
+    """
+    await set_tenant_context(session, event.workspace_id)
+    payload = event.payload or {}
+    idempotency_key = payload.get("idempotency_key")
+    generation_status = payload.get("status")
+    if not idempotency_key or generation_status not in _CHAT_FINISH_STATUS_MAP:
+        return None  # malformed event — nothing to finalize
+    execution_status = _CHAT_FINISH_STATUS_MAP[generation_status]
+    now = func.now()
+    values: dict = {
+        "status": execution_status,
+        "finished_at": now,
+        "updated_at": now,
+    }
+    if execution_status == "completed":
+        values["result"] = {"chat_message_id": payload.get("message_id")}
+    elif execution_status == "failed":
+        values["failure_reason"] = "generation_failed"
+    result = await session.execute(
+        update(TaskExecution)
+        .where(
+            TaskExecution.workspace_id == event.workspace_id,
+            TaskExecution.idempotency_key == idempotency_key,
+            TaskExecution.status == "queued",
+        )
+        .values(**values)
+    )
+    if result.rowcount > 0:
+        return None
+    # No queued row: either already finalized (idempotent no-op) or the
+    # enqueue has not been relayed yet (retry until it has).
+    exists = await session.scalar(
+        select(TaskExecution.id).where(
+            TaskExecution.workspace_id == event.workspace_id,
+            TaskExecution.idempotency_key == idempotency_key,
+        )
+    )
+    if exists is not None:
+        return None
+    raise _ExecutionNotMaterialized(
+        f"chat execution not materialized yet: {idempotency_key}"
     )

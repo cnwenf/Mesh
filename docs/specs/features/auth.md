@@ -218,6 +218,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `issue:read` | ✅ | ✅ | ✅ | ✅(受限) | ✅(受限) |
 | `issue:write` | ✅ | ✅ | ✅ | ❌ | ✅(按 scope) |
 | `comment:write` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `chat:write`(与 agent 实时聊天;发消息即触发执行,MES-67 L3) | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `agent:trigger`(@提及触发运行)**[Mesh 特色]** | ✅ | ✅ | ✅ | ❌ | ⚠️受限(防回环) |
 | `agent:manage` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `autopilot:manage`(自动化规则管理 / kill switch) | ✅ | ✅ | ❌ | ❌ | ❌ |

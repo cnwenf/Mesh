@@ -137,6 +137,12 @@ async def claim_execution(
                     .where(
                         TaskExecution.status == "queued",
                         TaskExecution.workspace_id == workspace_id,
+                        # H1: chat generations are platform-driven (chat-session.md
+                        # §4.4) and finalized via the outbox; a runtime must never
+                        # claim them (their empty label/cap requirements would
+                        # otherwise match any online runtime and lose the
+                        # terminal write-back).
+                        TaskExecution.trigger != "chat",
                         TaskExecution.label_requirements.op("<@")(
                             bindparam("p_labels", type_=JSONB)
                         ),

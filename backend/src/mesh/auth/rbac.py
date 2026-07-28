@@ -50,6 +50,7 @@ PERMISSION_MATRIX: dict[str, frozenset[str]] = {
     "issue:read": frozenset({"owner", "admin", "member", "guest"}),
     "issue:write": frozenset({"owner", "admin", "member"}),
     "comment:write": frozenset({"owner", "admin", "member", "guest"}),
+    "chat:write": frozenset({"owner", "admin", "member"}),  # MES-67 L3: guest 不得聊天/触发执行
     "agent:trigger": frozenset({"owner", "admin", "member"}),
     "agent:manage": frozenset({"owner", "admin"}),
     "autopilot:manage": frozenset({"owner", "admin"}),

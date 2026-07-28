@@ -30,3 +30,5 @@ htmlcov/
 
 # Node — never commit dependencies or build caches
 node_modules/
+docker-compose.override.yml
+dump.rdb

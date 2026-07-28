@@ -18,6 +18,7 @@ from mesh.db.models.autopilot import (
     WebhookEvent,
     WebhookSecret,
 )
+from mesh.db.models.chat import ChatMessage, ChatSession, Favorite
 from mesh.db.models.comment import Comment, CommentMention, CommentReaction
 from mesh.db.models.issue import (
     Issue,
@@ -114,6 +115,8 @@ __all__ = [
     "AutopilotArtifact",
     "AutopilotRun",
     "AutopilotRunAttempt",
+    "ChatMessage",
+    "ChatSession",
     "Comment",
     "CommentMention",
     "CommentReaction",
@@ -123,6 +126,7 @@ __all__ = [
     "EmailVerificationToken",
     "ExecutionAttempt",
     "ExecutionCredential",
+    "Favorite",
     "IdentifierPrefixRegistry",
     "Issue",
     "IssueActivity",

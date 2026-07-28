@@ -40,6 +40,10 @@ from mesh.auth.tokens import TokenService
 from mesh.autopilot.channels import register_autopilot_checkers
 from mesh.autopilot.routes import router as autopilot_router
 from mesh.autopilot.service import AutopilotService
+from mesh.chat.channels import register_chat_checkers
+from mesh.chat.engine import ChatGenerationEngine, ScriptedGenerationProvider
+from mesh.chat.routes import router as chat_router
+from mesh.chat.service import ChatService
 from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.routes import router as comment_inbox_router
@@ -56,6 +60,8 @@ from mesh.errors import (
     UnauthorizedError,
     ValidationError,
 )
+from mesh.favorites.routes import router as favorites_router
+from mesh.favorites.service import FavoritesService
 from mesh.issue.bulk import BulkService
 from mesh.issue.channels import register_issue_checkers
 from mesh.issue.dependencies import DependencyService
@@ -237,6 +243,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.comment_service = comment_service
     app.state.inbox_service = InboxService(session_factory)
+    # Chat module (chat-session.md): sessions / candidate messages / §6.8
+    # streaming. The generation engine runs in-process (asyncio tasks) and
+    # buffers deltas in Redis; chat-triggered executions are enqueued via the
+    # transactional outbox with trigger='chat' (README §6.9 / §6.5).
+    app.state.chat_engine = ChatGenerationEngine(
+        app.state.redis,
+        session_factory,
+        provider=ScriptedGenerationProvider(
+            chunk_delay_seconds=settings.chat_generation_chunk_delay_seconds
+        ),
+        buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
+    )
+    app.state.favorites_service = FavoritesService(session_factory)
+    app.state.chat_service = ChatService(
+        session_factory,
+        comment_service=app.state.comment_service,
+        attachment_service=app.state.attachment_service,
+        favorites_service=app.state.favorites_service,
+        streaming_stale_seconds=settings.chat_streaming_stale_seconds,
+    )
+    app.state.chat_service.engine = app.state.chat_engine
     app.state.agent_service = AgentService(session_factory)
     # skill.md: four-layer skill module. Script/reference bodies live in the
     # shared object bucket via content_ref; the import service is SSRF-guarded
@@ -288,6 +315,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_execution_checkers(app.state.authorizer, session_factory)
     register_squad_checkers(app.state.authorizer, session_factory)
     register_autopilot_checkers(app.state.authorizer, session_factory)
+    register_chat_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -304,6 +332,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(view_router)
     app.include_router(attachment_router)
     app.include_router(comment_inbox_router)
+    app.include_router(chat_router)
+    app.include_router(favorites_router)
     app.include_router(agent_router)
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)

@@ -846,6 +846,54 @@ class CommentService:
             raise GoneError(_COMMENT_GONE)
         return comment
 
+    async def preview_triggers(
+        self, *, workspace_id: uuid.UUID, body_markdown: str
+    ) -> dict:
+        """Pre-submit trigger preview (README §6.9 UI 配套 / chat 沉淀预览).
+
+        Pure read: parses mentions from a markdown body and lists the agent
+        members that publishing would enqueue (§3.5 trigger path). Writes
+        nothing and enqueues nothing; chat-session.md's 沉淀为评论 preview
+        shares this exact pipeline so preview and submit cannot drift.
+        """
+        _check_body_bytes(body_markdown)
+        async with self._factory() as session:
+            await set_tenant_context(session, workspace_id)
+            rendered = render_body(body_markdown)
+            mentioned = await self._resolve_mentions(
+                session, workspace_id=workspace_id, rendered=rendered
+            )
+            if not mentioned:
+                return {"mentions": [], "agent_triggers": []}
+            rows = (
+                await session.execute(
+                    select(Member, User)
+                    .outerjoin(User, Member.user_id == User.id)
+                    .where(
+                        Member.workspace_id == workspace_id,
+                        Member.id.in_([member.id for member in mentioned]),
+                    )
+                )
+            ).all()
+        by_id = {member.id: (member, user) for member, user in rows}
+        mentions: list[dict] = []
+        agent_triggers: list[dict] = []
+        for member in mentioned:
+            entry_member, entry_user = by_id.get(member.id, (member, None))
+            name = resolve_display_name(member=entry_member, user=entry_user)
+            mentions.append(
+                {"id": str(member.id), "member_type": member.member_type, "name": name}
+            )
+            if member.member_type == "agent":
+                agent_triggers.append(
+                    {
+                        "member_id": str(member.id),
+                        "agent_id": str(member.agent_id) if member.agent_id else None,
+                        "name": name,
+                    }
+                )
+        return {"mentions": mentions, "agent_triggers": agent_triggers}
+
     async def _resolve_mentions(
         self,
         session: AsyncSession,

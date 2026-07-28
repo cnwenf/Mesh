@@ -501,7 +501,12 @@ done ──► [*]
 - `interrupted` 与 `failed` 均保留已产生内容与状态,二者都可重新生成。
 - regenerate 不修改旧消息,而是新建候选并切换 `selected_candidate`,历史候选全部可回看回选。
 
-**与长任务执行状态机的衔接**:形态 B 中,agent 被 @ 提及后由 comment-inbox.md 的提及管线经 transactional outbox(README §6.6)入队 `task_executions`(`trigger='mention'`,经 `comment_mentions.triggered_execution_id` 关联),其生命周期遵循 **README §6.4 长任务状态机**(`queued → claimed → running → completed / failed / timeout`,含 `requeued` / `cancelling` / `cancelled` / `awaiting_approval`);执行 `completed` 后 agent 把产出作为 `comments` 回评(`author_id → members.id`,`member_type='agent'` 为快照)。形态 A 的流式生成是会话内的实时推理(generation),**不入 `task_executions` 队列**;两条路径在 UI 上以统一的 AI 徽章与消息状态呈现。
+**与长任务执行状态机的衔接**:形态 B 中,agent 被 @ 提及后由 comment-inbox.md 的提及管线经 transactional outbox(README §6.6)入队 `task_executions`(`trigger='mention'`,经 `comment_mentions.triggered_execution_id` 关联),其生命周期遵循 **README §6.4 长任务状态机**(`queued → claimed → running → completed / failed / timeout`,含 `requeued` / `cancelling` / `cancelled` / `awaiting_approval`);执行 `completed` 后 agent 把产出作为 `comments` 回评(`author_id → members.id`,`member_type='agent'` 为快照)。形态 A 的 agent 回复**同样经 `execution.enqueue` 入队**(`trigger='chat'`,§6.5 幂等键 `sha256(agent_id | issue_id | trigger_event_id)`,`issue_id` 取会话上下文 issue、无上下文时以稳定 `nil` 占位),使触发可审计、与触发矩阵一致;但**生成物本身是会话内的平台驱动实时推理(generation)**——由 API 侧生成引擎流式产出(上游推理细节非本模块目标,§1.3),**不经 runtime claim / attempt 物理层**:生成终态在同进程写回消息后,经 outbox 内部事件 `chat.generation_finished`(payload 携带 §6.5 幂等键与终态)由 relay 把对应 `task_executions` 行直接置于终态(`done→completed` / `interrupted→cancelled` / `failed→failed`);若入队尚未被 relay 物化,该事件按 outbox 重试语义补投直至落库。两条路径在 UI 上以统一的 AI 徽章与消息状态呈现。
+
+> **补投上限(实现注记)**:上述「补投直至落库」受 README §6.6 `outbox_max_attempts`(默认 5)上限约束;超过上限事件置 `failed` 并告警(非静默丢失),运维可据此重投。
+> **claim 排除 chat(H1)**:`runtime` 的 claim 查询显式 `trigger != 'chat'`,故在线 runtime 不会抢走 chat 执行——否则平台快速路径的终态回写(`UPDATE … WHERE status='queued'`)将命中 0 行而永久丢失,执行随后被 reaper 误判 failed/timeout。该不变量由 `tests/e2e/test_chat_review_e2e.py` 的「在线 runtime 不 claim chat 执行且终态仍 completed」用例守护。
+> **streaming 卡死回收**:`streaming` 消息 `started_at` 超过 `chat_streaming_stale_seconds`(默认 600s)视为引擎失联,下一次发送/重生成时由单并发守卫就地回收(置 `failed` 并经 `chat.generation_finished` 终结对应执行),避免 409 永久阻塞。
+> **不可信围栏随机化(L1)**:§6.15 围栏分隔符携带每快照随机 token,正文内对该 token 的出现做剔除,防止恶意 issue 内容伪造闭合分隔符逃逸围栏。
 
 ### 4.5 实时性与通知
 

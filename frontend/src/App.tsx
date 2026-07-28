@@ -21,7 +21,7 @@ import { I18nProvider, useT } from './i18n';
 import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
 import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
-import { PlaceholderPage } from './shell/PlaceholderPage';
+import { ChatPage } from './features/chat';
 import { AgentDetailPage } from './features/agents/AgentDetailPage';
 import { MarketplacePage } from './features/skills/MarketplacePage';
 import { SkillDetailPage } from './features/skills/SkillDetailPage';
@@ -193,7 +193,8 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="squads/:squadId" element={<SquadDetailPage />} />
                 <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
-                <Route path="chat" element={<PlaceholderPage kind="chat" />} />
+                {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
+                <Route path="chat" element={<ChatPage />} />
                 {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
                 <Route path="runtimes" element={<RuntimesPage />} />
                 <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />

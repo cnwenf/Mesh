@@ -30,6 +30,7 @@ const PER_FILE_DIRS = [
   'src/features/inbox/',
   'src/features/runtimes/',
   'src/features/autopilots/',
+  'src/features/chat/',
 ];
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

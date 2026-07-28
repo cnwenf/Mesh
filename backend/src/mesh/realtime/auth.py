@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select, text
 
+from mesh.db.models.chat import ChatSession
 from mesh.db.models.member import Member
 from mesh.db.models.realtime import RealtimeChannel
 from mesh.db.models.user import User
@@ -89,7 +90,9 @@ MEMBER_INBOX_SUFFIX = ":inbox"
 # private resource. Entities NOT listed here (e.g. not-yet-implemented modules)
 # keep the workspace-membership floor until they opt into resource-level checks
 # by adding themselves here AND registering a checker.
-RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset({"project", "agent", "execution"})
+RESOURCE_SCOPED_ENTITIES: frozenset[str] = frozenset(
+    {"project", "agent", "execution", "chat_session"}
+)
 
 
 @runtime_checkable
@@ -165,6 +168,32 @@ class DefaultChannelAuthorizer:
                 return None
             return owner
 
+        # chat_list:{member_id} (H2): owner-private list channel — like the
+        # inbox, it has no realtime_channels row until the first terminal event,
+        # so resolve the workspace from the roster and let the checker confirm
+        # the principal is that member.
+        if info.entity == "chat_list":
+            owner = await self._member_keyed_workspace(principal, info.key)
+            if owner is None:
+                return None
+            checker = self._prefix_checkers.get(info.entity)
+            if checker is not None and not await checker(principal, channel):
+                return None
+            return owner
+
+        # chat_session:{id} (H2): owner-only; resolve the workspace from the
+        # session row (a fresh session has no realtime_channels row yet, so the
+        # owner must still be able to subscribe to live terminal events), then
+        # the checker enforces ownership.
+        if info.entity == "chat_session":
+            owner = await self._chat_session_workspace(principal, info.key)
+            if owner is None:
+                return None
+            checker = self._prefix_checkers.get(info.entity)
+            if checker is not None and not await checker(principal, channel):
+                return None
+            return owner
+
         owner = await self._owning_workspace(principal, channel)
         if owner is None:
             return None
@@ -182,14 +211,22 @@ class DefaultChannelAuthorizer:
     async def _member_inbox_workspace(
         self, principal: Principal, key: str
     ) -> uuid.UUID | None:
-        """Resolve the owning workspace of a ``member:{id}:inbox`` channel.
+        """Resolve the owning workspace of a ``member:{id}:inbox`` channel."""
+        member_raw = key[: -len(MEMBER_INBOX_SUFFIX)]
+        return await self._member_keyed_workspace(principal, member_raw)
+
+    async def _member_keyed_workspace(
+        self, principal: Principal, member_raw: str
+    ) -> uuid.UUID | None:
+        """Resolve a member-keyed channel's workspace from the ROSTER.
 
         The member row must exist (active) in one of the principal's
         workspaces AND belong to the principal's user (dev principals —
         non-UUID subjects — are workspace-scoped by definition, matching the
-        dev convention elsewhere in this module).
+        dev convention elsewhere in this module). Used by ``member:{id}:inbox``
+        and the owner-private ``chat_list:{member_id}`` channel, neither of
+        which has a ``realtime_channels`` row before its first event.
         """
-        member_raw = key[: -len(MEMBER_INBOX_SUFFIX)]
         try:
             member_id = uuid.UUID(member_raw)
         except ValueError:
@@ -211,8 +248,31 @@ class DefaultChannelAuthorizer:
             if member is None:
                 continue
             if user_id is not None and member.user_id != user_id:
-                return None  # someone else's inbox — never leak existence
+                return None  # someone else's member-keyed channel — never leak
             return workspace_id
+        return None
+
+    async def _chat_session_workspace(
+        self, principal: Principal, session_raw: str
+    ) -> uuid.UUID | None:
+        """Resolve a ``chat_session:{id}`` channel's workspace from the session
+        row (a fresh session has no ``realtime_channels`` row yet). The
+        registered checker then enforces owner-only access."""
+        try:
+            session_id = uuid.UUID(session_raw)
+        except ValueError:
+            return None
+        for workspace_id in sorted(principal.workspace_ids):
+            async with self._session_factory() as session:
+                await set_tenant_context(session, workspace_id)
+                owner = await session.scalar(
+                    select(ChatSession.workspace_id).where(
+                        ChatSession.id == session_id,
+                        ChatSession.workspace_id == workspace_id,
+                    )
+                )
+            if owner is not None:
+                return owner
         return None
 
     async def _owning_workspace(self, principal: Principal, channel: str) -> uuid.UUID | None:
