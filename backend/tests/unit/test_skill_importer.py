@@ -73,8 +73,12 @@ def _import_service(session_factory, content_store, files: dict[str, bytes]) -> 
         settings=ImportSettings(
             fetcher=_fetcher_for(files),
             # The fixture registry host is explicitly trusted — the injected
-            # fetcher replaces the network, the allowlist short-circuits the
-            # DNS step of the SSRF guard (still exercised in test_skill_ssrf).
+            # fetcher replaces the network; the stub resolver keeps the
+            # fail-fast SSRF pre-check off real DNS (allowlisted hosts are
+            # still resolved since the C1/C2 pinning rewrite, so the stub
+            # returns a TEST-NET address that is never actually dialed; the
+            # address policy itself is exercised in test_skill_ssrf).
+            resolver=lambda host, port: ["192.0.2.1"],
             host_allowlist=frozenset({"reg.example.com", "m.example.com",
                                       "market.example.com"}),
         ),
@@ -156,7 +160,9 @@ class TestPipeline:
             decision="approve",
             comment="拒绝出站网络,仅允许只读 shell",
         )
-        assert approved["status"] == "ready"
+        # M1: approve returns the §3.2 approval RESULT (status "published"),
+        # not the import task object (which sits at "ready").
+        assert approved["status"] == "published"
         assert approved["granted_capabilities"] == ["exec:shell"]
         assert approved["reviewed_by"] == str(admin.id)
         async with session_factory() as session:

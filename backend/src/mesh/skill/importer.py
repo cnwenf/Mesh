@@ -74,6 +74,7 @@ from mesh.skill.service import (
     slugify,
 )
 from mesh.skill.ssrf import (
+    Resolver,
     SourceUnreachableError,
     fetch_pinned,
     resolve_pinned,
@@ -135,6 +136,10 @@ class ImportSettings:
     host_allowlist: frozenset[str] = frozenset()
     marketplace_url: str | None = None
     fetcher: Fetcher | None = None
+    # DNS seam for the fail-fast pre-check: production leaves it None (system
+    # resolver); tests inject a stub so allowlisted fixture hosts validate
+    # without touching real DNS (the injected ``fetcher`` replaces the wire).
+    resolver: Resolver | None = None
 
 
 class ImportService:
@@ -228,7 +233,11 @@ class ImportService:
                 details={"source_type": source_type},
             )
         # Fail fast on obviously bad URIs — the pipeline re-validates per hop.
-        validate_source_uri(uri, allowlist=self._settings.host_allowlist)
+        validate_source_uri(
+            uri,
+            allowlist=self._settings.host_allowlist,
+            resolver=self._settings.resolver,
+        )
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             now = _now(self._clock)
