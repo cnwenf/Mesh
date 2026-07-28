@@ -89,7 +89,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `avatar_url` | TEXT | NULL | 头像 |
 | `status` | TEXT | NOT NULL DEFAULT 'active',CHECK IN ('active','invited','disabled','deleted') | 账号状态 |
 | `timezone` | TEXT | NULL | **用户展示层时区**(IANA 名,如 `Asia/Shanghai`;R3 补登记——此前 README §6.18/i18n.md 依赖本列而 users 模型未登记)。**仅影响展示层本地化渲染**,一切时间戳存储/传输仍 UTC RFC3339(README §6.18);NULL 时回退工作区 `timezone` 再回退 `UTC` |
-| `settings` | JSONB | NOT NULL DEFAULT `'{}'` | **账号级展示偏好真源(R3 新增,此前 README §6.12/§6.18 与 i18n.md 依赖本字段而 users 模型缺失)**:`{"locale": "<BCP-47>", "theme": "light\|dark\|system"}`——`locale` 为用户界面语言偏好(取值 BCP-47,首发 `zh-CN`/`en`,应用层校验在支持清单内,非法值 422);`theme` 为主题模式(README §6.12 主题切换契约,`system` = 跟随 `prefers-color-scheme`);未设置的键走 locale 协商回退链(README §6.18)与主题回退(工作区 `settings.default_theme` → `system`)。**写接口为 `PATCH /api/v1/users/me`(§3.1)** |
+| `settings` | JSONB | NOT NULL DEFAULT `'{}'` | **账号级展示偏好真源(R3 新增,此前 README §6.12/§6.18 与 i18n.md 依赖本字段而 users 模型缺失)**:`{"locale": "<BCP-47>", "theme": "light\|dark\|system\|null"}`——`locale` 为用户界面语言偏好(取值 BCP-47,首发 `zh-CN`/`en`,应用层校验在支持清单内,非法值 422);`theme` 为主题模式(README §6.12 主题切换契约,**类型写死 `light\|dark\|system\|null/absent`,默认 absent/null = 继承工作区默认**;显式 `system` = 忽略工作区、跟随 `prefers-color-scheme`;显式 `null` = 清除、恢复跟随工作区默认,theme.md §2.1 三值语义写死);未设置/为 `null` 的键走 locale 协商回退链(README §6.18)与主题协商链(工作区 `settings.default_theme` → `system`)。**写接口为 `PATCH /api/v1/users/me`(§3.1)** |
 | `mfa_secret` | TEXT | NULL | TOTP 密钥(加密存储) |
 | `mfa_enabled_at` | TIMESTAMPTZ | NULL | |
 | `last_login_at` | TIMESTAMPTZ | NULL | |
@@ -149,6 +149,48 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 
 > **约束**:两类令牌均为**单次消费**(`consumed_at IS NULL` 方可使用,消费即置位);过期(`expires_at < now()`)或已消费的令牌一律拒绝;创建新令牌时作废旧的同类未完成令牌。
 
+### 2.4.2 表:`device_authorizations`(OAuth 设备码授权,CLI 登录)**[auth.md 增量,MES-76 评审 H7 闭环]**
+
+> CLI 设备码登录(cli.md §3.2 定义**流程契约**)的**服务端权威落地**:表结构、状态机、确认/轮询端点、限流、审计与码爆破防护全部在本 Spec 闭环(cli.md 不再重复定义,只引用本节)。与 MES-75 安全评审 H2(设备码爆破防护量化)在本节合并为唯一落点。
+
+| 字段 | 类型 | 约束 / 默认 | 说明 |
+|------|------|-------------|------|
+| `id` | UUID | PK,`gen_random_uuid()` | 授权记录 ID |
+| `device_code_hash` | TEXT | NOT NULL,UNIQUE | `device_code` 的 **HMAC-SHA256(服务端 pepper)** 哈希(不存明文;高熵码亦不以裸 SHA-256 落库,统一 keyed hash) |
+| `user_code_hash` | TEXT | NOT NULL,UNIQUE | `user_code` 的 **HMAC-SHA256(服务端 pepper)** 哈希——`user_code` 低熵(≥20bit),**裸 SHA-256 不足以抵御离线/在线爆破,必须 keyed hash**;pepper 为独立服务端密钥(`MESH_DEVICE_CODE_PEPPER`,不进仓库,生产缺失 fail-closed,同 §5.5 签名密钥基线) |
+| `status` | TEXT | NOT NULL DEFAULT 'pending',CHECK IN ('pending','approved','denied','consumed','expired','invalidated') | 授权状态机(见下) |
+| `requested_scopes` | TEXT[] | NOT NULL DEFAULT '{}' | 客户端请求的 scope 集合 |
+| `granted_scopes` | TEXT[] | NULL | **批准时固化的实际签发 scope = 请求 scope ∩ 批准用户角色权限**(服务端强制取交,§3.2) |
+| `approved_by_user_id` | UUID | NULL,FK→users(id) ON DELETE SET NULL | 批准者(浏览器登录态用户);denied 时为拒绝者 |
+| `workspace_id` | UUID | NULL,FK→workspaces(id) ON DELETE SET NULL | 批准所绑定的工作区(批准者在确认页选定;签发会话/令牌归属之;**多工作区用户必须显式选择**,不默认首个) |
+| `failed_attempts` | INT | NOT NULL DEFAULT 0 | 轮询端点针对本码的累计违规/猜错计数(爆破防护,见下) |
+| `request_ip` | INET | NULL | 取码请求来源 IP(审计 + 限流维度) |
+| `approved_at` | TIMESTAMPTZ | NULL | 批准时间 |
+| `denied_at` | TIMESTAMPTZ | NULL | 拒绝时间 |
+| `consumed_at` | TIMESTAMPTZ | NULL | 单次消费时间(token 端点换取会话时置位) |
+| `invalidated_at` | TIMESTAMPTZ | NULL | 作废时间(猜错超限/滥用) |
+| `expires_at` | TIMESTAMPTZ | NOT NULL | 过期时间(默认创建后 **15 分钟**) |
+| `created_at` | TIMESTAMPTZ | NOT NULL DEFAULT now() | |
+
+索引:`uq_device_auth_device_code (device_code_hash)`;`uq_device_auth_user_code (user_code_hash)`;`idx_device_auth_pending (expires_at) WHERE status = 'pending'`(过期清理扫描)。
+
+**状态机(写死,终态不可逆)**:
+
+```
+pending ──浏览器确认页批准(登录态 + CSRF + 手工录入 user_code)──► approved
+pending ──浏览器确认页拒绝──► denied(终态)
+pending ──TTL 过期(reaper/惰性)──► expired(终态)
+pending ──单码连续猜错/限速违规超限──► invalidated(终态,+ 审计)
+approved ──token 端点原子单次消费──► consumed(终态;同事务创建 sessions 行)
+approved ──TTL 过期──► expired(未被消费即过期)
+```
+
+**约束**:
+- **单次消费原子性**:token 端点以条件更新消费——`UPDATE device_authorizations SET status='consumed', consumed_at=now() WHERE id=$1 AND status='approved' AND consumed_at IS NULL AND expires_at > now()`,**影响行数恰为 1 方可继续**(同事务创建 `sessions` 行,type='cli',复用 §3.7 撤销链路);并发/重复消费命中 0 行即拒;
+- **码生成(量化,可验收)**:`user_code` 熵 **≥20bit**(RFC 8628 §6.1 基线)+ **去歧义字符集**(剔除 `0/O/1/I/L`,分组展示如 `XXXX-XXXX`);`device_code` 熵 **≥128bit**(密码学安全随机源);两码明文仅在取码响应中出现一次,落库仅存 HMAC 哈希;
+- **爆破防护(量化)**:轮询端点**双重限速**——按来源 IP 全局限速 + 按 `device_code` 限速(阈值见 §3.6),违规返回 `429 slow_down`(携带 `Retry-After`,客户端间隔 +5s);**累计违规超限(单码 `failed_attempts > 5`)→ 立即作废该记录(`status='invalidated`)+ 审计 `auth.device_invalidated`**;`device_code` 命中后须比对 `status='approved'`(消费阶段)且未过期方可推进,pending 返回 `authorization_pending` 继续轮询;
+- **过期清理**:reaper/惰性扫描将 `expires_at < now()` 且 `status IN ('pending','approved')` 的行置 `expired`。
+
 ### 2.5 表:`api_tokens`(个人 / agent 访问令牌)**[Mesh 特色]**
 
 | 字段 | 类型 | 约束 / 默认 | 说明 |
@@ -173,7 +215,23 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - 创建时生成高熵随机串(`mesh_pat_` + ≥32 字节 base64url),**只在创建响应里返回一次明文**,之后数据库仅存 `token_hash`,UI 只显示 `prefix` + 掩码。
 - **持有者统一为 `owner_member_id`(去多态,README §6.1)**:不再用 `owner_type/owner_id` 二元组。人类 PAT 指向本人的 member 行;**agent 运行凭证指向该 agent 的 member 行**(`members.member_type='agent'`),由复合 FK `(workspace_id, owner_member_id) → members(workspace_id, id)` 保证同租户;人类/agent 判别一律 JOIN `members.member_type`,**不存冗余 `owner_type` 列**。
 - 校验:客户端 `Authorization: Bearer <明文>` → 服务端算哈希 → 查 `token_hash` → 命中且未撤销未过期 → 解析 `owner_member_id/scopes/workspace_id` 注入请求上下文(经 `members` 解析 principal 类型与角色)。
-- 令牌自带可校验前缀/类型位,便于区分 PAT / agent token / refresh token。
+- 令牌自带可校验前缀/类型位,便于区分 PAT / agent token / refresh token——**前缀取值以 §2.5.1 注册表为唯一权威**。
+
+#### 2.5.1 令牌前缀注册表(唯一权威,评审 H7 收口)
+
+一切 Mesh 签发的凭证明文前缀**统一登记于本表**(auth.md owns),各 Spec 与代码示例**只可引用,不得新造前缀**(此前 `mesh_pat_`/`mesh_agt_`/`mesh_rt_` 与 runtime.md 示例 `rt_live_`、会话示例 `rt_` 多处冲突,本表收口为唯一来源):
+
+| 前缀 | 凭证类型 | 存储 / 载体 | 持有者 | 使用边界 |
+|------|----------|-------------|--------|----------|
+| `mesh_pat_` | 个人访问令牌(PAT) | `api_tokens.token_hash`(SHA-256) | 人类成员的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色);CLI / 脚本 / CI |
+| `mesh_agt_` | agent 运行凭证 | `api_tokens.token_hash`(SHA-256) | agent 的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色;默认不含 `agent:trigger` 防回环) |
+| `mesh_rt_` | runtime 守护进程令牌 | `api_tokens.token_hash`(SHA-256,`scope='runtime'`) | runtime(机器) | **仅 `/api/v1/daemon/*` 命名空间**(runtime.md §3.2),不得调控制台 API |
+| `mesh_rft_` | 会话 refresh token | `sessions.token_hash`(SHA-256) | 用户会话 | **仅 `POST /api/v1/auth/refresh`** |
+| (无前缀,JWT 格式) | 会话 access JWT | 无状态(签名校验) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min |
+
+> **非 Bearer 凭证不进本表**:一次性激活码(`ACT-XXXX-XXXX-XXXX` 分组码,runtime.md)、设备码 `user_code`(分组短码)/`device_code`(高熵,仅存 HMAC 哈希)、密码重置/邮箱验证令牌均非 `Authorization: Bearer` 凭证,各自形态见所属 Spec。
+>
+> **统一 Bearer 鉴权依赖(评审 H7 收口,写死)**:常规 REST 路由的鉴权依赖**按前缀路由到统一校验链**——JWT(验签,固定 alg)→ `mesh_pat_`/`mesh_agt_`(查 `api_tokens` 哈希,取 scopes/workspace)→ 其余前缀(含 `mesh_rt_`/`mesh_rft_`)在常规路由一律拒绝(daemon 命名空间单独只认 `mesh_rt_`);**有效权限恒为「scopes ∩ 持有者角色权限」**。「持 PAT 调用任意 `/api/v1` 端点」不再依赖个别端点单独解析 PAT;该依赖的代表性端点集成测试见 §5.2。
 
 ### 2.6 表:`audit_logs`(审计日志,append-only)
 
@@ -183,7 +241,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `workspace_id` | UUID | NULL,FK→workspaces(id) | 账号级事件可为 NULL |
 | `actor_member_id` | UUID | NULL,复合 FK `(workspace_id, actor_member_id) → members(workspace_id, id)`(非空时校验) | 行为者名册条目(人或 agent;系统动作为 NULL,README §6.1/§6.2) |
 | `actor_kind` | TEXT | NOT NULL,CHECK IN ('member','system') | 行为者类别:`member`=名册成员(人/agent 由 JOIN `members.member_type` 判别,**不存冗余 `actor_type`**),`system`=系统(允许 `actor_member_id` 为 NULL) |
-| `action` | TEXT | NOT NULL | 如 `auth.login`、`auth.login_failed`、`token.created`、`token.revoked`、`user.password_changed`(已登录态修改密码,账号级事件:`workspace_id` 为 NULL,行为者落 `metadata.user_id`)、`member.role_changed`、`member.removed`、`issue.deleted` |
+| `action` | TEXT | NOT NULL | 如 `auth.login`、`auth.login_failed`、`auth.logout`、`auth.device_code_issued`、`auth.device_approved`、`auth.device_denied`、`auth.device_consumed`、`auth.device_invalidated`(设备码爆破防护作废,§2.4.2)、`token.created`、`token.revoked`、`user.password_changed`(已登录态修改密码,账号级事件:`workspace_id` 为 NULL,行为者落 `metadata.user_id`)、`member.role_changed`、`member.removed`、`issue.deleted` |
 | `resource_type` | TEXT | NULL | 目标资源类型 |
 | `resource_id` | UUID | NULL | 目标资源 ID |
 | `ip_address` | INET | NULL | |
@@ -264,7 +322,26 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | GET | `/api/v1/sessions` | 列出我的活跃会话 | |
 | DELETE | `/api/v1/sessions/{id}` | 撤销指定会话 | |
 | GET | `/api/v1/me` | 当前用户与所属工作区列表 | |
-| PATCH | `/api/v1/users/me` | **修改当前账号资料与展示偏好(R3 新增)**:`{display_name?, avatar_url?, timezone?, settings?: {locale?, theme?}}`——仅接受列出字段(未知字段 `400 invalid_request`);`settings` 为**键级浅合并**(只覆盖传入键,其余保留);校验:`display_name` 1–80 字符;`avatar_url` 仅 `https` scheme(README §6.16);`timezone` 为合法 IANA 名(否则 `422 invalid_timezone`);`settings.locale` 在首发支持清单(`zh-CN`/`en`,扩展经 i18n.md 消息目录注册)内(否则 `422 unsupported_locale`);`settings.theme ∈ {light, dark, system}`(否则 `422 validation_error`);成功 `200` 返回更新后的完整用户对象(`{"data": {...}}`,含合并后 `settings`);变更写 `audit_logs`。**迁移(R3)**:存量用户的 locale/theme 偏好由迁移脚本一次性写入 `users.settings`(无旧列双写——本字段为新增真源,不存在长期双写期) | |
+| PATCH | `/api/v1/users/me` | **修改当前账号资料与展示偏好(R3 新增)**:`{display_name?, avatar_url?, timezone?, settings?: {locale?, theme?}}`——仅接受列出字段(未知字段 `400 invalid_request`);`settings` 为**键级浅合并**(只覆盖传入键,其余保留);校验:`display_name` 1–80 字符;`avatar_url` 仅 `https` scheme(README §6.16);`timezone` 为合法 IANA 名(否则 `422 invalid_timezone`);`settings.locale` 在首发支持清单(`zh-CN`/`en`,扩展经 i18n.md 消息目录注册)内(否则 `422 unsupported_locale`);**`settings.theme ∈ {light, dark, system}` 或显式 `null`**(显式 `null` = 清除账号偏好、恢复继承工作区默认,theme.md §2.1 三值语义;非法值 → **`422 invalid_theme_mode`**,与 theme.md §3.3 / workspace.md 错误码统一);成功 `200` 返回更新后的完整用户对象(`{"data": {...}}`,含合并后 `settings`);变更写 `audit_logs`。**迁移(R3)**:存量用户的 locale/theme 偏好由迁移脚本一次性写入 `users.settings`(无旧列双写——本字段为新增真源,不存在长期双写期);**存量「默认 system」语义迁移**:旧实现若把「未设置」落为字符串 `"system"`,迁移时区分「用户显式选择 system」与「从未选择」——无法区分的存量值保留 `"system"`(跟随 OS),新建账号一律 absent/null 默认 | |
+| GET | `/api/v1/auth/token` | **当前 Bearer 自省(评审 H7 新增)**:返回**当前请求所携凭证**的元数据——`{data: {kind: "pat"\|"agent"\|"session", token_id, prefix(掩码展示前缀), name, scopes, workspace_id, member_id, expires_at, last_used_at}}`;PAT/agent token 取 `api_tokens` 行,会话 JWT 取 `jti`→`sessions` + 声明;**不返回明文任何片段**;支撑 CLI `auth status` 展示 scope/过期/last_used(此前 `GET /me` 与本地凭证结构均不能提供) | |
+| DELETE | `/api/v1/auth/token` | **当前 Bearer 自撤销(评审 H7 新增)**:撤销**当前请求所携凭证**——PAT/agent token 置 `revoked_at=now()`(即时 401,§5.5);会话凭证撤销当前 refresh(access JWT 按 TTL 过期,§3.7);`200 {"data": {"status": "ok"}}`;支撑 CLI `logout --revoke` 无需另行持有 token id。撤销写 `audit_logs`(`token.revoked` / `auth.logout`) | |
+
+### 3.1.1 设备授权端点(auth.md 增量,评审 H7 闭环;流程契约见 cli.md §3.2)
+
+> 数据模型与状态机见 §2.4.2;以下端点为本增量的**服务端权威定义**,cli.md 仅引用。限流阈值见 §3.6,审计动作见 §2.6。
+
+| 方法 | 路径 | 说明 | 公开 |
+|------|------|------|:---:|
+| POST | `/api/v1/auth/device/code` | 取码:`{client_id: "mesh-cli", scope: "<space-joined>"}` → `200 {"data": {device_code, user_code, verification_uri, verification_uri_complete, expires_in(默认 900), interval(默认 5)}}`;同事务落 `device_authorizations`(`status='pending'`,仅存 HMAC 哈希);写审计 `auth.device_code_issued`(account-less,`metadata` 落 client_id/request_ip/scope) | ✅ |
+| POST | `/api/v1/auth/device/token` | 轮询换令牌(量化爆破防护,§2.4.2):请求 `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`。`pending` → `400 authorization_pending`(具名 code,§6.14 信封);限速违规 → `429 slow_down`(`Retry-After`,客户端间隔 +5s);拒绝 → `400 access_denied`(终止);过期/作废 → `400 expired_token`/`invalid_grant`(重新发起)。**成功 200**(仅 `status='approved'` 且未过期,经 §2.4.2 原子条件更新单次消费):`{data: {access_token(会话 access JWT), refresh_token(mesh_rft_…), token_type: "Bearer", expires_in, scope(= granted_scopes 实际签发值)}}`,同事务建 `sessions` 行(`type='cli'`,归属 `workspace_id` 取批准绑定)+ 置 `consumed_at` + 审计 `auth.device_consumed` | ✅ |
+| GET | `/api/v1/auth/device?user_code=` | 确认页数据(Web 登录态):校验 `user_code` 命中 `status='pending'` 且未过期 → 返回 `{data: {client_name, requested_scopes(人类可读全量枚举), code_challenge_present}};命中失败/过期返回通用 `404 not_found`(**不区分不存在/已消费/过期,防码探测**) | |
+| POST | `/api/v1/auth/device/approve` | 批准(Web 登录态 + **同源 CSRF 防护**):body `{user_code, workspace_id}`——**`user_code` 必须为确认页手工录入值,批准仅绑定所录入的码**(防 RFC 8628 §5.5 钓鱼:攻击者诱使受害者批准攻击者的码);`workspace_id` 由批准者显式选定(多工作区用户不默认);服务端置 `status='approved'` + `granted_scopes = 请求 scope ∩ 批准者角色权限`(**服务端强制取交,token 端点兜底重算**)+ `approved_by_user_id`/`workspace_id`/`approved_at`;写审计 `auth.device_approved`(含取交前后 scope);非法 user_code → `404 not_found` | |
+| POST | `/api/v1/auth/device/deny` | 拒绝(Web 登录态 + CSRF):body `{user_code}` → 置 `status='denied'` + `denied_at`;写审计 `auth.device_denied`;幂等(已终态返回当前状态) | |
+
+**授权确认页 UX(auth.md UI 增量,§4 衔接)**:
+- 入口 `verification_uri`(如 `/device`)要求**手工录入 `user_code`**(`verification_uri_complete` 可携带预填参数,但**提交仍要求页面上存在可见的码输入控件且值经校验与预填一致**,防受害者无意识一键批准);
+- 批准前展示:`client_id` 名称、**取交后**的 scope 人类可读全量枚举(逐条说明文案)、目标工作区选择器(批准者多工作区时必选)、醒目安全提示「仅在你本人发起的 CLI 登录时批准」;
+- 显式「批准 / 拒绝」双按钮,批准为默认焦点**非默认确认**(防回车误批)。
 
 ### 3.2 API token 端点 **[Mesh 特色]**
 
@@ -291,7 +368,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 { "email": "li@corp.com", "password": "...", "remember": true }
 // 200 Response
 { "data": { "access_token": "eyJhbGci...", "token_type": "Bearer",
-            "expires_in": 900, "refresh_token": "rt_..." } }
+            "expires_in": 900, "refresh_token": "mesh_rft_..." } }
 ```
 
 **注册** `POST /api/v1/auth/register`
@@ -317,20 +394,28 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 |------|------|------|
 | 400 | `validation_error` | 字段非法 |
 | 400 | `weak_password` | 密码强度不足(`details.reason ∈ too_short/needs_letter_and_digit/too_common`;注册/重置/修改密码共用) |
+| 400 | `authorization_pending` | 设备码轮询:尚未批准(继续轮询,§3.1.1) |
+| 400 | `access_denied` | 设备码被拒绝(终止轮询) |
+| 400 | `expired_token` / `invalid_grant` | 设备码过期 / 已消费 / 已作废(重新发起) |
 | 401 | `unauthorized` | 凭证缺失/无效/过期(README §6.14 canonical code) |
 | 401 | `unauthorized` | 邮箱未验证(`details.reason='email_not_verified'`;README §6.14 canonical code) |
 | 403 | `forbidden` | 角色/scope 不足 |
-| 404 | `not_found` | 资源不存在 |
+| 404 | `not_found` | 资源不存在(设备确认页 user_code 命中失败统一此码,防码探测) |
 | 409 | `conflict` | 邮箱已注册、唯一 owner 不可移除 |
 | 422 | `invalid_credentials` | 邮箱或密码错误(**统一文案,防枚举**) |
+| 422 | `invalid_theme_mode` | `settings.theme` 非法(既非 `light\|dark\|system` 也非显式 `null`;theme.md §3.3 唯一权威,本表同步登记) |
 | 423 | `account_locked` | 失败次数过多被临时锁定 |
 | 429 | `rate_limited` | 触发限流,含 `Retry-After` |
+| 429 | `slow_down` | 设备码轮询超速(§3.1.1/§3.6),客户端间隔 +5s;累计违规超限码作废 |
 
 ### 3.6 速率限制(阈值示例,可调)
 
 | 端点类 | 限制 | 维度 |
 |--------|------|------|
 | 登录 / 注册 / 重置 | 5 次/分钟,超出锁定 15 分钟 | **(IP, 邮箱) 二元组**(避免按纯邮箱维度锁定导致攻击者对任意受害者账号刷失败造成锁定 DoS;保留验证码解锁路径) |
+| **设备码取码**(`device/code`) | 10 次/分钟(登录类基线) | 来源 IP |
+| **设备码轮询**(`device/token`,§3.1.1 爆破防护) | **双重限速**:① 按来源 IP 全局 30 次/分钟;② 按 `device_code` ≤ `1/interval`(interval 取码时下发,默认 5s)——违规回 `429 slow_down`,**单码累计违规/猜错 > 5 次即作废该码**(`status='invalidated'`)+ 审计 | 来源 IP + `device_code` 双维度 |
+| **设备确认页**(`device/approve`/`deny`) | 10 次/分钟 | 登录态用户 + IP |
 | 通用 API 读 | 300 req/分钟 | token / 用户 |
 | 通用 API 写 | 120 req/分钟 | token / 用户 |
 | 附件上传/下载 | 60 req/分钟 | token / IP |
@@ -410,7 +495,8 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] 忘记密码恒返回成功(防枚举);重置链接短时效,重置后旧会话失效。
 - [ ] OAuth 登录用 state + PKCE;首次自动建号并绑定;解绑保留至少一种登录方式。
 - [ ] 可选 2FA(TOTP)启用需验证码确认,并提供备用码。
-- [ ] **账号展示偏好真源(R3)**:`users` 登记 `timezone`(IANA)与 `settings` JSONB(`locale` BCP-47 / `theme light|dark|system`),为 README §6.12/§6.18 与 i18n.md 的偏好真源;`PATCH /api/v1/users/me` 可写 `display_name`/`avatar_url`/`timezone`/`settings.locale`/`settings.theme`(键级浅合并),非法 timezone → `422 invalid_timezone`、不支持 locale → `422 unsupported_locale`、非法 theme/未知字段 → `422`/`400`;`GET /api/v1/me` 返回合并后 `settings`;偏好变更写 `audit_logs`;迁移脚本一次性补登记存量偏好,无双写期(集成测试 T32)。
+- [ ] **账号展示偏好真源(R3;MES-76 H1 修订)**:`users` 登记 `timezone`(IANA)与 `settings` JSONB(`locale` BCP-47 / `theme` **`light|dark|system|null/absent`,默认 absent/null = 继承工作区默认**),为 README §6.12/§6.18 与 i18n.md/theme.md 的偏好真源;`PATCH /api/v1/users/me` 可写 `display_name`/`avatar_url`/`timezone`/`settings.locale`/`settings.theme`(键级浅合并),非法 timezone → `422 invalid_timezone`、不支持 locale → `422 unsupported_locale`、**非法 theme → `422 invalid_theme_mode`(三处 owner 契约统一码,与 theme.md §3.3 / workspace.md 一致)**、未知字段 → `400`;**显式 `theme: null` 为合法清除(不报 422),回读 `settings.theme` 为 null,协商落工作区默认**;`GET /api/v1/me` 返回合并后 `settings`;偏好变更写 `audit_logs`;迁移脚本一次性补登记存量偏好,无双写期(集成测试 T32)。
+- [ ] **设备码授权全链路(MES-76 H7 新增,§2.4.2/§3.1.1)**:取码 → 确认页手工录入 `user_code` + 选定工作区 + 批准(取交后 scope 展示)→ 轮询 `authorization_pending` → `200` 换取会话凭证(`granted_scopes` 为取交值);拒绝分支 `access_denied`、过期分支 `expired_token` 各有 e2e;消费原子性:同一 approved 码并发/重复消费**恰好一次成功**(第二次 `invalid_grant`,不建第二条 sessions);批准绑定:录入 A 码的确认页提交 B 码被拒;`workspace_id` 未显式选择的多工作区批准被拒。
 
 ### 5.2 功能性(API token / agent)**[Mesh 特色]**
 
@@ -421,7 +507,9 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] token scope 与持有者角色权限**取交集**,不能超越角色权限(最小权限)。
 - [ ] 可为 agent 创建运行凭证;agent 用其代表自身读写,所有动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`)。
 - [ ] agent token 默认不授予 `agent:trigger`(防 agent-to-agent 回环),除非显式授权。
-- [ ] token 前缀/类型位可区分 PAT / agent token / refresh。
+- [ ] token 前缀/类型位可区分 PAT / agent token / refresh——**取值以 §2.5.1 前缀注册表为唯一权威**(`mesh_pat_`/`mesh_agt_`/`mesh_rt_`/`mesh_rft_`),全仓库 Spec 与代码示例无注册表外前缀(文档扫描断言)。
+- [ ] **统一 Bearer 鉴权依赖(评审 H7)**:常规 `/api/v1` 路由对会话 JWT / `mesh_pat_` / `mesh_agt_` 三类 Bearer 一致放行,权限恒为 scopes ∩ 角色;**代表性端点集成测试**(至少覆盖 `GET /workspaces/{ws}/issues`、`POST /workspaces/{ws}/issues`、`POST /issues/{id}/comments`、`GET /api/v1/me` 四类读/写/评论/自省端点)分别以 PAT 与 agent token 调用通过,越权 scope 403;`mesh_rt_`/`mesh_rft_` 前缀凭证调常规路由一律 401(daemon 命名空间只认 `mesh_rt_`,refresh 只认 `/auth/refresh`)。
+- [ ] **当前 Bearer 自省/自撤销(评审 H7)**:`GET /api/v1/auth/token` 返回 kind/token_id/prefix/scopes/expires_at/last_used_at(无明文字段),支撑 CLI `auth status`;`DELETE /api/v1/auth/token` 撤销 PAT 后下次调用即时 401,撤销会话后 refresh 不可续期。
 
 ### 5.3 功能性(授权 / 审计)
 
@@ -451,6 +539,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - [ ] **生产拒用公开默认签名密钥(fail-closed)**:一切签名/验签令牌的应用工厂(API 与 realtime 网关两个独立部署单元)必须在启动时共享同一校验(`validate_auth_settings`)拒绝 `auth_mode=production` + 仓库公开的默认开发密钥,违者拒启动(`ConfigError`);网关不得依赖 API 侧配置,漏配 `MESH_JWT_SECRET` 必须 fail-closed 而非以公开默认密钥验签。
 - [ ] **JWT 验签固定 `alg`**:验签时必须固定预期算法(如 HS256 或 RS256),显式拒绝 `alg=none`,防 HS/RS 混淆攻击(服务端不使用 token 头部声明的算法,仅用配置的固定算法验签)。
 - [ ] **密码重置/邮箱验证令牌落库**:两类令牌均有独立表(`password_reset_tokens`/`email_verification_tokens`),仅存 SHA-256 哈希,带 TTL(重置 1h / 验证 24h)与单次消费约束(`consumed_at`)。
+- [ ] **设备码爆破防护(MES-76 H7 / MES-75 安全 H2 合并落点,逐条量化)**:① `user_code` 熵 ≥20bit + 去歧义字符集(剔除 0/O/1/I/L,分组展示);`device_code` 熵 ≥128bit(密码学安全随机源);② 两码仅存 **HMAC-SHA256(服务端 pepper `MESH_DEVICE_CODE_PEPPER`)** 哈希——**不以裸 SHA-256 落库**(低熵 user_code 裸哈希可离线字典爆破),pepper 缺失时生产启动 fail-closed(同 JWT 密钥校验 §5.5);③ TTL 15min + 单次消费(原子条件更新,并发消费恰一次成功);④ 轮询端点双重限速(IP 全局 + 单码 `1/interval`),`slow_down` 累计违规超限即作废该码;⑤ 单码连续猜错/违规 ≤5 次 → `status='invalidated'` + 审计 `auth.device_invalidated`(e2e 触发并核验作废与审计行);⑥ 确认页手工录入 `user_code` + 批准仅绑定所录码 + 同源 CSRF + scope 全量人类可读枚举(构造跨码 CSRF / 钓鱼批准用例被拒);⑦ 签发 scope = 请求 scope ∩ 批准用户角色权限(服务端强制,token 端点兜底重算;构造越权 scope 请求被收窄),确认页展示取交后 scope。
 - [ ] **`role_override` 服务端强校验**:创建 token 时与每次请求鉴权时均校验 `role_override` 不高于持有者当前角色,违反返回 422;不能仅靠文字描述。
 - [ ] **登录锁定维度为 (IP, 邮箱) 二元组**:避免纯邮箱维度锁定导致 DoS;保留验证码解锁路径。
 - [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。

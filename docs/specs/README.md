@@ -139,7 +139,7 @@ Spec 不约束前端框架;要求:SPA、乐观更新 + 服务端版本校验、W
 
 ## 4. 模块总览
 
-Mesh 由 **20 个功能模块**组成,分五层:
+Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引对齐,此前误留 20):
 
 ### 4.1 基础层
 
@@ -250,7 +250,7 @@ agents(agent.md owns,AI 身份与配置)──1:N──┘      ▲
 | 子表 | `users`/`agents` **不设** `member_id` 列;关联方向永远是 `members → users/agents` |
 | 软终态 | 名册状态 `status ∈ {active,disabled,removed}`(`removed` 为软终态,物理清理按保留期);agent 另有 `agents.lifecycle_status`(active/paused/disabled/archived),停用 agent 时两者联动 |
 | 类型冗余 | **存储层禁止**冗余 `*_type`/`*_kind` 判别列(`author_type`、`assignee_type`、`uploader_kind`、`owner_type` 等一律不进表);人类/agent 判别一律 JOIN `members.member_type`。**API 响应**可携带服务端计算出的 `member_type` 快照字段用于免 JOIN 渲染,标注"快照,真源为 members"。若个别高频表确需存储快照,必须用**触发器/生成列**与 `members` 强制一致(防漂移),并在该 Spec 明示 |
-| 显示名解析 | 统一顺序:`members.display_override`(非空)→ 人类 `users.display_name`→`users.full_name`;agent `agents.name`。服务端解析,接口返回单一 `display_name` |
+| 显示名解析 | 统一顺序:`members.display_override`(非空)→ 人类 `users.display_name`→`users.email`(`users` 无 `full_name` 列,MES-76 H3 修订:此前引用不存在的 `users.full_name`);agent `agents.name`。服务端解析,接口返回单一 `display_name`。**检索专用投影**:`members.search_name` 为按本链算法同步的小写投影,**仅供 trigram 检索、不作显示真源**(同步契约与 DDL 见 search-command-palette.md §2.2,属本条「高频表存储快照须强制一致并明示」条款的登记项) |
 | 全局身份层(R5 写死) | `users` 与 `external_identities`(外部平台账号 ↔ `users.id` 映射,integrations.md §2.4.1)是**与成员名册解耦的全局身份表**——**不携带 `workspace_id` 所有权列,不是任何工作区的租户资源**:一个自然人(同一 `users.id`)凭各工作区的 `members` 行参与多个工作区,其外部身份映射为**单行全局行**,删除任一工作区(含建链工作区)不影响映射(建链来源仅以可空审计列 `created_in_workspace_id ON DELETE SET NULL` 记录,不级联控制映射生命周期);行级访问以所属 `users.id` 为边界(**全局解链仅映射所属用户本人,工作区 admin 无旁路**,只能撤销本工作区使用权/成员资格),不适用下述第 5 条 workspace RLS |
 
 ### 6.2 多租户同租户约束(唯一权威)
@@ -552,7 +552,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 设置(工作区/成员角色/审批策略/状态与字段/危险操作) | 管理员区 | admin/owner(guest/agent 不可见) | 普通成员不面对管理后台级复杂度 |
 
 - **Agent 入口去重(R5 写死:唯一名册 + 唯一创建入口 + 防回归校验)**:Settings 内不再维护独立 Agents 名册列表;Settings→Agents 仅承载"工作区级 agent 策略"(默认 runtime、触发护栏、审批策略),单个 agent 的配置从成员页/agent 详情进入。**「仅 Agent」视图是成员名册页的筛选投影(同一路由 / 同一列表组件 / 同一 `[ + 新建 Agent ]` 入口,agent.md §4.2/§4.5),不存在独立 Agents 列表页、第二导航 / 第二名册或第二个创建入口;`tests/docs/check_roster_entry.py` 随 CI 常跑(§9 T35),独立 `Agents [+ 新建]` 页面 / 未标注为投影的相关表述 / 导航图中的 Agents 新建入口均判 CI 失败。**
-- **全局搜索 / 命令面板**:`Ctrl/Cmd+K` 打开命令面板,跨模块搜索 issue(按 identifier/标题)、成员、agent、项目、视图、聊天会话;所有核心资源有**规范深链**:`/w/{workspace_slug}/issues/by-identifier/{KEY-N}`、`/w/{ws}/projects/{id}`、`/w/{ws}/agents/{id}`、`/w/{ws}/executions/{id}`、`/w/{ws}/chat/{session_id}`、`/w/{ws}/approvals`。
+- **全局搜索 / 命令面板**:`Ctrl/Cmd+K` 打开命令面板,跨模块搜索 issue(按 identifier/标题)、成员、agent、项目、视图、聊天会话;所有核心资源(**一切可搜索/可通知资源,MES-76 H5 补齐 member/view**)有**规范深链**:`/w/{workspace_slug}/issues/by-identifier/{KEY-N}`、`/w/{ws}/projects/{id}`、`/w/{ws}/members/{member_id}`(成员/agent 名册条目详情;`/w/{ws}/agents/{id}` 为其按 agent_id 解析的别名)、`/w/{ws}/views/{view_id}`、`/w/{ws}/executions/{id}`、`/w/{ws}/chat/{session_id}`、`/w/{ws}/approvals`。旧扁平路由(`/inbox`、`/board`、`/members`…)为同工作区上下文内的应用内别名,前端应用层 `replaceState`(302 语义)至规范路由并保留 query/hash,执行层与逐条映射见 search-command-palette.md §3.4。
 - **设计 token 与无障碍**:颜色以语义 token 定义(status/danger/warn/success/info),文本对比度 ≥ WCAG 2.1 AA(4.5:1);**脉冲动画/颜色不得作为唯一状态信号**(必须叠加图标/文字,如"● 处理中"含文字);全键盘可达(焦点可见、Tab 序合理、Enter/Space 激活);屏幕阅读器标签(aria-label/live-region 用于未读数与运行状态);尊重 `prefers-reduced-motion`;响应式断点 ≥ 1024 桌面 / 768 平板,移动端只读优先。
 - **核心页面异常态矩阵**(每个核心页面——看板、issue 详情、成员、聊天、运行详情、收件箱——必须实现):
 
@@ -819,7 +819,7 @@ Mesh 提供官方命令行工具 `mesh`(与 Web 同源 REST API,经 `api_tokens`
 | | `mesh issue children <id>` / `dependencies` | 结构与依赖查看 |
 | 项目 | `mesh project list/get/create` | project.md §3 对应 |
 | 成员与 agent | `mesh member list` / `mesh agent list/executions` | 名册与运行历史 |
-| 运行与 runtime | `mesh runtime register/heartbeat`(供自托管 daemon)/ `mesh execution get/logs/cancel` | runtime 协议的 CLI 形态;日志 `--follow` 流式 |
+| 运行与 runtime | `mesh runtime register/status`(自托管 daemon 注册 / **人工排障只读**,控制台 API)/ `mesh execution get/logs/cancel` | runtime 协议的 CLI 形态;日志 `--follow` 流式;**CLI 无任何心跳命令**——daemon 心跳仅由独立二进制 `mesh-runtime` 以 `mesh_rt_` 令牌走 `/api/v1/daemon/*`(cli.md §1.3 / runtime.md §3.2,控制台域与机器域零混用,MES-76 H8) |
 | 导入导出 | `mesh export issues --project <key> --format csv\|json -o <file>` / `mesh import issues --file <path> --dry-run` | import-export.md 对应 |
 | 通用 | `--workspace <slug>` 覆盖默认工作区;`--idempotency-key` 透传幂等键(§6.14) | 所有写命令支持 |
 

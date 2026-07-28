@@ -500,7 +500,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 调用方分两类：
 - **(a) 控制台 API**：用户 / 前端用，管理 runtime、查看执行、取消任务。Bearer token 为用户会话凭证。
-- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime API token**（激活后获得，`scope='runtime'`，服务端只存哈希），权限严格限定于本 runtime 与其领取的执行。
+- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime API token**（激活后获得，明文前缀 **`mesh_rt_`**——auth.md §2.5.1 令牌前缀注册表唯一权威，此前示例 `rt_live_` 已废弃；`scope='runtime'`，服务端只存哈希），权限严格限定于本 runtime 与其领取的执行。**心跳为机器域专属能力：`mesh` CLI 与一切用户凭证不得调用 `/api/v1/daemon/*`（cli.md §1.3，MES-76 H8）**。
 
 所有响应统一包络：成功单对象 `{"data": {...}}`；成功列表 `{"data": [...], "next_cursor": ...}`；失败 `{"error": {"code","message","details"}}`。
 
@@ -612,13 +612,13 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 {
   "data": {
     "runtime_id": "5f1c2a6e-9b4d-4c1a-8e2f-7a3b9c0d1e2f",
-    "runtime_token": "rt_live_a1b2c3d4e5f6...",
+    "runtime_token": "mesh_rt_a1b2c3d4e5f6...",
     "heartbeat_interval_seconds": 15
   }
 }
 ```
 
-> `runtime_token` 明文仅在此响应中出现一次；服务端写入 `api_tokens`（`scope='runtime'`）的哈希，激活码随即作废。
+> `runtime_token` 明文（`mesh_rt_` 前缀，auth.md §2.5.1 注册表）仅在此响应中出现一次；服务端写入 `api_tokens`（`scope='runtime'`）的哈希，激活码随即作废。
 
 **心跳（兼下行指令通道）**：
 

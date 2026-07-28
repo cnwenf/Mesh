@@ -87,6 +87,7 @@ members ──1:N──► member_project_access(guest 项目级可见性)──
 | `role` | TEXT | NOT NULL,CHECK IN ('owner','admin','member','guest') | `'member'` | 工作区角色 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled','removed') | `'active'` | |
 | `display_override` | TEXT | NULL | NULL | 工作区内显示名覆盖 |
+| `search_name` | TEXT | NOT NULL | `''` | **检索专用投影(MES-76 H3 登记,search-command-palette.md §2.2 owns 同步契约)**:按 §2.4 显示名解析链计算的小写归一名,供全局搜索 trigram 索引;**非显示真源**——显示一律实时解析链(§2.4),本列由入册/改名写路径同事务维护 + 周期对账兜底,防跨表表达式不可索引(README §6.1「高频表存储快照须强制一致并明示」条款登记项) |
 | `joined_at` | TIMESTAMPTZ | NULL | NULL | 正式加入时间 |
 | `disabled_at` | TIMESTAMPTZ | NULL | NULL | 停用时间 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -142,6 +143,10 @@ CREATE INDEX idx_members_workspace ON members(workspace_id, status);
 CREATE INDEX idx_members_user ON members(user_id);
 CREATE INDEX idx_members_agent ON members(agent_id);
 CREATE INDEX idx_members_type ON members(workspace_id, member_type);
+
+-- 检索投影 trigram 索引(MES-76 H3,DDL 与同步契约权威见 search-command-palette.md §2.2)
+CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
+CREATE INDEX idx_members_ws_type_active ON members (workspace_id, member_type) WHERE status <> 'removed';
 
 -- 供引用方复合 FK(README §6.2):issues.assignee_id 等据此同租户引用 members
 CREATE UNIQUE INDEX uq_members_ws_id ON members(workspace_id, id);
