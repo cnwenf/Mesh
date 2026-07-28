@@ -92,3 +92,32 @@
   display: inline-flex;
   gap: var(--space-1);
 }
+
+/* 附加操作区(上手清单恢复入口,onboarding.md §4.2) */
+.mesh-shortcut-help__actions {
+  margin-block-start: var(--space-5);
+  padding-block-start: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.mesh-shortcut-help__restore {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) ease-out;
+}
+
+.mesh-shortcut-help__restore:hover {
+  border-color: var(--color-info);
+  color: var(--color-info);
+}
+
+.mesh-shortcut-help__restore:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

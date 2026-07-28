@@ -28,6 +28,7 @@ const LABELS: ShellShortcutLabels = {
     goBoard: 'Go to Board',
     goMembers: 'Go to Members',
     goAutomation: 'Go to Automation',
+    restoreOnboarding: 'Show the getting-started checklist again',
   },
 };
 
@@ -40,11 +41,53 @@ describe('registerShellShortcuts', () => {
   it('注册导航命令、主题命令与快捷键', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS);
     const state = useShortcutRegistry.getState();
-    // 9 导航(含 issues,MES-31) + 3 主题 + 1 切换 = 13 命令
-    expect(state.commands).toHaveLength(13);
+    // 9 导航(含 issues,MES-31) + 3 主题 + 1 切换 + 1 上手清单恢复(MES-69) = 14 命令
+    expect(state.commands).toHaveLength(14);
     // g i / g b / g m / g a / c / / = 6 快捷键
     expect(state.shortcuts).toHaveLength(6);
     unregister();
+  });
+
+  it('onboarding.restore 命令经全局客户端恢复活跃工作区清单(onboarding.md §4.2)', async () => {
+    const { fakeResponse } = await import('../../api/__tests__/fetchStub');
+    const { resetApiClient } = await import('../../api/instance');
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/users/me')) {
+          return fakeResponse({
+            body: {
+              data: {
+                user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+                memberships: [
+                  {
+                    workspace_id: 'ws-1',
+                    workspace_name: 'WS',
+                    workspace_slug: 'ws',
+                    role: 'owner',
+                    status: 'active',
+                    joined_at: null,
+                  },
+                ],
+              },
+            },
+          });
+        }
+        return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: null } } });
+      }) as typeof fetch,
+    );
+    resetApiClient();
+    const unregister = registerShellShortcuts(vi.fn(), LABELS);
+    useShortcutRegistry.getState().commands.find((command) => command.id === 'onboarding.restore')?.run();
+    await vi.waitFor(() =>
+      expect(calls.some((url) => url.includes('/onboarding/restore'))).toBe(true),
+    );
+    unregister();
+    vi.unstubAllGlobals();
+    resetApiClient();
   });
 
   it('导航命令调用 navigate(对应路由)', () => {

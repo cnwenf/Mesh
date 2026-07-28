@@ -13,6 +13,7 @@ import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
+import { EmptyInboxTray } from '../onboarding/illustrations';
 import {
   archiveNotification,
   archiveRead,
@@ -194,7 +195,20 @@ export function InboxPage(): React.JSX.Element {
       {isLoading ? (
         <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox__skeleton" />
       ) : groups.length === 0 ? (
-        <EmptyState title={t('inbox.empty')} description={t('inbox.emptyDescription')} />
+        <EmptyState
+          illustration={<EmptyInboxTray />}
+          title={t('onboarding.empty.inbox.title')}
+          description={t('onboarding.empty.inbox.description')}
+          action={
+            <Button
+              size="sm"
+              data-testid="inbox-empty-action"
+              onClick={() => navigate('/board')}
+            >
+              {t('onboarding.empty.inbox.action')}
+            </Button>
+          }
+        />
       ) : (
         <div className="mesh-inbox__groups" data-testid="inbox-groups">
           {groups.map((group) => (

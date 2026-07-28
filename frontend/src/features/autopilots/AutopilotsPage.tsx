@@ -23,6 +23,7 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { EmptyAutomation } from '../onboarding/illustrations';
 import {
   getKillSwitchState,
   listAutopilots,
@@ -394,8 +395,18 @@ export function AutopilotsPage(): React.JSX.Element {
       {rules === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
       {rules !== null && rules.length === 0 && errorKey === null && (
         <EmptyState
-          title={t('autopilots.empty.title')}
-          description={t('autopilots.empty.description')}
+          illustration={<EmptyAutomation />}
+          title={t('onboarding.empty.automation.title')}
+          description={t('onboarding.empty.automation.description')}
+          action={
+            <Button
+              variant="primary"
+              data-testid="autopilot-empty-create"
+              onClick={() => navigate('/autopilots/new')}
+            >
+              {t('onboarding.empty.automation.action')}
+            </Button>
+          }
         />
       )}
       {rules !== null && rules.length > 0 && (

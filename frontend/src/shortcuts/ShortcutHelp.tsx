@@ -23,10 +23,22 @@ export interface ShortcutHelpProps {
   groupLabels: Record<ShortcutContext, string>;
   /** 平台展示注入(Cmd/Ctrl),缺省 detectMac() */
   isMac?: boolean;
+  /** 附加操作:恢复上手清单(onboarding.md §4.2 帮助菜单入口);两项同提供时才渲染 */
+  restoreLabel?: string;
+  onRestore?: () => void;
 }
 
 export function ShortcutHelp(props: ShortcutHelpProps): React.JSX.Element | null {
-  const { open, onClose, title, closeLabel, groupLabels, isMac = detectMac() } = props;
+  const {
+    open,
+    onClose,
+    title,
+    closeLabel,
+    groupLabels,
+    isMac = detectMac(),
+    restoreLabel,
+    onRestore,
+  } = props;
   const shortcuts = useShortcutRegistry((state) => state.shortcuts);
   const activeContexts = useShortcutRegistry((state) => state.activeContexts);
 
@@ -63,6 +75,18 @@ export function ShortcutHelp(props: ShortcutHelpProps): React.JSX.Element | null
             </ul>
           </section>
         ))}
+        {restoreLabel !== undefined && onRestore !== undefined ? (
+          <section className="mesh-shortcut-help__actions">
+            <button
+              type="button"
+              className="mesh-shortcut-help__restore"
+              data-testid="help-restore-onboarding"
+              onClick={onRestore}
+            >
+              {restoreLabel}
+            </button>
+          </section>
+        ) : null}
       </div>
     </Dialog>
   );

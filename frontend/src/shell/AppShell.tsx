@@ -16,6 +16,7 @@ import { env } from '../env';
 import { useT } from '../i18n';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
+import { OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
 import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
@@ -292,6 +293,7 @@ export function AppShell(): React.JSX.Element {
           goBoard: t('shortcuts.actionGoBoard'),
           goMembers: t('shortcuts.actionGoMembers'),
           goAutomation: t('shortcuts.actionGoAutomation'),
+          restoreOnboarding: t('onboarding.restoreHelp'),
         },
       }),
     [navigate, t],
@@ -314,6 +316,8 @@ export function AppShell(): React.JSX.Element {
       </div>
       <Sidebar />
       <main className="mesh-shell__main">
+        {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
+        <OnboardingChecklist />
         <Outlet />
       </main>
     </div>

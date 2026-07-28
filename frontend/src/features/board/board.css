@@ -440,3 +440,10 @@
   padding: var(--space-2) var(--space-3);
   margin-bottom: var(--space-3);
 }
+
+/* 空态主/次操作并排(onboarding.md §1.2.2 四要素:主操作 = 新建 issue) */
+.mesh-board__empty-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+}
