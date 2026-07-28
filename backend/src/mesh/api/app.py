@@ -16,6 +16,10 @@ from mesh import __version__
 from mesh.agent.channels import register_agent_checkers
 from mesh.agent.routes import router as agent_router
 from mesh.agent.service import AgentService
+from mesh.agent.triggers import (
+    register_skill_context_resolver,
+    register_skill_matching_resolver,
+)
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -74,6 +78,13 @@ from mesh.runtime.channels import register_execution_checkers
 from mesh.runtime.daemon_routes import router as runtime_daemon_router
 from mesh.runtime.routes import router as runtime_router
 from mesh.runtime.service import RuntimeService
+from mesh.skill.bindings import BindingService
+from mesh.skill.content_store import ObjectStorageContentStore
+from mesh.skill.importer import ImportService, ImportSettings
+from mesh.skill.installations import InstallationService
+from mesh.skill.resolvers import make_matching_resolver
+from mesh.skill.routes import router as skill_router
+from mesh.skill.service import SkillService
 from mesh.views.moves import BoardMoveService
 from mesh.views.projection import ProjectionService
 from mesh.views.routes import router as view_router
@@ -217,6 +228,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.inbox_service = InboxService(session_factory)
     app.state.agent_service = AgentService(session_factory)
+    # skill.md: four-layer skill module. Script/reference bodies live in the
+    # shared object bucket via content_ref; the import service is SSRF-guarded
+    # (host allowlist from settings) and the §6.11 / §4.5 resolvers feed the
+    # enqueue handler so the snapshot freezes bound skill versions.
+    app.state.skill_content_store = ObjectStorageContentStore(app.state.storage)
+    app.state.skill_service = SkillService(session_factory)
+    app.state.skill_installation_service = InstallationService(session_factory)
+    app.state.skill_binding_service = BindingService(session_factory)
+    app.state.skill_import_service = ImportService(
+        session_factory,
+        content_store=app.state.skill_content_store,
+        settings=ImportSettings(
+            host_allowlist=frozenset(
+                h.strip().lower()
+                for h in (settings.skill_source_host_allowlist or "").split(",")
+                if h.strip()
+            ),
+            marketplace_url=settings.skill_marketplace_url,
+        ),
+        installation_service=app.state.skill_installation_service,
+    )
+    register_skill_context_resolver(
+        app.state.skill_binding_service.collect_enqueue_context
+    )
+    register_skill_matching_resolver(make_matching_resolver())
     app.state.runtime_service = RuntimeService(session_factory, settings)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
@@ -245,6 +281,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agent_router)
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)
+    app.include_router(skill_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

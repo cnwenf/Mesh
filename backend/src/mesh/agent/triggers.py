@@ -47,6 +47,7 @@ from mesh.agent.service import WORKSPACE_AGENTS_CHANNEL
 from mesh.agent.snapshot import build_config_snapshot
 from mesh.db.models.agent import Agent
 from mesh.db.models.issue import Issue
+from mesh.db.models.label import IssueLabel, Label
 from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.tenant import set_tenant_context
@@ -72,6 +73,43 @@ _ISSUE_CONTEXT_ENRICHERS: list[IssueContextEnricher] = []
 def register_issue_context_enricher(fn: IssueContextEnricher) -> None:
     """Register a hook that adds comments/labels/attachments to the context."""
     _ISSUE_CONTEXT_ENRICHERS.append(fn)
+
+
+# §6.11 skill-snapshot seam. skill.md owns the bindings; the skill module
+# plugs in via ``register_skill_context_resolver`` to supply the enqueue
+# snapshot's ``skill_versions`` map + granted capability declarations
+# (normalized into the strict scheduling/authorization fields below by
+# build_config_snapshot, R3). Until a resolver is registered the slots stay
+# empty — the normalization still runs, so the strict types hold.
+SkillContextResolver = Callable[
+    [AsyncSession, uuid.UUID, uuid.UUID], Awaitable[dict]
+]
+_SKILL_CONTEXT_RESOLVER: SkillContextResolver | None = None
+
+
+def register_skill_context_resolver(fn: SkillContextResolver) -> None:
+    """Register the skill module's §6.11 enqueue-context producer."""
+    global _SKILL_CONTEXT_RESOLVER
+    _SKILL_CONTEXT_RESOLVER = fn
+
+
+# §4.5 / K7 auto-trigger matching seam. skill.md owns matching; it plugs in
+# via ``register_skill_matching_resolver`` to compute, for the issue being
+# enqueued, the skills whose instructions should be injected into the agent
+# context (trusted SOP, NOT §6.15 untrusted data) plus the per-skill evidence
+# persisted into ``config_snapshot.injected_skills`` for audit. The resolver
+# receives the raw issue title / description / label names.
+SkillMatchingResolver = Callable[
+    [AsyncSession, uuid.UUID, uuid.UUID, str, str | None, list[str]],
+    Awaitable[list[dict]],
+]
+_SKILL_MATCHING_RESOLVER: SkillMatchingResolver | None = None
+
+
+def register_skill_matching_resolver(fn: SkillMatchingResolver) -> None:
+    """Register the skill module's §4.5 auto-trigger matcher."""
+    global _SKILL_MATCHING_RESOLVER
+    _SKILL_MATCHING_RESOLVER = fn
 
 
 def _untrusted(value: object) -> str:
@@ -246,20 +284,92 @@ async def assign_orchestration_handler(
         )
         return None
 
-    # §6.11 reproducible snapshot. Skill bindings / capability declarations
-    # join once skill.md lands; until then both normalize to empty strict
-    # arrays (the normalization still runs, so the types are guaranteed).
-    snapshot_parts = build_config_snapshot(
-        agent_config_version_id=agent.active_config_version_id,
-        trigger_event_id=trigger_event_id,
-        skill_versions={},
-        declared_capabilities=[],
-        repo=None,
-    )
+    # §6.11 reproducible snapshot. Skill bindings + granted capability
+    # declarations come from the skill module's resolver (skill.md §2.5 /
+    # §6.11): the versions frozen here keep running in-flight executions no
+    # matter what rebinds / rollbacks afterwards. Resolution failures
+    # degrade to empty (never lose the trigger).
+    skill_context: dict = {}
+    if _SKILL_CONTEXT_RESOLVER is not None:
+        try:
+            skill_context = await _SKILL_CONTEXT_RESOLVER(
+                session, workspace_id, agent.id
+            )
+        except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
+            logger.exception("skill context resolution failed; enqueuing without skills")
+    # HIGH-2: build_config_snapshot normalizes the declared capabilities (R3).
+    # A persisted malformed declaration must NEVER crash the handler (that
+    # would poison the outbox event and stall the agent's dispatch until
+    # max_attempts) — degrade to empty grants instead.
+    try:
+        snapshot_parts = build_config_snapshot(
+            agent_config_version_id=agent.active_config_version_id,
+            trigger_event_id=trigger_event_id,
+            skill_versions=skill_context.get("skill_versions"),
+            declared_capabilities=skill_context.get("declared_capabilities"),
+            repo=None,
+        )
+    except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
+        logger.exception("capability normalization failed; enqueuing with empty grants")
+        snapshot_parts = build_config_snapshot(
+            agent_config_version_id=agent.active_config_version_id,
+            trigger_event_id=trigger_event_id,
+            skill_versions=skill_context.get("skill_versions"),
+            declared_capabilities=[],
+            repo=None,
+        )
+
     issue_context = await _issue_context(session, workspace_id=workspace_id, issue_id=issue_id)
+
+    # §4.5 / K7: auto-trigger matching → inject the matched skills' SOP into the
+    # agent context (TRUSTED instructions, distinct from the §6.15 untrusted
+    # issue context) and record the injection for audit. Failures degrade to no
+    # injection (never lose the trigger). The raw issue fields feed the matcher.
+    injected_skills: list[dict] = []
+    skill_instructions: str | None = None
+    if _SKILL_MATCHING_RESOLVER is not None:
+        try:
+            issue_row = await session.scalar(select(Issue).where(Issue.id == issue_id))
+            label_rows = (
+                await session.execute(
+                    select(Label.name)
+                    .join(IssueLabel, IssueLabel.label_id == Label.id)
+                    .where(IssueLabel.issue_id == issue_id)
+                )
+            ).scalars().all()
+            matches = await _SKILL_MATCHING_RESOLVER(
+                session,
+                workspace_id,
+                agent.id,
+                issue_row.title if issue_row is not None else "",
+                issue_row.description if issue_row is not None else None,
+                list(label_rows),
+            )
+            if matches:
+                injected_skills = [
+                    {
+                        "skill_id": m["skill_id"],
+                        "skill_version_id": m["skill_version_id"],
+                        "score": m["score"],
+                        "matched_by": m["matched_by"],
+                        "forced": m["forced"],
+                    }
+                    for m in matches
+                ]
+                skill_instructions = "\n\n".join(
+                    f"# Skill {m['skill_id']}\n{m['instructions']}" for m in matches
+                )
+                snapshot_parts["config_snapshot"]["injected_skills"] = injected_skills
+        except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
+            logger.exception("skill matching failed; enqueuing without injection")
+
     idempotency_key = enqueue_idempotency_key(
         agent_id=agent.id, issue_id=issue_id, trigger_event_id=trigger_event_id
     )
+    task_spec: dict = {"kind": "issue_assignment", "untrusted_context": issue_context}
+    if skill_instructions is not None:
+        task_spec["skill_instructions"] = skill_instructions
+        task_spec["injected_skills"] = injected_skills
     await emit_event(
         session,
         workspace_id=workspace_id,
@@ -275,10 +385,7 @@ async def assign_orchestration_handler(
             "config_snapshot": snapshot_parts["config_snapshot"],
             "required_capabilities": snapshot_parts["required_capabilities"],
             "label_requirements": [],
-            "task_spec": {
-                "kind": "issue_assignment",
-                "untrusted_context": issue_context,
-            },
+            "task_spec": task_spec,
         },
         idempotency_key=idempotency_key,
     )
@@ -312,5 +419,7 @@ __all__ = [
     "assign_orchestration_handler",
     "enqueue_idempotency_key",
     "register_issue_context_enricher",
+    "register_skill_context_resolver",
+    "register_skill_matching_resolver",
     "supersede_idempotency_key",
 ]

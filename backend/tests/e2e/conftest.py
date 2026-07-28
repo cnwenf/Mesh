@@ -71,6 +71,9 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # keeps the reaper red-line tests fast.
     env.setdefault("MESH_DAEMON_TLS_REQUIRED", "false")
     env.setdefault("MESH_RUNTIME_LEASE_SECONDS", "3")
+    # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
+    # source server, which the SSRF guard only permits via the allowlist.
+    env.setdefault("MESH_SKILL_SOURCE_HOST_ALLOWLIST", "127.0.0.1,localhost")
     return subprocess.Popen(
         [
             sys.executable,

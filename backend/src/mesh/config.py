@@ -167,6 +167,17 @@ class Settings(BaseSettings):
     # lazy checks on accept/preview).
     invitation_sweep_interval: float = Field(default=300.0, gt=0)
 
+    # Skill imports (skill.md §5.3 / §1.3 / §3.5). Server-side source fetches
+    # are SSRF-guarded (public addresses only); ``skill_source_host_allowlist``
+    # is the documented escape hatch (comma-separated hosts) for intranet
+    # registries / loopback fixtures. ``skill_marketplace_url`` is the external
+    # marketplace listings API the marketplace page consumes (empty = no
+    # market). ``skill_import_sweep_interval`` drives the crash-recovery sweep
+    # over in-flight import tasks.
+    skill_source_host_allowlist: str | None = None
+    skill_marketplace_url: str | None = None
+    skill_import_sweep_interval: float = Field(default=1.0, gt=0)
+
     # Object storage for the attachment module (attachment.md §3). The bucket
     # is PRIVATE; every access goes through short-lived presigned URLs and the
     # byte stream never transits the API process (three-stage direct upload).

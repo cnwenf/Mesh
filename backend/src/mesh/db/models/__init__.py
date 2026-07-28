@@ -53,6 +53,17 @@ from mesh.db.models.runtime import (
     TaskExecution,
     TaskLogSegment,
 )
+from mesh.db.models.skill import (
+    AgentSkill,
+    Skill,
+    SkillImportTask,
+    SkillInstallation,
+    SkillReference,
+    SkillScript,
+    SkillSource,
+    SkillTrigger,
+    SkillVersion,
+)
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -74,6 +85,7 @@ from mesh.db.models.workspace import (
 __all__ = [
     "Agent",
     "AgentConfigVersion",
+    "AgentSkill",
     "ApiToken",
     "Approval",
     "Attachment",
@@ -121,6 +133,14 @@ __all__ = [
     "RuntimeCredential",
     "RuntimeHeartbeat",
     "Session",
+    "Skill",
+    "SkillImportTask",
+    "SkillInstallation",
+    "SkillReference",
+    "SkillScript",
+    "SkillSource",
+    "SkillTrigger",
+    "SkillVersion",
     "TaskExecution",
     "TaskLogSegment",
     "UploadSession",

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 import redis.asyncio as aioredis
 from sqlalchemy import select
 
-from mesh.agent.triggers import assign_orchestration_handler
+from mesh.agent.triggers import assign_orchestration_handler, register_skill_matching_resolver
 from mesh.attachment.processing import process_blob
 from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
@@ -37,6 +37,9 @@ from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE, enqueue_execution_handler
 from mesh.runtime.reaper import runtime_reaper_loop
+from mesh.skill.content_store import ObjectStorageContentStore
+from mesh.skill.importer import ImportSettings, skill_import_sweep_loop
+from mesh.skill.resolvers import make_matching_resolver
 from mesh.workers.attachment_processor import (
     attachment_maintenance_loop,
     attachment_scan_loop,
@@ -150,6 +153,19 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     relay = build_relay(settings, session_factory, fanout, storage, mailer=mailer)
     stop = stop or asyncio.Event()
 
+    # skill.md §4.5 / §6.11: matching resolver feeds the enqueue handler; the
+    # crash-recovery sweep drains import tasks left mid-pipeline by a crash.
+    register_skill_matching_resolver(make_matching_resolver())
+    skill_content_store = ObjectStorageContentStore(storage)
+    skill_import_settings = ImportSettings(
+        host_allowlist=frozenset(
+            h.strip().lower()
+            for h in (settings.skill_source_host_allowlist or "").split(",")
+            if h.strip()
+        ),
+        marketplace_url=settings.skill_marketplace_url,
+    )
+
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
@@ -211,6 +227,17 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                 "attachment-maintenance",
                 lambda: attachment_maintenance_loop(
                     session_factory, storage=storage, settings=settings, stop=stop
+                ),
+            ),
+            TaskSpec(
+                "skill-import-sweep",
+                lambda: skill_import_sweep_loop(
+                    session_factory,
+                    content_store=skill_content_store,
+                    settings=skill_import_settings,
+                    interval=settings.skill_import_sweep_interval,
+                    stop=stop,
+                    clock=_utcnow,
                 ),
             ),
             TaskSpec(
