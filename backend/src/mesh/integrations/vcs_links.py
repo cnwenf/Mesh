@@ -227,6 +227,9 @@ async def _find_target_status(
     for status in rows:
         if status.category == target and status.is_default:
             return status
+    for status in rows:  # any status in the target category (last resort)
+        if status.category == target:
+            return status
     # Fall back to workspace-level statuses for project-scoped issues.
     if project_id is not None:
         rows = (await session.execute(
@@ -240,6 +243,9 @@ async def _find_target_status(
                 return status
         for status in rows:
             if status.category == target and status.is_default:
+                return status
+        for status in rows:
+            if status.category == target:
                 return status
     return None
 
@@ -412,22 +418,39 @@ async def ingest_vcs_event(
             continue
         issues.append(issue)
         if obj is not None:
-            link_source = "auto_branch" if branch and identifier in branch else "auto_keyword"
-            created = await create_link(
-                session,
-                workspace_id=workspace_id,
-                integration_id=integration.id,
-                provider=provider,
-                provider_tenant_key=event.tenant_key,
-                external_object_type=obj[0],
-                external_object_ref=obj[1],
-                mesh_entity_type="issue",
-                mesh_entity_id=issue.id,
-                link_source=link_source,
-                now=now,
+            # An active OR stale link means this external object was already
+            # associated for this issue — redelivered events skip creation
+            # (重复事件不重复建关联, §3.3; the partial unique index alone would
+            # re-create an active row after merged/closed marked it stale).
+            existing = await session.scalar(
+                select(VcsLink.id).where(
+                    VcsLink.workspace_id == workspace_id,
+                    VcsLink.provider == provider,
+                    VcsLink.provider_tenant_key == event.tenant_key,
+                    VcsLink.external_object_type == obj[0],
+                    VcsLink.external_object_ref == obj[1],
+                    VcsLink.mesh_entity_type == "issue",
+                    VcsLink.mesh_entity_id == issue.id,
+                    VcsLink.status.in_(("active", "stale")),
+                )
             )
-            if created is not None:
-                result["links_created"] += 1
+            if existing is None:
+                link_source = "auto_branch" if branch and identifier in branch else "auto_keyword"
+                created = await create_link(
+                    session,
+                    workspace_id=workspace_id,
+                    integration_id=integration.id,
+                    provider=provider,
+                    provider_tenant_key=event.tenant_key,
+                    external_object_type=obj[0],
+                    external_object_ref=obj[1],
+                    mesh_entity_type="issue",
+                    mesh_entity_id=issue.id,
+                    link_source=link_source,
+                    now=now,
+                )
+                if created is not None:
+                    result["links_created"] += 1
 
     action = vcs_action(provider, event)
     if action is None or not issues:

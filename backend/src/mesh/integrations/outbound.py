@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.integration import WebhookSubscription, WebhookSubscriptionDelivery
 from mesh.db.models.outbox import OutboxEvent
-from mesh.errors import BusinessRuleError, NotFoundError
+from mesh.errors import BusinessRuleError, NotFoundError, ValidationError
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.checkout import is_forbidden_host
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
@@ -67,7 +67,7 @@ def validate_subscription_url(url: str) -> None:
     """Creation-time guard: https scheme + non-private hostname."""
     parsed = urlparse(str(url or ""))
     if parsed.scheme != "https":
-        raise BusinessRuleError(
+        raise ValidationError(
             "webhook url must use https",
             code="invalid_url_scheme",
             details={"scheme": parsed.scheme},

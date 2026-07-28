@@ -16,6 +16,8 @@ from fastapi.responses import RedirectResponse
 
 from mesh.auth.deps import get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace
+from mesh.db.models.integration import Integration, VcsLink
+from mesh.db.models.issue import Issue
 from mesh.db.models.user import User
 from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
 from mesh.integrations import identities as identities_mod
@@ -698,8 +700,45 @@ async def retry_delivery(
 
 
 # ---------------------------------------------------------------------------
-# VCS links (§3.3)
+# VCS links (§3.3) — paths carry no workspace segment: the owning workspace
+# is resolved from the referenced resource (SECURITY DEFINER bootstrap read,
+# RLS fail-closed) and the caller is gated through resolve_workspace_context.
 # ---------------------------------------------------------------------------
+
+
+async def _resource_workspace(request: Request, fn: str, resource_id: uuid.UUID):
+    """Resolve a resource's workspace_id without a tenant GUC (RLS would
+    hide the row); falls back to a direct read under the owner role."""
+    from sqlalchemy import text as sql_text
+
+    async with request.app.state.session_factory() as session:
+        try:
+            return (await session.execute(
+                sql_text(f"SELECT {fn}(:id)"), {"id": resource_id}
+            )).scalar_one_or_none()
+        except Exception:  # noqa: BLE001 — function absent (owner-role tests)
+            model = {
+                "mesh_integration_workspace_id": Integration,
+                "mesh_vcs_link_workspace_id": VcsLink,
+                "mesh_issue_workspace_id": Issue,
+            }[fn]
+            row = await session.get(model, resource_id)
+            return row.workspace_id if row is not None else None
+
+
+async def _context_for_resource(
+    request: Request, user: User, fn: str, resource_id: uuid.UUID, permission: str | None
+):
+    from mesh.auth.rbac import resolve_workspace_context
+    from mesh.errors import NotFoundError as _NotFound
+
+    workspace_id = await _resource_workspace(request, fn, resource_id)
+    if workspace_id is None:
+        raise _NotFound("resource not found")
+    async with request.app.state.session_factory() as session:
+        return await resolve_workspace_context(
+            session, user=user, workspace_id=workspace_id, permission=permission
+        )
 
 
 @router.post("/integrations/vcs/links", status_code=201)
@@ -707,14 +746,16 @@ async def create_vcs_link(
     request: Request,
     response: Response,
     body: VcsLinkCreateRequest,
-    context: WorkspaceContext = Depends(require_workspace("issue:write")),
     user: User = Depends(get_current_user),
 ) -> dict:
+    integration_id = _path_uuid(body.integration_id, what="integration")
+    context = await _context_for_resource(
+        request, user, "mesh_integration_workspace_id", integration_id, "issue:write"
+    )
     await _rate_limit_write(request, user, response)
     service = _service(request)
     integration = await service.get_integration(
-        workspace_id=context.workspace.id,
-        integration_id=_path_uuid(body.integration_id, what="integration"),
+        workspace_id=context.workspace.id, integration_id=integration_id
     )
     if integration.kind not in ("vcs_github", "vcs_gitlab"):
         raise BusinessRuleError(
@@ -748,9 +789,12 @@ async def delete_vcs_link(
     request: Request,
     response: Response,
     link_id: str,
-    context: WorkspaceContext = Depends(require_workspace()),
     user: User = Depends(get_current_user),
 ) -> Response:
+    link_uuid = _path_uuid(link_id, what="vcs link")
+    context = await _context_for_resource(
+        request, user, "mesh_vcs_link_workspace_id", link_uuid, None
+    )
     await _rate_limit_write(request, user, response)
     from mesh.db.tenant import set_tenant_context
 
@@ -759,7 +803,7 @@ async def delete_vcs_link(
         await vcs_links_mod.delete_link(
             session,
             workspace_id=context.workspace.id,
-            link_id=_path_uuid(link_id, what="vcs link"),
+            link_id=link_uuid,
             now=datetime.now(UTC),
         )
     return Response(status_code=204)
@@ -769,16 +813,18 @@ async def delete_vcs_link(
 async def list_issue_vcs_links(
     request: Request,
     issue_id: str,
-    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
 ) -> dict:
+    issue_uuid = _path_uuid(issue_id, what="issue")
+    context = await _context_for_resource(
+        request, user, "mesh_issue_workspace_id", issue_uuid, None
+    )
     from mesh.db.tenant import set_tenant_context
 
     async with request.app.state.session_factory() as session:
         await set_tenant_context(session, context.workspace.id)
         rows = await vcs_links_mod.list_issue_links(
-            session,
-            workspace_id=context.workspace.id,
-            issue_id=_path_uuid(issue_id, what="issue"),
+            session, workspace_id=context.workspace.id, issue_id=issue_uuid
         )
     return {"data": [vcs_links_mod.render_link(row) for row in rows]}
 
@@ -788,14 +834,16 @@ async def resolve_vcs_identifiers(
     request: Request,
     response: Response,
     body: VcsResolveRequest,
-    context: WorkspaceContext = Depends(require_workspace()),
     user: User = Depends(get_current_user),
 ) -> dict:
+    integration_id = _path_uuid(body.integration_id, what="integration")
+    context = await _context_for_resource(
+        request, user, "mesh_integration_workspace_id", integration_id, None
+    )
     await _rate_limit_write(request, user, response)
     service = _service(request)
     integration = await service.get_integration(
-        workspace_id=context.workspace.id,
-        integration_id=_path_uuid(body.integration_id, what="integration"),
+        workspace_id=context.workspace.id, integration_id=integration_id
     )
     if integration.kind not in ("vcs_github", "vcs_gitlab"):
         raise BusinessRuleError(

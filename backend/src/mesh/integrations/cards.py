@@ -37,7 +37,7 @@ from mesh.integrations.connectors import adapter_for
 from mesh.integrations.identities import lookup_identity
 from mesh.integrations.inbound import (
     _decrypt_ref,
-    _load_integration,
+    _integration_from_row,
     _lookup_active_by_kind,
     _lookup_by_config_value,
 )
@@ -129,10 +129,10 @@ async def _locate_card_integration(
         )
     else:
         rows = []
+    # Build detached integrations from the SECURITY DEFINER rows — ORM
+    # reads are RLS-hidden before the tenant GUC is known (fail-closed).
     for row in rows:
-        integration = await _load_integration(session, row[0])
-        if integration is not None:
-            return integration
+        return _integration_from_row(row)
     return None
 
 

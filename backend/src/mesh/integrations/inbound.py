@@ -189,6 +189,41 @@ async def _load_integration(session: AsyncSession, integration_id: uuid.UUID) ->
     )
 
 
+async def _candidate_from_binding(session: AsyncSession, binding: tuple) -> tuple:
+    """Build a candidate row for a binding-routed integration (gitlab/github
+    repo routing) without pre-tenant ORM reads."""
+    integration = await _load_integration(session, binding[2])
+    if integration is None:  # owner-role fallback path may fail under RLS
+        # The definer lookup for the integration's columns keeps the
+        # pipeline alive under the restricted app role.
+        rows = await _lookup_active_by_kind(session, kind="vcs_gitlab")
+        for row in rows:
+            if row[0] == binding[2]:
+                return row
+        return (binding[2], binding[1], "active", "vcs_gitlab", {}, None)
+    return (
+        integration.id, integration.workspace_id, integration.status,
+        integration.kind, integration.config, integration.secret_ref,
+    )
+
+
+def _integration_from_row(row: tuple) -> Integration:
+    """Detached Integration from a SECURITY DEFINER lookup row.
+
+    Used BEFORE the tenant GUC is set (RLS fail-closed would hide ORM
+    reads under the restricted app role — same pattern as autopilot's
+    token-hash lookup).
+    """
+    return Integration(
+        id=row[0],
+        workspace_id=row[1],
+        status=row[2],
+        kind=row[3],
+        config=row[4] or {},
+        secret_ref=row[5],
+    )
+
+
 # ---------------------------------------------------------------------------
 # Provider locate + verify entry points
 # ---------------------------------------------------------------------------
@@ -236,12 +271,7 @@ async def _locate_and_verify(
                     session, provider="github", external_ref=repo
                 )
                 if binding is not None:
-                    integration = await _load_integration(session, binding[2])
-                    if integration is not None:
-                        candidates = [(
-                            integration.id, integration.workspace_id, integration.status,
-                            integration.kind, integration.config, integration.secret_ref,
-                        )]
+                    candidates = [await _candidate_from_binding(session, binding)]
     elif kind == "vcs_gitlab":
         project = payload.get("project") or {}
         repo = str(project.get("path_with_namespace") or "")
@@ -250,12 +280,7 @@ async def _locate_and_verify(
                 session, provider="gitlab", external_ref=repo
             )
             if binding is not None:
-                integration = await _load_integration(session, binding[2])
-                if integration is not None:
-                    candidates = [(
-                        integration.id, integration.workspace_id, integration.status,
-                        integration.kind, integration.config, integration.secret_ref,
-                    )]
+                candidates = [await _candidate_from_binding(session, binding)]
     elif kind == "im_feishu":
         # Feishu payloads carry no app id — try each integration's encrypt
         # key (spec §3.2 「经 app_id/encrypt_key」; candidate set is small).
@@ -279,9 +304,7 @@ async def _locate_and_verify(
             tolerance=tolerance,
         )
         if signature_status == "valid":
-            integration = await _load_integration(session, integration_id)
-            if integration is None:
-                continue
+            integration = _integration_from_row(row)
             normalized = adapter["normalize"](payload, lowered)
             # Refine gitlab tenant key from the integration instance config.
             if provider == "gitlab":
@@ -303,7 +326,7 @@ async def _locate_and_verify(
     header_present = _any_signature_header(kind, lowered)
     status = SIG_MISSING if not header_present else SIG_INVALID
     if first_candidate is not None:
-        return await _load_integration(session, first_candidate[0]), status, None
+        return _integration_from_row(first_candidate), status, None
     return None, status, None
 
 

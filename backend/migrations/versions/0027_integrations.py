@@ -439,6 +439,25 @@ def upgrade() -> None:
         f"GRANT EXECUTE ON FUNCTION mesh_integrations_active_by_kind(text) TO {APP_ROLE}"
     )
 
+    # Resource-scoped endpoints whose paths carry no workspace segment
+    # (§3.3: /integrations/vcs/*, /issues/{id}/vcs-links) resolve the owning
+    # workspace through these bootstrap reads before setting the tenant GUC.
+    for fn, table in (
+        ("mesh_integration_workspace_id", "integrations"),
+        ("mesh_vcs_link_workspace_id", "vcs_links"),
+        ("mesh_issue_workspace_id", "issues"),
+    ):
+        op.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION {fn}(p_id uuid) RETURNS uuid
+            LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+              SELECT t.workspace_id FROM {table} t WHERE t.id = p_id
+            $$
+            """
+        )
+        op.execute(f"REVOKE EXECUTE ON FUNCTION {fn}(uuid) FROM PUBLIC")
+        op.execute(f"GRANT EXECUTE ON FUNCTION {fn}(uuid) TO {APP_ROLE}")
+
     # -- executable reference: owner-only unlink authorization (R5, T29⑪) -----
     # Role columns deliberately do NOT participate — no admin bypass. The
     # backend service implementation must be line-for-line equivalent.
@@ -468,6 +487,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    for fn in (
+        "mesh_integration_workspace_id",
+        "mesh_vcs_link_workspace_id",
+        "mesh_issue_workspace_id",
+    ):
+        op.execute(f"REVOKE EXECUTE ON FUNCTION {fn}(uuid) FROM mesh_app")
+        op.execute(f"DROP FUNCTION IF EXISTS {fn}(uuid)")
     op.execute(
         "REVOKE EXECUTE ON FUNCTION external_identity_unlink_allowed(uuid, uuid) FROM mesh_app"
     )
