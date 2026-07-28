@@ -118,7 +118,7 @@
 | `q` | string | 查询词(≤120 字符);空/缺省 → 返回默认集(favorites + 各类型少量最近项,可为空) |
 | `types` | csv | 对象类型白名单子集;缺省=全部六类;非法值 `400 validation_error` |
 | `limit` | int | 默认 20,上限 50 |
-| `cursor` | opaque | 整体游标(§6.14),base64 `(score, type, id)` |
+| `cursor` | opaque | 整体游标(§6.14):**`cursor = base64(内部组成 (score, type, id) + 服务端 HMAC 签名)`**;签名不符 → `400 validation_error`;内部字段经签名校验前**一律不信任**(防攻击者任意构造 `(score,type,id)` 探测 keyset 分页路径/构造病态查询) |
 
 ```json
 // 200 Response
@@ -132,7 +132,7 @@
       "icon": "issue",
       "url": "/w/acme/issues/by-identifier/WEB-124",
       "badge": { "kind": "status", "label": "In Progress", "color": "info" },
-      "score": 18.4,
+      "score": 18.4, // 调试字段,默认不返回(见统一形状表)
       "highlight": { "title": [[0, 2]] }
     },
     {
@@ -143,7 +143,7 @@
       "icon": "agent",
       "url": "/w/acme/agents/mem_b2",
       "badge": { "kind": "member_type", "label": "agent" },
-      "score": 9.1
+      "score": 9.1 // 调试字段,默认不返回(见统一形状表)
     }
   ],
   "next_cursor": null
@@ -161,7 +161,7 @@
 | `icon` | ✓ | 类型图标键(语义键,前端映射图标) |
 | `url` | ✓ | 规范深链(§3.4),Enter 直达 |
 | `badge` | – | `{kind, label, color}`;`color` 仅取语义 token 名(status/danger/warn/success/info) |
-| `score` | – | 排序分(调试/二次排序用) |
+| `score` | – | 排序分;**不稳定、仅供调试,默认不返回**(仅显式调试开关/调试构建输出,避免泄漏排序内部权重) |
 | `highlight` | – | 命中区间 `{title: [[start,end], …]}`;**只返回 offset/length,不返回 HTML** |
 
 > 排序:服务端按 `score` 降序输出;平局裁决确定性(§4.6)。`next_cursor=null` 表示末页(§6.14)。
@@ -175,12 +175,13 @@
 |------|-----------|
 | issue | 工作区成员资格 + 所属项目可见性(私有项目仅其成员)+ issue 级可见性 |
 | project | 项目可见性(私有项目仅成员) |
-| member / agent | 工作区名册可见(角色矩阵按 auth.md;guest/agent 受限按 §6.12) |
-| view | 私有视图仅 owner;共享视图按工作区/项目成员 |
+| member / agent | 工作区名册可见;**`visibility='private'` 的 agent 仅其 owner 与 admin 可见**(agent.md「private 仅所有者与 admin 可见」同源;名册角色矩阵按 auth.md;guest/agent 受限按 §6.12) |
+| view | 私有视图仅 owner;共享视图按工作区/项目成员;**归属项目的视图与项目可见性取 AND**(项目不可见则该视图即使共享亦不可见) |
 | chat_session | 会话参与者 |
 
 - **私有项目不暴露存在性**:命中私有项目内 issue 时,非成员**不进结果、不进计数、不进默认集**——与「私有项目事件只进 `project:{id}` 频道,不广播后前端过滤」同原则(§6.7)。
-- 集成测试必须覆盖跨租户、跨私有项目、跨会话的**负向用例**(§5.3)。
+- **私有 agent 不暴露存在性**:`visibility='private'` 的 agent 对非 owner/非 admin **不进结果、不进默认集**(与私有项目同「不暴露存在性」原则;私有 agent 往往携带机密指令配置,名称/存在性本身即敏感)。
+- 集成测试必须覆盖跨租户、跨私有项目、跨私有 agent、跨会话的**负向用例**(§5.3)。
 
 ### 3.4 规范深链(§6.12 权威清单的前端路由落地)
 
@@ -340,10 +341,12 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 ### 5.3 安全与一致性
 
 - [ ] **跨租户负向**:A 租户搜索 q 不返回 B 租户任何对象(集成测试,RLS + 谓词双断言)。
-- [ ] **私有项目不暴露存在性**:非私有项目成员搜索命中词时,该私有项目内 issue/视图**不进结果、不进计数**;与 §6.7 同源原则核对。
+- [ ] **私有项目不暴露存在性**:非私有项目成员搜索命中词时,该私有项目内 issue/视图**不进结果、不进计数、不进默认集**;归属项目的视图与项目可见性取 AND(§3.3);与 §6.7 同源原则核对。
+- [ ] **私有 agent 不暴露存在性**:非 owner/非 admin 搜索**不返回** `visibility='private'` 的 agent(**不进结果、不进默认集**);owner 与 admin 可搜到(正向对照,§3.3 与 agent.md 同源)。
 - [ ] **会话隔离**:非参与者搜索不返回他人聊天会话。
-- [ ] **不落搜索日志**:服务端不持久化原始 query;访问日志不含 query 明文(或脱敏);错误上报不含 query。
-- [ ] **注入防护**:`q` 参数化 + `LIKE` 通配符转义;`types` 白名单;`highlight` 只返回 offset/length,前端不回显 HTML;`cursor` 不透明且服务端校验,非法 400。
+- [ ] **负向矩阵扩展**:空 `q` 默认集(favorites + 最近项)同样不泄漏越权对象(私有项目/私有 agent/他人会话探测均为空);成员退出某私有项目后,其 issue/视图命中与相关收藏**即刻消失**(与 §6.19 收藏失效目标清理联动)。
+- [ ] **不落搜索日志(全通道)**:`q` 原始值经**任何通道**(访问日志、错误上报、trace/span 属性、指标 label)**不得出请求处理器**——不采集或脱敏;服务端不持久化原始 query;集成测试断言上述各通道抓样无 query 明文。
+- [ ] **注入防护**:`q` 参数化 + `LIKE` 通配符转义;`types` 白名单;`highlight` 只返回 offset/length,前端不回显 HTML;`cursor` = base64(内部组成 + 服务端 HMAC),**签名不符 → 400**,内部字段经签名校验前一律不信任(§3.2)。
 - [ ] **限流**:搜索端点纳入限流中间件,429 带 `Retry-After`;错误 message 不泄漏 SQL/堆栈/内部 ID(§6.14)。
 - [ ] **无暴露外部出处**:代码/注释/文案/测试不含任何竞品名称或外部出处信息。
 

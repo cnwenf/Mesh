@@ -35,7 +35,7 @@
 | T4 | 偏好协商链 | 用户偏好(为 `null` 跳过)→ 工作区默认 → 系统(→`prefers-color-scheme`);未登录场景从第 2 级起 | 邀请接受页随工作区 |
 | T5 | 暗色整组替换 | `:root[data-theme='dark']` 属性选择器整组覆盖语义 token;暗色颜色 token 与亮色一一对应(测试断言无遗漏/多余) | 一处切换全局生效 |
 | T6 | 切换即时无刷新 | 仅改 `<html data-theme>`,CSS 变量级联即时生效;不重载不重建路由 | 设置页即时预览 |
-| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前读镜像键 `mesh.theme` → 解析 system → 设 `data-theme`;存储访问 try/catch | 刷新无白闪 |
+| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前读镜像键 `mesh.theme`(**键值显式白名单:非 `light|dark` 一律丢弃,回落 system 解析**)→ 解析 system → 设 `data-theme`;存储访问 try/catch | 刷新无白闪 |
 | T8 | 系统偏好实时跟随 | `system` 模式监听 `prefers-color-scheme` `change` 实时切换;显式 light/dark 忽略;卸载注销 | 操作系统切换即跟随 |
 | T9 | `color-scheme` 联动 | `:root` 声明 `color-scheme: light`,暗色声明 `dark`——原生滚动条/下拉/自动填充随主题 | 原生控件不刺眼 |
 | T10 | `prefers-reduced-motion` | 减少动效偏好下关过渡/动画;主题切换不做首帧渐变 | 无障碍 |
@@ -88,7 +88,7 @@
 
 - `tokenValues.ts` 的 `LIGHT_TOKENS`/`DARK_TOKENS` 为 token 唯一事实源,`tokens.css`(`:root`)/`tokens-dark.css`(`:root[data-theme='dark']`)须与其**逐项一致**(测试解析 CSS 断言镜像);
 - 新增/修改 token 须同时改三处(TS + 两份 CSS)并由测试兜底防漂移;
-- 防闪烁镜像键 `mesh.theme`(localStorage)由偏好 store 写入,仅供 `index.html` 内联脚本首帧读取,不是偏好真源(真源在服务端 `users.settings.theme`)。
+- 防闪烁镜像键 `mesh.theme`(localStorage)由偏好 store 写入,仅供 `index.html` 内联脚本首帧读取,不是偏好真源(真源在服务端 `users.settings.theme`);内联脚本对该键值**显式白名单**——**非 `light|dark` 一律丢弃并回落 system 解析**(localStorage 可被同源脚本写入,该脚本不得成为攻击者可控的属性落点)。
 
 ### 2.4 语义 token 清单(亮/暗各一份,一一对应)
 
@@ -107,7 +107,7 @@
 
 标签预设色板(`ColorPicker`)与确定性头像底色是「禁硬编码」规则的**合法例外**,立约如下:
 
-- 预设色板在亮/暗两套主题下对各自表面色满足对比(文本/前景叠加对比由组件保证);自定义 hex 经 `^#[0-9a-fA-F]{6}$` 严格校验后才作 CSS 值;
+- 预设色板在亮/暗两套主题下对各自表面色满足对比(文本/前景叠加对比由组件保证);自定义 hex `^#[0-9a-fA-F]{6}$` 在**服务端写入边界**(标签持久化,label-property.md 落地)与**渲染时同校验**——仅客户端校验无效(写入路径可绕过前端直达 API);
 - 数据色**不进入全局 token**;例外文件须在 §5.4 CI 扫描白名单**逐文件登记并注释原因**,新增例外需评审,不默认豁免。
 
 ---
@@ -215,9 +215,9 @@
 
 ### 5.3 安全与一致性
 
-- [ ] **无任意值注入面**:`data-theme` 仅取 `light|dark`(脚本与解析函数收敛二值);偏好枚举受控;token 值全部来自构建期静态 CSS,非运行时拼接用户输入。
+- [ ] **无任意值注入面(二值收敛)**:`data-theme` 仅取 `light|dark`(脚本与解析函数收敛二值);防闪烁脚本对镜像键 `mesh.theme` 显式白名单——构造非法值(如 `javascript:...`/任意字符串)写入 localStorage 后刷新,`data-theme` 回落 system 解析而非原样落地;偏好枚举受控;token 值全部来自构建期静态 CSS,非运行时拼接用户输入。
 - [ ] **CSP 协调**:防闪烁内联脚本经**每请求 nonce** 或 `sha256` 哈希白名单放行,**绝不**放开 `unsafe-inline`;脚本不含用户输入。
-- [ ] **数据色例外受控**:自定义 hex 经 `^#[0-9a-fA-F]{6}$` 校验;用户可控 `avatar_url`/`logo_url` 沿用 §6.16 https-only,主题不引入新 URL 面。
+- [ ] **数据色例外受控**:自定义 hex 经 `^#[0-9a-fA-F]{6}$` 在**服务端写入边界与渲染时双重校验**(构造非法 hex 直写 API 被拒);用户可控 `avatar_url`/`logo_url` 沿用 §6.16 https-only,主题不引入新 URL 面。
 - [ ] **偏好写入鉴权**:`PATCH /users/me` 仅本人;`default_theme` 写需 admin;变更写审计。
 - [ ] **无暴露外部出处**:token 命名/注释/文案不含任何竞品名称、外部调色板出处信息。
 

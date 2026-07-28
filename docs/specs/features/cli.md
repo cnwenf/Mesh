@@ -59,7 +59,7 @@
 | C18 | `--output table\|json` | json 与 REST 包络一致;**stdout 只放结果数据**,进度/spinner/日志/错误一律 stderr |
 | C19 | 退出码分类 | `0` 成功 / `1` 通用(5xx/网络/429 重试耗尽)/ `2` 鉴权(401/403/未登录/过期)/ `3` 校验(400/404/413/422)/ `4` 冲突(409/423);`130` SIGINT |
 | C20 | 游标翻页 | 列表命令统一 `--limit` + 自动跟随 `next_cursor` 的 `--all`(§6.14) |
-| C21 | `--verbose`/`--quiet`/`--yes` | verbose 打方法/路径/耗时到 stderr(不打 token);破坏性操作默认交互确认,`--yes` 跳过,**非 TTY 未给 `--yes` 报错退出** |
+| C21 | `--verbose`/`--quiet`/`--yes` | verbose 输出面收敛为**仅 method/path/状态码/耗时**(stderr):**显式不含请求/响应体、不含除掩码 `Authorization`(`Bearer [REDACTED]`)外的任何头**;一次性凭证(`runtime register` 激活码)只写指定 sink(0600 文件/stdin),不进任何诊断输出;破坏性操作默认交互确认,`--yes` 跳过,**非 TTY 未给 `--yes` 报错退出** |
 | C22 | `mesh completion <shell>` | bash/zsh/fish 静态补全脚本(命令/flag) |
 | C23 | `mesh version` | CLI 版本 + 目标 API 版本(v1);探测到 `Deprecation`/`Sunset` 响应头 → stderr 提示升级 |
 
@@ -139,7 +139,7 @@ hosts:
 ```
 
 **本地安全约束**:
-- 凭证文件创建即 `chmod 0600`、父目录 `0700`;启动校验过宽 → stderr 告警 + `chmod 600` 建议;
+- 凭证文件创建即 `chmod 0600`、父目录 `0700`;启动校验 **fail-closed**:发现凭证文件/父目录 group/other 可读或可写 → **拒绝加载**(退码 2 + 一行修复指令 `chmod 700 <dir> && chmod 600 <file>`),**不降级为告警**(credentials.yaml 明文持有长效 PAT/refresh token,过宽权限即等同泄漏);
 - 写入经「临时文件 → fsync → 原子 rename」,避免半写;
 - `MESH_TOKEN` 环境变量优先级最高(CI),其存在时不读凭证文件该 host;
 - 凭证后端抽象为 credential store,本期实现文件后端,预留 keychain(N5)。
@@ -187,17 +187,23 @@ hosts:
 **`POST /api/v1/auth/device/code`**(公开,登录类限流):
 - 请求:`{client_id: "mesh-cli", scope: "<space-joined>"}`;
 - 响应 200:`{data: {device_code, user_code, verification_uri, verification_uri_complete, expires_in(默认 900), interval(默认 5)}}`;
-- 落库:设备码授权记录——仅存 `device_code_hash`/`user_code_hash`(SHA-256)、TTL、`status=pending`、请求 scope、`consumed_at`(单次消费),形态参照 auth.md 既有一次性令牌表(`password_reset_tokens` 等)。
+- 落库:设备码授权记录——仅存 `device_code_hash`/`user_code_hash`(SHA-256)、TTL、`status=pending`、请求 scope、`consumed_at`(单次消费),形态参照 auth.md 既有一次性令牌表(`password_reset_tokens` 等);
+- **码生成要求(量化,可验收)**:`user_code` 熵 **≥20bit**(RFC 8628 §6.1 基线)且采用**去歧义字符集**(剔除 `0/O/1/I/L` 等易混字符,分组展示如 `XXXX-XXXX`);`device_code` 熵 **≥128bit**(密码学安全随机源)。
 
-**`POST /api/v1/auth/device/token`**(公开,限流防 `user_code` 爆破):
+**`POST /api/v1/auth/device/token`**(公开,**量化爆破防护**):
 - 请求:`{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`;
+- **爆破防护(量化,§5.3 逐条验收)**——`user_code` 是短码,爆破成功即直接领取受害者已批准的会话令牌(RFC 8628 核心威胁面):
+  - 轮询端点**双重限速**:按来源 IP 全局限速 + 按 `device_code` 限速;违规返回 `slow_down`,累计违规超限即**拒绝该码**;
+  - 单码**连续猜错上限 ≤5 次** → 立即作废该授权记录(`status=invalidated`)+ **审计留痕**;
+  - `device_code` 命中后须比对 **`status=pending` 且未过期未消费**方可推进(已消费/已作废/过期一律拒绝);
 - 轮询语义(以 §6.14 错误信封表达,非裸 OAuth 错误体):
   - `authorization_pending`(具名 code,400 携带)→ 继续轮询;
   - `slow_down` → 间隔 +5s;
   - `access_denied` → 终止(退码 2);
   - `expired_token` → 重新发起;
 - 成功 200:`{data: {access_token, refresh_token, token_type: "Bearer", expires_in, scope}}`,**同事务**置 `consumed_at` 并创建 `sessions` 行(复用会话撤销链路 auth.md §3.7 `session.revoked`)。
-- 浏览器授权确认页(Web 登录态页面:校验 `user_code` → 展示 scope → 批准/拒绝)属 auth.md UI 增量。
+- **授权确认页**(auth.md UI 增量,Web 登录态页面,防 RFC 8628 §5.5 钓鱼家族——攻击者诱使受害者浏览器提交对攻击者 `device_code` 的批准):用户须**手工录入 `user_code`** 且**批准仅绑定所录入的码**;approve 请求带**同源 CSRF 防护**;scope **全量人类可读枚举**,显式确认后方可批准。
+- **签发 scope 取交**(与 PAT「创建时与角色权限取交」规则同源,auth.md §2.5):**签发 scope = 请求 scope ∩ 批准用户角色权限,服务端强制**(token 端点兜底重算,不按请求原样签发——否则可能超出批准者角色权限);确认页展示**取交后**的 scope,避免展示与签发的同意 mismatch;token 响应 `scope` 为实际签发值。
 
 ### 3.3 日志流式(复用 runtime.md,不新增端点)
 
@@ -268,7 +274,7 @@ $ mesh auth login
 | 校验失败 | `Error: invalid --priority "urgent". Expected one of: none, low, medium, high.`(回显 `details`) |
 | 限流 | 按 `Retry-After` 自动退避重试(stderr 提示),耗尽归退码 1 |
 
-> 错误信息不泄漏 token/堆栈/SQL/内部 ID(§6.14);`Authorization` 头在 `--verbose` 中恒为 `Bearer [REDACTED]`。
+> 错误信息不泄漏 token/堆栈/SQL/内部 ID(§6.14);`--verbose` 输出面仅 method/path/状态码/耗时——不含请求/响应体,不含除掩码 `Authorization`(恒为 `Bearer [REDACTED]`)外的任何头;一次性凭证(激活码)只进指定 sink(0600 文件/stdin),不进任何诊断输出(C21)。
 
 ### 4.4 帮助层级
 
@@ -301,18 +307,26 @@ $ mesh auth login
 ### 5.3 安全(红线)
 
 - [ ] **令牌不落 argv/历史/进程表**:无 `--token` flag;`ps`/shell 历史抓包无令牌;`device_code` 不打印。
-- [ ] **凭证文件 0600/父目录 0700**;构造过宽权限 → 启动告警。
-- [ ] **stderr/日志不回显 token**:`--verbose` 输出 `Bearer [REDACTED]`;全通道脱敏复用 §6.16 黑名单。
-- [ ] **撤销联动**:Web 侧撤销 PAT/会话 → CLI 下次调用 401 → 清本地凭证 + 退码 2(§3.7 `session.revoked`)。
-- [ ] **传输 fail-closed**:API 基址为明文 `http` 时拒绝(显式 `--insecure` 开发开关默认禁)。
-- [ ] **设备码安全**(auth.md 增量验收):`device_code`/`user_code` 仅存哈希 + TTL 15min + 单次消费;轮询端点限流;确认页展示请求 scope。
+- [ ] **凭证文件 0600/父目录 0700(fail-closed)**:构造凭证文件/父目录 group/other 可读或可写 → 启动**拒绝加载**(退码 2 + 一行修复指令 `chmod 700 <dir> && chmod 600 <file>`),**不降级为告警**。
+- [ ] **诊断输出面收敛**:`--verbose` 仅 method/path/状态码/耗时——不含请求/响应体、不含除掩码 `Authorization`(`Bearer [REDACTED]`)外的任何头;全通道脱敏复用 §6.16 黑名单;一次性凭证(`runtime register` 激活码)只进指定 sink(0600 文件/stdin),不进任何诊断输出。
+- [ ] **撤销联动(PAT,即时)**:Web 侧撤销 PAT → CLI 下次调用**即时 401**(服务端逐请求查 `revoked_at`,auth.md §2.5)→ 清本地凭证 + 退码 2。
+- [ ] **撤销联动(会话,延迟有界)**:Web 侧撤销设备码会话 → CLI 在 **≤ access TTL(15min)** 内或 refresh 被拒时 401 → 清本地凭证 + 退码 2;延迟上界 = access TTL(auth.md §3.7 权威语义:无状态短期 access JWT,窗口内已撤销 JWT 仍可通过,验收不得要求会话撤销即时生效)。
+- [ ] **传输 fail-closed 与 `--insecure` 边界**:API 基址为明文 `http` 默认拒绝;`--insecure` ① **仅作单次调用 flag**(`mesh config set` 拒绝持久化该键);② 每次使用 **stderr 打一行警告**;③ `/api/v1/daemon/*` 的 TLS 强制(runtime.md §3.5 红线)**不随 `--insecure` 放宽**。
+- [ ] **设备码安全**(auth.md 增量验收,逐条量化):
+  - `user_code` 熵 ≥20bit + 去歧义字符集(剔除 0/O/1/I/L);`device_code` 熵 ≥128bit;
+  - `device_code`/`user_code` 仅存哈希 + TTL 15min + 单次消费;
+  - 轮询端点双重限速(按 IP 全局 + 按 `device_code`),`slow_down` 累计违规超限即拒绝该码;
+  - 单码连续猜错 ≤5 次 → 立即作废该授权码 + 审计留痕(e2e 触发并核验作废与审计行);
+  - `device_code` 命中后比对 `status=pending` 且未过期未消费方可推进;
+  - 确认页须用户手工录入 `user_code` 且批准仅绑定所录码,approve 带同源 CSRF 防护,scope 全量人类可读枚举、显式确认后方可批准(构造跨码 CSRF 攻击用例被拒);
+  - 签发 scope = 请求 scope ∩ 批准用户角色权限(服务端强制,验收构造越权 scope 请求被收窄),确认页展示取交后 scope。
 - [ ] **导入闸门**:源附件经 attachment.md 扫描放行方可建业,CLI 不绕过。
 - [ ] **无暴露外部出处**:代码/注释/帮助文本/示例不含任何竞品名称或外部出处。
 
 ### 5.4 版本、分发与 OpenAPI
 
 - [ ] **OpenAPI 3.1 随仓库发布**:`docs/api/openapi.yaml`(FastAPI 生成 + 人工校准)覆盖 §6.14 包络/错误码/分页与各模块端点,每端点含请求/响应 schema 与错误示例;CLI e2e 含对 OpenAPI 的**契约测试**(请求构造/响应解析不漂移)。
-- [ ] **内部端点暴露面**:`/api/v1/daemon/*` 与内部管理端点在公开 OpenAPI 以 `x-internal: true` 剔除(最终策略以安全评审为准)。
+- [ ] **内部端点暴露面(安全评审定夺:完全剔除)**:公开发布的 `docs/api/openapi.yaml` **不含** `/api/v1/daemon/*` 及内部管理端点(**整体剔除,非 `x-internal: true` 标记**——标记后 schema 仍随公开产物分发,等于泄漏内部机器接口的路径/参数/错误码全表面;daemon 协议是首方 `mesh-runtime` 二进制的契约,runtime.md 已文档化,无第三方 SDK 生成需求);**CI 断言** `docs/api/openapi.yaml` 中 `^/api/v1/daemon/` 路径**零命中**。
 - [ ] **版本协商**:`mesh version --verbose` 报告 CLI 版本 + API 版本;`Deprecation`/`Sunset` 响应头触发 stderr 升级提示。
 - [ ] **分发**:单一静态二进制(多平台多架构)经 Releases 发布,**附 SHA-256 校验和与签名**(公钥随产品发布,与 runtime.md 安装包同基线);安装脚本可审阅、不鼓励盲管道。
 - [ ] **前向兼容**:CLI 解析 JSON 容忍未知字段(旧客户端忽略新字段,§11.2)。
