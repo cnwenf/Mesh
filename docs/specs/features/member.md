@@ -250,6 +250,8 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 // 200 Response:返回更新后的成员对象
 ```
 
+> **名册行锁协议(MES-76 R4-H3)**:改角色 / 改状态(停用)/ 移除事务更新本 `members` 行即持有该行排他锁——与设备码消费事务对同一行的 `FOR UPDATE`(auth.md §3.1.1 consume 锁序)在同名册行上**线性化**:两者并发时按锁获取顺序定结果(消费先持锁则会话签发完成后变更再生效;变更先提交则消费按变更后状态拒绝/收窄签发),不存在 TOCTOU 间隙。显示名变更(`display_override`)另触发 `search_name` 同事务重算(§2.2 同步契约,search-command-palette.md §2.2)。
+
 **移除并转派** `DELETE /api/v1/workspaces/{ws}/members/{id}?reassign_to=mem-c3`
 ```json
 // 200 Response

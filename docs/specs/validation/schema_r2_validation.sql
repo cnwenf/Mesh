@@ -7,6 +7,12 @@
 --   regdictionary + IMMUTABLE,R2-H3/R3-M1)+ members.search_name 投影与五实体 trigram/prefix
 --   索引实跑 + 前缀查询表达式匹配断言 + identifier upper() 规范化等值(R3-M4)+
 --   runtime_token_hash UNIQUE 与停用置 NULL(R3-H4)+ T36/T37 正负行为断言。
+-- MES-76 R4(MES-74 第四轮收口):sessions 补 previous_token_hash/rotated_at(R4-M4 有界
+--   幂等轮换,T36 宽限窗语义断言);T37 改精确 11 条索引集合 + 关键 pg_get_indexdef +
+--   真实 1/2 字符前缀用例(强制关 seqscan 仅命名「表达式兼容性」,另保留自然规划 EXPLAIN);
+--   T38 词典升级路径 smoke test——版本化函数/投影/索引:事务外并发建 _next 索引 → 回补 →
+--   单事务原子改名切换 → 查询命中新索引 → 清理(R4-H4:REINDEX CONCURRENTLY 不可在事务内,
+--   以分阶段在线迁移替代;本块即该升级路径的可执行验证,不只空库建表)。
 -- R3(MES-7,HIGH-1～HIGH-9 + 3 建议):agent_config_versions 同租户/重叠 FK(T27);
 --   能力字段严格类型与归一(T28);集成外部身份全局唯一 + scope 异或 + vcs_links(T29);
 --   IM 投递台账多目的地(T30);data job RESTRICT/checkpoint/行台账恢复协议(T31);
@@ -2444,7 +2450,9 @@ END $$;
 CREATE TABLE sessions (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- = access JWT 的 sid 与 refresh 的 jti(R2-H1)
   user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash              TEXT NOT NULL UNIQUE,                        -- refresh token SHA-256(不存明文)
+  token_hash              TEXT NOT NULL UNIQUE,                        -- 当前 refresh token SHA-256(不存明文)
+  previous_token_hash     TEXT NULL UNIQUE,                            -- R4-M4 有界幂等轮换:上一枚 refresh 哈希(宽限窗内识别被轮换的旧凭证)
+  rotated_at              TIMESTAMPTZ NULL,                            -- 最近轮换时刻(now()-rotated_at ≤ 宽限窗时旧凭证走幂等路径)
   type                    TEXT NOT NULL DEFAULT 'web' CHECK (type IN ('web','cli','api')),
   workspace_id            UUID NULL REFERENCES workspaces(id) ON DELETE CASCADE,   -- CLI/设备会话绑定工作区
   granted_scopes          TEXT[] NOT NULL DEFAULT '{}',                -- 会话固化签发 scope(refresh 续签再与当前角色取交)
@@ -3783,6 +3791,21 @@ BEGIN
   EXCEPTION WHEN unique_violation THEN
     RAISE NOTICE 'PASS T36-7: device_authorization_id UNIQUE(单码至多一会话)';
   END;
+
+  -- ⑧ R4-M4 有界幂等轮换:宽限窗内旧凭证可定位(幂等路径),超窗失效
+  UPDATE sessions SET token_hash='mesh_rft_cur_1', previous_token_hash='mesh_rft_old_1', rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT EXISTS (SELECT 1 FROM sessions
+                  WHERE previous_token_hash='mesh_rft_old_1' AND revoked_at IS NULL
+                    AND rotated_at >= now() - interval '30 seconds'),
+         'T36 FAIL: 宽限窗内旧 refresh 应可经 previous_token_hash 定位(幂等轮换路径)';
+  UPDATE sessions SET rotated_at=now() - interval '120 seconds'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT NOT EXISTS (SELECT 1 FROM sessions
+                      WHERE previous_token_hash='mesh_rft_old_1'
+                        AND rotated_at >= now() - interval '30 seconds'),
+         'T36 FAIL: 超出宽限窗(120s > 30s)的旧 refresh 不应再定位(重放按失效处理)';
+  RAISE NOTICE 'PASS T36-8: 有界幂等轮换宽限窗语义(窗内旧凭证可定位,超窗失效;双 tab 并发续期不误登出)';
 END $$;
 
 -- T37 前置:批量行 + ANALYZE,使前缀路径 EXPLAIN 断言稳定(选择率接近生产形态,
@@ -3814,15 +3837,32 @@ BEGIN
          'T37 FAIL: public.mesh_search_norm 应为 IMMUTABLE';
   RAISE NOTICE 'PASS T37-2: public.mesh_search_norm 为 IMMUTABLE(表达式索引前提)';
 
-  -- ③ 搜索索引真实创建(DDL 已实跑,非 Spec 纸面声明)
+  -- ③ 搜索索引精确集合(R4-M1:11 条精确断言,缺一即失败;并校验关键 indexdef)
   ASSERT (SELECT count(*) FROM pg_indexes
            WHERE indexname IN ('idx_members_search_name_trgm','idx_members_search_name_prefix',
                                'idx_issues_title_trgm','idx_issues_title_prefix','idx_issues_identifier_prefix',
                                'idx_projects_name_trgm','idx_projects_name_prefix',
                                'idx_views_name_trgm','idx_views_name_prefix',
-                               'idx_chat_sessions_title_trgm','idx_chat_sessions_title_prefix')) >= 9,
-         'T37 FAIL: 搜索索引创建不全';
-  RAISE NOTICE 'PASS T37-3: trigram/prefix 搜索索引全部创建(member/issue/project/view/chat)';
+                               'idx_chat_sessions_title_trgm','idx_chat_sessions_title_prefix')) = 11,
+         'T37 FAIL: 搜索索引应为精确 11 条(9 条 mesh_search_norm 表达式索引 + 2 条成员投影索引)';
+  -- 注:pg_get_indexdef 按 search_path 归一显示(public. 缺省即省略),故断言匹配无 schema 前缀形;
+  -- DDL 源文本一律 public. 限定(与 Spec §2.2 逐字一致),二者不矛盾
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_members_search_name_prefix')
+         LIKE '%text_pattern_ops%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_members_search_name_prefix')
+         LIKE '%WHERE (status <> ''removed''::text)%',
+         'T37 FAIL: 成员前缀索引应为 text_pattern_ops + 部分谓词 status<>removed';
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_title_trgm')
+         LIKE '%gin_trgm_ops%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_title_trgm')
+         LIKE '%mesh_search_norm(title)%',
+         'T37 FAIL: issue title trigram 索引应为 mesh_search_norm(title) 表达式 + gin_trgm_ops';
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_identifier_prefix')
+         LIKE '%mesh_search_norm(identifier)%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_identifier_prefix')
+         LIKE '%text_pattern_ops%',
+         'T37 FAIL: identifier 前缀索引应为 mesh_search_norm(identifier) 表达式 + text_pattern_ops';
+  RAISE NOTICE 'PASS T37-3: 11 条搜索索引精确集合 + 关键 indexdef(表达式/算子/部分谓词)校验';
 
   -- ④ 投影回补与索引同一函数(一致性)
   INSERT INTO members (id, workspace_id, member_type, user_id, role, display_override)
@@ -3834,20 +3874,48 @@ BEGIN
          'T37 FAIL: search_name 投影应与 mesh_search_norm 一致';
   RAISE NOTICE 'PASS T37-4: members.search_name 投影与归一函数一致(José 管理员→jose 管理员)';
 
-  -- ⑤ 前缀查询表达式与索引表达式一致(强制关 seqscan 后走 pattern 索引 → 表达式逐字匹配;
-  --    查询携带 status <> 'removed' 可见性谓词,与部分索引谓词一致,§3.3 名册可见性同口径)
+  -- ⑤ 表达式兼容性断言(R4-M1:真实 1/2 字符用例;强制关 seqscan 只为证明「查询表达式与
+  --    索引表达式逐字匹配、pattern 索引可用」,不代表规划器选择;查询携带 status<>'removed'
+  --    可见性谓词,与部分索引谓词一致,§3.3 名册可见性同口径)
   SET LOCAL enable_seqscan = off;
   FOR v_rec IN EXECUTE
     'EXPLAIN SELECT id FROM members
        WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
          AND status <> ''removed''
-         AND search_name LIKE public.mesh_search_norm(''jos'') || ''%'''
+         AND search_name LIKE public.mesh_search_norm(''j'') || ''%'''
   LOOP
     v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
   END LOOP;
   ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
-         'T37 FAIL: 1–2 字符前缀查询未命中 pattern 索引(表达式与索引不一致)';
-  RAISE NOTICE 'PASS T37-5: 前缀查询命中 idx_members_search_name_prefix(索引/查询表达式一致)';
+         'T37 FAIL: 1 字符前缀查询与 pattern 索引表达式不匹配(关 seqscan 后仍不可用)';
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''jo'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T37 FAIL: 2 字符前缀查询与 pattern 索引表达式不匹配(关 seqscan 后仍不可用)';
+  RAISE NOTICE 'PASS T37-5: 表达式兼容性(真实 1/2 字符前缀查询均可用 pattern 索引,关 seqscan 下命中)';
+
+  -- ⑤b 真实规模自然规划断言(R4-M1:不强制 planner——批量行 + ANALYZE 后选择性前缀
+  --     应由规划器自然选中 pattern 索引;此项失败 = 索引对真实查询无效,而非规划器偏好)
+  SET LOCAL enable_seqscan = on;
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''jo'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T37 FAIL: 真实规模自然规划下 2 字符前缀查询未选中 pattern 索引(索引对真实查询无效)';
+  RAISE NOTICE 'PASS T37-5b: 真实规模不强制 planner,前缀查询自然命中 idx_members_search_name_prefix';
 
   -- ⑥ identifier 快路径 canonical uppercase(R3-M4:web-1 命中 WEB-1)
   ASSERT EXISTS (SELECT 1 FROM issues
@@ -3876,6 +3944,79 @@ BEGIN
   RAISE NOTICE 'PASS T37-8: 停用置 NULL 合法(多行 NULL 不冲突,令牌即失效)';
 END $$;
 
+-- ===================== T38:词典升级路径 smoke test(MES-76 R4-H4:REINDEX CONCURRENTLY 不可在事务内,
+--                       以版本化分阶段在线迁移替代;本块实跑该升级路径,不只空库建表)=====================
+-- 阶段 1(事务外,顶层 autocommit):新版归一函数(模拟词典升级后的新实现)+ 新版投影列 + 并发建新版索引
+CREATE FUNCTION public.mesh_search_norm_next(t TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+$$ SELECT lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD))) $$;
+
+ALTER TABLE members ADD COLUMN search_name_next TEXT NOT NULL DEFAULT '';
+
+-- 分批回补(smoke test 单批;生产按 spec §2.2 每批 ≤1 万行、不持长事务;升级期写入路径双写)
+UPDATE members SET search_name_next = public.mesh_search_norm_next(COALESCE(display_override, ''));
+
+-- 并发建新版索引(CREATE INDEX CONCURRENTLY 必须在事务外——本语句即该约束的可执行验证)
+CREATE INDEX CONCURRENTLY idx_members_search_name_prefix_next
+  ON members (workspace_id, search_name_next text_pattern_ops) WHERE status <> 'removed';
+CREATE INDEX CONCURRENTLY idx_members_search_name_trgm_next
+  ON members USING gin (search_name_next gin_trgm_ops);
+
+-- 阶段 2(单一快速事务,原子切换:改名不更 OID,旧索引仍绑定旧实现(现名 _prev),新索引接管规范名)
+DO $$
+DECLARE
+  v_next_oid OID;
+  v_plan     TEXT := '';
+  v_rec      RECORD;
+BEGIN
+  SELECT oid INTO v_next_oid FROM pg_proc WHERE proname='mesh_search_norm_next';
+
+  -- 函数切换:规范名 public.mesh_search_norm 指向新实现
+  ALTER FUNCTION public.mesh_search_norm RENAME TO mesh_search_norm_prev;
+  ALTER FUNCTION public.mesh_search_norm_next RENAME TO mesh_search_norm;
+
+  -- 投影列切换
+  ALTER TABLE members RENAME COLUMN search_name TO search_name_prev;
+  ALTER TABLE members RENAME COLUMN search_name_next TO search_name;
+
+  -- 索引名切换(索引体已绑定新列,改名使规范名指向新索引)
+  ALTER INDEX idx_members_search_name_prefix RENAME TO idx_members_search_name_prefix_prev;
+  ALTER INDEX idx_members_search_name_prefix_next RENAME TO idx_members_search_name_prefix;
+  ALTER INDEX idx_members_search_name_trgm RENAME TO idx_members_search_name_trgm_prev;
+  ALTER INDEX idx_members_search_name_trgm_next RENAME TO idx_members_search_name_trgm;
+
+  -- ① 规范函数名已切换为新实现
+  ASSERT (SELECT oid FROM pg_proc WHERE proname='mesh_search_norm') = v_next_oid,
+         'T38 FAIL: 切换后 public.mesh_search_norm 规范名应指向新版实现';
+  ASSERT public.mesh_search_norm('José') = 'jose', 'T38 FAIL: 新实现归一行为不变(José→jose)';
+
+  -- ② 切换后投影值一致(回补无遗漏——双写期无空窗的前提)
+  ASSERT NOT EXISTS (SELECT 1 FROM members WHERE search_name IS DISTINCT FROM search_name_prev),
+         'T38 FAIL: 切换后新旧投影不一致(回补遗漏)';
+
+  -- ③ 前缀查询命中切换后的新版索引(自然规划,不强制 planner)
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''jo'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T38 FAIL: 切换后前缀查询应命中新版 pattern 索引';
+
+  RAISE NOTICE 'PASS T38: 词典升级分阶段在线迁移(事务外建新函数/索引 → 回补 → 单事务原子改名切换 → 查询命中新索引)';
+END $$;
+
+-- 阶段 3(事务外):清理本 smoke test 的旧版成员索引与过渡列。
+-- 注:生产迁移须先对其余 9 条 mesh_search_norm 表达式索引(issues/projects/views/chat_sessions)
+-- 按同一模式建 _next 并切换,全部接管后方可 DROP FUNCTION public.mesh_search_norm_prev(TEXT)
+-- (该函数仍被未切换的表达式索引按 OID 依赖,提前 DROP 会被拒绝——此即「切换完整性」的天然保护)。
+DROP INDEX idx_members_search_name_prefix_prev;
+DROP INDEX idx_members_search_name_trgm_prev;
+ALTER TABLE members DROP COLUMN search_name_prev;
+
 \echo '============================================================'
-\echo 'ALL R2+R3+R4+R5+MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4+R5+MES-76(R2/R3/R4) SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'

@@ -115,13 +115,21 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
 $$ SELECT lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD))) $$;
 ```
 
-> **词典版本与 REINDEX 契约(R3-M1 写死)**:`unaccent` 词典数据随扩展/操作系统 locale 数据升级可能变化,届时既有表达式索引与 `search_name` 投影相对新词典**陈旧**。迁移台账必须记录 **unaccent `extversion` + 归一测试向量指纹**(如 `mesh_search_norm('José Àncône')` 的结果哈希);**任何词典/扩展升级的迁移必须同事务执行:① `REINDEX INDEX CONCURRENTLY` 全部 `mesh_search_norm` 表达式索引(上文 10 条)② 全量回补 `members.search_name`**,否则召回退化且索引与投影漂移。该函数与索引的 PG16 可执行性 + 归一行为(`José→jose`)+ 前缀查询命中断言在 `docs/specs/validation/schema_r2_validation.sql`(T37)实跑验证。
+> **词典升级迁移契约(R3-M1 建立,R4-H4 写死为 PG16 可执行方案)**:`unaccent` 词典数据随扩展/操作系统 locale 数据升级可能变化,届时既有表达式索引与 `search_name` 投影相对新词典**陈旧**。迁移台账必须记录 **unaccent `extversion` + 归一测试向量指纹**(如 `public.mesh_search_norm('José Àncône')` 的结果哈希);指纹变化即触发下述升级流程。**`REINDEX INDEX CONCURRENTLY` 不可在事务块内执行(PostgreSQL 16 实跑证实),故不采用「同事务 REINDEX + 回补」;唯一方案为版本化分阶段在线迁移**:
+>
+> 1. **建新版函数(事务外)**:`CREATE FUNCTION public.mesh_search_norm_next(…)`——新词典/规则的实现(显式 regdictionary 指向升级后的词典对象);
+> 2. **并发建新版索引(事务外,逐条 `CREATE INDEX CONCURRENTLY`)**:对上文 **9 条函数表达式索引**逐一建 `idx_*_next`(表达式改用 `public.mesh_search_norm_next`);成员投影索引待列切换后随新列重建;
+> 3. **新增投影列并分批回补(事务外,小批次提交)**:`ALTER TABLE members ADD COLUMN search_name_next TEXT NOT NULL DEFAULT ''` 后按主键分批 `UPDATE … SET search_name_next = public.mesh_search_norm_next(解析链)`(每批 ≤1 万行,不持长事务),回补期间写入路径**双写** `search_name` 与 `search_name_next`(保证切换点无空窗);
+> 4. **原子切换(单一快速事务)**:同事务内 `ALTER FUNCTION public.mesh_search_norm RENAME TO mesh_search_norm_prev; ALTER FUNCTION public.mesh_search_norm_next RENAME TO mesh_search_norm;`(查询按名解析 → 自动落到新实现;新 `_next` 索引表达式随之显示为 `mesh_search_norm`,与查询逐字一致)+ 投影列与索引改名切换(`search_name_next → search_name`、`idx_*_next → idx_*`,旧名让位)+ 停双写;**改名不更 OID,旧索引仍指向旧函数(现名 `mesh_search_norm_prev`)自然失配,新索引接管全部查询**;
+> 5. **清理旧对象(事务外)**:校验新索引命中与归一致性后 `DROP INDEX CONCURRENTLY idx_*_prev`、`DROP FUNCTION public.mesh_search_norm_prev`、删旧投影列(若保留为过渡列)。
+>
+> 每阶段可独立失败回滚(切换前失败:删 `_next` 对象即复原;切换后失败:反向改名回切)。该函数与索引的 PG16 可执行性 + 归一行为(`José→jose`)+ 前缀查询命中断言 + **本升级路径 smoke test**(建 `_next` 函数/索引 → 回补 → 原子改名切换 → 查询命中新索引 → 清理)在 `docs/specs/validation/schema_r2_validation.sql`(T37 建表与行为 / T38 升级路径)实跑验证。
 
 ```sql
 -- 1. member/agent:受控同步的搜索投影(评审 H3 主方案)
 ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT '';
 COMMENT ON COLUMN members.search_name IS
-  '检索专用投影 = mesh_search_norm(README §6.1 显示名解析链结果);仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2';
+  '检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2';
 
 -- 1a. ≥3 字符模糊:trigram GIN(search_name 已是归一值,索引/查询表达式一致)
 CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
@@ -138,9 +146,9 @@ CREATE INDEX idx_members_ws_type_active ON members (workspace_id, member_type)
 CREATE INDEX idx_issues_title_trgm ON issues USING gin ((public.mesh_search_norm(title)) gin_trgm_ops)
   WHERE deleted_at IS NULL;
 -- 2c. 1–2 字符前缀:title 与 identifier 各一条 pattern 索引(查询表达式与索引表达式逐字一致)
-CREATE INDEX idx_issues_title_prefix ON issues (workspace_id, (mesh_search_norm(title)) text_pattern_ops)
+CREATE INDEX idx_issues_title_prefix ON issues (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops)
   WHERE deleted_at IS NULL;
-CREATE INDEX idx_issues_identifier_prefix ON issues (workspace_id, (mesh_search_norm(identifier)) text_pattern_ops)
+CREATE INDEX idx_issues_identifier_prefix ON issues (workspace_id, (public.mesh_search_norm(identifier)) text_pattern_ops)
   WHERE deleted_at IS NULL;
 -- 2d. 租户/软删组合(与上述 GIN 做 BitmapAnd:租户 + 软删谓词下推)
 CREATE INDEX idx_issues_ws_not_deleted ON issues (workspace_id, project_id)
@@ -149,27 +157,29 @@ CREATE INDEX idx_issues_ws_not_deleted ON issues (workspace_id, project_id)
 -- 3. project(私有项目可见性谓词在查询内,§3.3)
 CREATE INDEX idx_projects_name_trgm ON projects USING gin ((public.mesh_search_norm(name)) gin_trgm_ops)
   WHERE deleted_at IS NULL;
-CREATE INDEX idx_projects_name_prefix ON projects (workspace_id, (mesh_search_norm(name)) text_pattern_ops)
+CREATE INDEX idx_projects_name_prefix ON projects (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops)
   WHERE deleted_at IS NULL;
 
 -- 4. view(修订:此前仅 B-tree,不支持 Spec 承诺的模糊匹配)
 CREATE INDEX idx_views_name_trgm ON views USING gin ((public.mesh_search_norm(name)) gin_trgm_ops);
-CREATE INDEX idx_views_name_prefix ON views (workspace_id, (mesh_search_norm(name)) text_pattern_ops);
+CREATE INDEX idx_views_name_prefix ON views (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops);
 
 -- 5. chat_session(参与者谓词在查询内,§3.3)
 CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin ((public.mesh_search_norm(title)) gin_trgm_ops);
-CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (mesh_search_norm(title)) text_pattern_ops);
+CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops);
 ```
 
-**查询表达式必须与索引表达式逐字一致**(否则 pattern/GIN 不走索引):前缀路径一律 `WHERE workspace_id = $ws AND mesh_search_norm(<col>) LIKE mesh_search_norm($q) || '%'`(members 为 `search_name LIKE mesh_search_norm($q) || '%'`,列本身已归一,**且必须携带可见性谓词 `AND status <> 'removed'`——与部分索引谓词逐字一致,缺此谓词部分索引不可选**,§3.3 名册可见性同口径);trigram 路径一律 `WHERE workspace_id = $ws AND mesh_search_norm(<col>) % mesh_search_norm($q)`(部分索引携带的 `deleted_at IS NULL` 谓词同理随查询携带)。**不存在「或顺序扫描」分支**——§5.2 以 EXPLAIN 断言三条路径均走上述索引(T37 已在 PG16 实跑断言前缀路径命中 `idx_members_search_name_prefix`)。
+> **索引计数(R4-M2 写死,T37 精确断言)**:搜索索引共 **11 条** = **9 条 `public.mesh_search_norm` 函数表达式索引**(issues ×3:title trigram/title prefix/identifier prefix;projects ×2;views ×2;chat_sessions ×2)+ **2 条成员投影列索引**(`idx_members_search_name_trgm` / `idx_members_search_name_prefix`,列本身已归一,非函数表达式)。`idx_members_ws_type_active` 与 `idx_issues_ws_not_deleted` 为租户/状态**支撑索引**,不计入 11 条搜索索引。
+
+**查询表达式必须与索引表达式逐字一致**(否则 pattern/GIN 不走索引):前缀路径一律 `WHERE workspace_id = $ws AND public.mesh_search_norm(<col>) LIKE public.mesh_search_norm($q) || '%'`(members 为 `search_name LIKE public.mesh_search_norm($q) || '%'`,列本身已归一,**且必须携带可见性谓词 `AND status <> 'removed'`——与部分索引谓词逐字一致,缺此谓词部分索引不可选**,§3.3 名册可见性同口径);trigram 路径一律 `WHERE workspace_id = $ws AND public.mesh_search_norm(<col>) % public.mesh_search_norm($q)`(部分索引携带的 `deleted_at IS NULL` 谓词同理随查询携带)。**不存在「或顺序扫描」分支**——§5.2 以 EXPLAIN 断言三条路径均走上述索引(T37 已在 PG16 实跑断言前缀路径命中 `idx_members_search_name_prefix`)。
 
 **`members.search_name` 同步契约(写死,防漂移)**:
 
 | 环节 | 规则 |
 |------|------|
-| 写入路径(同事务) | ① member 入册(人类/agent):`search_name = mesh_search_norm(按显示名链解析结果)`;② `members.display_override` 变更:重算;③ `users.display_name`/`users.email` 变更(改名):同事务重算该 user 的**全部** members 行(跨工作区);④ `agents.name` 变更:同事务重算该 agent 的全部 members 行。服务层写路径统一经 `sync_member_search_name(member_id)` 单一函数(内部只调 `mesh_search_norm`,不另写归一逻辑) |
-| 回填迁移 | 上线迁移一次性全量回填(`UPDATE members m SET search_name = mesh_search_norm(...) FROM users/agents ...`——**与索引/查询同一函数**),分批提交,迁移完成前搜索降级为 `mesh_search_norm(col) LIKE ...` 无索引兜底(不阻塞发布) |
-| 周期对账 | 低频 reconcile 任务(每日)全量比对投影与 `mesh_search_norm(实时解析链)`,不一致即修复并告警(漂移可观测) |
+| 写入路径(同事务) | ① member 入册(人类/agent):`search_name = mesh_search_norm(按显示名链解析结果)`;② `members.display_override` 变更:重算;③ `users.display_name`/`users.email` 变更(改名):同事务重算该 user 的**全部** members 行(跨工作区);④ `agents.name` 变更:同事务重算该 agent 的全部 members 行。服务层写路径统一经 `sync_member_search_name(member_id)` 单一函数(内部只调 `public.mesh_search_norm`,不另写归一逻辑;**词典升级迁移期按 §2.2 升级契约双写 `search_name`/`search_name_next`**) |
+| 回填迁移 | 上线迁移一次性全量回填(`UPDATE members m SET search_name = public.mesh_search_norm(...) FROM users/agents ...`——**与索引/查询同一函数**),分批提交(每批 ≤1 万行,不持长事务),迁移完成前搜索降级为 `public.mesh_search_norm(col) LIKE ...` 无索引兜底(不阻塞发布) |
+| 周期对账 | 低频 reconcile 任务(每日)全量比对投影与 `public.mesh_search_norm(实时解析链)`,不一致即修复并告警(漂移可观测) |
 | 一致性验收 | 集成测试:改名(users.display_name / agents.name / display_override)后搜索**立即**命中新名、旧名不再命中;**大写/带重音输入**(如 `ZHANG`/`José`)经归一命中小写去重音投影;跨工作区同一 user 的两条 members 行同步更新 |
 | 与 README §6.1 的关系 | `search_name` 是 README §6.1「若个别高频表确需存储快照,必须强制一致并明示」条款下的**受控搜索投影**:非显示真源(显示一律实时解析链)、同步由单一函数 + 对账兜底、在本 Spec 明示 |
 
@@ -177,9 +187,9 @@ CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (mes
 
 | 输入形态 | 路径 | 命中索引 | 候选上限 |
 |----------|------|----------|----------|
-| 1–2 字符 | trigram 在 <3 字符不可用:仅走**归一前缀匹配**(`mesh_search_norm(<col>) LIKE mesh_search_norm($q)\|\|'%'`)+ 本地命令匹配;对象类结果**仅前缀命中**,不做模糊 | 各实体 `*_prefix`(B-tree `text_pattern_ops`,workspace-scoped) | 每类 ≤5 |
+| 1–2 字符 | trigram 在 <3 字符不可用:仅走**归一前缀匹配**(`public.mesh_search_norm(<col>) LIKE public.mesh_search_norm($q)\|\|'%'`)+ 本地命令匹配;对象类结果**仅前缀命中**,不做模糊 | 各实体 `*_prefix`(B-tree `text_pattern_ops`,workspace-scoped) | 每类 ≤5 |
 | 完整 identifier(归一后匹配 `^[a-z0-9]+-\d+$`) | **identifier 等值快路径**(`UNIQUE(workspace_id, identifier)`,**canonical uppercase 规范化等值**:`identifier = upper(trim($q))`——identifier 存储即大写规范形(README §6.3 `KEY-N`),输入 `web-124` 经 `upper()` 命中 `WEB-124`;R3-M4 收口:此前「原始值等值」使小写输入进快路径却落空),跳过 150ms 防抖,命中即顶置 | `uq_issues_identifier` 唯一索引 | 1(顶置)+ 常规路径补齐 |
-| ≥3 字符 | trigram 相似度(`mesh_search_norm(<col>) % mesh_search_norm($q)`)+ §4.6 分层打分;可见性 JOIN 在查询内(§3.3) | 各实体 `*_trgm`(GIN)+ 租户/软删部分索引 BitmapAnd | 每类 ≤20,合并后 ≤ `limit×2` |
+| ≥3 字符 | trigram 相似度(`public.mesh_search_norm(<col>) % public.mesh_search_norm($q)`)+ §4.6 分层打分;可见性 JOIN 在查询内(§3.3) | 各实体 `*_trgm`(GIN)+ 租户/软删部分索引 BitmapAnd | 每类 ≤20,合并后 ≤ `limit×2` |
 
 - 一切查询 SQL 携带 `workspace_id` 复合前缀谓词 + RLS 纵深防御(§6.2);
 - **可见性过滤一律在查询内 JOIN/WHERE 完成**(§3.3),EXPLAIN 证明无「先取后筛」;
@@ -454,7 +464,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 > 词边界/驼峰/路径分隔 > 连续子串 > 子序列模糊 > 副标题/关键词兜底
 ```
 
-- 归一化:匹配前经 `mesh_search_norm`(NFKD + 去重音 + 小写,§2.2 唯一归一函数),**展示保留原文**(highlight 在原文上计算,§3.2);分词覆盖空格/`-`/`_`/`/`/`.`/驼峰边界;
+- 归一化:匹配前经 `public.mesh_search_norm`(NFKD + 去重音 + 小写,§2.2 唯一归一函数),**展示保留原文**(highlight 在原文上计算,§3.2);分词覆盖空格/`-`/`_`/`/`/`.`/驼峰边界;
 - **identifier 精确命中直接顶置**(等值快路径);
 - **服务端对象排序只用数据库可稳定计算的全序(评审 R2-H4 收口,写死)**——本地信号(最近使用 recency / 使用频率 frequency / 当前页面上下文)**不参与服务端对象分页**:recents/frequency 明确为 localStorage 纯本地(§1.3 不建表、不上传服务端),服务端拿不到也无法稳定计算,放入 keyset 全序会使 cursor 单调翻页不可实现,且上传本地行为构成隐私面。它们**仅用于**:本地命令条目排序、空态组装(§4.2.1)。(若未来坚持让本地信号参与对象排序,必须新增**显式请求输入**(客户端上传的有界排名向量)、将其纳入 cursor 绑定指纹,并在本节与 §5.3 声明隐私边界——本期不做,YAGNI。)
 - **全序 = keyset 排序键(与 §3.2 cursor 内部元组逐因子一一对应)**:`score_bucket DESC`(文本相关性主分,DB 内由 trigram 相似度 + 分层匹配规则计算,固定精度量化为整数,杜绝浮点不可复现)→ `title_len ASC`(标题更短优先)→ `title_lex ASC`(归一后标题字典序)→ `type ASC` → `id ASC`(终极确定性)。**每一因子均可由数据库对结果行稳定计算**——不存在依赖客户端状态或不可复现的因子(「原始顺序」「本地 recency」一律不进全序);cursor 携带全序完整元组 + 绑定指纹(§3.2),翻页严格单调推进,跨页无重复无遗漏;
@@ -504,7 +514,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 - [ ] 搜索 P95 < 300ms(热缓存,10 万 issue / 1 万成员工作区,q 为常见短词);identifier 精确命中 P95 < 100ms。**基准按 README §10**:k6 50 VU 稳态 + 100 VU 峰值、冷/热缓存各标注;查询携带**真实可见性 JOIN**(成员资格/项目可见性/私有 agent 谓词,§3.3),不以去权限的简化查询充数(评审 H3 收口)。
 - [ ] 命令面板本地命令过滤 < 16ms(单帧内);服务端结果防抖 150ms + 过期取消,无可感卡顿。
-- [ ] **三条查询路径各有 `EXPLAIN (ANALYZE, BUFFERS)`**(§2.2):1–2 字符前缀路径(**命中各实体 `*_prefix` B-tree pattern 索引,无全表顺序扫描**)、完整 identifier 快路径(唯一索引)、≥3 字符 trigram 路径(归一表达式 GIN + 租户/软删 BitmapAnd),在 10 万 issue / 1 万成员分布下逐条证明;**索引表达式 / 查询表达式 / 回填三方统一经 `mesh_search_norm`**(大写 + 带重音输入命中归一投影,EXPLAIN 仍走索引——表达式漂移即索引失效,本项即其回归断言);`members.search_name` 投影改名后即时可搜(同步契约验收)。
+- [ ] **三条查询路径各有 `EXPLAIN (ANALYZE, BUFFERS)`**(§2.2):1–2 字符前缀路径(**命中各实体 `*_prefix` B-tree pattern 索引,无全表顺序扫描**)、完整 identifier 快路径(唯一索引)、≥3 字符 trigram 路径(归一表达式 GIN + 租户/软删 BitmapAnd),在 10 万 issue / 1 万成员分布下逐条证明;**索引表达式 / 查询表达式 / 回填三方统一经 `public.mesh_search_norm`**(大写 + 带重音输入命中归一投影,EXPLAIN 仍走索引——表达式漂移即索引失效,本项即其回归断言);`members.search_name` 投影改名后即时可搜(同步契约验收)。
 
 ### 5.3 安全与一致性
 

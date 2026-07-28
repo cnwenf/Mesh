@@ -29,6 +29,15 @@ docs/specs/**/*.md 与 docs/specs/**/*.sql(含 validation 权威 SQL),把以下�
   mesh_rt_)+ `api_tokens` + `revoked_at`——runtime 令牌停用为 runtime 状态 +
   `runtimes.runtime_token_hash` 清除/轮换,不经 api_tokens(R3-H4;此前漏掉
   runtime.md §3.5「停用 token → api_tokens.revoked_at」残留)。
+规则 W(CLI/runtime 环境变量并列):出现「CLI/runtime」(斜杠并列)——runtime 机器令牌
+  不经 api_tokens / CLI 环境变量通道(与 mesh_rt_ 唯一真源冲突,R4-M3;此前 auth.md
+  §4.5/§5.5「API token 由 CLI/runtime 从环境变量读取」残留未被旧规则捕获)。
+规则 X(CSRF token 残留):同一行出现「CSRF token」+ SameSite/cookie 会话——Web 会话
+  CSRF 防护契约为 SameSite=Strict + Origin/Referer 同源校验,无独立 CSRF token
+  (R4-M3;否定语境「无独立 CSRF token」等放行)。
+规则 Y(登录响应体 refresh 残留):`/auth/login` 行或「登录…返回」行出现 refresh 且无
+  「仅经/Set-Cookie/绝不/不含/无」标记——密码登录仅 Web cookie-only,响应体绝无
+  refresh 明文(R4-H1/R4-M3)。
 
 **坏样例自测(R3-M2)**:每条规则携带一条注入坏样例,每次运行时先对坏样例语料执行
 全部规则,断言每条规则**必然命中**——避免「绿灯只证明正则没命中」(规则写坏/表达式
@@ -68,6 +77,16 @@ AGENT_URL_MEMBER_ID_RE = re.compile(r'"url"\s*:\s*"[^"]*/agents/mem[_-]')
 RUNTIME_TOKEN_WORD_RE = re.compile(r"runtime_token|mesh_rt_")
 REVOKED_AT_RE = re.compile(r"revoked_at")
 APITOKENS_RE = re.compile(r"api_tokens")
+
+CLI_SLASH_RUNTIME_RE = re.compile(r"CLI\s*/\s*runtime", re.IGNORECASE)
+
+CSRF_TOKEN_RE = re.compile(r"CSRF\s*token", re.IGNORECASE)
+CSRF_CONTEXT_RE = re.compile(r"SameSite|cookie 会话")
+CSRF_NEGATION_MARKERS = ("无独立", "不再用", "不需要", "无 CSRF token", "不提供")
+
+LOGIN_REFRESH_RE = re.compile(r"auth/login|登录[\s\S]{0,12}返回")
+REFRESH_WORD_RE = re.compile(r"refresh", re.IGNORECASE)
+LOGIN_REFRESH_ALLOW_MARKERS = ("仅经", "Set-Cookie", "绝不", "不含", "绝无", "无 refresh", "只有 access")
 
 FENCE_RE = re.compile(r"^\s*```")
 AGENT_HOLDER_RE = re.compile(r"owner_member_id.*mem[-_]agent|agent 运行凭证")
@@ -118,9 +137,31 @@ def scan_lines(lines: list[str], source: str) -> list[str]:
         # 规则 U:搜索结果 agent URL 用 /agents/ + members.id
         if AGENT_URL_MEMBER_ID_RE.search(line):
             violations.append(f"{source}:{lineno}: 规则 U: 成员类(members.id)结果 URL 使用 /agents/(应为 /members/{{member_id}})")
-        # 规则 V:runtime 令牌停用经 api_tokens.revoked_at
-        if RUNTIME_TOKEN_WORD_RE.search(line) and APITOKENS_RE.search(line) and REVOKED_AT_RE.search(line):
+        # 规则 V:runtime 令牌停用经 api_tokens.revoked_at(「mesh_rt_ 不入 api_tokens」等否定语境放行)
+        if (
+            RUNTIME_TOKEN_WORD_RE.search(line)
+            and APITOKENS_RE.search(line)
+            and REVOKED_AT_RE.search(line)
+            and not any(m in line for m in ("不入", "不经", "不进", "无该行", "不共"))
+        ):
             violations.append(f"{source}:{lineno}: 规则 V: runtime 令牌停用指向 api_tokens.revoked_at(应为 runtime 状态 + runtime_token_hash 清除/轮换)")
+        # 规则 W:CLI/runtime 环境变量并列(runtime 令牌不经 CLI 环境变量通道)
+        if CLI_SLASH_RUNTIME_RE.search(line):
+            violations.append(f"{source}:{lineno}: 规则 W: 「CLI/runtime」并列残留(runtime 机器令牌 mesh_rt_ 不经 api_tokens / CLI 环境变量通道)")
+        # 规则 X:CSRF token 残留(新契约为 SameSite + Origin/Referer,否定语境放行)
+        if (
+            CSRF_TOKEN_RE.search(line)
+            and CSRF_CONTEXT_RE.search(line)
+            and not any(m in line for m in CSRF_NEGATION_MARKERS)
+        ):
+            violations.append(f"{source}:{lineno}: 规则 X: 「CSRF token」残留(Web 会话 CSRF 防护为 SameSite=Strict + Origin/Referer 同源校验,无独立 CSRF token)")
+        # 规则 Y:登录响应体 refresh 残留(密码登录仅 Web cookie-only,响应体绝无 refresh)
+        if (
+            LOGIN_REFRESH_RE.search(line)
+            and REFRESH_WORD_RE.search(line)
+            and not any(m in line for m in LOGIN_REFRESH_ALLOW_MARKERS)
+        ):
+            violations.append(f"{source}:{lineno}: 规则 Y: 登录端点/描述出现响应体 refresh(密码登录仅 Web cookie-only,refresh 仅经 Set-Cookie 下发,绝不进响应体)")
 
     if in_fence and fence_block:
         check_block(fence_block)
@@ -146,6 +187,9 @@ SELF_TEST_BAD_LINES = {
     "规则 D": "既有扁平路由保留为应用内别名,访问时 replaceState(302 语义)至规范路由。",
     "规则 U": '{ "type": "agent", "id": "mem_b2", "url": "/w/acme/agents/mem_b2" }',
     "规则 V": "runtime 进入 paused 时停用其 runtime_token(api_tokens.revoked_at 置位)。",
+    "规则 W": "- [ ] 防 XSS 窃取:refresh 优先 httpOnly + Secure cookie,access 放内存;API token 由 CLI/runtime 从环境变量读取。",
+    "规则 X": "- [ ] 防 CSRF:OAuth 用 state + PKCE;cookie 会话用 `SameSite` + CSRF token。",
+    "规则 Y": "| POST | `/api/v1/auth/login` | 登录,返回 access + refresh | ✅ |",
 }
 SELF_TEST_BAD_BLOCK = {
     "规则 G": [
