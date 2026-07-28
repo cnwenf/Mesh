@@ -10,6 +10,14 @@ from mesh.db.models.attachment import (
     UploadSession,
 )
 from mesh.db.models.audit import AuditLog
+from mesh.db.models.autopilot import (
+    Autopilot,
+    AutopilotArtifact,
+    AutopilotRun,
+    AutopilotRunAttempt,
+    WebhookEvent,
+    WebhookSecret,
+)
 from mesh.db.models.comment import Comment, CommentMention, CommentReaction
 from mesh.db.models.issue import (
     Issue,
@@ -102,6 +110,10 @@ __all__ = [
     "AttachmentLink",
     "AttachmentQuota",
     "AuditLog",
+    "Autopilot",
+    "AutopilotArtifact",
+    "AutopilotRun",
+    "AutopilotRunAttempt",
     "Comment",
     "CommentMention",
     "CommentReaction",
@@ -163,6 +175,8 @@ __all__ = [
     "User",
     "View",
     "ViewIssuePosition",
+    "WebhookEvent",
+    "WebhookSecret",
     "Workspace",
     "WorkspaceInvitation",
     "WorkspaceInvitationRedemption",

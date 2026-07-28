@@ -220,6 +220,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `comment:write` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `agent:trigger`(@提及触发运行)**[Mesh 特色]** | ✅ | ✅ | ✅ | ❌ | ⚠️受限(防回环) |
 | `agent:manage` | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `autopilot:manage`(自动化规则管理 / kill switch) | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `token:manage`(创建/撤销 token) | ✅ | ✅ | ✅(仅自己) | ❌ | ❌ |
 
 ### 2.8 与其他模块的外键关系

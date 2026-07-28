@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.autopilot.approvals import apply_approval_decision
 from mesh.db.models.agent import Agent
 from mesh.db.models.issue import Issue
 from mesh.db.models.member import Member
@@ -192,11 +193,11 @@ async def request_tool_approval(
             workspace_id=workspace_id,
             event_type="notification.fanout",
             payload={
-                "kind": "approval_requested",
-                "priority": "critical",
+                "type": "review_requested",
                 "approval_id": str(approval.id),
                 "execution_id": str(execution.id),
                 "agent_id": str(execution.agent_id) if execution.agent_id else None,
+                "group_key": f"execution:{execution.id}:approval",
             },
             idempotency_key=f"approval:{approval.id}:notify",
         )
@@ -285,6 +286,15 @@ async def decide_approval(
                     )
                 execution_status = execution.status
 
+        run_status = None
+        if approval.subject_run_id is not None:
+            # autopilot_action subject (README §6.10): approve resumes the
+            # parked run (waiting_approval → running, executor dispatches);
+            # reject cancels it.
+            run_status = await apply_approval_decision(
+                session, approval=approval, approve=approve, now=now
+            )
+
         await emit_realtime(
             session,
             workspace_id=workspace_id,
@@ -298,6 +308,10 @@ async def decide_approval(
                     if approval.subject_execution_id
                     else None
                 ),
+                "run_id": (
+                    str(approval.subject_run_id) if approval.subject_run_id else None
+                ),
+                "run_status": run_status,
             },
             idempotency_key=f"approval:{approval.id}:decided",
         )
@@ -364,6 +378,39 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
                 ).scalar_one_or_none()
                 if agent is not None and agent.owner_user_id == member.user_id:
                     return
+    if approval.subject_run_id is not None:
+        from mesh.db.models.autopilot import Autopilot, AutopilotRun
+
+        run = (
+            await session.execute(
+                select(AutopilotRun).where(AutopilotRun.id == approval.subject_run_id)
+            )
+        ).scalar_one_or_none()
+        if run is not None:
+            # Trigger path: the member who manually triggered the run, or the
+            # rule creator (the persistent ownership signal).
+            if run.triggered_by is not None and run.triggered_by == member.id:
+                return
+            rule = (
+                await session.execute(
+                    select(Autopilot).where(Autopilot.id == run.autopilot_id)
+                )
+            ).scalar_one_or_none()
+            if rule is not None:
+                if rule.created_by == member.id:
+                    return
+                # Executor agent owner path.
+                if rule.executor_agent_id is not None:
+                    agent = (
+                        await session.execute(
+                            select(Agent).where(
+                                Agent.id == rule.executor_agent_id,
+                                Agent.workspace_id == approval.workspace_id,
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if agent is not None and agent.owner_user_id == member.user_id:
+                        return
     raise ForbiddenError("not permitted to decide this approval")
 
 

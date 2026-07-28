@@ -34,6 +34,11 @@ import { IssuesPage } from './features/issues/IssuesPage';
 import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
 import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
+import { AutopilotDetailPage } from './features/autopilots/AutopilotDetailPage';
+import { AutopilotEditorPage } from './features/autopilots/AutopilotEditorPage';
+import { AutopilotRunDetailPage } from './features/autopilots/AutopilotRunDetailPage';
+import { AutopilotsPage } from './features/autopilots/AutopilotsPage';
+import { WebhookConfigPage } from './features/autopilots/WebhookConfigPage';
 import { ExecutionDetailPage } from './features/runtimes/ExecutionDetailPage';
 import { RuntimeDetailPage } from './features/runtimes/RuntimeDetailPage';
 import { RuntimesPage } from './features/runtimes/RuntimesPage';
@@ -193,7 +198,13 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="runtimes" element={<RuntimesPage />} />
                 <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
                 <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
-                <Route path="automation" element={<Navigate to="/runtimes" replace />} />
+                <Route path="autopilots" element={<AutopilotsPage />} />
+                <Route path="autopilots/new" element={<AutopilotEditorPage />} />
+                <Route path="autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+                <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />
+                <Route path="autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
+                <Route path="webhooks" element={<WebhookConfigPage />} />
+                <Route path="automation" element={<Navigate to="/autopilots" replace />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

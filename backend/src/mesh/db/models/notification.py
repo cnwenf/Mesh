@@ -51,6 +51,11 @@ NOTIFICATION_TYPE_VALUES = (
     "execution_finished",
     "review_requested",
     "due_soon",
+    # autopilot.md §4.6 / README §6.13: circuit-break alerts (critical) and
+    # plain autopilot notices (normal) — the matrix is the authority, these
+    # two are its autopilot-domain rows.
+    "autopilot_alert",
+    "autopilot_notice",
 )
 NOTIFICATION_PRIORITY_VALUES = ("critical", "normal")
 ACTOR_KIND_VALUES = ("member", "system")

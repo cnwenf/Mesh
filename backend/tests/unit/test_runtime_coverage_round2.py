@@ -651,8 +651,26 @@ async def test_reaper_expires_approval_without_execution_and_non_awaiting(sessio
     from mesh.runtime.reaper import run_reaper_pass
 
     world = await seed_world(session_factory)
-    # (a) autopilot_action subject: no execution link at all.
+    # (a) autopilot_action subject: the README §6.10 R2 physical composite FK
+    # (approvals.subject_run_id → autopilot_runs) requires a real run row;
+    # seed a minimal rule + pending run, then an approval over it.
+    rule_id = uuid.uuid4()
+    run_id = uuid.uuid4()
     async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO autopilots (id, workspace_id, name, trigger_type, created_by) "
+                "VALUES (:ru, :ws, 'reaper-rule', 'schedule', :m)"
+            ),
+            {"ru": rule_id, "ws": world["ws_id"], "m": world["member_id"]},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO autopilot_runs (id, workspace_id, autopilot_id, trigger_type, status) "
+                "VALUES (:r, :ws, :ru, 'schedule', 'pending')"
+            ),
+            {"r": run_id, "ws": world["ws_id"], "ru": rule_id},
+        )
         await session.execute(
             text(
                 "INSERT INTO approvals (id, workspace_id, subject_type, subject_run_id, "
@@ -660,7 +678,7 @@ async def test_reaper_expires_approval_without_execution_and_non_awaiting(sessio
                 "VALUES (:a, :ws, 'autopilot_action', :r, :m, '{}'::jsonb, "
                 "now() - interval '1 minute', 'pending')"
             ),
-            {"a": uuid.uuid4(), "ws": world["ws_id"], "r": uuid.uuid4(), "m": world["member_id"]},
+            {"a": uuid.uuid4(), "ws": world["ws_id"], "r": run_id, "m": world["member_id"]},
         )
     # (b) tool_call on an execution that is NOT awaiting_approval (moved on).
     execution = await make_execution(

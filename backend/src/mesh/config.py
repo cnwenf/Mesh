@@ -281,6 +281,27 @@ class Settings(BaseSettings):
     )
     runtime_release_signing_key_url: str = "https://releases.mesh.example/mesh-release.pub"
 
+    # -- Autopilot module (autopilot.md) ------------------------------------
+    # Scheduler scan cadence (§4.5: 10–30s; PostgreSQL is the only scheduler
+    # source of truth — atomic next_run_at claim, multi-replica safe).
+    autopilot_schedule_interval: float = Field(default=15.0, gt=0)
+    # Due schedule rules claimed per scan pass (SKIP LOCKED batch).
+    autopilot_schedule_batch: int = Field(default=50, ge=1, le=1000)
+    # Run executor / execution-terminal reconciler cadence (§4.5).
+    autopilot_executor_interval: float = Field(default=2.0, gt=0)
+    # Pending autopilot_action approval expiry (README §6.10: the reaper
+    # expires, the run cancels with approval_expired).
+    autopilot_approval_ttl: timedelta = Field(default=timedelta(hours=24), gt=0)
+    # Misfire grace: a schedule slot missed by more than this many seconds is
+    # handled per misfire_policy instead of firing as "on time" (§2.6).
+    autopilot_misfire_grace_seconds: int = Field(default=300, ge=0)
+    # misfire_policy='run_all' catch-up cap per scan (bounded replay).
+    autopilot_run_all_cap: int = Field(default=50, ge=1)
+    # Inbound webhook signature timestamp tolerance window (§3.2: ±300s).
+    autopilot_webhook_timestamp_tolerance: timedelta = Field(
+        default=timedelta(seconds=300), gt=0
+    )
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""

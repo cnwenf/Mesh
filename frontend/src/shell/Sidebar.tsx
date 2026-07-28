@@ -18,6 +18,7 @@ export type NavKey =
   | 'squads'
   | 'cycles'
   | 'chat'
+  | 'autopilots'
   | 'automation'
   | 'settings';
 
@@ -37,7 +38,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'squads', to: '/squads' },
   { key: 'cycles', to: '/cycles' },
   { key: 'chat', to: '/chat' },
-  // 自动化入口指向 Runtimes 模块(runtime.md §4);nav.automation 文案保持不变。
+  // 自动化规则(autopilot.md §4):AI 队友值班表;运行时(runtime.md)单独入口。
+  { key: 'autopilots', to: '/autopilots' },
   { key: 'automation', to: '/runtimes' },
   { key: 'settings', to: '/settings' },
 ];

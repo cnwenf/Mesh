@@ -195,6 +195,23 @@ approvals(README §6.10):subject_type='autopilot_action',经 approvals.subject_r
 **去重唯一键**:`UNIQUE (workspace_id, idempotency_key)`。入站时先尝试插入,命中唯一冲突即视为重复,直接返回成功(幂等)但不再分发。
 **复合 FK 引用前提(README §6.2)**:`webhook_events` 被 `autopilot_runs.webhook_event_id` 复合引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
 
+### 2.5.1 表:`webhook_secrets`(入站凭据,§3.1 / §5.3 配套实现)
+
+§3.1 的 `POST/GET /workspaces/{ws}/webhook-secrets` 与入站端点的签名校验所需凭据存储(§5.3「Webhook 密钥仅存哈希/引用,创建后仅显示一次」的落地形态):
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | 归属 |
+| `label` | TEXT | NOT NULL,默认 `'default'` | 凭据标签 |
+| `token_hash` | TEXT | NOT NULL,`UNIQUE` | 入站 URL `/webhooks/inbound/{token}` 的 token 仅存 **SHA-256 哈希**(查询用,明文不落库) |
+| `encrypted_secret` | TEXT | NOT NULL | HMAC 签名密钥的 **Fernet 密文**(与 `runtime_credentials` 同契约,README §6.16;校验时需解密密重算签名,故非哈希) |
+| `status` | TEXT | NOT NULL,CHECK IN ('active','revoked') | 轮换即 revoke 旧凭据 |
+| `created_by` | UUID | NOT NULL,复合 FK→members | 创建者 |
+| `revoked_at` / `created_at` / `updated_at` | TIMESTAMPTZ | | |
+
+明文 token + secret **仅在创建/轮换响应出现一次**,列表端点绝不回显。入站端点无 Bearer 身份,RLS fail-closed 下经 SECURITY DEFINER 引导函数 `mesh_webhook_secret_by_token_hash(token_hash)` 先查凭据(得 workspace)再设租户 GUC——与 runtime 的 `mesh_runtime_by_token_hash` 同构。规则经 `trigger_config.secret_id` 绑定凭据;轮换保持行 id 不变(旧 token 立即失效,绑定规则继续可用)。
+
 ### 2.6 JSONB 配置结构
 
 **`trigger_config`(定时)**:

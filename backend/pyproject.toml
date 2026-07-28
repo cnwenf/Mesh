@@ -27,6 +27,8 @@ dependencies = [
     "boto3>=1.34",
     "markdown-it-py>=4.2",
     "Pillow>=10.3",
+    "croniter>=2.0",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

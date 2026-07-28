@@ -25,6 +25,9 @@ from mesh.attachment.scanner import HeuristicScanner
 from mesh.attachment.service import SCAN_REQUESTED_EVENT_TYPE
 from mesh.attachment.storage import ObjectStorage
 from mesh.auth.mailer import build_mailer
+from mesh.autopilot.executor import autopilot_executor_loop
+from mesh.autopilot.matcher import match_domain_event
+from mesh.autopilot.scheduler import autopilot_scheduler_loop
 from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
 from mesh.config import ConfigError, Settings, load_settings
 from mesh.db.engine import create_engine_from_settings, create_session_factory
@@ -123,10 +126,25 @@ def build_relay(
         max_agent_chain_depth=settings.max_agent_chain_depth,
         signing_secret=settings.jwt_secret,
     )
+
+    async def _realtime_publish_with_autopilot(session, event):
+        # Autopilot is the outbox relay consumer for domain events
+        # (autopilot.md §4.5, README §6.6): projection first (its frames are
+        # the return value), then trigger matching — run creation is
+        # idempotent through the guardrail dedup window, so relay
+        # redelivery after a crash never doubles a run (§5.1 T5-style
+        # kill-and-restart acceptance).
+        frames = await project_realtime_event(session, event)
+        try:
+            await match_domain_event(session, event)
+        except Exception:  # noqa: BLE001 — matching must not break projection
+            logger.exception("autopilot event matching failed for %s", event.id)
+        return frames
+
     return OutboxRelay(
         session_factory,
         handlers={
-            REALTIME_PUBLISH: project_realtime_event,
+            REALTIME_PUBLISH: _realtime_publish_with_autopilot,
             ASSIGN_EVENT_TYPE: assign_orchestration_handler,
             SCAN_REQUESTED_EVENT_TYPE: _build_scan_requested_handler(settings, storage),
             # runtime.md consumer side of the MES-60 / comment-inbox contract:
@@ -149,6 +167,27 @@ def build_relay(
         fanout=fanout,
     )
 
+
+
+def _autopilot_executor_services(settings: Settings, session_factory) -> dict:
+    """Action-step dependencies for the autopilot run executor.
+
+    Comment/issue actions reuse the owning modules' services (same
+    transaction-per-action contract as the API routes) — no duplicated
+    domain logic.
+    """
+    from mesh.comment_inbox.service import CommentService
+    from mesh.issue.service import IssueService
+
+    return {
+        "session_factory": session_factory,
+        "comment_service": CommentService(
+            session_factory,
+            max_agent_chain_depth=settings.max_agent_chain_depth,
+            signing_secret=settings.jwt_secret,
+        ),
+        "issue_service": IssueService(session_factory),
+    }
 
 async def run_worker(settings: Settings | None = None, stop: asyncio.Event | None = None) -> None:
     """Run all worker loops until ``stop`` is set (or forever)."""
@@ -262,8 +301,30 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                 "runtime-reaper",
                 lambda: runtime_reaper_loop(session_factory, settings=settings, stop=stop),
             ),
+            TaskSpec(
+                "autopilot-scheduler",
+                lambda: autopilot_scheduler_loop(
+                    session_factory,
+                    interval=settings.autopilot_schedule_interval,
+                    batch=settings.autopilot_schedule_batch,
+                    grace_seconds=settings.autopilot_misfire_grace_seconds,
+                    run_all_cap=settings.autopilot_run_all_cap,
+                    stop=stop,
+                ),
+            ),
+            TaskSpec(
+                "autopilot-executor",
+                lambda: autopilot_executor_loop(
+                    session_factory,
+                    services=_autopilot_executor_services(settings, session_factory),
+                    interval=settings.autopilot_executor_interval,
+                    approval_ttl=settings.autopilot_approval_ttl,
+                    stop=stop,
+                ),
+            ),
         ]
     )
+
     try:
         await supervisor.run()
     finally:
