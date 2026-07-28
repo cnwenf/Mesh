@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.api.pagination import DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT, paginate
 from mesh.attachment.storage import ObjectStorage
+from mesh.auth.audit import write_audit
 from mesh.data_jobs.mapping import infer_mapping, validate_export_mapping, validate_import_mapping
 from mesh.data_jobs.parser import read_headers
 from mesh.data_jobs.runner import ENQUEUE_EVENT_TYPE, enqueue_idempotency_key
@@ -121,7 +122,9 @@ class DataJobService:
             source = await self._load_ready_source(session, member=member, attachment_id=source_attachment_id)
             mapping = body.mapping
             if body.auto_infer or not mapping:
-                mapping = await self._infer_mapping(workspace_id, source, body.format)
+                mapping = await self._infer_mapping(
+                    workspace_id, source, body.format, entity_type=body.entity_type
+                )
             validate_import_mapping(mapping, entity_type=body.entity_type)
             # Idempotency: SELECT-first (duplicate key → first result, §6.14).
             if idempotency_key:
@@ -410,7 +413,7 @@ class DataJobService:
         user_agent: str | None = None,
     ) -> dict[str, Any]:
         """Signed download via the attachment channel (§3.6 / §3.9)."""
-        async with self._factory() as session:
+        async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             job = await self._load_owned_job(session, workspace_id=workspace_id, member=member, job_id=job_id)
             if job.result_attachment_id is None:
@@ -427,6 +430,19 @@ class DataJobService:
                 expires_in=ttl,
                 content_disposition=f"attachment; filename*=UTF-8''{quote(attachment.file_name)}",
                 content_type=blob.mime_type,
+            )
+            # §5.4 「下载均有审计日志」: record the product/error-report download.
+            await write_audit(
+                session,
+                workspace_id=workspace_id,
+                actor_member_id=member.id,
+                actor_kind="member",
+                action="data_job.downloaded",
+                resource_type="data_job",
+                resource_id=job.id,
+                metadata={"attachment_id": str(attachment.id), "kind": job.kind},
+                ip_address=ip_address,
+                user_agent=user_agent,
             )
             return {
                 "data": {
@@ -652,7 +668,7 @@ class DataJobService:
             shutil.rmtree(directory, ignore_errors=True)
 
     async def _infer_mapping(
-        self, workspace_id: uuid.UUID, source: Attachment, format: str
+        self, workspace_id: uuid.UUID, source: Attachment, format: str, *, entity_type: str
     ) -> dict[str, Any]:
         """auto_infer: stream the source out, read headers, draft a mapping."""
         blob = None
@@ -683,7 +699,7 @@ class DataJobService:
             import shutil
 
             shutil.rmtree(directory, ignore_errors=True)
-        mapping = infer_mapping(headers, entity_type="issues")
+        mapping = infer_mapping(headers, entity_type=entity_type)
         if not mapping["columns"]:
             raise ValidationError("could not infer any mapping from source headers", code="mapping_invalid")
         return mapping
@@ -695,14 +711,20 @@ class DataJobService:
     async def _load_owned_job(
         self, session: AsyncSession, *, workspace_id: uuid.UUID, member: Member, job_id: uuid.UUID
     ) -> DataJob:
-        """requested_by or workspace admin/owner — invisible = not found."""
+        """requested_by or workspace admin/owner (§3.6/§3.12/§5.4).
+
+        A missing / cross-tenant job is invisible (404 ``not_found``); a job
+        that exists in the caller's workspace but belongs to someone else is
+        a permission failure (403 ``forbidden``) — the error table and the
+        §5.4 acceptance criterion both require 403 for non-owner/admin.
+        """
         job = await session.scalar(
             select(DataJob).where(DataJob.workspace_id == workspace_id, DataJob.id == job_id)
         )
         if job is None:
             raise NotFoundError("data job not found")
         if job.requested_by != member.id and member.role not in _MANAGER_ROLES:
-            raise NotFoundError("data job not found")
+            raise ForbiddenError("data job not accessible")
         return job
 
     def _render_job(self, job: DataJob, *, with_preview: bool = False) -> dict[str, Any]:
@@ -729,6 +751,9 @@ class DataJobService:
         }
         if with_preview:
             payload["error_report"] = job.error_report or []
+            payload["preview"] = (job.params or {}).get("preview") or []
+            payload["warnings"] = (job.params or {}).get("warnings") or []
+            payload["predicted_failed_rows"] = (job.params or {}).get("predicted_failed_rows")
         if job.result_attachment_id is not None:
             payload["download_url"] = f"/api/v1/data-jobs/{job.id}/download"
         return payload

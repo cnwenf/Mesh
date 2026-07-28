@@ -57,7 +57,7 @@ from mesh.db.models.label import (
 )
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import Project, ProjectMember
-from mesh.db.models.workspace import IdentifierPrefixRegistry
+from mesh.db.models.workspace import IdentifierPrefixRegistry, Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ConflictError, MeshError
 from mesh.issue.graph import detect_parent_cycle, lock_issue_graph
@@ -286,6 +286,7 @@ class DataJobWorker:
             total_rows = 0
             failed_rows = 0
             errors_preview: list[dict[str, Any]] = []
+            warnings_preview: list[dict[str, Any]] = []
             preview_cap = self._settings.data_job_preview_rows
             error_cap = self._settings.data_job_error_preview_max
             renew_every = max(self._settings.data_job_batch_size, 100)
@@ -312,6 +313,12 @@ class DataJobWorker:
                             errors_preview.append(errors[0].as_dict())
                     elif len(preview) < preview_cap:
                         preview.append({"row": row_number, "values": _preview_values(values)})
+                    # §2.4 / §5.1: non-fatal transform warnings (e.g. status
+                    # fell back to default) are recorded, not silently dropped —
+                    # the row still succeeds, but the user can review them.
+                    for warning in warnings:
+                        if len(warnings_preview) < error_cap:
+                            warnings_preview.append(warning.as_dict())
                     if total_rows % renew_every == 0:
                         await self._renew_lease(claim, transition=f"validating:{total_rows}")
             except SourceParseError as exc:
@@ -344,12 +351,22 @@ class DataJobWorker:
                 params = dict(current.params or {})
                 params["validated_at"] = self._clock().isoformat()
                 params["predicted_failed_rows"] = failed_rows
+                # §3.3: persist the mapping preview (first N rows, capped) so
+                # GET /data-jobs/{id} and the wizard can show it — previously it
+                # only lived in the realtime event extra and was lost (B6).
+                params["preview"] = preview
+                params["warnings"] = warnings_preview
+                # validate is explicitly repeatable (§2.3); bump a round so each
+                # finalize emits a fresh realtime frame — a static key would be
+                # deduped by the outbox and re-validates would push nothing (B5).
+                validate_round = int(params.get("validate_round") or 0) + 1
+                params["validate_round"] = validate_round
                 current.params = params
                 current.updated_at = self._clock()
                 await self._emit_job_event(
                     session,
                     current,
-                    transition="validated",
+                    transition=f"validated:{validate_round}",
                     extra={"preview": preview, "predicted_failed_rows": failed_rows},
                 )
         finally:
@@ -414,7 +431,7 @@ class DataJobWorker:
             except SourceParseError as exc:
                 await self.fail_job(claim, "source_unparseable", message=str(exc))
                 return
-            await self._resolve_parents(claim, context, source_path)
+            await self._resolve_parents(claim, context, source_path, external_ref_def_id)
             await self._finalize_import(claim, source_path)
         finally:
             _cleanup_dir(scratch_dir)
@@ -585,7 +602,14 @@ class DataJobWorker:
             namespace_key = project.key
         else:
             number = await next_inbox_issue_number(session, workspace_id=claim.workspace_id)
-            namespace_key = DEFAULT_INBOX_PREFIX
+            # §3.7 「与人工新建语义完全一致」: the inbox namespace key honors the
+            # workspace's configurable ``inbox_issue_prefix`` exactly like the
+            # manual create path (issue/service.py), not a hardcoded default.
+            workspace = await session.scalar(
+                select(Workspace).where(Workspace.id == claim.workspace_id)
+            )
+            ws_settings = (workspace.settings if workspace is not None else None) or {}
+            namespace_key = ws_settings.get("inbox_issue_prefix") or DEFAULT_INBOX_PREFIX
         issue = Issue(
             id=target_id,
             workspace_id=claim.workspace_id,
@@ -778,8 +802,13 @@ class DataJobWorker:
         claim: Claim,
         context: transforms.TransformContext,
         source_path: str,
+        external_ref_def_id: uuid.UUID | None,
     ) -> None:
         if claim.entity_type != "issues":
+            return
+        if external_ref_def_id is None:
+            # Without the system field definition there is no authoritative
+            # source for parent keys (§3.7) — nothing to resolve.
             return
         job = await self._load_job(claim.job_id)
         mapping = (job.mapping if job else {}) or {}
@@ -825,6 +854,10 @@ class DataJobWorker:
                 await session.execute(
                     select(IssueCustomFieldValue.issue_id, IssueCustomFieldValue.value_text)
                     .where(IssueCustomFieldValue.workspace_id == claim.workspace_id)
+                    # §3.7: resolve parents ONLY through the ``external_ref``
+                    # system field — any other text custom-field value that
+                    # happens to equal a source parent key must not link.
+                    .where(IssueCustomFieldValue.field_def_id == external_ref_def_id)
                     .where(IssueCustomFieldValue.issue_id.in_([r.target_id for r in ledger_rows]))
                 )
             ).all()
@@ -1218,6 +1251,11 @@ class DataJobWorker:
         )
         if extra_message:
             preview = f"{preview} ({extra_message})"
+        # §3.10 failed row: the critical failure notification carries the
+        # task-level reason (source_changed / export_too_large / …) so the
+        # inbox preview is actionable, not a generic "failed".
+        if job.status == "failed" and job.failure_reason and job.failure_reason not in preview:
+            preview = f"{preview} reason={job.failure_reason}"
         await emit_notification_fanout(
             session,
             workspace_id=job.workspace_id,

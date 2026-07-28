@@ -3,7 +3,27 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.17.1] - 2026-07-29
+## [0.17.2] - 2026-07-29
+
+平台能力层 A:数据导入导出一致性加固(MES-70,import-export.md 五章逐项复核 + 缺陷收口)。对 0.17.1(MES-64)已合入的 import-export 模块做独立 spec 复核,修复若干真实缺陷并补齐 spec 要求的行为;T31 红线 e2e 全量重测仍全绿,模块单测覆盖率维持 ≥90%。
+
+### Fixed
+
+- **过滤导出运行时必失败(HIGH,§3.5/E3)**:`_iter_issue_rows` 此前把扁平 filter dict(§2.4,如 `{"state_category":[…]}`)原样作为 `filters=` 传给 `IssueService.list_issues`,而后者按结构化过滤树(`{field,op}`/`{and/or/not}`)编译 → 每个带过滤条件的导出都在 worker 内 `ValidationError` 并被误判为 `storage_error`。新增 `_translate_export_filters`/`_coerce_filter_date`,把扁平键路由到 `list_issues` 的类型化 kwargs(UUID 解析、日期归一),`state_category` 列表表达为 `in` 树节点。新增过滤导出真实 e2e 断言「仅导出匹配行」。
+- **导入 inbox 编号与人工新建不一致(B1,§3.7)**:无项目导入的 issue 命名空间键此前硬编码 `WS`,现改读工作区 `settings.inbox_issue_prefix`(与 issue 服务手工创建路径完全一致),自定义收件箱前缀的工作区不再产生错号。
+- **父子解析误配任意文本自定义字段(B2,§3.7)**:`_resolve_parents` 的 external_ref 反查此前未按 `field_def_id` 过滤,任何值恰好等于源父键的其它文本自定义字段都会被当作父节点。现仅经 `external_ref` 系统字段解析。
+- **projects 自动推断映射恒 400(B3,§3.2)**:`auto_infer` 此前硬编码 `entity_type="issues"`,项目导入的推断列被 `validate_import_mapping` 全数拒绝。现按请求 `entity_type` 推断。
+- **非属主访问作业返回 404 → 403(§3.6/§3.12/§5.4)**:同租户非属主/非 admin 访问他人作业由 `404` 改为 `403 forbidden`(仅作业不存在/跨租户保留 404),与错误码表及验收口径一致。
+- **映射预览/警告不落库(B4/B6,§2.4/§3.3/§5.1)**:`validate` 现把映射预览(前 N 行)与非致命转换警告(如状态回落默认)持久化到 `params.preview`/`params.warning`,`GET /data-jobs/{id}`(with preview)可回读,供向导展示;此前二者仅存在于一次性实时事件、重验/刷新即丢失。
+- **重复 validate 实时帧被去重(B5,§2.3)**:`validate` 终帧事件键改为按 `validate_round` 单调递增,重验不再被 outbox 去重而漏推。
+- **失败通知缺 failure_reason(§3.10)**:`failed` 终态通知预览追加任务级原因(`source_changed`/`export_too_large` 等),收件箱可直接定位。
+- **下载缺审计日志(§5.4)**:`download_job` 现写 `data_job.downloaded` 审计行(经 `mesh.auth.audit.write_audit`)。
+
+### Verified
+
+- 模块单测覆盖率维持 **≥90%**;data_jobs 真实起服 e2e 9/9 全绿(T31 八条红线 + 新增过滤导出实测);前端导入向导/导出/数据管理单测、typecheck、生产构建全绿(前端无改动)。
+
+
 
 平台能力层 A:数据导入导出全功能实现(MES-64,import-export.md 五章)。统一作业实体 `data_jobs` + 行台账 `data_job_rows`(迁移 0026);CSV/JSON 导入走「validate dry-run → run 部分成功」两段式,逐行值转换 + 逐行错误报告;异步导出经 outbox → worker 流式生成产物并经统一附件通道签名下载。T31 故障恢复红线全量实测:单调 `lease_seq` fencing 拒绝过期旧 worker 的批提交、`checkpoint` 续跑、`row_key` 原子占用「先占后建」杜绝重放重复建实体、源文件哈希冻结 + 替换拒绝、源附件 `ON DELETE RESTRICT`。§6.13 唯一通知矩阵补 data_job 三行(成功默认不进箱 / 部分成功 normal 进箱 / 失败 critical),仅引用不自定义分级;§6.7 `data_job.updated` 实时进度。前端导入向导(分步可回退 / 映射配置 / dry-run 错误表 / 进度)+ 数据管理页 + 项目页情境入口。真实起服 e2e 与真实浏览器 UI 走查全绿,模块单测覆盖率 ≥90%。
 

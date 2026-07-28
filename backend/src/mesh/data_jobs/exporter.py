@@ -171,6 +171,83 @@ def _product_file_name(job: DataJob) -> str:
     return f"{job.entity_type}-{stamp}.{job.format}"
 
 
+# Flat export filter keys (§2.4) routed to ``IssueService.list_issues`` typed
+# flat keyword args; ``state_category`` may be a list and is expressed as an
+# ``in`` structured-tree node because the flat parameter is scalar.
+_UUID_FILTER_KEYS = ("status_id", "assignee_id", "reporter_id", "cycle_id", "milestone_id", "parent_id")
+_DATE_FILTER_KEYS = ("due_before", "due_after")
+
+
+def _coerce_filter_date(value: Any) -> date | None:
+    """Parse an export filter date (ISO string / date / datetime) → ``date``."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return date.fromisoformat(text[:10])
+            except ValueError:
+                return None
+    return None
+
+
+def _translate_export_filters(
+    filters: dict[str, Any] | None, scope_project_id: uuid.UUID | None
+) -> tuple[dict[str, Any], Any]:
+    """Map the flat export filter dict onto ``list_issues`` inputs (§3.5/E3).
+
+    ``list_issues`` accepts typed flat keyword args PLUS a structured
+    ``filters`` tree (``{field, op}`` / ``{and/or/not}`` nodes). The export
+    request uses a flat dict (§2.4), so each key is routed to the right input.
+    Passing the raw flat dict straight through as ``filters=`` made
+    ``compile_filter_tree`` reject every filtered export (no ``field``/``op``)
+    and fail the job as ``storage_error`` — the bug this helper removes.
+
+    Returns ``(flat_kwargs, filter_tree)``.
+    """
+    flat_kwargs: dict[str, Any] = {}
+    if scope_project_id is not None:
+        flat_kwargs["project_id"] = scope_project_id
+    tree_conditions: list[dict[str, Any]] = []
+    for key, value in (filters or {}).items():
+        if value is None:
+            continue
+        if key == "state_category":
+            categories = list(value) if isinstance(value, (list, tuple)) else [value]
+            categories = [category for category in categories if category]
+            if categories:
+                tree_conditions.append({"field": "state_category", "op": "in", "value": categories})
+        elif key in _UUID_FILTER_KEYS:
+            parsed = _uuid_or_none(value)
+            if parsed is not None:
+                flat_kwargs[key] = parsed
+        elif key == "project_id":
+            if "project_id" not in flat_kwargs:
+                parsed = _uuid_or_none(value)
+                if parsed is not None:
+                    flat_kwargs["project_id"] = parsed
+        elif key in _DATE_FILTER_KEYS:
+            parsed_date = _coerce_filter_date(value)
+            if parsed_date is not None:
+                flat_kwargs[key] = parsed_date
+        elif key in ("priority", "q"):
+            flat_kwargs[key] = value
+    if not tree_conditions:
+        filter_tree: Any = None
+    elif len(tree_conditions) == 1:
+        filter_tree = tree_conditions[0]
+    else:
+        filter_tree = {"and": tree_conditions}
+    return flat_kwargs, filter_tree
+
+
 async def _iter_issue_rows(worker: Any, job: DataJob, columns: list[dict[str, str]]):
     """Cursor through the issue list query (filters reuse, §3.5/E3)."""
     params = job.params or {}
@@ -178,19 +255,21 @@ async def _iter_issue_rows(worker: Any, job: DataJob, columns: list[dict[str, st
     viewer = await _load_viewer(worker, job)
     if viewer is None:
         return
-    filters = params.get("filters")
-    project_id = _uuid_or_none(params.get("project_id")) if params.get("scope") == "project" else None
+    scope_project_id = (
+        _uuid_or_none(params.get("project_id")) if params.get("scope") == "project" else None
+    )
+    flat_kwargs, filter_tree = _translate_export_filters(params.get("filters"), scope_project_id)
     cursor: str | None = None
     while True:
         page = await issue_service.list_issues(
             viewer=viewer,
             workspace_id=job.workspace_id,
-            project_id=project_id,
-            filters=filters,
+            filters=filter_tree,
             sort="created_at",
             order="asc",
             limit=_EXPORT_PAGE_LIMIT,
             cursor=cursor,
+            **flat_kwargs,
         )
         items = page.get("data") or ()
         if items:
