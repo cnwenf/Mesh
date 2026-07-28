@@ -3,8 +3,24 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.18.0] - 2026-07-29
+## [0.19.0] - 2026-07-29
+平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
 
+### Added
+
+- **数据模型(analytics.md §2.5,迁移 0028)**:`analytics_snapshots` 物化缓存(`metric_key` CHECK、`scope_key` 入 `UNIQUE(workspace_id, metric_key, scope_key, dim_hash, window_start, window_end)`、`dim_hash` 为 `md5(dimensions::text)` 生成列、`uq_..._ws_id` 复合 FK 红线、fail-closed RLS、查找/过期索引、`mesh_app` 授权);`scope_key` 四态(`ws_admin` / `projects:<hash>` / `project:<id>` / `exec:p<h>:a<h>`)物理分行,跨权限绝不共享。
+- **统一 execution 可见性(§2.3.1 R4/R5)**:`visible_executions` 权威 CTE(两层串联:agent 可见性先行 + 关联 issue 继承项目可见性 / 无 issue 归属 agent)逐字内联到 §2.2.4 workload-B 与 §2.3 agent 主统计 / retry 子查询 / token 聚合(含 `execution_attempts`、`autopilot_runs` 关联);workspace dashboard agent 统计区与 workload 执行部分复用同一构件;`analytics_exec_visible_to` 逐执行布尔形态作可执行参照。
+- **六类指标口径(§2.2/§2.3)**:cycle time `percentile_cont` P50/P90 + `sample_size` + `insufficient_data`(无留痕/负时长不计入且显式披露);velocity / burndown 按**当前归属**(`scope_caliber=current_attribution`,移入/移出按当前集合重算、不还原历史);throughput **`calendar_timezone` 本地日历分桶**(`date_trunc(g, ts AT TIME ZONE cal_tz)`,每桶返回本地标签 + UTC 瞬间窗,跨 DST 23/25h 不错位);workload 成员维度统一(人类行执行列为空)+ 在途执行;agent 统计成功率/超时率(cancelled 不入分母但披露 `cancelled_count`)/重试率(attempts 派生)/平均端到端时长 + token `token_coverage` 诚实标注。
+- **缓存与只读(§2.6/§5.3)**:命中需 `scope_key` 相等 + `computed_at` 新于 TTL,stale-while-revalidate 可选(默认同步重算),`refresh=true` 强重算;workload 默认不缓存;任何端点(含 refresh)不写真源表(只读审计通过)。
+- **接口与错误码(§3)**:`/analytics/{cycle-time,velocity,throughput,workload,burndown,agents/stats}` + `/dashboards/{project/{id},workspace}`;workspace 聚合按请求者项目可见性过滤、显式多项目含不可见 → 整体 403、private agent → 403 `agent_not_visible`、`burndown_scope_required/conflict`、`invalid_time_range/invalid_timezone/filter_too_complex/query_cost_exceeded`;workload 整体游标分页;读限流 + refresh 更严限流。
+- **前端 UI(§4)**:工作区「洞察」页(吞吐量折线 + workload 排行 + agent 统计网格 + 可见性轻提示 + 时间窗/粒度切换)、项目详情「仪表盘」页签(velocity 分组柱 + burndown 理想/实际线 + count/points 切换 + cycle time KPI)、agent 详情统计卡(KPI + token 口径标注);手写 SVG 图表经语义 token、线型区分、暗色双主题;i18n 中英双目录同步(`analytics.*` + 新 `error.*` 占位符)。
+- **真实 e2e / UI 走查(T33 + §5)**:四类请求者(普通成员 / 项目成员 / private-agent owner / admin)以**同一权威聚合 SQL** 断言最终统计值(executions·succeeded / running·queued / retry_rate / total_tokens),跨权限缓存不共享负向、整体 403 负向、`calendar_timezone` 不跨日 + 跨 DST 负向、只读审计、当前归属口径;真实浏览器走查(仪表盘渲染 / 时间窗 / 可见性差异 / 暗色 / 名册深链)+ evidence 截图留证。
+
+### Notes(并行线说明)
+
+- 与 onboarding / import-export / integrations 并行线 owns 表集合不相交(`analytics_snapshots` 独立,其余只读);rebase main 按后合方迁移重编号惯例解撞号(当前链 0001→0028 单 head)。
+- 联调环境观察:本工作区共享机上 `data-jobs` 的 `wizardFlow` 创建失败用例为**既有环境性 flake**(在未经改动的 `origin/main` 同样以 5s 超时复现,与 analytics 无关);CI 历史为绿。
+## [0.18.0] - 2026-07-29
 平台能力层 A:上手引导全功能实现(MES-69,onboarding.md 五章)。`onboarding_states` + `onboarding_state_steps` 两表进度真源(迁移 0027);Mesh 激活路径五步清单(建区 → 邀请/加 agent → 建首 issue → 分派/@ 触发首个运行 → 收件箱见 agent 回评 = aha moment);入册同事务播种 + 成熟工作区全量 reconcile(R3/R4:受邀者步骤按成员自身历史带证据完成,未触发过执行的成员步骤 4 保持 pending——不批量补齐、不伪造证据);aha 末步仅由 `notification.read` 阅读证据驱动,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组,严格按 `trigger_member_id` 归属(读了他人触发执行的回评不得完成本人末步),aha 仅为触发者置位且仅置一次;成体系空状态六页四要素深链既有向导;前端清单卡片 + aha 庆祝态 + 帮助菜单恢复 + 管理员重置。T34 四真实场景全栈 e2e(真 uvicorn + 真 relay + 真 daemon 执行 + 真通知 fanout)与真实浏览器 UI 走查全绿;后端整体单测覆盖率 ≥90%,前端全局覆盖率 97.5/94.5/90.9/97.5(90% 门禁通过)。
 
 ### Added
