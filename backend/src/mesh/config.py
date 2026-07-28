@@ -437,6 +437,21 @@ class Settings(BaseSettings):
     # stale value and refreshes in the background (stale-while-revalidate).
     analytics_stale_while_revalidate: bool = False
 
+    # -- Integrations module (integrations.md §3.2/§3.4) -------------------
+    # Inbound platform signature timestamp tolerance window (§3.2: ±300s).
+    integration_signature_tolerance: timedelta = Field(
+        default=timedelta(seconds=300), gt=0
+    )
+    # Outbound webhook delivery: retry/backoff + subscription circuit
+    # breaker (§2.6 workspace-level constants).
+    webhook_delivery_max_attempts: int = Field(default=8, ge=1)
+    webhook_delivery_base_seconds: int = Field(default=30, ge=1)
+    webhook_delivery_max_seconds: int = Field(default=3600, ge=1)
+    webhook_delivery_timeout_seconds: int = Field(default=10, ge=1)
+    webhook_circuit_break_threshold: int = Field(default=20, ge=1)
+    webhook_delivery_poll_interval: float = Field(default=1.0, gt=0)
+    webhook_delivery_batch_size: int = Field(default=50, ge=1, le=1000)
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""

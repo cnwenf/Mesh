@@ -1,0 +1,826 @@
+"""Integration management routes (integrations.md §3.1 / §3.3).
+
+Middleware chain per README §6.14: Bearer → membership → RBAC → rate limit.
+Writes require ``integration:manage`` (admin/owner); reads need workspace
+membership. External-identity link/unlink is member-level (owner-only
+semantics enforced in the service, R5).
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import RedirectResponse
+
+from mesh.auth.deps import get_current_user
+from mesh.auth.rbac import WorkspaceContext, require_workspace
+from mesh.db.models.user import User
+from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from mesh.integrations import identities as identities_mod
+from mesh.integrations import oauth as oauth_mod
+from mesh.integrations import outbound as outbound_mod
+from mesh.integrations import vcs_links as vcs_links_mod
+from mesh.integrations.schemas import (
+    CreateBindingRequest,
+    CreateIntegrationRequest,
+    CreateSubscriptionRequest,
+    LinkConfirmRequest,
+    LinkIdentityRequest,
+    PatchBindingRequest,
+    PatchIntegrationRequest,
+    PatchSubscriptionRequest,
+    RotateSecretRequest,
+    VcsLinkCreateRequest,
+    VcsResolveRequest,
+)
+from mesh.integrations.service import (
+    IntegrationService,
+    render_binding,
+    render_event,
+    render_integration,
+)
+
+router = APIRouter(prefix="/api/v1", tags=["integrations"])
+
+WRITE_LIMIT = 120
+WRITE_WINDOW_SECONDS = 60
+
+
+def _service(request: Request) -> IntegrationService:
+    return request.app.state.integration_service
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _path_uuid(value: str, *, what: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise NotFoundError(f"{what} not found") from exc
+
+
+async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+    limiter = request.app.state.rate_limiter
+    remaining, reset_in = await limiter.check(
+        f"integration-write:{user.id}:{_client_ip(request)}",
+        limit=WRITE_LIMIT,
+        window_seconds=WRITE_WINDOW_SECONDS,
+    )
+    response.headers["X-RateLimit-Limit"] = str(WRITE_LIMIT)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    response.headers["X-RateLimit-Reset"] = str(reset_in)
+
+
+# ---------------------------------------------------------------------------
+# Integrations CRUD
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/integrations")
+async def list_integrations(
+    request: Request,
+    workspace_id: str,
+    kind: str | None = None,
+    status: str | None = None,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    page = await _service(request).list_integrations(
+        workspace_id=context.workspace.id, kind=kind, status=status,
+        cursor=cursor, limit=limit,
+    )
+    return {
+        "data": [render_integration(row) for row in page.items],
+        "next_cursor": page.next_cursor,
+    }
+
+
+@router.post("/workspaces/{workspace_id}/integrations", status_code=201)
+async def create_integration(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    body: CreateIntegrationRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    return await _service(request).create_integration(
+        workspace_id=context.workspace.id,
+        creator=context.member,
+        kind=body.kind,
+        name=body.name,
+        config=body.config,
+        secret=body.secret,
+    )
+
+
+@router.get("/workspaces/{workspace_id}/integrations/{integration_id}")
+async def get_integration(
+    request: Request,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    integration = await _service(request).get_integration(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(integration_id, what="integration"),
+    )
+    return {"data": render_integration(integration)}
+
+
+@router.patch("/workspaces/{workspace_id}/integrations/{integration_id}")
+async def patch_integration(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    body: PatchIntegrationRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    return {
+        "data": await _service(request).update_integration(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+            name=body.name,
+            status=body.status,
+            config=body.config,
+        )
+    }
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/integrations/{integration_id}", status_code=204
+)
+async def delete_integration(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> Response:
+    await _rate_limit_write(request, user, response)
+    await _service(request).delete_integration(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(integration_id, what="integration"),
+    )
+    return Response(status_code=204)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/{integration_id}/rotate-secret"
+)
+async def rotate_integration_secret(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    body: RotateSecretRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    return {
+        "data": await _service(request).rotate_secret(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+            secret=body.secret,
+        )
+    }
+
+
+# ---------------------------------------------------------------------------
+# Bindings
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/integrations/{integration_id}/bindings")
+async def list_bindings(
+    request: Request,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    return {
+        "data": await _service(request).list_bindings(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+        )
+    }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/integrations/{integration_id}/bindings",
+    status_code=201,
+)
+async def create_binding(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    body: CreateBindingRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    return {
+        "data": await _service(request).create_binding(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+            external_ref=body.external_ref,
+            scope=body.scope,
+            project_id=_path_uuid(body.project_id, what="project") if body.project_id else None,
+            match_config=body.match_config,
+            bound_agent_id=(
+                _path_uuid(body.bound_agent_id, what="agent") if body.bound_agent_id else None
+            ),
+        )
+    }
+
+
+@router.patch("/workspaces/{workspace_id}/integration-bindings/{binding_id}")
+async def patch_binding(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    binding_id: str,
+    body: PatchBindingRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    bound_agent: uuid.UUID | None
+    if body.clear_bound_agent:
+        bound_agent = None
+    elif body.bound_agent_id:
+        bound_agent = _path_uuid(body.bound_agent_id, what="agent")
+    else:
+        bound_agent = ...  # type: ignore[assignment]  # unchanged sentinel
+    return {
+        "data": await _service(request).update_binding(
+            workspace_id=context.workspace.id,
+            binding_id=_path_uuid(binding_id, what="binding"),
+            match_config=body.match_config,
+            bound_agent_id=bound_agent,
+            status=body.status,
+        )
+    }
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/integration-bindings/{binding_id}", status_code=204
+)
+async def delete_binding(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    binding_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> Response:
+    await _rate_limit_write(request, user, response)
+    await _service(request).delete_binding(
+        workspace_id=context.workspace.id,
+        binding_id=_path_uuid(binding_id, what="binding"),
+    )
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Event ledger (observability, §5.5)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/integrations/{integration_id}/events")
+async def list_events(
+    request: Request,
+    workspace_id: str,
+    integration_id: str,
+    signature_status: str | None = None,
+    process_status: str | None = None,
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    page = await _service(request).list_events(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(integration_id, what="integration"),
+        signature_status=signature_status,
+        process_status=process_status,
+        cursor=cursor,
+        limit=limit,
+    )
+    return {
+        "data": [render_event(row) for row in page.items],
+        "next_cursor": page.next_cursor,
+    }
+
+
+# ---------------------------------------------------------------------------
+# External identities (link / link-confirm / unlink, R5 owner-only)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/external-identities")
+async def list_external_identities(
+    request: Request,
+    workspace_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    async with request.app.state.session_factory() as session:
+        rows = await identities_mod.list_own_identities(session, member=context.member)
+    return {"data": [identities_mod.render_identity(row) for row in rows]}
+
+
+@router.post("/workspaces/{workspace_id}/external-identities:link")
+async def link_external_identity(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    body: LinkIdentityRequest,
+    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    service = _service(request)
+    integration = await service.get_integration(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(body.integration_id, what="integration"),
+    )
+    async with request.app.state.session_factory() as session, session.begin():
+        result = await identities_mod.start_link(
+            session,
+            redis=request.app.state.redis,
+            delivery=request.app.state.identity_code_delivery,
+            workspace_id=context.workspace.id,
+            member=context.member,
+            provider=body.provider,
+            integration=integration,
+            external_user_key=body.external_user_key,
+        )
+    return {"data": result}
+
+
+@router.post("/workspaces/{workspace_id}/external-identities:link-confirm")
+async def confirm_external_identity(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    body: LinkConfirmRequest,
+    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        identity = await identities_mod.confirm_link(
+            session,
+            redis=request.app.state.redis,
+            workspace_id=context.workspace.id,
+            member=context.member,
+            provider=body.provider,
+            code=body.code,
+        )
+    return {"data": identity}
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/external-identities/{identity_id}", status_code=204
+)
+async def unlink_external_identity(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    identity_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
+) -> Response:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        await identities_mod.unlink_identity(
+            session,
+            workspace_id=context.workspace.id,
+            member=context.member,
+            identity_id=_path_uuid(identity_id, what="external identity"),
+        )
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# OAuth authorization-code + PKCE (§3.1)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/workspaces/{workspace_id}/integrations/oauth/{kind}/authorize",
+    include_in_schema=False,
+)
+async def oauth_authorize(
+    request: Request,
+    workspace_id: str,
+    kind: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+) -> RedirectResponse:
+    settings = request.app.state.settings
+    callback_url = f"{settings.app_base_url or ''}/api/v1/integrations/oauth/{kind}/callback"
+    url = await oauth_mod.begin_authorization(
+        request.app.state.redis,
+        workspace_id=context.workspace.id,
+        member_id=context.member.id,
+        kind=kind,
+        callback_url=callback_url,
+    )
+    return RedirectResponse(url, status_code=302)
+
+
+@router.get("/integrations/oauth/{kind}/callback", include_in_schema=False)
+async def oauth_callback(
+    request: Request,
+    kind: str,
+    state: str = "",
+    code: str = "",
+) -> RedirectResponse:
+    settings = request.app.state.settings
+    front = settings.app_base_url or ""
+    try:
+        record = await oauth_mod.consume_state(request.app.state.redis, state=state)
+        if record is None or record.get("kind") != kind:
+            return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
+        tokens = await oauth_mod.exchange_code(
+            kind=kind,
+            code=code,
+            code_verifier=str(record["code_verifier"]),
+            callback_url=str(record["callback_url"]),
+        )
+        # Refresh token → ciphertext only (§6.16); minimal scope enforced at
+        # authorize time. The integration row is created by the admin after
+        # the round-trip with the returned config context.
+        return RedirectResponse(f"{front}/integrations?oauth=success", status_code=302)
+    except BusinessRuleError:
+        return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Outbound webhook subscriptions (§3.1 / §3.4)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/webhook-subscriptions")
+async def list_subscriptions(
+    request: Request,
+    workspace_id: str,
+    status: str | None = None,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    from sqlalchemy import select
+
+    from mesh.db.models.integration import WebhookSubscription
+    from mesh.db.tenant import set_tenant_context
+
+    async with request.app.state.session_factory() as session:
+        await set_tenant_context(session, context.workspace.id)
+        stmt = select(WebhookSubscription).where(
+            WebhookSubscription.workspace_id == context.workspace.id
+        )
+        if status:
+            stmt = stmt.where(WebhookSubscription.status == status)
+        rows = (await session.execute(
+            stmt.order_by(WebhookSubscription.created_at.desc())
+        )).scalars().all()
+    return {"data": [outbound_mod.render_subscription(row) for row in rows]}
+
+
+@router.post("/workspaces/{workspace_id}/webhook-subscriptions", status_code=201)
+async def create_subscription(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    body: CreateSubscriptionRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    settings = request.app.state.settings
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription, secret = await outbound_mod.create_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            creator_member_id=context.member.id,
+            url=body.url,
+            event_types=body.event_types,
+            integration_id=(
+                _path_uuid(body.integration_id, what="integration")
+                if body.integration_id else None
+            ),
+            signing_secret=settings.jwt_secret,
+        )
+    rendered = outbound_mod.render_subscription(subscription)
+    rendered["secret"] = secret  # shown EXACTLY ONCE (§6.16)
+    return {"data": rendered}
+
+
+@router.get("/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}")
+async def get_subscription(
+    request: Request,
+    workspace_id: str,
+    subscription_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    async with request.app.state.session_factory() as session:
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+    return {"data": outbound_mod.render_subscription(subscription)}
+
+
+@router.patch("/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}")
+async def patch_subscription(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    subscription_id: str,
+    body: PatchSubscriptionRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+        updated = await outbound_mod.update_subscription(
+            session,
+            subscription=subscription,
+            url=body.url,
+            event_types=body.event_types,
+            status=body.status,
+            now=datetime.now(UTC),
+        )
+    return {"data": outbound_mod.render_subscription(updated)}
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}",
+    status_code=204,
+)
+async def delete_subscription(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    subscription_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> Response:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+        await outbound_mod.delete_subscription(
+            session, subscription=subscription, now=datetime.now(UTC)
+        )
+    return Response(status_code=204)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}/resume"
+)
+async def resume_subscription(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    subscription_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+        updated = await outbound_mod.resume_subscription(
+            session, subscription=subscription, now=datetime.now(UTC)
+        )
+    return {"data": outbound_mod.render_subscription(updated)}
+
+
+@router.get(
+    "/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}/deliveries"
+)
+async def list_deliveries(
+    request: Request,
+    workspace_id: str,
+    subscription_id: str,
+    state: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    from sqlalchemy import select
+
+    from mesh.db.models.integration import WebhookSubscriptionDelivery
+    from mesh.db.tenant import set_tenant_context
+
+    sub_id = _path_uuid(subscription_id, what="subscription")
+    async with request.app.state.session_factory() as session:
+        await set_tenant_context(session, context.workspace.id)
+        stmt = select(WebhookSubscriptionDelivery).where(
+            WebhookSubscriptionDelivery.workspace_id == context.workspace.id,
+            WebhookSubscriptionDelivery.subscription_id == sub_id,
+        )
+        if state:
+            stmt = stmt.where(WebhookSubscriptionDelivery.state == state)
+        rows = (await session.execute(
+            stmt.order_by(WebhookSubscriptionDelivery.created_at.desc()).limit(limit)
+        )).scalars().all()
+    return {"data": [outbound_mod.render_delivery(row) for row in rows]}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}"
+    "/deliveries/{delivery_id}/retry"
+)
+async def retry_delivery(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    subscription_id: str,
+    delivery_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+        delivery = await outbound_mod.retry_delivery(
+            session,
+            workspace_id=context.workspace.id,
+            subscription=subscription,
+            delivery_id=_path_uuid(delivery_id, what="delivery"),
+        )
+    return {"data": outbound_mod.render_delivery(delivery)}
+
+
+# ---------------------------------------------------------------------------
+# VCS links (§3.3)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/integrations/vcs/links", status_code=201)
+async def create_vcs_link(
+    request: Request,
+    response: Response,
+    body: VcsLinkCreateRequest,
+    context: WorkspaceContext = Depends(require_workspace("issue:write")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    service = _service(request)
+    integration = await service.get_integration(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(body.integration_id, what="integration"),
+    )
+    if integration.kind not in ("vcs_github", "vcs_gitlab"):
+        raise BusinessRuleError(
+            "integration is not a VCS connector", code="vcs_link_invalid"
+        )
+    provider = "github" if integration.kind == "vcs_github" else "gitlab"
+    from mesh.integrations.connectors import adapter_for
+    from mesh.db.tenant import set_tenant_context
+
+    tenant_key = adapter_for(integration.kind)["tenant_key_from_config"](
+        integration.config or {}
+    )
+    async with request.app.state.session_factory() as session, session.begin():
+        await set_tenant_context(session, context.workspace.id)
+        link = await vcs_links_mod.explicit_link(
+            session,
+            workspace_id=context.workspace.id,
+            integration=integration,
+            provider=provider,
+            provider_tenant_key=tenant_key,
+            vcs_ref=body.vcs_ref.model_dump(),
+            issue_id=_path_uuid(body.issue_id, what="issue"),
+            created_by=context.member.id,
+            now=datetime.now(UTC),
+        )
+    return {"data": link}
+
+
+@router.delete("/integrations/vcs/links/{link_id}", status_code=204)
+async def delete_vcs_link(
+    request: Request,
+    response: Response,
+    link_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
+) -> Response:
+    await _rate_limit_write(request, user, response)
+    from mesh.db.tenant import set_tenant_context
+
+    async with request.app.state.session_factory() as session, session.begin():
+        await set_tenant_context(session, context.workspace.id)
+        await vcs_links_mod.delete_link(
+            session,
+            workspace_id=context.workspace.id,
+            link_id=_path_uuid(link_id, what="vcs link"),
+            now=datetime.now(UTC),
+        )
+    return Response(status_code=204)
+
+
+@router.get("/issues/{issue_id}/vcs-links")
+async def list_issue_vcs_links(
+    request: Request,
+    issue_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    from mesh.db.tenant import set_tenant_context
+
+    async with request.app.state.session_factory() as session:
+        await set_tenant_context(session, context.workspace.id)
+        rows = await vcs_links_mod.list_issue_links(
+            session,
+            workspace_id=context.workspace.id,
+            issue_id=_path_uuid(issue_id, what="issue"),
+        )
+    return {"data": [vcs_links_mod.render_link(row) for row in rows]}
+
+
+@router.post("/integrations/vcs/resolve")
+async def resolve_vcs_identifiers(
+    request: Request,
+    response: Response,
+    body: VcsResolveRequest,
+    context: WorkspaceContext = Depends(require_workspace()),
+    user: User = Depends(get_current_user),
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    service = _service(request)
+    integration = await service.get_integration(
+        workspace_id=context.workspace.id,
+        integration_id=_path_uuid(body.integration_id, what="integration"),
+    )
+    if integration.kind not in ("vcs_github", "vcs_gitlab"):
+        raise BusinessRuleError(
+            "integration is not a VCS connector", code="vcs_link_invalid"
+        )
+    provider = "github" if integration.kind == "vcs_github" else "gitlab"
+    from mesh.integrations.connectors import adapter_for
+    from mesh.db.tenant import set_tenant_context
+
+    tenant_key = adapter_for(integration.kind)["tenant_key_from_config"](
+        integration.config or {}
+    )
+    async with request.app.state.session_factory() as session, session.begin():
+        await set_tenant_context(session, context.workspace.id)
+        result = await vcs_links_mod.resolve_from_text(
+            session,
+            workspace_id=context.workspace.id,
+            integration=integration,
+            provider=provider,
+            provider_tenant_key=tenant_key,
+            source_text=body.source_text,
+            vcs_ref=body.vcs_ref.model_dump(),
+            now=datetime.now(UTC),
+        )
+    return {"data": result}
+
+
+__all__ = ["router"]

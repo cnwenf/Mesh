@@ -75,6 +75,12 @@ from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
+from mesh.integrations.outbound import (
+    WEBHOOK_DISPATCH_EVENT_TYPE,
+    WebhookDeliveryWorker,
+    derive_dispatch_from_realtime as webhook_dispatch_derive,
+    webhook_dispatch_handler,
+)
 
 logger = logging.getLogger("mesh.workers")
 
@@ -190,6 +196,12 @@ def build_relay(
             await onboarding_consume_realtime_event(session, event)
         except Exception:  # noqa: BLE001 — onboarding must not break projection
             logger.exception("onboarding event consumption failed for %s", event.id)
+        # integrations.md §3.4: outbound developer webhooks derive from the
+        # same domain-event stream (webhook.dispatch, deduped per event).
+        try:
+            await webhook_dispatch_derive(session, event)
+        except Exception:  # noqa: BLE001 — fan-out must not break projection
+            logger.exception("webhook dispatch derivation failed for %s", event.id)
         return frames
 
     handlers = {
@@ -219,6 +231,10 @@ def build_relay(
             make_squad_execution_finished_handler(squad_comment_service),
             squad_comment_service,
         ),
+        # integrations.md §3.4: outbound developer webhook fan-out — creates
+        # per-subscription deliveries (UNIQUE(subscription_id, event_ref)
+        # idempotency); the delivery worker posts them (separate loop below).
+        WEBHOOK_DISPATCH_EVENT_TYPE: webhook_dispatch_handler,
     }
     if data_job_worker is not None:
         # import-export.md §3.8: job execution flows through the outbox to
@@ -308,9 +324,29 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         marketplace_url=settings.skill_marketplace_url,
     )
 
+    # integrations.md §3.4: outbound developer webhook delivery worker —
+    # claims pending deliveries (created by the webhook.dispatch relay
+    # handler) and POSTs them with HMAC signature, exponential backoff and
+    # subscription-level circuit breaking.
+    webhook_delivery_worker = WebhookDeliveryWorker(
+        session_factory,
+        signing_secret=settings.jwt_secret,
+        max_attempts=settings.webhook_delivery_max_attempts,
+        base_seconds=settings.webhook_delivery_base_seconds,
+        max_seconds=settings.webhook_delivery_max_seconds,
+        timeout_seconds=settings.webhook_delivery_timeout_seconds,
+        break_threshold=settings.webhook_circuit_break_threshold,
+        poll_interval=settings.webhook_delivery_poll_interval,
+        batch_size=settings.webhook_delivery_batch_size,
+    )
+
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
+            TaskSpec(
+                "webhook-delivery",
+                lambda: webhook_delivery_worker.run_forever(stop),
+            ),
             TaskSpec(
                 "notification-digest",
                 lambda: notification_digest_loop(

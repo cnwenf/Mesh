@@ -44,6 +44,11 @@ from mesh.auth.tokens import TokenService
 from mesh.autopilot.channels import register_autopilot_checkers
 from mesh.autopilot.routes import router as autopilot_router
 from mesh.autopilot.service import AutopilotService
+from mesh.integrations.channels import register_integration_checkers
+from mesh.integrations.identities import RedisDevCodeDelivery
+from mesh.integrations.inbound_routes import router as integrations_inbound_router
+from mesh.integrations.routes import router as integrations_router
+from mesh.integrations.service import IntegrationService
 from mesh.chat.channels import register_chat_checkers
 from mesh.chat.engine import ChatGenerationEngine, ScriptedGenerationProvider
 from mesh.chat.routes import router as chat_router
@@ -330,6 +335,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Analytics module (analytics.md): read-only aggregates + materialized
     # cache; never writes source tables.
     app.state.analytics_service = AnalyticsService(session_factory, settings)
+    app.state.integration_service = IntegrationService(session_factory, settings.jwt_secret)
+    # Verification codes for external-identity linking are delivered to the
+    # claimed external account's DM (dev: Redis dev-outbox, tests read it).
+    app.state.identity_code_delivery = RedisDevCodeDelivery(app.state.redis)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -340,6 +349,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_execution_checkers(app.state.authorizer, session_factory)
     register_squad_checkers(app.state.authorizer, session_factory)
     register_autopilot_checkers(app.state.authorizer, session_factory)
+    register_integration_checkers(app.state.authorizer, session_factory)
     register_chat_checkers(app.state.authorizer, session_factory)
     register_data_job_checkers(app.state.authorizer, session_factory)
 
@@ -372,6 +382,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(squad_router)
     app.include_router(autopilot_router)
     app.include_router(analytics_router)
+    app.include_router(integrations_router)
+    app.include_router(integrations_inbound_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

@@ -45,6 +45,7 @@ OUTBOX_EVENT_TYPES = frozenset(
         "data_job.resume",  # import-export.md §3.8:数据作业恢复重投
         "squad.plan_decided",  # squad.md §6.10:计划审批决议 outbox event_type(approve/reject/expired → 根任务流转)
         "chat.generation_finished",  # chat-session.md §4.4:chat 生成终态回写 outbox event_type
+        "webhook.dispatch",  # integrations.md §3.4:出向 Webhook 投递扇出 outbox event_type(relay 派生 → 投递台账)
     }
 )
 
