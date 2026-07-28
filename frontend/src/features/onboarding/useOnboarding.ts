@@ -15,6 +15,7 @@ import { env } from '../../env';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
 import type { HumanProfile } from '../members/types';
+import { onOnboardingExternalChange } from './notify';
 import {
   completeOnboardingStep,
   dismissOnboarding,
@@ -123,6 +124,10 @@ export function useOnboarding(): UseOnboardingResult {
   }, [client, workspaceId, reloadKey]);
 
   const refetch = useCallback(() => setReloadKey((key) => key + 1), []);
+
+  // 帮助菜单 / 命令面板的恢复不经本 hook 的写路径且无实时帧 → 订阅模块内
+  // 变更广播,恢复成功后即时重拉(onboarding.md §4.2 流程 3)。
+  useEffect(() => onOnboardingExternalChange(refetch), [refetch]);
 
   // 实时订阅:本频道任何 onboarding.* 帧 → 重拉(DB 是真源,最简正确合并)。
   useEffect(() => {

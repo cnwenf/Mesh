@@ -4,6 +4,7 @@
 export { OnboardingChecklist } from './OnboardingChecklist';
 export { useOnboarding, ONBOARDING_POLL_INTERVAL_MS } from './useOnboarding';
 export { restoreActiveOnboarding } from './restore';
+export { notifyOnboardingExternalChange, onOnboardingExternalChange } from './notify';
 export * from './api';
 export * from './realtime';
 export * from './types';

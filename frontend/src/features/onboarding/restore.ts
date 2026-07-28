@@ -6,6 +6,7 @@
 import type { MeshApiClient } from '../../api';
 import { activeWorkspace, fetchMe } from '../members/api';
 import { restoreOnboarding } from './api';
+import { notifyOnboardingExternalChange } from './notify';
 
 /** 当前活跃工作区的清单恢复;无工作区时为 no-op。返回是否发起恢复。 */
 export async function restoreActiveOnboarding(client: MeshApiClient): Promise<boolean> {
@@ -13,5 +14,8 @@ export async function restoreActiveOnboarding(client: MeshApiClient): Promise<bo
   const active = activeWorkspace(me.memberships);
   if (active === null) return false;
   await restoreOnboarding(client, active.workspace_id);
+  // dismiss/restore 不发实时帧:广播一次,令 useOnboarding 即时重拉,
+  // 清单按库内进度重现(§4.2 流程 3)。
+  notifyOnboardingExternalChange();
   return true;
 }

@@ -10,6 +10,7 @@ import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { notifyOnboardingExternalChange } from '../notify';
 import { ONBOARDING_POLL_INTERVAL_MS, useOnboarding } from '../useOnboarding';
 
 const ME = {
@@ -218,6 +219,19 @@ describe('useOnboarding', () => {
       });
     });
     expect(routed.stateLoads()).toBe(2);
+  });
+
+  it('refetches when an external restore broadcasts (onboarding.md §4.2 流程 3)', async () => {
+    const { fetchImpl, routed } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding(), { wrapper: withRealtime });
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    expect(routed.stateLoads()).toBe(1);
+
+    act(() => {
+      notifyOnboardingExternalChange();
+    });
+    await waitFor(() => expect(routed.stateLoads()).toBe(2));
   });
 
   it('falls back to 30s polling when the realtime context is null (onboarding.md §3.7)', async () => {
