@@ -38,6 +38,9 @@ import { AutopilotEditorPage } from './features/autopilots/AutopilotEditorPage';
 import { AutopilotRunDetailPage } from './features/autopilots/AutopilotRunDetailPage';
 import { AutopilotsPage } from './features/autopilots/AutopilotsPage';
 import { WebhookConfigPage } from './features/autopilots/WebhookConfigPage';
+import { IntegrationDetailPage } from './features/integrations/IntegrationDetailPage';
+import { IntegrationsPage } from './features/integrations/IntegrationsPage';
+import { WebhooksPage } from './features/integrations/WebhooksPage';
 import { ExecutionDetailPage } from './features/runtimes/ExecutionDetailPage';
 import { RuntimeDetailPage } from './features/runtimes/RuntimeDetailPage';
 import { RuntimesPage } from './features/runtimes/RuntimesPage';
@@ -218,6 +221,11 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />
                 <Route path="autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
                 <Route path="webhooks" element={<WebhookConfigPage />} />
+                {/* 集成平台(integrations.md §4):集成管理 / 详情 / 出向 Webhook 订阅。
+                    出向订阅落 /webhook-subscriptions,避让 autopilot 入站 /webhooks。 */}
+                <Route path="integrations" element={<IntegrationsPage />} />
+                <Route path="integrations/:integrationId" element={<IntegrationDetailPage />} />
+                <Route path="webhook-subscriptions" element={<WebhooksPage />} />
                 <Route path="automation" element={<Navigate to="/autopilots" replace />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />

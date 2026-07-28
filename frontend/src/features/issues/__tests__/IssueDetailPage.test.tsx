@@ -224,6 +224,20 @@ function isAssignmentCall(url: string, init?: RequestInit): boolean {
   return url.includes('/squads/assignments/by-issue/') && (init?.method ?? 'GET') === 'GET';
 }
 
+/**
+ * VCS 关联面板(integrations.md §4.2)挂载即发的两个列表请求(issue 关联 +
+ * 工作区 VCS 集成),与详情并行、到达顺序不确定 —— 恒定回空页、不消耗队列。
+ */
+function isVcsPanelCall(url: string, init?: RequestInit): boolean {
+  const method = init?.method ?? 'GET';
+  return method === 'GET' && (/\/vcs-links/.test(url) || /\/integrations/.test(url));
+}
+
+/** VCS 关联面板列表固定响应(空页)。 */
+function vcsPanelEmpty(): ReturnType<typeof fakeResponse> {
+  return fakeResponse({ body: { data: [], next_cursor: null } });
+}
+
 /** 默认无活跃小队分派(data:null);分派相关测试自带专用桩,不经此 helper。 */
 function assignmentEmpty(): ReturnType<typeof fakeResponse> {
   return fakeResponse({ body: { data: null } });
@@ -242,6 +256,7 @@ function detailStub(...responses: Response[]): FetchStub {
     calls.push({ url, init });
     if (isAttachmentListCall(url, init)) return attachmentsEmpty();
     if (isAssignmentCall(url, init)) return assignmentEmpty();
+    if (isVcsPanelCall(url, init)) return vcsPanelEmpty();
     const response = responses[Math.min(index, responses.length - 1)];
     index += 1;
     return response;
