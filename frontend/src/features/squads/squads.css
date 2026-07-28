@@ -1,0 +1,663 @@
+/**
+ * Squad 模块样式(squad.md §4)。颜色一律经语义 token(design/tokens.css),
+ * 暗色模式由 token 集整体替换实现(README §6.12)。
+ */
+
+.mesh-squads {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.mesh-squads__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.mesh-squads__head h1 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-text);
+}
+
+.mesh-squads__back {
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mesh-squads__filters input[type='search'] {
+  min-width: 14rem;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* ---- 列表卡片 ---- */
+
+.mesh-squads__grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--space-3);
+}
+
+.mesh-squads__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  transition: border-color var(--duration-fast) ease, transform var(--duration-fast) ease;
+}
+
+.mesh-squads__card:hover {
+  border-color: var(--color-primary);
+  transform: translateY(calc(-1 * var(--space-1) / 2));
+}
+
+.mesh-squads__card-link {
+  text-decoration: none;
+}
+
+.mesh-squads__card-name {
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text);
+  transition: color var(--duration-fast) ease;
+}
+
+.mesh-squads__card-link:hover .mesh-squads__card-name {
+  color: var(--color-primary);
+}
+
+.mesh-squads__card-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.mesh-squads__kind-badge {
+  align-self: flex-start;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-info);
+  color: var(--color-info-contrast);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__card-meta {
+  display: flex;
+  gap: var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 表单 / 对话框 ---- */
+
+.mesh-squads__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-squads__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__form-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__form-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- 详情面板 ---- */
+
+.mesh-squads__pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.mesh-squads__pane h2 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+}
+
+.mesh-squads__pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-squads__pane-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 成员 ---- */
+
+.mesh-squads__members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-squads__member {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mesh-squads__member-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-squads__member-type {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 任务列表 ---- */
+
+.mesh-squads__tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-squads__task {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-squads__task-link {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+/* ---- 活动时间线 ---- */
+
+.mesh-squads__activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-squads__activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__activity-action {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-squads__activity-actor {
+  color: var(--color-text);
+}
+
+.mesh-squads__activity-time {
+  color: var(--color-text-muted);
+}
+
+/* ---- 消息区 ---- */
+
+.mesh-squads__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.mesh-squads__tab {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.mesh-squads__tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+}
+
+.mesh-squads__tab[aria-selected='true'] {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  border-color: var(--color-primary);
+}
+
+.mesh-squads__tab:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+.mesh-squads__messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-squads__message {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.mesh-squads__message-sender {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-squads__message-kind,
+.mesh-squads__message-time {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__message-body {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.mesh-squads__composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.mesh-squads__composer-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: var(--space-1);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-squads__composer-body textarea {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  resize: vertical;
+}
+
+/* ---- 任务详情:进度 / 审批 / 拆解树 ---- */
+
+.mesh-squads__progress {
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+
+.mesh-squads__progress-fill {
+  height: 100%;
+  background: var(--color-success);
+  transition: width var(--duration-fast) ease;
+}
+
+.mesh-squads__progress-label {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__plan {
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.mesh-squads__approval-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mesh-squads__result {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.mesh-squads__tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-squads__tree-node {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mesh-squads__tree-title {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-squads__tree-assignee,
+.mesh-squads__tree-stage {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__tree-blocked {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 表单字段(标签 + textarea,新建 / 编辑对话框.instructions 等)---- */
+
+.mesh-squads__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__field textarea {
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  resize: vertical;
+}
+
+.mesh-squads__field textarea:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* ---- 视图切换(树 / 看板分段控件)---- */
+
+.mesh-squads__segmented {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.mesh-squads__segmented-btn {
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.mesh-squads__segmented-btn:hover {
+  color: var(--color-text);
+}
+
+.mesh-squads__segmented-btn[aria-selected='true'] {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.mesh-squads__segmented-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ---- 看板(§4.1 / §4.2)---- */
+
+.mesh-squads__kanban {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.mesh-squads__kanban-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  min-height: var(--space-4);
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.mesh-squads__kanban-col--over {
+  border-color: var(--color-primary);
+  background: var(--color-surface-raised);
+}
+
+.mesh-squads__kanban-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__kanban-col-count {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__kanban-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-squads__kanban-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  cursor: grab;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.mesh-squads__kanban-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-raised);
+}
+
+.mesh-squads__kanban-card-title {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-squads__kanban-card-assignee,
+.mesh-squads__kanban-card-stage {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__kanban-card-blocked {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+}
+
+/* ---- 成员头像墙(§4.1 / §4.3-1)---- */
+
+.mesh-squads__avatarwall {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.mesh-squads__avatarwall-empty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-squads__avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(var(--space-4) + var(--space-2));
+  height: calc(var(--space-4) + var(--space-2));
+  border-radius: 50%;
+  border: 2px solid var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.mesh-squads__avatar--agent {
+  border-style: dashed;
+}
+
+.mesh-squads__avatar-initial {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.mesh-squads__avatar-type {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-primary);
+}
+
+.mesh-squads__avatar-leader {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-warn);
+  color: var(--color-surface);
+  font-size: var(--font-size-sm);
+  line-height: 1.2;
+}
+
+/* ---- 成员选择器(新建对话框)---- */
+
+.mesh-squads__member-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.mesh-squads__member-picker-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.mesh-squads__picked-members {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-squads__picked-members li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-squads__picked-name {
+  flex: 1;
+  color: var(--color-text);
+}
+
+.mesh-squads__leader-gate {
+  color: var(--color-warn);
+  font-size: var(--font-size-sm);
+}

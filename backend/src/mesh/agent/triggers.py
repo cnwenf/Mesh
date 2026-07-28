@@ -366,7 +366,17 @@ async def assign_orchestration_handler(
     idempotency_key = enqueue_idempotency_key(
         agent_id=agent.id, issue_id=issue_id, trigger_event_id=trigger_event_id
     )
-    task_spec: dict = {"kind": "issue_assignment", "untrusted_context": issue_context}
+    # Squad orchestration correlation (squad.md §4.4): when the dispatch came
+    # from a squad, ride the task id + role along so the terminal observer can
+    # map the execution back onto the squad_task.
+    task_spec: dict = {
+        "kind": "issue_assignment",
+        "untrusted_context": issue_context,
+    }
+    squad_task_id = payload.get("squad_task_id")
+    if squad_task_id:
+        task_spec["squad_task_id"] = str(squad_task_id)
+        task_spec["squad_role"] = str(payload.get("squad_role") or "executor")
     if skill_instructions is not None:
         task_spec["skill_instructions"] = skill_instructions
         task_spec["injected_skills"] = injected_skills

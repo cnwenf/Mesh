@@ -36,7 +36,8 @@ from mesh.db.models.runtime import (
     TaskExecution,
 )
 from mesh.db.tenant import set_tenant_context
-from mesh.outbox.service import emit_realtime
+from mesh.outbox.service import emit_event, emit_realtime
+from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.attempts import _emit_terminal_notification, _release_capacity
 from mesh.runtime.credentials import revoke_attempt_envelopes
 
@@ -343,6 +344,19 @@ async def _expire_approvals(session_factory: async_sessionmaker[AsyncSession]) -
                 data={"approval_id": str(approval.id), "decision": "expired"},
                 idempotency_key=f"approval:{approval.id}:expired",
             )
+            # squad_plan subjects: fail the root task via the squad relay (T8).
+            if approval.subject_type == "squad_plan" and approval.subject_task_id is not None:
+                await emit_event(
+                    session,
+                    workspace_id=workspace_id,
+                    event_type=SQUAD_PLAN_DECIDED_EVENT_TYPE,
+                    payload={
+                        "approval_id": str(approval.id),
+                        "subject_task_id": str(approval.subject_task_id),
+                        "decision": "expired",
+                    },
+                    idempotency_key=f"approval:{approval.id}:squad-plan-expired",
+                )
             if execution is not None and execution.status == "awaiting_approval":
                 execution.status = "cancelled"
                 execution.failure_reason = "approval_expired"

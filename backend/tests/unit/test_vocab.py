@@ -30,8 +30,11 @@ def _load_checker_module():
     return module
 
 
-def test_vocabulary_baseline_is_98_events():
-    assert len(EVENT_VOCABULARY) == 98
+# +5 in v0.16.1: squad SSE orchestration stream frames
+# (task.status / subtask.created / subtask.assigned / plan.submitted /
+# task.aggregated, squad.md §3.2/§3.5).
+def test_vocabulary_baseline_is_103_events():
+    assert len(EVENT_VOCABULARY) == 103
 
 
 def test_vocabulary_matches_readme_registry_exactly():

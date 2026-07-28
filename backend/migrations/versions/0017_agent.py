@@ -50,13 +50,16 @@ def upgrade() -> None:
           workspace_id             UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           name                     TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 120),
           avatar_url               TEXT NULL,
-          role_tag                 TEXT NULL CHECK (role_tag IS NULL OR char_length(role_tag) BETWEEN 1 AND 64),
+          role_tag                 TEXT NULL CHECK (role_tag IS NULL OR
+            char_length(role_tag) BETWEEN 1 AND 64),
           owner_user_id            UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
           slug                     TEXT NULL CHECK (slug IS NULL OR char_length(slug) BETWEEN 1 AND 64),
           bio                      TEXT NULL,
           badge_kind               TEXT NOT NULL DEFAULT 'ai' CHECK (badge_kind IN ('ai')),
-          lifecycle_status         TEXT NOT NULL DEFAULT 'active' CHECK (lifecycle_status IN ('active','paused','disabled','archived')),
-          visibility               TEXT NOT NULL DEFAULT 'workspace' CHECK (visibility IN ('workspace','private')),
+          lifecycle_status         TEXT NOT NULL DEFAULT 'active' CHECK (lifecycle_status IN
+            ('active','paused','disabled','archived')),
+          visibility               TEXT NOT NULL DEFAULT 'workspace' CHECK (visibility IN
+            ('workspace','private')),
           system_instructions      TEXT NULL,
           model_config             JSONB NOT NULL DEFAULT '{}'::jsonb,
           default_runtime_id       UUID NULL,

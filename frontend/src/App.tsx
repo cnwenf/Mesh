@@ -37,6 +37,9 @@ import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
 import { ExecutionDetailPage } from './features/runtimes/ExecutionDetailPage';
 import { RuntimeDetailPage } from './features/runtimes/RuntimeDetailPage';
 import { RuntimesPage } from './features/runtimes/RuntimesPage';
+import { SquadDetailPage } from './features/squads/SquadDetailPage';
+import { SquadTaskDetailPage } from './features/squads/SquadTaskDetailPage';
+import { SquadsPage } from './features/squads/SquadsPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
@@ -180,6 +183,10 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="marketplace" element={<MarketplacePage />} />
                 {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
                 <Route path="agents/:agentId" element={<AgentDetailPage />} />
+                {/* 小队(squad.md §4):列表 / 详情 / 任务详情(拆解树 + 计划审批) */}
+                <Route path="squads" element={<SquadsPage />} />
+                <Route path="squads/:squadId" element={<SquadDetailPage />} />
+                <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
                 <Route path="cycles" element={<CyclesPage />} />
                 <Route path="chat" element={<PlaceholderPage kind="chat" />} />
                 {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}

@@ -507,7 +507,7 @@ export function IssuesPage(): React.JSX.Element {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       toast.addToast(tRef.current(key), { tone: 'danger', closeLabel: tRef.current('common.close') });
     }
-  }, [client, workspace, nextCursor, qFilter, categoryFilter, priorityFilter, mineOnly]);
+  }, [client, workspace, nextCursor, qFilter, categoryFilter, priorityFilter, mineOnly, toast]);
 
   const setParam = useCallback(
     (key: string, value: string | null) => {

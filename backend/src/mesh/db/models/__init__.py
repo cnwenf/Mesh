@@ -64,6 +64,15 @@ from mesh.db.models.skill import (
     SkillTrigger,
     SkillVersion,
 )
+from mesh.db.models.squad import (
+    IssueSquadAssignment,
+    Squad,
+    SquadActivity,
+    SquadMember,
+    SquadMessage,
+    SquadTask,
+    SquadTaskDependency,
+)
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -108,6 +117,7 @@ __all__ = [
     "IssueCustomFieldValue",
     "IssueDependency",
     "IssueLabel",
+    "IssueSquadAssignment",
     "IssueStatus",
     "IssueSubscription",
     "IssueTemplate",
@@ -141,6 +151,12 @@ __all__ = [
     "SkillSource",
     "SkillTrigger",
     "SkillVersion",
+    "Squad",
+    "SquadActivity",
+    "SquadMember",
+    "SquadMessage",
+    "SquadTask",
+    "SquadTaskDependency",
     "TaskExecution",
     "TaskLogSegment",
     "UploadSession",

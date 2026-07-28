@@ -15,6 +15,7 @@ export type NavKey =
   | 'board'
   | 'members'
   | 'skills'
+  | 'squads'
   | 'cycles'
   | 'chat'
   | 'automation'
@@ -33,6 +34,7 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'board', to: '/board' },
   { key: 'members', to: '/members' },
   { key: 'skills', to: '/skills' },
+  { key: 'squads', to: '/squads' },
   { key: 'cycles', to: '/cycles' },
   { key: 'chat', to: '/chat' },
   // 自动化入口指向 Runtimes 模块(runtime.md §4);nav.automation 文案保持不变。
@@ -65,7 +67,8 @@ export function Sidebar(): React.JSX.Element {
               data-testid={'nav-' + item.key}
               className={({ isActive }) =>
                 navLinkClassName({
-                  isActive: isActive || (item.key === 'board' && location.pathname.startsWith('/views/')),
+                  isActive:
+                    isActive || (item.key === 'board' && location.pathname.startsWith('/views/')),
                 })
               }
             >

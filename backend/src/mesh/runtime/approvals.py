@@ -41,6 +41,11 @@ from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt, _release_capacity
 from mesh.runtime.credentials import revoke_attempt_envelopes
 
+# Internal outbox event_type the squad module consumes to apply a squad_plan
+# decision onto its root task (squad.md §6.10). Declared here so the approvals
+# entity stays the single decision entry while the effect is relay-side.
+SQUAD_PLAN_DECIDED_EVENT_TYPE = "squad.plan_decided"
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -296,6 +301,23 @@ async def decide_approval(
             },
             idempotency_key=f"approval:{approval.id}:decided",
         )
+        # squad_plan subjects: the squad module applies the decision onto its
+        # root task via the outbox relay (keeps runtime decoupled from squad).
+        if approval.subject_type == "squad_plan" and approval.subject_task_id is not None:
+            await emit_event(
+                session,
+                workspace_id=workspace_id,
+                event_type=SQUAD_PLAN_DECIDED_EVENT_TYPE,
+                payload={
+                    "approval_id": str(approval.id),
+                    "subject_task_id": str(approval.subject_task_id),
+                    "decision": approval.status,
+                    "decided_by_member_id": str(approval.decided_by_member_id)
+                    if approval.decided_by_member_id
+                    else None,
+                },
+                idempotency_key=f"approval:{approval.id}:squad-plan-decided",
+            )
         return _approval_response(approval, execution_status=execution_status)
 
 
@@ -306,6 +328,10 @@ async def _assert_may_decide(session: AsyncSession, *, approval: Approval, membe
     who filed the work item the agent was dispatched on — the persistent
     trigger signal in the data model)."""
     if member.role in ("admin", "owner"):
+        return
+    if approval.subject_type == "squad_plan":
+        # squad.md §3.4: any human member / observer / admin may review a plan.
+        # (The humans-only gate is enforced by the caller before this point.)
         return
     if approval.subject_execution_id is not None:
         execution = (
@@ -367,6 +393,9 @@ def _approval_response(approval: Approval, *, execution_status: str | None) -> d
         "subject_type": approval.subject_type,
         "subject_execution_id": (
             str(approval.subject_execution_id) if approval.subject_execution_id else None
+        ),
+        "subject_task_id": (
+            str(approval.subject_task_id) if approval.subject_task_id else None
         ),
         "status": approval.status,
         "action_summary": approval.action_summary,
