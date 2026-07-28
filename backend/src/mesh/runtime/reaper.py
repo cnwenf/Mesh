@@ -373,6 +373,12 @@ async def _expire_approvals(session_factory: async_sessionmaker[AsyncSession]) -
                     },
                     idempotency_key=f"execution:{execution.id}:cancelled",
                 )
+            if approval.subject_run_id is not None:
+                # autopilot_action subject (README §6.10 / autopilot.md §5.3):
+                # expiry cancels the parked run (approval_expired) + notifies.
+                from mesh.autopilot.approvals import expire_run_approval
+
+                await expire_run_approval(session, approval=approval, now=now)
             expired += 1
     return expired
 

@@ -1,0 +1,245 @@
+/* Autopilot 模块样式(autopilot.md §4;语义色一律走 design/base.css 令牌)。 */
+
+.mesh-autopilots__page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-4, 16px);
+  padding: var(--mesh-space-4, 16px);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.mesh-autopilots__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mesh-space-3, 12px);
+  flex-wrap: wrap;
+}
+
+.mesh-autopilots__title {
+  font-size: 1.35rem;
+  font-weight: 650;
+  margin: 0;
+}
+
+.mesh-autopilots__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--mesh-space-2, 8px);
+  flex-wrap: wrap;
+}
+
+.mesh-autopilots__kill-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mesh-space-2, 8px);
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: var(--mesh-radius-md, 8px);
+  padding: var(--mesh-space-1, 4px) var(--mesh-space-3, 12px);
+}
+
+.mesh-autopilots__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.mesh-autopilots__table th,
+.mesh-autopilots__table td {
+  text-align: left;
+  padding: var(--mesh-space-2, 8px) var(--mesh-space-3, 12px);
+  border-bottom: 1px solid var(--mesh-color-border, #d0d7de);
+}
+
+.mesh-autopilots__table th {
+  color: var(--mesh-color-text-muted, #57606a);
+  font-weight: 600;
+}
+
+.mesh-autopilots__row:hover {
+  background: var(--mesh-color-surface-hover, rgba(0, 0, 0, 0.03));
+  cursor: pointer;
+}
+
+.mesh-autopilots__cell-name {
+  font-weight: 600;
+}
+
+.mesh-autopilots__actions {
+  display: flex;
+  gap: var(--mesh-space-1, 4px);
+}
+
+/* 编辑器:四段可折叠区块(§4.2)。 */
+.mesh-autopilots__editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-3, 12px);
+}
+
+.mesh-autopilots__section {
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: var(--mesh-radius-md, 8px);
+  overflow: hidden;
+}
+
+.mesh-autopilots__section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--mesh-space-3, 12px) var(--mesh-space-4, 16px);
+  background: var(--mesh-color-surface-2, #f6f8fa);
+  border: none;
+  font-weight: 650;
+  font-size: 0.95rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mesh-autopilots__section-body {
+  padding: var(--mesh-space-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-3, 12px);
+}
+
+.mesh-autopilots__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-1, 4px);
+}
+
+.mesh-autopilots__field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--mesh-color-text-muted, #57606a);
+}
+
+.mesh-autopilots__field input,
+.mesh-autopilots__field select,
+.mesh-autopilots__field textarea {
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: var(--mesh-radius-sm, 6px);
+  padding: var(--mesh-space-2, 8px);
+  font-size: 0.9rem;
+  background: var(--mesh-color-surface, #fff);
+  color: inherit;
+}
+
+.mesh-autopilots__field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--mesh-space-3, 12px);
+}
+
+.mesh-autopilots__action-item {
+  border: 1px dashed var(--mesh-color-border, #d0d7de);
+  border-radius: var(--mesh-radius-md, 8px);
+  padding: var(--mesh-space-3, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-2, 8px);
+}
+
+.mesh-autopilots__action-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--mesh-space-2, 8px);
+}
+
+.mesh-autopilots__preview {
+  font-size: 0.85rem;
+  color: var(--mesh-color-text-muted, #57606a);
+}
+
+.mesh-autopilots__preview ul {
+  margin: var(--mesh-space-1, 4px) 0 0;
+  padding-left: var(--mesh-space-4, 16px);
+}
+
+.mesh-autopilots__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--mesh-space-2, 8px);
+  position: sticky;
+  bottom: 0;
+  padding: var(--mesh-space-3, 12px) 0;
+  background: var(--mesh-color-surface, #fff);
+}
+
+/* 运行时间线 / 详情。 */
+.mesh-autopilots__runs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.mesh-autopilots__runs-table th,
+.mesh-autopilots__runs-table td {
+  text-align: left;
+  padding: var(--mesh-space-2, 8px) var(--mesh-space-3, 12px);
+  border-bottom: 1px solid var(--mesh-color-border, #d0d7de);
+}
+
+.mesh-autopilots__run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-4, 16px);
+}
+
+.mesh-autopilots__card {
+  border: 1px solid var(--mesh-color-border, #d0d7de);
+  border-radius: var(--mesh-radius-md, 8px);
+  padding: var(--mesh-space-4, 16px);
+}
+
+.mesh-autopilots__card h3 {
+  margin: 0 0 var(--mesh-space-2, 8px);
+  font-size: 1rem;
+}
+
+.mesh-autopilots__kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--mesh-space-1, 4px) var(--mesh-space-3, 12px);
+  font-size: 0.9rem;
+}
+
+.mesh-autopilots__kv dt {
+  color: var(--mesh-color-text-muted, #57606a);
+}
+
+.mesh-autopilots__kv dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.mesh-autopilots__json {
+  background: var(--mesh-color-surface-2, #f6f8fa);
+  border-radius: var(--mesh-radius-sm, 6px);
+  padding: var(--mesh-space-3, 12px);
+  font-size: 0.8rem;
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.mesh-autopilots__secret-box {
+  border: 1px solid var(--mesh-color-border-strong, #f0883e);
+  border-radius: var(--mesh-radius-md, 8px);
+  padding: var(--mesh-space-4, 16px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--mesh-space-2, 8px);
+}
+
+.mesh-autopilots__secret-box code {
+  word-break: break-all;
+  background: var(--mesh-color-surface-2, #f6f8fa);
+  padding: var(--mesh-space-1, 4px) var(--mesh-space-2, 8px);
+  border-radius: var(--mesh-radius-sm, 6px);
+  font-size: 0.85rem;
+}

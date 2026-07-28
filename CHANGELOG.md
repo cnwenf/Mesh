@@ -3,6 +3,71 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.16.6] - 2026-07-28
+
+autopilot 验收 R3 整改(验收员两轮合并清单 M1–M5 全闭合 + LOW 项并入;复验 salvaged 改动时发现并彻底修复 M1 自环防护在真实服务下的两层根因):
+
+### Fixed
+
+- **M1 create_issue↔issue_created 自环切断(双重修复,实测生效)**:
+  - **谱系原子性**:`create_issue` 动作改在派发事务内写新 issue、其 `issue.created` outbox 行与 issue 产物(`IssueService.create_issue_in_session`,与 `apply_confirmed_move_in_session` 同式共享会话;SAVEPOINT 隔离使创建被拒时派发事务仍可用于失败记账)。修复前业务事务先提交事件、产物后记,relay 可在谱系锚点存在前匹配事件,`cascade_depth` 每轮归零。
+  - **触发级逻辑去重键**:一个领域事件会广播到多个 realtime 频道(issue 详情频道 + 工作区列表频道,各一行 outbox),修复前闸门按键 outbox **行 ID** 使每个频道副本各触发一次(N 倍放大,实测 25 issue/50 事件/24 run 的指数扇出);改按 `(触发类型, 实体 ID, 载荷签名)`(`_logical_dedup_key`)将频道副本聚合为一次触发;relay 重投递去重复用同键,多规则仍按规则各自触发(闸门按规则定界)。
+  - 回归:全链路单测(真实 dispatch → 真实 issue service → matcher,深度链 0→1→2→3、深度 4 截断)+ 真实 e2e(`rate_limit_max=50` 排除兜底干扰,断言恰 4 run 且稳定后不再增长——级联截断而非频率兜底)。
+- **M3 run_all 补跑**:`evaluate_trigger(bypass_concurrency)`——scheduler 的 run_all catch-up 槽仅豁免**触发期**并发闸门(同事务已建 pending 行曾被在途计数,默认 `concurrency_limit=1` 下 run_all 只产 1 run,§4.5「每个错过槽位一次运行」名存实亡);频率/去重/成环/级联/预算护栏照常,执行期仍串行。实测默认并发下 4 个到期槽产 4 run。
+- **M4 成环检测键**:`_loop_hit` 改经规则 JOIN 按 `executor_agent_id` 过滤(键 = `(executor_agent, target)`,§2.6/§5.3),跨规则同 executor×同目标成环漏检已堵(跨规则用例实测),不同 executor 不误伤。
+- **M5 覆盖率回正**:补 `list_webhook_events` 游标/`has_more` 分支用例(>limit 行 → `next_cursor` → 跟翻页 <limit 行 → `None`),`service.py` 回 90%,autopilot 逐文件 ≥90%(pytest --cov 实测)。
+- **Webhook 签名格式串 ICU 解析失败修复**:`autopilots.webhook.signatureFormat` 的尖括号触发 formatjs `UNCLOSED_TAG`,运行时回退显示原始 key;改写方括号记法,并对双语目录全量键做 ICU 解析普查(0 失败)+ 版本哈希重算。
+
+### Changed / Added(LOW 项并入)
+
+- scheduler 去除坏配置静默回退 `UTC`:缺/非法 cron 或时区 → 抢占置 `next_run_at=NULL` 停泊 + error 日志(§5.1 显式 IANA 时区不变量),补单测。
+- 非 dry test-run 前置 kill switch 闸门(`kill_switch_paused` → 409 `kill_switch`);dry_run 保持无副作用可用。
+- autopilot.md §3.3 对齐实现:`executor_busy` 注明为**执行层**可重试错误分类(动作失败归因运行时繁忙按指数退避重试),触发期并发满走 429 `concurrency_limited`。
+- 编辑器 `payload_match` 非法 JSON/非数组 → `PayloadMatchInvalidError` → 专用 i18n toast(`autopilots.editor.payloadMatchInvalid`,双语)+ 不提交(组件用例);编辑器头注与新预览行为(无状态端点、新建可用、非法式提示无效)一致。
+- `dedup_key_template` 契约注释固化于 `DEFAULT_GUARDRAILS`:默认 `{{trigger.event_id}}` 由各触发路径实例化(matcher 逻辑键 / scheduler slot 键 / webhook 事件 ID 或 `rejected:` 命名空间),规则作用域由闸门 `autopilot_id` 过滤保证。
+- **M2 rebase**:rebase 最新 `origin/main`(PR MERGEABLE);迁移按后合方惯例 `0020 → 0021`(链于 `0020_skill`,单 head 0001→0021),README/CHANGELOG/代码注释迁移号同步;i18n 键集取并集 + djb2 重算、en/zh parity。
+- **writing-plans 归档**:`docs/superpowers/plans/2026-07-28-autopilot-r3-fixes.md`(必查项 1 证据)。
+
+### 取舍说明(如实)
+
+- 出向 SSRF DNS-rebinding TOCTOU 保留为后续加固项:§5.3 仅要求拒私网段(已满足:私网/环回/link-local/元数据/多播/保留全拒 + https-only + 白名单 + 禁重定向),钉死解析 IP 需移植 runtime 模块 pinned-connection 设施。
+- 入队幂等键含 `attempt` 维持 §4.4 重试语义(重试需新 execution),代码注释说明,不改构造。
+
+## [0.16.5] - 2026-07-28
+
+autopilot 前端验收整改(验收员第 1 轮 3 HIGH + MEDIUM + LOW 全修):
+
+### Fixed / Added
+
+- **HIGH-1 cron 预览实时化**:编辑器新增**无状态预览端点** `POST /workspaces/{ws}/autopilots/preview-schedule`(正文 `{cron, timezone, count}`),cron/时区变更即防抖重算,**新建态(无规则 id)亦可用**;非法 cron/时区显示「无效」提示。另增 cron **常用周期下拉**(工作日/每天/每小时/每周一/每月 1 号 + 自定义手填)与时区 IANA datalist 辅助校验(§4.2 / 流程 A)。
+- **HIGH-2 过滤七维补齐**:编辑器过滤区补 `project_ids`、`actor_ids` 两维(§2.6 七维齐全);事件触发器暴露 `scope_project_ids` 作用域。
+- **HIGH-3 Webhook 最近事件**:新增 `GET /workspaces/{ws}/webhook-events`(游标分页 + `autopilot_id`/`process_status` 过滤;载荷原样可审,请求头仅存脱敏白名单);Webhook 配置页增「最近事件」表格(事件类型/签名/处理状态/接收时间/幂等键)+ 刷新;签名格式串 i18n 外部化。
+- **MEDIUM**:`rate_limit_overflow` 超限行为控件(drop/queue/alert_only);prompt **模板变量插入**按钮行({{trigger.*}}/{{steps.N.output}}/{{run.id}}/{{now}});列表「上次运行**结果**」列(StatusDot + 相对时间,后端列表响应补 `last_run_status` 批量窗口函数);WS 降级轮询默认 30s → **4s**(§3.5 3~5s);产物列表**带跳转**(issue/execution/inbox/评论回触发 issue)。
+- **LOW**:触发器列图标;kill switch 启用时**理由必填**(二次确认,确认按钮禁能直到填写)。
+- autopilot.md §3.1 同步补两条端点;前后端测试同步更新(前端 1998 测试全绿 + per-file 门禁通过;后端路由/服务新增端点测试)。
+
+## [0.16.4] - 2026-07-28
+
+阶段 7 智能体层 B:autopilot 自动化模块全功能实现(MES-66,autopilot.md 五章)。规则 = 触发器 + 过滤 + 顺序动作 + 默认开启护栏;定时以 PostgreSQL 为唯一调度事实源(原子抢占,多副本不重复触发),事件触发经 outbox relay 链式消费(崩溃恢复不丢事件);入站 Webhook HMAC 恒定时间校验 + 防重放 + 去重审计(被拒事件独立命名空间防预占);高风险动作经统一审批实体(§6.10,`approvals.subject_run_id` 物理复合 FK 落地)。
+
+### Added
+
+- **数据模型(autopilot.md §2,迁移 0023,链于 squad 0021/0022 之后)**:六张租户表——`autopilots`(规则:trigger/filter/action JSONB + 护栏配置 + `next_run_at` 调度状态;`UNIQUE(workspace_id, name) WHERE deleted_at IS NULL` 软删除范围唯一;`idx_autopilot_schedule` 部分索引)、`autopilot_runs`(触发快照可重放、`parent_run_id`/`cascade_depth` 级联谱系、`total_tokens` STORED 生成列、状态机 `pending→running/waiting_approval/retrying→succeeded/failed/cancelled`)、`autopilot_run_attempts`(`UNIQUE(run_id, attempt_number)` 审计链不复用)、`autopilot_artifacts`(产物解耦引用)、`webhook_events`(签名校验结果 + `UNIQUE(workspace_id, idempotency_key)` 去重 + 全程审计;**被拒事件 `rejected:<raw-hash>` 独立命名空间**——未签名伪造无法预占合法事件去重键 §2.5)、`webhook_secrets`(URL token 仅存 SHA-256 哈希、HMAC 签名密钥 Fernet 密文,明文仅创建/轮换时显示一次 §5.3;SECURITY DEFINER `mesh_webhook_secret_by_token_hash` 引导查询——入站端点无 Bearer,RLS fail-closed 下先查后设租户 GUC);§2.7 全部索引 + RLS + 同租户复合 FK。**`approvals.subject_run_id → autopilot_runs(workspace_id, id)` 延迟复合 FK 落地**(README §6.10 R2:逻辑关联升级物理 FK;`uq_approvals_pending_run` 部分唯一索引保证同 run 仅一个 pending)。
+- **定时调度(§4.5)**:worker `autopilot-scheduler` 循环——`FOR UPDATE SKIP LOCKED` 取出到期规则 + `UPDATE ... WHERE next_run_at=? RETURNING` 原子抢占(多副本恰一触发);`misfire_policy`(skip/run_once/run_all 封顶补发)处理宕机错过;一次性定时(`one_time_at`)运行后自动归档;cron 5 段校验(`invalid_cron` 400)+ **显式 IANA 时区必填**(`invalid_trigger_config` 400)+ 下次 5 次运行预览端点。
+- **事件触发(§4.5 / README §6.6)**:outbox relay 的 `realtime.publish` 处理链式接入 autopilot matcher(projector 优先)——消费 `issue.created`/`issue.updated`(状态/字段变更)/`issue.moved`/`comment.created`(含 agent 提及)→ 触发器作用域与过滤匹配(维度间 AND、同类多值 OR、`payload_match` 规则)→ 护栏闸门 → 同事务建 run;relay 崩溃重启后已提交未分发事件仍建 run(at-least-once,实测 kill-restart 不丢)。
+- **护栏六件套(默认开启,§2.6 / §5.3)**:频率上限(窗口计数,`rate_limit_overflow` drop/queue/alert_only,熔断发 `autopilot.rate_limited` + critical 告警)、去重窗口(`dedup_key` 窗口内仅一次)、并发上限(在途 run 计数,默认 1 串行)、级联深度(超 `cascade_max_depth` 拒建下游 run,422 `cascade_depth_exceeded`)、agent 成环检测(同 executor×触发目标窗口内去重,防互提)、每日运行/token 预算(超限熔断告警)。
+- **入站 Webhook(§2.5 / §3.2)**:`POST /api/v1/webhooks/inbound/{token}`——`X-Signature: t=<ts>,v1=<hex>` HMAC-SHA256 **恒定时间比较** + ±300s 时间戳防重放;`invalid`/`missing` 一律落库 `rejected` + 401,**绝不分发**;去重命中 200 `deduped`;分发走护栏后建 run;裸 JSON 契约(非 §6.14 包络)。凭据端点 `POST/GET /workspaces/{ws}/webhook-secrets` + 轮换(旧 token 立即失效,规则按 `secret_id` 绑定保持可用);列表绝不回显 token/secret。
+- **统一审批(§6.10)**:`require_approval=true` 或动作命中 `approval_required_actions`(默认 http_request/create_issue)→ `approvals(subject_type='autopilot_action', subject_run_id)` + run 停 `waiting_approval` + `autopilot_runs.approval_required` 帧 + critical 审批通知;批准 → 续跑 `running`,拒绝 → `cancelled(approval_rejected)`,过期 → reaper `cancelled(approval_expired)`(runtime reaper 扩展);`runs/{run_id}/approve|reject` 为统一审批端点薄封装(转发 `decide_approval`,裁决权:admin/owner、触发者、规则创建者、executor agent owner;agent 不可自批)。
+- **动作管线(§2.6 / §4.4)**:`run_agent_prompt`(经 §6.5 幂等键写 `execution.enqueue`,trigger='autopilot'、§6.11 冻结快照;重试入队**新 execution**;观察 `task_executions` 终态驱动 run 状态)、`add_comment`(经 CommentService,**抑制触发防回环**)、`send_notification`(§6.13 矩阵:成功留运行页、失败 critical 穿透免打扰)、`create_issue`、`http_request`(幂等键 + **SSRF 防护**:私网/环回/link-local/元数据地址拒绝 + https-only + 主机白名单);模板变量 `{{trigger.*}}`/`{{steps.N.output}}`/`{{run.id}}`/`{{now}}` 运行时插值,外部载荷经 §6.15 `UNTRUSTED_DATA` 标记结构隔离;指数退避 + 抖动重试(`retry_count`/`autopilot_run_attempts` 明细)。
+- **REST API(§3.1 全套)**:规则 CRUD(分页 + status/trigger_type/搜索筛选 + 30 天统计)、启停、test-run(支持 dry_run 过滤评估)、preview-schedule、runs 历史/详情(尝试明细 + 产物)/取消、审批薄封装、kill switch(workspace 级暂停全部/按原状态恢复)、webhook 凭据;具名错误码 §3.3(`invalid_cron`/`invalid_trigger_config` 400、`executor_required`/`agent_unavailable` 422 等);写端点 principal 限流;`autopilot:manage` 权限加入 auth.md §2.7 矩阵(owner/admin)。
+- **实时(§3.5)**:`autopilot.updated`/`autopilot.rate_limited`/`autopilot_runs.status_changed`/`autopilot_runs.approval_required`/`webhook_events.received` 经 outbox → projector 唯一路径;`workspace:{ws}:autopilots` + `autopilot:{id}` 频道(资源级订阅鉴权)。
+- **前端(§4)**:规则列表页(状态/类型筛选 + 搜索 + kill switch 二次确认含理由 + 30 天成功率列)、四段折叠规则编辑器(触发器含 cron 可视化/时区/misfire/一次性、过滤、动作增删排序五类型、护栏与重试预填默认值)、规则详情页(只读配置卡 + 运行时间线按状态过滤 + test-run 对话框)、运行详情页(触发快照/尝试明细/产物/审批批准·拒绝/取消)、Webhook 配置页(凭据创建明文仅一次 + 轮换 + 签名算法说明);`/automation` 入口重定向至 `/autopilots`;i18n 全外部化(zh-CN + en 各约 200 键,per-file 90% 门禁通过)。
+
+### Quality
+
+- **单元测试**:autopilot 模块 160+ 项,模块各文件 lines/functions/branches/statements 均 ≥90%(前端 per-file 门禁通过;前端全量 1990+ 测试全绿);后端全量单元套件通过,新增模块覆盖率 ≥90%。
+- **真实 e2e(真实起服 + 真实 worker + 真实 PostgreSQL)**:规则校验(invalid_cron 400 / executor_required 422 / 重名 409 / 缺时区 400)、事件触发经 relay 建 run、**relay 启动前已提交事件仍建 run(崩溃恢复 §5.1 T5 式)**、webhook(无效签名/重放/未知 token 401、有效分发、事件去重、**伪造防预占**、被拒审计独立命名空间、凭据不回显)、审批(批准续跑至成功/拒绝 cancelled(approval_rejected))、kill switch(暂停全部/恢复)、定时原子抢占恰触发一次(next_run_at 前移不重触发)、并发护栏丢弃二次触发。
+
 ## [0.16.3] - 2026-07-28
 squad 模块验收重修(MES-65,B1–B15 全量收口):安全鉴权、状态机守卫、SSE 断点重放、leader 汇总回写、前端看板/分派/表单补齐。
 

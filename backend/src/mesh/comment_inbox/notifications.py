@@ -120,6 +120,20 @@ def policy_for(notification_type: str, *, execution_status: str | None = None) -
             reset_unread=False,
             email_default="none",
         )
+    if notification_type == "autopilot_alert":
+        # README §6.13 熔断告警: critical, inbox, pierce quiet hours, reset.
+        return NotificationPolicy(
+            priority="critical", default_inbox=True, email_default="realtime", **_CRITICAL_INBOX
+        )
+    if notification_type == "autopilot_notice":
+        # README §6.13 kill-switch receipt / plain notices: normal, no pierce.
+        return NotificationPolicy(
+            priority="normal",
+            default_inbox=True,
+            pierce_quiet_hours=False,
+            reset_unread=False,
+            email_default="digest",
+        )
     if notification_type in ("comment_created", "status_changed", "subscribed_update", "due_soon"):
         return NotificationPolicy(
             priority="normal",

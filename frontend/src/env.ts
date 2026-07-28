@@ -10,7 +10,7 @@
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8901';
 const DEFAULT_WS_BASE_URL = 'ws://127.0.0.1:8901';
 const DEFAULT_DEMO_CHANNEL = 'workspace:ws-1:issues';
-const DEFAULT_POLLING_INTERVAL_MS = 30_000;
+const DEFAULT_POLLING_INTERVAL_MS = 4_000;  // autopilot.md §3.5: 3~5s fallback polling
 const DEV_OAUTH_PROVIDERS: readonly string[] = ['mock'];
 
 export interface MeshEnv {

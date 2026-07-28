@@ -745,6 +745,29 @@ class IssueService:
                 user_agent=user_agent,
             )
 
+    async def create_issue_in_session(
+        self,
+        session: AsyncSession,
+        *,
+        actor: Member,
+        workspace_id: uuid.UUID,
+        body: CreateIssueRequest,
+    ) -> dict:
+        """Create an issue inside the CALLER's transaction.
+
+        Cross-module atomic write (same pattern as
+        ``apply_confirmed_move_in_session``): the autopilot executor's
+        ``create_issue`` action must commit the issue, its ``issue.created``
+        outbox row and the autopilot issue artifact in ONE transaction —
+        otherwise the relay can match the trigger event before the lineage
+        anchor (artifact) exists and the ``create_issue ↔ issue_created``
+        cascade escapes the depth guard (autopilot.md §4.5 / §5.3).
+        """
+        await set_tenant_context(session, workspace_id)
+        return await self._create_issue_tx(
+            session, actor=actor, workspace_id=workspace_id, body=body
+        )
+
     # ------------------------------------------------------------------
     # get (UUID + by-identifier)
     # ------------------------------------------------------------------

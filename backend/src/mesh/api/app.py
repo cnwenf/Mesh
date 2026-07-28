@@ -37,6 +37,9 @@ from mesh.auth.routes import router as auth_router
 from mesh.auth.service import AuthService
 from mesh.auth.token_routes import router as token_router
 from mesh.auth.tokens import TokenService
+from mesh.autopilot.channels import register_autopilot_checkers
+from mesh.autopilot.routes import router as autopilot_router
+from mesh.autopilot.service import AutopilotService
 from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.routes import router as comment_inbox_router
@@ -271,6 +274,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.squad_task_service = SquadTaskService(
         session_factory, comment_service=comment_service
     )
+    # Autopilot module (autopilot.md): rules / runs / inbound webhooks. The
+    # signing secret derives from jwt_secret (same ciphertext-only contract
+    # as runtime_credentials, README §6.16).
+    app.state.autopilot_service = AutopilotService(session_factory, settings.jwt_secret)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -280,6 +287,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_agent_checkers(app.state.authorizer, session_factory)
     register_execution_checkers(app.state.authorizer, session_factory)
     register_squad_checkers(app.state.authorizer, session_factory)
+    register_autopilot_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
@@ -301,6 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(runtime_daemon_router)
     app.include_router(skill_router)
     app.include_router(squad_router)
+    app.include_router(autopilot_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

@@ -554,8 +554,9 @@ class Approval(Base):
 
     ``tool_call`` subjects (high-risk tool confirmation) reference
     ``task_executions``; ``squad_plan`` subjects reference ``squad_tasks``
-    (composite FK landed by the squad module, migration 0021); the
-    ``autopilot_action`` subject column stays bare until that module lands.
+    (composite FK landed by the squad module, migration 0021) and
+    ``autopilot_action`` subjects reference ``autopilot_runs`` (physical
+    composite FK landed by the autopilot increment, README §6.10 R2).
     """
 
     __tablename__ = "approvals"
@@ -572,6 +573,12 @@ class Approval(Base):
             ["squad_tasks.workspace_id", "squad_tasks.id"],
             ondelete="CASCADE",
             name="approvals_subject_task_id_squad_tasks",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "subject_run_id"],
+            ["autopilot_runs.workspace_id", "autopilot_runs.id"],
+            ondelete="CASCADE",
+            name="approvals_subject_run_id_autopilot_runs",
         ),
         ForeignKeyConstraint(
             ["workspace_id", "requested_by_member_id"],

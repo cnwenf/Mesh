@@ -7,7 +7,7 @@ describe('resolveEnv(运行时配置)', () => {
     expect(env.apiBaseUrl).toBe('http://127.0.0.1:8901');
     expect(env.wsBaseUrl).toBe('ws://127.0.0.1:8901');
     expect(env.demoChannel).toBe('workspace:ws-1:issues');
-    expect(env.pollingIntervalMs).toBe(30_000);
+    expect(env.pollingIntervalMs).toBe(4_000);
     expect(env.isDev).toBe(false);
     // 生产默认不渲染第三方登录按钮组(由运营方经 env 显式启用)
     expect(env.oauthProviders).toEqual([]);
@@ -47,8 +47,8 @@ describe('resolveEnv(运行时配置)', () => {
     const env = resolveEnv({
       VITE_MESH_POLLING_INTERVAL_MS: 'not-a-number',
     } as unknown as ImportMetaEnv);
-    expect(env.pollingIntervalMs).toBe(30_000);
+    expect(env.pollingIntervalMs).toBe(4_000);
     const zero = resolveEnv({ VITE_MESH_POLLING_INTERVAL_MS: '0' } as unknown as ImportMetaEnv);
-    expect(zero.pollingIntervalMs).toBe(30_000);
+    expect(zero.pollingIntervalMs).toBe(4_000);
   });
 });

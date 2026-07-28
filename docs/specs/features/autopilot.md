@@ -195,6 +195,23 @@ approvals(README §6.10):subject_type='autopilot_action',经 approvals.subject_r
 **去重唯一键**:`UNIQUE (workspace_id, idempotency_key)`。入站时先尝试插入,命中唯一冲突即视为重复,直接返回成功(幂等)但不再分发。
 **复合 FK 引用前提(README §6.2)**:`webhook_events` 被 `autopilot_runs.webhook_event_id` 复合引用,除 `PK(id)` 外建 **`UNIQUE (workspace_id, id)`**。
 
+### 2.5.1 表:`webhook_secrets`(入站凭据,§3.1 / §5.3 配套实现)
+
+§3.1 的 `POST/GET /workspaces/{ws}/webhook-secrets` 与入站端点的签名校验所需凭据存储(§5.3「Webhook 密钥仅存哈希/引用,创建后仅显示一次」的落地形态):
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | UUID | PK | |
+| `workspace_id` | UUID | NOT NULL,FK→workspaces(id) | 归属 |
+| `label` | TEXT | NOT NULL,默认 `'default'` | 凭据标签 |
+| `token_hash` | TEXT | NOT NULL,`UNIQUE` | 入站 URL `/webhooks/inbound/{token}` 的 token 仅存 **SHA-256 哈希**(查询用,明文不落库) |
+| `encrypted_secret` | TEXT | NOT NULL | HMAC 签名密钥的 **Fernet 密文**(与 `runtime_credentials` 同契约,README §6.16;校验时需解密密重算签名,故非哈希) |
+| `status` | TEXT | NOT NULL,CHECK IN ('active','revoked') | 轮换即 revoke 旧凭据 |
+| `created_by` | UUID | NOT NULL,复合 FK→members | 创建者 |
+| `revoked_at` / `created_at` / `updated_at` | TIMESTAMPTZ | | |
+
+明文 token + secret **仅在创建/轮换响应出现一次**,列表端点绝不回显。入站端点无 Bearer 身份,RLS fail-closed 下经 SECURITY DEFINER 引导函数 `mesh_webhook_secret_by_token_hash(token_hash)` 先查凭据(得 workspace)再设租户 GUC——与 runtime 的 `mesh_runtime_by_token_hash` 同构。规则经 `trigger_config.secret_id` 绑定凭据;轮换保持行 id 不变(旧 token 立即失效,绑定规则继续可用)。
+
 ### 2.6 JSONB 配置结构
 
 **`trigger_config`(定时)**:
@@ -312,6 +329,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 | POST | `/workspaces/{ws}/autopilots/{id}/test-run` | 手动触发一次(可 dry_run) | admin / `autopilot:manage` |
 | GET | `/workspaces/{ws}/autopilots/{id}/runs` | 该规则执行历史 | 成员 |
 | GET | `/workspaces/{ws}/autopilots/{id}/preview-schedule` | cron 下次运行预览 | 成员 |
+| POST | `/workspaces/{ws}/autopilots/preview-schedule` | **无状态** cron 预览(正文 `{cron, timezone, count}`)——编辑器「下次 5 次运行」**实时预览**,新建态(无规则 id)亦可用 | 成员 |
 | GET | `/workspaces/{ws}/autopilot-runs/{run_id}` | 单次运行详情(含产物/尝试明细) | 成员 |
 | GET | `/workspaces/{ws}/autopilot-runs/{run_id}/artifacts` | 运行产物列表 | 成员 |
 | POST | `/workspaces/{ws}/autopilot-runs/{run_id}/cancel` | 取消正在运行的 run | admin / `autopilot:manage` |
@@ -321,6 +339,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 | POST | `/webhooks/inbound/{token}` | 接收外部 Webhook(HMAC 签名校验,非 Bearer) | 签名校验 |
 | POST | `/workspaces/{ws}/webhook-secrets` | 创建/轮换 Webhook 密钥 | admin |
 | GET | `/workspaces/{ws}/webhook-secrets` | 列出密钥(不返回明文) | admin |
+| GET | `/workspaces/{ws}/webhook-events` | 入站事件审计列表(§4.1「最近事件」;`autopilot_id`/`process_status` 过滤 + 游标分页;载荷原样可审,请求头仅存脱敏白名单) | 成员 |
 
 > **统一审批入口(README §6.10)**:autopilot 高风险动作审批与高风险工具确认、squad 计划审批共用 `approvals` 实体与统一收件箱端点 `GET /api/v1/approvals?role=mine` / `GET /approvals/{id}` / `POST /approvals/{id}/approve` / `POST /approvals/{id}/reject`(全局定义,本模块不重复)。上方 `runs/{run_id}/approve|reject` 仅为面向 autopilot 运行详情页的便捷薄封装。
 
@@ -399,6 +418,7 @@ REST 基础路径 `/api/v1`,集合嵌套于 `/workspaces/{ws}/`;鉴权 `Authoriz
 { "data": { "kill_switch": true, "paused_autopilots": 14, "updated_at": "2026-07-24T04:00:00Z" } }
 ```
 > 恢复时 `enabled: false`,逐条恢复原状态(active 的重新参与调度)。
+> UI 启用止血时**理由必填**(二次确认对话框,§4.2);`reason` 仅审计展示,不进请求体约束。
 
 **入站 Webhook(HMAC 签名校验)** `POST /api/v1/webhooks/inbound/{token}`(无需 Bearer)
 ```
@@ -438,7 +458,7 @@ X-Event-Id: evt_9f2a...
 | 422 | `cascade_depth_exceeded` | agent→agent 级联深度超过 `cascade_max_depth` |
 | 429 | `rate_limited` | 触发频率超限 / API 限流 |
 | 500 | `internal_error` | 服务内部错误 |
-| 503 | `executor_busy` | agent 运行时繁忙且并发已满 |
+| 503 | `executor_busy` | agent 运行时繁忙(**执行层**可重试错误分类:动作失败归因于运行时繁忙时按指数退避重试,见 §4.4 重试;触发期并发已满在护栏闸门以 429 `concurrency_limited` 丢弃并告警,不走本码) |
 
 ### 3.4 分页 / 鉴权 / 限流
 
