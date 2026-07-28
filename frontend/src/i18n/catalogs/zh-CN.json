@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "3d6b2f86",
+  "version": "1bd61f0d",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
@@ -276,6 +276,7 @@
     "autopilots.editor.overflow.queue": "排队",
     "autopilots.editor.overflowLabel": "超出频率上限时",
     "autopilots.editor.payloadMatch": "载荷匹配规则(JSON 数组)",
+    "autopilots.editor.payloadMatchInvalid": "载荷匹配规则必须是合法的 JSON 数组",
     "autopilots.editor.preset.custom": "自定义…",
     "autopilots.editor.preset.daily9": "每天 09:00",
     "autopilots.editor.preset.hourly": "每小时",

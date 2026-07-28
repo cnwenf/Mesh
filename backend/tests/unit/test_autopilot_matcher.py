@@ -337,3 +337,73 @@ async def test_scope_project_ids_filtering(session_factory) -> None:
     async with session_factory() as session, session.begin():
         await match_domain_event(session, event)
     assert await _runs(session_factory) == []
+
+
+async def test_cascade_lineage_from_autopilot_created_issue(session_factory) -> None:
+    """M1 regression: issue triggers trace lineage through issue artifacts.
+
+    Without the artifact trace-back, an ``issue_created`` trigger fired by
+    the ``create_issue`` action reset ``cascade_depth`` to zero every round
+    (each round creates a NEW issue), so the ``create_issue ↔ issue_created``
+    self-loop could never be cut by ``cascade_max_depth`` (§5.3 防回环).
+    """
+    world = await seed_world(session_factory)
+    issue = await _seed_issue(session_factory, world)
+    # an upstream rule of a DIFFERENT trigger type created this issue via its
+    # run (the create_issue action records an "issue" artifact)
+    parent_rule = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        trigger_type="webhook_received",
+    )
+    parent_run = await make_run(session_factory, parent_rule, status="running", cascade_depth=2)
+    async with session_factory() as session, session.begin():
+        session.add(
+            AutopilotArtifact(
+                workspace_id=world["ws_id"],
+                run_id=parent_run.id,
+                artifact_type="issue",
+                ref_table="issues",
+                ref_id=issue.id,
+            )
+        )
+    await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        trigger_type="issue_created",
+        guardrails={"cascade_max_depth": 3},
+    )
+    event = await _outbox_event(
+        session_factory,
+        world,
+        event="issue.created",
+        data={"issue": {"id": str(issue.id)}},
+    )
+    async with session_factory() as session, session.begin():
+        await match_domain_event(session, event)
+    runs = await _runs(session_factory)
+    children = [r for r in runs if r.parent_run_id == parent_run.id]
+    assert len(children) == 1
+    assert children[0].cascade_depth == 3  # parent depth + 1, carried over the issue artifact
+
+    # depth 3 > max 2 → the guardrail gate cuts the chain: no new run
+    async with session_factory() as session, session.begin():
+        from mesh.db.models.autopilot import Autopilot
+
+        downstream = await session.scalar(
+            select(Autopilot).where(Autopilot.trigger_type == "issue_created")
+        )
+        guardrails = dict(downstream.guardrails)
+        guardrails["cascade_max_depth"] = 2
+        downstream.guardrails = guardrails
+    event2 = await _outbox_event(
+        session_factory,
+        world,
+        event="issue.created",
+        data={"issue": {"id": str(issue.id)}},
+    )
+    async with session_factory() as session, session.begin():
+        await match_domain_event(session, event2)
+    assert len(await _runs(session_factory)) == len(runs)  # chain cut

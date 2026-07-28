@@ -14,7 +14,10 @@ and executor loops):
 * kill switch: pause-all / restore;
 * schedule: a due rule fires exactly once (atomic claim advances
   next_run_at; later passes do not re-fire);
-* concurrency guardrail: a busy rule (limit 1) drops further triggers.
+* concurrency guardrail: a busy rule (limit 1) drops further triggers;
+* anti-loop: the create_issue ↔ issue_created self-loop is cut by the
+  cascade-depth guardrail (issue-artifact lineage), not by rate-limit
+  fallback.
 """
 
 from __future__ import annotations
@@ -759,3 +762,70 @@ async def test_rejected_events_audited_in_rejected_namespace(
     assert rejected[0].idempotency_key == f"rejected:{expected_suffix}"
     # authorization headers are never persisted
     assert "authorization" not in (rejected[0].headers or {})
+
+
+async def test_create_issue_self_loop_is_cut_by_cascade_depth(api_client, autopilot_worker):
+    """M1 regression (§1.1 / §5.3 / P11): the create_issue ↔ issue_created loop.
+
+    A rule triggered by ``issue_created`` whose action creates ANOTHER issue
+    loops forever unless issue triggers trace their lineage: every round
+    creates a NEW issue, so without the issue-artifact trace-back the
+    cascade depth stayed zero and loop detection never fired — only the
+    rate limit / daily budget backstop eventually stopped the spawn storm.
+
+    With the lineage wired, ``cascade_depth`` accumulates along the
+    artifact chain and the guardrail gate cuts the chain at
+    ``cascade_max_depth`` — well before the (deliberately generous) rate
+    limit could engage.
+    """
+    token, ws_id, _agent_id = await _setup_world(api_client, "loop")
+    rule = await _create_rule(
+        api_client,
+        token,
+        ws_id,
+        {
+            "name": "issue-spawner",
+            "trigger_type": "issue_created",
+            "action_config": [{"type": "create_issue", "title": "spawn {{run.id}}"}],
+            # no approval gate on create_issue — the loop must run unattended
+            "guardrails": {"approval_required_actions": [], "cascade_max_depth": 3},
+            # generous rate limit / concurrency: had the bug survived, the
+            # loop would blow PAST 4 runs toward the 50/hour ceiling — the
+            # exact-4 assertion below is what proves the cascade cut, not a
+            # rate-limit fallback
+            "rate_limit_max": 50,
+            "concurrency_limit": 10,
+        },
+    )
+    project_resp = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/projects",
+        json={"name": "LP", "key": "LP"},
+        headers=_auth(token),
+    )
+    project_id = project_resp.json()["data"]["id"]
+    seed = await api_client.post(
+        f"/api/v1/workspaces/{ws_id}/issues",
+        json={"title": "loop-seed", "project_id": project_id},
+        headers=_auth(token),
+    )
+    assert seed.status_code in (200, 201), seed.text
+
+    # chain: seed → run(d0) → issue → run(d1) → issue → run(d2) → issue →
+    # run(d3) → issue → next trigger is depth 4 > 3 → cascade_depth_exceeded
+    runs = await _poll_runs(api_client, token, ws_id, rule["id"], expect=4, timeout=30.0)
+    assert len(runs) == 4
+
+    # the loop has STOPPED — no further runs after the cut
+    await asyncio.sleep(4.0)
+    resp = await api_client.get(
+        f"/api/v1/workspaces/{ws_id}/autopilots/{rule['id']}/runs", headers=_auth(token)
+    )
+    assert resp.status_code == 200, resp.text
+    settled = resp.json()["data"]
+    assert len(settled) == 4
+
+    # the depth chain 0..3 is carried over the issue artifacts — only the
+    # seed run lacks a parent
+    depths = sorted(run["cascade_depth"] for run in settled)
+    assert depths == [0, 1, 2, 3]
+    assert [run["parent_run_id"] for run in settled].count(None) == 1

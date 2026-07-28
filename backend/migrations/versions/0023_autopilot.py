@@ -2,9 +2,10 @@
 
 Stage-7 agent-layer increment B (autopilot.md §2 / README §6.5 / §6.6 /
 §6.9 / §6.10). DDL mirrors docs/specs/features/autopilot.md §2.2–§2.7 and
-the README §6 canonical contracts. Migration number 0020 (single-head chain
-0001 → 0020); parallel increments occupying 0020 on their own branches are
-renumbered at merge time by the later-merging side (house convention).
+the README §6 canonical contracts. Migration number 0023 (single-head chain
+0001 → 0023, chained after the squad migrations 0021/0022); this increment
+originally occupied 0020 on its branch and was renumbered at merge time by
+the later-merging side (house convention).
 
 Tables (all tenant-scoped, RLS fail-closed per README §6.2 rule 5):
 
@@ -39,16 +40,16 @@ signature-authenticated, NOT Bearer — the workspace is unknown until the
 token lookup succeeds, same pattern as the runtime daemon token lookups):
 - ``mesh_webhook_secret_by_token_hash`` — URL token hash → secret row.
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0023
+Revises: 0022
 Create Date: 2026-07-28
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0020"
-down_revision = "0019"
+revision = "0023"
+down_revision = "0022"
 branch_labels = None
 depends_on = None
 

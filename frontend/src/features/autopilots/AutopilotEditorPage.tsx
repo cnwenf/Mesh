@@ -1,7 +1,8 @@
 /**
  * 规则编辑器(autopilot.md §4.2):四段可折叠区块——触发器 → 过滤 → 动作 →
  * 护栏与重试,底部固定 [取消][保存草稿(paused)][保存并启用]。cron 提供
- * 「下次 5 次运行预览」实时刷新(编辑已存在规则时经 preview-schedule 端点);
+ * 「下次 5 次运行预览」实时刷新(cron/时区变更防抖重算,经无状态
+ * preview-schedule 端点,新建态同样可用,非法式显示无效提示);
  * 动作区可增删排序;run_agent_prompt 强制选执行者 agent + prompt(§5.1
  * executor_required)。新建时护栏以推荐默认值预填,体现「护栏默认开启」。
  */
@@ -215,6 +216,15 @@ function stateFromRule(rule: AutopilotRule): EditorState {
   };
 }
 
+/** Malformed payload_match JSON in the filter editor — surfaced with a
+ * dedicated i18n toast instead of the generic error (R2 LOW). */
+class PayloadMatchInvalidError extends Error {
+  constructor() {
+    super('payload_match must be a JSON array');
+    this.name = 'PayloadMatchInvalidError';
+  }
+}
+
 function buildPayload(state: EditorState): Record<string, unknown> {
   const triggerConfig: Record<string, unknown> = {};
   if (state.triggerType === 'schedule') {
@@ -253,7 +263,14 @@ function buildPayload(state: EditorState): Record<string, unknown> {
   if (splitCsv(state.filterKeywordExclude).length > 0)
     filterConfig.keyword_exclude = splitCsv(state.filterKeywordExclude);
   if (state.filterPayloadMatch.trim()) {
-    filterConfig.payload_match = JSON.parse(state.filterPayloadMatch);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(state.filterPayloadMatch);
+    } catch {
+      throw new PayloadMatchInvalidError();
+    }
+    if (!Array.isArray(parsed)) throw new PayloadMatchInvalidError();
+    filterConfig.payload_match = parsed;
   }
 
   const approvalRequiredActions: string[] = [];
@@ -491,10 +508,13 @@ export function AutopilotEditorPage(): React.JSX.Element {
         });
         navigate(`/autopilots/${autopilotId}`);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        const messageKey =
+          error instanceof PayloadMatchInvalidError
+            ? 'autopilots.editor.payloadMatchInvalid'
+            : error instanceof MeshApiError
+              ? errorToI18nKey(error)
+              : 'error.unknown';
+        toast.addToast(t(messageKey), { tone: 'danger', closeLabel: t('common.close') });
       } finally {
         setSaving(false);
       }

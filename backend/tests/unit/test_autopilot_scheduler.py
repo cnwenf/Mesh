@@ -181,3 +181,66 @@ async def test_guardrail_gate_drops_over_limit(session_factory) -> None:
     # next_run_at still advanced
     row = await _rule(session_factory, rule.id)
     assert row.next_run_at > NOW
+
+
+async def test_misfire_run_all_under_default_concurrency_catches_up_every_slot(
+    session_factory,
+) -> None:
+    """M3 regression: run_all catch-up bypasses the trigger-time concurrency
+    gate. Without the bypass the pending rows created in the SAME transaction
+    count as in-flight and starve every slot past the first under the default
+    ``concurrency_limit=1`` — §4.5 「每个错过槽位一次运行」.
+    """
+    world = await seed_world(session_factory)
+    three_hours_back = NOW - timedelta(hours=3, minutes=30)
+    rule = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        next_run_at=three_hours_back,
+        trigger_config={"cron": "0 * * * *", "timezone": "UTC", "misfire_policy": "run_all"},
+        # DEFAULT concurrency_limit=1 — the regression case (prior behavior
+        # created exactly ONE run here).
+        rate_limit_max=100,
+        guardrails={"dedup_window_seconds": 0, "daily_run_budget": 0, "daily_token_budget": 0},
+    )
+    created = await _fire_schedule_rule(
+        session_factory,
+        rule_id=rule.id,
+        workspace_id=world["ws_id"],
+        expected_next=three_hours_back,
+        grace_seconds=300,
+        run_all_cap=50,
+        now=NOW,
+    )
+    # the original due slot + 3 missed hourly slots — all four fire
+    assert created == 4
+    assert len(await _runs(session_factory)) == 4
+
+
+async def test_missing_timezone_parks_rule_instead_of_silent_utc(session_factory) -> None:
+    """R1 LOW: an explicit IANA timezone is a creation-time invariant (§5.1);
+    a row without one is corrupted config — park it (next_run_at NULL, fire
+    nothing) instead of silently falling back to UTC.
+    """
+    world = await seed_world(session_factory)
+    due = NOW - timedelta(minutes=5)
+    rule = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        next_run_at=due,
+        trigger_config={"cron": "0 9 * * *", "timezone": "", "misfire_policy": "run_once"},
+    )
+    created = await _fire_schedule_rule(
+        session_factory,
+        rule_id=rule.id,
+        workspace_id=world["ws_id"],
+        expected_next=due,
+        grace_seconds=300,
+        run_all_cap=50,
+        now=NOW,
+    )
+    assert created == 0
+    row = await _rule(session_factory, rule.id)
+    assert row.next_run_at is None  # parked — scanner will not pick it up again

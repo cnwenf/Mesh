@@ -21,9 +21,14 @@ Event → trigger mapping:
   the comment mentions an agent member.
 
 Cascade tracing: when the triggering comment was PRODUCED by an autopilot
-run (its artifacts reference the comment), the new run links
-``parent_run_id`` / ``cascade_depth + 1`` — the guardrail gate cuts the
-chain at ``cascade_max_depth`` (agent↔agent loop protection, §2.6).
+run (its artifacts reference the comment) — or the triggering issue was
+CREATED by an autopilot run (its artifacts reference the issue) — the new
+run links ``parent_run_id`` / ``cascade_depth + 1`` — the guardrail gate
+cuts the chain at ``cascade_max_depth`` (agent↔agent loop protection,
+§2.6 / §5.3). Tracing issue artifacts is what closes the
+``create_issue ↔ issue_created`` self-loop: every issue the action
+creates carries its lineage, so the depth accumulates across fresh issues
+instead of resetting to zero each round.
 """
 
 from __future__ import annotations
@@ -120,20 +125,25 @@ async def _issue_filter_context(
     }
 
 
-async def _parent_run_for_comment(
-    session: AsyncSession, *, workspace_id: uuid.UUID, comment_id: uuid.UUID
+async def _parent_run_for_artifact(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    artifact_type: str,
+    ref_table: str,
+    ref_id: uuid.UUID,
 ) -> tuple[uuid.UUID | None, int, bool]:
-    """(parent_run_id, cascade_depth, actor_is_agent_run) for a comment
-    that an autopilot run produced — the cascade lineage anchor."""
+    """(parent_run_id, cascade_depth, produced_by_run) for a resource that
+    an autopilot run produced — the cascade lineage anchor (§5.3 防回环)."""
     row = (
         await session.execute(
             select(AutopilotArtifact.run_id, AutopilotRun.cascade_depth)
             .join(AutopilotRun, AutopilotRun.id == AutopilotArtifact.run_id)
             .where(
                 AutopilotArtifact.workspace_id == workspace_id,
-                AutopilotArtifact.artifact_type == "comment",
-                AutopilotArtifact.ref_table == "comments",
-                AutopilotArtifact.ref_id == comment_id,
+                AutopilotArtifact.artifact_type == artifact_type,
+                AutopilotArtifact.ref_table == ref_table,
+                AutopilotArtifact.ref_id == ref_id,
             )
             .order_by(AutopilotArtifact.created_at.desc())
             .limit(1)
@@ -142,6 +152,38 @@ async def _parent_run_for_comment(
     if row is None:
         return None, 0, False
     return row[0], row[1] + 1, True
+
+
+async def _parent_run_for_comment(
+    session: AsyncSession, *, workspace_id: uuid.UUID, comment_id: uuid.UUID
+) -> tuple[uuid.UUID | None, int, bool]:
+    """Lineage anchor for comment triggers (agent-produced comments)."""
+    return await _parent_run_for_artifact(
+        session,
+        workspace_id=workspace_id,
+        artifact_type="comment",
+        ref_table="comments",
+        ref_id=comment_id,
+    )
+
+
+async def _parent_run_for_issue(
+    session: AsyncSession, *, workspace_id: uuid.UUID, issue_id: uuid.UUID
+) -> tuple[uuid.UUID | None, int, bool]:
+    """Lineage anchor for issue triggers (autopilot-created issues).
+
+    Closes the ``create_issue ↔ issue_created`` self-loop: the action
+    records an ``issue`` artifact for every issue it creates, so issue
+    triggers trace back to the creating run and ``cascade_depth``
+    accumulates until the guardrail gate cuts the chain.
+    """
+    return await _parent_run_for_artifact(
+        session,
+        workspace_id=workspace_id,
+        artifact_type="issue",
+        ref_table="issues",
+        ref_id=issue_id,
+    )
 
 
 def _matches_trigger_config(
@@ -335,7 +377,10 @@ async def match_domain_event(session: AsyncSession, event: OutboxEvent) -> None:
             if not match_filter_config(rule.filter_config, context):
                 continue
 
-            # Cascade lineage for agent-produced comments.
+            # Cascade lineage for agent-produced comments AND autopilot-
+            # created issues — both anchor the loop cut (§5.3): the depth
+            # accumulates along the artifact chain until cascade_max_depth
+            # refuses the downstream run.
             parent_run_id: uuid.UUID | None = None
             cascade_depth = 0
             comment_id = _uuid_or_none(data.get("id"))
@@ -346,6 +391,9 @@ async def match_domain_event(session: AsyncSession, event: OutboxEvent) -> None:
                 )
                 loop_target = str(comment_id)
             elif issue_id is not None:
+                parent_run_id, cascade_depth, _produced = await _parent_run_for_issue(
+                    session, workspace_id=event.workspace_id, issue_id=issue_id
+                )
                 loop_target = str(issue_id)
 
             dedup_key = f"{event.id}:{rule.id}"

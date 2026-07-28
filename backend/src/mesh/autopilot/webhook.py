@@ -164,7 +164,7 @@ async def lookup_secret_by_token(
 ) -> tuple[uuid.UUID, uuid.UUID, str, str] | None:
     """Resolve the URL token → (id, workspace_id, status, encrypted_secret).
 
-    Uses the SECURITY DEFINER bootstrap function (migration 0020): the
+    Uses the SECURITY DEFINER bootstrap function (migration 0023): the
     endpoint has no Bearer identity, so the tenant GUC cannot be set before
     the lookup — RLS would hide every row from the restricted app role.
     Falls back to a direct query when the function is absent (owner-role

@@ -45,6 +45,12 @@ from mesh.outbox.service import emit_event, emit_realtime
 DEFAULT_GUARDRAILS: dict[str, Any] = {
     "rate_limit_overflow": "drop",
     "dedup_window_seconds": 300,
+    # The dedup key template is instantiated by each trigger path at gate
+    # time: the domain-event matcher keys ``{event.id}:{rule.id}``, the
+    # scheduler ``schedule:{rule.id}:{slot}``, the inbound webhook the
+    # event id / ``rejected:<hash>`` — all concrete renderings of the
+    # default ``{{trigger.event_id}}`` template (§2.6), scoped per rule by
+    # the gate's ``autopilot_id`` filter.
     "dedup_key_template": "{{trigger.event_id}}",
     "daily_run_budget": 200,
     "daily_token_budget": 2000000,
@@ -170,19 +176,27 @@ async def _dedup_hit(
 async def _loop_hit(
     session: AsyncSession,
     *,
-    autopilot_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     executor_agent_id: uuid.UUID | None,
     target_ref: str,
     window: timedelta,
     now: datetime,
 ) -> bool:
-    """Anti-ping-pong: same (executor agent, trigger target) inside window."""
+    """Anti-ping-pong: same (executor agent, trigger target) inside window.
+
+    The key is the EXECUTOR AGENT, not the rule (autopilot.md §2.6 / §5.3):
+    two DIFFERENT rules sharing one executor that ping-pong on the same
+    target are still a loop even though neither rule repeats itself, so the
+    window query joins the rules and filters on ``executor_agent_id``.
+    """
     if executor_agent_id is None or not target_ref:
         return False
     existing = await session.scalar(
         select(AutopilotRun.id)
+        .join(Autopilot, Autopilot.id == AutopilotRun.autopilot_id)
         .where(
-            AutopilotRun.autopilot_id == autopilot_id,
+            Autopilot.workspace_id == workspace_id,
+            Autopilot.executor_agent_id == executor_agent_id,
             AutopilotRun.created_at >= now - window,
             AutopilotRun.trigger_snapshot["loop_target"].astext == target_ref,
         )
@@ -260,10 +274,19 @@ async def evaluate_trigger(
     cascade_depth: int = 0,
     now: datetime | None = None,
     emit_alerts: bool = True,
+    bypass_concurrency: bool = False,
 ) -> GateDecision:
     """Run the full guardrail gate for one trigger (see module docstring).
 
     ``emit_alerts=False`` is for dry-run previews that must not side-effect.
+    ``bypass_concurrency=True`` is reserved for ``misfire_policy=run_all``
+    catch-up slots (§4.5 one run per missed slot): the slots are created as
+    ``pending`` runs in ONE transaction, which the in-flight counter would
+    otherwise see as already-occupied slots and refuse every slot past the
+    first under the default ``concurrency_limit=1``. The executor still
+    serializes the actual execution — only the trigger-time admission gate
+    is bypassed, every other guardrail (rate limit / dedup / loop / cascade
+    / budgets) still applies to catch-up slots.
     """
     moment = now if now is not None else datetime.now(UTC)
     guardrails = dict(DEFAULT_GUARDRAILS)
@@ -317,9 +340,9 @@ async def evaluate_trigger(
                 detail={"window": window_seconds, "max": rule.rate_limit_max},
             )
 
-    # 4. Concurrency.
+    # 4. Concurrency (skipped for run_all catch-up slots — see docstring).
     in_flight = await _in_flight_count(session, autopilot_id=rule.id)
-    if in_flight >= max(1, rule.concurrency_limit):
+    if not bypass_concurrency and in_flight >= max(1, rule.concurrency_limit):
         if emit_alerts:
             await emit_rate_limited(
                 session, rule=rule, reason="concurrency", dropped=1, now=moment
@@ -336,7 +359,7 @@ async def evaluate_trigger(
         loop_window = int(guardrails.get("agent_loop_window_seconds") or 0)
         if loop_window > 0 and await _loop_hit(
             session,
-            autopilot_id=rule.id,
+            workspace_id=rule.workspace_id,
             executor_agent_id=rule.executor_agent_id,
             target_ref=trigger_target_ref,
             window=timedelta(seconds=loop_window),

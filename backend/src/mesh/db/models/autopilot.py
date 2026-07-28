@@ -19,7 +19,7 @@ Tables (all tenant-scoped, README §6.1/§6.2):
 
 The unified approvals entity (README §6.10) gains its deferred physical
 composite FK ``approvals.subject_run_id → autopilot_runs(workspace_id, id)``
-here, now that the referenced table exists (migration 0020).
+here, now that the referenced table exists (migration 0023).
 
 Composite FKs follow the README §6.2 same-tenant pattern; nullable composite
 references use the PG16 column-level ``ON DELETE SET NULL (<column>)`` form

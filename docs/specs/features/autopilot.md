@@ -458,7 +458,7 @@ X-Event-Id: evt_9f2a...
 | 422 | `cascade_depth_exceeded` | agent→agent 级联深度超过 `cascade_max_depth` |
 | 429 | `rate_limited` | 触发频率超限 / API 限流 |
 | 500 | `internal_error` | 服务内部错误 |
-| 503 | `executor_busy` | agent 运行时繁忙且并发已满 |
+| 503 | `executor_busy` | agent 运行时繁忙(**执行层**可重试错误分类:动作失败归因于运行时繁忙时按指数退避重试,见 §4.4 重试;触发期并发已满在护栏闸门以 429 `concurrency_limited` 丢弃并告警,不走本码) |
 
 ### 3.4 分页 / 鉴权 / 限流
 

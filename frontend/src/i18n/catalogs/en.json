@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "60d8a9f4",
+  "version": "c71736a2",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -276,6 +276,7 @@
     "autopilots.editor.overflow.queue": "Queue it",
     "autopilots.editor.overflowLabel": "On rate-limit exceeded",
     "autopilots.editor.payloadMatch": "Payload match rules (JSON array)",
+    "autopilots.editor.payloadMatchInvalid": "Payload match rules must be a valid JSON array",
     "autopilots.editor.preset.custom": "Custom…",
     "autopilots.editor.preset.daily9": "Daily at 09:00",
     "autopilots.editor.preset.hourly": "Hourly",

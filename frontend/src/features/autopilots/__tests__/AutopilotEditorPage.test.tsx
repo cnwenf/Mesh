@@ -126,6 +126,32 @@ describe('AutopilotEditorPage', () => {
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
   });
 
+  it('rejects malformed payload_match JSON with a dedicated toast (R2 LOW)', async () => {
+    const calls = setup(false);
+    renderEditor('/autopilots/new');
+    await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
+    console.log('STEP editor-ready');
+    await userEvent.type(screen.getByTestId('autopilot-editor-name'), '过滤坏JSON');
+    console.log('STEP name-typed');
+    // open the filter section and type invalid JSON into payload_match
+    await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
+    console.log('STEP filter-toggled');
+    expect(screen.getByTestId('autopilot-section-filter-body')).toBeInTheDocument();
+    console.log('STEP filter-body-open');
+    await userEvent.type(screen.getByTestId('autopilot-editor-payload-match'), 'not-json');
+    console.log('STEP payload-typed');
+    expect((screen.getByTestId('autopilot-editor-payload-match') as HTMLTextAreaElement).value).toBe('not-json');
+    await userEvent.click(screen.getByTestId('autopilot-editor-save'));
+    console.log('STEP save-clicked');
+    await waitFor(() =>
+      expect(
+        screen.getByText('Payload match rules must be a valid JSON array'),
+      ).toBeInTheDocument(),
+    );
+    // nothing was submitted
+    expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(false);
+  });
+
   it('prefills from an existing rule in edit mode', async () => {
     setup(true);
     renderEditor('/autopilots/ap-1/edit');

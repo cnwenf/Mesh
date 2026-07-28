@@ -523,3 +523,40 @@ async def test_list_rules_includes_last_run_status(session_factory, service) -> 
     listing2 = await service.list_rules(workspace_id=world["ws_id"])
     row2 = next(r for r in listing2["data"] if r["id"] == str(rule2.id))
     assert row2["last_run_status"] is None
+
+
+async def test_list_webhook_events_cursor_pagination(session_factory, service) -> None:
+    """M5 regression: the cursor / has_more branch of the audit listing.
+
+    A page with MORE than ``limit`` rows returns ``next_cursor``; following
+    it onto a short page (< limit rows) returns ``next_cursor=None``.
+    """
+    from datetime import timedelta
+
+    from mesh.db.models.autopilot import WebhookEvent
+
+    world = await seed_world(session_factory)
+    base = datetime.now(UTC)
+    async with session_factory() as session, session.begin():
+        for index in range(3):
+            session.add(
+                WebhookEvent(
+                    workspace_id=world["ws_id"],
+                    idempotency_key=f"cursor-{index}",
+                    event_type="inbound.test",
+                    payload={"i": index},
+                    signature_status="valid",
+                    process_status="dispatched",
+                    received_at=base + timedelta(seconds=index),
+                )
+            )
+
+    first = await service.list_webhook_events(workspace_id=world["ws_id"], limit=2)
+    assert [row["idempotency_key"] for row in first["data"]] == ["cursor-2", "cursor-1"]
+    assert first["next_cursor"] is not None
+
+    second = await service.list_webhook_events(
+        workspace_id=world["ws_id"], limit=2, cursor=first["next_cursor"]
+    )
+    assert [row["idempotency_key"] for row in second["data"]] == ["cursor-0"]
+    assert second["next_cursor"] is None  # short page → last page

@@ -303,3 +303,80 @@ async def test_rate_limited_emits_realtime_and_notification(session_factory) -> 
     assert "notification.fanout" in types  # critical circuit alert
     fanout = next(e for e in events if e.event_type == "notification.fanout")
     assert fanout.payload["type"] == "autopilot_alert"
+
+
+async def test_gate_loop_detection_keyed_by_executor_across_rules(session_factory) -> None:
+    """M4 regression: the loop key is (executor_agent, target), NOT the rule.
+
+    Two DIFFERENT rules sharing one executor that ping-pong on the same
+    target are a loop too (§2.6 / §5.3) — per-rule keying let the second
+    rule's window query see nothing and pass it through.
+    """
+    import uuid
+
+    from mesh.db.models.agent import Agent
+
+    world = await seed_world(session_factory)
+    rule_a = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        executor_agent_id=world["agent_id"],
+        guardrails={"agent_loop_detection": True, "agent_loop_window_seconds": 60},
+    )
+    # rule A already ran against target "issue-9" inside the window
+    await make_run(
+        session_factory, rule_a, status="succeeded", trigger_snapshot={"loop_target": "issue-9"}
+    )
+    # rule B — a DIFFERENT rule, SAME executor agent
+    rule_b = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        executor_agent_id=world["agent_id"],
+        guardrails={"agent_loop_detection": True, "agent_loop_window_seconds": 60},
+    )
+    async with session_factory() as session:
+        cross = await evaluate_trigger(session, rule=rule_b, trigger_target_ref="issue-9")
+    assert cross.allowed is False and cross.reason == "agent_loop_detected"
+
+    # a different executor on the same target is not a ping-pong
+    second_agent_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        session.add(
+            Agent(
+                id=second_agent_id,
+                workspace_id=world["ws_id"],
+                name="Agent Other",
+                owner_user_id=world["user_id"],
+                lifecycle_status="active",
+            )
+        )
+    rule_c = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        executor_agent_id=second_agent_id,
+        guardrails={"agent_loop_detection": True, "agent_loop_window_seconds": 60},
+    )
+    async with session_factory() as session:
+        other = await evaluate_trigger(session, rule=rule_c, trigger_target_ref="issue-9")
+    assert other.allowed is True
+
+
+async def test_gate_bypass_concurrency_for_catchup_slots(session_factory) -> None:
+    """run_all catch-up slots bypass ONLY the trigger-time concurrency gate."""
+    world = await seed_world(session_factory)
+    rule = await make_rule(
+        session_factory,
+        world["ws_id"],
+        created_by=world["member_id"],
+        concurrency_limit=1,
+    )
+    # one in-flight run occupies the only slot
+    await make_run(session_factory, rule, status="running")
+    async with session_factory() as session:
+        denied = await evaluate_trigger(session, rule=rule)
+        bypassed = await evaluate_trigger(session, rule=rule, bypass_concurrency=True)
+    assert denied.allowed is False and denied.reason == "concurrency_limited"
+    assert bypassed.allowed is True

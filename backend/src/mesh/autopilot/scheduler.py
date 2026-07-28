@@ -100,15 +100,21 @@ async def _fire_schedule_rule(
 
         config = rule.trigger_config or {}
         cron_expression = str(config.get("cron") or "")
-        timezone_name = str(config.get("timezone") or "UTC")
+        # An explicit IANA timezone is a creation-time invariant (autopilot.md
+        # §5.1): never fall back to a silent "UTC" — a missing/invalid cron or
+        # timezone means corrupted config, which we PARK (claim with
+        # next_run_at = NULL, fire nothing) instead of guessing.
+        timezone_name = str(config.get("timezone") or "")
         misfire_policy = str(config.get("misfire_policy") or "run_once")
         one_time_at = config.get("one_time_at")
 
+        config_usable = True
         try:
             new_next = cron_mod.next_fire_time(cron_expression, timezone_name, after=now)
         except Exception:  # noqa: BLE001 — invalid config parked by validation elsewhere
             logger.exception("rule %s has unusable schedule config", rule.id)
             new_next = None
+            config_usable = False
 
         if one_time_at:
             new_next = None  # one-shot: archive after this fire
@@ -124,6 +130,9 @@ async def _fire_schedule_rule(
 
         if one_time_at:
             rule.status = "archived"
+
+        if not config_usable:
+            return 0  # parked: next_run_at is NULL, nothing fires until repaired
 
         # Misfire handling: how many slots were missed?
         slots: list[datetime] = [expected_next]
@@ -146,12 +155,19 @@ async def _fire_schedule_rule(
                 slots = []  # too late — advance only, fire nothing
 
         created = 0
-        for slot in slots:
+        for index, slot in enumerate(slots):
+            # run_all catch-up slots (every slot past the original due one)
+            # bypass ONLY the trigger-time concurrency gate — they are created
+            # pending in this one transaction, which the in-flight counter
+            # would count as occupied and starve the catch-up under the
+            # default concurrency_limit=1 (§4.5 one run per missed slot).
+            is_catchup_slot = misfire_policy == "run_all" and index > 0
             decision = await evaluate_trigger(
                 session,
                 rule=rule,
                 dedup_key=f"schedule:{rule.id}:{slot.isoformat()}",
                 now=now,
+                bypass_concurrency=is_catchup_slot,
             )
             if not decision.allowed:
                 continue

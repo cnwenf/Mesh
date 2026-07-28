@@ -573,6 +573,16 @@ class AutopilotService:
                     "matched_filters": matched_dimensions(rule.filter_config),
                 }
 
+            # The kill switch is an emergency stop (§5.3): it blocks manual
+            # test runs too (dry_run above is side-effect free and stays
+            # available for debugging a paused workspace).
+            if (rule.guardrails or {}).get("kill_switch_paused"):
+                raise ConflictError(
+                    "autopilot kill switch is engaged",
+                    code="kill_switch",
+                    details={"rule": str(rule.id)},
+                )
+
             now = _now()
             snapshot = {
                 "event_id": f"test:{rule.id}:{now.isoformat()}",
