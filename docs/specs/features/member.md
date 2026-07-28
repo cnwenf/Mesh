@@ -87,7 +87,7 @@ members ──1:N──► member_project_access(guest 项目级可见性)──
 | `role` | TEXT | NOT NULL,CHECK IN ('owner','admin','member','guest') | `'member'` | 工作区角色 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled','removed') | `'active'` | |
 | `display_override` | TEXT | NULL | NULL | 工作区内显示名覆盖 |
-| `search_name` | TEXT | NOT NULL | `''` | **检索专用投影(MES-76 H3 登记,search-command-palette.md §2.2 owns 同步契约)**:按 §2.4 显示名解析链计算的小写归一名,供全局搜索 trigram 索引;**非显示真源**——显示一律实时解析链(§2.4),本列由入册/改名写路径同事务维护 + 周期对账兜底,防跨表表达式不可索引(README §6.1「高频表存储快照须强制一致并明示」条款登记项) |
+| `search_name` | TEXT | NOT NULL | `''` | **检索专用投影(MES-76 H3 登记,search-command-palette.md §2.2 owns 同步契约与归一函数)**:`mesh_search_norm(§2.4 显示名解析链结果)`(NFKD + 去重音 + 小写,与索引/查询/回填同一归一函数,R2-H3),供全局搜索 trigram 与前缀 pattern 索引;**非显示真源**——显示一律实时解析链(§2.4),本列由入册/改名写路径同事务维护 + 周期对账兜底,防跨表表达式不可索引(README §6.1「高频表存储快照须强制一致并明示」条款登记项) |
 | `joined_at` | TIMESTAMPTZ | NULL | NULL | 正式加入时间 |
 | `disabled_at` | TIMESTAMPTZ | NULL | NULL | 停用时间 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -146,6 +146,7 @@ CREATE INDEX idx_members_type ON members(workspace_id, member_type);
 
 -- 检索投影 trigram 索引(MES-76 H3,DDL 与同步契约权威见 search-command-palette.md §2.2)
 CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
+CREATE INDEX idx_members_search_name_prefix ON members (workspace_id, search_name text_pattern_ops) WHERE status <> 'removed';  -- R2-H3:1–2 字符前缀路径
 CREATE INDEX idx_members_ws_type_active ON members (workspace_id, member_type) WHERE status <> 'removed';
 
 -- 供引用方复合 FK(README §6.2):issues.assignee_id 等据此同租户引用 members

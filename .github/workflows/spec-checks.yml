@@ -1,7 +1,8 @@
-# Mesh Spec 文档级硬关卡(R3 落地,README §6.7/T26;R5 扩充,T35):
+# Mesh Spec 文档级硬关卡(R3 落地,README §6.7/T26;R5 扩充,T35;MES-76 R2 扩充语义级):
 # 1) 事件词汇零漂移:tests/docs/check_event_vocab.py 比对 README §6.7 注册表,未登记即失败;
 # 2) 成员名册唯一入口:tests/docs/check_roster_entry.py 防独立 Agents 列表页/第二创建入口回归(agent.md §4.2/§5.1,README §6.12);
-# 3) DDL 可执行性 + 行为验证:docs/specs/validation/schema_r2_validation.sql 在 PostgreSQL 16 实跑。
+# 3) 语义级一致性:tests/docs/check_semantic_consistency.py 防默认值语义漂移/前缀⇄持有者类型错配/废弃前缀残留/深链执行层措辞回归(auth.md §2.5.1/§5.2,theme.md §2.1,search-command-palette.md §3.4);
+# 4) DDL 可执行性 + 行为验证:docs/specs/validation/schema_r2_validation.sql 在 PostgreSQL 16 实跑。
 name: spec-checks
 
 on:
@@ -39,6 +40,17 @@ jobs:
           python-version: "3.12"
       - name: check_roster_entry.py
         run: python3 tests/docs/check_roster_entry.py docs/specs
+
+  semantic-consistency:
+    name: 语义级一致性校验(MES-76 R2-M2:默认值语义/前缀类型绑定/执行层措辞)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: check_semantic_consistency.py
+        run: python3 tests/docs/check_semantic_consistency.py docs/specs
 
   schema-validation:
     name: DDL 与行为验证(PostgreSQL 16)

@@ -103,8 +103,7 @@ erDiagram
         text activation_token_hash
         timestamptz activation_expires_at
         timestamptz activated_at
-        uuid runtime_token_id FK "api_tokens(scope=runtime)"
-        text runtime_token_hash
+        text runtime_token_hash "mesh_rt_ 令牌 SHA-256,唯一真源,不入 api_tokens"
         jsonb capabilities
         jsonb labels
         text hostname
@@ -219,8 +218,7 @@ erDiagram
 | activation_token_hash | text | NULL | - | 一次性激活码哈希（激活后置空 / 作废） |
 | activation_expires_at | timestamptz | NULL | - | **激活码过期时间（R1 补齐，默认创建后 15 分钟）；过期后激活返回 `410`** |
 | activated_at | timestamptz | NULL | - | 激活时间（**即激活码 used_at**：非空表示激活码已使用，不可再用） |
-| runtime_token_id | uuid | NULL, FK→api_tokens.id | - | 长期 runtime API token（auth 模块 owns，`scope='runtime'`，只存哈希） |
-| runtime_token_hash | text | NULL | - | runtime token 哈希冗余（快速校验，可轮换） |
+| runtime_token_hash | text | NULL（激活前），UNIQUE | - | **runtime 机器令牌（`mesh_rt_` 前缀）的 SHA-256 哈希——唯一存储真源（MES-76 R2-H2 写死）**：激活时写入（明文仅激活响应一次），轮换时整体替换。**不入 `api_tokens`**——runtime 不是名册成员，`api_tokens.owner_member_id NOT NULL` 无法承载机器令牌；此前 `runtime_token_id FK→api_tokens.id` 与「哈希冗余」双真源已删除 |
 | capabilities | jsonb | NOT NULL | `'[]'` | 已安装工具 / 能力列表，如 `["version_control","python","node"]` |
 | labels | jsonb | NOT NULL | `'{}'` | 自定义标签，如 `{"gpu":"true","region":"intranet"}` |
 | hostname | text | NULL | - | 主机名 |
@@ -500,7 +498,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 调用方分两类：
 - **(a) 控制台 API**：用户 / 前端用，管理 runtime、查看执行、取消任务。Bearer token 为用户会话凭证。
-- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime API token**（激活后获得，明文前缀 **`mesh_rt_`**——auth.md §2.5.1 令牌前缀注册表唯一权威，此前示例 `rt_live_` 已废弃；`scope='runtime'`，服务端只存哈希），权限严格限定于本 runtime 与其领取的执行。**心跳为机器域专属能力：`mesh` CLI 与一切用户凭证不得调用 `/api/v1/daemon/*`（cli.md §1.3，MES-76 H8）**。
+- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime 机器令牌**（激活后获得，明文前缀 **`mesh_rt_`**——auth.md §2.5.1 令牌前缀注册表唯一权威，此前示例 `rt_live_` 已废弃；**仅存 SHA-256 哈希于 `runtimes.runtime_token_hash`（唯一真源，不进 `api_tokens`**——机器令牌无名册持有者，R2-H2），权限严格限定于本 runtime 与其领取的执行。**心跳为机器域专属能力：`mesh` CLI 与一切用户凭证不得调用 `/api/v1/daemon/*`（cli.md §1.3，MES-76 H8）**。
 
 所有响应统一包络：成功单对象 `{"data": {...}}`；成功列表 `{"data": [...], "next_cursor": ...}`；失败 `{"error": {"code","message","details"}}`。
 
@@ -618,7 +616,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 }
 ```
 
-> `runtime_token` 明文（`mesh_rt_` 前缀，auth.md §2.5.1 注册表）仅在此响应中出现一次；服务端写入 `api_tokens`（`scope='runtime'`）的哈希，激活码随即作废。
+> `runtime_token` 明文（`mesh_rt_` 前缀，auth.md §2.5.1 注册表）仅在此响应中出现一次；服务端写入 **`runtimes.runtime_token_hash`（SHA-256，唯一存储真源，R2-H2：不进 `api_tokens`）**，激活码随即作废。
 
 **心跳（兼下行指令通道）**：
 
@@ -758,7 +756,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 ### 3.5 鉴权与分页
 
 - 控制台 API：用户 Bearer token（会话 / JWT），按 workspace + 角色鉴权。
-- 机器 API：runtime Bearer token（`api_tokens.scope='runtime'`，只存哈希），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
+- 机器 API：runtime Bearer token（`mesh_rt_` 前缀，哈希唯一存于 `runtimes.runtime_token_hash`，R2-H2），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
 - **机器 API 强制 TLS（红线）**：runtime 协议（machine API）**仅经 TLS（HTTPS）提供，拒绝明文 HTTP**；claim / refetch 响应携带凭证明文，传输层降级即导致凭证裸露。所有 `/api/v1/daemon/` 端点强制 `Strict-Transport-Security`，非 TLS 请求返回 `403`。
 - **runtime 状态与 token 联动**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**停用其 `runtime_token`**（`api_tokens.revoked_at` 置位）；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，下线后的 token 不可调用任何机器 API。
 - 分页：`GET /api/v1/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
@@ -995,7 +993,7 @@ stateDiagram-v2
 ### 5.1 功能验收
 
 - [ ] 创建 runtime 生成 `status='pending'` 记录 + 一次性激活码（只存哈希、`activation_expires_at` 默认 15 分钟）+ **签名发布包安装信息**（artifact URL + sha256 + 签名 + 公钥；无 `curl | sh`，激活码不进命令行参数，README/§3.1 安装安全）。
-- [ ] 守护进程凭激活码（受限 stdin/`0600` 文件读入）激活：上报元数据 → 换取 runtime API token（`scope='runtime'`，只存哈希）→ runtime 置 `online`，`activated_at` 置位（激活码作废）；过期 / 已用激活码返回 `410`。
+- [ ] 守护进程凭激活码（受限 stdin/`0600` 文件读入）激活：上报元数据 → 换取 runtime 机器令牌（`mesh_rt_` 前缀，**SHA-256 仅存 `runtimes.runtime_token_hash`，`api_tokens` 无该行**——information_schema/表查询断言，R2-H2）→ runtime 置 `online`，`activated_at` 置位（激活码作废）；过期 / 已用激活码返回 `410`；轮换（`tokens:rotate`）后旧哈希即失效。
 - [ ] 平台托管与自托管走同一套「注册—心跳—领取—上报」机器接口，调度器不区分二者。
 - [ ] 心跳每 15s（可配）上报；超过 `心跳间隔 × 容忍倍数`（默认 45s）未收到判离线置 `unavailable`；`degraded` 时停止派新任务但保留排障窗口。
 - [ ] **claim 跨租户安全**：claim SQL 带 `workspace_id = :runtime_workspace_id`（token 解析，不信请求体）；标签/能力匹配只用服务端保存值，**能力匹配为权威条件（`required_capabilities <@ runtimes.capabilities`，不只文字声称）**；`default_runtime_id` 约束生效（集成测试 T1/T2/T20）。

@@ -18,7 +18,7 @@
 
 本模块为 Mesh 提供**设计系统级主题能力**,与 i18n(§6.18)共同构成前端呈现契约:
 
-- **三态主题**:`light` / `dark` / `system`(跟随系统 `prefers-color-scheme`),`system` 缺省;
+- **三态主题**:`light` / `dark` / `system`(跟随系统 `prefers-color-scheme`);**账号偏好默认 absent/null = 继承工作区默认**(显式 `system` = 跟随 OS,二者不可合并,§2.1);
 - **语义 token 单一取色路径**:一切颜色经语义 token 引用,暗色模式以**暗色 token 集整体替换**语义 token 取值实现,不逐组件改写(§6.12);
 - **偏好协商链**:用户偏好 → 工作区默认 → 系统(镜像 §6.18 locale 协商链);
 - **对比度自证 + 门禁**:两套主题各满足 WCAG 2.1 AA(4.5:1),设计期自证升级为 CI 门禁(§6.12)。
@@ -35,7 +35,7 @@
 | T4 | 偏好协商链 | 用户偏好(absent/`null` 跳过;显式 `system` 在本级终止并跟随 OS)→ 工作区默认 → 系统(→`prefers-color-scheme`);未登录场景从第 2 级起 | 邀请接受页随工作区 |
 | T5 | 暗色整组替换 | `:root[data-theme='dark']` 属性选择器整组覆盖语义 token;暗色颜色 token 与亮色一一对应(测试断言无遗漏/多余) | 一处切换全局生效 |
 | T6 | 切换即时无刷新 | 仅改 `<html data-theme>`,CSS 变量级联即时生效;不重载不重建路由 | 设置页即时预览 |
-| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前读**分区镜像键** `mesh.theme:{host}:{user_id|anon}:{workspace_id|-}`(**键值显式白名单:非 `light|dark` 一律丢弃,回落 system 解析**;冷缓存按 §2.3 首帧方案)→ 解析 system → 设 `data-theme`;存储访问 try/catch | 刷新无白闪 |
+| T7 | 防闪烁(FOUC) | `<head>` 同步内联脚本首帧前执行 §2.3 **三级链路**(精确注入 `__MESH_APPEARANCE__` → active-partition locator + 分区镜像 → skeleton;**键值显式白名单:非 `light|dark` 一律丢弃,回落 system 解析**)→ 解析 system → 设 `data-theme`;存储访问 try/catch | 刷新无白闪 |
 | T8 | 系统偏好实时跟随 | `system` 模式监听 `prefers-color-scheme` `change` 实时切换;显式 light/dark 忽略;卸载注销 | 操作系统切换即跟随 |
 | T9 | `color-scheme` 联动 | `:root` 声明 `color-scheme: light`,暗色声明 `dark`——原生滚动条/下拉/自动填充随主题 | 原生控件不刺眼 |
 | T10 | `prefers-reduced-motion` | 减少动效偏好下关过渡/动画;主题切换不做首帧渐变 | 无障碍 |
@@ -96,8 +96,11 @@
 - **token 唯一事实源为 `tokenValues.ts` 的 `LIGHT_TOKENS`/`DARK_TOKENS`**;`tokens.css`(`:root`)/`tokens-dark.css`(`:root[data-theme='dark']`)是**由构建脚本从该事实源生成的产物**(`npm run gen:tokens`,或等效构建步骤),文件头带「本文件由 tokenValues.ts 生成,禁止手改」标记(评审 M4 收口:此前「三份镜像须逐项一致」实为三个事实源,必然漂移):
   - 新增/修改 token **只改 `tokenValues.ts` 一处**,重新生成两份 CSS;
   - **CI 幂等断言**:生成步骤运行后工作区无 diff(手改生成文件即 CI 失败);既有「解析 CSS 断言与 TS 逐项一致」的测试保留为第二道防线;
-- **防闪烁镜像键按身份分区(评审 H2 收口)**:镜像键由单键 `mesh.theme` 改为**分区键** `mesh.theme:{host}:{user_id|anon}:{workspace_id|-}`(host = API 基址 origin;`anon` = 未登录;`-` = 无工作区上下文),由偏好 store 在解析完成后写入对应分区,仅供 `index.html` 内联脚本首帧读取,**不是偏好真源**(真源在服务端);**登出时清理当前 host 下该用户的全部分区键**(防下一账号串用上一账号/工作区的主题);内联脚本对该键值**显式白名单**——**非 `light|dark` 一律丢弃并回落 system 解析**(localStorage 可被同源脚本写入,该脚本不得成为攻击者可控的属性落点);
-- **冷缓存首帧方案(评审 H2 收口,写死)**:冷启动(无任何分区镜像,如首次访问/登出后/换设备)无远端工作区默认可读,**不得**回落到上一账号/工作区的残留值,按以下顺序取首帧主题:① **服务端入口注入**——SPA 入口 HTML 由服务端渲染时注入非敏感 `window.__MESH_APPEARANCE__ = { default_theme }`(已登录取请求者协商结果,邀请页取 invitation preview 同源数据;**仅含主题模式,不含任何工作区标识/名称等可枚举信息**,暴露面与公开 invitation preview 一致);② 注入缺失时(纯静态托管/离线缓存),协商完成前**只渲染中性 skeleton**(骨架屏使用与主题无关的中性灰阶,不呈现业务内容),协商完成(登录态 `GET /me` + 工作区默认读取完毕)后再应用解析主题;两条路径均保证**不闪错主题**(宁可短暂无主题骨架,不可先错后改)。
+- **首帧主题:一条可运行的三级链路(评审 R2-H5 写死,优先级「精确注入 → 精确镜像 → skeleton」)**:
+  - **① 精确注入(首选,正常导航的默认链路)**:Web 应用的 HTML 文档请求(应用路由的 GET,非 XHR/fetch)携带 **HttpOnly 会话 cookie `mesh_session`**(auth.md 会话模型的 httpOnly + Secure cookie 形态,§5.5「refresh 优先 httpOnly + Secure cookie」条款;Bearer 仅用于 API 调用,不承担 HTML 请求鉴权)。服务端入口(渲染 index.html 的应用入口中间件)**用该会话解析请求者协商链**——账号偏好取会话用户的 `users.settings.theme`,**工作区默认取路由路径中的 `/w/{workspace_slug}/` 段**解析出的 `workspaces.settings.default_theme`(无工作区段 → `system`;邀请接受页 `/invite?token=` → 经 invitation preview 同源数据)——并把**非敏感** `window.__MESH_APPEARANCE__ = { mode: "light"|"dark" }`(仅解析后的二值主题模式,**不含任何工作区标识/名称等可枚举信息**)内联注入入口 HTML;`<head>` 同步脚本首帧读取该注入值设置 `data-theme`;
+  - **② 精确镜像(回退:入口为纯静态缓存 / CDN 边缘副本 / 离线 Service Worker 命中,注入缺失)**:读 **active-partition locator**——首帧可读的单键 `mesh.theme.active`,值为当前活跃分区定位串 `{host}:{user_id|anon}:{workspace_id|-}`(host = API 基址 origin;`anon` = 未登录;`-` = 无工作区上下文)。内联脚本两步同步读取:locator → 分区值键 `mesh.theme:{locator}`;偏好 store 在**每次解析完成、登录、切换工作区**时写入当前活跃分区的定位串与解析值;分区值键**显式白名单**——非 `light|dark` 一律丢弃回落 system 解析(localStorage 可被同源脚本写入,不得成为攻击者可控的属性落点);**登出时清理 locator + 当前 host 下该用户的全部分区值键**(防下一账号串用);locator 缺失(冷启动/登出后/换设备)→ 不得猜测或沿用残留值,直接进 ③;
+  - **③ 中性 skeleton(最后兜底)**:注入与 locator 均不可用时,协商完成前**只渲染中性 skeleton**(与主题无关的中性灰阶骨架屏,不呈现业务内容),协商完成(登录态 `GET /me` + 工作区默认读取完毕)后应用解析主题并回写 ② 的 locator/分区值。三级链路均保证**不闪错主题**(宁可短暂无主题骨架,不可先错后改);
+- **偏好写失败 pending 队列按主体分区(评审 R2-H5 收口)**:`mesh.settings.pending` 改为**分区键** `mesh.settings.pending:{host}:{user_id}:{workspace_id}`(每条 pending 亦内嵌三元组);重放前校验**当前活跃主体与条目三元组一致**,不一致的条目**不重放**(换账号/换工作区后不得把上一主体的失败写回放到新主体);当前主体匹配时按 §4.5 冲突策略重放;
 
 ### 2.4 语义 token 清单(亮/暗各一份,一一对应)
 
@@ -206,7 +209,7 @@
 - **未登录**:无账号偏好 → 工作区默认(邀请接受页经**公开 invitation preview** 读 `appearance.default_theme`,§2.2/§3.1;其他公开页无工作区上下文 → `system`);防闪烁脚本仅读**分区镜像键**(§2.3),冷缓存按 §2.3 首帧方案(入口注入 / 中性 skeleton),**不串用上一账号/工作区残留值**;
 - **跨设备一致性**:账号偏好经 `PATCH /users/me` 持久化服务端,登录即回填(`GET /me`);本地 persist 仅作降级镜像与防闪烁首帧用,**服务端为跨设备真源**;
 - **工作区默认变更联动(评审 M5 收口)**:**未设显式账号偏好(absent/null)的用户**订阅 `workspace.updated` 实时事件(workspace.md §3.5,§6.7 已登记),收到 `settings.default_theme` 变更后**重新解析默认主题**并即时应用;显式偏好用户忽略该事件;
-- **降级与乐观写失败处理(评审 M5 收口,写死)**:服务端同步失败**不当场回滚本地**(乐观),但失败偏好写入进入**持久 pending 队列**(localStorage `mesh.settings.pending`,含键值、请求基线 `updated_at`、重试计数),策略如下:
+- **降级与乐观写失败处理(评审 M5 收口,写死)**:服务端同步失败**不当场回滚本地**(乐观),但失败偏好写入进入**持久 pending 队列**(localStorage **分区键** `mesh.settings.pending:{host}:{user_id}:{workspace_id}`,§2.3;每条含键值、请求基线 `updated_at`、重试计数,**重放前校验当前主体与分区三元组一致**),策略如下:
   - **联网重试**:`online` 事件 / 应用前台恢复 / 下次偏好写入时按序重放 pending;
   - **冲突策略(服务端回填优先)**:重试前先 `GET /me` 取服务端最新 `updated_at`——若服务端在本次 pending 基线之后**已被其他端/会话更新**,则**丢弃该 pending、采用服务端值**(服务端为跨设备真源,不回推本地旧值);否则重放 pending 写入;
   - pending 清空后本地解析与服务端一致,**杜绝「仅不回滚 → 下次登录突然跳回」的体验断层**;错误经 `lastSyncError` 按 code 渲染本地化提示(i18n.md §3.4);离线本地偏好仍可用。
@@ -220,7 +223,7 @@
 - [ ] **协商链优先级正确**:用户偏好(absent/`null` 跳过;显式 `system` 本级终止跟随 OS)→ 工作区默认 → 系统;账号未设 + 工作区默认 `dark` → 应用暗色;**显式 `system` + 工作区默认 `dark` + OS 浅色 → 应用浅色(忽略工作区)**;账号 `null` 写入后恢复跟随工作区默认;未登录进入邀请接受页 → 按 invitation preview 返回的工作区默认解析(**不再硬编码回退 `system`,不经过成员接口**)。
 - [ ] **无闪错主题 e2e 三场景(评审 H2)**:① **A→B 工作区切换**:已登录用户从默认暗色的工作区 A 切到默认浅色的 B,首帧即 B 的解析主题,无「先暗后浅」闪烁;② **换账号**:登出暗色偏好账号、登入无账号偏好账号,不串用上一账号主题(分区键已按登出清理);③ **邀请接受页**:未登录打开默认暗色工作区的邀请链接,首帧即暗色(来自 invitation preview 注入),无白闪无错主题。
 - [ ] **三态切换即时无刷新**:light/dark/system 切换仅改 `<html data-theme>`,无路由重建;`system` 下操作系统切换深浅色**实时跟随**(`matchMedia change`),显式 light/dark 时忽略系统变化。
-- [ ] **防闪烁**:冷启动(清本地镜像)刷新无白闪;冷缓存首帧按 §2.3 方案(入口注入 `__MESH_APPEARANCE__` 或中性 skeleton,不闪错主题);内联脚本 try/catch 存储访问;静态 HTML 不预置 `data-theme`。
+- [ ] **防闪烁**:冷启动(清本地镜像)刷新无白闪;冷缓存首帧按 §2.3 **三级链路**(精确注入 → locator/分区镜像 → skeleton,不闪错主题):**已登录正常导航命中注入链路**(断言入口 HTML 含 `__MESH_APPEARANCE__` 且与请求者协商结果一致);静态缓存入口命中 locator 链路;两者皆无时渲染中性 skeleton 至协商完成;内联脚本 try/catch 存储访问;静态 HTML 不预置 `data-theme`。
 - [ ] **暗色整组替换**:暗色颜色 token 与亮色**一一对应**(测试断言无遗漏/多余);抽查核心页面(看板/issue 详情/成员/聊天/运行详情/收件箱)暗色下无硬编码死角。
 - [ ] **`color-scheme` 联动**:暗色下原生滚动条/下拉/自动填充呈暗色。
 - [ ] **偏好写入**:用户偏好经 `PATCH /users/me`、工作区默认经 `PATCH /workspaces/{id}`,按键浅合并;非法值 → `422 invalid_theme_mode`(auth.md/workspace.md 错误码表已同步登记);**显式 `null` 为合法写入(清除),不报 422**。
@@ -236,7 +239,7 @@
 
 ### 5.3 安全与一致性
 
-- [ ] **无任意值注入面(二值收敛)**:`data-theme` 仅取 `light|dark`(脚本与解析函数收敛二值);防闪烁脚本对**分区镜像键** `mesh.theme:{host}:{user}:{workspace}` 显式白名单——构造非法值(如 `javascript:...`/任意字符串)写入 localStorage 后刷新,`data-theme` 回落 system 解析而非原样落地;**登出清理当前 host 下该用户的全部分区键**(e2e 断言清理后无残留、下一账号不串用);偏好枚举受控;token 值全部来自构建期静态 CSS,非运行时拼接用户输入;**入口注入的 `__MESH_APPEARANCE__` 仅含主题模式**(不含工作区标识/名称等可枚举信息),注入值同样经白名单收敛。
+- [ ] **无任意值注入面(二值收敛)**:`data-theme` 仅取 `light|dark`(脚本与解析函数收敛二值);防闪烁脚本对 **locator 与分区镜像键**(`mesh.theme.active` / `mesh.theme:{locator}`)显式白名单——构造非法值(如 `javascript:...`/任意字符串/指向不存在分区的 locator)写入 localStorage 后刷新,`data-theme` 回落 system 解析或 skeleton 而非原样落地;**登出清理 locator + 当前 host 下该用户的全部分区键**(e2e 断言清理后无残留、下一账号不串用);偏好枚举受控;token 值全部来自构建期静态 CSS,非运行时拼接用户输入;**入口注入的 `__MESH_APPEARANCE__` 仅含二值主题模式**(不含工作区标识/名称等可枚举信息),注入值同样经白名单收敛;**注入链路的工作区取自路由路径段**,不经用户可控 query/header 派生。
 - [ ] **CSP 协调**:防闪烁内联脚本经**每请求 nonce** 或 `sha256` 哈希白名单放行,**绝不**放开 `unsafe-inline`;脚本不含用户输入。
 - [ ] **数据色例外受控**:自定义 hex 经 `^#[0-9a-fA-F]{6}$` 在**服务端写入边界与渲染时双重校验**(构造非法 hex 直写 API 被拒);用户可控 `avatar_url`/`logo_url` 沿用 §6.16 https-only,主题不引入新 URL 面。
 - [ ] **偏好写入鉴权**:`PATCH /users/me` 仅本人;`default_theme` 写需 admin;变更写审计。

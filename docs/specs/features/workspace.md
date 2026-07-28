@@ -271,7 +271,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
   "slug": "acme",
   "logo_url": null,
   "timezone": "Asia/Shanghai",
-  "settings": { "default_locale": "en" },
+  "settings": { "default_locale": "en", "default_theme": "system" },
   "my_role": "owner",
   "created_at": "2026-07-24T10:00:00Z",
   "updated_at": "2026-07-24T10:00:00Z"
@@ -348,7 +348,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
   "slug": "acme",
   "logo_url": "https://cdn.example/logo.png",
   "timezone": "Asia/Shanghai",
-  "settings": { "default_locale": "en", "default_status_set": "basic", "new_member_default_role": "member",
+  "settings": { "default_locale": "en", "default_theme": "dark", "default_status_set": "basic", "new_member_default_role": "member",
                 "seat_limit": 50, "feature_flags": { "autopilot": true } },
   "my_role": "admin",
   "created_at": "2026-07-24T10:00:00Z",
@@ -359,8 +359,11 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 **预览邀请(公开,仅有限字段)** `GET /api/v1/invitations/preview?token=invtk_Ab3...`
 ```json
 // 200 Response(未登录亦可,用于落地页展示;不暴露内部 id 之外敏感信息)
+// appearance.default_theme(MES-76 H2/R2-H5):供未登录邀请接受页主题协商链第 2 级读取
+// (theme.md §2.2/§2.3 首帧「精确注入」链路),非敏感展示偏好,与工作区名同暴露面
 { "valid": true, "workspace_name": "Acme Team", "workspace_logo_url": "...",
-  "role": "member", "expires_at": "2026-07-27T10:00:00Z" }
+  "role": "member", "expires_at": "2026-07-27T10:00:00Z",
+  "appearance": { "default_theme": "dark" } }
 // 无效/过期/撤销时:
 { "valid": false, "reason": "expired" }   // reason ∈ {expired, revoked, exhausted, not_found}
 ```

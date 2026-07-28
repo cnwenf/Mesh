@@ -80,57 +80,89 @@
 
 **数据模型事实**:member/agent 的「显示名」是 `members.display_override → users.display_name → users.email`(人类)/`agents.name`(agent)的**跨表解析**(README §6.1),PostgreSQL **不能对跨表表达式建普通索引**——直接对「members 显示名」建 GIN 不可行。本 Spec 采用**受控同步的搜索投影**方案:在 `members` 上维护 `search_name` 投影列(与 README §6.1 显示名链同算法),对投影建 trigram 索引;显示渲染仍用实时解析链,投影**仅供检索**。
 
+**归一算法唯一入口(评审 R2-H3 写死:索引 / 查询 / 回填同一函数)**:
+
 ```sql
 -- 0. 扩展(随迁移启用,幂等)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS unaccent;
 
+-- 唯一归一函数:NFKD + 去重音 + 小写。IMMUTABLE 方可入表达式索引。
+-- 一切检索归一(投影写入 / 索引表达式 / 查询表达式 / 回填)只经此函数,
+-- 不得在各处分别 lower()/unaccent(),杜绝索引表达式与查询表达式漂移。
+CREATE OR REPLACE FUNCTION mesh_search_norm(t TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+$$ SELECT lower(unaccent(normalize(t, NFKD))) $$;
+```
+
+```sql
 -- 1. member/agent:受控同步的搜索投影(评审 H3 主方案)
 ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT '';
 COMMENT ON COLUMN members.search_name IS
-  '检索专用投影,与 README §6.1 显示名解析链同算法(display_override → users.display_name → users.email / agents.name),小写归一;仅用于 trigram 检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2';
+  '检索专用投影 = mesh_search_norm(README §6.1 显示名解析链结果);仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2';
 
--- 投影索引:trigram + 租户/类型/状态支撑索引
+-- 1a. ≥3 字符模糊:trigram GIN(search_name 已是归一值,索引/查询表达式一致)
 CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
+-- 1b. 1–2 字符前缀:B-tree pattern 索引(workspace-scoped,与查询表达式完全一致)
+CREATE INDEX idx_members_search_name_prefix ON members (workspace_id, search_name text_pattern_ops)
+  WHERE status <> 'removed';
+-- 1c. 租户/类型/状态支撑索引
 CREATE INDEX idx_members_ws_type_active ON members (workspace_id, member_type)
   WHERE status <> 'removed';
 
--- 2. issue:identifier 等值快路径(已有唯一索引)+ title trigram + 租户/软删组合
-CREATE INDEX idx_issues_title_trgm ON issues USING gin (title gin_trgm_ops);
+-- 2. issue
+-- 2a. identifier 等值快路径(已有 UNIQUE(workspace_id, identifier))
+-- 2b. title ≥3 字符模糊:归一表达式 trigram GIN
+CREATE INDEX idx_issues_title_trgm ON issues USING gin ((mesh_search_norm(title)) gin_trgm_ops)
+  WHERE deleted_at IS NULL;
+-- 2c. 1–2 字符前缀:title 与 identifier 各一条 pattern 索引(查询表达式与索引表达式逐字一致)
+CREATE INDEX idx_issues_title_prefix ON issues (workspace_id, (mesh_search_norm(title)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_identifier_prefix ON issues (workspace_id, (mesh_search_norm(identifier)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
+-- 2d. 租户/软删组合(与上述 GIN 做 BitmapAnd:租户 + 软删谓词下推)
 CREATE INDEX idx_issues_ws_not_deleted ON issues (workspace_id, project_id)
-  WHERE deleted_at IS NULL;   -- 与 title GIN 做 BitmapAnd:租户 + 软删谓词下推
+  WHERE deleted_at IS NULL;
 
--- 3. project:name trigram(私有项目可见性谓词在查询内,§3.3)
-CREATE INDEX idx_projects_name_trgm ON projects USING gin (name gin_trgm_ops);
+-- 3. project(私有项目可见性谓词在查询内,§3.3)
+CREATE INDEX idx_projects_name_trgm ON projects USING gin ((mesh_search_norm(name)) gin_trgm_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_projects_name_prefix ON projects (workspace_id, (mesh_search_norm(name)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
 
--- 4. view:name trigram(修订:此前仅 B-tree,不支持 Spec 承诺的模糊匹配)
-CREATE INDEX idx_views_name_trgm ON views USING gin (name gin_trgm_ops);
+-- 4. view(修订:此前仅 B-tree,不支持 Spec 承诺的模糊匹配)
+CREATE INDEX idx_views_name_trgm ON views USING gin ((mesh_search_norm(name)) gin_trgm_ops);
+CREATE INDEX idx_views_name_prefix ON views (workspace_id, (mesh_search_norm(name)) text_pattern_ops);
 
--- 5. chat_session:title trigram(参与者谓词在查询内,§3.3)
-CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin (title gin_trgm_ops);
+-- 5. chat_session(参与者谓词在查询内,§3.3)
+CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin ((mesh_search_norm(title)) gin_trgm_ops);
+CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (mesh_search_norm(title)) text_pattern_ops);
 ```
+
+**查询表达式必须与索引表达式逐字一致**(否则 pattern/GIN 不走索引):前缀路径一律 `WHERE workspace_id = $ws AND mesh_search_norm(<col>) LIKE mesh_search_norm($q) || '%'`(members 为 `search_name LIKE mesh_search_norm($q) || '%'`,列本身已归一);trigram 路径一律 `WHERE workspace_id = $ws AND mesh_search_norm(<col>) % mesh_search_norm($q)`。**不存在「或顺序扫描」分支**——§5.2 以 EXPLAIN 断言三条路径均走上述索引。
 
 **`members.search_name` 同步契约(写死,防漂移)**:
 
 | 环节 | 规则 |
 |------|------|
-| 写入路径(同事务) | ① member 入册(人类/agent):按显示名链解析后写 `search_name = lower(resolved)`;② `members.display_override` 变更:重算;③ `users.display_name`/`users.email` 变更(改名):同事务重算该 user 的**全部** members 行(跨工作区);④ `agents.name` 变更:同事务重算该 agent 的全部 members 行。服务层写路径统一经 `sync_member_search_name(member_id)` 单一函数 |
-| 回填迁移 | 上线迁移一次性全量回填(`UPDATE members m SET search_name = lower(...) FROM users/agents ...`),分批提交,迁移完成前搜索降级为 `ILIKE` 兜底(不阻塞发布) |
-| 周期对账 | 低频 reconcile 任务(每日)全量比对投影与实时解析链,不一致即修复并告警(漂移可观测) |
-| 一致性验收 | 集成测试:改名(users.display_name / agents.name / display_override)后搜索**立即**命中新名、旧名不再命中;跨工作区同一 user 的两条 members 行同步更新 |
+| 写入路径(同事务) | ① member 入册(人类/agent):`search_name = mesh_search_norm(按显示名链解析结果)`;② `members.display_override` 变更:重算;③ `users.display_name`/`users.email` 变更(改名):同事务重算该 user 的**全部** members 行(跨工作区);④ `agents.name` 变更:同事务重算该 agent 的全部 members 行。服务层写路径统一经 `sync_member_search_name(member_id)` 单一函数(内部只调 `mesh_search_norm`,不另写归一逻辑) |
+| 回填迁移 | 上线迁移一次性全量回填(`UPDATE members m SET search_name = mesh_search_norm(...) FROM users/agents ...`——**与索引/查询同一函数**),分批提交,迁移完成前搜索降级为 `mesh_search_norm(col) LIKE ...` 无索引兜底(不阻塞发布) |
+| 周期对账 | 低频 reconcile 任务(每日)全量比对投影与 `mesh_search_norm(实时解析链)`,不一致即修复并告警(漂移可观测) |
+| 一致性验收 | 集成测试:改名(users.display_name / agents.name / display_override)后搜索**立即**命中新名、旧名不再命中;**大写/带重音输入**(如 `ZHANG`/`José`)经归一命中小写去重音投影;跨工作区同一 user 的两条 members 行同步更新 |
 | 与 README §6.1 的关系 | `search_name` 是 README §6.1「若个别高频表确需存储快照,必须强制一致并明示」条款下的**受控搜索投影**:非显示真源(显示一律实时解析链)、同步由单一函数 + 对账兜底、在本 Spec 明示 |
 
-**三条查询路径(按输入形态分流,写死)**:
+**三条查询路径(按输入形态分流,写死;每条路径有对应索引,§5.2 逐条 EXPLAIN)**:
 
-| 输入形态 | 路径 | 候选上限 |
-|----------|------|----------|
-| 1–2 字符 | trigram 在 <3 字符不可用:仅走**前缀等值**(`search_name LIKE 'ab%'` / `identifier LIKE 'AB%'` / `name LIKE 'ab%'`,经 B-tree `text_pattern_ops` 或顺序扫描小结果集)+ 本地命令匹配;对象类结果**仅前缀命中**,不做模糊 | 每类 ≤5 |
-| 完整 identifier(归一后匹配 `^[A-Za-z][A-Za-z0-9]*-\d+$`) | **identifier 等值快路径**(`UNIQUE(workspace_id, identifier)`),跳过 150ms 防抖,命中即顶置 | 1(顶置)+ 常规路径补齐 |
-| ≥3 字符 | trigram 相似度(`%` 运算符 / `similarity()` 排序)+ §4.6 分层打分;可见性 JOIN 在查询内(§3.3) | 每类 ≤20,合并后 ≤ `limit×2` |
+| 输入形态 | 路径 | 命中索引 | 候选上限 |
+|----------|------|----------|----------|
+| 1–2 字符 | trigram 在 <3 字符不可用:仅走**归一前缀匹配**(`mesh_search_norm(<col>) LIKE mesh_search_norm($q)\|\|'%'`)+ 本地命令匹配;对象类结果**仅前缀命中**,不做模糊 | 各实体 `*_prefix`(B-tree `text_pattern_ops`,workspace-scoped) | 每类 ≤5 |
+| 完整 identifier(归一后匹配 `^[a-z0-9]+-\d+$`) | **identifier 等值快路径**(`UNIQUE(workspace_id, identifier)`,原始值等值),跳过 150ms 防抖,命中即顶置 | `uq_issues_identifier` 唯一索引 | 1(顶置)+ 常规路径补齐 |
+| ≥3 字符 | trigram 相似度(`mesh_search_norm(<col>) % mesh_search_norm($q)`)+ §4.6 分层打分;可见性 JOIN 在查询内(§3.3) | 各实体 `*_trgm`(GIN)+ 租户/软删部分索引 BitmapAnd | 每类 ≤20,合并后 ≤ `limit×2` |
 
 - 一切查询 SQL 携带 `workspace_id` 复合前缀谓词 + RLS 纵深防御(§6.2);
 - **可见性过滤一律在查询内 JOIN/WHERE 完成**(§3.3),EXPLAIN 证明无「先取后筛」;
 - `statement_timeout`(默认 3s)+ 估算成本兜底,超限 `422 query_cost_exceeded`(§6.14);
-- **性能验收(§5.2 / README §10)**:§10 基准(10 万 issue / 1 万成员工作区,50 VU 稳态 + 100 VU 峰值,冷/热缓存各标注)下搜索 P95 < 300ms、identifier 快路径 P95 < 100ms;附三条路径各自的 `EXPLAIN (ANALYZE, BUFFERS)`,证明命中上述 trigram/唯一/部分索引、无全表顺序扫描(可见性 JOIN 走真实成员/项目表)。
+- **性能验收(§5.2 / README §10)**:§10 基准(10 万 issue / 1 万成员工作区,50 VU 稳态 + 100 VU 峰值,冷/热缓存各标注)下搜索 P95 < 300ms、identifier 快路径 P95 < 100ms;附三条路径各自的 `EXPLAIN (ANALYZE, BUFFERS)`,证明命中上述 trigram/pattern/唯一索引、**无全表顺序扫描**(1–2 字符路径同样必须走 `*_prefix` 索引,与本节 DDL 互为印证——不得互相否定;可见性 JOIN 走真实成员/项目表)。
 
 ### 2.3 `recent_items`(可选增强,本期不建)
 
@@ -162,7 +194,7 @@ CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin (title gin_
 | `q` | string | 查询词(≤120 字符);**空/缺省 → `200 {"data": [], "next_cursor": null}`(服务端不返对象结果)**;面板空态的 favorites/recents/常用命令由前端按 §4.2 唯一数据流组装(favorites 经 `GET /api/v1/favorites`,recents/命令纯本地)——**不存在服务端「favorites + 最近项默认集」第二数据流**(评审 H4 收口:此前与「recents 仅本地、favorites 单独端点」矛盾) |
 | `types` | csv | 对象类型白名单子集;缺省=全部六类;非法值 `400 validation_error` |
 | `limit` | int | 默认 20,上限 50 |
-| `cursor` | opaque | 整体游标(§6.14):**`cursor = base64(完整排序元组 + 绑定指纹 + 服务端 HMAC 签名)`**——完整排序元组与 §4.6 平局裁决链**逐因子一一对应**:`(score_bucket, context_rank, recency_rank, frequency_rank, title_len, title_lex, type, id)`(score 以固定精度量化为整数 bucket,杜绝浮点不可复现);绑定指纹 = `sha256(q \| 排序后的 types 集合 \| workspace_id)`,**cursor 与产生它的 query/types/workspace 绑定,跨任一参数复用 → `400 validation_error`**(防攻击者搬运 cursor 探测他查询/他工作区的 keyset 路径);签名不符 → `400 validation_error`;内部字段经签名校验前**一律不信任**(MES-75 安全收口延续) |
+| `cursor` | opaque | 整体游标(§6.14):**`cursor = base64(完整排序元组 + 绑定指纹 + 服务端 HMAC 签名)`**——完整排序元组与 §4.6 全序**逐因子一一对应,且全部为数据库可稳定计算因子**:`(score_bucket, title_len, title_lex, type, id)`(score 以固定精度量化为整数 bucket,杜绝浮点不可复现;**本地 recency/frequency/上下文不进元组**,R2-H4);绑定指纹 = `sha256(q \| 排序后的 types 集合 \| workspace_id)`,**cursor 与产生它的 query/types/workspace 绑定,跨任一参数复用 → `400 validation_error`**(防攻击者搬运 cursor 探测他查询/他工作区的 keyset 路径);签名不符 → `400 validation_error`;内部字段经签名校验前**一律不信任**(MES-75 安全收口延续) |
 
 ```json
 // 200 Response
@@ -192,7 +224,7 @@ CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin (title gin_
         "capacity": { "running": 2, "queued": 1, "awaiting_approval": 0 }
       },
       "icon": "agent",
-      "url": "/w/acme/agents/mem_b2",
+      "url": "/w/acme/members/mem_b2",
       "badge": { "kind": "member_type", "label_key": "member.type.agent", "label_params": {}, "color": "info" }
     }
   ],
@@ -265,9 +297,9 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
    **一律保留原 query 与 hash**(如 `/board?view=x#card-1` → `/w/{ws}/board?view=x#card-1`);
 3. **active workspace 来源(写死,按序解析)**:① 当前 URL 已在 `/w/{ws}/…` 内 → 取 URL 中的 workspace;② 否则取**最近活跃工作区**(登录后经 `GET /workspaces` + 本地持久化 `mesh.last_workspace:{host}:{user}`,服务端 `users.last_active_workspace_id` 回填);③ 所属恰一个工作区 → 直接采用;④ **无上下文且多工作区 → 工作区选择页**(`/workspace-picker`,列出所属工作区,选定后跳规范路由并记忆);
-4. **302 执行层(写死)**:扁平路由是 **SPA 客户端路由**(服务端对应用路径统一返回 index.html,无 HTTP 层路由可言),故旧→新重定向在**前端应用层**执行——以 **`replaceState` 替换(不新增历史栈条目,等价 302 语义)** 至规范路由;**HTTP 302/301 仅发生在服务端可渲染入口**:邀请链接/邮件/IM 卡片一律直接生成规范深链(不经扁平路由),过期 slug 经 workspace.md `workspace_slug_history` 的 **301** 契约(服务端或前端解析 slug 时同一重定向源);
+4. **执行层(写死,评审 R2-M1)**:扁平路由是 **SPA 客户端路由**,旧→新跳转由**前端路由器的 replace navigation** 执行——`navigate(target, { replace: true })`(**触发路由匹配与数据加载**,不新增历史栈条目;**不得称「302 语义」,也不得用裸 `history.replaceState`**——裸 replaceState 只改 URL 不触发路由匹配/数据加载);**真实 HTTP 重定向仅发生在一处服务端入口**:SPA **入口文档处理器**(服务端对 `/w/{slug}/…` 与旧扁平路径的 HTML 文档请求统一返回 index.html 的中间件)在渲染入口前经 workspace.md `workspace_slug_history` 解析 slug——**slug 已过期时该入口返回真实 `HTTP 301`**(Location 指向新 slug 的规范路径,保留 query/hash);应用内已加载后的 slug 变更走 `GET /workspaces/by-slug/{slug}` 解析 + replace navigation(**前端替换不称 301**);邀请链接/邮件/IM 卡片一律直接生成规范深链(不经扁平路由);
 5. **SEO**:认证内页面统一 `<meta name="robots" content="noindex">` + `<link rel="canonical">` 指向规范深链——**不为 SEO 牺牲路由一致性**(不存在为爬虫保留扁平路由的分支);
-6. **测试矩阵(逐场景)**:① 旧书签 `/board` 直接刷新 → 落 active workspace 的 `/w/{ws}/board`(多工作区用户无上下文 → 选择页);② 过期 slug 深链 → 301 至新 slug,query/hash 保留;③ 通知/邮件链接(规范深链)直达正确页面;④ 多工作区用户 A→B 切换后旧扁平路由解析到 B(最近活跃);⑤ 无权限视图深链 → permission denied 异常态而非白屏。
+6. **测试矩阵(逐场景)**:① 旧书签 `/board` 直接刷新 → 入口文档处理器出 index.html,前端路由 replace navigation 落 active workspace 的 `/w/{ws}/board`(多工作区用户无上下文 → 选择页),数据加载完成无白屏;② 过期 slug 深链**直接刷新** → 入口文档处理器返回 **HTTP 301** 至新 slug(cURL 级断言状态码与 Location,query/hash 保留);③ 通知/邮件链接(规范深链)直达正确页面;④ 多工作区用户 A→B 切换后旧扁平路由解析到 B(最近活跃);⑤ 无权限视图深链 → permission denied 异常态而非白屏。
 
 ### 3.5 错误码表(模块专属)
 
@@ -381,10 +413,10 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 > 词边界/驼峰/路径分隔 > 连续子串 > 子序列模糊 > 副标题/关键词兜底
 ```
 
-- 归一化:匹配前小写 + 去重音(NFKD),**展示保留原文**(highlight 在原文上计算,§3.2);分词覆盖空格/`-`/`_`/`/`/`.`/驼峰边界;
+- 归一化:匹配前经 `mesh_search_norm`(NFKD + 去重音 + 小写,§2.2 唯一归一函数),**展示保留原文**(highlight 在原文上计算,§3.2);分词覆盖空格/`-`/`_`/`/`/`.`/驼峰边界;
 - **identifier 精确命中直接顶置**(等值快路径);
-- recency / frequency / 上下文可用性各**封顶**小幅加分,不得压过文本相关性;
-- **全序 = keyset 排序键(评审 H4 收口,与 §3.2 cursor 内部元组逐因子一一对应)**:`score_bucket DESC`(文本相关性主分,固定精度量化为整数,杜绝浮点不可复现)→ `context_rank`(当前上下文可用性封顶加分)→ `recency_rank`(最近使用封顶)→ `frequency_rank`(频率封顶)→ `title_len ASC`(标题更短优先)→ `title_lex ASC`(标题字典序)→ `type ASC` → `id ASC`(终极确定性)。**不存在「原始顺序」之类不可复现因子**——cursor 携带全序完整元组 + 绑定指纹(§3.2),翻页严格单调推进,跨页无重复无遗漏;
+- **服务端对象排序只用数据库可稳定计算的全序(评审 R2-H4 收口,写死)**——本地信号(最近使用 recency / 使用频率 frequency / 当前页面上下文)**不参与服务端对象分页**:recents/frequency 明确为 localStorage 纯本地(§1.3 不建表、不上传服务端),服务端拿不到也无法稳定计算,放入 keyset 全序会使 cursor 单调翻页不可实现,且上传本地行为构成隐私面。它们**仅用于**:本地命令条目排序、空态组装(§4.2.1)。(若未来坚持让本地信号参与对象排序,必须新增**显式请求输入**(客户端上传的有界排名向量)、将其纳入 cursor 绑定指纹,并在本节与 §5.3 声明隐私边界——本期不做,YAGNI。)
+- **全序 = keyset 排序键(与 §3.2 cursor 内部元组逐因子一一对应)**:`score_bucket DESC`(文本相关性主分,DB 内由 trigram 相似度 + 分层匹配规则计算,固定精度量化为整数,杜绝浮点不可复现)→ `title_len ASC`(标题更短优先)→ `title_lex ASC`(归一后标题字典序)→ `type ASC` → `id ASC`(终极确定性)。**每一因子均可由数据库对结果行稳定计算**——不存在依赖客户端状态或不可复现的因子(「原始顺序」「本地 recency」一律不进全序);cursor 携带全序完整元组 + 绑定指纹(§3.2),翻页严格单调推进,跨页无重复无遗漏;
 - 排序权重以**黄金集**(query→期望 top 结果测试集)的 Top-3 命中率/MRR 校准,不凭感觉。
 
 ### 4.7 防抖、焦点与无障碍
@@ -412,13 +444,13 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 - [ ] **命令面板六类对象搜索**:输入关键词命中 issue(identifier/标题)、成员、agent、项目、视图、聊天会话,分组呈现;每类至少一条真实数据 e2e 命中校验。
 - [ ] **workspace scope 与结果契约(评审 H4)**:搜索经 `/workspaces/{ws}/search` 唯一路径解析工作区(query/header 无第二来源;agent token 指名他区 → 403);响应**不含拼接好的可见句子**——`context` 为按类型结构化字段、`badge` 为消息目录 key + 参数(e2e 切换 locale 后副标题/徽章本地化正确,服务端响应体不变);`highlight` offset 以原始 title 的 Unicode code point 计(构造含多字节/组合字符标题的断言,前端高亮区间与命中词精确对齐)。
-- [ ] **游标稳定性(评审 H4)**:同一 (q, types, workspace) 翻页经 cursor 无重复/无遗漏(10 万 issue 工作区遍历断言);cursor 换 q / 换 types / 换 workspace 复用 → `400 validation_error`;篡改 cursor 内部字段(HMAC 不符)→ `400`;空 `q` 服务端返回空 `data`(空态 favorites/recents/命令按 §4.2 唯一数据流本地组装,favorites 经 §6.19 端点)。
+- [ ] **游标稳定性(评审 H4 / R2-H4)**:同一 (q, types, workspace) 翻页经 cursor 无重复/无遗漏(10 万 issue 工作区遍历断言);**排序全序仅含数据库可计算因子**——同一请求在不同客户端(不同本地 recents/frequency 状态)下返回**相同顺序**(断言服务端排序不依赖客户端状态);cursor 换 q / 换 types / 换 workspace 复用 → `400 validation_error`;篡改 cursor 内部字段(HMAC 不符)→ `400`;空 `q` 服务端返回空 `data`(空态 favorites/recents/命令按 §4.2 唯一数据流本地组装,favorites 经 §6.19 端点)。
 - [ ] **identifier 精确命中顶置**:输入完整 `KEY-N` 时该 issue 为第一结果,Enter 直达规范深链。
 - [ ] **命令条目**:导航命令、新建 issue、主题切换、打开帮助层、复制深链、收藏/取消收藏均可经面板执行,且各有等价鼠标路径。
 - [ ] **上下文分组生效**:看板/issue 详情/聊天页分别激活各自上下文组,帮助层与面板命令集实时反映;离开页面即复位(生产代码实际调用 `setContexts`,不再是死代码)。
 - [ ] **快捷键全集与仲裁(评审 H6)**:全局组 8 条 + 各上下文组按 §4.3 落地;序列键窗口 1000ms,超时/Esc 取消有 UI 提示;平台键渲染 mac/非 mac 各验;**看板页按 `C` 只触发看板新建(复用全局弹窗 + 预填当前列),全局 `C` 被屏蔽不并发执行;看板无可用列回退全局新建**;CI 静态断言全部注册快捷键在任一 active context 组合下无同优先级 combo 冲突;**异步结果补入不移位当前选中项**(e2e:选中第 2 条时插入新结果,Enter 打开的仍是原选中对象);**IME 输入中文时按候选键不触发裸键快捷键;modal 打开时底层页面裸键全屏蔽**;`?` 帮助层同 combo 只展示仲裁后有效键位。
 - [ ] **输入框豁免**:输入控件聚焦时单字符键不触发、`mod+K` 仍生效(回归用例)。
-- [ ] **规范深链(八条闭合,评审 H5)**:八条规范深链(issue/项目/成员/agent 别名/视图/执行/聊天/审批)可直接访问并正确渲染;既有扁平路由按 §3.4 映射表在前端应用层 `replaceState` 至规范路由(query/hash 保留);多工作区无上下文 → 工作区选择页;slug 过期走 workspace.md 301 重定向;§3.4 测试矩阵五场景逐条 e2e;认证内页面 `noindex` + canonical。
+- [ ] **规范深链(八条闭合,评审 H5 / R2-M1)**:八条规范深链(issue/项目/成员/agent 别名/视图/执行/聊天/审批)可直接访问并正确渲染;既有扁平路由按 §3.4 映射表经**前端路由器 replace navigation**(`navigate(target,{replace:true})`,断言触发数据加载,不称 302、不用裸 replaceState)至规范路由(query/hash 保留);多工作区无上下文 → 工作区选择页;**过期 slug 直接刷新由 SPA 入口文档处理器返回真实 HTTP 301**(cURL 级断言);§3.4 测试矩阵五场景逐条 e2e;认证内页面 `noindex` + canonical。
 - [ ] **异常态**:loading/empty/no-results/error/offline 五态按 §4.2 实现;no-results 提供「新建 issue "q"」动作——**仅有 `issue:write` 权限者可见(无权限者该动作不渲染),点击预填创建弹窗而非直接提交**(e2e 以 guest/无权限成员断言动作缺失)。
 - [ ] **空态(评审 M3)**:空 query 按 §4.2.1 唯一数据流展示 favorites(§6.19 端点)+ recents(本地)+ 常用命令;**favorites 与 recents 同 target 去重、各区排序正确**;**被删/失权对象的本地 recent 打开面板即被清理不再出现**;切换工作区后 recents 键隔离(不串用他区记录)。
 - [ ] **文案外部化**:面板/帮助层/错误提示无硬编码可见文案(i18n.md);颜色无硬编码(theme.md)。
@@ -427,7 +459,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 - [ ] 搜索 P95 < 300ms(热缓存,10 万 issue / 1 万成员工作区,q 为常见短词);identifier 精确命中 P95 < 100ms。**基准按 README §10**:k6 50 VU 稳态 + 100 VU 峰值、冷/热缓存各标注;查询携带**真实可见性 JOIN**(成员资格/项目可见性/私有 agent 谓词,§3.3),不以去权限的简化查询充数(评审 H3 收口)。
 - [ ] 命令面板本地命令过滤 < 16ms(单帧内);服务端结果防抖 150ms + 过期取消,无可感卡顿。
-- [ ] **三条查询路径各有 `EXPLAIN (ANALYZE, BUFFERS)`**(§2.2):1–2 字符前缀路径、完整 identifier 快路径、≥3 字符 trigram 路径,在 10 万 issue / 1 万成员分布下证明命中 §2.2 的 trigram/唯一/部分索引组合(BitmapAnd/快路径),**无全表顺序扫描**;`members.search_name` 投影改名后即时可搜(同步契约验收)。
+- [ ] **三条查询路径各有 `EXPLAIN (ANALYZE, BUFFERS)`**(§2.2):1–2 字符前缀路径(**命中各实体 `*_prefix` B-tree pattern 索引,无全表顺序扫描**)、完整 identifier 快路径(唯一索引)、≥3 字符 trigram 路径(归一表达式 GIN + 租户/软删 BitmapAnd),在 10 万 issue / 1 万成员分布下逐条证明;**索引表达式 / 查询表达式 / 回填三方统一经 `mesh_search_norm`**(大写 + 带重音输入命中归一投影,EXPLAIN 仍走索引——表达式漂移即索引失效,本项即其回归断言);`members.search_name` 投影改名后即时可搜(同步契约验收)。
 
 ### 5.3 安全与一致性
 

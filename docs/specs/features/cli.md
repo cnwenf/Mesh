@@ -255,11 +255,7 @@ $ mesh auth login
 - 无浏览器环境(SSH)→ 提示在另一设备打开(设备码流正是为受限输入设备设计);
 - CI/无头 → `mesh auth login --with-token`(stdin,隐藏回显)。
 
-**登录成功后的默认工作区解析(评审 M2 收口,写死)**:会话凭证落地后按所属工作区数分流:
-
-- **0 个工作区**:提示「当前账号无可用工作区,请在 Web 端创建或接受邀请后重试」,退码 0(登录本身成功)+ stderr 提示;后续需工作区的命令按未解析工作区报错(退码 3);
-- **1 个工作区**:自动设为默认工作区(写入 config.yaml,stdout 明示);
-- **多个工作区**:**TTY** → 交互式选择列表(↑/↓ 选定,写入默认);**非 TTY 且未给 `--workspace`** → **报错退出(退码 3)**,stderr 列出所属工作区并要求以 `mesh config set workspace <slug>` 或每命令 `--workspace <slug>` 显式指定(**不默认首个,防自动化脚本误操作错误工作区**)。
+**登录成功后的默认工作区(评审 R2-H1 收口,写死)**:设备码会话的工作区**在浏览器批准页已完成 0/1/多分流并显式绑定**(auth.md §3.1.1:0 个工作区无法批准、1 个自动绑定、多个必选),token 响应携带 `workspace: {id, slug}`;CLI 成功后**直接采用该批准绑定工作区为默认**(写入 config.yaml,stdout 明示「Default workspace: <slug>(批准时绑定)」),**不再按全部所属工作区二次选择**——二次选择可能选到批准绑定之外的工作区,与会话固化的 `workspace_id` 冲突。PAT 登录(`--with-token`)的默认工作区经 `mesh config set workspace <slug>` 或每命令 `--workspace <slug>` 指定;未解析工作区时执行需工作区的命令 → 退码 3 + 可操作提示(列出所属工作区)。**`--workspace` 逐命令覆盖**仍支持,但覆盖值仍受会话/令牌工作区边界约束(设备会话指名他区 → `403 forbidden`)。
 
 ### 4.3 错误可操作性(每条错误 = 发生了什么 + 下一步)
 
@@ -286,7 +282,7 @@ $ mesh auth login
 ### 5.1 功能性
 
 - [ ] **PAT 登录全链路**:`--with-token` stdin 登录 → 凭证 0600 落地 → `auth status` 正确展示(prefix 掩码,无明文)→ 任意工作项命令可用;`logout --revoke` 后服务端即 401。
-- [ ] **设备码登录全链路**(auth.md 增量落地后):取码 → 浏览器确认页批准 → CLI 轮询成功 → 会话凭证落地;`authorization_pending`/`slow_down`/`access_denied`/`expired_token` 四分支各有 e2e 用例;撤销 refresh 后 CLI 退出码 2。
+- [ ] **设备码登录全链路**(auth.md 增量落地后):取码 → 浏览器确认页批准(**工作区在批准页绑定**)→ CLI 轮询成功 → 会话凭证落地,**默认工作区直接采用批准绑定值(无成功后二次选择,e2e 断言多工作区账号登录后 config 即批准所选工作区)**;`authorization_pending`/`slow_down`/`access_denied`/`expired_token` 四分支各有 e2e 用例;撤销 refresh 后 CLI 退出码 2。
 - [ ] **工作项命令族 e2e**:§3.1 映射表每条命令真实启动服务 + 真实 API 调用 + 响应与落库校验;`issue create --description-file` 长文本含特殊字符(反引号/`$()`/引号)不被 shell 吞参。
 - [ ] **乐观并发**:`issue update` 携过期 `If-Match` → 409 → 退码 4 + 可操作错误。
 - [ ] **`logs --follow`**:SSE 流式跟随运行中执行,断线以 offset 重连**不丢不重**;收 `end` 自动退出;Ctrl-C 退码 130 无悬挂连接。
