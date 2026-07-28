@@ -436,7 +436,7 @@ async def test_create_issue_loop_lineage_accumulates_through_dispatch(session_fa
         "issue_service": IssueService(session_factory),
     }
     world = await seed_world(session_factory)
-    rule = await make_rule(
+    await make_rule(
         session_factory,
         world["ws_id"],
         created_by=world["member_id"],

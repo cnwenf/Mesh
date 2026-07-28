@@ -27,7 +27,6 @@ const API_BASE = process.env.AUTOPILOTS_API_BASE ?? 'http://127.0.0.1:8160';
 const RUN_SUFFIX = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
 let WORKSPACE_ID = '';
 let TOKEN = '';
-let AGENT_ID = '';
 
 async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: never }> {
   const resp = await fetch(`${API_BASE}${path}`, {
@@ -60,8 +59,9 @@ async function bootstrapWorld(): Promise<void> {
   TOKEN = ((await login.json()) as { data: { access_token: string } }).data.access_token;
   const ws = await api('POST', '/api/v1/workspaces', { name: 'AP Walkthrough WS', slug: `ap-walk-${RUN_SUFFIX}` });
   WORKSPACE_ID = (ws.data as { id: string }).id;
-  const agent = await api('POST', `/api/v1/workspaces/${WORKSPACE_ID}/agents`, { name: `ap-agent-${RUN_SUFFIX}` });
-  AGENT_ID = (agent.data as { id: string }).id;
+  // provision an agent member so the rule editor's executor pickers have an
+  // entry (the id itself is never referenced by the walkthrough)
+  await api('POST', `/api/v1/workspaces/${WORKSPACE_ID}/agents`, { name: `ap-agent-${RUN_SUFFIX}` });
 }
 
 async function loginReal(page: Page): Promise<void> {

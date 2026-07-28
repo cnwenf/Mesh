@@ -505,8 +505,6 @@ async def test_list_webhook_events_filters(session_factory, service) -> None:
 
 async def test_list_rules_includes_last_run_status(session_factory, service) -> None:
     world = await seed_world(session_factory)
-    async with session_factory() as session:
-        member = await session.scalar(select(Member).where(Member.id == world["member_id"]))
     rule = await make_rule(
         session_factory, world["ws_id"], created_by=world["member_id"], name="with-runs"
     )
