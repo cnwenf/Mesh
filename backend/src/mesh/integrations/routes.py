@@ -357,7 +357,10 @@ async def link_external_identity(
         workspace_id=context.workspace.id,
         integration_id=_path_uuid(body.integration_id, what="integration"),
     )
+    from mesh.db.tenant import set_tenant_context as _set_tenant
+
     async with request.app.state.session_factory() as session, session.begin():
+        await _set_tenant(session, context.workspace.id)
         result = await identities_mod.start_link(
             session,
             redis=request.app.state.redis,
@@ -381,7 +384,10 @@ async def confirm_external_identity(
     user: User = Depends(get_current_user),
 ) -> dict:
     await _rate_limit_write(request, user, response)
+    from mesh.db.tenant import set_tenant_context as _set_tenant
+
     async with request.app.state.session_factory() as session, session.begin():
+        await _set_tenant(session, context.workspace.id)
         identity = await identities_mod.confirm_link(
             session,
             redis=request.app.state.redis,
@@ -405,7 +411,10 @@ async def unlink_external_identity(
     user: User = Depends(get_current_user),
 ) -> Response:
     await _rate_limit_write(request, user, response)
+    from mesh.db.tenant import set_tenant_context as _set_tenant
+
     async with request.app.state.session_factory() as session, session.begin():
+        await _set_tenant(session, context.workspace.id)
         await identities_mod.unlink_identity(
             session,
             workspace_id=context.workspace.id,

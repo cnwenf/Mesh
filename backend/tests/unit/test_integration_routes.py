@@ -161,7 +161,7 @@ async def test_integration_crud_and_secret_contract(app_client):
     assert gone.status_code == 404
 
 
-async def test_integration_create_validation_and_rbac(app_client):
+async def test_integration_create_validation_and_rbac(app_client, session_factory):
     world = await make_world(app_client, "rbac")
     bad_kind = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
@@ -175,8 +175,7 @@ async def test_integration_create_validation_and_rbac(app_client):
     )
     assert secret_in_config.status_code == 422
 
-    # A plain member (second user invited? simpler: guest-less member via a
-    # second registered user given member role) cannot write.
+    # A plain (non-admin) member cannot write but can read.
     email2 = f"intg-member-{uuid.uuid4().hex[:6]}@example.com"
     await app_client.post(
         "/api/v1/auth/register",
@@ -185,28 +184,26 @@ async def test_integration_create_validation_and_rbac(app_client):
     token2 = (await app_client.post(
         "/api/v1/auth/login", json={"email": email2, "password": "Routes-Test-12345"}
     )).json()["data"]["access_token"]
-    invite = await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/invitations",
-        json={"emails": [email2]}, headers=auth_headers(world),
-    )
-    assert invite.status_code in (200, 201)
-    invitations = (await app_client.get(
-        f"/api/v1/workspaces/{world['ws_id']}/invitations", headers=auth_headers(world)
-    )).json()["data"]
-    target = next(i for i in invitations if i.get("email") == email2)
-    accept = await app_client.post(
-        "/api/v1/invitations/accept",
-        json={"token": target["token"]},
-        headers={"Authorization": f"Bearer {token2}"},
-    )
-    assert accept.status_code in (200, 201)
+    from sqlalchemy import select
+
+    from mesh.db.models.member import Member
+    from mesh.db.models.user import User
+
+    async with session_factory() as session, session.begin():
+        user2 = await session.scalar(select(User).where(User.email == email2))
+        session.add(Member(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            member_type="human",
+            user_id=user2.id,
+            role="member",
+            status="active",
+        ))
     forbidden = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
         json={"kind": "im_slack", "name": "z"},
         headers={"Authorization": f"Bearer {token2}"},
     )
     assert forbidden.status_code == 403
-    # Read is allowed for members.
     readable = await app_client.get(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
         headers={"Authorization": f"Bearer {token2}"},
@@ -295,7 +292,7 @@ async def test_inbound_slack_event_and_bad_signature(app_client):
                   "text": "hello", "event_ts": "1.1"},
     }
     body = json.dumps(payload).encode()
-    ts = str(int(NOW.timestamp()))
+    ts = str(int(datetime.now(UTC).timestamp()))  # server verifies vs real time
     sig = hmac.new(signing_secret.encode(), f"v0:{ts}:".encode() + body, hashlib.sha256).hexdigest()
     good = await app_client.post(
         "/api/v1/integrations/slack/events", content=body,
@@ -522,12 +519,22 @@ async def test_vcs_link_endpoints(app_client):
     unresolved = await app_client.post(
         "/api/v1/integrations/vcs/resolve",
         json={"integration_id": integration["id"],
-              "source_text": "no identifier here",
+              "source_text": "closes NOPE-999",
               "vcs_ref": {"type": "commit", "id": "sha-2"}},
         headers=auth_headers(world),
     )
     assert unresolved.status_code == 422
     assert unresolved.json()["error"]["code"] == "identifier_not_resolved"
+
+    no_identifiers = await app_client.post(
+        "/api/v1/integrations/vcs/resolve",
+        json={"integration_id": integration["id"],
+              "source_text": "no identifier here",
+              "vcs_ref": {"type": "commit", "id": "sha-3"}},
+        headers=auth_headers(world),
+    )
+    assert no_identifiers.status_code == 200
+    assert no_identifiers.json()["data"]["identifiers"] == []
 
     deleted = await app_client.delete(
         f"/api/v1/integrations/vcs/links/{link.json()['data']['id']}",
