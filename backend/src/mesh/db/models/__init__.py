@@ -42,6 +42,7 @@ from mesh.db.models.notification import (
     NotificationDelivery,
     NotificationPreference,
 )
+from mesh.db.models.onboarding import OnboardingState, OnboardingStateStep
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.project import (
     Cycle,
@@ -149,6 +150,8 @@ __all__ = [
     "NotificationDelivery",
     "NotificationPreference",
     "OAuthIdentity",
+    "OnboardingState",
+    "OnboardingStateStep",
     "OutboxEvent",
     "PasswordResetToken",
     "Project",
