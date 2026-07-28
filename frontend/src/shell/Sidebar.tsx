@@ -20,6 +20,7 @@ export type NavKey =
   | 'chat'
   | 'autopilots'
   | 'automation'
+  | 'insights'
   | 'settings';
 
 interface NavItem {
@@ -41,6 +42,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   // 自动化规则(autopilot.md §4):AI 队友值班表;运行时(runtime.md)单独入口。
   { key: 'autopilots', to: '/autopilots' },
   { key: 'automation', to: '/runtimes' },
+  // 统计报表(analytics.md §4.1):工作区洞察仪表盘。
+  { key: 'insights', to: '/insights' },
   { key: 'settings', to: '/settings' },
 ];
 

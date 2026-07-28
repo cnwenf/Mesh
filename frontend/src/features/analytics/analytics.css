@@ -1,0 +1,175 @@
+/* 统计报表(analytics.md §4):卡片/网格/KPI/表格;颜色仅经语义 token。 */
+
+.mesh-analytics__grid-layout {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 1fr;
+}
+
+.mesh-analytics__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-4);
+}
+
+.mesh-analytics__card-title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-analytics__card-note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__chart {
+  inline-size: 100%;
+  block-size: auto;
+}
+
+.mesh-analytics__grid {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.mesh-analytics__tick {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+
+.mesh-analytics__sparkline {
+  inline-size: 120px;
+  block-size: 28px;
+}
+
+.mesh-analytics__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  margin-block-end: var(--space-4);
+}
+
+.mesh-analytics__kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--space-3);
+}
+
+.mesh-analytics__kpi {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.mesh-analytics__kpi-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.mesh-analytics__kpi-value {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  margin: var(--space-1) 0 0;
+  color: var(--color-text);
+}
+
+.mesh-analytics__kpi-value--success {
+  color: var(--color-success);
+}
+
+.mesh-analytics__kpi-value--warn {
+  color: var(--color-warn);
+}
+
+.mesh-analytics__kpi-value--danger {
+  color: var(--color-danger);
+}
+
+.mesh-analytics__agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.mesh-analytics__agent-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--color-surface);
+}
+
+.mesh-analytics__agent-name {
+  margin: 0 0 var(--space-2);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.mesh-analytics__agent-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__token-note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-warn);
+}
+
+.mesh-analytics__table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.mesh-analytics__table th,
+.mesh-analytics__table td {
+  text-align: start;
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.mesh-analytics__table th {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.mesh-analytics__visibility-note {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__legend {
+  display: flex;
+  gap: var(--space-4);
+  margin-block-start: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.mesh-analytics__legend-swatch {
+  inline-size: 18px;
+  block-size: 0;
+  border-block-start-width: 2px;
+  border-block-start-style: solid;
+}
+
+.mesh-analytics__legend-swatch--dashed {
+  border-block-start-style: dashed;
+}

@@ -8,6 +8,7 @@
  * 触发重拉,agent.deleted 回名册(README §6.7)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AgentStatsCard } from '../analytics/AgentStatsCard';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
@@ -492,6 +493,14 @@ export function AgentDetailPage(): React.JSX.Element {
             <dt>{t('agents.detail.created')}</dt>
             <dd>{agent.created_at}</dd>
           </dl>
+          {/* 统计报表(analytics.md §4.4):agent 运行统计卡(名册深链唯一入口) */}
+          {workspace !== null ? (
+            <AgentStatsCard
+              client={client}
+              workspaceId={workspace.workspace_id}
+              agentId={agent.id}
+            />
+          ) : null}
         </section>
       ) : null}
 
