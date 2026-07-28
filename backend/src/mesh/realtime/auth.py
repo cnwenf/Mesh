@@ -81,7 +81,10 @@ PrefixChecker = Callable[[Principal, str], Awaitable[bool]]
 # workspace straight from the key and needs no resource checker or channel row.
 WORKSPACE_SCOPED_ENTITY = "workspace"
 MEMBER_INBOX_ENTITY = "member"
-MEMBER_INBOX_SUFFIX = ":inbox"
+# Member-private channel suffixes: the inbox (comment-inbox.md) and the
+# onboarding progress channel (onboarding.md §3.7). Both are owner-only;
+# ownership resolves from the roster, never from the channel string.
+MEMBER_PRIVATE_SUFFIXES: tuple[str, ...] = (":inbox", ":onboarding")
 
 # Resource-scoped entities: their privacy boundary is finer than workspace
 # membership (e.g. a *private* project inside a workspace), so they MUST have a
@@ -154,13 +157,24 @@ class DefaultChannelAuthorizer:
                 return None
             return owner
 
-        if info.entity == MEMBER_INBOX_ENTITY and info.key.endswith(MEMBER_INBOX_SUFFIX):
-            # member:{member_id}:inbox — ownership is resolved from the
-            # ROSTER, not from realtime_channels: an inbox that has never
-            # received a notification has no channel row yet, and the owner
-            # must still be able to subscribe to receive the FIRST one live
-            # (comment-inbox.md §3.6 / I9 realtime badge).
-            owner = await self._member_inbox_workspace(principal, info.key)
+        member_suffix = next(
+            (
+                suffix
+                for suffix in MEMBER_PRIVATE_SUFFIXES
+                if info.entity == MEMBER_INBOX_ENTITY and info.key.endswith(suffix)
+            ),
+            None,
+        )
+        if member_suffix is not None:
+            # member:{member_id}:inbox / member:{member_id}:onboarding —
+            # ownership is resolved from the ROSTER, not from
+            # realtime_channels: a member-private channel that has never
+            # received an event has no channel row yet, and the owner must
+            # still be able to subscribe to receive the FIRST one live
+            # (comment-inbox.md §3.6 / I9 realtime badge; onboarding.md §3.7).
+            owner = await self._member_keyed_workspace(
+                principal, info.key[: -len(member_suffix)]
+            )
             if owner is None:
                 return None
             checker = self._prefix_checkers.get(info.entity)
@@ -207,13 +221,6 @@ class DefaultChannelAuthorizer:
         if not await checker(principal, channel):
             return None
         return owner
-
-    async def _member_inbox_workspace(
-        self, principal: Principal, key: str
-    ) -> uuid.UUID | None:
-        """Resolve the owning workspace of a ``member:{id}:inbox`` channel."""
-        member_raw = key[: -len(MEMBER_INBOX_SUFFIX)]
-        return await self._member_keyed_workspace(principal, member_raw)
 
     async def _member_keyed_workspace(
         self, principal: Principal, member_raw: str

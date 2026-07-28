@@ -65,6 +65,8 @@ from mesh.errors import (
 )
 from mesh.favorites.routes import router as favorites_router
 from mesh.favorites.service import FavoritesService
+from mesh.onboarding.routes import router as onboarding_router
+from mesh.onboarding.service import OnboardingService
 from mesh.issue.bulk import BulkService
 from mesh.issue.channels import register_issue_checkers
 from mesh.issue.dependencies import DependencyService
@@ -260,6 +262,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
     )
     app.state.favorites_service = FavoritesService(session_factory)
+    app.state.onboarding_service = OnboardingService(session_factory)
     app.state.chat_service = ChatService(
         session_factory,
         comment_service=app.state.comment_service,
@@ -340,6 +343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(comment_inbox_router)
     app.include_router(chat_router)
     app.include_router(favorites_router)
+    app.include_router(onboarding_router)
     app.include_router(agent_router)
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)

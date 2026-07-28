@@ -333,6 +333,13 @@ class WorkspaceService:
                 resource_id=workspace.id,
                 metadata={"slug": workspace.slug},
             )
+            # Onboarding checklist seeding for the workspace creator
+            # (onboarding.md §3.5 R3 main path / §1.2.1 step 1): the owner's
+            # activation checklist is seeded in the SAME transaction, with
+            # create_workspace already completed (the workspace exists).
+            from mesh.onboarding.service import seed_for_new_member
+
+            await seed_for_new_member(session, workspace_id=workspace.id, member=member)
             result = workspace_to_dict(workspace, my_role="owner")
         return result
 

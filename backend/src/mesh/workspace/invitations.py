@@ -520,9 +520,14 @@ class InvitationService:
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
-            # Onboarding checklist seeding for new human members lands with the
-            # onboarding increment (onboarding.md §3.5 R3) — same transaction
-            # hook point as here.
+            # Onboarding checklist seeding for new human members (onboarding.md
+            # §3.5 R3 main path): same-transaction seed + full historical
+            # reconcile, so an invitee entering a mature workspace arrives with
+            # steps already evidenced from history. Agent members are never
+            # seeded; the call is idempotent for legacy/existing rows.
+            from mesh.onboarding.service import seed_for_new_member
+
+            await seed_for_new_member(session, workspace_id=workspace_id, member=member)
             response = self._accept_response(
                 {"id": member_id, "role": member_role, "status": member_status},
                 workspace,

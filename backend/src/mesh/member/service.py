@@ -395,9 +395,12 @@ class MemberService:
                 ip_address=ip_address,
                 user_agent=user_agent,
             )
-            # Onboarding checklist seeding for new human members lands with the
-            # onboarding increment (onboarding.md §3.5 R3) — same-transaction
-            # hook point as here.
+            # Onboarding checklist seeding for new human members (onboarding.md
+            # §3.5 R3 main path): same-transaction seed + full historical
+            # reconcile (idempotent; agent adds never reach this point).
+            from mesh.onboarding.service import seed_for_new_member
+
+            await seed_for_new_member(session, workspace_id=workspace_id, member=member)
             result = self.render_row(member, user)
         return result
 

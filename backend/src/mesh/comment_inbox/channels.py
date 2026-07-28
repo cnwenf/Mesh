@@ -1,6 +1,8 @@
-"""Per-channel authorization for ``member:{member_id}:inbox`` channels.
+"""Per-channel authorization for member-private ``member:{member_id}:*`` channels.
 
-Every inbox subscription re-checks that the principal owns that member row
+Covers the inbox (``member:{id}:inbox``) and the onboarding progress channel
+(``member:{id}:onboarding``, onboarding.md §3.7): both are OWNER-ONLY, so
+every subscription re-checks that the principal owns that member row
 (README §6.7 — the channel string is never the isolation boundary).
 Registered on BOTH the API and the realtime gateway factories so the
 independently-deployed processes cannot drift (CWE-862).
@@ -15,7 +17,7 @@ from sqlalchemy import select
 
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
-from mesh.realtime.auth import PrefixChecker, Principal
+from mesh.realtime.auth import MEMBER_PRIVATE_SUFFIXES, PrefixChecker, Principal
 from mesh.realtime.channels import parse_channel
 
 INBOX_SUFFIX = ":inbox"
@@ -35,9 +37,14 @@ def make_inbox_channel_checker(session_factory) -> PrefixChecker:
 
     async def check(principal: Principal, channel: str) -> bool:
         info = parse_channel(channel)
-        if info is None or not info.key.endswith(INBOX_SUFFIX):
+        if info is None:
             return False
-        member_raw = info.key[: -len(INBOX_SUFFIX)]
+        suffix = next(
+            (s for s in MEMBER_PRIVATE_SUFFIXES if info.key.endswith(s)), None
+        )
+        if suffix is None:
+            return False
+        member_raw = info.key[: -len(suffix)]
         try:
             member_id = uuid.UUID(member_raw)
         except ValueError:
