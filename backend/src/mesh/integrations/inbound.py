@@ -42,9 +42,9 @@ from mesh.db.models.integration import Integration, IntegrationBinding, Integrat
 from mesh.db.tenant import set_tenant_context
 from mesh.integrations.connectors import (
     KIND_TO_PROVIDER,
-    NormalizedEvent,
     SIG_INVALID,
     SIG_MISSING,
+    NormalizedEvent,
     adapter_for,
 )
 from mesh.integrations.matching import binding_matches, compute_im_signals
@@ -191,20 +191,26 @@ async def _load_integration(session: AsyncSession, integration_id: uuid.UUID) ->
 
 async def _candidate_from_binding(session: AsyncSession, binding: tuple) -> tuple:
     """Build a candidate row for a binding-routed integration (gitlab/github
-    repo routing) without pre-tenant ORM reads."""
-    integration = await _load_integration(session, binding[2])
-    if integration is None:  # owner-role fallback path may fail under RLS
-        # The definer lookup for the integration's columns keeps the
-        # pipeline alive under the restricted app role.
-        rows = await _lookup_active_by_kind(session, kind="vcs_gitlab")
-        for row in rows:
-            if row[0] == binding[2]:
-                return row
-        return (binding[2], binding[1], "active", "vcs_gitlab", {}, None)
-    return (
-        integration.id, integration.workspace_id, integration.status,
-        integration.kind, integration.config, integration.secret_ref,
-    )
+    repo routing) without pre-tenant ORM reads (RLS fail-closed)."""
+    try:
+        async with session.begin_nested():
+            row = (await session.execute(
+                text(
+                    "SELECT id, workspace_id, status, kind, config, secret_ref "
+                    "FROM mesh_integration_by_id(:id)"
+                ),
+                {"id": binding[2]},
+            )).first()
+            if row is not None:
+                return tuple(row)
+    except Exception:  # noqa: BLE001 — function absent (owner-role reuse)
+        integration = await _load_integration(session, binding[2])
+        if integration is not None:
+            return (
+                integration.id, integration.workspace_id, integration.status,
+                integration.kind, integration.config, integration.secret_ref,
+            )
+    return (binding[2], binding[1], "active", "vcs_gitlab", {}, None)
 
 
 def _integration_from_row(row: tuple) -> Integration:

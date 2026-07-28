@@ -128,7 +128,9 @@ async def test_duplicate_link_rejected_409(session_factory, redis_client):
             external_user_key="U_TAKEN", user_id=world["user"],
             created_in_workspace_id=world["ws"],
         ))
-    with pytest.raises(BusinessRuleError) as excinfo:
+    from mesh.errors import ConflictError
+
+    with pytest.raises(ConflictError) as excinfo:
         await _run_link(
             session_factory, redis_client, world, external_user_key="U_TAKEN"
         )

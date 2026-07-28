@@ -19,7 +19,7 @@ from mesh.auth.rbac import WorkspaceContext, require_workspace
 from mesh.db.models.integration import Integration, VcsLink
 from mesh.db.models.issue import Issue
 from mesh.db.models.user import User
-from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from mesh.errors import BusinessRuleError, NotFoundError
 from mesh.integrations import identities as identities_mod
 from mesh.integrations import oauth as oauth_mod
 from mesh.integrations import outbound as outbound_mod
@@ -39,7 +39,6 @@ from mesh.integrations.schemas import (
 )
 from mesh.integrations.service import (
     IntegrationService,
-    render_binding,
     render_event,
     render_integration,
 )
@@ -464,7 +463,7 @@ async def oauth_callback(
         record = await oauth_mod.consume_state(request.app.state.redis, state=state)
         if record is None or record.get("kind") != kind:
             return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
-        tokens = await oauth_mod.exchange_code(
+        _tokens = await oauth_mod.exchange_code(
             kind=kind,
             code=code,
             code_verifier=str(record["code_verifier"]),
@@ -722,9 +721,12 @@ async def _resource_workspace(request: Request, fn: str, resource_id: uuid.UUID)
 
     async with request.app.state.session_factory() as session:
         try:
-            return (await session.execute(
-                sql_text(f"SELECT {fn}(:id)"), {"id": resource_id}
-            )).scalar_one_or_none()
+            # SAVEPOINT: a missing function aborts only the savepoint, never
+            # the session — the ORM fallback below stays usable.
+            async with session.begin_nested():
+                return (await session.execute(
+                    sql_text(f"SELECT {fn}(:id)"), {"id": resource_id}
+                )).scalar_one_or_none()
         except Exception:  # noqa: BLE001 — function absent (owner-role tests)
             model = {
                 "mesh_integration_workspace_id": Integration,
@@ -771,8 +773,8 @@ async def create_vcs_link(
             "integration is not a VCS connector", code="vcs_link_invalid"
         )
     provider = "github" if integration.kind == "vcs_github" else "gitlab"
-    from mesh.integrations.connectors import adapter_for
     from mesh.db.tenant import set_tenant_context
+    from mesh.integrations.connectors import adapter_for
 
     tenant_key = adapter_for(integration.kind)["tenant_key_from_config"](
         integration.config or {}
@@ -859,8 +861,8 @@ async def resolve_vcs_identifiers(
             "integration is not a VCS connector", code="vcs_link_invalid"
         )
     provider = "github" if integration.kind == "vcs_github" else "gitlab"
-    from mesh.integrations.connectors import adapter_for
     from mesh.db.tenant import set_tenant_context
+    from mesh.integrations.connectors import adapter_for
 
     tenant_key = adapter_for(integration.kind)["tenant_key_from_config"](
         integration.config or {}

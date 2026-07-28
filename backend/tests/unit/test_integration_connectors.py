@@ -319,7 +319,9 @@ def test_gitlab_normalize_merge_request_hook():
 
 def test_gitlab_tenant_key_from_config():
     assert gitlab_tenant_key_from_config({"instance_url": "https://gitlab.com"}) == "gitlab.com"
-    assert gitlab_tenant_key_from_config({"instance_url": "https://code.corp.example/"}) == "code.corp.example"
+    assert gitlab_tenant_key_from_config(
+        {"instance_url": "https://code.corp.example/"}
+    ) == "code.corp.example"
     assert gitlab_tenant_key_from_config({}) == "gitlab.com"
 
 

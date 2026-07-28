@@ -136,6 +136,27 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - MES-92 daemon 真实执行体架构设计(`docs/specs/daemon-executor.md`,1021 行 Spec + specs 索引登记)+ 安全评审必修项收口。
 
 ## [0.19.0] - 2026-07-29
+
+平台能力层 D:集成平台全功能实现(MES-68,integrations.md 五章)。统一第三方集成抽象——IM(飞书/Lark、Slack)/ VCS(GitHub/GitLab)/ 出向 Webhook 共用同一套注册绑定、凭据保险箱、摄取管线与投递台账;连接器只实现「签名校验 + 载荷归一 + 出站适配」三个适配点。入站摄取复用 autopilot `webhook_events` 范式(恒定时间签名 + ±300s 防重放 + `rejected:<hash>` 防预占命名空间 + 去重幂等 200 + 全程审计,invalid/missing 一律 401 绝不分发),经 §6.9「外部 IM 消息触发」行写 `execution.enqueue`(trigger='integration',幂等键 `sha256(agent|binding|external_event_id)`,载荷 §6.15 不可信隔离)。`external_identities` 全局身份表(R4/R5:映射全局 `users.id`、身份键含平台租户、无 workspace_id/无 workspace RLS、建链工作区删除映射保留、解链仅所属用户本人且 admin 无旁路);卡片回调鉴权链(点击者 → users.id → 名册 JOIN → §6.10 权限再校验 → 转发统一审批,未映射/无权限 403 审批不变);建链信任根(验证码投递至外部账号私聊,10 分钟 TTL 单次消费);VCS `vcs_links` 真源 + identifier 自动关联 + `auto_status_map` 状态流转(系统评论留痕、重复事件幂等);出向订阅经 outbox `webhook.dispatch` 派生 → 投递 worker(`Mesh-Signature` HMAC + 指数退避 + 订阅级熔断 + resume/手动重试),https-only + SSRF 私网/元数据拒绝;OAuth 授权码 + PKCE;凭据密文存储、明文仅显示一次、全通道不回显。T29 全断言与 §5 红线真实起服 e2e 全绿;模块单测覆盖率 ≥90%。
+
+### Added
+
+- **数据模型(integrations.md §2,迁移 0028)**:七表——`integrations`(kind∈im_feishu/im_slack/vcs_github/vcs_gitlab/webhook_outbound,非密 `config` + 密文 `secret_ref`)·`integration_bindings`(**外部身份全局唯一键** `UNIQUE(provider, provider_tenant_key, external_ref)`,跨工作区抢绑 INSERT 即拒 409 `binding_conflict`;scope 精确异或 CHECK;项目级绑定随项目物理删除 `ON DELETE CASCADE`;`bound_agent_id` 列级 `SET NULL`)·`integration_events`(同构 autopilot `webhook_events`:`UNIQUE(integration_id, external_event_id)` 去重 + `rejected:<body-hash>` 独立命名空间防预占)·`external_identities`(**全局身份表**:映射 `users.id`、`UNIQUE(provider, provider_tenant_key, external_user_key)`、`created_in_workspace_id ON DELETE SET NULL` 仅审计、用户注销级联;无 workspace RLS)·`webhook_subscriptions` + `webhook_subscription_deliveries`(`UNIQUE(subscription_id, event_ref)` 投递幂等)·`vcs_links`(active 部分唯一键 + 同租户复合 FK);全部 §2.8 索引 + fail-closed RLS + SECURITY DEFINER 引导函数(按 kind/config 定位集成、绑定路由、资源→工作区解析、`external_identity_unlink_allowed()` 可执行参照)。
+- **入站摄取(§3.2,复用 autopilot 范式)**:四平台签名(飞书 `SHA256(ts+nonce+encrypt_key+body)` / Slack `v0=HMAC_SHA256` / GitHub `X-Hub-Signature-256` / GitLab 共享密钥或 HMAC)恒定时间比较 + 时间戳防重放;签名无效/缺失 → 401 + 审计,**绝不分发**;飞书/Slack `url_verification` challenge;集成停用 401 `integration_disabled`;匹配绑定后经 §6.9 同事务写 `execution.enqueue`(trigger='integration',幂等键 `sha256(agent_id|binding_id|external_event_id)`,§6.11 快照,载荷经 §6.15 `untrusted_context` 隔离);未绑定/未匹配 agent 仅审计;`integration.event_ingested` 实时台账。
+- **连接器(§5.2)**:飞书/Lark(`im.message.receive_v1` 归一、tenant_key)、Slack(Events API、team_id 路由)、GitHub(installation 路由、PR/push 归一)、GitLab(绑定路由、MR Hook 归一);新增连接器 = 三个适配点。
+- **外部身份建链/解链(§3.1,HIGH-1/R4/R5)**:一次性验证码投递至该外部账号私聊(dev 经 Redis dev-outbox;生产经平台 API),10 分钟 TTL + 单次消费;建链目标固定请求者本人 `users.id`(不接受指向他人的参数);重复建链 409 `identity_already_linked`;**全局解链仅映射所属 `users.id` 本人,工作区 admin/owner 无旁路**(403 `identity_unlink_forbidden`,`external_identity_unlink_allowed()` 仅比对 users.id);建链/解链审计留痕。
+- **IM 卡片回调鉴权链(§3.2/§4.3)**:飞书交互卡片 / Slack Block Kit 回调 → 提取点击者外部身份 → `external_identities` 映射 `users.id` → 集成解析工作区 → JOIN 该工作区 `members` 名册行(active human)→ §6.10 权限再校验 → 转发统一审批端点(approve/reject 幂等);未映射/无名册行/无权限 → 403 审批状态不变 + 审计;同一映射行服务多工作区审批,建链工作区删除后其余工作区照常解析。
+- **VCS 关联与自动流转(§3.3)**:`vcs_links` 显式关联 / identifier(`WEB-123`)自动解析关联(落库幂等、抢关 409);`auto_status_map` 经 issue 状态流转移置目标状态(严格模式 `allowed_transitions` 校验)+ `external_state` 刷新 + `stale` 标记 + 系统评论留痕;重复事件幂等不重复改状态;issue 侧栏关联列表端点。
+- **出向 Webhook 订阅(§3.4/§5.3)**:订阅 CRUD(https-only 400 `invalid_url_scheme`;创建时 SSRF 私网/环回/链路本地/元数据拒绝 422 `ssrf_blocked`;HMAC 密钥创建后**仅显示一次**);经 outbox `webhook.dispatch`(relay 自 `realtime.publish` 派生,`UNIQUE(subscription_id, event_ref)` 幂等)→ 投递 worker:`Mesh-Signature: t=<ts>,v1=HMAC_SHA256` + `Mesh-Event` + `Mesh-Delivery` 头、指数退避(`min(base×2^n,max)×jitter`)、投递时解析地址二次 SSRF 校验、订阅级熔断(连续失败超阈值 `disabled` + 告警)、`resume` 清零、手动重试失败投递(熔断期 422 `subscription_circuit_open`)。
+- **OAuth 授权码 + PKCE(§3.1)**:`authorize` 302(S256 challenge + 单次消费 state)、回调换取 token(refresh token 仅存密文,最小 scope),失败 `oauth_failed`。
+- **前端(§4)**:集成管理页(连接器目录卡片 + 已连接列表 + OAuth/粘贴 token 添加,密钥掩码)、集成详情(概览/绑定抽屉——作用域异或 + 匹配规则 + 目标 agent「留空=仅审计」提示/事件台账——签名/处理状态徽章 + 载荷预览标注不可信数据 + rejected/deduped 高亮)、出向订阅页(密钥仅显示一次对话框 + 投递时间线 + 熔断横幅/恢复 + 手动重试)、外部身份建链/解链面板、issue 侧栏 VCS 关联区块;i18n 全外部化(zh-CN + en,per-file 90% 门禁);异常态矩阵(loading/empty/permission/offline/retry)。
+
+### Verified
+
+- 真实 e2e(真实起服 + 真实 worker):T29 全断言(全局键抢绑 409 / scope 异或 / 项目级联 / 多工作区身份模型 + 建链工作区删除映射保留 / 结构与 RLS 负向 / 解链无旁路);签名拒绝 + 重放拒绝 + 去重幂等 + 防预占 + 停用拒绝;入站经真实 relay 落 `task_executions`(trigger='integration' + §6.9 幂等键);VCS 流程 C(PR 合并 → 自动置 done + 关联 + 评论,重复事件幂等);出向投递台账/重试/熔断/恢复;https-only + SSRF。
+- 单元测试:模块覆盖率 ≥90%(新增代码与整体双达标)。
+
+## [0.19.0] - 2026-07-29
 平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
 
 ### Added
@@ -192,6 +213,7 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - **B3(Spec §4.2/§5.1/§1.2.1)**:深链唯一真源 `deeplinks.ts`——清单 CTA 与空状态主操作同读一处;步骤 3 CTA 改指新建 issue 入口(`/issues?create=1`)、步骤 4 CTA 改指 issue 详情(分派 assignee / @ composer;工作区最新 issue 派生,无 issue 回退看板);CHANGELOG 措辞与代码对齐。
 - **§3.3 错误码对齐**:`workspace_id` 缺失/非法返回 400 `validation_error`(原文字面),合法 UUID 非成员保持 404 `not_found`(§5.3 不泄漏存在性)。
 - **非阻塞备注顺手清**:后端 `service.py`(1040 行)拆为 `completion.py`(守卫/进度)+ `attribution.py`(R4 触发者归属 / aha 证据链)+ `reconcile.py`(建状态全量 reconcile),`service.py` 降为 façade + 播种/渲染/路由事务(行为不变,测试全绿);死键 `a11y.onboarding.card`/`onboarding.dismissedNote` 与死码 `parseOnboardingFrame` 删除;restore 失败不再静默(帮助层 `role=alert` 提示);`OnboardingChecklist` 分支覆盖 90% 并纳入 per-file 门禁;`data-jobs/wizardFlow` 满载机偶发失败修为确定性等待(busy 禁用按钮竞态,非超时糊弄)。
+
 
 ## [0.17.2] - 2026-07-29
 

@@ -282,7 +282,7 @@ async def test_ingest_pr_merged_links_and_transitions(session_factory):
 async def test_ingest_repeat_event_idempotent(session_factory):
     world = await seed_world(session_factory)
     statuses = await make_statuses(session_factory, world)
-    issue = await make_issue(session_factory, world, statuses)
+    await make_issue(session_factory, world, statuses)
     await make_repo_binding(
         session_factory, world,
         match_config={"auto_status_map": {"merged": "done"}},

@@ -176,7 +176,9 @@ def feishu_request(encrypt_key: str, payload: dict, *, ts: str | None = None) ->
     return body, headers
 
 
-def github_request(secret: str, payload: dict, *, event: str, delivery: str | None = None) -> tuple[bytes, dict]:
+def github_request(
+    secret: str, payload: dict, *, event: str, delivery: str | None = None
+) -> tuple[bytes, dict]:
     body = json.dumps(payload).encode()
     sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     headers = {

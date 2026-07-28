@@ -439,6 +439,25 @@ def upgrade() -> None:
         f"GRANT EXECUTE ON FUNCTION mesh_integrations_active_by_kind(text) TO {APP_ROLE}"
     )
 
+    # Full-row bootstrap read by id (binding-routed ingestion — the tenant
+    # GUC is unknown until the integration row is resolved).
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION mesh_integration_by_id(p_id uuid)
+        RETURNS TABLE (
+          id uuid, workspace_id uuid, status text, kind text,
+          config jsonb, secret_ref text
+        )
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+          SELECT i.id, i.workspace_id, i.status, i.kind, i.config, i.secret_ref
+          FROM integrations i
+          WHERE i.id = p_id AND i.deleted_at IS NULL
+        $$
+        """
+    )
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_integration_by_id(uuid) FROM PUBLIC")
+    op.execute(f"GRANT EXECUTE ON FUNCTION mesh_integration_by_id(uuid) TO {APP_ROLE}")
+
     # Resource-scoped endpoints whose paths carry no workspace segment
     # (§3.3: /integrations/vcs/*, /issues/{id}/vcs-links) resolve the owning
     # workspace through these bootstrap reads before setting the tenant GUC.
@@ -487,6 +506,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_integration_by_id(uuid) FROM mesh_app")
+    op.execute("DROP FUNCTION IF EXISTS mesh_integration_by_id(uuid)")
     for fn in (
         "mesh_integration_workspace_id",
         "mesh_vcs_link_workspace_id",

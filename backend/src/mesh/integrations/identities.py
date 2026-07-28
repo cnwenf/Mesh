@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.auth.audit import write_audit
 from mesh.db.models.integration import ExternalIdentity, Integration
 from mesh.db.models.member import Member
-from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
+from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
 
 logger = logging.getLogger("mesh.integrations.identities")
 
@@ -148,7 +148,7 @@ async def start_link(
         )
     )
     if existing is not None:
-        raise BusinessRuleError(
+        raise ConflictError(
             "external account already linked", code="identity_already_linked"
         )
     code = "".join(pysecrets.choice("0123456789") for _ in range(CODE_LENGTH))
@@ -178,7 +178,11 @@ async def start_link(
         resource_type="external_identity",
         metadata={"provider": provider, "integration_id": str(integration.id)},
     )
-    return {"provider": provider, "external_user_key": external_user_key, "code_ttl_seconds": CODE_TTL_SECONDS}
+    return {
+        "provider": provider,
+        "external_user_key": external_user_key,
+        "code_ttl_seconds": CODE_TTL_SECONDS,
+    }
 
 
 async def confirm_link(
@@ -226,7 +230,7 @@ async def confirm_link(
     try:
         await session.flush()
     except IntegrityError as exc:
-        raise BusinessRuleError(
+        raise ConflictError(
             "external account already linked",
             code="identity_already_linked",
         ) from exc

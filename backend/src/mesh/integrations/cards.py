@@ -69,7 +69,9 @@ def parse_card_payload(raw_body: bytes, headers: dict[str, str]) -> dict[str, An
         return {}
 
 
-def extract_clicker(kind: str, payload: dict[str, Any], integration: Integration) -> tuple[str, str, str] | None:
+def extract_clicker(
+    kind: str, payload: dict[str, Any], integration: Integration
+) -> tuple[str, str, str] | None:
     """(provider, provider_tenant_key, external_user_key) of the clicker."""
     config = integration.config or {}
     if kind == "im_feishu":
@@ -198,6 +200,9 @@ async def handle_card_callback(
     provider, tenant_key, external_user_key = clicker
     approval_id, approve = action
     workspace_id = integration.workspace_id
+    from mesh.db.tenant import set_tenant_context
+
+    await set_tenant_context(session, workspace_id)
 
     # Chain link 1: external identity → global users.id.
     identity = await lookup_identity(

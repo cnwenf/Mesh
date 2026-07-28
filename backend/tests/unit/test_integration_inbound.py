@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from mesh.db.models.integration import Integration, IntegrationEvent
 from mesh.db.models.outbox import OutboxEvent
@@ -123,7 +122,7 @@ async def test_duplicate_event_is_idempotent_200_deduped(session_factory):
 
 
 async def test_invalid_signature_rejected_and_audited(session_factory):
-    world = await seed_world(session_factory)
+    await seed_world(session_factory)
     body, headers = slack_request("WRONG-SECRET", _slack_message())
     status, payload = await _run(session_factory, "im_slack", body, headers)
     assert status == 401
@@ -139,7 +138,7 @@ async def test_invalid_signature_rejected_and_audited(session_factory):
 
 
 async def test_missing_signature_rejected(session_factory):
-    world = await seed_world(session_factory)
+    await seed_world(session_factory)
     body = json.dumps(_slack_message()).encode()
     status, payload = await _run(
         session_factory, "im_slack", body, {"content-type": "application/json"}
@@ -375,7 +374,9 @@ async def test_gitlab_token_verification(session_factory):
         "user": {"username": "alice"},
         "object_attributes": {"iid": 3, "title": "x", "state": "opened", "action": "open"},
     }
-    body, headers = gitlab_request(world["secrets"]["gitlab_webhook_token"], payload, event="Merge Request Hook")
+    body, headers = gitlab_request(
+        world["secrets"]["gitlab_webhook_token"], payload, event="Merge Request Hook"
+    )
     status, _ = await _run(session_factory, "vcs_gitlab", body, headers)
     assert status == 200
     # Bad token.

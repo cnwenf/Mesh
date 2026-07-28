@@ -171,7 +171,7 @@ async def test_create_binding_scope_xor_enforced(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     # project scope without project id → CHECK violation surfaces as 4xx.
-    with pytest.raises((BusinessRuleError, Exception)) as excinfo:
+    with pytest.raises(BusinessRuleError):
         await service.create_binding(
             workspace_id=world["ws"], integration_id=world["integ_slack"],
             external_ref="C_XOR", scope="project", project_id=None,

@@ -33,7 +33,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -559,7 +559,7 @@ class WebhookDeliveryWorker:
                 if stop is not None:
                     try:
                         await asyncio.wait_for(stop.wait(), timeout=self._poll_interval)
-                    except (asyncio.TimeoutError, TimeoutError):
+                    except TimeoutError:
                         pass
                 else:
                     await asyncio.sleep(self._poll_interval)
