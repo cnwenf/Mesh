@@ -416,6 +416,29 @@ def upgrade() -> None:
         f"mesh_binding_by_external_ref(text, text) TO {APP_ROLE}"
     )
 
+    # feishu inbound events carry no app id in the payload — the integration
+    # is located by TRIING the stored encrypt keys (spec §3.2 "经 app_id /
+    # encrypt_key"); the candidate set per kind is small.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION mesh_integrations_active_by_kind(p_kind text)
+        RETURNS TABLE (
+          id uuid, workspace_id uuid, status text, kind text,
+          config jsonb, secret_ref text
+        )
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+          SELECT i.id, i.workspace_id, i.status, i.kind, i.config, i.secret_ref
+          FROM integrations i
+          WHERE i.kind = p_kind
+            AND i.deleted_at IS NULL
+        $$
+        """
+    )
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_integrations_active_by_kind(text) FROM PUBLIC")
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION mesh_integrations_active_by_kind(text) TO {APP_ROLE}"
+    )
+
     # -- executable reference: owner-only unlink authorization (R5, T29⑪) -----
     # Role columns deliberately do NOT participate — no admin bypass. The
     # backend service implementation must be line-for-line equivalent.
@@ -453,6 +476,8 @@ def downgrade() -> None:
         "REVOKE EXECUTE ON FUNCTION mesh_binding_by_external_ref(text, text) FROM mesh_app"
     )
     op.execute("DROP FUNCTION IF EXISTS mesh_binding_by_external_ref(text, text)")
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_integrations_active_by_kind(text) FROM mesh_app")
+    op.execute("DROP FUNCTION IF EXISTS mesh_integrations_active_by_kind(text)")
     op.execute(
         "REVOKE EXECUTE ON FUNCTION "
         "mesh_integrations_by_kind_config_value(text, text, text) FROM mesh_app"
