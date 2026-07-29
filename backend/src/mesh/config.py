@@ -136,6 +136,7 @@ class Settings(BaseSettings):
     device_code_pepper: str | None = None
     device_code_ttl: timedelta = Field(default=timedelta(seconds=900), gt=0)
     device_poll_interval: int = Field(default=5, ge=1)
+    device_auth_sweep_interval: float = Field(default=60.0, gt=0)
 
     # Refresh rotation race (auth.md §3.8): a rotated refresh token stays
     # acceptable for this window, issuing ONLY a fresh access token (never a

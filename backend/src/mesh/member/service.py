@@ -21,13 +21,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_, select, text, tuple_
+from sqlalchemy import func, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
+from mesh.auth.realtime import broadcast_session_revoked
 from mesh.db.models.agent import Agent
 from mesh.db.models.member import (
     MEMBER_ROLE_VALUES,
@@ -35,7 +36,7 @@ from mesh.db.models.member import (
     MemberProjectAccess,
 )
 from mesh.db.models.project import Project
-from mesh.db.models.user import User
+from mesh.db.models.user import Session, User
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
     BusinessRuleError,
@@ -482,6 +483,15 @@ class MemberService:
                         member.status = new_status
                         member.disabled_at = now if new_status == "disabled" else None
                         member.updated_at = now
+                        if new_status == "disabled":
+                            # MES-78 LOW-1: disabling revokes the member's
+                            # workspace-bound cli sessions (same transaction).
+                            await self._revoke_member_cli_sessions(
+                                session,
+                                workspace_id=workspace_id,
+                                user_id=member.user_id,
+                                now=now,
+                            )
                         changes["status"] = new_status
                         audit_action = "member.status_changed"
             if has_display:
@@ -530,6 +540,41 @@ class MemberService:
         return result
 
     # -- M-remove: soft removal + optional reassignment -------------------------
+
+    async def _revoke_member_cli_sessions(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        user_id: uuid.UUID | None,
+        now: datetime,
+    ) -> int:
+        """MES-78 LOW-1 / auth.md §1.1 撤销联动: member removal or disable
+        revokes every cli session bound to THIS workspace for the member's
+        user, in the SAME transaction — no "stale fixed scope silently
+        revives on re-invite" path: re-invitation requires a fresh device
+        approval (old refresh stays revoked → 401). Broadcast so live
+        connections drop at once (§3.7 ``session.revoked``)."""
+        if user_id is None:  # agent members carry no user sessions
+            return 0
+        result = await session.execute(
+            update(Session)
+            .where(Session.user_id == user_id)
+            .where(Session.workspace_id == workspace_id)
+            .where(Session.type == "cli")
+            .where(Session.revoked_at.is_(None))
+            .values(revoked_at=now)
+        )
+        revoked = result.rowcount or 0
+        if revoked:
+            # Broadcast on the affected workspace's channel directly — the
+            # user-global resolver would skip this membership (already
+            # removed/disabled in this transaction), and the revocation is
+            # workspace-scoped anyway (§3.7 session.revoked).
+            await broadcast_session_revoked(
+                session, user_id=user_id, workspace_ids=[workspace_id]
+            )
+        return revoked
 
     async def remove_member(
         self,
@@ -581,6 +626,14 @@ class MemberService:
 
             member.status = "removed"
             member.updated_at = _now(self._clock)
+            # MES-78 LOW-1: revoke the removed member's workspace-bound cli
+            # sessions in this same transaction (+ realtime broadcast).
+            await self._revoke_member_cli_sessions(
+                session,
+                workspace_id=workspace_id,
+                user_id=member.user_id,
+                now=member.updated_at,
+            )
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
