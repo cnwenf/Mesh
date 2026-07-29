@@ -1133,6 +1133,12 @@ class AuthService:
                     raise UnauthorizedError("invalid or expired token")
                 member_id = None
                 if row.workspace_id is not None:
+                    # Tenant GUC: members is RLS-protected — the roster read
+                    # must evaluate against the session's bound workspace
+                    # under the restricted app role (same invariant as
+                    # _session_access; without it the policy casts an unset
+                    # GUC to uuid and the request 500s).
+                    await set_tenant_context(session, row.workspace_id)
                     member_id = await session.scalar(
                         select(Member.id).where(
                             Member.workspace_id == row.workspace_id,

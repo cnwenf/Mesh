@@ -35,6 +35,9 @@ def app(db_url, redis_url):
         auth_mode="dev",
         jwt_secret="introspection-test-signing-secret",
         session_cookie_secure=False,
+        # Device-code issuance fails closed without the HMAC pepper — the
+        # workspace-bound session regression test exercises the device flow.
+        device_code_pepper="introspection-test-device-pepper",
     )
     return create_app(settings)
 
@@ -113,6 +116,70 @@ class TestIntrospection:
         body = resp.text
         assert "mesh_rft_" not in body
         assert access not in body
+
+    async def test_session_introspection_sets_tenant_context_for_workspace_session(
+        self, client, monkeypatch
+    ):
+        """Regression: a workspace-bound cli (device) session's introspection
+        MUST set the tenant GUC before the RLS-protected roster read — under
+        the restricted app role the policy casts the (otherwise unset) GUC to
+        uuid and the request dies with a 500 (caught by the real-stack e2e;
+        owner-role CI never trips it). Asserted here via a recording spy so
+        the invariant holds regardless of which DB role runs the suite."""
+        access = await _login(client)
+        ws = (
+            await client.post(
+                "/api/v1/workspaces",
+                json={"name": "Intro WS", "slug": f"intro-{uuid.uuid4().hex[:8]}"},
+                headers=_auth(access),
+            )
+        ).json()["data"]
+        # Device flow → workspace-bound cli session credential.
+        code = (
+            await client.post(
+                "/api/v1/auth/device/code",
+                json={"client_id": "mesh-cli", "scope": "issue:read"},
+            )
+        ).json()["data"]
+        approved = await client.post(
+            "/api/v1/auth/device/approve",
+            json={"user_code": code["user_code"], "workspace_id": ws["id"]},
+            headers=_auth(access),
+        )
+        assert approved.status_code == 200, approved.text
+        tok = (
+            await client.post(
+                "/api/v1/auth/device/token",
+                json={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    "device_code": code["device_code"],
+                    "client_id": "mesh-cli",
+                },
+            )
+        ).json()["data"]
+
+        import mesh.auth.service as service_mod
+
+        recorded: list = []
+        original = service_mod.set_tenant_context
+
+        async def spy(conn, workspace_id):
+            recorded.append(workspace_id)
+            return await original(conn, workspace_id)
+
+        monkeypatch.setattr(service_mod, "set_tenant_context", spy)
+
+        resp = await client.get("/api/v1/auth/token", headers=_auth(tok["access_token"]))
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["kind"] == "session"
+        assert data["workspace_id"] == ws["id"]
+        assert data["member_id"]  # roster resolved under the tenant context
+        assert data["scopes"] == ["issue:read"]
+        assert any(str(w) == ws["id"] for w in recorded), (
+            "introspection read the RLS-protected roster without setting the "
+            "tenant GUC — 500 under the restricted app role"
+        )
 
     async def test_pat_introspection_masks_and_describes(self, client, session_factory):
         access = await _login(client)
