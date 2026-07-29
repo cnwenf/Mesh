@@ -102,3 +102,63 @@ class TestJournal:
         raw = (tmp_path / "ledger.sqlite3").read_bytes()
         assert b"mesh_rt_" not in raw
         assert b"prompt" not in raw.lower()
+
+
+class TestCleanupStateAndMigration:
+    """A2 journal: cleanup_state + sandbox_handle columns, with an idempotent
+    migration for A1-era databases that lack them."""
+
+    async def test_new_columns_default_empty(self, journal):
+        await journal.put("a1", execution_id="e1", runtime_id="r1", lease_seq=1, status="claimed")
+        entry = await journal.get("a1")
+        assert entry.cleanup_state == ""
+        assert entry.sandbox_handle == ""
+
+    async def test_update_cleanup_state_and_sandbox_handle(self, journal):
+        await journal.put("a1", execution_id="e1", runtime_id="r1", lease_seq=1, status="claimed")
+        await journal.update("a1", cleanup_state="cgroup_killed", sandbox_handle="mesh/a1")
+        entry = await journal.get("a1")
+        assert entry.cleanup_state == "cgroup_killed"
+        assert entry.sandbox_handle == "mesh/a1"
+
+    async def test_legacy_database_is_migrated_on_open(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "ledger.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE attempts (
+                attempt_id        TEXT PRIMARY KEY,
+                execution_id      TEXT NOT NULL,
+                runtime_id        TEXT NOT NULL,
+                lease_seq         INTEGER NOT NULL,
+                lease_expires_at  REAL NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL,
+                log_offset_stdout INTEGER NOT NULL DEFAULT 0,
+                log_offset_stderr INTEGER NOT NULL DEFAULT 0,
+                work_dir          TEXT NOT NULL DEFAULT '',
+                created_at        REAL NOT NULL
+            );
+            INSERT INTO attempts (attempt_id, execution_id, runtime_id, lease_seq,
+                                  status, created_at)
+            VALUES ('old-1', 'e1', 'r1', 4, 'running', 0);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        j = Journal(path)
+        await j.open()  # must migrate, not fail
+        entry = await j.get("old-1")
+        assert entry is not None
+        assert entry.lease_seq == 4
+        assert entry.cleanup_state == ""
+        assert entry.sandbox_handle == ""
+        await j.close()
+
+        # Migration is idempotent: re-opening an already-migrated db works.
+        j2 = Journal(path)
+        await j2.open()
+        assert (await j2.get("old-1")).cleanup_state == ""
+        await j2.close()

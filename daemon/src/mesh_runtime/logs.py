@@ -1,8 +1,10 @@
 """LogUploader — redacted, offset-idempotent log relay (spec §3.9 / design §8.3).
 
 Lines are redacted FIRST; the upload ``start_offset`` is counted in REDACTED
-UTF-8 bytes and is the journal's authoritative watermark. Batches ship when
-ANY threshold trips (64 lines / 256 KiB / 500 ms). On a 409 ``offset_mismatch``
+UTF-8 bytes. Per the server contract the offset is a SINGLE cumulative
+watermark ACROSS both streams of an attempt (the journal mirrors it in both
+``log_offset_*`` fields). Batches ship when ANY threshold trips (64 lines /
+256 KiB / 500 ms). On a 409 ``offset_mismatch``
 the uploader reconciles against the server's ``expected`` offset — drops the
 confirmed prefix and retries — instead of dying; a lease fencing 409 is
 re-raised for the supervisor to handle.
@@ -99,23 +101,25 @@ class LogUploader:
 
     async def _flush_stream(self, ctx: AttemptContext, stream: str, *, sealed: bool) -> None:
         key = (ctx.attempt_id, stream)
-        offset_field = f"log_offset_{stream}"
         async with ctx.lock:
             entry = await self._journal.get(ctx.attempt_id)
-            start = getattr(entry, offset_field) if entry else 0
+            # Server contract (MES-98): start_offset is cumulative BYTES per
+            # attempt ACROSS both streams — a single monotonic watermark, not
+            # per-stream counters. Both journal fields mirror that watermark.
+            start = max(entry.log_offset_stdout, entry.log_offset_stderr) if entry else 0
             batches = self._collect_batches(ctx, stream, key, start)
             if not batches:
                 if not sealed:
                     return
                 # Nothing buffered, but the stream still needs its sealed close.
-                await self._upload_one(ctx, stream, start, [], offset_field=offset_field, sealed=True)
+                await self._upload_one(ctx, stream, start, [], sealed=True)
                 return
             last = len(batches) - 1
             for index, (batch_offset, batch_lines) in enumerate(batches):
                 try:
                     await self._upload_one(
                         ctx, stream, batch_offset, batch_lines,
-                        offset_field=offset_field, sealed=sealed and index == last,
+                        sealed=sealed and index == last,
                     )
                 except LeaseConflictError:
                     raise  # fencing — supervisor handles it
@@ -158,7 +162,7 @@ class LogUploader:
 
     async def _upload_one(
         self, ctx: AttemptContext, stream: str, start_offset: int, lines: list[str],
-        *, offset_field: str, sealed: bool,
+        *, sealed: bool,
     ) -> None:
         try:
             ack = await self._api.append_logs(
@@ -174,7 +178,11 @@ class LogUploader:
                 ctx.attempt_id, lease_seq=ctx.lease_seq, stream=stream,
                 start_offset=expected, lines=remaining, sealed=sealed,
             )
-        await self._journal.update(ctx.attempt_id, **{offset_field: ack.accepted_end_offset})
+        await self._journal.update(
+            ctx.attempt_id,
+            log_offset_stdout=ack.accepted_end_offset,
+            log_offset_stderr=ack.accepted_end_offset,
+        )
 
     async def _rebuffer(self, attempt_id: str, stream: str, lines: list[str]) -> None:
         if not lines:

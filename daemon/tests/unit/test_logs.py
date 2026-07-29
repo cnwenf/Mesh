@@ -101,15 +101,33 @@ class TestOffsets:
         entry = await journal.get(ctx.attempt_id)
         assert entry.log_offset_stdout == 5
 
-    async def test_separate_offsets_per_stream(self, journal, ctx):
+    async def test_offset_is_unified_across_streams(self, journal, ctx):
+        # Server contract (MES-98): start_offset is cumulative BYTES per attempt
+        # across BOTH streams. A stderr batch must continue where stdout ended,
+        # never restart at 0 — otherwise the server 409s offset_mismatch.
         api, clock = StubApi(), FakeClock()
         up = uploader(api, journal, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", "abc")
-        await up.submit(ctx, "stderr", "xy")
+        await up.submit(ctx, "stdout", "abc")  # [0, 3)
+        await up.submit(ctx, "stderr", "xy")   # must start at 3, not 0
+        stderr_calls = [c for c in api.calls if c["stream"] == "stderr"]
+        assert stderr_calls[0]["start_offset"] == 3
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 3
-        assert entry.log_offset_stderr == 2
+        assert entry.log_offset_stdout == 5
+        assert entry.log_offset_stderr == 5
+
+    async def test_interleaved_streams_keep_single_watermark(self, journal, ctx):
+        api, clock = StubApi(), FakeClock()
+        up = uploader(api, journal, clock=clock, batch_lines=1)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "aaaa")  # [0, 4)
+        await up.submit(ctx, "stderr", "bb")    # [4, 6)
+        await up.submit(ctx, "stdout", "cc")    # [6, 8)
+        starts = [(c["stream"], c["start_offset"]) for c in api.calls]
+        assert starts == [("stdout", 0), ("stderr", 4), ("stdout", 6)]
+        entry = await journal.get(ctx.attempt_id)
+        assert entry.log_offset_stdout == 8
+        assert entry.log_offset_stderr == 8
 
 
 class TestRedaction:
