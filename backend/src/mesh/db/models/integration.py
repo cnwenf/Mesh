@@ -40,6 +40,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    UniqueConstraint,
     Integer,
     text,
 )
@@ -689,10 +690,10 @@ class IntegrationMessageQueue(Base):
             name="fk_imq_target_agent",
             ondelete="SET NULL (target_agent_id)",
         ),
-        Index("uq_imq_ws_id", "workspace_id", "id", unique=True),
+        UniqueConstraint("workspace_id", "id", name="uq_imq_ws_id"),
         # NULL integration_id never conflicts (orphan audit rows).
-        Index("uq_imq_event", "integration_id", "integration_event_id", unique=True),
-        Index("uq_imq_conversation_seq", "conversation_key", "seq", unique=True),
+        UniqueConstraint("integration_id", "integration_event_id", name="uq_imq_event"),
+        UniqueConstraint("conversation_key", "seq", name="uq_imq_conversation_seq"),
         # Serial in-flight exclusion (parallel exempt).
         Index(
             "uq_imq_conversation_active",
@@ -817,8 +818,8 @@ class ExecutionContextAppend(Base):
             name="fk_eca_injected_attempt",
             ondelete="SET NULL (injected_attempt_id)",
         ),
-        Index("uq_eca_ws_id", "workspace_id", "id", unique=True),
-        Index("uq_eca_execution_seq", "execution_id", "seq", unique=True),
+        UniqueConstraint("workspace_id", "id", name="uq_eca_ws_id"),
+        UniqueConstraint("execution_id", "seq", name="uq_eca_execution_seq"),
         # Attempt-scoped pending set (matches the daemon GET filter).
         Index(
             "idx_eca_execution_pending",
