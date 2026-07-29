@@ -101,11 +101,103 @@ class TestPrepare:
         helper = CheckoutHelper(worktree=tmp_path / "wt")
         with pytest.raises(CheckoutError) as ei:
             await helper.prepare(
-                FrozenRepo(url="http://127.0.0.1/repo.git", base_ref="main"),
+                FrozenRepo(url="http://127.0.0.1/repo.git", base_ref="main", base_sha="a" * 40),
                 allowed_repos=["http://127.0.0.1/repo.git"],
                 platform_managed=True,
             )
         assert ei.value.reason == "private_address_forbidden"
+        assert not (tmp_path / "wt").exists()  # refused before any git process
+
+    async def test_platform_managed_refuses_dns_answer_with_private_ip(self, tmp_path):
+        """§1.3: a REGISTERED repo host whose trusted resolution answers
+        include a private/metadata IP is refused — all-or-nothing, even when
+        mixed with a public answer (rebinding / attacker-registered domain)."""
+        async def evil_resolver(host):
+            assert host == "git.example"
+            return ["93.184.216.34", "169.254.169.254"]  # public + metadata
+
+        helper = CheckoutHelper(worktree=tmp_path / "wt", resolver=evil_resolver)
+        with pytest.raises(CheckoutError) as ei:
+            await helper.prepare(
+                FrozenRepo(url="https://git.example/repo.git", base_ref="main", base_sha="b" * 40),
+                allowed_repos=["https://git.example/repo.git"],
+                platform_managed=True,
+            )
+        assert ei.value.reason == "private_address_forbidden"
+        assert not (tmp_path / "wt").exists()  # git never ran with credentials
+
+    async def test_platform_managed_resolver_failure_fails_closed(self, tmp_path):
+        async def dead_resolver(host):
+            raise OSError("no trusted resolution")
+
+        helper = CheckoutHelper(worktree=tmp_path / "wt", resolver=dead_resolver)
+        with pytest.raises(CheckoutError) as ei:
+            await helper.prepare(
+                FrozenRepo(url="https://git.example/repo.git", base_ref="main", base_sha="c" * 40),
+                allowed_repos=["https://git.example/repo.git"],
+                platform_managed=True,
+            )
+        assert ei.value.reason == "private_address_forbidden"
+
+    async def test_platform_managed_pins_fetch_to_verified_ips(self, tmp_path):
+        """The verified answer set is PINNED into git via http.curloptResolve
+        so the fetch connects only to the filtered IPs — git's own resolver
+        never gets a second (rebindable) look."""
+        sha = "d" * 40
+        env_dump = tmp_path / "git_env.txt"
+        fake_git = tmp_path / "fake-git.sh"
+        fake_git.write_text(
+            "#!/bin/sh\n"
+            f"env | grep -E 'GIT_CONFIG|PATH' >> {env_dump}\n"
+            "echo '---' >> " + str(env_dump) + "\n"
+            'if [ "$1" = "rev-parse" ]; then echo ' + sha + "; fi\n"
+            "exit 0\n"
+        )
+        fake_git.chmod(0o755)
+
+        async def public_resolver(host):
+            return ["93.184.216.34"]
+
+        helper = CheckoutHelper(
+            git_bin=str(fake_git), worktree=tmp_path / "wt", resolver=public_resolver
+        )
+        result = await helper.prepare(
+            FrozenRepo(url="https://git.example/repo.git", base_ref="main", base_sha=sha),
+            allowed_repos=["https://git.example/repo.git"],
+            platform_managed=True,
+            read_credential="ro-SECRET",
+        )
+        assert result.commit_sha == sha
+        dumped = env_dump.read_text()
+        assert "http.curloptResolve" in dumped
+        assert "git.example:443:93.184.216.34" in dumped
+        assert "Authorization: Bearer ro-SECRET" in dumped  # credential coexists, env-scoped
+
+    async def test_platform_managed_unpinnable_scheme_refused(self, tmp_path):
+        async def public_resolver(host):
+            return ["93.184.216.34"]
+
+        helper = CheckoutHelper(worktree=tmp_path / "wt", resolver=public_resolver)
+        with pytest.raises(CheckoutError) as ei:
+            await helper.prepare(
+                FrozenRepo(url="ssh://git.example/repo.git", base_ref="main", base_sha="e" * 40),
+                allowed_repos=["ssh://git.example/repo.git"],
+                platform_managed=True,
+            )
+        assert ei.value.reason == "unpinnable_scheme"
+
+    async def test_missing_base_sha_refused_before_any_fetch(self, tmp_path):
+        """§2.1/§2.6: no frozen base_sha => fail-closed; never fetch a moving
+        branch ref with verification skipped."""
+        helper = CheckoutHelper(worktree=tmp_path / "wt")
+        with pytest.raises(CheckoutError) as ei:
+            await helper.prepare(
+                FrozenRepo(url="https://git.example/repo.git", base_ref="main"),
+                allowed_repos=["https://git.example/repo.git"],
+                platform_managed=False,
+            )
+        assert ei.value.reason == "base_sha_required"
+        assert not (tmp_path / "wt").exists()
 
     async def test_sha_mismatch_refused(self, tmp_path, upstream):
         url, _sha = upstream
@@ -125,7 +217,7 @@ class TestPrepare:
         helper = CheckoutHelper(worktree=tmp_path / "wt", timeout=15)
         with pytest.raises(CheckoutError) as ei:
             await helper.prepare(
-                FrozenRepo(url="file:///nonexistent/repo.git", base_ref="main"),
+                FrozenRepo(url="file:///nonexistent/repo.git", base_ref="main", base_sha="f" * 40),
                 allowed_repos=["file:///nonexistent/repo.git"],
                 platform_managed=False,
             )

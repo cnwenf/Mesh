@@ -383,4 +383,9 @@ def heartbeat_metadata(config: DaemonConfig, inventory: Inventory) -> dict:
         "egress_enforced": sandboxed,
         "broker": "unix" if sandboxed else "none",
         "runtime_kind": config.runtime_kind,
+        # §3.2/§1.3: the public-address + resolved-IP SSRF gate on checkout
+        # applies to platform-managed runtimes; self-hosted runtimes may
+        # legitimately reach internal git servers, so they report the gate as
+        # off and the server dispatches with that knowledge.
+        "checkout_public_address_gate": config.runtime_kind == "platform_managed",
     }

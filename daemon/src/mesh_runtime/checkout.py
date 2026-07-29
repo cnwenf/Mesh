@@ -3,35 +3,58 @@
 
 Runs OUTSIDE the sandbox before the provider starts:
 
-- the repo URL must equal the frozen snapshot value, be in the workspace
-  ``allowed_repos`` list, and (platform-managed runtimes) pass the public-
-  address SSRF gate — the checkout helper never trusts task-supplied URLs;
+- the repo URL must equal the frozen snapshot value and be in the workspace
+  ``allowed_repos`` list — the checkout helper never trusts task-supplied URLs;
+- on platform-managed runtimes the URL additionally passes the public-address
+  SSRF gate: trusted resolution of the repo host, all-or-nothing IP filtering
+  of the WHOLE answer set (§1.3 "解析 IP 不合规即失败"), and the fetch is
+  PINNED to the verified IPs via ``http.curloptResolve`` so git's own
+  resolver never gets a second (rebindable) look; a scheme that cannot be
+  pinned fails closed;
+- self-hosted runtimes intentionally skip the public-address gate (their git
+  servers may legitimately be internal) — the heartbeat reports
+  ``checkout_public_address_gate`` so the server can dispatch accordingly;
+- the frozen snapshot MUST carry ``base_sha``: the helper fetches that exact
+  SHA and verifies it, never a moving branch ref (§2.1/§2.6 fail-closed);
 - read-only credentials travel ONLY in the git subprocess environment
   (``GIT_CONFIG_COUNT``-scoped ``http.extraHeader``) — never in the remote
   URL, never in .git/config, never in provider env; after the fetch the
   process is gone and so is the credential;
-- the worktree lands on the frozen base SHA; the sandbox gets no write
-  credential, so ``git push`` from inside fails even with shell access —
-  pushes go through the ActionBroker after human approval (§3.3).
+- the sandbox gets no write credential, so ``git push`` from inside fails
+  even with shell access — pushes go through the ActionBroker after human
+  approval (§3.3).
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from mesh_runtime.egress import Resolver, _default_resolver
 from mesh_runtime.errors import DaemonError
-from mesh_runtime.netguard import ForbiddenAddressError, assert_url_host_public
+from mesh_runtime.netguard import (
+    ForbiddenAddressError,
+    assert_url_host_public,
+    filter_answer_set,
+)
 
 _DEFAULT_TIMEOUT_SECONDS = 300.0
+_RESOLVE_TIMEOUT_SECONDS = 10.0
 _DIFF_MAX_BYTES = 2 * 1024 * 1024
+
+#: libcurl-backed schemes whose connections git can pin to verified IPs
+#: (``http.curloptResolve``). Anything else cannot be rebinding-protected and
+#: is refused on platform-managed runtimes.
+_PINNABLE_SCHEMES = frozenset({"http", "https"})
 
 
 class CheckoutError(DaemonError):
     """Checkout refused or failed. ``reason`` is a fixed code (no URL/path
-    echo): repo_not_allowed | private_address_forbidden | clone_failed |
-    sha_mismatch."""
+    echo): repo_not_allowed | private_address_forbidden | unpinnable_scheme |
+    base_sha_required | clone_failed | sha_mismatch."""
 
     def __init__(self, message: str, *, reason: str) -> None:
         super().__init__(message)
@@ -88,10 +111,12 @@ class CheckoutHelper:
         git_bin: str = "git",
         worktree: Path,
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+        resolver: Resolver | None = None,
     ) -> None:
         self._git = git_bin
         self._worktree = Path(worktree)
         self._timeout = timeout
+        self._resolver = resolver or _default_resolver
 
     async def prepare(
         self,
@@ -105,29 +130,66 @@ class CheckoutHelper:
         # Gate BEFORE any git process exists (no side effects on refusal).
         if not repo_is_allowed(repo.url, allowed_repos):
             raise CheckoutError("repo url is not in the workspace allowlist", reason="repo_not_allowed")
+        # §2.1/§2.6 fail-closed: a snapshot without base_sha would force
+        # fetching a MOVING ref and skipping verification — refuse outright.
+        if not repo.base_sha:
+            raise CheckoutError(
+                "frozen snapshot carries no base_sha; refusing a moving-ref fetch",
+                reason="base_sha_required",
+            )
+        extra_configs: list[tuple[str, str]] = []
         if platform_managed:
             try:
-                assert_url_host_public(repo.url)
+                url = assert_url_host_public(repo.url)
+                answers = await self._resolve_public(url.host)
             except ForbiddenAddressError:
                 raise CheckoutError(
                     "repo url failed the public-address gate", reason="private_address_forbidden"
                 ) from None
-        env = self._git_env(read_credential)
+            # §3.4 pin discipline: git must connect ONLY to the verified IPs.
+            # A scheme we cannot pin would leave a rebinding window — refuse.
+            if url.scheme not in _PINNABLE_SCHEMES:
+                raise CheckoutError(
+                    "repo scheme cannot be IP-pinned on platform runtimes",
+                    reason="unpinnable_scheme",
+                )
+            extra_configs.append(
+                ("http.curloptResolve", f"{url.host}:{url.port}:{','.join(answers)}")
+            )
+        env = self._git_env(read_credential, extra_configs)
         await self._run(env, "init", "--quiet")
         await self._run(env, "remote", "add", "origin", repo.url)  # URL carries NO credential
-        ref = repo.base_sha or repo.base_ref
         try:
-            await self._run(env, "fetch", "--quiet", "--depth", "1", "origin", ref)
+            await self._run(env, "fetch", "--quiet", "--depth", "1", "origin", repo.base_sha)
         except CheckoutError:
             raise
         except DaemonError as exc:
             raise CheckoutError("git fetch failed", reason="clone_failed") from exc
         sha = await self._run(env, "rev-parse", "FETCH_HEAD")
         sha = sha.strip()
-        if repo.base_sha and sha != repo.base_sha:
+        if sha != repo.base_sha:  # belt and braces — never trust the transport
             raise CheckoutError("fetched SHA does not match the frozen base_sha", reason="sha_mismatch")
         await self._run(env, "checkout", "--quiet", "-B", working_branch, sha)
         return CheckoutResult(commit_sha=sha, worktree=str(self._worktree))
+
+    async def _resolve_public(self, host: str) -> list[str]:
+        """Trusted-resolver + all-answer IP filtering for the repo host
+        (§1.3: resolved IPs non-compliant => fail). Literal IP hosts are
+        classified without DNS. The answers are then PINNED into git so no
+        second, attacker-influenced resolution happens at connect time."""
+        try:
+            canonical = str(ipaddress.ip_address(host))
+        except ValueError:
+            pass
+        else:
+            return filter_answer_set([canonical])
+        try:
+            answers = await asyncio.wait_for(
+                self._resolver(host), timeout=_RESOLVE_TIMEOUT_SECONDS
+            )
+        except (TimeoutError, OSError) as exc:
+            raise ForbiddenAddressError("untrusted resolution failed") from exc
+        return filter_answer_set(answers)  # one forbidden IP rejects all
 
     async def export_diff(self) -> str:
         """git diff of worktree changes, capped at the frozen diff budget."""
@@ -137,20 +199,28 @@ class CheckoutHelper:
         return out
 
     @staticmethod
-    def _git_env(read_credential: str | None) -> dict:
-        """Env-scoped, short-lived read-only credential plumbing. The value
-        exists only inside the git subprocess — never in the remote URL,
-        .git/config, or anything the sandbox can later read (§3.2)."""
+    def _git_env(
+        read_credential: str | None,
+        extra_configs: Sequence[tuple[str, str]] = (),
+    ) -> dict:
+        """Env-scoped, short-lived git config plumbing. Values exist only
+        inside the git subprocess — never in the remote URL, .git/config, or
+        anything the sandbox can later read (§3.2)."""
         env = {
             "PATH": "/usr/bin:/bin",
             "LC_ALL": "C",
             "GIT_TERMINAL_PROMPT": "0",  # never prompt; fail instead
             "HOME": "/nonexistent",  # no host gitconfig/credentials
         }
+        configs: list[tuple[str, str]] = []
         if read_credential:
-            env["GIT_CONFIG_COUNT"] = "1"
-            env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
-            env["GIT_CONFIG_VALUE_0"] = f"Authorization: Bearer {read_credential}"
+            configs.append(("http.extraHeader", f"Authorization: Bearer {read_credential}"))
+        configs.extend(extra_configs)
+        if configs:
+            env["GIT_CONFIG_COUNT"] = str(len(configs))
+            for index, (key, value) in enumerate(configs):
+                env[f"GIT_CONFIG_KEY_{index}"] = key
+                env[f"GIT_CONFIG_VALUE_{index}"] = value
         return env
 
     async def _run(self, env: dict, *args: str) -> str:
