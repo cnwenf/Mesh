@@ -892,7 +892,7 @@ CREATE TABLE notification_delivery (
   notification_id UUID NOT NULL,
   channel         TEXT NOT NULL CHECK (channel IN ('in_app','email','websocket')),
   destination_key TEXT NOT NULL DEFAULT '',                 -- R3:稳定目的地键(in_app/websocket 恒 '';im = provider:binding_id:external_target)
-  provider        TEXT NULL CHECK (provider IN ('feishu','slack','email_smtp')),  -- R3:结构化路由(不再塞 error)
+  provider        TEXT NULL CHECK (provider IN ('feishu','slack','dingtalk','email_smtp')),  -- R3:结构化路由(不再塞 error;MES-82:钉钉 IM 出站)
   external_target TEXT NULL,                                -- R3:外部目标身份(飞书 chat_id/open_id、Slack channel_id/user_id、邮件地址)
   integration_id  UUID NULL,                                -- R3:IM 集成实例(composite FK 于 integrations 建表后 ALTER 添加)
   binding_id      UUID NULL,                                -- R3:IM 绑定(composite FK 于 integration_bindings 建表后 ALTER 添加)
@@ -1498,10 +1498,11 @@ CREATE TABLE outbox_events (
   idempotency_key TEXT NULL UNIQUE,
   status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','failed')),
   delivery_attempts INT NOT NULL DEFAULT 0,
+  available_at    TIMESTAMPTZ NOT NULL DEFAULT now(),   -- 最早可领取时刻(退避/busy 后移;README §6.6 权威,MES-82 R4-4)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at    TIMESTAMPTZ NULL
 );
-CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pending';
+CREATE INDEX idx_outbox_pending ON outbox_events (available_at, created_at) WHERE status = 'pending';
 
 CREATE TABLE realtime_channels (
   channel      TEXT NOT NULL,
@@ -2052,7 +2053,8 @@ CREATE INDEX idx_onboarding_steps_pending
 CREATE TABLE integrations (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')),
+  kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','im_dingtalk','vcs_github','vcs_gitlab','webhook_outbound')),
+  stream_state JSONB NOT NULL DEFAULT '{}',                -- MES-82:钉钉 Stream 连接状态持久真源(integrations.md §2.2/§3.9)
   name         TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   config       JSONB NOT NULL DEFAULT '{}',
@@ -2073,7 +2075,7 @@ CREATE TABLE integration_bindings (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   integration_id      UUID NOT NULL,
-  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab','webhook')),
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','dingtalk','github','gitlab','webhook')),
   provider_tenant_key TEXT NOT NULL DEFAULT '',                                       -- R3:规范化外部平台租户(team_id/tenant_key/installation_id/实例主机)
   scope               TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
   project_id          UUID NULL,
@@ -2173,7 +2175,7 @@ CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscr
 -- → users.id → JOIN 该 workspace 的 members(workspace_id, user_id) → README §6.10 权限再校验。
 CREATE TABLE external_identities (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider              TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  provider              TEXT NOT NULL CHECK (provider IN ('feishu','slack','dingtalk','github','gitlab')),
   provider_tenant_key   TEXT NOT NULL DEFAULT '',                -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机),纳入身份键
   external_user_key     TEXT NOT NULL,
   user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射到全局登录身份(用户注销 → 映射级联删除,生命周期唯一级联来源)
@@ -4421,6 +4423,683 @@ BEGIN
   RAISE NOTICE 'PASS T38: 词典升级完整迁移(真实事务边界:事务外建 → 快速改名事务 COMMIT → 提交后验证 → 事务外 DROP INDEX CONCURRENTLY → 零依赖删旧 → 清理后验证)';
 END $$;
 -- T38:end
+
+-- ============================================================
+-- MES-82(钉钉机器人 / 集成队列):integration_message_queue + execution_context_appends
+-- DDL + 行为断言(T39)。两表的可执行参照实现,与 integrations.md §2.8/§2.10、
+-- runtime.md「运行期上下文追加」逐约束对账;#58 rebase 后 model/migration 以本节为基线。
+-- ============================================================
+
+-- ============ integration_message_queue(MES-82 §2.10)============
+CREATE TABLE integration_message_queue (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id       UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id     UUID NULL,                    -- 入队时 NOT NULL(服务层);父集成删除 SET NULL → 孤儿审计行
+  binding_id         UUID NULL,                    -- 入队时 NOT NULL;父绑定删除 SET NULL → 孤儿审计行
+  integration_event_id UUID NULL,
+  binding_display    TEXT NOT NULL DEFAULT '',     -- 绑定展示快照(孤儿审计行自描述)
+  project_id_snapshot UUID NULL,                   -- scope='project' 入队捕获(孤儿审计可见性过滤)
+  conversation_key   TEXT NOT NULL,
+  seq                BIGINT NOT NULL CHECK (seq > 0),
+  dispatch_mode      TEXT NOT NULL CHECK (dispatch_mode IN ('serial_conversation','parallel')),
+  state              TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (state IN ('pending','dispatching','processing','cancelling',
+                                      'done','failed','cancelled')),
+  execution_id       UUID NULL,
+  target_agent_id    UUID NULL,
+  message_excerpt    TEXT NOT NULL DEFAULT '',
+  sender_identity_key TEXT NOT NULL DEFAULT '',
+  ack_leader_id      UUID NULL,                    -- 窗口归属:leader 自指 / follower 指向 leader(摄取事务按 seq 确定,§3.8)
+  ack_window_at      TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 持锁后 clock_timestamp() 的锁序窗口时间(§3.8;协议显式写入,DEFAULT 兜底)
+  ack_attempted_at   TIMESTAMPTZ NULL,             -- leader 外呼闸门(§3.8)
+  ack_sent_at        TIMESTAMPTZ NULL,             -- 平台确认(仅 leader)
+  ack_represented_at TIMESTAMPTZ NULL,             -- 被抑制项:已被 leader 代表(非"已发送")
+  ack_merged_into    UUID NULL,                    -- 被抑制项 → leader id
+  lease_expires_at   TIMESTAMPTZ NULL,
+  enqueued_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at         TIMESTAMPTZ NULL,
+  finished_at        TIMESTAMPTZ NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_imq_ws_id UNIQUE (workspace_id, id),
+  CONSTRAINT uq_imq_event UNIQUE (integration_id, integration_event_id),
+  CONSTRAINT uq_imq_conversation_seq UNIQUE (conversation_key, seq),
+CONSTRAINT fk_imq_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE SET NULL (integration_id),
+  -- MES-82 删除保护(R2 闭合):SET NULL + 孤儿行必终态 CHECK(非终态失父引用 → CHECK 拒绝 = fail-closed)
+  CONSTRAINT ck_imq_orphan_terminal CHECK (
+       (integration_id IS NOT NULL OR state IN ('done','failed','cancelled'))
+   AND (binding_id     IS NOT NULL OR state IN ('done','failed','cancelled'))),
+  CONSTRAINT fk_imq_binding FOREIGN KEY (workspace_id, binding_id)
+    REFERENCES integration_bindings(workspace_id, id) ON DELETE SET NULL (binding_id),-- 删除保护(§2.10)
+  CONSTRAINT fk_imq_event FOREIGN KEY (workspace_id, integration_event_id)
+    REFERENCES integration_events(workspace_id, id) ON DELETE SET NULL (integration_event_id),
+  CONSTRAINT fk_imq_execution FOREIGN KEY (workspace_id, execution_id)
+    REFERENCES task_executions(workspace_id, id) ON DELETE SET NULL (execution_id),
+  CONSTRAINT fk_imq_target_agent FOREIGN KEY (workspace_id, target_agent_id)
+    REFERENCES agents(workspace_id, id) ON DELETE SET NULL (target_agent_id)
+);
+-- serial 在途独占(parallel 豁免);覆盖 dispatching/processing/cancelling 全在途态
+CREATE UNIQUE INDEX uq_imq_conversation_active
+  ON integration_message_queue(conversation_key)
+  WHERE state IN ('dispatching','processing','cancelling') AND dispatch_mode = 'serial_conversation';
+CREATE INDEX idx_imq_conversation_pending
+  ON integration_message_queue(conversation_key, seq) WHERE state = 'pending';
+CREATE INDEX idx_imq_lease ON integration_message_queue(lease_expires_at)
+  WHERE state IN ('dispatching','processing','cancelling');
+CREATE INDEX idx_imq_integration_state
+  ON integration_message_queue(integration_id, state, enqueued_at DESC, id);
+CREATE INDEX idx_imq_ws_state ON integration_message_queue(workspace_id, state);
+CREATE INDEX idx_imq_binding_state ON integration_message_queue(binding_id, state);
+
+-- ============ execution_context_appends(MES-82,runtime.md 运行期上下文追加)============
+CREATE TABLE execution_context_appends (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  execution_id UUID NOT NULL,
+  seq          BIGINT NOT NULL CHECK (seq > 0),
+  source       TEXT NOT NULL CHECK (source IN ('im_btw')),
+  payload      JSONB NOT NULL,
+  injected_at  TIMESTAMPTZ NULL,                       -- daemon 注入后 best-effort 记录(attempt 作用域 receipt,R5-1)
+  injected_attempt_id UUID NULL,                       -- 单指针 receipt:记录注入的 attempt(只保留最新,R6-1;requeue 清空)
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_eca_ws_id UNIQUE (workspace_id, id),
+  CONSTRAINT uq_eca_execution_seq UNIQUE (execution_id, seq),   -- daemon 去重键之一
+  CONSTRAINT fk_eca_execution FOREIGN KEY (workspace_id, execution_id)
+    REFERENCES task_executions(workspace_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_eca_injected_attempt FOREIGN KEY (workspace_id, injected_attempt_id)
+    REFERENCES execution_attempts(workspace_id, id) ON DELETE SET NULL (injected_attempt_id)
+);
+-- attempt 作用域待投递集(与 GET 过滤一致:未 receipt 或 receipt 已被 requeue 清空,R6-1)
+CREATE INDEX idx_eca_execution_pending ON execution_context_appends(execution_id, seq)
+  WHERE injected_attempt_id IS NULL;
+-- 每执行追加上限(M3)为服务层常量 MESH_CONTEXT_APPEND_MAX_COUNT(默认 20)/
+-- MESH_CONTEXT_APPEND_MAX_CHARS(默认 32000),写入前计数校验,非 DB 约束(此处登记防实现漂移)。
+
+-- trigger 词汇扩展 'integration'(README §6.9「外部 IM 消息触发」行,MES-82/#58 契约)
+ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_trigger_check;
+ALTER TABLE task_executions ADD CONSTRAINT ck_executions_trigger
+  CHECK (trigger IN ('assign','mention','autopilot','manual','chat','integration'));
+
+-- runtime.md task_executions 水位列(MES-82 运行期上下文追加,服务端持久连续水位)
+ALTER TABLE task_executions ADD COLUMN IF NOT EXISTS context_injected_through_seq BIGINT NOT NULL DEFAULT 0;
+
+-- T39:行为断言(独立事务,ROLLBACK 不污染)
+BEGIN;
+DO $$
+DECLARE
+  v_ws    UUID := '11111111-1111-1111-1111-111111111111';
+  v_int   UUID := '82000000-0000-0000-0000-000000000001';
+  v_bind  UUID := '82000000-0000-0000-0000-000000000002';
+  v_evt1  UUID := '82000000-0000-0000-0000-000000000003';
+  v_evt2  UUID := '82000000-0000-0000-0000-000000000004';
+  v_evt3  UUID := '82000000-0000-0000-0000-000000000005';
+  v_exec  UUID := '82000000-0000-0000-0000-000000000006';
+  v_member UUID;
+  v_agent UUID;
+  v_rows INT;                                      -- T39-10 GET DIAGNOSTICS(receipt ACK 行数断言)
+BEGIN
+  -- 种子:成员 / agent / 集成 / 绑定 / 事件(复用 T29 既有工作区;不存在则补最小种子)
+  SELECT id INTO v_member FROM members WHERE workspace_id = v_ws LIMIT 1;
+  IF v_member IS NULL THEN
+    RAISE EXCEPTION 'T39 FAIL: 缺少 T29 种子成员,本断言依赖前序 T29 种子数据';
+  END IF;
+  SELECT id INTO v_agent FROM agents WHERE workspace_id = v_ws LIMIT 1;
+  IF v_agent IS NULL THEN
+    INSERT INTO agents (id, workspace_id, name, owner_user_id)
+    VALUES ('82000000-0000-0000-0000-0000000000a1', v_ws, 'mes82-agent',
+            (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1))
+    RETURNING id INTO v_agent;
+  END IF;
+  INSERT INTO integrations (id, workspace_id, kind, name, created_by, stream_state)
+  VALUES (v_int, v_ws, 'im_dingtalk', 'MES-82 钉钉验证集成', v_member, '{}');
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref, bound_agent_id)
+  VALUES (v_bind, v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidMES82', v_agent);
+  INSERT INTO integration_events (id, workspace_id, integration_id, external_event_id, event_type,
+                                  payload, signature_status, process_status)
+  VALUES (v_evt1, v_ws, v_int, 'msg-mes82-1', 'im.message.receive', '{}', 'valid', 'dispatched'),
+         (v_evt2, v_ws, v_int, 'msg-mes82-2', 'im.message.receive', '{}', 'valid', 'dispatched'),
+         (v_evt3, v_ws, v_int, 'msg-mes82-3', 'im.message.receive', '{}', 'valid', 'dispatched');
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES (v_exec, v_ws, v_agent,
+          (SELECT id FROM issues WHERE workspace_id = v_ws LIMIT 1),
+          'integration', 'mes82-idem-key-1', '{}', '{}', '[]', '{}');
+
+  -- T39-1:状态机词汇——非法状态被 CHECK 拒绝
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      integration_event_id, conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, v_evt1, 'dingtalk:ding-corp-mes82:cidMES82', 1,
+            'serial_conversation', 'running');
+    RAISE EXCEPTION 'T39-1 FAIL: 非法状态 running 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-1: 状态机 CHECK 词汇(pending/dispatching/processing/cancelling/done/failed/cancelled)';
+  END;
+
+  -- T39-2:serial 在途独占(含 dispatching/cancelling 全在途态)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    integration_event_id, conversation_key, seq, dispatch_mode, state)
+  VALUES (v_ws, v_int, v_bind, v_evt1, 'dingtalk:ding-corp-mes82:cidMES82', 1,
+          'serial_conversation', 'processing');
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      integration_event_id, conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, v_evt2, 'dingtalk:ding-corp-mes82:cidMES82', 2,
+            'serial_conversation', 'dispatching');
+    RAISE EXCEPTION 'T39-2 FAIL: 同会话第二个 serial 在途项未被唯一索引拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-2: uq_imq_conversation_active serial 在途独占(serial processing 存在时 serial dispatching 被拒)';
+  END;
+
+  -- T39-3:parallel 豁免独占索引(同会话可并发)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    integration_event_id, conversation_key, seq, dispatch_mode, state)
+  VALUES (v_ws, v_int, v_bind, v_evt2, 'dingtalk:ding-corp-mes82:cidPARA', 1, 'parallel', 'processing'),
+         (v_ws, v_int, v_bind, v_evt3, 'dingtalk:ding-corp-mes82:cidPARA', 2, 'parallel', 'processing');
+  RAISE NOTICE 'PASS T39-3: parallel 项不受独占索引约束(同会话两个 parallel processing 并存)';
+
+  -- T39-4:cancelling 同样占位(serial processing → cancelling 后仍拒新 serial 在途项)
+  UPDATE integration_message_queue SET state = 'cancelling'
+   WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidMES82' AND seq = 1;
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, 'dingtalk:ding-corp-mes82:cidMES82', 3,
+            'serial_conversation', 'dispatching');
+    RAISE EXCEPTION 'T39-4 FAIL: cancelling 项未占串行 lane(提前放行下一项)';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-4: cancelling 项继续占用串行 lane(/stop 不提前放行下一任务)';
+  END;
+
+  -- T39-5:删除保护 fail-closed——非终态项存在时删绑定 → SET NULL 触发 ck_imq_orphan_terminal 违例
+  BEGIN
+    DELETE FROM integration_bindings WHERE id = v_bind;
+    RAISE EXCEPTION 'T39-5 FAIL: 非终态队列项失去父引用未被 CHECK 拒绝(消息静默孤儿化)';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-5: ck_imq_orphan_terminal 拒绝非终态项失父引用(DELETE 整体回滚,fail-closed)';
+  END;
+  ASSERT (SELECT count(*) FROM integration_bindings WHERE id = v_bind) = 1,
+         'T39-5 FAIL: DELETE 应整体回滚,绑定行应仍在';
+
+  -- T39-6:(conversation_key, seq) 唯一
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, 'dingtalk:ding-corp-mes82:cidPARA', 1, 'parallel', 'pending');
+    RAISE EXCEPTION 'T39-6 FAIL: 同会话重复 seq 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-6: (conversation_key, seq) 唯一(FIFO 序号真源)';
+  END;
+
+  -- T39-7:execution_context_appends (execution_id, seq) 唯一 + source CHECK
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, v_exec, 1, 'im_btw', '{"text":"用 staging 环境"}'::jsonb);
+  BEGIN
+    INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+    VALUES (v_ws, v_exec, 1, 'im_btw', '{"text":"重复 seq"}'::jsonb);
+    RAISE EXCEPTION 'T39-7 FAIL: 重复 (execution_id, seq) 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+    VALUES (v_ws, v_exec, 2, 'prompt', '{}'::jsonb);
+    RAISE EXCEPTION 'T39-7b FAIL: 未登记 source 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-7: appends (execution_id, seq) 唯一 + source 词汇(im_btw)';
+  END;
+
+  -- T39-8:删除保护成功路径——项全部终态后删绑定实际完成,孤儿审计行保留
+  UPDATE integration_message_queue SET state = 'cancelled', finished_at = now(),
+         binding_display = 'MES-82 验证绑定 → 研发群'
+   WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%';
+  DELETE FROM integration_bindings WHERE id = v_bind;           -- 必须成功(项已终态 → SET NULL)
+  ASSERT (SELECT count(*) FROM integration_bindings WHERE id = v_bind) = 0,
+         'T39-8 FAIL: 终态项存在时绑定删除应实际完成';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%') >= 3,
+         'T39-8 FAIL: 队列项应保留为孤儿审计行(不物理消失)';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%'
+             AND (binding_id IS NOT NULL OR state NOT IN ('done','failed','cancelled'))) = 0,
+         'T39-8 FAIL: 孤儿行应 binding_id=NULL 且全部终态';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%' AND binding_display <> '') >= 3,
+         'T39-8 FAIL: 孤儿审计行应携带 binding_display 快照(自描述可展示)';
+  RAISE NOTICE 'PASS T39-8: 删除保护成功路径闭合(强制终止后删除完成,孤儿审计行保留 + 快照自描述)';
+
+  -- T39-9:rearm 对齐真实 outbox_events DDL(§6.6 字段:status/delivery_attempts/published_at)
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- digest() 供 rearm 幂等键 sha256 计算
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, delivery_attempts)
+  VALUES (v_ws, 'execution.enqueue', '{"queue_item":"mes82"}'::jsonb, 'mes82-enqueue-key-1', 'failed', 8);
+  UPDATE outbox_events SET status = 'pending', delivery_attempts = 0, published_at = NULL
+   WHERE idempotency_key = 'mes82-enqueue-key-1' AND status = 'failed';
+  ASSERT (SELECT status = 'pending' AND delivery_attempts = 0 AND published_at IS NULL
+            FROM outbox_events WHERE idempotency_key = 'mes82-enqueue-key-1'),
+         'T39-9 FAIL: rearm 应置 pending + attempts=0 + published_at=NULL';
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000b2', v_ws, v_agent, NULL,
+          'integration', 'mes82-enqueue-key-1', '{}', '{}', '[]', '{}');
+  UPDATE outbox_events SET status = 'published', published_at = now()
+   WHERE idempotency_key = 'mes82-enqueue-key-1';
+  ASSERT (SELECT count(*) FROM task_executions WHERE id = '82000000-0000-0000-0000-0000000000b2') = 1,
+         'T39-9 FAIL: rearm 后 relay 应建成执行';
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-enqueue-key-1' || '|rearm|' || 'item-id', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-enqueue-key-1' || '|rearm|' || 'item-id', 'sha256'), 'hex')) = 1,
+         'T39-9 FAIL: rearm 幂等键新写应成功(不撞原键)';
+  RAISE NOTICE 'PASS T39-9: outbox rearm 按真实 DDL 执行(failed→pending 条件更新 + 建成执行 + rearm 键新写)';
+
+  -- T39-10:单指针 receipt ACK 闭合守卫结果验证(R6-1/R7-1)——真实创建 A/B receipt,逐分支验证 fencing(含 lease_seq 精确匹配)/覆盖结果
+  -- (单事务顺序 SQL 验证守卫逻辑结果;真实 FOR UPDATE 锁序与并发交错归服务层集成测试,不声称已实测竞态)
+  -- 准备:独立执行 + append seq 1..4 + 两个 attempt(A 先活跃后 reclaimed,B 接管)
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000e2', v_ws, v_agent, NULL, 'integration', 'mes82-receipt-exec', '{}', '{}', '[]', '{}');
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, '82000000-0000-0000-0000-0000000000e2', 1, 'im_btw', '{"text":"s1"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 2, 'im_btw', '{"text":"s2"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 3, 'im_btw', '{"text":"s3"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 4, 'im_btw', '{"text":"s4"}'::jsonb);
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000aa1', v_ws, '82000000-0000-0000-0000-0000000000e2', 1, 'running', 3);
+  -- ① A receipt seq<=4(fencing:A 为当前有效 attempt → 覆盖写入 4 行)+ 水位推进至 4
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 3);                              -- R7-1:lease_seq 精确匹配
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-10① FAIL: A receipt 应恰好覆盖 4 行';
+  UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  -- ② A reclaimed + requeue:同事务清空 receipt + 重置水位(单指针:只保留最新,requeue 清空)
+  UPDATE execution_attempts SET status = 'reclaimed' WHERE id = '82000000-0000-0000-0000-000000000aa1';
+  UPDATE task_executions SET status = 'queued', context_injected_through_seq = 0 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  UPDATE execution_context_appends SET injected_at = NULL, injected_attempt_id = NULL
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id IS NULL) = 4,
+         'T39-10② FAIL: requeue 应清空全部 receipt';
+  -- ③ B claim 后 GET(attempt 作用域过滤)命中 seq=4(全部 4 条重新可见 → 至少重收一次)
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000bb1', v_ws, '82000000-0000-0000-0000-0000000000e2', 2, 'running', 1);
+  UPDATE task_executions SET status = 'running' WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq > 0
+             AND (injected_attempt_id IS NULL OR injected_attempt_id <> '82000000-0000-0000-0000-000000000bb1')) = 4,
+         'T39-10③ FAIL: B GET 应命中全部 4 条(requeue 后重新可见,不丢失)';
+  -- ④ lease_seq 负/正配对(R8-1a 判别力:receipt 仍为 NULL 时先测错误 lease,再对同一行测正确 lease)
+  -- ④a 错误 lease_seq(99):receipt 当前全 NULL,IS DISTINCT FROM 不预过滤 → 0 行必须来自 lease 校验分支
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000bb1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 99);                             -- 错误 lease_seq
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-10④a FAIL: 错误 lease_seq 的 ACK 应整条 0 行';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id IS NULL) = 4,
+         'T39-10④a FAIL: 错误 lease 后 receipt 应保持未写(4 行仍 NULL)';
+  -- 水位按协议重算(连续前缀,当前 attempt=B):receipt 全 NULL → W=0,保持原值
+  UPDATE task_executions SET context_injected_through_seq =
+    COALESCE((SELECT min(seq) FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'),
+             (SELECT COALESCE(max(seq),0)+1 FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e2')) - 1
+   WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT context_injected_through_seq = 0 FROM task_executions WHERE id = '82000000-0000-0000-0000-0000000000e2'),
+         'T39-10④a FAIL: 错误 lease 后水位应保持 0(不推进)';
+  -- ④b 同一行、正确 lease_seq(1):恰好 4 行 + 水位推进至 4(与 ④a 仅 lease_seq 不同)
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000bb1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 1);                              -- 正确 lease_seq
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-10④b FAIL: 正确 lease 对同一行应恰好更新 4 行(单指针覆盖,不再 0 行卡死)';
+  UPDATE task_executions SET context_injected_through_seq =
+    COALESCE((SELECT min(seq) FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'),
+             (SELECT COALESCE(max(seq),0)+1 FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e2')) - 1
+   WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT context_injected_through_seq = 4 FROM task_executions WHERE id = '82000000-0000-0000-0000-0000000000e2'),
+         'T39-10④b FAIL: 正确 lease 后水位应推进至 4';
+  -- ⑤ B 再 GET 不返回 seq=4(同一 attempt 已 receipt 行不再下发)
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq > 0
+             AND (injected_attempt_id IS NULL OR injected_attempt_id <> '82000000-0000-0000-0000-000000000bb1')) = 0,
+         'T39-10⑤ FAIL: B 已 receipt 的行不应再下发';
+  -- ⑥ A 迟到 ACK:fencing(A 已 reclaimed,非当前有效 attempt)→ 0 行,不覆盖 B 的 receipt
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 3);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-10⑥ FAIL: A 迟到 ACK 应被 fencing 拒绝(0 行)';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id = '82000000-0000-0000-0000-000000000bb1') = 4,
+         'T39-10⑥ FAIL: B 的 receipt 不得被 A 覆盖';
+  RAISE NOTICE 'PASS T39-10: 单指针 receipt 闭合(A receipt→requeue 清空→B 重收→错误 lease 0 行/receipt 未写/水位不动→正确 lease 4 行/水位 4→B GET 不再下发→A 迟到 ACK 不覆盖)';
+
+  -- T39-11:ack 四字段语义——被抑制项 ack_sent_at 保持 NULL(字段不混用)
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b3', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidACK');
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_attempted_at, ack_sent_at)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3', 'dingtalk:ding-corp-mes82:cidACK', 1,
+          'serial_conversation', 'processing', now(), now());
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_represented_at, ack_merged_into)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3', 'dingtalk:ding-corp-mes82:cidACK', 2,
+          'serial_conversation', 'pending', now(),
+          (SELECT id FROM integration_message_queue
+            WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidACK' AND seq = 1));
+  ASSERT (SELECT ack_sent_at IS NULL AND ack_represented_at IS NOT NULL AND ack_merged_into IS NOT NULL
+            FROM integration_message_queue
+           WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidACK' AND seq = 2),
+         'T39-11 FAIL: 被抑制项应仅 ack_represented_at/ack_merged_into 置位,ack_sent_at 保持 NULL';
+  RAISE NOTICE 'PASS T39-11: ack 四字段语义(被代表 ≠ 已发送,字段不混用)';
+
+  -- T39-12:N-1 真实平台 ID 键编码——官方样例值存储与唯一解析(base64 样 cid + base64url 身份段)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, sender_identity_key)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
+          'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 1, 'serial_conversation', 'pending',
+          'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+         (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
+          'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 2, 'serial_conversation', 'pending',
+          'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU4');
+  -- 两个不同 senderId 的 base64url 编码(末字符 M vs N)→ 键不相等、各自唯一解析
+  ASSERT (SELECT count(DISTINCT sender_identity_key) = 2 FROM integration_message_queue
+           WHERE conversation_key = 'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg=='),
+         'T39-12 FAIL: 不同 senderId 编码后应为不同身份键(无坍缩)';
+  ASSERT (SELECT count(*) = 1 FROM integration_message_queue
+           WHERE sender_identity_key =
+             'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+         'T39-12 FAIL: 编码身份键应可精确唯一解析';
+  ASSERT position(':' in 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0') = 0,
+         'T39-12 FAIL: base64url 编码身份段不得含冒号(分隔符坍缩防护)';
+  RAISE NOTICE 'PASS T39-12: N-1 真实平台 ID 键(base64 样 cid 含 = 合法存储 + base64url 身份段无冒号、无坍缩)';
+
+  -- T39-13:ack leader 摄取事务按 seq 确定(结构语义:leader 自指 / follower 指向 leader)
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b4', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidACK2');
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_leader_id)
+  VALUES ('82000000-0000-0000-0000-0000000000c1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b4',
+          'dingtalk:ding-corp-mes82:cidACK2', 1, 'serial_conversation', 'processing',
+          '82000000-0000-0000-0000-0000000000c1'),                    -- M1 leader:自指
+         ('82000000-0000-0000-0000-0000000000c2', v_ws, v_int, '82000000-0000-0000-0000-0000000000b4',
+          'dingtalk:ding-corp-mes82:cidACK2', 2, 'serial_conversation', 'pending',
+          '82000000-0000-0000-0000-0000000000c1');                    -- M2 follower:指向 M1
+  ASSERT (SELECT ack_leader_id = id FROM integration_message_queue
+           WHERE id = '82000000-0000-0000-0000-0000000000c1'),
+         'T39-13 FAIL: leader 应自指';
+  ASSERT (SELECT ack_leader_id = '82000000-0000-0000-0000-0000000000c1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000c2'),
+         'T39-13 FAIL: 窗口内 follower 应指向 seq 最小的 leader(到达顺序无关)';
+  RAISE NOTICE 'PASS T39-13: ack leader 按 seq 确定(leader 自指 / follower 指向 leader,窗口归属持久化)';
+
+  -- T39-14:rearm 四态闭合(真实 outbox_events DDL)
+  -- a. pending(SLA 内):不造新事件(派生键行不存在),续租等待现有 relay
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, created_at)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb, 'mes82-rearm-pending', 'pending', now());
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-pending' || '|rearm|' || 'item-a', 'sha256'), 'hex')) = 0,
+         'T39-14a FAIL: pending(SLA 内)分支不得造新事件';
+  -- c. published 异常:原行保留(不 DELETE)+ 派生键新写
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, published_at)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb, 'mes82-rearm-pub', 'published', now());
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-rearm-pub' || '|rearm|' || 'item-c', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events WHERE idempotency_key = 'mes82-rearm-pub') = 1,
+         'T39-14c FAIL: published 原行必须保留(§6.6 审计保留,禁 DELETE)';
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-pub' || '|rearm|' || 'item-c', 'sha256'), 'hex')) = 1,
+         'T39-14c FAIL: 派生 rearm 键应新写成功(不撞原键唯一约束)';
+  -- d. missing:派生键新写(原键无行)
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-rearm-missing' || '|rearm|' || 'item-d', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-missing' || '|rearm|' || 'item-d', 'sha256'), 'hex')) = 1,
+         'T39-14d FAIL: missing 分支派生键新写应成功';
+  -- b. failed 条件更新(T39-9 已覆盖,此处复验条件守卫:对非 failed 行 0 行)
+  UPDATE outbox_events SET status = 'pending', delivery_attempts = 0, published_at = NULL
+   WHERE idempotency_key = 'mes82-rearm-pub' AND status = 'failed';
+  ASSERT (SELECT status = 'published' FROM outbox_events WHERE idempotency_key = 'mes82-rearm-pub'),
+         'T39-14b FAIL: 条件 rearm 不得误改非 failed 行';
+  RAISE NOTICE 'PASS T39-14: rearm 四态闭合(pending 不造新事件 / published 保留不删 / missing 派生键 / failed 条件守卫)';
+
+  -- T39-15:键空间结构不相交(E-1)——staffId 至宽字符集 [A-Za-z0-9._-] vs 编码键 x=<base64url>
+  -- (a) 编码键第 2 字符恒为 =
+  ASSERT substring('x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' from 2 for 1) = '=',
+         'T39-15a FAIL: 编码键第 2 字符应为 =';
+  -- (b) = 不在 staffId 至宽字符集 → 任何合法 staffId 不可能等于编码键(字符集代数)
+  ASSERT 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' !~ '^[A-Za-z0-9._-]+$',
+         'T39-15b FAIL: 编码键不应匹配 staffId 至宽字符集(否则不相交不成立)';
+  ASSERT '014728255240768602' ~ '^[A-Za-z0-9._-]+$',
+         'T39-15b FAIL: 合法 staffId 应匹配至宽字符集';
+  -- (c) link 流守卫:staffId 形参须匹配至宽字符集(x= 前缀串被拒,冒领不成立)
+  ASSERT 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' !~ '^[A-Za-z0-9._-]+$',
+         'T39-15c FAIL: 编码键串作为 external_account_ref 应被 staffId 字符集守卫拒绝(422)';
+  -- (d) 同 corp 下 staffId 形键与编码键为不同三元组行(互不解析到同一身份)
+  INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id,
+                                   created_in_workspace_id)
+  VALUES ('dingtalk', 'ding-corp-e1', '014728255240768602',
+          (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1), v_ws),
+         ('dingtalk', 'ding-corp-e1', 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0',
+          (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1), v_ws);
+  ASSERT (SELECT count(DISTINCT external_user_key) FROM external_identities
+           WHERE provider = 'dingtalk' AND provider_tenant_key = 'ding-corp-e1') = 2,
+         'T39-15d FAIL: staffId 形键与编码键应为两个独立三元组(唯一约束下互不坍缩)';
+  RAISE NOTICE 'PASS T39-15: 键空间结构不相交(编码键含 = / staffId 字符集无 = / 守卫拒绝 / 三元组独立)';
+
+  -- T39-16:窗口时间按锁序(ack_window_at,非事务开始时刻的 enqueued_at)
+  -- 模拟:T2 事务先开始(enqueued_at 较早)但后取锁 → 其 ack_window_at 落在 T1 窗口内 → follower
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b5', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidWIN');
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_leader_id, enqueued_at, ack_window_at)
+  VALUES ('82000000-0000-0000-0000-0000000000d1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidWIN', 1, 'serial_conversation', 'processing',
+          '82000000-0000-0000-0000-0000000000d1',
+          now(), now()),                                              -- T1:先取锁,leader 自指
+         ('82000000-0000-0000-0000-0000000000d2', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidWIN', 2, 'serial_conversation', 'pending',
+          '82000000-0000-0000-0000-0000000000d1',
+          now() - interval '10 seconds', now() + interval '1 second'); -- T2:enqueued_at 更早(事务先开始),ack_window_at 在 T1 窗口内
+  -- 按锁序时间判定:T2 的 ack_window_at ∈ [T1.ack_window_at, T1+5s) → follower 指向 T1
+  ASSERT (SELECT d2.ack_window_at BETWEEN d1.ack_window_at AND d1.ack_window_at + interval '5 seconds'
+            FROM integration_message_queue d1, integration_message_queue d2
+           WHERE d1.id = '82000000-0000-0000-0000-0000000000d1'
+             AND d2.id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: 锁序时间应使后取锁项落入先取锁项窗口';
+  ASSERT (SELECT d2.enqueued_at < d1.enqueued_at
+            FROM integration_message_queue d1, integration_message_queue d2
+           WHERE d1.id = '82000000-0000-0000-0000-0000000000d1'
+             AND d2.id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: 反例场景应满足 enqueued_at 倒序(事务先开始但后取锁)';
+  ASSERT (SELECT ack_leader_id = '82000000-0000-0000-0000-0000000000d1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: enqueued_at 倒序项按锁序窗口仍应为 follower(不产生第二个 leader)';
+  RAISE NOTICE 'PASS T39-16: 窗口时间按锁序 ack_window_at(事务先开始但后取锁 → 仍恰好一个 leader)';
+
+  -- T39-17:rearm 键分层约束结果验证(单事务顺序模拟两消费顺序;真实双消费者交错由服务层并发测试覆盖,§5.6)
+  -- 原事件(行级键 K,payload 执行键 K)与派生事件(行级键 K2,payload 执行键仍 K——R5-2 既有标准字段)
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{"idempotency_key":"mes82-exec-key-K","queue_item_id":"82000000-0000-0000-0000-0000000000e1"}'::jsonb,
+          'mes82-orig-K', 'pending'),
+         (v_ws, 'execution.enqueue', '{"idempotency_key":"mes82-exec-key-K","queue_item_id":"82000000-0000-0000-0000-0000000000e1"}'::jsonb,
+          encode(digest('mes82-orig-K' || '|rearm|' || 'item-race', 'sha256'), 'hex'), 'pending');
+  -- 消费者 A(任意顺序之一):取 payload.idempotency_key=K(既有平台标准字段)建执行 + 同事务绑定队列项
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state)
+  VALUES ('82000000-0000-0000-0000-0000000000e1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidRACE', 1, 'serial_conversation', 'dispatching');
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000f1', v_ws, v_agent, NULL,
+          'integration', 'mes82-exec-key-K', '{}', '{}', '[]', '{}');
+  UPDATE integration_message_queue SET state = 'processing',
+         execution_id = '82000000-0000-0000-0000-0000000000f1'
+   WHERE id = '82000000-0000-0000-0000-0000000000e1' AND state = 'dispatching' AND execution_id IS NULL;
+  -- 消费者 B(另一事件,执行键同为 K):建执行应撞唯一约束 → 回滚,不产生孤儿 execution
+  BEGIN
+    INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                                 task_spec, label_requirements, required_capabilities, config_snapshot)
+    VALUES ('82000000-0000-0000-0000-0000000000f2', v_ws, v_agent, NULL,
+            'integration', 'mes82-exec-key-K', '{}', '{}', '[]', '{}');
+    RAISE EXCEPTION 'T39-17 FAIL: 同执行级幂等键 K 的第二个 execution 未被唯一约束拒绝';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  -- 队列项守卫:已绑定项不再接受第二次绑定(状态守卫 0 行)
+  UPDATE integration_message_queue SET execution_id = '82000000-0000-0000-0000-0000000000f2'
+   WHERE id = '82000000-0000-0000-0000-0000000000e1' AND state = 'dispatching' AND execution_id IS NULL;
+  ASSERT (SELECT count(*) FROM task_executions WHERE idempotency_key = 'mes82-exec-key-K') = 1,
+         'T39-17 FAIL: 并发消费应恰好一个 execution(键 K 唯一)';
+  ASSERT (SELECT execution_id = '82000000-0000-0000-0000-0000000000f1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000e1'),
+         'T39-17 FAIL: 队列项只绑定唯一 execution(守卫阻止第二次绑定)';
+  RAISE NOTICE 'PASS T39-17: rearm 键分层约束结果(行级键 K/K2 + payload 执行键 K;唯一约束 + 队列项守卫 → 恰好一个 execution、绑定一次、无孤儿)';
+
+  -- T39-18:busy 不消耗失败预算(available_at 后移、delivery_attempts 不变、不终态、不热循环)
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'im.send', '{"kind":"ack"}'::jsonb, 'mes82-busy-event', 'pending');
+  -- 模拟连续 busy 超过通用 max_attempts:FOR 循环执行 max_attempts+1 = 9 次,每次仅后移 available_at,不递增 attempts
+  FOR i IN 1..9 LOOP
+    UPDATE outbox_events SET available_at = now() + interval '2 seconds'
+     WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  END LOOP;
+  ASSERT (SELECT status = 'pending' AND delivery_attempts = 0
+            FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: 连续 busy 超 max_attempts(9 > 8)仍不得递增 delivery_attempts、不得终态';
+  ASSERT (SELECT available_at > now() FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: busy 应后移 available_at(防热循环:领取条件 available_at <= now() 暂不满足)';
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending' AND available_at <= now()) = 0,
+         'T39-18 FAIL: available_at 未到期的事件不得被领取(不热循环)';
+  -- 刷新完成后 available_at 到期 → 可领取并成功 published
+  UPDATE outbox_events SET available_at = now() - interval '1 second'
+   WHERE idempotency_key = 'mes82-busy-event';
+  UPDATE outbox_events SET status = 'published', published_at = now()
+   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending' AND available_at <= now();
+  ASSERT (SELECT status = 'published' AND delivery_attempts = 0
+            FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: available_at 到期后应成功 published(全程未消耗失败预算)';
+  RAISE NOTICE 'PASS T39-18: busy 退避落真实 DDL(连续 9 次(>max_attempts 8)仅后移 available_at、attempts 恒 0 不终态、不热循环、到期成功)';
+  -- T39-19:审批续跑 receipt 统一重置(R7-2;R8-1b 判别力:连续 seq=1..4、水位协议重算、GET 以持久水位为起点)
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000e3', v_ws, v_agent, NULL,
+          'integration', 'mes82-approval-exec', '{}', '{}', '[]', '{}');
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, '82000000-0000-0000-0000-0000000000e3', 1, 'im_btw', '{"text":"btw-1"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e3', 2, 'im_btw', '{"text":"btw-2"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e3', 3, 'im_btw', '{"text":"btw-3"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e3', 4, 'im_btw', '{"text":"btw-4"}'::jsonb);
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000aa2', v_ws, '82000000-0000-0000-0000-0000000000e3', 1, 'running', 2);
+  -- ① A ACK 全部 4 行(lease_seq=2 匹配)→ 水位按协议重算得 4
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000aa2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 2);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-19① FAIL: A ACK 应更新全部 4 行';
+  UPDATE task_executions SET context_injected_through_seq =
+    COALESCE((SELECT min(seq) FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e3'
+                 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa2'),
+             (SELECT COALESCE(max(seq),0)+1 FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e3')) - 1
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  ASSERT (SELECT context_injected_through_seq = 4 FROM task_executions
+           WHERE id = '82000000-0000-0000-0000-0000000000e3'),
+         'T39-19① FAIL: 协议重算水位应得 4';
+  -- ② 审批挂起:attempt A → cancelled(awaiting_approval),执行 → awaiting_approval
+  UPDATE execution_attempts SET status = 'cancelled', failure_reason = 'awaiting_approval'
+   WHERE id = '82000000-0000-0000-0000-000000000aa2';
+  UPDATE task_executions SET status = 'awaiting_approval'
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  -- ③ 批准续跑:执行回 queued,同一执行行锁事务清空 receipt + 水位置 0(R7-2 统一重置)
+  UPDATE task_executions SET status = 'queued', context_injected_through_seq = 0
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  UPDATE execution_context_appends SET injected_at = NULL, injected_attempt_id = NULL
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3';
+  -- 同时断言 4 行 receipt 全 NULL 且水位为 0(删除重置任一步此断言即失败 → 真实判别)
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e3'
+             AND injected_attempt_id IS NULL AND injected_at IS NULL) = 4,
+         'T39-19③ FAIL: 批准续跑应清空全部 4 行 receipt';
+  ASSERT (SELECT context_injected_through_seq = 0 FROM task_executions
+           WHERE id = '82000000-0000-0000-0000-0000000000e3'),
+         'T39-19③ FAIL: 批准续跑应将水位置 0';
+  -- ④ B claim 新 attempt → B 可见性查询以持久水位为起点(seq > context_injected_through_seq)叠加 attempt receipt 过滤
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000bb2', v_ws, '82000000-0000-0000-0000-0000000000e3', 2, 'running', 1);
+  UPDATE task_executions SET status = 'running'
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  ASSERT (SELECT count(*) FROM execution_context_appends a
+           WHERE a.execution_id = '82000000-0000-0000-0000-0000000000e3'
+             AND a.seq > (SELECT context_injected_through_seq FROM task_executions
+                           WHERE id = '82000000-0000-0000-0000-0000000000e3')
+             AND (a.injected_attempt_id IS NULL
+                  OR a.injected_attempt_id <> '82000000-0000-0000-0000-000000000bb2')) = 4,
+         'T39-19④ FAIL: B 应以持久水位为起点重新 GET 到全部 4 条(至少一次进入续跑上下文)';
+  -- ⑤ B 正确 ACK → receipt 全归 B、水位重算回到 4;A 迟到 ACK 为 0、不覆盖
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000bb2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 1);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-19⑤ FAIL: B ACK 应覆盖全部 4 行';
+  UPDATE task_executions SET context_injected_through_seq =
+    COALESCE((SELECT min(seq) FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e3'
+                 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb2'),
+             (SELECT COALESCE(max(seq),0)+1 FROM execution_context_appends
+               WHERE execution_id = '82000000-0000-0000-0000-0000000000e3')) - 1
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  ASSERT (SELECT context_injected_through_seq = 4 FROM task_executions
+           WHERE id = '82000000-0000-0000-0000-0000000000e3'),
+         'T39-19⑤ FAIL: B ACK 后水位应回到 4';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e3'
+             AND injected_attempt_id = '82000000-0000-0000-0000-000000000bb2') = 4,
+         'T39-19⑤ FAIL: receipt 应全部归 B';
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000aa2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 2);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-19⑤ FAIL: A 迟到 ACK 应为 0(A 已 cancelled,fencing 拒写,不覆盖 B)';
+  RAISE NOTICE 'PASS T39-19: 审批续跑 receipt 统一重置(A ACK 4 行/水位 4→审批挂起→批准清空 receipt 全 NULL + 水位 0→B 以持久水位起点重收 4 条→B ACK 全归 B/水位回 4→A 迟到 ACK 0 行不覆盖)';
+END $$;
+ROLLBACK;
+-- T39:end
 
 \echo '============================================================'
 \echo 'ALL R2+R3+R4+R5+R6+R7+R8 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
