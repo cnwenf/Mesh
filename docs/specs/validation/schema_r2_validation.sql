@@ -4724,19 +4724,19 @@ BEGIN
     conversation_key, seq, dispatch_mode, state, sender_identity_key)
   VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
           'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 1, 'serial_conversation', 'pending',
-          'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+          'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
          (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
           'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 2, 'serial_conversation', 'pending',
-          'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU4');
+          'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU4');
   -- 两个不同 senderId 的 base64url 编码(末字符 M vs N)→ 键不相等、各自唯一解析
   ASSERT (SELECT count(DISTINCT sender_identity_key) = 2 FROM integration_message_queue
            WHERE conversation_key = 'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg=='),
          'T39-12 FAIL: 不同 senderId 编码后应为不同身份键(无坍缩)';
   ASSERT (SELECT count(*) = 1 FROM integration_message_queue
            WHERE sender_identity_key =
-             'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+             'dingtalk:dingxxxxsample:x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
          'T39-12 FAIL: 编码身份键应可精确唯一解析';
-  ASSERT position(':' in 'x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0') = 0,
+  ASSERT position(':' in 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0') = 0,
          'T39-12 FAIL: base64url 编码身份段不得含冒号(分隔符坍缩防护)';
   RAISE NOTICE 'PASS T39-12: N-1 真实平台 ID 键(base64 样 cid 含 = 合法存储 + base64url 身份段无冒号、无坍缩)';
 
@@ -4791,6 +4791,30 @@ BEGIN
   ASSERT (SELECT status = 'published' FROM outbox_events WHERE idempotency_key = 'mes82-rearm-pub'),
          'T39-14b FAIL: 条件 rearm 不得误改非 failed 行';
   RAISE NOTICE 'PASS T39-14: rearm 四态闭合(pending 不造新事件 / published 保留不删 / missing 派生键 / failed 条件守卫)';
+
+  -- T39-15:键空间结构不相交(E-1)——staffId 至宽字符集 [A-Za-z0-9._-] vs 编码键 x=<base64url>
+  -- (a) 编码键第 2 字符恒为 =
+  ASSERT substring('x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' from 2 for 1) = '=',
+         'T39-15a FAIL: 编码键第 2 字符应为 =';
+  -- (b) = 不在 staffId 至宽字符集 → 任何合法 staffId 不可能等于编码键(字符集代数)
+  ASSERT 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' !~ '^[A-Za-z0-9._-]+$',
+         'T39-15b FAIL: 编码键不应匹配 staffId 至宽字符集(否则不相交不成立)';
+  ASSERT '014728255240768602' ~ '^[A-Za-z0-9._-]+$',
+         'T39-15b FAIL: 合法 staffId 应匹配至宽字符集';
+  -- (c) link 流守卫:staffId 形参须匹配至宽字符集(x= 前缀串被拒,冒领不成立)
+  ASSERT 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0' !~ '^[A-Za-z0-9._-]+$',
+         'T39-15c FAIL: 编码键串作为 external_account_ref 应被 staffId 字符集守卫拒绝(422)';
+  -- (d) 同 corp 下 staffId 形键与编码键为不同三元组行(互不解析到同一身份)
+  INSERT INTO external_identities (provider, provider_tenant_key, external_user_key, user_id,
+                                   created_in_workspace_id)
+  VALUES ('dingtalk', 'ding-corp-e1', '014728255240768602',
+          (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1), v_ws),
+         ('dingtalk', 'ding-corp-e1', 'x=JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0',
+          (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1), v_ws);
+  ASSERT (SELECT count(DISTINCT external_user_key) FROM external_identities
+           WHERE provider = 'dingtalk' AND provider_tenant_key = 'ding-corp-e1') = 2,
+         'T39-15d FAIL: staffId 形键与编码键应为两个独立三元组(唯一约束下互不坍缩)';
+  RAISE NOTICE 'PASS T39-15: 键空间结构不相交(编码键含 = / staffId 字符集无 = / 守卫拒绝 / 三元组独立)';
 END $$;
 ROLLBACK;
 -- T39:end
