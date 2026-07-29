@@ -171,7 +171,7 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 模块 | 定位 |
 | --- | --- |
 | **agent(Agent 管理)** | agent 作为一等成员:配置(模型/指令/技能绑定)、可见性、分派即触发。owns `agents` 及其绑定/版本表 |
-| **runtime(运行时)** | agent 执行环境:注册/心跳、任务领取(SKIP LOCKED+租约)、日志流、凭证安全、仓库 checkout。**owns `runtimes`/`task_executions`/`execution_attempts` 等——`task_executions` 是全系统运行的唯一真源实体名** |
+| **runtime(运行时)** | agent 执行环境:注册/心跳、任务领取(SKIP LOCKED+租约)、日志流、凭证安全、仓库 checkout；真实本地执行、安全边界与 provider 适配见 [runtime-executor.md](features/runtime-executor.md)。**owns `runtimes`/`task_executions`/`execution_attempts` 等——`task_executions` 是全系统运行的唯一真源实体名** |
 | **skill(技能)** | 可安装的结构化指令包:定义—版本—安装—绑定四层解耦,沙箱与信任分级 |
 | **squad(小队)** | 人机编队协作:角色(leader/member)、拆解树 + 依赖 DAG + 批次、计划审批闸门(经 §6.10 统一 approval) |
 | **autopilot(自动化)** | 定时(cron)与事件驱动触发,把任务派给 agent;内置防失控护栏;审批经 §6.10 统一 approval |
@@ -208,7 +208,7 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 9 | [attachment.md](features/attachment.md) | 协作 | 签名直传三阶段、隔离区→扫描→clean 状态机、blob 去重独立记录、私有签名下载 |
 | 10 | [chat-session.md](features/chat-session.md) | 协作 | 对话抽象、POST 创建 generation → GET SSE 流、幂等中断、评论/附件引用权威 Spec |
 | 11 | [agent.md](features/agent.md) | 智能体 | agent 身份与配置版本快照、分派即触发主链路、入队可复现快照 |
-| 12 | [runtime.md](features/runtime.md) | 智能体 | 注册—心跳—领取—上报契约、execution/attempt 分层、租约自愈、凭证 fencing、签名安装 |
+| 12 | [runtime.md](features/runtime.md)（[本地执行体子 Spec](features/runtime-executor.md)） | 智能体 | 注册—心跳—领取—上报契约、execution/attempt 分层、租约自愈、凭证 fencing、真实 provider、安全沙箱与 task broker |
 | 13 | [skill.md](features/skill.md) | 智能体 | 四层解耦、不可变版本、沙箱与信任分级 |
 | 14 | [squad.md](features/squad.md) | 智能体 | 编排层与内容层解耦、DAG + 批次、计划审批(统一 approval)、issue 责任主体模型 |
 | 15 | [autopilot.md](features/autopilot.md) | 智能体 | 触发器+条件+动作、护栏默认开启、kill switch、审批(统一 approval) |
@@ -711,7 +711,8 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
      (同事务分配频道 seq),经 Redis pub/sub 通知网关推 issue.updated / execution.queued(§6.7)
   → runtime 以 FOR UPDATE SKIP LOCKED 领取(§6.4:workspace 校验 + 服务端标签与能力匹配 +
      原子容量扣减;无匹配任务则整体回滚、容量不泄漏;建 execution_attempts #1,一次性下发 attempt 绑定凭证)
-  → runtime checkout 专属分支 agent/<execution-id>/a<attempt>,沙箱执行(running,日志经 WS 流式回传)
+  → mesh-runtime checkout 专属分支 agent/<execution-id>/a<attempt>,以冻结 AttemptSpec 创建隔离沙箱；
+     provider 只连接 task broker，出站强制走钉死 IP 的 egress gateway，日志先脱敏再流式回传
   → 工具命中 confirm_required:经机器 API 创建 approval(§6.10),当前 attempt 置
      cancelled(awaiting_approval)、租约结束、容量释放;批准 → queued → attempt #N+1
      凭 resume_context 从审批点续跑;拒绝/过期 → cancelled
@@ -748,7 +749,7 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 - [x] **(R4)** §9 集成测试矩阵 T28–T34 描述同步扩充;validation 脚本在 PostgreSQL 16 全量实跑 93 项断言全绿(退出 0);词汇校验 `tests/docs/check_event_vocab.py` 通过(无未登记事件名);MES-2 canonical 一致性保持(词汇/错误码/分页包络/唯一通知矩阵),未引入新跨 Spec 冲突;无暴露外部出处内容。
 - [x] **(R5)** 第五轮架构/UX 复审 HIGH×3 全部修订落地(均为「定义 + 可执行测试」双重闭环):① **成员名册唯一入口**——agent.md §4.2 原独立「Agents」列表页改为成员名册页的「仅 Agent」筛选投影(同一路由 `/w/{ws}/members?member_type=agent` / 同一列表组件 / 同一 `[ + 新建 Agent ]` 入口,不形成第二导航/名册),章节标题、线框图与 §5.1 同步修正;新增文档结构校验 `tests/docs/check_roster_entry.py` + CI 常跑,防独立 `Agents [+ 新建]` 回归(README §6.12、§9 T35);② **external_identities 真正全局化**——既然映射目标为全局 `users.id`,本表改为与 `users` 同级的全局身份表:移除 `workspace_id` 租户所有权 / RLS 键,建链来源仅以可空审计列 `created_in_workspace_id ON DELETE SET NULL` 记录(不级联控制映射生命周期);全局解链仅映射所属 `users.id` 本人,工作区 admin 无旁路(仅可撤销本工作区使用权 / 成员资格),解链授权可执行参照 `external_identity_unlink_allowed()`;T29 扩展「删除建链工作区 A 后映射仍存在且 B 回调仍可解析」+ 全局表结构 / RLS / 解链权限负向测试(§6.1 全局身份层 / §6.2 第 5 条 / §6.17、integrations.md §2.1/§2.4.1/§2.8/§2.9/§3.1/§3.5/§5.2/§5.4);**与 `0611e35` 安全修复链(验证码 / OAuth 建链、`link-confirm`、解链即时生效、卡片回调二次权限校验)协同保留、未覆盖**;③ **Analytics 可见性谓词落入权威聚合 SQL**——`visible_executions` 统一 CTE 直接写入 §2.2.4 workload-B 与 §2.3 agent 主统计 / retry 子查询 / token 聚合(含 attempts、autopilot token 关联),明确 workspace dashboard 复用同一查询构件;T33 以**同一聚合 SQL** 对普通成员 / 项目成员 / private-agent owner / admin 四类请求者断言**最终统计值**(而非仅测 helper)(analytics.md §2.2.4/§2.3/§2.3.1/§3.1/§5.6)。
 - [x] **(R5)** §9 集成测试矩阵 T29/T33 描述同步扩充、新增 T35;validation 脚本在 PostgreSQL 16 全量实跑 **100 项断言全绿(退出 0)**;词汇校验 `tests/docs/check_event_vocab.py`(96 事件 / 21 Spec 零漂移)与文档结构校验 `tests/docs/check_roster_entry.py` 通过;MES-2 canonical 一致性保持(词汇 / 错误码 / 分页包络 / 唯一通知矩阵),未引入新跨 Spec 冲突;无暴露外部出处内容。
-- [ ] **(持续)** §9 全部集成测试(含 R2 T18–T26 与 R3/R4/R5 T27–T35)在开发阶段作为各模块验收的必测项落实。
+- [ ] **(持续)** §9 全部集成测试(含 R2 T18–T26、R3/R4/R5 T27–T35 与 runtime 执行体 T36)在开发阶段作为各模块验收的必测项落实。
 
 ---
 
@@ -793,6 +794,7 @@ CREATE INDEX idx_favorites_member ON favorites (workspace_id, member_id, created
 | T33 | **Analytics 可见性缓存键与口径(R3,HIGH-8;协同 MES-4 HIGH-2;R4 HIGH-6 扩展:execution 可见性 scope)** | ① 工作区级聚合(含 `/dashboards/workspace`)**按请求者项目可见性过滤**——非 private 项目成员得不到该项目统计量(admin/owner 见全工作区聚合);显式多项目聚合含不可见项目 → 整体 403(不部分返回);② `analytics_snapshots.scope_key` 纳入缓存唯一键:`ws_admin`(admin 全量)与 `projects:<hash>`(成员可见集合)快照分行并存,**跨权限缓存绝不共享**(普通成员查询不命中 ws_admin 行,可见性变更后旧键自然失效);③ burndown/velocity 按**当前归属口径**计算(响应 `scope_caliber='current_attribution'`),issue 移入/移出按当前集合重算,不声称还原历史归属;④ `calendar_timezone` 入维度指纹(不同时区分桶缓存不共享,本地自然日不跨桶);**R4:⑤ execution 指标统一可见性 scope(`analytics_exec_visible_to` 谓词,workload-B / agent stats / workspace dashboard 共用)——关联 issue 的执行继承项目可见性(普通成员看不到不可见 private project 的执行计数/时长/token,堵侧信道);无 issue 的 manual/chat/integration 执行归属 agent、无项目侧信道;private agent 先过 agent 可见性(仅 owner/admin 可见其统计);⑥ execution 类指标缓存键纳入同一 scope:`ws_admin` 与 `exec:p<可见项目集 hash>:a<可见 agent 集 hash>` 物理分行、跨权限绝不共享**;**R5(HIGH-3):⑦ 权威聚合 SQL 真实闭环——§2.2.4 workload-B 与 §2.3 agent 主统计 / retry 子查询 / token 聚合(含 attempts、autopilot token 关联)四段落地 SQL 均内联 §2.3.1 `visible_executions` 统一 CTE(workspace dashboard 复用同一构件);T33 以同一聚合 SQL 对普通成员 / 项目成员 / private-agent owner / admin 四类请求者断言最终统计值(executions·succeeded / running·queued / retry_rate / total_tokens),而非仅断言 helper 返回值** |
 | T34 | **Onboarding 证据与末步判定(R3,HIGH-9;R4 HIGH-4 扩展:四真实场景)** | ① **入册播种**:人类成员入册事务同事务播种清单 + 五步(步骤 1 即完成),agent 成员不播种;② **成熟工作区 reconcile**:受邀进入成熟工作区(已有 agent 成员/issue/历史执行)→ 建状态全量回查历史事实,步骤 2–4 按**成员自身历史**带证据直接完成,**不永久 pending**——**未触发过执行的成员步骤 4 保持 pending(不按「工作区首个执行」给未触发者批量完成、不伪造证据)**;③ **未读不得完成**:末步仅由 `notification.read` 驱动,相关通知未读 → 末步保持 pending、aha 不置位(不再凭「workspace 存在 completed 执行 + agent 评论」对全体成员批量完成);④ **错误 trigger member 不得完成**:末步严格按 `trigger_member_id` 完成——读了「他人触发的执行」的 agent 回评通知不得完成本人末步;触发者本人阅读后完成,`evidence` 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组、aha 仅为触发者置位;⑤ agent 创建入口唯一为成员名册(README §6.12,Settings 无独立 Agents 名册;onboarding 所有图/流程统一为入册播种 + `notification.read`) |
 | T35 | **成员名册唯一入口文档结构校验(R5,HIGH-1 防回归)** | 文档级结构校验:`tests/docs/check_roster_entry.py` 扫描 `docs/specs/**/*.md`,① 线框图中页面标题为 `Agents` 且带不带 Agent 后缀的 `[+ 新建]` 的独立列表页;② 未与「筛选投影 / 不存在 / 不维护」等标注同行的「Agent 列表页」表述;③ 导航 / 信息架构图中 `Agents` 行携带 `[+ 新建]` 入口——三类独立 Agents 名册 / 第二创建入口回归均判失败。**校验脚本随 CI 常跑(R5 落地),不通过即 CI 失败**;成员名册页「仅 Agent」筛选投影(标题「成员 Members」+ `[ + 新建 Agent ]`)不命中 |
+| T36 | **真实 runtime 执行体安全红线** | 在真实 Linux namespace/cgroup/network、`max_concurrent>=2` 下执行 runtime-executor.md §5.2 全矩阵且禁止 mock/skip：attempt A 不可读写 B 的文件、进程、内存、socket、凭证；沙箱不可读 daemon env/内存/token/control socket；恶意仓库 MCP/settings/hooks/项目指令不加载；无 broker/approval 无法 push、跨资源写或非白名单出站；可信解析→全 IP 过滤→建连钉死并逐跳重验，DNS rebinding/IPv4-mapped/元数据跳转均拒绝；清理后新 attempt 零残留；日志/result/diff/评论/附件全通道零 secret。任一失败阻断受保护分支和发布 |
 
 ---
 
