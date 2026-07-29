@@ -143,7 +143,7 @@ def build_html_entry_router() -> APIRouter:
         body = template
         if resolution.mode is not None:
             nonce = secrets.token_urlsafe(16)
-            payload = json.dumps({"mode": resolution.mode})
+            payload = json.dumps({"mode": resolution.mode}, separators=(",", ":"))
             injection = (
                 f'<script nonce="{nonce}">'
                 f"window.__MESH_APPEARANCE__ = {payload};"

@@ -128,7 +128,7 @@ async def test_session_cookie_injects_dark_with_nonce_csp(app, client):
         headers={"accept": "text/html", "cookie": "mesh_session=mesh_rft_entry_test"},
     )
     assert resp.status_code == 200
-    assert 'window.__MESH_APPEARANCE__ = {"mode": "dark"};' in resp.text
+    assert 'window.__MESH_APPEARANCE__ = {"mode":"dark"};' in resp.text
     assert resp.headers["cache-control"] == "private, no-store"
     csp = resp.headers["content-security-policy"]
     header_nonce = _csp_nonce(csp)
@@ -146,7 +146,7 @@ async def test_session_cookie_injects_light(app, client):
         "/",
         headers={"accept": "text/html", "cookie": "mesh_session=mesh_rft_entry_test"},
     )
-    assert 'window.__MESH_APPEARANCE__ = {"mode": "light"};' in resp.text
+    assert 'window.__MESH_APPEARANCE__ = {"mode":"light"};' in resp.text
     assert resp.headers["cache-control"] == "private, no-store"
 
 
@@ -197,7 +197,7 @@ async def test_workspace_slug_default_injected(app, client):
         "/w/entry-ws/board",
         headers={"accept": "text/html", "cookie": "mesh_session=mesh_rft_entry_test"},
     )
-    assert 'window.__MESH_APPEARANCE__ = {"mode": "dark"};' in resp.text
+    assert 'window.__MESH_APPEARANCE__ = {"mode":"dark"};' in resp.text
 
 
 async def test_invite_entry_injects_from_preview_without_session(app, client):
@@ -235,7 +235,7 @@ async def test_invite_entry_injects_from_preview_without_session(app, client):
 
     resp = await client.get(f"/invite/{token}", headers={"accept": "text/html"})
     assert resp.status_code == 200
-    assert 'window.__MESH_APPEARANCE__ = {"mode": "dark"};' in resp.text
+    assert 'window.__MESH_APPEARANCE__ = {"mode":"dark"};' in resp.text
     assert resp.headers["cache-control"] == "public, max-age=300"
 
 
@@ -309,4 +309,4 @@ async def test_real_login_refresh_flows_through_cookie(app, client):
     resp = await client.get(
         "/", headers={"accept": "text/html", "cookie": f"mesh_session={refresh}"}
     )
-    assert 'window.__MESH_APPEARANCE__ = {"mode": "dark"};' in resp.text
+    assert 'window.__MESH_APPEARANCE__ = {"mode":"dark"};' in resp.text
