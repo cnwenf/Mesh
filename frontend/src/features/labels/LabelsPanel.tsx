@@ -33,7 +33,12 @@ interface LabelFormState {
   description: string;
 }
 
-const EMPTY_FORM: LabelFormState = { name: '', color: '#3e63dd', description: '' };
+const EMPTY_FORM: LabelFormState = {
+  name: '',
+  // mesh-data-color: 标签数据色板默认值(数据色非主题取色,theme.md §2.5 合法例外,on-color 经亮度阈值自动配对)
+  color: '#3e63dd',
+  description: '',
+};
 
 async function fetchAllLabels(
   client: MeshApiClient,

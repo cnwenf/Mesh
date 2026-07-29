@@ -1,0 +1,81 @@
+/*
+ * 中性骨架屏(theme.md §2.3 ③)——与主题无关的加载占位。
+ * 取色经 --color-skeleton-* 语义 token(扫描门禁体系内,非硬编码例外)。
+ */
+.mesh-theme-skeleton {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  background: var(--color-bg);
+  z-index: 1000;
+}
+
+.mesh-theme-skeleton__sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-right: 1px solid var(--color-border);
+}
+
+.mesh-theme-skeleton__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.mesh-theme-skeleton__bar {
+  height: 14px;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--color-skeleton-base);
+}
+
+.mesh-theme-skeleton__bar--logo {
+  height: 24px;
+  width: 60%;
+  background: var(--color-skeleton-highlight);
+}
+
+.mesh-theme-skeleton__bar--short {
+  width: 45%;
+}
+
+.mesh-theme-skeleton__bar--title {
+  height: 28px;
+  width: 35%;
+  background: var(--color-skeleton-highlight);
+}
+
+.mesh-theme-skeleton__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  flex: 1;
+}
+
+.mesh-theme-skeleton__block {
+  min-height: 160px;
+  border-radius: var(--radius-md);
+  background: var(--color-skeleton-base);
+  opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mesh-theme-skeleton__bar,
+  .mesh-theme-skeleton__block {
+    animation: mesh-skeleton-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes mesh-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}

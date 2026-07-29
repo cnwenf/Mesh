@@ -16,6 +16,9 @@ import { SecuritySettings } from '../../features/auth';
 import { NotificationPreferencesSection } from '../../features/inbox';
 import { formatWithZoneAnnotation, SUPPORTED_LOCALES, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
+import { useWorkspaceThemeBridge } from '../../state/workspaceThemeBridge';
+import { resolveThemeChain } from '../../design/themeNegotiation';
+import type { ResolvedTheme } from '../../design/themeNegotiation';
 import type { ThemeMode } from '../../state/settingsStore';
 import type { PreferenceSyncError } from '../../state/preferencesSync';
 
@@ -28,11 +31,14 @@ const BASE_TIMEZONES: ReadonlyArray<string> = [
 
 const SAMPLE_INSTANT = '2026-07-25T18:00:00Z';
 
-const THEME_OPTIONS: ReadonlyArray<ThemeMode> = ['light', 'dark', 'system'];
 
 /** 将 PreferenceSyncError 映射为 i18n 消息键(§6.14 具名 code → 前端渲染) */
 function syncErrorToI18nKey(error: PreferenceSyncError): string {
-  if (error.code === 'unsupported_locale' || error.code === 'invalid_timezone') {
+  if (
+    error.code === 'unsupported_locale' ||
+    error.code === 'invalid_timezone' ||
+    error.code === 'invalid_theme_mode'
+  ) {
     return `error.${error.code}`;
   }
   if (error.code === 'network') {
@@ -49,6 +55,25 @@ export function SettingsPage(): React.JSX.Element {
   const setTimezone = useSettingsStore((state) => state.setTimezone);
   const lastSyncError = useSettingsStore((state) => state.lastSyncError);
   const clearSyncError = useSettingsStore((state) => state.clearSyncError);
+
+  // 占位标注「跟随默认(X)」/「跟随系统(X)」需当前解析值(§4.1):设置页为
+  // 全局路由(无工作区上下文),未设偏好时协商链落系统级(§2.2 已登录全局页等同 case3)。
+  const workspaceDefault = useWorkspaceThemeBridge((state) => state.defaultTheme);
+  const [systemDark, setSystemDark] = useState(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (event: MediaQueryListEvent): void => setSystemDark(event.matches);
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+  const defaultResolved: ResolvedTheme = resolveThemeChain({
+    userTheme: null,
+    workspaceDefault,
+    systemPrefersDark: systemDark,
+  }).mode;
+  const systemResolved: ResolvedTheme = systemDark ? 'dark' : 'light';
 
   // 当前用户(供安全设置:会话/两步验证/第三方绑定)。未登录时不渲染安全区。
   const [user, setUser] = useState<CurrentUser | null>(null);
@@ -109,15 +134,24 @@ export function SettingsPage(): React.JSX.Element {
         <Select
           data-testid="theme-select"
           label={t('theme.label')}
-          value={preferences.theme}
-          onChange={(event) => setTheme(event.target.value as ThemeMode)}
+          value={preferences.theme ?? ''}
+          onChange={(event) =>
+            setTheme(event.target.value === '' ? null : (event.target.value as ThemeMode))
+          }
         >
-          {THEME_OPTIONS.map((mode) => (
-            <option key={mode} value={mode}>
-              {t('theme.' + mode)}
-            </option>
-          ))}
+          {/* 首项 = 跟随默认(写 null,§4.1):全局页解析落系统级(§2.2),
+              占位标注当前解析值;工作区内由工作区默认级解析(WorkspaceProvider)。 */}
+          <option value="">
+            {t('theme.followDefault', { theme: t('theme.' + defaultResolved) })}
+          </option>
+          <option value="light">{t('theme.light')}</option>
+          <option value="dark">{t('theme.dark')}</option>
+          {/* 显式 system = 忽略工作区默认、跟随 OS(§2.1),标注系统当前解析值 */}
+          <option value="system">
+            {t('theme.systemResolved', { theme: t('theme.' + systemResolved) })}
+          </option>
         </Select>
+        <p className="mesh-settings__hint">{t('theme.defaultHint')}</p>
       </section>
 
       <section className="mesh-settings__section" aria-label={t('settings.language')}>

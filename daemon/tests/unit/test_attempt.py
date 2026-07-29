@@ -208,16 +208,27 @@ class TestSupervise:
         # exactly one advance per successful renew, under the lock
         assert ctx.lease_seq == 1 + len(api.renews)
 
-    async def test_sealed_flush_transient_failure_still_reports_terminal(self, journal, ctx):
-        """attempt.py ``_finalize`` ``except DaemonError: pass`` path: a transient
-        (non-lease) failure of the sealed log flush must NOT prevent the terminal
-        report — the redacted batch is the spool's / server-offset's job, and the
-        result must not be lost."""
-        class FlakyLogsApi(RenewOkApi):
-            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
-                raise ServerError("log relay down")
+    async def test_sealed_flush_transient_failure_recovers_via_retry(self, journal, ctx):
+        """A transient (non-lease) failure of the terminal sealed flush is
+        retried with a capped backoff (§3.9.3); once the relay recovers the
+        attempt still reports its real outcome — the result is not lost and
+        not demoted."""
+        class FlakyOnceLogsApi(RenewOkApi):
+            def __init__(self):
+                super().__init__()
+                self.append_calls = 0
 
-        api = FlakyLogsApi()
+            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+                self.append_calls += 1
+                if self.append_calls == 1:
+                    raise ServerError("transient 5xx")
+                return await super().append_logs(
+                    attempt_id, lease_seq=lease_seq, stream=stream,
+                    start_offset=start_offset, lines=lines, sealed=sealed,
+                )
+
+        api = FlakyOnceLogsApi()
+        clock = FakeClock()
 
         class Provider:
             name = "fake"
@@ -226,12 +237,80 @@ class TestSupervise:
                 yield TextDelta(text="some output")  # buffered; flushed sealed at finalize
                 yield FinalResult(summary="done", exit_code=0)
 
-        sup = make_supervisor(api, journal, FakeClock())
+        sup = make_supervisor(api, journal, clock)
         outcome = await sup.supervise(ctx, Provider(), run_request())
         assert outcome.status == "completed"
+        assert outcome.failure_reason is None
         assert outcome.terminal_reported is True
-        assert outcome.lease_lost is False
         assert [t["status"] for t in api.transitions] == ["running", "completed"]
+        # first sealed attempt failed, retry succeeded (+1 empty stderr sealed close)
+        assert api.append_calls == 3
+        assert clock.sleeps  # retry waited on the (fake) clock
+
+    async def test_sealed_flush_persistent_failure_demotes_to_log_flush_failed(self, journal, ctx):
+        """When the sealed flush keeps failing past the bounded retry envelope,
+        the attempt must NOT be certified completed on incomplete/unsealed
+        logs: the terminal state is demoted to failed/log_flush_failed (fixed
+        reason code), and the failure is reported exactly once."""
+        class DeadLogsApi(RenewOkApi):
+            def __init__(self):
+                super().__init__()
+                self.append_calls = 0
+
+            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+                self.append_calls += 1
+                raise ServerError("log relay down")
+
+        api = DeadLogsApi()
+        clock = FakeClock()
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield TextDelta(text="some output")
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(api, journal, clock)
+        outcome = await sup.supervise(ctx, Provider(), run_request())
+        assert outcome.status == "failed"
+        assert outcome.failure_reason == "log_flush_failed"
+        assert outcome.terminal_reported is True
+        assert [t["status"] for t in api.transitions] == ["running", "failed"]
+        terminal = [t for t in api.transitions if t["status"] == "failed"][0]
+        assert terminal["failure_reason"] == "log_flush_failed"
+        # initial attempt + bounded retries, never unbounded
+        assert api.append_calls == 4  # 1 + _SEALED_FLUSH_RETRIES
+        assert len([s for s in clock.sleeps if s > 0]) >= 3
+
+    async def test_sealed_flush_lease_conflict_during_retry_is_lease_lost(self, journal, ctx):
+        """Lease fencing raised mid-retry is NOT swallowed by the retry loop —
+        it maps to lease_lost with no terminal report."""
+        class FencingLogsApi(RenewOkApi):
+            def __init__(self):
+                super().__init__()
+                self.append_calls = 0
+
+            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+                self.append_calls += 1
+                if self.append_calls == 1:
+                    raise ServerError("transient")
+                raise LeaseConflictError("409", code="lease_seq_mismatch")
+
+        api = FencingLogsApi()
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield TextDelta(text="out")
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(api, journal, FakeClock())
+        outcome = await sup.supervise(ctx, Provider(), run_request())
+        assert outcome.lease_lost is True
+        assert outcome.terminal_reported is False
+        assert [t["status"] for t in api.transitions] == ["running"]
 
     async def test_renew_consecutive_daemon_errors_lease_lost(self, journal, ctx):
         class RenewServerErrorApi(StubApi):

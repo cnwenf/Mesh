@@ -127,7 +127,10 @@ async def cmd_run(config: DaemonConfig) -> int:
         inventory = await Inventory.probe(build_adapters(config))
         app = RuntimeApp(
             config, api, journal, inventory, build_adapters(config),
-            redaction_secrets=[],
+            # Defense in depth (§3.8): the long-lived runtime token itself is
+            # a redaction secret, so any accidental echo into a relayed log
+            # line is masked even before the per-attempt secret set applies.
+            redaction_secrets=[token],
         )
         app.set_runtime_id(runtime_id)
         loop = asyncio.get_running_loop()

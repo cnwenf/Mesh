@@ -110,14 +110,20 @@ async def test_settings_valid_theme_and_flags_merge(session_factory):
     assert updated["settings"]["default_priorities"] == ["low", "high"]
     assert updated["settings"]["feature_flags"] == {"autopilot": True}
 
+    # theme.md §3.3 + workspace.md §3.3: invalid default_theme →
+    # 422 invalid_theme_mode (unified named code).
     with pytest.raises(BusinessRuleError) as theme:
         await service.update_workspace(
             actor=member,
             workspace=workspace,
             patch=WorkspacePatch(settings={"default_theme": "neon"}),
         )
-    assert theme.value.code == "validation_error"
+    assert theme.value.code == "invalid_theme_mode"
     assert theme.value.status_code == 422
+    assert theme.value.details == {
+        "theme": "neon",
+        "supported": ["light", "dark", "system"],
+    }
 
 
 # --- lifecycle guards --------------------------------------------------------------

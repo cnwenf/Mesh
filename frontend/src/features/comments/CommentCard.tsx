@@ -7,6 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
+import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { getIssueByIdentifier } from '../issues/api';
@@ -102,6 +103,7 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
   const t = useT();
   const { comment } = props;
   const hydratedBody = useIssueLinkCards(comment.body_html ?? '', props.workspaceId);
+  const ugcGuard = useUgcColorGuard();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [editBusy, setEditBusy] = useState(false);
@@ -201,8 +203,10 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
         <div
           className="mesh-comments__body"
           data-testid={`comment-body-${comment.id}`}
+          ref={ugcGuard}
           // body_html 为服务端白名单净化后的 HTML(comment-inbox.md §5.1),系唯一允许的注入源;
           // C6 卡片水合仅替换受控的 mesh-issue-link 锚点,卡片文本已转义。
+          // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
           dangerouslySetInnerHTML={{ __html: hydratedBody }}
         />
       )}

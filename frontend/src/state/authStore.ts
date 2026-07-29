@@ -8,6 +8,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { onLogoutCleanup } from './settingsStore';
 
 export interface AuthState {
   /** 短期 access JWT(请求 Bearer 用) */
@@ -30,7 +31,12 @@ export const useAuthStore = create<AuthState>()(
       setToken: (token) => set({ token }),
       setSession: ({ accessToken, refreshToken }) =>
         set({ token: accessToken, refreshToken: refreshToken ?? null }),
-      clearToken: () => set({ token: null, refreshToken: null }),
+      clearToken: () => {
+        // theme.md §2.3:登出清理分区 locator + 遗留镜像键,防下一账号串用;
+        // 偏好回到「未表达」(协商链自工作区默认起)。
+        onLogoutCleanup();
+        set({ token: null, refreshToken: null });
+      },
     }),
     { name: AUTH_STORAGE_KEY },
   ),

@@ -61,7 +61,12 @@ const FIELD_KEY_PATTERN = /^[a-z][a-z0-9_]{0,49}$/;
 let optionDraftSeq = 0;
 function newOptionDraft(): OptionDraft {
   optionDraftSeq += 1;
-  return { key: 'draft-' + String(optionDraftSeq), name: '', color: '#3e63dd' };
+  return {
+    key: 'draft-' + String(optionDraftSeq),
+    name: '',
+    // mesh-data-color: 选项数据色板默认值(数据色非主题取色,theme.md §2.5 合法例外)
+    color: '#3e63dd',
+  };
 }
 
 async function fetchAllFields(
@@ -526,6 +531,7 @@ function OptionsEditorDialog(props: {
   const t = useT();
   const { addToast } = useToast();
   const [newName, setNewName] = useState('');
+  // mesh-data-color: 选项数据色板默认值(数据色非主题取色,theme.md §2.5 合法例外)
   const [newColor, setNewColor] = useState('#3e63dd');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

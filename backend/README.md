@@ -22,7 +22,7 @@ Layering inside `src/mesh/`:
 - `project/` — project module (`docs/specs/features/project.md`): project CRUD + archive/restore + soft delete, health/status trail with writeback, milestones (derived overdue), cycles (auto-roll), project members + private visibility, project templates + instantiation (§3.2b); same-transaction prefix-registry occupation with permanent reservation (README §6.3), workspace-less paths resolved through narrow SECURITY DEFINER lookups, `project:{id}` channel resource-level subscription checker.
 - `outbox/` — transactional outbox (§6.6): `emit_event`/`emit_realtime` write in the business transaction; the relay claims `FOR UPDATE SKIP LOCKED`; the projector is the ONLY writer of `realtime_events` and allocates per-channel `seq` in the same transaction.
 - `realtime/` — gateway protocol, channel auth hooks, Redis fan-out (Redis is fan-out only; replay truth is in `realtime_events`).
-- `runtime/` — runtime module (`docs/specs/features/runtime.md`): three-stage registration (shadow row + one-time activation-code hash + daemon activation issuing a hash-only `mesh_rt_` token), heartbeat/health with downlink cancel commands, the §2.5 atomic claim (runtime-row lock without pre-deduction → `FOR UPDATE SKIP LOCKED` task pick with tenant equality + server-side label/capability `<@` matching + default-runtime affinity → capacity + `claimed` + attempt in one commit; zero writes when nothing matches), the dual-layer state machine (terminal-transition-guarded idempotent capacity release, `lease_seq` zombie fencing), lease renewal, two-phase cancel/freeze, credential fencing (Fernet ciphertext, one-shot per-attempt envelopes, refetch cap 3 → freeze, full-channel redaction), checkout allowlist + SSRF guard, offset-continuous log segments in object storage with REST/SSE resume, the unified approvals single-resume protocol (README §6.10), and the `execution.enqueue` outbox consumer closing the MES-60 contract. Machine API (`/api/v1/daemon/`) is TLS-only with token-hash auth (workspace always server-derived); `execution:{id}[:logs]` channels carry resource-level subscription checks registered on both the API and the gateway.
+- `runtime/` — runtime module (`docs/specs/features/runtime.md`): three-stage registration (shadow row + one-time activation-code hash + daemon activation issuing a hash-only `mesh_rt_` token), heartbeat/health with downlink cancel commands, the §2.5 atomic claim (runtime-row lock without pre-deduction → `FOR UPDATE SKIP LOCKED` task pick with tenant equality + server-side label/capability `<@` matching + default-runtime affinity → capacity + `claimed` + attempt in one commit; zero writes when nothing matches), the dual-layer state machine (terminal-transition-guarded idempotent capacity release, `lease_seq` zombie fencing), lease renewal, two-phase cancel/freeze, credential fencing (Fernet ciphertext, one-shot per-attempt envelopes, refetch cap 3 → freeze, full-channel redaction), checkout allowlist + SSRF guard, offset-continuous log segments in object storage with REST/SSE resume, the unified approvals single-resume protocol (README §6.10), and the `execution.enqueue` outbox consumer closing the MES-60 contract. Machine API (`/api/v1/daemon/`) is TLS-only with token-hash auth (workspace always server-derived); `execution:{id}[:logs]` channels carry resource-level subscription checks registered on both the API and the gateway. **P0 server contracts (MES-98, runtime-executor.md §2.1–2.6):** §2.1 frozen AttemptSpec snapshot (provider/model/effort/system_instructions/budget/network/data policy + SHA-256 digest) via unified `build_config_snapshot` (assign/mention/autopilot share one entry); §2.2 S-05 task-level `mesh_task_` tokens (`attempt_task_tokens` table, claim-issued / renew-rotated / five-path terminal revocation, `validate_task_token` full校验 with lease_seq/runtime/scope/rate-limit, `/api/v1/task/*` endpoints via `resolve_task_principal` dependency); §2.4 S-11 `runtimes.runtime_token_hash` single source of truth (no `api_tokens` dual-write, migration 0029 rebuilds `mesh_runtime_by_token_hash` SECURITY DEFINER function); §2.5 S-06 server-side fallback redaction (`redact_result` before result persist, `redact_diff_text` before diff persist, ISO-13 aligned); §2.6 structured result columns on `execution_attempts` (provider/model/tokens/cost/turns) + protocol negotiation (activate/heartbeat accept protocol_version/provider_manifest/daemon_features); §3.7 S-09 `result_sink` issue completion closure (non-squad assign/mention triggers → `CommentService` real comment, suppress_triggers + idempotency key, stub-result and independent-closure triggers skipped).
 - `validation.py` — shared validators (IANA timezone, supported locale/theme, https-only user-controlled URLs; auth-canonical 422 codes, §6.16/§6.18).
 - `workspace/` — workspace module (`docs/specs/features/workspace.md`): workspace CRUD + slug redirects, invitation lifecycle with redemption separation (hash-only tokens, atomic accept, workspace-configurable caps), settings single-source locale, prefix registry (§6.3); plus the RBAC adjudicator (`auth/rbac.py`), the unified `members` roster table (member.md owns), append-only `audit_logs` (auth.md §2.6) and the guest project-visibility hook.
 - `workers/` — supervisor (isolated cancel domains + restart backoff), retention purge, invitation expiry sweep, process entrypoint.
@@ -92,6 +92,38 @@ production — see `auth/mailer.py`).
 | GET / POST | `/api/v1/workspaces/{ws}/project-templates` · PATCH / DELETE `/api/v1/project-templates/{id}` · POST `/instantiate` | templates (§3.2b): CRUD + instantiate (key registry-checked; prefill for not-yet-built modules degrades into `skipped`) |
 
 Writes are rate limited per principal+IP (120/min). Private-project realtime events only hit the `project:{id}` channel; public ones additionally hit `workspace:{ws}:projects` (§6.7).
+
+## HTML entry middleware (`docs/specs/features/theme.md` §2.3)
+
+`mesh.web.entry` serves the built SPA shell for HTML document navigations and
+implements the first-frame precise-injection tier:
+
+- Reads the HttpOnly `mesh_session` cookie (auth.md §5.5 web session form),
+  locates the session **read-only** via SHA-256 `token_hash` (revoked/expired
+  → anonymous), resolves the requester's theme negotiation chain
+  (`users.settings.theme` → route-derived workspace default: `/w/{slug}/…`
+  slug segment, `/invite/{token}` via invitation-preview same-source data →
+  system), and inlines the non-sensitive binary
+  `window.__MESH_APPEARANCE__ = {"mode":"light|dark"}` before `</head>`.
+  The payload carries only the converged mode — never workspace identifiers.
+- Cache boundary: personalized responses are `Cache-Control: private,
+  no-store` with a per-request nonce CSP; the anonymous shell is byte-stable
+  (`public, max-age=300`) with a sha256-hashed FOUC script. `script-src`
+  never allows `unsafe-inline`.
+- `mesh.web.appearance` holds the server-side chain resolution truth table
+  (binary convergence; any lookup failure degrades to no injection — the
+  entry never breaks the HTML response).
+- Session cookie (`auth.md §5.5`): `login`/`register`/`mfa/verify`/`refresh`
+  issue the HttpOnly `mesh_session` cookie (`Secure` derived from `auth_mode`,
+  overridable via `MESH_COOKIE_SECURE`; `SameSite=Strict`; `Path=/`;
+  `Max-Age` tracks the refresh token TTL, extended when remember-me is used) carrying the
+  refresh token — the additive channel this middleware reads; `logout`/`logout-all`
+  clear it. The in-body refresh token is retained for the Bearer API flow.
+
+- Deployment: nginx routes HTML document misses (`@app`) to this middleware;
+  the built frontend is shared via the `frontend_dist` compose volume
+  (`MESH_FRONTEND_DIST_DIR`, default `/srv/mesh/frontend`; absent → 404,
+  API unaffected).
 
 ## Security notes
 

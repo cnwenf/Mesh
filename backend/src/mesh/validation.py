@@ -58,11 +58,19 @@ def validate_locale(value: str) -> None:
 
 
 def validate_theme(value: str) -> None:
-    """Raise 422 ``validation_error`` unless ``value`` is a supported theme mode."""
+    """Raise 422 ``invalid_theme_mode`` unless ``value`` is a supported theme mode.
+
+    theme.md §3.3: the named ``invalid_theme_mode`` code is the single
+    authority for invalid theme values across all owners (auth
+    ``users.settings.theme`` via PATCH /users/me, workspace
+    ``settings.default_theme`` via PATCH /workspaces/{id}), aligned with
+    ``unsupported_locale`` / ``invalid_timezone``. ``details.theme`` /
+    ``details.supported`` let frontends render localized copy (§6.18).
+    """
     if value not in SUPPORTED_THEMES:
         raise BusinessRuleError(
             "unsupported theme",
-            code="validation_error",
+            code="invalid_theme_mode",
             details={"theme": value, "supported": list(SUPPORTED_THEMES)},
         )
 

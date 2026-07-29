@@ -314,12 +314,20 @@ class InvitationService:
             # Links of a soft-deleted workspace are not usable; the tenant's
             # existence is not disclosed through the invitation surface.
             return {"valid": False, "reason": "not_found"}
+        # theme.md §2.2/§3.1 + workspace.md §3.1 (MES-76 H2): the unauthenticated
+        # invite-accept page resolves the theme negotiation chain level 2 from
+        # ``appearance.default_theme``. A non-sensitive display preference with
+        # the same exposure surface as the workspace name; the preview still
+        # returns only limited public fields (never the full workspace detail).
+        workspace_settings = workspace.settings or {}
+        default_theme = workspace_settings.get("default_theme") or "system"
         return {
             "valid": True,
             "workspace_name": workspace.name if workspace else None,
             "workspace_logo_url": workspace.logo_url if workspace else None,
             "role": row.role,
             "expires_at": row.expires_at,
+            "appearance": {"default_theme": default_theme},
         }
 
     # -- accept (logged-in) --------------------------------------------------------------

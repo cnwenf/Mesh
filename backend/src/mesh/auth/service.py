@@ -135,6 +135,9 @@ def user_to_dict(user: User) -> dict:
             else None
         ),
         "created_at": user.created_at,
+        # theme.md §4.5: pending-queue conflict strategy needs the server's
+        # updated_at to detect "server newer → discard stale local write".
+        "updated_at": user.updated_at,
     }
 
 

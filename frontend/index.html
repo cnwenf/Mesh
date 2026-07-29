@@ -3,26 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f172a" />
     <title>Mesh</title>
     <script>
-      // 防主题闪烁(FOUC):首帧前同步解析主题偏好并落到 <html data-theme>。
-      // 偏好真源为 localStorage['mesh.settings.v1'](zustand persist),镜像键 mesh.theme 仅存 'light|dark|system'。
+      // 首帧防闪烁三级链路(theme.md §2.3,优先级 精确注入 → 精确镜像 → skeleton):
+      // ① window.__MESH_APPEARANCE__:服务端入口中间件按请求者协商链逐请求注入的
+      //    二值主题模式(白名单收敛,不含工作区标识等可枚举信息);
+      // ② mesh.theme.active:分区镜像键 {id: 路由身份, mode: light|dark}——
+      //    id 由当前 URL 同步推导(与 src/design/themeNegotiation.ts expectedRouteId 同构),
+      //    **id 匹配校验先于 mode 读取**,跨 tab/跨路由残留值天然失效;mode 显式白名单;
+      // ③ 均不可用:仅标记 data-theme-pending(不预置 data-theme),ThemeProvider
+      //    协商完成前渲染中性 skeleton——宁可短暂无主题骨架,不可先错后改。
+      // 存储访问全程 try/catch;脚本不含任何用户输入拼接。
       (function () {
-        var theme = 'system';
+        var doc = document.documentElement;
+        function apply(mode) {
+          doc.setAttribute('data-theme', mode);
+        }
+        // ① 精确注入
         try {
-          var mirror = localStorage.getItem('mesh.theme');
-          if (mirror === 'light' || mirror === 'dark' || mirror === 'system') theme = mirror;
-        } catch (_e) {
-          /* 存储不可用时回退 system */
+          var injected = window.__MESH_APPEARANCE__;
+          if (injected && (injected.mode === 'light' || injected.mode === 'dark')) {
+            apply(injected.mode);
+            return;
+          }
+        } catch (e) {
+          /* 注入值异常 → 进 ② */
         }
-        var resolved = theme;
-        if (theme === 'system') {
-          resolved =
-            window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-              ? 'dark'
-              : 'light';
+        // ② 分区镜像(路由身份分区,id 校验先于 mode)
+        try {
+          var raw = localStorage.getItem('mesh.theme.active');
+          if (raw) {
+            var loc = JSON.parse(raw);
+            var host = location.host;
+            var path = location.pathname;
+            var expected;
+            var m = /^\/w\/([^/?#]+)/.exec(path);
+            if (m) {
+              expected = host + ':w:' + m[1];
+            } else if (/^\/invite(?:[/=?#]|$)/.test(path)) {
+              expected = host + ':invite';
+            } else if (/^\/(?:login|register|auth|forgot-password|reset-password)(?:[/=?#]|$)/.test(path)) {
+              expected = host + ':anon';
+            } else {
+              expected = host + ':app';
+            }
+            if (loc && loc.id === expected && (loc.mode === 'light' || loc.mode === 'dark')) {
+              apply(loc.mode);
+              return;
+            }
+          }
+        } catch (e) {
+          /* 存储不可用/非法载荷 → 丢弃进 ③ */
         }
-        document.documentElement.setAttribute('data-theme', resolved);
+        // ③ 中性 skeleton 兜底(不预置 data-theme)
+        doc.setAttribute('data-theme-pending', '');
       })();
     </script>
   </head>

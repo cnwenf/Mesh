@@ -53,6 +53,12 @@ describe('preferencesSync(偏好服务端同步,auth.md §3.1)', () => {
       expect(payload.settings?.locale).toBeUndefined();
       expect(payload.settings?.theme).toBe('system');
     });
+
+    it('theme 为 null 时发送显式 null(清除、恢复跟随工作区默认,§3.2)', () => {
+      const prefs: UserPreferences = { theme: null, locale: null, timezone: 'UTC' };
+      const payload = toUpdatePayload(prefs);
+      expect(payload.settings?.theme).toBeNull();
+    });
   });
 
   describe('syncPreferencesToServer', () => {
@@ -91,6 +97,21 @@ describe('preferencesSync(偏好服务端同步,auth.md §3.1)', () => {
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
           code: 'invalid_timezone',
+          status: 422,
+        }),
+      );
+    });
+
+    it('422 invalid_theme_mode 经 onError 上报(theme.md §3.3 具名码)', async () => {
+      const client = createMockClient(errorFetch(422, 'invalid_theme_mode', 'unsupported theme'));
+      const onError = vi.fn();
+      const prefs: UserPreferences = { theme: 'light', locale: null, timezone: 'UTC' };
+
+      await syncPreferencesToServer(client, prefs, { onError });
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 'invalid_theme_mode',
           status: 422,
         }),
       );
@@ -152,6 +173,32 @@ describe('preferencesSync(偏好服务端同步,auth.md §3.1)', () => {
       await syncThemeToServer(client, 'light', { onError });
 
       expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    it('theme=null 发送显式 null(清除、恢复跟随工作区默认)', async () => {
+      const fetchImpl = successFetch();
+      const client = createMockClient(fetchImpl);
+
+      await syncThemeToServer(client, null);
+
+      const [, options] = (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        string,
+        RequestInit,
+      ];
+      expect(options.body).toContain('"theme":null');
+      const body = JSON.parse(options.body as string) as { settings: { theme: null } };
+      expect(body.settings.theme).toBeNull();
+    });
+
+    it('422 invalid_theme_mode 经 onError 归一上报', async () => {
+      const client = createMockClient(errorFetch(422, 'invalid_theme_mode', 'unsupported theme'));
+      const onError = vi.fn();
+
+      await syncThemeToServer(client, 'dark', { onError });
+
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: 'invalid_theme_mode', status: 422 }),
+      );
     });
   });
 

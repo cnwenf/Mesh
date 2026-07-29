@@ -5,8 +5,71 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-07-30
+
+### Added
+
+- **mesh-runtime A2 安全执行面(MES-94 阶段2·开发A2/MES-100)**:daemon 本地执行体在 A1 骨架之上落地真实内核隔离——
+  - **namespace/cgroup 沙箱(fail-closed)**:每 attempt 独立 mount/pid/net/ipc/uts namespace + cgroup2 硬限额(memory/cpu/pids、swap 关闭),pivot_root 进入只读最小根(tmpfs `/tmp` `/home` `/xdg`、全新 `/proc`、`/dev` 仅 null/zero/urandom),降权至非特权 uid;沙箱 netns **无默认路由**,唯一出口为 veth /30 上的 per-attempt egress 代理;沙箱未就绪绝不降级裸跑(失败 attempt 以 `failed/sandbox_violation` 终结)。
+  - **S-01 不可信配置隔离**:§1.4 固定 argv 模板、reserved env 合并后二次清洗、daemon 所有的只读 provider 配置、恶意 repo 文件枚举(ISO-09:`.mcp.json`/`.claude/settings*.json`/hooks/`CLAUDE.md` 仅作普通文件,绝不加载执行)。
+  - **S-02 唯一 ToolBroker 闸门**:SO_PEERCRED uid + cgroup 成员 + attempt nonce 三重校验;§3.3 动作→闸门唯一映射(未知动作 fail-closed;mount/提权/daemon 控制面/云元数据永久禁止,approval 亦不可放行);task token 代持与资源 scope 钉死;`confirm_required` 唯一协议=取消(awaiting_approval)+新 attempt 凭 resume_context 续跑,沙箱绝不挂起等待批准。
+  - **S-04 egress gateway**:可信解析→**全部**应答 IP 过滤(loopback/私有/link-local/多播/保留/文档/benchmarking/云元数据,IPv4-mapped 归一化;混入一个禁用 IP 即整次拒绝)→钉死建连;HTTP+CONNECT;3xx 不自动跟随(逐跳重验)。
+  - **checkout helper(§3.2)**:冻结 URL + allowlist + 公网地址闸门、精确 SHA checkout、只读凭证仅存在于 git 子进程环境(不进 remote URL / `.git/config` / provider env)。
+  - **S-08 幂等清理**:按序白名单拆除(broker→吊销→cgroup kill→挂载→产物→spool 门禁→journal 清理位),不跟随 symlink,拒绝 attempt 根外路径。
+  - **MES-98 P0 契约对齐**:claim/renew task token 字段、跨流统一日志 offset 水位、journal 在线迁移。
+  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 仍开发中,生产启用以最终安全复测为准。
+
+
+平台能力层·设计系统级:主题与暗色模式全功能实现(MES-81,theme.md 五章)。协商链闭合(T4:三值语义写死 + 工作区默认级 + 邀请页 preview 同源解析)、首帧防闪烁三级可执行链路(T7/H2:入口注入 → 分区 locator → skeleton)、token 构建期生成单一事实源、CI 四门禁(对比度独立关卡 / AST 硬编码扫描 / 双主题视觉回归 / forced-colors 仿真)、存量 CSS 债务零命中收口。
+
+### Added
+
+- **协商链闭合(theme.md §2.2)**:`users.settings.theme` 三值语义写死——`light`/`dark` 固定;显式 `system` **本级终止跟随 OS**(不回退工作区默认);**默认 absent/null = 未表达偏好,继承工作区默认**(与 i18n locale 链同构,「跟随 OS」与「继承工作区」不再压成同一值);「恢复跟随默认」实际写 `null`(PATCH `/users/me` 显式 null 清除,auth.md §3.1)。`workspaces.settings.default_theme` admin 入口(工作区设置三态选择,`workspace.updated` 实时联动——未设显式偏好的在线成员即时重解析应用,显式偏好成员忽略);未登录邀请接受页经公开 `GET /invitations/preview` 新增 `appearance.default_theme` 有限公开字段解析第 2 级(workspace.md §3.1 MES-76 H2,不开放完整 workspace detail 防枚举)。
+- **首帧防闪烁三级链路(§2.3)**:① **精确注入**——HTML 入口中间件(`mesh.web.entry`)读 `mesh_session` HttpOnly 会话 cookie(SHA-256 只读定位 `sessions`,撤销/过期即匿名),按路由路径段(`/w/{slug}/…` / `/invite/{token}`)解析协商链,注入非敏感二值 `window.__MESH_APPEARANCE__ = {"mode":"light|dark"}`(仅解析后模式,不含工作区标识/名称);个性化响应 `Cache-Control: private, no-store`,静态 shell 字节不变 `public, max-age=300`;CSP 双策略——注入路径 per-request nonce(两个内联脚本统一放行),静态 shell FOUC 脚本 sha256 哈希白名单,`script-src` 绝不 `unsafe-inline`;② **分区镜像** `mesh.theme.active` = `{id: 路由身份, mode}`——`id` 由 URL 同步推导(`{host}:w:{slug}` / `{host}:invite` / `{host}:app` / `{host}:anon`),**id 匹配校验先于 mode 读取**(跨 tab/跨路由残留值天然失效),mode 显式白名单非 `light|dark` 丢弃;解析完成/登录/切工作区单键回写,登出清理 locator + 遗留键;③ **中性 skeleton** 兜底——注入与 locator 均不可用时仅渲染与主题无关的灰阶骨架(`--color-skeleton-*` token),协商完成后应用权威解析;三级均保证不闪错主题(宁缺勿错)。compose 接线:nginx `@app` 反代 HTML 文档至 API 入口 + `frontend_dist` 共享卷(前端镜像写入、api 只读挂载)。
+- **token 单一事实源(§2.3/§5.4)**:`tokenValues.ts` 为唯一事实源,`scripts/gen-tokens.mjs` 构建期生成 `tokens.css` / `tokens-dark.css` / `tokens-print.css`(禁改头标记 + CI 幂等断言:生成后工作区无 diff;CSS↔TS 逐项一致测试保留为第二道防线)。新增语义 token:选区/强调(`--color-selection-*`/`--color-mark-*`,亮/暗各定义禁浏览器默认色)、骨架中性灰、代码高亮双色板(`--color-code-*`)、悬停/下沉表面、五个状态浅底;`AA_CONTRAST_PAIRS` 升级对象式配对表 32 对(text 4.5 / large-text·graphic 3.0,含字号/字重维度)。
+- **CI 门禁(§5.4)**:`check:contrast` 对比度独立关卡(亮/暗逐对,大文本组单列);AST 级硬编码色值扫描——Stylelint 自定义规则(CSS)+ ESLint 自定义规则(TS/TSX,共享 `lint-shared/color-grammar.mjs`),命中 hex/rgb/hsl/oklch/命名色/内联 style/SVG fill·stroke,放行 `var(--*)` 与 `transparent/currentColor/…` 及 forced-colors 块内系统色,**禁整文件白名单**——数据色例外经「行级 `mesh-data-color` 注释 + `theme-lint-exemptions.json` 逐文件登记」双要件(labels 数据色板已登记清偿);双主题视觉回归门禁——6 核心页(看板/issue 详情/成员/聊天/运行详情/收件箱)× light/dark × 1024×768/768×1024 = 24 个 `toHaveScreenshot`(`maxDiffPixelRatio 0.01`,确定性环境:内置 Noto Sans SC 字体锁定 + `page.clock` 冻结 + UTC/zh-CN + 动态区 locator mask,基线入库,CI 只比对不更新,基线更新经独立 `--update-snapshots` PR 审批);forced-colors 仿真验收(核心页矩阵系统色重映射 Canvas/CanvasText/Highlight/GrayText/LinkText 断言 + 显式 border/`forced-color-adjust` 声明点)+ PR 模板 Windows 高对比真机核对清单。
+- **暗色细部(§4.3)**:`::selection`/`<mark>` 经选区 token(亮/暗各定义);`input:-webkit-autofill` 表面色校正(覆盖浏览器黄/蓝底);`prefers-reduced-transparency` scrim 不透明降级;`prefers-contrast: more` 边界/文本增强(token 再赋值非第三套主题);`@media (forced-colors: active)` 语义 token 重映射系统色 + raised 表面显式 border + `.mesh-forced-colors-keep` 自证对比区声明点;`@media print` 强制亮色(tokens-print.css);UGC 内联色对比兜底(评论/聊天/方案渲染后扫描,与表面色对比 <4.5:1 回退 `var(--color-text)`,主题变更事件重扫)+ markdown 代码块主题感知双色板。
+- **偏好健壮性(§4.5)**:pending 写失败分区队列 `mesh.settings.pending:{host}:{user_id}:{workspace_id}`(条目内嵌三元组;重放前主体校验不符不重放;冲突策略服务端回填优先——重放前 GET `/me` 比对 `updated_at`,服务端较新则丢弃 pending 采用服务端值;重试上限;`online`/前台恢复/下次写入触发);登录回填 `usePreferencesBootstrap`(GET `/me` 服务端覆盖本地同名镜像,匿名本地值不充当账号偏好);跨标签页 `storage` 事件即时同步偏好与 locator;`meta theme-color` 亮/暗双声明 + 显式切换 JS 联动。
+- **错误码升格(§3.3)**:非法主题值统一具名码 `422 invalid_theme_mode`(`details.theme/supported` 供本地化),取代通用 `validation_error`,auth.md/workspace.md 错误码表已同步登记;前端 `PreferenceSyncError` 归一 + i18n 文案(zh-CN/en,目录版本哈希重算)。
+- **设置 UI(§4.1)**:个人外观四态选择——「跟随默认(X)」(占位标注当前解析值,写 null;全局页无工作区上下文落 system 解析,文案不声称工作区来源,hint 标注「工作区页面跟随工作区默认、全局页面跟随系统外观」)/浅色/深色/「跟随系统(X)」(标注 OS 当前解析值,语义为忽略工作区默认);工作区设置默认主题三态入口(admin,成员未单独设置时生效)。
+
+### Verified
+
+- **真实 e2e(生产形态栈:nginx 前门 → API HTML 入口)**:无闪错三场景全绿——A(默认暗)→B(默认浅)首帧即 B 主题无「先暗后浅」(data-theme 帧序列取证不含 dark)/ 换账号残留 locator(id 不符)不串用 + 解析后按当前路由身份重写 / 邀请接受页未登录首帧即邀请工作区默认暗色(preview 同源注入);注入链路断言(入口 HTML `__MESH_APPEARANCE__` 与协商结果一致、不含 slug 等可枚举信息);缓存边界(匿名 public + sha256 CSP / 个性化 private,no-store + nonce CSP,script-src 无 unsafe-inline);locator 白名单(非法 mode 丢弃);视觉回归 24 用例连跑三轮零 diff;forced-colors 仿真 14 断言绿;默认 mock e2e 套件 30 绿。
+- **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 通过;前端全局覆盖率 97.4/90.9/94.4/97.4(双门禁通过);`tsc` 净、eslint/stylelint 0 错、对比度关卡 32 对 ×2 主题全过、gen:tokens 幂等。
+
+### Fixed
+
+- **mesh-runtime A2 验收打回整改(MES-100,PR #74 第 2 轮)**:按验收员 14 项阻断清单逐条修复并补真实负向测试——
+  - **钉入必修×3**:① spool×sealed 交错残留——sealed flush 在 spool 回放后继续收集内存缓冲批、sealed 钉在真正最后一批;sealed flush 瞬态失败按有界退避重试(尊重 Retry-After、分钟级封顶),重试耗尽降级 `failed/log_flush_failed`(绝不以 completed 认证不完整日志),spool/journal 保留交启动对账续传;② 崩溃残留清理——启动对账收口 spool/work dir/sandbox cgroup/宿主侧 veth 残留(`terminal_seal_pending` 行先尽力回放+sealed 再清;包含校验的按 attempt 清理 + 全盘扫描,拒绝 work root 外路径);③ 500ms 独立 flush timer——稀疏流不等下一行,定时器按 §3.9.2「任一条件即发送」发送,事件驱动测试覆盖。
+  - **B4 [HIGH] checkout SSRF**:platform-managed checkout 在 git fetch 前对 repo host 走可信解析 + 全应答 IP 过滤,并以 `http.curloptResolve` 将连接钉死到已验证 IP(消除 rebinding 窗口);不可钉死 scheme 拒绝;self-hosted 豁免为设计使然,心跳新增 `checkout_public_address_gate` 能力位。**B5**:`base_sha` 缺失 fail-closed(绝不抓移动分支 ref 跳过校验)。
+  - **B6**:ISO-12 名实相符——新增 §5.2 枚举的跨解析 rebinding(先公网后私网/元数据)真实负向;重定向元数据子用例改为真实 traverse 302 且由生产 IP 过滤器(而非端口闸门)拒绝。**B7**:`max_redirects` 冻结上限真实生效(3xx 按 attempt 记账,超限拒绝中继)。**B8**:egress 代理钉死 per-attempt veth host IP(`IP_FREEBIND` 预绑),不再 `0.0.0.0` 暴露。
+  - **B9**:broker cgroup 校验分支真实负向/正向测试(真实 `/proc/<peer>/cgroup`)。**B10**:`issue.comment`/`issue.status` 幂等键门禁(缺键 fail-closed、同键重放不二次执行、失败不缓存)。**B11**:EXEC 门禁补 pid/ipc/uts namespace 比对。**B12**:reserved env 二次清洗补全(泛型 `_TOKEN/_SECRET/_KEY/_CREDENTIAL/_PASSWORD/_APIKEY` 后缀 + 代理族 + `NPM_TOKEN`)。
+  - **安全审核员 LOW 清单**:token fstat 复核补 0600 mode + 超限读拒绝(不静默截断)、journal 以 `os.open` 0600 预建消除 umask 窗口、runtime token 纳入脱敏集、Retry-After 全链路分钟级封顶(claim/heartbeat/sealed-flush 统一 `capped_retry_after`)。
+  - **文档**:spec 新增 §4.4.1 实现跟踪台账(A2 验收冻结登记非阻断项:非 root/userns 随 S-12、argv/provider 配置端到端强制随 A3 等)。
+
+## [0.20.0] - 2026-07-30
+服务端 P0 契约冻结落地(MES-91 阶段2 · MES-98,六轮验收收口):runtime 执行体服务端契约全面 Spec 化并对齐实现,为本地执行体(MES-94)联调放行。
+
+### Added
+
+- **Server P0 契约六项落地(MES-98,runtime-executor.md §2.1～2.6 / auth.md §2.5.1)**:
+  - **完整冻结快照(§2.1)**:`build_config_snapshot` 冻结完整 AttemptSpec(provider/model/effort/system_instructions/budget/network_policy/data_policy/skill 版本);assign/mention/autopilot 经统一入口解析 agent 真实配置(修复 mention 空配置 enqueue)并随 claim 下发;新增 SHA-256 快照摘要(`compute_snapshot_digest`)供 daemon 校验完整性。
+  - **任务级 Mesh 身份(§2.2 S-05)**:新增 `attempt_task_tokens` 表与 `task_tokens` 服务——claim 签发绑定 workspace/agent/execution/attempt/lease_seq 的短期 `mesh_task_` token(仅存 hash、明文一次性下发、默认禁 `agent:trigger` 防回环);renew 轮换,终态/reclaim/freeze/runtime 下线五路同事务吊销;`validate_task_token` 全校验(在途/lease_seq/runtime 归属/资源 scope/token+attempt 双维度限速);`/api/v1/task/*` 端点经 `resolve_task_principal` 依赖接线;task 沙箱不注入长期 PAT,token 不入 `api_tokens`。
+  - **结构化结果(§2.6)**:`execution_attempts` 类型化列(provider/provider_version/provider_session_id/model/prompt/completion/cache tokens/cost_usd/num_turns)+ 版本化 result schema 解析。
+  - **issue 完成闭环(§3.7 S-09)**:`result_sink` 消费 `execution.finished`——非 squad 的 assign/mention 触发经 `CommentService` 真实 API 写结果评论(suppress_triggers 防回环 + 幂等键;squad 走既有 relay 闭环;stub 结果与独立闭环触发器跳过)。
+  - **协议协商(§2.6)**:activate/heartbeat 接收 protocol_version/provider_manifest/daemon_features 并落库。
+- **task principal 真实 HTTP e2e**:`test_task_routes_e2e.py` 4 条全链路测试(注册→建区→agent→runtime 激活→enqueue→claim 实领 token→task 路由 200/401 断言,零 mock);新增 21 条 task token/脱敏/result sink 真实 DB 测试。
+
+### Changed
+
+- **runtime token 单一真源(§2.4 S-11)**:移除 `runtimes.runtime_token_id` FK 与 `api_tokens` 双写,`runtimes.runtime_token_hash` 为唯一真源;迁移 0029 吊销并清理旧 runtime token 行、重建 `mesh_runtime_by_token_hash` SECURITY DEFINER 引导函数(剔除已删列);`daemon_auth` 仅校验 hash。
+- 模型-迁移对齐:`cost_usd` Numeric(16,6)、`redaction_hits`/`snapshot_schema_version` nullable、claim 请求唯一索引入模型(drift 门禁绿)。
+
 ### Security
 
+- **S-06 全通道脱敏服务端兜底(安全放行附带条件,ISO-13)**:`attempts.py` 终态 result 持久化前 `redact_result()`、`checkout.py` diff 持久化前 `redact_diff_text()`,与 daemon 首层脱敏对齐(命中计数 + 告警链路)。
+- **task token fail-closed**:过期/吊销/非在途/lease_seq 或 runtime 不匹配/scope 越权一律 401;非 task 路由拒绝 `mesh_task_`;task 路由 token+attempt 双维度限速。
 - **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
   - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
   - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
@@ -21,6 +84,14 @@ Mesh 项目的所有重要变更都记录于此文件。
   - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
   - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
   - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+
+### Fixed
+
+- **onboarding t34 通知不变量回归**:result_sink 无条件结果评论破坏 `latest_comment_id` 精确匹配——触发门禁(仅 assign/mention)+ 内容门禁(stub 结果跳过)修复(第四轮验收三组基线对照实验锁定根因)。
+
+### 验证
+
+- 六轮验收干净环境实测收口:backend-ci 全绿(3004 passed / 0 failed,ruff 净,TOTAL 覆盖率 92% ≥90% 门禁);task principal 全链路真实 HTTP 实测(claim 实领 token → 200,伪造/console token → 401);S-11 干净库迁移实测(引导函数正常、旧 token 401);onboarding 基线对照实验(合入前基线绿 / 当前红 / 仅禁用 result_sink 绿)锁定回归归属并修复。
 
 ## [0.19.1] - 2026-07-29
 Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。

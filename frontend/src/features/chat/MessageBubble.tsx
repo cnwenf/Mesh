@@ -7,6 +7,7 @@
  */
 import type { MeshApiClient } from '../../api';
 import { Button } from '../../design';
+import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { formatRelativeTime, useT } from '../../i18n';
 import { renderMarkdownPreview } from '../comments/markdown';
 import { MessageAttachments } from './MessageAttachments';
@@ -36,6 +37,7 @@ export interface MessageBubbleProps {
 
 export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
   const t = useT();
+  const ugcGuard = useUgcColorGuard();
   const { message } = props;
 
   // §6.15:system 消息承载的是给模型的「不可信上下文」围栏(UNTRUSTED CONTEXT),
@@ -119,7 +121,9 @@ export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
       <div
         className="mesh-chat__bubble-body"
         data-testid={`chat-body-${message.id}`}
+        ref={ugcGuard}
         // 聊天 content 为原始 Markdown:marked 解析后经 DOMPurify 白名单净化(markdown.ts)。
+        // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
         dangerouslySetInnerHTML={{ __html: bodyHtml }}
       />
       {isStreaming ? (

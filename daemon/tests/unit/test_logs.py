@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from mesh_runtime.api import LogAck
@@ -101,15 +103,33 @@ class TestOffsets:
         entry = await journal.get(ctx.attempt_id)
         assert entry.log_offset_stdout == 5
 
-    async def test_separate_offsets_per_stream(self, journal, ctx):
+    async def test_offset_is_unified_across_streams(self, journal, ctx):
+        # Server contract (MES-98): start_offset is cumulative BYTES per attempt
+        # across BOTH streams. A stderr batch must continue where stdout ended,
+        # never restart at 0 — otherwise the server 409s offset_mismatch.
         api, clock = StubApi(), FakeClock()
         up = uploader(api, journal, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", "abc")
-        await up.submit(ctx, "stderr", "xy")
+        await up.submit(ctx, "stdout", "abc")  # [0, 3)
+        await up.submit(ctx, "stderr", "xy")   # must start at 3, not 0
+        stderr_calls = [c for c in api.calls if c["stream"] == "stderr"]
+        assert stderr_calls[0]["start_offset"] == 3
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 3
-        assert entry.log_offset_stderr == 2
+        assert entry.log_offset_stdout == 5
+        assert entry.log_offset_stderr == 5
+
+    async def test_interleaved_streams_keep_single_watermark(self, journal, ctx):
+        api, clock = StubApi(), FakeClock()
+        up = uploader(api, journal, clock=clock, batch_lines=1)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "aaaa")  # [0, 4)
+        await up.submit(ctx, "stderr", "bb")    # [4, 6)
+        await up.submit(ctx, "stdout", "cc")    # [6, 8)
+        starts = [(c["stream"], c["start_offset"]) for c in api.calls]
+        assert starts == [("stdout", 0), ("stderr", 4), ("stdout", 6)]
+        entry = await journal.get(ctx.attempt_id)
+        assert entry.log_offset_stdout == 8
+        assert entry.log_offset_stderr == 8
 
 
 class TestRedaction:
@@ -243,6 +263,74 @@ class TestNoLossAndSpool:
             await up.flush(ctx, sealed=True)
         assert spool.has_pending(ctx.attempt_id, "stdout")  # retained for next run
 
+    async def test_sealed_flush_replays_spooled_batch_then_sparse_tail_seals_last(
+        self, journal, ctx, tmp_path
+    ):
+        """Pinned negative scenario: a mid-stream transient 5xx leaves batch A
+        durable on disk, a sparse tail B never reaches a send threshold and
+        stays in memory, and the attempt then ends. The sealed flush must
+        upload A, THEN B, and land ``sealed`` on the TRUE last batch (B) —
+        never on the replayed spool batch, never drop B."""
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "AAAA")  # batch A buffered
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)  # A spooled, upload failed -> on disk
+        assert spool.has_pending(ctx.attempt_id, "stdout")
+        await up.submit(ctx, "stdout", "bb")  # sparse tail B: below threshold
+        assert len(api.calls) == 1  # B not uploaded yet
+
+        await up.flush(ctx, sealed=True)  # attempt ends -> terminal flush
+
+        stdout_calls = [c for c in api.calls if c["stream"] == "stdout"]
+        assert len(stdout_calls) == 3  # failed A + replayed A + continuation B
+        replay_a, tail_b = stdout_calls[1], stdout_calls[2]
+        assert replay_a["lines"] == ["AAAA"]
+        assert replay_a["start_offset"] == 0
+        assert replay_a["sealed"] is False  # sealed must NOT ride the replay
+        assert tail_b["lines"] == ["bb"]
+        assert tail_b["start_offset"] == 4  # continues right after A's bytes
+        assert tail_b["sealed"] is True  # sealed lands on the TRUE last batch
+        entry = await journal.get(ctx.attempt_id)
+        assert entry.log_offset_stdout == 6
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+
+    async def test_sealed_flush_failure_retry_replays_all_and_seals_last(
+        self, journal, ctx, tmp_path
+    ):
+        """If the first SEALED attempt fails transiently while replaying the
+        spooled batch, the in-memory tail is already durable (spooled before
+        upload) and the supervisor's retry replays BOTH batches in order,
+        sealing only the true last one."""
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "AAAA")
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)  # A on disk
+        await up.submit(ctx, "stdout", "bb")  # B in memory
+        api.errors = [ServerError("500")]
+        with pytest.raises(ServerError):
+            await up.flush(ctx, sealed=True)  # first sealed attempt fails on A
+        # B was made durable as the continuation BEFORE the failed upload.
+        pending = spool.pending(ctx.attempt_id, "stdout")
+        assert [(b.start_offset, b.lines) for b in pending] == [
+            (0, ("AAAA",)),
+            (4, ("bb",)),
+        ]
+        await up.flush(ctx, sealed=True)  # supervisor retry
+        stdout_sealed = [
+            c for c in api.calls if c["stream"] == "stdout" and c["sealed"]
+        ]
+        assert len(stdout_sealed) == 1
+        assert stdout_sealed[0]["lines"] == ["bb"]
+        assert stdout_sealed[0]["start_offset"] == 4
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+
     async def test_spool_full_backpressures_and_preserves_lines(self, journal, ctx, tmp_path):
         api, clock = StubApi(), FakeClock()
         spool = LogSpool(tmp_path / "spool", max_bytes=2)  # too small for "abcd"
@@ -271,3 +359,118 @@ class TestNoLossAndSpool:
         assert retry["start_offset"] == 4
         assert not spool.has_pending(ctx.attempt_id, "stdout")
 
+
+
+class TestIntervalTimer:
+    """§3.9.2 "any condition sends": the 500 ms arm must fire on its own
+    clock — a sparse stream (one line, then silence) cannot wait for the next
+    line, which may never come before finalize."""
+
+    async def test_flush_due_sends_sparse_stream_without_new_lines(self, journal, ctx):
+        """Deterministic core: once the batch interval has elapsed, flush_due
+        sends the buffered line even though no further submit() ever ran."""
+        api, clock = StubApi(), FakeClock()
+        up = uploader(
+            api, journal, clock=clock,
+            batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
+        )
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "lonely")
+        assert api.calls == []  # below every threshold
+        clock.advance(0.6)
+        await up.flush_due()  # interval elapsed -> sends, NO new line needed
+        assert len(api.calls) == 1
+        assert api.calls[0]["lines"] == ["lonely"]
+        assert api.calls[0]["sealed"] is False  # timer flushes are never sealed
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        await up.flush_due()  # idempotent — buffer already drained
+        assert len(api.calls) == 1
+
+    async def test_flush_due_noop_before_interval(self, journal, ctx):
+        """Negative anchor: before the interval elapses, flush_due sends
+        nothing — the line still needs the next line / a threshold."""
+        api, clock = StubApi(), FakeClock()
+        up = uploader(
+            api, journal, clock=clock,
+            batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
+        )
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "lonely")
+        clock.advance(0.49)
+        await up.flush_due()
+        assert api.calls == []
+
+    async def test_timer_task_flushes_sparse_stream_without_new_lines(self, journal, ctx):
+        """Wiring: the background tick task drives flush_due on its own —
+        proved by an Event (no yield-count polling race)."""
+        flushed = asyncio.Event()
+        api = StubApi()
+        original = api.append_logs
+
+        async def append_and_signal(*args, **kw):
+            ack = await original(*args, **kw)
+            flushed.set()
+            return ack
+
+        api.append_logs = append_and_signal
+        clock = FakeClock()
+        up = uploader(
+            api, journal, clock=clock,
+            batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
+        )
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "lonely")
+        await up.start_ticking()
+        try:
+            await asyncio.wait_for(flushed.wait(), timeout=5)
+        finally:
+            await up.stop_ticking()
+        assert api.calls[0]["lines"] == ["lonely"]
+        assert api.calls[0]["sealed"] is False
+
+    async def test_timer_survives_transient_upload_failure(self, journal, ctx):
+        """A transient failure on a due flush must not kill the timer: the
+        re-buffered lines go out on a later tick."""
+        attempts = {"n": 0}
+        recovered = asyncio.Event()
+        api = StubApi()
+        original = api.append_logs
+
+        async def flaky_append(*args, **kw):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise ServerError("500")
+            ack = await original(*args, **kw)
+            recovered.set()
+            return ack
+
+        api.append_logs = flaky_append
+        clock = FakeClock()
+        up = uploader(
+            api, journal, clock=clock,
+            batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
+        )
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "retry-me")
+        await up.start_ticking()
+        try:
+            await asyncio.wait_for(recovered.wait(), timeout=5)
+
+            async def watermark_caught_up() -> None:
+                while (await journal.get(ctx.attempt_id)).log_offset_stdout == 0:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(watermark_caught_up(), timeout=5)
+        finally:
+            await up.stop_ticking()
+        assert api.calls[-1]["lines"] == ["retry-me"]  # same lines, not lost
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 8
+
+    async def test_stop_ticking_is_idempotent(self, journal, ctx):
+        api, clock = StubApi(), FakeClock()
+        up = uploader(api, journal, clock=clock)
+        await seed(journal, ctx)
+        await up.stop_ticking()  # never started -> no-op
+        await up.start_ticking()
+        await up.stop_ticking()
+        await up.stop_ticking()  # second stop -> no-op

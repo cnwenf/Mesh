@@ -148,6 +148,11 @@ services:
       # optional external marketplace listings API. Empty = public-only / no market.
       MESH_SKILL_SOURCE_HOST_ALLOWLIST: ${MESH_SKILL_SOURCE_HOST_ALLOWLIST:-}
       MESH_SKILL_MARKETPLACE_URL: ${MESH_SKILL_MARKETPLACE_URL:-}
+      # theme.md §2.3 ①: the HTML entry serves the built SPA from the shared
+      # frontend_dist volume (populated by the frontend service at startup).
+      MESH_FRONTEND_DIST_DIR: /srv/mesh/frontend
+    volumes:
+      - frontend_dist:/srv/mesh/frontend:ro
     ports:
       - "127.0.0.1:${MESH_API_PORT:-8000}:8000"
     depends_on:
@@ -208,8 +213,12 @@ services:
   frontend:
     # Real SPA front-door (H5): builds the bundle and serves it same-origin via
     # nginx, reverse-proxying /api → api and /ws → gateway (no CORS needed).
+    # Also publishes the build into the shared frontend_dist volume so the api
+    # HTML entry can render the personalized shell (theme.md §2.3 ①).
     build:
       context: ./frontend
+    volumes:
+      - frontend_dist:/dist
     ports:
       - "127.0.0.1:${MESH_FRONTEND_PORT:-3001}:80"
     depends_on:
@@ -219,3 +228,6 @@ services:
 volumes:
   mesh_pgdata:
   mesh_minio_data:
+  # Built SPA shared between the frontend image (writer, at startup) and the
+  # api service (read-only, HTML entry template source).
+  frontend_dist:
