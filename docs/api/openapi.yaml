@@ -8591,6 +8591,58 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/task/context:
+    get:
+      tags:
+      - task-principal
+      summary: Get Task Context
+      description: 'Read the current attempt''s frozen context (§2.2 S-05).
+
+
+        Returns the execution/attempt/issue identifiers and frozen scopes
+
+        from the task token. The task sandbox uses this to know what
+
+        resources it can access.'
+      operationId: get_task_context_api_v1_task_context_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get Task Context Api V1 Task Context Get
+  /api/v1/task/executions/{execution_id}:
+    get:
+      tags:
+      - task-principal
+      summary: Get Task Execution
+      description: Read execution status — scoped to the token's attempt (§2.2 S-05).
+      operationId: get_task_execution_api_v1_task_executions__execution_id__get
+      parameters:
+      - name: execution_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Execution Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Task Execution Api V1 Task Executions  Execution Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/skills:
     get:
       tags:
