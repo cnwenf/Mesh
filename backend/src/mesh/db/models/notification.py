@@ -67,7 +67,7 @@ ACTOR_KIND_VALUES = ("member", "system")
 SUBSCRIPTION_REASON_VALUES = ("creator", "assignee", "mentioned", "participated", "manual")
 EMAIL_POLICY_VALUES = ("none", "realtime", "digest")
 DELIVERY_CHANNEL_VALUES = ("in_app", "email", "websocket", "im")
-DELIVERY_PROVIDER_VALUES = ("feishu", "slack", "email_smtp")
+DELIVERY_PROVIDER_VALUES = ("feishu", "slack", "dingtalk", "email_smtp")
 DELIVERY_STATE_VALUES = ("pending", "sent", "failed")
 
 
@@ -306,5 +306,20 @@ class NotificationDelivery(Base):
             ("notifications.workspace_id", "notifications.id"),
             ondelete="CASCADE",
             name="notification_delivery_notification_id_notifications",
+        ),
+        # Deferred composite FKs landed by the integrations module (0029,
+        # README §6.2 rule 6): integration/binding delete only NULLs the
+        # routing columns — ledger rows survive for troubleshooting.
+        ForeignKeyConstraint(
+            ("workspace_id", "integration_id"),
+            ("integrations.workspace_id", "integrations.id"),
+            ondelete="SET NULL (integration_id)",
+            name="fk_delivery_integration",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "binding_id"),
+            ("integration_bindings.workspace_id", "integration_bindings.id"),
+            ondelete="SET NULL (binding_id)",
+            name="fk_delivery_binding",
         ),
     )

@@ -151,6 +151,19 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - **OAuth 授权码 + PKCE(§3.1)**:`authorize` 302(S256 challenge + 单次消费 state)、回调换取 token(refresh token 仅存密文,最小 scope),失败 `oauth_failed`。
 - **前端(§4)**:集成管理页(连接器目录卡片 + 已连接列表 + OAuth/粘贴 token 添加,密钥掩码)、集成详情(概览/绑定抽屉——作用域异或 + 匹配规则 + 目标 agent「留空=仅审计」提示/事件台账——签名/处理状态徽章 + 载荷预览标注不可信数据 + rejected/deduped 高亮)、出向订阅页(密钥仅显示一次对话框 + 投递时间线 + 熔断横幅/恢复 + 手动重试)、外部身份建链/解链面板、issue 侧栏 VCS 关联区块;i18n 全外部化(zh-CN + en,per-file 90% 门禁);异常态矩阵(loading/empty/permission/offline/retry)。
 
+- **验收整改第一轮(验收员 04:32 打回清单全量收口)**:
+  - **出向投递真事件(HIGH-1,§3.4 行 599/P8)**:派发时捕获 `event_type`/`payload` 落 `webhook_subscription_deliveries` 新列;worker 的 `Mesh-Event` 头填**真实事件类型**(如 `issue.updated`),body = `{event, data, event_ref, delivery_id}`——订阅方从单个投递即可还原域事件(不再是两个不透明 UUID)。
+  - **测试连接 / 发送测试事件(HIGH-P1)**:`POST …/integrations/{id}:test`(轻量平台 API 只读往返:飞书 tenant_access_token / Slack auth.test / 钉钉 gettoken / GitHub·GitLab 身份端点;分类 healthy/auth_failed/unreachable,结果驱动连接器健康字段)+ `POST …/webhook-subscriptions/{id}:send-test`(合成 `webhook.test` 走完整签名+投递+台账)。
+  - **连接器健康度(MEDIUM-P2)**:`integrations` +`health_state`/`last_error`/`last_success_at`(§2.2);`:test` 与凭据校验结果驱动迁移;前端 §4.1 徽章 + `auth_failed`「重新授权」联动。
+  - **OAuth 回调持久化凭据(MEDIUM-1,§3.1 行 523)**:回调同程建集成行,refresh token(无则 access token)加密落 `secret_ref`;state 携带 `name`,成功重定向带集成 ID。
+  - **出向 SSRF DNS rebinding TOCTOU 闭合(MEDIUM-2)**:复用 `skill/ssrf.py` `resolve_pinned`(解析一次 + 全址校验 + pinned),httpx 自定义 network backend 只连已验证地址(TLS SNI/证书仍按原主机名),消除二次解析窗口;真实套接字负向用例。
+  - **入站 DoS 加固(MEDIUM-3)**:六端点 per-IP 滑窗限流(共享预算 429)+ body 1MiB 上限(413,预检 + 实读复检)+ rejected 台账载荷 16KiB 截断(取证前缀 + 原始字节数)。
+  - **台账保留窗口(MEDIUM-P3)**:`integration_ledger_retention_loop`(默认 30 天,GitHub 投递日志同级)清理 `integration_events` + `webhook_subscription_deliveries`(**pending 绝不删**)。
+  - **成功包络(MEDIUM-4)**:`POST /workspaces/{ws}/integrations` 响应套 `{"data"}`(§6.14 唯一偏差端点收口)。
+  - **VCS 三修(LOW)**:抢关 409 `ConflictError`(§5.2/§3.5)、`GET /issues/{id}/vcs-links` 仅返 active(§3.3)、render 对 `*_ref` 密文恒脱敏(§6.16 纵深)。
+  - **前端支撑字段**:已连接列表「近7天事件量」(`events_7d`)、订阅列表「成功率」(`success_rate` + 投递计数)、VCS 深链可点(`url` 字段,github/gitlab PR·MR·branch·commit·repo 映射)。
+  - **MES-82 rebase 衔接**:迁移 0029 含 `im_dingtalk` kind / `stream_state` 列 / provider +dingtalk / `integration_message_queue` + `execution_context_appends` 两表(与 T39 可执行参照逐约束对账)/ `notification_delivery` +dingtalk 与路由 FK / outbox `available_at` + 重键 pending 索引(relay 领取谓词 `available_at <= now()`,RetryableDelay 只后移不消耗失败预算)。
+
 ### Verified
 
 - 真实 e2e(真实起服 + 真实 worker):T29 全断言(全局键抢绑 409 / scope 异或 / 项目级联 / 多工作区身份模型 + 建链工作区删除映射保留 / 结构与 RLS 负向 / 解链无旁路);签名拒绝 + 重放拒绝 + 去重幂等 + 防预占 + 停用拒绝;入站经真实 relay 落 `task_executions`(trigger='integration' + §6.9 幂等键);VCS 流程 C(PR 合并 → 自动置 done + 关联 + 评论,重复事件幂等);出向投递台账/重试/熔断/恢复;https-only + SSRF。
