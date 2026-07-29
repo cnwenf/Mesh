@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Fixed
+
+- **integrations 迁移链单头修复**:integrations 迁移重编号 `0030 → 0033`(`0030_integrations.py → 0033_integrations.py`;`revision` 0030→0033、`down_revision` 改接主干 device-auth 链 head `0032`)——MES-80 device-auth 链(`0030`/`0031`/`0032`)先期合入 main 后,原 `0030_integrations` 与之形成 alembic 多头及 revision ID 碰撞;重编号后 `alembic upgrade head` 单头单链(0001 → 0033)。纯链修复:无 DDL 变更,`0030_integrations` 从未随任何已发布 tag 落地,线上无迁移数据影响。
+
 ## [0.22.0] - 2026-07-30
 
 平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 371 例(覆盖率 98.65%) + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2526 例全绿 + typecheck 净。
@@ -141,7 +145,7 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 
 ### Added
 
-- **数据模型(integrations.md §2,迁移 0030)**:七表——`integrations`(kind∈im_feishu/im_slack/vcs_github/vcs_gitlab/webhook_outbound,非密 `config` + 密文 `secret_ref`)·`integration_bindings`(**外部身份全局唯一键** `UNIQUE(provider, provider_tenant_key, external_ref)`,跨工作区抢绑 INSERT 即拒 409 `binding_conflict`;scope 精确异或 CHECK;项目级绑定随项目物理删除 `ON DELETE CASCADE`;`bound_agent_id` 列级 `SET NULL`)·`integration_events`(同构 autopilot `webhook_events`:`UNIQUE(integration_id, external_event_id)` 去重 + `rejected:<body-hash>` 独立命名空间防预占)·`external_identities`(**全局身份表**:映射 `users.id`、`UNIQUE(provider, provider_tenant_key, external_user_key)`、`created_in_workspace_id ON DELETE SET NULL` 仅审计、用户注销级联;无 workspace RLS)·`webhook_subscriptions` + `webhook_subscription_deliveries`(`UNIQUE(subscription_id, event_ref)` 投递幂等)·`vcs_links`(active 部分唯一键 + 同租户复合 FK);全部 §2.8 索引 + fail-closed RLS + SECURITY DEFINER 引导函数(按 kind/config 定位集成、绑定路由、资源→工作区解析、`external_identity_unlink_allowed()` 可执行参照)。
+- **数据模型(integrations.md §2,迁移 0033)**:七表——`integrations`(kind∈im_feishu/im_slack/vcs_github/vcs_gitlab/webhook_outbound,非密 `config` + 密文 `secret_ref`)·`integration_bindings`(**外部身份全局唯一键** `UNIQUE(provider, provider_tenant_key, external_ref)`,跨工作区抢绑 INSERT 即拒 409 `binding_conflict`;scope 精确异或 CHECK;项目级绑定随项目物理删除 `ON DELETE CASCADE`;`bound_agent_id` 列级 `SET NULL`)·`integration_events`(同构 autopilot `webhook_events`:`UNIQUE(integration_id, external_event_id)` 去重 + `rejected:<body-hash>` 独立命名空间防预占)·`external_identities`(**全局身份表**:映射 `users.id`、`UNIQUE(provider, provider_tenant_key, external_user_key)`、`created_in_workspace_id ON DELETE SET NULL` 仅审计、用户注销级联;无 workspace RLS)·`webhook_subscriptions` + `webhook_subscription_deliveries`(`UNIQUE(subscription_id, event_ref)` 投递幂等)·`vcs_links`(active 部分唯一键 + 同租户复合 FK);全部 §2.8 索引 + fail-closed RLS + SECURITY DEFINER 引导函数(按 kind/config 定位集成、绑定路由、资源→工作区解析、`external_identity_unlink_allowed()` 可执行参照)。
 - **入站摄取(§3.2,复用 autopilot 范式)**:四平台签名(飞书 `SHA256(ts+nonce+encrypt_key+body)` / Slack `v0=HMAC_SHA256` / GitHub `X-Hub-Signature-256` / GitLab 共享密钥或 HMAC)恒定时间比较 + 时间戳防重放;签名无效/缺失 → 401 + 审计,**绝不分发**;飞书/Slack `url_verification` challenge;集成停用 401 `integration_disabled`;匹配绑定后经 §6.9 同事务写 `execution.enqueue`(trigger='integration',幂等键 `sha256(agent_id|binding_id|external_event_id)`,§6.11 快照,载荷经 §6.15 `untrusted_context` 隔离);未绑定/未匹配 agent 仅审计;`integration.event_ingested` 实时台账。
 - **连接器(§5.2)**:飞书/Lark(`im.message.receive_v1` 归一、tenant_key)、Slack(Events API、team_id 路由)、GitHub(installation 路由、PR/push 归一)、GitLab(绑定路由、MR Hook 归一);新增连接器 = 三个适配点。
 - **外部身份建链/解链(§3.1,HIGH-1/R4/R5)**:一次性验证码投递至该外部账号私聊(dev 经 Redis dev-outbox;生产经平台 API),10 分钟 TTL + 单次消费;建链目标固定请求者本人 `users.id`(不接受指向他人的参数);重复建链 409 `identity_already_linked`;**全局解链仅映射所属 `users.id` 本人,工作区 admin/owner 无旁路**(403 `identity_unlink_forbidden`,`external_identity_unlink_allowed()` 仅比对 users.id);建链/解链审计留痕。
@@ -162,7 +166,7 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
   - **成功包络(MEDIUM-4)**:`POST /workspaces/{ws}/integrations` 响应套 `{"data"}`(§6.14 唯一偏差端点收口)。
   - **VCS 三修(LOW)**:抢关 409 `ConflictError`(§5.2/§3.5)、`GET /issues/{id}/vcs-links` 仅返 active(§3.3)、render 对 `*_ref` 密文恒脱敏(§6.16 纵深)。
   - **前端支撑字段**:已连接列表「近7天事件量」(`events_7d`)、订阅列表「成功率」(`success_rate` + 投递计数)、VCS 深链可点(`url` 字段,github/gitlab PR·MR·branch·commit·repo 映射)。
-  - **MES-82 rebase 衔接**:迁移 0030 含 `im_dingtalk` kind / `stream_state` 列 / provider +dingtalk / `integration_message_queue` + `execution_context_appends` 两表(与 T39 可执行参照逐约束对账)/ `notification_delivery` +dingtalk 与路由 FK / outbox `available_at` + 重键 pending 索引(relay 领取谓词 `available_at <= now()`,RetryableDelay 只后移不消耗失败预算)。
+  - **MES-82 rebase 衔接**:迁移 0033 含 `im_dingtalk` kind / `stream_state` 列 / provider +dingtalk / `integration_message_queue` + `execution_context_appends` 两表(与 T39 可执行参照逐约束对账)/ `notification_delivery` +dingtalk 与路由 FK / outbox `available_at` + 重键 pending 索引(relay 领取谓词 `available_at <= now()`,RetryableDelay 只后移不消耗失败预算)。
 
 ### Verified
 

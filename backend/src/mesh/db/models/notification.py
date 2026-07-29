@@ -307,7 +307,7 @@ class NotificationDelivery(Base):
             ondelete="CASCADE",
             name="notification_delivery_notification_id_notifications",
         ),
-        # Deferred composite FKs landed by the integrations module (0029,
+        # Deferred composite FKs landed by the integrations module (0033,
         # README §6.2 rule 6): integration/binding delete only NULLs the
         # routing columns — ledger rows survive for troubleshooting.
         ForeignKeyConstraint(
