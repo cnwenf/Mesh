@@ -2,7 +2,6 @@
 checkout, allowlist/SSRF gates (§3.2)."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 

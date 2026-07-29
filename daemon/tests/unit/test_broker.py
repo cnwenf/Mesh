@@ -104,7 +104,7 @@ class TestGateTable:
         assert gate_for("worktree.write").via == "mount"
 
     def test_forbidden_actions_are_never_grantable(self):
-        for action, gate in GATE_TABLE.items():
+        for _action, gate in GATE_TABLE.items():
             if gate.permission == "forbidden":
                 assert gate.via == "kernel"  # kernel policy, not approval
 
@@ -228,7 +228,8 @@ class TestTokenLifecycle:
         await writer2.drain()
         hello = json.loads(await reader2.readline())
         assert hello["ok"] is False
-        writer.close(); writer2.close()
+        writer.close()
+        writer2.close()
 
 
 class TestRateLimit:
