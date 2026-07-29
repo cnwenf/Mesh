@@ -96,6 +96,9 @@ mark {
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
+  /* -webkit-* 为 autofill 校正的唯一可用机制(评审 T3,无标准替代):
+     覆盖浏览器黄/蓝底为当前表面色。 */
+  /* stylelint-disable-next-line property-no-vendor-prefix */
   -webkit-box-shadow: 0 0 0 1000px var(--color-surface) inset;
   -webkit-text-fill-color: var(--color-text);
   caret-color: var(--color-text);
