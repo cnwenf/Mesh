@@ -33,8 +33,20 @@ from mesh_runtime.errors import DaemonError
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
-#: Exact reserved names (server parity NEW-M1 + daemon §3.8 additions).
-_RESERVED_EXACT = frozenset({"PATH", "NODE_OPTIONS", "HOME"})
+#: Exact reserved names (server parity NEW-M1 + daemon §3.8 additions,
+#: including the proxy family — the ONLY proxy pointer the provider may see
+#: is the daemon-assembled egress address from build_sandbox_env).
+_RESERVED_EXACT = frozenset(
+    {
+        "PATH",
+        "NODE_OPTIONS",
+        "HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+    }
+)
 
 #: Reserved prefixes — dynamic loading, interpreter injection, platform
 #: internals and cloud credentials (§3.8).
@@ -52,6 +64,29 @@ _RESERVED_PREFIXES = (
     "ALIBABA_",
     "ALIYUN_",
 )
+
+#: Generic sensitive suffixes (§3.8: token/credential/password names, from
+#: whatever vendor or CI system minted them — defense in depth on top of the
+#: provider-env-built-from-empty guarantee).
+_RESERVED_SUFFIXES = (
+    "_TOKEN",
+    "_SECRET",
+    "_KEY",
+    "_KEYS",
+    "_CREDENTIAL",
+    "_CREDENTIALS",
+    "_PASSWORD",
+    "_PASSWD",
+    "_APIKEY",
+)
+
+
+def _is_reserved_name(name: str) -> bool:
+    return (
+        name in _RESERVED_EXACT
+        or name.startswith(_RESERVED_PREFIXES)
+        or name.endswith(_RESERVED_SUFFIXES)
+    )
 
 #: Provider flags that would widen the loading surface — rejected from ANY
 #: externally influenced input (§1.5 rule 4).
@@ -94,7 +129,7 @@ class ProviderLaunchSpec:
 def validate_env_name(name: str) -> None:
     if not isinstance(name, str) or not _ENV_NAME_PATTERN.match(name):
         raise ReservedEnvError("env name must match ^[A-Z][A-Z0-9_]{0,63}$")
-    if name in _RESERVED_EXACT or name.startswith(_RESERVED_PREFIXES):
+    if _is_reserved_name(name):
         raise ReservedEnvError("reserved env name")
 
 
@@ -105,7 +140,7 @@ def scrub_env(merged: dict) -> dict:
     for key, value in merged.items():
         if not isinstance(key, str) or not _ENV_NAME_PATTERN.match(key):
             continue
-        if key in _RESERVED_EXACT or key.startswith(_RESERVED_PREFIXES):
+        if _is_reserved_name(key):
             continue
         out[key] = value
     return out

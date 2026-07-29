@@ -87,7 +87,7 @@ class TestProviderArgv:
 
 
 class TestEnvNameValidation:
-    @pytest.mark.parametrize("name", ["CI_API_KEY", "REPO_TOKEN", "A", "BUILD_ID_2"])
+    @pytest.mark.parametrize("name", ["A", "BUILD_ID_2", "LOCALE_NAME", "ATTEMPT_PHASE"])
     def test_accepts_plain_uppercase_names(self, name):
         validate_env_name(name)  # no raise
 
@@ -112,6 +112,20 @@ class TestEnvNameValidation:
             "AWS_SECRET_ACCESS_KEY",  # cloud credentials
             "AZURE_CLIENT_SECRET",
             "GOOGLE_APPLICATION_CREDENTIALS",
+            # §3.8 generic sensitive suffixes — vendor/CI-agnostic
+            "CI_API_KEY",
+            "REPO_TOKEN",
+            "REGISTRY_PASSWORD",
+            "DEPLOY_PASSWD",
+            "APP_CREDENTIALS",
+            "SERVICE_APIKEY",
+            "SIGNING_KEYS",
+            # §3.8 proxy family — only the daemon-assembled egress pointer
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "NPM_TOKEN",  # package-registry credential
         ],
     )
     def test_rejects_reserved_or_malformed_names(self, name):
@@ -126,15 +140,18 @@ class TestEnvNameValidation:
 class TestEnvScrubbing:
     def test_scrub_drops_reserved_from_merged_dict(self):
         merged = {
-            "CI_API_KEY": "v1",
+            "CI_API_KEY": "v1",       # generic _KEY suffix — dropped (§3.8)
             "LD_PRELOAD": "/evil.so",
             "PYTHONPATH": "/evil",
             "HOME": "/root",
             "MESH_DAEMON_SECRET": "x",
-            "REPO_TOKEN": "rot-x",
+            "REPO_TOKEN": "rot-x",    # generic _TOKEN suffix — dropped (§3.8)
+            "HTTPS_PROXY": "http://attacker:3128",  # proxy family — dropped
+            "NPM_TOKEN": "npm_x",     # registry credential — dropped
+            "BUILD_ID": "42",         # harmless — kept
         }
         scrubbed = scrub_env(merged)
-        assert scrubbed == {"CI_API_KEY": "v1", "REPO_TOKEN": "rot-x"}
+        assert scrubbed == {"BUILD_ID": "42"}
 
     def test_scrub_drops_non_allowlisted_shapes(self):
         assert scrub_env({"bad name": "1", "OK_NAME": "2", "": "3"}) == {"OK_NAME": "2"}
