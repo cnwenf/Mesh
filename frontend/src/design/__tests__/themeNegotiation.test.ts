@@ -8,6 +8,7 @@ import {
   isThemeMode,
   parseThemeLocator,
   resolveThemeChain,
+  routeExpectsWorkspaceDefault,
 } from '../themeNegotiation';
 
 describe('resolveThemeChain — §2.2 真源表', () => {
@@ -136,5 +137,20 @@ describe('parseThemeLocator — 白名单与分区校验(§5.3)', () => {
   it('非对象 JSON → null', () => {
     expect(parseThemeLocator('"dark"', expectedId)).toBeNull();
     expect(parseThemeLocator('42', expectedId)).toBeNull();
+  });
+});
+
+describe('routeExpectsWorkspaceDefault — H3 路由期望判定', () => {
+  it('/w/{slug}/… 与 /invite 期望工作区默认', () => {
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/w/acme/board')).toBe(true);
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/w/acme')).toBe(true);
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/invite/invtk_abc')).toBe(true);
+  });
+
+  it('全局/公开页不期望工作区默认(协商链可直接落系统级)', () => {
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/settings')).toBe(false);
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/inbox')).toBe(false);
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/login')).toBe(false);
+    expect(routeExpectsWorkspaceDefault('http://mesh.example/')).toBe(false);
   });
 });
