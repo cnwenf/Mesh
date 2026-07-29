@@ -127,7 +127,14 @@ def _compose_execution_finished(squad_handler, comment_service):
         await squad_handler(session, event)
         # Result sink for regular (non-squad) executions — creates a real
         # comment via CommentService (same path as squad writeback).
-        await execution_finished_result_sink(session, event, comment_service=comment_service)
+        # Best-effort: a result sink failure must NOT crash the relay or
+        # block the squad handler's savepoint.
+        try:
+            await execution_finished_result_sink(
+                session, event, comment_service=comment_service
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("result sink failed for event %s", event.id)
         return None
 
     return _handle

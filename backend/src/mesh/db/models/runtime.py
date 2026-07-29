@@ -35,6 +35,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     UniqueConstraint,
     text,
 )
@@ -285,8 +286,8 @@ class TaskExecution(Base):
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     # §2.1 P0: schema version for the frozen AttemptSpec snapshot.
-    snapshot_schema_version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, server_default=text("1")
+    snapshot_schema_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=1, server_default=text("1")
     )
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     queued_at: Mapped[datetime] = mapped_column(
@@ -343,6 +344,14 @@ class ExecutionAttempt(Base):
             postgresql_where=text("status IN ('claimed','running','cancelling')"),
         ),
         Index("idx_attempts_execution", "execution_id", "attempt_number"),
+        # §13.1: claim request idempotency (one claim per runtime+request).
+        Index(
+            "uq_attempts_runtime_claim_request",
+            "runtime_id",
+            "claim_request_id",
+            unique=True,
+            postgresql_where=text("claim_request_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -378,10 +387,12 @@ class ExecutionAttempt(Base):
     prompt_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
     completion_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
     cache_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
-    cost_usd: Mapped[float | None] = mapped_column(default=None)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(16, 6), default=None)
     num_turns: Mapped[int | None] = mapped_column(Integer, default=None)
     result_schema_version: Mapped[int | None] = mapped_column(Integer, default=None)
-    redaction_hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    redaction_hits: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0, server_default=text("0")
+    )
     # §13.1: claim request id for idempotent claim dedup.
     claim_request_id: Mapped[str | None] = mapped_column(TEXT, default=None)
     created_at: Mapped[datetime] = mapped_column(
