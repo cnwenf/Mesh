@@ -203,8 +203,8 @@ def get_test_storage_endpoint() -> str:
 
 def get_test_storage_credentials() -> tuple[str, str]:
     return (
-        os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-        os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+        os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+        os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
     )
 
 

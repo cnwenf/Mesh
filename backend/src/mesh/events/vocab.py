@@ -170,6 +170,7 @@ PLATFORM_EVENTS: frozenset[str] = frozenset(
         "onboarding.completed",
         "integration.updated",
         "integration.event_ingested",
+        "integration.queue_updated",
         "data_job.updated",
         "favorites.changed",
     }

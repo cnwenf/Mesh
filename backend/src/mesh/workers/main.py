@@ -29,7 +29,7 @@ from mesh.autopilot.executor import autopilot_executor_loop
 from mesh.autopilot.matcher import match_domain_event
 from mesh.autopilot.scheduler import autopilot_scheduler_loop
 from mesh.comment_inbox.notifications import FANOUT_EVENT_TYPE, NotificationFanoutHandler
-from mesh.config import ConfigError, Settings, load_settings
+from mesh.config import ConfigError, Settings, load_settings, validate_infra_settings
 from mesh.data_jobs.reaper import data_job_reaper_loop
 from mesh.data_jobs.runner import (
     ENQUEUE_EVENT_TYPE as DATA_JOB_ENQUEUE_EVENT_TYPE,
@@ -405,7 +405,14 @@ def main() -> int:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _request_stop)
     try:
-        loop.run_until_complete(run_worker(stop=stop))
+        settings = load_settings()
+        # Fail-safe (MES-83): the worker process holds owner-role DB, Redis
+        # fan-out and object storage connections — production must use strong
+        # credentials, validated on this process startup path before any loop
+        # starts. (run_worker itself stays embeddable for callers, e.g. tests,
+        # that hand in their own Settings.)
+        validate_infra_settings(settings)
+        loop.run_until_complete(run_worker(settings, stop=stop))
     except (ConfigError, MeshError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

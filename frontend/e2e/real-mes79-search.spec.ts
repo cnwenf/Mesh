@@ -39,7 +39,12 @@ async function authHeaders(target: Page): Promise<Record<string, string>> {
   });
 }
 
-async function api(target: Page, method: string, path: string, body?: unknown): Promise<Record<string, unknown>> {
+async function api(
+  target: Page,
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<Record<string, unknown>> {
   const headers = await authHeaders(target);
   const response = await target.request.fetch(`${API_BASE}/api/v1${path}`, {
     method,
@@ -66,16 +71,35 @@ test.beforeAll(async ({ browser }: { browser: Browser }) => {
   await expect(page.locator('.mesh-shell')).toBeVisible({ timeout: 30_000 });
 
   // 经真实 API 播种工作区与六类对象(与 UI 共享同一真实数据库)
-  const ws = (await api(page, 'POST', '/workspaces', { name: 'MES79 Real', slug: SLUG })).data as Record<string, string>;
+  const ws = (await api(page, 'POST', '/workspaces', { name: 'MES79 Real', slug: SLUG }))
+    .data as Record<string, string>;
   workspaceId = ws.id;
-  const project = (await api(page, 'POST', `/workspaces/${workspaceId}/projects`, { name: '走查项目', key: `M${RUN.slice(-2)}` })).data as Record<string, string>;
+  const project = (
+    await api(page, 'POST', `/workspaces/${workspaceId}/projects`, {
+      name: '走查项目',
+      key: `M${RUN.slice(-2)}`,
+    })
+  ).data as Record<string, string>;
   projectId = project.id;
-  const agent = (await api(page, 'POST', `/workspaces/${workspaceId}/agents`, { name: '走查助手' })).data as Record<string, string>;
+  const agent = (await api(page, 'POST', `/workspaces/${workspaceId}/agents`, { name: '走查助手' }))
+    .data as Record<string, string>;
   agentId = agent.id;
-  const issue = (await api(page, 'POST', `/workspaces/${workspaceId}/issues`, { title: '走查登录页崩溃', project_id: projectId })).data as Record<string, string>;
+  const issue = (
+    await api(page, 'POST', `/workspaces/${workspaceId}/issues`, {
+      title: '走查登录页崩溃',
+      project_id: projectId,
+    })
+  ).data as Record<string, string>;
   identifier = issue.identifier;
-  await api(page, 'POST', `/workspaces/${workspaceId}/views`, { name: '走查看板', layout: 'board', visibility: 'shared' });
-  await api(page, 'POST', `/workspaces/${workspaceId}/chat-sessions`, { agent_id: agentId, title: '走查会话' });
+  await api(page, 'POST', `/workspaces/${workspaceId}/views`, {
+    name: '走查看板',
+    layout: 'board',
+    visibility: 'shared',
+  });
+  await api(page, 'POST', `/workspaces/${workspaceId}/chat-sessions`, {
+    agent_id: agentId,
+    title: '走查会话',
+  });
 });
 
 test.afterAll(async () => {
@@ -91,7 +115,9 @@ test('Ctrl+K 命令面板:分组实体搜索 + Enter 规范深链 + 帮助层', 
   await combobox.fill('走查');
   // 六类对象分组命中(issue/member/agent/project/view/chat_session)——
   // 按 option 角色断言,避免标题/副标题同名的 strict-mode 歧义。
-  await expect(page.getByRole('option', { name: /走查登录页崩溃/ })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('option', { name: /走查登录页崩溃/ })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(page.getByRole('option', { name: /走查助手/ }).first()).toBeVisible();
   await expect(page.getByRole('option', { name: /走查项目/ }).first()).toBeVisible();
   await expect(page.getByRole('option', { name: /走查看板/ })).toBeVisible();
