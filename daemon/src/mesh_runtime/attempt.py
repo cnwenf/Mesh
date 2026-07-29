@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass, field
 
 from mesh_runtime.api import RuntimeApiClient
-from mesh_runtime.errors import DaemonError, LeaseConflictError
+from mesh_runtime.errors import DaemonError, LeaseConflictError, RateLimitedError
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
 from mesh_runtime.providers.base import (
@@ -35,6 +35,15 @@ logger = logging.getLogger("mesh_runtime.attempt")
 _MAX_RENEW_FAILURES = 3
 _DEFAULT_LEASE_SECONDS = 120.0
 _SUMMARY_MAX = 4096
+
+# Terminal sealed-flush retry envelope (§3.9.3): transient 5xx / rate limits
+# almost always clear in seconds, so retry with a capped backoff before
+# demoting the attempt. Retry-After from the server is honoured but capped so
+# a hostile/misconfigured server cannot park the attempt for hours.
+_SEALED_FLUSH_RETRIES = 3
+_SEALED_FLUSH_BACKOFF_BASE = 0.5
+_SEALED_FLUSH_BACKOFF_CAP = 5.0
+_RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 @dataclass
@@ -321,15 +330,39 @@ class AttemptSupervisor:
         except LeaseConflictError:
             await self._mark_lease_lost(ctx, outcome.status)
             return
-        except DaemonError:
-            # A sealed flush only raises on a transient (non-lease) failure or
-            # spool backpressure; the redacted batch is retained in the spool
-            # (§3.9.3) and the server's log offset — not this flush — stays the
-            # authority. Report the terminal state rather than lose the result;
-            # mark the stream unsealed so cleanup keeps the spool for replay.
-            self._spool_flushed = False
+        except DaemonError as exc:
+            try:
+                flushed = await self._retry_sealed_flush(ctx, exc)
+            except LeaseConflictError:
+                await self._mark_lease_lost(ctx, outcome.status)
+                return
+            if not flushed:
+                # Retries exhausted: the redacted batch is retained in the
+                # spool (§3.9.3 — cleanup keeps it for diagnostics), but the
+                # log stream could not be completed and sealed. NEVER certify
+                # a successful run on incomplete logs — demote the terminal
+                # state with a fixed reason code instead.
+                self._spool_flushed = False
+                outcome = AttemptOutcome(ctx.attempt_id, "failed", "log_flush_failed")
         await self._report_terminal(ctx, outcome, session_id, usage, summary, exit_code, hit_count)
         self._stop_renew()
+
+    async def _retry_sealed_flush(self, ctx, first_error: DaemonError) -> bool:
+        """Bounded retry of the terminal sealed flush (§3.9.3). Returns True
+        once the flush succeeds, False when retries are exhausted. Lease
+        fencing is NOT swallowed — it propagates so ``_finalize`` can map it
+        to lease_lost."""
+        delay = _sealed_flush_delay(first_error, attempt=0)
+        for attempt in range(1, _SEALED_FLUSH_RETRIES + 1):
+            await self._clock.sleep(delay)
+            try:
+                await self._logs.flush(ctx, sealed=True)
+                return True
+            except LeaseConflictError:
+                raise
+            except DaemonError as exc:
+                delay = _sealed_flush_delay(exc, attempt=attempt)
+        return False
 
     def _stop_renew(self) -> None:
         if self._renew_task is not None:
@@ -412,3 +445,13 @@ class AttemptSupervisor:
 
 def _short_reason(exc: Exception) -> str:
     return type(exc).__name__[:64]
+
+
+def _sealed_flush_delay(exc: DaemonError, *, attempt: int) -> float:
+    """Delay before sealed-flush retry ``attempt`` (0-based). Honours a
+    server-provided Retry-After, capped at a minute so a hostile or
+    misconfigured server cannot park the terminal flush indefinitely;
+    otherwise capped exponential backoff."""
+    if isinstance(exc, RateLimitedError) and exc.retry_after is not None:
+        return min(max(exc.retry_after, 0.0), _RETRY_AFTER_CAP_SECONDS)
+    return min(_SEALED_FLUSH_BACKOFF_BASE * (2**attempt), _SEALED_FLUSH_BACKOFF_CAP)

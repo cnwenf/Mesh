@@ -261,6 +261,74 @@ class TestNoLossAndSpool:
             await up.flush(ctx, sealed=True)
         assert spool.has_pending(ctx.attempt_id, "stdout")  # retained for next run
 
+    async def test_sealed_flush_replays_spooled_batch_then_sparse_tail_seals_last(
+        self, journal, ctx, tmp_path
+    ):
+        """Pinned negative scenario: a mid-stream transient 5xx leaves batch A
+        durable on disk, a sparse tail B never reaches a send threshold and
+        stays in memory, and the attempt then ends. The sealed flush must
+        upload A, THEN B, and land ``sealed`` on the TRUE last batch (B) —
+        never on the replayed spool batch, never drop B."""
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "AAAA")  # batch A buffered
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)  # A spooled, upload failed -> on disk
+        assert spool.has_pending(ctx.attempt_id, "stdout")
+        await up.submit(ctx, "stdout", "bb")  # sparse tail B: below threshold
+        assert len(api.calls) == 1  # B not uploaded yet
+
+        await up.flush(ctx, sealed=True)  # attempt ends -> terminal flush
+
+        stdout_calls = [c for c in api.calls if c["stream"] == "stdout"]
+        assert len(stdout_calls) == 3  # failed A + replayed A + continuation B
+        replay_a, tail_b = stdout_calls[1], stdout_calls[2]
+        assert replay_a["lines"] == ["AAAA"]
+        assert replay_a["start_offset"] == 0
+        assert replay_a["sealed"] is False  # sealed must NOT ride the replay
+        assert tail_b["lines"] == ["bb"]
+        assert tail_b["start_offset"] == 4  # continues right after A's bytes
+        assert tail_b["sealed"] is True  # sealed lands on the TRUE last batch
+        entry = await journal.get(ctx.attempt_id)
+        assert entry.log_offset_stdout == 6
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+
+    async def test_sealed_flush_failure_retry_replays_all_and_seals_last(
+        self, journal, ctx, tmp_path
+    ):
+        """If the first SEALED attempt fails transiently while replaying the
+        spooled batch, the in-memory tail is already durable (spooled before
+        upload) and the supervisor's retry replays BOTH batches in order,
+        sealing only the true last one."""
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "AAAA")
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)  # A on disk
+        await up.submit(ctx, "stdout", "bb")  # B in memory
+        api.errors = [ServerError("500")]
+        with pytest.raises(ServerError):
+            await up.flush(ctx, sealed=True)  # first sealed attempt fails on A
+        # B was made durable as the continuation BEFORE the failed upload.
+        pending = spool.pending(ctx.attempt_id, "stdout")
+        assert [(b.start_offset, b.lines) for b in pending] == [
+            (0, ("AAAA",)),
+            (4, ("bb",)),
+        ]
+        await up.flush(ctx, sealed=True)  # supervisor retry
+        stdout_sealed = [
+            c for c in api.calls if c["stream"] == "stdout" and c["sealed"]
+        ]
+        assert len(stdout_sealed) == 1
+        assert stdout_sealed[0]["lines"] == ["bb"]
+        assert stdout_sealed[0]["start_offset"] == 4
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+
     async def test_spool_full_backpressures_and_preserves_lines(self, journal, ctx, tmp_path):
         api, clock = StubApi(), FakeClock()
         spool = LogSpool(tmp_path / "spool", max_bytes=2)  # too small for "abcd"

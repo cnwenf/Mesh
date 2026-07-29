@@ -124,10 +124,15 @@ class LogUploader:
                 except LeaseConflictError:
                     raise  # fencing — supervisor handles it
                 except DaemonError:
-                    if sealed:
-                        raise  # terminal flush: supervisor decides; spool retains the batch
                     if self._spool is None:
+                        # Re-queue BEFORE propagating so the supervisor's retry
+                        # (sealed) or the next flush (mid-stream) re-sends the
+                        # very same lines — nothing is lost on failure.
                         await self._rebuffer(ctx.attempt_id, stream, batch_lines)
+                    # With a spool the batch is already durable on disk and is
+                    # replayed by the next collect; no rebuffer needed.
+                    if sealed:
+                        raise  # terminal flush: supervisor retries, then demotes
                     break  # transient mid-stream failure: retry on the next flush
                 if self._spool is not None:
                     self._spool.ack(ctx.attempt_id, stream, batch_offset)
@@ -136,29 +141,39 @@ class LogUploader:
         self, ctx: AttemptContext, stream: str, key: tuple[str, str], start: int
     ) -> list[tuple[int, list[str]]]:
         """Return the ``(start_offset, lines)`` batches to upload, in offset
-        order. Must run under ``ctx.lock``. A still-spooled batch (previous
-        upload failed transiently) is retried first and new buffer lines stay
-        queued, so offsets stay monotonic and replay stays idempotent."""
+        order. Must run under ``ctx.lock``.
+
+        Still-spooled batches (a previous upload failed transiently) are
+        replayed FIRST, then any in-memory buffer lines are collected as a
+        continuation batch starting right after the last spooled byte — so a
+        sealed (terminal) flush uploads the spooled batch AND the sparse tail
+        and lands ``sealed`` on the TRUE last batch (§3.9.2/§3.9.3). New
+        buffer lines are made durable in the spool before upload as well, so
+        offsets stay monotonic and replay stays idempotent."""
+        batches: list[tuple[int, list[str]]] = []
+        next_offset = start
         if self._spool is not None and self._spool.has_pending(ctx.attempt_id, stream):
-            return [
-                (batch.start_offset, list(batch.lines))
-                for batch in self._spool.pending(ctx.attempt_id, stream)
-            ]
+            for batch in self._spool.pending(ctx.attempt_id, stream):
+                batches.append((batch.start_offset, list(batch.lines)))
+                next_offset = max(next_offset, batch.start_offset + batch.byte_size)
         lines = self._buffers.pop(key, [])
         self._buffer_bytes.pop(key, None)
         self._first_at.pop(key, None)
-        if not lines:
-            return []
-        if self._spool is not None:
-            try:
-                # Durable BEFORE upload — survives crash/restart.
-                self._spool.write(SpooledBatch(ctx.attempt_id, stream, start, tuple(lines)))
-            except DaemonError:
-                # SpoolFullError (backpressure): put the lines back so nothing
-                # is lost, then let the error propagate to the supervisor.
-                self._rebuffer_sync(key, lines)
-                raise
-        return [(start, lines)]
+        if lines:
+            if self._spool is not None:
+                try:
+                    # Durable BEFORE upload — survives crash/restart.
+                    self._spool.write(
+                        SpooledBatch(ctx.attempt_id, stream, next_offset, tuple(lines))
+                    )
+                except DaemonError:
+                    # SpoolFullError (backpressure): put the lines back so
+                    # nothing is lost, then let the error propagate to the
+                    # supervisor.
+                    self._rebuffer_sync(key, lines)
+                    raise
+            batches.append((next_offset, lines))
+        return batches
 
     async def _upload_one(
         self, ctx: AttemptContext, stream: str, start_offset: int, lines: list[str],
