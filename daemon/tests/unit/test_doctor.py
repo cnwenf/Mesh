@@ -2,7 +2,7 @@ import os
 
 from mesh_runtime import RUNTIME_TOKEN_PREFIX
 from mesh_runtime.config import DaemonConfig
-from mesh_runtime.doctor import run_checks
+from mesh_runtime.doctor import _parse_version, run_checks
 from mesh_runtime.inventory import Inventory
 from mesh_runtime.providers.base import ProbeResult
 from mesh_runtime.providers.fake import FakeProvider
@@ -97,3 +97,64 @@ class TestDoctor:
         report = await run_checks(cfg, await healthy_inventory())
         url_check = next(c for c in report.checks if c.name == "server_url")
         assert not url_check.ok
+
+
+class TestParseVersion:
+    def test_parses_dotted_versions(self):
+        assert _parse_version("git version 2.43.0") == (2, 43, 0)
+        assert _parse_version("2.31") == (2, 31)
+        assert _parse_version("curl 8.5.0 ... libcurl/8.5.0") == (8, 5, 0)
+
+    def test_none_when_absent(self):
+        assert _parse_version("no digits here") is None
+
+
+class TestGitToolchain:
+    async def test_current_git_passes(self):
+        # The controlled runner ships a git >= 2.31.
+        from mesh_runtime.doctor import _check_git_toolchain
+
+        check = await _check_git_toolchain()
+        assert check.ok
+        assert "git " in check.detail
+
+    async def test_git_too_old_fails_closed(self, monkeypatch):
+        import mesh_runtime.doctor as doctor
+
+        async def fake_run_tool(argv):
+            return "git version 2.30.3\n" if argv[:2] == ["git", "--version"] else None
+
+        monkeypatch.setattr(doctor, "_run_tool", fake_run_tool)
+        check = await doctor._check_git_toolchain()
+        assert not check.ok
+        assert "2.31" in check.detail or "2.31" in check.hint
+        assert check.hint
+
+    async def test_missing_git_fails_closed(self, monkeypatch):
+        import mesh_runtime.doctor as doctor
+
+        monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+        check = await doctor._check_git_toolchain()
+        assert not check.ok
+        assert "not found" in check.detail
+
+    async def test_libcurl_old_adds_hardening_note(self, monkeypatch):
+        import mesh_runtime.doctor as doctor
+
+        async def fake_run_tool(argv):
+            if argv[:2] == ["git", "--version"]:
+                return "git version 2.43.0\n"
+            if argv[:2] == ["curl", "--version"]:
+                return "curl 7.88.0 libcurl/7.88.0 OpenSSL\n"
+            return None
+
+        monkeypatch.setattr(doctor, "_run_tool", fake_run_tool)
+        check = await doctor._check_git_toolchain()
+        assert check.ok  # redirect guard disables redirects; note, not failure
+        assert "libcurl 7.88.0" in check.detail
+        assert "hardening" in check.detail
+
+    async def test_run_checks_includes_toolchain(self, tmp_path):
+        cfg = make_config(tmp_path)
+        report = await run_checks(cfg, await healthy_inventory())
+        assert "git_toolchain" in {c.name for c in report.checks}

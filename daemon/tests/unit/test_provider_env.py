@@ -110,6 +110,18 @@ class TestEnvNameValidation:
             "PYTHONSTARTUP",
             "MESH_DAEMON_TOKEN",  # platform reserved prefixes
             "MESH_INTERNAL_X",
+            "MESH_BROKER_SOCKET",  # daemon-owned broker/egress pointers (§3.8)
+            "MESH_BROKER_NONCE",
+            "MESH_GATEWAY_HOST_IP",
+            "HTTP_PROXY",  # proxy family — egress redirect/MITM surface
+            "HTTPS_PROXY",
+            "NO_PROXY",
+            "ALL_PROXY",
+            "NODE_EXTRA_CA_CERTS",  # CA-redirect family — TLS trust surface
+            "SSL_CERT_FILE",
+            "SSL_CERT_DIR",
+            "REQUESTS_CA_BUNDLE",
+            "CURL_CA_BUNDLE",
             "AWS_SECRET_ACCESS_KEY",  # cloud credentials
             "AZURE_CLIENT_SECRET",
             "GOOGLE_APPLICATION_CREDENTIALS",

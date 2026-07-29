@@ -41,11 +41,11 @@ from mesh_runtime.inventory import read_binary_version, verify_binary_static
 from mesh_runtime.manifest import ProviderManifest
 from mesh_runtime.provider_env import (
     ProviderLaunchSpec,
+    _scrub_provider_env,
+    _validate_provider_env_name,
     build_provider_argv,
     build_sandbox_env,
     build_stream_json_input,
-    scrub_env,
-    validate_env_name,
     validate_no_escalation_args,
     write_provider_configs,
 )
@@ -418,11 +418,13 @@ class ClaudeCodeAdapter:
             xdg_root="/xdg",
         )
         # Administrator-owned provider credentials (§5.4.7): loaded from the
-        # 0600 provider env file, name-validated again here (third pass — the
-        # values are redaction secrets upstream and never task-derived). The
-        # reserved-name gate rejects proxy/broker/CA names outright.
-        for name, value in scrub_env(plan.provider_env).items():
-            validate_env_name(name)
+        # 0600 provider env file, re-filtered here with the credential-aware
+        # gate (third pass — values are redaction secrets upstream, never
+        # task-derived). Credential-shaped names (ANTHROPIC_API_KEY, …) pass;
+        # the daemon-owned proxy/broker/CA pointers are rejected outright and
+        # then re-asserted below.
+        for name, value in _scrub_provider_env(plan.provider_env).items():
+            _validate_provider_env_name(name)
             env[name] = value
         # Daemon-owned egress + broker pointers win (defense in depth on top of
         # the reserved-name rejection and the netns no-default-route guarantee).

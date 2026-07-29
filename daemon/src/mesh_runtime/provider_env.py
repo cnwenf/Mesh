@@ -107,6 +107,40 @@ def _is_reserved_name(name: str) -> bool:
         or name.endswith(_RESERVED_SUFFIXES)
     )
 
+
+def _validate_provider_env_name(name: str) -> None:
+    """Credential-aware name gate for the administrator-owned provider env
+    file (§5.4.7). This file is the DEDICATED channel for provider credentials,
+    so credential-shaped names (``*_KEY``/``*_SECRET``/``*_TOKEN``) are
+    deliberately PERMITTED — they are redaction secrets upstream, never
+    task-derived, and never reach argv/stdin/config/journal.
+
+    Still rejected (fail-closed): malformed names, the exact reserved pointers
+    (proxy family / CA-redirect / broker / gateway — the daemon owns those and
+    re-asserts them after merge) and the dangerous prefixes (dynamic loading,
+    interpreter injection, platform internals, cloud credentials)."""
+    if not isinstance(name, str) or not _ENV_NAME_PATTERN.match(name):
+        raise ReservedEnvError("env name must match ^[A-Z][A-Z0-9_]{0,63}$")
+    if name in _RESERVED_EXACT:
+        raise ReservedEnvError("reserved env name")
+    if name.startswith(_RESERVED_PREFIXES):
+        raise ReservedEnvError("reserved env name")
+
+
+def _scrub_provider_env(env: dict) -> dict:
+    """§3.8 second pass for the provider env file, credential-aware: drop
+    malformed / exact-reserved / dangerous-prefix names again (trust nothing),
+    but keep credential-shaped names — the opposite intent from ``scrub_env``,
+    which strips credentials from the from-empty sandbox env."""
+    out: dict = {}
+    for key, value in env.items():
+        try:
+            _validate_provider_env_name(key)
+        except ReservedEnvError:
+            continue
+        out[key] = value
+    return out
+
 #: Provider flags that would widen the loading surface — rejected from ANY
 #: externally influenced input (§1.5 rule 4).
 FORBIDDEN_ESCALATION_ARGS = frozenset(
@@ -409,7 +443,7 @@ def load_provider_env_file(path: Path, *, expected_uid: int) -> dict:
         name, value = line.split("=", 1)
         name = name.strip()
         try:
-            validate_env_name(name)
+            _validate_provider_env_name(name)
         except ReservedEnvError as exc:
             raise ProviderEnvError(
                 f"provider env file line {line_number}: reserved or malformed name"
@@ -419,8 +453,9 @@ def load_provider_env_file(path: Path, *, expected_uid: int) -> dict:
                 f"provider env file line {line_number}: empty value"
             )
         env[name] = value
-    # §3.8 second pass: re-scrub the merged result — trust nothing.
-    return scrub_env(env)
+    # §3.8 second pass: re-filter the merged result — trust nothing. Uses the
+    # credential-aware scrub (credentials are the intended content here).
+    return _scrub_provider_env(env)
 
 
 # -- stdin prompt assembly (§1.4: prompt only via stdin, never argv/shell) ----

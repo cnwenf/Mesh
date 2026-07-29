@@ -238,3 +238,83 @@ class TestDiff:
         diff = await helper.export_diff()
         assert "+print('v2')" in diff
         assert "-print('v1')" in diff
+
+
+class TestGitEnvRedirectGuard:
+    """§3.2 SSRF hardening: git fetch must never follow a cross-host redirect."""
+
+    def test_follow_redirects_disabled_without_credential(self):
+        env = CheckoutHelper._git_env(None)
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "http.followRedirects"
+        assert env["GIT_CONFIG_VALUE_0"] == "false"
+        assert "GIT_CONFIG_KEY_1" not in env
+
+    def test_follow_redirects_disabled_with_credential(self):
+        env = CheckoutHelper._git_env("rot-SECRET")
+        # followRedirects=false is entry 0 UNCONDITIONALLY; the auth header is
+        # entry 1 — the redirect guard never depends on a credential being set.
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.followRedirects"
+        assert env["GIT_CONFIG_VALUE_0"] == "false"
+        assert env["GIT_CONFIG_KEY_1"] == "http.extraHeader"
+        assert env["GIT_CONFIG_VALUE_1"] == "Authorization: Bearer rot-SECRET"
+
+
+class TestFetchRedirectRefused:
+    """Negative: an allowlisted repo that 302s must NOT drag the fetch to the
+    redirect target — the fetch fails and the target sees zero connections."""
+
+    async def test_cross_host_redirect_not_followed(self, tmp_path):
+        import http.server
+        import threading
+
+        target_hits = {"count": 0}
+
+        class TargetHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                target_hits["count"] += 1
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"should never be reached")
+
+            def log_message(self, *args):  # silence
+                pass
+
+        target_server = http.server.HTTPServer(("127.0.0.1", 0), TargetHandler)
+        target_port = target_server.server_address[1]
+
+        class RedirectHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{target_port}/pwned")
+                self.end_headers()
+
+            def log_message(self, *args):  # silence
+                pass
+
+        redirect_server = http.server.HTTPServer(("127.0.0.1", 0), RedirectHandler)
+        redirect_port = redirect_server.server_address[1]
+
+        t_target = threading.Thread(target=target_server.serve_forever, daemon=True)
+        t_redirect = threading.Thread(target=redirect_server.serve_forever, daemon=True)
+        t_target.start()
+        t_redirect.start()
+        try:
+            url = f"http://127.0.0.1:{redirect_port}/repo.git"
+            helper = CheckoutHelper(worktree=tmp_path / "wt", timeout=20)
+            with pytest.raises(CheckoutError) as ei:
+                await helper.prepare(
+                    # base_sha present so the fetch is attempted (the 302 makes
+                    # it fail before the sha comparison).
+                    FrozenRepo(url=url, base_ref="main", base_sha="a" * 40),
+                    allowed_repos=[url],
+                    platform_managed=False,  # self-hosted: only redirect guard protects
+                )
+            assert ei.value.reason == "clone_failed"
+            # The redirect target (stand-in for an internal/metadata endpoint)
+            # must have received ZERO connections — redirect was not followed.
+            assert target_hits["count"] == 0
+        finally:
+            redirect_server.shutdown()
+            target_server.shutdown()
