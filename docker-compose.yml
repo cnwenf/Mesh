@@ -6,22 +6,32 @@
 #   gateway   — realtime WebSocket gateway (independent process)
 #   frontend  — static placeholder page + /api and /ws reverse proxy
 #
-# SECURITY — LOCAL DEVELOPMENT ONLY (M2):
+# SECURITY — LOCAL DEVELOPMENT ONLY (M2 / MES-83 hardening):
+#   * NO secrets have defaults. Every credential is a REQUIRED variable
+#     (`${VAR:?...}`) — `docker compose up` fails fast if one is missing instead
+#     of silently coming up on a guessable password. Local dev: run
+#     `scripts/gen-dev-secrets.sh` once to generate a `.env` of strong random
+#     values. Production: set real, unique secrets (never the dev ones).
 #   * Published ports bind 127.0.0.1 by default — the stack is reachable from
 #     this machine only, never the network. Exposing it requires an explicit,
 #     deliberate edit below (a .env value alone cannot change the bind address).
+#   * Datastores (postgres / redis) publish NO ports at all — they are reachable
+#     only on the internal compose network. NEVER add a host port mapping for a
+#     datastore; a publicly reachable datastore is exactly how MES-83 happened.
 #   * MESH_AUTH_MODE defaults to "dev" (any mesh-dev:<workspace-id> token grants
 #     that workspace). That is safe ONLY because the ports are loopback-bound.
 #     For ANY non-local use you MUST set MESH_AUTH_MODE=production explicitly.
 #   * The API/gateway connect as the restricted non-owner role mesh_app so
 #     PostgreSQL RLS is enforced on the app path (M1, README §6.2 rule 5); the
 #     worker keeps the owner role for cross-tenant relay/projector/retention.
-#   * Redis requires a password (MESH_REDIS_PASSWORD) — another container on
-#     the compose network cannot forge fan-out frames or issue commands
-#     without credentials (L3). The DB remains the source of truth.
+#   * Redis requires a password (MESH_REDIS_PASSWORD) and runs with
+#     protected-mode on — an unauthenticated Redis lets a neighbor forge fan-out
+#     frames (L3). The DB remains the source of truth.
 #
-# Local development values only — every secret is an environment variable;
-# supply real values via .env (see .env.example) for anything beyond local dev.
+# Local development values only — every secret is a REQUIRED environment
+# variable with no default (see the SECURITY block above). Run
+# `scripts/gen-dev-secrets.sh` to generate a local `.env`; supply real, unique
+# secrets for anything beyond local dev (see .env.example).
 name: mesh
 
 services:
@@ -30,9 +40,12 @@ services:
     environment:
       POSTGRES_DB: ${MESH_POSTGRES_DB:-mesh}
       POSTGRES_USER: ${MESH_POSTGRES_USER:-mesh}
-      POSTGRES_PASSWORD: ${MESH_POSTGRES_PASSWORD:-mesh}
+      # Required — no default (MES-83). gen-dev-secrets.sh fills a strong value.
+      POSTGRES_PASSWORD: ${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}
     volumes:
       - mesh_pgdata:/var/lib/postgresql/data
+    # NO `ports:` — PostgreSQL is reachable only on the internal compose network.
+    # Never publish the datastore to the host (MES-83).
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${MESH_POSTGRES_USER:-mesh} -d ${MESH_POSTGRES_DB:-mesh}"]
       interval: 5s
@@ -41,12 +54,21 @@ services:
 
   redis:
     image: redis:7
-    # L3: require authentication — an unauthenticated Redis lets any container
-    # on the compose network forge realtime fan-out frames. LOCAL DEV default
-    # password; production sets MESH_REDIS_PASSWORD via .env.
-    command: ["redis-server", "--requirepass", "${MESH_REDIS_PASSWORD:-mesh}"]
+    # L3 / MES-83: require authentication AND keep protected-mode on — an
+    # unauthenticated Redis lets any container on the compose network forge
+    # realtime fan-out frames, and (worse) a publicly reachable one is a full
+    # remote-access vector. The password is REQUIRED with no default;
+    # gen-dev-secrets.sh generates a strong local value.
+    command:
+      - "redis-server"
+      - "--requirepass"
+      - "${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}"
+      - "--protected-mode"
+      - "yes"
+    # NO `ports:` — Redis is reachable only on the internal compose network.
+    # Never publish the datastore to the host (MES-83 — this is the incident).
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${MESH_REDIS_PASSWORD:-mesh}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -58,12 +80,18 @@ services:
     image: minio/minio:RELEASE.2025-06-13T11-33-47Z
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
-      MINIO_ROOT_USER: ${MESH_STORAGE_ACCESS_KEY:-mesh}
-      MINIO_ROOT_PASSWORD: ${MESH_STORAGE_SECRET_KEY:-mesh_minio_secret}
+      # Required — no defaults (MES-83). gen-dev-secrets.sh fills strong values.
+      MINIO_ROOT_USER: ${MESH_STORAGE_ACCESS_KEY:?MESH_STORAGE_ACCESS_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
+      MINIO_ROOT_PASSWORD: ${MESH_STORAGE_SECRET_KEY:?MESH_STORAGE_SECRET_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
     volumes:
       - mesh_minio_data:/data
     ports:
-      # S3 API + web console, loopback-bound like every other published port.
+      # Loopback-bound S3 API + console. The browser talks to object storage
+      # DIRECTLY for presigned uploads/downloads (three-stage direct upload,
+      # attachment.md §3), so a host-reachable endpoint is required even in
+      # local dev — but it is bound to 127.0.0.1 ONLY, never the network.
+      # Production must place object storage on a private network / behind a
+      # TLS-terminating reverse proxy and MUST NOT expose it publicly.
       - "127.0.0.1:${MESH_STORAGE_PORT:-9000}:9000"
       - "127.0.0.1:${MESH_STORAGE_CONSOLE_PORT:-9001}:9001"
     healthcheck:
@@ -80,12 +108,12 @@ services:
     environment:
       # Owner role: runs migrations (alembic upgrade head) and is available to
       # the app as a fallback; the app itself connects via MESH_APP_DATABASE_URL.
-      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Restricted non-owner role the API app connects as → RLS applies (M1).
-      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:?MESH_APP_DB_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Read by migration 0002 to create/alter the mesh_app login role.
-      MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:-mesh_app}
-      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
+      MESH_APP_DB_PASSWORD: ${MESH_APP_DB_PASSWORD:?MESH_APP_DB_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
       # Machine API TLS red line (runtime.md §3.5): compose serves plaintext
       # loopback, so dev defaults off; production leaves it unset and the
@@ -113,8 +141,8 @@ services:
       MESH_STORAGE_ENDPOINT: ${MESH_STORAGE_ENDPOINT:-http://minio:9000}
       MESH_STORAGE_PUBLIC_ENDPOINT: ${MESH_STORAGE_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
       MESH_STORAGE_REGION: ${MESH_STORAGE_REGION:-us-east-1}
-      MESH_STORAGE_ACCESS_KEY: ${MESH_STORAGE_ACCESS_KEY:-mesh}
-      MESH_STORAGE_SECRET_KEY: ${MESH_STORAGE_SECRET_KEY:-mesh_minio_secret}
+      MESH_STORAGE_ACCESS_KEY: ${MESH_STORAGE_ACCESS_KEY:?MESH_STORAGE_ACCESS_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_STORAGE_SECRET_KEY: ${MESH_STORAGE_SECRET_KEY:?MESH_STORAGE_SECRET_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
       MESH_STORAGE_BUCKET: ${MESH_STORAGE_BUCKET:-mesh-attachments}
       # Skill imports (skill.md §5.3 / §1.3): SSRF allowlist for source fetches +
       # optional external marketplace listings API. Empty = public-only / no market.
@@ -134,8 +162,8 @@ services:
     build: ./backend
     command: python -m mesh.workers
     environment:
-      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
-      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
       # The attachment processing worker reads quarantine objects for MIME
       # sniffing / SHA-256 / AV scan / thumbnails (attachment.md §3.3) — it
@@ -143,8 +171,8 @@ services:
       MESH_STORAGE_ENDPOINT: ${MESH_STORAGE_ENDPOINT:-http://minio:9000}
       MESH_STORAGE_PUBLIC_ENDPOINT: ${MESH_STORAGE_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
       MESH_STORAGE_REGION: ${MESH_STORAGE_REGION:-us-east-1}
-      MESH_STORAGE_ACCESS_KEY: ${MESH_STORAGE_ACCESS_KEY:-mesh}
-      MESH_STORAGE_SECRET_KEY: ${MESH_STORAGE_SECRET_KEY:-mesh_minio_secret}
+      MESH_STORAGE_ACCESS_KEY: ${MESH_STORAGE_ACCESS_KEY:?MESH_STORAGE_ACCESS_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
+      MESH_STORAGE_SECRET_KEY: ${MESH_STORAGE_SECRET_KEY:?MESH_STORAGE_SECRET_KEY is required (scripts/gen-dev-secrets.sh for local dev)}
       MESH_STORAGE_BUCKET: ${MESH_STORAGE_BUCKET:-mesh-attachments}
       # Skill imports (skill.md §5.3 / §1.3): SSRF allowlist for source fetches +
       # optional external marketplace listings API. Empty = public-only / no market.
@@ -164,10 +192,10 @@ services:
     # (uvicorn default is 16MB); keep it in sync with Settings.ws_max_size_bytes.
     command: uvicorn mesh.realtime.app:create_app --factory --host 0.0.0.0 --port 8081 --ws-max-size 65536
     environment:
-      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:-mesh}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_DATABASE_URL: postgresql+asyncpg://${MESH_POSTGRES_USER:-mesh}:${MESH_POSTGRES_PASSWORD:?MESH_POSTGRES_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
       # Restricted non-owner role the gateway app connects as → RLS applies (M1).
-      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:-mesh_app}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
-      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:-mesh}@redis:6379/0
+      MESH_APP_DATABASE_URL: postgresql+asyncpg://mesh_app:${MESH_APP_DB_PASSWORD:?MESH_APP_DB_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@postgres:5432/${MESH_POSTGRES_DB:-mesh}
+      MESH_REDIS_URL: redis://:${MESH_REDIS_PASSWORD:?MESH_REDIS_PASSWORD is required (scripts/gen-dev-secrets.sh for local dev)}@redis:6379/0
       MESH_AUTH_MODE: ${MESH_AUTH_MODE:-dev}
     ports:
       - "127.0.0.1:${MESH_WS_PORT:-8081}:8081"

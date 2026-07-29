@@ -7,9 +7,25 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from mesh.config import DEV_JWT_SECRET, ConfigError, load_settings, validate_auth_settings
+from mesh.config import (
+    DEV_JWT_SECRET,
+    ConfigError,
+    load_settings,
+    validate_auth_settings,
+    validate_infra_settings,
+)
 
 REQUIRED = {"database_url": "postgresql+asyncpg://u:p@h:5432/db", "redis_url": "redis://h:6379/0"}
+
+# A production-shaped credential set: every middleware secret is long, random and
+# not on the weak denylist. Used to prove the guard accepts a correct deployment.
+STRONG = "v3ry-str0ng-r4nd0m-s3cret-0123456789"
+STRONG_INFRA = {
+    "database_url": f"postgresql+asyncpg://mesh:{STRONG}@postgres:5432/mesh",
+    "redis_url": f"redis://:{STRONG}@redis:6379/0",
+    "storage_access_key": STRONG,
+    "storage_secret_key": STRONG,
+}
 
 
 def test_missing_required_settings_raise_config_error(monkeypatch):
@@ -106,3 +122,140 @@ def test_validate_auth_settings_accepts_dev_key_in_dev_mode():
 def test_validate_auth_settings_accepts_strong_secret_in_dev_mode():
     settings = load_settings(**REQUIRED, auth_mode="dev", jwt_secret="custom-dev-secret")
     validate_auth_settings(settings)  # does not raise
+
+
+# --- Middleware credential fail-safe (MES-83: weak default → exposed Redis) ---
+# validate_infra_settings is the production-only guard every process that talks
+# to a datastore calls at startup — API, realtime gateway and worker. It refuses
+# empty / well-known / too-short credentials so a misconfigured production deploy
+# fails fast instead of coming up on a guessable password.
+
+
+def test_validate_infra_settings_accepts_strong_credentials_in_production():
+    settings = load_settings(**STRONG_INFRA, auth_mode="production")
+    validate_infra_settings(settings)  # does not raise
+
+
+def test_validate_infra_settings_rejects_unauthenticated_redis_in_production():
+    # No password in the Redis URL — the exact shape of the MES-83 incident.
+    settings = load_settings(
+        **{**STRONG_INFRA, "redis_url": "redis://redis:6379/0"}, auth_mode="production"
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "redis_url" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_rejects_weak_known_redis_password_in_production():
+    settings = load_settings(
+        **{**STRONG_INFRA, "redis_url": "redis://:mesh@redis:6379/0"}, auth_mode="production"
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "redis_url" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_rejects_short_redis_password_in_production():
+    settings = load_settings(
+        **{**STRONG_INFRA, "redis_url": "redis://:abc123@redis:6379/0"}, auth_mode="production"
+    )
+    with pytest.raises(ConfigError):
+        validate_infra_settings(settings)
+
+
+def test_validate_infra_settings_rejects_weak_database_password_in_production():
+    settings = load_settings(
+        **{**STRONG_INFRA, "database_url": "postgresql+asyncpg://mesh:mesh@postgres:5432/mesh"},
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "database_url" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_rejects_passwordless_database_url_in_production():
+    settings = load_settings(
+        **{**STRONG_INFRA, "database_url": "postgresql+asyncpg://mesh@postgres:5432/mesh"},
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "database_url" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_rejects_weak_app_database_password_in_production():
+    settings = load_settings(
+        **STRONG_INFRA,
+        app_database_url="postgresql+asyncpg://mesh_app:mesh_app@postgres:5432/mesh",
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "app_database_url" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_accepts_strong_app_database_password_in_production():
+    settings = load_settings(
+        **STRONG_INFRA,
+        app_database_url=f"postgresql+asyncpg://mesh_app:{STRONG}@postgres:5432/mesh",
+        auth_mode="production",
+    )
+    validate_infra_settings(settings)  # does not raise
+
+
+def test_validate_infra_settings_rejects_default_storage_credentials_in_production():
+    # storage_access_key / storage_secret_key still hold the repo dev defaults.
+    settings = load_settings(
+        database_url=STRONG_INFRA["database_url"],
+        redis_url=STRONG_INFRA["redis_url"],
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert "storage_access_key" in excinfo.value.missing_fields
+    assert "storage_secret_key" in excinfo.value.missing_fields
+
+
+def test_validate_infra_settings_skipped_in_dev_mode():
+    # Dev/test keep the convenience defaults — the guard is production-only.
+    settings = load_settings(**REQUIRED, auth_mode="dev")
+    validate_infra_settings(settings)  # does not raise
+
+
+def test_validate_infra_settings_require_storage_false_skips_storage():
+    # Gateway shape (README §2.2 independent unit): strong DB + Redis, no storage
+    # config at all — legitimate, so require_storage=False must accept it.
+    settings = load_settings(
+        database_url=STRONG_INFRA["database_url"],
+        redis_url=STRONG_INFRA["redis_url"],
+        auth_mode="production",
+    )
+    validate_infra_settings(settings, require_storage=False)  # does not raise
+
+
+def test_validate_infra_settings_require_storage_false_still_checks_db_and_redis():
+    settings = load_settings(
+        database_url=STRONG_INFRA["database_url"],
+        redis_url="redis://redis:6379/0",  # no password
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings, require_storage=False)
+    assert excinfo.value.missing_fields == ("redis_url",)  # storage not reported
+
+
+def test_validate_infra_settings_reports_every_weak_field_at_once():
+    settings = load_settings(
+        database_url="postgresql+asyncpg://mesh:mesh@postgres:5432/mesh",
+        redis_url="redis://redis:6379/0",
+        auth_mode="production",
+    )
+    with pytest.raises(ConfigError) as excinfo:
+        validate_infra_settings(settings)
+    assert set(excinfo.value.missing_fields) >= {
+        "database_url",
+        "redis_url",
+        "storage_access_key",
+        "storage_secret_key",
+    }
+    assert "MESH_" in excinfo.value.detail  # actionable env-var guidance

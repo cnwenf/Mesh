@@ -3,6 +3,19 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Security
+
+- **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
+  - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
+  - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
+  - 新增后端启动期 fail-safe `validate_infra_settings`:`MESH_AUTH_MODE=production` 时 API / realtime 网关 / worker 三启动路径拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据(与既有 `validate_auth_settings` JWT 守卫同模式)。
+  - 数据存储零宿主端口:postgres / redis 确认无 `ports:` 映射、仅内部网络可达;MinIO 保留 `127.0.0.1` 回环发布(三阶段直传需浏览器直达)并注释生产必须内网 + TLS。
+  - CI 回归守护:`test_compose_security.py` 新增「数据存储零宿主端口 / MinIO 回环唯一 / 凭据必填无默认(`:?` 形式)」断言,随 backend-ci 常跑。
+  - 文档:`.env.example` 去除可猜测默认(占位符 + 生成脚本指引)、README Quick Start 增加生产部署安全清单(强唯一口令 / 不对公网暴露 / protected-mode + TLS / 部署前端口自检)、docs/specs/README.md §2.2 新增「数据与中间件凭据安全」权威条款。
+  - 验证:gen-dev-secrets → `docker compose up --build` 真栈以强口令启动,`/healthz` / `/readyz`(database+redis ok)/ 注册-邮箱验证(dev-mailbox 经强口令 redis-cli 取 token)-登录-建区-建 issue 全链路真实 API 调用绿;postgres / redis 零宿主端口、Redis `protected-mode yes`、邻容器未认证 `-NOAUTH` 拒绝实测;生产弱口令 fail-fast 实测(api / gateway / worker 三启动路径均以 `ConfigError` 非零退出,强口令配置正常启动);`scripts/gen-dev-secrets.sh` 生成强随机 `.env`(0600、拒绝覆盖、`--force` 轮换)与 compose 缺失凭据即报错实测;单测套件(含新增 25 例凭据守卫 + 9 例 compose 回归)全绿,`pytest --cov=mesh` TOTAL 92%(≥90% 门禁),ruff 净。
+
 ## [0.19.0] - 2026-07-29
 平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
 

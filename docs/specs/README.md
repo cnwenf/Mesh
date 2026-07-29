@@ -95,6 +95,13 @@ Mesh 服务端由以下**独立可部署单元**组成。起步可合并进程�
 
 **部署形态**:起步 = 1 个 API 进程(含 uvicorn 多 worker)+ 1 个 worker 进程(运行 relay/scheduler/reaper/fan-out/附件处理,各为独立 asyncio 任务)+ 1 个 realtime 网关进程;三者可容器化独立伸缩。worker 各任务之间以 SKIP LOCKED 解耦,**任何单一任务循环卡死不得阻塞其他任务**(看门狗 + 独立取消域)。
 
+**数据与中间件凭据安全(MES-83,权威)**:任何数据存储 / 中间件(PostgreSQL、Redis、MinIO 及 `mesh_app` 角色)的凭据与网络暴露遵循以下硬约束:
+
+1. **强唯一口令**:生产不得有任何可猜测默认口令;`docker-compose.yml` 中全部凭据为必填项(`${VAR:?...}`,缺失即启动报错),本地开发经 `scripts/gen-dev-secrets.sh` 一次性生成强随机值。
+2. **不对公网暴露**:数据存储 / 中间件一律不发布宿主端口(compose 中 postgres / redis 无 `ports:`;MinIO 仅回环发布供三阶段直传),仅经内网 / 服务网格可达;Redis 必须 `requirepass` + `protected-mode yes` + `bind` 内网网卡。
+3. **启动期 fail-fast**:`MESH_AUTH_MODE=production` 时,API / realtime 网关 / worker 三个启动路径均调用 `validate_infra_settings`,拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据。
+4. **CI 回归守护**:`backend/tests/unit/test_compose_security.py` 常跑断言「回环唯一发布 + 数据存储零宿主端口 + 凭据必填无默认」,防止弱口令 / 端口暴露回归。
+
 ### 2.3 独立 MQ 演进阈值(权威)
 
 PostgreSQL outbox/job queue 为起步方案,达到以下**任一亮级**时启动独立消息队列(如 NATS/Kafka/RabbitMQ)迁移评估:
