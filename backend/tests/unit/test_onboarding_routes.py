@@ -31,8 +31,8 @@ def _settings(db_url: str, redis_url: str) -> dict:
         "storage_public_endpoint": os.environ.get(
             "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
         ),
-        "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-        "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+        "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+        "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "storage_bucket": "mesh-onb-routes-test",
     }
 

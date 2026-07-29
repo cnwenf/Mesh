@@ -69,8 +69,11 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 前置条件:Docker + Docker Compose。
 
 ```bash
+./scripts/gen-dev-secrets.sh   # 首次:生成强随机密码的本地 .env(compose 不再内置任何默认口令)
 docker compose up --build -d
 ```
+
+> `docker-compose.yml` 中**所有凭据都是必填项、无默认值**(MES-83 加固):缺失任一口令时 `docker compose up` 直接报错而非以弱口令启动。本地开发用 `scripts/gen-dev-secrets.sh` 一次性生成强随机 `.env`(已 git-ignore);如需轮换,加 `--force` 重新生成。
 
 服务与端口(可用 `.env` 覆盖,见 [.env.example](.env.example)):
 
@@ -85,8 +88,20 @@ docker compose up --build -d
 > **安全提示(务必阅读)**:本 compose 栈**仅限本机开发**。
 >
 > - 对外端口(8000 / 8081 / 3001)默认绑定 `127.0.0.1`,**仅本机可达**,不暴露到网络;`.env` 只能改端口号,无法改绑定地址——如需对外暴露必须刻意修改 `docker-compose.yml`。
+> - **数据存储不发布任何宿主端口**:PostgreSQL / Redis 仅经内部 compose 网络可达,`docker-compose.yml` 中无 `ports:` 映射(MES-83)。**严禁**为任何数据存储添加宿主端口映射——公网可达的数据存储正是本次事故的根因。MinIO 因三阶段直传需浏览器直达,仅保留 `127.0.0.1` 回环发布,生产必须置于内网 / TLS 反代之后且不得公网暴露。
+> - **凭据无默认值、生产强制强口令**:所有口令为 compose 必填项(缺失即启动报错);`MESH_AUTH_MODE=production` 时后端在启动期**拒绝**空值 / 已知默认 / 过短的 Redis/PostgreSQL/MinIO 凭据(`validate_infra_settings`),配置不全直接 fail-fast。
 > - `MESH_AUTH_MODE` 默认 `dev`(任意 `mesh-dev:<workspace-id>` 即获该工作区完全访问),这**仅在端口只绑回环时安全**。任何**非本机/生产**使用必须显式设置 `MESH_AUTH_MODE=production`,并提供真实的数据库/Redis 凭据。
 > - API 与 realtime 网关以**受限非 owner 角色 `mesh_app`** 连接数据库,使 PostgreSQL RLS 租户兜底在应用连接路径真实生效(§6.2 第 5 条);worker 保留 owner 角色做跨租户 relay/projector/retention。
+
+### 生产部署安全清单(MES-83)
+
+任何非本机部署(生产 / 预发 / 共享环境)必须满足:
+
+1. **强唯一口令**:PostgreSQL、Redis、MinIO 及 `mesh_app` 角色、JWT 签名密钥均使用**强随机、互不相同**的口令(`openssl rand -base64 32` 或等价 CSPRNG),严禁复用本仓库示例值或任何可猜测默认。
+2. **不对公网暴露**:数据存储与中间件(Redis / PostgreSQL / MinIO)**绝不**发布到公网或宿主非回环网卡;仅经内网 / 服务网格可达,前置安全组 / 防火墙默认拒绝入方向 6379 / 5432 / 9000。
+3. **启用保护机制**:Redis 必须 `requirepass` + `protected-mode yes`(并 `bind` 内网网卡,勿 `0.0.0.0`);对象存储与 API 对外端点经 TLS。
+4. **生产认证模式**:`MESH_AUTH_MODE=production`;后端会在启动期校验上述凭据强度,配置不全即 fail-fast。
+5. **部署前自检端口暴露**:`ss -tlnp` / 云安全组核对,确认无数据存储端口对公网开放。
 
 冒烟验证:
 

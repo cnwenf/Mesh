@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +44,30 @@ SUPPORTED_THEMES: tuple[str, ...] = ("light", "dark", "system")
 # (``mesh.api.app.create_app``, ``mesh.realtime.app.create_app``) calls it at
 # startup (fail-safe, mirroring the auth_mode pattern).
 DEV_JWT_SECRET = "mesh-dev-insecure-signing-key-do-not-use-in-production"
+
+# Middleware credential guard (MES-83). A publicly reachable Redis shipped with a
+# guessable password is exactly how the incident happened; production must never
+# come up on an empty, well-known, or too-short secret. ``validate_infra_settings``
+# refuses any of these at startup when ``auth_mode=production``.
+WEAK_SECRET_DENYLIST: frozenset[str] = frozenset(
+    {
+        "mesh",
+        "mesh_app",
+        "mesh_minio_secret",
+        "minioadmin",
+        "postgres",
+        "password",
+        "secret",
+        "admin",
+        "root",
+        "changeme",
+        "change-me",
+        "letmein",
+        "test",
+    }
+)
+# Below this length a secret is rejected outright regardless of content.
+MIN_SECRET_LENGTH = 16
 
 
 class ConfigError(RuntimeError):
@@ -204,8 +229,15 @@ class Settings(BaseSettings):
     storage_endpoint: str = "http://127.0.0.1:9000"
     storage_public_endpoint: str | None = None
     storage_region: str = "us-east-1"
-    storage_access_key: str = "mesh"
-    storage_secret_key: str = "mesh_minio_secret"
+    # Object-storage credentials have NO guessable default (MES-83: a weak
+    # default shipped in this public file let an attacker who reads the repo
+    # take over any instance still using it). Empty here means "unset";
+    # ``validate_infra_settings`` rejects empty/known/short values when
+    # ``auth_mode=production``, and local dev gets strong per-checkout values
+    # from compose / scripts/gen-dev-secrets.sh. Dev/test may set them
+    # explicitly for a throwaway MinIO.
+    storage_access_key: str = ""
+    storage_secret_key: str = ""
     storage_bucket: str = "mesh-attachments"
 
     # Attachment limits & lifecycles (attachment.md §3.6/§4.6 — defaults are
@@ -385,4 +417,84 @@ def validate_auth_settings(settings: Settings) -> None:
         raise ConfigError(
             ("jwt_secret",),
             "MESH_JWT_SECRET must be set to a strong secret in production",
+        )
+
+
+def _url_password(url: str) -> str | None:
+    """Return the password component of a database/Redis URL, or ``None``.
+
+    ``urlsplit(...).password`` is ``None`` when the netloc carries no ``:pass@``
+    — i.e. the service would be contacted unauthenticated (the MES-83 shape).
+    """
+    return urlsplit(url).password
+
+
+def _is_strong_secret(value: str | None) -> bool:
+    """A production secret must be present, long, and not a well-known default."""
+    if value is None:
+        return False
+    stripped = value.strip()
+    if len(stripped) < MIN_SECRET_LENGTH:
+        return False
+    return stripped.lower() not in WEAK_SECRET_DENYLIST
+
+
+# Maps a Settings field to the env var an operator actually sets, so the startup
+# error points at the knob to fix rather than the internal field name.
+_INFRA_FIELD_ENV = {
+    "database_url": "MESH_DATABASE_URL",
+    "redis_url": "MESH_REDIS_URL",
+    "app_database_url": "MESH_APP_DATABASE_URL",
+    "storage_access_key": "MESH_STORAGE_ACCESS_KEY",
+    "storage_secret_key": "MESH_STORAGE_SECRET_KEY",
+}
+
+
+def validate_infra_settings(settings: Settings, *, require_storage: bool = True) -> None:
+    """Fail-safe for middleware credentials (MES-83).
+
+    A publicly reachable datastore on a guessable password is the incident this
+    guard prevents: production must connect to PostgreSQL / Redis / object storage
+    with a strong, unique secret. Every process that talks to a datastore — the
+    API and realtime gateway factories plus the worker — calls this at startup,
+    so an under-configured production deploy fails fast with actionable guidance
+    instead of coming up insecure. Dev/test (``auth_mode=dev``) keep the
+    convenience defaults and skip the check entirely.
+
+    :param require_storage: validate the object-storage credentials too. The
+        realtime gateway never touches object storage (an independently deployable
+        unit, README §2.2, whose configuration may legitimately omit storage), so
+        it calls this with ``require_storage=False``; the API and worker connect
+        to MinIO and keep the default ``True``.
+    :raises ConfigError: when ``auth_mode=production`` and any datastore URL lacks
+        a password, or any credential is empty, a known default, or too short.
+    """
+    if settings.auth_mode != "production":
+        return
+
+    weak_fields: list[str] = []
+    if not _is_strong_secret(_url_password(settings.redis_url)):
+        weak_fields.append("redis_url")
+    if not _is_strong_secret(_url_password(settings.database_url)):
+        weak_fields.append("database_url")
+    # The restricted app role is optional; validate only when configured.
+    if settings.app_database_url is not None and not _is_strong_secret(
+        _url_password(settings.app_database_url)
+    ):
+        weak_fields.append("app_database_url")
+    if require_storage:
+        if not _is_strong_secret(settings.storage_access_key):
+            weak_fields.append("storage_access_key")
+        if not _is_strong_secret(settings.storage_secret_key):
+            weak_fields.append("storage_secret_key")
+
+    if weak_fields:
+        env_vars = ", ".join(_INFRA_FIELD_ENV[field] for field in weak_fields)
+        raise ConfigError(
+            tuple(weak_fields),
+            (
+                "production middleware credentials must be strong and unique "
+                f"(>= {MIN_SECRET_LENGTH} chars, not a known default): set real "
+                f"secrets for {env_vars}. Redis must require a password."
+            ),
         )

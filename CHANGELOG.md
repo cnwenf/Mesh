@@ -3,6 +3,25 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Security
+
+- **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
+  - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
+  - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
+  - 新增后端启动期 fail-safe `validate_infra_settings`:`MESH_AUTH_MODE=production` 时 API / realtime 网关 / worker 三启动路径拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据(与既有 `validate_auth_settings` JWT 守卫同模式)。
+  - 数据存储零宿主端口:postgres / redis 确认无 `ports:` 映射、仅内部网络可达;MinIO 保留 `127.0.0.1` 回环发布(三阶段直传需浏览器直达)并注释生产必须内网 + TLS。
+  - CI 回归守护:`test_compose_security.py` 新增「数据存储零宿主端口 / MinIO 回环唯一 / 凭据必填无默认(`:?` 形式)」断言,随 backend-ci 常跑。
+  - 文档:`.env.example` 去除可猜测默认(占位符 + 生成脚本指引)、README Quick Start 增加生产部署安全清单(强唯一口令 / 不对公网暴露 / protected-mode + TLS / 部署前端口自检)、docs/specs/README.md §2.2 新增「数据与中间件凭据安全」权威条款。
+  - 验证:gen-dev-secrets → `docker compose up --build` 真栈以强口令启动,`/healthz` / `/readyz`(database+redis ok)/ 注册-邮箱验证(dev-mailbox 经强口令 redis-cli 取 token)-登录-建区-建 issue 全链路真实 API 调用绿;postgres / redis 零宿主端口、Redis `protected-mode yes`、邻容器未认证 `-NOAUTH` 拒绝实测;生产弱口令 fail-fast 实测(api / gateway / worker 三启动路径均以 `ConfigError` 非零退出,强口令配置正常启动);`scripts/gen-dev-secrets.sh` 生成强随机 `.env`(0600、拒绝覆盖、`--force` 轮换)与 compose 缺失凭据即报错实测;单测套件(含新增 25 例凭据守卫 + 9 例 compose 回归)全绿,`pytest --cov=mesh` TOTAL 92%(≥90% 门禁),ruff 净。
+- **MinIO 凭据出仓 + CI 端口收口(MES-83 复审 CRITICAL 整改:对象存储弱口令明文存在于公开仓库)**:
+  - `backend/src/mesh/config.py`:`storage_access_key` / `storage_secret_key` 的可猜测默认(`mesh` / `mesh_minio_secret`)改为空串——公开仓库不再携带任何可用的对象存储口令;生产经 `validate_infra_settings` 拒绝空值,本地开发经 compose / gen-dev-secrets 注入强值(`WEAK_SECRET_DENYLIST` 中保留该值作拒绝名单,非凭据)。
+  - CI(`backend-ci.yml` / `frontend.yml` 共三处 MinIO):删除硬编码 `mesh` / `mesh_minio_secret`,改为运行时 `openssl rand` 一次性生成强随机 root 凭据并经 `$GITHUB_ENV` 下发(MinIO 容器与测试进程同源);MinIO 发布端口 `9000:9000` → `127.0.0.1:9000:9000`,postgres / redis service 端口同改回环绑定(Leader 待办 1:CI 一律不绑 `0.0.0.0`)。
+  - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
+  - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
+  - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+
 ## [0.19.1] - 2026-07-29
 Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。
 
