@@ -65,6 +65,38 @@ class ReauthRequest(BaseModel):
     method: str | None = None
 
 
+# --- device-code authorization (auth.md §3.1.1) -------------------------------
+
+DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
+
+class DeviceCodeRequest(BaseModel):
+    """``POST /auth/device/code`` — RFC 8628 issuance request."""
+
+    client_id: str = Field(default="mesh-cli", min_length=1, max_length=64)
+    scope: str | None = Field(default=None, max_length=512)  # space-joined
+
+
+class DeviceTokenRequest(BaseModel):
+    """``POST /auth/device/token`` — RFC 8628 polling request."""
+
+    grant_type: str = Field(min_length=1, max_length=128)
+    device_code: str = Field(min_length=1, max_length=512)
+    client_id: str = Field(default="mesh-cli", min_length=1, max_length=64)
+
+
+class DeviceApproveRequest(BaseModel):
+    """``POST /auth/device/approve`` — the TYPED user_code binds the approval;
+    the workspace is the approver's explicit choice (0/1/many page branch)."""
+
+    user_code: str = Field(min_length=1, max_length=32)
+    workspace_id: uuid.UUID
+
+
+class DeviceDenyRequest(BaseModel):
+    user_code: str = Field(min_length=1, max_length=32)
+
+
 # --- password reset / email verification -------------------------------------
 
 
