@@ -13,12 +13,16 @@ on:
     paths:
       - "backend/**"
       - "tests/docs/**"
+      - "docs/api/**"
+      - "cli/**"
       - "docs/specs/validation/**"
       - ".github/workflows/backend-ci.yml"
   pull_request:
     paths:
       - "backend/**"
       - "tests/docs/**"
+      - "docs/api/**"
+      - "cli/**"
       - "docs/specs/validation/**"
       - ".github/workflows/backend-ci.yml"
   schedule:
@@ -40,6 +44,14 @@ jobs:
         run: python3 tests/docs/check_event_vocab.py docs/specs
       - name: check_roster_entry.py
         run: python3 tests/docs/check_roster_entry.py docs/specs
+      - name: check_openapi_surface.py
+        # cli.md §5.4: the published contract must carry zero /api/v1/daemon/
+        # paths (internal machine API fully stripped) and every CLI-required
+        # endpoint (cli.md §3.1). Regenerate the artifact with
+        # python backend/scripts/export_openapi.py.
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 tests/docs/check_openapi_surface.py docs/api/openapi.yaml
 
   test:
     name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%,lockfile 安装)

@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 OPENAPI_PATH = REPO_ROOT / "docs" / "api" / "openapi.yaml"
 
 EXCLUDED_PREFIXES = ("/api/v1/daemon/",)
-EXCLUDED_PATHS = ("/api/v1/debug/error/{status}",)
+EXCLUDED_PATHS: tuple[str, ...] = ()
 
 
 def _live_paths(db_url, redis_url) -> set[tuple[str, str]]:

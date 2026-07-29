@@ -23,8 +23,10 @@ sys.path.insert(0, str(BACKEND_DIR))
 
 # Path prefixes stripped from the published contract (internal-only surfaces).
 EXCLUDED_PREFIXES = ("/api/v1/daemon/",)
-# Individual internal paths stripped in addition to the prefixes.
-EXCLUDED_PATHS = ("/api/v1/debug/error/{status}",)
+# Individual internal paths stripped in addition to the prefixes. Dev-only
+# /_debug/* routes carry include_in_schema=False and never reach the document;
+# nothing else is stripped by exact path today.
+EXCLUDED_PATHS: tuple[str, ...] = ()
 
 OUTPUT_PATH = REPO_ROOT / "docs" / "api" / "openapi.yaml"
 
@@ -44,6 +46,40 @@ def build_spec() -> dict:
     return app.openapi()
 
 
+def _refs_in(node: object) -> set[str]:
+    """Every ``#/components/schemas/<Name>`` reference reachable from ``node``."""
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "$ref" and isinstance(value, str) and value.startswith(
+                "#/components/schemas/"
+            ):
+                found.add(value.rsplit("/", 1)[-1])
+            else:
+                found |= _refs_in(value)
+    elif isinstance(node, list):
+        for value in node:
+            found |= _refs_in(value)
+    return found
+
+
+def _reachable_schemas(spec: dict) -> set[str]:
+    """Schema names referenced (transitively) by the kept public paths.
+
+    Schemas only referenced by stripped internal paths must NOT ship: a
+    description string inside one still leaks the internal machine interface
+    (cli.md §5.4 — 整体剔除,非 x-internal 标记).
+    """
+    seen = _refs_in(spec.get("paths", {}))
+    schemas = spec.get("components", {}).get("schemas", {})
+    frontier = set(seen)
+    while frontier:
+        name = frontier.pop()
+        frontier |= _refs_in(schemas.get(name, {})) - seen
+        seen |= frontier
+    return seen
+
+
 def strip_internal(spec: dict) -> dict:
     paths = spec.get("paths", {})
     kept = {
@@ -53,6 +89,13 @@ def strip_internal(spec: dict) -> dict:
         and path not in EXCLUDED_PATHS
     }
     spec["paths"] = kept
+    schemas = spec.get("components", {}).get("schemas", {})
+    reachable = _reachable_schemas(spec)
+    orphans = sorted(set(schemas) - reachable)
+    for name in orphans:
+        del schemas[name]
+    if orphans:
+        print(f"stripped {len(orphans)} orphaned internal schemas (e.g. {orphans[0]})")
     return spec
 
 
