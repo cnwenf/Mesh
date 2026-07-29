@@ -1,6 +1,5 @@
 {
   "locale": "en",
-  "version": "8e42a00d",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -840,6 +839,26 @@
     "demo.duration": "Took {minutes, plural, one {# minute} other {# minutes}}",
     "demo.joined": "{name} joined on {date, date, medium}",
     "demo.position": "Item {n, number} of {total, number}",
+    "device.approve": "Approve",
+    "device.chooseWorkspace": "Choose the workspace to bind (required)",
+    "device.chooseWorkspacePlaceholder": "— select —",
+    "device.codeLabel": "Device code (the Code shown in the CLI terminal)",
+    "device.confirmSection": "Authorization confirmation",
+    "device.deny": "Deny",
+    "device.errorApprove": "Approval failed — try again.",
+    "device.errorDeny": "Denial failed — try again.",
+    "device.goLogin": "Sign in",
+    "device.loginRequired": "Sign in first to approve a device login request.",
+    "device.noWorkspace": "A CLI session must bind a workspace. Create or join a workspace on the Web first, then approve.",
+    "device.notFound": "The device code is invalid, expired, or already handled. Restart `mesh auth login` in the CLI.",
+    "device.requestsAccess": "requests access to Mesh on your behalf:",
+    "device.resultApproved": "Approved. Return to the CLI terminal to finish signing in.",
+    "device.resultDenied": "The device login request was denied.",
+    "device.scopeList": "Requested permissions",
+    "device.securityNotice": "Approve only if YOU initiated this login in the CLI. The device will act on your behalf, in the chosen workspace, with the permissions below.",
+    "device.singleWorkspace": "Will bind to workspace:",
+    "device.submitCode": "Check code",
+    "device.title": "Device authorization",
     "error.account_locked": "Account locked, try again later",
     "error.activation_expired": "The activation code has expired or was already used. Create a new runtime to get a fresh code.",
     "error.agent_not_visible": "That agent is private; its statistics are hidden.",
@@ -2046,5 +2065,6 @@
     "wsCreate.stepInvite": "New workspace — invite members",
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
-  }
+  },
+  "version": "970ec52f"
 }

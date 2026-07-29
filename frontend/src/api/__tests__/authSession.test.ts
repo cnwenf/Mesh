@@ -45,22 +45,22 @@ const TOKENS = {
   access_token: 'at',
   token_type: 'Bearer',
   expires_in: 900,
-  refresh_token: 'rt',
 };
 
 describe('auth session API(auth.md §3.1 续期/登出/重置/MFA/会话)', () => {
-  it('refresh 发送 refresh_token 并返回新凭证', async () => {
+  it('refresh 经 cookie 传输(空请求体)返回新 access(R4-H1)', async () => {
     const fetchImpl = createMockFetch(200, { data: TOKENS });
-    const result = await refresh(createClient(fetchImpl), 'rt-old');
+    const result = await refresh(createClient(fetchImpl));
     expect(result.access_token).toBe('at');
-    expect(calledBody(fetchImpl)).toEqual({ refresh_token: 'rt-old' });
+    // refresh 经 HttpOnly cookie 自动呈递——请求体为空,JS 不持有 refresh。
+    expect(calledBody(fetchImpl)).toEqual({});
     expect(calledUrl(fetchImpl)).toContain('/api/v1/auth/refresh');
   });
 
-  it('logout 撤销指定 refresh', async () => {
+  it('logout 经 cookie 识别会话(空请求体)', async () => {
     const fetchImpl = createMockFetch(200, { data: { status: 'ok' } });
-    await logout(createClient(fetchImpl), 'rt');
-    expect(calledBody(fetchImpl)).toEqual({ refresh_token: 'rt' });
+    await logout(createClient(fetchImpl));
+    expect(calledBody(fetchImpl)).toEqual({});
     expect(calledUrl(fetchImpl)).toContain('/api/v1/auth/logout');
   });
 

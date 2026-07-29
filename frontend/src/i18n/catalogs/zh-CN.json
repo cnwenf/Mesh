@@ -1,6 +1,5 @@
 {
   "locale": "zh-CN",
-  "version": "44ed3cf2",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
@@ -840,6 +839,26 @@
     "demo.duration": "耗时 {minutes, plural, other {# 分钟}}",
     "demo.joined": "{name} 于 {date, date, medium} 加入",
     "demo.position": "第 {n, number} 项，共 {total, number} 项",
+    "device.approve": "批准",
+    "device.chooseWorkspace": "选择要绑定的工作区(必选)",
+    "device.chooseWorkspacePlaceholder": "— 请选择 —",
+    "device.codeLabel": "设备码(CLI 终端显示的 Code)",
+    "device.confirmSection": "授权确认",
+    "device.deny": "拒绝",
+    "device.errorApprove": "批准失败,请重试。",
+    "device.errorDeny": "拒绝失败,请重试。",
+    "device.goLogin": "去登录",
+    "device.loginRequired": "请先登录后再批准设备登录请求。",
+    "device.noWorkspace": "CLI 会话需绑定一个工作区,请先在 Web 端创建或加入工作区后再批准。",
+    "device.notFound": "设备码无效、已过期或已被处理。请在 CLI 重新发起 `mesh auth login`。",
+    "device.requestsAccess": "请求以你的身份访问 Mesh:",
+    "device.resultApproved": "已批准。回到 CLI 终端完成登录。",
+    "device.resultDenied": "已拒绝该设备登录请求。",
+    "device.scopeList": "请求的权限清单",
+    "device.securityNotice": "仅在你本人于 CLI 发起登录时批准。批准后该设备将以你的身份、在所选工作区内按下列权限操作。",
+    "device.singleWorkspace": "将绑定到工作区:",
+    "device.submitCode": "查验设备码",
+    "device.title": "设备授权",
     "error.account_locked": "账号已锁定,请稍后再试",
     "error.activation_expired": "激活码已过期或已被使用，请重新创建 runtime 以获取新的激活码。",
     "error.agent_not_visible": "该 agent 为私有,其统计不可见。",
@@ -2046,5 +2065,6 @@
     "wsCreate.stepInvite": "新建工作区——邀请成员",
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
-  }
+  },
+  "version": "d899548f"
 }

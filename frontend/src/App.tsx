@@ -45,6 +45,7 @@ import { SquadDetailPage } from './features/squads/SquadDetailPage';
 import { SquadTaskDetailPage } from './features/squads/SquadTaskDetailPage';
 import { SquadsPage } from './features/squads/SquadsPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
+import { DeviceAuthorizationPage } from './features/device/DeviceAuthorizationPage';
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
 import { LoginPage } from './shell/pages/LoginPage';
@@ -159,6 +160,8 @@ function ShellProviders(): React.JSX.Element {
           <ErrorBoundary>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              {/* 设备码授权确认页(auth.md §3.1.1;CLI mesh auth login 的批准侧) */}
+              <Route path="/device" element={<DeviceAuthorizationPage />} />
               <Route path="/forgot" element={<ForgotPasswordPage />} />
               <Route path="/reset" element={<ResetPasswordPage />} />
               {/* OAuth 登录回调(§4.1/§4.5):提供商回跳 code+state,交换会话凭证后回跳 */}

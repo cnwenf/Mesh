@@ -24,7 +24,6 @@ import {
 import type { CurrentUser, MfaSetupInfo, OAuthIdentity, SessionInfo } from '../../api';
 import { Button, Input } from '../../design';
 import { useT } from '../../i18n';
-import { useAuthStore } from '../../state/authStore';
 import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 
 export interface SecuritySettingsProps {
@@ -54,7 +53,6 @@ export function SecuritySettings(props: SecuritySettingsProps): React.JSX.Elemen
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submittingPassword, setSubmittingPassword] = useState(false);
-  const refreshToken = useAuthStore((state) => state.refreshToken);
   const confirmMismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
 
   const reload = useCallback(() => {
@@ -168,7 +166,7 @@ export function SecuritySettings(props: SecuritySettingsProps): React.JSX.Elemen
     }
     setSubmittingPassword(true);
     try {
-      await changePassword(client, { oldPassword, newPassword, refreshToken });
+      await changePassword(client, { oldPassword, newPassword });
       setNotice(t('security.changePasswordSuccess'));
       setChanging(false);
       setOldPassword('');

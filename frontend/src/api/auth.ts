@@ -1,18 +1,19 @@
 /**
  * 认证 API — auth.md §3.1(注册/登录/续期/登出/重置/验证/MFA/会话)。
  *
- * 消费后端 auth 后端(增量 1 + 切片 2):登录返回 access JWT(900s)+ refresh;
+ * Web 刷新契约(R4-H1):refresh 令牌**仅**经 HttpOnly cookie(`mesh_session`,
+ * SameSite=Strict)下发——登录/注册响应体绝无 refresh 明文,JS 无从读取;
+ * 续期经 cookie 自动呈递(同源请求浏览器自动携带),轮换经 Set-Cookie 下发。
  * 错误具名码:422 invalid_credentials / 400 weak_password(details.reason)/
  * 409 conflict(field=email)/ 423 account_locked / 429 rate_limited。
  */
 import type { MeshApiClient } from './client';
 
-/** 登录成功响应(会话凭证) */
+/** 登录成功响应(仅 access;refresh 走 HttpOnly cookie,R4-H1) */
 export interface SessionTokens {
   access_token: string;
   token_type: string;
   expires_in: number;
-  refresh_token: string;
 }
 
 /** 启用 MFA 时的登录响应(需二次验证) */
@@ -100,19 +101,15 @@ export async function fetchMe(client: MeshApiClient): Promise<CurrentUser> {
   return client.request<CurrentUser>('GET', '/api/v1/me');
 }
 
-/** refresh 续期:用 refresh token 换新 access(+ 轮换 refresh)。 */
-export async function refresh(
-  client: MeshApiClient,
-  refreshToken: string,
-): Promise<SessionTokens> {
-  return client.request<SessionTokens>('POST', '/api/v1/auth/refresh', {
-    body: { refresh_token: refreshToken },
-  });
+/** refresh 续期(R4-H1 cookie 传输):refresh 经 HttpOnly cookie 自动呈递,
+ * 请求体为空;胜者轮换经 Set-Cookie 下发,响应体仅新 access。 */
+export async function refresh(client: MeshApiClient): Promise<SessionTokens> {
+  return client.request<SessionTokens>('POST', '/api/v1/auth/refresh', {});
 }
 
-/** 登出当前会话(撤销指定 refresh)。 */
-export async function logout(client: MeshApiClient, refreshToken: string): Promise<void> {
-  await client.request('POST', '/api/v1/auth/logout', { body: { refresh_token: refreshToken } });
+/** 登出当前会话(cookie 呈递识别会话;清理 HttpOnly cookie 由服务端下发)。 */
+export async function logout(client: MeshApiClient): Promise<void> {
+  await client.request('POST', '/api/v1/auth/logout', {});
 }
 
 /** 登出全部会话(撤销该用户所有 refresh)。 */
@@ -136,16 +133,15 @@ export async function resetPassword(
   });
 }
 
-/** 已登录态修改密码输入(§3.1 POST /auth/change-password,MES-39) */
+/** 已登录态修改密码输入(§3.1 POST /auth/change-password,MES-39 / R7-M1)。
+ * 当前会话经 access JWT 的 sid 识别并保留(不经 body 呈递 refresh)。 */
 export interface ChangePasswordInput {
   oldPassword: string;
   newPassword: string;
-  /** 当前会话 refresh:呈递则保留当前会话,其它会话失效;缺省则全部失效 */
-  refreshToken?: string | null;
 }
 
 /** 已登录态修改密码(§4.2):旧密码校验(422 invalid_credentials)+ 新密码强度
- * (400 weak_password,三 reason)。成功使其它会话失效,当前会话保留。 */
+ * (400 weak_password,三 reason)。成功使其它会话失效,当前会话(sid 识别)保留。 */
 export async function changePassword(
   client: MeshApiClient,
   input: ChangePasswordInput,
@@ -154,7 +150,6 @@ export async function changePassword(
     body: {
       old_password: input.oldPassword,
       new_password: input.newPassword,
-      ...(input.refreshToken != null ? { refresh_token: input.refreshToken } : {}),
     },
   });
 }
@@ -203,4 +198,44 @@ export async function listSessions(client: MeshApiClient): Promise<SessionInfo[]
 /** 撤销指定会话。 */
 export async function revokeSession(client: MeshApiClient, sessionId: string): Promise<void> {
   await client.request('DELETE', `/api/v1/sessions/${sessionId}`);
+}
+
+// --- 设备码授权确认页(auth.md §3.1.1,cli.md §3.2)----------------------------
+
+/** 确认页数据:client 名称 + 请求 scope 的人类可读枚举 + 批准者工作区列表(0/1/多分流) */
+export interface DeviceConfirmation {
+  client_name: string;
+  requested_scopes: { scope: string; description: string }[];
+  workspaces: { id: string; slug: string; name: string; my_role: string }[];
+}
+
+/** 读取设备码确认页数据(登录态;user_code 未命中 → 404,不区分原因防探测)。 */
+export async function fetchDeviceConfirmation(
+  client: MeshApiClient,
+  userCode: string,
+): Promise<DeviceConfirmation> {
+  return client.request<DeviceConfirmation>('GET', '/api/v1/auth/device', {
+    query: { user_code: userCode },
+  });
+}
+
+/** 批准:绑定所录入的 user_code 与显式选定的工作区(scope 服务端取交)。 */
+export async function approveDevice(
+  client: MeshApiClient,
+  userCode: string,
+  workspaceId: string,
+): Promise<{ status: string; granted_scopes?: string[] }> {
+  return client.request('POST', '/api/v1/auth/device/approve', {
+    body: { user_code: userCode, workspace_id: workspaceId },
+  });
+}
+
+/** 拒绝所录入的 user_code(终态幂等回显当前状态)。 */
+export async function denyDevice(
+  client: MeshApiClient,
+  userCode: string,
+): Promise<{ status: string }> {
+  return client.request('POST', '/api/v1/auth/device/deny', {
+    body: { user_code: userCode },
+  });
 }

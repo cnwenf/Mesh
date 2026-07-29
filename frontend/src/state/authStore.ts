@@ -12,11 +12,9 @@ import { persist } from 'zustand/middleware';
 export interface AuthState {
   /** 短期 access JWT(请求 Bearer 用) */
   token: string | null;
-  /** 可撤销 refresh token(仅 /auth/refresh 续期用) */
-  refreshToken: string | null;
   setToken: (token: string | null) => void;
-  /** 登录成功写入会话凭证(access + refresh) */
-  setSession: (tokens: { accessToken: string; refreshToken?: string | null }) => void;
+  /** 登录成功写入 access(R4-H1:refresh 仅存 HttpOnly cookie,JS 不持有) */
+  setSession: (tokens: { accessToken: string }) => void;
   clearToken: () => void;
 }
 
@@ -26,11 +24,9 @@ export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       token: null,
-      refreshToken: null,
       setToken: (token) => set({ token }),
-      setSession: ({ accessToken, refreshToken }) =>
-        set({ token: accessToken, refreshToken: refreshToken ?? null }),
-      clearToken: () => set({ token: null, refreshToken: null }),
+      setSession: ({ accessToken }) => set({ token: accessToken }),
+      clearToken: () => set({ token: null }),
     }),
     { name: AUTH_STORAGE_KEY },
   ),
@@ -39,9 +35,4 @@ export const useAuthStore = create<AuthState>()(
 /** 供非 React 上下文(客户端实例)读取当前 access token */
 export function getToken(): string | null {
   return useAuthStore.getState().token;
-}
-
-/** 供续期逻辑读取当前 refresh token */
-export function getRefreshToken(): string | null {
-  return useAuthStore.getState().refreshToken;
 }
