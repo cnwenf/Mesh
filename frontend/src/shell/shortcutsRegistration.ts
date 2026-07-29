@@ -87,7 +87,6 @@ export interface ShellShortcutEnv {
   /** 设置类命令门控(admin/owner 才注册,§1.2 S3 角色可见性矩阵) */
   readonly isAdmin: boolean;
 }
->>>>>>> 0b707ef3 (feat(frontend): 命令面板实体搜索 + 九条规范深链 + 快捷键四组上下文激活(MES-79))
 
 const THEME_MODES: ReadonlyArray<ThemeMode> = ['light', 'dark', 'system'];
 

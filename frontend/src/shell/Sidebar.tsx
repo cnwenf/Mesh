@@ -52,7 +52,6 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   // 统计报表(analytics.md §4.1):工作区洞察仪表盘。
   { key: 'insights', suffix: '/insights' },
   { key: 'settings', suffix: '/settings' },
->>>>>>> 0b707ef3 (feat(frontend): 命令面板实体搜索 + 九条规范深链 + 快捷键四组上下文激活(MES-79))
 ];
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
