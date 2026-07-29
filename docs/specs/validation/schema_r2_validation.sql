@@ -4500,7 +4500,8 @@ CREATE TABLE execution_context_appends (
   seq          BIGINT NOT NULL CHECK (seq > 0),
   source       TEXT NOT NULL CHECK (source IN ('im_btw')),
   payload      JSONB NOT NULL,
-  injected_at  TIMESTAMPTZ NULL,                       -- daemon 真实注入 agent turn 后回写(水位 ACK)
+  injected_at  TIMESTAMPTZ NULL,                       -- daemon 注入后 best-effort 记录(attempt 作用域 receipt,R5-1)
+  injected_attempt_id UUID NULL,                       -- 记录注入的 attempt(旧 attempt receipt 不计入新 attempt 水位/过滤,R5-1)
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_eca_ws_id UNIQUE (workspace_id, id),
   CONSTRAINT uq_eca_execution_seq UNIQUE (execution_id, seq),   -- daemon 去重键之一
@@ -4689,17 +4690,21 @@ BEGIN
          'T39-9 FAIL: rearm 幂等键新写应成功(不撞原键)';
   RAISE NOTICE 'PASS T39-9: outbox rearm 按真实 DDL 执行(failed→pending 条件更新 + 建成执行 + rearm 键新写)';
 
-  -- T39-10:服务端持久水位——GREATEST 单调不回退(回退型 ACK 被忽略)
+  -- T39-10:服务端水位 attempt 作用域——当前 attempt 内单调不回退;requeue 原子重置为 0(新 attempt 重收)
   UPDATE task_executions SET context_injected_through_seq = 5 WHERE id = v_exec;
   UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 3)
-   WHERE id = v_exec;
+   WHERE id = v_exec;                                           -- 同 attempt 内回退型 ACK 被忽略
   ASSERT (SELECT context_injected_through_seq = 5 FROM task_executions WHERE id = v_exec),
-         'T39-10 FAIL: 水位应单调不回退(GREATEST 忽略回退 ACK)';
+         'T39-10 FAIL: 同 attempt 内水位应单调不回退';
   UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 7)
    WHERE id = v_exec;
   ASSERT (SELECT context_injected_through_seq = 7 FROM task_executions WHERE id = v_exec),
          'T39-10 FAIL: 水位应前进至 7';
-  RAISE NOTICE 'PASS T39-10: context_injected_through_seq 服务端持久水位(GREATEST 单调,回退 ACK 忽略)';
+  -- 模拟 requeue 事务:原子重置水位(旧 attempt receipt 不再计入,新 attempt 从 0 重收,至少一次)
+  UPDATE task_executions SET context_injected_through_seq = 0 WHERE id = v_exec;
+  ASSERT (SELECT context_injected_through_seq = 0 FROM task_executions WHERE id = v_exec),
+         'T39-10 FAIL: requeue 应原子重置水位为 0';
+  RAISE NOTICE 'PASS T39-10: 水位 attempt 作用域(同 attempt 单调不回退;requeue 重置 → 新 attempt 至少重收一次)';
 
   -- T39-11:ack 四字段语义——被抑制项 ack_sent_at 保持 NULL(字段不混用)
   INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
@@ -4849,13 +4854,14 @@ BEGIN
          'T39-16 FAIL: enqueued_at 倒序项按锁序窗口仍应为 follower(不产生第二个 leader)';
   RAISE NOTICE 'PASS T39-16: 窗口时间按锁序 ack_window_at(事务先开始但后取锁 → 仍恰好一个 leader)';
 
-  -- T39-17:rearm 并发消费竞态——原事件(键 K)与派生事件(键 K2、payload 执行键 K)恰好建一个 execution
+  -- T39-17:rearm 键分层约束结果验证(单事务顺序模拟两消费顺序;真实双消费者交错由服务层并发测试覆盖,§5.6)
+  -- 原事件(行级键 K,payload 执行键 K)与派生事件(行级键 K2,payload 执行键仍 K——R5-2 既有标准字段)
   INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
-  VALUES (v_ws, 'execution.enqueue', '{"execution_idempotency_key":"mes82-exec-key-K"}'::jsonb,
+  VALUES (v_ws, 'execution.enqueue', '{"idempotency_key":"mes82-exec-key-K","queue_item_id":"82000000-0000-0000-0000-0000000000e1"}'::jsonb,
           'mes82-orig-K', 'pending'),
-         (v_ws, 'execution.enqueue', '{"execution_idempotency_key":"mes82-exec-key-K"}'::jsonb,
+         (v_ws, 'execution.enqueue', '{"idempotency_key":"mes82-exec-key-K","queue_item_id":"82000000-0000-0000-0000-0000000000e1"}'::jsonb,
           encode(digest('mes82-orig-K' || '|rearm|' || 'item-race', 'sha256'), 'hex'), 'pending');
-  -- 消费者 A(任意顺序之一):取 payload.execution_idempotency_key=K 建执行 + 同事务绑定队列项
+  -- 消费者 A(任意顺序之一):取 payload.idempotency_key=K(既有平台标准字段)建执行 + 同事务绑定队列项
   INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
     conversation_key, seq, dispatch_mode, state)
   VALUES ('82000000-0000-0000-0000-0000000000e1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
@@ -4884,21 +4890,19 @@ BEGIN
   ASSERT (SELECT execution_id = '82000000-0000-0000-0000-0000000000f1'
             FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000e1'),
          'T39-17 FAIL: 队列项只绑定唯一 execution(守卫阻止第二次绑定)';
-  RAISE NOTICE 'PASS T39-17: rearm 并发消费竞态(键分层 + 队列项守卫 → 恰好一个 execution、无孤儿)';
+  RAISE NOTICE 'PASS T39-17: rearm 键分层约束结果(行级键 K/K2 + payload 执行键 K;唯一约束 + 队列项守卫 → 恰好一个 execution、绑定一次、无孤儿)';
 
   -- T39-18:busy 不消耗失败预算(available_at 后移、delivery_attempts 不变、不终态、不热循环)
   INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
   VALUES (v_ws, 'im.send', '{"kind":"ack"}'::jsonb, 'mes82-busy-event', 'pending');
-  -- 模拟连续 busy 超过通用 max_attempts(假设 8 次):每次仅后移 available_at,不递增 attempts
-  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
-   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
-  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
-   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
-  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
-   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  -- 模拟连续 busy 超过通用 max_attempts:FOR 循环执行 max_attempts+1 = 9 次,每次仅后移 available_at,不递增 attempts
+  FOR i IN 1..9 LOOP
+    UPDATE outbox_events SET available_at = now() + interval '2 seconds'
+     WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  END LOOP;
   ASSERT (SELECT status = 'pending' AND delivery_attempts = 0
             FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
-         'T39-18 FAIL: busy 不得递增 delivery_attempts、不得终态';
+         'T39-18 FAIL: 连续 busy 超 max_attempts(9 > 8)仍不得递增 delivery_attempts、不得终态';
   ASSERT (SELECT available_at > now() FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
          'T39-18 FAIL: busy 应后移 available_at(防热循环:领取条件 available_at <= now() 暂不满足)';
   ASSERT (SELECT count(*) FROM outbox_events
@@ -4912,7 +4916,7 @@ BEGIN
   ASSERT (SELECT status = 'published' AND delivery_attempts = 0
             FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
          'T39-18 FAIL: available_at 到期后应成功 published(全程未消耗失败预算)';
-  RAISE NOTICE 'PASS T39-18: busy 退避落真实 DDL(available_at 后移、不耗预算、不热循环、到期成功)';
+  RAISE NOTICE 'PASS T39-18: busy 退避落真实 DDL(连续 9 次(>max_attempts 8)仅后移 available_at、attempts 恒 0 不终态、不热循环、到期成功)';
 END $$;
 ROLLBACK;
 -- T39:end
