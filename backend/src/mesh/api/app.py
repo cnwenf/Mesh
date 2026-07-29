@@ -94,6 +94,8 @@ from mesh.runtime.channels import register_execution_checkers
 from mesh.runtime.daemon_routes import router as runtime_daemon_router
 from mesh.runtime.routes import router as runtime_router
 from mesh.runtime.service import RuntimeService
+from mesh.search.routes import router as search_router
+from mesh.search.service import SearchService
 from mesh.skill.bindings import BindingService
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportService, ImportSettings
@@ -264,6 +266,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
     )
     app.state.favorites_service = FavoritesService(session_factory)
+    app.state.search_service = SearchService(
+        session_factory, secret=settings.search_cursor_secret
+    )
     app.state.onboarding_service = OnboardingService(session_factory)
     app.state.chat_service = ChatService(
         session_factory,
@@ -348,6 +353,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(comment_inbox_router)
     app.include_router(chat_router)
     app.include_router(favorites_router)
+    app.include_router(search_router)
     app.include_router(onboarding_router)
     app.include_router(agent_router)
     app.include_router(runtime_router)
