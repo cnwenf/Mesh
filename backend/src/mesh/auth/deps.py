@@ -27,6 +27,21 @@ def get_auth_service(request: Request):
     return request.app.state.auth_service
 
 
+def require_current_access(request: Request) -> jwt_mod.AccessToken:
+    """Decode the request's Bearer access JWT into its validated claims.
+
+    For routes that need claim-level detail (``sid`` for session lifecycle
+    operations — auth.md §1.1 registry) beyond the ``User`` row that
+    :func:`get_current_user` provides. Verification is identical: fixed
+    algorithm, ``exp`` enforced, ``typ=access`` required.
+    """
+    settings: Settings = request.app.state.settings
+    token = extract_bearer_token(request.headers.get("Authorization"))
+    return jwt_mod.decode_access_token(
+        token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
+    )
+
+
 async def get_current_user(
     request: Request, session: AsyncSession = Depends(get_session)
 ) -> User:
@@ -58,7 +73,12 @@ async def require_recent_auth(
     claims = jwt_mod.decode_access_token(
         token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
     )
-    if datetime.now(UTC) - claims.authenticated_at > settings.reauth_window:
+    # R6-H3: an absent auth_time (NULL authenticated_at) fails closed — the
+    # session has no recent primary authentication to vouch for the operation.
+    if (
+        claims.authenticated_at is None
+        or datetime.now(UTC) - claims.authenticated_at > settings.reauth_window
+    ):
         raise ForbiddenError(
             "recent re-authentication required", code="reauth_required"
         )

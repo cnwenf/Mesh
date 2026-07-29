@@ -9,12 +9,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import uuid
+
 import pyotp
 import pytest
 from sqlalchemy import select
 
+from mesh.auth import jwt as jwt_mod
 from mesh.auth.security import decrypt_secret, hash_token
-from mesh.auth.service import AuthService, MfaRequiredResult, TokenResult, UserUpdate
+from mesh.auth.service import (
+    AuthService,
+    MfaRequiredResult,
+    RefreshWinner,
+    TokenResult,
+    UserUpdate,
+)
 from mesh.config import load_settings
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.outbox import OutboxEvent
@@ -69,6 +78,19 @@ def service(session_factory, settings, clock, delivered):
 
 
 EMAIL = "li@corp.com"
+
+
+def _sid_of(service, access_token: str):
+    """The access JWT's sid claim — how change-password identifies the session."""
+    claims = jwt_mod.decode_access_token(
+        access_token,
+        secret=service._settings.jwt_secret,
+        algorithm=service._settings.jwt_algorithm,
+    )
+    assert claims.sid is not None
+    return claims.sid
+
+
 PASSWORD = "a-strong-passw0rd"
 
 
@@ -170,46 +192,73 @@ class TestLogin:
 
 
 class TestRefreshAndLogout:
-    async def test_refresh_rotates_and_revokes_old(self, service):
-        await service.register(email=EMAIL, password=PASSWORD, display_name="x")
-        first = await service.login(email=EMAIL, password=PASSWORD)
-        second = await service.refresh(refresh_token=first.refresh_token)
-        assert second.refresh_token != first.refresh_token
-        # The old refresh token is now revoked.
-        with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=first.refresh_token)
+    async def test_refresh_rotates_in_place(self, service):
+        # auth.md §3.8: rotation is an in-place credential swap with a bounded
+        # grace window — NOT revoke-and-reissue (that mis-logged-out multi-tab
+        # users racing on the same cookie).
+        from mesh.auth.service import RefreshGrace, RefreshWinner
 
-    async def test_refresh_replay_revokes_all_sessions(self, service, session_factory):
         await service.register(email=EMAIL, password=PASSWORD, display_name="x")
         first = await service.login(email=EMAIL, password=PASSWORD)
-        second = await service.refresh(refresh_token=first.refresh_token)
-        # Replaying the already-rotated token revokes EVERYTHING for the user.
+        second = await service.refresh(presented_token=first.refresh_token)
+        assert isinstance(second, RefreshWinner)
+        assert second.refresh_token != first.refresh_token
+        # Inside the grace window the rotated-out token still yields an access
+        # token — access ONLY, never a refresh (loser convergence, §3.8).
+        grace = await service.refresh(presented_token=first.refresh_token)
+        assert isinstance(grace, RefreshGrace)
+
+    async def test_refresh_rotated_out_token_rejected_after_grace(self, service, clock):
+        from mesh.auth.service import RefreshWinner
+
+        await service.register(email=EMAIL, password=PASSWORD, display_name="x")
+        first = await service.login(email=EMAIL, password=PASSWORD)
+        second = await service.refresh(presented_token=first.refresh_token)
+        assert isinstance(second, RefreshWinner)
+        clock.advance(seconds=31)  # past MESH_REFRESH_ROTATION_GRACE_SECONDS
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=first.refresh_token)
-        with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=second.refresh_token)
+            await service.refresh(presented_token=first.refresh_token)
+        # The live credential still works — no family revocation happened.
+        assert isinstance(
+            await service.refresh(presented_token=second.refresh_token), RefreshWinner
+        )
 
     async def test_refresh_expired_token_rejected(self, service, clock):
         await service.register(email=EMAIL, password=PASSWORD, display_name="x")
         first = await service.login(email=EMAIL, password=PASSWORD)
         clock.advance(days=15)  # past default refresh TTL
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=first.refresh_token)
+            await service.refresh(presented_token=first.refresh_token)
 
     async def test_logout_revokes_only_that_session(self, service):
+        from mesh.auth.service import RefreshWinner
+
         await service.register(email=EMAIL, password=PASSWORD, display_name="x")
         a = await service.login(email=EMAIL, password=PASSWORD)
         b = await service.login(email=EMAIL, password=PASSWORD)
         user = await _get_user(service._sf, EMAIL)
         assert len(await service.list_sessions(user_id=user.id)) == 2
 
-        await service.logout(user_id=user.id, refresh_token=a.refresh_token)
+        await service.logout(refresh_token=a.refresh_token)
         # Only one active session remains; the other still refreshes fine.
-        # (We don't re-present `a`'s token here — reusing a revoked refresh token
-        # is treated as replay and revokes the whole family by design.)
         assert len(await service.list_sessions(user_id=user.id)) == 1
-        assert isinstance(await service.refresh(refresh_token=b.refresh_token), TokenResult)
+        assert isinstance(
+            await service.refresh(presented_token=b.refresh_token), RefreshWinner
+        )
         assert a.refresh_token != b.refresh_token
+
+    async def test_logout_by_session_id(self, service):
+        await service.register(email=EMAIL, password=PASSWORD, display_name="x")
+        tokens = await service.login(email=EMAIL, password=PASSWORD)
+        claims = jwt_mod.decode_access_token(
+            tokens.access_token,
+            secret=service._settings.jwt_secret,
+            algorithm=service._settings.jwt_algorithm,
+        )
+        assert claims.sid is not None
+        await service.logout(session_id=claims.sid, user_id=claims.subject)
+        with pytest.raises(UnauthorizedError):
+            await service.refresh(presented_token=tokens.refresh_token)
 
     async def test_logout_all_revokes_every_session(self, service):
         await service.register(email=EMAIL, password=PASSWORD, display_name="x")
@@ -220,7 +269,7 @@ class TestRefreshAndLogout:
         assert revoked >= 2
         for token in (a.refresh_token, b.refresh_token):
             with pytest.raises(UnauthorizedError):
-                await service.refresh(refresh_token=token)
+                await service.refresh(presented_token=token)
 
 
 # --- password reset / email verification -------------------------------------
@@ -236,7 +285,7 @@ class TestResetAndVerify:
         await service.reset_password(token=token, new_password="a-new-passw0rd")
         # Old sessions invalidated by the password change.
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=login.refresh_token)
+            await service.refresh(presented_token=login.refresh_token)
         # New password works.
         assert isinstance(
             await service.login(email=EMAIL, password="a-new-passw0rd"), TokenResult
@@ -367,18 +416,17 @@ class TestChangePassword:
             user_id=user.id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token=current.refresh_token,
+            current_session_id=_sid_of(service, current.access_token),
         )
 
         # The presenting session survives the password change.
         assert isinstance(
-            await service.refresh(refresh_token=current.refresh_token), TokenResult
+            await service.refresh(presented_token=current.refresh_token), RefreshWinner
         )
         assert len(await service.list_sessions(user_id=user.id)) == 1
-        # The other session's refresh is dead. Asserted LAST: presenting a
-        # revoked token is replay detection and revokes the whole family.
+        # The other session's refresh is dead.
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=other.refresh_token)
+            await service.refresh(presented_token=other.refresh_token)
 
     async def test_change_without_token_revokes_every_session(self, service):
         user, current = await self._setup(service)
@@ -386,7 +434,7 @@ class TestChangePassword:
             user_id=user.id, old_password=PASSWORD, new_password=self.NEW_PASSWORD
         )
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=current.refresh_token)
+            await service.refresh(presented_token=current.refresh_token)
         assert await service.list_sessions(user_id=user.id) == []
 
     async def test_change_unknown_token_falls_back_to_revoke_all(self, service):
@@ -395,10 +443,10 @@ class TestChangePassword:
             user_id=user.id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token="stale-or-forged-token",
+            current_session_id=uuid.uuid4(),
         )
         with pytest.raises(UnauthorizedError):
-            await service.refresh(refresh_token=current.refresh_token)
+            await service.refresh(presented_token=current.refresh_token)
 
     async def test_change_re_stamps_current_session_auth_time(
         self, service, clock, session_factory
@@ -411,7 +459,7 @@ class TestChangePassword:
             user_id=user.id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token=current.refresh_token,
+            current_session_id=_sid_of(service, current.access_token),
         )
 
         async with session_factory() as session:
@@ -429,7 +477,7 @@ class TestChangePassword:
             user_id=user.id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token=current.refresh_token,
+            current_session_id=_sid_of(service, current.access_token),
             ip_address="203.0.113.7",
             user_agent="UA-current",
         )
@@ -516,7 +564,7 @@ class TestChangePassword:
             user_id=user_id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token=current.refresh_token,
+            current_session_id=_sid_of(service, current.access_token),
         )
 
         broadcasts = await self._broadcasts(session_factory, ws_id)
@@ -535,7 +583,7 @@ class TestChangePassword:
             user_id=user_id,
             old_password=PASSWORD,
             new_password=self.NEW_PASSWORD,
-            current_refresh_token=current.refresh_token,
+            current_session_id=_sid_of(service, current.access_token),
         )
 
         assert not await self._broadcasts(session_factory, ws_id)

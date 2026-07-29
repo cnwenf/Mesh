@@ -70,6 +70,9 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # is a deployment concern; the 403 gate is unit-covered) and a short lease
     # keeps the reaper red-line tests fast.
     env.setdefault("MESH_DAEMON_TLS_REQUIRED", "false")
+    # Web session cookie: Secure relaxed for the plaintext loopback e2e
+    # transport (same deliberate exception; production default stays true).
+    env.setdefault("MESH_SESSION_COOKIE_SECURE", "false")
     env.setdefault("MESH_RUNTIME_LEASE_SECONDS", "3")
     # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
     # source server, which the SSRF guard only permits via the allowlist.

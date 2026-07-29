@@ -8,11 +8,12 @@ lists bindings; ``DELETE /{provider}`` unbinds (keeping ≥1 login method).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 
 from mesh.auth.deps import get_current_user, require_recent_auth
 from mesh.auth.oauth import OAuthService
+from mesh.auth.routes import _set_session_cookie, _settings
 from mesh.db.models.user import User
 from mesh.errors import ValidationError
 
@@ -70,6 +71,7 @@ async def oauth_bind_start(
 async def oauth_callback(
     provider: str,
     request: Request,
+    response: Response,
     code: str | None = None,
     state: str | None = None,
 ) -> dict:
@@ -88,6 +90,11 @@ async def oauth_callback(
         ip_address=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
+    # R4-H1: a login-mode callback delivers the refresh via HttpOnly cookie —
+    # never in the JSON body (bind-mode responses carry no refresh).
+    refresh_token = data.pop("refresh_token", None)
+    if refresh_token is not None:
+        _set_session_cookie(response, refresh_token, _settings(request), remember=False)
     return {"data": data}
 
 

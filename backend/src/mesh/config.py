@@ -143,6 +143,12 @@ class Settings(BaseSettings):
     # refreshes converge on the winner's credential instead of logging out.
     refresh_rotation_grace_seconds: int = Field(default=30, ge=0)
 
+    # Web session cookie attributes (auth.md R4-H1): HttpOnly + SameSite=Strict
+    # + Path=/ are unconditional; ``Secure`` is on by default and only relaxed
+    # for plaintext loopback dev stacks (same deliberate exception pattern as
+    # MESH_DAEMON_TLS_REQUIRED — production leaves it true).
+    session_cookie_secure: bool = True
+
     # Transactional email (verification / reset). In ``auth_mode=dev`` tokens go
     # to the Redis dev-mailbox (test path); in production a real SMTP server is
     # used when ``smtp_host`` is set, else delivery is a logged no-op so the API

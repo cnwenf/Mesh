@@ -42,7 +42,9 @@ class AccessToken:
     subject: uuid.UUID
     jti: str
     expires_at: datetime
-    authenticated_at: datetime
+    # None ⇒ no recent primary authentication (claim absent) — step-up gates
+    # fail closed on this rather than trusting the token's issue time (R6-H3).
+    authenticated_at: datetime | None
     # Session-location invariant anchor (auth.md §1.1): names the sessions row.
     # Regular routes never look it up; lifecycle operations (refresh /
     # introspect / revoke / reauth / device approve) locate the session by it.
@@ -129,8 +131,14 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> AccessTok
     except (ValueError, KeyError) as exc:
         raise UnauthorizedError("invalid or expired token") from exc
 
-    # auth_time falls back to iat for tokens issued before step-up existed.
-    auth_time_raw = claims.get("auth_time", claims["iat"])
+    # auth_time: omitted ⇒ no primary authentication recorded (R6-H3). No iat
+    # fallback — issuance time must never masquerade as an authentication.
+    auth_time_raw = claims.get("auth_time")
+    authenticated_at: datetime | None = (
+        datetime.fromtimestamp(int(auth_time_raw), tz=UTC)
+        if auth_time_raw is not None
+        else None
+    )
     # Optional session/device claims — absent on pre-increment tokens.
     sid: uuid.UUID | None = None
     if claims.get("sid"):
@@ -151,7 +159,7 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> AccessTok
         subject=subject,
         jti=str(claims.get("jti", "")),
         expires_at=datetime.fromtimestamp(claims["exp"], tz=UTC),
-        authenticated_at=datetime.fromtimestamp(int(auth_time_raw), tz=UTC),
+        authenticated_at=authenticated_at,
         sid=sid,
         workspace_id=workspace_id,
         scopes=frozenset(str(s) for s in scope_raw),

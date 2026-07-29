@@ -27,21 +27,17 @@ class LoginRequest(BaseModel):
     remember: bool = False
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1)
-
-
-class LogoutRequest(BaseModel):
-    refresh_token: str = Field(min_length=1)
-
-
 class TokenResponse(BaseModel):
-    """Issued on login / successful refresh (auth.md §3.4)."""
+    """Issued on login / successful refresh (auth.md §3.4, R4-H1).
+
+    The response body NEVER carries a refresh token — Web refresh lives in the
+    HttpOnly ``mesh_session`` cookie; CLI/device refresh is delivered exactly
+    once, by the device token endpoint (Bearer ``mesh_rft_…``).
+    """
 
     access_token: str
     token_type: str = "Bearer"
     expires_in: int
-    refresh_token: str
 
 
 class MfaRequiredResponse(BaseModel):
@@ -69,16 +65,15 @@ class ResetPasswordRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    """Authenticated password change (auth.md §3.1/§4.2, MES-39).
+    """Authenticated password change (auth.md §3.1/§4.2, MES-39 / R7-M1).
 
-    ``refresh_token`` identifies the caller's *current* session so it survives
-    the change while every other session is revoked; omit it (or present an
-    unrecognised token) to revoke them all.
+    The initiating session survives the change (every other session is
+    revoked); it is identified by the caller's access JWT ``sid`` — the body
+    carries NO refresh token (R4-H1).
     """
 
     old_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
-    refresh_token: str | None = None
 
 
 class VerifyEmailRequest(BaseModel):
