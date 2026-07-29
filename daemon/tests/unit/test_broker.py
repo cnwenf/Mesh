@@ -197,7 +197,8 @@ class TestGatedMethods:
     async def test_issue_comment_write_allowed(self, broker):
         server, transport = broker
         reader, writer = await connect(server)
-        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "update", "idempotency_key": "c-1"})
+        resp = await call(reader, writer, "issue.comment",
+                          {"issue_id": ISSUE_ID, "body": "update", "idempotency_key": "c-1"})
         assert resp["ok"] is True
         sent = transport.calls[-1]
         assert sent.method == "POST"
@@ -372,7 +373,8 @@ class TestEdgePaths:
     async def test_comment_invalid_params(self, broker):
         server, _ = broker
         reader, writer = await connect(server)
-        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "", "idempotency_key": "c-bad"})
+        resp = await call(reader, writer, "issue.comment",
+                          {"issue_id": ISSUE_ID, "body": "", "idempotency_key": "c-bad"})
         assert resp["ok"] is False
         assert resp["error"]["code"] == "invalid_params"
         writer.close()

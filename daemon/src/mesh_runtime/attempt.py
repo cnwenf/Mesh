@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass, field
 
 from mesh_runtime.api import RuntimeApiClient
+from mesh_runtime.backoff import capped_retry_after
 from mesh_runtime.errors import DaemonError, LeaseConflictError, RateLimitedError
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
@@ -43,7 +44,6 @@ _SUMMARY_MAX = 4096
 _SEALED_FLUSH_RETRIES = 3
 _SEALED_FLUSH_BACKOFF_BASE = 0.5
 _SEALED_FLUSH_BACKOFF_CAP = 5.0
-_RETRY_AFTER_CAP_SECONDS = 60.0
 
 
 @dataclass
@@ -459,6 +459,6 @@ def _sealed_flush_delay(exc: DaemonError, *, attempt: int) -> float:
     server-provided Retry-After, capped at a minute so a hostile or
     misconfigured server cannot park the terminal flush indefinitely;
     otherwise capped exponential backoff."""
-    if isinstance(exc, RateLimitedError) and exc.retry_after is not None:
-        return min(max(exc.retry_after, 0.0), _RETRY_AFTER_CAP_SECONDS)
+    if isinstance(exc, RateLimitedError):
+        return capped_retry_after(exc.retry_after)
     return min(_SEALED_FLUSH_BACKOFF_BASE * (2**attempt), _SEALED_FLUSH_BACKOFF_CAP)

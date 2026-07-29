@@ -91,6 +91,11 @@ class Journal:
         # 0700 keeps those aux files unreadable to other users regardless of
         # umask — defense in depth on top of the doctor's directory check (§2.3).
         os.chmod(self._path.parent, 0o700)
+        # Pre-create the ledger with an explicit 0600 so there is NO window in
+        # which SQLite's connect creates it under a permissive umask; NOFOLLOW
+        # fails closed on a symlink planted at the path.
+        fd = os.open(self._path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
         # check_same_thread=False: every call is dispatched via asyncio.to_thread
         # (arbitrary worker threads) but serialized by self._lock, so the
         # connection is never used concurrently — only from varying threads.

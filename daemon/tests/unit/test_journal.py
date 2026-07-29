@@ -1,3 +1,4 @@
+import os
 import stat
 
 import pytest
@@ -164,3 +165,29 @@ class TestCleanupStateAndMigration:
         await j2.open()
         assert (await j2.get("old-1")).cleanup_state == ""
         await j2.close()
+
+
+class TestFilePermissions:
+    async def test_created_0600_under_permissive_umask(self, tmp_path):
+        """The ledger is pre-created with an explicit 0600 — even umask 000
+        must not leave it world-readable, at any point (§2.3)."""
+        old = os.umask(0o000)
+        try:
+            j = Journal(tmp_path / "state" / "ledger.sqlite3")
+            await j.open()
+            await j.close()
+        finally:
+            os.umask(old)
+        mode = stat.S_IMODE((tmp_path / "state" / "ledger.sqlite3").stat().st_mode)
+        assert mode == 0o600
+
+    async def test_open_refuses_symlinked_ledger_path(self, tmp_path):
+        """A symlink planted at the ledger path fails closed (O_NOFOLLOW)."""
+        real = tmp_path / "state" / "real.sqlite3"
+        real.parent.mkdir(mode=0o700)
+        real.write_bytes(b"")
+        link = tmp_path / "state" / "ledger.sqlite3"
+        link.symlink_to(real)
+        j = Journal(link)
+        with pytest.raises(OSError):
+            await j.open()

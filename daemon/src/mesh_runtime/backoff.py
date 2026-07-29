@@ -40,3 +40,15 @@ KEEPALIVE = BackoffPolicy(base=1.0, cap=15.0)
 
 #: 429 fallback when the server omitted Retry-After.
 RATE_LIMITED_FALLBACK_SECONDS = 5.0
+
+#: Minute-level cap on a server-provided Retry-After: a hostile or
+#: misconfigured server cannot park the claim / heartbeat loops for hours.
+RETRY_AFTER_CAP_SECONDS = 60.0
+
+
+def capped_retry_after(retry_after: float | None) -> float:
+    """Honour the server's Retry-After within frozen bounds: the fallback
+    when absent, and a minute-level cap so it can never stall the daemon."""
+    if retry_after is None:
+        return RATE_LIMITED_FALLBACK_SECONDS
+    return min(max(retry_after, 0.0), RETRY_AFTER_CAP_SECONDS)
