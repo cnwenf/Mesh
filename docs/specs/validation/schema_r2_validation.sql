@@ -3830,23 +3830,23 @@ BEGIN
   UPDATE sessions SET token_hash='R0', previous_token_hash=NULL, rotated_at=NULL, revoked_at=NULL
    WHERE id='abababab-0000-0000-0000-000000000001';
 
-  -- 胜者请求:条件轮换 WHERE token_hash=R0 → 影响 1 行(仲裁胜出),previous=R0、rotated_at=now()
+  -- 胜者请求:条件轮换 WHERE token_hash=R0 AND 未撤销 AND 未过期 → 影响 1 行(仲裁胜出),previous=R0、rotated_at=now()
   UPDATE sessions SET token_hash='R1', previous_token_hash=token_hash, rotated_at=now()
-   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL;
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 1, 'T36 FAIL: 胜者条件轮换应影响 1 行(行数控裁)';
 
   -- 后来者请求(携带 R0):条件轮换 WHERE token_hash='R0' → 影响 0 行(已轮换,仲裁败北)
   UPDATE sessions SET token_hash='R2', previous_token_hash=token_hash, rotated_at=now()
-   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL;
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 0, 'T36 FAIL: 后来者对已轮换 token 的条件轮换应影响 0 行(不得二次轮换)';
 
-  -- 后来者落宽限路径:previous_token_hash=R0 匹配 + 窗内 + 未撤销 → 只发 access(协议上不写库)
+  -- 后来者落宽限路径:previous_token_hash=R0 匹配 + 窗内 + 未撤销 + 未过期 → 只发 access(协议上不写库)
   ASSERT EXISTS (SELECT 1 FROM sessions
                   WHERE id='abababab-0000-0000-0000-000000000001'
                     AND previous_token_hash='R0' AND revoked_at IS NULL
-                    AND rotated_at >= now() - interval '30 seconds'),
+                    AND rotated_at >= now() - interval '30 seconds' AND expires_at > now()),
          'T36 FAIL: 窗内旧 refresh 应命中宽限路径条件(只发 access,不下发 refresh 明文)';
   -- 宽限路径不写库的断言:token_hash/previous/rotated_at 保持胜者写入值
   ASSERT (SELECT token_hash FROM sessions WHERE id='abababab-0000-0000-0000-000000000001') = 'R1'
@@ -3861,18 +3861,35 @@ BEGIN
                         AND previous_token_hash='R0' AND rotated_at >= now() - interval '30 seconds'),
          'T36 FAIL: 超出宽限窗(120s > 30s)的旧 refresh 不应命中宽限路径';
 
-  -- 撤销后:revoked_at 非空 → 胜者路径(条件轮换 WHERE revoked_at IS NULL)与宽限路径(同条件)均拒绝
+  -- 撤销后:revoked_at 非空 → 胜者路径(条件轮换 WHERE revoked_at IS NULL AND expires_at > now())与宽限路径(同条件)均拒绝
   UPDATE sessions SET revoked_at=now(), rotated_at=now()
    WHERE id='abababab-0000-0000-0000-000000000001';
   UPDATE sessions SET token_hash='R3', previous_token_hash=token_hash, rotated_at=now()
-   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R1' AND revoked_at IS NULL;
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R1' AND revoked_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话的条件轮换应影响 0 行';
   ASSERT NOT EXISTS (SELECT 1 FROM sessions
                       WHERE id='abababab-0000-0000-0000-000000000001'
-                        AND previous_token_hash='R0' AND revoked_at IS NULL),
+                        AND previous_token_hash='R0' AND revoked_at IS NULL AND expires_at > now()),
          'T36 FAIL: 已撤销会话不应命中宽限路径';
-  RAISE NOTICE 'PASS T36-8: R5-H1 轮换协议判定(胜者行数控裁/后来者 0 行不二次轮换/宽限只发 access 不写库/超窗失效/撤销双路拒绝)';
+
+  -- 过期后(MES-78 HIGH-1):expires_at 已过 → 胜者路径与宽限路径均拒绝,过期会话不得经轮换复活
+  -- (refresh 为不透明随机串无内嵌 exp,sessions.expires_at 是到期唯一真源;与 T36-6 设备批准条件更新的 expires_at > now() 对齐)
+  UPDATE sessions SET revoked_at=NULL, rotated_at=now(), expires_at=now() - interval '1 day'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  UPDATE sessions SET token_hash='R4', previous_token_hash=token_hash, rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R1' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已过期会话的条件轮换应影响 0 行(不得复活)';
+  ASSERT NOT EXISTS (SELECT 1 FROM sessions
+                      WHERE id='abababab-0000-0000-0000-000000000001'
+                        AND previous_token_hash='R0' AND revoked_at IS NULL
+                        AND rotated_at >= now() - interval '30 seconds' AND expires_at > now()),
+         'T36 FAIL: 已过期会话不应命中宽限路径(窗内 + 未撤销亦不得放行)';
+  -- 恢复活跃态供后续 ⑨ step-up 断言使用
+  UPDATE sessions SET revoked_at=NULL, expires_at=now() + interval '30 days'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  RAISE NOTICE 'PASS T36-8: R5-H1 轮换协议判定(胜者行数控裁/后来者 0 行不二次轮换/宽限只发 access 不写库/超窗失效/撤销双路拒绝/过期双路拒绝不得复活)';
 
   -- ⑨ R6-H3 authenticated_at step-up 状态机(取消无条件默认,按来源显式赋值)
   -- 建 session ≠ 主动认证:新建会话 authenticated_at 可为 NULL(闸门不通过)
