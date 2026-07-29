@@ -53,15 +53,12 @@ from mesh.auth.service import (
     TokenResult,
     UserUpdate,
 )
-from mesh.config import Settings
+from mesh.config import SESSION_COOKIE_NAME, Settings
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.errors import ForbiddenError, UnauthorizedError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
-
-# Web session cookie carrying the refresh token (R4-H1 / §3 refresh contract).
-SESSION_COOKIE = "mesh_session"
 
 # Rate-limit thresholds (auth.md §3.6 — login-class is the tightest).
 LOGIN_LIMIT = 5
@@ -104,26 +101,6 @@ def _settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
-def _set_session_cookie(
-    response: Response, refresh_token: str, settings: Settings, *, remember: bool
-) -> None:
-    """Deliver the Web refresh token (R4-H1): HttpOnly/Secure/SameSite=Strict."""
-    ttl = settings.remember_refresh_token_ttl if remember else settings.refresh_token_ttl
-    response.set_cookie(
-        SESSION_COOKIE,
-        refresh_token,
-        max_age=int(ttl.total_seconds()),
-        httponly=True,
-        secure=settings.session_cookie_secure,
-        samesite="strict",
-        path="/",
-    )
-
-
-def _clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE, path="/")
-
-
 def _same_origin(request: Request) -> bool:
     """Origin/Referer same-site check for cookie-authenticated mutations.
 
@@ -158,6 +135,42 @@ def _access_payload(result: TokenResult | RefreshWinner) -> dict:
     }
 
 
+def _cookie_secure(settings: Settings) -> bool:
+    """Secure flag (R4-H1 + theme.md §2.3 ①): an explicit ``cookie_secure``
+    override wins (TLS-terminator deployments speaking http to the app);
+    otherwise the R4-H1 knob ``session_cookie_secure`` decides (on by default;
+    the http-loopback dev stack relaxes it via compose env)."""
+    if settings.cookie_secure is not None:
+        return settings.cookie_secure
+    return settings.session_cookie_secure
+
+
+def _set_session_cookie(
+    response: Response, refresh_token: str, settings: Settings, *, remember: bool = False
+) -> None:
+    """Deliver the Web refresh token (R4-H1): HttpOnly/Secure/SameSite=Strict.
+
+    The SOLE web refresh transport — the response body carries access only
+    (never refresh plaintext). The theme.md §2.3 entry middleware reads this
+    cookie server-side for first-frame theme negotiation; max_age tracks the
+    refresh TTL (remember extends it).
+    """
+    ttl = settings.remember_refresh_token_ttl if remember else settings.refresh_token_ttl
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        value=refresh_token,
+        max_age=int(ttl.total_seconds()),
+        httponly=True,
+        secure=_cookie_secure(settings),
+        samesite="strict",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+
+
 # --- public auth -------------------------------------------------------------
 
 
@@ -177,6 +190,10 @@ async def register(body: RegisterRequest, request: Request, response: Response) 
     user, _token = await service.register(
         email=body.email, password=body.password, display_name=body.display_name
     )
+    # §4.1 auto-login: issue the session cookie so the post-register first
+    # navigation already carries the theme negotiation context.
+    if _token is not None:
+        _set_session_cookie(response, _token, _settings(request))
     return {"data": user}
 
 
@@ -241,7 +258,7 @@ async def refresh(request: Request, response: Response) -> dict:
     passes the Origin/Referer same-site check (CSRF defence in depth).
     """
     service: AuthService = get_auth_service(request)
-    cookie_token = request.cookies.get(SESSION_COOKIE)
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     authorization = request.headers.get("Authorization") or ""
     bearer_token: str | None = None
     if authorization.startswith("Bearer "):
@@ -396,7 +413,7 @@ async def logout(request: Request, response: Response) -> dict:
     way.
     """
     service: AuthService = get_auth_service(request)
-    cookie_token = request.cookies.get(SESSION_COOKIE)
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     authorization = request.headers.get("Authorization") or ""
     if cookie_token:
         await service.logout(refresh_token=cookie_token)
@@ -416,9 +433,12 @@ async def logout(request: Request, response: Response) -> dict:
 
 
 @router.post("/auth/logout-all")
-async def logout_all(request: Request, user: User = Depends(get_current_user)) -> dict:
+async def logout_all(
+    request: Request, response: Response, user: User = Depends(get_current_user)
+) -> dict:
     service: AuthService = get_auth_service(request)
     revoked = await service.logout_all(user_id=user.id)
+    _clear_session_cookie(response)
     return {"data": {"revoked": revoked}}
 
 

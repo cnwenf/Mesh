@@ -20,6 +20,11 @@ import type {
 } from '../../api/invitations';
 import { getToken } from '../../api/tokenStore';
 import { Button } from '../../design';
+import {
+  beginWorkspaceLoad as beginWorkspaceThemeLoad,
+  endWorkspaceContext as endWorkspaceThemeContext,
+  setWorkspaceDefaultFromPreview,
+} from '../../state/workspaceThemeBridge';
 import { formatWithZoneAnnotation, useT } from '../../i18n';
 import { useSettingsStore } from '../../state/settingsStore';
 
@@ -45,17 +50,31 @@ export function InviteAcceptPage(props: InviteAcceptPageProps): React.JSX.Elemen
 
   const loadPreview = useCallback(async (): Promise<void> => {
     setPhase({ kind: 'previewing' });
+    // theme.md §2.2:邀请接受页(未登录)协商链第 2 级经公开 invitation preview
+    // 的 appearance.default_theme 解析。加载期间标记「期望本级解析但未就绪」,
+    // 无显式账号偏好时呈现中性 skeleton 而非猜测主题(§2.3 ③)。
+    beginWorkspaceThemeLoad();
     try {
       const preview = await previewInvitation(client, token);
+      if (preview.valid) {
+        setWorkspaceDefaultFromPreview(preview.appearance?.default_theme);
+      } else {
+        endWorkspaceThemeContext();
+      }
       setPhase({ kind: 'preview', preview });
     } catch {
       // preview 恒 200;网络/解析失败按 not_found 同形呈现(不泄漏内部细节)
+      endWorkspaceThemeContext();
       setPhase({ kind: 'rejected', reason: 'not_found' });
     }
   }, [client, token]);
 
   useEffect(() => {
     void loadPreview();
+    return () => {
+      // 离开邀请入口 → 回到「无工作区上下文」,协商链落系统级。
+      endWorkspaceThemeContext();
+    };
   }, [loadPreview]);
 
   const handleAccept = async (): Promise<void> => {

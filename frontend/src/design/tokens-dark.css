@@ -1,31 +1,40 @@
-/*
- * 语义 token — 暗色集(README §6.12 主题契约)。
- * 暗色模式 = 整组 token 取值替换(非逐组件改写):颜色 token 与亮色集一一对应,
- * 同样满足 WCAG 2.1 AA(4.5:1)。单一事实源:src/design/tokenValues.ts(DARK_TOKENS)。
- */
+/* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 :root[data-theme='dark'] {
   --color-bg: #0f172a;
   --color-surface: #1e293b;
   --color-surface-raised: #334155;
+  --color-surface-hover: #263449;
+  --color-surface-sunken: #162032;
   --color-text: #f8fafc;
   --color-text-muted: #94a3b8;
   --color-border: #334155;
-
   --color-primary: #3b82f6;
   --color-primary-contrast: #0f172a;
-
   --color-danger: #f87171;
   --color-danger-contrast: #450a0a;
+  --color-danger-bg: #450a0a;
   --color-warn: #fbbf24;
   --color-warn-contrast: #451a03;
+  --color-warn-bg: #451a03;
   --color-success: #4ade80;
   --color-success-contrast: #052e16;
+  --color-success-bg: #052e16;
   --color-info: #38bdf8;
   --color-info-contrast: #082f49;
-
+  --color-info-bg: #082f49;
+  --color-primary-bg: #101828;
+  --color-selection-bg: #1e3a8a;
+  --color-selection-text: #f8fafc;
+  --color-mark-bg: #78350f;
+  --color-mark-text: #fef3c7;
+  --color-skeleton-base: #64748b;
+  --color-skeleton-highlight: #94a3b8;
+  --color-code-bg: #0b1220;
+  --color-code-text: #e2e8f0;
+  --color-code-keyword: #c4b5fd;
+  --color-code-string: #86efac;
+  --color-code-comment: #94a3b8;
   --color-focus-ring: #60a5fa;
-
   --color-scrim: rgba(0, 0, 0, 0.6);
-
   --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.55);
 }

@@ -79,7 +79,7 @@ npm run typecheck       # tsc --noEmit
 npm run test            # vitest 单元/组件测试
 npm run test:coverage   # 覆盖率(整体 lines/functions/branches/statements ≥90% 门禁)
 node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆盖率 ≥90% 校验
-npm run build           # 生产构建(tsc -b + vite build)
+npm run build           # 生产构建(gen:tokens + tsc -b + vite build)
 npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与 dev server)
 ```
 
@@ -128,15 +128,23 @@ frontend/
     │   ├── CommandPalette.tsx#   Ctrl/Cmd+K 命令面板(命令注册接口)
     │   └── ShortcutHelp.tsx  #   ? 快捷键帮助层
     ├── state/                # 全局状态
-    │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地持久化;阶段 2 接 PATCH /users/me)
+    │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地镜像 + 服务端同步:PATCH /users/me,auth.md §3.1;preferencesSync/pendingSettingsQueue/usePreferencesBootstrap)
     │   └── authStore.ts      #   Bearer token 存取
     └── shell/                # App shell 与占位页
         ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
         └── pages/            #   登录占位页、404、错误页、首页骨架演示区
 ```
 
+## 主题体系(theme.md — 设计系统级契约)
+
+- **token 单一事实源**:新增/修改 token **只改 `src/design/tokenValues.ts`**,随后 `npm run gen:tokens` 重新生成 `tokens.css` / `tokens-dark.css` / `tokens-print.css`(生成产物首行带禁改标记;CI 幂等断言:生成后工作区无 diff)。`AA_CONTRAST_PAIRS` 为对比度配对登记表(新增颜色 token 须先登记再合入;text 4.5:1、大文本/图形 3:1)。
+- **协商链(§2.2)**:`users.settings.theme`(absent/null = 继承工作区默认;显式 `system` = 忽略工作区跟随 OS)→ `workspaces.settings.default_theme`(WorkspaceProvider 经 `workspaceThemeBridge` 桥接,`workspace.updated` 实时联动)→ 系统 `prefers-color-scheme`。未登录邀请页经 preview `appearance.default_theme` 解析第 2 级。
+- **首帧三级链路(§2.3)**:`index.html` 内联脚本按「入口注入 `__MESH_APPEARANCE__`(服务端逐请求解析)→ 分区镜像键 `mesh.theme.active`(路由身份 `id` 校验先于 `mode` 白名单读取)→ `data-theme-pending` skeleton 兜底」顺序首帧落主题;`ThemeProvider` 挂载后以协商链权威解析覆盖并回写 locator。宁可短暂无主题骨架,不可先错后改。
+- **取色铁律(§5.4)**:组件一律 `var(--<语义 token>)`,禁硬编码色值——AST 级门禁(Stylelint + ESLint 自定义规则)CI 拦截;数据色例外(标签色板等)须「行级 `mesh-data-color` 注释 + `theme-lint-exemptions.json` 登记」双要件,禁整文件白名单。
+- **门禁命令**:`npm run check:contrast`(对比度独立关卡)、`npm run lint:css`(Stylelint)、`npm run test:e2e:visual`(双主题视觉回归,基线更新经独立 PR)。
+
 ## 阶段 1·B 边界
 
 - 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。
-- 偏好写入当前为本地持久化;阶段 2 接通 `PATCH /api/v1/users/me`(auth.md §3.1)与 `PATCH /api/v1/workspaces/{id}`(workspace.md)。
+- 偏好写入已接通服务端同步:`PATCH /api/v1/users/me`(auth.md §3.1,键级浅合并;失败写 pending 分区队列待重放,§4.5)+ `PATCH /api/v1/workspaces/{id}` 的 `settings.default_theme`(workspace.md,admin);本地持久化降级为镜像与防闪烁首帧用途(历史边界说明,仅存档案价值)。
 - 前端容器化在后续 Issue 集成(本阶段以 dev server + 生产构建验证)。

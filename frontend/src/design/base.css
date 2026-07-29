@@ -1,5 +1,6 @@
 @import './tokens.css';
 @import './tokens-dark.css';
+@import './tokens-print.css';
 
 /*
  * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +
@@ -66,10 +67,88 @@ svg {
   }
 }
 
-/* 尊重 prefers-contrast:边界退回更高对比的语义 token */
+/* 尊重 prefers-contrast(§4.3 / T11):边界/文本增强——媒体查询内 token 再赋值,
+   非独立第三套主题;亮/暗各自生效(取值经 token 引用,两套同增强)。 */
 @media (prefers-contrast: more) {
-  :root {
-    --color-border: var(--color-text-muted);
+  :root,
+  :root[data-theme='dark'] {
+    --color-border: var(--color-text);
+    --color-text-muted: var(--color-text);
+  }
+}
+
+/* 选区与 <mark>(评审 T2,§2.4 选区/强调组):亮/暗各定义,禁浏览器默认色
+   (暗底默认选区色不可读为一线高频漏项)。 */
+::selection {
+  background-color: var(--color-selection-bg);
+  color: var(--color-selection-text);
+}
+
+mark {
+  background-color: var(--color-mark-bg);
+  color: var(--color-mark-text);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+/* 自动填充暗校正(评审 T3):覆盖浏览器黄/蓝底为当前表面色,文本色校正;
+   登录/注册/邀请表单均受影响,亮/暗两套表面色各自校正。 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  /* -webkit-* 为 autofill 校正的唯一可用机制(评审 T3,无标准替代):
+     覆盖浏览器黄/蓝底为当前表面色。 */
+  /* stylelint-disable-next-line property-no-vendor-prefix */
+  -webkit-box-shadow: 0 0 0 1000px var(--color-surface) inset;
+  -webkit-text-fill-color: var(--color-text);
+  caret-color: var(--color-text);
+  transition: background-color 9999s ease-in-out 0s;
+}
+
+/* 半透明降级(评审 T5④):scrim 等半透明表面降级为不透明表面色;
+   其上文本经语义 token 对表面色满足 ≥4.5:1(配对表已登记),
+   不依赖背后内容透出提供可读性。 */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  :root[data-theme='dark'] {
+    --color-scrim: var(--color-surface);
+  }
+}
+
+/* 操作系统强制高对比(评审 T1 写死,无障碍底线,§4.3):
+   ① 语义 token 重映射系统色;② 层级/结构改靠显式 border(forced-colors 下
+   box-shadow 失效);③ 自证对比区经 .mesh-forced-colors-keep 声明
+   forced-color-adjust: none(图表/徽标等,颜色不作唯一信号原则同样适用);
+   ④ 焦点环随系统 Highlight(:focus-visible 已引用 --color-focus-ring)。 */
+@media (forced-colors: active) {
+  :root,
+  :root[data-theme='dark'] {
+    --color-bg: Canvas;
+    --color-surface: Canvas;
+    --color-surface-raised: Canvas;
+    --color-surface-hover: Canvas;
+    --color-surface-sunken: Canvas;
+    --color-text: CanvasText;
+    --color-text-muted: GrayText;
+    --color-border: CanvasText;
+    --color-primary: LinkText;
+    --color-primary-contrast: Canvas;
+    --color-focus-ring: Highlight;
+    --color-selection-bg: Highlight;
+    --color-selection-text: HighlightText;
+    --color-scrim: Canvas;
+  }
+
+  /* raised 表面显式 border 表达层级(阴影失效不破坏层级辨识) */
+  .mesh-dialog,
+  .mesh-toast,
+  .mesh-dialog__backdrop {
+    border: 1px solid ButtonBorder;
+  }
+
+  /* 自证对比区:声明点保留作者配色并自保系统色板内可读 */
+  .mesh-forced-colors-keep {
+    forced-color-adjust: none;
   }
 }
 

@@ -719,13 +719,18 @@ class TestUserUpdate:
 
     async def test_settings_invalid_theme(self, service):
         uid = await self._user_id(service)
-        # auth.md §3.1/§5.1 + README §9 T32: invalid theme → 422 validation_error.
+        # auth.md §3.1/§3.5 + theme.md §3.3: invalid theme → 422
+        # invalid_theme_mode (named code, details.theme/supported for i18n).
         with pytest.raises(BusinessRuleError) as exc:
             await service.update_user(
                 user_id=uid, patch=UserUpdate(settings={"theme": "neon"})
             )
-        assert exc.value.code == "validation_error"
+        assert exc.value.code == "invalid_theme_mode"
         assert exc.value.status_code == 422
+        assert exc.value.details == {
+            "theme": "neon",
+            "supported": ["light", "dark", "system"],
+        }
 
     async def test_settings_explicit_null_clears_key(self, service):
         """Explicit null in settings.locale/theme pops the key (MES-24 清除语义)."""

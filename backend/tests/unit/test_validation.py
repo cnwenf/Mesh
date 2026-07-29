@@ -51,11 +51,16 @@ def test_supported_themes_pass():
     validate_theme("system")
 
 
-def test_unsupported_theme_is_422_validation_error():
+def test_unsupported_theme_is_422_invalid_theme_mode():
+    # theme.md §3.3: invalid theme values use the named 422 invalid_theme_mode
+    # code across all three owners (auth users.settings.theme, workspace
+    # settings.default_theme), aligned with unsupported_locale/invalid_timezone.
     with pytest.raises(BusinessRuleError) as excinfo:
         validate_theme("neon")
-    assert excinfo.value.code == "validation_error"
+    assert excinfo.value.code == "invalid_theme_mode"
     assert excinfo.value.status_code == 422
+    assert excinfo.value.details["theme"] == "neon"
+    assert excinfo.value.details["supported"] == ["light", "dark", "system"]
 
 
 def test_https_url_passes():

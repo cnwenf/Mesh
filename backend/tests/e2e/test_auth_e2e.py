@@ -470,12 +470,15 @@ async def test_update_me_settings_and_validations(api_client):
     assert loc.status_code == 422
     assert loc.json()["error"]["code"] == "unsupported_locale"
 
-    # auth.md §3.1/§5.1 + README §9 T32: invalid theme → 422 validation_error.
+    # theme.md §3.3 (唯一权威) + auth.md §3.5 同步登记:
+    # invalid theme → 422 invalid_theme_mode (具名码,取代通用 validation_error).
     theme = await api_client.patch(
         "/api/v1/users/me", headers=h, json={"settings": {"theme": "neon"}}
     )
     assert theme.status_code == 422
-    assert theme.json()["error"]["code"] == "validation_error"
+    theme_error = theme.json()["error"]
+    assert theme_error["code"] == "invalid_theme_mode"
+    assert theme_error["details"] == {"theme": "neon", "supported": ["light", "dark", "system"]}
 
     avatar = await api_client.patch(
         "/api/v1/users/me", headers=h, json={"avatar_url": "http://insecure/x.png"}

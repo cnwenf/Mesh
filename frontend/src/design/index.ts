@@ -6,6 +6,11 @@ export { contrastRatio, hexToRgb, meetsAA, relativeLuminance, WCAG_AA_RATIO } fr
 export type { Rgb } from './contrast';
 export { AA_CONTRAST_PAIRS, DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
 export { ThemeProvider, resolveTheme } from './ThemeProvider';
+export { ThemeSkeleton } from './ThemeSkeleton';
+export { resolveThemeChain, expectedRouteId, parseThemeLocator, isThemeMode } from './themeNegotiation';
+export type { ResolvedTheme, ThemeSource, ThemeMode, ChainInput, ChainResult } from './themeNegotiation';
+export { THEME_LOCATOR_KEY, writeThemeLocator, clearThemeLocators } from './themeLocator';
+export { guardUgcInlineColors, useUgcColorGuard, THEME_CHANGED_EVENT } from './ugcColorGuard';
 export { Banner } from './components/Banner';
 export type { BannerProps, BannerTone } from './components/Banner';
 export { Button, buttonClasses } from './components/Button';

@@ -895,6 +895,7 @@
     "error.invalid_request": "The request was invalid. Check the submitted fields.",
     "error.invalid_state_transition": "That state transition is not allowed right now.",
     "error.invalid_status_transition": "This status transition is not allowed (strict mode)",
+    "error.invalid_theme_mode": "That theme mode is not supported. Choose light, dark, or system.",
     "error.invalid_time_range": "Invalid time range. The start must be earlier than the end (RFC3339 UTC).",
     "error.invalid_timezone": "That timezone is not valid. Please choose a valid IANA timezone.",
     "error.invitation_invalid": "This invitation is no longer valid",
@@ -1999,9 +2000,12 @@
     "status.reconnecting": "Reconnecting…",
     "status.resyncing": "Resyncing…",
     "theme.dark": "Dark",
+    "theme.defaultHint": "No preference: workspace pages follow the workspace default theme; global pages follow your system appearance.",
+    "theme.followDefault": "Default ({theme})",
     "theme.label": "Theme",
     "theme.light": "Light",
     "theme.system": "System",
+    "theme.systemResolved": "System ({theme})",
     "tokens.allScopes": "All (role permissions)",
     "tokens.create": "New token",
     "tokens.createSubmit": "Create token",
@@ -2019,6 +2023,8 @@
     "tokens.scopesLabel": "Scopes (comma-separated)",
     "tokens.title": "API tokens",
     "workspace.basicSection": "General",
+    "workspace.defaultTheme": "Default theme",
+    "workspace.defaultThemeHint": "Applies to members who have not chosen their own theme.",
     "workspace.deletedToast": "The workspace was deleted.",
     "workspace.homeLocale": "default language: {locale}",
     "workspace.homeRole": "your role: {role}",
@@ -2066,5 +2072,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "b9726bb8"
+  "version": "f1b20660"
 }

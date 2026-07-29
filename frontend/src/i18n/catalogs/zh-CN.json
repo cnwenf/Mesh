@@ -895,6 +895,7 @@
     "error.invalid_request": "请求无效，请检查提交的字段。",
     "error.invalid_state_transition": "当前不允许该状态迁移。",
     "error.invalid_status_transition": "严格模式下不允许该状态转换",
+    "error.invalid_theme_mode": "不支持该主题模式，请选择浅色、深色或跟随系统。",
     "error.invalid_time_range": "时间范围无效:起始须早于结束(RFC3339 UTC)。",
     "error.invalid_timezone": "时区无效，请选择合法的 IANA 时区。",
     "error.invitation_invalid": "该邀请已失效",
@@ -1999,9 +2000,12 @@
     "status.reconnecting": "重连中…",
     "status.resyncing": "正在重新同步…",
     "theme.dark": "深色",
+    "theme.defaultHint": "未单独设置时:工作区页面跟随工作区默认主题,全局页面跟随系统外观。",
+    "theme.followDefault": "跟随默认（{theme}）",
     "theme.label": "主题",
     "theme.light": "浅色",
     "theme.system": "跟随系统",
+    "theme.systemResolved": "跟随系统（{theme}）",
     "tokens.allScopes": "全部(角色权限)",
     "tokens.create": "新建令牌",
     "tokens.createSubmit": "创建令牌",
@@ -2019,6 +2023,8 @@
     "tokens.scopesLabel": "权限范围(逗号分隔)",
     "tokens.title": "API 令牌",
     "workspace.basicSection": "基本信息",
+    "workspace.defaultTheme": "默认主题",
+    "workspace.defaultThemeHint": "成员未单独设置主题时生效。",
     "workspace.deletedToast": "工作区已被删除。",
     "workspace.homeLocale": "默认语言:{locale}",
     "workspace.homeRole": "我的角色:{role}",
@@ -2066,5 +2072,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "4933c4f4"
+  "version": "dd94eb0d"
 }

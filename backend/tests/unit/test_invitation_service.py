@@ -276,6 +276,10 @@ async def test_preview_valid_and_invalid_reasons(session_factory):
     assert preview["role"] == "member"
     assert "expires_at" in preview
     assert "id" not in preview  # limited fields only
+    # theme.md §2.2/§3.1 + workspace.md §3.1: the public preview carries the
+    # workspace default theme so the unauthenticated invite-accept page can
+    # resolve the negotiation chain (level 2). Absent settings → "system".
+    assert preview["appearance"] == {"default_theme": "system"}
 
     assert (await service.preview_invitation(token="invtk_unknown")) == {
         "valid": False,
@@ -300,6 +304,29 @@ async def test_preview_valid_and_invalid_reasons(session_factory):
         )
     preview = await service.preview_invitation(token=_token_from_link(expired["invite_link"]))
     assert preview == {"valid": False, "reason": "expired"}
+
+
+async def test_preview_appearance_reflects_workspace_default_theme(session_factory):
+    # theme.md §2.2: the unauthenticated invite-accept page resolves the
+    # negotiation chain level 2 via the public invitation preview;
+    # appearance.default_theme mirrors workspaces.settings.default_theme.
+    workspace_id, admin, _ = await _workspace_with_admin(session_factory, "preview-theme")
+    service = InvitationService(session_factory)
+    created = (await service.create_invitations(actor=admin, workspace_id=workspace_id))[0]
+    token = _token_from_link(created["invite_link"])
+
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "UPDATE workspaces SET settings = coalesce(settings, '{}'::jsonb) "
+                "|| '{\"default_theme\": \"dark\"}'::jsonb WHERE id = :id"
+            ),
+            {"id": workspace_id},
+        )
+
+    preview = await service.preview_invitation(token=token)
+    assert preview["valid"] is True
+    assert preview["appearance"] == {"default_theme": "dark"}
 
 
 # --- accept -------------------------------------------------------------------

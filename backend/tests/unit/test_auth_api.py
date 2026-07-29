@@ -104,6 +104,48 @@ async def test_register_login_me_inprocess(client):
     assert me.json()["data"]["email"] == EMAIL
 
 
+async def test_login_issues_httponly_session_cookie(client):
+    # auth.md §5.5 / theme.md §2.3 ①: login sets the mesh_session HttpOnly
+    # cookie (additive channel the HTML entry reads for first-frame injection).
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": EMAIL, "password": PASSWORD, "display_name": "API"},
+    )
+    resp = await client.post(
+        "/api/v1/auth/login", json={"email": EMAIL, "password": PASSWORD}
+    )
+    set_cookies = resp.headers.get_list("set-cookie")
+    session = [c for c in set_cookies if c.startswith("mesh_session=")]
+    assert session, "login must Set-Cookie mesh_session"
+    header = session[0].lower()
+    assert "httponly" in header
+    assert "samesite=strict" in header
+    assert "path=/" in header
+    # dev auth_mode → secure omitted (http loopback); production would set it.
+    assert resp.json()["data"]["refresh_token"]  # body refresh still present (additive)
+
+
+async def test_me_returns_updated_at_for_pending_conflict_strategy(client):
+    # theme.md §4.5: /me must expose updated_at so the pending-queue conflict
+    # strategy can detect a newer server write.
+    tokens = await _register_and_login(client)
+    me = await client.get("/api/v1/me", headers=_auth(tokens["access_token"]))
+    assert me.status_code == 200
+    assert me.json()["data"]["updated_at"] is not None
+
+
+async def test_logout_clears_session_cookie(client):
+    tokens = await _register_and_login(client)
+    resp = await client.post(
+        "/api/v1/auth/logout",
+        headers=_auth(tokens["access_token"]),
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert resp.status_code == 200
+    cleared = [c for c in resp.headers.get_list("set-cookie") if c.startswith("mesh_session=")]
+    assert cleared and "max-age=0" in cleared[0].lower()
+
+
 async def _login(client, email=EMAIL, password=PASSWORD):
     resp = await client.post(
         "/api/v1/auth/login", json={"email": email, "password": password}
@@ -127,9 +169,9 @@ async def test_update_me_validation_errors_inprocess(client):
     theme = await client.patch(
         "/api/v1/users/me", headers=h, json={"settings": {"theme": "neon"}}
     )
-    # auth.md §3.1/§5.1 + README §9 T32: invalid theme → 422 validation_error.
+    # theme.md §3.3: invalid theme → 422 invalid_theme_mode (named code).
     assert theme.status_code == 422
-    assert theme.json()["error"]["code"] == "validation_error"
+    assert theme.json()["error"]["code"] == "invalid_theme_mode"
     unknown = await client.patch("/api/v1/users/me", headers=h, json={"nope": 1})
     assert unknown.status_code == 400 and unknown.json()["error"]["code"] == "validation_error"
 

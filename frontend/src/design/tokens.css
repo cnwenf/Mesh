@@ -1,13 +1,11 @@
-/*
- * 语义 token — 亮色集(README §6.12 主题契约)。
- * 单一事实源:src/design/tokenValues.ts(LIGHT_TOKENS);本文件须与其逐项一致(测试断言)。
- * 组件禁止硬编码色值,一切颜色经语义 token 引用;暗色为整组替换(tokens-dark.css)。
- */
+/* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 :root {
   /* 表面与文本 */
   --color-bg: #ffffff;
   --color-surface: #f9fafb;
   --color-surface-raised: #ffffff;
+  --color-surface-hover: #f3f4f6;
+  --color-surface-sunken: #f1f5f9;
   --color-text: #111827;
   --color-text-muted: #4b5563;
   --color-border: #d1d5db;
@@ -16,15 +14,37 @@
   --color-primary: #1d4ed8;
   --color-primary-contrast: #ffffff;
 
-  /* 状态色(文本/底色两用,与 *-contrast 配对均 ≥4.5:1) */
+  /* 状态色(文本/底色两用,与 *-contrast 配对均 ≥4.5:1;-bg 为浅底变体) */
   --color-danger: #b91c1c;
   --color-danger-contrast: #ffffff;
+  --color-danger-bg: #fee2e2;
   --color-warn: #92400e;
   --color-warn-contrast: #ffffff;
+  --color-warn-bg: #fef3c7;
   --color-success: #15803d;
   --color-success-contrast: #ffffff;
+  --color-success-bg: #dcfce7;
   --color-info: #075985;
   --color-info-contrast: #ffffff;
+  --color-info-bg: #e0f2fe;
+  --color-primary-bg: #dbeafe;
+
+  /* 选区/强调(::selection 与 <mark>,亮/暗各定义,禁浏览器默认色) */
+  --color-selection-bg: #bfdbfe;
+  --color-selection-text: #111827;
+  --color-mark-bg: #fde68a;
+  --color-mark-text: #111827;
+
+  /* 骨架屏(中性 skeleton,与主题无关的加载占位) */
+  --color-skeleton-base: #7d8590;
+  --color-skeleton-highlight: #adb5bd;
+
+  /* 代码高亮(markdown 代码块,亮/暗各一套,各前景对 code-bg ≥4.5:1) */
+  --color-code-bg: #f3f4f6;
+  --color-code-text: #111827;
+  --color-code-keyword: #6d28d9;
+  --color-code-string: #166534;
+  --color-code-comment: #4b5563;
 
   /* 焦点环 */
   --color-focus-ring: #2563eb;

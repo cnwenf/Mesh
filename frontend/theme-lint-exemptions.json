@@ -1,0 +1,28 @@
+{
+  "files": {
+    "src/features/labels/LabelsPanel.tsx": {
+      "reason": "标签数据色板默认值:数据色(theme.md §2.5 合法例外),on-color 经相对亮度阈值自动黑白配对,随对比度门禁抽验",
+      "lines": [39]
+    },
+    "src/features/labels/CustomFieldsPanel.tsx": {
+      "reason": "自定义字段选项数据色板默认值:数据色(theme.md §2.5 合法例外),与 ColorPicker 预设色板同族",
+      "lines": [68]
+    },
+    "test/lint-fixtures/fixture-any.css": {
+      "reason": "stylelint 规则单测夹具:lines=[] 语义验证(任意带注释处放行)",
+      "lines": []
+    },
+    "test/lint-fixtures/fixture-lines.css": {
+      "reason": "stylelint 规则单测夹具:行级登记验证(仅第 5 行放行)",
+      "lines": [5]
+    },
+    "test/lint-fixtures/eslint-fixture.tsx": {
+      "reason": "ESLint 规则单测夹具:lines=[] 语义验证(任意带注释处放行)",
+      "lines": []
+    },
+    "test/lint-fixtures/eslint-fixture-lines.tsx": {
+      "reason": "ESLint 规则单测夹具:行级登记验证(仅第 4 行放行)",
+      "lines": [4]
+    }
+  }
+}
