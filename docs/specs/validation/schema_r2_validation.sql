@@ -4694,7 +4694,8 @@ BEGIN
          'T39-9 FAIL: rearm 幂等键新写应成功(不撞原键)';
   RAISE NOTICE 'PASS T39-9: outbox rearm 按真实 DDL 执行(failed→pending 条件更新 + 建成执行 + rearm 键新写)';
 
-  -- T39-10:单指针 receipt ACK 闭合反例链(R6-1)——真实创建 A/B receipt,验证 fencing/覆盖分支
+  -- T39-10:单指针 receipt ACK 闭合守卫结果验证(R6-1/R7-1)——真实创建 A/B receipt,逐分支验证 fencing(含 lease_seq 精确匹配)/覆盖结果
+  -- (单事务顺序 SQL 验证守卫逻辑结果;真实 FOR UPDATE 锁序与并发交错归服务层集成测试,不声称已实测竞态)
   -- 准备:独立执行 + append seq 1..4 + 两个 attempt(A 先活跃后 reclaimed,B 接管)
   INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
                                task_spec, label_requirements, required_capabilities, config_snapshot)
@@ -4710,7 +4711,8 @@ BEGIN
   UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
    WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
      AND EXISTS (SELECT 1 FROM execution_attempts
-                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 3);                              -- R7-1:lease_seq 精确匹配
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 4, 'T39-10① FAIL: A receipt 应恰好覆盖 4 行';
   UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e2';
@@ -4734,7 +4736,8 @@ BEGIN
   UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000bb1'
    WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'
      AND EXISTS (SELECT 1 FROM execution_attempts
-                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 1);                              -- R7-1:lease_seq 精确匹配
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 4, 'T39-10④ FAIL: B ACK 应恰好更新 4 行(单指针覆盖,不再 0 行卡死)';
   UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e2';
@@ -4747,13 +4750,25 @@ BEGIN
   UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
    WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
      AND EXISTS (SELECT 1 FROM execution_attempts
-                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 3);                              -- R7-1:lease_seq 精确匹配
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 0, 'T39-10⑥ FAIL: A 迟到 ACK 应被 fencing 拒绝(0 行)';
   ASSERT (SELECT count(*) FROM execution_context_appends
            WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id = '82000000-0000-0000-0000-000000000bb1') = 4,
          'T39-10⑥ FAIL: B 的 receipt 不得被 A 覆盖';
-  RAISE NOTICE 'PASS T39-10: 单指针 receipt 闭合(A receipt→requeue 清空→B 重收→B ACK 恰好 4 行→B GET 不再下发→A 迟到 ACK 0 行不覆盖)';
+  -- ⑦ lease_seq 负向(R7-1):错误 lease_seq(99)ACK → 整条 0 行,不写 receipt、不推进水位
+  UPDATE task_executions SET context_injected_through_seq = 3 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000bb1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq = 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running')
+                    AND lease_seq = 99);                             -- 错误 lease_seq
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-10⑦ FAIL: 错误 lease_seq 的 ACK 应整条 0 行';
+  ASSERT (SELECT context_injected_through_seq = 3 FROM task_executions WHERE id = '82000000-0000-0000-0000-0000000000e2'),
+         'T39-10⑦ FAIL: 错误 lease_seq 不得推进水位';
+  RAISE NOTICE 'PASS T39-10: 单指针 receipt 闭合(A receipt→requeue 清空→B 重收→B ACK 恰好 4 行→B GET 不再下发→A 迟到 ACK 0 行不覆盖→错误 lease_seq 0 行不推进水位)';
 
   -- T39-11:ack 四字段语义——被抑制项 ack_sent_at 保持 NULL(字段不混用)
   INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
@@ -4966,6 +4981,73 @@ BEGIN
             FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
          'T39-18 FAIL: available_at 到期后应成功 published(全程未消耗失败预算)';
   RAISE NOTICE 'PASS T39-18: busy 退避落真实 DDL(连续 9 次(>max_attempts 8)仅后移 available_at、attempts 恒 0 不终态、不热循环、到期成功)';
+  -- T39-19:审批续跑 receipt 统一重置(R7-2)——与失联 requeue 同一路径,新 attempt 至少重收一次
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000e3', v_ws, v_agent, NULL,
+          'integration', 'mes82-approval-exec', '{}', '{}', '[]', '{}');
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, '82000000-0000-0000-0000-0000000000e3', 4, 'im_btw', '{"text":"btw-4"}'::jsonb);
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000aa2', v_ws, '82000000-0000-0000-0000-0000000000e3', 1, 'running', 2);
+  -- ① A 注入并 ACK seq=4(lease_seq=2 匹配)→ 水位 4
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000aa2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 2);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T39-19① FAIL: A ACK seq=4 应更新 1 行';
+  UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  -- ② 审批挂起:attempt A → cancelled(awaiting_approval),执行 → awaiting_approval
+  UPDATE execution_attempts SET status = 'cancelled', failure_reason = 'awaiting_approval'
+   WHERE id = '82000000-0000-0000-0000-000000000aa2';
+  UPDATE task_executions SET status = 'awaiting_approval' WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  -- ③ 批准续跑:执行回 queued,同一执行行锁事务清空 receipt + 水位置 0(R7-2 统一重置)
+  UPDATE task_executions SET status = 'queued', context_injected_through_seq = 0
+   WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  UPDATE execution_context_appends SET injected_at = NULL, injected_attempt_id = NULL
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND injected_attempt_id IS NULL) = 1,
+         'T39-19③ FAIL: 批准续跑应清空 receipt(与失联 requeue 同一路径)';
+  -- ④ B claim 新 attempt → seq=4 重新可见(至少进入 B 续跑上下文一次,at-least-once)
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000bb2', v_ws, '82000000-0000-0000-0000-0000000000e3', 2, 'running', 1);
+  UPDATE task_executions SET status = 'running' WHERE id = '82000000-0000-0000-0000-0000000000e3';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq > 0
+             AND (injected_attempt_id IS NULL OR injected_attempt_id <> '82000000-0000-0000-0000-000000000bb2')) = 1,
+         'T39-19④ FAIL: B 应重新 GET 到 seq=4(至少进入续跑上下文一次)';
+  -- ⑤ B ACK 覆盖为 B;A 迟到 ACK(已 cancelled)fencing 拒写,不覆盖 B
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000bb2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 1);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T39-19⑤ FAIL: B ACK 应覆盖 1 行';
+  UPDATE execution_context_appends SET injected_at = now(),
+         injected_attempt_id = '82000000-0000-0000-0000-000000000aa2'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq <= 4
+     AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa2'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa2'
+                    AND execution_id = '82000000-0000-0000-0000-0000000000e3'
+                    AND status IN ('claimed','running') AND lease_seq = 2);
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-19⑤ FAIL: A 迟到 ACK 不得覆盖 B(A 已 cancelled,fencing 拒写)';
+  ASSERT (SELECT injected_attempt_id = '82000000-0000-0000-0000-000000000bb2'
+            FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e3' AND seq = 4),
+         'T39-19⑤ FAIL: receipt 应保留为 B';
+  RAISE NOTICE 'PASS T39-19: 审批续跑 receipt 统一重置(A ACK→审批挂起→批准清空重置→B 重收 seq=4→B ACK 覆盖→A 迟到 ACK 不覆盖)';
 END $$;
 ROLLBACK;
 -- T39:end
