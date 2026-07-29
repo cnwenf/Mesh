@@ -26,7 +26,7 @@ from mesh.api.deps import extract_bearer_token, get_session
 from mesh.auth import jwt as jwt_mod
 from mesh.config import Settings
 from mesh.db.models.member import Member
-from mesh.db.models.user import User
+from mesh.db.models.user import Session, User
 from mesh.errors import ForbiddenError, UnauthorizedError
 
 
@@ -158,32 +158,102 @@ async def get_current_user(
     return user
 
 
+async def _recent_auth(
+    request: Request, session: AsyncSession, *, allowed_types: tuple[str, ...]
+) -> User:
+    """Session-location-invariant step-up gate (auth.md §1.1 / §5.5, R6/R7).
+
+    Sensitive operations ALWAYS read the sessions row by the access JWT's
+    ``sid`` (never the claim alone) — a revoked session inside the access TTL
+    window cannot pass, and the freshness verdict comes from the authoritative
+    ``sessions.authenticated_at``: NULL (no recent primary auth) or stale ⇒
+    ``403 reauth_required``. PAT/agent tokens have no interactive session and
+    are rejected with ``reason=interactive_session_required`` — the CLI
+    recovery path is Web reauth + re-approving a device login (cli.md §4.3).
+    """
+    settings: Settings = request.app.state.settings
+    principal = await get_current_principal(request, session)
+    if principal.kind != "session":
+        raise ForbiddenError(
+            "recent re-authentication required",
+            code="reauth_required",
+            details={"reason": "interactive_session_required"},
+        )
+    if principal.session_id is None:
+        raise ForbiddenError(
+            "recent re-authentication required",
+            code="reauth_required",
+            details={"reason": "session_not_locatable"},
+        )
+    now = datetime.now(UTC)
+    row = await session.scalar(
+        select(Session).where(
+            Session.id == principal.session_id,
+            Session.user_id == principal.subject,
+            Session.type.in_(allowed_types),
+            Session.revoked_at.is_(None),
+            Session.expires_at > now,
+        )
+    )
+    if row is None:
+        # Invariant: 0 rows ⇒ 401, never distinguishing why (anti-enumeration).
+        raise UnauthorizedError("invalid or expired token")
+    if (
+        row.authenticated_at is None
+        or now - row.authenticated_at > settings.reauth_window
+    ):
+        raise ForbiddenError("recent re-authentication required", code="reauth_required")
+    user = await session.scalar(select(User).where(User.id == row.user_id))
+    if user is None or user.status != "active":
+        raise UnauthorizedError("invalid or expired token")
+    return user
+
+
 async def require_recent_auth(
     request: Request, session: AsyncSession = Depends(get_session)
 ) -> User:
-    """Step-up gate for sensitive operations (auth.md §5.5).
+    """Step-up gate for PAT create/revoke + agent credential issuance —
+    ``web`` OR ``cli`` sessions (auth.md §1.1 credential matrix: a freshly
+    approved device login inherits the approver's authentication moment)."""
+    return await _recent_auth(request, session, allowed_types=("web", "cli"))
 
-    Requires the bearer to have performed a primary authentication (password /
-    TOTP) within ``reauth_window`` — recorded in the access token's ``auth_time``
-    and forwarded across silent refreshes. A stale authentication (e.g. a stolen
-    session being reused long after login) yields ``403 reauth_required`` so the
-    user must re-enter credentials before changing MFA / OAuth bindings / PATs.
-    """
-    settings: Settings = request.app.state.settings
-    token = extract_bearer_token(request.headers.get("Authorization"))
-    claims = jwt_mod.decode_access_token(
-        token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
-    )
-    # R6-H3: an absent auth_time (NULL authenticated_at) fails closed — the
-    # session has no recent primary authentication to vouch for the operation.
-    if (
-        claims.authenticated_at is None
-        or datetime.now(UTC) - claims.authenticated_at > settings.reauth_window
-    ):
+
+async def require_recent_auth_web_only(
+    request: Request, session: AsyncSession = Depends(get_session)
+) -> User:
+    """Step-up gate for 2FA management / OAuth link+unlink — WEB sessions
+    only (auth.md §1.1 credential matrix)."""
+    return await _recent_auth(request, session, allowed_types=("web",))
+
+
+async def require_web_session_user(
+    request: Request, session: AsyncSession = Depends(get_session)
+) -> User:
+    """Web-session-only identity gate (no freshness window) — for routes the
+    credential matrix reserves to interactive browser sessions (e.g.
+    change-password, whose own old-password check IS the re-auth, R7-M1)."""
+    principal = await get_current_principal(request, session)
+    if principal.kind != "session":
         raise ForbiddenError(
-            "recent re-authentication required", code="reauth_required"
+            "interactive browser session required",
+            code="forbidden",
+            details={"reason": "web_session_required"},
         )
-    user = await session.scalar(select(User).where(User.id == claims.subject))
+    if principal.session_id is None:
+        raise UnauthorizedError("invalid or expired token")
+    now = datetime.now(UTC)
+    row = await session.scalar(
+        select(Session).where(
+            Session.id == principal.session_id,
+            Session.user_id == principal.subject,
+            Session.type == "web",
+            Session.revoked_at.is_(None),
+            Session.expires_at > now,
+        )
+    )
+    if row is None:
+        raise UnauthorizedError("invalid or expired token")
+    user = await session.scalar(select(User).where(User.id == row.user_id))
     if user is None or user.status != "active":
         raise UnauthorizedError("invalid or expired token")
     return user

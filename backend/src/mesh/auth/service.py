@@ -997,6 +997,81 @@ class AuthService:
             result = user_to_dict(user)
         return result
 
+    # -- step-up re-authentication (auth.md §3.1 ``POST /auth/reauth``) --------
+
+    async def reauth(
+        self,
+        *,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        password: str | None = None,
+        totp_code: str | None = None,
+        method: str | None = None,
+    ) -> dict:
+        """Refresh the web session's ``authenticated_at`` via fresh primary
+        authentication (R6-H3 step-up state machine, web sessions only).
+
+        TOTP-enabled accounts MUST present ``totp_code`` — password alone is
+        rejected (``reason=totp_required``, MES-78 LOW-2): holding only the
+        password (e.g. phishing capture) must not unlock step-up. The OAuth
+        fresh-round-trip branch depends on the §2.4.3 one-time transaction
+        table (out of this increment's scope) and fails closed with
+        ``reason=oauth_reauth_pending``.
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            row = await session.scalar(
+                select(Session)
+                .where(
+                    Session.id == session_id,
+                    Session.user_id == user_id,
+                    Session.type == "web",
+                    Session.revoked_at.is_(None),
+                    Session.expires_at > now,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                raise UnauthorizedError("invalid or expired token")
+            user = await session.get(User, user_id)
+            if user is None or user.status != "active":
+                raise UnauthorizedError("invalid or expired token")
+
+            if user.mfa_enabled_at is not None:
+                # Branch-exclusive: a TOTP account re-auths with TOTP only.
+                if not totp_code or not self._verify_totp(user, totp_code):
+                    raise BusinessRuleError(
+                        "totp code required for re-authentication",
+                        code="invalid_credentials",
+                        details={"reason": "totp_required"},
+                    )
+            elif user.password_hash:
+                if not password or not security.verify_password(password, user.password_hash):
+                    raise BusinessRuleError(
+                        "incorrect password", code="invalid_credentials"
+                    )
+            else:
+                # OAuth-only account: the fresh round-trip branch needs the
+                # §2.4.3 transaction table — fail closed until it lands.
+                raise BusinessRuleError(
+                    "oauth re-authentication is not available yet",
+                    code="invalid_credentials",
+                    details={"reason": "oauth_reauth_pending"},
+                )
+
+            row.authenticated_at = now
+            row.last_active_at = now
+            authenticated_at = now
+        return {"status": "ok", "authenticated_at": authenticated_at}
+
+    def _verify_totp(self, user: User, code: str) -> bool:
+        """Validate a TOTP code for reauth WITHOUT consuming backup codes
+        (re-authentication is not a backup-code event)."""
+        if not user.mfa_secret:
+            return False
+        secret = security.decrypt_secret(user.mfa_secret, self._settings.jwt_secret)
+        return pyotp.TOTP(secret).verify(code, valid_window=1)
+
     # -- credential self-service (auth.md §3.1, review H7) ---------------------
 
     async def introspect_credential(self, *, principal) -> dict:

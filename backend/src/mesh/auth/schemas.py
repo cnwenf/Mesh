@@ -52,6 +52,19 @@ class MfaVerifyRequest(BaseModel):
     code: str = Field(min_length=1, max_length=16)
 
 
+class ReauthRequest(BaseModel):
+    """Step-up re-authentication (auth.md §3.1 ``POST /auth/reauth``).
+
+    Branch-exclusive bodies: ``{password}`` for password accounts,
+    ``{totp_code}`` for TOTP-enabled accounts (password alone is rejected —
+    MES-78 LOW-2), ``{method: "oauth"}`` for OAuth-only accounts.
+    """
+
+    password: str | None = Field(default=None, max_length=256)
+    totp_code: str | None = Field(default=None, max_length=16)
+    method: str | None = None
+
+
 # --- password reset / email verification -------------------------------------
 
 

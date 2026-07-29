@@ -29,7 +29,8 @@ from mesh.auth.deps import (
     get_current_principal,
     get_current_user,
     require_current_access,
-    require_recent_auth,
+    require_recent_auth_web_only,
+    require_web_session_user,
 )
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.schemas import (
@@ -38,6 +39,7 @@ from mesh.auth.schemas import (
     LoginRequest,
     MfaConfirmRequest,
     MfaVerifyRequest,
+    ReauthRequest,
     RegisterRequest,
     ResetPasswordRequest,
     UpdateUserRequest,
@@ -74,6 +76,10 @@ MFA_VERIFY_WINDOW_SECONDS = 60
 # the login-class (IP, email) throttle (§3.6) against online brute force.
 CHANGE_PASSWORD_LIMIT = 5
 CHANGE_PASSWORD_WINDOW_SECONDS = 60
+# Step-up reauth verifies the primary credential server-side — login-class
+# throttle on (IP, email) bounds online brute force (auth.md §3.6).
+REAUTH_LIMIT = 5
+REAUTH_WINDOW_SECONDS = 60
 
 
 def _client_ip(request: Request) -> str | None:
@@ -321,6 +327,38 @@ async def verify_email(body: VerifyEmailRequest, request: Request) -> dict:
 # --- protected auth ----------------------------------------------------------
 
 
+@router.post("/auth/reauth")
+async def reauth(
+    body: ReauthRequest,
+    request: Request,
+    response: Response,
+    user: User = Depends(require_web_session_user),
+) -> dict:
+    """Step-up re-authentication (auth.md §3.1, R6-H3): refresh the current
+    WEB session's ``authenticated_at`` by re-verifying the primary credential.
+    Revoked/expired sessions cannot reauth (the invariant serves exactly the
+    stale sessions — but never dead ones)."""
+    await _rate_limit(
+        request,
+        f"reauth:{_client_ip(request)}:{user.email.lower()}",
+        limit=REAUTH_LIMIT,
+        window=REAUTH_WINDOW_SECONDS,
+        response=response,
+    )
+    claims = require_current_access(request)
+    if claims.sid is None:
+        raise UnauthorizedError("invalid or expired token")
+    service: AuthService = get_auth_service(request)
+    data = await service.reauth(
+        user_id=user.id,
+        session_id=claims.sid,
+        password=body.password,
+        totp_code=body.totp_code,
+        method=body.method,
+    )
+    return {"data": data}
+
+
 @router.get("/auth/token")
 async def introspect_token(
     request: Request, principal=Depends(get_current_principal)
@@ -389,7 +427,7 @@ async def change_password(
     body: ChangePasswordRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_web_session_user),
 ) -> dict:
     # §4.2/§5.5 (R7-M1): authenticated password change. Re-entering the old
     # password IS the step-up re-authentication itself, so no separate
@@ -499,9 +537,9 @@ async def mfa_setup(request: Request, user: User = Depends(get_current_user)) ->
 
 @router.post("/auth/mfa/enable")
 async def mfa_enable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth_web_only)
 ) -> dict:
-    # §5.5: enabling 2FA is sensitive — requires a recent re-authentication.
+    # §5.5 + §1.1 matrix: 2FA management is web-session-only step-up.
     service: AuthService = get_auth_service(request)
     await service.mfa_enable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": True}}
@@ -509,9 +547,9 @@ async def mfa_enable(
 
 @router.post("/auth/mfa/disable")
 async def mfa_disable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth_web_only)
 ) -> dict:
-    # §5.5: disabling 2FA is sensitive — requires a recent re-authentication.
+    # §5.5 + §1.1 matrix: 2FA management is web-session-only step-up.
     service: AuthService = get_auth_service(request)
     await service.mfa_disable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": False}}

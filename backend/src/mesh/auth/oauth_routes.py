@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 
-from mesh.auth.deps import get_current_user, require_recent_auth
+from mesh.auth.deps import get_current_user, require_recent_auth_web_only
 from mesh.auth.oauth import OAuthService
 from mesh.auth.routes import _set_session_cookie, _settings
 from mesh.db.models.user import User
@@ -55,7 +55,7 @@ async def oauth_bind_start(
     provider: str,
     request: Request,
     redirect_uri: str | None = None,
-    user: User = Depends(require_recent_auth),  # §5.5 step-up: binding OAuth is sensitive
+    user: User = Depends(require_recent_auth_web_only),  # §1.1 matrix: OAuth link is web-only step-up
 ) -> RedirectResponse:
     """Authenticated bind start: 302 to the provider, returning to bind."""
     service = _oauth_service(request)
@@ -109,7 +109,7 @@ async def list_identities(
 
 @router.delete("/{provider}")
 async def unbind_identity(
-    provider: str, request: Request, user: User = Depends(require_recent_auth)  # §5.5 step-up
+    provider: str, request: Request, user: User = Depends(require_recent_auth_web_only)  # §1.1 matrix: web-only step-up
 ) -> dict:
     service = _oauth_service(request)
     await service.unbind_identity(user_id=user.id, provider_name=provider)
