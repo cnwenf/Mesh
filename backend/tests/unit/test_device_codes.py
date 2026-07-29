@@ -377,3 +377,34 @@ async def _audits(session_factory, action: str) -> list[AuditLog]:
                 await session.execute(select(AuditLog).where(AuditLog.action == action))
             ).scalars()
         )
+
+
+class TestUserCodeInsertRace:
+    """C2: losing the race on the partial unique index surfaces the typed
+    exhaustion error — never a raw IntegrityError 500."""
+
+    async def test_insert_collision_raises_typed_exhaustion(
+        self, device_service, session_factory, settings, monkeypatch
+    ):
+        from mesh.auth import security
+
+        fixed_code = "RACE-FIXD"
+
+        async def _fixed(_is_taken=None):
+            return fixed_code
+
+        # The taken-check passes (returns False) but the INSERT still loses
+        # the race: pre-plant an ACTIVE grant with the same user_code hash.
+        monkeypatch.setattr(security, "generate_user_code", _fixed)
+        planted = DeviceAuthorization(
+            device_code_hash=security.hmac_token(uuid.uuid4().hex, PEPPER),
+            user_code_hash=security.hmac_token(fixed_code, PEPPER),
+            status="pending",
+            requested_scopes=["issue:read"],
+            expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        )
+        async with session_factory() as session, session.begin():
+            session.add(planted)
+
+        with pytest.raises(security.DeviceCodeSpaceExhausted):
+            await device_service.create_code(client_id="mesh-cli", scopes=["issue:read"])

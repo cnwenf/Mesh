@@ -27,7 +27,7 @@ from mesh.auth.schemas import (
     DeviceDenyRequest,
     DeviceTokenRequest,
 )
-from mesh.errors import RateLimitedError, ValidationError
+from mesh.errors import ForbiddenError, RateLimitedError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["device-auth"])
 
@@ -48,6 +48,32 @@ def _device_service(request: Request) -> DeviceCodeService:
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+async def _require_web_session_claims(request: Request, session: AsyncSession):
+    """approve/deny are WEB-session-only (auth.md §1.1 credential matrix).
+
+    A presented PAT/agent token has no interactive session → ``403
+    reauth_required`` with ``reason=interactive_session_required`` (never a
+    bare 401 — the credential itself is VALID, it is merely the wrong KIND
+    for a human approval act). A session JWT without a locatable ``sid`` gets
+    the same gate as the other step-up paths (session_not_locatable).
+    """
+    principal = await get_current_principal(request, session)
+    if principal.kind != "session":
+        raise ForbiddenError(
+            "recent re-authentication required",
+            code="reauth_required",
+            details={"reason": "interactive_session_required"},
+        )
+    claims = require_current_access(request)
+    if claims.sid is None or claims.subject is None:
+        raise ForbiddenError(
+            "recent re-authentication required",
+            code="reauth_required",
+            details={"reason": "session_not_locatable"},
+        )
+    return claims
 
 
 async def _rate_limit(
@@ -174,11 +200,7 @@ async def device_approve(
     Requires a web session access JWT (Bearer) — the approver's identity and
     session come from the token's ``sub``/``sid``, never from the body.
     """
-    claims = require_current_access(request)
-    if claims.sid is None or claims.subject is None:
-        from mesh.errors import UnauthorizedError
-
-        raise UnauthorizedError("invalid or expired token")
+    claims = await _require_web_session_claims(request, session)
     await _rate_limit(
         request,
         f"device-confirm:{claims.subject}:{_client_ip(request)}",
@@ -202,13 +224,10 @@ async def device_deny(
     body: DeviceDenyRequest,
     request: Request,
     response: Response,
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Deny the TYPED user_code (web session Bearer; idempotent on terminals)."""
-    claims = require_current_access(request)
-    if claims.sid is None or claims.subject is None:
-        from mesh.errors import UnauthorizedError
-
-        raise UnauthorizedError("invalid or expired token")
+    claims = await _require_web_session_claims(request, session)
     await _rate_limit(
         request,
         f"device-confirm:{claims.subject}:{_client_ip(request)}",

@@ -247,3 +247,77 @@ class TestFullExchangeOverHttp:
         # The cli access token authenticates a regular route (unified Bearer).
         me = await client.get("/api/v1/me", headers=_auth(data["access_token"]))
         assert me.status_code == 200
+
+
+class TestCredentialMatrix:
+    """C3: approve/deny are WEB-session-only (auth.md §1.1 last matrix row).
+
+    A PAT is a VALID credential of the WRONG KIND for a human approval act —
+    403 reauth_required (reason=interactive_session_required), never a bare
+    401 that would read as "your token is broken".
+    """
+
+    async def _pat(self, client, access, ws_id) -> str:
+        created = await client.post(
+            f"/api/v1/workspaces/{ws_id}/api-tokens",
+            json={"name": "dr-pat", "scopes": ["issue:read"]},
+            headers=_auth(access),
+        )
+        assert created.status_code == 201, created.text
+        token = created.json()["data"]["token"]
+        assert token.startswith("mesh_pat_")
+        return token
+
+    async def test_approve_with_pat_is_403_reauth_required(self, client):
+        access = await _web_login(client)
+        ws = await _workspace(client, access)
+        pat = await self._pat(client, access, ws["id"])
+        issued = await _issue(client)
+        resp = await client.post(
+            "/api/v1/auth/device/approve",
+            json={"user_code": issued["user_code"], "workspace_id": ws["id"]},
+            headers=_auth(pat),
+        )
+        assert resp.status_code == 403, resp.text
+        error = resp.json()["error"]
+        assert error["code"] == "reauth_required"
+        assert error["details"]["reason"] == "interactive_session_required"
+
+    async def test_deny_with_pat_is_403_reauth_required(self, client):
+        access = await _web_login(client)
+        ws = await _workspace(client, access)
+        pat = await self._pat(client, access, ws["id"])
+        issued = await _issue(client)
+        resp = await client.post(
+            "/api/v1/auth/device/deny",
+            json={"user_code": issued["user_code"]},
+            headers=_auth(pat),
+        )
+        assert resp.status_code == 403, resp.text
+        error = resp.json()["error"]
+        assert error["code"] == "reauth_required"
+        assert error["details"]["reason"] == "interactive_session_required"
+
+    async def test_deny_audit_logs_the_denier_member(self, client, session_factory):
+        """C4: deny audit parity with approve — the roster member is the
+        actor, not a faceless 'system'."""
+        from sqlalchemy import select
+
+        from mesh.db.models.audit import AuditLog
+
+        access = await _web_login(client)
+        await _workspace(client, access)  # membership source for the audit actor
+        issued = await _issue(client)
+        denied = await client.post(
+            "/api/v1/auth/device/deny",
+            json={"user_code": issued["user_code"]},
+            headers=_auth(access),
+        )
+        assert denied.status_code == 200, denied.text
+        async with session_factory() as session:
+            row = await session.scalar(
+                select(AuditLog).where(AuditLog.action == "auth.device_denied")
+            )
+        assert row is not None
+        assert row.actor_kind == "member"
+        assert row.actor_member_id is not None

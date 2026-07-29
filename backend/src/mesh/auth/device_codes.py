@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth import security
@@ -140,6 +141,34 @@ class DeviceCodeService:
         device_code = security.generate_device_code()
         requested = sorted({s for s in (scopes or []) if s})
 
+        try:
+            return await self._insert_pending_grant(
+                device_code=device_code,
+                requested=requested,
+                client_id=client_id,
+                ip_address=ip_address,
+                now=now,
+                ttl=ttl,
+            )
+        except IntegrityError as exc:
+            # Lost the race on the partial unique index: another issuance
+            # claimed this active user_code between the taken-check and the
+            # INSERT. Surface the typed exhaustion error (500 + alert,
+            # auth.md §2.4.2), never a raw constraint violation.
+            raise security.DeviceCodeSpaceExhausted(
+                "user_code collided on insert under the active set"
+            ) from exc
+
+    async def _insert_pending_grant(
+        self,
+        *,
+        device_code: str,
+        requested: list[str],
+        client_id: str,
+        ip_address: str | None,
+        now,
+        ttl,
+    ) -> dict:
         async with self._sf() as session, session.begin():
             pepper = self._pepper()
 
@@ -421,11 +450,36 @@ class DeviceCodeService:
                 )
             )
             if result.rowcount == 1:
+                # Granular audit actor (C4: parity with approve, which logs
+                # the approving roster member). A pending grant binds no
+                # workspace, so resolve the denier's first active membership
+                # through the SECURITY DEFINER bootstrap function — no tenant
+                # context exists yet, and the roster read then sets the GUC
+                # for the app-role RLS policy.
+                denier_member_id = None
+                first_ws = (
+                    await session.execute(
+                        text(
+                            "SELECT workspace_id FROM mesh_my_workspaces(:u) "
+                            "WHERE status = 'active' ORDER BY joined_at LIMIT 1"
+                        ),
+                        {"u": denier_user_id},
+                    )
+                ).scalar()
+                if first_ws is not None:
+                    await set_tenant_context(session, first_ws)
+                    denier_member_id = await session.scalar(
+                        select(Member.id).where(
+                            Member.workspace_id == first_ws,
+                            Member.user_id == denier_user_id,
+                            Member.status == "active",
+                        )
+                    )
                 await write_audit(
                     session,
                     workspace_id=None,
-                    actor_member_id=None,
-                    actor_kind="system",
+                    actor_member_id=denier_member_id,
+                    actor_kind="member" if denier_member_id is not None else "system",
                     action="auth.device_denied",
                     resource_type="device_authorization",
                     resource_id=target.id,
