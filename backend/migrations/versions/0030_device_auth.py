@@ -13,16 +13,16 @@ Implements the auth.md §2.4.2 / §2.4 / §3.8 increment (MES-80):
   consumption yields at most one session), and ``previous_token_hash`` /
   ``rotated_at`` (bounded idempotent refresh rotation, auth.md §3.8).
 
-Revision ID: 0028
-Revises: 0027
+Revision ID: 0030
+Revises: 0029
 Create Date: 2026-07-29
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0029"
-down_revision = "0028"
+revision = "0030"
+down_revision = "0029"
 branch_labels = None
 depends_on = None
 
