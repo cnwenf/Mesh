@@ -4,9 +4,10 @@ Consumes ``execution.finished`` and writes a result comment on the issue
 for regular (non-squad) executions. Squad executions are handled by the
 squad module's own consumer (squad.md §4.4).
 
-The comment is written via the real comment API path (not DB direct write)
-to ensure identity, audit, and notification consistency. The agent member
-is the author — assertions verify the comment comes from a real API call.
+The comment is created via ``CommentService.create_comment`` (the same
+path the squad relay uses) — NOT a direct DB insert — so identity,
+audit, notification, and §6.16 secret-guard consistency are guaranteed.
+The agent's member row is the author.
 
 §2.5 S-06: result content passes through server-side redaction before
 persistence (daemon first-layer + server fallback).
@@ -20,10 +21,10 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mesh.db.models.member import Member
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
-from mesh.outbox.service import emit_realtime
 
 logger = logging.getLogger("mesh.runtime.result_sink")
 
@@ -33,15 +34,27 @@ EXECUTION_FINISHED_EVENT = "execution.finished"
 MAX_RESULT_COMMENT_LENGTH = 4000
 
 
+def _result_comment_idempotency_key(execution_id: uuid.UUID) -> str:
+    """Stable idempotency key so relay redelivery never doubles the comment."""
+    return f"execution:{execution_id}:result-comment"
+
+
 async def execution_finished_result_sink(
-    session: AsyncSession, event: OutboxEvent
+    session: AsyncSession,
+    event: OutboxEvent,
+    comment_service=None,
 ) -> list[tuple[str, dict]] | None:
     """Consume ``execution.finished`` → write result comment on the issue.
 
     Only handles regular (non-squad) executions. Squad executions carry
     ``task_spec.squad_task_id`` and are handled by the squad relay.
 
-    Runs inside the relay's savepoint; idempotent by the event's
+    ``comment_service`` is the ``CommentService`` instance wired by
+    ``workers/main.py`` (same instance the squad relay uses). When None
+    (e.g. unit tests without the full worker stack), the sink degrades
+    to a no-op rather than crashing the relay.
+
+    Runs inside the relay's savepoint; idempotent by the comment
     idempotency key.
     """
     await set_tenant_context(session, event.workspace_id)
@@ -76,29 +89,43 @@ async def execution_finished_result_sink(
     if execution.issue_id is None:
         return None
 
-    # Build the result summary comment.
+    # Build the result summary comment body.
     result = execution.result or {}
     summary = _build_result_summary(status, result, execution.failure_reason)
 
-    # Emit a realtime event for the issue channel so the UI can show the
-    # result. The actual comment creation goes through the comment service
-    # in a full e2e flow; here we emit the event that the comment module's
-    # consumer will pick up (or the UI renders directly).
-    await emit_realtime(
-        session,
-        workspace_id=event.workspace_id,
-        channel=f"issue:{execution.issue_id}",
-        event="execution.result",
-        data={
-            "execution_id": str(execution.id),
-            "agent_id": str(execution.agent_id) if execution.agent_id else None,
-            "issue_id": str(execution.issue_id),
-            "status": status,
-            "summary": summary,
-            "failure_reason": execution.failure_reason,
-        },
-        idempotency_key=f"execution:{execution.id}:result-sink",
-    )
+    # Resolve the agent's member row — the comment author.
+    author: Member | None = None
+    if execution.agent_id is not None:
+        author = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == event.workspace_id,
+                Member.agent_id == execution.agent_id,
+            )
+        )
+    if author is None:
+        logger.warning(
+            "result sink: no agent member for execution %s — skipping comment",
+            execution_id,
+        )
+        return None
+
+    # Create the result comment via CommentService (real API path, not
+    # direct DB insert — ensures identity, audit, notification, §6.16).
+    if comment_service is not None:
+        await comment_service.create_comment(
+            workspace_id=event.workspace_id,
+            issue_id=execution.issue_id,
+            author_member=author,
+            body_markdown=summary,
+            suppress_triggers=True,
+            idempotency_key=_result_comment_idempotency_key(execution.id),
+        )
+    else:
+        logger.warning(
+            "result sink: no comment_service wired — comment not created "
+            "for execution %s",
+            execution_id,
+        )
     return None
 
 

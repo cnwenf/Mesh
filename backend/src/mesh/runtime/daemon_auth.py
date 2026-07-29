@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 
 from fastapi import Request
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.security import hash_token
@@ -149,3 +149,39 @@ async def require_runtime(request: Request) -> Runtime:
     if scheme.lower() != "bearer" or not token:
         raise UnauthorizedError("missing bearer token")
     return await resolve_runtime_token(request.app.state.session_factory, token.strip())
+
+
+# ---------------------------------------------------------------------------
+# §2.2 S-05 / auth.md §2.5.1: task principal (mesh_task_ prefix).
+# Routes that explicitly declare task principal support use this dependency.
+# The unified Bearer chain discriminates by prefix: mesh_task_ → task token
+# validation → frozen scope enforcement.
+# ---------------------------------------------------------------------------
+
+TASK_TOKEN_PREFIX = "mesh_task_"
+
+
+async def resolve_task_principal(request: Request):
+    """FastAPI dependency for routes accepting ``mesh_task_`` task tokens.
+
+    §2.2 S-05 / auth.md §2.5.1: validates the task token (not expired,
+    not revoked, attempt in-flight, lease_seq, runtime attribution,
+    resource scope). Returns the AttemptTaskToken row on success.
+
+    Only routes that explicitly declare task principal support should
+    use this dependency — regular console routes reject mesh_task_.
+    """
+    from mesh.runtime.task_tokens import validate_task_token
+
+    authorization = request.headers.get("authorization") or ""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise UnauthorizedError("missing bearer token")
+    token = token.strip()
+    if not token.startswith(TASK_TOKEN_PREFIX):
+        raise UnauthorizedError("not a task token")
+
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        task_token = await validate_task_token(session, token=token)
+        return task_token
