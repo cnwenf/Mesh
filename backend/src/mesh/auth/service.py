@@ -128,6 +128,12 @@ def user_to_dict(user: User) -> dict:
         "settings": user.settings or {},
         "mfa_enabled": user.mfa_enabled_at is not None,
         "last_login_at": user.last_login_at,
+        # Active-workspace restoration hint (search-command-palette.md §3.4).
+        "last_active_workspace_id": (
+            str(user.last_active_workspace_id)
+            if user.last_active_workspace_id is not None
+            else None
+        ),
         "created_at": user.created_at,
     }
 

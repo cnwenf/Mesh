@@ -26,6 +26,7 @@ from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
+from mesh.api.html_entry import router as html_entry_router
 from mesh.api.realtime_routes import router as realtime_router
 from mesh.attachment.routes import router as attachment_router
 from mesh.attachment.service import AttachmentService
@@ -337,6 +338,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_error_handlers(app)
     app.include_router(health_router)
+    # Public SPA entry probe (search-command-palette.md §3.4): no auth, no data.
+    app.include_router(html_entry_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
     app.include_router(oauth_router)

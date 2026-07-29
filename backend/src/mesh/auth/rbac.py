@@ -22,6 +22,7 @@ before reading tenant tables, so the same code path is correct under RLS
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 
@@ -36,6 +37,13 @@ from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, NotFoundError
+
+logger = logging.getLogger(__name__)
+
+# Throttle for the users.last_active_workspace_id backfill (per-process): once
+# a (user, workspace) pair has been written this run, skip repeat writes.
+# Bounded by distinct pairs the process resolves — small in practice.
+_LAST_WS_WRITTEN: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
 # Role seniority (member.md §2.2 fixed enum; no custom roles — YAGNI).
 ROLE_RANK: dict[str, int] = {"guest": 0, "member": 1, "admin": 2, "owner": 3}
@@ -106,7 +114,34 @@ async def resolve_workspace_context(
         raise NotFoundError(_WORKSPACE_NOT_FOUND)
     if permission is not None and not role_satisfies(member.role, permission):
         raise ForbiddenError("insufficient role for this action")
+    await _backfill_last_active_workspace(session, user=user, workspace_id=workspace.id)
     return WorkspaceContext(workspace=workspace, member=member)
+
+
+async def _backfill_last_active_workspace(
+    session: AsyncSession, *, user: User, workspace_id: uuid.UUID
+) -> None:
+    """Best-effort users.last_active_workspace_id hint (search-command-palette.md §3.4).
+
+    Throttled per process via ``_LAST_WS_WRITTEN``: each (user, workspace) pair
+    writes at most once per run, and the UPDATE itself is a no-op when the
+    value already matches (IS DISTINCT FROM). Never fails the request — the
+    column is a restoration hint, authorization never reads it.
+    """
+    pair = (user.id, workspace_id)
+    if pair in _LAST_WS_WRITTEN:
+        return
+    try:
+        await session.execute(
+            text(
+                "UPDATE users SET last_active_workspace_id = :ws "
+                "WHERE id = :uid AND last_active_workspace_id IS DISTINCT FROM :ws"
+            ),
+            {"ws": workspace_id, "uid": user.id},
+        )
+        _LAST_WS_WRITTEN.add(pair)
+    except Exception:  # noqa: BLE001 — best-effort hint, never fail the request
+        logger.debug("last_active_workspace_id backfill skipped", exc_info=True)
 
 
 async def resolve_workspace_by_slug(
