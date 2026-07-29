@@ -25,6 +25,7 @@ from mesh.auth.rbac import role_satisfies
 from mesh.auth.tokens import ResolvedToken, TokenService
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, NotFoundError, UnauthorizedError
 
 _WORKSPACE_NOT_FOUND = "workspace not found"
@@ -89,6 +90,11 @@ async def gate_workspace(
         if resolved.workspace_id != workspace_id:
             # A token scoped to another workspace learns nothing (no leak).
             raise NotFoundError(_WORKSPACE_NOT_FOUND)
+        # Tenant GUC before the roster read: members is RLS-protected, and
+        # under the restricted app role the policy casts the (otherwise
+        # unset) mesh.workspace_id GUC to uuid — an unset GUC is '' and the
+        # read dies with a 500 instead of resolving the PAT's membership.
+        await set_tenant_context(session, workspace_id)
         member = await session.scalar(
             select(Member).where(
                 Member.workspace_id == workspace_id,
