@@ -48,6 +48,23 @@ Mesh 项目的所有重要变更都记录于此文件。
   - **安全审核员 LOW 清单**:token fstat 复核补 0600 mode + 超限读拒绝(不静默截断)、journal 以 `os.open` 0600 预建消除 umask 窗口、runtime token 纳入脱敏集、Retry-After 全链路分钟级封顶(claim/heartbeat/sealed-flush 统一 `capped_retry_after`)。
   - **文档**:spec 新增 §4.4.1 实现跟踪台账(A2 验收冻结登记非阻断项:非 root/userns 随 S-12、argv/provider 配置端到端强制随 A3 等)。
 
+## [0.21.0] - 2026-07-30
+
+平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 371 例(覆盖率 98.65%) + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2526 例全绿 + typecheck 净。
+
+### Added
+
+- **mesh CLI(cli.md 五章)**:`cli/` 独立包(click + httpx + PyYAML);退码契约 `errors.py` 表驱动(HTTP→exit 数据驱动,用法错误归 3 不占鉴权专属 2);凭证存储 fail-closed(0600/0700/属主/拒符号链接,临时文件 0600 → fsync → 原子 rename);配置优先级 flag > env(`MESH_*`,空串=未设置)> file > default,`config list --all` 标注来源,alias 单级展开(不递归);HTTP 客户端:401 设备会话静默 refresh(单飞 + 宽限重读)、429/5xx 有界重试、verbose 仅 method/path/状态/耗时(`Authorization` 恒 `Bearer [REDACTED]`)、明文 http 默认拒绝(`--insecure` 单次 + 告警)、自定义 CA 三入口、代理 env-only;`execution logs --follow` SSE 帧解析 + offset 续传去重 + 行首 RFC3339(--timestamps=false 裸行);内置 jq 子集(`.`/`.f`/`.[]`/`.[n]`/管道/`select(==)`/字面量,编译/求值错误带位置 → 退码 3);四 shell 静态补全(bash/zsh/fish/powershell);`--web` 规范深链桥接。
+- **auth 设备码增量(auth.md §2.4.2/§3.1.1)**:`device_authorizations` 表(迁移 0028)——device_code/user_code 均 **HMAC-SHA256 服务端 pepper(`MESH_DEVICE_CODE_PEPPER`,生产缺失 fail-closed)** 仅存哈希;user_code ≥20bit 去歧义字符集(剔除 0/O/1/I/L,`XXXX-XXXX` 分组,活跃碰撞重试≤5);部分唯一索引仅覆盖 pending/approved(终态释放码空间);状态机 pending→approved/denied→consumed/expired/invalidated 终态不可逆;取码/轮询/确认页数据/批准/拒绝五端点;轮询双重限速(IP 全局 + 单码 1/interval,`slow_down` + Retry-After,单码违规 >5 作废 + `auth.device_invalidated` 审计);批准事务:名册行 `FOR UPDATE` + scope 服务端取交(请求 ∩ 角色权限)+ 批准者 web 会话不变量定位 + `authenticated_at` 快照;消费事务固定锁序(授权行 → 名册行 → 条件消费 → cli 会话),与成员移除/降权在名册行上线性化(无 TOCTOU);确认页 0/1/多工作区分流。
+- **会话与凭证契约**:`sessions` 增 `workspace_id`(cli 绑定,CHECK 非空)/`granted_scopes`/`device_authorization_id`(UNIQUE 单次消费)/`previous_token_hash`/`rotated_at`;access JWT 增 `sid`/`workspace_id`/`scope` 声明;§3.8 有界幂等 refresh 轮换(条件 UPDATE 行数控裁,胜者唯一下发新 refresh,宽限窗只发 access 不写库不二次轮换,过期/撤销会话两路径均 401 不复活);refresh 双传输(Web `mesh_session` HttpOnly/Secure/SameSite=Strict cookie + Origin/Referer 同源校验;CLI Bearer `mesh_rft_`;同请求只认一种);`GET/DELETE /auth/token` 自省/自撤销(PAT 即时、会话经 sid);统一 Bearer 依赖前缀路由(JWT/`mesh_pat_`/`mesh_agt_` 放行且权限恒为 scopes∩角色;`mesh_rt_`/`mesh_rft_` 常规路由拒绝;前缀⇄持有者类型语义校验);`POST /auth/reauth` step-up 再认证(密码/TOTP 分支排他,OAuth-only fail-closed 待 §2.4.3);Web 登录/注册 refresh 改 HttpOnly cookie 下发(R4-H1:响应体绝无 refresh 明文)。
+- **Web 设备确认页**:`/device` 公开路由——手工录入 user_code(预填仅便利,提交校验录入值防钓鱼)、scope 人类可读枚举 + 安全提示、工作区 0/1/多分流(0 禁用批准、1 自动绑定、多必选无默认)、批准默认焦点非默认确认;i18n 全外部化(zh-CN/en 目录)。
+- **OpenAPI 与分发(cli.md §5.4)**:`docs/api/openapi.yaml`(OpenAPI 3.1,FastAPI 生成)——`/api/v1/daemon/*` 与内部端点**完全剔除**(非 x-internal 标记);`tests/docs/check_openapi_surface.py` CI 门禁(daemon 路径零命中 + CLI 依赖端点齐全);后端契约测试防 yaml↔应用漂移;`cli-release.yml` 多平台单二进制(PyInstaller)+ SHA-256 + minisign 签名(公钥随仓库),`cli/install.sh` 校验和 + 签名双验安装。
+
+### Changed
+
+- Web 前端认证改 cookie 传输(R4-H1):`authStore` 去除 refreshToken(access-only,refresh 仅 HttpOnly cookie)、`refresh()`/`logout()` 空请求体、SecuritySettings 改密经 sid 识别当前会话;登录响应类型去除 `refresh_token`。
+- 登录类端点限速阈值改可配置(`MESH_AUTH_RATE_LIMIT`/`MESH_AUTH_RATE_WINDOW`,auth.md §3.6「阈值示例,可调」)。
+
 ## [0.20.0] - 2026-07-30
 服务端 P0 契约冻结落地(MES-91 阶段2 · MES-98,六轮验收收口):runtime 执行体服务端契约全面 Spec 化并对齐实现,为本地执行体(MES-94)联调放行。
 

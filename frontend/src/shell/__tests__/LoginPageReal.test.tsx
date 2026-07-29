@@ -354,7 +354,8 @@ describe('LoginPage 真实账号登录(auth.md §3.1 接通)', () => {
     // 验证成功 → 写入会话并跳转首页。
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
     expect(useAuthStore.getState().token).toBe('at');
-    expect(useAuthStore.getState().refreshToken).toBe('rt');
+    // R4-H1: refresh lives in the HttpOnly cookie only; the store holds the access token.
+    expect(useAuthStore.getState().token).toBe('at');
   });
 
   it('开发用 token 直填入口保留(mock e2e 兼容:login-token/login-submit)', async () => {

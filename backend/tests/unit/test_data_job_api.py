@@ -306,6 +306,49 @@ class TestExportEndpoints:
         )
         assert resp.status_code == 400
 
+    async def test_pat_credential_can_export_and_import(self, client, app, session_factory):
+        """A3 regression: data-jobs must serve PAT holders — the CI/headless
+        ``mesh export`` / ``mesh import`` credential. The token branch of
+        ``gate_workspace`` sets the tenant GUC before the roster read; without
+        it the app-role RLS policy casts an unset GUC to uuid and every
+        PAT-driven data-job 500s."""
+        from mesh.auth.tokens import TokenService
+        from mesh.db.models.member import Member
+
+        token, ws_id, member_id = await _setup_admin(client, session_factory)
+        async with session_factory() as session:
+            member = await session.get(Member, member_id)
+        pat = (
+            await TokenService(session_factory).create_token(
+                actor=member,
+                workspace_id=ws_id,
+                name="ci-data-jobs",
+                scopes=["issue:read", "issue:write"],
+            )
+        )["token"]
+        assert pat.startswith("mesh_pat_")
+
+        exported = await client.post(
+            "/api/v1/data-jobs/export",
+            json={"workspace_id": str(ws_id), "scope": "workspace", "format": "csv"},
+            headers=_auth(pat),
+        )
+        assert exported.status_code == 201, exported.text
+
+        source_id = await _seed_source(app.state.storage, session_factory, ws_id, member_id)
+        imported = await client.post(
+            "/api/v1/data-jobs/import",
+            json={
+                "workspace_id": str(ws_id),
+                "entity_type": "issues",
+                "format": "csv",
+                "source_attachment_id": str(source_id),
+                "mapping": _MAPPING,
+            },
+            headers=_auth(pat),
+        )
+        assert imported.status_code == 201, imported.text
+
 
 class TestOwnershipAndDownload:
     async def test_stranger_gets_403(self, client, app, session_factory):

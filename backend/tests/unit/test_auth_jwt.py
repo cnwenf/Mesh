@@ -100,3 +100,54 @@ def test_decode_rejects_missing_exp():
     )
     with pytest.raises(UnauthorizedError):
         jwt_mod.decode_access_token(token, secret=SECRET, algorithm=ALG)
+
+
+# --- MES-80 A4: session-bound claims (auth.md §2.4 access JWT 声明写死) -------
+
+
+def test_sid_claim_roundtrip():
+    """The access JWT carries sid = sessions.id (session-location invariant)."""
+    session_id = uuid.uuid4()
+    token, _ = jwt_mod.encode_access_token(
+        subject=uuid.uuid4(),
+        secret=SECRET,
+        algorithm=ALG,
+        ttl=timedelta(minutes=15),
+        session_id=session_id,
+    )
+    decoded = jwt_mod.decode_access_token(token, secret=SECRET, algorithm=ALG)
+    assert decoded.sid == session_id
+
+
+def test_device_session_claims_roundtrip():
+    """Device sessions bind workspace_id + fixed granted scopes into the JWT."""
+    workspace_id = uuid.uuid4()
+    token, _ = jwt_mod.encode_access_token(
+        subject=uuid.uuid4(),
+        secret=SECRET,
+        algorithm=ALG,
+        ttl=timedelta(minutes=15),
+        session_id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        scopes=["issue:read", "comment:write"],
+    )
+    decoded = jwt_mod.decode_access_token(token, secret=SECRET, algorithm=ALG)
+    assert decoded.workspace_id == workspace_id
+    assert decoded.scopes == frozenset({"issue:read", "comment:write"})
+
+
+def test_legacy_token_without_sid_decodes():
+    """Tokens issued before the increment decode with sid=None (forward compat)."""
+    claims = {
+        "sub": str(uuid.uuid4()),
+        "iat": int(datetime.now(UTC).timestamp()),
+        "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+        "jti": uuid.uuid4().hex,
+        "typ": "access",
+        "auth_time": int(datetime.now(UTC).timestamp()),
+    }
+    token = pyjwt.encode(claims, SECRET, algorithm=ALG)
+    decoded = jwt_mod.decode_access_token(token, secret=SECRET, algorithm=ALG)
+    assert decoded.sid is None
+    assert decoded.workspace_id is None
+    assert decoded.scopes == frozenset()

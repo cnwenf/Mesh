@@ -46,7 +46,7 @@ export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Elem
     }
     void oauthCallbackLogin(client, provider, code, state)
       .then((tokens) => {
-        setSession({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token });
+        setSession({ accessToken: tokens.access_token });
         const next = safeNextPath(sessionStorage.getItem(OAUTH_NEXT_STORAGE_KEY));
         sessionStorage.removeItem(OAUTH_NEXT_STORAGE_KEY);
         navigate(next, { replace: true });

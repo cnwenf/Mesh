@@ -88,7 +88,8 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
     expect(useAuthStore.getState().token).toBe('jwt-oauth');
-    expect(useAuthStore.getState().refreshToken).toBe('rt-oauth');
+    // R4-H1: refresh lives in the HttpOnly cookie only; the store holds the access token.
+    expect(useAuthStore.getState().token).toBeTruthy();
     const [url] = fetchImpl.mock.calls[0] as [string];
     expect(url).toContain('/api/v1/auth/oauth/mock/callback?code=mockcode&state=mockstate');
   });

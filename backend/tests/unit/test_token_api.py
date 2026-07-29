@@ -57,9 +57,37 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _access_token(user_id: uuid.UUID) -> str:
+async def _access_token(app, user_id: uuid.UUID) -> str:
+    """Mint a web-session-bound access JWT.
+
+    Sensitive routes (PAT create/revoke) enforce the step-up gate via the
+    session row's ``sid`` (auth.md §1.1) — a bare JWT without a locatable
+    session is rejected, so tests must bind the token to a fresh session.
+    """
+    from datetime import datetime
+
+    from mesh.auth.security import generate_refresh_token, hash_token
+    from mesh.db.models.user import Session
+
+    now = datetime.now(UTC)
+    row = Session(
+        user_id=user_id,
+        token_hash=hash_token(generate_refresh_token()),
+        type="web",
+        expires_at=now + timedelta(days=14),
+        last_active_at=now,
+        authenticated_at=now,
+    )
+    async with app.state.session_factory() as session, session.begin():
+        session.add(row)
+        await session.flush()
+        session_id = row.id
     token, _ = jwt_mod.encode_access_token(
-        subject=user_id, secret=JWT_SECRET, algorithm="HS256", ttl=timedelta(minutes=15)
+        subject=user_id,
+        secret=JWT_SECRET,
+        algorithm="HS256",
+        ttl=timedelta(minutes=15),
+        session_id=session_id,
     )
     return token
 
@@ -103,8 +131,8 @@ async def ctx(app):
     member_user, member_member = await _seed_human(app, ws, "member")
     return {
         "ws": ws,
-        "owner_token": _access_token(owner_user),
-        "member_token": _access_token(member_user),
+        "owner_token": await _access_token(app, owner_user),
+        "member_token": await _access_token(app, member_user),
         "owner_member": owner_member,
         "member_member": member_member,
     }
@@ -323,7 +351,7 @@ async def test_non_member_gets_404(app, client, ctx):
         ).scalar_one()
     resp = await client.get(
         f"/api/v1/workspaces/{ctx['ws']}/api-tokens",
-        headers=_auth(_access_token(outsider)),
+        headers=_auth(await _access_token(app, outsider)),
     )
     assert resp.status_code == 404
 

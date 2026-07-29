@@ -157,6 +157,9 @@ def test_gateway_production_auth_mode_rejects_dev_tokens():
         # A real signing secret so the production fail-safe lets the app boot;
         # dev-token rejection below is independent of the secret's value.
         jwt_secret="gateway-inprocess-e2e-signing-secret",
+        # The device-code HMAC pepper is fail-closed in production too
+        # (auth.md §2.4.2 / §5.5) — same startup-guard pattern as above.
+        device_code_pepper="gateway-inprocess-e2e-device-pepper",
     )
     gateway_app = create_gateway_app(production_settings)
     with TestClient(gateway_app) as client:

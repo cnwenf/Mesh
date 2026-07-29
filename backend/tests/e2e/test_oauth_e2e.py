@@ -53,7 +53,10 @@ async def _oauth_login(client, *, sub: str, email: str, name: str = "OAuth User"
 
 async def test_oauth_login_round_trip_issues_working_tokens(api_client):
     data = await _oauth_login(api_client, sub="e2e-sub-1", email="oauth1@corp.com")
-    assert data["access_token"] and data["refresh_token"]
+    # R4-H1: the callback body carries access only — refresh rides the cookie.
+    assert data["access_token"]
+    assert "refresh_token" not in data
+    assert (api_client.cookies.get("mesh_session") or "").startswith("mesh_rft_")
     # The minted access token authenticates and resolves the auto-registered user.
     me = await api_client.get("/api/v1/me", headers=_auth(data["access_token"]))
     assert me.status_code == 200

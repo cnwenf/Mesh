@@ -8,7 +8,14 @@ capture one-time tokens instead of sending real email.
 Security invariants enforced here (auth.md §5.x):
 - argon2id + constant-time compare; uniform anti-enumeration failures;
 - refresh/reset/verification tokens stored as SHA-256 hashes only;
-- refresh rotation with replay detection (reusing a rotated token revokes all);
+- refresh rotation is bounded-idempotent with a grace window (§3.8, R5-H1): a
+  rotated-out credential is recognized via ``previous_token_hash`` inside the
+  window and receives ONLY a fresh access token (never a second rotation,
+  never refresh plaintext) so concurrent tabs/processes converge on the
+  winner; outside the window (or on a revoked session) it is a plain 401.
+  No family revocation on reuse — with hash-only storage a replayed token is
+  indistinguishable from a concurrent legitimate holder, and §3.8
+  deliberately converges instead of logging the race out;
 - password change / reset invalidates every refresh session;
 - (IP, email) login lockout;
 - TOTP MFA with encrypted secret + single-use backup codes.
@@ -18,7 +25,7 @@ from __future__ import annotations
 
 import inspect
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -30,8 +37,11 @@ from mesh.auth import jwt as jwt_mod
 from mesh.auth import security
 from mesh.auth.audit import write_audit
 from mesh.auth.ratelimit import assert_not_locked_out
-from mesh.auth.realtime import broadcast_user_revocation
+from mesh.auth.rbac import PERMISSION_MATRIX
+from mesh.auth.realtime import SESSION_REVOKED_EVENT, broadcast_user_revocation
 from mesh.config import Settings
+from mesh.db.models.api_token import ApiToken
+from mesh.db.models.member import Member
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -39,12 +49,14 @@ from mesh.db.models.user import (
     Session,
     User,
 )
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
     BusinessRuleError,
     ConflictError,
     NotFoundError,
     UnauthorizedError,
 )
+from mesh.outbox.service import emit_realtime
 
 MFA_ISSUER = "Mesh"
 MFA_TICKET_TYPE = "mfa"
@@ -68,6 +80,26 @@ class TokenResult:
     access_token: str
     refresh_token: str
     expires_in: int
+
+
+@dataclass(frozen=True)
+class RefreshWinner:
+    """The sole refresh-rotation winner: carries the ONLY new refresh issued."""
+
+    access_token: str
+    refresh_token: str
+    expires_in: int
+
+
+@dataclass(frozen=True)
+class RefreshGrace:
+    """A grace-window loser: fresh access ONLY — never a refresh (§3.8)."""
+
+    access_token: str
+    expires_in: int
+
+
+RefreshOutcome = RefreshWinner | RefreshGrace
 
 
 @dataclass(frozen=True)
@@ -153,14 +185,29 @@ class AuthService:
     # -- token issuance --------------------------------------------------------
 
     def _issue_access(
-        self, user_id: uuid.UUID, *, auth_time: datetime | None = None
+        self,
+        user_id: uuid.UUID,
+        *,
+        auth_time: datetime | None,
+        session_id: uuid.UUID | None = None,
+        workspace_id: uuid.UUID | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> tuple[str, int]:
+        """Issue an access JWT bound to ``session_id`` (the ``sid`` claim).
+
+        ``auth_time`` is passed explicitly — ``None`` means NO recent primary
+        authentication (silent SSO reuse, or a device session whose approver
+        had none) and the claim is omitted so step-up gates fail closed.
+        """
         token, _jti = jwt_mod.encode_access_token(
             subject=user_id,
             secret=self._settings.jwt_secret,
             algorithm=self._settings.jwt_algorithm,
             ttl=self._settings.access_token_ttl,
             auth_time=auth_time,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            scopes=scopes,
         )
         return token, int(self._settings.access_token_ttl.total_seconds())
 
@@ -174,33 +221,39 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
-        authenticated_at: datetime | None = None,
-    ) -> str:
-        """Persist a refresh session (hash only) and return the plaintext token.
+        authenticated_at: datetime | None,
+        workspace_id: uuid.UUID | None = None,
+        granted_scopes: list[str] | None = None,
+        device_authorization_id: uuid.UUID | None = None,
+    ) -> tuple[str, uuid.UUID]:
+        """Persist a refresh session (hash only) and return ``(plaintext, id)``.
 
-        ``authenticated_at`` records the last primary authentication (password /
-        TOTP); silent refresh forwards the original value so step-up re-auth
-        (§5.5) reflects the real authentication age.
+        ``authenticated_at`` is the caller's EXPLICIT primary-auth moment —
+        ``None`` is legitimate (no recent primary auth) and must never default
+        to "now": session creation is not authentication (auth.md R6-H3).
         """
-        refresh_plain = security.generate_token()
+        refresh_plain = security.generate_refresh_token()
         ttl = (
             self._settings.remember_refresh_token_ttl
             if remember
             else self._settings.refresh_token_ttl
         )
-        session.add(
-            Session(
-                user_id=user.id,
-                token_hash=security.hash_token(refresh_plain),
-                type=session_type,
-                ip_address=ip_address,
-                user_agent=user_agent,
-                expires_at=now + ttl,
-                last_active_at=now,
-                authenticated_at=authenticated_at or now,
-            )
+        row = Session(
+            user_id=user.id,
+            token_hash=security.hash_token(refresh_plain),
+            type=session_type,
+            workspace_id=workspace_id,
+            granted_scopes=granted_scopes or [],
+            device_authorization_id=device_authorization_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            expires_at=now + ttl,
+            last_active_at=now,
+            authenticated_at=authenticated_at,
         )
-        return refresh_plain
+        session.add(row)
+        await session.flush()  # assigns row.id (the access JWT's sid)
+        return refresh_plain, row.id
 
     async def _issue_tokens(
         self,
@@ -212,11 +265,12 @@ class AuthService:
         user_agent: str | None,
         remember: bool,
         now: datetime,
-        authenticated_at: datetime | None = None,
+        authenticated_at: datetime | None,
+        workspace_id: uuid.UUID | None = None,
+        granted_scopes: list[str] | None = None,
+        device_authorization_id: uuid.UUID | None = None,
     ) -> TokenResult:
-        auth_moment = authenticated_at or now
-        access_token, expires_in = self._issue_access(user.id, auth_time=auth_moment)
-        refresh_token = await self._create_session(
+        refresh_token, sid = await self._create_session(
             session,
             user,
             session_type=session_type,
@@ -224,10 +278,54 @@ class AuthService:
             user_agent=user_agent,
             remember=remember,
             now=now,
-            authenticated_at=auth_moment,
+            authenticated_at=authenticated_at,
+            workspace_id=workspace_id,
+            granted_scopes=granted_scopes,
+            device_authorization_id=device_authorization_id,
+        )
+        access_token, expires_in = self._issue_access(
+            user.id,
+            auth_time=authenticated_at,
+            session_id=sid,
+            workspace_id=workspace_id,
+            scopes=granted_scopes,
         )
         return TokenResult(
             access_token=access_token, refresh_token=refresh_token, expires_in=expires_in
+        )
+
+    async def issue_tokens_in_session(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        session_type: str,
+        ip_address: str | None,
+        user_agent: str | None,
+        now: datetime,
+        authenticated_at: datetime | None,
+        remember: bool = False,
+        workspace_id: uuid.UUID | None = None,
+        granted_scopes: list[str] | None = None,
+        device_authorization_id: uuid.UUID | None = None,
+    ) -> TokenResult:
+        """Issue access+refresh INSIDE the caller's transaction.
+
+        The device-code exchange (device_codes.py) must mint the cli session
+        atomically with the grant consumption — same transaction, same commit.
+        """
+        return await self._issue_tokens(
+            session,
+            user,
+            session_type=session_type,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            remember=remember,
+            now=now,
+            authenticated_at=authenticated_at,
+            workspace_id=workspace_id,
+            granted_scopes=granted_scopes,
+            device_authorization_id=device_authorization_id,
         )
 
     # -- registration ----------------------------------------------------------
@@ -347,6 +445,9 @@ class AuthService:
                         user_agent=user_agent,
                         remember=remember,
                         now=now,
+                        # Password verification just succeeded — this IS the
+                        # primary authentication moment (R6-H3).
+                        authenticated_at=now,
                     ),
                 )
 
@@ -387,6 +488,8 @@ class AuthService:
                 user_agent=user_agent,
                 remember=remember,
                 now=now,
+                # TOTP/backup code just verified — primary authentication.
+                authenticated_at=now,
             )
         return tokens
 
@@ -398,11 +501,15 @@ class AuthService:
         user_agent: str | None = None,
         remember: bool = False,
         session_type: str = "web",
+        authenticated_at: datetime | None,
     ) -> TokenResult:
         """Issue access+refresh for an already-authenticated user (OAuth login).
 
         The caller has established the user's identity out-of-band (e.g. a
         verified OAuth provider); this stamps last_login and mints tokens.
+        ``authenticated_at`` is the caller's verdict on primary-auth freshness
+        (R6-H3/R7-H3): a fresh interactive provider login passes ``now()``;
+        a silent SSO reuse passes ``None`` — never the callback arrival time.
         """
         now = _now(self._clock)
         async with self._sf() as session, session.begin():
@@ -418,6 +525,7 @@ class AuthService:
                 user_agent=user_agent,
                 remember=remember,
                 now=now,
+                authenticated_at=authenticated_at,
             )
 
     # -- refresh / logout ------------------------------------------------------
@@ -425,64 +533,214 @@ class AuthService:
     async def refresh(
         self,
         *,
-        refresh_token: str,
+        presented_token: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
-        session_type: str = "web",
-    ) -> TokenResult:
-        now = _now(self._clock)
-        token_hash = security.hash_token(refresh_token)
-        # Replay revocation must COMMIT before we raise, so the outcome is
-        # resolved inside the transaction and raised after it exits.
-        outcome: tuple[str, object]
-        async with self._sf() as session, session.begin():
-            row = await session.scalar(select(Session).where(Session.token_hash == token_hash))
-            if row is None or row.expires_at < now:
-                outcome = ("invalid", None)
-            elif row.revoked_at is not None:
-                # Replay: a rotated token was reused. Revoke everything for safety.
-                await self._revoke_all(session, row.user_id, now)
-                outcome = ("replay", None)
-            else:
-                user = await session.get(User, row.user_id)
-                if user is None or user.status != "active":
-                    outcome = ("invalid", None)
-                else:
-                    # Rotate: revoke the presented token, issue a fresh pair.
-                    # Forward the original authentication time so step-up re-auth
-                    # (§5.5) reflects the real authentication age, not the refresh.
-                    row.revoked_at = now
-                    outcome = (
-                        "tokens",
-                        await self._issue_tokens(
-                            session,
-                            user,
-                            session_type=session_type,
-                            ip_address=ip_address,
-                            user_agent=user_agent,
-                            remember=False,
-                            now=now,
-                            authenticated_at=row.authenticated_at,
-                        ),
-                    )
-        kind, payload = outcome
-        if kind == "invalid":
-            raise UnauthorizedError("invalid or expired token")
-        if kind == "replay":
-            raise UnauthorizedError("invalid or expired token", details={"reason": "replay"})
-        return payload  # type: ignore[return-value]
+    ) -> RefreshOutcome:
+        """Bounded idempotent rotation (auth.md §3.8) — winner-takes-all.
 
-    async def logout(self, *, user_id: uuid.UUID, refresh_token: str) -> None:
+        Two concurrent refreshes with the SAME refresh token (multi-tab /
+        multi-process race) both succeed: exactly one UPDATE wins the row
+        arbitration and is issued a fresh refresh (the winner — the ONLY
+        channel a new refresh plaintext ever leaves by); the loser matches the
+        rotated-out ``previous_token_hash`` inside the grace window and is
+        issued ONLY a fresh access token — no refresh, no second rotation, no
+        DB write — so both converge on the winner's credential instead of
+        logging each other out. Outside the window, or for revoked/expired
+        sessions, everything is a plain 401: an expired session is never
+        resurrected through either path.
+        """
         now = _now(self._clock)
-        token_hash = security.hash_token(refresh_token)
+        presented_hash = security.hash_token(presented_token)
+        grace_seconds = self._settings.refresh_rotation_grace_seconds
+
         async with self._sf() as session, session.begin():
-            row = await session.scalar(
-                select(Session).where(Session.token_hash == token_hash, Session.user_id == user_id)
+            # 1) Winner arbitration: conditional rotation, rowcount adjudicates.
+            new_refresh_plain = security.generate_refresh_token()
+            new_refresh_hash = security.hash_token(new_refresh_plain)
+            result = await session.execute(
+                update(Session)
+                .where(Session.token_hash == presented_hash)
+                .where(Session.revoked_at.is_(None))
+                .where(Session.expires_at > now)
+                .values(
+                    token_hash=new_refresh_hash,
+                    previous_token_hash=Session.token_hash,
+                    rotated_at=now,
+                )
             )
+            if result.rowcount == 1:
+                row = await session.scalar(
+                    select(Session).where(Session.token_hash == new_refresh_hash)
+                )
+                outcome: RefreshOutcome = await self._refresh_tokens(
+                    session,
+                    row,
+                    now=now,
+                    new_refresh_plain=new_refresh_plain,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                return outcome
+
+            # 2) Rowcount 0 — re-read to decide WHY.
+            current = await session.scalar(
+                select(Session).where(Session.token_hash == presented_hash)
+            )
+            if current is not None:
+                # presented == current hash yet the UPDATE matched nothing ⇒
+                # the session is revoked or expired (the realistic cause) —
+                # hard 401; the predicates are re-checked, never skipped.
+                if current.revoked_at is not None or current.expires_at <= now:
+                    raise UnauthorizedError("invalid or expired token")
+                # The vanishingly rare concurrent rotate-to-identical-value
+                # case: predicates hold, so proceed as a normal refresh.
+                return await self._refresh_tokens(
+                    session,
+                    current,
+                    now=now,
+                    new_refresh_plain=None,  # rotate now
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+
+            # 3) Grace path: presented matches the rotated-out previous hash.
+            previous_holder = await session.scalar(
+                select(Session).where(Session.previous_token_hash == presented_hash)
+            )
+            if (
+                previous_holder is not None
+                and previous_holder.rotated_at is not None
+                and previous_holder.revoked_at is None
+                and previous_holder.expires_at > now
+                and (now - previous_holder.rotated_at).total_seconds() <= grace_seconds
+            ):
+                # Access only. No refresh plaintext, no rotation, NO write —
+                # the grace path never extends the session's life or scope.
+                user = await session.get(User, previous_holder.user_id)
+                if user is None or user.status != "active":
+                    raise UnauthorizedError("invalid or expired token")
+                access_token, expires_in = await self._session_access(
+                    session, previous_holder, user, now=now
+                )
+                return RefreshGrace(access_token=access_token, expires_in=expires_in)
+
+            raise UnauthorizedError("invalid or expired token")
+
+    async def _refresh_tokens(
+        self,
+        session: AsyncSession,
+        row: Session,
+        *,
+        now: datetime,
+        new_refresh_plain: str | None,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> RefreshOutcome:
+        """Winner branch: rotate (when not already rotated) + issue the pair.
+
+        ``new_refresh_plain=None`` means the row still holds the presented
+        hash — rotate it in place first. Renewal scope = the session's fixed
+        ``granted_scopes`` ∩ the holder's CURRENT role permissions (a later
+        role downgrade narrows renewed tokens; web sessions carry an empty
+        list and stay role-based).
+        """
+        if new_refresh_plain is None:
+            new_refresh_plain = security.generate_refresh_token()
+            result = await session.execute(
+                update(Session)
+                .where(Session.id == row.id)
+                .where(Session.revoked_at.is_(None))
+                .where(Session.expires_at > now)
+                .values(
+                    token_hash=security.hash_token(new_refresh_plain),
+                    previous_token_hash=Session.token_hash,
+                    rotated_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                raise UnauthorizedError("invalid or expired token")
+            row = await session.scalar(select(Session).where(Session.id == row.id))
+        user = await session.get(User, row.user_id)
+        if user is None or user.status != "active":
+            raise UnauthorizedError("invalid or expired token")
+        row.last_active_at = now
+        access_token, expires_in = await self._session_access(session, row, user, now=now)
+        return RefreshWinner(
+            access_token=access_token,
+            refresh_token=new_refresh_plain,
+            expires_in=expires_in,
+        )
+
+    async def _session_access(
+        self, session: AsyncSession, row: Session, user: User, *, now: datetime
+    ) -> tuple[str, int]:
+        """Issue an access JWT bound to ``row`` with renewal-time scope (§3.1).
+
+        cli sessions re-intersect their fixed ``granted_scopes`` with the
+        holder's CURRENT role permissions (only ever narrows); web sessions
+        stay role-based (empty scope claim). ``authenticated_at`` is forwarded
+        as-is — possibly None — so step-up reflects the real auth age.
+        """
+        scopes: list[str] | None = None
+        workspace_id = row.workspace_id
+        if row.type == "cli" and row.workspace_id is not None:
+            # Tenant GUC: the roster read must evaluate RLS against the
+            # session's bound workspace under the restricted app role.
+            await set_tenant_context(session, row.workspace_id)
+            member = await session.scalar(
+                select(Member).where(
+                    Member.workspace_id == row.workspace_id,
+                    Member.user_id == row.user_id,
+                    Member.status == "active",
+                )
+            )
+            if member is None:
+                # The membership that anchored this device session is gone —
+                # it may not mint fresh access tokens.
+                raise UnauthorizedError("invalid or expired token")
+            role_perms = {p for p, roles in PERMISSION_MATRIX.items() if member.role in roles}
+            scopes = sorted(set(row.granted_scopes or []) & role_perms)
+        return self._issue_access(
+            user.id,
+            auth_time=row.authenticated_at,
+            session_id=row.id,
+            workspace_id=workspace_id,
+            scopes=scopes,
+        )
+
+    async def logout(
+        self,
+        *,
+        refresh_token: str | None = None,
+        session_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+    ) -> None:
+        """Revoke the session identified by refresh hash OR by ``sid``.
+
+        Transport-agnostic (auth.md §3.1): the route resolves the cookie /
+        Bearer transport to one of these locators; ``session_id`` lookups are
+        owner-checked when ``user_id`` is given.
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            if refresh_token is not None:
+                row = await session.scalar(
+                    select(Session).where(
+                        Session.token_hash == security.hash_token(refresh_token)
+                    )
+                )
+            elif session_id is not None:
+                stmt = select(Session).where(Session.id == session_id)
+                if user_id is not None:
+                    stmt = stmt.where(Session.user_id == user_id)
+                row = await session.scalar(stmt)
+            else:
+                row = None
             if row is not None and row.revoked_at is None:
                 row.revoked_at = now
                 # C4: notify live connections (outbox → realtime, §3.7/§5.6).
-                await broadcast_user_revocation(session, user_id=user_id)
+                await broadcast_user_revocation(session, user_id=row.user_id)
 
     async def logout_all(self, *, user_id: uuid.UUID) -> int:
         now = _now(self._clock)
@@ -554,7 +812,7 @@ class AuthService:
         user_id: uuid.UUID,
         old_password: str,
         new_password: str,
-        current_refresh_token: str | None = None,
+        current_session_id: uuid.UUID | None = None,
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> None:
@@ -563,11 +821,11 @@ class AuthService:
         Verifying the old password (argon2id, constant-time) *is* the §5.5
         step-up re-authentication — "recently re-entered the password" is
         exactly what that clause demands, so no additional recent-auth gate is
-        applied. The new password is held to the registration strength policy;
-        the hash and ``password_changed_at`` are rotated, every *other* refresh
-        session is revoked (the session that presented ``current_refresh_token``
-        is kept and re-stamped as recently authenticated; an absent or
-        unrecognised token falls back to revoking all), the revocation is
+        applied (R7-M1). The new password is held to the registration strength
+        policy; the hash and ``password_changed_at`` are rotated, every *other*
+        refresh session is revoked (the session named by the caller's access
+        JWT ``sid`` is kept and re-stamped as recently authenticated; an absent
+        or unrecognised sid falls back to revoking all), the revocation is
         broadcast (§3.7/§5.6), and an account-level ``user.password_changed``
         audit row is written (§2.6: ``workspace_id`` NULL, actor in metadata).
         """
@@ -585,12 +843,14 @@ class AuthService:
             user.password_hash = security.hash_password(new_password)
             user.password_changed_at = now
 
-            # Keep the presenting session when identifiable; revoke everything else.
+            # Keep the initiating session when identifiable by its sid (R4-H1:
+            # the current access names it; the body carries no refresh);
+            # revoke everything else.
             keep_session_id: uuid.UUID | None = None
-            if current_refresh_token is not None:
+            if current_session_id is not None:
                 row = await session.scalar(
                     select(Session).where(
-                        Session.token_hash == security.hash_token(current_refresh_token),
+                        Session.id == current_session_id,
                         Session.user_id == user_id,
                         Session.revoked_at.is_(None),
                         Session.expires_at >= now,
@@ -784,6 +1044,203 @@ class AuthService:
             user.updated_at = _now(self._clock)
             result = user_to_dict(user)
         return result
+
+    # -- step-up re-authentication (auth.md §3.1 ``POST /auth/reauth``) --------
+
+    async def reauth(
+        self,
+        *,
+        user_id: uuid.UUID,
+        session_id: uuid.UUID,
+        password: str | None = None,
+        totp_code: str | None = None,
+        method: str | None = None,
+    ) -> dict:
+        """Refresh the web session's ``authenticated_at`` via fresh primary
+        authentication (R6-H3 step-up state machine, web sessions only).
+
+        TOTP-enabled accounts MUST present ``totp_code`` — password alone is
+        rejected (``reason=totp_required``, MES-78 LOW-2): holding only the
+        password (e.g. phishing capture) must not unlock step-up. The OAuth
+        fresh-round-trip branch depends on the §2.4.3 one-time transaction
+        table (out of this increment's scope) and fails closed with
+        ``reason=oauth_reauth_pending``.
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            row = await session.scalar(
+                select(Session)
+                .where(
+                    Session.id == session_id,
+                    Session.user_id == user_id,
+                    Session.type == "web",
+                    Session.revoked_at.is_(None),
+                    Session.expires_at > now,
+                )
+                .with_for_update()
+            )
+            if row is None:
+                raise UnauthorizedError("invalid or expired token")
+            user = await session.get(User, user_id)
+            if user is None or user.status != "active":
+                raise UnauthorizedError("invalid or expired token")
+
+            if user.mfa_enabled_at is not None:
+                # Branch-exclusive: a TOTP account re-auths with TOTP only.
+                if not totp_code or not self._verify_totp(user, totp_code):
+                    raise BusinessRuleError(
+                        "totp code required for re-authentication",
+                        code="invalid_credentials",
+                        details={"reason": "totp_required"},
+                    )
+            elif user.password_hash:
+                if not password or not security.verify_password(password, user.password_hash):
+                    raise BusinessRuleError(
+                        "incorrect password", code="invalid_credentials"
+                    )
+            else:
+                # OAuth-only account: the fresh round-trip branch needs the
+                # §2.4.3 transaction table — fail closed until it lands.
+                raise BusinessRuleError(
+                    "oauth re-authentication is not available yet",
+                    code="invalid_credentials",
+                    details={"reason": "oauth_reauth_pending"},
+                )
+
+            row.authenticated_at = now
+            row.last_active_at = now
+            authenticated_at = now
+        return {"status": "ok", "authenticated_at": authenticated_at}
+
+    def _verify_totp(self, user: User, code: str) -> bool:
+        """Validate a TOTP code for reauth WITHOUT consuming backup codes
+        (re-authentication is not a backup-code event)."""
+        if not user.mfa_secret:
+            return False
+        secret = security.decrypt_secret(user.mfa_secret, self._settings.jwt_secret)
+        return pyotp.TOTP(secret).verify(code, valid_window=1)
+
+    # -- credential self-service (auth.md §3.1, review H7) ---------------------
+
+    async def introspect_credential(self, *, principal) -> dict:
+        """Metadata for the CURRENT credential — never a plaintext fragment.
+
+        Sessions resolve by the access JWT's ``sid`` (the session-location
+        invariant, §1.1); PAT/agent tokens by their ``api_tokens`` row. Powers
+        ``mesh auth status`` (prefix masked, scopes/expiry/last-use visible).
+        """
+        async with self._sf() as session:
+            if principal.kind != "session" and principal.workspace_id is not None:
+                # api_tokens is tenant-scoped — the GUC makes the read
+                # RLS-correct under the restricted app role.
+                await set_tenant_context(session, principal.workspace_id)
+            if principal.kind == "session":
+                if principal.session_id is None:
+                    # Pre-increment access JWT without sid — nothing to show.
+                    raise UnauthorizedError("invalid or expired token")
+                row = await session.get(Session, principal.session_id)
+                if row is None or row.revoked_at is not None or row.user_id != principal.subject:
+                    raise UnauthorizedError("invalid or expired token")
+                member_id = None
+                if row.workspace_id is not None:
+                    # Tenant GUC: members is RLS-protected — the roster read
+                    # must evaluate against the session's bound workspace
+                    # under the restricted app role (same invariant as
+                    # _session_access; without it the policy casts an unset
+                    # GUC to uuid and the request 500s).
+                    await set_tenant_context(session, row.workspace_id)
+                    member_id = await session.scalar(
+                        select(Member.id).where(
+                            Member.workspace_id == row.workspace_id,
+                            Member.user_id == row.user_id,
+                            Member.status == "active",
+                        )
+                    )
+                user = await session.get(User, row.user_id)
+                return {
+                    "kind": "session",
+                    "token_id": row.id,
+                    "prefix": None,
+                    "name": user.display_name if user is not None else None,
+                    "scopes": sorted(row.granted_scopes or []),
+                    "workspace_id": row.workspace_id,
+                    "member_id": member_id,
+                    "expires_at": row.expires_at,
+                    "last_used_at": row.last_active_at,
+                }
+            token_row = await session.get(ApiToken, principal.token_id)
+            if token_row is None or token_row.revoked_at is not None:
+                raise UnauthorizedError("invalid or expired token")
+            return {
+                "kind": principal.kind,
+                "token_id": token_row.id,
+                # Masked display prefix only — the plaintext existed once, at
+                # creation. Nothing more ever leaves the service.
+                "prefix": token_row.prefix + "…",
+                "name": token_row.name,
+                "scopes": sorted(token_row.scopes or []),
+                "workspace_id": token_row.workspace_id,
+                "member_id": token_row.owner_member_id,
+                "expires_at": token_row.expires_at,
+                "last_used_at": token_row.last_used_at,
+            }
+
+    async def revoke_credential(
+        self,
+        *,
+        principal,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        """Revoke the CURRENT credential itself (no token id required).
+
+        PAT/agent: ``revoked_at`` now ⇒ per-request hash lookup 401s at once
+        (§5.5). Session: refresh dies immediately; the issued access expires
+        with its TTL (≤15min, §3.7 — regular routes stay stateless).
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            if principal.kind != "session" and principal.workspace_id is not None:
+                await set_tenant_context(session, principal.workspace_id)
+            if principal.kind == "session":
+                if principal.session_id is None:
+                    raise UnauthorizedError("invalid or expired token")
+                row = await session.get(Session, principal.session_id)
+                if row is None or row.user_id != principal.subject:
+                    raise UnauthorizedError("invalid or expired token")
+                if row.revoked_at is None:
+                    row.revoked_at = now
+                    await broadcast_user_revocation(session, user_id=row.user_id)
+                return
+            token_row = await session.get(ApiToken, principal.token_id)
+            if token_row is None:
+                raise UnauthorizedError("invalid or expired token")
+            if token_row.revoked_at is None:
+                token_row.revoked_at = now
+                token_row.updated_at = now
+                await write_audit(
+                    session,
+                    workspace_id=token_row.workspace_id,
+                    actor_member_id=token_row.owner_member_id,
+                    actor_kind="member",
+                    action="token.revoked",
+                    resource_type="api_token",
+                    resource_id=token_row.id,
+                    metadata={"name": token_row.name, "self_revoked": True},
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                # Live connections bearing this token fail re-auth (§3.7/§5.6).
+                await emit_realtime(
+                    session,
+                    workspace_id=token_row.workspace_id,
+                    channel=f"workspace:{token_row.workspace_id}",
+                    event=SESSION_REVOKED_EVENT,
+                    data={
+                        "token_id": str(token_row.id),
+                        "owner_member_id": str(token_row.owner_member_id),
+                    },
+                )
 
     # -- sessions --------------------------------------------------------------
 

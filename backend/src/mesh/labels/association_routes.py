@@ -17,9 +17,8 @@ from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.labels.schemas import (
     CustomFieldValueInput,
@@ -44,11 +43,13 @@ def _client_meta(request: Request) -> dict:
     }
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response, bucket: str) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response, bucket: str
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"{bucket}:{user.id}:{client_ip}",
+        f"{bucket}:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -77,7 +78,7 @@ def _body_uuid(raw: str, *, field: str, index: int | None = None) -> uuid.UUID:
 
 async def _context_for(
     session: AsyncSession,
-    user: User,
+    principal: AuthenticatedPrincipal,
     workspace_id: uuid.UUID,
     *,
     not_found_message: str,
@@ -93,20 +94,20 @@ async def _context_for(
     """
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=None
+            session, principal=principal, workspace_id=workspace_id, permission=None
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
 
 
 async def _issue_context(
-    request: Request, user: User, session: AsyncSession, issue_id: str
+    request: Request, principal: AuthenticatedPrincipal, session: AsyncSession, issue_id: str
 ) -> tuple[WorkspaceContext, uuid.UUID]:
     parsed = _path_uuid(issue_id, message=_ISSUE_NOT_FOUND)
     workspace_id = await request.app.state.issue_service.resolve_issue_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_ISSUE_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id, not_found_message=_ISSUE_NOT_FOUND)
+    context = await _context_for(session, principal, workspace_id, not_found_message=_ISSUE_NOT_FOUND)
     return context, parsed
 
 
@@ -124,10 +125,10 @@ def _value_entry(entry: CustomFieldValueInput) -> dict:
 async def list_issue_labels(
     request: Request,
     issue_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     items = await request.app.state.issue_label_service.list_issue_labels(
         viewer=context.member,
         workspace_id=context.workspace.id,
@@ -143,11 +144,11 @@ async def replace_issue_labels(
     response: Response,
     issue_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "issue-labels-write")
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    await _rate_limit_write(request, principal, response, "issue-labels-write")
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     label_ids = [
         _body_uuid(raw, field="label_ids", index=index)
         for index, raw in enumerate(body.label_ids)
@@ -169,11 +170,11 @@ async def add_issue_label(
     response: Response,
     issue_id: str,
     label_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "issue-labels-write")
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    await _rate_limit_write(request, principal, response, "issue-labels-write")
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     parsed_label = _path_uuid(label_id, message=_LABEL_NOT_FOUND)
     data = await request.app.state.issue_label_service.add_label(
         actor=context.member,
@@ -191,11 +192,11 @@ async def remove_issue_label(
     response: Response,
     issue_id: str,
     label_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "issue-labels-write")
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    await _rate_limit_write(request, principal, response, "issue-labels-write")
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     parsed_label = _path_uuid(label_id, message=_LABEL_NOT_FOUND)
     data = await request.app.state.issue_label_service.remove_label(
         actor=context.member,
@@ -213,16 +214,16 @@ async def merge_label(
     request: Request,
     response: Response,
     label_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "labels-write")
+    await _rate_limit_write(request, principal, response, "labels-write")
     parsed = _path_uuid(label_id, message=_LABEL_NOT_FOUND)
     service = request.app.state.label_service
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
-    context = await _context_for(session, user, workspace_id, not_found_message=_LABEL_NOT_FOUND)
+    context = await _context_for(session, principal, workspace_id, not_found_message=_LABEL_NOT_FOUND)
     data = await service.merge_label(
         actor=context.member,
         workspace_id=workspace_id,
@@ -242,10 +243,10 @@ async def merge_label(
 async def list_custom_field_values(
     request: Request,
     issue_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     items = await request.app.state.field_value_service.list_values(
         viewer=context.member,
         workspace_id=context.workspace.id,
@@ -261,11 +262,11 @@ async def set_custom_field_values(
     response: Response,
     issue_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "issue-fields-write")
-    context, parsed = await _issue_context(request, user, session, issue_id)
+    await _rate_limit_write(request, principal, response, "issue-fields-write")
+    context, parsed = await _issue_context(request, principal, session, issue_id)
     data = await request.app.state.field_value_service.set_values(
         actor=context.member,
         workspace_id=context.workspace.id,

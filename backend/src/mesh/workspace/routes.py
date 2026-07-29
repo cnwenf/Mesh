@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal, get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_by_slug
 from mesh.db.models.user import User
 from mesh.workspace.invitations import InvitationService
@@ -107,12 +107,12 @@ async def list_workspaces(
 async def get_workspace_by_slug(
     slug: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     from mesh.workspace.service import workspace_to_dict
 
-    context = await resolve_workspace_by_slug(session, user=user, slug=slug)
+    context = await resolve_workspace_by_slug(session, principal=principal, slug=slug)
     return {"data": workspace_to_dict(context.workspace, my_role=context.member.role)}
 
 

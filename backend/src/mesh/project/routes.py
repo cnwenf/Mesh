@@ -16,9 +16,8 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.project.schemas import (
     AddProjectMemberRequest,
@@ -64,11 +63,13 @@ def _client_meta(request: Request) -> dict:
     }
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"project-write:{user.id}:{client_ip}",
+        f"project-write:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -99,7 +100,7 @@ def _tri(value, present: bool):
 
 async def _context_for(
     request: Request,
-    user: User,
+    principal: AuthenticatedPrincipal,
     session: AsyncSession,
     workspace_id: uuid.UUID,
     *,
@@ -116,7 +117,7 @@ async def _context_for(
     """
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=None
+            session, principal=principal, workspace_id=workspace_id, permission=None
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
@@ -132,10 +133,10 @@ async def create_project(
     body: CreateProjectRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     created = await _project_service(request).create_project(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -155,7 +156,7 @@ async def list_projects(
     lead_member_id: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     lead_id = _body_uuid(lead_member_id, field="lead_member_id") if lead_member_id else None
@@ -177,7 +178,7 @@ async def list_projects(
 async def get_project(
     project_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
@@ -186,7 +187,7 @@ async def get_project(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.get_project(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed
@@ -201,17 +202,17 @@ async def update_project(
     response: Response,
     project_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = ProjectPatch(
@@ -247,17 +248,17 @@ async def delete_project(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.delete_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -271,17 +272,17 @@ async def archive_project(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.archive_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -295,17 +296,17 @@ async def unarchive_project(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.unarchive_project(
         actor=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -325,17 +326,17 @@ async def add_project_update(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.add_update(
         actor=context.member, workspace_id=workspace_id, project_id=parsed, body=body,
@@ -350,7 +351,7 @@ async def list_project_updates(
     request: Request,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
@@ -359,7 +360,7 @@ async def list_project_updates(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     items, next_cursor = await service.list_updates(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -380,7 +381,7 @@ async def list_milestones(
     state: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
@@ -389,7 +390,7 @@ async def list_milestones(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     items, next_cursor = await service.list_milestones(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -404,17 +405,17 @@ async def create_milestone(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.create_milestone(
         actor=context.member, workspace_id=workspace_id, project_id=parsed, body=body,
@@ -429,17 +430,17 @@ async def update_milestone(
     milestone_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(milestone_id, message=_MILESTONE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_milestone_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_MILESTONE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = MilestonePatch(
@@ -460,17 +461,17 @@ async def delete_milestone(
     milestone_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(milestone_id, message=_MILESTONE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_milestone_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_MILESTONE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_MILESTONE_NOT_FOUND
     )
     data = await service.delete_milestone(
         actor=context.member, workspace_id=workspace_id, milestone_id=parsed,
@@ -491,7 +492,7 @@ async def list_cycles(
     project_id: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     parsed_project = _body_uuid(project_id, field="project_id") if project_id else None
@@ -511,10 +512,10 @@ async def create_cycle(
     body: CreateCycleRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     data = await _project_service(request).create_cycle(
         actor=context.member, workspace_id=context.workspace.id, body=body,
         **_client_meta(request),
@@ -528,17 +529,17 @@ async def update_cycle(
     cycle_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(cycle_id, message=_CYCLE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_cycle_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_CYCLE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_CYCLE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_CYCLE_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = CyclePatch(
@@ -566,7 +567,7 @@ async def list_project_members(
     request: Request,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
@@ -575,7 +576,7 @@ async def list_project_members(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     items, next_cursor = await service.list_project_members(
         viewer=context.member, workspace_id=workspace_id, project_id=parsed,
@@ -590,17 +591,17 @@ async def add_project_member(
     project_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_project_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     body.member_id = str(_body_uuid(body.member_id, field="member_id"))
     data = await service.add_project_member(
@@ -617,10 +618,10 @@ async def update_project_member(
     member_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed_project = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     parsed_member = _path_uuid(member_id, message="project member not found")
     service = _project_service(request)
@@ -628,7 +629,7 @@ async def update_project_member(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.update_project_member(
         actor=context.member,
@@ -647,10 +648,10 @@ async def remove_project_member(
     member_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed_project = _path_uuid(project_id, message=_PROJECT_NOT_FOUND)
     parsed_member = _path_uuid(member_id, message="project member not found")
     service = _project_service(request)
@@ -658,7 +659,7 @@ async def remove_project_member(
     if workspace_id is None:
         raise NotFoundError(_PROJECT_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_PROJECT_NOT_FOUND
     )
     data = await service.remove_project_member(
         actor=context.member,
@@ -680,7 +681,7 @@ async def list_project_templates(
     request: Request,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     items, next_cursor = await _project_service(request).list_templates(
@@ -694,10 +695,10 @@ async def create_project_template(
     body: CreateProjectTemplateRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     data = await _project_service(request).create_template(
         actor=context.member, workspace_id=context.workspace.id, body=body,
         **_client_meta(request),
@@ -711,17 +712,17 @@ async def update_project_template(
     template_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(template_id, message=_TEMPLATE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
     )
     data = await service.update_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed, body=body,
@@ -735,17 +736,17 @@ async def delete_project_template(
     template_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(template_id, message=_TEMPLATE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
     )
     data = await service.delete_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed,
@@ -760,17 +761,17 @@ async def instantiate_project_template(
     template_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(template_id, message=_TEMPLATE_NOT_FOUND)
     service = _project_service(request)
     workspace_id = await service.resolve_template_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_TEMPLATE_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_TEMPLATE_NOT_FOUND
     )
     data = await service.instantiate_template(
         actor=context.member, workspace_id=workspace_id, template_id=parsed, body=body,

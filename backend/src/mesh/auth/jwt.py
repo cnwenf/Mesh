@@ -18,6 +18,7 @@ revocable.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -41,7 +42,17 @@ class AccessToken:
     subject: uuid.UUID
     jti: str
     expires_at: datetime
-    authenticated_at: datetime
+    # None ⇒ no recent primary authentication (claim absent) — step-up gates
+    # fail closed on this rather than trusting the token's issue time (R6-H3).
+    authenticated_at: datetime | None
+    # Session-location invariant anchor (auth.md §1.1): names the sessions row.
+    # Regular routes never look it up; lifecycle operations (refresh /
+    # introspect / revoke / reauth / device approve) locate the session by it.
+    sid: uuid.UUID | None = None
+    # Device-session bindings fixed at approval (auth.md §2.4 access JWT 声明):
+    # web sessions carry None / empty — their workspace resolves per request.
+    workspace_id: uuid.UUID | None = None
+    scopes: frozenset[str] = frozenset()
 
 
 def _now() -> datetime:
@@ -56,12 +67,17 @@ def encode_access_token(
     ttl: timedelta,
     now: datetime | None = None,
     auth_time: datetime | None = None,
+    session_id: uuid.UUID | None = None,
+    workspace_id: uuid.UUID | None = None,
+    scopes: Sequence[str] | None = None,
 ) -> tuple[str, str]:
     """Issue an access JWT; returns ``(token, jti)``.
 
     ``auth_time`` records the last primary authentication (defaults to now);
     silent refresh forwards the original value so step-up re-auth (§5.5) reflects
-    the real authentication age, not the token re-issue time.
+    the real authentication age, not the token re-issue time. ``session_id``
+    (the ``sid`` claim) names the sessions row; ``workspace_id`` / ``scopes``
+    bind a device session to its approved workspace and fixed scope set.
     """
     moment = now or _now()
     auth_moment = auth_time or moment
@@ -74,6 +90,12 @@ def encode_access_token(
         "typ": ACCESS_TOKEN_TYPE,
         "auth_time": int(auth_moment.timestamp()),
     }
+    if session_id is not None:
+        claims["sid"] = str(session_id)
+    if workspace_id is not None:
+        claims["workspace_id"] = str(workspace_id)
+    if scopes:
+        claims["scope"] = sorted(scopes)
     token = jwt.encode(claims, secret, algorithm=algorithm)
     # PyJWT returns str for HS* algorithms; normalise for type safety.
     return token if isinstance(token, str) else token.decode("ascii"), jti
@@ -109,11 +131,36 @@ def decode_access_token(token: str, *, secret: str, algorithm: str) -> AccessTok
     except (ValueError, KeyError) as exc:
         raise UnauthorizedError("invalid or expired token") from exc
 
-    # auth_time falls back to iat for tokens issued before step-up existed.
-    auth_time_raw = claims.get("auth_time", claims["iat"])
+    # auth_time: omitted ⇒ no primary authentication recorded (R6-H3). No iat
+    # fallback — issuance time must never masquerade as an authentication.
+    auth_time_raw = claims.get("auth_time")
+    authenticated_at: datetime | None = (
+        datetime.fromtimestamp(int(auth_time_raw), tz=UTC)
+        if auth_time_raw is not None
+        else None
+    )
+    # Optional session/device claims — absent on pre-increment tokens.
+    sid: uuid.UUID | None = None
+    if claims.get("sid"):
+        try:
+            sid = uuid.UUID(str(claims["sid"]))
+        except ValueError as exc:
+            raise UnauthorizedError("invalid or expired token") from exc
+    workspace_id: uuid.UUID | None = None
+    if claims.get("workspace_id"):
+        try:
+            workspace_id = uuid.UUID(str(claims["workspace_id"]))
+        except ValueError as exc:
+            raise UnauthorizedError("invalid or expired token") from exc
+    scope_raw = claims.get("scope") or []
+    if not isinstance(scope_raw, list):
+        raise UnauthorizedError("invalid or expired token")
     return AccessToken(
         subject=subject,
         jti=str(claims.get("jti", "")),
         expires_at=datetime.fromtimestamp(claims["exp"], tz=UTC),
-        authenticated_at=datetime.fromtimestamp(int(auth_time_raw), tz=UTC),
+        authenticated_at=authenticated_at,
+        sid=sid,
+        workspace_id=workspace_id,
+        scopes=frozenset(str(s) for s in scope_raw),
     )

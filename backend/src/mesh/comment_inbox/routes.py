@@ -17,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import (
     WorkspaceContext,
     resolve_workspace_context,
@@ -32,7 +32,6 @@ from mesh.comment_inbox.schemas import (
     UpdateCommentRequest,
 )
 from mesh.comment_inbox.service import CommentService
-from mesh.db.models.user import User
 from mesh.errors import BusinessRuleError, NotFoundError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["comment-inbox"])
@@ -53,11 +52,16 @@ def _inbox(request: Request) -> InboxService:
     return request.app.state.inbox_service
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response, bucket: str) -> None:
+async def _rate_limit_write(
+    request: Request,
+    principal: AuthenticatedPrincipal,
+    response: Response,
+    bucket: str,
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"{bucket}:{user.id}:{client_ip}",
+        f"{bucket}:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -97,7 +101,7 @@ async def _workspace_id_via(
 
 async def _context_for(
     session: AsyncSession,
-    user: User,
+    principal: AuthenticatedPrincipal,
     workspace_id: uuid.UUID,
     *,
     permission: str | None,
@@ -105,7 +109,7 @@ async def _context_for(
 ) -> WorkspaceContext:
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=permission
+            session, principal=principal, workspace_id=workspace_id, permission=permission
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
@@ -128,7 +132,7 @@ async def list_comments(
     cursor: str | None = Query(default=None),
     include: str = Query(default="replies", pattern="^(replies|none)$"),
     order: str = Query(default="asc", pattern="^(asc|desc)$"),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(issue_id, message=_ISSUE_NOT_FOUND)
@@ -136,7 +140,7 @@ async def list_comments(
         session, parsed, function="mesh_issue_workspace_id", not_found_message=_ISSUE_NOT_FOUND
     )
     context = await _context_for(
-        session, user, workspace_id, permission="issue:read", not_found_message=_ISSUE_NOT_FOUND
+        session, principal, workspace_id, permission="issue:read", not_found_message=_ISSUE_NOT_FOUND
     )
     items, next_cursor = await _comments(request).list_comments(
         workspace_id=workspace_id,
@@ -158,16 +162,16 @@ async def create_comment(
     request: Request,
     response: Response,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     parsed = _path_uuid(issue_id, message=_ISSUE_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_issue_workspace_id", not_found_message=_ISSUE_NOT_FOUND
     )
     context = await _context_for(
-        session, user, workspace_id,
+        session, principal, workspace_id,
         permission="comment:write", not_found_message=_ISSUE_NOT_FOUND,
     )
     if body.attachment_ids:
@@ -197,7 +201,7 @@ async def create_comment(
 async def get_comment(
     comment_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
@@ -206,7 +210,7 @@ async def get_comment(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="issue:read",
+        session, principal, workspace_id, permission="issue:read",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     data = await _comments(request).get_comment(
@@ -222,17 +226,17 @@ async def update_comment(
     request: Request,
     response: Response,
     if_match: str | None = Header(default=None, alias="If-Match"),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_comment_workspace_id",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="comment:write",
+        session, principal, workspace_id, permission="comment:write",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     updated = await _comments(request).update_comment(
@@ -252,17 +256,17 @@ async def delete_comment(
     comment_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_comment_workspace_id",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="comment:write",
+        session, principal, workspace_id, permission="comment:write",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     await _comments(request).delete_comment(
@@ -279,7 +283,7 @@ async def list_replies(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
@@ -288,7 +292,7 @@ async def list_replies(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="issue:read",
+        session, principal, workspace_id, permission="issue:read",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     items, next_cursor = await _comments(request).list_replies(
@@ -306,12 +310,12 @@ async def resolve_thread(
     comment_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     return {
-        "data": await _resolve_via(request, session, user, comment_id, resolved=True)
+        "data": await _resolve_via(request, session, principal, comment_id, resolved=True)
     }
 
 
@@ -320,17 +324,18 @@ async def reopen_thread(
     comment_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     return {
-        "data": await _resolve_via(request, session, user, comment_id, resolved=False)
+        "data": await _resolve_via(request, session, principal, comment_id, resolved=False)
     }
 
 
 async def _resolve_via(
-    request: Request, session: AsyncSession, user: User, comment_id: str, *, resolved: bool
+    request: Request, session: AsyncSession, principal: AuthenticatedPrincipal, comment_id: str,
+    *, resolved: bool
 ) -> dict:
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
     workspace_id = await _workspace_id_via(
@@ -338,7 +343,7 @@ async def _resolve_via(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="comment:write",
+        session, principal, workspace_id, permission="comment:write",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     return await _comments(request).set_thread_resolved(
@@ -358,7 +363,7 @@ async def _resolve_via(
 async def list_reactions(
     comment_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
@@ -367,7 +372,7 @@ async def list_reactions(
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="issue:read",
+        session, principal, workspace_id, permission="issue:read",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     data = await _comments(request).list_reactions(
@@ -382,17 +387,17 @@ async def add_reaction(
     body: AddReactionRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_comment_workspace_id",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="comment:write",
+        session, principal, workspace_id, permission="comment:write",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     data = await _comments(request).add_reaction(
@@ -410,17 +415,17 @@ async def remove_reaction(
     emoji: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    await _rate_limit_write(request, user, response, "comment-write")
+    await _rate_limit_write(request, principal, response, "comment-write")
     parsed = _path_uuid(comment_id, message=_COMMENT_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_comment_workspace_id",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     context = await _context_for(
-        session, user, workspace_id, permission="comment:write",
+        session, principal, workspace_id, permission="comment:write",
         not_found_message=_COMMENT_NOT_FOUND,
     )
     await _comments(request).remove_reaction(
@@ -437,11 +442,11 @@ async def remove_reaction(
 
 
 async def _inbox_context(
-    workspace_id: str | None, user: User, session: AsyncSession
+    workspace_id: str | None, principal: AuthenticatedPrincipal, session: AsyncSession
 ) -> WorkspaceContext:
     parsed = _query_workspace_id(workspace_id)
     return await _context_for(
-        session, user, parsed, permission=None, not_found_message=_WORKSPACE_NOT_FOUND
+        session, principal, parsed, permission=None, not_found_message=_WORKSPACE_NOT_FOUND
     )
 
 
@@ -454,10 +459,10 @@ async def list_inbox(
     filter: str = Query(default="all"),
     type: str | None = Query(default=None),
     grouped: bool = Query(default=False),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     return await _inbox(request).list_notifications(
         workspace_id=context.workspace.id,
         member=context.member,
@@ -473,10 +478,10 @@ async def list_inbox(
 async def inbox_unread_count(
     request: Request,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     count = await _inbox(request).unread_count(
         workspace_id=context.workspace.id, member=context.member
     )
@@ -488,10 +493,10 @@ async def inbox_read_all(
     request: Request,
     body: ReadAllRequest | None = None,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     inbox_filter = body.filter if body is not None else None
     notification_type = body.type if body is not None else None
     if inbox_filter is not None and inbox_filter not in INBOX_FILTERS:
@@ -509,10 +514,10 @@ async def inbox_read_all(
 async def inbox_archive_read(
     request: Request,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     archived = await _inbox(request).archive_read(
         workspace_id=context.workspace.id, member=context.member
     )
@@ -522,14 +527,14 @@ async def inbox_archive_read(
 async def _inbox_item_op(
     request: Request,
     session: AsyncSession,
-    user: User,
+    principal: AuthenticatedPrincipal,
     notification_id: str,
     workspace_id: str | None,
     *,
     op: str,
 ) -> dict:
     parsed = _path_uuid(notification_id, message="notification not found")
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     service = _inbox(request)
     if op == "read":
         return await service.mark_read(
@@ -552,13 +557,13 @@ async def inbox_mark_read(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
+    await _rate_limit_write(request, principal, response, "inbox-write")
     return {
         "data": await _inbox_item_op(
-            request, session, user, notification_id, workspace_id, op="read"
+            request, session, principal, notification_id, workspace_id, op="read"
         )
     }
 
@@ -569,13 +574,13 @@ async def inbox_mark_unread(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
+    await _rate_limit_write(request, principal, response, "inbox-write")
     return {
         "data": await _inbox_item_op(
-            request, session, user, notification_id, workspace_id, op="unread"
+            request, session, principal, notification_id, workspace_id, op="unread"
         )
     }
 
@@ -586,13 +591,13 @@ async def inbox_archive(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
+    await _rate_limit_write(request, principal, response, "inbox-write")
     return {
         "data": await _inbox_item_op(
-            request, session, user, notification_id, workspace_id, op="archive"
+            request, session, principal, notification_id, workspace_id, op="archive"
         )
     }
 
@@ -603,14 +608,19 @@ async def inbox_archive(
 
 
 async def _mute_via(
-    request: Request, session: AsyncSession, user: User, issue_id: str, *, muted: bool
+    request: Request,
+    session: AsyncSession,
+    principal: AuthenticatedPrincipal,
+    issue_id: str,
+    *,
+    muted: bool,
 ) -> dict:
     parsed = _path_uuid(issue_id, message=_ISSUE_NOT_FOUND)
     workspace_id = await _workspace_id_via(
         session, parsed, function="mesh_issue_workspace_id", not_found_message=_ISSUE_NOT_FOUND
     )
     context = await _context_for(
-        session, user, workspace_id, permission=None, not_found_message=_ISSUE_NOT_FOUND
+        session, principal, workspace_id, permission=None, not_found_message=_ISSUE_NOT_FOUND
     )
     return await _inbox(request).set_issue_muted(
         workspace_id=workspace_id, issue_id=parsed, member=context.member, muted=muted
@@ -622,11 +632,11 @@ async def mute_issue(
     issue_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
-    return {"data": await _mute_via(request, session, user, issue_id, muted=True)}
+    await _rate_limit_write(request, principal, response, "inbox-write")
+    return {"data": await _mute_via(request, session, principal, issue_id, muted=True)}
 
 
 @router.post("/issues/{issue_id}/unmute")
@@ -634,11 +644,11 @@ async def unmute_issue(
     issue_id: str,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
-    return {"data": await _mute_via(request, session, user, issue_id, muted=False)}
+    await _rate_limit_write(request, principal, response, "inbox-write")
+    return {"data": await _mute_via(request, session, principal, issue_id, muted=False)}
 
 
 # ---------------------------------------------------------------------------
@@ -650,10 +660,10 @@ async def unmute_issue(
 async def get_notification_preferences(
     request: Request,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    context = await _inbox_context(workspace_id, user, session)
+    context = await _inbox_context(workspace_id, principal, session)
     data = await _inbox(request).get_preferences(
         workspace_id=context.workspace.id, member=context.member
     )
@@ -666,11 +676,11 @@ async def put_notification_preferences(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response, "inbox-write")
-    context = await _inbox_context(workspace_id, user, session)
+    await _rate_limit_write(request, principal, response, "inbox-write")
+    context = await _inbox_context(workspace_id, principal, session)
     data = await _inbox(request).put_preferences(
         workspace_id=context.workspace.id,
         member=context.member,

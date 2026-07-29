@@ -347,14 +347,14 @@ describe('SecuritySettings 修改密码表单(auth.md §4.2,MES-39)', () => {
   };
 
   beforeEach(() => {
-    useAuthStore.setState({ token: 'access-tok', refreshToken: 'rt-current' });
+    useAuthStore.setState({ token: 'access-tok' });
   });
 
   afterEach(() => {
-    useAuthStore.setState({ token: null, refreshToken: null });
+    useAuthStore.setState({ token: null });
   });
 
-  it('展开表单 → 强度条实时评估 → 提交成功:具名提示、刷新会话态、载荷带当前 refresh', async () => {
+  it('展开表单 → 强度条实时评估 → 提交成功:具名提示、刷新会话态、会话经 sid 识别(body 无 refresh)', async () => {
     const user = userEvent.setup();
     const onUserChanged = vi.fn();
     const capture: Array<{ url: string; body: unknown }> = [];
@@ -384,10 +384,10 @@ describe('SecuritySettings 修改密码表单(auth.md §4.2,MES-39)', () => {
     expect(onUserChanged).toHaveBeenCalled();
 
     const sent = capture.find((entry) => entry.url.includes('/api/v1/auth/change-password'));
+    // R7-M1/R4-H1:当前会话经 access JWT 的 sid 识别——body 不带 refresh_token。
     expect(sent?.body).toEqual({
       old_password: 'old-pass-1',
       new_password: 'a-new-passw0rd',
-      refresh_token: 'rt-current',
     });
   });
 

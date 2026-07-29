@@ -4,30 +4,59 @@ Public endpoints (register/login/refresh/reset/verify) carry no Bearer; the rest
 require a valid access JWT via :func:`get_current_user`. Login-class endpoints
 are rate limited (Redis sliding window) and login additionally enforces the
 (IP, email) lockout in the service layer. Tokens never appear in URLs (§6.16).
+
+Web refresh contract (R4-H1): login/refresh deliver the refresh token ONLY via
+the ``Set-Cookie: mesh_session`` cookie (HttpOnly/Secure/SameSite=Strict/Path=/)
+— the response body never carries one and the client never self-declares its
+form. CLI/device sessions refresh with ``Authorization: Bearer mesh_rft_…``
+(issued once by the device token endpoint); one request accepts exactly one
+transport. Refresh rotation follows the §3.8 bounded-idempotent contract: the
+winner gets the new refresh (its transport's channel), a grace-window loser
+gets ONLY a fresh access token.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, Response
+from urllib.parse import urlsplit
 
-from mesh.auth.deps import get_auth_service, get_current_user, require_recent_auth
+from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from mesh.api.deps import get_session
+from mesh.auth.deps import (
+    get_auth_service,
+    get_current_principal,
+    get_current_user,
+    require_current_access,
+    require_recent_auth_web_only,
+    require_web_session_user,
+)
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
-    LogoutRequest,
     MfaConfirmRequest,
     MfaVerifyRequest,
-    RefreshRequest,
+    ReauthRequest,
     RegisterRequest,
     ResetPasswordRequest,
     UpdateUserRequest,
     VerifyEmailRequest,
 )
-from mesh.auth.service import AuthService, MfaRequiredResult, TokenResult, UserUpdate
-from mesh.config import SESSION_COOKIE_NAME
+from mesh.auth.security import REFRESH_TOKEN_PREFIX
+from mesh.auth.service import (
+    AuthService,
+    MfaRequiredResult,
+    RefreshWinner,
+    TokenResult,
+    UserUpdate,
+)
+from mesh.config import SESSION_COOKIE_NAME, Settings
+from mesh.db.models.member import Member
 from mesh.db.models.user import User
+from mesh.errors import ForbiddenError, UnauthorizedError, ValidationError
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
@@ -44,6 +73,10 @@ MFA_VERIFY_WINDOW_SECONDS = 60
 # the login-class (IP, email) throttle (§3.6) against online brute force.
 CHANGE_PASSWORD_LIMIT = 5
 CHANGE_PASSWORD_WINDOW_SECONDS = 60
+# Step-up reauth verifies the primary credential server-side — login-class
+# throttle on (IP, email) bounds online brute force (auth.md §3.6).
+REAUTH_LIMIT = 5
+REAUTH_WINDOW_SECONDS = 60
 
 
 def _client_ip(request: Request) -> str | None:
@@ -64,35 +97,65 @@ async def _rate_limit(
     response.headers["X-RateLimit-Reset"] = str(reset_in)
 
 
-def _tokens_payload(result: TokenResult) -> dict:
+def _settings(request: Request) -> Settings:
+    return request.app.state.settings
+
+
+def _same_origin(request: Request) -> bool:
+    """Origin/Referer same-site check for cookie-authenticated mutations.
+
+    Defence in depth on top of ``SameSite=Strict`` (R4-H1): the request's
+    Origin (or Referer) host must match one of the site hosts the request
+    presents itself as (``Host`` / ``X-Forwarded-Host``, proxy-aware). Missing
+    Origin AND Referer → deny.
+    """
+    site_hosts = {request.headers.get("host", "")}
+    forwarded = request.headers.get("x-forwarded-host")
+    if forwarded:
+        site_hosts.update(part.strip() for part in forwarded.split(",") if part.strip())
+
+    def _host(value: str) -> str:
+        return urlsplit(value).netloc
+
+    origin = request.headers.get("origin")
+    if origin:
+        return _host(origin) in site_hosts
+    referer = request.headers.get("referer")
+    if referer:
+        return _host(referer) in site_hosts
+    return False
+
+
+def _access_payload(result: TokenResult | RefreshWinner) -> dict:
+    """The access-only body — a refresh NEVER appears in a response body here."""
     return {
         "access_token": result.access_token,
         "token_type": "Bearer",
         "expires_in": result.expires_in,
-        "refresh_token": result.refresh_token,
     }
 
 
-def _cookie_secure(settings) -> bool:
-    return (
-        settings.cookie_secure
-        if settings.cookie_secure is not None
-        else settings.auth_mode != "dev"
-    )
+def _cookie_secure(settings: Settings) -> bool:
+    """Secure flag (R4-H1 + theme.md §2.3 ①): an explicit ``cookie_secure``
+    override wins (TLS-terminator deployments speaking http to the app);
+    otherwise the R4-H1 knob ``session_cookie_secure`` decides (on by default;
+    the http-loopback dev stack relaxes it via compose env)."""
+    if settings.cookie_secure is not None:
+        return settings.cookie_secure
+    return settings.session_cookie_secure
 
 
 def _set_session_cookie(
-    response: Response, settings, refresh_token: str, *, remember: bool = False
+    response: Response, refresh_token: str, settings: Settings, *, remember: bool = False
 ) -> None:
-    """Issue the HttpOnly mesh_session cookie (auth.md §5.5 / theme.md §2.3 ①).
+    """Deliver the Web refresh token (R4-H1): HttpOnly/Secure/SameSite=Strict.
 
-    Additive parallel channel to the in-body refresh token: the entry middleware
-    reads it server-side to resolve the first-frame theme. HttpOnly + Secure +
-    SameSite=Strict; max_age tracks the refresh TTL (remember extends it).
+    The SOLE web refresh transport — the response body carries access only
+    (never refresh plaintext). The theme.md §2.3 entry middleware reads this
+    cookie server-side for first-frame theme negotiation; max_age tracks the
+    refresh TTL (remember extends it).
     """
-    ttl = (
-        settings.remember_refresh_token_ttl if remember else settings.refresh_token_ttl
-    )
+    ttl = settings.remember_refresh_token_ttl if remember else settings.refresh_token_ttl
     response.set_cookie(
         SESSION_COOKIE_NAME,
         value=refresh_token,
@@ -119,8 +182,8 @@ async def register(body: RegisterRequest, request: Request, response: Response) 
     await _rate_limit(
         request,
         f"register:{_client_ip(request)}:{body.email.lower()}",
-        limit=REGISTER_LIMIT,
-        window=REGISTER_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -130,7 +193,7 @@ async def register(body: RegisterRequest, request: Request, response: Response) 
     # §4.1 auto-login: issue the session cookie so the post-register first
     # navigation already carries the theme negotiation context.
     if _token is not None:
-        _set_session_cookie(response, request.app.state.settings, _token)
+        _set_session_cookie(response, _token, _settings(request))
     return {"data": user}
 
 
@@ -140,8 +203,8 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
     await _rate_limit(
         request,
         f"login:{ip}:{body.email.lower()}",
-        limit=LOGIN_LIMIT,
-        window=LOGIN_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -154,10 +217,9 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
     )
     if isinstance(result, MfaRequiredResult):
         return {"data": {"mfa_required": True, "mfa_ticket": result.mfa_ticket}}
-    _set_session_cookie(
-        response, request.app.state.settings, result.refresh_token, remember=body.remember
-    )
-    return {"data": _tokens_payload(result)}
+    # R4-H1: refresh ONLY via HttpOnly cookie — the body has no refresh field.
+    _set_session_cookie(response, result.refresh_token, _settings(request), remember=body.remember)
+    return {"data": _access_payload(result)}
 
 
 @router.post("/auth/mfa/verify")
@@ -167,8 +229,8 @@ async def mfa_verify(body: MfaVerifyRequest, request: Request, response: Respons
     await _rate_limit(
         request,
         f"mfa-verify:{_client_ip(request)}:{body.mfa_ticket}",
-        limit=MFA_VERIFY_LIMIT,
-        window=MFA_VERIFY_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -178,21 +240,75 @@ async def mfa_verify(body: MfaVerifyRequest, request: Request, response: Respons
         ip_address=_client_ip(request),
         user_agent=_user_agent(request),
     )
-    _set_session_cookie(response, request.app.state.settings, result.refresh_token)
-    return {"data": _tokens_payload(result)}
+    # R4-H1: second-factor completion delivers refresh via cookie as well.
+    _set_session_cookie(response, result.refresh_token, _settings(request), remember=False)
+    return {"data": _access_payload(result)}
 
 
 @router.post("/auth/refresh")
-async def refresh(body: RefreshRequest, request: Request, response: Response) -> dict:
+async def refresh(request: Request, response: Response) -> dict:
+    """Renew an access token (§3.8 bounded idempotent rotation).
+
+    Transport is determined by CREDENTIAL PRESENTATION, never by a client
+    self-declaration (R4-H1): the ``mesh_session`` cookie marks a web-origin
+    session (rotation delivered via ``Set-Cookie``); ``Bearer mesh_rft_…``
+    marks a device-origin session (rotation delivered in the body). Exactly
+    one transport per request — presenting both is an ambiguous request (400),
+    presenting neither is unauthenticated (401). A cookie refresh additionally
+    passes the Origin/Referer same-site check (CSRF defence in depth).
+    """
     service: AuthService = get_auth_service(request)
-    result = await service.refresh(
-        refresh_token=body.refresh_token,
-        ip_address=_client_ip(request),
-        user_agent=_user_agent(request),
-    )
-    # Rotation issues a fresh refresh → refresh the cookie (same max_age).
-    _set_session_cookie(response, request.app.state.settings, result.refresh_token)
-    return {"data": _tokens_payload(result)}
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    authorization = request.headers.get("Authorization") or ""
+    bearer_token: str | None = None
+    if authorization.startswith("Bearer "):
+        bearer_token = authorization[len("Bearer ") :].strip() or None
+    if bearer_token is not None and not bearer_token.startswith(REFRESH_TOKEN_PREFIX):
+        # Only session refresh tokens may hit this endpoint — an access JWT or
+        # PAT here is a protocol violation.
+        raise UnauthorizedError("invalid or expired token")
+    if cookie_token and bearer_token:
+        raise ValidationError(
+            "exactly one refresh transport per request",
+            code="invalid_request",
+            details={"reason": "ambiguous_refresh_transport"},
+        )
+
+    if bearer_token:
+        # Device/CLI transport: rotation plaintext leaves via the body.
+        outcome = await service.refresh(
+            presented_token=bearer_token,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+        if isinstance(outcome, RefreshWinner):
+            return {
+                "data": {
+                    **_access_payload(outcome),
+                    "refresh_token": outcome.refresh_token,
+                }
+            }
+        return {"data": _access_payload(outcome)}  # grace: access only
+
+    if cookie_token:
+        if not _same_origin(request):
+            # Missing / cross-origin Origin/Referer with a cookie credential —
+            # CSRF defence (R4-H1); SameSite=Strict is the primary shield.
+            raise ForbiddenError("cross-origin cookie refresh rejected", code="forbidden")
+        outcome = await service.refresh(
+            presented_token=cookie_token,
+            ip_address=_client_ip(request),
+            user_agent=_user_agent(request),
+        )
+        if isinstance(outcome, RefreshWinner):
+            _set_session_cookie(
+                response, outcome.refresh_token, _settings(request), remember=False
+            )
+        # Grace path: deliberately NO Set-Cookie — the winner already updated
+        # the shared cookie jar; a second rotation would amplify the chain.
+        return {"data": _access_payload(outcome)}
+
+    raise UnauthorizedError("invalid or expired token")
 
 
 @router.post("/auth/forgot-password")
@@ -201,8 +317,8 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request, respons
     await _rate_limit(
         request,
         f"reset:{_client_ip(request)}:{body.email.lower()}",
-        limit=REGISTER_LIMIT,
-        window=REGISTER_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -228,15 +344,90 @@ async def verify_email(body: VerifyEmailRequest, request: Request) -> dict:
 # --- protected auth ----------------------------------------------------------
 
 
-@router.post("/auth/logout")
-async def logout(
-    body: LogoutRequest,
+@router.post("/auth/reauth")
+async def reauth(
+    body: ReauthRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_web_session_user),
 ) -> dict:
+    """Step-up re-authentication (auth.md §3.1, R6-H3): refresh the current
+    WEB session's ``authenticated_at`` by re-verifying the primary credential.
+    Revoked/expired sessions cannot reauth (the invariant serves exactly the
+    stale sessions — but never dead ones)."""
+    await _rate_limit(
+        request,
+        f"reauth:{_client_ip(request)}:{user.email.lower()}",
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
+        response=response,
+    )
+    claims = require_current_access(request)
+    if claims.sid is None:
+        raise UnauthorizedError("invalid or expired token")
     service: AuthService = get_auth_service(request)
-    await service.logout(user_id=user.id, refresh_token=body.refresh_token)
+    data = await service.reauth(
+        user_id=user.id,
+        session_id=claims.sid,
+        password=body.password,
+        totp_code=body.totp_code,
+        method=body.method,
+    )
+    return {"data": data}
+
+
+@router.get("/auth/token")
+async def introspect_token(
+    request: Request, principal=Depends(get_current_principal)
+) -> dict:
+    """Self-introspection (review H7): metadata for the CURRENT credential —
+    kind/token_id/masked prefix/scopes/expiry/last-use, never a plaintext
+    fragment. Powers ``mesh auth status``."""
+    service: AuthService = get_auth_service(request)
+    return {"data": await service.introspect_credential(principal=principal)}
+
+
+@router.delete("/auth/token")
+async def revoke_token_self(
+    request: Request, principal=Depends(get_current_principal)
+) -> dict:
+    """Self-revocation (review H7): revoke the presented credential itself —
+    no token id needed. PAT: immediate 401 afterwards; session: refresh dies
+    at once, access with its TTL. Powers ``mesh auth logout --revoke``."""
+    service: AuthService = get_auth_service(request)
+    await service.revoke_credential(
+        principal=principal,
+        ip_address=_client_ip(request),
+        user_agent=_user_agent(request),
+    )
+    return {"data": {"status": "ok"}}
+
+
+@router.post("/auth/logout")
+async def logout(request: Request, response: Response) -> dict:
+    """Revoke the session named by the presented credential (auth.md §3.1).
+
+    Web: the ``mesh_session`` cookie; CLI: ``Bearer mesh_rft_…``; as a last
+    resort an access JWT's ``sid`` (so ``mesh auth logout`` with only the
+    in-memory access still revokes its session). The cookie is cleared either
+    way.
+    """
+    service: AuthService = get_auth_service(request)
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    authorization = request.headers.get("Authorization") or ""
+    if cookie_token:
+        await service.logout(refresh_token=cookie_token)
+    elif authorization.startswith("Bearer "):
+        token = authorization[len("Bearer ") :].strip()
+        if token.startswith(REFRESH_TOKEN_PREFIX):
+            await service.logout(refresh_token=token)
+        else:
+            claims = require_current_access(request)
+            if claims.sid is None:
+                raise UnauthorizedError("invalid or expired token")
+            await service.logout(session_id=claims.sid, user_id=claims.subject)
+    else:
+        raise UnauthorizedError("invalid or expired token")
     _clear_session_cookie(response)
     return {"data": {"status": "ok"}}
 
@@ -256,25 +447,27 @@ async def change_password(
     body: ChangePasswordRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_web_session_user),
 ) -> dict:
-    # §4.2/§5.5: authenticated password change. Re-entering the old password IS
-    # the sensitive-operation step-up re-authentication ("近期重新输入密码"), so
-    # no separate recent-auth gate; the (IP, email) throttle (§3.6) bounds
-    # online brute force of the old password by a hijacked session.
+    # §4.2/§5.5 (R7-M1): authenticated password change. Re-entering the old
+    # password IS the step-up re-authentication itself, so no separate
+    # recent-auth gate; the (IP, email) throttle (§3.6) bounds online brute
+    # force of the old password by a hijacked session. The initiating session
+    # is identified by the access JWT's sid — the body carries no refresh.
     await _rate_limit(
         request,
         f"change-password:{_client_ip(request)}:{user.email.lower()}",
-        limit=CHANGE_PASSWORD_LIMIT,
-        window=CHANGE_PASSWORD_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
+    claims = require_current_access(request)
     await service.change_password(
         user_id=user.id,
         old_password=body.old_password,
         new_password=body.new_password,
-        current_refresh_token=body.refresh_token,
+        current_session_id=claims.sid,
         ip_address=_client_ip(request),
         user_agent=_user_agent(request),
     )
@@ -282,9 +475,35 @@ async def change_password(
 
 
 @router.get("/me")
-async def get_me(user: User = Depends(get_current_user)) -> dict:
+async def get_me(
+    request: Request,
+    principal=Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Current identity — works for every credential kind the unified Bearer
+    gate routes (auth.md §5.2 representative-endpoint coverage): sessions and
+    human PATs resolve to the user; agent credentials resolve to their roster
+    identity (agents have no user row)."""
     from mesh.auth.service import user_to_dict
 
+    if principal.kind == "agent":
+        member = await session.get(Member, principal.member_id)
+        if member is None:
+            raise UnauthorizedError("invalid or expired token")
+        return {
+            "data": {
+                "kind": "agent",
+                "id": member.id,
+                "member_type": member.member_type,
+                "workspace_id": member.workspace_id,
+                "role": member.role,
+                "name": member.display_override,
+                "scopes": sorted(principal.scopes),
+            }
+        }
+    user = await session.scalar(select(User).where(User.id == principal.user_id))
+    if user is None or user.status != "active":
+        raise UnauthorizedError("invalid or expired token")
     return {"data": user_to_dict(user)}
 
 
@@ -338,9 +557,9 @@ async def mfa_setup(request: Request, user: User = Depends(get_current_user)) ->
 
 @router.post("/auth/mfa/enable")
 async def mfa_enable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth_web_only)
 ) -> dict:
-    # §5.5: enabling 2FA is sensitive — requires a recent re-authentication.
+    # §5.5 + §1.1 matrix: 2FA management is web-session-only step-up.
     service: AuthService = get_auth_service(request)
     await service.mfa_enable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": True}}
@@ -348,9 +567,9 @@ async def mfa_enable(
 
 @router.post("/auth/mfa/disable")
 async def mfa_disable(
-    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth)
+    body: MfaConfirmRequest, request: Request, user: User = Depends(require_recent_auth_web_only)
 ) -> dict:
-    # §5.5: disabling 2FA is sensitive — requires a recent re-authentication.
+    # §5.5 + §1.1 matrix: 2FA management is web-session-only step-up.
     service: AuthService = get_auth_service(request)
     await service.mfa_disable(user_id=user.id, code=body.code)
     return {"data": {"mfa_enabled": False}}

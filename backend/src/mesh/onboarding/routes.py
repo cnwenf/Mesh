@@ -19,9 +19,8 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.onboarding.schemas import OnboardingResetRequest
 from mesh.onboarding.service import OnboardingService
@@ -52,19 +51,21 @@ def _workspace_uuid(raw: str | None) -> uuid.UUID:
 
 
 async def _self_context(
-    session: AsyncSession, user: User, workspace_id: str | None
+    session: AsyncSession, principal: AuthenticatedPrincipal, workspace_id: str | None
 ) -> WorkspaceContext:
     """Membership gate for ?workspace_id= self-service endpoints."""
     return await resolve_workspace_context(
-        session, user=user, workspace_id=_workspace_uuid(workspace_id)
+        session, principal=principal, workspace_id=_workspace_uuid(workspace_id)
     )
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"onboarding-write:{user.id}:{client_ip}",
+        f"onboarding-write:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -77,11 +78,11 @@ async def _rate_limit_write(request: Request, user: User, response: Response) ->
 async def get_onboarding_state(
     request: Request,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """The caller's checklist progress (lazy seed+reconcile fallback, §3.5)."""
-    context = await _self_context(session, user, workspace_id)
+    context = await _self_context(session, principal, workspace_id)
     state = await _service(request).get_state(
         workspace_id=context.workspace.id, member_id=context.member.id
     )
@@ -94,12 +95,12 @@ async def complete_onboarding_step(
     response: Response,
     step_key: str,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Manually complete a step (idempotent — no-op on repeat, §3.5)."""
-    context = await _self_context(session, user, workspace_id)
-    await _rate_limit_write(request, user, response)
+    context = await _self_context(session, principal, workspace_id)
+    await _rate_limit_write(request, principal, response)
     step = await _service(request).complete_step_manual(
         workspace_id=context.workspace.id,
         member_id=context.member.id,
@@ -113,12 +114,12 @@ async def dismiss_onboarding(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Dismiss the checklist (idempotent — first dismissed_at wins)."""
-    context = await _self_context(session, user, workspace_id)
-    await _rate_limit_write(request, user, response)
+    context = await _self_context(session, principal, workspace_id)
+    await _rate_limit_write(request, principal, response)
     result = await _service(request).dismiss(
         workspace_id=context.workspace.id, member_id=context.member.id
     )
@@ -130,12 +131,12 @@ async def restore_onboarding(
     request: Request,
     response: Response,
     workspace_id: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Restore a dismissed checklist (idempotent)."""
-    context = await _self_context(session, user, workspace_id)
-    await _rate_limit_write(request, user, response)
+    context = await _self_context(session, principal, workspace_id)
+    await _rate_limit_write(request, principal, response)
     result = await _service(request).restore(
         workspace_id=context.workspace.id, member_id=context.member.id
     )
@@ -147,11 +148,11 @@ async def reset_onboarding(
     request: Request,
     response: Response,
     body: OnboardingResetRequest,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace("workspace:manage_members")),
 ) -> dict:
     """Admin/owner reset of one member's checklist (§3.4)."""
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     try:
         member_id = uuid.UUID(body.member_id)
     except ValueError as exc:

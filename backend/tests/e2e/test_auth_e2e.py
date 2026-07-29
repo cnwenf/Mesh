@@ -19,6 +19,21 @@ def _auth(access: str) -> dict:
     return {"Authorization": f"Bearer {access}"}
 
 
+def _origin(client) -> dict:
+    """Same-site Origin for cookie-authenticated mutations (R4-H1 CSRF)."""
+    return {"Origin": str(client.base_url).rstrip("/")}
+
+
+def _refresh_cookie(client):
+    return client.cookies.get("mesh_session") or ""
+
+
+async def _refresh(client):
+    """Cookie-transport refresh: refresh rides the mesh_session cookie; the
+    body carries nothing (R4-H1); Origin must be same-site."""
+    return await client.post("/api/v1/auth/refresh", headers=_origin(client))
+
+
 async def _register(client, email=EMAIL, password=PASSWORD, name="E2E"):
     return await client.post(
         "/api/v1/auth/register",
@@ -55,7 +70,10 @@ async def test_register_then_login_full_flow(api_client):
     tokens = login.json()["data"]
     assert tokens["token_type"] == "Bearer"
     assert tokens["expires_in"] == 900
-    assert tokens["access_token"] and tokens["refresh_token"]
+    assert tokens["access_token"]
+    # R4-H1: the body NEVER carries a refresh — it rides the HttpOnly cookie.
+    assert "refresh_token" not in tokens
+    assert _refresh_cookie(api_client).startswith("mesh_rft_")
 
 
 async def test_register_duplicate_email_409(api_client):
@@ -89,10 +107,16 @@ async def test_login_rate_limit_headers_and_429(api_client):
     ok = await _login(api_client)
     assert ok.status_code == 200
     assert "X-RateLimit-Limit" in ok.headers
-    # The (ip,email) bucket allows 5/min; this is hit #1, so 5 more exhausts it
-    # and the request past the limit is 429 with Retry-After.
+    assert "X-RateLimit-Remaining" in ok.headers
+    # Exhaustion → 429 + Retry-After. The limit is tunable (auth.md §3.6
+    # "阈值示例,可调"); e2e servers raise it so many back-to-back tests can
+    # share one (ip,email) bucket — when raised, exhaustion is exercised by
+    # the unit + in-process suites at the default 5/min instead.
+    limit = int(ok.headers["X-RateLimit-Limit"])
+    if limit > 20:
+        return
     last = None
-    for _ in range(5):
+    for _ in range(limit):
         last = await _login(api_client, password="wrong-pass-1")
     assert last.status_code == 429
     assert last.json()["error"]["code"] == "rate_limited"
@@ -132,22 +156,46 @@ async def test_me_rejects_garbage_and_expired(api_client):
 # --- refresh / logout / sessions ---------------------------------------------
 
 
-async def test_refresh_rotates_and_replay_revokes_family(api_client):
-    tokens = await _register_and_login(api_client)
-    r1 = tokens["refresh_token"]
-    refreshed = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": r1})
-    assert refreshed.status_code == 200
-    r2 = refreshed.json()["data"]["refresh_token"]
-    assert r2 != r1
-    # Reusing the rotated token r1 → 401 and revokes the whole family.
-    replay = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": r1})
-    assert replay.status_code == 401
-    reused_r2 = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": r2})
-    assert reused_r2.status_code == 401
+async def test_refresh_cookie_rotation_and_grace_real_e2e(api_client):
+    """§3.8 over real HTTP: winner rotates via Set-Cookie; the rotated-out
+    cookie grace-yields ACCESS ONLY (never a refresh) — no mis-logout."""
+    await _register_and_login(api_client)
+    r1 = _refresh_cookie(api_client)
+
+    winner = await _refresh(api_client)
+    assert winner.status_code == 200
+    r2 = _refresh_cookie(api_client)
+    assert r2 != r1 and r2.startswith("mesh_rft_")
+    # The winner's body carries access only — refresh came via Set-Cookie.
+    assert "refresh_token" not in winner.json()["data"]
+
+    # Replay the rotated-out cookie inside the grace window → access ONLY.
+    api_client.cookies.set("mesh_session", r1, domain=api_client.base_url.host)
+    grace = await _refresh(api_client)
+    assert grace.status_code == 200
+    assert "refresh_token" not in grace.json()["data"]
+    # Grace did NOT rotate: the jar still holds the winner's r2.
+    assert _refresh_cookie(api_client) == r1  # jar value we forced
+    api_client.cookies.set("mesh_session", r2, domain=api_client.base_url.host)
+    # The live credential still works (no family revocation).
+    again = await _refresh(api_client)
+    assert again.status_code == 200
+
+
+async def test_refresh_cross_origin_cookie_403_real_e2e(api_client):
+    """R4-H1: cookie refresh with a cross-site/missing Origin → 403."""
+    await _register_and_login(api_client)
+    evil = await api_client.post(
+        "/api/v1/auth/refresh", headers={"Origin": "http://evil.example"}
+    )
+    assert evil.status_code == 403
+    missing = await api_client.post("/api/v1/auth/refresh")
+    assert missing.status_code == 403
 
 
 async def test_refresh_invalid_token_401(api_client):
-    resp = await api_client.post("/api/v1/auth/refresh", json={"refresh_token": "bogus"})
+    api_client.cookies.set("mesh_session", "mesh_rft_bogus", domain=api_client.base_url.host)
+    resp = await _refresh(api_client)
     assert resp.status_code == 401
 
 
@@ -179,16 +227,16 @@ async def test_logout_and_sessions(api_client):
 
 
 async def test_logout_specific_refresh(api_client):
-    tokens = await _register_and_login(api_client)
-    lo = await api_client.post(
-        "/api/v1/auth/logout",
-        headers=_auth(tokens["access_token"]),
-        json={"refresh_token": tokens["refresh_token"]},
-    )
+    await _register_and_login(api_client)
+    revoked_cookie = _refresh_cookie(api_client)
+    # Cookie-transport logout: the mesh_session cookie names the session.
+    lo = await api_client.post("/api/v1/auth/logout")
     assert lo.status_code == 200
-    reused = await api_client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+    # Re-present the revoked cookie → 401.
+    api_client.cookies.set(
+        "mesh_session", revoked_cookie, domain=api_client.base_url.host
     )
+    reused = await _refresh(api_client)
     assert reused.status_code == 401
 
 
@@ -196,7 +244,7 @@ async def test_logout_specific_refresh(api_client):
 
 
 async def test_password_reset_single_use_via_dev_mailer(api_client, redis_client):
-    tokens = await _register_and_login(api_client)
+    await _register_and_login(api_client)
     forgot = await api_client.post("/api/v1/auth/forgot-password", json={"email": EMAIL})
     assert forgot.status_code == 200
     assert forgot.json()["data"]["status"] == "ok"
@@ -210,9 +258,8 @@ async def test_password_reset_single_use_via_dev_mailer(api_client, redis_client
     )
     assert reset.status_code == 200
     # Old session invalidated by the password change.
-    reused = await api_client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
+    # The reset revoked every session — the cookie refresh is dead.
+    reused = await _refresh(api_client)
     assert reused.status_code == 401
     # New password works.
     assert (await _login(api_client, password="a-new-passw0rd")).status_code == 200
@@ -264,7 +311,9 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
 
     tokens = await _register_and_login(api_client)
     h = _auth(tokens["access_token"])
-    other = (await _login(api_client)).json()["data"]  # a second device
+    current_cookie = _refresh_cookie(api_client)
+    _other = await _login(api_client)  # a second device (cookie overwritten)
+    other_cookie = _refresh_cookie(api_client)
 
     # 旧密码错 → 422 invalid_credentials。
     wrong = await api_client.post(
@@ -291,15 +340,12 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
         assert error["code"] == "weak_password"
         assert error["details"]["reason"] == reason
 
-    # 成功:携带当前会话 refresh → 保留当前会话,其它会话失效。
+    # 成功:发起会话经 access JWT 的 sid 识别并保留(R7-M1,body 不带 refresh),
+    # 其它会话失效。
     ok = await api_client.post(
         "/api/v1/auth/change-password",
         headers=h,
-        json={
-            "old_password": PASSWORD,
-            "new_password": "a-new-passw0rd",
-            "refresh_token": tokens["refresh_token"],
-        },
+        json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
     )
     assert ok.status_code == 200
     assert ok.json()["data"]["status"] == "ok"
@@ -318,8 +364,8 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
             .all()
         )
     }
-    assert rows[hash_token(tokens["refresh_token"])].revoked_at is None  # 当前会话保留
-    assert rows[hash_token(other["refresh_token"])].revoked_at is not None  # 其它失效
+    assert rows[hash_token(current_cookie)].revoked_at is None  # 当前会话保留
+    assert rows[hash_token(other_cookie)].revoked_at is not None  # 其它失效
     audits = (
         (
             await db_session.execute(
@@ -333,15 +379,13 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
     assert audits[0].workspace_id is None
     assert audits[0].resource_id == user.id
 
-    # 行为实测:当前会话 refresh 仍有效;其它会话旧 refresh 失效。
-    # (存活断言在前:呈递已撤销令牌会触发重放检测并撤销整个会话族,故置最后。)
-    alive = await api_client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
+    # 行为实测(Bearer mesh_rft_ 传输,与 cookie jar 解耦):当前会话 refresh
+    # 仍有效;其它会话旧 refresh 失效。(先清 jar——一条请求只能有一种传输。)
+    api_client.cookies.clear()
+    alive = await api_client.post("/api/v1/auth/refresh", headers=_auth(current_cookie))
     assert alive.status_code == 200
-    dead = await api_client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
-    )
+    assert alive.json()["data"]["refresh_token"].startswith("mesh_rft_")
+    dead = await api_client.post("/api/v1/auth/refresh", headers=_auth(other_cookie))
     assert dead.status_code == 401
 
     # 旧密码不再可登录;新密码可以。
@@ -351,8 +395,9 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
     assert (await _login(api_client, password="a-new-passw0rd")).status_code == 200
 
 
-async def test_change_password_without_refresh_revokes_all_real_e2e(api_client, db_session):
-    """未呈递当前会话凭证 → 全部会话失效(§4.5 安全默认)。"""
+async def test_change_password_identifies_session_by_sid_real_e2e(api_client, db_session):
+    """R7-M1/R4-H1: 发起会话经 access JWT 的 sid 识别并保留(body 不带 refresh),
+    且该会话 authenticated_at 刷新为改密时刻(step-up 真源,§2.4)。"""
     from sqlalchemy import select
 
     from mesh.db.models.user import Session, User
@@ -365,26 +410,31 @@ async def test_change_password_without_refresh_revokes_all_real_e2e(api_client, 
     )
     assert ok.status_code == 200
 
-    reused = await api_client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
-    assert reused.status_code == 401
+    # 单一会话:改密后仍活着(按 sid 保留),refresh 可用。
+    reused = await _refresh(api_client)
+    assert reused.status_code == 200
 
     user = (
         (await db_session.execute(select(User).where(User.email == EMAIL))).scalars().one()
     )
-    active = (
+    # §3.8 in-place rotation: the row survives but its token_hash follows the
+    # winner credential — locate it by the access JWT's sid, not the old hash.
+    import jwt as pyjwt
+
+    sid = pyjwt.decode(
+        tokens["access_token"], options={"verify_signature": False}
+    )["sid"]
+    row = (
         (
-            await db_session.execute(
-                select(Session).where(
-                    Session.user_id == user.id, Session.revoked_at.is_(None)
-                )
-            )
+            await db_session.execute(select(Session).where(Session.id == sid))
         )
         .scalars()
-        .all()
+        .one()
     )
-    assert active == []
+    assert row.revoked_at is None
+    # step-up 真源:改密即主动再认证,authenticated_at 已刷新。
+    assert row.authenticated_at is not None
+    assert row.authenticated_at >= user.password_changed_at
 
 
 # --- PATCH /users/me ---------------------------------------------------------
