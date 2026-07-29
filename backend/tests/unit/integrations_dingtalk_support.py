@@ -58,6 +58,11 @@ class ScriptedDingTalkTransport(httpx.AsyncBaseTransport):
     send_body: dict[str, Any] | None = None
     card_status: int = 200
     card_body: dict[str, Any] | None = None
+    # Per-request scripted answers for the send/card paths (popped FIFO;
+    # falls back to send_status/send_body when empty) — drives
+    # "first answer 40014, retry succeeds" scenarios.
+    send_queue: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
+    card_queue: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
     token_calls: int = 0
     requests: list[RecordedRequest] = field(default_factory=list)
     on_request: Callable[[RecordedRequest], None] | None = None
@@ -93,10 +98,16 @@ class ScriptedDingTalkTransport(httpx.AsyncBaseTransport):
                 {"accessToken": f"tok-{self.token_calls}", "expireIn": self.token_expire_in},
             )
         if path in (GROUP_SEND_PATH, DIRECT_SEND_PATH):
+            if self.send_queue:
+                status, payload = self.send_queue.pop(0)
+                return _json(status, payload)
             if self.send_body is not None:
                 return _json(self.send_status, self.send_body)
             return _json(self.send_status, {"processQueryKey": "pqk-1", "flowControlledStaffIdList": []})
         if path in (CARD_CREATE_PATH, CARD_UPDATE_PATH, CARD_STREAM_PATH):
+            if self.card_queue:
+                status, payload = self.card_queue.pop(0)
+                return _json(status, payload)
             if self.card_body is not None:
                 return _json(self.card_status, self.card_body)
             return _json(self.card_status, {"result": {"outTrackId": (body or {}).get("outTrackId")}})

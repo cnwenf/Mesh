@@ -449,13 +449,171 @@ def _json_body(response: httpx.Response) -> dict[str, Any]:
     return body if isinstance(body, dict) else {}
 
 
+# ---------------------------------------------------------------------------
+# DingTalkClient — robot message send + interactive card APIs (§3.10)
+# ---------------------------------------------------------------------------
+
+GROUP_SEND_PATH = "/v1.0/robot/groupMessages/send"
+DIRECT_SEND_PATH = "/v1.0/robot/oToMessages/batchSend"
+CARD_CREATE_PATH = "/v1.0/card/instances/createAndDeliver"
+CARD_UPDATE_PATH = "/v1.0/card/instances"
+CARD_STREAM_PATH = "/v1.0/card/streaming"
+
+
+class DingTalkClient:
+    """OpenAPI request executor bound to one integration's robot.
+
+    Every request carries ``x-acs-dingtalk-access-token`` (token from the
+    shared :class:`DingTalkTokenManager`). Error classification:
+
+    - HTTP 429 or a body ``code`` in :data:`RATE_LIMIT_CODES` →
+      :class:`DingTalkRateLimited` with the ``flowControlledStaffIdList``
+      (the caller delays just those recipients, §3.10);
+    - platform-reported token invalidity → invalidate the shared cache,
+      force-refresh ONCE, retry the original request ONCE (still failing →
+      :class:`DingTalkUpstreamError`);
+    - anything else non-2xx → :class:`DingTalkUpstreamError` recording
+      method/url/status ONLY — never the body (it may echo platform error
+      detail; §6.16 full-channel redaction).
+    """
+
+    def __init__(
+        self,
+        token_manager: DingTalkTokenManager,
+        *,
+        http_client: httpx.AsyncClient,
+        api_base: str = "https://api.dingtalk.com",
+        robot_code: str,
+        request_timeout: float = 10.0,
+    ) -> None:
+        self._token_manager = token_manager
+        self._client = http_client
+        self._api_base = api_base.rstrip("/")
+        self._robot_code = robot_code
+        self._request_timeout = request_timeout
+
+    @property
+    def robot_code(self) -> str:
+        return self._robot_code
+
+    # -- robot messages ----------------------------------------------------
+
+    async def send_group(
+        self, open_conversation_id: str, msg_key: str, msg_param: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Group message via ``groupMessages/send`` (§3.10).
+
+        ``msgParam`` is the JSON-encoded parameter object; the platform
+        caps it at 15000 bytes and does NOT support @ mentions — the
+        semantic layer enforces both before calling.
+        """
+        body = {
+            "robotCode": self._robot_code,
+            "openConversationId": open_conversation_id,
+            "msgKey": msg_key,
+            "msgParam": _encode_msg_param(msg_param),
+        }
+        return await self._request("POST", GROUP_SEND_PATH, body)
+
+    async def send_direct(
+        self, user_ids: list[str], msg_key: str, msg_param: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Single-chat message via ``oToMessages/batchSend`` (per-staffId)."""
+        body = {
+            "robotCode": self._robot_code,
+            "userIds": list(user_ids),
+            "msgKey": msg_key,
+            "msgParam": _encode_msg_param(msg_param),
+        }
+        return await self._request("POST", DIRECT_SEND_PATH, body)
+
+    # -- interactive cards (card_1.0) ----------------------------------------
+
+    async def create_and_deliver_card(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /v1.0/card/instances/createAndDeliver`` (cardTemplateId +
+        outTrackId + openSpaceId + cardData + callbackType)."""
+        return await self._request("POST", CARD_CREATE_PATH, body)
+
+    async def update_card(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``PUT /v1.0/card/instances`` — idempotent by ``outTrackId``."""
+        return await self._request("PUT", CARD_UPDATE_PATH, body)
+
+    async def stream_card(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``PUT /v1.0/card/streaming`` (guid idempotency, markdown
+        ``isFull=true`` full replacement, ``isFinalize`` closure)."""
+        return await self._request("PUT", CARD_STREAM_PATH, body)
+
+    # -- core request --------------------------------------------------------
+
+    async def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", path, body)
+
+    async def put(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("PUT", path, body)
+
+    async def _request(
+        self, method: str, path: str, body: dict[str, Any], *, _retried: bool = False
+    ) -> dict[str, Any]:
+        token = await self._token_manager.get_token()
+        url = f"{self._api_base}{path}"
+        headers = {"x-acs-dingtalk-access-token": token}
+        try:
+            response = await self._client.request(
+                method, url, json=body, headers=headers, timeout=self._request_timeout
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            raise DingTalkUpstreamError(
+                f"{method} {url} failed: {type(exc).__name__}", code="upstream_error"
+            ) from exc
+        payload = _json_body(response)
+        code = str(payload.get("code") or "")
+
+        if response.status_code == 429 or code in RATE_LIMIT_CODES:
+            controlled = payload.get("flowControlledStaffIdList") or []
+            if not isinstance(controlled, list):
+                controlled = []
+            raise DingTalkRateLimited(
+                f"{method} {path} rate limited code={code or 'http_429'}",
+                code=code or "rate_limited",
+                flow_controlled_staff_ids=tuple(str(item) for item in controlled),
+                http_status=response.status_code,
+            )
+
+        if 200 <= response.status_code < 300:
+            return payload
+
+        # Platform-reported token invalidity: invalidate + force-refresh
+        # ONCE + retry the original request ONCE (idempotent sends would
+        # dedup anyway; card updates are idempotent by outTrackId).
+        token_invalid = code in INVALID_TOKEN_CODES or response.status_code == 401
+        if token_invalid and not _retried:
+            await self._token_manager.invalidate()
+            return await self._request(method, path, body, _retried=True)
+
+        raise DingTalkUpstreamError(
+            f"{method} {url} status={response.status_code}",
+            code=code or "upstream_error",
+            http_status=response.status_code,
+        )
+
+
+def _encode_msg_param(msg_param: dict[str, Any]) -> str:
+    return json.dumps(msg_param, ensure_ascii=False, separators=(",", ":"))
+
+
 __all__ = [
+    "CARD_CREATE_PATH",
     "CARD_PARAM_KEY_MAX_BYTES",
     "CARD_PARAM_VALUE_MAX_BYTES",
+    "CARD_STREAM_PATH",
+    "CARD_UPDATE_PATH",
+    "DIRECT_SEND_PATH",
+    "DingTalkClient",
     "DingTalkError",
     "DingTalkRateLimited",
     "DingTalkTokenManager",
     "DingTalkUpstreamError",
+    "GROUP_SEND_PATH",
     "FOLLOWER_RECHECK_INTERVAL_SECONDS",
     "GROUP_MSG_PARAM_MAX_BYTES",
     "INVALID_CREDENTIAL_CODES",

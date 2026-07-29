@@ -374,3 +374,161 @@ async def test_expired_shared_entry_triggers_refresh(redis_client):
     )
     assert await manager.get_token() == "tok-1"
     assert transport.token_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# DingTalkClient — message send + error classification + forced refresh
+# ---------------------------------------------------------------------------
+
+from mesh.integrations.dingtalk_api import DingTalkClient  # noqa: E402
+
+
+async def _make_client(redis_client, transport: ScriptedDingTalkTransport) -> DingTalkClient:
+    manager = _make_manager(redis_client, transport)
+    return DingTalkClient(
+        manager,
+        http_client=make_client(transport),
+        robot_code="robot-1",
+        request_timeout=5.0,
+    )
+
+
+async def test_send_group_wire_format(redis_client):
+    transport = ScriptedDingTalkTransport()
+    client = await _make_client(redis_client, transport)
+    result = await client.send_group("cidABC==", "sampleText", {"content": "你好"})
+    assert result["processQueryKey"] == "pqk-1"
+    (sent,) = transport.group_sends()
+    assert sent.body == {
+        "robotCode": "robot-1",
+        "openConversationId": "cidABC==",
+        "msgKey": "sampleText",
+        "msgParam": '{"content":"你好"}',  # JSON-encoded, unicode kept
+    }
+    # the token travels as a header (never in the body)
+    assert sent.headers.get("x-acs-dingtalk-access-token") == "tok-1"
+
+
+async def test_send_direct_wire_format(redis_client):
+    transport = ScriptedDingTalkTransport()
+    client = await _make_client(redis_client, transport)
+    await client.send_direct(["staff1", "staff2"], "sampleMarkdown", {"title": "t", "text": "b"})
+    (sent,) = transport.direct_sends()
+    assert sent.body["userIds"] == ["staff1", "staff2"]
+    assert sent.body["msgKey"] == "sampleMarkdown"
+    assert json.loads(sent.body["msgParam"]) == {"title": "t", "text": "b"}
+
+
+async def test_rate_limit_code_raises_with_flow_controlled_list(redis_client):
+    transport = ScriptedDingTalkTransport(
+        send_status=400,
+        send_body={
+            "code": "send.too.fast",
+            "message": "slow down",
+            "flowControlledStaffIdList": ["staff-a", "staff-b"],
+        },
+    )
+    client = await _make_client(redis_client, transport)
+    with pytest.raises(DingTalkRateLimited) as excinfo:
+        await client.send_group("cid", "sampleText", {"content": "x"})
+    assert excinfo.value.code == "send.too.fast"
+    assert excinfo.value.flow_controlled_staff_ids == ("staff-a", "staff-b")
+    assert excinfo.value.http_status == 400
+
+
+@pytest.mark.parametrize(
+    "code", sorted({"send.too.fast", "too.many.group", "too.many.people", "send.byToken.tooFast"})
+)
+async def test_each_rate_limit_code_classified(redis_client, code: str):
+    transport = ScriptedDingTalkTransport(send_status=400, send_body={"code": code})
+    client = await _make_client(redis_client, transport)
+    with pytest.raises(DingTalkRateLimited) as excinfo:
+        await client.send_group("cid", "sampleText", {"content": "x"})
+    assert excinfo.value.code == code
+
+
+async def test_http_429_without_code_classified_rate_limited(redis_client):
+    transport = ScriptedDingTalkTransport(send_status=429, send_body={"message": "slow"})
+    client = await _make_client(redis_client, transport)
+    with pytest.raises(DingTalkRateLimited) as excinfo:
+        await client.send_group("cid", "sampleText", {"content": "x"})
+    assert excinfo.value.http_status == 429
+
+
+async def test_invalid_token_forced_refresh_once_then_retry_success(redis_client):
+    """First answer: platform says token invalid (40014) → invalidate →
+    refresh once → retry the original request → success."""
+    transport = ScriptedDingTalkTransport(
+        send_queue=[
+            (400, {"code": "40014", "message": "invalid token"}),
+            (200, {"processQueryKey": "pqk-retry"}),
+        ]
+    )
+    client = await _make_client(redis_client, transport)
+    result = await client.send_group("cid", "sampleText", {"content": "x"})
+    assert result["processQueryKey"] == "pqk-retry"
+    assert transport.token_calls == 2  # initial + forced refresh
+    sends = transport.group_sends()
+    assert len(sends) == 2
+    # the retry carried the NEW token
+    assert sends[0].headers["x-acs-dingtalk-access-token"] == "tok-1"
+    assert sends[1].headers["x-acs-dingtalk-access-token"] == "tok-2"
+
+
+async def test_invalid_token_retry_exhausted_raises_upstream(redis_client):
+    transport = ScriptedDingTalkTransport(
+        send_queue=[
+            (400, {"code": "40014"}),
+            (400, {"code": "40014"}),
+        ]
+    )
+    client = await _make_client(redis_client, transport)
+    with pytest.raises(DingTalkUpstreamError) as excinfo:
+        await client.send_group("cid", "sampleText", {"content": "x"})
+    assert excinfo.value.http_status == 400
+    assert len(transport.group_sends()) == 2  # exactly one retry
+
+
+async def test_upstream_5xx_records_method_url_status_only(redis_client):
+    transport = ScriptedDingTalkTransport(
+        send_status=503, send_body={"code": "internal", "secretLeak": "do-not-log"}
+    )
+    client = await _make_client(redis_client, transport)
+    with pytest.raises(DingTalkUpstreamError) as excinfo:
+        await client.send_group("cid", "sampleText", {"content": "x"})
+    message = str(excinfo.value)
+    assert "status=503" in message
+    assert "groupMessages/send" in message
+    # the body never surfaces in the error
+    assert "do-not-log" not in message
+    assert "internal" not in message
+
+
+async def test_network_error_is_upstream(redis_client):
+    transport = ScriptedDingTalkTransport(send_status=200)
+
+    async def _boom(*args, **kwargs):
+        raise httpx.ConnectTimeout("slow peer")
+
+    client = await _make_client(redis_client, transport)
+    client._client.request = _boom  # type: ignore[method-assign]
+    with pytest.raises(DingTalkUpstreamError):
+        await client.send_group("cid", "sampleText", {"content": "x"})
+
+
+async def test_card_endpoints_paths_and_idempotency_key(redis_client):
+    transport = ScriptedDingTalkTransport()
+    client = await _make_client(redis_client, transport)
+    await client.create_and_deliver_card(
+        {"cardTemplateId": "tpl", "outTrackId": "mesh-appr-1", "openSpaceId": "dtv1.card//IM_GROUP.cid"}
+    )
+    await client.update_card({"outTrackId": "mesh-appr-1", "cardData": {}})
+    await client.stream_card({"outTrackId": "mesh-appr-1", "guid": "g1", "isFull": True})
+    assert [r.path for r in transport.requests if r.path.startswith("/v1.0/card")] == [
+        "/v1.0/card/instances/createAndDeliver",
+        "/v1.0/card/instances",
+        "/v1.0/card/streaming",
+    ]
+    # every card call carried the idempotent outTrackId
+    card_requests = [r for r in transport.requests if r.path.startswith("/v1.0/card")]
+    assert all(r.body["outTrackId"] == "mesh-appr-1" for r in card_requests)
