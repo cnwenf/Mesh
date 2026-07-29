@@ -119,6 +119,10 @@ services:
       # loopback, so dev defaults off; production leaves it unset and the
       # secure default (true) applies — non-TLS /api/v1/daemon/ → 403.
       MESH_DAEMON_TLS_REQUIRED: ${MESH_DAEMON_TLS_REQUIRED:-false}
+      # Device-code HMAC pepper (auth.md §2.4.2): dev default for the
+      # loopback stack only — production MUST set a real secret
+      # (auth_mode=production fails closed when unset).
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:-mesh-dev-device-code-pepper-only}
       # Web session cookie Secure attribute: the loopback dev stack serves
       # plaintext http, so the Secure flag is relaxed locally (production
       # leaves it unset -> secure default true; auth.md R4-H1).
