@@ -15,10 +15,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
-
-import httpx
 
 
 @dataclass(frozen=True)
@@ -67,12 +65,9 @@ def follow_logs(
     last_emitted = start_offset - 1
     while True:
         path = f"/api/v1/workspaces/{workspace_id}/executions/{execution_id}/logs/stream"
-        try:
-            response = client.stream_request(
-                "GET", path, params={"offset": next_offset}
-            )
-        except Exception:
-            raise
+        response = client.stream_request(
+            "GET", path, params={"offset": next_offset}
+        )
         try:
             for event in parse_sse_lines(response.iter_lines()):
                 event_type = event.get("type")

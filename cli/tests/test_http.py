@@ -97,9 +97,8 @@ class TestAuthFailures:
             )
         )
         store = Store(PAT)
-        with _client(store) as client:
-            with pytest.raises(CliError) as exc:
-                client.request("GET", "/api/v1/me")
+        with _client(store) as client, pytest.raises(CliError) as exc:
+            client.request("GET", "/api/v1/me")
         assert exc.value.exit_code == EXIT_AUTH
         assert store.clears == 1  # dead PAT purged locally (§5.3)
         assert "mesh auth login" in (exc.value.hint or "")
@@ -118,9 +117,8 @@ class TestAuthFailures:
                 },
             )
         )
-        with _client(Store(PAT)) as client:
-            with pytest.raises(CliError) as exc:
-                client.request("POST", "/api/v1/x", json={})
+        with _client(Store(PAT)) as client, pytest.raises(CliError) as exc:
+            client.request("POST", "/api/v1/x", json={})
         assert exc.value.exit_code == EXIT_AUTH
         assert "issue:write" in (exc.value.hint or "")
 
@@ -177,9 +175,8 @@ class TestSilentRefresh:
             return_value=httpx.Response(401, json={"error": {"code": "unauthorized", "message": "x"}})
         )
         store = Store(PAT)
-        with _client(store) as client:
-            with pytest.raises(CliError) as exc:
-                client.request("GET", "/api/v1/me")
+        with _client(store) as client, pytest.raises(CliError) as exc:
+            client.request("GET", "/api/v1/me")
         assert exc.value.exit_code == EXIT_AUTH
         assert refresh_route.call_count == 0
 
@@ -250,9 +247,8 @@ class TestRetries:
                 429, json={"error": {"code": "rate_limited", "message": "slow"}}, headers={"Retry-After": "1"}
             )
         )
-        with _client(Store(PAT)) as client:
-            with pytest.raises(CliError) as exc:
-                client.request("GET", "/api/v1/me")
+        with _client(Store(PAT)) as client, pytest.raises(CliError) as exc:
+            client.request("GET", "/api/v1/me")
         assert exc.value.exit_code == EXIT_GENERIC  # retries exhausted → 1
 
     @respx.mock
@@ -271,9 +267,8 @@ class TestRetries:
         respx.get(f"{BASE}/api/v1/me").mock(
             return_value=httpx.Response(500, json={"error": {"code": "internal_error", "message": "x"}})
         )
-        with _client(Store(PAT)) as client:
-            with pytest.raises(CliError) as exc:
-                client.request("GET", "/api/v1/me")
+        with _client(Store(PAT)) as client, pytest.raises(CliError) as exc:
+            client.request("GET", "/api/v1/me")
         assert exc.value.exit_code == EXIT_GENERIC
 
 

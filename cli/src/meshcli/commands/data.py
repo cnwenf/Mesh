@@ -11,7 +11,6 @@ stops here, printing the mapping preview + row errors) → run;
 from __future__ import annotations
 
 import mimetypes
-import os
 import time
 from pathlib import Path
 

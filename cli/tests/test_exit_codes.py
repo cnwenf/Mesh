@@ -24,7 +24,6 @@ from meshcli.errors import (
     from_api_error,
 )
 
-
 # The authoritative rows: status → exit class, per cli.md §3.4.
 SPEC_ROWS = [
     (400, EXIT_VALIDATION),

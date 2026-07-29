@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Iterable, TextIO
+from collections.abc import Iterable
+from typing import Any, TextIO
 
 from meshcli.errors import EXIT_VALIDATION, CliError
 from meshcli.jqeval import JqError, compile_expression

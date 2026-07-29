@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from meshcli import config as config_mod
 from meshcli.config import CredentialEntry, resolve_key
 from meshcli.errors import EXIT_VALIDATION, CliError
 from meshcli.http import ClientOptions, MeshClient
-from meshcli.output import apply_jq, emit_json, emit_json_lines, emit_table, is_tty, stderr
+from meshcli.output import apply_jq, emit_json, emit_json_lines, emit_table, stderr
 
 
 @dataclass
@@ -43,7 +44,7 @@ class AppContext:
         if self.workspace:
             return self._resolve_workspace_segment(self.workspace)
         # Stored credential may carry an approved-bound workspace (device login).
-        entry = self.client._load_credential()  # noqa: SLF001 — context owns the store
+        entry = self.client._load_credential()
         if entry is not None and entry.workspace:
             return self._resolve_workspace_segment(entry.workspace)
         hint = "Set one with --workspace <slug> or `mesh config set workspace <slug>`."
@@ -176,7 +177,7 @@ class AppContext:
             stderr(message)
 
 
-def get_context(ctx) -> "AppContext":
+def get_context(ctx) -> AppContext:
     """Build (once per invocation) the AppContext from the stored global flags."""
     if "app" not in ctx.obj:
         flags = ctx.obj["flags"]
@@ -222,7 +223,6 @@ def build_context(
         effective_ca = host_tls.get("ca_cert")
 
     host = resolved_url
-    store_path = config_mod.credentials_path()
 
     def loader() -> CredentialEntry | None:
         return config_mod.load_credential(host)

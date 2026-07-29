@@ -25,8 +25,9 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Self
 
 import httpx
 
@@ -91,7 +92,7 @@ class MeshClient:
     def close(self) -> None:
         self._http.close()
 
-    def __enter__(self) -> "MeshClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

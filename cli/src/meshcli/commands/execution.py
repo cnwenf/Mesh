@@ -7,7 +7,7 @@ import sys
 import click
 
 from meshcli.context import get_context
-from meshcli.errors import EXIT_INTERRUPTED, CliError
+from meshcli.errors import EXIT_INTERRUPTED
 from meshcli.main import cli as root
 from meshcli.sse import fetch_history, follow_logs
 

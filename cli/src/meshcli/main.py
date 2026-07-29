@@ -18,7 +18,6 @@ import click
 
 from meshcli import __version__
 from meshcli.config import did_you_mean, expand_alias, load_aliases
-from meshcli.context import get_context
 from meshcli.errors import EXIT_GENERIC, EXIT_INTERRUPTED, EXIT_VALIDATION, CliError
 from meshcli.output import stderr
 
@@ -33,8 +32,10 @@ class MeshGroup(click.Group):
             name = args[0] if args else ""
             suggestion = did_you_mean(name, list(self.list_commands(ctx)))
             if suggestion:
-                exc = click.UsageError(f"{exc.format_message()} Did you mean {suggestion}?")
-            raise exc
+                raise click.UsageError(
+                    f"{exc.format_message()} Did you mean {suggestion}?"
+                ) from None
+            raise
 
     def command_names(self, ctx) -> list[str]:
         return list(self.list_commands(ctx))
@@ -127,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = expand_alias(argv, aliases)
 
     # SIGINT → 130, cleanly (no traceback, no hanging connections).
-    def _sigint(signum, frame):  # noqa: ARG001
+    def _sigint(signum, frame):
         raise KeyboardInterrupt
 
     previous = signal.signal(signal.SIGINT, _sigint)

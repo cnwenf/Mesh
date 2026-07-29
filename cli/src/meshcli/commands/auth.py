@@ -46,7 +46,7 @@ def _pat_login(ctx_obj, token: str) -> None:
     """Validate the PAT with one `GET /me` probe, then persist it (C1)."""
     app = ctx_obj
     # Temporarily probe with this token (the store may hold something else).
-    original_loader = app.client._load_credential  # noqa: SLF001
+    original_loader = app.client._load_credential
     app.client._load_credential = lambda: CredentialEntry(kind="pat", token=token)
     try:
         envelope = app.call("GET", "/api/v1/me")
@@ -157,7 +157,8 @@ def login(ctx, with_token, token_file, scopes, no_browser):
     app = get_context(ctx)
     if with_token or token_file:
         if token_file:
-            token = open(token_file, encoding="utf-8").read().strip()
+            with open(token_file, encoding="utf-8") as handle:
+                token = handle.read().strip()
             if not token:
                 raise CliError(f"no token in {token_file}", exit_code=EXIT_VALIDATION)
         else:
