@@ -31,8 +31,9 @@ from mesh.auth import security
 from mesh.auth.audit import write_audit
 from mesh.auth.ratelimit import assert_not_locked_out
 from mesh.auth.rbac import PERMISSION_MATRIX
-from mesh.auth.realtime import broadcast_user_revocation
+from mesh.auth.realtime import SESSION_REVOKED_EVENT, broadcast_user_revocation
 from mesh.config import Settings
+from mesh.db.models.api_token import ApiToken
 from mesh.db.models.member import Member
 from mesh.db.models.user import (
     EmailVerificationToken,
@@ -47,6 +48,7 @@ from mesh.errors import (
     NotFoundError,
     UnauthorizedError,
 )
+from mesh.outbox.service import emit_realtime
 
 MFA_ISSUER = "Mesh"
 MFA_TICKET_TYPE = "mfa"
@@ -994,6 +996,116 @@ class AuthService:
             user.updated_at = _now(self._clock)
             result = user_to_dict(user)
         return result
+
+    # -- credential self-service (auth.md §3.1, review H7) ---------------------
+
+    async def introspect_credential(self, *, principal) -> dict:
+        """Metadata for the CURRENT credential — never a plaintext fragment.
+
+        Sessions resolve by the access JWT's ``sid`` (the session-location
+        invariant, §1.1); PAT/agent tokens by their ``api_tokens`` row. Powers
+        ``mesh auth status`` (prefix masked, scopes/expiry/last-use visible).
+        """
+        async with self._sf() as session:
+            if principal.kind == "session":
+                if principal.session_id is None:
+                    # Pre-increment access JWT without sid — nothing to show.
+                    raise UnauthorizedError("invalid or expired token")
+                row = await session.get(Session, principal.session_id)
+                if row is None or row.revoked_at is not None or row.user_id != principal.subject:
+                    raise UnauthorizedError("invalid or expired token")
+                member_id = None
+                if row.workspace_id is not None:
+                    member_id = await session.scalar(
+                        select(Member.id).where(
+                            Member.workspace_id == row.workspace_id,
+                            Member.user_id == row.user_id,
+                            Member.status == "active",
+                        )
+                    )
+                user = await session.get(User, row.user_id)
+                return {
+                    "kind": "session",
+                    "token_id": row.id,
+                    "prefix": None,
+                    "name": user.display_name if user is not None else None,
+                    "scopes": sorted(row.granted_scopes or []),
+                    "workspace_id": row.workspace_id,
+                    "member_id": member_id,
+                    "expires_at": row.expires_at,
+                    "last_used_at": row.last_active_at,
+                }
+            token_row = await session.get(ApiToken, principal.token_id)
+            if token_row is None or token_row.revoked_at is not None:
+                raise UnauthorizedError("invalid or expired token")
+            return {
+                "kind": principal.kind,
+                "token_id": token_row.id,
+                # Masked display prefix only — the plaintext existed once, at
+                # creation. Nothing more ever leaves the service.
+                "prefix": token_row.prefix + "…",
+                "name": token_row.name,
+                "scopes": sorted(token_row.scopes or []),
+                "workspace_id": token_row.workspace_id,
+                "member_id": token_row.owner_member_id,
+                "expires_at": token_row.expires_at,
+                "last_used_at": token_row.last_used_at,
+            }
+
+    async def revoke_credential(
+        self,
+        *,
+        principal,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
+    ) -> None:
+        """Revoke the CURRENT credential itself (no token id required).
+
+        PAT/agent: ``revoked_at`` now ⇒ per-request hash lookup 401s at once
+        (§5.5). Session: refresh dies immediately; the issued access expires
+        with its TTL (≤15min, §3.7 — regular routes stay stateless).
+        """
+        now = _now(self._clock)
+        async with self._sf() as session, session.begin():
+            if principal.kind == "session":
+                if principal.session_id is None:
+                    raise UnauthorizedError("invalid or expired token")
+                row = await session.get(Session, principal.session_id)
+                if row is None or row.user_id != principal.subject:
+                    raise UnauthorizedError("invalid or expired token")
+                if row.revoked_at is None:
+                    row.revoked_at = now
+                    await broadcast_user_revocation(session, user_id=row.user_id)
+                return
+            token_row = await session.get(ApiToken, principal.token_id)
+            if token_row is None:
+                raise UnauthorizedError("invalid or expired token")
+            if token_row.revoked_at is None:
+                token_row.revoked_at = now
+                token_row.updated_at = now
+                await write_audit(
+                    session,
+                    workspace_id=token_row.workspace_id,
+                    actor_member_id=token_row.owner_member_id,
+                    actor_kind="member",
+                    action="token.revoked",
+                    resource_type="api_token",
+                    resource_id=token_row.id,
+                    metadata={"name": token_row.name, "self_revoked": True},
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+                # Live connections bearing this token fail re-auth (§3.7/§5.6).
+                await emit_realtime(
+                    session,
+                    workspace_id=token_row.workspace_id,
+                    channel=f"workspace:{token_row.workspace_id}",
+                    event=SESSION_REVOKED_EVENT,
+                    data={
+                        "token_id": str(token_row.id),
+                        "owner_member_id": str(token_row.owner_member_id),
+                    },
+                )
 
     # -- sessions --------------------------------------------------------------
 

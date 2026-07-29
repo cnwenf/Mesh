@@ -321,6 +321,33 @@ async def verify_email(body: VerifyEmailRequest, request: Request) -> dict:
 # --- protected auth ----------------------------------------------------------
 
 
+@router.get("/auth/token")
+async def introspect_token(
+    request: Request, principal=Depends(get_current_principal)
+) -> dict:
+    """Self-introspection (review H7): metadata for the CURRENT credential —
+    kind/token_id/masked prefix/scopes/expiry/last-use, never a plaintext
+    fragment. Powers ``mesh auth status``."""
+    service: AuthService = get_auth_service(request)
+    return {"data": await service.introspect_credential(principal=principal)}
+
+
+@router.delete("/auth/token")
+async def revoke_token_self(
+    request: Request, principal=Depends(get_current_principal)
+) -> dict:
+    """Self-revocation (review H7): revoke the presented credential itself —
+    no token id needed. PAT: immediate 401 afterwards; session: refresh dies
+    at once, access with its TTL. Powers ``mesh auth logout --revoke``."""
+    service: AuthService = get_auth_service(request)
+    await service.revoke_credential(
+        principal=principal,
+        ip_address=_client_ip(request),
+        user_agent=_user_agent(request),
+    )
+    return {"data": {"status": "ok"}}
+
+
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response) -> dict:
     """Revoke the session named by the presented credential (auth.md §3.1).
