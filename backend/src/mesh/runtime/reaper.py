@@ -175,6 +175,11 @@ async def _reclaim_one(
         attempt.updated_at = now
         await _release_capacity(session, attempt.runtime_id)
         await revoke_attempt_envelopes(session, attempt_id=attempt.id, now=now)
+        # §2.2 S-05: revoke task tokens same-transaction with reclaim
+        # (fail-closed — zombie holder's token must die with the lease).
+        from mesh.runtime.task_tokens import revoke_attempt_task_tokens
+
+        await revoke_attempt_task_tokens(session, attempt_id=attempt.id, now=now)
 
         execution = (
             await session.execute(
@@ -296,6 +301,21 @@ async def _mark_offline_runtimes(
                 event="runtime.offline",
                 data={"runtime_id": str(row.id), "name": row.name},
                 idempotency_key=f"runtime:{row.id}:offline:{threshold_iso}",
+            )
+            # §2.2 S-05: revoke task tokens for all in-flight attempts of
+            # this runtime (runtime offline = tokens must die, fail-closed).
+            from mesh.db.models.runtime import AttemptTaskToken
+
+            await session.execute(
+                text(
+                    """
+                    UPDATE attempt_task_tokens
+                       SET revoked_at = now()
+                     WHERE runtime_id = :rid
+                       AND revoked_at IS NULL
+                    """
+                ),
+                {"rid": row.id},
             )
             offline += 1
     return offline

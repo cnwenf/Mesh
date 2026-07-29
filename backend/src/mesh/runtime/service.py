@@ -216,7 +216,15 @@ class RuntimeService:
             await session.flush()
             return _render_runtime(runtime, include_activation=activation)
 
-    async def activate_runtime(self, *, activation_code: str, metadata: dict) -> dict:
+    async def activate_runtime(
+        self,
+        *,
+        activation_code: str,
+        metadata: dict,
+        protocol_version: int = 1,
+        provider_manifest: dict | None = None,
+        daemon_features: dict | None = None,
+    ) -> dict:
         """Daemon: exchange the one-time code for the long-lived runtime token.
 
         Plaintext token appears ONLY in this response; the server stores the
@@ -268,6 +276,11 @@ class RuntimeService:
             runtime.capabilities = capabilities
             runtime.labels = merged_labels
             runtime.version = str(meta.get("version") or runtime.version)
+            # §2.6 P0: persist protocol negotiation fields.
+            runtime.protocol_version = protocol_version
+            runtime.daemon_version = str(meta.get("version") or runtime.version)
+            runtime.provider_manifest = provider_manifest or {}
+            runtime.daemon_features = daemon_features or {}
             runtime.status = "online"
             runtime.activated_at = now  # non-null = code consumed (replay → 410)
             runtime.last_heartbeat_at = now
@@ -321,6 +334,7 @@ class RuntimeService:
         health: str,
         metrics: dict,
         inflight: list[str],
+        protocol_version: int | None = None,
     ) -> dict:
         # F8: daemon-reported inflight is DIAGNOSTIC (server-side attempt
         # rows stay the capacity authority) — but validated and persisted in
@@ -343,6 +357,9 @@ class RuntimeService:
             previous = row.status
             row.last_heartbeat_at = now
             row.updated_at = now
+            # §2.6 P0: track protocol version drift on heartbeat.
+            if protocol_version is not None:
+                row.protocol_version = protocol_version
             if health == "degraded":
                 # Alive process, broken environment: stop dispatch, keep the
                 # troubleshooting window (§5.1).

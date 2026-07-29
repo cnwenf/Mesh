@@ -100,7 +100,11 @@ async def activate_runtime(
     response.headers["X-RateLimit-Reset"] = str(reset_in)
     service = request.app.state.runtime_service
     data = await service.activate_runtime(
-        activation_code=body.activation_code, metadata=body.metadata
+        activation_code=body.activation_code,
+        metadata=body.metadata,
+        protocol_version=body.protocol_version,
+        provider_manifest=body.provider_manifest,
+        daemon_features=body.daemon_features,
     )
     return {"data": data}
 
@@ -127,6 +131,7 @@ async def heartbeat(
         health=body.health,
         metrics=body.metrics,
         inflight=body.inflight,
+        protocol_version=body.protocol_version,
     )
     return {"data": data}
 
@@ -172,6 +177,7 @@ async def patch_attempt(
     runtime: Runtime = Depends(require_runtime),
 ) -> dict:
     await _rate_limit_daemon(request, runtime, response)
+    settings = request.app.state.settings
     data = await transition_attempt(
         request.app.state.session_factory,
         attempt_id=_attempt_uuid(attempt_id),
@@ -180,6 +186,7 @@ async def patch_attempt(
         new_status=body.status,
         result=body.result,
         failure_reason=body.failure_reason,
+        signing_secret=settings.jwt_secret,
     )
     return {"data": data}
 
@@ -237,6 +244,7 @@ async def report_checkout(
     runtime: Runtime = Depends(require_runtime),
 ) -> dict:
     await _rate_limit_daemon(request, runtime, response)
+    settings = request.app.state.settings
     data = await checkout_mod.report_checkout(
         request.app.state.session_factory,
         attempt_id=_attempt_uuid(attempt_id),
@@ -249,6 +257,7 @@ async def report_checkout(
         local_path=body.local_path,
         diff=body.diff,
         storage=request.app.state.storage,
+        signing_secret=settings.jwt_secret,
     )
     return {"data": data}
 

@@ -179,9 +179,14 @@ async def enqueue_agent_executions(
                 )
             )
             if agent_row is not None:
+                mc = agent_row.model_config if isinstance(agent_row.model_config, dict) else {}
                 snapshot_parts = build_config_snapshot(
                     agent_config_version_id=agent_row.active_config_version_id,
                     trigger_event_id=trigger_event_id,
+                    provider=mc.get("provider"),
+                    model=mc.get("model"),
+                    effort=mc.get("reasoning_effort"),
+                    system_instructions=agent_row.system_instructions,
                 )
                 config_snapshot = snapshot_parts["config_snapshot"]
                 required_capabilities = snapshot_parts["required_capabilities"]

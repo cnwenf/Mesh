@@ -34,6 +34,7 @@ from mesh.errors import (
 )
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.credentials import revoke_attempt_envelopes, revoke_execution_envelopes
+from mesh.runtime.redaction import redact_result
 from mesh.runtime.task_tokens import revoke_attempt_task_tokens
 
 # Physical attempt machine (§4.7): source → allowed daemon-driven targets.
@@ -278,6 +279,7 @@ async def transition_attempt(
     new_status: str,
     result: dict | None = None,
     failure_reason: str | None = None,
+    signing_secret: str = "",
 ) -> dict:
     """PATCH /daemon/attempts/{id} — fenced status transition.
 
@@ -352,8 +354,19 @@ async def transition_attempt(
             attempt.started_at = now
         if new_status in ATTEMPT_TERMINAL_STATUSES:
             attempt.finished_at = now
-            attempt.result = result
             attempt.failure_reason = failure_reason
+            # §2.5 S-06: server-side fallback redaction — daemon redacts
+            # first, server MUST redact again before persisting (ISO-13).
+            redaction_hits = 0
+            if result is not None and signing_secret:
+                result, redaction_hits = await redact_result(
+                    session,
+                    workspace_id=workspace_id,
+                    result=result,
+                    signing_secret=signing_secret,
+                )
+            attempt.result = result
+            attempt.redaction_hits = redaction_hits
             # §2.6 P0: parse structured result fields for reliable
             # verification, budget aggregation, and querying.
             _extract_structured_result(attempt, result)
@@ -567,6 +580,19 @@ async def freeze_execution(
         if execution is None:
             raise NotFoundError("execution not found")
         revoked = await revoke_execution_envelopes(session, execution_id=execution_id)
+        # §2.2 S-05: revoke task tokens for ALL attempts of this execution
+        # (freeze is a security action — every token must die immediately).
+        from mesh.db.models.runtime import AttemptTaskToken
+
+        attempt_ids = (
+            await session.execute(
+                select(ExecutionAttempt.id).where(
+                    ExecutionAttempt.execution_id == execution_id,
+                )
+            )
+        ).scalars().all()
+        for aid in attempt_ids:
+            await revoke_attempt_task_tokens(session, attempt_id=aid)
         await emit_event(
             session,
             workspace_id=workspace_id,

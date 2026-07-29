@@ -122,6 +122,8 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # 6. Runtime token single source migration (§2.4 S-11)
     #    Revoke runtime-associated api_tokens, then drop the FK column.
+    #    MUST rebuild mesh_runtime_by_token_hash (0019 created it with
+    #    runtime_token_id in the return type — that column is going away).
     # ------------------------------------------------------------------
     # Revoke all runtime-associated api_tokens rows.
     op.execute("""
@@ -144,15 +146,63 @@ def upgrade() -> None:
         AND revoked_at IS NOT NULL
     """)
 
+    # §2.4 S-11: rebuild the SECURITY DEFINER bootstrap function WITHOUT
+    # runtime_token_id (0019 defined it with that column; the column is
+    # now gone — the function would 500 on every call otherwise).
+    op.execute("DROP FUNCTION IF EXISTS mesh_runtime_by_token_hash(text)")
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION mesh_runtime_by_token_hash(p_hash text)
+        RETURNS TABLE (
+          id uuid, workspace_id uuid, status text, deleted_at timestamptz
+        )
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+          SELECT r.id, r.workspace_id, r.status, r.deleted_at
+          FROM runtimes r
+          WHERE r.runtime_token_hash = p_hash
+        $$
+        """
+    )
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_runtime_by_token_hash(text) FROM PUBLIC")
+    op.execute("GRANT EXECUTE ON FUNCTION mesh_runtime_by_token_hash(text) TO mesh_app")
+
     # ------------------------------------------------------------------
-    # 7. New failure reasons (§13.3)
+    # 7. Failure reason vocabulary note (§13.3)
     # ------------------------------------------------------------------
-    # Extend the failure_reason CHECK to include new P0 reasons.
+    # New P0 failure reasons (executor_unavailable, executor_protocol_error,
+    # daemon_restart, budget_exceeded, usage_unavailable, log_backpressure)
+    # are enforced at the application layer (FAILURE_REASONS frozenset in
+    # models/runtime.py). No CHECK constraint exists on failure_reason —
+    # these DROP IF EXISTS are defensive no-ops for forward compatibility.
     op.execute("ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_failure_reason_check")
     op.execute("ALTER TABLE execution_attempts DROP CONSTRAINT IF EXISTS execution_attempts_failure_reason_check")
 
+    # ------------------------------------------------------------------
+    # 8. Grant DML on new table to app role
+    # ------------------------------------------------------------------
+    op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON attempt_task_tokens TO mesh_app")
+
 
 def downgrade() -> None:
+    # Restore the original mesh_runtime_by_token_hash with runtime_token_id.
+    op.execute("DROP FUNCTION IF EXISTS mesh_runtime_by_token_hash(text)")
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION mesh_runtime_by_token_hash(p_hash text)
+        RETURNS TABLE (
+          id uuid, workspace_id uuid, status text, deleted_at timestamptz,
+          runtime_token_id uuid
+        )
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+          SELECT r.id, r.workspace_id, r.status, r.deleted_at, r.runtime_token_id
+          FROM runtimes r
+          WHERE r.runtime_token_hash = p_hash
+        $$
+        """
+    )
+    op.execute("REVOKE EXECUTE ON FUNCTION mesh_runtime_by_token_hash(text) FROM PUBLIC")
+    op.execute("GRANT EXECUTE ON FUNCTION mesh_runtime_by_token_hash(text) TO mesh_app")
+
     # Restore runtime_token_id column.
     op.add_column("runtimes", sa.Column("runtime_token_id", postgresql.UUID(as_uuid=True), nullable=True))
     op.create_foreign_key("runtimes_runtime_token_id_fkey", "runtimes", "api_tokens", ["runtime_token_id"], ["id"], ondelete="SET NULL")

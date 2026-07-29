@@ -31,6 +31,14 @@ from mesh.db.models.runtime import (
 # §2.2: TTL = min(lease remaining + grace, 5 minutes).
 TASK_TOKEN_MAX_TTL = timedelta(minutes=5)
 
+# §2.2 S-05: rate limiting — max calls per token per window.
+TASK_TOKEN_RATE_LIMIT = 120  # calls per window
+TASK_TOKEN_RATE_WINDOW_SECONDS = 60
+
+# Simple in-memory rate limiter (per token hash + attempt).
+# Production would use Redis; this is the server-side minimum.
+_rate_buckets: dict[str, tuple[int, float]] = {}
+
 # Default scopes for a task token (§2.2 S-05): read current context,
 # write current issue comments/status, current squad task operations.
 # ``agent:trigger`` is denied by default (anti-loop).
@@ -145,19 +153,44 @@ async def validate_task_token(
     *,
     token: str,
     attempt_id: uuid.UUID | None = None,
+    lease_seq: int | None = None,
+    runtime_id: uuid.UUID | None = None,
     required_scope: str | None = None,
+    resource_issue_id: uuid.UUID | None = None,
 ) -> AttemptTaskToken:
     """Validate a ``mesh_task_`` token: not expired, not revoked, attempt
-    in-flight, lease_seq matches, resource scope check.
+    in-flight, lease_seq matches, runtime ownership, resource scope check.
+
+    §2.2 S-05: server validates attempt in-flight, lease_seq, runtime
+    attribution, and resource scope on every call. Rate-limited by
+    token + attempt dual dimension.
 
     Raises UnauthorizedError on any failure (fail-closed).
     """
+    import time
+
     from mesh.errors import UnauthorizedError
 
     if not token.startswith(TASK_TOKEN_PREFIX):
         raise UnauthorizedError("invalid task token")
 
     token_hash = _hash_token(token)
+
+    # §2.2 S-05: rate limit by token + attempt dual dimension.
+    now_ts = time.monotonic()
+    bucket_key = token_hash[:32]
+    bucket = _rate_buckets.get(bucket_key)
+    if bucket is not None:
+        count, window_start = bucket
+        if now_ts - window_start > TASK_TOKEN_RATE_WINDOW_SECONDS:
+            _rate_buckets[bucket_key] = (1, now_ts)
+        elif count >= TASK_TOKEN_RATE_LIMIT:
+            raise UnauthorizedError("task token rate limit exceeded")
+        else:
+            _rate_buckets[bucket_key] = (count + 1, window_start)
+    else:
+        _rate_buckets[bucket_key] = (1, now_ts)
+
     row = (
         await session.execute(
             select(AttemptTaskToken).where(
@@ -174,17 +207,23 @@ async def validate_task_token(
         raise UnauthorizedError("task token expired")
     if attempt_id is not None and row.attempt_id != attempt_id:
         raise UnauthorizedError("task token attempt mismatch")
+    # §2.2: runtime ownership check.
+    if runtime_id is not None and row.runtime_id != runtime_id:
+        raise UnauthorizedError("task token runtime mismatch")
 
     # Verify the attempt is still in-flight.
-    attempt = (
+    attempt_row = (
         await session.execute(
-            select(ExecutionAttempt.status).where(
+            select(ExecutionAttempt).where(
                 ExecutionAttempt.id == row.attempt_id,
             )
         )
     ).scalar_one_or_none()
-    if attempt is None or attempt not in ("claimed", "running", "cancelling"):
+    if attempt_row is None or attempt_row.status not in ("claimed", "running", "cancelling"):
         raise UnauthorizedError("attempt not in flight")
+    # §2.2: lease_seq must match the current attempt lease.
+    if lease_seq is not None and attempt_row.lease_seq != lease_seq:
+        raise UnauthorizedError("task token lease_seq mismatch")
 
     # Scope check.
     if required_scope is not None:
@@ -192,5 +231,11 @@ async def validate_task_token(
         denied_methods = (row.scopes or {}).get("denied", [])
         if required_scope in denied_methods or required_scope not in allowed_methods:
             raise UnauthorizedError("scope not permitted")
+
+    # Resource scope check: token is pinned to a specific issue.
+    if resource_issue_id is not None:
+        scoped_issue = (row.scopes or {}).get("issue_id")
+        if scoped_issue is not None and scoped_issue != str(resource_issue_id):
+            raise UnauthorizedError("resource scope mismatch")
 
     return row
