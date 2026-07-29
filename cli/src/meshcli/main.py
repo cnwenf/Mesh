@@ -31,10 +31,11 @@ class MeshGroup(click.Group):
         except click.UsageError as exc:
             name = args[0] if args else ""
             suggestion = did_you_mean(name, list(self.list_commands(ctx)))
-            if suggestion:
-                raise click.UsageError(
-                    f"{exc.format_message()} Did you mean {suggestion}?"
-                ) from None
+            message = exc.format_message()
+            # click ≥8.2 already appends its own "Did you mean …?" — only add
+            # ours when absent, never duplicate it (C7).
+            if suggestion and "Did you mean" not in message:
+                raise click.UsageError(f"{message} Did you mean {suggestion}?") from None
             raise
 
     def add_command(self, cmd, name=None):

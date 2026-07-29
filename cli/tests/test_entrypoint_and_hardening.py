@@ -29,7 +29,10 @@ class TestEntryPointDiscipline:
         result = run_raw(["isue", "list"])
         # Assert — usage errors stay exit 3 and point at the nearest command.
         assert result.exit_code == 3
-        assert "Did you mean issue?" in result.stderr
+        # Wording differs across click versions ("Did you mean 'issue'?" vs
+        # bare) — assert the suggestion is present, not its quoting (C7).
+        assert "Did you mean" in result.stderr
+        assert "issue" in result.stderr
 
     def test_broken_aliases_do_not_mask_usage(self, run_raw, mesh_env):
         # Arrange — valid YAML but an alias map the loader cannot iterate;

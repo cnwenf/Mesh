@@ -191,7 +191,11 @@ def load_credentials_raw() -> dict:
     path = credentials_path()
     if not path.exists():
         return {"version": CONFIG_VERSION, "hosts": {}}
-    with open(path, encoding="utf-8") as handle:
+    # O_NOFOLLOW closes the lstat→open race (C6): if a symlink is swapped in
+    # between the store validation and this open, the open itself refuses to
+    # follow it instead of reading through it.
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     data.setdefault("version", CONFIG_VERSION)
     data.setdefault("hosts", {})

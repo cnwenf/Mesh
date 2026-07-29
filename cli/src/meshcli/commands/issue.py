@@ -17,6 +17,25 @@ from meshcli.output import stderr
 ISSUE_COLUMNS = ["identifier", "title", "status", "priority", "assignee", "updated_at"]
 
 
+def _issue_row(row: dict) -> dict:
+    """Flatten nested objects for table cells (C5).
+
+    The API returns ``status`` (and ``assignee``) as related objects; the
+    table wants their human names, not a truncated JSON dump. JSON output is
+    unaffected — this mapper only feeds the table renderer.
+    """
+    out = dict(row)
+    status = out.get("status")
+    if isinstance(status, dict):
+        out["status"] = status.get("name") or status.get("id")
+    assignee = out.get("assignee")
+    if isinstance(assignee, dict):
+        out["assignee"] = (
+            assignee.get("display_name") or assignee.get("name") or assignee.get("id")
+        )
+    return out
+
+
 @root.group()
 def issue():
     """Work with issues."""
@@ -61,7 +80,7 @@ def list_issues(ctx, limit, fetch_all, status_filter, priority, assignee_id):
         envelope = app.call_all("GET", f"/api/v1/workspaces/{ws}/issues", params=params)
     else:
         envelope = app.call("GET", f"/api/v1/workspaces/{ws}/issues", params=params)
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 @issue.command("get")
@@ -83,7 +102,7 @@ def get_issue(ctx, issue_id, web):
         _web_open(app, f"/w/{ws}/issues/by-identifier/{issue_id}")
         return
     envelope = app.call("GET", f"/api/v1/issues/{_resolve_issue_id(app, issue_id)}")
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 def _resolve_issue_id(app, issue_id: str) -> str:
@@ -142,7 +161,7 @@ def create_issue(ctx, title, description_file, priority, assignee_id, project_id
         json=body,
         idempotency_key=idempotency_key or new_request_id(),
     )
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 @issue.command("update")
@@ -182,7 +201,7 @@ def update_issue(ctx, issue_id, title, description_file, priority, assignee_id, 
         json=body,
         if_match=str(expected_version) if expected_version is not None else None,
     )
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 @issue.command("status")
@@ -199,7 +218,7 @@ def set_status(ctx, issue_id, new_status):
     envelope = app.call(
         "PATCH", f"/api/v1/issues/{resolved}", json={"status": new_status}
     )
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 @issue.command("comment")
@@ -246,7 +265,7 @@ def children(ctx, issue_id):
     app = get_context(ctx)
     resolved = _resolve_issue_id(app, issue_id)
     envelope = app.call("GET", f"/api/v1/issues/{resolved}/children")
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
 
 
 @issue.command("dependencies")
@@ -272,4 +291,4 @@ def dependencies(ctx, issue_id, add_id):
         )
     else:
         envelope = app.call("GET", f"/api/v1/issues/{resolved}/dependencies")
-    app.emit(envelope, columns=ISSUE_COLUMNS)
+    app.emit(envelope, columns=ISSUE_COLUMNS, row_of=_issue_row)
