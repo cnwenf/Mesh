@@ -96,19 +96,35 @@ async def test_handler_failure_increments_attempts_then_fails(session_factory, w
     assert result.claimed == 0
 
 
-async def test_unknown_event_type_counts_as_failure(session_factory, workspace_factory):
+async def test_unregistered_event_type_is_not_claimed(session_factory, workspace_factory):
+    """Multi-relay architecture (integrations.md §3.8): the general relay
+    claims ONLY event types with registered handlers — unregistered types
+    (e.g. ``im.send``, delivered by the dedicated ack fast relay) stay
+    pending and must never consume the failure budget here."""
     workspace = await workspace_factory()
-    (event,) = await _seed(session_factory, workspace.id, event_type="nobody.handles", count=1)
-    # Pre-set attempts so one failed pass reaches max_attempts.
-    async with session_factory() as session, session.begin():
-        row = await session.get(OutboxEvent, event.id)
-        row.delivery_attempts = 4
+    (event,) = await _seed(session_factory, workspace.id, event_type="im.send", count=1)
     relay = OutboxRelay(session_factory, handlers={}, max_attempts=5)
     result = await relay.run_once()
-    assert result.failed == 1
+    assert result == RelayResult()  # nothing claimed
     async with session_factory() as session:
         row = await session.get(OutboxEvent, event.id)
-        assert row.status == OUTBOX_STATUS_FAILED
+        assert row.status == OUTBOX_STATUS_PENDING
+        assert row.delivery_attempts == 0
+
+
+async def test_dispatch_one_without_handler_fails_defensively(session_factory, workspace_factory):
+    """The no-handler branch survives as a defensive fallback for events
+    that somehow get claimed without a registered handler."""
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id, event_type="nobody.handles", count=1)
+    relay = OutboxRelay(session_factory, handlers={}, max_attempts=5)
+    async with session_factory() as session, session.begin():
+        row = await session.get(OutboxEvent, event.id)
+        frames = await relay.dispatch_one(session, row)
+        assert frames == []
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.delivery_attempts == 1
 
 
 async def test_run_once_empty_backlog(session_factory):
