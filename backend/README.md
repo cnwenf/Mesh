@@ -113,6 +113,12 @@ implements the first-frame precise-injection tier:
 - `mesh.web.appearance` holds the server-side chain resolution truth table
   (binary convergence; any lookup failure degrades to no injection — the
   entry never breaks the HTML response).
+- Session cookie (`auth.md §5.5`): `login`/`register`/`mfa/verify`/`refresh`
+  issue the HttpOnly `mesh_session` cookie (`Secure` derived from `auth_mode`,
+  overridable via `MESH_COOKIE_SECURE`; `SameSite=Strict`; `Path=/`) carrying the
+  refresh token — the additive channel this middleware reads; `logout`/`logout-all`
+  clear it. The in-body refresh token is retained for the Bearer API flow.
+
 - Deployment: nginx routes HTML document misses (`@app`) to this middleware;
   the built frontend is shared via the `frontend_dist` compose volume
   (`MESH_FRONTEND_DIST_DIR`, default `/srv/mesh/frontend`; absent → 404,
