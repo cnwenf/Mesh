@@ -82,6 +82,7 @@ claim 成功响应当前已包含 `task_spec`、`config_snapshot`、
 | 优先级 | 缺口 | 当前后果 | 本设计要求 |
 | --- | --- | --- | --- |
 | P0 | claim 只返回 `agent_config_version_id`，未返回不可变配置内容 | daemon 拿不到 system instructions、model 与完整 capability grants | claim 返回经过 Server 解析的 `agent_config` 快照及哈希 |
+| P0 | 没有 attempt-scoped Mesh 业务身份 | sandbox 若拿成员 PAT 会越权，若只拿 runtime token 又无法安全写当前任务 | claim 签发仅由 Broker 持有的 action token，绑定 attempt + lease + 当前资源 |
 | P0 | 普通 issue execution 完成后无通用结果评论 consumer | execution 可完成，但用户看不到 agent 最终答复 | 增加 `execution.finished` 的 agent result sink，幂等写评论 |
 | P0 | 没有 usage 上报与逻辑执行预算字段 | 无法证明真实 token 消耗，也无法跨 attempt 熔断 | 增加预算列、attempt 累计用量列与 fenced usage API |
 | P0 | mention enqueue 未走统一快照组装，`task_spec` 为空 | @agent 任务缺少评论上下文和 agent 配置 | assign / mention / autopilot 统一调用同一 snapshot builder |
@@ -114,7 +115,7 @@ checkpoint 可在首个 happy path 后完成，但在开放不受信任任务前
 │      ├─ LogSpool/Uploader ──────── POST logs                        │
 │      ├─ UsageReporter ──────────── POST report-usage                │
 │      ├─ Model controller process (有 provider 凭证，无仓库工具权限)  │
-│      └─ ToolBroker (无 provider/runtime token)                       │
+│      └─ ToolBroker (仅持有当前 attempt 的短期 action token)          │
 │             │                                                       │
 └─────────────┼───────────────────────────────────────────────────────┘
               │ attempt-scoped Unix socket / named pipe
@@ -132,8 +133,9 @@ checkpoint 可在首个 happy path 后完成，但在开放不受信任任务前
 - model controller 持有专用 coding CLI 认证，但没有直接 Bash / Read / Edit
   工具，也不挂载仓库；所有仓库操作经 ToolBroker；
 - task sandbox 挂载仓库并执行工具，但看不到 runtime token 和 provider 凭证；
-- ToolBroker 从父进程注入当前 attempt id、workspace 与 lease，不接受 sandbox
-  自报这些身份字段。
+- ToolBroker 只持有当前 attempt 的短期 action token；从父进程注入 attempt id、
+  workspace 与 lease，不接受 sandbox 自报这些身份字段，也不能 claim 或操作其它
+  attempt。
 
 ### 3.1 建议代码布局
 
@@ -458,6 +460,12 @@ sequenceDiagram
 - cleanup 只操作已校验的 attempt 目录；成功默认保留 1h，失败保留 24h，security
   freeze 保留到人工解冻；磁盘水位超过 80% 时停止 claim，先清理已终态目录。
 
+凭证只放在独立 tmpfs `/run/mesh-secrets/<attempt_id>`，不得进入上述持久目录。每个
+terminal cleanup 按固定 manifest 执行并审计：停止整个 cgroup → 关闭并删除 broker
+socket → 吊销 action token/envelope → 卸载 secret tmpfs → 删除 MCP config、CLI
+临时状态与 askpass → 截断已确认 spool → 删除或按 retention 隔离 worktree。security
+freeze 的例外只保留已脱敏现场，同时撤销凭证、关闭出站并将文件系统转只读。
+
 ### 7.2 Checkout
 
 1. 从 `config_snapshot.repo` 读取 URL、base ref、base SHA；任务 prompt 中的 URL
@@ -479,10 +487,27 @@ sequenceDiagram
 - 禁止 privileged、host PID/IPC/network、Docker socket 与宿主 HOME；
 - `no-new-privileges`、capabilities drop all、seccomp 与只读 `/proc`；
 - cgroup v2 限制 CPU、memory、pids；临时与工作目录设磁盘 quota；
-- 默认无出站网络。task_spec 域名 allowlist 解析后固定 IP 集合，DNS 重绑重新校验；
+- 默认无出站网络。sandbox 无原始网卡，只能访问 daemon 外部的 attempt-scoped
+  egress proxy；
 - 任务默认不能访问 Server machine API；ToolBroker 是唯一受控通道；
 - process backend 只在 `development=true` 且 workspace 标记为 trusted 时可用，
   心跳 capability 必须是 `isolation.process_dev`，不能伪装为 OCI。
+
+egress proxy 对每次新连接执行完整链路：
+
+```text
+规范化 allowlisted hostname
+  → 可信递归解析器解析全部 CNAME/A/AAAA
+  → 拒绝 RFC1918/loopback/link-local/ULA/metadata/reserved/multicast
+  → 解包 IPv4-mapped IPv6 后再次过滤
+  → 将本次连接钉死到已验证 IP（Host/SNI 仍为原 hostname）
+  → 代理建连，sandbox 不接触 DNS 与目标 IP 选择
+```
+
+HTTP 3xx 的每一跳都重新走 allowlist、解析、IP 过滤和钉死流程；DNS TTL 到期后新连接
+重新解析，现有连接不因二次解析切换目的 IP。代理拒绝直连 IP、非声明端口和未校验
+CONNECT。安全门禁必须覆盖 CNAME 链、DNS rebinding、IPv4-mapped IPv6、
+`169.254.169.254` 与重定向到私网。
 
 ### 7.4 子进程停止
 
@@ -526,7 +551,9 @@ claim 的执行输入必须由 Server 预先冻结，daemon 只按层装配：
 5. **恢复层**：经 Server 签名引用的 resume checkpoint。
 
 不可信数据永不拼进系统指令，也不能修改 CLI flags、MCP config、env、repo URL、
-预算或工具 allowlist。
+预算或工具 allowlist。squad 成员 result、leader 汇总输入和 agent 间追加消息同样
+属于不可信数据；每次跨 agent 传递都重新包入 `UNTRUSTED_DATA`，不得因为作者是
+agent 而提升为可信工作流层。
 
 ### 8.2 ToolBroker
 
@@ -540,6 +567,23 @@ MCP bridge 只暴露 capability grants 允许的工具：
 Broker 每个请求校验 attempt-scoped nonce、工具名、参数 schema、路径和命令 policy。
 nonce 只允许当前 attempt，不能调用 claim、heartbeat、credential refetch 或其它
 attempt。所有工具结果在返回模型前执行大小限制与 secret 扫描。
+
+动作到闸门的唯一映射：
+
+| 动作 | 最低 grant | Broker 行为 |
+| --- | --- | --- |
+| 当前 worktree 读、搜索、`git diff/status/log` | `read_only` | 只读执行；路径越界直接拒绝 |
+| 当前 worktree 写、格式化、测试、无网络构建 | `write` | 命令 AST/policy 校验后在 sandbox 执行 |
+| `git clone/fetch` 冻结 repo | `read_only` | daemon checkout helper 执行；只发短期只读凭证 |
+| `git commit` 当前 attempt 分支 | `write` | 仅允许 Server 冻结的 author/policy |
+| `git push`、发布、外部上传/POST、删除远端资源 | `confirm_required` | 未取得人类 approval 绝不执行；批准后的新 attempt 才获得一次性写凭证 |
+| 当前 issue 评论/状态、当前 squad task 操作 | `write` + 对应 task scope | Broker 使用短期 action token 调 Server |
+| 跨 issue 批量写、agent trigger、工作区管理、credential 明文读取 | 不暴露 | 无 grant 可开启，始终拒绝 |
+
+model controller 以 `--tools ""` 禁用内置 Bash/Read/Edit/Web，再用
+`--strict-mcp-config` 只装载 Broker，因此不存在绕过 Broker 的第二条执行路径；
+设计明确禁止 `bypassPermissions`。git 只读与写凭证分开颁发，写凭证只在
+`confirm_required` 批准后的新 attempt 中短时存在。
 
 ### 8.3 日志
 
@@ -635,7 +679,8 @@ diff、result 与 checkpoint artifact 必须在 Server 写对象存储或评论�
 - 激活只颁发本 runtime 的机器 scope，不具备用户、评论、issue 更新能力；
 - 每条 machine route 同时校验 token scope、runtime id、workspace、status；
 - daemon token 仅在父进程 TokenStore 中存在。Linux 优先 systemd credential；
-  fallback 文件必须 owner-only 0600、目录 0700；
+  fallback 启动时用 `lstat/open(O_NOFOLLOW)` 验证非 symlink、owner 等于 daemon
+  uid、文件权限恰为 0600 且父目录不宽于 0700；任一不符 fail closed；
 - `POST /daemon/runtimes/{id}/tokens:rotate` 用当前 token 换新 token；旧 token 仅保留
   10 分钟 grace。daemon 原子持久化并用新 token 完成一次 heartbeat 后，Server
   可提前吊销旧 token；
@@ -644,7 +689,33 @@ diff、result 与 checkpoint artifact 必须在 Server 写对象存储或评论�
 - token 绝不进入日志、异常 repr、metrics label、子进程 env、SQLite 或 core dump；
 - Server 对 token 只做常量时间哈希比较，未知 / 已吊销 / 跨 runtime 统一返回 401。
 
-### 9.2 子进程 env
+### 9.2 Attempt action token
+
+需要调用 Mesh 业务工具时，claim 额外签发短期 action token。它与 runtime token
+分型、分表、分 scope：
+
+```text
+workspace_id + agent_member_id + execution_id + attempt_id + lease_seq
+scopes = context:read, current_issue:comment, current_issue:status,
+         current_squad_task:write
+```
+
+- 默认没有 `agent:trigger`、跨 issue、成员、runtime、credential 或管理 scope；
+- TTL 为 `min(当前 lease 剩余时间, 5min)`；每次续租后由 daemon 父进程向 Server
+  换取新 token，旧 token grace 不超过 30s；
+- token 只进入 daemon-side ToolBroker 的内存，不进入 sandbox/model controller
+  env、文件、stdin、MCP 参数或工具结果；
+- Server 每次校验 token 中的 attempt 与数据库当前 holder/`lease_seq`，并按
+  token 60 requests/min、写操作 10 requests/min 限流；
+- attempt terminal、reclaimed、freeze 或 lease mismatch 时 Server 立即吊销；
+- Broker 返回经过 schema/大小/secret 扫描的业务结果，不回显 token；
+- 当前 issue 最终结果仍可由 §8.4 result sink 幂等兜底，避免 CLI 在完成后必须再
+  持有业务 token 才能交付结果。
+
+Server 新增 `execution_action_tokens`（只存 hash、scope、绑定字段、expires/revoked）
+或等价的短期签名凭证吊销台账；不得把成员 PAT/agent PAT 交给 daemon 或任务。
+
+### 9.3 子进程 env
 
 env 从空字典开始构造，不继承 daemon 的 `os.environ`。固定允许：
 
@@ -667,14 +738,22 @@ Server 已拒绝 `LD_*`、`DYLD_*`、`PYTHON*`、`PATH`、`NODE_OPTIONS`、
 - 终态 / freeze / refetch 时立即吊销并从内存覆盖删除；
 - 加入本地和 Server 两层 redaction blacklist。
 
-### 9.3 Provider 凭证
+ToolBroker socket 位于 daemon 私有 0700 目录、mode 0600；连接时校验
+`SO_PEERCRED`/平台等价机制的 uid 与 attempt cgroup 身份。socket 名称、fd 和 nonce
+不得跨 attempt 复用。
+
+### 9.4 Provider 凭证
 
 provider 凭证属于 model controller 安全域，不进入 repo sandbox。每个 runtime 使用
 专用最小权限账号/凭证，不复用个人日常 HOME。若目标 CLI 无法在“controller 无内置
 工具、repo 工具只走 broker”的模式下工作，该 CLI 只能在 trusted-local profile
 启用，不能宣称满足 production isolation。
 
-### 9.4 Approval checkpoint
+controller profile 从专用 credential store 复制到不向 sandbox 挂载的私有 tmpfs；
+禁用 provider telemetry 与自动更新，终态卸载 tmpfs。adapter probe 若不能确认钉住
+版本支持所需禁用项，production profile fail closed。
+
+### 9.5 Approval checkpoint
 
 checkpoint 只包含：
 
@@ -822,6 +901,15 @@ Python 代码通过可复现 lockfile 构建为版本化独立 artifact；发布
 签名、SBOM、protocol major 和支持的 CLI 版本矩阵。daemon 不自更新；升级由管理员
 或平台在 draining 后完成。
 
+供应链 CI 必须：
+
+- 依赖精确钉住并校验 hash，禁止未审查的动态安装；
+- 运行 `pip-audit` 与依赖许可证/SBOM 扫描，已知 CRITICAL/HIGH 漏洞阻断合入；
+- 对可复现构建产物重新计算 hash、验证签名，并用篡改 artifact 负向测试证明拒装；
+- provider CLI 只允许版本矩阵中的签名安装，不从 daemon 自动更新；
+- real_llm workflow 只允许 `workflow_dispatch` / 受保护定时任务，在需环境审批的
+  专用 runner 上运行；不得由 `pull_request` 或 fork 事件取得 secret。
+
 ### 12.2 配置项
 
 | 配置 | 默认 | 说明 |
@@ -881,7 +969,7 @@ health：
 | 变更 | 请求 / 响应关键点 | 幂等 / fencing |
 | --- | --- | --- |
 | 扩展 activate / heartbeat | protocol、daemon version、inventory、features | inventory hash 去重 |
-| 扩展 claim | resolved `agent_config`、prompt layers、budget remaining、output sink、claim request id | `claim_request_id` 每 runtime 唯一 |
+| 扩展 claim | resolved `agent_config`、prompt layers、budget remaining、output sink、claim request id、短期 action token | `claim_request_id` 每 runtime 唯一；action token 绑定 attempt + lease |
 | `POST attempts/{id}:report-usage` | §10.2 cumulative schema | `lease_seq` + `usage_seq` |
 | `POST attempts/{id}:relinquish` | `{lease_seq, reason}` | terminal/requeue 单事务，重复 no-op |
 | runtime token rotate | 新 token 一次性返回，旧 token grace | token family + confirm heartbeat |
@@ -901,6 +989,7 @@ health：
 新增/调整：
 
 - `runtime_tokens`；
+- `execution_action_tokens`（或等价的可吊销短期签名凭证台账）；
 - task/execution usage 与 budget 字段；
 - attempt executor/session/usage 字段；
 - attempt `claim_request_id` 与 `UNIQUE(runtime_id, claim_request_id)`；
@@ -920,6 +1009,12 @@ health：
 3. claim 的 frozen config 只有版本 id，没有可执行配置内容；
 4. mention producer 没有与 assign producer 共用 snapshot / task_spec；
 5. `execution.finished` 目前只注册 squad consumer，普通 issue 缺结果 sink。
+
+token 迁移顺序固定为：创建 `runtime_tokens` → 从现有 runtime hash 回填一条 active
+记录 → 部署只读新表且停止创建新 `api_tokens` 行 → 验证 activate/rotate/pause/
+decommission 与旧 token 401 负向 → 吊销并清理历史 runtime `api_tokens` 关联 →
+最后删除 `runtime_token_id` 与旧 hash 列。迁移期间允许双读但禁止双写，且必须有
+回滚窗口，不能直接删列破坏在线 runtime。
 
 开发阶段必须用迁移、代码与 Spec 一起收口，不能只在 daemon 中绕过。
 
@@ -970,6 +1065,9 @@ health：
 
 真实 E2E 必须启动 PostgreSQL、Redis、对象存储、Server worker、realtime gateway 与
 独立 daemon 进程，并使用已认证的真实 Claude Code；禁止替换成固定输出进程。
+workflow 使用受保护 environment、专用 runner 与 `concurrency=1`，费用上限必填；
+外部 PR/fork 不触发、不获得 secret。workspace/runtime/execution 全部经真实 API
+创建，禁止用 psql/ORM 直插播种来绕过注册、claim 或鉴权。
 
 #### B1：最小 happy path
 
@@ -997,15 +1095,44 @@ health：
 #### B3：安全
 
 - sandbox 读取 daemon/provider token 失败；
+- `max_concurrent>1` 时 attempt A 无法读取 attempt B 的目录、`/proc`、env、
+  broker socket/nonce/action token，A/B 均无法读取 daemon 进程内存与控制 socket；
 - env dump、异常栈、日志、评论、diff 中无 secret；
 - repo URL 越过 frozen allowlist 被 clone 前拒绝；
-- 私网 / link-local / metadata 出站失败；
+- 私网 / link-local / metadata、CNAME rebinding、IPv4-mapped IPv6、重定向到私网
+  均在 egress proxy 建连前失败；
+- 恶意 repo 内 `.mcp.json`、`.claude/settings.json`、hooks 与项目指令不被加载，
+  不能增加工具或绕过 Broker；
+- `confirm_required` 的 push/发布/外部写在 approval 前没有网络请求、凭证签发或
+  文件外副作用；批准后由新 attempt 从 checkpoint 恢复；
 - 旧 lease holder 的日志、usage、结果均 409；
-- `confirm_required` 工具批准前没有副作用，批准后新 attempt 从 checkpoint 恢复。
 
 ---
 
-## 15. 设计评审检查表
+## 15. MES-93 安全必修收口映射
+
+| 项 | 收口位置与可验证结论 |
+| --- | --- |
+| S-01 | §4.3：`--bare` + `--tools ""` + `--strict-mcp-config`，不加载 repo settings/hooks/MCP/memory；B3 恶意 repo 负向 |
+| S-02 | §8.2：动作→grant→闸门唯一表；明确禁 `bypassPermissions`，写凭证只在批准后的新 attempt 颁发 |
+| S-03 | §7.3 与 B3：`max_concurrent>1` 下 A→B、sandbox→daemon 的目录/进程/env/socket/token 负向矩阵 |
+| S-04 | §7.3：attempt-scoped egress proxy 执行可信解析→全 IP 过滤→钉死建连，重定向逐跳复验；B3 覆盖 rebinding |
+| S-05 | §9.2：action token 绑定 workspace/member/execution/attempt/lease，TTL、续期、限流、持有域和吊销时序写死 |
+| S-06 | §2.2、§8.4、§13：result/diff/artifact 双层全通道扫描，Server 落盘前兜底与 freeze |
+| S-07 | §10：预算入队冻结、CLI 原生硬限、daemon reserve/watchdog、Server 跨 attempt/workspace 汇总与 fail closed |
+| S-08 | §7.1、§8.3、§9.4：WAL 先脱敏、secret 仅 tmpfs、terminal cleanup manifest、journal 禁明文 |
+| S-09 | §8.1：issue/评论/repo/成员 result/leader 汇总均为不可信层；P0 统一所有 trigger snapshot |
+| S-10 | §9.1/§9.3：token file owner/symlink/mode 三查 fail closed、env 双检、Broker socket 0600 + peer uid/cgroup |
+| S-11 | §9.1/§13.4：`runtime_tokens` 单一机器凭证真源，迁移移除 `api_tokens` 双写与依赖并补旧 token 负向 |
+| S-12 | 全文与发布形态统一使用权威二进制名 `mesh-runtime` |
+| S-13 | §12.1/B：锁定依赖、`pip-audit`/SBOM/签名篡改门禁，real_llm 仅受保护 runner、非 PR、concurrency=1、无 DB 直插 |
+
+S-01～S-04 为开发放行前的 HIGH 门禁；其负向测试不得降级为普通告警或
+trusted-local profile 结果。
+
+---
+
+## 16. 设计评审检查表
 
 - [ ] runtime token 与 provider credential 均不进入仓库工具沙箱；
 - [ ] claim / logs / usage / result 全部带可验证的 attempt 与 lease fencing；
