@@ -22,7 +22,10 @@ import hmac
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import httpx
 
 # integrations.md §2.3 — kind → normalized provider.
 KIND_TO_PROVIDER: dict[str, str] = {
@@ -58,9 +61,7 @@ def _constant_time_equals(expected: str, presented: str) -> bool:
     return hmac.compare_digest(expected.lower(), (presented or "").lower())
 
 
-def _timestamp_within_window(
-    raw_ts: str | None, *, now: datetime, tolerance: timedelta
-) -> bool:
+def _timestamp_within_window(raw_ts: str | None, *, now: datetime, tolerance: timedelta) -> bool:
     """Replay protection: reject timestamps outside ±tolerance (autopilot §3.2)."""
     try:
         ts = float(str(raw_ts or "").strip())
@@ -193,8 +194,8 @@ def slack_normalize(payload: dict[str, Any], headers: dict[str, str]) -> Normali
     event = payload.get("event") or {}
     team_id = str(payload.get("team_id") or event.get("team") or "")
     event_ts = str(event.get("event_ts") or payload.get("event_time") or "")
-    external_event_id = f"{team_id}:{event_ts}" if team_id and event_ts else (
-        event_ts or str(payload.get("event_id") or "")
+    external_event_id = (
+        f"{team_id}:{event_ts}" if team_id and event_ts else (event_ts or str(payload.get("event_id") or ""))
     )
     return NormalizedEvent(
         external_event_id=external_event_id,
@@ -229,9 +230,7 @@ def github_verify(
     presented = lowered.get("x-hub-signature-256")
     if not presented:
         return SIG_MISSING
-    expected = "sha256=" + hmac.new(
-        webhook_secret.encode(), raw_body, hashlib.sha256
-    ).hexdigest()
+    expected = "sha256=" + hmac.new(webhook_secret.encode(), raw_body, hashlib.sha256).hexdigest()
     if not _constant_time_equals(expected, presented):
         return SIG_INVALID
     return SIG_VALID
@@ -291,9 +290,7 @@ def gitlab_verify(
     lowered = {k.lower(): v for k, v in headers.items()}
     signature = lowered.get("x-gitlab-signature")
     if signature:
-        expected = "sha256=" + hmac.new(
-            webhook_token.encode(), raw_body, hashlib.sha256
-        ).hexdigest()
+        expected = "sha256=" + hmac.new(webhook_token.encode(), raw_body, hashlib.sha256).hexdigest()
         if not _constant_time_equals(expected, signature):
             return SIG_INVALID
         return SIG_VALID
@@ -400,7 +397,7 @@ async def test_connectivity(
     *,
     config: dict[str, Any] | None,
     secret: str | None,
-    http_client: "httpx.AsyncClient | None" = None,
+    http_client: httpx.AsyncClient | None = None,
     base_urls: dict[str, str] | None = None,
 ) -> tuple[str, str | None]:
     """Lightweight platform-API round-trip; returns ``(health_state, detail)``.
@@ -456,8 +453,10 @@ async def test_connectivity(
             if resp.status_code != 200:
                 return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
             body = _json_or_empty(resp)
-            return (HEALTH_HEALTHY, None) if body.get("ok") else (
-                HEALTH_AUTH_FAILED, str(body.get("error") or "invalid_auth")
+            return (
+                (HEALTH_HEALTHY, None)
+                if body.get("ok")
+                else (HEALTH_AUTH_FAILED, str(body.get("error") or "invalid_auth"))
             )
         if kind == "im_dingtalk":
             app_key = str(config.get("app_key") or config.get("app_id") or "")
@@ -497,9 +496,7 @@ async def test_connectivity(
         if kind == "vcs_gitlab":
             base = str(config.get("instance_url") or bases[kind]).rstrip("/")
             try:
-                resp = await client.get(
-                    f"{base}/api/v4/user", headers={"PRIVATE-TOKEN": secret}
-                )
+                resp = await client.get(f"{base}/api/v4/user", headers={"PRIVATE-TOKEN": secret})
             except (_httpx.HTTPError, OSError) as exc:
                 return HEALTH_UNREACHABLE, type(exc).__name__
             if resp.status_code == 200:
@@ -513,7 +510,7 @@ async def test_connectivity(
             await client.aclose()
 
 
-def _json_or_empty(resp: "httpx.Response") -> dict[str, Any]:
+def _json_or_empty(resp: httpx.Response) -> dict[str, Any]:
     try:
         body = resp.json()
     except (ValueError, json.JSONDecodeError):

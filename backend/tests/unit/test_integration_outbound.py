@@ -59,9 +59,7 @@ def make_worker(session_factory, *, transport=None, resolver=None, **overrides):
         timeout_seconds=5,
         break_threshold=overrides.get("break_threshold", 2),
         poll_interval=0.01,
-        http_client_factory=(
-            (lambda: httpx.AsyncClient(transport=transport)) if transport else None
-        ),
+        http_client_factory=((lambda: httpx.AsyncClient(transport=transport)) if transport else None),
         resolver=resolver or public_resolver,
         clock=lambda: NOW,
     )
@@ -90,8 +88,10 @@ async def make_delivery(session_factory, world, subscription, *, event_ref="evt-
 
         await set_tenant_context(session, world["ws"])
         delivery = WebhookSubscriptionDelivery(
-            workspace_id=world["ws"], subscription_id=subscription.id,
-            event_ref=event_ref, state="pending",
+            workspace_id=world["ws"],
+            subscription_id=subscription.id,
+            event_ref=event_ref,
+            state="pending",
         )
         session.add(delivery)
     return delivery
@@ -225,13 +225,9 @@ async def test_delivery_failure_retries_with_backoff_then_fails(session_factory)
 
 async def test_circuit_breaker_trips_and_resume_clears(session_factory):
     world = await seed_world(session_factory)
-    subscription, _ = await make_subscription(
-        session_factory, world, event_types=[]
-    )
+    subscription, _ = await make_subscription(session_factory, world, event_types=[])
     transport = RecordingTransport(500)
-    worker = make_worker(
-        session_factory, transport=transport, max_attempts=1, break_threshold=2
-    )
+    worker = make_worker(session_factory, transport=transport, max_attempts=1, break_threshold=2)
     # Two distinct events → two failed deliveries → fail_count=2 → breaker.
     for i in range(2):
         await make_delivery(session_factory, world, subscription, event_ref=f"evt-{i}")
@@ -262,9 +258,7 @@ async def test_ssrf_at_delivery_fails_delivery(session_factory):
     subscription, _ = await make_subscription(session_factory, world)
     delivery = await make_delivery(session_factory, world, subscription)
     transport = RecordingTransport(200)
-    worker = make_worker(
-        session_factory, transport=transport, resolver=private_resolver, max_attempts=1
-    )
+    worker = make_worker(session_factory, transport=transport, resolver=private_resolver, max_attempts=1)
     await worker.run_once()
     assert transport.requests == [], "private-resolved target must never be POSTed"
     async with session_factory() as session:
@@ -280,9 +274,7 @@ async def test_ssrf_at_delivery_fails_delivery(session_factory):
 
 async def test_derivation_and_dispatch_creates_one_delivery(session_factory):
     world = await seed_world(session_factory)
-    await make_subscription(
-        session_factory, world, event_types=["issue.updated"]
-    )
+    await make_subscription(session_factory, world, event_types=["issue.updated"])
     async with session_factory() as session, session.begin():
         from mesh.db.tenant import set_tenant_context
 
@@ -300,11 +292,15 @@ async def test_derivation_and_dispatch_creates_one_delivery(session_factory):
         await session.flush()
         await ob.derive_dispatch_from_realtime(session, outbox_event)
     async with session_factory() as session:
-        dispatch = (await session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.event_type == ob.WEBHOOK_DISPATCH_EVENT_TYPE
+        dispatch = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == ob.WEBHOOK_DISPATCH_EVENT_TYPE)
+                )
             )
-        )).scalars().first()
+            .scalars()
+            .first()
+        )
         assert dispatch is not None
     async with session_factory() as session, session.begin():
         await ob.webhook_dispatch_handler(session, dispatch)
@@ -312,9 +308,7 @@ async def test_derivation_and_dispatch_creates_one_delivery(session_factory):
         from mesh.db.tenant import set_tenant_context
 
         await set_tenant_context(session, world["ws"])
-        deliveries = (await session.execute(
-            select(WebhookSubscriptionDelivery)
-        )).scalars().all()
+        deliveries = (await session.execute(select(WebhookSubscriptionDelivery))).scalars().all()
         assert len(deliveries) == 1
         assert deliveries[0].state == "pending"
     # Redelivery (at-least-once) → UNIQUE(subscription_id, event_ref) no-op.
@@ -324,9 +318,7 @@ async def test_derivation_and_dispatch_creates_one_delivery(session_factory):
         from mesh.db.tenant import set_tenant_context
 
         await set_tenant_context(session, world["ws"])
-        deliveries = (await session.execute(
-            select(WebhookSubscriptionDelivery)
-        )).scalars().all()
+        deliveries = (await session.execute(select(WebhookSubscriptionDelivery))).scalars().all()
         assert len(deliveries) == 1
 
 
@@ -342,11 +334,15 @@ async def test_derivation_skips_non_matching_event_types(session_factory):
         session.add(outbox_event)
         await session.flush()
         await ob.derive_dispatch_from_realtime(session, outbox_event)
-        dispatches = (await session.execute(
-            select(OutboxEvent).where(
-                OutboxEvent.event_type == ob.WEBHOOK_DISPATCH_EVENT_TYPE
+        dispatches = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == ob.WEBHOOK_DISPATCH_EVENT_TYPE)
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         assert dispatches == []
 
 
@@ -366,7 +362,9 @@ async def test_retry_delivery_requeues_failed(session_factory):
         row = await session.get(WebhookSubscriptionDelivery, delivery.id)
         row.state = "failed"
         result = await ob.retry_delivery(
-            session, workspace_id=world["ws"], subscription=subscription,
+            session,
+            workspace_id=world["ws"],
+            subscription=subscription,
             delivery_id=delivery.id,
         )
         assert result.state == "pending"
@@ -386,7 +384,9 @@ async def test_retry_delivery_breaker_open_rejected(session_factory):
         row.state = "failed"
         with pytest.raises(BusinessRuleError) as excinfo:
             await ob.retry_delivery(
-                session, workspace_id=world["ws"], subscription=sub,
+                session,
+                workspace_id=world["ws"],
+                subscription=sub,
                 delivery_id=delivery.id,
             )
         assert excinfo.value.code == "subscription_circuit_open"
@@ -415,6 +415,264 @@ async def test_get_subscription_foreign_workspace_404(session_factory):
     subscription, _ = await make_subscription(session_factory, world)
     async with session_factory() as session:
         with pytest.raises(NotFoundError):
-            await ob.get_subscription(
-                session, workspace_id=uuid.uuid4(), subscription_id=subscription.id
+            await ob.get_subscription(session, workspace_id=uuid.uuid4(), subscription_id=subscription.id)
+
+
+# ---------------------------------------------------------------------------
+# §3.4 / P8 — deliveries carry the REAL event type + payload
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_handler_persists_event_type_and_payload(session_factory):
+    """HIGH-1: the dispatch handler stores event_type + payload on the ledger
+    row so the worker can send the real Mesh-Event long after the source
+    outbox event is purged."""
+    world = await seed_world(session_factory)
+    await make_subscription(session_factory, world, event_types=["issue.updated"])
+    async with session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        outbox_event = OutboxEvent(
+            workspace_id=world["ws"],
+            event_type="realtime.publish",
+            payload={
+                "channel": f"workspace:{world['ws']}:issues",
+                "event": "issue.updated",
+                "data": {"id": "issue-1", "status": "done"},
+            },
+        )
+        session.add(outbox_event)
+        await session.flush()
+        await ob.derive_dispatch_from_realtime(session, outbox_event)
+    async with session_factory() as session:
+        dispatch = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == ob.WEBHOOK_DISPATCH_EVENT_TYPE)
+                )
             )
+            .scalars()
+            .first()
+        )
+    async with session_factory() as session, session.begin():
+        await ob.webhook_dispatch_handler(session, dispatch)
+    async with session_factory() as session:
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        delivery = (await session.execute(select(WebhookSubscriptionDelivery))).scalars().one()
+        # The real event type + the full data are persisted at derivation time.
+        assert delivery.event_type == "issue.updated"
+        assert delivery.payload == {
+            "event": "issue.updated",
+            "data": {"id": "issue-1", "status": "done"},
+        }
+
+
+async def test_deliver_one_sends_event_type_header_and_body(session_factory):
+    """HIGH-1 / P8: Mesh-Event carries the event TYPE and the body carries
+    event + data so a subscriber reconstructs the domain event alone."""
+    world = await seed_world(session_factory)
+    subscription, secret = await make_subscription(session_factory, world)
+    async with session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        delivery = WebhookSubscriptionDelivery(
+            workspace_id=world["ws"],
+            subscription_id=subscription.id,
+            event_ref="src-event-1",
+            event_type="issue.updated",
+            payload={"event": "issue.updated", "data": {"id": "issue-9"}},
+            state="pending",
+        )
+        session.add(delivery)
+    transport = RecordingTransport(200)
+    worker = make_worker(session_factory, transport=transport)
+    assert await worker.run_once() == 1
+    request = transport.requests[0]
+    assert request.headers["Mesh-Event"] == "issue.updated"
+    import json as _json
+
+    body = _json.loads(request.content)
+    assert body["event"] == "issue.updated"
+    assert body["data"] == {"id": "issue-9"}
+    assert body["event_ref"] == "src-event-1"
+    assert body["delivery_id"] == str(delivery.id)
+    # The signature still covers the exact bytes that were sent.
+    header = request.headers["Mesh-Signature"]
+    ts = header.split(",")[0][2:]
+    expected = hmac.new(secret.encode(), f"{ts}.".encode() + request.content, hashlib.sha256).hexdigest()
+    assert header.split("v1=")[1] == expected
+
+
+# ---------------------------------------------------------------------------
+# §3.1 — POST .../webhook-subscriptions/{id}:send-test
+# ---------------------------------------------------------------------------
+
+
+async def test_send_test_event_creates_pending_webhook_test_delivery(session_factory):
+    world = await seed_world(session_factory)
+    subscription, _ = await make_subscription(session_factory, world)
+    async with session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        sub = await session.get(WebhookSubscription, subscription.id)
+        first = await ob.send_test_event(
+            session,
+            workspace_id=world["ws"],
+            subscription=sub,
+            actor_member_id=world["member"],
+        )
+        second = await ob.send_test_event(
+            session,
+            workspace_id=world["ws"],
+            subscription=sub,
+            actor_member_id=world["member"],
+        )
+    assert first.state == "pending"
+    assert first.event_type == ob.WEBHOOK_TEST_EVENT_TYPE
+    assert first.payload["event"] == ob.WEBHOOK_TEST_EVENT_TYPE
+    assert first.payload["data"]["synthetic"] is True
+    # A unique event_ref per call keeps the UNIQUE(subscription_id, event_ref)
+    # idempotency key from colliding across repeated tests.
+    assert first.event_ref != second.event_ref
+    assert first.event_ref.startswith("test:")
+
+
+async def test_send_test_event_rejects_disabled_subscription(session_factory):
+    world = await seed_world(session_factory)
+    subscription, _ = await make_subscription(session_factory, world)
+    async with session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        sub = await session.get(WebhookSubscription, subscription.id)
+        sub.status = "disabled"
+        with pytest.raises(BusinessRuleError) as excinfo:
+            await ob.send_test_event(
+                session,
+                workspace_id=world["ws"],
+                subscription=sub,
+                actor_member_id=world["member"],
+            )
+        assert excinfo.value.code == "subscription_circuit_open"
+
+
+async def test_send_test_event_rejects_non_active_subscription(session_factory):
+    world = await seed_world(session_factory)
+    subscription, _ = await make_subscription(session_factory, world)
+    async with session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, world["ws"])
+        sub = await session.get(WebhookSubscription, subscription.id)
+        sub.status = "paused"
+        with pytest.raises(BusinessRuleError) as excinfo:
+            await ob.send_test_event(
+                session,
+                workspace_id=world["ws"],
+                subscription=sub,
+                actor_member_id=world["member"],
+            )
+        assert excinfo.value.code == "invalid_request"
+
+
+# ---------------------------------------------------------------------------
+# §6.16 — DNS-rebinding TOCTOU closure (real socket + structural)
+# ---------------------------------------------------------------------------
+
+
+async def test_pinned_backend_dials_pinned_ip_not_hostname():
+    """MEDIUM-2: the pinned network backend connects to the validated IP and
+    NEVER re-resolves the URL hostname. A real loopback server stands in for
+    the validated public address; the hostname passed in is one that does not
+    resolve — proof the connection used the pinned IP, not a fresh lookup."""
+    import asyncio
+
+    received = asyncio.Event()
+
+    async def _on_connect(reader, writer):
+        received.set()
+        writer.close()
+
+    server = await asyncio.start_server(_on_connect, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        backend = ob._PinnedNetworkBackend(("127.0.0.1",))
+        # The hostname is deliberately unresolvable: success is only possible
+        # if the backend ignores it and dials the pinned loopback address.
+        stream = await backend.connect_tcp(
+            "rebinding-hostname-that-must-not-resolve.invalid", port, timeout=5
+        )
+        assert stream is not None
+        await asyncio.wait_for(received.wait(), timeout=5)
+        await stream.aclose()
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_pinned_backend_raises_when_pinned_ip_unreachable():
+    """Negative: with no listener on the pinned address the connect fails —
+    the backend never falls back to resolving the hostname."""
+    import socket as _socket
+
+    import pytest as _pytest
+
+    # Reserve a port and immediately release it → nothing listens there.
+    with _socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead_port = sock.getsockname()[1]
+    backend = ob._PinnedNetworkBackend(("127.0.0.1",))
+    with _pytest.raises(Exception):  # noqa: B017, PT011 — any connect failure
+        await backend.connect_tcp("anything.example.com", dead_port, timeout=2)
+
+
+def test_worker_client_pins_validated_addresses():
+    """Structural proof the worker wires the pinned backend into httpx so the
+    validated IPs are the only dialable addresses (no redirect following)."""
+    pinned = ob.assert_public_resolved("https://hooks.example.com/x", resolver=public_resolver)
+    worker = ob.WebhookDeliveryWorker(None, signing_secret=TEST_SIGNING_SECRET, resolver=public_resolver)
+    client = worker._client(pinned)
+    transport = client._transport
+    assert isinstance(transport._pool._network_backend, ob._PinnedNetworkBackend)
+    assert transport._pool._network_backend._pinned_ips == tuple(PUBLIC_IPS)
+    assert client.follow_redirects is False, "redirects would re-enter an unvalidated host"
+
+
+def test_render_subscription_success_rate_math():
+    """§4.1 成功率 = sent / total, null on an empty sample."""
+    subscription = WebhookSubscription(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        url="https://hooks.example.com/x",
+        event_types=["issue.updated"],
+        status="active",
+        fail_count=0,
+        secret_ref="cipher",
+        created_by=uuid.uuid4(),
+    )
+    none_sample = ob.render_subscription(subscription)
+    assert none_sample["success_rate"] is None
+    assert none_sample["deliveries_total"] == 0
+    half = ob.render_subscription(subscription, delivery_stats=(10, 5))
+    assert half["success_rate"] == 0.5
+    assert half["deliveries_total"] == 10 and half["deliveries_sent"] == 5
+    full = ob.render_subscription(subscription, delivery_stats=(4, 4))
+    assert full["success_rate"] == 1.0
+
+
+def test_assert_public_resolved_maps_unreachable_to_ssrf_blocked():
+    """SourceUnreachableError (private/loopback/metadata) collapses to the
+    neutral 422 ssrf_blocked — no internal topology leaks."""
+    from mesh.skill.ssrf import SourceUnreachableError
+
+    def raising_resolver(host, port):
+        raise SourceUnreachableError("unreachable")
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        ob.assert_public_resolved("https://x.example.com", resolver=raising_resolver)
+    assert excinfo.value.code == "ssrf_blocked"

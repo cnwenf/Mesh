@@ -31,11 +31,13 @@ def make_service(session_factory) -> IntegrationService:
 
 
 def test_config_non_secret_accepts_refs():
-    assert_config_non_secret({
-        "app_id": "cli_123",
-        "signing_secret_ref": "gAAAAAB-ciphertext",
-        "callback_base": "https://mesh.example.com",
-    })
+    assert_config_non_secret(
+        {
+            "app_id": "cli_123",
+            "signing_secret_ref": "gAAAAAB-ciphertext",
+            "callback_base": "https://mesh.example.com",
+        }
+    )
 
 
 def test_config_rejects_plaintext_secret_keys():
@@ -61,8 +63,12 @@ async def test_create_integration_encrypts_secret_and_never_echoes(session_facto
 
         member = await session.get(Member, world["member"])
     result = await service.create_integration(
-        workspace_id=world["ws"], creator=member, kind="im_slack",
-        name="slack-2", config={"team_id": "T_NEW"}, secret="bot-secret-xyz",
+        workspace_id=world["ws"],
+        creator=member,
+        kind="im_slack",
+        name="slack-2",
+        config={"team_id": "T_NEW"},
+        secret="bot-secret-xyz",
     )
     rendered = result["integration"]
     assert rendered["has_secret"] is True
@@ -70,9 +76,7 @@ async def test_create_integration_encrypts_secret_and_never_echoes(session_facto
     assert "secret" not in {k for k in rendered if k != "has_secret"}
     # Ciphertext round-trip.
     async with session_factory() as session:
-        row = await session.scalar(
-            select(Integration).where(Integration.name == "slack-2")
-        )
+        row = await session.scalar(select(Integration).where(Integration.name == "slack-2"))
         assert row is not None
         assert row.secret_ref != "bot-secret-xyz"
         assert service.decrypt_integration_secret(row) == "bot-secret-xyz"
@@ -91,8 +95,11 @@ async def test_create_integration_rejects_bad_kind_and_secret_config(session_fac
         )
     with pytest.raises(BusinessRuleError):
         await service.create_integration(
-            workspace_id=world["ws"], creator=member, kind="im_slack",
-            name="y", config={"signing_secret": "plain!"},
+            workspace_id=world["ws"],
+            creator=member,
+            kind="im_slack",
+            name="y",
+            config={"signing_secret": "plain!"},
         )
 
 
@@ -116,17 +123,14 @@ async def test_update_and_soft_delete_integration(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     updated = await service.update_integration(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         status="disabled",
     )
     assert updated["status"] == "disabled"
-    await service.delete_integration(
-        workspace_id=world["ws"], integration_id=world["integ_slack"]
-    )
+    await service.delete_integration(workspace_id=world["ws"], integration_id=world["integ_slack"])
     with pytest.raises(NotFoundError):
-        await service.get_integration(
-            workspace_id=world["ws"], integration_id=world["integ_slack"]
-        )
+        await service.get_integration(workspace_id=world["ws"], integration_id=world["integ_slack"])
     # Soft-deleted rows remain (bindings/events preserved, §5.4).
     async with session_factory() as session:
         row = await session.get(Integration, world["integ_slack"])
@@ -140,13 +144,12 @@ async def test_rotate_secret_invalidates_old_ciphertext(session_factory):
         row = await session.get(Integration, world["integ_slack"])
         row.secret_ref = None
     result = await service.rotate_secret(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         secret="fresh-secret",
     )
     assert result["rotated"] is True
-    integration = await service.get_integration(
-        workspace_id=world["ws"], integration_id=world["integ_slack"]
-    )
+    integration = await service.get_integration(workspace_id=world["ws"], integration_id=world["integ_slack"])
     assert service.decrypt_integration_secret(integration) == "fresh-secret"
 
 
@@ -159,7 +162,8 @@ async def test_create_binding_normalizes_provider_and_tenant(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     rendered = await service.create_binding(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         external_ref="C_ROOM",
     )
     assert rendered["provider"] == "slack"
@@ -173,8 +177,11 @@ async def test_create_binding_scope_xor_enforced(session_factory):
     # project scope without project id → CHECK violation surfaces as 4xx.
     with pytest.raises(BusinessRuleError):
         await service.create_binding(
-            workspace_id=world["ws"], integration_id=world["integ_slack"],
-            external_ref="C_XOR", scope="project", project_id=None,
+            workspace_id=world["ws"],
+            integration_id=world["integ_slack"],
+            external_ref="C_XOR",
+            scope="project",
+            project_id=None,
         )
 
 
@@ -182,12 +189,14 @@ async def test_create_binding_global_conflict(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     await service.create_binding(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         external_ref="C_TAKEN",
     )
     with pytest.raises(ConflictError) as excinfo:
         await service.create_binding(
-            workspace_id=world["ws"], integration_id=world["integ_slack"],
+            workspace_id=world["ws"],
+            integration_id=world["integ_slack"],
             external_ref="C_TAKEN",
         )
     assert excinfo.value.code == "binding_conflict"
@@ -197,7 +206,8 @@ async def test_delete_binding_releases_external_slot(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     rendered = await service.create_binding(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         external_ref="C_RELEASE",
     )
     await service.delete_binding(
@@ -206,16 +216,21 @@ async def test_delete_binding_releases_external_slot(session_factory):
     )
     # Hard delete → the slot is free again (disabled would still occupy it).
     again = await service.create_binding(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         external_ref="C_RELEASE",
     )
     assert again["external_ref"] == "C_RELEASE"
     async with session_factory() as session:
-        rows = (await session.execute(
-            select(IntegrationBinding).where(
-                IntegrationBinding.external_ref == "C_RELEASE"
+        rows = (
+            (
+                await session.execute(
+                    select(IntegrationBinding).where(IntegrationBinding.external_ref == "C_RELEASE")
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
 
 
@@ -223,7 +238,8 @@ async def test_update_binding_status_and_match_config(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     rendered = await service.create_binding(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         external_ref="C_UPD",
     )
     updated = await service.update_binding(
@@ -242,6 +258,170 @@ async def test_update_binding_status_and_match_config(session_factory):
         )
 
 
+# ---------------------------------------------------------------------------
+# Connector health drive (§2.2 / §3.1 :test / §4.1 badge)
+# ---------------------------------------------------------------------------
+
+
+async def test_test_connection_healthy_clears_last_error_and_stamps_success(
+    session_factory,
+):
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    async with session_factory() as session:
+        from mesh.db.models.member import Member
+
+        member = await session.get(Member, world["member"])
+    # webhook_outbound has no platform credentials → healthy without HTTP.
+    created = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=member,
+        kind="webhook_outbound",
+        name="outbound-health",
+    )
+    integration_id = uuid.UUID(created["integration"]["id"])
+    # Seed a prior failure so we can prove healthy clears it.
+    integration = await service.get_integration(workspace_id=world["ws"], integration_id=integration_id)
+    await service.record_health(
+        workspace_id=world["ws"],
+        integration=integration,
+        health_state="auth_failed",
+        last_error="stale",
+    )
+    result = await service.test_connection(workspace_id=world["ws"], integration_id=integration_id)
+    assert result["health_state"] == "healthy"
+    async with session_factory() as session:
+        row = await session.get(Integration, integration_id)
+        assert row.health_state == "healthy"
+        assert row.last_error is None, "healthy clears last_error"
+        assert row.last_success_at is not None, "healthy stamps last_success_at"
+
+
+async def test_test_connection_auth_failed_persists_last_error(session_factory):
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    async with session_factory() as session:
+        from mesh.db.models.member import Member
+
+        member = await session.get(Member, world["member"])
+    # im_slack WITHOUT a secret → auth_failed missing_credentials (no HTTP).
+    created = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=member,
+        kind="im_slack",
+        name="slack-noauth",
+        config={"team_id": "T_NA"},
+    )
+    integration_id = uuid.UUID(created["integration"]["id"])
+    result = await service.test_connection(workspace_id=world["ws"], integration_id=integration_id)
+    assert result == {"health_state": "auth_failed", "detail": "missing_credentials"}
+    async with session_factory() as session:
+        row = await session.get(Integration, integration_id)
+        assert row.health_state == "auth_failed"
+        assert row.last_error == "missing_credentials"
+        assert row.last_success_at is None
+
+
+# ---------------------------------------------------------------------------
+# Renderers — secret redaction + §4.1 columns
+# ---------------------------------------------------------------------------
+
+
+def test_redacted_config_masks_every_ref_value():
+    from mesh.integrations.service import _redacted_config
+
+    assert _redacted_config(
+        {
+            "app_id": "cli_plain",
+            "signing_secret_ref": "gAAAAAB-ciphertext",
+            "webhook_token_ref": "another-cipher",
+            "empty_ref": "",
+        }
+    ) == {
+        "app_id": "cli_plain",
+        "signing_secret_ref": "***",
+        "webhook_token_ref": "***",
+        "empty_ref": "",  # empty value carries no material → left as-is
+    }
+    assert _redacted_config(None) == {}
+
+
+def test_render_integration_events_7d_only_when_provided():
+    from mesh.integrations.service import render_integration
+
+    integration = Integration(
+        id=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        kind="im_slack",
+        name="s",
+        config={"team_id": "T"},
+        created_by=uuid.uuid4(),
+    )
+    without = render_integration(integration)
+    assert "events_7d" not in without, "field omitted unless computed"
+    with_count = render_integration(integration, events_7d=17)
+    assert with_count["events_7d"] == 17
+
+
+async def test_event_counts_since_counts_per_integration(session_factory):
+    from datetime import UTC, datetime, timedelta
+
+    from mesh.db.models.integration import IntegrationEvent
+    from mesh.db.tenant import set_tenant_context
+
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    now = datetime.now(UTC)
+    async with session_factory() as session, session.begin():
+        await set_tenant_context(session, world["ws"])
+        # Two recent events on the slack integration, one old, one on github.
+        for i in range(2):
+            session.add(
+                IntegrationEvent(
+                    workspace_id=world["ws"],
+                    integration_id=world["integ_slack"],
+                    external_event_id=f"rc-{i}",
+                    event_type="message",
+                    payload={},
+                    signature_status="valid",
+                    process_status="received",
+                    received_at=now - timedelta(days=1),
+                )
+            )
+        session.add(
+            IntegrationEvent(
+                workspace_id=world["ws"],
+                integration_id=world["integ_slack"],
+                external_event_id="old",
+                event_type="message",
+                payload={},
+                signature_status="valid",
+                process_status="received",
+                received_at=now - timedelta(days=30),
+            )
+        )
+        session.add(
+            IntegrationEvent(
+                workspace_id=world["ws"],
+                integration_id=world["integ_github"],
+                external_event_id="gh-1",
+                event_type="push",
+                payload={},
+                signature_status="valid",
+                process_status="received",
+                received_at=now - timedelta(days=1),
+            )
+        )
+    counts = await service.event_counts_since(
+        workspace_id=world["ws"],
+        integration_ids=[world["integ_slack"], world["integ_github"]],
+        since=now - timedelta(days=7),
+    )
+    assert counts[world["integ_slack"]] == 2, "only events within the window"
+    assert counts[world["integ_github"]] == 1
+    assert await service.event_counts_since(workspace_id=world["ws"], integration_ids=[], since=now) == {}
+
+
 async def test_event_ledger_filterable(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
@@ -252,17 +432,28 @@ async def test_event_ledger_filterable(session_factory):
 
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, world["ws"])
-        for i, (sig, proc) in enumerate([
-            ("valid", "dispatched"), ("invalid", "rejected"), ("valid", "deduped"),
-        ]):
-            session.add(IntegrationEvent(
-                workspace_id=world["ws"], integration_id=world["integ_slack"],
-                external_event_id=f"evt-{i}", event_type="message",
-                payload={}, signature_status=sig, process_status=proc,
-                received_at=datetime.now(UTC),
-            ))
+        for i, (sig, proc) in enumerate(
+            [
+                ("valid", "dispatched"),
+                ("invalid", "rejected"),
+                ("valid", "deduped"),
+            ]
+        ):
+            session.add(
+                IntegrationEvent(
+                    workspace_id=world["ws"],
+                    integration_id=world["integ_slack"],
+                    external_event_id=f"evt-{i}",
+                    event_type="message",
+                    payload={},
+                    signature_status=sig,
+                    process_status=proc,
+                    received_at=datetime.now(UTC),
+                )
+            )
     page = await service.list_events(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
         process_status="rejected",
     )
     assert len(page.items) == 1

@@ -57,13 +57,34 @@ async def test_begin_authorization_and_state_consumption(redis_client):
     assert await oauth_mod.consume_state(redis_client, state=state) is None
 
 
+async def test_begin_authorization_carries_name_through_state(redis_client):
+    """The admin-chosen name rides in the state record so the callback can
+    create the integration row under that name (§3.1)."""
+    url = await oauth_mod.begin_authorization(
+        redis_client,
+        workspace_id=uuid.uuid4(),
+        member_id=uuid.uuid4(),
+        kind="vcs_github",
+        callback_url="https://mesh.test/cb",
+        name="My GitHub",
+    )
+    state = url.split("state=")[1].split("&")[0]
+    record = await oauth_mod.consume_state(redis_client, state=state)
+    assert record is not None
+    assert record["name"] == "My GitHub"
+    assert record["kind"] == "vcs_github"
+
+
 async def test_begin_authorization_bad_kind(redis_client):
     from mesh.errors import BusinessRuleError
 
     with pytest.raises(BusinessRuleError):
         await oauth_mod.begin_authorization(
-            redis_client, workspace_id=uuid.uuid4(), member_id=uuid.uuid4(),
-            kind="fax", callback_url="https://x",
+            redis_client,
+            workspace_id=uuid.uuid4(),
+            member_id=uuid.uuid4(),
+            kind="fax",
+            callback_url="https://x",
         )
 
 
@@ -73,8 +94,11 @@ async def test_exchange_code_success_and_failure(redis_client):
     )
     async with httpx.AsyncClient(transport=ok_transport) as client:
         tokens = await oauth_mod.exchange_code(
-            kind="im_slack", code="c", code_verifier="v",
-            callback_url="https://x", http_client=client,
+            kind="im_slack",
+            code="c",
+            code_verifier="v",
+            callback_url="https://x",
+            http_client=client,
         )
     assert tokens["refresh_token"] == "rt-1"
 
@@ -84,8 +108,11 @@ async def test_exchange_code_success_and_failure(redis_client):
     async with httpx.AsyncClient(transport=bad_transport) as client:
         with pytest.raises(BusinessRuleError) as excinfo:
             await oauth_mod.exchange_code(
-                kind="im_slack", code="c", code_verifier="v",
-                callback_url="https://x", http_client=client,
+                kind="im_slack",
+                code="c",
+                code_verifier="v",
+                callback_url="https://x",
+                http_client=client,
             )
         assert excinfo.value.code == "oauth_failed"
 
@@ -93,8 +120,11 @@ async def test_exchange_code_success_and_failure(redis_client):
     async with httpx.AsyncClient(transport=no_token_transport) as client:
         with pytest.raises(BusinessRuleError):
             await oauth_mod.exchange_code(
-                kind="im_slack", code="c", code_verifier="v",
-                callback_url="https://x", http_client=client,
+                kind="im_slack",
+                code="c",
+                code_verifier="v",
+                callback_url="https://x",
+                http_client=client,
             )
 
     def raise_transport(request):
@@ -103,8 +133,11 @@ async def test_exchange_code_success_and_failure(redis_client):
     async with httpx.AsyncClient(transport=httpx.MockTransport(raise_transport)) as client:
         with pytest.raises(BusinessRuleError):
             await oauth_mod.exchange_code(
-                kind="vcs_github", code="c", code_verifier="v",
-                callback_url="https://x", http_client=client,
+                kind="vcs_github",
+                code="c",
+                code_verifier="v",
+                callback_url="https://x",
+                http_client=client,
             )
 
 
@@ -153,39 +186,51 @@ def test_extract_action_variants():
     approval_id = uuid.uuid4()
     ok = extract_action({"action": {"value": {"approval_id": str(approval_id), "decision": "approve"}}})
     assert ok == (approval_id, True)
-    via_actions = extract_action({"actions": [
-        {"value": json.dumps({"approval_id": str(approval_id), "decision": "reject"})}
-    ]})
+    via_actions = extract_action(
+        {"actions": [{"value": json.dumps({"approval_id": str(approval_id), "decision": "reject"})}]}
+    )
     assert via_actions == (approval_id, False)
     assert extract_action({}) is None
     assert extract_action({"action": {"value": "not-json"}}) is None
     assert extract_action({"action": {"value": {"approval_id": "bad", "decision": "approve"}}}) is None
-    assert extract_action(
-        {"action": {"value": {"approval_id": str(approval_id), "decision": "maybe"}}}
-    ) is None
+    assert (
+        extract_action({"action": {"value": {"approval_id": str(approval_id), "decision": "maybe"}}}) is None
+    )
 
 
 def test_extract_clicker_feishu_and_slack():
     from mesh.db.models.integration import Integration
 
     slack = Integration(
-        workspace_id=uuid.uuid4(), kind="im_slack", name="s",
-        config={"team_id": "T_CFG"}, created_by=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        kind="im_slack",
+        name="s",
+        config={"team_id": "T_CFG"},
+        created_by=uuid.uuid4(),
     )
-    assert extract_clicker(
-        "im_slack", {"user": {"id": "U9"}, "team": {"id": "T9"}}, slack
-    ) == ("slack", "T9", "U9")
+    assert extract_clicker("im_slack", {"user": {"id": "U9"}, "team": {"id": "T9"}}, slack) == (
+        "slack",
+        "T9",
+        "U9",
+    )
     assert extract_clicker("im_slack", {"user_id": "U8"}, slack) == ("slack", "T_CFG", "U8")
     feishu = Integration(
-        workspace_id=uuid.uuid4(), kind="im_feishu", name="f",
-        config={"tenant_key": "tk-cfg"}, created_by=uuid.uuid4(),
+        workspace_id=uuid.uuid4(),
+        kind="im_feishu",
+        name="f",
+        config={"tenant_key": "tk-cfg"},
+        created_by=uuid.uuid4(),
     )
-    assert extract_clicker(
-        "im_feishu", {"open_id": "ou_1", "tenant_key": "tk-1"}, feishu
-    ) == ("feishu", "tk-1", "ou_1")
-    assert extract_clicker(
-        "im_feishu", {"operator": {"open_id": "ou_2"}}, feishu
-    ) == ("feishu", "tk-cfg", "ou_2")
+    assert extract_clicker("im_feishu", {"open_id": "ou_1", "tenant_key": "tk-1"}, feishu) == (
+        "feishu",
+        "tk-1",
+        "ou_1",
+    )
+    assert extract_clicker("im_feishu", {"operator": {"open_id": "ou_2"}}, feishu) == (
+        "feishu",
+        "tk-cfg",
+        "ou_2",
+    )
     assert extract_clicker("im_feishu", {}, feishu) is None
     assert extract_clicker("vcs_github", {}, feishu) is None
 
@@ -221,31 +266,48 @@ async def test_feishu_challenge_and_event(app_client_full):
     verification_token = "fvt-" + uuid.uuid4().hex
     await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_feishu", "name": "fs-main", "config": {
-            "tenant_key": "tk-fs",
-            "encrypt_key_ref": encrypt_secret(encrypt_key, SIGNING_SECRET),
-            "verification_token_ref": encrypt_secret(verification_token, SIGNING_SECRET),
-        }},
+        json={
+            "kind": "im_feishu",
+            "name": "fs-main",
+            "config": {
+                "tenant_key": "tk-fs",
+                "encrypt_key_ref": encrypt_secret(encrypt_key, SIGNING_SECRET),
+                "verification_token_ref": encrypt_secret(verification_token, SIGNING_SECRET),
+            },
+        },
         headers=auth_headers(world),
     )
     # challenge with valid token echoes; invalid token → 401 invalid_challenge
-    challenge_body = json.dumps({
-        "type": "url_verification", "challenge": "ch-fs", "token": verification_token,
-    }).encode()
+    challenge_body = json.dumps(
+        {
+            "type": "url_verification",
+            "challenge": "ch-fs",
+            "token": verification_token,
+        }
+    ).encode()
     ts = str(int(datetime.now(UTC).timestamp()))
     nonce = "n1"
     sig = hashlib.sha256(f"{ts}{nonce}{encrypt_key}".encode() + challenge_body).hexdigest()
     ok = await app_client_full.post(
-        "/api/v1/integrations/feishu/events", content=challenge_body,
-        headers={"timestamp": ts, "nonce": nonce, "x-lark-signature": sig,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/feishu/events",
+        content=challenge_body,
+        headers={
+            "timestamp": ts,
+            "nonce": nonce,
+            "x-lark-signature": sig,
+            "content-type": "application/json",
+        },
     )
     assert ok.status_code == 200
     assert ok.json() == {"challenge": "ch-fs"}
 
-    bad_token = json.dumps({
-        "type": "url_verification", "challenge": "x", "token": "WRONG",
-    }).encode()
+    bad_token = json.dumps(
+        {
+            "type": "url_verification",
+            "challenge": "x",
+            "token": "WRONG",
+        }
+    ).encode()
     bad = await app_client_full.post("/api/v1/integrations/feishu/events", content=bad_token)
     assert bad.status_code == 401
     assert bad.json()["error"]["code"] == "invalid_challenge"
@@ -253,18 +315,23 @@ async def test_feishu_challenge_and_event(app_client_full):
     # signed event event → 200 (no binding → received audit)
     event_payload = {
         "schema": "2.0",
-        "header": {"event_id": "evt-fs-1", "event_type": "im.message.receive_v1",
-                   "tenant_key": "tk-fs"},
-        "event": {"sender": {"sender_id": {"open_id": "ou_a"}},
-                  "message": {"chat_id": "oc_1", "message_type": "text",
-                              "content": json.dumps({"text": "hi"})}},
+        "header": {"event_id": "evt-fs-1", "event_type": "im.message.receive_v1", "tenant_key": "tk-fs"},
+        "event": {
+            "sender": {"sender_id": {"open_id": "ou_a"}},
+            "message": {"chat_id": "oc_1", "message_type": "text", "content": json.dumps({"text": "hi"})},
+        },
     }
     ebody = json.dumps(event_payload).encode()
     esig = hashlib.sha256(f"{ts}{nonce}{encrypt_key}".encode() + ebody).hexdigest()
     ev = await app_client_full.post(
-        "/api/v1/integrations/feishu/events", content=ebody,
-        headers={"timestamp": ts, "nonce": nonce, "x-lark-signature": esig,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/feishu/events",
+        content=ebody,
+        headers={
+            "timestamp": ts,
+            "nonce": nonce,
+            "x-lark-signature": esig,
+            "content-type": "application/json",
+        },
     )
     assert ev.status_code == 200
     assert ev.json()["process_status"] == "received"
@@ -277,10 +344,14 @@ async def test_github_and_gitlab_endpoints(app_client_full):
     gh_secret = "gws-" + uuid.uuid4().hex
     await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "vcs_github", "name": "gh-main", "config": {
-            "installation_id": "777",
-            "webhook_secret_ref": encrypt_secret(gh_secret, SIGNING_SECRET),
-        }},
+        json={
+            "kind": "vcs_github",
+            "name": "gh-main",
+            "config": {
+                "installation_id": "777",
+                "webhook_secret_ref": encrypt_secret(gh_secret, SIGNING_SECRET),
+            },
+        },
         headers=auth_headers(world),
     )
     gh_payload = {
@@ -293,33 +364,48 @@ async def test_github_and_gitlab_endpoints(app_client_full):
     gh_body = json.dumps(gh_payload).encode()
     gh_sig = hmac.new(gh_secret.encode(), gh_body, hashlib.sha256).hexdigest()
     gh = await app_client_full.post(
-        "/api/v1/integrations/github/events", content=gh_body,
-        headers={"x-hub-signature-256": f"sha256={gh_sig}",
-                 "x-github-event": "pull_request", "x-github-delivery": "d-1",
-                 "content-type": "application/json"},
+        "/api/v1/integrations/github/events",
+        content=gh_body,
+        headers={
+            "x-hub-signature-256": f"sha256={gh_sig}",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "d-1",
+            "content-type": "application/json",
+        },
     )
     assert gh.status_code == 200
 
     gh_bad = await app_client_full.post(
-        "/api/v1/integrations/github/events", content=gh_body,
-        headers={"x-hub-signature-256": "sha256=nope",
-                 "x-github-event": "pull_request", "x-github-delivery": "d-2"},
+        "/api/v1/integrations/github/events",
+        content=gh_body,
+        headers={
+            "x-hub-signature-256": "sha256=nope",
+            "x-github-event": "pull_request",
+            "x-github-delivery": "d-2",
+        },
     )
     assert gh_bad.status_code == 401
 
     # gitlab routes through the repo binding
     gl_token = "gwt-" + uuid.uuid4().hex
-    gl_integration = (await app_client_full.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "vcs_gitlab", "name": "gl-main", "config": {
-            "instance_url": "https://gitlab.com",
-            "webhook_token_ref": encrypt_secret(gl_token, SIGNING_SECRET),
-        }},
-        headers=auth_headers(world),
-    )).json()["integration"]
+    gl_integration = (
+        await app_client_full.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={
+                "kind": "vcs_gitlab",
+                "name": "gl-main",
+                "config": {
+                    "instance_url": "https://gitlab.com",
+                    "webhook_token_ref": encrypt_secret(gl_token, SIGNING_SECRET),
+                },
+            },
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
     await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{gl_integration['id']}/bindings",
-        json={"external_ref": "acme/api"}, headers=auth_headers(world),
+        json={"external_ref": "acme/api"},
+        headers=auth_headers(world),
     )
     gl_payload = {
         "event_uuid": "gl-1",
@@ -329,13 +415,18 @@ async def test_github_and_gitlab_endpoints(app_client_full):
     }
     gl_body = json.dumps(gl_payload).encode()
     gl = await app_client_full.post(
-        "/api/v1/integrations/gitlab/events", content=gl_body,
-        headers={"x-gitlab-token": gl_token, "x-gitlab-event": "Merge Request Hook",
-                 "content-type": "application/json"},
+        "/api/v1/integrations/gitlab/events",
+        content=gl_body,
+        headers={
+            "x-gitlab-token": gl_token,
+            "x-gitlab-event": "Merge Request Hook",
+            "content-type": "application/json",
+        },
     )
     assert gl.status_code == 200
     gl_bad = await app_client_full.post(
-        "/api/v1/integrations/gitlab/events", content=gl_body,
+        "/api/v1/integrations/gitlab/events",
+        content=gl_body,
         headers={"x-gitlab-token": "WRONG", "x-gitlab-event": "Merge Request Hook"},
     )
     assert gl_bad.status_code == 401
@@ -348,20 +439,25 @@ async def test_card_endpoint_end_to_end(app_client_full, redis_client):
     signing_secret = "sss-" + uuid.uuid4().hex
     await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-card", "config": {
-            "team_id": "T_CARD",
-            "signing_secret_ref": encrypt_secret(signing_secret, SIGNING_SECRET),
-        }},
+        json={
+            "kind": "im_slack",
+            "name": "slack-card",
+            "config": {
+                "team_id": "T_CARD",
+                "signing_secret_ref": encrypt_secret(signing_secret, SIGNING_SECRET),
+            },
+        },
         headers=auth_headers(world),
     )
     # link the requester's slack identity
-    integration_id = (await app_client_full.get(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations", headers=auth_headers(world)
-    )).json()["data"][0]["id"]
+    integration_id = (
+        await app_client_full.get(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations", headers=auth_headers(world)
+        )
+    ).json()["data"][0]["id"]
     await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/external-identities:link",
-        json={"provider": "slack", "integration_id": integration_id,
-              "external_user_key": "U_CARD"},
+        json={"provider": "slack", "integration_id": integration_id, "external_user_key": "U_CARD"},
         headers=auth_headers(world),
     )
     code = await redis_client.get("mesh:identity-dev-outbox:slack:T_CARD:U_CARD")
@@ -373,22 +469,29 @@ async def test_card_endpoint_end_to_end(app_client_full, redis_client):
     # card callback for a non-existent approval → 404 (chain passes, approval missing)
     missing = uuid.uuid4()
     payload = {
-        "type": "block_actions", "team": {"id": "T_CARD"}, "user": {"id": "U_CARD"},
+        "type": "block_actions",
+        "team": {"id": "T_CARD"},
+        "user": {"id": "U_CARD"},
         "actions": [{"value": json.dumps({"approval_id": str(missing), "decision": "approve"})}],
     }
     body = json.dumps(payload).encode()
     ts = str(int(datetime.now(UTC).timestamp()))
     sig = hmac.new(signing_secret.encode(), f"v0:{ts}:".encode() + body, hashlib.sha256).hexdigest()
     response = await app_client_full.post(
-        "/api/v1/integrations/slack/cards", content=body,
-        headers={"x-slack-signature": f"v0={sig}", "x-slack-request-timestamp": ts,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/slack/cards",
+        content=body,
+        headers={
+            "x-slack-signature": f"v0={sig}",
+            "x-slack-request-timestamp": ts,
+            "content-type": "application/json",
+        },
     )
     assert response.status_code == 404
 
     # bad signature → 401
     bad = await app_client_full.post(
-        "/api/v1/integrations/slack/cards", content=body,
+        "/api/v1/integrations/slack/cards",
+        content=body,
         headers={"x-slack-signature": "v0=bad", "x-slack-request-timestamp": ts},
     )
     assert bad.status_code == 401
@@ -400,10 +503,13 @@ async def test_card_endpoint_end_to_end(app_client_full, redis_client):
 
 async def test_delivery_retry_endpoint_404_and_422(app_client_full):
     world = await make_world(app_client_full, "dretry")
-    subscription = (await app_client_full.post(
-        f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions",
-        json={"url": "https://hooks.example.com/x"}, headers=auth_headers(world),
-    )).json()["data"]
+    subscription = (
+        await app_client_full.post(
+            f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions",
+            json={"url": "https://hooks.example.com/x"},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]
     missing = await app_client_full.post(
         f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions/"
         f"{subscription['id']}/deliveries/{uuid.uuid4()}/retry",

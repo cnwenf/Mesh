@@ -35,9 +35,7 @@ def _settings_kwargs(db_url: str, redis_url: str, **overrides) -> dict:
         "jwt_secret": SIGNING_SECRET,
         "daemon_tls_required": False,
         "storage_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100"),
-        "storage_public_endpoint": os.environ.get(
-            "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100"
-        ),
+        "storage_public_endpoint": os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100"),
         "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
         "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
         "storage_bucket": "mesh-integration-routes-test",
@@ -74,28 +72,31 @@ async def make_world(client: httpx.AsyncClient, suffix: str) -> dict:
         "/api/v1/auth/register",
         json={"email": email, "password": "Routes-Test-12345", "display_name": "INTG Routes"},
     )
-    login = await client.post(
-        "/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"}
-    )
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": "Routes-Test-12345"})
     token = login.json()["data"]["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
-    ws = (await client.post(
-        "/api/v1/workspaces",
-        json={"name": f"INTG {suffix}", "slug": f"intg-routes-{suffix}"},
-        headers=headers,
-    )).json()["data"]
-    agent = (await client.post(
-        f"/api/v1/workspaces/{ws['id']}/agents",
-        json={"name": f"intg-agent-{suffix}"},
-        headers=headers,
-    )).json()["data"]
-    members = (await client.get(
-        f"/api/v1/workspaces/{ws['id']}/members", headers=headers
-    )).json()["data"]
+    ws = (
+        await client.post(
+            "/api/v1/workspaces",
+            json={"name": f"INTG {suffix}", "slug": f"intg-routes-{suffix}"},
+            headers=headers,
+        )
+    ).json()["data"]
+    agent = (
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/agents",
+            json={"name": f"intg-agent-{suffix}"},
+            headers=headers,
+        )
+    ).json()["data"]
+    members = (await client.get(f"/api/v1/workspaces/{ws['id']}/members", headers=headers)).json()["data"]
     human_member = next(m for m in members if m.get("member_type") == "human")
     return {
-        "token": token, "headers": headers, "ws_id": ws["id"],
-        "agent_id": agent["id"], "member_id": human_member["id"],
+        "token": token,
+        "headers": headers,
+        "ws_id": ws["id"],
+        "agent_id": agent["id"],
+        "member_id": human_member["id"],
         "email": email,
     }
 
@@ -113,13 +114,20 @@ async def test_integration_crud_and_secret_contract(app_client):
     world = await make_world(app_client, "crud")
     created = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-main", "config": {"team_id": "T0X"},
-              "secret": "xoxb-secret-plain"},
+        json={
+            "kind": "im_slack",
+            "name": "slack-main",
+            "config": {"team_id": "T0X"},
+            "secret": "xoxb-secret-plain",
+        },
         headers=auth_headers(world),
     )
     assert created.status_code == 201
     data = created.json()
-    integration = data["integration"] if "integration" in data else data["data"]
+    # MEDIUM-4: the create endpoint wears the §6.14 {"data"} envelope; the
+    # payload carries the rendered integration + the secret_accepted flag.
+    assert data["data"]["secret_accepted"] is True
+    integration = data["data"]["integration"]
     assert integration["has_secret"] is True
     assert "xoxb-secret-plain" not in json.dumps(data), "secret never echoed (§6.16)"
 
@@ -138,14 +146,16 @@ async def test_integration_crud_and_secret_contract(app_client):
 
     patched = await app_client.patch(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}",
-        json={"status": "disabled"}, headers=auth_headers(world),
+        json={"status": "disabled"},
+        headers=auth_headers(world),
     )
     assert patched.status_code == 200
     assert patched.json()["data"]["status"] == "disabled"
 
     rotated = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}/rotate-secret",
-        json={"secret": "new-secret"}, headers=auth_headers(world),
+        json={"secret": "new-secret"},
+        headers=auth_headers(world),
     )
     assert rotated.status_code == 200
 
@@ -165,7 +175,8 @@ async def test_integration_create_validation_and_rbac(app_client, session_factor
     world = await make_world(app_client, "rbac")
     bad_kind = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "smoke_signal", "name": "x"}, headers=auth_headers(world),
+        json={"kind": "smoke_signal", "name": "x"},
+        headers=auth_headers(world),
     )
     assert bad_kind.status_code == 422
     secret_in_config = await app_client.post(
@@ -181,9 +192,9 @@ async def test_integration_create_validation_and_rbac(app_client, session_factor
         "/api/v1/auth/register",
         json={"email": email2, "password": "Routes-Test-12345", "display_name": "M2"},
     )
-    token2 = (await app_client.post(
-        "/api/v1/auth/login", json={"email": email2, "password": "Routes-Test-12345"}
-    )).json()["data"]["access_token"]
+    token2 = (
+        await app_client.post("/api/v1/auth/login", json={"email": email2, "password": "Routes-Test-12345"})
+    ).json()["data"]["access_token"]
     from sqlalchemy import select
 
     from mesh.db.models.member import Member
@@ -191,13 +202,15 @@ async def test_integration_create_validation_and_rbac(app_client, session_factor
 
     async with session_factory() as session, session.begin():
         user2 = await session.scalar(select(User).where(User.email == email2))
-        session.add(Member(
-            workspace_id=uuid.UUID(world["ws_id"]),
-            member_type="human",
-            user_id=user2.id,
-            role="member",
-            status="active",
-        ))
+        session.add(
+            Member(
+                workspace_id=uuid.UUID(world["ws_id"]),
+                member_type="human",
+                user_id=user2.id,
+                role="member",
+                status="active",
+            )
+        )
     forbidden = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
         json={"kind": "im_slack", "name": "z"},
@@ -218,15 +231,20 @@ async def test_integration_create_validation_and_rbac(app_client, session_factor
 
 async def test_binding_crud_and_conflict(app_client):
     world = await make_world(app_client, "bind")
-    integration = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-b", "config": {"team_id": "T_B"}},
-        headers=auth_headers(world),
-    )).json()["integration"]
+    integration = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={"kind": "im_slack", "name": "slack-b", "config": {"team_id": "T_B"}},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
     ok = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}/bindings",
-        json={"external_ref": "C_ROOM", "match_config": {"trigger_on": ["mention"]},
-              "bound_agent_id": world["agent_id"]},
+        json={
+            "external_ref": "C_ROOM",
+            "match_config": {"trigger_on": ["mention"]},
+            "bound_agent_id": world["agent_id"],
+        },
         headers=auth_headers(world),
     )
     assert ok.status_code == 201
@@ -236,14 +254,16 @@ async def test_binding_crud_and_conflict(app_client):
 
     conflict = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}/bindings",
-        json={"external_ref": "C_ROOM"}, headers=auth_headers(world),
+        json={"external_ref": "C_ROOM"},
+        headers=auth_headers(world),
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "binding_conflict"
 
     xor = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}/bindings",
-        json={"external_ref": "C_X", "scope": "project"}, headers=auth_headers(world),
+        json={"external_ref": "C_X", "scope": "project"},
+        headers=auth_headers(world),
     )
     assert xor.status_code in (400, 422)
 
@@ -255,7 +275,8 @@ async def test_binding_crud_and_conflict(app_client):
 
     patched = await app_client.patch(
         f"/api/v1/workspaces/{world['ws_id']}/integration-bindings/{binding['id']}",
-        json={"status": "disabled"}, headers=auth_headers(world),
+        json={"status": "disabled"},
+        headers=auth_headers(world),
     )
     assert patched.status_code == 200
 
@@ -279,33 +300,44 @@ async def test_inbound_slack_event_and_bad_signature(app_client):
     await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/integrations",
         json={
-            "kind": "im_slack", "name": "slack-inb",
-            "config": {"team_id": "T_INB",
-                       "signing_secret_ref": encrypt_secret(signing_secret, SIGNING_SECRET),
-                       "bot_user_id": "U_BOT"},
+            "kind": "im_slack",
+            "name": "slack-inb",
+            "config": {
+                "team_id": "T_INB",
+                "signing_secret_ref": encrypt_secret(signing_secret, SIGNING_SECRET),
+                "bot_user_id": "U_BOT",
+            },
         },
         headers=auth_headers(world),
     )
     payload = {
-        "type": "event_callback", "team_id": "T_INB",
-        "event": {"type": "message", "channel": "C_INB", "user": "U_H",
-                  "text": "hello", "event_ts": "1.1"},
+        "type": "event_callback",
+        "team_id": "T_INB",
+        "event": {"type": "message", "channel": "C_INB", "user": "U_H", "text": "hello", "event_ts": "1.1"},
     }
     body = json.dumps(payload).encode()
     ts = str(int(datetime.now(UTC).timestamp()))  # server verifies vs real time
     sig = hmac.new(signing_secret.encode(), f"v0:{ts}:".encode() + body, hashlib.sha256).hexdigest()
     good = await app_client.post(
-        "/api/v1/integrations/slack/events", content=body,
-        headers={"x-slack-signature": f"v0={sig}", "x-slack-request-timestamp": ts,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/slack/events",
+        content=body,
+        headers={
+            "x-slack-signature": f"v0={sig}",
+            "x-slack-request-timestamp": ts,
+            "content-type": "application/json",
+        },
     )
     assert good.status_code == 200
     assert good.json()["process_status"] == "received"  # no binding → audit only
 
     bad = await app_client.post(
-        "/api/v1/integrations/slack/events", content=body,
-        headers={"x-slack-signature": "v0=deadbeef", "x-slack-request-timestamp": ts,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/slack/events",
+        content=body,
+        headers={
+            "x-slack-signature": "v0=deadbeef",
+            "x-slack-request-timestamp": ts,
+            "content-type": "application/json",
+        },
     )
     assert bad.status_code == 401
     assert bad.json()["error"]["code"] == "invalid_signature"
@@ -315,9 +347,13 @@ async def test_inbound_slack_event_and_bad_signature(app_client):
     cbody = json.dumps(challenge_payload).encode()
     csig = hmac.new(signing_secret.encode(), f"v0:{ts}:".encode() + cbody, hashlib.sha256).hexdigest()
     challenge = await app_client.post(
-        "/api/v1/integrations/slack/events", content=cbody,
-        headers={"x-slack-signature": f"v0={csig}", "x-slack-request-timestamp": ts,
-                 "content-type": "application/json"},
+        "/api/v1/integrations/slack/events",
+        content=cbody,
+        headers={
+            "x-slack-signature": f"v0={csig}",
+            "x-slack-request-timestamp": ts,
+            "content-type": "application/json",
+        },
     )
     assert challenge.status_code == 200
     assert challenge.json() == {"challenge": "ch-1"}
@@ -325,11 +361,13 @@ async def test_inbound_slack_event_and_bad_signature(app_client):
 
 async def test_inbound_event_ledger_endpoint(app_client):
     world = await make_world(app_client, "ledg")
-    integration = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-ledg", "config": {"team_id": "T_LEDG"}},
-        headers=auth_headers(world),
-    )).json()["integration"]
+    integration = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={"kind": "im_slack", "name": "slack-ledg", "config": {"team_id": "T_LEDG"}},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
     events = await app_client.get(
         f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration['id']}/events",
         headers=auth_headers(world),
@@ -345,15 +383,16 @@ async def test_inbound_event_ledger_endpoint(app_client):
 
 async def test_identity_link_confirm_unlink_flow(app_client, redis_client):
     world = await make_world(app_client, "ident")
-    integration = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-id", "config": {"team_id": "T_ID"}},
-        headers=auth_headers(world),
-    )).json()["integration"]
+    integration = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={"kind": "im_slack", "name": "slack-id", "config": {"team_id": "T_ID"}},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
     link = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/external-identities:link",
-        json={"provider": "slack", "integration_id": integration["id"],
-              "external_user_key": "U_LINKER"},
+        json={"provider": "slack", "integration_id": integration["id"], "external_user_key": "U_LINKER"},
         headers=auth_headers(world),
     )
     assert link.status_code == 200
@@ -392,15 +431,16 @@ async def test_identity_link_confirm_unlink_flow(app_client, redis_client):
 
 async def test_identity_confirm_wrong_code(app_client, redis_client):
     world = await make_world(app_client, "idc")
-    integration = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "im_slack", "name": "slack-idc", "config": {"team_id": "T_IDC"}},
-        headers=auth_headers(world),
-    )).json()["integration"]
+    integration = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={"kind": "im_slack", "name": "slack-idc", "config": {"team_id": "T_IDC"}},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
     await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/external-identities:link",
-        json={"provider": "slack", "integration_id": integration["id"],
-              "external_user_key": "U_X"},
+        json={"provider": "slack", "integration_id": integration["id"], "external_user_key": "U_X"},
         headers=auth_headers(world),
     )
     bad = await app_client.post(
@@ -436,14 +476,16 @@ async def test_subscription_crud_one_time_secret(app_client):
 
     http_url = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions",
-        json={"url": "http://insecure.example.com/x"}, headers=auth_headers(world),
+        json={"url": "http://insecure.example.com/x"},
+        headers=auth_headers(world),
     )
     assert http_url.status_code == 400
     assert http_url.json()["error"]["code"] == "invalid_url_scheme"
 
     ssrf = await app_client.post(
         f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions",
-        json={"url": "https://169.254.169.254/meta"}, headers=auth_headers(world),
+        json={"url": "https://169.254.169.254/meta"},
+        headers=auth_headers(world),
     )
     assert ssrf.status_code == 422
     assert ssrf.json()["error"]["code"] == "ssrf_blocked"
@@ -462,7 +504,8 @@ async def test_subscription_crud_one_time_secret(app_client):
 
     patched = await app_client.patch(
         f"/api/v1/workspaces/{world['ws_id']}/webhook-subscriptions/{subscription_id}",
-        json={"status": "paused"}, headers=auth_headers(world),
+        json={"status": "paused"},
+        headers=auth_headers(world),
     )
     assert patched.status_code == 200
 
@@ -480,37 +523,67 @@ async def test_subscription_crud_one_time_secret(app_client):
 
 async def test_vcs_link_endpoints(app_client):
     world = await make_world(app_client, "vcs")
-    integration = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/integrations",
-        json={"kind": "vcs_github", "name": "gh-vcs",
-              "config": {"installation_id": "42"}},
-        headers=auth_headers(world),
-    )).json()["integration"]
-    issue = (await app_client.post(
-        f"/api/v1/workspaces/{world['ws_id']}/issues",
-        json={"title": "link me"}, headers=auth_headers(world),
-    )).json()["data"]
+    integration = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/integrations",
+            json={"kind": "vcs_github", "name": "gh-vcs", "config": {"installation_id": "42"}},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]["integration"]
+    issue = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/issues",
+            json={"title": "link me"},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]
 
     link = await app_client.post(
         "/api/v1/integrations/vcs/links",
-        json={"integration_id": integration["id"],
-              "vcs_ref": {"type": "pull_request", "id": "acme/web#5"},
-              "mesh_entity_type": "issue", "issue_id": issue["id"]},
+        json={
+            "integration_id": integration["id"],
+            "vcs_ref": {"type": "pull_request", "id": "acme/web#5"},
+            "mesh_entity_type": "issue",
+            "issue_id": issue["id"],
+        },
         headers=auth_headers(world),
     )
     assert link.status_code == 201
+    # LOW-1/§4.2: the rendered link carries a clickable deep link.
+    assert link.json()["data"]["url"] == "https://github.com/acme/web/pull/5"
 
-    listed = await app_client.get(
-        f"/api/v1/issues/{issue['id']}/vcs-links", headers=auth_headers(world)
-    )
+    listed = await app_client.get(f"/api/v1/issues/{issue['id']}/vcs-links", headers=auth_headers(world))
     assert listed.status_code == 200
     assert len(listed.json()["data"]) == 1
 
+    # LOW-1: claiming an external object already linked to ANOTHER issue → 409.
+    issue2 = (
+        await app_client.post(
+            f"/api/v1/workspaces/{world['ws_id']}/issues",
+            json={"title": "steal the link"},
+            headers=auth_headers(world),
+        )
+    ).json()["data"]
+    conflict = await app_client.post(
+        "/api/v1/integrations/vcs/links",
+        json={
+            "integration_id": integration["id"],
+            "vcs_ref": {"type": "pull_request", "id": "acme/web#5"},
+            "mesh_entity_type": "issue",
+            "issue_id": issue2["id"],
+        },
+        headers=auth_headers(world),
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "conflict"
+
     resolved = await app_client.post(
         "/api/v1/integrations/vcs/resolve",
-        json={"integration_id": integration["id"],
-              "source_text": f"closes {issue['identifier']}",
-              "vcs_ref": {"type": "commit", "id": "sha-1"}},
+        json={
+            "integration_id": integration["id"],
+            "source_text": f"closes {issue['identifier']}",
+            "vcs_ref": {"type": "commit", "id": "sha-1"},
+        },
         headers=auth_headers(world),
     )
     assert resolved.status_code == 200
@@ -518,9 +591,11 @@ async def test_vcs_link_endpoints(app_client):
 
     unresolved = await app_client.post(
         "/api/v1/integrations/vcs/resolve",
-        json={"integration_id": integration["id"],
-              "source_text": "closes NOPE-999",
-              "vcs_ref": {"type": "commit", "id": "sha-2"}},
+        json={
+            "integration_id": integration["id"],
+            "source_text": "closes NOPE-999",
+            "vcs_ref": {"type": "commit", "id": "sha-2"},
+        },
         headers=auth_headers(world),
     )
     assert unresolved.status_code == 422
@@ -528,9 +603,11 @@ async def test_vcs_link_endpoints(app_client):
 
     no_identifiers = await app_client.post(
         "/api/v1/integrations/vcs/resolve",
-        json={"integration_id": integration["id"],
-              "source_text": "no identifier here",
-              "vcs_ref": {"type": "commit", "id": "sha-3"}},
+        json={
+            "integration_id": integration["id"],
+            "source_text": "no identifier here",
+            "vcs_ref": {"type": "commit", "id": "sha-3"},
+        },
         headers=auth_headers(world),
     )
     assert no_identifiers.status_code == 200

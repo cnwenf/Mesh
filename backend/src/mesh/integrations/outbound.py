@@ -172,6 +172,31 @@ class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
         await self._delegate.sleep(seconds)
 
 
+def _pinned_http_transport(pinned_ips: tuple[str, ...]) -> httpx.AsyncHTTPTransport:
+    """An httpx transport whose httpcore pool only dials ``pinned_ips``.
+
+    httpx 0.28's ``AsyncHTTPTransport`` exposes no ``network_backend``
+    keyword, so build the transport normally (which gives us a correct TLS
+    context + pool configuration) and swap its httpcore pool for one wired to
+    :class:`_PinnedNetworkBackend`. The hostname is then never re-resolved at
+    connect time (DNS-rebinding TOCTOU closure, README §6.16) while SNI +
+    certificate verification stay bound to the original hostname.
+    """
+    transport = httpx.AsyncHTTPTransport()
+    pool = transport._pool  # noqa: SLF001 — httpx offers no public seam
+    transport._pool = httpcore.AsyncConnectionPool(  # noqa: SLF001
+        ssl_context=pool._ssl_context,
+        max_connections=pool._max_connections,
+        max_keepalive_connections=pool._max_keepalive_connections,
+        keepalive_expiry=pool._keepalive_expiry,
+        http1=pool._http1,
+        http2=pool._http2,
+        retries=pool._retries,
+        network_backend=_PinnedNetworkBackend(pinned_ips),
+    )
+    return transport
+
+
 # ---------------------------------------------------------------------------
 # Subscription CRUD
 # ---------------------------------------------------------------------------
@@ -420,12 +445,18 @@ async def webhook_dispatch_handler(
     payload = event.payload or {}
     event_type = str(payload.get("event_type") or "")
     source_event_ref = str(payload.get("source_event_ref") or event.id)
-    subscriptions = (await session.execute(
-        select(WebhookSubscription).where(
-            WebhookSubscription.workspace_id == event.workspace_id,
-            WebhookSubscription.status == "active",
+    subscriptions = (
+        (
+            await session.execute(
+                select(WebhookSubscription).where(
+                    WebhookSubscription.workspace_id == event.workspace_id,
+                    WebhookSubscription.status == "active",
+                )
+            )
         )
-    )).scalars().all()
+        .scalars()
+        .all()
+    )
     data = payload.get("data") or {}
     for subscription in subscriptions:
         if not _event_matches(subscription, event_type):
@@ -513,13 +544,9 @@ class WebhookDeliveryWorker:
             return httpx.AsyncClient(
                 timeout=self._timeout_seconds,
                 follow_redirects=False,
-                transport=httpx.AsyncHTTPTransport(
-                    network_backend=_PinnedNetworkBackend(pinned.pinned_ips)
-                ),
+                transport=_pinned_http_transport(pinned.pinned_ips),
             )
-        return httpx.AsyncClient(
-            timeout=self._timeout_seconds, follow_redirects=False
-        )
+        return httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=False)
 
     async def claim_due(self, session: AsyncSession) -> list[WebhookSubscriptionDelivery]:
         now = self._clock()
@@ -538,9 +565,7 @@ class WebhookDeliveryWorker:
         )
         return list((await session.execute(stmt)).scalars().all())
 
-    async def deliver_one(
-        self, session: AsyncSession, delivery: WebhookSubscriptionDelivery
-    ) -> None:
+    async def deliver_one(self, session: AsyncSession, delivery: WebhookSubscriptionDelivery) -> None:
         subscription = await session.get(WebhookSubscription, delivery.subscription_id)
         if subscription is None or subscription.status != "active":
             return  # deleted / paused / breaker-open: leave pending until resume
@@ -616,9 +641,9 @@ class WebhookDeliveryWorker:
             if subscription.fail_count >= self._break_threshold:
                 subscription.status = "disabled"  # circuit breaker (§3.4)
                 logger.error(
-                    "webhook subscription %s circuit breaker OPEN after %d "
-                    "consecutive failures",
-                    subscription.id, subscription.fail_count,
+                    "webhook subscription %s circuit breaker OPEN after %d consecutive failures",
+                    subscription.id,
+                    subscription.fail_count,
                 )
                 await emit_realtime(
                     session,
@@ -632,9 +657,7 @@ class WebhookDeliveryWorker:
                         "fail_count": subscription.fail_count,
                         "reason": "circuit_break",
                     },
-                    idempotency_key=(
-                        f"subscription:{subscription.id}:breaker:{int(now.timestamp() * 1000)}"
-                    ),
+                    idempotency_key=(f"subscription:{subscription.id}:breaker:{int(now.timestamp() * 1000)}"),
                 )
         else:
             delivery.next_retry_at = now + compute_next_retry(
