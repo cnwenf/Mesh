@@ -40,8 +40,8 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
-    UniqueConstraint,
     Integer,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TEXT, TIMESTAMP, UUID
@@ -118,12 +118,8 @@ class Integration(Base):
     __tablename__ = "integrations"
     __table_args__ = (
         CheckConstraint(f"kind IN {INTEGRATION_KIND_VALUES!r}", name="integrations_kind"),
-        CheckConstraint(
-            f"health_state IN {INTEGRATION_HEALTH_VALUES!r}", name="integrations_health_state"
-        ),
-        CheckConstraint(
-            f"status IN {INTEGRATION_STATUS_VALUES!r}", name="integrations_status"
-        ),
+        CheckConstraint(f"health_state IN {INTEGRATION_HEALTH_VALUES!r}", name="integrations_health_state"),
+        CheckConstraint(f"status IN {INTEGRATION_STATUS_VALUES!r}", name="integrations_status"),
         ForeignKeyConstraint(
             ("workspace_id", "created_by"),
             ("members.workspace_id", "members.id"),
@@ -156,19 +152,13 @@ class Integration(Base):
     # MES-82: DingTalk Stream connection-state persistence truth source
     # (integrations.md §2.2/§3.9; only used by kind='im_dingtalk' stream
     # mode — the connector behavior ships in the MES-82 slices).
-    stream_state: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'")
-    )
+    stream_state: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     # Connector health (§2.2): independent of the manual status; driven by
     # the connectivity test endpoint and outbound credential-refresh /
     # delivery outcomes (auth_failed → "re-authorize" banner, §4.1 badge).
-    health_state: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("'unknown'")
-    )
+    health_state: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'unknown'"))
     last_error: Mapped[str | None] = mapped_column(TEXT, nullable=True)
-    last_success_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    last_success_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     name: Mapped[str] = mapped_column(TEXT, nullable=False)
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
@@ -199,15 +189,10 @@ class IntegrationBinding(Base):
             f"provider IN {BINDING_PROVIDER_VALUES!r}",
             name="integration_bindings_provider",
         ),
+        CheckConstraint(f"scope IN {BINDING_SCOPE_VALUES!r}", name="integration_bindings_scope"),
+        CheckConstraint(f"status IN {INTEGRATION_STATUS_VALUES!r}", name="integration_bindings_status"),
         CheckConstraint(
-            f"scope IN {BINDING_SCOPE_VALUES!r}", name="integration_bindings_scope"
-        ),
-        CheckConstraint(
-            f"status IN {INTEGRATION_STATUS_VALUES!r}", name="integration_bindings_status"
-        ),
-        CheckConstraint(
-            "(scope = 'workspace' AND project_id IS NULL) "
-            "OR (scope = 'project' AND project_id IS NOT NULL)",
+            "(scope = 'workspace' AND project_id IS NULL) OR (scope = 'project' AND project_id IS NOT NULL)",
             name="ck_binding_scope",
         ),
         ForeignKeyConstraint(
@@ -253,15 +238,11 @@ class IntegrationBinding(Base):
     )
     integration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     provider: Mapped[str] = mapped_column(TEXT, nullable=False)
-    provider_tenant_key: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    provider_tenant_key: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     scope: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'workspace'"))
     project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     external_ref: Mapped[str] = mapped_column(TEXT, nullable=False)
-    match_config: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'")
-    )
+    match_config: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     bound_agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     created_at: Mapped[datetime] = mapped_column(
@@ -299,9 +280,7 @@ class IntegrationEvent(Base):
             ondelete="CASCADE",
         ),
         Index("uq_integration_events_ws_id", "workspace_id", "id", unique=True),
-        Index(
-            "uq_integration_event_dedup", "integration_id", "external_event_id", unique=True
-        ),
+        Index("uq_integration_event_dedup", "integration_id", "external_event_id", unique=True),
         Index(
             "idx_event_integration_status",
             "integration_id",
@@ -322,9 +301,7 @@ class IntegrationEvent(Base):
     event_type: Mapped[str] = mapped_column(TEXT, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     signature_status: Mapped[str] = mapped_column(TEXT, nullable=False)
-    process_status: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("'received'")
-    )
+    process_status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'received'"))
     received_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -374,9 +351,7 @@ class ExternalIdentity(Base):
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     provider: Mapped[str] = mapped_column(TEXT, nullable=False)
-    provider_tenant_key: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    provider_tenant_key: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     external_user_key: Mapped[str] = mapped_column(TEXT, nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
@@ -408,9 +383,7 @@ class WebhookSubscription(Base):
 
     __tablename__ = "webhook_subscriptions"
     __table_args__ = (
-        CheckConstraint(
-            f"status IN {SUBSCRIPTION_STATUS_VALUES!r}", name="webhook_subscriptions_status"
-        ),
+        CheckConstraint(f"status IN {SUBSCRIPTION_STATUS_VALUES!r}", name="webhook_subscriptions_status"),
         CheckConstraint("fail_count >= 0", name="webhook_subscriptions_fail_count_nonneg"),
         ForeignKeyConstraint(
             ("workspace_id", "integration_id"),
@@ -437,9 +410,7 @@ class WebhookSubscription(Base):
     integration_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     url: Mapped[str] = mapped_column(TEXT, nullable=False)
     secret_ref: Mapped[str] = mapped_column(TEXT, nullable=False)
-    event_types: Mapped[list[str]] = mapped_column(
-        ARRAY(TEXT), nullable=False, server_default=text("'{}'")
-    )
+    event_types: Mapped[list[str]] = mapped_column(ARRAY(TEXT), nullable=False, server_default=text("'{}'"))
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     fail_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
@@ -473,17 +444,13 @@ class WebhookSubscriptionDelivery(Base):
             name="fk_delivery_subscription",
             ondelete="CASCADE",
         ),
-        Index(
-            "uq_delivery_subscription_event", "subscription_id", "event_ref", unique=True
-        ),
+        Index("uq_delivery_subscription_event", "subscription_id", "event_ref", unique=True),
         Index(
             "idx_delivery_retry",
             "next_retry_at",
             postgresql_where=text("state = 'pending'"),
         ),
-        Index(
-            "idx_delivery_subscription", "subscription_id", text("created_at DESC")
-        ),
+        Index("idx_delivery_subscription", "subscription_id", text("created_at DESC")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -502,9 +469,7 @@ class WebhookSubscriptionDelivery(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     state: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
-    next_retry_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    next_retry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_error: Mapped[str | None] = mapped_column(TEXT, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -529,12 +494,8 @@ class VcsLink(Base):
             f"external_object_type IN {VCS_OBJECT_TYPE_VALUES!r}",
             name="vcs_links_external_object_type",
         ),
-        CheckConstraint(
-            f"mesh_entity_type IN {VCS_MESH_ENTITY_VALUES!r}", name="vcs_links_mesh_entity_type"
-        ),
-        CheckConstraint(
-            f"link_source IN {VCS_LINK_SOURCE_VALUES!r}", name="vcs_links_link_source"
-        ),
+        CheckConstraint(f"mesh_entity_type IN {VCS_MESH_ENTITY_VALUES!r}", name="vcs_links_mesh_entity_type"),
+        CheckConstraint(f"link_source IN {VCS_LINK_SOURCE_VALUES!r}", name="vcs_links_link_source"),
         CheckConstraint(f"status IN {VCS_LINK_STATUS_VALUES!r}", name="vcs_links_status"),
         ForeignKeyConstraint(
             ("workspace_id", "integration_id"),
@@ -585,20 +546,14 @@ class VcsLink(Base):
     )
     integration_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     provider: Mapped[str] = mapped_column(TEXT, nullable=False)
-    provider_tenant_key: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    provider_tenant_key: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     external_object_type: Mapped[str] = mapped_column(TEXT, nullable=False)
     external_object_ref: Mapped[str] = mapped_column(TEXT, nullable=False)
     mesh_entity_type: Mapped[str] = mapped_column(TEXT, nullable=False)
     mesh_entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    link_source: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("'manual'")
-    )
+    link_source: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'manual'"))
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
-    external_state: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, server_default=text("'{}'")
-    )
+    external_state: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
@@ -700,8 +655,7 @@ class IntegrationMessageQueue(Base):
             "conversation_key",
             unique=True,
             postgresql_where=text(
-                "state IN ('dispatching','processing','cancelling') "
-                "AND dispatch_mode = 'serial_conversation'"
+                "state IN ('dispatching','processing','cancelling') AND dispatch_mode = 'serial_conversation'"
             ),
         ),
         Index(
@@ -734,17 +688,11 @@ class IntegrationMessageQueue(Base):
     )
     integration_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     binding_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    integration_event_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    integration_event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     # Binding display snapshot — orphan audit rows stay self-describing.
-    binding_display: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    binding_display: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     # scope='project' capture at enqueue time (orphan-audit visibility).
-    project_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    project_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     conversation_key: Mapped[str] = mapped_column(TEXT, nullable=False)
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     dispatch_mode: Mapped[str] = mapped_column(TEXT, nullable=False)
@@ -752,28 +700,18 @@ class IntegrationMessageQueue(Base):
     execution_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     target_agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     message_excerpt: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
-    sender_identity_key: Mapped[str] = mapped_column(
-        TEXT, nullable=False, server_default=text("''")
-    )
+    sender_identity_key: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
     # Emoji-ack window protocol (§3.8): leader self-references; followers
     # point at the leader that represents them.
     ack_leader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     ack_window_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
-    ack_attempted_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    ack_sent_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    ack_represented_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    ack_attempted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    ack_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    ack_represented_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     ack_merged_into: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     enqueued_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -839,12 +777,8 @@ class ExecutionContextAppend(Base):
     seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
     source: Mapped[str] = mapped_column(TEXT, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    injected_at: Mapped[datetime | None] = mapped_column(
-        TIMESTAMP(timezone=True), nullable=True
-    )
-    injected_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    injected_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    injected_attempt_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
