@@ -192,12 +192,16 @@ async def test_cursor_pagination_stable_and_client_independent(client):
     assert set(created) <= set(walked_issues), "cursor traversal missed rows"
 
     # A freshly registered non-member gets 404 (workspace membership gates
-    # search; existence is never leaked).
+    # search; existence is never leaked) — by UUID AND by slug form.
     token2 = await _register_and_login(client, f"page2-{uuid.uuid4().hex[:8]}@e2e.mesh")
     outsider = await client.get(
-        f"/workspaces/{ws['id']}/search", params={"q": "分页稳定"}, headers=_auth(token2)
+        f"/api/v1/workspaces/{ws['id']}/search", params={"q": "分页稳定"}, headers=_auth(token2)
     )
     assert outsider.status_code == 404
+    outsider_slug = await client.get(
+        f"/api/v1/workspaces/{ws['slug']}/search", params={"q": "分页稳定"}, headers=_auth(token2)
+    )
+    assert outsider_slug.status_code == 404
 
     # Server order must NOT depend on client state (R2-H4): two independent
     # connections of the SAME member (distinct httpx clients carry no shared
@@ -288,9 +292,38 @@ async def test_explain_three_query_paths(db_session, client):
         rows = (await db_session.execute(text(sql), params or {})).all()
         return "\n".join(row[0] for row in rows)
 
+    # §5.2 requires EXPLAIN (ANALYZE, BUFFERS) — actual execution, not
+    # planner estimates alone.
+    async def explain_analyze(sql: str, params: dict | None = None) -> str:
+        return await explain(f"EXPLAIN (ANALYZE, BUFFERS) {sql}", params)
+
+    # Visibility JOIN shape shared by the issue proofs (M5 — the proof must
+    # carry the REAL visibility JOIN, not a de-permissioned simplification):
+    # member-role form — public projects ∪ member's projects ∪ no project.
+    issue_join = (
+        "LEFT JOIN issue_statuses s "
+        "ON s.workspace_id = i.workspace_id AND s.id = i.status_id "
+        "LEFT JOIN projects p "
+        "ON p.workspace_id = i.workspace_id AND p.id = i.project_id"
+    )
+    member_visibility = (
+        "(i.project_id IS NULL "
+        "OR i.project_id IN (SELECT project_id FROM project_members pm "
+        "WHERE pm.workspace_id = i.workspace_id AND pm.member_id = :mid) "
+        "OR i.project_id IN (SELECT id FROM projects pp "
+        "WHERE pp.workspace_id = i.workspace_id AND pp.visibility = 'public' "
+        "AND pp.deleted_at IS NULL))"
+    )
+    member_id = (
+        await db_session.execute(
+            text("SELECT id FROM members WHERE workspace_id = :ws LIMIT 1"),
+            {"ws": ws_id},
+        )
+    ).scalar_one()
+
     # Path 1 — 1–2 char prefix (members projection, natural planning).
-    plan = await explain(
-        "EXPLAIN SELECT id FROM members "
+    plan = await explain_analyze(
+        "SELECT id FROM members "
         "WHERE workspace_id = :ws AND status <> 'removed' "
         "AND search_name LIKE public.mesh_search_norm('jo') || '%'",
         {"ws": ws_id},
@@ -298,20 +331,23 @@ async def test_explain_three_query_paths(db_session, client):
     assert "idx_members_search_name_prefix" in plan, plan
     assert "Seq Scan on members" not in plan, plan
 
-    # Path 1b — issue title prefix: index usable (forced proof, T37-style).
-    await db_session.execute(text("SET LOCAL enable_seqscan = off"))
-    plan = await explain(
-        "EXPLAIN SELECT id FROM issues "
-        "WHERE workspace_id = :ws AND deleted_at IS NULL "
-        "AND public.mesh_search_norm(title) LIKE public.mesh_search_norm('ze') || '%'",
-        {"ws": ws_id},
+    # Path 1b — issue title prefix under NATURAL planning at §10 scale with
+    # the real visibility JOIN (M5 — no enable_seqscan=off forcing; ~2.7%
+    # selectivity must win the index on its own merits).
+    plan = await explain_analyze(
+        f"SELECT i.id FROM issues i {issue_join} "
+        "WHERE i.workspace_id = :ws AND i.deleted_at IS NULL "
+        f"AND {member_visibility} "
+        "AND public.mesh_search_norm(i.title) LIKE public.mesh_search_norm('ze') || '%'",
+        {"ws": ws_id, "mid": member_id},
     )
     assert "idx_issues_title_prefix" in plan, plan
-    await db_session.execute(text("SET LOCAL enable_seqscan = on"))
+    assert "Seq Scan on issues" not in plan, plan
+    assert "project_members" in plan or "pp" in plan, "visibility JOIN missing"
 
     # Path 2 — canonical identifier equality fast path (natural planning).
-    plan = await explain(
-        "EXPLAIN SELECT id FROM issues "
+    plan = await explain_analyze(
+        "SELECT id FROM issues "
         "WHERE workspace_id = :ws AND identifier = upper(trim('exp-123'))",
         {"ws": ws_id},
     )
@@ -330,15 +366,17 @@ async def test_explain_three_query_paths(db_session, client):
     ).scalar_one()
     assert rows == 10000
 
-    # Path 3 — trigram GIN under the §10 distribution with NATURAL planning:
-    # at 100k rows the selective trigram predicate (~2.7% of the workspace)
-    # must beat the full workspace scan — no forced GUCs, no index drops.
-    # This is the §5.2 "无全表顺序扫描" proof for the fuzzy path.
-    plan = await explain(
-        "EXPLAIN SELECT id FROM issues "
-        "WHERE workspace_id = :ws AND deleted_at IS NULL "
-        "AND public.mesh_search_norm(title) % public.mesh_search_norm('zebra')",
-        {"ws": ws_id},
+    # Path 3 — trigram GIN under the §10 distribution with NATURAL planning
+    # and the real visibility JOIN (M5): at 100k rows the selective trigram
+    # predicate (~2.7% of the workspace) must beat the full workspace scan —
+    # no forced GUCs, no index drops. §5.2 「无全表顺序扫描」 proof.
+    plan = await explain_analyze(
+        f"SELECT i.id FROM issues i {issue_join} "
+        "WHERE i.workspace_id = :ws AND i.deleted_at IS NULL "
+        f"AND {member_visibility} "
+        "AND public.mesh_search_norm(i.title) % public.mesh_search_norm('zebra')",
+        {"ws": ws_id, "mid": member_id},
     )
     assert "idx_issues_title_trgm" in plan, plan
     assert "Seq Scan on issues" not in plan, plan
+    assert "Buffers:" in plan, "BUFFERS output missing (ANALYZE BUFFERS)"

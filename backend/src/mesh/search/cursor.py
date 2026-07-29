@@ -22,8 +22,6 @@ from dataclasses import dataclass
 
 from mesh.errors import ValidationError
 
-INVALID_CURSOR = "invalid_cursor"
-
 
 @dataclass(frozen=True)
 class SearchCursor:
@@ -73,14 +71,16 @@ def decode_search_cursor(
     expected_fingerprint: str,
     secret: str,
 ) -> SearchCursor:
-    """Decode + verify a cursor; any failure is a 400 ``invalid_cursor``.
+    """Decode + verify a cursor; any failure is a 400 ``validation_error``.
 
-    Internal fields are used ONLY after the HMAC verifies; the binding
-    fingerprint is checked afterwards so cross-query reuse is rejected.
+    Per §3.2/§3.5 a bad/tampered/reused cursor is the canonical
+    ``validation_error`` code (no module-private code). Internal fields are
+    used ONLY after the HMAC verifies; the binding fingerprint is checked
+    afterwards so cross-query reuse is rejected.
     """
 
     def _invalid() -> ValidationError:
-        return ValidationError("invalid cursor", code=INVALID_CURSOR)
+        return ValidationError("invalid cursor")
 
     try:
         decoded = base64.urlsafe_b64decode(raw.encode("ascii"))

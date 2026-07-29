@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from fastapi import Depends
@@ -42,8 +43,16 @@ logger = logging.getLogger(__name__)
 
 # Throttle for the users.last_active_workspace_id backfill (per-process): once
 # a (user, workspace) pair has been written this run, skip repeat writes.
-# Bounded by distinct pairs the process resolves — small in practice.
-_LAST_WS_WRITTEN: set[tuple[uuid.UUID, uuid.UUID]] = set()
+# Bounded LRU (evicts oldest pairs past the cap) so a long-lived process
+# serving many distinct pairs cannot grow this set without limit (LOW fix).
+_LAST_WS_WRITTEN_MAX = 4096
+_LAST_WS_WRITTEN: OrderedDict[tuple[uuid.UUID, uuid.UUID], None] = OrderedDict()
+
+
+def _remember_ws_write(pair: tuple[uuid.UUID, uuid.UUID]) -> None:
+    _LAST_WS_WRITTEN[pair] = None
+    while len(_LAST_WS_WRITTEN) > _LAST_WS_WRITTEN_MAX:
+        _LAST_WS_WRITTEN.popitem(last=False)
 
 # Role seniority (member.md §2.2 fixed enum; no custom roles — YAGNI).
 ROLE_RANK: dict[str, int] = {"guest": 0, "member": 1, "admin": 2, "owner": 3}
@@ -139,7 +148,7 @@ async def _backfill_last_active_workspace(
             ),
             {"ws": workspace_id, "uid": user.id},
         )
-        _LAST_WS_WRITTEN.add(pair)
+        _remember_ws_write(pair)
     except Exception:  # noqa: BLE001 — best-effort hint, never fail the request
         logger.debug("last_active_workspace_id backfill skipped", exc_info=True)
 
@@ -175,12 +184,38 @@ async def resolve_workspace_by_slug(
     )
 
 
+async def resolve_workspace_by_ref(
+    session: AsyncSession,
+    *,
+    user: User,
+    ref: str,
+    permission: str | None = None,
+) -> WorkspaceContext:
+    """Resolve a workspace path/query reference: UUID **or slug** (§3.1).
+
+    ``{ws}`` references are 「UUID 或 slug」 (search-command-palette.md §3.1,
+    same shape as the issue/project collection endpoints): a UUID goes
+    straight to the membership gate; any other value is resolved as a
+    current slug, falling back to a historic slug (workspace.md §2.5).
+    Unresolvable values are a 404 — never leak what shape of id exists.
+    """
+    try:
+        parsed = uuid.UUID(ref)
+    except ValueError:
+        return await resolve_workspace_by_slug(
+            session, user=user, slug=ref, permission=permission
+        )
+    return await resolve_workspace_context(
+        session, user=user, workspace_id=parsed, permission=permission
+    )
+
+
 def require_workspace(permission: str | None = None):
     """FastAPI dependency factory for ``/workspaces/{workspace_id}`` routes.
 
     Usage: ``context: WorkspaceContext = Depends(require_workspace("workspace:settings"))``.
-    Non-UUID path values are a 404 (not a 400 — never leak what shape of id
-    exists).
+    The path segment accepts a UUID or a slug — see
+    :func:`resolve_workspace_by_ref`.
     """
 
     async def _dependency(
@@ -188,12 +223,8 @@ def require_workspace(permission: str | None = None):
         user: User = Depends(get_current_user),
         session: AsyncSession = Depends(get_session),
     ) -> WorkspaceContext:
-        try:
-            parsed = uuid.UUID(workspace_id)
-        except ValueError as exc:
-            raise NotFoundError(_WORKSPACE_NOT_FOUND) from exc
-        return await resolve_workspace_context(
-            session, user=user, workspace_id=parsed, permission=permission
+        return await resolve_workspace_by_ref(
+            session, user=user, ref=workspace_id, permission=permission
         )
 
     return _dependency

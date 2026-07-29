@@ -19,6 +19,9 @@ policy on ``workspace_slug_history`` is fail-closed without the GUC.
 
 from __future__ import annotations
 
+import re
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 from sqlalchemy import select, text
@@ -31,9 +34,18 @@ router = APIRouter(tags=["entry"])
 
 _ENTRY_OK_HEADER = {"X-Mesh-Entry": "ok"}
 
+# Same-origin guarantee (LOW-1 hardening): control characters in the slug or
+# subpath can never produce a well-formed same-origin Location (header
+# injection / malformed redirect) — reject with 400 instead of building a
+# Location from them.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
 
 async def _probe(request: Request, session: AsyncSession, slug: str, subpath: str) -> Response:
     """Shared probe logic for the with-path and without-path route variants."""
+    if _CONTROL_CHARS.search(slug) is not None or _CONTROL_CHARS.search(subpath) is not None:
+        return Response(status_code=400, headers=dict(_ENTRY_OK_HEADER))
+
     current = await session.scalar(
         select(Workspace.slug).where(Workspace.slug == slug, Workspace.deleted_at.is_(None))
     )
@@ -56,9 +68,11 @@ async def _probe(request: Request, session: AsyncSession, slug: str, subpath: st
         # Unknown slug: let the SPA render its not-found state.
         return Response(status_code=200, headers=dict(_ENTRY_OK_HEADER))
 
-    rebuilt = f"/w/{new_slug}"
+    # Percent-encode each part so non-ASCII (CJK) subpaths produce a valid
+    # latin-1 Location header instead of a 500 (LOW-1); "/" stays a separator.
+    rebuilt = f"/w/{quote(new_slug, safe='')}"
     if subpath != "":
-        rebuilt = f"{rebuilt}/{subpath}"
+        rebuilt = f"{rebuilt}/{quote(subpath, safe='/')}"
     query = request.url.query
     if query != "":
         rebuilt = f"{rebuilt}?{query}"

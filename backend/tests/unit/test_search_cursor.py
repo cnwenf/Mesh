@@ -62,7 +62,7 @@ def test_tampered_payload_rejected():
     ).decode()
     with pytest.raises(ValidationError) as exc:
         decode_search_cursor(tampered, expected_fingerprint="fp-1", secret=SECRET)
-    assert exc.value.code == "invalid_cursor"
+    assert exc.value.code == "validation_error"
 
 
 def test_tampered_signature_rejected():
@@ -86,7 +86,7 @@ def test_cross_query_reuse_rejected():
     raw = _encoded(fingerprint="fp-a")
     with pytest.raises(ValidationError) as exc:
         decode_search_cursor(raw, expected_fingerprint="fp-b", secret=SECRET)
-    assert exc.value.code == "invalid_cursor"
+    assert exc.value.code == "validation_error"
 
 
 def test_garbage_rejected():

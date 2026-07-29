@@ -64,16 +64,21 @@ STATEMENT_TIMEOUT_MS = 3000
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9]+-\d+$")
 
-# §4.6 quantized ladder — the SQL CASE below and scoring.py agree on these.
-_SQL_SCORE_CASE = """
-CASE
-  WHEN {norm} = :nq THEN 8
-  WHEN {norm} LIKE :prefix_pat ESCAPE '\\' THEN 6
-  WHEN (' ' || {norm}) LIKE :token_pat ESCAPE '\\' THEN 5
-  WHEN position(:nq in {norm}) > 0 THEN 3
-  ELSE 1
-END
-""".strip()
+# §4.6 quantized ladder — single source of truth is the DB function
+# ``public.mesh_search_text_score`` (migration 0029): exact 8 > prefix 7 >
+# token-prefix 6 (every query token prefixes some title token; separators
+# - _ / . normalized to spaces) > acronym 5 (query chars = initials of
+# successive title tokens) > substring 3 > fuzzy 1. ``scoring.py`` mirrors
+# the identical algorithm for unit tests — no SQL/Python divergence (M6).
+_SQL_SCORE = "public.mesh_search_text_score({norm}, :nq)"
+
+# Issue score: the title ladder, lifted to ≥6 when the identifier itself
+# prefix-matches (M1 — identifier retrieval on the 1–2 char path).
+_ISSUE_SCORE = (
+    "GREATEST(public.mesh_search_text_score({norm}, :nq), "
+    "CASE WHEN public.mesh_search_norm(i.identifier) LIKE :prefix_pat ESCAPE '\\' "
+    "THEN 6 ELSE 0 END)"
+)
 
 
 @dataclass(frozen=True)
@@ -205,12 +210,23 @@ def issue_visibility_clause(viewer: Member) -> str:
 
 
 def keyset_clause(entity_type: str, cursor: SearchCursor | None) -> str:
-    """Keyset filter for one entity list, given the merged-order cursor."""
+    """Keyset filter for one entity list, given the merged-order cursor.
+
+    ``title_lex`` comparisons are forced to ``COLLATE "C"`` (code-point
+    order) so the DB ordering is identical to the Python merge/cursor
+    boundary comparison regardless of the database's default collation
+    (H2 — compose's default ``en_US.utf8`` would otherwise diverge from
+    Python's code-point comparison on CJK ties, dropping or duplicating
+    rows across page boundaries; zh-CN is a first-release language).
+    """
     if cursor is None:
         return "TRUE"
+    # CAST(:k_tlx AS TEXT) — the ``:param::type`` shorthand is not parsed
+    # after a bindparam in text(); explicit CAST compiles cleanly.
     base = (
         "(score_bucket < :k_sb OR (score_bucket = :k_sb AND title_len > :k_tl) "
-        "OR (score_bucket = :k_sb AND title_len = :k_tl AND title_lex > :k_tlx)"
+        "OR (score_bucket = :k_sb AND title_len = :k_tl "
+        "AND (title_lex COLLATE \"C\") > (CAST(:k_tlx AS TEXT) COLLATE \"C\"))"
     )
     if entity_type < cursor.result_type:
         return base + ")"
@@ -218,12 +234,14 @@ def keyset_clause(entity_type: str, cursor: SearchCursor | None) -> str:
         return (
             base
             + " OR (score_bucket = :k_sb AND title_len = :k_tl "
-            "AND title_lex = :k_tlx AND id > :k_id))"
+            "AND (title_lex COLLATE \"C\") = (CAST(:k_tlx AS TEXT) COLLATE \"C\") "
+            "AND id > :k_id))"
         )
     # entity_type > cursor.result_type: equal-prefix rows sort AFTER cursor.
     return (
         "(score_bucket < :k_sb OR (score_bucket = :k_sb AND title_len > :k_tl) "
-        "OR (score_bucket = :k_sb AND title_len = :k_tl AND title_lex >= :k_tlx))"
+        "OR (score_bucket = :k_sb AND title_len = :k_tl "
+        "AND (title_lex COLLATE \"C\") >= (CAST(:k_tlx AS TEXT) COLLATE \"C\")))"
     )
 
 
@@ -240,10 +258,13 @@ def match_clause(mode: str, norm_expr: str) -> str:
     )
 
 
-def order_limit(cap: int) -> str:
+def order_limit(fetch: int) -> str:
+    # COLLATE "C" keeps the SQL order byte-identical to the Python code-point
+    # merge (H2 — see keyset_clause).
     return (
-        "ORDER BY score_bucket DESC, title_len ASC, title_lex ASC, id ASC "
-        f"LIMIT {int(cap)}"
+        "ORDER BY score_bucket DESC, title_len ASC, "
+        "(title_lex COLLATE \"C\") ASC, id ASC "
+        f"LIMIT {int(fetch)}"
     )
 
 
@@ -523,6 +544,12 @@ class SearchService:
         nq = p.normalized
         mode = "prefix" if len(nq) <= 2 else "trigram"
         cap = PREFIX_TYPE_CAP if mode == "prefix" else FUZZY_TYPE_CAP
+        # Per-type fetch size must track the page size (H1): with a fixed cap
+        # a page of `limit` rows could consume the whole per-type budget and
+        # emit next_cursor=null while rows remain — silent loss. Fetch
+        # max(cap, limit+1) per type so any full page always has one row in
+        # hand to prove there is more (and the cursor boundary is exact).
+        fetch = max(cap, p.limit + 1)
         base_params: dict[str, Any] = {
             "ws": workspace.id,
             "mid": viewer.id,
@@ -557,19 +584,19 @@ class SearchService:
                 rows.append(pinned)
 
         if "issue" in p.types:
-            sql_rows = await self._fetch_issues(session, base_params, viewer, mode, cap, pinned_id)
+            sql_rows = await self._fetch_issues(session, base_params, viewer, mode, fetch, pinned_id)
             rows.extend(build_issue_rows(sql_rows))
         if p.types & _MEMBER_QUERY_TYPES:
-            sql_rows = await self._fetch_members(session, base_params, viewer, mode, cap)
+            sql_rows = await self._fetch_members(session, base_params, viewer, mode, fetch)
             rows.extend(build_member_rows(sql_rows, p.types))
         if "project" in p.types:
-            sql_rows = await self._fetch_projects(session, base_params, viewer, mode, cap)
+            sql_rows = await self._fetch_projects(session, base_params, viewer, mode, fetch)
             rows.extend(build_project_rows(sql_rows))
         if "view" in p.types:
-            sql_rows = await self._fetch_views(session, base_params, viewer, mode, cap)
+            sql_rows = await self._fetch_views(session, base_params, viewer, mode, fetch)
             rows.extend(build_view_rows(sql_rows))
         if "chat_session" in p.types:
-            sql_rows = await self._fetch_chat_sessions(session, base_params, mode, cap)
+            sql_rows = await self._fetch_chat_sessions(session, base_params, mode, fetch)
             rows.extend(build_chat_rows(sql_rows))
 
         await self._enrich_agent_capacity(session, base_params, rows)
@@ -609,8 +636,18 @@ class SearchService:
         pinned_id: uuid.UUID | None,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(i.title)"
-        score_case = _SQL_SCORE_CASE.format(norm=norm)
+        score_case = _ISSUE_SCORE.format(norm=norm)
         pin_filter = "AND i.id <> :pinned_id" if pinned_id is not None else ""
+        if mode == "prefix":
+            # 1–2 char path matches title OR identifier prefix (M1 — §1.2 S2
+            # promises identifier retrieval; idx_issues_identifier_prefix is
+            # built exactly for this, §2.2 DDL 2c).
+            issue_match = (
+                f"({norm} LIKE :prefix_pat ESCAPE '\\' "
+                "OR public.mesh_search_norm(i.identifier) LIKE :prefix_pat ESCAPE '\\')"
+            )
+        else:
+            issue_match = match_clause(mode, norm)
         sql = text(
             f"""
             SELECT * FROM (
@@ -628,7 +665,7 @@ class SearchService:
                 ON p.workspace_id = i.workspace_id AND p.id = i.project_id
               WHERE i.workspace_id = :ws AND i.deleted_at IS NULL
                 AND {issue_visibility_clause(viewer)}
-                AND {match_clause(mode, norm)}
+                AND {issue_match}
                 {pin_filter}
             ) t
             WHERE {keyset_clause("issue", params.get("_cursor"))}
@@ -649,10 +686,15 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "m.search_name"
-        score_case = _SQL_SCORE_CASE.format(norm=norm)
+        score_case = _SQL_SCORE.format(norm=norm)
+        # The title expression MUST mirror the projection's display chain
+        # exactly (M4 — §2.2 「杜绝漂移」): NULLIF(display_name,'') so an
+        # empty display_name falls through to email exactly as search_name
+        # was computed. title_lex IS the projection column itself, so the
+        # ordering key cannot diverge from the rendered title by construction.
         title_expr = (
             "COALESCE(NULLIF(m.display_override, ''), "
-            "CASE m.member_type WHEN 'human' THEN COALESCE(u.display_name, u.email) "
+            "CASE m.member_type WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email) "
             "WHEN 'agent' THEN a.name END, '')"
         )
         # Private agents are visible to their owner and admins ONLY (§3.3):
@@ -695,7 +737,7 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(p.name)"
-        score_case = _SQL_SCORE_CASE.format(norm=norm)
+        score_case = _SQL_SCORE.format(norm=norm)
         if is_admin_role(viewer):
             vis = "TRUE"
         else:
@@ -728,14 +770,12 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(v.name)"
-        score_case = _SQL_SCORE_CASE.format(norm=norm)
-        # Private views: owner only; project-owned views AND with project
-        # visibility (§3.3 — invisible project ⇒ its views invisible even
-        # when shared).
-        own_clause = (
-            "(v.visibility = 'shared' OR v.owner_member_id = :mid "
-            "OR :viewer_is_admin = TRUE)"
-        )
+        score_case = _SQL_SCORE.format(norm=norm)
+        # Private views: OWNER ONLY — §3.3 is explicit (「私有视图仅 owner」),
+        # so even admins do not see other members' private views here (no
+        # admin bypass). Project-owned views AND with project visibility
+        # (§3.3 — invisible project ⇒ its views invisible even when shared).
+        own_clause = "(v.visibility = 'shared' OR v.owner_member_id = :mid)"
         project_clause = (
             f"(v.project_id IS NULL OR v.project_id IN ({visible_projects_subquery(viewer)}))"
         )
@@ -768,7 +808,7 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(c.title)"
-        score_case = _SQL_SCORE_CASE.format(norm=norm)
+        score_case = _SQL_SCORE.format(norm=norm)
         # Participant model: sessions are 1:1 owner + agent — only the owner
         # member row sees the session (§3.3).
         sql = text(

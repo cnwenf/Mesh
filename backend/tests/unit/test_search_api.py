@@ -616,3 +616,153 @@ async def test_statement_timeout_maps_to_query_cost_exceeded(client, world, monk
     r = await _search(client, world["owner_token"], world["ws_id"], "登录")
     assert r.status_code == 422
     assert r.json()["error"]["code"] == "query_cost_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-regression tests (MES-79 验收打回:P0 / H1 / H2 / M1 + view LOW)
+# ---------------------------------------------------------------------------
+
+
+async def test_slug_workspace_ref_search_and_favorites(client, world):
+    """P0 — {ws} accepts a slug (§3.1 「UUID 或 slug」): palettes on canonical
+    /w/{slug}/… pages pass the slug; both search and favorites must resolve it
+    (current slug AND historic slug after rename)."""
+    token, slug = world["owner_token"], world["slug"]
+
+    by_slug = await _search(client, token, slug, "登录")
+    assert by_slug.status_code == 200
+    assert by_slug.json()["data"], "slug-form search returned nothing"
+
+    fav_slug = await client.get(
+        "/api/v1/favorites", params={"workspace_id": slug}, headers=_h(token)
+    )
+    assert fav_slug.status_code == 200
+
+    # Rename the workspace → the OLD slug still resolves (historic slug).
+    r = await client.patch(
+        f"/api/v1/workspaces/{world['ws_id']}",
+        json={"slug": slug + "-renamed"},
+        headers=_h(token),
+    )
+    assert r.status_code == 200, r.text
+    historic = await _search(client, token, slug, "登录")
+    assert historic.status_code == 200
+    assert historic.json()["data"]
+
+
+async def test_pagination_no_row_loss_when_limit_exceeds_per_type_cap(client, world):
+    """H1 — page size must not be capped by the per-type fetch budget: 25
+    matches with the default limit=20 previously returned exactly 20 rows
+    with next_cursor=null, silently losing 5."""
+    token, ws_id = world["owner_token"], world["ws_id"]
+    project = world["public_project"]
+    created = []
+    for n in range(1, 26):
+        issue = await _issue(client, token, ws_id, f"分页丢行回归任务 {n:02d}", project)
+        created.append(issue["id"])
+
+    first = await _search(client, token, ws_id, "分页丢行回归", limit=20)
+    body = first.json()
+    first_ids = [item["id"] for item in body["data"]]
+    assert len(first_ids) == 20
+    assert body["next_cursor"] is not None, "25 matches must paginate, not stop at 20"
+
+    walked = list(first_ids)
+    cursor = body["next_cursor"]
+    pages = 1
+    while cursor is not None:
+        page = await _search(client, token, ws_id, "分页丢行回归", limit=20, cursor=cursor)
+        page_body = page.json()
+        walked.extend(item["id"] for item in page_body["data"])
+        cursor = page_body["next_cursor"]
+        pages += 1
+        assert pages <= 4
+    assert len(walked) == len(set(walked)) == 25, "duplicates or missed rows across pages"
+    assert set(created) <= set(walked)
+
+
+async def test_prefix_path_walks_past_per_type_cap(client, world):
+    """H1 on the 1–2 char path: 8 prefix matches must all be retrievable
+    (the fixed PREFIX_TYPE_CAP=5 used to truncate the result set)."""
+    token, ws_id = world["owner_token"], world["ws_id"]
+    project = world["public_project"]
+    created = []
+    for n in range(1, 9):
+        issue = await _issue(client, token, ws_id, f"Zz{n} 前缀溢出回归任务", project)
+        created.append(issue["id"])
+
+    walked = []
+    cursor = None
+    while True:
+        page = await _search(client, token, ws_id, "zz", limit=20, cursor=cursor)
+        body = page.json()
+        walked.extend(item["id"] for item in body["data"] if item["type"] == "issue")
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+    assert set(created) <= set(walked), "prefix path lost rows beyond the old cap of 5"
+
+
+async def test_identifier_prefix_recall_on_short_query(client, world):
+    """M1 — the 1–2 char path must match issue identifiers (idx_issues_
+    identifier_prefix was dead before): q='tg' recalls TG-<n> issues even
+    though their titles do not start with 'tg'."""
+    token, ws_id = world["owner_token"], world["ws_id"]
+    project = await _project(client, token, ws_id, "标识符前缀项目", "TG")
+    issue = await _issue(client, token, ws_id, "完全不相关的标题内容", project)
+
+    page = await _search(client, token, ws_id, "tg", types="issue")
+    ids = [item["id"] for item in page.json()["data"]]
+    assert issue["id"] in ids, "identifier prefix did not recall the issue"
+
+
+async def test_cjk_same_length_multipage_traversal(client, world):
+    """H2 — CJK titles with identical length and score bucket tie-break on
+    title_lex; the DB order must equal the Python code-point merge (COLLATE
+    "C"), or page boundaries duplicate/drop rows under en_US.utf8."""
+    token, ws_id = world["owner_token"], world["ws_id"]
+    project = world["public_project"]
+    # Same prefix (same bucket + length), varying final code points.
+    tails = ["一", "九", "二", "五", "十", "三", "七", "四", "六", "八"]
+    created = []
+    for tail in tails:
+        issue = await _issue(client, token, ws_id, f"中文标题{tail}", project)
+        created.append(issue["id"])
+
+    walked = []
+    cursor = None
+    while True:
+        page = await _search(client, token, ws_id, "中文标题", limit=3, cursor=cursor)
+        body = page.json()
+        page_ids = [item["id"] for item in body["data"] if item["id"] in set(created)]
+        walked.extend(page_ids)
+        cursor = body["next_cursor"]
+        if cursor is None:
+            break
+        assert len(walked) <= len(created) + 3
+    assert len(walked) == len(set(walked)), "CJK ties duplicated across pages"
+    assert set(created) <= set(walked), "CJK ties dropped across pages"
+
+
+async def test_private_view_hidden_from_admin(client, world):
+    """§3.3 「私有视图仅 owner」 — even admins do not see other members'
+    private views (no admin bypass)."""
+    member_token = world["member_token"]
+    owner_token = world["owner_token"]
+    ws_id = world["ws_id"]
+
+    r = await client.post(
+        f"/api/v1/workspaces/{ws_id}/views",
+        json={"name": "成员私有视图回归", "layout": "board", "visibility": "private"},
+        headers=_h(member_token),
+    )
+    assert r.status_code == 201, r.text
+    view_id = r.json()["data"]["id"]
+
+    # The owner (admin role) must NOT see the member's private view.
+    owner_hits = await _search(client, owner_token, ws_id, "成员私有视图回归")
+    assert all(item["id"] != view_id for item in owner_hits.json()["data"])
+
+    # The owner sees it: their own private view.
+    member_hits = await _search(client, member_token, ws_id, "成员私有视图回归")
+    assert any(item["id"] == view_id for item in member_hits.json()["data"])

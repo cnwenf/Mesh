@@ -10,17 +10,23 @@ normalized form (§3.2 highlight contract).
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
-# Match-strength ladder, quantized (§4.6): text relevance dominates.
+# Match-strength ladder, quantized (§4.6): text relevance dominates. These
+# values MIRROR the DB function public.mesh_search_text_score exactly (M6 —
+# the SQL SELECTs use that function as score_bucket; this Python ladder is
+# its twin for unit tests, with identical separator handling and tiers).
 SCORE_EXACT = 8  # normalized equality
 SCORE_IDENTIFIER_PIN = 9  # canonical identifier exact hit — pinned top
-SCORE_PREFIX = 6  # normalized title starts with the query
-SCORE_TOKEN_PREFIX = 5  # a word of the title starts with the query
+SCORE_PREFIX = 7  # normalized title starts with the query
+SCORE_TOKEN_PREFIX = 6  # every query token prefixes some title token
+SCORE_ACRONYM = 5  # query chars = initials of successive title tokens
 SCORE_SUBSTRING = 3  # contiguous substring
 SCORE_FUZZY = 1  # trigram-similarity recall only
 
-TOKEN_SEPARATORS = frozenset(" -_/.\t")
+# Token boundaries (§4.6 词边界/驼峰/路径分隔): - _ / . and whitespace.
+_TOKEN_SPLIT = re.compile(r"[-_/. ]+")
 
 
 def normalize_search_text(value: str) -> str:
@@ -34,22 +40,37 @@ def normalize_search_text(value: str) -> str:
     return stripped.lower()
 
 
+def _tokens(value: str) -> list[str]:
+    return [tok for tok in _TOKEN_SPLIT.split(value) if tok]
+
+
 def score_match(normalized_title: str, normalized_query: str) -> int:
-    """Quantized match strength of ``normalized_query`` against the title."""
+    """Quantized match strength — exact mirror of mesh_search_text_score."""
     if not normalized_query:
-        return 0
+        return SCORE_FUZZY
     if normalized_title == normalized_query:
         return SCORE_EXACT
     if normalized_title.startswith(normalized_query):
         return SCORE_PREFIX
-    # Token-prefix: a separated word starts with the query.
-    previous = " "
-    for index, ch in enumerate(normalized_title):
-        if previous in TOKEN_SEPARATORS and normalized_title.startswith(
-            normalized_query, index
-        ):
-            return SCORE_TOKEN_PREFIX
-        previous = ch
+    tokens_t = _tokens(normalized_title)
+    tokens_q = _tokens(normalized_query)
+    # Token-prefix: every query token prefixes SOME title token.
+    if tokens_q and all(
+        any(tt.startswith(tq) for tt in tokens_t) for tq in tokens_q
+    ):
+        return SCORE_TOKEN_PREFIX
+    # Acronym: the query's characters (separators stripped) match the first
+    # characters of successive title tokens, in order.
+    flat_q = _TOKEN_SPLIT.sub("", normalized_query)
+    if flat_q and len(tokens_t) >= len(flat_q):
+        matched = 0
+        for tok in tokens_t:
+            if matched >= len(flat_q):
+                break
+            if tok and tok[0] == flat_q[matched]:
+                matched += 1
+        if matched >= len(flat_q):
+            return SCORE_ACRONYM
     if normalized_query in normalized_title:
         return SCORE_SUBSTRING
     return SCORE_FUZZY

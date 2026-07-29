@@ -214,12 +214,25 @@ def test_keyset_clause_all_branches():
         score_bucket=6, title_len=4, title_lex="mmm", result_type="member", row_id=uuid.uuid4()
     )
     # entity type < cursor type → strictly-before-tuple form
-    assert "title_lex > :k_tlx)" in keyset_clause("issue", cursor)
-    assert "id > :k_id" not in keyset_clause("issue", cursor)
+    issue = keyset_clause("issue", cursor)
+    assert '(title_lex COLLATE "C") > (CAST(:k_tlx AS TEXT) COLLATE "C"))' in issue
+    assert "id > :k_id" not in issue
+    # H2 — every title_lex comparison is COLLATE "C" (code-point order).
+    assert issue.count('COLLATE "C"') >= 2
     # entity type == cursor type → id tiebreak present
-    assert "id > :k_id" in keyset_clause("member", cursor)
+    member = keyset_clause("member", cursor)
+    assert "id > :k_id" in member
+    assert '(title_lex COLLATE "C") = (CAST(:k_tlx AS TEXT) COLLATE "C")' in member
     # entity type > cursor type → inclusive title_lex
-    assert "title_lex >= :k_tlx" in keyset_clause("view", cursor)
+    assert '(title_lex COLLATE "C") >= (CAST(:k_tlx AS TEXT) COLLATE "C"))' in keyset_clause(
+        "view", cursor
+    )
+
+
+def test_order_limit_collates_code_point():
+    order = order_limit(21)
+    assert '(title_lex COLLATE "C") ASC' in order
+    assert "LIMIT 21" in order
 
 
 def test_match_and_order_fragments():

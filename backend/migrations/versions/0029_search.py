@@ -74,6 +74,71 @@ def upgrade() -> None:
     # query expressions call the function, so it needs EXECUTE.
     op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_search_norm(TEXT) TO {APP_ROLE}")
 
+    # -- §4.6 scoring ladder — single source of truth (M6) -----------------------
+    # The service SELECTs use this function as score_bucket; scoring.py
+    # mirrors the identical algorithm for unit tests, so SQL and Python can
+    # never diverge (M6: the previous parallel SQL CASE / Python ladder
+    # disagreed on separator handling and lacked acronym/word-boundary
+    # tiers). Inputs are expected ALREADY normalized (mesh_search_norm).
+    #   8 exact > 7 prefix > 6 token-prefix (every query token prefixes
+    #   some title token; separators - _ / . count as token boundaries)
+    #   > 5 acronym (query chars = initials of successive title tokens)
+    #   > 3 contiguous substring > 1 trigram fuzzy fallback.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_search_text_score(t TEXT, q TEXT)
+        RETURNS INT
+        LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+        $$
+        DECLARE
+          toks_t TEXT[];
+          toks_q TEXT[];
+          tok TEXT;
+          flat_q TEXT;
+          p INT;
+          all_prefixed BOOLEAN;
+          non_empty INT := 0;
+        BEGIN
+          IF q = '' THEN RETURN 1; END IF;
+          IF t = q THEN RETURN 8; END IF;
+          IF t LIKE q || '%' THEN RETURN 7; END IF;
+          -- Separator normalization: - _ / . (and space) are token boundaries.
+          toks_t := string_to_array(regexp_replace(t, '[-_/. ]+', ' ', 'g'), ' ');
+          toks_q := string_to_array(regexp_replace(q, '[-_/. ]+', ' ', 'g'), ' ');
+          -- Token-prefix: every non-empty query token prefixes some title token.
+          all_prefixed := TRUE;
+          FOREACH tok IN ARRAY toks_q LOOP
+            IF tok = '' THEN CONTINUE; END IF;
+            non_empty := non_empty + 1;
+            IF NOT EXISTS (
+              SELECT 1 FROM unnest(toks_t) AS tt
+              WHERE tt <> '' AND tt LIKE tok || '%'
+            ) THEN
+              all_prefixed := FALSE;
+              EXIT;
+            END IF;
+          END LOOP;
+          IF non_empty > 0 AND all_prefixed THEN RETURN 6; END IF;
+          -- Acronym: the query's characters (sans separators) match the
+          -- first characters of successive title tokens in order.
+          flat_q := regexp_replace(q, '[-_/. ]+', '', 'g');
+          IF flat_q <> '' AND array_length(toks_t, 1) >= length(flat_q) THEN
+            p := 1;
+            FOREACH tok IN ARRAY toks_t LOOP
+              IF p > length(flat_q) THEN EXIT; END IF;
+              IF tok <> '' AND left(tok, 1) = substring(flat_q FROM p FOR 1) THEN
+                p := p + 1;
+              END IF;
+            END LOOP;
+            IF p > length(flat_q) THEN RETURN 5; END IF;
+          END IF;
+          IF position(q in t) > 0 THEN RETURN 3; END IF;
+          RETURN 1;
+        END $$
+        """
+    )
+    op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_search_text_score(TEXT, TEXT) TO {APP_ROLE}")
+
     # -- single search_name resync entry point (§2.2 sync contract) --------------
     # SECURITY DEFINER so the app role can resync across workspaces (a user
     # rename touches that user's member rows in EVERY workspace — the tenant
@@ -133,9 +198,46 @@ def upgrade() -> None:
     )
 
     # -- backfill before building indexes (fresh databases: no-op) ---------------
-    # Same single code path the service layer and the daily reconcile use
-    # (§2.2 sync contract): one function, one normalization algorithm.
-    op.execute("SELECT public.mesh_resync_search_name('all')")
+    # Batched walk (§2.2 「每批 ≤1 万行,不持长事务」 — M3: the previous
+    # single-UPDATE form violated the batch contract): keyset walk over
+    # members.id, ≤10 000 rows per UPDATE statement, same normalization
+    # chain the service layer and the daily reconcile use.
+    op.execute(
+        """
+        DO $$
+        DECLARE
+          v_batch CONSTANT INT := 10000;
+          v_last UUID := '00000000-0000-0000-0000-000000000000';
+          v_ids UUID[];
+        BEGIN
+          LOOP
+            SELECT array_agg(id ORDER BY id) INTO v_ids
+            FROM (SELECT id FROM members WHERE id > v_last ORDER BY id LIMIT v_batch) b;
+            EXIT WHEN v_ids IS NULL;
+            v_last := v_ids[array_length(v_ids, 1)];
+            UPDATE members m
+            SET search_name = src.norm
+            FROM (
+              SELECT m2.id,
+                     public.mesh_search_norm(COALESCE(
+                       NULLIF(m2.display_override, ''),
+                       CASE m2.member_type
+                         WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email)
+                         WHEN 'agent' THEN a.name
+                       END,
+                       ''
+                     )) AS norm
+              FROM members m2
+              LEFT JOIN users u ON u.id = m2.user_id
+              LEFT JOIN agents a ON a.id = m2.agent_id
+              WHERE m2.id = ANY (v_ids)
+            ) src
+            WHERE m.id = src.id
+              AND m.search_name IS DISTINCT FROM src.norm;
+          END LOOP;
+        END $$
+        """
+    )
 
     # -- member/agent: projection column indexes (§2.2 items 1a–1c) ---------------
     # ≥3 char fuzzy: trigram GIN on the already-normalized column.

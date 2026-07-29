@@ -138,3 +138,57 @@ async def test_entry_probe_unknown_slug_ok(client: httpx.AsyncClient):
     assert r.status_code == 200
     assert r.headers.get("x-mesh-entry") == "ok"
     assert r.content == b""
+
+
+@pytest.mark.asyncio
+async def test_entry_probe_cjk_subpath_location_is_valid(client: httpx.AsyncClient):
+    """LOW-1 — a CJK subpath must produce a valid (percent-encoded) Location
+    instead of a latin-1 encoding 500."""
+    token = await _login(client, "entry-cjk@example.com")
+    ws_id = await _create_workspace(client, token, "cjkteam")
+    r = await client.patch(
+        f"/api/v1/workspaces/{ws_id}", json={"slug": "cjkteam2"}, headers=_h(token)
+    )
+    assert r.status_code == 200, r.text
+
+    r = await client.get(
+        "/__mesh_entry/w/cjkteam/board/看板", follow_redirects=False
+    )
+    assert r.status_code == 301
+    location = r.headers["location"]
+    # ASCII-safe header value, decodes back to the original path.
+    location.encode("latin-1")
+    from urllib.parse import unquote
+
+    assert unquote(location) == "/w/cjkteam2/board/看板"
+
+
+@pytest.mark.asyncio
+async def test_entry_probe_control_chars_rejected_400(client: httpx.AsyncClient):
+    """LOW-1 — control characters can never build a well-formed same-origin
+    Location; the probe rejects 400 (documented same-origin guarantee).
+
+    Drives ``_probe`` directly: the HTTP transport (h11) refuses CRLF in the
+    request line, so the in-handler guard is exercised at the unit level.
+    """
+    from unittest.mock import Mock
+
+    from mesh.api.html_entry import _probe
+
+    token = await _login(client, "entry-ctrl@example.com")
+    await _create_workspace(client, token, "ctrlteam")
+    r = await client.patch(
+        "/api/v1/workspaces/ctrlteam", json={"slug": "ctrlteam2"}, headers=_h(token)
+    )
+    assert r.status_code == 200, r.text
+
+    app = client._transport.app  # type: ignore[attr-defined]
+    async with app.state.session_factory() as session:
+        request = Mock()
+        request.url = Mock(query="")
+        # CRLF injection attempt in the subpath.
+        response = await _probe(request, session, "ctrlteam", "board\r\nInjected: x")
+        assert response.status_code == 400
+        # Control char in the slug too.
+        response = await _probe(request, session, "ctrl\rteam", "")
+        assert response.status_code == 400

@@ -22,6 +22,7 @@ from mesh.agent.triggers import (
 )
 from mesh.analytics.routes import router as analytics_router
 from mesh.analytics.service import AnalyticsService
+from mesh.api.access_log import access_log_dispatch
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -351,6 +352,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_data_job_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
+    # Self-managed access log: method + path only, never the query string
+    # (§5.3 — uvicorn's default access log records the full request line and
+    # would leak the raw search q; deployments pass --no-access-log).
+    app.middleware("http")(access_log_dispatch)
     app.include_router(health_router)
     # Public SPA entry probe (search-command-palette.md §3.4): no auth, no data.
     app.include_router(html_entry_router)

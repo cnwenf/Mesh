@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mesh.search.scoring import (
+    SCORE_ACRONYM,
     SCORE_EXACT,
     SCORE_FUZZY,
     SCORE_PREFIX,
@@ -29,10 +30,60 @@ def test_score_ladder_ordering():
     assert score_match("safari crash", "safari crash") == SCORE_EXACT
     assert score_match("safari crash", "saf") == SCORE_PREFIX
     assert score_match("safari crash", "crash") == SCORE_TOKEN_PREFIX
+    # Multi-token query: every query token prefixes some title token.
+    assert score_match("safari crash", "saf cr") == SCORE_TOKEN_PREFIX
+    # Separator normalization: - _ / . count as token boundaries (M6 —
+    # the SQL twin translates the same separator set before tokenizing).
+    assert score_match("safari-crash", "crash") == SCORE_TOKEN_PREFIX
+    assert score_match("login_page.v2", "page v2") == SCORE_TOKEN_PREFIX
+    # Acronym: query chars = initials of successive title tokens.
+    assert score_match("world cup final", "wcf") == SCORE_ACRONYM
+    assert score_match("safari crash", "sc") == SCORE_ACRONYM
     assert score_match("wsafari crash", "saf") == SCORE_SUBSTRING
     assert score_match("unrelated", "zzz") == SCORE_FUZZY
     # The ladder is strictly decreasing — the total order depends on it.
-    assert SCORE_EXACT > SCORE_PREFIX > SCORE_TOKEN_PREFIX > SCORE_SUBSTRING > SCORE_FUZZY
+    assert (
+        SCORE_EXACT
+        > SCORE_PREFIX
+        > SCORE_TOKEN_PREFIX
+        > SCORE_ACRONYM
+        > SCORE_SUBSTRING
+        > SCORE_FUZZY
+    )
+
+
+async def test_score_matches_db_function(db_session):
+    """The Python ladder is the exact mirror of mesh_search_text_score (M6).
+
+    The service uses the DB function as score_bucket; if the two ever
+    diverge, Python-side tests would pass while ranking silently changes.
+    """
+    from sqlalchemy import text
+
+    cases = [
+        ("safari crash", "safari crash"),
+        ("safari crash", "saf"),
+        ("safari crash", "crash"),
+        ("safari crash", "saf cr"),
+        ("safari crash", "saf cri"),  # fuzzy tier (cri ∉ prefix of crash)
+        ("safari-crash", "crash"),
+        ("login_page.v2", "page v2"),
+        ("world cup final", "wcf"),
+        ("safari crash", "sc"),
+        ("wsafari crash", "saf"),
+        ("unrelated", "zzz"),
+        ("jose ancone", "jose"),
+        ("代码助手 登录", "登录"),
+        ("", "anything"),
+    ]
+    for title, query in cases:
+        db_score = (
+            await db_session.execute(
+                text("SELECT public.mesh_search_text_score(:t, :q)"),
+                {"t": title, "q": query},
+            )
+        ).scalar_one()
+        assert score_match(title, query) == db_score, f"diverged on ({title!r}, {query!r})"
 
 
 def test_score_accent_insensitive():
