@@ -224,7 +224,7 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 runtime 的 Server 协议与数据模型以
 [runtime.md](features/runtime.md) 为唯一权威；本地执行进程的组件边界、CLI
 适配、任务隔离、预算熔断、部署和真实 LLM E2E 见配套设计
-[daemon-executor.md](daemon-executor.md)。
+[runtime-executor.md](features/runtime-executor.md)。
 
 调研原始记录见 [`../research/`](../research/)(每模块一份,功能 / 数据模型 / 接口 / UI / UX 四维度)。
 
