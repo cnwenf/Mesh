@@ -14,13 +14,19 @@ ledger. Oversize bodies get a bare 413; over-rate callers get a bare
 
 from __future__ import annotations
 
+import json
+import logging
+import time
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from mesh.integrations.cards import handle_card_callback
-from mesh.integrations.inbound import process_inbound
+from mesh.integrations.inbound import _lookup_by_config_value, process_inbound
+
+logger = logging.getLogger("mesh.integrations.inbound_routes")
 
 router = APIRouter(prefix="/api/v1/integrations", tags=["integrations-inbound"])
 
@@ -32,6 +38,13 @@ INBOUND_RATE_WINDOW_SECONDS = 60
 # attachment ceiling. Content-Length is checked BEFORE reading; the read
 # length is re-checked (chunked-transfer defense in depth).
 INBOUND_BODY_MAX_BYTES = 1024 * 1024
+
+# auth.md §3.6 inbound-callback row (MES-82/87): the pre-signature COARSE
+# anti-abuse layer for the DingTalk callback is keyed by the (integration,
+# IP) tuple and answers over-limit callers with a SILENT 200 — a non-2xx
+# would trigger the external platform's retry amplification. Audit + alert
+# only; the post-signature semantic guardrails (§2.10) are the next layer.
+DINGTALK_PRE_LIMIT_PER_MIN = 120
 
 
 def _client_ip(request: Request) -> str:
@@ -76,13 +89,18 @@ def _tolerance(request: Request):
     return request.app.state.settings.integration_signature_tolerance
 
 
-async def _run_inbound(request: Request, kind: str) -> JSONResponse:
-    guarded = await _guard(request)
-    if guarded is not None:
-        return guarded
-    raw_body = await _read_body(request)
-    if isinstance(raw_body, JSONResponse):
-        return raw_body
+async def _run_inbound(
+    request: Request, kind: str, *, raw_body: bytes | None = None
+) -> JSONResponse:
+    """Run the pipeline; ``raw_body`` skips the guards when the caller has
+    already applied them (the DingTalk route guards + pre-limits first)."""
+    if raw_body is None:
+        guarded = await _guard(request)
+        if guarded is not None:
+            return guarded
+        raw_body = await _read_body(request)
+        if isinstance(raw_body, JSONResponse):
+            return raw_body
     settings = request.app.state.settings
     session_factory = request.app.state.session_factory
     headers = dict(request.headers)
@@ -127,6 +145,82 @@ async def _run_card(request: Request, kind: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=body)
 
 
+@router.post("/dingtalk/events")
+async def dingtalk_events(request: Request) -> JSONResponse:
+    """DingTalk HTTP receive mode callback (§3.2 ``receive_mode='http'``).
+
+    Guard order (unauthenticated surface — DoS hardening): shared per-IP
+    sliding window (429) + 1 MiB body cap, THEN locate the integration by
+    ``chatbotCorpId`` and apply the (integration, IP) pre-signature coarse
+    limit — over-limit callers get a SILENT 200 (auth.md §3.6: non-2xx
+    triggers platform retry amplification), audit + alert only. Signature
+    verification runs afterwards, inside ``process_inbound``.
+    """
+    guarded = await _guard(request)
+    if guarded is not None:
+        return guarded
+    raw_body = await _read_body(request)
+    if isinstance(raw_body, JSONResponse):
+        return raw_body
+
+    # Locate the integration BEFORE signature work (the pre-signature limit
+    # is keyed by (integration, IP)). Unlocatable payloads fall through to
+    # process_inbound → indistinguishable from a bad signature (401).
+    corp_id = ""
+    try:
+        parsed = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+        if isinstance(parsed, dict):
+            corp_id = str(parsed.get("chatbotCorpId") or "")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        parsed = None
+    if corp_id:
+        session_factory = request.app.state.session_factory
+        async with session_factory() as session:
+            rows = await _lookup_by_config_value(
+                session, kind="im_dingtalk", key="corp_id", value=corp_id
+            )
+        if rows:
+            integration_id = rows[0][0]
+            exceeded = await _dingtalk_pre_limit_exceeded(
+                request, integration_id=integration_id
+            )
+            if exceeded:
+                # Silent 200 + audit/alert ONLY (auth.md §3.6).
+                logger.error(
+                    "dingtalk inbound pre-signature rate limit exceeded "
+                    "(integration=%s ip=%s) — silent 200, no distribution",
+                    integration_id,
+                    _client_ip(request),
+                )
+                return JSONResponse(
+                    status_code=200,
+                    content={"received": True, "process_status": "rate_limited"},
+                )
+
+    return await _run_inbound(request, "im_dingtalk", raw_body=raw_body)
+
+
+async def _dingtalk_pre_limit_exceeded(request: Request, *, integration_id: uuid.UUID) -> bool:
+    """(integration, IP) sliding window — non-raising (silent-200 layer).
+
+    Shares the Redis sliding-window primitive with the auth rate limiter
+    but NEVER raises: over-limit inbound callbacks must answer 200.
+    """
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return False  # fail OPEN here: signature verification is the gate
+    moment = time.time()
+    window = INBOUND_RATE_WINDOW_SECONDS
+    key = f"mesh:dingtalk-prelimit:{integration_id}:{_client_ip(request)}"
+    pipe = redis.pipeline()
+    pipe.zremrangebyscore(key, 0, moment - window)
+    pipe.zcard(key)
+    pipe.zadd(key, {f"{moment}:{uuid.uuid4().hex}": moment})
+    pipe.expire(key, window)
+    _removed, count, _added, _ttl = await pipe.execute()
+    return int(count) >= DINGTALK_PRE_LIMIT_PER_MIN
+
+
 @router.post("/feishu/events")
 async def feishu_events(request: Request) -> JSONResponse:
     return await _run_inbound(request, "im_feishu")
@@ -168,6 +262,7 @@ async def dingtalk_cards(request: Request) -> JSONResponse:
 
 
 __all__ = [
+    "DINGTALK_PRE_LIMIT_PER_MIN",
     "INBOUND_BODY_MAX_BYTES",
     "INBOUND_RATE_LIMIT",
     "INBOUND_RATE_WINDOW_SECONDS",

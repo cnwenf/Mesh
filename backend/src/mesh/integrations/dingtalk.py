@@ -228,7 +228,11 @@ def build_conversation_key(provider: str, provider_tenant_key: str, external_ref
         raise ValidationError(
             "unknown provider", code="invalid_request", details={"provider": provider}
         )
-    _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
+    # Tenant may be '' (bindings created without a platform tenant; the
+    # bindings table defaults provider_tenant_key to '') — when present it
+    # must be separator/control-free; DingTalk requires the corpId shape.
+    if provider_tenant_key:
+        _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
     _validate_key_segment(external_ref, field="external_ref")
     if provider == PROVIDER:
         if not _CORP_ID_CHARSET.match(provider_tenant_key):
@@ -258,7 +262,8 @@ def build_sender_identity_key(provider: str, provider_tenant_key: str, external_
         raise ValidationError(
             "unknown provider", code="invalid_request", details={"provider": provider}
         )
-    _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
+    if provider_tenant_key:
+        _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
     if provider == PROVIDER:
         if not _CORP_ID_CHARSET.match(provider_tenant_key):
             raise ValidationError(

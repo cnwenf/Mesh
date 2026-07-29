@@ -342,7 +342,7 @@ def test_kind_to_provider_mapping():
 
 
 def test_adapter_for_all_kinds():
-    for kind in ("im_feishu", "im_slack", "vcs_github", "vcs_gitlab"):
+    for kind in ("im_feishu", "im_slack", "im_dingtalk", "vcs_github", "vcs_gitlab"):
         adapter = adapter_for(kind)
         assert callable(adapter["verify"])
         assert callable(adapter["normalize"])
