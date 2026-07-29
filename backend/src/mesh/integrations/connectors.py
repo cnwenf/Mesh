@@ -64,6 +64,35 @@ class NormalizedEvent:
     extra: dict[str, Any] = field(default_factory=dict)  # vcs action/state etc.
 
 
+@dataclass(frozen=True)
+class VerifiedEnvelope:
+    """The ingestion layering boundary (integrations.md §2.10:651-664).
+
+    Both receive modes — the HTTP callback adapter (per-request platform
+    signature) and the Stream channel adapter (connection-level app_key /
+    app_secret authentication, frame authenticity established once at
+    ``connections/open``) — normalize into THIS single structure; everything
+    downstream (dedup / command plane / matching / guardrails / queueing /
+    ack / audit) is the one shared ``ingest_verified_event()`` core.
+    """
+
+    provider: str  # normalized provider ('dingtalk' / 'feishu' / 'slack' / …)
+    provider_tenant_key: str  # corp_id / tenant_key / team_id
+    external_event_id: str  # msgId / event_id — the dedup key
+    event_type: str  # normalized event type for the ledger
+    external_ref: str  # conversationId / chat_id / channel_id
+    conversation_type: str | None  # IM conversation kind ('1' DM / '2' group); None for VCS
+    sender_key: str  # normalized sender identity segment (staffId or x=<b64url>)
+    text: str  # trimmed/truncated message text — UNTRUSTED data (§6.15)
+    truncated: bool  # True when the text hit MESH_IM_INBOUND_TEXT_MAX_CHARS
+    msgtype: str  # platform message type ('text' / 'richText' / … ; '' for VCS)
+    raw_payload: dict[str, Any]  # full original payload for the audit ledger
+    channel: str  # receive channel: 'http' | 'stream'
+    is_direct_message: bool = False
+    bot_mentioned: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
 def _constant_time_equals(expected: str, presented: str) -> bool:
     return hmac.compare_digest(expected.lower(), (presented or "").lower())
 
@@ -618,6 +647,7 @@ __all__ = [
     "GITLAB_EVENT_HEADER",
     "KIND_TO_PROVIDER",
     "NormalizedEvent",
+    "VerifiedEnvelope",
     "PROVIDER_TO_KIND",
     "SIG_INVALID",
     "SIG_MISSING",
