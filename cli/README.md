@@ -7,10 +7,16 @@ Mesh 开发者平台命令行:与 Web 同源 `/api/v1` 的 REST 瘦客户端。�
 ```bash
 pip install ./cli                     # 本地安装(入口 mesh)
 # 或经 Releases 的签名二进制:
-./install.sh cli-v0.19.0              # 校验 SHA-256 + minisign 签名后安装
+./install.sh cli-v0.20.0              # 校验 SHA-256 + minisign 签名后安装
 ```
 
 开发运行:`PYTHONPATH=cli/src python -m meshcli --help`。
+
+## 版本、分发与 OpenAPI(cli.md §5.4)
+
+- **版本协商**:`mesh version` 报告 CLI 版本 + 目标 API 版本;`mesh version --verbose` 追加运行时/平台、配置的 API 基址与**在线服务端 API 版本**(探测公开契约文档)。服务端返回 `Deprecation`/`Sunset` 响应头时,任何命令均在 stderr 打升级提示(含 SSE 流式通道)。
+- **公开契约**:[docs/api/openapi.yaml](../docs/api/openapi.yaml)(OpenAPI 3.1,`python backend/scripts/export_openapi.py` 生成)是与本 CLI 对齐的权威 API 契约——`/api/v1/daemon/*` 及内部端点**整体剔除**(非 `x-internal` 标记,孤儿 schema 一并移除)。CI 门禁 `tests/docs/check_openapi_surface.py` 断言 daemon 路径零命中 + CLI 依赖端点齐全;`backend/tests/unit/test_cli_openapi_contract.py`(应用↔yaml 漂移)与 `cli/tests/test_openapi_contract.py`(CLI 请求构造/响应解析↔yaml 漂移)双侧防漂移。
+- **签名分发**:推 `cli-v*` tag 触发 `.github/workflows/cli-release.yml`——四平台(linux/darwin × x86_64/aarch64)原生 runner 各构建 PyInstaller 单二进制,每个产物附 **SHA-256 校验和 + minisign 签名**;`install.sh` 先校验和、后验签(公钥 `cli/mesh-release.pub` 随仓库发布,与 runtime.md 安装包同基线),不鼓励盲管道(`curl | sh` 已废)。签名密钥经仓库 secret 注入,绝不进代码库。
 
 ## 登录
 
