@@ -79,7 +79,7 @@ npm run typecheck       # tsc --noEmit
 npm run test            # vitest 单元/组件测试
 npm run test:coverage   # 覆盖率(整体 lines/functions/branches/statements ≥90% 门禁)
 node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆盖率 ≥90% 校验
-npm run build           # 生产构建(tsc -b + vite build)
+npm run build           # 生产构建(gen:tokens + tsc -b + vite build)
 npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与 dev server)
 ```
 
@@ -128,7 +128,7 @@ frontend/
     │   ├── CommandPalette.tsx#   Ctrl/Cmd+K 命令面板(命令注册接口)
     │   └── ShortcutHelp.tsx  #   ? 快捷键帮助层
     ├── state/                # 全局状态
-    │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地持久化;阶段 2 接 PATCH /users/me)
+    │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地镜像 + 服务端同步:PATCH /users/me,auth.md §3.1;preferencesSync/pendingSettingsQueue/usePreferencesBootstrap)
     │   └── authStore.ts      #   Bearer token 存取
     └── shell/                # App shell 与占位页
         ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
@@ -146,5 +146,5 @@ frontend/
 ## 阶段 1·B 边界
 
 - 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。
-- 偏好写入当前为本地持久化;阶段 2 接通 `PATCH /api/v1/users/me`(auth.md §3.1)与 `PATCH /api/v1/workspaces/{id}`(workspace.md)。
+- 偏好写入已接通服务端同步:`PATCH /api/v1/users/me`(auth.md §3.1,键级浅合并;失败写 pending 分区队列待重放,§4.5)+ `PATCH /api/v1/workspaces/{id}` 的 `settings.default_theme`(workspace.md,admin);本地持久化降级为镜像与防闪烁首帧用途(历史边界说明,仅存档案价值)。
 - 前端容器化在后续 Issue 集成(本阶段以 dev server + 生产构建验证)。

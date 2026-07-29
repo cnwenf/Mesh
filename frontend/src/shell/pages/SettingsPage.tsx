@@ -56,7 +56,8 @@ export function SettingsPage(): React.JSX.Element {
   const lastSyncError = useSettingsStore((state) => state.lastSyncError);
   const clearSyncError = useSettingsStore((state) => state.clearSyncError);
 
-  // 占位标注「跟随工作区默认(X)」/「跟随系统(X)」需当前解析值(§4.1)。
+  // 占位标注「跟随默认(X)」/「跟随系统(X)」需当前解析值(§4.1):设置页为
+  // 全局路由(无工作区上下文),未设偏好时协商链落系统级(§2.2 已登录全局页等同 case3)。
   const workspaceDefault = useWorkspaceThemeBridge((state) => state.defaultTheme);
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
@@ -67,7 +68,7 @@ export function SettingsPage(): React.JSX.Element {
     media.addEventListener('change', onChange);
     return () => media.removeEventListener('change', onChange);
   }, []);
-  const workspaceResolved: ResolvedTheme = resolveThemeChain({
+  const defaultResolved: ResolvedTheme = resolveThemeChain({
     userTheme: null,
     workspaceDefault,
     systemPrefersDark: systemDark,
@@ -138,9 +139,10 @@ export function SettingsPage(): React.JSX.Element {
             setTheme(event.target.value === '' ? null : (event.target.value as ThemeMode))
           }
         >
-          {/* 首项 = 跟随工作区默认(写 null,§4.1),占位标注当前解析值 */}
+          {/* 首项 = 跟随默认(写 null,§4.1):全局页解析落系统级(§2.2),
+              占位标注当前解析值;工作区内由工作区默认级解析(WorkspaceProvider)。 */}
           <option value="">
-            {t('theme.followWorkspace', { theme: t('theme.' + workspaceResolved) })}
+            {t('theme.followDefault', { theme: t('theme.' + defaultResolved) })}
           </option>
           <option value="light">{t('theme.light')}</option>
           <option value="dark">{t('theme.dark')}</option>
@@ -149,6 +151,7 @@ export function SettingsPage(): React.JSX.Element {
             {t('theme.systemResolved', { theme: t('theme.' + systemResolved) })}
           </option>
         </Select>
+        <p className="mesh-settings__hint">{t('theme.defaultHint')}</p>
       </section>
 
       <section className="mesh-settings__section" aria-label={t('settings.language')}>

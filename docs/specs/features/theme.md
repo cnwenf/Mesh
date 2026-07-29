@@ -95,6 +95,7 @@
   - **邀请接受页(未登录)**:从**公开** `GET /api/v1/invitations/preview?token=`(workspace.md §3.1,凭不可枚举的邀请 token 访问,**仅返回有限公开字段**)读取 `appearance.default_theme`——该端点**不开放完整 workspace detail**(防工作区信息枚举);
   - **已登录进入工作区上下文**:读取成员接口 `GET /api/v1/workspaces/{id}` 返回的 `settings.default_theme`(同 `fetchWorkspaceDefaultLocale` 模板);
   - **无工作区上下文的公开页**:直接落 `system`。
+- **已登录但无工作区上下文的全局页**(设置/收件箱等非 `/w/{slug}`、非 `/invite` 路由)**等同 case3 → 直接落 `system`**:第 1 级 absent/`null` 跳过本级,第 2 级无工作区上下文不参与——**不以「用户首个所属工作区的默认」解析**(工作区默认级仅作用于工作区作用域路由与邀请接受页);`usePreferencesBootstrap` 读首个所属工作区仅用于 pending 队列主体分区(§2.3 三元组),**不写主题桥接**(桥接由 WorkspaceProvider 在工作区路由内独占);
 
 ### 2.3 单一事实源(前端)
 
@@ -190,7 +191,7 @@
 
 - **个人偏好**:设置 → 外观 → 主题下拉(light/dark/system),即时生效(既有实现延续);命令面板提供快捷命令(`theme.light`/`theme.dark`/`theme.system`/`theme.toggle`,既有注册延续);`system` 态标注当前系统解析值(如「跟随系统(暗)」,**并区别于「跟随工作区默认」**)让用户预知结果;
 - **工作区默认**:工作区设置 → 默认主题(admin 可见),写入 `settings.default_theme`,文案说明「成员未单独设置时生效」(**当前无此入口,属 T4 的 UI 面,随协商链一并落地**);
-- 两级关系可视化:用户级未设置(absent/null)时显示「跟随工作区默认(dark)」占位,显式选择后提供「恢复跟随默认」——**该动作实际写入 `settings.theme = null`**(而非 `system`,与 i18n.md §4.1 同款交互);`system` 选项文案为「跟随系统」,语义为忽略工作区默认。
+- 两级关系可视化:用户级未设置(absent/null)时选项首项显示「跟随默认(dark)」(**占位标注当前解析值**——全局页无工作区上下文即 system 解析值,工作区路由内为工作区默认解析值;文案不声称解析来源,附 hint 说明「工作区页面跟随工作区默认主题,全局页面跟随系统外观」),显式选择后提供「恢复跟随默认」——**该动作实际写入 `settings.theme = null`**(而非 `system`,与 i18n.md §4.1 同款交互);`system` 选项文案为「跟随系统(亮)」,标注系统当前解析值,语义为忽略工作区默认。
 
 ### 4.2 切换即时生效(无刷新、不重放动画)
 

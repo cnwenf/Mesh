@@ -1,6 +1,6 @@
 {
     "locale": "zh-CN",
-    "version": "c4a91bfc",
+    "version": "773f5f4b",
     "messages": {
         "a11y.closeDialog": "关闭对话框",
         "a11y.connectionStatus": "连接状态",
@@ -1981,7 +1981,8 @@
         "status.reconnecting": "重连中…",
         "status.resyncing": "正在重新同步…",
         "theme.dark": "深色",
-        "theme.followWorkspace": "跟随工作区默认（{theme}）",
+        "theme.defaultHint": "未单独设置时:工作区页面跟随工作区默认主题,全局页面跟随系统外观。",
+        "theme.followDefault": "跟随默认（{theme}）",
         "theme.label": "主题",
         "theme.light": "浅色",
         "theme.system": "跟随系统",

@@ -1,6 +1,6 @@
 {
     "locale": "en",
-    "version": "2bf47047",
+    "version": "51870815",
     "messages": {
         "a11y.closeDialog": "Close dialog",
         "a11y.connectionStatus": "Connection status",
@@ -1981,7 +1981,8 @@
         "status.reconnecting": "Reconnecting…",
         "status.resyncing": "Resyncing…",
         "theme.dark": "Dark",
-        "theme.followWorkspace": "Workspace default ({theme})",
+        "theme.defaultHint": "No preference: workspace pages follow the workspace default theme; global pages follow your system appearance.",
+        "theme.followDefault": "Default ({theme})",
         "theme.label": "Theme",
         "theme.light": "Light",
         "theme.system": "System",

@@ -266,7 +266,7 @@ describe('usePreferencesBootstrap(theme.md §4.5 登录回填)', () => {
     addSpy.mockRestore();
   });
 
-  it('工作区基线写入:bridge 基线态(null+loaded)时以首个工作区 default_theme 写入', async () => {
+  it('工作区主体:首个所属工作区 detail 后置 activeWorkspace,且不写主题桥接', async () => {
     useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: true });
     const fetchImpl = createFetch({
       me: () => meResponse(BASE_ME),
@@ -278,35 +278,16 @@ describe('usePreferencesBootstrap(theme.md §4.5 登录回填)', () => {
 
     renderHook(() => usePreferencesBootstrap());
 
-    await waitFor(() =>
-      expect(useWorkspaceThemeBridge.getState().defaultTheme).toBe('dark'),
-    );
-    expect(useWorkspaceThemeBridge.getState().loaded).toBe(true);
-    expect(getActiveSubject().workspaceId).toBe('ws-1');
-  });
-
-  it('基线竞态:bridge loaded=false(工作区路由加载中)时不写 defaultTheme,仍置主体', async () => {
-    useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: false });
-    const fetchImpl = createFetch({
-      me: () => meResponse(BASE_ME),
-      workspaceList: () => workspaceListResponse(['ws-1']),
-      workspaceDetail: () => workspaceDetailResponse({ default_theme: 'dark' }),
-    });
-    mocks.client = createMockClient(fetchImpl);
-    useAuthStore.setState({ token: 'tk' });
-
-    renderHook(() => usePreferencesBootstrap());
-
-    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
-    // 路由值(WorkspaceProvider)优先:基线不覆盖,loaded 保持未就绪。
+    await waitFor(() => expect(getActiveSubject().workspaceId).toBe('ws-1'));
+    // 桥接由 WorkspaceProvider 独占(§2.2:全局页无工作区上下文 → system):
+    // detail 含 default_theme='dark' 亦不写入桥接。
     expect(useWorkspaceThemeBridge.getState()).toMatchObject({
       defaultTheme: null,
-      loaded: false,
+      loaded: true,
     });
-    expect(getActiveSubject().workspaceId).toBe('ws-1');
   });
 
-  it('路由值优先:bridge 已有 defaultTheme 时不被基线覆盖', async () => {
+  it('桥接已持路由值(工作区导航后)时 bootstrap 同样不触碰', async () => {
     useWorkspaceThemeBridge.setState({ defaultTheme: 'light', loaded: true });
     const fetchImpl = createFetch({
       me: () => meResponse(BASE_ME),
@@ -319,43 +300,11 @@ describe('usePreferencesBootstrap(theme.md §4.5 登录回填)', () => {
     renderHook(() => usePreferencesBootstrap());
 
     await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
-    expect(useWorkspaceThemeBridge.getState().defaultTheme).toBe('light');
-  });
-
-  it('非法 default_theme 白名单收敛为 null(bridge.setWorkspaceDefault 语义)', async () => {
-    useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: true });
-    const fetchImpl = createFetch({
-      me: () => meResponse(BASE_ME),
-      workspaceList: () => workspaceListResponse(['ws-1']),
-      workspaceDetail: () => workspaceDetailResponse({ default_theme: 'neon' }),
-    });
-    mocks.client = createMockClient(fetchImpl);
-    useAuthStore.setState({ token: 'tk' });
-
-    renderHook(() => usePreferencesBootstrap());
-
-    await waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
     expect(useWorkspaceThemeBridge.getState()).toMatchObject({
-      defaultTheme: null,
+      defaultTheme: 'light',
       loaded: true,
     });
-  });
-
-  it('detail 无 default_theme:以 null 写入(占位标注解析来源基线)', async () => {
-    useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: true });
-    const setter = vi.spyOn(useWorkspaceThemeBridge.getState(), 'setWorkspaceDefault');
-    const fetchImpl = createFetch({
-      me: () => meResponse(BASE_ME),
-      workspaceList: () => workspaceListResponse(['ws-1']),
-      workspaceDetail: () => workspaceDetailResponse({}),
-    });
-    mocks.client = createMockClient(fetchImpl);
-    useAuthStore.setState({ token: 'tk' });
-
-    renderHook(() => usePreferencesBootstrap());
-
-    await waitFor(() => expect(setter).toHaveBeenCalledWith(null));
-    setter.mockRestore();
+    expect(getActiveSubject().workspaceId).toBe('ws-1');
   });
 
   it('空工作区列表:不发起 detail 请求、工作区主体不置', async () => {

@@ -34,7 +34,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **暗色细部(§4.3)**:`::selection`/`<mark>` 经选区 token(亮/暗各定义);`input:-webkit-autofill` 表面色校正(覆盖浏览器黄/蓝底);`prefers-reduced-transparency` scrim 不透明降级;`prefers-contrast: more` 边界/文本增强(token 再赋值非第三套主题);`@media (forced-colors: active)` 语义 token 重映射系统色 + raised 表面显式 border + `.mesh-forced-colors-keep` 自证对比区声明点;`@media print` 强制亮色(tokens-print.css);UGC 内联色对比兜底(评论/聊天/方案渲染后扫描,与表面色对比 <4.5:1 回退 `var(--color-text)`,主题变更事件重扫)+ markdown 代码块主题感知双色板。
 - **偏好健壮性(§4.5)**:pending 写失败分区队列 `mesh.settings.pending:{host}:{user_id}:{workspace_id}`(条目内嵌三元组;重放前主体校验不符不重放;冲突策略服务端回填优先——重放前 GET `/me` 比对 `updated_at`,服务端较新则丢弃 pending 采用服务端值;重试上限;`online`/前台恢复/下次写入触发);登录回填 `usePreferencesBootstrap`(GET `/me` 服务端覆盖本地同名镜像,匿名本地值不充当账号偏好);跨标签页 `storage` 事件即时同步偏好与 locator;`meta theme-color` 亮/暗双声明 + 显式切换 JS 联动。
 - **错误码升格(§3.3)**:非法主题值统一具名码 `422 invalid_theme_mode`(`details.theme/supported` 供本地化),取代通用 `validation_error`,auth.md/workspace.md 错误码表已同步登记;前端 `PreferenceSyncError` 归一 + i18n 文案(zh-CN/en,目录版本哈希重算)。
-- **设置 UI(§4.1)**:个人外观四态选择——「跟随工作区默认(X)」(占位标注当前解析值,写 null)/浅色/深色/「跟随系统(X)」(标注 OS 当前解析值,区别于跟随工作区默认);工作区设置默认主题三态入口(admin,成员未单独设置时生效)。
+- **设置 UI(§4.1)**:个人外观四态选择——「跟随默认(X)」(占位标注当前解析值,写 null;全局页无工作区上下文落 system 解析,文案不声称工作区来源,hint 标注「工作区页面跟随工作区默认、全局页面跟随系统外观」)/浅色/深色/「跟随系统(X)」(标注 OS 当前解析值,语义为忽略工作区默认);工作区设置默认主题三态入口(admin,成员未单独设置时生效)。
 
 ### Verified
 

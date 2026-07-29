@@ -16,8 +16,10 @@ Security contract (theme.md §5.3):
   caches never store a session-derived shell; the anonymous shell is
   byte-stable (no nonce) and served with a sha256-hashed FOUC script so it
   remains public-cacheable;
-- the workspace identity comes from the URL path segment only — never from
-  query params or headers; the injection payload carries no workspace
+- the workspace slug identity comes from the URL path segment only — never
+  from headers; the invite token additionally accepts the documented
+  ``/invite?token=`` query form (preview-equivalent exposure, no workspace
+  enumeration beyond it); the injection payload carries no workspace
   identifier/name (no enumeration surface).
 
 Read-only against the session model; degrades to a static shell (or 404 when

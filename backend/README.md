@@ -115,7 +115,8 @@ implements the first-frame precise-injection tier:
   entry never breaks the HTML response).
 - Session cookie (`auth.md §5.5`): `login`/`register`/`mfa/verify`/`refresh`
   issue the HttpOnly `mesh_session` cookie (`Secure` derived from `auth_mode`,
-  overridable via `MESH_COOKIE_SECURE`; `SameSite=Strict`; `Path=/`) carrying the
+  overridable via `MESH_COOKIE_SECURE`; `SameSite=Strict`; `Path=/`;
+  `Max-Age` tracks the refresh token TTL, extended when remember-me is used) carrying the
   refresh token — the additive channel this middleware reads; `logout`/`logout-all`
   clear it. The in-body refresh token is retained for the Bearer API flow.
 
