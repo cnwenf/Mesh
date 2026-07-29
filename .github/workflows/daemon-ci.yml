@@ -40,11 +40,14 @@ jobs:
       - name: Ruff lint
         run: ruff check src/ tests/
       - name: Full suite incl. real sandbox + ISO red-line matrix (root)
-        run: sudo -E python -m pytest --cov=mesh_runtime --cov-report=term-missing
+        # Resolve the interpreter BEFORE sudo: secure_path would otherwise
+        # re-resolve `python` to the system interpreter, which lacks pytest
+        # and the dev deps installed into the setup-python toolcache.
+        run: sudo -E "$(command -v python)" -m pytest --cov=mesh_runtime --cov-report=term-missing
       - name: ISO matrix junit evidence
         if: always()
         run: |
-          sudo -E python -m pytest tests/isolation --junit-xml=iso-matrix-junit.xml || true
+          sudo -E "$(command -v python)" -m pytest tests/isolation --junit-xml=iso-matrix-junit.xml || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
