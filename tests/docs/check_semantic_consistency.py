@@ -38,6 +38,13 @@ docs/specs/**/*.md 与 docs/specs/**/*.sql(含 validation 权威 SQL),把以下�
 规则 Y(登录响应体 refresh 残留):`/auth/login` 行或「登录…返回」行出现 refresh 且无
   「仅经/Set-Cookie/绝不/不含/无」标记——密码登录仅 Web cookie-only,响应体绝无
   refresh 明文(R4-H1/R4-M3)。
+规则 Z(auth.md 文件级:sessions 登记表完整性):auth.md 必须含 sessions-registry
+  标记块,且块内必需条目齐全(login/logout-all/refresh/token/reset-password/
+  change-password/sessions/WS 握手/HTML 入口)——白名单不闭合会使 logout-all、
+  reset-password、个性化 HTML 入口等已登记端点/首帧链路无法实现(R5-H2)。
+规则 AA(validation SQL 文件级:T38 pg_depend 断言):schema_r2_validation.sql 含 T38
+  则必须含 pg_depend + refobjid 逐条 OID 绑定断言——否则 9 条函数表达式索引迁移
+  未被真正验证(R5-H3)。
 
 **坏样例自测(R3-M2)**:每条规则携带一条注入坏样例,每次运行时先对坏样例语料执行
 全部规则,断言每条规则**必然命中**——避免「绿灯只证明正则没命中」(规则写坏/表达式
@@ -170,10 +177,55 @@ def scan_lines(lines: list[str], source: str) -> list[str]:
 
 def scan_file(path: Path) -> list[str]:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         return [f"{path}: 无法读取: {exc}"]
-    return scan_lines(lines, str(path))
+    return scan_lines(text.splitlines(), str(path)) + scan_file_level(path, text)
+
+
+# --------------------- 文件级语义规则(R5-H2/R5-H3)---------------------
+SESSIONS_REGISTRY_REQUIRED = (
+    "auth/login",
+    "logout-all",
+    "auth/refresh",
+    "auth/token",
+    "reset-password",
+    "change-password",
+    "/sessions",
+    "握手",          # WS 握手鉴权
+    "HTML 入口",     # 个性化 HTML 入口中间件
+)
+
+
+def check_sessions_registry(text: str) -> list[str]:
+    """auth.md:sessions 生命周期操作登记表完整性(R5-H2:标记块 + 必需路径齐全)。"""
+    violations: list[str] = []
+    start = text.find("<!-- sessions-registry:start -->")
+    end = text.find("<!-- sessions-registry:end -->")
+    if start < 0 or end < 0 or end < start:
+        violations.append("auth.md: 规则 Z: 缺少 sessions-registry 标记块(会话生命周期操作登记表未登记或不完整)")
+        return violations
+    block = text[start:end]
+    for required in SESSIONS_REGISTRY_REQUIRED:
+        if required not in block:
+            violations.append(f"auth.md: 规则 Z: sessions 登记表缺少必需条目「{required}」(白名单不闭合会使已登记端点/首帧链路无法实现)")
+    return violations
+
+
+def check_t38_pg_depend(text: str) -> list[str]:
+    """schema_r2_validation.sql:T38 必须含 pg_depend 逐条 OID 绑定断言(R5-H3)。"""
+    if "T38" in text and ("pg_depend" not in text or "refobjid" not in text):
+        return ["schema_r2_validation.sql: 规则 AA: T38 缺少 pg_depend/refobjid 逐条 OID 绑定断言(9 条函数表达式索引迁移未被真正验证)"]
+    return []
+
+
+def scan_file_level(path: Path, text: str) -> list[str]:
+    name = path.name
+    if name == "auth.md":
+        return check_sessions_registry(text)
+    if name == "schema_r2_validation.sql":
+        return check_t38_pg_depend(text)
+    return []
 
 
 # ----------------------------- 坏样例自测(R3-M2) -----------------------------
@@ -203,6 +255,24 @@ SELF_TEST_BAD_BLOCK = {
 }
 
 
+SELF_TEST_BAD_FILES = {
+    "规则 Z": (
+        "auth.md",
+        # 登记表缺 logout-all 条目 → 必须失败
+        "前言\n<!-- sessions-registry:start -->\n| POST /auth/login | 写:创建会话 |\n"
+        "| POST /auth/refresh | 读+写:轮换 |\n<!-- sessions-registry:end -->\n后记",
+    ),
+    "规则 Z(无标记块)": (
+        "auth.md",
+        "| POST /auth/logout-all | 批量撤销 |  # 登记表在标记块外,视为未登记",
+    ),
+    "规则 AA": (
+        "schema_r2_validation.sql",
+        "-- T38:词典升级 smoke test(仅改名切换,无依赖断言)\nALTER FUNCTION x RENAME TO y;\n",
+    ),
+}
+
+
 def run_self_tests() -> list[str]:
     failures: list[str] = []
     for rule, bad_line in SELF_TEST_BAD_LINES.items():
@@ -213,6 +283,13 @@ def run_self_tests() -> list[str]:
         hits = scan_lines(bad_block, "<self-test>")
         if not any(rule in h for h in hits):
             failures.append(f"自测失败:{rule} 未命中其注入坏代码块(规则表达式可能已失效)")
+    for rule, (filename, bad_content) in SELF_TEST_BAD_FILES.items():
+        hits = scan_lines(bad_content.splitlines(), "<self-test>") + scan_file_level(
+            Path(filename), bad_content
+        )
+        rule_key = rule.split("(")[0]
+        if not any(rule_key in h for h in hits):
+            failures.append(f"自测失败:{rule} 未命中其注入坏文件(文件级规则可能已失效)")
     return failures
 
 

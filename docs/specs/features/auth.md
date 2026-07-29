@@ -21,10 +21,30 @@
 
 **会话模型取舍**:采用"短期无状态 access JWT(便于横向扩展)+ 服务端可撤销 refresh token(支撑撤销与多设备管理)"混合模型,比纯 JWT 或纯 session cookie 更平衡。access TTL 短(如 15min),使撤销最长延迟 = access TTL。
 
-**无状态 access 的执行边界(评审 R3-H1 建立,R4-H2 写死为不变量 + 白名单,全链唯一口径)**:
+**无状态 access 的执行边界(评审 R3-H1 建立,R4-H2 写死为不变量 + 登记表,R5-H2 闭合,全链唯一口径)**:
 - **不变量**:**常规资源路由的 Bearer 中间件不逐请求查 `sessions` 表**——对会话 access JWT 只做验签 + `exp` + claims 解析(横向扩展与低延迟的既定取舍)。这是唯一的硬边界;不以「仅 N 处查表」式绝对枚举表述(会掩盖正常会话管理路径,R4-H2 收口)。
-- **显式会话管理操作白名单(允许查/写 `sessions`,按 `sid` 或 refresh `jti` 定位)**:① 自省 `GET /auth/token`;② 自撤销 `DELETE /auth/token`;③ 续期 `/auth/refresh`(校验会话未撤销/未过期 + 轮换);④ 登出 `POST /auth/logout`(撤销当前会话 refresh);⑤ 修改密码 `POST /auth/change-password`(以当前 access `sid` 识别并保留发起会话,§3.1);⑥ 会话管理 `GET /sessions` / `DELETE /sessions/{id}`(列表与指定撤销)。**白名单之外的任何路径不得查 `sessions` 表**(新增会话管理操作须先入白名单再实现);
-- **撤销语义**:会话撤销(登出/自撤销/指定撤销/改密撤销其它会话)→ refresh **立即失效**(白名单路径命中 `revoked_at` 即拒),**已签发 access 最迟于 TTL(≤15min)自然失效**,窗口内已撤销会话的 access 在常规路由**仍可通过**(不变量使然)——验收不得要求会话撤销对常规路由即时生效(PAT 无此窗口:`api_tokens.revoked_at` 逐请求查,撤销即时 401,长令牌对逐请求查表的负载可接受);WebSocket 连接经 `session.revoked` 实时广播主动失效(§3.7),不等 TTL。全链不得出现「常规请求按 `sid` 逐请求查 session 即时 401」的表述(与不变量互斥)。
+- **会话生命周期操作登记表(查/写 `sessions` 的全部操作,按路径 + 读写目的完整登记;R4-H2 建立,R5-H2 闭合——硬边界只约束常规资源中间件,生命周期操作经本表显式授权,避免「白名单不闭合使已登记端点/首帧链路无法实现」)**:
+
+<!-- sessions-registry:start -->
+
+| 路径 / 入口 | 读写目的 |
+|------|------|
+| `POST /auth/login` | **写**:创建会话行、签发 refresh(Web 经 Set-Cookie;密码/OAuth 仅 Web 形态,§3) |
+| `POST /auth/logout` | **读 + 写**:定位当前会话(Web 按 cookie / CLI 按 Bearer)并撤销 |
+| `POST /auth/logout-all` | **读 + 写**:**批量撤销**该用户全部未撤销会话 |
+| `POST /auth/refresh` | **读 + 写**:校验会话未撤销/未过期 + 轮换仲裁 / 有界宽限(§3.8) |
+| `GET /auth/token` | **读**:自省当前凭证的会话元数据 |
+| `DELETE /auth/token` | **写**:自撤销当前会话 |
+| `POST /auth/reset-password` | **读 + 写**:密码重置后使该用户**全部会话失效**(凭重置令牌定位 user 后批量撤销) |
+| `POST /auth/change-password` | **读 + 写**:按当前 access `sid` 识别并保留发起会话、更新 `authenticated_at`(R5-M1)、撤销其它会话 |
+| `GET /sessions` / `DELETE /sessions/{id}` | **读 / 写**:会话列表与指定撤销 |
+| `/ws` 握手鉴权(§3.7) | **读**:连接建立时校验 token、订阅逐资源授权;`session.revoked` 广播触发主动断开 |
+| 个性化 HTML 入口中间件(theme.md §2.3 精确注入) | **读**:`mesh_session` cookie → 会话 → 请求者 `users.settings.theme` / 路由工作区默认,注入 `__MESH_APPEARANCE__`(**只读不写;响应 `Cache-Control: private, no-store`**) |
+
+<!-- sessions-registry:end -->
+
+  **登记表之外的任何路径不得查/写 `sessions` 表**;新增会话生命周期操作**必须先更新本登记表(路径 + 读写目的)再实现**——语义校验脚本(`tests/docs/check_semantic_consistency.py` 规则 Z)以 `sessions-registry` 标记块为锚,断言登记完整性(必需路径齐全:login / logout / logout-all / refresh / token / reset-password / change-password / sessions / WS / 个性化 HTML 入口),注入缺项坏样例必失败;
+- **撤销语义**:会话撤销(登出/自撤销/指定撤销/改密撤销其它会话)→ refresh **立即失效**(登记表路径命中 `revoked_at` 即拒),**已签发 access 最迟于 TTL(≤15min)自然失效**,窗口内已撤销会话的 access 在常规路由**仍可通过**(不变量使然)——验收不得要求会话撤销对常规路由即时生效(PAT 无此窗口:`api_tokens.revoked_at` 逐请求查,撤销即时 401,长令牌对逐请求查表的负载可接受);WebSocket 连接经 `session.revoked` 实时广播主动失效(§3.7),不等 TTL。全链不得出现「常规请求按 `sid` 逐请求查 session 即时 401」的表述(与不变量互斥)。
 
 ### 1.2 功能点 + 用户场景表
 
@@ -125,8 +145,9 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `id` | UUID | PK | 会话 ID。**即 access JWT 的 `sid` 声明值与 refresh token 的 `jti` 值**(二者同指本行;access JWT 另有**逐枚唯一**的 `jti` 做单枚令牌标识,不与 `sid` 混用——评审 R2-H1 收口:此前「sessions.id = refresh jti」与「自省按 access jti 查 sessions」无可执行关联) |
 | `user_id` | UUID | NOT NULL,FK→users(id) ON DELETE CASCADE | |
 | `token_hash` | TEXT | NOT NULL,UNIQUE | 当前 refresh token 的 SHA-256 哈希(不存明文) |
-| `previous_token_hash` | TEXT | NULL | **轮换前的上一枚 refresh 哈希(§3.8 有界幂等轮换)**:仅用于宽限窗内识别「被轮换掉的旧凭证」,宽限过后清空(NULL);UNIQUE(NULL 不冲突) |
-| `rotated_at` | TIMESTAMPTZ | NULL | 最近一次轮换时刻(与 `previous_token_hash` 同事务置位;`now() - rotated_at ≤ 宽限窗` 时旧凭证走幂等路径) |
+| `previous_token_hash` | TEXT | NULL | **轮换前的上一枚 refresh 哈希(§3.8 有界幂等轮换)**:仅用于宽限窗内**识别**「被轮换掉的旧凭证」——宽限命中时**只发 access,不返回任何 refresh 明文、不二次轮换**(R5-H1:仅存哈希模型下无法还原胜者明文);宽限过后清空(NULL);UNIQUE(NULL 不冲突) |
+| `rotated_at` | TIMESTAMPTZ | NULL | 最近一次轮换时刻(与 `previous_token_hash` 同事务置位;`now() - rotated_at ≤ 宽限窗` 时旧凭证走宽限路径) |
+| `authenticated_at` | TIMESTAMPTZ | NOT NULL DEFAULT `now()` | **最近一次主动认证时刻(R5-M1:step-up 再认证状态唯一真源)**:会话创建(登录)时置位;用户在会话上完成 step-up 再认证时更新为 `now()`(如改密保留发起会话 §3.1、TOTP 再校验);**step-up 有效期判定 = `now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s,§5.5)**,无独立过期列(窗口比对即判据);会话撤销后自然失效 |
 | `type` | TEXT | NOT NULL DEFAULT 'web',CHECK IN ('web','cli','api') | 会话来源(`cli` = 设备码登录) |
 | `workspace_id` | UUID | NULL,FK→workspaces(id) ON DELETE CASCADE | **CLI/设备会话绑定的工作区**(批准页显式选定,§3.1.1);`web` 会话为 NULL(多工作区交互式会话按请求路径解析工作区)。**CHECK:`type='cli'` 时 `workspace_id` 必须非空**——设备会话的后续请求与 refresh 续签一律以此列为工作区真源,不重新选择 |
 | `granted_scopes` | TEXT[] | NOT NULL DEFAULT '{}' | **会话固化的签发 scope**(登录/批准时取交结果:请求 scope ∩ 当时角色权限)。**refresh 续签时从此列取固化 scope 并与当前角色权限再次取交**(角色降权后旧 scope 不延续);`web` 会话为空数组(权限按角色实时计算) |
@@ -143,7 +164,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 - `uq_token_hash (token_hash)`;`uq_sessions_device_auth (device_authorization_id)`(NULL 不冲突);
 - `idx_sessions_user (user_id) WHERE revoked_at IS NULL`。
 
-> **access JWT 声明(写死)**:`{sub: user_id, sid: session.id, jti: <本枚 access 唯一>, workspace_id?: <设备会话绑定值>, scope?: <固化 scope>, exp, iat}`。**常规路由只验签 + `exp` + claims,不按 `sid` 查表**(§1.1 不变量);`sid` 查表仅限 §1.1 **显式会话管理操作白名单**(自省/自撤销/续期/登出/改密保留发起会话/会话列表与指定撤销);`/auth/refresh` 按 refresh `jti`(= session.id)校验会话未撤销;`jti` 仅用于单枚 access 的审计/去重,不承担会话关联。撤销 session 后 refresh 立即失效,已签发 access 最迟 TTL 自然失效(窗口内常规路由仍可通过,§1.1/§3.7/§5.5);WS 连接经 `session.revoked` 广播主动断开。
+> **access JWT 声明(写死)**:`{sub: user_id, sid: session.id, jti: <本枚 access 唯一>, workspace_id?: <设备会话绑定值>, scope?: <固化 scope>, exp, iat}`。**常规路由只验签 + `exp` + claims,不按 `sid` 查表**(§1.1 不变量);`sid` 查表仅限 §1.1 **会话生命周期操作登记表**(自省/自撤销/续期/登出/改密保留发起会话/会话列表与指定撤销);`/auth/refresh` 按 refresh `jti`(= session.id)校验会话未撤销;`jti` 仅用于单枚 access 的审计/去重,不承担会话关联。撤销 session 后 refresh 立即失效,已签发 access 最迟 TTL 自然失效(窗口内常规路由仍可通过,§1.1/§3.7/§5.5);WS 连接经 `session.revoked` 广播主动断开。
 
 ### 2.4.1 表:`password_reset_tokens` 与 `email_verification_tokens`(一次性令牌)
 
@@ -245,7 +266,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | `mesh_agt_` | agent 运行凭证 | `api_tokens.token_hash`(SHA-256) | agent 的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色;默认不含 `agent:trigger` 防回环) | 命中行 JOIN `members.member_type='agent'`,否则拒绝 |
 | `mesh_rt_` | runtime 守护进程令牌 | **`runtimes.runtime_token_hash`(SHA-256,runtime.md §2 owns;R2-H2 写死:不入 `api_tokens`——runtime 非名册成员,`owner_member_id NOT NULL` 无法承载)** | runtime(机器) | **仅 `/api/v1/daemon/*` 命名空间**(runtime.md §3.2),不得调控制台 API | 仅以 `runtimes` 表校验(哈希 + runtime_id 匹配);常规路由的 Bearer 依赖对 `mesh_rt_` 一律拒绝 |
 | `mesh_rft_` | 会话 refresh token | `sessions.token_hash`(SHA-256) | 用户会话 | **仅 `POST /api/v1/auth/refresh`** | 仅 refresh 端点受理;其他端点出现即拒绝 |
-| (无前缀,JWT 格式) | 会话 access JWT | 无状态验签(**常规路由不查表**,R3-H1 不变量) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min | 验签 + exp + claims 有效;**`sid` 查表仅限 §1.1 显式会话管理操作白名单**(R4-H2,不以「三处」绝对枚举表述) |
+| (无前缀,JWT 格式) | 会话 access JWT | 无状态验签(**常规路由不查表**,R3-H1 不变量) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min | 验签 + exp + claims 有效;**`sid` 查表仅限 §1.1 会话生命周期操作登记表**(R4-H2/R5-H2,不以「三处」绝对枚举表述) |
 
 > **注册表校验 = 词形 + 类型语义(R2-H2 写死)**:校验链先按前缀路由到**对应存储表**(词形),再断言**持有者类型与使用边界**(类型语义)——`mesh_agt_` 前缀的令牌命中 human 成员行、`mesh_rt_` 出现在常规路由、`mesh_rft_` 出现在 refresh 以外端点,一律拒绝并告警。扫描/测试不止检查「前缀字符串存在」,还断言示例与实现中**前缀 ⇄ 存储表 ⇄ 持有者类型**三者绑定一致(§5.2)。
 
@@ -336,12 +357,12 @@ approved ──TTL 过期──► expired(未被消费即过期)
 |------|------|------|:---:|
 | POST | `/api/v1/auth/register` | 邮箱+密码注册 | ✅ |
 | POST | `/api/v1/auth/login` | 密码登录(**仅 Web 形态,R4-H1**):校验成功 → 响应体仅 access JWT + 元数据,refresh **仅经 `Set-Cookie mesh_session`(HttpOnly/Secure/SameSite=Strict/Path=/)下发,绝不进响应体**;**不接受调用方自报客户端形态,不提供非浏览器密码流**(CLI 走设备授权 §3.1.1 / PAT) | ✅ |
-| POST | `/api/v1/auth/refresh` | refresh 换新 access(可轮换 refresh)。**传输形态由会话签发来源决定(R4-H1,非调用方自报)**:Web 密码/OAuth 来源会话认 HttpOnly cookie `mesh_session`(SameSite=Strict + Origin/Referer 同源校验,轮换经 `Set-Cookie` 下发,**多 tab 竞态按 §3.8 有界幂等轮换**);设备授权来源会话认 `Authorization: Bearer mesh_rft_…`;同请求只认其一。**新 access 的 scope = 会话 `granted_scopes` 固化值 ∩ 持有者当前角色权限**(R2-H1:角色降权后旧 scope 不延续;`web` 会话 granted_scopes 为空,按角色实时计算);新 access 继承 `sid`、另发逐枚唯一 `jti`;设备会话 access 继承 `workspace_id` 声明;**校验按 refresh `jti`(= session.id)命中 sessions 行且 `revoked_at` 为空**(属 §1.1 会话管理白名单操作) | ✅ |
+| POST | `/api/v1/auth/refresh` | refresh 换新 access(可轮换 refresh)。**传输形态由会话签发来源决定(R4-H1,非调用方自报)**:Web 密码/OAuth 来源会话认 HttpOnly cookie `mesh_session`(SameSite=Strict + Origin/Referer 同源校验,轮换经 `Set-Cookie` 下发,**多 tab 竞态按 §3.8 有界幂等轮换**);设备授权来源会话认 `Authorization: Bearer mesh_rft_…`;同请求只认其一。**新 access 的 scope = 会话 `granted_scopes` 固化值 ∩ 持有者当前角色权限**(R2-H1:角色降权后旧 scope 不延续;`web` 会话 granted_scopes 为空,按角色实时计算);新 access 继承 `sid`、另发逐枚唯一 `jti`;设备会话 access 继承 `workspace_id` 声明;**校验按 refresh `jti`(= session.id)命中 sessions 行且 `revoked_at` 为空**(属 §1.1 会话生命周期操作登记表) | ✅ |
 | POST | `/api/v1/auth/logout` | 登出当前会话(撤销 refresh) | |
 | POST | `/api/v1/auth/logout-all` | 撤销该用户全部会话 | |
 | POST | `/api/v1/auth/forgot-password` | 发起重置(恒返回成功,防枚举) | ✅ |
 | POST | `/api/v1/auth/reset-password` | 凭重置令牌设新密码并使旧会话失效 | ✅ |
-| POST | `/api/v1/auth/change-password` | **已登录态修改密码(§4.2)**:body `{old_password, new_password}`——校验旧密码(argon2id 恒定时间比较;错误 → `422 invalid_credentials`)。**旧密码重输即 §5.5 敏感操作 step-up 再认证**(「近期重新输入密码」由本表单天然满足,不另设再认证门槛)→ 校验新密码强度(复用注册策略 §5.1;弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 更新 `password_hash` + `password_changed_at=now()` → **使该用户其它 refresh 会话失效**(**发起会话以当前请求 access JWT 的 `sid` 识别并保留**(R4-H1:Web JS 读不到 refresh,body 不再传 `refresh_token?`;`sid` 属 §1.1 显式会话管理白名单操作),刷新其 `authenticated_at` 为本次认证时刻;`sid` 缺失/会话已撤销则全部失效;PAT 单独管理;撤销经 §3.7/§5.6 outbox→realtime 广播)→ 写账号级审计 `user.password_changed`(§2.6)。限流同登录类(§3.6,(IP, 邮箱) 5 次/分钟);成功 `200 {"data": {"status": "ok"}}` | |
+| POST | `/api/v1/auth/change-password` | **已登录态修改密码(§4.2)**:body `{old_password, new_password}`——校验旧密码(argon2id 恒定时间比较;错误 → `422 invalid_credentials`)。**旧密码重输即 §5.5 敏感操作 step-up 再认证**(「近期重新输入密码」由本表单天然满足,不另设再认证门槛)→ 校验新密码强度(复用注册策略 §5.1;弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 更新 `password_hash` + `password_changed_at=now()` → **使该用户其它 refresh 会话失效**(**发起会话以当前请求 access JWT 的 `sid` 识别并保留**(R4-H1:Web JS 读不到 refresh,body 不再传 `refresh_token?`;`sid` 属 §1.1 会话生命周期登记表操作),刷新其 `authenticated_at=now()`(step-up 状态唯一真源,§2.4,R5-M1);`sid` 缺失/会话已撤销则全部失效;PAT 单独管理;撤销经 §3.7/§5.6 outbox→realtime 广播)→ 写账号级审计 `user.password_changed`(§2.6)。限流同登录类(§3.6,(IP, 邮箱) 5 次/分钟);成功 `200 {"data": {"status": "ok"}}` | |
 | POST | `/api/v1/auth/verify-email` | 验证邮箱 | ✅ |
 | GET | `/api/v1/auth/oauth/{provider}/start` | 发起第三方登录(302,state + PKCE) | ✅ |
 | GET/POST | `/api/v1/auth/oauth/{provider}/callback` | 回调:登录或自动注册并绑定 | ✅ |
@@ -456,15 +477,21 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - **会话/token 撤销实时生效**:撤销落库后同事务写 outbox(README §6.6),经 realtime 网关广播使相关连接失效或下次心跳鉴权失败重连被拒(**不用进程内事件总线**);access JWT 短期,撤销最长延迟 = 其 TTL。**广播事件名写死为 `session.revoked`**(README §6.7 注册表「会话 / 鉴权」域已登记;MES-77 事实核查建议项补注:事件名字面如此前仅存于后端代码,本节为 Spec 侧权威落点),按该用户所属各工作区频道逐一 fan-out。
 - 异常登录提醒经 WebSocket 站内 + 邮件双通道。
 
-### 3.8 refresh 轮换竞态:服务端有界幂等轮换(R4-M4 写死)
+### 3.8 refresh 轮换竞态:有界幂等轮换 + 胜者唯一下发(R4-M4 建立,R5-H1 写死——仅存哈希模型下可实现的唯一闭合方案)
 
-多 tab 共用同一 HttpOnly cookie、各自在内存持有 access;**同时过期时会并发 `/auth/refresh`**——若「轮换即撤销旧 refresh」无条件生效,胜者轮换后其余 tab 在途请求携带的旧 refresh 已失效 → 401 → 正常 tab 被误判登出。本 Spec 选**服务端有界幂等轮换**(不依赖客户端跨 tab 协调,Web Locks/BroadcastChannel 非必需,非浏览器客户端同样受益):
+多 tab 共用同一 HttpOnly cookie、各自在内存持有 access;**同时过期时会并发 `/auth/refresh`**——若「轮换即撤销旧 refresh」无条件生效,其余 tab 在途请求携带的旧 refresh 已失效 → 401 → 正常 tab 被误判登出。
 
-- **轮换事务**:校验当前 `token_hash` 命中且会话未撤销 → 生成新 refresh,`token_hash ← 新值`、**`previous_token_hash ← 旧值`、`rotated_at ← now()` 同事务置位** → 下发新凭证(Web 经 `Set-Cookie`,设备会话经响应体);
-- **宽限幂等路径**:refresh 请求未命中 `token_hash` 但命中 **`previous_token_hash`,且 `now() - rotated_at ≤ MESH_REFRESH_ROTATION_GRACE_SECONDS`(默认 30s)、会话未撤销** → **不再轮换**,直接返回**当前**凭证(当前 refresh + 新 access,Web 同时 `Set-Cookie` 当前 refresh)——即「并发轮换的后来者复用胜者结果」,双 tab 均续期成功、cookie 收敛到同一当前值、**不误登出**;
-- **宽限外 / 会话已撤销**:`previous_token_hash` 命中但超窗或会话已撤销 → `401 unauthorized`(重放/窃取按正常失效处理);宽限窗结束后下一次会话写操作顺带清空 `previous_token_hash`(防旧哈希长期留存);
-- **安全性**:宽限窗内旧凭证只能换得**同一会话的当前凭证**(不产生新会话、不延长会话生命、不放宽 scope),等价于一次幂等重试;窗口默认 30s 远小于 refresh 寿命,重放面有界;`previous_token_hash` 同样仅存哈希。
-- **验收(e2e)**:**双 tab 同时过期并发 refresh → 两个请求均 200**(其一真轮换、其一命中幂等路径),两 tab 最终 cookie/凭证一致且后续请求均通过,**无误登出**;宽限窗外重放旧 refresh → 401;会话撤销后幂等路径亦 401。
+**核心约束(R5-H1 收口)**:`token_hash` / `previous_token_hash` **均只存 SHA-256 哈希,服务端无法从哈希还原胜者生成的当前 refresh 明文**——故宽限路径**不返回、也不需要返回 refresh 明文**(此前「宽限返回当前 refresh + 重新 Set-Cookie」表述已撤销,其在仅存哈希模型下不可实现)。写死**方案 A:胜者唯一下发 + 宽限只发 access**:
+
+- **轮换仲裁(条件更新,行数控裁)**:refresh 请求执行条件轮换——`UPDATE sessions SET token_hash=$new, previous_token_hash=token_hash, rotated_at=now() WHERE id=$sid AND token_hash=$presented AND revoked_at IS NULL`(先由 `$presented` 的哈希定位候选行):
+  - **影响行数 = 1 → 本请求为唯一胜者**:响应下发**本次生成的新 refresh 明文** + 新 access(Web 经 `Set-Cookie: mesh_session=<新值>`;CLI/设备会话经响应体);
+  - **影响行数 = 0 → 重读会话行判定**:① `$presented` 匹配当前 `token_hash`(并发下他人刚轮换为同一呈现值的极端情形)→ 按当前凭证正常处理;② `$presented` 匹配 `previous_token_hash` 且满足宽限条件 → 宽限路径;③ 均不匹配 → `401 unauthorized`;
+- **宽限路径(只发 access,绝不下发 refresh 明文,绝不二次轮换)**:`$presented` 匹配 `previous_token_hash` 且 `now() - rotated_at ≤ MESH_REFRESH_ROTATION_GRACE_SECONDS`(默认 30s)且 `revoked_at IS NULL` → **仅签发新 access JWT;无 `Set-Cookie`、响应体不含任何 refresh**;**宽限路径不写库**(`token_hash`/`previous_token_hash`/`rotated_at` 一律不动——无链式放大)。机理:新 refresh 的**唯一下发通道是胜者响应**,后来者只需拿到 access 即可延续会话,凭证收敛由下述客户端机制保证;
+- **Web 收敛(共享 cookie jar)**:浏览器 cookie jar **按 origin 共享、跨 tab 一致**——胜者响应的 `Set-Cookie` 把 jar 更新为新 refresh;**胜者/后来者响应任意乱序(后来者先到达亦然),结果相同**:两请求均 200(胜者 = 新 refresh + access;后来者 = 仅 access),此后**任一 tab 的后续请求自动携带 jar 中的新 refresh** → 收敛到单一当前凭证,**不误登出**。陈旧窗口仅覆盖「后来者 in-flight 请求发出 ↔ 胜者 Set-Cookie 到达 jar」之间已派发的请求,由宽限路径兜住;
+- **CLI / 设备客户端 single-flight(写死)**:CLI/设备端无共享 cookie jar,客户端协调写死为:**同一凭证存储(凭证文件)单元内至多一个 in-flight refresh**(进程内锁 + 等待队列,并发调用方共享同一请求结果);**命中宽限路径或收到 401 时,必须先重读凭证文件再宣告失败**(胜者进程可能已将新 refresh 写入文件)——重读成功 → 以新 refresh 重试;重读后仍失败且已超宽限窗 → 退码 2 重新登录。多进程共用凭证文件时经「胜者进程写文件 + 后来进程强制重读」收敛;**响应乱序不破坏收敛**(真源在凭证文件与 sessions 表,不在单进程内存副本);
+- **宽限外 / 会话已撤销**:`previous_token_hash` 匹配但超窗或 `revoked_at` 非空 → `401 unauthorized`(重放/窃取按正常失效处理);宽限窗结束后下一次会话写操作顺带清空 `previous_token_hash`(防旧哈希长期留存);
+- **安全性**:宽限路径**不下发任何 refresh 明文**(新 refresh 的唯一获取通道是胜者响应)、**不轮换**(无链式放大)、不产生新会话 / 不延长会话生命 / 不放宽 scope;窗口默认 30s 远小于 refresh 寿命,重放面有界;`previous_token_hash` 仅存哈希;
+- **验收(真实并发 e2e,R5-H1 断言清单——不得以哈希查询测试替代)**:① 携带同一旧 refresh 的**两个并发 refresh(真并行,非串行模拟)→ 恰一个响应携带新 refresh(胜者)、另一个仅 access**,两者均 200;② **响应乱序**(后来者响应先于胜者到达)→ 最终 cookie jar / 凭证文件持有胜者新 refresh,两 tab/进程后续请求均通过,**无误登出**;③ 宽限窗外重放旧 refresh → 401;④ 会话已撤销 → 胜者路径与宽限路径均 401;⑤ **宽限响应无 refresh 明文**(响应体与 Set-Cookie 抓包断言);⑥ 终态 `sessions` 仅单一当前 `token_hash`,宽限路径未变更 `token_hash`/`previous_token_hash`/`rotated_at`;⑦ CLI 双进程共用凭证文件并发 refresh → 文件收敛为胜者新 refresh,后来进程重读后重试成功。**T36(PG16)以串行等价验证协议判定逻辑**(行数仲裁 / 宽限条件 / 不二次轮换 / 窗口 / 撤销);本真并行 e2e 在后端实现期落实并纳入 CI。
 
 ---
 
@@ -500,8 +527,8 @@ approved ──TTL 过期──► expired(未被消费即过期)
 
 1. **注册**:校验强度与唯一性 → argon2id 哈希 → 建 `users` → 发验证邮件;未验证可登录但受限。
 2. **登录(仅 Web 形态,R4-H1)**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行(`type='web'`)并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,§2.4)+ 长期 refresh(存哈希入 `sessions`);**refresh 仅经 `Set-Cookie: mesh_session=…; Secure; HttpOnly; SameSite=Strict; Path=/` 下发,响应体绝无 refresh 明文;不接受调用方自报客户端形态,不提供非浏览器密码流**(CLI/API 非浏览器客户端走设备授权流 §3.1.1——token 端点返回 `mesh_rft_…` Bearer——或 PAT `mesh_pat_`)。`remember=true` 延长 refresh。
-3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh`(Web 经 cookie,设备会话经 Bearer)→ 校验哈希未撤销未过期(**或命中 §3.8 有界幂等轮换宽限**:已被轮换的旧 refresh 在宽限窗内返回当前凭证,多 tab 不误登出)→ **从会话行取固化 `granted_scopes` 与当前角色权限取交**作为新 access 的 scope(R2-H1)→ 颁新 access(继承 `sid`、新 `jti`;轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
-4. **登出**:撤销当前 refresh(Web 按 cookie 定位会话,CLI 按 Bearer 或自撤销端点);「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——**修改密码时发起会话以当前 access `sid` 识别并保留**(R4-H1,body 不传 refresh),刷新其近期再认证时刻;无有效 `sid` 则全部失效(PAT 单独管理)。
+3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh`(Web 经 cookie,设备会话经 Bearer)→ 校验哈希未撤销未过期(**或命中 §3.8 有界幂等轮换宽限**:已被轮换的旧 refresh 在宽限窗内**仅获发新 access,不下发 refresh 明文、不二次轮换**,凭证经胜者响应 + 共享 cookie jar / CLI 重读收敛,多 tab 不误登出)→ **从会话行取固化 `granted_scopes` 与当前角色权限取交**作为新 access 的 scope(R2-H1)→ 颁新 access(继承 `sid`、新 `jti`;轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
+4. **登出**:撤销当前 refresh(Web 按 cookie 定位会话,CLI 按 Bearer 或自撤销端点);「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——**修改密码时发起会话以当前 access `sid` 识别并保留**(R4-H1,body 不传 refresh),刷新其 `authenticated_at=now()`(§2.4);无有效 `sid` 则全部失效(PAT 单独管理)。
 5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。
 6. **API token / agent 凭证**:创建→存哈希、一次性明文→**CLI 从环境变量读取 API token(`mesh_pat_`/`mesh_agt_`,绝不硬编码**;**runtime 机器令牌 `mesh_rt_` 不经 api_tokens,由 mesh-runtime daemon 激活后持有,runtime.md §3.5,R4-M3**)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`,人类/agent 经 JOIN `members.member_type` 判别);agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
 
@@ -526,7 +553,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] **401 canonical code(README §6.14)**:凭证缺失/无效/过期与邮箱未验证统一返回 401 `unauthorized`(未验证以 `details.reason='email_not_verified'` 区分,不另立 code)。
 - [ ] 失败计数达阈值返回 423 `account_locked`。
 - [ ] access 过期可用 refresh 静默续期;refresh 轮换后旧的立即失效(防重放)。
-- [ ] 登出撤销当前 refresh;登出所有批量撤销;密码变更使其它 refresh 会话失效(**已登录态修改密码时发起会话以当前 access `sid` 识别并保留(R4-H1),无有效 sid 则全部失效**);登出/改密/会话列表/指定撤销均属 §1.1 会话管理白名单操作。
+- [ ] 登出撤销当前 refresh;登出所有批量撤销;密码变更使其它 refresh 会话失效(**已登录态修改密码时发起会话以当前 access `sid` 识别并保留(R4-H1),无有效 sid 则全部失效**);登出/改密/会话列表/指定撤销均属 §1.1 会话生命周期操作登记表。
 - [ ] **登录形态固定(R4-H1)**:密码/OAuth 登录响应体**绝无 refresh 明文**(refresh 仅 `Set-Cookie mesh_session` HttpOnly 下发;断言响应 JSON 无 refresh 字段、`document.cookie` 读不到);**登录端点不接受客户端自报形态参数**(`Accept` 协商 / `client=` 一律不影响响应形态);CLI 非浏览器密码流不存在(CLI 仅设备授权/PAT,§3.1.1/§3.2)。
 - [ ] **已登录态修改密码(§4.2)**:`POST /api/v1/auth/change-password`(鉴权态)校验旧密码(错误 → `422 invalid_credentials`)与新密码强度(弱 → `400 weak_password`,三 reason 复用注册策略),成功更新 `password_hash` + `password_changed_at` 并使其它会话失效、写审计 `user.password_changed`;前端「设置 → 安全」提供旧+新+确认+强度条的实时校验表单。
 - [ ] 会话列表展示设备/UA/IP/最近活跃,可撤销指定会话。
@@ -575,7 +602,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] 防 CSRF:OAuth 用 state + PKCE;**Web cookie 会话用 `SameSite=Strict` + `Origin`/`Referer` 同源校验(R3-H2/R4-H1:无独立 CSRF token**;注意此为 CSRF 防护而非被盗 cookie 的持有证明,XSS 外渠道窃取由 HttpOnly + step-up 再认证 + 短 TTL + 撤销联动纵深防御)。
 - [ ] 防 XSS 窃取:**Web refresh 仅 httpOnly + Secure cookie**(响应体绝无 refresh 明文),access 放内存;**API token(`mesh_pat_`/`mesh_agt_`)由 CLI 从环境变量读取;runtime 机器令牌 `mesh_rt_` 由 mesh-runtime daemon 持有,不入 `api_tokens`,不经环境变量通道(runtime.md §3.5,R4-M3)**。
 - [ ] **Web refresh cookie 契约(R3-H2/R4-H1)**:Web 登录响应体**绝无 refresh 明文**(断言 `document.cookie` 读不到 `mesh_session`、响应 JSON 无 refresh 字段、登录端点不接受任何客户端形态自报参数);`/auth/refresh` Web 来源会话凭 cookie 成功续期并轮换 `Set-Cookie`;**跨源 Origin/Referer(或缺失)的 cookie refresh 请求 → 403**(CSRF 防护——注意这不是被盗 cookie 的持有证明,refresh 按完整会话凭证定性,纵深防御为 HttpOnly + 短 TTL + 撤销联动 + step-up,§3);`/api/v1` 其余路由仅携带 cookie 无 Bearer → 401(API 路由不接受 cookie 鉴权);设备来源会话 `Bearer mesh_rft_…` 续期成功;**个性化入口 HTML(含 `__MESH_APPEARANCE__`)响应头为 `Cache-Control: private, no-store`**(已登录入口与邀请入口均断言),静态 shell/资产与个性化 HTML 分离。
-- [ ] **多 tab 轮换竞态(R4-M4)**:**双 tab 同时过期并发 `/auth/refresh` → 两个请求均 200**(其一真轮换、其一命中 §3.8 宽限幂等路径返回当前凭证),两 tab 最终 cookie/凭证一致、后续请求均通过,**无误登出**;宽限窗(`MESH_REFRESH_ROTATION_GRACE_SECONDS`,默认 30s)外重放旧 refresh → 401;会话已撤销时幂等路径亦 401。
+- [ ] **多 tab 轮换竞态(R4-M4;R5-H1 真实并发断言清单)**:**双 tab 同时过期并发 `/auth/refresh`(真并行)→ 两个请求均 200**(其一为胜者:新 refresh + Set-Cookie;**其一命中 §3.8 宽限路径:仅获发新 access,响应无 refresh 明文、无 Set-Cookie、不二次轮换**);**响应乱序**下两 tab 最终 cookie/凭证收敛为胜者新值、后续请求均通过,**无误登出**;宽限窗(`MESH_REFRESH_ROTATION_GRACE_SECONDS`,默认 30s)外重放旧 refresh → 401;会话已撤销时胜者路径与宽限路径均 401;**CLI 双进程共用凭证文件并发 refresh → 文件收敛为胜者新 refresh,后来进程重读后重试成功**;完整断言清单见 §3.8。
 - [ ] **设备码消费锁序(R4-H3)**:consume 事务按「锁授权行 → `FOR UPDATE` 锁名册行 → 条件消费 + 建 session + 审计」单事务固定锁序执行;名册移除/改角色事务与 consume 在同名册行上线性化(并发用例断言按锁后结果签发或拒绝,无 TOCTOU 间隙)。
 - [ ] 全站 HTTPS/HSTS;签名 URL 短时效。
 - [ ] 支持 JWT 签名密钥与加密密钥轮换;密钥不出现在代码/仓库。
@@ -588,7 +615,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。
 - [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),使用连接建立后首帧认证单一机制(README §6.16,v0.1.0 起实现基线)。
 - [ ] 各端点限流生效,超限 429 + `Retry-After`;登录类叠加失败锁定。
-- [ ] **敏感操作 step-up 再认证**:修改密码、换绑/解绑 OAuth、创建/撤销 PAT、启用/禁用 2FA 等高危操作要求**近期再认证**(如最近 15 分钟内重新输入密码或 TOTP 验证码),否则返回 `403 reauth_required`;防止会话被劫持后直接执行敏感操作。
+- [ ] **敏感操作 step-up 再认证**:修改密码、换绑/解绑 OAuth、创建/撤销 PAT、启用/禁用 2FA 等高危操作要求**近期再认证**(**窗口判据为 `now() - sessions.authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s,R5-M1 唯一真源**——如最近窗口内重新输入密码或 TOTP 验证码),否则返回 `403 reauth_required`;防止会话被劫持后直接执行敏感操作。
 
 ### 5.6 实时
 

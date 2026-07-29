@@ -110,20 +110,25 @@ CREATE EXTENSION IF NOT EXISTS unaccent;
 -- R3-M1 硬化:固定 schema(public)与显式 regdictionary(public.unaccent)——
 -- unaccent(text) 单参形式被 PostgreSQL 标记为 STABLE(读词典),此处以显式词典
 -- 双参形式包装并声明 IMMUTABLE;词典即由此被「钉死」到该具名词典对象。
+-- R5-H3 硬化:语言刻意选 plpgsql(永不内联)——表达式索引的 indexprs 存 CREATE INDEX
+-- 时被规划器简化后的表达式,LANGUAGE sql 函数的简化形态随规划器内联行为而定(版本间
+-- 可变),一旦查询表达式简化结果与 indexprs 分叉,索引匹配静默失效;plpgsql 两侧恒保持
+-- 原函数调用,匹配跨版本稳定(单次调用开销相对 trigram 运算可忽略)。
 CREATE OR REPLACE FUNCTION public.mesh_search_norm(t TEXT) RETURNS TEXT
-LANGUAGE sql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
-$$ SELECT lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD))) $$;
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+$$ BEGIN RETURN lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD))); END $$;
 ```
 
 > **词典升级迁移契约(R3-M1 建立,R4-H4 写死为 PG16 可执行方案)**:`unaccent` 词典数据随扩展/操作系统 locale 数据升级可能变化,届时既有表达式索引与 `search_name` 投影相对新词典**陈旧**。迁移台账必须记录 **unaccent `extversion` + 归一测试向量指纹**(如 `public.mesh_search_norm('José Àncône')` 的结果哈希);指纹变化即触发下述升级流程。**`REINDEX INDEX CONCURRENTLY` 不可在事务块内执行(PostgreSQL 16 实跑证实),故不采用「同事务 REINDEX + 回补」;唯一方案为版本化分阶段在线迁移**:
 >
-> 1. **建新版函数(事务外)**:`CREATE FUNCTION public.mesh_search_norm_next(…)`——新词典/规则的实现(显式 regdictionary 指向升级后的词典对象);
-> 2. **并发建新版索引(事务外,逐条 `CREATE INDEX CONCURRENTLY`)**:对上文 **9 条函数表达式索引**逐一建 `idx_*_next`(表达式改用 `public.mesh_search_norm_next`);成员投影索引待列切换后随新列重建;
-> 3. **新增投影列并分批回补(事务外,小批次提交)**:`ALTER TABLE members ADD COLUMN search_name_next TEXT NOT NULL DEFAULT ''` 后按主键分批 `UPDATE … SET search_name_next = public.mesh_search_norm_next(解析链)`(每批 ≤1 万行,不持长事务),回补期间写入路径**双写** `search_name` 与 `search_name_next`(保证切换点无空窗);
-> 4. **原子切换(单一快速事务)**:同事务内 `ALTER FUNCTION public.mesh_search_norm RENAME TO mesh_search_norm_prev; ALTER FUNCTION public.mesh_search_norm_next RENAME TO mesh_search_norm;`(查询按名解析 → 自动落到新实现;新 `_next` 索引表达式随之显示为 `mesh_search_norm`,与查询逐字一致)+ 投影列与索引改名切换(`search_name_next → search_name`、`idx_*_next → idx_*`,旧名让位)+ 停双写;**改名不更 OID,旧索引仍指向旧函数(现名 `mesh_search_norm_prev`)自然失配,新索引接管全部查询**;
-> 5. **清理旧对象(事务外)**:校验新索引命中与归一致性后 `DROP INDEX CONCURRENTLY idx_*_prev`、`DROP FUNCTION public.mesh_search_norm_prev`、删旧投影列(若保留为过渡列)。
+> 1. **建新版函数(事务外)**:`CREATE FUNCTION public.mesh_search_norm_next(…)`——新词典/规则的实现(显式 regdictionary 指向升级后的词典对象),**必须与旧版有可观察的行为差异**(如词典升级新增折叠映射;建时以测试向量断言 `mesh_search_norm_next(v) ≠ mesh_search_norm(v)`,证明是词典版本共存与真实行为变化,非同源空转);
+> 2. **新增投影列 + 分批回补 + 双写(事务外,小批次提交)**:`ALTER TABLE members ADD COLUMN search_name_next TEXT NOT NULL DEFAULT ''` 后按主键分批 `UPDATE … SET search_name_next = public.mesh_search_norm_next(解析链)`(每批 ≤1 万行,不持长事务);回补期间写入路径**双写** `search_name` 与 `search_name_next`(保证切换点无空窗);
+> 3. **切换前建完全部 11 条 `_next` 索引(事务外,逐条 `CREATE INDEX CONCURRENTLY`)**:**9 条函数表达式索引** `idx_*_next`(表达式改用 `public.mesh_search_norm_next`)+ **2 条成员投影列索引**(建在 `search_name_next` 上的 trigram + prefix)——**不存在「切换后再补建」的索引,切换时全部 `_next` 索引已就绪**(R5-H3 收口:此前「投影索引待列切换后重建」与「切换假定 `_next` 索引已存在」顺序矛盾,已删除);
+> 4. **原子改名切换(单一快速事务)**:同事务内 `ALTER FUNCTION public.mesh_search_norm RENAME TO mesh_search_norm_prev; ALTER FUNCTION public.mesh_search_norm_next RENAME TO mesh_search_norm;`(查询按名解析 → 自动落到新实现)+ 投影列改名(`search_name_next → search_name`)+ 11 条索引改名(`idx_*_next → idx_*`,旧名让位为 `idx_*_prev`)+ 停双写;**改名不更 OID:新索引绑定新版函数 OID 接管规范名,旧索引仍指向旧函数(现名 `mesh_search_norm_prev`)自然失配**;
+> 5. **验证(切换事务内/后)**:以 **`pg_depend` 逐条断言 9 条规范表达式索引均绑定新版函数 OID(`refobjid = mesh_search_norm 的 OID`,计数 = 9)、旧版函数零索引依赖**,辅以 `pg_get_expr`/`pg_get_indexdef` 表达式文本校验(规范索引显示 `mesh_search_norm(…)`,旧 `_prev` 索引显示 `mesh_search_norm_prev(…)`),并行为抽查(测试向量查询命中新索引、新折叠行为生效);
+> 6. **清理(事务外,实际删除)**:`DROP INDEX CONCURRENTLY` 全部 11 条 `idx_*_prev` → `DROP FUNCTION public.mesh_search_norm_prev(TEXT)`(**9 条表达式索引全部迁移后旧函数零依赖方可删除——删除成功本身即切换完整性证明**)+ 删旧投影列;清理后**重跑前缀与 trigram 查询**确认新索引可用。
 >
-> 每阶段可独立失败回滚(切换前失败:删 `_next` 对象即复原;切换后失败:反向改名回切)。该函数与索引的 PG16 可执行性 + 归一行为(`José→jose`)+ 前缀查询命中断言 + **本升级路径 smoke test**(建 `_next` 函数/索引 → 回补 → 原子改名切换 → 查询命中新索引 → 清理)在 `docs/specs/validation/schema_r2_validation.sql`(T37 建表与行为 / T38 升级路径)实跑验证。
+> 每阶段可独立失败回滚(切换前失败:删 `_next` 对象即复原;切换后失败:反向改名回切)。该函数与索引的 PG16 可执行性 + 归一行为(`José→jose`)+ 前缀查询命中断言 + **本升级路径完整 smoke test**(T38:可观察行为差异的新版函数(词典版本共存)→ 回补 → 事务外建全部 11 条 `_next` 索引 → 原子改名切换 → `pg_depend`/`pg_get_expr` 逐条断言 9 条表达式索引绑定新 OID 且旧函数零依赖 → 实际删除旧函数/列/索引 → 前缀与 trigram 查询命中新索引)在 `docs/specs/validation/schema_r2_validation.sql`(T37 建表与行为 / T38 升级路径)实跑验证。
 
 ```sql
 -- 1. member/agent:受控同步的搜索投影(评审 H3 主方案)
