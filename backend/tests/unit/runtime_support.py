@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from mesh.config import load_settings
 from mesh.db.models.agent import Agent
-from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX, ApiToken
+from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import Runtime, TaskExecution
 from mesh.db.models.user import User

@@ -582,7 +582,6 @@ async def freeze_execution(
         revoked = await revoke_execution_envelopes(session, execution_id=execution_id)
         # §2.2 S-05: revoke task tokens for ALL attempts of this execution
         # (freeze is a security action — every token must die immediately).
-        from mesh.db.models.runtime import AttemptTaskToken
 
         attempt_ids = (
             await session.execute(
