@@ -105,6 +105,44 @@ describe('ProjectDashboardPanel', () => {
     });
   });
 
+  it('switching the time range refetches the project dashboard', async () => {
+    const client = {
+      request: vi.fn(async () => PROJECT_DASHBOARD),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(
+      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('project-dashboard-range')).toBeInTheDocument();
+    });
+    await waitFor(() => expect(client.request).toHaveBeenCalled());
+    const before = (client.request as ReturnType<typeof vi.fn>).mock.calls.length;
+    fireEvent.change(screen.getByTestId('project-dashboard-range'), { target: { value: '90' } });
+    await waitFor(() => {
+      expect((client.request as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before);
+    });
+  });
+
+  it('renders the velocity empty state when there are no cycles', async () => {
+    const client = makeStubClient(() => ({
+      ...PROJECT_DASHBOARD,
+      velocity: { ...PROJECT_DASHBOARD.velocity, cycles: [] },
+    }));
+    renderWithProviders(
+      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('project-dashboard-velocity')).toBeInTheDocument();
+    });
+    // velocity 卡内空态(非整页空态)
+    expect(
+      within(screen.getByTestId('project-dashboard-velocity')).getByText(
+        'No data in this window.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('renders the no-scope empty state when burndown is null', async () => {
     const client = makeStubClient(() => ({ ...PROJECT_DASHBOARD, burndown: null }));
     renderWithProviders(

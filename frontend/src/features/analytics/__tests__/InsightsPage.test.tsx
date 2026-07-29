@@ -160,6 +160,44 @@ describe('InsightsPage', () => {
     expect(screen.getByText('No agent executions in this window.')).toBeInTheDocument();
   });
 
+  it('omits the per-agent token note when coverage is full (ternary false branch)', async () => {
+    dashboardToReturn = {
+      ...DASHBOARD,
+      agent_stats: {
+        agents: [
+          {
+            ...DASHBOARD.agent_stats.agents[0],
+            tokens: {
+              prompt_tokens: 100,
+              completion_tokens: 50,
+              total_tokens: 150,
+              token_coverage: 1,
+            },
+          },
+        ],
+        meta: {},
+      },
+    };
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await waitFor(() => {
+      expect(screen.getByTestId('insights-agents')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Tokens cover autopilot-triggered runs only.')).toBeNull();
+  });
+
+  it('switching the time range refetches the dashboard', async () => {
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await waitFor(() => {
+      expect(screen.getByTestId('insights-range')).toBeInTheDocument();
+    });
+    const before = requestCalls.length;
+    const refetch = waitFor(() => {
+      expect(requestCalls.length).toBeGreaterThan(before);
+    });
+    fireEvent.change(screen.getByTestId('insights-range'), { target: { value: '90' } });
+    await refetch;
+  });
+
   it('switching granularity refetches with the new query', async () => {
     renderWithProviders(<InsightsPage />, { route: '/insights' });
     await waitFor(() => {
