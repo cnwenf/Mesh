@@ -489,7 +489,7 @@ class AuthService:
         presented_token: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
-    ) -> "RefreshOutcome":
+    ) -> RefreshOutcome:
         """Bounded idempotent rotation (auth.md §3.8) — winner-takes-all.
 
         Two concurrent refreshes with the SAME refresh token (multi-tab /
@@ -589,7 +589,7 @@ class AuthService:
         new_refresh_plain: str | None,
         ip_address: str | None,
         user_agent: str | None,
-    ) -> "RefreshOutcome":
+    ) -> RefreshOutcome:
         """Winner branch: rotate (when not already rotated) + issue the pair.
 
         ``new_refresh_plain=None`` means the row still holds the presented

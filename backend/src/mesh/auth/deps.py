@@ -1,14 +1,21 @@
 """FastAPI dependencies for the auth module.
 
-``get_current_user`` is the protected-route gate: it parses the Bearer access
-JWT (fixed ``alg`` from config — the token header is never trusted), then loads
-the corresponding ``users`` row. Workspace-scoped authorization (RBAC over
-``members.role``) layers on top of this in the member/workspace modules; the
-auth core only needs the global login identity.
+``get_current_principal`` is the unified Bearer gate (auth.md §2.5.1 prefix
+registry, review H7): one dependency routes EVERY regular ``/api/v1`` request
+by credential prefix — session access JWT (stateless verify, fixed ``alg`` —
+the token header is never trusted), ``mesh_pat_`` / ``mesh_agt_`` (hashed
+lookup via :class:`TokenService`, type-semantics enforced), while
+``mesh_rt_`` / ``mesh_rft_`` are rejected on regular routes (machine tokens
+belong to ``/api/v1/daemon/*``; refresh tokens to ``/auth/refresh`` only).
+``get_current_user`` adapts a principal to the ``users`` row for routes that
+need the global login identity; workspace-scoped authorization (RBAC over
+``members.role`` ∩ token scopes) layers on top in the rbac module.
 """
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from fastapi import Depends, Request
@@ -18,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.api.deps import extract_bearer_token, get_session
 from mesh.auth import jwt as jwt_mod
 from mesh.config import Settings
+from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.errors import ForbiddenError, UnauthorizedError
 
@@ -42,16 +50,109 @@ def require_current_access(request: Request) -> jwt_mod.AccessToken:
     )
 
 
-async def get_current_user(
+@dataclass(frozen=True)
+class AuthenticatedPrincipal:
+    """A Bearer credential resolved to its acting identity (auth.md §2.5.1).
+
+    ``kind`` is ``session`` (access JWT), ``pat`` (human personal token) or
+    ``agent`` (agent runtime credential). Effective permissions are ALWAYS
+    ``scopes ∩ holder role`` — for sessions the access JWT carries the fixed
+    scope claim (empty ⇒ role-based, web sessions), for PAT/agent tokens the
+    token service already intersected scopes with the current role.
+    """
+
+    kind: str  # "session" | "pat" | "agent"
+    member_id: uuid.UUID | None = None
+    user_id: uuid.UUID | None = None
+    workspace_id: uuid.UUID | None = None  # PAT: owning ws; session: device binding
+    session_id: uuid.UUID | None = None
+    subject: uuid.UUID | None = None  # JWT sub (sessions)
+    token_id: uuid.UUID | None = None  # api_tokens.id (PAT/agent)
+    scopes: frozenset[str] = field(default_factory=frozenset)
+
+
+async def get_current_principal(
     request: Request, session: AsyncSession = Depends(get_session)
-) -> User:
-    """Resolve the authenticated user from a Bearer access JWT."""
+) -> AuthenticatedPrincipal:
+    """Route the Bearer credential by prefix (auth.md §2.5.1 registry)."""
+    from mesh.auth.security import REFRESH_TOKEN_PREFIX
+    from mesh.auth.tokens import AGENT_TOKEN_PREFIX, PAT_TOKEN_PREFIX
+    from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX
+
     settings: Settings = request.app.state.settings
     token = extract_bearer_token(request.headers.get("Authorization"))
+
+    # Machine + refresh tokens have no business on regular routes: mesh_rt_
+    # belongs to /api/v1/daemon/* (runtime.md §3.5), mesh_rft_ ONLY to
+    # POST /auth/refresh. Their appearance here is rejected outright.
+    if token.startswith(RUNTIME_TOKEN_PREFIX) or token.startswith(REFRESH_TOKEN_PREFIX):
+        raise UnauthorizedError(
+            "invalid or expired token", details={"reason": "credential_misrouted"}
+        )
+
+    if token.startswith(PAT_TOKEN_PREFIX) or token.startswith(AGENT_TOKEN_PREFIX):
+        token_service = request.app.state.token_service
+        resolved = await token_service.resolve_pat(
+            token=token,
+            ip_address=request.client.host if request.client else None,
+        )
+        if resolved is None:
+            raise UnauthorizedError("invalid or expired token")
+        # Type semantics (§2.5.1 R2-H2): the prefix must match the holder's
+        # member type — a mesh_pat_ resolving to an agent row (or vice versa)
+        # is a forged/mis-issued credential.
+        expected = "human" if token.startswith(PAT_TOKEN_PREFIX) else "agent"
+        if resolved.member_type != expected:
+            raise UnauthorizedError(
+                "invalid or expired token", details={"reason": "credential_type_mismatch"}
+            )
+        member = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == resolved.workspace_id,
+                Member.id == resolved.owner_member_id,
+            )
+        )
+        return AuthenticatedPrincipal(
+            kind="pat" if expected == "human" else "agent",
+            member_id=resolved.owner_member_id,
+            user_id=member.user_id if member is not None else None,
+            workspace_id=resolved.workspace_id,
+            token_id=resolved.id,
+            scopes=resolved.scopes,
+        )
+
+    # Everything else must be a session access JWT.
     claims = jwt_mod.decode_access_token(
         token, secret=settings.jwt_secret, algorithm=settings.jwt_algorithm
     )
-    user = await session.scalar(select(User).where(User.id == claims.subject))
+    return AuthenticatedPrincipal(
+        kind="session",
+        subject=claims.subject,
+        user_id=claims.subject,
+        session_id=claims.sid,
+        workspace_id=claims.workspace_id,
+        scopes=claims.scopes,
+    )
+
+
+async def get_current_user(
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Resolve the authenticated USER behind the credential.
+
+    Session principals resolve by ``sub``; human PAT principals by the
+    holder's ``members.user_id``. Agent credentials have no user identity —
+    user-level routes reject them (agent-facing endpoints consume the
+    principal directly).
+    """
+    if principal.user_id is None:
+        raise UnauthorizedError(
+            "this credential has no user identity",
+            details={"reason": "agent_credential"},
+        )
+    user = await session.scalar(select(User).where(User.id == principal.user_id))
     if user is None or user.status != "active":
         raise UnauthorizedError("invalid or expired token")
     return user

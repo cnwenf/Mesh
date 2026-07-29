@@ -20,8 +20,17 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Request, Response
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from mesh.auth.deps import get_auth_service, get_current_user, require_current_access, require_recent_auth
+from mesh.api.deps import get_session
+from mesh.auth.deps import (
+    get_auth_service,
+    get_current_principal,
+    get_current_user,
+    require_current_access,
+    require_recent_auth,
+)
 from mesh.auth.ratelimit import RateLimiter
 from mesh.auth.schemas import (
     ChangePasswordRequest,
@@ -43,6 +52,7 @@ from mesh.auth.service import (
     UserUpdate,
 )
 from mesh.config import Settings
+from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.errors import ForbiddenError, UnauthorizedError, ValidationError
 
@@ -380,9 +390,35 @@ async def change_password(
 
 
 @router.get("/me")
-async def get_me(user: User = Depends(get_current_user)) -> dict:
+async def get_me(
+    request: Request,
+    principal=Depends(get_current_principal),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Current identity — works for every credential kind the unified Bearer
+    gate routes (auth.md §5.2 representative-endpoint coverage): sessions and
+    human PATs resolve to the user; agent credentials resolve to their roster
+    identity (agents have no user row)."""
     from mesh.auth.service import user_to_dict
 
+    if principal.kind == "agent":
+        member = await session.get(Member, principal.member_id)
+        if member is None:
+            raise UnauthorizedError("invalid or expired token")
+        return {
+            "data": {
+                "kind": "agent",
+                "id": member.id,
+                "member_type": member.member_type,
+                "workspace_id": member.workspace_id,
+                "role": member.role,
+                "name": member.display_override,
+                "scopes": sorted(principal.scopes),
+            }
+        }
+    user = await session.scalar(select(User).where(User.id == principal.user_id))
+    if user is None or user.status != "active":
+        raise UnauthorizedError("invalid or expired token")
     return {"data": user_to_dict(user)}
 
 

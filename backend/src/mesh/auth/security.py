@@ -160,7 +160,7 @@ class DeviceCodeSpaceExhausted(RuntimeError):
 
 
 async def generate_user_code(
-    is_taken: "Callable[[str], Awaitable[bool]] | None" = None,
+    is_taken: Callable[[str], Awaitable[bool]] | None = None,
 ) -> str:
     """Generate a grouped ``XXXX-XXXX`` user code (plaintext, shown once).
 

@@ -368,21 +368,27 @@ def _request_for(app, token: str):
 
 @pytest.mark.parametrize("status", ["disabled", "deleted"])
 async def test_get_current_user_rejects_non_active_directly(app, status):
-    from mesh.auth.deps import get_current_user
+    from mesh.auth.deps import get_current_principal, get_current_user
     from mesh.errors import UnauthorizedError
 
     _uid, token = await _make_user(app, status=status)
     async with app.state.session_factory() as session:
+        principal = await get_current_principal(_request_for(app, token), session=session)
         with pytest.raises(UnauthorizedError):
-            await get_current_user(_request_for(app, token), session=session)
+            await get_current_user(
+                _request_for(app, token), principal=principal, session=session
+            )
 
 
 async def test_get_current_user_returns_active_user_directly(app):
-    from mesh.auth.deps import get_current_user
+    from mesh.auth.deps import get_current_principal, get_current_user
 
     uid, token = await _make_user(app, status="active")
     async with app.state.session_factory() as session:
-        user = await get_current_user(_request_for(app, token), session=session)
+        principal = await get_current_principal(_request_for(app, token), session=session)
+        user = await get_current_user(
+            _request_for(app, token), principal=principal, session=session
+        )
     assert user.id == uid
 
 

@@ -30,9 +30,8 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.db.models.member import Member, MemberProjectAccess
-from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, NotFoundError
@@ -67,6 +66,26 @@ def role_satisfies(role: str, permission: str) -> bool:
     return role in PERMISSION_MATRIX.get(permission, frozenset())
 
 
+def assert_scope(actor: Member, permission: str) -> None:
+    """Scope-intersection gate (auth.md §2.5.1: effective = scopes ∩ role).
+
+    Credentials issued with a non-empty scope set (PAT / agent tokens, device
+    sessions) are additionally restricted to the granted permissions — the
+    role matrix is the ceiling, the scope set the floor. Web sessions carry
+    an empty set (``principal_scopes`` unset) and stay purely role-based, so
+    this is a no-op for browser traffic. The attribute is attached to the
+    roster row by :func:`resolve_workspace_context` — it is request-scoped
+    state, never persisted.
+    """
+    scopes = getattr(actor, "principal_scopes", None)
+    if scopes and permission not in scopes:
+        raise ForbiddenError(
+            "token scope does not cover this action",
+            code="forbidden",
+            details={"required_scope": permission},
+        )
+
+
 @dataclass(frozen=True)
 class WorkspaceContext:
     """A resolved tenant access: the workspace and the caller's roster entry."""
@@ -78,41 +97,84 @@ class WorkspaceContext:
 async def resolve_workspace_context(
     session: AsyncSession,
     *,
-    user: User,
+    principal: AuthenticatedPrincipal,
     workspace_id: uuid.UUID,
     permission: str | None = None,
 ) -> WorkspaceContext:
-    """Gate a user into a workspace; enforce ``permission`` when given.
+    """Gate a principal into a workspace; enforce ``permission`` when given.
 
-    Sets the tenant GUC, then loads the non-deleted workspace and the user's
-    active member row. Raises 404 for every invisible case and 403 when the
-    role matrix denies ``permission``.
+    Sets the tenant GUC, then loads the non-deleted workspace and the
+    principal's active member row. Raises 404 for every invisible case and
+    403 when the role matrix denies ``permission`` — or when a credential
+    whose scope set (∩ role at issuance) does not cover the permission tries
+    to use it (auth.md §2.5.1: effective permissions are scopes ∩ role).
+
+    * Session principals resolve membership by ``members.user_id``; a device
+      session (access JWT carrying a ``workspace_id`` binding, auth.md §2.4)
+      may ONLY address its bound workspace — naming another → 403 (cli.md
+      §4.2 R2-H1).
+    * PAT/agent principals are workspace-scoped at issuance: the request must
+      target ``principal.workspace_id`` (else the uniform 404), and the
+      member row is the token's ``owner_member_id`` holder.
     """
     await set_tenant_context(session, workspace_id)
+
+    if principal.kind in ("pat", "agent"):
+        if principal.workspace_id != workspace_id:
+            # A PAT cannot reach into other workspaces — same 404 as an
+            # invisible workspace (no existence leak, §5.3).
+            raise NotFoundError(_WORKSPACE_NOT_FOUND)
+    elif principal.workspace_id is not None and principal.workspace_id != workspace_id:
+        # Device session bound elsewhere — explicit 403 (cli.md §4.2).
+        raise ForbiddenError("session is bound to a different workspace")
+
     workspace = await session.scalar(
         select(Workspace).where(Workspace.id == workspace_id, Workspace.deleted_at.is_(None))
     )
     if workspace is None:
         raise NotFoundError(_WORKSPACE_NOT_FOUND)
-    member = await session.scalar(
-        select(Member).where(
-            Member.workspace_id == workspace_id,
-            Member.user_id == user.id,
-            Member.status == "active",
+
+    if principal.kind in ("pat", "agent"):
+        member = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == workspace_id,
+                Member.id == principal.member_id,
+                Member.status == "active",
+            )
         )
-    )
+    else:
+        member = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == workspace_id,
+                Member.user_id == principal.user_id,
+                Member.status == "active",
+            )
+        )
     if member is None:
         # Same 404 as an unknown workspace — existence must not leak (§5.3).
         raise NotFoundError(_WORKSPACE_NOT_FOUND)
-    if permission is not None and not role_satisfies(member.role, permission):
-        raise ForbiddenError("insufficient role for this action")
+    # Request-scoped scope set for the service-layer ∩ gates (assert_scope);
+    # empty for web sessions ⇒ role-based only. Not persisted.
+    member.principal_scopes = principal.scopes
+    if permission is not None:
+        if not role_satisfies(member.role, permission):
+            raise ForbiddenError("insufficient role for this action")
+        # Scope gate: non-empty scope sets (PAT/agent tokens, device
+        # sessions) additionally restrict to the granted permissions —
+        # web sessions carry an empty set and stay purely role-based.
+        if principal.scopes and permission not in principal.scopes:
+            raise ForbiddenError(
+                "token scope does not cover this action",
+                code="forbidden",
+                details={"required_scope": permission},
+            )
     return WorkspaceContext(workspace=workspace, member=member)
 
 
 async def resolve_workspace_by_slug(
     session: AsyncSession,
     *,
-    user: User,
+    principal: AuthenticatedPrincipal,
     slug: str,
     permission: str | None = None,
 ) -> WorkspaceContext:
@@ -136,7 +198,7 @@ async def resolve_workspace_by_slug(
     if workspace_id is None:
         raise NotFoundError(_WORKSPACE_NOT_FOUND)
     return await resolve_workspace_context(
-        session, user=user, workspace_id=workspace_id, permission=permission
+        session, principal=principal, workspace_id=workspace_id, permission=permission
     )
 
 
@@ -145,12 +207,13 @@ def require_workspace(permission: str | None = None):
 
     Usage: ``context: WorkspaceContext = Depends(require_workspace("workspace:settings"))``.
     Non-UUID path values are a 404 (not a 400 — never leak what shape of id
-    exists).
+    exists). Accepts every credential kind the unified Bearer gate routes
+    (session JWT / mesh_pat_ / mesh_agt_; auth.md §2.5.1 review H7).
     """
 
     async def _dependency(
         workspace_id: str,
-        user: User = Depends(get_current_user),
+        principal: AuthenticatedPrincipal = Depends(get_current_principal),
         session: AsyncSession = Depends(get_session),
     ) -> WorkspaceContext:
         try:
@@ -158,7 +221,7 @@ def require_workspace(permission: str | None = None):
         except ValueError as exc:
             raise NotFoundError(_WORKSPACE_NOT_FOUND) from exc
         return await resolve_workspace_context(
-            session, user=user, workspace_id=parsed, permission=permission
+            session, principal=principal, workspace_id=parsed, permission=permission
         )
 
     return _dependency
