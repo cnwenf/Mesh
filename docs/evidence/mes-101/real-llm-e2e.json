@@ -1,0 +1,56 @@
+{
+  "server_url": "http://127.0.0.1:58100",
+  "marker": "MESH-A3-OK-14e34ee3",
+  "steps": [
+    "auth: register+login ok",
+    "workspace 4137d991-4905-42b0-8cf4-4604f591f8d3 created",
+    "agent 69bf38a1-69fd-45e8-ae93-fda19ecf3655 created (member 9629c7ed-7d3a-403b-a7b6-9e1dedcdddfb)",
+    "runtime 361b0553-905c-4a97-8290-07d18880261f pending; activation code issued",
+    "provider probed healthy: ['claude-code']",
+    "daemon activated; runtime_id=361b0553-905c-4a97-8290-07d18880261f",
+    "runtime status after activate+heartbeat: online",
+    "issue fa55bbcd-80b2-4251-b0e2-e5df60c8dead assigned → enqueue path triggered",
+    "execution terminal: completed (reason=None)",
+    "result v1 ok: total_tokens=1408 turns=1 cost=0.011699 session=a95363c2",
+    "logs reflowed; provider credential redacted",
+    "daemon graceful shutdown; sandbox resources released"
+  ],
+  "execution": {
+    "id": "c6938da9-23a4-4a30-b995-05edcccafd1c",
+    "status": "completed",
+    "failure_reason": null
+  },
+  "result": {
+    "usage": {
+      "turns": 1,
+      "cost_usd": "0.011699",
+      "input_tokens": 6,
+      "total_tokens": 1408,
+      "output_tokens": 155,
+      "cache_read_tokens": 0,
+      "cache_creation_tokens": 1247
+    },
+    "outcome": {
+      "summary": "It looks like no task or question was provided. How can I help you today? Feel free to share what you'd like to work on — whether it's a coding problem, a file to inspect, a command to run, or something else entirely.",
+      "exit_code": 0,
+      "termination": "completed"
+    },
+    "provider": {
+      "name": "claude-code",
+      "model": "unknown",
+      "version": "2.1.218",
+      "session_id": "a95363c2-7835-41f2-ba9e-1989cbd97d49"
+    },
+    "artifacts": {
+      "diff_ref": null,
+      "checkout_id": null
+    },
+    "redaction": {
+      "hit_count": 0,
+      "rule_version": "redaction-v1"
+    },
+    "schema_version": 1
+  },
+  "log_excerpt": "{\"data\": {\"execution_id\": \"c6938da9-23a4-4a30-b995-05edcccafd1c\", \"attempt_id\": \"ab1fbdbf-f3d7-4f1b-8cce-71e8b2a88b7f\", \"execution_status\": \"completed\", \"lines\": [{\"stream\": \"stdout\", \"offset\": 0, \"line\": \"It looks like no task or question was provided. How can I help you today? Feel free to share what you'd like to work on \\u2014 whether it's a coding problem, a file to inspect, a command to run, or something else entirely.\"}], \"next_offset\": 220}}",
+  "verdict": "PASS"
+}

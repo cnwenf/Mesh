@@ -263,3 +263,170 @@ class TestBuildRunRequest:
             if not p.name.endswith(".tmp")
         ]
         assert spool_files, "spooled redacted batch was dropped"
+
+
+class TestClaudeWiring:
+    """A3 app wiring: pinned manifest → ClaudeCodeAdapter in the real sandbox;
+    provider credentials are redaction secrets; missing frozen budget fails
+    closed with a fenced terminal (§3.5)."""
+
+    def _app(self, tmp_path, *, manifest=True, provider_env_file=None, budget="1.00"):
+        from mesh_runtime.config import DaemonConfig
+
+        state = tmp_path / "state"
+        work = tmp_path / "work"
+        state.mkdir()
+        work.mkdir()
+        provider_dir = tmp_path / "provider"
+        provider_dir.mkdir()
+        binary = provider_dir / "claude"
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+        import hashlib
+
+        sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+        manifest_path = None
+        if manifest:
+            manifest_path = tmp_path / "manifest.toml"
+            manifest_path.write_text(
+                f'provider = "claude-code"\nversion = "9.9.9"\nbinary_sha256 = "{sha}"\n'
+                'required_flags = ["--print", "--max-budget-usd"]\n'
+                "[hard_limits]\nusd_budget = true\nwall_timeout = true\n",
+                encoding="utf-8",
+            )
+        env_path = None
+        if provider_env_file is not None:
+            env_path = tmp_path / "provider.env"
+            env_path.write_text(provider_env_file, encoding="utf-8")
+            import os as _os
+
+            _os.chmod(env_path, 0o600)
+        config = DaemonConfig(
+            server_url="https://mesh.example.com",
+            state_dir=state,
+            work_dir=work,
+            provider_path=binary,
+            provider_manifest=manifest_path,
+            provider_env_file=env_path,
+        )
+        from mesh_runtime.app import RuntimeApp
+
+        return RuntimeApp(config, AppStubApi(), None, None, adapters=[])
+
+    class _FakeSecurity:
+        def __init__(self, tmp_path):
+
+            class _Cfg:
+                nonce = "nonce-x"
+
+            self.config = _Cfg()
+            self.broker_socket_path = str(tmp_path / "run" / "broker.sock")
+            self.egress = None
+            self.egress_proxy_url = "http://10.9.9.1:3128"
+            self.destroyed = False
+
+            class _Egress:
+                port = 0
+
+            self.egress = _Egress()
+
+        def bind_adapter_destroy(self, destroy):
+            self._destroy = destroy
+
+    def test_manifest_configured_selects_claude_adapter(self, tmp_path):
+        from mesh_runtime.providers.claude_code import ClaudeCodeAdapter
+
+        app = self._app(tmp_path)
+        claim = make_claim()
+        claim.execution["config_snapshot"]["budget"] = {"max_cost_usd": "1.00", "max_turns": 3}
+        claim.execution["config_snapshot"]["model"] = "pinned-model"
+        security = self._FakeSecurity(tmp_path)
+
+        class _Mgr:  # stands in for SandboxManager (not started here)
+            pass
+
+        app._sandbox_manager = _Mgr()
+        adapter = app._select_adapter(claim, tmp_path / "attempt", security)
+        assert isinstance(adapter, ClaudeCodeAdapter)
+        assert adapter.name == "claude-code"
+
+    def test_missing_frozen_budget_select_fails_closed(self, tmp_path):
+        from mesh_runtime.budget import BudgetError
+
+        app = self._app(tmp_path)
+        claim = make_claim()  # no budget in snapshot
+
+        class _Mgr:
+            pass
+
+        app._sandbox_manager = _Mgr()
+        security = self._FakeSecurity(tmp_path)
+        with pytest.raises(BudgetError):
+            app._select_adapter(claim, tmp_path / "attempt", security)
+
+    def test_no_manifest_keeps_sandboxed_fake_adapter(self, tmp_path):
+        from mesh_runtime.providers.sandboxed import SandboxedProcessAdapter
+
+        app = self._app(tmp_path, manifest=False)
+        claim = make_claim()
+
+        class _Mgr:
+            pass
+
+        app._sandbox_manager = _Mgr()
+        adapter = app._select_adapter(claim, tmp_path / "attempt", self._FakeSecurity(tmp_path))
+        assert isinstance(adapter, SandboxedProcessAdapter)
+
+    def test_provider_env_values_become_redaction_secrets(self, tmp_path):
+        app = self._app(tmp_path, provider_env_file="ANTHROPIC_API_KEY=sk-super-secret\n")
+        assert "sk-super-secret" in app._redaction_secrets
+        assert app._provider_env == {"ANTHROPIC_API_KEY": "sk-super-secret"}
+
+    def test_build_run_request_tools_default_and_snapshot(self):
+        from mesh_runtime.app import DEFAULT_TOOL_ALLOWLIST, build_run_request
+
+        claim = make_claim()
+        request = build_run_request(claim)
+        assert request.tools_allowlist == DEFAULT_TOOL_ALLOWLIST
+        claim.execution["config_snapshot"]["tools_allow"] = ["Read"]
+        request = build_run_request(claim)
+        assert request.tools_allowlist == ("Read",)
+
+    async def test_spawn_attempt_fenced_fail_when_budget_missing(self, tmp_path, journal):
+        """A claim with no frozen budget must fail-closed: fenced terminal
+        'executor_unavailable', never a bare run (§3.1/§3.5)."""
+        app = self._app(tmp_path)  # manifest configured, claude path active
+
+        class _Mgr:
+            pass
+
+        app._sandbox_manager = _Mgr()
+        app.set_runtime_id("rt-1")
+        app._journal = journal
+
+        calls = []
+
+        class _Api(AppStubApi):
+            async def transition(self, attempt_id, *, lease_seq, status,
+                                 result=None, failure_reason=None):
+                calls.append((status, failure_reason))
+                return {}
+
+        app._api = _Api()
+
+        claim = make_claim()  # no "budget" in config_snapshot
+        # Stub security so finish() is observable but does nothing.
+        sec = self._FakeSecurity(tmp_path)
+        finished = []
+        sec.finish = lambda *, spool_flushed: finished.append(spool_flushed) or _noop()
+
+        async def _noop():
+            return None
+
+        orig_build = app._build_security
+        app._build_security = lambda c, root, redactor: sec
+        await app._spawn_attempt(claim)
+        app._build_security = orig_build
+
+        assert ("failed", "executor_unavailable") in calls
+        assert finished == [True]

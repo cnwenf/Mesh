@@ -48,6 +48,7 @@ class TestProviderArgv:
         assert "--print" in argv
         assert argv[argv.index("--input-format") + 1] == "stream-json"
         assert argv[argv.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in argv  # pinned provider requires it for stream-json
         assert "--bare" in argv
         assert "--disable-slash-commands" in argv
         assert "--no-session-persistence" in argv
@@ -250,3 +251,117 @@ class TestHostileRepoScan:
         self._plant(tmp_path, "docs/claude.md.backup", "sub/.mcp.json")
         findings = scan_repo_for_hostile_files(tmp_path)
         assert {f.kind for f in findings} == {"mcp_config"}  # nested .mcp.json still hostile
+
+
+from mesh_runtime.provider_env import (  # noqa: E402
+    ProviderEnvError,
+    build_stream_json_input,
+    load_provider_env_file,
+)
+
+
+def _write_env_file(tmp_path, content: str, *, mode: int = 0o600, parent_mode: int | None = None):
+    parent = tmp_path / "creds"
+    parent.mkdir()
+    os.chmod(parent, parent_mode if parent_mode is not None else 0o700)
+    p = parent / "provider.env"
+    p.write_text(content, encoding="utf-8")
+    os.chmod(p, mode)
+    return p
+
+
+class TestProviderEnvFile:
+    def test_loads_validated_pairs(self, tmp_path):
+        p = _write_env_file(tmp_path, "# comment\nANTHROPIC_API_KEY=sk-secret-123\n\nANTHROPIC_BASE_URL=https://api.example.com\n")
+        env = load_provider_env_file(p, expected_uid=os.getuid())
+        assert env == {
+            "ANTHROPIC_API_KEY": "sk-secret-123",
+            "ANTHROPIC_BASE_URL": "https://api.example.com",
+        }
+
+    def test_value_may_contain_equals(self, tmp_path):
+        p = _write_env_file(tmp_path, "CUSTOM_HEADER=a=b=c\n")
+        env = load_provider_env_file(p, expected_uid=os.getuid())
+        assert env == {"CUSTOM_HEADER": "a=b=c"}
+
+    def test_rejects_world_readable_mode(self, tmp_path):
+        p = _write_env_file(tmp_path, "ANTHROPIC_API_KEY=x\n", mode=0o644)
+        with pytest.raises(ProviderEnvError, match="0600"):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_rejects_symlink(self, tmp_path):
+        real = tmp_path / "real.env"
+        real.write_text("ANTHROPIC_API_KEY=x\n", encoding="utf-8")
+        link = tmp_path / "link.env"
+        link.symlink_to(real)
+        with pytest.raises(ProviderEnvError, match="symlink"):
+            load_provider_env_file(link, expected_uid=os.getuid())
+
+    def test_rejects_wrong_owner(self, tmp_path):
+        p = _write_env_file(tmp_path, "ANTHROPIC_API_KEY=x\n")
+        foreign_uid = os.getuid() + 1 if os.getuid() != 12345 else 54321
+        with pytest.raises(ProviderEnvError, match="owner"):
+            load_provider_env_file(p, expected_uid=foreign_uid)
+
+    def test_rejects_open_parent_dir(self, tmp_path):
+        p = _write_env_file(tmp_path, "ANTHROPIC_API_KEY=x\n", parent_mode=0o755)
+        with pytest.raises(ProviderEnvError, match="parent"):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_rejects_reserved_names_after_merge(self, tmp_path):
+        p = _write_env_file(tmp_path, "LD_PRELOAD=/evil.so\n")
+        with pytest.raises(DaemonError):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_rejects_xdg_and_home_names(self, tmp_path):
+        p = _write_env_file(tmp_path, "HOME=/somewhere\n")
+        with pytest.raises(DaemonError):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_rejects_malformed_line(self, tmp_path):
+        p = _write_env_file(tmp_path, "THIS LINE HAS NO EQUALS\n")
+        with pytest.raises(ProviderEnvError, match="KEY=VALUE"):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_rejects_empty_value(self, tmp_path):
+        p = _write_env_file(tmp_path, "ANTHROPIC_API_KEY=\n")
+        with pytest.raises(ProviderEnvError, match="empty"):
+            load_provider_env_file(p, expected_uid=os.getuid())
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(ProviderEnvError):
+            load_provider_env_file(tmp_path / "absent.env", expected_uid=os.getuid())
+
+
+class TestStreamJsonInput:
+    def test_single_json_line_user_message(self):
+        line = build_stream_json_input("do the task")
+        assert line.endswith("\n")
+        assert "\n" not in line[:-1]
+        record = json.loads(line)
+        assert record["type"] == "user"
+        assert record["message"]["role"] == "user"
+        assert isinstance(record["message"]["content"], str)
+        assert "do the task" in record["message"]["content"]
+
+    def test_untrusted_context_wrapped_in_random_boundaries(self):
+        line = build_stream_json_input("malicious instructions")
+        content = json.loads(line)["message"]["content"]
+        assert "mesh-untrusted-context" in content
+        assert "malicious instructions" in content
+        # boundary appears open AND close, and is not content-chosen
+        first = build_stream_json_input("malicious instructions")
+        assert first != line or True  # randomness: boundaries differ across calls
+        b1 = json.loads(first)["message"]["content"].split()[1]
+        b2 = content.split()[1]
+        assert b1 != b2
+
+    def test_explicit_boundary_is_used(self):
+        line = build_stream_json_input("ctx", boundary="deadbeef" * 4)
+        content = json.loads(line)["message"]["content"]
+        assert ("deadbeef" * 4) in content
+
+    def test_empty_context_still_yields_valid_message(self):
+        line = build_stream_json_input("")
+        record = json.loads(line)
+        assert record["message"]["content"]

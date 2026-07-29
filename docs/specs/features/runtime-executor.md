@@ -2,7 +2,7 @@
 
 > 状态：安全复评通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
 >
-> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；**A2 安全执行面已落地**——真实 Linux namespace/cgroup 沙箱（mount/pid/net/ipc/uts + cgroup2 限额，fail-closed 不降级裸跑）、S-01 不可信配置隔离（空 HOME/XDG、只读私有配置、reserved env 二次清洗；§1.4 固定 argv 与 §1.5 三件套配置机制就绪、随 A3 真实 provider 接线端到端强制）、S-02 唯一 ToolBroker 闸门（SO_PEERCRED+cgroup+nonce 三重校验、动作→闸门唯一映射、confirm_required=取消+新 attempt 续跑）、S-04 egress gateway（可信解析→全 IP 过滤→钉死建连、沙箱 netns 无默认路由、重定向跳数上限）、checkout helper（只读凭证分离、精确 SHA、解析 IP 复核闸门）、S-08 幂等清理（含启动对账残留清理）；ISO-01～14 隔离红线负向矩阵真实环境全绿（`daemon/tests/isolation/`，禁 mock/skip）。A3 真实 Claude Code provider（固定版本适配、stream-json 解析、预算截断）开发中（见 §4.4）。
+> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；**A2 安全执行面已落地**——真实 Linux namespace/cgroup 沙箱（mount/pid/net/ipc/uts + cgroup2 限额，fail-closed 不降级裸跑）、S-01 不可信配置隔离（空 HOME/XDG、只读私有配置、reserved env 二次清洗；§1.4 固定 argv 与 §1.5 三件套配置机制就绪、随 A3 真实 provider 接线端到端强制）、S-02 唯一 ToolBroker 闸门（SO_PEERCRED+cgroup+nonce 三重校验、动作→闸门唯一映射、confirm_required=取消+新 attempt 续跑）、S-04 egress gateway（可信解析→全 IP 过滤→钉死建连、沙箱 netns 无默认路由、重定向跳数上限）、checkout helper（只读凭证分离、精确 SHA、解析 IP 复核闸门、**git fetch 禁跨主机重定向 `http.followRedirects=false`**）、S-08 幂等清理（含启动对账残留清理）；ISO-01～14 隔离红线负向矩阵真实环境全绿（`daemon/tests/isolation/`，禁 mock/skip）。**A3 真实 Claude Code provider 已落地**——钉死版本 capability manifest（TOML 编码 §1.4 字段：provider/version/binary_sha256/required_flags/hard_limits）+ SHA-256/版本/flags fail-closed 探测（静态校验先于执行、inode/mtime/hash 变更即缓存失效、run() 再核验 digest、help `--flag[-suffix]` 简写展开）、§1.4 固定 argv（`--verbose` 为该版本 stream-json 输出所必需，已并入钉死 flag 集；prompt 只走 stdin、禁 shell）、§3.9 严格 stream-json 解析（固定 schema 白名单、未知/畸形/超大丢弃计诊断、thinking 永不入流）、S-07 daemon 层预算（usage/wall/idle 逐拍截断 → `budget_exceeded`/`timeout` 终结词汇、更严格者生效）、沙箱内只读 CA 信任库（provider TLS 校验）、session/usage/result schema v1 回流、doctor git/libcurl 工具链版本门禁；**真实 LLM e2e 全绿**（真实钉死二进制注册 online → 真实 claim → 沙箱内真实调用 → 日志/会话/token 回流、凭据零泄漏，`docs/evidence/mes-101/real-llm-e2e.json`）。
 >
 > 所属模块：`runtime` 的本地执行子系统；服务端调度、数据模型和机器 API 仍以 `runtime.md` 为权威。
 >
@@ -71,7 +71,8 @@
 
 ### 1.4 Provider 适配契约
 
-每个 provider 版本随发布包携带不可变 capability manifest：
+每个 provider 版本随发布包携带不可变 capability manifest（字段如下；落地编码为
+**TOML**，字段语义与下表一一对应，选 TOML 是为零新增依赖、不扩大供应链面）：
 
 ```yaml
 provider: claude-code
@@ -81,6 +82,7 @@ required_flags:
   - --print
   - --output-format
   - --input-format
+  - --verbose
   - --bare
   - --disable-slash-commands
   - --no-session-persistence
@@ -98,7 +100,11 @@ hard_limits:
   wall_timeout: true
 ```
 
-daemon 启动时校验二进制绝对路径、文件摘要、版本和必需 flags；任一不符，runtime 报 `degraded` 且不领取要求该 provider 的任务。禁止 PATH 搜索、自动升级、插件自动发现和运行时下载 provider。
+> `--verbose` 是当前钉死 provider 版本在 `--print` 下输出 `stream-json` 的**必要**开关
+> （缺失即 `--output-format=stream-json requires --verbose` 启动失败）；它只启用 §3.9
+> 解析的记录流，不扩大加载面（非 §1.5 rule 4 的扩面参数），故并入钉死 flag 集。
+
+daemon 启动时校验二进制绝对路径、文件摘要、版本和必需 flags；任一不符，runtime 报 `degraded` 且不领取要求该 provider 的任务。禁止 PATH 搜索、自动升级、插件自动发现和运行时下载 provider。帮助文本以 `--flag[-suffix]` 简写同时声明 `--flag` 与 `--flag-suffix`（如 `--system-prompt[-file]`），探测按展开后的具体 flag 逐一比对。
 
 本地探测由 `mesh-runtime doctor` 和 daemon 启动自检共用同一实现：
 
@@ -115,6 +121,7 @@ daemon 启动时校验二进制绝对路径、文件摘要、版本和必需 fla
   --print
   --input-format stream-json
   --output-format stream-json
+  --verbose
   --bare
   --disable-slash-commands
   --no-session-persistence

@@ -383,3 +383,106 @@ class TestSupervise:
         assert outcome.lease_lost is True
         assert outcome.terminal_reported is False
         assert provider_ran == []  # provider never started
+
+
+class TestTerminationMapping:
+    """A3: precise frozen termination vocabulary (runtime-executor.md §3.9)."""
+
+    async def _run_with_final(self, journal, ctx, final: FinalResult, *, usage=None):
+        clock = FakeClock()
+        api = RenewOkApi()
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield SessionStarted(session_id="sess-9", model="m")
+                if usage is not None:
+                    yield usage
+                yield final
+
+        sup = make_supervisor(api, journal, clock)
+        outcome = await sup.supervise(ctx, Provider(), run_request())
+        terminal = next(t for t in api.transitions if t["status"] != "running")
+        return outcome, terminal
+
+    async def test_budget_exceeded_maps_to_failed_with_frozen_reason(self, journal, ctx):
+        outcome, terminal = await self._run_with_final(
+            journal, ctx,
+            FinalResult(summary="truncated", exit_code=1, termination="budget_exceeded"),
+        )
+        assert outcome.status == "failed"
+        assert terminal["failure_reason"] == "budget_exceeded"
+
+    async def test_timeout_maps_to_failed_with_frozen_reason(self, journal, ctx):
+        outcome, terminal = await self._run_with_final(
+            journal, ctx,
+            FinalResult(summary="wall", exit_code=124, termination="timeout"),
+        )
+        assert outcome.status == "failed"
+        assert terminal["failure_reason"] == "timeout"
+
+    async def test_plain_failure_still_reports_nonzero_exit(self, journal, ctx):
+        outcome, terminal = await self._run_with_final(
+            journal, ctx, FinalResult(summary="boom", exit_code=3)
+        )
+        assert outcome.status == "failed"
+        assert terminal["failure_reason"] == "nonzero_exit"
+
+    async def test_turns_flow_from_provider_usage_into_result(self, journal, ctx):
+        reported = {}
+        clock = FakeClock()
+
+        class CapturingApi(RenewOkApi):
+            async def transition(self, attempt_id, *, lease_seq, status, result=None,
+                                 failure_reason=None):
+                if result is not None:
+                    reported.update(result)
+                return await super().transition(
+                    attempt_id, lease_seq=lease_seq, status=status,
+                    result=result, failure_reason=failure_reason,
+                )
+
+        api = CapturingApi()
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield SessionStarted(session_id="sess-2", model="m")
+                yield UsageObserved(
+                    input_tokens=11, output_tokens=7, cost_usd="0.002000", turns=4
+                )
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(api, journal, clock)
+        outcome = await sup.supervise(ctx, Provider(), run_request())
+        assert outcome.status == "completed"
+        assert reported["usage"]["turns"] == 4
+        assert reported["usage"]["total_tokens"] == 18
+        assert reported["provider"]["session_id"] == "sess-2"
+        assert reported["outcome"]["termination"] == "completed"
+
+
+class TestUnexpectedProviderError:
+    async def test_unexpected_exception_terminates_not_hangs(self, journal, ctx):
+        # HIGH #1: a non-DaemonError from the provider must still finalize the
+        # attempt (set _done) — otherwise supervise() blocks forever.
+        clock = FakeClock()
+        api = RenewOkApi()
+
+        class BoomProvider:
+            name = "boom"
+
+            async def run(self, request):
+                yield SessionStarted(session_id="s", model="m")
+                raise ValueError("transport exploded")
+
+        sup = make_supervisor(api, journal, clock)
+        outcome = await asyncio.wait_for(
+            sup.supervise(ctx, BoomProvider(), run_request()), timeout=10
+        )
+        assert outcome.status == "failed"
+        assert outcome.failure_reason == "ValueError"
+        statuses = [t["status"] for t in api.transitions]
+        assert statuses[-1] == "failed"

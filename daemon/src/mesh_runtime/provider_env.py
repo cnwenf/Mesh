@@ -26,6 +26,8 @@ import asyncio
 import json
 import os
 import re
+import secrets
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,9 +35,18 @@ from mesh_runtime.errors import DaemonError
 
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
-#: Exact reserved names (server parity NEW-M1 + daemon §3.8 additions,
-#: including the proxy family — the ONLY proxy pointer the provider may see
-#: is the daemon-assembled egress address from build_sandbox_env).
+#: Exact reserved names (server parity NEW-M1 + daemon §3.8 additions).
+#: Includes the proxy family — the ONLY proxy pointer the provider may see is
+#: the daemon-assembled egress address from build_sandbox_env — plus the
+#: CA-redirect vars (an attacker-controlled value could otherwise MITM/redirect
+#: the provider's TLS) and the platform egress/broker pointers the daemon owns.
+#:
+#: NOTE (known residual, accepted): ``MESH_ATTEMPT_ID`` / ``MESH_EXECUTION_ID``
+#: are deliberately NOT reserved — they are diagnostics only, not security
+#: pointers. The security-critical pointers (egress proxy, broker socket/nonce)
+#: are re-asserted by the daemon AFTER the provider env merges (see
+#: ClaudeCodeAdapter._build_env), so an operator env cannot redirect them even
+#: if it overwrites the diagnostic IDs.
 _RESERVED_EXACT = frozenset(
     {
         "PATH",
@@ -45,17 +56,25 @@ _RESERVED_EXACT = frozenset(
         "HTTPS_PROXY",
         "ALL_PROXY",
         "NO_PROXY",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "MESH_GATEWAY_HOST_IP",
     }
 )
 
 #: Reserved prefixes — dynamic loading, interpreter injection, platform
-#: internals and cloud credentials (§3.8).
+#: internals (broker/gateway pointers) and cloud credentials (§3.8).
 _RESERVED_PREFIXES = (
     "LD_",
     "DYLD_",
     "PYTHON",
     "MESH_DAEMON_",
     "MESH_INTERNAL_",
+    "MESH_BROKER_",
+    "MESH_GATEWAY_",
     "XDG_",
     "AWS_",
     "AZURE_",
@@ -107,6 +126,11 @@ _SCAN_MAX_FILES = 20_000
 class ReservedEnvError(DaemonError):
     """An env name or provider arg failed the reserved-name / escalation
     gate. Fail-closed; the rejected value is NOT echoed upstream."""
+
+
+class ProviderEnvError(DaemonError):
+    """The administrator-owned provider credential file failed the §2.3
+    security checks or carries malformed content. Fail-closed."""
 
 
 @dataclass(frozen=True)
@@ -194,6 +218,11 @@ def build_provider_argv(spec: ProviderLaunchSpec) -> list[str]:
         "--print",
         "--input-format", "stream-json",
         "--output-format", "stream-json",
+        # The pinned provider refuses --print + stream-json output unless
+        # --verbose is present (verified against the release binary). It only
+        # enables the streaming record stream §3.9 parses — it does NOT widen
+        # the loading surface (not an escalation flag, §1.5 rule 4).
+        "--verbose",
         "--bare",
         "--disable-slash-commands",
         "--no-session-persistence",
@@ -232,14 +261,17 @@ async def write_provider_configs(
 
     def _write_sync() -> ProviderConfigPaths:
         root.mkdir(parents=True, exist_ok=True)
-        mcp = {
-            "mcpServers": {
+        mcp_servers = (
+            {
                 "mesh-task-broker": {
                     "type": "unix-socket",
                     "path": broker_socket_path,
                 }
             }
-        }
+            if broker_socket_path
+            else {}
+        )
+        mcp = {"mcpServers": mcp_servers}
         paths = ProviderConfigPaths(
             settings_json=root / "settings.json",
             mcp_json=root / "mcp.json",
@@ -306,3 +338,115 @@ def scan_repo_for_hostile_files(worktree: Path) -> list[HostileFinding]:
             if rel == ".claude/hooks":
                 findings.append(HostileFinding(rel, "hooks"))
     return sorted(findings, key=lambda f: (f.kind, f.path))
+
+
+# -- administrator-owned provider credentials (§5.4.7) ------------------------
+#
+# Provider credentials (e.g. the API key the pinned CLI authenticates with)
+# enter ONLY the trusted provider launch boundary: a daemon-owned 0600 file,
+# validated name-by-name, injected into the sandbox process environment and
+# nowhere else — never argv, stdin, config files, journal, logs or results.
+# Every credential value is added to the RedactionPipeline secret set so all
+# egress channels strip it even on a logic bug (§5.4.7: same redactor).
+
+
+_PROVIDER_ENV_MAX_BYTES = 64 * 1024
+
+
+def load_provider_env_file(path: Path, *, expected_uid: int) -> dict:
+    """Load KEY=VALUE provider credentials under the §2.3 file gate: parent dir
+    exact-owner + 0700; the file is opened with ``O_NOFOLLOW`` and verified via
+    ``fstat`` on the OPENED fd (regular file, exact owner, mode 0600) so the
+    check and the read target the SAME inode — no lstat/read TOCTOU. Names are
+    validated (§3.8 reserved set) and the merged dict is scrubbed AGAIN —
+    nothing reserved survives into the sandbox environment."""
+    p = Path(path)
+    try:
+        parent_st = p.parent.stat()
+    except FileNotFoundError as exc:
+        raise ProviderEnvError("provider env file parent dir not found") from exc
+    if parent_st.st_uid != expected_uid:
+        raise ProviderEnvError("provider env file parent dir owner mismatch")
+    if stat.S_IMODE(parent_st.st_mode) & 0o077:
+        raise ProviderEnvError("provider env file parent dir must be mode 0700")
+
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError as exc:
+        raise ProviderEnvError("provider env file not found") from exc
+    except OSError as exc:  # O_NOFOLLOW raises ELOOP on a symlink
+        raise ProviderEnvError("provider env file must not be a symlink") from exc
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ProviderEnvError("provider env file must be a regular file")
+        if st.st_uid != expected_uid:
+            raise ProviderEnvError("provider env file owner mismatch")
+        if stat.S_IMODE(st.st_mode) != 0o600:
+            raise ProviderEnvError("provider env file must be mode 0600")
+        chunks: list[bytes] = []
+        total = 0
+        while total < _PROVIDER_ENV_MAX_BYTES:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    finally:
+        os.close(fd)
+
+    env: dict = {}
+    for line_number, raw_line in enumerate(
+        b"".join(chunks).decode("utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ProviderEnvError(
+                f"provider env file line {line_number} is not KEY=VALUE"
+            )
+        name, value = line.split("=", 1)
+        name = name.strip()
+        try:
+            validate_env_name(name)
+        except ReservedEnvError as exc:
+            raise ProviderEnvError(
+                f"provider env file line {line_number}: reserved or malformed name"
+            ) from exc
+        if not value:
+            raise ProviderEnvError(
+                f"provider env file line {line_number}: empty value"
+            )
+        env[name] = value
+    # §3.8 second pass: re-scrub the merged result — trust nothing.
+    return scrub_env(env)
+
+
+# -- stdin prompt assembly (§1.4: prompt only via stdin, never argv/shell) ----
+
+
+def wrap_untrusted_context(context: str, *, source: str, boundary: str | None = None) -> str:
+    """Wrap untrusted task context in server/daemon-generated boundary markers
+    (§3.7): the content can never choose its own boundary, and parsers treat
+    the wrapped block as data, not instructions."""
+    marker = boundary or secrets.token_hex(16)
+    size = len(context.encode("utf-8"))
+    if not context:
+        return "(no task context provided)"
+    return (
+        f"<<<mesh-untrusted-context {marker}>>>\n"
+        f"source={source} size={size}\n"
+        f"{context}\n"
+        f"<<<end-mesh-untrusted-context {marker}>>>"
+    )
+
+
+def build_stream_json_input(untrusted_context: str, *, source: str = "trigger",
+                            boundary: str | None = None) -> str:
+    """The ONE stdin line fed to the provider: a stream-json user message.
+    Trusted system instructions travel via --system-prompt-file instead and
+    are never concatenated with this block (§3.7 S-09)."""
+    content = wrap_untrusted_context(untrusted_context, source=source, boundary=boundary)
+    record = {"type": "user", "message": {"role": "user", "content": content}}
+    return json.dumps(record, ensure_ascii=False) + "\n"

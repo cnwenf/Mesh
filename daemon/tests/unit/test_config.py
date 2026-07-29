@@ -91,3 +91,50 @@ class TestDaemonConfigValidation:
         )
         with pytest.raises(ConfigError, match="origin"):
             DaemonConfig.load(write_toml(tmp_path, text))
+
+
+class TestProviderManifestConfig:
+    BASE = {
+        "server_url": "https://mesh.example.com",
+        "state_dir": "/var/lib/mesh",
+        "work_dir": "/var/work/mesh",
+    }
+
+    def test_manifest_requires_provider_path(self):
+        raw = {**self.BASE, "provider_manifest": "/opt/mesh/manifest.toml"}
+        with pytest.raises(ConfigError, match="provider_path"):
+            DaemonConfig.from_dict(raw)
+
+    def test_manifest_and_env_file_absolute(self):
+        raw = {
+            **self.BASE,
+            "provider_path": "/opt/mesh/providers/claude/2.1.218/claude",
+            "provider_manifest": "/opt/mesh/manifest.toml",
+            "provider_env_file": "/etc/mesh/provider.env",
+        }
+        config = DaemonConfig.from_dict(raw)
+        assert str(config.provider_manifest) == "/opt/mesh/manifest.toml"
+        assert str(config.provider_env_file) == "/etc/mesh/provider.env"
+
+    def test_relative_manifest_rejected(self):
+        raw = {
+            **self.BASE,
+            "provider_path": "/opt/mesh/claude",
+            "provider_manifest": "relative/manifest.toml",
+        }
+        with pytest.raises(ConfigError, match="absolute"):
+            DaemonConfig.from_dict(raw)
+
+    def test_sandbox_ceiling_defaults_and_overrides(self):
+        config = DaemonConfig.from_dict(self.BASE)
+        assert config.sandbox_memory_bytes == 512 * 1024 * 1024
+        assert config.sandbox_pids_max == 256
+        raw = {**self.BASE, "sandbox_memory_bytes": 2147483648, "sandbox_pids_max": 512}
+        config = DaemonConfig.from_dict(raw)
+        assert config.sandbox_memory_bytes == 2147483648
+        assert config.sandbox_pids_max == 512
+
+    def test_sandbox_ceiling_must_be_positive(self):
+        raw = {**self.BASE, "sandbox_memory_bytes": 0}
+        with pytest.raises(ConfigError, match="sandbox_memory_bytes"):
+            DaemonConfig.from_dict(raw)

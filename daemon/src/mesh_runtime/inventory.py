@@ -35,8 +35,11 @@ def _fail(path: str, reason: str) -> BinaryProbe:
     return BinaryProbe(ok=False, path=path, sha256=None, version=None, reason=reason)
 
 
-async def probe_binary(path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS) -> BinaryProbe:
-    """Verify and fingerprint a provider binary. Fail-closed on any doubt."""
+def verify_binary_static(path: str) -> BinaryProbe:
+    """Verify a provider binary's path/owner/mode and compute its SHA-256 —
+    WITHOUT executing it (§1.4 step 2: verify BEFORE running anything, so an
+    attacker-planted binary is never exec'd). Fail-closed on any doubt. The
+    returned probe carries the digest but no version."""
     p = Path(path)
     if not p.is_absolute():
         return _fail(path, "provider path must be absolute")
@@ -60,8 +63,15 @@ async def probe_binary(path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS) 
     with open(p, "rb") as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
             sha.update(chunk)
-    digest = sha.hexdigest()
+    return BinaryProbe(ok=True, path=path, sha256=sha.hexdigest(), version=None, reason=None)
 
+
+async def read_binary_version(
+    path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS
+) -> BinaryProbe:
+    """Read ``--version`` in a bare env. CALL ONLY on a statically verified
+    (digest-matched) binary — never on an unverified path."""
+    p = Path(path)
     try:
         proc = await asyncio.create_subprocess_exec(
             str(p),
@@ -80,13 +90,21 @@ async def probe_binary(path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS) 
         return _fail(path, "version check timeout")
     if proc.returncode != 0:
         return _fail(path, f"version check exited {proc.returncode}")
-    version = stdout[:_VERSION_OUTPUT_MAX].decode("utf-8", errors="replace").strip().splitlines()
+    lines = stdout[:_VERSION_OUTPUT_MAX].decode("utf-8", errors="replace").strip().splitlines()
+    return BinaryProbe(ok=True, path=path, sha256=None, version=lines[0] if lines else "", reason=None)
+
+
+async def probe_binary(path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS) -> BinaryProbe:
+    """Verify and fingerprint a provider binary. Fail-closed on any doubt:
+    static (path/owner/mode/SHA-256) first, then the ``--version`` read."""
+    static = verify_binary_static(path)
+    if not static.ok:
+        return static
+    ver = await read_binary_version(path, timeout=timeout)
+    if not ver.ok:
+        return ver
     return BinaryProbe(
-        ok=True,
-        path=path,
-        sha256=digest,
-        version=version[0] if version else "",
-        reason=None,
+        ok=True, path=path, sha256=static.sha256, version=ver.version, reason=None
     )
 
 

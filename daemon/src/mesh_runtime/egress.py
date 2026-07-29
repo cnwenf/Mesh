@@ -217,17 +217,15 @@ class EgressGateway:
         if not self._authorized(method, url.scheme, url.host, url.port):
             self._deny(writer, 403)
             return
-        ip = await self._resolve_pinned(url.host)
-        if ip is None:
+        verified = await self._resolve_verified(url.host)
+        if not verified:
             self._deny(writer, 403)
             return
-        try:
-            upstream_reader, upstream_writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, url.port), timeout=self._timeout
-            )
-        except OSError:
+        upstream = await self._connect_pinned(verified, url.port)
+        if upstream is None:
             self._deny(writer, 502)
             return
+        upstream_reader, upstream_writer = upstream
         try:
             path = url.path or "/"
             if url.query:
@@ -326,17 +324,15 @@ class EgressGateway:
         ):
             self._deny(writer, 403)
             return
-        ip = await self._resolve_pinned(host)
-        if ip is None:
+        verified = await self._resolve_verified(host)
+        if not verified:
             self._deny(writer, 403)
             return
-        try:
-            upstream_reader, upstream_writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, port), timeout=self._timeout
-            )
-        except OSError:
+        upstream = await self._connect_pinned(verified, port)
+        if upstream is None:
             self._deny(writer, 502)
             return
+        upstream_reader, upstream_writer = upstream
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
         self.stats["allowed"] += 1
@@ -380,19 +376,35 @@ class EgressGateway:
             and method in policy.allowed_methods
         )
 
-    async def _resolve_pinned(self, host: str) -> str | None:
-        """Trusted resolve → filter EVERY answer → return the pinned IP to
-        connect to. Any failure refuses the whole request (fail-closed)."""
+    async def _resolve_verified(self, host: str) -> list[str]:
+        """Trusted resolve → filter EVERY answer → return the verified IP set.
+        Any failure refuses the whole request (fail-closed)."""
         try:
             answers = await asyncio.wait_for(self._resolver(host), timeout=self._timeout)
             verified = self._filter(list(answers))
         except (ForbiddenAddressError, TimeoutError, OSError):
             self.stats["denied"] += 1
-            return None
+            return []
         if not verified:
             self.stats["denied"] += 1
-            return None
-        return verified[0]
+        return list(verified)
+
+    async def _connect_pinned(
+        self, verified: list[str], port: int
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+        """Connect to ONE of the verified IPs (§3.4 step 5: the connection is
+        pinned to the verified set, never re-resolved). Addresses are tried in
+        order so an unreachable family (e.g. IPv6 on an IPv4-only host) falls
+        through to the next verified address instead of failing the request;
+        every candidate already passed the full IP filter."""
+        for ip in verified:
+            try:
+                return await asyncio.wait_for(
+                    asyncio.open_connection(ip, port), timeout=self._timeout
+                )
+            except (OSError, TimeoutError):
+                continue
+        return None
 
     def _deny(self, writer: asyncio.StreamWriter, status: int) -> None:
         self.stats["denied"] += 1

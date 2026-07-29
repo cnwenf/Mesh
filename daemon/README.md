@@ -10,10 +10,11 @@ This package is **standalone** — it shares only the versioned HTTP contract
 (see `docs/specs/features/runtime-executor.md` §3.1). The binary and service
 name are exactly `mesh-runtime`.
 
-## Status (MES-94 · stage A1 + A2)
+## Status (MES-94 · stage A1 + A2 + A3)
 
-Implemented — the daemon **skeleton** (A1) plus the **secure execution
-surface** (A2), driving the full attempt state machine and crash recovery:
+Implemented — the daemon **skeleton** (A1), the **secure execution surface**
+(A2) and the **real pinned provider** (A3), driving the full attempt state
+machine and crash recovery:
 
 - `api` — typed client for the whole `/api/v1/daemon/*` surface with
   fail-closed error classification (401 fatal, 409 lease fence, 429
@@ -105,9 +106,51 @@ FAILS, never skips). Evidence: `docs/evidence/mes-100/` (ISO matrix junit +
 real-server integration: activate → online → claim → sandboxed execution →
 redacted reflow).
 
-Still ahead (A3 real provider): the pinned Claude Code adapter (capability
-manifest + SHA-256 check, stream-json parsing, hard budget truncation,
-session/usage/result reflow).
+Still ahead (B real-LLM workflow): the protected assign/mention → real claim →
+tool/approval → diff/result/comment/status workflow on top of A3.
+
+A3 real pinned provider (a real coding CLI inside the A2 sandbox):
+
+- `manifest` — the immutable §1.4 capability manifest (TOML encoding of the
+  spec's fields: `provider` / `version` / `binary_sha256` / `required_flags` /
+  `hard_limits`). Loading is fail-closed on any doubt; `hard_limits.usd_budget`
+  / `wall_timeout` must be `true` (a real provider with no hard budget is
+  refused, §3.5). `required_flags` must stay inside the frozen §1.4 argv set
+  and never include a §1.5 load-expanding flag.
+- `providers/claude_code` — the pinned Claude Code adapter. `probe()`
+  re-verifies absolute path / owner / mode / SHA-256 / exact version and that
+  every required flag is advertised by a bare-env `--help` read (the
+  `--flag[-suffix]` help shorthand is expanded to its concrete flags); the
+  result caches on `(dev, ino, mtime, size)` and is invalidated the instant the
+  binary's inode/mtime/hash changes (§1.4 step 5). `run()` builds the frozen
+  §1.4 argv (prompt via stdin only — never argv, never a shell), writes the
+  three daemon-owned read-only configs into the attempt run dir, builds the
+  sandbox env FROM EMPTY plus the administrator-owned provider credentials
+  (§5.4.7), and parses the vendor `stream-json` stream into unified events.
+  The broker socket and egress proxy are resolved at `run()` time (security
+  starts after adapter construction), never captured eagerly.
+- `stream_json` — strict §3.9 parser: a fixed schema whitelist
+  (system/init, assistant text/tool_use/usage, user tool_result, the terminal
+  result record); unknown / malformed / oversized records are dropped with a
+  diagnostic reason (never raised, never relayed); `thinking` blocks never
+  become events (§3.7).
+- `budget` — S-07 daemon-layer enforcement: the effective limit is the
+  STRICTER of the frozen snapshot and the daemon caps; provider-reported usage
+  and wall/idle clocks are checked live and a violation TERM→KILLs the
+  provider, terminating with the frozen `budget_exceeded` / `timeout`
+  vocabulary. `UsageObserved.turns` and the result record's `total_cost_usd`
+  flow into the schema-v1 terminal result.
+- `sandbox_init` additionally bind-mounts the host's read-only public CA trust
+  store (`/etc/ssl/certs`) so the provider can verify the TLS certificate of
+  its pinned egress destination (public roots only — no host config, no
+  secrets).
+
+Proof: `tests/integration/real_llm_e2e.py` drives the real gate over the
+public API (no `psql` seed): register → workspace → agent (frozen budget +
+network policy) → runtime → daemon activate → **online** → assign → real claim
+→ the pinned binary executes a real LLM call inside the namespace/cgroup
+sandbox → logs / session / usage / result reflow with the provider credential
+redacted. Evidence: `docs/evidence/mes-101/real-llm-e2e.json`.
 
 ## Install & run
 
@@ -137,8 +180,19 @@ server_url = "https://mesh.example.com"   # https origin only (http loopback + a
 state_dir  = "/var/lib/mesh-runtime"       # absolute, 0700 — token, journal, spool
 work_dir   = "/var/lib/mesh-runtime/work"  # absolute, 0700 — attempt worktrees
 max_concurrent = 1                          # daemon ceiling; server still adjudicates
-# provider_path = "/opt/mesh/providers/claude/<version>/claude"  # A3
+# A3 real provider (omit all three to stay on the A1/A2 fake provider):
+# provider_path        = "/opt/mesh/providers/claude/<version>/claude"  # pinned binary (absolute)
+# provider_manifest    = "/etc/mesh-runtime/claude-manifest.toml"       # §1.4 capability manifest
+# provider_env_file    = "/etc/mesh-runtime/provider.env"               # 0600 provider credentials (0700 parent)
+# sandbox_memory_bytes = 2147483648   # per-attempt cgroup ceilings (daemon local;
+# sandbox_pids_max     = 256          # the frozen snapshot may be stricter, never looser)
 ```
+
+The provider credential file is `KEY=VALUE` lines (e.g. `ANTHROPIC_API_KEY=…`);
+every name is re-validated against the §3.8 reserved set and every value joins
+the redaction secret set, so credentials never reach logs, results, argv,
+stdin, or the journal (§5.4.7). Generate a manifest's pinned values with
+`mesh-runtime manifest hash --binary <path>`.
 
 Server-owned values (heartbeat/lease intervals, the authoritative
 `max_concurrent`) arrive in protocol responses and are never configured here.
