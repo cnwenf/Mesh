@@ -5,7 +5,31 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
-平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 153 例 + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2482 例全绿 + typecheck 净。
+### Added
+
+- **mesh-runtime A2 安全执行面(MES-94 阶段2·开发A2/MES-100)**:daemon 本地执行体在 A1 骨架之上落地真实内核隔离——
+  - **namespace/cgroup 沙箱(fail-closed)**:每 attempt 独立 mount/pid/net/ipc/uts namespace + cgroup2 硬限额(memory/cpu/pids、swap 关闭),pivot_root 进入只读最小根(tmpfs `/tmp` `/home` `/xdg`、全新 `/proc`、`/dev` 仅 null/zero/urandom),降权至非特权 uid;沙箱 netns **无默认路由**,唯一出口为 veth /30 上的 per-attempt egress 代理;沙箱未就绪绝不降级裸跑(失败 attempt 以 `failed/sandbox_violation` 终结)。
+  - **S-01 不可信配置隔离**:§1.4 固定 argv 模板、reserved env 合并后二次清洗、daemon 所有的只读 provider 配置、恶意 repo 文件枚举(ISO-09:`.mcp.json`/`.claude/settings*.json`/hooks/`CLAUDE.md` 仅作普通文件,绝不加载执行)。
+  - **S-02 唯一 ToolBroker 闸门**:SO_PEERCRED uid + cgroup 成员 + attempt nonce 三重校验;§3.3 动作→闸门唯一映射(未知动作 fail-closed;mount/提权/daemon 控制面/云元数据永久禁止,approval 亦不可放行);task token 代持与资源 scope 钉死;`confirm_required` 唯一协议=取消(awaiting_approval)+新 attempt 凭 resume_context 续跑,沙箱绝不挂起等待批准。
+  - **S-04 egress gateway**:可信解析→**全部**应答 IP 过滤(loopback/私有/link-local/多播/保留/文档/benchmarking/云元数据,IPv4-mapped 归一化;混入一个禁用 IP 即整次拒绝)→钉死建连;HTTP+CONNECT;3xx 不自动跟随(逐跳重验)。
+  - **checkout helper(§3.2)**:冻结 URL + allowlist + 公网地址闸门、精确 SHA checkout、只读凭证仅存在于 git 子进程环境(不进 remote URL / `.git/config` / provider env)。
+  - **S-08 幂等清理**:按序白名单拆除(broker→吊销→cgroup kill→挂载→产物→spool 门禁→journal 清理位),不跟随 symlink,拒绝 attempt 根外路径。
+  - **MES-98 P0 契约对齐**:claim/renew task token 字段、跨流统一日志 offset 水位、journal 在线迁移。
+  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 仍开发中,生产启用以最终安全复测为准。
+
+### Fixed
+
+- **mesh-runtime A2 验收打回整改(MES-100,PR #74 第 2 轮)**:按验收员 14 项阻断清单逐条修复并补真实负向测试——
+  - **钉入必修×3**:① spool×sealed 交错残留——sealed flush 在 spool 回放后继续收集内存缓冲批、sealed 钉在真正最后一批;sealed flush 瞬态失败按有界退避重试(尊重 Retry-After、分钟级封顶),重试耗尽降级 `failed/log_flush_failed`(绝不以 completed 认证不完整日志),spool/journal 保留交启动对账续传;② 崩溃残留清理——启动对账收口 spool/work dir/sandbox cgroup/宿主侧 veth 残留(`terminal_seal_pending` 行先尽力回放+sealed 再清;包含校验的按 attempt 清理 + 全盘扫描,拒绝 work root 外路径);③ 500ms 独立 flush timer——稀疏流不等下一行,定时器按 §3.9.2「任一条件即发送」发送,事件驱动测试覆盖。
+  - **B4 [HIGH] checkout SSRF**:platform-managed checkout 在 git fetch 前对 repo host 走可信解析 + 全应答 IP 过滤,并以 `http.curloptResolve` 将连接钉死到已验证 IP(消除 rebinding 窗口);不可钉死 scheme 拒绝;self-hosted 豁免为设计使然,心跳新增 `checkout_public_address_gate` 能力位。**B5**:`base_sha` 缺失 fail-closed(绝不抓移动分支 ref 跳过校验)。
+  - **B6**:ISO-12 名实相符——新增 §5.2 枚举的跨解析 rebinding(先公网后私网/元数据)真实负向;重定向元数据子用例改为真实 traverse 302 且由生产 IP 过滤器(而非端口闸门)拒绝。**B7**:`max_redirects` 冻结上限真实生效(3xx 按 attempt 记账,超限拒绝中继)。**B8**:egress 代理钉死 per-attempt veth host IP(`IP_FREEBIND` 预绑),不再 `0.0.0.0` 暴露。
+  - **B9**:broker cgroup 校验分支真实负向/正向测试(真实 `/proc/<peer>/cgroup`)。**B10**:`issue.comment`/`issue.status` 幂等键门禁(缺键 fail-closed、同键重放不二次执行、失败不缓存)。**B11**:EXEC 门禁补 pid/ipc/uts namespace 比对。**B12**:reserved env 二次清洗补全(泛型 `_TOKEN/_SECRET/_KEY/_CREDENTIAL/_PASSWORD/_APIKEY` 后缀 + 代理族 + `NPM_TOKEN`)。
+  - **安全审核员 LOW 清单**:token fstat 复核补 0600 mode + 超限读拒绝(不静默截断)、journal 以 `os.open` 0600 预建消除 umask 窗口、runtime token 纳入脱敏集、Retry-After 全链路分钟级封顶(claim/heartbeat/sealed-flush 统一 `capped_retry_after`)。
+  - **文档**:spec 新增 §4.4.1 实现跟踪台账(A2 验收冻结登记非阻断项:非 root/userns 随 S-12、argv/provider 配置端到端强制随 A3 等)。
+
+## [0.21.0] - 2026-07-30
+
+平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 371 例(覆盖率 98.65%) + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2526 例全绿 + typecheck 净。
 
 ### Added
 

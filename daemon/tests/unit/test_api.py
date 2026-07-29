@@ -51,7 +51,13 @@ class TestActivate:
         assert resp.runtime_token == TOKEN
         assert resp.heartbeat_interval_seconds == 15.0
         call = server.calls_for("POST /api/v1/daemon/runtimes:activate")[0]
-        assert call.body == {"activation_code": "activate-code-123", "metadata": {"hostname": "box"}}
+        assert call.body == {
+            "activation_code": "activate-code-123",
+            "metadata": {"hostname": "box"},
+            "protocol_version": 1,
+            "provider_manifest": {},
+            "daemon_features": {},
+        }
         assert "authorization" not in call.headers
 
     async def test_activate_error_maps(self, server):

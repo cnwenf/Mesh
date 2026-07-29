@@ -30,7 +30,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 
 ## 实现状态
 
-> Runtime 服务端协议已实现；本地执行体 `mesh-runtime` 安全评审已通过、开发放行——A1 执行体骨架(fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流)已落地于 [`daemon/`](daemon/README.md)，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)；A2 安全执行面(namespace/cgroup 沙箱、task/action broker、egress gateway)与 A3 真实 Claude Code provider 仍在开发，真实 provider 的生产启用以最终安全复测通过为准。
+> Runtime 服务端协议已实现；本地执行体 `mesh-runtime` 安全评审已通过、开发放行——A1 执行体骨架(fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流)与 **A2 安全执行面**(真实 Linux namespace/cgroup 沙箱 fail-closed、S-01 不可信配置隔离、S-02 唯一 ToolBroker 闸门、S-04 egress gateway、checkout 只读凭证分离、S-08 幂等清理；ISO-01～14 隔离红线负向矩阵真实环境全绿、与 server P0 契约真实联调通过，证据见 `docs/evidence/mes-100/`)已落地于 [`daemon/`](daemon/README.md)，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)；A3 真实 Claude Code provider 仍在开发，真实 provider 的生产启用以最终安全复测通过为准。
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |

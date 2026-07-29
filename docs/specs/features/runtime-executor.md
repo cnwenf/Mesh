@@ -2,7 +2,7 @@
 
 > 状态：安全复评通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
 >
-> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；A2 安全执行面与 A3 真实 Claude Code provider 开发中（见 §4.4）。
+> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；**A2 安全执行面已落地**——真实 Linux namespace/cgroup 沙箱（mount/pid/net/ipc/uts + cgroup2 限额，fail-closed 不降级裸跑）、S-01 不可信配置隔离（空 HOME/XDG、只读私有配置、reserved env 二次清洗；§1.4 固定 argv 与 §1.5 三件套配置机制就绪、随 A3 真实 provider 接线端到端强制）、S-02 唯一 ToolBroker 闸门（SO_PEERCRED+cgroup+nonce 三重校验、动作→闸门唯一映射、confirm_required=取消+新 attempt 续跑）、S-04 egress gateway（可信解析→全 IP 过滤→钉死建连、沙箱 netns 无默认路由、重定向跳数上限）、checkout helper（只读凭证分离、精确 SHA、解析 IP 复核闸门）、S-08 幂等清理（含启动对账残留清理）；ISO-01～14 隔离红线负向矩阵真实环境全绿（`daemon/tests/isolation/`，禁 mock/skip）。A3 真实 Claude Code provider（固定版本适配、stream-json 解析、预算截断）开发中（见 §4.4）。
 >
 > 所属模块：`runtime` 的本地执行子系统；服务端调度、数据模型和机器 API 仍以 `runtime.md` 为权威。
 >
@@ -457,6 +457,23 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 | A3 真实 provider | 固定 Claude Code 适配、预算、流式解析、session/usage/result | provider manifest 与恶意 fixture 通过 |
 | B 真 LLM e2e | assign/mention → 真 claim → 真调用 → tool/approval → diff/result/comment/status | 受保护 workflow 全绿 |
 | 最终放行 | 安全复测、运维手册、回滚演练、成本告警 | 明确安全审核通过后启用生产 |
+
+### 4.4.1 实现跟踪台账（A2 验收冻结登记）
+
+以下条目为 A2 验收明确登记的非阻断跟踪项，安全属性当前均成立；各项按标注阶段闭合，闭合前生产启用不予放行：
+
+| 条目 | 现状与缓解 | 闭合阶段 |
+| --- | --- | --- |
+| §1.4 固定 argv / §1.5 三件套配置端到端强制 | 机制与单测就绪（`build_provider_argv`/`write_provider_configs`），生产 provider 接线随 A3；ISO-09 当前以 python 替身证明，恶意 fixture 门禁随 A3 真二进制闭合 | A3 |
+| daemon 非 root + user namespace（§1.2/§4.3 字面） | 沙箱降权不可逆 setuid + nosuid 只读根，内核层隔离真实；但 daemon 进程本身以 root 起沙箱，无 CLONE_NEWUSER | S-12 / 发布阶段（生产启用前必修） |
+| confirm_required 取消+续跑生产闭环 | `escalate_confirm_required` 安全属性成立（高危动作绝不执行、沙箱不挂起），生产触发链路随 A3/B 接线 | A3 / B |
+| ActionBroker 服务端 grant 签名校验与永久禁止动作排除 | 当前不可达（写 grant 未接线）；接线前必修 | 写 grant 接线前 |
+| broker socket create→chmod TOCTOU 窗口 | 父目录 0700 + attempt nonce 缓解 | S-12 |
+| 「永久禁止动作携带 grant」运行时负向测试 | 闸门表静态拒绝已覆盖，运行时负向补强 | A3 |
+| probe_binary manifest required_flags 对照与探测沙箱（§1.4 步骤 2-4） | 当前仅路径/属主/摘要/版本自检 | A3 |
+| ISO-01 覆盖 B 的 provider 配置/socket（§5.2 枚举） | worktree/tmp 已覆盖，provider 配置/socket 面随 A3 provider 资产出现后补齐 | A3 |
+| cleanup 失败隔离 runtime（§3.6） | 当前仅 warning + journal 位记录；隔离语义随 doctor/isolated 状态接线 | S-12 |
+| egress resolver 管理员可配置（§3.4 rule 2） | 当前固定系统解析器（安全属性成立：任务不可自定义） | S-12 |
 
 ---
 

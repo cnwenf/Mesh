@@ -65,13 +65,23 @@ class FileTokenStore:
         parent_mode = stat.S_IMODE(self.path.parent.stat().st_mode)
         if parent_mode & 0o077:
             raise TokenStoreError("token parent directory must not grant group/other access — refusing")
-        # Re-verify through the opened fd (TOCTOU between lstat and open).
+        # Re-verify through the opened fd (TOCTOU between lstat and open):
+        # same regular file, same owner AND the exact 0600 mode — a swap to a
+        # world-readable file between lstat and open must fail closed.
         fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             fst = os.fstat(fd)
-            if not stat.S_ISREG(fst.st_mode) or fst.st_uid != self.expected_uid:
+            if (
+                not stat.S_ISREG(fst.st_mode)
+                or fst.st_uid != self.expected_uid
+                or stat.S_IMODE(fst.st_mode) != 0o600
+            ):
                 raise TokenStoreError("token file changed underneath us — refusing")
             raw = os.read(fd, 4096)
+            if len(raw) == 4096:
+                # A real token never fills the read budget; a full read means
+                # the file is oversized — refuse instead of silently truncating.
+                raise TokenStoreError("token file exceeds the frozen size limit — refusing")
         finally:
             os.close(fd)
         token = raw.decode("utf-8").strip()

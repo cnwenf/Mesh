@@ -1,6 +1,14 @@
 import pytest
 
-from mesh_runtime.backoff import EMPTY_QUEUE, KEEPALIVE, NETWORK, BackoffPolicy
+from mesh_runtime.backoff import (
+    EMPTY_QUEUE,
+    KEEPALIVE,
+    NETWORK,
+    RATE_LIMITED_FALLBACK_SECONDS,
+    RETRY_AFTER_CAP_SECONDS,
+    BackoffPolicy,
+    capped_retry_after,
+)
 from tests.conftest import make_rand
 
 
@@ -41,3 +49,17 @@ class TestBackoffPolicy:
     def test_invalid_policy_rejected_by_full_jitter(self):
         with pytest.raises(ValueError):
             BackoffPolicy(base=0.0, cap=10.0).delay(0, make_rand([0.5]))
+
+
+class TestCappedRetryAfter:
+    def test_absent_uses_fallback(self):
+        assert capped_retry_after(None) == RATE_LIMITED_FALLBACK_SECONDS
+
+    def test_within_bounds_honoured(self):
+        assert capped_retry_after(17.5) == 17.5
+
+    def test_huge_capped_at_minute(self):
+        assert capped_retry_after(3600.0) == RETRY_AFTER_CAP_SECONDS == 60.0
+
+    def test_negative_clamped_to_zero(self):
+        assert capped_retry_after(-5.0) == 0.0

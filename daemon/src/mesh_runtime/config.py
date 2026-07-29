@@ -26,6 +26,10 @@ _KNOWN_KEYS = frozenset(
         "heartbeat_interval_seconds",
         "shutdown_grace_seconds",
         "allow_insecure_http",
+        "sandbox_uid",
+        "sandbox_gid",
+        "sandbox_backend",
+        "runtime_kind",
     }
 )
 
@@ -47,6 +51,10 @@ class DaemonConfig:
     heartbeat_interval_seconds: float = 15.0  # default; server response wins
     shutdown_grace_seconds: float = 20.0
     allow_insecure_http: bool = False
+    sandbox_uid: int = 65534  # nobody — the sandbox drops to this uid
+    sandbox_gid: int = 65534  # nogroup
+    sandbox_backend: str = "linux_ns"  # "linux_ns" (fail-closed) | "none" (dev only)
+    runtime_kind: str = "self_hosted"  # self_hosted | platform_managed
     labels: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -109,6 +117,17 @@ class DaemonConfig:
         if provider_version is not None:
             provider_version = str(provider_version)
 
+        sandbox_backend = str(raw.get("sandbox_backend", "linux_ns"))
+        if sandbox_backend not in ("linux_ns", "none"):
+            raise ConfigError("sandbox_backend must be 'linux_ns' or 'none'")
+        runtime_kind = str(raw.get("runtime_kind", "self_hosted"))
+        if runtime_kind not in ("self_hosted", "platform_managed"):
+            raise ConfigError("runtime_kind must be 'self_hosted' or 'platform_managed'")
+        sandbox_uid = int(raw.get("sandbox_uid", 65534))
+        sandbox_gid = int(raw.get("sandbox_gid", 65534))
+        if sandbox_uid <= 0:
+            raise ConfigError("sandbox_uid must be an unprivileged uid > 0")
+
         return cls(
             server_url=server_url.rstrip("/"),
             state_dir=state_dir,
@@ -119,6 +138,10 @@ class DaemonConfig:
             heartbeat_interval_seconds=heartbeat,
             shutdown_grace_seconds=grace,
             allow_insecure_http=allow_insecure,
+            sandbox_uid=sandbox_uid,
+            sandbox_gid=sandbox_gid,
+            sandbox_backend=sandbox_backend,
+            runtime_kind=runtime_kind,
         )
 
 

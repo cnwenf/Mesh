@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Rows still considered in-flight and needing reconciliation on startup.
-ACTIVE_STATUSES = frozenset({"claimed", "running"})
+#: ``terminal_seal_pending`` rows are terminal server-side but still own
+#: spooled log batches: startup reconciliation replays and reaps them (§3.9.3).
+ACTIVE_STATUSES = frozenset({"claimed", "running", "terminal_seal_pending"})
 
 _UPDATABLE_FIELDS = frozenset(
     {
@@ -25,6 +27,8 @@ _UPDATABLE_FIELDS = frozenset(
         "log_offset_stdout",
         "log_offset_stderr",
         "work_dir",
+        "cleanup_state",
+        "sandbox_handle",
     }
 )
 
@@ -39,10 +43,18 @@ CREATE TABLE IF NOT EXISTS attempts (
     log_offset_stdout INTEGER NOT NULL DEFAULT 0,
     log_offset_stderr INTEGER NOT NULL DEFAULT 0,
     work_dir          TEXT NOT NULL DEFAULT '',
+    cleanup_state     TEXT NOT NULL DEFAULT '',
+    sandbox_handle    TEXT NOT NULL DEFAULT '',
     created_at        REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attempts_status ON attempts(status);
 """
+
+#: Columns added after A1; legacy databases are migrated idempotently on open.
+_MIGRATED_COLUMNS = (
+    ("cleanup_state", "TEXT NOT NULL DEFAULT ''"),
+    ("sandbox_handle", "TEXT NOT NULL DEFAULT ''"),
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +69,8 @@ class JournalEntry:
     log_offset_stderr: int
     work_dir: str
     created_at: float
+    cleanup_state: str = ""
+    sandbox_handle: str = ""
 
 
 class Journal:
@@ -77,16 +91,31 @@ class Journal:
         # 0700 keeps those aux files unreadable to other users regardless of
         # umask — defense in depth on top of the doctor's directory check (§2.3).
         os.chmod(self._path.parent, 0o700)
+        # Pre-create the ledger with an explicit 0600 so there is NO window in
+        # which SQLite's connect creates it under a permissive umask; NOFOLLOW
+        # fails closed on a symlink planted at the path.
+        fd = os.open(self._path, os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
         # check_same_thread=False: every call is dispatched via asyncio.to_thread
         # (arbitrary worker threads) but serialized by self._lock, so the
         # connection is never used concurrently — only from varying threads.
         conn = sqlite3.connect(self._path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.executescript(_SCHEMA)
+        self._migrate_sync(conn)
         conn.commit()
         self._conn = conn
         # Restrict AFTER creation so the file exists with 0600 regardless of umask.
         os.chmod(self._path, 0o600)
+
+    @staticmethod
+    def _migrate_sync(conn: sqlite3.Connection) -> None:
+        """Add columns introduced after A1 to databases created by older
+        versions. Idempotent: existing columns are left untouched."""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(attempts)")}
+        for name, definition in _MIGRATED_COLUMNS:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE attempts ADD COLUMN {name} {definition}")
 
     async def close(self) -> None:
         async with self._lock:
@@ -204,4 +233,6 @@ def _row_to_entry(row: sqlite3.Row) -> JournalEntry:
         log_offset_stderr=row["log_offset_stderr"],
         work_dir=row["work_dir"],
         created_at=row["created_at"],
+        cleanup_state=row["cleanup_state"],
+        sandbox_handle=row["sandbox_handle"],
     )
