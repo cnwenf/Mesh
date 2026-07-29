@@ -8,7 +8,14 @@ capture one-time tokens instead of sending real email.
 Security invariants enforced here (auth.md §5.x):
 - argon2id + constant-time compare; uniform anti-enumeration failures;
 - refresh/reset/verification tokens stored as SHA-256 hashes only;
-- refresh rotation with replay detection (reusing a rotated token revokes all);
+- refresh rotation is bounded-idempotent with a grace window (§3.8, R5-H1): a
+  rotated-out credential is recognized via ``previous_token_hash`` inside the
+  window and receives ONLY a fresh access token (never a second rotation,
+  never refresh plaintext) so concurrent tabs/processes converge on the
+  winner; outside the window (or on a revoked session) it is a plain 401.
+  No family revocation on reuse — with hash-only storage a replayed token is
+  indistinguishable from a concurrent legitimate holder, and §3.8
+  deliberately converges instead of logging the race out;
 - password change / reset invalidates every refresh session;
 - (IP, email) login lockout;
 - TOTP MFA with encrypted secret + single-use backup codes.

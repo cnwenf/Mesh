@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from mesh.db.models.user import DeviceAuthorization, Session, User
@@ -62,6 +62,56 @@ class TestDeviceAuthorizationConstraints:
             async with session_factory() as session, session.begin():
                 session.add(DeviceAuthorization(**_authz(status=status)))
                 await session.flush()
+
+    @pytest.mark.parametrize("terminal", ["consumed", "expired", "invalidated"])
+    async def test_terminal_state_cannot_transition(self, session_factory, terminal):
+        """B2: the BEFORE UPDATE trigger rejects ANY status change out of a
+        terminal state — resurrection (consumed → approved ⇒ double redemption)
+        is impossible even for paths that omit the from-state predicate or for
+        direct operational writes."""
+        async with session_factory() as session, session.begin():
+            grant = DeviceAuthorization(**_authz(status=terminal))
+            session.add(grant)
+            await session.flush()
+            grant_id = grant.id
+        with pytest.raises(IntegrityError, match="terminal"):
+            async with session_factory() as session, session.begin():
+                row = await session.get(DeviceAuthorization, grant_id)
+                row.status = "approved"
+        # The row is untouched.
+        async with session_factory() as session:
+            assert (await session.get(DeviceAuthorization, grant_id)).status == terminal
+
+    async def test_non_terminal_transition_still_allowed(self, session_factory):
+        """The trigger only guards terminal states: pending → approved is the
+        happy-path transition the service layer performs conditionally."""
+        async with session_factory() as session, session.begin():
+            grant = DeviceAuthorization(**_authz(status="pending"))
+            session.add(grant)
+            await session.flush()
+            grant_id = grant.id
+        async with session_factory() as session, session.begin():
+            row = await session.get(DeviceAuthorization, grant_id)
+            row.status = "approved"
+        async with session_factory() as session:
+            assert (await session.get(DeviceAuthorization, grant_id)).status == "approved"
+
+    async def test_terminal_row_non_status_update_allowed(self, session_factory):
+        """A terminal row may still receive writes that keep the status (the
+        trigger guards the state machine, not the whole row)."""
+        async with session_factory() as session, session.begin():
+            grant = DeviceAuthorization(**_authz(status="consumed"))
+            session.add(grant)
+            await session.flush()
+            grant_id = grant.id
+        async with session_factory() as session, session.begin():
+            result = await session.execute(
+                text(
+                    "UPDATE device_authorizations SET user_code_hash = :h WHERE id = :id"
+                ),
+                {"h": uuid.uuid4().hex, "id": grant_id},
+            )
+            assert result.rowcount == 1
 
     async def test_partial_unique_blocks_two_active_same_user_code(self, session_factory):
         shared = uuid.uuid4().hex
