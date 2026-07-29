@@ -3,6 +3,26 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.19.0] - 2026-07-29
+
+平台能力层·设计系统级:主题与暗色模式全功能实现(MES-81,theme.md 五章)。协商链闭合(T4:三值语义写死 + 工作区默认级 + 邀请页 preview 同源解析)、首帧防闪烁三级可执行链路(T7/H2:入口注入 → 分区 locator → skeleton)、token 构建期生成单一事实源、CI 四门禁(对比度独立关卡 / AST 硬编码扫描 / 双主题视觉回归 / forced-colors 仿真)、存量 CSS 债务零命中收口。
+
+### Added
+
+- **协商链闭合(theme.md §2.2)**:`users.settings.theme` 三值语义写死——`light`/`dark` 固定;显式 `system` **本级终止跟随 OS**(不回退工作区默认);**默认 absent/null = 未表达偏好,继承工作区默认**(与 i18n locale 链同构,「跟随 OS」与「继承工作区」不再压成同一值);「恢复跟随默认」实际写 `null`(PATCH `/users/me` 显式 null 清除,auth.md §3.1)。`workspaces.settings.default_theme` admin 入口(工作区设置三态选择,`workspace.updated` 实时联动——未设显式偏好的在线成员即时重解析应用,显式偏好成员忽略);未登录邀请接受页经公开 `GET /invitations/preview` 新增 `appearance.default_theme` 有限公开字段解析第 2 级(workspace.md §3.1 MES-76 H2,不开放完整 workspace detail 防枚举)。
+- **首帧防闪烁三级链路(§2.3)**:① **精确注入**——HTML 入口中间件(`mesh.web.entry`)读 `mesh_session` HttpOnly 会话 cookie(SHA-256 只读定位 `sessions`,撤销/过期即匿名),按路由路径段(`/w/{slug}/…` / `/invite/{token}`)解析协商链,注入非敏感二值 `window.__MESH_APPEARANCE__ = {"mode":"light|dark"}`(仅解析后模式,不含工作区标识/名称);个性化响应 `Cache-Control: private, no-store`,静态 shell 字节不变 `public, max-age=300`;CSP 双策略——注入路径 per-request nonce(两个内联脚本统一放行),静态 shell FOUC 脚本 sha256 哈希白名单,`script-src` 绝不 `unsafe-inline`;② **分区镜像** `mesh.theme.active` = `{id: 路由身份, mode}`——`id` 由 URL 同步推导(`{host}:w:{slug}` / `{host}:invite` / `{host}:app` / `{host}:anon`),**id 匹配校验先于 mode 读取**(跨 tab/跨路由残留值天然失效),mode 显式白名单非 `light|dark` 丢弃;解析完成/登录/切工作区单键回写,登出清理 locator + 遗留键;③ **中性 skeleton** 兜底——注入与 locator 均不可用时仅渲染与主题无关的灰阶骨架(`--color-skeleton-*` token),协商完成后应用权威解析;三级均保证不闪错主题(宁缺勿错)。compose 接线:nginx `@app` 反代 HTML 文档至 API 入口 + `frontend_dist` 共享卷(前端镜像写入、api 只读挂载)。
+- **token 单一事实源(§2.3/§5.4)**:`tokenValues.ts` 为唯一事实源,`scripts/gen-tokens.mjs` 构建期生成 `tokens.css` / `tokens-dark.css` / `tokens-print.css`(禁改头标记 + CI 幂等断言:生成后工作区无 diff;CSS↔TS 逐项一致测试保留为第二道防线)。新增语义 token:选区/强调(`--color-selection-*`/`--color-mark-*`,亮/暗各定义禁浏览器默认色)、骨架中性灰、代码高亮双色板(`--color-code-*`)、悬停/下沉表面、五个状态浅底;`AA_CONTRAST_PAIRS` 升级对象式配对表 32 对(text 4.5 / large-text·graphic 3.0,含字号/字重维度)。
+- **CI 门禁(§5.4)**:`check:contrast` 对比度独立关卡(亮/暗逐对,大文本组单列);AST 级硬编码色值扫描——Stylelint 自定义规则(CSS)+ ESLint 自定义规则(TS/TSX,共享 `lint-shared/color-grammar.mjs`),命中 hex/rgb/hsl/oklch/命名色/内联 style/SVG fill·stroke,放行 `var(--*)` 与 `transparent/currentColor/…` 及 forced-colors 块内系统色,**禁整文件白名单**——数据色例外经「行级 `mesh-data-color` 注释 + `theme-lint-exemptions.json` 逐文件登记」双要件(labels 数据色板已登记清偿);双主题视觉回归门禁——6 核心页(看板/issue 详情/成员/聊天/运行详情/收件箱)× light/dark × 1024×768/768×1024 = 24 个 `toHaveScreenshot`(`maxDiffPixelRatio 0.01`,确定性环境:内置 Noto Sans SC 字体锁定 + `page.clock` 冻结 + UTC/zh-CN + 动态区 locator mask,基线入库,CI 只比对不更新,基线更新经独立 `--update-snapshots` PR 审批);forced-colors 仿真验收(核心页矩阵系统色重映射 Canvas/CanvasText/Highlight/GrayText/LinkText 断言 + 显式 border/`forced-color-adjust` 声明点)+ PR 模板 Windows 高对比真机核对清单。
+- **暗色细部(§4.3)**:`::selection`/`<mark>` 经选区 token(亮/暗各定义);`input:-webkit-autofill` 表面色校正(覆盖浏览器黄/蓝底);`prefers-reduced-transparency` scrim 不透明降级;`prefers-contrast: more` 边界/文本增强(token 再赋值非第三套主题);`@media (forced-colors: active)` 语义 token 重映射系统色 + raised 表面显式 border + `.mesh-forced-colors-keep` 自证对比区声明点;`@media print` 强制亮色(tokens-print.css);UGC 内联色对比兜底(评论/聊天/方案渲染后扫描,与表面色对比 <4.5:1 回退 `var(--color-text)`,主题变更事件重扫)+ markdown 代码块主题感知双色板。
+- **偏好健壮性(§4.5)**:pending 写失败分区队列 `mesh.settings.pending:{host}:{user_id}:{workspace_id}`(条目内嵌三元组;重放前主体校验不符不重放;冲突策略服务端回填优先——重放前 GET `/me` 比对 `updated_at`,服务端较新则丢弃 pending 采用服务端值;重试上限;`online`/前台恢复/下次写入触发);登录回填 `usePreferencesBootstrap`(GET `/me` 服务端覆盖本地同名镜像,匿名本地值不充当账号偏好);跨标签页 `storage` 事件即时同步偏好与 locator;`meta theme-color` 亮/暗双声明 + 显式切换 JS 联动。
+- **错误码升格(§3.3)**:非法主题值统一具名码 `422 invalid_theme_mode`(`details.theme/supported` 供本地化),取代通用 `validation_error`,auth.md/workspace.md 错误码表已同步登记;前端 `PreferenceSyncError` 归一 + i18n 文案(zh-CN/en,目录版本哈希重算)。
+- **设置 UI(§4.1)**:个人外观四态选择——「跟随工作区默认(X)」(占位标注当前解析值,写 null)/浅色/深色/「跟随系统(X)」(标注 OS 当前解析值,区别于跟随工作区默认);工作区设置默认主题三态入口(admin,成员未单独设置时生效)。
+
+### Verified
+
+- **真实 e2e(生产形态栈:nginx 前门 → API HTML 入口)**:无闪错三场景全绿——A(默认暗)→B(默认浅)首帧即 B 主题无「先暗后浅」(data-theme 帧序列取证不含 dark)/ 换账号残留 locator(id 不符)不串用 + 解析后按当前路由身份重写 / 邀请接受页未登录首帧即邀请工作区默认暗色(preview 同源注入);注入链路断言(入口 HTML `__MESH_APPEARANCE__` 与协商结果一致、不含 slug 等可枚举信息);缓存边界(匿名 public + sha256 CSP / 个性化 private,no-store + nonce CSP,script-src 无 unsafe-inline);locator 白名单(非法 mode 丢弃);视觉回归 24 用例连跑三轮零 diff;forced-colors 仿真 14 断言绿;默认 mock e2e 套件 30 绿。
+- **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 通过;前端全局覆盖率 97.4/90.9/94.4/97.4(双门禁通过);`tsc` 净、eslint/stylelint 0 错、对比度关卡 32 对 ×2 主题全过、gen:tokens 幂等。
+
 ## [0.18.0] - 2026-07-29
 
 平台能力层 A:上手引导全功能实现(MES-69,onboarding.md 五章)。`onboarding_states` + `onboarding_state_steps` 两表进度真源(迁移 0027);Mesh 激活路径五步清单(建区 → 邀请/加 agent → 建首 issue → 分派/@ 触发首个运行 → 收件箱见 agent 回评 = aha moment);入册同事务播种 + 成熟工作区全量 reconcile(R3/R4:受邀者步骤按成员自身历史带证据完成,未触发过执行的成员步骤 4 保持 pending——不批量补齐、不伪造证据);aha 末步仅由 `notification.read` 阅读证据驱动,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组,严格按 `trigger_member_id` 归属(读了他人触发执行的回评不得完成本人末步),aha 仅为触发者置位且仅置一次;成体系空状态六页四要素深链既有向导;前端清单卡片 + aha 庆祝态 + 帮助菜单恢复 + 管理员重置。T34 四真实场景全栈 e2e(真 uvicorn + 真 relay + 真 daemon 执行 + 真通知 fanout)与真实浏览器 UI 走查全绿;后端整体单测覆盖率 ≥90%,前端全局覆盖率 97.5/94.5/90.9/97.5(90% 门禁通过)。

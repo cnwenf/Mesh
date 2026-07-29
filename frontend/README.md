@@ -134,6 +134,14 @@ frontend/
         └── pages/            #   登录占位页、404、错误页、首页骨架演示区
 ```
 
+## 主题体系(theme.md — 设计系统级契约)
+
+- **token 单一事实源**:新增/修改 token **只改 `src/design/tokenValues.ts`**,随后 `npm run gen:tokens` 重新生成 `tokens.css` / `tokens-dark.css` / `tokens-print.css`(生成产物首行带禁改标记;CI 幂等断言:生成后工作区无 diff)。`AA_CONTRAST_PAIRS` 为对比度配对登记表(新增颜色 token 须先登记再合入;text 4.5:1、大文本/图形 3:1)。
+- **协商链(§2.2)**:`users.settings.theme`(absent/null = 继承工作区默认;显式 `system` = 忽略工作区跟随 OS)→ `workspaces.settings.default_theme`(WorkspaceProvider 经 `workspaceThemeBridge` 桥接,`workspace.updated` 实时联动)→ 系统 `prefers-color-scheme`。未登录邀请页经 preview `appearance.default_theme` 解析第 2 级。
+- **首帧三级链路(§2.3)**:`index.html` 内联脚本按「入口注入 `__MESH_APPEARANCE__`(服务端逐请求解析)→ 分区镜像键 `mesh.theme.active`(路由身份 `id` 校验先于 `mode` 白名单读取)→ `data-theme-pending` skeleton 兜底」顺序首帧落主题;`ThemeProvider` 挂载后以协商链权威解析覆盖并回写 locator。宁可短暂无主题骨架,不可先错后改。
+- **取色铁律(§5.4)**:组件一律 `var(--<语义 token>)`,禁硬编码色值——AST 级门禁(Stylelint + ESLint 自定义规则)CI 拦截;数据色例外(标签色板等)须「行级 `mesh-data-color` 注释 + `theme-lint-exemptions.json` 登记」双要件,禁整文件白名单。
+- **门禁命令**:`npm run check:contrast`(对比度独立关卡)、`npm run lint:css`(Stylelint)、`npm run test:e2e:visual`(双主题视觉回归,基线更新经独立 PR)。
+
 ## 阶段 1·B 边界
 
 - 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。

@@ -93,6 +93,31 @@ production — see `auth/mailer.py`).
 
 Writes are rate limited per principal+IP (120/min). Private-project realtime events only hit the `project:{id}` channel; public ones additionally hit `workspace:{ws}:projects` (§6.7).
 
+## HTML entry middleware (`docs/specs/features/theme.md` §2.3)
+
+`mesh.web.entry` serves the built SPA shell for HTML document navigations and
+implements the first-frame precise-injection tier:
+
+- Reads the HttpOnly `mesh_session` cookie (auth.md §5.5 web session form),
+  locates the session **read-only** via SHA-256 `token_hash` (revoked/expired
+  → anonymous), resolves the requester's theme negotiation chain
+  (`users.settings.theme` → route-derived workspace default: `/w/{slug}/…`
+  slug segment, `/invite/{token}` via invitation-preview same-source data →
+  system), and inlines the non-sensitive binary
+  `window.__MESH_APPEARANCE__ = {"mode":"light|dark"}` before `</head>`.
+  The payload carries only the converged mode — never workspace identifiers.
+- Cache boundary: personalized responses are `Cache-Control: private,
+  no-store` with a per-request nonce CSP; the anonymous shell is byte-stable
+  (`public, max-age=300`) with a sha256-hashed FOUC script. `script-src`
+  never allows `unsafe-inline`.
+- `mesh.web.appearance` holds the server-side chain resolution truth table
+  (binary convergence; any lookup failure degrades to no injection — the
+  entry never breaks the HTML response).
+- Deployment: nginx routes HTML document misses (`@app`) to this middleware;
+  the built frontend is shared via the `frontend_dist` compose volume
+  (`MESH_FRONTEND_DIST_DIR`, default `/srv/mesh/frontend`; absent → 404,
+  API unaffected).
+
 ## Security notes
 
 - **Secrets are env-only** (`MESH_*`); startup validates required values and fails fast.
