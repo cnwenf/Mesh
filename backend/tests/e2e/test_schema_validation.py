@@ -1,6 +1,6 @@
 """Run docs/specs/validation/schema_r2_validation.sql on a disposable PG 16.
 
-Acceptance: the 124 canonical assertions PASS and the script exits 0.
+Acceptance: the 143 canonical assertions PASS and the script exits 0.
 The script uses psql meta-commands, so it is executed with the real ``psql``
 binary — exactly like the CI job (``psql -v ON_ERROR_STOP=1 -f ...``). When the
 host has no psql (dev laptops), the cached ``postgres:16`` image provides it.
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.e2e
 
 VALIDATION_SQL = SPECS_DIR / "validation" / "schema_r2_validation.sql"
 VALIDATION_DB = "mesh_validation_ci"
-EXPECTED_PASS_COUNT = 124
+EXPECTED_PASS_COUNT = 143
 
 
 def _conn_parts() -> tuple[str, str, str, str]:
@@ -65,7 +65,7 @@ def _validation_sql_path() -> str:
     return "/work/docs/specs/validation/schema_r2_validation.sql"
 
 
-def test_schema_r2_validation_runs_124_assertions_green():
+def test_schema_r2_validation_runs_143_assertions_green():
     drop = _run_psql("postgres", "-c", f"DROP DATABASE IF EXISTS {VALIDATION_DB} WITH (FORCE)")
     assert drop.returncode == 0, drop.stderr
     create = _run_psql("postgres", "-c", f"CREATE DATABASE {VALIDATION_DB}")
