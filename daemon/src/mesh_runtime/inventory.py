@@ -1,0 +1,162 @@
+"""Provider inventory + fail-closed binary probing (spec §1.4, design §4.2).
+
+Probing scans ONLY administrator-configured absolute paths — never PATH/HOME/
+repo coincidences. The binary is verified (regular file, no symlink, sane
+owner/mode, SHA-256) BEFORE a no-network ``--version`` read; any failure marks
+the provider unavailable and the runtime degraded (no claim).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import stat
+from dataclasses import dataclass
+from pathlib import Path
+
+from mesh_runtime.providers.base import ExecutorAdapter, ProbeResult
+
+_VERSION_TIMEOUT_SECONDS = 5.0
+_VERSION_OUTPUT_MAX = 4096
+
+
+@dataclass(frozen=True)
+class BinaryProbe:
+    ok: bool
+    path: str
+    sha256: str | None
+    version: str | None
+    reason: str | None
+
+
+def _fail(path: str, reason: str) -> BinaryProbe:
+    return BinaryProbe(ok=False, path=path, sha256=None, version=None, reason=reason)
+
+
+async def probe_binary(path: str, *, timeout: float = _VERSION_TIMEOUT_SECONDS) -> BinaryProbe:
+    """Verify and fingerprint a provider binary. Fail-closed on any doubt."""
+    p = Path(path)
+    if not p.is_absolute():
+        return _fail(path, "provider path must be absolute")
+
+    try:
+        st = p.lstat()
+    except FileNotFoundError:
+        return _fail(path, "binary not found")
+    if stat.S_ISLNK(st.st_mode):
+        return _fail(path, "binary is a symlink — refusing")
+    if not stat.S_ISREG(st.st_mode):
+        return _fail(path, "binary is not a regular file")
+    if st.st_mode & 0o002:
+        return _fail(path, "binary is world-writable — refusing")
+    if st.st_uid not in (0, os.getuid()):
+        return _fail(path, "binary owner is neither root nor the daemon uid — refusing")
+    if not os.access(p, os.X_OK):
+        return _fail(path, "binary is not executable")
+
+    sha = hashlib.sha256()
+    with open(p, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            sha.update(chunk)
+    digest = sha.hexdigest()
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(p),
+            "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},  # bare env, no daemon leakage
+        )
+    except OSError as exc:
+        return _fail(path, f"cannot exec binary for version check: {type(exc).__name__}")
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return _fail(path, "version check timeout")
+    if proc.returncode != 0:
+        return _fail(path, f"version check exited {proc.returncode}")
+    version = stdout[:_VERSION_OUTPUT_MAX].decode("utf-8", errors="replace").strip().splitlines()
+    return BinaryProbe(
+        ok=True,
+        path=path,
+        sha256=digest,
+        version=version[0] if version else "",
+        reason=None,
+    )
+
+
+@dataclass(frozen=True)
+class ProviderStatus:
+    name: str
+    available: bool
+    version: str | None
+    binary_sha256: str | None
+    capabilities: tuple[str, ...]
+    reason: str | None
+
+
+class Inventory:
+    """Snapshot of probed providers; heartbeats report only what passed."""
+
+    def __init__(self, statuses: list[ProviderStatus]) -> None:
+        self.statuses = tuple(statuses)
+
+    @classmethod
+    async def probe(cls, adapters: list[ExecutorAdapter]) -> Inventory:
+        statuses: list[ProviderStatus] = []
+        for adapter in adapters:
+            result: ProbeResult = await adapter.probe()
+            statuses.append(
+                ProviderStatus(
+                    name=result.name,
+                    available=result.available,
+                    version=result.version,
+                    binary_sha256=result.binary_sha256,
+                    capabilities=tuple(result.capabilities),
+                    reason=result.reason,
+                )
+            )
+        return cls(statuses)
+
+    def healthy(self) -> bool:
+        return all(s.available for s in self.statuses)
+
+    def capability_keys(self) -> list[str]:
+        return sorted({cap for s in self.statuses for cap in s.capabilities})
+
+    def degraded_reasons(self) -> list[str]:
+        return [s.reason or f"{s.name} unavailable" for s in self.statuses if not s.available]
+
+    def inventory_hash(self) -> str:
+        canonical = json.dumps(
+            [
+                {
+                    "name": s.name,
+                    "available": s.available,
+                    "version": s.version,
+                    "binary_sha256": s.binary_sha256,
+                    "capabilities": list(s.capabilities),
+                }
+                for s in self.statuses
+            ],
+            sort_keys=True,
+        )
+        return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def heartbeat_payload(self) -> list[dict]:
+        return [
+            {
+                "name": s.name,
+                "version": s.version,
+                "healthy": s.available,
+                "binary_sha256": s.binary_sha256,
+                "capabilities": list(s.capabilities),
+            }
+            for s in self.statuses
+            if s.available
+        ]
