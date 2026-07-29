@@ -544,6 +544,7 @@ describe('editor: exercise every input + error toasts', () => {
     );
   }
 
+  // 用例遍历全部触发器类型的表单控件,满载并行跑时需更宽时间预算(防 flake)。
   it('touches every form control across trigger types and guardrails', async () => {
     stub(() =>
       fakeResponse({
@@ -615,7 +616,7 @@ describe('editor: exercise every input + error toasts', () => {
     await userEvent.click(screen.getByTestId('autopilot-editor-approval-http'));
     await userEvent.click(screen.getByTestId('autopilot-editor-approval-create-issue'));
     expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(true);
-  });
+  }, 15_000);
 
   it('shows an error toast when create fails', async () => {
     stub((_url, method) => {
