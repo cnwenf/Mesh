@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage && node scripts/verify-perfile-coverage.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:visual": "playwright test -c playwright.visual.config.ts",
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts",
     "test:e2e:runtimes": "playwright test -c playwright.runtimes.config.ts",
     "test:e2e:autopilots": "playwright test -c playwright.autopilots.config.ts"

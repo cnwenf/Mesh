@@ -105,6 +105,47 @@ jobs:
           path: frontend/playwright-report
           retention-days: 7
 
+  visual:
+    # 暗色视觉回归门禁(theme.md §5.4):6 页 × light/dark × 桌面/平板固定矩阵,
+    # 确定性环境(冻结时钟 / UTC / zh-CN / 内置字体锁定 / 动态区 mask)下
+    # toHaveScreenshot 基线比对。常规跑只比对不更新;基线更新经独立 PR。
+    # 独立端口(8911 / 5199)避免与默认 mock 套件(8901 / 5173)冲突。
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run visual regression gate (baseline compare, no --update-snapshots)
+        run: npm run test:e2e:visual
+
+      - name: Upload Playwright report (visual)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
+
+      - name: Upload visual diff artifacts (actual / expected / diff)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-test-results
+          path: frontend/test-results
+          retention-days: 7
+
   attachment-e2e:
     # 附件模块真实后端浏览器走查(MES-59 §5 验收):真 PostgreSQL + Redis +
     # MinIO + uvicorn api/worker/gateway 全栈,真浏览器注册/上传(直传 MinIO)/
