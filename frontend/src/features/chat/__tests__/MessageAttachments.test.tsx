@@ -139,7 +139,9 @@ describe('MessageAttachments(§4.2 扫描闸门)', () => {
     );
     const card = await screen.findByTestId('chat-attachment-file-a-1');
     expect(card).toHaveTextContent('r.pdf');
-    fireEvent.click(screen.getByTestId('chat-attachment-download-a-1'));
+    // detail 异步就绪后才渲染下载按钮:等待其出现(与下载失败/URL 闸门用例同模式),
+    // 避免与 getAttachment 回填竞态(全量套件并行下同步 getBy 偶发落空)。
+    fireEvent.click(await screen.findByTestId('chat-attachment-download-a-1'));
     await waitFor(() => expect(calls.some((u) => u.includes('/download'))).toBe(true));
   });
 
@@ -246,7 +248,8 @@ describe('MessageAttachments(§4.2 扫描闸门)', () => {
       />,
     );
     await screen.findByTestId('chat-attachment-file-a-1');
-    fireEvent.click(screen.getByTestId('chat-attachment-download-a-1'));
+    // 等待 detail 回填后的下载按钮(同上:防与 getAttachment 竞态)。
+    fireEvent.click(await screen.findByTestId('chat-attachment-download-a-1'));
     await waitFor(() => expect(calls.some((u) => u.includes('/download'))).toBe(true));
     expect(document.querySelector('.mesh-toast')).toBeNull();
   });
