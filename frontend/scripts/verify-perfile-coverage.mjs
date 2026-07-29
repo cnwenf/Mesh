@@ -36,6 +36,7 @@ const PER_FILE_DIRS = [
   'src/features/runtimes/',
   'src/features/autopilots/',
   'src/features/chat/',
+  'src/features/analytics/',
   'src/hooks/',
   'src/state/',
   'src/design/',

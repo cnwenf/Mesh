@@ -354,14 +354,15 @@ CHECK (
 | `mesh_pat_` | 个人访问令牌(PAT) | `api_tokens.token_hash`(SHA-256) | 人类成员的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色);CLI / 脚本 / CI | 命中行的 `owner_member_id` JOIN `members.member_type='human'`,否则拒绝 |
 | `mesh_agt_` | agent 运行凭证 | `api_tokens.token_hash`(SHA-256) | agent 的 member 行 | 任意 `/api/v1`(权限 = scopes ∩ 角色;默认不含 `agent:trigger` 防回环) | 命中行 JOIN `members.member_type='agent'`,否则拒绝 |
 | `mesh_rt_` | runtime 守护进程令牌 | **`runtimes.runtime_token_hash`(SHA-256,runtime.md §2 owns;R2-H2 写死:不入 `api_tokens`——runtime 非名册成员,`owner_member_id NOT NULL` 无法承载)** | runtime(机器) | **仅 `/api/v1/daemon/*` 命名空间**(runtime.md §3.2),不得调控制台 API | 仅以 `runtimes` 表校验(哈希 + runtime_id 匹配);常规路由的 Bearer 依赖对 `mesh_rt_` 一律拒绝 |
+| `mesh_task_` | attempt 短期任务令牌 | `attempt_task_tokens.token_hash`（SHA-256，runtime-executor.md §2.2；不入 `api_tokens`） | 当前 execution attempt 的 daemon task broker | 仅显式支持 task principal 的方法与冻结资源；不得调用 daemon、token、审批裁决或 scope 外 API | 校验未过期/未撤销、attempt 在途、`lease_seq`、runtime/workspace/agent/resource/method scope；审计 actor 从 execution/agent 派生，不映射为任意 member PAT |
 | `mesh_rft_` | 会话 refresh token | `sessions.token_hash`(SHA-256) | 用户会话 | **仅 `POST /api/v1/auth/refresh`** | 仅 refresh 端点受理;其他端点出现即拒绝 |
 | (无前缀,JWT 格式) | 会话 access JWT | 无状态验签(**常规路由不查表**,R3-H1 不变量) | 用户会话 | 任意 `/api/v1`(会话权限),TTL ≤15min | 验签 + exp + claims 有效;**`sid` 查表仅限 §1.1 会话生命周期操作登记表**(R4-H2/R5-H2,不以「三处」绝对枚举表述) |
 
-> **注册表校验 = 词形 + 类型语义(R2-H2 写死)**:校验链先按前缀路由到**对应存储表**(词形),再断言**持有者类型与使用边界**(类型语义)——`mesh_agt_` 前缀的令牌命中 human 成员行、`mesh_rt_` 出现在常规路由、`mesh_rft_` 出现在 refresh 以外端点,一律拒绝并告警。扫描/测试不止检查「前缀字符串存在」,还断言示例与实现中**前缀 ⇄ 存储表 ⇄ 持有者类型**三者绑定一致(§5.2)。
+> **注册表校验 = 词形 + 类型语义(R2-H2 写死)**:校验链先按前缀路由到**对应存储表**(词形),再断言**持有者类型与使用边界**(类型语义)——`mesh_agt_` 前缀的令牌命中 human 成员行、`mesh_rt_` 出现在常规路由、`mesh_task_` 出现在未显式接受 task principal 的路由、`mesh_rft_` 出现在 refresh 以外端点,一律拒绝并告警。扫描/测试不止检查「前缀字符串存在」,还断言示例与实现中**前缀 ⇄ 存储表 ⇄ 持有者类型**三者绑定一致(§5.2)。
 
 > **非 Bearer 凭证不进本表**:一次性激活码(`ACT-XXXX-XXXX-XXXX` 分组码,runtime.md)、设备码 `user_code`(分组短码)/`device_code`(高熵,仅存 HMAC 哈希)、密码重置/邮箱验证令牌均非 `Authorization: Bearer` 凭证,各自形态见所属 Spec。
 >
-> **统一 Bearer 鉴权依赖(评审 H7 收口,写死)**:常规 REST 路由的鉴权依赖**按前缀路由到统一校验链**——JWT(验签,固定 alg)→ `mesh_pat_`/`mesh_agt_`(查 `api_tokens` 哈希,取 scopes/workspace)→ 其余前缀(含 `mesh_rt_`/`mesh_rft_`)在常规路由一律拒绝(daemon 命名空间单独只认 `mesh_rt_`);**有效权限恒为「scopes ∩ 持有者角色权限」**。「持 PAT 调用任意 `/api/v1` 端点」不再依赖个别端点单独解析 PAT;该依赖的代表性端点集成测试见 §5.2。
+> **统一 Bearer 鉴权依赖(评审 H7 收口,写死)**:常规 REST 路由的鉴权依赖**按前缀路由到统一校验链**——JWT(验签,固定 alg)→ `mesh_pat_`/`mesh_agt_`(查 `api_tokens` 哈希,取 scopes/workspace)→ `mesh_task_`（仅路由显式声明 task principal 时查 attempt token 与冻结 scope）→ 其余前缀(含 `mesh_rt_`/`mesh_rft_`)拒绝(daemon 命名空间单独只认 `mesh_rt_`);**成员类有效权限恒为「scopes ∩ 持有者角色权限」；task principal 则为「冻结方法/资源 scope ∩ 路由声明」，不存在角色扩权**。「持 PAT 调用任意 `/api/v1` 端点」不再依赖个别端点单独解析 PAT;该依赖的代表性端点集成测试见 §5.2。
 
 ### 2.6 表:`audit_logs`(审计日志,append-only)
 
@@ -567,8 +568,9 @@ CHECK (
 | 通用 API 写 | 120 req/分钟 | token / 用户 |
 | 附件上传/下载 | 60 req/分钟 | token / IP |
 | WebSocket 消息 | 60 msg/分钟 | 连接 |
+| 入站集成回调(integrations.md §3.2 非 Bearer 入站端点与 Stream 摄取入口) | 120 req/分钟 | **(集成, IP) 二元组** |
 
-实现:令牌桶/滑动窗口(Redis),响应头 `X-RateLimit-Limit/Remaining/Reset`;超限 429 + `Retry-After`。登录类叠加失败计数锁定与凭据填充防护。
+实现:令牌桶/滑动窗口(Redis),响应头 `X-RateLimit-Limit/Remaining/Reset`;超限 429 + `Retry-After`。登录类叠加失败计数锁定与凭据填充防护。**入站集成回调行为签名校验**前**的粗粒度防刷**:超限对平台侧**静默 200**(非 2xx 会触发外部平台重推放大),仅审计 + 告警;签名**后**的语义级护栏(每身份/每会话频率、会话排队深度、文本长度上限)见 integrations.md §2.10「入站频率护栏」,两层分层互补(MES-82)。
 
 ### 3.7 WebSocket 鉴权与实时
 
@@ -674,8 +676,8 @@ CHECK (
 - [ ] token scope 与持有者角色权限**取交集**,不能超越角色权限(最小权限)。
 - [ ] 可为 agent 创建运行凭证;agent 用其代表自身读写,所有动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`)。**签发路由 `POST /api/v1/agents/{agent_id}/tokens` 受 step-up 闸门保护(§1.1 凭证矩阵 / §5.5 ⑤,与 PAT 创建对称):超窗陈旧会话 → `403 reauth_required`,`mesh_pat_`/`mesh_agt_` 令牌 → `403 reauth_required`**。
 - [ ] agent token 默认不授予 `agent:trigger`(防 agent-to-agent 回环),除非显式授权。
-- [ ] token 前缀/类型位可区分 PAT / agent token / refresh——**取值以 §2.5.1 前缀注册表为唯一权威**(`mesh_pat_`/`mesh_agt_`/`mesh_rt_`/`mesh_rft_`),全仓库 Spec 与代码示例无注册表外前缀(文档扫描断言)。**类型语义校验(R2-H2)**:① 为 agent 成员创建 token 签发 `mesh_agt_` 前缀、为人类成员签发 `mesh_pat_`(响应断言);② `mesh_agt_` 令牌伪造/错配到 human 成员行 → 校验拒绝(构造用例);③ **`mesh_rt_` 令牌仅存 `runtimes.runtime_token_hash`,`api_tokens` 无任何 runtime 令牌行**(information_schema + 表查询断言),且 `mesh_rt_` 凭证调常规 `/api/v1` 路由 → 401;④ `mesh_rft_` 凭证调 refresh 以外端点 → 401;⑤ 语义级文档校验脚本(`tests/docs/check_semantic_consistency.py`,CI 硬关卡)断言各 Spec 示例「前缀 ⇄ 存储表 ⇄ 持有者类型」绑定一致与默认值语义,不止词形扫描。
-- [ ] **统一 Bearer 鉴权依赖(评审 H7)**:常规 `/api/v1` 路由对会话 JWT / `mesh_pat_` / `mesh_agt_` 三类 Bearer 一致放行,权限恒为 scopes ∩ 角色;**代表性端点集成测试**(至少覆盖 `GET /workspaces/{ws}/issues`、`POST /workspaces/{ws}/issues`、`POST /issues/{id}/comments`、`GET /api/v1/me` 四类读/写/评论/自省端点)分别以 PAT 与 agent token 调用通过,越权 scope 403;`mesh_rt_`/`mesh_rft_` 前缀凭证调常规路由一律 401(daemon 命名空间只认 `mesh_rt_`,refresh 只认 `/auth/refresh`)。
+- [ ] token 前缀/类型位可区分 PAT / agent token / runtime / task / refresh——**取值以 §2.5.1 前缀注册表为唯一权威**(`mesh_pat_`/`mesh_agt_`/`mesh_rt_`/`mesh_task_`/`mesh_rft_`),全仓库 Spec 与代码示例无注册表外前缀(文档扫描断言)。**类型语义校验(R2-H2)**:① 为 agent 成员创建 token 签发 `mesh_agt_` 前缀、为人类成员签发 `mesh_pat_`(响应断言);② `mesh_agt_` 令牌伪造/错配到 human 成员行 → 校验拒绝(构造用例);③ **`mesh_rt_` 令牌仅存 `runtimes.runtime_token_hash`,`api_tokens` 无任何 runtime 令牌行**(information_schema + 表查询断言),且 `mesh_rt_` 凭证调常规 `/api/v1` 路由 → 401;④ `mesh_task_` 仅存 attempt token 表，terminal/reclaim/renew 后旧 token 即时 401，scope 外/非 task 路由拒绝；⑤ `mesh_rft_` 凭证调 refresh 以外端点 → 401;⑥ 语义级文档校验脚本(`tests/docs/check_semantic_consistency.py`,CI 硬关卡)断言各 Spec 示例「前缀 ⇄ 存储表 ⇄ 持有者类型」绑定一致与默认值语义,不止词形扫描。
+- [ ] **统一 Bearer 鉴权依赖(评审 H7)**:常规 `/api/v1` 路由对会话 JWT / `mesh_pat_` / `mesh_agt_` 三类成员凭证一致放行,权限恒为 scopes ∩ 角色；`mesh_task_` 仅在显式声明 task principal 的方法按冻结资源 scope 放行;**代表性端点集成测试**(至少覆盖 `GET /workspaces/{ws}/issues`、`POST /workspaces/{ws}/issues`、`POST /issues/{id}/comments`、`GET /api/v1/me` 四类读/写/评论/自省端点)分别以 PAT 与 agent token 调用通过,越权 scope 403；task token 对获准的当前 issue 方法通过，对其余三类、跨资源和 terminal 后调用拒绝；`mesh_rt_`/`mesh_rft_` 前缀凭证调常规路由一律 401(daemon 命名空间只认 `mesh_rt_`,refresh 只认 `/auth/refresh`)。
 - [ ] **当前 Bearer 自省/自撤销(评审 H7)**:`GET /api/v1/auth/token` 返回 kind/token_id/prefix/scopes/expires_at/last_used_at(无明文字段),支撑 CLI `auth status`;`DELETE /api/v1/auth/token` 撤销 PAT 后下次调用即时 401,撤销会话后 refresh 不可续期。
 
 ### 5.3 功能性(授权 / 审计)

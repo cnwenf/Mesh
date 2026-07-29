@@ -301,6 +301,9 @@ async def assign_orchestration_handler(
     # A persisted malformed declaration must NEVER crash the handler (that
     # would poison the outbox event and stall the agent's dispatch until
     # max_attempts) — degrade to empty grants instead.
+    # §2.1 P0: resolve the agent's actual config to freeze provider/model/
+    # effort/system_instructions into the AttemptSpec (not just version id).
+    model_config = agent.model_config if isinstance(agent.model_config, dict) else {}
     try:
         snapshot_parts = build_config_snapshot(
             agent_config_version_id=agent.active_config_version_id,
@@ -308,6 +311,10 @@ async def assign_orchestration_handler(
             skill_versions=skill_context.get("skill_versions"),
             declared_capabilities=skill_context.get("declared_capabilities"),
             repo=None,
+            provider=model_config.get("provider"),
+            model=model_config.get("model"),
+            effort=model_config.get("reasoning_effort"),
+            system_instructions=agent.system_instructions,
         )
     except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
         logger.exception("capability normalization failed; enqueuing with empty grants")
@@ -317,6 +324,10 @@ async def assign_orchestration_handler(
             skill_versions=skill_context.get("skill_versions"),
             declared_capabilities=[],
             repo=None,
+            provider=model_config.get("provider"),
+            model=model_config.get("model"),
+            effort=model_config.get("reasoning_effort"),
+            system_instructions=agent.system_instructions,
         )
 
     issue_context = await _issue_context(session, workspace_id=workspace_id, issue_id=issue_id)

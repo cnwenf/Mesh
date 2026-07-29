@@ -3,7 +3,25 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.19.0] - 2026-07-29
+## [Unreleased]
+
+### Security
+
+- **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
+  - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
+  - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
+  - 新增后端启动期 fail-safe `validate_infra_settings`:`MESH_AUTH_MODE=production` 时 API / realtime 网关 / worker 三启动路径拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据(与既有 `validate_auth_settings` JWT 守卫同模式)。
+  - 数据存储零宿主端口:postgres / redis 确认无 `ports:` 映射、仅内部网络可达;MinIO 保留 `127.0.0.1` 回环发布(三阶段直传需浏览器直达)并注释生产必须内网 + TLS。
+  - CI 回归守护:`test_compose_security.py` 新增「数据存储零宿主端口 / MinIO 回环唯一 / 凭据必填无默认(`:?` 形式)」断言,随 backend-ci 常跑。
+  - 文档:`.env.example` 去除可猜测默认(占位符 + 生成脚本指引)、README Quick Start 增加生产部署安全清单(强唯一口令 / 不对公网暴露 / protected-mode + TLS / 部署前端口自检)、docs/specs/README.md §2.2 新增「数据与中间件凭据安全」权威条款。
+  - 验证:gen-dev-secrets → `docker compose up --build` 真栈以强口令启动,`/healthz` / `/readyz`(database+redis ok)/ 注册-邮箱验证(dev-mailbox 经强口令 redis-cli 取 token)-登录-建区-建 issue 全链路真实 API 调用绿;postgres / redis 零宿主端口、Redis `protected-mode yes`、邻容器未认证 `-NOAUTH` 拒绝实测;生产弱口令 fail-fast 实测(api / gateway / worker 三启动路径均以 `ConfigError` 非零退出,强口令配置正常启动);`scripts/gen-dev-secrets.sh` 生成强随机 `.env`(0600、拒绝覆盖、`--force` 轮换)与 compose 缺失凭据即报错实测;单测套件(含新增 25 例凭据守卫 + 9 例 compose 回归)全绿,`pytest --cov=mesh` TOTAL 92%(≥90% 门禁),ruff 净。
+- **MinIO 凭据出仓 + CI 端口收口(MES-83 复审 CRITICAL 整改:对象存储弱口令明文存在于公开仓库)**:
+  - `backend/src/mesh/config.py`:`storage_access_key` / `storage_secret_key` 的可猜测默认(`mesh` / `mesh_minio_secret`)改为空串——公开仓库不再携带任何可用的对象存储口令;生产经 `validate_infra_settings` 拒绝空值,本地开发经 compose / gen-dev-secrets 注入强值(`WEAK_SECRET_DENYLIST` 中保留该值作拒绝名单,非凭据)。
+  - CI(`backend-ci.yml` / `frontend.yml` 共三处 MinIO):删除硬编码 `mesh` / `mesh_minio_secret`,改为运行时 `openssl rand` 一次性生成强随机 root 凭据并经 `$GITHUB_ENV` 下发(MinIO 容器与测试进程同源);MinIO 发布端口 `9000:9000` → `127.0.0.1:9000:9000`,postgres / redis service 端口同改回环绑定(Leader 待办 1:CI 一律不绑 `0.0.0.0`)。
+  - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
+  - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
+  - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+
 
 平台能力层·设计系统级:主题与暗色模式全功能实现(MES-81,theme.md 五章)。协商链闭合(T4:三值语义写死 + 工作区默认级 + 邀请页 preview 同源解析)、首帧防闪烁三级可执行链路(T7/H2:入口注入 → 分区 locator → skeleton)、token 构建期生成单一事实源、CI 四门禁(对比度独立关卡 / AST 硬编码扫描 / 双主题视觉回归 / forced-colors 仿真)、存量 CSS 债务零命中收口。
 
@@ -23,8 +41,48 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **真实 e2e(生产形态栈:nginx 前门 → API HTML 入口)**:无闪错三场景全绿——A(默认暗)→B(默认浅)首帧即 B 主题无「先暗后浅」(data-theme 帧序列取证不含 dark)/ 换账号残留 locator(id 不符)不串用 + 解析后按当前路由身份重写 / 邀请接受页未登录首帧即邀请工作区默认暗色(preview 同源注入);注入链路断言(入口 HTML `__MESH_APPEARANCE__` 与协商结果一致、不含 slug 等可枚举信息);缓存边界(匿名 public + sha256 CSP / 个性化 private,no-store + nonce CSP,script-src 无 unsafe-inline);locator 白名单(非法 mode 丢弃);视觉回归 24 用例连跑三轮零 diff;forced-colors 仿真 14 断言绿;默认 mock e2e 套件 30 绿。
 - **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 通过;前端全局覆盖率 97.4/90.9/94.4/97.4(双门禁通过);`tsc` 净、eslint/stylelint 0 错、对比度关卡 32 对 ×2 主题全过、gen:tokens 幂等。
 
-## [0.18.0] - 2026-07-29
+## [0.19.1] - 2026-07-29
+Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。
 
+### Changed
+
+- **命名漂移治理(MES-85)**:`.github/workflows/backend-ci.yml` `schema-validation` job 显示名改为不含计数的通用名「DDL 与行为验证(PostgreSQL 16)」(与 `spec-checks.yml` 同名 job 对齐)——断言集随 `docs/specs/validation/schema_r2_validation.sql` 演进,显示名硬编码具体数字注定反复漂移,从根上消除(一并调和 v0.19.0 随 rebase 带入的「124 条断言」后缀;MES-86 (#63) 的同名标签改动被本通用名方案取代,其测试加固保留);CHANGELOG 历史条目 4 处「100 条断言」残留计数措辞清理(仅去计数、句意不变)。门禁逻辑、步骤、断言 SQL 与测试行为零变更。
+
+### Fixed
+
+- **schema-validation e2e 加固(MES-86)**:`backend/tests/e2e/test_schema_validation.py` P3 加固(FAIL 行锚定正则收紧 + teardown 加固),漂移防护测试健壮性增强;期望计数同步(100→124,MES-84)已含于 v0.19.0 条目。
+
+### Docs
+
+- 钉钉机器人接入 Spec 增补(MES-82:双接收模式/emoji 确认/`/stop`·`/btw`/消息队列,三视角评审通过)。
+- MES-92 daemon 真实执行体架构设计(`docs/specs/daemon-executor.md`,1021 行 Spec + specs 索引登记)+ 安全评审必修项收口。
+
+## [0.19.0] - 2026-07-29
+平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
+
+### Added
+
+- **数据模型(analytics.md §2.5,迁移 0028)**:`analytics_snapshots` 物化缓存(`metric_key` CHECK、`scope_key` 入 `UNIQUE(workspace_id, metric_key, scope_key, dim_hash, window_start, window_end)`、`dim_hash` 为 `md5(dimensions::text)` 生成列、`uq_..._ws_id` 复合 FK 红线、fail-closed RLS、查找/过期索引、`mesh_app` 授权);`scope_key` 四态(`ws_admin` / `projects:<hash>` / `project:<id>` / `exec:p<h>:a<h>`)物理分行,跨权限绝不共享。
+- **统一 execution 可见性(§2.3.1 R4/R5)**:`visible_executions` 权威 CTE(两层串联:agent 可见性先行 + 关联 issue 继承项目可见性 / 无 issue 归属 agent)逐字内联到 §2.2.4 workload-B 与 §2.3 agent 主统计 / retry 子查询 / token 聚合(含 `execution_attempts`、`autopilot_runs` 关联);workspace dashboard agent 统计区与 workload 执行部分复用同一构件;`analytics_exec_visible_to` 逐执行布尔形态作可执行参照。
+- **六类指标口径(§2.2/§2.3)**:cycle time `percentile_cont` P50/P90 + `sample_size` + `insufficient_data`(无留痕/负时长不计入且显式披露);velocity / burndown 按**当前归属**(`scope_caliber=current_attribution`,移入/移出按当前集合重算、不还原历史);throughput **`calendar_timezone` 本地日历分桶**(`date_trunc(g, ts AT TIME ZONE cal_tz)`,每桶返回本地标签 + UTC 瞬间窗,跨 DST 23/25h 不错位);workload 成员维度统一(人类行执行列为空)+ 在途执行;agent 统计成功率/超时率(cancelled 不入分母但披露 `cancelled_count`)/重试率(attempts 派生)/平均端到端时长 + token `token_coverage` 诚实标注。
+- **缓存与只读(§2.6/§5.3)**:命中需 `scope_key` 相等 + `computed_at` 新于 TTL,stale-while-revalidate 可选(默认同步重算),`refresh=true` 强重算;workload 默认不缓存;任何端点(含 refresh)不写真源表(只读审计通过)。
+- **接口与错误码(§3)**:`/analytics/{cycle-time,velocity,throughput,workload,burndown,agents/stats}` + `/dashboards/{project/{id},workspace}`;workspace 聚合按请求者项目可见性过滤、显式多项目含不可见 → 整体 403、private agent → 403 `agent_not_visible`、`burndown_scope_required/conflict`、`invalid_time_range/invalid_timezone/filter_too_complex/query_cost_exceeded`;workload 整体游标分页;读限流 + refresh 更严限流。
+- **前端 UI(§4)**:工作区「洞察」页(吞吐量折线 + workload 排行 + agent 统计网格 + 可见性轻提示 + 时间窗/粒度切换)、项目详情「仪表盘」页签(velocity 分组柱 + burndown 理想/实际线 + count/points 切换 + cycle time KPI)、agent 详情统计卡(KPI + token 口径标注);手写 SVG 图表经语义 token、线型区分、暗色双主题;i18n 中英双目录同步(`analytics.*` + 新 `error.*` 占位符)。
+- **真实 e2e / UI 走查(T33 + §5)**:四类请求者(普通成员 / 项目成员 / private-agent owner / admin)以**同一权威聚合 SQL** 断言最终统计值(executions·succeeded / running·queued / retry_rate / total_tokens),跨权限缓存不共享负向、整体 403 负向、`calendar_timezone` 不跨日 + 跨 DST 负向、只读审计、当前归属口径;真实浏览器走查(仪表盘渲染 / 时间窗 / 可见性差异 / 暗色 / 名册深链)+ evidence 截图留证。
+
+### Fixed
+
+- **漂移防护计数同步(MES-84)**:`backend/tests/e2e/test_schema_validation.py` 期望计数由硬编码 100 同步到实测 124,对齐 `schema_r2_validation.sql` 断言集现状;此前 CI「单测 + 真实 e2e」持续报红「expected 100 PASS, got 124」。
+
+### Docs
+
+- 阶段 8 parity Spec 多轮评审收口:MES-73 一致性评审必修 22 项(P1–P10/C1–C7/T1–T5)、MES-74 架构/UX 关卡 + 九轮复审(含 OAuth 执行链)全量整改、MES-75 安全评审 H1–H3/M1–M7/L1–L5 全量修复、MES-78 安全增量复核 HIGH-1 + MEDIUM-1 收口 + LOW×4。
+
+### Notes(并行线说明)
+
+- 与 onboarding / import-export / integrations 并行线 owns 表集合不相交(`analytics_snapshots` 独立,其余只读);rebase main 按后合方迁移重编号惯例解撞号(当前链 0001→0028 单 head)。
+- 联调环境观察:本工作区共享机上 `data-jobs` 的 `wizardFlow` 创建失败用例为**既有环境性 flake**(在未经改动的 `origin/main` 同样以 5s 超时复现,与 analytics 无关);CI 历史为绿。
+## [0.18.0] - 2026-07-29
 平台能力层 A:上手引导全功能实现(MES-69,onboarding.md 五章)。`onboarding_states` + `onboarding_state_steps` 两表进度真源(迁移 0027);Mesh 激活路径五步清单(建区 → 邀请/加 agent → 建首 issue → 分派/@ 触发首个运行 → 收件箱见 agent 回评 = aha moment);入册同事务播种 + 成熟工作区全量 reconcile(R3/R4:受邀者步骤按成员自身历史带证据完成,未触发过执行的成员步骤 4 保持 pending——不批量补齐、不伪造证据);aha 末步仅由 `notification.read` 阅读证据驱动,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组,严格按 `trigger_member_id` 归属(读了他人触发执行的回评不得完成本人末步),aha 仅为触发者置位且仅置一次;成体系空状态六页四要素深链既有向导;前端清单卡片 + aha 庆祝态 + 帮助菜单恢复 + 管理员重置。T34 四真实场景全栈 e2e(真 uvicorn + 真 relay + 真 daemon 执行 + 真通知 fanout)与真实浏览器 UI 走查全绿;后端整体单测覆盖率 ≥90%,前端全局覆盖率 97.5/94.5/90.9/97.5(90% 门禁通过)。
 
 ### Added
@@ -1123,7 +1181,7 @@ workspace 工作区与多租户基础(MES-13,阶段 2):workspace.md 五章后端
 
 - 单测 + 真实 e2e(uvicorn 子进程以受限 `mesh_app` 角色连接,RLS 在应用路径真实生效 + 真实 PostgreSQL 16 + Redis,真实 API 调用与落库校验)共 **417 项全绿**;pytest-cov **95.44%**(≥90% 门禁,新增模块 ≥92%、多数 97–100%,整体与新增代码双达标);ruff 全绿。
 - 跨租户负向测试:猜测 UUID 跨工作区访问与不存在资源返回**同一 404 信封**(无存在性泄漏);邀请 token 哈希不可逆(数据库无明文);超上限/过期/撤销邀请被拒;`max_uses=1` 并发接受恰一人成功(T11);RLS 无 GUC 即不可读、错租户写入被策略拒绝。
-- `schema_r2_validation.sql` DDL 与行为验证(PG16,100 条断言)继续全绿;`docker compose up --build` 一键可跑(冒烟:建区 → 改名重定向 → 邀请创建/预览/接受/用尽 → 跨租户 404 → 角色变更审计,全部通过)。
+- `schema_r2_validation.sql` DDL 与行为验证(PG16)继续全绿;`docker compose up --build` 一键可跑(冒烟:建区 → 改名重定向 → 邀请创建/预览/接受/用尽 → 跨租户 404 → 角色变更审计,全部通过)。
 
 ## [0.3.0] - 2026-07-25
 
@@ -1167,7 +1225,7 @@ auth 鉴权体系核心(MES-12,阶段 2 增量 1)+ 应用数据库角色 RLS 加
 ### Quality
 
 - 单测 + 真实 e2e(uvicorn 子进程 + 真实 PostgreSQL 16 + Redis,真实 API 调用与落库)共 272 项全绿;pytest-cov **95.52%**(≥90% 门禁,auth 各模块 ≥92%,整体与新增代码双达标);ruff 全绿。
-- `schema_r2_validation.sql` DDL 与行为验证(PG16,100 条断言)随 main CI 持续通过;main 三 job 全绿。
+- `schema_r2_validation.sql` DDL 与行为验证(PG16)随 main CI 持续通过;main 三 job 全绿。
 
 ## [0.1.0] - 2026-07-25
 
@@ -1182,10 +1240,10 @@ auth 鉴权体系核心(MES-12,阶段 2 增量 1)+ 应用数据库角色 RLS 加
 - **多租户基础构件(§6.2)**:`UNIQUE(workspace_id,id)` + 复合 FK 迁移/ORM 模板、`realtime_channels`/`realtime_events` 租户键 + RLS 策略(`mesh.workspace_id` GUC)、全局表豁免清单(`users` / `external_identities`)。
 - **realtime 网关骨架(§6.7/§6.16)**:WebSocket 首帧认证(token 不入 URL)、逐频道资源级授权钩子、`resume_from` 全量分页重放、游标过旧 `resync_required` + 对账 REST 端点;fan-out 故障显式下发错误并关闭连接(客户端凭 `resume_from` 重连重放)。
 - **一键部署**:`docker compose up --build` 拉起 PostgreSQL 16 + Redis 7 + api + worker + gateway + 前端占位(nginx 反代 `/api`、`/ws`);健康检查 `/healthz`、`/readyz`;README Quick Start 可跑通。
-- **CI 流水线**:`backend-ci` 三个 job——文档词汇/结构校验、单测 + 真实 e2e(真实服务进程/真实 API 调用/真实落库,pytest-cov ≥90% 门禁,ruff)、`schema_r2_validation.sql` 在 PostgreSQL 16 一次性实例实跑(100 条断言)。
+- **CI 流水线**:`backend-ci` 三个 job——文档词汇/结构校验、单测 + 真实 e2e(真实服务进程/真实 API 调用/真实落库,pytest-cov ≥90% 门禁,ruff)、`schema_r2_validation.sql` 在 PostgreSQL 16 一次性实例实跑。
 
 ### Quality
 
 - 单测 + 真实 e2e 共 150 项全绿,pytest-cov 95.34%(≥90% 门禁,整体与新增代码双达标)。
-- `schema_r2_validation.sql` 在 PostgreSQL 16 实跑:100 条断言全部 PASS、退出 0。
+- `schema_r2_validation.sql` 在 PostgreSQL 16 实跑:断言全部 PASS、退出 0。
 - 模型 ↔ 迁移漂移守卫测试(alembic `compare_metadata`),防止 ORM 与迁移后的 schema 静默漂移。

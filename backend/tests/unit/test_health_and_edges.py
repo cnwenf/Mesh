@@ -16,8 +16,10 @@ from mesh.errors import INTERNAL_ERROR_MESSAGE
 
 
 def _settings(db_url, redis_url, **overrides):
-    # Provide a signing secret so create_app's production fail-safe passes; these
-    # tests exercise health/edge cases, not auth.
+    # These tests exercise health/edge cases, not the production credential
+    # policy — run in dev mode with the convenience test credentials (MES-83:
+    # production now also validates infra credentials at startup).
+    overrides.setdefault("auth_mode", "dev")
     overrides.setdefault("jwt_secret", "health-edge-test-signing-secret-00")
     return load_settings(database_url=db_url, redis_url=redis_url, **overrides)
 

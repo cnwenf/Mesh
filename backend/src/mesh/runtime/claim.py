@@ -40,6 +40,7 @@ from mesh.db.tenant import set_tenant_context
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import DeliveredCredential, issue_envelopes
 from mesh.runtime.daemon_auth import validate_env_names
+from mesh.runtime.task_tokens import issue_task_token
 
 
 @dataclass(frozen=True)
@@ -262,6 +263,21 @@ async def claim_execution(
                 if item.env is not None:
                     validate_env_names([item.env])
 
+            # §2.2 S-05: issue the short-lived task token for this attempt.
+            # Plaintext delivered exactly once in this response; only the
+            # hash is stored. Token scope pinned to workspace/attempt/agent/
+            # issue; ``agent:trigger`` denied by default (anti-loop).
+            task_token_plaintext, _task_token_row = await issue_task_token(
+                session,
+                workspace_id=workspace_id,
+                attempt_id=attempt_row["id"],
+                runtime_id=runtime_id,
+                lease_seq=attempt_row["lease_seq"],
+                lease_expires_at=attempt_row["lease_expires_at"],
+                issue_id=execution.issue_id,
+                agent_id=execution.agent_id,
+            )
+
             # Observability: claim + queue depth (§3.6 channels).
             attempt_id = attempt_row["id"]
             await emit_realtime(
@@ -291,6 +307,9 @@ async def claim_execution(
                 "working_branch": attempt_row["working_branch"],
                 "lease_expires_at": attempt_row["lease_expires_at"].isoformat(),
                 "lease_seq": attempt_row["lease_seq"],
+                # §2.2 S-05: task token delivered exactly once (claim).
+                "task_token": task_token_plaintext,
+                "task_token_expires_at": _task_token_row.expires_at.isoformat(),
                 "credentials": [
                     {
                         "id": str(item.id),

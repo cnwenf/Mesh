@@ -63,8 +63,8 @@ def _storage_env() -> dict[str, str]:
     return {
         "MESH_STORAGE_ENDPOINT": endpoint,
         "MESH_STORAGE_PUBLIC_ENDPOINT": endpoint,
-        "MESH_STORAGE_ACCESS_KEY": os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-        "MESH_STORAGE_SECRET_KEY": os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+        "MESH_STORAGE_ACCESS_KEY": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+        "MESH_STORAGE_SECRET_KEY": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "MESH_STORAGE_BUCKET": os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e"),
     }
 
@@ -314,8 +314,8 @@ async def test_source_replaced_after_validate_api_rejects_and_worker_fails_criti
             endpoint=endpoint,
             public_endpoint=endpoint,
             region="us-east-1",
-            access_key=os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-            secret_key=os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+            access_key=os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+            secret_key=os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
             bucket=os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e"),
         )
     )
@@ -625,8 +625,8 @@ def _storage_settings_kwargs() -> dict:
     return {
         "storage_endpoint": endpoint,
         "storage_public_endpoint": endpoint,
-        "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-        "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+        "storage_access_key": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+        "storage_secret_key": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "storage_bucket": os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e"),
     }
 

@@ -1,6 +1,7 @@
 """SQLAlchemy models for the Mesh schema."""
 
 from mesh.db.models.agent import Agent, AgentConfigVersion
+from mesh.db.models.analytics import AnalyticsSnapshot
 from mesh.db.models.api_token import ApiToken
 from mesh.db.models.attachment import (
     Attachment,
@@ -55,6 +56,7 @@ from mesh.db.models.project import (
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
 from mesh.db.models.runtime import (
     Approval,
+    AttemptTaskToken,
     ExecutionAttempt,
     ExecutionCredential,
     RepoCheckout,
@@ -106,8 +108,10 @@ __all__ = [
     "Agent",
     "AgentConfigVersion",
     "AgentSkill",
+    "AnalyticsSnapshot",
     "ApiToken",
     "Approval",
+    "AttemptTaskToken",
     "Attachment",
     "AttachmentBlob",
     "AttachmentLink",

@@ -57,24 +57,34 @@ class ActivateRuntimeRequest(BaseModel):
 
     The activation code arrives in the body, assembled by the daemon from a
     restricted stdin / 0600 file — never a shell argument (§3.1 install safety).
+
+    §2.6 P0: protocol_version, provider manifest, and daemon features are
+    reported at activation for capability negotiation.
     """
 
     activation_code: str = Field(min_length=8, max_length=64)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    protocol_version: int = Field(default=1, ge=1)
+    provider_manifest: dict[str, Any] = Field(default_factory=dict)
+    daemon_features: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("metadata")
+    @field_validator("metadata", "provider_manifest", "daemon_features")
     @classmethod
     def _bound_metadata(cls, v: dict[str, Any]) -> dict[str, Any]:
         return _bounded_json(v, "metadata")  # type: ignore[return-value]
 
 
 class HeartbeatRequest(BaseModel):
-    """POST /daemon/runtimes/{id}:heartbeat (§3.2)."""
+    """POST /daemon/runtimes/{id}:heartbeat (§3.2).
+
+    §2.6 P0: protocol_version reported on every heartbeat for drift detection.
+    """
 
     current_load: int = Field(default=0, ge=0)
     health: Literal["healthy", "degraded"] = "healthy"
     metrics: dict[str, Any] = Field(default_factory=dict)
     inflight: list[str] = Field(default_factory=list)
+    protocol_version: int | None = Field(default=None, ge=1)
 
     @field_validator("metrics")
     @classmethod

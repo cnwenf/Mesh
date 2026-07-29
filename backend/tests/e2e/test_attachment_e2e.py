@@ -80,8 +80,8 @@ def _storage_env() -> dict[str, str]:
     return {
         "MESH_STORAGE_ENDPOINT": endpoint,
         "MESH_STORAGE_PUBLIC_ENDPOINT": endpoint,
-        "MESH_STORAGE_ACCESS_KEY": os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh"),
-        "MESH_STORAGE_SECRET_KEY": os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret"),
+        "MESH_STORAGE_ACCESS_KEY": os.environ.get("MESH_STORAGE_ACCESS_KEY", ""),
+        "MESH_STORAGE_SECRET_KEY": os.environ.get("MESH_STORAGE_SECRET_KEY", ""),
         "MESH_STORAGE_BUCKET": os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e"),
     }
 

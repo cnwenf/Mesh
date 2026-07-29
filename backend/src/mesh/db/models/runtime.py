@@ -96,6 +96,7 @@ ATTEMPT_TERMINAL_STATUSES = frozenset(
 ATTEMPT_INFLIGHT_STATUSES = frozenset({"claimed", "running", "cancelling"})
 
 # Failure reason vocabulary (runtime.md §2.2 task_executions.failure_reason).
+# §13.3 P0: extended with executor/budget/log failure reasons.
 FAILURE_REASONS = frozenset(
     {
         "oom",
@@ -109,6 +110,12 @@ FAILURE_REASONS = frozenset(
         "awaiting_approval",
         "approval_rejected",
         "approval_expired",
+        "executor_unavailable",
+        "executor_protocol_error",
+        "daemon_restart",
+        "budget_exceeded",
+        "usage_unavailable",
+        "log_backpressure",
     }
 )
 
@@ -167,10 +174,14 @@ class Runtime(Base):
         TIMESTAMP(timezone=True), default=None
     )
     activated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
-    runtime_token_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("api_tokens.id", ondelete="SET NULL"), default=None
-    )
+    # §2.4 S-11: runtime_token_hash is the SINGLE source of truth for machine
+    # credentials. The old runtime_token_id FK to api_tokens has been removed.
     runtime_token_hash: Mapped[str | None] = mapped_column(TEXT, default=None)
+    # §2.6 P0: daemon protocol negotiation fields.
+    protocol_version: Mapped[int | None] = mapped_column(Integer, default=None)
+    daemon_version: Mapped[str | None] = mapped_column(TEXT, default=None)
+    provider_manifest: Mapped[dict | None] = mapped_column(JSONB, default=None)
+    daemon_features: Mapped[dict | None] = mapped_column(JSONB, default=None)
     capabilities: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
@@ -273,6 +284,10 @@ class TaskExecution(Base):
     config_snapshot: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+    # §2.1 P0: schema version for the frozen AttemptSpec snapshot.
+    snapshot_schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     queued_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
@@ -355,6 +370,20 @@ class ExecutionAttempt(Base):
     working_branch: Mapped[str | None] = mapped_column(TEXT, default=None)
     result: Mapped[dict | None] = mapped_column(JSONB, default=None)
     failure_reason: Mapped[str | None] = mapped_column(TEXT, default=None)
+    # §2.6 P0: structured result fields for reliable verification/budget/query.
+    provider: Mapped[str | None] = mapped_column(TEXT, default=None)
+    provider_version: Mapped[str | None] = mapped_column(TEXT, default=None)
+    provider_session_id: Mapped[str | None] = mapped_column(TEXT, default=None)
+    model: Mapped[str | None] = mapped_column(TEXT, default=None)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    cache_tokens: Mapped[int | None] = mapped_column(Integer, default=None)
+    cost_usd: Mapped[float | None] = mapped_column(default=None)
+    num_turns: Mapped[int | None] = mapped_column(Integer, default=None)
+    result_schema_version: Mapped[int | None] = mapped_column(Integer, default=None)
+    redaction_hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    # §13.1: claim request id for idempotent claim dedup.
+    claim_request_id: Mapped[str | None] = mapped_column(TEXT, default=None)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
@@ -658,3 +687,64 @@ class Approval(Base):
     decided_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     decision_comment: Mapped[str | None] = mapped_column(TEXT, default=None)
     idempotency_key: Mapped[str | None] = mapped_column(TEXT, default=None)
+
+
+# §2.2 S-05: task token prefix (auth.md §2.5.1 registered).
+TASK_TOKEN_PREFIX = "mesh_task_"
+
+
+class AttemptTaskToken(Base):
+    """Short-lived task token ledger (§2.2 S-05).
+
+    One active token per attempt (partial unique index on ``attempt_id``
+    WHERE ``revoked_at IS NULL``). Plaintext is delivered exactly once in
+    the claim/renew response; only the SHA-256 hash is stored. Never
+    reuses ``api_tokens`` or member roles (auth.md §2.5.1 R2-H2).
+    """
+
+    __tablename__ = "attempt_task_tokens"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "attempt_id"],
+            ["execution_attempts.workspace_id", "execution_attempts.id"],
+            ondelete="CASCADE",
+            name="attempt_task_tokens_ws_attempt_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "runtime_id"],
+            ["runtimes.workspace_id", "runtimes.id"],
+            ondelete="CASCADE",
+            name="attempt_task_tokens_ws_runtime_fkey",
+        ),
+        Index("uq_attempt_task_tokens_ws_id", "workspace_id", "id", unique=True),
+        Index("uq_attempt_task_tokens_hash", "token_hash", unique=True),
+        # Only one active (non-revoked) token per attempt.
+        Index(
+            "uq_attempt_task_tokens_active",
+            "attempt_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index("idx_attempt_task_tokens_attempt", "attempt_id", "lease_seq"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    runtime_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    lease_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_hash: Mapped[str] = mapped_column(TEXT, nullable=False)
+    scopes: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )

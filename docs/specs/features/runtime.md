@@ -5,6 +5,7 @@
 > 被依赖：`agent`（分派即触发的执行落地）、`autopilot`（自动化执行）、`squad`（多 agent 协作执行）
 > 技术栈基准：Python 异步 Web 框架（FastAPI）+ SQLAlchemy 2.x（`DeclarativeBase` / `Mapped` / `mapped_column`，异步会话）+ PostgreSQL + WebSocket / SSE
 > 文档性质：可直接指导开发的实现规格。runtime 是 agent 实际执行代码、操作仓库、运行命令的「身体」/「工位机器」。
+> 本地执行体：真实 provider、task broker、沙箱/网络/凭证边界、动作审批闭环与安全红线测试以 [`runtime-executor.md`](runtime-executor.md) 为实现子 Spec；与本文冲突时，安全边界取更严格者。
 
 ---
 
@@ -42,9 +43,9 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 | R7 | 租约 + lease_seq | 领取即发租约，周期续租；租约过期视为持有者已死可回收；`lease_seq` 防「诈尸 / 脑裂」覆盖 |
 | R8 | 并发上限与背压 | 每 runtime `max_concurrent`（默认 1）；满载时新任务停留 `queued`，队列深度即背压信号 |
 | R9 | 日志流式 + 续传 | stdout/stderr 按行追加上报，带单调 `offset`；前端实时滚动，断线凭最后 offset 无缝续看，不丢不重 |
-| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离（**出站默认 deny**，按 task_spec 声明域名白名单放行），cgroup 资源配额，非特权用户，结束即销毁 |
+| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离（**出站默认 deny**；允许目标也必须经可信解析→全 IP 过滤→建连钉死，重定向逐跳复验），cgroup 资源配额，非特权用户，结束即销毁 |
 | R11 | 代码仓库专属分支 checkout | 每任务创建专属工作分支 `agent/<execution-id>`，多任务并行不互相污染；产出差异（diff）回报供 review |
-| R12 | 凭证注入（不落盘） | secret 仅在 claim 时随任务一次性下发、短期、最小权限；能走环境变量就不落盘；**全通道脱敏（日志 + 评论 + 附件产出物）**；**runtime_token 仅存于 daemon 受信进程，任务沙箱不可见** |
+| R12 | 凭证注入（broker 代持） | task token 与高危 secret 仅由 daemon/task broker 代持，沙箱只得到动作级 handle；一次性、短期、最小权限，必要临时文件仅入 tmpfs 0600；**全通道脱敏（日志 + result + diff + 评论 + 附件产出物）**；**runtime_token 与 task token 均对任务沙箱不可见** |
 | R13 | 超时与取消（两段式） | 任务级超时 + 用户主动取消；先优雅终止（SIGTERM + 宽限期）再强制 kill（SIGKILL）；`cancelling` 显式中间态 |
 | R14 | 运维可观测 | 队列深度 / 负载 / 心跳新鲜度作为一等可见信号；暂停 / 冻结 / 隔离等人类干预点 |
 
@@ -55,6 +56,7 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 - 任务队列、原子领取、租约、并发、状态机、失联回收；
 - 执行日志的流式上报 / 续传 / 持久化索引；
 - 沙箱执行规范的契约、代码 checkout 专属分支、凭证一次性下发与脱敏；
+- 本地执行体的具体 provider 适配、task broker、动作闸门、出站 gateway 与红线矩阵（`runtime-executor.md`）；
 - 超时 / 取消 / 冻结 / 隔离。
 
 **本模块不负责（非目标）：**
@@ -64,9 +66,9 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 - 底层模型供应商接入（统一以「主流大语言模型」抽象）。
 
 **约束红线：**
-- **凭证安全是红线而非功能**：secret 仅 claim 时一次性下发、短期、最小权限、能走环境变量就不落盘、**全通道脱敏（日志 + 评论 + 附件产出物均做 secret 命中检测，命中即拦截并告警）**、服务端永不回显明文、执行结束即失效。
+- **凭证安全是红线而非功能**：runtime/task token 不进任务 env/文件，敏感凭证由 broker 代持、短期、最小权限；必要临时文件只进 tmpfs 0600；**全通道脱敏（日志 + result + diff + 评论 + 附件产出物均做 secret 命中检测）**、服务端永不回显明文、执行结束即失效。
 - **工作区隔离是红线**：claim SQL 与领取端点强制 `workspace_id` 等值过滤（从 runtime 记录读取，不接受客户端传入），跨 workspace 领取不可能发生。
-- **沙箱出站默认 deny 是红线**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）。
+- **沙箱出站默认 deny 是红线**：任务沙箱无直连路由；允许目标仍须经可信 resolver 解析、全部 IP 过滤、向已验证 IP 直连并保留原 host 做 TLS 校验，重定向逐跳重验；任何部署形态下禁止 loopback/private/link-local/reserved/云元数据网段与 DNS rebinding。
 - **daemon token 隔离是红线**：`runtime_token`（长期凭证，可 claim 任务、换取其他任务的一次性凭证明文）**仅存于 daemon 受信进程**，任务沙箱无法读取 daemon 的环境变量、进程内存或控制套接字；`max_concurrent>1` 时恶意任务即使攻破沙箱也无法窃取 daemon token 冒充 runtime。
 - 没有任务会永远卡住，也没有状态会永远悬而未决（超时 / 取消 / 失联回收均有「优雅→强制」两段式与显式中间态）。
 
@@ -260,7 +262,8 @@ erDiagram
 | cancel_requested_by | uuid | NULL, FK→members.id | - | 谁请求取消（成员 / 系统）；复合 FK `(workspace_id, cancel_requested_by) → members(workspace_id, id)` |
 | cancel_requested_at | timestamptz | NULL | - | 取消请求时间 |
 | result | jsonb | NULL | - | 最终结果摘要（来自成功 attempt） |
-| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / awaiting_approval / approval_rejected / approval_expired）；`awaiting_approval` = 审批挂起时当前 attempt 的失败分类 |
+| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / awaiting_approval / approval_rejected / approval_expired / **cancelled_by_command**）；`awaiting_approval` = 审批挂起时当前 attempt 的失败分类；`cancelled_by_command` = IM 命令平面 `/stop` 触发的用户取消（integrations.md §3.7，MES-82） |
+| context_injected_through_seq | bigint | NOT NULL DEFAULT 0 | - | **运行期上下文追加的服务端连续水位（MES-82，attempt 作用域）**：**同一 attempt 内**已连续 receipt 的最大 append seq（连续前缀；同 attempt 内 ACK 乱序不回退）；**requeue 时同事务重置为 0**（receipt 清空，新 attempt 重收，跨 attempt 不单调）；`inject_context` 下发起点以此为准（daemon 重启首报 0 经 fencing/水位忽略；同一 attempt 已 receipt 的行不再下发——去重快路径，非恰好一次承诺，见「运行期上下文追加」） |
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
 > **领取 / 租约 / 分支 / 日志 / 单次结果等物理字段不在本表**——全部下沉到 `execution_attempts`；`retry_count` 由 `COUNT(execution_attempts)-1` 派生，不再存冗余列。
@@ -328,8 +331,8 @@ erDiagram
 | injected_at | timestamptz | NOT NULL DEFAULT `now()` | 注入时间 |
 | revoked_at | timestamptz | NULL | 撤销时间（freeze / 轮换 / attempt 终态后置位） |
 
-> 记录「本次尝试实际注入了哪些 secret」，用于审计与脱敏对账。**凭证协议（R1，README §6.5/§6.11）**：
-> - 凭证仅在 `claim` 响应中随 attempt 一次性下发（短期 envelope，默认 TTL ≤ 2h，绑定 attempt_id 与 lease_seq）；
+> 记录「本次尝试实际授权了哪些 secret」，用于审计与脱敏对账。**凭证协议（R1，README §6.5/§6.11；真实 provider 取更严格的 runtime-executor.md §2.2/§3.2）**：
+> - 凭证仅在 `claim` 响应中随 attempt 一次性下发给 daemon 受信面（短期 envelope，默认 TTL ≤ 2h，绑定 attempt_id 与 lease_seq）；repo 凭证交 checkout helper，task token 交 broker，高危 secret 交 action broker，不直接映射进 provider env；
 > - **网络响应丢失 / requeue / freeze 后的重取**：daemon 可 `POST /api/v1/daemon/attempts/{attempt_id}/credentials:refetch`——仅当该 attempt 仍 `claimed/running` 且 `lease_seq` 匹配时返回**新 envelope**（旧 envelope 立即撤销，`revoked_at` 置位），每 attempt 重取次数有上限（默认 3），超限转人工 freeze 审查；
 > - **轮换 / 撤销**：控制台轮换 `runtime_credentials` 时，在途 envelope 于下次心跳被下行指令要求重取；`POST /executions/{id}:freeze` 立即撤销该执行所有 attempt 的 envelope（`revoked_at`）；
 > - attempt 终态（completed/failed/timeout/cancelled/reclaimed）即撤销其全部 envelope，服务端永不回显明文。
@@ -588,7 +591,8 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | POST | `/api/v1/daemon/attempts/{attempt_id}/checkouts` | 上报 checkout / diff 结果 |
 | POST | `/api/v1/daemon/attempts/{attempt_id}:renew-lease` | 租约续期 |
 | POST | `/api/v1/daemon/attempts/{attempt_id}/credentials:refetch` | **凭证重取**（响应丢失/网络抖动后；仅租约有效且 attempt 在途时可调用，发新 envelope 撤旧，每 attempt 上限 3 次，见 §2.2 凭证协议） |
-| POST | `/api/v1/daemon/executions/{id}/approvals` | **高风险工具审批请求**：运行中工具命中 `confirm_required` 时创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，逻辑执行转 `awaiting_approval`；批准结果经心跳下行/轮询回传，执行回 `queued` 由新 attempt 凭 `resume_context` 续跑 |
+| POST | `/api/v1/daemon/executions/{id}/approvals` | **高风险工具审批请求**：运行中工具命中 `confirm_required` 时创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，逻辑执行转 `awaiting_approval`；批准结果经心跳下行/轮询回传，**执行回 `queued` 的事务（同一执行行锁）按 R7-2 统一重置：清空该执行全部 append 的 receipt（`injected_at/injected_attempt_id` 置 NULL）+ `context_injected_through_seq=0`**（与失联 requeue 同一路径，at-least-once 允许重复，最简闭合），随后新 attempt 经 claim 建立、凭 `resume_context` 续跑并重新 GET 待注入 append |
+| GET | `/api/v1/daemon/executions/{id}/context-appends` | **运行期上下文追加拉取**（MES-82）：`?since_seq=N` 返回 `execution_context_appends` 中 **seq > N 且 `injected_attempt_id IS NULL OR injected_attempt_id <> :current_attempt`** 的追加行（按 seq 序；attempt 作用域：当前 attempt 已记录行不返回、旧 attempt 记录行对新 attempt 照常返回，与协议同文无分叉）；daemon 收心跳 `inject_context` 指令后调用，下一 turn 边界注入（at-least-once，注入后尽力记录；见「运行期上下文追加」） | daemon |
 
 > 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配、`workspace_id` 由 token 解析注入（**不以请求体为准**），且仅允许操作本 runtime 与其领取的 attempt。
 
@@ -628,18 +632,51 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
   "current_load": 2,
   "health": "healthy",
   "metrics": {"cpu_pct": 47, "mem_pct": 61, "disk_free_mb": 82000},
-  "inflight": ["8f3a1d2c-...", "c21e9b7a-..."]
+  "inflight": ["att-uuid-1", "att-uuid-2"],
+  "context_progress": [
+    {"attempt_id": "att-uuid-1", "execution_id": "8f3a1d2c-...", "injected_through_seq": 3, "lease_seq": 7},
+    {"attempt_id": "att-uuid-2", "execution_id": "c21e9b7a-...", "injected_through_seq": 0, "lease_seq": 1}
+  ]
 }
 // 响应 200
 {
   "data": {
     "server_time": "2026-07-24T09:41:30Z",
     "commands": [
-      {"type": "cancel_execution", "execution_id": "8f3a1d2c-...", "grace_seconds": 15}
+      {"type": "cancel_execution", "execution_id": "8f3a1d2c-...", "grace_seconds": 15},
+      {"type": "inject_context", "attempt_id": "att-uuid-2", "execution_id": "c21e9b7a-...", "from_seq": 0}
     ]
   }
 }
 ```
+
+> **请求字段**：`inflight`（在途 **attempt UUID** 列表）保持既有语义，**仅作诊断**；**`context_progress`（MES-82 新增）为 best-effort 记录通道**：daemon 按在途 attempt 逐条上报 `{attempt_id, execution_id, injected_through_seq, lease_seq}`（本地视角已注入的最大 seq + **该 attempt claim/renew 后持有的最新 `lease_seq` fencing 令牌，R7-1 协议输入**）；服务端锁执行行后同时校验 **workspace/runtime 归属 + 最新有效 attempt + `claimed/running` 状态 + `lease_seq` 精确匹配**——**任一不符（含错误/过期 `lease_seq`）整条 0 行：不写 receipt、不推进水位**；校验通过方回写 `injected_at` 并推进水位——**尽力去重，非正确性保证**（上报丢失只扩大重复窗口，at-least-once 语义不受影响，见「运行期上下文追加」）。缺省（旧 daemon 不上报）不影响语义（仅失去去重快路径）。
+>
+> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现 seq 大于该执行已上报 `injected_through_seq` 的新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对持有该执行在途 attempt 的 runtime 下发 `{type:'inject_context', attempt_id, execution_id, from_seq}`（**`from_seq` = 服务端持久水位 `task_executions.context_injected_through_seq`，不以 daemon 上报值为下发起点**——daemon 重启首报 0 不引发重放）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点；**端点固定附加 attempt 作用域过滤 `injected_attempt_id IS NULL OR injected_attempt_id <> :current_attempt`——同一 attempt 已 receipt 行不返回，旧 attempt receipt 已在 requeue 清空（单指针模型）**）取得待注入行，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次）；**投递语义为 at-least-once**（注入后经心跳尽力记录 `injected_at`/水位作去重快路径，窄崩溃窗口内允许重复，下游容忍写死）。详见本节「运行期上下文追加」。
+
+**运行期上下文追加（MES-82；integrations.md §3.7 `/btw` 的落点机制）**：
+
+在途执行可被追加补充上下文（来源：IM 命令平面的 `/btw`），追加行是**不可信数据**（README §6.15），不改变执行的真源状态与配置快照（§6.11），仅供 agent 在后续 turn 作为数据参考：
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | uuid | PK，`UNIQUE (workspace_id, id)`（§6.2 复合 FK 引用前提） | |
+| workspace_id | uuid | NOT NULL，FK→workspaces ON DELETE CASCADE | |
+| execution_id | uuid | NOT NULL，复合 FK `(workspace_id, execution_id) → task_executions(workspace_id, id)` ON DELETE CASCADE | 追加归属的在途执行 |
+| seq | bigint | NOT NULL，`UNIQUE (execution_id, seq)` | 执行内单调递增（插入时执行维度咨询锁取号，同 integrations.md §2.10 协议） |
+| source | text | NOT NULL，CHECK IN ('im_btw') | 追加来源（本期仅 IM `/btw`；扩展新来源需登记本词汇） |
+| payload | jsonb | NOT NULL | `{sender_user_id, sender_display, text(≤4000 字符截断), received_at, conversation_ref}` |
+| injected_at | timestamptz | NULL | daemon 注入后经心跳 best-effort 记录的时刻（**attempt 作用域去重快路径，非 exactly-once 真源**，见「注入投递语义」；NULL = 未记录/待投递；执行终态时仍未注入的行随执行审计保留） |
+| injected_attempt_id | uuid | NULL，**复合 FK `(workspace_id, injected_attempt_id) → execution_attempts(workspace_id, id)` ON DELETE SET NULL (injected_attempt_id)** | **记录注入的 attempt（单指针 receipt，R5-1/R6-1）**：仅当前有效 attempt 的 ACK 可覆盖写入（fencing：FOR UPDATE 锁执行行 + attempt 当前有效 + `lease_seq` 匹配，否则 0 行拒写）；**只保留最新 receipt**（当前 attempt 覆盖旧 attempt，不承担历史审计）；**requeue 事务清空 receipt（置 NULL）+ 重置水位**，新 attempt 至少重收一次（允许重复、不得丢失，与 at-least-once 承诺一致） |
+| created_at | timestamptz | NOT NULL DEFAULT now() | |
+
+- **写入方与准入**：集成平台命令平面以服务层调用写入（不经 daemon HTTP）；**仅对 `queued/claimed/running` 的执行可写；`cancelling` 的执行不再接受追加**（integrations.md §3.7：渲染"任务正在停止，无法补充"反馈），终态执行写入 → `422`（渲染"任务已结束"）。**每执行追加上限（M3，成本放大残余面护栏）与 seq 取号共用同一把执行级事务咨询锁**：写入事务先 `pg_advisory_xact_lock(hashtext('eca:' || execution_id))`，锁内**依次**校验 `MESH_CONTEXT_APPEND_MAX_COUNT`（默认 20 条，COUNT(*)）与 `MESH_CONTEXT_APPEND_MAX_CHARS`（默认 32000 字符，SUM 累计 payload.text 长度）→ 超限拒绝写入 `422 append_limit_exceeded`（integrations.md 渲染"补充已达上限"反馈 + 审计）→ 通过则 `seq = COALESCE(max(seq),0)+1` INSERT（锁保证计数校验与取号原子，并发写不穿 20/32000 上限）。
+- **注入投递语义（at-least-once，诚实降级写死；R4-2）**：本 Spec **不承诺「不重放 / 恰好一份」**——现有 runtime 契约只有审批挂起/续跑路径的 `resume_context`，**没有每 turn 对话检查点原语**（无 checkpoint 表/提交 API/已提交指针/attempt fencing），故注入记录无法与"对话状态"同事务原子发布；与其虚构机制，**显式降级为 at-least-once**：每条 append 对执行**至少投递一次**，窄崩溃窗口（已注入对话、记录落库前崩溃）内**可能重复投递**。**下游容忍写死**：append 块是**不可信补充数据**（README §6.15），同一 `(execution_id, seq)` 的重复块与单块**语义等价**（同一条"顺便补充"重复展示，不是两条不同指示）；**注入不是工具调用、不触发执行、不累积副作用**——agent 不得把重复补充块解读为"强调/执行两次"，高风险动作仍只经 `confirm_required` 闸门（与补充次数无关）。
+- **尽力去重（attempt 作用域，缩小重复窗口，非正确性保证）**：① daemon 进程内 `(execution_id, seq)` 已注入集合（正常运行期不重复注入）；② 注入完成后 daemon 经心跳 `context_progress` 上报，服务端以**单指针覆盖模型**回写 receipt（**同一事务、与 requeue 同一行锁顺序**）：先 `SELECT … FOR UPDATE` 锁 `task_executions` 行 → **fencing 校验（协议输入完整，R7-1）**：上报条目必须携带 `lease_seq`（daemon claim/renew 后持有的最新值）；服务端锁执行行后校验 **① workspace/runtime 归属 ② `:attempt` 是该执行最新有效 attempt（`execution_attempts` 最新行、未被 `reclaimed`）③ 状态 `claimed/running` ④ `lease_seq` 与当前 attempt 值精确匹配**——**任一不符（错误/过期 `lease_seq`、陈旧 attempt、归属不符）整条 ACK 0 行：不写 receipt、不推进水位**（requeue 先提交 → 执行已回落 queued / :attempt 非当前 / lease_seq 过期 → 迟到 ACK 被拒）→ 校验通过则**覆盖写入（只保留最新 receipt，不承担旧 receipt 历史审计）**：`UPDATE execution_context_appends SET injected_at=now(), injected_attempt_id=:attempt WHERE execution_id=:e AND seq <= :reported AND injected_attempt_id IS DISTINCT FROM :attempt`（**当前 attempt B 可覆盖旧 A 的 receipt**——修复 `IS NULL OR = :attempt` 条件下 B 永远 ACK 0 行、水位永不推进的缺陷；A 先提交 → requeue 清空其 receipt → B 正常写入；两条路径皆原子闭合）→ 同事务重算水位（见下）；best-effort：上报/回写丢失只扩大重复窗口，不破坏语义。③ `GET …?since_seq=N` 固定附加过滤 `injected_attempt_id IS NULL OR injected_attempt_id <> :current_attempt`（**仅当前 attempt 的 receipt 生效**）。④ **requeue：执行回落 `queued` 的事务（与 §2.x requeue 语义同文：reaper 置 attempt `reclaimed` + 执行回落 queued；新 attempt 由后续 claim 建立）持同一 `task_executions` 行锁，同事务清空该执行全部 append 的 receipt（`injected_at=NULL, injected_attempt_id=NULL`）并重置水位为 0** → 后续 claim 建立的 attempt B 拉取时全部 seq 重新可见（at-least-once：允许重复、不得丢失）。
+- **服务端连续水位（attempt 作用域，去重快路径，best-effort）**：`task_executions.context_injected_through_seq BIGINT NOT NULL DEFAULT 0` = 该执行**在当前有效 attempt 上已连续记录注入完成**的最大 seq（连续前缀：所有 seq ≤ W 的行 `injected_attempt_id = 当前有效 attempt`）。心跳 ACK 处理事务内以**找首个缺口**重算（仅计当前 attempt 的 receipt）：`W = COALESCE((SELECT min(seq) FROM execution_context_appends WHERE execution_id=:e AND (injected_attempt_id IS DISTINCT FROM :current_attempt)), (SELECT COALESCE(max(seq),0)+1 …)) - 1`，同事务写入 `context_injected_through_seq = W`（attempt 作用域内单调；**跨 attempt 不单调——requeue 时重置，见下**）。**receipt/水位统一重置（R7-2：一切「执行回 `queued` 且后续创建新 attempt」的路径）**——**失联 requeue（reaper 置 attempt `reclaimed` + 执行回落 `queued`）、审批批准续跑（`awaiting_approval → queued`）、手动重试（若存在）均在同一 `task_executions` 行锁事务中清空全部 receipt（`injected_at/injected_attempt_id` 置 NULL）+ 原子重置 `context_injected_through_seq = 0`**（新 attempt 均由后续 claim 建立而非重置事务创建）——单指针模型下 receipt 只保留最新一份（不承担历史审计），清空后新 attempt 从 0 重收（at-least-once 允许重复，最简闭合）；与 ACK 事务同一行锁顺序保证两种提交序皆闭合（A 先提交 → 重置事务清空；重置先提交 → A 的 fencing 失败）。水位与 receipt 是缩小重复窗口的快路径，**不是 exactly-once 真源**（真源语义见上「at-least-once」条）。
+- **下行起点以服务端水位为准**：`inject_context` 触发条件 = 存在 `seq > context_injected_through_seq AND (injected_attempt_id IS NULL OR injected_attempt_id <> 当前有效 attempt)` 的行；**下发 `from_seq = context_injected_through_seq`（服务端水位，不以心跳上报值为起点）**；`GET …?since_seq=N` 端点**固定附加 attempt 作用域过滤**（`injected_attempt_id IS NULL OR injected_attempt_id <> :current_attempt`，API 表与协议同文，无两份契约）——当前 attempt 已记录行不返回，**旧 attempt 记录的行对新 attempt 照常返回（不丢失）**。
+- **daemon 侧快路径去重**：daemon 进程内以 `(execution_id, seq)` 集合避免同一 attempt 内重复拉取——**仅快路径，正确性由 attempt 作用域 receipt + requeue 重置保证**（attempt 失败/回收后新 attempt 重收，不丢失；重复由下游容忍消化）。
+- **边界**：追加不是 `config_snapshot` 的一部分（不参与 §6.11 冻结）；执行**终态**（cancelled/failed/completed/timeout）时未注入的追加行保留审计（`injected_at` 永 NULL），不再投递；追加行的删除仅随执行级联（ON DELETE CASCADE），不提供单独删除端点（审计完整性）。
 
 **领取任务（原子，核心）**：
 
@@ -651,6 +688,9 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
   "diagnostics": {"labels": {"region": "intranet"}, "capacity_remaining": 2}
 }
 // 响应 200（领到）
+// 注意：下方 credentials/env 是现有 server 契约形状；真实 provider 启用前须完成
+// runtime-executor.md §2.6 P0 升级，由 daemon 按 kind 路由至 helper/broker，
+// runtime/task token、repo 写凭证与高危 secret 不得进入 provider env。
 {
   "data": {
     "execution": {
@@ -689,9 +729,9 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 // 响应 204（队列空、无满足标签/能力约束的任务、或容量已满；无匹配任务时事务整体回滚、current_load 不变，无 body）
 ```
 
-> **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。`credentials[].value` 命中脱敏黑名单，日志中出现即替换为 `***`。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
+> **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发给 daemon 受信面**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。真实 provider 按 runtime-executor.md §2.6 路由到 checkout helper/task broker/action broker，不把 runtime/task token、repo 写凭证或高危 secret 注入 env。`credentials[].value` 命中脱敏黑名单，任何输出通道出现均按 §6.16 处理。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
 >
-> **注入环境变量名安全约束（NEW-M1）**：`env_declarations` 与 `credentials[].env` 中的环境变量名须经服务端白名单校验——**拒绝 `LD_*`、`PATH`、`PYTHON*`、`NODE_OPTIONS`、`DYLD_*` 及平台保留前缀（`MESH_DAEMON_*`、`MESH_INTERNAL_*`）等敏感名**，防止覆盖进程加载器 / 运行时 / daemon 认证变量；仅允许匹配 `^[A-Z][A-Z0-9_]{0,63}$` 且不在拒绝清单内的名称，校验在 claim 组装时执行，非法名返回 `422`。
+> **注入环境变量名安全约束（NEW-M1）**：provider env 从空白 allowlist 构造；仅低敏、动作内确需的值可进入 env，且 `env_declarations` 与 `credentials[].env` 由 server 和 daemon 双重校验——**拒绝 `LD_*`、`PATH`、`PYTHON*`、`NODE_OPTIONS`、`DYLD_*`、云凭证名及平台保留前缀（`MESH_DAEMON_*`、`MESH_INTERNAL_*`）等敏感名**；runtime/task token、repo 写凭证和高危 secret 永不允许。名称仅允许匹配 `^[A-Z][A-Z0-9_]{0,63}$` 且命中显式 allowlist，否则 `422`/本地 fail-closed。
 
 **追加日志（带 offset，幂等）**：
 
@@ -774,6 +814,8 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | `execution:{id}` | `execution.completed` / `execution.failed` / `execution.timeout` / `execution.cancelled` / `execution.requeued` | 终态 / 重排 |
 | `execution:{id}:logs` | `execution.log`（带 offset） | 实时日志流 |
 | `workspace:{ws}:queue` | `queue.depth_changed` | 队列深度背压信号 |
+
+**内部领域事件 `execution.finished`（outbox，非实时事件名；MES-82 写死为终态单一扇出真源）**：执行进入任一终态时，状态机在**同一事务**写 outbox 内部事件 `execution.finished`，payload `{execution_id, workspace_id, status, failure_reason, finished_at}`，`status ∈ completed | failed | timeout | cancelled`（终态统一承载，不分裂为四个 event type）。**所有终态下游消费者一律订阅本事件**，不直接消费上表的实时事件名（`execution.completed/failed/…` 是本事件经 outbox→projector 派生到 `/ws` 的实时投影）：通知 fan-out（§6.13）、integrations.md 队列项终态回写（`completed→done`、`failed/timeout→failed`、`cancelled→cancelled`）、squad/autopilot 终态联动。幂等：消费方按 `execution_id` + 终态守卫去重（重复出队 no-op）。
 
 ---
 
@@ -1006,13 +1048,13 @@ stateDiagram-v2
 - [ ] 任务级超时：守护进程本地计时 + 服务端租约 / 看门狗双重兜底；超时置 `timeout`，`failure_reason='timeout'`。
 - [ ] 日志按行 / 块上报带单调 `offset`（按 attempt）；前端实时滚动；断线凭最后 offset 无缝续传，不丢不重。
 - [ ] checkout 为每 **attempt** 创建专属工作分支 `agent/<execution-id>/a<attempt>`（按 attempt 唯一，README §6.5），多任务/多尝试并行不互相污染；结束产出差异（diff）回报，工作目录超期回收。
-- [ ] 凭证仅在 claim / refetch 响应按 attempt 一次性下发（短期 envelope）；`credentials:refetch` 仅租约有效且在途时可用、发新撤旧、上限 3 次；freeze 立即撤销 envelope；`execution_credentials` 记录注入/撤销审计；UI 凭证标签值恒为 `***`。
+- [ ] 凭证仅在 claim / refetch 响应按 attempt 一次性下发给 daemon 受信 helper/broker（短期 envelope）；`credentials:refetch` 仅租约有效且在途时可用、发新撤旧、上限 3 次；freeze 立即撤销 envelope；runtime/task token 与高危 secret 不进 provider env；`execution_credentials` 记录授权/撤销审计；UI 凭证标签值恒为 `***`。
 - [ ] **execution/attempt 分层**（README §6.4）：requeue 新建 attempt 行，旧 attempt 审计信息不被覆盖（集成测试 T4）；`retry_count` 由 attempts 数派生，超 `max_attempts` 转 `failed(max_retries)`；**物理层 `cancelling` 中间态与逻辑层词汇统一（CHECK 与索引一致）**；非法迁移返回 `409`/`422`。
 - [ ] **入队可复现快照**（README §6.11）：`config_snapshot` 冻结 agent_config_version_id、skill 版本、**`capability_grants`（版本化 capability key + permission，不含工具目录主键）**、repo/base SHA、trigger_event_id；运行期间配置 / 能力授权变更不影响在途执行。
-- [ ] **高风险工具审批（唯一续跑协议）**：执行前经 `/daemon/executions/{id}/approvals` 创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，执行转 `awaiting_approval`（reaper 无需特殊处理，无在途租约）；批准后执行回 `queued`，**新 attempt 凭 `resume_context` 从审批点续跑**；拒绝/过期转 `cancelled`；**同一 subject 仅一个 pending approval**（部分唯一索引兜底，集成测试 T8/T21）。
+- [ ] **高风险工具审批（唯一续跑协议）**：执行前经 `/daemon/executions/{id}/approvals` 创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，执行转 `awaiting_approval`（reaper 无需特殊处理，无在途租约）；批准后执行回 `queued`（**同事务清空 append receipt + 水位置 0，R7-2 统一重置**），**新 attempt 经 claim 建立、凭 `resume_context` 从审批点续跑**（待注入 append 重新 GET，至少一次）；拒绝/过期转 `cancelled`；**同一 subject 仅一个 pending approval**（部分唯一索引兜底，集成测试 T8/T21）。
 - [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封（README §6.14）；机器 API token 越权访问其它 runtime 返回 `403`。
 - [ ] **仓库 checkout 白名单验收（H1）**：checkout 命中 `allowed_repos` 白名单外 URL → `403`；`repo_token` 不可用于白名单外仓库；平台托管 runtime checkout 私网 / 元数据地址被拒（集成测试覆盖）。
-- [ ] **注入环境变量名安全（NEW-M1）**：`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 平台保留前缀等敏感名 → `422` 拒绝。
+- [ ] **注入环境变量名安全（NEW-M1）**：provider env 从空白 allowlist 构造，server/daemon 双重校验；`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 云凭证名 / 平台保留前缀，或尝试注入 runtime/task token、repo 写凭证、高危 secret → `422` 或本地 fail-closed。
 - [ ] **机器 API 强制 TLS（NEW-M3）**：非 TLS 请求到 `/api/v1/daemon/` 返回 `403`。
 - [ ] **runtime 下线即吊销 token（NEW-L2；R3-H4 收口）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token_hash` 同步清除（置 NULL，`api_tokens` 无此令牌行）；下线后以旧令牌明文调用任何机器 API 返回 `401`；恢复服务经 `tokens:rotate` 签发新令牌，旧令牌永久失效。
 - [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重；事件名全部命中 README §6.7 词汇注册表（含 `execution.awaiting_approval`）。
@@ -1022,11 +1064,11 @@ stateDiagram-v2
 
 - [ ] **任务不重复领取**：多 runtime 并发 claim 同一任务时，`FOR UPDATE SKIP LOCKED` 保证恰有一台抢到，其余立即抢下一条；零锁等待、零重复执行；`idempotency_key` 唯一约束兜底防重复入队。
 - [ ] **失联自愈**：runtime 失联后，其上 `claimed/running` 且租约过期的 **attempt** 由 reaper 置 `reclaimed`、逻辑执行回落 `queued` 新建下一个 attempt（或超 `max_attempts` 转 `failed`），改由其它 runtime 接手，无需人工；回收时 `lease_seq++` 防「诈尸」覆盖（脑裂防护），容量幂等释放。**`awaiting_approval` 无在途 attempt（当前 attempt 已 cancelled、租约已结束），reaper 无需特殊处理，无"暂停租约导致永久卡死"路径（README §6.4 唯一协议）**。
-- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；**全通道脱敏——日志、评论、附件产出物均做 secret 命中检测，命中即拦截该内容写出并触发安全告警**（验收须覆盖评论 / 附件通道，非仅日志）；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2）。
+- [ ] **凭证 broker 代持 / 不落持久盘**：runtime/task token、高危 secret 和 repo 写凭证不进 provider env/文件；broker/helper 内存代持，必须提供文件句柄时只写 attempt tmpfs 0600 且终态清零；服务端永不回显明文（`encrypted_value` 只进不出）；**全通道双层脱敏——日志、result、diff、评论、附件产出物均覆盖**；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2、runtime-executor.md §2.2/§2.5）。
 - [ ] **日志时延**：日志尾部增量从守护进程产生到前端可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 offset 补发不丢不重；封口段落对象存储读取续传 P95 ≤ 1s。
 - [ ] **沙箱隔离**：每任务独立容器 / 命名空间，cgroup CPU / 内存 / 磁盘 / 时长配额；单任务 OOM 被终止标 `failed(sandbox/oom)`，同机其它任务与宿主机不受影响；非特权用户运行，不挂宿主机 root。
-- [ ] **沙箱出站默认 deny**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）；被注入任务无法将凭证经外联外泄或扫描内网。
-- [ ] **daemon token 与任务沙箱隔离（红线）**：`runtime_token` 仅存于 daemon 受信进程的环境 / 内存中，任务沙箱无法读取 daemon 的 env / 进程内存 / 控制套接字；`max_concurrent>1` 时恶意任务窃取 daemon token 的攻击路径不存在；此约束写入部署规范文档。
+- [ ] **沙箱出站默认 deny**：任务沙箱无直连路由；允许目标也必须经可信 resolver→全部 IP 过滤→向已验证 IP 建连，保留原 host 做 TLS 校验，重定向逐跳重验；DNS rebinding、IPv4-mapped、loopback/private/link-local/reserved/云元数据网段均拒绝；平台托管与自托管同一红线（runtime-executor.md §3.4/T36）。
+- [ ] **daemon token 与任务沙箱隔离（红线）**：`runtime_token` 仅存 OS keyring 或 daemon 专用 0600 文件并在受信进程内使用，不进通用 env；task token 仅由 broker 代持。任务沙箱无法读取 daemon env / 进程内存 / token 文件 / 控制套接字；`max_concurrent>1` 时恶意任务窃取任一 token 的攻击路径不存在，并由 T36 真实负向矩阵验证。
 - [ ] **无永久卡死**：任何任务最终都到达终态（completed/failed/timeout/cancelled），无状态永久悬而未决（租约 + 看门狗 + reaper 共同保证）。
 - [ ] **队列背压可观测**：队列深度、负载、心跳新鲜度在列表 / 详情实时可见；`queue.depth_changed` 事件推送。
 - [ ] **限流与退避**：机器 API 与控制台 API 接入限流，超限返回 `429` 带 `Retry-After`。

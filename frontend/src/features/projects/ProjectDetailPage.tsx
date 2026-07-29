@@ -27,13 +27,14 @@ import { MilestonesPanel } from './MilestonesPanel';
 import { applyMilestoneFrame, applyUpdateFrame, mergeProjectHeader } from './realtime';
 import { UpdatesPanel } from './UpdatesPanel';
 import type { Membership } from '../members/types';
+import { ProjectDashboardPanel } from '../analytics/ProjectDashboardPanel';
 import type { Milestone, ProjectDetail, ProjectUpdateEntry } from './types';
 import { AvatarInitial, HealthIndicator, ProgressBar, StatusBadge } from './widgets';
 import './projects.css';
 
-type TabKey = 'overview' | 'milestones' | 'updates';
+type TabKey = 'overview' | 'milestones' | 'updates' | 'dashboard';
 
-const TAB_KEYS: readonly TabKey[] = ['overview', 'milestones', 'updates'];
+const TAB_KEYS: readonly TabKey[] = ['overview', 'milestones', 'updates', 'dashboard'];
 
 function tabFromParam(raw: string | null): TabKey {
   return TAB_KEYS.includes(raw as TabKey) ? (raw as TabKey) : 'overview';
@@ -390,6 +391,15 @@ export function ProjectDetailPage(): React.JSX.Element {
           updates={updates}
           prependUpdate={(update) => setUpdates((prev) => [update, ...prev])}
           onSubmitted={reload}
+        />
+      ) : null}
+
+      {/* 统计报表(analytics.md §4.2):velocity + burndown + cycle time */}
+      {activeTab === 'dashboard' && workspace !== null ? (
+        <ProjectDashboardPanel
+          client={client}
+          workspaceId={workspace.workspace_id}
+          projectId={project.id}
         />
       ) : null}
 

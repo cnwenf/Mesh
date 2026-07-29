@@ -32,6 +32,7 @@ import { IssuesPage } from './features/issues/IssuesPage';
 import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
 import { ProjectSettingsPage } from './features/projects/ProjectSettingsPage';
+import { InsightsPage } from './features/analytics/InsightsPage';
 import { AutopilotDetailPage } from './features/autopilots/AutopilotDetailPage';
 import { AutopilotEditorPage } from './features/autopilots/AutopilotEditorPage';
 import { AutopilotRunDetailPage } from './features/autopilots/AutopilotRunDetailPage';
@@ -207,6 +208,8 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
                 <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
                 <Route path="autopilots" element={<AutopilotsPage />} />
+                {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘 */}
+                <Route path="insights" element={<InsightsPage />} />
                 <Route path="autopilots/new" element={<AutopilotEditorPage />} />
                 <Route path="autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
                 <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />

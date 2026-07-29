@@ -30,6 +30,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 
 ## 实现状态
 
+> Runtime 服务端协议已实现；真实本地执行体仍处于安全设计关卡，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)，安全复评通过前不启动 provider 执行开发。
+
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |
@@ -46,6 +48,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | 上手引导(onboarding.md 五章,平台能力层 A) | ✅ v0.18.0 | 两表数据模型(迁移 0027:`onboarding_states` 每成员每工作区每清单一主记录——`UNIQUE(workspace_id, member_id, checklist)` 幂等播种基础、复合 FK → `members(workspace_id, id)` ON DELETE CASCADE、`aha_reached_at` 仅置一次、`idx_..._ws_aha` 部分索引;`onboarding_state_steps` 步骤明细子表——step_key/status/completed_via CHECK 枚举、`(status='completed') = (completed_at IS NOT NULL)` 一致性 CHECK、`evidence` JSONB 完成证据、`idx_onboarding_steps_pending` 部分索引供自动检测精准 UPDATE)+ RLS fail-closed + GRANT。**入册播种为主路径(§3.5 R3)**:人类成员入册事务(建区 owner / 邀请兑换 / 直接添加)**同事务**播种主记录 + 五步(步骤 1 即 `completed(auto)`)+ 全量历史 reconcile(agent 成员不播种);`GET /onboarding/state` 惰性创建仅为兜底。**成熟工作区 reconcile(R3/R4)**:受邀进入成熟工作区 → 步骤 2(agent 成员或 human≥2)、步骤 3(工作区已有 issue 或本人 report)按事实带证据完成;**步骤 4 仅按成员自身触发历史完成**(assign 经 `issue_activity` 分派留痕 actor、建 issue 即分派回退 reporter;mention 经 `execution.enqueue` outbox 幂等键 → `comment_mentions.triggered_execution_id` → 评论作者),**从未触发过的成员保持 pending——不按「工作区首个执行」批量补齐、不伪造证据**;步骤 5 仅历史已读合格通知完成。**aha 末步仅由 `notification.read` 驱动(T34)**:成员打开/标读的通知关联 agent 回评(含聚合组 `latest_comment_id`)+ 该成员触发的已完成执行 → 完成末步、置 `aha_reached_at`、evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组;**未读不得完成、读了他人触发执行的回评不得完成本人末步、aha 仅为触发者置位且仅置一次**;完成守卫为条件 UPDATE(at-least-once 重复消费幂等)。**自动完成经 outbox relay 消费**(链于 `realtime.publish` 合成处理器:投影 → autopilot → onboarding):`member.added`/`issue.created`/`execution.queued`(仅解析到真实执行行、trigger ∈ assign/mention)/`notification.read`;派生 `onboarding.progress`/`onboarding.completed` 经 outbox 唯一路径落 `member:{member_id}:onboarding` 私有频道(§6.7 已登记词汇,roster 归属授权 + member 私有频道校验扩展 `:onboarding` 后缀)。REST §3.1 五端点(state 单对象内联五步 / steps 手动完成幂等 / dismiss / restore / admin reset 删档重建含 reconcile;自助端点成员资格门 + 清单归属即本人防 IDOR;`validation_error`/`not_found`/`forbidden`/`checklist_completed` 错误码;写端点限流)。前端:上手清单卡片(进度条 success 语义 token、五步勾选 ✓ + 文字非颜色唯一信号、每步 CTA 深链既有向导不新造向导、自动完成角标、首未完成步高亮、dismiss、aha 庆祝卡 reduced-motion 安全)+ **六页成体系空状态四要素**(插画 + §1.2.2 文案 + 主操作深链:收件箱/项目/看板/成员/聊天/自动化)+ 帮助菜单与命令面板「重新显示上手清单」+ 成员页 admin/owner 重置入口(二次确认)+ 实时帧重拉与 30s 轮询降级;i18n 全外部化(zh-CN + en 各 +51 键 parity,djb2 版本重算)。真实 e2e:T34 四场景全栈实测(入册播种 / 成熟工作区 reconcile 未触发者步骤 4 pending / 未读不完成 / 错误触发者拒绝 + 触发者四元组 + `onboarding.completed` 经 outbox→projector 仅一次;真 daemon 激活/claim/完成 + 真实 agent 回评 + 真实通知 fanout)+ 跨租户 404 / 防 IDOR / 并发首访恰一行五步;真实浏览器 UI 走查(清单渲染 / CTA 深链 / 空状态 / dismiss-restore / 庆祝态)存证;后端整体覆盖率 ≥90%、前端全局覆盖率 97.5/94.5/90.9/97.5(90% 门禁通过) |
 | 主题与暗色模式(theme.md 五章,平台能力层·设计系统级) | ✅ v0.19.0 | **协商链闭合(T4)**:`users.settings.theme` 三值语义写死(light/dark 固定;显式 `system` 本级终止跟随 OS;**absent/null = 继承工作区默认**,「恢复跟随默认」实际写 null)→ `workspaces.settings.default_theme`(admin 入口 + `workspace.updated` 实时联动未设显式偏好成员即时重解析)→ 系统;未登录邀请接受页经公开 invitation preview `appearance.default_theme` 解析第 2 级(有限公开字段,不开放完整 detail)。**首帧防闪烁三级链路(T7/H2)**:① HTML 入口中间件读 `mesh_session` HttpOnly 会话(SHA-256 只读定位)按路由身份(`/w/{slug}` / `/invite/{token}`)解析协商链,注入二值 `__MESH_APPEARANCE__`(个性化响应 `private, no-store` + per-request nonce CSP,静态 shell `public` + sha256 CSP,script-src 绝不 unsafe-inline)② 分区镜像键 `mesh.theme.active`(**id 路由身份校验先于 mode 读取** + 二值白名单 + 登出清理,跨 tab/跨路由残留天然失效)③ 中性 skeleton 兜底(宁缺勿错)。**token 单一事实源**:`tokenValues.ts` 构建期生成 tokens/tokens-dark/tokens-print 三 CSS(禁改头标记 + CI 幂等断言);新增 selection/mark/skeleton/code 高亮等语义 token。**CI 门禁**:对比度独立关卡(亮/暗逐对,text 4.5 / 大文本·图形 3.0)+ AST 级硬编码色值扫描(Stylelint/ESLint 自定义规则,禁整文件白名单,数据色例外逐文件 + 行级登记)+ 双主题视觉回归(6 核心页 × light/dark × 双视口 toHaveScreenshot,确定性 fixture/内置字体/frozen clock/动态区 mask,基线更新独立 PR)+ forced-colors 仿真验收。**存量债务**:skills/autopilots/dataJobs/projects 硬编码色值全部迁移语义 token,扫描零命中。**暗色细部**:选区/mark token 化、autofill 暗校正、reduced-transparency 不透明降级、prefers-contrast 增强、forced-colors 系统色重映射、打印强制亮色、UGC 内联色对比兜底 + 代码高亮双色板。**健壮性**:pending 偏好分区队列(`{host}:{user}:{workspace}` 三元组校验 + 服务端优先冲突策略 + online/前台触发)+ 登录回填服务端真源裁决 + 跨标签页 storage 同步。真实 e2e:无闪错三场景(A 暗→B 浅首帧无闪错 / 换账号残留 locator 不串用 / 邀请页未登录 preview 同源注入)+ 注入链路与缓存边界真实生产形态栈实测全绿;后端整体覆盖率 ≥90%、前端全局覆盖率 97.4/90.9/94.4/97.4(双门禁通过) |
 | 数据导入导出(import-export.md 五章,平台能力层 A) | ✅ v0.17.1 | 统一作业实体 `data_jobs` + 行台账 `data_job_rows`(迁移 0026:状态机 + `mapping/params/checkpoint/error_report` JSONB + 源哈希冻结 + `lease_seq` fencing + 源附件 `ON DELETE RESTRICT` + 产物列级 `SET NULL` + 复合 FK 同租户 + RLS + 引导函数);CSV/JSON 导入「validate dry-run → run 部分成功」两段式,逐行值转换(7 种 transform + 自定义字段)+ 逐行错误报告 + `external_ref` 幂等系统字段 + 正常编号 + 父子二次解析防环;异步导出经 outbox → worker 游标流式生成产物,统一附件通道签名下载(纯文本白名单即时可下载),每页续租 + filters 行数预检。**T31 故障恢复红线**:批事务 `FOR UPDATE` 锁行校验 `lease_owner+lease_seq+未过期`(**fencing 同作用于 fail_job**)、`checkpoint` 续跑、`row_key` 原子占用「先占后建」杜绝重放重复建实体、源哈希双校验、reaper 回收过期租约(清零 owner 保留 seq)+ 重投 resume + 补偿卡死作业、源附件 RESTRICT。§6.13 补 data_job 三行(成功不进箱 / 部分成功 normal 进箱 / 失败 critical)仅引用不自定义;§6.7 `data_job.updated` 实时进度逐资源授权;错误码齐 `validation_required/source_changed/export_too_large` 等;创建限流 + 幂等键;前端导入向导(分步可回退 / 映射 / dry-run 错误表 / 进度)+ 数据管理页 + 项目页情境入口 + i18n 中英同步。真实起服 e2e + 真实浏览器 UI 走查全绿,模块单测 ≥90% |
+| 统计报表与仪表盘(analytics.md 五章,阶段 8·平台能力 C) | ✅ v0.19.0 | 只读聚合分析层:唯一物化缓存 `analytics_snapshots`(迁移 0028:`scope_key` 入唯一键物理分行,跨权限绝不共享,`dim_hash` 生成列,`calendar_timezone` 入维度指纹,RLS + 复合 FK + 查找/过期索引);**统一 execution 可见性 CTE `visible_executions`(§2.3.1 R5)逐字内联到 workload-B / agent 主统计 / retry 子查询 / token 聚合四段权威 SQL——关联 issue 的执行继承项目可见性、无 issue 执行(manual/chat/integration)归属 agent、private agent 先过 agent 可见性**;六类指标口径(cycle time `percentile_cont` + 无留痕/负时长 `insufficient_data` 诚实披露;velocity / burndown **当前归属口径** `scope_caliber=current_attribution` 不还原历史归属;throughput **`calendar_timezone` 本地日历分桶**(含跨 DST 23/25h 不错位);workload 成员维度统一 + 在途执行;agent 统计 token 仅覆盖 autopilot 触发执行 + `token_coverage` 诚实披露);8 端点 `/analytics/*` + `/dashboards/project|workspace`(`workspace` 按请求者项目可见性过滤、显式多项目含不可见 → 整体 403、private agent → `agent_not_visible`、具名错误码齐、读限流);前端:工作区「洞察」页(导航 + 命令面板唯一入口)+ 项目详情「仪表盘」页签 + agent 详情统计卡(名册深链唯一入口),手写 SVG 图表经语义 token、线型区分(颜色非唯一信号)、暗色双主题;真实起服 e2e 四类请求者同一权威聚合 SQL 断言最终统计值(T33 七项)+ 跨权限缓存负向 + 整体 403 + 分桶不跨日 + 只读审计,真实浏览器 UI 走查 + evidence 留证;模块单测覆盖率 ≥90% |
 | auth 增量2:PAT/API token + 审计查询端点(auth.md §2.5/§3.2/§3.3) | ✅ v0.7.0 | 长期 PAT/API token(独立于会话 JWT、可吊销、可限定 scope/过期)、token 审计与查询端点;补 MES-12 文档欠账,与 CHANGELOG [0.7.0] 对齐 |
 | workspace §4 前端 UI 接通(workspace.md §4) | ✅ v0.8.0 | 工作区切换器/创建向导、设置页(基本信息/邀请全生命周期/角色矩阵/危险区)、邀请接受页(四 reason UI 态)、账号登录接通、realtime 会话 JWT 鉴权管道;i18n 全外部化(zh-CN+en) |
 | project 项目(project.md) | ✅ v0.10.0 | 项目 CRUD/归档恢复/软删除、健康度与状态留痕(回写 + 事件)、里程碑 CRUD(逾期派生态)、迭代周期 CRUD(auto_roll 自动滚动)、项目成员与私有可见性、项目模板与实例化;前缀注册表同事务排他登记、前缀永久保留(`UNIQUE(workspace_id, key)` 非部分唯一索引 + 注册表双重保证);`UNIQUE(workspace_id, id)` + 同租户复合 FK + RLS;§3.1 全部端点(包络/游标分页/If-Match 乐观并发/错误码);project 前端页面(列表/详情/设置/周期)与实时增量合并;进度聚合与 issue 顺延待 issue.md 增量 |
@@ -67,8 +70,11 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 前置条件:Docker + Docker Compose。
 
 ```bash
+./scripts/gen-dev-secrets.sh   # 首次:生成强随机密码的本地 .env(compose 不再内置任何默认口令)
 docker compose up --build -d
 ```
+
+> `docker-compose.yml` 中**所有凭据都是必填项、无默认值**(MES-83 加固):缺失任一口令时 `docker compose up` 直接报错而非以弱口令启动。本地开发用 `scripts/gen-dev-secrets.sh` 一次性生成强随机 `.env`(已 git-ignore);如需轮换,加 `--force` 重新生成。
 
 服务与端口(可用 `.env` 覆盖,见 [.env.example](.env.example)):
 
@@ -83,8 +89,20 @@ docker compose up --build -d
 > **安全提示(务必阅读)**:本 compose 栈**仅限本机开发**。
 >
 > - 对外端口(8000 / 8081 / 3001)默认绑定 `127.0.0.1`,**仅本机可达**,不暴露到网络;`.env` 只能改端口号,无法改绑定地址——如需对外暴露必须刻意修改 `docker-compose.yml`。
+> - **数据存储不发布任何宿主端口**:PostgreSQL / Redis 仅经内部 compose 网络可达,`docker-compose.yml` 中无 `ports:` 映射(MES-83)。**严禁**为任何数据存储添加宿主端口映射——公网可达的数据存储正是本次事故的根因。MinIO 因三阶段直传需浏览器直达,仅保留 `127.0.0.1` 回环发布,生产必须置于内网 / TLS 反代之后且不得公网暴露。
+> - **凭据无默认值、生产强制强口令**:所有口令为 compose 必填项(缺失即启动报错);`MESH_AUTH_MODE=production` 时后端在启动期**拒绝**空值 / 已知默认 / 过短的 Redis/PostgreSQL/MinIO 凭据(`validate_infra_settings`),配置不全直接 fail-fast。
 > - `MESH_AUTH_MODE` 默认 `dev`(任意 `mesh-dev:<workspace-id>` 即获该工作区完全访问),这**仅在端口只绑回环时安全**。任何**非本机/生产**使用必须显式设置 `MESH_AUTH_MODE=production`,并提供真实的数据库/Redis 凭据。
 > - API 与 realtime 网关以**受限非 owner 角色 `mesh_app`** 连接数据库,使 PostgreSQL RLS 租户兜底在应用连接路径真实生效(§6.2 第 5 条);worker 保留 owner 角色做跨租户 relay/projector/retention。
+
+### 生产部署安全清单(MES-83)
+
+任何非本机部署(生产 / 预发 / 共享环境)必须满足:
+
+1. **强唯一口令**:PostgreSQL、Redis、MinIO 及 `mesh_app` 角色、JWT 签名密钥均使用**强随机、互不相同**的口令(`openssl rand -base64 32` 或等价 CSPRNG),严禁复用本仓库示例值或任何可猜测默认。
+2. **不对公网暴露**:数据存储与中间件(Redis / PostgreSQL / MinIO)**绝不**发布到公网或宿主非回环网卡;仅经内网 / 服务网格可达,前置安全组 / 防火墙默认拒绝入方向 6379 / 5432 / 9000。
+3. **启用保护机制**:Redis 必须 `requirepass` + `protected-mode yes`(并 `bind` 内网网卡,勿 `0.0.0.0`);对象存储与 API 对外端点经 TLS。
+4. **生产认证模式**:`MESH_AUTH_MODE=production`;后端会在启动期校验上述凭据强度,配置不全即 fail-fast。
+5. **部署前自检端口暴露**:`ss -tlnp` / 云安全组核对,确认无数据存储端口对公网开放。
 
 冒烟验证:
 

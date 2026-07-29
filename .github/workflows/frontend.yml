@@ -166,7 +166,9 @@ jobs:
           POSTGRES_USER: mesh
           POSTGRES_DB: mesh
         ports:
-          - 5432:5432
+          # MES-83: bind loopback — a CI datastore must never listen on all
+          # interfaces, even on an ephemeral runner.
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U mesh"
           --health-interval 5s
@@ -175,7 +177,8 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          # MES-83: bind loopback (never 0.0.0.0) — see postgres note above.
+          - 127.0.0.1:6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -189,20 +192,28 @@ jobs:
       MESH_AUTH_MODE: dev
       MESH_STORAGE_ENDPOINT: http://127.0.0.1:9000
       MESH_STORAGE_PUBLIC_ENDPOINT: http://127.0.0.1:9000
-      MESH_STORAGE_ACCESS_KEY: mesh
-      MESH_STORAGE_SECRET_KEY: mesh_minio_secret
+      # MESH_STORAGE_ACCESS_KEY / MESH_STORAGE_SECRET_KEY are NOT set here:
+      # each job generates strong per-run values via $GITHUB_ENV (MES-83 — no
+      # static object-storage secret may live in this public repository).
       MESH_STORAGE_BUCKET: mesh-attachments
     steps:
       - uses: actions/checkout@v4
 
       # MinIO 不经 services 声明:GitHub services 无法给 minio/minio 传
       # `server /data` 启动命令(默认 entrypoint 无参即退出)。
+      - name: Generate strong MinIO credentials (MES-83)
+        # Per-run random root credentials exported via $GITHUB_ENV for every
+        # later step (MinIO container + backend servers + Playwright). No
+        # static object-storage secret lives in this public repository.
+        run: |
+          echo "MESH_STORAGE_ACCESS_KEY=mesh-ci-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+          echo "MESH_STORAGE_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Start MinIO
         run: |
           docker run -d --name mesh-ci-minio \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=mesh \
-            -e MINIO_ROOT_PASSWORD=mesh_minio_secret \
+            -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$MESH_STORAGE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$MESH_STORAGE_SECRET_KEY" \
             minio/minio:RELEASE.2025-06-13T11-33-47Z \
             server /data
           for i in $(seq 1 30); do
@@ -301,7 +312,9 @@ jobs:
           POSTGRES_USER: mesh
           POSTGRES_DB: mesh
         ports:
-          - 5432:5432
+          # MES-83: bind loopback — a CI datastore must never listen on all
+          # interfaces, even on an ephemeral runner.
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U mesh"
           --health-interval 5s
@@ -310,7 +323,8 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          # MES-83: bind loopback (never 0.0.0.0) — see postgres note above.
+          - 127.0.0.1:6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -324,8 +338,9 @@ jobs:
       MESH_AUTH_MODE: dev
       MESH_STORAGE_ENDPOINT: http://127.0.0.1:9000
       MESH_STORAGE_PUBLIC_ENDPOINT: http://127.0.0.1:9000
-      MESH_STORAGE_ACCESS_KEY: mesh
-      MESH_STORAGE_SECRET_KEY: mesh_minio_secret
+      # MESH_STORAGE_ACCESS_KEY / MESH_STORAGE_SECRET_KEY are NOT set here:
+      # each job generates strong per-run values via $GITHUB_ENV (MES-83 — no
+      # static object-storage secret may live in this public repository).
       MESH_STORAGE_BUCKET: mesh-attachments
       RUNTIMES_PG_HOST: 127.0.0.1
       RUNTIMES_PG_PORT: "5432"
@@ -335,12 +350,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Generate strong MinIO credentials (MES-83)
+        run: |
+          echo "MESH_STORAGE_ACCESS_KEY=mesh-ci-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+          echo "MESH_STORAGE_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Start MinIO
         run: |
           docker run -d --name mesh-ci-minio-rt \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=mesh \
-            -e MINIO_ROOT_PASSWORD=mesh_minio_secret \
+            -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$MESH_STORAGE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$MESH_STORAGE_SECRET_KEY" \
             minio/minio:RELEASE.2025-06-13T11-33-47Z \
             server /data
           for i in $(seq 1 30); do

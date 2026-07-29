@@ -144,10 +144,15 @@ def test_gateway_websocket_flow_inprocess(settings, workspace_factory, session_f
             assert frame["code"] == "unauthorized"
 
 
-def test_gateway_production_auth_mode_rejects_dev_tokens(settings):
+def test_gateway_production_auth_mode_rejects_dev_tokens():
+    # Production startup also validates middleware credentials (MES-83), so this
+    # scenario carries strong placeholder datastore URLs — the gateway lifespan
+    # connects lazily and a dev token is rejected before any datastore is
+    # touched, so these are never dialed; they only satisfy the startup guard.
+    strong = "v3ry-str0ng-r4nd0m-s3cret-0123456789"
     production_settings = load_settings(
-        database_url=settings.database_url,
-        redis_url=settings.redis_url,
+        database_url=f"postgresql+asyncpg://mesh:{strong}@postgres.internal:5432/mesh",
+        redis_url=f"redis://:{strong}@redis.internal:6379/0",
         auth_mode="production",
         # A real signing secret so the production fail-safe lets the app boot;
         # dev-token rejection below is independent of the secret's value.

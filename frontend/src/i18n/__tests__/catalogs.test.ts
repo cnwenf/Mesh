@@ -283,6 +283,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     // theme.md §4.1 主题占位标注(跟随工作区默认/跟随系统的当前解析值)
     theme: 'dark',
     percent: 40,
+    // analytics §4 文案占位符(MES-71):净流量 / 日历时区回显
+    net: 2,
+    tz: 'UTC',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

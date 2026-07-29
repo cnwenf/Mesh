@@ -63,8 +63,8 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     storage_endpoint = os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000")
     env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
-    env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
-    env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
+    env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "")
+    env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "")
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
     # Runtime machine API: e2e servers run plaintext loopback (TLS termination
     # is a deployment concern; the 403 gate is unit-covered) and a short lease

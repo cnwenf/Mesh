@@ -33,8 +33,10 @@ def _load_checker_module():
 # +5 in v0.16.1: squad SSE orchestration stream frames
 # (task.status / subtask.created / subtask.assigned / plan.submitted /
 # task.aggregated, squad.md §3.2/§3.5).
-def test_vocabulary_baseline_is_103_events():
-    assert len(EVENT_VOCABULARY) == 103
+# +1 in MES-82: integration.queue_updated(入站消息队列失效通知,
+# integrations.md §3.6/§3.9,README §6.7 平台能力域登记)。
+def test_vocabulary_baseline_is_104_events():
+    assert len(EVENT_VOCABULARY) == 104
 
 
 def test_vocabulary_matches_readme_registry_exactly():

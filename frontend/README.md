@@ -63,7 +63,8 @@ VITE_MESH_OAUTH_PROVIDERS=mock                             # 第三方登录按�
 保留窗口清理经 SQL DELETE(与后端 e2e T6 同法)。
 
 ```bash
-# 前置:仓库根目录起后端栈(docker compose up postgres redis api worker gateway,MESH_AUTH_MODE=dev)
+# 前置:仓库根目录起后端栈(首次先 ./scripts/gen-dev-secrets.sh 生成强随机 .env;
+#       docker compose up postgres redis api worker gateway,MESH_AUTH_MODE=dev)
 npx playwright test --config playwright.real.config.ts
 ```
 

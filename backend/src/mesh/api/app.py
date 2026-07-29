@@ -20,6 +20,8 @@ from mesh.agent.triggers import (
     register_skill_context_resolver,
     register_skill_matching_resolver,
 )
+from mesh.analytics.routes import router as analytics_router
+from mesh.analytics.service import AnalyticsService
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -48,7 +50,7 @@ from mesh.comment_inbox.channels import register_inbox_checkers
 from mesh.comment_inbox.inbox import InboxService
 from mesh.comment_inbox.routes import router as comment_inbox_router
 from mesh.comment_inbox.service import CommentService
-from mesh.config import Settings, load_settings, validate_auth_settings
+from mesh.config import Settings, load_settings, validate_auth_settings, validate_infra_settings
 from mesh.data_jobs.channels import register_data_job_checkers
 from mesh.data_jobs.routes import router as data_jobs_router
 from mesh.data_jobs.service import DataJobService
@@ -166,6 +168,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # the well-known dev signing key (auth.md §5.5 — keys not in code/repo).
     # Shared with the realtime gateway factory so the two cannot drift apart.
     validate_auth_settings(settings)
+    # Fail-safe (MES-83): production must connect to PostgreSQL / Redis / object
+    # storage with strong, unique credentials — refuse an under-configured deploy
+    # at startup instead of coming up on a guessable password.
+    validate_infra_settings(settings)
     app = FastAPI(title="Mesh API", version=__version__, lifespan=lifespan)
 
     engine = create_app_engine_from_settings(settings)
@@ -313,6 +319,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # signing secret derives from jwt_secret (same ciphertext-only contract
     # as runtime_credentials, README §6.16).
     app.state.autopilot_service = AutopilotService(session_factory, settings.jwt_secret)
+    # Analytics module (analytics.md): read-only aggregates + materialized
+    # cache; never writes source tables.
+    app.state.analytics_service = AnalyticsService(session_factory, settings)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -351,6 +360,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(skill_router)
     app.include_router(squad_router)
     app.include_router(autopilot_router)
+    app.include_router(analytics_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

@@ -15,7 +15,7 @@ from mesh.api.error_handlers import install_error_handlers
 from mesh.api.health import router as health_router
 from mesh.chat.channels import register_chat_checkers
 from mesh.comment_inbox.channels import register_inbox_checkers
-from mesh.config import Settings, load_settings, validate_auth_settings
+from mesh.config import Settings, load_settings, validate_auth_settings, validate_infra_settings
 from mesh.data_jobs.channels import register_data_job_checkers
 from mesh.db.engine import create_app_engine_from_settings, create_session_factory
 from mesh.issue.channels import register_issue_checkers
@@ -50,6 +50,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # auth. Shared with the API factory (the gateway deploys independently,
     # README §2.2, so its configuration is validated on its own startup path).
     validate_auth_settings(settings)
+    # Fail-safe (MES-83): the gateway holds a Redis fan-out connection and an app
+    # DB pool, so production credentials are validated on its own startup path —
+    # it deploys independently (README §2.2) and may be misconfigured on its own.
+    # require_storage=False: the gateway never touches object storage, so a
+    # minimal production gateway config without storage env vars is legitimate.
+    validate_infra_settings(settings, require_storage=False)
     app = FastAPI(title="Mesh Realtime Gateway", version=__version__, lifespan=lifespan)
 
     engine = create_app_engine_from_settings(settings)

@@ -38,11 +38,15 @@ async def test_realtime_create_app_accepts_dev_mode_default_key(db_url, redis_ur
     await app.state.engine.dispose()
 
 
-async def test_realtime_create_app_accepts_strong_secret_in_production(db_url, redis_url):
-    """The guard blocks only the well-known dev key, not production secrets."""
+async def test_realtime_create_app_accepts_strong_secret_in_production():
+    """A fully production-grade config (strong signing key AND strong middleware
+    credentials — MES-83) is accepted. The factory does not dial the datastores,
+    so strong placeholder URLs stand in for the operator's real secrets; the
+    gateway never touches object storage, so storage defaults are not checked."""
+    strong = "v3ry-str0ng-r4nd0m-s3cret-0123456789"
     settings = load_settings(
-        database_url=db_url,
-        redis_url=redis_url,
+        database_url=f"postgresql+asyncpg://mesh:{strong}@postgres.internal:5432/mesh",
+        redis_url=f"redis://:{strong}@redis.internal:6379/0",
         auth_mode="production",
         jwt_secret="realtime-factory-test-signing-secret",
     )

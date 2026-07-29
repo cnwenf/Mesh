@@ -53,7 +53,9 @@ jobs:
           POSTGRES_USER: mesh
           POSTGRES_DB: mesh
         ports:
-          - 5432:5432
+          # MES-83: bind loopback — a CI datastore must never listen on all
+          # interfaces, even on an ephemeral runner.
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U mesh"
           --health-interval 5s
@@ -62,7 +64,8 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          # MES-83: bind loopback (never 0.0.0.0) — see postgres note above.
+          - 127.0.0.1:6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -73,12 +76,20 @@ jobs:
     # docker run 起真实 MinIO(附件真实 e2e 的三阶段直传对象存储,零 mock)。
     steps:
       - uses: actions/checkout@v4
+      - name: Generate strong MinIO credentials (MES-83)
+        # Per-run random root credentials exported for every later step (the
+        # MinIO container AND the test env). No static object-storage secret
+        # lives in this public repository — the MES-83 incident exploited a
+        # guessable default shipped here.
+        run: |
+          echo "MESH_STORAGE_ACCESS_KEY=mesh-ci-$(openssl rand -hex 8)" >> "$GITHUB_ENV"
+          echo "MESH_STORAGE_SECRET_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - name: Start MinIO (attachment real e2e object storage)
         run: |
           docker run -d --name mesh-ci-minio \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=mesh \
-            -e MINIO_ROOT_PASSWORD=mesh_minio_secret \
+            -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$MESH_STORAGE_ACCESS_KEY" \
+            -e MINIO_ROOT_PASSWORD="$MESH_STORAGE_SECRET_KEY" \
             minio/minio:RELEASE.2025-06-13T11-33-47Z \
             server /data
           for i in $(seq 1 30); do
@@ -110,14 +121,14 @@ jobs:
           MESH_TEST_DATABASE_URL: postgresql+asyncpg://mesh:mesh@127.0.0.1:5432/mesh_test
           MESH_TEST_REDIS_URL: redis://127.0.0.1:6379/1
           MESH_TEST_STORAGE_ENDPOINT: http://127.0.0.1:9000
-          MESH_STORAGE_ACCESS_KEY: mesh
-          MESH_STORAGE_SECRET_KEY: mesh_minio_secret
+          # MESH_STORAGE_ACCESS_KEY / MESH_STORAGE_SECRET_KEY are the per-run
+          # strong values generated above (via $GITHUB_ENV) — never hardcoded.
         run: |
           cd backend
           pytest --cov=mesh --cov-report=term-missing --cov-fail-under=90
 
   schema-validation:
-    name: DDL 与行为验证(PostgreSQL 16,100 条断言)
+    name: DDL 与行为验证(PostgreSQL 16)
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     services:
