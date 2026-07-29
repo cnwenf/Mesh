@@ -4433,9 +4433,11 @@ END $$;
 CREATE TABLE integration_message_queue (
   id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id       UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  integration_id     UUID NOT NULL,
-  binding_id         UUID NOT NULL,
+  integration_id     UUID NULL,                    -- 入队时 NOT NULL(服务层);父集成删除 SET NULL → 孤儿审计行
+  binding_id         UUID NULL,                    -- 入队时 NOT NULL;父绑定删除 SET NULL → 孤儿审计行
   integration_event_id UUID NULL,
+  binding_display    TEXT NOT NULL DEFAULT '',     -- 绑定展示快照(孤儿审计行自描述)
+  project_id_snapshot UUID NULL,                   -- scope='project' 入队捕获(孤儿审计可见性过滤)
   conversation_key   TEXT NOT NULL,
   seq                BIGINT NOT NULL CHECK (seq > 0),
   dispatch_mode      TEXT NOT NULL CHECK (dispatch_mode IN ('serial_conversation','parallel')),
@@ -4446,9 +4448,10 @@ CREATE TABLE integration_message_queue (
   target_agent_id    UUID NULL,
   message_excerpt    TEXT NOT NULL DEFAULT '',
   sender_identity_key TEXT NOT NULL DEFAULT '',
-  ack_attempted_at   TIMESTAMPTZ NULL,
-  ack_sent_at        TIMESTAMPTZ NULL,
-  ack_merged_into    UUID NULL,
+  ack_attempted_at   TIMESTAMPTZ NULL,             -- leader 外呼闸门(§3.8)
+  ack_sent_at        TIMESTAMPTZ NULL,             -- 平台确认(仅 leader)
+  ack_represented_at TIMESTAMPTZ NULL,             -- 被抑制项:已被 leader 代表(非"已发送")
+  ack_merged_into    UUID NULL,                    -- 被抑制项 → leader id
   lease_expires_at   TIMESTAMPTZ NULL,
   enqueued_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at         TIMESTAMPTZ NULL,
@@ -4458,10 +4461,14 @@ CREATE TABLE integration_message_queue (
   CONSTRAINT uq_imq_ws_id UNIQUE (workspace_id, id),
   CONSTRAINT uq_imq_event UNIQUE (integration_id, integration_event_id),
   CONSTRAINT uq_imq_conversation_seq UNIQUE (conversation_key, seq),
-  CONSTRAINT fk_imq_integration FOREIGN KEY (workspace_id, integration_id)
-    REFERENCES integrations(workspace_id, id) ON DELETE RESTRICT,        -- 删除保护(§2.10)
+CONSTRAINT fk_imq_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE SET NULL (integration_id),
+  -- MES-82 删除保护(R2 闭合):SET NULL + 孤儿行必终态 CHECK(非终态失父引用 → CHECK 拒绝 = fail-closed)
+  CONSTRAINT ck_imq_orphan_terminal CHECK (
+       (integration_id IS NOT NULL OR state IN ('done','failed','cancelled'))
+   AND (binding_id     IS NOT NULL OR state IN ('done','failed','cancelled'))),
   CONSTRAINT fk_imq_binding FOREIGN KEY (workspace_id, binding_id)
-    REFERENCES integration_bindings(workspace_id, id) ON DELETE RESTRICT,-- 删除保护(§2.10)
+    REFERENCES integration_bindings(workspace_id, id) ON DELETE SET NULL (binding_id),-- 删除保护(§2.10)
   CONSTRAINT fk_imq_event FOREIGN KEY (workspace_id, integration_event_id)
     REFERENCES integration_events(workspace_id, id) ON DELETE SET NULL (integration_event_id),
   CONSTRAINT fk_imq_execution FOREIGN KEY (workspace_id, execution_id)
@@ -4506,6 +4513,9 @@ CREATE INDEX idx_eca_execution_pending ON execution_context_appends(execution_id
 ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_trigger_check;
 ALTER TABLE task_executions ADD CONSTRAINT ck_executions_trigger
   CHECK (trigger IN ('assign','mention','autopilot','manual','chat','integration'));
+
+-- runtime.md task_executions 水位列(MES-82 运行期上下文追加,服务端持久连续水位)
+ALTER TABLE task_executions ADD COLUMN IF NOT EXISTS context_injected_through_seq BIGINT NOT NULL DEFAULT 0;
 
 -- T39:行为断言(独立事务,ROLLBACK 不污染)
 BEGIN;
@@ -4595,13 +4605,15 @@ BEGIN
     RAISE NOTICE 'PASS T39-4: cancelling 项继续占用串行 lane(/stop 不提前放行下一任务)';
   END;
 
-  -- T39-5:删除保护——绑定存在队列项时 RESTRICT 拒绝删除
+  -- T39-5:删除保护 fail-closed——非终态项存在时删绑定 → SET NULL 触发 ck_imq_orphan_terminal 违例
   BEGIN
     DELETE FROM integration_bindings WHERE id = v_bind;
-    RAISE EXCEPTION 'T39-5 FAIL: 存在队列项的绑定被物理删除(CASCADE 消失)';
-  EXCEPTION WHEN foreign_key_violation THEN
-    RAISE NOTICE 'PASS T39-5: fk_imq_binding RESTRICT 拒绝删除(已确认接收的队列项不物理消失)';
+    RAISE EXCEPTION 'T39-5 FAIL: 非终态队列项失去父引用未被 CHECK 拒绝(消息静默孤儿化)';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-5: ck_imq_orphan_terminal 拒绝非终态项失父引用(DELETE 整体回滚,fail-closed)';
   END;
+  ASSERT (SELECT count(*) FROM integration_bindings WHERE id = v_bind) = 1,
+         'T39-5 FAIL: DELETE 应整体回滚,绑定行应仍在';
 
   -- T39-6:(conversation_key, seq) 唯一
   BEGIN
@@ -4629,6 +4641,103 @@ BEGIN
   EXCEPTION WHEN check_violation THEN
     RAISE NOTICE 'PASS T39-7: appends (execution_id, seq) 唯一 + source 词汇(im_btw)';
   END;
+
+  -- T39-8:删除保护成功路径——项全部终态后删绑定实际完成,孤儿审计行保留
+  UPDATE integration_message_queue SET state = 'cancelled', finished_at = now(),
+         binding_display = 'MES-82 验证绑定 → 研发群'
+   WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%';
+  DELETE FROM integration_bindings WHERE id = v_bind;           -- 必须成功(项已终态 → SET NULL)
+  ASSERT (SELECT count(*) FROM integration_bindings WHERE id = v_bind) = 0,
+         'T39-8 FAIL: 终态项存在时绑定删除应实际完成';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%') >= 3,
+         'T39-8 FAIL: 队列项应保留为孤儿审计行(不物理消失)';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%'
+             AND (binding_id IS NOT NULL OR state NOT IN ('done','failed','cancelled'))) = 0,
+         'T39-8 FAIL: 孤儿行应 binding_id=NULL 且全部终态';
+  ASSERT (SELECT count(*) FROM integration_message_queue
+           WHERE conversation_key LIKE 'dingtalk:ding-corp-mes82:%' AND binding_display <> '') >= 3,
+         'T39-8 FAIL: 孤儿审计行应携带 binding_display 快照(自描述可展示)';
+  RAISE NOTICE 'PASS T39-8: 删除保护成功路径闭合(强制终止后删除完成,孤儿审计行保留 + 快照自描述)';
+
+  -- T39-9:rearm 对齐真实 outbox_events DDL(§6.6 字段:status/delivery_attempts/published_at)
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;   -- digest() 供 rearm 幂等键 sha256 计算
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, delivery_attempts)
+  VALUES (v_ws, 'execution.enqueue', '{"queue_item":"mes82"}'::jsonb, 'mes82-enqueue-key-1', 'failed', 8);
+  UPDATE outbox_events SET status = 'pending', delivery_attempts = 0, published_at = NULL
+   WHERE idempotency_key = 'mes82-enqueue-key-1' AND status = 'failed';
+  ASSERT (SELECT status = 'pending' AND delivery_attempts = 0 AND published_at IS NULL
+            FROM outbox_events WHERE idempotency_key = 'mes82-enqueue-key-1'),
+         'T39-9 FAIL: rearm 应置 pending + attempts=0 + published_at=NULL';
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000b2', v_ws, v_agent, NULL,
+          'integration', 'mes82-enqueue-key-1', '{}', '{}', '[]', '{}');
+  UPDATE outbox_events SET status = 'published', published_at = now()
+   WHERE idempotency_key = 'mes82-enqueue-key-1';
+  ASSERT (SELECT count(*) FROM task_executions WHERE id = '82000000-0000-0000-0000-0000000000b2') = 1,
+         'T39-9 FAIL: rearm 后 relay 应建成执行';
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-enqueue-key-1' || '|rearm|' || 'item-id', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-enqueue-key-1' || '|rearm|' || 'item-id', 'sha256'), 'hex')) = 1,
+         'T39-9 FAIL: rearm 幂等键新写应成功(不撞原键)';
+  RAISE NOTICE 'PASS T39-9: outbox rearm 按真实 DDL 执行(failed→pending 条件更新 + 建成执行 + rearm 键新写)';
+
+  -- T39-10:服务端持久水位——GREATEST 单调不回退(回退型 ACK 被忽略)
+  UPDATE task_executions SET context_injected_through_seq = 5 WHERE id = v_exec;
+  UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 3)
+   WHERE id = v_exec;
+  ASSERT (SELECT context_injected_through_seq = 5 FROM task_executions WHERE id = v_exec),
+         'T39-10 FAIL: 水位应单调不回退(GREATEST 忽略回退 ACK)';
+  UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 7)
+   WHERE id = v_exec;
+  ASSERT (SELECT context_injected_through_seq = 7 FROM task_executions WHERE id = v_exec),
+         'T39-10 FAIL: 水位应前进至 7';
+  RAISE NOTICE 'PASS T39-10: context_injected_through_seq 服务端持久水位(GREATEST 单调,回退 ACK 忽略)';
+
+  -- T39-11:ack 四字段语义——被抑制项 ack_sent_at 保持 NULL(字段不混用)
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b3', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidACK');
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_attempted_at, ack_sent_at)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3', 'dingtalk:ding-corp-mes82:cidACK', 1,
+          'serial_conversation', 'processing', now(), now());
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_represented_at, ack_merged_into)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3', 'dingtalk:ding-corp-mes82:cidACK', 2,
+          'serial_conversation', 'pending', now(),
+          (SELECT id FROM integration_message_queue
+            WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidACK' AND seq = 1));
+  ASSERT (SELECT ack_sent_at IS NULL AND ack_represented_at IS NOT NULL AND ack_merged_into IS NOT NULL
+            FROM integration_message_queue
+           WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidACK' AND seq = 2),
+         'T39-11 FAIL: 被抑制项应仅 ack_represented_at/ack_merged_into 置位,ack_sent_at 保持 NULL';
+  RAISE NOTICE 'PASS T39-11: ack 四字段语义(被代表 ≠ 已发送,字段不混用)';
+
+  -- T39-12:N-1 真实平台 ID 键编码——官方样例值存储与唯一解析(base64 样 cid + base64url 身份段)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, sender_identity_key)
+  VALUES (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
+          'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 1, 'serial_conversation', 'pending',
+          'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+         (v_ws, v_int, '82000000-0000-0000-0000-0000000000b3',
+          'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg==', 2, 'serial_conversation', 'pending',
+          'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU4');
+  -- 两个不同 senderId 的 base64url 编码(末字符 M vs N)→ 键不相等、各自唯一解析
+  ASSERT (SELECT count(DISTINCT sender_identity_key) = 2 FROM integration_message_queue
+           WHERE conversation_key = 'dingtalk:dingxxxxsample:cid6EUvB2O8qVF2RYQtHTKEsg=='),
+         'T39-12 FAIL: 不同 senderId 编码后应为不同身份键(无坍缩)';
+  ASSERT (SELECT count(*) = 1 FROM integration_message_queue
+           WHERE sender_identity_key =
+             'dingtalk:dingxxxxsample:x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0'),
+         'T39-12 FAIL: 编码身份键应可精确唯一解析';
+  ASSERT position(':' in 'x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0') = 0,
+         'T39-12 FAIL: base64url 编码身份段不得含冒号(分隔符坍缩防护)';
+  RAISE NOTICE 'PASS T39-12: N-1 真实平台 ID 键(base64 样 cid 含 = 合法存储 + base64url 身份段无冒号、无坍缩)';
 END $$;
 ROLLBACK;
 -- T39:end
