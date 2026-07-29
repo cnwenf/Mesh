@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 
 from fastapi import Request
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.security import hash_token
@@ -171,7 +171,9 @@ async def resolve_task_principal(request: Request):
     Only routes that explicitly declare task principal support should
     use this dependency — regular console routes reject mesh_task_.
     """
-    from mesh.runtime.task_tokens import validate_task_token
+    from mesh.db.models.runtime import AttemptTaskToken
+    from mesh.db.tenant import set_tenant_context
+    from mesh.runtime.task_tokens import _hash_token, validate_task_token
 
     authorization = request.headers.get("authorization") or ""
     scheme, _, token = authorization.partition(" ")
@@ -183,5 +185,20 @@ async def resolve_task_principal(request: Request):
 
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
+        # Preliminary lookup to get workspace_id for tenant context.
+        # attempt_task_tokens has no RLS, so this works without GUC.
+        token_hash = _hash_token(token)
+        row = (
+            await session.execute(
+                select(AttemptTaskToken.workspace_id).where(
+                    AttemptTaskToken.token_hash == token_hash,
+                )
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise UnauthorizedError("invalid task token")
+        # Set tenant context BEFORE validate_task_token queries
+        # execution_attempts (which has RLS on workspace_id).
+        await set_tenant_context(session, row)
         task_token = await validate_task_token(session, token=token)
         return task_token
