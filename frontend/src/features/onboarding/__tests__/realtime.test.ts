@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { RealtimeEventFrame } from '../../../types/realtime';
-import { isOnboardingFrame, parseOnboardingFrame } from '../realtime';
+import { isOnboardingFrame } from '../realtime';
 
 const CHANNEL = 'member:mem-1:onboarding';
 
@@ -26,49 +26,5 @@ describe('isOnboardingFrame', () => {
         CHANNEL,
       ),
     ).toBe(false);
-  });
-});
-
-describe('parseOnboardingFrame', () => {
-  it('parses a progress frame with a known step key', () => {
-    const parsed = parseOnboardingFrame(
-      frame('onboarding.progress', {
-        state_id: 'obs-1',
-        checklist: 'activation',
-        step_key: 'create_first_issue',
-        status: 'completed',
-        completed_via: 'auto',
-        progress: { total: 5, completed: 3, skipped: 0 },
-      }),
-    );
-    expect(parsed).toEqual({ stateId: 'obs-1', kind: 'progress', stepKey: 'create_first_issue' });
-  });
-
-  it('parses a completed frame without a step key', () => {
-    const parsed = parseOnboardingFrame(
-      frame('onboarding.completed', {
-        state_id: 'obs-1',
-        checklist: 'activation',
-        aha_reached_at: '2026-07-25T09:00:00Z',
-        progress: { total: 5, completed: 5, skipped: 0 },
-      }),
-    );
-    expect(parsed).toEqual({ stateId: 'obs-1', kind: 'completed', stepKey: null });
-  });
-
-  it('returns null stateId / stepKey when payload fields are absent or invalid', () => {
-    expect(parseOnboardingFrame(frame('onboarding.progress', {}))).toEqual({
-      stateId: null,
-      kind: 'progress',
-      stepKey: null,
-    });
-    expect(
-      parseOnboardingFrame(frame('onboarding.progress', { state_id: 'obs-2', step_key: 'bogus' })),
-    ).toEqual({ stateId: 'obs-2', kind: 'progress', stepKey: null });
-  });
-
-  it('returns null for non-onboarding frames', () => {
-    expect(parseOnboardingFrame(frame('notification.created', {}))).toBeNull();
-    expect(parseOnboardingFrame({ op: 'ping' } as unknown as RealtimeEventFrame)).toBeNull();
   });
 });

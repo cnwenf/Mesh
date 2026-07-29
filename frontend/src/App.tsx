@@ -139,14 +139,17 @@ function ShellProviders(): React.JSX.Element {
   );
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
-  // 帮助菜单恢复上手清单(onboarding.md §4.2 流程 3):恢复成功后收起帮助层,清单按库内进度重现。
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  // 帮助菜单恢复上手清单(onboarding.md §4.2 流程 3):恢复成功后收起帮助层,清单按库内进度重现;
+  // 失败不再静默吞掉——帮助层内显式提示(§错误处理:用户可见失败反馈)。
   const handleRestoreOnboarding = useCallback(() => {
+    setRestoreError(null);
     void restoreActiveOnboarding(getApiClient())
       .then((restored) => {
         if (restored) setHelpOpen(false);
       })
-      .catch(() => undefined);
-  }, []);
+      .catch(() => setRestoreError(t('onboarding.restoreError')));
+  }, [t]);
 
   return (
     <ToastProvider regionLabel={t('a11y.notifications')}>
@@ -235,6 +238,7 @@ function ShellProviders(): React.JSX.Element {
             }}
             restoreLabel={t('onboarding.restoreHelp')}
             onRestore={handleRestoreOnboarding}
+            restoreError={restoreError ?? undefined}
           />
         </OverlayControlsProvider>
       </ShortcutProvider>

@@ -1,13 +1,12 @@
 {
   "locale": "zh-CN",
-  "version": "130d97f8",
+  "version": "c404f4cd",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
     "a11y.dismiss": "关闭提示",
     "a11y.languageToggle": "切换语言",
     "a11y.notifications": "通知",
-    "a11y.onboarding.card": "上手清单",
     "a11y.openHelp": "打开键盘快捷键",
     "a11y.openPalette": "打开命令面板",
     "a11y.sidebar": "侧边导航栏",
@@ -1328,7 +1327,6 @@
     "onboarding.autoBadge": "已自动完成",
     "onboarding.completedBadge": "已完成",
     "onboarding.dismiss": "不再显示",
-    "onboarding.dismissedNote": "上手清单已关闭。",
     "onboarding.empty.automation.action": "新建 autopilot",
     "onboarding.empty.automation.description": "让 autopilot 定时或按事件自动把工作派给 agent",
     "onboarding.empty.automation.title": "还没有 autopilot",
@@ -1980,6 +1978,7 @@
     "dataJobs.export.runningHint": "导出在后台执行,可关闭本对话框,完成后会收到通知。",
     "dataJobs.export.download": "下载导出文件",
     "dataJobs.export.failedToast": "导出失败",
-    "dataJobs.page.loading": "数据作业加载中…"
+    "dataJobs.page.loading": "数据作业加载中…",
+    "onboarding.restoreError": "清单恢复失败,请重试。"
   }
 }

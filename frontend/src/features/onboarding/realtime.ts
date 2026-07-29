@@ -6,17 +6,6 @@
  * 进度真源在数据库,任何本频道帧均触发整拉 GET state(最简正确合并,§3.7 降级等价)。
  */
 import type { RealtimeEventFrame } from '../../types/realtime';
-import { isOnboardingStepKey } from './types';
-import type { OnboardingStepKey } from './types';
-
-export type OnboardingEventKind = 'progress' | 'completed';
-
-export interface OnboardingFrameInfo {
-  readonly stateId: string | null;
-  readonly kind: OnboardingEventKind;
-  /** 仅 progress 帧携带(completed 帧为 null) */
-  readonly stepKey: OnboardingStepKey | null;
-}
 
 const PROGRESS_EVENT = 'onboarding.progress';
 const COMPLETED_EVENT = 'onboarding.completed';
@@ -28,20 +17,3 @@ export function isOnboardingFrame(frame: RealtimeEventFrame, channelId: string):
   return frame.event === PROGRESS_EVENT || frame.event === COMPLETED_EVENT;
 }
 
-/**
- * 解析本模块事件帧:非本模块帧返回 null;progress/completed 取出 state_id 与 step_key。
- * 载荷字段缺失时对应项为 null(不信任远端载荷,边界处校验,§6.15)。
- */
-export function parseOnboardingFrame(frame: RealtimeEventFrame): OnboardingFrameInfo | null {
-  if (frame.op !== 'event') return null;
-  if (frame.event !== PROGRESS_EVENT && frame.event !== COMPLETED_EVENT) return null;
-  const payload = frame.payload as Record<string, unknown>;
-  const stateId = typeof payload.state_id === 'string' ? payload.state_id : null;
-  if (frame.event === COMPLETED_EVENT) {
-    return { stateId, kind: 'completed', stepKey: null };
-  }
-  const rawStepKey = payload.step_key;
-  const stepKey =
-    typeof rawStepKey === 'string' && isOnboardingStepKey(rawStepKey) ? rawStepKey : null;
-  return { stateId, kind: 'progress', stepKey };
-}

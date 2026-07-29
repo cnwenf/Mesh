@@ -16,6 +16,7 @@ import { env } from '../../env';
 import { useT } from '../../i18n';
 import { AgentWizard } from '../agents/AgentWizard';
 import { resetOnboardingMember } from '../onboarding/api';
+import { requestOptimisticStepComplete } from '../onboarding/notify';
 import { EmptyRoster } from '../onboarding/illustrations';
 import { activeWorkspace, fetchMe, getMember, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
@@ -486,14 +487,20 @@ export function MembersPage(): React.JSX.Element {
             onClose={() => setAddOpen(false)}
             client={client}
             workspaceId={workspace.workspace_id}
-            onInvited={() => setReloadKey((key) => key + 1)}
+            onInvited={() => {
+              setReloadKey((key) => key + 1);
+              requestOptimisticStepComplete('invite_member_or_add_agent'); // §1.2.2 乐观推进步骤 2
+            }}
           />
           <AgentWizard
             open={wizardOpen}
             onClose={() => setWizardOpen(false)}
             client={client}
             workspaceId={workspace.workspace_id}
-            onSaved={() => setReloadKey((key) => key + 1)}
+            onSaved={() => {
+              setReloadKey((key) => key + 1);
+              requestOptimisticStepComplete('invite_member_or_add_agent'); // §1.2.2 O9:加 agent 完成 → 步骤 2
+            }}
           />
           {confirm !== null ? (
             <RemoveMemberDialog

@@ -1,13 +1,12 @@
 {
   "locale": "en",
-  "version": "4331f4f1",
+  "version": "d51d42c4",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
     "a11y.dismiss": "Dismiss",
     "a11y.languageToggle": "Change language",
     "a11y.notifications": "Notifications",
-    "a11y.onboarding.card": "Getting started checklist",
     "a11y.openHelp": "Open keyboard shortcuts",
     "a11y.openPalette": "Open command palette",
     "a11y.sidebar": "Sidebar navigation",
@@ -1328,7 +1327,6 @@
     "onboarding.autoBadge": "Auto-completed",
     "onboarding.completedBadge": "Done",
     "onboarding.dismiss": "Don't show again",
-    "onboarding.dismissedNote": "The getting-started checklist is hidden.",
     "onboarding.empty.automation.action": "New autopilot",
     "onboarding.empty.automation.description": "Let autopilots dispatch work to agents on a schedule or event.",
     "onboarding.empty.automation.title": "No autopilots yet",
@@ -1980,6 +1978,7 @@
     "dataJobs.export.runningHint": "The export runs in the background; you can close this dialog — you'll be notified when it finishes.",
     "dataJobs.export.download": "Download export",
     "dataJobs.export.failedToast": "Export failed",
-    "dataJobs.page.loading": "Loading data jobs…"
+    "dataJobs.page.loading": "Loading data jobs…",
+    "onboarding.restoreError": "Could not restore the checklist. Please try again."
   }
 }

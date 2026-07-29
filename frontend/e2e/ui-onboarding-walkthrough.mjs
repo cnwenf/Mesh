@@ -1,7 +1,10 @@
 /**
- * Onboarding UI 真人走查(真实全栈:compose API/worker/gateway + Vite 前端)。
+ * Onboarding UI 真人走查(真实全栈:compose API/worker/gateway + 同源 SPA 前门)。
  * 清单渲染 / CTA 深链 / 空状态 / 自动完成实时刷新 / dismiss-restore / 庆祝态。
  * 存证截图 → e2e/evidence/onboarding/。
+ *
+ * 手工脚本(manual-only,未接 CI):需先 `docker compose up -d --build` 起全栈
+ * (本脚本假设 API :18000 / 前端 :13001 的隔离端口组合),再 `node e2e/ui-onboarding-walkthrough.mjs`。
  */
 import { rm } from 'node:fs/promises';
 import { mkdirSync as mkdir } from 'node:fs';
@@ -103,7 +106,12 @@ try {
   await page.getByTestId('onboarding-cta-create_first_issue').click();
   await page.waitForTimeout(1000);
   log('cta3 →', page.url());
-  if (!page.url().includes('/board')) throw new Error('step3 CTA did not deeplink to /board');
+  if (!page.url().includes('/issues?create=1')) throw new Error('step3 CTA did not deeplink to create-issue entry');
+  // 步骤 4 CTA:无 issue 时回退看板;建 issue 后指向 issue 详情(分派/@ composer,§1.2.1)
+  await page.getByTestId('onboarding-cta-dispatch_or_mention_agent').click();
+  await page.waitForTimeout(1000);
+  log('cta4(no issue)→', page.url());
+  if (!page.url().includes('/board')) throw new Error('step4 CTA fallback did not deeplink to /board');
 
   // 6. 看板空状态四要素(插画 + 文案 + 主操作)
   await shot('02-board-empty-state.png');
@@ -122,15 +130,16 @@ try {
   await page.waitForTimeout(2000);
   log('agent created via roster wizard');
 
-  // 步骤 2 自动完成(实时帧或轮询;等待最多 20s)
+  // 步骤 2 完成:空状态主操作成功后乐观置位(§1.2.2 末注;completed_via=manual,
+  // 服务端 member.added 事件经完成守卫复核收敛)——断言步骤呈完成态(✓)
   await page.waitForFunction(
     () => {
-      const el = document.querySelector('[data-testid="onboarding-auto-badge-invite_member_or_add_agent"]');
+      const el = document.querySelector('[data-testid="onboarding-check-invite_member_or_add_agent"]');
       return el !== null;
     },
     { timeout: 20000 },
   );
-  log('step2 auto-completed via member.added event chain');
+  log('step2 completed (optimistic advancement from empty-state action)');
   await shot('03-step2-auto-completed.png');
 
   // 8. 真实 issue + 真实分派(agent 触发执行)→ 步骤 3/4 经 outbox 事件链自动完成
@@ -178,6 +187,14 @@ try {
   );
   log('step4 auto-completed via execution.queued (trigger owner = me)');
   await shot('04-steps-auto-progress.png');
+
+  // 有 issue 后步骤 4 CTA 深链 issue 详情(分派 assignee / @ 提及 composer 所在)
+  await page.getByTestId('onboarding-cta-dispatch_or_mention_agent').click();
+  await page.waitForTimeout(1000);
+  log('cta4(with issue)→', page.url());
+  if (!page.url().match(/\/issues\//)) throw new Error('step4 CTA did not deeplink to issue detail');
+  await page.goBack();
+  await page.waitForTimeout(800);
 
   // 9. dismiss → 隐藏 → 帮助菜单 restore → 重现
   await page.getByTestId('onboarding-dismiss').click();

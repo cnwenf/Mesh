@@ -99,20 +99,21 @@ async def test_workspace_creation_seeds_owner_checklist(client):
     assert steps["invite_member_or_add_agent"]["status"] == "pending"
 
 
-async def test_state_workspace_gate_404_matrix(client):
+async def test_state_workspace_gate_error_matrix(client):
     token = await _login(client, f"gate-{uuid.uuid4().hex[:8]}@e2e.mesh")
-    # Missing workspace_id.
+    # workspace_id 缺失 / 非法 → 400 validation_error(onboarding.md §3.3 参数校验)。
     r = await client.get("/api/v1/onboarding/state", headers=_h(token))
-    assert r.status_code == 404
-    assert r.json()["error"]["code"] == "not_found"
-    # Malformed workspace_id — same 404, no shape leak.
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "validation_error"
     r = await client.get("/api/v1/onboarding/state?workspace_id=nope", headers=_h(token))
-    assert r.status_code == 404
-    # Foreign workspace — same 404 (membership gate, no existence leak).
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "validation_error"
+    # 合法 UUID 但非成员 → 404 not_found(§5.3 不泄漏存在性,成员资格门裁决)。
     other = await _login(client, f"other-{uuid.uuid4().hex[:8]}@e2e.mesh")
     foreign_ws = await _ws(client, other, f"fo-{uuid.uuid4().hex[:8]}")
     r = await client.get(f"/api/v1/onboarding/state?workspace_id={foreign_ws}", headers=_h(token))
     assert r.status_code == 404
+    assert r.json()["error"]["code"] == "not_found"
 
 
 async def test_manual_complete_and_invalid_step_key(client):

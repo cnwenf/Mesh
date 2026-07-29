@@ -13,6 +13,7 @@ import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { useSettingsStore } from '../../state/settingsStore';
+import { BOARD_PATH } from '../onboarding/deeplinks';
 import { EmptyInboxTray } from '../onboarding/illustrations';
 import {
   archiveNotification,
@@ -203,7 +204,7 @@ export function InboxPage(): React.JSX.Element {
             <Button
               size="sm"
               data-testid="inbox-empty-action"
-              onClick={() => navigate('/board')}
+              onClick={() => navigate(BOARD_PATH)}
             >
               {t('onboarding.empty.inbox.action')}
             </Button>

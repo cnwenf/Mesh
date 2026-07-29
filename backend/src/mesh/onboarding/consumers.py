@@ -46,13 +46,13 @@ from mesh.db.models.onboarding import (
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
-from mesh.onboarding.service import (
-    complete_step,
-    ensure_seeded,
+from mesh.onboarding.attribution import (
     evaluate_agent_reply_notification,
-    reconcile_state,
     resolve_execution_trigger_member,
 )
+from mesh.onboarding.completion import complete_step
+from mesh.onboarding.reconcile import reconcile_state
+from mesh.onboarding.service import ensure_seeded
 
 logger = logging.getLogger("mesh.onboarding.consumers")
 

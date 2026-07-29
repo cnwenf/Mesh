@@ -65,8 +65,6 @@ from mesh.errors import (
 )
 from mesh.favorites.routes import router as favorites_router
 from mesh.favorites.service import FavoritesService
-from mesh.onboarding.routes import router as onboarding_router
-from mesh.onboarding.service import OnboardingService
 from mesh.issue.bulk import BulkService
 from mesh.issue.channels import register_issue_checkers
 from mesh.issue.dependencies import DependencyService
@@ -81,6 +79,8 @@ from mesh.labels.routes import router as label_router
 from mesh.labels.service import LabelService
 from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
+from mesh.onboarding.routes import router as onboarding_router
+from mesh.onboarding.service import OnboardingService
 from mesh.project.channels import register_resource_checkers
 from mesh.project.routes import router as project_router
 from mesh.project.service import ProjectService

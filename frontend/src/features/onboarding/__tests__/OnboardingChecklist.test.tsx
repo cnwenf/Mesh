@@ -82,6 +82,11 @@ function stubApi(overrides: Record<string, unknown> = {}): RoutedCalls {
     if (url.includes('/onboarding/dismiss')) {
       return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: '2026-07-25T08:30:00Z' } } });
     }
+    if (url.includes('/issues')) {
+      return fakeResponse({
+        body: { data: [{ id: 'iss-1', title: 'T', identifier: 'WS-1' }], next_cursor: null },
+      });
+    }
     if (url.includes('/members')) return fakeResponse({ body: ROSTER });
     return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nope' } } });
   }) as typeof fetch;
@@ -105,7 +110,7 @@ function renderChecklist(): RoutedCalls {
 
 function LocationProbe(): React.JSX.Element {
   const location = useLocation();
-  return <span data-testid="location-probe">{location.pathname}</span>;
+  return <span data-testid="location-probe">{location.pathname + location.search}</span>;
 }
 
 beforeEach(() => vi.unstubAllGlobals());
@@ -163,7 +168,11 @@ describe('OnboardingChecklist', () => {
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/members');
 
     await user.click(screen.getByTestId('onboarding-cta-create_first_issue'));
-    expect(screen.getByTestId('location-probe')).toHaveTextContent('/board');
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues?create=1');
+
+    // 步骤 4 深链工作区最新 issue 详情(分派 assignee / @ composer 所在,§1.2.1)
+    await user.click(screen.getByTestId('onboarding-cta-dispatch_or_mention_agent'));
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/iss-1');
 
     await user.click(screen.getByTestId('onboarding-cta-see_agent_reply_in_inbox'));
     expect(screen.getByTestId('location-probe')).toHaveTextContent('/inbox');

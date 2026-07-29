@@ -205,6 +205,8 @@ describe('ImportWizard full flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     expect(screen.queryByTestId('validate-summary')).toBeNull();
+    // busy 期间按钮 isLoading 禁用;待其恢复可点再触发下一次(防满载机竞态)。
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
 
     request.mockRejectedValueOnce(new Error('network down'));
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));

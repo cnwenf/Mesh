@@ -6,7 +6,9 @@
  * - 实时:经 useRealtimeContext() 订阅 member:{member_id}:onboarding,本频道任何
  *   onboarding.progress/completed 帧 → 整拉 GET state(进度真源在数据库,§3.7);
  * - 降级:实时上下文为 null(shell 外)时 30s 轮询 GET state(§3.7 功能等价);
- * - 写操作(dismiss/restore/completeStep)后一律重拉——数据库是唯一真源,不做乐观改写。
+ * - 写操作(dismiss/restore/completeStep)后一律重拉——数据库是唯一真源;
+ * - 空状态主操作完成的乐观推进(§1.2.2):本地即时置位 + POST 手动完成 + 失败回滚,
+ *   领域事件经服务端完成守卫复核收敛。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, errorToI18nKey, getToken } from '../../api';
@@ -14,8 +16,10 @@ import { MeshApiError } from '../../api/errors';
 import { env } from '../../env';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
+import { listIssues } from '../issues/api';
 import type { HumanProfile } from '../members/types';
-import { onOnboardingExternalChange } from './notify';
+import { onOnboardingExternalChange, onStepOptimisticRequest } from './notify';
+import type { StepOptimisticRequest } from './notify';
 import {
   completeOnboardingStep,
   dismissOnboarding,
@@ -51,6 +55,8 @@ export interface UseOnboardingResult {
   readonly workspaceId: string | null;
   readonly memberId: string | null;
   readonly workspaceSlug: string | null;
+  /** 工作区最新 issue id(步骤 4 共享深链用;无 issue 为 null)。 */
+  readonly latestIssueId: string | null;
   readonly dismiss: () => Promise<void>;
   readonly restore: () => Promise<void>;
   readonly completeStep: (stepKey: OnboardingStepKey) => Promise<void>;
@@ -68,6 +74,7 @@ export function useOnboarding(): UseOnboardingResult {
   const [loading, setLoading] = useState(true);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [latestIssueId, setLatestIssueId] = useState<string | null>(null);
 
   // 派生活跃工作区与当前成员(与 useInboxContext 同口径,多取 slug 供 CTA 深链)。
   useEffect(() => {
@@ -125,9 +132,67 @@ export function useOnboarding(): UseOnboardingResult {
 
   const refetch = useCallback(() => setReloadKey((key) => key + 1), []);
 
+  // 工作区最新 issue(§1.2.1 步骤 4 共享深链 → issue 详情的分派/@ composer)。
+  // 随 reloadKey 刷新:建 issue 后步骤 4 CTA 即指向真实 issue。
+  useEffect(() => {
+    if (workspaceId === null) return;
+    let cancelled = false;
+    void listIssues(client, workspaceId, { limit: 1 })
+      .then((page) => {
+        if (!cancelled) setLatestIssueId(page.data[0]?.id ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setLatestIssueId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId, reloadKey]);
+
   // 帮助菜单 / 命令面板的恢复不经本 hook 的写路径且无实时帧 → 订阅模块内
   // 变更广播,恢复成功后即时重拉(onboarding.md §4.2 流程 3)。
   useEffect(() => onOnboardingExternalChange(refetch), [refetch]);
+
+  // 空状态主操作完成 → 乐观推进对应步骤(§1.2.2 末注 / §5.1「乐观 UI + 服务端
+  // 领域事件复核」):本地即时置位 + POST 手动完成,失败回滚本地置位,成功后重拉
+  // 以服务端为真;领域事件到达经完成守卫收敛(手动/自动至多一次)。
+  const handleOptimisticRequest = useCallback(
+    (request: StepOptimisticRequest) => {
+      // 决策基于当前已渲染状态(同步可读);setState updater 只做并发安全改写。
+      if (workspaceId === null || state === null) return;
+      const target = state.steps.find((s) => s.step_key === request.stepKey);
+      if (target === undefined || target.status !== 'pending') return; // 已完成 → 交由服务端领域事件
+      const rollback = state;
+      setState((prev) => {
+        if (prev === null) return prev;
+        const current = prev.steps.find((s) => s.step_key === request.stepKey);
+        if (current === undefined || current.status !== 'pending') return prev;
+        const steps = prev.steps.map((s) =>
+          s.step_key === request.stepKey
+            ? {
+                ...s,
+                status: 'completed' as const,
+                completed_via: 'manual' as const,
+                completed_at: new Date().toISOString(),
+              }
+            : s,
+        );
+        return {
+          ...prev,
+          steps,
+          progress: { ...prev.progress, completed: prev.progress.completed + 1 },
+        };
+      });
+      void completeOnboardingStep(client, workspaceId, request.stepKey)
+        .then(() => refetch())
+        .catch((err: unknown) => {
+          setState(rollback); // 回滚乐观置位
+          setErrorKey(err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription');
+        });
+    },
+    [client, workspaceId, refetch, state],
+  );
+  useEffect(() => onStepOptimisticRequest(handleOptimisticRequest), [handleOptimisticRequest]);
 
   // 实时订阅:本频道任何 onboarding.* 帧 → 重拉(DB 是真源,最简正确合并)。
   useEffect(() => {
@@ -183,6 +248,7 @@ export function useOnboarding(): UseOnboardingResult {
     workspaceId,
     memberId,
     workspaceSlug,
+    latestIssueId,
     dismiss,
     restore,
     completeStep,

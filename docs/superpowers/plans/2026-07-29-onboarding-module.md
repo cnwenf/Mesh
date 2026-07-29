@@ -17,7 +17,7 @@
 - 末步仅 `notification.read` 驱动;严格按 `trigger_member_id` 归属;evidence 四元组 `{execution_id, comment_id, notification_id, trigger_member_id}`;aha 仅触发者置位、仅置一次。
 - agent 成员不播种清单。
 - UT 覆盖率整体与新增代码均 ≥ 90%(backend `pytest --cov-fail-under=90`;frontend `test:coverage` 90% 门)。
-- git 身份 `cnwenf <cnwenf@outlook.com>`;提交无 Co-Authored-By;分支/代码/文档不得暴露参考来源。
+- git 身份 `cnwenf <cnwenf@outlook.com>`;提交无 Co-Authored-By。
 - i18n:en + zh-CN 键集 parity,djb2 `version` 重算写入两个 catalog JSON。
 - agent 创建入口唯一为成员名册(`tests/docs/check_roster_entry.py` CI 防回归)。
 

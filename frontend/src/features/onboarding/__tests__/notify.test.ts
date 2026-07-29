@@ -2,7 +2,12 @@
  * 模块内变更广播测试(onboarding.md §4.2 流程 3:恢复后清单即时重现)。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { notifyOnboardingExternalChange, onOnboardingExternalChange } from '../notify';
+import {
+  notifyOnboardingExternalChange,
+  onOnboardingExternalChange,
+  onStepOptimisticRequest,
+  requestOptimisticStepComplete,
+} from '../notify';
 
 describe('onOnboardingExternalChange / notifyOnboardingExternalChange', () => {
   it('notifies every subscriber exactly once per broadcast', () => {
@@ -34,5 +39,23 @@ describe('onOnboardingExternalChange / notifyOnboardingExternalChange', () => {
     expect(() => notifyOnboardingExternalChange()).not.toThrow();
     expect(selfRemoving).toHaveBeenCalledTimes(1);
     expect(later).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('onStepOptimisticRequest / requestOptimisticStepComplete(§1.2.2 O9)', () => {
+  it('broadcasts the step key to every subscriber', () => {
+    const a = vi.fn();
+    const b = vi.fn();
+    const offA = onStepOptimisticRequest(a);
+    onStepOptimisticRequest(b);
+
+    requestOptimisticStepComplete('create_first_issue');
+    expect(a).toHaveBeenCalledWith({ stepKey: 'create_first_issue' });
+    expect(b).toHaveBeenCalledWith({ stepKey: 'create_first_issue' });
+
+    offA();
+    requestOptimisticStepComplete('invite_member_or_add_agent');
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledWith({ stepKey: 'invite_member_or_add_agent' });
   });
 });

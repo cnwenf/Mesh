@@ -10,7 +10,7 @@ import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
-import { notifyOnboardingExternalChange } from '../notify';
+import { notifyOnboardingExternalChange, requestOptimisticStepComplete } from '../notify';
 import { ONBOARDING_POLL_INTERVAL_MS, useOnboarding } from '../useOnboarding';
 
 const ME = {
@@ -97,6 +97,11 @@ function routedFetch(): { fetchImpl: typeof fetch; routed: RoutedStub } {
         body: {
           data: { step_key: 'create_first_issue', status: 'completed', completed_via: 'manual', completed_at: '2026-07-25T08:00:00Z' },
         },
+      });
+    }
+    if (url.includes('/issues')) {
+      return fakeResponse({
+        body: { data: [{ id: 'iss-1', title: 'T', identifier: 'WS-1' }], next_cursor: null },
       });
     }
     if (url.includes('/members')) return fakeResponse({ body: ROSTER });
@@ -340,4 +345,96 @@ describe('useOnboarding', () => {
     await waitFor(() => expect(result.current.errorKey).toBe('state.errorDescription'));
     expect(result.current.workspaceId).toBeNull();
   });
+
+  it('derives the latest issue id for the step-4 shared deeplink', async () => {
+    const { fetchImpl } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding(), { wrapper: withRealtime });
+    await waitFor(() => expect(result.current.latestIssueId).toBe('iss-1'));
+  });
+
+  it('optimistically completes a step on request, POSTs, then refetches (§1.2.2)', async () => {
+    const { fetchImpl, routed } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding(), { wrapper: withRealtime });
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    const loadsBefore = routed.stateLoads();
+
+    act(() => {
+      requestOptimisticStepComplete('create_first_issue');
+    });
+    // 本地即时置位(乐观)
+    expect(
+      result.current.state?.steps.find((s2) => s2.step_key === 'create_first_issue')?.status,
+    ).toBe('completed');
+    // POST 手动完成 + 成功后重拉(服务端为真)
+    await waitFor(() =>
+      expect(
+        routed.calls.some((call) =>
+          call.url.includes('/onboarding/steps/create_first_issue/complete'),
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(routed.stateLoads()).toBe(loadsBefore + 1));
+  });
+
+  it('rolls back the optimistic mark when the manual-complete POST fails', async () => {
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/members')) return fakeResponse({ body: ROSTER });
+      if (url.includes('/issues')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      if (method === 'POST' && url.includes('/onboarding/steps/')) {
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      }
+      return fakeResponse({ body: { data: stateBody(1) } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding());
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+
+    act(() => {
+      requestOptimisticStepComplete('create_first_issue');
+    });
+    // 失败 → 回滚至快照(pending)+ errorKey
+    await waitFor(() =>
+      expect(
+        result.current.state?.steps.find((s2) => s2.step_key === 'create_first_issue')?.status,
+      ).toBe('pending'),
+    );
+    expect(result.current.errorKey).toBe('error.internal_error');
+  });
+
+
+  it('ignores optimistic requests for an already-completed step (guard, no POST)', async () => {
+    const { fetchImpl, routed } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding(), { wrapper: withRealtime });
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    const callsBefore = routed.calls.length;
+
+    act(() => {
+      // stateBody(1) 中 create_workspace 已 completed → 守卫短路,不发 POST
+      requestOptimisticStepComplete('create_workspace');
+    });
+    await Promise.resolve();
+    expect(routed.calls.length).toBe(callsBefore);
+    expect(
+      result.current.state?.steps.find((s2) => s2.step_key === 'create_workspace')?.completed_via,
+    ).toBe('auto'); // 未被改写
+  });
+
+  it('ignores async derivation results after unmount (cancel guards)', async () => {
+    const { fetchImpl } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result, unmount } = renderHook(() => useOnboarding());
+    expect(result.current.loading).toBe(true);
+    unmount(); // 派生/加载在途时卸载 → cancelled 分支静默丢弃结果
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(result.current.state).toBeNull();
+  });
+
 });

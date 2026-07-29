@@ -10,32 +10,13 @@ import { useNavigate } from 'react-router';
 import { Button } from '../../design';
 import { useT } from '../../i18n';
 import { AhaCelebration } from './illustrations';
-import type { OnboardingState, OnboardingStep, OnboardingStepKey } from './types';
+import { stepDeeplink } from './deeplinks';
+import type { OnboardingState, OnboardingStep } from './types';
 import { STEP_KEYS } from './types';
 import { useOnboarding } from './useOnboarding';
 import './onboarding.css';
 
 const PERCENT_BASE = 100;
-
-interface StepDeeplinkProps {
-  readonly workspaceSlug: string | null;
-}
-
-/** 激活路径五步 CTA 深链(§1.2.1 深链既有向导目录,一律落地既有页面,不另建向导)。 */
-function stepDeeplink(stepKey: OnboardingStepKey, props: StepDeeplinkProps): string {
-  switch (stepKey) {
-    case 'create_workspace':
-      return props.workspaceSlug !== null ? `/w/${props.workspaceSlug}/settings` : '/settings';
-    case 'invite_member_or_add_agent':
-      return '/members';
-    case 'create_first_issue':
-      return '/board';
-    case 'dispatch_or_mention_agent':
-      return '/board';
-    case 'see_agent_reply_in_inbox':
-      return '/inbox';
-  }
-}
 
 interface StepRowProps {
   readonly step: OnboardingStep;
@@ -92,12 +73,13 @@ function StepRow(props: StepRowProps): React.JSX.Element {
 interface ChecklistCardProps {
   readonly state: OnboardingState;
   readonly workspaceSlug: string | null;
+  readonly latestIssueId: string | null;
   readonly onDismiss: () => void;
 }
 
 function ChecklistCard(props: ChecklistCardProps): React.JSX.Element {
   const t = useT();
-  const { state, workspaceSlug, onDismiss } = props;
+  const { state, workspaceSlug, latestIssueId, onDismiss } = props;
   const { completed, total } = state.progress;
   const percent = total === 0 ? 0 : Math.round((completed / total) * PERCENT_BASE);
   const stepsByKey = new Map(state.steps.map((step) => [step.step_key, step]));
@@ -142,7 +124,7 @@ function ChecklistCard(props: ChecklistCardProps): React.JSX.Element {
               key={key}
               step={step}
               highlighted={key === firstPendingKey}
-              deeplink={stepDeeplink(key, { workspaceSlug })}
+              deeplink={stepDeeplink(key, { workspaceSlug, latestIssueId })}
             />
           );
         })}
@@ -181,7 +163,7 @@ function AhaCard(props: AhaCardProps): React.JSX.Element {
  */
 export function OnboardingChecklist(): React.JSX.Element | null {
   const navigate = useNavigate();
-  const { state, loading, dismiss, workspaceSlug } = useOnboarding();
+  const { state, loading, dismiss, workspaceSlug, latestIssueId } = useOnboarding();
 
   if (loading || state === null || state.dismissed_at !== null) return null;
 
@@ -198,6 +180,7 @@ export function OnboardingChecklist(): React.JSX.Element | null {
     <ChecklistCard
       state={state}
       workspaceSlug={workspaceSlug}
+      latestIssueId={latestIssueId}
       onDismiss={() => void dismiss()}
     />
   );

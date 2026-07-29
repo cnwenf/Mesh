@@ -23,6 +23,7 @@ import { createIssue, workspaceIssuesChannel } from '../issues/api';
 import type { CreateIssueBody, IssuePriority } from '../issues/types';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
 import { EmptyBoardColumns } from '../onboarding/illustrations';
 import {
   createView,
@@ -438,7 +439,7 @@ export function BoardPage(): React.JSX.Element {
               <Button
                 variant="primary"
                 data-testid="board-empty-new-issue"
-                onClick={() => navigate('/issues?create=1')}
+                onClick={() => navigate(CREATE_ISSUE_PATH)}
               >
                 {t('onboarding.empty.board.action')}
               </Button>

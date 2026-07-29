@@ -15,7 +15,13 @@ import type { RealtimeClient } from '../../../realtime';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
+import { requestOptimisticStepComplete } from '../../onboarding/notify';
 import { IssuesPage } from '../IssuesPage';
+
+vi.mock('../../onboarding/notify', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../onboarding/notify')>();
+  return { ...actual, requestOptimisticStepComplete: vi.fn() };
+});
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
@@ -163,6 +169,7 @@ function queueInitialLoad(...extra: ReturnType<typeof fakeResponse>[]): FetchStu
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  vi.mocked(requestOptimisticStepComplete).mockClear();
 });
 
 afterEach(() => {
@@ -235,6 +242,9 @@ describe('IssuesPage', () => {
     });
     fireEvent.submit(screen.getByTestId('issue-create-form'));
     await screen.findByText('WS-3');
+    // 建 issue 成功 → 乐观推进清单步骤 3(onboarding.md §1.2.2 末注;服务端
+    // issue.created 领域事件复核收敛)
+    expect(requestOptimisticStepComplete).toHaveBeenCalledWith('create_first_issue');
   });
 
   it('opens the bulk bar on selection and bulk-deletes (§5.5)', async () => {

@@ -22,7 +22,7 @@ from mesh.api.deps import get_session
 from mesh.auth.deps import get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
 from mesh.db.models.user import User
-from mesh.errors import NotFoundError
+from mesh.errors import NotFoundError, ValidationError
 from mesh.onboarding.schemas import OnboardingResetRequest
 from mesh.onboarding.service import OnboardingService
 
@@ -39,13 +39,16 @@ def _service(request: Request) -> OnboardingService:
 
 
 def _workspace_uuid(raw: str | None) -> uuid.UUID:
+    # §3.3:workspace_id 缺失/非法 = 400 validation_error(参数校验);合法 UUID
+    # 但非成员 = 404 not_found(不泄漏存在性,§5.3)由成员资格门裁决。
     if not raw:
-        raise NotFoundError(_WORKSPACE_NOT_FOUND)
+        raise ValidationError("workspace_id is required", details={"field": "workspace_id"})
     try:
         return uuid.UUID(raw)
     except ValueError as exc:
-        # Never leak which id shapes exist (README §6.14).
-        raise NotFoundError(_WORKSPACE_NOT_FOUND) from exc
+        raise ValidationError(
+            "invalid workspace_id", details={"field": "workspace_id"}
+        ) from exc
 
 
 async def _self_context(

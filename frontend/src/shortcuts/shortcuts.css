@@ -121,3 +121,9 @@
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
+
+.mesh-shortcut-help__restore-error {
+  margin-block-start: var(--space-2);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+}
