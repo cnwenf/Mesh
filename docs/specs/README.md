@@ -221,6 +221,11 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 22 | [cli.md](features/cli.md) | 平台能力 | `mesh` CLI 命令族(REST 瘦客户端)、PAT/设备码鉴权、日志 SSE 流式、导入导出联动、退出码契约、OpenAPI 3.1 |
 | 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令 |
 
+runtime 的 Server 协议与数据模型以
+[runtime.md](features/runtime.md) 为唯一权威；本地执行进程的组件边界、CLI
+适配、任务隔离、预算熔断、部署和真实 LLM E2E 见配套设计
+[daemon-executor.md](daemon-executor.md)。
+
 调研原始记录见 [`../research/`](../research/)(每模块一份,功能 / 数据模型 / 接口 / UI / UX 四维度)。
 
 ---
