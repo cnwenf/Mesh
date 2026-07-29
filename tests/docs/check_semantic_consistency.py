@@ -162,31 +162,32 @@ def check_login_example(text: str) -> list[str]:
     return violations
 
 
-SESSIONS_REGISTRY_REQUIRED_ROWS = (
-    "POST /api/v1/auth/register",
-    "POST /api/v1/auth/login",
-    "POST /api/v1/auth/device/token",
-    "POST /api/v1/auth/device/approve",  # R7-H1:实查 sessions,必须登记
-    "POST /api/v1/auth/device/deny",
-    "POST /api/v1/auth/refresh",
-    "POST /api/v1/auth/logout",          # 独立行(logout-all 不得顶替)
-    "POST /api/v1/auth/logout-all",
-    "POST /api/v1/auth/reset-password",
-    "POST /api/v1/auth/change-password",
-    "POST /api/v1/auth/reauth",
-    "GET /api/v1/auth/token",            # GET/DELETE 须分别成行
-    "DELETE /api/v1/auth/token",
-    "GET /api/v1/sessions",
-    "DELETE /api/v1/sessions/{id}",
-)
-SESSIONS_REGISTRY_REQUIRED_CONTAINS = (
-    "/api/v1/auth/oauth/{provider}/callback",  # 允许 GET/POST 合并写法
-    "/api/v1/auth/oauth/{provider}/start",
-    "/ws",                                      # WS 握手鉴权行
-    "HTML 入口",                                 # 个性化 HTML 入口中间件行
-    "step-up",                                  # step-up 闸门中间件行
-)
-# step-up 闸门行的精确受保护路由集合(R7-H2/M2:三元组 purpose 校验)
+# 规则 Z canonical row → 精确 read/write purpose 映射(R8-M2:method/path/purpose 三元组,
+# 具体诊断码 Z:MISSING_ROW / Z:PURPOSE / Z:MISSING_CONTAINS / Z:GATE_*)
+REGISTRY_ROW_PURPOSE: dict[str, tuple[str, ...]] = {
+    "POST /api/v1/auth/register": ("写",),
+    "POST /api/v1/auth/login": ("写",),
+    "POST /api/v1/auth/device/token": ("写",),
+    "POST /api/v1/auth/device/approve": ("读",),
+    "POST /api/v1/auth/device/deny": ("读",),
+    "POST /api/v1/auth/refresh": ("读", "写"),
+    "POST /api/v1/auth/logout": ("读", "写"),
+    "POST /api/v1/auth/logout-all": ("读", "写"),
+    "POST /api/v1/auth/reset-password": ("读", "写"),
+    "POST /api/v1/auth/change-password": ("读", "写"),
+    "POST /api/v1/auth/reauth": ("读", "写"),
+    "GET /api/v1/auth/token": ("读",),
+    "DELETE /api/v1/auth/token": ("写",),
+    "GET /api/v1/sessions": ("读",),
+    "DELETE /api/v1/sessions/{id}": ("写",),
+}
+# 首格按包含匹配的行(oauth 合并写法 / WS / HTML 入口)→ 必需 purpose 标记
+REGISTRY_CONTAINS_PURPOSE: dict[str, tuple[str, ...]] = {
+    "/api/v1/auth/oauth/{provider}/start": ("读", "写"),
+    "/api/v1/auth/oauth/{provider}/callback": ("读", "写"),
+    "/ws": ("读",),
+    "HTML 入口": ("读",),
+}
 STEPUP_GATE_REQUIRED_TOKENS = ("api-tokens", "2fa", "oauth")
 
 
@@ -211,39 +212,44 @@ def _registry_rows(block: str) -> list[tuple[str, str]]:
 
 
 def check_sessions_registry(text: str) -> list[str]:
-    """auth.md:sessions 生命周期登记表 method/path/purpose 三元组(R6-H2/R7-M2)。"""
+    """auth.md:sessions 登记表 method/path/purpose 精确三元组(R6-H2/R7-M2/R8-M2)。"""
     violations: list[str] = []
     start = text.find("<!-- sessions-registry:start -->")
     end = text.find("<!-- sessions-registry:end -->")
     if start < 0 or end < 0 or end < start:
-        violations.append("auth.md: 规则 Z: 缺少 sessions-registry 标记块(登记表未登记)")
+        violations.append("Z:NO_REGISTRY: auth.md 缺少 sessions-registry 标记块")
         return violations
     rows = _registry_rows(text[start:end])
-    first_cells = [first for first, _ in rows]
     purpose_by_first = {first: purpose for first, purpose in rows}
-    for required in SESSIONS_REGISTRY_REQUIRED_ROWS:
-        if required not in purpose_by_first:
-            violations.append(
-                f"auth.md: 规则 Z: 登记表缺少精确行「{required}」(同前缀条目不得顶替,method+完整路径逐条穷举)"
-            )
-        elif not ("读" in purpose_by_first[required] or "写" in purpose_by_first[required]):
-            violations.append(
-                f"auth.md: 规则 Z: 行「{required}」的 purpose 未标注读/写目的(三元组不完整)"
-            )
-    for required in SESSIONS_REGISTRY_REQUIRED_CONTAINS:
-        if not any(required in first for first in first_cells):
-            violations.append(f"auth.md: 规则 Z: 登记表缺少含「{required}」的条目")
-    # step-up 闸门行:精确受保护路由集合 + change-password 不在预闸门(R7-M1/M2)
-    gate_rows = [(f, p) for f, p in rows if "step-up" in f or "step-up" in p]
-    if not gate_rows:
-        violations.append("auth.md: 规则 Z: 缺少 step-up 闸门中间件登记行")
+    # 精确行 → 精确 read/write purpose
+    for row, markers in REGISTRY_ROW_PURPOSE.items():
+        if row not in purpose_by_first:
+            violations.append(f"Z:MISSING_ROW:{row}: 登记表缺少精确行(同前缀条目不得顶替)")
+            continue
+        purpose = purpose_by_first[row]
+        for marker in markers:
+            if marker not in purpose:
+                violations.append(f"Z:PURPOSE:{row}: purpose 应含「{marker}」标注,实际 {purpose[:40]!r}")
+    # 包含匹配行 → purpose 校验(oauth start/callback / WS / HTML 入口)
+    for token, markers in REGISTRY_CONTAINS_PURPOSE.items():
+        matched = [p for f, p in rows if token in f]
+        if not matched:
+            violations.append(f"Z:MISSING_CONTAINS:{token}: 登记表缺少含「{token}」的条目")
+            continue
+        purpose = " | ".join(matched)
+        for marker in markers:
+            if marker not in purpose:
+                violations.append(f"Z:PURPOSE:{token}: purpose 应含「{marker}」标注")
+    # step-up 闸门行:精确受保护路由集合 + change-password 不在预闸门
+    gate_purpose = " ".join(p for f, p in rows if "step-up" in f or "step-up" in p)
+    if not gate_purpose:
+        violations.append("Z:GATE_MISSING: 缺少 step-up 闸门中间件登记行")
     else:
-        gate_purpose = " ".join(p for _, p in gate_rows)
         for token in STEPUP_GATE_REQUIRED_TOKENS:
             if token not in gate_purpose:
-                violations.append(f"auth.md: 规则 Z: step-up 闸门 purpose 缺少受保护路由标记「{token}」")
+                violations.append(f"Z:GATE_TOKEN:{token}: 闸门 purpose 缺少受保护路由标记")
         if "不在预闸门" not in gate_purpose:
-            violations.append("auth.md: 规则 Z: step-up 闸门未声明 change-password 不在预闸门集合(R7-M1 口径)")
+            violations.append("Z:GATE_PRE_GATE: 闸门未声明 change-password 不在预闸门集合(R7-M1 口径)")
     return violations
 
 
@@ -256,32 +262,41 @@ CANONICAL_EXPRESSION_INDEXES = (
 
 
 def check_t38_pg_depend(text: str) -> list[str]:
-    """schema_r2_validation.sql:T38:start/end 标记截段 + 精确断言 + 阶段顺序(R7-M2)。"""
+    """schema_r2_validation.sql:T38:start/end 标记截段 + 精确断言 + 阶段顺序(R7-M2/R8-M2 具体诊断码)。"""
+    start_count = text.count("-- T38:start")
+    end_count = text.count("-- T38:end")
+    if start_count == 0 and "T38" in text:
+        return ["AA:MARKER_MISSING: 含 T38 但缺少 T38:start 标记(总览注释不得冒充 T38 段)"]
+    if start_count == 0:
+        return []
+    violations: list[str] = []
+    if start_count != 1:
+        violations.append(f"AA:MARKER_DUP:T38:start 出现 {start_count} 次,应恰好一次")
+    if end_count != 1:
+        violations.append(f"AA:MARKER_DUP:T38:end 出现 {end_count} 次,应恰好一次")
     start = text.find("-- T38:start")
     end = text.find("-- T38:end")
-    if start < 0 or end < 0 or end < start:
-        if "T38" in text:
-            return ["schema_r2_validation.sql: 规则 AA: 含 T38 但缺少唯一 T38:start/end 标记截段(总览注释不得冒充 T38 段)"]
-        return []
+    if end < start:
+        violations.append("AA:MARKER_ORDER: T38:end 在 T38:start 之前")
+        return violations
     t38 = text[start:end]
     # 存在性与顺序均仅对可执行语句判定(剔除注释行)——注释里的「断言」是假断言(R7-M2)
     code_only = "\n".join(
         line for line in t38.splitlines() if not line.lstrip().startswith("--")
     )
-    violations: list[str] = []
     if "pg_depend" not in code_only or "refobjid" not in code_only:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少 pg_depend/refobjid OID 绑定断言(可执行语句)")
+        violations.append("AA:NO_PG_DEPEND: T38 段缺少 pg_depend/refobjid OID 绑定断言(可执行语句)")
     if "v_new_bound = 9" not in code_only or "v_old_bound = 9" not in code_only:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少新/旧函数精确绑定计数断言(v_new_bound = 9 与 v_old_bound = 9,可执行语句)")
+        violations.append("AA:NO_BOUNDS: T38 段缺少 v_new_bound = 9 / v_old_bound = 9 精确绑定计数断言")
     if "v_old_deps = 0" not in code_only:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少旧函数零依赖断言(v_old_deps = 0,可执行语句)")
+        violations.append("AA:NO_OLD_DEPS: T38 段缺少 v_old_deps = 0 旧函数零依赖断言")
     if "DROP INDEX CONCURRENTLY" not in code_only:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少事务外 DROP INDEX CONCURRENTLY(生产契约删除路径)")
+        violations.append("AA:NO_DROP_INDEX: T38 段缺少事务外 DROP INDEX CONCURRENTLY")
     if "DROP FUNCTION public.mesh_search_norm_prev" not in code_only:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少旧函数实际删除(DROP FUNCTION mesh_search_norm_prev)")
+        violations.append("AA:NO_DROP_FUNCTION: T38 段缺少旧函数实际删除")
     missing = [name for name in CANONICAL_EXPRESSION_INDEXES if name not in code_only]
     if missing:
-        violations.append(f"schema_r2_validation.sql: 规则 AA: T38 段未锚定全部 9 条规范表达式索引(可执行语句),缺 {missing}")
+        violations.append(f"AA:MISSING_INDEX: T38 段未锚定全部 9 条规范表达式索引,缺 {missing}")
     # 阶段顺序:建 _next → 切换前断言 → 事务外删 _prev → 零依赖删旧
     stages = [
         ("CREATE INDEX CONCURRENTLY", "事务外建 _next 索引"),
@@ -299,9 +314,7 @@ def check_t38_pg_depend(text: str) -> list[str]:
     if len(positions) == len(stages):
         for (pos_a, label_a), (pos_b, label_b) in itertools.pairwise(positions):
             if pos_a > pos_b:
-                violations.append(
-                    f"schema_r2_validation.sql: 规则 AA: T38 阶段顺序错误——「{label_a}」应在「{label_b}」之前"
-                )
+                violations.append(f"AA:STAGE_ORDER: 「{label_a}」应在「{label_b}」之前")
     return violations
 
 
@@ -368,52 +381,70 @@ _GATE_ROW = (
 )
 
 
-def _registry_doc(rows: tuple[str, ...], gate: str = _GATE_ROW) -> str:
-    body = "".join(f"| `{row}` | **读 + 写**:目的 |\n" for row in rows)
+def _registry_doc(
+    rows: tuple[str, ...],
+    gate: str = _GATE_ROW,
+    purpose_override: dict[str, str] | None = None,
+) -> str:
+    """构造合法表格语法的登记表(各行带前导 |);purpose_override 按行覆盖 purpose 格。"""
+    overrides = purpose_override or {}
+    body = "".join(
+        f"| `{row}` | {overrides.get(row, '**读 + 写**:目的')} |\n"
+        if row not in overrides
+        else f"| `{row}` | {overrides[row]} |\n"
+        for row in rows
+    )
     tail = "".join(f"| {row} | **读**:目的 |\n" for row in _REGISTRY_TAIL_ROWS)
     return "<!-- sessions-registry:start -->\n" + body + tail + gate + "\n<!-- sessions-registry:end -->"
 
 
-SELF_TEST_BAD_FILES = {
+SELF_TEST_BAD_FILES: dict[str, tuple[str, str, str]] = {
+    # name → (filename, bad content, expected diagnostic code)
     "规则 Z(无标记块)": (
         "auth.md",
         "| POST /api/v1/auth/logout-all | 批量撤销 |  # 登记表在标记块外,视为未登记",
+        "Z:NO_REGISTRY",
     ),
     "规则 Z(同前缀缺项:logout-all 顶替 logout)": (
         "auth.md",
         _registry_doc(tuple(r for r in _REGISTRY_GOOD_ROWS if r != "POST /api/v1/auth/logout")),
+        "Z:MISSING_ROW:POST /api/v1/auth/logout",
     ),
     "规则 Z(同前缀缺项:缺 DELETE /api/v1/auth/token)": (
         "auth.md",
         _registry_doc(tuple(r for r in _REGISTRY_GOOD_ROWS if r != "DELETE /api/v1/auth/token")),
+        "Z:MISSING_ROW:DELETE /api/v1/auth/token",
     ),
     "规则 Z(缺 device/approve 登记)": (
         "auth.md",
         _registry_doc(tuple(r for r in _REGISTRY_GOOD_ROWS if r != "POST /api/v1/auth/device/approve")),
+        "Z:MISSING_ROW:POST /api/v1/auth/device/approve",
     ),
-    "规则 Z(路径正确但 purpose 错:无读/写标注)": (
+    "规则 Z(register purpose 错:写→读)": (
         "auth.md",
-        "<!-- sessions-registry:start -->\n"
-        + "".join(
-            f"| `{row}` | " + ("**读 + 写**:目的" if row != "POST /api/v1/auth/logout" else "会话管理") + " |\n"
-            for row in _REGISTRY_GOOD_ROWS
-        )
-        + "".join(f"| {row} | **读**:目的 |\n" for row in _REGISTRY_TAIL_ROWS)
-        + _GATE_ROW + "\n<!-- sessions-registry:end -->",
+        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"POST /api/v1/auth/register": "**读**:目的"}),
+        "Z:PURPOSE:POST /api/v1/auth/register",
+    ),
+    "规则 Z(callback purpose 整段为空)": (
+        "auth.md",
+        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"GET/POST /api/v1/auth/oauth/{provider}/callback": ""}),
+        "Z:PURPOSE:/api/v1/auth/oauth/{provider}/callback",
     ),
     "规则 Z(闸门缺受保护路由标记 2fa)": (
         "auth.md",
         _registry_doc(
             _REGISTRY_GOOD_ROWS,
-            gate="step-up 闸门中间件 | **读**:受保护路由 api-tokens 创建/撤销、oauth 换绑;change-password 不在预闸门集合 |",
+            gate="| step-up 闸门中间件 | **读**:受保护路由 api-tokens 创建/撤销、oauth 换绑;change-password 不在预闸门集合 |",
         ),
+        "Z:GATE_TOKEN:2fa",
     ),
     "规则 Z(闸门未声明 change-password 不在预闸门)": (
         "auth.md",
         _registry_doc(
             _REGISTRY_GOOD_ROWS,
-            gate="step-up 闸门中间件 | **读**:受保护路由 api-tokens、2fa、oauth |",
+            gate="| step-up 闸门中间件 | **读**:受保护路由 api-tokens、2fa、oauth |",
         ),
+        "Z:GATE_PRE_GATE",
     ),
     "规则 Y(跨行 refresh 字段,与历史残留同形)": (
         "auth.md",
@@ -424,14 +455,16 @@ SELF_TEST_BAD_FILES = {
             + '{ "data": { "access_token": "eyJ...",\n'
             + '            "expires_in": 900, "refresh_token": "mesh_rft_..." } }\n```\n'
         ),
+        "规则 Y:",
     ),
-    "规则 AA(总览先出现 T38、标记段缺断言)": (
+    "规则 AA(总览先出现 T38、标记段缺计数断言)": (
         "schema_r2_validation.sql",
         (
             "-- 文件头总览:T38 升级 smoke test……\n"
             "-- T38:start\nSELECT * FROM pg_depend WHERE refobjid = v_oid;\n"
             "-- 无计数/无索引集合/无删除\n-- T38:end\n"
         ),
+        "AA:NO_BOUNDS",
     ),
     "规则 AA(缺事务外 DROP INDEX CONCURRENTLY)": (
         "schema_r2_validation.sql",
@@ -442,6 +475,7 @@ SELF_TEST_BAD_FILES = {
             + "SELECT count(*) FROM pg_depend WHERE refobjid = x;\n"
             + "DROP FUNCTION public.mesh_search_norm_prev(TEXT);\n-- T38:end\n"
         ),
+        "AA:NO_DROP_INDEX",
     ),
     "规则 AA(阶段顺序错误:先删后断言)": (
         "schema_r2_validation.sql",
@@ -453,6 +487,19 @@ SELF_TEST_BAD_FILES = {
             + "".join(f"-- {name}\n" for name in CANONICAL_EXPRESSION_INDEXES)
             + "pg_depend refobjid\nDROP FUNCTION public.mesh_search_norm_prev(TEXT);\n-- T38:end\n"
         ),
+        "AA:STAGE_ORDER",
+    ),
+    "规则 AA(T38:start 重复出现)": (
+        "schema_r2_validation.sql",
+        (
+            "-- T38:start\n-- T38:start\n"
+            + "CREATE INDEX CONCURRENTLY x ON t(c);\n"
+            + "ASSERT v_new_bound = 9;\nASSERT v_old_bound = 9;\nASSERT v_old_deps = 0;\n"
+            + "DROP INDEX CONCURRENTLY idx_prev;\n"
+            + "".join(f"{name} x\n" for name in CANONICAL_EXPRESSION_INDEXES)
+            + "pg_depend refobjid\nDROP FUNCTION public.mesh_search_norm_prev(TEXT);\n-- T38:end\n"
+        ),
+        "AA:MARKER_DUP",
     ),
 }
 
@@ -467,16 +514,18 @@ def run_self_tests() -> list[str]:
         hits = scan_lines(bad_block, "<self-test>")
         if not any(rule in h for h in hits):
             failures.append(f"自测失败:{rule} 未命中其注入坏代码块(规则表达式可能已失效)")
-    for rule, (filename, bad_content) in SELF_TEST_BAD_FILES.items():
+    for rule, (filename, bad_content, expected_code) in SELF_TEST_BAD_FILES.items():
         hits = scan_lines(bad_content.splitlines(), "<self-test>") + scan_file_level(
             Path(filename), bad_content
         )
-        rule_key = rule.split("(")[0]
-        if not any(rule_key in h for h in hits):
-            failures.append(f"自测失败:{rule} 未命中其注入坏文件(文件级规则可能已失效)")
-    # 正对照:完整登记表不应触发规则 Z
+        # R8-M2:断言具体诊断码,而非「任意规则诊断」——掩盖错因的自测即缺陷
+        if not any(expected_code in h for h in hits):
+            failures.append(
+                f"自测失败:{rule} 未命中期望诊断码 {expected_code!r};实际诊断:{hits}"
+            )
+    # 正对照:完整登记表(正确 purpose)不应触发规则 Z
     good_hits = scan_file_level(Path("auth.md"), _registry_doc(_REGISTRY_GOOD_ROWS))
-    z_hits = [h for h in good_hits if "规则 Z" in h]
+    z_hits = [h for h in good_hits if h.startswith("Z:")]
     if z_hits:
         failures.append(f"自测失败:完整登记表误触发规则 Z:{z_hits}")
     return failures

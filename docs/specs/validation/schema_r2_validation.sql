@@ -3728,20 +3728,28 @@ BEGIN
   RAISE NOTICE 'PASS S2: chat_sessions.is_pinned 已删除;会话置顶经 favorites(target_type=chat_session)唯一表达';
 END $$;
 
--- oauth_transactions:一次性 OAuth 事务(auth.md §2.4.3,R7-H3:login/link/reauth 共用 callback 的目的/会话绑定)
+-- oauth_transactions:一次性 OAuth 事务(auth.md §2.4.3,R7-H3 建立,R8-H2 浏览器绑定 + R8-M1 DB 层不变量)
 CREATE TABLE oauth_transactions (
   id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  state_hash     TEXT NOT NULL UNIQUE,                        -- SHA-256(state);state 明文仅在 start 302 中出现
+  state_hash     TEXT NOT NULL UNIQUE,                        -- SHA-256(state);state 明文仅在发起响应中出现
+  browser_locator_hash TEXT NOT NULL,                         -- R8-H2:浏览器绑定 locator 的 SHA-256 哈希(callback 必须匹配,防 login CSRF)
   purpose        TEXT NOT NULL CHECK (purpose IN ('login','link','reauth')),
-  provider       TEXT NOT NULL,
-  user_id        UUID NULL REFERENCES users(id) ON DELETE CASCADE,   -- link/reauth:发起用户;login:NULL
-  initiating_sid UUID NULL,                                   -- link/reauth:发起会话(reauth 仅更新此会话)
+  provider       TEXT NOT NULL,                               -- callback 校验 URL {provider} 与本字段一致(provider mix-up 防护)
+  user_id        UUID NULL REFERENCES users(id) ON DELETE CASCADE,   -- link/reauth:发起用户;login:NULL(条件 CHECK)
+  initiating_sid UUID NULL REFERENCES sessions(id) ON DELETE CASCADE, -- R8-M1:FK link/reauth 发起会话(reauth 仅更新此会话;会话被删级联删事务)
   code_verifier  TEXT NOT NULL,                               -- PKCE verifier(生产加密存储,同 runtime_credentials 契约)
-  max_age        INT NULL,                                    -- 新鲜性约束(reauth/link 默认 0 = 强制交互)
+  max_age        INT NULL CHECK (max_age IS NULL OR max_age >= 0),  -- R8-M1:link/reauth 条件 CHECK 必填;非负
   safe_next      TEXT NULL,                                   -- 回跳目标(建事务时经 safeNextPath 守卫)
   expires_at     TIMESTAMPTZ NOT NULL,                        -- TTL(默认 10 分钟)
   consumed_at    TIMESTAMPTZ NULL,                            -- 一次性消费
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- R8-M1:purpose 条件不变量(DB 层强制,malformed transaction 建表即拒)
+  CHECK (
+       (purpose = 'login' AND user_id IS NULL AND initiating_sid IS NULL)
+    OR (purpose IN ('link','reauth') AND user_id IS NOT NULL
+                                       AND initiating_sid IS NOT NULL
+                                       AND max_age IS NOT NULL)
+  )
 );
 CREATE INDEX idx_oauth_tx_expires ON oauth_transactions (expires_at) WHERE consumed_at IS NULL;
 
@@ -3910,40 +3918,91 @@ BEGIN
   RAISE NOTICE 'PASS T36-9: authenticated_at step-up 状态机(NULL 默认/来源显式赋值/设备继承批准快照非消费时刻/窗口判据/reauth 恢复)';
 END $$;
 
--- T36-10:oauth_transactions 一次性事务语义(R7-H3:purpose 绑定 + 原子消费 + 重放拒绝)
+-- T36-10:oauth_transactions 一次性事务语义(R7-H3 建立;R8-H2 浏览器绑定/provider mix-up;R8-M1 DB 层不变量)
 DO $$
 DECLARE
   v_rows INT;
   v_sid  UUID;
+  v_sid_cli UUID;
+  v_sid_exp UUID;
+  v_uid  UUID;
 BEGIN
+  SELECT id INTO v_uid FROM users LIMIT 1;
+
   -- purpose CHECK:非法目的被拒
   BEGIN
-    INSERT INTO oauth_transactions (state_hash, purpose, provider, code_verifier, expires_at)
-    VALUES ('h-bad', 'signup', 'mock', 'v', now() + interval '10 minutes');
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, code_verifier, expires_at)
+    VALUES ('h-bad', 'loc', 'signup', 'mock', 'v', now() + interval '10 minutes');
     RAISE EXCEPTION 'T36 FAIL: 非法 purpose 未被 CHECK 拒绝';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
 
-  -- login 事务:user_id/initiating_sid 可空
-  INSERT INTO oauth_transactions (state_hash, purpose, provider, code_verifier, expires_at)
-  VALUES ('h-login', 'login', 'mock', 'v1', now() + interval '10 minutes');
-  -- reauth 事务:绑定发起会话
-  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
-  VALUES ('abababab-0000-0000-0000-000000000003', (SELECT id FROM users LIMIT 1),
-          'mesh_rft_web_reauth', 'web', now() + interval '30 days', now());
-  SELECT id INTO v_sid FROM sessions WHERE id='abababab-0000-0000-0000-000000000003';
-  INSERT INTO oauth_transactions (state_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
-  VALUES ('h-reauth', 'reauth', 'mock', (SELECT user_id FROM sessions WHERE id=v_sid), v_sid, 'v2', 0, now() + interval '10 minutes');
+  -- R8-M1 malformed transaction DB 层即拒(不只靠应用 fail-closed)
+  -- (a) login 携带 user_id → 条件 CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, code_verifier, expires_at)
+    VALUES ('h-bad-a', 'loc', 'login', 'mock', v_uid, 'v', now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: login 携带 user_id 未被条件 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
 
-  -- 原子消费:首次 1 行,重放 0 行(拒绝)
+  -- 测试用会话:web(正常)/ cli(类型不符)/ web 已过期
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000003', v_uid, 'mesh_rft_web_reauth', 'web', now() + interval '30 days', now());
+  SELECT id INTO v_sid FROM sessions WHERE id='abababab-0000-0000-0000-000000000003';
+  INSERT INTO sessions (id, user_id, token_hash, type, workspace_id, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000004', v_uid, 'mesh_rft_cli_tx', 'cli',
+          '11111111-1111-1111-1111-111111111111', now() + interval '30 days', now());
+  SELECT id INTO v_sid_cli FROM sessions WHERE id='abababab-0000-0000-0000-000000000004';
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000005', v_uid, 'mesh_rft_web_expired', 'web', now() - interval '1 minute', now());
+  SELECT id INTO v_sid_exp FROM sessions WHERE id='abababab-0000-0000-0000-000000000005';
+
+  -- (b) link 缺 initiating_sid → 条件 CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-b', 'loc', 'link', 'mock', v_uid, 'v', 0, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: link 缺 initiating_sid 未被条件 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  -- (c) max_age < 0 → CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-c', 'loc', 'reauth', 'mock', v_uid, v_sid, 'v', -1, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: max_age < 0 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  -- (d) initiating_sid FK:不存在的会话 → FK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-d', 'loc', 'reauth', 'mock', v_uid, '99999999-9999-0000-0000-000000000099', 'v', 0, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: initiating_sid 外键未拒绝不存在的会话';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  -- 合法事务:login(user_id/sid 必空)+ reauth(绑定发起会话 + locator 哈希)
+  INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, code_verifier, expires_at)
+  VALUES ('h-login', 'loc-login', 'login', 'mock', 'v1', now() + interval '10 minutes');
+  INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+  VALUES ('h-reauth', 'loc-reauth', 'reauth', 'mock', v_uid, v_sid, 'v2', 0, now() + interval '10 minutes');
+
+  -- R8-H2 浏览器绑定:攻击者 locator 不匹配 → 消费被拒(事务仍未消费)
   UPDATE oauth_transactions SET consumed_at=now()
-   WHERE state_hash='h-reauth' AND consumed_at IS NULL AND expires_at > now();
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-attacker' AND consumed_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
-  ASSERT v_rows = 1, 'T36 FAIL: 首次消费应影响 1 行';
+  ASSERT v_rows = 0, 'T36 FAIL: 攻击者 locator 不匹配应拒绝消费(login CSRF 防护)';
+  -- provider mix-up:URL provider 与事务 provider 不符 → 查无事务(拒绝)
+  ASSERT NOT EXISTS (SELECT 1 FROM oauth_transactions WHERE state_hash='h-reauth' AND provider='other-provider'),
+         'T36 FAIL: provider mix-up 校验应查无事务';
+  -- 正确 locator + provider → 原子消费 1 行;重放 0 行
   UPDATE oauth_transactions SET consumed_at=now()
-   WHERE state_hash='h-reauth' AND consumed_at IS NULL AND expires_at > now();
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-reauth' AND consumed_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
-  ASSERT v_rows = 0, 'T36 FAIL: 重放消费应影响 0 行(state 一次性,防重放/跨账号串用)';
+  ASSERT v_rows = 1, 'T36 FAIL: 正确 locator 首次消费应影响 1 行';
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-reauth' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 重放消费应影响 0 行(state 一次性,防重放)';
 
   -- 过期事务不可消费
   UPDATE oauth_transactions SET expires_at=now() - interval '1 minute' WHERE state_hash='h-login';
@@ -3952,13 +4011,33 @@ BEGIN
   GET DIAGNOSTICS v_rows = ROW_COUNT;
   ASSERT v_rows = 0, 'T36 FAIL: 过期事务不可消费';
 
-  -- reauth 仅更新发起会话:模拟 callback 重校验会话不变量后更新 authenticated_at
-  UPDATE sessions SET revoked_at=now() WHERE id=v_sid;   -- 会话已撤销 → 不变量 0 行 → reauth 拒绝
+  -- R8 reauth callback 重校验完整会话定位不变量(user_id + type + 未撤销 + 未过期)
   UPDATE sessions SET authenticated_at=now()
-   WHERE id=v_sid AND revoked_at IS NULL AND expires_at > now() AND type='web';
+   WHERE id=v_sid AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
   GET DIAGNOSTICS v_rows = ROW_COUNT;
-  ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话不得通过 reauth 更新 authenticated_at(会话定位不变量)';
-  RAISE NOTICE 'PASS T36-10: oauth_transactions(purpose CHECK/state 一次性原子消费/过期拒绝/reauth 会话不变量)';
+  ASSERT v_rows = 1, 'T36 FAIL: 正常 web 发起会话应通过完整不变量';
+  -- 类型不符(cli 会话)→ 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid_cli AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: cli 类型会话不得通过 web 不变量(type 校验)';
+  -- 会话已过期 → 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid_exp AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已过期会话不得通过不变量(expires_at 校验)';
+  -- 属主不符 → 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND user_id='99999999-9999-0000-0000-000000000099' AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 属主不符不得通过不变量(user_id 校验)';
+  -- 会话已撤销 → 0 行(往返期间撤销 → link/reauth callback 拒绝)
+  UPDATE sessions SET revoked_at=now() WHERE id=v_sid;
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话不得通过 reauth 更新 authenticated_at(revoked_at 校验)';
+  RAISE NOTICE 'PASS T36-10: oauth_transactions(purpose/条件 CHECK/FK 拒 malformed/浏览器绑定 locator 防 login CSRF/provider mix-up/原子消费与重放/过期拒绝/完整会话不变量 user_id+type+expired+revoked)';
 END $$;
 
 -- T37 前置:批量行 + ANALYZE,使前缀路径 EXPLAIN 断言稳定(选择率接近生产形态,
@@ -4327,5 +4406,5 @@ END $$;
 -- T38:end
 
 \echo '============================================================'
-\echo 'ALL R2+R3+R4+R5+R6+R7 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4+R5+R6+R7+R8 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'

@@ -31,8 +31,8 @@
 |------|------|
 | `POST /api/v1/auth/register` | **写**:注册成功**自动登录**(§4.1)——创建 `type='web'` 会话行、签发 refresh(Set-Cookie);凭据校验成功 → `authenticated_at=now()`(R6-H3) |
 | `POST /api/v1/auth/login` | **写**:密码校验成功——创建 web 会话、签发 refresh(Set-Cookie);`authenticated_at=now()`(R6-H3) |
-| `GET /api/v1/auth/oauth/{provider}/start` | **读**:发起 OAuth 往返(state + PKCE;step-up/换绑用途携带 `max_age=0`/`prompt=login` 与 purpose 参数,§5.5/R6-H3) |
-| `GET/POST /api/v1/auth/oauth/{provider}/callback` | **读 + 写**:按 `state_hash` 定位一次性 `oauth_transactions` 行并**原子消费**(R7-H3,§2.4.3),按 `purpose` 分支:`login` → 登录/自动注册并绑定、创建 web 会话(新鲜交互登录 → `authenticated_at=now()`,静默 SSO → NULL);`link` → 校验当前会话与 transaction 绑定 `user_id`/`initiating_sid` 一致后绑定 `oauth_identities`,**不创建会话/账号**;`reauth` → 重校验会话定位不变量后**仅更新该会话 `authenticated_at`**,**不创建/换绑账号** |
+| `GET /api/v1/auth/oauth/{provider}/start` | **读 + 写**:发起 OAuth 往返——**仅 `purpose ∈ {login,link}`**(reauth 事务唯一入口为 `POST /auth/reauth`,R8-H1);创建 `oauth_transactions` + 下发浏览器绑定 locator cookie(§2.4.3);`link` 需 web 会话 + freshness 闸门,`login` 公开 |
+| `GET/POST /api/v1/auth/oauth/{provider}/callback` | **读 + 写**:**不要求 Bearer**;按 §2.4.3 浏览器绑定链路:state 定位 → **provider mix-up 校验** → **locator cookie 哈希匹配(防 login CSRF:截获的 callback URL 在另一浏览器打开被拒,不建 session)** → 原子消费并清理 locator → 按 `purpose` 分支:`login` 登录/注册并建 web 会话(新鲜交互 → `authenticated_at=now()`,静默 SSO → NULL);`link`/**`reauth` 以不变量重校验发起会话 `initiating_sid`** 后绑定身份 / 仅更新该会话 `authenticated_at`,**不创建会话/账号** |
 | `POST /api/v1/auth/device/token` | **写**:设备码消费**创建 `type='cli'` 会话**(§3.1.1 INSERT sessions);`authenticated_at` **继承批准记录 `approved_authenticated_at`**(批准时从批准者浏览器会话经锁定读取,R6-H3;不得以消费时刻冒充认证),可为 NULL |
 | `POST /api/v1/auth/device/approve` | **读**(R7-H1 登记):按请求 Bearer access 的 **`sid` 经会话定位不变量**(仅 `web` 类型、未撤销、未过期、`user_id=sub`)定位批准者会话并读 `authenticated_at`(复制进 `approved_authenticated_at`);写目标为 `device_authorizations`(不写 sessions);0 行 → `401 unauthorized` |
 | `POST /api/v1/auth/device/deny` | **读**(R7-H1 登记):同上按 `sid` 经不变量定位批准者会话(仅 `web`);写目标为 `device_authorizations` |
@@ -41,7 +41,7 @@
 | `POST /api/v1/auth/logout-all` | **读 + 写**:**批量撤销**该用户全部未撤销会话 |
 | `POST /api/v1/auth/reset-password` | **读 + 写**:凭重置令牌定位 user 后**批量撤销全部会话,不建立新会话**——响应 `200 {"data":{"status":"ok"}}`,**无 Set-Cookie、无 access 正文**,用户回登录页以新密码重新登录(R7-M3 选定口径:重置后回登录页,非自动登录;无新会话即无 `authenticated_at` 赋值) |
 | `POST /api/v1/auth/change-password` | **读 + 写**:按 `sid` 经不变量定位发起 web 会话 → **事务内校验 `old_password`(即主动再认证本身,不经 `authenticated_at` 预闸门,R7-M1)→ 成功后更新该会话 `authenticated_at=now()`**、撤销其它会话 |
-| `POST /api/v1/auth/reauth` | **读 + 写**:**step-up 再认证(R6-H3 新增)**——密码用户呈递 `{password}`、启用 TOTP 用户呈递 `{totp_code}`,校验成功 → 按不变量定位的当前 web 会话 `authenticated_at=now()`;OAuth-only 用户呈递 `{method:"oauth"}` → 建 `purpose='reauth'` 的 `oauth_transactions`(§2.4.3)并返回新鲜授权 URL,**callback 重校验会话不变量后仅更新该会话**(R7-H3);**仅 web 会话可调用,PAT/agent 调用 → `403 reauth_required`** |
+| `POST /api/v1/auth/reauth` | **读 + 写**:**step-up 再认证(R6-H3 新增;R8-H1 恢复操作豁免 freshness 预闸门)**——按会话定位不变量定位 web 会话(NULL/超窗 `authenticated_at` 的会话恰为服务对象);密码 `{password}` / TOTP `{totp_code}` 校验成功 → 该会话 `authenticated_at=now()`;OAuth-only `{method:"oauth"}` → **建 `purpose='reauth'` transaction(reauth 事务唯一入口)** 返回授权 URL,callback 重校验不变量后仅更新该会话;**仅 web 会话,PAT/agent → `403 reauth_required`** |
 | `GET /api/v1/auth/token` | **读**:自省当前凭证的会话元数据 |
 | `DELETE /api/v1/auth/token` | **写**:自撤销当前会话 |
 | `GET /api/v1/sessions` | **读**:会话列表 |
@@ -268,20 +268,21 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - **爆破防护(量化)**:轮询端点**双重限速**——按来源 IP 全局限速 + 按 `device_code` 限速(阈值见 §3.6),违规返回 `429 slow_down`(携带 `Retry-After`,客户端间隔 +5s);**累计违规超限(单码 `failed_attempts > 5`)→ 立即作废该记录(`status='invalidated`)+ 审计 `auth.device_invalidated`**;`device_code` 命中后须比对 `status='approved'`(消费阶段)且未过期方可推进,pending 返回 `authorization_pending` 继续轮询;
 - **过期清理**:reaper/惰性扫描将 `expires_at < now()` 且 `status IN ('pending','approved')` 的行置 `expired`。
 
-### 2.4.3 表:`oauth_transactions`(一次性 OAuth 事务,R7-H3)
+### 2.4.3 表:`oauth_transactions`(一次性 OAuth 事务,R7-H3 建立,R8-H2 浏览器绑定链路)
 
-> login / link / reauth 三目的共用同一 callback,**必须**经本表区分目的、绑定发起会话、防重放/跨账号串用。选 **DB 实现**(与会话/审计同库同事务,可审计;Redis 替代方案放弃)。
+> login / link / reauth 三目的共用同一 callback,**必须**经本表区分目的、绑定发起浏览器与发起会话、防重放/跨账号串用/**login CSRF**。选 **DB 实现**(与会话/审计同库同事务,可审计;Redis 替代方案放弃)。
 
 | 字段 | 类型 | 约束 / 默认 | 说明 |
 |------|------|-------------|------|
 | `id` | UUID | PK,`gen_random_uuid()` | |
-| `state_hash` | TEXT | NOT NULL,UNIQUE | `state` 的 SHA-256 哈希;`state` 明文仅在 `start` 的 302 Location 中出现一次,callback 按哈希定位 |
+| `state_hash` | TEXT | NOT NULL,UNIQUE | `state` 的 SHA-256 哈希;`state` 明文仅在发起响应的 302 Location / `authorization_url` 中出现一次,callback 按哈希定位 |
+| `browser_locator_hash` | TEXT | **NOT NULL** | **浏览器绑定 locator 的 SHA-256 哈希(R8-H2)**:发起时生成 ≥128bit 随机 locator,经 `mesh_oauth_locus` cookie 下发至发起浏览器,哈希入本行;callback 必须匹配(证明回调到达发起浏览器,login CSRF 防护),见「浏览器绑定链路」 |
 | `purpose` | TEXT | NOT NULL,CHECK IN ('login','link','reauth') | 往返目的:登录 / 换绑 / step-up 再认证 |
-| `provider` | TEXT | NOT NULL | 提供商标识(与 `oauth_identities.provider` 同枚举) |
-| `user_id` | UUID | NULL,FK→users(id) ON DELETE CASCADE | `link`/`reauth`:发起用户(callback 校验会话一致);`login`:NULL |
-| `initiating_sid` | UUID | NULL | 发起会话 id(`link`/`reauth` 必填):`reauth` 成功后**仅更新此会话**;callback 校验当前会话与之一致(防跨账号/跨会话串用) |
+| `provider` | TEXT | NOT NULL | 提供商标识(与 `oauth_identities.provider` 同枚举;callback 校验 URL `{provider}` 与本字段一致,provider mix-up 防护) |
+| `user_id` | UUID | NULL,FK→users(id) ON DELETE CASCADE | `link`/`reauth`:发起用户(**条件 CHECK 必填**);`login`:**条件 CHECK 必空** |
+| `initiating_sid` | UUID | NULL,**FK→sessions(id) ON DELETE CASCADE** | 发起会话 id(**`link`/`reauth` 条件 CHECK 必填,`login` 必空**):callback 以 §1.1 会话定位不变量**重校验**此会话(未撤销/未过期/属主 == `user_id`/`type='web'`)后执行分支;会话被删 → 事务级联删除 |
 | `code_verifier` | TEXT | NOT NULL | PKCE verifier,**加密存储**(同 `runtime_credentials.encrypted_value` 契约),callback 取出随 `code` 提交提供商;随本行一次性消费 |
-| `max_age` | INT | NULL | 请求的新鲜性约束秒数(`reauth`/`link` 默认 0 = 强制交互);callback 据此校验提供商 `auth_time` |
+| `max_age` | INT | NULL,**CHECK (max_age IS NULL OR max_age >= 0)** | 新鲜性约束秒数;**`link`/`reauth` 条件 CHECK 必填**(默认 0 = 强制交互),`login` 可空;callback 据此校验提供商 `auth_time` |
 | `safe_next` | TEXT | NULL | 回调成功后回跳目标(建事务时经 `safeNextPath` 守卫,§4.1) |
 | `expires_at` | TIMESTAMPTZ | NOT NULL | TTL(默认 10 分钟) |
 | `consumed_at` | TIMESTAMPTZ | NULL | 一次性消费时刻 |
@@ -289,10 +290,32 @@ approved ──TTL 过期──► expired(未被消费即过期)
 
 索引:`uq_oauth_tx_state_hash (state_hash)`;`idx_oauth_tx_expires (expires_at) WHERE consumed_at IS NULL`(过期清理)。
 
-**约束(写死)**:
-- **原子消费**:callback 以条件更新消费——`UPDATE oauth_transactions SET consumed_at=now() WHERE id=$tx AND consumed_at IS NULL AND expires_at > now()`,**影响行数恰为 1 方可继续**;重放/并发/过期命中 0 行即拒(统一错误重定向,不区分原因);
-- **purpose 隔离**:callback 分支严格按 `purpose` 执行——`login` 只走登录/注册绑定并建会话;`link` 只绑定 `oauth_identities` 到 `user_id` 指向用户(校验当前会话 == `initiating_sid` 且会话属主 == `user_id`),不建会话/账号;`reauth` 只更新 `initiating_sid` 会话的 `authenticated_at`(重校验 §1.1 会话定位不变量后),不建/绑账号;purpose 与请求上下文不符(如 `reauth` 事务被用于登录流)→ 拒绝;
-- **新鲜性 fail-closed(R7-H3)**:`reauth` 与 `link`(过 step-up 闸门者)要求提供商 `id_token` 携带**可验证签名的 `auth_time`** 且满足 `max_age` 约束;**提供商不返回可验证签名 `auth_time` 或不支持 `max_age` → step-up 判定失败(reauth 拒绝、link 闸门不通过),绝不允许以 callback 到达时间代替主动认证**;`login` 目的不受此约束(新鲜性仅决定 `authenticated_at` 赋值,不阻断登录);
+**条件 CHECK(DB 层强制,malformed transaction 建表即拒,不只靠应用 fail-closed;R8-M1)**:
+
+```sql
+CHECK (
+     (purpose = 'login' AND user_id IS NULL AND initiating_sid IS NULL)
+  OR (purpose IN ('link','reauth') AND user_id IS NOT NULL
+                                     AND initiating_sid IS NOT NULL
+                                     AND max_age IS NOT NULL)
+)
+```
+
+**浏览器绑定链路(R8-H2 写死,start → provider → callback 凭证传递全图)**:
+
+- **发起(`GET /auth/oauth/{provider}/start` 或 `POST /auth/reauth` 的 OAuth 分支)**:服务端生成 `state`(≥128bit)+ PKCE verifier + **浏览器绑定 locator(≥128bit 随机)**;locator 经 **`Set-Cookie: mesh_oauth_locus=<locator>; HttpOnly; Secure; SameSite=Lax; Path=/api/v1/auth/oauth; Max-Age=600`** 下发——**必须 `SameSite=Lax` 而非 Strict**:提供商顶层回跳是跨站顶层导航,Strict cookie 不携带,callback 将永远拿不到 locator;**`Path` 限定 callback 路由**(不泄漏至其它路径);**该 cookie 无任何 API 能力**——仅 callback 消费时做哈希比对,不被任何其它端点读取/接受;`browser_locator_hash` 入 transaction;**多 tab 策略**:单 cookie 后发起覆盖先发起(**最后发起者胜**)——先发起 tab 的 callback 将因 locator 不匹配被拒为过期态(错误页提示重试),可接受且显式文档化;
+- **callback(`GET/POST /api/v1/auth/oauth/{provider}/callback`)不要求 Bearer**(提供商顶层回跳不携带;transaction 即一次性授权上下文;`mesh_session` 为 `SameSite=Strict` 不随跨站回跳携带,本就不作为 callback 凭证),按序执行:
+  1. `state` → `state_hash` 定位 transaction;不存在/过期/已消费 → 统一错误重定向(不区分原因,防枚举);
+  2. **provider mix-up 防护**:断言 URL 路径 `{provider}` **== `transaction.provider`**,不符即拒(分支路由完全以 transaction.provider 为准,禁止二者分叉);
+  3. **浏览器绑定校验**:读 `mesh_oauth_locus` cookie;缺失 → 拒;`SHA-256(cookie) == transaction.browser_locator_hash` 方可继续,**不符即拒**——攻击者在自己浏览器发起 login 后截获有效 callback URL 诱导受害者打开:受害者浏览器无攻击者的 locator cookie → 拒,**不建 session**(login CSRF 防护);
+  4. **原子消费**:`UPDATE oauth_transactions SET consumed_at=now() WHERE id=$tx AND consumed_at IS NULL AND expires_at > now()`,**影响行数恰为 1 方可继续**(重放/并发/过期命中 0 行即拒,统一错误重定向);同响应**清理 locator cookie**(`Set-Cookie: mesh_oauth_locus=; Max-Age=0; Path=/api/v1/auth/oauth`);
+  5. 用 `code` + 存储的 `code_verifier` 向 **transaction.provider** 换取 token;
+  6. **按 purpose 分支(严格隔离)**:
+     - `login`:解析 sub+email → 登录/注册/绑定 → 创建 web 会话(新鲜性赋值规则见下);
+     - `link`:以 `SELECT … FROM sessions WHERE id=transaction.initiating_sid AND user_id=transaction.user_id AND type='web' AND revoked_at IS NULL AND expires_at > now() FOR UPDATE` **重校验发起会话**——「当前会话」= 经不变量重校验的**发起会话**,**不是从 callback 请求新派生**(callback 无 Bearer,cookie 不随跨站回跳;0 行 → 拒,往返期间会话被撤销/过期/属主不符即失败)→ 绑定 `oauth_identities` 到 `transaction.user_id`,**不建会话/账号**;
+     - `reauth`:同款不变量重校验 `initiating_sid` → **仅更新该会话 `authenticated_at=now()`**,不建/绑账号;
+  7. 按 `safe_next`(经守卫)重定向。
+- **新鲜性 fail-closed(R7-H3)**:`reauth` 与 `link` 要求提供商 `id_token` 携带**可验证签名的 `auth_time`** 且满足 `max_age` 约束;**提供商不返回可验证签名 `auth_time` 或不支持 `max_age` → step-up 判定失败(reauth 拒绝、link 闸门不通过),绝不允许以 callback 到达时间代替主动认证**;`login` 目的不受此约束(新鲜性仅决定 `authenticated_at` 赋值,不阻断登录);
 - **过期清理**:reaper/惰性扫描将 `expires_at < now()` 且 `consumed_at IS NULL` 的行删除(短 TTL,无需保留)。
 
 ### 2.5 表:`api_tokens`(个人 / agent 访问令牌)**[Mesh 特色]**
@@ -428,13 +451,13 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | POST | `/api/v1/auth/forgot-password` | 发起重置(恒返回成功,防枚举) | ✅ |
 | POST | `/api/v1/auth/reset-password` | 凭重置令牌设新密码:**使该用户全部会话失效,不建立新会话(R7-M3 选定口径)**——成功 `200 {"data": {"status": "ok"}}`,**无 Set-Cookie、无 access 正文**,前端回登录页以新密码重新登录(不自动登录,无新会话即无 `authenticated_at` 赋值;重置令牌单次消费,§2.4.1) | ✅ |
 | POST | `/api/v1/auth/change-password` | **已登录态修改密码(§4.2,仅 web 会话)**:body `{old_password, new_password}`——先按 `sid` 经**会话定位不变量**(§1.1)定位发起 web 会话(0 行 → `401 unauthorized`),再校验旧密码(argon2id 恒定时间比较;错误 → `422 invalid_credentials`)。**本端点不经 `authenticated_at` 预闸门——事务内 `old_password` 校验通过即主动再认证本身(R7-M1 选定口径,删除与登记表互斥的「预闸门」表述)** → 校验新密码强度(复用注册策略 §5.1;弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 更新 `password_hash` + `password_changed_at=now()` + **发起会话 `authenticated_at=now()`**(step-up 唯一真源,§2.4)→ **使该用户其它 refresh 会话失效**(撤销经 §3.7/§5.6 outbox→realtime 广播);PAT 不满足本端点凭证要求(仅 web 会话,矩阵 §1.1)。限流同登录类(§3.6,(IP, 邮箱) 5 次/分钟);成功 `200 {"data": {"status": "ok"}}` | |
-| POST | `/api/v1/auth/reauth` | **step-up 再认证(R6-H3 新增,仅 web 会话)**:按 `sid` 经会话定位不变量定位当前 web 会话(0 行 → `401 unauthorized`)。① 持密码用户 body `{password}` → argon2id 校验成功 → 该会话 `authenticated_at=now()`;② 启用 TOTP 用户 body `{totp_code}` → 校验成功 → `authenticated_at=now()`;③ OAuth-only 用户 body `{method:"oauth"}` → 创建 `purpose='reauth'` 的 `oauth_transactions`(绑定发起 `sid`,§2.4.3)→ `200 {"data": {"authorization_url": …}}`(`start` 强制 `max_age=0`/`prompt=login`),**callback 原子消费 transaction、重校验会话定位不变量后仅更新该会话 `authenticated_at`,不创建/换绑账号;提供商不能返回可验证签名 `auth_time` 或不支持 `max_age` → fail-closed 拒绝本次 reauth(R7-H3)**;**PAT/agent 凭证调用 → `403 reauth_required`(`details.reason='interactive_session_required'`)**;限流同登录类(§3.6);失败 `422 invalid_credentials`;成功 `200 {"data": {"status": "ok", "authenticated_at": …}}` | |
+| POST | `/api/v1/auth/reauth` | **step-up 再认证(R6-H3 新增,仅 web 会话;R8-H1:恢复操作本身,豁免 freshness 预闸门)**:按 `sid` 经**会话定位不变量**定位当前 web 会话(**0 行 → `401 unauthorized`——撤销/过期会话不可 reauth;`authenticated_at` 为 NULL/超窗的会话恰是本端点的服务对象,不以 freshness 闸门自锁**)。① 持密码用户 body `{password}` → argon2id 校验成功 → 该会话 `authenticated_at=now()`;② 启用 TOTP 用户 body `{totp_code}` → 校验成功 → `authenticated_at=now()`;③ OAuth-only 用户 body `{method:"oauth"}` → **创建 `purpose='reauth'` 的 `oauth_transactions`(reauth 事务唯一创建入口,绑定发起 `sid`,§2.4.3)** → `200 {"data": {"authorization_url": …}}`(URL 强制 `max_age=0`/`prompt=login`),**callback 重校验会话不变量后仅更新该会话 `authenticated_at`**;**PAT/agent 凭证调用 → `403 reauth_required`(`details.reason='interactive_session_required'`)**;限流同登录类(§3.6);失败 `422 invalid_credentials`;成功 `200 {"data": {"status": "ok", "authenticated_at": …}}` | |
 | POST | `/api/v1/auth/2fa/setup` | 启用 TOTP(下发密钥 + 二维码,**验证码确认后方置 `mfa_enabled_at`**);**step-up 闸门保护(§5.5)**:仅 web 会话 + 近期 `authenticated_at` 窗口内可调用,PAT/agent → `403 reauth_required` | |
 | POST | `/api/v1/auth/2fa/disable` | 停用 TOTP(呈递验证码确认);**step-up 闸门保护**,同上 | |
 | DELETE | `/api/v1/auth/oauth/{provider}` | 解绑第三方账号(保留至少一种登录方式);**step-up 闸门保护**,同上 | |
 | POST | `/api/v1/auth/verify-email` | 验证邮箱 | ✅ |
-| GET | `/api/v1/auth/oauth/{provider}/start` | 发起第三方 OAuth 往返:**创建一次性 `oauth_transactions` 行(§2.4.3)** 绑定 `purpose ∈ {login,link,reauth}`、`state_hash`、PKCE verifier、发起 `sid`/`user_id`(link/reauth 必填,经会话定位不变量校验;`purpose=link/reauth` 须先过 step-up 闸门)、`safe_next`(经 `safeNextPath` 守卫)→ 302 提供商(`state` 明文仅此处下发;`purpose=reauth/link` 强制 `max_age=0`/`prompt=login` 保证新鲜交互) | login 公开;link/reauth 需 web 会话 |
-| GET/POST | `/api/v1/auth/oauth/{provider}/callback` | 回调:按 `state_hash` 定位 transaction,**原子消费**(`UPDATE … SET consumed_at=now() WHERE id=$tx AND consumed_at IS NULL AND expires_at>now()`,行数 1 方可继续;不存在/过期/已消费 → 统一重定向登录页错误态,不区分,防枚举)→ 用 `code` + 存存的 `code_verifier` 换 token → **按 purpose 分支**:① `login`:解析 sub+email,命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`;创建 web 会话——**仅当提供商 id_token 携带可验证签名 `auth_time` 且满足请求 `max_age`(本次往返为新鲜交互登录)→ `authenticated_at=now()`;静默 SSO 复用 → NULL;提供商不能提供可验证 `auth_time`/不支持 `max_age` → 按 `login` 仍可登录但 `authenticated_at=NULL`(step-up 不可用,fail-closed 仅约束 step-up,不阻断登录)**;② `link`:**校验当前登录会话与 transaction 绑定的 `user_id`/`initiating_sid` 一致(防跨账号串用)** → 绑定 `oauth_identities` 到该用户,**不创建会话/账号**;③ `reauth`:**重校验 `initiating_sid` 会话定位不变量(未撤销/未过期/`user_id` 一致)→ 仅更新该会话 `authenticated_at=now()`;新鲜性校验失败(无可验证 `auth_time`/不满足 `max_age`)→ fail-closed 拒绝,绝不以 callback 到达时间代替主动认证;不创建/换绑账号**;成功后按 `safe_next` 守卫重定向 | login 公开;link/reauth 由 transaction 绑定校验 |
+| GET | `/api/v1/auth/oauth/{provider}/start` | 发起第三方 OAuth 往返(**仅 `purpose ∈ {login, link}`;`reauth` 事务唯一入口为 `POST /auth/reauth`,R8-H1 单一路径**):**创建一次性 `oauth_transactions` 行(§2.4.3)** 绑定 purpose、`state_hash`、**`browser_locator_hash`(下发 `mesh_oauth_locus` HttpOnly/Secure/**SameSite=Lax**/Path=/api/v1/auth/oauth/TTL 10min 的浏览器绑定 cookie,无 API 能力)**、PKCE verifier、发起 `sid`/`user_id`(`purpose=link` 必填,经会话定位不变量 + **step-up freshness 闸门**;`purpose=login` 必空)、`safe_next`(经守卫)→ 302 提供商(`state` 明文仅此处下发;`purpose=link` 强制 `max_age=0`/`prompt=login` 保证新鲜交互) | login 公开;link 需 web 会话 + freshness |
+| GET/POST | `/api/v1/auth/oauth/{provider}/callback` | 回调(**不要求 Bearer**,transaction 即一次性授权上下文;按 §2.4.3 浏览器绑定链路按序执行):① `state_hash` 定位 transaction(不存在/过期/已消费 → 统一错误重定向);② **URL `{provider}` == `transaction.provider` 断言(provider mix-up 防护)**;③ **`mesh_oauth_locus` cookie 哈希与 `browser_locator_hash` 匹配(缺失/不符即拒——防 login CSRF:截获的 callback URL 在另一浏览器打开不建 session)**;④ 原子消费(`consumed_at IS NULL AND expires_at>now()` 条件更新,行数 1)+ 清理 locator cookie;⑤ `code` + 存存的 `code_verifier` 向 transaction.provider 换 token;⑥ **按 purpose 分支**:`login` → 登录/注册绑定 + 建 web 会话(新鲜性赋值规则,§2.4.3);`link` → **以不变量重校验 `initiating_sid` 发起会话后**绑定 `oauth_identities`,不建会话/账号;`reauth` → **重校验 `initiating_sid` 后仅更新该会话 `authenticated_at`**,不建/绑账号;⑦ `safe_next` 守卫重定向 | login 公开;link/reauth 由 transaction 绑定 + 会话不变量校验 |
 | GET | `/api/v1/sessions` | 列出我的活跃会话 | |
 | DELETE | `/api/v1/sessions/{id}` | 撤销指定会话 | |
 | GET | `/api/v1/me` | 当前用户与所属工作区列表 | |
@@ -604,7 +627,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 2. **登录(仅 Web 形态,R4-H1)**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行(`type='web'`,**`authenticated_at=now()`——密码凭据校验成功即主动认证,R6-H3**)并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,§2.4)+ 长期 refresh(存哈希入 `sessions`);**refresh 仅经 `Set-Cookie: mesh_session=…; Secure; HttpOnly; SameSite=Strict; Path=/` 下发,响应体绝无 refresh 明文;不接受调用方自报客户端形态,不提供非浏览器密码流**(CLI/API 非浏览器客户端走设备授权流 §3.1.1——token 端点返回 `mesh_rft_…` Bearer——或 PAT `mesh_pat_`)。`remember=true` 延长 refresh。
 3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh`(Web 经 cookie,设备会话经 Bearer)→ 校验哈希未撤销未过期(**或命中 §3.8 有界幂等轮换宽限**:已被轮换的旧 refresh 在宽限窗内**仅获发新 access,不下发 refresh 明文、不二次轮换**,凭证经胜者响应 + 共享 cookie jar / CLI 重读收敛,多 tab 不误登出)→ **从会话行取固化 `granted_scopes` 与当前角色权限取交**作为新 access 的 scope(R2-H1)→ 颁新 access(继承 `sid`、新 `jti`;轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
 4. **登出**:撤销当前 refresh(Web 按 cookie 定位会话,CLI 按 Bearer 或自撤销端点);「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——**修改密码时发起会话以当前 access `sid` 识别并保留**(R4-H1,body 不传 refresh),刷新其 `authenticated_at=now()`(§2.4);无有效 `sid` 则全部失效(PAT 单独管理)。
-5. **OAuth(授权码 + PKCE,一次性事务绑定,R7-H3)**:`start` 生成 `state`(防 CSRF)+ PKCE,**创建 `oauth_transactions` 行绑定 purpose/state_hash/PKCE verifier/发起 sid·user_id/safe_next**(§2.4.3;link/reauth 先过 step-up 闸门与会话定位不变量)→ 302 提供商(reauth/link 强制 `max_age=0`/`prompt=login`)→ 回调按 `state_hash` 定位事务并**原子消费**(重放/过期/已消费即拒),用 `code` + 存储的 `code_verifier` 换 token → **按 purpose 分支**:`login` → 解析 sub+email(命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`)并建 web 会话;`link` → 校验当前会话与事务绑定一致后绑定身份,不建会话/账号;`reauth` → 重校验 `initiating_sid` 会话不变量后仅更新该会话 `authenticated_at`,不建/绑账号。**`authenticated_at` 赋值(R6-H3/R7-H3):仅当提供商 `id_token` 携带可验证签名 `auth_time` 且满足 `max_age`(本次往返为新鲜交互登录)→ `now()`;静默 SSO 复用 → `NULL`;提供商无可验证 `auth_time`/不支持 `max_age` → step-up fail-closed(reauth 拒绝,绝不以 callback 到达时间代替主动认证;login 仍可登录但 `authenticated_at=NULL`)**。
+5. **OAuth(授权码 + PKCE,一次性事务 + 浏览器绑定链路,R7-H3/R8)**:**发起入口按 purpose 单一化(R8-H1)**——`login`/`link` 经 `GET /auth/oauth/{provider}/start`(`link` 需 web 会话 + freshness 闸门);**`reauth` 事务仅经 `POST /auth/reauth` 创建(只要求会话定位不变量,豁免 freshness 预闸门——恢复操作不自锁)**。发起时生成 `state`(防 CSRF)+ PKCE + **浏览器绑定 locator(HttpOnly/Secure/SameSite=Lax cookie,哈希入事务,§2.4.3)**,创建 `oauth_transactions` 行 → 302/授权 URL 至提供商(`max_age=0`/`prompt=login` 保证新鲜交互)→ 回调**不要求 Bearer**,按序:state 定位 → **URL provider == 事务 provider 断言** → **locator cookie 匹配(防 login CSRF)** → 原子消费 + 清理 locator → `code` + 存储的 `code_verifier` 换 token → **按 purpose 分支**:`login` → 解析 sub+email(命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`)并建 web 会话;`link`/`reauth` → **以会话定位不变量重校验发起会话 `initiating_sid`(未撤销/未过期/属主一致/type='web')**,link 绑定身份(不建会话/账号)、reauth 仅更新该会话 `authenticated_at`(不建/绑账号)。**`authenticated_at` 赋值(R6-H3/R7-H3):仅当提供商 `id_token` 携带可验证签名 `auth_time` 且满足 `max_age`(本次往返为新鲜交互登录)→ `now()`;静默 SSO 复用 → `NULL`;提供商无可验证 `auth_time`/不支持 `max_age` → step-up fail-closed(reauth 拒绝,绝不以 callback 到达时间代替主动认证;login 仍可登录但 `authenticated_at=NULL`)**。
 6. **API token / agent 凭证**:创建→存哈希、一次性明文→**CLI 从环境变量读取 API token(`mesh_pat_`/`mesh_agt_`,绝不硬编码**;**runtime 机器令牌 `mesh_rt_` 不经 api_tokens,由 mesh-runtime daemon 激活后持有,runtime.md §3.5,R4-M3**)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`,人类/agent 经 JOIN `members.member_type` 判别);agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
 
 ### 4.6 每请求授权校验流程
@@ -690,7 +713,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。
 - [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),使用连接建立后首帧认证单一机制(README §6.16,v0.1.0 起实现基线)。
 - [ ] 各端点限流生效,超限 429 + `Retry-After`;登录类叠加失败锁定。
-- [ ] **敏感操作 step-up 再认证(R6-H3 状态机;R7-H1/H2 安全收口)**:**按 §1.1 凭证矩阵逐路由断言**——① **PAT 创建/撤销:`web` 与 `cli` 会话 JWT 均允许,各自检查本会话 `authenticated_at` 窗口**(判据 `authenticated_at IS NOT NULL AND now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`,默认 900s),窗口外 `403 reauth_required`;② **2FA 启停 / OAuth 换绑解绑:仅 `web` 会话**(cli 会话调用 → `403`,即使窗口内);③ **change-password 不经 `authenticated_at` 预闸门**——事务内 `old_password` 校验即再认证,成功后更新 `authenticated_at`(断言:超窗 web 会话持正确旧密码改密成功,且 `authenticated_at` 刷新);④ **`mesh_pat_`/`mesh_agt_` 令牌调用上述任一路由 → `403 reauth_required`(`details.reason='interactive_session_required'`)**,不存在实现侧绕过。**来源赋值断言**:密码登录/注册后 `authenticated_at=now()`;OAuth **静默 SSO 复用 → NULL**(新鲜交互登录(可验证签名 `auth_time` 满足 `max_age`)才置位;**提供商无可验证 `auth_time` → step-up fail-closed,login 可登录但 `authenticated_at=NULL`,绝不以 callback 到达时间赋值**);**设备 cli 会话继承批准记录 `approved_authenticated_at`(批准事务经会话定位不变量读取),绝不以消费时刻置位**。**恢复入口**:`POST /auth/reauth`(密码/TOTP/OAuth 新鲜往返,仅 web);**旧 cli 会话无法 reauth → CLI 明确提示「Web 完成 reauth 后重新执行 `mesh auth login`(设备批准)」(cli.md §4.3 同口径),退码 2,无永久死结**。**负向 e2e(R7-H1 撤销窗口,关键)**:**撤销某 web 会话后,持该会话未过期 access 调 `device/approve`、`reauth`、PAT 创建 → 均 `401 unauthorized`(会话定位不变量),且断言不产生新 sessions 行 / api_tokens 行**;旧 Web 会话(`authenticated_at` 超窗/NULL)批准设备码 → CLI 会话继承 NULL/超窗值 → CLI 创建 PAT → `403 reauth_required` → Web 完成 reauth → 批准新设备码(继承新鲜时刻)→ CLI 创建 PAT 成功。**OAuth transaction e2e(R7-H3)**:同一 `state` 重放 callback → 第二次拒绝(已消费);`purpose=reauth` 事务的 callback 不创建/换绑账号(断言 users/oauth_identities 无新行,仅该会话 `authenticated_at` 更新);`link` 事务被另一账号会话消费 → 拒绝(跨账号串用防护)。
+- [ ] **敏感操作 step-up 再认证(R6-H3 状态机;R7-H1/H2 安全收口)**:**按 §1.1 凭证矩阵逐路由断言**——① **PAT 创建/撤销:`web` 与 `cli` 会话 JWT 均允许,各自检查本会话 `authenticated_at` 窗口**(判据 `authenticated_at IS NOT NULL AND now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`,默认 900s),窗口外 `403 reauth_required`;② **2FA 启停 / OAuth 换绑解绑:仅 `web` 会话**(cli 会话调用 → `403`,即使窗口内);③ **change-password 不经 `authenticated_at` 预闸门**——事务内 `old_password` 校验即再认证,成功后更新 `authenticated_at`(断言:超窗 web 会话持正确旧密码改密成功,且 `authenticated_at` 刷新);④ **`mesh_pat_`/`mesh_agt_` 令牌调用上述任一路由 → `403 reauth_required`(`details.reason='interactive_session_required'`)**,不存在实现侧绕过。**来源赋值断言**:密码登录/注册后 `authenticated_at=now()`;OAuth **静默 SSO 复用 → NULL**(新鲜交互登录(可验证签名 `auth_time` 满足 `max_age`)才置位;**提供商无可验证 `auth_time` → step-up fail-closed,login 可登录但 `authenticated_at=NULL`,绝不以 callback 到达时间赋值**);**设备 cli 会话继承批准记录 `approved_authenticated_at`(批准事务经会话定位不变量读取),绝不以消费时刻置位**。**恢复入口**:`POST /auth/reauth`(密码/TOTP/OAuth 新鲜往返,仅 web);**旧 cli 会话无法 reauth → CLI 明确提示「Web 完成 reauth 后重新执行 `mesh auth login`(设备批准)」(cli.md §4.3 同口径),退码 2,无永久死结**。**负向 e2e(R7-H1 撤销窗口,关键)**:**撤销某 web 会话后,持该会话未过期 access 调 `device/approve`、`reauth`、PAT 创建 → 均 `401 unauthorized`(会话定位不变量),且断言不产生新 sessions 行 / api_tokens 行**;旧 Web 会话(`authenticated_at` 超窗/NULL)批准设备码 → CLI 会话继承 NULL/超窗值 → CLI 创建 PAT → `403 reauth_required` → Web 完成 reauth → 批准新设备码(继承新鲜时刻)→ CLI 创建 PAT 成功。**OAuth transaction e2e(R7-H3/R8)**:同一 `state` 重放 callback → 第二次拒绝(已消费);`purpose=reauth` 事务的 callback 不创建/换绑账号(断言 users/oauth_identities 无新行,仅该会话 `authenticated_at` 更新);`link` 事务 callback 时发起会话已不匹配 → 拒绝。**reauth 恢复流 e2e(R8-H1)**:`authenticated_at` 超窗/NULL 的 OAuth-only web 会话**可发起** `POST /auth/reauth`(不被 freshness 闸门自锁)→ 完成 OAuth 新鲜往返 → 仅原会话 `authenticated_at` 刷新;**撤销/过期会话调 reauth → `401 unauthorized`**;`start?purpose=reauth` 入口不存在(单一入口断言)。**浏览器绑定 e2e(R8-H2,login CSRF 防护)**:① **攻击者在自己浏览器发起 login、截获有效 callback URL 诱导受害者浏览器打开 → 拒绝且受害者浏览器不建 session**(locator cookie 不匹配);② **provider mix-up**:callback URL 的 `{provider}` 与 transaction.provider 不符 → 拒绝;③ **往返期间发起会话被撤销** → `link`/`reauth` callback 拒绝(不变量 0 行),`login` 不受影响;④ locator cookie 属性断言:`HttpOnly; Secure; SameSite=Lax; Path=/api/v1/auth/oauth`,消费后被清理;⑤ 多 tab 并发往返:后发起者胜,先发起 tab 的 callback 被拒为过期态。
 
 ### 5.6 实时
 
