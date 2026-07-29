@@ -283,6 +283,40 @@ class AuthService:
             access_token=access_token, refresh_token=refresh_token, expires_in=expires_in
         )
 
+    async def issue_tokens_in_session(
+        self,
+        session: AsyncSession,
+        user: User,
+        *,
+        session_type: str,
+        ip_address: str | None,
+        user_agent: str | None,
+        now: datetime,
+        authenticated_at: datetime | None,
+        remember: bool = False,
+        workspace_id: uuid.UUID | None = None,
+        granted_scopes: list[str] | None = None,
+        device_authorization_id: uuid.UUID | None = None,
+    ) -> TokenResult:
+        """Issue access+refresh INSIDE the caller's transaction.
+
+        The device-code exchange (device_codes.py) must mint the cli session
+        atomically with the grant consumption — same transaction, same commit.
+        """
+        return await self._issue_tokens(
+            session,
+            user,
+            session_type=session_type,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            remember=remember,
+            now=now,
+            authenticated_at=authenticated_at,
+            workspace_id=workspace_id,
+            granted_scopes=granted_scopes,
+            device_authorization_id=device_authorization_id,
+        )
+
     # -- registration ----------------------------------------------------------
 
     async def register(
