@@ -4,8 +4,8 @@ outbound webhook subscriptions + deliveries, vcs links.
 Stage-7 platform-capability increment D (integrations.md §2 / README §6.2 /
 §6.5 / §6.6 / §6.7 / §6.9 / §6.16 / §6.17). DDL mirrors
 docs/specs/features/integrations.md §2.8 and docs/specs/validation/
-schema_r2_validation.sql verbatim. Migration number 0027 (single-head chain
-0001 → 0027, chained after data_jobs 0026).
+schema_r2_validation.sql verbatim. Migration number 0029 (single-head chain
+0001 → 0029, chained after analytics 0028 / onboarding 0027).
 
 Tables:
 
@@ -46,16 +46,16 @@ Executable reference (README §6.17 / T29⑪):
 - ``external_identity_unlink_allowed(identity_id, member_id)`` — owner-only
   unlink authorization; role columns do NOT participate (no admin bypass).
 
-Revision ID: 0027
-Revises: 0026
+Revision ID: 0029
+Revises: 0027
 Create Date: 2026-07-29
 """
 from __future__ import annotations
 
 from alembic import op
 
-revision = "0027"
-down_revision = "0026"
+revision = "0029"
+down_revision = "0028"
 branch_labels = None
 depends_on = None
 

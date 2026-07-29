@@ -26,7 +26,7 @@
 
 **Backend (create):**
 - `backend/src/mesh/db/models/integration.py` — ORM models: `Integration`, `IntegrationBinding`, `IntegrationEvent`, `ExternalIdentity`, `WebhookSubscription`, `WebhookSubscriptionDelivery`, `VcsLink`.
-- `backend/migrations/versions/0027_integrations.py` — DDL (mirrors integrations.md §2.8 verbatim) + RLS + SECURITY DEFINER bootstrap lookup for signature-auth endpoints + `external_identity_unlink_allowed(identity_id, member_id)` SQL reference function.
+- `backend/migrations/versions/0028_integrations.py` — DDL (mirrors integrations.md §2.8 verbatim) + RLS + SECURITY DEFINER bootstrap lookup for signature-auth endpoints + `external_identity_unlink_allowed(identity_id, member_id)` SQL reference function.
 - `backend/src/mesh/integrations/__init__.py`
 - `backend/src/mesh/integrations/connectors.py` — adapter protocol + `feishu`/`slack`/`github`/`gitlab`/`webhook_outbound` adapters: `verify()`, `normalize_event()`, `tenant_key()`, outbound send helpers (token cache for feishu).
 - `backend/src/mesh/integrations/inbound.py` — shared ingestion pipeline (mirror of `autopilot/webhook.py`).
@@ -59,18 +59,18 @@
 
 ---
 
-## Task 1: Data model + migration 0027
+## Task 1: Data model + migration 0028
 
-**Files:** Create `backend/src/mesh/db/models/integration.py`, `backend/migrations/versions/0027_integrations.py`; modify `backend/src/mesh/db/models/__init__.py`; test `backend/tests/unit/test_integration_models.py`, `backend/tests/e2e/test_integrations_schema_e2e.py`.
+**Files:** Create `backend/src/mesh/db/models/integration.py`, `backend/migrations/versions/0028_integrations.py`; modify `backend/src/mesh/db/models/__init__.py`; test `backend/tests/unit/test_integration_models.py`, `backend/tests/e2e/test_integrations_schema_e2e.py`.
 
 **Interfaces:**
 - Produces: ORM classes `Integration(id, workspace_id, kind, name, status, config, secret_ref, created_by, deleted_at, timestamps)`, `IntegrationBinding(id, workspace_id, integration_id, provider, provider_tenant_key, scope, project_id, external_ref, match_config, bound_agent_id, status, timestamps)`, `IntegrationEvent(id, workspace_id, integration_id, external_event_id, event_type, payload, signature_status, process_status, received_at, timestamps)`, `ExternalIdentity(id, provider, provider_tenant_key, external_user_key, user_id, created_in_workspace_id, verified_at, timestamps)` — **no workspace_id column**, `WebhookSubscription(id, workspace_id, integration_id, url, secret_ref, event_types, status, fail_count, created_by, timestamps)`, `WebhookSubscriptionDelivery(id, workspace_id, subscription_id, event_ref, state, attempts, next_retry_at, response_status, last_error, created_at)`, `VcsLink(id, workspace_id, integration_id, provider, provider_tenant_key, external_object_type, external_object_ref, mesh_entity_type, mesh_entity_id, link_source, status, external_state, created_by, timestamps)`.
 
-- [ ] **Step 1: Migration 0027** — DDL exactly per integrations.md §2.8 (all 7 tables, constraints `uq_binding_external_identity UNIQUE(provider, provider_tenant_key, external_ref)`, `ck_binding_scope` XOR CHECK, `uq_integration_event_dedup UNIQUE(integration_id, external_event_id)`, `uq_external_identity UNIQUE(provider, provider_tenant_key, external_user_key)`, `uq_delivery_subscription_event`, partial unique indexes `uq_vcs_links_external_object` / `uq_vcs_links_mesh_entity` WHERE status='active'), composite FKs with PG16 column-level `ON DELETE SET NULL (bound_agent_id)` / `(integration_id)` / `(created_by)` / `(created_in_workspace_id)`, RLS fail-closed on the six tenant tables (NOT external_identities) with `mesh_app` grants, plus SQL function `external_identity_unlink_allowed(p_identity_id uuid, p_member_id uuid) RETURNS boolean` comparing ONLY `users.id` via `members.user_id` (role不参与). Chain `revision="0027"`, `down_revision="0026"`.
+- [ ] **Step 1: Migration 0028** — DDL exactly per integrations.md §2.8 (all 7 tables, constraints `uq_binding_external_identity UNIQUE(provider, provider_tenant_key, external_ref)`, `ck_binding_scope` XOR CHECK, `uq_integration_event_dedup UNIQUE(integration_id, external_event_id)`, `uq_external_identity UNIQUE(provider, provider_tenant_key, external_user_key)`, `uq_delivery_subscription_event`, partial unique indexes `uq_vcs_links_external_object` / `uq_vcs_links_mesh_entity` WHERE status='active'), composite FKs with PG16 column-level `ON DELETE SET NULL (bound_agent_id)` / `(integration_id)` / `(created_by)` / `(created_in_workspace_id)`, RLS fail-closed on the six tenant tables (NOT external_identities) with `mesh_app` grants, plus SQL function `external_identity_unlink_allowed(p_identity_id uuid, p_member_id uuid) RETURNS boolean` comparing ONLY `users.id` via `members.user_id` (role不参与). Chain `revision="0028"`, `down_revision="0027"`.
 - [ ] **Step 2: ORM models** matching DDL (follow `db/models/autopilot.py` style; `ExternalIdentity` without workspace_id).
 - [ ] **Step 3: Schema e2e test** (real DB): run migrations; assert T29 structure negatives — `information_schema.columns`: `external_identities` has NO `workspace_id`; no FK from `external_identities` to `workspaces` with `DELETE_RULE='CASCADE'`; `pg_policies` has no policy on `external_identities`; constraint existence checks for global binding key, scope CHECK, dedup key, vcs_links partial uniques.
 - [ ] **Step 4: Model↔migration drift test** — extend the existing drift-check pattern (see `tests/e2e/test_schema_validation.py`) to cover the new tables' unique constraints.
-- [ ] **Step 5: Run** `pytest tests/e2e/test_integrations_schema_e2e.py tests/unit/test_integration_models.py -v` → green. Commit `feat(integrations): 数据模型 + 迁移 0027(七表 + T29 结构约束)`.
+- [ ] **Step 5: Run** `pytest tests/e2e/test_integrations_schema_e2e.py tests/unit/test_integration_models.py -v` → green. Commit `feat(integrations): 数据模型 + 迁移 0028(七表 + T29 结构约束)`.
 
 ## Task 2: RBAC + IntegrationService CRUD + credential security
 

@@ -10,7 +10,7 @@ card callbacks / inbound events is forbidden (identity forgery).
 
 Unlink authorization is owner-only: ``external_identity_unlink_allowed``
 compares ONLY ``users.id`` (line-for-line equivalent of the executable
-reference SQL in migration 0027 / schema_r2_validation.sql) — workspace
+reference SQL in migration 0028 / schema_r2_validation.sql) — workspace
 admin/owner roles do NOT constitute authorization (no bypass, T29⑪).
 """
 
