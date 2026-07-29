@@ -34,6 +34,8 @@ from mesh.errors import (
 )
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.credentials import revoke_attempt_envelopes, revoke_execution_envelopes
+from mesh.runtime.redaction import redact_result
+from mesh.runtime.task_tokens import revoke_attempt_task_tokens
 
 # Physical attempt machine (§4.7): source → allowed daemon-driven targets.
 ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -223,6 +225,51 @@ def _opt(value: uuid.UUID | None) -> str | None:
     return str(value) if value else None
 
 
+# §2.6 P0: structured result schema version.
+RESULT_SCHEMA_VERSION = 1
+
+
+def _extract_structured_result(attempt: ExecutionAttempt, result: dict | None) -> None:
+    """Parse the versioned result schema (§2.6) into typed attempt columns.
+
+    Extracts provider/model/usage/outcome fields for reliable verification,
+    budget aggregation, and querying. ``result.output`` stays as the final
+    summary; the structured columns are the queryable truth.
+    """
+    if not result or not isinstance(result, dict):
+        return
+    attempt.result_schema_version = RESULT_SCHEMA_VERSION
+    provider = result.get("provider")
+    if isinstance(provider, dict):
+        attempt.provider = provider.get("name")
+        attempt.provider_version = provider.get("version")
+        attempt.provider_session_id = provider.get("session_id")
+        attempt.model = provider.get("model")
+    usage = result.get("usage")
+    if isinstance(usage, dict):
+        attempt.prompt_tokens = _safe_int(usage.get("input_tokens"))
+        attempt.completion_tokens = _safe_int(usage.get("output_tokens"))
+        cache_read = _safe_int(usage.get("cache_read_tokens")) or 0
+        cache_create = _safe_int(usage.get("cache_creation_tokens")) or 0
+        attempt.cache_tokens = cache_read + cache_create
+        attempt.num_turns = _safe_int(usage.get("turns"))
+        cost = usage.get("cost_usd")
+        if cost is not None:
+            try:
+                attempt.cost_usd = float(cost)
+            except (TypeError, ValueError):
+                pass
+
+
+def _safe_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def transition_attempt(
     session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -232,6 +279,7 @@ async def transition_attempt(
     new_status: str,
     result: dict | None = None,
     failure_reason: str | None = None,
+    signing_secret: str = "",
 ) -> dict:
     """PATCH /daemon/attempts/{id} — fenced status transition.
 
@@ -306,9 +354,26 @@ async def transition_attempt(
             attempt.started_at = now
         if new_status in ATTEMPT_TERMINAL_STATUSES:
             attempt.finished_at = now
-            attempt.result = result
             attempt.failure_reason = failure_reason
+            # §2.5 S-06: server-side fallback redaction — daemon redacts
+            # first, server MUST redact again before persisting (ISO-13).
+            redaction_hits = 0
+            if result is not None and signing_secret:
+                result, redaction_hits = await redact_result(
+                    session,
+                    workspace_id=workspace_id,
+                    result=result,
+                    signing_secret=signing_secret,
+                )
+            attempt.result = result
+            attempt.redaction_hits = redaction_hits
+            # §2.6 P0: parse structured result fields for reliable
+            # verification, budget aggregation, and querying.
+            _extract_structured_result(attempt, result)
             await revoke_attempt_envelopes(session, attempt_id=attempt.id, now=now)
+            # §2.2 S-05: revoke task tokens same-transaction with terminal
+            # state transition (fail-closed).
+            await revoke_attempt_task_tokens(session, attempt_id=attempt.id, now=now)
             if was_inflight:
                 await _release_capacity(session, attempt.runtime_id)
 
@@ -346,7 +411,13 @@ async def renew_lease(
     lease_seconds: int,
 ) -> dict:
     """POST /daemon/attempts/{id}:renew-lease — lease_seq advances every
-    claim / renew; the old value is then a zombie detector (409)."""
+    claim / renew; the old value is then a zombie detector (409).
+
+    §2.6 P0: also atomically rotates the task token — old token revoked
+    same-transaction, new plaintext returned once.
+    """
+    from mesh.runtime.task_tokens import issue_task_token
+
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, runtime.workspace_id)
         attempt = await _load_daemon_attempt(session, attempt_id=attempt_id, runtime=runtime)
@@ -361,11 +432,38 @@ async def renew_lease(
         attempt.lease_seq = attempt.lease_seq + 1
         attempt.lease_expires_at = now + timedelta(seconds=lease_seconds)
         attempt.updated_at = now
+
+        # §2.2 S-05: rotate task token atomically with lease renewal.
+        # Old token revoked same-transaction; new plaintext returned once.
+        execution = (
+            await session.execute(
+                select(TaskExecution).where(TaskExecution.id == attempt.execution_id)
+            )
+        ).scalar_one_or_none()
+        task_token_plaintext = None
+        task_token_expires = None
+        if execution is not None:
+            task_token_plaintext, token_row = await issue_task_token(
+                session,
+                workspace_id=runtime.workspace_id,
+                attempt_id=attempt.id,
+                runtime_id=runtime.id,
+                lease_seq=attempt.lease_seq,
+                lease_expires_at=attempt.lease_expires_at,
+                issue_id=execution.issue_id,
+                agent_id=execution.agent_id,
+            )
+            task_token_expires = token_row.expires_at.isoformat()
+
         await session.flush()
-        return {
+        response: dict = {
             "lease_expires_at": attempt.lease_expires_at.isoformat(),
             "lease_seq": attempt.lease_seq,
         }
+        if task_token_plaintext is not None:
+            response["task_token"] = task_token_plaintext
+            response["task_token_expires_at"] = task_token_expires
+        return response
 
 
 async def cancel_execution(
@@ -482,6 +580,18 @@ async def freeze_execution(
         if execution is None:
             raise NotFoundError("execution not found")
         revoked = await revoke_execution_envelopes(session, execution_id=execution_id)
+        # §2.2 S-05: revoke task tokens for ALL attempts of this execution
+        # (freeze is a security action — every token must die immediately).
+
+        attempt_ids = (
+            await session.execute(
+                select(ExecutionAttempt.id).where(
+                    ExecutionAttempt.execution_id == execution_id,
+                )
+            )
+        ).scalars().all()
+        for aid in attempt_ids:
+            await revoke_attempt_task_tokens(session, attempt_id=aid)
         await emit_event(
             session,
             workspace_id=workspace_id,

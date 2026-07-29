@@ -13,11 +13,11 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.config import Settings
-from mesh.db.models.api_token import DISPLAY_PREFIX_LEN, RUNTIME_TOKEN_PREFIX, ApiToken
+from mesh.db.models.api_token import DISPLAY_PREFIX_LEN, RUNTIME_TOKEN_PREFIX
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
     ExecutionAttempt,
@@ -216,7 +216,15 @@ class RuntimeService:
             await session.flush()
             return _render_runtime(runtime, include_activation=activation)
 
-    async def activate_runtime(self, *, activation_code: str, metadata: dict) -> dict:
+    async def activate_runtime(
+        self,
+        *,
+        activation_code: str,
+        metadata: dict,
+        protocol_version: int = 1,
+        provider_manifest: dict | None = None,
+        daemon_features: dict | None = None,
+    ) -> dict:
         """Daemon: exchange the one-time code for the long-lived runtime token.
 
         Plaintext token appears ONLY in this response; the server stores the
@@ -268,6 +276,11 @@ class RuntimeService:
             runtime.capabilities = capabilities
             runtime.labels = merged_labels
             runtime.version = str(meta.get("version") or runtime.version)
+            # §2.6 P0: persist protocol negotiation fields.
+            runtime.protocol_version = protocol_version
+            runtime.daemon_version = str(meta.get("version") or runtime.version)
+            runtime.provider_manifest = provider_manifest or {}
+            runtime.daemon_features = daemon_features or {}
             runtime.status = "online"
             runtime.activated_at = now  # non-null = code consumed (replay → 410)
             runtime.last_heartbeat_at = now
@@ -275,25 +288,19 @@ class RuntimeService:
             # never stored and the row can no longer be activated).
             runtime.updated_at = now
 
-            # Issue the long-lived daemon token (hash-only storage).
+            # §2.4 S-11: issue the long-lived daemon token — hash stored
+            # ONLY in runtimes.runtime_token_hash (single source of truth).
+            # No api_tokens row is created (R2-H2: runtime is not a roster
+            # member; owner_member_id NOT NULL cannot host it).
             if runtime.created_by is None:
                 raise BusinessRuleError(
                     "runtime has no registered owner for token issuance",
                     code="runtime_owner_missing",
                 )
             plaintext = RUNTIME_TOKEN_PREFIX + secrets.token_urlsafe(32)
-            token_row = ApiToken(
-                workspace_id=runtime.workspace_id,
-                owner_member_id=runtime.created_by,
-                name=f"runtime:{runtime.name}",
-                token_hash=hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-                prefix=plaintext[:DISPLAY_PREFIX_LEN],
-                scopes=["runtime"],
-            )
-            session.add(token_row)
-            await session.flush()
-            runtime.runtime_token_id = token_row.id
-            runtime.runtime_token_hash = token_row.token_hash
+            runtime.runtime_token_hash = hashlib.sha256(
+                plaintext.encode("utf-8")
+            ).hexdigest()
 
             await emit_realtime(
                 session,
@@ -327,6 +334,7 @@ class RuntimeService:
         health: str,
         metrics: dict,
         inflight: list[str],
+        protocol_version: int | None = None,
     ) -> dict:
         # F8: daemon-reported inflight is DIAGNOSTIC (server-side attempt
         # rows stay the capacity authority) — but validated and persisted in
@@ -349,6 +357,9 @@ class RuntimeService:
             previous = row.status
             row.last_heartbeat_at = now
             row.updated_at = now
+            # §2.6 P0: track protocol version drift on heartbeat.
+            if protocol_version is not None:
+                row.protocol_version = protocol_version
             if health == "degraded":
                 # Alive process, broken environment: stop dispatch, keep the
                 # troubleshooting window (§5.1).
@@ -528,7 +539,8 @@ class RuntimeService:
     async def rotate_runtime_token(
         self, *, workspace_id: uuid.UUID, runtime_id: uuid.UUID
     ) -> dict:
-        """Issue a new daemon token; plaintext shown ONLY here; old revoked."""
+        """Issue a new daemon token; plaintext shown ONLY here; old hash
+        overwritten (§2.4 S-11: single source — no api_tokens row)."""
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             runtime = await self._get_runtime_row(session, workspace_id, runtime_id)
@@ -537,25 +549,17 @@ class RuntimeService:
                     "runtime has no registered owner for token issuance",
                     code="runtime_owner_missing",
                 )
-            await self._revoke_runtime_token(session, runtime)
+            # §2.4 S-11: overwrite the hash in-place; the old token
+            # immediately gets 401 on next daemon_auth lookup.
             plaintext = RUNTIME_TOKEN_PREFIX + secrets.token_urlsafe(32)
-            token_row = ApiToken(
-                workspace_id=workspace_id,
-                owner_member_id=runtime.created_by,
-                name=f"runtime:{runtime.name}",
-                token_hash=hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-                prefix=plaintext[:DISPLAY_PREFIX_LEN],
-                scopes=["runtime"],
-            )
-            session.add(token_row)
-            await session.flush()
-            runtime.runtime_token_id = token_row.id
-            runtime.runtime_token_hash = token_row.token_hash
+            runtime.runtime_token_hash = hashlib.sha256(
+                plaintext.encode("utf-8")
+            ).hexdigest()
             runtime.updated_at = _now()
             return {
                 "runtime_id": str(runtime.id),
                 "runtime_token": plaintext,
-                "prefix": token_row.prefix,
+                "prefix": plaintext[:DISPLAY_PREFIX_LEN],
             }
 
     async def _lifecycle(
@@ -580,13 +584,11 @@ class RuntimeService:
             return _render_runtime(runtime)
 
     async def _revoke_runtime_token(self, session: AsyncSession, runtime: Runtime) -> None:
-        if runtime.runtime_token_id is None:
-            return
-        await session.execute(
-            update(ApiToken)
-            .where(ApiToken.id == runtime.runtime_token_id, ApiToken.revoked_at.is_(None))
-            .values(revoked_at=_now())
-        )
+        """§2.4 S-11: clear the hash — the old token immediately gets 401.
+
+        No api_tokens row to revoke (single source of truth).
+        """
+        runtime.runtime_token_hash = None
 
     async def _get_runtime_row(
         self, session: AsyncSession, workspace_id: uuid.UUID, runtime_id: uuid.UUID

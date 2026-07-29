@@ -9,7 +9,6 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from mesh.db.models.api_token import ApiToken
 from mesh.db.models.runtime import (
     ExecutionAttempt,
     RepoCheckout,
@@ -73,14 +72,14 @@ async def test_decommission_revokes_token_and_hides_runtime(session_factory):
     world = await seed_world(session_factory)
     service = _service(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"], created_by=world["member_id"])
-    _, token_row = await issue_runtime_token(session_factory, runtime)
+    _, _token_row = await issue_runtime_token(session_factory, runtime)
     await service.decommission_runtime(workspace_id=world["ws_id"], runtime_id=runtime.id)
     async with session_factory() as session:
         row = await session.get(Runtime, runtime.id)
-        revoked = await session.get(ApiToken, token_row.id)
     assert row.status == "decommissioned"
     assert row.deleted_at is not None
-    assert revoked.revoked_at is not None
+    # §2.4 S-11: token revoked by clearing the hash (no api_tokens row).
+    assert row.runtime_token_hash is None
     with pytest.raises(NotFoundError):
         await service.get_runtime(workspace_id=world["ws_id"], runtime_id=runtime.id)
 

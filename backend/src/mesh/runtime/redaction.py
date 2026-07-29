@@ -8,21 +8,29 @@ module is the single guard every outgoing-text path calls:
   BLOCKS them (quarantine gate never opens) + raises a critical security
   alert on hit;
 - **comments** — the comment module (MES-58) must call
-  :func:`assert_no_workspace_secrets` on comment content before insert; the
-  guard is provided here so that path is a one-liner when the module lands.
+  :func:`assert_no_workspace_secrets` on comment content before insert;
+- **result** — ``attempts.py`` calls :func:`redact_result` before persisting
+  the terminal result (§2.5 S-06 server-side fallback);
+- **diff** — ``checkout.py`` calls :func:`redact_diff_text` before persisting
+  the diff (§2.5 S-06 server-side fallback).
 
+Daemon redacts first; server redacts again as fallback — never trust daemon.
 Hits are counted; the blocking variant raises 422 ``secret_detected`` and the
 caller emits the §6.13 critical alert.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.errors import BusinessRuleError
 from mesh.runtime.credentials import load_redaction_blacklist, redact_text
+
+logger = logging.getLogger("mesh.runtime.redaction")
 
 # Text-like MIME families whose attachment payloads are secret-scanned.
 TEXT_SCAN_MIME_PREFIXES = ("text/",)
@@ -103,3 +111,71 @@ async def assert_no_workspace_secrets(
             code="secret_detected",
             details={"channel": channel, "hits": hits},
         )
+
+
+# ---------------------------------------------------------------------------
+# §2.5 S-06: server-side fallback redaction for result and diff channels.
+# Daemon redacts first; server MUST redact again (never trust daemon).
+# ---------------------------------------------------------------------------
+
+_REDACT_REPLACEMENT = "***"
+
+
+async def redact_result(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    result: dict | None,
+    signing_secret: str,
+) -> tuple[dict | None, int]:
+    """§2.5 S-06: redact secrets from a terminal result dict before persist.
+
+    Serializes the result to JSON, redacts all secret occurrences, and
+    returns (redacted_result, hit_count). If hit_count > 0 a security
+    alert is logged (the daemon failed to redact — ISO-13).
+    """
+    if not result:
+        return result, 0
+    blacklist = await load_redaction_blacklist(session, workspace_id, signing_secret)
+    if not blacklist:
+        return result, 0
+    serialized = json.dumps(result, ensure_ascii=False, default=str)
+    redacted_text, hits = redact_text(serialized, blacklist)
+    if hits > 0:
+        logger.warning(
+            "server-side result redaction: %d secret hit(s) in workspace %s "
+            "(daemon first-layer redaction failed)",
+            hits,
+            workspace_id,
+        )
+        try:
+            return json.loads(redacted_text), hits
+        except (json.JSONDecodeError, ValueError):
+            # Redaction broke JSON structure — return a safe stub.
+            return {"output": _REDACT_REPLACEMENT, "redacted": True}, hits
+    return result, 0
+
+
+async def redact_diff_text(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    diff: str | None,
+    signing_secret: str,
+) -> tuple[str | None, int]:
+    """§2.5 S-06: redact secrets from a diff string before persist to
+    object storage. Returns (redacted_diff, hit_count)."""
+    if not diff:
+        return diff, 0
+    blacklist = await load_redaction_blacklist(session, workspace_id, signing_secret)
+    if not blacklist:
+        return diff, 0
+    redacted, hits = redact_text(diff, blacklist)
+    if hits > 0:
+        logger.warning(
+            "server-side diff redaction: %d secret hit(s) in workspace %s "
+            "(daemon first-layer redaction failed)",
+            hits,
+            workspace_id,
+        )
+    return redacted, hits

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 from mesh.config import load_settings
 from mesh.db.models.agent import Agent
-from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX, ApiToken
+from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import Runtime, TaskExecution
 from mesh.db.models.user import User
@@ -159,28 +159,22 @@ async def make_execution(
     return execution
 
 
-async def issue_runtime_token(session_factory, runtime: Runtime) -> tuple[str, ApiToken]:
-    """Attach a real api_tokens row + hash to the runtime (daemon auth)."""
+async def issue_runtime_token(session_factory, runtime: Runtime) -> tuple[str, None]:
+    """§2.4 S-11: set runtime_token_hash directly (single source of truth).
+
+    No api_tokens row is created — runtime tokens live ONLY in
+    runtimes.runtime_token_hash. Returns (plaintext, None) for backward
+    compatibility with callers that unpack a tuple.
+    """
     plaintext = RUNTIME_TOKEN_PREFIX + secrets.token_urlsafe(32)
-    token = ApiToken(
-        workspace_id=runtime.workspace_id,
-        owner_member_id=runtime.created_by,
-        name=f"runtime:{runtime.name}",
-        token_hash=hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-        prefix=plaintext[:12],
-        scopes=["runtime"],
-    )
+    token_hash = hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
     async with session_factory() as session, session.begin():
-        session.add(token)
-        await session.flush()
         from sqlalchemy import update
 
         await session.execute(
             update(Runtime)
             .where(Runtime.id == runtime.id)
-            .values(runtime_token_id=token.id, runtime_token_hash=token.token_hash)
+            .values(runtime_token_hash=token_hash)
         )
-        session.expunge(token)
-    runtime.runtime_token_hash = token.token_hash
-    runtime.runtime_token_id = token.id
-    return plaintext, token
+    runtime.runtime_token_hash = token_hash
+    return plaintext, None

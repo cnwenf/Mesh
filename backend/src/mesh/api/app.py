@@ -102,6 +102,7 @@ from mesh.runtime.channels import register_execution_checkers
 from mesh.runtime.daemon_routes import router as runtime_daemon_router
 from mesh.runtime.routes import router as runtime_router
 from mesh.runtime.service import RuntimeService
+from mesh.runtime.task_routes import router as task_router
 from mesh.search.routes import router as search_router
 from mesh.search.service import SearchService
 from mesh.skill.bindings import BindingService
@@ -380,6 +381,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agent_router)
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)
+    # §2.2 S-05: task principal routes (mesh_task_ tokens).
+    app.include_router(task_router)
     app.include_router(skill_router)
     app.include_router(squad_router)
     app.include_router(autopilot_router)
