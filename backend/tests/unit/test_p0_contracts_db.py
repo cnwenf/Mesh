@@ -570,6 +570,74 @@ class TestResultSinkDB:
         assert "timeout" in _build_result_summary("timeout", {}, None)
         assert "cancelled" in _build_result_summary("cancelled", {}, None).lower()
 
+    async def test_result_sink_skips_non_assign_triggers(self, session_factory):
+        """§3.7 S-09: chat/autopilot/manual triggers don't get result comments."""
+        from mesh.db.models.outbox import OutboxEvent
+        from mesh.runtime.result_sink import execution_finished_result_sink
+
+        world = await seed_world(session_factory)
+        # chat trigger — has independent closure path.
+        execution = await make_execution(
+            session_factory, world["ws_id"], world["agent_id"],
+        )
+        # Override trigger to "chat".
+        from sqlalchemy import update as sql_update
+        async with session_factory() as session, session.begin():
+            from mesh.db.tenant import set_tenant_context
+            await set_tenant_context(session, world["ws_id"])
+            await session.execute(
+                sql_update(TaskExecution)
+                .where(TaskExecution.id == execution.id)
+                .values(trigger="chat", status="completed")
+            )
+        event = OutboxEvent(
+            workspace_id=world["ws_id"],
+            event_type="execution.finished",
+            payload={
+                "execution_id": str(execution.id),
+                "status": "completed",
+            },
+        )
+        async with session_factory() as session:
+            result = await execution_finished_result_sink(session, event)
+        assert result is None
+
+    async def test_result_sink_skips_stub_result(self, session_factory):
+        """Completed execution with no output/summary → no result comment."""
+        from mesh.db.models.outbox import OutboxEvent
+        from mesh.runtime.result_sink import execution_finished_result_sink
+
+        world = await seed_world(session_factory)
+        execution = await make_execution(
+            session_factory, world["ws_id"], world["agent_id"],
+        )
+        # Set trigger=assign, status=completed, result={"exit_code": 0}.
+        from sqlalchemy import update as sql_update
+        async with session_factory() as session, session.begin():
+            from mesh.db.tenant import set_tenant_context
+            await set_tenant_context(session, world["ws_id"])
+            await session.execute(
+                sql_update(TaskExecution)
+                .where(TaskExecution.id == execution.id)
+                .values(
+                    trigger="assign",
+                    status="completed",
+                    result={"exit_code": 0},
+                )
+            )
+        event = OutboxEvent(
+            workspace_id=world["ws_id"],
+            event_type="execution.finished",
+            payload={
+                "execution_id": str(execution.id),
+                "status": "completed",
+            },
+        )
+        async with session_factory() as session:
+            result = await execution_finished_result_sink(session, event)
+        # Stub result (no output) → skipped.
+        assert result is None
+
 
 # ---------------------------------------------------------------------------
 # Task principal auth — real DB (§2.2 S-05 / auth.md §2.5.1)
