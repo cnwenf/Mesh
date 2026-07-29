@@ -287,7 +287,7 @@ class TestFullStack:
         logged = "\n".join(ln for call in api.logs for ln in call["lines"])
         assert "hello-from-sandbox" in logged
         # S-08: the attempt root is gone after terminal cleanup.
-        assert not (config.work_dir / "exec-full-1" / "att-full-1").exists()
+        assert not (config.work_dir / "exec-ful" / "att-full").exists()
         # Journal row deleted after confirmed terminal.
         assert await journal.get("att-full-1") is None
         await journal.close()

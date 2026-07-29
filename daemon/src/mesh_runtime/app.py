@@ -152,7 +152,12 @@ class RuntimeApp:
         attempt lifecycle here keeps the scheduler's concurrency slot held
         until the attempt is terminal."""
         attempt_id = claim.attempt_id
-        attempt_root = self.config.work_dir / claim.execution_id / attempt_id
+        # Short path segments: the broker unix socket path must stay under the
+        # 108-byte AF_UNIX limit even with deep state roots. The journal keeps
+        # full ids; the directory names are an implementation detail.
+        attempt_root = (
+            self.config.work_dir / claim.execution_id[:8] / attempt_id[:8]
+        )
         ctx = AttemptContext(
             attempt_id=attempt_id,
             execution_id=claim.execution_id,
