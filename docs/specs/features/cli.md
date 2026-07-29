@@ -283,6 +283,7 @@ $ mesh auth login
 | 未登录 | `Error: not authenticated. Run \`mesh auth login\` to sign in.` |
 | token 过期 | `Error: your token has expired. Run \`mesh auth login\` to re-authenticate.` |
 | scope 不足 | `Error: this token lacks scope \`issue:write\`. Re-create it with the needed scope, then retry.` |
+| 敏感操作需再认证(R7-H2) | `Error: this session lacks recent active authentication (reauth_required). Have the user complete reauth on the Web (POST /auth/reauth), then re-run \`mesh auth login\` to re-approve a device session inheriting the fresh authentication.`(PAT 创建/撤销受 step-up 窗口约束;旧 CLI 会话无法在 CLI 侧 reauth,退码 2,auth.md §1.1 恢复路径同口径) |
 | 乐观锁冲突 | `Error: the issue was modified by someone else. Re-fetch with \`mesh issue get X\` and retry.` |
 | 校验失败 | `Error: invalid --priority "urgent". Expected one of: none, low, medium, high.`(回显 `details`) |
 | 限流 | 按 `Retry-After` 自动退避重试(stderr 提示),耗尽归退码 1 |

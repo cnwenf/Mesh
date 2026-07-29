@@ -3728,6 +3728,23 @@ BEGIN
   RAISE NOTICE 'PASS S2: chat_sessions.is_pinned 已删除;会话置顶经 favorites(target_type=chat_session)唯一表达';
 END $$;
 
+-- oauth_transactions:一次性 OAuth 事务(auth.md §2.4.3,R7-H3:login/link/reauth 共用 callback 的目的/会话绑定)
+CREATE TABLE oauth_transactions (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  state_hash     TEXT NOT NULL UNIQUE,                        -- SHA-256(state);state 明文仅在 start 302 中出现
+  purpose        TEXT NOT NULL CHECK (purpose IN ('login','link','reauth')),
+  provider       TEXT NOT NULL,
+  user_id        UUID NULL REFERENCES users(id) ON DELETE CASCADE,   -- link/reauth:发起用户;login:NULL
+  initiating_sid UUID NULL,                                   -- link/reauth:发起会话(reauth 仅更新此会话)
+  code_verifier  TEXT NOT NULL,                               -- PKCE verifier(生产加密存储,同 runtime_credentials 契约)
+  max_age        INT NULL,                                    -- 新鲜性约束(reauth/link 默认 0 = 强制交互)
+  safe_next      TEXT NULL,                                   -- 回跳目标(建事务时经 safeNextPath 守卫)
+  expires_at     TIMESTAMPTZ NOT NULL,                        -- TTL(默认 10 分钟)
+  consumed_at    TIMESTAMPTZ NULL,                            -- 一次性消费
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_oauth_tx_expires ON oauth_transactions (expires_at) WHERE consumed_at IS NULL;
+
 -- ===================== T36:auth sessions / 设备授权(MES-76 R2-H1/R3-H5/R3-M3)=====================
 DO $$
 DECLARE
@@ -3893,6 +3910,57 @@ BEGIN
   RAISE NOTICE 'PASS T36-9: authenticated_at step-up 状态机(NULL 默认/来源显式赋值/设备继承批准快照非消费时刻/窗口判据/reauth 恢复)';
 END $$;
 
+-- T36-10:oauth_transactions 一次性事务语义(R7-H3:purpose 绑定 + 原子消费 + 重放拒绝)
+DO $$
+DECLARE
+  v_rows INT;
+  v_sid  UUID;
+BEGIN
+  -- purpose CHECK:非法目的被拒
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, purpose, provider, code_verifier, expires_at)
+    VALUES ('h-bad', 'signup', 'mock', 'v', now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: 非法 purpose 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- login 事务:user_id/initiating_sid 可空
+  INSERT INTO oauth_transactions (state_hash, purpose, provider, code_verifier, expires_at)
+  VALUES ('h-login', 'login', 'mock', 'v1', now() + interval '10 minutes');
+  -- reauth 事务:绑定发起会话
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000003', (SELECT id FROM users LIMIT 1),
+          'mesh_rft_web_reauth', 'web', now() + interval '30 days', now());
+  SELECT id INTO v_sid FROM sessions WHERE id='abababab-0000-0000-0000-000000000003';
+  INSERT INTO oauth_transactions (state_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+  VALUES ('h-reauth', 'reauth', 'mock', (SELECT user_id FROM sessions WHERE id=v_sid), v_sid, 'v2', 0, now() + interval '10 minutes');
+
+  -- 原子消费:首次 1 行,重放 0 行(拒绝)
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T36 FAIL: 首次消费应影响 1 行';
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 重放消费应影响 0 行(state 一次性,防重放/跨账号串用)';
+
+  -- 过期事务不可消费
+  UPDATE oauth_transactions SET expires_at=now() - interval '1 minute' WHERE state_hash='h-login';
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-login' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 过期事务不可消费';
+
+  -- reauth 仅更新发起会话:模拟 callback 重校验会话不变量后更新 authenticated_at
+  UPDATE sessions SET revoked_at=now() WHERE id=v_sid;   -- 会话已撤销 → 不变量 0 行 → reauth 拒绝
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND revoked_at IS NULL AND expires_at > now() AND type='web';
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话不得通过 reauth 更新 authenticated_at(会话定位不变量)';
+  RAISE NOTICE 'PASS T36-10: oauth_transactions(purpose CHECK/state 一次性原子消费/过期拒绝/reauth 会话不变量)';
+END $$;
+
 -- T37 前置:批量行 + ANALYZE,使前缀路径 EXPLAIN 断言稳定(选择率接近生产形态,
 -- 小表统计下规划器可能误选工作区唯一索引,非索引不可用)
 INSERT INTO users (id, email, display_name)
@@ -4029,7 +4097,8 @@ BEGIN
   RAISE NOTICE 'PASS T37-8: 停用置 NULL 合法(多行 NULL 不冲突,令牌即失效)';
 END $$;
 
--- ===================== T38:词典升级路径完整 smoke test(R4-H4 建立,R5-H3 扩充,R6-H4 真实事务边界)
+-- T38:start
+-- ===================== T38:词典升级路径完整 smoke test(R4-H4 建立,R5-H3 扩充,R6-H4 真实事务边界,R7-M2 标记截段)
 -- 结构与生产分阶段迁移逐段对应:阶段 1 事务外建行为差异新版函数(词典版本共存)→
 -- 阶段 2 事务外加列 + 回补 + 双写 → 阶段 3 事务外 CREATE INDEX CONCURRENTLY ×11 →
 -- 阶段 4 单一快速事务只做改名(清理前断言新函数精确绑定 9 条规范索引、旧函数精确绑定
@@ -4255,7 +4324,8 @@ BEGIN
          'T38 FAIL: 清理后 trigram 查询应可走规范 GIN 索引';
   RAISE NOTICE 'PASS T38: 词典升级完整迁移(真实事务边界:事务外建 → 快速改名事务 COMMIT → 提交后验证 → 事务外 DROP INDEX CONCURRENTLY → 零依赖删旧 → 清理后验证)';
 END $$;
+-- T38:end
 
 \echo '============================================================'
-\echo 'ALL R2+R3+R4+R5+MES-76(R2/R3/R4) SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4+R5+R6+R7 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'

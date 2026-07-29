@@ -12,14 +12,18 @@ W(CLI/runtime 环境变量并列)/ X(CSRF token 残留,否定语境放行)。
 - 规则 Y(auth.md):登录示例**代码块上下文**校验——登录示例块不得含 `"refresh_token"`
   字段且须含 `Set-Cookie`(端点标题与字段分行即漏检的逐行匹配已废弃;注入与历史
   残留同形的跨行坏样例必失败)。
-- 规则 Z(auth.md):sessions 登记表**精确行集合**——解析标记块内表格行首格,
-  精确匹配 method + 完整 `/api/v1` 路径(register/login/oauth callback/device token/
-  refresh/logout 与 logout-all 分别成行/reset-password/change-password/reauth/
-  token GET 与 DELETE 分别成行/sessions GET 与 DELETE 分别成行/WS 握手/HTML 入口/
-  step-up 闸门)——同前缀条目不得顶替。
-- 规则 AA(validation SQL):T38 段锚定精确断言——pg_depend + refobjid、
-  v_new_bound = 9 与 v_old_bound = 9、v_old_deps = 0、9 条规范表达式索引名全集、
-  事务外 DROP INDEX CONCURRENTLY、旧函数实际删除——虚假 pg_depend 坏样例必失败。
+- 规则 Z(auth.md,R7-M2 三元组):sessions 登记表解析 (首格, purpose) 二元组——
+  精确行集合(register/login/oauth start+callback/device token+approve+deny/
+  refresh/logout 与 logout-all 分行/reset-password/change-password/reauth/
+  token GET 与 DELETE 分行/sessions GET 与 DELETE 分行/WS 握手/HTML 入口),
+  每行 purpose 须含读/写标注;step-up 闸门行 purpose 须含精确受保护路由标记
+  (api-tokens/2fa/oauth)且声明 change-password 不在预闸门(R7-M1)——同前缀条目
+  不得顶替,「路径正确但 purpose 错」坏样例必失败。
+- 规则 AA(validation SQL,R7-M2 标记截段):以唯一 `T38:start/end` 标记截段(文件头
+  总览注释不得冒充 T38 段),段内含 pg_depend + refobjid、v_new_bound = 9 与
+  v_old_bound = 9、v_old_deps = 0、9 条规范表达式索引名全集、事务外 DROP INDEX
+  CONCURRENTLY、旧函数实际删除,且阶段顺序(建 _next → 切换前断言 → 删 _prev →
+  零依赖 → 删旧函数)——「总览先出现 T38 而标记段缺断言」「阶段乱序」坏样例必失败。
 
 **坏样例自测**:每条规则携带注入坏样例,每次运行先断言全部规则必中坏样例——
 避免「绿灯只证明正则没命中」。自测失败 = 脚本缺陷,退出 1。
@@ -30,6 +34,7 @@ W(CLI/runtime 环境变量并列)/ X(CSRF token 残留,否定语境放行)。
 
 from __future__ import annotations
 
+import itertools
 import re
 import sys
 from pathlib import Path
@@ -161,6 +166,8 @@ SESSIONS_REGISTRY_REQUIRED_ROWS = (
     "POST /api/v1/auth/register",
     "POST /api/v1/auth/login",
     "POST /api/v1/auth/device/token",
+    "POST /api/v1/auth/device/approve",  # R7-H1:实查 sessions,必须登记
+    "POST /api/v1/auth/device/deny",
     "POST /api/v1/auth/refresh",
     "POST /api/v1/auth/logout",          # 独立行(logout-all 不得顶替)
     "POST /api/v1/auth/logout-all",
@@ -174,15 +181,21 @@ SESSIONS_REGISTRY_REQUIRED_ROWS = (
 )
 SESSIONS_REGISTRY_REQUIRED_CONTAINS = (
     "/api/v1/auth/oauth/{provider}/callback",  # 允许 GET/POST 合并写法
+    "/api/v1/auth/oauth/{provider}/start",
     "/ws",                                      # WS 握手鉴权行
     "HTML 入口",                                 # 个性化 HTML 入口中间件行
     "step-up",                                  # step-up 闸门中间件行
 )
+# step-up 闸门行的精确受保护路由集合(R7-H2/M2:三元组 purpose 校验)
+STEPUP_GATE_REQUIRED_TOKENS = ("api-tokens", "2fa", "oauth")
 
 
-def _registry_rows(block: str) -> list[str]:
-    """解析登记表区块表格行,返回规范化首格(去反引号/首尾空白)。"""
-    rows: list[str] = []
+def _registry_rows(block: str) -> list[tuple[str, str]]:
+    """解析登记表区块表格行,返回 (规范化首格, purpose 全文) 二元组。
+
+    purpose 取首格之后的全部列重新拼接(purpose 内允许含 `|`,如「web|cli」)。
+    """
+    rows: list[tuple[str, str]] = []
     for line in block.splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
@@ -191,13 +204,14 @@ def _registry_rows(block: str) -> list[str]:
         if not cells:
             continue
         first = cells[0].replace("`", "").strip()
+        purpose = " | ".join(cells[1:])
         if first and not set(first) <= set("-: "):  # 跳过表头分隔行
-            rows.append(first)
+            rows.append((first, purpose))
     return rows
 
 
 def check_sessions_registry(text: str) -> list[str]:
-    """auth.md:sessions 生命周期登记表精确行集合(R6-H2/M1)。"""
+    """auth.md:sessions 生命周期登记表 method/path/purpose 三元组(R6-H2/R7-M2)。"""
     violations: list[str] = []
     start = text.find("<!-- sessions-registry:start -->")
     end = text.find("<!-- sessions-registry:end -->")
@@ -205,15 +219,31 @@ def check_sessions_registry(text: str) -> list[str]:
         violations.append("auth.md: 规则 Z: 缺少 sessions-registry 标记块(登记表未登记)")
         return violations
     rows = _registry_rows(text[start:end])
-    row_set = set(rows)
+    first_cells = [first for first, _ in rows]
+    purpose_by_first = {first: purpose for first, purpose in rows}
     for required in SESSIONS_REGISTRY_REQUIRED_ROWS:
-        if required not in row_set:
+        if required not in purpose_by_first:
             violations.append(
                 f"auth.md: 规则 Z: 登记表缺少精确行「{required}」(同前缀条目不得顶替,method+完整路径逐条穷举)"
             )
+        elif not ("读" in purpose_by_first[required] or "写" in purpose_by_first[required]):
+            violations.append(
+                f"auth.md: 规则 Z: 行「{required}」的 purpose 未标注读/写目的(三元组不完整)"
+            )
     for required in SESSIONS_REGISTRY_REQUIRED_CONTAINS:
-        if not any(required in row for row in rows):
+        if not any(required in first for first in first_cells):
             violations.append(f"auth.md: 规则 Z: 登记表缺少含「{required}」的条目")
+    # step-up 闸门行:精确受保护路由集合 + change-password 不在预闸门(R7-M1/M2)
+    gate_rows = [(f, p) for f, p in rows if "step-up" in f or "step-up" in p]
+    if not gate_rows:
+        violations.append("auth.md: 规则 Z: 缺少 step-up 闸门中间件登记行")
+    else:
+        gate_purpose = " ".join(p for _, p in gate_rows)
+        for token in STEPUP_GATE_REQUIRED_TOKENS:
+            if token not in gate_purpose:
+                violations.append(f"auth.md: 规则 Z: step-up 闸门 purpose 缺少受保护路由标记「{token}」")
+        if "不在预闸门" not in gate_purpose:
+            violations.append("auth.md: 规则 Z: step-up 闸门未声明 change-password 不在预闸门集合(R7-M1 口径)")
     return violations
 
 
@@ -226,25 +256,52 @@ CANONICAL_EXPRESSION_INDEXES = (
 
 
 def check_t38_pg_depend(text: str) -> list[str]:
-    """schema_r2_validation.sql:T38 段锚定精确迁移断言(R6-H4/M1)。"""
-    t38_at = text.find("T38")
-    if t38_at < 0:
+    """schema_r2_validation.sql:T38:start/end 标记截段 + 精确断言 + 阶段顺序(R7-M2)。"""
+    start = text.find("-- T38:start")
+    end = text.find("-- T38:end")
+    if start < 0 or end < 0 or end < start:
+        if "T38" in text:
+            return ["schema_r2_validation.sql: 规则 AA: 含 T38 但缺少唯一 T38:start/end 标记截段(总览注释不得冒充 T38 段)"]
         return []
-    t38 = text[t38_at:]
+    t38 = text[start:end]
+    # 存在性与顺序均仅对可执行语句判定(剔除注释行)——注释里的「断言」是假断言(R7-M2)
+    code_only = "\n".join(
+        line for line in t38.splitlines() if not line.lstrip().startswith("--")
+    )
     violations: list[str] = []
-    if "pg_depend" not in t38 or "refobjid" not in t38:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 缺少 pg_depend/refobjid OID 绑定断言")
-    if "v_new_bound = 9" not in t38 or "v_old_bound = 9" not in t38:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 缺少新/旧函数精确绑定计数断言(v_new_bound = 9 与 v_old_bound = 9)")
-    if "v_old_deps = 0" not in t38:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 缺少旧函数零依赖断言(v_old_deps = 0)")
-    if "DROP INDEX CONCURRENTLY" not in t38:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 缺少事务外 DROP INDEX CONCURRENTLY(生产契约删除路径)")
-    if "DROP FUNCTION public.mesh_search_norm_prev" not in t38:
-        violations.append("schema_r2_validation.sql: 规则 AA: T38 缺少旧函数实际删除(DROP FUNCTION mesh_search_norm_prev)")
-    missing = [name for name in CANONICAL_EXPRESSION_INDEXES if name not in t38]
+    if "pg_depend" not in code_only or "refobjid" not in code_only:
+        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少 pg_depend/refobjid OID 绑定断言(可执行语句)")
+    if "v_new_bound = 9" not in code_only or "v_old_bound = 9" not in code_only:
+        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少新/旧函数精确绑定计数断言(v_new_bound = 9 与 v_old_bound = 9,可执行语句)")
+    if "v_old_deps = 0" not in code_only:
+        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少旧函数零依赖断言(v_old_deps = 0,可执行语句)")
+    if "DROP INDEX CONCURRENTLY" not in code_only:
+        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少事务外 DROP INDEX CONCURRENTLY(生产契约删除路径)")
+    if "DROP FUNCTION public.mesh_search_norm_prev" not in code_only:
+        violations.append("schema_r2_validation.sql: 规则 AA: T38 段缺少旧函数实际删除(DROP FUNCTION mesh_search_norm_prev)")
+    missing = [name for name in CANONICAL_EXPRESSION_INDEXES if name not in code_only]
     if missing:
-        violations.append(f"schema_r2_validation.sql: 规则 AA: T38 未锚定全部 9 条规范表达式索引,缺 {missing}")
+        violations.append(f"schema_r2_validation.sql: 规则 AA: T38 段未锚定全部 9 条规范表达式索引(可执行语句),缺 {missing}")
+    # 阶段顺序:建 _next → 切换前断言 → 事务外删 _prev → 零依赖删旧
+    stages = [
+        ("CREATE INDEX CONCURRENTLY", "事务外建 _next 索引"),
+        ("ASSERT v_new_bound = 9", "切换前新函数绑定断言"),
+        ("DROP INDEX CONCURRENTLY", "事务外删 _prev 索引"),
+        ("ASSERT v_old_deps = 0", "旧函数零依赖断言"),
+        ("DROP FUNCTION public.mesh_search_norm_prev", "删旧函数"),
+    ]
+    positions = []
+    for needle, label in stages:
+        pos = code_only.find(needle)
+        if pos < 0:
+            break
+        positions.append((pos, label))
+    if len(positions) == len(stages):
+        for (pos_a, label_a), (pos_b, label_b) in itertools.pairwise(positions):
+            if pos_a > pos_b:
+                violations.append(
+                    f"schema_r2_validation.sql: 规则 AA: T38 阶段顺序错误——「{label_a}」应在「{label_b}」之前"
+                )
     return violations
 
 
@@ -290,21 +347,31 @@ SELF_TEST_BAD_BLOCK = {
 
 _REGISTRY_GOOD_ROWS = (
     "POST /api/v1/auth/register", "POST /api/v1/auth/login",
+    "GET /api/v1/auth/oauth/{provider}/start",
     "GET/POST /api/v1/auth/oauth/{provider}/callback",
-    "POST /api/v1/auth/device/token", "POST /api/v1/auth/refresh",
+    "POST /api/v1/auth/device/token",
+    "POST /api/v1/auth/device/approve", "POST /api/v1/auth/device/deny",
+    "POST /api/v1/auth/refresh",
     "POST /api/v1/auth/logout", "POST /api/v1/auth/logout-all",
     "POST /api/v1/auth/reset-password", "POST /api/v1/auth/change-password",
     "POST /api/v1/auth/reauth", "GET /api/v1/auth/token",
     "DELETE /api/v1/auth/token", "GET /api/v1/sessions",
     "DELETE /api/v1/sessions/{id}",
 )
-_REGISTRY_TAIL_ROWS = ("`/ws` 握手鉴权", "个性化 HTML 入口中间件", "step-up 闸门中间件")
+_REGISTRY_TAIL_ROWS = (
+    "`/ws` 握手鉴权",
+    "个性化 HTML 入口中间件",
+)
+_GATE_ROW = (
+    "| step-up 闸门中间件 | **读**:受保护路由 api-tokens 创建/撤销(web|cli)、2fa 启停(web)、"
+    "oauth 换绑/解绑(web);change-password 不在预闸门集合 |"
+)
 
 
-def _registry_doc(rows: tuple[str, ...]) -> str:
-    body = "".join(f"| `{row}` | 目的 |\n" for row in rows)
-    tail = "".join(f"| {row} | 目的 |\n" for row in _REGISTRY_TAIL_ROWS)
-    return "<!-- sessions-registry:start -->\n" + body + tail + "<!-- sessions-registry:end -->"
+def _registry_doc(rows: tuple[str, ...], gate: str = _GATE_ROW) -> str:
+    body = "".join(f"| `{row}` | **读 + 写**:目的 |\n" for row in rows)
+    tail = "".join(f"| {row} | **读**:目的 |\n" for row in _REGISTRY_TAIL_ROWS)
+    return "<!-- sessions-registry:start -->\n" + body + tail + gate + "\n<!-- sessions-registry:end -->"
 
 
 SELF_TEST_BAD_FILES = {
@@ -320,6 +387,34 @@ SELF_TEST_BAD_FILES = {
         "auth.md",
         _registry_doc(tuple(r for r in _REGISTRY_GOOD_ROWS if r != "DELETE /api/v1/auth/token")),
     ),
+    "规则 Z(缺 device/approve 登记)": (
+        "auth.md",
+        _registry_doc(tuple(r for r in _REGISTRY_GOOD_ROWS if r != "POST /api/v1/auth/device/approve")),
+    ),
+    "规则 Z(路径正确但 purpose 错:无读/写标注)": (
+        "auth.md",
+        "<!-- sessions-registry:start -->\n"
+        + "".join(
+            f"| `{row}` | " + ("**读 + 写**:目的" if row != "POST /api/v1/auth/logout" else "会话管理") + " |\n"
+            for row in _REGISTRY_GOOD_ROWS
+        )
+        + "".join(f"| {row} | **读**:目的 |\n" for row in _REGISTRY_TAIL_ROWS)
+        + _GATE_ROW + "\n<!-- sessions-registry:end -->",
+    ),
+    "规则 Z(闸门缺受保护路由标记 2fa)": (
+        "auth.md",
+        _registry_doc(
+            _REGISTRY_GOOD_ROWS,
+            gate="step-up 闸门中间件 | **读**:受保护路由 api-tokens 创建/撤销、oauth 换绑;change-password 不在预闸门集合 |",
+        ),
+    ),
+    "规则 Z(闸门未声明 change-password 不在预闸门)": (
+        "auth.md",
+        _registry_doc(
+            _REGISTRY_GOOD_ROWS,
+            gate="step-up 闸门中间件 | **读**:受保护路由 api-tokens、2fa、oauth |",
+        ),
+    ),
     "规则 Y(跨行 refresh 字段,与历史残留同形)": (
         "auth.md",
         (
@@ -330,16 +425,34 @@ SELF_TEST_BAD_FILES = {
             + '            "expires_in": 900, "refresh_token": "mesh_rft_..." } }\n```\n'
         ),
     ),
-    "规则 AA(虚假 pg_depend:无计数断言)": (
+    "规则 AA(总览先出现 T38、标记段缺断言)": (
         "schema_r2_validation.sql",
-        "-- T38: SELECT * FROM pg_depend WHERE refobjid = v_oid;\n-- 无计数/无索引集合/无删除\n",
+        (
+            "-- 文件头总览:T38 升级 smoke test……\n"
+            "-- T38:start\nSELECT * FROM pg_depend WHERE refobjid = v_oid;\n"
+            "-- 无计数/无索引集合/无删除\n-- T38:end\n"
+        ),
     ),
     "规则 AA(缺事务外 DROP INDEX CONCURRENTLY)": (
         "schema_r2_validation.sql",
-        "-- T38:\n-- v_new_bound = 9 / v_old_bound = 9 / v_old_deps = 0\n"
-        + "".join(f"-- {name}\n" for name in CANONICAL_EXPRESSION_INDEXES)
-        + "SELECT count(*) FROM pg_depend WHERE refobjid = x;\n"
-        + "DROP FUNCTION public.mesh_search_norm_prev(TEXT);\n",
+        (
+            "-- T38:start\n-- v_new_bound = 9 / v_old_bound = 9 / v_old_deps = 0\n"
+            + "CREATE INDEX CONCURRENTLY x ON t(c);\n"
+            + "".join(f"-- {name}\n" for name in CANONICAL_EXPRESSION_INDEXES)
+            + "SELECT count(*) FROM pg_depend WHERE refobjid = x;\n"
+            + "DROP FUNCTION public.mesh_search_norm_prev(TEXT);\n-- T38:end\n"
+        ),
+    ),
+    "规则 AA(阶段顺序错误:先删后断言)": (
+        "schema_r2_validation.sql",
+        (
+            "-- T38:start\n"
+            + "CREATE INDEX CONCURRENTLY x ON t(c);\n"
+            + "DROP INDEX CONCURRENTLY idx_prev;\n"  # 删除早于切换前断言 → 顺序错误
+            + "ASSERT v_new_bound = 9;\nASSERT v_old_bound = 9;\nASSERT v_old_deps = 0;\n"
+            + "".join(f"-- {name}\n" for name in CANONICAL_EXPRESSION_INDEXES)
+            + "pg_depend refobjid\nDROP FUNCTION public.mesh_search_norm_prev(TEXT);\n-- T38:end\n"
+        ),
     ),
 }
 
