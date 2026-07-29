@@ -688,6 +688,40 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  // ---- issue 详情(面板空态收藏解析 H6:resolveTarget → getIssue)-----------
+  // favorites 仅返回 target id(§6.19);面板打开时经详情端点解析标题 + 深链,
+  // 404 即「目标已不存在」→ 收藏行不渲染。mock 以 SEARCH_FIXTURES 的 issue 条目
+  // 按 id 或 identifier 应答,未知 id → not_found(与真实端点同语义)。
+  const issueDetailMatch = path.match(/^\/api\/v1\/issues\/([^/]+)$/);
+  if (issueDetailMatch && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const ref = decodeURIComponent(issueDetailMatch[1]);
+    const fixture = SEARCH_FIXTURES.find(
+      (f) =>
+        f.type === 'issue' &&
+        (f.id === ref || (f.context && f.context.identifier === ref)),
+    );
+    if (!fixture) {
+      sendJson(res, 404, errorEnvelope('not_found', `issue ${ref} not found`));
+      return;
+    }
+    const status = fixture.context.status;
+    sendJson(res, 200, {
+      data: {
+        id: fixture.id,
+        title: fixture.title,
+        identifier: fixture.context.identifier,
+        state_category: status.category,
+        status: { id: status.id, name: status.name, category: status.category },
+        project: fixture.context.project,
+      },
+    });
+    return;
+  }
+
   sendJson(res, 404, errorEnvelope('not_found', `no mock route for ${req.method} ${path}`));
 }
 
