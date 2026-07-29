@@ -212,6 +212,94 @@ class TestPlainHttpProxy:
         assert len(upstream["received"]) == 1  # only the first hop reached the origin
 
 
+class TestRedirectHopCap:
+    """§3.4 rule 7 / §2.1: the frozen max_redirects is a real hop cap — once
+    the gateway has relayed max_redirects 3xx responses for an attempt,
+    further redirects are REFUSED, not relayed."""
+
+    @pytest.fixture
+    async def redirect_origin(self):
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+            while True:
+                line = await reader.readline()
+                if line in (b"\r\n", b"\n", b""):
+                    break
+            writer.write(
+                b"HTTP/1.1 302 Found\r\nLocation: http://public.example/next\r\n"
+                b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        yield port
+        server.close()
+        await server.wait_closed()
+
+    async def test_redirect_chain_capped_at_frozen_max(self, redirect_origin):
+        policy = NetworkPolicy.from_snapshot(
+            {
+                "allowed_schemes": ["http"],
+                "allowed_hosts": [HOST],
+                "allowed_ports": [redirect_origin],
+                "allowed_methods": ["GET"],
+                "max_redirects": 3,
+            }
+        )
+        gw = EgressGateway(
+            policy, resolver=resolver_to_loopback, address_filter=loopback_filter
+        )
+        await gw.start()
+        try:
+            statuses = []
+            for _ in range(6):
+                resp = await proxy_get(gw.port, f"http://{HOST}:{redirect_origin}/hop")
+                statuses.append(resp.split(b" ", 2)[1])
+            # exactly max_redirects 3xx relayed; everything after is refused
+            assert statuses[:3] == [b"302"] * 3
+            assert statuses[3:] == [b"403"] * 3
+            assert gw.stats["redirects_capped"] == 3
+        finally:
+            await gw.stop()
+
+    async def test_non_redirect_responses_do_not_consume_the_cap(self, upstream):
+        gw = EgressGateway(
+            policy_for(upstream["port"]),
+            resolver=resolver_to_loopback,
+            address_filter=loopback_filter,
+        )
+        await gw.start()
+        try:
+            for _ in range(10):  # 200 OK responses, far beyond max_redirects=5
+                resp = await proxy_get(gw.port, f"http://{HOST}:{upstream['port']}/ok")
+                assert resp.startswith(b"HTTP/1.1 200")
+            assert gw.stats["redirects_capped"] == 0
+        finally:
+            await gw.stop()
+
+
+class TestVethBind:
+    """§3.4: the gateway binds the per-attempt veth host IP — never a
+    wildcard address a host-side peer could borrow."""
+
+    async def test_binds_specified_host_ip_not_wildcard(self, upstream):
+        gw = EgressGateway(
+            policy_for(upstream["port"]),
+            resolver=resolver_to_loopback,
+            address_filter=loopback_filter,
+            listen_host="169.254.254.253",  # not on-link yet — needs IP_FREEBIND
+        )
+        port = await gw.start()
+        try:
+            bound = gw._server.sockets[0].getsockname()
+            assert bound[0] == "169.254.254.253"  # exact-IP bind, not 0.0.0.0
+            assert bound[1] == port > 0
+            assert gw.proxy_url == f"http://169.254.254.253:{port}"
+        finally:
+            await gw.stop()
+
+
 class TestConnectTunnel:
     async def test_connect_tunnels_when_host_port_allowed(self, upstream):
         policy = policy_for(upstream["port"])

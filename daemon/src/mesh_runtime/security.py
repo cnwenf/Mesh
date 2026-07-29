@@ -99,9 +99,16 @@ class AttemptSecurity:
             self.checkout_id = str(ack.get("id")) if isinstance(ack, dict) else None
         from mesh_runtime.egress import NetworkPolicy
 
+        # Bind the gateway to the per-attempt veth host IP — the sandbox's
+        # ONLY exit — never a wildcard address (§3.4). The link is reserved
+        # now so the IP is known before provisioning consumes it.
+        listen_host = "127.0.0.1"
+        if self._sandbox_manager is not None:
+            link = await self._sandbox_manager.reserve_link(cfg.attempt_id)
+            listen_host = link.host_ip
         self.egress = EgressGateway(
             NetworkPolicy.from_snapshot(cfg.network_policy),
-            listen_host="0.0.0.0",  # per-attempt veth host IP binds happen below
+            listen_host=listen_host,
             address_filter=filter_answer_set,
         )
         await self.egress.start()
@@ -211,6 +218,10 @@ class AttemptSecurity:
                 await self._adapter_destroy()
             elif self._sandbox_manager is not None:
                 await self._sandbox_manager.destroy_attempt(cfg.attempt_id)
+            if self._sandbox_manager is not None:
+                # Drop a link reservation that provisioning never consumed
+                # (attempt ended before the sandbox started).
+                self._sandbox_manager.release_link(cfg.attempt_id)
 
         async def revoke() -> None:
             # Task token revocation happens in the server's terminal

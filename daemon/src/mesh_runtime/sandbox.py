@@ -69,6 +69,17 @@ class SandboxHandle:
     verified_uid: int
 
 
+@dataclass(frozen=True)
+class LinkReservation:
+    """A reserved per-attempt veth /30, allocated before the sandbox exists
+    so the egress gateway can bind the host-side IP up front (§3.4)."""
+
+    host_ip: str
+    sandbox_ip: str
+    veth_host: str
+    veth_peer: str
+
+
 class SandboxManager:
     def __init__(
         self,
@@ -85,6 +96,7 @@ class SandboxManager:
         self.cgroup_base = Path(cgroup_base)
         self._python = python_bin or sys.executable
         self._handles: dict[str, SandboxHandle] = {}
+        self._pending_links: dict[str, LinkReservation] = {}
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -94,6 +106,22 @@ class SandboxManager:
     async def shutdown(self) -> None:
         for handle in list(self._handles.values()):
             await self.destroy(handle)
+
+    async def reserve_link(self, attempt_id: str) -> LinkReservation:
+        """Reserve the attempt's /30 link addresses BEFORE provisioning so
+        the egress gateway can bind the host veth IP first (idempotent)."""
+        reservation = self._pending_links.get(attempt_id)
+        if reservation is None:
+            host_ip, sandbox_ip, veth_host, veth_peer = await self._reserve_link_addresses(
+                attempt_id
+            )
+            reservation = LinkReservation(host_ip, sandbox_ip, veth_host, veth_peer)
+            self._pending_links[attempt_id] = reservation
+        return reservation
+
+    def release_link(self, attempt_id: str) -> None:
+        """Drop a reservation that provisioning never consumed (idempotent)."""
+        self._pending_links.pop(attempt_id, None)
 
     def _ensure_base_cgroup(self) -> None:
         self.cgroup_base.mkdir(parents=True, exist_ok=True)
@@ -123,7 +151,15 @@ class SandboxManager:
             created["root"] = True
             cgroup_path = await asyncio.to_thread(self._create_cgroup, spec)
             created["cgroup"] = cgroup_path
-            host_ip, sandbox_ip, veth_host, veth_peer = await self._reserve_link_addresses(spec)
+            link = self._pending_links.pop(spec.attempt_id, None)
+            if link is None:  # standalone provisioning (no prior reservation)
+                host_ip, sandbox_ip, veth_host, veth_peer = await self._reserve_link_addresses(
+                    spec.attempt_id
+                )
+            else:
+                host_ip, sandbox_ip, veth_host, veth_peer = (
+                    link.host_ip, link.sandbox_ip, link.veth_host, link.veth_peer,
+                )
             created["veth"] = veth_host
             handle = await self._spawn_and_verify(
                 spec, cgroup_path=cgroup_path,
@@ -173,14 +209,14 @@ class SandboxManager:
             pass
         return str(path)
 
-    async def _reserve_link_addresses(self, spec: SandboxSpec) -> tuple[str, str, str, str]:
-        digest = hashlib.sha256(spec.attempt_id.encode()).digest()
+    async def _reserve_link_addresses(self, attempt_id: str) -> tuple[str, str, str, str]:
+        digest = hashlib.sha256(attempt_id.encode()).digest()
         for salt in range(16):
             base_fourth = (digest[salt] % 63) * 4  # /30-aligned network base
             base_third = digest[(salt + 1) % len(digest)]
             host_ip = f"169.254.{base_third}.{base_fourth + 1}"
             sandbox_ip = f"169.254.{base_third}.{base_fourth + 2}"
-            short = hashlib.sha256(f"{spec.attempt_id}:{salt}".encode()).hexdigest()[:8]
+            short = hashlib.sha256(f"{attempt_id}:{salt}".encode()).hexdigest()[:8]
             veth_host = f"mvh{short[:11]}"
             veth_peer = f"mvs{short[:11]}"
             probe = subprocess.run(
@@ -351,6 +387,7 @@ class SandboxManager:
         """Idempotent S-08-grade teardown: kill the cgroup, reap, remove the
         veth pair and the attempt root. Never raises on best-effort steps."""
         self._handles.pop(handle.attempt_id, None)
+        self.release_link(handle.attempt_id)
 
         def _teardown() -> None:
             # TERM the provider, then KILL the whole cgroup (no survivors).

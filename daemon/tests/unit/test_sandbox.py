@@ -267,3 +267,32 @@ class TestCapabilities:
         )
         assert caps["sandbox"] == "linux_ns"
         assert caps["egress_enforced"] is True
+
+
+async def test_reserve_link_is_consumed_by_provision(manager, tmp_path):
+    """The egress gateway binds the veth host IP BEFORE the sandbox exists
+    (§3.4): provisioning must consume that exact reservation, not allocate a
+    fresh /30 — otherwise the bound listener and the sandbox exit diverge."""
+    attempt_id = str(uuid.uuid4())
+    link = await manager.reserve_link(attempt_id)
+    assert link.host_ip != link.sandbox_ip
+    assert await manager.reserve_link(attempt_id) is link  # idempotent
+    spec = make_spec(tmp_path / "root", attempt_id=attempt_id)
+    handle = await manager.provision(spec)
+    try:
+        assert handle.host_ip == link.host_ip
+        assert handle.sandbox_ip == link.sandbox_ip
+        assert handle.veth_host == link.veth_host
+        assert attempt_id not in manager._pending_links  # consumed
+    finally:
+        await manager.destroy(handle)
+    manager.release_link(attempt_id)  # idempotent after consumption
+
+
+async def test_release_link_drops_unconsumed_reservation(manager):
+    attempt_id = str(uuid.uuid4())
+    await manager.reserve_link(attempt_id)
+    assert attempt_id in manager._pending_links
+    manager.release_link(attempt_id)
+    assert attempt_id not in manager._pending_links
+    manager.release_link(attempt_id)  # no-op second time

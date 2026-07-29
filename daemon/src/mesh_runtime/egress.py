@@ -121,7 +121,8 @@ class EgressGateway:
         self._timeout = timeout
         self._server: asyncio.Server | None = None
         self._port = 0
-        self.stats: dict[str, int] = {"allowed": 0, "denied": 0}
+        self._redirects_served = 0  # per-attempt 3xx hop accounting (§3.4 r.7)
+        self.stats: dict[str, int] = {"allowed": 0, "denied": 0, "redirects_capped": 0}
 
     @property
     def port(self) -> int:
@@ -132,9 +133,19 @@ class EgressGateway:
         return f"http://{self._listen_host}:{self._port}"
 
     async def start(self) -> int:
-        self._server = await asyncio.start_server(
-            self._on_connection, self._listen_host, 0
-        )
+        if self._listen_host in ("0.0.0.0", "127.0.0.1", "::"):
+            self._server = await asyncio.start_server(
+                self._on_connection, self._listen_host, 0
+            )
+        else:
+            # Production path: bind the per-attempt veth HOST IP — the only
+            # interface the sandbox can reach. The address is not on-link yet
+            # (the sandbox link is created afterwards), so claim it with
+            # IP_FREEBIND; this also keeps the proxy off every other host
+            # interface — a wildcard listener would let any host-side peer
+            # borrow this attempt's allowlisted exit (§3.4).
+            sock = _freebind_listener(self._listen_host)
+            self._server = await asyncio.start_server(self._on_connection, sock=sock)
         self._port = self._server.sockets[0].getsockname()[1]
         return self._port
 
@@ -235,10 +246,12 @@ class EgressGateway:
             length = int(self._header_value(headers, "content-length") or "0")
             if length > 0:
                 await self._forward_request_body(reader, upstream_writer, length)
-            await self._stream_response(upstream_reader, writer)
+            await self._relay_response(upstream_reader, writer)
             self.stats["allowed"] += 1
         except _UploadTooLarge:
             self._deny(writer, 403)
+        except _RedirectCapped:
+            pass  # 403 already written by the hop-cap guard
         except (OSError, TimeoutError):
             pass  # client/upstream went away mid-transfer; nothing to report
         finally:
@@ -257,6 +270,29 @@ class EgressGateway:
             writer.write(chunk)
             await writer.drain()
             remaining -= len(chunk)
+
+    async def _relay_response(
+        self, upstream_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter
+    ) -> None:
+        """Pipe the upstream response to the client, enforcing the frozen
+        redirect hop cap (§3.4 rule 7 / §2.1). The gateway never follows 3xx
+        itself; the sandbox client re-enters the pipeline per hop. Each 3xx
+        this gateway serves IS one hop of that chain, so once max_redirects
+        3xx responses have been relayed for this attempt, any further
+        redirect is refused instead of relayed — bounding client-side chains
+        at the frozen limit."""
+        status_line = await asyncio.wait_for(
+            upstream_reader.readline(), timeout=self._timeout
+        )
+        if _is_redirect_status(status_line):
+            if self._redirects_served >= self._policy.max_redirects:
+                self.stats["redirects_capped"] += 1
+                self._deny(client_writer, 403)
+                raise _RedirectCapped()
+            self._redirects_served += 1
+        client_writer.write(status_line)
+        await client_writer.drain()
+        await self._stream_response(upstream_reader, client_writer)
 
     @staticmethod
     async def _stream_response(
@@ -382,3 +418,41 @@ class EgressGateway:
 
 class _UploadTooLarge(Exception):
     """Request body exceeded the frozen upload budget."""
+
+
+class _RedirectCapped(Exception):
+    """Redirect hop cap reached — the 3xx was refused, not relayed (§3.4 r.7)."""
+
+
+def _is_redirect_status(status_line: bytes) -> bool:
+    """True for an ``HTTP/x 3xx …`` status line."""
+    parts = status_line.split(None, 2)
+    if len(parts) < 2 or not parts[0].startswith(b"HTTP/"):
+        return False
+    try:
+        return 300 <= int(parts[1]) < 400
+    except ValueError:
+        return False
+
+
+#: Linux SOL_IP option allowing a bind to an address that is not on-link yet
+#: (the per-attempt veth is created after the gateway binds).
+_IP_FREEBIND = 15
+
+
+def _freebind_listener(host: str) -> socket.socket:
+    """A non-blocking, bound TCP listener on ``host:0`` that tolerates the
+    address not existing on any interface yet."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, _IP_FREEBIND, 1)
+        except OSError:
+            pass  # non-Linux dev host: plain bind; fails closed if off-link
+        sock.setblocking(False)
+        sock.bind((host, 0))
+    except OSError:
+        sock.close()
+        raise
+    return sock
