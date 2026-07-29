@@ -48,7 +48,7 @@
 连接器是抽象的**具体实现**:本期落地 **飞书/Lark、Slack、钉钉/DingTalk**(IM)与 **GitHub/GitLab**(VCS)三类公开集成目标平台,以及**出向 Webhook** 这一通用开发者通道。新增一个连接器 = 实现"签名校验 + 载荷归一 + 出站适配"三个适配点,无需触碰摄取/去重/凭据/投递的通用机制。
 
 > **钉钉连接器与三项交互能力(MES-82)**:钉钉连接器除通用摄取/出站外,额外落地三项 IM 交互能力,均由平台通用机制承载、不作连接器私有旁路:
-> 1. **emoji 确认接收(ack)**:入站任务消息摄取成功后**立即回一条轻量确认消息**(默认 `✅ 已接收,处理中`)再异步执行。钉钉开放平台**不提供**对任意消息添加 emoji 回应(reaction)的机器人 API,故"emoji 确认"以确认消息实现等价语义(见 §3.8);飞书/Slack 连接器同此语义(平台统一,不因平台有 reaction API 而分叉)。
+> 1. **emoji 确认接收(ack)**:入站任务消息摄取成功后**立即回一条轻量确认消息**(默认 `✅ 已接收,处理中`)再异步执行。钉钉**无官方公开支持**的消息级 emoji 回应(reaction)API(官方 SDK 面的 `emotion/reply` 接口无公开文档、不稳定,不予采用,§3.8),故"emoji 确认"以确认消息实现等价语义(见 §3.8);飞书/Slack 连接器同此语义(平台统一,不因平台有 reaction API 而分叉)。
 > 2. **`/stop` / `/btw` 指令(命令平面)**:入站文本命中命令前缀即走**控制平面即时处理**,不参与任务排队:`/stop` 取消发起人在本会话的在途执行与排队项;`/btw` 向本会话正在处理的执行追加补充上下文(不可信数据,§6.15)。命令注册表可扩展(见 §3.7)。
 > 3. **新消息自动排队**:入站任务消息经**会话级 FIFO 队列**(`integration_message_queue`,§2.10)按序串行派发——同一会话至多一个处理中的执行(部分唯一索引数据库级保证),新消息不丢失、不并发冲突,队列状态/位置可查询。
 
@@ -82,7 +82,8 @@
 - **不**做跨 workspace 的全局集成定义:集成与绑定都是工作区级;一个外部身份至多绑定一个工作区(外部侧唯一,§2.3)。
 - **不**自定义入站摄取的去重/签名/审计机制 —— 一律复用 autopilot `webhook_events` 范式(autopilot.md §2.5/§3.2),仅替换平台特定的签名算法与载荷归一。
 - **钉钉:只支持企业内部应用机器人(双向收发),不支持自定义 Webhook 机器人**:后者只能单向群发、无法接收消息回调,不满足本模块"摄取外部消息触发运行"的最小语义(YAGNI);`kind='im_dingtalk'` 一律以企业内部应用的 `app_key`/`app_secret` 凭据建集成。
-- **不依赖平台级 emoji 回应(reaction)API**:钉钉开放平台不对机器人开放"给任意消息添加 emoji 回应"的能力;emoji 确认接收以**轻量确认消息**实现等价语义(§3.8),且三平台语义统一(飞书/Slack 即便有 reaction API 也不分叉实现,避免连接器行为漂移)。
+- **不依赖平台级 emoji 回应(reaction)API**:钉钉**无官方公开支持**的消息级 reaction 能力——官方 SDK(robot_1.0)虽存在 `emotion/reply`/`emotion/recall` 接口,但**无任何公开文档页**(未公开支持、无 SLA、随时可变),**不予采用**;emoji 确认接收以**轻量确认消息**实现等价语义(§3.8),且三平台语义统一(飞书/Slack 即便有 reaction API 也不分叉实现,避免连接器行为漂移)。
+- **钉钉媒体与状态类 API 本期非目标(YAGNI)**:不做入站媒体下载(`messageFiles/download`,非文本消息仅审计原载荷,不取媒体内容,§3.2 消息类型矩阵)、不做机器人消息撤回(`groupMessages/recall`/`otoMessages/batchRecall`,平台支持 24h 内撤回)、不做消息已读状态查询(`groupMessages/query`/`oToMessages/readStatus` 及已读/撤回事件订阅)、不做机器人菜单/快捷入口(文本命令已足够,实现期可作 `/help` 的 UX 增强)。**平台无"机器人被移出群"事件**(钉钉事件总览「机器人」类仅已读/撤回两项),移出感知经出站失败(`upstream_error`)+ 告警路径(§3.5)。
 - **命令平面不持有执行生命周期语义**:`/stop` 的实际取消动作经 runtime 的执行取消协议(runtime.md `task_executions` 状态机,`failure_reason='cancelled_by_command'` 为 runtime.md 登记词汇),`/btw` 的上下文注入经 **runtime.md「运行期上下文追加」机制(`execution_context_appends` 表 + 心跳下行,本 Spec 增补同步登记于 runtime.md/agent.md**,不可信数据隔离,§6.15,下一 turn 边界生效);本模块只是命令的**解析、鉴权与转发面**,不另建执行状态真源。
 
 ---
@@ -708,11 +709,18 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
                             { "type": "CALLBACK", "topic": "/v1.0/card/instances/callback" } ],
          "ua": "mesh-integration/<version>" }
      → 得 { endpoint, ticket }(均短期有效)→ WSS 连接 wss://<endpoint>?ticket=<ticket>
-  → 收到 topic='/v1.0/im/bot/messages/get' 帧(载荷同 HTTP 回调 body:msgId/conversationId/
-     conversationType/senderStaffId/text.content/sessionWebhook…)
-     → 【同事务】走统一摄取管线(§3.2 统一摄取流程,与 HTTP 端点共用同一服务函数)
-     → 摄取事务提交后向钉钉回帧 ACK { "code": 200, "headers": <原帧 headers>, "message": "OK",
-       "data": "received" } —— ACK 必须返回,否则钉钉按未确认重推(重推经 msgId 去重幂等,§3.2)
+  → 帧处理协议(帧结构 { specVersion:'1.0', type, headers{topic,…}, payload, time }):
+     · type='SYSTEM' 系统帧:topic='ping' → 【必须回 ACK】{ code:200, headers:原样回传,
+       message:'OK', data:回原 payload }(官方 SDK 同构 KeepAlive;不回 ping → 平台判定连接
+       不健康主动断连);topic='disconnect' → 平台要求下线,主动关闭连接并立即重走 connections/open
+     · type='CALLBACK' topic='/v1.0/im/bot/messages/get'(载荷同 HTTP 回调 body:msgId/
+       conversationId/conversationType/senderStaffId/text.content/sessionWebhook…)
+       → 【同事务】走统一摄取管线(§3.2 统一摄取流程,与 HTTP 端点共用同一服务函数)
+       → 摄取事务提交后回帧 ACK { code:200, headers:原帧 headers, message:'OK', data:'received' }
+       —— ACK 必须返回,否则钉钉按未确认重推(重推经 msgId 去重幂等,§3.2)
+     · type='CALLBACK' topic='/v1.0/card/instances/callback' → 卡片回调链(§3.10)→ 回 ACK
+     · Mesh 侧心跳探活(heartbeat_timeout_seconds,默认 90s 无任何帧)与平台 ping 机制**并列**:
+       任一失活即触发重连
   → 连接断开/心跳超时(config.stream_reconnect.heartbeat_timeout_seconds,默认 90s 无帧)
      → 指数退避重连(base 2s,max 300s,±20% 抖动,config.stream_reconnect)→ 重走 connections/open
   → 集成 disabled/删除 → 关闭该集成长连接;凭据轮换 → 断连并以新密文重连
@@ -722,9 +730,9 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 >
 > **传输硬化(硬约束)**:仅接受 `wss://` 网关 endpoint(非 wss 即拒连 + 告警,防降级);强制校验网关 TLS 证书(禁 `verify=False`);`ticket` 是钉钉协议要求的短期一次性建连凭据(置于 WS URL query 为平台协议强制,构成 README §6.16「禁 URL query 传 token」的**显式命名例外**:该约束针对 Mesh 自有 `/ws` 网关的长期会话 token,钉钉 ticket 短时效 + 单次使用 + 不落日志/事件载荷/出站台账),缓解 = wss + 证书校验 + 每轮重连重新换取。
 >
-> **单实例互斥与崩溃安全**:同一集成的 Stream worker 以数据库咨询锁(`pg_advisory_lock(hashtext('dingtalk_stream:'||integration_id))`)保证全局单连接,避免双连接导致钉钉侧负载与重复推送;即便互斥失效,`integration_events.UNIQUE(integration_id, external_event_id)` 去重仍是最终幂等兜底。worker 崩溃由进程守护(compose `restart: unless-stopped`)重拉,重连后钉钉重推未 ACK 帧,不丢消息。
+> **单实例互斥与崩溃安全**:同一集成的 Stream worker 以数据库咨询锁(`pg_advisory_lock(hashtext('dingtalk_stream:'||integration_id))`)保证全局单连接,避免双连接导致钉钉侧负载与重复推送;即便互斥失效,`integration_events.UNIQUE(integration_id, external_event_id)` 去重仍是最终幂等兜底。worker 崩溃由进程守护(compose `restart: unless-stopped`)重拉,重连后钉钉重推未 ACK 帧,不丢消息。**平台连接上限(S-5)**:钉钉 Stream **单应用最多 50 条连接**——多个 Mesh 集成配置**共享同一 `app_key`** 时,实现期连接管理按 `(app_key)` 粒度去重共享一条物理连接(帧按 `robotCode`/集成路由分发),而非每集成各占一条;`GET .../stream-status` 对共享连接的同 app 集成返回同一连接态。
 >
-> **`sessionWebhook` 的处理**:入站载荷携带有效期约 1 小时的 `sessionWebhook`(钉钉侧快捷回复地址);本模块**不将其作为出站主通道**(短时效、不可靠、不利审计),仅记录于事件载荷备查;出站一律经 OpenAPI + `accessToken`(§3.10),受 §6.16 SSRF 防护(`oapi.dingtalk.com`/`api.dingtalk.com` 之外的用户可控地址不参与出站)。
+> **`sessionWebhook` 的处理**:入站载荷携带 `sessionWebhook`(钉钉侧快捷回复地址),时效由载荷 `sessionWebhookExpiredTime` 绝对过期戳给出(官方示例约 90 分钟,无固定值);本模块**不将其作为出站主通道**(短时效、不可靠、不利审计),仅记录于事件载荷备查;出站一律经 OpenAPI + `accessToken`(§3.10),受 §6.16 SSRF 防护(`oapi.dingtalk.com`/`api.dingtalk.com` 之外的用户可控地址不参与出站)。
 
 **钉钉入站载荷归一与消息类型矩阵(一致性评审穷举项,写死)**:
 
@@ -1014,9 +1022,15 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 |------|------|------|
 | 群消息(确认接收/进度/结果/命令反馈) | `POST /v1.0/robot/groupMessages/send` `{robotCode, openConversationId(=external_ref), msgKey, msgParam}` | `msgKey` ∈ `sampleText`/`sampleMarkdown`/`sampleActionCard6` 等;`msgParam` 为对应 JSON 字符串 |
 | 单聊消息 | `POST /v1.0/robot/oToMessages/batchSend` `{robotCode, userIds:[<senderStaffId>], msgKey, msgParam}` | 同上 |
-| 审批/交互卡片 | **钉钉互动卡片 card_1.0 体系(写死,勿与旧 `im/robots/interactiveCards` 混用)**:`cardTemplateId`(模板)+ `outTrackId`(每卡唯一、更新幂等键,取 `approval_id` 派生)+ `openSpaceId`(投放空间);**回调通道 `callbackType=STREAM/HTTP` 二选一**,与接收模式对齐(Stream 模式经 topic `/v1.0/card/instances/callback`;HTTP 模式经独立回调地址,签名同 §3.2 钉钉行);卡片参数受官方硬约束(`cardParamMap` key≤100B / value≤1KB) | 回调鉴权链同飞书/Slack 卡片(§3.2/§4.3 流程 B):**点击者身份锚定回调载荷 `senderStaffId`(企业员工 userId),无 staffId 回落 `x-<senderId>` 编码**(§3.10 编码,与入站同映射)→ `external_identities`(provider='dingtalk', tenant=corp_id)→ 全局 `users.id` → 集成解析 workspace → JOIN `members` 名册行 → README §6.10 权限校验 → 转发 `POST /approvals/{id}/approve\|reject`;未映射/无名册行/无权限 → 403,审批状态不变,留痕;**回调响应即回写卡片**(响应体 `cardUpdateOptions` + `cardData`/`userPrivateData`,loading 态经 `userPrivateData` 按点击者私有呈现,终态经 `cardData` 公共更新;§4.4 生命周期) |
+| 审批/交互卡片 | **钉钉互动卡片 card_1.0 体系(写死,勿与旧 `im/robots/interactiveCards` 混用;`sampleActionCard6` 等传统 ActionCard 无回调/无更新能力,仅可作纯通知卡,严禁承载 §6.10 审批卡)**:投放经 **`POST /v1.0/card/instances/createAndDeliver`** —— `cardTemplateId`(模板)+ **`outTrackId`(每卡唯一,绑定 `approval_id`,回调据此回查审批)** + **`openSpaceId`(`dtv1.card//IM_GROUP.<openConversationId>` 群 / `dtv1.card//IM_ROBOT.<senderStaffId>` 单聊)** + `cardData` + **`callbackType='STREAM'`(复用本模块已建长连接,推荐)或 `'HTTP'`**(独立回调地址,签名同 §3.2 钉钉行,二选一与接收模式对齐);更新经 `PUT /v1.0/card/instances`;卡片参数受官方硬约束(`cardParamMap` key≤100B / value≤1KB) | 回调(topic `/v1.0/card/instances/callback`)鉴权链同飞书/Slack 卡片(§3.2/§4.3 流程 B):**点击者身份锚定回调载荷 `userId`(配 `userIdType`,**写死按 staffId 归一**),无 staffId 回落 `x-<senderId>` 编码**(§3.10 编码,与入站同映射)→ `external_identities`(provider='dingtalk', tenant=corp_id)→ 全局 `users.id` → 集成解析 workspace → JOIN `members` 名册行 → README §6.10 权限校验 → 转发 `POST /approvals/{id}/approve\|reject`;未映射/无名册行/无权限 → 403,审批状态不变,留痕;**回调响应即回写卡片**(响应体 `cardUpdateOptions` + `cardData`/`userPrivateData`,loading 态经 `userPrivateData` 按点击者私有呈现,终态经 `cardData` 公共更新;§4.4 生命周期) |
 
 **主动推送(任务进度与结果)**:执行进度/结果通知经统一通知管线(README §6.13 `channel='im'`)→ 出站适配器按 `notification_delivery.destination_key='dingtalk:<binding_id>:<conversationId>'` 投递到源会话;台账落 `notification_delivery(channel='im', provider='dingtalk')`;限流退避(钉钉 OpenAPI 速率限制)与失败重试经出站适配器统一处理(同飞书范式)。**静默优先(`config.verbosity='final_only'`,默认)**:IM 会话只推确认接收、审批/交互卡片与**最终结果**,中间进度(工具调用流水、阶段性日志)**默认不出站**——避免群聊刷屏,过程可观测性以 Mesh 站内执行详情为真源(README §6.13:站内永远是通知真源);`verbosity='progress'` 时进度通知一并推送(通知分级与去噪仍按 README §6.13 唯一优先级矩阵,本模块不另行定义)。
+
+**平台官方出站约束(一致性评审穷举,写死)**:
+- **限流以错误码呈现,无官方公开每分钟数值**:机器人消息 API 的限流经响应错误码 + `flowControlledStaffIdList`(被限流的接收人)返回(`send.too.fast`/`too.many.group`/`too.many.people`/`send.byToken.tooFast`);出站适配器**按错误码分类退避**(命中限流码 → 指数退避 + 对 `flowControlledStaffIdList` 中的接收人延迟重试,不整体失败),与 HTTP 429 同策略;Spec **不写死具体限额数值**。
+- **平台通用限额(自托管运维知悉项)**:标准版单应用单 API 约 20 QPS、全部内部应用合计约 1 万次/月、单 IP >1 万次/20s 封禁 5 分钟(专业/专属版分级不同);大规模部署的运维容量规划参考,非本模块运行时参数。
+- **`groupMessages/send` 载荷约束**:`msgParam` **≤ 15000 字节**、**不支持 @ 提及**(UX 约束:ack/结果文案设计不得依赖 @ 发起人,需引起注意时以文案直呼展示名替代)。
+- **超长结果行为(写死)**:结果文本超 15000 字节 → **markdown 分段发送**(按段落/代码块边界切分,每段 < 15000 字节;分段幂等键 `sha256(notification_id | 'chunk' | i)` 登记 README §6.5,at-least-once 下重复出队不重复发段);**分段数超 `MESH_IM_MAX_CHUNKS`(默认 5)→ 其后内容截断 + 末段附站内执行详情深链**("完整结果见 Mesh:<URL>")。
 
 **SSRF 与 URL 约束**:钉钉出站目标固定为平台官方域(`api.dingtalk.com`/`oapi.dingtalk.com`),不接受用户可控出站地址(README §6.16);入站载荷中的 `sessionWebhook` 不作为出站目标使用(§3.2 备注)。
 
@@ -1211,7 +1225,11 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **互动卡片回调鉴权(同 §5.2 卡片链)**:钉钉互动卡片按钮回调 → 点击者 `userId` + corp_id → `external_identities` → `users.id` → 集成解析 workspace → JOIN members → §6.10 权限校验;未映射/无名册行点击批准 → 403,审批状态不变,留痕;已映射有权限者点击 → 转发 approve/reject,重复点击幂等。
 - [ ] **钉钉卡片交互全生命周期(§4.4)**:点击 → 按钮即时 loading;成功 → 卡片更新终态文本 + **按钮禁用**;重复点击 → no-op 终态保持;审批过期 → "已过期" + [回 Mesh 处理] 深链;回调转发失败 → "处理失败" + 深链兜底 + 告警;无权/未映射 → "无权限" + 引导(不泄露详情);断言各态卡片更新幂等(同一 approval_id 更新不冲突)。
 - [ ] **测试出站与接收诊断分离**:`POST .../test-send` 在 Stream 接收信道 down 时**仍成功**(出站不依赖接收信道;失败仅 `upstream_error`/凭据问题);`GET .../stream-status` 独立报告接收信道态;`503 stream_channel_unavailable` 不出现在 test-send 响应。
-- [ ] **真实钉钉联调(验收阶段)**:真实企业内部应用机器人(测试企业)端到端 —— Stream 建连、群内 @触发 + ✅ 确认(leading edge)、/stop 两阶段、/btw、排队、卡片点击闭环、最终结果推送全部真实验证(非 mock);联调存证(截图/日志)附验收评论。
+- [ ] **非文本入站消息矩阵(C-1)**:群聊 @机器人发 audio/video/file → 平台不投递(无 `integration_events` 行,非模块过滤);单聊发 picture/richText → 事件落库 `processed` + **不创建执行、不入队列、不 ack**(审计载荷含 msgtype);单聊 text → 正常触发;`messageFiles/download` 媒体下载路径不存在于代码(非目标断言)。
+- [ ] **出站平台约束(C-2)**:模拟 `send.too.fast` 错误码 → 出站适配器指数退避重试(不整体失败,台账记限流码);结果文本 >15000 字节 → 按边界分段发送(各段幂等键 `sha256(notification_id|'chunk'|i)`,重复出队不重发段);超 `MESH_IM_MAX_CHUNKS`(默认 5)→ 截断 + 末段含站内深链;出站文案断言不含 @ 提及(平台不支持)。
+- [ ] **卡片 API 面(C-3)**:审批卡片投放经 `createAndDeliver`(断言请求含 `cardTemplateId`/`outTrackId`=approval 派生/`openSpaceId` 群或单聊格式/`callbackType`);**审批卡片路径不出现 `sampleActionCard6`/传统 ActionCard**(代码路径断言);更新经 `PUT /v1.0/card/instances`,outTrackId 幂等(重复更新不冲突)。
+- [ ] **Stream 系统帧(C-4)**:测试替身注入 `type='SYSTEM', topic='ping'` 帧 → worker 回 ACK(code=200 + 原 headers + 原 payload data);注入 `topic='disconnect'` → worker 主动断连并重走 connections/open;90s 无帧 → Mesh 侧探活重连(与平台 ping 并列)。
+- [ ] **真实钉钉联调(验收阶段)**:真实企业内部应用机器人(测试企业)端到端 —— Stream 建连、群内 @触发 + ✅ 确认(leading edge)、/stop 两阶段、/btw、排队、卡片点击闭环、最终结果推送全部真实验证(非 mock);联调存证(截图/日志)附验收评论。**观察项(C-5)**:联调时实测 `/v1.0/robot/emotion/reply` 实际可用性并记录(可用亦不改本期设计——无官方公开文档/无 SLA,官方转正后再评估)。
 
 **平台硬化与横切(评审收口)**:
 - [ ] **入站频率护栏(§2.10)**:单身份超 20 条/分钟(`MESH_IM_INBOUND_PER_IDENTITY_PER_MIN`)或单会话超 60 条/分钟或会话 pending 深度超 50 → 超限消息**不入队、不创建执行、不 ack**,落 `rejected` + `_mesh_reject_reason='rate_limited'` + 一次性机器人提示(同会话提示 ≤1 次/分钟)+ 告警;HTTP 模式超限仍返回 200(不触发平台重推)。

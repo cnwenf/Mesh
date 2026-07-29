@@ -326,6 +326,7 @@ awaiting_approval ──拒绝/过期──► cancelled(失败终态,failure_re
   | 数据作业入队(import/export) | `sha256(data_job_id \| action)`(`action ∈ {created, import-validate, import-run, export}`;同一作业同一动作不重复入队,import-export.md §3.8) |
   | 数据作业恢复(reaper) | `sha256(data_job_id \| 'resume' \| last_committed_batch)`(按 checkpoint 批次去重,保证回收-重投幂等,import-export.md §3.8 R3) |
   | 集成 IM 会话性出站(确认接收 ack / 命令反馈,integrations.md §3.8) | `sha256(queue_item_id \| 'ack')`(经 outbox `im.send` 快通道,at-most-once;同一队列项至多一条确认消息) |
+  | 集成 IM 超长结果分段发送(integrations.md §3.10,钉钉 msgParam ≤15000 字节) | `sha256(notification_id \| 'chunk' \| i)`(第 i 段至多一次;at-least-once 出队下重复不重发段) |
 
 - 接收方(评论 API、工具网关等)以 `Idempotency-Key` 落库去重,重复投递返回首次结果。
 
