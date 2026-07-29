@@ -13,8 +13,11 @@ const EXPECTED: ReadonlyArray<{ testid: string; label: string; href: string }> =
   { testid: 'nav-board', label: 'Board', href: '/board' },
   { testid: 'nav-members', label: 'Members', href: '/members' },
   { testid: 'nav-chat', label: 'Chat', href: '/chat' },
-  // 自动化入口指向 Runtimes 模块(runtime.md §4);文案保持 nav.automation。
-  { testid: 'nav-automation', label: 'Automation', href: '/runtimes' },
+  // 统一「待我审批」入口(README §6.10 / §3.4 规范深链)。
+  { testid: 'nav-approvals', label: 'Approvals', href: '/approvals' },
+  // 自动化运营区(§6.12 信息架构:Autopilots / Runtimes / Skills 三入口),
+  // 无工作区上下文时为扁平路径(经 FlatRouteMigration 解析至规范路由)。
+  { testid: 'nav-automation', label: 'Automation', href: '/automations/runtimes' },
   { testid: 'nav-settings', label: 'Settings', href: '/settings' },
 ];
 

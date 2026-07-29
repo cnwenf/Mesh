@@ -5,7 +5,7 @@
  * 引用回复(quote_message_id)以顶部横幅呈现,可 × 取消;流式进行中由父级禁用。
  * 数据获取/乐观在父级(onSend 返回 Promise);本组件只编排输入与上传态。
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { Button, IconButton } from '../../design';
 import { useT } from '../../i18n';
@@ -37,15 +37,25 @@ export interface ChatComposerProps {
   readonly onClearQuote: () => void;
   /** 会话非 active 或流式进行中时禁用发送。 */
   readonly disabled?: boolean;
+  /** mod+↑ 编辑上一条:nonce 变化即以 content 预填草稿并聚焦(§4.3 S12)。 */
+  readonly draftSeed?: { readonly nonce: number; readonly content: string } | null;
 }
 
 export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
   const t = useT();
   const uploader = useAttachmentUploader();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
+
+  // mod+↑「编辑上一条」草稿种子:nonce 变化即预填并聚焦。
+  useEffect(() => {
+    if (props.draftSeed === undefined || props.draftSeed === null) return;
+    setValue(props.draftSeed.content);
+    textareaRef.current?.focus();
+  }, [props.draftSeed]);
 
   const isUploading = uploader.uploads.some((upload) => PENDING_PHASES.has(upload.phase));
   // 就绪附件(scanning/ready 且已得 attachmentId):id 用于发送关联,ref 用于乐观展示。
@@ -97,9 +107,21 @@ export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        void submit();
+      // IME 组合输入豁免(评审 P1):候选词阶段的 Enter 是选词确认,不是发送。
+      if (event.nativeEvent.isComposing || event.keyCode === 229) {
+        return;
+      }
+      if (event.key === 'Enter') {
+        // Enter 发送;Shift+Enter 换行(§4.3 S12);mod+Enter 同样发送(兼容旧肌肉记忆)。
+        if (event.metaKey || event.ctrlKey || !event.shiftKey) {
+          event.preventDefault();
+          void submit();
+        }
+        return;
+      }
+      if (event.key === 'Escape') {
+        // Esc 退出输入焦点(§4.3 S12)。
+        event.currentTarget.blur();
       }
     },
     [submit],
@@ -159,6 +181,7 @@ export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
       ) : null}
 
       <textarea
+        ref={textareaRef}
         className="mesh-chat__composer-input"
         data-testid="chat-composer-input"
         value={value}

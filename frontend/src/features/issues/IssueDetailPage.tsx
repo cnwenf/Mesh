@@ -15,6 +15,7 @@ import { Button, ErrorState, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { AttachmentPanel } from '../attachments';
 import { useSettingsStore } from '../../state/settingsStore';
 import { CommentsPanel } from '../comments';
@@ -168,6 +169,36 @@ export function IssueDetailPage(): React.JSX.Element {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
+
+  // issue 详情上下文组(§4.3 S11):['global','board','issue'] —— issue 特异性
+  // 最高,同键仲裁胜出(详情抽屉叠于看板之上时 board 组共存而不冲突)。
+  usePageContext('board', 'issue');
+
+  useEffect(() => {
+    const registry = useShortcutRegistry.getState();
+    const focusField = (testid: string) => () => {
+      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)?.focus();
+    };
+    return registry.registerShortcuts([
+      { id: 'issue.edit', combo: 'e', label: t('shortcuts.issueEdit'), group: 'issue', run: focusField('issue-detail-title') },
+      { id: 'issue.status', combo: 's', label: t('shortcuts.issueStatus'), group: 'issue', run: focusField('issue-detail-status') },
+      { id: 'issue.assignee', combo: 'a', label: t('shortcuts.issueAssignee'), group: 'issue', run: focusField('issue-detail-assignee') },
+      { id: 'issue.priority', combo: 'p', label: t('shortcuts.issuePriority'), group: 'issue', run: focusField('issue-detail-priority') },
+      // L:打开标签选择器(评审 P5,label-property.md 既有搜索输入即选择入口)。
+      { id: 'issue.labels', combo: 'l', label: t('shortcuts.issueLabels'), group: 'issue', run: focusField('issue-label-search') },
+      { id: 'issue.milestone', combo: 'm', label: t('shortcuts.issueMilestone'), group: 'issue', run: focusField('issue-detail-milestone') },
+      {
+        id: 'issue.submit.comment',
+        combo: 'mod+enter',
+        label: t('shortcuts.issueSubmitComment'),
+        group: 'issue',
+        run: () => {
+          document.querySelector<HTMLButtonElement>('[data-testid="composer-submit"]')?.click();
+        },
+      },
+      { id: 'issue.close', combo: 'esc', label: t('shortcuts.issueClose'), group: 'issue', run: () => navigate(-1) },
+    ]);
+  }, [t, navigate]);
 
   const [issue, setIssue] = useState<IssueDetail | null>(null);
   const [statuses, setStatuses] = useState<IssueStatusRef[]>([]);

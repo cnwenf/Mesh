@@ -2,9 +2,19 @@
  * 对话框:role=dialog + aria-modal,由 title prop 标注(aria-labelledby)。
  * 焦点圈养:打开后焦点移入;Tab/Shift+Tab 在对话框内循环;Esc 关闭(onClose);
  * 点击遮罩关闭;关闭后焦点归还打开前的触发元素。无硬编码文案(closeLabel 来自调用方)。
+ *
+ * 弹层分层关闭栈(§4.5,评审 P3):打开期间经 overlayStack 登记——快捷键分发
+ * 据此全屏蔽背景页面键;Esc 语义分层:弹层内输入控件获焦时首个 Esc 仅失焦
+ * 输入控件,不关弹层;关闭后焦点归还触发元素,触发元素已不存在时回落页面
+ * 主区域首个可聚焦元素(绝不落 body)。
  */
 import { useEffect, useId, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import {
+  isFormFieldElement,
+  pushOverlay,
+  restoreOverlayFocus,
+} from '../../shortcuts/overlayStack';
 import { IconButton } from './IconButton';
 import './components.css';
 
@@ -38,10 +48,16 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
     previouslyFocusedRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
+    const removeOverlay = pushOverlay({
+      id: titleId,
+      returnFocusTo: previouslyFocusedRef.current,
+    });
     return () => {
-      previouslyFocusedRef.current?.focus();
+      removeOverlay();
+      // 触发元素已不在文档中时回落 main 首个可聚焦元素(§6.12,绝不落 body)。
+      restoreOverlayFocus(previouslyFocusedRef.current);
     };
-  }, [open]);
+  }, [open, titleId]);
 
   if (!open) {
     return null;
@@ -50,6 +66,17 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.stopPropagation();
+      // §4.5 分层关闭:弹层内输入控件获焦时,首个 Esc 仅失焦输入控件,不关弹层。
+      const active = document.activeElement;
+      if (
+        active !== null &&
+        active !== dialogRef.current &&
+        isFormFieldElement(active) &&
+        dialogRef.current?.contains(active) === true
+      ) {
+        (active as HTMLElement).blur();
+        return;
+      }
       onClose();
       return;
     }

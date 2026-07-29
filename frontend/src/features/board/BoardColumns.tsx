@@ -43,14 +43,26 @@ interface BoardCardProps {
   readonly card: BoardCard;
   readonly index: number;
   readonly draggable: boolean;
+  readonly selected: boolean;
+  readonly onSelect: (issueId: string) => void;
   readonly onDropOnCard: (issueId: string, index: number) => void;
 }
 
-function BoardCardItem({ card, index, draggable, onDropOnCard }: BoardCardProps): React.JSX.Element {
+function BoardCardItem({
+  card,
+  index,
+  draggable,
+  selected,
+  onSelect,
+  onDropOnCard,
+}: BoardCardProps): React.JSX.Element {
   return (
     <div
-      className="mesh-board__card"
+      className={selected ? 'mesh-board__card mesh-board__card--selected is-selected' : 'mesh-board__card'}
       data-testid={`board-card-${card.id}`}
+      aria-selected={selected}
+      tabIndex={-1}
+      onClick={() => onSelect(card.id)}
       draggable={draggable}
       onDragStart={(event) => {
         event.dataTransfer.setData(CARD_MIME, card.id);
@@ -86,6 +98,8 @@ interface BoardColumnCardProps {
   readonly cards: readonly BoardCard[];
   readonly canWrite: boolean;
   readonly dragEnabled: boolean;
+  readonly selectedCardId: string | null;
+  readonly onSelectCard: (issueId: string) => void;
   readonly onToggleCollapse: (key: string) => void;
   readonly onDropCard: (issueId: string, toGroupKey: string, position: number) => void;
   readonly onQuickCreate: (groupKey: string, title: string) => void;
@@ -151,8 +165,18 @@ function QuickCreate({
 }
 
 function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
-  const { column, groupBy, cards, canWrite, dragEnabled, onToggleCollapse, onDropCard, onQuickCreate } =
-    props;
+  const {
+    column,
+    groupBy,
+    cards,
+    canWrite,
+    dragEnabled,
+    selectedCardId,
+    onSelectCard,
+    onToggleCollapse,
+    onDropCard,
+    onQuickCreate,
+  } = props;
   const t = useT();
   const isDynamic = groupBy !== null && groupBy !== 'state_category' && groupBy !== 'priority';
   const label =
@@ -215,6 +239,8 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
                 card={card}
                 index={index}
                 draggable={dragEnabled}
+                selected={card.id === selectedCardId}
+                onSelect={onSelectCard}
                 onDropOnCard={(issueId, cardIndex) =>
                   onDropCard(issueId, column.key, computeDropPosition(cards, cardIndex))
                 }
@@ -234,6 +260,9 @@ interface BoardColumnsProps {
   readonly cardsByKey: Readonly<Record<string, readonly BoardCard[]>>;
   readonly canWrite: boolean;
   readonly dragEnabled: boolean;
+  /** 键盘选中卡(§4.3.1 评审 P4:「选中」从此有键盘路径);null/缺省 = 未选中 */
+  readonly selectedCardId?: string | null;
+  readonly onSelectCard?: (issueId: string) => void;
   readonly onToggleCollapse: (key: string) => void;
   readonly onDropCard: (issueId: string, toGroupKey: string, position: number) => void;
   readonly onQuickCreate: (groupKey: string, title: string) => void;
@@ -250,6 +279,8 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     onDropCard,
     onQuickCreate,
   } = props;
+  const selectedCardId = props.selectedCardId ?? null;
+  const onSelectCard = props.onSelectCard ?? (() => undefined);
   return (
     <div className="mesh-board__columns" role="list" data-testid="board-columns">
       {columns.map((column) => (
@@ -260,6 +291,8 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
             cards={cardsByKey[column.key] ?? []}
             canWrite={canWrite}
             dragEnabled={dragEnabled}
+            selectedCardId={selectedCardId}
+            onSelectCard={onSelectCard}
             onToggleCollapse={onToggleCollapse}
             onDropCard={onDropCard}
             onQuickCreate={onQuickCreate}

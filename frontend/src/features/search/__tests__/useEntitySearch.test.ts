@@ -1,0 +1,205 @@
+/**
+ * useEntitySearch 单测(§4.7:防抖 150ms / identifier 跳过防抖 / 过期请求取消 / 重试)。
+ * 以受控 fetch 桩(注入 MeshApiClient.fetchImpl)+ 假时钟驱动。
+ */
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MeshApiClient } from '../../../api/client';
+import { SEARCH_DEBOUNCE_MS, useEntitySearch } from '../useEntitySearch';
+import type { SearchResultItem } from '../types';
+
+interface PendingCall {
+  url: string;
+  signal: AbortSignal | undefined;
+  resolve: (response: Response) => void;
+  reject: (error: unknown) => void;
+}
+
+const ISSUE_ITEM: SearchResultItem = {
+  type: 'issue',
+  id: 'i1',
+  title: 'Login page',
+  context: { identifier: 'WEB-1', project: null, status: { id: 's', name: 'Todo', category: 'todo' } },
+  icon: 'issue',
+  url: '/w/acme/issues/i1',
+};
+
+function okEnvelope(data: readonly SearchResultItem[]): Response {
+  return new Response(JSON.stringify({ data, next_cursor: null }), { status: 200 });
+}
+
+describe('useEntitySearch(防抖 + 过期取消,§4.7)', () => {
+  const calls: PendingCall[] = [];
+  const fetchImpl = vi.fn((url: string | URL | Request, init?: RequestInit) => {
+    let resolve!: (response: Response) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<Response>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    calls.push({ url: String(url), signal: init?.signal ?? undefined, resolve, reject });
+    return promise;
+  });
+  const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => null, fetchImpl });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    calls.length = 0;
+    fetchImpl.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function setup(initialQuery = '') {
+    return renderHook(
+      ({ q, enabled }: { q: string; enabled: boolean }) =>
+        useEntitySearch({ client, workspaceId: 'ws-1', query: q, enabled }),
+      { initialProps: { q: initialQuery, enabled: true } },
+    );
+  }
+
+  it('空查询不发请求,结果为空', () => {
+    const { result } = setup('');
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.current.entityResults).toEqual([]);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('普通查询防抖 150ms:窗口内不发,到点即发', () => {
+    const { rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1);
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.url).toContain('/api/v1/workspaces/ws-1/search');
+    expect(calls[0]?.url).toContain('q=abc');
+  });
+
+  it('连续输入只发最后一次(防抖合并)', () => {
+    const { rerender } = setup('');
+    rerender({ q: 'a', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(60);
+    });
+    rerender({ q: 'ab', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(60);
+    });
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.url).toContain('q=abc');
+  });
+
+  it('完整 identifier 形态跳过防抖即刻请求(大小写/空白不敏感)', () => {
+    const { rerender } = setup('');
+    rerender({ q: ' web-124 ', enabled: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(calls[0]?.url).toContain('q=web-124');
+  });
+
+  it('新请求发出时 abort 上一在途请求(过期取消)', () => {
+    const { rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const firstSignal = calls[0]?.signal;
+    rerender({ q: 'def', enabled: true });
+    expect(firstSignal?.aborted).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('响应到达后落结果并退出 loading', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(result.current.loading).toBe(true);
+    await act(async () => {
+      calls[0]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.error).toBeNull();
+    expect(result.current.entityResults).toEqual([ISSUE_ITEM]);
+  });
+
+  it('查询清空后重置结果且不发新请求', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      calls[0]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    rerender({ q: '', enabled: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.current.entityResults).toEqual([]);
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('enabled=false 时停检索', () => {
+    const { rerender } = setup('');
+    rerender({ q: 'abc', enabled: false });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS * 3);
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('失败上报 error 态;retry 不改变 query 即重发并恢复', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      calls[0]?.reject(new Error('boom'));
+    });
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.loading).toBe(false);
+
+    act(() => {
+      result.current.retry();
+    });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      calls[1]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.entityResults).toEqual([ISSUE_ITEM]);
+  });
+
+  it('被 abort 的在途失败不上报为错误态', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    const first = calls[0];
+    rerender({ q: 'def', enabled: true }); // abort 第一请求
+    await act(async () => {
+      first?.reject(new Error('aborted'));
+    });
+    expect(result.current.error).toBeNull();
+  });
+});

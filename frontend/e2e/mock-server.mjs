@@ -44,6 +44,108 @@ function seedIssues() {
   }));
 }
 
+// ---------------------------------------------------------------------------
+// 全局搜索 fixture(search-command-palette.md §3.2 结果形状:结构化 context +
+// 消息目录徽章 + codepoint 高亮区间;url 为 §3.4 规范深链)
+// ---------------------------------------------------------------------------
+
+const SEARCH_ENTITY_TYPES = new Set(['issue', 'member', 'agent', 'project', 'view', 'chat_session']);
+
+const SEARCH_FIXTURES = [
+  {
+    type: 'issue',
+    id: 'sr-issue-1',
+    title: 'Login page crashes on Safari',
+    context: {
+      identifier: 'WEB-124',
+      project: { id: 'p-1', name: 'Website' },
+      status: { id: 's-3', name: 'In Progress', category: 'in_progress' },
+    },
+    icon: 'issue',
+    url: '/w/acme/issues/by-identifier/WEB-124',
+    badge: { kind: 'status', label_key: 'issue.status.name', label_params: { name: 'In Progress' }, color: 'info' },
+  },
+  {
+    type: 'issue',
+    id: 'sr-issue-2',
+    title: 'Login rate limiting',
+    context: {
+      identifier: 'WEB-130',
+      project: null,
+      status: { id: 's-1', name: 'Todo', category: 'todo' },
+    },
+    icon: 'issue',
+    url: '/w/acme/issues/by-identifier/WEB-130',
+    badge: { kind: 'status', label_key: 'issue.status.name', label_params: { name: 'Todo' }, color: 'status' },
+  },
+  {
+    type: 'member',
+    id: 'sr-member-1',
+    title: 'Zhang Wei',
+    context: { member_type: 'human', role: 'admin' },
+    icon: 'member',
+    url: '/w/acme/members/sr-member-1',
+    badge: { kind: 'member_type', label_key: 'member.type.human', label_params: {}, color: 'info' },
+  },
+  {
+    type: 'agent',
+    id: 'sr-agent-1',
+    title: 'Code Assistant',
+    context: {
+      member_type: 'agent',
+      role: 'member',
+      capacity: { running: 2, queued: 1, awaiting_approval: 0 },
+    },
+    icon: 'agent',
+    url: '/w/acme/members/sr-agent-1',
+    badge: { kind: 'member_type', label_key: 'member.type.agent', label_params: {}, color: 'info' },
+  },
+  {
+    type: 'project',
+    id: 'sr-project-1',
+    title: 'Website Revamp',
+    context: { visibility: 'public', key: 'WEB' },
+    icon: 'project',
+    url: '/w/acme/projects/sr-project-1',
+    badge: { kind: 'visibility', label_key: 'project.visibility.public', label_params: {}, color: 'success' },
+  },
+  {
+    type: 'view',
+    id: 'sr-view-1',
+    title: 'Active Website Tasks',
+    context: { scope: 'workspace' },
+    icon: 'view',
+    url: '/w/acme/views/sr-view-1',
+  },
+  {
+    type: 'chat_session',
+    id: 'sr-chat-1',
+    title: 'Release planning chat',
+    context: { participants_count: 3, agent: { id: 'sr-agent-1', name: 'Code Assistant' } },
+    icon: 'chat_session',
+    url: '/w/acme/chat/sr-chat-1',
+  },
+];
+
+const FAVORITES_FIXTURES = [
+  {
+    id: 'fav-1',
+    workspace_id: 'ws-1',
+    member_id: 'member-human-1',
+    target_type: 'issue',
+    target_id: 'sr-issue-1',
+    created_at: isoAt(2 * 60_000),
+  },
+  {
+    id: 'fav-2',
+    workspace_id: 'ws-1',
+    member_id: 'member-human-1',
+    target_type: 'project',
+    target_id: 'sr-project-1',
+    created_at: isoAt(1 * 60_000),
+  },
+];
+
 const state = {
   issues: seedIssues(),
   idempotency: new Map(), // key → { status, body }
@@ -524,6 +626,65 @@ async function handleRequest(req, res, url) {
 
   if (path === '/api/v1/i18n/missing' && req.method === 'POST') {
     sendEmpty(res, 204);
+    return;
+  }
+
+  // ---- 全局搜索(search-command-palette.md §3.1/§3.2:workspace scope = 路径;
+  //      空 q → 空集;types 白名单校验;limit ≤50;前缀命中给 codepoint 高亮区间)---
+  const searchMatch = /^\/api\/v1\/workspaces\/([^/]+)\/search$/.exec(path);
+  if (searchMatch !== null && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const q = (url.searchParams.get('q') ?? '').trim();
+    if (q === '') {
+      sendJson(res, 200, { data: [], next_cursor: null });
+      return;
+    }
+    if ([...q].length > 120) {
+      sendJson(res, 400, errorEnvelope('validation_error', 'q exceeds 120 characters'));
+      return;
+    }
+    let typesFilter = null;
+    const typesParam = url.searchParams.get('types');
+    if (typesParam !== null) {
+      typesFilter = typesParam.split(',').filter((item) => item !== '');
+      if (typesFilter.length === 0 || typesFilter.some((item) => !SEARCH_ENTITY_TYPES.has(item))) {
+        sendJson(res, 400, errorEnvelope('validation_error', 'invalid types value'));
+        return;
+      }
+    }
+    const limitParam = url.searchParams.get('limit');
+    const limit = limitParam === null ? 20 : Number(limitParam);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      sendJson(res, 400, errorEnvelope('validation_error', 'limit must be 1..50'));
+      return;
+    }
+    const lower = q.toLowerCase();
+    const qLength = [...q].length;
+    const matched = SEARCH_FIXTURES.filter((item) => item.title.toLowerCase().includes(lower))
+      .filter((item) => typesFilter === null || typesFilter.includes(item.type))
+      .slice(0, limit)
+      .map((item) => {
+        const index = item.title.toLowerCase().indexOf(lower);
+        // 前缀命中:标注原始 title 上的 codepoint 区间 [0, len(q))(§3.2)
+        return index === 0
+          ? { ...item, highlight: { title: { unit: 'codepoint', ranges: [[0, qLength]] } } }
+          : item;
+      });
+    sendJson(res, 200, { data: matched, next_cursor: null });
+    return;
+  }
+
+  // ---- 收藏(§6.19:面板空态唯一服务端数据源;created_at 倒序)----------------
+  if (path === '/api/v1/favorites' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const favorites = [...FAVORITES_FIXTURES].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    sendJson(res, 200, { data: favorites, next_cursor: null });
     return;
   }
 

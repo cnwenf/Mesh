@@ -12,17 +12,19 @@
  * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(新建视图)→ 内容。
  * 选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
+/* eslint-disable react-refresh/only-export-components -- 模块契约:loadAllGroups 与页面组件同文件导出 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useMatch, useNavigate, useParams } from 'react-router';
 import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
 import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
-import { createIssue, workspaceIssuesChannel } from '../issues/api';
+import { usePageContext, useShortcutRegistry } from '../../shortcuts';
+import { createIssue, updateIssue, workspaceIssuesChannel } from '../issues/api';
 import type { CreateIssueBody, IssuePriority } from '../issues/types';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { Membership } from '../members/types';
+import { activeWorkspace, fetchMe, listMembers } from '../members/api';
+import type { MemberSummary, Membership } from '../members/types';
 import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
 import { EmptyBoardColumns } from '../onboarding/illustrations';
 import {
@@ -34,9 +36,11 @@ import {
   updateView,
   viewChannel,
 } from './api';
-import { BoardColumns } from './BoardColumns';
+import { BoardColumns, computeDropPosition } from './BoardColumns';
 import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
 import { columnsForView, deriveColumns } from './columns';
+import { buildBoardGrid, columnKeyOfCard, moveCardSelection, nextColumnKey } from './keyboardNav';
+import type { BoardDirection, BoardGrid } from './keyboardNav';
 import { FilterConfigPanel } from './FilterConfigPanel';
 import { fetchViewIssues, moveCard } from './projection';
 import type { BoardCard, BoardGroup, MovePlan, ViewProjection } from './projection';
@@ -162,6 +166,57 @@ export function BoardPage(): React.JSX.Element {
   const boardGroupsRef = useRef(boardGroups);
   boardGroupsRef.current = boardGroups;
 
+  // —— 键盘流转(§4.3 S10 / 评审 P4):选中态 + 二维网格移动 + 上下文组注册 ——
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
+  const selectedCardIdRef = useRef(selectedCardId);
+  selectedCardIdRef.current = selectedCardId;
+  const boardGridRef = useRef<BoardGrid>([]);
+  const membersCacheRef = useRef<readonly MemberSummary[] | null>(null);
+
+  // 规范路由前缀:挂载于 /w/{slug}/* 时内部导航保持 workspace-scoped 规范形态。
+  const workspaceRouteMatch = useMatch('/w/:workspaceSlug/*');
+  const routePrefix =
+    workspaceRouteMatch !== null && workspaceRouteMatch.params.workspaceSlug !== undefined
+      ? `/w/${workspaceRouteMatch.params.workspaceSlug}`
+      : '';
+  const routePrefixRef = useRef(routePrefix);
+  routePrefixRef.current = routePrefix;
+
+  // 看板上下文激活:['global','board'](卸载复位 ['global'],setContexts 死代码接通)。
+  usePageContext('board');
+
+  // 键盘动作实现经 ref 间接:注册 effect 仅挂载时执行一次,动作闭包随渲染更新。
+  const boardActionsRef = useRef({
+    move: (_direction: BoardDirection): void => undefined,
+    newCard: (): void => undefined,
+    changeStatus: (): void => undefined,
+    changeAssignee: (): void => undefined,
+    openCard: (): void => undefined,
+    toggleFilter: (): void => undefined,
+  });
+
+  useEffect(() => {
+    const registry = useShortcutRegistry.getState();
+    const actions = () => boardActionsRef.current;
+    const move = (direction: BoardDirection) => () => actions().move(direction);
+    return registry.registerShortcuts([
+      { id: 'board.move.up', combo: 'arrowup', label: t('shortcuts.boardMove'), group: 'board', run: move('up') },
+      { id: 'board.move.down', combo: 'arrowdown', label: t('shortcuts.boardMove'), group: 'board', run: move('down') },
+      { id: 'board.move.left', combo: 'arrowleft', label: t('shortcuts.boardMove'), group: 'board', run: move('left') },
+      { id: 'board.move.right', combo: 'arrowright', label: t('shortcuts.boardMove'), group: 'board', run: move('right') },
+      { id: 'board.move.up.vim', combo: 'k', label: t('shortcuts.boardMove'), group: 'board', run: move('up') },
+      { id: 'board.move.down.vim', combo: 'j', label: t('shortcuts.boardMove'), group: 'board', run: move('down') },
+      { id: 'board.move.left.vim', combo: 'h', label: t('shortcuts.boardMove'), group: 'board', run: move('left') },
+      { id: 'board.move.right.vim', combo: 'l', label: t('shortcuts.boardMove'), group: 'board', run: move('right') },
+      // §4.3.1 规则 3:看板 C 仲裁胜出于全局 C(复用列快速创建并预填当前列)。
+      { id: 'board.new.card', combo: 'c', label: t('shortcuts.boardNewCard'), group: 'board', run: () => actions().newCard() },
+      { id: 'board.change.status', combo: 's', label: t('shortcuts.boardChangeStatus'), group: 'board', run: () => actions().changeStatus() },
+      { id: 'board.change.assignee', combo: 'a', label: t('shortcuts.boardChangeAssignee'), group: 'board', run: () => actions().changeAssignee() },
+      { id: 'board.open.card', combo: 'enter', label: t('shortcuts.boardOpenCard'), group: 'board', run: () => actions().openCard() },
+      { id: 'board.filter', combo: 'f', label: t('shortcuts.boardFilter'), group: 'board', run: () => actions().toggleFilter() },
+    ]);
+  }, [t]);
+
   // 当前生效分组(草稿 group_by;须在早期返回之前的 hooks 区计算,§ Rules of Hooks)。
   const effectiveGroupBy = draft?.group_by ?? 'state_category';
   // 已加载卡片按生效 group_by 本地重分桶(§4.2 分组切换即时反映);
@@ -233,7 +288,7 @@ export function BoardPage(): React.JSX.Element {
 
   const selectView = useCallback(
     (nextId: string) => {
-      navigate(`/views/${nextId}`);
+      navigate(`${routePrefixRef.current}/views/${nextId}`);
     },
     [navigate],
   );
@@ -408,7 +463,7 @@ export function BoardPage(): React.JSX.Element {
       await deleteView(client, view.id);
       await loadViews(workspaceId);
       if (selectedView?.id === view.id) {
-        navigate('/board');
+        navigate(`${routePrefixRef.current}/board`);
       }
     } catch (error) {
       toastError(error);
@@ -439,7 +494,7 @@ export function BoardPage(): React.JSX.Element {
               <Button
                 variant="primary"
                 data-testid="board-empty-new-issue"
-                onClick={() => navigate(CREATE_ISSUE_PATH)}
+                onClick={() => navigate(`${routePrefix}${CREATE_ISSUE_PATH}`)}
               >
                 {t('onboarding.empty.board.action')}
               </Button>
@@ -478,6 +533,91 @@ export function BoardPage(): React.JSX.Element {
       ? derived.columns
       : columnsForView(previewView);
   const cardsByKey = derived.cardsByKey;
+
+  // —— 键盘动作实现(§4.3 S10):注册 effect 经 boardActionsRef 间接调用 ——
+  boardGridRef.current = buildBoardGrid(columns, cardsByKey);
+
+  const focusCard = (cardId: string): void => {
+    document.querySelector<HTMLElement>(`[data-testid="board-card-${cardId}"]`)?.focus();
+  };
+
+  const keyboardMove = (direction: BoardDirection): void => {
+    const next = moveCardSelection(boardGridRef.current, selectedCardIdRef.current, direction);
+    if (next === null) return; // 全空列保持原选中并忽略
+    setSelectedCardId(next);
+    focusCard(next);
+  };
+
+  // C:当前选中列快速创建(预填该列分组值,§4.3.1 规则 3 同一创建的两种预填形态);
+  // 无可用列回退全局新建(空弹窗 /issues?create=1)。
+  const keyboardNewCard = (): void => {
+    const grid = boardGridRef.current;
+    const targetKey =
+      selectedCardIdRef.current !== null
+        ? columnKeyOfCard(grid, selectedCardIdRef.current)
+        : grid[0]?.key ?? null;
+    if (targetKey === null) {
+      navigate(`${routePrefixRef.current}/issues?create=1`);
+      return;
+    }
+    document.querySelector<HTMLElement>(`[data-testid="quick-add-${targetKey}"]`)?.focus();
+  };
+
+  // S:改选中卡状态 —— 复用列 UI 的 move API(下一列循环推进,等价鼠标拖拽路径)。
+  const keyboardChangeStatus = (): void => {
+    const grid = boardGridRef.current;
+    const cardId = selectedCardIdRef.current;
+    if (cardId === null || selectedView === null) return;
+    const fromKey = columnKeyOfCard(grid, cardId);
+    if (fromKey === null) return;
+    const toKey = nextColumnKey(grid, fromKey);
+    if (toKey === null || toKey === fromKey) return;
+    const targetCell = grid.find((cell) => cell.key === toKey);
+    void handleDropCard(cardId, toKey, computeDropPosition(targetCell?.cards ?? [], null));
+  };
+
+  // A:改选中卡负责人 —— 成员名册循环切换(等价鼠标路径:issue 详情负责人选择)。
+  const keyboardChangeAssignee = (): void => {
+    const cardId = selectedCardIdRef.current;
+    if (cardId === null) return;
+    const card = boardGroupsRef.current
+      .flatMap((group) => group.data)
+      .find((item) => item.id === cardId);
+    if (card === undefined) return;
+    void (async () => {
+      try {
+        let members = membersCacheRef.current;
+        if (members === null) {
+          const page = await listMembers(client, workspaceId, { limit: 100 });
+          members = page.data;
+          membersCacheRef.current = members;
+        }
+        if (members.length === 0) return;
+        const idx = members.findIndex((member) => member.id === card.assignee_id);
+        const next = members[(idx + 1) % members.length];
+        if (next === undefined) return;
+        await updateIssue(client, card.id, { assignee_id: next.id });
+        if (selectedView !== null) await loadBoard(selectedView);
+      } catch (error) {
+        toastError(error);
+      }
+    })();
+  };
+
+  const keyboardOpenCard = (): void => {
+    const cardId = selectedCardIdRef.current;
+    if (cardId === null) return;
+    navigate(`${routePrefixRef.current}/issues/${cardId}`);
+  };
+
+  boardActionsRef.current = {
+    move: keyboardMove,
+    newCard: keyboardNewCard,
+    changeStatus: keyboardChangeStatus,
+    changeAssignee: keyboardChangeAssignee,
+    openCard: keyboardOpenCard,
+    toggleFilter: () => setPanel((current) => (current === 'filter' ? null : 'filter')),
+  };
 
   const toggleCollapse = (key: string): void => {
     const collapsed = new Set(draft.board_settings.collapsed_columns ?? []);
@@ -806,6 +946,8 @@ export function BoardPage(): React.JSX.Element {
               cardsByKey={cardsByKey}
               canWrite={canWrite}
               dragEnabled={canWrite && !dirty}
+              selectedCardId={selectedCardId}
+              onSelectCard={setSelectedCardId}
               onToggleCollapse={toggleCollapse}
               onDropCard={(issueId, toGroupKey, position) =>
                 void handleDropCard(issueId, toGroupKey, position)

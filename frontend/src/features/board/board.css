@@ -447,3 +447,16 @@
   gap: var(--space-2);
   justify-content: center;
 }
+
+/* 键盘选中卡(§4.3 S10 / 评审 P4):选中态以轮廓 + 焦点环表达,
+   仅语义 token,非颜色唯一信号(叠焦点可见轮廓)。 */
+.mesh-board__card--selected,
+.mesh-board__card.is-selected {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.mesh-board__card:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

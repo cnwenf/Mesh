@@ -10,17 +10,17 @@
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Outlet, useMatch, useNavigate } from 'react-router';
+import { Outlet, useMatch } from 'react-router';
 import { MeshApiError, getToken } from '../api';
 import { env } from '../env';
-import { useT } from '../i18n';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
 import { OnboardingChecklist } from '../features/onboarding';
 import { useAuthStore } from '../state/authStore';
 import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
-import { registerShellShortcuts } from './shortcutsRegistration';
+import { SeoMeta } from './SeoMeta';
+import { ShellShortcutsRegistrar } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
 import { StatusBanner } from './StatusBanner';
 import { TopBar } from './TopBar';
@@ -230,8 +230,6 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
 }
 
 export function AppShell(): React.JSX.Element {
-  const navigate = useNavigate();
-  const t = useT();
   const hasToken = useAuthStore((state) => state.token !== null);
 
   // reconciler 依赖 client 实例,而 useRealtime 的 options 在首渲染定型:
@@ -266,40 +264,6 @@ export function AppShell(): React.JSX.Element {
     intervalMs: env.pollingIntervalMs,
   });
 
-  useEffect(
-    () =>
-      registerShellShortcuts(navigate, {
-        nav: {
-          home: t('nav.home'),
-          inbox: t('nav.inbox'),
-          projects: t('nav.projects'),
-          issues: t('nav.issues'),
-          board: t('nav.board'),
-          members: t('nav.members'),
-          chat: t('nav.chat'),
-          automation: t('nav.automation'),
-          insights: t('nav.insights'),
-          settings: t('nav.settings'),
-        },
-        theme: {
-          light: t('theme.light'),
-          dark: t('theme.dark'),
-          system: t('theme.system'),
-        },
-        actions: {
-          themeToggle: t('a11y.themeToggle'),
-          newIssue: t('shortcuts.actionNewIssue'),
-          focusSearch: t('shortcuts.actionFocusSearch'),
-          goInbox: t('shortcuts.actionGoInbox'),
-          goBoard: t('shortcuts.actionGoBoard'),
-          goMembers: t('shortcuts.actionGoMembers'),
-          goAutomation: t('shortcuts.actionGoAutomation'),
-          restoreOnboarding: t('onboarding.restoreHelp'),
-        },
-      }),
-    [navigate, t],
-  );
-
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
@@ -311,6 +275,11 @@ export function AppShell(): React.JSX.Element {
 
   const layout = (
     <div className="mesh-shell">
+      {/* SEO 契约(§3.4):认证内页面 noindex + canonical 规范深链 */}
+      <SeoMeta />
+      {/* 快捷键/命令注册:位于 WorkspaceProvider 子树内(工作区路由命中时),
+          按 slug/role 门控命令集;上下文变化自动重注册 */}
+      <ShellShortcutsRegistrar />
       <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />

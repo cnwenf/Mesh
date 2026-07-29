@@ -6,15 +6,17 @@
  * ToastProvider(regionLabel)与命令面板/帮助层;二者的 open 态以 useState 持有于本层,
  * ShortcutProvider 回调开启,OverlayControls 下达 TopBar。路由树经 ErrorBoundary 兜底。
  *
- * 阶段 2 接通(MES-24):
- * - workspaceDefaultLocale 经 useWorkspaceLocale 从工作区 API 异步获取;
- * - 偏好写入经 settingsStore 同步到 PATCH /api/v1/users/me。
+ * 路由形态(search-command-palette.md §3.4):一切核心资源以 workspace-scoped
+ * **规范深链** `/w/{workspace_slug}/…` 渲染(九条清单闭合:issue 按编号 / 项目 /
+ * 成员 / agent 别名 / 视图 / 执行 / 聊天 / 小队 / 审批);旧扁平路由经 AppShell
+ * 内 catch-all <FlatRouteMigration/> 由**路由器 replace navigation** 迁移至规范
+ * 路由(query/hash 保留,active workspace 按解析序求解,多工作区无上下文 →
+ * /workspace-picker 选择页)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
 import { restoreActiveOnboarding } from './features/onboarding';
-import { activeWorkspace, fetchMe } from './features/members/api';
 import { getIssueByIdentifier } from './features/issues/api';
 import { ThemeProvider, ToastProvider } from './design';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
@@ -24,7 +26,9 @@ import { AppShell, OverlayControlsProvider } from './shell/AppShell';
 import type { OverlayControls } from './shell/AppShell';
 import { ChatPage } from './features/chat';
 import { AgentDetailPage } from './features/agents/AgentDetailPage';
+import { ApprovalsPage } from './features/approvals/ApprovalsPage';
 import { BoardPage } from './features/board/BoardPage';
+import { MemberDetailPage } from './features/members/MemberDetailPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
 import { IssueDetailPage } from './features/issues/IssueDetailPage';
@@ -41,6 +45,9 @@ import { WebhookConfigPage } from './features/autopilots/WebhookConfigPage';
 import { ExecutionDetailPage } from './features/runtimes/ExecutionDetailPage';
 import { RuntimeDetailPage } from './features/runtimes/RuntimeDetailPage';
 import { RuntimesPage } from './features/runtimes/RuntimesPage';
+import { MarketplacePage } from './features/skills/MarketplacePage';
+import { SkillDetailPage } from './features/skills/SkillDetailPage';
+import { SkillsPage } from './features/skills/SkillsPage';
 import { SquadDetailPage } from './features/squads/SquadDetailPage';
 import { SquadTaskDetailPage } from './features/squads/SquadTaskDetailPage';
 import { SquadsPage } from './features/squads/SquadsPage';
@@ -52,12 +59,21 @@ import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
+import { FlatRouteMigration } from './workspace/flatRoutes';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
+import {
+  WorkspaceApprovalsSettingsPage,
+  WorkspaceDangerSettingsPage,
+  WorkspaceFieldsSettingsPage,
+  WorkspaceMembersSettingsPage,
+} from './workspace/pages/settingsSubpages';
 import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
 import { DataManagementPage } from './features/data-jobs/DataManagementPage';
 import { InboxPage } from './features/inbox';
+import { useWorkspace } from './workspace/WorkspaceProvider';
+import { WorkspacePickerPage } from './workspace/WorkspacePickerPage';
 
 /**
  * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
@@ -94,24 +110,21 @@ export default function App(): React.JSX.Element {
 }
 
 /**
- * C6 深链:`#IDENTIFIER` 链接解析为同工作区 issue。后端渲染 `#MES-123` 为
- * `/issues/by-identifier/MES-123`;此路由用当前活跃工作区解析 identifier 后跳详情。
+ * 规范深链(§3.4):`/w/{ws}/issues/by-identifier/{KEY-N}` —— workspace-scoped
+ * 解析 identifier 后 replace 至同工作区 issue 详情。工作区 id 取自当前工作区
+ * 上下文(WorkspaceProvider,经 slug 解析,含历史 slug 规范化)。
  */
-function IssueByIdentifierRedirect(): React.JSX.Element {
+function WorkspaceIssueByIdentifierRedirect(): React.JSX.Element {
   const { identifier } = useParams<{ identifier: string }>();
+  const { status, workspace } = useWorkspace();
   const [target, setTarget] = useState<string | null | undefined>(undefined);
   useEffect(() => {
+    if (workspace === null || identifier === undefined) return;
     let cancelled = false;
     const client = getApiClient();
     void (async () => {
       try {
-        const me = await fetchMe(client);
-        const active = activeWorkspace(me.memberships);
-        if (active === null || identifier === undefined) {
-          if (!cancelled) setTarget(null);
-          return;
-        }
-        const detail = await getIssueByIdentifier(client, active.workspace_id, identifier);
+        const detail = await getIssueByIdentifier(client, workspace.id, identifier);
         if (!cancelled) setTarget(detail.id);
       } catch {
         if (!cancelled) setTarget(null);
@@ -120,10 +133,11 @@ function IssueByIdentifierRedirect(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [identifier]);
+  }, [workspace, identifier]);
+  if (status !== 'ready' || workspace === null) return <></>;
   if (target === undefined) return <></>;
   if (target === null) return <Navigate to="/not-found" replace />;
-  return <Navigate to={`/issues/${target}`} replace />;
+  return <Navigate to={`/w/${workspace.slug}/issues/${target}`} replace />;
 }
 
 function ShellProviders(): React.JSX.Element {
@@ -154,7 +168,11 @@ function ShellProviders(): React.JSX.Element {
 
   return (
     <ToastProvider regionLabel={t('a11y.notifications')}>
-      <ShortcutProvider onOpenPalette={controls.openPalette} onOpenHelp={controls.openHelp}>
+      <ShortcutProvider
+        onOpenPalette={controls.openPalette}
+        onOpenHelp={controls.openHelp}
+        sequencePendingLabel={t('shortcuts.sequencePending')}
+      >
         <OverlayControlsProvider value={controls}>
           <ErrorBoundary>
             <Routes>
@@ -165,9 +183,87 @@ function ShellProviders(): React.JSX.Element {
               <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />
               <Route path="/" element={<AppShell />}>
                 <Route index element={<HomePage />} />
+                {/* 账号设置(主题/语言/时区/安全/通知偏好):保持扁平路由,非工作区设置 */}
                 <Route path="settings" element={<SettingsPage />} />
-                {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
+                {/* 多工作区无上下文 → 选择页(search-command-palette.md §3.4 解析序 ⑤) */}
+                <Route path="workspace-picker" element={<WorkspacePickerPage />} />
+                {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
+                <Route path="invite/:token" element={<InviteAcceptPage />} />
+
+                {/* ===== 规范深链(workspace-scoped,§3.4 九条清单闭合)===== */}
                 <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
+                <Route path="w/:workspaceSlug/inbox" element={<InboxPage />} />
+                {/* 看板与视图(kanban.md):默认视图 / 选中视图 URL 同步(§4.2 可分享/收藏) */}
+                <Route path="w/:workspaceSlug/board" element={<BoardPage />} />
+                <Route path="w/:workspaceSlug/views/:viewId" element={<BoardPage />} />
+                {/* 成员名册(人 + agent 同册)与成员详情(agent 行经别名路由至 agent 详情) */}
+                <Route path="w/:workspaceSlug/members" element={<MembersPage />} />
+                <Route path="w/:workspaceSlug/members/:memberId" element={<MemberDetailPage />} />
+                <Route path="w/:workspaceSlug/agents/:agentId" element={<AgentDetailPage />} />
+                <Route path="w/:workspaceSlug/projects" element={<ProjectsPage />} />
+                <Route path="w/:workspaceSlug/projects/:projectId" element={<ProjectDetailPage />} />
+                <Route
+                  path="w/:workspaceSlug/projects/:projectId/settings"
+                  element={<ProjectSettingsPage />}
+                />
+                <Route path="w/:workspaceSlug/issues" element={<IssuesPage />} />
+                <Route
+                  path="w/:workspaceSlug/issues/by-identifier/:identifier"
+                  element={<WorkspaceIssueByIdentifierRedirect />}
+                />
+                <Route path="w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+                {/* 聊天模块(chat-session.md §4):会话列表 / 会话详情 */}
+                <Route path="w/:workspaceSlug/chat" element={<ChatPage />} />
+                <Route path="w/:workspaceSlug/chat/:sessionId" element={<ChatPage />} />
+                {/* 小队(squad.md §4,可通知资源):列表 / 详情 / 任务详情 */}
+                <Route path="w/:workspaceSlug/squads" element={<SquadsPage />} />
+                <Route path="w/:workspaceSlug/squads/:squadId" element={<SquadDetailPage />} />
+                <Route
+                  path="w/:workspaceSlug/squads/:squadId/tasks/:taskId"
+                  element={<SquadTaskDetailPage />}
+                />
+                <Route path="w/:workspaceSlug/cycles" element={<CyclesPage />} />
+                {/* 执行详情(runtime.md §4) */}
+                <Route
+                  path="w/:workspaceSlug/executions/:executionId"
+                  element={<ExecutionDetailPage />}
+                />
+                {/* 统一「待我审批」入口(README §6.10) */}
+                <Route path="w/:workspaceSlug/approvals" element={<ApprovalsPage />} />
+                {/* 自动化运营区(§6.12 信息架构:Autopilots / Runtimes / Skills 三入口) */}
+                <Route path="w/:workspaceSlug/automations/autopilots" element={<AutopilotsPage />} />
+                <Route
+                  path="w/:workspaceSlug/automations/autopilots/new"
+                  element={<AutopilotEditorPage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/automations/autopilots/runs/:runId"
+                  element={<AutopilotRunDetailPage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/automations/autopilots/:autopilotId"
+                  element={<AutopilotDetailPage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/automations/autopilots/:autopilotId/edit"
+                  element={<AutopilotEditorPage />}
+                />
+                <Route path="w/:workspaceSlug/automations/runtimes" element={<RuntimesPage />} />
+                <Route
+                  path="w/:workspaceSlug/automations/runtimes/:runtimeId"
+                  element={<RuntimeDetailPage />}
+                />
+                <Route path="w/:workspaceSlug/automations/webhooks" element={<WebhookConfigPage />} />
+                <Route path="w/:workspaceSlug/automations/skills" element={<SkillsPage />} />
+                <Route
+                  path="w/:workspaceSlug/automations/skills/marketplace"
+                  element={<MarketplacePage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/automations/skills/:skillId"
+                  element={<SkillDetailPage />}
+                />
+                {/* 工作区设置(admin+;§6.12 管理员区五子页) */}
                 <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
                 {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
                 <Route path="w/:workspaceSlug/settings/labels" element={<WorkspaceLabelsPage />} />
@@ -176,46 +272,30 @@ function ShellProviders(): React.JSX.Element {
                   path="w/:workspaceSlug/settings/custom-fields"
                   element={<WorkspaceCustomFieldsPage />}
                 />
-                {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
-                <Route path="invite/:token" element={<InviteAcceptPage />} />
-                <Route path="inbox" element={<InboxPage />} />
-                <Route path="projects" element={<ProjectsPage />} />
-                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-                <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
-                <Route path="issues" element={<IssuesPage />} />
-                {/* C6 深链:#IDENTIFIER 链接 → 解析当前工作区 issue 后跳详情 */}
                 <Route
-                  path="issues/by-identifier/:identifier"
-                  element={<IssueByIdentifierRedirect />}
+                  path="w/:workspaceSlug/settings/members"
+                  element={<WorkspaceMembersSettingsPage />}
                 />
-                <Route path="issues/:issueId" element={<IssueDetailPage />} />
-                {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
-                    选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}
-                <Route path="board" element={<BoardPage />} />
-                <Route path="views/:viewId" element={<BoardPage />} />
-                <Route path="members" element={<MembersPage />} />
-                {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
-                <Route path="agents/:agentId" element={<AgentDetailPage />} />
-                {/* 小队(squad.md §4):列表 / 详情 / 任务详情(拆解树 + 计划审批) */}
-                <Route path="squads" element={<SquadsPage />} />
-                <Route path="squads/:squadId" element={<SquadDetailPage />} />
-                <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
-                <Route path="cycles" element={<CyclesPage />} />
-                {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
-                <Route path="chat" element={<ChatPage />} />
-                {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
-                <Route path="runtimes" element={<RuntimesPage />} />
-                <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
-                <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
-                <Route path="autopilots" element={<AutopilotsPage />} />
-                {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘 */}
-                <Route path="insights" element={<InsightsPage />} />
-                <Route path="autopilots/new" element={<AutopilotEditorPage />} />
-                <Route path="autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
-                <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />
-                <Route path="autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
-                <Route path="webhooks" element={<WebhookConfigPage />} />
-                <Route path="automation" element={<Navigate to="/autopilots" replace />} />
+                <Route
+                  path="w/:workspaceSlug/settings/approvals"
+                  element={<WorkspaceApprovalsSettingsPage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/settings/fields"
+                  element={<WorkspaceFieldsSettingsPage />}
+                />
+                <Route
+                  path="w/:workspaceSlug/settings/danger"
+                  element={<WorkspaceDangerSettingsPage />}
+                />
+                {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘(规范深链;
+                    旧扁平 /insights 经 FlatRouteMigration 迁移至此) */}
+                <Route path="w/:workspaceSlug/insights" element={<InsightsPage />} />
+
+                {/* 旧扁平路由迁移:规范路由未命中者经 FlatRouteMigration 以路由器
+                    replace navigation 落规范深链(query/hash 保留,§3.4 执行层);
+                    非旧路由路径呈现 not-found */}
+                <Route path="*" element={<FlatRouteMigration />} />
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

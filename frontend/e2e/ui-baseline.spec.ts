@@ -124,7 +124,11 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     await page.goto('/');
     await page.getByTestId('open-palette').click();
     await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    // §4.5 Esc 分层关闭栈:输入框获焦时首个 Esc 仅失焦,第二个 Esc 才关面板。
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).not.toBeVisible();
     await page.getByTestId('open-help').click();
     await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
   });
@@ -152,19 +156,17 @@ test.describe('路由与占位页', () => {
     await page.waitForURL('**/');
   });
 
-  test('侧栏导航基线:看板为数据页(MES-43)呈 §6.12 错误态,成员页呈标题', async ({ page }) => {
+  test('侧栏导航基线:旧扁平路由经工作区解析,无上下文时呈 not-found(§3.4 迁移契约)', async ({ page }) => {
     await page.goto('/');
     const main = page.locator('main');
-    // 看板已由占位页升级为视图定义层数据页:mock 契约不提供 /users/me,
-    // 页面按 README §6.12 呈现错误态基线(错误标题 + 重试入口)
+    // §3.4:扁平路由经前端路由器 replace navigation 迁移至规范路由,active
+    // workspace 解析序 URL > 最近活跃 > 服务端 > 单一成员 > 选择页。mock 契约
+    // 不提供 /users/me 且无本地记忆 → 解析失败 → not-found 基线(未登录态)。
     await page.getByTestId('nav-board').click();
-    await page.waitForURL('**/board');
-    await expect(page.getByTestId('board-page')).toBeVisible();
-    await expect(main.getByText('Something went wrong')).toBeVisible();
-    await expect(main.getByRole('button', { name: /retry/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
     await page.getByTestId('nav-members').click();
-    await page.waitForURL('**/members');
-    await expect(main.getByText('Members')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+    await expect(main.getByTestId('notfound-home')).toBeVisible();
   });
 });
 

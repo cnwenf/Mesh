@@ -12,6 +12,7 @@ import { EmptyState, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { usePageContext, useShortcutRegistry } from '../../shortcuts';
 import { listAgents } from '../agents/api';
 import type { AgentSummary } from '../agents/types';
 import { activeWorkspace, fetchMe } from '../members/api';
@@ -23,7 +24,7 @@ import {
   putSessionFavorite,
   chatListChannel,
 } from './api';
-import { ConversationPanel } from './ConversationPanel';
+import { CHAT_EDIT_LAST_EVENT, ConversationPanel } from './ConversationPanel';
 import { toErrorKey } from './errors';
 import { NewSessionDialog } from './NewSessionDialog';
 import { applySessionListFrame } from './realtime';
@@ -54,6 +55,37 @@ export function ChatPage(): React.JSX.Element {
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>('active');
   const [selected, setSelected] = useState<ChatSession | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+
+  // 聊天上下文独占激活(§2.1:chat 与 board/issue 不叠加)。Enter 发送 / Shift+Enter
+  // 换行 / Esc 失焦的实际语义在 ChatComposer(输入控件原生键,分发层第 1 层放行);
+  // 此处登记命令供帮助层呈现与焦点动作;mod+↑ 经事件委派给持有消息的 ConversationPanel。
+  usePageContext('chat');
+  useEffect(() => {
+    const registry = useShortcutRegistry.getState();
+    const focusComposer = () => {
+      document.querySelector<HTMLElement>('[data-testid="chat-composer-input"]')?.focus();
+    };
+    return registry.registerShortcuts([
+      { id: 'chat.send', combo: 'enter', label: t('shortcuts.chatSend'), group: 'chat', run: focusComposer },
+      { id: 'chat.newline', combo: 'shift+enter', label: t('shortcuts.chatNewline'), group: 'chat', run: focusComposer },
+      {
+        id: 'chat.edit.last',
+        combo: 'mod+arrowup',
+        label: t('shortcuts.chatEditLast'),
+        group: 'chat',
+        run: () => window.dispatchEvent(new CustomEvent(CHAT_EDIT_LAST_EVENT)),
+      },
+      {
+        id: 'chat.blur',
+        combo: 'esc',
+        label: t('shortcuts.chatBlur'),
+        group: 'chat',
+        run: () => {
+          if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        },
+      },
+    ]);
+  }, [t]);
 
   // 工作区解析(单一归属口径,同其他页面)。
   useEffect(() => {
