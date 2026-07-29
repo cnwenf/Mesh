@@ -30,7 +30,7 @@ from mesh.integrations.connectors import NormalizedEvent
 
 DEFAULT_IM_TRIGGERS = ("mention", "direct_message")
 
-IM_PROVIDERS = frozenset({"feishu", "slack"})
+IM_PROVIDERS = frozenset({"feishu", "slack", "dingtalk"})
 VCS_PROVIDERS = frozenset({"github", "gitlab"})
 
 
@@ -184,6 +184,12 @@ def compute_im_signals(provider: str, event: NormalizedEvent, config: dict[str, 
         mentions = event.extra.get("mentions") or []
         mentioned = len(mentions) > 0 or "@" in event.text
         is_dm = str(event.extra.get("chat_type") or "") == "p2p"
+        return mentioned, is_dm
+    if provider == "dingtalk":
+        # Group @-bot = ``isInAtList=true`` (§3.2 normalization table);
+        # direct messages (conversationType '1') are direct_message triggers.
+        is_dm = str(event.extra.get("conversation_type") or "") == "1"
+        mentioned = bool(event.extra.get("is_in_at_list")) or is_dm
         return mentioned, is_dm
     return False, False
 

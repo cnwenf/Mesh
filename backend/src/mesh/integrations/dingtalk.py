@@ -259,13 +259,18 @@ def build_sender_identity_key(provider: str, provider_tenant_key: str, external_
             "unknown provider", code="invalid_request", details={"provider": provider}
         )
     _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
-    if provider == PROVIDER and not _CORP_ID_CHARSET.match(provider_tenant_key):
-        raise ValidationError(
-            "dingtalk provider_tenant_key must be a corpId (ding…)",
-            code="invalid_request",
-            details={"field": "provider_tenant_key"},
-        )
-    _validate_user_key_segment(external_user_key)
+    if provider == PROVIDER:
+        if not _CORP_ID_CHARSET.match(provider_tenant_key):
+            raise ValidationError(
+                "dingtalk provider_tenant_key must be a corpId (ding…)",
+                code="invalid_request",
+                details={"field": "provider_tenant_key"},
+            )
+        # E-1 charset algebra: staffId-charset or x=<base64url> — a raw
+        # colon-carrying senderId is refused (separator-collapse defense).
+        _validate_user_key_segment(external_user_key)
+    else:
+        _validate_key_segment(external_user_key, field="external_user_key")
     return f"{provider}:{provider_tenant_key}:{external_user_key}"
 
 
