@@ -16,6 +16,19 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **前端 UI(§4)**:工作区「洞察」页(吞吐量折线 + workload 排行 + agent 统计网格 + 可见性轻提示 + 时间窗/粒度切换)、项目详情「仪表盘」页签(velocity 分组柱 + burndown 理想/实际线 + count/points 切换 + cycle time KPI)、agent 详情统计卡(KPI + token 口径标注);手写 SVG 图表经语义 token、线型区分、暗色双主题;i18n 中英双目录同步(`analytics.*` + 新 `error.*` 占位符)。
 - **真实 e2e / UI 走查(T33 + §5)**:四类请求者(普通成员 / 项目成员 / private-agent owner / admin)以**同一权威聚合 SQL** 断言最终统计值(executions·succeeded / running·queued / retry_rate / total_tokens),跨权限缓存不共享负向、整体 403 负向、`calendar_timezone` 不跨日 + 跨 DST 负向、只读审计、当前归属口径;真实浏览器走查(仪表盘渲染 / 时间窗 / 可见性差异 / 暗色 / 名册深链)+ evidence 截图留证。
 
+### Changed
+
+- **命名漂移治理(MES-85)**:`.github/workflows/backend-ci.yml` `schema-validation` job 显示名改为不含计数的通用名「DDL 与行为验证(PostgreSQL 16)」(与 `spec-checks.yml` 同名 job 对齐)——断言集随 `docs/specs/validation/schema_r2_validation.sql` 演进,显示名硬编码具体数字注定反复漂移,从根上消除(rebase 时一并调和本版顺带带入的「124 条断言」后缀);CHANGELOG 历史条目 4 处「100 条断言」残留计数措辞清理(仅去计数、句意不变)。门禁逻辑、步骤、断言 SQL 与测试行为零变更。
+
+### Fixed
+
+- **漂移防护计数同步(MES-84)**:`backend/tests/e2e/test_schema_validation.py` 期望计数由硬编码 100 同步到实测 124,对齐 `schema_r2_validation.sql` 断言集现状;此前 CI「单测 + 真实 e2e」持续报红「expected 100 PASS, got 124」。
+
+### Docs
+
+- 阶段 8 parity Spec 多轮评审收口:MES-73 一致性评审必修 22 项(P1–P10/C1–C7/T1–T5)、MES-74 架构/UX 关卡 + 九轮复审(含 OAuth 执行链)全量整改、MES-75 安全评审 H1–H3/M1–M7/L1–L5 全量修复、MES-78 安全增量复核 HIGH-1 + MEDIUM-1 收口 + LOW×4;钉钉机器人接入 Spec 增补(MES-82:双接收模式/emoji 确认/`/stop`·`/btw`/消息队列,三视角评审通过)。
+- MES-92 daemon 真实执行体架构设计(`docs/specs/daemon-executor.md`,1021 行 Spec + specs 索引登记)。
+
 ### Notes(并行线说明)
 
 - 与 onboarding / import-export / integrations 并行线 owns 表集合不相交(`analytics_snapshots` 独立,其余只读);rebase main 按后合方迁移重编号惯例解撞号(当前链 0001→0028 单 head)。
