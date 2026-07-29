@@ -140,6 +140,22 @@ def test_validate_search_settings_accepts_dev_key_in_dev_mode():
     validate_search_settings(settings)  # does not raise
 
 
+def test_api_factory_refuses_dev_search_cursor_secret_in_production():
+    # Fail-fast wiring: create_app rejects the public dev cursor key at
+    # startup in production — raised before any engine/IO side effects.
+    from mesh.api.app import create_app
+
+    with pytest.raises(ConfigError) as excinfo:
+        create_app(
+            load_settings(
+                **REQUIRED,
+                auth_mode="production",
+                jwt_secret="a-real-production-secret-0123456789",
+            )
+        )  # search_cursor_secret still the public dev default
+    assert excinfo.value.missing_fields == ("search_cursor_secret",)
+
+
 def test_validate_auth_settings_accepts_strong_secret_in_dev_mode():
     settings = load_settings(**REQUIRED, auth_mode="dev", jwt_secret="custom-dev-secret")
     validate_auth_settings(settings)  # does not raise
