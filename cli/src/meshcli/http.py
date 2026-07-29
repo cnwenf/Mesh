@@ -176,7 +176,10 @@ class MeshClient:
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Open a streaming response (SSE) — the caller iterates lines."""
-        response = self._send(method, path, params=params, headers=headers, stream=True)
+        response = self._send(
+            method, path, json=None, params=params, headers=headers, stream=True
+        )
+        self._note_deprecation(response)
         if 400 <= response.status_code < 600:
             body = response.read()
             response.close()

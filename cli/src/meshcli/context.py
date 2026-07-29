@@ -180,7 +180,18 @@ class AppContext:
 def get_context(ctx) -> AppContext:
     """Build (once per invocation) the AppContext from the stored global flags."""
     if "app" not in ctx.obj:
-        flags = ctx.obj["flags"]
+        flags = dict(ctx.obj["flags"])
+        # Global options may sit BEFORE or AFTER the subcommand (cli.md
+        # §5.1 — `mesh issue list --output json`): options injected at the
+        # command level (main._inject_global_options) override the root-level
+        # value whenever they were actually given. Commands that define their
+        # own option of the same name (e.g. `version --verbose`) surface via
+        # ctx.params instead of the injected stash.
+        injected = ctx.obj.get("injected_flags", {})
+        for key in flags:
+            value = injected.get(key, ctx.params.get(key))
+            if value is not None and value is not False:
+                flags[key] = value
         ctx.obj["app"] = build_context(
             api_url=flags["api_url"],
             workspace=flags["workspace"],

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+from typing import Any
 
 import click
 
@@ -91,15 +92,39 @@ def _device_login(ctx_obj, scopes: str, no_browser: bool) -> None:
     stderr("✓ Waiting for authorization… (polling)")
     while time.monotonic() < deadline:
         time.sleep(interval)
-        response = app.client.request(
-            "POST",
-            "/api/v1/auth/device/token",
-            json={
-                "grant_type": DEVICE_GRANT_TYPE,
-                "device_code": device_code,
-                "client_id": CLIENT_ID,
-            },
-        )
+        try:
+            response = app.client.request(
+                "POST",
+                "/api/v1/auth/device/token",
+                json={
+                    "grant_type": DEVICE_GRANT_TYPE,
+                    "device_code": device_code,
+                    "client_id": CLIENT_ID,
+                },
+            )
+        except CliError as exc:
+            # RFC 8628 polling branches (cli.md §3.2 / §5.1 四分支):
+            # pending → keep polling; slow_down → widen the interval; the two
+            # terminals end the flow with the auth-exclusive exit code.
+            code = str((exc.envelope or {}).get("error", {}).get("code"))
+            if code == "authorization_pending":
+                continue
+            if code == "slow_down":
+                interval += POLL_SLOW_DOWN_EXTRA_SECONDS
+                continue
+            if code == "access_denied":
+                raise CliError(
+                    "the device authorization was denied",
+                    exit_code=EXIT_AUTH,
+                    hint="Run `mesh auth login` to start a fresh device flow.",
+                ) from exc
+            if code == "expired_token":
+                raise CliError(
+                    "the device code expired before approval",
+                    exit_code=EXIT_AUTH,
+                    hint="Run `mesh auth login` again for a fresh code.",
+                ) from exc
+            raise
         data = response.json().get("data", {})
         workspace = data.get("workspace", {})
         # 3) Success: persist the device session; the workspace chosen on the
@@ -281,15 +306,47 @@ def logout(ctx, revoke):
 
 
 @root.command("version")
+@click.option(
+    "--verbose",
+    "verbose",
+    is_flag=True,
+    help="Also report runtime/platform, the configured API base URL and the live server API version.",
+)
 @click.pass_context
-def version_cmd(ctx):
+def version_cmd(ctx, verbose: bool):
     """Print the CLI version and target API version.
 
     Example: mesh version --output json
+    Example: mesh version --verbose
     """
     app = get_context(ctx)
-    envelope = {"data": {"cli_version": __version__, "api_version": API_VERSION}}
+    data: dict[str, Any] = {"cli_version": __version__, "api_version": API_VERSION}
+    if verbose:
+        import platform
+
+        data["python"] = platform.python_version()
+        data["platform"] = f"{platform.system().lower()}-{platform.machine()}"
+        data["api_url"] = app.api_url
+        server: dict[str, Any] = {"reachable": False}
+        try:
+            # The public contract document carries the server's API version
+            # (cli.md §5.4 版本协商); any Deprecation/Sunset header on this
+            # response triggers the shared stderr upgrade warning.
+            response = app.client.request("GET", "/openapi.json")
+            info = response.json().get("info", {})
+            server = {"reachable": True, "api_version": info.get("version")}
+        except (CliError, ValueError):
+            pass  # informational probe — an unreachable server is not an error
+        data["server"] = server
     if app.output == "json":
-        emit_json(envelope)
+        emit_json({"data": data})
     else:
         stderr(f"mesh {__version__} (API {API_VERSION})")
+        if verbose:
+            stderr(f"python {data['python']} on {data['platform']}")
+            stderr(f"api-url {data['api_url']}")
+            server = data["server"]
+            if server.get("reachable"):
+                stderr(f"server reachable — API version {server.get('api_version')}")
+            else:
+                stderr("server unreachable")

@@ -37,8 +37,65 @@ class MeshGroup(click.Group):
                 ) from None
             raise
 
+    def add_command(self, cmd, name=None):
+        # cli.md §5.1 places global flags AFTER the subcommand
+        # (`mesh issue list --output json`): inject copies of every root
+        # option into each (sub)command so both positions parse. The
+        # per-command value wins over the root-level one (see get_context).
+        _inject_global_options(cmd)
+        super().add_command(cmd, name)
+
     def command_names(self, ctx) -> list[str]:
         return list(self.list_commands(ctx))
+
+
+def _stash_injected_option(ctx, param, value):
+    """Collect the command-level copy of a global flag without exposing it as
+    a callback kwarg — get_context merges these over the root-level values."""
+    ctx.obj.setdefault("injected_flags", {})[param.name] = value
+    return value
+
+
+def _global_option_decls() -> list[click.Option]:
+    """Fresh copies of the root global options (names match the flags dict)."""
+    common = {"expose_value": False, "callback": _stash_injected_option}
+    return [
+        click.Option(["--workspace"], default=None,
+                     help="Workspace slug or UUID (overrides config).", **common),
+        click.Option(["--output"], type=click.Choice(["table", "json"]), default=None,
+                     help="Output format (default: table; json is the scripting contract).", **common),
+        click.Option(["--api-url"], "api_url", default=None,
+                     help="API base URL (overrides config/env).", **common),
+        click.Option(["--verbose"], is_flag=True, default=False,
+                     help="Print method/path/status/elapsed to stderr (never bodies, never tokens).", **common),
+        click.Option(["--quiet"], is_flag=True, default=False,
+                     help="Suppress progress output on stderr.", **common),
+        click.Option(["--yes"], is_flag=True, default=False,
+                     help="Skip interactive confirmation prompts.", **common),
+        click.Option(["--insecure"], is_flag=True, default=False,
+                     help="Disable TLS verification for THIS invocation only (never persisted).", **common),
+        click.Option(["--ca-cert"], "ca_cert", default=None, type=click.Path(),
+                     help="Custom CA bundle PEM for this invocation.", **common),
+        click.Option(["--jq"], "jq", default=None,
+                     help="Filter successful `.data` with a jq expression (requires --output json).", **common),
+        click.Option(["--no-header"], "no_header", is_flag=True, default=False,
+                     help="Omit the table header row.", **common),
+    ]
+
+
+def _inject_global_options(cmd: click.Command) -> None:
+    """Attach the global options to ``cmd`` (recursing into subgroups).
+
+    Commands that already define an option of the same name keep their own
+    (e.g. ``version --verbose``) — the merge in get_context still honors it.
+    """
+    existing = {param.name for param in cmd.params}
+    for option in _global_option_decls():
+        if option.name not in existing:
+            cmd.params.append(option)
+    if isinstance(cmd, click.Group):
+        for sub in cmd.commands.values():
+            _inject_global_options(sub)
 
 
 @click.group(
