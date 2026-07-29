@@ -280,6 +280,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     skipped: 2,
     // onboarding §4 文案占位符(MES-69):进度条已完成数 / 百分比
     completed: 2,
+    // theme.md §4.1 主题占位标注(跟随工作区默认/跟随系统的当前解析值)
+    theme: 'dark',
     percent: 40,
   };
 

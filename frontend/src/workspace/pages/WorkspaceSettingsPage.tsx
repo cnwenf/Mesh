@@ -124,6 +124,7 @@ function BasicInfoSection(): React.JSX.Element {
   const [logoUrl, setLogoUrl] = useState('');
   const [timezone, setTimezone] = useState('');
   const [defaultLocale, setDefaultLocale] = useState('');
+  const [defaultTheme, setDefaultTheme] = useState('system');
   const [isSaving, setIsSaving] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [errorValues, setErrorValues] = useState<Record<string, unknown>>({});
@@ -142,6 +143,11 @@ function BasicInfoSection(): React.JSX.Element {
         ? workspace.settings.default_locale
         : 'en',
     );
+    setDefaultTheme(
+      typeof workspace.settings.default_theme === 'string'
+        ? workspace.settings.default_theme
+        : 'system',
+    );
     setInitializedFor(workspace.id);
     setErrorKey(null);
   }
@@ -154,7 +160,11 @@ function BasicInfoSection(): React.JSX.Element {
     defaultLocale !==
       (typeof workspace.settings.default_locale === 'string'
         ? workspace.settings.default_locale
-        : 'en');
+        : 'en') ||
+    defaultTheme !==
+      (typeof workspace.settings.default_theme === 'string'
+        ? workspace.settings.default_theme
+        : 'system');
 
   const handleSave = async (): Promise<void> => {
     if (logoUrl.trim() !== '' && !isHttpsUrl(logoUrl.trim())) {
@@ -175,7 +185,15 @@ function BasicInfoSection(): React.JSX.Element {
         ? workspace.settings.default_locale
         : 'en';
     if (defaultLocale !== currentLocale) {
-      changes.settings = { default_locale: defaultLocale };
+      changes.settings = { ...changes.settings, default_locale: defaultLocale };
+    }
+    const currentTheme =
+      typeof workspace.settings.default_theme === 'string'
+        ? workspace.settings.default_theme
+        : 'system';
+    if (defaultTheme !== currentTheme) {
+      // theme.md §2.1/§3.1:工作区默认主题(admin),非法值 → 422 invalid_theme_mode。
+      changes.settings = { ...changes.settings, default_theme: defaultTheme };
     }
     try {
       const updated = await patch(changes);
@@ -264,6 +282,17 @@ function BasicInfoSection(): React.JSX.Element {
         ))}
       </Select>
       <p className="mesh-field-hint">{t('workspace.localeHint')}</p>
+      <Select
+        label={t('workspace.defaultTheme')}
+        value={defaultTheme}
+        data-testid="ws-default-theme-select"
+        onChange={(event) => setDefaultTheme(event.target.value)}
+      >
+        <option value="light">{t('theme.light')}</option>
+        <option value="dark">{t('theme.dark')}</option>
+        <option value="system">{t('theme.system')}</option>
+      </Select>
+      <p className="mesh-field-hint">{t('workspace.defaultThemeHint')}</p>
       {errorKey !== null ? (
         <p role="alert" data-testid="ws-basic-error">
           {t(errorKey, errorValues)}
