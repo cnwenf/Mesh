@@ -365,14 +365,16 @@ class SandboxManager:
         cgroups = _read(proc_path / "cgroup")
         if Path(cgroup_path).name not in cgroups:
             raise SandboxUnavailableError("sandbox process escaped its cgroup")
-        own_netns = os.readlink("/proc/self/ns/net")
-        their_netns = os.readlink(proc_path / "ns" / "net")
-        if own_netns == their_netns:
-            raise SandboxUnavailableError("sandbox shares the daemon network namespace")
-        own_mntns = os.readlink("/proc/self/ns/mnt")
-        their_mntns = os.readlink(proc_path / "ns" / "mnt")
-        if own_mntns == their_mntns:
-            raise SandboxUnavailableError("sandbox shares the daemon mount namespace")
+        # EVERY namespace the sandbox claims must actually differ from the
+        # daemon's — a regression dropping any CLONE_NEW* flag is caught here,
+        # before the provider is released by the EXEC gate (§5.2 ISO-02).
+        for ns in ("net", "mnt", "pid", "ipc", "uts"):
+            own = os.readlink(f"/proc/self/ns/{ns}")
+            theirs = os.readlink(proc_path / "ns" / ns)
+            if own == theirs:
+                raise SandboxUnavailableError(
+                    f"sandbox shares the daemon {ns} namespace"
+                )
         return uid
 
     # -- teardown --------------------------------------------------------------

@@ -197,7 +197,7 @@ class TestGatedMethods:
     async def test_issue_comment_write_allowed(self, broker):
         server, transport = broker
         reader, writer = await connect(server)
-        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "update"})
+        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "update", "idempotency_key": "c-1"})
         assert resp["ok"] is True
         sent = transport.calls[-1]
         assert sent.method == "POST"
@@ -372,7 +372,7 @@ class TestEdgePaths:
     async def test_comment_invalid_params(self, broker):
         server, _ = broker
         reader, writer = await connect(server)
-        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": ""})
+        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "", "idempotency_key": "c-bad"})
         assert resp["ok"] is False
         assert resp["error"]["code"] == "invalid_params"
         writer.close()
@@ -442,3 +442,164 @@ class TestFinalBranches:
         assert resp["ok"] is True
         assert resp["result"] == {}
         writer.close()
+
+
+class TestIdempotency:
+    """§3.3: issue.comment / issue.status are idempotency-keyed gates — a
+    repeated key replays the cached result instead of re-executing."""
+
+    @pytest.fixture
+    async def write_broker(self, tmp_path):
+        transport = StubMeshTransport()
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID,
+            socket_dir=tmp_path / "s",
+            sandbox_uid=os.getuid(),
+            cgroup_marker="",
+            nonce=NONCE,
+            task_token="mesh_task_idem",
+            server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID,
+            grants={"issue.comment": "write", "issue.status": "write"},
+            transport=transport,
+        )
+        await server.start()
+        yield server, transport
+        await server.stop()
+
+    async def test_write_without_idempotency_key_refused(self, write_broker):
+        server, transport = write_broker
+        reader, writer = await connect(server)
+        try:
+            resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": "x"})
+            assert resp["ok"] is False
+            assert resp["error"]["code"] == "invalid_params"
+            resp2 = await call(reader, writer, "issue.status",
+                               {"issue_id": ISSUE_ID, "status": "done"}, call_id=2)
+            assert resp2["ok"] is False
+            assert resp2["error"]["code"] == "invalid_params"
+            assert transport.calls == []  # nothing reached upstream
+        finally:
+            writer.close()
+
+    async def test_repeated_key_replays_without_reexecuting(self, write_broker):
+        server, transport = write_broker
+        reader, writer = await connect(server)
+        try:
+            params = {"issue_id": ISSUE_ID, "body": "update", "idempotency_key": "dup-1"}
+            first = await call(reader, writer, "issue.comment", params)
+            second = await call(reader, writer, "issue.comment", params, call_id=2)
+            assert first["ok"] is True and second["ok"] is True
+            assert second["result"] == first["result"]
+            assert second["id"] == 2  # replay carries the NEW call id
+            assert len(transport.calls) == 1  # side effect executed exactly once
+            assert any(a["event"] == "idempotent_replay" for a in server.audit)
+        finally:
+            writer.close()
+
+    async def test_distinct_keys_execute_independently(self, write_broker):
+        server, transport = write_broker
+        reader, writer = await connect(server)
+        try:
+            await call(reader, writer, "issue.comment",
+                       {"issue_id": ISSUE_ID, "body": "a", "idempotency_key": "k1"})
+            await call(reader, writer, "issue.comment",
+                       {"issue_id": ISSUE_ID, "body": "b", "idempotency_key": "k2"}, call_id=2)
+            assert len(transport.calls) == 2
+        finally:
+            writer.close()
+
+    async def test_failed_upstream_is_not_cached(self, write_broker):
+        server, transport = write_broker
+        reader, writer = await connect(server)
+        try:
+            transport.fail_next = "rate_limited"
+            params = {"issue_id": ISSUE_ID, "body": "x", "idempotency_key": "retry-1"}
+            failed = await call(reader, writer, "issue.comment", params)
+            assert failed["ok"] is False
+            retried = await call(reader, writer, "issue.comment", params, call_id=2)
+            assert retried["ok"] is True  # same key, retried upstream, succeeded
+            assert len(transport.calls) == 2
+        finally:
+            writer.close()
+
+    async def test_overlong_key_refused(self, write_broker):
+        server, transport = write_broker
+        reader, writer = await connect(server)
+        try:
+            resp = await call(reader, writer, "issue.comment",
+                              {"issue_id": ISSUE_ID, "body": "x", "idempotency_key": "k" * 201})
+            assert resp["ok"] is False
+            assert resp["error"]["code"] == "invalid_params"
+            assert transport.calls == []
+        finally:
+            writer.close()
+
+
+class TestPeerCgroupGate:
+    """B9: the cgroup arm of the peer gate is exercised for REAL — no empty
+    marker shortcut. Reads the actual /proc/<peer>/cgroup of the connecting
+    process."""
+
+    async def test_correct_uid_wrong_cgroup_refused(self, tmp_path):
+        transport = StubMeshTransport()
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID,
+            socket_dir=tmp_path / "run",
+            sandbox_uid=os.getuid(),  # uid arm passes...
+            cgroup_marker="mesh-another-attempt",  # ...cgroup arm must not
+            nonce=NONCE,
+            task_token="mesh_task_cg",
+            server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID,
+            grants={"issue.read": "read_only"},
+            transport=transport,
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(server.socket_path)
+            writer.write((json.dumps({"nonce": NONCE}) + "\n").encode())
+            await writer.drain()
+            hello = json.loads(await reader.readline())
+            assert hello == {"ok": False, "error": {"code": "peer_refused"}}
+            assert transport.calls == []  # nothing executed
+            assert any(a["event"] == "peer_cgroup_mismatch" for a in server.audit)
+            writer.close()
+        finally:
+            await server.stop()
+
+    @pytest.mark.skipif(os.getuid() != 0, reason="moving processes between cgroups requires root")
+    async def test_matching_cgroup_marker_admitted(self, tmp_path):
+        """Positive arm under root: join a cgroup whose name carries the
+        marker and the same request is admitted and executed."""
+        from pathlib import Path
+
+        base = Path("/sys/fs/cgroup")
+        leaf = base / f"mesh-broker-test-{os.getpid()}"
+        leaf.mkdir(exist_ok=True)
+        original = Path("/proc/self/cgroup").read_text().split(":", 2)[2].strip()
+        transport = StubMeshTransport()
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID,
+            socket_dir=tmp_path / "run",
+            sandbox_uid=0,
+            cgroup_marker=leaf.name,
+            nonce=NONCE,
+            task_token="mesh_task_cg2",
+            server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID,
+            grants={"issue.read": "read_only"},
+            transport=transport,
+        )
+        await server.start()
+        try:
+            (leaf / "cgroup.procs").write_text(str(os.getpid()))
+            reader, writer = await connect(server)
+            resp = await call(reader, writer, "issue.read", {"issue_id": ISSUE_ID})
+            assert resp["ok"] is True, resp
+            assert len(transport.calls) == 1
+            writer.close()
+        finally:
+            (base / original.lstrip("/") / "cgroup.procs").write_text(str(os.getpid()))
+            await server.stop()
+            leaf.rmdir()

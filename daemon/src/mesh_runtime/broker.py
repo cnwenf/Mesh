@@ -32,10 +32,17 @@ import secrets
 import socket
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import httpx
+
+#: Write actions that MUST carry a caller-supplied idempotency key (§3.3):
+#: retries replay the cached result instead of re-executing the side effect.
+_IDEMPOTENT_ACTIONS = frozenset({"issue.comment", "issue.status"})
+_IDEMPOTENCY_KEY_MAX = 200
+_IDEMPOTENCY_CACHE_MAX = 256
 
 _GATE_BROKER = "broker"
 _GATE_MOUNT = "mount"
@@ -114,6 +121,7 @@ class ToolBrokerServer:
         self._tokens = 0.0
         self._tokens_at = 0.0
         self._lock = asyncio.Lock()
+        self._idempotency: OrderedDict[str, dict] = OrderedDict()
         self.audit: list[dict] = []
 
     # -- lifecycle ------------------------------------------------------------
@@ -268,6 +276,22 @@ class ToolBrokerServer:
             if issue_id != self._issue_id:
                 await self._send(writer, self._reply(call_id, None, "resource_scope_mismatch"))
                 return
+        # §3.3 idempotency gate: write actions must carry a caller-supplied
+        # key; a repeated key replays the cached result instead of executing
+        # the side effect twice. Missing/malformed key => fail-closed.
+        idempotency_key: str | None = None
+        if method in _IDEMPOTENT_ACTIONS:
+            raw_key = params.get("idempotency_key")
+            if not isinstance(raw_key, str) or not raw_key or len(raw_key) > _IDEMPOTENCY_KEY_MAX:
+                await self._send(writer, self._reply(call_id, None, "invalid_params"))
+                return
+            idempotency_key = f"{method}:{raw_key}"
+            cached = self._idempotency.get(idempotency_key)
+            if cached is not None:
+                self._idempotency.move_to_end(idempotency_key)
+                self._audit("idempotent_replay", {"action": method})
+                await self._send(writer, {"id": call_id, "ok": True, "result": cached})
+                return
         try:
             if method == "issue.read":
                 response = await self._mesh_get(f"/api/v1/issues/{issue_id}")
@@ -311,6 +335,12 @@ class ToolBrokerServer:
             data = response.json()
         except ValueError:
             data = {}
+        if idempotency_key is not None:
+            # Cache ONLY successes — a failed upstream stays retryable under
+            # the same key.
+            self._idempotency[idempotency_key] = data
+            if len(self._idempotency) > _IDEMPOTENCY_CACHE_MAX:
+                self._idempotency.popitem(last=False)
         self._audit("executed", {"action": method})
         await self._send(writer, {"id": call_id, "ok": True, "result": data})
 
