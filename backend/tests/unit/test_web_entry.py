@@ -251,6 +251,9 @@ async def test_unknown_api_path_is_404_not_html(client):
     )
     assert resp.status_code == 404
     assert "text/html" not in resp.headers.get("content-type", "")
+    # §6.14: guarded API misses keep the canonical JSON envelope (not plain
+    # text) so API clients see the same not_found shape as registered routes.
+    assert resp.json()["error"]["code"] == "not_found"
 
 
 async def test_non_html_accept_is_404(client):

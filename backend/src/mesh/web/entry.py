@@ -37,6 +37,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from mesh.config import SESSION_COOKIE_NAME
 from mesh.web.appearance import resolve_entry_appearance
@@ -124,6 +125,22 @@ def _not_found() -> PlainTextResponse:
     )
 
 
+def _raise_api_not_found() -> None:
+    """404 for guarded API namespaces, rendered by the canonical §6.14
+    envelope handler (``{"error": {"code": "not_found"}}``) — unknown
+    ``/api/…`` paths must stay JSON-shaped misses, never fall into the shell
+    nor degrade to plain text. Hardening headers ride along via
+    ``exc.headers`` (the envelope handler forwards them)."""
+    raise StarletteHTTPException(
+        status_code=404,
+        headers={
+            "cache-control": "no-store",
+            "vary": "Accept, Cookie",
+            **_SECURITY_HEADERS,
+        },
+    )
+
+
 def build_html_entry_router() -> APIRouter:
     """Catch-all HTML entry. Mount AFTER every API router."""
     router = APIRouter(tags=["web-entry"], include_in_schema=False)
@@ -132,7 +149,7 @@ def build_html_entry_router() -> APIRouter:
     async def html_entry(request: Request) -> Response:
         full_path = request.url.path
         if full_path.startswith(_GUARDED_PREFIXES):
-            return _not_found()
+            _raise_api_not_found()
         if not _wants_html(request):
             return _not_found()
 
