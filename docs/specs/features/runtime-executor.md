@@ -458,6 +458,23 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 | B 真 LLM e2e | assign/mention → 真 claim → 真调用 → tool/approval → diff/result/comment/status | 受保护 workflow 全绿 |
 | 最终放行 | 安全复测、运维手册、回滚演练、成本告警 | 明确安全审核通过后启用生产 |
 
+### 4.4.1 实现跟踪台账（A2 验收冻结登记）
+
+以下条目为 A2 验收明确登记的非阻断跟踪项，安全属性当前均成立；各项按标注阶段闭合，闭合前生产启用不予放行：
+
+| 条目 | 现状与缓解 | 闭合阶段 |
+| --- | --- | --- |
+| §1.4 固定 argv / §1.5 三件套配置端到端强制 | 机制与单测就绪（`build_provider_argv`/`write_provider_configs`），生产 provider 接线随 A3；ISO-09 当前以 python 替身证明，恶意 fixture 门禁随 A3 真二进制闭合 | A3 |
+| daemon 非 root + user namespace（§1.2/§4.3 字面） | 沙箱降权不可逆 setuid + nosuid 只读根，内核层隔离真实；但 daemon 进程本身以 root 起沙箱，无 CLONE_NEWUSER | S-12 / 发布阶段（生产启用前必修） |
+| confirm_required 取消+续跑生产闭环 | `escalate_confirm_required` 安全属性成立（高危动作绝不执行、沙箱不挂起），生产触发链路随 A3/B 接线 | A3 / B |
+| ActionBroker 服务端 grant 签名校验与永久禁止动作排除 | 当前不可达（写 grant 未接线）；接线前必修 | 写 grant 接线前 |
+| broker socket create→chmod TOCTOU 窗口 | 父目录 0700 + attempt nonce 缓解 | S-12 |
+| 「永久禁止动作携带 grant」运行时负向测试 | 闸门表静态拒绝已覆盖，运行时负向补强 | A3 |
+| probe_binary manifest required_flags 对照与探测沙箱（§1.4 步骤 2-4） | 当前仅路径/属主/摘要/版本自检 | A3 |
+| ISO-01 覆盖 B 的 provider 配置/socket（§5.2 枚举） | worktree/tmp 已覆盖，provider 配置/socket 面随 A3 provider 资产出现后补齐 | A3 |
+| cleanup 失败隔离 runtime（§3.6） | 当前仅 warning + journal 位记录；隔离语义随 doctor/isolated 状态接线 | S-12 |
+| egress resolver 管理员可配置（§3.4 rule 2） | 当前固定系统解析器（安全属性成立：任务不可自定义） | S-12 |
+
 ---
 
 ## 5. 安全要求与验收门禁
