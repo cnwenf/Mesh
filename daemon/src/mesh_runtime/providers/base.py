@@ -72,6 +72,7 @@ class UsageObserved:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     cost_usd: str = "0.000000"
+    turns: int = 0  # provider-reported turn count (A3 result record carries it)
 
     @property
     def total_tokens(self) -> int:
@@ -87,6 +88,9 @@ class UsageObserved:
 class FinalResult:
     summary: str
     exit_code: int
+    # Precise termination when the adapter KNOWS it (budget_exceeded/timeout/
+    # completed/failed); "" means "derive from exit code" (the A1/A2 path).
+    termination: str = ""
 
 
 @dataclass(frozen=True)

@@ -41,6 +41,10 @@ _MS_REMOUNT = 32
 _MNT_DETACH = 2
 
 _SYSTEM_DIRS = ("/usr",)
+# Public CA trust stores (read-only). The provider performs TLS verification
+# against the pinned egress destination (§3.4); these directories hold ONLY
+# public root certificates — no host config, no secrets.
+_CA_CERT_DIRS = ("/etc/ssl/certs", "/etc/pki/tls/certs")
 _USR_SYMLINKS = {"bin": "usr/bin", "lib": "usr/lib", "lib64": "usr/lib64", "sbin": "usr/sbin"}
 
 _libc = ctypes.CDLL("libc.so.6", use_errno=True)
@@ -122,6 +126,12 @@ def _setup_mounts(spec: dict) -> None:
     os.makedirs(os.path.join(root, "etc"), exist_ok=True)
     with open(os.path.join(root, "etc", "hosts"), "w", encoding="utf-8") as fh:
         fh.write("127.0.0.1 localhost\n::1 localhost\n")
+    # Public CA trust store (read-only) so the provider can verify the TLS
+    # certificate of the pinned egress destination. Bound pre-pivot; host paths
+    # vanish afterwards. Public root CAs only — no secrets (§1.2 read-only image).
+    for src in _CA_CERT_DIRS:
+        if os.path.exists(src):
+            _bind_ro(src, root + src)
     os.makedirs(os.path.join(root, "proc"), exist_ok=True)
     os.makedirs(os.path.join(root, "tmp"), exist_ok=True)
     os.makedirs(os.path.join(root, "dev"), exist_ok=True)

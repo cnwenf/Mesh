@@ -170,6 +170,31 @@ async def test_enqueue_writes_execution_event_with_snapshot_and_key(session_fact
 
 
 @pytest.mark.unit
+async def test_snapshot_freezes_budget_and_network_policy(session_factory):
+    """§2.1 P0: agent model_config budget/network_policy freeze into the
+    AttemptSpec so the daemon's S-07 gate + egress allowlist are reproducible."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(
+        session_factory, workspace, owner,
+        model_config={
+            "provider": "claude-code",
+            "budget": {"max_cost_usd": "0.50", "max_turns": 2},
+            "network_policy": {"allowed_hosts": ["api.example.com"]},
+        },
+    )
+    issue = await _make_issue(session_factory, workspace, owner)
+    await _run_handler(session_factory, workspace, _assign_payload(issue_id=issue["id"], agent=agent))
+
+    events = await _enqueue_events(session_factory, workspace)
+    snapshot = events[0].payload["config_snapshot"]
+    assert snapshot["provider"] == "claude-code"
+    assert snapshot["budget"]["max_cost_usd"] == "0.50"
+    assert snapshot["budget"]["max_turns"] == 2
+    assert snapshot["network_policy"]["allowed_hosts"] == ["api.example.com"]
+
+
+@pytest.mark.unit
 async def test_redelivery_is_idempotent(session_factory):
     workspace = await _make_workspace(session_factory)
     owner = await _make_owner(session_factory, workspace)

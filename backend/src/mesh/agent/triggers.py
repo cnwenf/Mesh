@@ -315,6 +315,17 @@ async def assign_orchestration_handler(
             model=model_config.get("model"),
             effort=model_config.get("reasoning_effort"),
             system_instructions=agent.system_instructions,
+            # §2.1: workspace-admin budget/network overrides frozen from the
+            # agent config (snapshot.py DEFAULT_* otherwise). The daemon
+            # fail-closes on these for real providers (runtime-executor §3.5).
+            budget=(
+                model_config.get("budget")
+                if isinstance(model_config.get("budget"), dict) else None
+            ),
+            network_policy=(
+                model_config.get("network_policy")
+                if isinstance(model_config.get("network_policy"), dict) else None
+            ),
         )
     except Exception:  # noqa: BLE001 — degrade, do not drop the trigger
         logger.exception("capability normalization failed; enqueuing with empty grants")
@@ -328,6 +339,17 @@ async def assign_orchestration_handler(
             model=model_config.get("model"),
             effort=model_config.get("reasoning_effort"),
             system_instructions=agent.system_instructions,
+            # §2.1: workspace-admin budget/network overrides frozen from the
+            # agent config (snapshot.py DEFAULT_* otherwise). The daemon
+            # fail-closes on these for real providers (runtime-executor §3.5).
+            budget=(
+                model_config.get("budget")
+                if isinstance(model_config.get("budget"), dict) else None
+            ),
+            network_policy=(
+                model_config.get("network_policy")
+                if isinstance(model_config.get("network_policy"), dict) else None
+            ),
         )
 
     issue_context = await _issue_context(session, workspace_id=workspace_id, issue_id=issue_id)
