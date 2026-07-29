@@ -57,6 +57,13 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: Token CSS generation is idempotent (theme.md §5.4)
+        # tokens.css/tokens-dark.css/tokens-print.css are generated from
+        # tokenValues.ts; a hand-edit would surface as a post-generation diff.
+        run: |
+          npm run gen:tokens
+          git diff --exit-code -- src/design/tokens.css src/design/tokens-dark.css src/design/tokens-print.css
+
   contrast:
     # 对比度独立关卡(theme.md §5.4):tokenValues.ts 单一事实源逐对校验,
     # 亮/暗两套 × text 4.5:1 / large-text·graphic 3:1,任一不达标即失败。
