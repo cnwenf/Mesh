@@ -436,7 +436,7 @@ erDiagram
 - 处理器 `enqueue_agent_run(agent_id, issue_id, trigger, trigger_event_id)`（由 outbox relay 调用）：
   1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
-  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；
+  3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；**运行期上下文追加**（runtime.md `execution_context_appends`，如 IM `/btw` 命令，integrations.md §3.7）经心跳 `inject_context` 下行、daemon 在**下一 agent turn 边界**以不可信数据块注入当前对话（LLM 单轮不可打断；追加内容不作为指令执行，高风险动作仍走 `confirm_required`）；
   4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（**严格对象数组** `[{capability, permission}]`，由下述归一算法从绑定技能声明派生，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
   5. 创建 `task_executions`（`status='queued'`，`agent_id`；写入权威 **`label_requirements`** 与 **`required_capabilities`**——后者为**严格 capability key 字符串数组**（如 `["ffmpeg","exec:shell"]`），由下述**入队归一算法**（README §6.4 权威定义）从绑定技能声明派生，为 claim 时与服务端 runtime 能力匹配的权威字段，README §6.4；物理领取产生 `execution_attempts`，见 runtime.md / README §6.4）；
   6. 发出 `execution.queued` 事件（outbox → `realtime_events`，README §6.7）。

@@ -325,6 +325,8 @@ awaiting_approval ──拒绝/过期──► cancelled(失败终态,failure_re
   | git 推送 | 重试分支名 **按 attempt 唯一**:`agent/<execution_id>/a<attempt_number>`,杜绝两个 runtime/attempt 推同一分支 |
   | 数据作业入队(import/export) | `sha256(data_job_id \| action)`(`action ∈ {created, import-validate, import-run, export}`;同一作业同一动作不重复入队,import-export.md §3.8) |
   | 数据作业恢复(reaper) | `sha256(data_job_id \| 'resume' \| last_committed_batch)`(按 checkpoint 批次去重,保证回收-重投幂等,import-export.md §3.8 R3) |
+  | 集成 IM 会话性出站(确认接收 ack / 命令反馈,integrations.md §3.8) | `sha256(queue_item_id \| 'ack')`(经 outbox `im.send` 快通道,at-most-once;同一队列项至多一条确认消息) |
+  | 集成 IM 超长结果分段发送(integrations.md §3.10,钉钉 msgParam ≤15000 字节) | `sha256(notification_id \| 'chunk' \| i)`(第 i 段至多一次;at-least-once 出队下重复不重发段) |
 
 - 接收方(评论 API、工具网关等)以 `Idempotency-Key` 落库去重,重复投递返回首次结果。
 
@@ -341,14 +343,15 @@ CREATE TABLE outbox_events (
   idempotency_key TEXT NULL,              -- 处理器去重键(§6.5)
   status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','failed')),
   delivery_attempts INT NOT NULL DEFAULT 0,
+  available_at   TIMESTAMPTZ NOT NULL DEFAULT now(),   -- 最早可领取时刻(退避/可重试结果后移;MES-82 R4-4 入权威)
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at   TIMESTAMPTZ NULL,
   UNIQUE (idempotency_key)                -- NULL 不冲突
 );
-CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pending';
+CREATE INDEX idx_outbox_pending ON outbox_events (available_at, created_at) WHERE status = 'pending';
 ```
 
-- 业务事务**同事务 INSERT outbox_events**(与业务行同提交);relay worker `FOR UPDATE SKIP LOCKED` 领取并分发,成功后置 `published`;失败退避重试,`delivery_attempts` 超限置 `failed` 并告警。
+- 业务事务**同事务 INSERT outbox_events**(与业务行同提交);relay worker 领取条件 `status='pending' AND available_at <= now()`(`FOR UPDATE SKIP LOCKED`)并分发,成功后置 `published`;失败退避重试(**后移 `available_at` = now() + 指数退避,同时 `delivery_attempts+1`**),`delivery_attempts` 超限置 `failed` 并告警。**可重试非失败结果(如 integrations.md `token_refresh_busy`,MES-82 R4-4)只后移 `available_at`(短退避)、不递增 `delivery_attempts`**——不消耗失败预算、不终态,`available_at` 过滤同时防止热循环。**`execution.enqueue` 执行级幂等键沿用既有标准 `payload.idempotency_key`(各触发路径与消费者契约不变);仅 `trigger='integration'` 附加要求 payload 携带 `queue_item_id` 且消费者先 `FOR UPDATE` 锁队列项守卫状态(integrations.md §3.9 rearm 键分层:行级键 K2 仅 outbox 去重,payload 仍携带执行级键 K)**。
 - **终态行保留期清理(防无限膨胀)**:`published`/`failed` 行(含 `idempotency_key` 唯一索引项)由 worker 的 outbox-retention 循环按保留期(默认 7 天,`MESH_OUTBOX_EVENT_RETENTION` 可配)分批删除;`pending` 行**永不**清理(清理即静默丢任务)。`failed` 行需整段保留期过后才可删,远大于 relay 重试预算,故 §6.6 永久失败告警必然先于清理发出。
 - **禁止**在业务事务外"顺手"创建 execution/notification/realtime 事件(进程内总线、直接调下游)——此为评审硬约束。
 - **实时事件的唯一登记路径(R2 硬约束)**:一切实时事件(含各模块 §3.x/§4.x 所列 WebSocket 事件、`notification.created`、执行状态回流)一律为:业务事务写 `outbox_events`(`event_type='realtime.publish'`,payload 含频道、事件名、完整变更字段)→ **realtime projector**(§2.2)以 outbox 事件 id 为唯一去重键写 `realtime_events` 并**在投影事务内分配频道 `seq`**(§6.7)→ 经 Redis pub/sub 通知网关发布。**禁止业务事务直接 INSERT `realtime_events` 或直接分配 `seq`**——两条路径会产生不同的原子性/排序/去重实现乃至重复事件;projector 崩溃后重启经 outbox 补投,`realtime_events.UNIQUE(outbox_event_id)` 保证不重复登记(§9 T5/T26)。
@@ -418,7 +421,7 @@ CREATE POLICY mesh_rt_events_tenant ON realtime_events
 | 技能 / 附件 | `skill_import.progress` · `skill.changed` · `skill.update_available` · `skill.approval_required` · `attachment.processed` · `attachment.deleted` |
 | 小队 | `squad.updated` · `squad.archived` · `squad_member.changed` · `squad_task.status_changed` · `squad_activity.created` · `squad_message.created` · `squad_assignment.changed`(R2 新增:小队分派建立/取消,squad.md) · `task.status` · `subtask.created` · `subtask.assigned` · `plan.submitted` · `task.aggregated`(§6.8 编排进度 SSE 流帧,持久于 `squad_task:{id}` 频道凭 seq 断点重放,squad.md §3.2/§3.5) |
 | 自动化 | `autopilot.updated` · `autopilot.rate_limited` · `autopilot_runs.status_changed` · `autopilot_runs.approval_required` · `webhook_events.received` |
-| 平台能力(R2 新增模块) | `onboarding.progress` · `onboarding.completed` · `integration.updated` · `integration.event_ingested` · `data_job.updated` · `favorites.changed` |
+| 平台能力(R2 新增模块) | `onboarding.progress` · `onboarding.completed` · `integration.updated` · `integration.event_ingested` · `integration.queue_updated` · `data_job.updated` · `favorites.changed` |
 | 聊天流式(§6.8 流内事件) | `message.created` · `message.delta` · `message.done` · `message.interrupted` · `error` · `ping` |
 
 > **词汇漂移零容忍**(R2):如 agent.md 曾出现的帧示例 "agent.run_started"(未登记运行起始帧名,与本表 `execution.started` 冲突)一律以本注册表为准修正;新事件必须先进本表再在模块 Spec 引用。**R3:文档级词汇校验脚本与 CI 已落地**——`tests/docs/check_event_vocab.py` 扫描 `docs/specs/**/*.md` 的事件名引用并与本注册表比对,未登记即 CI 失败(`.github/workflows/spec-checks.yml`;此前本节约定在校验脚本缺位下以人工评审兜底,R3 起为自动化硬关卡)。
@@ -447,7 +450,7 @@ CREATE POLICY mesh_rt_events_tenant ON realtime_events
 | 运行中再次 @同一 agent(**新评论**) | **入队新执行**(每条评论 = 独立触发事件);防风暴由频率护栏(rate_limit + 链深度)兜底,语义本身确定 |
 | 运行中再次 @同一 agent(**同评论重复编辑**) | 提及集合未变 → **no-op** |
 | autopilot 事件重复到达 | 按 `dedup_key` 幂等(autopilot.md),窗口内仅一次 |
-| **外部 IM 消息触发**(R2,§6.17) | 已绑定 IM 渠道(飞书/Lark、Slack)中 @agent 或私聊 agent → 入队一次执行(`trigger='integration'`,幂等键 `sha256(agent_id \| integration_binding_id \| external_event_id)`,`integration_events.UNIQUE(integration_id, external_event_id)` 去重保证同一外部事件仅一次);**入站消息内容一律按不可信数据处理**(§6.15);未绑定/未匹配 agent 的外部消息不触发运行(仅审计留痕) |
+| **外部 IM 消息触发**(R2,§6.17) | 已绑定 IM 渠道(飞书/Lark、Slack、**钉钉/DingTalk**)中 @agent 或私聊 agent → 入**会话级 FIFO 队列**(`integration_message_queue`,integrations.md §2.10)后入队一次执行(`trigger='integration'`,幂等键 `sha256(agent_id \| integration_binding_id \| external_event_id)`,`integration_events.UNIQUE(integration_id, external_event_id)` 去重保证同一外部事件仅一次);**派发时机按入队时有效模式快照(项 `dispatch_mode`,含排空-再切换规则)**:`serial_conversation`(钉钉默认)同一会话串行派发(**数据库级至多一个在途项,部分唯一索引覆盖 `dispatching/processing/cancelling` 全在途态**——`/stop` 的 `cancelling` 项继续占用 lane、不提前放行下一项;新消息按序排队)、`parallel`(飞书/Slack 默认)入队即派发(同会话可并发,不受独占索引约束);队列项状态机 `pending→dispatching→processing→(cancelling→)终态`,执行终态由内部事件 `execution.finished` 单一驱动(runtime.md);**命令消息(`/stop`/`/btw` 等)走控制平面即时处理,不入队不触发**(integrations.md §3.7);**入站消息内容一律按不可信数据处理**(§6.15);未绑定/未匹配 agent 的外部消息不触发运行(仅审计留痕) |
 
 **UI 配套**:@ 候选提示语为"**发布后将触发一次运行**"(不得写"选中将立即触发");composer 提交前展示 **trigger preview**(列出将被触发的 agent 清单),并提供**显式抑制**开关(请求体 `suppress_triggers: true` → 仅通知不运行);聊天"沉淀为评论"须展示目标 issue、最终正文、附件与 @agent 副作用预览,确认后**一次提交**。
 
@@ -599,7 +602,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 聚合窗口 | 同 `group_key` 60s 窗口内合并为一条(`payload.count` 递增),避免通知风暴 |
 | 自我抑制 | 动作发起者不给自己生成通知;agent 永不接收会再触发自己的通知(回环防护) |
 | 模块对齐(R2/R3) | runtime.md 的"终态触发通知"改为**按本矩阵分发**(成功→运行页,失败/超时→收件箱 + 可选 Webhook);comment-inbox.md 的 `execution_finished` 类型**默认不投递成功事件**(preferences 显式订阅后才进箱),失败/超时按 critical 投递;**import-export.md 的 data job 通知只引用本矩阵的 data job 三行(R3),不得自行定义成功/失败分级**;**任何模块 Spec 不得另行定义事件分级或无条件成功通知**("触发者收到 execution_finished""agent 完成均生成通知"之类表述一律以本矩阵为准修正) |
-| 投递渠道(R2) | `notification_delivery.channel` 取值扩展为 `in_app`/`email`/`websocket`/**`im`**(comment-inbox.md owns);`channel='im'` 时在投递台账记录具体 IM 平台(`feishu`/`slack`)与目标外部身份;IM 投递经 §6.17 集成平台出站适配器发送(失败重试/幂等与其余渠道一致,台账为 `notification_delivery`)。**IM 渠道仅为出站增强,站内收件箱永远是通知真源**(推送是增强,不是唯一依据) |
+| 投递渠道(R2) | `notification_delivery.channel` 取值扩展为 `in_app`/`email`/`websocket`/**`im`**(comment-inbox.md owns);`channel='im'` 时在投递台账记录具体 IM 平台(`feishu`/`slack`/`dingtalk`)与目标外部身份;IM 投递经 §6.17 集成平台出站适配器发送(失败重试/幂等与其余渠道一致,台账为 `notification_delivery`)。**IM 渠道仅为出站增强,站内收件箱永远是通知真源**(推送是增强,不是唯一依据) |
 
 ### 6.14 API / 错误 / 分页 词汇(唯一权威)
 
@@ -611,7 +614,7 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 | 分页 | 游标分页(keyset,base64 编码 `(sort_key, id)`);**分组查询统一为"整体游标"契约**:`{"groups": [{key,label,count,wip?,data}], "next_cursor": ...}`——`count` 为组内总数,`data` 为当前页切片;**不得**在响应中再给每组独立 cursor(issue.md 与 kanban.md 统一此契约) |
 | 乐观并发 | 写操作支持 `version` 字段或 `If-Match: <updated_at>`;冲突 `409 conflict` |
 | 错误信封 | `{"error": {"code": "<snake_case>", "message": "...", "details": {...}}}`;message 不泄漏堆栈/SQL/内部 ID |
-| HTTP 语义 | 400 validation_error(含 `filter_too_complex`)/ 401 unauthorized / 403 forbidden / 404 not_found / 409 conflict(唯一约束、乐观锁、状态冲突)/ 410 gone / 413 payload_too_large / 415 unsupported_media_type / 422 业务校验失败(具名 code)/ 423 locked / 429 rate_limited(带 `Retry-After`)/ 500 internal_error / 502 storage_error |
+| HTTP 语义 | 400 validation_error(含 `filter_too_complex`)/ 401 unauthorized / 403 forbidden / 404 not_found / 409 conflict(唯一约束、乐观锁、状态冲突)/ 410 gone / 413 payload_too_large / 415 unsupported_media_type / 422 业务校验失败(具名 code)/ 423 locked / 429 rate_limited(带 `Retry-After`)/ 500 internal_error / 502 storage_error / 503 service_unavailable(模块具名码 `stream_channel_unavailable`:集成 Stream 长连接信道未就绪等上游信道态,integrations.md §3.5) |
 | 幂等写 | 创建/动作类端点支持 `Idempotency-Key` 请求头(§6.5);重复键返回首次结果 |
 | 过滤限制 | 列表/视图 filters **最大嵌套深度 3、最大条件数 20**;服务端以 `statement_timeout`(默认 3s)+ 估算查询成本兜底,超限返回 `400 filter_too_complex`,成本超限返回 `422 query_cost_exceeded` 并建议收窄条件 |
 | 跨项目迁移(R2) | 跨项目移动 issue(看板 `group_by=project` 拖拽或显式 move 端点)为**两步式契约**:`POST /api/v1/issues/{id}/move-preview`(或 move 命令 `dry_run`)返回将被**映射/清除**的字段清单(项目私有 status → 目标项目同 category 默认 status;项目私有 milestone/cycle/label/自定义字段值清除;工作区级字段保留)→ 客户端展示并要求确认 → `POST /api/v1/issues/{id}/move`(或 `POST /views/{id}/moves`,`confirm=true`)在**单事务**完成迁移;未确认的 move 返回 `422 move_confirmation_required`(详见 issue.md §3.8 / kanban.md §3.2) |
@@ -642,8 +645,8 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 
 | 规则 | 内容 |
 | --- | --- |
-| 注册与绑定 | `integrations`(集成定义:`kind ∈ ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')`、启用状态、配置)+ `integration_bindings`(工作区/项目级绑定:外部租户/仓库/频道 ↔ Mesh 工作区,携带匹配规则如"该 IM 群消息 @agent 时触发谁")。绑定经复合 FK 同租户(§6.2);**一个外部身份可绑定到至多一个工作区——规范化 `(provider, provider_tenant_key, external_ref)` 全局唯一键(R3)**;VCS 对象 ↔ Mesh 实体关联真源为 `vcs_links`(R3);**外部用户身份 ↔ Mesh 用户映射真源为 `external_identities`(R3 协同 MES-4 HIGH-1 引入,R4 修订模型,R5 全局化):映射到**全局登录身份 `users.id`**(不再锁到单个 workspace-scoped 的 `member_id`——与 §6.1「同一 `users.id` 在多工作区各有 member 行」的核心模型一致,同一已认证外部账号可跨多个 Mesh 工作区参与卡片审批),**身份键为 `UNIQUE(provider, provider_tenant_key, external_user_key)`**(纳入平台租户,不同外部租户的同名 user key 不冲突);**R5 写死:本表是与 `users` 同级的全局身份表——不携带 `workspace_id` 所有权 / RLS 键(§6.1 全局身份层、§6.2 第 5 条),建链来源仅以可空审计列 `created_in_workspace_id ON DELETE SET NULL` 记录,删除建链工作区不级联删除映射(其余工作区回调照常解析);全局解链仅允许映射所属 `users.id` 本人(无 admin 旁路),工作区管理员只能撤销本工作区使用权 / 成员资格(T29 跨工作区删除 + RLS / 权限负向测试)**;**卡片回调鉴权链**:回调先由集成实例解析所属 workspace → 查本表得 `users.id` → JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行 → 按 §6.10 权限行再校验(未映射/该用户在此工作区无名册行/无权限 → 403,审批状态不变,审计留痕)** |
-| 入站事件摄取 | **复用 autopilot `webhook_events` 范式**(autopilot.md):HMAC/签名校验(恒定时间比较 + 时间戳防重放)→ `integration_events.UNIQUE(integration_id, external_event_id)` 去重(重复事件幂等 200 不再分发)→ 全程审计 → **签名无效/缺失一律拒绝(401),绝不分发**。`integration_events` 由 integrations.md owns,与 autopilot 的 `webhook_events` 同构但相互独立 |
+| 注册与绑定 | `integrations`(集成定义:`kind ∈ ('im_feishu','im_slack','im_dingtalk','vcs_github','vcs_gitlab','webhook_outbound')`、启用状态、配置)+ `integration_bindings`(工作区/项目级绑定:外部租户/仓库/频道 ↔ Mesh 工作区,携带匹配规则如"该 IM 群消息 @agent 时触发谁")。绑定经复合 FK 同租户(§6.2);**一个外部身份可绑定到至多一个工作区——规范化 `(provider, provider_tenant_key, external_ref)` 全局唯一键(R3;钉钉:corp_id + conversationId)**;VCS 对象 ↔ Mesh 实体关联真源为 `vcs_links`(R3);**外部用户身份 ↔ Mesh 用户映射真源为 `external_identities`(R3 协同 MES-4 HIGH-1 引入,R4 修订模型,R5 全局化):映射到**全局登录身份 `users.id`**(不再锁到单个 workspace-scoped 的 `member_id`——与 §6.1「同一 `users.id` 在多工作区各有 member 行」的核心模型一致,同一已认证外部账号可跨多个 Mesh 工作区参与卡片审批),**身份键为 `UNIQUE(provider, provider_tenant_key, external_user_key)`**(纳入平台租户,不同外部租户的同名 user key 不冲突);**R5 写死:本表是与 `users` 同级的全局身份表——不携带 `workspace_id` 所有权 / RLS 键(§6.1 全局身份层、§6.2 第 5 条),建链来源仅以可空审计列 `created_in_workspace_id ON DELETE SET NULL` 记录,删除建链工作区不级联删除映射(其余工作区回调照常解析);全局解链仅允许映射所属 `users.id` 本人(无 admin 旁路),工作区管理员只能撤销本工作区使用权 / 成员资格(T29 跨工作区删除 + RLS / 权限负向测试)**;**卡片回调鉴权链**:回调先由集成实例解析所属 workspace → 查本表得 `users.id` → JOIN 该 workspace 的 `members(workspace_id, user_id)` 得名册行 → 按 §6.10 权限行再校验(未映射/该用户在此工作区无名册行/无权限 → 403,审批状态不变,审计留痕)** |
+| 入站事件摄取 | **复用 autopilot `webhook_events` 范式**(autopilot.md):HMAC/签名校验(恒定时间比较 + 时间戳防重放)→ `integration_events.UNIQUE(integration_id, external_event_id)` 去重(重复事件幂等 200 不再分发)→ 全程审计 → **签名无效/缺失一律拒绝(401),绝不分发**。`integration_events` 由 integrations.md owns,与 autopilot 的 `webhook_events` 同构但相互独立。**接收信道有二态、摄取管线唯一**:平台 HTTP 回调(逐请求签名)与 **Mesh 侧主动出连的长连接信道(钉钉 Stream 模式:通道层以 app_key/app_secret 鉴权,帧真确性由建连鉴权一次性确立,等价逐帧签名)**;长连接 worker 单实例互斥 + 指数退避重连 + 未 ACK 重推经去重幂等(integrations.md §3.2) |
 | 入站 → 触发 | 入站消息/事件经 §6.9 触发矩阵的「外部 IM 消息触发」行入队执行(`trigger='integration'`);**入站内容一律按不可信数据处理**(§6.15:结构化隔离,不当指令执行);VCS 事件(merge/close/comment)经 autopilot 规则或内置联动规则映射到 issue 状态流转/评论 |
 | 出站渠道 | 通知的 IM 投递(§6.13 `channel='im'`)、审批/交互卡片推送(§6.10 approvals 的卡片化呈现与回调)经集成平台**出站适配器**统一发送;适配器负责平台令牌(如 `tenant_access_token`)的缓存与刷新、速率退避、失败重试(台账见 `notification_delivery` / 卡片回调记 approvals `decision_comment`) |
 | 出向 Webhook(开发者平台,建议-9 转正) | `webhook_subscriptions`(订阅:目标 URL + 事件类型过滤 + 状态)+ 投递台账(重试退避 / HMAC-SHA256 签名 / `Mesh-Signature`/`Mesh-Event`/`Mesh-Delivery` 头 / 投递结果);订阅级熔断(连续失败暂停 + 告警);**出向目标受 §6.16 SSRF 防护约束** |
