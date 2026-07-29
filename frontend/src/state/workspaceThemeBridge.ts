@@ -6,13 +6,17 @@
  * 写入 `default_theme`,ThemeProvider 读取并解析协商链。
  *
  * 语义:
- * - 默认 `{defaultTheme: null, loaded: true}` = 无工作区上下文(公开页/全局
- *   页),协商链直接落系统级;
- * - 进入工作区路由:WorkspaceProvider 挂载即置 `loaded: false`(期望本级
- *   解析,ThemeProvider 对无显式偏好的用户呈现 skeleton 而非猜测),detail
- *   就绪后写入 `default_theme` 并 `loaded: true`;
+ * - 初值 `{defaultTheme: null, loaded: false}`:乐观假定「可能在工作区路由」,
+ *   配合 ThemeProvider 的首帧保持(H3)消除全局/匿名首帧的 light→dark 翻转闪烁;
+ *   全局/匿名页由 bootstrap 的 `markSessionProbed` 显式置 loaded=true 解锁,
+ *   工作区路由由 WorkspaceProvider 在 detail 就绪后置 loaded=true;
+ * - 进入工作区路由:WorkspaceProvider 挂载即 `beginWorkspaceLoad`(loaded=false),
+ *   detail 就绪后写入 `default_theme` 并 loaded=true;
  * - `workspace.updated` 实时事件由 WorkspaceProvider 浅合并进 settings,
  *   依赖该对象的桥接写入随之刷新 → 未设显式偏好的成员即时重解析(§4.5)。
+ *
+ * 匿名防死锁:ThemeProvider 的 skeleton 仅当 `sessionProbed`(bootstrap 已完成)
+ * 才可能触发;匿名无 session 时 bootstrap 不置 probed → 匿名永不陷 skeleton。
  */
 import { create } from 'zustand';
 import { isThemeMode } from '../design/themeNegotiation';
@@ -33,7 +37,7 @@ export interface WorkspaceThemeBridgeState {
 
 export const useWorkspaceThemeBridge = create<WorkspaceThemeBridgeState>()((set) => ({
   defaultTheme: null,
-  loaded: true,
+  loaded: false,
 
   setWorkspaceDefault: (theme) =>
     set({ defaultTheme: isThemeMode(theme) ? theme : null, loaded: true }),

@@ -186,10 +186,12 @@ describe('ThemeProvider 协商链(theme.md §2.2)', () => {
 });
 
 describe('ThemeProvider skeleton 兜底(theme.md §2.3 ③)', () => {
-  // skeleton 仅在「路由期望工作区默认 且 桥接未就绪」时出现(H3):用工作区路由
-  // 触发 routeExpectsWorkspaceDefault=true,否则全局路由协商链可直接落系统级。
+  // skeleton 仅在「路由期望工作区默认 且 桥接未就绪 且 已探测会话」时出现(H3):
+  // 用工作区路由触发 routeExpectsWorkspaceDefault=true,并置 sessionProbed=true
+  // (模拟已登录 bootstrap 完成),否则全局路由/匿名协商链可直接落系统级或不陷 skeleton。
   beforeEach(() => {
     window.history.pushState({}, '', '/w/ws-skel/board');
+    useSettingsStore.setState({ sessionProbed: true });
   });
   afterEach(() => {
     window.history.pushState({}, '', '/');

@@ -69,6 +69,7 @@ function syncMetaThemeColor(mode: ResolvedTheme, explicit: boolean): void {
 
 export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element {
   const userTheme = useSettingsStore((state) => state.preferences.theme);
+  const sessionProbed = useSettingsStore((state) => state.sessionProbed);
   const workspaceDefault = useWorkspaceThemeBridge((state) => state.defaultTheme);
   const workspaceLoaded = useWorkspaceThemeBridge((state) => state.loaded);
   const [systemPrefersDark, setSystemPrefersDark] = useState(
@@ -91,7 +92,11 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
   // 桥接已就绪。否则(工作区路由且桥接未就绪)链不可信——若首帧已有注入/locator
   // 提示则**保持**该首帧(不覆盖、不写 locator),否则呈现中性 skeleton。
   const chainReady = userTheme !== null || !routeExpectsWs || workspaceLoaded;
-  const pending = !chainReady && !firstFrameHint.current;
+  // skeleton 仅在「链不可信 + 无首帧提示 + bootstrap 已探测会话」时呈现:
+  // - 匿名(无 session)→ bootstrap 不置 sessionProbed → 永不陷 skeleton;
+  // - 注入/locator 首帧(firstFrameHint)→ 保持首帧,不 skeleton;
+  // - 仅「已登录 + 工作区路由 + 桥接未就绪 + 无任何首帧提示」这一窄窗口才 skeleton。
+  const pending = !chainReady && !firstFrameHint.current && sessionProbed;
 
   // system 偏好实时跟随(T8):matchMedia change 监听,卸载注销。
   useEffect(() => {

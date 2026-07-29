@@ -58,6 +58,10 @@ export interface SettingsState {
   preferences: UserPreferences;
   /** 最近一次服务端同步错误(null = 无错误);UI 层读取后渲染提示 */
   lastSyncError: PreferenceSyncError | null;
+  /** bootstrap 是否已完成会话探测(H3 防 skeleton 死锁:匿名无 session 时不置位,
+   *  使 ThemeProvider 的 skeleton 永不触发;登录/全局页探测后置 true)。非持久化。 */
+  sessionProbed: boolean;
+  markSessionProbed: () => void;
   setTheme: (theme: ThemeMode | null) => void;
   setLocale: (locale: string | null) => void;
   setTimezone: (timezone: string) => void;
@@ -113,6 +117,9 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       preferences: defaultPreferences(),
       lastSyncError: null,
+      sessionProbed: false,
+
+      markSessionProbed: () => set({ sessionProbed: true }),
 
       setTheme: (theme) => {
         set((state) => ({
@@ -276,5 +283,6 @@ export function onLogoutCleanup(): void {
   useSettingsStore.setState((state) => ({
     preferences: { ...state.preferences, theme: null, locale: null },
     lastSyncError: null,
+    sessionProbed: false,
   }));
 }
