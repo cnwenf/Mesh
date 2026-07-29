@@ -2,10 +2,11 @@ import pytest
 
 from mesh_runtime.api import LogAck
 from mesh_runtime.attempt import AttemptContext
-from mesh_runtime.errors import LeaseConflictError
+from mesh_runtime.errors import LeaseConflictError, ServerError
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
 from mesh_runtime.redaction import RedactionPipeline
+from mesh_runtime.spool import LogSpool, SpoolFullError
 from mesh_runtime.timeutil import FakeClock
 
 SECRET = "sk-live-TopSecret123"
@@ -45,9 +46,9 @@ def ctx():
     return AttemptContext(attempt_id="att-1", execution_id="exec-1", runtime_id="rt-1", lease_seq=1)
 
 
-def uploader(api, journal, redactor=None, *, clock, **kw):
+def uploader(api, journal, redactor=None, *, clock, spool=None, **kw):
     redactor = redactor or RedactionPipeline(secrets=[], rule_version="v1")
-    return LogUploader(api, journal, redactor, clock=clock, **kw)
+    return LogUploader(api, journal, redactor, clock=clock, spool=spool, **kw)
 
 
 async def seed(journal, ctx):
@@ -169,3 +170,104 @@ class TestFlushAndReconcile:
         api.errors = [LeaseConflictError("409", code="lease_seq_mismatch")]
         with pytest.raises(LeaseConflictError):
             await up.submit(ctx, "stdout", "x")
+
+
+class TestNoLossAndSpool:
+    """HIGH-2: a transient (non-409) upload failure must never permanently lose
+    already-redacted lines. With a spool the batch is durable and replayed
+    idempotently; even without one the lines are re-buffered and retried."""
+
+    async def test_transient_failure_rebuffers_and_retries_without_spool(self, journal, ctx):
+        api, clock = StubApi(), FakeClock()
+        up = uploader(api, journal, clock=clock, batch_lines=100)  # spool=None
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "abc")
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)  # transient -> swallowed + re-buffered
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 0
+        await up.flush(ctx, sealed=True)  # retry succeeds
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3  # not lost
+
+    async def test_transient_failure_does_not_fail_the_attempt_on_submit(self, journal, ctx):
+        api, clock = StubApi(), FakeClock()
+        up = uploader(api, journal, clock=clock, batch_lines=1)
+        await seed(journal, ctx)
+        api.errors = [ServerError("500")]
+        # Mid-stream threshold flush fails transiently; submit must NOT raise
+        # (a 5xx must not kill the attempt) and the line must survive.
+        await up.submit(ctx, "stdout", "abc")
+        api.errors = []
+        await up.flush(ctx, sealed=True)
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+
+    async def test_spool_replays_unacked_batch_after_transient_failure(self, journal, ctx, tmp_path):
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "abc")
+        api.errors = [ServerError("500")]
+        await up.flush(ctx, sealed=False)
+        assert spool.has_pending(ctx.attempt_id, "stdout")  # durable, not lost
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 0
+        await up.flush(ctx, sealed=False)  # replays the spooled batch, acks it
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+
+    async def test_spool_survives_restart_and_replays(self, journal, ctx, tmp_path):
+        api, clock = StubApi(), FakeClock()
+        dir_ = tmp_path / "spool"
+        up1 = uploader(api, journal, clock=clock, batch_lines=100,
+                       spool=LogSpool(dir_, max_bytes=4096))
+        await seed(journal, ctx)
+        await up1.submit(ctx, "stdout", "abc")
+        api.errors = [ServerError("500")]
+        await up1.flush(ctx, sealed=False)  # spooled, upload failed
+        # "restart": a brand-new uploader + spool handle over the same directory
+        spool2 = LogSpool(dir_, max_bytes=4096)
+        up2 = uploader(api, journal, clock=clock, batch_lines=100, spool=spool2)
+        await up2.flush(ctx, sealed=True)
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+        assert not spool2.has_pending(ctx.attempt_id, "stdout")
+
+    async def test_sealed_flush_transient_failure_propagates_but_spool_retains(
+        self, journal, ctx, tmp_path
+    ):
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "abc")
+        api.errors = [ServerError("500")]
+        with pytest.raises(ServerError):  # sealed -> supervisor decides
+            await up.flush(ctx, sealed=True)
+        assert spool.has_pending(ctx.attempt_id, "stdout")  # retained for next run
+
+    async def test_spool_full_backpressures_and_preserves_lines(self, journal, ctx, tmp_path):
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=2)  # too small for "abcd"
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "abcd")
+        with pytest.raises(SpoolFullError):
+            await up.flush(ctx, sealed=False)
+        # The lines were NOT dropped: a second flush still tries to spool them
+        # (still over cap), proving they remain buffered for backpressure.
+        with pytest.raises(SpoolFullError):
+            await up.flush(ctx, sealed=True)
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 0
+
+    async def test_offset_mismatch_reconcile_with_spool(self, journal, ctx, tmp_path):
+        api, clock = StubApi(), FakeClock()
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        up = uploader(api, journal, clock=clock, batch_lines=100, spool=spool)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "aaaa")  # journal offset -> 4
+        await up.submit(ctx, "stdout", "bbbb")
+        await journal.update(ctx.attempt_id, log_offset_stdout=0)  # drift behind server
+        api.errors = [LeaseConflictError("409", code="offset_mismatch", details={"expected": 4})]
+        await up.flush(ctx, sealed=True)
+        retry = [c for c in api.calls if c["stream"] == "stdout"][-1]
+        assert retry["start_offset"] == 4
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+

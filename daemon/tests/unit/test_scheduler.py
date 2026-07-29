@@ -22,13 +22,15 @@ def claim_body(attempt_id="a1", lease_seq=1):
     }
 
 
-def make_scheduler(server, *, on_claimed, max_concurrent=1, rand=None, clock=None):
+def make_scheduler(server, *, on_claimed, max_concurrent=1, rand=None, clock=None,
+                   on_attempt_error=None):
     api = RuntimeApiClient("https://x.example", TOKEN, transport=server.transport())
     from mesh_runtime.timeutil import FakeClock
 
     return ClaimScheduler(
         api, RUNTIME_ID, max_concurrent=max_concurrent,
         clock=clock or FakeClock(), on_claimed=on_claimed, rand=rand,
+        on_attempt_error=on_attempt_error,
     )
 
 
@@ -134,6 +136,85 @@ class TestStep:
     async def test_rejects_bad_max_concurrent(self, fake_server):
         with pytest.raises(ValueError):
             make_scheduler(fake_server, on_claimed=lambda c: None, max_concurrent=0)
+
+
+class TestAttemptTaskLifecycle:
+    """HIGH-1: spawned attempt tasks must be strongly referenced (so the event
+    loop cannot GC them mid-await and wedge ``inflight``) and any exception from
+    ``on_claimed`` must be surfaced to diagnostics — never silently swallowed as
+    an unretrieved task exception that drops the claim."""
+
+    async def test_spawned_task_is_strongly_referenced_until_done(self, fake_server):
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("a1"))
+        release = asyncio.Event()
+
+        async def on_claimed(claim):
+            await release.wait()
+
+        sched = make_scheduler(fake_server, on_claimed=on_claimed)
+        await sched.step()
+        await drain()
+        assert len(sched.tasks) == 1  # held by a strong reference, not GC-able
+        release.set()
+        await drain()
+        assert sched.tasks == set()  # released on completion
+
+    async def test_on_claimed_error_is_reported_and_inflight_released(self, fake_server):
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("a1"))
+        reported = []
+
+        async def on_claimed(claim):
+            raise RuntimeError("boom")
+
+        sched = make_scheduler(
+            fake_server, on_claimed=on_claimed,
+            on_attempt_error=lambda claim, exc: reported.append((claim.attempt_id, exc)),
+        )
+        outcome, _ = await sched.step()
+        assert outcome == "claimed"
+        assert sched.inflight == 1
+        await drain()
+        # The failure is surfaced to the diagnostics hook, not lost as an
+        # unretrieved task exception, and the slot is released so claiming
+        # continues.
+        assert sched.inflight == 0
+        assert len(reported) == 1
+        attempt_id, exc = reported[0]
+        assert attempt_id == "a1"
+        assert isinstance(exc, RuntimeError)
+        assert sched.tasks == set()
+
+    async def test_on_claimed_error_without_hook_is_logged_not_swallowed(self, fake_server, caplog):
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("a1"))
+
+        async def on_claimed(claim):
+            raise KeyError("attempt")  # e.g. malformed claim payload
+
+        sched = make_scheduler(fake_server, on_claimed=on_claimed)
+        await sched.step()
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="mesh_runtime.scheduler"):
+            await drain()
+        assert sched.inflight == 0  # slot still released
+        assert any("a1" in record.message for record in caplog.records)
+
+    async def test_scheduler_keeps_claiming_after_attempt_error(self, fake_server):
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("a1"))
+        fake_server.enqueue(CLAIM_KEY, 200, claim_body("a2"))
+
+        async def on_claimed(claim):
+            if claim.attempt_id == "a1":
+                raise RuntimeError("boom")
+
+        sched = make_scheduler(fake_server, on_claimed=on_claimed, max_concurrent=1)
+        await sched.step()  # a1 -> errors
+        await drain()
+        assert sched.inflight == 0
+        outcome, _ = await sched.step()  # a2 still claimable — not wedged
+        assert outcome == "claimed"
+        await drain()
+        assert sched.inflight == 0
 
 
 class TestRunLoop:

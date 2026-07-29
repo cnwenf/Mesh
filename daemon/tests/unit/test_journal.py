@@ -21,6 +21,21 @@ class TestJournal:
         await j.close()
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
+    async def test_open_tightens_state_dir_to_0700(self, tmp_path):
+        """SQLite creates transient ``-journal``/``-wal``/``-shm`` aux files
+        under the process umask (often 0644). A 0700 state dir keeps them
+        unreadable to other users regardless of umask (§2.3, defense in depth
+        on top of the doctor's directory check)."""
+        import os
+
+        state = tmp_path / "state"
+        state.mkdir(mode=0o755)  # deliberately too permissive
+        j = Journal(state / "ledger.sqlite3")
+        await j.open()
+        await j.put("a", execution_id="e", runtime_id="r", lease_seq=1, status="claimed")
+        await j.close()
+        assert stat.S_IMODE(os.stat(state).st_mode) == 0o700
+
     async def test_put_and_get_roundtrip(self, journal):
         await journal.put(
             "att-1", execution_id="exec-1", runtime_id="rt-1",

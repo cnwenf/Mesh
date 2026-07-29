@@ -32,6 +32,24 @@ class TestClassifyResponse:
             classify_response(409, None)
         assert exc_info.value.code is None
 
+    def test_409_carries_error_details(self):
+        with pytest.raises(LeaseConflictError) as exc_info:
+            classify_response(
+                409, {"error": {"code": "offset_mismatch", "details": {"expected": 7}}}
+            )
+        assert exc_info.value.code == "offset_mismatch"
+        assert exc_info.value.details == {"expected": 7}
+
+    def test_409_details_default_to_empty_when_absent(self):
+        with pytest.raises(LeaseConflictError) as exc_info:
+            classify_response(409, {"error": {"code": "lease_seq_mismatch"}})
+        assert exc_info.value.details == {}
+
+    def test_409_details_ignores_non_dict(self):
+        with pytest.raises(LeaseConflictError) as exc_info:
+            classify_response(409, {"error": {"code": "x", "details": "not-a-dict"}})
+        assert exc_info.value.details == {}
+
     def test_410_gone(self):
         with pytest.raises(GoneError):
             classify_response(410, {"error": {"code": "activation_expired"}})

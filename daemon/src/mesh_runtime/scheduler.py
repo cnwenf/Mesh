@@ -13,6 +13,7 @@ is unit-testable without driving the infinite :meth:`run` loop.
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import Awaitable, Callable
 
@@ -21,7 +22,10 @@ from mesh_runtime.backoff import EMPTY_QUEUE, NETWORK, RATE_LIMITED_FALLBACK_SEC
 from mesh_runtime.errors import FatalAuthError, RateLimitedError, ServerError
 from mesh_runtime.timeutil import Clock, SystemClock
 
+logger = logging.getLogger("mesh_runtime.scheduler")
+
 OnClaimed = Callable[[ClaimResponse], Awaitable[None]]
+OnAttemptError = Callable[[ClaimResponse, BaseException], None]
 
 _CAPACITY_POLL_SECONDS = 0.05
 
@@ -35,6 +39,7 @@ class ClaimScheduler:
         max_concurrent: int,
         clock: Clock | None = None,
         on_claimed: OnClaimed,
+        on_attempt_error: OnAttemptError | None = None,
         rand: Callable[[], float] | None = None,
     ) -> None:
         if max_concurrent < 1:
@@ -44,16 +49,28 @@ class ClaimScheduler:
         self._max_concurrent = max_concurrent
         self._clock = clock or SystemClock()
         self._on_claimed = on_claimed
+        self._on_attempt_error = on_attempt_error
         self._rand = rand or random.random
         self._inflight = 0
         self._empty_attempt = 0
         self._net_attempt = 0
         self._stop = asyncio.Event()
+        # Strong references to in-flight attempt tasks. The event loop keeps
+        # only weak references to tasks, so an unreferenced attempt awaiting a
+        # long provider run could be garbage-collected mid-flight — its
+        # ``finally`` would never run and ``_inflight`` would wedge, silently
+        # stopping all claiming. We hold each task here until it completes.
+        self._tasks: set[asyncio.Task] = set()
         self.fatal: FatalAuthError | None = None
 
     @property
     def inflight(self) -> int:
         return self._inflight
+
+    @property
+    def tasks(self) -> set[asyncio.Task]:
+        """In-flight attempt tasks (strong references; read-only view)."""
+        return self._tasks
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -84,7 +101,9 @@ class ClaimScheduler:
         self._empty_attempt = 0
         self._net_attempt = 0
         self._inflight += 1
-        asyncio.create_task(self._run_attempt(claim))
+        task = asyncio.create_task(self._run_attempt(claim))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         return "claimed", 0.0
 
     async def run(self, shutdown: asyncio.Event) -> None:
@@ -98,5 +117,18 @@ class ClaimScheduler:
     async def _run_attempt(self, claim: ClaimResponse) -> None:
         try:
             await self._on_claimed(claim)
+        except asyncio.CancelledError:
+            raise  # shutdown drain cancels in-flight attempts — propagate
+        except BaseException as exc:  # noqa: BLE001 — a claim must never vanish silently
+            # Surface the failure to diagnostics/audit. Without this the
+            # exception would be "never retrieved" and the dropped claim would
+            # leave no trace; the server's lease/reaper remains the authority.
+            self._report_attempt_error(claim, exc)
         finally:
             self._inflight -= 1
+
+    def _report_attempt_error(self, claim: ClaimResponse, exc: BaseException) -> None:
+        attempt_id = getattr(claim, "attempt_id", "<unknown>")
+        logger.error("attempt %s failed in on_claimed: %r", attempt_id, exc, exc_info=exc)
+        if self._on_attempt_error is not None:
+            self._on_attempt_error(claim, exc)

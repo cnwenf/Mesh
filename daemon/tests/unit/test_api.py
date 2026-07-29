@@ -232,6 +232,22 @@ class TestErrorMapping:
         with pytest.raises(ServerError):
             await api.claim(RUNTIME_ID)
 
+    async def test_409_offset_mismatch_carries_details_over_the_wire(self, server):
+        """The log uploader reconciles against the server's ``expected`` offset,
+        so the wire layer must surface ``error.details`` on a 409 (errors.py
+        ``_error_details``), not just the code."""
+        server.enqueue(
+            f"POST /api/v1/daemon/attempts/{ATTEMPT_ID}/logs",
+            409,
+            {"error": {"code": "offset_mismatch", "details": {"expected": 128}}},
+        )
+        with pytest.raises(LeaseConflictError) as exc:
+            await client(server).append_logs(
+                ATTEMPT_ID, lease_seq=3, stream="stdout", start_offset=0, lines=["a"], sealed=False
+            )
+        assert exc.value.code == "offset_mismatch"
+        assert exc.value.details == {"expected": 128}
+
 
 class TestRetryAfterParsing:
     @pytest.mark.parametrize(

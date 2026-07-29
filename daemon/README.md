@@ -24,9 +24,16 @@ secrets), driving the full attempt state machine and crash recovery:
 - `attempt` — per-attempt supervisor: single-lock `lease_seq` fencing, renew
   loop, provider lifecycle, fenced terminal report; a 409 kills the provider
   and stops all reporting (the server reaper owns the truth).
-- `journal` — SQLite (0600, metadata only) crash-recovery ledger.
+- `journal` — SQLite (0600, metadata only) crash-recovery ledger; the state
+  directory is tightened to 0700 so SQLite's transient `-journal`/`-wal`/`-shm`
+  aux files are never world-readable regardless of umask.
 - `logs` — redaction-first batching (64 lines / 256 KiB / 500 ms), offsets
-  counted in redacted UTF-8 bytes, 409 `offset_mismatch` reconciliation.
+  counted in redacted UTF-8 bytes, 409 `offset_mismatch` reconciliation. A
+  batch is spooled BEFORE upload and cleared only on server ack, so a crash,
+  restart, or transient network blip never loses redacted lines; a mid-stream
+  transient failure is retried on the next flush instead of failing the attempt.
+- `spool` — durable per-attempt redacted-batch store (0600 files, 0700 dir),
+  idempotent `(attempt, stream, start_offset)` replay, frozen-cap backpressure.
 - `redaction` / `result` — first-layer redaction pipeline and the versioned
   terminal result schema (decimal-string money, non-negative ints).
 - `token_store` — `mesh_rt_` token persistence with the `lstat`/`open`/`fstat`

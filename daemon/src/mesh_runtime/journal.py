@@ -69,7 +69,14 @@ class Journal:
         await asyncio.to_thread(self._open_sync)
 
     def _open_sync(self) -> None:
+        import os
+
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # SQLite creates transient ``-journal``/``-wal``/``-shm`` rollback files
+        # under the process umask (often 0644). Tightening the state directory to
+        # 0700 keeps those aux files unreadable to other users regardless of
+        # umask — defense in depth on top of the doctor's directory check (§2.3).
+        os.chmod(self._path.parent, 0o700)
         # check_same_thread=False: every call is dispatched via asyncio.to_thread
         # (arbitrary worker threads) but serialized by self._lock, so the
         # connection is never used concurrently — only from varying threads.
@@ -79,8 +86,6 @@ class Journal:
         conn.commit()
         self._conn = conn
         # Restrict AFTER creation so the file exists with 0600 regardless of umask.
-        import os
-
         os.chmod(self._path, 0o600)
 
     async def close(self) -> None:

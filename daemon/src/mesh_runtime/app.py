@@ -24,6 +24,7 @@ from mesh_runtime.providers.base import ExecutorAdapter, RunRequest
 from mesh_runtime.reconcile import reconcile_on_startup
 from mesh_runtime.redaction import RedactionPipeline
 from mesh_runtime.scheduler import ClaimScheduler
+from mesh_runtime.spool import DEFAULT_SPOOL_MAX_BYTES, LogSpool
 from mesh_runtime.timeutil import Clock, SystemClock
 
 logger = logging.getLogger("mesh_runtime")
@@ -157,7 +158,13 @@ class RuntimeApp:
             work_dir=str(self.config.work_dir / claim.execution_id / attempt_id),
         )
         redactor = RedactionPipeline(secrets=self._redaction_secrets, rule_version=self._rule_version)
-        logs = LogUploader(self._api, self._journal, redactor, clock=self._clock)
+        # Per-attempt tmpfs spool: redacted batches are durable BEFORE upload and
+        # only cleared on server ack, so a crash/network blip never loses logs
+        # (§3.9.3). Scoped to a subdirectory so the frozen cap is per attempt.
+        spool = LogSpool(
+            self.config.spool_dir / attempt_id, max_bytes=DEFAULT_SPOOL_MAX_BYTES
+        )
+        logs = LogUploader(self._api, self._journal, redactor, clock=self._clock, spool=spool)
         adapter = self._select_adapter()
         supervisor = AttemptSupervisor(
             self._api,
@@ -176,6 +183,7 @@ class RuntimeApp:
             outcome = await supervisor.supervise(ctx, adapter, build_run_request(claim))
             if outcome.terminal_reported:
                 await self._journal.delete(attempt_id)  # only after confirmed terminal (§3.6)
+                await logs.drain_attempt(attempt_id)  # drop residual spooled batches
             logger.info("attempt %s finished: %s", attempt_id, outcome.status)
         finally:
             self._supervisors.pop(attempt_id, None)

@@ -247,7 +247,11 @@ class AttemptSupervisor:
             await self._mark_lease_lost(ctx, outcome.status)
             return
         except DaemonError:
-            pass  # spool keeps the redacted batch; reconciled on next run
+            # A sealed flush only raises on a transient (non-lease) failure or
+            # spool backpressure; the redacted batch is retained in the spool
+            # (§3.9.3) and the server's log offset — not this flush — stays the
+            # authority. Report the terminal state rather than lose the result.
+            pass
         await self._report_terminal(ctx, outcome, session_id, usage, summary, exit_code, hit_count)
         self._stop_renew()
 

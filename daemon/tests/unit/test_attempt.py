@@ -190,6 +190,49 @@ class TestSupervise:
         assert sup.renew_period(120.0) == 40.0  # min(40, 40)
         assert sup.renew_period(30.0) == 10.0   # min(10, 40)
 
+    async def test_renew_success_advances_lease_seq(self, journal, ctx):
+        """attempt.py lease-maintenance happy path: a successful renew advances
+        ``ctx.lease_seq`` under the shared lock so no report uses a stale value."""
+        api = RenewOkApi()
+        gate = asyncio.Event()
+        provider = BlockingProvider(gate, events_before=[SessionStarted("s", "m")])
+        sup = make_supervisor(api, journal, FakeClock())
+        task = asyncio.create_task(sup.supervise(ctx, provider, run_request()))
+        while not api.renews:  # wait for at least one successful renew
+            await asyncio.sleep(0)
+        assert ctx.lease_seq > 1  # advanced from the initial 1
+        gate.set()
+        outcome = await task
+        assert outcome.status == "completed"
+        assert outcome.lease_lost is False
+        # exactly one advance per successful renew, under the lock
+        assert ctx.lease_seq == 1 + len(api.renews)
+
+    async def test_sealed_flush_transient_failure_still_reports_terminal(self, journal, ctx):
+        """attempt.py ``_finalize`` ``except DaemonError: pass`` path: a transient
+        (non-lease) failure of the sealed log flush must NOT prevent the terminal
+        report — the redacted batch is the spool's / server-offset's job, and the
+        result must not be lost."""
+        class FlakyLogsApi(RenewOkApi):
+            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+                raise ServerError("log relay down")
+
+        api = FlakyLogsApi()
+
+        class Provider:
+            name = "fake"
+
+            async def run(self, request):
+                yield TextDelta(text="some output")  # buffered; flushed sealed at finalize
+                yield FinalResult(summary="done", exit_code=0)
+
+        sup = make_supervisor(api, journal, FakeClock())
+        outcome = await sup.supervise(ctx, Provider(), run_request())
+        assert outcome.status == "completed"
+        assert outcome.terminal_reported is True
+        assert outcome.lease_lost is False
+        assert [t["status"] for t in api.transitions] == ["running", "completed"]
+
     async def test_renew_consecutive_daemon_errors_lease_lost(self, journal, ctx):
         class RenewServerErrorApi(StubApi):
             async def renew_lease(self, attempt_id, *, lease_seq):

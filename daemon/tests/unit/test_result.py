@@ -111,3 +111,44 @@ class TestValidateResult:
     def test_non_dict_rejected(self):
         with pytest.raises(ValueError, match="object"):
             validate_result([])  # type: ignore[arg-type]
+
+    def test_rejects_unknown_termination(self):
+        doc = make_result()
+        doc["outcome"]["termination"] = "exploded"
+        with pytest.raises(ValueError, match="termination"):
+            validate_result(doc)
+
+    def test_rejects_bool_exit_code(self):
+        doc = make_result()
+        doc["outcome"]["exit_code"] = False  # isinstance(False, int) is True
+        with pytest.raises(ValueError, match="exit_code"):
+            validate_result(doc)
+
+    def test_rejects_non_integer_exit_code(self):
+        doc = make_result()
+        doc["outcome"]["exit_code"] = "0"
+        with pytest.raises(ValueError, match="exit_code"):
+            validate_result(doc)
+
+    def test_rejects_total_tokens_inconsistent_with_components(self):
+        doc = make_result()
+        doc["usage"]["total_tokens"] = doc["usage"]["total_tokens"] + 1
+        with pytest.raises(ValueError, match="total_tokens"):
+            validate_result(doc)
+
+    def test_rejects_bool_usage_field(self):
+        doc = make_result()
+        doc["usage"]["input_tokens"] = True
+        with pytest.raises(ValueError, match="input_tokens"):
+            validate_result(doc)
+
+
+class TestUsageBooleanRejection:
+    def test_usage_rejects_bool_token_counts(self):
+        # bool is a subclass of int; counts must be genuine non-negative ints.
+        with pytest.raises(ValueError, match="input_tokens"):
+            usage(input_tokens=True)._validate()
+
+    def test_build_result_rejects_bool_turns(self):
+        with pytest.raises(ValueError, match="turns"):
+            make_result(usage=usage(turns=False))
