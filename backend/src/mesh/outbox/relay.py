@@ -1,11 +1,19 @@
 """Outbox relay worker (README §2.2 / §6.6).
 
-Polls ``outbox_events(status='pending')`` with ``FOR UPDATE SKIP LOCKED``
-(multiple replicas never process the same row), dispatches each event to the
+Polls ``outbox_events`` with the authority claim predicate
+``status='pending' AND available_at <= now()`` (``FOR UPDATE SKIP LOCKED``;
+multiple replicas never process the same row), dispatches each event to the
 handler registered for its ``event_type`` in the same transaction, then marks
 it ``published``. Failures increment ``delivery_attempts``; exceeding
 ``max_attempts`` marks the row ``failed`` (alerting concern). Handlers may
 return frames to publish on the Redis fan-out AFTER the transaction commits.
+
+Retryable NON-failure outcomes (e.g. integrations.md ``token_refresh_busy``,
+MES-82 R4-4) raise :class:`RetryableDelay` instead of failing: the relay
+moves ``available_at`` forward by a short backoff WITHOUT incrementing
+``delivery_attempts`` — the failure budget is never consumed and the row
+never reaches a terminal state; the ``available_at`` index filter prevents
+hot claim loops.
 """
 
 from __future__ import annotations
@@ -14,7 +22,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -32,6 +40,21 @@ logger = logging.getLogger("mesh.outbox.relay")
 
 # handler(session, event) → optional [(channel, frame)] to fan out after commit
 Handler = Callable[[AsyncSession, OutboxEvent], Awaitable[list[tuple[str, dict]] | None]]
+
+
+class RetryableDelay(Exception):
+    """Handler outcome: retry later WITHOUT consuming the failure budget.
+
+    README §6.6 (MES-82 R4-4): retryable non-failure results (e.g. an IM
+    token refresh already in flight — ``token_refresh_busy``) only move
+    ``available_at`` forward by ``delay`` (short backoff); they never
+    increment ``delivery_attempts`` and never reach a terminal state.
+    """
+
+    def __init__(self, delay: float, reason: str = "") -> None:
+        super().__init__(reason or "retryable delay")
+        self.delay = max(0.1, float(delay))
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -67,11 +90,23 @@ class OutboxRelay:
         self._handlers[event_type] = handler
 
     async def claim_batch(self, session: AsyncSession) -> list[OutboxEvent]:
-        """Claim up to ``batch_size`` pending rows, oldest first (SKIP LOCKED)."""
+        """Claim up to ``batch_size`` claimable rows, oldest first (SKIP LOCKED).
+
+        README §6.6 authority claim predicate: ``status='pending' AND
+        available_at <= now()`` — deferred rows (failure backoff or retryable
+        non-failure results) stay invisible until their earliest-claim
+        instant, and ``idx_outbox_pending (available_at, created_at)``
+        provides the scan order.
+        """
         stmt = (
             select(OutboxEvent)
             .where(OutboxEvent.status == OUTBOX_STATUS_PENDING)
-            .order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc())
+            .where(OutboxEvent.available_at <= datetime.now(UTC))
+            .order_by(
+                OutboxEvent.available_at.asc(),
+                OutboxEvent.created_at.asc(),
+                OutboxEvent.id.asc(),
+            )
             .limit(self._batch_size)
             .with_for_update(skip_locked=True)
         )
@@ -114,11 +149,34 @@ class OutboxRelay:
                 frames = await handler(session, event) or []
                 event.status = OUTBOX_STATUS_PUBLISHED
                 event.published_at = datetime.now(UTC)
+        except RetryableDelay as delay:
+            # Savepoint rolled back; outer transaction still usable.
+            await self._defer_retryable(session, event, delay)
+            return []
         except Exception:
             # Savepoint rolled back; outer transaction still usable.
             await self._mark_delivery_failure(session, event)
             return []
         return list(frames)
+
+    async def _defer_retryable(
+        self, session: AsyncSession, event: OutboxEvent, delay: RetryableDelay
+    ) -> None:
+        """Move ``available_at`` forward WITHOUT consuming the failure budget.
+
+        README §6.6 (MES-82 R4-4): retryable non-failure results stay
+        ``pending`` with ``delivery_attempts`` untouched; the ``available_at``
+        index filter both schedules the retry and prevents a hot claim loop.
+        """
+        event.available_at = datetime.now(UTC) + timedelta(seconds=delay.delay)
+        logger.info(
+            "outbox event %s deferred %.1fs without failure budget (type=%s, reason=%s)",
+            event.id,
+            delay.delay,
+            event.event_type,
+            delay.reason,
+        )
+        await session.flush()
 
     async def run_once(self) -> RelayResult:
         """Claim and dispatch one batch in a single transaction."""

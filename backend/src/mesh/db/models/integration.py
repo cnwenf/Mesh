@@ -35,6 +35,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     ForeignKey,
     ForeignKeyConstraint,
@@ -51,6 +52,7 @@ from mesh.db.base import Base
 INTEGRATION_KIND_VALUES = (
     "im_feishu",
     "im_slack",
+    "im_dingtalk",
     "vcs_github",
     "vcs_gitlab",
     "webhook_outbound",
@@ -58,11 +60,16 @@ INTEGRATION_KIND_VALUES = (
 
 # Normalized provider identifiers (R3): bindings/identities/vcs_links use the
 # provider dimension of the global external-identity key.
-BINDING_PROVIDER_VALUES = ("feishu", "slack", "github", "gitlab", "webhook")
-IDENTITY_PROVIDER_VALUES = ("feishu", "slack", "github", "gitlab")
+BINDING_PROVIDER_VALUES = ("feishu", "slack", "dingtalk", "github", "gitlab", "webhook")
+IDENTITY_PROVIDER_VALUES = ("feishu", "slack", "dingtalk", "github", "gitlab")
 VCS_PROVIDER_VALUES = ("github", "gitlab")
 
 INTEGRATION_STATUS_VALUES = ("active", "disabled")
+
+# Connector health (independent of the manual active/disabled status):
+# driven by the connectivity test endpoint, outbound credential-refresh
+# failures (``auth_failed`` → "re-authorize" banner) and delivery outcomes.
+INTEGRATION_HEALTH_VALUES = ("unknown", "healthy", "auth_failed", "unreachable")
 BINDING_SCOPE_VALUES = ("workspace", "project")
 
 # integrations.md §2.4 — signature outcomes; invalid/missing are ALWAYS
@@ -111,6 +118,9 @@ class Integration(Base):
     __table_args__ = (
         CheckConstraint(f"kind IN {INTEGRATION_KIND_VALUES!r}", name="integrations_kind"),
         CheckConstraint(
+            f"health_state IN {INTEGRATION_HEALTH_VALUES!r}", name="integrations_health_state"
+        ),
+        CheckConstraint(
             f"status IN {INTEGRATION_STATUS_VALUES!r}", name="integrations_status"
         ),
         ForeignKeyConstraint(
@@ -142,6 +152,22 @@ class Integration(Base):
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
     )
     kind: Mapped[str] = mapped_column(TEXT, nullable=False)
+    # MES-82: DingTalk Stream connection-state persistence truth source
+    # (integrations.md §2.2/§3.9; only used by kind='im_dingtalk' stream
+    # mode — the connector behavior ships in the MES-82 slices).
+    stream_state: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'")
+    )
+    # Connector health (§2.2): independent of the manual status; driven by
+    # the connectivity test endpoint and outbound credential-refresh /
+    # delivery outcomes (auth_failed → "re-authorize" banner, §4.1 badge).
+    health_state: Mapped[str] = mapped_column(
+        TEXT, nullable=False, server_default=text("'unknown'")
+    )
+    last_error: Mapped[str | None] = mapped_column(TEXT, nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     name: Mapped[str] = mapped_column(TEXT, nullable=False)
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
@@ -467,6 +493,12 @@ class WebhookSubscriptionDelivery(Base):
     )
     subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     event_ref: Mapped[str] = mapped_column(TEXT, nullable=False)
+    # Event type + payload captured at derivation time (§3.4/P8): the
+    # delivery worker sends the real event type in the ``Mesh-Event``
+    # header and the full payload in the body — subscribers must be able
+    # to reconstruct e.g. ``issue.updated`` and its data from a delivery.
+    event_type: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
     state: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     next_retry_at: Mapped[datetime | None] = mapped_column(
@@ -571,5 +603,247 @@ class VcsLink(Base):
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
     updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+# integrations.md §2.10 (MES-82) — inbound-message conversation FIFO queue.
+QUEUE_DISPATCH_MODE_VALUES = ("serial_conversation", "parallel")
+QUEUE_STATE_VALUES = (
+    "pending",
+    "dispatching",
+    "processing",
+    "cancelling",
+    "done",
+    "failed",
+    "cancelled",
+)
+# In-flight states occupying the serial conversation lane (the partial
+# unique index covers exactly these; ``cancelling`` keeps the lane until
+# terminal — /stop does not early-release the next item, §2.10/T39-4).
+QUEUE_INFLIGHT_STATES = ("dispatching", "processing", "cancelling")
+QUEUE_TERMINAL_STATES = ("done", "failed", "cancelled")
+
+# runtime.md runtime context appends (MES-82): registered sources.
+CONTEXT_APPEND_SOURCE_VALUES = ("im_btw",)
+
+
+class IntegrationMessageQueue(Base):
+    """Inbound-message conversation-level FIFO queue (integrations.md §2.10).
+
+    MES-82 "new messages auto-queue" truth source. Serial conversations
+    admit at most ONE in-flight item (partial unique index over
+    dispatching/processing/cancelling, parallel mode exempt); ``seq`` per
+    ``conversation_key`` is the FIFO truth. Delete protection is
+    fail-closed: parent SET NULL + ``ck_imq_orphan_terminal`` rejects a
+    non-terminal item losing its parent (the DELETE rolls back entirely),
+    so messages are never silently orphaned; surviving orphan rows are
+    self-describing terminal audit rows (``binding_display`` snapshot).
+    ``ack_*`` columns carry the emoji-acknowledgement window protocol
+    (§3.8: leader/follower suppression, single outbound per window).
+    """
+
+    __tablename__ = "integration_message_queue"
+    __table_args__ = (
+        CheckConstraint("seq > 0", name="integration_message_queue_seq_positive"),
+        CheckConstraint(
+            f"dispatch_mode IN {QUEUE_DISPATCH_MODE_VALUES!r}",
+            name="integration_message_queue_dispatch_mode",
+        ),
+        CheckConstraint(f"state IN {QUEUE_STATE_VALUES!r}", name="integration_message_queue_state"),
+        # Fail-closed orphan protection: SET NULL parents require terminal
+        # state (T39-5 — DELETE of a parent with an in-flight item is
+        # rejected wholesale, never silently orphaning a live message).
+        CheckConstraint(
+            "(integration_id IS NOT NULL OR state IN ('done','failed','cancelled')) "
+            "AND (binding_id IS NOT NULL OR state IN ('done','failed','cancelled'))",
+            name="ck_imq_orphan_terminal",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "integration_id"),
+            ("integrations.workspace_id", "integrations.id"),
+            name="fk_imq_integration",
+            ondelete="SET NULL (integration_id)",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "binding_id"),
+            ("integration_bindings.workspace_id", "integration_bindings.id"),
+            name="fk_imq_binding",
+            ondelete="SET NULL (binding_id)",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "integration_event_id"),
+            ("integration_events.workspace_id", "integration_events.id"),
+            name="fk_imq_event",
+            ondelete="SET NULL (integration_event_id)",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "execution_id"),
+            ("task_executions.workspace_id", "task_executions.id"),
+            name="fk_imq_execution",
+            ondelete="SET NULL (execution_id)",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "target_agent_id"),
+            ("agents.workspace_id", "agents.id"),
+            name="fk_imq_target_agent",
+            ondelete="SET NULL (target_agent_id)",
+        ),
+        Index("uq_imq_ws_id", "workspace_id", "id", unique=True),
+        # NULL integration_id never conflicts (orphan audit rows).
+        Index("uq_imq_event", "integration_id", "integration_event_id", unique=True),
+        Index("uq_imq_conversation_seq", "conversation_key", "seq", unique=True),
+        # Serial in-flight exclusion (parallel exempt).
+        Index(
+            "uq_imq_conversation_active",
+            "conversation_key",
+            unique=True,
+            postgresql_where=text(
+                "state IN ('dispatching','processing','cancelling') "
+                "AND dispatch_mode = 'serial_conversation'"
+            ),
+        ),
+        Index(
+            "idx_imq_conversation_pending",
+            "conversation_key",
+            "seq",
+            postgresql_where=text("state = 'pending'"),
+        ),
+        Index(
+            "idx_imq_lease",
+            "lease_expires_at",
+            postgresql_where=text("state IN ('dispatching','processing','cancelling')"),
+        ),
+        Index(
+            "idx_imq_integration_state",
+            "integration_id",
+            "state",
+            text("enqueued_at DESC"),
+            "id",
+        ),
+        Index("idx_imq_ws_state", "workspace_id", "state"),
+        Index("idx_imq_binding_state", "binding_id", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    integration_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    binding_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    integration_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    # Binding display snapshot — orphan audit rows stay self-describing.
+    binding_display: Mapped[str] = mapped_column(
+        TEXT, nullable=False, server_default=text("''")
+    )
+    # scope='project' capture at enqueue time (orphan-audit visibility).
+    project_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    conversation_key: Mapped[str] = mapped_column(TEXT, nullable=False)
+    seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dispatch_mode: Mapped[str] = mapped_column(TEXT, nullable=False)
+    state: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'pending'"))
+    execution_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    target_agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    message_excerpt: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("''"))
+    sender_identity_key: Mapped[str] = mapped_column(
+        TEXT, nullable=False, server_default=text("''")
+    )
+    # Emoji-ack window protocol (§3.8): leader self-references; followers
+    # point at the leader that represents them.
+    ack_leader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    ack_window_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    ack_attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    ack_sent_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    ack_represented_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    ack_merged_into: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    enqueued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ExecutionContextAppend(Base):
+    """Runtime context-append ledger (runtime.md, MES-82).
+
+    /btw side messages queued against a RUNNING execution (§3.7): each
+    append carries a per-execution monotonic ``seq`` (the daemon dedup
+    key together with ``execution_id``); ``injected_attempt_id`` is the
+    single-pointer injection receipt (attempt scope — requeue clears it,
+    so the pending set is ``injected_attempt_id IS NULL``). Per-execution
+    append caps (count/chars) are service-layer constants, not DB
+    constraints (§2.10 M3).
+    """
+
+    __tablename__ = "execution_context_appends"
+    __table_args__ = (
+        CheckConstraint("seq > 0", name="execution_context_appends_seq_positive"),
+        CheckConstraint(
+            f"source IN {CONTEXT_APPEND_SOURCE_VALUES!r}",
+            name="execution_context_appends_source",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "execution_id"),
+            ("task_executions.workspace_id", "task_executions.id"),
+            name="fk_eca_execution",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ("workspace_id", "injected_attempt_id"),
+            ("execution_attempts.workspace_id", "execution_attempts.id"),
+            name="fk_eca_injected_attempt",
+            ondelete="SET NULL (injected_attempt_id)",
+        ),
+        Index("uq_eca_ws_id", "workspace_id", "id", unique=True),
+        Index("uq_eca_execution_seq", "execution_id", "seq", unique=True),
+        # Attempt-scoped pending set (matches the daemon GET filter).
+        Index(
+            "idx_eca_execution_pending",
+            "execution_id",
+            "seq",
+            postgresql_where=text("injected_attempt_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    execution_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source: Mapped[str] = mapped_column(TEXT, nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    injected_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    injected_attempt_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

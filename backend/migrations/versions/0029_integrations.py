@@ -32,6 +32,31 @@ Tables:
   ``UNIQUE(subscription_id, event_ref)`` idempotency (README §6.5).
 - ``vcs_links`` — VCS object ↔ Mesh entity link truth source (R3): partial
   unique active indexes, same-tenant composite FKs.
+- ``integration_message_queue`` — inbound-message conversation-level FIFO
+  queue (MES-82 §2.10): serial-lane in-flight exclusion (parallel exempt),
+  orphan-audit delete protection (SET NULL + terminal-state CHECK,
+  fail-closed), emoji-ack window columns (§3.8). DDL mirrors the executable
+  reference in docs/specs/validation/schema_r2_validation.sql (T39).
+- ``execution_context_appends`` — runtime context-append ledger (MES-82,
+  runtime.md "运行期上下文追加"): per-execution monotonic ``seq`` + attempt
+  scoped injection receipt. DDL mirrors the T39 executable reference.
+
+Cross-table alignment (MES-82 rebase coordination, README §6.6/§6.9):
+
+- ``integrations.kind`` CHECK includes ``im_dingtalk`` (integrations.md
+  §2.7 authority) + ``stream_state`` JSONB persistence column (§2.2/§3.9).
+- ``integration_bindings`` / ``external_identities`` provider CHECKs
+  include ``dingtalk``.
+- ``notification_delivery.provider`` CHECK extended with ``dingtalk``
+  (comment-inbox.md §2 row) + integration/binding routing FKs (§6.2 rule 6
+  column-level SET NULL).
+- ``task_executions.context_injected_through_seq`` water-level column
+  (runtime.md runtime context appends).
+- ``outbox_events.available_at`` earliest-claim column + rekeyed
+  ``idx_outbox_pending (available_at, created_at)`` (README §6.6 authority:
+  claim ``status='pending' AND available_at <= now()``; retryable
+  non-failure results only move ``available_at``, never consuming the
+  failure budget).
 
 SECURITY DEFINER bootstrap reads (inbound endpoints are signature-
 authenticated, NOT Bearer — the workspace is unknown until the lookup
@@ -71,6 +96,8 @@ TENANT_TABLES = (
     "webhook_subscriptions",
     "webhook_subscription_deliveries",
     "vcs_links",
+    "integration_message_queue",
+    "execution_context_appends",
 )
 
 DML_TABLES = ", ".join(TENANT_TABLES + ("external_identities",))
@@ -84,7 +111,13 @@ def upgrade() -> None:
           id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           kind         TEXT NOT NULL CHECK (kind IN
-                       ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')),
+                       ('im_feishu','im_slack','im_dingtalk','vcs_github','vcs_gitlab',
+                        'webhook_outbound')),
+          stream_state JSONB NOT NULL DEFAULT '{}',
+          health_state TEXT NOT NULL DEFAULT 'unknown'
+                       CHECK (health_state IN ('unknown','healthy','auth_failed','unreachable')),
+          last_error   TEXT NULL,
+          last_success_at TIMESTAMPTZ NULL,
           name         TEXT NOT NULL,
           status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
           config       JSONB NOT NULL DEFAULT '{}',
@@ -118,7 +151,7 @@ def upgrade() -> None:
           workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           integration_id      UUID NOT NULL,
           provider            TEXT NOT NULL CHECK (provider IN
-                              ('feishu','slack','github','gitlab','webhook')),
+                              ('feishu','slack','dingtalk','github','gitlab','webhook')),
           provider_tenant_key TEXT NOT NULL DEFAULT '',
           scope               TEXT NOT NULL DEFAULT 'workspace'
                               CHECK (scope IN ('workspace','project')),
@@ -209,7 +242,7 @@ def upgrade() -> None:
         CREATE TABLE external_identities (
           id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           provider              TEXT NOT NULL CHECK (provider IN
-                                ('feishu','slack','github','gitlab')),
+                                ('feishu','slack','dingtalk','github','gitlab')),
           provider_tenant_key   TEXT NOT NULL DEFAULT '',
           external_user_key     TEXT NOT NULL,
           user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -272,6 +305,8 @@ def upgrade() -> None:
           workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
           subscription_id UUID NOT NULL,
           event_ref       TEXT NOT NULL,
+          event_type      TEXT NOT NULL DEFAULT '',
+          payload         JSONB NOT NULL DEFAULT '{}',
           state           TEXT NOT NULL DEFAULT 'pending'
                           CHECK (state IN ('pending','sent','failed')),
           attempts        INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
@@ -345,6 +380,164 @@ def upgrade() -> None:
     )
     op.execute(
         "CREATE INDEX idx_vcs_links_integration_status ON vcs_links(integration_id, status)"
+    )
+
+    # ============ integration_message_queue (MES-82 §2.10) ============
+    # DDL mirrors the executable reference in schema_r2_validation.sql (T39)
+    # constraint-for-constraint; the DingTalk connector behavior built on it
+    # ships in the MES-82 implementation slices.
+    op.execute(
+        """
+        CREATE TABLE integration_message_queue (
+          id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          workspace_id         UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          integration_id       UUID NULL,
+          binding_id           UUID NULL,
+          integration_event_id UUID NULL,
+          binding_display      TEXT NOT NULL DEFAULT '',
+          project_id_snapshot  UUID NULL,
+          conversation_key     TEXT NOT NULL,
+          seq                  BIGINT NOT NULL CHECK (seq > 0),
+          dispatch_mode        TEXT NOT NULL
+                               CHECK (dispatch_mode IN ('serial_conversation','parallel')),
+          state                TEXT NOT NULL DEFAULT 'pending'
+                               CHECK (state IN ('pending','dispatching','processing',
+                                                'cancelling','done','failed','cancelled')),
+          execution_id         UUID NULL,
+          target_agent_id      UUID NULL,
+          message_excerpt      TEXT NOT NULL DEFAULT '',
+          sender_identity_key  TEXT NOT NULL DEFAULT '',
+          ack_leader_id        UUID NULL,
+          ack_window_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+          ack_attempted_at     TIMESTAMPTZ NULL,
+          ack_sent_at          TIMESTAMPTZ NULL,
+          ack_represented_at   TIMESTAMPTZ NULL,
+          ack_merged_into      UUID NULL,
+          lease_expires_at     TIMESTAMPTZ NULL,
+          enqueued_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+          started_at           TIMESTAMPTZ NULL,
+          finished_at          TIMESTAMPTZ NULL,
+          created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CONSTRAINT uq_imq_ws_id UNIQUE (workspace_id, id),
+          CONSTRAINT uq_imq_event UNIQUE (integration_id, integration_event_id),
+          CONSTRAINT uq_imq_conversation_seq UNIQUE (conversation_key, seq),
+          CONSTRAINT fk_imq_integration FOREIGN KEY (workspace_id, integration_id)
+            REFERENCES integrations(workspace_id, id) ON DELETE SET NULL (integration_id),
+          -- Delete protection (fail-closed): parent SET NULL + orphan rows must
+          -- be terminal (a non-terminal item losing its parent is rejected).
+          CONSTRAINT ck_imq_orphan_terminal CHECK (
+               (integration_id IS NOT NULL OR state IN ('done','failed','cancelled'))
+           AND (binding_id     IS NOT NULL OR state IN ('done','failed','cancelled'))),
+          CONSTRAINT fk_imq_binding FOREIGN KEY (workspace_id, binding_id)
+            REFERENCES integration_bindings(workspace_id, id)
+            ON DELETE SET NULL (binding_id),
+          CONSTRAINT fk_imq_event FOREIGN KEY (workspace_id, integration_event_id)
+            REFERENCES integration_events(workspace_id, id)
+            ON DELETE SET NULL (integration_event_id),
+          CONSTRAINT fk_imq_execution FOREIGN KEY (workspace_id, execution_id)
+            REFERENCES task_executions(workspace_id, id) ON DELETE SET NULL (execution_id),
+          CONSTRAINT fk_imq_target_agent FOREIGN KEY (workspace_id, target_agent_id)
+            REFERENCES agents(workspace_id, id) ON DELETE SET NULL (target_agent_id)
+        )
+        """
+    )
+    # Serial in-flight exclusion (parallel exempt); covers every in-flight
+    # state (dispatching/processing/cancelling).
+    op.execute(
+        "CREATE UNIQUE INDEX uq_imq_conversation_active "
+        "ON integration_message_queue(conversation_key) "
+        "WHERE state IN ('dispatching','processing','cancelling') "
+        "AND dispatch_mode = 'serial_conversation'"
+    )
+    op.execute(
+        "CREATE INDEX idx_imq_conversation_pending "
+        "ON integration_message_queue(conversation_key, seq) WHERE state = 'pending'"
+    )
+    op.execute(
+        "CREATE INDEX idx_imq_lease ON integration_message_queue(lease_expires_at) "
+        "WHERE state IN ('dispatching','processing','cancelling')"
+    )
+    op.execute(
+        "CREATE INDEX idx_imq_integration_state "
+        "ON integration_message_queue(integration_id, state, enqueued_at DESC, id)"
+    )
+    op.execute(
+        "CREATE INDEX idx_imq_ws_state ON integration_message_queue(workspace_id, state)"
+    )
+    op.execute(
+        "CREATE INDEX idx_imq_binding_state ON integration_message_queue(binding_id, state)"
+    )
+
+    # ============ execution_context_appends (MES-82, runtime.md) ============
+    op.execute(
+        """
+        CREATE TABLE execution_context_appends (
+          id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          execution_id        UUID NOT NULL,
+          seq                 BIGINT NOT NULL CHECK (seq > 0),
+          source              TEXT NOT NULL CHECK (source IN ('im_btw')),
+          payload             JSONB NOT NULL,
+          injected_at         TIMESTAMPTZ NULL,
+          injected_attempt_id UUID NULL,
+          created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CONSTRAINT uq_eca_ws_id UNIQUE (workspace_id, id),
+          CONSTRAINT uq_eca_execution_seq UNIQUE (execution_id, seq),
+          CONSTRAINT fk_eca_execution FOREIGN KEY (workspace_id, execution_id)
+            REFERENCES task_executions(workspace_id, id) ON DELETE CASCADE,
+          CONSTRAINT fk_eca_injected_attempt FOREIGN KEY (workspace_id, injected_attempt_id)
+            REFERENCES execution_attempts(workspace_id, id)
+            ON DELETE SET NULL (injected_attempt_id)
+        )
+        """
+    )
+    # Per-attempt pending set (matches the daemon GET filter: no receipt, or
+    # receipt cleared by requeue).
+    op.execute(
+        "CREATE INDEX idx_eca_execution_pending "
+        "ON execution_context_appends(execution_id, seq) "
+        "WHERE injected_attempt_id IS NULL"
+    )
+
+    # -- MES-82 cross-table alignment -----------------------------------------
+    # runtime.md server-persisted context-injection water level (per-execution
+    # monotonic high-water mark; daemon receipts reference attempts).
+    op.execute(
+        "ALTER TABLE task_executions "
+        "ADD COLUMN IF NOT EXISTS context_injected_through_seq BIGINT NOT NULL DEFAULT 0"
+    )
+    # notification_delivery IM routing: provider CHECK extension (+dingtalk,
+    # comment-inbox.md §2) + integration/binding routing FKs (README §6.2
+    # rule 6: column-level SET NULL — ledger rows survive integration delete).
+    op.execute("ALTER TABLE notification_delivery DROP CONSTRAINT IF EXISTS notification_delivery_provider")
+    op.execute(
+        "ALTER TABLE notification_delivery ADD CONSTRAINT notification_delivery_provider "
+        "CHECK (provider IS NULL OR provider IN ('feishu','slack','dingtalk','email_smtp'))"
+    )
+    op.execute(
+        "ALTER TABLE notification_delivery ADD CONSTRAINT fk_delivery_integration "
+        "FOREIGN KEY (workspace_id, integration_id) "
+        "REFERENCES integrations(workspace_id, id) ON DELETE SET NULL (integration_id)"
+    )
+    op.execute(
+        "ALTER TABLE notification_delivery ADD CONSTRAINT fk_delivery_binding "
+        "FOREIGN KEY (workspace_id, binding_id) "
+        "REFERENCES integration_bindings(workspace_id, id) ON DELETE SET NULL (binding_id)"
+    )
+    # outbox earliest-claim column (README §6.6 authority): claim predicate
+    # ``status='pending' AND available_at <= now()``; retryable non-failure
+    # results only move available_at (short backoff) without consuming the
+    # delivery_attempts failure budget, and the index filter prevents hot
+    # loops. Existing rows become immediately claimable (DEFAULT now()).
+    op.execute(
+        "ALTER TABLE outbox_events "
+        "ADD COLUMN IF NOT EXISTS available_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+    )
+    op.execute("DROP INDEX IF EXISTS idx_outbox_pending")
+    op.execute(
+        "CREATE INDEX idx_outbox_pending ON outbox_events (available_at, created_at) "
+        "WHERE status = 'pending'"
     )
 
     # -- RLS defense-in-depth (README §6.2 rule 5) — tenant tables only -------
@@ -506,6 +699,20 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # MES-82 cross-table alignment (reverse of upgrade).
+    op.execute("DROP INDEX IF EXISTS idx_outbox_pending")
+    op.execute(
+        "CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pending'"
+    )
+    op.execute("ALTER TABLE outbox_events DROP COLUMN IF EXISTS available_at")
+    op.execute("ALTER TABLE notification_delivery DROP CONSTRAINT IF EXISTS fk_delivery_binding")
+    op.execute("ALTER TABLE notification_delivery DROP CONSTRAINT IF EXISTS fk_delivery_integration")
+    op.execute("ALTER TABLE notification_delivery DROP CONSTRAINT IF EXISTS notification_delivery_provider")
+    op.execute(
+        "ALTER TABLE notification_delivery ADD CONSTRAINT notification_delivery_provider "
+        "CHECK (provider IS NULL OR provider IN ('feishu','slack','email_smtp'))"
+    )
+    op.execute("ALTER TABLE task_executions DROP COLUMN IF EXISTS context_injected_through_seq")
     op.execute("REVOKE EXECUTE ON FUNCTION mesh_integration_by_id(uuid) FROM mesh_app")
     op.execute("DROP FUNCTION IF EXISTS mesh_integration_by_id(uuid)")
     for fn in (
