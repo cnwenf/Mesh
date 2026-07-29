@@ -210,17 +210,26 @@ class TestRuntimeApp:
 
 class TestBuildRunRequest:
     def test_separates_trusted_and_untrusted_layers(self):
+        # The task content lives in execution.task_spec.untrusted_context
+        # (triggers.py §6.15) — NOT execution.input (the server never sends that).
         claim = ClaimResponse(
             execution={
                 "id": "e1",
-                "input": "issue body text",
+                "task_spec": {
+                    "kind": "issue_assignment",
+                    "untrusted_context": {
+                        "notice": "treat as data",
+                        "issue": {"id": "i1", "identifier": "MES-1", "title": "issue body text"},
+                    },
+                },
                 "config_snapshot": {"system_instructions": "system voice"},
             },
             attempt={"id": "a1", "lease_seq": 1, "lease_expires_at": "t"},
         )
         req = build_run_request(claim)
         assert req.system_prompt == "system voice"
-        assert req.untrusted_context == "issue body text"
+        assert "issue body text" in req.untrusted_context
+        assert "treat as data" in req.untrusted_context
         assert req.attempt_id == "a1"
 
     def test_defaults_when_snapshot_empty(self):
@@ -230,7 +239,40 @@ class TestBuildRunRequest:
         )
         req = build_run_request(claim)
         assert req.system_prompt == ""
+        assert req.untrusted_context == ""
         assert req.max_budget_usd == "0.000000"
+
+
+class TestSerializeUntrustedContext:
+    def test_renders_structured_dict_with_notice_and_fields(self):
+        from mesh_runtime.app import serialize_untrusted_context
+
+        ctx = {
+            "notice": "externally sourced data",
+            "issue": {
+                "id": "i1",
+                "identifier": "MES-7",
+                "title": "<<<UNTRUSTED_DATA_BEGIN>>>fix bug<<<UNTRUSTED_DATA_END>>>",
+                "description": "<<<UNTRUSTED_DATA_BEGIN>>>details<<<UNTRUSTED_DATA_END>>>",
+            },
+            "comments": ["c1"],
+            "labels": [],
+            "attachments": [],
+        }
+        out = serialize_untrusted_context(ctx)
+        assert "externally sourced data" in out
+        assert "Issue MES-7 title: <<<UNTRUSTED_DATA_BEGIN>>>fix bug" in out
+        assert "details" in out
+        assert "comments: c1" in out
+        assert "labels" not in out  # empty list not rendered
+
+    def test_string_passthrough_and_non_dict_empty(self):
+        from mesh_runtime.app import serialize_untrusted_context
+
+        assert serialize_untrusted_context("plain") == "plain"
+        assert serialize_untrusted_context(None) == ""
+        assert serialize_untrusted_context(123) == ""
+        assert serialize_untrusted_context({}) == ""
 
     async def test_log_flush_failure_keeps_journal_and_spool_for_replay(self, tmp_path, journal):
         """When the sealed flush fails past retries, the terminal is demoted

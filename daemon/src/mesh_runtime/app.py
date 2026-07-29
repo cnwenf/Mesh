@@ -48,25 +48,60 @@ class RuntimeMetadata:
     os_name: str
 
 
+def serialize_untrusted_context(ctx: object) -> str:
+    """Render the server's structured untrusted context (triggers.py §6.15)
+    into text for the provider.
+
+    The server delivers ``task_spec.untrusted_context`` as a dict whose
+    externally-sourced fields (issue title/description, comments, labels,
+    attachments) are ALREADY wrapped in the server's ``UNTRUSTED_DATA`` markers;
+    this renders the notice plus those fields verbatim. A plain string is passed
+    through; anything else yields "" (fail-safe: no task context rather than a
+    crash). The daemon NEVER splices this into trusted instructions (§3.7)."""
+    if isinstance(ctx, str):
+        return ctx
+    if not isinstance(ctx, dict):
+        return ""
+    parts: list[str] = []
+    notice = ctx.get("notice")
+    if isinstance(notice, str) and notice:
+        parts.append(notice)
+    issue = ctx.get("issue")
+    if isinstance(issue, dict):
+        identifier = issue.get("identifier")
+        title = issue.get("title")
+        description = issue.get("description")
+        label = f"Issue {identifier}" if identifier else "Issue"
+        if isinstance(title, str) and title:
+            parts.append(f"{label} title: {title}")
+        if isinstance(description, str) and description:
+            parts.append(f"{label} description: {description}")
+    for key in ("comments", "labels", "attachments"):
+        items = ctx.get(key)
+        if isinstance(items, list):
+            rendered = [str(x) for x in items if x]
+            if rendered:
+                parts.append(f"{key}: " + " | ".join(rendered))
+    return "\n".join(parts)
+
+
 def build_run_request(claim: ClaimResponse) -> RunRequest:
     """Assemble the frozen prompt layers from the claim (spec §8.1).
 
-    Trusted system instructions come from the frozen snapshot; everything
-    task-specific is placed in the UNTRUSTED field so it can never be parsed
-    as instructions (§3.7 S-09). The tool allowlist is daemon-generated from
-    the frozen grants (§1.4) — never from task output.
+    Trusted system instructions come from the frozen snapshot; the task
+    content lives in ``execution.task_spec.untrusted_context`` (where the
+    server's enqueue actually places it — triggers.py §6.15) and is rendered
+    as UNTRUSTED data so it can never be parsed as instructions (§3.7 S-09).
+    The tool allowlist is daemon-generated from the frozen grants (§1.4) —
+    never from task output.
     """
     snapshot = claim.config_snapshot
     execution = claim.execution
-    system_parts = []
     system_instructions = snapshot.get("system_instructions")
-    if isinstance(system_instructions, str) and system_instructions:
-        system_parts.append(system_instructions)
-    untrusted_parts = []
-    for key in ("input", "trigger_summary", "issue_excerpt"):
-        value = execution.get(key)
-        if isinstance(value, str) and value:
-            untrusted_parts.append(value)
+    system_prompt = system_instructions if isinstance(system_instructions, str) else ""
+    task_spec = execution.get("task_spec")
+    untrusted_raw = task_spec.get("untrusted_context") if isinstance(task_spec, dict) else None
+    untrusted_context = serialize_untrusted_context(untrusted_raw)
     budget = snapshot.get("budget") or {}
     max_budget = budget.get("max_cost_usd") if isinstance(budget, dict) else None
     tools = DEFAULT_TOOL_ALLOWLIST
@@ -75,8 +110,8 @@ def build_run_request(claim: ClaimResponse) -> RunRequest:
         tools = tuple(t for t in raw_tools if isinstance(t, str) and t) or tools
     return RunRequest(
         attempt_id=claim.attempt_id,
-        system_prompt="\n\n".join(system_parts),
-        untrusted_context="\n\n".join(untrusted_parts),
+        system_prompt=system_prompt,
+        untrusted_context=untrusted_context,
         max_turns=int((budget.get("max_turns") if isinstance(budget, dict) else None) or 0),
         max_budget_usd=str(max_budget or "0.000000"),
         tools_allowlist=tools,

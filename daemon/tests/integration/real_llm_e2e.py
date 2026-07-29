@@ -95,8 +95,10 @@ async def main() -> dict:
         # The task instruction lives in the TRUSTED system_instructions (frozen
         # AgentConfig); the issue body is UNTRUSTED context and — per §3.7 — the
         # provider must NOT treat it as an instruction.
+        e2e_model = os.environ.get("MES101_MODEL") or os.environ.get("ANTHROPIC_MODEL") or "sonnet"
         model_config = {
             "provider": "claude-code",
+            "model": e2e_model,
             "budget": {"max_cost_usd": "0.50", "max_turns": 2},
             "network_policy": {"allowed_hosts": [API_HOST]},
         }
@@ -227,12 +229,26 @@ async def main() -> dict:
         usage = result.get("usage", {})
         assert usage.get("total_tokens", 0) > 0, f"no usage回流: {usage}"
         assert result.get("provider", {}).get("session_id"), "no session_id回流"
+        # Functional assertion (CRITICAL-1): the task instruction must ACTUALLY
+        # reach the model and be executed — the MARKER appears in the model's
+        # reflowed final summary. "execution completed" alone is NOT enough
+        # (a pipeline can be green while the model never saw the task).
+        summary = (result.get("outcome") or {}).get("summary", "")
+        evidence["marker_found"] = MARKER in summary
+        evidence["model"] = result.get("provider", {}).get("model")
+        assert MARKER in summary, (
+            f"MARKER not in model output — task instruction did not reach the "
+            f"model. summary={summary[:200]!r}"
+        )
+        assert result.get("provider", {}).get("model") == e2e_model, (
+            f"frozen model not回流: {result.get('provider', {}).get('model')!r} != {e2e_model!r}"
+        )
         result_json = json.dumps(result)
         assert api_key not in result_json, "API KEY leaked into result!"
         evidence["steps"].append(
-            f"result v1 ok: total_tokens={usage.get('total_tokens')} "
-            f"turns={usage.get('turns')} cost={usage.get('cost_usd')} "
-            f"session={result['provider']['session_id'][:8]}"
+            f"result v1 ok: MARKER in output; model={e2e_model}; "
+            f"total_tokens={usage.get('total_tokens')} turns={usage.get('turns')} "
+            f"cost={usage.get('cost_usd')} session={result['provider']['session_id'][:8]}"
         )
 
         # 10. logs回流 via REST + secret redaction.

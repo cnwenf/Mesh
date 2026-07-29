@@ -49,6 +49,7 @@ from mesh_runtime.provider_env import (
     validate_no_escalation_args,
     write_provider_configs,
 )
+from mesh_runtime.provider_probe import probe_isolation_fixture_sync
 from mesh_runtime.providers.base import (
     ExecutorEvent,
     FinalResult,
@@ -89,6 +90,10 @@ _POLL_SECONDS = 0.25
 _TERM_GRACE_SECONDS = 5.0
 _STDERR_TAIL_BYTES = 4096
 _STDERR_CAP_BYTES = 64 * 1024
+
+#: uid the isolation-fixture probe drops to when run as root — the sandbox runs
+#: non-root (bypassPermissions is refused as root), so the fixture must too.
+_SANDBOX_PROBE_UID = 65534
 
 #: Sandbox-side mount point of the attempt run dir (sandbox_init bind-mounts
 #: ``<attempt_root>/run`` read-only at this path).
@@ -262,6 +267,21 @@ class ClaudeCodeAdapter:
         if missing:
             return self._unavailable(
                 "binary help is missing required flag(s): " + ", ".join(missing)
+            )
+        # §1.4 steps 3-4 / §1.5 / ISO-09: prove the isolation flags hold on the
+        # REAL binary (not a python stand-in) — CRITICAL-1 proved flag semantics
+        # can deviate on a real release. Fail-closed if the provider does not
+        # launch (cannot verify) or any hostile fixture takes effect. Runs as an
+        # unprivileged uid (the sandbox runs non-root; bypassPermissions is
+        # refused as root).
+        fixture = await asyncio.to_thread(
+            probe_isolation_fixture_sync,
+            self._binary_path,
+            drop_uid=(_SANDBOX_PROBE_UID if os.getuid() == 0 else None),
+        )
+        if not fixture.isolated:
+            return self._unavailable(
+                f"isolation fixture probe failed: {fixture.detail}"
             )
         return ProbeResult(
             available=True,
@@ -445,15 +465,19 @@ class ClaudeCodeAdapter:
             # A launcher that cannot carry the stdin prompt / stdout stream
             # breaks the §1.4 contract — fail closed like a sandbox failure.
             raise SandboxLaunchError("provider stdio pipes unavailable")
-        # Prompt travels via stdin ONLY: one stream-json user message with the
-        # untrusted context wrapped in boundary markers (§1.4, §3.7). If the
-        # provider already exited (startup crash / config error) the write
-        # raises BrokenPipe/ConnectionReset — swallow it; the stdout loop below
-        # observes EOF and reports the failure instead of hanging.
+        # Prompt travels via stdin ONLY: one stream-json user message carrying
+        # the trusted system instructions + the boundary-wrapped untrusted
+        # context (§1.4, §3.7). Under --bare the user message is the one
+        # channel that reaches the model (system-prompt-file is not applied).
+        # If the provider already exited (startup crash / config error) the
+        # write raises BrokenPipe/ConnectionReset — swallow it; the stdout loop
+        # below observes EOF and reports the failure instead of hanging.
         try:
             proc.stdin.write(
                 build_stream_json_input(
-                    request.untrusted_context, boundary=plan.context_boundary
+                    request.system_prompt,
+                    request.untrusted_context,
+                    boundary=plan.context_boundary,
                 ).encode("utf-8")
             )
             await proc.stdin.drain()

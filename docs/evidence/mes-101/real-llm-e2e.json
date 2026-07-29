@@ -1,45 +1,45 @@
 {
   "server_url": "http://127.0.0.1:58100",
-  "marker": "MESH-A3-OK-7d25af38",
+  "marker": "MESH-A3-OK-629609c9",
   "steps": [
     "auth: register+login ok",
-    "workspace aa9544ff-a84d-436a-b384-eb7275b1fcde created",
-    "agent 741c27fb-7f45-4704-91ff-ae3278a3e4d7 created (member 78d8ab2e-60fa-452f-ba99-601997657e06)",
-    "runtime 0b6f4ff0-71bc-4bad-a51b-b424551e9fd2 pending; activation code issued",
+    "workspace a067aa09-f029-4fa8-b58a-6519682f6c1a created",
+    "agent 47b72a57-1d7d-4bcf-86ff-3a02d5d55db7 created (member 8b84ad99-c69c-4834-9b7d-7a2fc9911c2c)",
+    "runtime e8b7a29a-757d-4bcb-b425-088b37096539 pending; activation code issued",
     "provider probed healthy: ['claude-code']",
-    "daemon activated; runtime_id=0b6f4ff0-71bc-4bad-a51b-b424551e9fd2",
+    "daemon activated; runtime_id=e8b7a29a-757d-4bcb-b425-088b37096539",
     "runtime status after activate+heartbeat: online",
-    "issue b70623db-e25b-4019-8013-e36a5bbaa081 assigned → enqueue path triggered",
+    "issue b72aa979-bb8b-47fb-8c98-93db65e861a9 assigned → enqueue path triggered",
     "execution terminal: completed (reason=None)",
-    "result v1 ok: total_tokens=1299 turns=1 cost=0.008974 session=3f2acbca",
+    "result v1 ok: MARKER in output; model=qwen3.8-max-preview; total_tokens=1571 turns=1 cost=0.011030 session=f2c05321",
     "logs reflowed; provider credential redacted",
     "daemon graceful shutdown; sandbox resources released"
   ],
   "execution": {
-    "id": "8f4481dc-16e8-426c-bde5-14e7a0a93185",
+    "id": "791c2116-5b70-4fbb-8e21-0d2074220811",
     "status": "completed",
     "failure_reason": null
   },
   "result": {
     "usage": {
       "turns": 1,
-      "cost_usd": "0.008974",
+      "cost_usd": "0.011030",
       "input_tokens": 6,
-      "total_tokens": 1299,
-      "output_tokens": 46,
+      "total_tokens": 1571,
+      "output_tokens": 65,
       "cache_read_tokens": 0,
-      "cache_creation_tokens": 1247
+      "cache_creation_tokens": 1500
     },
     "outcome": {
-      "summary": "It looks like no task context was provided. Could you please share the details of what you'd like help with?",
+      "summary": "MESH-A3-OK-629609c9",
       "exit_code": 0,
       "termination": "completed"
     },
     "provider": {
       "name": "claude-code",
-      "model": "unknown",
+      "model": "qwen3.8-max-preview",
       "version": "2.1.218",
-      "session_id": "3f2acbca-5c06-4c25-bace-bbcf5f7e77d9"
+      "session_id": "f2c05321-3976-44b2-96c8-2b78416f6217"
     },
     "artifacts": {
       "diff_ref": null,
@@ -51,6 +51,8 @@
     },
     "schema_version": 1
   },
-  "log_excerpt": "{\"data\": {\"execution_id\": \"8f4481dc-16e8-426c-bde5-14e7a0a93185\", \"attempt_id\": \"03f21bfb-a976-4111-9e63-93e1c3c68961\", \"execution_status\": \"completed\", \"lines\": [{\"stream\": \"stdout\", \"offset\": 0, \"line\": \"It looks like no task context was provided. Could you please share the details of what you'd like help with?\"}], \"next_offset\": 109}}",
+  "log_excerpt": "{\"data\": {\"execution_id\": \"791c2116-5b70-4fbb-8e21-0d2074220811\", \"attempt_id\": \"1a1c5837-eb9b-438a-8728-c6998e9645bf\", \"execution_status\": \"completed\", \"lines\": [{\"stream\": \"stdout\", \"offset\": 0, \"line\": \"MESH-A3-OK-629609c9\"}], \"next_offset\": 20}}",
+  "marker_found": true,
+  "model": "qwen3.8-max-preview",
   "verdict": "PASS"
 }
