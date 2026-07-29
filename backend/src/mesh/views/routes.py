@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
 from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
@@ -126,7 +126,7 @@ async def _context_for(
     """
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=None
+            session, principal=principal, workspace_id=workspace_id, permission=None
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
@@ -154,7 +154,7 @@ async def list_views(
     project_id: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     items, next_cursor = await _view_service(request).list_views(
@@ -172,7 +172,7 @@ async def create_view(
     body: CreateViewRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -190,7 +190,7 @@ async def reorder_views(
     body: ReorderViewsRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -213,7 +213,7 @@ async def reorder_views(
 async def get_view(
     request: Request,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(view_id)
@@ -231,7 +231,7 @@ async def update_view(
     response: Response,
     view_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -254,7 +254,7 @@ async def delete_view(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await _rate_limit_write(request, user, response)
@@ -273,7 +273,7 @@ async def duplicate_view(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -294,7 +294,7 @@ async def patch_view_wip(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     await _rate_limit_write(request, user, response)
@@ -322,7 +322,7 @@ async def list_view_issues(
     view_id: str,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Execute a view's config against issues → grouped overall-cursor envelope.
@@ -349,7 +349,7 @@ async def move_view_card(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Atomic board drag (kanban §3.2): optimistic lock + advisory lock + WIP
@@ -379,7 +379,7 @@ async def reorder_view_cards(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """In-column card reorder (kanban §4.3): per-view position only, no field change."""

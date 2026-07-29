@@ -102,10 +102,14 @@ async def gate_workspace(
             raise ForbiddenError("insufficient role for this action")
         return member
 
+    from mesh.auth.deps import AuthenticatedPrincipal
     from mesh.auth.rbac import resolve_workspace_context
 
     assert caller.user is not None  # authenticate() guarantees one or the other
+    principal = AuthenticatedPrincipal(
+        kind="session", user_id=caller.user.id, subject=caller.user.id
+    )
     context = await resolve_workspace_context(
-        session, user=caller.user, workspace_id=workspace_id, permission=permission
+        session, principal=principal, workspace_id=workspace_id, permission=permission
     )
     return context.member
