@@ -16,7 +16,7 @@ import random
 from collections.abc import Awaitable, Callable
 
 from mesh_runtime.api import HeartbeatResponse, RuntimeApiClient
-from mesh_runtime.backoff import KEEPALIVE, RATE_LIMITED_FALLBACK_SECONDS
+from mesh_runtime.backoff import KEEPALIVE, capped_retry_after
 from mesh_runtime.errors import FatalAuthError, RateLimitedError, ServerError
 from mesh_runtime.timeutil import Clock, SystemClock
 
@@ -88,7 +88,7 @@ class HeartbeatLoop:
             self.fatal = exc
             return "fatal", 0.0
         except RateLimitedError as exc:
-            delay = exc.retry_after if exc.retry_after is not None else RATE_LIMITED_FALLBACK_SECONDS
+            delay = capped_retry_after(exc.retry_after)
             return "rate_limited", delay
         except ServerError:
             return "server_error", KEEPALIVE.delay(self.beats, self._rand)

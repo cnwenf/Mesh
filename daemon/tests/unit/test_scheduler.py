@@ -104,6 +104,14 @@ class TestStep:
         assert outcome == "rate_limited"
         assert delay == RATE_LIMITED_FALLBACK_SECONDS
 
+    async def test_rate_limited_retry_after_capped_at_minute(self, fake_server):
+        # A hostile/misconfigured server cannot park claiming for hours.
+        fake_server.enqueue(CLAIM_KEY, 429, None, headers={"Retry-After": "7200"})
+        sched = make_scheduler(fake_server, on_claimed=lambda c: None)
+        outcome, delay = await sched.step()
+        assert outcome == "rate_limited"
+        assert delay == 60.0
+
     async def test_server_error_backoff_increments_counter(self, fake_server):
         fake_server.enqueue(CLAIM_KEY, 500, None)
         fake_server.enqueue(CLAIM_KEY, 500, None)

@@ -101,11 +101,32 @@ class ClaimResponse:
         creds = self.attempt.get("credentials")
         return [c for c in creds if isinstance(c, dict)] if isinstance(creds, list) else []
 
+    @property
+    def task_token(self) -> str | None:
+        """One-time ``mesh_task_`` token delivered at claim (MES-98 P0). Held
+        by the daemon-side ToolBroker only — never enters the sandbox."""
+        token = self.attempt.get("task_token")
+        return token if isinstance(token, str) and token else None
+
+    @property
+    def task_token_expires_at(self) -> str | None:
+        expires = self.attempt.get("task_token_expires_at")
+        return expires if isinstance(expires, str) and expires else None
+
+    @property
+    def resume_context(self) -> dict | None:
+        """Structured resume checkpoint present ONLY when this claim continues
+        an execution whose tool_call approval was granted (runtime.md §3.2)."""
+        ctx = self.execution.get("resume_context")
+        return ctx if isinstance(ctx, dict) else None
+
 
 @dataclass(frozen=True)
 class LeaseInfo:
     lease_seq: int
     lease_expires_at: str
+    task_token: str | None = None  # rotated on every renew; plaintext once
+    task_token_expires_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -183,11 +204,25 @@ class RuntimeApiClient:
 
     # -- endpoints ----------------------------------------------------------
 
-    async def activate(self, activation_code: str, metadata: dict) -> ActivateResponse:
+    async def activate(
+        self,
+        activation_code: str,
+        metadata: dict,
+        *,
+        protocol_version: int = 1,
+        provider_manifest: dict | None = None,
+        daemon_features: dict | None = None,
+    ) -> ActivateResponse:
         data = await self._request(
             "POST",
             "/api/v1/daemon/runtimes:activate",
-            body={"activation_code": activation_code, "metadata": metadata},
+            body={
+                "activation_code": activation_code,
+                "metadata": metadata,
+                "protocol_version": protocol_version,
+                "provider_manifest": provider_manifest or {},
+                "daemon_features": daemon_features or {},
+            },
             auth=False,
         )
         if not data or "runtime_id" not in data or "runtime_token" not in data:
@@ -206,16 +241,20 @@ class RuntimeApiClient:
         health: str,
         metrics: dict,
         inflight: list[str],
+        protocol_version: int | None = None,
     ) -> HeartbeatResponse:
+        body: dict = {
+            "current_load": current_load,
+            "health": health,
+            "metrics": metrics,
+            "inflight": inflight,
+        }
+        if protocol_version is not None:
+            body["protocol_version"] = protocol_version
         data = await self._request(
             "POST",
             f"/api/v1/daemon/runtimes/{runtime_id}:heartbeat",
-            body={
-                "current_load": current_load,
-                "health": health,
-                "metrics": metrics,
-                "inflight": inflight,
-            },
+            body=body,
         )
         data = data or {}
         commands = data.get("commands")
@@ -247,7 +286,14 @@ class RuntimeApiClient:
         )
         if not data:
             raise ProtocolError("renew returned no data")
-        return LeaseInfo(lease_seq=int(data["lease_seq"]), lease_expires_at=str(data["lease_expires_at"]))
+        token = data.get("task_token")
+        expires = data.get("task_token_expires_at")
+        return LeaseInfo(
+            lease_seq=int(data["lease_seq"]),
+            lease_expires_at=str(data["lease_expires_at"]),
+            task_token=token if isinstance(token, str) and token else None,
+            task_token_expires_at=expires if isinstance(expires, str) and expires else None,
+        )
 
     async def transition(
         self,

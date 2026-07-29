@@ -11,10 +11,12 @@ daemon never tries to "fix" the server.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 
 from mesh_runtime.api import RuntimeApiClient
-from mesh_runtime.errors import DaemonError, LeaseConflictError
+from mesh_runtime.backoff import capped_retry_after
+from mesh_runtime.errors import DaemonError, LeaseConflictError, RateLimitedError
 from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
 from mesh_runtime.providers.base import (
@@ -24,12 +26,24 @@ from mesh_runtime.providers.base import (
     TextDelta,
     UsageObserved,
 )
+from mesh_runtime.providers.sandboxed import SandboxLaunchError
+from mesh_runtime.redaction import RedactionPipeline
 from mesh_runtime.result import TERMINATIONS, Usage, build_result
 from mesh_runtime.timeutil import Clock, SystemClock
+
+logger = logging.getLogger("mesh_runtime.attempt")
 
 _MAX_RENEW_FAILURES = 3
 _DEFAULT_LEASE_SECONDS = 120.0
 _SUMMARY_MAX = 4096
+
+# Terminal sealed-flush retry envelope (§3.9.3): transient 5xx / rate limits
+# almost always clear in seconds, so retry with a capped backoff before
+# demoting the attempt. Retry-After from the server is honoured but capped so
+# a hostile/misconfigured server cannot park the attempt for hours.
+_SEALED_FLUSH_RETRIES = 3
+_SEALED_FLUSH_BACKOFF_BASE = 0.5
+_SEALED_FLUSH_BACKOFF_CAP = 5.0
 
 
 @dataclass
@@ -67,6 +81,8 @@ class AttemptSupervisor:
         model: str = "fake-model",
         rule_version: str = "redaction-v1",
         max_renew_failures: int = _MAX_RENEW_FAILURES,
+        security=None,  # AttemptSecurity | None — A2 isolation stack
+        redactor=None,  # RedactionPipeline for diff/summary redaction
     ) -> None:
         self._api = api
         self._journal = journal
@@ -77,6 +93,8 @@ class AttemptSupervisor:
         self._model = model
         self._rule_version = rule_version
         self._max_renew_failures = max_renew_failures
+        self._security = security
+        self._redactor = redactor
 
         self._provider_done = False
         self._provider_task: asyncio.Task | None = None
@@ -88,9 +106,18 @@ class AttemptSupervisor:
         self._attempt_id = ""
         self._outcome: AttemptOutcome | None = None
         self._done = asyncio.Event()
+        self._cleaned = False
+        self._spool_flushed = True
 
     def renew_period(self, lease_seconds: float) -> float:
         return min(lease_seconds / 3.0, 40.0)
+
+    @property
+    def spool_flushed(self) -> bool:
+        """Whether the terminal sealed flush completed. False means redacted
+        batches are still spooled on disk and the journal row must be kept for
+        startup replay (§3.9.3)."""
+        return self._spool_flushed
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -105,13 +132,29 @@ class AttemptSupervisor:
                 status="claimed",
                 work_dir=ctx.work_dir,
             )
+        # §3.1 order: checkout → egress → broker BEFORE the provider starts.
+        if self._security is not None:
+            try:
+                async with ctx.lock:
+                    seq = ctx.lease_seq
+                await self._security.start(lease_seq=seq)
+            except DaemonError:
+                await self._finalize(
+                    ctx,
+                    AttemptOutcome(ctx.attempt_id, "failed", "executor_unavailable"),
+                    None, Usage(0, 0, 0, 0, 0, "0.000000"), "", 1, 0,
+                )
+                await self._cleanup()
+                return self._finish()
         await self._report_running(ctx)
         if self._done.is_set():  # lost the lease before the provider started
+            await self._cleanup()
             return self._finish()
         self._iter = provider.run(request).__aiter__()
         self._provider_task = asyncio.create_task(self._run_provider(ctx))
         self._renew_task = asyncio.create_task(self._renew_loop(ctx))
         await self._done.wait()
+        await self._cleanup()
         return self._finish()
 
     async def stop(self, ctx: AttemptContext) -> AttemptOutcome:
@@ -121,7 +164,45 @@ class AttemptSupervisor:
         await self._report_cancelled(ctx)
         self._teardown()
         self._done.set()
+        await self._cleanup()
         return self._finish()
+
+    async def escalate_confirm_required(
+        self, ctx: AttemptContext, action: str, params: dict, resume_context: dict | None = None
+    ) -> AttemptOutcome:
+        """§3.3 confirm_required protocol: ask the server to cancel THIS
+        attempt as awaiting_approval (lease ends, capacity released, tokens
+        revoked server-side); an approved NEW attempt resumes via
+        resume_context. The privileged sandbox is never parked."""
+        if self._security is None:
+            return self._finish()
+        async with ctx.lock:
+            seq = ctx.lease_seq
+        await self._security.request_approval(
+            lease_seq=seq, action=action, params=params, resume_context=resume_context
+        )
+        self._stopped = True
+        self._terminal_reported = True  # server owns the state now — no report
+        self._outcome = AttemptOutcome(
+            ctx.attempt_id, "cancelled", "awaiting_approval", terminal_reported=True
+        )
+        self._teardown()
+        self._done.set()
+        await self._cleanup()
+        return self._finish()
+
+    async def _cleanup(self) -> None:
+        if self._security is None or self._cleaned:
+            return
+        self._cleaned = True
+        try:
+            report = await self._security.finish(spool_flushed=self._spool_flushed)
+            if not report.ok:
+                logger.warning(
+                    "attempt %s cleanup incomplete: %s", self._attempt_id, report.failures
+                )
+        except DaemonError as exc:
+            logger.warning("attempt %s cleanup failed: %s", self._attempt_id, type(exc).__name__)
 
     async def wait(self) -> AttemptOutcome:
         await self._done.wait()
@@ -217,6 +298,16 @@ class AttemptSupervisor:
             # condition (provider_done / lease_lost) or via stop()'s teardown.
             self._provider_done = True
             return
+        except SandboxLaunchError:
+            # fail-closed red line: the sandbox could not be provisioned or
+            # verified — report sandbox_violation, NEVER run bare (§5.2).
+            self._provider_done = True
+            await self._finalize(
+                ctx,
+                AttemptOutcome(ctx.attempt_id, "failed", "sandbox_violation"),
+                session_id, usage, "", 1, hit_count,
+            )
+            return
         except DaemonError as exc:
             self._provider_done = True
             await self._finalize(
@@ -246,14 +337,39 @@ class AttemptSupervisor:
         except LeaseConflictError:
             await self._mark_lease_lost(ctx, outcome.status)
             return
-        except DaemonError:
-            # A sealed flush only raises on a transient (non-lease) failure or
-            # spool backpressure; the redacted batch is retained in the spool
-            # (§3.9.3) and the server's log offset — not this flush — stays the
-            # authority. Report the terminal state rather than lose the result.
-            pass
+        except DaemonError as exc:
+            try:
+                flushed = await self._retry_sealed_flush(ctx, exc)
+            except LeaseConflictError:
+                await self._mark_lease_lost(ctx, outcome.status)
+                return
+            if not flushed:
+                # Retries exhausted: the redacted batch is retained in the
+                # spool (§3.9.3 — cleanup keeps it for diagnostics), but the
+                # log stream could not be completed and sealed. NEVER certify
+                # a successful run on incomplete logs — demote the terminal
+                # state with a fixed reason code instead.
+                self._spool_flushed = False
+                outcome = AttemptOutcome(ctx.attempt_id, "failed", "log_flush_failed")
         await self._report_terminal(ctx, outcome, session_id, usage, summary, exit_code, hit_count)
         self._stop_renew()
+
+    async def _retry_sealed_flush(self, ctx, first_error: DaemonError) -> bool:
+        """Bounded retry of the terminal sealed flush (§3.9.3). Returns True
+        once the flush succeeds, False when retries are exhausted. Lease
+        fencing is NOT swallowed — it propagates so ``_finalize`` can map it
+        to lease_lost."""
+        delay = _sealed_flush_delay(first_error, attempt=0)
+        for attempt in range(1, _SEALED_FLUSH_RETRIES + 1):
+            await self._clock.sleep(delay)
+            try:
+                await self._logs.flush(ctx, sealed=True)
+                return True
+            except LeaseConflictError:
+                raise
+            except DaemonError as exc:
+                delay = _sealed_flush_delay(exc, attempt=attempt)
+        return False
 
     def _stop_renew(self) -> None:
         if self._renew_task is not None:
@@ -278,6 +394,14 @@ class AttemptSupervisor:
 
     async def _report_terminal(self, ctx, outcome, session_id, usage, summary, exit_code, hit_count) -> None:
         status = outcome.status if outcome.status in TERMINATIONS else "failed"
+        redactor = self._redactor or RedactionPipeline(secrets=[], rule_version=self._rule_version)
+        summary = redactor.redact(summary).text  # §2.5: result channel is redacted too
+        checkout_id = None
+        diff_ref = None
+        if self._security is not None:
+            hit_count += await self._security.export_diff(lease_seq=ctx.lease_seq, redactor=redactor)
+            checkout_id = self._security.checkout_id
+            diff_ref = self._security.diff_ref
         result = build_result(
             provider=self._provider_name,
             version=self._provider_version,
@@ -287,8 +411,8 @@ class AttemptSupervisor:
             exit_code=exit_code,
             summary=summary[:_SUMMARY_MAX],
             termination=status,
-            checkout_id=None,
-            diff_ref=None,
+            checkout_id=checkout_id,
+            diff_ref=diff_ref,
             rule_version=self._rule_version,
             hit_count=hit_count,
         )
@@ -328,3 +452,13 @@ class AttemptSupervisor:
 
 def _short_reason(exc: Exception) -> str:
     return type(exc).__name__[:64]
+
+
+def _sealed_flush_delay(exc: DaemonError, *, attempt: int) -> float:
+    """Delay before sealed-flush retry ``attempt`` (0-based). Honours a
+    server-provided Retry-After, capped at a minute so a hostile or
+    misconfigured server cannot park the terminal flush indefinitely;
+    otherwise capped exponential backoff."""
+    if isinstance(exc, RateLimitedError):
+        return capped_retry_after(exc.retry_after)
+    return min(_SEALED_FLUSH_BACKOFF_BASE * (2**attempt), _SEALED_FLUSH_BACKOFF_CAP)
