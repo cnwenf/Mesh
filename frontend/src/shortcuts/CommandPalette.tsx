@@ -33,6 +33,8 @@ import { getApiClient } from '../api/instance';
 import { Dialog } from '../design/components/Dialog';
 import { listAllFavorites } from '../features/search/api';
 import { incrementCommandCount, readCommandCounts } from '../features/search/commandCounts';
+import { collectValidRecentKeys, resolveFavoriteTargets } from '../features/search/favoritesResolve';
+import type { ResolvedTarget } from '../features/search/favoritesResolve';
 import {
   getPaletteQuery,
   subscribePaletteQuery,
@@ -145,6 +147,11 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   const [counts, setCounts] = useState<Readonly<Record<string, number>>>({});
   const [favorites, setFavorites] = useState<readonly FavoriteEntry[]>([]);
   const [recents, setRecents] = useState<readonly RecentEntry[]>([]);
+  // 收藏目标批量解析结果(§4.2.1 步骤 3);null = 尚未完成(打开瞬间),map = 已核验。
+  const [resolvedFavorites, setResolvedFavorites] = useState<ReadonlyMap<
+    string,
+    ResolvedTarget
+  > | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
 
@@ -174,18 +181,36 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setRecents(readRecents(identity.userId, identity.workspaceId));
+    const scope = {
+      workspaceId: identity.workspaceId,
+      workspaceSlug: identity.workspaceSlug,
+    };
+    const initialRecents = readRecents(identity.userId, identity.workspaceId);
+    setRecents(initialRecents);
+    setResolvedFavorites(null);
+    // §5.1 打开即清理:批量存在性核验 recents,missing(已删/失权)立即剪枝;
+    // 瞬态错误(error)保留,避免网络抖动误删本地数据。
+    void collectValidRecentKeys(client, initialRecents, scope).then((validKeys) => {
+      if (!cancelled) setRecents(pruneRecents(identity.userId, identity.workspaceId, validKeys));
+    });
+    // §4.2.1 步骤 3:收藏仅返回 target id,空态批量解析标题/规范深链并剔除失效目标。
     void listAllFavorites(client, identity.workspaceId)
-      .then((list) => {
-        if (!cancelled) setFavorites(list);
+      .then(async (list) => {
+        if (cancelled) return;
+        setFavorites(list);
+        const resolved = await resolveFavoriteTargets(client, list, scope);
+        if (!cancelled) setResolvedFavorites(resolved);
       })
       .catch(() => {
-        if (!cancelled) setFavorites([]);
+        if (!cancelled) {
+          setFavorites([]);
+          setResolvedFavorites(new Map());
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [open, client, identity.userId, identity.workspaceId]);
+  }, [open, client, identity.userId, identity.workspaceId, identity.workspaceSlug]);
 
   // 顶栏桥接查询在面板已打开时变化(程序化 setPaletteQuery)→ 同步到输入框。
   useEffect(() => {
@@ -221,10 +246,16 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 行组装:空 query 走唯一组装流;非空 query 命令同步先行 + 实体分组随后。
   const rows = useMemo<readonly PaletteRow[]>(() => {
     if (trimmed === '') {
-      return buildEmptyQueryRows({ favorites, recents, commands, counts });
+      return buildEmptyQueryRows({
+        favorites,
+        recents,
+        commands,
+        counts,
+        resolved: resolvedFavorites ?? undefined,
+      });
     }
     return buildQueryRows(filterCommands(commands, trimmed), search.entityResults);
-  }, [trimmed, favorites, recents, commands, counts, search.entityResults]);
+  }, [trimmed, favorites, recents, commands, counts, resolvedFavorites, search.entityResults]);
 
   const sections = useMemo<readonly SectionPlan[]>(() => {
     if (trimmed === '') {

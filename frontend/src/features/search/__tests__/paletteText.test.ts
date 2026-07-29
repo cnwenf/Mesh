@@ -126,7 +126,7 @@ describe('entitySubtitle(本地化副标题组装,§3.2/§6.18)', () => {
     expect(calls.map((call) => call.key)).toEqual(['view.scope.workspace', 'search.subtitle.view']);
   });
 
-  it('member / agent / chat_session 走各自键', () => {
+  it('member / agent 角色经 member.role.* 本地化(不裸插枚举,MES-79 M9)', () => {
     const calls: Array<{ key: string; values?: Record<string, unknown> }> = [];
     const t = recordingT(calls);
     entitySubtitle(t, {
@@ -145,7 +145,34 @@ describe('entitySubtitle(本地化副标题组装,§3.2/§6.18)', () => {
       icon: 'agent',
       url: '/u',
     });
-    entitySubtitle(t, {
+    // 角色先经 member.role.* 目录键本地化,再以本地化结果入副标题 ICU。
+    expect(calls.map((call) => call.key)).toEqual([
+      'member.role.admin',
+      'search.subtitle.member',
+      'member.role.member',
+      'search.subtitle.agent',
+    ]);
+    // recordingT 返回键本身 → 副标题 role 参数为本地化键(真实目录则渲染「管理员」等)。
+    expect(calls[1]?.values).toEqual({ role: 'member.role.admin' });
+  });
+
+  it('未知角色(目录外枚举)原样回退,不呈现 member.role.xxx 死键(M9)', () => {
+    const calls: Array<{ key: string; values?: Record<string, unknown> }> = [];
+    entitySubtitle(recordingT(calls), {
+      type: 'member',
+      id: 'm1',
+      title: 't',
+      context: { member_type: 'human', role: 'superuser' },
+      icon: 'member',
+      url: '/u',
+    });
+    expect(calls.map((call) => call.key)).toEqual(['search.subtitle.member']);
+    expect(calls[0]?.values).toEqual({ role: 'superuser' });
+  });
+
+  it('chat_session 走自身键', () => {
+    const calls: Array<{ key: string; values?: Record<string, unknown> }> = [];
+    entitySubtitle(recordingT(calls), {
       type: 'chat_session',
       id: 'c1',
       title: 't',
@@ -153,12 +180,8 @@ describe('entitySubtitle(本地化副标题组装,§3.2/§6.18)', () => {
       icon: 'chat_session',
       url: '/u',
     });
-    expect(calls.map((call) => call.key)).toEqual([
-      'search.subtitle.member',
-      'search.subtitle.agent',
-      'search.subtitle.chat',
-    ]);
-    expect(calls[2]?.values).toEqual({ agent: 'Helper' });
+    expect(calls.map((call) => call.key)).toEqual(['search.subtitle.chat']);
+    expect(calls[0]?.values).toEqual({ agent: 'Helper' });
   });
 
   it('chat_session 无 agent → agent 参数空串', () => {

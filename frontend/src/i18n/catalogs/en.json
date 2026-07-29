@@ -1,6 +1,6 @@
 {
   "locale": "en",
-  "version": "1c005328",
+  "version": "82a06b3a",
   "messages": {
     "a11y.closeDialog": "Close dialog",
     "a11y.connectionStatus": "Connection status",
@@ -2110,6 +2110,11 @@
     "shortcuts.chatNewline": "Insert new line",
     "shortcuts.chatEditLast": "Edit last message",
     "shortcuts.chatBlur": "Exit input focus",
-    "shortcuts.sequencePending": "G —"
+    "shortcuts.sequencePending": "G —",
+    "nav.runtimes": "Runtimes",
+    "member.role.owner": "Owner",
+    "member.role.admin": "Admin",
+    "member.role.member": "Member",
+    "member.role.guest": "Guest"
   }
 }

@@ -102,5 +102,7 @@ describe('WorkspacePickerPage', () => {
     stubMe({ error: { code: 'internal_error', message: 'x' } }, 500);
     renderAt('/workspace-picker');
     await waitFor(() => expect(screen.getByTestId('ws-picker-error')).toBeInTheDocument());
+    // 重试入口可点击(onRetry → navigate(0) 刷新重载)
+    fireEvent.click(screen.getByRole('button', { name: /retry/i }));
   });
 });

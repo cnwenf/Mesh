@@ -170,3 +170,26 @@ test('标识符快路径:小写 identifier 顶置命中(§5.1)', async () => {
   await page.keyboard.press('Enter');
   await page.waitForURL(`**/issues/by-identifier/${identifier}`);
 });
+
+test('P0:规范深链页 /w/{slug}/… 上面板实体搜索可用(slug scope,§3.1/§3.4)', async () => {
+  // 主路径回归:identity 自 URL slug 解析 scope,搜索命中 /workspaces/{slug}/search。
+  // 此前 usePaletteIdentity 以 slug 拼请求而后端仅受 UUID → 404「Search failed」;
+  // 后端 slug 解析修通后,此页级流程须分组命中并 Enter 直达规范深链。
+  await page.goto(`/w/${SLUG}/inbox`);
+  await expect(page.locator('.mesh-shell')).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press('Control+K');
+  const combobox = page.getByRole('combobox');
+  await expect(combobox).toBeFocused({ timeout: 15_000 });
+  await combobox.fill('走查');
+  // 分组实体结果命中(而非「Search failed / 搜索失败」错误态)。
+  await expect(page.getByRole('option', { name: /走查登录页崩溃/ })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(page.getByRole('option', { name: /走查项目/ }).first()).toBeVisible();
+  await expect(page.getByText('Search failed')).toHaveCount(0);
+  await expect(page.getByText('搜索失败')).toHaveCount(0);
+  await page.screenshot({ path: resolve(EVIDENCE_DIR, 'palette-on-slug-page.png') });
+  // Enter 直达 issue 规范深链(URL 保持 slug 形态)。
+  await page.keyboard.press('Enter');
+  await page.waitForURL(`**/w/${SLUG}/issues/by-identifier/${identifier}`);
+});

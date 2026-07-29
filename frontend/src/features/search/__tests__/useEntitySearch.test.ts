@@ -5,6 +5,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api/client';
+import { MeshApiError } from '../../../api/errors';
 import { SEARCH_DEBOUNCE_MS, useEntitySearch } from '../useEntitySearch';
 import type { SearchResultItem } from '../types';
 
@@ -201,5 +202,47 @@ describe('useEntitySearch(防抖 + 过期取消,§4.7)', () => {
       first?.reject(new Error('aborted'));
     });
     expect(result.current.error).toBeNull();
+  });
+
+  it('MeshApiError(非 2xx 信封)原样上报,区别于网络错误归一为 network', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    // 非 2xx 错误信封 → 客户端抛 MeshApiError(code=envelope.code)→ hook 原样置 error
+    await act(async () => {
+      calls[0]?.resolve(
+        new Response(JSON.stringify({ error: { code: 'internal', message: 'x' } }), {
+          status: 500,
+        }),
+      );
+    });
+    expect(result.current.error).toBeInstanceOf(MeshApiError);
+    expect(result.current.error?.code).toBe('internal');
+  });
+
+  it('迟到响应经代次守卫丢弃,不覆盖新结果(竞态治理)', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    const first = calls[0];
+    rerender({ q: 'def', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    const second = calls[1];
+    await act(async () => {
+      second?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.entityResults).toEqual([ISSUE_ITEM]);
+    // 过期(首请求)响应迟到 → 代次不符丢弃,不覆盖现行结果
+    const stale: SearchResultItem = { ...ISSUE_ITEM, id: 'stale', title: 'Stale' };
+    await act(async () => {
+      first?.resolve(okEnvelope([stale]));
+    });
+    expect(result.current.entityResults).toEqual([ISSUE_ITEM]);
   });
 });

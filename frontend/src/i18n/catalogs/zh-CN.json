@@ -1,6 +1,6 @@
 {
   "locale": "zh-CN",
-  "version": "6a0e660f",
+  "version": "595c465e",
   "messages": {
     "a11y.closeDialog": "关闭对话框",
     "a11y.connectionStatus": "连接状态",
@@ -2110,6 +2110,11 @@
     "shortcuts.chatNewline": "换行",
     "shortcuts.chatEditLast": "编辑上一条消息",
     "shortcuts.chatBlur": "退出输入焦点",
-    "shortcuts.sequencePending": "G —"
+    "shortcuts.sequencePending": "G —",
+    "nav.runtimes": "运行时",
+    "member.role.owner": "所有者",
+    "member.role.admin": "管理员",
+    "member.role.member": "成员",
+    "member.role.guest": "访客"
   }
 }

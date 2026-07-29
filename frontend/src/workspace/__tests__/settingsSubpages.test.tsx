@@ -66,6 +66,25 @@ function renderPage(page: React.JSX.Element, role = 'admin'): void {
   );
 }
 
+/** 自定义 fetch 桩渲染(用于端点失败/非空数据分支覆盖) */
+function renderWithFetcher(page: React.JSX.Element, fetchImpl: typeof fetch): void {
+  vi.stubGlobal('fetch', fetchImpl);
+  resetApiClient();
+  render(
+    <I18nProvider requested={null} systemLocales={[]}>
+      <ToastProvider regionLabel="notifications">
+        <MemoryRouter initialEntries={['/w/acme/settings']}>
+          <WorkspaceProvider slug="acme">{page}</WorkspaceProvider>
+        </MemoryRouter>
+      </ToastProvider>
+    </I18nProvider>,
+  );
+}
+
+const bySlugOk = (): Response => fakeResponse({ body: { data: detailWithRole('admin') } });
+const serverError = (): Response =>
+  fakeResponse({ status: 500, body: { error: { code: 'internal', message: 'x' } } });
+
 beforeEach(() => window.localStorage.clear());
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -110,5 +129,56 @@ describe('设置子页内容(admin+)', () => {
     renderPage(<WorkspaceDangerSettingsPage />, 'admin');
     await waitFor(() => expect(screen.getByTestId('ws-settings-danger')).toBeInTheDocument());
     expect(screen.getByTestId('ws-settings-danger-owner-only')).toBeInTheDocument();
+  });
+
+  it('危险操作页 owner → 呈现 DangerZone(isOwner 真分支,无 owner-only 提示)', async () => {
+    renderPage(<WorkspaceDangerSettingsPage />, 'owner');
+    await waitFor(() => expect(screen.getByTestId('ws-settings-danger')).toBeInTheDocument());
+    expect(screen.queryByTestId('ws-settings-danger-owner-only')).not.toBeInTheDocument();
+  });
+
+  it('审批策略页有待审批条目 → 呈现清单(approvals 非空分支)', async () => {
+    renderWithFetcher(
+      <WorkspaceApprovalsSettingsPage />,
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/workspaces/by-slug/')) return bySlugOk();
+        if (url.includes('/approvals')) {
+          return fakeResponse({
+            body: { data: [{ id: 'ap-1', action_summary: 'Run migration' }], next_cursor: null },
+          });
+        }
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as unknown as typeof fetch,
+    );
+    await waitFor(() => expect(screen.getByTestId('ws-approvals-policy-list')).toBeInTheDocument());
+    expect(screen.getByText('Run migration')).toBeInTheDocument();
+  });
+
+  it('审批策略端点失败 → 空态兜底(catch 分支)', async () => {
+    renderWithFetcher(
+      <WorkspaceApprovalsSettingsPage />,
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/workspaces/by-slug/')) return bySlugOk();
+        if (url.includes('/approvals')) return serverError();
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as unknown as typeof fetch,
+    );
+    await waitFor(() => expect(screen.getByTestId('ws-approvals-empty')).toBeInTheDocument());
+  });
+
+  it('状态端点失败 → 状态清单空兜底(catch 分支)', async () => {
+    renderWithFetcher(
+      <WorkspaceFieldsSettingsPage />,
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/workspaces/by-slug/')) return bySlugOk();
+        if (url.includes('/statuses')) return serverError();
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as unknown as typeof fetch,
+    );
+    await waitFor(() => expect(screen.getByTestId('ws-fields-status-list')).toBeInTheDocument());
+    expect(screen.getByTestId('ws-fields-status-list').children).toHaveLength(0);
   });
 });

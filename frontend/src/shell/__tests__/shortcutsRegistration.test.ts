@@ -16,7 +16,10 @@ const LABELS: ShellShortcutLabels = {
     board: 'Board',
     members: 'Members',
     chat: 'Chat',
+    squads: 'Squads',
     automation: 'Automation',
+    runtimes: 'Runtimes',
+    skills: 'Skills',
     insights: 'Insights',
     approvals: 'Approvals',
     settings: 'Settings',
@@ -59,12 +62,48 @@ describe('registerShellShortcuts', () => {
   it('注册导航命令、主题命令与快捷键', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
     const state = useShortcutRegistry.getState();
-    // 11 导航(+审批 MES-79 / +insights MES-71) + 3 主题 + 1 切换 + 上手清单恢复 +
-    // 帮助层 + 复制深链 + 收藏切换 + 标记全部已读 = 20 命令(无工作区上下文口径)
-    expect(state.commands).toHaveLength(20);
+    // 14 导航(+审批 MES-79 / +insights MES-71 / +小队·Runtimes·Skills MES-79 S3 闭合) +
+    // 3 主题 + 1 切换 + 上手清单恢复 + 新建 issue(面板命令) + 帮助层 + 复制深链 +
+    // 收藏切换 = 23 命令(无工作区上下文口径;标记全部已读 M10 门控,workspaceId=null 不注册)
+    expect(state.commands).toHaveLength(23);
     // g i / g b / g m / g a / c / / / ? = 7 快捷键
     expect(state.shortcuts).toHaveLength(7);
     unregister();
+  });
+
+  it('S3 枚举闭合:新建 issue / 小队 / Runtimes / Skills 均注册为可搜索面板命令(§1.2 S3)', () => {
+    const navigate = vi.fn();
+    const unregister = registerShellShortcuts(navigate, LABELS, ENV_ADMIN, OVERLAY);
+    const commands = useShortcutRegistry.getState().commands;
+    const ids = commands.map((command) => command.id);
+    for (const id of ['issue.new', 'nav.squads', 'nav.runtimes', 'nav.skills']) {
+      expect(ids, `missing command ${id}`).toContain(id);
+    }
+    const runCommand = (id: string): void => {
+      commands.find((command) => command.id === id)?.run();
+    };
+    runCommand('issue.new');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/issues?create=1');
+    runCommand('nav.squads');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/squads');
+    runCommand('nav.runtimes');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/automations/runtimes');
+    runCommand('nav.skills');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/automations/skills');
+    unregister();
+  });
+
+  it('M10:标记全部已读仅在工作区上下文注册(workspaceId=null 恒空操作 → 根本不注册)', () => {
+    const unregisterPlain = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
+    expect(useShortcutRegistry.getState().commands.map((command) => command.id)).not.toContain(
+      'mark.all.read',
+    );
+    unregisterPlain();
+    const unregisterAdmin = registerShellShortcuts(vi.fn(), LABELS, ENV_ADMIN, OVERLAY);
+    expect(useShortcutRegistry.getState().commands.map((command) => command.id)).toContain(
+      'mark.all.read',
+    );
+    unregisterAdmin();
   });
 
   it('设置各子页命令仅 admin+ 注册(§1.2 S3:无权命令根本不注册,非点击报错)', () => {

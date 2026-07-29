@@ -9,5 +9,6 @@ export * from './commandCounts';
 export * from './paletteSections';
 export * from './paletteBridge';
 export * from './paletteText';
+export * from './favoritesResolve';
 export * from './useEntitySearch';
 export * from './usePaletteIdentity';

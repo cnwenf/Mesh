@@ -53,6 +53,13 @@ const KEYS = {
   'workspacePicker.hint': ['Pick the workspace to open this page in.', '选择要进入的工作区。'],
   'workspacePicker.open': ['Open', '进入'],
   'nav.approvals': ['Approvals', '审批'],
+  // 自动化运营区 Runtimes 入口(§1.2 S3 ①;nav.skills / nav.squads 目录已存在)。
+  'nav.runtimes': ['Runtimes', '运行时'],
+  // 成员/agent 角色本地化(§3.2 结构化 context,副标题不得裸插枚举,MES-79 M9)。
+  'member.role.owner': ['Owner', '所有者'],
+  'member.role.admin': ['Admin', '管理员'],
+  'member.role.member': ['Member', '成员'],
+  'member.role.guest': ['Guest', '访客'],
   'shortcuts.actionCopyDeepLink': ['Copy link to current page', '复制当前页面深链'],
   'shortcuts.actionToggleFavorite': [
     'Favorite / unfavorite current resource',

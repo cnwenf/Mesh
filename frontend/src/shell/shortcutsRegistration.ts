@@ -45,7 +45,10 @@ export type NavKey =
   | 'board'
   | 'members'
   | 'chat'
+  | 'squads'
   | 'automation'
+  | 'runtimes'
+  | 'skills'
   | 'insights'
   | 'approvals'
   | 'settings';
@@ -141,7 +144,11 @@ export function registerShellShortcuts(
     { key: 'board', to: wsPath('/board') },
     { key: 'members', to: wsPath('/members') },
     { key: 'chat', to: wsPath('/chat') },
+    { key: 'squads', to: wsPath('/squads') },
     { key: 'automation', to: wsPath('/automations/autopilots') },
+    // 自动化运营区三入口(§6.12 信息架构):autopilots(automation)+ Runtimes + Skills。
+    { key: 'runtimes', to: wsPath('/automations/runtimes') },
+    { key: 'skills', to: wsPath('/automations/skills') },
     { key: 'insights', to: wsPath('/insights') },
     { key: 'approvals', to: wsPath('/approvals') },
     { key: 'settings', to: wsPath('/settings') },
@@ -180,6 +187,20 @@ export function registerShellShortcuts(
       run: () => {
         void restoreActiveOnboarding(client).catch(() => undefined);
       },
+    }),
+  );
+
+  // 新建 issue(§1.2 S3 ④):既为快捷键 `c`(见下 shortcutDefs),亦须登记为面板
+  // command 方可被搜索/执行(面板仅渲染 state.commands)。目标与 `c` 同:issues 页
+  // 展开快速创建(issue.md §4.2)。
+  unregisters.push(
+    registry.registerCommand({
+      id: 'issue.new',
+      label: labels.actions.newIssue,
+      group: 'global',
+      combo: 'c',
+      keywords: ['issue', 'new', 'create', 'xinjian'],
+      run: () => navigate(wsPath('/issues?create=1')),
     }),
   );
 
@@ -236,18 +257,22 @@ export function registerShellShortcuts(
   );
 
   // 标记全部已读——随当前收件箱视图 filter 口径(comment-inbox.md §3.2 同 filter)。
-  unregisters.push(
-    registry.registerCommand({
-      id: 'mark.all.read',
-      label: labels.actions.markAllRead,
-      group: 'global',
-      run: () => {
-        const view = getCurrentInboxView();
-        if (view.workspaceId === null) return;
-        void readAll(client, view.workspaceId, view.filter).catch(() => undefined);
-      },
-    }),
-  );
+  // 无工作区上下文(workspaceId=null)时该命令恒为静默空操作,故根本不注册(与设置类
+  // 命令同门控口径,§1.2 S3「无权/无上下文命令根本不注册」),避免命令面板出现死条目。
+  if (env.workspaceId !== null) {
+    unregisters.push(
+      registry.registerCommand({
+        id: 'mark.all.read',
+        label: labels.actions.markAllRead,
+        group: 'global',
+        run: () => {
+          const view = getCurrentInboxView();
+          if (view.workspaceId === null) return;
+          void readAll(client, view.workspaceId, view.filter).catch(() => undefined);
+        },
+      }),
+    );
+  }
 
   // 待审批命令(有工作区上下文即可见,§6.10 统一入口;导航命令已含 approvals,
   // 此条以动作语义并列呈现于命令面板动作区)。
@@ -354,7 +379,10 @@ export function ShellShortcutsRegistrar(): null {
             board: t('nav.board'),
             members: t('nav.members'),
             chat: t('nav.chat'),
+            squads: t('nav.squads'),
             automation: t('nav.automation'),
+            runtimes: t('nav.runtimes'),
+            skills: t('nav.skills'),
             insights: t('nav.insights'),
             approvals: t('nav.approvals'),
             settings: t('nav.settings'),

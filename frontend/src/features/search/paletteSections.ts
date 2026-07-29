@@ -8,6 +8,7 @@
  * - 纯函数:不触网、不碰存储,便于单测;行 key 全局稳定(异步补入按 key 保持选中,§4.3.1)。
  */
 import type { ShortcutCommand } from '../../shortcuts/registry';
+import type { ResolvedTarget } from './favoritesResolve';
 import { recentTargetKey } from './recents';
 import type { RecentEntry } from './recents';
 import type { FavoriteEntry, SearchResultItem, SearchResultType } from './types';
@@ -60,6 +61,11 @@ export interface EmptyQueryRowsInput {
   readonly commands: readonly ShortcutCommand[];
   /** commandId → 使用次数(缺失记 0) */
   readonly counts: Readonly<Record<string, number>>;
+  /**
+   * 收藏目标批量解析结果(§4.2.1 步骤 3,键 `${type}:${id}`);recents 未命中的收藏
+   * 据此补标题/深链。未解析(缺失/失败)且 recents 亦无 → 目标失效,该行不渲染。
+   */
+  readonly resolved?: ReadonlyMap<string, ResolvedTarget>;
 }
 
 /** 收藏时间倒序(RFC3339 字符串可直接字典序比较;非法时间沉底) */
@@ -75,24 +81,33 @@ function compareFavoriteCreatedAtDesc(a: FavoriteEntry, b: FavoriteEntry): numbe
  */
 export function buildEmptyQueryRows(input: EmptyQueryRowsInput): readonly PaletteRow[] {
   const favorites = [...input.favorites].sort(compareFavoriteCreatedAtDesc);
-  const favoriteTargets = new Set<string>(
-    favorites.map((favorite) => recentTargetKey(favorite.target_type, favorite.target_id)),
-  );
   const recentByTarget = new Map<string, RecentEntry>(
     input.recents.map((entry) => [recentTargetKey(entry.type, entry.id), entry]),
   );
 
-  const favoriteRows: PaletteRow[] = favorites.map((favorite) => {
-    const resolved = recentByTarget.get(recentTargetKey(favorite.target_type, favorite.target_id));
-    return {
+  // §4.2.1 步骤 3:收藏标题/深链取自 recents 命中或空态批量存在性核验(resolved);
+  // 两者皆无 → 目标已删/失权(核验 missing/未达),不渲染裸 UUID 死行,直接跳过。
+  // favoriteTargets 仅收录**实际渲染**的收藏 target:被跳过的收藏不抑制同 target 的
+  // recents 行(否则收藏核验失败会连带抹掉本地仍有效的最近访问)。
+  const favoriteTargets = new Set<string>();
+  const favoriteRows: PaletteRow[] = [];
+  for (const favorite of favorites) {
+    const targetKey = recentTargetKey(favorite.target_type, favorite.target_id);
+    const fromRecents = recentByTarget.get(targetKey);
+    const fromResolve = input.resolved?.get(targetKey);
+    const title = fromRecents?.title ?? fromResolve?.title;
+    const url = fromRecents?.url ?? fromResolve?.url;
+    if (title === undefined || url === undefined) continue;
+    favoriteTargets.add(targetKey);
+    favoriteRows.push({
       kind: 'favorite',
       key: favoriteRowKey(favorite.id),
       favorite,
-      title: resolved?.title ?? favorite.target_id,
-      url: resolved?.url ?? null,
+      title,
+      url,
       targetType: favorite.target_type,
-    };
-  });
+    });
+  }
 
   const recentRows: PaletteRow[] = input.recents
     .filter((entry) => !favoriteTargets.has(recentTargetKey(entry.type, entry.id)))

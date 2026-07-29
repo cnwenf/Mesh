@@ -28,6 +28,17 @@ export function glyphFor(kind: SearchResultType | 'command' | 'favorite' | 'rece
   return GLYPH_BY_TYPE[kind];
 }
 
+/** 角色枚举本地化键(§3.2 结构化 context + 消息目录;裸枚举不得直接入句) */
+const LOCALIZED_ROLES: readonly string[] = ['owner', 'admin', 'member', 'guest'];
+
+/**
+ * 成员/agent 角色本地化(§3.2):枚举值经 member.role.* 目录键渲染;未知角色
+ * (目录外枚举)原样回退,避免呈现「member.role.xxx」死键。
+ */
+export function roleLabel(t: TranslateFn, role: string): string {
+  return LOCALIZED_ROLES.includes(role) ? t(`member.role.${role}`) : role;
+}
+
 /**
  * 实体副标题(本地化组装,§3.2):枚举值经各自消息目录键
  * (project.visibility.* / view.scope.*),缺失项目名以空串占位(ICU 原样输出分隔符)。
@@ -43,9 +54,9 @@ export function entitySubtitle(t: TranslateFn, item: SearchResultItem): string {
       });
     }
     case 'member':
-      return t('search.subtitle.member', { role: item.context.role });
+      return t('search.subtitle.member', { role: roleLabel(t, item.context.role) });
     case 'agent':
-      return t('search.subtitle.agent', { role: item.context.role });
+      return t('search.subtitle.agent', { role: roleLabel(t, item.context.role) });
     case 'project':
       return t('search.subtitle.project', {
         key: item.context.key,

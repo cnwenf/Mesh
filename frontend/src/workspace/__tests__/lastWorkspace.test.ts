@@ -52,6 +52,23 @@ describe('lastWorkspace(§3.4 active workspace 解析序)', () => {
     expect(readLastWorkspaceSlug('u2', storage, HOST)).toBeNull();
   });
 
+  it('存储读写异常 → 安全降级(读返回 null;写静默不抛)', () => {
+    const throwing: Storage = {
+      getItem: () => {
+        throw new Error('quota exceeded');
+      },
+      setItem: () => {
+        throw new Error('quota exceeded');
+      },
+      removeItem: () => undefined,
+      clear: () => undefined,
+      key: () => null,
+      length: 0,
+    };
+    expect(readLastWorkspaceSlug('u1', throwing, HOST)).toBeNull();
+    expect(() => recordLastWorkspace('u1', 'alpha', throwing, HOST)).not.toThrow();
+  });
+
   it('解析序 ②:本地记忆 slug 经成员资格校验命中', () => {
     recordLastWorkspace('u1', 'beta', storage, HOST);
     const slug = resolveActiveWorkspaceSlug({

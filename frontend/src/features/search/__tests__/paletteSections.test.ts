@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ShortcutCommand } from '../../../shortcuts/registry';
+import type { ResolvedTarget } from '../favoritesResolve';
 import {
   buildEmptyQueryRows,
   buildQueryRows,
@@ -11,6 +12,13 @@ import {
   groupEntityResults,
 } from '../paletteSections';
 import type { FavoriteEntry, SearchResultItem } from '../types';
+
+/** 构造批量核验结果映射(键 `${type}:${id}`,§4.2.1 步骤 3) */
+function resolved(
+  entries: ReadonlyArray<{ type: string; id: string; title: string; url: string }>,
+): Map<string, ResolvedTarget> {
+  return new Map(entries.map((entry) => [`${entry.type}:${entry.id}`, { title: entry.title, url: entry.url }]));
+}
 
 function command(id: string, label: string, keywords?: string[]): ShortcutCommand {
   return { id, label, group: 'global', keywords, run: () => undefined };
@@ -60,6 +68,11 @@ describe('buildEmptyQueryRows(空态唯一数据流,§4.2.1)', () => {
       recents: [],
       commands: [],
       counts: {},
+      resolved: resolved([
+        { type: 'issue', id: 'i-1', title: 'T1', url: '/u1' },
+        { type: 'issue', id: 'i-2', title: 'T2', url: '/u2' },
+        { type: 'issue', id: 'i-3', title: 'T3', url: '/u3' },
+      ]),
     });
     expect(rows.map((row) => row.kind)).toEqual(['favorite', 'favorite', 'favorite']);
     const keys = rows.map((row) => (row.kind === 'favorite' ? row.favorite.id : ''));
@@ -101,21 +114,36 @@ describe('buildEmptyQueryRows(空态唯一数据流,§4.2.1)', () => {
       recents: [{ type: 'project', id: 'p-1', title: 'P', url: '/p', at: '2026-07-01T00:00:00.000Z' }],
       commands: [command('a', 'Alpha')],
       counts: {},
+      resolved: resolved([{ type: 'issue', id: 'i-9', title: 'T9', url: '/u9' }]),
     });
     expect(rows.map((row) => row.kind)).toEqual(['favorite', 'recent', 'command']);
   });
 
-  it('无可解析标题的收藏行以 target_id 兜底且不可跳转(url=null)', () => {
+  it('收藏经批量核验解析出标题/规范深链(recents 未命中,§4.2.1 步骤 3)', () => {
+    const rows = buildEmptyQueryRows({
+      favorites: [favorite('f1', 'issue', 'i-9', '2026-07-01T00:00:00.000Z')],
+      recents: [],
+      commands: [],
+      counts: {},
+      resolved: resolved([
+        { type: 'issue', id: 'i-9', title: 'Resolved title', url: '/w/acme/issues/by-identifier/K-9' },
+      ]),
+    });
+    const row = rows[0];
+    if (row?.kind !== 'favorite') throw new Error('expected favorite row');
+    expect(row.title).toBe('Resolved title');
+    expect(row.url).toBe('/w/acme/issues/by-identifier/K-9');
+  });
+
+  it('收藏目标核验失败且 recents 无命中 → 跳过不渲染裸 UUID 死行(§4.2.1 步骤 3)', () => {
     const rows = buildEmptyQueryRows({
       favorites: [favorite('f1', 'issue', 'i-unknown', '2026-07-01T00:00:00.000Z')],
       recents: [],
       commands: [],
       counts: {},
+      resolved: new Map(), // 批量核验完成但目标不存在(missing)
     });
-    const row = rows[0];
-    if (row?.kind !== 'favorite') throw new Error('expected favorite row');
-    expect(row.title).toBe('i-unknown');
-    expect(row.url).toBeNull();
+    expect(rows).toEqual([]);
   });
 });
 

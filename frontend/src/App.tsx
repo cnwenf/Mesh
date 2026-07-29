@@ -18,6 +18,7 @@ import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router'
 import { getApiClient } from './api/instance';
 import { restoreActiveOnboarding } from './features/onboarding';
 import { getIssueByIdentifier } from './features/issues/api';
+import { usePaletteIdentity } from './features/search/usePaletteIdentity';
 import { ThemeProvider, ToastProvider } from './design';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
 import { I18nProvider, useT } from './i18n';
@@ -31,7 +32,7 @@ import { BoardPage } from './features/board/BoardPage';
 import { MemberDetailPage } from './features/members/MemberDetailPage';
 import { MembersPage } from './features/members/MembersPage';
 import { CyclesPage } from './features/projects/CyclesPage';
-import { IssueDetailPage } from './features/issues/IssueDetailPage';
+import { IssueByIdRedirect } from './features/issues/IssueByIdRedirect';
 import { IssuesPage } from './features/issues/IssuesPage';
 import { ProjectDetailPage } from './features/projects/ProjectDetailPage';
 import { ProjectsPage } from './features/projects/ProjectsPage';
@@ -144,6 +145,12 @@ function ShellProviders(): React.JSX.Element {
   const t = useT();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  // no-results「新建 issue」门控(§4.2):当前工作区成员角色 owner/admin/member 可创建,
+  // guest/失权(role null)不可。面板渲染于 Provider 树顶层(工作区路由之外),故经
+  // usePaletteIdentity 的成员身份角色解析(§3.4 解析序)取角色,而非 useOptionalWorkspace。
+  const paletteIdentity = usePaletteIdentity({ client: getApiClient() });
+  const canCreateIssue =
+    paletteIdentity.role !== null && paletteIdentity.role !== 'guest';
 
   const controls = useMemo<OverlayControls>(
     () => ({
@@ -211,7 +218,7 @@ function ShellProviders(): React.JSX.Element {
                   path="w/:workspaceSlug/issues/by-identifier/:identifier"
                   element={<WorkspaceIssueByIdentifierRedirect />}
                 />
-                <Route path="w/:workspaceSlug/issues/:issueId" element={<IssueDetailPage />} />
+                <Route path="w/:workspaceSlug/issues/:issueId" element={<IssueByIdRedirect />} />
                 {/* 聊天模块(chat-session.md §4):会话列表 / 会话详情 */}
                 <Route path="w/:workspaceSlug/chat" element={<ChatPage />} />
                 <Route path="w/:workspaceSlug/chat/:sessionId" element={<ChatPage />} />
@@ -307,6 +314,7 @@ function ShellProviders(): React.JSX.Element {
             closeLabel={t('a11y.closeDialog')}
             searchPlaceholder={t('shortcuts.palettePlaceholder')}
             emptyText={t('shortcuts.paletteEmpty')}
+            canCreateIssue={canCreateIssue}
           />
           <ShortcutHelp
             open={helpOpen}
