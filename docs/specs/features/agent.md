@@ -95,7 +95,7 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 | status | varchar(16) | 名册状态 `active/disabled/removed` |
 | display_override | text NULL | 工作区内显示名覆盖 |
 
-显示名解析顺序（README §6.1）：`members.display_override`（非空）→ agent：`agents.name`；人类：`users.display_name` → `users.full_name`。
+显示名解析顺序（README §6.1）：`members.display_override`（非空）→ agent：`agents.name`；人类：`users.display_name` → `users.email`（`users` 无 `full_name` 列，MES-76 H3 对齐 README §6.1 修订）。
 
 ### 2.2 `users` — 人类账号（auth.md owns，此处仅说明关联方式）
 

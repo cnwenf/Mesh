@@ -87,6 +87,7 @@ members ──1:N──► member_project_access(guest 项目级可见性)──
 | `role` | TEXT | NOT NULL,CHECK IN ('owner','admin','member','guest') | `'member'` | 工作区角色 |
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled','removed') | `'active'` | |
 | `display_override` | TEXT | NULL | NULL | 工作区内显示名覆盖 |
+| `search_name` | TEXT | NOT NULL | `''` | **检索专用投影(MES-76 H3 登记,search-command-palette.md §2.2 owns 同步契约与归一函数)**:`mesh_search_norm(§2.4 显示名解析链结果)`(NFKD + 去重音 + 小写,与索引/查询/回填同一归一函数,R2-H3),供全局搜索 trigram 与前缀 pattern 索引;**非显示真源**——显示一律实时解析链(§2.4),本列由入册/改名写路径同事务维护 + 周期对账兜底,防跨表表达式不可索引(README §6.1「高频表存储快照须强制一致并明示」条款登记项) |
 | `joined_at` | TIMESTAMPTZ | NULL | NULL | 正式加入时间 |
 | `disabled_at` | TIMESTAMPTZ | NULL | NULL | 停用时间 |
 | `created_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
@@ -142,6 +143,11 @@ CREATE INDEX idx_members_workspace ON members(workspace_id, status);
 CREATE INDEX idx_members_user ON members(user_id);
 CREATE INDEX idx_members_agent ON members(agent_id);
 CREATE INDEX idx_members_type ON members(workspace_id, member_type);
+
+-- 检索投影 trigram 索引(MES-76 H3,DDL 与同步契约权威见 search-command-palette.md §2.2)
+CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
+CREATE INDEX idx_members_search_name_prefix ON members (workspace_id, search_name text_pattern_ops) WHERE status <> 'removed';  -- R2-H3:1–2 字符前缀路径
+CREATE INDEX idx_members_ws_type_active ON members (workspace_id, member_type) WHERE status <> 'removed';
 
 -- 供引用方复合 FK(README §6.2):issues.assignee_id 等据此同租户引用 members
 CREATE UNIQUE INDEX uq_members_ws_id ON members(workspace_id, id);
@@ -218,7 +224,7 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
       "status": "active",
       "display_name": "Jane Doe",
       "joined_at": "2026-01-10T08:00:00Z",
-      "profile": { "id": "usr-1", "full_name": "Jane Doe", "email": "jane@acme.com",
+      "profile": { "id": "usr-1", "display_name": "Jane Doe", "email": "jane@acme.com",
                    "avatar_url": "https://cdn.example/jane.png" }
     },
     {
@@ -243,6 +249,8 @@ REST 基础路径 `/api/v1`,Bearer token 鉴权(见 auth.md),游标分页,统一
 { "display_override": "小李" }
 // 200 Response:返回更新后的成员对象
 ```
+
+> **名册行锁协议(MES-76 R4-H3)**:改角色 / 改状态(停用)/ 移除事务更新本 `members` 行即持有该行排他锁——与设备码消费事务对同一行的 `FOR UPDATE`(auth.md §3.1.1 consume 锁序)在同名册行上**线性化**:两者并发时按锁获取顺序定结果(消费先持锁则会话签发完成后变更再生效;变更先提交则消费按变更后状态拒绝/收窄签发),不存在 TOCTOU 间隙。显示名变更(`display_override`)另触发 `search_name` 同事务重算(§2.2 同步契约,search-command-palette.md §2.2)。**移除/停用事务同事务撤销该成员(人类)该工作区绑定的 cli 会话**(`UPDATE sessions SET revoked_at=now() WHERE user_id=$member.user_id AND workspace_id=$ws AND type='cli' AND revoked_at IS NULL`,经 `session.revoked` 广播,auth.md §1.1 撤销语义 / §3.7 触发集;MES-78 LOW-1——防旧固化 scope 在重新受邀时静默恢复能力)。
 
 **移除并转派** `DELETE /api/v1/workspaces/{ws}/members/{id}?reassign_to=mem-c3`
 ```json

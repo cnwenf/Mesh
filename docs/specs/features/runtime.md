@@ -103,8 +103,7 @@ erDiagram
         text activation_token_hash
         timestamptz activation_expires_at
         timestamptz activated_at
-        uuid runtime_token_id FK "api_tokens(scope=runtime)"
-        text runtime_token_hash
+        text runtime_token_hash "mesh_rt_ 令牌 SHA-256,唯一真源,不入 api_tokens"
         jsonb capabilities
         jsonb labels
         text hostname
@@ -219,8 +218,7 @@ erDiagram
 | activation_token_hash | text | NULL | - | 一次性激活码哈希（激活后置空 / 作废） |
 | activation_expires_at | timestamptz | NULL | - | **激活码过期时间（R1 补齐，默认创建后 15 分钟）；过期后激活返回 `410`** |
 | activated_at | timestamptz | NULL | - | 激活时间（**即激活码 used_at**：非空表示激活码已使用，不可再用） |
-| runtime_token_id | uuid | NULL, FK→api_tokens.id | - | 长期 runtime API token（auth 模块 owns，`scope='runtime'`，只存哈希） |
-| runtime_token_hash | text | NULL | - | runtime token 哈希冗余（快速校验，可轮换） |
+| runtime_token_hash | text | NULL（激活前），UNIQUE | - | **runtime 机器令牌（`mesh_rt_` 前缀）的 SHA-256 哈希——唯一存储真源（MES-76 R2-H2 写死）**：激活时写入（明文仅激活响应一次），轮换时整体替换。**不入 `api_tokens`**——runtime 不是名册成员，`api_tokens.owner_member_id NOT NULL` 无法承载机器令牌；此前 `runtime_token_id FK→api_tokens.id` 与「哈希冗余」双真源已删除 |
 | capabilities | jsonb | NOT NULL | `'[]'` | 已安装工具 / 能力列表，如 `["version_control","python","node"]` |
 | labels | jsonb | NOT NULL | `'{}'` | 自定义标签，如 `{"gpu":"true","region":"intranet"}` |
 | hostname | text | NULL | - | 主机名 |
@@ -500,35 +498,37 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 调用方分两类：
 - **(a) 控制台 API**：用户 / 前端用，管理 runtime、查看执行、取消任务。Bearer token 为用户会话凭证。
-- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime API token**（激活后获得，`scope='runtime'`，服务端只存哈希），权限严格限定于本 runtime 与其领取的执行。
+- **(b) 机器 API（守护进程）**：runtime 守护进程用，注册 / 心跳 / 领取 / 上报。Bearer token 为 **runtime 机器令牌**（激活后获得，明文前缀 **`mesh_rt_`**——auth.md §2.5.1 令牌前缀注册表唯一权威，此前示例 `rt_live_` 已废弃；**仅存 SHA-256 哈希于 `runtimes.runtime_token_hash`（唯一真源，不进 `api_tokens`**——机器令牌无名册持有者，R2-H2），权限严格限定于本 runtime 与其领取的执行。**心跳为机器域专属能力：`mesh` CLI 与一切用户凭证不得调用 `/api/v1/daemon/*`（cli.md §1.3，MES-76 H8）**。
 
 所有响应统一包络：成功单对象 `{"data": {...}}`；成功列表 `{"data": [...], "next_cursor": ...}`；失败 `{"error": {"code","message","details"}}`。
 
 ### 3.1 控制台 API
 
+> **路径前缀（MES-77 跨 Spec 同步，配合 cli.md C1/C5，与后端 `runtime/routes.py` 实际实现逐端点对齐）**：控制台 API 一律为 workspace 作用域，路径均带 `/workspaces/{ws}/` 前缀（`{ws}` = workspace UUID 或 slug，鉴权中间件解析并校验成员资格，§6.2）；此前表内裸路径为文档漂移，以本表为准。daemon 命名空间 `/api/v1/daemon/*`（§3.5，机器域，`mesh_rt_` 令牌）不带工作区前缀——runtime 自身即工作区资源，激活时已绑定。
+
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/runtimes` | runtime 列表（游标分页，可按 status/kind/labels 过滤） |
-| POST | `/api/v1/runtimes` | 创建 runtime（返回一次性激活码 + 安装命令） |
-| GET | `/api/v1/runtimes/{id}` | runtime 详情（元数据、负载、心跳） |
-| PATCH | `/api/v1/runtimes/{id}` | 更新（name、labels、max_concurrent） |
-| POST | `/api/v1/runtimes/{id}:pause` | 暂停（不再领新任务） |
-| POST | `/api/v1/runtimes/{id}:resume` | 恢复 |
-| POST | `/api/v1/runtimes/{id}/tokens:rotate` | 轮换 runtime API token |
-| DELETE | `/api/v1/runtimes/{id}` | 软删除 / 下线 |
-| GET | `/api/v1/runtimes/{id}/executions` | 该 runtime 的执行历史 |
-| GET | `/api/v1/executions/{id}` | 执行详情 |
-| POST | `/api/v1/executions/{id}:cancel` | 取消执行 |
-| POST | `/api/v1/executions/{id}:freeze` | 冻结可疑执行（吊销短期凭证、保留现场） |
-| GET | `/api/v1/executions/{id}/logs?offset=N&stream=stdout` | 拉取日志（续传，REST 轮询 / 补历史） |
-| GET(SSE) | `/api/v1/executions/{id}/logs/stream?offset=N` | 实时日志流（SSE 降级通道） |
-| WS | `/ws` 订阅 `execution:{id}:logs` | 实时日志流（WebSocket 主通道） |
-| GET/POST/DELETE | `/api/v1/credentials` | secret 管理（明文只进不出） |
+| GET | `/api/v1/workspaces/{ws}/runtimes` | runtime 列表（游标分页，可按 status/kind/labels 过滤） |
+| POST | `/api/v1/workspaces/{ws}/runtimes` | 创建 runtime（返回一次性激活码 + 安装命令；cli.md `mesh runtime register` 的控制台侧影子记录，cli.md §1.3） |
+| GET | `/api/v1/workspaces/{ws}/runtimes/{id}` | runtime 详情（元数据、负载、最近心跳；cli.md `mesh runtime status` 排障只读数据源） |
+| PATCH | `/api/v1/workspaces/{ws}/runtimes/{id}` | 更新（name、labels、max_concurrent） |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}:pause` | 暂停（不再领新任务） |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}:resume` | 恢复 |
+| POST | `/api/v1/workspaces/{ws}/runtimes/{id}/tokens:rotate` | 轮换 runtime API token |
+| DELETE | `/api/v1/workspaces/{ws}/runtimes/{id}` | 软删除 / 下线 |
+| GET | `/api/v1/workspaces/{ws}/runtimes/{id}/executions` | 该 runtime 的执行历史 |
+| GET | `/api/v1/workspaces/{ws}/executions/{id}` | 执行详情 |
+| POST | `/api/v1/workspaces/{ws}/executions/{id}:cancel` | 取消执行 |
+| POST | `/api/v1/workspaces/{ws}/executions/{id}:freeze` | 冻结可疑执行（吊销短期凭证、保留现场） |
+| GET | `/api/v1/workspaces/{ws}/executions/{id}/logs?offset=N&stream=stdout` | 拉取日志（续传，REST 轮询 / 补历史；`stream=stdout\|stderr` 分流过滤） |
+| GET(SSE) | `/api/v1/workspaces/{ws}/executions/{id}/logs/stream?offset=N` | 实时日志流（SSE 降级通道，§3.3） |
+| WS | `/ws` 订阅 `execution:{id}:logs` | 实时日志流（WebSocket 主通道；频道名不含工作区段，订阅授权按 §6.7 资源级重校验） |
+| GET/POST/DELETE | `/api/v1/workspaces/{ws}/credentials` | secret 管理（明文只进不出） |
 
 **创建 runtime 请求 / 响应**：
 
 ```json
-// POST /api/v1/runtimes  — 请求
+// POST /api/v1/workspaces/{ws}/runtimes  — 请求
 {
   "name": "intranet-build-01",
   "kind": "self_hosted",
@@ -566,7 +566,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 **取消执行**：
 
 ```json
-// POST /api/v1/executions/8f3a1d2c-.../cancel  — 响应 200
+// POST /api/v1/workspaces/{ws}/executions/8f3a1d2c-.../cancel  — 响应 200
 {
   "data": {
     "id": "8f3a1d2c-4e5b-4a2c-9d1e-3b7c8a0f1e2d",
@@ -612,13 +612,13 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 {
   "data": {
     "runtime_id": "5f1c2a6e-9b4d-4c1a-8e2f-7a3b9c0d1e2f",
-    "runtime_token": "rt_live_a1b2c3d4e5f6...",
+    "runtime_token": "mesh_rt_a1b2c3d4e5f6...",
     "heartbeat_interval_seconds": 15
   }
 }
 ```
 
-> `runtime_token` 明文仅在此响应中出现一次；服务端写入 `api_tokens`（`scope='runtime'`）的哈希，激活码随即作废。
+> `runtime_token` 明文（`mesh_rt_` 前缀，auth.md §2.5.1 注册表）仅在此响应中出现一次；服务端写入 **`runtimes.runtime_token_hash`（SHA-256，唯一存储真源，R2-H2：不进 `api_tokens`）**，激活码随即作废。
 
 **心跳（兼下行指令通道）**：
 
@@ -727,17 +727,19 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 
 ### 3.3 日志流式端点（WebSocket 主 / SSE 降级，含续传）
 
-连接：订阅 `/ws` 频道 `execution:{id}:logs`（可带初始 `offset`）；SSE 降级 `GET /api/v1/executions/{id}/logs/stream?offset=N`。两者共用同一 offset 协议。
+连接：订阅 `/ws` 频道 `execution:{id}:logs`（可带初始 `offset`）；SSE 降级 `GET /api/v1/workspaces/{ws}/executions/{id}/logs/stream?offset=N`（MES-77：补 workspace 前缀，与 §3.1 表一致）。两者共用同一 offset 协议。
 
 服务端帧（文本帧，JSON）：
 
 ```json
-{"type": "log", "stream": "stdout", "offset": 1049012, "line": "PASSED [ 41%]"}
-{"type": "log", "stream": "stderr", "offset": 1049120, "line": "warning: deprecated api"}
+{"type": "log", "stream": "stdout", "offset": 1049012, "ts": "2026-07-24T09:41:58Z", "line": "PASSED [ 41%]"}
+{"type": "log", "stream": "stderr", "offset": 1049120, "ts": "2026-07-24T09:41:59Z", "line": "warning: deprecated api"}
 {"type": "status", "status": "running"}
 {"type": "heartbeat", "server_time": "2026-07-24T09:42:00Z"}
 {"type": "end", "status": "completed", "final_offset": 1200340}
 ```
+
+> **`log` 帧 `ts` 字段（MES-77 增量，配合 cli.md C5 写死）**：RFC3339 UTC，取**服务端收口该日志段的时间**（服务端时钟，避免 daemon 时钟偏移进入日志时间轴）；同一 `POST /api/v1/daemon/attempts/{attempt_id}/logs` 追加段内的各帧共享该段收口时间（段级精度，非逐行）。「日志跟随」的时间维度以此为准；CLI `mesh execution logs` 默认行首渲染 `ts`（`--timestamps=false` 关闭，cli.md §1.2 C12）。WS 主通道与 SSE 降级通道帧形一致。
 
 续传协议：客户端记录已处理的最大 offset，断线重连时把它作为 `?offset=` 传入；服务端先从对象存储补发 `[offset, 已封口)` 历史，再接上实时尾部，保证**不丢、不重、单调递增**。客户端按 `offset` 去重以防补发与实时流边界重叠。频道内事件 `seq`（README §6.7，用于事件重放）与日志 `offset`（用于字节续传）并存、互不混用；日志频道为 `execution:{id}:logs`，其 `seq` 作用域即该频道。
 
@@ -758,10 +760,10 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 ### 3.5 鉴权与分页
 
 - 控制台 API：用户 Bearer token（会话 / JWT），按 workspace + 角色鉴权。
-- 机器 API：runtime Bearer token（`api_tokens.scope='runtime'`，只存哈希），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
+- 机器 API：runtime Bearer token（`mesh_rt_` 前缀，哈希唯一存于 `runtimes.runtime_token_hash`，R2-H2），服务端校验 token 哈希与 `runtime_id` 匹配，且仅允许操作**本 runtime 所属 workspace** 内的资源与其领取的执行。**claim 操作的 workspace 归属从 `runtimes.workspace_id` 服务端读取，不接受客户端传入；心跳 `inflight` 上报的 execution 按 `workspace_id` 归属校验。**
 - **机器 API 强制 TLS（红线）**：runtime 协议（machine API）**仅经 TLS（HTTPS）提供，拒绝明文 HTTP**；claim / refetch 响应携带凭证明文，传输层降级即导致凭证裸露。所有 `/api/v1/daemon/` 端点强制 `Strict-Transport-Security`，非 TLS 请求返回 `403`。
-- **runtime 状态与 token 联动**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**停用其 `runtime_token`**（`api_tokens.revoked_at` 置位）；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，下线后的 token 不可调用任何机器 API。
-- 分页：`GET /api/v1/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
+- **runtime 状态与 token 联动（R3-H4：mesh_rt_ 真源全链收口）**：runtime 进入 `paused` / `decommissioned` / 软删除（`deleted_at` 置位）时，同步**清除其 `runtimes.runtime_token_hash`（置 NULL——机器令牌唯一真源即失效，不存在可复用的已撤销令牌行；恢复服务经 `tokens:rotate` 重新签发新 `mesh_rt_` 令牌）**，**不经 `api_tokens`（runtime 令牌不入该表，R2-H2）**；所有机器 API 端点统一校验 runtime `status` 与 `deleted_at IS NULL`，且 token 哈希校验命中当前 `runtime_token_hash`——下线/停用后旧令牌调用任何机器 API 必然 401（哈希为空或状态门拒绝）。
+- 分页：`GET /api/v1/workspaces/{ws}/runtimes?cursor=<opaque>&limit=20` → `{"data":[...], "next_cursor":"eyJ..."}`，`next_cursor=null` 表示末页。
 
 ### 3.6 WebSocket 事件清单（`/ws`，`<entity>.<action>`，带 seq）
 
@@ -995,7 +997,7 @@ stateDiagram-v2
 ### 5.1 功能验收
 
 - [ ] 创建 runtime 生成 `status='pending'` 记录 + 一次性激活码（只存哈希、`activation_expires_at` 默认 15 分钟）+ **签名发布包安装信息**（artifact URL + sha256 + 签名 + 公钥；无 `curl | sh`，激活码不进命令行参数，README/§3.1 安装安全）。
-- [ ] 守护进程凭激活码（受限 stdin/`0600` 文件读入）激活：上报元数据 → 换取 runtime API token（`scope='runtime'`，只存哈希）→ runtime 置 `online`，`activated_at` 置位（激活码作废）；过期 / 已用激活码返回 `410`。
+- [ ] 守护进程凭激活码（受限 stdin/`0600` 文件读入）激活：上报元数据 → 换取 runtime 机器令牌（`mesh_rt_` 前缀，**SHA-256 仅存 `runtimes.runtime_token_hash`，`api_tokens` 无该行**——information_schema/表查询断言，R2-H2）→ runtime 置 `online`，`activated_at` 置位（激活码作废）；过期 / 已用激活码返回 `410`；轮换（`tokens:rotate`）后旧哈希即失效。
 - [ ] 平台托管与自托管走同一套「注册—心跳—领取—上报」机器接口，调度器不区分二者。
 - [ ] 心跳每 15s（可配）上报；超过 `心跳间隔 × 容忍倍数`（默认 45s）未收到判离线置 `unavailable`；`degraded` 时停止派新任务但保留排障窗口。
 - [ ] **claim 跨租户安全**：claim SQL 带 `workspace_id = :runtime_workspace_id`（token 解析，不信请求体）；标签/能力匹配只用服务端保存值，**能力匹配为权威条件（`required_capabilities <@ runtimes.capabilities`，不只文字声称）**；`default_runtime_id` 约束生效（集成测试 T1/T2/T20）。
@@ -1012,7 +1014,7 @@ stateDiagram-v2
 - [ ] **仓库 checkout 白名单验收（H1）**：checkout 命中 `allowed_repos` 白名单外 URL → `403`；`repo_token` 不可用于白名单外仓库；平台托管 runtime checkout 私网 / 元数据地址被拒（集成测试覆盖）。
 - [ ] **注入环境变量名安全（NEW-M1）**：`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 平台保留前缀等敏感名 → `422` 拒绝。
 - [ ] **机器 API 强制 TLS（NEW-M3）**：非 TLS 请求到 `/api/v1/daemon/` 返回 `403`。
-- [ ] **runtime 下线即吊销 token（NEW-L2）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token` 同步停用；下线后 token 调用任何机器 API 返回 `401`。
+- [ ] **runtime 下线即吊销 token（NEW-L2；R3-H4 收口）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token_hash` 同步清除（置 NULL，`api_tokens` 无此令牌行）；下线后以旧令牌明文调用任何机器 API 返回 `401`；恢复服务经 `tokens:rotate` 签发新令牌，旧令牌永久失效。
 - [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重；事件名全部命中 README §6.7 词汇注册表（含 `execution.awaiting_approval`）。
 - [ ] **终态通知按矩阵分发**（README §6.13，T25）：失败/超时为 critical 进收件箱 + 可选 Webhook（穿透 quiet hours、重置同组未读）；成功默认留运行页/时间线（仅订阅 `execution_finished` 时进收件箱，不穿透、不重置未读）；取消不通知发起者。
 

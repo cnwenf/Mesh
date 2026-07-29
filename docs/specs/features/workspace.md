@@ -112,11 +112,11 @@ users(人类登录身份,auth.md)──┐
 | `invitation_max_uses_cap` | int | `100` | 邀请 `max_uses` 可配置上限(LOW-2 硬化:显式值超过上限拒绝,见 §2.3) |
 | `invitation_max_lifetime_hours_cap` | int | `720` | 邀请有效期小时数可配置上限(LOW-2 硬化,默认 30 天:显式 `expires_in_hours` 超过上限拒绝,见 §2.3) |
 | `default_locale` | string | `"en"` | **工作区默认 locale(唯一真源,R3)**:BCP-47,README §6.18 / i18n.md locale 协商链的第三级(用户偏好 `users.settings.locale` 缺失时回退到本键,再回退系统 `en`)。R3:默认值由 `"zh-CN"` 统一为 **`"en"`**(与 i18n.md §2.1/§2.3 及 README §6.18 系统回退一致;首发语言 `zh-CN`/`en` 指支持清单,不等于默认值);既有 `default_language` 列仅迁移后弃用,协商一律只走本键,**不长期双写** |
-| `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户未设 `users.settings.theme` 时生效) |
+| `default_theme` | string | `"system"` | 工作区默认主题模式 `light`/`dark`/`system`(README §6.12 主题契约:用户账号偏好 absent/`null` 时生效;三值语义与协商链见 theme.md §2.1/§2.2);非法值 → `422 invalid_theme_mode`(与 theme.md §3.3 / auth.md §3.5 统一,§3.3 已登记) |
 | `seat_limit` | int \| null | `null` | 席位上限(null=不限,供计费展示) |
 | `feature_flags` | object | `{}` | 功能开关位,如 `{"autopilot": true}`(产品级 Feature Flags 系统为未来规划,README §12) |
 
-> 写入 `settings` 采用**按键浅合并**(PATCH 语义):仅覆盖请求中出现的键,未出现的键保持原值;未知键允许透传以支持前向兼容,但服务端对已知键做类型校验,非法返回 400。
+> 写入 `settings` 采用**按键浅合并**(PATCH 语义):仅覆盖请求中出现的键,未出现的键保持原值;未知键允许透传以支持前向兼容,但服务端对已知键做类型校验——**已登记具名错误码的已知键从其具名码**(`default_theme` → `422 invalid_theme_mode`、`default_locale` → `422 unsupported_locale`,与 auth.md §3.1 canonical 一致),其余已知键类型非法返回 `400 validation_error`(§3.3)。
 
 ### 2.3 表:`workspace_invitations`(邀请)
 
@@ -253,7 +253,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 | GET | `/workspaces/{id}/invitations` | 列出邀请 | admin |
 | DELETE | `/workspaces/{id}/invitations/{inv_id}` | 撤销邀请 | admin |
 | POST | `/invitations/accept` | 凭 token 接受邀请(入册事务内**同事务为人类新成员播种 onboarding 清单**,onboarding.md §3.5,R3) | 已登录 |
-| GET | `/invitations/preview?token=` | 预览邀请(工作区名/角色/是否有效) | 公开(仅返回有限字段) |
+| GET | `/invitations/preview?token=` | 预览邀请(工作区名/角色/是否有效;**MES-76 H2:返回 `appearance.default_theme`(工作区默认主题,供未登录邀请接受页主题协商,theme.md §2.2/§3.1)——非敏感展示偏好,与既有工作区名同暴露面**;**仍仅返回有限公开字段,不开放完整 workspace detail,防工作区信息枚举**) | 公开(凭不可枚举邀请 token) |
 
 > 成员名册的读写端点见 member.md(`GET/PATCH/DELETE /workspaces/{id}/members`)。
 
@@ -271,7 +271,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
   "slug": "acme",
   "logo_url": null,
   "timezone": "Asia/Shanghai",
-  "settings": { "default_locale": "en" },
+  "settings": { "default_locale": "en", "default_theme": "system" },
   "my_role": "owner",
   "created_at": "2026-07-24T10:00:00Z",
   "updated_at": "2026-07-24T10:00:00Z"
@@ -348,7 +348,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
   "slug": "acme",
   "logo_url": "https://cdn.example/logo.png",
   "timezone": "Asia/Shanghai",
-  "settings": { "default_locale": "en", "default_status_set": "basic", "new_member_default_role": "member",
+  "settings": { "default_locale": "en", "default_theme": "dark", "default_status_set": "basic", "new_member_default_role": "member",
                 "seat_limit": 50, "feature_flags": { "autopilot": true } },
   "my_role": "admin",
   "created_at": "2026-07-24T10:00:00Z",
@@ -359,8 +359,11 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 **预览邀请(公开,仅有限字段)** `GET /api/v1/invitations/preview?token=invtk_Ab3...`
 ```json
 // 200 Response(未登录亦可,用于落地页展示;不暴露内部 id 之外敏感信息)
+// appearance.default_theme(MES-76 H2/R2-H5):供未登录邀请接受页主题协商链第 2 级读取
+// (theme.md §2.2/§2.3 首帧「精确注入」链路),非敏感展示偏好,与工作区名同暴露面
 { "valid": true, "workspace_name": "Acme Team", "workspace_logo_url": "...",
-  "role": "member", "expires_at": "2026-07-27T10:00:00Z" }
+  "role": "member", "expires_at": "2026-07-27T10:00:00Z",
+  "appearance": { "default_theme": "dark" } }
 // 无效/过期/撤销时:
 { "valid": false, "reason": "expired" }   // reason ∈ {expired, revoked, exhausted, not_found}
 ```
@@ -381,6 +384,7 @@ REST 基础路径 `/api/v1`;鉴权 `Authorization: Bearer <token>`(会话 JWT �
 | 400 | `validation_error` | slug 含大写/超长、name 超长等请求级格式错误 |
 | 422 | `invalid_timezone` | `timezone` 非合法 IANA 时区(与 auth.md §3.1 canonical 对齐,README §6.18) |
 | 422 | `unsupported_locale` | `settings.default_locale` 不在受支持 locale 清单内(与 auth.md §3.1 / i18n.md §3.5 对齐;**R4:locale 写入校验统一用具名 422,不再用 400 validation_error**) |
+| 422 | `invalid_theme_mode` | `settings.default_theme` 不在 `{light,dark,system}`(theme.md §3.3 唯一权威,本表同步登记;MES-76 H1 三处 owner 契约统一码) |
 | 401 | `unauthorized` | token 缺失/失效 |
 | 403 | `forbidden` | 非成员访问 / 角色不足(如非 owner 删除) |
 | 404 | `not_found` | 工作区不存在或对当前 principal 不可见 |

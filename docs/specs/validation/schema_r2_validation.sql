@@ -1,6 +1,20 @@
 -- ============================================================================
 -- Mesh Spec R2+R3+R4+R5 — PostgreSQL 16 全量 DDL 可执行性 + 行为验证脚本
--- 依据:docs/specs/README.md(Draft v3 / R2 + R3 + R4 + R5 修订)§6 全局权威契约 + 20 份功能 Spec
+-- 依据:docs/specs/README.md(Draft v3 / R2 + R3 + R4 + R5 修订)§6 全局权威契约 + 23 份功能 Spec
+-- MES-76 R2/R3(MES-74 架构/UX 评审三轮收口):auth sessions(workspace/scope/device_authz +
+--   cli 必绑 CHECK)+ device_authorizations(状态机 CHECK + user_code_hash 部分唯一 R3-M3 +
+--   approve/consume 原子条件更新)+ mesh_search_norm 归一函数(public schema + 显式
+--   regdictionary + IMMUTABLE,R2-H3/R3-M1)+ members.search_name 投影与五实体 trigram/prefix
+--   索引实跑 + 前缀查询表达式匹配断言 + identifier upper() 规范化等值(R3-M4)+
+--   runtime_token_hash UNIQUE 与停用置 NULL(R3-H4)+ T36/T37 正负行为断言。
+-- MES-76 R4(MES-74 第四轮收口):sessions 补 previous_token_hash/rotated_at(R4-M4 有界
+--   幂等轮换,T36 宽限窗语义断言);T37 改精确 11 条索引集合 + 关键 pg_get_indexdef +
+--   真实 1/2 字符前缀用例(强制关 seqscan 仅命名「表达式兼容性」,另保留自然规划 EXPLAIN);
+--   T38 词典升级路径**完整** smoke test(R5-H3 扩充):可观察行为差异的版本化函数(词典版本
+--   共存,新版新增连字符折叠)→ 回补 + 双写 → 事务外建完全部 11 条 _next 索引(9 表达式 + 2 投影)→
+--   单事务原子改名切换 → pg_depend/pg_get_expr 逐条断言 9 条表达式索引绑定新 OID、旧函数
+--   零依赖 → 实际删除旧函数/列/索引 → 前缀与 trigram 查询命中新索引
+--   (R4-H4:REINDEX CONCURRENTLY 不可在事务内,以分阶段在线迁移替代;不只空库建表)。
 -- R3(MES-7,HIGH-1～HIGH-9 + 3 建议):agent_config_versions 同租户/重叠 FK(T27);
 --   能力字段严格类型与归一(T28);集成外部身份全局唯一 + scope 异或 + vcs_links(T29);
 --   IM 投递台账多目的地(T30);data job RESTRICT/checkpoint/行台账恢复协议(T31);
@@ -27,6 +41,25 @@
 -- ============================================================================
 \set ON_ERROR_STOP on
 CREATE EXTENSION IF NOT EXISTS btree_gin;
+-- MES-76 R2/R3:搜索检索扩展(trigram 模糊 + 去重音归一),search-command-palette.md §2.2
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE EXTENSION IF NOT EXISTS unaccent;
+
+-- ----------------------------------------------------------------------------
+-- MES-76 R2-H3/R3-M1:检索归一唯一函数(索引 / 查询 / 回填同一入口)
+-- NFKD + 去重音 + 小写;IMMUTABLE 方可入表达式索引。**固定 schema(public)与显式
+-- regdictionary(public.unaccent)**:unaccent(text) 单参形式为 STABLE(读词典),
+-- 此处以显式词典双参形式包装并声明 IMMUTABLE——词典/扩展升级会使既有表达式索引陈旧,
+-- 迁移台账须记录 unaccent extversion 与本函数测试向量结果,词典变更后 REINDEX 全部
+-- mesh_search_norm 表达式索引 + 回补 members.search_name(search-command-palette.md §2.2)。
+-- ----------------------------------------------------------------------------
+-- 语言刻意选 plpgsql(永不内联):表达式索引的 indexprs 存「CREATE INDEX 时被规划器简化后的
+-- 表达式」——LANGUAGE sql 函数的简化形态随规划器内联行为而定(版本间可变),一旦查询表达式
+-- 的简化结果与 indexprs 分叉,索引匹配静默失效;plpgsql 两侧恒保持原函数调用,匹配跨版本
+-- 稳定(单次调用开销相对 trigram 运算可忽略)。
+CREATE OR REPLACE FUNCTION public.mesh_search_norm(t TEXT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+$$ BEGIN RETURN lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD))); END $$;
 
 -- ----------------------------------------------------------------------------
 -- R3 辅助函数(HIGH-2:调度能力与授权能力严格类型校验,供 CHECK 约束引用)
@@ -146,9 +179,9 @@ CREATE TABLE users (
   password_hash       TEXT NULL,
   password_changed_at TIMESTAMPTZ NULL,
   display_name        TEXT NOT NULL,
-  full_name           TEXT NULL,
+  -- MES-76 R3-M2 收口:users 无 full_name / bio 列(auth.md §2.2 / member.md §2.4 权威模型;
+  -- 显示名链为 members.display_override → users.display_name → users.email,README §6.1)
   avatar_url          TEXT NULL,
-  bio                 TEXT NULL,
   timezone            TEXT NULL,                            -- 展示层时区(IANA;R3 于 auth.md §2.2 登记,存储仍 UTC)
   settings            JSONB NOT NULL DEFAULT '{}',          -- R3(HIGH-7):账号级展示偏好真源 {locale, theme}(PATCH /api/v1/users/me 写入)
   status              TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','invited','disabled','deleted')),
@@ -681,7 +714,7 @@ CREATE TABLE runtimes (
   activation_token_hash      TEXT NULL,
   activation_expires_at      TIMESTAMPTZ NULL,
   activated_at               TIMESTAMPTZ NULL,
-  runtime_token_hash         TEXT NULL,
+  runtime_token_hash         TEXT NULL UNIQUE,              -- MES-76 R2-H2/R3-H4:mesh_rt_ 机器令牌唯一存储真源(不入 api_tokens;停用置 NULL)
   capabilities               JSONB NOT NULL DEFAULT '[]',
   labels                     JSONB NOT NULL DEFAULT '{}',
   hostname                   TEXT NULL,
@@ -2414,6 +2447,98 @@ BEGIN
 END $$;
 
 -- ============================================================================
+-- MES-76 R2/R3 修订 DDL:auth sessions / device_authorizations + 搜索归一与索引
+-- (auth.md §2.4/§2.4.2/§3.1.1、search-command-palette.md §2.2/member.md §2.2;
+--  R3-H4:本轮表/CHECK/FK/部分唯一/前缀与 GIN 索引真正纳入 PG16 验证,不再只跑旧脚本)
+-- ============================================================================
+
+-- sessions:refresh token / 会话,可撤销;CLI/设备会话的 workspace/scope 真源(auth.md §2.4)
+CREATE TABLE sessions (
+  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- = access JWT 的 sid 与 refresh 的 jti(R2-H1)
+  user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash              TEXT NOT NULL UNIQUE,                        -- 当前 refresh token SHA-256(不存明文)
+  previous_token_hash     TEXT NULL UNIQUE,                            -- R4-M4 有界幂等轮换:上一枚 refresh 哈希(宽限窗内识别被轮换的旧凭证)
+  rotated_at              TIMESTAMPTZ NULL,                            -- 最近轮换时刻(now()-rotated_at ≤ 宽限窗时旧凭证走宽限路径)
+  authenticated_at        TIMESTAMPTZ NULL,                            -- R6-H3:最近主动认证时刻(step-up 唯一真源)。NULL = 无主动认证证明(静默 SSO / 设备会话继承批准会话 NULL);建 session ≠ 主动认证,取消无条件默认;按来源显式赋值,窗口判据 IS NOT NULL AND now()-authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS
+  type                    TEXT NOT NULL DEFAULT 'web' CHECK (type IN ('web','cli','api')),
+  workspace_id            UUID NULL REFERENCES workspaces(id) ON DELETE CASCADE,   -- CLI/设备会话绑定工作区
+  granted_scopes          TEXT[] NOT NULL DEFAULT '{}',                -- 会话固化签发 scope(refresh 续签再与当前角色取交)
+  device_authorization_id UUID NULL,                                   -- FK 在 device_authorizations 建表后补(UNIQUE)
+  user_agent              TEXT NULL,
+  ip_address              INET NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_active_at          TIMESTAMPTZ NULL,
+  expires_at              TIMESTAMPTZ NOT NULL,
+  revoked_at              TIMESTAMPTZ NULL,
+  CHECK (type <> 'cli' OR workspace_id IS NOT NULL)                    -- R2-H1:设备会话必有绑定工作区
+);
+CREATE INDEX idx_sessions_user ON sessions (user_id) WHERE revoked_at IS NULL;
+
+-- device_authorizations:OAuth 设备码授权(auth.md §2.4.2;状态机 + 单次消费 + 短码复用安全)
+CREATE TABLE device_authorizations (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  device_code_hash    TEXT NOT NULL UNIQUE,                            -- HMAC-SHA256(pepper);128bit 无空间耗尽 → 全表 UNIQUE
+  user_code_hash      TEXT NOT NULL,                                   -- HMAC-SHA256(pepper);唯一性见部分唯一索引(R3-M3)
+  status              TEXT NOT NULL DEFAULT 'pending'
+                      CHECK (status IN ('pending','approved','denied','consumed','expired','invalidated')),
+  requested_scopes    TEXT[] NOT NULL DEFAULT '{}',
+  granted_scopes      TEXT[] NULL,                                     -- 批准时固化:请求 scope ∩ 名册行角色权限(R3-H5)
+  approved_by_user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+  approved_authenticated_at TIMESTAMPTZ NULL,                           -- R6-H3:批准者浏览器会话 authenticated_at 快照(approve 事务 FOR UPDATE 锁定读取;consume 时复制进 cli 会话,绝不以消费时刻冒充)
+  workspace_id        UUID NULL REFERENCES workspaces(id) ON DELETE SET NULL,
+  failed_attempts     INT NOT NULL DEFAULT 0 CHECK (failed_attempts >= 0),
+  request_ip          INET NULL,
+  approved_at         TIMESTAMPTZ NULL,
+  denied_at           TIMESTAMPTZ NULL,
+  consumed_at         TIMESTAMPTZ NULL,
+  invalidated_at      TIMESTAMPTZ NULL,
+  expires_at          TIMESTAMPTZ NOT NULL,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- R3-M3:user_code 低熵短码(≥20bit),全历史 UNIQUE 会使码空间随累计耗尽;
+-- 部分唯一仅约束活跃码(pending/approved),终态后允许安全复用
+CREATE UNIQUE INDEX uq_device_auth_user_code_active ON device_authorizations (user_code_hash)
+  WHERE status IN ('pending','approved');
+CREATE INDEX idx_device_auth_pending ON device_authorizations (expires_at) WHERE status = 'pending';
+
+-- sessions.device_authorization_id → device_authorizations(单码至多一会话)
+ALTER TABLE sessions
+  ADD CONSTRAINT fk_sessions_device_auth
+  FOREIGN KEY (device_authorization_id) REFERENCES device_authorizations(id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX uq_sessions_device_auth ON sessions (device_authorization_id);
+
+-- ----------------------------------------------------------------------------
+-- 搜索投影 + 归一表达式索引(search-command-palette.md §2.2 DDL 实跑,R2-H3/R3-M1)
+-- mesh_search_norm 见文件头部(public schema + 显式 regdictionary,IMMUTABLE)
+-- ----------------------------------------------------------------------------
+ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT '';
+
+-- members:trigram(≥3 字符)+ workspace-scoped pattern(1–2 字符前缀)
+CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops);
+CREATE INDEX idx_members_search_name_prefix ON members (workspace_id, search_name text_pattern_ops)
+  WHERE status <> 'removed';
+
+-- issues:identifier 等值快路径已有 UNIQUE(workspace_id, identifier);title 归一 trigram/pattern + 租户软删组合
+CREATE INDEX idx_issues_title_trgm ON issues USING gin ((public.mesh_search_norm(title)) gin_trgm_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_title_prefix ON issues (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_identifier_prefix ON issues (workspace_id, (public.mesh_search_norm(identifier)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_issues_ws_not_deleted ON issues (workspace_id, project_id)
+  WHERE deleted_at IS NULL;
+
+-- projects / views / chat_sessions
+CREATE INDEX idx_projects_name_trgm ON projects USING gin ((public.mesh_search_norm(name)) gin_trgm_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_projects_name_prefix ON projects (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_views_name_trgm ON views USING gin ((public.mesh_search_norm(name)) gin_trgm_ops);
+CREATE INDEX idx_views_name_prefix ON views (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops);
+CREATE INDEX idx_chat_sessions_title_trgm ON chat_sessions USING gin ((public.mesh_search_norm(title)) gin_trgm_ops);
+CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops);
+
+-- ============================================================================
 -- R3 修订行为验证(HIGH-1～HIGH-9 + 建议项;测试编号顺延 T27～T34,README §9)
 -- ============================================================================
 
@@ -3603,6 +3728,700 @@ BEGIN
   RAISE NOTICE 'PASS S2: chat_sessions.is_pinned 已删除;会话置顶经 favorites(target_type=chat_session)唯一表达';
 END $$;
 
+-- oauth_transactions:一次性 OAuth 事务(auth.md §2.4.3,R7-H3 建立,R8-H2 浏览器绑定 + R8-M1 DB 层不变量)
+CREATE TABLE oauth_transactions (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  state_hash     TEXT NOT NULL UNIQUE,                        -- SHA-256(state);state 明文仅在发起响应中出现
+  browser_locator_hash TEXT NOT NULL,                         -- R8-H2:浏览器绑定 locator 的 SHA-256 哈希(callback 必须匹配,防 login CSRF)
+  purpose        TEXT NOT NULL CHECK (purpose IN ('login','link','reauth')),
+  provider       TEXT NOT NULL,                               -- callback 校验 URL {provider} 与本字段一致(provider mix-up 防护)
+  user_id        UUID NULL REFERENCES users(id) ON DELETE CASCADE,   -- link/reauth:发起用户;login:NULL(条件 CHECK)
+  initiating_sid UUID NULL REFERENCES sessions(id) ON DELETE CASCADE, -- R8-M1:FK link/reauth 发起会话(reauth 仅更新此会话;会话被删级联删事务)
+  code_verifier  TEXT NOT NULL,                               -- PKCE verifier(生产加密存储,同 runtime_credentials 契约)
+  max_age        INT NULL CHECK (max_age IS NULL OR max_age >= 0),  -- R8-M1:link/reauth 条件 CHECK 必填;非负
+  safe_next      TEXT NULL,                                   -- 回跳目标(建事务时经 safeNextPath 守卫)
+  expires_at     TIMESTAMPTZ NOT NULL,                        -- TTL(默认 10 分钟)
+  consumed_at    TIMESTAMPTZ NULL,                            -- 一次性消费
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- R8-M1:purpose 条件不变量(DB 层强制,malformed transaction 建表即拒)
+  CHECK (
+       (purpose = 'login' AND user_id IS NULL AND initiating_sid IS NULL)
+    OR (purpose IN ('link','reauth') AND user_id IS NOT NULL
+                                       AND initiating_sid IS NOT NULL
+                                       AND max_age IS NOT NULL)
+  )
+);
+CREATE INDEX idx_oauth_tx_expires ON oauth_transactions (expires_at) WHERE consumed_at IS NULL;
+
+-- ===================== T36:auth sessions / 设备授权(MES-76 R2-H1/R3-H5/R3-M3)=====================
+DO $$
+DECLARE
+  v_authz UUID;
+  v_rows  INT;
+  v_user  UUID;
+BEGIN
+  SELECT id INTO v_user FROM users LIMIT 1;
+
+  -- ① 正例:web 会话 workspace 可为 NULL
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at)
+  VALUES ('abababab-0000-0000-0000-000000000001', v_user, 'mesh_rft_hash_web_1', 'web', now() + interval '30 days');
+  RAISE NOTICE 'PASS T36-1: web 会话 workspace_id 可为 NULL';
+
+  -- ② 负例:cli 会话必绑工作区(CHECK)
+  BEGIN
+    INSERT INTO sessions (user_id, token_hash, type, expires_at)
+    VALUES (v_user, 'mesh_rft_hash_cli_1', 'cli', now() + interval '30 days');
+    RAISE EXCEPTION 'T36 FAIL: cli 会话未绑工作区未被拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T36-2: CHECK 拒绝 cli 会话 workspace_id IS NULL(R2-H1 设备会话必绑)';
+  END;
+
+  -- ③ 状态机 CHECK
+  BEGIN
+    INSERT INTO device_authorizations (device_code_hash, user_code_hash, status, expires_at)
+    VALUES ('dc-bad', 'uc-bad', 'weird_state', now() + interval '15 minutes');
+    RAISE EXCEPTION 'T36 FAIL: 非法状态未被拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T36-3: device_authorizations 状态枚举 CHECK';
+  END;
+
+  -- ④ R3-M3 部分唯一:活跃码(pending/approved)user_code_hash 冲突;终态后允许安全复用
+  INSERT INTO device_authorizations (id, device_code_hash, user_code_hash, status, expires_at)
+  VALUES ('adadadad-0000-0000-0000-000000000001', 'dc-1', 'uc-shared', 'pending', now() + interval '15 minutes')
+  RETURNING id INTO v_authz;
+  BEGIN
+    INSERT INTO device_authorizations (device_code_hash, user_code_hash, status, expires_at)
+    VALUES ('dc-2', 'uc-shared', 'pending', now() + interval '15 minutes');
+    RAISE EXCEPTION 'T36 FAIL: 活跃期重复 user_code_hash 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T36-4: 活跃(pending/approved)user_code_hash 部分唯一';
+  END;
+  UPDATE device_authorizations SET status='consumed', consumed_at=now() WHERE id = v_authz;
+  INSERT INTO device_authorizations (device_code_hash, user_code_hash, status, expires_at)
+  VALUES ('dc-3', 'uc-shared', 'pending', now() + interval '15 minutes');
+  RAISE NOTICE 'PASS T36-5: 终态后 user_code_hash 允许安全复用(20bit 码空间不随历史耗尽)';
+
+  -- ⑤ approve/consume 条件更新原子性:首次恰 1 行,重复 0 行(并发批/拒不覆盖)
+  UPDATE device_authorizations SET status='approved', approved_at=now()
+   WHERE device_code_hash='dc-3' AND status='pending' AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T36 FAIL: approve 条件更新应恰影响 1 行';
+  UPDATE device_authorizations SET status='approved', approved_at=now()
+   WHERE device_code_hash='dc-3' AND status='pending' AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 重复 approve 应影响 0 行(原子迁移)';
+  RAISE NOTICE 'PASS T36-6: approve 条件更新原子性(WHERE pending AND expires_at>now(),1 行/0 行)';
+
+  -- ⑥ 单码至多一会话(sessions.device_authorization_id UNIQUE)
+  INSERT INTO sessions (user_id, token_hash, type, workspace_id, device_authorization_id, expires_at)
+  VALUES (v_user, 'mesh_rft_hash_cli_2', 'cli', '11111111-1111-1111-1111-111111111111',
+          (SELECT id FROM device_authorizations WHERE device_code_hash='dc-3'), now() + interval '30 days');
+  BEGIN
+    INSERT INTO sessions (user_id, token_hash, type, workspace_id, device_authorization_id, expires_at)
+    VALUES (v_user, 'mesh_rft_hash_cli_3', 'cli', '11111111-1111-1111-1111-111111111111',
+            (SELECT id FROM device_authorizations WHERE device_code_hash='dc-3'), now() + interval '30 days');
+    RAISE EXCEPTION 'T36 FAIL: 单码第二条会话未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T36-7: device_authorization_id UNIQUE(单码至多一会话)';
+  END;
+
+  -- ⑧ R5-H1 轮换仲裁 + 宽限「只发 access」协议(串行等价判定逻辑;真并行 e2e 在后端实现期,§3.8 断言清单)
+  -- 初始态:会话持有 refresh R0
+  UPDATE sessions SET token_hash='R0', previous_token_hash=NULL, rotated_at=NULL, revoked_at=NULL
+   WHERE id='abababab-0000-0000-0000-000000000001';
+
+  -- 胜者请求:条件轮换 WHERE token_hash=R0 AND 未撤销 AND 未过期 → 影响 1 行(仲裁胜出),previous=R0、rotated_at=now()
+  UPDATE sessions SET token_hash='R1', previous_token_hash=token_hash, rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T36 FAIL: 胜者条件轮换应影响 1 行(行数控裁)';
+
+  -- 后来者请求(携带 R0):条件轮换 WHERE token_hash='R0' → 影响 0 行(已轮换,仲裁败北)
+  UPDATE sessions SET token_hash='R2', previous_token_hash=token_hash, rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R0' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 后来者对已轮换 token 的条件轮换应影响 0 行(不得二次轮换)';
+
+  -- 后来者落宽限路径:previous_token_hash=R0 匹配 + 窗内 + 未撤销 + 未过期 → 只发 access(协议上不写库)
+  ASSERT EXISTS (SELECT 1 FROM sessions
+                  WHERE id='abababab-0000-0000-0000-000000000001'
+                    AND previous_token_hash='R0' AND revoked_at IS NULL
+                    AND rotated_at >= now() - interval '30 seconds' AND expires_at > now()),
+         'T36 FAIL: 窗内旧 refresh 应命中宽限路径条件(只发 access,不下发 refresh 明文)';
+  -- 宽限路径不写库的断言:token_hash/previous/rotated_at 保持胜者写入值
+  ASSERT (SELECT token_hash FROM sessions WHERE id='abababab-0000-0000-0000-000000000001') = 'R1'
+     AND (SELECT previous_token_hash FROM sessions WHERE id='abababab-0000-0000-0000-000000000001') = 'R0',
+         'T36 FAIL: 宽限路径不得变更 token_hash/previous_token_hash(不二次轮换、不放大)';
+
+  -- 超窗:rotated_at 移出 30s 窗 → 宽限条件不成立(重放按 401 失效)
+  UPDATE sessions SET rotated_at=now() - interval '120 seconds'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT NOT EXISTS (SELECT 1 FROM sessions
+                      WHERE id='abababab-0000-0000-0000-000000000001'
+                        AND previous_token_hash='R0' AND rotated_at >= now() - interval '30 seconds'),
+         'T36 FAIL: 超出宽限窗(120s > 30s)的旧 refresh 不应命中宽限路径';
+
+  -- 撤销后:revoked_at 非空 → 胜者路径(条件轮换 WHERE revoked_at IS NULL AND expires_at > now())与宽限路径(同条件)均拒绝
+  UPDATE sessions SET revoked_at=now(), rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  UPDATE sessions SET token_hash='R3', previous_token_hash=token_hash, rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R1' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话的条件轮换应影响 0 行';
+  ASSERT NOT EXISTS (SELECT 1 FROM sessions
+                      WHERE id='abababab-0000-0000-0000-000000000001'
+                        AND previous_token_hash='R0' AND revoked_at IS NULL AND expires_at > now()),
+         'T36 FAIL: 已撤销会话不应命中宽限路径';
+
+  -- 过期后(MES-78 HIGH-1):expires_at 已过 → 胜者路径与宽限路径均拒绝,过期会话不得经轮换复活
+  -- (refresh 为不透明随机串无内嵌 exp,sessions.expires_at 是到期唯一真源;与 T36-6 设备批准条件更新的 expires_at > now() 对齐)
+  UPDATE sessions SET revoked_at=NULL, rotated_at=now(), expires_at=now() - interval '1 day'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  UPDATE sessions SET token_hash='R4', previous_token_hash=token_hash, rotated_at=now()
+   WHERE id='abababab-0000-0000-0000-000000000001' AND token_hash='R1' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已过期会话的条件轮换应影响 0 行(不得复活)';
+  ASSERT NOT EXISTS (SELECT 1 FROM sessions
+                      WHERE id='abababab-0000-0000-0000-000000000001'
+                        AND previous_token_hash='R0' AND revoked_at IS NULL
+                        AND rotated_at >= now() - interval '30 seconds' AND expires_at > now()),
+         'T36 FAIL: 已过期会话不应命中宽限路径(窗内 + 未撤销亦不得放行)';
+  -- 恢复活跃态供后续 ⑨ step-up 断言使用
+  UPDATE sessions SET revoked_at=NULL, expires_at=now() + interval '30 days'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  RAISE NOTICE 'PASS T36-8: R5-H1 轮换协议判定(胜者行数控裁/后来者 0 行不二次轮换/宽限只发 access 不写库/超窗失效/撤销双路拒绝/过期双路拒绝不得复活)';
+
+  -- ⑨ R6-H3 authenticated_at step-up 状态机(取消无条件默认,按来源显式赋值)
+  -- 建 session ≠ 主动认证:新建会话 authenticated_at 可为 NULL(闸门不通过)
+  INSERT INTO sessions (id, user_id, token_hash, type, workspace_id, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000002', v_user, 'mesh_rft_cli_null', 'cli',
+          '11111111-1111-1111-1111-111111111111', now() + interval '30 days', NULL);
+  ASSERT NOT (SELECT authenticated_at IS NOT NULL AND now() - authenticated_at <= interval '900 seconds'
+                FROM sessions WHERE id='abababab-0000-0000-0000-000000000002'),
+         'T36 FAIL: authenticated_at=NULL 的会话(静默 SSO / 批准会话无新鲜认证继承)step-up 闸门不应通过';
+
+  -- 密码登录/注册:凭据校验成功显式置 now() → 窗口内通过
+  UPDATE sessions SET authenticated_at=now() WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT (SELECT authenticated_at IS NOT NULL AND now() - authenticated_at <= interval '900 seconds'
+            FROM sessions WHERE id='abababab-0000-0000-0000-000000000001'),
+         'T36 FAIL: 凭据校验成功置位后应在 900s 窗口内';
+
+  -- 设备会话继承:approved_authenticated_at 经锁定读取后复制进 cli 会话(不以消费时刻冒充)
+  UPDATE device_authorizations SET approved_authenticated_at=now() - interval '100 seconds'
+   WHERE device_code_hash='dc-3';
+  UPDATE sessions SET authenticated_at=(SELECT approved_authenticated_at FROM device_authorizations WHERE device_code_hash='dc-3')
+   WHERE id='abababab-0000-0000-0000-000000000002';
+  ASSERT (SELECT authenticated_at = (SELECT approved_authenticated_at FROM device_authorizations WHERE device_code_hash='dc-3')
+            FROM sessions WHERE id='abababab-0000-0000-0000-000000000002'),
+         'T36 FAIL: cli 会话 authenticated_at 应精确继承批准记录快照(非消费时刻)';
+  -- 批准会话无新鲜认证(NULL)→ 继承 NULL → 闸门不通过(旧 Web 会话批准设备码负向路径)
+  UPDATE device_authorizations SET approved_authenticated_at=NULL WHERE device_code_hash='dc-3';
+  UPDATE sessions SET authenticated_at=(SELECT approved_authenticated_at FROM device_authorizations WHERE device_code_hash='dc-3')
+   WHERE id='abababab-0000-0000-0000-000000000002';
+  ASSERT (SELECT authenticated_at IS NULL FROM sessions WHERE id='abababab-0000-0000-0000-000000000002'),
+         'T36 FAIL: 批准会话无新鲜认证时 cli 会话应继承 NULL(闸门不通过 → CLI 敏感操作 403 reauth_required)';
+
+  -- 超窗:1000s 前的认证超出窗口 → 闸门不通过(需经 POST /auth/reauth 恢复)
+  UPDATE sessions SET authenticated_at=now() - interval '1000 seconds'
+   WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT NOT (SELECT authenticated_at IS NOT NULL AND now() - authenticated_at <= interval '900 seconds'
+                FROM sessions WHERE id='abababab-0000-0000-0000-000000000001'),
+         'T36 FAIL: 1000s 前的认证应超出 step-up 窗口(需再认证)';
+  -- reauth 恢复:更新为 now() → 窗口内通过
+  UPDATE sessions SET authenticated_at=now() WHERE id='abababab-0000-0000-0000-000000000001';
+  ASSERT (SELECT authenticated_at IS NOT NULL AND now() - authenticated_at <= interval '900 seconds'
+            FROM sessions WHERE id='abababab-0000-0000-0000-000000000001'),
+         'T36 FAIL: reauth 后应重新在窗口内';
+  RAISE NOTICE 'PASS T36-9: authenticated_at step-up 状态机(NULL 默认/来源显式赋值/设备继承批准快照非消费时刻/窗口判据/reauth 恢复)';
+END $$;
+
+-- T36-10:oauth_transactions 一次性事务语义(R7-H3 建立;R8-H2 浏览器绑定/provider mix-up;R8-M1 DB 层不变量)
+DO $$
+DECLARE
+  v_rows INT;
+  v_sid  UUID;
+  v_sid_cli UUID;
+  v_sid_exp UUID;
+  v_uid  UUID;
+BEGIN
+  SELECT id INTO v_uid FROM users LIMIT 1;
+
+  -- purpose CHECK:非法目的被拒
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, code_verifier, expires_at)
+    VALUES ('h-bad', 'loc', 'signup', 'mock', 'v', now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: 非法 purpose 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- R8-M1 malformed transaction DB 层即拒(不只靠应用 fail-closed)
+  -- (a) login 携带 user_id → 条件 CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, code_verifier, expires_at)
+    VALUES ('h-bad-a', 'loc', 'login', 'mock', v_uid, 'v', now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: login 携带 user_id 未被条件 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- 测试用会话:web(正常)/ cli(类型不符)/ web 已过期
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000003', v_uid, 'mesh_rft_web_reauth', 'web', now() + interval '30 days', now());
+  SELECT id INTO v_sid FROM sessions WHERE id='abababab-0000-0000-0000-000000000003';
+  INSERT INTO sessions (id, user_id, token_hash, type, workspace_id, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000004', v_uid, 'mesh_rft_cli_tx', 'cli',
+          '11111111-1111-1111-1111-111111111111', now() + interval '30 days', now());
+  SELECT id INTO v_sid_cli FROM sessions WHERE id='abababab-0000-0000-0000-000000000004';
+  INSERT INTO sessions (id, user_id, token_hash, type, expires_at, authenticated_at)
+  VALUES ('abababab-0000-0000-0000-000000000005', v_uid, 'mesh_rft_web_expired', 'web', now() - interval '1 minute', now());
+  SELECT id INTO v_sid_exp FROM sessions WHERE id='abababab-0000-0000-0000-000000000005';
+
+  -- (b) link 缺 initiating_sid → 条件 CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-b', 'loc', 'link', 'mock', v_uid, 'v', 0, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: link 缺 initiating_sid 未被条件 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  -- (c) max_age < 0 → CHECK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-c', 'loc', 'reauth', 'mock', v_uid, v_sid, 'v', -1, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: max_age < 0 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+  -- (d) initiating_sid FK:不存在的会话 → FK 拒绝
+  BEGIN
+    INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+    VALUES ('h-bad-d', 'loc', 'reauth', 'mock', v_uid, '99999999-9999-0000-0000-000000000099', 'v', 0, now() + interval '10 minutes');
+    RAISE EXCEPTION 'T36 FAIL: initiating_sid 外键未拒绝不存在的会话';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  -- 合法事务:login(user_id/sid 必空)+ reauth(绑定发起会话 + locator 哈希)
+  INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, code_verifier, expires_at)
+  VALUES ('h-login', 'loc-login', 'login', 'mock', 'v1', now() + interval '10 minutes');
+  INSERT INTO oauth_transactions (state_hash, browser_locator_hash, purpose, provider, user_id, initiating_sid, code_verifier, max_age, expires_at)
+  VALUES ('h-reauth', 'loc-reauth', 'reauth', 'mock', v_uid, v_sid, 'v2', 0, now() + interval '10 minutes');
+
+  -- R8-H2 浏览器绑定:攻击者 locator 不匹配 → 消费被拒(事务仍未消费)
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-attacker' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 攻击者 locator 不匹配应拒绝消费(login CSRF 防护)';
+  -- provider mix-up:URL provider 与事务 provider 不符 → 查无事务(拒绝)
+  ASSERT NOT EXISTS (SELECT 1 FROM oauth_transactions WHERE state_hash='h-reauth' AND provider='other-provider'),
+         'T36 FAIL: provider mix-up 校验应查无事务';
+  -- 正确 locator + provider → 原子消费 1 行;重放 0 行
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-reauth' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T36 FAIL: 正确 locator 首次消费应影响 1 行';
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-reauth' AND browser_locator_hash='loc-reauth' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 重放消费应影响 0 行(state 一次性,防重放)';
+
+  -- 过期事务不可消费
+  UPDATE oauth_transactions SET expires_at=now() - interval '1 minute' WHERE state_hash='h-login';
+  UPDATE oauth_transactions SET consumed_at=now()
+   WHERE state_hash='h-login' AND consumed_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 过期事务不可消费';
+
+  -- R8 reauth callback 重校验完整会话定位不变量(user_id + type + 未撤销 + 未过期)
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 1, 'T36 FAIL: 正常 web 发起会话应通过完整不变量';
+  -- 类型不符(cli 会话)→ 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid_cli AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: cli 类型会话不得通过 web 不变量(type 校验)';
+  -- 会话已过期 → 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid_exp AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已过期会话不得通过不变量(expires_at 校验)';
+  -- 属主不符 → 0 行
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND user_id='99999999-9999-0000-0000-000000000099' AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 属主不符不得通过不变量(user_id 校验)';
+  -- 会话已撤销 → 0 行(往返期间撤销 → link/reauth callback 拒绝)
+  UPDATE sessions SET revoked_at=now() WHERE id=v_sid;
+  UPDATE sessions SET authenticated_at=now()
+   WHERE id=v_sid AND user_id=v_uid AND type='web' AND revoked_at IS NULL AND expires_at > now();
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T36 FAIL: 已撤销会话不得通过 reauth 更新 authenticated_at(revoked_at 校验)';
+  RAISE NOTICE 'PASS T36-10: oauth_transactions(purpose/条件 CHECK/FK 拒 malformed/浏览器绑定 locator 防 login CSRF/provider mix-up/原子消费与重放/过期拒绝/完整会话不变量 user_id+type+expired+revoked)';
+END $$;
+
+-- T37 前置:批量行 + ANALYZE,使前缀路径 EXPLAIN 断言稳定(选择率接近生产形态,
+-- 小表统计下规划器可能误选工作区唯一索引,非索引不可用)
+INSERT INTO users (id, email, display_name)
+SELECT gen_random_uuid(), 'bulk-'||g||'@x.dev', 'Bulk User '||g FROM generate_series(1,3000) g;
+INSERT INTO members (workspace_id, member_type, user_id, role, display_override, search_name)
+SELECT '11111111-1111-1111-1111-111111111111', 'human', u.id, 'member', 'Bulk '||u.email, public.mesh_search_norm('Bulk '||u.email)
+FROM (SELECT id, email FROM users WHERE email LIKE 'bulk-%') u;
+ANALYZE members;
+
+-- ===================== T37:搜索归一函数 + 索引 + identifier 快路径 + runtime 令牌真源(MES-76 R2-H3/R3-M1/R3-M4/R3-H4)=====================
+DO $$
+DECLARE
+  v_plan   TEXT := '';
+  v_rec    RECORD;
+  v_member UUID;
+  v_rt1    UUID;
+  v_rt2    UUID;
+BEGIN
+  -- ① 归一行为:NFKD + 去重音 + 小写(R3-M1)
+  ASSERT public.mesh_search_norm('José') = 'jose', 'T37 FAIL: mesh_search_norm(José) 应为 jose';
+  ASSERT public.mesh_search_norm('ZHANG Wei') = 'zhang wei', 'T37 FAIL: 大写应归一小写';
+  ASSERT public.mesh_search_norm(NULL) IS NULL, 'T37 FAIL: NULL 输入应返回 NULL';
+  RAISE NOTICE 'PASS T37-1: mesh_search_norm 归一行为(José→jose、大写→小写、NULL→NULL)';
+
+  -- ② IMMUTABLE 声明(表达式索引前提)+ 固定 schema
+  ASSERT (SELECT provolatile FROM pg_proc WHERE proname='mesh_search_norm' AND pronamespace='public'::regnamespace LIMIT 1) = 'i',
+         'T37 FAIL: public.mesh_search_norm 应为 IMMUTABLE';
+  RAISE NOTICE 'PASS T37-2: public.mesh_search_norm 为 IMMUTABLE(表达式索引前提)';
+
+  -- ③ 搜索索引精确集合(R4-M1:11 条精确断言,缺一即失败;并校验关键 indexdef)
+  ASSERT (SELECT count(*) FROM pg_indexes
+           WHERE indexname IN ('idx_members_search_name_trgm','idx_members_search_name_prefix',
+                               'idx_issues_title_trgm','idx_issues_title_prefix','idx_issues_identifier_prefix',
+                               'idx_projects_name_trgm','idx_projects_name_prefix',
+                               'idx_views_name_trgm','idx_views_name_prefix',
+                               'idx_chat_sessions_title_trgm','idx_chat_sessions_title_prefix')) = 11,
+         'T37 FAIL: 搜索索引应为精确 11 条(9 条 mesh_search_norm 表达式索引 + 2 条成员投影索引)';
+  -- 注:pg_get_indexdef 按 search_path 归一显示(public. 缺省即省略),故断言匹配无 schema 前缀形;
+  -- DDL 源文本一律 public. 限定(与 Spec §2.2 逐字一致),二者不矛盾
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_members_search_name_prefix')
+         LIKE '%text_pattern_ops%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_members_search_name_prefix')
+         LIKE '%WHERE (status <> ''removed''::text)%',
+         'T37 FAIL: 成员前缀索引应为 text_pattern_ops + 部分谓词 status<>removed';
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_title_trgm')
+         LIKE '%gin_trgm_ops%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_title_trgm')
+         LIKE '%mesh_search_norm(title)%',
+         'T37 FAIL: issue title trigram 索引应为 mesh_search_norm(title) 表达式 + gin_trgm_ops';
+  ASSERT (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_identifier_prefix')
+         LIKE '%mesh_search_norm(identifier)%' AND
+         (SELECT indexdef FROM pg_indexes WHERE indexname='idx_issues_identifier_prefix')
+         LIKE '%text_pattern_ops%',
+         'T37 FAIL: identifier 前缀索引应为 mesh_search_norm(identifier) 表达式 + text_pattern_ops';
+  RAISE NOTICE 'PASS T37-3: 11 条搜索索引精确集合 + 关键 indexdef(表达式/算子/部分谓词)校验';
+
+  -- ④ 投影回补与索引同一函数(一致性)
+  INSERT INTO members (id, workspace_id, member_type, user_id, role, display_override)
+  VALUES ('eeeeeeee-7777-0000-0000-000000000076', '11111111-1111-1111-1111-111111111111', 'human',
+          (SELECT id FROM users LIMIT 1), 'member', 'José 管理员')
+  RETURNING id INTO v_member;
+  UPDATE members SET search_name = public.mesh_search_norm(display_override) WHERE id = v_member;
+  ASSERT (SELECT search_name FROM members WHERE id = v_member) = 'jose 管理员',
+         'T37 FAIL: search_name 投影应与 mesh_search_norm 一致';
+  RAISE NOTICE 'PASS T37-4: members.search_name 投影与归一函数一致(José 管理员→jose 管理员)';
+
+  -- ⑤ 表达式兼容性断言(R4-M1:真实 1/2 字符用例;强制关 seqscan 只为证明「查询表达式与
+  --    索引表达式逐字匹配、pattern 索引可用」,不代表规划器选择;查询携带 status<>'removed'
+  --    可见性谓词,与部分索引谓词一致,§3.3 名册可见性同口径)
+  SET LOCAL enable_seqscan = off;
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''j'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T37 FAIL: 1 字符前缀查询与 pattern 索引表达式不匹配(关 seqscan 后仍不可用)';
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''jo'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T37 FAIL: 2 字符前缀查询与 pattern 索引表达式不匹配(关 seqscan 后仍不可用)';
+  RAISE NOTICE 'PASS T37-5: 表达式兼容性(真实 1/2 字符前缀查询均可用 pattern 索引,关 seqscan 下命中)';
+
+  -- ⑤b 真实规模自然规划断言(R4-M1:不强制 planner——批量行 + ANALYZE 后选择性前缀
+  --     应由规划器自然选中 pattern 索引;此项失败 = 索引对真实查询无效,而非规划器偏好)
+  SET LOCAL enable_seqscan = on;
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''jo'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T37 FAIL: 真实规模自然规划下 2 字符前缀查询未选中 pattern 索引(索引对真实查询无效)';
+  RAISE NOTICE 'PASS T37-5b: 真实规模不强制 planner,前缀查询自然命中 idx_members_search_name_prefix';
+
+  -- ⑥ identifier 快路径 canonical uppercase(R3-M4:web-1 命中 WEB-1)
+  ASSERT EXISTS (SELECT 1 FROM issues
+                  WHERE workspace_id = '11111111-1111-1111-1111-111111111111'
+                    AND identifier = upper('web-1')),
+         'T37 FAIL: 小写输入 web-1 应经 upper() 规范化等值命中 WEB-1';
+  RAISE NOTICE 'PASS T37-6: identifier 快路径 upper() 规范化等值(web-1 → WEB-1)';
+
+  -- ⑦ runtime_token_hash UNIQUE(R3-H4:mesh_rt_ 唯一真源)
+  INSERT INTO runtimes (id, workspace_id, name, runtime_token_hash)
+  VALUES ('a1a1a1a1-7777-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 't37-rt-1', 'mesh_rt_dup_hash')
+  RETURNING id INTO v_rt1;
+  INSERT INTO runtimes (id, workspace_id, name, runtime_token_hash)
+  VALUES ('a1a1a1a1-7777-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 't37-rt-2', NULL)
+  RETURNING id INTO v_rt2;
+  BEGIN
+    UPDATE runtimes SET runtime_token_hash='mesh_rt_dup_hash' WHERE id = v_rt2;
+    RAISE EXCEPTION 'T37 FAIL: 重复 runtime_token_hash 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T37-7: runtime_token_hash UNIQUE(mesh_rt_ 唯一真源,重复哈希被拒)';
+  END;
+  -- 停用 = 置 NULL(允许多行 NULL,不冲突)
+  UPDATE runtimes SET runtime_token_hash=NULL WHERE id = v_rt1;
+  ASSERT (SELECT count(*) FROM runtimes WHERE name IN ('t37-rt-1','t37-rt-2') AND runtime_token_hash IS NULL) = 2,
+         'T37 FAIL: 停用清除哈希应允许多行 NULL';
+  RAISE NOTICE 'PASS T37-8: 停用置 NULL 合法(多行 NULL 不冲突,令牌即失效)';
+END $$;
+
+-- T38:start
+-- ===================== T38:词典升级路径完整 smoke test(R4-H4 建立,R5-H3 扩充,R6-H4 真实事务边界,R7-M2 标记截段)
+-- 结构与生产分阶段迁移逐段对应:阶段 1 事务外建行为差异新版函数(词典版本共存)→
+-- 阶段 2 事务外加列 + 回补 + 双写 → 阶段 3 事务外 CREATE INDEX CONCURRENTLY ×11 →
+-- 阶段 4 单一快速事务只做改名(清理前断言新函数精确绑定 9 条规范索引、旧函数精确绑定
+-- 9 条 _prev)→ COMMIT → 阶段 5/6 COMMIT 后可见状态行为验证 → 阶段 7 逐条事务外
+-- DROP INDEX CONCURRENTLY → 阶段 8 断言旧函数零依赖并删旧函数/列 → 阶段 9 清理后行为验证 =====================
+
+-- 阶段 1(事务外):新版归一函数——与旧版**可观察行为不同**(模拟词典/规则升级:连字符折叠为空格)
+CREATE FUNCTION public.mesh_search_norm_next(t TEXT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
+$$ BEGIN RETURN lower(public.unaccent('public.unaccent'::regdictionary, normalize(replace(t, '-', ' '), NFKD))); END $$;
+
+DO $$
+BEGIN
+  ASSERT public.mesh_search_norm('alpha-beta') = 'alpha-beta', 'T38 FAIL: 旧版函数应保留连字符';
+  ASSERT public.mesh_search_norm_next('alpha-beta') = 'alpha beta', 'T38 FAIL: 新版函数应折叠连字符为空格(可观察行为差异)';
+  ASSERT public.mesh_search_norm_next('José') = 'jose', 'T38 FAIL: 新版基础归一行为不变(José→jose)';
+  RAISE NOTICE 'PASS T38-1: 词典版本共存(新旧函数并存,行为可观察差异:连字符 alpha-beta vs alpha beta)';
+END $$;
+
+-- 阶段 2(事务外):新增投影列 + 回补(生产按 spec §2.2 分批 ≤1 万行 + 双写;smoke test 单批)
+ALTER TABLE members ADD COLUMN search_name_next TEXT NOT NULL DEFAULT '';
+UPDATE members SET search_name_next = public.mesh_search_norm_next(COALESCE(display_override, ''));
+
+-- 阶段 3(事务外,逐条 CREATE INDEX CONCURRENTLY):切换前建完全部 11 条 _next 索引
+CREATE INDEX CONCURRENTLY idx_issues_title_trgm_next ON issues USING gin ((public.mesh_search_norm_next(title)) gin_trgm_ops) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY idx_issues_title_prefix_next ON issues (workspace_id, (public.mesh_search_norm_next(title)) text_pattern_ops) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY idx_issues_identifier_prefix_next ON issues (workspace_id, (public.mesh_search_norm_next(identifier)) text_pattern_ops) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY idx_projects_name_trgm_next ON projects USING gin ((public.mesh_search_norm_next(name)) gin_trgm_ops) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY idx_projects_name_prefix_next ON projects (workspace_id, (public.mesh_search_norm_next(name)) text_pattern_ops) WHERE deleted_at IS NULL;
+CREATE INDEX CONCURRENTLY idx_views_name_trgm_next ON views USING gin ((public.mesh_search_norm_next(name)) gin_trgm_ops);
+CREATE INDEX CONCURRENTLY idx_views_name_prefix_next ON views (workspace_id, (public.mesh_search_norm_next(name)) text_pattern_ops);
+CREATE INDEX CONCURRENTLY idx_chat_sessions_title_trgm_next ON chat_sessions USING gin ((public.mesh_search_norm_next(title)) gin_trgm_ops);
+CREATE INDEX CONCURRENTLY idx_chat_sessions_title_prefix_next ON chat_sessions (workspace_id, (public.mesh_search_norm_next(title)) text_pattern_ops);
+CREATE INDEX CONCURRENTLY idx_members_search_name_trgm_next ON members USING gin (search_name_next gin_trgm_ops);
+CREATE INDEX CONCURRENTLY idx_members_search_name_prefix_next ON members (workspace_id, search_name_next text_pattern_ops) WHERE status <> 'removed';
+
+-- 阶段 4(单一快速事务,只做改名 + 清理前双侧精确绑定断言;本 DO 结束即 COMMIT)
+DO $$
+DECLARE
+  v_old_oid OID;
+  v_new_oid OID;
+  v_new_bound INT;
+  v_old_bound INT;
+BEGIN
+  SELECT oid INTO v_old_oid FROM pg_proc WHERE proname='mesh_search_norm';
+  SELECT oid INTO v_new_oid FROM pg_proc WHERE proname='mesh_search_norm_next';
+
+  -- 4a. 原子改名:函数 / 投影列 / 11 条索引(改名不更 OID)
+  ALTER FUNCTION public.mesh_search_norm RENAME TO mesh_search_norm_prev;
+  ALTER FUNCTION public.mesh_search_norm_next RENAME TO mesh_search_norm;
+  ALTER TABLE members RENAME COLUMN search_name TO search_name_prev;
+  ALTER TABLE members RENAME COLUMN search_name_next TO search_name;
+  ALTER INDEX idx_issues_title_trgm RENAME TO idx_issues_title_trgm_prev;
+  ALTER INDEX idx_issues_title_trgm_next RENAME TO idx_issues_title_trgm;
+  ALTER INDEX idx_issues_title_prefix RENAME TO idx_issues_title_prefix_prev;
+  ALTER INDEX idx_issues_title_prefix_next RENAME TO idx_issues_title_prefix;
+  ALTER INDEX idx_issues_identifier_prefix RENAME TO idx_issues_identifier_prefix_prev;
+  ALTER INDEX idx_issues_identifier_prefix_next RENAME TO idx_issues_identifier_prefix;
+  ALTER INDEX idx_projects_name_trgm RENAME TO idx_projects_name_trgm_prev;
+  ALTER INDEX idx_projects_name_trgm_next RENAME TO idx_projects_name_trgm;
+  ALTER INDEX idx_projects_name_prefix RENAME TO idx_projects_name_prefix_prev;
+  ALTER INDEX idx_projects_name_prefix_next RENAME TO idx_projects_name_prefix;
+  ALTER INDEX idx_views_name_trgm RENAME TO idx_views_name_trgm_prev;
+  ALTER INDEX idx_views_name_trgm_next RENAME TO idx_views_name_trgm;
+  ALTER INDEX idx_views_name_prefix RENAME TO idx_views_name_prefix_prev;
+  ALTER INDEX idx_views_name_prefix_next RENAME TO idx_views_name_prefix;
+  ALTER INDEX idx_chat_sessions_title_trgm RENAME TO idx_chat_sessions_title_trgm_prev;
+  ALTER INDEX idx_chat_sessions_title_trgm_next RENAME TO idx_chat_sessions_title_trgm;
+  ALTER INDEX idx_chat_sessions_title_prefix RENAME TO idx_chat_sessions_title_prefix_prev;
+  ALTER INDEX idx_chat_sessions_title_prefix_next RENAME TO idx_chat_sessions_title_prefix;
+  ALTER INDEX idx_members_search_name_trgm RENAME TO idx_members_search_name_trgm_prev;
+  ALTER INDEX idx_members_search_name_trgm_next RENAME TO idx_members_search_name_trgm;
+  ALTER INDEX idx_members_search_name_prefix RENAME TO idx_members_search_name_prefix_prev;
+  ALTER INDEX idx_members_search_name_prefix_next RENAME TO idx_members_search_name_prefix;
+
+  -- 4b. 清理前断言(此时 11 条 _prev 仍在):新函数精确绑定 9 条规范表达式索引
+  SELECT count(DISTINCT c.relname) INTO v_new_bound
+  FROM pg_depend d JOIN pg_class c ON c.oid = d.objid
+  WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_proc'::regclass
+    AND d.refobjid = v_new_oid
+    AND c.relname IN ('idx_issues_title_trgm','idx_issues_title_prefix','idx_issues_identifier_prefix',
+                      'idx_projects_name_trgm','idx_projects_name_prefix',
+                      'idx_views_name_trgm','idx_views_name_prefix',
+                      'idx_chat_sessions_title_trgm','idx_chat_sessions_title_prefix');
+  ASSERT v_new_bound = 9, 'T38 FAIL: 切换后新函数应精确绑定 9 条规范表达式索引(pg_depend 计数 = 9)';
+
+  -- 4c. 清理前断言:旧函数精确绑定 9 条 _prev 表达式索引(_prev 未删,依赖理应仍在)
+  SELECT count(DISTINCT c.relname) INTO v_old_bound
+  FROM pg_depend d JOIN pg_class c ON c.oid = d.objid
+  WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_proc'::regclass
+    AND d.refobjid = v_old_oid
+    AND c.relname IN ('idx_issues_title_trgm_prev','idx_issues_title_prefix_prev','idx_issues_identifier_prefix_prev',
+                      'idx_projects_name_trgm_prev','idx_projects_name_prefix_prev',
+                      'idx_views_name_trgm_prev','idx_views_name_prefix_prev',
+                      'idx_chat_sessions_title_trgm_prev','idx_chat_sessions_title_prefix_prev');
+  ASSERT v_old_bound = 9, 'T38 FAIL: 清理前旧函数应精确绑定 9 条 _prev 表达式索引(改名不更 OID)';
+
+  -- 4d. 规范函数名指向新实现 + indexdef 表达式文本校验
+  ASSERT (SELECT oid FROM pg_proc WHERE proname='mesh_search_norm') = v_new_oid,
+         'T38 FAIL: 切换后 public.mesh_search_norm 规范名应指向新版实现';
+  ASSERT (SELECT pg_get_indexdef(c.oid) FROM pg_class c WHERE c.relname='idx_issues_title_trgm')
+         LIKE '%mesh_search_norm(title)%' AND
+         (SELECT pg_get_indexdef(c.oid) FROM pg_class c WHERE c.relname='idx_issues_title_trgm')
+         NOT LIKE '%mesh_search_norm_prev%',
+         'T38 FAIL: 规范表达式索引 indexdef 应显示 mesh_search_norm(绑定新实现)';
+  RAISE NOTICE 'PASS T38-2: 单一快速事务原子改名(新函数绑定 9 条规范索引/旧函数绑定 9 条 _prev,indexdef 校验)→ COMMIT';
+END $$;
+
+-- 阶段 5(COMMIT 后可见状态,事务外):批量行使规划器在真实选择率下自然选中索引
+INSERT INTO issues (id, workspace_id, identifier_namespace_key, number, identifier, title, status_id, state_category)
+SELECT gen_random_uuid(), '11111111-1111-1111-1111-111111111111', 'T38', g, 'T38-'||g,
+       'Gamma Noise Title '||g, 'eeeeeeee-0000-0000-0000-000000000001', 'todo'
+FROM generate_series(1,3000) g;
+ANALYZE issues;
+
+-- 阶段 6(COMMIT 后行为验证事务):新折叠行为落投影 + 前缀自然命中 + trigram 表达式可用
+DO $$
+DECLARE
+  v_plan TEXT := '';
+  v_rec  RECORD;
+BEGIN
+  ASSERT public.mesh_search_norm('alpha-beta') = 'alpha beta', 'T38 FAIL: 切换后规范函数应具新版连字符折叠行为';
+  ASSERT public.mesh_search_norm('José') = 'jose', 'T38 FAIL: 基础归一行为不变';
+  -- 回补一致性:新投影 = 以新函数重归一旧投影(行为变更迁移的正确不变量——
+  -- 连字符折叠使含连字符的值合法地不同,严格相等不是回补契约;须在新成员插入前断言)
+  ASSERT NOT EXISTS (SELECT 1 FROM members
+                      WHERE search_name IS DISTINCT FROM public.mesh_search_norm(search_name_prev)),
+         'T38 FAIL: 新投影应等于以新函数重归一旧投影(回补遗漏/错误)';
+  INSERT INTO users (id, email, display_name) VALUES ('aaaaaaaa-7777-0000-0000-000000000076', 't38-user@x.dev', 'T38 User');
+  INSERT INTO members (id, workspace_id, member_type, user_id, role, display_override, search_name)
+  VALUES ('dddddddd-7777-0000-0000-000000000076', '11111111-1111-1111-1111-111111111111', 'human',
+          'aaaaaaaa-7777-0000-0000-000000000076', 'member', 'Alpha-Beta Tester', public.mesh_search_norm('Alpha-Beta Tester'));
+  ASSERT (SELECT search_name FROM members WHERE id='dddddddd-7777-0000-0000-000000000076') = 'alpha beta tester',
+         'T38 FAIL: 切换后新折叠行为(连字符→空格)应落入投影';
+  -- 前缀查询自然命中规范 pattern 索引(不强制 planner)
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''alpha b'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T38 FAIL: COMMIT 后前缀查询应自然命中规范 pattern 索引';
+  -- trigram 表达式索引可用(强制 bitmap 路径验证表达式匹配,自然选择由 §10 真实规模验收)
+  SET LOCAL enable_seqscan = off;
+  SET LOCAL enable_indexscan = off;
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM issues
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND deleted_at IS NULL
+         AND public.mesh_search_norm(title) % public.mesh_search_norm(''zebra'')'
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_issues_title_trgm%',
+         'T38 FAIL: COMMIT 后 trigram 表达式查询应可走规范 GIN 索引(表达式不匹配则 bitmap 不可用)';
+  RAISE NOTICE 'PASS T38-3: COMMIT 后可见状态行为验证(新折叠落投影/前缀自然命中/trigram 表达式可用)';
+END $$;
+
+-- 阶段 7(事务外,逐条 DROP INDEX CONCURRENTLY:生产契约要求的并发安全删除)
+DROP INDEX CONCURRENTLY idx_issues_title_trgm_prev;
+DROP INDEX CONCURRENTLY idx_issues_title_prefix_prev;
+DROP INDEX CONCURRENTLY idx_issues_identifier_prefix_prev;
+DROP INDEX CONCURRENTLY idx_projects_name_trgm_prev;
+DROP INDEX CONCURRENTLY idx_projects_name_prefix_prev;
+DROP INDEX CONCURRENTLY idx_views_name_trgm_prev;
+DROP INDEX CONCURRENTLY idx_views_name_prefix_prev;
+DROP INDEX CONCURRENTLY idx_chat_sessions_title_trgm_prev;
+DROP INDEX CONCURRENTLY idx_chat_sessions_title_prefix_prev;
+DROP INDEX CONCURRENTLY idx_members_search_name_trgm_prev;
+DROP INDEX CONCURRENTLY idx_members_search_name_prefix_prev;
+
+-- 阶段 8(事务):旧函数零依赖断言(_prev 索引已全部删除)→ 删旧函数/旧列
+DO $$
+DECLARE
+  v_old_deps INT;
+BEGIN
+  SELECT count(*) INTO v_old_deps FROM pg_depend
+   WHERE refobjid = (SELECT oid FROM pg_proc WHERE proname='mesh_search_norm_prev')
+     AND refclassid = 'pg_proc'::regclass AND classid = 'pg_class'::regclass;
+  ASSERT v_old_deps = 0, 'T38 FAIL: _prev 索引删除后旧函数应零索引依赖(9 条表达式索引已全迁移)';
+  DROP FUNCTION public.mesh_search_norm_prev(TEXT);
+  ASSERT NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname='mesh_search_norm_prev'),
+         'T38 FAIL: 旧版函数应已实际删除';
+  ALTER TABLE members DROP COLUMN search_name_prev;
+  ASSERT NOT EXISTS (SELECT 1 FROM information_schema.columns
+                      WHERE table_name='members' AND column_name='search_name_prev'),
+         'T38 FAIL: 旧投影列应已删除';
+  RAISE NOTICE 'PASS T38-4: 旧函数零依赖 → 实际删除旧函数/旧列(删除成功即切换完整性证明)';
+END $$;
+
+-- 阶段 9(清理后行为验证):规范索引接管全部查询,新函数行为生效
+DO $$
+DECLARE
+  v_plan TEXT := '';
+  v_rec  RECORD;
+BEGIN
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM members
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND status <> ''removed''
+         AND search_name LIKE public.mesh_search_norm(''alpha b'') || ''%'''
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_members_search_name_prefix%',
+         'T38 FAIL: 清理后前缀查询应命中规范 pattern 索引';
+  SET LOCAL enable_seqscan = off;
+  SET LOCAL enable_indexscan = off;
+  v_plan := '';
+  FOR v_rec IN EXECUTE
+    'EXPLAIN SELECT id FROM issues
+       WHERE workspace_id = ''11111111-1111-1111-1111-111111111111''
+         AND deleted_at IS NULL
+         AND public.mesh_search_norm(title) % public.mesh_search_norm(''zebra'')'
+  LOOP
+    v_plan := v_plan || v_rec."QUERY PLAN" || E'\n';
+  END LOOP;
+  ASSERT v_plan LIKE '%idx_issues_title_trgm%',
+         'T38 FAIL: 清理后 trigram 查询应可走规范 GIN 索引';
+  RAISE NOTICE 'PASS T38: 词典升级完整迁移(真实事务边界:事务外建 → 快速改名事务 COMMIT → 提交后验证 → 事务外 DROP INDEX CONCURRENTLY → 零依赖删旧 → 清理后验证)';
+END $$;
+-- T38:end
+
 \echo '============================================================'
-\echo 'ALL R2+R3+R4+R5 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
+\echo 'ALL R2+R3+R4+R5+R6+R7+R8 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'
