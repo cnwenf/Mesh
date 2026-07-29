@@ -286,7 +286,7 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
   "auto_status_map": { "merged": "done", "closed": "cancelled" } }
 ```
 > - IM 绑定:`trigger_on` ∈ {mention, direct_message, keyword};`mention_agents` 限定 @哪些 agent 才触发(未匹配不触发,仅审计,README §6.9)。钉钉群内 @机器人 = `mention`、单聊 = `direct_message`(入站载荷 `conversationType` 归一:`"2"`=群聊、`"1"`=单聊)。
-> - **`inbound_queue` 语义(§2.10/§3.9)**:`serial_conversation`(钉钉默认):同一会话的入站任务消息按 FIFO 串行派发,至多一个在途执行;`parallel`(飞书/Slack 默认,保持 §6.9 基线):入队即派发、不等待前序。两种模式均可在集成级切换,切换不影响已在途项。
+> - **`inbound_queue` 语义(§2.10/§3.9)**:`serial_conversation`(钉钉默认):同一会话的入站任务消息按 FIFO 串行派发,至多一个在途执行;`parallel`(飞书/Slack 默认,保持 §6.9 基线):入队即派发、不等待前序。两种模式均可在集成级切换,切换不追溯已入队项(存量 pending 项按入队时 `dispatch_mode` 快照被派发器清空,§2.10/§3.9)。
 > - VCS 绑定:`vcs_events` 过滤事件类型;`branch_pattern` 限定分支;`auto_status_map` 把 VCS 动作映射到 issue 目标状态(经 issue.md 状态流转,服务层校验目标状态存在于该 issue 当前作用域)。
 > - **不可信内容(README §6.15)**:`match_config` 中的关键词/模式是**匹配条件**,不入 agent 上下文;入站消息正文入 agent 上下文时按不可信数据隔离。
 
@@ -1092,7 +1092,7 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **数据库级并发保证**:`uq_imq_conversation_processing` 部分唯一索引生效——并发派发器争抢同会话 → 至多一个成功,其余唯一约束冲突回退(information_schema/pg_indexes 结构断言 + 并发注入测试)。
 - [ ] **不丢失(崩溃恢复)**:M1 processing 时杀派发器/进程 → 重启后租约修复:M1 执行已终态则补回写 done/failed;执行丢失则经幂等键重新派发;**M2/M3 继续按序执行**,队列最终无悬挂 pending(超租约阈值后断言)。
 - [ ] **位置查询**:`GET .../integrations/{id}/queue` 返回各会话项与 `position`(M3 在 M1 处理、M2 排队时 position=2);`:cancel` 取消 M2(本人)→ M3 position 变 1;非 pending 项取消 → 422 `queue_item_not_cancellable`;他人 pending 项由无 manage 权限者取消 → 403。
-- [ ] **parallel 模式基线**:飞书/Slack 默认 `parallel` → 连发消息各自即时派发(不等前序终态),§6.9 原触发语义不变;集成级切 `serial_conversation` 后新消息按串行处理,切换不影响已在途项。
+- [ ] **parallel 模式基线**:飞书/Slack 默认 `parallel` → 连发消息各自即时派发(不等前序终态),§6.9 原触发语义不变;集成级切 `serial_conversation` 后新消息按串行处理,切换不追溯已入队项(存量 pending 项按入队时 `dispatch_mode` 快照被派发器清空,§2.10/§3.9)。
 - [ ] **实时**:入队/派发/终态/取消均推 `integration.queue_updated`(README §6.7 注册表已登记),带 `position`,面板实时刷新;断线重放无丢失无重复。
 
 **出站与推送(§3.10)**:
