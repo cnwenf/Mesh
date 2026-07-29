@@ -330,3 +330,93 @@ class TestGatewayLifecycle:
         # Gateway still serves a valid request afterwards.
         response = await proxy_get(gateway.port, f"http://{HOST}:{upstream['port']}/")
         assert b"200 OK" in response
+
+
+class TestEdgePaths:
+    async def test_unreachable_upstream_returns_502(self, upstream):
+        # Port 1 on loopback: admitted by the allowlist + injected filter, but
+        # nothing listens — the gateway must answer 502, never hang or drop.
+        policy = NetworkPolicy.from_snapshot(
+            {"allowed_schemes": ["http"], "allowed_hosts": [HOST], "allowed_ports": [1]}
+        )
+        gw = EgressGateway(policy, resolver=resolver_to_loopback, address_filter=loopback_filter)
+        await gw.start()
+        try:
+            response = await proxy_get(gw.port, f"http://{HOST}:1/")
+            assert b"502" in response
+        finally:
+            await gw.stop()
+
+    async def test_connect_without_port_is_400(self, gateway):
+        reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+        writer.write(f"CONNECT {HOST} HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+        await writer.drain()
+        response = await reader.read(65536)
+        writer.close()
+        assert b"400" in response
+
+    async def test_connect_with_non_numeric_port_is_400(self, gateway):
+        reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+        writer.write(f"CONNECT {HOST}:https HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+        await writer.drain()
+        response = await reader.read(65536)
+        writer.close()
+        assert b"400" in response
+
+    async def test_resolver_failure_refused(self, upstream):
+        async def failing_resolver(host: str) -> list[str]:
+            raise OSError("dns down")
+
+        gw = EgressGateway(
+            policy_for(upstream["port"]), resolver=failing_resolver, address_filter=loopback_filter
+        )
+        await gw.start()
+        try:
+            response = await proxy_get(gw.port, f"http://{HOST}:{upstream['port']}/")
+            assert b"403" in response
+            assert gw.stats["denied"] >= 1
+        finally:
+            await gw.stop()
+
+    async def test_relative_form_request_is_403(self, gateway):
+        # A well-behaved proxy client uses absolute-form; origin-form has no
+        # host to gate on — refuse.
+        reader, writer = await asyncio.open_connection("127.0.0.1", gateway.port)
+        writer.write(b"GET /relative HTTP/1.1\r\nHost: public.example\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+        response = await reader.read(65536)
+        writer.close()
+        assert b"403" in response or b"400" in response
+
+    async def test_policy_from_non_dict_snapshot_is_deny_all(self):
+        policy = NetworkPolicy.from_snapshot("garbage")  # type: ignore[arg-type]
+        assert policy.allowed_hosts == frozenset()
+        gw = EgressGateway(policy, resolver=resolver_to_loopback, address_filter=loopback_filter)
+        await gw.start()
+        try:
+            response = await proxy_get(gw.port, "https://anything.example/")
+            assert b"403" in response
+        finally:
+            await gw.stop()
+
+
+class TestTransferRobustness:
+    async def test_client_disconnect_mid_response_is_tolerated(self, upstream):
+        # Client hangs up while the response streams — the gateway must not
+        # crash and must keep serving the next request.
+        gw = EgressGateway(
+            policy_for(upstream["port"]), resolver=resolver_to_loopback, address_filter=loopback_filter
+        )
+        await gw.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", gw.port)
+            writer.write(
+                f"GET http://{HOST}:{upstream['port']}/ HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode()
+            )
+            await writer.drain()
+            writer.close()  # abandon before reading the response
+            await asyncio.sleep(0.2)
+            response = await proxy_get(gw.port, f"http://{HOST}:{upstream['port']}/")
+            assert b"200 OK" in response  # gateway still healthy
+        finally:
+            await gw.stop()

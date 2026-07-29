@@ -51,6 +51,7 @@ class SandboxSpec:
     cpu_period_us: int
     pids_max: int
     tmp_bytes: int
+    gateway_port: int = 0  # per-attempt egress proxy port on the host veth IP
 
 
 @dataclass(frozen=True)
@@ -140,7 +141,9 @@ class SandboxManager:
 
     def _layout(self, spec: SandboxSpec) -> None:
         root = Path(spec.root)
-        root.mkdir(parents=True, exist_ok=False)
+        # exist_ok: the broker may have created run/ already (§3.1 order).
+        # Freshness is guaranteed by S-08 cleanup removing the root on terminal.
+        root.mkdir(parents=True, exist_ok=True)
         # 0711: the sandbox user may traverse "/" (needed to reach its own
         # mounts) but cannot list it; everything sensitive sits in 0700 dirs.
         os.chmod(root, 0o711)
@@ -198,6 +201,12 @@ class SandboxManager:
 
         control_r, control_w = os.pipe()
         status_r, status_w = os.pipe()
+        env = {**spec.env, "MESH_GATEWAY_HOST_IP": host_ip}
+        if spec.gateway_port:
+            # The ONLY exit: the per-attempt egress proxy on the host veth IP.
+            proxy = f"http://{host_ip}:{spec.gateway_port}"
+            env["HTTP_PROXY"] = proxy
+            env["HTTPS_PROXY"] = proxy
         spec_payload = {
             "control_fd": control_r,
             "status_fd": status_w,
@@ -205,7 +214,7 @@ class SandboxManager:
             "uid": spec.uid,
             "gid": spec.gid,
             "argv": list(spec.argv),
-            "env": {**spec.env, "MESH_GATEWAY_HOST_IP": host_ip},
+            "env": env,
             "ro_binds": list(spec.ro_binds),
             "tmp_bytes": spec.tmp_bytes,
         }
@@ -331,6 +340,12 @@ class SandboxManager:
         return uid
 
     # -- teardown --------------------------------------------------------------
+
+    async def destroy_attempt(self, attempt_id: str) -> None:
+        """Destroy the sandbox registered for an attempt (idempotent)."""
+        handle = self._handles.get(attempt_id)
+        if handle is not None:
+            await self.destroy(handle)
 
     async def destroy(self, handle: SandboxHandle) -> None:
         """Idempotent S-08-grade teardown: kill the cgroup, reap, remove the

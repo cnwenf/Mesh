@@ -137,7 +137,7 @@ class TestProvision:
         daemon_cwd = os.getcwd()
         script = (
             "import os\n"
-            f"hostile = ['/root', '/etc/shadow', {daemon_cwd!r}, '/home']\n"
+            f"hostile = ['/root', '/etc/shadow', {daemon_cwd!r}, '/var']\n"
             "for path in hostile:\n"
             "    print(f'{path}={os.path.exists(path)}')\n"
             "required = ['/worktree', '/tmp', '/run', '/proc', '/usr/bin/python3', '/etc/hosts']\n"
@@ -148,7 +148,7 @@ class TestProvision:
         handle = await manager.provision(spec)
         out, _ = await _read_all(handle)
         lines = dict(line.split("=") for line in out.decode().splitlines() if "=" in line)
-        for hostile in ("/root", "/etc/shadow", daemon_cwd, "/home"):
+        for hostile in ("/root", "/etc/shadow", daemon_cwd, "/var"):
             assert lines[hostile] == "False", f"host path {hostile} leaked into the sandbox"
         for required in ("/worktree", "/tmp", "/run", "/proc", "/usr/bin/python3", "/etc/hosts"):
             assert lines[required] == "True", f"required sandbox path {required} missing"

@@ -79,6 +79,7 @@ class RuntimeApp:
         metadata: RuntimeMetadata | None = None,
         redaction_secrets: list[str] | None = None,
         rule_version: str = "redaction-v1",
+        sandbox_manager=None,  # SandboxManager | None — enables the A2 stack
     ) -> None:
         self.config = config
         self._api = api
@@ -89,6 +90,7 @@ class RuntimeApp:
         self._metadata = metadata
         self._redaction_secrets = redaction_secrets or []
         self._rule_version = rule_version
+        self._sandbox_manager = sandbox_manager
         self._supervisors: dict[str, AttemptSupervisor] = {}
         self._contexts: dict[str, AttemptContext] = {}
         self._attempt_tasks: dict[str, asyncio.Task] = {}
@@ -150,14 +152,24 @@ class RuntimeApp:
         attempt lifecycle here keeps the scheduler's concurrency slot held
         until the attempt is terminal."""
         attempt_id = claim.attempt_id
+        attempt_root = self.config.work_dir / claim.execution_id / attempt_id
         ctx = AttemptContext(
             attempt_id=attempt_id,
             execution_id=claim.execution_id,
             runtime_id=self._runtime_id or "",
             lease_seq=claim.lease_seq,
-            work_dir=str(self.config.work_dir / claim.execution_id / attempt_id),
+            work_dir=str(attempt_root),
         )
-        redactor = RedactionPipeline(secrets=self._redaction_secrets, rule_version=self._rule_version)
+        # §2.5/§3.8: credential values + task token are redaction secrets —
+        # in-memory only, never logged.
+        secrets = list(self._redaction_secrets)
+        for cred in claim.credentials:
+            value = cred.get("value")
+            if isinstance(value, str) and value:
+                secrets.append(value)
+        if claim.task_token:
+            secrets.append(claim.task_token)
+        redactor = RedactionPipeline(secrets=secrets, rule_version=self._rule_version)
         # Per-attempt tmpfs spool: redacted batches are durable BEFORE upload and
         # only cleared on server ack, so a crash/network blip never loses logs
         # (§3.9.3). Scoped to a subdirectory so the frozen cap is per attempt.
@@ -165,7 +177,8 @@ class RuntimeApp:
             self.config.spool_dir / attempt_id, max_bytes=DEFAULT_SPOOL_MAX_BYTES
         )
         logs = LogUploader(self._api, self._journal, redactor, clock=self._clock, spool=spool)
-        adapter = self._select_adapter()
+        security = self._build_security(claim, attempt_root, redactor)
+        adapter = self._select_adapter(claim, attempt_root, security)
         supervisor = AttemptSupervisor(
             self._api,
             self._journal,
@@ -173,6 +186,8 @@ class RuntimeApp:
             self._clock,
             provider_name=adapter.name,
             rule_version=self._rule_version,
+            security=security,
+            redactor=redactor,
         )
         self._supervisors[attempt_id] = supervisor
         self._contexts[attempt_id] = ctx
@@ -190,7 +205,106 @@ class RuntimeApp:
             self._contexts.pop(attempt_id, None)
             self._attempt_tasks.pop(attempt_id, None)
 
-    def _select_adapter(self) -> ExecutorAdapter:
+    def _build_security(self, claim: ClaimResponse, attempt_root, redactor):
+        """Assemble the A2 isolation stack (None when the daemon runs without
+        a sandbox manager — the A1 contract path)."""
+        if self._sandbox_manager is None:
+            return None
+        from mesh_runtime.broker import new_nonce
+        from mesh_runtime.checkout import FrozenRepo
+        from mesh_runtime.security import AttemptSecurity, SecurityConfig
+
+        snapshot = claim.config_snapshot
+        grants: dict = {}
+        raw_grants = snapshot.get("capability_grants")
+        if isinstance(raw_grants, list):
+            for grant in raw_grants:
+                if isinstance(grant, dict):
+                    cap = grant.get("capability")
+                    perm = grant.get("permission")
+                    if isinstance(cap, str) and isinstance(perm, str):
+                        grants[cap] = perm
+        repo = FrozenRepo.from_snapshot(snapshot)
+        read_credential = None
+        for cred in claim.credentials:
+            if cred.get("kind") == "repo_token" and isinstance(cred.get("value"), str):
+                read_credential = cred["value"]
+                break
+        config = SecurityConfig(
+            attempt_id=claim.attempt_id,
+            execution_id=claim.execution_id,
+            attempt_root=attempt_root,
+            task_token=claim.task_token,
+            issue_id=str(claim.execution.get("issue_id") or "") or None,
+            grants=grants,
+            nonce=new_nonce(),
+            sandbox_uid=self.config.sandbox_uid,
+            cgroup_marker=f"mesh-{claim.attempt_id}",
+            repo=repo,
+            # Server-side report_checkout enforces the workspace allowlist in
+            # the same transaction; the daemon gate validates shape here.
+            allowed_repos=(repo.url,) if repo else (),
+            platform_managed=self.config.runtime_kind == "platform_managed",
+            read_credential=read_credential,
+            network_policy=snapshot.get("network_policy") if isinstance(snapshot.get("network_policy"), dict) else {},
+        )
+        return AttemptSecurity(
+            config,
+            api=self._api,
+            journal=self._journal,
+            sandbox_manager=self._sandbox_manager,
+            server_base_url=self.config.server_url,
+        )
+
+    def _select_adapter(self, claim: ClaimResponse | None = None, attempt_root=None, security=None) -> ExecutorAdapter:
+        """Sandboxed adapter when a sandbox manager is wired; otherwise the
+        injected adapters (A1 contract path / dev backend)."""
+        if self._sandbox_manager is not None and claim is not None and security is not None:
+            from mesh_runtime.provider_env import build_sandbox_env
+            from mesh_runtime.providers.sandboxed import SandboxedProcessAdapter
+            from mesh_runtime.sandbox import SandboxSpec
+
+            if self.config.provider_path is None:
+                raise RuntimeError("sandbox_backend=linux_ns requires provider_path")
+            provider_path = str(self.config.provider_path)
+
+            def spec_builder(request: RunRequest) -> SandboxSpec:
+                env = build_sandbox_env(
+                    attempt_id=claim.attempt_id,
+                    execution_id=claim.execution_id,
+                    home="/home",
+                    xdg_root="/xdg",
+                )
+                env["MESH_BROKER_NONCE"] = security.config.nonce
+                if security.broker_socket_path:
+                    # Sandbox-side path: /run is the attempt run dir mounted in.
+                    env["MESH_BROKER_SOCKET"] = "/run/" + security.broker_socket_path.rsplit("/", 1)[-1]
+                return SandboxSpec(
+                    attempt_id=claim.attempt_id,
+                    root=attempt_root,
+                    uid=self.config.sandbox_uid,
+                    gid=self.config.sandbox_gid,
+                    argv=(provider_path,),
+                    env=env,
+                    # Provider binaries mount read-only at their host path;
+                    # the provider dir must be dedicated (no secrets inside).
+                    ro_binds=(str(self.config.provider_path.parent),),
+                    memory_bytes=512 * 1024 * 1024,
+                    cpu_quota_us=100_000,
+                    cpu_period_us=100_000,
+                    pids_max=256,
+                    tmp_bytes=256 * 1024 * 1024,
+                    gateway_port=security.egress.port if security.egress is not None else 0,
+                )
+
+            adapter = SandboxedProcessAdapter(
+                sandbox_manager=self._sandbox_manager,
+                spec_builder=spec_builder,
+                provider_name="sandboxed",
+                provider_version=self.config.provider_version or "0.0.0-a2",
+            )
+            security.bind_adapter_destroy(adapter.destroy)
+            return adapter
         if not self._adapters:
             raise RuntimeError("no provider adapters registered")
         return self._adapters[0]
@@ -225,6 +339,7 @@ def heartbeat_metadata(config: DaemonConfig, inventory: Inventory) -> dict:
     import os
     import platform
 
+    sandboxed = config.sandbox_backend == "linux_ns"
     return {
         "daemon_version": __version__,
         "protocol_version": PROTOCOL_VERSION,
@@ -234,4 +349,9 @@ def heartbeat_metadata(config: DaemonConfig, inventory: Inventory) -> dict:
         "os": f"{platform.system()} {platform.release()}",
         "cpu_cores": os.cpu_count() or 0,
         "max_concurrent": config.max_concurrent,
+        # A2 security capabilities (§4.3): server dispatches accordingly.
+        "sandbox": config.sandbox_backend,
+        "egress_enforced": sandboxed,
+        "broker": "unix" if sandboxed else "none",
+        "runtime_kind": config.runtime_kind,
     }

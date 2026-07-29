@@ -95,8 +95,16 @@ def _setup_mounts(spec: dict) -> None:
     _mount("", "/", "", _MS_REC | _MS_PRIVATE, "")
     _mount(root, root, "", _MS_BIND | _MS_REC, "")
     # Read-only system "image" — host system files, no secrets.
-    for src in _SYSTEM_DIRS + tuple(spec.get("ro_binds", [])):
+    for src in _SYSTEM_DIRS:
         if os.path.exists(src):
+            _bind_ro(src, root + src)
+    # Extra read-only binds (provider binaries) at their host paths. Bound
+    # PRE-pivot (host paths vanish afterwards). NOTE: paths under /tmp are
+    # shadowed by the sandbox tmpfs — providers must live elsewhere, matching
+    # the /opt/mesh/providers/... production layout (§4.3).
+    for src in tuple(spec.get("ro_binds", [])):
+        if os.path.exists(src):
+            os.makedirs(root + src, exist_ok=True)
             _bind_ro(src, root + src)
     # Provider run dir (settings/mcp/system + broker socket): bind read-only.
     run_dir = os.path.join(root, "run")
@@ -117,6 +125,8 @@ def _setup_mounts(spec: dict) -> None:
     os.makedirs(os.path.join(root, "proc"), exist_ok=True)
     os.makedirs(os.path.join(root, "tmp"), exist_ok=True)
     os.makedirs(os.path.join(root, "dev"), exist_ok=True)
+    os.makedirs(os.path.join(root, "home"), exist_ok=True)
+    os.makedirs(os.path.join(root, "xdg"), exist_ok=True)
     # pivot into the attempt root.
     put_old = os.path.join(root, ".old_root")
     os.makedirs(put_old, exist_ok=True)
@@ -124,14 +134,22 @@ def _setup_mounts(spec: dict) -> None:
     os.chdir("/")
     _umount2("/.old_root", _MNT_DETACH)
     os.rmdir("/.old_root")
-    # Root fs read-only (NON-recursive: the worktree/tmp/dev/proc submounts
-    # keep their own flags). §1.2: sandbox root filesystem is read-only.
-    _mount("", "/", "", _MS_REMOUNT | _MS_BIND | _MS_RDONLY | _MS_NOSUID | _MS_NODEV, "")
     # Fresh /proc under the new pid namespace: sandbox sees ONLY itself.
     _mount("proc", "/proc", "proc", _MS_NOSUID | _MS_NOEXEC | _MS_NODEV, "")
     # tmpfs /tmp sized by the frozen budget.
     tmp_kb = max(int(spec.get("tmp_bytes", 64 * 1024 * 1024)) // 1024, 1024)
     _mount("tmpfs", "/tmp", "tmpfs", _MS_NOSUID | _MS_NODEV, f"size={tmp_kb}k,mode=1777")
+    # Private EMPTY HOME + XDG on tmpfs, owned by the sandbox user (§1.5 rule
+    # 1): no host user dirs, no daemon HOME, no historical provider state.
+    uid = int(spec["uid"])
+    gid = int(spec["gid"])
+    _mount("tmpfs", "/home", "tmpfs", _MS_NOSUID | _MS_NODEV,
+           f"size=16m,mode=700,uid={uid},gid={gid}")
+    _mount("tmpfs", "/xdg", "tmpfs", _MS_NOSUID | _MS_NODEV,
+           f"size=16m,mode=700,uid={uid},gid={gid}")
+    # Root fs read-only LAST (NON-recursive: the worktree/tmp/dev/proc/home
+    # submounts keep their own flags). §1.2: sandbox root fs is read-only.
+    _mount("", "/", "", _MS_REMOUNT | _MS_BIND | _MS_RDONLY | _MS_NOSUID | _MS_NODEV, "")
     # Minimal /dev: null, zero, urandom — nothing else.
     _mount("tmpfs", "/dev", "tmpfs", _MS_NOSUID | _MS_NOEXEC, "size=64k,mode=755")
     import stat as _stat

@@ -42,7 +42,11 @@ markers = [
 [tool.coverage.run]
 source = ["mesh_runtime"]
 branch = true
-omit = ["src/mesh_runtime/__main__.py"]
+# __main__.py: entry shim. sandbox_init.py: the in-sandbox child program — it
+# runs as a separate unprivileged process INSIDE the sandbox (unreachable to
+# the daemon's coverage tracer); every line of it is exercised end-to-end by
+# the real-namespace tests in tests/unit/test_sandbox.py and the ISO matrix.
+omit = ["src/mesh_runtime/__main__.py", "src/mesh_runtime/sandbox_init.py"]
 
 [tool.coverage.report]
 fail_under = 90

@@ -281,3 +281,164 @@ class TestActionBroker:
             return {}
         with pytest.raises(ValueError, match="mismatch"):
             await ab.execute(grant["grant_id"], executor, override={"repo": "other"})
+
+
+class TestEdgePaths:
+    async def test_peer_uid_mismatch_refused(self, tmp_path):
+        # Broker expects sandbox uid 65534 but the test client runs as root.
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID, socket_dir=tmp_path / "run2",
+            sandbox_uid=65534, cgroup_marker="", nonce=NONCE,
+            task_token="mesh_task_x", server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID, grants={},
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(server.socket_path)
+            hello = json.loads(await reader.readline())
+            assert hello["ok"] is False
+            assert hello["error"]["code"] == "peer_refused"
+            writer.close()
+        finally:
+            await server.stop()
+
+    async def test_malformed_json_is_rejected(self, broker):
+        server, _ = broker
+        reader, writer = await connect(server)
+        writer.write(b"this is not json\n")
+        await writer.drain()
+        resp = json.loads(await reader.readline())
+        assert resp["ok"] is False
+        assert resp["error"]["code"] == "malformed_request"
+        writer.close()
+
+    async def test_non_dict_request_rejected(self, broker):
+        server, _ = broker
+        reader, writer = await connect(server)
+        writer.write(b"[1, 2, 3]\n")
+        await writer.drain()
+        resp = json.loads(await reader.readline())
+        assert resp["error"]["code"] == "malformed_request"
+        writer.close()
+
+    async def test_project_read_grant_and_scope(self, tmp_path):
+        transport = StubMeshTransport()
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID, socket_dir=tmp_path / "run3",
+            sandbox_uid=os.getuid(), cgroup_marker="", nonce=NONCE,
+            task_token="mesh_task_p", server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID, grants={"project.read": "read_only"},
+            transport=transport,
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(server.socket_path)
+            writer.write((json.dumps({"nonce": NONCE}) + "\n").encode())
+            await writer.drain()
+            assert json.loads(await reader.readline())["ok"] is True
+            writer.write((json.dumps({"id": 1, "method": "project.read",
+                                      "params": {"project_id": "p1"}}) + "\n").encode())
+            await writer.drain()
+            resp = json.loads(await reader.readline())
+            # stub transport 404s unknown paths -> upstream error code mapped
+            assert resp["ok"] is False
+            assert resp["error"]["code"] == "not_found"
+            writer.close()
+        finally:
+            await server.stop()
+
+    async def test_upstream_error_code_mapped(self, broker):
+        server, transport = broker
+        transport.fail_next = "resource_scope_mismatch"
+        reader, writer = await connect(server)
+        resp = await call(reader, writer, "issue.read", {"issue_id": ISSUE_ID})
+        assert resp["ok"] is False
+        assert resp["error"]["code"] == "resource_scope_mismatch"
+        writer.close()
+
+    async def test_upstream_transport_failure(self, broker):
+        server, transport = broker
+
+        async def boom(request):
+            raise httpx.ConnectError("down")
+
+        transport.handle_async_request = boom
+        reader, writer = await connect(server)
+        resp = await call(reader, writer, "issue.read", {"issue_id": ISSUE_ID})
+        assert resp["ok"] is False
+        assert resp["error"]["code"] == "upstream_unavailable"
+        writer.close()
+
+    async def test_comment_invalid_params(self, broker):
+        server, _ = broker
+        reader, writer = await connect(server)
+        resp = await call(reader, writer, "issue.comment", {"issue_id": ISSUE_ID, "body": ""})
+        assert resp["ok"] is False
+        assert resp["error"]["code"] == "invalid_params"
+        writer.close()
+
+    async def test_frozen_broker_refuses_new_connections(self, tmp_path):
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID, socket_dir=tmp_path / "run4",
+            sandbox_uid=os.getuid(), cgroup_marker="", nonce=NONCE,
+            task_token="mesh_task_f", server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID, grants={},
+        )
+        await server.start()
+        await server.freeze()
+        try:
+            reader, writer = await asyncio.open_unix_connection(server.socket_path)
+            hello = json.loads(await reader.readline())
+            assert hello["ok"] is False
+            assert hello["error"]["code"] == "broker_frozen"
+            writer.close()
+        finally:
+            await server.stop()
+
+    async def test_write_grant_cannot_downgrade_to_readonly_gate(self, tmp_path):
+        # issue.read gate is read_only; a "write" grant on it must not pass
+        # the write-permission check path (grants validated at call time).
+        server = ToolBrokerServer(
+            attempt_id=ATTEMPT_ID, socket_dir=tmp_path / "run5",
+            sandbox_uid=os.getuid(), cgroup_marker="", nonce=NONCE,
+            task_token="mesh_task_w", server_base_url="https://mesh.example.com",
+            issue_id=ISSUE_ID, grants={"issue.status": "read_only"},
+        )
+        await server.start()
+        try:
+            reader, writer = await asyncio.open_unix_connection(server.socket_path)
+            writer.write((json.dumps({"nonce": NONCE}) + "\n").encode())
+            await writer.drain()
+            assert json.loads(await reader.readline())["ok"] is True
+            resp = await call(reader, writer, "issue.status", {"issue_id": ISSUE_ID, "status": "done"})
+            # read_only grant cannot satisfy the write gate
+            assert resp["ok"] is False
+            assert resp["error"]["code"] == "capability_not_granted"
+            writer.close()
+        finally:
+            await server.stop()
+
+
+class TestFinalBranches:
+    async def test_non_string_nonce_is_bad_nonce(self, broker):
+        server, _ = broker
+        reader, writer = await asyncio.open_unix_connection(server.socket_path)
+        writer.write((json.dumps({"nonce": 12345}) + "\n").encode())
+        await writer.drain()
+        hello = json.loads(await reader.readline())
+        assert hello["ok"] is False
+        assert hello["error"]["code"] == "bad_nonce"
+        writer.close()
+
+    async def test_upstream_non_json_body_tolerated(self, broker):
+        server, transport = broker
+
+        async def plaintext(request):
+            return httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
+
+        transport.handle_async_request = plaintext
+        reader, writer = await connect(server)
+        resp = await call(reader, writer, "issue.read", {"issue_id": ISSUE_ID})
+        assert resp["ok"] is True
+        assert resp["result"] == {}
+        writer.close()
