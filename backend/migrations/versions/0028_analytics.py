@@ -1,7 +1,7 @@
 """analytics: analytics_snapshots materialized cache (analytics.md §2.5).
 
 Platform-capability increment (analytics.md §2.5/§2.6, README §6.2).
-Single-head chain 0001 → 0027.
+Single-head chain 0001 → 0028.
 
 Tables (tenant-scoped, RLS fail-closed per README §6.2 rule 5):
 
@@ -16,7 +16,7 @@ Tables (tenant-scoped, RLS fail-closed per README §6.2 rule 5):
   indexing JSONB directly. ``calendar_timezone`` lives in ``dimensions``,
   hence different-timezone bucketing never shares a row (§2.2.3 R3).
 
-Revision ID: 0027
+Revision ID: 0028
 Revises: 0026
 Create Date: 2026-07-29
 """
@@ -25,8 +25,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0027"
-down_revision = "0026"
+revision = "0028"
+down_revision = "0027"
 branch_labels = None
 depends_on = None
 

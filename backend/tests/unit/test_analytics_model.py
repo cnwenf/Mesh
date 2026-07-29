@@ -1,4 +1,4 @@
-"""analytics_snapshots model + migration 0027 behavior (analytics.md §2.5)."""
+"""analytics_snapshots model + migration 0028 behavior (analytics.md §2.5)."""
 
 from __future__ import annotations
 

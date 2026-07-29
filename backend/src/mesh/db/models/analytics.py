@@ -87,7 +87,7 @@ class AnalyticsSnapshot(Base):
     dimensions: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    # STORED generated column — must mirror migration 0027 exactly
+    # STORED generated column — must mirror migration 0028 exactly
     # (`dim_hash TEXT GENERATED ALWAYS AS (md5(dimensions::text)) STORED`, no
     # NOT NULL) so the model↔migration drift guard (test_model_migration_drift)
     # stays green. Matches the autopilot_runs.total_tokens pattern.
