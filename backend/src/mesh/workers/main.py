@@ -72,6 +72,7 @@ from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
+from mesh.workers.search_reconcile import search_reconcile_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
 logger = logging.getLogger("mesh.workers")
@@ -372,6 +373,14 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             TaskSpec(
                 "data-job-reaper",
                 lambda: data_job_reaper_loop(session_factory, settings=settings, stop=stop),
+            ),
+            TaskSpec(
+                "search-reconcile",
+                lambda: search_reconcile_loop(
+                    session_factory,
+                    interval=settings.search_reconcile_interval,
+                    stop=stop,
+                ),
             ),
         ]
     )

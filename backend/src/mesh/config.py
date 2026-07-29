@@ -193,6 +193,15 @@ class Settings(BaseSettings):
     skill_marketplace_url: str | None = None
     skill_import_sweep_interval: float = Field(default=1.0, gt=0)
 
+    # Search projection reconcile (search-command-palette.md §2.2): low-
+    # frequency full comparison + repair of members.search_name; write paths
+    # sync in-transaction, this is the observable drift backstop.
+    search_reconcile_interval: float = Field(default=86400.0, gt=0)
+
+    # HMAC key for search cursor signing (§3.2). Production MUST set a real
+    # secret via env; the dev default keeps local/demo pagination stable.
+    search_cursor_secret: str = Field(default="mesh-dev-search-cursor-secret")
+
     # Object storage for the attachment module (attachment.md §3). The bucket
     # is PRIVATE; every access goes through short-lived presigned URLs and the
     # byte stream never transits the API process (three-stage direct upload).

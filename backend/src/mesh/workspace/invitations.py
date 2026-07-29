@@ -456,6 +456,12 @@ class InvitationService:
             member_role = member.role
             member_status = member.status
 
+            # Search projection (§2.2): created or reactivated row.
+            from mesh.search.projection import sync_member_search_name
+
+            await session.flush()
+            await sync_member_search_name(session, member_id)
+
             # Redemption record — the (invitation_id, user_id) unique index is
             # the idempotency backstop: a losing same-user race rolls the whole
             # transaction back (undoing the increment) and the caller returns

@@ -45,6 +45,7 @@ from mesh.errors import (
     NotFoundError,
     UnauthorizedError,
 )
+from mesh.search.projection import recompute_for_user
 
 MFA_ISSUER = "Mesh"
 MFA_TICKET_TYPE = "mfa"
@@ -757,6 +758,10 @@ class AuthService:
                 raise NotFoundError("user not found")
             if patch.display_name is not None:
                 user.display_name = patch.display_name
+                # Search projection (§2.2): rename → resync every member row
+                # of this identity across all workspaces, same transaction.
+                await session.flush()
+                await recompute_for_user(session, user_id)
             if patch.avatar_url is not None:
                 _validate_avatar_url(patch.avatar_url)
                 user.avatar_url = patch.avatar_url

@@ -74,6 +74,56 @@ def upgrade() -> None:
     # query expressions call the function, so it needs EXECUTE.
     op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_search_norm(TEXT) TO {APP_ROLE}")
 
+    # -- single search_name resync entry point (§2.2 sync contract) --------------
+    # SECURITY DEFINER so the app role can resync across workspaces (a user
+    # rename touches that user's member rows in EVERY workspace — the tenant
+    # GUC / RLS would hide the other workspaces' rows otherwise; same pattern
+    # as the mesh_<entity>_workspace_id resolvers). All normalization goes
+    # through public.mesh_search_norm; the IS DISTINCT FROM guard keeps it a
+    # no-op when already consistent.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_resync_search_name(
+          p_kind TEXT,
+          p_id UUID DEFAULT NULL
+        ) RETURNS BIGINT
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
+        $$
+        DECLARE
+          v_count BIGINT;
+        BEGIN
+          IF p_kind NOT IN ('member', 'user', 'agent', 'all') THEN
+            RAISE EXCEPTION 'mesh_resync_search_name: unknown kind %', p_kind;
+          END IF;
+          UPDATE members m
+          SET search_name = src.norm
+          FROM (
+            SELECT m2.id AS mid,
+                   public.mesh_search_norm(COALESCE(
+                     NULLIF(m2.display_override, ''),
+                     CASE m2.member_type
+                       WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email)
+                       WHEN 'agent' THEN a.name
+                     END,
+                     ''
+                   )) AS norm
+            FROM members m2
+            LEFT JOIN users u ON u.id = m2.user_id
+            LEFT JOIN agents a ON a.id = m2.agent_id
+            WHERE (p_kind = 'all')
+               OR (p_kind = 'member' AND m2.id = p_id)
+               OR (p_kind = 'user' AND m2.user_id = p_id)
+               OR (p_kind = 'agent' AND m2.agent_id = p_id)
+          ) src
+          WHERE m.id = src.mid
+            AND m.search_name IS DISTINCT FROM src.norm;
+          GET DIAGNOSTICS v_count = ROW_COUNT;
+          RETURN v_count;
+        END $$
+        """
+    )
+    op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) TO {APP_ROLE}")
+
     # -- members.search_name projection (README §6.1 registered snapshot) --------
     op.execute("ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT ''")
     op.execute(
@@ -83,48 +133,9 @@ def upgrade() -> None:
     )
 
     # -- backfill before building indexes (fresh databases: no-op) ---------------
-    # Batched ≤10k rows per UPDATE (§2.2 回填迁移); each statement is bounded so
-    # no single UPDATE holds a huge row set.
-    op.execute(
-        """
-        DO $$
-        DECLARE
-          v_batch INT := 10000;
-          v_rows  INT;
-        BEGIN
-          LOOP
-            WITH batch AS (
-              SELECT m.id
-              FROM members m
-              WHERE m.search_name = ''
-              ORDER BY m.id
-              LIMIT v_batch
-              FOR UPDATE OF m SKIP LOCKED
-            )
-            UPDATE members m
-            SET search_name = public.mesh_search_norm(src.display_name)
-            FROM (
-              SELECT b.id,
-                     COALESCE(
-                       NULLIF(m2.display_override, ''),
-                       CASE m2.member_type
-                         WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email)
-                         WHEN 'agent' THEN a.name
-                       END,
-                       ''
-                     ) AS display_name
-              FROM batch b
-              JOIN members m2 ON m2.id = b.id
-              LEFT JOIN users u ON u.id = m2.user_id
-              LEFT JOIN agents a ON a.id = m2.agent_id
-            ) src
-            WHERE m.id = src.id;
-            GET DIAGNOSTICS v_rows = ROW_COUNT;
-            EXIT WHEN v_rows = 0;
-          END LOOP;
-        END $$
-        """
-    )
+    # Same single code path the service layer and the daily reconcile use
+    # (§2.2 sync contract): one function, one normalization algorithm.
+    op.execute("SELECT public.mesh_resync_search_name('all')")
 
     # -- member/agent: projection column indexes (§2.2 items 1a–1c) ---------------
     # ≥3 char fuzzy: trigram GIN on the already-normalized column.
@@ -210,6 +221,7 @@ def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS idx_issues_ws_not_deleted")
     op.execute("DROP INDEX IF EXISTS idx_members_ws_type_active")
     op.execute("ALTER TABLE members DROP COLUMN IF EXISTS search_name")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_resync_search_name(TEXT, UUID)")
     op.execute("DROP FUNCTION IF EXISTS public.mesh_search_norm(TEXT)")
     # Extensions are intentionally kept: other databases may rely on them and
     # dropping shared extensions is not reversible safely from one module.
