@@ -310,3 +310,50 @@ async def test_real_login_refresh_flows_through_cookie(app, client):
         "/", headers={"accept": "text/html", "cookie": f"mesh_session={refresh}"}
     )
     assert 'window.__MESH_APPEARANCE__ = {"mode":"dark"};' in resp.text
+
+
+async def test_injection_precedes_fouc_resolver_in_document_order(app, client):
+    # H1: __MESH_APPEARANCE__ must be defined before the FOUC resolver runs
+    # (inline scripts execute top-to-bottom; otherwise tier ① is dead).
+    await _seed_session_user(app.state.session_factory, email="e7@corp.com", theme="dark")
+    resp = await client.get(
+        "/", headers={"accept": "text/html", "cookie": "mesh_session=mesh_rft_entry_test"}
+    )
+    injection_at = resp.text.find("window.__MESH_APPEARANCE__")
+    fouc_at = resp.text.find("(function ()")
+    assert injection_at != -1 and fouc_at != -1
+    assert injection_at < fouc_at
+
+
+async def test_anonymous_workspace_route_is_not_an_existence_oracle(app, client):
+    # M1: anonymous /w/{slug} must NOT resolve the slug workspace default
+    # (no injection, falls to system) — the by-slug API is auth-gated, so the
+    # entry must not leak workspace existence via differential injection.
+    async with app.state.session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO workspaces (name, slug, settings) "
+                "VALUES ('Oracle WS', 'oracle-ws', CAST(:s AS jsonb))"
+            ),
+            {"s": json.dumps({"default_theme": "dark"})},
+        )
+    resp = await client.get(
+        "/w/oracle-ws/board", headers={"accept": "text/html"}
+    )  # no cookie
+    assert "window.__MESH_APPEARANCE__" not in resp.text
+    assert resp.headers["cache-control"] == "public, max-age=300"
+
+
+async def test_404_carries_no_store_and_hardening_headers(client):
+    resp = await client.get("/api/v1/nope", headers={"accept": "text/html"})
+    assert resp.status_code == 404
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
+
+
+async def test_success_response_carries_hardening_headers(client):
+    resp = await client.get("/", headers={"accept": "text/html"})
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+    assert "ws:" not in resp.headers["content-security-policy"].split("connect-src")[1].split(";")[0]

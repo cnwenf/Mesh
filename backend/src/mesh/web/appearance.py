@@ -160,8 +160,14 @@ async def resolve_entry_appearance(
             return AppearanceResolution(mode=user_mode, personalized=personalized)
 
         # Level 2: workspace default (absent/null/invalid user preference).
+        # §2.2 / §5.3(M1): the slug-level workspace default is only consulted for
+        # an authenticated request — anonymous /w/{slug} must NOT become a
+        # workspace-existence oracle (the by-slug API is auth-gated; the entry
+        # would otherwise leak existence via differential injection). Anonymous
+        # pages fall to system; the unauthenticated invite path uses the
+        # preview same-source resolver below (the documented §2.2 channel).
         slug = workspace_slug_from_path(path)
-        if slug is not None:
+        if personalized and slug is not None:
             default = await _workspace_default_theme(session_factory, slug)
             return AppearanceResolution(
                 mode=_binary(default), personalized=personalized

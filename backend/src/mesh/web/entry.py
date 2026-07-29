@@ -36,16 +36,14 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
+from mesh.config import SESSION_COOKIE_NAME
 from mesh.web.appearance import resolve_entry_appearance
-
-SESSION_COOKIE_NAME = "mesh_session"
 
 # Namespaces the entry must never shadow. The router is mounted last so
 # registered API routes win; this guard is defence in depth (unknown
 # /api/… paths must 404 as JSON-shaped misses, not fall into the shell).
 _GUARDED_PREFIXES = ("/api", "/ws", "/assets", "/uploads", "/favicon", "/_debug")
 _INVITE_PATH_TOKEN = re.compile(r"^/invite/([^/?#]+)")
-_FIRST_HEAD_CLOSE = re.compile(r"</head\s*>", re.IGNORECASE)
 _FIRST_PLAIN_SCRIPT = re.compile(r"<script>")
 _FIRST_SCRIPT_BODY = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 
@@ -55,9 +53,19 @@ _CSP_BASE = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
-    "connect-src 'self' ws: wss:; "
+    # Realtime WS is same-origin (nginx proxies /ws); 'self' covers it — no
+    # scheme-wide ws:/wss: that would permit arbitrary websocket hosts (§5.3).
+    "connect-src 'self'; "
     "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 )
+
+# Hardening headers applied to every entry response (success + 404).
+_SECURITY_HEADERS = {
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+}
 
 # Content cache keyed by (index path, mtime_ns) — the built shell is static;
 # tests swap dist dirs, so key on the file identity, not process lifetime.
@@ -65,24 +73,29 @@ _shell_cache: dict[tuple[str, int], tuple[str, str | None]] = {}
 
 
 def _load_shell(dist_dir: str) -> tuple[str, str | None] | None:
-    """Return (index_html, fouc_sha256_b64) or None when the build is absent."""
+    """Return (index_html, fouc_sha256_b64) or None when the build is absent.
+
+    Any read/parse failure degrades to None (no cache poisoning from a
+    transiently corrupt file).
+    """
     index_path = Path(dist_dir) / "index.html"
     try:
         stat = index_path.stat()
-    except OSError:
-        return None
-    key = (str(index_path), stat.st_mtime_ns)
-    cached = _shell_cache.get(key)
-    if cached is None:
+        key = (str(index_path), stat.st_mtime_ns)
+        cached = _shell_cache.get(key)
+        if cached is not None:
+            return cached
         html = index_path.read_text(encoding="utf-8")
-        match = _FIRST_SCRIPT_BODY.search(html)
-        script_hash = None
-        if match is not None:
-            digest = hashlib.sha256(match.group(1).encode("utf-8")).digest()
-            script_hash = base64.standard_b64encode(digest).decode("ascii")
-        cached = (html, script_hash)
-        _shell_cache.clear()
-        _shell_cache[key] = cached
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _FIRST_SCRIPT_BODY.search(html)
+    script_hash = None
+    if match is not None:
+        digest = hashlib.sha256(match.group(1).encode("utf-8")).digest()
+        script_hash = base64.standard_b64encode(digest).decode("ascii")
+    cached = (html, script_hash)
+    _shell_cache.clear()
+    _shell_cache[key] = cached
     return cached
 
 
@@ -95,6 +108,20 @@ def _wants_html(request: Request) -> bool:
     )
 
 
+def _not_found() -> PlainTextResponse:
+    """404 that must never be stored by a shared cache (no injection oracle /
+    cache-poison DoS via misses)."""
+    return PlainTextResponse(
+        "Not Found",
+        status_code=404,
+        headers={
+            "cache-control": "no-store",
+            "vary": "Accept, Cookie",
+            **_SECURITY_HEADERS,
+        },
+    )
+
+
 def build_html_entry_router() -> APIRouter:
     """Catch-all HTML entry. Mount AFTER every API router."""
     router = APIRouter(tags=["web-entry"], include_in_schema=False)
@@ -103,15 +130,15 @@ def build_html_entry_router() -> APIRouter:
     async def html_entry(request: Request) -> Response:
         full_path = request.url.path
         if full_path.startswith(_GUARDED_PREFIXES):
-            return PlainTextResponse("Not Found", status_code=404)
+            return _not_found()
         if not _wants_html(request):
-            return PlainTextResponse("Not Found", status_code=404)
+            return _not_found()
 
         loaded = _load_shell(request.app.state.settings.frontend_dist_dir)
         if loaded is None:
             # Built frontend absent (dev backend-only runs, startup race):
             # the API keeps working; the shell is simply not served here.
-            return PlainTextResponse("Not Found", status_code=404)
+            return _not_found()
         template, script_hash = loaded
 
         # URL-derived invite token (path segment; query fallback for the
@@ -139,18 +166,23 @@ def build_html_entry_router() -> APIRouter:
             invite_token=invite_token,
         )
 
-        headers = {"vary": "Accept, Cookie"}
+        headers = {"vary": "Accept, Cookie", **_SECURITY_HEADERS}
         body = template
         if resolution.mode is not None:
             nonce = secrets.token_urlsafe(16)
             payload = json.dumps({"mode": resolution.mode}, separators=(",", ":"))
+            # H1: the injection MUST precede the FOUC resolver in document
+            # order — inline scripts execute top-to-bottom, so the FOUC reads
+            # window.__MESH_APPEARANCE__ only if it already exists. Both inline
+            # scripts share the per-request nonce (one CSP source expression).
             injection = (
                 f'<script nonce="{nonce}">'
                 f"window.__MESH_APPEARANCE__ = {payload};"
-                "</script>"
+                "</script>\n    "
             )
-            body = _FIRST_PLAIN_SCRIPT.sub(f'<script nonce="{nonce}">', body, count=1)
-            body = _FIRST_HEAD_CLOSE.sub(injection + "\n</head>", body, count=1)
+            body = _FIRST_PLAIN_SCRIPT.sub(
+                injection + f'<script nonce="{nonce}">', body, count=1
+            )
             headers["content-security-policy"] = _CSP_BASE.format(
                 script_allow=f"'nonce-{nonce}'"
             )
