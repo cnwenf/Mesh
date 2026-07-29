@@ -38,6 +38,11 @@ DEFAULT_LOGIN_LOCK_DURATION = timedelta(minutes=15)
 SUPPORTED_LOCALES: tuple[str, ...] = ("zh-CN", "en")
 SUPPORTED_THEMES: tuple[str, ...] = ("light", "dark", "system")
 
+# HttpOnly session cookie carrying the refresh token (auth.md §5.5 web session
+# form). Read by the HTML entry middleware (mesh.web.entry) to resolve the
+# first-frame theme negotiation chain server-side (theme.md §2.3 ①).
+SESSION_COOKIE_NAME = "mesh_session"
+
 # A clearly-marked development signing key. Production MUST override
 # ``MESH_JWT_SECRET``: :func:`validate_auth_settings` refuses this default when
 # ``auth_mode=production``, and every app factory that signs or verifies tokens
@@ -93,6 +98,13 @@ class Settings(BaseSettings):
     # never enables the dev authenticator). "dev" enables mesh-dev:<workspace>
     # tokens and must be set explicitly (docker compose sets it for local dev).
     auth_mode: Literal["dev", "production"] = "production"
+
+    # Secure flag on the mesh_session cookie (auth.md §5.5 / theme.md §2.3 ①).
+    # None (default) → derive from auth_mode (dev/http loopback = False so the
+    # cookie is sent over plain http in local dev; production = True). Set
+    # explicitly for a TLS-terminator deployment running auth_mode=production
+    # behind a proxy that speaks http to the app.
+    cookie_secure: bool | None = None
 
     # The API/gateway application connects with a restricted, non-owner role
     # (mesh_app) so PostgreSQL RLS applies to the app path (M1, §6.2 rule 5) —
@@ -152,6 +164,13 @@ class Settings(BaseSettings):
     api_port: int = DEFAULT_API_PORT
     ws_host: str = "0.0.0.0"
     ws_port: int = DEFAULT_WS_PORT
+
+    # theme.md §2.3 ①: directory holding the built frontend (index.html +
+    # assets) that the personalized HTML entry serves with the per-request
+    # __MESH_APPEARANCE__ injection. Populated in production via a shared
+    # volume from the frontend image; when index.html is absent the entry
+    # degrades to 404 and the JSON API is unaffected.
+    frontend_dist_dir: str = "/srv/mesh/frontend"
 
     # Outbox relay tuning (README §6.6 / §2.2).
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)

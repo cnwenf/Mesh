@@ -1,10 +1,10 @@
 /* 技能模块样式(skill.md §4 UI/UX):库网格 / 详情 Tab / 导入向导 / 绑定区。 */
 
 .mesh-skills {
-  padding: var(--space-4, 16px);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-skills__header {
@@ -12,7 +12,7 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills__title {
@@ -24,7 +24,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills__market-link {
@@ -37,23 +37,23 @@
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-skills__card {
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  padding: var(--space-3, 12px);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1, 4px);
-  background: var(--color-surface, #fff);
+  gap: var(--space-1);
+  background: var(--color-surface);
 }
 
 .mesh-skills__card-link {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1, 4px);
+  gap: var(--space-1);
   color: inherit;
   text-decoration: none;
 }
@@ -62,7 +62,7 @@
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: var(--space-1, 4px);
+  gap: var(--space-1);
 }
 
 .mesh-skills__card-badge {
@@ -70,55 +70,55 @@
 }
 
 .mesh-skills__card-summary {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
   font-size: 0.9rem;
 }
 
 .mesh-skills__card-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
   font-size: 0.85rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills__card-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  margin-top: var(--space-1, 4px);
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .mesh-skills__status {
   border-radius: 999px;
   padding: 0 8px;
   font-size: 0.8rem;
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
 }
 
 .mesh-skills__status--published {
-  color: #1a7f37;
-  border-color: #1a7f37;
+  color: var(--color-success);
+  border-color: var(--color-success);
 }
 
 .mesh-skills__status--draft {
-  color: #9a6700;
-  border-color: #9a6700;
+  color: var(--color-warn);
+  border-color: var(--color-warn);
 }
 
 .mesh-skills__status--deprecated,
 .mesh-skills__status--disabled {
-  color: #cf222e;
-  border-color: #cf222e;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
 }
 
 .mesh-skills__script-flag {
-  color: #9a6700;
+  color: var(--color-warn);
   font-size: 0.85rem;
 }
 
 .mesh-skills__needs-review {
-  color: #9a6700;
+  color: var(--color-warn);
   font-size: 0.8rem;
 }
 
@@ -130,22 +130,22 @@
 /* --- 详情页 --- */
 
 .mesh-skills-detail {
-  padding: var(--space-4, 16px);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-skills-detail__header {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills-detail__tabs {
   display: flex;
-  gap: var(--space-1, 4px);
-  border-bottom: 1px solid var(--color-border, #d0d7de);
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .mesh-skills-detail__tabs button {
@@ -154,19 +154,19 @@
   padding: 8px 12px;
   cursor: pointer;
   border-bottom: 2px solid transparent;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills-detail__tabs button.is-active {
-  border-bottom-color: var(--color-accent, #0969da);
-  color: var(--color-text, #1f2328);
+  border-bottom-color: var(--color-primary);
+  color: var(--color-text);
   font-weight: 600;
 }
 
 .mesh-skills-detail__body {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: var(--space-4, 16px);
+  gap: var(--space-4);
 }
 
 @media (max-width: 800px) {
@@ -182,19 +182,19 @@
 
 .mesh-skills-detail__versions th,
 .mesh-skills-detail__versions td {
-  border-bottom: 1px solid var(--color-border, #d0d7de);
+  border-bottom: 1px solid var(--color-border);
   padding: 6px 8px;
   text-align: left;
   font-size: 0.9rem;
 }
 
 .mesh-skills-detail__side {
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  padding: var(--space-3, 12px);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
   align-self: start;
 }
 
@@ -207,7 +207,7 @@
 }
 
 .mesh-skills-detail__side dt {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills-detail__side dd {
@@ -216,7 +216,7 @@
 
 .mesh-skills__cap-chip {
   display: inline-block;
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 999px;
   padding: 0 6px;
   margin-right: 4px;
@@ -227,18 +227,18 @@
 .mesh-skills-detail__lifecycle {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills-detail__script {
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px;
   margin-bottom: 8px;
 }
 
 .mesh-skills-detail__script pre {
-  background: var(--color-surface-muted, #f6f8fa);
+  background: var(--color-surface-sunken);
   padding: 8px;
   overflow-x: auto;
   font-size: 0.85rem;
@@ -254,15 +254,15 @@
 }
 
 .mesh-skills-detail__script-caps li {
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 999px;
   padding: 0 6px;
   font-size: 0.8rem;
 }
 
 .mesh-skills-detail__script-caps li.is-risky {
-  color: #cf222e;
-  border-color: #cf222e;
+  color: var(--color-danger);
+  border-color: var(--color-danger);
 }
 
 /* --- 导入向导 --- */
@@ -270,39 +270,39 @@
 .mesh-skills-wizard {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
   min-width: 480px;
   max-width: 720px;
 }
 
 .mesh-skills-wizard__steps {
   display: flex;
-  gap: var(--space-3, 12px);
+  gap: var(--space-3);
   margin: 0;
   padding: 0;
   list-style: none;
   font-size: 0.9rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills-wizard__steps li.is-active {
   font-weight: 700;
-  color: var(--color-text, #1f2328);
+  color: var(--color-text);
 }
 
 .mesh-skills-wizard__body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills-wizard__summary {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills-wizard__instructions {
-  background: var(--color-surface-muted, #f6f8fa);
-  border: 1px solid var(--color-border, #d0d7de);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px;
   white-space: pre-wrap;
@@ -313,7 +313,7 @@
 
 .mesh-skills-wizard__scripts,
 .mesh-skills-wizard__caps-section {
-  border: 1px solid var(--color-border, #d0d7de);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px;
   display: flex;
@@ -322,7 +322,7 @@
 }
 
 .mesh-skills-wizard__warn {
-  color: #9a6700;
+  color: var(--color-warn);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -336,26 +336,26 @@
 }
 
 .mesh-skills-wizard__script-runtime {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-skills-wizard__entry {
-  border: 1px solid var(--color-accent, #0969da);
+  border: 1px solid var(--color-primary);
   border-radius: 999px;
   padding: 0 6px;
   font-size: 0.75rem;
-  color: var(--color-accent, #0969da);
+  color: var(--color-primary);
 }
 
 .mesh-skills-wizard__caps,
 .mesh-skills-wizard__caps-hint {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
 .mesh-skills__version-tag {
   font-size: 0.8rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 /* --- 表单 --- */
@@ -363,7 +363,7 @@
 .mesh-skills__form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
   min-width: 380px;
 }
 
@@ -377,11 +377,11 @@
 .mesh-skills__form-actions {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-skills__form-error {
-  color: #cf222e;
+  color: var(--color-danger);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -389,12 +389,12 @@
 .mesh-skills__bind-row {
   display: flex;
   align-items: center;
-  gap: var(--space-2, 8px);
-  margin-top: var(--space-2, 8px);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .mesh-skills__bind-note {
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
@@ -402,10 +402,10 @@
 .mesh-skills__card-version,
 .mesh-skills__card-install {
   font-size: 0.8rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 .mesh-skills__update-flag {
-  color: #0969da;
+  color: var(--color-primary);
   font-size: 0.85rem;
   margin-left: 4px;
 }
@@ -418,42 +418,42 @@
 }
 .mesh-skills-wizard__progress-label {
   font-size: 0.85rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 .mesh-skills-wizard__progress-bar {
   display: block;
   height: 8px;
-  background: var(--color-surface-muted, #eaeef2);
+  background: var(--color-surface-sunken);
   border-radius: 999px;
   overflow: hidden;
 }
 .mesh-skills-wizard__progress-bar > span {
   display: block;
   height: 100%;
-  background: #0969da;
+  background: var(--color-primary);
   transition: width 0.3s ease;
 }
 
 /* 高危能力高亮 (§4.2, 与详情页复用) */
 .mesh-skills-wizard__caps .is-risky,
 .mesh-skills-wizard__cap.is-risky {
-  color: #cf222e;
+  color: var(--color-danger);
   font-weight: 600;
 }
 
 /* 详情版本 diff (§4.3) */
 .mesh-skills-detail__diff pre {
-  background: var(--color-surface-muted, #f6f8fa);
+  background: var(--color-surface-sunken);
   padding: 8px;
   overflow-x: auto;
   font-size: 0.82rem;
 }
-.mesh-skills-detail__diff-add { color: #1a7f37; }
-.mesh-skills-detail__diff-del { color: #cf222e; }
-.mesh-skills-detail__diff-eq { color: var(--color-text-muted, #57606a); }
+.mesh-skills-detail__diff-add { color: var(--color-success); }
+.mesh-skills-detail__diff-del { color: var(--color-danger); }
+.mesh-skills-detail__diff-eq { color: var(--color-text-muted); }
 .mesh-skills-detail__diff-legend {
   font-size: 0.8rem;
-  color: var(--color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 .mesh-skills-detail__update {
   display: flex;
@@ -473,5 +473,5 @@
   gap: 4px 12px;
   margin: 8px 0;
 }
-.mesh-skills__market-preview dt { color: var(--color-text-muted, #57606a); }
+.mesh-skills__market-preview dt { color: var(--color-text-muted); }
 .mesh-skills__market-preview dd { margin: 0; }

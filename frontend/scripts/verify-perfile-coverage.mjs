@@ -22,6 +22,10 @@ const METRICS = ['lines', 'functions', 'branches', 'statements'];
  * 目录级 per-file 门禁名单:目录内每个源文件逐文件 ≥90,不被全局均值掩盖。
  * labels/auth 的同类先例为历史误配遗留的 per-file 缺口,随各自模块清偿后
  * 纳入本名单(见 MES-60 第 2 轮验收 R1)。
+ *
+ * hooks/state/design 为协商链·首帧链路·pending 队列等核心平台代码
+ * (theme.md §4.5 登录回填即曾在此绕过门禁,MES-81 验收 B1 收口):
+ * 纳入逐文件门禁,杜绝核心新代码被聚合均值摊薄漏测。
  */
 const PER_FILE_DIRS = [
   'src/features/agents/',
@@ -33,6 +37,9 @@ const PER_FILE_DIRS = [
   'src/features/autopilots/',
   'src/features/chat/',
   'src/features/analytics/',
+  'src/hooks/',
+  'src/state/',
+  'src/design/',
 ];
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

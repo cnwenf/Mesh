@@ -26,6 +26,7 @@ from mesh.auth.schemas import (
     VerifyEmailRequest,
 )
 from mesh.auth.service import AuthService, MfaRequiredResult, TokenResult, UserUpdate
+from mesh.config import SESSION_COOKIE_NAME
 from mesh.db.models.user import User
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
@@ -72,6 +73,41 @@ def _tokens_payload(result: TokenResult) -> dict:
     }
 
 
+def _cookie_secure(settings) -> bool:
+    return (
+        settings.cookie_secure
+        if settings.cookie_secure is not None
+        else settings.auth_mode != "dev"
+    )
+
+
+def _set_session_cookie(
+    response: Response, settings, refresh_token: str, *, remember: bool = False
+) -> None:
+    """Issue the HttpOnly mesh_session cookie (auth.md §5.5 / theme.md §2.3 ①).
+
+    Additive parallel channel to the in-body refresh token: the entry middleware
+    reads it server-side to resolve the first-frame theme. HttpOnly + Secure +
+    SameSite=Strict; max_age tracks the refresh TTL (remember extends it).
+    """
+    ttl = (
+        settings.remember_refresh_token_ttl if remember else settings.refresh_token_ttl
+    )
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        value=refresh_token,
+        max_age=int(ttl.total_seconds()),
+        httponly=True,
+        secure=_cookie_secure(settings),
+        samesite="strict",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+
+
 # --- public auth -------------------------------------------------------------
 
 
@@ -91,6 +127,10 @@ async def register(body: RegisterRequest, request: Request, response: Response) 
     user, _token = await service.register(
         email=body.email, password=body.password, display_name=body.display_name
     )
+    # §4.1 auto-login: issue the session cookie so the post-register first
+    # navigation already carries the theme negotiation context.
+    if _token is not None:
+        _set_session_cookie(response, request.app.state.settings, _token)
     return {"data": user}
 
 
@@ -114,6 +154,9 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
     )
     if isinstance(result, MfaRequiredResult):
         return {"data": {"mfa_required": True, "mfa_ticket": result.mfa_ticket}}
+    _set_session_cookie(
+        response, request.app.state.settings, result.refresh_token, remember=body.remember
+    )
     return {"data": _tokens_payload(result)}
 
 
@@ -135,17 +178,20 @@ async def mfa_verify(body: MfaVerifyRequest, request: Request, response: Respons
         ip_address=_client_ip(request),
         user_agent=_user_agent(request),
     )
+    _set_session_cookie(response, request.app.state.settings, result.refresh_token)
     return {"data": _tokens_payload(result)}
 
 
 @router.post("/auth/refresh")
-async def refresh(body: RefreshRequest, request: Request) -> dict:
+async def refresh(body: RefreshRequest, request: Request, response: Response) -> dict:
     service: AuthService = get_auth_service(request)
     result = await service.refresh(
         refresh_token=body.refresh_token,
         ip_address=_client_ip(request),
         user_agent=_user_agent(request),
     )
+    # Rotation issues a fresh refresh → refresh the cookie (same max_age).
+    _set_session_cookie(response, request.app.state.settings, result.refresh_token)
     return {"data": _tokens_payload(result)}
 
 
@@ -184,17 +230,24 @@ async def verify_email(body: VerifyEmailRequest, request: Request) -> dict:
 
 @router.post("/auth/logout")
 async def logout(
-    body: LogoutRequest, request: Request, user: User = Depends(get_current_user)
+    body: LogoutRequest,
+    request: Request,
+    response: Response,
+    user: User = Depends(get_current_user),
 ) -> dict:
     service: AuthService = get_auth_service(request)
     await service.logout(user_id=user.id, refresh_token=body.refresh_token)
+    _clear_session_cookie(response)
     return {"data": {"status": "ok"}}
 
 
 @router.post("/auth/logout-all")
-async def logout_all(request: Request, user: User = Depends(get_current_user)) -> dict:
+async def logout_all(
+    request: Request, response: Response, user: User = Depends(get_current_user)
+) -> dict:
     service: AuthService = get_auth_service(request)
     revoked = await service.logout_all(user_id=user.id)
+    _clear_session_cookie(response)
     return {"data": {"revoked": revoked}}
 
 

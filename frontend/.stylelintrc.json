@@ -1,0 +1,23 @@
+{
+  "extends": ["stylelint-config-standard"],
+  "plugins": ["./stylelint-plugins/no-hardcoded-colors.mjs"],
+  "ignoreFiles": [
+    "src/design/tokens.css",
+    "src/design/tokens-dark.css",
+    "src/design/tokens-print.css"
+  ],
+  "rules": {
+    "mesh/no-hardcoded-colors": true,
+    "selector-class-pattern": null,
+    "rule-empty-line-before": null,
+    "no-descending-specificity": null,
+    "media-feature-range-notation": null,
+    "declaration-block-no-redundant-longhand-properties": null,
+    "no-duplicate-selectors": null,
+    "value-keyword-case": null,
+    "color-hex-length": null,
+    "font-family-name-quotes": null,
+    "alpha-value-notation": null,
+    "import-notation": null
+  }
+}

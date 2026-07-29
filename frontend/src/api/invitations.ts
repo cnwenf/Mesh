@@ -52,6 +52,12 @@ export type InvitationPreview =
       workspace_logo_url: string | null;
       role: string;
       expires_at: string;
+      /**
+       * 展示偏好公开字段(theme.md §2.2/§3.1,workspace.md §3.1 MES-76 H2):
+       * 未登录邀请接受页主题协商链第 2 级读取 `default_theme`;与工作区名同暴露面,
+       * 不开放完整 workspace detail。
+       */
+      appearance?: { default_theme?: string };
     }
   | { valid: false; reason: InvitationRejectReason };
 

@@ -353,6 +353,8 @@ describe('SquadDetailPage', () => {
     expect(String(deletes[0].url)).toContain('/squads/sq-1/members/mem-2');
   });
 
+  // 三步串行桩(花名册 → POST → 成员刷新)+ 对话框交互,coverage instrumentation
+  // 下全量套件并行时偶发超 5s 默认 testTimeout(单独运行 <1s);放宽本条防 CI 抖动。
   it('adds a member from the workspace roster then refreshes the member list', async () => {
     const stub = queueInitialLoad(
       // dialog open → roster:
@@ -382,7 +384,7 @@ describe('SquadDetailPage', () => {
     expect(JSON.parse(String(posts[0].init?.body))).toEqual({
       members: [{ member_id: 'mem-3', role: 'member' }],
     });
-  });
+  }, 15_000);
 
   it('filters messages by kind tabs (client-side)', async () => {
     queueInitialLoad();

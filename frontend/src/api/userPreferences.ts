@@ -13,22 +13,29 @@ export interface UpdatePreferencesPayload {
   timezone?: string;
   settings?: {
     locale?: string | null;
-    theme?: ThemeMode;
+    /** 显式 null = 清除、恢复跟随工作区默认(theme.md §2.1/§3.2) */
+    theme?: ThemeMode | null;
   };
 }
 
 /** GET /api/v1/me 响应中的用户偏好字段 */
 export interface ServerUserPreferences {
+  /** 用户 id(pending 队列主体分区用,theme.md §2.3) */
+  id?: string;
+  /** 服务端更新时间(pending 冲突策略基线,theme.md §4.5) */
+  updated_at?: string;
   timezone: string | null;
   settings: {
     locale?: string | null;
-    theme?: ThemeMode;
+    /** absent/null = 未表达偏好,协商链继承工作区默认(theme.md §2.1) */
+    theme?: ThemeMode | null;
   };
 }
 
-/** 422 错误码:不支持的 locale / 非法时区(auth.md §3.1 canonical) */
+/** 422 错误码:不支持的 locale / 非法时区 / 非法主题模式(auth.md §3.1、theme.md §3.3) */
 export const ERROR_UNSUPPORTED_LOCALE = 'unsupported_locale';
 export const ERROR_INVALID_TIMEZONE = 'invalid_timezone';
+export const ERROR_INVALID_THEME_MODE = 'invalid_theme_mode';
 
 const USERS_ME_PATH = '/api/v1/users/me';
 const ME_PATH = '/api/v1/me';

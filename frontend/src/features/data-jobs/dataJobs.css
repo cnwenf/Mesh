@@ -8,17 +8,17 @@
 .mesh-data-jobs__table td {
   text-align: left;
   padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--mesh-border, #e5e7eb);
+  border-bottom: 1px solid var(--color-border);
 }
 .mesh-data-jobs__status--completed {
-  color: var(--mesh-success, #059669);
+  color: var(--color-success);
 }
 .mesh-data-jobs__status--failed {
-  color: var(--mesh-danger, #dc2626);
+  color: var(--color-danger);
 }
 .mesh-data-jobs__status--running,
 .mesh-data-jobs__status--validating {
-  color: var(--mesh-accent, #4f46e5);
+  color: var(--color-primary);
 }
 .mesh-data-jobs__progress {
   display: flex;
@@ -29,12 +29,12 @@
   flex: 1;
   height: 0.5rem;
   border-radius: 0.25rem;
-  background: var(--mesh-border, #e5e7eb);
+  background: var(--color-border);
   overflow: hidden;
 }
 .mesh-data-jobs__progress-fill {
   height: 100%;
-  background: var(--mesh-accent, #4f46e5);
+  background: var(--color-primary);
 }
 .mesh-import-wizard__steps {
   display: flex;
@@ -65,7 +65,7 @@
 .mesh-import-wizard__errors td {
   text-align: left;
   padding: 0.25rem 0.5rem;
-  border-bottom: 1px solid var(--mesh-border, #e5e7eb);
+  border-bottom: 1px solid var(--color-border);
 }
 .mesh-data-jobs__actions {
   display: flex;

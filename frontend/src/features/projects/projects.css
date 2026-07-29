@@ -491,7 +491,7 @@
 }
 
 .mesh-projects__icon {
-  font-size: var(--font-size-base, 1rem);
+  font-size: var(--font-size-md);
   line-height: 1;
 }
 
@@ -510,6 +510,6 @@
 }
 
 .mesh-projects__health-button:focus-visible {
-  outline: 2px solid var(--color-primary, #2563eb);
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }

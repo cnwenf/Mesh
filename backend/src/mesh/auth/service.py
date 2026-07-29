@@ -128,6 +128,9 @@ def user_to_dict(user: User) -> dict:
         "mfa_enabled": user.mfa_enabled_at is not None,
         "last_login_at": user.last_login_at,
         "created_at": user.created_at,
+        # theme.md §4.5: pending-queue conflict strategy needs the server's
+        # updated_at to detect "server newer → discard stale local write".
+        "updated_at": user.updated_at,
     }
 
 
