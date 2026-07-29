@@ -229,8 +229,15 @@ class Settings(BaseSettings):
     storage_endpoint: str = "http://127.0.0.1:9000"
     storage_public_endpoint: str | None = None
     storage_region: str = "us-east-1"
-    storage_access_key: str = "mesh"
-    storage_secret_key: str = "mesh_minio_secret"
+    # Object-storage credentials have NO guessable default (MES-83: a weak
+    # default shipped in this public file let an attacker who reads the repo
+    # take over any instance still using it). Empty here means "unset";
+    # ``validate_infra_settings`` rejects empty/known/short values when
+    # ``auth_mode=production``, and local dev gets strong per-checkout values
+    # from compose / scripts/gen-dev-secrets.sh. Dev/test may set them
+    # explicitly for a throwaway MinIO.
+    storage_access_key: str = ""
+    storage_secret_key: str = ""
     storage_bucket: str = "mesh-attachments"
 
     # Attachment limits & lifecycles (attachment.md §3.6/§4.6 — defaults are
