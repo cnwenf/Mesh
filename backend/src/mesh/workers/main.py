@@ -44,6 +44,7 @@ from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
+from mesh.integrations.dispatcher import dispatcher_loop, make_dispatch_wake_handler
 from mesh.integrations.outbound import (
     WEBHOOK_DISPATCH_EVENT_TYPE,
     WebhookDeliveryWorker,
@@ -51,6 +52,10 @@ from mesh.integrations.outbound import (
 )
 from mesh.integrations.outbound import (
     derive_dispatch_from_realtime as webhook_dispatch_derive,
+)
+from mesh.integrations.queue_events import (
+    DISPATCH_WAKE_EVENT,
+    queue_execution_finished_handler,
 )
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.onboarding.consumers import consume_realtime_event as onboarding_consume_realtime_event
@@ -81,6 +86,7 @@ from mesh.workers.device_auth_sweep import device_auth_sweep_loop
 from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
+from mesh.workers.queue_retention import integration_queue_audit_retention_loop
 from mesh.workers.retention import (
     integration_ledger_retention_loop,
     outbox_retention_loop,
@@ -127,12 +133,14 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
 
 
 def _compose_execution_finished(squad_handler, comment_service):
-    """§3.7 S-09: compose squad handler + result sink for execution.finished.
+    """§3.7 S-09: compose squad handler + result sink + integration queue
+    write-back for execution.finished.
 
-    The relay dispatches one handler per event type. Both the squad relay
-    (squad task closure) and the result sink (regular issue result comment)
-    must observe execution.finished. The result sink internally skips
-    squad executions (checks task_spec.squad_task_id).
+    The relay dispatches one handler per event type. The squad relay (squad
+    task closure), the result sink (regular issue result comment) and the
+    integration message-queue terminal write-back (integrations.md §3.9 —
+    the ONLY driver of queue-item terminal states) must all observe
+    execution.finished. The result sink internally skips squad executions.
     """
 
     async def _handle(session, event):
@@ -148,6 +156,12 @@ def _compose_execution_finished(squad_handler, comment_service):
             )
         except Exception:  # noqa: BLE001
             logger.exception("result sink failed for event %s", event.id)
+        # Integration queue terminal write-back (done/failed/cancelled +
+        # dispatch wake + cancelling-item terminal feedback). Correctness
+        # path — failures propagate so the relay retries the event (the
+        # squad/result-sink effects above are idempotent under redelivery).
+        # No-op for executions with no queue item bound.
+        await queue_execution_finished_handler(session, event)
         return None
 
     return _handle
@@ -317,6 +331,12 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     )
     stop = stop or asyncio.Event()
 
+    # integrations.md §3.9: queue dispatcher wakes explicitly on terminal
+    # write-back (imq.dispatch_wake, written same-transaction) with a 1s tick
+    # fallback; the relay handler merely sets the shared event.
+    imq_wake = asyncio.Event()
+    relay.register(DISPATCH_WAKE_EVENT, make_dispatch_wake_handler(imq_wake))
+
     # skill.md §4.5 / §6.11: matching resolver feeds the enqueue handler; the
     # crash-recovery sweep drains import tasks left mid-pipeline by a crash.
     register_skill_matching_resolver(make_matching_resolver())
@@ -470,6 +490,22 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             TaskSpec(
                 "data-job-reaper",
                 lambda: data_job_reaper_loop(session_factory, settings=settings, stop=stop),
+            ),
+            # integrations.md §3.9: conversation FIFO queue dispatcher +
+            # crash-safe lease repair (five branches, outbox rearm).
+            TaskSpec(
+                "imq-dispatcher",
+                lambda: dispatcher_loop(
+                    session_factory, settings=settings, wake=imq_wake, stop=stop
+                ),
+            ),
+            # integrations.md §3.9: terminal orphan audit-row retention purge
+            # (binding_id IS NULL only; MESH_IM_QUEUE_AUDIT_RETENTION window).
+            TaskSpec(
+                "imq-audit-retention",
+                lambda: integration_queue_audit_retention_loop(
+                    session_factory, settings=settings, stop=stop
+                ),
             ),
         ]
     )

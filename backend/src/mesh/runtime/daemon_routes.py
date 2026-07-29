@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from mesh.db.models.runtime import Runtime
 from mesh.errors import ConflictError, ForbiddenError, NotFoundError
 from mesh.runtime import approvals as approvals_mod
 from mesh.runtime import checkout as checkout_mod
+from mesh.runtime import context_appends as context_appends_mod
 from mesh.runtime import logs as logs_mod
 from mesh.runtime.attempts import renew_lease, transition_attempt
 from mesh.runtime.claim import claim_execution
@@ -132,6 +133,7 @@ async def heartbeat(
         metrics=body.metrics,
         inflight=body.inflight,
         protocol_version=body.protocol_version,
+        context_progress=[entry.model_dump() for entry in body.context_progress],
     )
     return {"data": data}
 
@@ -365,3 +367,44 @@ async def request_approval(
         approval_ttl=settings.runtime_approval_ttl,
     )
     return {"data": data}
+
+
+# ---------------------------------------------------------------------------
+# Runtime context appends (MES-82 /btw, runtime.md §3.2)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/executions/{execution_id}/context-appends")
+async def get_context_appends(
+    request: Request,
+    response: Response,
+    execution_id: str,
+    attempt_id: str,
+    since_seq: int = Query(default=0, ge=0),
+    runtime: Runtime = Depends(require_runtime),
+) -> dict:
+    """Fetch pending context appends for an in-flight execution (MES-82).
+
+    Daemon-authenticated exactly like the approvals endpoint: ``attempt_id``
+    (REQUIRED) must belong to THIS runtime AND to the path execution. Returns
+    the attempt-scoped pending set — ``seq > since_seq`` with the current
+    attempt's already-receipted rows filtered out (single-pointer model; old
+    attempt rows were cleared on requeue). Delivery is at-least-once (runtime.md
+    「运行期上下文追加」): the daemon injects at the next turn boundary and the
+    downstream tolerates duplicate blocks as untrusted data (README §6.15).
+    """
+    await _rate_limit_daemon(request, runtime, response)
+    try:
+        execution_uuid = uuid.UUID(execution_id)
+    except ValueError as exc:
+        raise NotFoundError("execution not found") from exc
+    if since_seq < 0:
+        raise NotFoundError("execution not found")
+    rows = await context_appends_mod.get_context_appends_for_daemon(
+        request.app.state.session_factory,
+        runtime=runtime,
+        execution_id=execution_uuid,
+        since_seq=since_seq,
+        attempt_id=_attempt_uuid(attempt_id),
+    )
+    return {"data": rows}

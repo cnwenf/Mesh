@@ -117,6 +117,9 @@ FAILURE_REASONS = frozenset(
         "budget_exceeded",
         "usage_unavailable",
         "log_backpressure",
+        # integrations.md §3.7 (MES-82): user cancel via the IM command plane
+        # (/stop) — registered vocabulary, carried by execution.finished.
+        "cancelled_by_command",
     }
 )
 

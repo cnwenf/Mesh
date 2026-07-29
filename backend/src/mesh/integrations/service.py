@@ -9,21 +9,27 @@ references); the optional top-level ``secret`` plaintext is encrypted into
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.api.pagination import Page, paginate
+from mesh.auth.audit import write_audit
 from mesh.db.constraints import violates
 from mesh.db.models.integration import (
+    QUEUE_TERMINAL_STATES,
     Integration,
     IntegrationBinding,
     IntegrationEvent,
+    IntegrationMessageQueue,
 )
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
@@ -38,11 +44,23 @@ from mesh.integrations.matching import validate_match_config
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
 
+logger = logging.getLogger("mesh.integrations.service")
+
 # Secret-shaped config keys must carry ciphertext references, never plaintext.
 _SECRET_KEY_RE = re.compile(r"(secret|token|password|credential)$", re.IGNORECASE)
 
 VALID_KINDS = tuple(KIND_TO_PROVIDER.keys())
 VALID_STATUSES = ("active", "disabled")
+
+# Delete protection (integrations.md §2.10 / §3.9): force-cancel reason stamped
+# into the audit trail when a protected parent deletion drains its queue items.
+BINDING_DELETED_REASON = "binding_deleted"
+# §3.9 force path: bounded wait for in-flight items to reach a terminal state
+# (driven by the execution.finished write-back) before forcing them cancelled.
+DEFAULT_FORCE_CANCEL_WAIT_SECONDS = 30.0
+# Poll cadence for the bounded wait — short so a pending-only drain returns
+# immediately and an in-flight drain checks the write-back frequently.
+FORCE_CANCEL_POLL_INTERVAL_SECONDS = 0.05
 
 
 def assert_config_non_secret(config: dict[str, Any]) -> None:
@@ -288,8 +306,48 @@ class IntegrationService:
             return render_integration(integration)
 
     async def delete_integration(
-        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID, now: datetime | None = None
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        now: datetime | None = None,
+        force: str | None = None,
+        force_cancel_wait_seconds: float | None = None,
+        actor_member_id: uuid.UUID | None = None,
     ) -> None:
+        """Soft-delete the integration (§3.1).
+
+        ``force='cancel'`` first walks EVERY binding through the binding
+        delete-protection force path (§3.9: drain non-terminal queue items,
+        hard-delete the binding → orphan audit rows), then soft-deletes the
+        integration. Without ``force`` the existing soft-delete runs unchanged
+        (it does not cascade into queue items, so no protection is needed).
+        """
+        if force is not None and force != "cancel":
+            raise BusinessRuleError("invalid force value", code="invalid_request")
+        if force == "cancel":
+            async with self._sf() as session:
+                await set_tenant_context(session, workspace_id)
+                binding_ids = (
+                    (
+                        await session.execute(
+                            select(IntegrationBinding.id).where(
+                                IntegrationBinding.workspace_id == workspace_id,
+                                IntegrationBinding.integration_id == integration_id,
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            for binding_id in binding_ids:
+                await self.delete_binding(
+                    workspace_id=workspace_id,
+                    binding_id=binding_id,
+                    force="cancel",
+                    force_cancel_wait_seconds=force_cancel_wait_seconds,
+                    actor_member_id=actor_member_id,
+                )
         moment = now or datetime.now(UTC)
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
@@ -488,10 +546,38 @@ class IntegrationService:
             await session.flush()
             return render_binding(binding)
 
-    async def delete_binding(self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID) -> None:
-        """Hard delete — releases the global external-identity slot (§2.3:
-        disabled bindings still occupy the key; re-binding elsewhere
-        requires deleting the row)."""
+    async def delete_binding(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        binding_id: uuid.UUID,
+        force: str | None = None,
+        force_cancel_wait_seconds: float | None = None,
+        actor_member_id: uuid.UUID | None = None,
+    ) -> None:
+        """Hard delete with delete protection (§2.10 / §3.9).
+
+        Hard delete releases the global external-identity slot (§2.3: disabled
+        bindings still occupy the key; re-binding elsewhere requires deleting
+        the row).
+
+        * No ``force``: non-terminal queue items → 409
+          ``binding_has_active_queue``. Terminal items do NOT block — they ride
+          the FK ``ON DELETE SET NULL`` into self-describing orphan audit rows.
+        * ``force='cancel'``: force-terminate every item first (pending →
+          cancelled; in-flight → runtime cancel + bounded wait, then forced
+          cancelled), THEN delete the parent — the SET NULL turns the
+          now-terminal items into orphan audit rows (success-path closure).
+        """
+        if force is not None and force != "cancel":
+            raise BusinessRuleError("invalid force value", code="invalid_request")
+        if force == "cancel":
+            await self._force_terminate_binding_items(
+                workspace_id=workspace_id,
+                binding_id=binding_id,
+                wait_seconds=force_cancel_wait_seconds,
+                actor_member_id=actor_member_id,
+            )
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             binding = await session.scalar(
@@ -502,8 +588,219 @@ class IntegrationService:
             )
             if binding is None:
                 raise NotFoundError("binding not found")
+            if force is None:
+                active = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(IntegrationMessageQueue)
+                        .where(
+                            IntegrationMessageQueue.workspace_id == workspace_id,
+                            IntegrationMessageQueue.binding_id == binding_id,
+                            IntegrationMessageQueue.state.not_in(QUEUE_TERMINAL_STATES),
+                        )
+                    )
+                ).scalar_one()
+                if active:
+                    raise ConflictError(
+                        "binding has non-terminal queue items; use ?force=cancel",
+                        code="binding_has_active_queue",
+                        details={"active_items": int(active)},
+                    )
             await session.delete(binding)
             await session.flush()
+
+    async def _force_terminate_binding_items(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        binding_id: uuid.UUID,
+        wait_seconds: float | None = None,
+        actor_member_id: uuid.UUID | None = None,
+    ) -> None:
+        """§3.9 force path: drive every item of a binding to a terminal state.
+
+        ① Cancel tx (committed): ``pending`` → ``cancelled``; in-flight
+        (``dispatching/processing/cancelling``) → request execution cancel and
+        mark ``cancelling`` (cancel intent persisted in the same transaction;
+        the heartbeat downlink completes the stop). An audit row records
+        ``reason='binding_deleted'``.
+        ② Poll on fresh sessions (no open transaction) up to ``wait_seconds``
+        for all items to reach a terminal state — the ``execution.finished``
+        write-back drives in-flight items to ``cancelled``.
+        ③ Force any survivor to ``cancelled`` and log an alert (the
+        execution-side cancel intent is already durable, so the daemon finishes
+        the stop on recovery); the survivors then ride SET NULL into orphan
+        audit rows when the parent is deleted.
+        """
+        budget = (
+            DEFAULT_FORCE_CANCEL_WAIT_SECONDS
+            if wait_seconds is None
+            else float(wait_seconds)
+        )
+        async with self._sf() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            binding = await session.scalar(
+                select(IntegrationBinding).where(
+                    IntegrationBinding.id == binding_id,
+                    IntegrationBinding.workspace_id == workspace_id,
+                )
+            )
+            if binding is None:
+                raise NotFoundError("binding not found")
+            items = (
+                (
+                    await session.execute(
+                        select(IntegrationMessageQueue)
+                        .where(
+                            IntegrationMessageQueue.workspace_id == workspace_id,
+                            IntegrationMessageQueue.binding_id == binding_id,
+                            IntegrationMessageQueue.state.not_in(QUEUE_TERMINAL_STATES),
+                        )
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for item in items:
+                if item.state == "pending":
+                    item.state = "cancelled"
+                    item.finished_at = func.now()
+                else:  # dispatching / processing / cancelling
+                    if item.execution_id is not None:
+                        await self._request_execution_cancel(
+                            session,
+                            workspace_id=workspace_id,
+                            execution_id=item.execution_id,
+                            member_id=actor_member_id,
+                        )
+                    if item.state != "cancelling":
+                        item.state = "cancelling"
+                item.updated_at = func.now()
+            if items:
+                await write_audit(
+                    session,
+                    workspace_id=workspace_id,
+                    actor_member_id=actor_member_id,
+                    actor_kind="member" if actor_member_id is not None else "system",
+                    action="integration_queue.force_cancel",
+                    resource_type="integration_binding",
+                    resource_id=binding_id,
+                    metadata={
+                        "reason": BINDING_DELETED_REASON,
+                        "item_ids": [str(item.id) for item in items],
+                    },
+                )
+            await session.flush()
+
+        # ② Bounded wait for in-flight items to reach a terminal state.
+        deadline = time.monotonic() + budget
+        while True:
+            remaining = await self._count_active_binding_items(
+                workspace_id=workspace_id, binding_id=binding_id
+            )
+            if remaining == 0 or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(FORCE_CANCEL_POLL_INTERVAL_SECONDS)
+
+        # ③ Force any survivor to cancelled (+ alert).
+        async with self._sf() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            survivors = (
+                (
+                    await session.execute(
+                        select(IntegrationMessageQueue)
+                        .where(
+                            IntegrationMessageQueue.workspace_id == workspace_id,
+                            IntegrationMessageQueue.binding_id == binding_id,
+                            IntegrationMessageQueue.state.not_in(QUEUE_TERMINAL_STATES),
+                        )
+                        .with_for_update()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for item in survivors:
+                item.state = "cancelled"
+                item.finished_at = func.now()
+                item.updated_at = func.now()
+            await session.flush()
+        if survivors:
+            logger.warning(
+                "force-cancelled %d queue items after %.1fs wait "
+                "(binding=%s reason=%s) — execution cancel intent persisted; "
+                "daemon completes the stop on recovery",
+                len(survivors),
+                budget,
+                binding_id,
+                BINDING_DELETED_REASON,
+            )
+
+    async def _count_active_binding_items(
+        self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID
+    ) -> int:
+        """Non-terminal queue-item count for a binding (fresh session)."""
+        async with self._sf() as session:
+            await set_tenant_context(session, workspace_id)
+            return int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(IntegrationMessageQueue)
+                        .where(
+                            IntegrationMessageQueue.workspace_id == workspace_id,
+                            IntegrationMessageQueue.binding_id == binding_id,
+                            IntegrationMessageQueue.state.not_in(QUEUE_TERMINAL_STATES),
+                        )
+                    )
+                ).scalar_one()
+            )
+
+    async def _request_execution_cancel(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        execution_id: uuid.UUID,
+        member_id: uuid.UUID | None,
+    ) -> None:
+        """Persist an execution cancel intent inside the caller's transaction.
+
+        Prefers the in-transaction runtime cancel service when present; falls
+        back to a direct conditional UPDATE that persists the same cancel intent
+        (claimed/running → cancelling). The heartbeat downlink delivers the
+        actual stop; this never creates a new outbox event (§3.7).
+        """
+        try:
+            from mesh.runtime import attempts as _attempts
+        except ImportError:  # pragma: no cover — runtime always present
+            _attempts = None
+        cancel_tx = getattr(_attempts, "request_execution_cancel_tx", None)
+        if cancel_tx is not None:
+            await cancel_tx(
+                session,
+                workspace_id=workspace_id,
+                execution_id=execution_id,
+                member_id=member_id,
+            )
+            return
+        from mesh.db.models.runtime import TaskExecution
+
+        await session.execute(
+            update(TaskExecution)
+            .where(
+                TaskExecution.id == execution_id,
+                TaskExecution.workspace_id == workspace_id,
+                TaskExecution.status.in_(("claimed", "running", "cancelling")),
+            )
+            .values(
+                cancel_requested_at=func.now(),
+                cancel_requested_by=member_id,
+                status="cancelling",
+                updated_at=func.now(),
+            )
+        )
 
     # ------------------------------------------------------------------
     # Event ledger (§3.1 / §5.5 observability)
@@ -559,6 +856,55 @@ class IntegrationService:
                     )
                 ).scalar_one()
             )
+
+
+# ---------------------------------------------------------------------------
+# Delete protection — project deletion guard (integrations.md §2.10 / §5.6 ④)
+# ---------------------------------------------------------------------------
+
+
+async def assert_no_active_project_queue(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    workspace_id: uuid.UUID,
+    project_id: uuid.UUID,
+) -> None:
+    """Fail-closed guard run before a project deletion (§2.10 / §5.6 ④).
+
+    Deleting a project cascades its project-scoped bindings; that cascade would
+    ``SET NULL`` the bindings' queue items, which ``ck_imq_orphan_terminal``
+    rejects while ANY item is non-terminal (the whole DELETE rolls back — no
+    silent message loss). The project service therefore refuses to delete a
+    project that still has non-terminal items on a project-scoped binding; the
+    caller must first drain them through the binding ``?force=cancel`` path.
+    Module-level (takes a session factory) so the project module can call it
+    with a lazy import and no circular dependency on ``IntegrationService``.
+    """
+    async with session_factory() as session:
+        await set_tenant_context(session, workspace_id)
+        active = (
+            await session.execute(
+                select(func.count())
+                .select_from(IntegrationMessageQueue)
+                .join(
+                    IntegrationBinding,
+                    (IntegrationBinding.workspace_id == IntegrationMessageQueue.workspace_id)
+                    & (IntegrationBinding.id == IntegrationMessageQueue.binding_id),
+                )
+                .where(
+                    IntegrationMessageQueue.workspace_id == workspace_id,
+                    IntegrationBinding.scope == "project",
+                    IntegrationBinding.project_id == project_id,
+                    IntegrationMessageQueue.state.not_in(QUEUE_TERMINAL_STATES),
+                )
+            )
+        ).scalar_one()
+    if active:
+        raise ConflictError(
+            "project has non-terminal integration queue items; force-cancel them first",
+            code="binding_has_active_queue",
+            details={"active_items": int(active)},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +980,11 @@ def render_event(event: IntegrationEvent) -> dict[str, Any]:
 
 
 __all__ = [
+    "BINDING_DELETED_REASON",
+    "DEFAULT_FORCE_CANCEL_WAIT_SECONDS",
     "IntegrationService",
     "assert_config_non_secret",
+    "assert_no_active_project_queue",
     "render_binding",
     "render_event",
     "render_integration",

@@ -23,6 +23,7 @@ from mesh.errors import BusinessRuleError, NotFoundError
 from mesh.integrations import identities as identities_mod
 from mesh.integrations import oauth as oauth_mod
 from mesh.integrations import outbound as outbound_mod
+from mesh.integrations import queue_api as queue_api_mod
 from mesh.integrations import vcs_links as vcs_links_mod
 from mesh.integrations.schemas import (
     CreateBindingRequest,
@@ -178,13 +179,19 @@ async def delete_integration(
     response: Response,
     workspace_id: str,
     integration_id: str,
+    force: str | None = Query(default=None),
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
     user: User = Depends(get_current_user),
 ) -> Response:
+    """Soft-delete; ``?force=cancel`` first drains every binding's queue
+    (§3.9 delete protection) before the soft delete."""
     await _rate_limit_write(request, user, response)
     await _service(request).delete_integration(
         workspace_id=context.workspace.id,
         integration_id=_path_uuid(integration_id, what="integration"),
+        force=force,
+        force_cancel_wait_seconds=request.app.state.settings.im_force_cancel_wait_seconds,
+        actor_member_id=context.member.id,
     )
     return Response(status_code=204)
 
@@ -316,13 +323,20 @@ async def delete_binding(
     response: Response,
     workspace_id: str,
     binding_id: str,
+    force: str | None = Query(default=None),
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
     user: User = Depends(get_current_user),
 ) -> Response:
+    """Delete a binding (physical). Delete protection (§3.9): non-terminal
+    queue items + no ``?force=cancel`` → 409 ``binding_has_active_queue``;
+    ``?force=cancel`` drains them first (orphans survive as audit rows)."""
     await _rate_limit_write(request, user, response)
     await _service(request).delete_binding(
         workspace_id=context.workspace.id,
         binding_id=_path_uuid(binding_id, what="binding"),
+        force=force,
+        force_cancel_wait_seconds=request.app.state.settings.im_force_cancel_wait_seconds,
+        actor_member_id=context.member.id,
     )
     return Response(status_code=204)
 
@@ -986,6 +1000,11 @@ async def resolve_vcs_identifiers(
             now=datetime.now(UTC),
         )
     return {"data": result}
+
+
+# Queue query / operation endpoints (§3.9). queue_api.router carries NO prefix;
+# this router already supplies /api/v1, so the paths compose without duplication.
+router.include_router(queue_api_mod.router)
 
 
 __all__ = ["router"]

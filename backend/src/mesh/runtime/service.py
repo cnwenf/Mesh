@@ -9,6 +9,7 @@ token revocation linkage (NEW-L2), token rotation, credential management
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -37,7 +38,13 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_realtime
+from mesh.runtime.context_appends import (
+    ack_context_progress,
+    compute_inject_commands,
+)
 from mesh.runtime.credentials import encrypt_credential_value
+
+logger = logging.getLogger(__name__)
 
 # Activation code alphabet without ambiguous glyphs (0/O, 1/I/L).
 _CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -335,6 +342,7 @@ class RuntimeService:
         metrics: dict,
         inflight: list[str],
         protocol_version: int | None = None,
+        context_progress: list[dict] | None = None,
     ) -> dict:
         # F8: daemon-reported inflight is DIAGNOSTIC (server-side attempt
         # rows stay the capacity authority) — but validated and persisted in
@@ -392,6 +400,25 @@ class RuntimeService:
                 )
             )
 
+            # MES-82: best-effort context-injection receipts (runtime.md
+            # 「运行期上下文追加」). A lost/mis-fenced report only widens the
+            # duplicate window — it must NEVER fail the heartbeat, so it runs in
+            # a SAVEPOINT and any unexpected error is logged and swallowed.
+            if context_progress:
+                try:
+                    async with session.begin_nested():
+                        await ack_context_progress(
+                            session,
+                            workspace_id=row.workspace_id,
+                            runtime_id=row.id,
+                            entries=context_progress,
+                        )
+                except Exception:  # noqa: BLE001 — best-effort by contract
+                    logger.exception(
+                        "context_progress ack failed for runtime %s; heartbeat continues",
+                        row.id,
+                    )
+
             # Downlink commands ride the heartbeat response (§4.8: ≤15s).
             commands: list[dict] = []
             cancelling = (
@@ -414,6 +441,30 @@ class RuntimeService:
                         "grace_seconds": 15,
                     }
                 )
+
+            # MES-82: inject_context downlink for in-flight attempts whose
+            # execution has new append rows beyond the server watermark
+            # (from_seq = server watermark, never the daemon-reported value).
+            in_flight = (
+                await session.execute(
+                    select(ExecutionAttempt).where(
+                        ExecutionAttempt.workspace_id == row.workspace_id,
+                        or_(
+                            ExecutionAttempt.runtime_id == row.id,
+                            ExecutionAttempt.claimed_by_runtime_id == row.id,
+                        ),
+                        ExecutionAttempt.status.in_(["claimed", "running"]),
+                    )
+                )
+            ).scalars().all()
+            commands.extend(
+                await compute_inject_commands(
+                    session,
+                    workspace_id=row.workspace_id,
+                    runtime_id=row.id,
+                    attempt_rows=in_flight,
+                )
+            )
             return {"server_time": now.isoformat(), "commands": commands}
 
     # -- listing / detail ------------------------------------------------------

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -74,10 +75,31 @@ class ActivateRuntimeRequest(BaseModel):
         return _bounded_json(v, "metadata")  # type: ignore[return-value]
 
 
+class ContextProgressEntry(BaseModel):
+    """One heartbeat ``context_progress`` record (runtime.md §3.2, MES-82).
+
+    Best-effort injection receipt for a single in-flight attempt: the daemon's
+    local view of the highest injected ``seq`` plus the ``lease_seq`` fencing
+    token it holds after claim/renew (R7-1 protocol input). The server fences on
+    workspace/runtime ownership + latest valid attempt + ``claimed/running`` +
+    exact ``lease_seq``; any mismatch writes 0 rows (never an error).
+    """
+
+    model_config = {"extra": "forbid"}
+
+    attempt_id: UUID
+    execution_id: UUID
+    injected_through_seq: int = Field(default=0, ge=0)
+    lease_seq: int = Field(default=0, ge=0)
+
+
 class HeartbeatRequest(BaseModel):
     """POST /daemon/runtimes/{id}:heartbeat (§3.2).
 
     §2.6 P0: protocol_version reported on every heartbeat for drift detection.
+    MES-82: ``context_progress`` is the best-effort context-injection receipt
+    channel (runtime.md「运行期上下文追加」); absent on old daemons, which simply
+    loses the dedup fast path without affecting at-least-once semantics.
     """
 
     current_load: int = Field(default=0, ge=0)
@@ -85,6 +107,7 @@ class HeartbeatRequest(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     inflight: list[str] = Field(default_factory=list)
     protocol_version: int | None = Field(default=None, ge=1)
+    context_progress: list[ContextProgressEntry] = Field(default_factory=list)
 
     @field_validator("metrics")
     @classmethod

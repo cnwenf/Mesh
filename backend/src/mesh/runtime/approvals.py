@@ -39,7 +39,13 @@ from mesh.errors import (
     NotFoundError,
 )
 from mesh.outbox.service import emit_event, emit_realtime
-from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt, _release_capacity
+from mesh.runtime.attempts import (
+    _assert_lease,
+    _emit_finished_event,
+    _load_daemon_attempt,
+    _release_capacity,
+)
+from mesh.runtime.context_appends import reset_context_receipts_tx
 from mesh.runtime.credentials import revoke_attempt_envelopes
 
 # Internal outbox event_type the squad module consumes to apply a squad_plan
@@ -260,6 +266,12 @@ async def decide_approval(
                     execution.failure_reason = None
                     execution.queued_at = now
                     execution.updated_at = now
+                    # R7-2/T39-19: approval resume shares the lost-contact
+                    # requeue path — clear every append receipt + reset the
+                    # watermark atomically under the same execution row lock
+                    # so the new attempt re-receives all seqs (at-least-once;
+                    # resume_context is layered on top by the claim path).
+                    await reset_context_receipts_tx(session, execution_id=execution.id)
                     await emit_realtime(
                         session,
                         workspace_id=workspace_id,
@@ -284,6 +296,9 @@ async def decide_approval(
                         },
                         idempotency_key=f"execution:{execution.id}:cancelled",
                     )
+                    # Terminal single fan-out (§4.8): drives the integration
+                    # queue-item terminal write-back for this execution.
+                    await _emit_finished_event(session, execution=execution)
                 execution_status = execution.status
 
         run_status = None
