@@ -191,13 +191,17 @@ async def test_cursor_pagination_stable_and_client_independent(client):
     assert len(walked_issues) == len(set(walked_issues)), "cursor duplicated rows"
     assert set(created) <= set(walked_issues), "cursor traversal missed rows"
 
-    # Server order must NOT depend on client state (R2-H4): a second client
-    # (fresh login, empty local recents/frequency by construction) gets the
-    # identical single-page ordering.
+    # A freshly registered non-member gets 404 (workspace membership gates
+    # search; existence is never leaked).
     token2 = await _register_and_login(client, f"page2-{uuid.uuid4().hex[:8]}@e2e.mesh")
-    # Second user is not a member → 404; instead prove client-independence
-    # with two independent connections of the SAME member (distinct httpx
-    # clients carry no shared state).
+    outsider = await client.get(
+        f"/workspaces/{ws['id']}/search", params={"q": "分页稳定"}, headers=_auth(token2)
+    )
+    assert outsider.status_code == 404
+
+    # Server order must NOT depend on client state (R2-H4): two independent
+    # connections of the SAME member (distinct httpx clients carry no shared
+    # state) get the identical single-page ordering.
     import httpx
 
     transport = client._transport

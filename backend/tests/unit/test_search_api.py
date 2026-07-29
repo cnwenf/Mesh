@@ -604,6 +604,7 @@ async def test_statement_timeout_maps_to_query_cost_exceeded(client, world, monk
     mapping under test.
     """
     import asyncpg
+
     import mesh.search.service as search_service
 
     async def _boom(*args, **kwargs):

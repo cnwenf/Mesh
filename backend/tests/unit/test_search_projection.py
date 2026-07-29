@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.db.models.agent import Agent
@@ -18,9 +19,9 @@ from mesh.db.models.member import Member
 from mesh.db.models.user import User
 from mesh.db.models.workspace import Workspace
 from mesh.search.projection import (
-    reconcile_search_names,
     recompute_for_agent,
     recompute_for_user,
+    reconcile_search_names,
     sync_member_search_name,
 )
 
@@ -159,7 +160,11 @@ async def test_reconcile_repairs_drift(db_session):
 
 
 async def test_resync_unknown_kind_rejected(db_session):
-    with pytest.raises(Exception):
+    # plpgsql RAISE EXCEPTION (SQLSTATE P0001): the guard rejects unknown kinds
+    # with the function's own message. Asserted as a specific DBAPIError whose
+    # adapted driver error names asyncpg's RaiseError class and the message —
+    # never bare Exception (B017).
+    with pytest.raises(DBAPIError, match=r"RaiseError.*unknown kind"):
         await db_session.execute(
             text("SELECT public.mesh_resync_search_name('bogus', NULL)")
         )
