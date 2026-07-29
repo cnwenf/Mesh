@@ -1,20 +1,20 @@
 #!/bin/sh
 # mesh CLI installer — downloads a release binary and VERIFIES it before
 # installing (SHA-256 checksum + minisign signature against the public key
-# shipped in the repository at cli/mesh-cli.pub).
+# shipped in the repository at cli/mesh-release.pub).
 #
 # Deliberately transparent: read this script before running it. Do NOT pipe
 # curl to sh blindly (cli.md §5.4 / N4: no auto-update, no blind installs).
 #
 # Usage:
 #   ./install.sh <version>            # e.g. ./install.sh cli-v0.1.0
-#   MESH_CLI_PUBKEY=/path/to/mesh-cli.pub ./install.sh cli-v0.1.0
+#   MESH_CLI_PUBKEY=/path/to/mesh-release.pub ./install.sh cli-v0.1.0
 set -eu
 
 VERSION="${1:?usage: install.sh <version>   e.g. cli-v0.1.0}"
 REPO="${MESH_CLI_REPO:-cnwenf/Mesh}"
 INSTALL_DIR="${MESH_CLI_INSTALL_DIR:-/usr/local/bin}"
-PUBKEY="${MESH_CLI_PUBKEY:-cli/mesh-cli.pub}"
+PUBKEY="${MESH_CLI_PUBKEY:-cli/mesh-release.pub}"
 
 case "$(uname -s)" in
   Linux)  os=linux ;;
@@ -42,9 +42,9 @@ echo "verifying SHA-256…"
 if command -v minisign >/dev/null 2>&1; then
   if [ ! -f "$PUBKEY" ]; then
     echo "public key $PUBKEY not found — fetching from the repository…"
-    curl -fsSL -o "${WORK}/mesh-cli.pub" \
-      "https://raw.githubusercontent.com/${REPO}/main/cli/mesh-cli.pub"
-    PUBKEY="${WORK}/mesh-cli.pub"
+    curl -fsSL -o "${WORK}/mesh-release.pub" \
+      "https://raw.githubusercontent.com/${REPO}/main/cli/mesh-release.pub"
+    PUBKEY="${WORK}/mesh-release.pub"
   fi
   curl -fsSL -o "${WORK}/${ASSET}.minisig" "${BASE}/${ASSET}.minisig"
   echo "verifying minisign signature…"
