@@ -333,8 +333,20 @@ async def test_iso11_no_direct_route_raw_socket_or_mapped(manager, iso_root):
 
 
 async def test_iso12_rebinding_cname_and_redirect_metadata_refused(iso_root):
-    """Gateway-level proof with the PRODUCTION IP filter and a counting
-    'attacker' origin that must receive ZERO connections."""
+    """Gateway-level proof with the PRODUCTION IP filter and counting origins
+    that must receive ZERO connections after any hostile resolution.
+
+    §5.2-enumerated subcases:
+      1. mixed answer set (public + private) -> whole request refused;
+      2. CNAME chain collapsed to a private answer -> refused;
+      3. cross-resolution rebinding: FIRST resolution public (connects),
+         SECOND resolution private/metadata -> refused, no new connection;
+      4. redirect-to-metadata: hop 1 a real 302 served by the counting
+         origin, hop 2 the literal metadata IP -> refused by the IP filter
+         itself (port/host gates deliberately open so the filter is proved).
+    """
+    import subprocess
+
     from mesh_runtime.egress import EgressGateway, NetworkPolicy
     from mesh_runtime.netguard import filter_answer_set
 
@@ -352,6 +364,7 @@ async def test_iso12_rebinding_cname_and_redirect_metadata_refused(iso_root):
             "allowed_ports": [port], "allowed_methods": ["GET"],
         })
 
+        # 1. mixed public + private answer set: all-or-nothing refusal.
         async def mixed_resolver(host):
             return ["93.184.216.34", "127.0.0.1"]  # public + private mixed
 
@@ -365,6 +378,7 @@ async def test_iso12_rebinding_cname_and_redirect_metadata_refused(iso_root):
         assert b"403" in resp1
         await gw1.stop()
 
+        # 2. CNAME chain collapsing to a private answer.
         async def cname_private_resolver(host):
             return ["10.0.0.7"]  # CNAME chain collapsed to a private answer
 
@@ -379,41 +393,143 @@ async def test_iso12_rebinding_cname_and_redirect_metadata_refused(iso_root):
         await gw2.stop()
         assert received == []  # zero SYNs reached the forbidden target
 
-        # Redirect to metadata: hop 1 allowed (public via injected answer set
-        # standing in for a real public IP), hop 2 refused by the allowlist.
-        async def redirect_origin(reader, writer):
-            await reader.readline()
+        # 3. cross-resolution rebinding (public FIRST, private SECOND): bind a
+        # stand-in "public" IP on loopback so the first hop really connects
+        # locally; the rebinded second resolution must be refused with NO new
+        # connection ever attempted.
+        add = subprocess.run(
+            ["ip", "addr", "add", "93.184.216.34/32", "dev", "lo"], capture_output=True
+        )
+        assert add.returncode == 0, add.stderr.decode()
+        public_hits = []
+
+        async def public_origin(reader, writer):
             while (await reader.readline()) not in (b"\r\n", b""):
                 pass
+            public_hits.append(1)
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            await writer.drain()
+            writer.close()
+
+        pub = await asyncio.start_server(public_origin, "93.184.216.34", 0)
+        pport = pub.sockets[0].getsockname()[1]
+        try:
+            policy_rb = NetworkPolicy.from_snapshot({
+                "allowed_schemes": ["http"], "allowed_hosts": ["rebind.example"],
+                "allowed_ports": [pport], "allowed_methods": ["GET"],
+            })
+            # first resolution public, every later resolution hostile
+            answers = [["93.184.216.34"], ["127.0.0.1"], ["169.254.169.254"]]
+
+            async def rebinding_resolver(host):
+                if answers:
+                    return answers.pop(0)
+                return ["169.254.169.254"]  # rebind: private/metadata
+
+            gw3 = EgressGateway(policy_rb, resolver=rebinding_resolver, address_filter=filter_answer_set)
+            await gw3.start()
+            req = (
+                f"GET http://rebind.example:{pport}/ HTTP/1.1\r\n"
+                "Host: rebind.example\r\nConnection: close\r\n\r\n"
+            ).encode()
+            # hop 1: public answer -> filter passes -> connects to the stand-in
+            r, w = await asyncio.open_connection("127.0.0.1", gw3.port)
+            w.write(req)
+            await w.drain()
+            resp_ok = await r.read(65536)
+            w.close()
+            assert b"200" in resp_ok
+            assert len(public_hits) == 1
+            # hop 2: same host, REBINDED to loopback -> refused by IP filter
+            r, w = await asyncio.open_connection("127.0.0.1", gw3.port)
+            w.write(req)
+            await w.drain()
+            resp_rb = await r.read(65536)
+            w.close()
+            assert b"403" in resp_rb
+            # hop 3: rebind to the cloud metadata address -> refused as well
+            r, w = await asyncio.open_connection("127.0.0.1", gw3.port)
+            w.write(req)
+            await w.drain()
+            resp_md = await r.read(65536)
+            w.close()
+            assert b"403" in resp_md
+            await gw3.stop()
+            assert len(public_hits) == 1  # ZERO connections after the rebind
+        finally:
+            pub.close()
+            await pub.wait_closed()
+            subprocess.run(["ip", "addr", "del", "93.184.216.34/32", "dev", "lo"], capture_output=True)
+
+        # 4. redirect to metadata: hop 1 is a REAL 302 served by the counting
+        # origin (on a stand-in public IP bound to lo); the client's follow-up
+        # (hop 2) targets the literal metadata IP. Host allowlist AND port
+        # gate are deliberately OPEN for both hops so the refusal can only
+        # come from the production IP filter.
+        redirect_hits = []
+
+        async def redirect_origin(reader, writer):
+            while (await reader.readline()) not in (b"\r\n", b""):
+                pass
+            redirect_hits.append(1)
             writer.write(b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data\r\n"
                          b"Content-Length: 0\r\nConnection: close\r\n\r\n")
             await writer.drain()
             writer.close()
 
-        redir = await asyncio.start_server(redirect_origin, "127.0.0.1", 0)
+        add2 = subprocess.run(
+            ["ip", "addr", "add", "93.184.216.35/32", "dev", "lo"], capture_output=True
+        )
+        assert add2.returncode == 0, add2.stderr.decode()
+        redir = await asyncio.start_server(redirect_origin, "93.184.216.35", 0)
         rport = redir.sockets[0].getsockname()[1]
-        policy3 = NetworkPolicy.from_snapshot({
-            "allowed_schemes": ["http"], "allowed_hosts": ["start.example", "169.254.169.254"],
-            "allowed_ports": [rport], "allowed_methods": ["GET"],
-        })
+        try:
+            policy4 = NetworkPolicy.from_snapshot({
+                "allowed_schemes": ["http"],
+                "allowed_hosts": ["start.example", "169.254.169.254"],  # both open
+                "allowed_ports": [rport, 80],  # both open — the filter must do the work
+                "allowed_methods": ["GET"],
+            })
 
-        async def loopback_resolver(host):
-            return ["127.0.0.1"]
+            async def hop_resolver(host):
+                # start.example -> the stand-in public origin; the metadata
+                # literal resolves to itself so the filter sees the real IP.
+                return {
+                    "start.example": ["93.184.216.35"],
+                    "169.254.169.254": ["169.254.169.254"],
+                }[host]
 
-        # metadata host IS on the (deliberately loose) host allowlist, but the
-        # production IP filter kills its link-local address on the second hop.
-        gw3 = EgressGateway(policy3, resolver=loopback_resolver, address_filter=filter_answer_set)
-        await gw3.start()
-        r, w = await asyncio.open_connection("127.0.0.1", gw3.port)
-        w.write(b"GET http://169.254.169.254/latest/meta-data HTTP/1.1\r\n"
-                b"Host: 169.254.169.254\r\nConnection: close\r\n\r\n")
-        await w.drain()
-        resp3 = await r.read(65536)
-        w.close()
-        assert b"403" in resp3  # link-local metadata address filtered
-        await gw3.stop()
-        redir.close()
-        await redir.wait_closed()
+            gw4 = EgressGateway(policy4, resolver=hop_resolver, address_filter=filter_answer_set)
+            await gw4.start()
+            # hop 1: the 302 is served verbatim (never followed by the gateway)
+            r, w = await asyncio.open_connection("127.0.0.1", gw4.port)
+            w.write(
+                (
+                    f"GET http://start.example:{rport}/ HTTP/1.1\r\n"
+                    "Host: start.example\r\nConnection: close\r\n\r\n"
+                ).encode()
+            )
+            await w.drain()
+            resp_h1 = await r.read(65536)
+            w.close()
+            assert b"302 Found" in resp_h1
+            assert b"169.254.169.254" in resp_h1
+            assert len(redirect_hits) == 1  # hop 1 really traversed the origin
+            # hop 2: client follows the Location -> the IP filter refuses the
+            # link-local metadata address (host+port gates were open).
+            r, w = await asyncio.open_connection("127.0.0.1", gw4.port)
+            w.write(b"GET http://169.254.169.254/latest/meta-data HTTP/1.1\r\n"
+                    b"Host: 169.254.169.254\r\nConnection: close\r\n\r\n")
+            await w.drain()
+            resp_h2 = await r.read(65536)
+            w.close()
+            assert b"403" in resp_h2
+            assert len(redirect_hits) == 1  # no second connection anywhere
+            await gw4.stop()
+        finally:
+            redir.close()
+            await redir.wait_closed()
+            subprocess.run(["ip", "addr", "del", "93.184.216.35/32", "dev", "lo"], capture_output=True)
     finally:
         server.close()
         await server.wait_closed()
