@@ -1,6 +1,7 @@
 """SQLAlchemy models for the Mesh schema."""
 
 from mesh.db.models.agent import Agent, AgentConfigVersion
+from mesh.db.models.analytics import AnalyticsSnapshot
 from mesh.db.models.api_token import ApiToken
 from mesh.db.models.attachment import (
     Attachment,
@@ -106,6 +107,7 @@ __all__ = [
     "Agent",
     "AgentConfigVersion",
     "AgentSkill",
+    "AnalyticsSnapshot",
     "ApiToken",
     "Approval",
     "Attachment",

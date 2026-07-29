@@ -20,6 +20,8 @@ from mesh.agent.triggers import (
     register_skill_context_resolver,
     register_skill_matching_resolver,
 )
+from mesh.analytics.routes import router as analytics_router
+from mesh.analytics.service import AnalyticsService
 from mesh.api.deps import current_principal
 from mesh.api.envelope import DataEnvelope
 from mesh.api.error_handlers import install_error_handlers
@@ -312,6 +314,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # signing secret derives from jwt_secret (same ciphertext-only contract
     # as runtime_credentials, README §6.16).
     app.state.autopilot_service = AutopilotService(session_factory, settings.jwt_secret)
+    # Analytics module (analytics.md): read-only aggregates + materialized
+    # cache; never writes source tables.
+    app.state.analytics_service = AnalyticsService(session_factory, settings)
     # Resource-level subscription authorization (README §6.7): shared with the
     # realtime gateway so the standalone /ws process enforces the same
     # private-project visibility (CWE-862). Visibility re-checked per subscribe.
@@ -350,6 +355,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(skill_router)
     app.include_router(squad_router)
     app.include_router(autopilot_router)
+    app.include_router(analytics_router)
 
     @app.get("/api/v1/ping", response_model=DataEnvelope[dict], tags=["meta"])
     async def ping() -> DataEnvelope[dict]:

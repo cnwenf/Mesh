@@ -30,6 +30,7 @@ export type NavKey =
   | 'members'
   | 'chat'
   | 'automation'
+  | 'insights'
   | 'settings';
 
 export interface ShellShortcutLabels {
@@ -50,6 +51,7 @@ const NAV_COMMAND_ROUTES: ReadonlyArray<{ key: NavKey; to: string }> = [
   { key: 'members', to: '/members' },
   { key: 'chat', to: '/chat' },
   { key: 'automation', to: '/automation' },
+  { key: 'insights', to: '/insights' },
   { key: 'settings', to: '/settings' },
 ];
 

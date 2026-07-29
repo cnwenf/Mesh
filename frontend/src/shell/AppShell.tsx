@@ -278,6 +278,7 @@ export function AppShell(): React.JSX.Element {
           members: t('nav.members'),
           chat: t('nav.chat'),
           automation: t('nav.automation'),
+          insights: t('nav.insights'),
           settings: t('nav.settings'),
         },
         theme: {
