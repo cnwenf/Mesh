@@ -58,10 +58,16 @@ async def begin_authorization(
     member_id: uuid.UUID,
     kind: str,
     callback_url: str,
+    name: str | None = None,
     app_client_id: str | None = None,
     authorize_base_url: str | None = None,
 ) -> str:
-    """Store the state + PKCE verifier; return the provider authorize URL."""
+    """Store the state + PKCE verifier; return the provider authorize URL.
+
+    ``name`` rides along in the state record so the callback can create
+    the integration row (with the refresh token persisted as ciphertext,
+    §3.1 line 523) under the admin's chosen name.
+    """
     if kind not in AUTHORIZE_URLS:
         raise BusinessRuleError("unsupported oauth kind", code="invalid_request")
     verifier, challenge = generate_pkce_pair()
@@ -72,6 +78,7 @@ async def begin_authorization(
         "kind": kind,
         "code_verifier": verifier,
         "callback_url": callback_url,
+        "name": name or "",
     }
     await redis.set(f"{STATE_PREFIX}{state}", json.dumps(record), ex=STATE_TTL_SECONDS)
     base = authorize_base_url or AUTHORIZE_URLS[kind]

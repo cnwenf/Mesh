@@ -14,8 +14,18 @@ Subscriptions filter domain events and receive HTTPS POSTs signed with
         (``disabled`` + alert; manual ``resume`` clears ``fail_count``).
 
 SSRF (README §6.16): https-only at creation (400 ``invalid_url_scheme``);
-resolved addresses re-checked at delivery time (private / loopback /
-link-local / metadata → delivery failed ``ssrf_blocked``).
+at delivery time the URL is resolved exactly ONCE through the shared
+``mesh.skill.ssrf.resolve_pinned`` guard (private / loopback / link-local /
+metadata → delivery failed ``ssrf_blocked``) and the connection is pinned
+to the validated addresses via a custom network backend — the hostname is
+NEVER re-resolved at connect time, closing the DNS-rebinding TOCTOU
+(validation query answered public, connect query answered 127.0.0.1).
+TLS SNI + certificate verification stay bound to the original hostname.
+
+Deliveries carry the REAL event type + payload (§3.4 / P8): the
+``Mesh-Event`` header is the domain event type (e.g. ``issue.updated``)
+and the JSON body contains ``event`` + ``data`` so a subscriber can
+reconstruct the domain event from a delivery alone.
 """
 
 from __future__ import annotations
@@ -32,6 +42,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -43,10 +54,14 @@ from mesh.errors import BusinessRuleError, NotFoundError, ValidationError
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.checkout import is_forbidden_host
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
+from mesh.skill.ssrf import PinnedTarget, SourceUnreachableError, resolve_pinned
 
 logger = logging.getLogger("mesh.integrations.outbound")
 
 WEBHOOK_DISPATCH_EVENT_TYPE = "webhook.dispatch"
+# Synthetic event type for POST .../webhook-subscriptions/{id}:send-test —
+# walks the FULL signing + delivery + ledger path (§3.1, P1).
+WEBHOOK_TEST_EVENT_TYPE = "webhook.test"
 
 # §2.6 workspace-level delivery constants (defaults; config-overridable).
 DEFAULT_RETRY_MAX_ATTEMPTS = 8
@@ -81,38 +96,80 @@ def validate_subscription_url(url: str) -> None:
         )
 
 
-def assert_public_resolved(url: str, resolver=None) -> None:
-    """Delivery-time guard: every resolved address must be public.
+def assert_public_resolved(url: str, resolver=None) -> PinnedTarget:
+    """Resolve ONCE + validate + PIN the delivery target (DRY: skill/ssrf.py).
 
-    DNS rebinding / hostname indirection cannot smuggle a private target
-    past the creation-time check. ``resolver`` is injectable for tests.
+    Delegates to the shared ``resolve_pinned`` SSRF guard (README §6.16):
+    https-only, no userinfo smuggling, every resolved address public
+    (private / loopback / link-local / metadata refused wholesale — a mixed
+    answer is a rebinding hole). Returns the :class:`PinnedTarget` whose
+    ``pinned_ips`` are the ONLY addresses the caller may connect to; the
+    hostname must never be re-resolved at connect time (TOCTOU closure).
+    ``resolver`` is injectable for tests. All refusals collapse to the
+    neutral 422 ``ssrf_blocked`` (no internal topology leaks).
     """
-    parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise BusinessRuleError("webhook url must use https", code="ssrf_blocked")
-    host = parsed.hostname or ""
-    if is_forbidden_host(host):
-        raise BusinessRuleError("webhook url target is forbidden", code="ssrf_blocked")
-    resolve = resolver or _resolve_host
     try:
-        addresses = resolve(host, parsed.port or 443)
-    except OSError as exc:
+        return resolve_pinned(url, resolver=resolver)
+    except SourceUnreachableError as exc:
         raise BusinessRuleError(
-            "webhook url does not resolve", code="ssrf_blocked",
-            details={"host": host},
+            "webhook url failed delivery-time SSRF validation",
+            code="ssrf_blocked",
         ) from exc
-    for address in addresses:
-        if is_forbidden_host(address):
-            raise BusinessRuleError(
-                "webhook url resolves to a forbidden address",
-                code="ssrf_blocked",
-                details={"host": host},
-            )
 
 
 def _resolve_host(host: str, port: int) -> list[str]:
     infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     return [info[4][0] for info in infos]
+
+
+class _PinnedNetworkBackend(httpcore.AsyncNetworkBackend):
+    """Connect ONLY to pre-validated IPs — the rebinding window's closure.
+
+    httpx/httpcore pass the URL hostname to ``connect_tcp``; this backend
+    ignores it and dials one of ``pinned_ips`` instead. TLS is terminated
+    by httpcore against the ORIGINAL hostname (SNI + certificate
+    verification unaffected), so a certificate pinned to the hostname still
+    validates while the TCP endpoint is fixed to the validated address.
+    """
+
+    def __init__(self, pinned_ips: tuple[str, ...]) -> None:
+        self._pinned_ips = tuple(pinned_ips)
+        # httpcore's autodetecting (anyio/trio) backend; the module path is
+        # stable across httpcore 1.x (httpx pins httpcore==1.*).
+        from httpcore._backends.auto import AutoBackend  # noqa: PLC0415
+
+        self._delegate = AutoBackend()
+
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: object = None,
+    ) -> httpcore.AsyncNetworkStream:
+        last_exc: Exception | None = None
+        for pinned_ip in self._pinned_ips:
+            try:
+                return await self._delegate.connect_tcp(
+                    pinned_ip,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except Exception as exc:  # noqa: BLE001 — try the next pinned address
+                last_exc = exc
+        assert last_exc is not None  # pinned_ips is never empty (resolve_pinned)
+        raise last_exc
+
+    async def connect_unix_socket(
+        self, path: str, timeout: float | None = None, socket_options: object = None
+    ) -> httpcore.AsyncNetworkStream:  # pragma: no cover — webhook targets are https URLs
+        return await self._delegate.connect_unix_socket(path, timeout, socket_options)
+
+    async def sleep(self, seconds: float) -> None:  # pragma: no cover
+        await self._delegate.sleep(seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +314,18 @@ async def _emit_subscription_updated(
     )
 
 
-def render_subscription(subscription: WebhookSubscription) -> dict[str, Any]:
-    """List/detail rendering — the secret is NEVER echoed (§6.16)."""
+def render_subscription(
+    subscription: WebhookSubscription,
+    *,
+    delivery_stats: tuple[int, int] | None = None,
+) -> dict[str, Any]:
+    """List/detail rendering — the secret is NEVER echoed (§6.16).
+
+    ``delivery_stats`` = (total, sent) over the ledger lifetime; the §4.1
+    "成功率" field is ``sent / total`` (null when nothing was delivered —
+    an empty sample says nothing about health).
+    """
+    total, sent = delivery_stats or (0, 0)
     return {
         "id": str(subscription.id),
         "integration_id": str(subscription.integration_id) if subscription.integration_id else None,
@@ -267,6 +334,9 @@ def render_subscription(subscription: WebhookSubscription) -> dict[str, Any]:
         "status": subscription.status,
         "fail_count": subscription.fail_count,
         "has_secret": bool(subscription.secret_ref),
+        "deliveries_total": total,
+        "deliveries_sent": sent,
+        "success_rate": (sent / total) if total > 0 else None,
         "created_by": str(subscription.created_by),
         "created_at": subscription.created_at.isoformat() if subscription.created_at else None,
         "updated_at": subscription.updated_at.isoformat() if subscription.updated_at else None,
@@ -278,6 +348,7 @@ def render_delivery(delivery: WebhookSubscriptionDelivery) -> dict[str, Any]:
         "id": str(delivery.id),
         "subscription_id": str(delivery.subscription_id),
         "event_ref": delivery.event_ref,
+        "event_type": delivery.event_type,
         "state": delivery.state,
         "attempts": delivery.attempts,
         "next_retry_at": delivery.next_retry_at.isoformat() if delivery.next_retry_at else None,
@@ -355,13 +426,19 @@ async def webhook_dispatch_handler(
             WebhookSubscription.status == "active",
         )
     )).scalars().all()
+    data = payload.get("data") or {}
     for subscription in subscriptions:
         if not _event_matches(subscription, event_type):
             continue
+        # Persist the event type + payload at derivation time so the
+        # delivery worker sends the REAL Mesh-Event header + full body
+        # (§3.4 / P8) even long after the source outbox row is purged.
         delivery = WebhookSubscriptionDelivery(
             workspace_id=event.workspace_id,
             subscription_id=subscription.id,
             event_ref=source_event_ref,
+            event_type=event_type,
+            payload={"event": event_type, "data": data},
             state="pending",
         )
         session.add(delivery)
@@ -426,9 +503,20 @@ class WebhookDeliveryWorker:
         self._resolver = resolver
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    def _client(self) -> httpx.AsyncClient:
+    def _client(self, pinned: PinnedTarget | None = None) -> httpx.AsyncClient:
         if self._http_client_factory is not None:
             return self._http_client_factory()
+        if pinned is not None:
+            # Pin the TCP endpoint to the validated addresses (rebinding
+            # TOCTOU closure); redirects are NEVER followed (a 3xx Location
+            # would re-enter an unvalidated host).
+            return httpx.AsyncClient(
+                timeout=self._timeout_seconds,
+                follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(
+                    network_backend=_PinnedNetworkBackend(pinned.pinned_ips)
+                ),
+            )
         return httpx.AsyncClient(
             timeout=self._timeout_seconds, follow_redirects=False
         )
@@ -457,14 +545,25 @@ class WebhookDeliveryWorker:
         if subscription is None or subscription.status != "active":
             return  # deleted / paused / breaker-open: leave pending until resume
         secret = decrypt_credential_value(subscription.secret_ref, self._signing_secret)
+        # §3.4 / P8: the body carries the REAL event type + data so the
+        # subscriber can reconstruct the domain event (e.g. issue.updated)
+        # from a delivery alone — not two opaque UUIDs.
+        delivery_payload = delivery.payload or {}
         body = json.dumps(
-            {"event_ref": delivery.event_ref, "delivery_id": str(delivery.id)},
+            {
+                "event": delivery.event_type,
+                "data": delivery_payload.get("data") or {},
+                "event_ref": delivery.event_ref,
+                "delivery_id": str(delivery.id),
+            },
             separators=(",", ":"),
         ).encode()
         now = self._clock()
-        # SSRF re-check on the RESOLVED address (defense in depth, §6.16).
+        # SSRF: resolve ONCE + validate + PIN, then connect only to the
+        # pinned addresses (§6.16; DNS rebinding TOCTOU closed — the
+        # hostname is never re-resolved at connect time).
         try:
-            assert_public_resolved(subscription.url, resolver=self._resolver)
+            pinned = assert_public_resolved(subscription.url, resolver=self._resolver)
         except BusinessRuleError as exc:
             delivery.attempts += 1
             delivery.response_status = None
@@ -474,12 +573,14 @@ class WebhookDeliveryWorker:
         timestamp = int(now.timestamp())
         headers = {
             "Mesh-Signature": format_signature_header(signature_headers(secret, body, timestamp)),
-            "Mesh-Event": delivery.event_ref,
+            # §3.4 line 599: Mesh-Event carries the event TYPE (legacy rows
+            # without a captured type fall back to the source event ref).
+            "Mesh-Event": delivery.event_type or delivery.event_ref,
             "Mesh-Delivery": str(delivery.id),
             "Content-Type": "application/json",
         }
         try:
-            async with self._client() as client:
+            async with self._client(pinned) as client:
                 response = await client.post(subscription.url, content=body, headers=headers)
             status_code = response.status_code
             ok = 200 <= status_code < 300
@@ -603,12 +704,60 @@ async def retry_delivery(
     return delivery
 
 
+async def send_test_event(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    subscription: WebhookSubscription,
+    actor_member_id: uuid.UUID,
+) -> WebhookSubscriptionDelivery:
+    """POST .../webhook-subscriptions/{id}:send-test (§3.1, P1).
+
+    Synthesizes a ``webhook.test`` delivery that walks the FULL path —
+    the delivery worker signs it (``Mesh-Signature``), posts it with
+    ``Mesh-Event: webhook.test`` + the payload body, and records it in
+    the delivery ledger exactly like a domain-event delivery. A unique
+    ``event_ref`` per call means repeated tests never collide with the
+    ``UNIQUE(subscription_id, event_ref)`` idempotency key.
+    """
+    if subscription.status == "disabled":
+        raise BusinessRuleError(
+            "subscription circuit breaker is open; resume first",
+            code="subscription_circuit_open",
+        )
+    if subscription.status != "active":
+        raise BusinessRuleError(
+            "only active subscriptions can send test events",
+            code="invalid_request",
+            details={"status": subscription.status},
+        )
+    delivery = WebhookSubscriptionDelivery(
+        workspace_id=workspace_id,
+        subscription_id=subscription.id,
+        event_ref=f"test:{uuid.uuid4()}",
+        event_type=WEBHOOK_TEST_EVENT_TYPE,
+        payload={
+            "event": WEBHOOK_TEST_EVENT_TYPE,
+            "data": {
+                "synthetic": True,
+                "subscription_id": str(subscription.id),
+                "requested_by": str(actor_member_id),
+            },
+        },
+        state="pending",
+    )
+    session.add(delivery)
+    await session.flush()
+    return delivery
+
+
 __all__ = [
     "DEFAULT_CIRCUIT_BREAK_THRESHOLD",
     "DEFAULT_RETRY_BASE_SECONDS",
     "DEFAULT_RETRY_MAX_ATTEMPTS",
     "DEFAULT_RETRY_MAX_SECONDS",
     "WEBHOOK_DISPATCH_EVENT_TYPE",
+    "WEBHOOK_TEST_EVENT_TYPE",
     "WebhookDeliveryWorker",
     "assert_public_resolved",
     "compute_next_retry",
@@ -622,6 +771,7 @@ __all__ = [
     "resume_subscription",
     "retry_delivery",
     "rotate_subscription_secret",
+    "send_test_event",
     "signature_headers",
     "update_subscription",
     "validate_subscription_url",

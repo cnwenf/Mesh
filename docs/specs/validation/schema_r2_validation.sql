@@ -2055,6 +2055,10 @@ CREATE TABLE integrations (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','im_dingtalk','vcs_github','vcs_gitlab','webhook_outbound')),
   stream_state JSONB NOT NULL DEFAULT '{}',                -- MES-82:钉钉 Stream 连接状态持久真源(integrations.md §2.2/§3.9)
+  health_state TEXT NOT NULL DEFAULT 'unknown'             -- 连接器健康(§2.2,MEDIUM-P2:测试连接/凭据失效驱动,§4.1 徽章)
+               CHECK (health_state IN ('unknown','healthy','auth_failed','unreachable')),
+  last_error   TEXT NULL,
+  last_success_at TIMESTAMPTZ NULL,
   name         TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   config       JSONB NOT NULL DEFAULT '{}',
@@ -2151,6 +2155,8 @@ CREATE TABLE webhook_subscription_deliveries (
   workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   subscription_id UUID NOT NULL,
   event_ref       TEXT NOT NULL,
+  event_type      TEXT NOT NULL DEFAULT '',                -- HIGH-1:Mesh-Event 头真值(派发时捕获,§3.4 行 599)
+  payload         JSONB NOT NULL DEFAULT '{}',             -- HIGH-1:body 携带事件类型+data(P8 订阅方还原)
   state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
   attempts        INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   next_retry_at   TIMESTAMPTZ NULL,

@@ -374,6 +374,153 @@ ADAPTERS: dict[str, dict[str, Any]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Connectivity test (§3.1 :test — lightweight credential/connectivity check)
+# ---------------------------------------------------------------------------
+
+TEST_TIMEOUT_SECONDS = 5.0
+
+# Per-kind default platform API bases (injectable for tests / private
+# instances — GitLab self-hosted reads ``instance_url`` from config).
+TEST_BASE_URLS: dict[str, str] = {
+    "im_feishu": "https://open.feishu.cn",
+    "im_slack": "https://slack.com",
+    "im_dingtalk": "https://oapi.dingtalk.com",
+    "vcs_github": "https://api.github.com",
+    "vcs_gitlab": "https://gitlab.com",
+}
+
+HEALTH_HEALTHY = "healthy"
+HEALTH_AUTH_FAILED = "auth_failed"
+HEALTH_UNREACHABLE = "unreachable"
+
+
+async def test_connectivity(
+    kind: str,
+    *,
+    config: dict[str, Any] | None,
+    secret: str | None,
+    http_client: "httpx.AsyncClient | None" = None,
+    base_urls: dict[str, str] | None = None,
+) -> tuple[str, str | None]:
+    """Lightweight platform-API round-trip; returns ``(health_state, detail)``.
+
+    Classifies exactly three ways (§3.1): credentials accepted →
+    ``healthy``; credentials rejected by the platform (401/403 or a
+    provider-level auth error code) → ``auth_failed`` (drives the
+    "re-authorize" banner, §4.1); network/DNS/timeout failure →
+    ``unreachable``. No side effects on the platform side (read-only
+    identity/token endpoints only). ``webhook_outbound`` has no platform
+    credentials — it reports ``healthy`` with an explanatory detail
+    (subscriptions verify via ``:send-test`` instead).
+    """
+    import httpx as _httpx
+
+    config = config or {}
+    bases = {**TEST_BASE_URLS, **(base_urls or {})}
+    if kind == "webhook_outbound":
+        return HEALTH_HEALTHY, "outbound_only_no_credentials"
+    if not secret:
+        return HEALTH_AUTH_FAILED, "missing_credentials"
+
+    client = http_client or _httpx.AsyncClient(timeout=TEST_TIMEOUT_SECONDS)
+    owns_client = http_client is None
+    try:
+        if kind == "im_feishu":
+            app_id = str(config.get("app_id") or "")
+            if not app_id:
+                return HEALTH_AUTH_FAILED, "missing_app_id"
+            try:
+                resp = await client.post(
+                    f"{bases[kind]}/open-apis/auth/v3/tenant_access_token/internal",
+                    json={"app_id": app_id, "app_secret": secret},
+                )
+            except (_httpx.HTTPError, OSError) as exc:
+                return HEALTH_UNREACHABLE, type(exc).__name__
+            if resp.status_code != 200:
+                return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
+            body = _json_or_empty(resp)
+            return (
+                (HEALTH_HEALTHY, None)
+                if body.get("code") == 0
+                else (HEALTH_AUTH_FAILED, f"code_{body.get('code')}")
+            )
+        if kind == "im_slack":
+            try:
+                resp = await client.post(
+                    f"{bases[kind]}/api/auth.test",
+                    headers={"Authorization": f"Bearer {secret}"},
+                )
+            except (_httpx.HTTPError, OSError) as exc:
+                return HEALTH_UNREACHABLE, type(exc).__name__
+            if resp.status_code != 200:
+                return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
+            body = _json_or_empty(resp)
+            return (HEALTH_HEALTHY, None) if body.get("ok") else (
+                HEALTH_AUTH_FAILED, str(body.get("error") or "invalid_auth")
+            )
+        if kind == "im_dingtalk":
+            app_key = str(config.get("app_key") or config.get("app_id") or "")
+            if not app_key:
+                return HEALTH_AUTH_FAILED, "missing_app_key"
+            try:
+                resp = await client.get(
+                    f"{bases[kind]}/gettoken",
+                    params={"appkey": app_key, "appsecret": secret},
+                )
+            except (_httpx.HTTPError, OSError) as exc:
+                return HEALTH_UNREACHABLE, type(exc).__name__
+            if resp.status_code != 200:
+                return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
+            body = _json_or_empty(resp)
+            return (
+                (HEALTH_HEALTHY, None)
+                if body.get("errcode") == 0
+                else (HEALTH_AUTH_FAILED, f"errcode_{body.get('errcode')}")
+            )
+        if kind == "vcs_github":
+            try:
+                resp = await client.get(
+                    f"{bases[kind]}/user",
+                    headers={
+                        "Authorization": f"Bearer {secret}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+            except (_httpx.HTTPError, OSError) as exc:
+                return HEALTH_UNREACHABLE, type(exc).__name__
+            if resp.status_code == 200:
+                return HEALTH_HEALTHY, None
+            if resp.status_code in (401, 403):
+                return HEALTH_AUTH_FAILED, f"http_{resp.status_code}"
+            return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
+        if kind == "vcs_gitlab":
+            base = str(config.get("instance_url") or bases[kind]).rstrip("/")
+            try:
+                resp = await client.get(
+                    f"{base}/api/v4/user", headers={"PRIVATE-TOKEN": secret}
+                )
+            except (_httpx.HTTPError, OSError) as exc:
+                return HEALTH_UNREACHABLE, type(exc).__name__
+            if resp.status_code == 200:
+                return HEALTH_HEALTHY, None
+            if resp.status_code in (401, 403):
+                return HEALTH_AUTH_FAILED, f"http_{resp.status_code}"
+            return HEALTH_UNREACHABLE, f"http_{resp.status_code}"
+        return HEALTH_AUTH_FAILED, "unsupported_kind"
+    finally:
+        if owns_client:
+            await client.aclose()
+
+
+def _json_or_empty(resp: "httpx.Response") -> dict[str, Any]:
+    try:
+        body = resp.json()
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
 def adapter_for(kind: str) -> dict[str, Any]:
     provider = KIND_TO_PROVIDER.get(kind)
     adapter = ADAPTERS.get(provider or "")

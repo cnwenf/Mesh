@@ -28,7 +28,7 @@ from mesh.db.models.integration import (
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ConflictError, NotFoundError
-from mesh.integrations.connectors import KIND_TO_PROVIDER, adapter_for
+from mesh.integrations.connectors import KIND_TO_PROVIDER, adapter_for, test_connectivity
 from mesh.integrations.matching import validate_match_config
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
@@ -138,6 +138,93 @@ class IntegrationService:
                 sort_value_of=lambda row: row.created_at, id_of=lambda row: row.id,
                 cursor=cursor, limit=limit,
             )
+
+    async def event_counts_since(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_ids: list[uuid.UUID],
+        since: datetime,
+    ) -> dict[uuid.UUID, int]:
+        """Inbound event counts per integration since ``since`` (§4.1 近7天事件量)."""
+        if not integration_ids:
+            return {}
+        async with self._sf() as session:
+            await set_tenant_context(session, workspace_id)
+            rows = (
+                await session.execute(
+                    select(IntegrationEvent.integration_id, func.count())
+                    .where(
+                        IntegrationEvent.workspace_id == workspace_id,
+                        IntegrationEvent.integration_id.in_(integration_ids),
+                        IntegrationEvent.received_at >= since,
+                    )
+                    .group_by(IntegrationEvent.integration_id)
+                )
+            ).all()
+            return {row[0]: row[1] for row in rows}
+
+    async def record_health(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration: Integration,
+        health_state: str,
+        last_error: str | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Persist a connector-health transition (§2.2 / §4.1 badge).
+
+        ``healthy`` stamps ``last_success_at`` and clears ``last_error``;
+        failure states stamp ``last_error`` and keep the previous success
+        instant (the UI shows "last ok" context next to the badge).
+        """
+        moment = now or datetime.now(UTC)
+        async with self._sf() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            row = await session.get(Integration, integration.id)
+            if row is None or row.deleted_at is not None:
+                raise NotFoundError("integration not found")
+            row.health_state = health_state
+            if health_state == "healthy":
+                row.last_error = None
+                row.last_success_at = moment
+            else:
+                row.last_error = last_error
+            row.updated_at = moment
+            await self._emit_integration_updated(session, row, moment, "updated")
+
+    async def test_connection(
+        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
+    ) -> dict[str, Any]:
+        """POST .../integrations/{id}:test (§3.1, P1) + health drive (P2).
+
+        Decrypts the credential IN-MEMORY only (§6.16), runs the
+        connector's lightweight platform-API check, and persists the
+        outcome to the health fields (§4.1 badge / re-authorize banner).
+        """
+        async with self._sf() as session:
+            await set_tenant_context(session, workspace_id)
+            integration = await session.get(Integration, integration_id)
+            if integration is None or integration.deleted_at is not None:
+                raise NotFoundError("integration not found")
+            kind = integration.kind
+            config = dict(integration.config or {})
+            secret = (
+                decrypt_credential_value(integration.secret_ref, self._signing_secret)
+                if integration.secret_ref
+                else None
+            )
+        health_state, detail = await test_connectivity(
+            kind, config=config, secret=secret
+        )
+        await self.record_health(
+            workspace_id=workspace_id,
+            integration=integration,
+            health_state=health_state,
+            last_error=detail,
+        )
+        return {"health_state": health_state, "detail": detail}
 
     async def get_integration(
         self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
@@ -470,19 +557,45 @@ class IntegrationService:
 # ---------------------------------------------------------------------------
 
 
-def render_integration(integration: Integration) -> dict[str, Any]:
+def _redacted_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """§6.16 defense in depth: NEVER echo ``*_ref`` ciphertext values.
+
+    The ciphertext itself is not plaintext, but rendering it hands every
+    list/get reader offline attack material; responses keep the KEY (the
+    config shape is non-secret) with a fixed mask value.
+    """
     return {
+        key: ("***" if str(key).endswith("_ref") and value else value)
+        for key, value in (config or {}).items()
+    }
+
+
+def render_integration(
+    integration: Integration, *, events_7d: int | None = None
+) -> dict[str, Any]:
+    rendered = {
         "id": str(integration.id),
         "workspace_id": str(integration.workspace_id),
         "kind": integration.kind,
         "name": integration.name,
         "status": integration.status,
-        "config": integration.config or {},
+        # Connector health (§2.2): independent of the manual active/disabled
+        # status; ``auth_failed`` drives the "re-authorize" banner (§4.1).
+        "health_state": integration.health_state,
+        "last_error": integration.last_error,
+        "last_success_at": (
+            integration.last_success_at.isoformat() if integration.last_success_at else None
+        ),
+        "config": _redacted_config(integration.config),
         "has_secret": bool(integration.secret_ref),
         "created_by": str(integration.created_by),
         "created_at": integration.created_at.isoformat() if integration.created_at else None,
         "updated_at": integration.updated_at.isoformat() if integration.updated_at else None,
     }
+    if events_7d is not None:
+        # §4.1 connected-list column "近7天事件量".
+        rendered["events_7d"] = events_7d
+    return rendered
 
 
 def render_binding(binding: IntegrationBinding) -> dict[str, Any]:

@@ -9,7 +9,7 @@ semantics enforced in the service, R5).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -47,6 +47,9 @@ router = APIRouter(prefix="/api/v1", tags=["integrations"])
 
 WRITE_LIMIT = 120
 WRITE_WINDOW_SECONDS = 60
+
+# §4.1 connected-list column "近7天事件量" window.
+EVENTS_WINDOW_DAYS = 7
 
 
 def _service(request: Request) -> IntegrationService:
@@ -91,12 +94,20 @@ async def list_integrations(
     limit: int = Query(default=50, ge=1, le=200),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    page = await _service(request).list_integrations(
+    service = _service(request)
+    page = await service.list_integrations(
         workspace_id=context.workspace.id, kind=kind, status=status,
         cursor=cursor, limit=limit,
     )
+    counts = await service.event_counts_since(
+        workspace_id=context.workspace.id,
+        integration_ids=[row.id for row in page.items],
+        since=datetime.now(UTC) - timedelta(days=EVENTS_WINDOW_DAYS),
+    )
     return {
-        "data": [render_integration(row) for row in page.items],
+        "data": [
+            render_integration(row, events_7d=counts.get(row.id, 0)) for row in page.items
+        ],
         "next_cursor": page.next_cursor,
     }
 
@@ -111,7 +122,7 @@ async def create_integration(
     user: User = Depends(get_current_user),
 ) -> dict:
     await _rate_limit_write(request, user, response)
-    return await _service(request).create_integration(
+    created = await _service(request).create_integration(
         workspace_id=context.workspace.id,
         creator=context.member,
         kind=body.kind,
@@ -119,6 +130,9 @@ async def create_integration(
         config=body.config,
         secret=body.secret,
     )
+    # §6.14 success envelope (MEDIUM-4: the one admin endpoint that
+    # previously bypassed it).
+    return {"data": created}
 
 
 @router.get("/workspaces/{workspace_id}/integrations/{integration_id}")
@@ -194,6 +208,31 @@ async def rotate_integration_secret(
             workspace_id=context.workspace.id,
             integration_id=_path_uuid(integration_id, what="integration"),
             secret=body.secret,
+        )
+    }
+
+
+@router.post("/workspaces/{workspace_id}/integrations/{integration_id}:test")
+async def test_integration(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Test connection (§3.1, P1): lightweight platform API round-trip.
+
+    Verifies credentials/connectivity WITHOUT side effects and drives the
+    connector health fields (MEDIUM-P2): the outcome is persisted to
+    ``health_state`` / ``last_error`` / ``last_success_at`` so the §4.1
+    badge and "re-authorize" banner reflect reality.
+    """
+    await _rate_limit_write(request, user, response)
+    return {
+        "data": await _service(request).test_connection(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
         )
     }
 
@@ -436,6 +475,7 @@ async def oauth_authorize(
     request: Request,
     workspace_id: str,
     kind: str,
+    name: str | None = None,
     context: WorkspaceContext = Depends(require_workspace("integration:manage")),
 ) -> RedirectResponse:
     settings = request.app.state.settings
@@ -446,6 +486,7 @@ async def oauth_authorize(
         member_id=context.member.id,
         kind=kind,
         callback_url=callback_url,
+        name=name,
     )
     return RedirectResponse(url, status_code=302)
 
@@ -457,23 +498,61 @@ async def oauth_callback(
     state: str = "",
     code: str = "",
 ) -> RedirectResponse:
+    """OAuth round-trip completion (MEDIUM-1: credentials ARE persisted).
+
+    §3.1 line 523: the refresh token is stored as ciphertext ONLY
+    (``secret_ref``, §6.16) — the callback creates the integration row
+    itself (state carries workspace/member/name), so the token never
+    depends on a later manual step and never touches plaintext storage.
+    """
+    from mesh.db.models.member import Member
+    from mesh.db.tenant import set_tenant_context
+
     settings = request.app.state.settings
     front = settings.app_base_url or ""
     try:
         record = await oauth_mod.consume_state(request.app.state.redis, state=state)
         if record is None or record.get("kind") != kind:
             return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
-        _tokens = await oauth_mod.exchange_code(
+        tokens = await oauth_mod.exchange_code(
             kind=kind,
             code=code,
             code_verifier=str(record["code_verifier"]),
             callback_url=str(record["callback_url"]),
         )
-        # Refresh token → ciphertext only (§6.16); minimal scope enforced at
-        # authorize time. The integration row is created by the admin after
-        # the round-trip with the returned config context.
-        return RedirectResponse(f"{front}/integrations?oauth=success", status_code=302)
-    except BusinessRuleError:
+        # Refresh token preferred (long-lived); providers without refresh
+        # tokens (e.g. GitHub) fall back to the access token — ciphertext
+        # either way, minimal scope enforced at authorize time.
+        secret_value = str(tokens.get("refresh_token") or tokens.get("access_token") or "")
+        if not secret_value:
+            return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
+        config: dict[str, object] = {}
+        provider_tenant_id = tokens.get("team_id") or (tokens.get("team") or {}).get("id")
+        if provider_tenant_id:
+            config["provider_tenant_id"] = str(provider_tenant_id)
+        workspace_id = uuid.UUID(str(record["workspace_id"]))
+        member_id = uuid.UUID(str(record["member_id"]))
+        async with request.app.state.session_factory() as session:
+            await set_tenant_context(session, workspace_id)
+            member = await session.get(Member, member_id)
+        if member is None or member.status != "active":
+            return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
+        name = str(record.get("name") or "") or f"{kind}-oauth"
+        service: IntegrationService = request.app.state.integration_service
+        created = await service.create_integration(
+            workspace_id=workspace_id,
+            creator=member,
+            kind=kind,
+            name=name,
+            config=config,
+            secret=secret_value,
+        )
+        integration_id = created["integration"]["id"]
+        return RedirectResponse(
+            f"{front}/integrations?oauth=success&id={integration_id}", status_code=302
+        )
+    except (BusinessRuleError, ValueError):
+        # ValueError guards uuid parsing of a tampered state record.
         return RedirectResponse(f"{front}/integrations?oauth=error", status_code=302)
 
 
@@ -494,6 +573,10 @@ async def list_subscriptions(
     from mesh.db.models.integration import WebhookSubscription
     from mesh.db.tenant import set_tenant_context
 
+    from sqlalchemy import func as sa_func
+
+    from mesh.db.models.integration import WebhookSubscriptionDelivery
+
     async with request.app.state.session_factory() as session:
         await set_tenant_context(session, context.workspace.id)
         stmt = select(WebhookSubscription).where(
@@ -504,7 +587,36 @@ async def list_subscriptions(
         rows = (await session.execute(
             stmt.order_by(WebhookSubscription.created_at.desc())
         )).scalars().all()
-    return {"data": [outbound_mod.render_subscription(row) for row in rows]}
+        # §4.1 "成功率" per subscription (lifetime ledger counts).
+        stats: dict[uuid.UUID, tuple[int, int]] = {}
+        if rows:
+            stats = {
+                stat_row[0]: (stat_row[1], stat_row[2])
+                for stat_row in (
+                    await session.execute(
+                        select(
+                            WebhookSubscriptionDelivery.subscription_id,
+                            sa_func.count(),
+                            sa_func.count(WebhookSubscriptionDelivery.id).filter(
+                                WebhookSubscriptionDelivery.state == "sent"
+                            ),
+                        )
+                        .where(
+                            WebhookSubscriptionDelivery.workspace_id == context.workspace.id,
+                            WebhookSubscriptionDelivery.subscription_id.in_(
+                                [row.id for row in rows]
+                            ),
+                        )
+                        .group_by(WebhookSubscriptionDelivery.subscription_id)
+                    )
+                ).all()
+            }
+    return {
+        "data": [
+            outbound_mod.render_subscription(row, delivery_stats=stats.get(row.id))
+            for row in rows
+        ]
+    }
 
 
 @router.post("/workspaces/{workspace_id}/webhook-subscriptions", status_code=201)
@@ -642,6 +754,43 @@ async def resume_subscription(
             session, subscription=subscription, now=datetime.now(UTC)
         )
     return {"data": outbound_mod.render_subscription(updated)}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}:send-test",
+    status_code=201,
+)
+async def send_subscription_test_event(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    subscription_id: str,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Send test event (§3.1, P1): a synthetic ``webhook.test`` delivery.
+
+    Walks the FULL delivery path — the worker signs it (``Mesh-Signature``),
+    posts ``Mesh-Event: webhook.test`` + payload body, and records it in
+    the ledger like any domain-event delivery.
+    """
+    await _rate_limit_write(request, user, response)
+    async with request.app.state.session_factory() as session, session.begin():
+        from mesh.db.tenant import set_tenant_context
+
+        await set_tenant_context(session, context.workspace.id)
+        subscription = await outbound_mod.get_subscription(
+            session,
+            workspace_id=context.workspace.id,
+            subscription_id=_path_uuid(subscription_id, what="subscription"),
+        )
+        delivery = await outbound_mod.send_test_event(
+            session,
+            workspace_id=context.workspace.id,
+            subscription=subscription,
+            actor_member_id=context.member.id,
+        )
+    return {"data": outbound_mod.render_delivery(delivery)}
 
 
 @router.get(

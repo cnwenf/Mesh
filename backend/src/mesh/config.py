@@ -213,6 +213,13 @@ class Settings(BaseSettings):
     outbox_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS))
     outbox_retention_interval: float = Field(default=3600.0, gt=0)
 
+    # Integration ledger retention (integrations.md §2.4/§2.6, MEDIUM-P3):
+    # inbound event audits + outbound delivery ledgers store raw external
+    # content (potentially PII); purged on a GitHub-delivery-log-class
+    # 30-day window. Pending deliveries are never purged.
+    integration_ledger_retention: timedelta = Field(default=timedelta(days=30))
+    integration_ledger_retention_interval: float = Field(default=3600.0, gt=0)
+
     # Realtime retention window (README §6.7: default 7 days, configurable).
     realtime_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS))
     realtime_retention_interval: float = Field(default=3600.0, gt=0)

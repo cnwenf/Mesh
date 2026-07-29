@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationEvent, VcsLink
 from mesh.db.models.issue import Issue, IssueStatus
 from mesh.db.models.workspace import Workspace
-from mesh.errors import BusinessRuleError, NotFoundError
+from mesh.errors import BusinessRuleError, ConflictError, NotFoundError
 from mesh.integrations.connectors import NormalizedEvent
 from mesh.issue.service import _workspace_issues_channel
 from mesh.outbox.service import emit_realtime
@@ -151,7 +151,9 @@ async def list_issue_links(
             VcsLink.workspace_id == workspace_id,
             VcsLink.mesh_entity_type == "issue",
             VcsLink.mesh_entity_id == issue_id,
-            VcsLink.status != "deleted",
+            # §3.3 line 576 / §5.2 line 733: the sidebar lists ACTIVE links
+            # (stale rows are history, surfaced by retention scans, not UI).
+            VcsLink.status == "active",
         ).order_by(VcsLink.created_at.desc())
     )).scalars().all()
     return list(rows)
@@ -172,6 +174,55 @@ async def delete_link(
     return link
 
 
+def deep_link_url(link: VcsLink) -> str | None:
+    """Web URL of the external object (§4.2 line 671 "深链").
+
+    Ref conventions (external_object_for): github ``owner/repo#<n>`` /
+    ``owner/repo@<branch>`` / ``owner/repo``; gitlab ``path#<iid>`` /
+    ``path@<branch>`` / ``path`` with the instance host carried in
+    ``provider_tenant_key``. Returns None for shapes we cannot map —
+    the UI falls back to plain text.
+    """
+    provider = link.provider
+    ref = link.external_object_ref or ""
+    obj_type = link.external_object_type
+    if not ref:
+        return None
+    if provider == "github":
+        base = "https://github.com"
+        if obj_type == "pull_request" and "#" in ref:
+            repo, _, number = ref.partition("#")
+            return f"{base}/{repo}/pull/{number}" if repo and number else None
+        if obj_type == "issue" and "#" in ref:
+            repo, _, number = ref.partition("#")
+            return f"{base}/{repo}/issues/{number}" if repo and number else None
+        if obj_type == "branch" and "@" in ref:
+            repo, _, branch = ref.partition("@")
+            return f"{base}/{repo}/tree/{branch}" if repo and branch else None
+        if obj_type == "commit" and "@" in ref:
+            repo, _, sha = ref.partition("@")
+            return f"{base}/{repo}/commit/{sha}" if repo and sha else None
+        if obj_type == "repository":
+            return f"{base}/{ref}"
+        return None
+    if provider == "gitlab":
+        host = (link.provider_tenant_key or "gitlab.com").strip().lower() or "gitlab.com"
+        base = f"https://{host}"
+        if obj_type == "merge_request" and "#" in ref:
+            repo, _, iid = ref.partition("#")
+            return f"{base}/{repo}/-/merge_requests/{iid}" if repo and iid else None
+        if obj_type == "branch" and "@" in ref:
+            repo, _, branch = ref.partition("@")
+            return f"{base}/{repo}/-/tree/{branch}" if repo and branch else None
+        if obj_type == "commit" and "@" in ref:
+            repo, _, sha = ref.partition("@")
+            return f"{base}/{repo}/-/commit/{sha}" if repo and sha else None
+        if obj_type == "repository":
+            return f"{base}/{ref}"
+        return None
+    return None
+
+
 def render_link(link: VcsLink) -> dict[str, Any]:
     return {
         "id": str(link.id),
@@ -179,6 +230,7 @@ def render_link(link: VcsLink) -> dict[str, Any]:
         "provider": link.provider,
         "external_object_type": link.external_object_type,
         "external_object_ref": link.external_object_ref,
+        "url": deep_link_url(link),
         "mesh_entity_type": link.mesh_entity_type,
         "mesh_entity_id": str(link.mesh_entity_id),
         "link_source": link.link_source,
@@ -543,7 +595,7 @@ async def explicit_link(
     if existing is not None:
         if existing.mesh_entity_id == issue.id:
             return render_link(existing)  # idempotent same-issue re-link
-        raise BusinessRuleError(
+        raise ConflictError(
             "external object already linked to another issue",
             code="conflict",
             details={"existing_issue_id": str(existing.mesh_entity_id)},
@@ -563,9 +615,7 @@ async def explicit_link(
         now=now,
     )
     if link is None:  # race: another writer won the slot
-        raise BusinessRuleError(
-            "external object already linked", code="conflict"
-        )
+        raise ConflictError("external object already linked", code="conflict")
     return render_link(link)
 
 

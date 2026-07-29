@@ -56,6 +56,27 @@ logger = logging.getLogger("mesh.integrations.inbound")
 
 REJECTED_KEY_PREFIX = "rejected:"
 
+# MEDIUM-3: rejected rows audit UNTRUSTED external content (potentially
+# PII, potentially attacker-inflated). Persisting the full payload lets a
+# credential-less forger amplify storage; rejected audits keep only a
+# size-capped head (the forensic prefix) + the original byte size.
+REJECTED_PAYLOAD_MAX_BYTES = 16 * 1024
+REJECTED_PAYLOAD_HEAD_BYTES = 4 * 1024
+
+
+def _audit_payload(payload: dict[str, Any], process_status: str) -> dict[str, Any]:
+    """Truncate rejected-audit payloads (valid events keep full payloads)."""
+    if process_status != "rejected":
+        return payload
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(encoded) <= REJECTED_PAYLOAD_MAX_BYTES:
+        return payload
+    return {
+        "_truncated": True,
+        "original_bytes": len(encoded),
+        "head": encoded[:REJECTED_PAYLOAD_HEAD_BYTES].decode("utf-8", "replace"),
+    }
+
 # Only benign headers are persisted — never Authorization/Cookie/signatures.
 _STORED_HEADERS = (
     "content-type",
@@ -412,7 +433,7 @@ async def _store_event(
         integration_id=integration_id,
         external_event_id=external_event_id,
         event_type=event_type,
-        payload=payload,
+        payload=_audit_payload(payload, process_status),
         signature_status=signature_status,
         process_status=process_status,
         received_at=now,

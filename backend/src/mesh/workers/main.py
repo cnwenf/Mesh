@@ -81,7 +81,11 @@ from mesh.workers.device_auth_sweep import device_auth_sweep_loop
 from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
-from mesh.workers.retention import outbox_retention_loop, retention_loop
+from mesh.workers.retention import (
+    integration_ledger_retention_loop,
+    outbox_retention_loop,
+    retention_loop,
+)
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
 logger = logging.getLogger("mesh.workers")
@@ -374,6 +378,16 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     retention=settings.outbox_event_retention,
                     interval=settings.outbox_retention_interval,
+                    stop=stop,
+                    clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "integration-ledger-retention",
+                lambda: integration_ledger_retention_loop(
+                    session_factory,
+                    retention=settings.integration_ledger_retention,
+                    interval=settings.integration_ledger_retention_interval,
                     stop=stop,
                     clock=_utcnow,
                 ),
