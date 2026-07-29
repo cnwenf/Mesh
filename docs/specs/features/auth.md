@@ -27,19 +27,26 @@
 
 <!-- sessions-registry:start -->
 
-| 路径 / 入口 | 读写目的 |
+| 路径 / 入口(真实 method + 完整 `/api/v1` 路径,R6-H2 逐条穷举) | 读写目的 |
 |------|------|
-| `POST /auth/login` | **写**:创建会话行、签发 refresh(Web 经 Set-Cookie;密码/OAuth 仅 Web 形态,§3) |
-| `POST /auth/logout` | **读 + 写**:定位当前会话(Web 按 cookie / CLI 按 Bearer)并撤销 |
-| `POST /auth/logout-all` | **读 + 写**:**批量撤销**该用户全部未撤销会话 |
-| `POST /auth/refresh` | **读 + 写**:校验会话未撤销/未过期 + 轮换仲裁 / 有界宽限(§3.8) |
-| `GET /auth/token` | **读**:自省当前凭证的会话元数据 |
-| `DELETE /auth/token` | **写**:自撤销当前会话 |
-| `POST /auth/reset-password` | **读 + 写**:密码重置后使该用户**全部会话失效**(凭重置令牌定位 user 后批量撤销) |
-| `POST /auth/change-password` | **读 + 写**:按当前 access `sid` 识别并保留发起会话、更新 `authenticated_at`(R5-M1)、撤销其它会话 |
-| `GET /sessions` / `DELETE /sessions/{id}` | **读 / 写**:会话列表与指定撤销 |
+| `POST /api/v1/auth/register` | **写**:注册成功**自动登录**(§4.1)——创建 `type='web'` 会话行、签发 refresh(Set-Cookie);凭据校验成功 → `authenticated_at=now()`(R6-H3) |
+| `POST /api/v1/auth/login` | **写**:密码校验成功——创建 web 会话、签发 refresh(Set-Cookie);`authenticated_at=now()`(R6-H3) |
+| `GET /api/v1/auth/oauth/{provider}/start` | **读**:发起 OAuth 往返(state + PKCE;step-up/换绑用途携带 `max_age=0`/`prompt=login` 与 purpose 参数,§5.5/R6-H3) |
+| `GET/POST /api/v1/auth/oauth/{provider}/callback` | **读 + 写**:回调校验 state、换 token,登录/自动注册并绑定、创建 web 会话;**仅当提供商认证新鲜(本次往返发生交互登录,`auth_time` 满足 `max_age`)→ `authenticated_at=now()`;静默 SSO 复用 → `authenticated_at=NULL`**(R6-H3) |
+| `POST /api/v1/auth/device/token` | **写**:设备码消费**创建 `type='cli'` 会话**(§3.1.1 INSERT sessions);`authenticated_at` **继承批准记录 `approved_authenticated_at`**(批准时从批准者浏览器会话经锁定读取,R6-H3;不得以消费时刻冒充认证),可为 NULL |
+| `POST /api/v1/auth/refresh` | **读 + 写**:校验会话未撤销/未过期 + 轮换仲裁 / 有界宽限(§3.8) |
+| `POST /api/v1/auth/logout` | **读 + 写**:定位当前会话(Web 按 cookie / CLI 按 Bearer)并撤销 |
+| `POST /api/v1/auth/logout-all` | **读 + 写**:**批量撤销**该用户全部未撤销会话 |
+| `POST /api/v1/auth/reset-password` | **读 + 写**:凭重置令牌定位 user 后**批量撤销全部会话**,并以新凭据建立新 web 会话(`authenticated_at=now()`) |
+| `POST /api/v1/auth/change-password` | **读 + 写**:step-up 闸门校验(读 `authenticated_at`)→ 按当前 access `sid` 识别并保留发起会话、更新 `authenticated_at=now()`、撤销其它会话 |
+| `POST /api/v1/auth/reauth` | **读 + 写**:**step-up 再认证(R6-H3 新增)**——密码用户呈递 `{password}`、启用 TOTP 用户呈递 `{totp_code}`,校验成功 → 当前 web 会话 `authenticated_at=now()`;OAuth-only 用户呈递 `{method:"oauth"}` → 返回新鲜授权 URL(`start` 携带 `max_age=0`/`prompt=login`,回调校验新鲜 `auth_time` 后更新 `authenticated_at`);**仅 web 会话可调用,PAT/agent 调用 → `403 reauth_required`** |
+| `GET /api/v1/auth/token` | **读**:自省当前凭证的会话元数据 |
+| `DELETE /api/v1/auth/token` | **写**:自撤销当前会话 |
+| `GET /api/v1/sessions` | **读**:会话列表 |
+| `DELETE /api/v1/sessions/{id}` | **写**:指定撤销会话 |
 | `/ws` 握手鉴权(§3.7) | **读**:连接建立时校验 token、订阅逐资源授权;`session.revoked` 广播触发主动断开 |
 | 个性化 HTML 入口中间件(theme.md §2.3 精确注入) | **读**:`mesh_session` cookie → 会话 → 请求者 `users.settings.theme` / 路由工作区默认,注入 `__MESH_APPEARANCE__`(**只读不写;响应 `Cache-Control: private, no-store`**) |
+| step-up 闸门中间件(§5.5,R6-H3) | **读**:对**精确受保护路由集合**——`POST /api/v1/workspaces/{ws}/api-tokens`(创建 PAT)、`DELETE /api/v1/workspaces/{ws}/api-tokens/{id}`(撤销 PAT)、`POST /api/v1/auth/2fa/setup` 与 `POST /api/v1/auth/2fa/disable`(启停 2FA)、OAuth 换绑/解绑(`GET /api/v1/auth/oauth/{provider}/start?purpose=link` 及 `DELETE /api/v1/auth/oauth/{provider}`)、`POST /api/v1/auth/change-password`——读当前 web 会话 `sessions.authenticated_at` 判定 `now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS(默认 900s)`;**PAT/agent 凭证(无 web 会话)调用受保护路由一律 `403 reauth_required`(`details.reason='interactive_session_required'`,指引经 Web 交互会话 + reauth 完成,§5.5)** |
 
 <!-- sessions-registry:end -->
 
@@ -147,7 +154,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `token_hash` | TEXT | NOT NULL,UNIQUE | 当前 refresh token 的 SHA-256 哈希(不存明文) |
 | `previous_token_hash` | TEXT | NULL | **轮换前的上一枚 refresh 哈希(§3.8 有界幂等轮换)**:仅用于宽限窗内**识别**「被轮换掉的旧凭证」——宽限命中时**只发 access,不返回任何 refresh 明文、不二次轮换**(R5-H1:仅存哈希模型下无法还原胜者明文);宽限过后清空(NULL);UNIQUE(NULL 不冲突) |
 | `rotated_at` | TIMESTAMPTZ | NULL | 最近一次轮换时刻(与 `previous_token_hash` 同事务置位;`now() - rotated_at ≤ 宽限窗` 时旧凭证走宽限路径) |
-| `authenticated_at` | TIMESTAMPTZ | NOT NULL DEFAULT `now()` | **最近一次主动认证时刻(R5-M1:step-up 再认证状态唯一真源)**:会话创建(登录)时置位;用户在会话上完成 step-up 再认证时更新为 `now()`(如改密保留发起会话 §3.1、TOTP 再校验);**step-up 有效期判定 = `now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s,§5.5)**,无独立过期列(窗口比对即判据);会话撤销后自然失效 |
+| `authenticated_at` | TIMESTAMPTZ | **NULL**(R6-H3:取消无条件默认——建 session ≠ 主动认证) | **最近一次主动认证时刻(step-up 再认证状态唯一真源)**,按会话来源**显式赋值**:① 密码登录/注册——凭据校验成功时 `now()`;② OAuth 回调——**仅当本次往返发生新鲜交互登录**(提供商 `auth_time` 满足 `max_age` 约束)时 `now()`,静默 SSO 复用保持 `NULL`;③ 设备 cli 会话——**继承批准记录 `approved_authenticated_at`**(批准事务从批准者浏览器会话经锁定读取,§3.1.1;批准会话无新鲜认证则 `NULL`)——**绝不以 token 消费时刻冒充认证**;④ step-up 再认证(`POST /auth/reauth`、改密保留发起会话)——更新为 `now()`。**step-up 判定 = `authenticated_at IS NOT NULL AND now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s,§5.5)**;NULL 或超窗 → 闸门不通过(经 reauth 恢复);会话撤销后自然失效 |
 | `type` | TEXT | NOT NULL DEFAULT 'web',CHECK IN ('web','cli','api') | 会话来源(`cli` = 设备码登录) |
 | `workspace_id` | UUID | NULL,FK→workspaces(id) ON DELETE CASCADE | **CLI/设备会话绑定的工作区**(批准页显式选定,§3.1.1);`web` 会话为 NULL(多工作区交互式会话按请求路径解析工作区)。**CHECK:`type='cli'` 时 `workspace_id` 必须非空**——设备会话的后续请求与 refresh 续签一律以此列为工作区真源,不重新选择 |
 | `granted_scopes` | TEXT[] | NOT NULL DEFAULT '{}' | **会话固化的签发 scope**(登录/批准时取交结果:请求 scope ∩ 当时角色权限)。**refresh 续签时从此列取固化 scope 并与当前角色权限再次取交**(角色降权后旧 scope 不延续);`web` 会话为空数组(权限按角色实时计算) |
@@ -201,6 +208,7 @@ roles *─* permissions               (可选自定义 RBAC;内置角色硬编�
 | `workspace_id` | UUID | NULL,FK→workspaces(id) ON DELETE SET NULL | 批准所绑定的工作区(批准者在确认页选定;签发会话/令牌归属之;**多工作区用户必须显式选择**,不默认首个) |
 | `failed_attempts` | INT | NOT NULL DEFAULT 0 | 轮询端点针对本码的累计违规/猜错计数(爆破防护,见下) |
 | `request_ip` | INET | NULL | 取码请求来源 IP(审计 + 限流维度) |
+| `approved_authenticated_at` | TIMESTAMPTZ | NULL | **批准者浏览器会话的 `authenticated_at` 快照(R6-H3)**:approve 事务内对批准者当前 web 会话行 `FOR UPDATE` 读取后复制;consume 时复制进新 cli 会话的 `authenticated_at`——**设备会话的 step-up 资格只能来自批准者真实认证时刻,不得以消费时刻冒充** |
 | `approved_at` | TIMESTAMPTZ | NULL | 批准时间 |
 | `denied_at` | TIMESTAMPTZ | NULL | 拒绝时间 |
 | `consumed_at` | TIMESTAMPTZ | NULL | 单次消费时间(token 端点换取会话时置位) |
@@ -363,6 +371,10 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | POST | `/api/v1/auth/forgot-password` | 发起重置(恒返回成功,防枚举) | ✅ |
 | POST | `/api/v1/auth/reset-password` | 凭重置令牌设新密码并使旧会话失效 | ✅ |
 | POST | `/api/v1/auth/change-password` | **已登录态修改密码(§4.2)**:body `{old_password, new_password}`——校验旧密码(argon2id 恒定时间比较;错误 → `422 invalid_credentials`)。**旧密码重输即 §5.5 敏感操作 step-up 再认证**(「近期重新输入密码」由本表单天然满足,不另设再认证门槛)→ 校验新密码强度(复用注册策略 §5.1;弱 → `400 weak_password`,`details.reason ∈ too_short/needs_letter_and_digit/too_common`)→ 更新 `password_hash` + `password_changed_at=now()` → **使该用户其它 refresh 会话失效**(**发起会话以当前请求 access JWT 的 `sid` 识别并保留**(R4-H1:Web JS 读不到 refresh,body 不再传 `refresh_token?`;`sid` 属 §1.1 会话生命周期登记表操作),刷新其 `authenticated_at=now()`(step-up 状态唯一真源,§2.4,R5-M1);`sid` 缺失/会话已撤销则全部失效;PAT 单独管理;撤销经 §3.7/§5.6 outbox→realtime 广播)→ 写账号级审计 `user.password_changed`(§2.6)。限流同登录类(§3.6,(IP, 邮箱) 5 次/分钟);成功 `200 {"data": {"status": "ok"}}` | |
+| POST | `/api/v1/auth/reauth` | **step-up 再认证(R6-H3 新增,仅 web 会话)**:① 持密码用户 body `{password}` → argon2id 校验成功 → 当前 web 会话 `authenticated_at=now()`;② 启用 TOTP 用户 body `{totp_code}` → 校验成功 → `authenticated_at=now()`;③ OAuth-only 用户 body `{method:"oauth"}` → `200 {"data": {"authorization_url": …}}`,经 `start`(携带 `max_age=0`/`prompt=login`)新鲜往返,回调校验提供商 `auth_time` 新鲜后更新 `authenticated_at`;**PAT/agent 凭证调用 → `403 reauth_required`(`details.reason='interactive_session_required'`)**;限流同登录类(§3.6);失败 `422 invalid_credentials`;成功 `200 {"data": {"status": "ok", "authenticated_at": …}}` | |
+| POST | `/api/v1/auth/2fa/setup` | 启用 TOTP(下发密钥 + 二维码,**验证码确认后方置 `mfa_enabled_at`**);**step-up 闸门保护(§5.5)**:仅 web 会话 + 近期 `authenticated_at` 窗口内可调用,PAT/agent → `403 reauth_required` | |
+| POST | `/api/v1/auth/2fa/disable` | 停用 TOTP(呈递验证码确认);**step-up 闸门保护**,同上 | |
+| DELETE | `/api/v1/auth/oauth/{provider}` | 解绑第三方账号(保留至少一种登录方式);**step-up 闸门保护**,同上 | |
 | POST | `/api/v1/auth/verify-email` | 验证邮箱 | ✅ |
 | GET | `/api/v1/auth/oauth/{provider}/start` | 发起第三方登录(302,state + PKCE) | ✅ |
 | GET/POST | `/api/v1/auth/oauth/{provider}/callback` | 回调:登录或自动注册并绑定 | ✅ |
@@ -380,9 +392,9 @@ approved ──TTL 过期──► expired(未被消费即过期)
 | 方法 | 路径 | 说明 | 公开 |
 |------|------|------|:---:|
 | POST | `/api/v1/auth/device/code` | 取码:`{client_id: "mesh-cli", scope: "<space-joined>"}` → `200 {"data": {device_code, user_code, verification_uri, verification_uri_complete, expires_in(默认 900), interval(默认 5)}}`;同事务落 `device_authorizations`(`status='pending'`,仅存 HMAC 哈希);写审计 `auth.device_code_issued`(account-less,`metadata` 落 client_id/request_ip/scope) | ✅ |
-| POST | `/api/v1/auth/device/token` | 轮询换令牌(量化爆破防护,§2.4.2):请求 `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`。`pending` → `400 authorization_pending`(具名 code,§6.14 信封);限速违规 → `429 slow_down`(`Retry-After`,客户端间隔 +5s);拒绝 → `400 access_denied`(终止);过期/作废 → `400 expired_token`/`invalid_grant`(重新发起)。**成功 200**——消费为**单事务固定锁序(R4-H3 写死,消除 R3-H5 残留 TOCTOU)**,步骤严格按序:① **`SELECT … FROM device_authorizations WHERE device_code_hash=$h FOR UPDATE` 锁授权行**(校验 `status='approved'` 且未过期,否则按状态回对应错误);② **`SELECT role FROM members WHERE workspace_id=authz.workspace_id AND user_id=authz.approved_by_user_id AND status='active' FOR UPDATE` 锁对应名册行**——0 行(批准后、消费前被移除/停用)→ **作废授权(`status='invalidated'` + 审计 `auth.device_invalidated`)并返回 `400 access_denied`,绝不签发**;③ **`签发 scope = authz.granted_scopes ∩ 该名册行当前角色权限`(只收窄不放宽)**;④ 条件消费更新(`SET status='consumed', consumed_at=now() WHERE id=authz.id AND status='approved'`,行数 1);⑤ 建 `sessions` 行(`type='cli'`,`workspace_id`/`granted_scopes` 取最终签发值,`device_authorization_id` 指回授权记录——UNIQUE 保证单码至多一会话,§2.4);⑥ 审计 `auth.device_consumed`——**一次提交**。**成员移除 / 角色变更必须走同一锁协议**:member.md 的移除(`DELETE /workspaces/{ws}/members/{id}`)与改角色(`PATCH …/members/{id}`)事务内更新 `members` 行即持该行排他锁,与本事务 ② 的 `FOR UPDATE` **在同一行上线性化**——consume 先持锁则移除/降权等待至会话签发完成,移除先提交则 consume 在 ② 读到 0 行或新角色(按锁后结果签发或拒绝,不存在「读到 active 后移除插入提交」间隙):`{data: {access_token(会话 access JWT,含 sid/workspace_id/scope 声明), refresh_token(mesh_rft_…), token_type: "Bearer", expires_in, scope(= 实际签发值), workspace: {id, slug}(批准绑定工作区,CLI 直接采用为默认)}}` | ✅ |
+| POST | `/api/v1/auth/device/token` | 轮询换令牌(量化爆破防护,§2.4.2):请求 `{grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code, client_id}`。`pending` → `400 authorization_pending`(具名 code,§6.14 信封);限速违规 → `429 slow_down`(`Retry-After`,客户端间隔 +5s);拒绝 → `400 access_denied`(终止);过期/作废 → `400 expired_token`/`invalid_grant`(重新发起)。**成功 200**——消费为**单事务固定锁序(R4-H3 写死,消除 R3-H5 残留 TOCTOU)**,步骤严格按序:① **`SELECT … FROM device_authorizations WHERE device_code_hash=$h FOR UPDATE` 锁授权行**(校验 `status='approved'` 且未过期,否则按状态回对应错误);② **`SELECT role FROM members WHERE workspace_id=authz.workspace_id AND user_id=authz.approved_by_user_id AND status='active' FOR UPDATE` 锁对应名册行**——0 行(批准后、消费前被移除/停用)→ **作废授权(`status='invalidated'` + 审计 `auth.device_invalidated`)并返回 `400 access_denied`,绝不签发**;③ **`签发 scope = authz.granted_scopes ∩ 该名册行当前角色权限`(只收窄不放宽)**;④ 条件消费更新(`SET status='consumed', consumed_at=now() WHERE id=authz.id AND status='approved'`,行数 1);⑤ 建 `sessions` 行(`type='cli'`,`workspace_id`/`granted_scopes` 取最终签发值,`device_authorization_id` 指回授权记录——UNIQUE 保证单码至多一会话,§2.4;**`authenticated_at` 继承 `authz.approved_authenticated_at`——可为 NULL(批准会话无新鲜认证),绝不以消费时刻冒充(R6-H3)**);⑥ 审计 `auth.device_consumed`——**一次提交**。**成员移除 / 角色变更必须走同一锁协议**:member.md 的移除(`DELETE /workspaces/{ws}/members/{id}`)与改角色(`PATCH …/members/{id}`)事务内更新 `members` 行即持该行排他锁,与本事务 ② 的 `FOR UPDATE` **在同一行上线性化**——consume 先持锁则移除/降权等待至会话签发完成,移除先提交则 consume 在 ② 读到 0 行或新角色(按锁后结果签发或拒绝,不存在「读到 active 后移除插入提交」间隙):`{data: {access_token(会话 access JWT,含 sid/workspace_id/scope 声明), refresh_token(mesh_rft_…), token_type: "Bearer", expires_in, scope(= 实际签发值), workspace: {id, slug}(批准绑定工作区,CLI 直接采用为默认)}}` | ✅ |
 | GET | `/api/v1/auth/device?user_code=` | 确认页数据(Web 登录态):校验 `user_code` 命中 `status='pending'` 且未过期 → 返回 `{data: {client_name, requested_scopes(人类可读全量枚举), workspaces: [{id, slug, name, my_role}](批准者所属工作区列表,供 0/1/多分流)}};命中失败/过期返回通用 `404 not_found`(**不区分不存在/已消费/过期,防码探测**) | |
-| POST | `/api/v1/auth/device/approve` | 批准(Web 登录态 + **同源 CSRF 防护**):body `{user_code, workspace_id}`——**`user_code` 必须为确认页手工录入值,批准仅绑定所录入的码**(防 RFC 8628 §5.5 钓鱼:攻击者诱使受害者批准攻击者的码);`workspace_id` 由批准者显式选定(多工作区用户不默认)。**事务内先锁定批准者在该工作区的名册行(R3-H5,防篡改 body 绑定非成员工作区)**:`SELECT role FROM members WHERE workspace_id=$ws AND user_id=$u AND status='active' FOR UPDATE`——**0 行 → `403 forbidden`**(批准者非该工作区活跃成员;仅 FK 到 workspaces 不足以授权,名册行才是授权依据);`granted_scopes = 请求 scope ∩ 该名册行角色权限`(服务端强制取交)。状态迁移为**原子条件更新**:`UPDATE device_authorizations SET status='approved', granted_scopes=<取交值>, approved_by_user_id=$u, workspace_id=$ws, approved_at=now() WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,**影响行数恰为 1 方可继续**(并发批/拒/过期竞争下恰一方成功,0 行 → 当前状态回显,不覆盖他方迁移);token 端点消费时兜底重校验(见下行);写审计 `auth.device_approved`(含取交前后 scope 与名册行 id);非法 user_code → `404 not_found` | |
+| POST | `/api/v1/auth/device/approve` | 批准(Web 登录态 + **同源 CSRF 防护**):body `{user_code, workspace_id}`——**`user_code` 必须为确认页手工录入值,批准仅绑定所录入的码**(防 RFC 8628 §5.5 钓鱼:攻击者诱使受害者批准攻击者的码);`workspace_id` 由批准者显式选定(多工作区用户不默认)。**事务内先锁定批准者在该工作区的名册行(R3-H5,防篡改 body 绑定非成员工作区)**:`SELECT role FROM members WHERE workspace_id=$ws AND user_id=$u AND status='active' FOR UPDATE`——**0 行 → `403 forbidden`**(批准者非该工作区活跃成员;仅 FK 到 workspaces 不足以授权,名册行才是授权依据);`granted_scopes = 请求 scope ∩ 该名册行角色权限`(服务端强制取交);**同事务对批准者当前 cookie 会话行 `SELECT authenticated_at FROM sessions WHERE id=$sid FOR UPDATE` 锁定读取并复制进 `approved_authenticated_at`**(R6-H3:设备会话的 step-up 资格只能继承批准者真实认证时刻;批准会话无新鲜认证则复制 NULL)。状态迁移为**原子条件更新**:`UPDATE device_authorizations SET status='approved', granted_scopes=<取交值>, approved_by_user_id=$u, workspace_id=$ws, approved_authenticated_at=<锁定读取值>, approved_at=now() WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,**影响行数恰为 1 方可继续**(并发批/拒/过期竞争下恰一方成功,0 行 → 当前状态回显,不覆盖他方迁移);token 端点消费时兜底重校验(见下行);写审计 `auth.device_approved`(含取交前后 scope 与名册行 id);非法 user_code → `404 not_found` | |
 | POST | `/api/v1/auth/device/deny` | 拒绝(Web 登录态 + CSRF):body `{user_code}` → **同款原子条件更新**(`SET status='denied', denied_at=now(), approved_by_user_id=$u WHERE user_code_hash=$h AND status='pending' AND expires_at > now()`,行数 1 方为本次拒绝);写审计 `auth.device_denied`;已终态时幂等返回当前状态(0 行不报错、不覆盖) | |
 
 **授权确认页 UX(auth.md UI 增量,§4 衔接;0/1/多工作区分流在此完成,评审 R2-H1)**:
@@ -410,13 +422,14 @@ approved ──TTL 过期──► expired(未被消费即过期)
 
 ### 3.4 请求/响应 JSON 示例
 
-**登录** `POST /api/v1/auth/login`
+**登录(Web 密码形态,cookie-only)** `POST /api/v1/auth/login`
 ```json
 // Request
 { "email": "li@corp.com", "password": "...", "remember": true }
-// 200 Response
-{ "data": { "access_token": "eyJhbGci...", "token_type": "Bearer",
-            "expires_in": 900, "refresh_token": "mesh_rft_..." } }
+// 200 Response —— refresh 仅经响应头 Set-Cookie 下发(HttpOnly,JS 不可读),
+// 响应体绝无 refresh 明文(R4-H1/R6-H1;CLI 非浏览器密码流不存在,§3)
+// Set-Cookie: mesh_session=mesh_rft_…; Secure; HttpOnly; SameSite=Strict; Path=/
+{ "data": { "access_token": "eyJhbGci...", "token_type": "Bearer", "expires_in": 900 } }
 ```
 
 **注册** `POST /api/v1/auth/register`
@@ -525,11 +538,11 @@ approved ──TTL 过期──► expired(未被消费即过期)
 
 ### 4.5 关键流程(UX)
 
-1. **注册**:校验强度与唯一性 → argon2id 哈希 → 建 `users` → 发验证邮件;未验证可登录但受限。
-2. **登录(仅 Web 形态,R4-H1)**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行(`type='web'`)并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,§2.4)+ 长期 refresh(存哈希入 `sessions`);**refresh 仅经 `Set-Cookie: mesh_session=…; Secure; HttpOnly; SameSite=Strict; Path=/` 下发,响应体绝无 refresh 明文;不接受调用方自报客户端形态,不提供非浏览器密码流**(CLI/API 非浏览器客户端走设备授权流 §3.1.1——token 端点返回 `mesh_rft_…` Bearer——或 PAT `mesh_pat_`)。`remember=true` 延长 refresh。
+1. **注册**:校验强度与唯一性 → argon2id 哈希 → 建 `users` → 发验证邮件;**注册成功自动登录(§4.1)——创建 web 会话并 `authenticated_at=now()`(凭据刚校验,R6-H3)**;未验证可登录但受限。
+2. **登录(仅 Web 形态,R4-H1)**:恒定时间比较哈希 → 失败计数(达阈值锁定+可选验证码)→ 成功创建 `sessions` 行(`type='web'`,**`authenticated_at=now()`——密码凭据校验成功即主动认证,R6-H3**)并颁发短期 access JWT(含 `sub`/`exp`/**逐枚唯一 `jti`**/`sid=session.id`,§2.4)+ 长期 refresh(存哈希入 `sessions`);**refresh 仅经 `Set-Cookie: mesh_session=…; Secure; HttpOnly; SameSite=Strict; Path=/` 下发,响应体绝无 refresh 明文;不接受调用方自报客户端形态,不提供非浏览器密码流**(CLI/API 非浏览器客户端走设备授权流 §3.1.1——token 端点返回 `mesh_rft_…` Bearer——或 PAT `mesh_pat_`)。`remember=true` 延长 refresh。
 3. **静默续期**:access 过期 → 用 refresh 调 `/auth/refresh`(Web 经 cookie,设备会话经 Bearer)→ 校验哈希未撤销未过期(**或命中 §3.8 有界幂等轮换宽限**:已被轮换的旧 refresh 在宽限窗内**仅获发新 access,不下发 refresh 明文、不二次轮换**,凭证经胜者响应 + 共享 cookie jar / CLI 重读收敛,多 tab 不误登出)→ **从会话行取固化 `granted_scopes` 与当前角色权限取交**作为新 access 的 scope(R2-H1)→ 颁新 access(继承 `sid`、新 `jti`;轮换 refresh 并撤销旧的,防重放)→ 更新 `last_active_at`。
 4. **登出**:撤销当前 refresh(Web 按 cookie 定位会话,CLI 按 Bearer 或自撤销端点);「登出所有」批量撤销;**密码变更**(重置 / 已登录态修改)使该用户**其它** refresh 会话失效——**修改密码时发起会话以当前 access `sid` 识别并保留**(R4-H1,body 不传 refresh),刷新其 `authenticated_at=now()`(§2.4);无有效 `sid` 则全部失效(PAT 单独管理)。
-5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。
+5. **OAuth(授权码 + PKCE)**:`start` 生成 `state`(防 CSRF)+ PKCE → 302 提供商 → 回调校验 `state`、用 `code`+`code_verifier` 换 token → 解析 sub+email:命中已有绑定→登录;email 已存在→绑定;全新→建 `users(password_hash=NULL)`+`oauth_identities`。**`authenticated_at` 赋值(R6-H3):仅当本次往返为新鲜交互登录(提供商 `id_token.auth_time` 满足请求的 `max_age` 约束)→ `now()`;静默 SSO 复用(无新鲜交互)→ `NULL`(step-up 闸门需经 `POST /auth/reauth` 的 OAuth 新鲜往返恢复)**;step-up/换绑用途的 `start` 强制携带 `max_age=0`/`prompt=login` 保证新鲜性。
 6. **API token / agent 凭证**:创建→存哈希、一次性明文→**CLI 从环境变量读取 API token(`mesh_pat_`/`mesh_agt_`,绝不硬编码**;**runtime 机器令牌 `mesh_rt_` 不经 api_tokens,由 mesh-runtime daemon 激活后持有,runtime.md §3.5,R4-M3**)→请求带 Bearer→服务端查哈希、取上下文→scope ∩ 角色做 RBAC→agent 动作以 `actor_member_id`(指向其 member 行)留痕(`actor_kind='member'`,人类/agent 经 JOIN `members.member_type` 判别);agent token 默认不可 `agent:trigger`(防回环);撤销→`revoked_at` 立即生效→后续 401。
 
 ### 4.6 每请求授权校验流程
@@ -615,7 +628,7 @@ approved ──TTL 过期──► expired(未被消费即过期)
 - [ ] **审计 append-only DB 级 enforcement**:应用数据库账号对 `audit_logs` 仅授 `INSERT`+`SELECT`,或触发器拒绝 `UPDATE`/`DELETE`。
 - [ ] **禁止 query 参数传 token**:WebSocket 连接不得在 URL query 中携带 JWT(防落入访问日志/代理),使用连接建立后首帧认证单一机制(README §6.16,v0.1.0 起实现基线)。
 - [ ] 各端点限流生效,超限 429 + `Retry-After`;登录类叠加失败锁定。
-- [ ] **敏感操作 step-up 再认证**:修改密码、换绑/解绑 OAuth、创建/撤销 PAT、启用/禁用 2FA 等高危操作要求**近期再认证**(**窗口判据为 `now() - sessions.authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s,R5-M1 唯一真源**——如最近窗口内重新输入密码或 TOTP 验证码),否则返回 `403 reauth_required`;防止会话被劫持后直接执行敏感操作。
+- [ ] **敏感操作 step-up 再认证(R6-H3 完整状态机)**:受保护路由集合(创建/撤销 PAT、换绑/解绑 OAuth、启停 2FA、改密——§1.1 登记表 step-up 闸门行精确枚举)要求**近期主动认证**:**判据 `authenticated_at IS NOT NULL AND now() - authenticated_at ≤ MESH_STEP_UP_WINDOW_SECONDS`(默认 900s)**,否则 `403 reauth_required`。**来源赋值断言**:密码登录/注册后 `authenticated_at=now()`;OAuth **静默 SSO 复用 → NULL**(新鲜交互登录(`max_age` 满足)才置位);**设备 cli 会话继承批准记录 `approved_authenticated_at`(批准事务对批准者会话 `FOR UPDATE` 锁定读取),绝不以消费时刻置位**。**恢复入口**:`POST /auth/reauth`(密码/TOTP/OAuth 新鲜往返,仅 web 会话)。**PAT/agent 处理写死**:PAT/agent 凭证调用受保护路由**一律 `403 reauth_required`(`details.reason='interactive_session_required'`)**——账号安全操作必须经 Web 交互会话,PAT 不能创建/撤销 PAT,不存在实现侧绕过或永久 403 死结(用户经 Web reauth 后即可操作)。**负向 e2e**:旧 Web 会话(`authenticated_at` 超窗/NULL)批准设备码 → CLI 会话继承 NULL/超窗值 → **CLI 创建 PAT → `403 reauth_required`** → Web 完成 `POST /auth/reauth`(密码)→ 批准新设备码(继承新鲜时刻)→ CLI 创建 PAT 成功。
 
 ### 5.6 实时
 
