@@ -107,7 +107,17 @@ class RuntimeApp:
     async def run(self) -> None:
         if self._runtime_id is None:
             raise RuntimeError("runtime id not set — activate first")
-        await reconcile_on_startup(self._journal, self._api, self._runtime_id)
+        from mesh_runtime.residual import ResidualPaths
+
+        cgroup_base = getattr(self._sandbox_manager, "cgroup_base", None)
+        residual_paths = ResidualPaths(
+            work_root=self.config.work_dir,
+            spool_root=self.config.spool_dir,
+            **({"cgroup_base": cgroup_base} if cgroup_base is not None else {}),
+        )
+        await reconcile_on_startup(
+            self._journal, self._api, self._runtime_id, paths=residual_paths
+        )
 
         heartbeat = HeartbeatLoop(
             self._api,
@@ -263,6 +273,7 @@ class RuntimeApp:
                 snapshot.get("network_policy")
                 if isinstance(snapshot.get("network_policy"), dict) else {}
             ),
+            spool_dir=self.config.spool_dir / claim.attempt_id,
         )
         return AttemptSecurity(
             config,

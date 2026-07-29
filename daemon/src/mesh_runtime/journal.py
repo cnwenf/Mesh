@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 #: Rows still considered in-flight and needing reconciliation on startup.
-ACTIVE_STATUSES = frozenset({"claimed", "running"})
+#: ``terminal_seal_pending`` rows are terminal server-side but still own
+#: spooled log batches: startup reconciliation replays and reaps them (§3.9.3).
+ACTIVE_STATUSES = frozenset({"claimed", "running", "terminal_seal_pending"})
 
 _UPDATABLE_FIELDS = frozenset(
     {

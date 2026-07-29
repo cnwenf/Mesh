@@ -73,9 +73,11 @@ class TestJournal:
         await journal.put("a2", execution_id="e", runtime_id="r", lease_seq=1, status="running")
         await journal.put("a3", execution_id="e", runtime_id="r", lease_seq=1, status="terminal_reported")
         await journal.put("a4", execution_id="e", runtime_id="r", lease_seq=1, status="lease_lost")
+        # terminal BUT still owning spooled batches — reconciliation owns it
+        await journal.put("a5", execution_id="e", runtime_id="r", lease_seq=1, status="terminal_seal_pending")
         active = {e.attempt_id for e in await journal.list_active()}
-        assert active == {"a1", "a2"}
-        assert set(ACTIVE_STATUSES) == {"claimed", "running"}
+        assert active == {"a1", "a2", "a5"}
+        assert set(ACTIVE_STATUSES) == {"claimed", "running", "terminal_seal_pending"}
 
     async def test_delete_removes_entry(self, journal):
         await journal.put("a1", execution_id="e", runtime_id="r", lease_seq=1, status="claimed")

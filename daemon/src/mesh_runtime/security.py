@@ -43,6 +43,7 @@ class SecurityConfig:
     platform_managed: bool = False
     read_credential: str | None = None
     network_policy: dict = field(default_factory=dict)
+    spool_dir: Path | None = None  # S-08 clears it once logs are confirmed
 
 
 class AttemptSecurity:
@@ -219,7 +220,7 @@ class AttemptSecurity:
         manifest = ResourceManifest(
             attempt_root=cfg.attempt_root,
             socket_paths=(self.broker.socket_path,) if self.broker else (),
-            spool_dir=None,
+            spool_dir=cfg.spool_dir,
         )
         cleaner = AttemptCleaner(self._journal)
         return await cleaner.cleanup(

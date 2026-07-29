@@ -366,7 +366,9 @@ class TestIntervalTimer:
     clock — a sparse stream (one line, then silence) cannot wait for the next
     line, which may never come before finalize."""
 
-    async def test_timer_flushes_sparse_stream_without_new_lines(self, journal, ctx):
+    async def test_flush_due_sends_sparse_stream_without_new_lines(self, journal, ctx):
+        """Deterministic core: once the batch interval has elapsed, flush_due
+        sends the buffered line even though no further submit() ever ran."""
         api, clock = StubApi(), FakeClock()
         up = uploader(
             api, journal, clock=clock,
@@ -375,24 +377,18 @@ class TestIntervalTimer:
         await seed(journal, ctx)
         await up.submit(ctx, "stdout", "lonely")
         assert api.calls == []  # below every threshold
-        await up.start_ticking()
-        try:
-            # FakeClock.sleep inside the tick loop advances fake time; yield
-            # until the due flush lands — NO further submit() calls.
-            for _ in range(100):
-                await asyncio.sleep(0)
-                if api.calls:
-                    break
-            assert len(api.calls) == 1
-            assert api.calls[0]["lines"] == ["lonely"]
-            assert api.calls[0]["sealed"] is False  # timer flushes are never sealed
-            assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
-        finally:
-            await up.stop_ticking()
+        clock.advance(0.6)
+        await up.flush_due()  # interval elapsed -> sends, NO new line needed
+        assert len(api.calls) == 1
+        assert api.calls[0]["lines"] == ["lonely"]
+        assert api.calls[0]["sealed"] is False  # timer flushes are never sealed
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        await up.flush_due()  # idempotent — buffer already drained
+        assert len(api.calls) == 1
 
-    async def test_without_timer_sparse_stream_waits_for_next_line(self, journal, ctx):
-        """Negative anchor: with no timer running, advancing the clock alone
-        flushes nothing — proving the timer (not the clock) is what sends."""
+    async def test_flush_due_noop_before_interval(self, journal, ctx):
+        """Negative anchor: before the interval elapses, flush_due sends
+        nothing — the line still needs the next line / a threshold."""
         api, clock = StubApi(), FakeClock()
         up = uploader(
             api, journal, clock=clock,
@@ -400,31 +396,75 @@ class TestIntervalTimer:
         )
         await seed(journal, ctx)
         await up.submit(ctx, "stdout", "lonely")
-        clock.advance(10.0)  # long past the interval
-        await asyncio.sleep(0)
+        clock.advance(0.49)
+        await up.flush_due()
         assert api.calls == []
 
+    async def test_timer_task_flushes_sparse_stream_without_new_lines(self, journal, ctx):
+        """Wiring: the background tick task drives flush_due on its own —
+        proved by an Event (no yield-count polling race)."""
+        flushed = asyncio.Event()
+        api = StubApi()
+        original = api.append_logs
+
+        async def append_and_signal(*args, **kw):
+            ack = await original(*args, **kw)
+            flushed.set()
+            return ack
+
+        api.append_logs = append_and_signal
+        clock = FakeClock()
+        up = uploader(
+            api, journal, clock=clock,
+            batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
+        )
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "lonely")
+        await up.start_ticking()
+        try:
+            await asyncio.wait_for(flushed.wait(), timeout=5)
+        finally:
+            await up.stop_ticking()
+        assert api.calls[0]["lines"] == ["lonely"]
+        assert api.calls[0]["sealed"] is False
+
     async def test_timer_survives_transient_upload_failure(self, journal, ctx):
-        """A transient failure inside a tick must not kill the timer: the next
-        tick replays the (re-buffered) lines."""
-        api, clock = StubApi(), FakeClock()
+        """A transient failure on a due flush must not kill the timer: the
+        re-buffered lines go out on a later tick."""
+        attempts = {"n": 0}
+        recovered = asyncio.Event()
+        api = StubApi()
+        original = api.append_logs
+
+        async def flaky_append(*args, **kw):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise ServerError("500")
+            ack = await original(*args, **kw)
+            recovered.set()
+            return ack
+
+        api.append_logs = flaky_append
+        clock = FakeClock()
         up = uploader(
             api, journal, clock=clock,
             batch_lines=100, batch_bytes=10_000, batch_interval=0.5,
         )
         await seed(journal, ctx)
         await up.submit(ctx, "stdout", "retry-me")
-        api.errors = [ServerError("500")]  # first due-flush fails
         await up.start_ticking()
         try:
-            for _ in range(400):
-                await asyncio.sleep(0)
-                if (await journal.get(ctx.attempt_id)).log_offset_stdout > 0:
-                    break
-            assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 8
-            assert api.calls[-1]["lines"] == ["retry-me"]  # same lines, not lost
+            await asyncio.wait_for(recovered.wait(), timeout=5)
+
+            async def watermark_caught_up() -> None:
+                while (await journal.get(ctx.attempt_id)).log_offset_stdout == 0:
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(watermark_caught_up(), timeout=5)
         finally:
             await up.stop_ticking()
+        assert api.calls[-1]["lines"] == ["retry-me"]  # same lines, not lost
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 8
 
     async def test_stop_ticking_is_idempotent(self, journal, ctx):
         api, clock = StubApi(), FakeClock()

@@ -20,6 +20,7 @@ and retried on the next flush — it must NOT fail the attempt; only a sealed
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,8 @@ if TYPE_CHECKING:
     from mesh_runtime.api import RuntimeApiClient
     from mesh_runtime.attempt import AttemptContext
     from mesh_runtime.journal import Journal
+
+logger = logging.getLogger("mesh_runtime.logs")
 
 DEFAULT_BATCH_LINES = 64
 DEFAULT_BATCH_BYTES = 256 * 1024
@@ -143,16 +146,18 @@ class LogUploader:
         while not self._tick_stop.is_set():
             await self._clock.sleep(self._tick_interval)
             try:
-                await self._flush_due()
+                await self.flush_due()
             except DaemonError as exc:
                 # Keep the timer alive: mid-stream failures are the uploader's
                 # retry/spool problem, lease fencing is the supervisor's. A
                 # dead timer would silently re-stall sparse streams.
-                logging.getLogger("mesh_runtime").warning(
-                    "flush timer tick error: %s", type(exc).__name__
-                )
+                logger.warning("flush timer tick error: %s", type(exc).__name__)
 
-    async def _flush_due(self) -> None:
+    async def flush_due(self) -> None:
+        """Flush every stream whose oldest buffered line has aged past the
+        batch interval (§3.9.2 interval arm). Called on each timer tick; also
+        directly callable for deterministic checks. Never seals — a sealed
+        close is the supervisor's terminal decision."""
         now = self._clock.now()
         due: list[tuple[str, str]] = []
         async with self._lock:
