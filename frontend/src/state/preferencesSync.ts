@@ -18,6 +18,7 @@ import {
   updatePreferences,
 } from '../api/userPreferences';
 import type { UpdatePreferencesPayload } from '../api/userPreferences';
+import { enqueueFailedWrite, replayPendingWrites } from './pendingSettingsQueue';
 import type { ThemeMode, UserPreferences } from './settingsStore';
 
 /** 偏好同步错误类型(供 UI 层按 code 渲染 i18n 错误提示) */
@@ -84,7 +85,10 @@ export async function syncPreferencesToServer(
   const payload = toUpdatePayload(preferences);
   try {
     await updatePreferences(client, payload);
+    // 写入成功 → 顺带按序重放 pending(§4.5 触发点之一);重放失败静默保留。
+    void replayPendingWrites(client);
   } catch (err: unknown) {
+    enqueueFailedWrite(payload); // 乐观不回滚,失败写入进分区队列
     const syncError = toSyncError(err);
     options.onError?.(syncError);
   }
@@ -100,9 +104,12 @@ export async function syncThemeToServer(
   theme: ThemeMode | null,
   options: SyncPreferencesOptions = {},
 ): Promise<void> {
+  const payload: UpdatePreferencesPayload = { settings: { theme } };
   try {
-    await updatePreferences(client, { settings: { theme } });
+    await updatePreferences(client, payload);
+    void replayPendingWrites(client);
   } catch (err: unknown) {
+    enqueueFailedWrite(payload);
     options.onError?.(toSyncError(err));
   }
 }
@@ -121,7 +128,9 @@ export async function syncLocaleToServer(
   payload.settings!.locale = locale;
   try {
     await updatePreferences(client, payload);
+    void replayPendingWrites(client);
   } catch (err: unknown) {
+    enqueueFailedWrite(payload);
     options.onError?.(toSyncError(err));
   }
 }
@@ -134,9 +143,12 @@ export async function syncTimezoneToServer(
   timezone: string,
   options: SyncPreferencesOptions = {},
 ): Promise<void> {
+  const payload: UpdatePreferencesPayload = { timezone };
   try {
-    await updatePreferences(client, { timezone });
+    await updatePreferences(client, payload);
+    void replayPendingWrites(client);
   } catch (err: unknown) {
+    enqueueFailedWrite(payload);
     options.onError?.(toSyncError(err));
   }
 }

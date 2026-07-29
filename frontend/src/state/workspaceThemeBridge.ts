@@ -47,3 +47,13 @@ export const useWorkspaceThemeBridge = create<WorkspaceThemeBridgeState>()((set)
 export function setWorkspaceDefaultFromPreview(theme: string | null | undefined): void {
   useWorkspaceThemeBridge.getState().setWorkspaceDefault(theme);
 }
+
+/** 进入工作区/邀请入口:标记「期望本级解析但未就绪」(skeleton 兜底)。 */
+export function beginWorkspaceLoad(): void {
+  useWorkspaceThemeBridge.getState().beginWorkspaceLoad();
+}
+
+/** 离开工作区/邀请入口:回到「无工作区上下文」(loaded 恢复 true)。 */
+export function endWorkspaceContext(): void {
+  useWorkspaceThemeBridge.getState().endWorkspaceContext();
+}

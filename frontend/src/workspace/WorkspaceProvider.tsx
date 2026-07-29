@@ -33,6 +33,7 @@ import { useRealtimeContext } from '../shell/AppShell';
 import { channelEventsUrl, fetchRestEvents } from '../shell/AppShell';
 import { env } from '../env';
 import { getToken } from '../state/authStore';
+import { setActiveWorkspace } from '../state/pendingSettingsQueue';
 import { useWorkspaceThemeBridge } from '../state/workspaceThemeBridge';
 import { canDeleteWorkspace, canViewSettings } from './permissions';
 
@@ -141,11 +142,14 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
       // 本级不可解析(工作区不可达/不存在)→ 回到「无工作区上下文」,
       // 协商链落系统级;错误态 UI 正常呈现,不滞留 skeleton。
       useWorkspaceThemeBridge.getState().endWorkspaceContext();
+      setActiveWorkspace(null);
       return;
     }
     if (status !== 'ready' || workspace === null) return;
     const value = workspace.settings?.default_theme;
     useWorkspaceThemeBridge.getState().setWorkspaceDefault(typeof value === 'string' ? value : null);
+    // pending 队列主体分区(workspace 维,theme.md §2.3)。
+    setActiveWorkspace(workspace.id);
   }, [status, workspace]);
 
   // W6 重定向:历史 slug 解析到当前工作区后规范化 URL(replace,子路径保留)。

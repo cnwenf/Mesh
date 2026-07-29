@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { Banner, Button, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
+import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -90,6 +91,7 @@ type TaskViewMode = 'tree' | 'kanban';
 
 export function SquadTaskDetailPage(): React.JSX.Element {
   const t = useT();
+  const ugcGuard = useUgcColorGuard();
   const toast = useToast();
   const { squadId, taskId } = useParams<{ squadId: string; taskId: string }>();
   const realtime = useRealtimeContext();
@@ -314,6 +316,7 @@ export function SquadTaskDetailPage(): React.JSX.Element {
               <div
                 className="mesh-squads__plan"
                 data-testid="squad-task-plan"
+                ref={ugcGuard}
                 dangerouslySetInnerHTML={{ __html: planHtml }}
               />
             ) : null}

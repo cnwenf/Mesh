@@ -22,6 +22,7 @@ import { writeThemeLocator } from './themeLocator';
 import { resolveThemeChain } from './themeNegotiation';
 import type { ResolvedTheme } from './themeNegotiation';
 import { DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
+import { THEME_CHANGED_EVENT } from './ugcColorGuard';
 import { ThemeSkeleton } from './ThemeSkeleton';
 
 const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)';
@@ -102,6 +103,8 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
     el.removeAttribute(PENDING_ATTR);
     writeThemeLocator(mode);
     syncMetaThemeColor(mode, userTheme === 'light' || userTheme === 'dark');
+    // UGC 内联色兜底等主题相关后处理的重扫信号(§4.3 T5③)。
+    window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT));
     firstFrameHint.current = false;
   }, [mode, pending, userTheme]);
 

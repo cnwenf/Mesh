@@ -23,6 +23,11 @@ import type { MeshApiClient } from '../api/client';
 import { LEGACY_THEME_MIRROR_KEY, THEME_LOCATOR_KEY, clearThemeLocators } from '../design/themeLocator';
 import { isThemeMode } from '../design/themeNegotiation';
 import type { ThemeMode } from '../design/themeNegotiation';
+import {
+  clearPendingWritesForHost,
+  setActiveUser,
+  setActiveWorkspace,
+} from './pendingSettingsQueue';
 import type { PreferenceSyncError } from './preferencesSync';
 import {
   syncLocaleToServer,
@@ -259,11 +264,15 @@ export function initCrossTabSync(): () => void {
 }
 
 /**
- * 登出清理(theme.md §2.3):删除分区 locator + 遗留镜像键,防下一账号串用;
- * 偏好回到「未表达」(theme=null,协商链自工作区默认起),不触发服务端同步。
+ * 登出清理(theme.md §2.3):删除分区 locator + 遗留镜像键 + 当前 host 下
+ * pending 偏好队列分区,防下一账号串用;偏好回到「未表达」(theme=null,
+ * 协商链自工作区默认起),不触发服务端同步。
  */
 export function onLogoutCleanup(): void {
   clearThemeLocators();
+  clearPendingWritesForHost();
+  setActiveUser(null);
+  setActiveWorkspace(null);
   useSettingsStore.setState((state) => ({
     preferences: { ...state.preferences, theme: null, locale: null },
     lastSyncError: null,

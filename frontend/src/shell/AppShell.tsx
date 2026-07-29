@@ -14,6 +14,7 @@ import { Outlet, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
 import { env } from '../env';
 import { useT } from '../i18n';
+import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
 import { OnboardingChecklist } from '../features/onboarding';
@@ -233,6 +234,8 @@ export function AppShell(): React.JSX.Element {
   const navigate = useNavigate();
   const t = useT();
   const hasToken = useAuthStore((state) => state.token !== null);
+  // theme.md §4.5:登录态偏好回填(GET /me 真源)+ pending 重放触发器。
+  usePreferencesBootstrap();
 
   // reconciler 依赖 client 实例,而 useRealtime 的 options 在首渲染定型:
   // 以稳定包装函数 + ref 延迟委派到绑定真实 client 的实现。

@@ -10,6 +10,7 @@ export { ThemeSkeleton } from './ThemeSkeleton';
 export { resolveThemeChain, expectedRouteId, parseThemeLocator, isThemeMode } from './themeNegotiation';
 export type { ResolvedTheme, ThemeSource, ThemeMode, ChainInput, ChainResult } from './themeNegotiation';
 export { THEME_LOCATOR_KEY, writeThemeLocator, clearThemeLocators } from './themeLocator';
+export { guardUgcInlineColors, useUgcColorGuard, THEME_CHANGED_EVENT } from './ugcColorGuard';
 export { Banner } from './components/Banner';
 export type { BannerProps, BannerTone } from './components/Banner';
 export { Button, buttonClasses } from './components/Button';

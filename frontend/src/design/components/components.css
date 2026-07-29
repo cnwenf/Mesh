@@ -380,3 +380,52 @@
     opacity: 0.4;
   }
 }
+
+/* ===== UGC 代码块(theme.md §4.3 评审 T5③:代码高亮双色板)=====
+ * markdown 渲染的第三方内容经语义 token 登记的主题感知配色;
+ * 亮/暗各一套(--color-code-* 已在 tokenValues.ts 配对表登记 ≥4.5:1)。
+ * 具体语法高亮 span(.token-*)为 highlighter 预留同一取色面。 */
+.mesh-comments__body pre,
+.mesh-chat__bubble-body pre,
+.mesh-squads__plan pre {
+  background-color: var(--color-code-bg);
+  color: var(--color-code-text);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.mesh-comments__body code,
+.mesh-chat__bubble-body code,
+.mesh-squads__plan code {
+  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+.mesh-comments__body :not(pre) > code,
+.mesh-chat__bubble-body :not(pre) > code,
+.mesh-squads__plan :not(pre) > code {
+  background-color: var(--color-code-bg);
+  color: var(--color-code-text);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+}
+
+.mesh-comments__body .token-keyword,
+.mesh-chat__bubble-body .token-keyword,
+.mesh-squads__plan .token-keyword {
+  color: var(--color-code-keyword);
+}
+
+.mesh-comments__body .token-string,
+.mesh-chat__bubble-body .token-string,
+.mesh-squads__plan .token-string {
+  color: var(--color-code-string);
+}
+
+.mesh-comments__body .token-comment,
+.mesh-chat__bubble-body .token-comment,
+.mesh-squads__plan .token-comment {
+  color: var(--color-code-comment);
+}
