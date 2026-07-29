@@ -5,22 +5,17 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
-### Security
+### Added
 
-- **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
-  - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
-  - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
-  - 新增后端启动期 fail-safe `validate_infra_settings`:`MESH_AUTH_MODE=production` 时 API / realtime 网关 / worker 三启动路径拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据(与既有 `validate_auth_settings` JWT 守卫同模式)。
-  - 数据存储零宿主端口:postgres / redis 确认无 `ports:` 映射、仅内部网络可达;MinIO 保留 `127.0.0.1` 回环发布(三阶段直传需浏览器直达)并注释生产必须内网 + TLS。
-  - CI 回归守护:`test_compose_security.py` 新增「数据存储零宿主端口 / MinIO 回环唯一 / 凭据必填无默认(`:?` 形式)」断言,随 backend-ci 常跑。
-  - 文档:`.env.example` 去除可猜测默认(占位符 + 生成脚本指引)、README Quick Start 增加生产部署安全清单(强唯一口令 / 不对公网暴露 / protected-mode + TLS / 部署前端口自检)、docs/specs/README.md §2.2 新增「数据与中间件凭据安全」权威条款。
-  - 验证:gen-dev-secrets → `docker compose up --build` 真栈以强口令启动,`/healthz` / `/readyz`(database+redis ok)/ 注册-邮箱验证(dev-mailbox 经强口令 redis-cli 取 token)-登录-建区-建 issue 全链路真实 API 调用绿;postgres / redis 零宿主端口、Redis `protected-mode yes`、邻容器未认证 `-NOAUTH` 拒绝实测;生产弱口令 fail-fast 实测(api / gateway / worker 三启动路径均以 `ConfigError` 非零退出,强口令配置正常启动);`scripts/gen-dev-secrets.sh` 生成强随机 `.env`(0600、拒绝覆盖、`--force` 轮换)与 compose 缺失凭据即报错实测;单测套件(含新增 25 例凭据守卫 + 9 例 compose 回归)全绿,`pytest --cov=mesh` TOTAL 92%(≥90% 门禁),ruff 净。
-- **MinIO 凭据出仓 + CI 端口收口(MES-83 复审 CRITICAL 整改:对象存储弱口令明文存在于公开仓库)**:
-  - `backend/src/mesh/config.py`:`storage_access_key` / `storage_secret_key` 的可猜测默认(`mesh` / `mesh_minio_secret`)改为空串——公开仓库不再携带任何可用的对象存储口令;生产经 `validate_infra_settings` 拒绝空值,本地开发经 compose / gen-dev-secrets 注入强值(`WEAK_SECRET_DENYLIST` 中保留该值作拒绝名单,非凭据)。
-  - CI(`backend-ci.yml` / `frontend.yml` 共三处 MinIO):删除硬编码 `mesh` / `mesh_minio_secret`,改为运行时 `openssl rand` 一次性生成强随机 root 凭据并经 `$GITHUB_ENV` 下发(MinIO 容器与测试进程同源);MinIO 发布端口 `9000:9000` → `127.0.0.1:9000:9000`,postgres / redis service 端口同改回环绑定(Leader 待办 1:CI 一律不绑 `0.0.0.0`)。
-  - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
-  - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
-  - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+- **mesh-runtime A2 安全执行面(MES-94 阶段2·开发A2/MES-100)**:daemon 本地执行体在 A1 骨架之上落地真实内核隔离——
+  - **namespace/cgroup 沙箱(fail-closed)**:每 attempt 独立 mount/pid/net/ipc/uts namespace + cgroup2 硬限额(memory/cpu/pids、swap 关闭),pivot_root 进入只读最小根(tmpfs `/tmp` `/home` `/xdg`、全新 `/proc`、`/dev` 仅 null/zero/urandom),降权至非特权 uid;沙箱 netns **无默认路由**,唯一出口为 veth /30 上的 per-attempt egress 代理;沙箱未就绪绝不降级裸跑(失败 attempt 以 `failed/sandbox_violation` 终结)。
+  - **S-01 不可信配置隔离**:§1.4 固定 argv 模板、reserved env 合并后二次清洗、daemon 所有的只读 provider 配置、恶意 repo 文件枚举(ISO-09:`.mcp.json`/`.claude/settings*.json`/hooks/`CLAUDE.md` 仅作普通文件,绝不加载执行)。
+  - **S-02 唯一 ToolBroker 闸门**:SO_PEERCRED uid + cgroup 成员 + attempt nonce 三重校验;§3.3 动作→闸门唯一映射(未知动作 fail-closed;mount/提权/daemon 控制面/云元数据永久禁止,approval 亦不可放行);task token 代持与资源 scope 钉死;`confirm_required` 唯一协议=取消(awaiting_approval)+新 attempt 凭 resume_context 续跑,沙箱绝不挂起等待批准。
+  - **S-04 egress gateway**:可信解析→**全部**应答 IP 过滤(loopback/私有/link-local/多播/保留/文档/benchmarking/云元数据,IPv4-mapped 归一化;混入一个禁用 IP 即整次拒绝)→钉死建连;HTTP+CONNECT;3xx 不自动跟随(逐跳重验)。
+  - **checkout helper(§3.2)**:冻结 URL + allowlist + 公网地址闸门、精确 SHA checkout、只读凭证仅存在于 git 子进程环境(不进 remote URL / `.git/config` / provider env)。
+  - **S-08 幂等清理**:按序白名单拆除(broker→吊销→cgroup kill→挂载→产物→spool 门禁→journal 清理位),不跟随 symlink,拒绝 attempt 根外路径。
+  - **MES-98 P0 契约对齐**:claim/renew task token 字段、跨流统一日志 offset 水位、journal 在线迁移。
+  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 仍开发中,生产启用以最终安全复测为准。
 
 
 平台能力层·设计系统级:主题与暗色模式全功能实现(MES-81,theme.md 五章)。协商链闭合(T4:三值语义写死 + 工作区默认级 + 邀请页 preview 同源解析)、首帧防闪烁三级可执行链路(T7/H2:入口注入 → 分区 locator → skeleton)、token 构建期生成单一事实源、CI 四门禁(对比度独立关卡 / AST 硬编码扫描 / 双主题视觉回归 / forced-colors 仿真)、存量 CSS 债务零命中收口。
@@ -40,6 +35,61 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 - **真实 e2e(生产形态栈:nginx 前门 → API HTML 入口)**:无闪错三场景全绿——A(默认暗)→B(默认浅)首帧即 B 主题无「先暗后浅」(data-theme 帧序列取证不含 dark)/ 换账号残留 locator(id 不符)不串用 + 解析后按当前路由身份重写 / 邀请接受页未登录首帧即邀请工作区默认暗色(preview 同源注入);注入链路断言(入口 HTML `__MESH_APPEARANCE__` 与协商结果一致、不含 slug 等可枚举信息);缓存边界(匿名 public + sha256 CSP / 个性化 private,no-store + nonce CSP,script-src 无 unsafe-inline);locator 白名单(非法 mode 丢弃);视觉回归 24 用例连跑三轮零 diff;forced-colors 仿真 14 断言绿;默认 mock e2e 套件 30 绿。
 - **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 通过;前端全局覆盖率 97.4/90.9/94.4/97.4(双门禁通过);`tsc` 净、eslint/stylelint 0 错、对比度关卡 32 对 ×2 主题全过、gen:tokens 幂等。
+
+### Fixed
+
+- **mesh-runtime A2 验收打回整改(MES-100,PR #74 第 2 轮)**:按验收员 14 项阻断清单逐条修复并补真实负向测试——
+  - **钉入必修×3**:① spool×sealed 交错残留——sealed flush 在 spool 回放后继续收集内存缓冲批、sealed 钉在真正最后一批;sealed flush 瞬态失败按有界退避重试(尊重 Retry-After、分钟级封顶),重试耗尽降级 `failed/log_flush_failed`(绝不以 completed 认证不完整日志),spool/journal 保留交启动对账续传;② 崩溃残留清理——启动对账收口 spool/work dir/sandbox cgroup/宿主侧 veth 残留(`terminal_seal_pending` 行先尽力回放+sealed 再清;包含校验的按 attempt 清理 + 全盘扫描,拒绝 work root 外路径);③ 500ms 独立 flush timer——稀疏流不等下一行,定时器按 §3.9.2「任一条件即发送」发送,事件驱动测试覆盖。
+  - **B4 [HIGH] checkout SSRF**:platform-managed checkout 在 git fetch 前对 repo host 走可信解析 + 全应答 IP 过滤,并以 `http.curloptResolve` 将连接钉死到已验证 IP(消除 rebinding 窗口);不可钉死 scheme 拒绝;self-hosted 豁免为设计使然,心跳新增 `checkout_public_address_gate` 能力位。**B5**:`base_sha` 缺失 fail-closed(绝不抓移动分支 ref 跳过校验)。
+  - **B6**:ISO-12 名实相符——新增 §5.2 枚举的跨解析 rebinding(先公网后私网/元数据)真实负向;重定向元数据子用例改为真实 traverse 302 且由生产 IP 过滤器(而非端口闸门)拒绝。**B7**:`max_redirects` 冻结上限真实生效(3xx 按 attempt 记账,超限拒绝中继)。**B8**:egress 代理钉死 per-attempt veth host IP(`IP_FREEBIND` 预绑),不再 `0.0.0.0` 暴露。
+  - **B9**:broker cgroup 校验分支真实负向/正向测试(真实 `/proc/<peer>/cgroup`)。**B10**:`issue.comment`/`issue.status` 幂等键门禁(缺键 fail-closed、同键重放不二次执行、失败不缓存)。**B11**:EXEC 门禁补 pid/ipc/uts namespace 比对。**B12**:reserved env 二次清洗补全(泛型 `_TOKEN/_SECRET/_KEY/_CREDENTIAL/_PASSWORD/_APIKEY` 后缀 + 代理族 + `NPM_TOKEN`)。
+  - **安全审核员 LOW 清单**:token fstat 复核补 0600 mode + 超限读拒绝(不静默截断)、journal 以 `os.open` 0600 预建消除 umask 窗口、runtime token 纳入脱敏集、Retry-After 全链路分钟级封顶(claim/heartbeat/sealed-flush 统一 `capped_retry_after`)。
+  - **文档**:spec 新增 §4.4.1 实现跟踪台账(A2 验收冻结登记非阻断项:非 root/userns 随 S-12、argv/provider 配置端到端强制随 A3 等)。
+
+## [0.20.0] - 2026-07-30
+服务端 P0 契约冻结落地(MES-91 阶段2 · MES-98,六轮验收收口):runtime 执行体服务端契约全面 Spec 化并对齐实现,为本地执行体(MES-94)联调放行。
+
+### Added
+
+- **Server P0 契约六项落地(MES-98,runtime-executor.md §2.1～2.6 / auth.md §2.5.1)**:
+  - **完整冻结快照(§2.1)**:`build_config_snapshot` 冻结完整 AttemptSpec(provider/model/effort/system_instructions/budget/network_policy/data_policy/skill 版本);assign/mention/autopilot 经统一入口解析 agent 真实配置(修复 mention 空配置 enqueue)并随 claim 下发;新增 SHA-256 快照摘要(`compute_snapshot_digest`)供 daemon 校验完整性。
+  - **任务级 Mesh 身份(§2.2 S-05)**:新增 `attempt_task_tokens` 表与 `task_tokens` 服务——claim 签发绑定 workspace/agent/execution/attempt/lease_seq 的短期 `mesh_task_` token(仅存 hash、明文一次性下发、默认禁 `agent:trigger` 防回环);renew 轮换,终态/reclaim/freeze/runtime 下线五路同事务吊销;`validate_task_token` 全校验(在途/lease_seq/runtime 归属/资源 scope/token+attempt 双维度限速);`/api/v1/task/*` 端点经 `resolve_task_principal` 依赖接线;task 沙箱不注入长期 PAT,token 不入 `api_tokens`。
+  - **结构化结果(§2.6)**:`execution_attempts` 类型化列(provider/provider_version/provider_session_id/model/prompt/completion/cache tokens/cost_usd/num_turns)+ 版本化 result schema 解析。
+  - **issue 完成闭环(§3.7 S-09)**:`result_sink` 消费 `execution.finished`——非 squad 的 assign/mention 触发经 `CommentService` 真实 API 写结果评论(suppress_triggers 防回环 + 幂等键;squad 走既有 relay 闭环;stub 结果与独立闭环触发器跳过)。
+  - **协议协商(§2.6)**:activate/heartbeat 接收 protocol_version/provider_manifest/daemon_features 并落库。
+- **task principal 真实 HTTP e2e**:`test_task_routes_e2e.py` 4 条全链路测试(注册→建区→agent→runtime 激活→enqueue→claim 实领 token→task 路由 200/401 断言,零 mock);新增 21 条 task token/脱敏/result sink 真实 DB 测试。
+
+### Changed
+
+- **runtime token 单一真源(§2.4 S-11)**:移除 `runtimes.runtime_token_id` FK 与 `api_tokens` 双写,`runtimes.runtime_token_hash` 为唯一真源;迁移 0029 吊销并清理旧 runtime token 行、重建 `mesh_runtime_by_token_hash` SECURITY DEFINER 引导函数(剔除已删列);`daemon_auth` 仅校验 hash。
+- 模型-迁移对齐:`cost_usd` Numeric(16,6)、`redaction_hits`/`snapshot_schema_version` nullable、claim 请求唯一索引入模型(drift 门禁绿)。
+
+### Security
+
+- **S-06 全通道脱敏服务端兜底(安全放行附带条件,ISO-13)**:`attempts.py` 终态 result 持久化前 `redact_result()`、`checkout.py` diff 持久化前 `redact_diff_text()`,与 daemon 首层脱敏对齐(命中计数 + 告警链路)。
+- **task token fail-closed**:过期/吊销/非在途/lease_seq 或 runtime 不匹配/scope 越权一律 401;非 task 路由拒绝 `mesh_task_`;task 路由 token+attempt 双维度限速。
+- **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
+  - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
+  - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
+  - 新增后端启动期 fail-safe `validate_infra_settings`:`MESH_AUTH_MODE=production` 时 API / realtime 网关 / worker 三启动路径拒绝空值 / 已知默认 / 过短(<16 字符)的 Redis / PostgreSQL / 对象存储凭据(与既有 `validate_auth_settings` JWT 守卫同模式)。
+  - 数据存储零宿主端口:postgres / redis 确认无 `ports:` 映射、仅内部网络可达;MinIO 保留 `127.0.0.1` 回环发布(三阶段直传需浏览器直达)并注释生产必须内网 + TLS。
+  - CI 回归守护:`test_compose_security.py` 新增「数据存储零宿主端口 / MinIO 回环唯一 / 凭据必填无默认(`:?` 形式)」断言,随 backend-ci 常跑。
+  - 文档:`.env.example` 去除可猜测默认(占位符 + 生成脚本指引)、README Quick Start 增加生产部署安全清单(强唯一口令 / 不对公网暴露 / protected-mode + TLS / 部署前端口自检)、docs/specs/README.md §2.2 新增「数据与中间件凭据安全」权威条款。
+  - 验证:gen-dev-secrets → `docker compose up --build` 真栈以强口令启动,`/healthz` / `/readyz`(database+redis ok)/ 注册-邮箱验证(dev-mailbox 经强口令 redis-cli 取 token)-登录-建区-建 issue 全链路真实 API 调用绿;postgres / redis 零宿主端口、Redis `protected-mode yes`、邻容器未认证 `-NOAUTH` 拒绝实测;生产弱口令 fail-fast 实测(api / gateway / worker 三启动路径均以 `ConfigError` 非零退出,强口令配置正常启动);`scripts/gen-dev-secrets.sh` 生成强随机 `.env`(0600、拒绝覆盖、`--force` 轮换)与 compose 缺失凭据即报错实测;单测套件(含新增 25 例凭据守卫 + 9 例 compose 回归)全绿,`pytest --cov=mesh` TOTAL 92%(≥90% 门禁),ruff 净。
+- **MinIO 凭据出仓 + CI 端口收口(MES-83 复审 CRITICAL 整改:对象存储弱口令明文存在于公开仓库)**:
+  - `backend/src/mesh/config.py`:`storage_access_key` / `storage_secret_key` 的可猜测默认(`mesh` / `mesh_minio_secret`)改为空串——公开仓库不再携带任何可用的对象存储口令;生产经 `validate_infra_settings` 拒绝空值,本地开发经 compose / gen-dev-secrets 注入强值(`WEAK_SECRET_DENYLIST` 中保留该值作拒绝名单,非凭据)。
+  - CI(`backend-ci.yml` / `frontend.yml` 共三处 MinIO):删除硬编码 `mesh` / `mesh_minio_secret`,改为运行时 `openssl rand` 一次性生成强随机 root 凭据并经 `$GITHUB_ENV` 下发(MinIO 容器与测试进程同源);MinIO 发布端口 `9000:9000` → `127.0.0.1:9000:9000`,postgres / redis service 端口同改回环绑定(Leader 待办 1:CI 一律不绑 `0.0.0.0`)。
+  - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
+  - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
+  - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+
+### Fixed
+
+- **onboarding t34 通知不变量回归**:result_sink 无条件结果评论破坏 `latest_comment_id` 精确匹配——触发门禁(仅 assign/mention)+ 内容门禁(stub 结果跳过)修复(第四轮验收三组基线对照实验锁定根因)。
+
+### 验证
+
+- 六轮验收干净环境实测收口:backend-ci 全绿(3004 passed / 0 failed,ruff 净,TOTAL 覆盖率 92% ≥90% 门禁);task principal 全链路真实 HTTP 实测(claim 实领 token → 200,伪造/console token → 401);S-11 干净库迁移实测(引导函数正常、旧 token 401);onboarding 基线对照实验(合入前基线绿 / 当前红 / 仅禁用 result_sink 绿)锁定回归归属并修复。
 
 ## [0.19.1] - 2026-07-29
 Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。

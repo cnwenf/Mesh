@@ -114,3 +114,27 @@ class TestClear:
 
     async def test_clear_missing_file_is_ok(self, store):
         await store.clear()  # no error
+
+
+class TestLoadHardening:
+    async def test_load_rejects_mode_swap_between_lstat_and_fstat(self, store, monkeypatch):
+        """The fstat re-check must include the 0600 mode: a file swapped to a
+        world-readable one between lstat and open fails closed."""
+        import mesh_runtime.token_store as ts
+
+        await store.save("mesh_rt_swap-target")
+
+        class SwappedStat:
+            st_mode = 0o100644  # regular file, but 0644 — swapped after lstat
+            st_uid = ts.os.getuid()
+
+        monkeypatch.setattr(ts.os, "fstat", lambda fd: SwappedStat())
+        with pytest.raises(TokenStoreError):
+            await store.load()
+
+    async def test_load_rejects_oversized_token_file(self, store):
+        """A token file filling the 4096-byte read budget is anomalous —
+        refuse instead of silently truncating."""
+        await store.save("mesh_rt_" + "a" * 5000)
+        with pytest.raises(TokenStoreError):
+            await store.load()

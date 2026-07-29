@@ -84,6 +84,13 @@ class TestBeatOnce:
         assert outcome == "rate_limited"
         assert delay == 30.0
 
+    async def test_rate_limited_retry_after_capped_at_minute(self, fake_server):
+        fake_server.enqueue(HB_KEY, 429, None, headers={"Retry-After": "7200"})
+        hb = make_heartbeat(fake_server)
+        outcome, delay = await hb.beat_once()
+        assert outcome == "rate_limited"
+        assert delay == 60.0
+
     async def test_server_error_keepalive_backoff_no_increment(self, fake_server):
         fake_server.enqueue(HB_KEY, 500, None)
         hb = make_heartbeat(fake_server, rand=make_rand([1.0]))

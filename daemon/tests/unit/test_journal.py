@@ -1,3 +1,4 @@
+import os
 import stat
 
 import pytest
@@ -73,9 +74,11 @@ class TestJournal:
         await journal.put("a2", execution_id="e", runtime_id="r", lease_seq=1, status="running")
         await journal.put("a3", execution_id="e", runtime_id="r", lease_seq=1, status="terminal_reported")
         await journal.put("a4", execution_id="e", runtime_id="r", lease_seq=1, status="lease_lost")
+        # terminal BUT still owning spooled batches — reconciliation owns it
+        await journal.put("a5", execution_id="e", runtime_id="r", lease_seq=1, status="terminal_seal_pending")
         active = {e.attempt_id for e in await journal.list_active()}
-        assert active == {"a1", "a2"}
-        assert set(ACTIVE_STATUSES) == {"claimed", "running"}
+        assert active == {"a1", "a2", "a5"}
+        assert set(ACTIVE_STATUSES) == {"claimed", "running", "terminal_seal_pending"}
 
     async def test_delete_removes_entry(self, journal):
         await journal.put("a1", execution_id="e", runtime_id="r", lease_seq=1, status="claimed")
@@ -102,3 +105,89 @@ class TestJournal:
         raw = (tmp_path / "ledger.sqlite3").read_bytes()
         assert b"mesh_rt_" not in raw
         assert b"prompt" not in raw.lower()
+
+
+class TestCleanupStateAndMigration:
+    """A2 journal: cleanup_state + sandbox_handle columns, with an idempotent
+    migration for A1-era databases that lack them."""
+
+    async def test_new_columns_default_empty(self, journal):
+        await journal.put("a1", execution_id="e1", runtime_id="r1", lease_seq=1, status="claimed")
+        entry = await journal.get("a1")
+        assert entry.cleanup_state == ""
+        assert entry.sandbox_handle == ""
+
+    async def test_update_cleanup_state_and_sandbox_handle(self, journal):
+        await journal.put("a1", execution_id="e1", runtime_id="r1", lease_seq=1, status="claimed")
+        await journal.update("a1", cleanup_state="cgroup_killed", sandbox_handle="mesh/a1")
+        entry = await journal.get("a1")
+        assert entry.cleanup_state == "cgroup_killed"
+        assert entry.sandbox_handle == "mesh/a1"
+
+    async def test_legacy_database_is_migrated_on_open(self, tmp_path):
+        import sqlite3
+
+        path = tmp_path / "ledger.sqlite3"
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE attempts (
+                attempt_id        TEXT PRIMARY KEY,
+                execution_id      TEXT NOT NULL,
+                runtime_id        TEXT NOT NULL,
+                lease_seq         INTEGER NOT NULL,
+                lease_expires_at  REAL NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL,
+                log_offset_stdout INTEGER NOT NULL DEFAULT 0,
+                log_offset_stderr INTEGER NOT NULL DEFAULT 0,
+                work_dir          TEXT NOT NULL DEFAULT '',
+                created_at        REAL NOT NULL
+            );
+            INSERT INTO attempts (attempt_id, execution_id, runtime_id, lease_seq,
+                                  status, created_at)
+            VALUES ('old-1', 'e1', 'r1', 4, 'running', 0);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        j = Journal(path)
+        await j.open()  # must migrate, not fail
+        entry = await j.get("old-1")
+        assert entry is not None
+        assert entry.lease_seq == 4
+        assert entry.cleanup_state == ""
+        assert entry.sandbox_handle == ""
+        await j.close()
+
+        # Migration is idempotent: re-opening an already-migrated db works.
+        j2 = Journal(path)
+        await j2.open()
+        assert (await j2.get("old-1")).cleanup_state == ""
+        await j2.close()
+
+
+class TestFilePermissions:
+    async def test_created_0600_under_permissive_umask(self, tmp_path):
+        """The ledger is pre-created with an explicit 0600 — even umask 000
+        must not leave it world-readable, at any point (§2.3)."""
+        old = os.umask(0o000)
+        try:
+            j = Journal(tmp_path / "state" / "ledger.sqlite3")
+            await j.open()
+            await j.close()
+        finally:
+            os.umask(old)
+        mode = stat.S_IMODE((tmp_path / "state" / "ledger.sqlite3").stat().st_mode)
+        assert mode == 0o600
+
+    async def test_open_refuses_symlinked_ledger_path(self, tmp_path):
+        """A symlink planted at the ledger path fails closed (O_NOFOLLOW)."""
+        real = tmp_path / "state" / "real.sqlite3"
+        real.parent.mkdir(mode=0o700)
+        real.write_bytes(b"")
+        link = tmp_path / "state" / "ledger.sqlite3"
+        link.symlink_to(real)
+        j = Journal(link)
+        with pytest.raises(OSError):
+            await j.open()

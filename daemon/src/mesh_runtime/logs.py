@@ -1,8 +1,10 @@
 """LogUploader — redacted, offset-idempotent log relay (spec §3.9 / design §8.3).
 
 Lines are redacted FIRST; the upload ``start_offset`` is counted in REDACTED
-UTF-8 bytes and is the journal's authoritative watermark. Batches ship when
-ANY threshold trips (64 lines / 256 KiB / 500 ms). On a 409 ``offset_mismatch``
+UTF-8 bytes. Per the server contract the offset is a SINGLE cumulative
+watermark ACROSS both streams of an attempt (the journal mirrors it in both
+``log_offset_*`` fields). Batches ship when ANY threshold trips (64 lines /
+256 KiB / 500 ms). On a 409 ``offset_mismatch``
 the uploader reconciles against the server's ``expected`` offset — drops the
 confirmed prefix and retries — instead of dying; a lease fencing 409 is
 re-raised for the supervisor to handle.
@@ -18,6 +20,7 @@ and retried on the next flush — it must NOT fail the attempt; only a sealed
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -31,9 +34,15 @@ if TYPE_CHECKING:
     from mesh_runtime.attempt import AttemptContext
     from mesh_runtime.journal import Journal
 
+logger = logging.getLogger("mesh_runtime.logs")
+
 DEFAULT_BATCH_LINES = 64
 DEFAULT_BATCH_BYTES = 256 * 1024
 DEFAULT_BATCH_INTERVAL = 0.5
+#: Resolution of the independent flush timer (§3.9.2 "any condition sends"):
+#: a sparse stream that never reaches the line/byte thresholds is flushed once
+#: the batch interval elapses, without waiting for the next line.
+DEFAULT_TICK_INTERVAL = 0.1
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,7 @@ class LogUploader:
         batch_lines: int = DEFAULT_BATCH_LINES,
         batch_bytes: int = DEFAULT_BATCH_BYTES,
         batch_interval: float = DEFAULT_BATCH_INTERVAL,
+        tick_interval: float = DEFAULT_TICK_INTERVAL,
     ) -> None:
         self._api = api
         self._journal = journal
@@ -62,14 +72,19 @@ class LogUploader:
         self._batch_lines = batch_lines
         self._batch_bytes = batch_bytes
         self._batch_interval = batch_interval
+        self._tick_interval = tick_interval
         self._buffers: dict[tuple[str, str], list[str]] = {}
         self._buffer_bytes: dict[tuple[str, str], int] = {}
         self._first_at: dict[tuple[str, str], float] = {}
+        self._contexts: dict[str, AttemptContext] = {}
         self._lock = asyncio.Lock()
+        self._tick_task: asyncio.Task | None = None
+        self._tick_stop = asyncio.Event()
 
     async def submit(self, ctx: AttemptContext, stream: str, line: str) -> SubmitResult:
         result = self._redactor.redact(line)
         key = (ctx.attempt_id, stream)
+        self._contexts[ctx.attempt_id] = ctx  # timer needs the lease lock/seq
         should_flush = False
         async with self._lock:
             buf = self._buffers.setdefault(key, [])
@@ -96,34 +111,98 @@ class LogUploader:
         """Drop any residual spooled batches for a terminal attempt (§3.9.3)."""
         if self._spool is not None:
             self._spool.drain(attempt_id)
+        self._contexts.pop(attempt_id, None)
+
+    # -- independent flush timer (§3.9.2) ------------------------------------
+
+    async def start_ticking(self) -> None:
+        """Run the interval arm of "any condition sends" on its own clock.
+
+        ``submit`` only evaluates the 500 ms condition when a NEW line
+        arrives, so a sparse stream (one line, then silence until finalize)
+        would otherwise stall in the buffer. The tick loop flushes any stream
+        whose oldest buffered line is past the batch interval, independent of
+        arrivals."""
+        if self._tick_task is not None and not self._tick_task.done():
+            return
+        self._tick_stop = asyncio.Event()
+        self._tick_task = asyncio.create_task(
+            self._tick_loop(), name="log-flush-timer"
+        )
+
+    async def stop_ticking(self) -> None:
+        task = self._tick_task
+        self._tick_task = None
+        if task is None:
+            return
+        self._tick_stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _tick_loop(self) -> None:
+        while not self._tick_stop.is_set():
+            await self._clock.sleep(self._tick_interval)
+            try:
+                await self.flush_due()
+            except DaemonError as exc:
+                # Keep the timer alive: mid-stream failures are the uploader's
+                # retry/spool problem, lease fencing is the supervisor's. A
+                # dead timer would silently re-stall sparse streams.
+                logger.warning("flush timer tick error: %s", type(exc).__name__)
+
+    async def flush_due(self) -> None:
+        """Flush every stream whose oldest buffered line has aged past the
+        batch interval (§3.9.2 interval arm). Called on each timer tick; also
+        directly callable for deterministic checks. Never seals — a sealed
+        close is the supervisor's terminal decision."""
+        now = self._clock.now()
+        due: list[tuple[str, str]] = []
+        async with self._lock:
+            for key, first_at in self._first_at.items():
+                if now - first_at >= self._batch_interval:
+                    due.append(key)
+        for attempt_id, stream in due:
+            ctx = self._contexts.get(attempt_id)
+            if ctx is not None:
+                await self._flush_stream(ctx, stream, sealed=False)
 
     async def _flush_stream(self, ctx: AttemptContext, stream: str, *, sealed: bool) -> None:
         key = (ctx.attempt_id, stream)
-        offset_field = f"log_offset_{stream}"
         async with ctx.lock:
             entry = await self._journal.get(ctx.attempt_id)
-            start = getattr(entry, offset_field) if entry else 0
+            # Server contract (MES-98): start_offset is cumulative BYTES per
+            # attempt ACROSS both streams — a single monotonic watermark, not
+            # per-stream counters. Both journal fields mirror that watermark.
+            start = max(entry.log_offset_stdout, entry.log_offset_stderr) if entry else 0
             batches = self._collect_batches(ctx, stream, key, start)
             if not batches:
                 if not sealed:
                     return
                 # Nothing buffered, but the stream still needs its sealed close.
-                await self._upload_one(ctx, stream, start, [], offset_field=offset_field, sealed=True)
+                await self._upload_one(ctx, stream, start, [], sealed=True)
                 return
             last = len(batches) - 1
             for index, (batch_offset, batch_lines) in enumerate(batches):
                 try:
                     await self._upload_one(
                         ctx, stream, batch_offset, batch_lines,
-                        offset_field=offset_field, sealed=sealed and index == last,
+                        sealed=sealed and index == last,
                     )
                 except LeaseConflictError:
                     raise  # fencing — supervisor handles it
                 except DaemonError:
-                    if sealed:
-                        raise  # terminal flush: supervisor decides; spool retains the batch
                     if self._spool is None:
+                        # Re-queue BEFORE propagating so the supervisor's retry
+                        # (sealed) or the next flush (mid-stream) re-sends the
+                        # very same lines — nothing is lost on failure.
                         await self._rebuffer(ctx.attempt_id, stream, batch_lines)
+                    # With a spool the batch is already durable on disk and is
+                    # replayed by the next collect; no rebuffer needed.
+                    if sealed:
+                        raise  # terminal flush: supervisor retries, then demotes
                     break  # transient mid-stream failure: retry on the next flush
                 if self._spool is not None:
                     self._spool.ack(ctx.attempt_id, stream, batch_offset)
@@ -132,33 +211,43 @@ class LogUploader:
         self, ctx: AttemptContext, stream: str, key: tuple[str, str], start: int
     ) -> list[tuple[int, list[str]]]:
         """Return the ``(start_offset, lines)`` batches to upload, in offset
-        order. Must run under ``ctx.lock``. A still-spooled batch (previous
-        upload failed transiently) is retried first and new buffer lines stay
-        queued, so offsets stay monotonic and replay stays idempotent."""
+        order. Must run under ``ctx.lock``.
+
+        Still-spooled batches (a previous upload failed transiently) are
+        replayed FIRST, then any in-memory buffer lines are collected as a
+        continuation batch starting right after the last spooled byte — so a
+        sealed (terminal) flush uploads the spooled batch AND the sparse tail
+        and lands ``sealed`` on the TRUE last batch (§3.9.2/§3.9.3). New
+        buffer lines are made durable in the spool before upload as well, so
+        offsets stay monotonic and replay stays idempotent."""
+        batches: list[tuple[int, list[str]]] = []
+        next_offset = start
         if self._spool is not None and self._spool.has_pending(ctx.attempt_id, stream):
-            return [
-                (batch.start_offset, list(batch.lines))
-                for batch in self._spool.pending(ctx.attempt_id, stream)
-            ]
+            for batch in self._spool.pending(ctx.attempt_id, stream):
+                batches.append((batch.start_offset, list(batch.lines)))
+                next_offset = max(next_offset, batch.start_offset + batch.byte_size)
         lines = self._buffers.pop(key, [])
         self._buffer_bytes.pop(key, None)
         self._first_at.pop(key, None)
-        if not lines:
-            return []
-        if self._spool is not None:
-            try:
-                # Durable BEFORE upload — survives crash/restart.
-                self._spool.write(SpooledBatch(ctx.attempt_id, stream, start, tuple(lines)))
-            except DaemonError:
-                # SpoolFullError (backpressure): put the lines back so nothing
-                # is lost, then let the error propagate to the supervisor.
-                self._rebuffer_sync(key, lines)
-                raise
-        return [(start, lines)]
+        if lines:
+            if self._spool is not None:
+                try:
+                    # Durable BEFORE upload — survives crash/restart.
+                    self._spool.write(
+                        SpooledBatch(ctx.attempt_id, stream, next_offset, tuple(lines))
+                    )
+                except DaemonError:
+                    # SpoolFullError (backpressure): put the lines back so
+                    # nothing is lost, then let the error propagate to the
+                    # supervisor.
+                    self._rebuffer_sync(key, lines)
+                    raise
+            batches.append((next_offset, lines))
+        return batches
 
     async def _upload_one(
         self, ctx: AttemptContext, stream: str, start_offset: int, lines: list[str],
-        *, offset_field: str, sealed: bool,
+        *, sealed: bool,
     ) -> None:
         try:
             ack = await self._api.append_logs(
@@ -174,7 +263,11 @@ class LogUploader:
                 ctx.attempt_id, lease_seq=ctx.lease_seq, stream=stream,
                 start_offset=expected, lines=remaining, sealed=sealed,
             )
-        await self._journal.update(ctx.attempt_id, **{offset_field: ack.accepted_end_offset})
+        await self._journal.update(
+            ctx.attempt_id,
+            log_offset_stdout=ack.accepted_end_offset,
+            log_offset_stderr=ack.accepted_end_offset,
+        )
 
     async def _rebuffer(self, attempt_id: str, stream: str, lines: list[str]) -> None:
         if not lines:

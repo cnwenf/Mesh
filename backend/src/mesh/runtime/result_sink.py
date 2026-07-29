@@ -85,12 +85,32 @@ async def execution_finished_result_sink(
     if task_spec.get("squad_task_id"):
         return None
 
+    # §3.7 S-09: only assign/mention triggers get result comments.
+    # chat, autopilot, manual, integration have independent closure paths
+    # (chat-session.md §4.4, autopilot.md §4.5, onboarding.md §3.6).
+    # Writing result comments for those triggers breaks their notification
+    # invariants (e.g. onboarding t34 reply-notification matching).
+    _RESULT_COMMENT_TRIGGERS = frozenset({"assign", "mention"})
+    if execution.trigger not in _RESULT_COMMENT_TRIGGERS:
+        return None
+
     # Only write a result comment for issue-bound executions.
     if execution.issue_id is None:
         return None
 
     # Build the result summary comment body.
     result = execution.result or {}
+
+    # §3.7 S-09: only post a result comment when the execution produced
+    # meaningful output. Stub results (e.g. {"exit_code": 0} from test
+    # harnesses or minimal daemon completions) don't warrant a comment —
+    # the agent writes its own summary via task MCP when it has content.
+    # This prevents result_sink from polluting notification invariants
+    # on issues where the agent posts its own reply comment.
+    output = result.get("output") or result.get("summary") or ""
+    if status == "completed" and not (isinstance(output, str) and output.strip()):
+        return None
+
     summary = _build_result_summary(status, result, execution.failure_reason)
 
     # Resolve the agent's member row — the comment author.

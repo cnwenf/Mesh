@@ -1,0 +1,25 @@
+{
+  "server_url": "http://127.0.0.1:25610",
+  "steps": [
+    "auth: register+login ok",
+    "workspace 21fb8feb-bdab-4596-bdaf-55e927668668 created; allowed_repos set",
+    "agent 6d7f25af-d7f6-47f5-b02d-661c3d74246c created (member 29c354fc-14be-457f-8f80-eaffafd81bcb)",
+    "runtime 0290f216-330f-433c-9626-4ed11cdbd951 pending; activation code issued",
+    "daemon activated; runtime_id=0290f216-330f-433c-9626-4ed11cdbd951",
+    "runtime status after activate+heartbeat: online",
+    "issue 4ab1742d-26fa-43d7-be9c-57338ceb3ded assigned → enqueue path triggered",
+    "execution terminal: completed",
+    "logs reflowed; secret redacted (***)",
+    "result schema_version=1; no secret in result",
+    "task token not exposed in console API (expected; plaintext only in claim/renew) — revocation covered by server P0 contract tests",
+    "daemon graceful shutdown; sandbox resources released"
+  ],
+  "execution": {
+    "id": "8b374797-421e-4d85-b7e7-3b7b8b526f28",
+    "status": "completed",
+    "failure_reason": null
+  },
+  "log_excerpt": "{\"data\": {\"execution_id\": \"8b374797-421e-4d85-b7e7-3b7b8b526f28\", \"attempt_id\": \"3f5c7f48-120b-4e50-a661-55907c72b636\", \"execution_status\": \"completed\", \"lines\": [{\"stream\": \"stdout\", \"offset\": 0, \"line\": \"integration-run 7bf8097d\"}, {\"stream\": \"stdout\", \"offset\": 25, \"line\": \"carries ***\"}], \"next_offset\": 37}}",
+  "result_schema_version": 1,
+  "verdict": "PASS"
+}
