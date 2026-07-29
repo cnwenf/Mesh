@@ -332,7 +332,10 @@ async def test_create_activate_flow(session_factory):
     assert activated["runtime_token"].startswith(RUNTIME_TOKEN_PREFIX)
     async with session_factory() as session:
         runtime = (await session.execute(select(Runtime))).scalar_one()
-        token = (await session.execute(select(ApiToken))).scalar_one()
+        # §2.4 S-11: NO api_tokens row — hash lives ONLY on runtimes.
+        api_token_count = (
+            await session.execute(select(ApiToken))
+        ).scalars().all()
     assert runtime.status == "online"
     assert runtime.activated_at is not None  # non-null = code consumed
     # Hash remains (replay resolves to 410), plaintext is never stored.
@@ -340,10 +343,11 @@ async def test_create_activate_flow(session_factory):
     assert runtime.hostname == "build-node-7"
     assert runtime.labels == {"region": "intranet", "gpu": "false"}  # merged
     assert runtime.capabilities == ["version_control", "python"]
-    assert token.token_hash == hashlib.sha256(
+    # §2.4 S-11: token hash on runtime row, zero api_tokens rows.
+    assert runtime.runtime_token_hash == hashlib.sha256(
         activated["runtime_token"].encode()
     ).hexdigest()
-    assert "runtime" in token.scopes
+    assert len(api_token_count) == 0, "mesh_rt_ must never enter api_tokens"
 
 
 async def test_activation_expired_and_used_410(session_factory):
@@ -411,13 +415,13 @@ async def test_pause_revokes_token_rotate_issues_new(session_factory):
     world = await seed_world(session_factory)
     service = _service(session_factory)
     runtime = await make_runtime(session_factory, world["ws_id"], created_by=world["member_id"])
-    old_plain, old_token = await issue_runtime_token(session_factory, runtime)
+    old_plain, _ = await issue_runtime_token(session_factory, runtime)
 
     await service.pause_runtime(workspace_id=world["ws_id"], runtime_id=runtime.id)
     async with session_factory() as session:
-        revoked = await session.get(ApiToken, old_token.id)
         fresh = await session.get(Runtime, runtime.id)
-    assert revoked.revoked_at is not None
+    # §2.4 S-11: pause clears the hash (old token immediately gets 401).
+    assert fresh.runtime_token_hash is None
     assert fresh.status == "paused"
 
     rotated = await service.rotate_runtime_token(
@@ -430,6 +434,14 @@ async def test_pause_revokes_token_rotate_issues_new(session_factory):
     assert fresh.runtime_token_hash == hashlib.sha256(
         rotated["runtime_token"].encode()
     ).hexdigest()
+    # §2.4 S-11: zero api_tokens rows for runtime tokens.
+    async with session_factory() as session:
+        runtime_tokens = (
+            await session.execute(
+                select(ApiToken).where(ApiToken.scopes.any("runtime"))
+            )
+        ).scalars().all()
+    assert len(runtime_tokens) == 0, "mesh_rt_ must never enter api_tokens"
 
 
 async def test_credentials_crud_plaintext_never_returned(session_factory):

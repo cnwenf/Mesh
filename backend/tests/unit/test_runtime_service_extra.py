@@ -9,7 +9,6 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from mesh.db.models.api_token import ApiToken
 from mesh.db.models.runtime import (
     ExecutionAttempt,
     RepoCheckout,

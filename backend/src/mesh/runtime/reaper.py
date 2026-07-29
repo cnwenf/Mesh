@@ -304,7 +304,6 @@ async def _mark_offline_runtimes(
             )
             # §2.2 S-05: revoke task tokens for all in-flight attempts of
             # this runtime (runtime offline = tokens must die, fail-closed).
-            from mesh.db.models.runtime import AttemptTaskToken
 
             await session.execute(
                 text(

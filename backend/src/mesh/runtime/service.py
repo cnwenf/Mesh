@@ -13,11 +13,11 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.config import Settings
-from mesh.db.models.api_token import DISPLAY_PREFIX_LEN, RUNTIME_TOKEN_PREFIX, ApiToken
+from mesh.db.models.api_token import DISPLAY_PREFIX_LEN, RUNTIME_TOKEN_PREFIX
 from mesh.db.models.member import Member
 from mesh.db.models.runtime import (
     ExecutionAttempt,
