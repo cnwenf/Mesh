@@ -30,6 +30,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 
 ## 实现状态
 
+> Runtime 服务端协议已实现；真实本地执行体仍处于安全设计关卡，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)，安全复评通过前不启动 provider 执行开发。
+
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |

@@ -5,6 +5,7 @@
 > 被依赖：`agent`（分派即触发的执行落地）、`autopilot`（自动化执行）、`squad`（多 agent 协作执行）
 > 技术栈基准：Python 异步 Web 框架（FastAPI）+ SQLAlchemy 2.x（`DeclarativeBase` / `Mapped` / `mapped_column`，异步会话）+ PostgreSQL + WebSocket / SSE
 > 文档性质：可直接指导开发的实现规格。runtime 是 agent 实际执行代码、操作仓库、运行命令的「身体」/「工位机器」。
+> 本地执行体：真实 provider、task broker、沙箱/网络/凭证边界、动作审批闭环与安全红线测试以 [`runtime-executor.md`](runtime-executor.md) 为实现子 Spec；与本文冲突时，安全边界取更严格者。
 
 ---
 
@@ -42,9 +43,9 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 | R7 | 租约 + lease_seq | 领取即发租约，周期续租；租约过期视为持有者已死可回收；`lease_seq` 防「诈尸 / 脑裂」覆盖 |
 | R8 | 并发上限与背压 | 每 runtime `max_concurrent`（默认 1）；满载时新任务停留 `queued`，队列深度即背压信号 |
 | R9 | 日志流式 + 续传 | stdout/stderr 按行追加上报，带单调 `offset`；前端实时滚动，断线凭最后 offset 无缝续看，不丢不重 |
-| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离（**出站默认 deny**，按 task_spec 声明域名白名单放行），cgroup 资源配额，非特权用户，结束即销毁 |
+| R10 | 沙箱隔离 | 每任务独立容器 / 命名空间，文件 / 进程 / 网络隔离（**出站默认 deny**；允许目标也必须经可信解析→全 IP 过滤→建连钉死，重定向逐跳复验），cgroup 资源配额，非特权用户，结束即销毁 |
 | R11 | 代码仓库专属分支 checkout | 每任务创建专属工作分支 `agent/<execution-id>`，多任务并行不互相污染；产出差异（diff）回报供 review |
-| R12 | 凭证注入（不落盘） | secret 仅在 claim 时随任务一次性下发、短期、最小权限；能走环境变量就不落盘；**全通道脱敏（日志 + 评论 + 附件产出物）**；**runtime_token 仅存于 daemon 受信进程，任务沙箱不可见** |
+| R12 | 凭证注入（broker 代持） | task token 与高危 secret 仅由 daemon/task broker 代持，沙箱只得到动作级 handle；一次性、短期、最小权限，必要临时文件仅入 tmpfs 0600；**全通道脱敏（日志 + result + diff + 评论 + 附件产出物）**；**runtime_token 与 task token 均对任务沙箱不可见** |
 | R13 | 超时与取消（两段式） | 任务级超时 + 用户主动取消；先优雅终止（SIGTERM + 宽限期）再强制 kill（SIGKILL）；`cancelling` 显式中间态 |
 | R14 | 运维可观测 | 队列深度 / 负载 / 心跳新鲜度作为一等可见信号；暂停 / 冻结 / 隔离等人类干预点 |
 
@@ -55,6 +56,7 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 - 任务队列、原子领取、租约、并发、状态机、失联回收；
 - 执行日志的流式上报 / 续传 / 持久化索引；
 - 沙箱执行规范的契约、代码 checkout 专属分支、凭证一次性下发与脱敏；
+- 本地执行体的具体 provider 适配、task broker、动作闸门、出站 gateway 与红线矩阵（`runtime-executor.md`）；
 - 超时 / 取消 / 冻结 / 隔离。
 
 **本模块不负责（非目标）：**
@@ -64,9 +66,9 @@ Mesh 把 AI agent 当作真正的队友，而队友需要一台真实的「工�
 - 底层模型供应商接入（统一以「主流大语言模型」抽象）。
 
 **约束红线：**
-- **凭证安全是红线而非功能**：secret 仅 claim 时一次性下发、短期、最小权限、能走环境变量就不落盘、**全通道脱敏（日志 + 评论 + 附件产出物均做 secret 命中检测，命中即拦截并告警）**、服务端永不回显明文、执行结束即失效。
+- **凭证安全是红线而非功能**：runtime/task token 不进任务 env/文件，敏感凭证由 broker 代持、短期、最小权限；必要临时文件只进 tmpfs 0600；**全通道脱敏（日志 + result + diff + 评论 + 附件产出物均做 secret 命中检测）**、服务端永不回显明文、执行结束即失效。
 - **工作区隔离是红线**：claim SQL 与领取端点强制 `workspace_id` 等值过滤（从 runtime 记录读取，不接受客户端传入），跨 workspace 领取不可能发生。
-- **沙箱出站默认 deny 是红线**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）。
+- **沙箱出站默认 deny 是红线**：任务沙箱无直连路由；允许目标仍须经可信 resolver 解析、全部 IP 过滤、向已验证 IP 直连并保留原 host 做 TLS 校验，重定向逐跳重验；任何部署形态下禁止 loopback/private/link-local/reserved/云元数据网段与 DNS rebinding。
 - **daemon token 隔离是红线**：`runtime_token`（长期凭证，可 claim 任务、换取其他任务的一次性凭证明文）**仅存于 daemon 受信进程**，任务沙箱无法读取 daemon 的环境变量、进程内存或控制套接字；`max_concurrent>1` 时恶意任务即使攻破沙箱也无法窃取 daemon token 冒充 runtime。
 - 没有任务会永远卡住，也没有状态会永远悬而未决（超时 / 取消 / 失联回收均有「优雅→强制」两段式与显式中间态）。
 
@@ -329,8 +331,8 @@ erDiagram
 | injected_at | timestamptz | NOT NULL DEFAULT `now()` | 注入时间 |
 | revoked_at | timestamptz | NULL | 撤销时间（freeze / 轮换 / attempt 终态后置位） |
 
-> 记录「本次尝试实际注入了哪些 secret」，用于审计与脱敏对账。**凭证协议（R1，README §6.5/§6.11）**：
-> - 凭证仅在 `claim` 响应中随 attempt 一次性下发（短期 envelope，默认 TTL ≤ 2h，绑定 attempt_id 与 lease_seq）；
+> 记录「本次尝试实际授权了哪些 secret」，用于审计与脱敏对账。**凭证协议（R1，README §6.5/§6.11；真实 provider 取更严格的 runtime-executor.md §2.2/§3.2）**：
+> - 凭证仅在 `claim` 响应中随 attempt 一次性下发给 daemon 受信面（短期 envelope，默认 TTL ≤ 2h，绑定 attempt_id 与 lease_seq）；repo 凭证交 checkout helper，task token 交 broker，高危 secret 交 action broker，不直接映射进 provider env；
 > - **网络响应丢失 / requeue / freeze 后的重取**：daemon 可 `POST /api/v1/daemon/attempts/{attempt_id}/credentials:refetch`——仅当该 attempt 仍 `claimed/running` 且 `lease_seq` 匹配时返回**新 envelope**（旧 envelope 立即撤销，`revoked_at` 置位），每 attempt 重取次数有上限（默认 3），超限转人工 freeze 审查；
 > - **轮换 / 撤销**：控制台轮换 `runtime_credentials` 时，在途 envelope 于下次心跳被下行指令要求重取；`POST /executions/{id}:freeze` 立即撤销该执行所有 attempt 的 envelope（`revoked_at`）；
 > - attempt 终态（completed/failed/timeout/cancelled/reclaimed）即撤销其全部 envelope，服务端永不回显明文。
@@ -686,6 +688,9 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
   "diagnostics": {"labels": {"region": "intranet"}, "capacity_remaining": 2}
 }
 // 响应 200（领到）
+// 注意：下方 credentials/env 是现有 server 契约形状；真实 provider 启用前须完成
+// runtime-executor.md §2.6 P0 升级，由 daemon 按 kind 路由至 helper/broker，
+// runtime/task token、repo 写凭证与高危 secret 不得进入 provider env。
 {
   "data": {
     "execution": {
@@ -724,9 +729,9 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 // 响应 204（队列空、无满足标签/能力约束的任务、或容量已满；无匹配任务时事务整体回滚、current_load 不变，无 body）
 ```
 
-> **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。`credentials[].value` 命中脱敏黑名单，日志中出现即替换为 `***`。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
+> **凭证只在 `claim` / `credentials:refetch` 响应中随 attempt 一次性下发给 daemon 受信面**（短期 envelope、最小权限、绑定 attempt 与 lease）；之后任何接口都不再返回明文。真实 provider 按 runtime-executor.md §2.6 路由到 checkout helper/task broker/action broker，不把 runtime/task token、repo 写凭证或高危 secret 注入 env。`credentials[].value` 命中脱敏黑名单，任何输出通道出现均按 §6.16 处理。响应丢失后经 `credentials:refetch` 重取（旧 envelope 立即撤销，§2.2）。
 >
-> **注入环境变量名安全约束（NEW-M1）**：`env_declarations` 与 `credentials[].env` 中的环境变量名须经服务端白名单校验——**拒绝 `LD_*`、`PATH`、`PYTHON*`、`NODE_OPTIONS`、`DYLD_*` 及平台保留前缀（`MESH_DAEMON_*`、`MESH_INTERNAL_*`）等敏感名**，防止覆盖进程加载器 / 运行时 / daemon 认证变量；仅允许匹配 `^[A-Z][A-Z0-9_]{0,63}$` 且不在拒绝清单内的名称，校验在 claim 组装时执行，非法名返回 `422`。
+> **注入环境变量名安全约束（NEW-M1）**：provider env 从空白 allowlist 构造；仅低敏、动作内确需的值可进入 env，且 `env_declarations` 与 `credentials[].env` 由 server 和 daemon 双重校验——**拒绝 `LD_*`、`PATH`、`PYTHON*`、`NODE_OPTIONS`、`DYLD_*`、云凭证名及平台保留前缀（`MESH_DAEMON_*`、`MESH_INTERNAL_*`）等敏感名**；runtime/task token、repo 写凭证和高危 secret 永不允许。名称仅允许匹配 `^[A-Z][A-Z0-9_]{0,63}$` 且命中显式 allowlist，否则 `422`/本地 fail-closed。
 
 **追加日志（带 offset，幂等）**：
 
@@ -1043,13 +1048,13 @@ stateDiagram-v2
 - [ ] 任务级超时：守护进程本地计时 + 服务端租约 / 看门狗双重兜底；超时置 `timeout`，`failure_reason='timeout'`。
 - [ ] 日志按行 / 块上报带单调 `offset`（按 attempt）；前端实时滚动；断线凭最后 offset 无缝续传，不丢不重。
 - [ ] checkout 为每 **attempt** 创建专属工作分支 `agent/<execution-id>/a<attempt>`（按 attempt 唯一，README §6.5），多任务/多尝试并行不互相污染；结束产出差异（diff）回报，工作目录超期回收。
-- [ ] 凭证仅在 claim / refetch 响应按 attempt 一次性下发（短期 envelope）；`credentials:refetch` 仅租约有效且在途时可用、发新撤旧、上限 3 次；freeze 立即撤销 envelope；`execution_credentials` 记录注入/撤销审计；UI 凭证标签值恒为 `***`。
+- [ ] 凭证仅在 claim / refetch 响应按 attempt 一次性下发给 daemon 受信 helper/broker（短期 envelope）；`credentials:refetch` 仅租约有效且在途时可用、发新撤旧、上限 3 次；freeze 立即撤销 envelope；runtime/task token 与高危 secret 不进 provider env；`execution_credentials` 记录授权/撤销审计；UI 凭证标签值恒为 `***`。
 - [ ] **execution/attempt 分层**（README §6.4）：requeue 新建 attempt 行，旧 attempt 审计信息不被覆盖（集成测试 T4）；`retry_count` 由 attempts 数派生，超 `max_attempts` 转 `failed(max_retries)`；**物理层 `cancelling` 中间态与逻辑层词汇统一（CHECK 与索引一致）**；非法迁移返回 `409`/`422`。
 - [ ] **入队可复现快照**（README §6.11）：`config_snapshot` 冻结 agent_config_version_id、skill 版本、**`capability_grants`（版本化 capability key + permission，不含工具目录主键）**、repo/base SHA、trigger_event_id；运行期间配置 / 能力授权变更不影响在途执行。
 - [ ] **高风险工具审批（唯一续跑协议）**：执行前经 `/daemon/executions/{id}/approvals` 创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，执行转 `awaiting_approval`（reaper 无需特殊处理，无在途租约）；批准后执行回 `queued`（**同事务清空 append receipt + 水位置 0，R7-2 统一重置**），**新 attempt 经 claim 建立、凭 `resume_context` 从审批点续跑**（待注入 append 重新 GET，至少一次）；拒绝/过期转 `cancelled`；**同一 subject 仅一个 pending approval**（部分唯一索引兜底，集成测试 T8/T21）。
 - [ ] 控制台 / 机器 API 全部走统一响应包络与错误信封（README §6.14）；机器 API token 越权访问其它 runtime 返回 `403`。
 - [ ] **仓库 checkout 白名单验收（H1）**：checkout 命中 `allowed_repos` 白名单外 URL → `403`；`repo_token` 不可用于白名单外仓库；平台托管 runtime checkout 私网 / 元数据地址被拒（集成测试覆盖）。
-- [ ] **注入环境变量名安全（NEW-M1）**：`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 平台保留前缀等敏感名 → `422` 拒绝。
+- [ ] **注入环境变量名安全（NEW-M1）**：provider env 从空白 allowlist 构造，server/daemon 双重校验；`env_declarations` / `credentials[].env` 含 `LD_*` / `PATH` / `PYTHON*` / 云凭证名 / 平台保留前缀，或尝试注入 runtime/task token、repo 写凭证、高危 secret → `422` 或本地 fail-closed。
 - [ ] **机器 API 强制 TLS（NEW-M3）**：非 TLS 请求到 `/api/v1/daemon/` 返回 `403`。
 - [ ] **runtime 下线即吊销 token（NEW-L2；R3-H4 收口）**：runtime 进入 `paused` / `decommissioned` / 软删除时，`runtime_token_hash` 同步清除（置 NULL，`api_tokens` 无此令牌行）；下线后以旧令牌明文调用任何机器 API 返回 `401`；恢复服务经 `tokens:rotate` 签发新令牌，旧令牌永久失效。
 - [ ] 运行状态事件经 outbox → `realtime_events`（频道内 seq，README §6.6/§6.7）发布，断线重放不漏不重；事件名全部命中 README §6.7 词汇注册表（含 `execution.awaiting_approval`）。
@@ -1059,11 +1064,11 @@ stateDiagram-v2
 
 - [ ] **任务不重复领取**：多 runtime 并发 claim 同一任务时，`FOR UPDATE SKIP LOCKED` 保证恰有一台抢到，其余立即抢下一条；零锁等待、零重复执行；`idempotency_key` 唯一约束兜底防重复入队。
 - [ ] **失联自愈**：runtime 失联后，其上 `claimed/running` 且租约过期的 **attempt** 由 reaper 置 `reclaimed`、逻辑执行回落 `queued` 新建下一个 attempt（或超 `max_attempts` 转 `failed`），改由其它 runtime 接手，无需人工；回收时 `lease_seq++` 防「诈尸」覆盖（脑裂防护），容量幂等释放。**`awaiting_approval` 无在途 attempt（当前 attempt 已 cancelled、租约已结束），reaper 无需特殊处理，无"暂停租约导致永久卡死"路径（README §6.4 唯一协议）**。
-- [ ] **凭证不落盘**：secret 能走环境变量就不写文件；必须落盘的写入内存型临时目录，任务结束即删；服务端永不回显明文（`encrypted_value` 只进不出）；**全通道脱敏——日志、评论、附件产出物均做 secret 命中检测，命中即拦截该内容写出并触发安全告警**（验收须覆盖评论 / 附件通道，非仅日志）；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2）。
+- [ ] **凭证 broker 代持 / 不落持久盘**：runtime/task token、高危 secret 和 repo 写凭证不进 provider env/文件；broker/helper 内存代持，必须提供文件句柄时只写 attempt tmpfs 0600 且终态清零；服务端永不回显明文（`encrypted_value` 只进不出）；**全通道双层脱敏——日志、result、diff、评论、附件产出物均覆盖**；短期凭证 envelope 按 attempt 绑定，attempt 终态即撤销（§2.2、runtime-executor.md §2.2/§2.5）。
 - [ ] **日志时延**：日志尾部增量从守护进程产生到前端可见 P95 ≤ 2s（WebSocket 在线时）；断线重连凭 offset 补发不丢不重；封口段落对象存储读取续传 P95 ≤ 1s。
 - [ ] **沙箱隔离**：每任务独立容器 / 命名空间，cgroup CPU / 内存 / 磁盘 / 时长配额；单任务 OOM 被终止标 `failed(sandbox/oom)`，同机其它任务与宿主机不受影响；非特权用户运行，不挂宿主机 root。
-- [ ] **沙箱出站默认 deny**：任务沙箱出站网络默认拒绝，仅按 `task_spec` 声明的域名白名单放行；任何部署形态下禁止 RFC1918 / link-local / 云元数据地址（`169.254.169.254` 等）；被注入任务无法将凭证经外联外泄或扫描内网。
-- [ ] **daemon token 与任务沙箱隔离（红线）**：`runtime_token` 仅存于 daemon 受信进程的环境 / 内存中，任务沙箱无法读取 daemon 的 env / 进程内存 / 控制套接字；`max_concurrent>1` 时恶意任务窃取 daemon token 的攻击路径不存在；此约束写入部署规范文档。
+- [ ] **沙箱出站默认 deny**：任务沙箱无直连路由；允许目标也必须经可信 resolver→全部 IP 过滤→向已验证 IP 建连，保留原 host 做 TLS 校验，重定向逐跳重验；DNS rebinding、IPv4-mapped、loopback/private/link-local/reserved/云元数据网段均拒绝；平台托管与自托管同一红线（runtime-executor.md §3.4/T36）。
+- [ ] **daemon token 与任务沙箱隔离（红线）**：`runtime_token` 仅存 OS keyring 或 daemon 专用 0600 文件并在受信进程内使用，不进通用 env；task token 仅由 broker 代持。任务沙箱无法读取 daemon env / 进程内存 / token 文件 / 控制套接字；`max_concurrent>1` 时恶意任务窃取任一 token 的攻击路径不存在，并由 T36 真实负向矩阵验证。
 - [ ] **无永久卡死**：任何任务最终都到达终态（completed/failed/timeout/cancelled），无状态永久悬而未决（租约 + 看门狗 + reaper 共同保证）。
 - [ ] **队列背压可观测**：队列深度、负载、心跳新鲜度在列表 / 详情实时可见；`queue.depth_changed` 事件推送。
 - [ ] **限流与退避**：机器 API 与控制台 API 接入限流，超限返回 `429` 带 `Retry-After`。
