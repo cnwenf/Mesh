@@ -44,11 +44,6 @@ from mesh.auth.tokens import TokenService
 from mesh.autopilot.channels import register_autopilot_checkers
 from mesh.autopilot.routes import router as autopilot_router
 from mesh.autopilot.service import AutopilotService
-from mesh.integrations.channels import register_integration_checkers
-from mesh.integrations.identities import RedisDevCodeDelivery
-from mesh.integrations.inbound_routes import router as integrations_inbound_router
-from mesh.integrations.routes import router as integrations_router
-from mesh.integrations.service import IntegrationService
 from mesh.chat.channels import register_chat_checkers
 from mesh.chat.engine import ChatGenerationEngine, ScriptedGenerationProvider
 from mesh.chat.routes import router as chat_router
@@ -74,6 +69,11 @@ from mesh.errors import (
 )
 from mesh.favorites.routes import router as favorites_router
 from mesh.favorites.service import FavoritesService
+from mesh.integrations.channels import register_integration_checkers
+from mesh.integrations.identities import RedisDevCodeDelivery
+from mesh.integrations.inbound_routes import router as integrations_inbound_router
+from mesh.integrations.routes import router as integrations_router
+from mesh.integrations.service import IntegrationService
 from mesh.issue.bulk import BulkService
 from mesh.issue.channels import register_issue_checkers
 from mesh.issue.dependencies import DependencyService

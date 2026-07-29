@@ -44,6 +44,14 @@ from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
+from mesh.integrations.outbound import (
+    WEBHOOK_DISPATCH_EVENT_TYPE,
+    WebhookDeliveryWorker,
+    webhook_dispatch_handler,
+)
+from mesh.integrations.outbound import (
+    derive_dispatch_from_realtime as webhook_dispatch_derive,
+)
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.onboarding.consumers import consume_realtime_event as onboarding_consume_realtime_event
 from mesh.outbox.projector import project_realtime_event
@@ -75,12 +83,6 @@ from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
 from mesh.workers.retention import outbox_retention_loop, retention_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
-from mesh.integrations.outbound import (
-    WEBHOOK_DISPATCH_EVENT_TYPE,
-    WebhookDeliveryWorker,
-    derive_dispatch_from_realtime as webhook_dispatch_derive,
-    webhook_dispatch_handler,
-)
 
 logger = logging.getLogger("mesh.workers")
 
