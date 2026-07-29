@@ -101,6 +101,17 @@ class View(Base):
         ),
         # Composite-FK reference target (README §6.2).
         Index("uq_views_ws_id", "workspace_id", "id", unique=True),
+        # Search indexes (search-command-palette.md §2.2).
+        Index(
+            "idx_views_name_trgm",
+            text("(public.mesh_search_norm(name)) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "idx_views_name_prefix",
+            "workspace_id",
+            text("(public.mesh_search_norm(name)) text_pattern_ops"),
+        ),
         # "Workspace-level OR project-level" name uniqueness (README §6.3):
         # partial expression index — COALESCE cannot sit in a table UNIQUE.
         Index(

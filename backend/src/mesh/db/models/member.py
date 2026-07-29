@@ -50,6 +50,18 @@ class Member(Base):
     role: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'member'"))
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     display_override: Mapped[str | None] = mapped_column(TEXT, default=None)
+    # Search-only projection = public.mesh_search_norm(README §6.1 display-name
+    # chain). Never rendered; synced via sync_member_search_name + reconcile
+    # (search-command-palette.md §2.2 sync contract).
+    search_name: Mapped[str] = mapped_column(
+        TEXT,
+        nullable=False,
+        server_default=text("''"),
+        comment=(
+            "检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);"
+            "仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2"
+        ),
+    )
     joined_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     disabled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(
@@ -92,6 +104,25 @@ class Member(Base):
         Index("idx_members_user", "user_id"),
         Index("idx_members_agent", "agent_id"),
         Index("idx_members_type", "workspace_id", "member_type"),
+        # Search indexes (search-command-palette.md §2.2). The projection
+        # column is already normalized, so these are plain column indexes.
+        Index(
+            "idx_members_search_name_trgm",
+            text("search_name gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "idx_members_search_name_prefix",
+            "workspace_id",
+            text("search_name text_pattern_ops"),
+            postgresql_where=text("status <> 'removed'"),
+        ),
+        Index(
+            "idx_members_ws_type_active",
+            "workspace_id",
+            "member_type",
+            postgresql_where=text("status <> 'removed'"),
+        ),
         # Same-tenant composite FK (README §6.1 / §6.2): agent roster rows
         # reference an agent of THIS workspace; cross-workspace references
         # fail at INSERT (T1).
