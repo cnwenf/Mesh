@@ -191,6 +191,27 @@ REGISTRY_CONTAINS_PURPOSE: dict[str, tuple[str, ...]] = {
 STEPUP_GATE_REQUIRED_TOKENS = ("api-tokens", "2fa", "oauth")
 
 
+PURPOSE_MARKER_RE = re.compile(r"^\*\*([^*]+)\*\*")
+
+
+def _purpose_markers(purpose: str) -> frozenset[str]:
+    """解析 purpose 格开头结构化标记(如「**读 + 写**」),归一为 {读, 写} 集合。
+
+    R9-M1:与 canonical 集合做**相等比较**(额外 marker 亦拒绝),不再是子集包含。
+    无结构化开头标记 → 空集合(诊断 Z:PURPOSE 命中)。
+    """
+    m = PURPOSE_MARKER_RE.match(purpose.strip())
+    if not m:
+        return frozenset()
+    raw = m.group(1)
+    markers = set()
+    if "读" in raw:
+        markers.add("读")
+    if "写" in raw:
+        markers.add("写")
+    return frozenset(markers)
+
+
 def _registry_rows(block: str) -> list[tuple[str, str]]:
     """解析登记表区块表格行,返回 (规范化首格, purpose 全文) 二元组。
 
@@ -221,30 +242,48 @@ def check_sessions_registry(text: str) -> list[str]:
         return violations
     rows = _registry_rows(text[start:end])
     purpose_by_first = {first: purpose for first, purpose in rows}
-    # 精确行 → 精确 read/write purpose
+    # 精确行 → purpose 结构化标记**相等比较**(R9-M1:额外 marker 亦拒绝,不再子集包含)
     for row, markers in REGISTRY_ROW_PURPOSE.items():
         if row not in purpose_by_first:
             violations.append(f"Z:MISSING_ROW:{row}: 登记表缺少精确行(同前缀条目不得顶替)")
             continue
-        purpose = purpose_by_first[row]
-        for marker in markers:
-            if marker not in purpose:
-                violations.append(f"Z:PURPOSE:{row}: purpose 应含「{marker}」标注,实际 {purpose[:40]!r}")
-    # 包含匹配行 → purpose 校验(oauth start/callback / WS / HTML 入口)
+        actual = _purpose_markers(purpose_by_first[row])
+        if actual != frozenset(markers):
+            violations.append(
+                f"Z:PURPOSE:{row}: purpose 标记应恰为 {{{'+'.join(markers)}}},"
+                f"实际 {{{'+'.join(sorted(actual)) or '无标记'}}}(缺项或多余 marker 均拒绝)"
+            )
+    # 包含匹配行 → purpose 标记相等比较 + callback GET-only(R9-H1)
     for token, markers in REGISTRY_CONTAINS_PURPOSE.items():
-        matched = [p for f, p in rows if token in f]
+        matched = [(f, p) for f, p in rows if token in f]
         if not matched:
             violations.append(f"Z:MISSING_CONTAINS:{token}: 登记表缺少含「{token}」的条目")
             continue
-        purpose = " | ".join(matched)
-        for marker in markers:
-            if marker not in purpose:
-                violations.append(f"Z:PURPOSE:{token}: purpose 应含「{marker}」标注")
-    # step-up 闸门行:精确受保护路由集合 + change-password 不在预闸门
-    gate_purpose = " ".join(p for f, p in rows if "step-up" in f or "step-up" in p)
-    if not gate_purpose:
+        for first, purpose in matched:
+            actual = _purpose_markers(purpose)
+            if actual != frozenset(markers):
+                violations.append(
+                    f"Z:PURPOSE:{token}: purpose 标记应恰为 {{{'+'.join(markers)}}},"
+                    f"实际 {{{'+'.join(sorted(actual)) or '无标记'}}}"
+                )
+            if "callback" in token and ("POST" in first or not first.startswith("GET")):
+                violations.append(
+                    f"Z:CALLBACK_METHOD:{token}: callback 必须 GET-only(R9-H1:Lax locator 不随跨站 POST),"
+                    f"实际首格 {first[:50]!r}"
+                )
+    # step-up 闸门行:读标记恰为 {读} + 精确受保护路由集合 + change-password 不在预闸门
+    # 闸门行按首格识别(其它行 purpose 可能提及 step-up,不作闸门行;R9-M1)
+    gate_rows = [(f, p) for f, p in rows if "step-up 闸门中间件" in f]
+    if not gate_rows:
         violations.append("Z:GATE_MISSING: 缺少 step-up 闸门中间件登记行")
     else:
+        gate_purpose = " ".join(p for _, p in gate_rows)
+        gate_markers = _purpose_markers(gate_rows[0][1])
+        if gate_markers != frozenset({"读"}):
+            violations.append(
+                f"Z:GATE_RW: 闸门 purpose 读/写标记应恰为 {{读}},"
+                f"实际 {{{'+'.join(sorted(gate_markers)) or '无标记'}}}(缺读标记或多余写标记均拒绝)"
+            )
         for token in STEPUP_GATE_REQUIRED_TOKENS:
             if token not in gate_purpose:
                 violations.append(f"Z:GATE_TOKEN:{token}: 闸门 purpose 缺少受保护路由标记")
@@ -361,7 +400,7 @@ SELF_TEST_BAD_BLOCK = {
 _REGISTRY_GOOD_ROWS = (
     "POST /api/v1/auth/register", "POST /api/v1/auth/login",
     "GET /api/v1/auth/oauth/{provider}/start",
-    "GET/POST /api/v1/auth/oauth/{provider}/callback",
+    "GET /api/v1/auth/oauth/{provider}/callback",
     "POST /api/v1/auth/device/token",
     "POST /api/v1/auth/device/approve", "POST /api/v1/auth/device/deny",
     "POST /api/v1/auth/refresh",
@@ -381,23 +420,32 @@ _GATE_ROW = (
 )
 
 
+def _default_purpose(row: str) -> str:
+    """按 canonical 映射生成该行的真实期望 purpose(R9-M1:正对照不再一律 读+写)。"""
+    if row in REGISTRY_ROW_PURPOSE:
+        markers = REGISTRY_ROW_PURPOSE[row]
+    else:
+        markers = next(
+            (m for token, m in REGISTRY_CONTAINS_PURPOSE.items() if token in row),
+            ("读", "写"),
+        )
+    return f"**{'+'.join(markers)}**:目的"
+
+
 def _registry_doc(
     rows: tuple[str, ...],
     gate: str = _GATE_ROW,
     purpose_override: dict[str, str] | None = None,
 ) -> str:
-    """构造合法表格语法的登记表(各行带前导 |);purpose_override 按行覆盖 purpose 格。"""
+    """构造合法表格语法的登记表(各行带前导 |);各行按真实期望 purpose 生成,
+    purpose_override 按行覆盖(坏样注入用)。"""
     overrides = purpose_override or {}
     body = "".join(
-        f"| `{row}` | {overrides.get(row, '**读 + 写**:目的')} |\n"
-        if row not in overrides
-        else f"| `{row}` | {overrides[row]} |\n"
+        f"| `{row}` | {overrides.get(row, _default_purpose(row))} |\n"
         for row in rows
     )
     tail = "".join(f"| {row} | **读**:目的 |\n" for row in _REGISTRY_TAIL_ROWS)
     return "<!-- sessions-registry:start -->\n" + body + tail + gate + "\n<!-- sessions-registry:end -->"
-
-
 SELF_TEST_BAD_FILES: dict[str, tuple[str, str, str]] = {
     # name → (filename, bad content, expected diagnostic code)
     "规则 Z(无标记块)": (
@@ -427,8 +475,36 @@ SELF_TEST_BAD_FILES: dict[str, tuple[str, str, str]] = {
     ),
     "规则 Z(callback purpose 整段为空)": (
         "auth.md",
-        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"GET/POST /api/v1/auth/oauth/{provider}/callback": ""}),
+        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"GET /api/v1/auth/oauth/{provider}/callback": ""}),
         "Z:PURPOSE:/api/v1/auth/oauth/{provider}/callback",
+    ),
+    "规则 Z(register purpose 多写:写→读+写)": (
+        "auth.md",
+        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"POST /api/v1/auth/register": "**读 + 写**:目的"}),
+        "Z:PURPOSE:POST /api/v1/auth/register",
+    ),
+    "规则 Z(approve purpose 多写:读→读+写)": (
+        "auth.md",
+        _registry_doc(_REGISTRY_GOOD_ROWS, purpose_override={"POST /api/v1/auth/device/approve": "**读 + 写**:目的"}),
+        "Z:PURPOSE:POST /api/v1/auth/device/approve",
+    ),
+    "规则 Z(gate 缺读标记)": (
+        "auth.md",
+        _registry_doc(
+            _REGISTRY_GOOD_ROWS,
+            gate="| step-up 闸门中间件 | 受保护路由 api-tokens、2fa、oauth;change-password 不在预闸门集合 |",
+        ),
+        "Z:GATE_RW",
+    ),
+    "规则 Z(callback 非 GET-only)": (
+        "auth.md",
+        _registry_doc(
+            tuple(
+                ("GET/POST " + r[len("GET "):]) if r == "GET /api/v1/auth/oauth/{provider}/callback" else r
+                for r in _REGISTRY_GOOD_ROWS
+            ),
+        ),
+        "Z:CALLBACK_METHOD",
     ),
     "规则 Z(闸门缺受保护路由标记 2fa)": (
         "auth.md",
