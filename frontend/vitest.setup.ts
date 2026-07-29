@@ -39,6 +39,9 @@ if (!window.ResizeObserver) {
 
 afterEach(() => {
   cleanup();
+  // 防御性:任何文件经 vi.stubGlobal 注入的全局(如 fetch 夹具)在此统一复位,
+  // 杜绝跨文件污染(vitest 默认不自动 unstub)。各文件自身的 afterEach 仍保留。
+  vi.unstubAllGlobals();
   localStorage.clear();
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');
