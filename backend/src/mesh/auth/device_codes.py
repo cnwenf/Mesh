@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth import security
@@ -27,6 +27,7 @@ from mesh.config import Settings
 from mesh.db.models.member import Member
 from mesh.db.models.user import DeviceAuthorization, Session, User
 from mesh.db.models.workspace import Workspace
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import NotFoundError, UnauthorizedError, ValidationError
 
 VERIFICATION_URI_PATH = "/device"
@@ -213,30 +214,26 @@ class DeviceCodeService:
                 raise NotFoundError("code not found")
             requested = list(row.requested_scopes or [])
             # The approver's workspaces with their role — the page branches on
-            # 0 / 1 / many (auth.md §3.1.1 workspace selection contract).
+            # 0 / 1 / many (auth.md §3.1.1 workspace selection contract). The
+            # roster read goes through the SECURITY DEFINER helper: this is a
+            # workspace-less path, so the tenant GUC cannot be set and the
+            # fail-closed RLS policy would hide every member row (same pattern
+            # as auth/realtime.py's revocation fan-out). Agent memberships
+            # carry no user_id, so only human rows can match.
             member_rows = (
-                (
-                    await session.execute(
-                        select(Member, Workspace)
-                        .join(Workspace, Workspace.id == Member.workspace_id)
-                        .where(
-                            Member.user_id == approver.id,
-                            Member.status == "active",
-                            Member.member_type == "human",
-                            Workspace.deleted_at.is_(None),
-                        )
-                    )
+                await session.execute(
+                    text(
+                        "SELECT w.id, w.slug, w.name, m.role"
+                        " FROM mesh_my_workspaces(:uid) m"
+                        " JOIN workspaces w ON w.id = m.workspace_id"
+                        " WHERE m.status = 'active' AND w.deleted_at IS NULL"
+                    ),
+                    {"uid": approver.id},
                 )
-                .all()
-            )
+            ).all()
             workspaces = [
-                {
-                    "id": member.workspace_id,
-                    "slug": ws.slug,
-                    "name": ws.name,
-                    "my_role": member.role,
-                }
-                for member, ws in member_rows
+                {"id": ws_id, "slug": slug, "name": name, "my_role": role}
+                for ws_id, slug, name, role in member_rows
             ]
             return {
                 "client_name": CLIENT_NAME,
@@ -295,7 +292,9 @@ class DeviceCodeService:
             web_session = await self._locate_web_session(
                 session, user_id=approver_user_id, sid=approver_sid, now=now, for_update=True
             )
-            # 2) Roster authority: active member of the chosen workspace.
+            # 2) Roster authority: active member of the chosen workspace. The
+            # tenant GUC makes the roster read RLS-correct under the app role.
+            await set_tenant_context(session, workspace_id)
             member = await session.scalar(
                 select(Member)
                 .where(
@@ -490,7 +489,9 @@ class DeviceCodeService:
             else:
                 # status == "approved" — consume under the fixed lock order.
                 # ② Roster row under lock: the approver must still be an
-                # ACTIVE member of the bound workspace.
+                # ACTIVE member of the bound workspace (tenant GUC set for
+                # RLS correctness under the restricted app role).
+                await set_tenant_context(session, row.workspace_id)
                 member = await session.scalar(
                     select(Member)
                     .where(

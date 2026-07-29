@@ -35,6 +35,7 @@ from mesh.auth.realtime import SESSION_REVOKED_EVENT, broadcast_user_revocation
 from mesh.config import Settings
 from mesh.db.models.api_token import ApiToken
 from mesh.db.models.member import Member
+from mesh.db.tenant import set_tenant_context
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -674,6 +675,9 @@ class AuthService:
         scopes: list[str] | None = None
         workspace_id = row.workspace_id
         if row.type == "cli" and row.workspace_id is not None:
+            # Tenant GUC: the roster read must evaluate RLS against the
+            # session's bound workspace under the restricted app role.
+            await set_tenant_context(session, row.workspace_id)
             member = await session.scalar(
                 select(Member).where(
                     Member.workspace_id == row.workspace_id,
@@ -1116,6 +1120,10 @@ class AuthService:
         ``mesh auth status`` (prefix masked, scopes/expiry/last-use visible).
         """
         async with self._sf() as session:
+            if principal.kind != "session" and principal.workspace_id is not None:
+                # api_tokens is tenant-scoped — the GUC makes the read
+                # RLS-correct under the restricted app role.
+                await set_tenant_context(session, principal.workspace_id)
             if principal.kind == "session":
                 if principal.session_id is None:
                     # Pre-increment access JWT without sid — nothing to show.
@@ -1176,6 +1184,8 @@ class AuthService:
         """
         now = _now(self._clock)
         async with self._sf() as session, session.begin():
+            if principal.kind != "session" and principal.workspace_id is not None:
+                await set_tenant_context(session, principal.workspace_id)
             if principal.kind == "session":
                 if principal.session_id is None:
                     raise UnauthorizedError("invalid or expired token")

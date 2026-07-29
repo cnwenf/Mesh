@@ -27,6 +27,7 @@ from mesh.auth import jwt as jwt_mod
 from mesh.config import Settings
 from mesh.db.models.member import Member
 from mesh.db.models.user import Session, User
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import ForbiddenError, UnauthorizedError
 
 
@@ -106,6 +107,10 @@ async def get_current_principal(
             raise UnauthorizedError(
                 "invalid or expired token", details={"reason": "credential_type_mismatch"}
             )
+        # The roster read is tenant-scoped — set the GUC so the RLS policy
+        # evaluates against the token's workspace (the token itself is the
+        # bootstrap authority, resolved via the SECURITY DEFINER hash lookup).
+        await set_tenant_context(session, resolved.workspace_id)
         member = await session.scalar(
             select(Member).where(
                 Member.workspace_id == resolved.workspace_id,

@@ -73,6 +73,9 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # Web session cookie: Secure relaxed for the plaintext loopback e2e
     # transport (same deliberate exception; production default stays true).
     env.setdefault("MESH_SESSION_COOKIE_SECURE", "false")
+    # Device-code HMAC pepper (loopback-only e2e value; production sets a
+    # strong secret via env — validate_auth_settings enforces it there).
+    env.setdefault("MESH_DEVICE_CODE_PEPPER", "e2e-device-code-pepper-0123456789")
     env.setdefault("MESH_RUNTIME_LEASE_SECONDS", "3")
     # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
     # source server, which the SSRF guard only permits via the allowlist.

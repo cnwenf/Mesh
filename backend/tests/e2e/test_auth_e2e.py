@@ -374,7 +374,8 @@ async def test_change_password_full_flow_real_e2e(api_client, db_session):
     assert audits[0].resource_id == user.id
 
     # 行为实测(Bearer mesh_rft_ 传输,与 cookie jar 解耦):当前会话 refresh
-    # 仍有效;其它会话旧 refresh 失效。
+    # 仍有效;其它会话旧 refresh 失效。(先清 jar——一条请求只能有一种传输。)
+    api_client.cookies.clear()
     alive = await api_client.post("/api/v1/auth/refresh", headers=_auth(current_cookie))
     assert alive.status_code == 200
     assert alive.json()["data"]["refresh_token"].startswith("mesh_rft_")
@@ -412,11 +413,16 @@ async def test_change_password_identifies_session_by_sid_real_e2e(api_client, db
     user = (
         (await db_session.execute(select(User).where(User.email == EMAIL))).scalars().one()
     )
+    # §3.8 in-place rotation: the row survives but its token_hash follows the
+    # winner credential — locate it by the access JWT's sid, not the old hash.
+    import jwt as pyjwt
+
+    sid = pyjwt.decode(
+        tokens["access_token"], options={"verify_signature": False}
+    )["sid"]
     row = (
         (
-            await db_session.execute(
-                select(Session).where(Session.token_hash == hash_token(cookie))
-            )
+            await db_session.execute(select(Session).where(Session.id == sid))
         )
         .scalars()
         .one()
