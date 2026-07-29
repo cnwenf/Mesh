@@ -40,6 +40,7 @@ const PER_FILE_DIRS = [
   'src/hooks/',
   'src/state/',
   'src/design/',
+  'src/features/integrations/',
 ];
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');

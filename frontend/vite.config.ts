@@ -12,6 +12,12 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./vitest.setup.ts'],
     css: false,
+    // 单测墙钟上限:v8 覆盖率插桩显著拖慢渲染/请求链(同 vitest.setup.ts 把
+    // asyncUtilTimeout 1s→5s 的理由)。默认 5s 的 it 超时在插桩 + 串行异步周期
+    // (如 data-jobs 导入向导 create 失败双周期)下会偶发触顶,与逻辑无关——CI 专用
+    // runner 较快故不显,慢速共享机/高负载下显形。给足 headroom 让门禁只校验行为/
+    // 覆盖率,不校验机器速度。
+    testTimeout: 15000,
     // e2e/ 归 Playwright(test:e2e),不由 vitest 收集
     exclude: [...configDefaults.exclude, 'e2e/**'],
     coverage: {
