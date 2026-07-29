@@ -5,7 +5,7 @@
  *
  * useNavigate 以 vi.mock 间谍替换;网络经全局 fetch 桩路由(me/favorites/search)。
  */
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test-utils/render';
@@ -52,8 +52,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/** 每用例可覆写的搜索响应(缺省空集) */
-let searchResponder: () => Response;
+/** 每用例可覆写的搜索响应(缺省空集;可返回未决 Promise 以控制在途窗口) */
+let searchResponder: () => Response | Promise<Response>;
 
 function installFetchStub(): void {
   const fetchStub = vi.fn(async (input: RequestInfo | URL): Promise<Response> => {
@@ -221,6 +221,28 @@ describe('CommandPalette(统一命令面板)', () => {
     expect(counts['goto-board']).toBe(1);
   });
 
+  it('选中 key 不在当前结果集时回落首行,Enter 不误命中(§4.3.1 稳定性)', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CommandPalette open onClose={() => undefined} {...PALETTE_PROPS} />);
+    const input = screen.getByRole('combobox');
+    await waitFor(() => expect(input).toHaveFocus());
+    // 过滤到单一命令并悬停选中它(模拟鼠标停留产生的 selectedKey)
+    await user.type(input, 'board');
+    const boardOption = await screen.findByRole('option', { name: 'Go to board' });
+    fireEvent.mouseEnter(boardOption);
+    expect(boardOption).toHaveAttribute('aria-selected', 'true');
+    // 改查询:悬停选中的命令已不在结果集;effective 应回落首行而非钉住失效 key
+    await user.clear(input);
+    await user.type(input, 'theme');
+    const themeOption = await screen.findByRole('option', { name: 'Toggle theme' });
+    expect(themeOption).toHaveAttribute('aria-selected', 'true');
+    expect(input).toHaveAttribute('aria-activedescendant', themeOption.id);
+    // Enter 命中首行(Toggle theme),而非已失效的 Go to board
+    await user.keyboard('{Enter}');
+    expect(spies.toggleTheme).toHaveBeenCalledTimes(1);
+    expect(spies.gotoBoard).not.toHaveBeenCalled();
+  });
+
   it('点击选项执行命令并关闭(鼠标等价路径)', async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -260,6 +282,33 @@ describe('CommandPalette(统一命令面板)', () => {
     await user.click(createButton);
     expect(navigateSpy).toHaveBeenCalledWith('/issues?create=1&title=zzz');
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-results 无瞬态闪现:在途窗口不渲染,仅检索完成且结果空时呈现(§4.2)', async () => {
+    let resolveSearch: (response: Response) => void = () => undefined;
+    searchResponder = () =>
+      new Promise<Response>((resolve) => {
+        resolveSearch = resolve;
+      });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <CommandPalette open onClose={() => undefined} {...PALETTE_PROPS} canCreateIssue />,
+    );
+    await user.type(screen.getByRole('combobox'), 'zzz');
+    // 等到请求在途(防抖结束、进度条出现):此刻检索尚未落定
+    expect(await screen.findByRole('progressbar')).toBeInTheDocument();
+    // 在途窗口:no-results 文案、「新建 issue」按钮与空态文案一律不渲染
+    expect(screen.queryByText('No results for “zzz”')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Create issue/ })).not.toBeInTheDocument();
+    expect(screen.queryByText('Nothing to show')).not.toBeInTheDocument();
+    // 检索完成且结果空 → no-results 与「新建 issue」方呈现
+    await act(async () => {
+      resolveSearch(jsonResponse({ data: [], next_cursor: null }));
+    });
+    expect(await screen.findByText('No results for “zzz”')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Create issue “zzz”' }),
+    ).toBeInTheDocument();
   });
 
   it('错误态:内联错误行 + 重试按钮;重试成功后渲染结果', async () => {

@@ -245,4 +245,97 @@ describe('useEntitySearch(防抖 + 过期取消,§4.7)', () => {
     });
     expect(result.current.entityResults).toEqual([ISSUE_ITEM]);
   });
+
+  it('settled:空 query 无需请求即为已完成', () => {
+    const { result } = setup('');
+    expect(result.current.settled).toBe(true);
+  });
+
+  it('settled:防抖窗口与在途期间为 false,成功落定后为 true(§4.2 no-results 门控)', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    // 防抖窗口:请求未发,settled 已失效(杜绝 no-results 瞬态闪现)
+    expect(result.current.settled).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1);
+    });
+    expect(result.current.settled).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    // 在途:请求已发未决,settled 仍为 false
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.current.settled).toBe(false);
+    await act(async () => {
+      calls[0]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.settled).toBe(true);
+  });
+
+  it('settled:query 变化即失效,回到先前已完成 query 亦须本轮检索完成', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      calls[0]?.resolve(okEnvelope([]));
+    });
+    expect(result.current.settled).toBe(true);
+    // 清空 → settled 回归(空 query 无需请求)
+    rerender({ q: '', enabled: true });
+    expect(result.current.settled).toBe(true);
+    // 重新输入同一 query:上一完成态已失效,新请求完成前 settled=false
+    rerender({ q: 'abc', enabled: true });
+    expect(result.current.settled).toBe(false);
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    expect(result.current.settled).toBe(false);
+    await act(async () => {
+      calls[1]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.settled).toBe(true);
+  });
+
+  it('settled:失败亦属已完成(错误态由 error 驱动);retry 成功后恢复', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      calls[0]?.reject(new Error('boom'));
+    });
+    expect(result.current.settled).toBe(true);
+    expect(result.current.error).not.toBeNull();
+    // retry:query 未变,重发期间 loading 覆盖;成功后 settled 维持 true
+    act(() => {
+      result.current.retry();
+    });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      calls[1]?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.settled).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('settled:迟到响应(代次不符)不标记新 query 已完成', async () => {
+    const { result, rerender } = setup('');
+    rerender({ q: 'abc', enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+    });
+    const first = calls[0];
+    rerender({ q: 'def', enabled: true });
+    expect(result.current.settled).toBe(false);
+    // 过期响应迟到 → 丢弃,且不得把 'def' 误报为已完成
+    await act(async () => {
+      first?.resolve(okEnvelope([ISSUE_ITEM]));
+    });
+    expect(result.current.settled).toBe(false);
+  });
 });

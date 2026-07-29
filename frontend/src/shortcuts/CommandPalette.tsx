@@ -18,9 +18,9 @@
  * - 命中标题以字重 + 下划线叠加高亮(颜色不作唯一信号,§6.12);徽章/副标题经消息目录
  *   本地化组装(§6.18);颜色一律语义 token,无硬编码。
  *
- * 状态:loading 顶部细进度条;no-results(+「新建 issue」预填动作,仅 canCreateIssue
- * 者可见,§4.2);error + 重试;offline 提示(命令仍可用)。prefers-reduced-motion
- * 降级见 shortcuts.css。
+ * 状态:loading 顶部细进度条;no-results(**检索已完成且结果空**方呈现——在途/防抖
+ * 窗口不渲染,+「新建 issue」预填动作仅 canCreateIssue 者可见,§4.2);error + 重试;
+ * offline 提示(命令仍可用)。prefers-reduced-motion 降级见 shortcuts.css。
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type {
@@ -284,12 +284,15 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   }, [trimmed, rows, search.entityResults]);
 
   // 选择稳定性(§4.3.1):按稳定 key 维持选中 —— 异步补入不移位当前选中项;
-  // 选中行消失(过滤变化)回落首行。
+  // 选中行消失(过滤变化/结果集更替)回落首行。注意:selectedKey 可能暂指当前 rows
+  // 之外的 key(例如跨次打开面板残留的悬停选中),此时不得以其钉住有效下标,否则
+  // Enter 会命中错误行;视为未选中,回落首行(仍存在的 key 经 indexByKey 命中,稳定性不破)。
   const indexByKey = useMemo(
     () => new Map<string, number>(rows.map((row, index) => [row.key, index])),
     [rows],
   );
-  const selectedIndex = selectedKey === null ? -1 : (indexByKey.get(selectedKey) ?? -1);
+  const selectedIndex =
+    selectedKey === null ? -1 : (indexByKey.has(selectedKey) ? indexByKey.get(selectedKey)! : -1);
   const effectiveIndex = selectedIndex >= 0 ? selectedIndex : rows.length > 0 ? 0 : -1;
   const selectedRow = effectiveIndex >= 0 ? (rows[effectiveIndex] ?? null) : null;
   const selectedRowRef = useRef<PaletteRow | null>(null);
@@ -420,8 +423,15 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
     }
   };
 
+  // no-results 仅在「检索已完成且结果空」时呈现(§4.2):防抖窗口与在途请求期间
+  // (settled=false / loading)一律不渲染,杜绝 no-results 文案与「新建 issue」按钮
+  // 同真实结果行短暂并存(含查询文本的元素瞬态重复,strict mode 歧义)。
   const showNoResults =
-    trimmed !== '' && !search.loading && search.error === null && rows.length === 0;
+    trimmed !== '' &&
+    search.settled &&
+    !search.loading &&
+    search.error === null &&
+    rows.length === 0;
 
   return (
     <Dialog open={open} onClose={onClose} title={title} closeLabel={closeLabel}>
@@ -466,7 +476,9 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
             ) : null}
           </div>
         ) : null}
-        {rows.length === 0 && !showNoResults && !(trimmed !== '' && search.error !== null) ? (
+        {/* 空态文案仅空 query(§4.2 empty 态);非空 query 的在途/防抖窗口由 loading 态
+            覆盖(不渲染空态),完成后由 no-results / error 接管。 */}
+        {trimmed === '' && rows.length === 0 ? (
           <p className="mesh-palette__empty">{emptyText}</p>
         ) : null}
         {rows.length > 0 ? (

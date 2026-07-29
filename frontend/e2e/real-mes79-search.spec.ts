@@ -141,7 +141,9 @@ test('顶栏搜索输入即展开同一面板(§4.9)', async () => {
   await page.goto(`/w/${SLUG}/inbox`);
   await page.getByTestId('topbar-search').pressSequentially('走查项目', { delay: 30 });
   await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
-  await expect(page.getByText('走查项目')).toBeVisible();
+  // 按 option 角色断言,消除 strict-mode 歧义(项目行与副标题含项目名的 issue 行
+  // 均匹配;no-results 已门控为「检索完成且结果空」,在途窗口不再瞬态闪现)。
+  await expect(page.getByRole('option', { name: /走查项目/ }).first()).toBeVisible();
   await page.screenshot({ path: resolve(EVIDENCE_DIR, 'topbar-search.png') });
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
@@ -174,7 +176,7 @@ test('标识符快路径:小写 identifier 顶置命中(§5.1)', async () => {
 test('P0:规范深链页 /w/{slug}/… 上面板实体搜索可用(slug scope,§3.1/§3.4)', async () => {
   // 主路径回归:identity 自 URL slug 解析 scope,搜索命中 /workspaces/{slug}/search。
   // 此前 usePaletteIdentity 以 slug 拼请求而后端仅受 UUID → 404「Search failed」;
-  // 后端 slug 解析修通后,此页级流程须分组命中并 Enter 直达规范深链。
+  // 后端 slug 解析修通后,此页级流程须分组命中并直达规范深链。
   await page.goto(`/w/${SLUG}/inbox`);
   await expect(page.locator('.mesh-shell')).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press('Control+K');
@@ -182,14 +184,15 @@ test('P0:规范深链页 /w/{slug}/… 上面板实体搜索可用(slug scope,§
   await expect(combobox).toBeFocused({ timeout: 15_000 });
   await combobox.fill('走查');
   // 分组实体结果命中(而非「Search failed / 搜索失败」错误态)。
-  await expect(page.getByRole('option', { name: /走查登录页崩溃/ })).toBeVisible({
-    timeout: 15_000,
-  });
+  const issueOption = page.getByRole('option', { name: /走查登录页崩溃/ });
+  await expect(issueOption).toBeVisible({ timeout: 15_000 });
   await expect(page.getByRole('option', { name: /走查项目/ }).first()).toBeVisible();
   await expect(page.getByText('Search failed')).toHaveCount(0);
   await expect(page.getByText('搜索失败')).toHaveCount(0);
   await page.screenshot({ path: resolve(EVIDENCE_DIR, 'palette-on-slug-page.png') });
-  // Enter 直达 issue 规范深链(URL 保持 slug 形态)。
-  await page.keyboard.press('Enter');
+  // 显式点击目标 option 直达 issue 规范深链(URL 保持 slug 形态)——比依赖键盘默认
+  // 选中行更确定:无头浏览器截图会移动虚拟鼠标触发某行 onMouseEnter,使 Enter 命中
+  // 非首行;直接点击目标行规避该悬停副作用,且语义即「选中该项并直达」。
+  await issueOption.click();
   await page.waitForURL(`**/w/${SLUG}/issues/by-identifier/${identifier}`);
 });

@@ -6,6 +6,9 @@
  *   (`KEY-N`,大小写不敏感)跳过防抖即刻请求(§2.2 等值快路径,命中顶置);
  * - 竞态治理:每次发请求前 abort 上一在途请求(AbortController),且以单调代次
  *   守卫丢弃迟到响应;被 abort 的失败不上报为错误态;
+ * - settled 语义:当前 query 的检索「已完成」——防抖窗口与在途请求均为 false,
+ *   仅成功/失败落定(或空 query 无需请求)后为 true。面板据此门控 no-results:
+ *   只有「已完成且结果空」才呈现,杜绝在途/防抖窗口的瞬态闪现(§4.2 loading 态覆盖);
  * - 选择稳定性不在本 hook:面板按稳定行 key 维持选中(§4.3.1)。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -33,6 +36,12 @@ export interface UseEntitySearchOptions {
 export interface EntitySearchState {
   readonly entityResults: readonly SearchResultItem[];
   readonly loading: boolean;
+  /**
+   * 当前 query 的检索是否已完成:防抖窗口与在途请求期间为 false,成功/失败落定
+   * (或空 query 无需请求)后为 true。面板门控 no-results 仅在「已完成且结果空」
+   * 时呈现(§4.2),避免在途/防抖窗口瞬态闪现。
+   */
+  readonly settled: boolean;
   readonly error: MeshApiError | null;
   /** 错误态手动重试(不改变 query 即重发) */
   readonly retry: () => void;
@@ -44,6 +53,16 @@ export function useEntitySearch(options: UseEntitySearchOptions): EntitySearchSt
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<MeshApiError | null>(null);
   const [retryTick, setRetryTick] = useState(0);
+  // 已完成检索的 query(裁剪态);null = 当前 query 尚未完成。query 一变即在渲染期
+  // 失效(下方渲染期状态调整,先于提交,不产生中间帧),settled 据此派生。
+  const [completedQuery, setCompletedQuery] = useState<string | null>('');
+  const [trackedQuery, setTrackedQuery] = useState(query);
+  if (trackedQuery !== query) {
+    // 渲染期调整状态(React「props 变化时调整 state」模式):query 变化即视上一
+    // 完成态过期,即使回到先前已完成的 query 也须待本轮检索完成方可再报 settled。
+    setTrackedQuery(query);
+    setCompletedQuery(null);
+  }
   const epochRef = useRef(0);
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -75,6 +94,7 @@ export function useEntitySearch(options: UseEntitySearchOptions): EntitySearchSt
         .then((envelope) => {
           if (epochRef.current !== epoch) return; // 迟到响应丢弃(竞态治理)
           setEntityResults(envelope.data);
+          setCompletedQuery(trimmed);
           setLoading(false);
         })
         .catch((err: unknown) => {
@@ -87,6 +107,7 @@ export function useEntitySearch(options: UseEntitySearchOptions): EntitySearchSt
               new MeshApiError({ status: 0, code: 'network', message: 'search failed' }),
             );
           }
+          setCompletedQuery(trimmed); // 失败亦属「已完成」:错误态由 error 驱动呈现
           setLoading(false);
         });
     };
@@ -106,5 +127,8 @@ export function useEntitySearch(options: UseEntitySearchOptions): EntitySearchSt
     };
   }, [client, workspaceId, query, enabled, debounceMs, retryTick]);
 
-  return { entityResults, loading, error, retry };
+  const trimmedNow = query.trim();
+  const settled = trimmedNow === '' || completedQuery === trimmedNow;
+
+  return { entityResults, loading, settled, error, retry };
 }
