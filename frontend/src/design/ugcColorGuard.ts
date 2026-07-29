@@ -48,19 +48,36 @@ export function guardUgcInlineColors(root: HTMLElement): void {
   });
 }
 
+/**
+ * 逐个重扫登记点:存活节点执行兜底重扫;节点已被 GC 回收的登记点
+ * 收集返回,由调用方移除。抽出纯函数供主题变更监听器复用(§4.3)。
+ */
+export function rescanGuardedRefs(
+  refs: Iterable<WeakRef<HTMLElement>>,
+): WeakRef<HTMLElement>[] {
+  const reclaimed: WeakRef<HTMLElement>[] = [];
+  for (const ref of refs) {
+    const el = ref.deref();
+    if (el === undefined) {
+      reclaimed.push(ref);
+    } else {
+      guardUgcInlineColors(el);
+    }
+  }
+  return reclaimed;
+}
+
+/** 重扫并剪除已回收登记点(缺省作用于模块登记表;主题变更监听器入口)。 */
+export function sweepGuardedRoots(refs: Set<WeakRef<HTMLElement>> = guardedRoots): void {
+  for (const ref of rescanGuardedRefs(refs)) {
+    refs.delete(ref);
+  }
+}
+
 function installThemeListener(): void {
   if (themeListenerInstalled || typeof window === 'undefined') return;
   themeListenerInstalled = true;
-  window.addEventListener(THEME_CHANGED_EVENT, () => {
-    for (const ref of [...guardedRoots]) {
-      const el = ref.deref();
-      if (el === undefined) {
-        guardedRoots.delete(ref);
-      } else {
-        guardUgcInlineColors(el);
-      }
-    }
-  });
+  window.addEventListener(THEME_CHANGED_EVENT, () => sweepGuardedRoots());
 }
 
 /**

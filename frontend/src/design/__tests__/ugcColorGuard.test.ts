@@ -6,7 +6,13 @@
  * (生产取自 tokens 级联,语义一致)。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { THEME_CHANGED_EVENT, guardUgcInlineColors, useUgcColorGuard } from '../ugcColorGuard';
+import {
+  THEME_CHANGED_EVENT,
+  guardUgcInlineColors,
+  rescanGuardedRefs,
+  sweepGuardedRoots,
+  useUgcColorGuard,
+} from '../ugcColorGuard';
 
 const DARK_SURFACE = '#1e293b';
 const LIGHT_SURFACE = '#f9fafb';
@@ -64,6 +70,33 @@ describe('guardUgcInlineColors', () => {
     expect(root.querySelector('span')?.style.color).toBe('var(--color-text)');
     expect(root.querySelector('em')?.style.color).toBe('rgb(248, 250, 252)');
   });
+
+  it('不可解析的内联色(命名色)→ 不强改(保持净化器既有约束)', () => {
+    const root = makeRoot(DARK_SURFACE, '<p style="color: red">x</p>');
+    guardUgcInlineColors(root);
+    // ratioOnSurface → null(fg 解析失败):保留原值,不误伤。
+    expect(root.querySelector('p')?.style.color).toBe('red');
+  });
+
+  it('不可解析的表面色 → 整轮跳过(不抛、不改)', () => {
+    const root = makeRoot('not-a-color', '<p style="color: #000000">x</p>');
+    guardUgcInlineColors(root);
+    expect(root.querySelector('p')?.style.color).toBe('rgb(0, 0, 0)');
+  });
+
+  it('半透明前景先对表面合成再判定(暗底半透明黑字 → 回退)', () => {
+    // rgba(0,0,0,0.4) 叠 #1e293b 后仍是深灰 on 暗蓝,对比 <4.5 → 回退。
+    const root = makeRoot(DARK_SURFACE, '<p style="color: rgba(0, 0, 0, 0.4)">x</p>');
+    guardUgcInlineColors(root);
+    expect(root.querySelector('p')?.style.color).toBe('var(--color-text)');
+  });
+
+  it('半透明表面色先对白底合成再判定(等效白底黑字 → 保留)', () => {
+    // rgba(255,255,255,0.5) 叠 #ffffff = 白底;黑字对比 21:1 → 保留。
+    const root = makeRoot('rgba(255, 255, 255, 0.5)', '<p style="color: #000000">x</p>');
+    guardUgcInlineColors(root);
+    expect(root.querySelector('p')?.style.color).toBe('rgb(0, 0, 0)');
+  });
 });
 
 describe('useUgcColorGuard — 挂载兜底 + 主题变更重扫', () => {
@@ -86,5 +119,35 @@ describe('useUgcColorGuard — 挂载兜底 + 主题变更重扫', () => {
     guard(root);
     root.remove();
     expect(() => window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT))).not.toThrow();
+  });
+});
+
+describe('rescanGuardedRefs — 存活重扫 / 已回收登记点收集', () => {
+  it('存活节点执行重扫;已回收节点(WeakRef 空)收集返回', () => {
+    // 存活登记点:亮底黑字先达标,改表面为暗底后经重扫回退。
+    const root = makeRoot(LIGHT_SURFACE, '<p style="color:#000000">x</p>');
+    const live = new WeakRef(root);
+    // 已回收登记点:deref → undefined 的结构等价桩(GC 时机不可控,以桩收敛分支)。
+    const reclaimedRef = { deref: () => undefined } as WeakRef<HTMLElement>;
+
+    root.style.setProperty('--color-surface', DARK_SURFACE);
+    const reclaimed = rescanGuardedRefs([reclaimedRef, live]);
+
+    expect(reclaimed).toEqual([reclaimedRef]);
+    expect(root.querySelector('p')?.style.color).toBe('var(--color-text)');
+  });
+
+  it('sweepGuardedRoots:重扫存活点并从登记集合剪除已回收点', () => {
+    const root = makeRoot(LIGHT_SURFACE, '<p style="color:#000000">x</p>');
+    const live = new WeakRef(root);
+    const dead = { deref: () => undefined } as WeakRef<HTMLElement>;
+    const registry = new Set<WeakRef<HTMLElement>>([dead, live]);
+
+    root.style.setProperty('--color-surface', DARK_SURFACE);
+    sweepGuardedRoots(registry);
+
+    expect(registry.has(dead)).toBe(false);
+    expect(registry.has(live)).toBe(true);
+    expect(root.querySelector('p')?.style.color).toBe('var(--color-text)');
   });
 });
