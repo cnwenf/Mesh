@@ -184,7 +184,7 @@ class TestProviderConfigFiles:
         assert paths.system_md.read_text() == "trusted platform policy"
         for path in (paths.mcp_json, paths.settings_json, paths.system_md):
             mode = stat.S_IMODE(path.stat().st_mode)
-            assert mode == 0o400  # read-only; sandbox gets a read-only mount
+            assert mode == 0o444  # ro-owned by daemon; ro-mounted into sandbox
             if os.getuid() == 0:
                 assert path.stat().st_uid == 0  # daemon-owned, task cannot rewrite
 

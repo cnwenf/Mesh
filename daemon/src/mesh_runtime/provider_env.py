@@ -192,7 +192,7 @@ async def write_provider_configs(
     settings: dict | None = None,
 ) -> ProviderConfigPaths:
     """Write the three platform-owned config files into the attempt's private
-    run dir: daemon-owned, 0400, later bind-mounted read-only (§1.4/§2.3).
+    run dir: daemon-owned, 0444, later bind-mounted read-only (§1.4/§2.3).
     mcp.json registers the platform task broker and NOTHING else (§1.5)."""
 
     def _write_sync() -> ProviderConfigPaths:
@@ -219,13 +219,13 @@ async def write_provider_configs(
 
 
 def _write_private(path: Path, content: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o400)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o444)
     try:
         os.write(fd, content.encode("utf-8"))
         os.fsync(fd)
     finally:
         os.close(fd)
-    os.chmod(path, 0o400)  # umask may have diluted the create mode
+    os.chmod(path, 0o444)  # world-readable, nobody-writable; ro-mounted anyway
 
 
 @dataclass(frozen=True)

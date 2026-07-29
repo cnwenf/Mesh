@@ -35,6 +35,8 @@ addopts = "-q"
 markers = [
     "unit: fast, hermetic tests — fake clock, no network, no real LLM",
     "contract: fake-provider state-machine and crash-recovery contract tests",
+    "sandbox: real Linux namespace/cgroup sandbox tests (require root; FAIL, never skip)",
+    "isolation: ISO-01~14 real isolation red-line matrix (require root; FAIL, never skip)",
 ]
 
 [tool.coverage.run]
