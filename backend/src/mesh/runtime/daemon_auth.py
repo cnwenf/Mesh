@@ -25,7 +25,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.security import hash_token
-from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX, ApiToken
+from mesh.db.models.api_token import RUNTIME_TOKEN_PREFIX
 from mesh.db.models.runtime import Runtime
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ForbiddenError, UnauthorizedError
@@ -109,7 +109,7 @@ async def resolve_runtime_token(
         row = (
             await session.execute(
                 text(
-                    "SELECT id, workspace_id, status, deleted_at, runtime_token_id "
+                    "SELECT id, workspace_id, status, deleted_at "
                     "FROM mesh_runtime_by_token_hash(:h)"
                 ),
                 {"h": token_hash},
@@ -123,16 +123,9 @@ async def resolve_runtime_token(
         # Tenant GUC before any RLS-guarded read (the bootstrap lookup above
         # is SECURITY DEFINER; everything below runs under the policy).
         await set_tenant_context(session, row["workspace_id"])
-        # Token revocation backstop (NEW-L2): pause/decommission revokes the
-        # api_tokens row; a cached runtime row must not outlive that.
-        if row["runtime_token_id"] is not None:
-            revoked = (
-                await session.execute(
-                    select(ApiToken.revoked_at).where(ApiToken.id == row["runtime_token_id"])
-                )
-            ).one_or_none()
-            if revoked is None or revoked[0] is not None:
-                raise UnauthorizedError("invalid runtime token")
+        # §2.4 S-11: daemon_auth only validates the runtime hash — no
+        # api_tokens backstop (single source of truth). Pause/decommission
+        # clears runtime_token_hash; the hash comparison below is the gate.
 
         runtime = await session.get(Runtime, row["id"])
         if runtime is None or runtime.runtime_token_hash != token_hash:

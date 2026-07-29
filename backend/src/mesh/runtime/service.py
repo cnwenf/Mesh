@@ -275,25 +275,19 @@ class RuntimeService:
             # never stored and the row can no longer be activated).
             runtime.updated_at = now
 
-            # Issue the long-lived daemon token (hash-only storage).
+            # §2.4 S-11: issue the long-lived daemon token — hash stored
+            # ONLY in runtimes.runtime_token_hash (single source of truth).
+            # No api_tokens row is created (R2-H2: runtime is not a roster
+            # member; owner_member_id NOT NULL cannot host it).
             if runtime.created_by is None:
                 raise BusinessRuleError(
                     "runtime has no registered owner for token issuance",
                     code="runtime_owner_missing",
                 )
             plaintext = RUNTIME_TOKEN_PREFIX + secrets.token_urlsafe(32)
-            token_row = ApiToken(
-                workspace_id=runtime.workspace_id,
-                owner_member_id=runtime.created_by,
-                name=f"runtime:{runtime.name}",
-                token_hash=hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-                prefix=plaintext[:DISPLAY_PREFIX_LEN],
-                scopes=["runtime"],
-            )
-            session.add(token_row)
-            await session.flush()
-            runtime.runtime_token_id = token_row.id
-            runtime.runtime_token_hash = token_row.token_hash
+            runtime.runtime_token_hash = hashlib.sha256(
+                plaintext.encode("utf-8")
+            ).hexdigest()
 
             await emit_realtime(
                 session,
@@ -528,7 +522,8 @@ class RuntimeService:
     async def rotate_runtime_token(
         self, *, workspace_id: uuid.UUID, runtime_id: uuid.UUID
     ) -> dict:
-        """Issue a new daemon token; plaintext shown ONLY here; old revoked."""
+        """Issue a new daemon token; plaintext shown ONLY here; old hash
+        overwritten (§2.4 S-11: single source — no api_tokens row)."""
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             runtime = await self._get_runtime_row(session, workspace_id, runtime_id)
@@ -537,25 +532,17 @@ class RuntimeService:
                     "runtime has no registered owner for token issuance",
                     code="runtime_owner_missing",
                 )
-            await self._revoke_runtime_token(session, runtime)
+            # §2.4 S-11: overwrite the hash in-place; the old token
+            # immediately gets 401 on next daemon_auth lookup.
             plaintext = RUNTIME_TOKEN_PREFIX + secrets.token_urlsafe(32)
-            token_row = ApiToken(
-                workspace_id=workspace_id,
-                owner_member_id=runtime.created_by,
-                name=f"runtime:{runtime.name}",
-                token_hash=hashlib.sha256(plaintext.encode("utf-8")).hexdigest(),
-                prefix=plaintext[:DISPLAY_PREFIX_LEN],
-                scopes=["runtime"],
-            )
-            session.add(token_row)
-            await session.flush()
-            runtime.runtime_token_id = token_row.id
-            runtime.runtime_token_hash = token_row.token_hash
+            runtime.runtime_token_hash = hashlib.sha256(
+                plaintext.encode("utf-8")
+            ).hexdigest()
             runtime.updated_at = _now()
             return {
                 "runtime_id": str(runtime.id),
                 "runtime_token": plaintext,
-                "prefix": token_row.prefix,
+                "prefix": plaintext[:DISPLAY_PREFIX_LEN],
             }
 
     async def _lifecycle(
@@ -580,13 +567,11 @@ class RuntimeService:
             return _render_runtime(runtime)
 
     async def _revoke_runtime_token(self, session: AsyncSession, runtime: Runtime) -> None:
-        if runtime.runtime_token_id is None:
-            return
-        await session.execute(
-            update(ApiToken)
-            .where(ApiToken.id == runtime.runtime_token_id, ApiToken.revoked_at.is_(None))
-            .values(revoked_at=_now())
-        )
+        """§2.4 S-11: clear the hash — the old token immediately gets 401.
+
+        No api_tokens row to revoke (single source of truth).
+        """
+        runtime.runtime_token_hash = None
 
     async def _get_runtime_row(
         self, session: AsyncSession, workspace_id: uuid.UUID, runtime_id: uuid.UUID
