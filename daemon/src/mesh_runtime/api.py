@@ -190,7 +190,7 @@ class RuntimeApiClient:
             body={"activation_code": activation_code, "metadata": metadata},
             auth=False,
         )
-        if not data:
+        if not data or "runtime_id" not in data or "runtime_token" not in data:
             raise ProtocolError("activate returned no data")
         return ActivateResponse(
             runtime_id=str(data["runtime_id"]),

@@ -64,6 +64,10 @@ class FakeClock:
         self.sleeps.append(seconds)
         if seconds > 0:
             self._monotonic += seconds
+        # Yield control exactly like a real sleep would. Without this, a loop
+        # driven by FakeClock never suspends and starves every other task —
+        # shutdown events and task cancellations would never be delivered.
+        await asyncio.sleep(0)
 
     def advance(self, seconds: float) -> None:
         if seconds < 0:

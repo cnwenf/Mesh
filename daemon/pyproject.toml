@@ -40,6 +40,7 @@ markers = [
 [tool.coverage.run]
 source = ["mesh_runtime"]
 branch = true
+omit = ["src/mesh_runtime/__main__.py"]
 
 [tool.coverage.report]
 fail_under = 90

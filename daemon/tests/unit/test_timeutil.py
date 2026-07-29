@@ -2,9 +2,8 @@ import random
 
 import pytest
 
-from tests.conftest import make_rand
-
 from mesh_runtime.timeutil import FakeClock, SystemClock, full_jitter
+from tests.conftest import make_rand
 
 
 class TestFakeClock:

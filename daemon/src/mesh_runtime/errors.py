@@ -33,11 +33,24 @@ class FatalAuthError(DaemonError):
 
 
 class LeaseConflictError(DaemonError):
-    """409 fencing: stale lease_seq or attempt already terminal/reclaimed."""
+    """409 fencing: stale lease_seq or attempt already terminal/reclaimed.
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    ``code`` distinguishes lease fencing (``lease_seq_mismatch`` /
+    ``attempt_terminal``) from log offset drift (``offset_mismatch``); the
+    latter carries the server's ``expected`` offset in ``details`` so the
+    uploader can reconcile instead of dying.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: dict | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 class GoneError(DaemonError):
@@ -78,7 +91,7 @@ def classify_response(
     if status in (401, 403):
         raise FatalAuthError(message)
     if status == 409:
-        raise LeaseConflictError(message, code=code)
+        raise LeaseConflictError(message, code=code, details=_error_details(body))
     if status == 410:
         raise GoneError(message)
     if status == 429:
@@ -102,3 +115,11 @@ def _error_code(body: dict | None) -> str | None:
     if isinstance(raw, str) and raw:
         return raw
     return None
+
+
+def _error_details(body: dict | None) -> dict:
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and isinstance(error.get("details"), dict):
+            return error["details"]
+    return {}

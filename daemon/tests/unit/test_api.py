@@ -202,12 +202,16 @@ class TestErrorMapping:
             {"error": {"code": "invalid_token", "message": "no"}},
         )
         with pytest.raises(FatalAuthError):
-            await client(server).heartbeat(RUNTIME_ID, current_load=0, health="healthy", metrics={}, inflight=[])
+            await client(server).heartbeat(
+                RUNTIME_ID, current_load=0, health="healthy", metrics={}, inflight=[]
+            )
 
     async def test_500_is_server_error(self, server):
         server.enqueue(f"POST /api/v1/daemon/runtimes/{RUNTIME_ID}:heartbeat", 500, None)
         with pytest.raises(ServerError):
-            await client(server).heartbeat(RUNTIME_ID, current_load=0, health="healthy", metrics={}, inflight=[])
+            await client(server).heartbeat(
+                RUNTIME_ID, current_load=0, health="healthy", metrics={}, inflight=[]
+            )
 
     async def test_429_carries_retry_after(self, server):
         server.enqueue(

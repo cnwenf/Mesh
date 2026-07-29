@@ -1,8 +1,7 @@
 import pytest
 
-from tests.conftest import make_rand
-
 from mesh_runtime.backoff import EMPTY_QUEUE, KEEPALIVE, NETWORK, BackoffPolicy
+from tests.conftest import make_rand
 
 
 class TestBackoffPolicy:

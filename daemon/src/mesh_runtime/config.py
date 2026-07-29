@@ -81,8 +81,8 @@ class DaemonConfig:
         allow_insecure = bool(raw.get("allow_insecure_http", False))
         _validate_server_url(server_url, allow_insecure=allow_insecure)
 
-        state_dir = Path(_require_str(raw, "state_dir"))
-        work_dir = Path(_require_str(raw, "work_dir"))
+        state_dir = _require_path(raw, "state_dir")
+        work_dir = _require_path(raw, "work_dir")
         if not state_dir.is_absolute():
             raise ConfigError("state_dir must be an absolute path")
         if not work_dir.is_absolute():
@@ -92,10 +92,9 @@ class DaemonConfig:
         if max_concurrent < 1:
             raise ConfigError("max_concurrent must be >= 1")
 
-        provider_path_raw = raw.get("provider_path")
         provider_path: Path | None = None
-        if provider_path_raw is not None:
-            provider_path = Path(str(provider_path_raw))
+        if raw.get("provider_path") is not None:
+            provider_path = _require_path(raw, "provider_path")
             if not provider_path.is_absolute():
                 raise ConfigError("provider_path must be an absolute path")
 
@@ -128,6 +127,15 @@ def _require_str(raw: dict, key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{key} is required and must be a non-empty string")
     return value
+
+
+def _require_path(raw: dict, key: str) -> Path:
+    value = raw.get(key)
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str) and value:
+        return Path(value)
+    raise ConfigError(f"{key} is required and must be a non-empty path")
 
 
 def _validate_server_url(url: str, *, allow_insecure: bool) -> None:
