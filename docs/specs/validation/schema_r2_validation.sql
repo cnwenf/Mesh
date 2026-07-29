@@ -4501,15 +4501,18 @@ CREATE TABLE execution_context_appends (
   source       TEXT NOT NULL CHECK (source IN ('im_btw')),
   payload      JSONB NOT NULL,
   injected_at  TIMESTAMPTZ NULL,                       -- daemon 注入后 best-effort 记录(attempt 作用域 receipt,R5-1)
-  injected_attempt_id UUID NULL,                       -- 记录注入的 attempt(旧 attempt receipt 不计入新 attempt 水位/过滤,R5-1)
+  injected_attempt_id UUID NULL,                       -- 单指针 receipt:记录注入的 attempt(只保留最新,R6-1;requeue 清空)
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_eca_ws_id UNIQUE (workspace_id, id),
   CONSTRAINT uq_eca_execution_seq UNIQUE (execution_id, seq),   -- daemon 去重键之一
   CONSTRAINT fk_eca_execution FOREIGN KEY (workspace_id, execution_id)
-    REFERENCES task_executions(workspace_id, id) ON DELETE CASCADE
+    REFERENCES task_executions(workspace_id, id) ON DELETE CASCADE,
+  CONSTRAINT fk_eca_injected_attempt FOREIGN KEY (workspace_id, injected_attempt_id)
+    REFERENCES execution_attempts(workspace_id, id) ON DELETE SET NULL (injected_attempt_id)
 );
+-- attempt 作用域待投递集(与 GET 过滤一致:未 receipt 或 receipt 已被 requeue 清空,R6-1)
 CREATE INDEX idx_eca_execution_pending ON execution_context_appends(execution_id, seq)
-  WHERE injected_at IS NULL;
+  WHERE injected_attempt_id IS NULL;
 -- 每执行追加上限(M3)为服务层常量 MESH_CONTEXT_APPEND_MAX_COUNT(默认 20)/
 -- MESH_CONTEXT_APPEND_MAX_CHARS(默认 32000),写入前计数校验,非 DB 约束(此处登记防实现漂移)。
 
@@ -4534,6 +4537,7 @@ DECLARE
   v_exec  UUID := '82000000-0000-0000-0000-000000000006';
   v_member UUID;
   v_agent UUID;
+  v_rows INT;                                      -- T39-10 GET DIAGNOSTICS(receipt ACK 行数断言)
 BEGIN
   -- 种子:成员 / agent / 集成 / 绑定 / 事件(复用 T29 既有工作区;不存在则补最小种子)
   SELECT id INTO v_member FROM members WHERE workspace_id = v_ws LIMIT 1;
@@ -4690,21 +4694,66 @@ BEGIN
          'T39-9 FAIL: rearm 幂等键新写应成功(不撞原键)';
   RAISE NOTICE 'PASS T39-9: outbox rearm 按真实 DDL 执行(failed→pending 条件更新 + 建成执行 + rearm 键新写)';
 
-  -- T39-10:服务端水位 attempt 作用域——当前 attempt 内单调不回退;requeue 原子重置为 0(新 attempt 重收)
-  UPDATE task_executions SET context_injected_through_seq = 5 WHERE id = v_exec;
-  UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 3)
-   WHERE id = v_exec;                                           -- 同 attempt 内回退型 ACK 被忽略
-  ASSERT (SELECT context_injected_through_seq = 5 FROM task_executions WHERE id = v_exec),
-         'T39-10 FAIL: 同 attempt 内水位应单调不回退';
-  UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, 7)
-   WHERE id = v_exec;
-  ASSERT (SELECT context_injected_through_seq = 7 FROM task_executions WHERE id = v_exec),
-         'T39-10 FAIL: 水位应前进至 7';
-  -- 模拟 requeue 事务:原子重置水位(旧 attempt receipt 不再计入,新 attempt 从 0 重收,至少一次)
-  UPDATE task_executions SET context_injected_through_seq = 0 WHERE id = v_exec;
-  ASSERT (SELECT context_injected_through_seq = 0 FROM task_executions WHERE id = v_exec),
-         'T39-10 FAIL: requeue 应原子重置水位为 0';
-  RAISE NOTICE 'PASS T39-10: 水位 attempt 作用域(同 attempt 单调不回退;requeue 重置 → 新 attempt 至少重收一次)';
+  -- T39-10:单指针 receipt ACK 闭合反例链(R6-1)——真实创建 A/B receipt,验证 fencing/覆盖分支
+  -- 准备:独立执行 + append seq 1..4 + 两个 attempt(A 先活跃后 reclaimed,B 接管)
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000e2', v_ws, v_agent, NULL, 'integration', 'mes82-receipt-exec', '{}', '{}', '[]', '{}');
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, '82000000-0000-0000-0000-0000000000e2', 1, 'im_btw', '{"text":"s1"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 2, 'im_btw', '{"text":"s2"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 3, 'im_btw', '{"text":"s3"}'::jsonb),
+         (v_ws, '82000000-0000-0000-0000-0000000000e2', 4, 'im_btw', '{"text":"s4"}'::jsonb);
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000aa1', v_ws, '82000000-0000-0000-0000-0000000000e2', 1, 'running', 3);
+  -- ① A receipt seq<=4(fencing:A 为当前有效 attempt → 覆盖写入 4 行)+ 水位推进至 4
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-10① FAIL: A receipt 应恰好覆盖 4 行';
+  UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  -- ② A reclaimed + requeue:同事务清空 receipt + 重置水位(单指针:只保留最新,requeue 清空)
+  UPDATE execution_attempts SET status = 'reclaimed' WHERE id = '82000000-0000-0000-0000-000000000aa1';
+  UPDATE task_executions SET status = 'queued', context_injected_through_seq = 0 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  UPDATE execution_context_appends SET injected_at = NULL, injected_attempt_id = NULL
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id IS NULL) = 4,
+         'T39-10② FAIL: requeue 应清空全部 receipt';
+  -- ③ B claim 后 GET(attempt 作用域过滤)命中 seq=4(全部 4 条重新可见 → 至少重收一次)
+  INSERT INTO execution_attempts (id, workspace_id, execution_id, attempt_number, status, lease_seq)
+  VALUES ('82000000-0000-0000-0000-000000000bb1', v_ws, '82000000-0000-0000-0000-0000000000e2', 2, 'running', 1);
+  UPDATE task_executions SET status = 'running' WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq > 0
+             AND (injected_attempt_id IS NULL OR injected_attempt_id <> '82000000-0000-0000-0000-000000000bb1')) = 4,
+         'T39-10③ FAIL: B GET 应命中全部 4 条(requeue 后重新可见,不丢失)';
+  -- ④ B ACK 恰好 4 行(覆盖写入),水位推进至 4
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000bb1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000bb1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000bb1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 4, 'T39-10④ FAIL: B ACK 应恰好更新 4 行(单指针覆盖,不再 0 行卡死)';
+  UPDATE task_executions SET context_injected_through_seq = 4 WHERE id = '82000000-0000-0000-0000-0000000000e2';
+  -- ⑤ B 再 GET 不返回 seq=4(同一 attempt 已 receipt 行不再下发)
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq > 0
+             AND (injected_attempt_id IS NULL OR injected_attempt_id <> '82000000-0000-0000-0000-000000000bb1')) = 0,
+         'T39-10⑤ FAIL: B 已 receipt 的行不应再下发';
+  -- ⑥ A 迟到 ACK:fencing(A 已 reclaimed,非当前有效 attempt)→ 0 行,不覆盖 B 的 receipt
+  UPDATE execution_context_appends SET injected_at = now(), injected_attempt_id = '82000000-0000-0000-0000-000000000aa1'
+   WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND seq <= 4 AND injected_attempt_id IS DISTINCT FROM '82000000-0000-0000-0000-000000000aa1'
+     AND EXISTS (SELECT 1 FROM execution_attempts
+                  WHERE id = '82000000-0000-0000-0000-000000000aa1' AND execution_id = '82000000-0000-0000-0000-0000000000e2' AND status IN ('claimed','running'));
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  ASSERT v_rows = 0, 'T39-10⑥ FAIL: A 迟到 ACK 应被 fencing 拒绝(0 行)';
+  ASSERT (SELECT count(*) FROM execution_context_appends
+           WHERE execution_id = '82000000-0000-0000-0000-0000000000e2' AND injected_attempt_id = '82000000-0000-0000-0000-000000000bb1') = 4,
+         'T39-10⑥ FAIL: B 的 receipt 不得被 A 覆盖';
+  RAISE NOTICE 'PASS T39-10: 单指针 receipt 闭合(A receipt→requeue 清空→B 重收→B ACK 恰好 4 行→B GET 不再下发→A 迟到 ACK 0 行不覆盖)';
 
   -- T39-11:ack 四字段语义——被抑制项 ack_sent_at 保持 NULL(字段不混用)
   INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
