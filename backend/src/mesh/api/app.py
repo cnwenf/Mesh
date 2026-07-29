@@ -107,6 +107,7 @@ from mesh.views.moves import BoardMoveService
 from mesh.views.projection import ProjectionService
 from mesh.views.routes import router as view_router
 from mesh.views.service import ViewService
+from mesh.web.entry import build_html_entry_router
 from mesh.workspace.invitations import InvitationService
 from mesh.workspace.routes import router as workspace_router
 from mesh.workspace.service import WorkspaceService
@@ -369,5 +370,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return DataEnvelope(
                 data={"subject": principal.subject, "workspaces": sorted(map(str, principal.workspace_ids))}
             )
+
+    # Personalized HTML entry (theme.md §2.3 ①): mounted LAST so every API
+    # route keeps priority over the shell catch-all. Serves the built SPA with
+    # a per-request __MESH_APPEARANCE__ injection resolved from the HttpOnly
+    # mesh_session cookie / route workspace identity; degrades to 404 when the
+    # frontend build is absent.
+    app.include_router(build_html_entry_router())
 
     return app

@@ -128,6 +128,13 @@ class Settings(BaseSettings):
     ws_host: str = "0.0.0.0"
     ws_port: int = DEFAULT_WS_PORT
 
+    # theme.md §2.3 ①: directory holding the built frontend (index.html +
+    # assets) that the personalized HTML entry serves with the per-request
+    # __MESH_APPEARANCE__ injection. Populated in production via a shared
+    # volume from the frontend image; when index.html is absent the entry
+    # degrades to 404 and the JSON API is unaffected.
+    frontend_dist_dir: str = "/srv/mesh/frontend"
+
     # Outbox relay tuning (README §6.6 / §2.2).
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)
     outbox_poll_interval: float = Field(default=1.0, gt=0)
