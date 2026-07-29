@@ -508,6 +508,7 @@ CREATE TABLE integration_message_queue (
   ack_represented_at TIMESTAMPTZ NULL,                                  -- 被抑制项:已被窗口 leader 代表(本项不外呼;绝非"已发送",§3.8)
   ack_merged_into    UUID NULL,                                         -- 被抑制项指向的 leader 队列项 id(§3.8)
   lease_expires_at   TIMESTAMPTZ NULL,                                  -- dispatching/processing/cancelling 租约(过期孤儿项由修复扫描处置,§3.9)
+  ack_window_at      TIMESTAMPTZ NOT NULL DEFAULT now(),                -- 协议在持 imq_seq 锁后显式写 clock_timestamp()(锁序时间,§3.8 窗口判定真源;DEFAULT now() 仅表级兜底,窗口判定不得依赖之)
   enqueued_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   started_at         TIMESTAMPTZ NULL,                                  -- 进入 processing 的时刻
   finished_at        TIMESTAMPTZ NULL,
@@ -583,7 +584,7 @@ CREATE INDEX idx_imq_binding_state ON integration_message_queue(binding_id, stat
 | `project_id_snapshot` | UUID | NULL | NULL | **绑定作用域为 project 时入队捕获的项目 ID 快照**(多态逻辑引用,不建 FK——项目可能已物理删除):孤儿审计行的 project 可见性过滤依据(§3.9 审计端点);workspace 级绑定为 NULL |
 | `integration_event_id` | UUID | NULL,复合 FK → `integration_events(workspace_id, id)` `ON DELETE SET NULL (integration_event_id)` | — | 源入站事件;`UNIQUE(integration_id, integration_event_id)` 与事件去重同源——重复外部事件不重复入队;事件台账删除仅置空引用 |
 | `conversation_key` | TEXT | NOT NULL | — | **规范化会话键** `<provider>:<provider_tenant_key>:<external_ref>`(如 `dingtalk:dingxxxx:cidxxxx`);队列串行粒度。**键编码与分段校验(N-1 订正,写死)**:分隔符 `:` 为键结构保留字符,服务层插入前逐段校验——① `provider` 为登记枚举值;② `provider_tenant_key` 按平台模式(钉钉 corpId `ding[A-Za-z0-9]+`);③ `external_ref`/身份段**不得含 `:` 与控制字符**。**平台事实(官方报文样例核验)**:钉钉 `conversationId`/`msgId` 为 base64 样加密 ID(字母表 `A-Za-z0-9+/=`,如 `cid6EUvB2O8qVF2RYQtHTKEsg==`,**含 `=`、可含 `+/`,结构上不含 `:`**),`senderId` 为 `$:LWCP_v1:$…` 加密串(**含 `$`/`:`/`+`**),`senderStaffId`/`chatbotCorpId` 字符集钉死**最宽官方口径** `[A-Za-z0-9._-]`(单一事实源:官方存在「字母数字」与「字母、数字及 `-_`」两版口径,取至宽并集,`.` 亦容)——故 `external_ref` 段字符类为**不含 `:` 的超集** `^[A-Za-z0-9_.@+/=-]+$`(钉钉 cid 合法通过);**外部联系人身份段不得取 `senderId` 原值**(含冒号会复现 `("a","b:c","d")` 与 `("a","b","c:d")` 坍缩歧义),一律编码为 `x=<base64url(senderId)>`(§3.10:**编码键第 2 字符恒为 `=`,而 `=` 不在 staffId 至宽字符集 `[A-Za-z0-9._-]` 内 → 两键空间结构不相交,由字符集代数保证、不依赖文档版本**;E-1 闭合);违例 → `invalid_request` |
-| `seq` | BIGINT | NOT NULL,CHECK (> 0),`UNIQUE (conversation_key, seq)` | — | 会话内入队序号。**取号协议(并发安全)**:入队事务先 `pg_advisory_xact_lock(hashtext('imq_seq:'||conversation_key))` 串行化同会话取号,再 `INSERT … seq = COALESCE((SELECT max(seq) … WHERE conversation_key=:k),0)+1`(空会话首插同样受咨询锁保护);并以 `ON CONFLICT (conversation_key, seq) DO NOTHING` + 有限次重试(≤3)作背压兜底;**禁止裸 `max+1` 无锁写入**。位置 = 本会话中 `state='pending'` 且 `seq` 较小者计数 + 1 |
+| `seq` | BIGINT | NOT NULL,CHECK (> 0),`UNIQUE (conversation_key, seq)` | — | 会话内入队序号。**取号协议(并发安全)**:入队事务先 `pg_advisory_xact_lock(hashtext('imq_seq:'||conversation_key))` 串行化同会话取号,**持锁后取 `ack_window_at = clock_timestamp()`(锁序时间,§3.8 窗口真源)**,再 `INSERT … seq = COALESCE((SELECT max(seq) … WHERE conversation_key=:k),0)+1`(空会话首插同样受咨询锁保护);并以 `ON CONFLICT (conversation_key, seq) DO NOTHING` + 有限次重试(≤3)作背压兜底;**禁止裸 `max+1` 无锁写入**。位置 = 本会话中 `state='pending'` 且 `seq` 较小者计数 + 1 |
 | `dispatch_mode` | TEXT | NOT NULL,CHECK IN ('serial_conversation','parallel') | — | **入队时的有效模式快照,项生命周期内不可变**。有效模式 = `config.inbound_queue`,但**会话内仍有非终态 serial 项时强制为 `serial_conversation`(排空-再切换规则)**——模式切换待旧串行 lane 排空后生效,杜绝新 parallel 项越过/重叠旧 serial 项(§3.9) |
 | `state` | TEXT | NOT NULL,CHECK IN ('pending','dispatching','processing','cancelling','done','failed','cancelled') | `'pending'` | **状态机(见下)**;终态 = done/failed/cancelled;**终态→终态转换一律 no-op 守卫**(取消与终态回写竞态幂等) |
 | `execution_id` | UUID | NULL,复合 FK → `task_executions(workspace_id, id)` `ON DELETE SET NULL (execution_id)` | NULL | 派发时绑定的执行(runtime.md);`dispatching` 写出、经「执行关联回写」在同一事务转入 `processing` 时确认(§3.9,两种模式共用);执行记录删除仅置空引用,队列项审计保留 |
@@ -596,7 +597,8 @@ CREATE INDEX idx_imq_binding_state ON integration_message_queue(binding_id, stat
 | `ack_represented_at` | TIMESTAMPTZ | NULL | NULL | **被抑制项**:已被窗口 leader 的确认消息代表(本项不外呼,审计"已被代表确认",非漏发、非已发送) |
 | `ack_merged_into` | UUID | NULL | NULL | 被抑制项指向的 leader 队列项 id(§3.8 leading-edge 合并) |
 | `lease_expires_at` | TIMESTAMPTZ | NULL | NULL | `dispatching/processing/cancelling` 租约到期时刻(派发放量 = 执行超时上限 + 缓冲);过期孤儿项由修复扫描按执行状态分支处置(§3.9 不丢失保证) |
-| `enqueued_at` / `started_at` / `finished_at` | TIMESTAMPTZ | NOT NULL/NULL/NULL | `now()`/—/— | 入队/派发/终态时刻(队列时延观测) |
+| `ack_window_at` | TIMESTAMPTZ | NOT NULL | 持锁后 `clock_timestamp()` | **ack 窗口判定的锁序时间真源(§3.8)**:入队事务取得 `imq_seq:` 咨询锁**之后**显式取 `clock_timestamp()`(实时墙钟,非事务开始时刻的 `now()`)并持久化;窗口 `[L.ack_window_at, L.ack_window_at + window)` 与 leader 判定共用此值——杜绝"事务先开始但后取锁"的时序倒挂(该项 `enqueued_at` 早于先取锁项却不落入其窗口的反例) |
+| `enqueued_at` / `started_at` / `finished_at` | TIMESTAMPTZ | NOT NULL/NULL/NULL | `now()`/—/— | 入队/派发/终态时刻(队列时延观测;`enqueued_at` 为事务开始时刻,**不参与 ack 窗口判定**) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | NOT NULL | `now()` | |
 
 **状态机(状态词汇的唯一权威)**:
@@ -791,9 +793,12 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
                 serial_conversation(钉钉默认)→ 保持 pending,由队列派发器(§3.9)在会话
                     无任何非终态项时取首项派发(转 dispatching + 写 outbox)
               → process_status='dispatched'
-  → 【emoji 确认接收(§3.8)】入队事务【同事务】写 outbox('im.send',幂等键 §6.5)
-     → 出站快 relay 消费:先持久化 ack_attempted_at(外呼前闸门)→ leading-edge 合并判定
-       (首条 <2s 发出;窗口内后续项抑制、记 ack_merged_into)→ 平台发送 → 回写 ack_sent_at
+  → 【emoji 确认接收(§3.8)】入队事务内(持 imq_seq 锁、取 ack_window_at=clock_timestamp() 之后)
+     按 ack_window_at 判定窗口 leader:仅 leader 项【同事务】写 outbox('im.send',幂等键 §6.5);
+     follower 项不写任何 ack 事件(无外部副作用,窗口归属由 ack_leader_id 结构性表达);
+     ack_template='' 的集成跳过全部 ack 处理(不写事件、不占窗口)
+     → 出站快 relay 消费 leader 事件:T1 同事务置 ack_attempted_at + 事件 published →
+       事务外平台发送 → T2 回写 ack_sent_at + 批量回写窗口 follower represented
        (at-most-once,不重试;不经 notification_delivery)
   → relay 消费 execution.enqueue 创建 task_executions(trigger='integration'),【同事务】
      队列项 dispatching → processing + 绑定 execution_id + lease(§3.9 执行关联回写)
@@ -948,12 +953,15 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 **leader 在摄取/取号事务内按 seq 确定(不依赖 relay 到达顺序,写死)**:入队事务已持有会话级取号咨询锁(`imq_seq:<conversation_key>`,§2.10)串行化同会话全部入队——**窗口 leader 判定复用该锁,在入队事务内按 seq 顺序完成**:
 
 ```
-入队事务(持有 imq_seq 咨询锁,seq = max+1 之后):
-  查本会话"覆盖 leader":满足 ack_leader_id = L.id(自指,L 即 leader)
-    且 本项.enqueued_at ∈ [L.enqueued_at, L.enqueued_at + MESH_IM_ACK_COALESCE_WINDOW) 的最近项 L
+入队事务(持有 imq_seq 咨询锁;已取 ack_window_at = clock_timestamp()、seq = max+1):
+  若 integrations.config.ack_template = '' → 【跳过全部 ack 处理】不写事件、
+    ack_leader_id 留 NULL、本项不参与/不占用任何 ack 窗口(关闭确认的集成零窗口副作用)
+  否则查本会话"覆盖 leader":满足 ack_leader_id = L.id(自指,L 即 leader)
+    且 本项.ack_window_at ∈ [L.ack_window_at, L.ack_window_at + MESH_IM_ACK_COALESCE_WINDOW)
+    的最近项 L(**窗口时间一律按锁序 ack_window_at,不用 enqueued_at/now()**)
   · 命中 → 本项为 follower:ack_leader_id = L.id;【不写 im.send outbox 事件】
-           (follower 无外部副作用,仅审计;ack_represented_at/ack_merged_into 由 relay? 不——
-            follower 根本无 ack 事件,represented 语义经 ack_leader_id 指向表达)
+           (follower 无外部副作用;represented 语义经 ack_leader_id 指向表达,
+            ack_represented_at/ack_merged_into 由 leader T2 成功后批量回写)
   · 未命中 → 本项为 leader:ack_leader_id = 本项.id(自指);
              【同事务】写 outbox_events(event_type='im.send',
                幂等键 sha256(queue_item_id | 'ack')(README §6.5 登记键),
@@ -991,7 +999,7 @@ ack 快 relay(outbox relay 同进程集合的高优先级受监督任务,目标�
 ```
 > **不**在摄取请求内同步直发外部平台(README §6.6:外部可见副作用一律经 outbox;ack 外呼是 outbox 事件 handler 的消费动作:T1 闸门 + 事件终态化 → 事务外外呼 → T2 结果落库)。
 
-**leading-edge 合并(防 ack 反射放大,安全护栏)**:窗口 leader(摄取事务内按 seq 判定,见上)即时发出通用确认("✅ 已接收,处理中/排队中",携带发送时刻 best-effort 位置);窗口 `[leader.enqueued_at, leader.enqueued_at + MESH_IM_ACK_COALESCE_WINDOW)`(默认 5s)内后续项为 follower(无外呼、无 outbox 事件,仅结构性指向 leader)。**relay 到达顺序与并发对合并结果无影响**(leader 由入队 seq 序先定);**不做尾部"共 N 条"合并消息**(与"首条即时"不可兼得,YAGNI)。
+**leading-edge 合并(防 ack 反射放大,安全护栏)**:窗口 leader(摄取事务内按 seq 判定,见上)即时发出通用确认("✅ 已接收,处理中/排队中",携带发送时刻 best-effort 位置);窗口 `[leader.ack_window_at, leader.ack_window_at + MESH_IM_ACK_COALESCE_WINDOW)`(默认 5s,**锁序时间**,不用事务开始时刻)内后续项为 follower(无外呼、无 outbox 事件,仅结构性指向 leader)。**relay 到达顺序与并发对合并结果无影响**(leader 由入队 seq 序先定);**不做尾部"共 N 条"合并消息**(与"首条即时"不可兼得,YAGNI)。
 
 **规则(可测试)**:
 - **仅 `dispatched` 的任务消息触发 ack**:去重(`deduped`)、未匹配、被限频(`rejected` + `_mesh_reject_reason='rate_limited'`)、命令消息、被拒消息**一律不发 ack**(避免重复事件刷确认、避免给未绑定群发噪音、避免灌消息放大出站配额)。
@@ -1039,8 +1047,9 @@ ack 快 relay(outbox relay 同进程集合的高优先级受监督任务,目标�
      - **a. `status='pending'`(relay 尚未消费/消费中崩溃)→ 不造新事件**:续队列项租约(`lease_expires_at = now()+buffer`),等待现有 relay 消费(relay 以 pending 行为扫描真源,本项会被自然消费);**升级条件**:若 `outbox_events.created_at < now() - MESH_OUTBOX_CONSUME_SLA`(默认 = 2× relay 轮询间隔)且仍 pending、执行仍不存在 → 视同丢失走 d(rearm 键新写);
      - **b. `status='failed'`(relay 重试耗尽)→ 条件 rearm:`UPDATE outbox_events SET status='pending', delivery_attempts=0, published_at=NULL WHERE id=:evt AND status='failed'`**(0 行 = 其他修复副本已先 rearm,退避);relay 重新消费创建执行(原幂等键,执行行不存在故创建成功);
      - **c. `status='published'`(handler 自称完成但执行行缺失——理论不可达:消费事务回滚则不会置 published)→ 不 DELETE 原行**(outbox 终态行按 §6.6 保留期审计保留,删除破坏审计;派生 rearm 键本就不撞原键唯一约束,无需释放占位):走 d;
-     - **d. 行不存在 或 c 之异常 published → INSERT 新 outbox 事件,`idempotency_key = sha256(原幂等键 | 'rearm' | item_id)`**(派生键,与原键不撞唯一约束),`event_type='execution.enqueue'`,payload 携带原队列项引用。
-     **仅 b/d 真正重派发,a 等待现有 relay**;validation 以真实 `outbox_events` DDL 对四态逐一实测(§5.6 / T39-9/T39-14)。
+     - **d. 行不存在 或 c 之异常 published → INSERT 新 outbox 事件**:`event_type='execution.enqueue'`,**键分层(R4-3 写死)**——`outbox_events.idempotency_key = K2 = sha256(K | 'rearm' | item_id)`(仅 outbox 行级去重,与原键 K 不撞唯一约束)而 **payload 内 `execution_idempotency_key = K`(原执行级幂等键,稳定)**;
+     - **消费者契约(R4-3 写死,适用一切 `execution.enqueue` 消费)**:① **执行级幂等键只取自 `payload.execution_idempotency_key`,绝不 fallback 到 `outbox_events.idempotency_key`**(故原始事件[K]与派生事件[K2]创建/命中**同一** `task_executions.idempotency_key=K`,执行唯一约束跨两者去重;所有 enqueue 写入方——摄取事务、派发器、rearm——一律在 payload 携带该字段);② **消费者事务先 `FOR UPDATE` 锁队列项并守卫状态**(`state='dispatching' AND execution_id IS NULL`),守卫通过方创建执行并在**同一事务**绑定 `execution_id` + 转 `processing`;守卫失败(项已被其他消费者绑定/已终态)→ **整事务回滚,不创建执行(无孤儿 execution)**;③ 旧 pending 事件与派生事件**任意消费顺序、并发消费 → 恰好一个 execution**(键 K 唯一约束 + 队列项守卫双保证),队列项只绑定该执行。
+     **仅 b/d 真正重派发,a 等待现有 relay**;validation 以真实 `outbox_events` DDL 对四态逐一实测 + 并发消费竞态实测(§5.6 / T39-9/T39-14/T39-17)。
   任一分支都使项离开"在途且过期"集合,杜绝扫描空转;**任何崩溃路径下已入队消息要么被执行、要么进终态可查,不静默丢失**。
 - **删除保护(成功路径闭合,§2.10 `ck_imq_orphan_terminal` + SET NULL)**:绑定/集成删除端点(§3.1 DELETE)两种形态:**无 `force`** —— 存在**非终态**项 → `409 binding_has_active_queue`(终态项不阻塞);**`?force=cancel`** —— ① 强制批量终止:该父对象下 `pending` 项 → `cancelled(reason='binding_deleted')`,`dispatching/processing/cancelling` 项 → 调用 runtime 取消服务(幂等)并等待终态(上限 30s,超时强制 `cancelled(reason='binding_deleted')` + 告警,执行侧取消意图已由 DB 持久化、daemon 恢复后继续停止);② **DELETE 父行 → 全部队列项已终态,FK `ON DELETE SET NULL` 触发,父引用置空、删除实际完成**(DELETE 语句成功返回,不被 FK 阻塞);③ 孤儿审计行(`binding_id IS NULL`,携带 `binding_display`/`project_id_snapshot`/`conversation_key`/`sender_identity_key` 自描述)经**工作区级审计端点 `GET /workspaces/{ws}/integration-queue-audit`** 可查(成员角色;project 级项按 `project_id_snapshot` 可见性过滤;仅返回终态孤儿行),保留期 `MESH_IM_QUEUE_AUDIT_RETENTION`(默认 30 天)后由 worker 分批物理清理(仅清理 `binding_id IS NULL` 的终态行)。**绕过端点的直接父行 DELETE**(含项目物理删除对 project 级绑定的 CASCADE 链)在非终态项存在时被 `ck_imq_orphan_terminal` CHECK 拒绝(SET NULL 使非终态项失去父引用 → CHECK 违例 → 整个 DELETE 回滚)——项目删除服务流程须先对其 project 级绑定执行同一强制终止(fail-closed:未清理则项目删除失败,不静默丢消息)。
 
@@ -1065,7 +1074,7 @@ ack 快 relay(outbox relay 同进程集合的高优先级受监督任务,目标�
 **accessToken 缓存刷新(多副本语义,写死)**:多个 `mesh.workers` 副本共享同一令牌缓存,刷新必须是**分布式单飞**:
 - **共享缓存**:Redis 键 `dingtalk:access_token:<integration_id>` → `{token, expires_at}`,写入 TTL = `7200s − 300s 缓冲 + jitter(±60s,防多集成同时过期惊群)`;副本读取本地进程缓存(LRU,≤30s)未命中再读 Redis。
 - **主动刷新(所有权安全协议,写死)**:本地/共享缓存 `expires_at` 临近(≤5 分钟)→ 抢分布式锁 `SET dingtalk:token_lock:<integration_id> <random_owner_token> NX EX 30`(**每次抢占生成随机 owner token**,30s 租约)→ **抢到后双检** Redis `expires_at` 仍临近方调用 `POST /v1.0/oauth2/accessToken` `{appKey, appSecret}`(**该请求超时 = 10s,严格小于 30s 租约,持锁期间不会租约过期**;若平台响应异常接近超时不续租,直接失败走重试路径)→ 写回共享缓存 → **经 Lua 条件脚本释放锁(仅当 `GET lock == 本 owner token` 方 `DEL`,防超时后迟到的旧 owner 误删新锁)**。
-- **follower 有界等待(覆盖刷新超时窗口,写死)**:未抢到锁的副本(follower)→ **500ms 双检重读共享缓存,循环至 `MESH_TOKEN_FOLLOWER_WAIT`(默认 12s = 刷新请求超时 10s + 2s 缓冲)——正常刷新(≤10s)期间 follower 必然等到新令牌,不得在 leader 合法刷新期间终态失败** → 等待窗口耗尽仍无令牌 → **尝试重抢一次**(持锁者可能已崩溃且租约到期)→ 仍未得 → 本次出站结果为 **`token_refresh_busy`(可重试退避结果,非终态失败):outbox 事件保持 `pending` + 按 §6.6 relay 退避(`next_retry` 短回退)重试**,出站投递台账记一次 busy 尝试;**仅凭据真失败(refresh 端点返回 invalid app_secret 类错误 → `invalid_credentials` 终态)或刷新端点连续失败超 relay 重试预算(`upstream_error` 终态)才终态 `failed`**。
+- **follower 有界等待(覆盖刷新超时窗口,写死)**:未抢到锁的副本(follower)→ **500ms 双检重读共享缓存,循环至 `MESH_TOKEN_FOLLOWER_WAIT`(默认 12s = 刷新请求超时 10s + 2s 缓冲)——正常刷新(≤10s)期间 follower 必然等到新令牌,不得在 leader 合法刷新期间终态失败** → 等待窗口耗尽仍无令牌 → **尝试重抢一次**(持锁者可能已崩溃且租约到期)→ 仍未得 → 本次出站结果为 **`token_refresh_busy`(可重试退避结果,非终态失败):outbox 事件保持 `pending`,仅后移 `available_at`(README §6.6 权威字段,短退避默认 +2s)、**不递增 `delivery_attempts`——不消耗失败预算、不终态,`available_at` 过滤防热循环**(**#58 迁移落点:该字段随 README §6.6 权威 DDL 入 migration,relay 领取 SQL 按 `available_at <= now()` 过滤**);出站投递台账记一次 busy 尝试;**仅凭据真失败(refresh 端点返回 invalid app_secret 类错误 → `invalid_credentials` 终态)或刷新端点连续失败超 relay 重试预算(`upstream_error` 终态,递增 `delivery_attempts`)才终态 `failed`**。
 - **崩溃恢复与迟到的旧 owner**:锁持有者崩溃 → 租约 30s 自动释放,等待副本经"尝试重抢"接管;接管后**旧 owner 迟到释放被 Lua owner 比对拒绝**(锁值已是新 owner token,DEL 不执行)——**任何时刻至多一个有效刷新者**;共享缓存写入是先于锁释放的独立 SET,持有者写后崩溃不影响令牌可用。
 - **平台侧失效强制刷新**:钉钉返回令牌失效错误码(如 `40014`/`88`)→ 作废旧缓存 + 按上述所有权协议抢锁强制刷新**一次**(幂等:刷新后重试原请求仅一次,仍失败记 `failed`),全副本经共享缓存失效一致。
 - 刷新彻底失败/凭据撤销 → 出站投递记 `failed` + 告警(不阻塞其他集成);**令牌值与 appSecret 永不回显响应/日志/出站请求调试信息**(README §6.16 全通道脱敏:**解密后的 app_secret/accessToken 一律登记 `redact_in_logs` 黑名单**;`connections/open`/`accessToken` 等携带明文秘钥的出站请求体在日志、错误台账、投递详情中以 `***` 替换,502 排障仅记 `method/url/status`,不记 body)。
@@ -1253,6 +1262,8 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **仅 dispatched 触发**:重复事件(deduped)/ 未绑定会话 / 命令消息 / 签名被拒消息 → **不发确认消息**(出站台账无对应行)。
 - [ ] **leading-edge 合并(五字段语义)**:同会话窗口(`MESH_IM_ACK_COALESCE_WINDOW`,以 leader `enqueued_at` 起算 5s)内连发 3 条 → **仅 leader 收到确认消息**(leader: `ack_leader_id` 自指 + `ack_attempted_at` + `ack_sent_at` 置位);后 2 条为 follower(`ack_leader_id` 指向 leader、`ack_sent_at` 保持 NULL,leader T2 后 `ack_represented_at`/`ack_merged_into` 回写;**follower 无 im.send outbox 事件**,被代表 ≠ 已发送);**不发"共 N 条"尾部消息**。
 - [ ] **ack 并发闭合①(到达顺序无关)**:**强制 M2(seq=2)先于 M1(seq=1)进入 relay 处理**(测试以入队节拍控制)→ leader 仍为 M1(摄取事务按 seq 先定),平台 mock **恰好一次外呼**;M2 为 follower(断言 `ack_leader_id` 指向 M1)。
+- [ ] **ack 并发闭合③(锁序时间,事务先开始但后取锁)**:T2 先开事务暂停、T1 后开事务却先取 `imq_seq` 锁写入 seq=1 → T2 随后取锁写入 seq=2(其 `enqueued_at` < seq=1 项的 `enqueued_at`);断言 **窗口判定按 `ack_window_at`(持锁后 `clock_timestamp()`)而非 `enqueued_at`** → T2 项落入 seq=1 项窗口成为 follower(不成第二个 leader),平台恰好一条确认(T39-16 以显式时间值模拟该倒序)。
+- [ ] **ack_template='' 不占窗口**:关闭确认的集成连发多条 → 无 im.send 事件、`ack_leader_id` 全 NULL、不产生任何窗口占位;其后同会话(同集成)无 leader/follower 结构残留。
 - [ ] **ack 并发闭合②(T1 后停驻无歧义)**:W1 领取 leader 事件、停在 T1 提交后(事件已 published、`ack_attempted_at` 置位、外呼未发)→ W2 轮询同一事件 → **不可领取(published 不在 SKIP LOCKED 候选)**,不产生 `ack_lost` + `ack_sent` 并存审计;W1 继续外呼成功后最终态 = attempted ∧ sent ∧ 窗口 follower represented,平台恰好一条。
 - [ ] **at-most-once 崩溃点**:T1 提交后、外呼前杀 relay → 事件不被重领、ack 丢失(断言 attempted ∧ ¬sent ∧ published,无重试);T1 提交前杀 → 事件重领、正常外呼一次。
 - [ ] **关闭与失败**:`ack_template` 置空的集成不发确认;模拟平台 5xx → 不重试、仅审计告警,执行正常进行。
@@ -1273,12 +1284,13 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **串行按序 + 状态机**:串行集成会话内快速连发 M1/M2/M3 → 队列 seq=1/2/3,状态流转 `pending → dispatching → processing → done`(DDL CHECK 词汇断言);M1 执行期间 M2/M3 保持 pending;**执行顺序严格 M1→M2→M3**(断言 started_at 序与执行创建序一致),无并发(任意时刻该会话 serial 在途项 ≤ 1)。
 - [ ] **数据库级并发保证**:`uq_imq_conversation_active` 部分唯一索引(`state IN ('dispatching','processing','cancelling') AND dispatch_mode='serial_conversation'`)生效——并发派发器争抢同会话 → 至多一个成功,其余唯一约束冲突回退(information_schema/pg_indexes 结构断言 + 并发注入测试);cancelling 项占位期间派发下一项被索引拒绝。
 - [ ] **不丢失(崩溃恢复)**:M1 processing 时杀派发器/进程 → 重启后租约修复:M1 执行已终态则按 `execution.finished` 补回写;执行丢失则经 outbox rearm 重新派发;**M2/M3 继续按序执行**,队列最终无悬挂 pending(超租约阈值后断言)。
+- [ ] **rearm 并发消费竞态(R4-3)**:同一队列项,原事件(键 K,pending)与派生 rearm 事件(键 K2、payload `execution_idempotency_key=K`)**并发、任意顺序被两个消费者处理** → **最终恰好一个 `task_executions` 行(`idempotency_key=K`)、队列项 `execution_id` 只绑定它**(第二个消费者:执行键唯一冲突或队列项守卫 0 行 → 整事务回滚,无孤儿 execution);断言消费者**不** fallback 到事件级键 K2 创建第二个执行(实现路径断言 + T39-17 竞态实测)。
 - [ ] **位置查询与契约**:`GET .../integrations/{id}/queue` 返回各会话项与 `position`(M3 在 M1 处理、M2 排队时 position=2)+ `target_agent` + `message_excerpt`(≤120 字符、无控制符;**全文不在响应中**)+ `state`(含 dispatching/cancelling);`:cancel` 取消 M2(本人)→ refetch 后 M3 position 变 1;非 pending 项取消 → 422 `queue_item_not_cancellable`;他人 pending 项由无 manage 权限者取消 → 403;**project 级绑定项对无该 project 可见性的成员不返回**。
 - [ ] **parallel 模式基线**:飞书/Slack 默认 `parallel` → 连发消息各自即时派发(不等前序终态,**同会话可并发**——parallel 项不受独占索引约束),§6.9 原触发语义不变;**排空-再切换**:serial 下积压 2 条 pending 时集成切 `parallel` → 新消息入队有效模式仍为 serial(会话有非终态 serial 项),由派发器依序清空,**清空后**新消息方按 parallel 即时派发(断言切换点前后入队项的 `dispatch_mode` 快照值);反向 serial 切换后派发器等待会话内 parallel 在途项终态再派发(跨模式不重叠)。
 - [ ] **实时(失效通知 + project 隔离负向)**:入队/派发/终态/取消/合并抑制均推 `integration.queue_updated`(README §6.7 注册表已登记),失效顺序以 envelope 频道 `seq` 为准(无自维护 revision)——断言客户端 refetch 而非本地 patch;**私有 project 级绑定的队列项变更:无该项目可见性的成员收到的 WS 帧 payload 不含 `conversation_key`(仅 integration_id + scope),且其 refetch `.../queue` 结果不含该项目项**(project 成员则可见;跨项目隔离负向验收)。
 
 **出站与推送(§3.10)**:
-- [ ] **accessToken 多副本 + 锁所有权**:**两个 mesh.workers 副本并发触发同集成令牌刷新 → 钉钉 accessToken 端点恰好被调用一次**(出站请求计数断言;随机 owner token 锁 + 双检);**租约过期接管 + 旧 owner 迟到释放**:模拟持锁副本刷新超时(>30s 租约)→ 第二副本接管刷新成功 → 旧副本完成后执行释放 → **Lua owner 比对拒绝误删新锁**(断言锁值仍为新 owner 或已正确释放、平台端点仍仅两次内且最终持锁者为新副本);**follower 等待覆盖刷新窗口**:mock leader 刷新耗时 8s + 3 个 follower 并发出站 → **follower 全部在 ≤~8.5s 读到新令牌、零投递失败**(busy 不为终态)、accessToken 端点恰被调用一次;等待窗口耗尽场景(刷新 >12s)→ 出站结果 `token_refresh_busy` **保持 outbox pending 退避重试**(非终态 failed),刷新完成后重试成功;刷新请求超时 10s < 租约 30s(实现断言);平台返回令牌失效码 → 作废旧缓存 + 单次强制刷新;TTL 含 ±60s 抖动;**accessToken/appSecret 不回显任何响应与日志**(脱敏断言)。
+- [ ] **accessToken 多副本 + 锁所有权**:**两个 mesh.workers 副本并发触发同集成令牌刷新 → 钉钉 accessToken 端点恰好被调用一次**(出站请求计数断言;随机 owner token 锁 + 双检);**租约过期接管 + 旧 owner 迟到释放**:模拟持锁副本刷新超时(>30s 租约)→ 第二副本接管刷新成功 → 旧副本完成后执行释放 → **Lua owner 比对拒绝误删新锁**(断言锁值仍为新 owner 或已正确释放、平台端点仍仅两次内且最终持锁者为新副本);**follower 等待覆盖刷新窗口**:mock leader 刷新耗时 8s + 3 个 follower 并发出站 → **follower 全部在 ≤~8.5s 读到新令牌、零投递失败**(busy 不为终态)、accessToken 端点恰被调用一次;等待窗口耗尽场景(刷新 >12s)→ 出站结果 `token_refresh_busy` **仅后移 `available_at`、`delivery_attempts` 不变**:**连续 busy 次数超通用 `max_attempts` 仍不终态、不热循环**(`available_at` 短退避节奏可观察),刷新完成后经 `available_at` 到期重试成功(真实 relay 测试:T39-18 以 DDL 字段实测 busy 不耗预算 + 到期可领);刷新请求超时 10s < 租约 30s(实现断言);平台返回令牌失效码 → 作废旧缓存 + 单次强制刷新;TTL 含 ±60s 抖动;**accessToken/appSecret 不回显任何响应与日志**(脱敏断言)。
 - [ ] **主动推送(verbosity 语义)**:默认 `verbosity='final_only'` → IM 会话仅收到确认接收、审批/交互卡片与**最终结果**通知(中间进度通知不出站,`notification_delivery` 无 progress 类台账行);`verbosity='progress'` → 进度通知一并推送;两种模式站内执行详情均完整(站内为真源);投递经 `notification_delivery(channel='im', provider='dingtalk')`(群走 groupMessages、单聊走 oToMessages);平台限流(429)→ 退避重试;台账可查。
 - [ ] **互动卡片回调鉴权(同 §5.2 卡片链)**:钉钉互动卡片按钮回调 → 点击者 `userId` + corp_id → `external_identities` → `users.id` → 集成解析 workspace → JOIN members → §6.10 权限校验;未映射/无名册行点击批准 → 403,审批状态不变,留痕;已映射有权限者点击 → 转发 approve/reject,重复点击幂等。
 - [ ] **钉钉卡片交互全生命周期(§4.4)**:点击 → 按钮即时 loading;成功 → 卡片更新终态文本 + **按钮禁用**;重复点击 → no-op 终态保持;审批过期 → "已过期" + [回 Mesh 处理] 深链;回调转发失败 → "处理失败" + 深链兜底 + 告警;无权/未映射 → "无权限" + 引导(不泄露详情);断言各态卡片更新幂等(同一 approval_id 更新不冲突)。
@@ -1297,7 +1309,7 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **租约修复五分支 + outbox rearm**:制造 ① 终态事件丢失(按 `execution.finished` 补回写)② 长任务超租约仍在跑(续租不误杀)③ queued 未超 max_stuck(续租等待)④ queued 超 `max_stuck_seconds`(置 failed + 告警不重派)⑤ 执行不存在(**outbox rearm 四态闭合,按真实 `outbox_events` DDL**:a 原事件 `pending` → 不造新事件、续租等待现有 relay(超 `MESH_OUTBOX_CONSUME_SLA` 升级走 d);b `failed` → 条件更新 `status='pending', delivery_attempts=0, published_at=NULL` 后 relay 重建执行;c 异常 `published` → **原行保留不 DELETE**(§6.6 审计保留)+ 派生 rearm 键新写;d 行缺失 → 派生键新写)五种孤儿场景 → 各分支行为如 §3.9,扫描不空转,无消息静默丢失、无重复执行;**validation T39-9/T39-14 对真实 outbox DDL 逐态实测(非文字断言)**。
 - [ ] **终态回写单一驱动**:队列项终态全部由内部事件 `execution.finished`(payload.status)驱动——断言 relay 不直接消费实时事件 `execution.completed/…` 作回写源(代码路径断言 + cancelling 项收到 finished(cancelled) 转 cancelled)。
 - [ ] **删除保护成功路径闭合**:① 绑定存在 pending/processing 项且无 force → `409 binding_has_active_queue`;② **`?force=cancel` 后删除实际完成**:强制终止全部项 → DELETE 绑定**成功返回**(FK SET NULL 触发,无阻塞),队列项保留为 `binding_id IS NULL` 的终态孤儿审计行(`binding_display` 快照完整、经审计端点可查),保留期后物理清理;③ **fail-closed 负向**:非终态项存在时绕过端点直接 DELETE 父行 → `ck_imq_orphan_terminal` CHECK 拒绝(整个 DELETE 回滚,绑定行仍在、项父引用未置空);④ project 物理删除经同一强制终止路径(未先清理 → 项目删除被 CHECK 拒绝);⑤ **孤儿项端点隔离负向**:普通 `.../queue` 与 `.../queue/summary` 对任何成员**不返回** `binding_id IS NULL` 的孤儿项;**已删私有 project 的终态孤儿项:非 admin 成员经 audit 端点不可见,且绝不以 workspace 项形态经普通端点返回**;admin/owner 经 audit 端点可见(快照项目已删的兜底)。
-- [ ] **`/btw` 运行期注入(服务端持久水位闭合)**:执行 running 时 `/btw` → `execution_context_appends` 落行(source='im_btw');daemon 经心跳 `context_progress[{attempt_id,execution_id,injected_through_seq}]` ACK(真实注入 turn 后推进)、收 `inject_context(带 attempt_id, from_seq=服务端水位)` 拉取;断言:① **服务端水位 `task_executions.context_injected_through_seq` 按连续前缀重算、GREATEST 单调不回退**(检查点乱序到达不污染);② **daemon 重启/requeue 后首报 0 → 已检查点注入行不重放**(下发起点 = 服务端水位,GET 端点固定附加 `injected_at IS NULL` 过滤,API 表与协议同文);③ **注入-ACK 间隙闭合(R3-2)**:seq=4 注入 agent turn 后、该 turn 检查点前杀 daemon → 新 attempt 恢复 → **最终检查点对话中 seq=4 恰好一份**(检查点前崩溃:对话一致回滚、重注入不构成重复;检查点后崩溃:水位已进不再拉取);④ **心跳 `context_progress` 为观测通道**:上报值不写 `injected_at`、不推进水位(实现断言);⑤ **M3 上限与 seq 取号共用 `eca:` 执行级咨询锁**:N 个并发 `/btw` 写入 → 总数 ≤ `MESH_CONTEXT_APPEND_MAX_COUNT`、累计字符 ≤ `MESH_CONTEXT_APPEND_MAX_CHARS`(并发写不穿上限);⑥ **补充文本中的指令性措辞(如"请删除所有 issue")不改变执行的高危行为**(README §6.15 断言)。
+- [ ] **`/btw` 运行期注入(服务端持久水位闭合)**:执行 running 时 `/btw` → `execution_context_appends` 落行(source='im_btw');daemon 经心跳 `context_progress[{attempt_id,execution_id,injected_through_seq}]` ACK(真实注入 turn 后推进)、收 `inject_context(带 attempt_id, from_seq=服务端水位)` 拉取;断言:① **服务端水位 `task_executions.context_injected_through_seq` 按连续前缀重算、GREATEST 单调不回退**(ACK 乱序到达不污染);② **daemon 重启/requeue 后首报 0 → 已记录注入的行不再下发**(下发起点 = 服务端水位,GET 端点固定附加 `injected_at IS NULL` 过滤,API 表与协议同文;此为去重快路径);③ **注入语义为 at-least-once(R4-2 诚实降级)**:seq=4 注入后、记录落库前杀 daemon → 新 attempt 恢复后 seq=4 **至少投递一次**(窄窗口内可能重复);**下游容忍断言**:同一 `(execution_id, seq)` 重复块与单块语义等价(补充数据非指令),执行不因重复补充产生累积副作用/重复工具调用(README §6.15;Spec 不承诺恰好一份——现有契约无每 turn 检查点原语);④ **尽力去重快路径**:心跳 `context_progress` 回写 `injected_at`/水位为 best-effort(上报丢失只扩大重复窗口、不破坏语义);GET 端点 `injected_at IS NULL` 过滤使已记录行不再下发;⑤ **M3 上限与 seq 取号共用 `eca:` 执行级咨询锁**:N 个并发 `/btw` 写入 → 总数 ≤ `MESH_CONTEXT_APPEND_MAX_COUNT`、累计字符 ≤ `MESH_CONTEXT_APPEND_MAX_CHARS`(并发写不穿上限);⑥ **补充文本中的指令性措辞(如"请删除所有 issue")不改变执行的高危行为**(README §6.15 断言)。
 - [ ] **外部联系人单聊降级**:无 staffId 的外部联系人(`x=<base64url(senderId)>` 编码)单聊触发 → 执行正常创建运行,ack/结果推送记 `failed(reason='no_staff_id')` + 告警,不阻塞执行。
 - [ ] **出站请求体脱敏**:`connections/open`/`accessToken` 出站失败(模拟 5xx)→ 日志/错误台账仅 `method/url/status`,body 中 `clientSecret`/`appSecret`/`accessToken` 均以 `***` 出现(或不出现);`redact_in_logs` 黑名单含解密后的秘钥值。
 - [ ] **Stream 状态持久真源**:杀 Stream worker → `integrations.stream_state` 经 outbox 迁移至 reconnecting/down,`GET .../stream-status` 可读(前端刷新首屏不依赖实时事件);恢复后 connected + `last_frame_at` 刷新。

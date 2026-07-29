@@ -1498,10 +1498,11 @@ CREATE TABLE outbox_events (
   idempotency_key TEXT NULL UNIQUE,
   status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','published','failed')),
   delivery_attempts INT NOT NULL DEFAULT 0,
+  available_at    TIMESTAMPTZ NOT NULL DEFAULT now(),   -- 最早可领取时刻(退避/busy 后移;README §6.6 权威,MES-82 R4-4)
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at    TIMESTAMPTZ NULL
 );
-CREATE INDEX idx_outbox_pending ON outbox_events (created_at) WHERE status = 'pending';
+CREATE INDEX idx_outbox_pending ON outbox_events (available_at, created_at) WHERE status = 'pending';
 
 CREATE TABLE realtime_channels (
   channel      TEXT NOT NULL,
@@ -4449,6 +4450,7 @@ CREATE TABLE integration_message_queue (
   message_excerpt    TEXT NOT NULL DEFAULT '',
   sender_identity_key TEXT NOT NULL DEFAULT '',
   ack_leader_id      UUID NULL,                    -- 窗口归属:leader 自指 / follower 指向 leader(摄取事务按 seq 确定,§3.8)
+  ack_window_at      TIMESTAMPTZ NOT NULL DEFAULT now(),  -- 持锁后 clock_timestamp() 的锁序窗口时间(§3.8;协议显式写入,DEFAULT 兜底)
   ack_attempted_at   TIMESTAMPTZ NULL,             -- leader 外呼闸门(§3.8)
   ack_sent_at        TIMESTAMPTZ NULL,             -- 平台确认(仅 leader)
   ack_represented_at TIMESTAMPTZ NULL,             -- 被抑制项:已被 leader 代表(非"已发送")
@@ -4815,6 +4817,102 @@ BEGIN
            WHERE provider = 'dingtalk' AND provider_tenant_key = 'ding-corp-e1') = 2,
          'T39-15d FAIL: staffId 形键与编码键应为两个独立三元组(唯一约束下互不坍缩)';
   RAISE NOTICE 'PASS T39-15: 键空间结构不相交(编码键含 = / staffId 字符集无 = / 守卫拒绝 / 三元组独立)';
+
+  -- T39-16:窗口时间按锁序(ack_window_at,非事务开始时刻的 enqueued_at)
+  -- 模拟:T2 事务先开始(enqueued_at 较早)但后取锁 → 其 ack_window_at 落在 T1 窗口内 → follower
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b5', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidWIN');
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_leader_id, enqueued_at, ack_window_at)
+  VALUES ('82000000-0000-0000-0000-0000000000d1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidWIN', 1, 'serial_conversation', 'processing',
+          '82000000-0000-0000-0000-0000000000d1',
+          now(), now()),                                              -- T1:先取锁,leader 自指
+         ('82000000-0000-0000-0000-0000000000d2', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidWIN', 2, 'serial_conversation', 'pending',
+          '82000000-0000-0000-0000-0000000000d1',
+          now() - interval '10 seconds', now() + interval '1 second'); -- T2:enqueued_at 更早(事务先开始),ack_window_at 在 T1 窗口内
+  -- 按锁序时间判定:T2 的 ack_window_at ∈ [T1.ack_window_at, T1+5s) → follower 指向 T1
+  ASSERT (SELECT d2.ack_window_at BETWEEN d1.ack_window_at AND d1.ack_window_at + interval '5 seconds'
+            FROM integration_message_queue d1, integration_message_queue d2
+           WHERE d1.id = '82000000-0000-0000-0000-0000000000d1'
+             AND d2.id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: 锁序时间应使后取锁项落入先取锁项窗口';
+  ASSERT (SELECT d2.enqueued_at < d1.enqueued_at
+            FROM integration_message_queue d1, integration_message_queue d2
+           WHERE d1.id = '82000000-0000-0000-0000-0000000000d1'
+             AND d2.id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: 反例场景应满足 enqueued_at 倒序(事务先开始但后取锁)';
+  ASSERT (SELECT ack_leader_id = '82000000-0000-0000-0000-0000000000d1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000d2'),
+         'T39-16 FAIL: enqueued_at 倒序项按锁序窗口仍应为 follower(不产生第二个 leader)';
+  RAISE NOTICE 'PASS T39-16: 窗口时间按锁序 ack_window_at(事务先开始但后取锁 → 仍恰好一个 leader)';
+
+  -- T39-17:rearm 并发消费竞态——原事件(键 K)与派生事件(键 K2、payload 执行键 K)恰好建一个 execution
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{"execution_idempotency_key":"mes82-exec-key-K"}'::jsonb,
+          'mes82-orig-K', 'pending'),
+         (v_ws, 'execution.enqueue', '{"execution_idempotency_key":"mes82-exec-key-K"}'::jsonb,
+          encode(digest('mes82-orig-K' || '|rearm|' || 'item-race', 'sha256'), 'hex'), 'pending');
+  -- 消费者 A(任意顺序之一):取 payload.execution_idempotency_key=K 建执行 + 同事务绑定队列项
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state)
+  VALUES ('82000000-0000-0000-0000-0000000000e1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b5',
+          'dingtalk:ding-corp-mes82:cidRACE', 1, 'serial_conversation', 'dispatching');
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES ('82000000-0000-0000-0000-0000000000f1', v_ws, v_agent, NULL,
+          'integration', 'mes82-exec-key-K', '{}', '{}', '[]', '{}');
+  UPDATE integration_message_queue SET state = 'processing',
+         execution_id = '82000000-0000-0000-0000-0000000000f1'
+   WHERE id = '82000000-0000-0000-0000-0000000000e1' AND state = 'dispatching' AND execution_id IS NULL;
+  -- 消费者 B(另一事件,执行键同为 K):建执行应撞唯一约束 → 回滚,不产生孤儿 execution
+  BEGIN
+    INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                                 task_spec, label_requirements, required_capabilities, config_snapshot)
+    VALUES ('82000000-0000-0000-0000-0000000000f2', v_ws, v_agent, NULL,
+            'integration', 'mes82-exec-key-K', '{}', '{}', '[]', '{}');
+    RAISE EXCEPTION 'T39-17 FAIL: 同执行级幂等键 K 的第二个 execution 未被唯一约束拒绝';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  -- 队列项守卫:已绑定项不再接受第二次绑定(状态守卫 0 行)
+  UPDATE integration_message_queue SET execution_id = '82000000-0000-0000-0000-0000000000f2'
+   WHERE id = '82000000-0000-0000-0000-0000000000e1' AND state = 'dispatching' AND execution_id IS NULL;
+  ASSERT (SELECT count(*) FROM task_executions WHERE idempotency_key = 'mes82-exec-key-K') = 1,
+         'T39-17 FAIL: 并发消费应恰好一个 execution(键 K 唯一)';
+  ASSERT (SELECT execution_id = '82000000-0000-0000-0000-0000000000f1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000e1'),
+         'T39-17 FAIL: 队列项只绑定唯一 execution(守卫阻止第二次绑定)';
+  RAISE NOTICE 'PASS T39-17: rearm 并发消费竞态(键分层 + 队列项守卫 → 恰好一个 execution、无孤儿)';
+
+  -- T39-18:busy 不消耗失败预算(available_at 后移、delivery_attempts 不变、不终态、不热循环)
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'im.send', '{"kind":"ack"}'::jsonb, 'mes82-busy-event', 'pending');
+  -- 模拟连续 busy 超过通用 max_attempts(假设 8 次):每次仅后移 available_at,不递增 attempts
+  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
+   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
+   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  UPDATE outbox_events SET available_at = now() + interval '2 seconds'
+   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending';
+  ASSERT (SELECT status = 'pending' AND delivery_attempts = 0
+            FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: busy 不得递增 delivery_attempts、不得终态';
+  ASSERT (SELECT available_at > now() FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: busy 应后移 available_at(防热循环:领取条件 available_at <= now() 暂不满足)';
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending' AND available_at <= now()) = 0,
+         'T39-18 FAIL: available_at 未到期的事件不得被领取(不热循环)';
+  -- 刷新完成后 available_at 到期 → 可领取并成功 published
+  UPDATE outbox_events SET available_at = now() - interval '1 second'
+   WHERE idempotency_key = 'mes82-busy-event';
+  UPDATE outbox_events SET status = 'published', published_at = now()
+   WHERE idempotency_key = 'mes82-busy-event' AND status = 'pending' AND available_at <= now();
+  ASSERT (SELECT status = 'published' AND delivery_attempts = 0
+            FROM outbox_events WHERE idempotency_key = 'mes82-busy-event'),
+         'T39-18 FAIL: available_at 到期后应成功 published(全程未消耗失败预算)';
+  RAISE NOTICE 'PASS T39-18: busy 退避落真实 DDL(available_at 后移、不耗预算、不热循环、到期成功)';
 END $$;
 ROLLBACK;
 -- T39:end

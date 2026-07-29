@@ -261,7 +261,7 @@ erDiagram
 | cancel_requested_at | timestamptz | NULL | - | 取消请求时间 |
 | result | jsonb | NULL | - | 最终结果摘要（来自成功 attempt） |
 | failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / awaiting_approval / approval_rejected / approval_expired / **cancelled_by_command**）；`awaiting_approval` = 审批挂起时当前 attempt 的失败分类；`cancelled_by_command` = IM 命令平面 `/stop` 触发的用户取消（integrations.md §3.7，MES-82） |
-| context_injected_through_seq | bigint | NOT NULL DEFAULT 0 | - | **运行期上下文追加的服务端持久连续水位（MES-82）**：已连续注入完成的最大 append seq（连续前缀，GREATEST 单调不回退）；`inject_context` 下发起点以此为准（daemon 重启首报 0 不重放已注入行，见「运行期上下文追加」） |
+| context_injected_through_seq | bigint | NOT NULL DEFAULT 0 | - | **运行期上下文追加的服务端持久连续水位（MES-82）**：已连续注入完成的最大 append seq（连续前缀，GREATEST 单调不回退）；`inject_context` 下发起点以此为准（daemon 重启首报 0 经 GREATEST 忽略，已记录注入的行不再下发——去重快路径，非恰好一次承诺，见「运行期上下文追加」） |
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
 > **领取 / 租约 / 分支 / 日志 / 单次结果等物理字段不在本表**——全部下沉到 `execution_attempts`；`retry_count` 由 `COUNT(execution_attempts)-1` 派生，不再存冗余列。
@@ -590,7 +590,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | POST | `/api/v1/daemon/attempts/{attempt_id}:renew-lease` | 租约续期 |
 | POST | `/api/v1/daemon/attempts/{attempt_id}/credentials:refetch` | **凭证重取**（响应丢失/网络抖动后；仅租约有效且 attempt 在途时可调用，发新 envelope 撤旧，每 attempt 上限 3 次，见 §2.2 凭证协议） |
 | POST | `/api/v1/daemon/executions/{id}/approvals` | **高风险工具审批请求**：运行中工具命中 `confirm_required` 时创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，逻辑执行转 `awaiting_approval`；批准结果经心跳下行/轮询回传，执行回 `queued` 由新 attempt 凭 `resume_context` 续跑 |
-| GET | `/api/v1/daemon/executions/{id}/context-appends` | **运行期上下文追加拉取**（MES-82）：`?since_seq=N` 返回 `execution_context_appends` 中 **seq > N 且 `injected_at IS NULL`** 的追加行（按 seq 序；已注入行绝不返回，与协议同文无分叉）；daemon 收心跳 `inject_context` 指令后调用，下一 turn 边界注入、随该 turn 检查点持久化（见「运行期上下文追加」） | daemon |
+| GET | `/api/v1/daemon/executions/{id}/context-appends` | **运行期上下文追加拉取**（MES-82）：`?since_seq=N` 返回 `execution_context_appends` 中 **seq > N 且 `injected_at IS NULL`** 的追加行（按 seq 序；已注入行绝不返回，与协议同文无分叉）；daemon 收心跳 `inject_context` 指令后调用，下一 turn 边界注入（at-least-once，注入后尽力记录；见「运行期上下文追加」） | daemon |
 
 > 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配、`workspace_id` 由 token 解析注入（**不以请求体为准**），且仅允许操作本 runtime 与其领取的 attempt。
 
@@ -648,9 +648,9 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 }
 ```
 
-> **请求字段**：`inflight`（在途 **attempt UUID** 列表）保持既有语义，**仅作诊断**；**`context_progress`（MES-82 新增）为观测通道**：daemon 按在途 attempt 逐条上报 `{attempt_id, execution_id, injected_through_seq}`（本地视角已注入的最大 seq），供活跃看板与 `inject_context` 下发判据；**不写 `injected_at`、不推进服务端水位**（注入记录唯一真源是 turn 检查点，见「运行期上下文追加」——消除「已注入、ACK 前崩溃」重放间隙）。缺省（旧 daemon 不上报）不影响正确性（服务端按自身水位下发）。
+> **请求字段**：`inflight`（在途 **attempt UUID** 列表）保持既有语义，**仅作诊断**；**`context_progress`（MES-82 新增）为 best-effort 记录通道**：daemon 按在途 attempt 逐条上报 `{attempt_id, execution_id, injected_through_seq}`（本地视角已注入的最大 seq）；服务端经归属校验（陈旧/已回收 attempt 忽略）后回写 `injected_at` 并推进水位——**尽力去重,非正确性保证**（上报丢失只扩大重复窗口，at-least-once 语义不受影响，见「运行期上下文追加」）。缺省（旧 daemon 不上报）不影响语义（仅失去去重快路径）。
 >
-> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现 seq 大于该执行已上报 `injected_through_seq` 的新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对持有该执行在途 attempt 的 runtime 下发 `{type:'inject_context', attempt_id, execution_id, from_seq}`（**`from_seq` = 服务端持久水位 `task_executions.context_injected_through_seq`，不以 daemon 上报值为下发起点**——daemon 重启首报 0 不引发重放）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点；**端点固定附加 `injected_at IS NULL` 过滤，已注入行绝不返回**）取得待注入行，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次）；**注入记录随该 turn 检查点同事务持久化（`injected_at` + 水位），心跳上报仅为观测**（不写 `injected_at`）。详见本节「运行期上下文追加」。
+> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现 seq 大于该执行已上报 `injected_through_seq` 的新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对持有该执行在途 attempt 的 runtime 下发 `{type:'inject_context', attempt_id, execution_id, from_seq}`（**`from_seq` = 服务端持久水位 `task_executions.context_injected_through_seq`，不以 daemon 上报值为下发起点**——daemon 重启首报 0 不引发重放）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点；**端点固定附加 `injected_at IS NULL` 过滤，已注入行绝不返回**）取得待注入行，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次）；**投递语义为 at-least-once**（注入后经心跳尽力记录 `injected_at`/水位作去重快路径，窄崩溃窗口内允许重复，下游容忍写死）。详见本节「运行期上下文追加」。
 
 **运行期上下文追加（MES-82；integrations.md §3.7 `/btw` 的落点机制）**：
 
@@ -664,13 +664,13 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | seq | bigint | NOT NULL，`UNIQUE (execution_id, seq)` | 执行内单调递增（插入时执行维度咨询锁取号，同 integrations.md §2.10 协议） |
 | source | text | NOT NULL，CHECK IN ('im_btw') | 追加来源（本期仅 IM `/btw`；扩展新来源需登记本词汇） |
 | payload | jsonb | NOT NULL | `{sender_user_id, sender_display, text(≤4000 字符截断), received_at, conversation_ref}` |
-| injected_at | timestamptz | NULL | **随承载该注入的 agent turn 检查点同事务记录**的时刻（唯一写入路径见下「注入持久化」；NULL = 已写入待注入；执行终态时仍未注入的行随执行审计保留） |
+| injected_at | timestamptz | NULL | daemon 注入后经心跳 best-effort 记录的时刻（**去重快路径，非 exactly-once 真源**，见「注入投递语义」；NULL = 未记录/待投递；执行终态时仍未注入的行随执行审计保留） |
 | created_at | timestamptz | NOT NULL DEFAULT now() | |
 
 - **写入方与准入**：集成平台命令平面以服务层调用写入（不经 daemon HTTP）；**仅对 `queued/claimed/running` 的执行可写；`cancelling` 的执行不再接受追加**（integrations.md §3.7：渲染"任务正在停止，无法补充"反馈），终态执行写入 → `422`（渲染"任务已结束"）。**每执行追加上限（M3，成本放大残余面护栏）与 seq 取号共用同一把执行级事务咨询锁**：写入事务先 `pg_advisory_xact_lock(hashtext('eca:' || execution_id))`，锁内**依次**校验 `MESH_CONTEXT_APPEND_MAX_COUNT`（默认 20 条，COUNT(*)）与 `MESH_CONTEXT_APPEND_MAX_CHARS`（默认 32000 字符，SUM 累计 payload.text 长度）→ 超限拒绝写入 `422 append_limit_exceeded`（integrations.md 渲染"补充已达上限"反馈 + 审计）→ 通过则 `seq = COALESCE(max(seq),0)+1` INSERT（锁保证计数校验与取号原子，并发写不穿 20/32000 上限）。
-- **注入持久化（exactly-once 唯一机制：绑定 turn 检查点，写死）**：daemon 注入 = 将 append 块并入下一个 agent turn（turn N）的**输入**，turn N 的**检查点写路径（现有 resume 机制：`resume_context` 每 turn 检查点，与审批续跑同一机制）携带 `injected_context_seqs: [seq…]`**；服务端检查点写事务**同事务**为这些 seq 回写 `UPDATE execution_context_appends SET injected_at=now() WHERE execution_id=:e AND seq = ANY(:seqs) AND injected_at IS NULL`（按 `(execution_id, seq)` 幂等），并重算推进连续水位（见下）。**心跳 `context_progress` 降级为观测通道**：仅用于活跃看板与 `inject_context` 下发判据，**不写 `injected_at`、不推进水位**——「已注入、ACK 前崩溃」间隙由此消失：注入记录的唯一落点是与对话状态同生死的检查点。
-- **崩溃一致性（对已检查点对话状态恰好一次）**：turn N 检查点**前**崩溃 → 新 attempt（本机重启或 requeue 到他机）自 turn N-1 检查点恢复，**对话状态一致回滚**，服务端水位未进、append 行仍 `injected_at IS NULL` → 重新拉取并注入重跑的 turn N（回滚后的对话无该块，**重注入不构成重复**）；turn N 检查点**后**崩溃 → 水位已进、不再拉取，对话已含该块。**任何崩溃点，最终检查点对话中每条 append 恰好一份**（不重放、不丢失）。
-- **服务端持久连续水位（重启安全真源）**：`task_executions.context_injected_through_seq BIGINT NOT NULL DEFAULT 0` = 该执行**已连续注入完成**的最大 seq（连续前缀：所有 seq ≤ W 的行 `injected_at IS NOT NULL`）。检查点写事务内以**找首个缺口**重算：`W = COALESCE((SELECT min(seq) FROM execution_context_appends WHERE execution_id=:e AND injected_at IS NULL), (SELECT COALESCE(max(seq),0)+1 …)) - 1`，`UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, W)`——**GREATEST 保证单调不回退**（检查点乱序到达亦不污染）。
+- **注入投递语义（at-least-once，诚实降级写死；R4-2）**：本 Spec **不承诺「不重放 / 恰好一份」**——现有 runtime 契约只有审批挂起/续跑路径的 `resume_context`，**没有每 turn 对话检查点原语**（无 checkpoint 表/提交 API/已提交指针/attempt fencing），故注入记录无法与"对话状态"同事务原子发布；与其虚构机制，**显式降级为 at-least-once**：每条 append 对执行**至少投递一次**，窄崩溃窗口（已注入对话、记录落库前崩溃）内**可能重复投递**。**下游容忍写死**：append 块是**不可信补充数据**（README §6.15），同一 `(execution_id, seq)` 的重复块与单块**语义等价**（同一条"顺便补充"重复展示，不是两条不同指示）；**注入不是工具调用、不触发执行、不累积副作用**——agent 不得把重复补充块解读为"强调/执行两次"，高风险动作仍只经 `confirm_required` 闸门（与补充次数无关）。
+- **尽力去重（缩小重复窗口，非正确性保证）**：① daemon 进程内 `(execution_id, seq)` 已注入集合（正常运行期不重复注入）；② 注入完成后 daemon 经心跳 `context_progress` 上报，服务端回写 `injected_at` 并推进水位（**best-effort 记录：上报/回写丢失只扩大重复窗口，不破坏语义**）；③ `GET …?since_seq=N` 固定附加 `injected_at IS NULL` 过滤（已记录注入的行不再下发）；④ requeue 到新 attempt：未记录行重新投递（at-least-once），已记录行不投递。
+- **服务端连续水位（去重快路径，best-effort）**：`task_executions.context_injected_through_seq BIGINT NOT NULL DEFAULT 0` = 该执行**已连续记录注入完成**的最大 seq（连续前缀：所有 seq ≤ W 的行 `injected_at IS NOT NULL`）。心跳 ACK 处理事务内以**找首个缺口**重算：`W = COALESCE((SELECT min(seq) FROM execution_context_appends WHERE execution_id=:e AND injected_at IS NULL), (SELECT COALESCE(max(seq),0)+1 …)) - 1`，`UPDATE task_executions SET context_injected_through_seq = GREATEST(context_injected_through_seq, W)`——**GREATEST 保证单调不回退**；水位与 `injected_at` 是缩小重复窗口的快路径，**不是 exactly-once 真源**（真源语义见上「at-least-once」条）。
 - **下行起点以服务端水位为准**：`inject_context` 触发条件 = 存在 `seq > context_injected_through_seq AND injected_at IS NULL` 的行；**下发 `from_seq = context_injected_through_seq`（服务端水位，不以心跳上报值为起点）**；`GET …?since_seq=N` 端点**固定附加 `injected_at IS NULL` 过滤**（API 表与协议同文，无两份契约），已注入行绝不返回。
 - **daemon 侧快路径去重**：daemon 进程内以 `(execution_id, seq)` 集合避免重复拉取——**仅快路径，正确性由检查点绑定与服务端 `injected_at` 过滤保证**；检查点前崩溃恢复时多拉的行恰是回滚对话所缺，重注入为正确行为。
 - **边界**：追加不是 `config_snapshot` 的一部分- **边界**：追加不是 `config_snapshot` 的一部分（不参与 §6.11 冻结）；执行**终态**（cancelled/failed/completed/timeout）时未注入的追加行保留审计（`injected_at` 永 NULL），不再投递；追加行的删除仅随执行级联（ON DELETE CASCADE），不提供单独删除端点（审计完整性）。
