@@ -71,17 +71,29 @@ def test_schema_r2_validation_runs_124_assertions_green():
     create = _run_psql("postgres", "-c", f"CREATE DATABASE {VALIDATION_DB}")
     assert create.returncode == 0, create.stderr
 
-    result = _run_psql(
-        VALIDATION_DB, "-v", "ON_ERROR_STOP=1", "-f", _validation_sql_path()
-    )
-    # ON_ERROR_STOP=1: any failing assertion (RAISE EXCEPTION) exits non-zero.
-    assert result.returncode == 0, f"validation script failed:\n{result.stderr[-4000:]}"
+    try:
+        result = _run_psql(
+            VALIDATION_DB, "-v", "ON_ERROR_STOP=1", "-f", _validation_sql_path()
+        )
+        # ON_ERROR_STOP=1: any failing assertion (RAISE EXCEPTION) exits non-zero.
+        assert result.returncode == 0, f"validation script failed:\n{result.stderr[-4000:]}"
 
-    combined = result.stderr + result.stdout
-    # Each assertion emits exactly one "NOTICE:  PASS ..." line.
-    passes = re.findall(r"NOTICE:\s+PASS ", combined)
-    fails = [line for line in combined.splitlines() if "FAIL" in line]
-    assert not fails, f"validation reported failures: {fails[:5]}"
-    assert len(passes) == EXPECTED_PASS_COUNT, (
-        f"expected {EXPECTED_PASS_COUNT} PASS assertions, got {len(passes)}"
-    )
+        combined = result.stderr + result.stdout
+        # Each assertion emits exactly one "NOTICE:  PASS ..." line. Failures are
+        # raised as EXCEPTION (aborting under ON_ERROR_STOP, caught by the exit
+        # code above), so this FAIL tripwire only guards against future PASS copy
+        # that happens to contain "FAIL" — hence the anchored NOTICE:\s+FAIL match
+        # instead of a broad substring.
+        passes = re.findall(r"NOTICE:\s+PASS ", combined)
+        fails = [
+            line for line in combined.splitlines() if re.search(r"NOTICE:\s+FAIL", line)
+        ]
+        assert not fails, f"validation reported failures: {fails[:5]}"
+        assert len(passes) == EXPECTED_PASS_COUNT, (
+            f"expected {EXPECTED_PASS_COUNT} PASS assertions, got {len(passes)}"
+        )
+    finally:
+        # Drop the scratch DB so long-lived dev hosts do not accumulate residue.
+        # CI runs on a disposable service container, so this is a no-op there
+        # (the next run also starts from DROP DATABASE IF EXISTS).
+        _run_psql("postgres", "-c", f"DROP DATABASE IF EXISTS {VALIDATION_DB} WITH (FORCE)")
