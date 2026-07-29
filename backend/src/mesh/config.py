@@ -44,6 +44,17 @@ SUPPORTED_THEMES: tuple[str, ...] = ("light", "dark", "system")
 # startup (fail-safe, mirroring the auth_mode pattern).
 DEV_JWT_SECRET = "mesh-dev-insecure-signing-key-do-not-use-in-production"
 
+# A clearly-marked development HMAC key for search cursor signing
+# (search-command-palette.md §3.2). Production MUST override
+# ``MESH_SEARCH_CURSOR_SECRET``: :func:`validate_search_settings` refuses this
+# default when ``auth_mode=production`` (mirrors the DEV_JWT_SECRET pattern —
+# auth.md §5.5, keys not in code/repo). The exposure ceiling is low (cursors
+# only carry keyset page position; all visibility filtering runs independently
+# inside each entity's SQL WHERE clause, so a forged cursor can never read
+# resources the caller may not already see) — the guard is defense-in-depth
+# against cursor forgery/replay with a public key.
+DEV_SEARCH_CURSOR_SECRET = "mesh-dev-search-cursor-secret-do-not-use-in-production"
+
 
 class ConfigError(RuntimeError):
     """Raised when required settings are missing or invalid at startup."""
@@ -199,8 +210,9 @@ class Settings(BaseSettings):
     search_reconcile_interval: float = Field(default=86400.0, gt=0)
 
     # HMAC key for search cursor signing (§3.2). Production MUST set a real
-    # secret via env; the dev default keeps local/demo pagination stable.
-    search_cursor_secret: str = Field(default="mesh-dev-search-cursor-secret")
+    # secret via env — ``validate_search_settings`` refuses the public dev
+    # default when ``auth_mode=production`` (fail-fast at API startup).
+    search_cursor_secret: str = Field(default=DEV_SEARCH_CURSOR_SECRET)
 
     # Object storage for the attachment module (attachment.md §3). The bucket
     # is PRIVATE; every access goes through short-lived presigned URLs and the
@@ -394,4 +406,29 @@ def validate_auth_settings(settings: Settings) -> None:
         raise ConfigError(
             ("jwt_secret",),
             "MESH_JWT_SECRET must be set to a strong secret in production",
+        )
+
+
+def validate_search_settings(settings: Settings) -> None:
+    """Fail-safe for the search cursor HMAC key (search-command-palette.md §3.2).
+
+    Production must never sign cursors with the well-known dev key: the
+    default is public in this repository, so cursors forged with it would
+    pass verification. Scope is the API factory only (``mesh.api.app``) —
+    the realtime gateway never signs search cursors, so its startup must not
+    depend on this variable (README §2.2 independently deployable unit).
+
+    The confidentiality ceiling without this guard is low — forged cursors
+    can only hop pages inside the result set the caller may already read
+    (visibility is enforced inside each entity's SQL, cursor-independent) —
+    but forgery/replay with a public key must still fail fast in production,
+    mirroring the ``validate_auth_settings`` / ``DEV_JWT_SECRET`` pattern.
+
+    :raises ConfigError: when ``auth_mode=production`` and
+        ``search_cursor_secret`` is still the public development default.
+    """
+    if settings.auth_mode == "production" and settings.search_cursor_secret == DEV_SEARCH_CURSOR_SECRET:
+        raise ConfigError(
+            ("search_cursor_secret",),
+            "MESH_SEARCH_CURSOR_SECRET must be set to a strong secret in production",
         )
