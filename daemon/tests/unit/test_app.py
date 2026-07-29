@@ -231,3 +231,35 @@ class TestBuildRunRequest:
         req = build_run_request(claim)
         assert req.system_prompt == ""
         assert req.max_budget_usd == "0.000000"
+
+    async def test_log_flush_failure_keeps_journal_and_spool_for_replay(self, tmp_path, journal):
+        """When the sealed flush fails past retries, the terminal is demoted
+        to failed/log_flush_failed and — critically — the journal row and the
+        spooled redacted batches are KEPT (status terminal_seal_pending) so
+        startup reconciliation can replay+seal, not silently dropped."""
+        from mesh_runtime.errors import ServerError
+
+        class DeadLogsApi(AppStubApi):
+            async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+                raise ServerError("log relay down")
+
+        config = make_config(tmp_path)
+        api = DeadLogsApi(claim_response=make_claim("att-app-2"))
+        app, hit = await run_until(
+            config, api, journal, [CompletingProvider()],
+            predicate=lambda: ("att-app-2", "failed") in api.transitions,
+        )
+        assert hit, "attempt never demoted to failed"
+        # demoted terminal with the fixed reason code, reported exactly once
+        failed = [s for a, s in api.transitions if a == "att-app-2"]
+        assert failed == ["running", "failed"]
+        # journal row KEPT for startup replay — not deleted
+        entry = await journal.get("att-app-2")
+        assert entry is not None
+        assert entry.status == "terminal_seal_pending"
+        # spooled batch KEPT on disk — not drained
+        spool_files = [
+            p for p in (config.spool_dir / "att-app-2").iterdir()
+            if not p.name.endswith(".tmp")
+        ]
+        assert spool_files, "spooled redacted batch was dropped"

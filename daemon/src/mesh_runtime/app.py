@@ -199,13 +199,21 @@ class RuntimeApp:
         current = asyncio.current_task()
         if current is not None:
             self._attempt_tasks[attempt_id] = current
+        await logs.start_ticking()  # §3.9.2: interval arm flushes sparse streams
         try:
             outcome = await supervisor.supervise(ctx, adapter, build_run_request(claim))
-            if outcome.terminal_reported:
+            if outcome.terminal_reported and supervisor.spool_flushed:
                 await self._journal.delete(attempt_id)  # only after confirmed terminal (§3.6)
                 await logs.drain_attempt(attempt_id)  # drop residual spooled batches
+            elif outcome.terminal_reported:
+                # Terminal reported but the log stream is not sealed/complete
+                # (sealed flush failed past retries): KEEP the journal row and
+                # the spooled batches so startup reconciliation makes a
+                # best-effort replay+seal before cleanup (§3.9.3).
+                await self._journal.update(attempt_id, status="terminal_seal_pending")
             logger.info("attempt %s finished: %s", attempt_id, outcome.status)
         finally:
+            await logs.stop_ticking()
             self._supervisors.pop(attempt_id, None)
             self._contexts.pop(attempt_id, None)
             self._attempt_tasks.pop(attempt_id, None)

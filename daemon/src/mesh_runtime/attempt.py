@@ -112,6 +112,13 @@ class AttemptSupervisor:
     def renew_period(self, lease_seconds: float) -> float:
         return min(lease_seconds / 3.0, 40.0)
 
+    @property
+    def spool_flushed(self) -> bool:
+        """Whether the terminal sealed flush completed. False means redacted
+        batches are still spooled on disk and the journal row must be kept for
+        startup replay (§3.9.3)."""
+        return self._spool_flushed
+
     # -- lifecycle ----------------------------------------------------------
 
     async def supervise(self, ctx: AttemptContext, provider, request: RunRequest) -> AttemptOutcome:

@@ -36,6 +36,10 @@ if TYPE_CHECKING:
 DEFAULT_BATCH_LINES = 64
 DEFAULT_BATCH_BYTES = 256 * 1024
 DEFAULT_BATCH_INTERVAL = 0.5
+#: Resolution of the independent flush timer (§3.9.2 "any condition sends"):
+#: a sparse stream that never reaches the line/byte thresholds is flushed once
+#: the batch interval elapses, without waiting for the next line.
+DEFAULT_TICK_INTERVAL = 0.1
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,7 @@ class LogUploader:
         batch_lines: int = DEFAULT_BATCH_LINES,
         batch_bytes: int = DEFAULT_BATCH_BYTES,
         batch_interval: float = DEFAULT_BATCH_INTERVAL,
+        tick_interval: float = DEFAULT_TICK_INTERVAL,
     ) -> None:
         self._api = api
         self._journal = journal
@@ -64,14 +69,19 @@ class LogUploader:
         self._batch_lines = batch_lines
         self._batch_bytes = batch_bytes
         self._batch_interval = batch_interval
+        self._tick_interval = tick_interval
         self._buffers: dict[tuple[str, str], list[str]] = {}
         self._buffer_bytes: dict[tuple[str, str], int] = {}
         self._first_at: dict[tuple[str, str], float] = {}
+        self._contexts: dict[str, AttemptContext] = {}
         self._lock = asyncio.Lock()
+        self._tick_task: asyncio.Task | None = None
+        self._tick_stop = asyncio.Event()
 
     async def submit(self, ctx: AttemptContext, stream: str, line: str) -> SubmitResult:
         result = self._redactor.redact(line)
         key = (ctx.attempt_id, stream)
+        self._contexts[ctx.attempt_id] = ctx  # timer needs the lease lock/seq
         should_flush = False
         async with self._lock:
             buf = self._buffers.setdefault(key, [])
@@ -98,6 +108,61 @@ class LogUploader:
         """Drop any residual spooled batches for a terminal attempt (§3.9.3)."""
         if self._spool is not None:
             self._spool.drain(attempt_id)
+        self._contexts.pop(attempt_id, None)
+
+    # -- independent flush timer (§3.9.2) ------------------------------------
+
+    async def start_ticking(self) -> None:
+        """Run the interval arm of "any condition sends" on its own clock.
+
+        ``submit`` only evaluates the 500 ms condition when a NEW line
+        arrives, so a sparse stream (one line, then silence until finalize)
+        would otherwise stall in the buffer. The tick loop flushes any stream
+        whose oldest buffered line is past the batch interval, independent of
+        arrivals."""
+        if self._tick_task is not None and not self._tick_task.done():
+            return
+        self._tick_stop = asyncio.Event()
+        self._tick_task = asyncio.create_task(
+            self._tick_loop(), name="log-flush-timer"
+        )
+
+    async def stop_ticking(self) -> None:
+        task = self._tick_task
+        self._tick_task = None
+        if task is None:
+            return
+        self._tick_stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _tick_loop(self) -> None:
+        while not self._tick_stop.is_set():
+            await self._clock.sleep(self._tick_interval)
+            try:
+                await self._flush_due()
+            except DaemonError as exc:
+                # Keep the timer alive: mid-stream failures are the uploader's
+                # retry/spool problem, lease fencing is the supervisor's. A
+                # dead timer would silently re-stall sparse streams.
+                logging.getLogger("mesh_runtime").warning(
+                    "flush timer tick error: %s", type(exc).__name__
+                )
+
+    async def _flush_due(self) -> None:
+        now = self._clock.now()
+        due: list[tuple[str, str]] = []
+        async with self._lock:
+            for key, first_at in self._first_at.items():
+                if now - first_at >= self._batch_interval:
+                    due.append(key)
+        for attempt_id, stream in due:
+            ctx = self._contexts.get(attempt_id)
+            if ctx is not None:
+                await self._flush_stream(ctx, stream, sealed=False)
 
     async def _flush_stream(self, ctx: AttemptContext, stream: str, *, sealed: bool) -> None:
         key = (ctx.attempt_id, stream)
