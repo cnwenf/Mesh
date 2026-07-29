@@ -1,5 +1,6 @@
 @import './tokens.css';
 @import './tokens-dark.css';
+@import './tokens-print.css';
 
 /*
  * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +

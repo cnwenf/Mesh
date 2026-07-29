@@ -1,0 +1,41 @@
+/* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
+@media print {
+  :root, :root[data-theme='dark'] {
+    --color-bg: #ffffff;
+    --color-surface: #f9fafb;
+    --color-surface-raised: #ffffff;
+    --color-surface-hover: #f3f4f6;
+    --color-surface-sunken: #f1f5f9;
+    --color-text: #111827;
+    --color-text-muted: #4b5563;
+    --color-border: #d1d5db;
+    --color-primary: #1d4ed8;
+    --color-primary-contrast: #ffffff;
+    --color-danger: #b91c1c;
+    --color-danger-contrast: #ffffff;
+    --color-danger-bg: #fee2e2;
+    --color-warn: #92400e;
+    --color-warn-contrast: #ffffff;
+    --color-warn-bg: #fef3c7;
+    --color-success: #15803d;
+    --color-success-contrast: #ffffff;
+    --color-success-bg: #dcfce7;
+    --color-info: #075985;
+    --color-info-contrast: #ffffff;
+    --color-info-bg: #e0f2fe;
+    --color-primary-bg: #dbeafe;
+    --color-selection-bg: #bfdbfe;
+    --color-selection-text: #111827;
+    --color-mark-bg: #fde68a;
+    --color-mark-text: #111827;
+    --color-skeleton-base: #7d8590;
+    --color-skeleton-highlight: #adb5bd;
+    --color-code-bg: #f3f4f6;
+    --color-code-text: #111827;
+    --color-code-keyword: #6d28d9;
+    --color-code-string: #166534;
+    --color-code-comment: #4b5563;
+    --color-focus-ring: #2563eb;
+    --color-scrim: rgba(15, 23, 42, 0.45);
+  }
+}

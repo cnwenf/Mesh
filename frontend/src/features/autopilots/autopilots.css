@@ -3,8 +3,8 @@
 .mesh-autopilots__page {
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-4, 16px);
-  padding: var(--mesh-space-4, 16px);
+  gap: var(--space-4);
+  padding: var(--space-4);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -13,7 +13,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--mesh-space-3, 12px);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
@@ -26,17 +26,17 @@
 .mesh-autopilots__toolbar {
   display: flex;
   align-items: center;
-  gap: var(--mesh-space-2, 8px);
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .mesh-autopilots__kill-switch {
   display: inline-flex;
   align-items: center;
-  gap: var(--mesh-space-2, 8px);
-  border: 1px solid var(--mesh-color-border, #d0d7de);
-  border-radius: var(--mesh-radius-md, 8px);
-  padding: var(--mesh-space-1, 4px) var(--mesh-space-3, 12px);
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-3);
 }
 
 .mesh-autopilots__table {
@@ -48,17 +48,17 @@
 .mesh-autopilots__table th,
 .mesh-autopilots__table td {
   text-align: left;
-  padding: var(--mesh-space-2, 8px) var(--mesh-space-3, 12px);
-  border-bottom: 1px solid var(--mesh-color-border, #d0d7de);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .mesh-autopilots__table th {
-  color: var(--mesh-color-text-muted, #57606a);
+  color: var(--color-text-muted);
   font-weight: 600;
 }
 
 .mesh-autopilots__row:hover {
-  background: var(--mesh-color-surface-hover, rgba(0, 0, 0, 0.03));
+  background: var(--color-surface-hover);
   cursor: pointer;
 }
 
@@ -68,19 +68,19 @@
 
 .mesh-autopilots__actions {
   display: flex;
-  gap: var(--mesh-space-1, 4px);
+  gap: var(--space-1);
 }
 
 /* 编辑器:四段可折叠区块(§4.2)。 */
 .mesh-autopilots__editor {
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-autopilots__section {
-  border: 1px solid var(--mesh-color-border, #d0d7de);
-  border-radius: var(--mesh-radius-md, 8px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -89,8 +89,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--mesh-space-3, 12px) var(--mesh-space-4, 16px);
-  background: var(--mesh-color-surface-2, #f6f8fa);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-sunken);
   border: none;
   font-weight: 650;
   font-size: 0.95rem;
@@ -99,75 +99,75 @@
 }
 
 .mesh-autopilots__section-body {
-  padding: var(--mesh-space-4, 16px);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-autopilots__field {
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-1, 4px);
+  gap: var(--space-1);
 }
 
 .mesh-autopilots__field label {
   font-size: 0.85rem;
   font-weight: 600;
-  color: var(--mesh-color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-autopilots__field input,
 .mesh-autopilots__field select,
 .mesh-autopilots__field textarea {
-  border: 1px solid var(--mesh-color-border, #d0d7de);
-  border-radius: var(--mesh-radius-sm, 6px);
-  padding: var(--mesh-space-2, 8px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
   font-size: 0.9rem;
-  background: var(--mesh-color-surface, #fff);
+  background: var(--color-surface);
   color: inherit;
 }
 
 .mesh-autopilots__field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: var(--mesh-space-3, 12px);
+  gap: var(--space-3);
 }
 
 .mesh-autopilots__action-item {
-  border: 1px dashed var(--mesh-color-border, #d0d7de);
-  border-radius: var(--mesh-radius-md, 8px);
-  padding: var(--mesh-space-3, 12px);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-autopilots__action-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--mesh-space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-autopilots__preview {
   font-size: 0.85rem;
-  color: var(--mesh-color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-autopilots__preview ul {
-  margin: var(--mesh-space-1, 4px) 0 0;
-  padding-left: var(--mesh-space-4, 16px);
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
 }
 
 .mesh-autopilots__footer {
   display: flex;
   justify-content: flex-end;
-  gap: var(--mesh-space-2, 8px);
+  gap: var(--space-2);
   position: sticky;
   bottom: 0;
-  padding: var(--mesh-space-3, 12px) 0;
-  background: var(--mesh-color-surface, #fff);
+  padding: var(--space-3) 0;
+  background: var(--color-surface);
 }
 
 /* 运行时间线 / 详情。 */
@@ -180,36 +180,36 @@
 .mesh-autopilots__runs-table th,
 .mesh-autopilots__runs-table td {
   text-align: left;
-  padding: var(--mesh-space-2, 8px) var(--mesh-space-3, 12px);
-  border-bottom: 1px solid var(--mesh-color-border, #d0d7de);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .mesh-autopilots__run-detail {
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-4, 16px);
+  gap: var(--space-4);
 }
 
 .mesh-autopilots__card {
-  border: 1px solid var(--mesh-color-border, #d0d7de);
-  border-radius: var(--mesh-radius-md, 8px);
-  padding: var(--mesh-space-4, 16px);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
 }
 
 .mesh-autopilots__card h3 {
-  margin: 0 0 var(--mesh-space-2, 8px);
+  margin: 0 0 var(--space-2);
   font-size: 1rem;
 }
 
 .mesh-autopilots__kv {
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: var(--mesh-space-1, 4px) var(--mesh-space-3, 12px);
+  gap: var(--space-1) var(--space-3);
   font-size: 0.9rem;
 }
 
 .mesh-autopilots__kv dt {
-  color: var(--mesh-color-text-muted, #57606a);
+  color: var(--color-text-muted);
 }
 
 .mesh-autopilots__kv dd {
@@ -218,9 +218,9 @@
 }
 
 .mesh-autopilots__json {
-  background: var(--mesh-color-surface-2, #f6f8fa);
-  border-radius: var(--mesh-radius-sm, 6px);
-  padding: var(--mesh-space-3, 12px);
+  background: var(--color-surface-sunken);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
   font-size: 0.8rem;
   overflow-x: auto;
   max-height: 320px;
@@ -228,18 +228,18 @@
 }
 
 .mesh-autopilots__secret-box {
-  border: 1px solid var(--mesh-color-border-strong, #f0883e);
-  border-radius: var(--mesh-radius-md, 8px);
-  padding: var(--mesh-space-4, 16px);
+  border: 1px solid var(--color-warn);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--mesh-space-2, 8px);
+  gap: var(--space-2);
 }
 
 .mesh-autopilots__secret-box code {
   word-break: break-all;
-  background: var(--mesh-color-surface-2, #f6f8fa);
-  padding: var(--mesh-space-1, 4px) var(--mesh-space-2, 8px);
-  border-radius: var(--mesh-radius-sm, 6px);
+  background: var(--color-surface-sunken);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
   font-size: 0.85rem;
 }
