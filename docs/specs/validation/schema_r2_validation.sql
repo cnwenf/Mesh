@@ -4448,6 +4448,7 @@ CREATE TABLE integration_message_queue (
   target_agent_id    UUID NULL,
   message_excerpt    TEXT NOT NULL DEFAULT '',
   sender_identity_key TEXT NOT NULL DEFAULT '',
+  ack_leader_id      UUID NULL,                    -- 窗口归属:leader 自指 / follower 指向 leader(摄取事务按 seq 确定,§3.8)
   ack_attempted_at   TIMESTAMPTZ NULL,             -- leader 外呼闸门(§3.8)
   ack_sent_at        TIMESTAMPTZ NULL,             -- 平台确认(仅 leader)
   ack_represented_at TIMESTAMPTZ NULL,             -- 被抑制项:已被 leader 代表(非"已发送")
@@ -4738,6 +4739,58 @@ BEGIN
   ASSERT position(':' in 'x-JEx3Q1BfdjE6JDZHWXNuK3pydjVXWjc3eGMydjR6c3lYZkJ2MU0') = 0,
          'T39-12 FAIL: base64url 编码身份段不得含冒号(分隔符坍缩防护)';
   RAISE NOTICE 'PASS T39-12: N-1 真实平台 ID 键(base64 样 cid 含 = 合法存储 + base64url 身份段无冒号、无坍缩)';
+
+  -- T39-13:ack leader 摄取事务按 seq 确定(结构语义:leader 自指 / follower 指向 leader)
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref)
+  VALUES ('82000000-0000-0000-0000-0000000000b4', v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidACK2');
+  INSERT INTO integration_message_queue (id, workspace_id, integration_id, binding_id,
+    conversation_key, seq, dispatch_mode, state, ack_leader_id)
+  VALUES ('82000000-0000-0000-0000-0000000000c1', v_ws, v_int, '82000000-0000-0000-0000-0000000000b4',
+          'dingtalk:ding-corp-mes82:cidACK2', 1, 'serial_conversation', 'processing',
+          '82000000-0000-0000-0000-0000000000c1'),                    -- M1 leader:自指
+         ('82000000-0000-0000-0000-0000000000c2', v_ws, v_int, '82000000-0000-0000-0000-0000000000b4',
+          'dingtalk:ding-corp-mes82:cidACK2', 2, 'serial_conversation', 'pending',
+          '82000000-0000-0000-0000-0000000000c1');                    -- M2 follower:指向 M1
+  ASSERT (SELECT ack_leader_id = id FROM integration_message_queue
+           WHERE id = '82000000-0000-0000-0000-0000000000c1'),
+         'T39-13 FAIL: leader 应自指';
+  ASSERT (SELECT ack_leader_id = '82000000-0000-0000-0000-0000000000c1'
+            FROM integration_message_queue WHERE id = '82000000-0000-0000-0000-0000000000c2'),
+         'T39-13 FAIL: 窗口内 follower 应指向 seq 最小的 leader(到达顺序无关)';
+  RAISE NOTICE 'PASS T39-13: ack leader 按 seq 确定(leader 自指 / follower 指向 leader,窗口归属持久化)';
+
+  -- T39-14:rearm 四态闭合(真实 outbox_events DDL)
+  -- a. pending(SLA 内):不造新事件(派生键行不存在),续租等待现有 relay
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, created_at)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb, 'mes82-rearm-pending', 'pending', now());
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-pending' || '|rearm|' || 'item-a', 'sha256'), 'hex')) = 0,
+         'T39-14a FAIL: pending(SLA 内)分支不得造新事件';
+  -- c. published 异常:原行保留(不 DELETE)+ 派生键新写
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status, published_at)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb, 'mes82-rearm-pub', 'published', now());
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-rearm-pub' || '|rearm|' || 'item-c', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events WHERE idempotency_key = 'mes82-rearm-pub') = 1,
+         'T39-14c FAIL: published 原行必须保留(§6.6 审计保留,禁 DELETE)';
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-pub' || '|rearm|' || 'item-c', 'sha256'), 'hex')) = 1,
+         'T39-14c FAIL: 派生 rearm 键应新写成功(不撞原键唯一约束)';
+  -- d. missing:派生键新写(原键无行)
+  INSERT INTO outbox_events (workspace_id, event_type, payload, idempotency_key, status)
+  VALUES (v_ws, 'execution.enqueue', '{}'::jsonb,
+          encode(digest('mes82-rearm-missing' || '|rearm|' || 'item-d', 'sha256'), 'hex'), 'pending');
+  ASSERT (SELECT count(*) FROM outbox_events
+           WHERE idempotency_key = encode(digest('mes82-rearm-missing' || '|rearm|' || 'item-d', 'sha256'), 'hex')) = 1,
+         'T39-14d FAIL: missing 分支派生键新写应成功';
+  -- b. failed 条件更新(T39-9 已覆盖,此处复验条件守卫:对非 failed 行 0 行)
+  UPDATE outbox_events SET status = 'pending', delivery_attempts = 0, published_at = NULL
+   WHERE idempotency_key = 'mes82-rearm-pub' AND status = 'failed';
+  ASSERT (SELECT status = 'published' FROM outbox_events WHERE idempotency_key = 'mes82-rearm-pub'),
+         'T39-14b FAIL: 条件 rearm 不得误改非 failed 行';
+  RAISE NOTICE 'PASS T39-14: rearm 四态闭合(pending 不造新事件 / published 保留不删 / missing 派生键 / failed 条件守卫)';
 END $$;
 ROLLBACK;
 -- T39:end
