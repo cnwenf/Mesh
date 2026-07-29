@@ -49,6 +49,7 @@ async def test_realtime_create_app_accepts_strong_secret_in_production():
         redis_url=f"redis://:{strong}@redis.internal:6379/0",
         auth_mode="production",
         jwt_secret="realtime-factory-test-signing-secret",
+        device_code_pepper="realtime-factory-test-device-pepper",
     )
     app = create_app(settings)
     assert app.state.authenticator is not None

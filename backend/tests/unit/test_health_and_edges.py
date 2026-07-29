@@ -21,6 +21,7 @@ def _settings(db_url, redis_url, **overrides):
     # production now also validates infra credentials at startup).
     overrides.setdefault("auth_mode", "dev")
     overrides.setdefault("jwt_secret", "health-edge-test-signing-secret-00")
+    overrides.setdefault("device_code_pepper", "health-edge-test-device-pepper-00")
     return load_settings(database_url=db_url, redis_url=redis_url, **overrides)
 
 

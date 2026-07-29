@@ -128,6 +128,21 @@ class Settings(BaseSettings):
     login_max_failures: int = Field(default=DEFAULT_LOGIN_MAX_FAILURES, ge=1)
     login_lock_duration: timedelta = DEFAULT_LOGIN_LOCK_DURATION
 
+    # Device-code authorization (auth.md §2.4.2 / §3.1.1, cli.md §3.2). The
+    # HMAC pepper keys the device_code/user_code hashes — low-entropy user
+    # codes MUST NOT be stored under bare SHA-256 (offline dictionary attack),
+    # so production startup fails closed when the pepper is absent (validated
+    # in ``validate_auth_settings``, same baseline as the JWT secret).
+    device_code_pepper: str | None = None
+    device_code_ttl: timedelta = Field(default=timedelta(seconds=900), gt=0)
+    device_poll_interval: int = Field(default=5, ge=1)
+
+    # Refresh rotation race (auth.md §3.8): a rotated refresh token stays
+    # acceptable for this window, issuing ONLY a fresh access token (never a
+    # refresh, never a second rotation) so concurrent multi-tab / multi-process
+    # refreshes converge on the winner's credential instead of logging out.
+    refresh_rotation_grace_seconds: int = Field(default=30, ge=0)
+
     # Transactional email (verification / reset). In ``auth_mode=dev`` tokens go
     # to the Redis dev-mailbox (test path); in production a real SMTP server is
     # used when ``smtp_host`` is set, else delivery is a logged no-op so the API
@@ -417,6 +432,14 @@ def validate_auth_settings(settings: Settings) -> None:
         raise ConfigError(
             ("jwt_secret",),
             "MESH_JWT_SECRET must be set to a strong secret in production",
+        )
+    if settings.auth_mode == "production" and not settings.device_code_pepper:
+        # auth.md §2.4.2 / §5.5: device/user codes are stored as HMAC-SHA256
+        # keyed by this pepper; without it the low-entropy user_code space is
+        # brute-forceable from a database leak. Fail closed like the JWT key.
+        raise ConfigError(
+            ("device_code_pepper",),
+            "MESH_DEVICE_CODE_PEPPER must be set to a strong secret in production",
         )
 
 
