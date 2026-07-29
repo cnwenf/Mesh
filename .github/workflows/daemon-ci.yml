@@ -1,9 +1,13 @@
-# Mesh daemon (mesh-runtime) CI — MES-94 stage A1.
+# Mesh daemon (mesh-runtime) CI — MES-94 stage A1→A2.
 #
-# The A1 daemon tests are hermetic: a FakeClock (no real waits) and a scripted
-# fake server over httpx.MockTransport (real HTTP semantics, zero network). No
-# database, Redis or object storage is required. Gates: ruff lint + pytest with
-# a ≥90% branch-coverage floor (pyproject fail_under).
+# Two gates:
+# 1. ruff lint + the full pytest suite with the ≥90% branch-coverage floor
+#    (pyproject fail_under). The suite runs UNDER SUDO: the A2 sandbox,
+#    full-stack and ISO-01~14 red-line tests exercise REAL Linux
+#    namespace/cgroup/network isolation and fail (never skip) without root —
+#    a sandbox the runner cannot prove is a sandbox the daemon may not claim.
+# 2. hermetic unit/contract tests stay hermetic (FakeClock, scripted fake
+#    server over httpx.MockTransport) — no database, Redis, network or LLM.
 name: daemon-ci
 
 on:
@@ -19,7 +23,7 @@ on:
 
 jobs:
   test:
-    name: mesh-runtime 单测 + 合同测试(覆盖率 ≥90%,无网络/无 LLM)
+    name: mesh-runtime 全量测试(含 ISO-01~14 红线矩阵,root 真环境,覆盖率 ≥90%)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -35,5 +39,14 @@ jobs:
           pip install -e '.[dev]'
       - name: Ruff lint
         run: ruff check src/ tests/
-      - name: Unit + contract tests with coverage gate
-        run: pytest --cov=mesh_runtime --cov-report=term-missing
+      - name: Full suite incl. real sandbox + ISO red-line matrix (root)
+        run: sudo -E python -m pytest --cov=mesh_runtime --cov-report=term-missing
+      - name: ISO matrix junit evidence
+        if: always()
+        run: |
+          sudo -E python -m pytest tests/isolation --junit-xml=iso-matrix-junit.xml || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iso-matrix-junit
+          path: daemon/iso-matrix-junit.xml

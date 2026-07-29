@@ -75,7 +75,9 @@ def attempt_root():
     shutil.rmtree(root.parent, ignore_errors=True)
 
 
-def make_config(attempt_root: Path, *, repo_url=None, base_sha=None, task_token="mesh_task_sec") -> SecurityConfig:
+def make_config(
+    attempt_root: Path, *, repo_url=None, base_sha=None, task_token="mesh_task_sec"
+) -> SecurityConfig:
     from mesh_runtime.checkout import FrozenRepo
 
     return SecurityConfig(
@@ -96,7 +98,9 @@ def make_config(attempt_root: Path, *, repo_url=None, base_sha=None, task_token=
 
 
 class TestStart:
-    async def test_start_runs_checkout_egress_broker_in_order(self, tmp_path, upstream, journal, attempt_root):
+    async def test_start_runs_checkout_egress_broker_in_order(
+        self, tmp_path, upstream, journal, attempt_root
+    ):
         url, sha = upstream
         api = StubApi()
         sec = AttemptSecurity(make_config(attempt_root, repo_url=url, base_sha=sha),
@@ -229,12 +233,14 @@ class TestAppWiring:
         claim = ClaimResponse(
             execution={"id": "e1", "issue_id": ISSUE_ID,
                        "config_snapshot": {"repo": {"url": "file:///x.git", "base_ref": "main"},
-                                           "capability_grants": [{"capability": "issue:read", "permission": "read_only"}],
+                                           "capability_grants": [
+                                               {"capability": "issue:read", "permission": "read_only"}],
                                            "network_policy": {"allowed_hosts": ["a.example"]}}},
             attempt={"id": "a1", "lease_seq": 1, "lease_expires_at": "t", "task_token": "mesh_task_x",
                      "credentials": [{"id": "c1", "kind": "repo_token", "value": "rot-v"}]},
         )
-        security = app._build_security(claim, tmp_path / "attempt", RedactionPipeline(secrets=[], rule_version="v1"))
+        redactor = RedactionPipeline(secrets=[], rule_version="v1")
+        security = app._build_security(claim, tmp_path / "attempt", redactor)
         assert security is not None
         assert security.config.task_token == "mesh_task_x"
         assert security.config.issue_id == ISSUE_ID
@@ -244,13 +250,14 @@ class TestAppWiring:
         assert isinstance(adapter, SandboxedProcessAdapter)
 
     async def test_without_sandbox_manager_security_is_none(self, tmp_path):
+        from mesh_runtime.api import ClaimResponse
         from mesh_runtime.app import RuntimeApp
         from mesh_runtime.config import DaemonConfig
         from mesh_runtime.inventory import Inventory
-        from mesh_runtime.api import ClaimResponse
 
         config = DaemonConfig(server_url="https://mesh.example.com",
                               state_dir=tmp_path / "state", work_dir=tmp_path / "work")
         app = RuntimeApp(config, api=None, journal=None, inventory=Inventory([]), adapters=[])
-        claim = ClaimResponse(execution={"id": "e1"}, attempt={"id": "a1", "lease_seq": 1, "lease_expires_at": "t"})
+        claim = ClaimResponse(execution={"id": "e1"},
+                              attempt={"id": "a1", "lease_seq": 1, "lease_expires_at": "t"})
         assert app._build_security(claim, tmp_path, RedactionPipeline(secrets=[], rule_version="v1")) is None

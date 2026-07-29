@@ -10,10 +10,10 @@ This package is **standalone** — it shares only the versioned HTTP contract
 (see `docs/specs/features/runtime-executor.md` §3.1). The binary and service
 name are exactly `mesh-runtime`.
 
-## Status (MES-94 · stage A1)
+## Status (MES-94 · stage A1 + A2)
 
-Implemented — the daemon **skeleton** with a fake provider (no real LLM /
-secrets), driving the full attempt state machine and crash recovery:
+Implemented — the daemon **skeleton** (A1) plus the **secure execution
+surface** (A2), driving the full attempt state machine and crash recovery:
 
 - `api` — typed client for the whole `/api/v1/daemon/*` surface with
   fail-closed error classification (401 fatal, 409 lease fence, 429
@@ -41,9 +41,51 @@ secrets), driving the full attempt state machine and crash recovery:
 - `inventory` / `doctor` — fail-closed binary probing and actionable local
   capability checks.
 
-Still ahead (A2 secure execution surface, A3 real provider): real
-namespace/cgroup sandbox, task/action broker, egress gateway, and the pinned
-Claude Code adapter.
+A2 secure execution surface (real kernel isolation, fail-closed — never a
+bare run):
+
+- `sandbox` / `sandbox_init` — per-attempt mount/pid/net/ipc/uts namespaces +
+  cgroup2 hard limits (memory/cpu/pids, swap off), pivot_root into a minimal
+  read-only root (tmpfs `/tmp` `/home` `/xdg`, fresh `/proc`, `/dev` reduced
+  to null/zero/urandom), privilege drop to an unprivileged uid, no default
+  network route — the only exit is the per-attempt egress proxy on a veth
+  /30. Verified by an EXEC gate: the provider never runs unless the daemon
+  has confirmed uid/cgroup/namespaces.
+- `provider_env` — S-01: the frozen §1.4 argv template, reserved-env
+  scrubbing (second pass after any merge), daemon-owned read-only provider
+  configs, and hostile repo-file enumeration (ISO-09: `.mcp.json` /
+  `.claude/settings*.json` / hooks / `CLAUDE.md` are plain files, never
+  loaded or executed).
+- `broker` — S-02: the unique ToolBroker gate. SO_PEERCRED uid + cgroup
+  membership + attempt nonce, the §3.3 action→gate table (unknown actions
+  fail closed; mount/privilege/daemon-control/cloud-metadata are permanently
+  forbidden — approval cannot release them), task-token scope pinning, rate
+  limiting, and the `confirm_required` protocol (cancel as
+  `awaiting_approval` + resume in a new attempt — the sandbox never parks).
+- `egress` / `netguard` — S-04: trusted resolve → filter EVERY answer IP
+  (loopback/private/link-local/multicast/reserved/documentation/benchmarking/
+  cloud metadata, IPv4-mapped normalized; one forbidden answer refuses the
+  request) → pinned connect; HTTP + CONNECT; 3xx never followed (every hop
+  re-enters the pipeline).
+- `checkout` — §3.2: frozen-URL + allowlist + public-address gates, exact-SHA
+  checkout, read-only credentials confined to the git subprocess environment
+  (never the remote URL, `.git/config`, or provider env).
+- `cleanup` — S-08: ordered, idempotent, whitelist-only teardown (broker →
+  revoke → cgroup kill → mounts → artifacts → spool gate → journal bit);
+  never follows symlinks, refuses paths outside the attempt root.
+- `security` — per-attempt orchestration of the stack; `attempt` / `app`
+  wire it into the claim→terminal lifecycle (sandbox failure reports
+  `failed/sandbox_violation`).
+
+Proof: `tests/isolation/` runs the ISO-01~14 red-line matrix on REAL
+namespaces/cgroups/network — no mocks, no skips (a runner without root
+FAILS, never skips). Evidence: `docs/evidence/mes-100/` (ISO matrix junit +
+real-server integration: activate → online → claim → sandboxed execution →
+redacted reflow).
+
+Still ahead (A3 real provider): the pinned Claude Code adapter (capability
+manifest + SHA-256 check, stream-json parsing, hard budget truncation,
+session/usage/result reflow).
 
 ## Install & run
 

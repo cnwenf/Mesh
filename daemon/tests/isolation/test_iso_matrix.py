@@ -260,11 +260,11 @@ async def test_iso09_malicious_repo_files_never_load(manager, iso_root, tmp_path
     script = (
         "import os, subprocess, time\n"
         "time.sleep(0.3)\n"
-        "print('BEACON', os.path.exists(%r))\n"
+        f"print('BEACON', os.path.exists({str(beacon)!r}))\n"
         "procs = subprocess.run(['ps', '-e'], capture_output=True, text=True).stdout\n"
         "print('EVIL-PROC', 'evil' in procs)\n"
         "print('FILES-ARE-PLAIN', open('.mcp.json').read()[:1] == '{')\n"
-    ) % str(beacon)
+    )
     out, code = await run_sandbox(manager, make_spec(iso_root / "a9", (PY, "-c", script)))
     assert code == 0
     text = out.decode()
@@ -425,7 +425,6 @@ async def test_iso12_rebinding_cname_and_redirect_metadata_refused(iso_root):
 async def test_iso13_secret_redacted_across_channels(iso_root):
     """Provider output → logs → terminal result: one RedactionPipeline, no
     channel carries the plaintext (sandboxed provider emits the secret)."""
-    import tempfile
     from pathlib import Path
 
     from mesh_runtime.api import LogAck

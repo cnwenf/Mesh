@@ -2,7 +2,7 @@
 
 > 状态：安全复评通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
 >
-> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；A2 安全执行面与 A3 真实 Claude Code provider 开发中（见 §4.4）。
+> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；**A2 安全执行面已落地**——真实 Linux namespace/cgroup 沙箱（mount/pid/net/ipc/uts + cgroup2 限额，fail-closed 不降级裸跑）、S-01 不可信配置隔离（空 HOME/XDG、只读私有配置、reserved env 二次清洗；§1.4 固定 argv 与 §1.5 三件套配置机制就绪、随 A3 真实 provider 接线端到端强制）、S-02 唯一 ToolBroker 闸门（SO_PEERCRED+cgroup+nonce 三重校验、动作→闸门唯一映射、confirm_required=取消+新 attempt 续跑）、S-04 egress gateway（可信解析→全 IP 过滤→钉死建连、沙箱 netns 无默认路由、重定向跳数上限）、checkout helper（只读凭证分离、精确 SHA、解析 IP 复核闸门）、S-08 幂等清理（含启动对账残留清理）；ISO-01～14 隔离红线负向矩阵真实环境全绿（`daemon/tests/isolation/`，禁 mock/skip）。A3 真实 Claude Code provider（固定版本适配、stream-json 解析、预算截断）开发中（见 §4.4）。
 >
 > 所属模块：`runtime` 的本地执行子系统；服务端调度、数据模型和机器 API 仍以 `runtime.md` 为权威。
 >

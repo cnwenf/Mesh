@@ -251,7 +251,10 @@ class RuntimeApp:
             allowed_repos=(repo.url,) if repo else (),
             platform_managed=self.config.runtime_kind == "platform_managed",
             read_credential=read_credential,
-            network_policy=snapshot.get("network_policy") if isinstance(snapshot.get("network_policy"), dict) else {},
+            network_policy=(
+                snapshot.get("network_policy")
+                if isinstance(snapshot.get("network_policy"), dict) else {}
+            ),
         )
         return AttemptSecurity(
             config,
@@ -261,7 +264,9 @@ class RuntimeApp:
             server_base_url=self.config.server_url,
         )
 
-    def _select_adapter(self, claim: ClaimResponse | None = None, attempt_root=None, security=None) -> ExecutorAdapter:
+    def _select_adapter(
+        self, claim: ClaimResponse | None = None, attempt_root=None, security=None
+    ) -> ExecutorAdapter:
         """Sandboxed adapter when a sandbox manager is wired; otherwise the
         injected adapters (A1 contract path / dev backend)."""
         if self._sandbox_manager is not None and claim is not None and security is not None:

@@ -5,6 +5,18 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Added
+
+- **mesh-runtime A2 安全执行面(MES-94 阶段2·开发A2/MES-100)**:daemon 本地执行体在 A1 骨架之上落地真实内核隔离——
+  - **namespace/cgroup 沙箱(fail-closed)**:每 attempt 独立 mount/pid/net/ipc/uts namespace + cgroup2 硬限额(memory/cpu/pids、swap 关闭),pivot_root 进入只读最小根(tmpfs `/tmp` `/home` `/xdg`、全新 `/proc`、`/dev` 仅 null/zero/urandom),降权至非特权 uid;沙箱 netns **无默认路由**,唯一出口为 veth /30 上的 per-attempt egress 代理;沙箱未就绪绝不降级裸跑(失败 attempt 以 `failed/sandbox_violation` 终结)。
+  - **S-01 不可信配置隔离**:§1.4 固定 argv 模板、reserved env 合并后二次清洗、daemon 所有的只读 provider 配置、恶意 repo 文件枚举(ISO-09:`.mcp.json`/`.claude/settings*.json`/hooks/`CLAUDE.md` 仅作普通文件,绝不加载执行)。
+  - **S-02 唯一 ToolBroker 闸门**:SO_PEERCRED uid + cgroup 成员 + attempt nonce 三重校验;§3.3 动作→闸门唯一映射(未知动作 fail-closed;mount/提权/daemon 控制面/云元数据永久禁止,approval 亦不可放行);task token 代持与资源 scope 钉死;`confirm_required` 唯一协议=取消(awaiting_approval)+新 attempt 凭 resume_context 续跑,沙箱绝不挂起等待批准。
+  - **S-04 egress gateway**:可信解析→**全部**应答 IP 过滤(loopback/私有/link-local/多播/保留/文档/benchmarking/云元数据,IPv4-mapped 归一化;混入一个禁用 IP 即整次拒绝)→钉死建连;HTTP+CONNECT;3xx 不自动跟随(逐跳重验)。
+  - **checkout helper(§3.2)**:冻结 URL + allowlist + 公网地址闸门、精确 SHA checkout、只读凭证仅存在于 git 子进程环境(不进 remote URL / `.git/config` / provider env)。
+  - **S-08 幂等清理**:按序白名单拆除(broker→吊销→cgroup kill→挂载→产物→spool 门禁→journal 清理位),不跟随 symlink,拒绝 attempt 根外路径。
+  - **MES-98 P0 契约对齐**:claim/renew task token 字段、跨流统一日志 offset 水位、journal 在线迁移。
+  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 仍开发中,生产启用以最终安全复测为准。
+
 ## [0.20.0] - 2026-07-30
 服务端 P0 契约冻结落地(MES-91 阶段2 · MES-98,六轮验收收口):runtime 执行体服务端契约全面 Spec 化并对齐实现,为本地执行体(MES-94)联调放行。
 

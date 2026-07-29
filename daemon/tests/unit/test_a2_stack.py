@@ -14,7 +14,7 @@ from mesh_runtime.journal import Journal
 from mesh_runtime.logs import LogUploader
 from mesh_runtime.providers.base import FinalResult, RunRequest, SessionStarted, TextDelta
 from mesh_runtime.providers.fake import FakeProvider
-from mesh_runtime.providers.sandboxed import SandboxLaunchError, SandboxedProcessAdapter
+from mesh_runtime.providers.sandboxed import SandboxedProcessAdapter, SandboxLaunchError
 from mesh_runtime.redaction import RedactionPipeline
 from mesh_runtime.sandbox import SandboxManager, SandboxSpec
 
