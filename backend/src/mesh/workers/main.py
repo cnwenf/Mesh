@@ -57,6 +57,7 @@ from mesh.runtime.enqueue import (
     enqueue_execution_handler,
 )
 from mesh.runtime.reaper import runtime_reaper_loop
+from mesh.runtime.result_sink import execution_finished_result_sink
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportSettings, skill_import_sweep_loop
 from mesh.skill.resolvers import make_matching_resolver
@@ -107,6 +108,25 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
         if blob is None or blob.scan_status != "pending":
             return None  # already processed / claimed by the sweep loop
         await process_blob(session, blob, storage=storage, settings=settings, scanner=scanner)
+        return None
+
+    return _handle
+
+
+def _compose_execution_finished(squad_handler):
+    """§3.7 S-09: compose squad handler + result sink for execution.finished.
+
+    The relay dispatches one handler per event type. Both the squad relay
+    (squad task closure) and the result sink (regular issue result comment)
+    must observe execution.finished. The result sink internally skips
+    squad executions (checks task_spec.squad_task_id).
+    """
+
+    async def _handle(session, event):
+        # Squad handler first (squad task closure).
+        await squad_handler(session, event)
+        # Result sink for regular (non-squad) executions.
+        await execution_finished_result_sink(session, event)
         return None
 
     return _handle
@@ -182,7 +202,13 @@ def build_relay(
         # squad.md: plan decisions (§6.10) and execution-terminal observation
         # (§4.4) are applied relay-side, keeping runtime decoupled from squad.
         SQUAD_PLAN_DECIDED_EVENT_TYPE: squad_plan_decided_handler,
-        "execution.finished": make_squad_execution_finished_handler(squad_comment_service),
+        # §3.7 S-09: execution.finished is consumed by BOTH the squad relay
+        # (squad task closure) and the result sink (regular issue comment).
+        # Compose them: squad handler runs first, then result sink for
+        # non-squad executions (result_sink skips squad executions internally).
+        "execution.finished": _compose_execution_finished(
+            make_squad_execution_finished_handler(squad_comment_service),
+        ),
     }
     if data_job_worker is not None:
         # import-export.md §3.8: job execution flows through the outbox to

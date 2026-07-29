@@ -56,6 +56,7 @@ from mesh.db.models.project import (
 from mesh.db.models.realtime import RealtimeChannel, RealtimeEvent
 from mesh.db.models.runtime import (
     Approval,
+    AttemptTaskToken,
     ExecutionAttempt,
     ExecutionCredential,
     RepoCheckout,
@@ -110,6 +111,7 @@ __all__ = [
     "AnalyticsSnapshot",
     "ApiToken",
     "Approval",
+    "AttemptTaskToken",
     "Attachment",
     "AttachmentBlob",
     "AttachmentLink",

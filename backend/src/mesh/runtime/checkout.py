@@ -134,6 +134,7 @@ async def report_checkout(
     local_path: str | None = None,
     diff: str | None = None,
     storage: object | None = None,
+    signing_secret: str = "",
 ) -> dict:
     """Daemon: report checkout lifecycle (cloning → ready → diff_ready)."""
     from mesh.runtime.attempts import _assert_lease, _load_daemon_attempt
@@ -205,6 +206,17 @@ async def report_checkout(
 
         diff_ref = checkout.diff_ref
         if diff and status == "diff_ready" and storage is not None:
+            # §2.5 S-06: server-side fallback redaction before persisting
+            # diff to object storage (daemon redacts first, server again).
+            if signing_secret:
+                from mesh.runtime.redaction import redact_diff_text
+
+                diff, _diff_hits = await redact_diff_text(
+                    session,
+                    workspace_id=workspace_id,
+                    diff=diff,
+                    signing_secret=signing_secret,
+                )
             key = f"logs/{workspace_id}/diffs/{attempt.id.hex}.diff"
             await storage.put_bytes(  # type: ignore[attr-defined]
                 key, diff.encode("utf-8"), content_type="text/x-diff"
