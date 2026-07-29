@@ -204,11 +204,17 @@ def test_validate_infra_settings_accepts_strong_app_database_password_in_product
 
 
 def test_validate_infra_settings_rejects_default_storage_credentials_in_production():
-    # storage_access_key / storage_secret_key still hold the repo dev defaults.
+    # storage_access_key / storage_secret_key default to "" (no guessable secret
+    # ships in the repo, MES-83). Pass them explicitly so the assertion is
+    # deterministic even where ambient MESH_STORAGE_* env vars are set (CI
+    # injects strong per-run values for the real-storage e2e — an init kwarg
+    # overrides the env, so this still exercises the empty-default rejection).
     settings = load_settings(
         database_url=STRONG_INFRA["database_url"],
         redis_url=STRONG_INFRA["redis_url"],
         auth_mode="production",
+        storage_access_key="",
+        storage_secret_key="",
     )
     with pytest.raises(ConfigError) as excinfo:
         validate_infra_settings(settings)
@@ -245,10 +251,14 @@ def test_validate_infra_settings_require_storage_false_still_checks_db_and_redis
 
 
 def test_validate_infra_settings_reports_every_weak_field_at_once():
+    # Explicit weak storage credentials keep this deterministic under CI's
+    # ambient strong MESH_STORAGE_* env (an init kwarg overrides the env).
     settings = load_settings(
         database_url="postgresql+asyncpg://mesh:mesh@postgres:5432/mesh",
         redis_url="redis://redis:6379/0",
         auth_mode="production",
+        storage_access_key="",
+        storage_secret_key="",
     )
     with pytest.raises(ConfigError) as excinfo:
         validate_infra_settings(settings)
