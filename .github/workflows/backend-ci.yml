@@ -117,7 +117,7 @@ jobs:
           pytest --cov=mesh --cov-report=term-missing --cov-fail-under=90
 
   schema-validation:
-    name: DDL 与行为验证(PostgreSQL 16,124 条断言)
+    name: DDL 与行为验证(PostgreSQL 16)
     runs-on: ubuntu-latest
     if: github.event_name != 'schedule'
     services:
