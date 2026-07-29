@@ -23,6 +23,12 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
+
+from mesh.errors import BusinessRuleError, ValidationError
+from mesh.integrations.outbound import _pinned_http_transport
+from mesh.runtime.checkout import is_forbidden_host
+from mesh.skill.ssrf import PinnedTarget, Resolver, SourceUnreachableError, resolve_pinned
 
 if TYPE_CHECKING:
     import httpx
@@ -372,6 +378,53 @@ ADAPTERS: dict[str, dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
+# Config write-time guards (README §6.16 — SSRF)
+# ---------------------------------------------------------------------------
+
+
+def validate_instance_url(url: str) -> None:
+    """Write-time guard for self-hosted VCS ``instance_url`` (README §6.16).
+
+    https-only + forbidden-host refusal, isomorphic with the webhook
+    subscription URL guard (``outbound.validate_subscription_url``): a
+    literal private / loopback / link-local / cloud-metadata target can
+    never be persisted into integration config. DNS-level defeat (a public
+    hostname resolving into private space, DNS rebinding) is closed at
+    request time by :func:`test_connectivity`'s pinned resolver — the two
+    layers mirror the webhook delivery path's create-time + deliver-time
+    guards.
+    """
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme != "https":
+        raise ValidationError(
+            "instance_url must use https",
+            code="invalid_url_scheme",
+            details={"scheme": parsed.scheme},
+        )
+    host = parsed.hostname or ""
+    if not host or is_forbidden_host(host):
+        raise BusinessRuleError(
+            "instance_url target is forbidden",
+            code="ssrf_blocked",
+            details={"host": host},
+        )
+
+
+def validate_integration_config(kind: str, config: dict[str, Any] | None) -> None:
+    """Per-kind config guards applied at EVERY config write (§6.16).
+
+    Currently: GitLab self-hosted ``instance_url`` must pass
+    :func:`validate_instance_url`. Kinds without user-controlled outbound
+    targets (platform APIs are hardcoded whitelisted hosts) pass through.
+    """
+    config = config or {}
+    if kind == "vcs_gitlab":
+        instance_url = config.get("instance_url")
+        if instance_url:
+            validate_instance_url(str(instance_url))
+
+
+# ---------------------------------------------------------------------------
 # Connectivity test (§3.1 :test — lightweight credential/connectivity check)
 # ---------------------------------------------------------------------------
 
@@ -399,6 +452,7 @@ async def test_connectivity(
     secret: str | None,
     http_client: httpx.AsyncClient | None = None,
     base_urls: dict[str, str] | None = None,
+    resolver: Resolver | None = None,
 ) -> tuple[str, str | None]:
     """Lightweight platform-API round-trip; returns ``(health_state, detail)``.
 
@@ -410,6 +464,14 @@ async def test_connectivity(
     identity/token endpoints only). ``webhook_outbound`` has no platform
     credentials — it reports ``healthy`` with an explanatory detail
     (subscriptions verify via ``:send-test`` instead).
+
+    SSRF (README §6.16): every platform base except GitLab self-hosted is
+    a hardcoded whitelisted host. A user-configured ``instance_url`` is
+    treated exactly like a webhook delivery target — resolve ONCE through
+    the shared ``resolve_pinned`` guard and connect ONLY to the pinned
+    public IPs (DNS-rebinding TOCTOU closure, redirects never followed);
+    a refused target classifies as ``unreachable``/``ssrf_blocked`` and
+    nothing is dialed. ``resolver`` is injectable for tests.
     """
     import httpx as _httpx
 
@@ -420,8 +482,30 @@ async def test_connectivity(
     if not secret:
         return HEALTH_AUTH_FAILED, "missing_credentials"
 
-    client = http_client or _httpx.AsyncClient(timeout=TEST_TIMEOUT_SECONDS)
-    owns_client = http_client is None
+    # GitLab self-hosted: validate + pin BEFORE building the client (write-
+    # time validate_instance_url already refuses literal private targets;
+    # this closes public hostnames resolving into private space).
+    pinned: PinnedTarget | None = None
+    if kind == "vcs_gitlab" and http_client is None:
+        base = str(config.get("instance_url") or bases[kind]).rstrip("/")
+        try:
+            pinned = resolve_pinned(base, resolver=resolver)
+        except SourceUnreachableError:
+            return HEALTH_UNREACHABLE, "ssrf_blocked"
+
+    if http_client is not None:
+        client = http_client
+        owns_client = False
+    elif pinned is not None:
+        client = _httpx.AsyncClient(
+            timeout=TEST_TIMEOUT_SECONDS,
+            follow_redirects=False,
+            transport=_pinned_http_transport(pinned.pinned_ips),
+        )
+        owns_client = True
+    else:
+        client = _httpx.AsyncClient(timeout=TEST_TIMEOUT_SECONDS)
+        owns_client = True
     try:
         if kind == "im_feishu":
             app_id = str(config.get("app_id") or "")
@@ -550,4 +634,6 @@ __all__ = [
     "slack_normalize",
     "slack_tenant_key_from_config",
     "slack_verify",
+    "validate_instance_url",
+    "validate_integration_config",
 ]

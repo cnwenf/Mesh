@@ -169,6 +169,10 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - 真实 e2e(真实起服 + 真实 worker):T29 全断言(全局键抢绑 409 / scope 异或 / 项目级联 / 多工作区身份模型 + 建链工作区删除映射保留 / 结构与 RLS 负向 / 解链无旁路);签名拒绝 + 重放拒绝 + 去重幂等 + 防预占 + 停用拒绝;入站经真实 relay 落 `task_executions`(trigger='integration' + §6.9 幂等键);VCS 流程 C(PR 合并 → 自动置 done + 关联 + 评论,重复事件幂等);出向投递台账/重试/熔断/恢复;https-only + SSRF。
 - 单元测试:模块覆盖率 ≥90%(新增代码与整体双达标)。
 
+### Security
+
+- **集成安全审核整改(HIGH-1 / M-1)**:GitLab 自托管 `instance_url` SSRF 防护与 webhook 投递同构双层闭合——config 写入(create/update)强制 https + `is_forbidden_host`(私网/回环/link-local/云元数据一律 `ssrf_blocked`/`invalid_url_scheme` 拒绝,不可落库);连通性测试(`:test`)经共享 `resolve_pinned` 单次解析 + 校验 + 钉死 IP,仅连接已验证公网地址(DNS-rebinding TOCTOU 闭合)、不跟随重定向。外部身份建链验证码增失败限次(`MAX_CODE_ATTEMPTS=5`):失败计数保持剩余 TTL(失败不续期),额度耗尽即销毁该码,杜绝 10 分钟 TTL 内暴破 6 位验证码映射他人外部账号。另修复 `integrations.css` 3 处 color-function 记法(CI Lint 门禁)。
+
 ## [0.19.0] - 2026-07-29
 平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
 

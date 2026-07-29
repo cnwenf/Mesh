@@ -40,6 +40,12 @@ CODE_TTL_SECONDS = 600  # §3.1: 10-minute TTL
 CODE_PREFIX = "mesh:identity-code:"
 DEV_OUTBOX_PREFIX = "mesh:identity-dev-outbox:"
 CODE_LENGTH = 6
+# Brute-force cap (security M-1): a 6-digit code must not be guessable
+# within its TTL. After this many mismatches the code is DESTROYED — the
+# write rate limit alone would still allow ~1000+ guesses per window, and
+# a success would map someone else's unlinked external account onto the
+# attacker's users.id (the card-callback chain resolves clickers by it).
+MAX_CODE_ATTEMPTS = 5
 
 
 class CodeDelivery(Protocol):
@@ -50,9 +56,7 @@ class CodeDelivery(Protocol):
     failures raise — the link never proceeds without a delivered code.
     """
 
-    async def deliver(
-        self, *, provider: str, tenant_key: str, external_user_key: str, code: str
-    ) -> None: ...
+    async def deliver(self, *, provider: str, tenant_key: str, external_user_key: str, code: str) -> None: ...
 
 
 class RedisDevCodeDelivery:
@@ -65,14 +69,14 @@ class RedisDevCodeDelivery:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
-    async def deliver(
-        self, *, provider: str, tenant_key: str, external_user_key: str, code: str
-    ) -> None:
+    async def deliver(self, *, provider: str, tenant_key: str, external_user_key: str, code: str) -> None:
         key = f"{DEV_OUTBOX_PREFIX}{provider}:{tenant_key}:{external_user_key}"
         await self._redis.set(key, code, ex=CODE_TTL_SECONDS)
         logger.info(
             "identity verification code delivered (dev outbox): %s:%s:%s",
-            provider, tenant_key, external_user_key,
+            provider,
+            tenant_key,
+            external_user_key,
         )
 
 
@@ -98,15 +102,17 @@ async def external_identity_unlink_allowed(
     not an authorization (no bypass). Line-for-line equivalent of the SQL
     reference function ``external_identity_unlink_allowed(uuid, uuid)``.
     """
-    row = (await session.execute(
-        select(ExternalIdentity.id)
-        .join(Member, Member.id == member_id)
-        .where(
-            ExternalIdentity.id == identity_id,
-            Member.user_id == ExternalIdentity.user_id,
-            Member.status == "active",
+    row = (
+        await session.execute(
+            select(ExternalIdentity.id)
+            .join(Member, Member.id == member_id)
+            .where(
+                ExternalIdentity.id == identity_id,
+                Member.user_id == ExternalIdentity.user_id,
+                Member.status == "active",
+            )
         )
-    )).first()
+    ).first()
     return row is not None
 
 
@@ -135,9 +141,7 @@ async def start_link(
     if provider not in ("feishu", "slack", "github", "gitlab"):
         raise BusinessRuleError("unsupported provider", code="invalid_request")
     if not external_user_key:
-        raise BusinessRuleError(
-            "external_user_key is required", code="invalid_request"
-        )
+        raise BusinessRuleError("external_user_key is required", code="invalid_request")
     # Duplicate mapping pre-check (authoritative check stays at confirm).
     tenant_key = _tenant_key_for(provider, integration)
     existing = await session.scalar(
@@ -148,9 +152,7 @@ async def start_link(
         )
     )
     if existing is not None:
-        raise ConflictError(
-            "external account already linked", code="identity_already_linked"
-        )
+        raise ConflictError("external account already linked", code="identity_already_linked")
     code = "".join(pysecrets.choice("0123456789") for _ in range(CODE_LENGTH))
     record = {
         "code_hash": _hash_code(code),
@@ -201,16 +203,26 @@ async def confirm_link(
     target is ALWAYS the requester's own global identity (R4).
     """
     if member.user_id is None:
-        raise BusinessRuleError(
-            "member has no global user identity", code="invalid_request"
-        )
+        raise BusinessRuleError("member has no global user identity", code="invalid_request")
     raw = await redis.get(_code_key(workspace_id, member.id, provider))
     if raw is None:
-        raise BusinessRuleError(
-            "verification code expired or never issued", code="invalid_request"
-        )
+        raise BusinessRuleError("verification code expired or never issued", code="invalid_request")
     record = json.loads(raw)
     if not _safe_equals(_hash_code(code), str(record.get("code_hash") or "")):
+        # Brute-force cap (M-1): count the mismatch and either persist the
+        # counter (preserving the REMAINING ttl — a failure must never
+        # extend the code's lifetime) or destroy the code once the budget
+        # is exhausted. The error stays identical either way.
+        key = _code_key(workspace_id, member.id, provider)
+        attempts = int(record.get("failed_attempts") or 0) + 1
+        if attempts >= MAX_CODE_ATTEMPTS:
+            await redis.delete(key)
+        else:
+            record["failed_attempts"] = attempts
+            ttl = await redis.ttl(key)
+            if ttl is None or ttl < 0:
+                ttl = CODE_TTL_SECONDS
+            await redis.set(key, json.dumps(record), ex=ttl)
         raise BusinessRuleError("verification code mismatch", code="invalid_request")
     # Single consumption: delete BEFORE the insert so a failed insert cannot
     # be replayed into a retry loop with the same code.
@@ -261,9 +273,7 @@ async def unlink_identity(
     identity = await session.get(ExternalIdentity, identity_id)
     if identity is None:
         raise NotFoundError("external identity not found")
-    if not await external_identity_unlink_allowed(
-        session, identity_id=identity_id, member_id=member.id
-    ):
+    if not await external_identity_unlink_allowed(session, identity_id=identity_id, member_id=member.id):
         raise ForbiddenError(
             "only the mapping owner may unlink this external identity",
             code="identity_unlink_forbidden",
@@ -282,17 +292,21 @@ async def unlink_identity(
     )
 
 
-async def list_own_identities(
-    session: AsyncSession, *, member: Member
-) -> list[ExternalIdentity]:
+async def list_own_identities(session: AsyncSession, *, member: Member) -> list[ExternalIdentity]:
     """The requester's OWN mappings (global table filtered by users.id)."""
     if member.user_id is None:
         return []
-    rows = (await session.execute(
-        select(ExternalIdentity)
-        .where(ExternalIdentity.user_id == member.user_id)
-        .order_by(ExternalIdentity.created_at.desc())
-    )).scalars().all()
+    rows = (
+        (
+            await session.execute(
+                select(ExternalIdentity)
+                .where(ExternalIdentity.user_id == member.user_id)
+                .order_by(ExternalIdentity.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
     return list(rows)
 
 
@@ -320,7 +334,7 @@ async def lookup_identity(
 def _tenant_key_for(provider: str, integration: Integration) -> str:
     from mesh.integrations.connectors import adapter_for
 
-    adapter = adapter_for(f"{'im' if provider in ('feishu','slack') else 'vcs'}_{provider}")
+    adapter = adapter_for(f"{'im' if provider in ('feishu', 'slack') else 'vcs'}_{provider}")
     return adapter["tenant_key_from_config"](integration.config or {})
 
 
@@ -338,8 +352,7 @@ def render_identity(identity: ExternalIdentity) -> dict[str, Any]:
         "external_user_key": identity.external_user_key,
         "user_id": str(identity.user_id),
         "created_in_workspace_id": (
-            str(identity.created_in_workspace_id)
-            if identity.created_in_workspace_id else None
+            str(identity.created_in_workspace_id) if identity.created_in_workspace_id else None
         ),
         "verified_at": identity.verified_at.isoformat() if identity.verified_at else None,
         "created_at": identity.created_at.isoformat() if identity.created_at else None,
@@ -350,6 +363,7 @@ __all__ = [
     "CODE_LENGTH",
     "CODE_TTL_SECONDS",
     "DEV_OUTBOX_PREFIX",
+    "MAX_CODE_ATTEMPTS",
     "RedisDevCodeDelivery",
     "confirm_link",
     "external_identity_unlink_allowed",

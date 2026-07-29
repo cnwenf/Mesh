@@ -458,3 +458,98 @@ async def test_event_ledger_filterable(session_factory):
     )
     assert len(page.items) == 1
     assert page.items[0].process_status == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# GitLab self-hosted instance_url SSRF guard at config WRITE time
+# (README §6.16, security HIGH-1)
+# ---------------------------------------------------------------------------
+
+
+async def _create_gitlab(session_factory, world, *, config, name_suffix="g"):
+    from mesh.db.models.member import Member
+
+    service = make_service(session_factory)
+    async with session_factory() as session:
+        member = await session.get(Member, world["member"])
+    return await service.create_integration(
+        workspace_id=world["ws"],
+        creator=member,
+        kind="vcs_gitlab",
+        name=f"gitlab-{name_suffix}-{uuid.uuid4().hex[:6]}",
+        config=config,
+        secret="glpat-xxx",
+    )
+
+
+@pytest.mark.parametrize(
+    "instance_url",
+    [
+        "https://127.0.0.1",
+        "https://10.0.0.8",
+        "https://169.254.169.254",  # cloud metadata
+        "https://[::1]",
+        "https://localhost",
+    ],
+)
+async def test_create_gitlab_rejects_forbidden_instance_url(session_factory, instance_url):
+    # Arrange
+    world = await seed_world(session_factory)
+    # Act / Assert — refused at the service boundary...
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await _create_gitlab(session_factory, world, config={"instance_url": instance_url})
+    assert excinfo.value.code == "ssrf_blocked"
+    # ...and nothing was persisted.
+    async with session_factory() as session:
+        rows = (
+            (await session.execute(select(Integration).where(Integration.workspace_id == world["ws"])))
+            .scalars()
+            .all()
+        )
+    assert all((row.config or {}).get("instance_url") != instance_url for row in rows)
+
+
+async def test_create_gitlab_rejects_non_https_instance_url(session_factory):
+    # Arrange
+    world = await seed_world(session_factory)
+    # Act / Assert
+    from mesh.errors import ValidationError
+
+    with pytest.raises(ValidationError) as excinfo:
+        await _create_gitlab(
+            session_factory, world, config={"instance_url": "http://gitlab.corp.example.com"}
+        )
+    assert excinfo.value.code == "invalid_url_scheme"
+
+
+async def test_create_gitlab_accepts_public_https_instance_url(session_factory):
+    # Arrange
+    world = await seed_world(session_factory)
+    # Act
+    result = await _create_gitlab(
+        session_factory, world, config={"instance_url": "https://gitlab.corp.example.com"}
+    )
+    # Assert — persisted verbatim (non-secret config is not redacted).
+    assert result["integration"]["config"]["instance_url"] == "https://gitlab.corp.example.com"
+
+
+async def test_update_gitlab_config_rejects_forbidden_instance_url(session_factory):
+    # Arrange — an integration with a clean self-hosted config.
+    world = await seed_world(session_factory)
+    created = await _create_gitlab(
+        session_factory, world, config={"instance_url": "https://gitlab.corp.example.com"}
+    )
+    integration_id = uuid.UUID(created["integration"]["id"])
+    service = make_service(session_factory)
+    # Act / Assert — switching to an intranet/metadata target is refused.
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await service.update_integration(
+            workspace_id=world["ws"],
+            integration_id=integration_id,
+            config={"instance_url": "https://169.254.169.254"},
+        )
+    assert excinfo.value.code == "ssrf_blocked"
+    # The stored config is unchanged.
+    async with session_factory() as session:
+        row = await session.get(Integration, integration_id)
+    assert (row.config or {}).get("instance_url") == "https://gitlab.corp.example.com"

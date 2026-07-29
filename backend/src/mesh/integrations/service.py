@@ -28,7 +28,12 @@ from mesh.db.models.integration import (
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ConflictError, NotFoundError
-from mesh.integrations.connectors import KIND_TO_PROVIDER, adapter_for, test_connectivity
+from mesh.integrations.connectors import (
+    KIND_TO_PROVIDER,
+    adapter_for,
+    test_connectivity,
+    validate_integration_config,
+)
 from mesh.integrations.matching import validate_match_config
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
@@ -50,8 +55,7 @@ def assert_config_non_secret(config: dict[str, Any]) -> None:
             continue
         if _SECRET_KEY_RE.search(str(key)) and isinstance(value, str) and value:
             raise BusinessRuleError(
-                "config must not contain plaintext secrets; store ciphertext "
-                "as '<name>_ref'",
+                "config must not contain plaintext secrets; store ciphertext as '<name>_ref'",
                 code="invalid_request",
                 details={"key": key},
             )
@@ -79,11 +83,13 @@ class IntegrationService:
     ) -> dict[str, Any]:
         if kind not in VALID_KINDS:
             raise BusinessRuleError(
-                "invalid integration kind", code="invalid_request",
+                "invalid integration kind",
+                code="invalid_request",
                 details={"kind": kind, "allowed": list(VALID_KINDS)},
             )
         config = dict(config or {})
         assert_config_non_secret(config)
+        validate_integration_config(kind, config)
         moment = now or datetime.now(UTC)
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
@@ -92,10 +98,7 @@ class IntegrationService:
                 kind=kind,
                 name=name,
                 config=config,
-                secret_ref=(
-                    encrypt_credential_value(secret, self._signing_secret)
-                    if secret else None
-                ),
+                secret_ref=(encrypt_credential_value(secret, self._signing_secret) if secret else None),
                 created_by=creator.id,
                 created_at=moment,
                 updated_at=moment,
@@ -105,9 +108,7 @@ class IntegrationService:
                 await session.flush()
             except IntegrityError as exc:
                 if violates(exc, "uq_integrations_ws_name"):
-                    raise ConflictError(
-                        "integration name already exists", code="conflict"
-                    ) from exc
+                    raise ConflictError("integration name already exists", code="conflict") from exc
                 raise
             await self._emit_integration_updated(session, integration, moment, "created")
             rendered = render_integration(integration)
@@ -133,10 +134,14 @@ class IntegrationService:
             if status:
                 stmt = stmt.where(Integration.status == status)
             return await paginate(
-                session, stmt,
-                sort_column=Integration.created_at, id_column=Integration.id,
-                sort_value_of=lambda row: row.created_at, id_of=lambda row: row.id,
-                cursor=cursor, limit=limit,
+                session,
+                stmt,
+                sort_column=Integration.created_at,
+                id_column=Integration.id,
+                sort_value_of=lambda row: row.created_at,
+                id_of=lambda row: row.id,
+                cursor=cursor,
+                limit=limit,
             )
 
     async def event_counts_since(
@@ -194,9 +199,7 @@ class IntegrationService:
             row.updated_at = moment
             await self._emit_integration_updated(session, row, moment, "updated")
 
-    async def test_connection(
-        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
-    ) -> dict[str, Any]:
+    async def test_connection(self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID) -> dict[str, Any]:
         """POST .../integrations/{id}:test (§3.1, P1) + health drive (P2).
 
         Decrypts the credential IN-MEMORY only (§6.16), runs the
@@ -215,9 +218,7 @@ class IntegrationService:
                 if integration.secret_ref
                 else None
             )
-        health_state, detail = await test_connectivity(
-            kind, config=config, secret=secret
-        )
+        health_state, detail = await test_connectivity(kind, config=config, secret=secret)
         await self.record_health(
             workspace_id=workspace_id,
             integration=integration,
@@ -226,9 +227,7 @@ class IntegrationService:
         )
         return {"health_state": health_state, "detail": detail}
 
-    async def get_integration(
-        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
-    ) -> Integration:
+    async def get_integration(self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID) -> Integration:
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
             integration = await session.scalar(
@@ -268,6 +267,10 @@ class IntegrationService:
             )
             if integration is None:
                 raise NotFoundError("integration not found")
+            if config is not None:
+                # §6.16: per-kind guards at EVERY config write (the row's
+                # kind is authoritative — config carries no kind of its own).
+                validate_integration_config(integration.kind, config)
             if name is not None:
                 integration.name = name
             if status is not None:
@@ -279,9 +282,7 @@ class IntegrationService:
                 await session.flush()
             except IntegrityError as exc:
                 if violates(exc, "uq_integrations_ws_name"):
-                    raise ConflictError(
-                        "integration name already exists", code="conflict"
-                    ) from exc
+                    raise ConflictError("integration name already exists", code="conflict") from exc
                 raise
             await self._emit_integration_updated(session, integration, moment, "updated")
             return render_integration(integration)
@@ -324,9 +325,7 @@ class IntegrationService:
             integration.secret_ref = encrypt_credential_value(secret, self._signing_secret)
             integration.updated_at = datetime.now(UTC)
             await session.flush()
-            await self._emit_integration_updated(
-                session, integration, integration.updated_at, "rotated"
-            )
+            await self._emit_integration_updated(session, integration, integration.updated_at, "rotated")
         return {"id": str(integration_id), "rotated": True}
 
     def decrypt_integration_secret(self, integration: Integration) -> str | None:
@@ -352,9 +351,7 @@ class IntegrationService:
                 "status": integration.status,
                 "change": subject,
             },
-            idempotency_key=(
-                f"integration:{integration.id}:{subject}:{int(moment.timestamp() * 1000)}"
-            ),
+            idempotency_key=(f"integration:{integration.id}:{subject}:{int(moment.timestamp() * 1000)}"),
         )
 
     # ------------------------------------------------------------------
@@ -388,9 +385,7 @@ class IntegrationService:
                 raise NotFoundError("integration not found")
             provider = KIND_TO_PROVIDER.get(integration.kind)
             if provider is None or provider == "webhook":
-                raise BusinessRuleError(
-                    "integration kind does not support bindings", code="invalid_request"
-                )
+                raise BusinessRuleError("integration kind does not support bindings", code="invalid_request")
             validate_match_config(provider, match_config)
             adapter = adapter_for(integration.kind)
             tenant_key = adapter["tenant_key_from_config"](integration.config or {})
@@ -413,8 +408,7 @@ class IntegrationService:
             except IntegrityError as exc:
                 if violates(exc, "uq_binding_external_identity"):
                     raise ConflictError(
-                        "external identity already bound (possibly in another "
-                        "workspace)",
+                        "external identity already bound (possibly in another workspace)",
                         code="binding_conflict",
                     ) from exc
                 if violates(exc, "ck_binding_scope"):
@@ -444,14 +438,20 @@ class IntegrationService:
     ) -> list[dict[str, Any]]:
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
-            rows = (await session.execute(
-                select(IntegrationBinding)
-                .where(
-                    IntegrationBinding.workspace_id == workspace_id,
-                    IntegrationBinding.integration_id == integration_id,
+            rows = (
+                (
+                    await session.execute(
+                        select(IntegrationBinding)
+                        .where(
+                            IntegrationBinding.workspace_id == workspace_id,
+                            IntegrationBinding.integration_id == integration_id,
+                        )
+                        .order_by(IntegrationBinding.created_at.desc())
+                    )
                 )
-                .order_by(IntegrationBinding.created_at.desc())
-            )).scalars().all()
+                .scalars()
+                .all()
+            )
             return [render_binding(row) for row in rows]
 
     async def update_binding(
@@ -488,9 +488,7 @@ class IntegrationService:
             await session.flush()
             return render_binding(binding)
 
-    async def delete_binding(
-        self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID
-    ) -> None:
+    async def delete_binding(self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID) -> None:
         """Hard delete — releases the global external-identity slot (§2.3:
         disabled bindings still occupy the key; re-binding elsewhere
         requires deleting the row)."""
@@ -532,10 +530,15 @@ class IntegrationService:
             if process_status:
                 stmt = stmt.where(IntegrationEvent.process_status == process_status)
             return await paginate(
-                session, stmt,
-                sort_column=IntegrationEvent.received_at, id_column=IntegrationEvent.id,
-                sort_value_of=lambda row: row.received_at, id_of=lambda row: row.id,
-                cursor=cursor, limit=limit, descending=True,
+                session,
+                stmt,
+                sort_column=IntegrationEvent.received_at,
+                id_column=IntegrationEvent.id,
+                sort_value_of=lambda row: row.received_at,
+                id_of=lambda row: row.id,
+                cursor=cursor,
+                limit=limit,
+                descending=True,
             )
 
     async def event_counts_7d(
@@ -543,13 +546,19 @@ class IntegrationService:
     ) -> int:
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
-            return int((await session.execute(
-                select(func.count()).select_from(IntegrationEvent).where(
-                    IntegrationEvent.workspace_id == workspace_id,
-                    IntegrationEvent.integration_id == integration_id,
-                    IntegrationEvent.received_at >= since,
-                )
-            )).scalar_one())
+            return int(
+                (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(IntegrationEvent)
+                        .where(
+                            IntegrationEvent.workspace_id == workspace_id,
+                            IntegrationEvent.integration_id == integration_id,
+                            IntegrationEvent.received_at >= since,
+                        )
+                    )
+                ).scalar_one()
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -570,9 +579,7 @@ def _redacted_config(config: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def render_integration(
-    integration: Integration, *, events_7d: int | None = None
-) -> dict[str, Any]:
+def render_integration(integration: Integration, *, events_7d: int | None = None) -> dict[str, Any]:
     rendered = {
         "id": str(integration.id),
         "workspace_id": str(integration.workspace_id),
@@ -583,9 +590,7 @@ def render_integration(
         # status; ``auth_failed`` drives the "re-authorize" banner (§4.1).
         "health_state": integration.health_state,
         "last_error": integration.last_error,
-        "last_success_at": (
-            integration.last_success_at.isoformat() if integration.last_success_at else None
-        ),
+        "last_success_at": (integration.last_success_at.isoformat() if integration.last_success_at else None),
         "config": _redacted_config(integration.config),
         "has_secret": bool(integration.secret_ref),
         "created_by": str(integration.created_by),

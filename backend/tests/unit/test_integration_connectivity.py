@@ -11,10 +11,14 @@ from __future__ import annotations
 import httpx
 import pytest
 
+import mesh.integrations.connectors as connectors_mod
+from mesh.errors import BusinessRuleError, ValidationError
 from mesh.integrations.connectors import (
     HEALTH_AUTH_FAILED,
     HEALTH_HEALTHY,
     HEALTH_UNREACHABLE,
+    validate_instance_url,
+    validate_integration_config,
 )
 from mesh.integrations.connectors import (
     test_connectivity as check_connectivity,
@@ -290,3 +294,164 @@ async def test_non_json_200_body_is_auth_failed():
         )
     assert state == HEALTH_AUTH_FAILED
     assert detail == "code_None"
+
+
+# ---------------------------------------------------------------------------
+# GitLab self-hosted instance_url — SSRF guard (README §6.16, security HIGH-1)
+# ---------------------------------------------------------------------------
+#
+# Two layers, isomorphic with the webhook delivery path (outbound.py):
+#   1. WRITE-TIME — validate_instance_url refuses non-https and forbidden
+#      (private / loopback / link-local / metadata) hosts at config write,
+#      so a literal intranet target can never be persisted.
+#   2. TEST-TIME — when no http_client is injected, the probe resolves ONCE
+#      through the shared resolve_pinned guard and connects ONLY to the
+#      pinned public IPs (DNS-rebinding TOCTOU closure, no redirect follow).
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://gitlab.example.com",  # non-https
+        "HTTP://GITLAB.EXAMPLE.COM",
+        "gitlab.example.com",  # schemeless
+        "",  # empty
+        "ftp://gitlab.example.com",
+    ],
+)
+def test_validate_instance_url_rejects_non_https(url):
+    # Arrange / Act / Assert
+    with pytest.raises(ValidationError) as excinfo:
+        validate_instance_url(url)
+    assert excinfo.value.code == "invalid_url_scheme"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.0.0.1",  # loopback
+        "https://127.0.0.1:8443",
+        "https://10.0.0.8",  # RFC1918
+        "https://192.168.1.4",
+        "https://172.16.5.5",
+        "https://169.254.169.254",  # cloud metadata
+        "https://[::1]",  # IPv6 loopback
+        "https://localhost",  # known-bad hostname
+        "https://user:pass@127.0.0.1",  # userinfo smuggling attempt
+    ],
+)
+def test_validate_instance_url_rejects_forbidden_hosts(url):
+    with pytest.raises(BusinessRuleError) as excinfo:
+        validate_instance_url(url)
+    assert excinfo.value.code == "ssrf_blocked"
+
+
+def test_validate_instance_url_accepts_public_https():
+    assert validate_instance_url("https://gitlab.corp.example.com") is None
+    assert validate_instance_url("https://gitlab.com/") is None
+
+
+def test_validate_integration_config_guards_gitlab_only():
+    # Arrange — a forbidden target...
+    forbidden = {"instance_url": "https://127.0.0.1"}
+    # Act / Assert — ...is refused for vcs_gitlab...
+    with pytest.raises(BusinessRuleError) as excinfo:
+        validate_integration_config("vcs_gitlab", forbidden)
+    assert excinfo.value.code == "ssrf_blocked"
+    # ...ignored for kinds that never read instance_url...
+    assert validate_integration_config("im_slack", forbidden) is None
+    # ...and absent instance_url (gitlab.com default) is fine.
+    assert validate_integration_config("vcs_gitlab", {}) is None
+    assert validate_integration_config("vcs_gitlab", None) is None
+
+
+def _public_resolver(ip: str):
+    return lambda hostname, port: [ip]
+
+
+async def test_gitlab_connectivity_refuses_private_resolution():
+    # Arrange — public-looking hostname resolving into private space
+    # (the rebinding oracle the guard must refuse). No http_client seam:
+    # the real guarded path runs; the injected resolver stands in for DNS.
+    # Act
+    state, detail = await check_connectivity(
+        "vcs_gitlab",
+        config={"instance_url": "https://gitlab.example.com"},
+        secret="glpat-x",
+        resolver=_public_resolver("127.0.0.1"),
+    )
+    # Assert — neutral refusal, nothing dialed.
+    assert (state, detail) == (HEALTH_UNREACHABLE, "ssrf_blocked")
+
+
+async def test_gitlab_connectivity_refuses_literal_private_ip_without_resolver():
+    # Arrange / Act — literal private target, DEFAULT resolver (getaddrinfo
+    # on a literal IP is local + deterministic): refused before any dial.
+    state, detail = await check_connectivity(
+        "vcs_gitlab",
+        config={"instance_url": "https://10.0.0.8"},
+        secret="glpat-x",
+    )
+    # Assert
+    assert (state, detail) == (HEALTH_UNREACHABLE, "ssrf_blocked")
+
+
+async def test_gitlab_connectivity_dials_only_pinned_public_ips(monkeypatch):
+    # Arrange — resolver answers a single public IP; capture what the
+    # transport builder receives and serve the probe via MockTransport.
+    captured: dict[str, object] = {}
+    seen_urls: list[str] = []
+
+    def fake_transport(pinned_ips):
+        captured["pinned_ips"] = pinned_ips
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_urls.append(str(request.url))
+            return httpx.Response(200, json={"id": 1, "username": "admin"})
+
+        return httpx.MockTransport(handler)
+
+    monkeypatch.setattr(connectors_mod, "_pinned_http_transport", fake_transport)
+    # Act
+    state, detail = await check_connectivity(
+        "vcs_gitlab",
+        config={"instance_url": "https://gitlab.example.com/"},
+        secret="glpat-x",
+        resolver=_public_resolver("93.184.216.34"),
+    )
+    # Assert — healthy, and the validated IP was the ONLY dial target.
+    assert (state, detail) == (HEALTH_HEALTHY, None)
+    assert captured["pinned_ips"] == ("93.184.216.34",)
+    assert seen_urls == ["https://gitlab.example.com/api/v4/user"]
+
+
+async def test_gitlab_connectivity_default_base_is_gitlab_com(monkeypatch):
+    # Arrange — no instance_url configured → the hardcoded public default.
+    seen: list[str] = []
+
+    def fake_transport(pinned_ips):
+        return httpx.MockTransport(lambda request: seen.append(str(request.url)) or httpx.Response(401))
+
+    monkeypatch.setattr(connectors_mod, "_pinned_http_transport", fake_transport)
+    # Act
+    state, detail = await check_connectivity(
+        "vcs_gitlab", config={}, secret="glpat-x", resolver=_public_resolver("172.65.251.78")
+    )
+    # Assert — 401 classifies auth_failed against the default host.
+    assert (state, detail) == (HEALTH_AUTH_FAILED, "http_401")
+    assert seen == ["https://gitlab.com/api/v4/user"]
+
+
+async def test_gitlab_connectivity_injected_client_bypasses_pin_for_tests():
+    # Arrange — the http_client test seam stays authoritative (unit tests
+    # simulate platforms via MockTransport; no resolve_pinned involved).
+    async with _client(200, {"id": 1}) as client:
+        # Act
+        state, detail = await check_connectivity(
+            "vcs_gitlab",
+            config={"instance_url": "https://127.0.0.1"},  # seam: not guarded
+            secret="glpat-x",
+            http_client=client,
+        )
+    # Assert
+    assert (state, detail) == (HEALTH_HEALTHY, None)

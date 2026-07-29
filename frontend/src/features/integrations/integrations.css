@@ -100,7 +100,7 @@
 }
 
 .mesh-integrations__row:hover {
-  background: var(--mesh-color-surface-hover, rgba(0, 0, 0, 0.03));
+  background: var(--mesh-color-surface-hover, rgb(0 0 0 / 0.03));
   cursor: pointer;
 }
 
@@ -227,11 +227,11 @@
 
 /* 事件台账:rejected/deduped 行高亮。 */
 .mesh-integrations__row--rejected {
-  background: var(--mesh-color-surface-danger, rgba(207, 34, 46, 0.06));
+  background: var(--mesh-color-surface-danger, rgb(207 34 46 / 0.06));
 }
 
 .mesh-integrations__row--deduped {
-  background: var(--mesh-color-surface-warn, rgba(191, 135, 0, 0.06));
+  background: var(--mesh-color-surface-warn, rgb(191 135 0 / 0.06));
 }
 
 .mesh-integrations__payload {
