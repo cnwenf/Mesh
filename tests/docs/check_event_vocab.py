@@ -46,6 +46,8 @@ OUTBOX_EVENT_TYPES = frozenset(
         "squad.plan_decided",  # squad.md §6.10:计划审批决议 outbox event_type(approve/reject/expired → 根任务流转)
         "chat.generation_finished",  # chat-session.md §4.4:chat 生成终态回写 outbox event_type
         "webhook.dispatch",  # integrations.md §3.4:出向 Webhook 投递扇出 outbox event_type(relay 派生 → 投递台账)
+        "im.send",  # integrations.md §3.8:IM 确认接收/命令反馈出站 outbox event_type(摄取事务写 leader 事件 → 快 relay at-most-once 外呼)
+        "imq.dispatch_wake",  # integrations.md §3.9:队列派发器显式唤醒 outbox event_type(终态回写同事务写入,1s tick 仅兜底)
     }
 )
 
