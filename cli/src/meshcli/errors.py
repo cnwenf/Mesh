@@ -48,12 +48,13 @@ HTTP_EXIT_CODES: dict[int, int] = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(eq=False)
 class CliError(Exception):
     """A user-facing CLI failure carrying its exit code + actionable hint.
 
     ``message`` states what happened; ``hint`` states the next step (cli.md
-    §4.3: every error = what happened + what to do next).
+    §4.3: every error = what happened + what to do next). Not frozen: the
+    interpreter/click must be able to attach ``__traceback__``.
     """
 
     message: str
