@@ -16,4 +16,7 @@ FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+# When a shared dist volume is mounted at /dist (compose: the api service
+# mounts it read-only as the HTML entry's frontend_dist_dir), publish the
+# build into it before serving so the API can render the personalized shell.
+CMD ["/bin/sh", "-c", "if [ -d /dist ]; then cp -r /usr/share/nginx/html/. /dist/; fi && exec nginx -g 'daemon off;'"]
