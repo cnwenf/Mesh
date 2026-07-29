@@ -89,6 +89,25 @@ export function expectedRouteId(href: string): string {
   return `${host}:app`;
 }
 
+/** SPA 客户端导航变更事件(由 main.tsx 对 history 的补丁派发,供 ThemeProvider
+ *  感知路由身份变化,见 §2.3/H3)。 */
+export const ROUTE_CHANGE_EVENT = 'mesh-route-change';
+
+/**
+ * 当前路由是否「期望工作区默认」参与协商(§2.3/H3):`/w/{slug}/…` 与
+ * `/invite…` 的协商链第 2 级依赖工作区默认,需等工作区桥接就绪才可信地解析;
+ * 全局/公开页不期望工作区默认,协商链可直接落系统级。
+ */
+export function routeExpectsWorkspaceDefault(href: string): boolean {
+  let path: string;
+  try {
+    path = new URL(href).pathname;
+  } catch {
+    path = href;
+  }
+  return SLUG_SEGMENT.test(path) || INVITE_ENTRY.test(path);
+}
+
 /**
  * 解析首帧分区镜像键 `mesh.theme.active`(§2.3 ②)。
  *

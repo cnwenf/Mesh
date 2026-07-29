@@ -82,10 +82,25 @@ function readEntries(key: string): PendingEntry[] {
     const raw = localStorage.getItem(key);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as PendingEntry[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    // 形状校验:毒化/残缺条目丢弃,绝不令重放崩溃(评审 LOW)。
+    return parsed.filter(isWellFormedEntry) as PendingEntry[];
   } catch {
     return [];
   }
+}
+
+function isWellFormedEntry(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.payload !== 'object' || entry.payload === null) return false;
+  if (typeof entry.retryCount !== 'number' || !Number.isFinite(entry.retryCount)) {
+    return false;
+  }
+  if (!Array.isArray(entry.subject) || entry.subject.length !== 3) return false;
+  return (
+    entry.baselineUpdatedAt === null || typeof entry.baselineUpdatedAt === 'string'
+  );
 }
 
 function writeEntries(key: string, entries: PendingEntry[]): void {
@@ -119,9 +134,11 @@ export function hasPendingWrites(): boolean {
 }
 
 function isLater(updatedAt: string | null, baseline: string | null): boolean {
-  if (updatedAt === null) return false;
-  if (baseline === null) return false; // 基线未知:保守重放,不以猜测丢弃
-  return new Date(updatedAt).getTime() > new Date(baseline).getTime();
+  if (updatedAt === null || baseline === null) return false; // 基线未知:保守重放
+  const a = new Date(updatedAt).getTime();
+  const b = new Date(baseline).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false; // 防 NaN 误判
+  return a > b;
 }
 
 export interface ReplayOptions {

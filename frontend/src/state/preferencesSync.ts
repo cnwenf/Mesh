@@ -18,7 +18,7 @@ import {
   updatePreferences,
 } from '../api/userPreferences';
 import type { UpdatePreferencesPayload } from '../api/userPreferences';
-import { enqueueFailedWrite, replayPendingWrites } from './pendingSettingsQueue';
+import { enqueueFailedWrite, noteServerUpdatedAt, replayPendingWrites } from './pendingSettingsQueue';
 import type { ThemeMode, UserPreferences } from './settingsStore';
 
 /** 偏好同步错误类型(供 UI 层按 code 渲染 i18n 错误提示) */
@@ -84,8 +84,10 @@ export async function syncPreferencesToServer(
 ): Promise<void> {
   const payload = toUpdatePayload(preferences);
   try {
-    await updatePreferences(client, payload);
-    // 写入成功 → 顺带按序重放 pending(§4.5 触发点之一);重放失败静默保留。
+    const synced = await updatePreferences(client, payload);
+    // 写入成功 → 以响应 updated_at 前移冲突基线(防自身写入被误判为陈旧,§4.5);
+    // 顺带按序重放 pending(§4.5 触发点之一);重放失败静默保留。
+    noteServerUpdatedAt(synced.updated_at ?? null);
     void replayPendingWrites(client);
   } catch (err: unknown) {
     enqueueFailedWrite(payload); // 乐观不回滚,失败写入进分区队列
@@ -106,7 +108,8 @@ export async function syncThemeToServer(
 ): Promise<void> {
   const payload: UpdatePreferencesPayload = { settings: { theme } };
   try {
-    await updatePreferences(client, payload);
+    const synced = await updatePreferences(client, payload);
+    noteServerUpdatedAt(synced.updated_at ?? null);
     void replayPendingWrites(client);
   } catch (err: unknown) {
     enqueueFailedWrite(payload);
@@ -127,7 +130,8 @@ export async function syncLocaleToServer(
   // (后端 PATCH 对显式 null 执行 merged.pop('locale'),auth.md §3.1 清除语义)
   payload.settings!.locale = locale;
   try {
-    await updatePreferences(client, payload);
+    const synced = await updatePreferences(client, payload);
+    noteServerUpdatedAt(synced.updated_at ?? null);
     void replayPendingWrites(client);
   } catch (err: unknown) {
     enqueueFailedWrite(payload);
@@ -145,7 +149,8 @@ export async function syncTimezoneToServer(
 ): Promise<void> {
   const payload: UpdatePreferencesPayload = { timezone };
   try {
-    await updatePreferences(client, payload);
+    const synced = await updatePreferences(client, payload);
+    noteServerUpdatedAt(synced.updated_at ?? null);
     void replayPendingWrites(client);
   } catch (err: unknown) {
     enqueueFailedWrite(payload);

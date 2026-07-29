@@ -19,7 +19,7 @@ import type { ReactNode } from 'react';
 import { useSettingsStore } from '../state/settingsStore';
 import { useWorkspaceThemeBridge } from '../state/workspaceThemeBridge';
 import { writeThemeLocator } from './themeLocator';
-import { resolveThemeChain } from './themeNegotiation';
+import { resolveThemeChain, routeExpectsWorkspaceDefault, ROUTE_CHANGE_EVENT } from './themeNegotiation';
 import type { ResolvedTheme } from './themeNegotiation';
 import { DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
 import { THEME_CHANGED_EVENT } from './ugcColorGuard';
@@ -74,7 +74,11 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
   const [systemPrefersDark, setSystemPrefersDark] = useState(
     () => window.matchMedia(DARK_SCHEME_QUERY).matches,
   );
-  // 内联脚本已精确注入/命中 locator 的首帧:抑制挂载瞬间的 skeleton 闪烁。
+  // 当前路由是否期望工作区默认(H3):随 SPA 导航更新,决定协商链是否可信。
+  const [routeExpectsWs, setRouteExpectsWs] = useState(() =>
+    routeExpectsWorkspaceDefault(window.location.href),
+  );
+  // 内联脚本已精确注入/命中 locator 的首帧:权威数据,首帧不可被链覆盖。
   const firstFrameHint = useRef(firstFrameHasTheme());
 
   const { mode } = resolveThemeChain({
@@ -83,7 +87,11 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
     systemPrefersDark,
   });
 
-  const pending = userTheme === null && !workspaceLoaded && !firstFrameHint.current;
+  // 协商链是否可信解析(H3):用户已显式选择 / 路由不期望工作区默认 / 工作区
+  // 桥接已就绪。否则(工作区路由且桥接未就绪)链不可信——若首帧已有注入/locator
+  // 提示则**保持**该首帧(不覆盖、不写 locator),否则呈现中性 skeleton。
+  const chainReady = userTheme !== null || !routeExpectsWs || workspaceLoaded;
+  const pending = !chainReady && !firstFrameHint.current;
 
   // system 偏好实时跟随(T8):matchMedia change 监听,卸载注销。
   useEffect(() => {
@@ -95,10 +103,29 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
     return () => media.removeEventListener('change', handleChange);
   }, []);
 
-  // 权威解析落地:切换即时无刷新(仅改 <html data-theme>,§4.2 T6)。
+  // 路由身份变更(popstate + 客户端导航补丁)→ 重算是否期望工作区默认。
   useEffect(() => {
-    if (pending) return;
+    const update = (): void =>
+      setRouteExpectsWs(routeExpectsWorkspaceDefault(window.location.href));
+    window.addEventListener('popstate', update);
+    window.addEventListener(ROUTE_CHANGE_EVENT, update);
+    return () => {
+      window.removeEventListener('popstate', update);
+      window.removeEventListener(ROUTE_CHANGE_EVENT, update);
+    };
+  }, []);
+
+  // 权威解析落地(H3):链不可信但有首帧提示时「保持」首帧(注入/locator 已是
+  // 服务端按当前路由协商的权威结果,链尚未就绪不可覆盖,避免错误闪烁);链不可信
+  // 且无提示时维持 skeleton;链就绪时应用链解析值并回写 locator。
+  useEffect(() => {
     const el = document.documentElement;
+    if (!chainReady) {
+      if (firstFrameHint.current) {
+        el.removeAttribute(PENDING_ATTR); // 首帧提示已绘制,清 pending 标记
+      }
+      return;
+    }
     el.dataset.theme = mode;
     el.removeAttribute(PENDING_ATTR);
     writeThemeLocator(mode);
@@ -106,7 +133,7 @@ export function ThemeProvider(props: { children: ReactNode }): React.JSX.Element
     // UGC 内联色兜底等主题相关后处理的重扫信号(§4.3 T5③)。
     window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT));
     firstFrameHint.current = false;
-  }, [mode, pending, userTheme]);
+  }, [mode, chainReady, userTheme]);
 
   // pending 期间以中性 skeleton 覆盖视口(§2.3 ③:不呈现业务内容),但 children
   // 保持挂载——其中恰含供给工作区默认的 WorkspaceProvider,卸载会死锁协商链。

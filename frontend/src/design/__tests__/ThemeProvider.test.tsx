@@ -186,6 +186,15 @@ describe('ThemeProvider 协商链(theme.md §2.2)', () => {
 });
 
 describe('ThemeProvider skeleton 兜底(theme.md §2.3 ③)', () => {
+  // skeleton 仅在「路由期望工作区默认 且 桥接未就绪」时出现(H3):用工作区路由
+  // 触发 routeExpectsWorkspaceDefault=true,否则全局路由协商链可直接落系统级。
+  beforeEach(() => {
+    window.history.pushState({}, '', '/w/ws-skel/board');
+  });
+  afterEach(() => {
+    window.history.pushState({}, '', '/');
+  });
+
   it('user=null + 工作区默认未就绪 → skeleton 覆盖视口,children 隐藏但保持挂载', () => {
     useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: false });
     const { getByTestId, getByText } = render(
@@ -225,6 +234,28 @@ describe('ThemeProvider skeleton 兜底(theme.md §2.3 ③)', () => {
     expect(getByText('business content')).toBeTruthy();
     expect(queryByTestId('theme-skeleton')).toBeNull();
     expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('H3: 工作区路由 + 注入首帧 + 桥接未就绪 → 保持注入值,不覆盖、不写错 locator', () => {
+    // 服务端按当前路由协商注入 dark;桥接尚未就绪时链不可信,Provider 必须
+    // 保持首帧(data-theme=dark),不得用 chain(null,null,OS=light) 覆盖。
+    document.documentElement.dataset.theme = 'dark';
+    useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: false });
+    render(
+      <ThemeProvider>
+        <p>content</p>
+      </ThemeProvider>,
+    );
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    // 保持期间不写 locator(避免以不可信链值污染分区镜像)。
+    expect(localStorage.getItem('mesh.theme.active')).toBeNull();
+    // 桥接就绪后链可信,应用并回写 locator(与注入一致 → 无翻转)。
+    act(() => useWorkspaceThemeBridge.getState().setWorkspaceDefault('dark'));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    const locator = JSON.parse(localStorage.getItem('mesh.theme.active') ?? 'null') as {
+      mode: string;
+    } | null;
+    expect(locator?.mode).toBe('dark');
   });
 
   it('首帧已注入 data-theme(无 pending 标记)→ 不闪 skeleton', () => {
