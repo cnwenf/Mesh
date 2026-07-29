@@ -128,6 +128,12 @@ class Settings(BaseSettings):
     login_max_failures: int = Field(default=DEFAULT_LOGIN_MAX_FAILURES, ge=1)
     login_lock_duration: timedelta = DEFAULT_LOGIN_LOCK_DURATION
 
+    # Login-class endpoint rate limit (auth.md §3.6 — "阈值示例,可调": the
+    # thresholds are tunable; covers register/login/forgot/mfa-verify/
+    # change-password/reauth per (IP, email)).
+    auth_rate_limit: int = Field(default=5, ge=1)
+    auth_rate_window: timedelta = Field(default=timedelta(seconds=60), gt=0)
+
     # Device-code authorization (auth.md §2.4.2 / §3.1.1, cli.md §3.2). The
     # HMAC pepper keys the device_code/user_code hashes — low-entropy user
     # codes MUST NOT be stored under bare SHA-256 (offline dictionary attack),

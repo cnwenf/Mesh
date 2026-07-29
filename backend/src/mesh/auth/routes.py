@@ -169,8 +169,8 @@ async def register(body: RegisterRequest, request: Request, response: Response) 
     await _rate_limit(
         request,
         f"register:{_client_ip(request)}:{body.email.lower()}",
-        limit=REGISTER_LIMIT,
-        window=REGISTER_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -186,8 +186,8 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
     await _rate_limit(
         request,
         f"login:{ip}:{body.email.lower()}",
-        limit=LOGIN_LIMIT,
-        window=LOGIN_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -212,8 +212,8 @@ async def mfa_verify(body: MfaVerifyRequest, request: Request, response: Respons
     await _rate_limit(
         request,
         f"mfa-verify:{_client_ip(request)}:{body.mfa_ticket}",
-        limit=MFA_VERIFY_LIMIT,
-        window=MFA_VERIFY_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -300,8 +300,8 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request, respons
     await _rate_limit(
         request,
         f"reset:{_client_ip(request)}:{body.email.lower()}",
-        limit=REGISTER_LIMIT,
-        window=REGISTER_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)
@@ -341,8 +341,8 @@ async def reauth(
     await _rate_limit(
         request,
         f"reauth:{_client_ip(request)}:{user.email.lower()}",
-        limit=REAUTH_LIMIT,
-        window=REAUTH_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     claims = require_current_access(request)
@@ -437,8 +437,8 @@ async def change_password(
     await _rate_limit(
         request,
         f"change-password:{_client_ip(request)}:{user.email.lower()}",
-        limit=CHANGE_PASSWORD_LIMIT,
-        window=CHANGE_PASSWORD_WINDOW_SECONDS,
+        limit=_settings(request).auth_rate_limit,
+        window=int(_settings(request).auth_rate_window.total_seconds()),
         response=response,
     )
     service: AuthService = get_auth_service(request)

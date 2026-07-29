@@ -76,6 +76,9 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # Device-code HMAC pepper (loopback-only e2e value; production sets a
     # strong secret via env — validate_auth_settings enforces it there).
     env.setdefault("MESH_DEVICE_CODE_PEPPER", "e2e-device-code-pepper-0123456789")
+    # Login-class rate limit is tuned UP for e2e: many tests share one
+    # (IP, email) bucket back-to-back; production keeps the §3.6 default.
+    env.setdefault("MESH_AUTH_RATE_LIMIT", "100000")
     env.setdefault("MESH_RUNTIME_LEASE_SECONDS", "3")
     # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
     # source server, which the SSRF guard only permits via the allowlist.
