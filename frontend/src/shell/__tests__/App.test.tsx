@@ -62,8 +62,8 @@ describe('App 路由', () => {
   it('/inbox 渲染收件箱页(空态)', async () => {
     navigateTo('/inbox');
     render(<App />);
-    // 收件箱页解析到工作区后拉取通知;mock 返回空列表 → 呈现空态文案。
-    await waitFor(() => expect(screen.getByText('Inbox zero')).toBeInTheDocument());
+    // 收件箱页解析到工作区后拉取通知;mock 返回空列表 → 呈现 onboarding 四要素空态文案。
+    await waitFor(() => expect(screen.getByText('No notifications yet')).toBeInTheDocument());
   });
 
   it('未知路由渲染 404', () => {

@@ -1,0 +1,197 @@
+/*
+ * 上手清单卡片(onboarding.md §4.1/§4.2)— 语义 token 唯一色源(README §6.12)。
+ * 进度条 success 填充;首步高亮 info 描边;aha 庆祝态 success 底色 + 弱动效
+ * (prefers-reduced-motion 时关闭动画,文字与图标已构成独立信号)。
+ */
+
+.mesh-onboarding {
+  margin-block-end: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--color-text);
+}
+
+.mesh-onboarding__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.mesh-onboarding__title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+}
+
+.mesh-onboarding__dismiss {
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.mesh-onboarding__dismiss:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+.mesh-onboarding__dismiss:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-onboarding__progress {
+  margin-block-start: var(--space-3);
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.mesh-onboarding__progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-success);
+  transition: width var(--duration-slow) ease-out;
+}
+
+.mesh-onboarding__progress-text {
+  margin: var(--space-2) 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-onboarding__steps {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-onboarding__step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+}
+
+/* 首个未完成步骤:高亮并默认展开 CTA(§4.2) */
+.mesh-onboarding__step--current {
+  border-color: var(--color-info);
+  background: var(--color-surface);
+}
+
+.mesh-onboarding__step-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-onboarding__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+  color: var(--color-success-contrast);
+}
+
+/* 完成态:✓ 图标 + success 底(并附文字标签,颜色不作唯一信号) */
+.mesh-onboarding__check--done {
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.mesh-onboarding__step-name {
+  font-size: var(--font-size-md);
+}
+
+.mesh-onboarding__badge {
+  font-size: var(--font-size-sm);
+  color: var(--color-info);
+  border: 1px solid var(--color-info);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+.mesh-onboarding__step-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-inline-start: calc(var(--space-4) + var(--space-2));
+}
+
+.mesh-onboarding__step-description {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* aha 庆祝态(§4.2) */
+.mesh-onboarding--aha {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  border-color: var(--color-success);
+}
+
+.mesh-onboarding__aha-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  color: var(--color-success);
+}
+
+.mesh-onboarding__aha-description {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-onboarding__aha-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+/* 弱动效:transform/opacity 合成器友好;文字与图标为独立信号(§4.2/§6.12) */
+@keyframes mesh-onboarding-aha-pop {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-1)) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.mesh-onboarding--aha {
+  animation: mesh-onboarding-aha-pop var(--duration-slow) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-onboarding--aha {
+    animation: none;
+  }
+
+  .mesh-onboarding__progress-fill {
+    transition: none;
+  }
+}

@@ -45,6 +45,7 @@ from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
+from mesh.onboarding.consumers import consume_realtime_event as onboarding_consume_realtime_event
 from mesh.outbox.projector import project_realtime_event
 from mesh.outbox.relay import OutboxRelay
 from mesh.realtime.pubsub import RedisFanOut
@@ -147,12 +148,19 @@ def build_relay(
         # the return value), then trigger matching — run creation is
         # idempotent through the guardrail dedup window, so relay
         # redelivery after a crash never doubles a run (§5.1 T5-style
-        # kill-and-restart acceptance).
+        # kill-and-restart acceptance). Onboarding (onboarding.md §3.6)
+        # chains on the same claim: member.added / issue.created /
+        # execution.queued / notification.read advance checklists through
+        # the §3.5 completion guards (at-least-once safe).
         frames = await project_realtime_event(session, event)
         try:
             await match_domain_event(session, event)
         except Exception:  # noqa: BLE001 — matching must not break projection
             logger.exception("autopilot event matching failed for %s", event.id)
+        try:
+            await onboarding_consume_realtime_event(session, event)
+        except Exception:  # noqa: BLE001 — onboarding must not break projection
+            logger.exception("onboarding event consumption failed for %s", event.id)
         return frames
 
     handlers = {

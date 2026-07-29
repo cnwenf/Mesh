@@ -11,10 +11,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
+import { Button, Dialog, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { AgentWizard } from '../agents/AgentWizard';
+import { resetOnboardingMember } from '../onboarding/api';
+import { requestOptimisticStepComplete } from '../onboarding/notify';
+import { EmptyRoster } from '../onboarding/illustrations';
 import { activeWorkspace, fetchMe, getMember, listMembers, updateMember } from './api';
 import { AddMemberDialog } from './AddMemberDialog';
 import { RemoveMemberDialog } from './RemoveMemberDialog';
@@ -81,6 +84,8 @@ export function MembersPage(): React.JSX.Element {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [detail, setDetail] = useState<MemberDetail | null>(null);
   const [confirm, setConfirm] = useState<{ mode: RemoveMode; member: MemberSummary } | null>(null);
+  /** 管理员重置上手进度的二次确认目标(onboarding.md §4.2;仅人类成员行) */
+  const [resetTarget, setResetTarget] = useState<MemberSummary | null>(null);
 
   // Resolve the current workspace from the caller's memberships (single source
   // until the workspace picker lands with MES-24).
@@ -159,6 +164,24 @@ export function MembersPage(): React.JSX.Element {
     try {
       await updateMember(client, workspace.workspace_id, member.id, { status: 'active' });
       setReloadKey((key) => key + 1);
+    } catch (err) {
+      toast.addToast(err instanceof Error ? err.message : t('common.unknownError'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
+    }
+  };
+
+  // 管理员重置某人类成员的上手进度(onboarding.md §4.2):二次确认后调重置端点。
+  const handleResetOnboarding = async (member: MemberSummary): Promise<void> => {
+    if (workspace === null) return;
+    setResetTarget(null);
+    try {
+      await resetOnboardingMember(client, workspace.workspace_id, member.id);
+      toast.addToast(t('onboarding.reset.success'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
     } catch (err) {
       toast.addToast(err instanceof Error ? err.message : t('common.unknownError'), {
         tone: 'danger',
@@ -256,7 +279,31 @@ export function MembersPage(): React.JSX.Element {
       ) : isLoading ? (
         <Skeleton loadingLabel={t('common.loading')} />
       ) : members.length === 0 ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('members.empty')} />
+        <EmptyState
+          illustration={<EmptyRoster />}
+          title={t('onboarding.empty.members.title')}
+          description={t('onboarding.empty.members.description')}
+          action={
+            canManage ? (
+              <div className="mesh-members__empty-actions">
+                <Button
+                  variant="secondary"
+                  data-testid="members-empty-invite"
+                  onClick={() => setAddOpen(true)}
+                >
+                  {t('onboarding.empty.members.action')}
+                </Button>
+                <Button
+                  variant="primary"
+                  data-testid="members-empty-agent"
+                  onClick={() => setWizardOpen(true)}
+                >
+                  {t('onboarding.empty.members.actionAgent')}
+                </Button>
+              </div>
+            ) : undefined
+          }
+        />
       ) : (
         <table className="mesh-members__table">
           <thead>
@@ -391,6 +438,17 @@ export function MembersPage(): React.JSX.Element {
                           {t('members.remove.action')}
                         </Button>
                       ) : null}
+                      {/* 上手进度重置仅对人类成员行(agent 不建清单,onboarding.md §3.5) */}
+                      {member.member_type === 'human' ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          data-testid={`reset-onboarding-${member.id}`}
+                          onClick={() => setResetTarget(member)}
+                        >
+                          {t('onboarding.reset.action')}
+                        </Button>
+                      ) : null}
                     </div>
                   ) : null}
                 </td>
@@ -429,14 +487,20 @@ export function MembersPage(): React.JSX.Element {
             onClose={() => setAddOpen(false)}
             client={client}
             workspaceId={workspace.workspace_id}
-            onInvited={() => setReloadKey((key) => key + 1)}
+            onInvited={() => {
+              setReloadKey((key) => key + 1);
+              requestOptimisticStepComplete('invite_member_or_add_agent'); // §1.2.2 乐观推进步骤 2
+            }}
           />
           <AgentWizard
             open={wizardOpen}
             onClose={() => setWizardOpen(false)}
             client={client}
             workspaceId={workspace.workspace_id}
-            onSaved={() => setReloadKey((key) => key + 1)}
+            onSaved={() => {
+              setReloadKey((key) => key + 1);
+              requestOptimisticStepComplete('invite_member_or_add_agent'); // §1.2.2 O9:加 agent 完成 → 步骤 2
+            }}
           />
           {confirm !== null ? (
             <RemoveMemberDialog
@@ -450,6 +514,28 @@ export function MembersPage(): React.JSX.Element {
               onChanged={() => setReloadKey((key) => key + 1)}
             />
           ) : null}
+          <Dialog
+            open={resetTarget !== null}
+            onClose={() => setResetTarget(null)}
+            title={t('onboarding.reset.confirmTitle')}
+            closeLabel={t('common.close')}
+          >
+            <p data-testid="reset-onboarding-body">{t('onboarding.reset.confirmBody')}</p>
+            <div className="mesh-members__dialog-actions">
+              <Button variant="secondary" onClick={() => setResetTarget(null)}>
+                {t('common.cancel')}
+              </Button>
+              {resetTarget !== null ? (
+                <Button
+                  variant="danger"
+                  data-testid="reset-onboarding-confirm"
+                  onClick={() => void handleResetOnboarding(resetTarget)}
+                >
+                  {t('onboarding.reset.confirm')}
+                </Button>
+              ) : null}
+            </div>
+          </Dialog>
         </>
       ) : null}
     </main>

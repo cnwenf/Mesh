@@ -278,6 +278,9 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     column: 'State',
     importable: 98,
     skipped: 2,
+    // onboarding §4 文案占位符(MES-69):进度条已完成数 / 百分比
+    completed: 2,
+    percent: 40,
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

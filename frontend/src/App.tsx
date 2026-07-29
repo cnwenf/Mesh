@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
+import { restoreActiveOnboarding } from './features/onboarding';
 import { activeWorkspace, fetchMe } from './features/members/api';
 import { getIssueByIdentifier } from './features/issues/api';
 import { ThemeProvider, ToastProvider } from './design';
@@ -138,6 +139,17 @@ function ShellProviders(): React.JSX.Element {
   );
   const closePalette = useCallback(() => setPaletteOpen(false), []);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  // 帮助菜单恢复上手清单(onboarding.md §4.2 流程 3):恢复成功后收起帮助层,清单按库内进度重现;
+  // 失败不再静默吞掉——帮助层内显式提示(§错误处理:用户可见失败反馈)。
+  const handleRestoreOnboarding = useCallback(() => {
+    setRestoreError(null);
+    void restoreActiveOnboarding(getApiClient())
+      .then((restored) => {
+        if (restored) setHelpOpen(false);
+      })
+      .catch(() => setRestoreError(t('onboarding.restoreError')));
+  }, [t]);
 
   return (
     <ToastProvider regionLabel={t('a11y.notifications')}>
@@ -224,6 +236,9 @@ function ShellProviders(): React.JSX.Element {
               issue: t('shortcuts.groupIssue'),
               chat: t('shortcuts.groupChat'),
             }}
+            restoreLabel={t('onboarding.restoreHelp')}
+            onRestore={handleRestoreOnboarding}
+            restoreError={restoreError ?? undefined}
           />
         </OverlayControlsProvider>
       </ShortcutProvider>

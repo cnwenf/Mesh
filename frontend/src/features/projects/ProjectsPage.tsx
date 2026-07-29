@@ -13,6 +13,7 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { EmptyFolder } from '../onboarding/illustrations';
 import { listProjects, workspaceProjectsChannel } from './api';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
@@ -263,7 +264,20 @@ export function ProjectsPage(): React.JSX.Element {
       ) : isLoading ? (
         <Skeleton loadingLabel={t('common.loading')} />
       ) : projects.length === 0 ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('projects.empty')} />
+        <EmptyState
+          illustration={<EmptyFolder />}
+          title={t('onboarding.empty.projects.title')}
+          description={t('onboarding.empty.projects.description')}
+          action={
+            <Button
+              variant="primary"
+              data-testid="projects-empty-create"
+              onClick={() => setCreateOpen(true)}
+            >
+              {t('onboarding.empty.projects.action')}
+            </Button>
+          }
+        />
       ) : (
         <>
           <div className="mesh-projects__grid" data-testid="projects-grid">

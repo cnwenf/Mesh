@@ -95,10 +95,10 @@ describe('InboxPage', () => {
     expect(screen.getByTestId('inbox-unread-dot-n-1')).toBeTruthy();
   });
 
-  it('shows the empty state when there are no notifications', async () => {
+  it('shows the empty state when there are no notifications (onboarding 四要素)', async () => {
     queue({ data: [], next_cursor: null });
     renderWithProviders(<InboxPage />);
-    await screen.findByText('Inbox zero');
+    await screen.findByText('No notifications yet');
   });
 
   it('switches filter tabs and re-queries with the filter', async () => {

@@ -7,6 +7,8 @@
  *   (issue.md §4.2);`/` 聚焦顶栏搜索;
  * - 所有快捷键均有等价鼠标路径(§6.12);返回合并注销函数。
  */
+import { getApiClient } from '../api/instance';
+import { restoreActiveOnboarding } from '../features/onboarding';
 import { useShortcutRegistry } from '../shortcuts';
 import type { ShortcutDef } from '../shortcuts';
 import { useSettingsStore } from '../state/settingsStore';
@@ -100,6 +102,18 @@ export function registerShellShortcuts(
       label: labels.actions.themeToggle,
       group: 'global',
       run: () => setTheme(NEXT_THEME[useSettingsStore.getState().preferences.theme]),
+    }),
+  );
+
+  // 上手清单恢复(onboarding.md §4.2):与帮助菜单入口同一编排;失败静默(幂等,无可见副作用)
+  unregisters.push(
+    registry.registerCommand({
+      id: 'onboarding.restore',
+      label: labels.actions.restoreOnboarding,
+      group: 'global',
+      run: () => {
+        void restoreActiveOnboarding(getApiClient()).catch(() => undefined);
+      },
     }),
   );
 

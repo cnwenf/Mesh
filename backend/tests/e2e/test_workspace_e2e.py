@@ -266,8 +266,14 @@ async def test_invitation_full_lifecycle(api_client, session_factory):
     names = [e.payload["event"] for e in realtime]
     assert names.count("invitation.redeemed") == 2
     assert names.count("member.added") >= 2
+    # invitation.redeemed / member.added 走工作区频道;入册同事务播种的
+    # onboarding.progress 走成员私有频道 member:{id}:onboarding(onboarding.md §3.7)。
     for event in realtime:
-        assert event.payload["channel"] == f"workspace:{workspace['id']}"
+        if event.payload["event"] in ("invitation.redeemed", "member.added"):
+            assert event.payload["channel"] == f"workspace:{workspace['id']}"
+        elif event.payload["event"] == "onboarding.progress":
+            assert event.payload["channel"].startswith("member:")
+            assert event.payload["channel"].endswith(":onboarding")
 
     # Expire flow: backdate a fresh link, accept → expired; preview reason.
     expired_link = (

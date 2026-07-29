@@ -19,6 +19,7 @@ import type { MemberSummary, Membership } from '../members/types';
 import { listProjects } from '../projects/api';
 import type { ProjectSummary } from '../projects/types';
 import { bulkIssues, createIssue, listIssues, listStatuses, workspaceIssuesChannel } from './api';
+import { requestOptimisticStepComplete } from '../onboarding/notify';
 import { applyIssueListFrame } from './realtime';
 import type { IssuePriority, IssueSummary, IssueStatusRef, StateCategory } from './types';
 import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
@@ -560,6 +561,7 @@ export function IssuesPage(): React.JSX.Element {
           workspace={workspace}
           members={roster}
           onCreated={(created) => {
+            requestOptimisticStepComplete('create_first_issue'); // §1.2.2 乐观推进步骤 3
             // F3:新建结果遵循当前过滤水位;不匹配则重拉(而非错误前置)
             if (
               matchesFilters(

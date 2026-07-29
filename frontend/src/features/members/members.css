@@ -216,3 +216,18 @@
 .mesh-members__error {
   color: var(--color-danger);
 }
+
+/* 空态主/次操作并排(onboarding.md §1.2.2:邀请成员 + 添加 agent) */
+.mesh-members__empty-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+/* 上手进度重置二次确认对话框操作行(onboarding.md §4.2) */
+.mesh-members__dialog-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  margin-block-start: var(--space-4);
+}

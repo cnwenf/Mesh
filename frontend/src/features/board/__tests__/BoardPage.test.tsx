@@ -197,12 +197,14 @@ describe('BoardPage', () => {
     expect(within(doneColumn).getByTestId('quick-add-done')).toBeEnabled();
   });
 
-  it('无视图时呈现空态与新建主操作(§6.12 empty)', async () => {
+  it('无视图时呈现空态与新建主操作(§6.12 empty;onboarding 四要素 + 视图创建次操作)', async () => {
     stubFetchByRoute({ views: [] });
     renderWithProviders(<BoardPage />, { route: '/board' });
     await waitFor(() => {
-      expect(screen.getByText('No views yet')).toBeInTheDocument();
+      expect(screen.getByText('The board is empty')).toBeInTheDocument();
     });
+    // 主操作深链既有 issue 快速创建;视图创建入口仍保留(次操作)
+    expect(screen.getByTestId('board-empty-new-issue')).toBeInTheDocument();
     expect(screen.getByTestId('view-create-open')).toBeInTheDocument();
   });
 

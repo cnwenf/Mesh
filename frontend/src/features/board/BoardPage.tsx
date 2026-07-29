@@ -23,6 +23,8 @@ import { createIssue, workspaceIssuesChannel } from '../issues/api';
 import type { CreateIssueBody, IssuePriority } from '../issues/types';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { CREATE_ISSUE_PATH } from '../onboarding/deeplinks';
+import { EmptyBoardColumns } from '../onboarding/illustrations';
 import {
   createView,
   deleteView,
@@ -428,17 +430,30 @@ export function BoardPage(): React.JSX.Element {
           onDelete={handleDelete}
         />
         <EmptyState
-          title={t('board.emptyTitle')}
-          description={t('board.emptyDescription')}
+          illustration={<EmptyBoardColumns />}
+          title={t('onboarding.empty.board.title')}
+          description={t('onboarding.empty.board.description')}
           action={
-            <Button
-              data-testid="board-empty-create"
-              onClick={() =>
-                document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()
-              }
-            >
-              + {t('board.newView')}
-            </Button>
+            <div className="mesh-board__empty-actions">
+              {/* 主操作:深链既有 issue 快速创建(命令面板 / 快捷键 c 同路径,§6.12) */}
+              <Button
+                variant="primary"
+                data-testid="board-empty-new-issue"
+                onClick={() => navigate(CREATE_ISSUE_PATH)}
+              >
+                {t('onboarding.empty.board.action')}
+              </Button>
+              {/* 次操作:新建视图(原入口保留) */}
+              <Button
+                variant="secondary"
+                data-testid="board-empty-create"
+                onClick={() =>
+                  document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()
+                }
+              >
+                + {t('board.newView')}
+              </Button>
+            </div>
           }
         />
       </div>

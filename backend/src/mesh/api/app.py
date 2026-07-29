@@ -79,6 +79,8 @@ from mesh.labels.routes import router as label_router
 from mesh.labels.service import LabelService
 from mesh.member.routes import router as member_router
 from mesh.member.service import MemberService
+from mesh.onboarding.routes import router as onboarding_router
+from mesh.onboarding.service import OnboardingService
 from mesh.project.channels import register_resource_checkers
 from mesh.project.routes import router as project_router
 from mesh.project.service import ProjectService
@@ -260,6 +262,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
     )
     app.state.favorites_service = FavoritesService(session_factory)
+    app.state.onboarding_service = OnboardingService(session_factory)
     app.state.chat_service = ChatService(
         session_factory,
         comment_service=app.state.comment_service,
@@ -340,6 +343,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(comment_inbox_router)
     app.include_router(chat_router)
     app.include_router(favorites_router)
+    app.include_router(onboarding_router)
     app.include_router(agent_router)
     app.include_router(runtime_router)
     app.include_router(runtime_daemon_router)

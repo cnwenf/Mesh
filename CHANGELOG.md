@@ -3,6 +3,40 @@
 Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.18.0] - 2026-07-29
+
+平台能力层 A:上手引导全功能实现(MES-69,onboarding.md 五章)。`onboarding_states` + `onboarding_state_steps` 两表进度真源(迁移 0027);Mesh 激活路径五步清单(建区 → 邀请/加 agent → 建首 issue → 分派/@ 触发首个运行 → 收件箱见 agent 回评 = aha moment);入册同事务播种 + 成熟工作区全量 reconcile(R3/R4:受邀者步骤按成员自身历史带证据完成,未触发过执行的成员步骤 4 保持 pending——不批量补齐、不伪造证据);aha 末步仅由 `notification.read` 阅读证据驱动,evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组,严格按 `trigger_member_id` 归属(读了他人触发执行的回评不得完成本人末步),aha 仅为触发者置位且仅置一次;成体系空状态六页四要素深链既有向导;前端清单卡片 + aha 庆祝态 + 帮助菜单恢复 + 管理员重置。T34 四真实场景全栈 e2e(真 uvicorn + 真 relay + 真 daemon 执行 + 真通知 fanout)与真实浏览器 UI 走查全绿;后端整体单测覆盖率 ≥90%,前端全局覆盖率 97.5/94.5/90.9/97.5(90% 门禁通过)。
+
+### Added
+
+- **数据模型(onboarding.md §2,迁移 0027)**:`onboarding_states`(每成员每工作区每清单一主记录;`UNIQUE(workspace_id, member_id, checklist)` 幂等播种基础;复合 FK `(workspace_id, member_id) → members(workspace_id, id)` ON DELETE CASCADE——跨租户引用 INSERT 即拒;`aha_reached_at`/`dismissed_at`;`idx_onboarding_states_ws_aha` 部分索引);`onboarding_state_steps`(步骤明细子表,step_key 五步枚举 CHECK、status/completed_via CHECK、`(status='completed') = (completed_at IS NOT NULL)` 一致性 CHECK、`evidence` JSONB 完成证据、`idx_onboarding_steps_pending` 部分索引供自动检测精准 UPDATE,§5.2 无全表扫描);`UNIQUE(workspace_id, id)` 复合 FK 引用目标;fail-closed RLS + GRANT mesh_app;downgrade 完备;模型↔DDL 漂移门禁绿。
+- **入册播种(§3.5 R3 主路径,T34①)**:人类成员入册事务(工作区创建 owner / 邀请兑换 / 直接添加)**同事务**播种主记录 + 五步——`create_workspace` 步即 `completed(auto)`(工作区既已存在),savepoint 守卫保证并发首访恰一行五步;agent 成员**不播种**(清单是人类成员的上手路径);`GET /onboarding/state` 惰性创建仅为存量成员兜底。
+- **成熟工作区全量 reconcile(R3/R4,T34②)**:播种后同事务回查历史事实——步骤 2(工作区历史名册已含 agent 成员或 human ≥ 2,evidence `member_added_id`)、步骤 3(工作区已有 issue 或本人 report 过,evidence `issue_id`/`reporter_member_id`)按工作区事实带证据完成;**步骤 4 仅按成员自身触发历史完成**:assign 经 `issue_activity(field='assignee_id')` 分派留痕 actor(建 issue 即分派无留痕时回退 reporter——创建路径不写 activity,分派者即创建者)、mention 经 `execution.enqueue` outbox 幂等键反查 `comment_mentions.triggered_execution_id`(skeleton 锚点)→ 评论作者;**从未触发过的成员保持 pending——不按「工作区首个执行」批量补齐、不伪造证据**;步骤 5 仅历史已读且满足末步条件的通知完成。
+- **aha 末步阅读证据协议(§1.2.1/T34③④)**:末步**仅由 `notification.read` 驱动**——成员标读/打开的通知关联 agent 回评(JOIN `members.member_type='agent'`;聚合收件箱组经 `payload.latest_comment_id` 锚定最新回评)+ 该评论所属执行 `completed` 且**由该成员触发**(assign/mention 归属链校验)→ 完成末步、`aha_reached_at` 条件 UPDATE 仅置一次、evidence 持久化 `{execution_id, comment_id, notification_id, trigger_member_id}` 四元组;**相关通知未读 → 末步保持 pending、aha 不置位**(不再凭「工作区存在 completed 执行 + agent 评论」对全体成员批量完成);**读了「他人触发的执行」的 agent 回评通知不得完成本人末步**,aha 仅为触发者置位。
+- **自动完成事件消费(§3.6,README §6.6 唯一权威)**:链于 outbox relay 的 `realtime.publish` 合成处理器(投影 → autopilot 匹配 → onboarding 消费,单次 claim 三投递);`member.added`(agent 成员或 human≥2 → 工作区内该步 pending 清单批量完成)、`issue.created`(工作区首 issue 批量 / reporter 即时)、`execution.queued`(仅解析到真实 `task_executions` 行且 trigger ∈ assign/mention;**仅完成触发者本人清单**——R4 不批量污染其他成员;skeleton 载荷自动跳过)、`notification.read`(末步证据链);完成守卫为 `pending` 条件 UPDATE,at-least-once 重复消费幂等(0 行 no-op,不重发事件);派生 `onboarding.progress`/`onboarding.completed` 经 `emit_realtime` outbox 唯一路径登记 `member:{member_id}:onboarding` 私有频道(§6.7 已登记词汇,本模块不直写 `realtime_events`)。
+- **REST API(§3.1/§6.14)**:`GET /onboarding/state?workspace_id=`(单对象内联五步 + progress 聚合快照,惰性播种兜底)、`POST /onboarding/steps/{step_key}/complete?workspace_id=`(手动完成,幂等 no-op 不覆盖 completed_via/completed_at;dismissed 时非末步 422 `checklist_completed`)、`POST /onboarding/dismiss?workspace_id=` / `POST /onboarding/restore?workspace_id=`(条件 UPDATE 幂等,首值保持)、`POST /workspaces/{ws}/onboarding/reset`(admin/owner 删档重建 + 全量 reconcile;非 admin 403);自助端点成员资格门 + 清单归属即当前 principal(防 IDOR,无 member_id 参数可篡改);`workspace_id` 缺失/非法 400 `validation_error`、合法 UUID 非成员 404 `not_found`(§3.3 + §5.3 不泄漏存在性)、非 admin 重置 403 `forbidden` 错误码矩阵;写端点 principal+IP 限流。
+- **频道授权扩展(README §6.7)**:`member:{member_id}:onboarding` 私有频道——realtime 授权 member 实体分支扩展 `:onboarding` 后缀(roster 归属解析,首事件前无频道行亦可订阅);member 私有频道 checker 接受 `:inbox`/`:onboarding` 双后缀,所有权规则同一(principal 拥有该 member 行),API 与网关同注册不漂移。
+- **前端上手清单(onboarding.md §4)**:新模块 `src/features/onboarding/`——清单卡片常驻核心页顶部(进度条 success 语义 token + `{completed}/{total}` + 百分比;五步勾选圈 ✓ 图标 + 「已完成」文字,脉冲/颜色不作唯一信号;每步 CTA 一步深链**既有**向导——设置 / 成员名册(邀请面板 + 唯一 agent 创建入口)/ 新建 issue 入口(`/issues?create=1`)/ issue 详情(分派 assignee / @ 提及 composer,§1.2.1;无 issue 回退看板)/ 收件箱,不重复造向导;CTA 目标经 `deeplinks.ts` 唯一真源解析;自动完成「✓ 已自动完成」角标;首个未完成步高亮默认展开 CTA;「不再显示」dismiss);**aha 庆祝卡**(插画 + 「你的第一位 AI 队友已上岗」+ 「查看 ta 的回评」深链收件箱 + 一键收起,尊重 `prefers-reduced-motion`,文字与图标叠加非动画唯一信号);`useOnboarding` 派生工作区/成员(仿 useInboxContext)+ WS 订阅 `member:{id}:onboarding` 帧触发重拉 + 实时缺省 30s 轮询降级(§3.7),写操作后以 DB 为准重拉。
+- **成体系空状态(§1.2.2,README §6.12 异常态矩阵延伸)**:六核心页空状态四要素(语义 token 插画 + 引导文案 + 主操作按钮 + 深链既有向导)——收件箱(空收件托盘,「查看 issue」)/ 项目(空文件夹,「新建项目」)/ 看板(空看板列,「新建 issue」复用既有快建路径推进步骤 3)/ 成员(空名册,「邀请成员 / 添加 agent」——agent 入口唯一为成员名册,推进步骤 2)/ 聊天(空会话列表,「开始对话」)/ 自动化(空 autopilot 列表,「新建 autopilot」);空状态主操作与清单 CTA 共享同一深链表(`deeplinks.ts` 单一真源,§4.2/§5.1);**乐观推进**(§1.2.2 末注/§5.1):成员页邀请成功 / 加 agent 成功 → 乐观置位步骤 2、建 issue 成功 → 乐观置位步骤 3(本地即时置位 + POST 手动完成 + 失败回滚),服务端领域事件经完成守卫复核收敛。
+- **恢复与重置入口(§4.2)**:帮助菜单(`?` 快捷键层)与命令面板(Ctrl/Cmd+K)「重新显示上手清单」→ restore 编排共用;成员管理页 admin/owner 对人类成员「重置该成员上手进度」(二次确认 Dialog → 重置端点)。
+- **i18n**:zh-CN + en 各 +51 个 `onboarding.*` 键 + `error.checklist_completed`/`onboarding.restoreError`,键集 parity 保持(1978 键),djb2 目录版本重算(en `d51d42c4` / zh-CN `c404f4cd`,独立核验与 `computeCatalogVersion` 一致)。
+
+### Verified
+
+- **后端单测 54 项全绿**:模型约束 11(跨租户复合 FK 拒绝 / completed_at 一致性 CHECK / 枚举守卫 / 级联 / 并发播种恰一行五步)、服务 20(播种幂等 / reconcile 各分支含建 issue 即分派归属 / 守卫 no-op / dismiss-restore 幂等 / reset 重建)、消费 17(四事件逐分支 + R4 仅触发者完成 + 未读不完成 + 错误触发者拒绝 + 重复消费幂等 + skeleton 跳过)、路由 7(包络形状 / 400-404 错误矩阵 / 422 / 403 / 防 IDOR)。
+- **T34 四真实场景 e2e 全绿**(真 uvicorn mesh_app RLS + 生产 relay 处理器集 + 真 PostgreSQL):① 入册播种(建区/邀请兑换同事务播种,agent 不播种);② 成熟工作区 reconcile(受邀者步骤 2-3 带证据完成、步骤 4 保持 pending);③ 未读不完成(回评通知已投递未标读 → 末步 pending、aha NULL);④ 错误触发者拒绝 + 触发者本人标读 → 四元组 evidence + `onboarding.completed` 经 outbox→projector 落 `realtime_events` 仅一次;执行链全真(daemon 激活/claim/attempt completed + 真实 agent 回评 + 真实 fanout)。
+- **真实浏览器 UI 走查**:docker compose 全栈(迁移 0027 随 api 启动自动应用)+ Vite 真前端——清单渲染/进度/CTA 深链跳转/六页空状态/dismiss-帮助菜单 restore/管理员重置,存证截图。
+- **覆盖率**:后端整体 `pytest --cov=mesh --cov-fail-under=90` 全量实测通过(TOTAL 92%,含全部 e2e);前端 247 文件 / 2476 测试全绿,全局 L97.5/B90.9/F94.5/S97.5,onboarding 目录纳入 per-file 90% 门禁并通过;`tsc` 净、eslint 0 错;CI `ruff check backend/src backend/tests` 净;`check_event_vocab.py` / `check_roster_entry.py` CI 脚本通过。
+- **回归适配**:`test_workspace_e2e.py` 的 outbox 频道断言收窄为按事件名分道(invitation.redeemed / member.added 仍断言工作区频道;入册播种派生的 `onboarding.progress` 断言成员私有频道 `member:{id}:onboarding`,onboarding.md §3.7)。
+
+### Fixed(验收第 1 轮打回整改,B1/B2/B3)
+
+- **B1(CI 红线)**:`backend/src/mesh/api/app.py` onboarding import 排序违例(I001)致 CI ruff 步骤 exit 1——修复后 CI lint 命令 `ruff check backend/src backend/tests` 全净,覆盖率门禁与真实 e2e 在 CI 真实执行。
+- **B2(Spec §1.2.2/§5.1)**:空状态主操作「乐观推进」落地——成员页邀请/加 agent 成功 → 步骤 2、建 issue 成功 → 步骤 3,经 `useOnboarding` 乐观置位(本地即时 + POST 手动完成 + 失败回滚)+ 服务端领域事件复核;修复乐观处理器「setState updater 排队未同步执行致 POST 不发起」缺陷(决策改基于已渲染状态);补钩子乐观/回滚/守卫单测与页面接线测试。
+- **B3(Spec §4.2/§5.1/§1.2.1)**:深链唯一真源 `deeplinks.ts`——清单 CTA 与空状态主操作同读一处;步骤 3 CTA 改指新建 issue 入口(`/issues?create=1`)、步骤 4 CTA 改指 issue 详情(分派 assignee / @ composer;工作区最新 issue 派生,无 issue 回退看板);CHANGELOG 措辞与代码对齐。
+- **§3.3 错误码对齐**:`workspace_id` 缺失/非法返回 400 `validation_error`(原文字面),合法 UUID 非成员保持 404 `not_found`(§5.3 不泄漏存在性)。
+- **非阻塞备注顺手清**:后端 `service.py`(1040 行)拆为 `completion.py`(守卫/进度)+ `attribution.py`(R4 触发者归属 / aha 证据链)+ `reconcile.py`(建状态全量 reconcile),`service.py` 降为 façade + 播种/渲染/路由事务(行为不变,测试全绿);死键 `a11y.onboarding.card`/`onboarding.dismissedNote` 与死码 `parseOnboardingFrame` 删除;restore 失败不再静默(帮助层 `role=alert` 提示);`OnboardingChecklist` 分支覆盖 90% 并纳入 per-file 门禁;`data-jobs/wizardFlow` 满载机偶发失败修为确定性等待(busy 禁用按钮竞态,非超时糊弄)。
+
 ## [0.17.2] - 2026-07-29
 
 平台能力层 A:数据导入导出一致性加固(MES-70,import-export.md 五章逐项复核 + 缺陷收口)。对 0.17.1(MES-64)已合入的 import-export 模块做独立 spec 复核,修复若干真实缺陷并补齐 spec 要求的行为;T31 红线 e2e 全量重测仍全绿,模块单测覆盖率维持 ≥90%。

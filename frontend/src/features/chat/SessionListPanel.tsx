@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { Button, EmptyState, ErrorState, IconButton, Select, Skeleton } from '../../design';
 import { formatRelativeTime, useT } from '../../i18n';
 import type { AgentSummary } from '../agents/types';
+import { EmptyChatBubbles } from '../onboarding/illustrations';
 import { AgentAvatar } from './AgentAvatar';
 import type { ChatSession } from './types';
 
@@ -174,11 +175,12 @@ export function SessionListPanel(props: SessionListPanelProps): React.JSX.Elemen
         <Skeleton loadingLabel={t('common.loading')} />
       ) : props.sessions.length === 0 ? (
         <EmptyState
-          title={t('chat.empty.sessionsTitle')}
-          description={t('chat.empty.sessionsDescription')}
+          illustration={<EmptyChatBubbles />}
+          title={t('onboarding.empty.chat.title')}
+          description={t('onboarding.empty.chat.description')}
           action={
             <Button size="sm" data-testid="chat-empty-new" onClick={props.onNewSession}>
-              {t('chat.session.new')}
+              {t('onboarding.empty.chat.action')}
             </Button>
           }
         />

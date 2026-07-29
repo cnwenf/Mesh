@@ -243,14 +243,14 @@ describe('ProjectsPage', () => {
     expect(screen.queryByTestId('project-date-prj-2')).not.toBeInTheDocument();
   });
 
-  it('无项目时显示空态', async () => {
+  it('无项目时显示空态(onboarding 四要素)', async () => {
     stub([]);
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
     // 两段加载(fetchMe → workspace 就绪后二次拉取)会瞬时替换空态节点;
     // 以「终态独有的描述文案 + 标题」组合作为稳定判据。
     await waitFor(() => {
-      expect(screen.getByText('No projects match the current filters.')).toBeInTheDocument();
-      expect(screen.getByText('Nothing here yet')).toBeInTheDocument();
+      expect(screen.getByText('Group related issues with a project.')).toBeInTheDocument();
+      expect(screen.getByText('No projects yet')).toBeInTheDocument();
     });
   });
 

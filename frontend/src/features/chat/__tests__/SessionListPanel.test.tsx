@@ -129,10 +129,14 @@ describe('SessionListPanel(§4.1)', () => {
     expect(onStatusFilterChange).toHaveBeenCalledWith('archived');
   });
 
-  it('空列表呈现空态 + 新建入口', async () => {
+  it('空列表呈现 onboarding 四要素空态 + 新建入口(onboarding.md §1.2.2)', async () => {
     const user = userEvent.setup();
     const onNewSession = vi.fn();
     renderPanel({ sessions: [], onNewSession });
+    // 插画 + 引导文案 + 主操作深链既有发起会话入口
+    expect(screen.getByTestId('illustration-chat')).toBeInTheDocument();
+    expect(screen.getByText('No conversations yet')).toBeInTheDocument();
+    expect(screen.getByText('Start a chat')).toBeInTheDocument();
     await user.click(screen.getByTestId('chat-empty-new'));
     expect(onNewSession).toHaveBeenCalledTimes(1);
   });

@@ -25,6 +25,7 @@ const METRICS = ['lines', 'functions', 'branches', 'statements'];
  */
 const PER_FILE_DIRS = [
   'src/features/agents/',
+  'src/features/onboarding/',
   'src/features/members/',
   'src/features/comments/',
   'src/features/inbox/',

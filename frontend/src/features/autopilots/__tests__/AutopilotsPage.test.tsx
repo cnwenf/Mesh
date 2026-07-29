@@ -196,12 +196,12 @@ describe('AutopilotsPage', () => {
     expect(realtime.subscribed).toContain('workspace:ws-1:autopilots');
   });
 
-  it('shows the empty state without rules', async () => {
+  it('shows the empty state without rules (onboarding 四要素空态:插画 + 文案 + 深链既有向导)', async () => {
     setup([]);
     renderPage();
-    await waitFor(() =>
-      expect(screen.getByText(/No automation rules yet/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/No autopilots yet/)).toBeInTheDocument());
+    // 主操作深链 autopilot 创建向导(onboarding.md §1.2.2)
+    expect(screen.getByTestId('autopilot-empty-create')).toBeInTheDocument();
   });
 
   it('shows the error state on fetch failure', async () => {
