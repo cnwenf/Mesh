@@ -106,7 +106,8 @@ async def test_register_login_me_inprocess(client):
 
 async def test_login_issues_httponly_session_cookie(client):
     # auth.md §5.5 / theme.md §2.3 ①: login sets the mesh_session HttpOnly
-    # cookie (additive channel the HTML entry reads for first-frame injection).
+    # cookie — the SOLE web refresh transport (R4-H1); the HTML entry reads it
+    # server-side for first-frame theme injection.
     await client.post(
         "/api/v1/auth/register",
         json={"email": EMAIL, "password": PASSWORD, "display_name": "API"},
@@ -122,7 +123,8 @@ async def test_login_issues_httponly_session_cookie(client):
     assert "samesite=strict" in header
     assert "path=/" in header
     # dev auth_mode → secure omitted (http loopback); production would set it.
-    assert resp.json()["data"]["refresh_token"]  # body refresh still present (additive)
+    # R4-H1: the body carries access ONLY — refresh never appears in plaintext.
+    assert "refresh_token" not in resp.json()["data"]
 
 
 async def test_me_returns_updated_at_for_pending_conflict_strategy(client):
@@ -135,12 +137,10 @@ async def test_me_returns_updated_at_for_pending_conflict_strategy(client):
 
 
 async def test_logout_clears_session_cookie(client):
-    tokens = await _register_and_login(client)
-    resp = await client.post(
-        "/api/v1/auth/logout",
-        headers=_auth(tokens["access_token"]),
-        json={"refresh_token": tokens["refresh_token"]},
-    )
+    # R4-H1 logout: the session is located via the presented mesh_session
+    # cookie (kept in the client jar since login) — no body, no Bearer.
+    await _register_and_login(client)
+    resp = await client.post("/api/v1/auth/logout")
     assert resp.status_code == 200
     cleared = [c for c in resp.headers.get_list("set-cookie") if c.startswith("mesh_session=")]
     assert cleared and "max-age=0" in cleared[0].lower()
