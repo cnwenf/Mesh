@@ -185,7 +185,8 @@ describe('MessageAttachments(§4.2 扫描闸门)', () => {
       />,
     );
     await screen.findByTestId('chat-attachment-file-a-1');
-    fireEvent.click(screen.getByTestId('chat-attachment-download-a-1'));
+    // 下载按钮在签名 URL 异步解析后出现(高负载下非同步渲染)。
+    fireEvent.click(await screen.findByTestId('chat-attachment-download-a-1'));
     await waitFor(() => expect(document.querySelector('.mesh-toast')).not.toBeNull());
   });
 
@@ -227,7 +228,8 @@ describe('MessageAttachments(§4.2 扫描闸门)', () => {
       />,
     );
     await screen.findByTestId('chat-attachment-file-a-1');
-    fireEvent.click(screen.getByTestId('chat-attachment-download-a-1'));
+    // 下载按钮在签名 URL 异步解析后出现(高负载下非同步渲染)。
+    fireEvent.click(await screen.findByTestId('chat-attachment-download-a-1'));
     // 端点被调用,但非法协议被拦截(无 toast、无崩溃)
     await waitFor(() => expect(calls.some((u) => u.includes('/download'))).toBe(true));
     expect(document.querySelector('.mesh-toast')).toBeNull();

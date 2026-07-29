@@ -109,7 +109,7 @@ export function SettingsPage(): React.JSX.Element {
         <Select
           data-testid="theme-select"
           label={t('theme.label')}
-          value={preferences.theme}
+          value={preferences.theme ?? ''}
           onChange={(event) => setTheme(event.target.value as ThemeMode)}
         >
           {THEME_OPTIONS.map((mode) => (

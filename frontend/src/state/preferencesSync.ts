@@ -12,6 +12,7 @@
 import type { MeshApiClient } from '../api/client';
 import { MeshApiError } from '../api/errors';
 import {
+  ERROR_INVALID_THEME_MODE,
   ERROR_INVALID_TIMEZONE,
   ERROR_UNSUPPORTED_LOCALE,
   updatePreferences,
@@ -21,7 +22,12 @@ import type { ThemeMode, UserPreferences } from './settingsStore';
 
 /** 偏好同步错误类型(供 UI 层按 code 渲染 i18n 错误提示) */
 export interface PreferenceSyncError {
-  readonly code: 'unsupported_locale' | 'invalid_timezone' | 'network' | 'server';
+  readonly code:
+    | 'unsupported_locale'
+    | 'invalid_timezone'
+    | 'invalid_theme_mode'
+    | 'network'
+    | 'server';
   readonly message: string;
   readonly status: number;
 }
@@ -47,7 +53,11 @@ export function toUpdatePayload(preferences: UserPreferences): UpdatePreferences
 /** 将 MeshApiError 归一为 PreferenceSyncError */
 function toSyncError(err: unknown): PreferenceSyncError {
   if (err instanceof MeshApiError) {
-    if (err.code === ERROR_UNSUPPORTED_LOCALE || err.code === ERROR_INVALID_TIMEZONE) {
+    if (
+      err.code === ERROR_UNSUPPORTED_LOCALE ||
+      err.code === ERROR_INVALID_TIMEZONE ||
+      err.code === ERROR_INVALID_THEME_MODE
+    ) {
       return { code: err.code, message: err.message, status: err.status };
     }
     if (err.status === 0) {
@@ -82,10 +92,12 @@ export async function syncPreferencesToServer(
 
 /**
  * 单独同步 theme(仅 settings.theme 字段变更时调用,减少不必要的全量写入)。
+ * `null` = 显式清除、恢复跟随工作区默认(theme.md §3.2:后端对显式 null
+ * 执行 key pop;非法值 → 422 invalid_theme_mode 经 onError 归一)。
  */
 export async function syncThemeToServer(
   client: MeshApiClient,
-  theme: ThemeMode,
+  theme: ThemeMode | null,
   options: SyncPreferencesOptions = {},
 ): Promise<void> {
   try {

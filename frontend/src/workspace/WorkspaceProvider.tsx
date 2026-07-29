@@ -33,6 +33,7 @@ import { useRealtimeContext } from '../shell/AppShell';
 import { channelEventsUrl, fetchRestEvents } from '../shell/AppShell';
 import { env } from '../env';
 import { getToken } from '../state/authStore';
+import { useWorkspaceThemeBridge } from '../state/workspaceThemeBridge';
 import { canDeleteWorkspace, canViewSettings } from './permissions';
 
 export type WorkspaceStatus = 'loading' | 'ready' | 'not_found' | 'error';
@@ -122,6 +123,30 @@ export function WorkspaceProvider(props: WorkspaceProviderProps): React.JSX.Elem
   useEffect(() => {
     void load();
   }, [load]);
+
+  // theme.md §2.2 协商链第 2 级:把当前工作区 settings.default_theme 桥接给
+  // 路由树根的 ThemeProvider。挂载/切 slug 时先置「期望本级解析但未就绪」
+  // (无显式偏好的用户呈现中性 skeleton 而非猜测);detail 就绪后写入默认值;
+  // workspace.updated 实时浅合并更新 workspace 对象,本 effect 随之重写,
+  // 未设显式账号偏好的成员即时重解析并应用(theme.md §4.5)。
+  useEffect(() => {
+    useWorkspaceThemeBridge.getState().beginWorkspaceLoad();
+    return () => {
+      useWorkspaceThemeBridge.getState().endWorkspaceContext();
+    };
+  }, [slug]);
+
+  useEffect(() => {
+    if (status === 'error' || status === 'not_found') {
+      // 本级不可解析(工作区不可达/不存在)→ 回到「无工作区上下文」,
+      // 协商链落系统级;错误态 UI 正常呈现,不滞留 skeleton。
+      useWorkspaceThemeBridge.getState().endWorkspaceContext();
+      return;
+    }
+    if (status !== 'ready' || workspace === null) return;
+    const value = workspace.settings?.default_theme;
+    useWorkspaceThemeBridge.getState().setWorkspaceDefault(typeof value === 'string' ? value : null);
+  }, [status, workspace]);
 
   // W6 重定向:历史 slug 解析到当前工作区后规范化 URL(replace,子路径保留)。
   useEffect(() => {

@@ -179,7 +179,8 @@ describe('ConversationPanel 分支覆盖(§4.2)', () => {
       />,
     );
     const bar = await screen.findByTestId('chat-context-bar');
-    expect(bar.textContent).toContain('WEB-1');
+    // identifier 经异步解析(先回退 id,解析成功后替换为 WEB-1)。
+    await waitFor(() => expect(bar.textContent).toContain('WEB-1'));
     fireEvent.click(screen.getByTestId('chat-context-remove'));
     await waitFor(() => expect(onSessionUpdated).toHaveBeenCalledTimes(1));
     expect(recorder.calls.some((c) => c.method === 'PATCH')).toBe(true);

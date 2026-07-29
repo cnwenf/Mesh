@@ -101,7 +101,8 @@ export function registerShellShortcuts(
       id: 'theme.toggle',
       label: labels.actions.themeToggle,
       group: 'global',
-      run: () => setTheme(NEXT_THEME[useSettingsStore.getState().preferences.theme]),
+      run: () =>
+        setTheme(NEXT_THEME[useSettingsStore.getState().preferences.theme ?? 'system']),
     }),
   );
 
