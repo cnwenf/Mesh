@@ -20,7 +20,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { MeshApiClient } from '../api/client';
-import { LEGACY_THEME_MIRROR_KEY, THEME_LOCATOR_KEY, clearThemeLocators } from '../design/themeLocator';
+import { LEGACY_THEME_MIRROR_KEY, clearThemeLocators } from '../design/themeLocator';
 import { isThemeMode } from '../design/themeNegotiation';
 import type { ThemeMode } from '../design/themeNegotiation';
 import {
@@ -73,8 +73,6 @@ export interface SettingsState {
 }
 
 export const SETTINGS_STORAGE_KEY = 'mesh.settings.v1';
-/** 跨标签页 locator 变更事件(ThemeProvider 监听重校验,§4.2 补齐) */
-export const LOCATOR_CHANGE_EVENT = 'mesh-theme-locator-change';
 
 export function detectTimezone(): string {
   try {
@@ -229,7 +227,9 @@ let crossTabTeardown: (() => void) | null = null;
 /**
  * 跨标签页同步(§4.2 评审 T5② 补齐):zustand persist 默认不监听同源其他
  * 标签页的写入——注册 storage 监听,偏好写入即时同步到当前标签(不刷新、
- * 不二次回推服务端);locator 写入派发事件由 ThemeProvider 重校验。
+ * 不二次回推服务端)。locator 键的跨标签页变更无需事件中转:各标签页在自身
+ * 解析落地时按当前路由身份回写自己的 locator,ThemeProvider 的权威解析
+ * effect 即重校验来源(评审 L2/B3:原 LOCATOR_CHANGE_EVENT 无生产消费者,已删)。
  * 返回拆卸函数;重复调用幂等(仅首个生效)。
  */
 export function initCrossTabSync(): () => void {
@@ -258,8 +258,6 @@ export function initCrossTabSync(): () => void {
       } catch {
         /* 其他标签页写入了非法载荷:忽略,保持本标签现状 */
       }
-    } else if (event.key === THEME_LOCATOR_KEY) {
-      window.dispatchEvent(new CustomEvent(LOCATOR_CHANGE_EVENT));
     }
   };
   window.addEventListener('storage', onStorage);

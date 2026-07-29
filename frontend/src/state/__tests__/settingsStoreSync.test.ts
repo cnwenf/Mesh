@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../api/client';
 import { THEME_LOCATOR_KEY } from '../../design/themeLocator';
 import {
-  LOCATOR_CHANGE_EVENT,
   SETTINGS_STORAGE_KEY,
   bindSyncClient,
   defaultPreferences,
@@ -268,10 +267,9 @@ describe('跨标签页同步(theme.md §4.2 评审 T5②)', () => {
     }
   });
 
-  it('locator 键变更派发 LOCATOR_CHANGE_EVENT', () => {
+  it('locator 键的跨标签页写入不中转事件(各标签页自写自校验,B3)', () => {
     const teardown = initCrossTabSync();
-    const listener = vi.fn();
-    window.addEventListener(LOCATOR_CHANGE_EVENT, listener);
+    const before = useSettingsStore.getState().preferences;
     try {
       act(() => {
         window.dispatchEvent(
@@ -281,9 +279,9 @@ describe('跨标签页同步(theme.md §4.2 评审 T5②)', () => {
           }),
         );
       });
-      expect(listener).toHaveBeenCalledTimes(1);
+      // 偏好不受影响、无事件中转:locator 由 ThemeProvider 权威解析 effect 重校验。
+      expect(useSettingsStore.getState().preferences).toBe(before);
     } finally {
-      window.removeEventListener(LOCATOR_CHANGE_EVENT, listener);
       teardown();
     }
   });
