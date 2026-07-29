@@ -75,11 +75,20 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   }
 
   async function onApprove(): Promise<void> {
-    if (confirmation === null || workspaceId === '') return;
+    if (confirmation === null) return;
+    // 单工作区自动绑定在点击时派生(不依赖 effect 时序——快速点击不得落空);
+    // 多工作区必须已手选(无默认项)。
+    const effectiveWorkspace =
+      workspaceId !== ''
+        ? workspaceId
+        : confirmation.workspaces.length === 1
+          ? confirmation.workspaces[0].id
+          : '';
+    if (effectiveWorkspace === '') return;
     // 批准绑定所录入的码(非预填值):防预填篡改导致批准他码。
     const code = codeInput.trim();
     try {
-      const result = await approveDevice(client, code, workspaceId);
+      const result = await approveDevice(client, code, effectiveWorkspace);
       setResultStatus(result.status);
       setPhase('done');
     } catch {
