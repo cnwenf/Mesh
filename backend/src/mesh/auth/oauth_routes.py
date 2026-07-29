@@ -109,7 +109,10 @@ async def list_identities(
 
 @router.delete("/{provider}")
 async def unbind_identity(
-    provider: str, request: Request, user: User = Depends(require_recent_auth_web_only)  # §1.1 matrix: web-only step-up
+    # §1.1 matrix: web-only step-up
+    provider: str,
+    request: Request,
+    user: User = Depends(require_recent_auth_web_only),
 ) -> dict:
     service = _oauth_service(request)
     await service.unbind_identity(user_id=user.id, provider_name=provider)

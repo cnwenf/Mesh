@@ -244,7 +244,7 @@ async def test_logout_specific_refresh(api_client):
 
 
 async def test_password_reset_single_use_via_dev_mailer(api_client, redis_client):
-    tokens = await _register_and_login(api_client)
+    await _register_and_login(api_client)
     forgot = await api_client.post("/api/v1/auth/forgot-password", json={"email": EMAIL})
     assert forgot.status_code == 200
     assert forgot.json()["data"]["status"] == "ok"
@@ -400,11 +400,9 @@ async def test_change_password_identifies_session_by_sid_real_e2e(api_client, db
     且该会话 authenticated_at 刷新为改密时刻(step-up 真源,§2.4)。"""
     from sqlalchemy import select
 
-    from mesh.auth.security import hash_token
     from mesh.db.models.user import Session, User
 
     tokens = await _register_and_login(api_client)
-    cookie = _refresh_cookie(api_client)
     ok = await api_client.post(
         "/api/v1/auth/change-password",
         headers=_auth(tokens["access_token"]),

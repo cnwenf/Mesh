@@ -64,7 +64,6 @@ async def _web_login(api_url: str, email: str) -> tuple[str, httpx.Cookies]:
 
 async def _create_pat(api_url: str, access: str) -> str:
     async with httpx.AsyncClient(base_url=api_url, headers={"Authorization": f"Bearer {access}"}) as client:
-        me = (await client.get("/api/v1/me")).json()["data"]
         ws = (
             await client.post(
                 "/api/v1/workspaces",

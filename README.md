@@ -62,6 +62,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,已于 v0.12.0 随 React 19 / react-router 8 迁移清零(MES-56) |
 | 安全硬化·依赖收口续:React 19 / react-router 8 迁移(MES-56,MES-55 审计例外清零) | ✅ v0.12.0 | react-router 7.18.1 → 8.3.0 清零 GHSA-qwww-vcr4-c8h2(high,RSC CSRF;本站纯客户端 SPA 无该攻击面,随修复版收口使 `npm audit --omit=dev` 全清);连带 React 18.3.1 → 19.2.8(react-router 8 peer 要求 ≥19.2.7)、`@types/react`(-dom)19、Node 引擎 ≥22.22.0(CI Node 20 → 22);v8 移除 `react-router-dom` 包,全仓 43 文件 import 统一为 `react-router`(纯声明式库模式,所用 API 全兼容,零行为变更);typecheck / lint / 构建 / 1274 例单测全绿(覆盖率 97.26%),真实浏览器 e2e 30/30 + 真实后端全栈走查通过 |
 | 安全硬化·依赖收口(auth.md §4.1,MES-46 终局独立扫描) | ✅ v0.11.10 | react-router 6.30.4 → 7.18.1(`npm audit --omit=dev` moderate×2 清零:GHSA-wrjc-x8rr-h8h6 反斜杠开放重定向可达项 + GHSA-337j-9hxr-rhxg SSR hydration 未引入项;无其他依赖 major 升级);登录 `?next=` 与 OAuth 往返回跳守卫统一为 `safeNextPath` 单一实现并升级为**浏览器 URL 解析器等价校验**(控制字符/空白预检 + 同源解析,堵 TAB/LF/CR 与 `/\` 反斜杠两类归一化绕过,CVE-2025-68470 同族);残留 GHSA-qwww-vcr4-c8h2(high)仅影响 unstable RSC API,纯客户端 SPA 不适用,清零待 React 19 迁移独立评估(MES-56) |
+| 开发者平台 CLI + auth 设备码增量 + OpenAPI(cli.md 五章 / auth.md §2.4.2 §3.1.1 / §11) | ✅ v0.19.0 | `mesh` 命令行(REST 瘦客户端,Python/click):设备码登录(RFC 8628:取码 → 浏览器确认页批准 → 轮询换会话凭证,**批准页绑定工作区即 CLI 默认**)+ PAT stdin 登录(令牌绝不进 argv);issue/project/member/agent/execution/runtime 全命令族 + `execution logs --follow`(SSE 降级通道,offset 续传不丢不重)+ export/import(流式 + --dry-run + --strict);退码契约 0/1/2/3/4/130 表驱动;`--output json` 单一合法 JSON + 内置 jq 子集;凭证 0600 fail-closed(属主/符号链接/过宽权限拒载);四 shell 补全。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希 + 活跃码部分唯一索引 + 状态机终态不可逆 + 单码违规>5 作废审计)、确认/拒绝/轮询端点(名册 `FOR UPDATE` 锁序 + scope 服务端取交 + 批准者会话不变量)、`sessions` 设备绑定列 + access JWT `sid`、§3.8 有界幂等 refresh 轮换(Web cookie / CLI `mesh_rft_` 双传输,宽限窗只发 access)、Bearer 自省/自撤销 `GET/DELETE /auth/token`、统一 Bearer 依赖(前缀路由 JWT/`mesh_pat_`/`mesh_agt_`,scopes∩角色;`mesh_rt_`/`mesh_rft_` 常规路由拒绝);Web 登录 refresh 改 HttpOnly cookie 下发(R4-H1);Web 端 `/device` 确认页(手工录入 + 工作区 0/1/多分流 + 防钓鱼绑定)。OpenAPI 3.1 随仓库 `docs/api/openapi.yaml`(FastAPI 生成,`/api/v1/daemon/*` 完全剔除 + CI 零命中门禁 + CLI 契约测试);CLI 单二进制发布流(SHA-256 + minisign 签名,install.sh 校验安装) |
 | attachment 附件(attachment.md 五章,阶段 5 协作层) | ✅ v0.13.2 | 三阶段签名直传(upload-request 签发短时效 PUT → 客户端直传对象存储 → complete 仅 HEAD 初校验并移交隔离区,字节流不经应用服务器);**blob 真源表 `attachment_blobs`**(内容寻址 `UNIQUE(workspace_id, content_hash)` 并发去重串行化、`ref_count` 同事务原子计数、隔离区 `scan_status` 内容级状态机,扫一次全体共享者可见)+ 独立附件记录 `attachments`(会话级 `upload_status`)+ 多态逻辑外键 `attachment_links` + 分块台账 `upload_sessions` + 配额 `attachment_quotas`(§2);隔离区管线 worker(SKIP LOCKED 领取:magic-byte MIME 嗅探 + 全量 SHA-256 校验 + AV 扫描钩子 + sm/md/lg 缩略图,纯文本白名单 `skipped`,§3.3/README §2.2);**可见性闸门**(未放行下载/预览/缩略图 403 `scan_pending`,感染永久拒绝 403 `scan_infected` + critical 审计,README §9 T14);**秒传 possession**(RED LINE:仅已可读该 blob 方可凭 hash 短路,否则强制完整上传 + 服务端后置去重,T24);私有桶短时效签名下载(60s 级、绑定方法与键、未知/可执行强制 attachment);`attachment.processed`/`attachment.deleted` 经 outbox 唯一写入路径;孤儿清理 / 延迟回收 / GC 仅 `ref_count=0`;§3.1 全部端点(§6.14 包络/游标分页/幂等键/限流,人类 JWT 与 agent API token 同一套接口);`UNIQUE(workspace_id, id)` + 同租户复合 FK + RLS;前端附件功能(composer 拖拽/粘贴/进度上传、issue 详情附件区、缩略图网格/灯箱/文件卡片/扫描中占位/agent 产出物标记,i18n 全外部化) |
 
 ## Quick Start
@@ -102,6 +103,21 @@ docker compose up --build -d
 3. **启用保护机制**:Redis 必须 `requirepass` + `protected-mode yes`(并 `bind` 内网网卡,勿 `0.0.0.0`);对象存储与 API 对外端点经 TLS。
 4. **生产认证模式**:`MESH_AUTH_MODE=production`;后端会在启动期校验上述凭据强度,配置不全即 fail-fast。
 5. **部署前自检端口暴露**:`ss -tlnp` / 云安全组核对,确认无数据存储端口对公网开放。
+
+### mesh CLI
+
+```bash
+# 设备码登录(默认):浏览器打开确认页录入 Code 并批准
+pip install ./cli          # 或 Releases 下载签名二进制(cli/install.sh 校验安装)
+mesh config set api-url http://localhost:8000   # 本机栈为 http,需配合 --insecure
+mesh --insecure auth login
+mesh --insecure issue list --workspace <slug> --output json
+
+# CI / 无头:PAT 经 stdin,令牌绝不进命令行参数
+echo "$MESH_PAT" | mesh auth login --with-token
+```
+
+退出码契约:`0` 成功 / `1` 通用(5xx·网络·限流耗尽)/ `2` 鉴权专属(401/403·未登录·过期)/ `3` 校验(400/404/422·用法错误)/ `4` 冲突(409/423)/ `130` 中断;`--output json` 为稳定脚本契约(stdout 单一合法 JSON,诊断一律 stderr)。详见 [docs/specs/features/cli.md](docs/specs/features/cli.md) 与 [cli/README.md](cli/README.md)。
 
 冒烟验证:
 

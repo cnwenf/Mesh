@@ -35,7 +35,6 @@ from mesh.auth.realtime import SESSION_REVOKED_EVENT, broadcast_user_revocation
 from mesh.config import Settings
 from mesh.db.models.api_token import ApiToken
 from mesh.db.models.member import Member
-from mesh.db.tenant import set_tenant_context
 from mesh.db.models.user import (
     EmailVerificationToken,
     LoginAttempt,
@@ -43,6 +42,7 @@ from mesh.db.models.user import (
     Session,
     User,
 )
+from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
     BusinessRuleError,
     ConflictError,

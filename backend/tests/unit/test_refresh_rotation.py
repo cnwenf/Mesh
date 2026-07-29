@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from mesh.auth import jwt as jwt_mod
 from mesh.auth.service import AuthService, RefreshGrace, RefreshWinner

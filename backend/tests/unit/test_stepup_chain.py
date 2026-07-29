@@ -19,7 +19,6 @@ import redis.asyncio as aioredis
 from sqlalchemy import select
 
 from mesh.api.app import create_app
-from mesh.auth.security import decrypt_secret
 from mesh.auth.service import AuthService
 from mesh.auth.tokens import TokenService
 from mesh.config import load_settings
@@ -121,7 +120,11 @@ class TestReauthService:
 
         clock.advance(hours=2)  # the original authentication grows stale
         moment = clock.now
-        result = await service.reauth(user_id=tokens_access_subject(service, tokens), session_id=sid, password=PASSWORD)
+        result = await service.reauth(
+            user_id=tokens_access_subject(service, tokens),
+            session_id=sid,
+            password=PASSWORD,
+        )
         assert result["status"] == "ok"
         assert result["authenticated_at"] == moment
 

@@ -20,7 +20,6 @@ from mesh.config import load_settings
 from mesh.db.models.agent import Agent
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
-from mesh.workspace.service import WorkspaceService
 
 pytestmark = pytest.mark.unit
 

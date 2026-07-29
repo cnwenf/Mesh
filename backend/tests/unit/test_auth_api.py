@@ -181,7 +181,7 @@ async def test_sessions_and_logout_all_inprocess(client):
 
 
 async def test_reset_and_verify_inprocess(client, redis):
-    tokens = await _register_and_login(client)
+    await _register_and_login(client)
     forgot = await client.post("/api/v1/auth/forgot-password", json={"email": EMAIL})
     assert forgot.status_code == 200
     reset_token = await redis.get(f"mesh:devmail:password_reset:{EMAIL}")

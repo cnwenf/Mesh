@@ -13,16 +13,14 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-from mesh.auth.rbac import (
+from mesh.auth.deps import AuthenticatedPrincipal
+from mesh.auth.rbac import (  # noqa: E402  (helper import grouping)
     PERMISSION_MATRIX,
     ROLE_RANK,
     WorkspaceContext,
     assert_guest_project_visible,
     resolve_workspace_by_slug,
     resolve_workspace_context,
-)
-from mesh.auth.deps import AuthenticatedPrincipal
-from mesh.auth.rbac import (  # noqa: E402  (helper import grouping)
     role_satisfies,
 )
 from mesh.db.models.member import Member

@@ -14,13 +14,11 @@ import asyncio
 import uuid
 
 import httpx
-import jwt as pyjwt
 import pytest
 import redis.asyncio as aioredis
 from sqlalchemy import select, text
 
-from mesh.db.models.member import Member
-from mesh.db.models.user import DeviceAuthorization, Session, User
+from mesh.db.models.user import DeviceAuthorization, Session
 from tests.conftest import get_test_redis_url
 
 EMAIL = "device-e2e@corp.com"
@@ -391,7 +389,7 @@ class TestRefreshRace:
         winner), the loser gets access ONLY; the DB holds a single current
         token_hash equal to the winner's credential; the grace path wrote
         nothing (no second rotation)."""
-        access = await _register_and_login(api_client)
+        await _register_and_login(api_client)
         refresh = _refresh_cookie(api_client)
         # Bearer-only from here: the cookie would make the transport ambiguous.
         api_client.cookies.clear()

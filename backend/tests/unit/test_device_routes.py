@@ -164,7 +164,7 @@ class TestPollingBranches:
 
     async def test_denied_maps_to_access_denied(self, client):
         access = await _web_login(client)
-        ws = await _workspace(client, access)
+        await _workspace(client, access)
         issued = await _issue(client)
         dn = await client.post(
             "/api/v1/auth/device/deny",

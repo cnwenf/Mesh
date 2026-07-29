@@ -27,9 +27,9 @@ from mesh.auth.service import AuthService
 from mesh.config import load_settings
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member
-from mesh.db.models.user import DeviceAuthorization, Session, User
+from mesh.db.models.user import DeviceAuthorization, Session
 from mesh.db.models.workspace import Workspace
-from mesh.errors import ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
+from mesh.errors import ForbiddenError, UnauthorizedError, ValidationError
 
 pytestmark = pytest.mark.unit
 
@@ -360,7 +360,7 @@ class TestBruteForceAndSweep:
     ):
         user_id, sid, _ = await _approver(auth_service, session_factory)
         ws_id, _ = await _workspace_for(session_factory, user_id)
-        a = await device_service.create_code(client_id="mesh-cli", scopes=[])
+        await device_service.create_code(client_id="mesh-cli", scopes=[])
         b = await device_service.create_code(client_id="mesh-cli", scopes=[])
         await _approve(device_service, b["user_code"], ws_id, user_id, sid)
         clock.advance(minutes=16)

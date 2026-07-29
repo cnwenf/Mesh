@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.api.deps import get_session
 from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.onboarding.schemas import OnboardingResetRequest
 from mesh.onboarding.service import OnboardingService

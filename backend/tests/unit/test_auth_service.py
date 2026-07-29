@@ -7,9 +7,8 @@ deterministically.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pyotp
 import pytest
