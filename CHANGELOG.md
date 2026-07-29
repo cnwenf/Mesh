@@ -5,8 +5,28 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-30
+服务端 P0 契约冻结落地(MES-91 阶段2 · MES-98,六轮验收收口):runtime 执行体服务端契约全面 Spec 化并对齐实现,为本地执行体(MES-94)联调放行。
+
+### Added
+
+- **Server P0 契约六项落地(MES-98,runtime-executor.md §2.1～2.6 / auth.md §2.5.1)**:
+  - **完整冻结快照(§2.1)**:`build_config_snapshot` 冻结完整 AttemptSpec(provider/model/effort/system_instructions/budget/network_policy/data_policy/skill 版本);assign/mention/autopilot 经统一入口解析 agent 真实配置(修复 mention 空配置 enqueue)并随 claim 下发;新增 SHA-256 快照摘要(`compute_snapshot_digest`)供 daemon 校验完整性。
+  - **任务级 Mesh 身份(§2.2 S-05)**:新增 `attempt_task_tokens` 表与 `task_tokens` 服务——claim 签发绑定 workspace/agent/execution/attempt/lease_seq 的短期 `mesh_task_` token(仅存 hash、明文一次性下发、默认禁 `agent:trigger` 防回环);renew 轮换,终态/reclaim/freeze/runtime 下线五路同事务吊销;`validate_task_token` 全校验(在途/lease_seq/runtime 归属/资源 scope/token+attempt 双维度限速);`/api/v1/task/*` 端点经 `resolve_task_principal` 依赖接线;task 沙箱不注入长期 PAT,token 不入 `api_tokens`。
+  - **结构化结果(§2.6)**:`execution_attempts` 类型化列(provider/provider_version/provider_session_id/model/prompt/completion/cache tokens/cost_usd/num_turns)+ 版本化 result schema 解析。
+  - **issue 完成闭环(§3.7 S-09)**:`result_sink` 消费 `execution.finished`——非 squad 的 assign/mention 触发经 `CommentService` 真实 API 写结果评论(suppress_triggers 防回环 + 幂等键;squad 走既有 relay 闭环;stub 结果与独立闭环触发器跳过)。
+  - **协议协商(§2.6)**:activate/heartbeat 接收 protocol_version/provider_manifest/daemon_features 并落库。
+- **task principal 真实 HTTP e2e**:`test_task_routes_e2e.py` 4 条全链路测试(注册→建区→agent→runtime 激活→enqueue→claim 实领 token→task 路由 200/401 断言,零 mock);新增 21 条 task token/脱敏/result sink 真实 DB 测试。
+
+### Changed
+
+- **runtime token 单一真源(§2.4 S-11)**:移除 `runtimes.runtime_token_id` FK 与 `api_tokens` 双写,`runtimes.runtime_token_hash` 为唯一真源;迁移 0029 吊销并清理旧 runtime token 行、重建 `mesh_runtime_by_token_hash` SECURITY DEFINER 引导函数(剔除已删列);`daemon_auth` 仅校验 hash。
+- 模型-迁移对齐:`cost_usd` Numeric(16,6)、`redaction_hits`/`snapshot_schema_version` nullable、claim 请求唯一索引入模型(drift 门禁绿)。
+
 ### Security
 
+- **S-06 全通道脱敏服务端兜底(安全放行附带条件,ISO-13)**:`attempts.py` 终态 result 持久化前 `redact_result()`、`checkout.py` diff 持久化前 `redact_diff_text()`,与 daemon 首层脱敏对齐(命中计数 + 告警链路)。
+- **task token fail-closed**:过期/吊销/非在途/lease_seq 或 runtime 不匹配/scope 越权一律 401;非 task 路由拒绝 `mesh_task_`;task 路由 token+attempt 双维度限速。
 - **数据与中间件凭据加固(MES-83,公网 Redis 未授权访问事故根因整改)**:
   - `docker-compose.yml` 全部凭据(PostgreSQL / Redis / `mesh_app` / MinIO 根凭据)改为**必填、无默认值**(`${VAR:?...}`,缺失即启动报错),移除 `:-mesh` / `:-mesh_app` / `:-mesh_minio_secret` 等可猜测默认;Redis 显式 `--requirepass` + `--protected-mode yes`。
   - 新增 `scripts/gen-dev-secrets.sh`:本地开发一次性生成强随机 `.env`(CSPRNG,文件 0600,git-ignore;`--force` 轮换),杜绝弱口令开发态。
@@ -21,6 +41,14 @@ Mesh 项目的所有重要变更都记录于此文件。
   - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
   - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
   - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+
+### Fixed
+
+- **onboarding t34 通知不变量回归**:result_sink 无条件结果评论破坏 `latest_comment_id` 精确匹配——触发门禁(仅 assign/mention)+ 内容门禁(stub 结果跳过)修复(第四轮验收三组基线对照实验锁定根因)。
+
+### 验证
+
+- 六轮验收干净环境实测收口:backend-ci 全绿(3004 passed / 0 failed,ruff 净,TOTAL 覆盖率 92% ≥90% 门禁);task principal 全链路真实 HTTP 实测(claim 实领 token → 200,伪造/console token → 401);S-11 干净库迁移实测(引导函数正常、旧 token 401);onboarding 基线对照实验(合入前基线绿 / 当前红 / 仅禁用 result_sink 绿)锁定回归归属并修复。
 
 ## [0.19.1] - 2026-07-29
 Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。
