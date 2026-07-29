@@ -26,8 +26,27 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import logging
 import re
 import uuid
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+from mesh.integrations.dingtalk_api import (
+    GROUP_MSG_PARAM_MAX_BYTES,
+    MSG_KEY_MARKDOWN,
+    MSG_KEY_TEXT,
+    DingTalkClient,
+    DingTalkError,
+    DingTalkRateLimited,
+    InvalidCredentials,
+)
+
+if TYPE_CHECKING:
+    pass
+
+logger = logging.getLogger("mesh.integrations.im_outbound")
 
 # ---------------------------------------------------------------------------
 # External user-key encoding (§3.10 — unambiguous, structurally disjoint)
@@ -205,11 +224,218 @@ def is_card_notification(notification_type: str) -> bool:
     return notification_type == "review_requested"
 
 
+# ---------------------------------------------------------------------------
+# Conversation send + notification push (§3.10)
+# ---------------------------------------------------------------------------
+
+CONVERSATION_GROUP = "group"
+CONVERSATION_DIRECT = "direct"
+
+# The robot message APIs do NOT support @ mentions — copy must call people
+# out by display name instead (§3.10 UX constraint). Outbound text is
+# scrubbed of @mention tokens before sending.
+_MENTION_TOKEN_PATTERN = re.compile(r"@[^\s@]+")
+
+# §3.10 deep-link line appended to the final chunk of a truncated result.
+TRUNCATION_LINK_TEMPLATE = "\n\n---\n完整结果见 Mesh:{url}"
+
+SEND_STATUS_SENT = "sent"
+SEND_STATUS_FAILED = "failed"
+
+REASON_NO_STAFF_ID = "no_staff_id"
+REASON_RATE_LIMITED = "rate_limited"
+REASON_INVALID_CREDENTIALS = "invalid_credentials"
+REASON_UPSTREAM_ERROR = "upstream_error"
+
+
+def sanitize_no_mentions(text: str) -> str:
+    """Strip ``@token`` mention sequences (the platform cannot deliver
+    mentions; attention is expressed by naming the person in copy)."""
+    return _MENTION_TOKEN_PATTERN.sub("", text)
+
+
+def truncate_to_bytes(text: str, max_bytes: int) -> str:
+    """UTF-8-safe prefix truncation to ``max_bytes`` (ellipsis marker)."""
+    if len(text.encode("utf-8")) <= max_bytes:
+        return text
+    marker = "…"
+    limit = _prefix_within_bytes(text, max(max_bytes - len(marker.encode("utf-8")), 1))
+    return text[:limit] + marker
+
+
+@dataclass(frozen=True)
+class ConversationTarget:
+    """Where an outbound IM message goes (derived from the queue item /
+    binding at send time)."""
+
+    workspace_id: uuid.UUID
+    integration_id: uuid.UUID
+    provider_tenant_key: str  # corp_id
+    external_ref: str  # conversationId (group or direct conversation)
+    conversation_type: str  # CONVERSATION_GROUP / CONVERSATION_DIRECT
+    sender_key: str = ""  # direct chats: recipient staffId ('' → undeliverable)
+    binding_id: uuid.UUID | None = None
+    robot_code: str = ""
+
+
+@dataclass(frozen=True)
+class SendOutcome:
+    status: str  # SEND_STATUS_SENT / SEND_STATUS_FAILED
+    reason: str = ""
+    rate_limit_code: str = ""
+    flow_controlled_staff_ids: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def sent(self) -> bool:
+        return self.status == SEND_STATUS_SENT
+
+
+def _fit_msg_param(param: dict[str, object], cap: int = GROUP_MSG_PARAM_MAX_BYTES) -> dict[str, object]:
+    """Shrink the largest string field until the encoded msgParam fits the
+    platform cap (adversarial single-message path; chunked results never
+    reach this)."""
+    encoded = json.dumps(param, ensure_ascii=False, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) <= cap:
+        return param
+    largest_key = max(
+        (key for key, value in param.items() if isinstance(value, str)),
+        key=lambda key: len(str(param[key])),
+        default=None,
+    )
+    if largest_key is None:
+        return param
+    overhead = len(encoded.encode("utf-8")) - len(str(param[largest_key]).encode("utf-8"))
+    fitted = truncate_to_bytes(str(param[largest_key]), cap - overhead)
+    return {**param, largest_key: fitted}
+
+
+class DingTalkIMAdapter:
+    """Semantic outbound adapter for one DingTalk integration instance.
+
+    - conversation channel selection (group ``groupMessages/send`` vs.
+      direct ``oToMessages/batchSend`` per ``conversation_type``),
+    - external-contact direct chats fail ``no_staff_id`` (§3.10 written
+      degradation — the run itself is unaffected),
+    - long results split into markdown chunks with truncation + in-app
+      deep link beyond ``max_chunks`` (§3.10),
+    - rate-limit outcomes carry the flow-controlled staff list so the
+      relay can back off per recipient instead of failing wholesale.
+    """
+
+    def __init__(
+        self,
+        client: DingTalkClient,
+        *,
+        max_chunks: int = 5,
+    ) -> None:
+        self._client = client
+        self._max_chunks = max(1, max_chunks)
+
+    async def send_text(self, target: ConversationTarget, text: str) -> SendOutcome:
+        return await self._send(target, MSG_KEY_TEXT, {"content": sanitize_no_mentions(text)})
+
+    async def send_markdown(
+        self, target: ConversationTarget, title: str, markdown: str
+    ) -> SendOutcome:
+        return await self._send(
+            target,
+            MSG_KEY_MARKDOWN,
+            {"title": sanitize_no_mentions(title), "text": sanitize_no_mentions(markdown)},
+        )
+
+    async def _send(
+        self, target: ConversationTarget, msg_key: str, msg_param: dict[str, object]
+    ) -> SendOutcome:
+        param = _fit_msg_param(msg_param)
+        try:
+            if target.conversation_type == CONVERSATION_GROUP:
+                await self._client.send_group(target.external_ref, msg_key, param)
+                return SendOutcome(SEND_STATUS_SENT)
+            # direct — oToMessages needs an enterprise staffId
+            if not target.sender_key or is_external_contact_key(target.sender_key):
+                logger.warning(
+                    "dingtalk direct outbound undeliverable (no staffId) integration=%s conversation=%s",
+                    target.integration_id,
+                    target.external_ref,
+                )
+                return SendOutcome(SEND_STATUS_FAILED, reason=REASON_NO_STAFF_ID)
+            await self._client.send_direct([target.sender_key], msg_key, param)
+            return SendOutcome(SEND_STATUS_SENT)
+        except DingTalkRateLimited as exc:
+            return SendOutcome(
+                SEND_STATUS_FAILED,
+                reason=REASON_RATE_LIMITED,
+                rate_limit_code=exc.code,
+                flow_controlled_staff_ids=exc.flow_controlled_staff_ids,
+            )
+        except InvalidCredentials:
+            return SendOutcome(SEND_STATUS_FAILED, reason=REASON_INVALID_CREDENTIALS)
+        except DingTalkError:
+            return SendOutcome(SEND_STATUS_FAILED, reason=REASON_UPSTREAM_ERROR)
+
+    async def send_result(
+        self,
+        target: ConversationTarget,
+        *,
+        notification_id: uuid.UUID,
+        markdown: str,
+        title: str = "Mesh 执行结果",
+        detail_url: str | None = None,
+    ) -> list[SendOutcome]:
+        """Push a (possibly long) result as markdown chunks (§3.10).
+
+        Beyond ``max_chunks`` the remainder is truncated and the last sent
+        chunk carries the in-app execution-detail deep link. Each chunk's
+        idempotency key is :func:`chunk_idempotency_key` — the relay
+        registers it with the outbox event so at-least-once dequeue never
+        re-sends a chunk. Terminal failures (invalid credentials /
+        undeliverable direct chat) abort the remaining chunks.
+        """
+        chunks = split_markdown_chunks(markdown)
+        if not chunks:
+            return []
+        truncated = len(chunks) > self._max_chunks
+        if truncated:
+            chunks = chunks[: self._max_chunks]
+        total = len(chunks)
+        outcomes: list[SendOutcome] = []
+        for index, chunk in enumerate(chunks):
+            body = chunk
+            if truncated and index == total - 1 and detail_url:
+                link = TRUNCATION_LINK_TEMPLATE.format(url=detail_url)
+                # Reserve room for the link so it is never cut in half.
+                head = truncate_to_bytes(
+                    chunk, GROUP_MSG_PARAM_MAX_BYTES - len(link.encode("utf-8")) - 60
+                )
+                body = head + link
+            chunk_title = f"{title} ({index + 1}/{total})" if total > 1 else title
+            outcome = await self.send_markdown(target, chunk_title, body)
+            outcomes.append(outcome)
+            if not outcome.sent and outcome.reason in (
+                REASON_INVALID_CREDENTIALS,
+                REASON_NO_STAFF_ID,
+            ):
+                break  # terminal — remaining chunks cannot succeed either
+        return outcomes
+
+
 __all__ = [
+    "CONVERSATION_DIRECT",
+    "CONVERSATION_GROUP",
+    "ConversationTarget",
     "DEFAULT_CHUNK_MAX_BYTES",
+    "DingTalkIMAdapter",
     "EXTERNAL_CONTACT_PREFIX",
     "FINAL_NOTIFICATION_TYPES",
+    "REASON_INVALID_CREDENTIALS",
+    "REASON_NO_STAFF_ID",
+    "REASON_RATE_LIMITED",
+    "REASON_UPSTREAM_ERROR",
+    "SEND_STATUS_FAILED",
+    "SEND_STATUS_SENT",
     "STAFF_ID_KEY_PATTERN",
+    "SendOutcome",
+    "TRUNCATION_LINK_TEMPLATE",
     "VERBOSITY_FINAL_ONLY",
     "VERBOSITY_PROGRESS",
     "chunk_idempotency_key",
@@ -218,7 +444,9 @@ __all__ = [
     "is_external_contact_key",
     "is_valid_staff_id_key",
     "normalize_dingtalk_user_key",
+    "sanitize_no_mentions",
     "should_push_notification",
     "split_markdown_chunks",
+    "truncate_to_bytes",
     "validate_identity_segment",
 ]

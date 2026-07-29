@@ -155,7 +155,7 @@ def test_prefers_paragraph_boundary():
 
 
 def test_falls_back_to_line_boundary():
-    lines = ["line-%04d" % i for i in range(3000)]  # no blank lines
+    lines = [f"line-{i:04d}" for i in range(3000)]  # no blank lines
     text = "\n".join(lines)
     chunks = split_markdown_chunks(text, max_bytes=10000)
     assert len(chunks) > 1
@@ -219,3 +219,241 @@ def test_card_rendering_only_for_approval_requests():
     assert is_card_notification("review_requested")
     assert not is_card_notification("execution_finished")
     assert not is_card_notification("comment_created")
+
+
+# ---------------------------------------------------------------------------
+# DingTalkIMAdapter — channel selection / degradation / truncation
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+
+from mesh.integrations.dingtalk_api import DingTalkClient, DingTalkTokenManager  # noqa: E402
+from mesh.integrations.im_outbound import (  # noqa: E402
+    CONVERSATION_DIRECT,
+    CONVERSATION_GROUP,
+    REASON_INVALID_CREDENTIALS,
+    REASON_NO_STAFF_ID,
+    REASON_RATE_LIMITED,
+    REASON_UPSTREAM_ERROR,
+    ConversationTarget,
+    DingTalkIMAdapter,
+    sanitize_no_mentions,
+    truncate_to_bytes,
+)
+from tests.unit.integrations_dingtalk_support import (  # noqa: E402
+    ScriptedDingTalkTransport,
+    make_client,
+)
+
+
+def _group_target(**overrides) -> ConversationTarget:
+    base = {
+        "workspace_id": uuid.uuid4(),
+        "integration_id": uuid.uuid4(),
+        "provider_tenant_key": "dingcorp",
+        "external_ref": OFFICIAL_CONVERSATION_ID,
+        "conversation_type": CONVERSATION_GROUP,
+        "sender_key": "",
+        "binding_id": uuid.uuid4(),
+    }
+    return ConversationTarget(**{**base, **overrides})
+
+
+def _direct_target(sender_key: str = OFFICIAL_STAFF_ID, **overrides) -> ConversationTarget:
+    return _group_target(
+        conversation_type=CONVERSATION_DIRECT, sender_key=sender_key, **overrides
+    )
+
+
+async def _adapter(redis_client, transport: ScriptedDingTalkTransport, **kwargs) -> DingTalkIMAdapter:
+    manager = DingTalkTokenManager(
+        redis_client,
+        http_client=make_client(transport),
+        integration_id=uuid.uuid4(),
+        app_key="k",
+        app_secret="s",
+        jitter=lambda: 0,
+    )
+    client = DingTalkClient(
+        manager, http_client=make_client(transport), robot_code="robot-1"
+    )
+    return DingTalkIMAdapter(client, **kwargs)
+
+
+async def test_group_text_uses_group_messages_send(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_group_target(), "✅ 已接收,处理中")
+    assert outcome.sent
+    (sent,) = transport.group_sends()
+    assert sent.body["openConversationId"] == OFFICIAL_CONVERSATION_ID
+    assert sent.body["msgKey"] == "sampleText"
+    assert _json.loads(sent.body["msgParam"]) == {"content": "✅ 已接收,处理中"}
+    assert transport.direct_sends() == []
+
+
+async def test_direct_text_uses_oto_batch_send(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_direct_target(), "result")
+    assert outcome.sent
+    (sent,) = transport.direct_sends()
+    assert sent.body["userIds"] == [OFFICIAL_STAFF_ID]
+    assert transport.group_sends() == []
+
+
+async def test_direct_external_contact_fails_no_staff_id_without_request(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    external_key = encode_external_contact_key(OFFICIAL_SENDER_ID)
+    outcome = await adapter.send_text(_direct_target(sender_key=external_key), "hi")
+    assert not outcome.sent
+    assert outcome.reason == REASON_NO_STAFF_ID
+    assert transport.direct_sends() == []  # no request went out
+
+
+async def test_direct_missing_sender_key_fails_no_staff_id(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_direct_target(sender_key=""), "hi")
+    assert outcome.reason == REASON_NO_STAFF_ID
+
+
+async def test_rate_limited_outcome_carries_classification(redis_client):
+    transport = ScriptedDingTalkTransport(
+        send_status=400,
+        send_body={"code": "send.too.fast", "flowControlledStaffIdList": ["s1"]},
+    )
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_group_target(), "hi")
+    assert not outcome.sent
+    assert outcome.reason == REASON_RATE_LIMITED
+    assert outcome.rate_limit_code == "send.too.fast"
+    assert outcome.flow_controlled_staff_ids == ("s1",)
+
+
+async def test_invalid_credentials_outcome(redis_client):
+    """App secret rejected at the REFRESH endpoint → terminal
+    invalid_credentials; the business endpoint is never reached."""
+    transport = ScriptedDingTalkTransport(
+        token_status=400, token_body={"code": "invalidAuthentication"}
+    )
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_group_target(), "hi")
+    assert outcome.reason == REASON_INVALID_CREDENTIALS
+    assert transport.group_sends() == []
+
+
+async def test_token_invalid_then_refresh_still_failing_is_upstream(redis_client):
+    """40014 on the business endpoint → invalidate + refresh once + retry
+    once; still failing → upstream_error (NOT invalid_credentials)."""
+    transport = ScriptedDingTalkTransport(
+        send_queue=[(400, {"code": "40014"}), (400, {"code": "40014"})]
+    )
+    adapter = await _adapter(redis_client, transport)
+    outcome = await adapter.send_text(_group_target(), "hi")
+    assert outcome.reason == REASON_UPSTREAM_ERROR
+    assert transport.token_calls == 2
+
+
+def test_sanitize_no_mentions_strips_at_tokens():
+    assert sanitize_no_mentions("@张三 结果来了") == " 结果来了"
+    assert sanitize_no_mentions("请 @值班 agent 处理") == "请  agent 处理"
+    assert sanitize_no_mentions("no mentions here") == "no mentions here"
+
+
+async def test_outbound_text_never_carries_mentions(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    await adapter.send_text(_group_target(), "@李四 任务完成了")
+    (sent,) = transport.group_sends()
+    content = _json.loads(sent.body["msgParam"])["content"]
+    assert "@" not in content
+
+
+def test_truncate_to_bytes_utf8_safe():
+    text = "中" * 1000
+    out = truncate_to_bytes(text, 300)
+    assert len(out.encode("utf-8")) <= 300
+    assert out.endswith("…")
+    assert truncate_to_bytes("short", 300) == "short"
+
+
+async def test_oversized_single_text_fitted_to_platform_cap(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    await adapter.send_text(_group_target(), "a" * 20000)
+    (sent,) = transport.group_sends()
+    assert len(sent.body["msgParam"].encode("utf-8")) <= 15000
+
+
+async def test_send_result_chunks_long_markdown(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport, max_chunks=5)
+    markdown = ("## section\n" + "内容" * 3000 + "\n\n") * 16  # ~96KB → more than 5 chunks
+    outcomes = await adapter.send_result(
+        _group_target(), notification_id=uuid.uuid4(), markdown=markdown
+    )
+    assert len(outcomes) == 5  # truncated at max_chunks
+    assert all(o.sent for o in outcomes)
+    sends = transport.group_sends()
+    assert len(sends) == 5
+    for sent in sends:
+        assert len(sent.body["msgParam"].encode()) <= 15000
+        assert sent.body["msgKey"] == "sampleMarkdown"
+
+
+async def test_send_result_truncation_appends_deep_link_to_last_chunk(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport, max_chunks=2)
+    markdown = ("para " * 2000 + "\n\n") * 10
+    detail_url = "https://mesh.example.com/workspaces/ws/executions/ex1"
+    outcomes = await adapter.send_result(
+        _group_target(), notification_id=uuid.uuid4(), markdown=markdown, detail_url=detail_url
+    )
+    assert len(outcomes) == 2
+    sends = transport.group_sends()
+    last_text = _json.loads(sends[-1].body["msgParam"])["text"]
+    first_text = _json.loads(sends[0].body["msgParam"])["text"]
+    assert f"完整结果见 Mesh:{detail_url}" in last_text
+    assert "完整结果见 Mesh" not in first_text
+    # the link survives whole (never cut mid-URL)
+    assert last_text.endswith(detail_url)
+
+
+async def test_send_result_within_budget_no_link_no_suffix(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport, max_chunks=5)
+    outcomes = await adapter.send_result(
+        _group_target(),
+        notification_id=uuid.uuid4(),
+        markdown="single short result",
+        detail_url="https://x",
+    )
+    assert len(outcomes) == 1
+    (sent,) = transport.group_sends()
+    param = _json.loads(sent.body["msgParam"])
+    assert param["title"] == "Mesh 执行结果"  # no (i/n) suffix for a single chunk
+    assert "完整结果见 Mesh" not in param["text"]
+
+
+async def test_send_result_terminal_failure_aborts_remaining_chunks(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport, max_chunks=5)
+    markdown = ("para " * 2000 + "\n\n") * 16  # 5+ chunks
+    # direct chat to an external contact → terminal no_staff_id
+    outcomes = await adapter.send_result(
+        _direct_target(sender_key=encode_external_contact_key(OFFICIAL_SENDER_ID)),
+        notification_id=uuid.uuid4(),
+        markdown=markdown,
+    )
+    assert len(outcomes) == 1  # aborted after the first terminal outcome
+    assert outcomes[0].reason == REASON_NO_STAFF_ID
+    assert transport.direct_sends() == []
+
+
+async def test_send_result_empty_markdown_no_sends(redis_client):
+    transport = ScriptedDingTalkTransport()
+    adapter = await _adapter(redis_client, transport)
+    assert await adapter.send_result(_group_target(), notification_id=uuid.uuid4(), markdown="") == []
+    assert transport.group_sends() == []
