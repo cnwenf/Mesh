@@ -629,7 +629,11 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
   "current_load": 2,
   "health": "healthy",
   "metrics": {"cpu_pct": 47, "mem_pct": 61, "disk_free_mb": 82000},
-  "inflight": ["8f3a1d2c-...", "c21e9b7a-..."]
+  "inflight": ["att-uuid-1", "att-uuid-2"],
+  "context_progress": [
+    {"attempt_id": "att-uuid-1", "execution_id": "8f3a1d2c-...", "injected_through_seq": 3},
+    {"attempt_id": "att-uuid-2", "execution_id": "c21e9b7a-...", "injected_through_seq": 0}
+  ]
 }
 // 响应 200
 {
@@ -637,13 +641,15 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
     "server_time": "2026-07-24T09:41:30Z",
     "commands": [
       {"type": "cancel_execution", "execution_id": "8f3a1d2c-...", "grace_seconds": 15},
-      {"type": "inject_context", "execution_id": "c21e9b7a-...", "from_seq": 3}
+      {"type": "inject_context", "attempt_id": "att-uuid-2", "execution_id": "c21e9b7a-...", "from_seq": 0}
     ]
   }
 }
 ```
 
-> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对该执行的 runtime 下发 `{type:'inject_context', execution_id, from_seq}`（`from_seq` = daemon 已确认消费的最大 seq，由心跳请求 `inflight` 明细携带或默认 0）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点）取得追加载荷，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次）。详见本节「运行期上下文追加」。
+> **请求字段**：`inflight`（在途 **attempt UUID** 列表）保持既有语义，**仅作诊断**；**`context_progress`（MES-82 新增，结构化水位）是上下文追加的唯一 ACK 通道**：daemon 按在途 attempt 逐条上报 `{attempt_id, execution_id, injected_through_seq}`（`injected_through_seq` = 该执行已**真实注入 agent turn** 的最大 append seq；未注入过 = 0）。缺省（旧 daemon 不上报）= 服务端不对其下发 `inject_context`（功能降级、不影响其余心跳语义）。
+>
+> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现 seq 大于该执行已上报 `injected_through_seq` 的新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对持有该执行在途 attempt 的 runtime 下发 `{type:'inject_context', attempt_id, execution_id, from_seq}`（`from_seq` = 服务端据 `context_progress` 判定的待注入起点）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点）取得 seq > N 的追加行，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次），**真实注入完成后**在下次心跳 `context_progress` 推进 `injected_through_seq`（= 本次注入的最大 seq）作为 ACK → 服务端回写对应行 `injected_at`。详见本节「运行期上下文追加」。
 
 **运行期上下文追加（MES-82；integrations.md §3.7 `/btw` 的落点机制）**：
 
@@ -660,9 +666,11 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | injected_at | timestamptz | NULL | daemon 确认注入 agent turn 的时刻（NULL = 已写入待注入；执行终态时仍未注入的行随执行审计保留） |
 | created_at | timestamptz | NOT NULL DEFAULT now() | |
 
-- **写入方**：集成平台命令平面以服务层调用写入（不经 daemon HTTP）；**仅对 `queued/claimed/running/cancelling` 的执行可写**，终态执行写入 → `422`（integrations.md 侧渲染为"任务已结束"反馈）。
-- **下行与注入**：心跳 `inject_context` 指令（见上）→ daemon `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N` 拉取 → **下一 agent turn 边界**以结构化不可信块注入（标注 `source='im_btw'`，agent 不得作为指令执行）→ daemon 经心跳 `inflight` 明细回报各执行已消费 seq → 服务端回写 `injected_at`。
-- **边界**：追加不是 `config_snapshot` 的一部分（不参与 §6.11 冻结）；执行被取消/失败时未注入的追加行保留审计，不随新 attempt 重放（`/btw` 语义针对当次运行）。
+- **写入方与准入**：集成平台命令平面以服务层调用写入（不经 daemon HTTP）；**仅对 `queued/claimed/running` 的执行可写；`cancelling` 的执行不再接受追加**（integrations.md §3.7：渲染"任务正在停止，无法补充"反馈），终态执行写入 → `422`（渲染"任务已结束"）。**每执行追加上限（M3，成本放大残余面护栏）**：`MESH_CONTEXT_APPEND_MAX_COUNT`（默认 20 条）与 `MESH_CONTEXT_APPEND_MAX_CHARS`（默认 32000 字符，累计 payload.text）双上限，写入前计数校验，超限拒绝写入 → `422 append_limit_exceeded`（integrations.md 渲染"补充已达上限"反馈 + 审计；频率护栏限瞬时速率、本上限管长时执行累积）。
+- **下行与注入协议（闭合语义）**：心跳 `inject_context(attempt_id, execution_id, from_seq)` 指令 → daemon `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=from_seq` 拉取 → **下一 agent turn 边界**以结构化不可信块注入（标注 `source='im_btw'`，agent 不得作为指令执行）→ **真实注入完成后**经下次心跳 `context_progress` 推进 `injected_through_seq` ACK → 服务端回写对应行 `injected_at`。**ACK 只在真实注入后发出**（拉取后尚未到 turn 边界/注入失败 → 不推进水位，服务端将再次下发）。
+- **去重**：daemon 以 **`(execution_id, seq)` 为去重键**（进程内已注入集合 + 水位）；同一行被重复下行（服务端重发 `inject_context`、心跳竞态）不重复注入。
+- **attempt 切换语义（requeue / daemon 重启）**：追加归属**逻辑执行**（`execution_id`）而非 attempt——① **未注入行（`injected_at IS NULL`）在 requeue 产生的新 attempt 上继续投递**（新 attempt 首次心跳上报该执行 `injected_through_seq=0` 或断点值，服务端据 `context_progress` 重新下发；`/btw` 是对"这次运行"的补充，运行未终结则补充仍有效）；② **已注入行不重放**（其内容已在执行的对话历史中，经 resume 机制随 attempt 衔接；daemon 按 `(execution_id, seq)` 去重，水位不回退）；③ **daemon 重启**：内存去重集丢失，但按心跳上报的 `injected_through_seq` 水位恢复（服务端持久化于 `injected_at`；daemon 可从服务端拉取的 since_seq 起点重建，已注入行不会被服务端再次纳入 `since_seq` 之后）。
+- **边界**：追加不是 `config_snapshot` 的一部分（不参与 §6.11 冻结）；执行**终态**（cancelled/failed/completed/timeout）时未注入的追加行保留审计（`injected_at` 永 NULL），不再投递；追加行的删除仅随执行级联（ON DELETE CASCADE），不提供单独删除端点（审计完整性）。
 
 **领取任务（原子，核心）**：
 
@@ -797,6 +805,8 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | `execution:{id}` | `execution.completed` / `execution.failed` / `execution.timeout` / `execution.cancelled` / `execution.requeued` | 终态 / 重排 |
 | `execution:{id}:logs` | `execution.log`（带 offset） | 实时日志流 |
 | `workspace:{ws}:queue` | `queue.depth_changed` | 队列深度背压信号 |
+
+**内部领域事件 `execution.finished`（outbox，非实时事件名；MES-82 写死为终态单一扇出真源）**：执行进入任一终态时，状态机在**同一事务**写 outbox 内部事件 `execution.finished`，payload `{execution_id, workspace_id, status, failure_reason, finished_at}`，`status ∈ completed | failed | timeout | cancelled`（终态统一承载，不分裂为四个 event type）。**所有终态下游消费者一律订阅本事件**，不直接消费上表的实时事件名（`execution.completed/failed/…` 是本事件经 outbox→projector 派生到 `/ws` 的实时投影）：通知 fan-out（§6.13）、integrations.md 队列项终态回写（`completed→done`、`failed/timeout→failed`、`cancelled→cancelled`）、squad/autopilot 终态联动。幂等：消费方按 `execution_id` + 终态守卫去重（重复出队 no-op）。
 
 ---
 

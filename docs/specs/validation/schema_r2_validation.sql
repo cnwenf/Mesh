@@ -4423,6 +4423,216 @@ BEGIN
 END $$;
 -- T38:end
 
+-- ============================================================
+-- MES-82(钉钉机器人 / 集成队列):integration_message_queue + execution_context_appends
+-- DDL + 行为断言(T39)。两表的可执行参照实现,与 integrations.md §2.8/§2.10、
+-- runtime.md「运行期上下文追加」逐约束对账;#58 rebase 后 model/migration 以本节为基线。
+-- ============================================================
+
+-- ============ integration_message_queue(MES-82 §2.10)============
+CREATE TABLE integration_message_queue (
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id       UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  integration_id     UUID NOT NULL,
+  binding_id         UUID NOT NULL,
+  integration_event_id UUID NULL,
+  conversation_key   TEXT NOT NULL,
+  seq                BIGINT NOT NULL CHECK (seq > 0),
+  dispatch_mode      TEXT NOT NULL CHECK (dispatch_mode IN ('serial_conversation','parallel')),
+  state              TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (state IN ('pending','dispatching','processing','cancelling',
+                                      'done','failed','cancelled')),
+  execution_id       UUID NULL,
+  target_agent_id    UUID NULL,
+  message_excerpt    TEXT NOT NULL DEFAULT '',
+  sender_identity_key TEXT NOT NULL DEFAULT '',
+  ack_attempted_at   TIMESTAMPTZ NULL,
+  ack_sent_at        TIMESTAMPTZ NULL,
+  ack_merged_into    UUID NULL,
+  lease_expires_at   TIMESTAMPTZ NULL,
+  enqueued_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at         TIMESTAMPTZ NULL,
+  finished_at        TIMESTAMPTZ NULL,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_imq_ws_id UNIQUE (workspace_id, id),
+  CONSTRAINT uq_imq_event UNIQUE (integration_id, integration_event_id),
+  CONSTRAINT uq_imq_conversation_seq UNIQUE (conversation_key, seq),
+  CONSTRAINT fk_imq_integration FOREIGN KEY (workspace_id, integration_id)
+    REFERENCES integrations(workspace_id, id) ON DELETE RESTRICT,        -- 删除保护(§2.10)
+  CONSTRAINT fk_imq_binding FOREIGN KEY (workspace_id, binding_id)
+    REFERENCES integration_bindings(workspace_id, id) ON DELETE RESTRICT,-- 删除保护(§2.10)
+  CONSTRAINT fk_imq_event FOREIGN KEY (workspace_id, integration_event_id)
+    REFERENCES integration_events(workspace_id, id) ON DELETE SET NULL (integration_event_id),
+  CONSTRAINT fk_imq_execution FOREIGN KEY (workspace_id, execution_id)
+    REFERENCES task_executions(workspace_id, id) ON DELETE SET NULL (execution_id),
+  CONSTRAINT fk_imq_target_agent FOREIGN KEY (workspace_id, target_agent_id)
+    REFERENCES agents(workspace_id, id) ON DELETE SET NULL (target_agent_id)
+);
+-- serial 在途独占(parallel 豁免);覆盖 dispatching/processing/cancelling 全在途态
+CREATE UNIQUE INDEX uq_imq_conversation_active
+  ON integration_message_queue(conversation_key)
+  WHERE state IN ('dispatching','processing','cancelling') AND dispatch_mode = 'serial_conversation';
+CREATE INDEX idx_imq_conversation_pending
+  ON integration_message_queue(conversation_key, seq) WHERE state = 'pending';
+CREATE INDEX idx_imq_lease ON integration_message_queue(lease_expires_at)
+  WHERE state IN ('dispatching','processing','cancelling');
+CREATE INDEX idx_imq_integration_state
+  ON integration_message_queue(integration_id, state, enqueued_at DESC, id);
+CREATE INDEX idx_imq_ws_state ON integration_message_queue(workspace_id, state);
+CREATE INDEX idx_imq_binding_state ON integration_message_queue(binding_id, state);
+
+-- ============ execution_context_appends(MES-82,runtime.md 运行期上下文追加)============
+CREATE TABLE execution_context_appends (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  execution_id UUID NOT NULL,
+  seq          BIGINT NOT NULL CHECK (seq > 0),
+  source       TEXT NOT NULL CHECK (source IN ('im_btw')),
+  payload      JSONB NOT NULL,
+  injected_at  TIMESTAMPTZ NULL,                       -- daemon 真实注入 agent turn 后回写(水位 ACK)
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_eca_ws_id UNIQUE (workspace_id, id),
+  CONSTRAINT uq_eca_execution_seq UNIQUE (execution_id, seq),   -- daemon 去重键之一
+  CONSTRAINT fk_eca_execution FOREIGN KEY (workspace_id, execution_id)
+    REFERENCES task_executions(workspace_id, id) ON DELETE CASCADE
+);
+CREATE INDEX idx_eca_execution_pending ON execution_context_appends(execution_id, seq)
+  WHERE injected_at IS NULL;
+-- 每执行追加上限(M3)为服务层常量 MESH_CONTEXT_APPEND_MAX_COUNT(默认 20)/
+-- MESH_CONTEXT_APPEND_MAX_CHARS(默认 32000),写入前计数校验,非 DB 约束(此处登记防实现漂移)。
+
+-- trigger 词汇扩展 'integration'(README §6.9「外部 IM 消息触发」行,MES-82/#58 契约)
+ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_trigger_check;
+ALTER TABLE task_executions ADD CONSTRAINT ck_executions_trigger
+  CHECK (trigger IN ('assign','mention','autopilot','manual','chat','integration'));
+
+-- T39:行为断言(独立事务,ROLLBACK 不污染)
+BEGIN;
+DO $$
+DECLARE
+  v_ws    UUID := '11111111-1111-1111-1111-111111111111';
+  v_int   UUID := '82000000-0000-0000-0000-000000000001';
+  v_bind  UUID := '82000000-0000-0000-0000-000000000002';
+  v_evt1  UUID := '82000000-0000-0000-0000-000000000003';
+  v_evt2  UUID := '82000000-0000-0000-0000-000000000004';
+  v_evt3  UUID := '82000000-0000-0000-0000-000000000005';
+  v_exec  UUID := '82000000-0000-0000-0000-000000000006';
+  v_member UUID;
+  v_agent UUID;
+BEGIN
+  -- 种子:成员 / agent / 集成 / 绑定 / 事件(复用 T29 既有工作区;不存在则补最小种子)
+  SELECT id INTO v_member FROM members WHERE workspace_id = v_ws LIMIT 1;
+  IF v_member IS NULL THEN
+    RAISE EXCEPTION 'T39 FAIL: 缺少 T29 种子成员,本断言依赖前序 T29 种子数据';
+  END IF;
+  SELECT id INTO v_agent FROM agents WHERE workspace_id = v_ws LIMIT 1;
+  IF v_agent IS NULL THEN
+    INSERT INTO agents (id, workspace_id, name, owner_user_id)
+    VALUES ('82000000-0000-0000-0000-0000000000a1', v_ws, 'mes82-agent',
+            (SELECT user_id FROM members WHERE workspace_id = v_ws AND user_id IS NOT NULL LIMIT 1))
+    RETURNING id INTO v_agent;
+  END IF;
+  INSERT INTO integrations (id, workspace_id, kind, name, created_by, stream_state)
+  VALUES (v_int, v_ws, 'im_dingtalk', 'MES-82 钉钉验证集成', v_member, '{}');
+  INSERT INTO integration_bindings (id, workspace_id, integration_id, provider, provider_tenant_key,
+                                    external_ref, bound_agent_id)
+  VALUES (v_bind, v_ws, v_int, 'dingtalk', 'ding-corp-mes82', 'cidMES82', v_agent);
+  INSERT INTO integration_events (id, workspace_id, integration_id, external_event_id, event_type,
+                                  payload, signature_status, process_status)
+  VALUES (v_evt1, v_ws, v_int, 'msg-mes82-1', 'im.message.receive', '{}', 'valid', 'dispatched'),
+         (v_evt2, v_ws, v_int, 'msg-mes82-2', 'im.message.receive', '{}', 'valid', 'dispatched'),
+         (v_evt3, v_ws, v_int, 'msg-mes82-3', 'im.message.receive', '{}', 'valid', 'dispatched');
+  INSERT INTO task_executions (id, workspace_id, agent_id, issue_id, trigger, idempotency_key,
+                               task_spec, label_requirements, required_capabilities, config_snapshot)
+  VALUES (v_exec, v_ws, v_agent,
+          (SELECT id FROM issues WHERE workspace_id = v_ws LIMIT 1),
+          'integration', 'mes82-idem-key-1', '{}', '{}', '[]', '{}');
+
+  -- T39-1:状态机词汇——非法状态被 CHECK 拒绝
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      integration_event_id, conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, v_evt1, 'dingtalk:ding-corp-mes82:cidMES82', 1,
+            'serial_conversation', 'running');
+    RAISE EXCEPTION 'T39-1 FAIL: 非法状态 running 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-1: 状态机 CHECK 词汇(pending/dispatching/processing/cancelling/done/failed/cancelled)';
+  END;
+
+  -- T39-2:serial 在途独占(含 dispatching/cancelling 全在途态)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    integration_event_id, conversation_key, seq, dispatch_mode, state)
+  VALUES (v_ws, v_int, v_bind, v_evt1, 'dingtalk:ding-corp-mes82:cidMES82', 1,
+          'serial_conversation', 'processing');
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      integration_event_id, conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, v_evt2, 'dingtalk:ding-corp-mes82:cidMES82', 2,
+            'serial_conversation', 'dispatching');
+    RAISE EXCEPTION 'T39-2 FAIL: 同会话第二个 serial 在途项未被唯一索引拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-2: uq_imq_conversation_active serial 在途独占(serial processing 存在时 serial dispatching 被拒)';
+  END;
+
+  -- T39-3:parallel 豁免独占索引(同会话可并发)
+  INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+    integration_event_id, conversation_key, seq, dispatch_mode, state)
+  VALUES (v_ws, v_int, v_bind, v_evt2, 'dingtalk:ding-corp-mes82:cidPARA', 1, 'parallel', 'processing'),
+         (v_ws, v_int, v_bind, v_evt3, 'dingtalk:ding-corp-mes82:cidPARA', 2, 'parallel', 'processing');
+  RAISE NOTICE 'PASS T39-3: parallel 项不受独占索引约束(同会话两个 parallel processing 并存)';
+
+  -- T39-4:cancelling 同样占位(serial processing → cancelling 后仍拒新 serial 在途项)
+  UPDATE integration_message_queue SET state = 'cancelling'
+   WHERE conversation_key = 'dingtalk:ding-corp-mes82:cidMES82' AND seq = 1;
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, 'dingtalk:ding-corp-mes82:cidMES82', 3,
+            'serial_conversation', 'dispatching');
+    RAISE EXCEPTION 'T39-4 FAIL: cancelling 项未占串行 lane(提前放行下一项)';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-4: cancelling 项继续占用串行 lane(/stop 不提前放行下一任务)';
+  END;
+
+  -- T39-5:删除保护——绑定存在队列项时 RESTRICT 拒绝删除
+  BEGIN
+    DELETE FROM integration_bindings WHERE id = v_bind;
+    RAISE EXCEPTION 'T39-5 FAIL: 存在队列项的绑定被物理删除(CASCADE 消失)';
+  EXCEPTION WHEN foreign_key_violation THEN
+    RAISE NOTICE 'PASS T39-5: fk_imq_binding RESTRICT 拒绝删除(已确认接收的队列项不物理消失)';
+  END;
+
+  -- T39-6:(conversation_key, seq) 唯一
+  BEGIN
+    INSERT INTO integration_message_queue (workspace_id, integration_id, binding_id,
+      conversation_key, seq, dispatch_mode, state)
+    VALUES (v_ws, v_int, v_bind, 'dingtalk:ding-corp-mes82:cidPARA', 1, 'parallel', 'pending');
+    RAISE EXCEPTION 'T39-6 FAIL: 同会话重复 seq 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN
+    RAISE NOTICE 'PASS T39-6: (conversation_key, seq) 唯一(FIFO 序号真源)';
+  END;
+
+  -- T39-7:execution_context_appends (execution_id, seq) 唯一 + source CHECK
+  INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+  VALUES (v_ws, v_exec, 1, 'im_btw', '{"text":"用 staging 环境"}'::jsonb);
+  BEGIN
+    INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+    VALUES (v_ws, v_exec, 1, 'im_btw', '{"text":"重复 seq"}'::jsonb);
+    RAISE EXCEPTION 'T39-7 FAIL: 重复 (execution_id, seq) 未被拒绝';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  BEGIN
+    INSERT INTO execution_context_appends (workspace_id, execution_id, seq, source, payload)
+    VALUES (v_ws, v_exec, 2, 'prompt', '{}'::jsonb);
+    RAISE EXCEPTION 'T39-7b FAIL: 未登记 source 未被 CHECK 拒绝';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS T39-7: appends (execution_id, seq) 唯一 + source 词汇(im_btw)';
+  END;
+END $$;
+ROLLBACK;
+-- T39:end
+
 \echo '============================================================'
 \echo 'ALL R2+R3+R4+R5+R6+R7+R8 MES-76 SCHEMA + BEHAVIOR VALIDATIONS PASSED (PostgreSQL 16)'
 \echo '============================================================'
