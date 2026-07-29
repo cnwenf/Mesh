@@ -1,6 +1,8 @@
 # Runtime 本地执行体架构 Spec
 
-> 状态：安全复评候选版
+> 状态：安全复评通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
+>
+> 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；A2 安全执行面与 A3 真实 Claude Code provider 开发中（见 §4.4）。
 >
 > 所属模块：`runtime` 的本地执行子系统；服务端调度、数据模型和机器 API 仍以 `runtime.md` 为权威。
 >

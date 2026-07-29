@@ -27,6 +27,8 @@ Fields frozen per §6.11 + §2.1:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -93,28 +95,42 @@ def build_config_snapshot(
     version id. The daemon receives everything from this frozen snapshot.
     """
     normalized = normalize_capability_declarations(declared_capabilities or [])
+    snapshot: dict[str, Any] = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "agent_config_version_id": (
+            str(agent_config_version_id) if agent_config_version_id is not None else None
+        ),
+        # §2.1: actual provider config (not just a version reference).
+        "provider": provider,
+        "model": model,
+        "effort": effort,
+        "system_instructions": system_instructions,
+        # §2.1: frozen budget/network/data policies.
+        "budget": {**DEFAULT_BUDGET, **(budget or {})},
+        "network_policy": {**DEFAULT_NETWORK_POLICY, **(network_policy or {})},
+        "data_policy": {**DEFAULT_DATA_POLICY, **(data_policy or {})},
+        "skill_versions": dict(skill_versions or {}),
+        "capability_grants": normalized["grants"],
+        "repo": repo,
+        "trigger_event_id": str(trigger_event_id),
+    }
+    # §2.1: server-side digest — daemon rejects execution if the digest
+    # doesn't match (tamper detection / version drift guard).
+    snapshot["digest"] = compute_snapshot_digest(snapshot)
     return {
-        "config_snapshot": {
-            "schema_version": SNAPSHOT_SCHEMA_VERSION,
-            "agent_config_version_id": (
-                str(agent_config_version_id) if agent_config_version_id is not None else None
-            ),
-            # §2.1: actual provider config (not just a version reference).
-            "provider": provider,
-            "model": model,
-            "effort": effort,
-            "system_instructions": system_instructions,
-            # §2.1: frozen budget/network/data policies.
-            "budget": {**DEFAULT_BUDGET, **(budget or {})},
-            "network_policy": {**DEFAULT_NETWORK_POLICY, **(network_policy or {})},
-            "data_policy": {**DEFAULT_DATA_POLICY, **(data_policy or {})},
-            "skill_versions": dict(skill_versions or {}),
-            "capability_grants": normalized["grants"],
-            "repo": repo,
-            "trigger_event_id": str(trigger_event_id),
-        },
+        "config_snapshot": snapshot,
         "required_capabilities": normalized["required"],
     }
 
 
-__all__ = ["SNAPSHOT_SCHEMA_VERSION", "build_config_snapshot"]
+def compute_snapshot_digest(snapshot: dict[str, Any]) -> str:
+    """§2.1: SHA-256 digest of the AttemptSpec content (excluding the
+    digest field itself). The daemon verifies this before execution;
+    unknown version or digest mismatch → refuse execution."""
+    # Exclude 'digest' key from the content being hashed.
+    content = {k: v for k, v in sorted(snapshot.items()) if k != "digest"}
+    serialized = json.dumps(content, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+__all__ = ["SNAPSHOT_SCHEMA_VERSION", "build_config_snapshot", "compute_snapshot_digest"]

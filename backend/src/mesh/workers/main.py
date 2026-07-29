@@ -113,7 +113,7 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
     return _handle
 
 
-def _compose_execution_finished(squad_handler):
+def _compose_execution_finished(squad_handler, comment_service):
     """§3.7 S-09: compose squad handler + result sink for execution.finished.
 
     The relay dispatches one handler per event type. Both the squad relay
@@ -125,8 +125,16 @@ def _compose_execution_finished(squad_handler):
     async def _handle(session, event):
         # Squad handler first (squad task closure).
         await squad_handler(session, event)
-        # Result sink for regular (non-squad) executions.
-        await execution_finished_result_sink(session, event)
+        # Result sink for regular (non-squad) executions — creates a real
+        # comment via CommentService (same path as squad writeback).
+        # Best-effort: a result sink failure must NOT crash the relay or
+        # block the squad handler's savepoint.
+        try:
+            await execution_finished_result_sink(
+                session, event, comment_service=comment_service
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("result sink failed for event %s", event.id)
         return None
 
     return _handle
@@ -208,6 +216,7 @@ def build_relay(
         # non-squad executions (result_sink skips squad executions internally).
         "execution.finished": _compose_execution_finished(
             make_squad_execution_finished_handler(squad_comment_service),
+            squad_comment_service,
         ),
     }
     if data_job_worker is not None:
