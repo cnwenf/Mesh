@@ -902,7 +902,7 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 **`/stop` 处置序列(确定性语义,可测试)**:
 1. 解析发起人外部身份**全三元组**(`provider`+`provider_tenant_key`+`external_user_key` → `external_identities.users.id`);**未映射 → 机器人回"请先在 Mesh 站内连接你的外部账号"并附建链入口提示,仅审计,不取消任何东西**。
 2. **分别、独立地**处理发起人在本会话的两类项(多人同群语义:即使当前 `processing` 项属于他人 A,发起人 B 的 `/stop` 仍取消 B 自己的 pending,不因"无权停 A"而整体拒绝;两类处置互不牵连):
-   - **(a) 在途项**:查本会话 `state='processing'` 且经三元组解析为本人(或请求者具 `execution:manage`)的队列项——**有则原子转 `cancelling`(`UPDATE … SET state='cancelling', updated_at=now() WHERE id=:id AND state='processing'` 守卫)+ 同事务写 durable outbox 取消命令(event_type `execution.cancel_request`,幂等键 `sha256(execution_id | 'cancel_by_command')`,载荷 `{execution_id, reason, requested_by}`)**;outbox 消费方调用 runtime 取消端点(`POST /executions/{id}:cancel`,runtime.md:置执行 `cancelling`、daemon 经心跳下行真停,`failure_reason='cancelled_by_command'`)。**项保持 `cancelling` 继续占用串行 lane**,直到 `execution.finished(status=cancelled)` 到达才转 `cancelled`——**不提前释放会话独占**(运行中的执行优雅停止期间,下一项不得启动);取消命令经 outbox 持久重试,runtime 暂不可达不丢取消意图;
+   - **(a) 在途项**:查本会话 `state='processing'` 且经三元组解析为本人(或请求者具 `execution:manage`)的队列项——**有则原子转 `cancelling`(`UPDATE … SET state='cancelling', updated_at=now() WHERE id=:id AND state='processing'` 守卫)+ 同事务调用 runtime 执行取消服务(`POST /api/v1/workspaces/{ws}/executions/{id}:cancel` 的服务层函数,runtime.md R13:同事务置执行 `cancelling` + `cancel_requested_at`,取消意图即持久化于 DB,daemon 经心跳下行 cancel 指令真停,`failure_reason='cancelled_by_command'`)**——取消是**本地 DB 持久化**,不经事务外网络调用,无"提交后丢失"窗口。**项保持 `cancelling` 继续占用串行 lane**,直到 `execution.finished(status=cancelled)` 到达才转 `cancelled`——**不提前释放会话独占**(运行中的执行优雅停止期间,下一项不得启动);daemon 离线时取消意图已由 DB 持有,daemon 恢复后经心跳下行执行停止,不丢取消意图;
    - **(b) 排队项**:原子批量取消发起人在本会话的全部 `pending` 项(`UPDATE … SET state='cancelled', finished_at=now() WHERE conversation_key=:k AND state='pending' AND <三元组解析本人>`,按 `seq` 序);**立即生效**(pending 无执行,无需两阶段)。
 3. **两段式反馈文案**(经 outbox `im.send`,不是 ack、不经合并窗口):
    - **即时段**:命中 (a) → "⏳ 正在停止任务「<消息摘要>」…";仅 (b) → "已取消 N 条排队消息";(a)+(b) → "⏳ 正在停止任务「…」,并已取消 N 条排队消息";皆无 → "当前没有进行中或排队的任务(你的)";
@@ -985,7 +985,7 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
   4. 执行存在但 `queued` **超** `max_stuck`(默认 = 2×执行超时)→ 置 `failed(reason='dispatch_stuck')` + 告警,**不重派发**(幂等键固定,重入队必为 no-op,重派是死路);
   5. 执行不存在(入队事件丢失/消费失败)→ **outbox rearm**:查该队列项对应的 outbox 事件——存在且 pending/failed → 显式 rearm(重置 `available_at=now()`、清零失败计数,由 relay 重新消费;幂等键不变,执行行不存在故创建成功);outbox 事件也丢失 → 以 rearm 幂等键 `sha256(原幂等键 | 'rearm' | item_id)` 新写一条 `execution.enqueue`(执行行不存在,新键不撞旧唯一约束)。**仅此支真正重派发**。
   任一分支都使项离开"在途且过期"集合,杜绝扫描空转;**任何崩溃路径下已入队消息要么被执行、要么进终态可查,不静默丢失**。
-- **删除保护(禁 CASCADE 物理消失)**:`integration_id`/`binding_id` 复合 FK 为 `ON DELETE RESTRICT`(§2.10)。绑定/集成删除端点(§3.1 DELETE)须先经**强制批量终止**:该绑定/集成下 `pending` 项 → `cancelled(reason='binding_deleted')`;`dispatching/processing/cancelling` 项 → 经 outbox 下发取消命令并等待终态(上限 30s,超时强制 `cancelled(reason='binding_deleted')` + 告警,执行侧取消意图仍持久重试);**所有项保留为终态审计行**(可查询"删除前谁的消息被终止"),随后删除父行。项目物理删除(project.md 级联链)触发 RESTRICT 时,项目删除服务流程须先对其 project 级绑定执行同一强制终止路径(fail-closed:未清理则项目删除被数据库拒绝)。
+- **删除保护(禁 CASCADE 物理消失)**:`integration_id`/`binding_id` 复合 FK 为 `ON DELETE RESTRICT`(§2.10)。绑定/集成删除端点(§3.1 DELETE)须先经**强制批量终止**:该绑定/集成下 `pending` 项 → `cancelled(reason='binding_deleted')`;`dispatching/processing/cancelling` 项 → 调用 runtime 取消服务(幂等)并等待终态(上限 30s,超时强制 `cancelled(reason='binding_deleted')` + 告警,执行侧取消意图已由 DB 持久化、daemon 恢复后继续停止);**所有项保留为终态审计行**(可查询"删除前谁的消息被终止"),随后删除父行。项目物理删除(project.md 级联链)触发 RESTRICT 时,项目删除服务流程须先对其 project 级绑定执行同一强制终止路径(fail-closed:未清理则项目删除被数据库拒绝)。
 
 **查询与操作端点**:
 
@@ -1190,7 +1190,7 @@ IM 卡片(外部平台内):审批卡片 + 交互卡片(样式约定见 §4.4)
 - [ ] **`/stop` 连同排队项取消**:串行模式下发起人排队了 2 条 pending → `/stop` 后在途执行进入 cancelling + 2 条 pending 即时 `cancelled`(按 seq 序),即时段反馈含取消条数。
 - [ ] **多人同群各自取消**:同群用户 A 的任务 processing、用户 B 有 1 条 pending → B 发 `/stop` → **B 的 pending 被取消,A 的 processing 不受影响**(不因"无权停 A"整体拒绝),反馈文案区分("已取消你的 1 条排队消息;当前进行中的任务不属于你")。
 - [ ] **`/stop` 授权负向**:用户 B(已映射身份、无 manage 权限)仅对 A 的在途任务发 `/stop`(B 无排队项)→ 拒绝(回 command_forbidden 语义文本)+ 审计,**A 的执行不受影响、详情不泄露**;未映射身份发 `/stop` → 回建链提示,零副作用;有 `execution:manage` 权限成员发 `/stop` → 放行(可停他人任务)。
-- [ ] **`/stop` 取消意图不丢失**:取消命令写入 outbox 后使 runtime 不可达 → 项保持 cancelling、命令经 outbox 重试,runtime 恢复后执行被取消并最终转 cancelled(不产生"项已取消、执行仍跑"撕裂)。
+- [ ] **`/stop` 取消意图不丢失**:取消请求经 runtime 取消服务落库(执行 `cancelling` + `cancel_requested_at`)后使 daemon 离线 → 项保持 cancelling(不放行下一项),daemon 恢复后经心跳下行停止执行、`execution.finished(cancelled)` 转 cancelled(不产生"项已取消、执行仍跑"撕裂;取消服务调用本身为同事务 DB 写入,无事务外网络丢失窗口)。
 - [ ] **`/btw` 注入在途执行**:执行 running 时发 `/btw 用 staging 环境` → 机器人回"已补充…",执行上下文中出现该补充(结构化隔离标记 `source='im_btw'`,**作为数据而非指令**:执行不因补充文本中的"指令性措辞"改变高危行为,README §6.15);执行不打断、不新建;**下一 agent turn 边界生效**(断言当前 turn 不被打断、补充块出现在后续 turn)。
 - [ ] **`/btw` 追加上限(M3)**:对同一执行连发 `/btw` 超 `MESH_CONTEXT_APPEND_MAX_COUNT`(默认 20)或累计超 `MESH_CONTEXT_APPEND_MAX_CHARS`(默认 32000)→ 超限起**不写入** `execution_context_appends` + 机器人回"补充已达上限…" + 审计;限额内的补充照常注入。
 - [ ] **`/btw` cancelling 拒绝与无在途降级**:项为 cancelling 时发 `/btw` → 回"任务正在停止,无法补充";会话无 processing/cancelling 项时发 `/btw 查下日志` → 回提示"…已按新消息排队" + 剥前缀文本按普通消息入队执行。
