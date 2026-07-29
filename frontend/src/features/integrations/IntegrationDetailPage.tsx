@@ -7,18 +7,27 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Button, Dialog, ErrorState, Input, Skeleton, StatusDot, useToast } from '../../design';
+import { Banner, Button, Dialog, ErrorState, Input, Skeleton, StatusDot, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { canViewSettings } from '../../workspace/permissions';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
-import { getIntegration, integrationChannel, patchIntegration, rotateIntegrationSecret, workspaceIntegrationsChannel } from './api';
+import {
+  getIntegration,
+  integrationAuthorizeUrl,
+  integrationChannel,
+  patchIntegration,
+  rotateIntegrationSecret,
+  testIntegration,
+  workspaceIntegrationsChannel,
+} from './api';
 import { BindingDrawer } from './BindingDrawer';
 import { EventLedger } from './EventLedger';
-import { INTEGRATION_STATUS_TONE, KIND_ICON } from './format';
+import { HEALTH_STATE_TONE, INTEGRATION_STATUS_TONE, KIND_ICON, toHealthState } from './format';
 import type { Integration } from './types';
+import { OAUTH_KINDS } from './types';
 import './integrations.css';
 
 type TabKey = 'overview' | 'bindings' | 'events';
@@ -45,6 +54,7 @@ export function IntegrationDetailPage(): React.JSX.Element {
   const [rotateOpen, setRotateOpen] = useState(false);
   const [rotateSecret, setRotateSecret] = useState('');
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   const isAdmin = membership !== null && canViewSettings(membership.role);
 
@@ -190,6 +200,32 @@ export function IntegrationDetailPage(): React.JSX.Element {
     }
   }, [membership, integration, rotateSecret, toast, t]);
 
+  const reauthorize = useCallback((): void => {
+    if (membership === null || integration === null) return;
+    window.location.assign(integrationAuthorizeUrl(membership.workspace_id, integration.kind));
+  }, [membership, integration]);
+
+  const runTest = useCallback(async (): Promise<void> => {
+    if (membership === null || integration === null) return;
+    setTesting(true);
+    try {
+      const result = await testIntegration(newClient(), membership.workspace_id, integration.id);
+      const nextState = toHealthState(result.health_state);
+      setIntegration({ ...integration, health_state: nextState, last_error: result.detail });
+      toast.addToast(t('integrations.toast.tested'), {
+        tone: nextState === 'healthy' ? 'success' : 'warn',
+        closeLabel: t('common.close'),
+      });
+    } catch (error) {
+      toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
+    } finally {
+      setTesting(false);
+    }
+  }, [membership, integration, toast, t]);
+
   if (errorKey !== null) {
     return (
       <div className="mesh-integrations__page">
@@ -227,11 +263,40 @@ export function IntegrationDetailPage(): React.JSX.Element {
           tone={INTEGRATION_STATUS_TONE[integration.status]}
           label={t(`integrations.status.${integration.status}`)}
         />
+        <span data-testid="integration-health" title={integration.last_error ?? undefined}>
+          <StatusDot
+            tone={HEALTH_STATE_TONE[integration.health_state]}
+            label={t(`integrations.health.${integration.health_state}`)}
+          />
+        </span>
       </div>
 
       {integration.status === 'disabled' && (
         <div className="mesh-integrations__muted" data-testid="integration-disabled-note">
           {t('integrations.detail.disabledNote')}
+        </div>
+      )}
+
+      {integration.health_state === 'auth_failed' && (
+        <div data-testid="integration-auth-failed-banner">
+          <Banner tone="danger">
+            {t('integrations.detail.authFailed')}
+            {isAdmin && OAUTH_KINDS.has(integration.kind) && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={reauthorize}
+                data-testid="integration-reauthorize"
+              >
+                {t('integrations.actions.reauthorize')}
+              </Button>
+            )}
+          </Banner>
+          {integration.last_error !== null && (
+            <div className="mesh-integrations__muted" data-testid="integration-last-error">
+              {integration.last_error}
+            </div>
+          )}
         </div>
       )}
 
@@ -265,6 +330,15 @@ export function IntegrationDetailPage(): React.JSX.Element {
                   data-testid="integration-rotate"
                 >
                   {t('integrations.detail.rotate')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  isLoading={testing}
+                  onClick={() => void runTest()}
+                  data-testid="integration-test"
+                >
+                  {t('integrations.actions.test')}
                 </Button>
               </div>
             )}

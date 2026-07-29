@@ -6,6 +6,7 @@ import type { StatusDotTone } from '../../design';
 import type {
   BindingStatus,
   DeliveryState,
+  IntegrationHealthState,
   IntegrationKind,
   IntegrationStatus,
   ProcessStatus,
@@ -13,6 +14,7 @@ import type {
   SubscriptionStatus,
   VcsLinkStatus,
 } from './types';
+import { INTEGRATION_HEALTH_STATES } from './types';
 
 /** 集成 kind 图标(§4.1 类型图标列)。 */
 export const KIND_ICON: Record<IntegrationKind, string> = {
@@ -27,6 +29,21 @@ export const INTEGRATION_STATUS_TONE: Record<IntegrationStatus, StatusDotTone> =
   active: 'success',
   disabled: 'neutral',
 };
+
+/** 连接器健康度徽章色调(§4.1;unknown=中性 / healthy=成功 / auth_failed=危险 / unreachable=警告)。 */
+export const HEALTH_STATE_TONE: Record<IntegrationHealthState, StatusDotTone> = {
+  unknown: 'neutral',
+  healthy: 'success',
+  auth_failed: 'danger',
+  unreachable: 'warn',
+};
+
+/** 健康度收窄(`:test` 响应为 string 契约;未知值归 `unknown`,边界处防御,§6.15)。 */
+export function toHealthState(value: string): IntegrationHealthState {
+  return (INTEGRATION_HEALTH_STATES as ReadonlyArray<string>).includes(value)
+    ? (value as IntegrationHealthState)
+    : 'unknown';
+}
 
 export const SIGNATURE_STATUS_TONE: Record<SignatureStatus, StatusDotTone> = {
   valid: 'success',
@@ -96,6 +113,25 @@ export function isHttpsUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * 外部深链 scheme 防御(§6.15 不可信内容):仅放行 http/https,
+ * 拒绝 `javascript:`/`data:` 等可执行 scheme;非法 URL 同样拒绝。
+ */
+export function isSafeWebUrl(url: string): boolean {
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'https:' || protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/** 出向订阅成功率(§4.1:null / 非有限值 → `—`;0..1 → 整数百分比)。 */
+export function formatSuccessRate(rate: number | null): string {
+  if (rate === null || !Number.isFinite(rate)) return '—';
+  return `${Math.round(rate * 100)}%`;
 }
 
 /** VCS 关联 external_state 快照渲染(如 `{pr_state:'merged'}` → `pr_state=merged`)。 */

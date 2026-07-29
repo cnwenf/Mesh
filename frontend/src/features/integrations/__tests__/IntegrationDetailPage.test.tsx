@@ -26,24 +26,30 @@ const INTEGRATION = {
   status: 'active',
   config: { app_id: 'A1' },
   has_secret: true,
+  health_state: 'healthy',
+  last_error: null,
+  last_success_at: '2026-07-08T00:00:00Z',
+  events_7d: 12,
   created_by: 'm-1',
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
 };
 
-const ME = {
-  user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
-  memberships: [
-    {
-      workspace_id: 'ws-1',
-      workspace_name: 'T',
-      workspace_slug: 't',
-      role: 'owner',
-      status: 'active',
-      joined_at: null,
-    },
-  ],
-};
+function makeMe(role: string) {
+  return {
+    user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
+    memberships: [
+      {
+        workspace_id: 'ws-1',
+        workspace_name: 'T',
+        workspace_slug: 't',
+        role,
+        status: 'active',
+        joined_at: null,
+      },
+    ],
+  };
+}
 
 interface Recorded {
   url: string;
@@ -54,16 +60,19 @@ interface SetupFlags {
   readonly failPatch?: boolean;
   readonly failRotate?: boolean;
   readonly failReloadGet?: boolean;
+  readonly failTest?: boolean;
+  readonly role?: string;
 }
 
 function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Recorded[] {
   const calls: Recorded[] = [];
   let getCount = 0;
+  const me = makeMe(flags.role ?? 'owner');
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method });
-    if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (url.endsWith('/integrations/int-1') && method === 'GET') {
       getCount += 1;
       if (flags.failReloadGet && getCount > 1)
@@ -74,6 +83,11 @@ function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Reco
       if (flags.failPatch)
         return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
       return fakeResponse({ body: { data: { ...INTEGRATION, name: '新名称', status: 'disabled' } } });
+    }
+    if (method === 'POST' && url.endsWith(':test')) {
+      if (flags.failTest)
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({ body: { data: { health_state: 'healthy', detail: null } } });
     }
     if (method === 'POST' && url.endsWith('/rotate-secret')) {
       if (flags.failRotate)
@@ -219,7 +233,7 @@ describe('IntegrationDetailPage', () => {
   it('shows the error state when the integration cannot load', async () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: makeMe('owner') } });
       return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -319,7 +333,7 @@ describe('IntegrationDetailPage', () => {
     vi.stubGlobal('fetch', impl);
     const { unmount } = renderPage();
     unmount();
-    resolveMe?.(fakeResponse({ body: { data: ME } }));
+    resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
@@ -340,7 +354,7 @@ describe('IntegrationDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     const { unmount } = renderPage();
-    resolveMe?.(fakeResponse({ body: { data: ME } }));
+    resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     unmount();
     resolveGet?.(fakeResponse({ body: { data: INTEGRATION } }));
@@ -364,7 +378,7 @@ describe('IntegrationDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     const { unmount } = renderPage();
-    resolveMe?.(fakeResponse({ body: { data: ME } }));
+    resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     unmount();
     resolveGet?.(fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }));
@@ -392,5 +406,121 @@ describe('IntegrationDetailPage', () => {
     vi.stubGlobal('fetch', impl);
     renderPage();
     await waitFor(() => expect(screen.getByText(/unexpected error/i)).toBeInTheDocument());
+  });
+
+  it('renders the health badge in the header', async () => {
+    setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-health')).toBeInTheDocument());
+    expect(screen.getByTestId('integration-health').textContent).toContain('Healthy');
+  });
+
+  it('shows the auth-failed banner with last error and a re-authorize jump', async () => {
+    const locationAssign = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { assign: locationAssign, origin: 'http://localhost', search: '' },
+    });
+    try {
+      setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: 'token_expired' });
+      renderPage();
+      await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+      expect(screen.getByTestId('integration-last-error').textContent).toBe('token_expired');
+      await userEvent.click(screen.getByTestId('integration-reauthorize'));
+      expect(locationAssign).toHaveBeenCalledWith(
+        expect.stringContaining('/integrations/oauth/im_slack/authorize'),
+      );
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    }
+  });
+
+  it('hides the re-authorize button and error subtext when not applicable', async () => {
+    setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: null }, { role: 'member' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
+    expect(screen.queryByTestId('integration-last-error')).toBeNull();
+  });
+
+  it('hides re-authorize for auth-failed non-oauth connectors', async () => {
+    setup({ ...INTEGRATION, kind: 'webhook_outbound', health_state: 'auth_failed', last_error: 'bad' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
+  });
+
+  it('shows the auth-failed banner after a failed connection test reveals revoked credentials', async () => {
+    const me = makeMe('owner');
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.endsWith('/integrations/int-1') && method === 'GET')
+        return fakeResponse({ body: { data: INTEGRATION } });
+      if (method === 'POST' && url.endsWith(':test'))
+        return fakeResponse({ body: { data: { health_state: 'auth_failed', detail: 'token_revoked' } } });
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
+    expect(screen.queryByTestId('integration-auth-failed-banner')).toBeNull();
+    await userEvent.click(screen.getByTestId('integration-test'));
+    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-health').textContent).toContain('Auth failed'),
+    );
+    expect(screen.getByTestId('integration-last-error').textContent).toBe('token_revoked');
+  });
+
+  it('tests the connection from the overview and updates the health badge', async () => {
+    const calls = setup({ ...INTEGRATION, health_state: 'unreachable', last_error: 'timeout' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
+    expect(screen.getByTestId('integration-health').textContent).toContain('Unreachable');
+    await userEvent.click(screen.getByTestId('integration-test'));
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1:test') && call.method === 'POST'),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByTestId('integration-health').textContent).toContain('Healthy'));
+    await waitFor(() => expect(screen.getByText(/Connection test completed/)).toBeInTheDocument());
+  });
+
+  it('surfaces a failed connection test as a toast', async () => {
+    setup(INTEGRATION, { failTest: true });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-test'));
+    await waitFor(() => expect(screen.getByText(/internal error/i)).toBeInTheDocument());
+  });
+
+  it('maps a malformed test envelope to the unknown error key', async () => {
+    const me = makeMe('owner');
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (url.endsWith('/integrations/int-1') && method === 'GET')
+        return fakeResponse({ body: { data: INTEGRATION } });
+      if (method === 'POST' && url.endsWith(':test'))
+        return fakeResponse({ body: { data: null } });
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-test'));
+    await waitFor(() => expect(screen.getByText(/unexpected error/i)).toBeInTheDocument());
+  });
+
+  it('hides the test button for non-admins', async () => {
+    setup(INTEGRATION, { role: 'member' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
+    expect(screen.queryByTestId('integration-test')).toBeNull();
   });
 });

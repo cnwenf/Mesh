@@ -10,7 +10,7 @@ import { Button, Dialog, EmptyState, Input, Select, Skeleton, StatusDot, useToas
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { createVcsLink, deleteVcsLink, listIntegrations, listIssueVcsLinks } from './api';
-import { KIND_ICON, VCS_LINK_STATUS_TONE, formatExternalState } from './format';
+import { KIND_ICON, VCS_LINK_STATUS_TONE, formatExternalState, isSafeWebUrl } from './format';
 import type { Integration, VcsLink, VcsObjectType } from './types';
 import { VCS_OBJECT_TYPES } from './types';
 import './integrations.css';
@@ -128,7 +128,19 @@ export function VcsLinksPanel(props: VcsLinksPanelProps): React.JSX.Element {
               <li key={link.id} className="mesh-integrations__vcs-item" data-testid={`vcs-link-row-${link.id}`}>
                 <span>
                   <span aria-hidden="true">{KIND_ICON[link.provider === 'github' ? 'vcs_github' : 'vcs_gitlab']}</span>{' '}
-                  <span className="mesh-integrations__vcs-ref">{link.external_object_ref}</span>{' '}
+                  {link.url !== null && isSafeWebUrl(link.url) ? (
+                    <a
+                      className="mesh-integrations__vcs-ref"
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid={`vcs-link-anchor-${link.id}`}
+                    >
+                      {link.external_object_ref}
+                    </a>
+                  ) : (
+                    <span className="mesh-integrations__vcs-ref">{link.external_object_ref}</span>
+                  )}{' '}
                   <StatusDot
                     tone={VCS_LINK_STATUS_TONE[link.status]}
                     label={t(`integrations.vcs.status.${link.status}`)}

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BINDING_STATUS_TONE,
   DELIVERY_STATE_TONE,
+  HEALTH_STATE_TONE,
   INTEGRATION_STATUS_TONE,
   KIND_ICON,
   PROCESS_STATUS_TONE,
@@ -13,8 +14,11 @@ import {
   VCS_LINK_STATUS_TONE,
   formatExternalState,
   formatRelativeTime,
+  formatSuccessRate,
   isHttpsUrl,
+  isSafeWebUrl,
   isTripped,
+  toHealthState,
 } from '../format';
 
 describe('tone maps', () => {
@@ -45,6 +49,48 @@ describe('tone maps', () => {
     expect(KIND_ICON.im_feishu).toBeTruthy();
     expect(KIND_ICON.vcs_github).toBeTruthy();
     expect(KIND_ICON.webhook_outbound).toBeTruthy();
+  });
+
+  it('maps health states to semantic tones', () => {
+    expect(HEALTH_STATE_TONE.unknown).toBe('neutral');
+    expect(HEALTH_STATE_TONE.healthy).toBe('success');
+    expect(HEALTH_STATE_TONE.auth_failed).toBe('danger');
+    expect(HEALTH_STATE_TONE.unreachable).toBe('warn');
+  });
+});
+
+describe('toHealthState', () => {
+  it('passes through known states and narrows unknown values', () => {
+    expect(toHealthState('healthy')).toBe('healthy');
+    expect(toHealthState('auth_failed')).toBe('auth_failed');
+    expect(toHealthState('unreachable')).toBe('unreachable');
+    expect(toHealthState('bogus')).toBe('unknown');
+    expect(toHealthState('')).toBe('unknown');
+  });
+});
+
+describe('formatSuccessRate', () => {
+  it('renders an em dash for null or non-finite rates', () => {
+    expect(formatSuccessRate(null)).toBe('—');
+    expect(formatSuccessRate(Number.NaN)).toBe('—');
+    expect(formatSuccessRate(Number.POSITIVE_INFINITY)).toBe('—');
+  });
+
+  it('renders rounded integer percentages', () => {
+    expect(formatSuccessRate(0.95)).toBe('95%');
+    expect(formatSuccessRate(0.951)).toBe('95%');
+    expect(formatSuccessRate(1)).toBe('100%');
+    expect(formatSuccessRate(0)).toBe('0%');
+  });
+});
+
+describe('isSafeWebUrl', () => {
+  it('accepts http(s) and rejects executable or invalid schemes', () => {
+    expect(isSafeWebUrl('https://github.com/owner/repo/pull/1')).toBe(true);
+    expect(isSafeWebUrl('http://gitlab.internal/owner/repo/-/commit/abc')).toBe(true);
+    expect(isSafeWebUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeWebUrl('data:text/html,x')).toBe(false);
+    expect(isSafeWebUrl('not a url')).toBe(false);
   });
 });
 

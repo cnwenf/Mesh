@@ -35,23 +35,16 @@ import {
   listBindings,
   listIntegrations,
   patchIntegration,
+  testIntegration,
   workspaceIntegrationsChannel,
 } from './api';
 import { ExternalIdentitiesPanel } from './ExternalIdentitiesPanel';
-import { INTEGRATION_STATUS_TONE, KIND_ICON } from './format';
+import { HEALTH_STATE_TONE, INTEGRATION_STATUS_TONE, KIND_ICON, toHealthState } from './format';
 import type { Integration, IntegrationKind } from './types';
-import { CONNECTOR_CATALOG, INTEGRATION_KINDS } from './types';
+import { CONNECTOR_CATALOG, INTEGRATION_KINDS, OAUTH_KINDS } from './types';
 import './integrations.css';
 
 const PAGE_LIMIT = 100;
-
-/** 支持 OAuth 授权流(整页跳外部平台)的 kind;webhook_outbound 为手填凭据。 */
-const OAUTH_KINDS: ReadonlySet<IntegrationKind> = new Set<IntegrationKind>([
-  'im_feishu',
-  'im_slack',
-  'vcs_github',
-  'vcs_gitlab',
-]);
 
 /** 各 kind 的非密 config JSON 占位提示(§2.7;密钥走 secret 字段,不入 config)。 */
 const CONFIG_HINTS: Record<IntegrationKind, string> = {
@@ -228,6 +221,7 @@ export function IntegrationsPage(): React.JSX.Element {
   const [busy, setBusy] = useState(false);
   const [disableTarget, setDisableTarget] = useState<Integration | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Integration | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   const oauthResult = searchParams.get('oauth');
   const isAdmin = membership !== null && canViewSettings(membership.role);
@@ -388,6 +382,40 @@ export function IntegrationsPage(): React.JSX.Element {
     [membership, runAction, t],
   );
 
+  const testConnection = useCallback(
+    (integration: Integration): void => {
+      if (membership === null) return;
+      setTestingId(integration.id);
+      void (async () => {
+        try {
+          const result = await testIntegration(newClient(), membership.workspace_id, integration.id);
+          const nextState = toHealthState(result.health_state);
+          setIntegrations((prev) =>
+            prev === null
+              ? prev
+              : prev.map((item) =>
+                  item.id === integration.id
+                    ? { ...item, health_state: nextState, last_error: result.detail }
+                    : item,
+                ),
+          );
+          toast.addToast(t('integrations.toast.tested'), {
+            tone: nextState === 'healthy' ? 'success' : 'warn',
+            closeLabel: t('common.close'),
+          });
+        } catch (error) {
+          toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+            tone: 'danger',
+            closeLabel: t('common.close'),
+          });
+        } finally {
+          setTestingId(null);
+        }
+      })();
+    },
+    [membership, toast, t],
+  );
+
   const connectedByKind = useMemo(() => {
     const counts: Partial<Record<IntegrationKind, number>> = {};
     for (const integration of integrations ?? []) {
@@ -470,6 +498,7 @@ export function IntegrationsPage(): React.JSX.Element {
               <th>{t('integrations.columns.kind')}</th>
               <th>{t('integrations.columns.status')}</th>
               <th>{t('integrations.columns.bindings')}</th>
+              <th>{t('integrations.columns.events7d')}</th>
               <th>{t('integrations.columns.actions')}</th>
             </tr>
           </thead>
@@ -493,10 +522,20 @@ export function IntegrationsPage(): React.JSX.Element {
                     tone={INTEGRATION_STATUS_TONE[integration.status]}
                     label={t(`integrations.status.${integration.status}`)}
                   />
+                  <span
+                    data-testid={`integration-health-${integration.id}`}
+                    title={integration.last_error ?? undefined}
+                  >
+                    <StatusDot
+                      tone={HEALTH_STATE_TONE[integration.health_state]}
+                      label={t(`integrations.health.${integration.health_state}`)}
+                    />
+                  </span>
                 </td>
                 <td data-testid={`integration-bindings-${integration.id}`}>
                   {bindingCounts[integration.id] ?? 0}
                 </td>
+                <td data-testid={`integration-events7d-${integration.id}`}>{integration.events_7d}</td>
                 <td className="mesh-integrations__actions" onClick={(event) => event.stopPropagation()}>
                   <IconButton
                     label={t('integrations.actions.detail')}
@@ -506,6 +545,29 @@ export function IntegrationsPage(): React.JSX.Element {
                   >
                     ⚙
                   </IconButton>
+                  {isAdmin &&
+                    integration.health_state === 'auth_failed' &&
+                    OAUTH_KINDS.has(integration.kind) && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => startOAuth(integration.kind)}
+                        data-testid={`integration-reauth-${integration.id}`}
+                      >
+                        {t('integrations.actions.reauthorize')}
+                      </Button>
+                    )}
+                  {isAdmin && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={testingId === integration.id}
+                      onClick={() => testConnection(integration)}
+                      data-testid={`integration-test-${integration.id}`}
+                    >
+                      {t('integrations.actions.test')}
+                    </Button>
+                  )}
                   {isAdmin && (
                     <IconButton
                       label={

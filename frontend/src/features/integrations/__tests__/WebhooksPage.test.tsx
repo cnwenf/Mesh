@@ -26,11 +26,23 @@ const SUB_ACTIVE = {
   status: 'active',
   fail_count: 0,
   has_secret: true,
+  deliveries_total: 20,
+  deliveries_sent: 19,
+  success_rate: 0.95,
   created_by: 'm-1',
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
 };
-const SUB_TRIPPED = { ...SUB_ACTIVE, id: 'sub-2', url: 'https://example.com/b', status: 'disabled', fail_count: 5 };
+const SUB_TRIPPED = {
+  ...SUB_ACTIVE,
+  id: 'sub-2',
+  url: 'https://example.com/b',
+  status: 'disabled',
+  fail_count: 5,
+  deliveries_total: 0,
+  deliveries_sent: 0,
+  success_rate: null,
+};
 const SUB_PAUSED = { ...SUB_ACTIVE, id: 'sub-3', url: 'https://example.com/c', status: 'paused' };
 
 const DELIVERY_FAILED = {
@@ -102,6 +114,8 @@ function setup(opts: { readonly role?: string; readonly subscriptions?: unknown[
       return fakeResponse({ body: { data: { ...DELIVERY_FAILED, state: 'pending' } } });
     if (/\/webhook-subscriptions\/[^/]+\/resume/.test(url))
       return fakeResponse({ body: { data: { ...SUB_TRIPPED, status: 'active', fail_count: 0 } } });
+    if (method === 'POST' && url.endsWith(':send-test'))
+      return fakeResponse({ body: { data: { delivery_id: 'del-t1', state: 'pending' } } });
     if (/\/webhook-subscriptions\/[^/]+\/deliveries/.test(url))
       return fakeResponse({
         body: { data: [DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_SENT], next_cursor: null },
@@ -424,5 +438,56 @@ describe('WebhooksPage', () => {
     await waitFor(() => expect(screen.getByTestId('webhook-copy-secret')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('webhook-copy-secret'));
     await waitFor(() => expect(screen.getByText(/copy manually/)).toBeInTheDocument());
+  });
+
+  it('shows the success rate and delivery totals per subscription', async () => {
+    setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('webhook-success-rate-sub-1')).toBeInTheDocument());
+    expect(screen.getByTestId('webhook-success-rate-sub-1').textContent).toContain('95%');
+    expect(screen.getByTestId('webhook-success-rate-sub-1').textContent).toContain('20');
+    // null success_rate (zero deliveries) renders as an em dash
+    expect(screen.getByTestId('webhook-success-rate-sub-2').textContent).toContain('—');
+  });
+
+  it('sends a test event through the send-test endpoint', async () => {
+    const calls = setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('webhook-send-test-sub-1')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('webhook-send-test-sub-1'));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) => call.url.endsWith('/webhook-subscriptions/sub-1:send-test') && call.method === 'POST',
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(screen.getByText(/Test event sent/)).toBeInTheDocument());
+  });
+
+  it('hides the send-test action for non-admins', async () => {
+    setup({ role: 'member' });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('webhook-url-sub-1')).toBeInTheDocument());
+    expect(screen.queryByTestId('webhook-send-test-sub-1')).toBeNull();
+  });
+
+  it('surfaces a send-test failure as a toast', async () => {
+    const me = makeMe('owner');
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
+      if (method === 'GET' && url.includes('/webhook-subscriptions'))
+        return fakeResponse({ body: { data: [SUB_ACTIVE], next_cursor: null } });
+      if (method === 'POST')
+        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('webhook-send-test-sub-1')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('webhook-send-test-sub-1'));
+    await waitFor(() => expect(screen.getByText(/internal error/i)).toBeInTheDocument());
   });
 });

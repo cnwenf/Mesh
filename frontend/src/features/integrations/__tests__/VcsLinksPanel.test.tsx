@@ -20,6 +20,7 @@ const LINK = {
   provider: 'github',
   external_object_type: 'pull_request',
   external_object_ref: 'owner/repo#123',
+  url: 'https://github.com/owner/repo/pull/123',
   mesh_entity_type: 'issue',
   mesh_entity_id: 'issue-1',
   link_source: 'manual',
@@ -37,6 +38,10 @@ const VCS_INTEGRATION = {
   status: 'active',
   config: {},
   has_secret: true,
+  health_state: 'healthy',
+  last_error: null,
+  last_success_at: null,
+  events_7d: 0,
   created_by: 'm-1',
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
@@ -78,6 +83,32 @@ describe('VcsLinksPanel', () => {
     await waitFor(() => expect(screen.getByTestId('vcs-link-row-l-1')).toBeInTheDocument());
     expect(screen.getByText('owner/repo#123')).toBeInTheDocument();
     expect(screen.getByText(/pr_state=merged/)).toBeInTheDocument();
+  });
+
+  it('renders the external ref as a clickable deep link', async () => {
+    setup();
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId('vcs-link-anchor-l-1')).toBeInTheDocument());
+    const anchor = screen.getByTestId('vcs-link-anchor-l-1');
+    expect(anchor.tagName).toBe('A');
+    expect(anchor.getAttribute('href')).toBe('https://github.com/owner/repo/pull/123');
+    expect(anchor.getAttribute('target')).toBe('_blank');
+    expect(anchor.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('falls back to plain text when the link has no url', async () => {
+    setup([{ ...LINK, url: null }]);
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId('vcs-link-row-l-1')).toBeInTheDocument());
+    expect(screen.queryByTestId('vcs-link-anchor-l-1')).toBeNull();
+    expect(screen.getByText('owner/repo#123')).toBeInTheDocument();
+  });
+
+  it('falls back to plain text for unsafe url schemes', async () => {
+    setup([{ ...LINK, url: 'javascript:alert(1)' }]);
+    renderPanel();
+    await waitFor(() => expect(screen.getByTestId('vcs-link-row-l-1')).toBeInTheDocument());
+    expect(screen.queryByTestId('vcs-link-anchor-l-1')).toBeNull();
   });
 
   it('creates a link using only vcs integrations', async () => {

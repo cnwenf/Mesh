@@ -22,8 +22,16 @@ import {
   patchSubscription,
   resumeSubscription,
   retryDelivery,
+  sendSubscriptionTestEvent,
 } from './api';
-import { DELIVERY_STATE_TONE, SUBSCRIPTION_STATUS_TONE, formatRelativeTime, isHttpsUrl, isTripped } from './format';
+import {
+  DELIVERY_STATE_TONE,
+  SUBSCRIPTION_STATUS_TONE,
+  formatRelativeTime,
+  formatSuccessRate,
+  isHttpsUrl,
+  isTripped,
+} from './format';
 import type { Delivery, WebhookSubscription } from './types';
 import './integrations.css';
 
@@ -105,6 +113,7 @@ export function WebhooksPage(): React.JSX.Element {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<Delivery[] | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [sendTestId, setSendTestId] = useState<string | null>(null);
 
   const isAdmin = membership !== null && canViewSettings(membership.role);
 
@@ -264,6 +273,18 @@ export function WebhooksPage(): React.JSX.Element {
     [membership, runAction, t],
   );
 
+  const sendTest = useCallback(
+    (subscription: WebhookSubscription): void => {
+      if (membership === null) return;
+      setSendTestId(subscription.id);
+      void runAction(
+        () => sendSubscriptionTestEvent(newClient(), membership.workspace_id, subscription.id),
+        t('integrations.webhooks.testSentToast'),
+      ).finally(() => setSendTestId(null));
+    },
+    [membership, runAction, t],
+  );
+
   const nowMs = Date.now();
   const locale = navigator.language;
   const urlInvalid = url !== '' && !isHttpsUrl(url);
@@ -324,6 +345,12 @@ export function WebhooksPage(): React.JSX.Element {
                   )}
                 </div>
 
+                <span className="mesh-integrations__muted" data-testid={`webhook-success-rate-${subscription.id}`}>
+                  {t('integrations.webhooks.successRate')} {formatSuccessRate(subscription.success_rate)}
+                  {' · '}
+                  {t('integrations.webhooks.deliveriesTotal', { count: subscription.deliveries_total })}
+                </span>
+
                 {tripped && (
                   <div data-testid={`webhook-breaker-${subscription.id}`}>
                     <Banner tone="danger">
@@ -346,6 +373,17 @@ export function WebhooksPage(): React.JSX.Element {
                   <Button variant="ghost" size="sm" onClick={() => toggleExpand(subscription.id)} data-testid={`webhook-expand-${subscription.id}`}>
                     {expanded ? t('integrations.webhooks.hideDeliveries') : t('integrations.webhooks.showDeliveries')}
                   </Button>
+                  {isAdmin && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={sendTestId === subscription.id}
+                      onClick={() => sendTest(subscription)}
+                      data-testid={`webhook-send-test-${subscription.id}`}
+                    >
+                      {t('integrations.webhooks.sendTest')}
+                    </Button>
+                  )}
                   {isAdmin && (
                     <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(subscription.id)} data-testid={`webhook-delete-${subscription.id}`}>
                       {t('integrations.actions.delete')}

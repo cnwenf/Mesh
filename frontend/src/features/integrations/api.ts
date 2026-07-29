@@ -144,6 +144,25 @@ export async function rotateIntegrationSecret(
   );
 }
 
+/** 连接测试结果(§3.1:`health_state` 为后端 string 契约,展示层经 toHealthState 收窄)。 */
+export interface IntegrationTestResult {
+  readonly health_state: string;
+  readonly detail: string | null;
+}
+
+/** 测试连接(§3.1):主动健康检查,返回最新 `health_state` 与错误详情。 */
+export async function testIntegration(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+): Promise<IntegrationTestResult> {
+  return client.request<IntegrationTestResult>(
+    'POST',
+    `${integrationPath(workspaceId, integrationId)}:test`,
+    { body: {} },
+  );
+}
+
 export async function listBindings(
   client: MeshApiClient,
   workspaceId: string,
@@ -295,6 +314,25 @@ export async function resumeSubscription(
   return client.request<WebhookSubscription>(
     'POST',
     `${subscriptionPath(workspaceId, subscriptionId)}/resume`,
+    { body: {} },
+  );
+}
+
+/** 发送测试事件结果(§3.1:合成事件走完整签名 + 投递 + 台账)。 */
+export interface SendTestEventResult {
+  readonly delivery_id: string;
+  readonly state: string;
+}
+
+/** 发送测试事件(§3.1):入投递台账,经出向通道签名投递 `webhook.test`。 */
+export async function sendSubscriptionTestEvent(
+  client: MeshApiClient,
+  workspaceId: string,
+  subscriptionId: string,
+): Promise<SendTestEventResult> {
+  return client.request<SendTestEventResult>(
+    'POST',
+    `${subscriptionPath(workspaceId, subscriptionId)}:send-test`,
     { body: {} },
   );
 }

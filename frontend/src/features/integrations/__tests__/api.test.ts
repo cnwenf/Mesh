@@ -33,6 +33,8 @@ import {
   resumeSubscription,
   retryDelivery,
   rotateIntegrationSecret,
+  sendSubscriptionTestEvent,
+  testIntegration,
   unlinkExternalIdentity,
   workspaceIntegrationsChannel,
 } from '../api';
@@ -105,6 +107,16 @@ describe('integration endpoints', () => {
     ]);
     expect(calls[4].opts).toMatchObject({ body: { secret: 'shh' } });
   });
+
+  it('tests a connection via the :test endpoint', async () => {
+    const { client, calls } = makeClient();
+    await testIntegration(client, WS, 'i-1');
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/api/v1/workspaces/${WS}/integrations/i-1:test`,
+      opts: { body: {} },
+    });
+  });
 });
 
 describe('binding + event endpoints', () => {
@@ -171,6 +183,16 @@ describe('subscription + delivery endpoints', () => {
     expect(calls[1]).toMatchObject({
       method: 'POST',
       path: `/api/v1/workspaces/${WS}/webhook-subscriptions/s-1/deliveries/d-1/retry`,
+    });
+  });
+
+  it('sends a subscription test event via the :send-test endpoint', async () => {
+    const { client, calls } = makeClient();
+    await sendSubscriptionTestEvent(client, WS, 's-1');
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: `/api/v1/workspaces/${WS}/webhook-subscriptions/s-1:send-test`,
+      opts: { body: {} },
     });
   });
 });

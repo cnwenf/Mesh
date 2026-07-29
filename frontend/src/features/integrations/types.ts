@@ -31,6 +31,24 @@ export const INTEGRATION_KINDS: ReadonlyArray<IntegrationKind> = [
 /** 集成启用状态(§2.2;`disabled` 时入站拒绝分发、出站停发)。 */
 export type IntegrationStatus = 'active' | 'disabled';
 
+/** 连接器健康度(§4.1 列表徽章;凭据失效联动「重新授权」CTA)。 */
+export type IntegrationHealthState = 'unknown' | 'healthy' | 'auth_failed' | 'unreachable';
+
+export const INTEGRATION_HEALTH_STATES: ReadonlyArray<IntegrationHealthState> = [
+  'unknown',
+  'healthy',
+  'auth_failed',
+  'unreachable',
+];
+
+/** 支持 OAuth 授权流(整页跳外部平台)的 kind;webhook_outbound 为手填凭据。 */
+export const OAUTH_KINDS: ReadonlySet<IntegrationKind> = new Set<IntegrationKind>([
+  'im_feishu',
+  'im_slack',
+  'vcs_github',
+  'vcs_gitlab',
+]);
+
 export interface Integration {
   readonly id: string;
   readonly workspace_id: string;
@@ -41,6 +59,14 @@ export interface Integration {
   readonly config: Readonly<Record<string, unknown>>;
   /** 凭据存在标记(凭据密文引用 `secret_ref` 的回显面,绝不暴露明文)。 */
   readonly has_secret: boolean;
+  /** 连接器健康度(列表徽章 + 详情;`auth_failed` 触发重新授权 CTA)。 */
+  readonly health_state: IntegrationHealthState;
+  /** 最近一次健康检查的错误信息(展示为 tooltip/副文本,不回显凭据)。 */
+  readonly last_error: string | null;
+  /** 最近一次成功连通时间(UTC RFC3339)。 */
+  readonly last_success_at: string | null;
+  /** 近 7 天入站事件量(§4.1 列表列)。 */
+  readonly events_7d: number;
   readonly created_by: string;
   readonly created_at: string;
   readonly updated_at: string;
@@ -111,6 +137,10 @@ export interface WebhookSubscription {
   readonly status: SubscriptionStatus;
   readonly fail_count: number;
   readonly has_secret: boolean;
+  /** 投递台账统计(§4.1 列表成功率:total=0 时 success_rate=null)。 */
+  readonly deliveries_total: number;
+  readonly deliveries_sent: number;
+  readonly success_rate: number | null;
   /** 仅创建响应出现一次的签名密钥明文(§3.1;随后永不回显)。 */
   readonly secret?: string;
   readonly created_by: string;
@@ -162,6 +192,8 @@ export interface VcsLink {
   readonly provider: BindingProvider;
   readonly external_object_type: VcsObjectType;
   readonly external_object_ref: string;
+  /** 外部对象 Web URL(深链;不可推导时为 null,渲染回退纯文本,§4.2)。 */
+  readonly url: string | null;
   readonly mesh_entity_type: 'issue';
   readonly mesh_entity_id: string;
   readonly link_source: string;
