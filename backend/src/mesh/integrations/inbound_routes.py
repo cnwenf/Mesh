@@ -105,6 +105,7 @@ async def _run_inbound(
     session_factory = request.app.state.session_factory
     headers = dict(request.headers)
     now = datetime.now(UTC)
+    guardrails = _build_guardrails(request, settings)
     async with session_factory() as session, session.begin():
         status_code, body = await process_inbound(
             session,
@@ -114,10 +115,25 @@ async def _run_inbound(
             signing_secret=settings.jwt_secret,
             now=now,
             tolerance=_tolerance(request),
-            redis=request.app.state.redis,
-            settings=settings,
+            guardrails=guardrails,
         )
     return JSONResponse(status_code=status_code, content=body)
+
+
+def _build_guardrails(request: Request, settings):
+    """Post-signature semantic guardrails (§2.10) — only when Redis is up;
+    signature verification remains the hard gate regardless."""
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        return None
+    from mesh.integrations.guardrails import InboundGuardrails
+
+    return InboundGuardrails(
+        redis,
+        per_identity_per_min=settings.im_inbound_per_identity_per_min,
+        per_conversation_per_min=settings.im_inbound_per_conversation_per_min,
+        max_pending_per_conversation=settings.im_queue_max_pending_per_conversation,
+    )
 
 
 async def _run_card(request: Request, kind: str) -> JSONResponse:
@@ -249,16 +265,6 @@ async def feishu_cards(request: Request) -> JSONResponse:
 @router.post("/slack/cards")
 async def slack_cards(request: Request) -> JSONResponse:
     return await _run_card(request, "im_slack")
-
-
-@router.post("/dingtalk/cards")
-async def dingtalk_cards(request: Request) -> JSONResponse:
-    """DingTalk interactive-card HTTP callback (``callbackType='HTTP'``;
-    Stream mode delivers the same topic over the long connection and the
-    stream worker routes it to the same handler function). Signature
-    scheme: §3.2 DingTalk row (``timestamp`` + ``sign`` headers, official
-    ±3600s tolerance)."""
-    return await _run_card(request, "im_dingtalk")
 
 
 __all__ = [

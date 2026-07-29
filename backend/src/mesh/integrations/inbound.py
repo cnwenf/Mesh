@@ -761,6 +761,7 @@ async def process_inbound(
     signing_secret: str,
     now: datetime,
     tolerance: timedelta,
+    guardrails=None,
 ) -> tuple[int, dict[str, Any]]:
     """Full inbound pipeline; runs inside the caller's transaction.
 
@@ -832,7 +833,11 @@ async def process_inbound(
             provider, event, config=dict(integration.config or {}), raw_payload=payload
         )
         result = await ingest_verified_event(
-            session, integration=integration, envelope=envelope, now=now
+            session,
+            integration=integration,
+            envelope=envelope,
+            now=now,
+            guardrails=guardrails,
         )
         return result.status_code, result.body
 
