@@ -266,6 +266,7 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
   "callback_base": null,                         // receive_mode='http' 时必填:https://mesh.example.com/api/v1/integrations/dingtalk
   "ack_template": "✅ 已接收,处理中",             // emoji 确认接收模板(§3.8;置空字符串 = 关闭确认)
   "inbound_queue": "serial_conversation",        // 会话级串行排队(§2.10/§3.9) | parallel(即时派发,飞书/Slack 默认)
+  "verbosity": "final_only",                     // IM 侧推送详略:final_only(默认,仅确认/审批卡片/最终结果) | progress(追加进度通知);中间过程站内永远可见(README §6.13 站内为真源)
   "stream_reconnect": { "base_seconds": 2, "max_seconds": 300, "heartbeat_timeout_seconds": 90 } }
 // kind='vcs_github'
 { "installation_id": "1234567", "webhook_secret_ref": "<密文引用>",
@@ -924,7 +925,7 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 | 单聊消息 | `POST /v1.0/robot/oToMessages/batchSend` `{robotCode, userIds:[<senderStaffId>], msgKey, msgParam}` | 同上 |
 | 审批/交互卡片 | 钉钉**互动卡片**(模板 + 投放 + 更新):投放经上述发送通道(`msgKey` 为卡片模板),按钮回调经 Stream topic `/v1.0/card/instances/callback`(HTTP 模式经独立回调地址,签名同 §3.2 钉钉行) | 回调鉴权链同飞书/Slack 卡片(§3.2/§4.3 流程 B):点击者 `userId` → `external_identities`(provider='dingtalk', tenant=corp_id)→ 全局 `users.id` → 集成解析 workspace → JOIN `members` 名册行 → README §6.10 权限校验 → 转发 `POST /approvals/{id}/approve\|reject`;未映射/无名册行/无权限 → 403,审批状态不变,留痕 |
 
-**主动推送(任务进度与结果)**:执行进度/结果通知经统一通知管线(README §6.13 `channel='im'`)→ 出站适配器按 `notification_delivery.destination_key='dingtalk:<binding_id>:<conversationId>'` 投递到源会话;台账落 `notification_delivery(channel='im', provider='dingtalk')`;限流退避(钉钉 OpenAPI 速率限制)与失败重试经出站适配器统一处理(同飞书范式)。
+**主动推送(任务进度与结果)**:执行进度/结果通知经统一通知管线(README §6.13 `channel='im'`)→ 出站适配器按 `notification_delivery.destination_key='dingtalk:<binding_id>:<conversationId>'` 投递到源会话;台账落 `notification_delivery(channel='im', provider='dingtalk')`;限流退避(钉钉 OpenAPI 速率限制)与失败重试经出站适配器统一处理(同飞书范式)。**静默优先(`config.verbosity='final_only'`,默认)**:IM 会话只推确认接收、审批/交互卡片与**最终结果**,中间进度(工具调用流水、阶段性日志)**默认不出站**——避免群聊刷屏,过程可观测性以 Mesh 站内执行详情为真源(README §6.13:站内永远是通知真源);`verbosity='progress'` 时进度通知一并推送(通知分级与去噪仍按 README §6.13 唯一优先级矩阵,本模块不另行定义)。
 
 **SSRF 与 URL 约束**:钉钉出站目标固定为平台官方域(`api.dingtalk.com`/`oapi.dingtalk.com`),不接受用户可控出站地址(README §6.16);入站载荷中的 `sessionWebhook` 不作为出站目标使用(§3.2 备注)。
 
