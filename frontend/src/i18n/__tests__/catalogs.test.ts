@@ -265,6 +265,15 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     groupBy: 'status',
     // kanban 投影层 §4 文案占位符(MES-33):WIP 超限 toast 的列 key
     group: 'in_progress',
+    // search-command-palette §4 文案占位符(MES-79):结构化副标题/徽章/空态
+    identifier: 'WEB-124',
+    project: '官网改版',
+    status: 'In Progress',
+    key: 'WEB',
+    visibility: 'public',
+    scope: 'project',
+    agent: '代码助手',
+    q: '登录',
     // comment-inbox §4 文案占位符(触发预览的 agent 名单)
     names: 'code-reviewer, test-runner',
     // runtime §4 文案占位符:负载 / 心跳新鲜度 / 日志偏移 / 终态原因
