@@ -148,3 +148,4 @@ frontend/
 - 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。
 - 偏好写入已接通服务端同步:`PATCH /api/v1/users/me`(auth.md §3.1,键级浅合并;失败写 pending 分区队列待重放,§4.5)+ `PATCH /api/v1/workspaces/{id}` 的 `settings.default_theme`(workspace.md,admin);本地持久化降级为镜像与防闪烁首帧用途(历史边界说明,仅存档案价值)。
 - 前端容器化在后续 Issue 集成(本阶段以 dev server + 生产构建验证)。
+
