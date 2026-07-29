@@ -892,7 +892,7 @@ CREATE TABLE notification_delivery (
   notification_id UUID NOT NULL,
   channel         TEXT NOT NULL CHECK (channel IN ('in_app','email','websocket')),
   destination_key TEXT NOT NULL DEFAULT '',                 -- R3:稳定目的地键(in_app/websocket 恒 '';im = provider:binding_id:external_target)
-  provider        TEXT NULL CHECK (provider IN ('feishu','slack','email_smtp')),  -- R3:结构化路由(不再塞 error)
+  provider        TEXT NULL CHECK (provider IN ('feishu','slack','dingtalk','email_smtp')),  -- R3:结构化路由(不再塞 error;MES-82:钉钉 IM 出站)
   external_target TEXT NULL,                                -- R3:外部目标身份(飞书 chat_id/open_id、Slack channel_id/user_id、邮件地址)
   integration_id  UUID NULL,                                -- R3:IM 集成实例(composite FK 于 integrations 建表后 ALTER 添加)
   binding_id      UUID NULL,                                -- R3:IM 绑定(composite FK 于 integration_bindings 建表后 ALTER 添加)
@@ -2052,7 +2052,8 @@ CREATE INDEX idx_onboarding_steps_pending
 CREATE TABLE integrations (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','vcs_github','vcs_gitlab','webhook_outbound')),
+  kind         TEXT NOT NULL CHECK (kind IN ('im_feishu','im_slack','im_dingtalk','vcs_github','vcs_gitlab','webhook_outbound')),
+  stream_state JSONB NOT NULL DEFAULT '{}',                -- MES-82:钉钉 Stream 连接状态持久真源(integrations.md §2.2/§3.9)
   name         TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   config       JSONB NOT NULL DEFAULT '{}',
@@ -2073,7 +2074,7 @@ CREATE TABLE integration_bindings (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id        UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   integration_id      UUID NOT NULL,
-  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab','webhook')),
+  provider            TEXT NOT NULL CHECK (provider IN ('feishu','slack','dingtalk','github','gitlab','webhook')),
   provider_tenant_key TEXT NOT NULL DEFAULT '',                                       -- R3:规范化外部平台租户(team_id/tenant_key/installation_id/实例主机)
   scope               TEXT NOT NULL DEFAULT 'workspace' CHECK (scope IN ('workspace','project')),
   project_id          UUID NULL,
@@ -2173,7 +2174,7 @@ CREATE INDEX idx_delivery_subscription ON webhook_subscription_deliveries(subscr
 -- → users.id → JOIN 该 workspace 的 members(workspace_id, user_id) → README §6.10 权限再校验。
 CREATE TABLE external_identities (
   id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider              TEXT NOT NULL CHECK (provider IN ('feishu','slack','github','gitlab')),
+  provider              TEXT NOT NULL CHECK (provider IN ('feishu','slack','dingtalk','github','gitlab')),
   provider_tenant_key   TEXT NOT NULL DEFAULT '',                -- R4:平台租户(飞书 tenant_key / Slack team_id / GitHub installation 或 org / GitLab 实例主机),纳入身份键
   external_user_key     TEXT NOT NULL,
   user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,   -- R4:映射到全局登录身份(用户注销 → 映射级联删除,生命周期唯一级联来源)

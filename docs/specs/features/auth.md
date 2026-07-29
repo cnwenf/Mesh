@@ -567,8 +567,9 @@ CHECK (
 | 通用 API 写 | 120 req/分钟 | token / 用户 |
 | 附件上传/下载 | 60 req/分钟 | token / IP |
 | WebSocket 消息 | 60 msg/分钟 | 连接 |
+| 入站集成回调(integrations.md §3.2 非 Bearer 入站端点与 Stream 摄取入口) | 120 req/分钟 | **(集成, IP) 二元组** |
 
-实现:令牌桶/滑动窗口(Redis),响应头 `X-RateLimit-Limit/Remaining/Reset`;超限 429 + `Retry-After`。登录类叠加失败计数锁定与凭据填充防护。
+实现:令牌桶/滑动窗口(Redis),响应头 `X-RateLimit-Limit/Remaining/Reset`;超限 429 + `Retry-After`。登录类叠加失败计数锁定与凭据填充防护。**入站集成回调行为签名校验**前**的粗粒度防刷**:超限对平台侧**静默 200**(非 2xx 会触发外部平台重推放大),仅审计 + 告警;签名**后**的语义级护栏(每身份/每会话频率、会话排队深度、文本长度上限)见 integrations.md §2.10「入站频率护栏」,两层分层互补(MES-82)。
 
 ### 3.7 WebSocket 鉴权与实时
 

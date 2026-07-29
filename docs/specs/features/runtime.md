@@ -260,7 +260,7 @@ erDiagram
 | cancel_requested_by | uuid | NULL, FK→members.id | - | 谁请求取消（成员 / 系统）；复合 FK `(workspace_id, cancel_requested_by) → members(workspace_id, id)` |
 | cancel_requested_at | timestamptz | NULL | - | 取消请求时间 |
 | result | jsonb | NULL | - | 最终结果摘要（来自成功 attempt） |
-| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / awaiting_approval / approval_rejected / approval_expired）；`awaiting_approval` = 审批挂起时当前 attempt 的失败分类 |
+| failure_reason | text | NULL | - | 失败分类（oom / timeout / nonzero_exit / sandbox_violation / lease_expired / max_retries / superseded / agent_paused / awaiting_approval / approval_rejected / approval_expired / **cancelled_by_command**）；`awaiting_approval` = 审批挂起时当前 attempt 的失败分类；`cancelled_by_command` = IM 命令平面 `/stop` 触发的用户取消（integrations.md §3.7，MES-82） |
 | created_at / updated_at | timestamptz | NOT NULL | `now()` | 审计时间 |
 
 > **领取 / 租约 / 分支 / 日志 / 单次结果等物理字段不在本表**——全部下沉到 `execution_attempts`；`retry_count` 由 `COUNT(execution_attempts)-1` 派生，不再存冗余列。
@@ -589,6 +589,7 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
 | POST | `/api/v1/daemon/attempts/{attempt_id}:renew-lease` | 租约续期 |
 | POST | `/api/v1/daemon/attempts/{attempt_id}/credentials:refetch` | **凭证重取**（响应丢失/网络抖动后；仅租约有效且 attempt 在途时可调用，发新 envelope 撤旧，每 attempt 上限 3 次，见 §2.2 凭证协议） |
 | POST | `/api/v1/daemon/executions/{id}/approvals` | **高风险工具审批请求**：运行中工具命中 `confirm_required` 时创建统一 `approvals`（README §6.10），**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量释放**，逻辑执行转 `awaiting_approval`；批准结果经心跳下行/轮询回传，执行回 `queued` 由新 attempt 凭 `resume_context` 续跑 |
+| GET | `/api/v1/daemon/executions/{id}/context-appends` | **运行期上下文追加拉取**（MES-82）：`?since_seq=N` 返回 `execution_context_appends` 中 seq > N 的追加行（按 seq 序）；daemon 收心跳 `inject_context` 指令后调用，下一 turn 边界注入（见「运行期上下文追加」） | daemon |
 
 > 机器 API 命名空间 `/api/v1/daemon/`，与 agent 管理的 `/api/v1/agents` 显式区分。鉴权：`runtime_token_hash` 与 `runtime_id` 匹配、`workspace_id` 由 token 解析注入（**不以请求体为准**），且仅允许操作本 runtime 与其领取的 attempt。
 
@@ -635,11 +636,33 @@ SQLAlchemy 2.x 落地：同一 `async` 事务内依次 `select(...).with_for_upd
   "data": {
     "server_time": "2026-07-24T09:41:30Z",
     "commands": [
-      {"type": "cancel_execution", "execution_id": "8f3a1d2c-...", "grace_seconds": 15}
+      {"type": "cancel_execution", "execution_id": "8f3a1d2c-...", "grace_seconds": 15},
+      {"type": "inject_context", "execution_id": "c21e9b7a-...", "from_seq": 3}
     ]
   }
 }
 ```
+
+> **`inject_context` 下行指令（MES-82 运行期上下文追加）**：当某在途执行的 `execution_context_appends` 出现新行（如集成平台 `/btw` 命令写入，integrations.md §3.7），心跳响应即对该执行的 runtime 下发 `{type:'inject_context', execution_id, from_seq}`（`from_seq` = daemon 已确认消费的最大 seq，由心跳请求 `inflight` 明细携带或默认 0）；daemon 拉取 `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N`（daemon 鉴权同 approvals 端点）取得追加载荷，**在该执行下一 agent turn 边界**以不可信数据块注入（README §6.15：LLM 单轮不可打断，追加不中断当前轮次）。详见本节「运行期上下文追加」。
+
+**运行期上下文追加（MES-82；integrations.md §3.7 `/btw` 的落点机制）**：
+
+在途执行可被追加补充上下文（来源：IM 命令平面的 `/btw`），追加行是**不可信数据**（README §6.15），不改变执行的真源状态与配置快照（§6.11），仅供 agent 在后续 turn 作为数据参考：
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| id | uuid | PK，`UNIQUE (workspace_id, id)`（§6.2 复合 FK 引用前提） | |
+| workspace_id | uuid | NOT NULL，FK→workspaces ON DELETE CASCADE | |
+| execution_id | uuid | NOT NULL，复合 FK `(workspace_id, execution_id) → task_executions(workspace_id, id)` ON DELETE CASCADE | 追加归属的在途执行 |
+| seq | bigint | NOT NULL，`UNIQUE (execution_id, seq)` | 执行内单调递增（插入时执行维度咨询锁取号，同 integrations.md §2.10 协议） |
+| source | text | NOT NULL，CHECK IN ('im_btw') | 追加来源（本期仅 IM `/btw`；扩展新来源需登记本词汇） |
+| payload | jsonb | NOT NULL | `{sender_user_id, sender_display, text(≤4000 字符截断), received_at, conversation_ref}` |
+| injected_at | timestamptz | NULL | daemon 确认注入 agent turn 的时刻（NULL = 已写入待注入；执行终态时仍未注入的行随执行审计保留） |
+| created_at | timestamptz | NOT NULL DEFAULT now() | |
+
+- **写入方**：集成平台命令平面以服务层调用写入（不经 daemon HTTP）；**仅对 `queued/claimed/running/cancelling` 的执行可写**，终态执行写入 → `422`（integrations.md 侧渲染为"任务已结束"反馈）。
+- **下行与注入**：心跳 `inject_context` 指令（见上）→ daemon `GET /api/v1/daemon/executions/{id}/context-appends?since_seq=N` 拉取 → **下一 agent turn 边界**以结构化不可信块注入（标注 `source='im_btw'`，agent 不得作为指令执行）→ daemon 经心跳 `inflight` 明细回报各执行已消费 seq → 服务端回写 `injected_at`。
+- **边界**：追加不是 `config_snapshot` 的一部分（不参与 §6.11 冻结）；执行被取消/失败时未注入的追加行保留审计，不随新 attempt 重放（`/btw` 语义针对当次运行）。
 
 **领取任务（原子，核心）**：
 
