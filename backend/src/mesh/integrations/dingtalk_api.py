@@ -32,7 +32,20 @@ pinned-resolver guard applies to user-controlled targets only).
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
+import logging
+import random
+import uuid
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Callable
+
+import httpx
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
+
+logger = logging.getLogger("mesh.integrations.dingtalk")
 
 # ---------------------------------------------------------------------------
 # Platform message catalog (§3.10 — 13 official robot msgKey types)
@@ -181,11 +194,267 @@ def redact_body_for_log(body: dict[str, Any] | None) -> dict[str, Any]:
     return {key: ("***" if key in _SENSITIVE_BODY_KEYS else value) for key, value in body.items()}
 
 
+# ---------------------------------------------------------------------------
+# accessToken cache — multi-replica single-flight refresh (§3.10)
+# ---------------------------------------------------------------------------
+
+# Conditional lock release: DEL only when the lock still carries OUR random
+# owner token — a stale owner returning after its lease expired must never
+# delete the successor's lock (at most one effective refresher at any
+# instant).
+_RELEASE_LOCK_LUA = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
+
+def _default_jitter() -> int:
+    return random.randint(-TOKEN_TTL_JITTER_SECONDS, TOKEN_TTL_JITTER_SECONDS)
+
+
+class DingTalkTokenManager:
+    """``accessToken`` cache shared across ``mesh.workers`` replicas.
+
+    Protocol (§3.10, ownership-safe):
+
+    - SHARED cache: Redis ``dingtalk:access_token:<integration_id>`` →
+      ``{token, expires_at}`` with TTL ``lifetime − 300 ± 60s`` (jitter
+      thwarts synchronized expiry across integrations). A per-process LRU
+      entry (≤30s) sits in front of Redis.
+    - REFRESH: ``SET lock <random owner> NX EX <lease>``; the winner
+      DOUBLE-CHECKS the shared cache is still stale, then calls
+      ``POST /v1.0/oauth2/accessToken`` (timeout strictly UNDER the lease —
+      the lease cannot expire mid-refresh), writes the shared cache, and
+      releases via the Lua owner compare.
+    - FOLLOWER: re-checks the shared cache every 500ms up to
+      ``follower_wait`` (default 12s = refresh timeout + buffer) — a
+      legitimate leader refresh (≤10s) is always outwaited, never a
+      terminal failure during it. Window exhausted → ONE re-acquire attempt
+      (the leader may have crashed and its lease expired) → still nothing →
+      :class:`TokenRefreshBusy` (retryable non-failure; the outbox relay
+      moves ``available_at`` without consuming the failure budget).
+    """
+
+    def __init__(
+        self,
+        redis: Redis,
+        *,
+        http_client: httpx.AsyncClient,
+        integration_id: uuid.UUID | str,
+        app_key: str,
+        app_secret: str,
+        api_base: str = "https://api.dingtalk.com",
+        refresh_timeout: float = 10.0,
+        lock_ttl: int = 30,
+        follower_wait: float = 12.0,
+        recheck_interval: float = FOLLOWER_RECHECK_INTERVAL_SECONDS,
+        now: Callable[[], datetime] | None = None,
+        jitter: Callable[[], int] | None = None,
+        sleep: Callable[[float], Any] | None = None,
+    ) -> None:
+        if refresh_timeout >= lock_ttl:
+            # §3.10 — the refresh request must complete inside the lease; a
+            # lease expiring mid-refresh would admit a second refresher.
+            raise ValueError("refresh_timeout must be strictly less than lock_ttl")
+        self._redis = redis
+        self._client = http_client
+        self._integration_id = str(integration_id)
+        self._app_key = app_key
+        self._app_secret = app_secret
+        self._api_base = api_base.rstrip("/")
+        self._refresh_timeout = refresh_timeout
+        self._lock_ttl = lock_ttl
+        self._follower_wait = follower_wait
+        self._recheck_interval = recheck_interval
+        self._now = now or (lambda: datetime.now(UTC))
+        self._jitter = jitter or _default_jitter
+        self._sleep = sleep or asyncio.sleep
+        # (token, expires_at_epoch, cached_at_epoch)
+        self._local: tuple[str, float, float] | None = None
+
+    # -- cache keys ------------------------------------------------------
+
+    @property
+    def cache_key(self) -> str:
+        return f"dingtalk:access_token:{self._integration_id}"
+
+    @property
+    def lock_key(self) -> str:
+        return f"dingtalk:token_lock:{self._integration_id}"
+
+    # -- public API ------------------------------------------------------
+
+    async def get_token(self, *, force: bool = False) -> str:
+        """A valid accessToken, refreshing through the ownership protocol.
+
+        ``force=True`` skips both cache layers (platform-reported token
+        invalidation) and goes straight at the refresh protocol.
+        """
+        now_ts = self._now().timestamp()
+        if not force:
+            local = self._local
+            if local is not None:
+                token, expires_at, cached_at = local
+                if (
+                    now_ts - cached_at <= LOCAL_CACHE_MAX_AGE_SECONDS
+                    and expires_at - now_ts > TOKEN_REFRESH_AHEAD_SECONDS
+                ):
+                    return token
+            shared = await self._read_shared()
+            if shared is not None:
+                token, expires_at = shared
+                if expires_at - now_ts > TOKEN_REFRESH_AHEAD_SECONDS:
+                    self._cache_local(token, expires_at)
+                    return token
+        return await self._refresh()
+
+    async def invalidate(self) -> None:
+        """Drop both cache layers (platform reported the token invalid)."""
+        self._local = None
+        await self._redis.delete(self.cache_key)
+
+    # -- refresh protocol --------------------------------------------------
+
+    async def _refresh(self) -> str:
+        owner = uuid.uuid4().hex
+        acquired = await self._redis.set(self.lock_key, owner, nx=True, ex=self._lock_ttl)
+        if acquired:
+            try:
+                return await self._refresh_as_leader()
+            finally:
+                await self._release_lock(owner)
+        return await self._wait_as_follower()
+
+    async def _refresh_as_leader(self) -> str:
+        # Double-check: another leader may have refreshed between our stale
+        # read and the lock acquisition.
+        shared = await self._read_shared()
+        now_ts = self._now().timestamp()
+        if shared is not None:
+            token, expires_at = shared
+            if expires_at - now_ts > TOKEN_REFRESH_AHEAD_SECONDS:
+                self._cache_local(token, expires_at)
+                return token
+        token, expires_at, expire_in = await self._call_refresh_endpoint()
+        await self._write_shared(token, expires_at, expire_in)
+        self._cache_local(token, expires_at)
+        return token
+
+    async def _wait_as_follower(self) -> str:
+        deadline = self._now().timestamp() + self._follower_wait
+        while True:
+            await self._sleep(self._recheck_interval)
+            shared = await self._read_shared()
+            now_ts = self._now().timestamp()
+            if shared is not None:
+                token, expires_at = shared
+                if expires_at - now_ts > TOKEN_REFRESH_AHEAD_SECONDS:
+                    self._cache_local(token, expires_at)
+                    return token
+            if now_ts >= deadline:
+                break
+        # Window exhausted: the leader may have crashed and its lease expired —
+        # ONE re-acquire attempt (takeover), then give up retryable.
+        owner = uuid.uuid4().hex
+        acquired = await self._redis.set(self.lock_key, owner, nx=True, ex=self._lock_ttl)
+        if acquired:
+            try:
+                return await self._refresh_as_leader()
+            finally:
+                await self._release_lock(owner)
+        raise TokenRefreshBusy(
+            f"token refresh still in flight for integration {self._integration_id}"
+        )
+
+    async def _release_lock(self, owner: str) -> None:
+        try:
+            await self._redis.eval(_RELEASE_LOCK_LUA, 1, self.lock_key, owner)
+        except Exception:  # noqa: BLE001 — lock TTL is the safety net
+            logger.warning("dingtalk token lock release failed", exc_info=True)
+
+    # -- platform call -----------------------------------------------------
+
+    async def _call_refresh_endpoint(self) -> tuple[str, float, int]:
+        """``POST /v1.0/oauth2/accessToken`` → (token, expires_at, expire_in).
+
+        The request body carries the appSecret in plaintext — it is NEVER
+        logged (failures record method/url/status only, §6.16).
+        """
+        url = f"{self._api_base}/v1.0/oauth2/accessToken"
+        body = {"appKey": self._app_key, "appSecret": self._app_secret}
+        try:
+            response = await self._client.post(url, json=body, timeout=self._refresh_timeout)
+        except (httpx.HTTPError, OSError) as exc:
+            raise DingTalkUpstreamError(
+                f"POST {url} failed: {type(exc).__name__}", code="upstream_error"
+            ) from exc
+        payload = _json_body(response)
+        if response.status_code != 200:
+            code = str(payload.get("code") or "")
+            if code in INVALID_CREDENTIAL_CODES:
+                raise InvalidCredentials("dingtalk rejected the app credentials", code=code)
+            raise DingTalkUpstreamError(
+                f"POST {url} status={response.status_code}",
+                code=code or "upstream_error",
+                http_status=response.status_code,
+            )
+        token = str(payload.get("accessToken") or "")
+        code = str(payload.get("code") or "")
+        if not token:
+            if code in INVALID_CREDENTIAL_CODES:
+                raise InvalidCredentials("dingtalk rejected the app credentials", code=code)
+            raise DingTalkUpstreamError(
+                f"POST {url} returned no accessToken", code=code or "upstream_error"
+            )
+        try:
+            expire_in = int(payload.get("expireIn") or TOKEN_LIFETIME_SECONDS)
+        except (TypeError, ValueError):
+            expire_in = TOKEN_LIFETIME_SECONDS
+        expires_at = self._now().timestamp() + expire_in
+        return token, expires_at, expire_in
+
+    # -- shared cache IO -----------------------------------------------------
+
+    async def _read_shared(self) -> tuple[str, float] | None:
+        raw = await self._redis.get(self.cache_key)
+        if not raw:
+            return None
+        try:
+            decoded = json.loads(raw)
+            token = str(decoded["token"])
+            expires_at = float(decoded["expires_at"])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if expires_at <= self._now().timestamp():
+            return None  # expired entry — treat as absent
+        return token, expires_at
+
+    async def _write_shared(self, token: str, expires_at: float, expire_in: int) -> None:
+        ttl = max(60, expire_in - TOKEN_TTL_BUFFER_SECONDS + self._jitter())
+        await self._redis.set(
+            self.cache_key, json.dumps({"token": token, "expires_at": expires_at}), ex=ttl
+        )
+
+    def _cache_local(self, token: str, expires_at: float) -> None:
+        self._local = (token, expires_at, self._now().timestamp())
+
+
+def _json_body(response: httpx.Response) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
 __all__ = [
     "CARD_PARAM_KEY_MAX_BYTES",
     "CARD_PARAM_VALUE_MAX_BYTES",
     "DingTalkError",
     "DingTalkRateLimited",
+    "DingTalkTokenManager",
     "DingTalkUpstreamError",
     "FOLLOWER_RECHECK_INTERVAL_SECONDS",
     "GROUP_MSG_PARAM_MAX_BYTES",
