@@ -21,6 +21,7 @@ Mesh 项目的所有重要变更都记录于此文件。
   - 测试代码:`MESH_STORAGE_ACCESS_KEY` / `MESH_STORAGE_SECRET_KEY` 的环境变量回退由弱口令改为空(CI 经 env 注入强值;未配置时对象存储用例按既有机制 skip),公开仓库测试源不再出现可猜测口令。
   - 验证:config / compose 守卫 + 受影响的 5 个单测文件 47 例全绿;真实附件 e2e(三阶段签名直传,`test_attachment_e2e.py` 5 例)以显式 env 全绿;compose 真栈以生成强凭据启动,`/readyz` database+redis ok、MinIO 建桶 / 上传 / 下载往返绿,旧弱口令 `mesh/mesh_minio_secret` 对新实例鉴权拒绝(ClientError);ruff 净。
   - 主机侧(本机共享 agent 机,非仓库):DOCKER-USER 增补容器口 9000/9001(MinIO)、3306(MySQL)公网 DROP + 内网/回环放行(仿 Redis 止血范式),并以幂等脚本 + systemd 单元(`mesh-datastore-firewall.service`,docker 之后自启)持久化——重启不再失效(连同 Leader 临时 5432/6379 规则一并固化),IPv6 平行规则同配;netns 模拟外部源实测 DROP 命中、本机回环与容器间访问不受影响。
+- **验收遗留收口(MES-83 LOW-2/LOW-3,不改变门禁行为)**:`backend-ci.yml` / `spec-checks.yml` 的 `schema-validation` job postgres 发布 `5432:5432` → `127.0.0.1:5432:5432`(PR#61 遗漏的第二处 CI 数据存储发布,与本 PR「CI 数据存储一律绑回环」口径对齐;`psql -h 127.0.0.1` 连接不受影响);`test_analytics_routes.py` 存储凭据 env 回退 `mesh`/`mesh_minio_secret` → 空(MES-76 带入,dev 单测、值已在拒绝名单,按 PR#61 测试口径清零);`docs/superpowers/plans/2026-07-29-analytics-module.md` 历史明文凭据脱敏为占位符。
 
 ## [0.19.1] - 2026-07-29
 Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名不再含断言计数)+ 集成/运行时 Spec 增补,无功能行为变更。

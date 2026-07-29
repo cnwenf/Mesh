@@ -18,7 +18,7 @@
 - 只读:任何端点(含 `refresh=true`)不得写 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs`/`issue_activity` 等真源表,仅 `analytics_snapshots` 可写。
 - ruff:`line-length=110`,select E/F/I/UP/B;前端 eslint + tsc 零错。
 - 迁移重编号惯例:本模块基线 `0027_analytics`(`down_revision="0026"`);若 push 前 main 已有 0027(onboarding/import-export/integrations 并行线),顺延重编号并改 `down_revision`,保证 0001→head 单链。
-- 测试环境(本机):PG `postgresql+asyncpg://mesh:mesh@127.0.0.1:54399/mesh_test`(容器 `acc64t-pg`),Redis `redis://127.0.0.1:6399/1`(容器 `acc64t-redis`,无密码),MinIO `http://127.0.0.1:9100`(mesh/mesh_minio_secret)。运行时导出:`export MESH_TEST_DATABASE_URL=... MESH_TEST_REDIS_URL=... MESH_TEST_STORAGE_ENDPOINT=... MESH_STORAGE_ACCESS_KEY=mesh MESH_STORAGE_SECRET_KEY=mesh_minio_secret`。
+- 测试环境(本机):PG `postgresql+asyncpg://<user>:<password>@127.0.0.1:54399/mesh_test`(容器 `acc64t-pg`),Redis `redis://127.0.0.1:6399/1`(容器 `acc64t-redis`),MinIO `http://127.0.0.1:9100`(`<access-key>`/`<secret-key>`)。运行时导出:`export MESH_TEST_DATABASE_URL=... MESH_TEST_REDIS_URL=... MESH_TEST_STORAGE_ENDPOINT=... MESH_STORAGE_ACCESS_KEY=<...> MESH_STORAGE_SECRET_KEY=<...>`(凭据从环境注入,不在文档/仓库留明文——MES-83 口径)。
 
 ## File Structure
 

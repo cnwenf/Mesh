@@ -138,7 +138,9 @@ jobs:
           POSTGRES_PASSWORD: mesh
           POSTGRES_DB: mesh_validation
         ports:
-          - 5432:5432
+          # MES-83 收口(LOW-2):CI 数据存储一律绑回环,不暴露到 runner 全接口
+          # (psql 经 -h 127.0.0.1 连接,回环绑定无影响)。
+          - 127.0.0.1:5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
