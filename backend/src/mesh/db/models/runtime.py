@@ -269,6 +269,11 @@ class TaskExecution(Base):
     agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     issue_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     trigger: Mapped[str] = mapped_column(TEXT, nullable=False, default="assign")
+    # Server-persisted context-injection water level (runtime.md runtime
+    # context appends, MES-82): high-water seq the daemon has injected.
+    context_injected_through_seq: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     status: Mapped[str] = mapped_column(TEXT, nullable=False, default="queued")
     idempotency_key: Mapped[str | None] = mapped_column(TEXT, default=None)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)

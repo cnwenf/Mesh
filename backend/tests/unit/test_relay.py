@@ -45,13 +45,9 @@ async def test_run_once_publishes_with_handler(session_factory, workspace_factor
     assert result == RelayResult(claimed=3, published=3, failed=0)
     assert len(seen) == 3
     async with session_factory() as session:
-        statuses = (
-            (await session.execute(select(OutboxEvent.status))).scalars().all()
-        )
+        statuses = (await session.execute(select(OutboxEvent.status))).scalars().all()
         assert statuses == [OUTBOX_STATUS_PUBLISHED] * 3
-        published_ats = (
-            (await session.execute(select(OutboxEvent.published_at))).scalars().all()
-        )
+        published_ats = (await session.execute(select(OutboxEvent.published_at))).scalars().all()
         assert all(value is not None for value in published_ats)
 
 
@@ -67,10 +63,7 @@ async def test_concurrent_relays_do_not_double_process(session_factory, workspac
         await asyncio.sleep(0.01)  # widen the concurrency window
         return None
 
-    relays = [
-        OutboxRelay(session_factory, handlers={"test.event": handler}, batch_size=10)
-        for _ in range(3)
-    ]
+    relays = [OutboxRelay(session_factory, handlers={"test.event": handler}, batch_size=10) for _ in range(3)]
     results = await asyncio.gather(*(relay.run_once() for relay in relays))
     assert sum(r.claimed for r in results) == 10
     assert len(processed) == 10
@@ -135,9 +128,7 @@ async def test_frames_are_fanned_out_after_commit(session_factory, workspace_fac
     async def handler(session, event):
         return [("issue:x", {"op": "event", "seq": 1})]
 
-    relay = OutboxRelay(
-        session_factory, handlers={"test.event": handler}, fanout=FakeFanOut()
-    )
+    relay = OutboxRelay(session_factory, handlers={"test.event": handler}, fanout=FakeFanOut())
     await relay.run_once()
     assert published_frames == [("issue:x", {"op": "event", "seq": 1})]
 
@@ -170,9 +161,7 @@ async def test_db_error_poison_event_does_not_block_batch(session_factory, works
 
     async with session_factory() as session:
         poison = (
-            await session.execute(
-                select(OutboxEvent).where(OutboxEvent.status == OUTBOX_STATUS_PENDING)
-            )
+            await session.execute(select(OutboxEvent).where(OutboxEvent.status == OUTBOX_STATUS_PENDING))
         ).scalar_one()
         assert poison.delivery_attempts == 1  # increment persisted despite the error
 
@@ -191,12 +180,78 @@ async def test_run_forever_stops_on_event(session_factory, workspace_factory):
         processed.append(event.id)
         return None
 
-    relay = OutboxRelay(
-        session_factory, handlers={"test.event": handler}, poll_interval=0.05
-    )
+    relay = OutboxRelay(session_factory, handlers={"test.event": handler}, poll_interval=0.05)
     stop = asyncio.Event()
     task = asyncio.create_task(relay.run_forever(stop))
     await asyncio.sleep(0.2)
     stop.set()
     await asyncio.wait_for(task, timeout=5)
     assert len(processed) == 1
+
+
+# ---------------------------------------------------------------------------
+# §6.6 — available_at claim filter + RetryableDelay (MES-82 R4-4)
+# ---------------------------------------------------------------------------
+
+
+async def test_claim_batch_skips_deferred_rows(session_factory, workspace_factory):
+    """Rows with available_at in the future are invisible to the claim."""
+    from datetime import UTC, datetime, timedelta
+
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id, count=1)
+    # Defer the row into the future.
+    async with session_factory() as session, session.begin():
+        row = await session.get(OutboxEvent, event.id)
+        row.available_at = datetime.now(UTC) + timedelta(hours=1)
+    relay = OutboxRelay(session_factory, handlers={"test.event": lambda s, e: None})
+    async with session_factory() as session:
+        assert await relay.claim_batch(session) == [], "deferred row stays invisible"
+    assert (await relay.run_once()).claimed == 0
+    # Bring it back into the claim window → it is claimed.
+    async with session_factory() as session, session.begin():
+        row = await session.get(OutboxEvent, event.id)
+        row.available_at = datetime.now(UTC) - timedelta(seconds=1)
+    assert (await relay.run_once()).claimed == 1
+
+
+async def test_retryable_delay_defers_without_consuming_budget(session_factory, workspace_factory):
+    """RetryableDelay moves available_at forward but leaves status pending and
+    delivery_attempts UNCHANGED — unlike a plain failure (which increments)."""
+    from datetime import UTC, datetime
+
+    from mesh.outbox.relay import RetryableDelay
+
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id, count=1)
+
+    async def busy(session, event_):
+        raise RetryableDelay(delay=30, reason="token_refresh_busy")
+
+    relay = OutboxRelay(session_factory, handlers={"test.event": busy}, max_attempts=5)
+    result = await relay.run_once()
+    # Not published, not failed — still claimed once this pass.
+    assert result.claimed == 1 and result.published == 0 and result.failed == 0
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.status == OUTBOX_STATUS_PENDING
+        assert row.delivery_attempts == 0, "failure budget must NOT be consumed"
+        assert row.available_at > datetime.now(UTC), "available_at moved forward"
+    # The deferred row is not hot-looped: an immediate pass claims nothing.
+    assert (await relay.run_once()).claimed == 0
+
+
+async def test_plain_failure_increments_budget_contrast(session_factory, workspace_factory):
+    """Contrast: a plain handler failure DOES increment delivery_attempts."""
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id, count=1)
+
+    async def boom(session, event_):
+        raise RuntimeError("hard failure")
+
+    relay = OutboxRelay(session_factory, handlers={"test.event": boom}, max_attempts=5)
+    await relay.run_once()
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.status == OUTBOX_STATUS_PENDING
+        assert row.delivery_attempts == 1

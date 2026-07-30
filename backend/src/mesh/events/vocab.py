@@ -229,6 +229,10 @@ OUTBOX_INTERNAL_EVENT_TYPES: frozenset[str] = frozenset(
         # when the platform-driven generation terminates (relay handler:
         # mesh.runtime.enqueue.chat_generation_finished_handler).
         "chat.generation_finished",
+        # integrations.md §3.4: outbound developer webhook fan-out (relay
+        # derives it from realtime.publish; the dispatch handler creates
+        # per-subscription deliveries; the delivery worker posts them).
+        "webhook.dispatch",
     }
 )
 

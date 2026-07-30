@@ -83,6 +83,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_squad_checkers(app.state.authorizer, session_factory)
     register_chat_checkers(app.state.authorizer, session_factory)
     register_data_job_checkers(app.state.authorizer, session_factory)
+    from mesh.integrations.channels import register_integration_checkers
+
+    register_integration_checkers(app.state.authorizer, session_factory)
 
     install_error_handlers(app)
     app.include_router(health_router)
