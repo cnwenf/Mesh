@@ -375,7 +375,7 @@ return 0
 - [ ] **Step 2:** `ruff check src tests`;文档更新(backend README worker 表 + 模块说明;README 模块行;CHANGELOG 版本节;Spec 无需改——本切片不改契约,如发现缺漏另起评论反馈 Leader)。
 - [ ] **Step 3:** 合规自查:`git log --format=%B origin/main..HEAD | grep -i 'co-authored-by'` 无输出;全分支 diff grep 参考来源字样零命中;`git log -1 --format='%an <%ae> | %cn <%ce>'` 双 cnwenf。
 - [ ] **Step 4:** push + `gh pr create`(描述含:切片范围、跨切片集成点三条、§5.6 验收对照表、e2e 证据摘要)。
-- [ ] **Step 5:** `multica issue comment add` 发结果评论(PR URL + 验收要点);issue 状态 → in_review。
+- [ ] **Step 5:** 发结果评论(PR URL + 验收要点);issue 状态 → in_review。
 
 ---
 
