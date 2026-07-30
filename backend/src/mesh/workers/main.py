@@ -167,6 +167,26 @@ def _compose_execution_finished(squad_handler, comment_service):
     return _handle
 
 
+def _fanout_with_im_derivation(base_handler):
+    """integrations.md §3.10: after the baseline notification fanout,
+    derive IM deliveries (notification_delivery(channel='im') ledger +
+    im.send events) for integration-triggered executions. The derivation
+    runs in a SAVEPOINT — a derivation failure never breaks the baseline
+    in-app fanout (site inbox is the source of truth, README §6.13)."""
+    from mesh.integrations.im_outbound import derive_im_deliveries_from_fanout
+
+    async def _handle(session, event):
+        await base_handler.handle(session, event)
+        try:
+            async with session.begin_nested():
+                await derive_im_deliveries_from_fanout(session, event)
+        except Exception:  # noqa: BLE001
+            logger.exception("IM delivery derivation failed for event %s", event.id)
+        return None
+
+    return _handle
+
+
 def build_relay(
     settings: Settings,
     session_factory,
@@ -236,9 +256,11 @@ def build_relay(
         # chat-session.md §4.4 衔接: platform-driven chat generations
         # finalize their trigger='chat' execution through the outbox.
         CHAT_GENERATION_FINISHED_EVENT: chat_generation_finished_handler,
-        FANOUT_EVENT_TYPE: NotificationFanoutHandler(
-            aggregation_window_seconds=settings.notification_aggregation_window,
-            mailer=mailer,
+        FANOUT_EVENT_TYPE: _fanout_with_im_derivation(
+            NotificationFanoutHandler(
+                aggregation_window_seconds=settings.notification_aggregation_window,
+                mailer=mailer,
+            )
         ),
         # squad.md: plan decisions (§6.10) and execution-terminal observation
         # (§4.4) are applied relay-side, keeping runtime decoupled from squad.
@@ -366,12 +388,42 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         batch_size=settings.webhook_delivery_batch_size,
     )
 
+    # integrations.md §3.8/§3.10: the im.send fast relay — sole consumer of
+    # im.send events (ack T1/T2 at-most-once protocol, notification chunk
+    # delivery with ledger writeback, command feedback, approval cards).
+    # High-priority supervised task alongside the outbox relay (§3.9).
+    from mesh.integrations.dingtalk_cards import push_card_from_event
+    from mesh.integrations.im_outbound import IMSendRelay
+
+    im_send_relay = IMSendRelay(
+        session_factory,
+        redis=redis_client,
+        signing_secret=settings.jwt_secret,
+        api_base=settings.dingtalk_api_base,
+        poll_interval=settings.im_send_poll_interval,
+        batch_size=settings.im_send_batch_size,
+        max_chunks=settings.im_max_chunks,
+        ack_send_timeout=settings.im_ack_send_timeout,
+        max_attempts=settings.im_delivery_max_attempts,
+        token_refresh_timeout=settings.dingtalk_token_refresh_timeout,
+        token_lock_ttl=settings.dingtalk_token_lock_ttl,
+        token_follower_wait=settings.token_follower_wait,
+        request_timeout=settings.dingtalk_request_timeout,
+        rate_limit_base_seconds=settings.im_rate_limit_base_seconds,
+        rate_limit_max_seconds=settings.im_rate_limit_max_seconds,
+        card_pusher=push_card_from_event,
+    )
+
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
             TaskSpec(
                 "webhook-delivery",
                 lambda: webhook_delivery_worker.run_forever(stop),
+            ),
+            TaskSpec(
+                "im-send-relay",
+                lambda: im_send_relay.run_forever(stop),
             ),
             TaskSpec(
                 "notification-digest",

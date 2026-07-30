@@ -960,6 +960,174 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# notification.fanout → IM delivery derivation (§3.3 / §3.10 主动推送)
+# ---------------------------------------------------------------------------
+
+
+def _im_result_markdown(notification_type: str, payload: dict[str, Any]) -> str:
+    """Conversational IM copy for a notification (site inbox stays the
+    source of truth; this is the outbound enhancement, README §6.13)."""
+    if notification_type == "execution_finished":
+        status = str(payload.get("status") or "")
+        if status in ("failed", "timeout"):
+            reason = str(payload.get("failure_reason") or "")
+            return f"❌ 执行失败：{reason}" if reason else "❌ 执行失败"
+        if status == "cancelled":
+            return "⏹ 执行已取消"
+        summary = str(payload.get("result_summary") or payload.get("summary") or "")
+        return f"✅ 执行完成\n\n{summary}" if summary else "✅ 执行完成"
+    if notification_type == "comment_created":
+        body = str(payload.get("body") or payload.get("excerpt") or "")
+        return body or "💬 新评论"
+    # Progress / other types (only pushed under verbosity='progress').
+    return str(payload.get("body") or payload.get("text") or "")
+
+
+async def derive_im_deliveries_from_fanout(session: AsyncSession, event: OutboxEvent) -> None:
+    """Chain AFTER the base ``notification.fanout`` handler: for
+    integration-triggered executions, materialize the
+    ``notification_delivery(channel='im')`` ledger row + the ``im.send``
+    outbox events (approval card, or chunked result text) that the
+    IMSendRelay delivers to the source conversation.
+
+    Verbosity (§3.3): ``final_only`` (default) derives only final-result /
+    approval notifications; progress types require ``verbosity='progress'``.
+    The in-app inbox is ALWAYS complete — IM is the enhancement.
+    """
+    from mesh.db.models.integration import IntegrationEvent
+    from mesh.db.models.notification import Notification
+    from mesh.db.models.runtime import TaskExecution
+
+    payload = event.payload or {}
+    notification_type = str(payload.get("type") or payload.get("kind") or "")
+    execution_id = _uuid_or_none(payload.get("execution_id"))
+    if not notification_type or execution_id is None:
+        return
+    await set_tenant_context(session, event.workspace_id)
+    execution = await session.get(TaskExecution, execution_id)
+    if execution is None or execution.trigger != "integration":
+        return
+    item = await session.scalar(
+        select(IntegrationMessageQueue)
+        .where(IntegrationMessageQueue.execution_id == execution_id)
+        .limit(1)
+    )
+    if item is None or item.integration_id is None:
+        return
+    integration = await session.get(Integration, item.integration_id)
+    if (
+        integration is None
+        or integration.kind != "im_dingtalk"
+        or integration.status != "active"
+    ):
+        return
+    config = integration.config or {}
+    verbosity = str(config.get("verbosity") or VERBOSITY_FINAL_ONLY)
+    if not should_push_notification(notification_type=notification_type, verbosity=verbosity):
+        return
+    # In-app is the source of truth: mirror an existing notification only.
+    notification = await session.scalar(
+        select(Notification)
+        .where(
+            Notification.workspace_id == event.workspace_id,
+            Notification.execution_id == execution_id,
+        )
+        .order_by(Notification.created_at.desc())
+        .limit(1)
+    )
+    if notification is None:
+        return
+    _tenant, external_ref = _parse_conversation_key(item.conversation_key)
+    # conversation type: authoritative from the ingested event payload
+    conversation_type = CONVERSATION_GROUP
+    if item.integration_event_id is not None:
+        ingested = await session.get(IntegrationEvent, item.integration_event_id)
+        raw_type = str((ingested.payload or {}).get("conversationType") or "") if ingested else ""
+        if raw_type == "1":
+            conversation_type = CONVERSATION_DIRECT
+    sender_key = ""
+    if conversation_type == CONVERSATION_DIRECT:
+        sender_key = item.sender_identity_key.rpartition(":")[2]
+    destination_key = f"dingtalk:{item.binding_id}:{external_ref}"
+
+    card = is_card_notification(notification_type)
+    approval_id = _uuid_or_none(payload.get("approval_id"))
+    if card and approval_id is None:
+        return
+    chunks_total = 1
+    text_chunks: list[str] = []
+    if not card:
+        markdown = _im_result_markdown(notification_type, payload)
+        if not markdown:
+            return
+        text_chunks = plan_result_chunks(markdown, max_chunks=5)
+        if not text_chunks:
+            return
+        chunks_total = len(text_chunks)
+
+    delivery = NotificationDelivery(
+        workspace_id=event.workspace_id,
+        notification_id=notification.id,
+        channel="im",
+        provider="dingtalk",
+        destination_key=destination_key,
+        integration_id=integration.id,
+        binding_id=item.binding_id,
+        external_target=json.dumps(
+            {
+                "chunks_total": chunks_total,
+                "sent_chunks": 0,
+                "conversation_type": conversation_type,
+                "conversation_key": item.conversation_key,
+                "sender_key": sender_key,
+                "card": card,
+            }
+        ),
+        state="pending",
+    )
+    session.add(delivery)
+    try:
+        async with session.begin_nested():
+            await session.flush()
+    except Exception:  # noqa: BLE001 — UNIQUE(notification_id, channel, dest)
+        return  # duplicate derivation (at-least-once fanout) — ledger exists
+    base_payload = {
+        "workspace_id": str(event.workspace_id),
+        "integration_id": str(integration.id),
+        "binding_id": str(item.binding_id) if item.binding_id else None,
+        "conversation_key": item.conversation_key,
+        "conversation_type": conversation_type,
+        "target_user_key": sender_key,
+        "delivery_id": str(delivery.id),
+    }
+    from mesh.outbox.service import emit_event as _emit
+
+    if card:
+        await _emit(
+            session,
+            workspace_id=event.workspace_id,
+            event_type=IM_SEND_EVENT_TYPE,
+            payload={**base_payload, "kind": IM_SEND_KIND_CARD, "approval_id": str(approval_id)},
+            idempotency_key=hashlib.sha256(f"{approval_id}|card".encode()).hexdigest(),
+        )
+        return
+    for index, chunk_text in enumerate(text_chunks):
+        await _emit(
+            session,
+            workspace_id=event.workspace_id,
+            event_type=IM_SEND_EVENT_TYPE,
+            payload={
+                **base_payload,
+                "kind": IM_SEND_KIND_NOTIFICATION,
+                "chunk_index": index,
+                "chunks_total": chunks_total,
+                "text": chunk_text,
+            },
+            idempotency_key=chunk_idempotency_key(notification.id, index),
+        )
+
+
 async def make_adapter(
     *,
     redis: Any,
@@ -1029,6 +1197,7 @@ __all__ = [
     "VERBOSITY_FINAL_ONLY",
     "VERBOSITY_PROGRESS",
     "chunk_idempotency_key",
+    "derive_im_deliveries_from_fanout",
     "encode_external_contact_key",
     "is_card_notification",
     "is_external_contact_key",

@@ -59,6 +59,11 @@ async def load_redaction_blacklist(
 
     Called on the log-append hot path; a row that fails to decrypt (rotated
     key) is skipped rather than breaking ingestion.
+
+    Integration credentials (``integrations.secret_ref``, same ciphertext
+    contract — README §6.16 / integrations.md §3.10) join the blacklist by
+    construction: their decrypted values MUST never reach logs or outbound
+    debug surfaces (``redact_in_logs`` registration).
     """
     rows = (
         await session.execute(
@@ -69,8 +74,19 @@ async def load_redaction_blacklist(
             )
         )
     ).scalars().all()
+    from mesh.db.models.integration import Integration
+
+    integration_rows = (
+        await session.execute(
+            select(Integration.secret_ref).where(
+                Integration.workspace_id == workspace_id,
+                Integration.deleted_at.is_(None),
+                Integration.secret_ref.is_not(None),
+            )
+        )
+    ).scalars().all()
     values: list[str] = []
-    for ciphertext in rows:
+    for ciphertext in (*rows, *integration_rows):
         try:
             values.append(decrypt_credential_value(ciphertext, signing_secret))
         except Exception:  # noqa: BLE001 — undecryptable row: skip, never fail
