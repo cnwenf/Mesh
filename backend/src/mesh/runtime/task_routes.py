@@ -128,7 +128,10 @@ class TaskSubtaskInput(BaseModel):
 
 class TaskSubtasksRequest(BaseModel):
     plan_markdown: str | None = None
-    subtasks: list[TaskSubtaskInput] = Field(min_length=1)
+    # Server-side cap mirrors the daemon broker's _SUBTASKS_MAX (defense in
+    # depth: the L1 security review's max_length=16 — a single LLM-driven
+    # decomposition may never fan out unboundedly).
+    subtasks: list[TaskSubtaskInput] = Field(min_length=1, max_length=16)
 
 
 def _require_method(task_token: AttemptTaskToken, method: str) -> None:

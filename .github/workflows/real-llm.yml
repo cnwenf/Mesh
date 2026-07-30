@@ -35,6 +35,10 @@ concurrency:
   group: real-llm
   cancel-in-progress: false
 
+# 最小权限(L3 安全复审建议):命脉 workflow 不需要任何仓库写权限——
+# 证据经 artifact 上传(upload-artifact 自带所需权限),不推 ref、不改内容。
+permissions: {}
+
 jobs:
   real-llm-e2e:
     name: 真 LLM 全链路命脉测试(单 agent + 多 agent 组队)
@@ -47,9 +51,11 @@ jobs:
       MESH_REAL_LLM_BUDGET_USD: ${{ inputs.budget_usd || '1.00' }}
       MESH_REAL_LLM_MODEL: ${{ inputs.model || '' }}
     steps:
-      - uses: actions/checkout@v4
+      # 第三方 action 一律 SHA 钉死(L3 安全复审建议;注释标注对应版本,
+      # 升级时同步换 SHA)。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -128,7 +134,7 @@ jobs:
 
       - name: Upload redacted evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: real-llm-evidence
           path: |

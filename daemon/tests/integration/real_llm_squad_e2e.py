@@ -35,6 +35,7 @@ docs/evidence/mes-95/real-llm-squad-e2e.json。
 import asyncio
 import json
 import os
+import secrets
 import sys
 import uuid
 from pathlib import Path
@@ -52,7 +53,9 @@ from mesh_runtime.journal import Journal
 from mesh_runtime.sandbox import SandboxManager
 
 SERVER_URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:58100"
-PASSWORD = "Mesh-Squad-Passw0rd!"
+# Fresh random password per run (L2 security-review suggestion): the throwaway
+# e2e account never shares a credential across runs or with documentation.
+PASSWORD = f"Mesh-E2E-{secrets.token_urlsafe(18)}-Aa1!"
 
 
 def _env(primary: str, fallback: str, default: str) -> str:

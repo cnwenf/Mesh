@@ -197,7 +197,16 @@ async def test_assign_to_agent_enqueues_execution_through_relay(api_client, sess
     assert payload["required_capabilities"] == []
     assert isinstance(payload["required_capabilities"], list)
     assert all(isinstance(c, str) for c in payload["required_capabilities"])
-    assert snapshot["capability_grants"] == []
+    # §3.3 broker grants frozen into every agent execution (MES-95 task
+    # principal surface): exactly the default set mirroring the task-token
+    # scopes — nothing wider; squad grants are orchestrator-role-only and
+    # absent here (plain assign trigger, no squad_role).
+    assert sorted(snapshot["capability_grants"], key=lambda g: g["capability"]) == [
+        {"capability": "issue.comment", "permission": "write"},
+        {"capability": "issue.read", "permission": "read_only"},
+        {"capability": "issue.status", "permission": "write"},
+        {"capability": "project.read", "permission": "read_only"},
+    ]
     assert isinstance(snapshot["capability_grants"], list)
     # §6.15 untrusted context isolation.
     assert "UNTRUSTED_DATA_BEGIN" in payload["task_spec"]["untrusted_context"]["issue"]["title"]

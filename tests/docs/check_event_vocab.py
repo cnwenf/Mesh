@@ -11,6 +11,9 @@
 - outbox/内部 event_type(`issue.assigned`、`execution.enqueue`、`notification.fanout`、
   `data_job.enqueue`、`data_job.resume` 等)不是实时事件名,属 §6.6 领域事件词汇,
   列入 OUTBOX_EVENT_TYPES 白名单(新增此类 event_type 须同步本清单);
+- task broker 闸门动作(`squad.members`、`squad.subtasks` 等)是沙箱工具调用经
+  daemon broker 代执行的动作词汇(runtime-executor.md §3.3 唯一权威),非实时事件名,
+  列入 BROKER_GATE_ACTIONS 白名单(新增此类动作须同步本清单);
 - 文件引用(*.md / *.py / *.sql / *.yaml / *.json / *.csv)与代码块内的 SQL 列引用跳过;
 - 注册表内的 `error`/`ping` 为 §6.8 流式协议流内帧名,无点号,不参与点号 token 校验。
 
@@ -53,6 +56,17 @@ OUTBOX_EVENT_TYPES = frozenset(
 EXTERNAL_PLATFORM_EVENTS = frozenset(
     {
         "message.channels",  # Slack Events API 事件类型(integrations.md §1.2/§2.4/§5.2 引用)
+    }
+)
+
+# task broker 闸门动作(runtime-executor.md §3.3 动作→闸门唯一映射表的动作名)。
+# 形如 `<entity>.<action>` 但既非实时事件名(§6.7)亦非 outbox event_type(§6.6),
+# 是沙箱内工具调用经 daemon broker 代执行的动作词汇;唯一权威为 §3.3 闸门表。
+# 新增此类动作时必须同步本清单。
+BROKER_GATE_ACTIONS = frozenset(
+    {
+        "squad.members",  # runtime-executor.md §3.3:读取当前 squad 任务成员名册(read_only,orchestrator attempt 专属)
+        "squad.subtasks",  # runtime-executor.md §3.3:拆解当前 squad 任务(write + 幂等键,服务端校验 orchestrator 身份)
     }
 )
 
@@ -111,7 +125,12 @@ def scan_spec(md_file: Path, registered: set[str], entities: set[str]) -> list[t
             entity = token.split(".", 1)[0]
             if entity not in entities:
                 continue  # 非事件实体(表列/配置/GUC 引用),跳过
-            if token in registered or token in OUTBOX_EVENT_TYPES or token in EXTERNAL_PLATFORM_EVENTS:
+            if (
+                token in registered
+                or token in OUTBOX_EVENT_TYPES
+                or token in EXTERNAL_PLATFORM_EVENTS
+                or token in BROKER_GATE_ACTIONS
+            ):
                 continue
             if looks_like_column(token):
                 continue  # table.column 形态的 schema 引用(如 autopilot_runs.execution_id)
