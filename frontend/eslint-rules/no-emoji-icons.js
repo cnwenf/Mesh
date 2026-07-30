@@ -40,14 +40,26 @@ export const noEmojiIcons = {
     const sourceCode = context.sourceCode;
 
     /**
-     * 违规节点(或其所属承载节点)上一行是否有 mesh-emoji-ok 例外注释(须给出原因)。
-     * 锚点候选:节点自身;对象属性值上的注释写在属性键之前,故再取 Property 父节点
-     * (与 no-hardcoded-colors 上溯 JSXAttribute 同理)。
+     * 违规节点或其所属语句上一行是否有 mesh-emoji-ok 例外注释(须给出原因)。
+     * 注释写在承载语句之前(如 `const x = cond ? `⚠${k}` : y;` 的 const 行之前),
+     * 而表达式节点前有运算符/关键字 token,getCommentsBefore 取不到——故锚点
+     * 上溯至首个语句级父节点(VariableDeclaration/ExpressionStatement)或 Property。
      */
     function isExempted(node) {
       const anchors = [node];
-      if (node.parent !== undefined && node.parent !== null && node.parent.type === 'Property') {
-        anchors.push(node.parent);
+      let current = node.parent;
+      let depth = 0;
+      while (current !== undefined && current !== null && depth < 6) {
+        anchors.push(current);
+        if (
+          current.type === 'VariableDeclaration' ||
+          current.type === 'ExpressionStatement' ||
+          current.type === 'Property'
+        ) {
+          break;
+        }
+        current = current.parent;
+        depth += 1;
       }
       for (const anchor of anchors) {
         const comments = sourceCode.getCommentsBefore(anchor);

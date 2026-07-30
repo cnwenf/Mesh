@@ -43,11 +43,21 @@ describe('mesh/no-emoji-icons', () => {
         },
         // 带插值但字面片段干净的模板串放行
         { code: 'const mixed = `${prefix} 文本 ${suffix}`;' },
-        // 模板串例外注释(锚点为整个模板节点)
+        // 模板串例外注释(锚点上溯至承载语句)
         {
           code: [
             '// mesh-emoji-ok: 开发期诊断前缀,非产品 UI 图标',
             'const marker = `⚠[${key}] ${text}`;',
+          ].join('\n'),
+        },
+        // 条件表达式内模板(I18nProvider 形态):注释在 const 语句前一行
+        {
+          code: [
+            'function f(dev, key, text) {',
+            '  // mesh-emoji-ok: 开发期缺译诊断前缀',
+            '  const out = dev ? `⚠[${key}] ${text}` : text;',
+            '  return out;',
+            '}',
           ].join('\n'),
         },
       ],
