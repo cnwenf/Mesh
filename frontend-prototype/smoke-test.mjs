@@ -61,6 +61,17 @@ function assert(condition, message) {
 await command("Runtime.enable");
 const checks = [];
 
+await evaluate(`document.fonts.ready.then(() => true)`);
+const fontState = await evaluate(`({
+  interLoaded: document.fonts.check("14px Inter"),
+  loadedFaces: [...document.fonts].filter((face) => face.family === "Inter" && face.status === "loaded").length,
+  bodyFamily: getComputedStyle(document.body).fontFamily
+})`);
+assert(fontState.interLoaded, "Bundled Inter font did not load.");
+assert(fontState.loadedFaces >= 1, "No loaded Inter font face was found.");
+assert(fontState.bodyFamily.startsWith("Inter"), "Inter is not the primary UI font.");
+checks.push("offline-font");
+
 const initial = await evaluate(`({
   title: document.title,
   boardColumns: document.querySelectorAll("[data-drop-column]").length,
@@ -156,6 +167,16 @@ const afterMessages = await evaluate(`document.querySelectorAll(".message").leng
 assert(afterMessages === beforeMessages + 2, "Chat did not append the user and agent messages.");
 checks.push("chat-send");
 
+const darkBubble = await evaluate(`(() => {
+  document.documentElement.dataset.theme = "dark";
+  const style = getComputedStyle(document.querySelector(".message--me .message__body"));
+  return { background: style.backgroundColor, color: style.color };
+})()`);
+assert(darkBubble.background === "rgb(39, 39, 42)", "Dark user message bubble does not match the selected surface.");
+assert(darkBubble.color === "rgb(250, 250, 250)", "Dark user message bubble text has the wrong contrast.");
+await evaluate(`document.documentElement.dataset.theme = "light"`);
+checks.push("dark-chat-bubble");
+
 await evaluate(`location.hash = "#/settings"`);
 await evaluate(`new Promise(resolve => setTimeout(resolve, 50))`);
 await evaluate(`document.querySelector('[data-tab="preferences"]').click()`);
@@ -193,14 +214,43 @@ checks.push("mobile-navigation");
 
 await evaluate(`location.hash = "#/login"`);
 await evaluate(`new Promise(resolve => setTimeout(resolve, 40))`);
+const loginInitial = await evaluate(`({
+  disabled: document.querySelector('[data-form="login"] [data-auth-submit]').disabled,
+  disabledBackground: getComputedStyle(document.querySelector('[data-form="login"] [data-auth-submit]')).backgroundColor,
+  expectedDisabledBackground: (() => {
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = "var(--disabled)";
+    document.body.append(probe);
+    const background = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return background;
+  })(),
+  hasBrandAboveCard: Boolean(document.querySelector(".auth-brand")),
+  footer: document.querySelector(".auth-card__footer").textContent.replace(/\\s+/g, " ").trim()
+})`);
+assert(loginInitial.disabled, "Empty login form did not render a disabled primary action.");
+assert(loginInitial.disabledBackground === loginInitial.expectedDisabledBackground, "Empty login form did not use the disabled surface.");
+assert(!loginInitial.hasBrandAboveCard, "Login page still renders branding above the card.");
+assert(loginInitial.footer.includes("Prefer the desktop app?") && loginInitial.footer.includes("Download"), "Login footer CTA is not aligned.");
 await evaluate(`(() => {
   const form = document.querySelector('[data-form="login"]');
-  form.elements.email.value = "test@mesh.local";
+  const input = form.elements.email;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  setter.call(input, "test@mesh.local");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
   form.requestSubmit();
 })()`);
 await evaluate(`new Promise(resolve => setTimeout(resolve, 40))`);
 assert(await evaluate(`location.hash === "#/code"`), "Login did not advance to the code step.");
-await evaluate(`document.querySelector('[data-form="verify-code"]').requestSubmit()`);
+await evaluate(`(() => {
+  const form = document.querySelector('[data-form="verify-code"]');
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+  [...form.querySelectorAll(".otp-cell")].forEach((input, index) => {
+    setter.call(input, String(index + 1));
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  form.requestSubmit();
+})()`);
 await evaluate(`new Promise(resolve => setTimeout(resolve, 40))`);
 assert(await evaluate(`location.hash === "#/issues"`), "Code verification did not enter the workspace.");
 checks.push("auth-flow");

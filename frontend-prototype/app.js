@@ -283,9 +283,6 @@
       ${iconName ? icon(iconName, "icon--sm") : ""}<span>${label}</span>
     </button>`;
 
-  const meshBrand = () =>
-    `<span class="mesh-mark" aria-hidden="true"></span><span>Mesh</span>`;
-
   function currentRoute() {
     const route = location.hash.replace(/^#\/?/, "").split("?")[0].trim();
     return route || "issues";
@@ -390,32 +387,31 @@
   function authPage(mode) {
     const isRegister = mode === "register";
     const isCode = mode === "code";
-    const title = isCode ? "输入登录验证码" : isRegister ? "创建 Mesh 账号" : "登录 Mesh";
+    const title = isCode ? "Check your email" : isRegister ? "Create your Mesh account" : "Sign in to Mesh";
     const description = isCode
-      ? `验证码已发送至 ${escapeHtml(state.authEmail || "you@example.com")}`
+      ? `We sent a verification code to ${escapeHtml(state.authEmail || "you@example.com")}`
       : isRegister
-        ? "创建账号，开始与智能体并肩协作"
-        : "输入邮箱，我们会向你发送登录验证码";
+        ? "Create an account to start working with your AI teammates"
+        : "Enter your email to get a login code";
 
     const form = isCode
       ? `<form class="modal-form" data-form="verify-code">
           <div class="otp-row">
-            ${Array.from({ length: 6 }, (_, index) => `<input class="otp-cell" inputmode="numeric" maxlength="1" aria-label="验证码第 ${index + 1} 位" ${index === 0 ? "autofocus" : ""}/>`).join("")}
+            ${Array.from({ length: 6 }, (_, index) => `<input class="otp-cell" inputmode="numeric" maxlength="1" pattern="[0-9]" required aria-label="Verification code digit ${index + 1}" ${index === 0 ? "autofocus" : ""}/>`).join("")}
           </div>
-          <button class="ui-button ui-button--primary" type="submit">继续</button>
+          <button class="ui-button ui-button--primary" type="submit" data-auth-submit disabled>Continue</button>
         </form>`
       : `<form class="modal-form" data-form="${isRegister ? "register" : "login"}">
-          ${isRegister ? `<div class="form-field"><label class="form-label" for="name">姓名</label><input id="name" class="ui-input" name="name" placeholder="你的姓名" autocomplete="name" required /></div>` : ""}
+          ${isRegister ? `<div class="form-field"><label class="form-label" for="name">Name</label><input id="name" class="ui-input" name="name" placeholder="Your name" autocomplete="name" required /></div>` : ""}
           <div class="form-field">
-            <label class="form-label" for="email">邮箱</label>
+            <label class="form-label" for="email">Email</label>
             <input id="email" class="ui-input" name="email" type="email" placeholder="you@example.com" autocomplete="email" required autofocus />
           </div>
-          <button class="ui-button ui-button--primary" type="submit">${isRegister ? "创建账号" : "继续"}</button>
+          <button class="ui-button ui-button--primary" type="submit" data-auth-submit disabled>${isRegister ? "Create account" : "Continue"}</button>
         </form>`;
 
     return `<main class="auth-screen">
       <div class="auth-shell">
-        <div class="auth-brand">${meshBrand()}</div>
         <section class="auth-card">
           <div class="auth-card__body">
             <div class="auth-card__heading"><h1>${title}</h1><p>${description}</p></div>
@@ -424,8 +420,10 @@
           <div class="auth-card__footer">
             ${
               isCode
-                ? `<button class="auth-switch" type="button" data-route="login">没有收到？<strong>重新发送</strong></button>`
-                : `<button class="auth-switch" type="button" data-route="${isRegister ? "login" : "register"}">${isRegister ? "已有账号？" : "第一次使用 Mesh？"} <strong>${isRegister ? "登录" : "创建账号"}</strong></button>`
+                ? `<button class="auth-switch" type="button" data-route="login">Back</button>`
+                : isRegister
+                  ? `<button class="auth-switch" type="button" data-route="login">Already have an account? <strong>Sign in</strong></button>`
+                  : `<button class="auth-switch" type="button" data-action="download-desktop">Prefer the desktop app? <strong>Download</strong></button>`
             }
           </div>
         </section>
@@ -853,9 +851,9 @@
               (item, index) => `<article class="automation-row">
                 <span class="automation-icon">${icon(index % 2 ? "clock" : "zap", "icon--lg")}</span>
                 <div class="automation-name"><strong>${item.name}</strong><span>${item.detail}</span></div>
-                <div class="automation-row__schedule"><div class="u-muted" style="font-size:10px">触发</div><div style="font-size:12px">${item.schedule}</div></div>
-                <div class="automation-row__target"><div class="u-muted" style="font-size:10px">目标</div><div style="font-size:12px">${item.target}</div></div>
-                <div class="automation-row__last-run"><div class="u-muted" style="font-size:10px">最近运行</div><div style="font-size:12px">${item.run}</div></div>
+                <div class="automation-row__schedule"><div class="u-muted" style="font-size:11px">触发</div><div style="font-size:12px">${item.schedule}</div></div>
+                <div class="automation-row__target"><div class="u-muted" style="font-size:11px">目标</div><div style="font-size:12px">${item.target}</div></div>
+                <div class="automation-row__last-run"><div class="u-muted" style="font-size:11px">最近运行</div><div style="font-size:12px">${item.run}</div></div>
                 <button class="switch" type="button" role="switch" aria-checked="${item.enabled}" aria-label="${item.enabled ? "暂停" : "启用"}自动化" data-action="toggle-automation" data-index="${index}"></button>
               </article>`,
             )
@@ -982,7 +980,7 @@
           <section class="chart-panel">
             <div class="chart-panel__head"><h3>智能体用量</h3><span class="u-muted" style="font-size:11px">Token</span></div>
             <div class="agent-metric-list">
-              ${metricPeople.map(([person, name, width, value]) => `<div class="agent-metric">${avatar(person)}<div class="agent-metric__copy"><div class="agent-metric__line"><span>${name}</span><span class="u-mono u-muted">${value}</span></div><div class="progress-track"><i style="width:${width}%"></i></div></div><span class="u-mono" style="font-size:10px">${width}%</span></div>`).join("")}
+              ${metricPeople.map(([person, name, width, value]) => `<div class="agent-metric">${avatar(person)}<div class="agent-metric__copy"><div class="agent-metric__line"><span>${name}</span><span class="u-mono u-muted">${value}</span></div><div class="progress-track"><i style="width:${width}%"></i></div></div><span class="u-mono" style="font-size:11px">${width}%</span></div>`).join("")}
             </div>
           </section>
         </div>
@@ -1193,7 +1191,7 @@
         <div class="command-group-title">${query ? "搜索结果" : "建议"}</div>
         ${commands.length ? commands.map(([route, label, iconName, key]) => `<button class="command-item" type="button" data-command-route="${route}">${icon(iconName)}<span>${label}</span>${key ? `<kbd class="shortcut">${key}</kbd>` : ""}</button>`).join("") : `<div class="no-results" style="min-height:130px">没有匹配的命令</div>`}
       </div>
-      <div class="dialog__foot" style="justify-content:flex-start;color:var(--ink-soft);font-size:10px"><kbd class="shortcut">↑↓</kbd><span>选择</span><kbd class="shortcut">↵</kbd><span>打开</span><kbd class="shortcut">esc</kbd><span>关闭</span></div>
+      <div class="dialog__foot" style="justify-content:flex-start;color:var(--ink-soft);font-size:11px"><kbd class="shortcut">↑↓</kbd><span>选择</span><kbd class="shortcut">↵</kbd><span>打开</span><kbd class="shortcut">esc</kbd><span>关闭</span></div>
     `, "dialog--command");
   }
 
@@ -1271,6 +1269,7 @@
       "open-workspaces": workspaceDialog,
       "create-workspace": createWorkspaceDialog,
       "close-overlay": closeOverlay,
+      "download-desktop": () => showToast("Mesh Desktop", "Desktop download will be available from the release page."),
       "open-command": () => {
         state.commandQuery = "";
         commandDialog();
@@ -1413,6 +1412,15 @@
   });
 
   document.addEventListener("input", (event) => {
+    const authForm = event.target.closest('form[data-form="login"], form[data-form="register"], form[data-form="verify-code"]');
+    if (authForm) {
+      const submit = authForm.querySelector("[data-auth-submit]");
+      if (submit) submit.disabled = !authForm.checkValidity();
+      if (event.target.matches(".otp-cell") && event.target.value) {
+        const next = event.target.nextElementSibling;
+        if (next?.matches(".otp-cell")) next.focus();
+      }
+    }
     if (event.target.matches("[data-command-input]")) {
       state.commandQuery = event.target.value;
       commandDialog();
