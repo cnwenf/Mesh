@@ -15,6 +15,7 @@
  */
 import { useEffect, useState } from 'react';
 import type { MeshApiClient } from '../../api/client';
+import { useAuthStore } from '../../state/authStore';
 import { readLastWorkspaceSlug } from '../../workspace/lastWorkspace';
 import { fetchMe } from '../members/api';
 import type { MemberRole, MeResponse, Membership } from '../members/types';
@@ -136,12 +137,19 @@ export interface UsePaletteIdentityOptions {
 /**
  * 解析 {userId, workspaceId, role}:同步部分(slug)即时可得,me 异步补齐后按
  * §3.4 解析序收窄 workspaceId 并给出成员角色。
+ *
+ * **未登录不探测 users/me**:面板对公开页(登录页 / OAuth 回调 / 邀请预览)同样
+ * 挂载,匿名探测必收 401,会触发 api/unauthorized 全局兜底整页跳 /login——OAuth
+ * 回调往返在交换完成前被打断(auth.md §4.5 step 5 全往返破坏)。未登录恒按
+ * anon/default 降级呈现(§2.1:身份缺失仅降级隔离粒度,不阻断面板);token 出现
+ * (登录/回调换牌)后经 authStore 订阅自动升级为真身解析。
  */
 export function usePaletteIdentity(options: UsePaletteIdentityOptions): PaletteIdentity {
   const { client } = options;
   const pathname =
     options.pathname ?? (typeof window === 'undefined' ? '/' : window.location.pathname);
   const slug = workspaceSlugFromPath(pathname);
+  const hasToken = useAuthStore((state) => state.token !== null);
   const [identity, setIdentity] = useState<PaletteIdentity>({
     userId: ANONYMOUS_USER_ID,
     workspaceId: slug ?? DEFAULT_WORKSPACE_ID,
@@ -150,6 +158,16 @@ export function usePaletteIdentity(options: UsePaletteIdentityOptions): PaletteI
   });
 
   useEffect(() => {
+    if (!hasToken) {
+      // 匿名态:不发起 users/me(见函数头注),直接降级呈现。
+      setIdentity({
+        userId: ANONYMOUS_USER_ID,
+        workspaceId: slug ?? DEFAULT_WORKSPACE_ID,
+        workspaceSlug: slug,
+        role: null,
+      });
+      return;
+    }
     let cancelled = false;
     void loadMe(client).then((me) => {
       if (cancelled) return;
@@ -177,7 +195,7 @@ export function usePaletteIdentity(options: UsePaletteIdentityOptions): PaletteI
     return () => {
       cancelled = true;
     };
-  }, [client, slug]);
+  }, [client, slug, hasToken]);
 
   return identity;
 }

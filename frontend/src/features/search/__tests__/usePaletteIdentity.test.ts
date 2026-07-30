@@ -4,6 +4,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../../../api/client';
+import { useAuthStore } from '../../../state/authStore';
 import type { MemberRole, Membership } from '../../members/types';
 import {
   ANONYMOUS_USER_ID,
@@ -64,6 +65,40 @@ describe('workspaceSlugFromPath', () => {
 });
 
 describe('usePaletteIdentity', () => {
+  beforeEach(() => {
+    // 已登录态前置:未登录时 hook 不探测 users/me(匿名降级,见下条用例与函数头注)。
+    useAuthStore.getState().setToken('tok_test');
+  });
+  afterEach(() => {
+    useAuthStore.getState().clearToken();
+  });
+
+  it('未登录不探测 users/me:anon/default 降级,fetch 零调用(防公开页 401 兜底跳转打断 OAuth 回调)', async () => {
+    useAuthStore.getState().clearToken();
+    const fetchImpl = vi.fn();
+    const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => null, fetchImpl });
+    const { result } = renderHook(() => usePaletteIdentity({ client, pathname: '/' }));
+    expect(result.current.userId).toBe(ANONYMOUS_USER_ID);
+    expect(result.current.workspaceId).toBe(DEFAULT_WORKSPACE_ID);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('token 出现后自动升级为真身解析(登录/OAuth 回调换牌路径)', async () => {
+    useAuthStore.getState().clearToken();
+    const client = clientReturning({
+      data: {
+        user: { id: 'u9', email: 'a@b.c', display_name: 'A' },
+        memberships: [{ workspace_id: 'ws-9', workspace_name: 'W', workspace_slug: 'w', role: 'member', status: 'active', joined_at: null }],
+      },
+    });
+    const { result } = renderHook(() => usePaletteIdentity({ client, pathname: '/' }));
+    expect(result.current.userId).toBe(ANONYMOUS_USER_ID);
+    // 模拟 OAuth 回调 setSession 写入 token → 订阅触发真身解析。
+    useAuthStore.getState().setToken('tok_new');
+    await waitFor(() => expect(result.current.userId).toBe('u9'));
+    expect(result.current.workspaceId).toBe('ws-9');
+  });
+
   it('me 成功:user.id + 首个成员身份 workspace_id(无 URL slug 时)', async () => {
     const client = clientReturning({
       data: {
