@@ -219,6 +219,41 @@ describe('AttachmentComposer', () => {
     expect(await screen.findByTestId('upload-cards')).toBeTruthy();
   });
 
+  it('opens the file picker when the paperclip is clicked', () => {
+    renderComposer(true);
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
+    fireEvent.click(screen.getByTestId('attachment-paperclip'));
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
+  });
+
+  it('ignores a drop without files', () => {
+    renderComposer(true);
+    fireEvent.drop(screen.getByTestId('attachment-composer'), { dataTransfer: {} });
+    expect(screen.queryByTestId('upload-cards')).toBeNull();
+  });
+
+  it('ignores a paste without clipboard files', () => {
+    renderComposer(true);
+    fireEvent.paste(screen.getByTestId('attachment-composer'), {});
+    expect(screen.queryByTestId('upload-cards')).toBeNull();
+  });
+
+  it('removes a failed upload card via the 移除 button (keeps name/size + named error until then)', async () => {
+    renderComposer(true);
+    const input = screen.getByTestId('attachment-file-input') as HTMLInputElement;
+    await userEvent.upload(input, new File(['x'], 'tool.exe', { type: 'application/x-msdownload' }));
+    const error = await screen.findByRole('alert');
+    // 具名错误(error.unsupported_media_type → 本地化文案)+ 文件名/大小保留
+    expect(error.textContent).toContain('not supported');
+    const remove = screen
+      .getAllByRole('button')
+      .find((b) => b.getAttribute('data-testid')?.startsWith('upload-cancel-'));
+    expect(remove).toBeTruthy();
+    fireEvent.click(remove as HTMLButtonElement);
+    await waitFor(() => expect(screen.queryByTestId('upload-cards')).toBeNull());
+  });
+
   it('dropping a file triggers an upload', async () => {
     renderComposer(true);
     const composer = screen.getByTestId('attachment-composer');

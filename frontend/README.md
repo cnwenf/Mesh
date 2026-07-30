@@ -132,6 +132,12 @@ frontend/
     │                         #   Skeleton/EmptyState/ErrorState(§7.7 四部分)/Banner/Toast/Kbd/StatusDot
     │                         #   + MES-115 增补:Field/Textarea/Checkbox(半选)/Switch/Popover(翻转定位)/
     │                         #   PageHeader/Toolbar/DataTable(aria-sort 排序)
+    │   └── patterns/         #   页面模板(design-quality.md §4.4/§11.1,MES-111 批次②沉淀):
+    │                         #   PageHeader(唯一 h1 + 面包屑 + 动作槽)/DataView(标题栏 + 工具条
+    │                         #   槽 + 主体 + 分页 + 粘底批量条)/DetailLayout(桌面两栏 + 320px
+    │                         #   属性侧栏;窄容器自动收为「属性」底部 Drawer)/FilterChips/BulkBar/
+    │                         #   useListKeyboardSelection(漫游 tabindex 行选择)。依赖方向
+    │                         #   features → patterns → primitives → foundations,禁反向。
     ├── shortcuts/            # 快捷键体系(§6.12)
     │   ├── registry.ts       #   分组命令/快捷键注册表(上下文感知)
     │   ├── ShortcutProvider.tsx  # 输入框豁免(除 Ctrl/Cmd 组合)、序列键 G→I/B/M/A

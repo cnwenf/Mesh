@@ -3,8 +3,22 @@
  * 有 url 呈现原图、下载可用;缩放/旋转/重置/在附件区定位;关闭按钮回调 onClose。
  */
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Lightbox, type LightboxProps } from '../components/Lightbox';
+
+/** jsdom 不提供 PointerEvent(且 fireEvent 会丢弃 pointerId);以携带 pointerId 的桩替代,
+ *  使双指捏合的多指针跟踪可在单测中驱动。 */
+class FakePointerEvent extends MouseEvent {
+  readonly pointerId: number;
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 0;
+  }
+}
+
+beforeEach(() => {
+  vi.stubGlobal('PointerEvent', FakePointerEvent);
+});
 
 function renderLightbox(imageUrl: string | null) {
   const onDownload = vi.fn();
@@ -123,5 +137,40 @@ describe('Lightbox', () => {
     const { onClose } = renderLightbox('http://cdn/x.png');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('toggles 1×↔2× on double-tap (parity §2.22)', () => {
+    renderLightbox('http://cdn/x.png');
+    const img = screen.getByTestId('lightbox-image');
+    const tap = (): void => {
+      fireEvent.pointerDown(img, { pointerId: 1, clientX: 100, clientY: 100 });
+      fireEvent.pointerUp(img, { pointerId: 1, clientX: 100, clientY: 100 });
+    };
+    tap();
+    tap();
+    expect(img.style.transform).toContain('scale(2)');
+    tap();
+    tap();
+    expect(img.style.transform).toContain('scale(1)');
+  });
+
+  it('zooms with a two-finger pinch and clamps at the max scale', () => {
+    renderLightbox('http://cdn/x.png');
+    const img = screen.getByTestId('lightbox-image');
+    fireEvent.pointerDown(img, { pointerId: 1, clientX: 0, clientY: 0 });
+    fireEvent.pointerDown(img, { pointerId: 2, clientX: 100, clientY: 0 });
+    // 距离 100 → 200:相对基准 1× 放大到 2×
+    fireEvent.pointerMove(img, { pointerId: 2, clientX: 200, clientY: 0 });
+    expect(img.style.transform).toContain('scale(2)');
+    // 距离 100 → 1000:超过上限,钳制到 4×
+    fireEvent.pointerMove(img, { pointerId: 2, clientX: 1000, clientY: 0 });
+    expect(img.style.transform).toContain('scale(4)');
+    fireEvent.pointerUp(img, { pointerId: 1, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(img, { pointerId: 2, clientX: 1000, clientY: 0 });
+  });
+
+  it('ignores pinch gestures while the image is still loading', () => {
+    renderLightbox(null);
+    expect(screen.queryByTestId('lightbox-image')).toBeNull();
   });
 });

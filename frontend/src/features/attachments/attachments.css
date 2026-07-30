@@ -1,6 +1,9 @@
 /**
- * 附件模块样式(attachment.md §4)。颜色一律经语义 token(design/tokens.css),
- * 暗色模式由 token 集整体替换实现(README §6.12)。类名前缀 mesh-attachments-*。
+ * 附件模块样式(attachment.md §4 / design-quality.md §3.2 附件行)。
+ * 统一文件卡:图片缩略图卡与文件行共用同一卡片语言(surface-raised/border-subtle/radius-md,
+ * hover 升起 shadow-1)。扫描状态图标 + 文案 + tone(颜色非唯一)。进度环走 token 描边。
+ * hover 操作组 + 触控「更多」菜单;触控命中区 ≥44px。灯箱工具栏手机底部固定。
+ * 颜色一律经语义 token(design/tokens.css);暗色由 token 集整体替换。
  */
 
 .mesh-attachments {
@@ -21,26 +24,50 @@
   font-size: var(--font-size-sm);
 }
 
-/* 图片缩略图网格 */
+/* ---- 统一文件卡语言(§3.2):缩略图网格 + 文件列表共用 ---- */
 .mesh-attachments__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
   gap: var(--space-3);
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.mesh-attachments__grid-item {
+.mesh-attachments__grid-item,
+.mesh-attachments__file {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--color-surface-raised);
+  transition:
+    box-shadow var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter);
 }
 
+.mesh-attachments__grid-item:hover,
+.mesh-attachments__file:hover {
+  box-shadow: var(--shadow-1);
+  border-color: var(--color-border);
+}
+
+.mesh-attachments__file {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* 感染/错误态:危险三元组(fg/bg/border)。 */
+.mesh-attachments__file--danger,
+.mesh-attachments__grid-item--danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+}
+
+/* 图片缩略图 */
 .mesh-attachments__thumb {
   display: block;
   width: 100%;
@@ -48,7 +75,7 @@
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
+  background: var(--color-surface);
   overflow: hidden;
   cursor: pointer;
 }
@@ -64,7 +91,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  background: var(--color-border);
+  background: var(--color-border-subtle);
 }
 
 .mesh-attachments__grid-name {
@@ -75,7 +102,6 @@
   white-space: nowrap;
 }
 
-/* 文件卡片列表 */
 .mesh-attachments__files {
   display: flex;
   flex-direction: column;
@@ -85,18 +111,7 @@
   padding: 0;
 }
 
-.mesh-attachments__file {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-
-.mesh-attachments__file-icon,
-.mesh-attachments__action-glyph {
+.mesh-attachments__file-icon {
   color: var(--color-text-muted);
   flex: none;
 }
@@ -127,9 +142,10 @@
 .mesh-attachments__ai-badge {
   padding: 0 var(--space-1);
   border-radius: var(--radius-sm);
-  background: var(--color-info);
-  color: var(--color-info-contrast);
-  font-size: var(--font-size-sm);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info-border);
+  color: var(--color-info-fg);
+  font-size: var(--font-size-caption);
   line-height: 1.4;
 }
 
@@ -141,17 +157,18 @@
   width: 1.4em;
   height: 1.4em;
   flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--color-surface-muted, var(--color-info));
-  color: var(--color-info-contrast);
-  font-size: var(--font-size-sm);
+  border-radius: var(--radius-full);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info-border);
+  color: var(--color-info-fg);
+  font-size: var(--font-size-caption);
   font-weight: 600;
 }
 
 /* §4.4:agent 产出物来源标记「来自 <agent> 运行」。 */
 .mesh-attachments__agent-source {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
 }
 
 /* M1:列表加载失败错误态 + 重试。 */
@@ -159,7 +176,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--color-danger);
+  color: var(--color-danger-fg);
   font-size: var(--font-size-sm);
 }
 
@@ -173,48 +190,116 @@
 }
 
 .mesh-attachments__retry:hover {
-  background: var(--color-surface-hover, var(--color-surface));
+  background: var(--color-surface-hover);
 }
 
-.mesh-attachments__scanning {
-  color: var(--color-warn);
+/* ---- 扫描状态(§4.5/§4.6):图标 + 文案 + tone,颜色非唯一 ---- */
+.mesh-attachments__scan {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
 }
 
-.mesh-attachments__scanning--tile {
-  display: flex;
+.mesh-attachments__scan--info {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: var(--color-info-fg);
+}
+
+.mesh-attachments__scan--danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-fg);
+}
+
+.mesh-attachments__scan-icon {
+  flex: none;
+}
+
+.mesh-attachments__scan-next {
+  flex-basis: 100%;
+  font-size: var(--font-size-caption);
+  opacity: 0.9;
+}
+
+/* 未放行图片的网格占位:方形、居中。 */
+.mesh-attachments__scan--tile {
   align-items: center;
   justify-content: center;
   width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
   text-align: center;
   padding: var(--space-2);
 }
 
-.mesh-attachments__rejected {
-  color: var(--color-danger);
-  font-size: var(--font-size-sm);
+/* composer 内扫描提示(轻量行内) */
+.mesh-attachments__scanning {
+  color: var(--color-warn);
+  font-size: var(--font-size-caption);
 }
 
-/* hover 操作组 */
+/* ---- hover 操作组 + 触控「更多」菜单(§8.2) ---- */
 .mesh-attachments__actions {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   flex: none;
   opacity: 0;
-  transition: opacity var(--duration-fast);
+  visibility: hidden;
+  transition:
+    opacity var(--motion-fast) var(--ease-enter),
+    visibility var(--motion-fast);
 }
 
 .mesh-attachments__file:hover .mesh-attachments__actions,
 .mesh-attachments__grid-item:hover .mesh-attachments__actions,
 .mesh-attachments__actions:focus-within {
   opacity: 1;
+  visibility: visible;
 }
 
-/* 灯箱 */
+.mesh-attachments__actions-touch {
+  display: none;
+}
+
+@media (hover: none) {
+  .mesh-attachments__actions {
+    display: none;
+  }
+
+  .mesh-attachments__actions-touch {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /* 触控命中区 ≥44px(§8.2) */
+  .mesh-attachments__actions-touch .mesh-icon-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-attachments__actions,
+  .mesh-attachments__grid-item,
+  .mesh-attachments__file {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .mesh-attachments__scan {
+    border-color: CanvasText;
+  }
+}
+
+/* ---- 灯箱 ---- */
 .mesh-attachments-lightbox {
   display: flex;
   flex-direction: column;
@@ -233,11 +318,13 @@
   border-radius: var(--radius-sm);
 }
 
+/* touch-action:none 让捏合/双击手势直达组件,不被浏览器缩放/滚动拦截。 */
 .mesh-attachments-lightbox__image {
   max-width: 100%;
   max-height: 60vh;
   border-radius: var(--radius-sm);
-  transition: transform var(--duration-fast, 150ms) ease-out;
+  touch-action: none;
+  transition: transform var(--motion-fast) var(--ease-exit);
 }
 
 .mesh-attachments-lightbox__loading {
@@ -247,7 +334,7 @@
 
 .mesh-attachments-lightbox__actions {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-dropdown);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -255,7 +342,31 @@
   gap: var(--space-2);
 }
 
-/* composer */
+/* 手机(compact ≤599px):工具栏贴底、按钮 ≥44px(parity §2.22 触控灯箱工具栏)。 */
+@media (max-width: 599px) {
+  .mesh-attachments-lightbox__actions {
+    position: sticky;
+    bottom: 0;
+    width: 100%;
+    padding: var(--space-2);
+    background: var(--color-surface-raised);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .mesh-attachments-lightbox__actions .mesh-icon-button,
+  .mesh-attachments-lightbox__actions .mesh-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-attachments-lightbox__image {
+    transition: none;
+  }
+}
+
+/* ---- composer(上传入口 + 进度卡) ---- */
 .mesh-attachments-composer {
   display: flex;
   flex-wrap: wrap;
@@ -268,7 +379,7 @@
 }
 
 .mesh-attachments-composer--dragging {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
   background: var(--color-surface-raised);
 }
 
@@ -296,10 +407,10 @@
 .mesh-attachments-composer__card {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
   background: var(--color-surface-raised);
 }
 
@@ -311,7 +422,7 @@
 .mesh-attachments-composer__card-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-0-5);
   flex: 1;
   min-width: 0;
 }
@@ -324,11 +435,82 @@
   white-space: nowrap;
 }
 
-.mesh-attachments-composer__progress {
-  width: 100%;
+.mesh-attachments-composer__card-size {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-attachments-composer__card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+/* 失败卡的重试/移除按钮触控 ≥44px。 */
+@media (pointer: coarse) {
+  .mesh-attachments-composer__card-actions .mesh-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
 }
 
 .mesh-attachments-composer__error {
-  color: var(--color-danger);
+  color: var(--color-danger-fg);
   font-size: var(--font-size-sm);
+}
+
+/* ---- 进度环(§3.2) ---- */
+.mesh-progress-ring {
+  flex: none;
+}
+
+.mesh-progress-ring__track {
+  stroke: var(--color-border-subtle);
+}
+
+.mesh-progress-ring__bar {
+  stroke: var(--color-accent);
+  transition: stroke-dashoffset var(--motion-fast) var(--ease-exit);
+}
+
+.mesh-progress-ring__text {
+  fill: var(--color-text);
+  font-size: var(--font-size-caption);
+}
+
+/* 不确定态:整体旋转 1/4 弧。 */
+.mesh-progress-ring--indeterminate {
+  animation: mesh-ring-spin var(--motion-slow) linear infinite;
+  transform-origin: center;
+}
+
+@keyframes mesh-ring-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-progress-ring--indeterminate {
+    animation: none;
+  }
+
+  .mesh-progress-ring__bar {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .mesh-progress-ring__track {
+    stroke: CanvasText;
+  }
+
+  .mesh-progress-ring__bar {
+    stroke: Highlight;
+  }
+
+  .mesh-progress-ring__text {
+    fill: CanvasText;
+  }
 }

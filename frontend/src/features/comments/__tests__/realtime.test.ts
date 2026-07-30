@@ -8,8 +8,11 @@ import type { RealtimeEventFrame } from '../../../types/realtime';
 import {
   applyCommentsFrame,
   applyExecutionFrame,
+  applyExecutionLifecycleFrame,
   clearPlaceholdersForAgentComment,
+  executionChannel,
 } from '../realtime';
+import type { ExecutionPlaceholder } from '../realtime';
 import type { Comment } from '../types';
 
 function frame(event: string, payload: unknown): RealtimeEventFrame {
@@ -186,5 +189,75 @@ describe('execution placeholders', () => {
     // non-agent comment / non-created frames keep placeholders
     expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.created', ROOT))).toBe(placeholders);
     expect(clearPlaceholdersForAgentComment(placeholders, frame('comment.updated', {}))).toBe(placeholders);
+  });
+});
+
+/** 执行生命周期帧 → 占位五态迁移(验收必修 3 / §9.8)。 */
+describe('applyExecutionLifecycleFrame 五态迁移', () => {
+  const PLACEHOLDER: ExecutionPlaceholder = {
+    execution_id: 'e1',
+    comment_id: 'c-1',
+    agent_id: 'mem-agent',
+    agent_name: 'reviewer',
+    status: 'queued',
+    failure_reason: null,
+  };
+  const lifecycleFrame = (event: string, payload: unknown): RealtimeEventFrame =>
+    ({ op: 'event', channel: 'execution:e1', seq: 1, event, payload }) as RealtimeEventFrame;
+
+  it('queued 占位初始为 queued 态(附 failure_reason 缺省 null)', () => {
+    const added = applyExecutionFrame(
+      [],
+      frame('execution.queued', { execution_id: 'e1', agent_member_id: 'mem-agent' }),
+    );
+    expect(added[0].status).toBe('queued');
+    expect(added[0].failure_reason).toBeNull();
+  });
+
+  it('started → running;awaiting_approval → waiting', () => {
+    const running = applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.started', { execution_id: 'e1' }));
+    expect(running[0].status).toBe('running');
+    const waiting = applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.awaiting_approval', { execution_id: 'e1' }));
+    expect(waiting[0].status).toBe('waiting');
+  });
+
+  it('failed / timeout → failed + failure_reason(留失败占位供重试,§4.1)', () => {
+    const failed = applyExecutionLifecycleFrame(
+      [PLACEHOLDER],
+      lifecycleFrame('execution.failed', { execution_id: 'e1', failure_reason: 'nonzero_exit' }),
+    );
+    expect(failed[0].status).toBe('failed');
+    expect(failed[0].failure_reason).toBe('nonzero_exit');
+    const timeout = applyExecutionLifecycleFrame(
+      [PLACEHOLDER],
+      lifecycleFrame('execution.timeout', { execution_id: 'e1' }),
+    );
+    expect(timeout[0].status).toBe('failed');
+    expect(timeout[0].failure_reason).toBeNull();
+  });
+
+  it('completed / cancelled → 移除占位', () => {
+    expect(
+      applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.completed', { execution_id: 'e1' })),
+    ).toEqual([]);
+    expect(
+      applyExecutionLifecycleFrame([PLACEHOLDER], lifecycleFrame('execution.cancelled', { execution_id: 'e1' })),
+    ).toEqual([]);
+  });
+
+  it('未知执行 id / 无关事件 / 非法载荷 → 原样返回(同引用)', () => {
+    const frames: RealtimeEventFrame[] = [
+      lifecycleFrame('execution.started', { execution_id: 'other' }),
+      lifecycleFrame('execution.progress', { execution_id: 'e1' }),
+      lifecycleFrame('execution.started', {}),
+    ];
+    for (const f of frames) {
+      const input: ExecutionPlaceholder[] = [PLACEHOLDER];
+      expect(applyExecutionLifecycleFrame(input, f)).toBe(input);
+    }
+  });
+
+  it('executionChannel 按执行 id 组装频道名', () => {
+    expect(executionChannel('e1')).toBe('execution:e1');
   });
 });

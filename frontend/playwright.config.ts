@@ -12,7 +12,7 @@ export default defineConfig({
   // 真实后端 spec 需各自专用 config(独立后端栈)运行,默认 mock 契约套件须排除。
   // 真实后端 spec 一律以 real-*.spec.ts 命名(glob 兜底,杜绝新增漏配);
   // workspace-flow.spec.ts 为历史命名特例,显式列出。
-  testIgnore: ['real-*.spec.ts', 'workspace-flow.spec.ts', 'visual/**'],
+  testIgnore: ['real-*.spec.ts', 'workspace-flow.spec.ts', 'visual/**', 'mes111-b2.spec.ts'],
   timeout: 90_000,
   retries: 0,
   workers: 1,

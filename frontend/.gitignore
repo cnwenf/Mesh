@@ -9,3 +9,7 @@ tsconfig.tsbuildinfo
 e2e/.members-context.json
 e2e/mes106/stack.env
 e2e/mes107/stack.env
+# MES-59 附件走查 RUN 编号残留(RUN=Date.now 切片;复跑经 MES59_EVIDENCE_DIR 指向
+# 暂存目录,勿入库;入库的基线存证为历史轮次显式提交,不受本忽略规则影响)
+e2e/evidence/attachments/*-[0-9]*.png
+e2e/evidence/attachments/*-[0-9]*.txt
