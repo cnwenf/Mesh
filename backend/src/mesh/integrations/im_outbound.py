@@ -386,6 +386,11 @@ class DingTalkIMAdapter:
         self._client = client
         self._max_chunks = max(1, max_chunks)
 
+    @property
+    def client(self) -> DingTalkClient:
+        """The underlying OpenAPI client (card push path)."""
+        return self._client
+
     async def send_text(self, target: ConversationTarget, text: str) -> SendOutcome:
         return await self._send(target, MSG_KEY_TEXT, {"content": sanitize_no_mentions(text)})
 
@@ -482,6 +487,26 @@ def _parse_conversation_key(conversation_key: str) -> tuple[str, str]:
     if not sep or not sep2:
         raise ValueError(f"malformed conversation_key {conversation_key!r}")
     return tenant, ref
+
+
+def target_from_payload(
+    payload: dict[str, Any],
+    workspace_id: uuid.UUID,
+    integration_id: uuid.UUID | None,
+) -> ConversationTarget:
+    """Rebuild the outbound target from an ``im.send`` payload (shared by
+    the relay and the card pusher)."""
+    conversation_key = str(payload.get("conversation_key") or "")
+    tenant_key, external_ref = _parse_conversation_key(conversation_key)
+    return ConversationTarget(
+        workspace_id=workspace_id,
+        integration_id=integration_id or uuid.UUID(int=0),
+        provider_tenant_key=tenant_key,
+        external_ref=external_ref,
+        conversation_type=str(payload.get("conversation_type") or CONVERSATION_GROUP),
+        sender_key=str(payload.get("target_user_key") or ""),
+        binding_id=_uuid_or_none(payload.get("binding_id")),
+    )
 
 
 class IMSendRelay:
@@ -895,17 +920,7 @@ class IMSendRelay:
         workspace_id: uuid.UUID,
         integration_id: uuid.UUID | None,
     ) -> ConversationTarget:
-        conversation_key = str(payload.get("conversation_key") or "")
-        tenant_key, external_ref = _parse_conversation_key(conversation_key)
-        return ConversationTarget(
-            workspace_id=workspace_id,
-            integration_id=integration_id or uuid.UUID(int=0),
-            provider_tenant_key=tenant_key,
-            external_ref=external_ref,
-            conversation_type=str(payload.get("conversation_type") or CONVERSATION_GROUP),
-            sender_key=str(payload.get("target_user_key") or ""),
-            binding_id=_uuid_or_none(payload.get("binding_id")),
-        )
+        return target_from_payload(payload, workspace_id, integration_id)
 
     async def _adapter_for(
         self, session: AsyncSession, *, integration_id: uuid.UUID
@@ -985,6 +1000,7 @@ __all__ = [
     "sanitize_no_mentions",
     "should_push_notification",
     "split_markdown_chunks",
+    "target_from_payload",
     "truncate_to_bytes",
     "validate_identity_segment",
 ]
