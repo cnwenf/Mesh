@@ -12,7 +12,7 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { IconButton, StatusDot, Tooltip } from '../design';
+import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
 import { useT } from '../i18n';
@@ -102,16 +102,20 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
         {TEXT_VISIBLE_STATES.has(state) ? (
           <StatusDot tone={TONE_BY_STATE[state]} label={t('status.' + state)} pulse={PULSING_STATES.has(state)} />
         ) : (
-          // 稳定态:仅状态点 + tooltip 承载可读名(§4.2);role=img + aria-label
-          // 保证读屏可感知,颜色非唯一信号。
-          <Tooltip content={t('status.' + state)}>
-            <span className="mesh-status" role="img" aria-label={t('status.' + state)}>
-              <span
-                className={'mesh-status__dot mesh-status__dot--' + TONE_BY_STATE[state]}
-                aria-hidden="true"
-              />
-            </span>
-          </Tooltip>
+          // 稳定态:仅状态点(§4.2)。可读名经 aria-label(读屏)+ title(悬停提示)
+          // 承载,颜色非唯一信号;不用 Tooltip 组件——其内联浮层在视口右缘会撑出
+          // 页面级横向滚动(320px 溢出门禁),title 零布局副作用。
+          <span
+            className="mesh-status"
+            role="img"
+            aria-label={t('status.' + state)}
+            title={t('status.' + state)}
+          >
+            <span
+              className={'mesh-status__dot mesh-status__dot--' + TONE_BY_STATE[state]}
+              aria-hidden="true"
+            />
+          </span>
         )}
       </span>
       <span className="mesh-topbar__actions">

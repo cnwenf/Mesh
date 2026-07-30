@@ -43,8 +43,10 @@ describe('TopBar', () => {
       // 可读名由 tooltip 承载(role=img + aria-label 供读屏,颜色非唯一信号)。
       const conn = screen.getByTestId('conn-status');
       expect(conn.querySelector('.mesh-status__label')).toBeNull();
-      expect(screen.getByRole('img', { name: LABELS[state as ConnectionState] })).toBeInTheDocument();
-      expect(screen.getByRole('tooltip')).toHaveTextContent(LABELS[state as ConnectionState]);
+      const img = screen.getByRole('img', { name: LABELS[state as ConnectionState] });
+      expect(img).toBeInTheDocument();
+      // 悬停提示经 title 承载(零布局副作用,不撑出 320px 横向滚动)
+      expect(img).toHaveAttribute('title', LABELS[state as ConnectionState]);
     },
   );
 
