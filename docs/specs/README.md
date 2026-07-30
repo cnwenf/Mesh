@@ -195,7 +195,7 @@ Mesh 由 **24 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | **search-command-palette(全局搜索 / 命令面板 / 快捷键体系)** | §6.12 详 Spec:`Ctrl/Cmd+K` 命令面板(跨模块搜 issue/成员/agent/项目/视图/聊天会话,服务端权限过滤)、规范深链(一切资源外链唯一形态)、power-user 快捷键四组(全局/看板/issue/聊天)+ `?` 上下文帮助层 + 输入框豁免;横切导航效率层,不新增业务表,不扩 §6.7 事件词汇 |
 | **cli(开发者平台 CLI)** | §11 详 Spec:`mesh` 官方命令行(REST 瘦客户端,经 `api_tokens`/设备码会话鉴权),工作项/项目/成员/agent/执行/日志流式(SSE)/导入导出全命令族,`--output table\|json` 双模式与退出码分类,OpenAPI 3.1 随仓库发布;服务端零新表(设备码授权为 auth.md 增量) |
 | **theme(主题与暗色模式)** | §6.12 主题段详 Spec:三态 `light/dark/system`、偏好协商链(用户→工作区默认→系统,镜像 §6.18 locale 链)、语义 token 单一取色路径与暗色 token 集整组替换、两套主题 WCAG AA 自证 + CI 门禁(对比度/硬编码扫描);设计系统级呈现契约,不新增业务表 |
-| **design-quality(前端设计质量与体验)** | MES-133 全局 UI/UX 实施合同:clean-room 边界、页面模板、信息架构、精确设计令牌、完整组件状态、逐页旅程、响应式/触控、实时/离线恢复、固定视觉矩阵与渐进迁移;不新增业务表 |
+| **design-quality(前端设计质量与体验)** | MES-133 全局 UI/UX 实施合同:clean-room 边界、受控观察附件索引、页面模板、精确 HEX/OKLCH 令牌、许可白名单、完整组件状态、逐页施工卡、MES-108 校准单、响应式/触控、固定视觉矩阵与渐进迁移;不新增业务表 |
 
 ---
 
@@ -228,7 +228,7 @@ Mesh 由 **24 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 21 | [search-command-palette.md](features/search-command-palette.md) | 平台能力 | 命令面板跨模块搜索(服务端权限过滤)、规范深链、power-user 快捷键四组 + `?` 上下文帮助层 + 输入框豁免 |
 | 22 | [cli.md](features/cli.md) | 平台能力 | `mesh` CLI 命令族(REST 瘦客户端)、PAT/设备码鉴权、日志 SSE 流式、导入导出联动、退出码契约、OpenAPI 3.1 |
 | 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令 |
-| 24 | [design-quality.md](features/design-quality.md) | 平台能力 | MES-133 前端设计 Spec：clean-room 合规、令牌/排版/23 类组件、逐页旅程、架构分层、页面×视口×主题×状态×交互矩阵与视觉门禁 |
+| 24 | [design-quality.md](features/design-quality.md) | 平台能力 | MES-133 前端设计 Spec：clean-room 合规、观察附件关联、HEX/OKLCH 令牌、许可依赖、逐页施工卡、MES-108 current→target 校准、架构分层与视觉门禁 |
 
 runtime 的 Server 协议与数据模型以
 [runtime.md](features/runtime.md) 为唯一权威；本地执行进程的组件边界、CLI

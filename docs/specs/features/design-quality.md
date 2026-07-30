@@ -4,7 +4,7 @@
 >
 > 状态：**Architecture / UX reviewed — Ready for implementation**
 >
-> 代码基线：`4bbff27a`（2026-07-30）
+> 代码基线：`614b1a02`（2026-07-30，含 MES-108 基础与 MES-135 资产许可白名单）
 >
 > 适用范围：Mesh Web SPA 全部公开页、应用页、浮层、状态与响应式形态
 >
@@ -40,8 +40,8 @@
 全流程 MUST 遵守：
 
 - 不读取、检索、反编译或复制任何外部产品的源代码、CSS、source map、私有接口、私有素材或设计文件。
-- 不提交外部界面截图、品牌名、Logo、URL、文案、图标、插画、组件命名或可识别创意素材。
-- 观察截图只可作为临时测量输入，不进入仓库、Issue 附件、测试 fixture 或视觉基线。
+- 不向仓库提交外部界面截图、品牌名、Logo、URL、文案、图标、插画、组件命名或可识别创意素材。
+- 观察截图只可作为 MES-133 的受控 Issue 附件与临时测量输入，不进入仓库、测试 fixture 或视觉基线；附件仅用本文定义的中性文件名引用。
 - 本文给出的 token、组件 API、文案结构、图标规则和代码分层均由 Mesh 独立决定；实施者只按本文编码，不接触观察输入。
 - 第三方字体、图标或库仅可选用 MIT、Apache-2.0、BSD、OFL 等允许项目使用的许可；引入前在依赖清单记录包名、版本、许可证和 NOTICE 要求。
 - 无法由黑盒观察确认的行为，以 Mesh 业务 Spec、可访问性和一致性原则独立决策，不推断外部内部实现。
@@ -117,12 +117,12 @@
 
 ### 2.3 MES-133 基线差距
 
-下表只描述 `4bbff27a` 到本文目标的差距；已在 §2.2 落地的基础不得重复实现。
+下表只描述 `614b1a02` 到本文目标的差距；已在 §2.2 落地的基础不得重复实现。
 
 | ID   | 优先级 | 基线事实                                                               | 用户影响                                   | 阶段 2 必须交付                                                        |
 | ---- | ------ | ---------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
 | B-01 | P0     | 桌面侧栏仍为单层文字列表，宽度 232px，未分组、未折叠                    | 导航扫描慢，大屏占位与规范值不一致         | §4.1 分组侧栏，240/64px 双态，状态与权限驱动入口                       |
-| B-02 | P0     | 顶栏品牌不是首页链接，帮助/命令等仍使用字符作为图标                     | 返回路径不稳定，图标语言不统一             | 品牌链接、20px 原创 SVG 图标、统一 tooltip/aria-label                  |
+| B-02 | P0     | 顶栏品牌不是首页链接，帮助/命令等仍使用字符作为图标                     | 返回路径不稳定，图标语言不统一             | 品牌链接、20px Lucide SVG 图标、统一 tooltip/aria-label                 |
 | B-03 | P0     | 手机顶栏把搜索框折成第二行，占用 88–104px                              | 小屏首屏内容不足，键盘弹出前已浪费空间     | 单行 56px 顶栏；搜索改为图标入口，输入只存在于命令面板                 |
 | B-04 | P0     | 手机看板仅把横向滚动限制在容器内，尚未完成单泳道与触控移动路径          | 可浏览但难以切列、移动和快速创建           | §8.3 单泳道、列 chips、长按移动 sheet、WIP 预告和回滚                  |
 | B-05 | P0     | Issue 详情在窄屏仍是长页面，属性没有底部 sheet，活动与评论缺少清晰模式 | 核心操作被元数据淹没，返回位置不可预测     | §9.9 详情双栏/单栏、属性 sheet、时间线、草稿和返回位置恢复             |
@@ -136,7 +136,7 @@
 基础 token 与第一批原语已完成，剩余缺口位于“复合组件 + 页面模式 + 迁移纪律”：
 
 - Combobox、Popover、DataTable、Card、Editor、Comment、Activity、Command Palette、Board 尚无统一状态合同。
-- 字符和 emoji 图标仍存在于顶栏、导航和局部操作；必须迁移到原创 SVG 图标系统。
+- 字符和 emoji 图标仍存在于顶栏、导航和局部操作；必须迁移到许可白名单内的 Lucide SVG 图标系统。
 - `.mesh-page` 仍固定 760px；数据页、详情页、设置页没有统一的 pattern 组件。
 - feature CSS 仍可自造近似间距和断点；需要静态检查与容器级布局约束。
 - overlay 分别维护焦点圈养、滚动锁和 Esc；需要统一 OverlayManager 与层级栈。
@@ -320,30 +320,30 @@
 
 下表为规范值。任何调整必须先修订本文并在同一 PR 更新 `tokenValues.ts`、对比度登记和视觉基线；不得由页面或组件临时偏移。
 
-| Token                      | Light                | Dark              | 用途             |
-| -------------------------- | -------------------- | ----------------- | ---------------- |
-| `--color-canvas`           | `#F7F8FA`            | `#0F1115`         | 应用背景         |
-| `--color-surface`          | `#FFFFFF`            | `#171A21`         | 主内容表面       |
-| `--color-surface-subtle`   | `#F1F3F5`            | `#1D212A`         | 次级区域         |
-| `--color-surface-raised`   | `#FFFFFF`            | `#222732`         | 菜单、浮层、卡片 |
-| `--color-surface-hover`    | `#F4F5F7`            | `#252B36`         | hover            |
-| `--color-surface-pressed`  | `#E9ECF0`            | `#2B3240`         | pressed          |
-| `--color-surface-selected` | `#EEF2FF`            | `#24263F`         | selected         |
-| `--color-surface-sunken`   | `#F1F5F9`            | `#162032`         | 输入、代码、内嵌区 |
-| `--color-text-strong`      | `#16181D`            | `#F4F6F8`         | 标题和主数据     |
-| `--color-text`             | `#2B2F36`            | `#D7DBE0`         | 正文             |
-| `--color-text-muted`       | `#5F6980`            | `#9AA3AF`         | 辅助信息         |
-| `--color-text-disabled`    | `#98A2B3`            | `#697386`         | 禁用态           |
-| `--color-border-subtle`    | `#EAECF0`            | `#252B35`         | 轻分隔           |
-| `--color-border`           | `#D7DCE3`            | `#343C49`         | 控件与卡片边界   |
-| `--color-border-strong`    | `#B8C0CC`            | `#4A5565`         | 强分隔           |
-| `--color-accent`           | `#4F46E5`            | `#818CF8`         | 主操作、链接     |
-| `--color-accent-hover`     | `#4338CA`            | `#A5B4FC`         | 主操作 hover     |
-| `--color-accent-pressed`   | `#3730A3`            | `#6366F1`         | 主操作 pressed   |
-| `--color-accent-soft`      | `#EEF2FF`            | `#24263F`         | 选中背景         |
-| `--color-accent-contrast`  | `#FFFFFF`            | `#10131A`         | 强调色上的文字/图标 |
-| `--color-focus-ring`       | `#2563EB`            | `#93C5FD`         | 焦点环           |
-| `--color-scrim`            | `rgba(15,23,42,.52)` | `rgba(0,0,0,.72)` | 遮罩             |
+| Token                      | Light `hex / oklch`                              | Dark `hex / oklch`                               | 用途             |
+| -------------------------- | ------------------------------------------------ | ------------------------------------------------- | ---------------- |
+| `--color-canvas`           | `#F7F8FA / oklch(0.979 0.003 264.5)`             | `#0F1115 / oklch(0.177 0.009 264.3)`              | 应用背景         |
+| `--color-surface`          | `#FFFFFF / oklch(1.000 0 none)`                  | `#171A21 / oklch(0.218 0.015 266.9)`              | 主内容表面       |
+| `--color-surface-subtle`   | `#F1F3F5 / oklch(0.963 0.003 247.9)`             | `#1D212A / oklch(0.248 0.018 266.2)`              | 次级区域         |
+| `--color-surface-raised`   | `#FFFFFF / oklch(1.000 0 none)`                  | `#222732 / oklch(0.273 0.022 265.8)`              | 菜单、浮层、卡片 |
+| `--color-surface-hover`    | `#F4F5F7 / oklch(0.970 0.003 264.5)`             | `#252B36 / oklch(0.288 0.022 262.5)`              | hover            |
+| `--color-surface-pressed`  | `#E9ECF0 / oklch(0.942 0.006 255.5)`             | `#2B3240 / oklch(0.317 0.027 264.1)`              | pressed          |
+| `--color-surface-selected` | `#EEF2FF / oklch(0.962 0.018 272.3)`             | `#24263F / oklch(0.279 0.046 279.5)`              | selected         |
+| `--color-surface-sunken`   | `#F1F5F9 / oklch(0.968 0.007 247.9)`             | `#162032 / oklch(0.243 0.038 261.7)`              | 输入、代码、内嵌区 |
+| `--color-text-strong`      | `#16181D / oklch(0.209 0.010 268.2)`             | `#F4F6F8 / oklch(0.972 0.003 247.9)`              | 标题和主数据     |
+| `--color-text`             | `#2B2F36 / oklch(0.304 0.014 261.7)`             | `#D7DBE0 / oklch(0.890 0.008 253.9)`              | 正文             |
+| `--color-text-muted`       | `#5F6980 / oklch(0.521 0.038 266.6)`             | `#9AA3AF / oklch(0.712 0.020 255.6)`              | 辅助信息         |
+| `--color-text-disabled`    | `#98A2B3 / oklch(0.710 0.027 261.1)`             | `#697386 / oklch(0.554 0.032 263.3)`              | 禁用态           |
+| `--color-border-subtle`    | `#EAECF0 / oklch(0.943 0.006 264.5)`             | `#252B35 / oklch(0.288 0.020 260.6)`              | 轻分隔           |
+| `--color-border`           | `#D7DCE3 / oklch(0.893 0.011 256.7)`             | `#343C49 / oklch(0.354 0.025 260.1)`              | 控件与卡片边界   |
+| `--color-border-strong`    | `#B8C0CC / oklch(0.805 0.019 258.4)`             | `#4A5565 / oklch(0.446 0.030 257.7)`              | 强分隔           |
+| `--color-accent`           | `#4F46E5 / oklch(0.511 0.230 277.0)`             | `#818CF8 / oklch(0.680 0.158 276.9)`              | 主操作、链接     |
+| `--color-accent-hover`     | `#4338CA / oklch(0.457 0.215 277.0)`             | `#A5B4FC / oklch(0.785 0.104 274.7)`              | 主操作 hover     |
+| `--color-accent-pressed`   | `#3730A3 / oklch(0.398 0.177 277.4)`             | `#6366F1 / oklch(0.585 0.204 277.1)`              | 主操作 pressed   |
+| `--color-accent-soft`      | `#EEF2FF / oklch(0.962 0.018 272.3)`             | `#24263F / oklch(0.279 0.046 279.5)`              | 选中背景         |
+| `--color-accent-contrast`  | `#FFFFFF / oklch(1.000 0 none)`                  | `#10131A / oklch(0.187 0.015 266.8)`              | 强调色上的文字/图标 |
+| `--color-focus-ring`       | `#2563EB / oklch(0.546 0.215 262.9)`             | `#93C5FD / oklch(0.809 0.096 251.8)`              | 焦点环           |
+| `--color-scrim`            | `#0F172A / oklch(0.208 0.042 265.8) / 52%`       | `#000000 / oklch(0 0 none) / 72%`                 | 遮罩             |
 
 状态色必须拆为 `fg/bg/border` 三元组：
 
@@ -357,13 +357,15 @@
 
 状态三元组的规范值：
 
-| 语义 | Light `fg / bg / border` | Dark `fg / bg / border` |
-| --- | --- | --- |
-| success | `#15803D / #DCFCE7 / #86EFAC` | `#4ADE80 / #052E16 / #14532D` |
-| warning | `#92400E / #FEF3C7 / #FCD34D` | `#FBBF24 / #451A03 / #78350F` |
-| danger | `#B91C1C / #FEE2E2 / #FCA5A5` | `#F87171 / #450A0A / #7F1D1D` |
-| info | `#075985 / #E0F2FE / #7DD3FC` | `#38BDF8 / #082F49 / #0C4A6E` |
-| neutral | `#475467 / #F2F4F7 / #D0D5DD` | `#98A2B3 / #252B36 / #343C49` |
+| 语义 | Light `fg / bg / border`（hex） | Light `fg / bg / border`（oklch） | Dark `fg / bg / border`（hex） | Dark `fg / bg / border`（oklch） |
+| --- | --- | --- | --- | --- |
+| success | `#15803D / #DCFCE7 / #86EFAC` | `0.527 0.137 150.1 / 0.962 0.043 156.7 / 0.871 0.136 154.4` | `#4ADE80 / #052E16 / #14532D` | `0.800 0.182 151.7 / 0.266 0.063 152.9 / 0.393 0.090 152.5` |
+| warning | `#92400E / #FEF3C7 / #FCD34D` | `0.473 0.125 46.2 / 0.962 0.058 95.6 / 0.879 0.153 91.6` | `#FBBF24 / #451A03 / #78350F` | `0.837 0.164 84.4 / 0.279 0.074 45.6 / 0.414 0.105 45.9` |
+| danger | `#B91C1C / #FEE2E2 / #FCA5A5` | `0.505 0.190 27.5 / 0.936 0.031 17.7 / 0.808 0.103 19.6` | `#F87171 / #450A0A / #7F1D1D` | `0.711 0.166 22.2 / 0.258 0.089 26.0 / 0.396 0.133 25.7` |
+| info | `#075985 / #E0F2FE / #7DD3FC` | `0.443 0.100 240.8 / 0.951 0.025 236.8 / 0.828 0.101 230.3` | `#38BDF8 / #082F49 / #0C4A6E` | `0.754 0.139 232.7 / 0.293 0.063 243.2 / 0.391 0.085 240.9` |
+| neutral | `#475467 / #F2F4F7 / #D0D5DD` | `0.442 0.035 257.8 / 0.966 0.005 258.3 / 0.872 0.012 259.8` | `#98A2B3 / #252B36 / #343C49` | `0.710 0.027 261.1 / 0.288 0.022 262.5 / 0.354 0.025 260.1` |
+
+上表状态列中的每组三元数均省略共同的 `oklch(...)` 包装以便阅读；实现时不得省略函数。HEX 是兼容输出，OKLCH 是设计/调色源；构建产物必须同时生成 `oklch()` 与紧邻的 HEX fallback，并用 ΔE/对比度测试阻止两者语义漂移。
 
 ### 5.3 间距与布局
 
@@ -458,8 +460,8 @@
 
 ### 6.1 字体配对
 
-- Display/标题：`Manrope`（Latin）+ `Noto Sans SC`（CJK）。
-- UI/正文：`Inter`（Latin）+ `Noto Sans SC`（CJK）。
+- Display/标题：`Inter` 600/700（Latin）+ `Noto Sans SC` 600/700（CJK）。
+- UI/正文：`Inter` 400/500/600（Latin）+ `Noto Sans SC` 400/500/600（CJK）。
 - 代码/日志/标识：`JetBrains Mono` + `SFMono-Regular` + `Consolas`。
 - 字体必须自托管并按 Latin/CJK 子集加载；首屏只加载常用 400/500/600，700 按页面需要加载。
 - 字体失败时回退系统字体，不允许阻断页面或导致不可交互的长时间 FOIT。
@@ -468,10 +470,10 @@
 
 | 样式          | 字号/行高 | 字重 | 用途                     |
 | ------------- | --------- | ---- | ------------------------ |
-| `display-lg`  | 36/44     | 650  | 公共页展示标题，极少使用 |
-| `display-sm`  | 30/38     | 650  | 工作台欢迎区             |
-| `title-1`     | 24/32     | 650  | 页面标题                 |
-| `title-2`     | 20/28     | 650  | 对象详情标题             |
+| `display-lg`  | 36/44     | 700  | 公共页展示标题，极少使用 |
+| `display-sm`  | 30/38     | 700  | 工作台欢迎区             |
+| `title-1`     | 24/32     | 700  | 页面标题                 |
+| `title-2`     | 20/28     | 600  | 对象详情标题             |
 | `title-3`     | 18/26     | 600  | 分区标题、dialog 标题    |
 | `body-lg`     | 16/26     | 400  | 长文本、说明             |
 | `body`        | 14/22     | 400  | 默认 UI 正文             |
@@ -503,9 +505,29 @@
 
 ## 7. 组件与视觉细节
 
+### 7.0 第三方资产与依赖选择
+
+所有视觉依赖以
+[`asset-license-whitelist.md`](../frontend/asset-license-whitelist.md)
+为唯一许可白名单；实现 PR 必须锁定版本、保留版权/许可证文本并同步
+`THIRD_PARTY_NOTICES.md`。本文固定选择如下，不允许页面自行换库：
+
+| 能力 | 固定选择 | 许可 | 实施边界 |
+| --- | --- | --- | --- |
+| 无障碍原语 | Radix UI Primitives | MIT | 只提供行为和语义；外观全部由 Mesh token/CSS Modules 定义 |
+| 产品图标 | Lucide | ISC | React 按需导入；仅 16/20/24px；禁止复制任何外部品牌图标 |
+| Latin 字体 | Inter | OFL-1.1 | 自托管 400/500/600/700；正文、控件和标题共用 |
+| CJK 字体 | Noto Sans SC | OFL-1.1 | 自托管并子集化 400/500/600/700；不从第三方 CDN 加载 |
+| 代码字体 | JetBrains Mono | OFL-1.1 | 自托管 400/500；仅代码、日志与技术标识 |
+| 协调动效 | Framer Motion | MIT | 仅 Dialog/Drawer、布局重排等协调动效；简单 hover/颜色过渡仍用 CSS token |
+| 图表 | Recharts | MIT | 只用于洞察；颜色、tooltip、空态与读屏摘要使用 Mesh 语义层 |
+| 样式隔离 | CSS Custom Properties + CSS Modules | Web 标准 | token 全局、组件和 feature 局部；不引入第二套主题运行时 |
+
+依赖扫描 MUST 拒绝未知许可证和新外部图片/字体域名；若白名单文档与本文冲突，以白名单的安全与许可限制为准并先修订本文。
+
 ### 7.1 图标
 
-- 建立统一 20px 线性 SVG 图标集，默认描边 1.75、圆角端点。
+- 使用 Lucide 建立统一 20px 线性 SVG 图标层，默认描边 1.75、圆角端点；feature 只从内部 Icon adapter 导入。
 - 尺寸只用 16/20/24px；空状态插图例外。
 - emoji 仅允许评论回应和用户内容；导航、按钮、状态、通知、自动值守触发器不得使用 emoji。
 - 图标按钮必须有 tooltip 和 `aria-label`；危险图标必须同时有文字或确认上下文。
@@ -762,6 +784,73 @@
 
 公共流程不渲染私有应用侧栏；鉴权失效从受保护页跳登录时必须把规范路径、query 和 hash 编码为安全 `next`，回跳后不得显示上一工作区数据。
 
+### 9.9.1 MES-133 观察截图关联协议
+
+观察截图只存放在 MES-133 的访问受控附件区，不进入 Git、README、测试夹具或视觉基线。本文引用使用
+`见 MES-133 附件：<中性文件名>`，实现者从本文获得结构和数值，不以附件像素或外部文案作为实现源。
+
+本轮在未登录条件下已经完成 12 张公开状态截图，CSS viewport/DPR 分别为
+`1440×900/1` 与 `390×844/1`：
+
+- Landing：见 MES-133 附件：`landing-ready-light-desktop-1440x900.png`、
+  `landing-ready-dark-desktop-1440x900.png`、
+  `landing-ready-light-mobile-390x844.png`、
+  `landing-ready-dark-mobile-390x844.png`。
+- 登录：见 MES-133 附件：`login-ready-light-desktop-1440x900.png`、
+  `login-ready-dark-desktop-1440x900.png`、
+  `login-ready-light-mobile-390x844.png`、
+  `login-ready-dark-mobile-390x844.png`。
+- 404：见 MES-133 附件：`not-found-ready-light-desktop-1440x900.png`、
+  `not-found-ready-dark-desktop-1440x900.png`、
+  `not-found-ready-light-mobile-390x844.png`、
+  `not-found-ready-dark-mobile-390x844.png`。
+
+注册独立入口在本轮公开观察中返回 404；这证明“注册”不能被当作已采集。内页、注册其他入口、overlay 和非 ready 状态统一标记 `WAITING_CREDENTIALS`，取得凭据后按下表的预定中性文件名增量上传。新增附件只更新 MES-133 覆盖索引和本节状态，不改变本文原创 token 或组件 API。
+
+### 9.9.2 全页面施工卡与截图覆盖
+
+下表是逐页实施合同；`IA/组件` 定义信息顺序与复用单元，`状态/交互` 定义必须可操作的终态，`重排` 定义桌面和手机差异。附件列为 `READY` 时已在 MES-133；其余均为凭据到位后的固定补件名。
+
+| 页面/模式 | IA / 组件 | 状态与交互 | 桌面 → 手机重排 | MES-133 附件关联 |
+| --- | --- | --- | --- | --- |
+| Landing | 顶栏→价值主张→主/次 CTA→能力证明→页脚；PublicFlow、Button、Link | ready/loading/error/offline；键盘顺序先主 CTA；导航折叠后功能不丢 | 1440 内容居中、主 CTA 同行 → 390 单列、菜单 Drawer、CTA ≥44 | `READY`：见 §9.9.1 的 4 张 `landing-*` |
+| 登录 | 单任务标题→说明→账号字段→主 CTA→帮助；PublicFlow、Field、Button | empty/focus/invalid/submitting/code-sent/rate-limited/offline；错误保留账号；安全 next | 420 宽卡、顶距 ≤96 → 全宽无阴影、16px gutter、软键盘不遮 CTA | `READY`：见 §9.9.1 的 4 张 `login-*`；其他状态待 `login-{state}-{theme}-{viewport}.png` |
+| 注册/找回/MFA | 账号→验证→恢复信息；Stepper、Field、CodeInput、Banner | empty/invalid/sending/verified/expired/locked/offline；返回不清共享字段 | 420 宽单卡 → 一次一步、数字键盘、重发和返回 ≥44 | `WAITING_CREDENTIALS`：`register-ready-light-desktop-1440x900.png` 等同矩阵 |
+| 404/对象不存在 | 状态码→可读标题→原因→安全返回；ErrorState | not-found；返回入口可键盘到达，不泄漏私有对象 | 内容居中、≤560 → 16px gutter、按钮 44 高 | `READY`：见 §9.9.1 的 4 张 `not-found-*` |
+| Permission/只读 | 原页面标题→影响说明→可见数据边界→恢复/返回；ErrorState、Banner | forbidden/readonly/permission-revoked；不泄漏对象是否存在；失权清缓存 | 安全父页内状态 → 单列且主恢复动作常驻 | `WAITING_CREDENTIALS`：`permission-forbidden-{theme}-{viewport}.png` |
+| Onboarding | 工作区事实→当前一步→进度→跳过/恢复；OnboardingCard、Progress | loading/current/completed/dismissed/error/offline；已有事实自动补证 | 首页右侧 360 卡 → 首页首区全宽、一次展开一步 | `WAITING_CREDENTIALS`：`onboarding-current-{theme}-{viewport}.png` |
+| 工作区首页 | PageHeader→KPI→我的工作→团队/agent 动态→快速创建；Workbench、Card、Timeline | first-use/ready/loading/empty/error/offline/permission/long；卡片深链保留返回 | 1120、KPI 四列、主次 2:1 → KPI 2/1 列、单列、CTA 44 | `WAITING_CREDENTIALS`：`home-ready-{theme}-{viewport}.png` |
+| Projects 列表/详情 | 页头→筛选/保存视图→列表→详情概览/里程碑；DataView、Detail、Card | loading/refresh/empty/ready/readonly/error/offline/long；筛选和排序写 URL | 1440 表格/双栏 → 64–88 行卡/单栏、筛选 Sheet | `WAITING_CREDENTIALS`：`projects-ready-{theme}-{viewport}.png` |
+| Cycles | PageHeader→当前周期→范围/燃尽→历史；DataView、ChartFrame、DateField | empty/ready/loading/closed/error/offline/long；日期和时区明确；关闭周期确认 | 概览+列表双区 → 单列、图表摘要先于图形 | `WAITING_CREDENTIALS`：`cycles-ready-{theme}-{viewport}.png` |
+| Issue 列表 | PageHeader→view/filter/display→DataView→批量条；DataTable、FilterBar | ready/loading/refresh/empty/error/readonly/offline/selected/long；新建和批量可撤销 | 行 44、宽数据页 → 主次行 64–88、筛选 Sheet、批量条在底栏上 | `WAITING_CREDENTIALS`：`issue-list-ready-{theme}-{viewport}.png` |
+| Issue 创建 | 标题→常用属性→展开区→提交；Dialog/Sheet、Editor、Combobox | empty/dirty/invalid/submitting/error/success/offline；`Mod+Enter`；关闭 dirty confirm | 640 Dialog → 全屏 Sheet、提交贴软键盘上方 | `WAITING_CREDENTIALS`：`issue-create-dirty-{theme}-{viewport}.png` |
+| Issue 详情 | 对象头→描述→Activity；右侧属性；DetailLayout、Editor、Status | loading/partial/ready/readonly/error/offline/conflict/deleted；编辑失败保留草稿 | 720+320 双栏 → 单栏、属性 chips + Sheet | `WAITING_CREDENTIALS`：`issue-detail-ready-{theme}-{viewport}.png` |
+| 评论/回复 | 时间线节点→正文→附件→操作→composer；Comment、Editor、Combobox | draft/uploading/sending/sent/failed/resolved/highlighted；提及后果发布前可见 | 正文 ≤720、线程缩进 44 → 缩进 16、composer sticky | `WAITING_CREDENTIALS`：`comments-thread-{theme}-{viewport}.png` |
+| 附件 | 上传区→文件卡→扫描/预览/下载；Dropzone、FileCard、Lightbox | empty/queued/uploading/scanning/clean/infected/failed/expired；拖拽/粘贴/选择等价 | 行内卡+灯箱 → 系统 picker、全屏灯箱、安全区工具栏 | `WAITING_CREDENTIALS`：`attachments-scanning-{theme}-{viewport}.png` |
+| Activity | 分组时间线→事件正文→运行/对象深链→加载更早；Timeline | loading/ready/empty/realtime-new/error/offline/long；实时不抢滚动/焦点 | 时间列 112 → 时间落正文下；离底 >80px 显示“有更新” | `WAITING_CREDENTIALS`：`activity-realtime-{theme}-{viewport}.png` |
+| Board | toolbar→列头→卡片；Board、Card、MoveSheet | loading/ready/filtered-empty/dragging/WIP-block/offline/conflict；pointer/键盘/触控等价 | 280–320 多列横向区 → 单泳道+列 chips+长按移动 Sheet | `WAITING_CREDENTIALS`：`board-ready-{theme}-{viewport}.png` |
+| Members | PageHeader→筛选→名册→详情/邀请；DataTable、Avatar、Drawer | loading/empty/ready/readonly/error/offline/pending；权限解释；管理操作可撤销 | 表格+480 Drawer → 72 行卡+全屏 Sheet | `WAITING_CREDENTIALS`：`members-ready-{theme}-{viewport}.png` |
+| Labels/自定义字段 | 类型/作用域→定义列表→编辑/引用影响；DataTable、Badge、Dialog | empty/ready/readonly/dirty/error/conflict/delete-confirm；删除先显示引用范围 | 表格+560 Dialog → 卡片+全屏 Sheet | `WAITING_CREDENTIALS`：`fields-ready-{theme}-{viewport}.png` |
+| Agents | PageHeader→状态筛选→名册→能力/运行/环境摘要；DataView、Status、Tabs | loading/empty/ready/offline/archived/private/unavailable/error；私有项不泄漏 | 表格/详情 Drawer → 卡片/详情子路由 | `WAITING_CREDENTIALS`：`agents-ready-{theme}-{viewport}.png` |
+| Inbox | 筛选/批量→列表→详情；Conversation、ListRow、Activity | loading/empty/ready/realtime-new/offline/error/partial-failure；标读/归档/恢复 | 360+主列 → 列表/详情路由化二选一 | `WAITING_CREDENTIALS`：`inbox-ready-{theme}-{viewport}.png` |
+| Chat | 会话列表→消息→上下文→composer；Conversation、Message、Editor | empty/ready/streaming/waiting/failed/offline/long；停止/重生成/候选切换 | 320+主列、消息 ≤720 → 列表/会话二选一、composer 贴底 | `WAITING_CREDENTIALS`：`chat-streaming-{theme}-{viewport}.png` |
+| Search/命令面板 | query→分组结果→预览/页脚命令；CommandPalette、Combobox | idle/searching/results/empty/offline/error/forbidden；旧响应不跳活动项 | 640×≤72vh overlay → 全屏、顶部返回、44 行 | `WAITING_CREDENTIALS`：`search-results-{theme}-{viewport}.png` |
+| Account 设置 | 二级导航→身份/偏好/安全→保存；SettingsLayout、Form、Banner | pristine/dirty/saving/saved/error/conflict；离开 dirty confirm | 240+640 → 分组列表/单栏、保存条在底栏上 | `WAITING_CREDENTIALS`：`settings-account-dirty-{theme}-{viewport}.png` |
+| Workspace 设置 | 基本信息→成员策略→危险区；SettingsLayout、Form、Dialog | ready/readonly/dirty/saving/conflict/danger-confirm；权限逐区表达 | 240+640、危险区分离 → 单栏、危险动作独立页 | `WAITING_CREDENTIALS`：`settings-workspace-ready-{theme}-{viewport}.png` |
+| Member 设置/详情 | 身份→角色→访问→活动；Detail、Select、Timeline | loading/ready/readonly/error/remove-confirm/pending；不得修改最后 owner | Drawer/设置页 → 子路由/全屏 Sheet | `WAITING_CREDENTIALS`：`settings-member-ready-{theme}-{viewport}.png` |
+| Agent 设置/详情 | 身份→runtime/skills→环境门禁→活动；Detail、Combobox、Status | ready/private/archived/unavailable/dirty/error；秘密只显示是否已配置 | 720+320 → 单栏、配置分组 Sheet | `WAITING_CREDENTIALS`：`settings-agent-ready-{theme}-{viewport}.png` |
+| Runtime | 健康摘要→能力→任务/日志→操作；DataView、LogViewer、Status | online/offline/stale/busy/error/pending；危险操作确认、日志可复制 | 表格+详情 Drawer → 卡片+详情路由，日志受控横滚 | `WAITING_CREDENTIALS`：`runtime-offline-{theme}-{viewport}.png` |
+| Execution/审批 | 请求上下文→权限/成本/过期→批准/拒绝→续跑；Detail、CodeBlock、Dialog | pending/approved/rejected/expired/running/failed/readonly；人类专属动作，过期可重发 | 详情+右侧动作卡 → 单栏、动作贴底但不遮日志 | `WAITING_CREDENTIALS`：`approval-pending-{theme}-{viewport}.png` |
+| Skills | 搜索/来源→已装/可用列表→详情/依赖；DataView、Card、Dialog | loading/empty/ready/incompatible/installing/error/readonly；来源与权限可见 | 三列卡/Drawer → 单列/全屏详情 | `WAITING_CREDENTIALS`：`skills-ready-{theme}-{viewport}.png` |
+| Squads | 名册→leader→成员/角色→活动；DataTable、AvatarGroup、Drawer | empty/ready/readonly/pending/error/archived；角色变更反馈不丢上下文 | 表格+480 Drawer → 卡片+Sheet | `WAITING_CREDENTIALS`：`squads-ready-{theme}-{viewport}.png` |
+| Autopilot 列表/编辑 | 状态/触发器→列表→编辑器→run history；DataView、Form、Timeline | empty/ready/enabled/disabled/draft/invalid/saving/running/error；副作用提交前预览 | 表格+640 Drawer → 卡片+全屏编辑器 | `WAITING_CREDENTIALS`：`autopilot-editor-{theme}-{viewport}.png` |
+| Integrations | provider 类别→连接列表→配置/事件台账；DataView、Card、Form | empty/ready/connecting/connected/degraded/error/readonly；外部载荷明确“不可信数据” | 卡片网格+Drawer → 单列+全屏配置 | `WAITING_CREDENTIALS`：`integrations-ready-{theme}-{viewport}.png` |
+| 导入/导出 | 来源/格式→映射→校验→执行/报告；Stepper、FileCard、DataTable | empty/uploading/validating/invalid/running/partial/succeeded/failed；可下载报告 | 720 向导+映射表 → 单列、映射表转字段卡 | `WAITING_CREDENTIALS`：`import-validating-{theme}-{viewport}.png` |
+| Analytics | 时间/范围→KPI→趋势→分布→明细；Card、ChartFrame、DataTable | loading/empty/ready/partial/error/offline/long；图表有摘要和明细等价路径 | 4 KPI+2 列图表 → 2/1 KPI、单列图表、表格卡片/受控横滚 | `WAITING_CREDENTIALS`：`analytics-ready-{theme}-{viewport}.png` |
+| Tokens/审计 | token 列表/新建一次性值→审计筛选/详情；DataTable、Dialog、CodeBlock | empty/ready/creating/revealed-once/revoked/error/readonly；秘密不二次展示；审计只读 | 表格+Drawer → 卡片+详情子路由 | `WAITING_CREDENTIALS`：`audit-ready-{theme}-{viewport}.png` |
+
+每个 `WAITING_CREDENTIALS` 行取得账号后至少补 light/dark × desktop/mobile 的 `ready` 四张，并对该行列出的可见差异状态补一张最小证明截图；完整自动化状态笛卡尔积仍以 §13.5 为准，不靠人工附件替代。
+
 ### 9.10 关键用户旅程与步骤预算
 
 步骤数按“需要用户作出一次独立决定或提交”计，页面加载和自动实时更新不计。
@@ -953,8 +1042,8 @@ App providers
 
 | 顺序 | 交付单元 | 主要改动 | 可并行边界 | 退出条件 |
 | --- | --- | --- | --- | --- |
-| M0 | 基线与门禁 | 建 `design-quality-v1` fixture/manifest/case 生成器；固定 token 快照；登记现存豁免 | 仅测试与文档，可单独 PR | 当前主干全部基线可复现；没有把临时观察截图带入仓库 |
-| M1 | Foundation 完成 | 原创 SVG Icon；Combobox/Popover/DataTable/Card；统一 OverlayManager；补 §7.8 全状态 | 原语可按文件并行，API 在首个 PR 冻结 | 组件状态、键盘、axe、四主题模式测试全绿；feature 尚未换肤 |
+| M0 | 基线与门禁 | 建 `design-quality-v1` fixture/manifest/case 生成器；固定 token 快照；登记现存豁免；建立许可证扫描和 `THIRD_PARTY_NOTICES.md` | 仅测试与文档，可单独 PR | 当前主干全部基线可复现；依赖符合 §7.0；没有把观察截图带入仓库 |
+| M1 | Foundation 完成 | Lucide Icon adapter；Radix 行为原语；Combobox/Popover/DataTable/Card；统一 OverlayManager；补 §7.8 全状态 | 原语可按文件并行，API 在首个 PR 冻结 | 组件状态、键盘、axe、四主题模式测试全绿；feature 尚未换肤 |
 | M2 | Product patterns | Editor/Comment/Activity/CommandPalette/Board；PageHeader/DataView/Detail/Conversation/Settings | pattern 可按族并行，不接业务 API | 纯 fixture 下覆盖 §7.8；patterns 不导入 feature/router/API |
 | M3 | AppShell 与路由 | 56px 顶栏、240/64 侧栏、compact 单行顶栏；route modules lazy；滚动/焦点协议 | shell 和 route 拆包可并行，合入前联调 | 全部入口桌面/手机可达；无死链、无双滚动、首包预算通过 |
 | M4 | 激活路径 | 登录/注册/找回/邀请、Onboarding、工作区首页 | PublicFlow 与 Workbench 两组可并行 | 首次激活旅程 ≤§9.10 步数；所有状态/主题/视口 tuple 通过 |
@@ -1088,7 +1177,7 @@ App providers
 | 浏览器 | `package-lock.json` 对应 Playwright bundled Chromium；运行时 `browser.version()` 必须与 baseline manifest 完全相等 |
 | 色彩 | sRGB、无 HDR、默认 contrast；forced-colors/prefers-contrast 在独立功能用例跑 |
 | locale/timezone | 主矩阵 `zh-CN` / `Asia/Shanghai`；扩张用例 `en-US` / `America/Los_Angeles` |
-| 字体 | 仓库自托管 Manrope 600、Inter 400/500/600、Noto Sans SC 400/500/600、JetBrains Mono 400/500；`document.fonts.ready` 后截图 |
+| 字体 | 仓库自托管 Inter 400/500/600/700、Noto Sans SC 400/500/600/700、JetBrains Mono 400/500；`document.fonts.ready` 后截图 |
 | 时钟 | `2026-07-30T12:00:00+08:00`；relative time、cron、日期输入均冻结 |
 | 网络 | 默认零延迟；loading/pending 由可控 deferred response；offline 用 BrowserContext 切换 |
 | 动画 | 截图用例注入 reduced motion 并等待两个 animation frame；§5.6 的时长/轨迹由独立非截图用例验证 |
@@ -1173,4 +1262,96 @@ dqv1__issue-detail__M__K__conflict__C__zh-CN.png
 - 焦点恢复、IME、dirty draft、冲突、WIP、失权和断线都有保值/恢复策略，避免用户输入丢失和静默失败。
 - 信息密度、表面层级、字阶、44px 触控目标、颜色非唯一信号和 WCAG 2.2 AA 已形成统一合同。
 
-本 Spec 已覆盖阶段 1 的全部交付物并完成技术架构/UX 双评审，**允许进入阶段 2 原创实现；阶段 3 验收仍由专责角色执行**。
+本 Spec 已完成 MES-133 初稿、公开页观察附件关联和技术架构/UX 双评审；待 Mesh Leader 完成本轮 Spec 复核并合入后，方可进入阶段 2 原创实现。受保护页观察截图按 §9.9.2 在凭据到位后增量补齐；阶段 3 验收仍由专责角色执行。
+
+---
+
+## 15. MES-108 基础校准施工单（附录）
+
+本附录把当前主干基础拆成“直接复用 / 必须校正 / 缺失新增”，防止阶段 2 重做已完成能力，也防止把已有近似值误当最终成品。`现状` 只指 `614b1a02` 静态基线，不是阶段 3 验收结论。
+
+### 15.1 直接复用
+
+| 层 | 当前可直接复用 | 冻结边界 |
+| --- | --- | --- |
+| Theme/tokens | `design/tokenValues.ts`、生成脚本、亮暗键集合、协商链、防 FOUC、contrast/forced-colors/reduced-motion 门禁 | 保留单一事实源和现有测试；只增 semantic/component token，不建第二套 theme store |
+| 排版基础 | 已落地的 display→micro 字号/行高、数字 tabular、中文基础规则 | 字体资产按 §6/§7.0 校正；业务页不得回退旧 `sm/md/lg` 表达新层级 |
+| 基础组件 | Button、IconButton、Input、Select、Dialog、Drawer、Menu、Tabs、Tooltip、Accordion、Avatar、Badge、Kbd、Skeleton、EmptyState、ErrorState、Banner、Toast、StatusDot | 保留业务 props 与测试；行为逐步落到 Radix/OverlayManager，不能要求 feature 一次性重写 |
+| 外壳基础 | AppShell grid、TopBar、StatusBanner、Desktop Sidebar、compact MobileNav/More Drawer、安全区和 skip link | 保留路由可达与手机入口；只校准数值、图标、分组、滚动和浮层所有权 |
+| 业务能力 | 现有 API、service/data 分层、REST 包络、OCC、outbox/WebSocket、i18n、权限、评论/附件/看板/聊天状态机 | 视觉迁移不得复制协议或改变服务端语义；新聚合需求先修业务 Spec |
+| 测试资产 | token 幂等/语义一致性脚本、真实浏览器 E2E、现有 Mesh 原创视觉基线 | 原有通过项不删；新增 `design-quality-v1` 矩阵与 manifest 后再逐页迁移 |
+
+### 15.2 必须校正：当前 → 目标
+
+| 对象/位置 | 当前值或实现 | 目标值或实现 | 完成判据 |
+| --- | --- | --- | --- |
+| Shell 列宽 `shell.css` | `grid-template-columns: 232px 1fr`，与已有 token 240/64 漂移 | `var(--shell-sidebar-expanded) 1fr`；折叠时 64px | 1024/1440 截图几何与 §4.5 一致；无硬编码 232 |
+| TopBar | 高度由内容/padding 推导；层级 `z-index:2` | 固定 56px；`--z-sticky:100`；状态横幅高度参与 sticky offset | compact/wide 都是单行 56；锚点不被遮挡 |
+| compact 顶栏 | 搜索可能占第二行或消耗首屏 | 品牌/工作区 + 搜索 IconButton + 主动作，单行 56；输入只在 CommandPalette | 320px 首屏无第二行搜索；`/`、顶栏、`Mod+K` 同状态 |
+| Sidebar active | 整块 primary 高饱和背景、单层列表 | `accent-soft` + 3px 当前指示 + `text-strong`；按工作/团队/运行/管理分组 | 当前项同时由位置/指示/文字表达；亮暗对比达标 |
+| 浮层层级 | `2/40/45/46/50` 等原始值散落 | sticky 100 / dropdown 200 / overlay 300 / toast 400 | 静态扫描零未登记原始 z-index |
+| 阴影 | 多处 `--shadow-raised` | 卡/菜单 `shadow-1`，Popover/sticky `shadow-2`，Dialog/Drawer `shadow-3` | M8 删除 alias；暗色 raised 同时有 border |
+| 色彩 API | 业务仍可引用 `--color-primary` 等兼容键 | 新代码只用 §5.2 `surface/text/accent/state`；旧键仅迁移 alias | alias 使用量随页面族归零；HEX/OKLCH fallback 同源 |
+| Display 字体 | `Manrope` + Inter/CJK，display weight 650 | Inter 700 + Noto Sans SC 700；正文 Inter/Noto 400/500/600 | 自托管文件/NOTICE/字体 hash 入 manifest；无网络字体请求 |
+| 产品图标 | 内部 path registry、字符/emoji 与页面图标混用 | Lucide 经内部 Icon adapter 按需导入；16/20/24、stroke 1.75 | 导航/操作无字符和 emoji；bundle 无整库导入 |
+| 页面容器 | `.mesh-page { max-width:760px }` 统一压窄所有页面 | readable 720 / form 640 / standard 1120 / wide 1440，由 Page pattern 选择 | 数据页不被压成正文列；业务页不自造 max-width |
+| Dialog/Drawer | 各自处理 keydown、focus trap、滚动锁 | Radix 行为原语 + 单一 OverlayManager；外观仍为 Mesh token | Esc 只关栈顶、关闭归还 trigger、嵌套浮层和 dirty guard 测试通过 |
+| Select/选择器 | 简单原生 Select 与 feature 自造 popup 并存 | 简单 Select 经统一 adapter；可搜索/异步/多选全部使用 Combobox；>8 项手机转 Sheet | 同一业务无两套键盘协议；错误/loading/empty 原位 |
+| CSS 作用域 | 全局 feature `.css` 和近似类名可互相覆盖 | token/base 保持全局；新/迁移组件与 feature 使用 CSS Modules | 每迁完页面族删旧选择器；无 `!important` 竞赛 |
+| Mobile Board | 横向容器可浏览但跨列移动弱 | 单泳道 + 列 chips；touch 350ms 或菜单打开 MoveSheet；WIP 先提示 | pointer/keyboard/touch 到同一服务端终态；失败回原位 |
+| 详情/会话 | 小屏多为视觉折栏，返回上下文不统一 | 子路由/query 表达列表/详情；`from` + stable id 恢复筛选/滚动/焦点 | refresh/back 可重复；CSS hide 不承担导航语义 |
+
+### 15.3 缺失新增
+
+| 新增单元 | 放置位置 | 必须能力 | 前置 |
+| --- | --- | --- | --- |
+| 依赖与许可层 | package lock、`THIRD_PARTY_NOTICES.md`、license CI | §7.0 七项固定选择、版本锁定、未知许可/外部资产域名 fail | M0 |
+| Icon adapter | `design/foundations/icon` | Lucide 名称白名单、按需导入、size/stroke/label 统一 | 许可层 |
+| OverlayManager | `design/overlays` | modal 栈、scroll lock、Esc、focus return、portal 层级 | Radix 原语 |
+| Combobox/Popover/DataTable/Card | `design/primitives` / `data-display` | §7.8 全状态、键盘、axe、四主题模式 | token/API 冻结 |
+| Editor/Comment/Activity/CommandPalette/Board | `design/patterns` | 草稿/IME/实时/冲突/多输入方式状态机 | 上述原语 |
+| Page patterns | `design/patterns` | PageHeader、PublicFlow、Workbench、DataView、Detail、Conversation、Settings | AppShell 几何冻结 |
+| Route manifest | `routes` | 七页面族 lazy、每族 loading/error boundary、page-code 映射、标题和规范深链 | Page patterns |
+| 视觉 fixture/manifest | `frontend/e2e` | §13.5 tuple 生成、固定字体/时钟/数据 hash、`data-visual-ready` | M0 |
+| 页面族迁移 | `features/*` | §9.9.2 全施工卡；一族迁移即删该族重复原语/CSS | M1–M3 |
+| 观察附件补采 | MES-133 附件，不在仓库 | §9.9.2 所有 `WAITING_CREDENTIALS` 的四组合 ready + 差异状态最小集 | 登录凭据 |
+
+### 15.4 按提交执行的工作包
+
+| 包 | 先改什么 | 再接什么 | 禁止混入 | 可独立回退点 |
+| --- | --- | --- | --- | --- |
+| M0-A | 许可扫描、NOTICE、字体/浏览器/fixture manifest | CI fail-fast | 页面换肤 | 仅基础设施提交 |
+| M0-B | tokenValues 的 OKLCH+HEX、字体栈、z/shadow alias 计数 | token 生成、contrast、snapshot | 组件 DOM 改动 | token 提交 |
+| M1-A | Radix provider + OverlayManager + Dialog/Drawer 适配器 | Menu/Popover/Tooltip | feature CSS | overlay 提交 |
+| M1-B | Lucide adapter + Button/Input/Select/Combobox/Card/DataTable | 组件状态/axe/visual tests | 路由调整 | foundation 提交 |
+| M2 | Editor/Comment/Activity/Palette/Board + 五个 Page patterns | 纯 fixture stories/tests | API 请求和 WebSocket 订阅 | pattern 提交 |
+| M3 | AppShell 56/240/64、导航分组、compact、route manifest/lazy | URL/focus/scroll 协议 | 业务字段/接口 | shell/route 提交 |
+| M4 | PublicFlow、Onboarding、Home | 登录→首次激活 E2E | Issue/Board 重写 | 激活路径提交 |
+| M5 | Issue list/create/detail、Comment/Attachment/Activity、Board | REST/WS controller 适配 | Settings/Chat | 工作核心提交 |
+| M6 | Members/Agents、Inbox、Chat、Search | Conversation/Combobox 复用 | 平台设置 | 协作入口提交 |
+| M7 | Settings、Projects/Cycles、Runtime/Execution、Skills/Squads、Autopilot、Integrations/Import、Analytics | 所有剩余 route→page-code | token alias 清理 | 分页面族提交 |
+| M8 | 删除 alias、字符图标、重复组件/CSS；冻结最终矩阵 | 完整 CI 与阶段 3 固定输入 | 新功能 | 清理提交 |
+
+每个包的 PR 描述必须列 `复用 / 校正 / 新增 / 删除` 四栏；没有删除项的页面迁移默认不完整。任何阶段发现服务端聚合缺口，先修订业务 Spec 并单独实现 API/service/data，不在前端以 N+1 或隐藏字段绕过。
+
+### 15.5 MES-110 清单交叉核对
+
+| MES-110 范围 | 本 Spec 映射 | 结论 |
+| --- | --- | --- |
+| §1.1 信息架构与导航 | §3、§4、§9.9.2、§9.11、M3 | 已映射；路由、分组、URL、404/权限均有合同 |
+| §1.2 设计令牌与视觉语言 | §5–§7、§15.1–§15.3 | 已映射；包含 HEX/OKLCH、排版、组件与 current→target |
+| §1.3 主题与暗色 | §5.2、§10.2、§13.5–§13.7 | 已映射；light/dark、对比、forced-colors、固定截图环境 |
+| §1.4 响应式与移动 | §4.5、§8、§9.9.2 | 已映射；320/390、触控、软键盘、看板/详情/会话降级 |
+| §1.5 i18n/时区 | §6.4、§10.3、§13.6 | 已映射；中英长度、locale/timezone 与固定时间 |
+| §1.6 搜索、§1.7 快捷键 | §7.8.3、§9.6、§9.9.2、§10.2 | 已映射；统一状态、IME、键盘/鼠标/触控等价 |
+| §1.8 异常态、§1.9 实时 | §9.1、§9.12、§10.1、§11.1 | 已映射；offline/stale/conflict/失权与单连接 reducer |
+| §1.10 通知、§1.12 收藏、§1.13 审批 | §9.9.2、§9.11、§15.4 M6/M7 | 已映射；Inbox、深链返回、收藏搜索上下文、Execution/审批页 |
+| §1.11 a11y | §7.8、§10.2、§13.4 | 已映射；WCAG 2.2 AA、axe、读屏、reflow |
+| §1.14 微交互 | §5.5–§5.6、§7.8 | 已映射；精确时长/easing/reduced-motion 与组件完整态 |
+| §1.15 批量/flags/presence | §7.8、§9.9.2、§11.1 | 已映射；批量局部失败、状态可见、权限驱动入口 |
+| §1.16 安全渲染 | §0.1、§7.0、§11.1、§13.7 | 已映射；clean-room、许可、UGC/秘密边界和无外部素材基线 |
+| §2.1–§2.22 全部页面模块 | §9.9.2 全页面施工卡 + §13.3/§13.5 | 已映射；认证、Shell、Home、Workspace、成员、项目/周期、Issue、Board、字段、评论、Chat、Agent、Runtime/Execution、Skills、Squads、Autopilot、Onboarding、Integrations、Import/Export、Analytics、Account、Attachment 均有行 |
+| §3 四组合矩阵 | §9.9.1、§13.5–§13.7 | 已映射；人工附件覆盖状态与自动化笛卡尔积职责分离 |
+| §4 必修缺口 | §2.3 B-01…B-09、§15.2–§15.4 | 已映射；每项都有 before→after、所有者阶段与退出条件 |
+
+交叉核对结果：MES-110 的 §1.1–§1.16、§2.1–§2.22、§3、§4 **零未映射项**。MES-110 仍是阶段 3 的逐条验收清单；本文只负责把每条转成可实现的架构、数值、状态、响应式和施工顺序，不替代验收员签字。
