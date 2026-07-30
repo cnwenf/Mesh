@@ -11,55 +11,17 @@ obtained via the daemon claim flow. Validates:
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
-import subprocess
-import sys
 import uuid
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 
+# runtime_worker (real relay + reaper subprocess) lives in tests/e2e/conftest.py.
+
 PASSWORD = "e2e-password-123"
-WORKER_READY_WAIT_SECONDS = 3
-
-
-@pytest_asyncio.fixture(scope="module")
-async def runtime_worker(provision_database):
-    """Worker process (relay + reaper) for task token e2e tests."""
-    from tests.conftest import get_test_database_url, get_test_redis_url
-
-    env = os.environ.copy()
-    env["MESH_DATABASE_URL"] = get_test_database_url()
-    env["MESH_REDIS_URL"] = get_test_redis_url()
-    env["MESH_AUTH_MODE"] = "dev"
-    env["MESH_RUNTIME_REAPER_INTERVAL"] = "0.5"
-    env["MESH_RUNTIME_LEASE_SECONDS"] = "3"
-    env["MESH_OUTBOX_POLL_INTERVAL"] = "0.2"
-    storage_endpoint = os.environ.get(
-        "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9000"
-    )
-    env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
-    env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
-    env["MESH_STORAGE_BUCKET"] = os.environ.get(
-        "MESH_TEST_STORAGE_BUCKET", "mesh-e2e"
-    )
-    process = subprocess.Popen(
-        [sys.executable, "-m", "mesh.workers"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    await asyncio.sleep(WORKER_READY_WAIT_SECONDS)
-    assert process.poll() is None, "worker died during startup"
-    yield process
-    process.terminate()
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=10)
 
 
 def _auth(token: str) -> dict:

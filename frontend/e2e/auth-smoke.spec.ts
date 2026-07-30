@@ -12,7 +12,7 @@ test.describe('auth §4.1 登录冒烟', () => {
     await page.getByTestId('login-password').fill('secret123');
     await page.getByTestId('login-account-submit').click();
     await page.waitForURL('**/');
-    await expect(page.getByTestId('demo-theme')).toBeVisible();
+    await expect(page.getByTestId('home-workspace-list')).toBeVisible();
   });
 
   test('账号锁定 → 具名错误文案(§6.14)', async ({ page }) => {
@@ -37,7 +37,7 @@ test.describe('auth §4.1 登录冒烟', () => {
     await page.getByTestId('mfa-code').fill('123456');
     await page.getByTestId('mfa-submit').click();
     await page.waitForURL('**/');
-    await expect(page.getByTestId('demo-theme')).toBeVisible();
+    await expect(page.getByTestId('home-workspace-list')).toBeVisible();
   });
 
   test('注册成功 → 「已发验证邮件」结果页 → 继续回跳', async ({ page }) => {
@@ -51,7 +51,7 @@ test.describe('auth §4.1 登录冒烟', () => {
     await expect(page.getByTestId('register-verify-sent')).toContainText('smoke@corp.com');
     await page.getByTestId('register-continue').click();
     await page.waitForURL('**/');
-    await expect(page.getByTestId('demo-theme')).toBeVisible();
+    await expect(page.getByTestId('home-workspace-list')).toBeVisible();
   });
 
   test('第三方登录按钮组:mock 提供商全往返(§4.5 step 5,?next= 回跳原路径)', async ({

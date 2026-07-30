@@ -879,9 +879,10 @@ async def _context_for_resource(
     workspace_id = await _resource_workspace(request, fn, resource_id)
     if workspace_id is None:
         raise _NotFound("resource not found")
-    # The routes authenticate via get_current_user; the RBAC resolver takes a
-    # principal — build a session-kind principal from the authenticated user
-    # (membership is resolved by user_id, same as the web-session path).
+    # These endpoints are session-authenticated (get_current_user); the RBAC
+    # gate speaks AuthenticatedPrincipal (auth.md §2.5.1) — a session
+    # principal resolves membership by user_id with role-based permissions
+    # (empty scope set ⇒ web session semantics).
     principal = AuthenticatedPrincipal(kind="session", user_id=user.id)
     async with request.app.state.session_factory() as session:
         return await resolve_workspace_context(

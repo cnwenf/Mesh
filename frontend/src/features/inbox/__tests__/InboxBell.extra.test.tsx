@@ -10,6 +10,7 @@ import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import type { RealtimeEventFrame } from '../../../types/realtime';
 import { InboxBell } from '../InboxBell';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -58,11 +59,16 @@ function setup(): void {
   vi.stubGlobal('fetch', stub.fetchImpl);
 }
 
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
 beforeEach(() => {
+  useAuthStore.getState().setToken('tok_test');
   bellFrame = null;
   vi.unstubAllGlobals();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('InboxBell (补充覆盖)', () => {
   it('renders 99+ for counts above 99 and ignores frames from other channels', async () => {

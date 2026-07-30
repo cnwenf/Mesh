@@ -13,6 +13,7 @@ import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { NotificationPreferencesSection } from '../NotificationPreferencesSection';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -40,8 +41,15 @@ function queue(getPrefs: unknown, putPrefs: Response = fakeResponse({ body: { da
   return stub;
 }
 
-beforeEach(() => vi.unstubAllGlobals());
-afterEach(() => vi.unstubAllGlobals());
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
+});
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('NotificationPreferencesSection (补充覆盖)', () => {
   it('applies returned preferences and quiet hours (branch L47 loop + quiet 两臂)', async () => {

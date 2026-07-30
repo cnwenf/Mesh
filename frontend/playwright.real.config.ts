@@ -32,7 +32,6 @@ export default defineConfig({
       env: {
         VITE_MESH_API_BASE_URL: 'http://127.0.0.1:8000',
         VITE_MESH_WS_BASE_URL: 'ws://127.0.0.1:8081',
-        VITE_MESH_DEMO_CHANNEL: 'workspace:11111111-1111-1111-1111-111111111111:issues',
         VITE_MESH_POLLING_INTERVAL_MS: '1000',
       },
     },

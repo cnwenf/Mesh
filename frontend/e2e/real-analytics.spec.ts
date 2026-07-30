@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { injectSession } from './helpers';
 import type { Page } from '@playwright/test';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,12 +27,9 @@ const context = JSON.parse(
 const EVIDENCE = resolve(ROOT, 'e2e', 'evidence', 'analytics');
 
 async function login(page: Page, token: string): Promise<void> {
-  await page.goto('/login');
-  // 开发用 token 直填入口:<details> 折叠面板,点 summary 展开后填 token。
-  await page.locator('details.mesh-login__dev summary').click();
-  await page.getByTestId('login-token').fill(token);
-  await page.getByTestId('login-submit').click();
-  await page.waitForURL(/\/$|\/inbox|\/projects/, { timeout: 30_000 });
+  // dev-auth 栈无表单登录:会话经 authStore 持久化键注入(MES-107 起登录页无 dev 入口)
+  await injectSession(page, token);
+  await page.goto('/');
 }
 
 test.describe('analytics dashboards (real stack)', () => {

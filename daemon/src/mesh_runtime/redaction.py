@@ -49,6 +49,26 @@ class RedactionPipeline:
                 if encoded_url != secret and encoded_url not in self._patterns:
                     self._patterns.append(encoded_url)
 
+    def add_secret(self, secret: str) -> None:
+        """Add a secret discovered after construction (e.g. a task token
+        rotated by a lease renewal, §2.6). Same encoding expansion as init;
+        duplicates are no-ops."""
+        if not secret or not secret.strip():
+            return
+        new_patterns = [secret]
+        if len(secret) >= _MIN_ENCODED_MATCH_LEN:
+            encoded_b64 = base64.b64encode(secret.encode("utf-8")).decode("ascii")
+            if encoded_b64 not in new_patterns:
+                new_patterns.append(encoded_b64)
+            encoded_url = quote(secret, safe="")
+            if encoded_url != secret and encoded_url not in new_patterns:
+                new_patterns.append(encoded_url)
+        for pattern in new_patterns:
+            if pattern not in self._patterns:
+                self._patterns.insert(0, pattern)  # newest first is fine; order
+                # only matters among overlapping lengths and the rotated token
+                # never overlaps the claim-time secrets it supplements.
+
     def redact(self, text: str) -> RedactionResult:
         hits = 0
         for pattern in self._patterns:

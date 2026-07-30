@@ -8643,6 +8643,184 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/task/issues/{issue_id}:
+    get:
+      tags:
+      - task-principal
+      summary: Read Task Issue
+      description: 'Read the current issue (scope ``issue:read``) — the broker''s
+
+        ``issue.read`` action lands here, authenticated as the attempt''s agent
+
+        member (regular console routes reject task tokens, auth.md §2.5.1).'
+      operationId: read_task_issue_api_v1_task_issues__issue_id__get
+      parameters:
+      - name: issue_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Issue Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Read Task Issue Api V1 Task Issues  Issue Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/task/issues/{issue_id}/comments:
+    post:
+      tags:
+      - task-principal
+      summary: Create Task Issue Comment
+      description: 'Comment on the current issue AS the attempt''s agent member (scope
+
+        ``issue:comment:write``). ``suppress_triggers=True``: a broker-mediated
+
+        comment must never re-wake agents (leader↔member loop suppression,
+
+        squad.md §5.3 / comment-inbox loop rule).'
+      operationId: create_task_issue_comment_api_v1_task_issues__issue_id__comments_post
+      parameters:
+      - name: issue_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Issue Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCommentRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Task Issue Comment Api V1 Task Issues  Issue Id  Comments Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/task/issues/{issue_id}/status:
+    patch:
+      tags:
+      - task-principal
+      summary: Set Task Issue Status
+      description: 'Set the current issue status as the attempt''s agent member (scope
+
+        ``issue:status:write``) — goes through the regular issue service so the
+
+        write gate and (when enabled) strict-mode transition rules apply. The
+
+        broker speaks status NAMES; this route resolves the workspace''s
+
+        issue_statuses row (the console API takes status ids).'
+      operationId: set_task_issue_status_api_v1_task_issues__issue_id__status_patch
+      parameters:
+      - name: issue_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Issue Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskStatusRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Set Task Issue Status Api V1 Task Issues  Issue Id  Status Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/task/squad/members:
+    get:
+      tags:
+      - task-principal
+      summary: List Squad Members For Task
+      description: 'Read the squad roster for the current squad task (scope
+
+        ``squad:task:read``). The leader''s orchestrator run uses this to choose
+
+        subtask assignees BEFORE decomposing — member ids, roles and names only;
+
+        no credentials, no cross-squad data.'
+      operationId: list_squad_members_for_task_api_v1_task_squad_members_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response List Squad Members For Task Api V1 Task Squad Members Get
+  /api/v1/task/squad/subtasks:
+    post:
+      tags:
+      - task-principal
+      summary: Create Squad Subtasks For Task
+      description: 'Submit the leader''s decomposition for the CURRENT squad task (scope
+
+        ``squad:task:decompose`` — orchestrator attempts only, §2.2 S-05).
+
+
+        Delegates to the SAME ``SquadTaskService.create_subtasks`` the console
+
+        route uses, so the state machine, depth/cycle guards and dispatch all
+
+        apply unchanged; ``_assert_can_orchestrate`` inside it is the authoritative
+
+        check that the caller really is this task''s leader (squad.md §5.3).'
+      operationId: create_squad_subtasks_for_task_api_v1_task_squad_subtasks_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskSubtasksRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Create Squad Subtasks For Task Api V1 Task Squad Subtasks Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/skills:
     get:
       tags:
@@ -15838,6 +16016,27 @@ components:
       required:
       - title
       title: SubtaskInput
+    TaskCommentRequest:
+      properties:
+        body:
+          type: string
+          maxLength: 8000
+          minLength: 1
+          title: Body
+      type: object
+      required:
+      - body
+      title: TaskCommentRequest
+    TaskStatusRequest:
+      properties:
+        status:
+          type: string
+          pattern: ^(todo|in_progress|in_review|done|blocked|backlog|cancelled)$
+          title: Status
+      type: object
+      required:
+      - status
+      title: TaskStatusRequest
     TaskStatusUpdateRequest:
       properties:
         status:
@@ -15854,6 +16053,55 @@ components:
       - status
       title: TaskStatusUpdateRequest
       description: 'Manual kanban status move (§4.2): server validates the transition.'
+    TaskSubtaskInput:
+      properties:
+        title:
+          type: string
+          minLength: 1
+          title: Title
+        assignee_member_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Assignee Member Id
+        stage:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Stage
+        depends_on:
+          items:
+            type: string
+          type: array
+          title: Depends On
+      type: object
+      required:
+      - title
+      title: TaskSubtaskInput
+      description: 'One decomposition entry submitted by a leader''s orchestrator attempt.
+
+
+        ``assignee_member_id`` names a SQUAD MEMBER (members.id); the service
+
+        re-validates membership, depth and cycles (squad.md §3.4).'
+    TaskSubtasksRequest:
+      properties:
+        plan_markdown:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Plan Markdown
+        subtasks:
+          items:
+            $ref: '#/components/schemas/TaskSubtaskInput'
+          type: array
+          maxItems: 16
+          minItems: 1
+          title: Subtasks
+      type: object
+      required:
+      - subtasks
+      title: TaskSubtasksRequest
     TestRunRequest:
       properties:
         simulate_trigger_payload:

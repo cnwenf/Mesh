@@ -1,9 +1,10 @@
 /**
  * App shell(README §6.12):TopBar + StatusBanner + Sidebar + <main><Outlet/></main>。
  *
- * - 承载实时连接:useRealtime({url: env.wsBaseUrl + '/ws', getToken, enabled, reconciler});
+ * - 承载实时连接:useRealtime({url: resolveWsGatewayUrl(env.wsBaseUrl), getToken, enabled, reconciler});
+ *   网关地址为绝对 ws(s)://(同源部署 wsBaseUrl 空时由页面 location 派生,MES-106);
  *   reconciler 以 REST 整拉 resync_required 给出的 rest URL 对账(§6.7);
- * - RealtimeContext:向页面(如 HomePage 演示区)暴露 {state, client};shell 外为 null;
+ * - RealtimeContext:向页面(如首页工作区仪表盘)暴露 {state, client};shell 外为 null;
  * - OverlayControls:App 层持有命令面板/帮助层开关,经本 Context 下达 TopBar;
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
@@ -12,7 +13,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { Outlet, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
-import { env } from '../env';
+import { env, resolveWsGatewayUrl } from '../env';
 import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
@@ -180,9 +181,8 @@ export interface OfflinePollingOptions {
   state: ConnectionState;
   /** 有 token 才轮询(对账端点需 Bearer 鉴权) */
   enabled: boolean;
-  channel: string;
-  /** 额外需轮询的频道(如页面已订阅的 project:/workspace: 频道);与 channel 去重 */
-  extraChannels?: readonly string[];
+  /** 需轮询的频道集合(页面已订阅的 workspace:/project:/issue: 频道);为空则不轮询 */
+  channels: readonly string[];
   intervalMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -191,20 +191,19 @@ export interface OfflinePollingOptions {
  * §3.2 离线降级轮询机制编排:WS 处于 reconnecting/resyncing/offline(非 idle)
  * 时启动 PollingFallback,按频道 seq 水位轮询 REST 对账端点,帧经
  * client.ingestReconciledEvent 与实时帧同路径合并(游标守卫天然去重);
- * 恢复 connected/idle 后自动停止。轮询覆盖演示频道 + 调用方已订阅的频道,
+ * 恢复 connected/idle 后自动停止。轮询覆盖调用方已订阅的频道,
  * 使 WS 不可用时(含首订阅竞态重试耗尽后)项目/工作区列表仍能增量更新。
  */
 export function useOfflinePolling(opts: OfflinePollingOptions): void {
-  const { client, state, enabled, channel } = opts;
-  const extraChannels = opts.extraChannels ?? [];
+  const { client, state, enabled, channels } = opts;
   const intervalMs = opts.intervalMs ?? env.pollingIntervalMs;
   const fetchImpl = opts.fetchImpl ?? fetch;
   // 稳定化频道集合,避免每次渲染重建依赖
-  const channelsKey = [channel, ...extraChannels].join('|');
+  const channelsKey = [...channels].sort().join('|');
   useEffect(() => {
     if (!enabled) return;
     if (state === 'connected' || state === 'idle') return;
-    const channels = Array.from(new Set([channel, ...extraChannels]));
+    if (channelsKey === '') return;
     const fallback = new PollingFallback({
       source: {
         fetch: async (ch: string, since: number) => ({
@@ -216,7 +215,7 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
     const offFrame = fallback.onFrame((frame) => {
       client.ingestReconciledEvent(frame);
     });
-    for (const ch of channels) {
+    for (const ch of channelsKey.split('|')) {
       const cursor = client.getCursor(ch);
       if (cursor !== undefined) fallback.seedSince(ch, cursor);
       fallback.subscribe(ch);
@@ -226,7 +225,6 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
       offFrame();
       fallback.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- channelsKey 稳定化频道集合
   }, [state, enabled, client, channelsKey, intervalMs, fetchImpl]);
 }
 
@@ -241,7 +239,9 @@ export function AppShell(): React.JSX.Element {
   // 以稳定包装函数 + ref 延迟委派到绑定真实 client 的实现。
   const reconcilerRef = useRef<((req: ResyncRequest) => Promise<void>) | null>(null);
   const { state, client } = useRealtime({
-    url: env.wsBaseUrl + '/ws',
+    // 绝对 ws(s):// 网关地址(MES-106):同源部署 wsBaseUrl 为空时经
+    // resolveWsGatewayUrl 由页面 location 派生(WebSocket 构造器拒绝相对地址)。
+    url: resolveWsGatewayUrl(env.wsBaseUrl),
     getToken,
     enabled: hasToken,
     reconciler: (req: ResyncRequest) => {
@@ -264,8 +264,7 @@ export function AppShell(): React.JSX.Element {
     client,
     state,
     enabled: hasToken,
-    channel: env.demoChannel,
-    extraChannels: subscribedChannels,
+    channels: subscribedChannels,
     intervalMs: env.pollingIntervalMs,
   });
 

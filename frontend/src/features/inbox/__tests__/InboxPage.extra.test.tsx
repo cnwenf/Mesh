@@ -9,6 +9,7 @@ import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { InboxPage } from '../InboxPage';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -45,8 +46,15 @@ function queue(inboxBody: unknown = { data: [NOTIF], next_cursor: null }): Fetch
   return stub;
 }
 
-beforeEach(() => vi.unstubAllGlobals());
-afterEach(() => vi.unstubAllGlobals());
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
+});
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('InboxPage (补充覆盖)', () => {
   it('marks read and navigates when the row main button is clicked (onClick L229)', async () => {

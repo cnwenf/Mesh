@@ -15,6 +15,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { injectSession } from './helpers';
 
 const WORKSPACE_ID = '11111111-1111-1111-1111-111111111111';
 const CHANNEL = `workspace:${WORKSPACE_ID}:issues`;
@@ -36,14 +37,16 @@ function publishEvent(identifier: string, title: string): void {
   const updatedAt = new Date(Date.UTC(2026, 6, 26, 12, 0, eventCounter)).toISOString();
   const payload = {
     channel: CHANNEL,
-    event: 'issue.updated',
+    event: 'issue.created',
     data: {
-      id: `real-${identifier}`,
-      identifier,
-      title,
-      status_category: 'in_progress',
-      updated_at: updatedAt,
-      visibility: { workspace_id: WORKSPACE_ID, project_id: null },
+      issue: {
+        id: `real-${identifier}`,
+        workspace_id: WORKSPACE_ID,
+        identifier,
+        title,
+        state_category: 'in_progress',
+        updated_at: updatedAt,
+      },
     },
   };
   const json = JSON.stringify(payload).replace(/'/g, "''");
@@ -63,14 +66,9 @@ function watermark(): number {
 }
 
 async function loginReal(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto('/login');
-  // dev-token 直填入口在 <details> 内(MES-26 起默认折叠),展开后填写
-  await page.locator('.mesh-login__dev').evaluate((el) => {
-    (el as HTMLDetailsElement).open = true;
-  });
-  await page.getByTestId('login-token').fill(TOKEN);
-  await page.getByTestId('login-submit').click();
-  await page.waitForURL('**/');
+  // dev-auth 栈无表单登录:会话经 authStore 持久化键注入(MES-107 起登录页无 dev 入口)
+  await injectSession(page, TOKEN);
+  await page.goto('/');
 }
 
 test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
@@ -93,7 +91,7 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
 
     // 经真实生产路径注入事件 → 增量合并出行
     publishEvent('REAL-1', '真实后端实时帧');
-    const row = page.getByTestId('demo-issue-REAL-1');
+    const row = page.getByTestId('home-issue-REAL-1');
     await expect(row).toBeVisible({ timeout: 20_000 });
     await expect(row).toContainText('真实后端实时帧');
     await page.screenshot({ path: 'test-results/real-02-live-merged.png' });
@@ -109,7 +107,7 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     });
 
     // 服务端全量重放存储事件 → 合并出行
-    await expect(page.getByTestId('demo-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('home-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
 
     // 断网期间注入新事件
     await page.context().setOffline(true);
@@ -119,7 +117,7 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     // 恢复 → 重连带 resume_from=last_seq+1 → 服务端顺序补发 → 无感合并
     await page.context().setOffline(false);
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 30_000 });
-    await expect(page.getByTestId('demo-issue-REAL-2')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('home-issue-REAL-2')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/);
     await page.screenshot({ path: 'test-results/real-03-resume-replay.png' });
   });
@@ -129,7 +127,7 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
       timeout: 20_000,
     });
-    await expect(page.getByTestId('demo-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('home-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
 
     const before = watermark();
     expect(before).toBeGreaterThan(0);
@@ -149,7 +147,7 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
       timeout: 30_000,
     });
     // 对账拉回的事件完成合并
-    await expect(page.getByTestId('demo-issue-REAL-3')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('home-issue-REAL-3')).toBeVisible({ timeout: 30_000 });
     await page.screenshot({ path: 'test-results/real-04-resync-reconciled.png' });
   });
 });

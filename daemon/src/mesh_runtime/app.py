@@ -41,6 +41,28 @@ _DAEMON_BUDGET_CAPS = DaemonCaps(wall_seconds=3600.0, idle_seconds=600.0)
 #: appended per attempt when a broker socket exists.
 DEFAULT_TOOL_ALLOWLIST = ("Read", "Write", "Edit", "Glob", "Grep", "Bash")
 
+#: Trusted platform notices appended to the system prompt per frozen
+#: squad_role (squad.md §4.4 wakes). Derived from the server's task_spec —
+#: platform metadata, never task content (§3.7 S-09 boundary preserved).
+_SQUAD_ROLE_NOTICES: dict[str, str] = {
+    "orchestrator": (
+        "[Mesh platform metadata — trusted] Squad role for THIS run: "
+        "ORCHESTRATOR (decompose phase). The squad tools (squad_members, "
+        "squad_subtasks) ARE granted in this run."
+    ),
+    "aggregator": (
+        "[Mesh platform metadata — trusted] Squad role for THIS run: "
+        "AGGREGATOR (summary phase, the subtasks already finished). The "
+        "squad decomposition tools are NOT granted in this run — summarize "
+        "and close via issue_comment / issue_status per your instructions."
+    ),
+    "executor": (
+        "[Mesh platform metadata — trusted] Squad role for THIS run: "
+        "EXECUTOR (member subtask). Report via issue_comment per your "
+        "instructions."
+    ),
+}
+
 
 @dataclass(frozen=True)
 class RuntimeMetadata:
@@ -68,10 +90,16 @@ def serialize_untrusted_context(ctx: object) -> str:
         parts.append(notice)
     issue = ctx.get("issue")
     if isinstance(issue, dict):
+        issue_id = issue.get("id")
         identifier = issue.get("identifier")
         title = issue.get("title")
         description = issue.get("description")
         label = f"Issue {identifier}" if identifier else "Issue"
+        # The frozen issue id — the task broker's issue/squad tools take it
+        # as an argument (resource scope is still server-pinned; this only
+        # lets the model name the resource it is already scoped to).
+        if isinstance(issue_id, str) and issue_id:
+            parts.append(f"{label} id: {issue_id}")
         if isinstance(title, str) and title:
             parts.append(f"{label} title: {title}")
         if isinstance(description, str) and description:
@@ -102,6 +130,14 @@ def build_run_request(claim: ClaimResponse) -> RunRequest:
     task_spec = execution.get("task_spec")
     untrusted_raw = task_spec.get("untrusted_context") if isinstance(task_spec, dict) else None
     untrusted_context = serialize_untrusted_context(untrusted_raw)
+    # Trusted PLATFORM metadata (from the frozen task_spec — server-derived,
+    # NOT task content, so it belongs in the trusted layer, §3.7): the squad
+    # role tells the model which wake phase this run is, so a leader doesn't
+    # burn budget probing tools its current phase doesn't grant.
+    squad_role = task_spec.get("squad_role") if isinstance(task_spec, dict) else None
+    notice = _SQUAD_ROLE_NOTICES.get(squad_role) if isinstance(squad_role, str) else None
+    if notice:
+        system_prompt = f"{system_prompt}\n\n{notice}" if system_prompt else notice
     budget = snapshot.get("budget") or {}
     max_budget = budget.get("max_cost_usd") if isinstance(budget, dict) else None
     tools = DEFAULT_TOOL_ALLOWLIST
@@ -405,8 +441,8 @@ class RuntimeApp:
         """§1.4/§5.4: the pinned provider runs INSIDE the A2 sandbox with the
         daemon-authored argv/env/configs and frozen S-07 budget enforcement."""
         from mesh_runtime.budget import BudgetLimits
+        from mesh_runtime.provider_env import SANDBOX_RUN_DIR
         from mesh_runtime.providers.claude_code import (
-            SANDBOX_RUN_DIR,
             SANDBOX_WORKTREE_CWD,
             ClaudeCodeAdapter,
             ClaudeLaunchPlan,

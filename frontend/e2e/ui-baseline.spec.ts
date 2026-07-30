@@ -1,11 +1,16 @@
 /**
  * UI/UX 基线真实浏览器验证(MES-16 §真实操作验证):
- * 主题切换、i18n 切换、快捷键框架与命令面板、404、登录占位页、时区化展示、异常态组件。
+ * 主题切换、i18n 切换、快捷键框架与命令面板、404、登录守卫、时区化展示、异常态组件。
+ *
+ * MES-106 起受保护页位于登录守卫之后:基线用例经 helpers.login 真实邮箱/密码登录
+ * 后再操作;「未登录访问受保护页」的基线断言改为守卫跳转 /login?next=(auth.md §4.1)。
  */
 import { expect, test } from '@playwright/test';
+import { login } from './helpers';
 
 test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整组 token 替换)', () => {
   test('设置页选择暗色 → html[data-theme=dark],切回亮色恢复', async ({ page }) => {
+    await login(page);
     await page.goto('/settings');
     await page.getByTestId('theme-select').selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
@@ -13,16 +18,8 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
-  test('首页演示区按钮切换 system 模式', async ({ page }) => {
-    await page.goto('/');
-    await page.getByTestId('demo-theme-dark').click();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-    await page.getByTestId('demo-theme-system').click();
-    // Playwright 默认浅色系统偏好 → system 解析为 light
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  });
-
   test('暗色主题在刷新后保持(持久化)', async ({ page }) => {
+    await login(page);
     await page.goto('/settings');
     await page.getByTestId('theme-select').selectOption('dark');
     await page.reload();
@@ -32,6 +29,7 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
 
 test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)', () => {
   test('切换到 zh-CN → 界面文案就地变更', async ({ page }) => {
+    await login(page);
     await page.goto('/settings');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
     await page.getByTestId('locale-select').selectOption('zh-CN');
@@ -40,6 +38,7 @@ test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)'
   });
 
   test('恢复跟随默认(null locale)', async ({ page }) => {
+    await login(page);
     await page.goto('/settings');
     await page.getByTestId('locale-select').selectOption('zh-CN');
     await expect(page.getByRole('heading', { name: '设置' })).toBeVisible();
@@ -47,21 +46,8 @@ test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)'
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   });
 
-  test('ICU 复数:en 1 comment / 3 comments / No comments;zh 条评论', async ({ page }) => {
-    await page.goto('/');
-    const icu = page.getByTestId('demo-icu');
-    await page.getByTestId('demo-count').fill('1');
-    await expect(icu).toHaveText('1 comment');
-    await page.getByTestId('demo-count').fill('3');
-    await expect(icu).toHaveText('3 comments');
-    await page.getByTestId('demo-count').fill('0');
-    await expect(icu).toHaveText('No comments');
-    await page.getByTestId('demo-locale-zh').click();
-    await page.getByTestId('demo-count').fill('5');
-    await expect(icu).toHaveText('5 条评论');
-  });
-
   test('时区化展示:同一 UTC 值按用户时区渲染(§6.18 存储不变)', async ({ page }) => {
+    await login(page);
     await page.goto('/settings');
     await page.getByTestId('timezone-select').selectOption('Asia/Shanghai');
     const sample = page.getByTestId('tz-sample');
@@ -75,6 +61,7 @@ test.describe('i18n 切换(README §6.18:就地更新、无刷新、ICU 复数)'
 
 test.describe('快捷键体系与命令面板(README §6.12)', () => {
   test('? 打开快捷键帮助层,Esc 关闭', async ({ page }) => {
+    await login(page);
     await page.goto('/');
     await page.keyboard.press('Shift+/');
     const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
@@ -84,6 +71,7 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
   });
 
   test('Ctrl+K 打开命令面板,搜索并执行导航命令', async ({ page }) => {
+    await login(page);
     await page.goto('/');
     await page.keyboard.press('Control+k');
     const palette = page.getByRole('dialog', { name: 'Command palette' });
@@ -94,7 +82,10 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   });
 
-  test('Ctrl+K 搜索任意关键词均出结果且 Issues 导航命令可命中跳转(MES-45 回归)', async ({ page }) => {
+  test('Ctrl+K 搜索任意关键词均出结果且 Issues 导航命令可命中跳转(MES-45 回归)', async ({
+    page,
+  }) => {
+    await login(page);
     await page.goto('/');
     await page.keyboard.press('Control+k');
     const palette = page.getByRole('dialog', { name: 'Command palette' });
@@ -109,6 +100,7 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
   });
 
   test('G 然后 I 序列键跳转收件箱;输入框聚焦时不触发裸键', async ({ page }) => {
+    await login(page);
     await page.goto('/');
     await page.keyboard.press('g');
     await page.keyboard.press('i');
@@ -121,6 +113,7 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
   });
 
   test('顶栏按钮提供等价鼠标路径(快捷键是加速,不是唯一入口)', async ({ page }) => {
+    await login(page);
     await page.goto('/');
     await page.getByTestId('open-palette').click();
     await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
@@ -130,22 +123,29 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
   });
 });
 
-test.describe('路由与占位页', () => {
-  test('未登录访问首页可见(骨架不强制登录),登录占位页写 token 后进入', async ({ page }) => {
+test.describe('路由与登录守卫', () => {
+  test('未登录访问受保护首页 → 守卫跳 /login?next=(MES-106);真实登录后回跳真实首页(MES-107)', async ({
+    page,
+  }) => {
     await page.goto('/');
-    await expect(page.getByTestId('demo-theme')).toBeVisible();
-    await page.goto('/login');
+    // 路由守卫:受保护页未登录不再渲染,统一跳登录页并携带原目标(§4.1)
+    await page.waitForURL(/\/login\?next=/);
+    expect(new URL(page.url()).searchParams.get('next')).toBe('/');
     await expect(page.getByRole('heading', { name: 'Sign in to Mesh' })).toBeVisible();
-    // dev-token 直填入口在 <details> 内(MES-26 起默认折叠),展开后填写
-    await page.locator('.mesh-login__dev').evaluate((el) => {
-      (el as HTMLDetailsElement).open = true;
-    });
-    await page.getByTestId('login-token').fill('e2e-token');
-    await page.getByTestId('login-submit').click();
+    // 登录页无 dev 令牌块 / 过时阶段文案(脚手架已清理)
+    await expect(page.locator('.mesh-login__dev')).toHaveCount(0);
+    await expect(page.getByText(/Phase 2/)).toHaveCount(0);
+    // 真实邮箱/密码登录 → 回跳原目标 → 真实首页(工作区列表)
+    await page.getByTestId('login-email').fill('jane@corp.com');
+    await page.getByTestId('login-password').fill('secret123');
+    await page.getByTestId('login-account-submit').click();
     await page.waitForURL('**/');
+    await expect(page.getByTestId('home-workspace-list')).toBeVisible();
+    await expect(page.getByTestId('home-dashboard')).toBeVisible();
   });
 
   test('404 页与返回首页入口', async ({ page }) => {
+    await login(page);
     await page.goto('/definitely-not-a-page');
     await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
     await page.getByTestId('notfound-home').click();
@@ -153,9 +153,10 @@ test.describe('路由与占位页', () => {
   });
 
   test('侧栏导航基线:看板为数据页(MES-43)呈 §6.12 错误态,成员页呈标题', async ({ page }) => {
+    await login(page);
     await page.goto('/');
     const main = page.locator('main');
-    // 看板已由占位页升级为视图定义层数据页:mock 契约不提供 /users/me,
+    // 看板为视图定义层数据页:mock 契约提供 /users/me 但不提供视图端点,
     // 页面按 README §6.12 呈现错误态基线(错误标题 + 重试入口)
     await page.getByTestId('nav-board').click();
     await page.waitForURL('**/board');
@@ -164,16 +165,7 @@ test.describe('路由与占位页', () => {
     await expect(main.getByRole('button', { name: /retry/i })).toBeVisible();
     await page.getByTestId('nav-members').click();
     await page.waitForURL('**/members');
-    await expect(main.getByText('Members')).toBeVisible();
-  });
-});
-
-test.describe('异常态组件基线(README §6.12 异常态矩阵)', () => {
-  test('首页演示区呈现 loading/empty/error 三态', async ({ page }) => {
-    await page.goto('/');
-    const states = page.getByTestId('demo-states');
-    await expect(states).toBeVisible();
-    // error 态提供重试入口
-    await expect(states.getByRole('button', { name: /retry/i })).toBeVisible();
+    // mock 提供 /users/me:成员页解析工作区后呈标题(mock 无名册端点 → 空/错误态)
+    await expect(main.getByRole('heading', { name: 'Members' })).toBeVisible();
   });
 });

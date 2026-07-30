@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
 import { env } from '../../env';
+import { useAuthStore } from '../../state/authStore';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
 import type { HumanProfile } from '../members/types';
 
@@ -33,11 +34,15 @@ function matchMemberId(
 
 export function useInboxContext(): InboxContext {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
+  // MES-106(验收 M1):收件箱上下文解析为鉴权请求——未登录(匿名 shell 挂载,
+  // 如守卫跳转窗口期 / 公开邀请页)不发起,保持 loading;token 写入后随依赖补取。
+  const hasToken = useAuthStore((state) => state.token !== null);
   const [status, setStatus] = useState<InboxContextStatus>('loading');
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [memberId, setMemberId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!hasToken) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -59,7 +64,7 @@ export function useInboxContext(): InboxContext {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, hasToken]);
 
   return { status, workspaceId, memberId };
 }

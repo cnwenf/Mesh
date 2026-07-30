@@ -22,7 +22,55 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **integrations VCS 关联端点 principal 传参缺陷**:`_context_for_resource` 以 `user=` 调用 `resolve_workspace_context`(实际签名为 `principal=`)导致 VCS links 端点 500;改为由已认证用户构造 session 类 principal 传入(MES-68 遗留,既有单测 `test_vcs_link_endpoints` 由 FAILED 转绿)。
 - **runtime 终态单一扇出契约补齐**:`execution.finished` 内部事件此前仅 daemon 上报终态路径发出;console 取消(queued/awaiting_approval 直终态)、reaper(cancelling→cancelled、max_retries→failed)、审批拒绝四处补发(幂等键去重),使「所有终态下游消费者一律订阅本事件」契约闭合(队列项终态回写依赖之)。
 
+## [0.23.1] - 2026-07-30
+
+前端生产就绪收尾(MES-107 去脚手架化):消除用户手机端实测暴露的「半成品」观感,前端由工程脚手架形态收口为真实产品 UI。
+
+### Changed
+
+- **真实首页替换骨架演示区**:`HomePage` 重写为工作区仪表盘——`GET /users/me` 问候语 + 工作区卡片列表(深链 `/w/:slug` + 角色徽标)+ 活跃工作区 issue 仪表盘(`listIssues` 游标分页 + `workspace:{ws}:issues` 实时增量合并 + 快捷创建 + 加载失败重试);无成员身份呈空态 + 创建工作区向导入口。整体移除 demo 组件与对不存在端点 `/api/v1/demo/issues` 的依赖。
+- **登录页清理**:删除 dev 令牌直填块与过时 `login.phaseNote`。
+- **路由 / Tab 接通**:补齐 Sidebar 技能项缺失的 `/skills`、`/skills/:skillId`、`/marketplace` 路由(此前点击即 404);agent 详情「技能」Tab 接通已实现的 `AgentSkillsTab`(替换「即将上线」占位)。
+- **占位 / 演示残留清理**:`PlaceholderPage` 与前端根 `placeholder/` 静态占位目录删除;i18n 双目录清理 `demo.*` / `home.demo*` / `login.phaseNote` / `members.add.agentComingSoon` / `agents.skills.placeholder*` 等残留键并新增仪表盘键(版本哈希重算);`roles.rosterUnavailable` 过时文案改写;env 移除 `demoChannel`。
+- **契约 mock 与 e2e 去 demo 化**:mock 新增 `/users/me`、issue 端点挂真实路径、治具端点更名 `/api/v1/mock/*`;e2e helpers 改真实邮箱/密码登录 + 会话注入;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + Pixel 7 双视口)。
+- **文档与实现对齐**:根 README 目录总览表 frontend 行改为真实产品 UI 描述(消除与同源部署描述的自相矛盾)并补记本里程碑;`frontend/README.md` 同步;`AppShell` 头注「HomePage 演示区」改为「首页工作区仪表盘」。
+
+### 验证
+
+单测 2905/2905、整体行覆盖 97.78%(HomePage 99.63%)、per-file ≥90 与变更代码双门禁通过;typecheck / eslint+stylelint / 生产构建 0 错;mock 契约 e2e 25/25;真实 e2e(production 鉴权 + 公网 HTTP,桌面 + Pixel 7)8/8;验收员独立真机浏览器复测(桌面 + 手机)全过——守卫跳登录、登录页无 dev 块/phaseNote、首页真实加载无演示组件/加载失败、空态→向导建区→卡片深链、仪表盘快捷创建真实落库、`/skills` 与 `/marketplace` 非 404、agent 技能 Tab 接真实绑定 UI;全站 grep 无占位/演示残留、无参考源泄漏;PR #91 CI 6/6 绿合入 main。
+
+## [0.23.0] - 2026-07-30
+
+命脉层真 LLM 全链路 e2e 入库并真实跑通(MES-95,MES-91 交付物 B,runtime-executor.md §5.4):多 agent 组队、真烧 LLM、非桩非 mock,产品核心价值端到端可复跑验证。
+
+### Added
+
+- **命脉层 squad e2e(`daemon/tests/integration/real_llm_squad_e2e.py`)**:全程公开 API(禁 psql seed)——注册/登录 → workspace → 3 个真实 claude-code agent(冻结 budget + network_policy)→ 小队(leader + 2 成员)→ runtime 激活 → 动态 nonce issue 派发 → leader orchestrator 运行经 task broker `squad_members`/`squad_subtasks` 工具**真实拆解**两个子任务并分派 → 两名成员各自真实 claim + 真实 LLM 执行、经 `issue_comment` 回报 → leader aggregator 运行**真实汇总评论**并经 `issue_status` 置 issue done → relay 回写 leader 署名结论。断言:每次执行 completed 且 usage 真实回流(tokens/cost/session,成员会话互异)、日志非空且凭据零泄漏、nonce 出现在运行输出、issue 真 Done。
+- **命脉 workflow `.github/workflows/real-llm.yml`(§5.4.4)**:仅 workflow_dispatch/schedule 触发(无 pull_request),受保护 self-hosted runner 标签 + 仓库归属双闸门,`concurrency` 串行,凭证仅 secrets 0600 落盘,证据经同一脱敏器脱敏后上传;第三方 action SHA 钉死;`permissions: {}` 最小权限。
+- **task principal issue 路由(auth.md §2.5.1 / §2.2 S-05)**:`/api/v1/task/issues/{id}` 读/评论/状态——评论以 attempt 的 agent member 署名且 `suppress_triggers` 防回环;task principal squad 路由 `GET /task/squad/members`、`POST /task/squad/subtasks`(仅 `squad_role=orchestrator` 的 attempt,服务端再校验 orchestrator 身份并委派既有 squad 状态机,subtasks 上限 16);task token 角色化 scope 与冻结快照角色化 grants(orchestrator 追加 `squad:task:read`/`squad:task:decompose`)。
+- **squad 角色平台提示**:冻结 `task_spec.squad_role` 作为可信平台元数据附入 system prompt(orchestrator/aggregator/executor 相位区分),非任务内容、不破 §3.7 边界。
+
+### Fixed
+
+真链路实弹暴露并修复的三处阻断性产品缺陷(均单测 + 真 LLM 双验证):
+
+- **MCP 传输无效**:钉死 provider 仅支持 stdio/sse/http,mcp.json 的 unix-socket 登记被静默忽略(真实运行中 LLM 无任何 broker 工具)→ 改 stdio 传输 + 平台属主 0444 只读桥接脚本(MCP JSON-RPC ↔ broker socket/nonce 协议;不含凭证,task token 仍只在沙箱外)。
+- **broker 授权永不匹配**:`_broker_grants` 按 scope 名查表与冻结 grants(动作名键)不符 → 改按动作名直通 GATE_TABLE 合法授权(fail-closed);§3.3 表新增 `squad.members`/`squad.subtasks`。
+- **续租后 token 失效**:renew 同事务吊销旧 token 但 daemon 从不轮换 broker 明文 → `_apply_token_rotation` 同步 broker 并加入脱敏集。
+
+### Changed
+
+- 词汇治理:`tests/docs/check_event_vocab.py` 新增 `BROKER_GATE_ACTIONS` 白名单类别(§3.3 闸门表为唯一权威,处理方式同 `OUTBOX_EVENT_TYPES`),`squad.members`/`squad.subtasks` 归类为 broker 闸门动作词汇(非实时事件)。
+- e2e 临时账户密码改每次运行随机生成;openapi.yaml 重生成(含 task principal 路由)。
+
+验证:命脉 workflow 两次真实运行全绿;验收独立栈复跑真实链路 PASS(4 执行 / 4 互异 session / issue 真 Done / nonce 全覆盖 / 凭据零泄漏,证据交叉核实属实);daemon 全量套件含 ISO-01~14 红线矩阵全绿、覆盖率 93.56%(改动模块 ≥91%);backend 单测 + 真实 HTTP e2e 全绿(覆盖率 ≥90% 门禁);PR #83 CI 9/9 绿合入 main。
+
+## [0.22.1] - 2026-07-30
+
+### Fixed
+
 - **integrations 迁移链单头修复**:integrations 迁移重编号 `0030 → 0033`(`0030_integrations.py → 0033_integrations.py`;`revision` 0030→0033、`down_revision` 改接主干 device-auth 链 head `0032`)——MES-80 device-auth 链(`0030`/`0031`/`0032`)先期合入 main 后,原 `0030_integrations` 与之形成 alembic 多头及 revision ID 碰撞;重编号后 `alembic upgrade head` 单头单链(0001 → 0033)。纯链修复:无 DDL 变更,`0030_integrations` 从未随任何已发布 tag 落地,线上无迁移数据影响。
+- **MES-106 未登录守卫 / 401 全局兜底 / WS 公网 HTTP(MES-106,auth.md §4.1)**:修复手机端实测体验阻断——未登录访问首页等受保护页不再停在原页连收 401、满屏「内容加载失败」。`RequireAuth` pathless layout 守卫包裹全部受保护 shell 子路由:未登录访问不渲染受保护子树、不发起受保护请求,统一 `Navigate` 到 `/login?next=<原路径(含查询串,经编码)>`,登录成功经 `safeNextPath` 守卫回跳原页(登录页另受理 `?redirect=` 同义别名);邀请接受预览页留在守卫之外(匿名可见,预览 200 不受影响);已登录访问 `/login` 反向回跳。API 客户端 401 全局兜底:非鉴权豁免端点 401 统一「清 access token + 整页跳 `/login?next=<当前路径>`」;鉴权豁免端点(登录/注册/MFA 验证/忘记密码/重置/验证邮箱/OAuth 往返)业务错误就地呈现、登录页上仅清 token 不成环。匿名 shell 挂载零鉴权请求:`useWorkspaceLocale` / `usePreferencesBootstrap` / `useInboxContext` / `useOnboarding` 全部经 `hasToken` 门控(消除匿名守卫跳转窗口与公开邀请页的游离 `users/me` 401——即 issue 复现的后端日志症状)。实时网关地址归一绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空、nginx 反代 `/ws`)由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),显式 `http(s)://` 基址归一为 `ws(s)://`,公网 HTTP 实时可用。真实 e2e(production 鉴权 + 公网 HTTP + Pixel 7 视口隔离栈)7/7(守卫跳转 / 邀请预览无受保护请求 / 深层路径回跳 / 已登录反向回跳 / 篡改 token 401 全局跳转 / WS `auth_ok` 首帧)+ 验收独立脚本 13/13(含开放重定向防御 `//evil.example` 回落首页、错误密码就地呈现不成环);单测 2910 例,整体覆盖率 97.77%(branches 91.22%),变更行 133/133 = 100%。
 
 ## [0.22.0] - 2026-07-30
 

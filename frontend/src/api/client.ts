@@ -10,6 +10,7 @@ import type { GroupedEnvelope, ListEnvelope } from '../types/envelopes';
 import { isErrorEnvelope } from '../types/envelopes';
 import { MeshApiError } from './errors';
 import { AUTH_HEADER, bearerHeader } from './tokenStore';
+import { isAuthExemptPath } from './unauthorized';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -27,6 +28,7 @@ const IF_MATCH_HEADER = 'If-Match';
 const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
 const RETRY_AFTER_HEADER = 'Retry-After';
 const HTTP_TOO_MANY_REQUESTS = 429;
+const HTTP_UNAUTHORIZED = 401;
 const HTTP_NO_CONTENT = 204;
 
 export interface ClientOptions {
@@ -34,6 +36,13 @@ export interface ClientOptions {
   getToken: () => string | null;
   /** 测试可注入 fetch 实现;缺省使用全局 fetch */
   fetchImpl?: typeof fetch;
+  /**
+   * 非鉴权豁免端点收到 401(token 失效/未登录)时触发(MES-106 全局兜底:
+   * 清 token + 跳登录页,见 unauthorized.ts)。鉴权豁免端点(登录/注册/MFA
+   * 验证等)的 401/4xx 属业务错误,就地呈现具名文案,不触发此回调。
+   * 回调先于 MeshApiError 抛出同步执行;请求 Promise 仍照常 reject。
+   */
+  onUnauthorized?: () => void;
 }
 
 export interface RequestOptions {
@@ -113,10 +122,13 @@ export class MeshApiClient {
 
   private readonly fetchImpl: typeof fetch;
 
+  private readonly onUnauthorized: (() => void) | undefined;
+
   constructor(opts: ClientOptions) {
     this.baseUrl = opts.baseUrl;
     this.getToken = opts.getToken;
     this.fetchImpl = opts.fetchImpl ?? defaultFetchImpl;
+    this.onUnauthorized = opts.onUnauthorized;
   }
 
   /** 单对象包络解析:返回 `data`;204/空体返回 undefined。 */
@@ -217,6 +229,10 @@ export class MeshApiClient {
     }
 
     if (!response.ok) {
+      // MES-106:非鉴权豁免端点的 401 = 会话失效 → 全局兜底(清 token + 跳登录)。
+      if (response.status === HTTP_UNAUTHORIZED && !isAuthExemptPath(path)) {
+        this.onUnauthorized?.();
+      }
       throw await this.buildHttpError(response);
     }
     return response;

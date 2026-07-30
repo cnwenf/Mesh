@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useParams } from 'react-router';
 import { getApiClient } from './api/instance';
+import { useAuthStore } from './state/authStore';
 import { restoreActiveOnboarding } from './features/onboarding';
 import { activeWorkspace, fetchMe } from './features/members/api';
 import { getIssueByIdentifier } from './features/issues/api';
@@ -47,7 +48,11 @@ import { RuntimesPage } from './features/runtimes/RuntimesPage';
 import { SquadDetailPage } from './features/squads/SquadDetailPage';
 import { SquadTaskDetailPage } from './features/squads/SquadTaskDetailPage';
 import { SquadsPage } from './features/squads/SquadsPage';
+import { MarketplacePage } from './features/skills/MarketplacePage';
+import { SkillDetailPage } from './features/skills/SkillDetailPage';
+import { SkillsPage } from './features/skills/SkillsPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
+import { RequireAuth } from './shell/RequireAuth';
 import { DeviceAuthorizationPage } from './features/device/DeviceAuthorizationPage';
 import { ForgotPasswordPage } from './shell/pages/ForgotPasswordPage';
 import { HomePage } from './shell/pages/HomePage';
@@ -80,8 +85,11 @@ function useLocaleInputs(): { requested: string | null; systemLocales: readonly 
 
 export default function App(): React.JSX.Element {
   const { requested, systemLocales } = useLocaleInputs();
+  // MES-106:工作区默认 locale 为鉴权请求,登录前不发起(否则匿名首页即收
+  // 401);token 写入后随 hasToken 变化补取(登录前协商链自系统级回退)。
+  const hasToken = useAuthStore((state) => state.token !== null);
   // 阶段 2 接通(MES-24):工作区默认 locale 经 workspace API 异步获取
-  const workspaceDefaultLocale = useWorkspaceLocale(getApiClient());
+  const workspaceDefaultLocale = useWorkspaceLocale(hasToken ? getApiClient() : null);
   return (
     <BrowserRouter>
       <ThemeProvider>
@@ -170,63 +178,76 @@ function ShellProviders(): React.JSX.Element {
               {/* OAuth 登录回调(§4.1/§4.5):提供商回跳 code+state,交换会话凭证后回跳 */}
               <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />
               <Route path="/" element={<AppShell />}>
-                <Route index element={<HomePage />} />
-                <Route path="settings" element={<SettingsPage />} />
-                {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
-                <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
-                <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
-                {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
-                <Route path="w/:workspaceSlug/settings/labels" element={<WorkspaceLabelsPage />} />
-                <Route path="w/:workspaceSlug/settings/data" element={<DataManagementPage />} />
-                <Route
-                  path="w/:workspaceSlug/settings/custom-fields"
-                  element={<WorkspaceCustomFieldsPage />}
-                />
-                {/* 邀请接受页(公开;preview → accept,四 reason UI 态) */}
+                {/* 邀请接受页(公开;preview → accept,四 reason UI 态):
+                    未登录可见预览、accept 时才跳登录,故置于登录守卫之外。 */}
                 <Route path="invite/:token" element={<InviteAcceptPage />} />
-                <Route path="inbox" element={<InboxPage />} />
-                <Route path="projects" element={<ProjectsPage />} />
-                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
-                <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
-                <Route path="issues" element={<IssuesPage />} />
-                {/* C6 深链:#IDENTIFIER 链接 → 解析当前工作区 issue 后跳详情 */}
-                <Route
-                  path="issues/by-identifier/:identifier"
-                  element={<IssueByIdentifierRedirect />}
-                />
-                <Route path="issues/:issueId" element={<IssueDetailPage />} />
-                {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
-                    选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}
-                <Route path="board" element={<BoardPage />} />
-                <Route path="views/:viewId" element={<BoardPage />} />
-                <Route path="members" element={<MembersPage />} />
-                {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
-                <Route path="agents/:agentId" element={<AgentDetailPage />} />
-                {/* 小队(squad.md §4):列表 / 详情 / 任务详情(拆解树 + 计划审批) */}
-                <Route path="squads" element={<SquadsPage />} />
-                <Route path="squads/:squadId" element={<SquadDetailPage />} />
-                <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
-                <Route path="cycles" element={<CyclesPage />} />
-                {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
-                <Route path="chat" element={<ChatPage />} />
-                {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
-                <Route path="runtimes" element={<RuntimesPage />} />
-                <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
-                <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
-                <Route path="autopilots" element={<AutopilotsPage />} />
-                {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘 */}
-                <Route path="insights" element={<InsightsPage />} />
-                <Route path="autopilots/new" element={<AutopilotEditorPage />} />
-                <Route path="autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
-                <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />
-                <Route path="autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
-                <Route path="webhooks" element={<WebhookConfigPage />} />
-                {/* 集成平台(integrations.md §4):集成管理 / 详情 / 出向 Webhook 订阅。
-                    出向订阅落 /webhook-subscriptions,避让 autopilot 入站 /webhooks。 */}
-                <Route path="integrations" element={<IntegrationsPage />} />
-                <Route path="integrations/:integrationId" element={<IntegrationDetailPage />} />
-                <Route path="webhook-subscriptions" element={<WebhooksPage />} />
-                <Route path="automation" element={<Navigate to="/autopilots" replace />} />
+                {/* MES-106 路由守卫(auth.md §4.1):未登录访问受保护页统一跳
+                    /login?next=<原路径>,登录后经 safeNextPath 回跳;token 失效
+                    由 API 层 401 全局兜底清 token,守卫随之生效(二者不重叠)。 */}
+                <Route element={<RequireAuth />}>
+                  <Route index element={<HomePage />} />
+                  <Route path="settings" element={<SettingsPage />} />
+                  {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
+                  <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
+                  <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
+                  {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
+                  <Route
+                    path="w/:workspaceSlug/settings/labels"
+                    element={<WorkspaceLabelsPage />}
+                  />
+                  <Route path="w/:workspaceSlug/settings/data" element={<DataManagementPage />} />
+                  <Route
+                    path="w/:workspaceSlug/settings/custom-fields"
+                    element={<WorkspaceCustomFieldsPage />}
+                  />
+                  <Route path="inbox" element={<InboxPage />} />
+                  <Route path="projects" element={<ProjectsPage />} />
+                  <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+                  <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
+                  <Route path="issues" element={<IssuesPage />} />
+                  {/* C6 深链:#IDENTIFIER 链接 → 解析当前工作区 issue 后跳详情 */}
+                  <Route
+                    path="issues/by-identifier/:identifier"
+                    element={<IssueByIdentifierRedirect />}
+                  />
+                  <Route path="issues/:issueId" element={<IssueDetailPage />} />
+                  {/* 看板与视图(kanban.md):视图定义层 shell(MES-43 切片;
+                      选中视图 URL 同步 /views/{id} 可分享/收藏,§4.2) */}
+                  <Route path="board" element={<BoardPage />} />
+                  <Route path="views/:viewId" element={<BoardPage />} />
+                  <Route path="members" element={<MembersPage />} />
+                  {/* agent 详情页:成员名册 agent 行的唯一深链入口(agent.md §4.3,README §6.12) */}
+                  <Route path="agents/:agentId" element={<AgentDetailPage />} />
+                  {/* 小队(squad.md §4):列表 / 详情 / 任务详情(拆解树 + 计划审批) */}
+                  <Route path="squads" element={<SquadsPage />} />
+                  <Route path="squads/:squadId" element={<SquadDetailPage />} />
+                  <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
+                  <Route path="cycles" element={<CyclesPage />} />
+                {/* 技能库(skill.md §4.1/§4.2):库页 / 详情 / 市场 */}
+                <Route path="skills" element={<SkillsPage />} />
+                <Route path="skills/:skillId" element={<SkillDetailPage />} />
+                <Route path="marketplace" element={<MarketplacePage />} />
+                  {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
+                  <Route path="chat" element={<ChatPage />} />
+                  {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
+                  <Route path="runtimes" element={<RuntimesPage />} />
+                  <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />
+                  <Route path="executions/:executionId" element={<ExecutionDetailPage />} />
+                  <Route path="autopilots" element={<AutopilotsPage />} />
+                  {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘 */}
+                  <Route path="insights" element={<InsightsPage />} />
+                  <Route path="autopilots/new" element={<AutopilotEditorPage />} />
+                  <Route path="autopilots/runs/:runId" element={<AutopilotRunDetailPage />} />
+                  <Route path="autopilots/:autopilotId" element={<AutopilotDetailPage />} />
+                  <Route path="autopilots/:autopilotId/edit" element={<AutopilotEditorPage />} />
+                  <Route path="webhooks" element={<WebhookConfigPage />} />
+                  {/* 集成平台(integrations.md §4):集成管理 / 详情 / 出向 Webhook 订阅。
+                      出向订阅落 /webhook-subscriptions,避让 autopilot 入站 /webhooks。 */}
+                  <Route path="integrations" element={<IntegrationsPage />} />
+                  <Route path="integrations/:integrationId" element={<IntegrationDetailPage />} />
+                  <Route path="webhook-subscriptions" element={<WebhooksPage />} />
+                  <Route path="automation" element={<Navigate to="/autopilots" replace />} />
+                </Route>
               </Route>
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

@@ -23,7 +23,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | --- | --- |
 | [docs/specs/](docs/specs/) | Spec 文档(所有实现的唯一依据) |
 | [backend/](backend/) | Python 后端(FastAPI REST + realtime 网关 + outbox/projector worker) |
-| [frontend/](frontend/) | Web 前端(阶段 1·B 骨架:工程脚手架、API/实时契约层、设计系统与体验基线、i18n 基线) |
+| [frontend/](frontend/) | Web 前端(React 19 + Vite 单页应用:真实产品 UI——工作区仪表盘首页、登录、看板、issue、成员、技能库等;设计系统 / 实时契约 / i18n 基线;详见 [frontend/README.md](frontend/README.md)) |
 | [tests/](tests/) | 文档级校验脚本(事件词汇、名册入口等) |
 
 开发任何功能前,请先阅读对应的功能 Spec;Spec 是本仓库所有实现的唯一依据。
@@ -31,9 +31,13 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 ## 实现状态
 
 > Runtime 服务端协议已实现；本地执行体 `mesh-runtime` 安全评审已通过、开发放行——A1 执行体骨架(fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流)、**A2 安全执行面**(真实 Linux namespace/cgroup 沙箱 fail-closed、S-01 不可信配置隔离、S-02 唯一 ToolBroker 闸门、S-04 egress gateway、checkout 只读凭证分离、S-08 幂等清理；ISO-01～14 隔离红线负向矩阵真实环境全绿、与 server P0 契约真实联调通过，证据见 `docs/evidence/mes-100/`)与 **A3 真实 provider**(钉死版本 Claude Code 适配——capability manifest + SHA-256/版本/flags fail-closed 探测、§1.4 固定 argv + prompt 只走 stdin、§3.9 严格 stream-json 解析、S-07 预算实时截断、沙箱内只读 CA 信任库、session/usage/result schema v1 回流；真实 LLM e2e 全绿，证据见 `docs/evidence/mes-101/`)已落地于 [`daemon/`](daemon/README.md)，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)；真实 provider 的生产启用以最终安全复测通过为准。
+>
+> **命脉层真 LLM 全链路 e2e(MES-95，已入库)**:两层测试策略——常规 CI(`backend-ci`/`daemon-ci`)用 fake provider 覆盖状态机/崩溃恢复/隔离红线/脱敏/预算，**fake 永不冒充命脉测试**;命脉层 `.github/workflows/real-llm.yml`(仅手动/定时触发、受保护 self-hosted runner、`concurrency` 串行、凭证仅 secrets、外部 PR 绝不执行)跑 `daemon/tests/integration/real_llm_squad_e2e.py`:本地真实 Claude Code 注册为 runtime → leader + 2 成员组小队 → 动态 nonce issue 派发 → leader **真实拆解**(经 task broker `squad.members`/`squad.subtasks` 工具、服务端校验 orchestrator 身份)→ 两名成员**真实认领执行**并经 `issue.comment` 回报 → leader 聚合运行**真实汇总评论**并置 issue `done` → 全程执行日志/session/token/cost 真实回流、凭据零泄漏。首次完整真实运行 PASS(4 执行/4 独立 session/45k tokens，证据见 `docs/evidence/mes-95/real-llm-squad-e2e.json`);运行方式见 [`daemon/README.md`](daemon/README.md)。
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
+| 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 📐 Spec ready | MES-109 已完成当前基线逐页审查、手机/平板/桌面与亮暗主题存证、逐页差距清单，以及令牌、排版、组件、图标、响应式、触控、关键流程和视觉/无障碍门禁定义；实施顺序为“可达性与手机 P0 → Foundation → 外壳/页面模式 → 核心流程 → 全页收口” |
+| 前端生产就绪收尾(MES-107 去脚手架化) | ✅ v0.23.1 | 首页替换为真实工作区仪表盘(GET /users/me 问候 + 工作区卡片列表 + 活跃工作区 issue 仪表盘:游标分页 + 实时增量合并 + 快捷创建);登录页删除 dev 令牌块与过时 phaseNote;PlaceholderPage、placeholder/ 静态占位目录与全站占位/演示/即将上线文案清理(i18n 双语目录同步、版本哈希重算);/skills 路由与 agent 详情技能 Tab 接通;契约 mock 与 e2e 去 demo 化;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + 手机双视口 8/8);单测 2901 例、整体行覆盖 97.79%、变更代码 99.6%(双门禁通过) |
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |
 | auth 认证核心(auth.md 增量 1) | ✅ v0.2.0 | 注册/登录/会话/MFA/一次性令牌/账号偏好 + 应用路径 RLS 加固 |
 | workspace 工作区与多租户基础(workspace.md) | ✅ v0.4.0 | 工作区 CRUD 与 slug 重定向、邀请全生命周期与兑换分离、RBAC 裁决与审计、前缀注册表、租户表 fail-closed RLS;前端设置/邀请页面待前端脚手架增量接通 |
@@ -132,6 +136,8 @@ curl http://localhost:3001/api/v1/ping      # 经 nginx 同源代理到 API
 ```
 
 > **前端部署形态(H5)**:`docker compose up --build` 会用 `frontend/Dockerfile` 构建真实 SPA 并由 nginx 在 `:3001` **同源**承载,`/api` 反代到 `api:8000`、`/ws` 反代到 `gateway:8081`,因此浏览器对 API/WS 的请求**同源**,后端无需开 CORS(生产部署形态,auth.md §5.5)。直接打开 http://localhost:3001/chat 即可与 agent 实时对话。compose 真栈 `/chat` 全链路冒烟见 `frontend/e2e/real-chat-compose.spec.ts`(配置 `frontend/playwright.chat-compose.config.ts`,前置:`docker compose up --build -d`,无 webServer)。
+>
+> **会话与登录守卫(MES-106,auth.md §4.1)**:受保护路由未登录访问统一跳 `/login?next=<原路径>`,登录后回跳原页;token 失效(受保护端点 401)由 API 客户端全局兜底清 token 并跳登录页(鉴权豁免端点的业务错误就地呈现,不受影响)。实时网关地址为绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空)时由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),公网 HTTP 部署实时可用。
 >
 > **本地开发替代**:若用 Vite dev server(`cd frontend && npm run dev`),以同源代理配置启动:`VITE_MESH_API_BASE_URL="" VITE_MESH_WS_BASE_URL="" npx vite --config vite.local.config.ts`(该配置把 `/api`、`/ws` 代理到 `127.0.0.1:8000/8081`),同样同源、无需 CORS。
 
