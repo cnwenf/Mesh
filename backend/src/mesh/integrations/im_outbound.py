@@ -822,7 +822,14 @@ class IMSendRelay:
         if outcome.reason == REASON_RATE_LIMITED:
             self._defer_rate_limited(event, payload)
             return
-        if outcome.reason in (REASON_INVALID_CREDENTIALS, REASON_NO_STAFF_ID):
+        if outcome.reason in (
+            REASON_INVALID_CREDENTIALS,
+            REASON_NO_STAFF_ID,
+            "not_found",
+            "invalid_request",
+        ):
+            # Terminal — the card can never be delivered (missing approval /
+            # undeliverable target / malformed event).
             await self._fail_delivery(session, payload, reason=outcome.reason)
             self._mark_published(event)
             return
