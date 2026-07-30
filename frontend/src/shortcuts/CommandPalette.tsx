@@ -25,6 +25,11 @@ export interface CommandPaletteProps {
   emptyText: string;
   /** 面板标题(dialog 可访问名) */
   title: string;
+  /**
+   * 打开时的初始查询(统一搜索入口:顶栏搜索续输入/回车展开面板时携带已键入文本,
+   * search-command-palette.md S1)。仅在 open 由 false→true 时读取;缺省为清空。
+   */
+  initialQuery?: string;
 }
 
 function optionId(commandId: string): string {
@@ -32,7 +37,7 @@ function optionId(commandId: string): string {
 }
 
 export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | null {
-  const { open, onClose, closeLabel, searchPlaceholder, emptyText, title } = props;
+  const { open, onClose, closeLabel, searchPlaceholder, emptyText, title, initialQuery } = props;
   const commands = useShortcutRegistry((state) => state.commands);
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -53,10 +58,10 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
 
   useEffect(() => {
     if (open) {
-      setQuery('');
+      setQuery(initialQuery ?? '');
       inputRef.current?.focus();
     }
-  }, [open]);
+  }, [open, initialQuery]);
 
   useEffect(() => {
     setSelectedIndex(0);

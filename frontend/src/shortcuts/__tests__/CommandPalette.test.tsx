@@ -168,4 +168,17 @@ describe('CommandPalette(Ctrl/Cmd+K 命令面板)', () => {
     expect(screen.getByRole('listbox')).toHaveAttribute('id', listboxId);
     expect(input).toHaveAttribute('aria-expanded', 'true');
   });
+
+  it('initialQuery 提供时以该查询打开并按查询过滤(顶栏搜索续输入展开同一面板,search-command-palette S1)', () => {
+    render(<CommandPalette open onClose={() => undefined} {...PALETTE_PROPS} initialQuery="theme" />);
+    const input = screen.getByRole('combobox');
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('theme');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+  });
+
+  it('initialQuery 缺省时打开仍清空查询(向后兼容)', () => {
+    render(<CommandPalette open onClose={() => undefined} {...PALETTE_PROPS} />);
+    expect(screen.getByRole('combobox')).toHaveValue('');
+  });
 });
