@@ -172,7 +172,7 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 
 ### 2.4 表:`integration_events`(入站事件摄取台账:签名 / 去重 / 审计)
 
-> **同构于 autopilot `webhook_events`**(autopilot.md §2.5),相互独立:autopilot 的入站事件落 `webhook_events`,集成平台的入站事件落本表;摄取管线的签名/去重/审计/拒无效语义完全一致(`signature_status` 词汇同构,**不含 autopilot 的 `skipped`**——该值仅服务 autopilot test-run 场景,集成平台无此场景;`process_status` 词汇完全一致,限频拒绝复用 `rejected` + `payload._mesh_reject_reason='rate_limited'`,不新增枚举值)。
+> **同构于 autopilot `webhook_events`**(autopilot.md §2.5),相互独立:autopilot 的入站事件落 `webhook_events`,集成平台的入站事件落本表;摄取管线的签名/去重/审计/拒无效语义完全一致(`signature_status` 词汇同构,**不含 autopilot 的 `skipped`**——该值仅服务 autopilot test-run 场景,集成平台无此场景;`process_status` 词汇完全一致,被拒复用 `rejected` + `payload._mesh_reject_reason ∈ {rate_limited, malformed_payload}`(词汇见 §2.10 被拒命名空间注记),不新增 `process_status` 枚举值)。
 
 | 字段 | 类型 | 约束 | 默认值 | 说明 |
 |------|------|------|--------|------|
@@ -645,6 +645,10 @@ processing ──execution.finished(status=completed)──► done             
 | 每会话排队深度 | `conversation_key` 的 pending 计数 | `MESH_IM_QUEUE_MAX_PENDING_PER_CONVERSATION` | 50 |
 
 超限处置:**不入队**,落 `integration_events`(`process_status='rejected'`、`payload._mesh_reject_reason='rate_limited'`,真实 `msgId` 占去重键防同消息重试风暴)+ 机器人回**一次性**限频提示(同会话提示自身限频 1 次/分钟,防提示反射;提示 `im.send` 载荷**自携** `conversation_type` 与单聊 `target_user_key`——被拒消息不入队、无队列项可供出站派生,单聊经 `oToMessages` 投递至发起人,群聊经 `groupMessages`,与出站通道选择单一事实源一致)+ 告警;HTTP 回调模式返回 **200**(非 2xx 会触发平台重推放大),Stream 帧正常 ACK。**入站文本长度上限**:消息正文与 `/btw` 参数统一受 `MESH_IM_INBOUND_TEXT_MAX_CHARS`(默认 4000)约束,超限截断 + `payload.truncated=true` 审计(提示注入面与 token 成本护栏,§6.15 之外的量化补充)。命令平面(§3.7)的频率约束**指向本节**(此前误引 auth.md 限流矩阵"入站回调行"——该行经本 Spec 同步补入 auth.md §3.6,作签名**前**每集成/IP 粗粒度防刷,与上述签名**后**语义级护栏分层互补)。
+
+**`payload._mesh_reject_reason` 被拒命名空间词汇**(注解于 `payload`,非 `process_status` 枚举——被拒事件 `process_status` 恒 `rejected`;均以 `rejected:` 前缀/真实 `msgId` 键防预占与重试风暴 + 全程审计落 `integration_events`):
+- `rate_limited` —— 签名**后**语义级频率护栏超限(身份 20/min 全局 / 会话 60/min / pending 深度 50 三道计数,本节上款);
+- `malformed_payload` —— **签名有效但载荷畸形不可摄取**(归一层/键构造层校验失败:缺 `msgId`/`conversationId` 必填、身份段字符集违例、`conversationId` 含 `:` 等 N-1 分段失败)→ 转 `rejected:<sha256(raw_body)>` 审计行(16KiB 截断,§3.2)+ HTTP 裸 200 `{"process_status":"rejected","reason":"malformed_payload"}`(绝不 §6.14 信封/非 2xx,消除平台重推放大;Stream 路径 catch→审计跳帧同语义)。
 
 **与 §6.9 触发矩阵的关系(README §6.9「外部 IM 消息触发」行据此修订)**:入站 IM 消息命中绑定、**过频率护栏**后**入本表**(同摄取事务,`dispatch_mode` 快照当时有效模式——含排空-再切换规则、`target_agent_id` 快照目标、`message_excerpt` 摘要),再经 outbox 入队执行(`trigger='integration'`,幂等键 `sha256(agent_id | integration_binding_id | external_event_id)` 不变):**`serial_conversation`(钉钉默认)** 由派发器在会话无在途项时按 seq 序派发,数据库级至多一在途;**`parallel`(飞书/Slack 默认)** 摄取事务乐观直派(§6.9 原基线:入队即派发,同会话可并发);模式切换待旧串行 lane 排空后生效(§2.10 `dispatch_mode` 说明)。**终态回写的唯一驱动是内部领域事件 `execution.finished`**(runtime.md:执行终态单一扇出事件,payload `{execution_id, status, failure_reason}`,`status ∈ completed/failed/timeout/cancelled`;注意这是 outbox 内部事件,非 README §6.7 实时事件名——实时事件 `execution.completed/failed/…` 与本模块终态回写均由其派生):`completed → done`,`failed/timeout → failed`,`cancelled → cancelled`。
 
