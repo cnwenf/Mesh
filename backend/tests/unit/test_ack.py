@@ -14,7 +14,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
-from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationMessageQueue
+from mesh.db.models.integration import (
+    Integration,
+    IntegrationBinding,
+    IntegrationEvent,
+    IntegrationMessageQueue,
+)
 from mesh.db.models.notification import NotificationDelivery
 from mesh.db.models.outbox import OutboxEvent
 from mesh.integrations.ack import (
@@ -90,9 +95,13 @@ async def enqueue_item(
     state: str = "pending",
     ack_template: str = DEFAULT_ACK_TEMPLATE,
     conversation_type: str = "group",
+    enqueued_at: datetime | None = None,
+    integration_event_id: uuid.UUID | None = None,
 ) -> IntegrationMessageQueue:
     """Simulate the MES-88 enqueue transaction's ack step under the
-    documented contract (lock held, ack_window_at taken, item flushed)."""
+    documented contract (lock held, ack_window_at taken, item flushed).
+    ``enqueued_at`` defaults to ``ack_window_at``; pass an explicit value
+    to build genuinely crossed enqueue/window orderings (T39-16 shape)."""
     async with session_factory() as session, session.begin():
         item = IntegrationMessageQueue(
             workspace_id=world["ws"],
@@ -105,8 +114,9 @@ async def enqueue_item(
             state=state,
             message_excerpt=f"task {seq}",
             sender_identity_key=f"dingtalk:dingcorpTEST:{sender_key}",
+            integration_event_id=integration_event_id,
             ack_window_at=ack_window_at,
-            enqueued_at=ack_window_at,
+            enqueued_at=enqueued_at or ack_window_at,
         )
         session.add(item)
         await session.flush()
@@ -321,8 +331,12 @@ async def test_ack_success_sets_five_fields_and_sends_exactly_once(
         assert follower.ack_merged_into == leader.id
 
 
-async def test_ack_pre_t1_crash_reclaims_and_sends_once(session_factory, redis_client):
-    """Crash BEFORE T1 → event still pending → reclaim → exactly one send."""
+async def test_ack_unattempted_event_reclaims_exactly_one_send(session_factory, redis_client):
+    """An event never committed by T1 (pending ∧ attempted NULL — the state
+    a pre-T1 crash leaves behind, guaranteed by T1's single transaction) is
+    reclaimed on the next pass and sends exactly once. Two full relay passes
+    stand in for the crash/restart cycle; the post-T1 crash (attempted ∧
+    published) is tested separately below."""
     world = await seed_dingtalk(session_factory)
     transport = ScriptedDingTalkTransport()
     leader, _ = await enqueue_item(session_factory, world=world, seq=1, ack_window_at=T0)
@@ -628,3 +642,146 @@ async def test_upstream_failure_exhausts_budget_then_terminal(session_factory, r
         assert event.delivery_attempts == 5
         row = await session.get(NotificationDelivery, delivery_id)
         assert row.state == "failed"
+
+
+# ---------------------------------------------------------------------------
+# §3.8 ledger: send result recorded on the source inbound event (R4/R8)
+# ---------------------------------------------------------------------------
+
+
+async def _make_inbound_event(session_factory, world) -> uuid.UUID:
+    async with session_factory() as session, session.begin():
+        event = IntegrationEvent(
+            workspace_id=world["ws"],
+            integration_id=world["integ_dingtalk"],
+            external_event_id=f"msg-{uuid.uuid4().hex}",
+            event_type="im.message.receive_v1",
+            payload={"conversationType": "2"},
+            signature_status="valid",
+            process_status="dispatched",
+        )
+        session.add(event)
+        await session.flush()
+    return event.id
+
+
+async def test_ack_success_records_mesh_ack_in_event_ledger(session_factory, redis_client):
+    world = await seed_dingtalk(session_factory)
+    event_id = await _make_inbound_event(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    await enqueue_item(
+        session_factory, world=world, seq=1, ack_window_at=T0,
+        integration_event_id=event_id,
+    )
+    await _make_relay(session_factory, redis_client, transport).run_once()
+    assert len(transport.group_sends()) == 1
+    async with session_factory() as session:
+        row = await session.get(IntegrationEvent, event_id)
+        audit = row.payload.get("_mesh_ack")
+        assert audit is not None
+        assert audit["status"] == "sent"
+        assert audit["sent_at"]
+        assert "_mesh_ack_failed" not in row.payload
+
+
+async def test_ack_failure_writes_mesh_ack_failed_audit(session_factory, redis_client):
+    world = await seed_dingtalk(session_factory)
+    event_id = await _make_inbound_event(session_factory, world)
+    transport = ScriptedDingTalkTransport(send_status=500, send_body={"code": "boom"})
+    item, _ = await enqueue_item(
+        session_factory, world=world, seq=1, ack_window_at=T0,
+        integration_event_id=event_id,
+    )
+    relay = _make_relay(session_factory, redis_client, transport)
+    await relay.run_once()
+    async with session_factory() as session:
+        row = await session.get(IntegrationEvent, event_id)
+        audit = row.payload.get("_mesh_ack_failed")
+        assert audit is not None
+        assert audit["status"] == "failed"
+        assert audit["reason"] == "upstream_error"
+        assert audit["at"]
+        assert "_mesh_ack" not in row.payload
+        # at-most-once unchanged: one attempt, never sent, never retried
+        queue_item = await session.get(IntegrationMessageQueue, item.id)
+        assert queue_item.ack_attempted_at is not None
+        assert queue_item.ack_sent_at is None
+    await relay.run_once()
+    assert len(transport.group_sends()) == 1  # still no retry
+
+
+async def test_ack_timeout_writes_mesh_ack_failed_audit(session_factory, redis_client):
+    world = await seed_dingtalk(session_factory)
+    event_id = await _make_inbound_event(session_factory, world)
+    transport = ScriptedDingTalkTransport(token_delay=1.0)  # slower than ack timeout
+    await enqueue_item(
+        session_factory, world=world, seq=1, ack_window_at=T0,
+        integration_event_id=event_id,
+    )
+    relay = IMSendRelay(
+        session_factory,
+        redis=redis_client,
+        signing_secret=TEST_SIGNING_SECRET,
+        api_base="http://dingtalk.fake",
+        http_client=make_client(transport),
+        ack_send_timeout=0.2,
+    )
+    await relay.run_once()
+    async with session_factory() as session:
+        row = await session.get(IntegrationEvent, event_id)
+        audit = row.payload.get("_mesh_ack_failed")
+        assert audit is not None
+        assert audit["reason"] == "timeout"
+
+
+async def test_ack_ledger_skipped_gracefully_without_event_link(session_factory, redis_client):
+    """Items without a linked inbound event: the send still happens and the
+    relay does not crash on the missing ledger target."""
+    world = await seed_dingtalk(session_factory)
+    transport = ScriptedDingTalkTransport()
+    item, _ = await enqueue_item(session_factory, world=world, seq=1, ack_window_at=T0)
+    await _make_relay(session_factory, redis_client, transport).run_once()
+    assert len(transport.group_sends()) == 1
+    loaded = await _load_item(session_factory, item.id)
+    assert loaded.ack_sent_at is not None
+
+
+# ---------------------------------------------------------------------------
+# ③ — genuinely crossed enqueued_at / ack_window_at samples (T39-16 shape)
+# ---------------------------------------------------------------------------
+
+
+async def test_leader_election_with_crossed_enqueue_and_window_times(session_factory):
+    """seq=2's transaction STARTED first (earlier enqueued_at) but took the
+    imq_seq lock LATER (later ack_window_at) → it must fall into seq=1's
+    window as a follower, even though its enqueued_at is the earlier one.
+    Election reads ONLY lock-ordered ack_window_at, never enqueued_at."""
+    world = await seed_dingtalk(session_factory)
+    first, is_leader_1 = await enqueue_item(
+        session_factory, world=world, seq=1,
+        ack_window_at=T0 + timedelta(seconds=1),   # lock taken first
+        enqueued_at=T0 + timedelta(seconds=5),     # transaction started later
+    )
+    assert is_leader_1 is True
+    second, is_leader_2 = await enqueue_item(
+        session_factory, world=world, seq=2,
+        ack_window_at=T0 + timedelta(seconds=2),   # lock taken later
+        enqueued_at=T0,                            # transaction started FIRST
+    )
+    assert is_leader_2 is False
+    loaded_first = await _load_item(session_factory, first.id)
+    loaded_second = await _load_item(session_factory, second.id)
+    # the crossing is real in the data (not trivially equal timestamps)
+    assert loaded_second.enqueued_at < loaded_first.enqueued_at
+    assert loaded_second.ack_window_at > loaded_first.ack_window_at
+    # yet the later-enqueued item owns the window
+    assert loaded_second.ack_leader_id == first.id
+    # only the leader wrote an im.send event
+    async with session_factory() as session:
+        events = (
+            await session.execute(
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+            )
+        ).scalars().all()
+    assert len(events) == 1
+    assert events[0].payload["queue_item_id"] == str(first.id)

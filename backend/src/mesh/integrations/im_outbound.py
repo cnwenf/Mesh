@@ -662,6 +662,7 @@ class IMSendRelay:
                         update(IntegrationMessageQueue)
                         .where(
                             IntegrationMessageQueue.id == leader_id,
+                            IntegrationMessageQueue.workspace_id == workspace_id,
                             IntegrationMessageQueue.ack_sent_at.is_(None),
                         )
                         .values(ack_sent_at=now, updated_at=now)
@@ -671,6 +672,7 @@ class IMSendRelay:
                         update(IntegrationMessageQueue)
                         .where(
                             IntegrationMessageQueue.ack_leader_id == leader_id,
+                            IntegrationMessageQueue.workspace_id == workspace_id,
                             IntegrationMessageQueue.id != leader_id,
                             IntegrationMessageQueue.ack_represented_at.is_(None),
                         )
@@ -679,14 +681,73 @@ class IMSendRelay:
                         )
                     )
                 else:
-                    # at-most-once: NO retry. The loss is audit-visible
-                    # (attempted ∧ ¬sent) — confirmation is UX sugar, not
-                    # the task's source of truth; dispatch is unaffected.
+                    # at-most-once: NO retry. The loss is audit-visible —
+                    # attempted ∧ ¬sent on the queue item plus the explicit
+                    # ``_mesh_ack_failed`` entry on the source inbound event
+                    # written below. Confirmation is UX sugar, not the
+                    # task's source of truth; dispatch is unaffected.
                     logger.warning(
                         "ack send failed (not retried) item=%s reason=%s",
                         leader_id,
                         outcome.reason,
                     )
+                # §3.8 ledger artifact: the ack send outcome (sent OR lost)
+                # is recorded on the source inbound event's payload — both
+                # paths (acceptance R4/R8).
+                await self._record_ack_result_in_event_ledger(
+                    session,
+                    leader_id=leader_id,
+                    workspace_id=workspace_id,
+                    outcome=outcome,
+                    now=now,
+                )
+
+    async def _record_ack_result_in_event_ledger(
+        self,
+        session: AsyncSession,
+        *,
+        leader_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        outcome: SendOutcome,
+        now: datetime,
+    ) -> None:
+        """Append the ack send result to the source inbound event's payload
+        (§3.8 ledger: ``integration_events.payload`` carries the send
+        result): ``_mesh_ack`` on success, ``_mesh_ack_failed`` on
+        failure/timeout. Savepoint-isolated — a ledger write failure must
+        NOT roll back the T2 queue-item writes (the at-most-once shape is
+        fixed); the queue item's four ack fields remain the primary truth.
+        Items without a linked inbound event skip the write gracefully."""
+        from mesh.db.models.integration import IntegrationEvent
+
+        try:
+            async with session.begin_nested():
+                item = await session.scalar(
+                    select(IntegrationMessageQueue).where(
+                        IntegrationMessageQueue.id == leader_id,
+                        IntegrationMessageQueue.workspace_id == workspace_id,
+                    )
+                )
+                if item is None or item.integration_event_id is None:
+                    return
+                event = await session.get(IntegrationEvent, item.integration_event_id)
+                if event is None:
+                    return
+                if outcome.sent:
+                    audit_key = "_mesh_ack"
+                    audit_value = {"status": "sent", "sent_at": now.isoformat()}
+                else:
+                    audit_key = "_mesh_ack_failed"
+                    audit_value = {
+                        "status": "failed",
+                        "reason": outcome.reason,
+                        "at": now.isoformat(),
+                    }
+                event.payload = {**(event.payload or {}), audit_key: audit_value}
+                event.updated_at = now
+                await session.flush()
+        except Exception:  # noqa: BLE001 — ledger is best-effort (§3.8 audit)
+            logger.exception("ack result ledger write failed item=%s", leader_id)
 
     async def _send_ack_message(self, payload: dict[str, Any]) -> SendOutcome:
         workspace_id = uuid.UUID(str(payload["workspace_id"]))
