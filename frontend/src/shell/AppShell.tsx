@@ -1,7 +1,8 @@
 /**
  * App shell(README §6.12):TopBar + StatusBanner + Sidebar + <main><Outlet/></main>。
  *
- * - 承载实时连接:useRealtime({url: env.wsBaseUrl + '/ws', getToken, enabled, reconciler});
+ * - 承载实时连接:useRealtime({url: resolveWsGatewayUrl(env.wsBaseUrl), getToken, enabled, reconciler});
+ *   网关地址为绝对 ws(s)://(同源部署 wsBaseUrl 空时由页面 location 派生,MES-106);
  *   reconciler 以 REST 整拉 resync_required 给出的 rest URL 对账(§6.7);
  * - RealtimeContext:向页面(如 HomePage 演示区)暴露 {state, client};shell 外为 null;
  * - OverlayControls:App 层持有命令面板/帮助层开关,经本 Context 下达 TopBar;
@@ -12,7 +13,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { Outlet, useMatch, useNavigate } from 'react-router';
 import { MeshApiError, getToken } from '../api';
-import { env } from '../env';
+import { env, resolveWsGatewayUrl } from '../env';
 import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
@@ -241,7 +242,9 @@ export function AppShell(): React.JSX.Element {
   // 以稳定包装函数 + ref 延迟委派到绑定真实 client 的实现。
   const reconcilerRef = useRef<((req: ResyncRequest) => Promise<void>) | null>(null);
   const { state, client } = useRealtime({
-    url: env.wsBaseUrl + '/ws',
+    // 绝对 ws(s):// 网关地址(MES-106):同源部署 wsBaseUrl 为空时经
+    // resolveWsGatewayUrl 由页面 location 派生(WebSocket 构造器拒绝相对地址)。
+    url: resolveWsGatewayUrl(env.wsBaseUrl),
     getToken,
     enabled: hasToken,
     reconciler: (req: ResyncRequest) => {

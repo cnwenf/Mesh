@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveEnv } from './env';
+import { resolveEnv, resolveWsGatewayUrl } from './env';
 
 describe('resolveEnv(运行时配置)', () => {
   it('无 VITE_MESH_* 时使用默认值(mock 服务端)', () => {
@@ -50,5 +50,50 @@ describe('resolveEnv(运行时配置)', () => {
     expect(env.pollingIntervalMs).toBe(4_000);
     const zero = resolveEnv({ VITE_MESH_POLLING_INTERVAL_MS: '0' } as unknown as ImportMetaEnv);
     expect(zero.pollingIntervalMs).toBe(4_000);
+  });
+});
+
+describe('resolveWsGatewayUrl(实时网关绝对 URL,MES-106)', () => {
+  const httpLocation = { protocol: 'http:', host: 'mesh.example.com' };
+  const httpsLocation = { protocol: 'https:', host: 'mesh.example.com' };
+
+  it('wsBaseUrl 为空(同源部署)→ 由页面 location 派生绝对 ws://(公网 HTTP 场景)', () => {
+    expect(resolveWsGatewayUrl('', httpLocation)).toBe('ws://mesh.example.com/ws');
+  });
+
+  it('https 页面 → wss://(安全上下文必须加密 WS)', () => {
+    expect(resolveWsGatewayUrl('', httpsLocation)).toBe('wss://mesh.example.com/ws');
+  });
+
+  it('显式 ws:// 基址原样拼接 /ws', () => {
+    expect(resolveWsGatewayUrl('ws://127.0.0.1:8901', httpLocation)).toBe('ws://127.0.0.1:8901/ws');
+  });
+
+  it('显式基址尾斜杠剔除(不产生 //ws)', () => {
+    expect(resolveWsGatewayUrl('wss://gw.example.com/', httpsLocation)).toBe(
+      'wss://gw.example.com/ws',
+    );
+    expect(resolveWsGatewayUrl('wss://gw.example.com///', httpsLocation)).toBe(
+      'wss://gw.example.com/ws',
+    );
+  });
+
+  it('显式 http(s):// 基址归一为 ws(s)://(WebSocket 构造器拒绝 http scheme)', () => {
+    expect(resolveWsGatewayUrl('http://gw.example.com', httpLocation)).toBe(
+      'ws://gw.example.com/ws',
+    );
+    expect(resolveWsGatewayUrl('https://gw.example.com', httpsLocation)).toBe(
+      'wss://gw.example.com/ws',
+    );
+  });
+
+  it('空白基址视同空(同源派生)', () => {
+    expect(resolveWsGatewayUrl('   ', httpLocation)).toBe('ws://mesh.example.com/ws');
+  });
+
+  it('缺省 location 取 window.location(同源派生,scheme 随页面协议)', () => {
+    const expected =
+      (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws';
+    expect(resolveWsGatewayUrl('')).toBe(expected);
   });
 });

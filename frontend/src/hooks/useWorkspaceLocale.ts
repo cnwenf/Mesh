@@ -20,7 +20,12 @@ export function useWorkspaceLocale(client: MeshApiClient | null): string | null 
   const [locale, setLocale] = useState<string | null>(null);
 
   useEffect(() => {
-    if (client === null) return;
+    // MES-106:client 为 null(未登录,App 层经 hasToken 门控传入)→ 不请求,
+    // 并重置为 null(登出后协商链回系统级,不沿用上一账号的工作区默认)。
+    if (client === null) {
+      setLocale(null);
+      return;
+    }
     let cancelled = false;
 
     fetchWorkspaceDefaultLocale(client)
