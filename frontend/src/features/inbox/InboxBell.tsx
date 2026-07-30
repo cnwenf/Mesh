@@ -6,7 +6,7 @@
  * (inbox.unread_count 为未读数权威源,notification.created 仅更新下拉预览)。
  * 点击通知直达 issue 评论锚点并自动标已读。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Icon, IconButton } from '../../design';
@@ -33,6 +33,7 @@ export function InboxBell(): React.JSX.Element {
   const [latest, setLatest] = useState<readonly Notification[]>([]);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
   const rootRef = useRef<HTMLDivElement>(null);
+  const dropdownId = useId();
 
   // 工作区切换时拉取未读计数。
   useEffect(() => {
@@ -92,16 +93,16 @@ export function InboxBell(): React.JSX.Element {
   }, [open]);
 
   const toggleOpen = useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (next && workspaceId !== null) {
-        void listInbox(client, { workspaceId, limit: DROPDOWN_LIMIT, filter: 'all' })
-          .then((page) => setLatest(page.data.slice(0, DROPDOWN_LIMIT)))
-          .catch(() => undefined);
-      }
-      return next;
-    });
-  }, [client, workspaceId]);
+    // M5:拉取移出 updater(setState updater 须纯)。由闭包 open 计算下一态
+    // (open 在 deps 内,回调总持最新值;避免 updater 内副作用在 StrictMode 双调用下错乱)。
+    const next = !open;
+    setOpen(next);
+    if (next && workspaceId !== null) {
+      void listInbox(client, { workspaceId, limit: DROPDOWN_LIMIT, filter: 'all' })
+        .then((page) => setLatest(page.data.slice(0, DROPDOWN_LIMIT)))
+        .catch(() => undefined);
+    }
+  }, [client, workspaceId, open]);
 
   const handleClick = useCallback(
     (notification: Notification) => {
@@ -123,6 +124,7 @@ export function InboxBell(): React.JSX.Element {
         className="mesh-inbox-bell__button"
         data-testid="inbox-bell"
         aria-expanded={open}
+        aria-controls={open ? dropdownId : undefined}
         onClick={toggleOpen}
       >
         <Icon name="bell" size={20} />
@@ -133,7 +135,15 @@ export function InboxBell(): React.JSX.Element {
         </span>
       ) : null}
       {open ? (
-        <div className="mesh-inbox-bell__dropdown" role="menu" data-testid="inbox-dropdown">
+        // M6:下拉是导航列表(条目跳详情 + 「查看全部」链接),非 ARIA menu 命令菜单;
+        // 用 role=region + aria-label 取代非法 menu 结构(避免缺方向键漫游/menuitem 子结构非法)。
+        <div
+          id={dropdownId}
+          className="mesh-inbox-bell__dropdown"
+          role="region"
+          aria-label={t('a11y.notifications')}
+          data-testid="inbox-dropdown"
+        >
           {latest.length === 0 ? (
             <p className="mesh-inbox-bell__empty mesh-text-caption" data-testid="inbox-bell-empty">
               {t('inbox.empty')}
@@ -144,7 +154,6 @@ export function InboxBell(): React.JSX.Element {
                 <li key={notification.id}>
                   <button
                     type="button"
-                    role="menuitem"
                     className="mesh-inbox-bell__item"
                     data-testid={`inbox-bell-item-${notification.id}`}
                     onClick={() => handleClick(notification)}
@@ -155,7 +164,7 @@ export function InboxBell(): React.JSX.Element {
                     <span className="mesh-inbox-bell__item-preview mesh-text-caption mesh-truncate">
                       {notification.preview}
                     </span>
-                    <time className="mesh-text-caption mesh-tnum">
+                    <time className="mesh-text-caption mesh-tnum" dateTime={notification.created_at}>
                       {formatRelativeTime(notification.created_at, { locale })}
                     </time>
                   </button>

@@ -1597,7 +1597,6 @@
     "members.add.title": "添加成员",
     "members.badge.agent": "AI",
     "members.col.actions": "操作",
-    "members.col.contact": "邮箱 / 简介",
     "members.col.name": "名称",
     "members.col.role": "角色",
     "members.col.status": "状态",
@@ -1941,7 +1940,6 @@
     "runtimes.execution.triggerKind.integration": "集成",
     "runtimes.execution.triggerKind.manual": "手动",
     "runtimes.execution.triggerKind.mention": "提及",
-    "runtimes.execution.triggerKind.unknown": "触发",
     "runtimes.execution.unknownReason": "未知原因",
     "runtimes.field.capabilities": "能力",
     "runtimes.field.concurrency": "并发",
@@ -2473,7 +2471,8 @@
     "chat.list.label": "会话列表",
     "chat.conversation.label": "会话",
     "chat.contextBar.collapse": "收起上下文",
-    "chat.contextBar.expand": "展开上下文"
+    "chat.contextBar.expand": "展开上下文",
+    "inbox.preview.notFound": "未找到该通知——可能已归档或不在当前列表内。"
   },
-  "version": "75ff1d1d"
+  "version": "266f2273"
 }

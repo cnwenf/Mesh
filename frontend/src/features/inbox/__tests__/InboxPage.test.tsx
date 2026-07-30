@@ -385,10 +385,15 @@ describe('InboxPage 预览窗格(双栏详情)', () => {
   it('shows a graceful fallback for an unknown deep-linked id after load', async () => {
     queue();
     renderInbox('/inbox/missing-1');
-    const title = await screen.findByTestId('inbox-preview-title');
-    // 加载完成后仍不存在 → 以 id 为标题 + 源删除提示降级(不崩溃)。
-    expect(title.textContent).toBe('missing-1');
-    expect(screen.getByTestId('inbox-preview-deleted')).toBeTruthy();
+    // H5:不在已加载窗口 ≠ 源删除;呈「未找到/已归档」缺失态,不得以裸 UUID 为标题、
+    // 不得误报 sourceDeleted(comment-inbox §5.3)。
+    await screen.findByTestId('inbox-preview-missing');
+    expect(screen.queryByTestId('inbox-preview-deleted')).toBeNull();
+    expect(
+      screen.getByText(
+        'This notification wasn’t found — it may have been archived or is outside the loaded list.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('shows a skeleton in the preview pane while the list is still loading', async () => {

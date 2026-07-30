@@ -1597,7 +1597,6 @@
     "members.add.title": "Add member",
     "members.badge.agent": "AI",
     "members.col.actions": "Actions",
-    "members.col.contact": "Email / description",
     "members.col.name": "Name",
     "members.col.role": "Role",
     "members.col.status": "Status",
@@ -1941,7 +1940,6 @@
     "runtimes.execution.triggerKind.integration": "Integration",
     "runtimes.execution.triggerKind.manual": "Manual",
     "runtimes.execution.triggerKind.mention": "Mention",
-    "runtimes.execution.triggerKind.unknown": "Triggered",
     "runtimes.execution.unknownReason": "unknown",
     "runtimes.field.capabilities": "Capabilities",
     "runtimes.field.concurrency": "Concurrency",
@@ -2473,7 +2471,8 @@
     "chat.list.label": "Chat sessions",
     "chat.conversation.label": "Conversation",
     "chat.contextBar.collapse": "Hide context",
-    "chat.contextBar.expand": "Show context"
+    "chat.contextBar.expand": "Show context",
+    "inbox.preview.notFound": "This notification wasn’t found — it may have been archived or is outside the loaded list."
   },
-  "version": "97128fe4"
+  "version": "9e334615"
 }

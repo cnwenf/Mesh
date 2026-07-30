@@ -169,9 +169,10 @@ describe('ChatPage 路由化选中(§4.4)', () => {
     stubApi(baseRouter());
     renderChatPage('/chat/ghost');
     await screen.findByTestId('chat-session-sess-1');
-    // 引导失败:占位呈现(无会话面板),列表仍可用
+    // H6:引导 404 → 确证不存在后 replace 回 /chat,最终呈现列表占位(无会话面板)。
+    // 重定向经 effect 异步发生,故 waitFor 占位文案(中间可能短暂 Skeleton)。
     expect(screen.queryByTestId('chat-conversation')).toBeNull();
-    expect(screen.getByText('Select a conversation')).toBeInTheDocument();
+    await screen.findByText('Select a conversation');
   });
 
   it('返回列表(参数归无)→ 清空选中呈现占位', async () => {

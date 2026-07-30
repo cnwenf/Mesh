@@ -65,6 +65,8 @@ export function ChatPage(): React.JSX.Element {
   const [bootstrappedSession, setBootstrappedSession] = useState<ChatSession | null>(null);
   /** 深链引导去重:`${workspaceId}:${sessionId}` 仅拉一次(404 不循环重试)。 */
   const bootstrapAttemptRef = useRef<string | null>(null);
+  /** H6:深链会话确证不存在/失效(引导 404 且列表无命中)。 */
+  const [sessionNotFound, setSessionNotFound] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
 
   // 工作区解析(单一归属口径,同其他页面)。
@@ -163,6 +165,7 @@ export function ChatPage(): React.JSX.Element {
   // 路由离开会话(参数归无)→ 清空引导快照,选中派生回落到占位。
   useEffect(() => {
     if (sessionId === undefined) setBootstrappedSession(null);
+    setSessionNotFound(false);
   }, [sessionId]);
 
   // 深链引导:参数会话不在已加载列表(且无引导快照)时一次性拉取;
@@ -181,7 +184,10 @@ export function ChatPage(): React.JSX.Element {
         if (!cancelled) setBootstrappedSession(session);
       })
       .catch(() => {
-        if (!cancelled) setBootstrappedSession(null);
+        if (!cancelled) {
+          setBootstrappedSession(null);
+          setSessionNotFound(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -197,6 +203,13 @@ export function ChatPage(): React.JSX.Element {
       ? bootstrappedSession
       : null;
   }, [sessionId, sessions, bootstrappedSession]);
+
+  // H6:确证坏/失效深链 → 回列表路由,消除手机死胡同(§8.3)与桌面悬空 URL。
+  useEffect(() => {
+    if (sessionId !== undefined && sessionNotFound) {
+      navigate('/chat', { replace: true });
+    }
+  }, [sessionId, sessionNotFound, navigate]);
 
   const handleSelect = useCallback(
     (session: ChatSession) => {
@@ -291,6 +304,7 @@ export function ChatPage(): React.JSX.Element {
       >
         {selected !== null ? (
           <ConversationPanel
+            key={selected.id}
             client={client}
             workspaceId={workspaceId}
             session={selected}

@@ -523,6 +523,7 @@ export function MembersPage(): React.JSX.Element {
                 {members.map((member) => (
                   <tr
                     key={member.id}
+                    data-testid={`member-row-${member.id}`}
                     className={
                       member.status === 'removed'
                         ? 'mesh-members__row mesh-members__row--removed'

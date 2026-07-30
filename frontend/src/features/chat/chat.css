@@ -83,7 +83,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-inline-size: 0;
   text-align: left;
   padding: var(--space-2);
@@ -244,7 +244,7 @@
 }
 
 .mesh-chat__bubble-role {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
 
@@ -408,7 +408,7 @@
 }
 
 .mesh-chat__composer-upload-name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-chat__composer-upload-meta {
@@ -553,7 +553,7 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   font-size: var(--font-size-sm);
 }
 
@@ -571,6 +571,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+/* H3:作者 display:flex 会盖过 UA 的 [hidden]{display:none},致收起失效且与
+   aria-expanded 矛盾;显式兜底(不依赖全局规则,保持本组件自洽)。 */
+.mesh-chat__context-chips[hidden] {
+  display: none;
 }
 
 /* 收起态摘要:已关联上下文截断一行。 */
@@ -627,7 +633,7 @@
 .mesh-chat__candidate-selected {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   color: var(--color-primary);
 }
 

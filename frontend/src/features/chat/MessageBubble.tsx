@@ -90,7 +90,7 @@ export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
         {isAgent && isFailed ? (
           <RunStateBadge state="failed" label={t('runState.failed')} size="sm" />
         ) : null}
-        <time className="mesh-chat__bubble-time">
+        <time className="mesh-chat__bubble-time" dateTime={message.created_at}>
           {formatRelativeTime(message.created_at, { locale: props.locale })}
         </time>
       </header>

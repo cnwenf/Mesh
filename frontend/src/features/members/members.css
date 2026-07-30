@@ -269,6 +269,19 @@
   }
 }
 
+/* M2/§8.2:平板(600–1023px 仍渲染桌面表格)与粗指针设备,行内控件命中区放大到
+   ≥44px(桌面表格的行菜单触发钮/角色下拉此前约 28–30px,不满足触控硬门槛)。 */
+@media (pointer: coarse), (min-width: 600px) and (max-width: 1023px) {
+  .mesh-members__table .mesh-icon-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+
+  .mesh-members__role-select {
+    min-block-size: 44px;
+  }
+}
+
 /* --- 详情抽屉 ------------------------------------------------------------- */
 .mesh-members__drawer {
   position: fixed;

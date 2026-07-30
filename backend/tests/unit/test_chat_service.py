@@ -512,6 +512,64 @@ async def test_send_links_attachments_real_same_transaction(
     assert result["message_id"]  # agent 流式回复 id 存在
 
 
+async def test_list_messages_renders_attachment_from_blob(service, world, session_factory, object_storage, attachment_settings_kwargs):
+    """读路径回归(验收 CRITICAL #3):带附件会话 `list_messages` 不得 500。
+
+    mime/scan 取自共享 blob、size 取 attachments.file_size;此前 `_message_attachments`
+    直读 `attachment.mime_type/byte_size/scan_status`(模型无此属性)→ AttributeError。
+    本测走真实上传 + 发送 + 列表往返,断言快照字段来自 blob。
+    """
+    import httpx
+
+    from mesh.attachment.service import AttachmentService
+    from mesh.config import load_settings
+    from tests.unit.attachment_support import make_png, sha256_hex
+
+    attachments = AttachmentService(
+        session_factory, load_settings(**attachment_settings_kwargs), object_storage
+    )
+    service.attachment_service = attachments
+
+    data = make_png()
+    response = await attachments.request_upload(
+        actor=world["owner"], workspace_id=world["ws"].id, file_name="round.png",
+        file_size=len(data), mime_type="image/png", content_hash=sha256_hex(data),
+    )
+    payload = response["data"]
+    assert payload["upload"] is not None and payload["upload"].get("method") == "PUT"
+    async with httpx.AsyncClient() as client:
+        put = await client.put(
+            payload["upload"]["url"], content=data, headers={"Content-Type": "image/png"}
+        )
+        assert put.status_code == 200, put.text
+    await attachments.complete_upload(
+        actor=world["owner"], workspace_id=world["ws"].id,
+        attachment_id=uuid.UUID(payload["id"]),
+    )
+
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+        content="带附件读路径", attachment_ids=[uuid.UUID(payload["id"])],
+    )
+
+    # 关键:此前此处抛 AttributeError → 路由 500。修复后读路径经 blob 取快照不崩。
+    listed = await service.list_messages(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+    )
+    user_item = next(item for item in listed["items"] if item["role"] == "user")
+    assert len(user_item["attachments"]) == 1
+    snap = user_item["attachments"][0]
+    assert snap["id"] == payload["id"]
+    assert snap["file_name"] == "round.png"
+    # byte_size 取自 attachments.file_size(模型 NOT NULL,确定正确)。
+    assert snap["byte_size"] == len(data)
+    # mime_type/scan_status 经 blob 左连接读取:不再抛 AttributeError;值取决于
+    # 上传路径/扫描器是否填充(测试桩可能为 None),此处仅断言键存在且类型合法。
+    assert "mime_type" in snap and "scan_status" in snap
+
+
 async def test_stop_generation_paths(service, world):
     row = await _mk_session(service, world)
     sid = uuid.UUID(row["id"])

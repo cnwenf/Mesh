@@ -413,16 +413,17 @@ test.describe('MES-111 批次③ 四组合真实走查', () => {
     });
     await page.screenshot({ path: `${shot}-11-chat-stopped.png` });
 
-    // 重生成:对最近一条 agent 消息点重生成 → 新流式回复。
+    // 重生成:对最近一条 agent 消息点重生成 → 新流式回复。不再静默跳过(验收 #11):
+    // 等待重生成入口出现并滚入视口(手机会话视图下可能需滚动),缺则硬失败。
     const regenerate = page.locator('[data-testid^="chat-regenerate-"]').last();
-    if (await regenerate.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      const beforeCount = await page.locator('[data-testid^="chat-body-"]').count();
-      await regenerate.click();
-      await expect
-        .poll(async () => page.locator('[data-testid^="chat-body-"]').count(), { timeout: 60_000 })
-        .toBeGreaterThanOrEqual(beforeCount);
-      await page.screenshot({ path: `${shot}-12-chat-regenerated.png` });
-    }
+    await regenerate.waitFor({ state: 'visible', timeout: 30_000 });
+    await regenerate.scrollIntoViewIfNeeded();
+    const beforeCount = await page.locator('[data-testid^="chat-body-"]').count();
+    await regenerate.click();
+    await expect
+      .poll(async () => page.locator('[data-testid^="chat-body-"]').count(), { timeout: 60_000 })
+      .toBeGreaterThanOrEqual(beforeCount);
+    await page.screenshot({ path: `${shot}-12-chat-regenerated.png` });
 
     // 附件(真实 minio 直传:小 PNG → 扫描门 → 气泡内附件卡)。
     // 直传 PUT 走浏览器 → MinIO 公网端点;compose 形态的 HTML 入口 CSP 为

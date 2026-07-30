@@ -29,6 +29,9 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
   const navigate = useNavigate();
 
   if (unknownId !== null) {
+    // H5:unknownId 仅表示「不在已加载窗口」(深链旧通知 / 桌面选中后归档出列 /
+    // 切到未读 tab 深链已读),并非源实体被删;故用「未找到/已归档」文案,不得把裸 UUID
+    // 当标题、不得误报 sourceDeleted(comment-inbox §5.3:该文案仅用于源实体删除)。
     return (
       <div className="mesh-inbox-preview mesh-inbox-preview--missing" data-testid="inbox-preview-missing">
         <Button
@@ -40,12 +43,10 @@ export function InboxPreviewPane(props: InboxPreviewPaneProps): React.JSX.Elemen
         >
           {t('inbox.back')}
         </Button>
-        <h2 className="mesh-text-title-3 mesh-inbox-preview__title" data-testid="inbox-preview-title">
-          {unknownId}
-        </h2>
-        <p className="mesh-text-caption mesh-inbox-preview__note" data-testid="inbox-preview-deleted">
-          {t('inbox.preview.sourceDeleted')}
-        </p>
+        <EmptyState
+          title={t('inbox.preview.notFound')}
+          description={t('inbox.preview.selectDescription')}
+        />
       </div>
     );
   }

@@ -97,13 +97,22 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
     await page.getByTestId(`role-select-${joiner}`).selectOption('admin');
     await expect(page.getByTestId(`role-select-${joiner}`)).toHaveValue('admin');
 
-    // 停用:二次确认后状态变为已停用(行内出现「启用」)
-    await page.getByTestId(`disable-${joiner}`).click();
+    // 行操作已迁入底座 Menu(验收 H1):展开该行「Row actions」后按 menuitem 文案点击。
+    const row = page.getByTestId(`member-row-${joiner}`);
+    const openRowMenu = async () => {
+      await row.getByRole('button', { name: 'Row actions' }).click();
+    };
+
+    // 停用:二次确认后状态变为已停用(行菜单出现「Enable」)
+    await openRowMenu();
+    await page.getByRole('menuitem', { name: 'Disable' }).click();
     await page.getByTestId('remove-confirm').click();
-    await expect(page.getByTestId(`enable-${joiner}`)).toBeVisible();
+    await openRowMenu();
+    await expect(page.getByRole('menuitem', { name: 'Enable' })).toBeVisible();
 
     // 移除:确认后软删除,默认名册不再展示该成员
-    await page.getByTestId(`remove-${joiner}`).click();
+    await openRowMenu();
+    await page.getByRole('menuitem', { name: 'Remove' }).click();
     await page.getByTestId('remove-confirm').click();
     await expect(page.getByTestId(`role-select-${joiner}`)).toHaveCount(0);
   });

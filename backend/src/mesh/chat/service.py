@@ -213,34 +213,52 @@ class ChatService:
         }
 
     async def _message_attachments(self, session, *, workspace_id: uuid.UUID,
-                                   message_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[dict]]:
-        """Inline attachment snapshots via the unified attachment module."""
-        from mesh.db.models.attachment import Attachment, AttachmentLink
+                                   message_ids: list[uuid.UUID],
+                                   owner_id: uuid.UUID | None = None) -> dict[uuid.UUID, list[dict]]:
+        """Inline attachment snapshots via the unified attachment module.
+
+        mime/scan/size 取自共享 blob(§2.3):`Attachment` 仅持有 `file_name`/`file_size`,
+        `mime_type`/`scan_status` 在 `AttachmentBlob`——此前直读 `attachment.mime_type`
+        等触发 AttributeError,致带附件会话 `GET messages` 恒 500(验收 CRITICAL #3)。
+        `owner_id` 非空时 JOIN 会话属主做纵深防御(读边界已由 `_load_owned` 在会话级
+        强制;此处再钉一次,使本查询单独调用亦不漏他人私聊附件)。
+        """
+        from mesh.db.models.attachment import Attachment, AttachmentBlob, AttachmentLink
+        from mesh.db.models.chat import ChatMessage, ChatSession
 
         if not message_ids:
             return {}
+        stmt = (
+            select(AttachmentLink.linked_id, Attachment, AttachmentBlob)
+            .join(Attachment, Attachment.id == AttachmentLink.attachment_id)
+            .join(AttachmentBlob, AttachmentBlob.id == Attachment.blob_id)
+            .where(
+                AttachmentLink.workspace_id == workspace_id,
+                AttachmentLink.linked_type == "chat_message",
+                AttachmentLink.linked_id.in_(message_ids),
+                Attachment.deleted_at.is_(None),
+            )
+        )
+        if owner_id is not None:
+            stmt = (
+                stmt.join(ChatMessage, ChatMessage.id == AttachmentLink.linked_id)
+                .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+                .where(ChatSession.owner_id == owner_id)
+            )
         rows = (
             await session.execute(
-                select(AttachmentLink.linked_id, Attachment)
-                .join(Attachment, Attachment.id == AttachmentLink.attachment_id)
-                .where(
-                    AttachmentLink.workspace_id == workspace_id,
-                    AttachmentLink.linked_type == "chat_message",
-                    AttachmentLink.linked_id.in_(message_ids),
-                    Attachment.deleted_at.is_(None),
-                )
-                .order_by(AttachmentLink.position, AttachmentLink.id)
+                stmt.order_by(AttachmentLink.position, AttachmentLink.id)
             )
         ).all()
         grouped: dict[uuid.UUID, list[dict]] = {}
-        for linked_id, attachment in rows:
+        for linked_id, attachment, blob in rows:
             grouped.setdefault(linked_id, []).append(
                 {
                     "id": str(attachment.id),
                     "file_name": attachment.file_name,
-                    "mime_type": attachment.mime_type,
-                    "byte_size": attachment.byte_size,
-                    "scan_status": attachment.scan_status,
+                    "mime_type": blob.mime_type if blob is not None else None,
+                    "byte_size": attachment.file_size,
+                    "scan_status": blob.scan_status if blob is not None else None,
                 }
             )
         return grouped
@@ -524,6 +542,7 @@ class ChatService:
                 attachments = await self._message_attachments(
                     session, workspace_id=workspace_id,
                     message_ids=[row.id for row in rows[:limit]],
+                    owner_id=actor.id,
                 )
                 items = [
                     await self.render_message(
@@ -558,7 +577,8 @@ class ChatService:
             rows = list((await session.execute(stmt.limit(limit + 1))).scalars().all())
             page = rows[:limit]
             attachments = await self._message_attachments(
-                session, workspace_id=workspace_id, message_ids=[row.id for row in page]
+                session, workspace_id=workspace_id, message_ids=[row.id for row in page],
+                owner_id=actor.id,
             )
             # Candidate metadata for selected agent replies (‹ 1/3 › paging).
             # M7: a single window-function query yields both the sibling count
@@ -1227,24 +1247,38 @@ class ChatService:
                 )
             attachments: list[dict] = []
             if attachment_ids and self.attachment_service is not None:
+                # ORM 取代裸 SQL(验收 CRITICAL #4):attachments 表无 mime_type/byte_size
+                # 列(mime/scan 在 attachment_blobs,size 为 file_size);且补可见性门——
+                # 仅纳入经 attachment_links 链接到「本会话」消息的附件,杜绝跨会话/越权预览。
+                from mesh.db.models.attachment import Attachment, AttachmentBlob, AttachmentLink
+                from mesh.db.models.chat import ChatMessage
+
                 rows = (
                     await session.execute(
-                        text(
-                            "SELECT id, file_name, mime_type, byte_size FROM attachments "
-                            "WHERE workspace_id = :ws AND id = ANY(:ids) "
-                            "AND deleted_at IS NULL"
-                        ),
-                        {"ws": workspace_id, "ids": attachment_ids},
+                        select(Attachment, AttachmentBlob)
+                        .join(AttachmentBlob, AttachmentBlob.id == Attachment.blob_id)
+                        .join(
+                            AttachmentLink,
+                            (AttachmentLink.attachment_id == Attachment.id)
+                            & (AttachmentLink.linked_type == "chat_message"),
+                        )
+                        .join(ChatMessage, ChatMessage.id == AttachmentLink.linked_id)
+                        .where(
+                            Attachment.workspace_id == workspace_id,
+                            Attachment.id.in_(attachment_ids),
+                            Attachment.deleted_at.is_(None),
+                            ChatMessage.session_id == chat_session.id,
+                        )
                     )
                 ).all()
                 attachments = [
                     {
-                        "id": str(att_id),
-                        "file_name": file_name,
-                        "mime_type": mime_type,
-                        "byte_size": byte_size,
+                        "id": str(attachment.id),
+                        "file_name": attachment.file_name,
+                        "mime_type": blob.mime_type if blob is not None else None,
+                        "byte_size": attachment.file_size,
                     }
-                    for att_id, file_name, mime_type, byte_size in rows
+                    for attachment, blob in rows
                 ]
         triggers = {"mentions": [], "agent_triggers": []}
         if self.comment_service is not None:

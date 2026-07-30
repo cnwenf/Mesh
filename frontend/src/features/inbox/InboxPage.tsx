@@ -128,36 +128,64 @@ export function InboxPage(): React.JSX.Element {
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
   // 乐观标已读(无导航):行内操作与预览窗格共用。
+  // M9:乐观操作失败不再静默吞错——回滚乐观态 + danger toast。
+  const notifyFailure = useCallback(() => {
+    toast.addToast(t('common.unknownError'), {
+      tone: 'danger',
+      closeLabel: t('common.close'),
+    });
+  }, [toast, t]);
+
   const handleMarkRead = useCallback(
     (notification: Notification) => {
       if (workspaceId === null || notification.read_at !== null) return;
-      void markRead(client, workspaceId, notification.id).catch(() => undefined);
+      void markRead(client, workspaceId, notification.id).catch(() => {
+        setNotifications((prev) =>
+          prev.map((item) =>
+            item.id === notification.id ? { ...item, read_at: null } : item,
+          ),
+        );
+        notifyFailure();
+      });
       setNotifications((prev) =>
         prev.map((item) =>
           item.id === notification.id ? { ...item, read_at: new Date().toISOString() } : item,
         ),
       );
     },
-    [client, workspaceId],
+    [client, workspaceId, notifyFailure],
   );
 
   // 行点击 = 选中(路由 /inbox/:id,push 以支持后退)+ 乐观标已读。
   const handleSelect = useCallback(
     (notification: Notification) => {
       handleMarkRead(notification);
-      navigate(`/inbox/${notification.id}`);
+      // L8:已选中行重复点击不再 push,避免重复历史项。
+      if (notification.id !== selectedId) {
+        navigate(`/inbox/${notification.id}`);
+      }
     },
-    [handleMarkRead, navigate],
+    [handleMarkRead, navigate, selectedId],
   );
 
   const handleArchive = useCallback(
     (notification: Notification) => {
       if (workspaceId === null) return;
+      const snapshot = notifications;
       void archiveNotification(client, workspaceId, notification.id)
-        .then(() => setNotifications((prev) => prev.filter((item) => item.id !== notification.id)))
-        .catch(() => undefined);
+        .then(() => {
+          setNotifications((prev) => prev.filter((item) => item.id !== notification.id));
+          // H5:归档当前选中通知后清选中,避免预览窗悬空(桌面双栏不再突变为缺失态)。
+          if (notification.id === selectedId) {
+            navigate('/inbox', { replace: true });
+          }
+        })
+        .catch(() => {
+          setNotifications(snapshot);
+          notifyFailure();
+        });
     },
-    [client, workspaceId],
+    [client, workspaceId, selectedId, navigate, notifications, notifyFailure],
   );
 
   const handleMute = useCallback(
@@ -167,24 +195,32 @@ export function InboxPage(): React.JSX.Element {
           toast.addToast(t('inbox.mutedToast'), { tone: 'success', closeLabel: t('common.close') });
           setNotifications((prev) => prev.filter((item) => item.issue_id !== issueId));
         })
-        .catch(() => undefined);
+        .catch(() => notifyFailure());
     },
-    [client, toast, t],
+    [client, toast, t, notifyFailure],
   );
 
   const handleReadAll = useCallback(() => {
     if (workspaceId === null) return;
     void readAll(client, workspaceId, filter)
       .then(() => reload())
-      .catch(() => undefined);
-  }, [client, workspaceId, filter, reload]);
+      .catch(() => notifyFailure());
+  }, [client, workspaceId, filter, reload, notifyFailure]);
 
   const handleArchiveRead = useCallback(() => {
     if (workspaceId === null) return;
     void archiveRead(client, workspaceId)
       .then(() => reload())
-      .catch(() => undefined);
-  }, [client, workspaceId, reload]);
+      .catch(() => notifyFailure());
+  }, [client, workspaceId, reload, notifyFailure]);
+
+  // M7:分钟级 tick,使横幅在跨越窗口边界时出现/消失(页面停留 21:58、窗口 22:00 起)。
+  const [quietTick, setQuietTick] = useState(0);
+  useEffect(() => {
+    if (quietHours === null) return undefined;
+    const id = window.setInterval(() => setQuietTick((value) => value + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, [quietHours]);
 
   const quietHoursActive = useMemo(() => {
     if (quietHours === null) return false;
@@ -193,12 +229,13 @@ export function InboxPage(): React.JSX.Element {
       hour: now.getHours(),
       minute: now.getMinutes(),
     });
-  }, [quietHours]);
+    // quietTick 不在函数体读取,仅作为每分钟重算的触发器(读取 new Date());
+    // exhaustive-deps 看不到这层意图,故显式豁免。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quietHours, quietTick]);
 
-  if (status === 'loading' || workspaceId === null) {
-    return <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox__skeleton" />;
-  }
-
+  // M8:错误优先于骨架——否则 status==='error' 且 workspaceId 未解析时会落入
+  // 下方骨架分支无限转,无 ErrorState/重试(对照 ChatPage bootError)。
   if (error !== null) {
     return (
       <ErrorState
@@ -208,6 +245,10 @@ export function InboxPage(): React.JSX.Element {
         onRetry={reload}
       />
     );
+  }
+
+  if (status === 'loading' || workspaceId === null) {
+    return <Skeleton loadingLabel={t('common.loading')} className="mesh-inbox__skeleton" />;
   }
 
   const groups = groupNotifications(notifications);
@@ -365,10 +406,15 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
   ].join(' ');
 
   return (
-    <li className={rowClasses} data-testid={`inbox-row-${notification.id}`}>
+    <li
+      className={rowClasses}
+      data-testid={`inbox-row-${notification.id}`}
+      aria-current={isSelected ? 'true' : undefined}
+    >
       <button
         type="button"
         className="mesh-inbox__row-main"
+        aria-pressed={isSelected}
         onClick={() => onSelect(notification)}
       >
         <span className="mesh-inbox__row-lead">
@@ -405,7 +451,10 @@ function InboxRow(props: InboxRowProps): React.JSX.Element {
             </Badge>
           </span>
         ) : null}
-        <time className="mesh-text-caption mesh-tnum mesh-inbox__row-time">
+        <time
+          className="mesh-text-caption mesh-tnum mesh-inbox__row-time"
+          dateTime={notification.created_at}
+        >
           {formatRelativeTime(notification.created_at, { locale })}
         </time>
       </button>
