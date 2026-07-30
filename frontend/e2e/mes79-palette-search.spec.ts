@@ -20,14 +20,17 @@ test('Ctrl+K 打开面板:空态收藏区 + 分组搜索 + Enter 规范深链', 
   await page.keyboard.press('Control+K');
   const combobox = page.getByRole('combobox');
   await expect(combobox).toBeFocused();
+  // 分区标题断言一律限定面板作用域:页面其余区域(侧栏/移动导航/首页)
+  // 存在同名文案(MES-111 移动端导航),裸 getByText 触发 strict mode 歧义。
+  const palette = page.getByRole('dialog', { name: 'Command palette' });
 
   // 空态:收藏区(mock favorites 1 条)+ 命令区
-  await expect(page.getByText('Favorites')).toBeVisible();
-  await expect(page.getByText('Commands')).toBeVisible();
+  await expect(palette.getByText('Favorites')).toBeVisible();
+  await expect(palette.getByText('Commands')).toBeVisible();
 
   // 输入查询 → 分组结果(mock fixture 两条 issue 标题含 Login)
   await combobox.fill('Login');
-  await expect(page.getByText('Issues')).toBeVisible();
+  await expect(palette.getByText('Issues')).toBeVisible();
   const firstOption = page.getByRole('option', { name: /Login page crashes/ });
   await expect(firstOption).toBeVisible();
   // 命中高亮片段(字重 + 下划线叠加,非颜色唯一信号)

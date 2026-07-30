@@ -494,11 +494,12 @@ async function handleRequest(req, res, url) {
 
     if (req.method === 'GET') {
       if (!issue) {
-        sendJson(res, 404, errorEnvelope('not_found', `issue ${id} not found`));
+        // 不在 CRUD 演示库的 id 放行至下方「收藏解析」搜索 fixture 路由
+        // (sr-* 条目仅存于 SEARCH_FIXTURES);两处皆不命中方落终末 404。
+      } else {
+        sendJson(res, 200, envelope(issue));
         return;
       }
-      sendJson(res, 200, envelope(issue));
-      return;
     }
 
     if (req.method === 'PATCH') {
