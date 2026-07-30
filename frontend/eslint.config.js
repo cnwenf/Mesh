@@ -49,4 +49,13 @@ export default tseslint.config(
     plugins: { mesh: meshRules },
     rules: { 'mesh/no-hardcoded-colors': 'error' },
   },
+  {
+    // emoji/字符图标门禁(design-quality §7.1):导航/按钮/状态/通知/触发器一律
+    // 经统一 SVG 图标系统。UGC 场景(评论回应调色板)为用户内容,经 ignores 排除;
+    // i18n 开发期缺失标记(⚠[key],仅 dev 可见诊断前缀)经行级 mesh-emoji-ok 注释放行。
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['**/__tests__/**', 'src/features/comments/ReactionBar.tsx'],
+    plugins: { mesh: meshRules },
+    rules: { 'mesh/no-emoji-icons': 'error' },
+  },
 );

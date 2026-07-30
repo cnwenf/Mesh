@@ -18,6 +18,7 @@ import { restoreActiveOnboarding } from './features/onboarding';
 import { activeWorkspace, fetchMe } from './features/members/api';
 import { getIssueByIdentifier } from './features/issues/api';
 import { ThemeProvider, ToastProvider } from './design';
+import { StyleguidePage } from './design/StyleguidePage';
 import { useWorkspaceLocale } from './hooks/useWorkspaceLocale';
 import { I18nProvider, useT } from './i18n';
 import { CommandPalette, ShortcutHelp, ShortcutProvider } from './shortcuts';
@@ -180,6 +181,9 @@ function ShellProviders(): React.JSX.Element {
           <ErrorBoundary>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              {/* 设计系统 fixture 页(MES-115 视觉回归基础):公开、无业务数据,
+                  组件状态矩阵走查与 1440/1024/768/390 × 亮暗拍摄对象 */}
+              <Route path="/styleguide" element={<StyleguidePage />} />
               {/* 设备码授权确认页(auth.md §3.1.1;CLI mesh auth login 的批准侧) */}
               <Route path="/device" element={<DeviceAuthorizationPage />} />
               <Route path="/forgot" element={<ForgotPasswordPage />} />

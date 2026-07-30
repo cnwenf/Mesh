@@ -298,7 +298,7 @@
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--color-bg) 70%, transparent);
-  z-index: 50;
+  z-index: var(--z-overlay); /* 全屏遮罩层(§11.2 令牌;原 50 散落值清偿) */
 }
 
 .mesh-issues__move-dialog {

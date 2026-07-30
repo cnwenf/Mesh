@@ -208,7 +208,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-raised);
-  z-index: 10;
+  z-index: var(--z-dropdown); /* 弹层面板层(§11.2 令牌;原 10 散落值清偿) */
   padding: var(--space-2);
 }
 
