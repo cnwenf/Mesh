@@ -86,7 +86,9 @@ def make_config(
         attempt_root=attempt_root,
         task_token=task_token,
         issue_id=ISSUE_ID,
-        grants={"issue:read": "read_only", "issue:comment:write": "write"},
+        # Frozen capability_grants are keyed BY BROKER ACTION NAME (§3.3) —
+        # exactly what the server freezes into the AttemptSpec.
+        grants={"issue.read": "read_only", "issue.comment": "write"},
         nonce=uuid.uuid4().hex,
         sandbox_uid=65534,
         cgroup_marker="",
@@ -150,6 +152,40 @@ class TestStart:
         sec = AttemptSecurity(cfg, api=StubApi(), journal=journal)
         grants = sec._broker_grants()
         assert grants == {"issue.read": "read_only", "issue.comment": "write"}
+
+    def test_broker_grants_pass_through_squad_actions(self, journal, attempt_root):
+        """Orchestrator attempts freeze squad.* grants — they reach the
+        broker gate unchanged (MES-95 leader decomposition path)."""
+        cfg = make_config(attempt_root)
+        cfg = SecurityConfig(**{
+            **cfg.__dict__,
+            "grants": {
+                "issue.read": "read_only",
+                "squad.members": "read_only",
+                "squad.subtasks": "write",
+            },
+        })
+        sec = AttemptSecurity(cfg, api=StubApi(), journal=journal)
+        grants = sec._broker_grants()
+        assert grants["squad.members"] == "read_only"
+        assert grants["squad.subtasks"] == "write"
+        assert grants["issue.read"] == "read_only"
+
+    def test_broker_grants_drop_unknown_or_malformed(self, journal, attempt_root):
+        """Fail-closed: unknown capabilities and bad permissions never
+        become broker grants."""
+        cfg = make_config(attempt_root)
+        cfg = SecurityConfig(**{
+            **cfg.__dict__,
+            "grants": {
+                "totally.unknown": "write",
+                "mount": "write",  # permanently forbidden gate
+                "issue.read": "confirm_required",  # not a broker permission
+                42: "write",
+            },
+        })
+        sec = AttemptSecurity(cfg, api=StubApi(), journal=journal)
+        assert sec._broker_grants() == {}
 
 
 class TestApprovalProtocol:

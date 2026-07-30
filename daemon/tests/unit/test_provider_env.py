@@ -2,6 +2,7 @@
 attempt-private read-only configs, and hostile repo-file enumeration
 (ISO-09 negative basis: repo config files are plain files, never loaded)."""
 
+import ast
 import json
 import os
 import stat
@@ -208,15 +209,34 @@ class TestProviderConfigFiles:
         mcp = json.loads(paths.mcp_json.read_text())
         servers = mcp["mcpServers"]
         assert list(servers) == ["mesh-task-broker"]  # platform broker ONLY
-        assert servers["mesh-task-broker"]["path"] == "/run/mesh/broker.sock"
+        # §1.5: the pinned provider only supports stdio/sse/http MCP
+        # transports — a raw unix-socket entry would be silently ignored, so
+        # the broker is registered as a stdio server running the platform
+        # bridge from the read-only run dir mount.
+        entry = servers["mesh-task-broker"]
+        assert entry["type"] == "stdio"
+        assert entry["command"] == "/usr/bin/python3"
+        assert entry["args"] == ["/run/mesh_task_broker_mcp.py"]
+        # The bridge script is written alongside, 0444, and is valid Python.
+        assert paths.mcp_bridge is not None
+        bridge_source = paths.mcp_bridge.read_text()
+        ast.parse(bridge_source)
+        assert "mesh-task-broker" in bridge_source
         settings = json.loads(paths.settings_json.read_text())
         assert settings["effort"] == "high"
         assert paths.system_md.read_text() == "trusted platform policy"
-        for path in (paths.mcp_json, paths.settings_json, paths.system_md):
+        for path in (paths.mcp_json, paths.settings_json, paths.system_md, paths.mcp_bridge):
             mode = stat.S_IMODE(path.stat().st_mode)
             assert mode == 0o444  # ro-owned by daemon; ro-mounted into sandbox
             if os.getuid() == 0:
                 assert path.stat().st_uid == 0  # daemon-owned, task cannot rewrite
+
+    async def test_no_broker_socket_means_no_mcp_server_and_no_bridge(self, tmp_path):
+        paths = await write_provider_configs(
+            tmp_path, system_prompt="s", broker_socket_path=""
+        )
+        assert json.loads(paths.mcp_json.read_text())["mcpServers"] == {}
+        assert paths.mcp_bridge is None
 
     async def test_settings_default_is_empty_object(self, tmp_path):
         paths = await write_provider_configs(

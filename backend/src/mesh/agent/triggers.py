@@ -44,7 +44,7 @@ from mesh.agent.guardrails import (
     evaluate_assign_trigger,
 )
 from mesh.agent.service import WORKSPACE_AGENTS_CHANNEL
-from mesh.agent.snapshot import build_config_snapshot
+from mesh.agent.snapshot import build_config_snapshot, compute_snapshot_digest
 from mesh.db.models.agent import Agent
 from mesh.db.models.issue import Issue
 from mesh.db.models.label import IssueLabel, Label
@@ -144,6 +144,49 @@ def supersede_idempotency_key(
     return hashlib.sha256(
         f"{agent_id}|{issue_id}|{trigger_event_id}|cancel_superseded".encode()
     ).hexdigest()
+
+
+# §3.3 broker action grants frozen into every agent AttemptSpec at enqueue
+# time. They mirror the task-token scopes (runtime/task_tokens.py) so the
+# daemon's ToolBroker gate and the server's task-token scope check enforce
+# the SAME action set. These are GRANTS (what the run's broker may attempt),
+# NOT required_capabilities (what runtime may claim the execution) — the two
+# must never be conflated, or no runtime could ever claim.
+DEFAULT_BROKER_GRANTS: tuple[dict, ...] = (
+    {"capability": "issue.read", "permission": "read_only"},
+    {"capability": "issue.comment", "permission": "write"},
+    {"capability": "issue.status", "permission": "write"},
+    {"capability": "project.read", "permission": "read_only"},
+)
+
+# Squad leaders' orchestrator attempts additionally may read the squad roster
+# and submit the decomposition of the CURRENT task (§2.2 S-05 "current squad
+# task operations", squad.md §5.3). Executor/aggregator roles never get these.
+ORCHESTRATOR_BROKER_GRANTS: tuple[dict, ...] = (
+    {"capability": "squad.members", "permission": "read_only"},
+    {"capability": "squad.subtasks", "permission": "write"},
+)
+
+
+def _inject_broker_grants(config_snapshot: dict, squad_role: str | None) -> None:
+    """Append the platform broker grants to the frozen snapshot (in place)
+    and recompute the §2.1 digest over the final content.
+
+    Deterministic: existing grants win on capability collision, the merged
+    list is capability-sorted, so identical inputs freeze identical digests.
+    """
+    grants = [g for g in (config_snapshot.get("capability_grants") or []) if isinstance(g, dict)]
+    known = {g.get("capability") for g in grants}
+    extras: tuple[dict, ...] = DEFAULT_BROKER_GRANTS
+    if squad_role == "orchestrator":
+        extras = DEFAULT_BROKER_GRANTS + ORCHESTRATOR_BROKER_GRANTS
+    for grant in extras:
+        if grant["capability"] not in known:
+            grants.append(dict(grant))
+            known.add(grant["capability"])
+    grants.sort(key=lambda g: str(g.get("capability")))
+    config_snapshot["capability_grants"] = grants
+    config_snapshot["digest"] = compute_snapshot_digest(config_snapshot)
 
 
 async def _load_agent_and_member(
@@ -407,9 +450,20 @@ async def assign_orchestration_handler(
         "untrusted_context": issue_context,
     }
     squad_task_id = payload.get("squad_task_id")
+    squad_role: str | None = None
     if squad_task_id:
+        squad_role = str(payload.get("squad_role") or "executor")
         task_spec["squad_task_id"] = str(squad_task_id)
-        task_spec["squad_role"] = str(payload.get("squad_role") or "executor")
+        task_spec["squad_role"] = squad_role
+    # §3.3 broker action grants — frozen into the AttemptSpec at enqueue time
+    # so the daemon's ToolBroker gate can authorize platform tool calls from
+    # the run (runtime-executor §2.2). Mirrors the task-token scopes; the
+    # orchestrator-only squad grants let the leader's run decompose the
+    # CURRENT task via the task broker (squad.md §5.3). Appended AFTER
+    # build_config_snapshot (NOT via declared_capabilities — those would
+    # pollute required_capabilities and break claim matching), then the
+    # §2.1 server-side digest is recomputed over the final content.
+    _inject_broker_grants(snapshot_parts["config_snapshot"], squad_role)
     if skill_instructions is not None:
         task_spec["skill_instructions"] = skill_instructions
         task_spec["injected_skills"] = injected_skills

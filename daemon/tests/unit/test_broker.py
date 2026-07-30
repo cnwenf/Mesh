@@ -45,10 +45,12 @@ class StubMeshTransport(httpx.AsyncBaseTransport):
             code = self.fail_next
             self.fail_next = None
             return httpx.Response(403, json={"error": {"code": code}})
-        if request.url.path.endswith(f"/issues/{ISSUE_ID}"):
+        if request.url.path.endswith(f"/issues/{ISSUE_ID}") and request.method == "GET":
             return httpx.Response(200, json={"data": {"id": ISSUE_ID, "title": "demo"}})
         if request.url.path.endswith(f"/issues/{ISSUE_ID}/comments") and request.method == "POST":
             return httpx.Response(201, json={"data": {"id": "c1"}})
+        if request.url.path.endswith(f"/issues/{ISSUE_ID}/status") and request.method == "PATCH":
+            return httpx.Response(200, json={"data": {"id": ISSUE_ID, "status": "done"}})
         return httpx.Response(404, json={"error": {"code": "not_found"}})
 
 

@@ -383,10 +383,15 @@ class TestRunContract:
         [e async for e in adapter.run(request_for(plan))]
         mcp = json.loads((plan.host_run_dir / "mcp.json").read_text())
         assert list(mcp["mcpServers"]) == ["mesh-task-broker"]
-        assert mcp["mcpServers"]["mesh-task-broker"]["path"] == "/run/mesh-broker.sock"
+        # stdio transport running the platform bridge from the ro run-dir
+        # mount (the pinned provider ignores raw unix-socket MCP entries).
+        entry = mcp["mcpServers"]["mesh-task-broker"]
+        assert entry["type"] == "stdio"
+        assert entry["command"] == "/usr/bin/python3"
+        assert entry["args"] == ["/run/mesh_task_broker_mcp.py"]
         system_md = (plan.host_run_dir / "system.md").read_text()
         assert system_md == "TRUSTED platform policy"
-        for name in ("mcp.json", "settings.json", "system.md"):
+        for name in ("mcp.json", "settings.json", "system.md", "mesh_task_broker_mcp.py"):
             mode = stat.S_IMODE((plan.host_run_dir / name).stat().st_mode)
             assert mode == 0o444
 

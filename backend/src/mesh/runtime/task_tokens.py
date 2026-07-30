@@ -53,6 +53,28 @@ DEFAULT_TASK_SCOPES: dict = {
     "denied": ["agent:trigger"],
 }
 
+# §2.2 S-05 "current squad task operations": the squad leader's orchestrator
+# attempt additionally gets the scoped read/decompose methods the task broker
+# needs to decompose ON THE CURRENT SQUAD TASK ONLY (squad.md §5.3: the server
+# still verifies the calling attempt's agent IS that task's orchestrator).
+# Executor / aggregator attempts never receive these — decomposition is a
+# leader-only side effect.
+SQUAD_ORCHESTRATOR_METHODS: tuple[str, ...] = (
+    "squad:task:read",
+    "squad:task:decompose",
+)
+
+
+def squad_role_of_task_spec(task_spec: object) -> str | None:
+    """The frozen squad role an execution's ``task_spec`` carries
+    (squad.md §4.4). Drives task-token scope widening for a leader's
+    orchestrator attempt (§2.2 S-05). Non-squad executions and malformed
+    specs yield None — the default scopes apply."""
+    if not isinstance(task_spec, dict):
+        return None
+    role = task_spec.get("squad_role")
+    return role if isinstance(role, str) and role else None
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -78,10 +100,14 @@ async def issue_task_token(
     issue_id: uuid.UUID | None = None,
     project_id: uuid.UUID | None = None,
     agent_id: uuid.UUID | None = None,
+    squad_role: str | None = None,
 ) -> tuple[str, AttemptTaskToken]:
     """Issue a new task token for an attempt. Returns (plaintext, row).
 
     Revokes any existing active token for the attempt first (rotation).
+    ``squad_role`` (from the execution's frozen ``task_spec``) widens the
+    method scope for a squad leader's orchestrator attempt ONLY (§2.2 S-05
+    current-squad-task operations); every other role keeps the defaults.
     """
     now = _now()
     # Revoke existing active token (rotation on renew).
@@ -100,6 +126,8 @@ async def issue_task_token(
     expires_at = now + timedelta(seconds=ttl_seconds)
 
     scopes = dict(DEFAULT_TASK_SCOPES)
+    if squad_role == "orchestrator":
+        scopes["methods"] = [*DEFAULT_TASK_SCOPES["methods"], *SQUAD_ORCHESTRATOR_METHODS]
     scopes["workspace_id"] = str(workspace_id)
     scopes["attempt_id"] = str(attempt_id)
     scopes["runtime_id"] = str(runtime_id)

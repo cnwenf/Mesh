@@ -443,6 +443,8 @@ async def renew_lease(
         task_token_plaintext = None
         task_token_expires = None
         if execution is not None:
+            from mesh.runtime.task_tokens import squad_role_of_task_spec
+
             task_token_plaintext, token_row = await issue_task_token(
                 session,
                 workspace_id=runtime.workspace_id,
@@ -452,6 +454,7 @@ async def renew_lease(
                 lease_expires_at=attempt.lease_expires_at,
                 issue_id=execution.issue_id,
                 agent_id=execution.agent_id,
+                squad_role=squad_role_of_task_spec(execution.task_spec),
             )
             task_token_expires = token_row.expires_at.isoformat()
 
