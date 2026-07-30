@@ -5,9 +5,12 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-07-30
+
 ### Fixed
 
 - **integrations 迁移链单头修复**:integrations 迁移重编号 `0030 → 0033`(`0030_integrations.py → 0033_integrations.py`;`revision` 0030→0033、`down_revision` 改接主干 device-auth 链 head `0032`)——MES-80 device-auth 链(`0030`/`0031`/`0032`)先期合入 main 后,原 `0030_integrations` 与之形成 alembic 多头及 revision ID 碰撞;重编号后 `alembic upgrade head` 单头单链(0001 → 0033)。纯链修复:无 DDL 变更,`0030_integrations` 从未随任何已发布 tag 落地,线上无迁移数据影响。
+- **MES-106 未登录守卫 / 401 全局兜底 / WS 公网 HTTP(MES-106,auth.md §4.1)**:修复手机端实测体验阻断——未登录访问首页等受保护页不再停在原页连收 401、满屏「内容加载失败」。`RequireAuth` pathless layout 守卫包裹全部受保护 shell 子路由:未登录访问不渲染受保护子树、不发起受保护请求,统一 `Navigate` 到 `/login?next=<原路径(含查询串,经编码)>`,登录成功经 `safeNextPath` 守卫回跳原页(登录页另受理 `?redirect=` 同义别名);邀请接受预览页留在守卫之外(匿名可见,预览 200 不受影响);已登录访问 `/login` 反向回跳。API 客户端 401 全局兜底:非鉴权豁免端点 401 统一「清 access token + 整页跳 `/login?next=<当前路径>`」;鉴权豁免端点(登录/注册/MFA 验证/忘记密码/重置/验证邮箱/OAuth 往返)业务错误就地呈现、登录页上仅清 token 不成环。匿名 shell 挂载零鉴权请求:`useWorkspaceLocale` / `usePreferencesBootstrap` / `useInboxContext` / `useOnboarding` 全部经 `hasToken` 门控(消除匿名守卫跳转窗口与公开邀请页的游离 `users/me` 401——即 issue 复现的后端日志症状)。实时网关地址归一绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空、nginx 反代 `/ws`)由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),显式 `http(s)://` 基址归一为 `ws(s)://`,公网 HTTP 实时可用。真实 e2e(production 鉴权 + 公网 HTTP + Pixel 7 视口隔离栈)7/7(守卫跳转 / 邀请预览无受保护请求 / 深层路径回跳 / 已登录反向回跳 / 篡改 token 401 全局跳转 / WS `auth_ok` 首帧)+ 验收独立脚本 13/13(含开放重定向防御 `//evil.example` 回落首页、错误密码就地呈现不成环);单测 2910 例,整体覆盖率 97.77%(branches 91.22%),变更行 133/133 = 100%。
 
 ## [0.22.0] - 2026-07-30
 
