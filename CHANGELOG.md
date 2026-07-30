@@ -5,6 +5,23 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-07-30
+
+前端生产就绪收尾(MES-107 去脚手架化):消除用户手机端实测暴露的「半成品」观感,前端由工程脚手架形态收口为真实产品 UI。
+
+### Changed
+
+- **真实首页替换骨架演示区**:`HomePage` 重写为工作区仪表盘——`GET /users/me` 问候语 + 工作区卡片列表(深链 `/w/:slug` + 角色徽标)+ 活跃工作区 issue 仪表盘(`listIssues` 游标分页 + `workspace:{ws}:issues` 实时增量合并 + 快捷创建 + 加载失败重试);无成员身份呈空态 + 创建工作区向导入口。整体移除 demo 组件与对不存在端点 `/api/v1/demo/issues` 的依赖。
+- **登录页清理**:删除 dev 令牌直填块与过时 `login.phaseNote`。
+- **路由 / Tab 接通**:补齐 Sidebar 技能项缺失的 `/skills`、`/skills/:skillId`、`/marketplace` 路由(此前点击即 404);agent 详情「技能」Tab 接通已实现的 `AgentSkillsTab`(替换「即将上线」占位)。
+- **占位 / 演示残留清理**:`PlaceholderPage` 与前端根 `placeholder/` 静态占位目录删除;i18n 双目录清理 `demo.*` / `home.demo*` / `login.phaseNote` / `members.add.agentComingSoon` / `agents.skills.placeholder*` 等残留键并新增仪表盘键(版本哈希重算);`roles.rosterUnavailable` 过时文案改写;env 移除 `demoChannel`。
+- **契约 mock 与 e2e 去 demo 化**:mock 新增 `/users/me`、issue 端点挂真实路径、治具端点更名 `/api/v1/mock/*`;e2e helpers 改真实邮箱/密码登录 + 会话注入;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + Pixel 7 双视口)。
+- **文档与实现对齐**:根 README 目录总览表 frontend 行改为真实产品 UI 描述(消除与同源部署描述的自相矛盾)并补记本里程碑;`frontend/README.md` 同步;`AppShell` 头注「HomePage 演示区」改为「首页工作区仪表盘」。
+
+### 验证
+
+单测 2905/2905、整体行覆盖 97.78%(HomePage 99.63%)、per-file ≥90 与变更代码双门禁通过;typecheck / eslint+stylelint / 生产构建 0 错;mock 契约 e2e 25/25;真实 e2e(production 鉴权 + 公网 HTTP,桌面 + Pixel 7)8/8;验收员独立真机浏览器复测(桌面 + 手机)全过——守卫跳登录、登录页无 dev 块/phaseNote、首页真实加载无演示组件/加载失败、空态→向导建区→卡片深链、仪表盘快捷创建真实落库、`/skills` 与 `/marketplace` 非 404、agent 技能 Tab 接真实绑定 UI;全站 grep 无占位/演示残留、无参考源泄漏;PR #91 CI 6/6 绿合入 main。
+
 ## [0.23.0] - 2026-07-30
 
 命脉层真 LLM 全链路 e2e 入库并真实跑通(MES-95,MES-91 交付物 B,runtime-executor.md §5.4):多 agent 组队、真烧 LLM、非桩非 mock,产品核心价值端到端可复跑验证。
