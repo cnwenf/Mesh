@@ -26,6 +26,7 @@ import {
   setWorkspaceDefaultFromPreview,
 } from '../../state/workspaceThemeBridge';
 import { formatWithZoneAnnotation, useT } from '../../i18n';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useSettingsStore } from '../../state/settingsStore';
 
 type AcceptPhase =
@@ -47,6 +48,8 @@ export function InviteAcceptPage(props: InviteAcceptPageProps): React.JSX.Elemen
   const location = useLocation();
   const preferences = useSettingsStore((state) => state.preferences);
   const [phase, setPhase] = useState<AcceptPhase>({ kind: 'previewing' });
+
+  useDocumentTitle(t('title.invite'));
 
   const loadPreview = useCallback(async (): Promise<void> => {
     setPhase({ kind: 'previewing' });

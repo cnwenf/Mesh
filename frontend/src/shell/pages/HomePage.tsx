@@ -14,16 +14,21 @@ import { Link } from 'react-router';
 import { errorToI18nKey, getApiClient, MeshApiError } from '../../api';
 import type { MeshApiClient } from '../../api';
 import { Button, EmptyState, ErrorState, Input, Skeleton, useToast } from '../../design';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { createIssue, listIssues, workspaceIssuesChannel } from '../../features/issues/api';
 import { applyIssueListFrame } from '../../features/issues/realtime';
 import type { IssueSummary } from '../../features/issues/types';
 import { activeWorkspace, fetchMe } from '../../features/members/api';
 import type { MeResponse, Membership } from '../../features/members/types';
+import { OnboardingChecklist } from '../../features/onboarding';
+import { listProjects } from '../../features/projects/api';
+import type { ProjectSummary } from '../../features/projects/types';
 import { CreateWorkspaceWizard } from '../../workspace/CreateWorkspaceWizard';
 import { useRealtimeContext } from '../AppShell';
 
 const DASHBOARD_PAGE_SIZE = 5;
+const PROJECTS_PAGE_SIZE = 6;
 
 export interface HomePageProps {
   client?: MeshApiClient;
@@ -63,6 +68,7 @@ export function HomePage(props: HomePageProps): React.JSX.Element {
         <ErrorState
           title={t('state.errorTitle')}
           description={t(errorKey)}
+          impact={t('home.errorImpact')}
           retryLabel={t('common.retry')}
           onRetry={handleRetry}
         />
@@ -93,20 +99,23 @@ function HomeContent(props: HomeContentProps): React.JSX.Element {
   const active = activeWorkspace(me.memberships);
   const displayName = me.user.display_name !== '' ? me.user.display_name : me.user.email;
 
+  // 标签页标题随语义变化(G19)。
+  useDocumentTitle(t('title.home'));
+
   const openWizard = useCallback(() => setWizardOpen(true), []);
   const closeWizard = useCallback(() => setWizardOpen(false), []);
 
   return (
     <div className="mesh-page mesh-home">
       <header className="mesh-home__hero">
-        <h1 className="mesh-page__title" data-testid="home-greeting">
+        <h1 className="mesh-home__greeting mesh-text-display-sm" data-testid="home-greeting">
           {t('home.greeting', { name: displayName })}
         </h1>
         <p className="mesh-home__subtitle">{t('home.subtitle')}</p>
       </header>
 
       <section className="mesh-home__section" aria-label={t('home.workspacesTitle')}>
-        <h2 className="mesh-home__heading">{t('home.workspacesTitle')}</h2>
+        <h2 className="mesh-home__heading mesh-text-title-3">{t('home.workspacesTitle')}</h2>
         {me.memberships.length === 0 ? (
           <div className="mesh-home__empty" data-testid="home-no-workspaces">
             <EmptyState
@@ -127,6 +136,10 @@ function HomeContent(props: HomeContentProps): React.JSX.Element {
       </section>
 
       {active !== null ? (
+        <ProjectsSection client={client} workspaceId={active.workspace_id} />
+      ) : null}
+
+      {active !== null ? (
         <IssueFeedSection
           client={client}
           workspaceId={active.workspace_id}
@@ -136,6 +149,68 @@ function HomeContent(props: HomeContentProps): React.JSX.Element {
 
       <CreateWorkspaceWizard open={wizardOpen} onClose={closeWizard} client={client} />
     </div>
+  );
+}
+
+interface ProjectsSectionProps {
+  client: MeshApiClient;
+  workspaceId: string;
+}
+
+/**
+ * 最近项目小组件(design-quality §3.2 首页行「最近项目」)。真实 API:
+ * listProjects 取最近更新的项目;加载/失败/空均安静处理(失败不阻断工作台,
+ * 空态不渲染区块——有数据才呈现,无数据不展示演示内容)。
+ */
+function ProjectsSection(props: ProjectsSectionProps): React.JSX.Element | null {
+  const { client, workspaceId } = props;
+  const t = useT();
+  // null = 加载中/失败(不渲染);[] = 空(不渲染);有数据才呈现。
+  const [projects, setProjects] = useState<readonly ProjectSummary[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listProjects(client, workspaceId, { limit: PROJECTS_PAGE_SIZE })
+      .then((page) => {
+        if (!cancelled) setProjects(page.data);
+      })
+      .catch(() => {
+        // 项目不可得不阻断工作台:安静隐藏本小组件。
+        if (!cancelled) setProjects(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
+
+  if (projects === null || projects.length === 0) return null;
+
+  return (
+    <section
+      className="mesh-home__section"
+      aria-label={t('home.projectsTitle')}
+      data-testid="home-projects"
+    >
+      <h2 className="mesh-home__heading mesh-text-title-3">{t('home.projectsTitle')}</h2>
+      <ul className="mesh-home__workspace-list">
+        {projects.map((project) => (
+          <li
+            key={project.id}
+            className="mesh-home__workspace"
+            data-testid={'home-project-' + project.key}
+          >
+            <Link className="mesh-home__workspace-link" to={'/projects/' + project.id}>
+              <span className="mesh-home__workspace-name">{project.name}</span>
+              <span className="mesh-home__workspace-meta">
+                {project.key}
+                {' · '}
+                {t('home.projectOpenIssues', { count: project.open_issues })}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -266,9 +341,7 @@ function IssueFeedSection(props: IssueFeedSectionProps): React.JSX.Element {
       const created = await createIssue(client, workspaceId, { title });
       // created 帧与本响应可能先后到达:按 id 去重,避免重复行。
       setIssues((prev) =>
-        prev === null || prev.some((issue) => issue.id === created.id)
-          ? prev
-          : [...prev, created],
+        prev === null || prev.some((issue) => issue.id === created.id) ? prev : [...prev, created],
       );
       setNewTitle('');
     } catch (error) {
@@ -281,23 +354,22 @@ function IssueFeedSection(props: IssueFeedSectionProps): React.JSX.Element {
   const sectionTitle = t('home.dashboardTitle', { workspace: workspaceName });
 
   return (
-    <section
-      className="mesh-home__section"
-      aria-label={sectionTitle}
-      data-testid="home-dashboard"
-    >
-      <h2 className="mesh-home__heading">{sectionTitle}</h2>
+    <section className="mesh-home__section" aria-label={sectionTitle} data-testid="home-dashboard">
+      <h2 className="mesh-home__heading mesh-text-title-3">{sectionTitle}</h2>
 
       {feedErrorKey !== null ? (
         <ErrorState
           title={t('state.errorTitle')}
           description={t(feedErrorKey)}
+          impact={t('home.feedErrorImpact')}
           retryLabel={t('common.retry')}
           onRetry={retryFeed}
         />
       ) : null}
 
-      {feedErrorKey === null && issues === null ? <Skeleton loadingLabel={t('state.loading')} /> : null}
+      {feedErrorKey === null && issues === null ? (
+        <Skeleton loadingLabel={t('state.loading')} />
+      ) : null}
 
       {feedErrorKey === null && issues !== null ? (
         <div className="mesh-home__feed">
@@ -314,10 +386,15 @@ function IssueFeedSection(props: IssueFeedSectionProps): React.JSX.Element {
           </form>
 
           {issues.length === 0 ? (
-            <EmptyState
-              title={t('home.feedEmptyTitle')}
-              description={t('home.feedEmptyDescription')}
-            />
+            <div className="mesh-home__onboarding" data-testid="home-onboarding">
+              <EmptyState
+                title={t('home.feedEmptyTitle')}
+                description={t('home.feedEmptyDescription')}
+              />
+              {/* 无数据进 onboarding(design-quality §3.2 首页行):清单自管显隐,
+                  完成/dismiss 后自动收起;有数据的工作台不渲染本分支(无演示内容)。 */}
+              <OnboardingChecklist />
+            </div>
           ) : (
             <ul className="mesh-home__issue-list" data-testid="home-issue-list">
               {issues.map((issue) => (
