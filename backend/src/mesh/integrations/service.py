@@ -259,6 +259,116 @@ class IntegrationService:
             raise NotFoundError("integration not found")
         return integration
 
+    async def test_send(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        conversation_ref: str,
+        conversation_type: str = "group",
+        user_key: str = "",
+        redis: object,
+        api_base: str | None = None,
+        http_client: object | None = None,
+    ) -> dict[str, Any]:
+        """POST .../integrations/{id}/test-send (§3.9, diagnostics split).
+
+        Sends a test text through the OpenAPI outbound adapter. Outbound
+        NEVER depends on the Stream receive channel — failures surface as
+        502 ``upstream_error`` (or credential hints), NEVER as 503
+        ``stream_channel_unavailable`` (that code is receive-diagnostic
+        only, §3.5).
+        """
+        from mesh.errors import UpstreamError
+        from mesh.integrations.im_outbound import (
+            ConversationTarget,
+            make_adapter,
+        )
+
+        async with self._sf() as session:
+            await set_tenant_context(session, workspace_id)
+            integration = await session.get(Integration, integration_id)
+            if integration is None or integration.deleted_at is not None:
+                raise NotFoundError("integration not found")
+            if integration.kind != "im_dingtalk":
+                raise BusinessRuleError(
+                    "test-send is only supported for im_dingtalk integrations",
+                    code="invalid_request",
+                )
+            corp_id = str((integration.config or {}).get("corp_id") or "")
+            adapter = await make_adapter(
+                redis=redis,
+                integration=integration,
+                signing_secret=self._signing_secret,
+                api_base=api_base or "https://api.dingtalk.com",
+                http_client=http_client,
+            )
+        if adapter is None:
+            raise UpstreamError(
+                "integration is disabled or has no credentials",
+                code="upstream_error",
+                details={"reason": "integration_unavailable"},
+            )
+        target = ConversationTarget(
+            workspace_id=workspace_id,
+            integration_id=integration_id,
+            provider_tenant_key=corp_id,
+            external_ref=conversation_ref,
+            conversation_type=conversation_type,
+            sender_key=user_key,
+        )
+        outcome = await adapter.send_text(target, "Mesh 测试发送成功 ✅")
+        if outcome.sent:
+            return {"status": "sent", "conversation_ref": conversation_ref}
+        raise UpstreamError(
+            "test send failed",
+            code="upstream_error",
+            details={"reason": outcome.reason, "rate_limit_code": outcome.rate_limit_code},
+        )
+
+    async def get_stream_status(
+        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
+    ) -> dict[str, Any]:
+        """GET .../integrations/{id}/stream-status (§3.9, receive-side
+        diagnostics only — reads the persisted ``stream_state``, never
+        initiates outbound). ``state='down'`` → 503
+        ``stream_channel_unavailable`` (§3.5: that code lives here and
+        nowhere else)."""
+        from mesh.errors import ServiceUnavailableError
+
+        async with self._sf() as session:
+            await set_tenant_context(session, workspace_id)
+            integration = await session.get(Integration, integration_id)
+        if integration is None or integration.deleted_at is not None:
+            raise NotFoundError("integration not found")
+        if integration.kind != "im_dingtalk":
+            raise BusinessRuleError(
+                "stream-status is only available for im_dingtalk integrations",
+                code="invalid_request",
+            )
+        state = dict(integration.stream_state or {})
+        if integration.status == "disabled":
+            return {
+                "state": "disabled",
+                "last_frame_at": state.get("last_frame_at"),
+                "last_attempt_at": state.get("last_attempt_at"),
+                "backoff_seconds": state.get("backoff_seconds"),
+            }
+        connection_state = str(state.get("state") or "down")
+        body = {
+            "state": connection_state,
+            "last_frame_at": state.get("last_frame_at"),
+            "last_attempt_at": state.get("last_attempt_at"),
+            "backoff_seconds": state.get("backoff_seconds"),
+        }
+        if connection_state == "down":
+            raise ServiceUnavailableError(
+                "dingtalk stream receive channel is down",
+                code="stream_channel_unavailable",
+                details=body,
+            )
+        return body
+
     async def update_integration(
         self,
         *,

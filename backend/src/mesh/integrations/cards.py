@@ -88,6 +88,10 @@ def extract_clicker(
         team = payload.get("team") or {}
         tenant = str(team.get("id") or payload.get("team_id") or config.get("team_id") or "")
         return ("slack", tenant, user_key) if user_key else None
+    if kind == "im_dingtalk":
+        from mesh.integrations.dingtalk_cards import extract_dingtalk_clicker
+
+        return extract_dingtalk_clicker(payload, integration)
     return None
 
 
@@ -129,6 +133,12 @@ async def _locate_card_integration(
             await _lookup_by_config_value(session, kind=kind, key="team_id", value=team_id)
             if team_id else []
         )
+    elif kind == "im_dingtalk":
+        corp_id = str(payload.get("corpId") or "")
+        if corp_id:
+            rows = await _lookup_by_config_value(session, kind=kind, key="corp_id", value=corp_id)
+        else:
+            rows = await _lookup_active_by_kind(session, kind=kind)
     else:
         rows = []
     # Build detached integrations from the SECURITY DEFINER rows — ORM
@@ -169,6 +179,41 @@ async def _verify_card_signature(
     return status == "valid"
 
 
+async def resolve_clicker_member(
+    session: AsyncSession,
+    *,
+    provider: str,
+    provider_tenant_key: str,
+    external_user_key: str,
+    workspace_id: uuid.UUID,
+) -> tuple[Member | None, str]:
+    """Shared callback auth chain links 1+2 (§3.2, R4 mapping model).
+
+    Returns ``(member, denial_reason)``; ``denial_reason`` is ``""`` on
+    success, else ``identity_unmapped`` / ``no_roster_row``. The §6.10
+    permission row itself is applied by ``decide_approval`` (link 3).
+    """
+    identity = await lookup_identity(
+        session,
+        provider=provider,
+        provider_tenant_key=provider_tenant_key,
+        external_user_key=external_user_key,
+    )
+    if identity is None:
+        return None, "identity_unmapped"
+    member = await session.scalar(
+        select(Member).where(
+            Member.workspace_id == workspace_id,
+            Member.user_id == identity.user_id,
+            Member.status == "active",
+            Member.member_type == "human",
+        )
+    )
+    if member is None:
+        return None, "no_roster_row"
+    return member, ""
+
+
 async def handle_card_callback(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
@@ -181,12 +226,39 @@ async def handle_card_callback(
     tolerance: timedelta,
 ) -> tuple[int, dict[str, Any]]:
     """Full card-callback pipeline. Returns (status, bare-JSON body)."""
-    if kind not in ("im_feishu", "im_slack"):
+    if kind not in ("im_feishu", "im_slack", "im_dingtalk"):
         return 401, _error("invalid_signature", "unsupported card callback")
     payload = parse_card_payload(raw_body, headers)
     integration = await _locate_card_integration(session, kind=kind, payload=payload)
     if integration is None:
         return 401, _error("invalid_signature", "signature verification failed")
+    if kind == "im_dingtalk":
+        # HTTP callbackType (§3.10): the DingTalk signature scheme covers
+        # timestamp + "\n" + app_secret with the OFFICIAL ±3600s tolerance
+        # (written in stone — narrowing rejects legitimate callbacks).
+        from mesh.integrations.dingtalk_cards import (
+            handle_dingtalk_card_callback,
+            verify_callback_signature,
+        )
+
+        config = integration.config or {}
+        app_secret = _decrypt_ref(
+            signing_secret, str(config.get("app_secret_ref") or integration.secret_ref)
+        )
+        if not app_secret:
+            return 401, _error("invalid_signature", "signature verification failed")
+        lowered = {k.lower(): v for k, v in headers.items()}
+        status = verify_callback_signature(
+            app_secret=app_secret,
+            timestamp=lowered.get("timestamp"),
+            sign=lowered.get("sign"),
+            now=now,
+        )
+        if status != "valid":
+            return 401, _error("invalid_signature", "signature verification failed")
+        return await handle_dingtalk_card_callback(
+            session, session_factory, integration=integration, payload=payload, now=now
+        )
     if not await _verify_card_signature(
         session, kind=kind, integration=integration, raw_body=raw_body,
         headers=headers, signing_secret=signing_secret, now=now, tolerance=tolerance,
@@ -204,35 +276,26 @@ async def handle_card_callback(
 
     await set_tenant_context(session, workspace_id)
 
-    # Chain link 1: external identity → global users.id.
-    identity = await lookup_identity(
-        session, provider=provider, provider_tenant_key=tenant_key,
+    # Chain links 1+2: external identity → users.id → workspace roster row.
+    member, denial = await resolve_clicker_member(
+        session,
+        provider=provider,
+        provider_tenant_key=tenant_key,
         external_user_key=external_user_key,
-    )
-    if identity is None:
-        await _audit_denial(
-            session, workspace_id=workspace_id, approval_id=approval_id,
-            reason="identity_unmapped", provider=provider,
-            external_user_key=external_user_key,
-        )
-        return 403, _error("forbidden", "clicker identity is not mapped to a Mesh user")
-
-    # Chain link 2: roster row in THIS workspace (active member required).
-    member = await session.scalar(
-        select(Member).where(
-            Member.workspace_id == workspace_id,
-            Member.user_id == identity.user_id,
-            Member.status == "active",
-            Member.member_type == "human",
-        )
+        workspace_id=workspace_id,
     )
     if member is None:
         await _audit_denial(
             session, workspace_id=workspace_id, approval_id=approval_id,
-            reason="no_roster_row", provider=provider,
+            reason=denial, provider=provider,
             external_user_key=external_user_key,
         )
-        return 403, _error("forbidden", "clicker has no active membership in this workspace")
+        message = (
+            "clicker identity is not mapped to a Mesh user"
+            if denial == "identity_unmapped"
+            else "clicker has no active membership in this workspace"
+        )
+        return 403, _error("forbidden", message)
 
     # Chain link 3: forward to the unified approval endpoint (§6.10
     # permission row + idempotent repeat handling live there).
@@ -296,4 +359,5 @@ __all__ = [
     "extract_clicker",
     "handle_card_callback",
     "parse_card_payload",
+    "resolve_clicker_member",
 ]
