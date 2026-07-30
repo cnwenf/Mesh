@@ -1,0 +1,165 @@
+/* 看板拖拽浮层 / 触摸移动 sheet / 移动紧凑(design-quality §9.4/§8.3)。
+   颜色/间距/阴影/层级/动效一律经语义 token。 */
+
+/* --- 拖拽浮层(浮动副本) --- */
+.mesh-board-drag__layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  pointer-events: none;
+}
+
+.mesh-board-drag__clone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  will-change: transform;
+  transition: transform var(--motion-instant) var(--ease-move);
+}
+
+/* prefers-reduced-motion:副本不做过渡,直接跟手。 */
+@media (prefers-reduced-motion: reduce) {
+  .mesh-board-drag__clone {
+    transition: none;
+  }
+}
+
+/* --- 触摸移动 sheet(≤599px 经 Drawer 自动转底部 sheet) --- */
+.mesh-board-touch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mesh-board-touch__reorder {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mesh-board-touch__reorder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mesh-board-touch__reorder-btn:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-board-touch__columns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-board-touch__column-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.mesh-board-touch__column-btn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.mesh-board-touch__column-btn--blocked {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.mesh-board-touch__column-name {
+  font-weight: 600;
+}
+
+.mesh-board-touch__wip {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-board-touch__blocked-reason {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: auto;
+  font-size: var(--font-size-sm);
+  color: var(--color-danger);
+}
+
+/* --- 移动紧凑(§8.3:单泳道 + 顶部 chips 切列) --- */
+.mesh-board-compact__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-board-compact__chips {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  flex: 1;
+  padding-block-end: var(--space-1);
+}
+
+.mesh-board-compact__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mesh-board-compact__chip--active {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  font-weight: 600;
+}
+
+.mesh-board-compact__chip:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-board-compact__chip-count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-board-compact__body {
+  margin-block-start: var(--space-3);
+  touch-action: pan-y; /* 横向滑动切列,纵向滚动保留 */
+}

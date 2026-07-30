@@ -3,10 +3,12 @@
  * issue:{id} 频道实时合并(comment.* / reaction.* / execution.*)、以及
  * 发表/回复/反应/解决/删除的乐观更新(失败回滚)。视图层(CommentsPanel)消费本 hook。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
 import { uuidv4 } from '../../api/uuid';
+import { useToast } from '../../design';
 import { env } from '../../env';
+import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import {
   addReaction as addReactionApi,
@@ -26,6 +28,7 @@ import {
 } from './realtime';
 import type { ExecutionPlaceholder } from './realtime';
 import type { Comment, CommentMemberRef, ReactionSummary } from './types';
+import { UNDO_WINDOW_MS, useDeferredDelete } from './useDeferredDelete';
 
 /** 纯函数:按 id 在顶层列表(含内嵌 preview_replies)中 patch 一条评论;未命中原样返回。 */
 export function patchCommentById(
@@ -51,6 +54,29 @@ export function patchCommentById(
       return { ...comment, preview_replies: replies };
     }
     return comment;
+  });
+  return changed ? next : (comments as Comment[]);
+}
+
+/**
+ * 纯函数:按 id 从顶层列表(含内嵌 preview_replies)中移除一条评论。
+ * 顶层命中 → 直接过滤;嵌套命中 → 从所属线程根 preview_replies 移除并递减 reply_count。
+ * 未命中原样返回(同引用)。用于延迟删除的乐观隐藏(§9.5.5),撤销经快照整体恢复。
+ */
+export function removeCommentById(comments: readonly Comment[], id: string): Comment[] {
+  if (comments.some((comment) => comment.id === id)) {
+    return comments.filter((comment) => comment.id !== id);
+  }
+  let changed = false;
+  const next = comments.map((comment) => {
+    if (comment.preview_replies === undefined) return comment;
+    if (!comment.preview_replies.some((reply) => reply.id === id)) return comment;
+    changed = true;
+    return {
+      ...comment,
+      preview_replies: comment.preview_replies.filter((reply) => reply.id !== id),
+      reply_count: Math.max(0, comment.reply_count - 1),
+    };
   });
   return changed ? next : (comments as Comment[]);
 }
@@ -106,7 +132,8 @@ export interface UseCommentsData {
   readonly createReply: (parent: Comment, body: string, opts: SubmitOptions) => Promise<Comment>;
   readonly toggleReaction: (comment: Comment, emoji: string) => Promise<void>;
   readonly setResolved: (comment: Comment, resolved: boolean) => Promise<void>;
-  readonly remove: (comment: Comment) => Promise<void>;
+  /** 延迟删除(§9.5.5):乐观隐藏 + 撤销 toast;窗口到期才真正调用 DELETE。 */
+  readonly remove: (comment: Comment) => void;
   /** 编辑评论(If-Match: updated_at 乐观锁;409 conflict 抛给调用方提示)。 */
   readonly saveEdit: (comment: Comment, bodyMarkdown: string) => Promise<Comment>;
 }
@@ -117,11 +144,15 @@ export function useCommentsData(
 ): UseCommentsData {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  const toast = useToast();
+  const t = useT();
   const [comments, setComments] = useState<Comment[]>([]);
   const [placeholders, setPlaceholders] = useState<ExecutionPlaceholder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // 延迟删除快照:乐观隐藏前的完整列表,撤销/失败时整体恢复。
+  const deleteSnapshotRef = useRef<readonly Comment[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,26 +314,45 @@ export function useCommentsData(
     [client, comments],
   );
 
-  const remove = useCallback(
-    async (comment: Comment): Promise<void> => {
-      const snapshot = comments;
-      const now = new Date().toISOString();
-      setComments((prev) =>
-        patchCommentById(prev, comment.id, (target) => ({
-          ...target,
-          deleted_at: now,
-          body_markdown: '',
-          body_html: '',
-          body_text: '',
-        })),
-      );
-      try {
-        await deleteComment(client, comment.id);
-      } catch {
-        setComments(snapshot);
-      }
+  // 延迟删除状态机(§9.5.5):窗口到期才真正 DELETE;失败经 onFailed 回滚 + 危险提示。
+  const deferredDelete = useDeferredDelete<Comment>({
+    windowMs: UNDO_WINDOW_MS,
+    commit: (comment) => deleteComment(client, comment.id),
+    onCommitted: () => {
+      deleteSnapshotRef.current = null;
     },
-    [client, comments],
+    onFailed: () => {
+      if (deleteSnapshotRef.current !== null) setComments([...deleteSnapshotRef.current]);
+      deleteSnapshotRef.current = null;
+      // 错误四部分(§7.7):发生了什么 + 影响(评论仍可见)+ 恢复动作(重试)。
+      toast.addToast(t('comments.deleteFailed'), { tone: 'danger', closeLabel: t('common.close') });
+    },
+  });
+  const { request: requestDelete, undo: undoDelete, pending: pendingDelete } = deferredDelete;
+
+  const remove = useCallback(
+    (comment: Comment): void => {
+      // 双重删除守卫:已有一条待删除则忽略。
+      if (pendingDelete !== null) return;
+      deleteSnapshotRef.current = comments;
+      setComments((prev) => removeCommentById(prev, comment.id));
+      requestDelete(comment);
+      // 撤销 toast:与撤销窗口等长,action 在窗口内可恢复。
+      toast.addToast(t('comments.deletedToast'), {
+        tone: 'info',
+        closeLabel: t('common.close'),
+        actionLabel: t('comments.undo'),
+        durationMs: UNDO_WINDOW_MS,
+        onAction: () => {
+          const undone = undoDelete();
+          if (undone && deleteSnapshotRef.current !== null) {
+            setComments([...deleteSnapshotRef.current]);
+            deleteSnapshotRef.current = null;
+          }
+        },
+      });
+    },
+    [comments, pendingDelete, requestDelete, toast, t, undoDelete],
   );
 
   const saveEdit = useCallback(

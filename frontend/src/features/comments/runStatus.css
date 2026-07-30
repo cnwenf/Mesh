@@ -1,0 +1,99 @@
+/**
+ * AI 运行五态统一呈现样式(design-quality.md §9.8)。
+ * tone 一律经状态语义三元组(fg/bg/border)token;图标 + 文案双信号,颜色非唯一。
+ * running 脉冲、reduced-motion 关闭;forced-colors 下保留边框可读。
+ */
+
+.mesh-run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+
+.mesh-run-status__icon {
+  flex: none;
+}
+
+.mesh-run-status__name {
+  font-weight: 600;
+}
+
+.mesh-run-status--neutral {
+  background: var(--color-surface-subtle);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-muted);
+}
+
+.mesh-run-status--info {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: var(--color-info-fg);
+}
+
+.mesh-run-status--warning {
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+  color: var(--color-warning-fg);
+}
+
+.mesh-run-status--success {
+  background: var(--color-success-bg);
+  border-color: var(--color-success-border);
+  color: var(--color-success-fg);
+}
+
+.mesh-run-status--danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-fg);
+}
+
+/* running 轻微脉冲(仅图标透明度,合成器友好);reduced-motion 关闭 */
+.mesh-run-status--pulse .mesh-run-status__icon {
+  animation: mesh-run-pulse var(--motion-slow) var(--ease-move) infinite;
+}
+
+@keyframes mesh-run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+/* failed 重试/介入入口 */
+.mesh-run-status__retry {
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  padding: 0 var(--space-2);
+}
+
+@media (pointer: coarse) {
+  .mesh-run-status__retry {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-run-status--pulse .mesh-run-status__icon {
+    animation: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .mesh-run-status {
+    border-color: CanvasText;
+  }
+}

@@ -12,6 +12,7 @@
  * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(新建视图)→ 内容。
  * 选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
+/* eslint-disable react-refresh/only-export-components -- loadAllGroups 与页面组件同模块契约(测试复用) */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { getApiClient } from '../../api/instance';
@@ -35,6 +36,7 @@ import {
   viewChannel,
 } from './api';
 import { BoardColumns } from './BoardColumns';
+import { BoardListView } from './BoardListView';
 import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
 import { columnsForView, deriveColumns } from './columns';
 import { FilterConfigPanel } from './FilterConfigPanel';
@@ -239,9 +241,12 @@ export function BoardPage(): React.JSX.Element {
   );
 
   // 投影加载:选中视图变化 → 执行视图配置拉取整板(§3.2)。
+  // 已有内容时保持渲染(§10.1/§13.3 局部刷新不清空已有内容):快速创建/移动后
+  // 的整板重拉不卸载 BoardColumns,紧凑模式当前列与滚动位置得以保持;
+  // 切换视图时由下方 effect 先清空分组,走骨架屏路径。
   const loadBoard = useCallback(
     async (view: View) => {
-      setBoardStatus('loading');
+      if (boardGroupsRef.current.length === 0) setBoardStatus('loading');
       try {
         const projection = await loadAllGroups(client, view.id);
         setBoardGroups(projection.groups);
@@ -257,6 +262,10 @@ export function BoardPage(): React.JSX.Element {
 
   useEffect(() => {
     if (selectedView !== null && selectedView.layout === 'board') {
+      // 视图切换:清空旧视图分组并立即置 loading(避免短暂展示上一视图数据,
+      // §9.7 同类约束);boardGroupsRef 要到下一次渲染才同步,故显式置态。
+      setBoardGroups([]);
+      setBoardStatus('loading');
       void loadBoard(selectedView);
     } else {
       setBoardGroups([]);
@@ -810,13 +819,17 @@ export function BoardPage(): React.JSX.Element {
               onDropCard={(issueId, toGroupKey, position) =>
                 void handleDropCard(issueId, toGroupKey, position)
               }
-              onQuickCreate={(groupKey, title) => void handleQuickCreate(groupKey, title)}
+              onQuickCreate={(groupKey, title) => handleQuickCreate(groupKey, title)}
             />
           )
         ) : selectedView.layout === 'list' ? (
-          <EmptyState
-            title={t('board.listPlaceholderTitle')}
-            description={t('board.listPlaceholderDescription')}
+          <BoardListView
+            view={previewView}
+            groups={displayGroups}
+            columnTargetStatus={columnTargetStatus}
+            canWrite={canWrite}
+            onOpenIssue={(id: string) => navigate(`/issues/${id}`)}
+            onChanged={() => void loadBoard(selectedView)}
           />
         ) : (
           <EmptyState

@@ -88,3 +88,20 @@ export type { TabItem, TabsProps } from './components/Tabs';
 export { Tooltip } from './components/Tooltip';
 export type { TooltipProps } from './components/Tooltip';
 export { focusableElements, trapTabKey, useFocusTrap } from './components/useFocusTrap';
+export {
+  BulkBar,
+  DataView,
+  DetailLayout,
+  FilterChips,
+  useListKeyboardSelection,
+} from './patterns';
+export type {
+  BulkBarProps,
+  DataViewProps,
+  DetailLayoutProps,
+  FilterChip,
+  FilterChipsProps,
+  ListKeyboardSelection,
+  PageHeaderCrumb,
+  UseListKeyboardSelectionOptions,
+} from './patterns';

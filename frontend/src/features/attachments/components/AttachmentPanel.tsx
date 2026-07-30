@@ -7,8 +7,10 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../../api';
-import { IconButton, useToast } from '../../../design';
+import { Icon, IconButton, Menu, Tooltip, useToast } from '../../../design';
+import type { IconName, MenuEntry } from '../../../design';
 import { env } from '../../../env';
+import { formatFileSize } from '../format';
 import { useT } from '../../../i18n';
 import { useRealtimeContext } from '../../../shell/AppShell';
 import {
@@ -45,19 +47,9 @@ function triggerDownload(url: string, fileName: string): void {
   anchor.remove();
 }
 
-/** 人性化文件大小(M2:不裸渲染字节数)。 */
-export function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const rounded = unit === 0 ? String(Math.round(value)) : value.toFixed(value >= 100 ? 0 : 1);
-  return `${rounded} ${units[unit]}`;
-}
+// 人性化文件大小(M2:不裸渲染字节数)。实现移到 ../format 以免 Panel ↔ Composer 循环依赖;
+// 这里重新导出以保持既有公共 API 面不变(import 见文件顶部)。
+export { formatFileSize };
 
 /** 放行态:clean/skipped 开放下载/预览(§2.2)。 */
 function isReleased(attachment: Attachment): boolean {
@@ -66,6 +58,40 @@ function isReleased(attachment: Attachment): boolean {
 
 function isRejected(attachment: Attachment): boolean {
   return attachment.scan_status === 'infected' || attachment.scan_status === 'error';
+}
+
+/** 扫描状态视觉(attachment.md §4.5/§4.6):图标 + 文案 + tone,颜色非唯一信号。 */
+interface ScanNotice {
+  readonly icon: IconName;
+  readonly tone: 'info' | 'danger';
+  readonly text: string;
+  /** 后续说明(感染/错误态:接下来会发生什么)。 */
+  readonly next: string | null;
+}
+
+function scanNoticeOf(attachment: Attachment, t: (key: string) => string): ScanNotice | null {
+  switch (attachment.scan_status) {
+    case 'pending':
+      // 复用既有 attachments.scanning(措辞即「扫描中,完成后开放下载」),不新增同义键。
+      return { icon: 'clock', tone: 'info', text: t('attachments.scanning'), next: null };
+    case 'infected':
+      return {
+        icon: 'warning',
+        tone: 'danger',
+        text: t('attachments.scanInfected'),
+        next: t('attachments.scanInfectedNext'),
+      };
+    case 'error':
+      return {
+        icon: 'error',
+        tone: 'danger',
+        text: t('attachments.scanError'),
+        next: t('attachments.scanErrorNext'),
+      };
+    default:
+      // clean/skipped:放行,无提示。
+      return null;
+  }
 }
 
 function uploaderName(attachment: Attachment, fallback: string): string {
@@ -170,8 +196,13 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
         const descriptor = await getDownloadUrl(client, attachment.id);
         triggerDownload(descriptor.url, descriptor.file_name);
       } catch (err: unknown) {
-        const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
-        toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
+        // 具名 API 错误(status≠0,隔离/无权限/未找到)沿用精确文案;瞬时失败(status=0,
+        // 多为网络抖动/签名过期)给可执行提示 + 重试指引(parity §2.22)。
+        const message =
+          err instanceof MeshApiError && err.status !== 0
+            ? t(errorToI18nKey(err))
+            : t('attachments.downloadFailed');
+        toast.addToast(message, { tone: 'danger', closeLabel: t('common.close') });
       }
     },
     [client, toast, t],
@@ -218,45 +249,95 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
    * 下载与复制链接;**删除始终可用**,否则感染文件在 UI 上永远清不掉。删除权限
    * 由服务端按上传者鉴权(非上传者 → 403),前端不因闸门状态剥夺该入口。
    */
-  const renderActions = (attachment: Attachment, released: boolean): React.JSX.Element => (
-    <span className="mesh-attachments__actions">
-      {released ? (
-        <>
-          <IconButton
-            label={`${t('attachments.download')}: ${attachment.file_name}`}
-            size="sm"
-            data-testid={`attachment-download-${attachment.id}`}
-            onClick={() => void download(attachment)}
-          >
-            <FileIcon mimeType={null} extension={null} isImage={false} className="mesh-attachments__action-glyph" />
-          </IconButton>
-          <IconButton
-            label={`${t('attachments.copyLink')}: ${attachment.file_name}`}
-            size="sm"
-            data-testid={`attachment-copy-${attachment.id}`}
-            onClick={() => void copyLink(attachment)}
-          >
-            <span aria-hidden="true">⧉</span>
-          </IconButton>
-        </>
-      ) : null}
-      <IconButton
-        label={`${t('attachments.delete')}: ${attachment.file_name}`}
-        size="sm"
-        variant="danger"
-        data-testid={`attachment-delete-${attachment.id}`}
-        onClick={() => void remove(attachment)}
-      >
-        <span aria-hidden="true">×</span>
-      </IconButton>
-    </span>
-  );
+  const renderActions = (attachment: Attachment, released: boolean): React.JSX.Element => {
+    // 触控「更多」菜单(hover:none 常驻):与桌面 hover 操作同一组动作(§8.2)。
+    const menuEntries: ReadonlyArray<MenuEntry> = [
+      ...(released
+        ? [
+            {
+              key: 'download',
+              label: t('attachments.download'),
+              icon: 'download' as IconName,
+              onSelect: () => void download(attachment),
+            },
+            {
+              key: 'copy',
+              label: t('attachments.copyLink'),
+              icon: 'link' as IconName,
+              onSelect: () => void copyLink(attachment),
+            },
+          ]
+        : []),
+      {
+        key: 'delete',
+        label: t('attachments.delete'),
+        icon: 'trash' as IconName,
+        danger: true,
+        onSelect: () => void remove(attachment),
+      },
+    ];
+    return (
+      <>
+        {/* 桌面:hover/focus-within 出现的图标按钮 + Tooltip(§7.1 图标按钮必配)。 */}
+        <span className="mesh-attachments__actions">
+          {released ? (
+            <>
+              <Tooltip content={t('attachments.download')}>
+                <IconButton
+                  label={`${t('attachments.download')}: ${attachment.file_name}`}
+                  size="sm"
+                  data-testid={`attachment-download-${attachment.id}`}
+                  onClick={() => void download(attachment)}
+                >
+                  <Icon name="download" size={16} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip content={t('attachments.copyLink')}>
+                <IconButton
+                  label={`${t('attachments.copyLink')}: ${attachment.file_name}`}
+                  size="sm"
+                  data-testid={`attachment-copy-${attachment.id}`}
+                  onClick={() => void copyLink(attachment)}
+                >
+                  <Icon name="link" size={16} />
+                </IconButton>
+              </Tooltip>
+            </>
+          ) : null}
+          <Tooltip content={t('attachments.delete')}>
+            <IconButton
+              label={`${t('attachments.delete')}: ${attachment.file_name}`}
+              size="sm"
+              variant="danger"
+              data-testid={`attachment-delete-${attachment.id}`}
+              onClick={() => void remove(attachment)}
+            >
+              <Icon name="trash" size={16} />
+            </IconButton>
+          </Tooltip>
+        </span>
+        {/* 触控:常驻「更多」菜单(桌面端经 CSS 隐藏)。 */}
+        <span className="mesh-attachments__actions-touch">
+          <Menu
+            trigger={<Icon name="more-horizontal" size={20} />}
+            triggerLabel={t('attachments.moreActions')}
+            entries={menuEntries}
+            align="end"
+          />
+        </span>
+      </>
+    );
+  };
 
   const renderFileCard = (attachment: Attachment): React.JSX.Element => {
     const released = isReleased(attachment);
     const rejected = isRejected(attachment);
+    const notice = scanNoticeOf(attachment, t);
+    const fileClass = rejected
+      ? 'mesh-attachments__file mesh-attachments__file--danger'
+      : 'mesh-attachments__file';
     return (
-      <li key={attachment.id} className="mesh-attachments__file" data-testid={`attachment-file-${attachment.id}`}>
+      <li key={attachment.id} className={fileClass} data-testid={`attachment-file-${attachment.id}`}>
         <FileIcon
           mimeType={attachment.mime_type}
           extension={attachment.extension}
@@ -286,14 +367,19 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
               </>
             ) : null}
           </span>
-          {!released && !rejected ? (
-            <span className="mesh-attachments__scanning" data-testid={`attachment-scanning-${attachment.id}`}>
-              {t('attachments.scanning')}
-            </span>
-          ) : null}
-          {rejected ? (
-            <span className="mesh-attachments__rejected" data-testid={`attachment-rejected-${attachment.id}`}>
-              {t('attachments.rejected')}
+          {notice !== null ? (
+            /* 扫描状态(§4.5/§4.6):图标 + 文案 + tone,颜色非唯一信号;感染/错误附后续说明。 */
+            <span
+              className={`mesh-attachments__scan mesh-attachments__scan--${notice.tone}`}
+              data-testid={
+                rejected ? `attachment-rejected-${attachment.id}` : `attachment-scanning-${attachment.id}`
+              }
+            >
+              <Icon name={notice.icon} size={16} className="mesh-attachments__scan-icon" />
+              <span className="mesh-attachments__scan-text">{notice.text}</span>
+              {notice.next !== null ? (
+                <span className="mesh-attachments__scan-next">{notice.next}</span>
+              ) : null}
             </span>
           ) : null}
         </span>
@@ -335,28 +421,41 @@ export function AttachmentPanel(props: AttachmentPanelProps): React.JSX.Element 
       ) : null}
       {images.length > 0 ? (
         <ul className="mesh-attachments__grid" data-testid="attachments-grid">
-          {images.map((attachment) => (
-            <li key={attachment.id} className="mesh-attachments__grid-item">
-              {isReleased(attachment) ? (
-                <Thumbnail
-                  attachment={attachment}
-                  client={client}
-                  openLabel={t('attachments.openImage')}
-                  loadingLabel={t('common.loading')}
-                  onOpen={openLightbox}
-                />
-              ) : (
-                <span
-                  className="mesh-attachments__scanning mesh-attachments__scanning--tile"
-                  data-testid={`attachment-scanning-${attachment.id}`}
-                >
-                  {isRejected(attachment) ? t('attachments.rejected') : t('attachments.scanning')}
-                </span>
-              )}
-              <span className="mesh-attachments__grid-name">{attachment.file_name}</span>
-              {renderActions(attachment, isReleased(attachment))}
-            </li>
-          ))}
+          {images.map((attachment) => {
+            const released = isReleased(attachment);
+            const tileNotice = released ? null : scanNoticeOf(attachment, t);
+            const itemClass = isRejected(attachment)
+              ? 'mesh-attachments__grid-item mesh-attachments__grid-item--danger'
+              : 'mesh-attachments__grid-item';
+            return (
+              <li key={attachment.id} className={itemClass}>
+                {released ? (
+                  <Thumbnail
+                    attachment={attachment}
+                    client={client}
+                    openLabel={t('attachments.openImage')}
+                    loadingLabel={t('common.loading')}
+                    onOpen={openLightbox}
+                  />
+                ) : (
+                  /* 未放行图片:扫描/拒绝占位(图标 + 文案,§4.5/§4.6),不暴露下载/预览。 */
+                  <span
+                    className={`mesh-attachments__scan mesh-attachments__scan--tile mesh-attachments__scan--${tileNotice?.tone ?? 'info'}`}
+                    data-testid={`attachment-scanning-${attachment.id}`}
+                  >
+                    {tileNotice !== null ? (
+                      <>
+                        <Icon name={tileNotice.icon} size={20} className="mesh-attachments__scan-icon" />
+                        <span className="mesh-attachments__scan-text">{tileNotice.text}</span>
+                      </>
+                    ) : null}
+                  </span>
+                )}
+                <span className="mesh-attachments__grid-name">{attachment.file_name}</span>
+                {renderActions(attachment, released)}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       {files.length > 0 ? (

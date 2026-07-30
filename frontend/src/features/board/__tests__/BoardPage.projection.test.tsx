@@ -9,6 +9,7 @@ import { renderWithProviders } from '../../../test-utils/render';
 import { BoardPage } from '../BoardPage';
 import type { BoardCard } from '../projection';
 import type { View } from '../types';
+import { ensurePointerEvent, mockRect } from './dragTestUtils';
 
 const ME = {
   user: { id: 'u', email: 'o@x.com', display_name: 'O' },
@@ -103,12 +104,26 @@ function stubBoard(options: StubOptions = {}) {
   return calls;
 }
 
-function dropCard(target: HTMLElement, issueId: string): void {
-  fireEvent.drop(target, { dataTransfer: { getData: () => issueId } });
+/**
+ * 指针拖拽落点模拟(替换旧 HTML5 DnD,§9.4):源卡 → 越阈值 → 命中目标列 → 抬起。
+ * jsdom 无真实布局,逐元素 mock getBoundingClientRect(见 dragTestUtils)。
+ */
+function dropCard(issueId: string, sourceColumnKey: string, targetColumnKey: string): void {
+  const sourceCard = screen.getByTestId(`board-card-${issueId}`);
+  mockRect(sourceCard, { left: 0, top: 0, right: 100, bottom: 40 });
+  mockRect(screen.getByTestId(`board-column-${sourceColumnKey}`), { left: 0, top: 0, right: 100, bottom: 600 });
+  mockRect(screen.getByTestId(`board-column-${targetColumnKey}`), { left: 200, top: 0, right: 300, bottom: 600 });
+  fireEvent.pointerDown(sourceCard, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
+  fireEvent.pointerMove(document, { clientX: 20, clientY: 10 }); // 越阈值进入拖拽
+  fireEvent.pointerMove(document, { clientX: 250, clientY: 300 }); // 命中目标列
+  fireEvent.pointerUp(document, { clientX: 250, clientY: 300 });
 }
 
 describe('看板投影层交互', () => {
-  beforeEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+    ensurePointerEvent();
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it('渲染真实卡片到对应列', async () => {
@@ -131,8 +146,7 @@ describe('看板投影层交互', () => {
     });
     renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-column-todo');
-    const ipBody = screen.getByTestId('column-body-in_progress');
-    dropCard(ipBody, 'i1');
+    dropCard('i1', 'todo', 'in_progress');
     await waitFor(() => {
       const move = calls.find((c) => c.method === 'POST' && c.url.includes('/moves'));
       expect(move).toBeDefined();
@@ -152,7 +166,7 @@ describe('看板投影层交互', () => {
     });
     renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-column-todo');
-    dropCard(screen.getByTestId('column-body-in_progress'), 'i1');
+    dropCard('i1', 'todo', 'in_progress');
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'POST' && c.url.includes('/moves'))).toBe(true);
     });
@@ -181,7 +195,7 @@ describe('看板投影层交互', () => {
     });
     renderWithProviders(<BoardPage />, { route: '/views/v1' });
     await screen.findByTestId('board-column-p-src');
-    dropCard(screen.getByTestId('column-body-p-dst'), 'i1');
+    dropCard('i1', 'p-src', 'p-dst');
     // 预览模态出现(映射/清除清单)。
     expect(await screen.findByTestId('move-preview-dialog')).toBeInTheDocument();
     expect(screen.getByTestId('move-preview-mapped')).toBeInTheDocument();

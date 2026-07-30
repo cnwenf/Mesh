@@ -4,13 +4,24 @@
  * url 为 null 时呈现加载中占位。缩放/旋转为纯 CSS transform(合成器友好,
  * 不动布局属性);每次重新打开重置视图。所有文案来自 prop,无硬编码可见字符串。
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Button, Dialog, IconButton, Skeleton } from '../../../design';
+import {
+  doubleTapScale,
+  LIGHTBOX_MAX_SCALE,
+  LIGHTBOX_MIN_SCALE,
+  pinchScale,
+  pointerDistance,
+} from '../pinchMath';
+import type { PointerPoint } from '../pinchMath';
 import '../attachments.css';
 
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 4;
+const MIN_SCALE = LIGHTBOX_MIN_SCALE;
+const MAX_SCALE = LIGHTBOX_MAX_SCALE;
 const SCALE_STEP = 0.5;
+/** 双击判定窗口(ms):两次轻触间隔小于此值视为双击。 */
+const DOUBLE_TAP_MS = 300;
 
 export interface LightboxProps {
   readonly open: boolean;
@@ -44,6 +55,51 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
     }
   }, [props.open]);
 
+  /* 触控手势(parity §2.22):双指捏合缩放 + 双击切换 1×↔2×。键盘等价路径为按钮,手势仅增强。 */
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const pointersRef = useRef<Map<number, PointerPoint>>(new Map());
+  const pinchStartRef = useRef<{ distance: number; base: number } | null>(null);
+  const lastTapRef = useRef<{ time: number } | null>(null);
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLImageElement>): void => {
+    if (props.imageUrl === null) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointersRef.current.size === 2) {
+      const [a, b] = Array.from(pointersRef.current.values());
+      pinchStartRef.current = { distance: pointerDistance(a, b), base: scaleRef.current };
+    }
+  };
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLImageElement>): void => {
+    if (!pointersRef.current.has(event.pointerId)) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pointersRef.current.size === 2 && pinchStartRef.current !== null) {
+      const [a, b] = Array.from(pointersRef.current.values());
+      const distance = pointerDistance(a, b);
+      setScale(
+        pinchScale(pinchStartRef.current.distance, distance, pinchStartRef.current.base, MIN_SCALE, MAX_SCALE),
+      );
+    }
+  };
+
+  const handlePointerEnd = (event: ReactPointerEvent<HTMLImageElement>): void => {
+    const wasSingle = pointersRef.current.size === 1;
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size < 2) pinchStartRef.current = null;
+    // 单指抬起且非捏合 → 双击检测。
+    if (wasSingle && pinchStartRef.current === null) {
+      const now = Date.now();
+      const last = lastTapRef.current;
+      if (last !== null && now - last.time < DOUBLE_TAP_MS) {
+        setScale((current) => doubleTapScale(current));
+        lastTapRef.current = null;
+      } else {
+        lastTapRef.current = { time: now };
+      }
+    }
+  };
+
   return (
     <Dialog open={props.open} onClose={props.onClose} title={props.title} closeLabel={props.closeLabel}>
       <div className="mesh-attachments-lightbox">
@@ -57,6 +113,10 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
               alt={props.title}
               style={{ transform: `scale(${scale}) rotate(${rotation}deg)` }}
               data-testid="lightbox-image"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerEnd}
+              onPointerCancel={handlePointerEnd}
             />
           )}
         </div>

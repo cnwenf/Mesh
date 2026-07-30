@@ -3,15 +3,26 @@
  * 反应增删(含失败回滚)、解决/重开、删除、编辑(If-Match)、实时帧合并。
  * 经 RealtimeContext.Provider 注入伪客户端以驱动 onFrame。
  */
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
+import { ToastProvider } from '../../../design';
+import { I18nProvider } from '../../../i18n';
+import type { MissingReporter } from '../../../i18n';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
-import { patchCommentById, toggleReactionLocal, useCommentsData } from '../useCommentsData';
+import {
+  patchCommentById,
+  removeCommentById,
+  toggleReactionLocal,
+  useCommentsData,
+} from '../useCommentsData';
 import type { Comment, CommentMemberRef } from '../types';
+import { UNDO_WINDOW_MS } from '../useDeferredDelete';
+
+const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
 const ME: CommentMemberRef = { id: 'mem-1', member_type: 'human', name: 'Owner' };
 
@@ -83,7 +94,14 @@ function mockFetch(): typeof fetch {
 }
 
 function wrapper(props: { children: ReactNode }): React.JSX.Element {
-  return <RealtimeContext.Provider value={realtimeValue}>{props.children}</RealtimeContext.Provider>;
+  // useCommentsData 的延迟删除经 useToast/useT 呈现撤销提示,故测试栈含 I18n + Toast Provider。
+  return (
+    <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+      <ToastProvider regionLabel="test">
+        <RealtimeContext.Provider value={realtimeValue}>{props.children}</RealtimeContext.Provider>
+      </ToastProvider>
+    </I18nProvider>
+  );
 }
 
 function render(): ReturnType<typeof renderHook<ReturnType<typeof useCommentsData>, { member: CommentMemberRef | null }>> {
@@ -219,13 +237,71 @@ describe('useCommentsData', () => {
     expect(result.current.comments.some((c) => c.resolved_at === '2026-07-03T00:00:00Z')).toBe(true);
   });
 
-  it('deletes a comment optimistically and rolls back on failure', async () => {
+  it('hides the comment immediately and defers the real DELETE (§9.5.5)', async () => {
     const { result } = render();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    await act(async () => {
-      await result.current.remove(ROOT);
+    act(() => {
+      result.current.remove(ROOT);
     });
-    expect(result.current.comments.find((c) => c.id === 'c-1')?.deleted_at).not.toBeNull();
+    // 乐观隐藏:立即从列表移除
+    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
+    // 撤销窗口内尚未真正删除
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('restores the comment when undo is clicked within the window', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() => {
+      result.current.remove(ROOT);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(true));
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('issues the real DELETE once the undo window expires', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.useFakeTimers();
+    act(() => {
+      result.current.remove(ROOT);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(UNDO_WINDOW_MS);
+      await Promise.resolve();
+    });
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('rolls back to the snapshot when the deferred DELETE fails', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.useFakeTimers();
+    act(() => {
+      result.current.remove(ROOT);
+    });
+    failNext = true;
+    await act(async () => {
+      vi.advanceTimersByTime(UNDO_WINDOW_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it('ignores a second delete while one is already pending (double-delete guard)', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() => {
+      result.current.remove(ROOT);
+      result.current.remove(ROOT);
+    });
+    // 仍只隐藏一次,不抛错;列表中无 c-1
+    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
   });
 
   it('saves an edit with the optimistic lock', async () => {
@@ -261,6 +337,20 @@ describe('pure helpers', () => {
     expect(patched[0].preview_replies?.[0].body_text).toBe('x');
     const miss = patchCommentById([ROOT], 'nope', (c) => c);
     expect(miss).toEqual([ROOT]);
+  });
+
+  it('removeCommentById removes top-level and nested replies and returns same ref on miss', () => {
+    // 顶层移除
+    expect(removeCommentById([ROOT], 'c-1')).toEqual([]);
+    // 嵌套移除并递减 reply_count
+    const withReply: Comment = { ...ROOT, reply_count: 1, preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }] };
+    const removed = removeCommentById([withReply], 'c-2');
+    expect(removed[0].preview_replies).toEqual([]);
+    expect(removed[0].reply_count).toBe(0);
+    // 未命中原样返回(同引用)
+    const input: readonly Comment[] = [ROOT];
+    const miss = removeCommentById(input, 'nope');
+    expect(miss).toBe(input);
   });
 
   it('toggleReactionLocal adds, removes self, and drops empty reactions', () => {

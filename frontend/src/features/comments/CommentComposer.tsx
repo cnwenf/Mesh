@@ -19,6 +19,7 @@ import {
 } from './mentions';
 import type { MentionCandidate } from './mentions';
 import { useCommentDraft } from './useCommentDraft';
+import { useDraftSaveIndicator } from './useDraftSaveIndicator';
 
 export interface CommentComposerProps {
   readonly draftKey: string;
@@ -34,6 +35,8 @@ type SubmitState = 'idle' | 'sending' | 'error';
 export function CommentComposer(props: CommentComposerProps): React.JSX.Element {
   const t = useT();
   const draft = useCommentDraft(props.draftKey);
+  // 草稿自动保存弱提示(§9.5.1):写穿已在 useCommentDraft 完成,此处仅映射可视状态。
+  const draftIndicator = useDraftSaveIndicator(draft.value);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionStart, setMentionStart] = useState(0);
@@ -128,11 +131,30 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
 
   const previewHtml = previewMode ? renderMarkdownPreview(draft.value) : '';
 
+  // 草稿弱提示文案(§9.5.1):dirty/saving → 「保存中」;saved → 「已保存 · 绝对时间」。
+  // 绝对时间保证读屏/悬浮可得知确切时刻(§10.3),视觉上弱化为 caption/muted。
+  const draftStatusText = useMemo(() => {
+    if (draftIndicator.status === 'dirty' || draftIndicator.status === 'saving') {
+      return t('comments.draftSaving');
+    }
+    if (draftIndicator.status === 'saved' && draftIndicator.savedAt !== null) {
+      return t('comments.draftSaved', { time: new Date(draftIndicator.savedAt).toLocaleTimeString() });
+    }
+    return null;
+  }, [draftIndicator.status, draftIndicator.savedAt, t]);
+
   return (
     <div className="mesh-comments__composer" data-testid="comment-composer">
       {props.replyToName !== null && props.replyToName !== undefined ? (
         <p className="mesh-comments__reply-hint" data-testid="reply-hint">
           {t('comments.composer.replyTo', { name: props.replyToName })}
+        </p>
+      ) : null}
+
+      {/* 草稿恢复弱提示(§9.5.1):本地有草稿被载入空编辑器时一次性提示,用户编辑后即消失。 */}
+      {draft.restored ? (
+        <p className="mesh-comments__draft-restored" data-testid="draft-restored">
+          {t('comments.draftRestored')}
         </p>
       ) : null}
 
@@ -204,6 +226,13 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
           </span>
         ) : null}
 
+        {/* 草稿自动保存弱提示(§9.5.1):aria-live=polite 供读屏,视觉上弱化为 muted caption。 */}
+        {draftStatusText !== null ? (
+          <span className="mesh-comments__draft-status" aria-live="polite" data-testid="draft-status">
+            {draftStatusText}
+          </span>
+        ) : null}
+
         <Button
           size="sm"
           data-testid="composer-submit"
@@ -216,12 +245,14 @@ export function CommentComposer(props: CommentComposerProps): React.JSX.Element 
       </div>
 
       {submitState === 'error' ? (
-        <p className="mesh-comments__composer-error" role="alert" data-testid="composer-error">
-          {t('comments.composer.failed')}
-          <button type="button" data-testid="composer-retry" onClick={() => void submit()}>
-            {t('common.retry')}
+        /* 失败四部分(§7.7):发生了什么(发送失败)+ 哪部分受影响/已保留(正文/提及/附件保留)+
+           可执行恢复动作(重试)。role=alert 原位提示,不清空任何输入(§9.5.4)。 */
+        <div className="mesh-comments__composer-error" role="alert" data-testid="composer-error">
+          <p className="mesh-comments__composer-error-text">{t('comments.composer.failedKeep')}</p>
+          <button type="button" className="mesh-comments__composer-retry" data-testid="composer-retry" onClick={() => void submit()}>
+            {t('comments.retry')}
           </button>
-        </p>
+        </div>
       ) : null}
     </div>
   );

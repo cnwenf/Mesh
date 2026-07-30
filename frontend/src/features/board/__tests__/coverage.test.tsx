@@ -90,10 +90,11 @@ describe('BoardPage 覆盖补强', () => {
     });
   });
 
-  it('list 布局呈现列表占位;timmeline/table 预留呈现未实现态', async () => {
+  it('list 布局接线 BoardListView(空分组呈现列表空态)', async () => {
     stubMeAndViews([view({ layout: 'list' })]);
     renderWithProviders(<BoardPage />, { route: '/views/v1' });
-    expect(await screen.findByText('List layout')).toBeInTheDocument();
+    // 列表视图已接线(投影空分组 → BoardListView 空态),不再是占位文案。
+    expect(await screen.findByTestId('list-empty')).toBeInTheDocument();
   });
 
   it('无工作区空态', async () => {

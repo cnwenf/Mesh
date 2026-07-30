@@ -6,11 +6,17 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
+import { ToastProvider } from '../../../design';
+import { I18nProvider } from '../../../i18n';
+import type { MissingReporter } from '../../../i18n';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
 import { toggleReactionLocal, useCommentsData } from '../useCommentsData';
 import type { Comment, CommentMemberRef, ReactionSummary } from '../types';
+import { UNDO_WINDOW_MS } from '../useDeferredDelete';
+
+const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
 const ME: CommentMemberRef = { id: 'mem-1', member_type: 'human', name: 'Owner' };
 const OTHER: CommentMemberRef = { id: 'mem-9', member_type: 'human', name: 'B' };
@@ -76,7 +82,11 @@ function routingFetch(): typeof fetch {
 
 function wrapper(props: { children: ReactNode }): React.JSX.Element {
   return (
-    <RealtimeContext.Provider value={realtimeValue}>{props.children}</RealtimeContext.Provider>
+    <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+      <ToastProvider regionLabel="test">
+        <RealtimeContext.Provider value={realtimeValue}>{props.children}</RealtimeContext.Provider>
+      </ToastProvider>
+    </I18nProvider>
   );
 }
 
@@ -123,17 +133,25 @@ describe('useCommentsData branch fill', () => {
     expect(result.current.comments.find((c) => c.id === 'c-1')?.resolved_at).toBeNull();
   });
 
-  it('rolls back a delete when the API call fails', async () => {
+  it('rolls back a delete when the deferred API call fails', async () => {
     const { result } = renderData();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
+    vi.useFakeTimers();
     failDelete = true;
-    const before = result.current.comments;
-    await act(async () => {
-      await result.current.remove(ROOT);
+    act(() => {
+      result.current.remove(ROOT);
     });
-    // 失败回滚到快照(deleted_at 还原为 null)
-    expect(result.current.comments).toBe(before);
-    expect(result.current.comments.find((c) => c.id === 'c-1')?.deleted_at).toBeNull();
+    // 乐观隐藏
+    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(false);
+    // 窗口到期 → DELETE 失败 → 回滚恢复
+    await act(async () => {
+      vi.advanceTimersByTime(UNDO_WINDOW_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.comments.some((c) => c.id === 'c-1')).toBe(true);
+    vi.useRealTimers();
   });
 });
 

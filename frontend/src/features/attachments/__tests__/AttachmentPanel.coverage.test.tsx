@@ -245,7 +245,11 @@ describe('AttachmentPanel coverage', () => {
     ]);
     const scanning = await screen.findByTestId('attachment-scanning-img-pending');
     expect(scanning.textContent).toContain('Scanning');
-    expect(screen.getByTestId('attachment-scanning-img-infected').textContent).toContain('blocked');
+    // 感染态:危险 tone + 图标 + scanInfected 文案(§4.6;locale=en 渲染实际英文)。
+    const infected = screen.getByTestId('attachment-scanning-img-infected');
+    expect(infected.textContent).toContain('Security scan blocked this file');
+    expect(infected.querySelector('.mesh-attachments__scan-icon')).not.toBeNull();
+    expect(infected.className).toContain('mesh-attachments__scan--danger');
   });
 
   it('shows a placeholder until the thumbnail signed url resolves', async () => {
@@ -270,5 +274,136 @@ describe('AttachmentPanel coverage', () => {
     await waitFor(() => expect(calls.filter((c) => c.url.includes('/download')).length).toBeGreaterThan(0));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('renders file-card scan notices with icon + tone; pending hides download, infected/error show next steps (§4.5/§4.6)', async () => {
+    renderPanel([
+      listRoute([
+        att({ id: 'p', file_name: 'p.pdf', scan_status: 'pending' }),
+        att({ id: 'i', file_name: 'i.pdf', scan_status: 'infected' }),
+        att({ id: 'e', file_name: 'e.pdf', scan_status: 'error' }),
+      ]),
+    ]);
+    // pending:信息 tone + 时钟图标 + 无下载,但删除始终可用(M3)
+    const pendingNotice = await screen.findByTestId('attachment-scanning-p');
+    expect(pendingNotice.className).toContain('mesh-attachments__scan--info');
+    expect(pendingNotice.querySelector('.mesh-attachments__scan-icon')).not.toBeNull();
+    expect(screen.queryByTestId('attachment-download-p')).toBeNull();
+    expect(screen.getByTestId('attachment-delete-p')).toBeTruthy();
+    // infected:危险 tone 卡片 + 「接下来会发生什么」说明
+    const infectedCard = await screen.findByTestId('attachment-file-i');
+    expect(infectedCard.className).toContain('mesh-attachments__file--danger');
+    const infectedNotice = screen.getByTestId('attachment-rejected-i');
+    expect(infectedNotice.className).toContain('mesh-attachments__scan--danger');
+    expect(infectedNotice.textContent).toContain("It's permanently blocked.");
+    // error:危险 tone + 重试指引
+    const errorNotice = await screen.findByTestId('attachment-rejected-e');
+    expect(errorNotice.textContent).toContain("Security scan couldn't verify this file");
+    expect(errorNotice.textContent).toContain('Try uploading again, or contact an admin.');
+  });
+
+  it('renders an always-available touch "more" menu mirroring the hover actions (§8.2)', async () => {
+    renderPanel([listRoute([att({ id: 'file-1' })])]);
+    const trigger = await screen.findByRole('button', { name: 'More actions' });
+    fireEvent.click(trigger);
+    expect((await screen.findByRole('menuitem', { name: 'Download' })).textContent).toBe('Download');
+    expect(screen.getByRole('menuitem', { name: 'Copy link' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeTruthy();
+  });
+
+  it('omits download/copy from the touch menu when not released', async () => {
+    renderPanel([listRoute([att({ id: 'p', scan_status: 'pending' })])]);
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+    expect(await screen.findByRole('menuitem', { name: 'Delete' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Download' })).toBeNull();
+  });
+
+  it('falls back for unknown/agent uploaders (avatar initial + display name)', async () => {
+    renderPanel([
+      listRoute([
+        att({ id: 'u-null', uploader: null }),
+        att({ id: 'u-agent', uploader: { id: 'a', member_type: 'agent', display_name: null } }),
+      ]),
+    ]);
+    expect(await screen.findByTestId('attachment-avatar-u-null')).toBeTruthy();
+    expect(screen.getByTestId('attachment-avatar-u-null').textContent).toBe('?');
+    expect(screen.getByTestId('attachment-avatar-u-agent').textContent).toBe('A');
+    // 无显示名 → 回落「未知」
+    expect(screen.getByTestId('attachment-file-u-null').textContent).toContain('Unknown');
+  });
+
+  it('constructs a default client when none is injected', async () => {
+    vi.stubGlobal(
+      'fetch',
+      (async () => fakeResponse({ body: { data: [], next_cursor: null } })) as typeof fetch,
+    );
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+            <ToastLayer>
+              <AttachmentPanel workspaceId="ws-1" issueId="iss-1" />
+            </ToastLayer>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId('attachments-empty')).toBeTruthy();
+  });
+
+  it('copies the stable link through the touch menu', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderPanel([listRoute([att({ id: 'file-1' })])]);
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Copy link' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining('/download')));
+  });
+
+  it('locates the attachment from the lightbox (closes dialog and scrolls to the tile)', async () => {
+    // jsdom 无 scrollIntoView;桩掉以免定位回调抛错(afterEach 统一拆除)。
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    renderPanel([
+      listRoute([att({ id: 'img-1', file_name: 's.png', is_image: true, mime_type: 'image/png', extension: 'png', thumbnail_url: '/x' })]),
+      { match: (url) => url.includes('/thumbnail'), response: () => fakeResponse({ body: { data: { url: 'http://cdn/t.png', size: 'md', expires_at: 'x' } } }) },
+      { match: (url) => url.includes('/download'), response: () => fakeResponse({ body: { data: { url: 'http://cdn/dl', file_name: 's.png', expires_at: 'x' } } }) },
+    ]);
+    fireEvent.click(await screen.findByTestId('attachment-thumb-img-1'));
+    await screen.findByRole('dialog');
+    fireEvent.click(await screen.findByTestId('lightbox-locate'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // 等 rAF 定位回调执行(滚动到缩略图条目)
+    await waitFor(() => expect(window.HTMLElement.prototype.scrollIntoView).toHaveBeenCalled());
+  });
+
+  it('invokes download and delete through the touch "more" menu (§8.2)', async () => {
+    const { calls } = renderPanel([
+      listRoute([att({ id: 'file-1' })]),
+      {
+        match: (url) => url.includes('/download'),
+        response: () => fakeResponse({ body: { data: { url: 'http://cdn/dl', file_name: 'f', expires_at: 'x' } } }),
+      },
+    ]);
+    fireEvent.click(await screen.findByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Download' }));
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/download'))).toBe(true));
+    // 选择后菜单关闭;重开后经菜单删除
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
+  });
+
+  it('shows an actionable downloadFailed toast on a transient (network) download failure (parity §2.22)', async () => {
+    renderPanel([
+      listRoute([att({ id: 'file-1' })]),
+      {
+        match: (url) => url.includes('/download'),
+        response: (): Response => {
+          throw new TypeError('network down');
+        },
+      },
+    ]);
+    fireEvent.click(await screen.findByTestId('attachment-download-file-1'));
+    expect(await screen.findByText(/Download failed — the link may have expired\. Try again\./)).toBeTruthy();
   });
 });

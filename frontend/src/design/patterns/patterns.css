@@ -1,0 +1,317 @@
+/**
+ * 页面模板层样式(design-quality.md §4.4/§11.2):
+ * PageHeader / DataView / BulkBar / FilterChips / DetailLayout。
+ * 颜色一律经语义令牌;布局用 Grid/Flex + container query(§11.2);
+ * z-index 经层级令牌(§11.2);触控目标经 pointer:coarse 增强(§8.2)。
+ */
+
+/* DataView eyebrow 面包屑(经设计级 PageHeader eyebrow 槽)。 */
+.mesh-data-view__crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-data-view__crumbs li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.mesh-data-view__crumbs li:not(:last-child)::after {
+  content: '/';
+  color: var(--color-text-disabled);
+}
+
+.mesh-data-view__crumbs a {
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.mesh-data-view__crumbs a:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+/* ---------- DataView 结构 ---------- */
+.mesh-data-view {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-block-size: 100%;
+}
+
+.mesh-data-view__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+}
+
+.mesh-data-view__body {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.mesh-data-view__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-block: var(--space-3);
+}
+
+/* ---------- BulkBar(粘底,§3.2 / §8.2 安全区) ---------- */
+.mesh-bulk-bar {
+  position: sticky;
+  bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-inline: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  inline-size: fit-content;
+  max-inline-size: calc(100% - var(--space-4));
+  animation: mesh-bulk-bar-in var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-bulk-bar-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.mesh-bulk-bar__count {
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.mesh-bulk-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-bulk-bar__clear {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+
+.mesh-bulk-bar__clear:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+/* ---------- FilterChips ---------- */
+.mesh-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-filter-chips__list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-filter-chips__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline-start: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  transition:
+    background var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-filter-chips__item:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-filter-chips__label {
+  color: var(--color-text-muted);
+}
+
+.mesh-filter-chips__value {
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-filter-chips__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+  margin-inline-end: var(--space-0-5);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.mesh-filter-chips__remove:hover {
+  background: var(--color-surface-pressed);
+  color: var(--color-text-strong);
+}
+
+.mesh-filter-chips__clear {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-body-sm);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mesh-filter-chips__clear:hover {
+  color: var(--color-text);
+}
+
+@media (pointer: coarse) {
+  .mesh-filter-chips__item {
+    min-block-size: 44px;
+  }
+
+  .mesh-filter-chips__remove {
+    inline-size: 44px;
+    block-size: 44px;
+  }
+}
+
+/* ---------- DetailLayout(§4.4 Detail / §8.3) ---------- */
+.mesh-detail-layout {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-detail-layout__header {
+  min-inline-size: 0;
+}
+
+.mesh-detail-layout__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.mesh-detail-layout__columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.mesh-detail-layout__main {
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* 窄容器 / 手机:侧栏收起为属性按钮(§8.3)。 */
+.mesh-detail-layout__aside {
+  display: none;
+}
+
+.mesh-detail-layout__aside-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  align-self: flex-start;
+  min-block-size: 44px;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-strong);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-detail-layout__aside-trigger:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-detail-layout__aside-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+}
+
+/* 宽容器:两栏,侧栏 320px sticky(§3.2 属性 320px 侧栏)。 */
+@container (min-width: 900px) {
+  .mesh-detail-layout__columns {
+    grid-template-columns: minmax(0, 1fr) 320px;
+  }
+
+  .mesh-detail-layout__aside {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    position: sticky;
+    top: var(--space-4);
+    max-block-size: calc(100vh - var(--space-8));
+    overflow-y: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-subtle);
+  }
+
+  .mesh-detail-layout__aside-trigger {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-bulk-bar {
+    animation: none;
+  }
+}

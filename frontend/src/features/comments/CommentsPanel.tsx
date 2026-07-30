@@ -10,8 +10,10 @@ import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { CommentCard } from './CommentCard';
 import { CommentComposer } from './CommentComposer';
+import { RunStatus } from './RunStatus';
 import { listReplies } from './api';
 import type { MentionCandidate } from './mentions';
+import { scrollToAndHighlight } from './scrollToAndHighlight';
 import type { Comment, CommentMemberRef } from './types';
 import { useCommentsData } from './useCommentsData';
 import type { SubmitOptions } from './useCommentsData';
@@ -61,10 +63,11 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // 深链跳转与发表成功共用同一滚动 + 高亮入口(§9.5.5)。
   useEffect(() => {
     if (highlightedId === null) return;
     const element = window.document.getElementById(`comment-${highlightedId}`);
-    element?.scrollIntoView({ block: 'center' });
+    scrollToAndHighlight(element);
   }, [highlightedId, comments]);
 
   const toggleThread = useCallback(
@@ -102,9 +105,13 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
 
   const handleSubmit = useCallback(
     async (body: string, opts: SubmitOptions): Promise<void> => {
-      if (replyTarget !== null) await createReply(replyTarget, body, opts);
-      else await createTopLevel(body, opts);
+      // 发表成功 → 滚动到新评论并短暂高亮(§9.5.5)。服务端返回的评论 id 用于定位。
+      const created =
+        replyTarget !== null
+          ? await createReply(replyTarget, body, opts)
+          : await createTopLevel(body, opts);
       setReplyTarget(null);
+      setHighlightedId(created.id);
     },
     [replyTarget, createReply, createTopLevel],
   );
@@ -209,21 +216,28 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
             comments.map((comment) =>
               comment.author_kind === 'system' ? (
                 <div className="mesh-comments__activity" key={comment.id} data-testid={`activity-${comment.id}`}>
-                  <span>{comment.body_text}</span>
-                  <time>{formatRelativeTime(comment.created_at, { locale: props.locale })}</time>
+                  {/* 系统活动:左轨上的紧凑灰色小字行 + 小活动图标(§3.2 时间线视觉)。 */}
+                  <span className="mesh-comments__activity-node" aria-hidden="true">
+                    <Icon name="activity" size={16} />
+                  </span>
+                  <span className="mesh-comments__activity-text">{comment.body_text}</span>
+                  <time className="mesh-comments__activity-time">
+                    {formatRelativeTime(comment.created_at, { locale: props.locale })}
+                  </time>
                 </div>
               ) : (
                 renderThread(comment)
               ),
             )
           )}
+          {/* AI 运行占位:统一五态组件(§9.8),realtime comment.created 到达后替换为真实评论。 */}
           {placeholders.map((placeholder) => (
             <div
               className="mesh-comments__executing"
               key={placeholder.execution_id}
               data-testid={`executing-${placeholder.execution_id}`}
             >
-              <Icon name="clock" size={16} /> {t('comments.executing', { name: placeholder.agent_name })}
+              <RunStatus status="running" agentName={placeholder.agent_name} />
             </div>
           ))}
         </div>

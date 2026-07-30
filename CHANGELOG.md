@@ -26,6 +26,17 @@ Mesh 项目的所有重要变更都记录于此文件。
   - **图标清偿**:产品 UI 中 emoji/字符图标全站替换为统一 SVG Icon(skills 信任徽标、autopilots 触发器、board/chat/inbox/onboarding/comments/integrations 等);导航/按钮/状态/通知一律经 `<Icon>`(回应 emoji 为用户内容,例外)。
   - **静态门禁**:eslint `mesh/no-emoji-icons`(UI 表意位禁 emoji/字符图标,含模板串字面片段与国旗区,UGC 回应例外)+ stylelint `mesh/zindex-token-only`(z-index 一律 `var(--z-*)` 层级令牌或局部 -1/0/1,存量散落值清偿),叠加既有 AST 级硬编码色值门禁。
   - **视觉回归基础**:`/styleguide` 组件状态 fixture 页(静态确定性)+ playwright 视觉矩阵扩充 wide 1440×900 / phone 390×844 项目,合成四视口 × 亮暗拍摄基础。
+- **前端设计优化批次②(MES-111 Stage 1,design-quality.md §3.2/§4.4/§8.3/§9.4/§9.5)**:看板 + issue 列表/详情 + 评论/附件页面族按设计 Spec 升级,G7 看板必修项全部清偿——
+  - **页面模板层沉淀(src/design/patterns,§4.4/§11.1)**:PageHeader(唯一 h1 + 面包屑 + 动作槽)、DataView(标题栏 + 视图/筛选工具条槽 + 主体 + 分页 + 粘底批量条,container query 自适应)、DetailLayout(桌面两栏 + 320px 属性侧栏 sticky;窄容器自动收为「属性」按钮 + 底部 Drawer sheet;summary chips 槽)、FilterChips(可移除过滤条件 + 清除全部)、BulkBar(粘底 + 安全区 + 滑入动效)、useListKeyboardSelection(漫游 tabindex 行选择:↑↓/Home/End/Enter/空格)。API 稳定导出供批次③④复用,依赖方向 features → patterns → primitives → foundations。
+  - **看板拖拽全反馈(G7 必修,§9.4)**:HTML5 DnD 整体替换为指针拖拽——移动阈值进入拖拽、原位占位(虚线框)、拖拽副本阴影 + 微缩放浮层、目标列 dragover 高亮、落点指示条、WIP warn/block 文案落下前可见(warn 允许落位 + 预警条,block 禁用落点 + 拒收条)、Esc 取消、aria-live 全程播报;失败弹回 + toast / 409 重取收敛 / 跨项目迁移预览确认沿用原子 move 命令。
+  - **看板键盘移动模式(§9.4.5/§10.2)**:聚焦卡片方向键进入移动模式,←→ 选列、↑↓ 选落点(指示条实时),Enter 确认、Esc 取消,aria-keyshortcuts + live region 播报,拖拽的非拖拽等价路径。
+  - **看板触控与手机(§8.3/§9.4.6)**:长按召唤目标列 sheet(列计数/WIP 态,block 列禁用带原因;含移到顶部/底部/上移/下移列内排序);compact 单泳道模式——列 chips 横滑切换 + 左右按钮 + 横向轻扫,不依赖精细横向拖动。
+  - **看板 List 布局落地(G7 必修,kanban §1.2)**:占位空态替换为真实表格——分组节头可折叠、列头排序(aria-sort)、自定义列显隐、行内编辑(标题/优先级/状态,经 PATCH /issues/{id},失败保留输入)、复选多选 + 批量条(状态/优先级/删除,POST /issues/bulk,成功 N/失败 M)、手机主次行卡片。
+  - **看板虚拟化(§11.4/kanban §5.3)**:≥200 卡片列启用窗口化渲染(overscan + 定高行 + aria-setsize/posinset,焦点项恒渲染不破坏读屏),1000 卡片列滚动达性能线。
+  - **Issue 列表 DataView 化(§3.2)**:标准 DataView(标题栏/保存视图预设/过滤 chips/表头/行/批量条)、URL 过滤态 + 客户端排序、键盘上下选择(Enter 打开/空格选中)、320px 主次行降级、批量条粘底。
+  - **Issue 详情 DetailLayout 化(§3.2/§8.3)**:桌面内容/讨论为主 + 320px 属性侧栏;手机属性入底部 Drawer;标题内联编辑(Enter 存/Esc 退);评论/活动 Tabs 切换;标题下 summary chips(状态/优先级/负责人/到期);保存状态弱提示(保存中/已保存/冲突已收敛)。
+  - **评论与附件(§9.5/§3.2)**:时间线视觉(头像轨 + 连接线、系统活动弱化小字);草稿本地自动保存 + 「保存中/已保存/已恢复」弱提示;@ 候选 agent 标注「发布后将触发运行」;发布成功滚动 + 闪烁定位;删除 5s 撤销(延迟真删 + toast 撤销,失败回滚);次要操作 hover/focus 显示、触控收进「更多」菜单;AI 运行五态(queued/running/waiting/succeeded/failed)统一图标 + 文案 + tone;附件统一文件卡 + 进度环(SVG,indeterminate 态)+ 扫描状态门禁可视化(扫描中/拦截/失败四部分文案)+ 失败重试;灯箱触控工具栏 + 双指缩放/双击放大。
+  - **验证**:新增/变更代码 UT ≥90%(per-file 门禁 + diff 门禁);真实后端 e2e(建 issue、拖拽鼠标 + 键盘双路径、评论草稿/失败重试/撤销、附件上传失败重试)桌面 + 手机全过;桌面 + 手机 × 亮暗四组合真实操作存证(frontend/e2e/evidence/mes111-b2/);构建/lint/typecheck/对比度/视觉回归全绿。
 - **前端设计系统底座(MES-111 Phase 1,design-quality.md §5–§9)**:按设计优化 Spec 落地逐页工作所依赖的设计系统基础层——
   - **设计令牌扩展**(tokenValues.ts 单一事实源,三文件生成 + CI 幂等):表面五级层级(canvas/surface/subtle/raised/hover/pressed/selected)、文本四级(strong/text/muted/disabled)、边界三级(subtle/border/strong)、品牌强调色 accent 系(hover/pressed/soft/contrast,旧 primary 系作迁移期别名)、状态色 fg/bg/border 三元组(success/warning/danger/info/neutral)+ 危险按钮交互态令牌、头像稳定配色八组(亮/暗各自校准非简单反色);间距补齐(0/0.5/1.5/8/10/12/16 档)、布局变量(外壳宽度/页边距/内容宽度四档)、圆角六档(xs→full)、阴影三级(轻浮起/浮层/对话框,暗色配合边框)、动效五档时长 + 三条标准缓动、z-index 五层级;全部经对比度关卡逐对自证(76 对 × 亮暗双主题,text 4.5:1 / 大文本·图形 3:1)。
   - **排版体系**:Display=Manrope、UI=Inter、CJK=Noto Sans SC、等宽=JetBrains Mono 的字体配对令牌(自托管字体文件随页面批次加载,未加载回退系统栈)+ type scale 十一档(display-lg→micro 字号/行高/字重)+ 表格数字 tabular-nums、等宽标识、中文排版(严格换行/受控断行/阅读宽度)工具类;默认 UI 正文调整为 14/22,iOS 表单控件经控件专用令牌保持 16px 防聚焦缩放。
