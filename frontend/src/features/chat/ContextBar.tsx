@@ -1,12 +1,17 @@
 /**
- * 会话上下文条(chat-session.md §4.2)。呈现已关联的 issue 与 project(各带移除),
- * 并提供「添加/更换上下文」入口(ContextPicker 设定/更换/清除 issue 上下文)。
- * 二者皆无时呈现弱化的「关联上下文」提示。上下文变更经 patchChatSession 三态语义:
- * 设定/更换传 id,清除传 null(省略键则保持);后端按可见性鉴权,404/403 经 toErrorKey toast。
+ * 会话上下文条(chat-session.md §4.2 / design-quality §3.2 可收起条)。呈现已关联的
+ * issue 与 project(各带移除),并提供「添加/更换上下文」入口(ContextPicker 设定/
+ * 更换/清除 issue 上下文)。二者皆无时呈现弱化的「关联上下文」提示。上下文变更经
+ * patchChatSession 三态语义:设定/更换传 id,清除传 null(省略键则保持);后端按
+ * 可见性鉴权,404/403 经 toErrorKey toast。
+ *
+ * 可收起(§3.2):默认展开呈现完整 chips;收起后为单行薄条——已关联上下文摘要
+ * (截断一行)+ 展开触发器。触发器带 aria-expanded / aria-controls,chips 区经
+ * hidden 切换(保持可访问名与控件可达性,不销毁子树)。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import type { MeshApiClient } from '../../api';
-import { Button, useToast } from '../../design';
+import { Button, Icon, IconButton, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { getIssue } from '../issues/api';
 import type { IssueDetail } from '../issues/types';
@@ -32,6 +37,8 @@ export function ContextBar(props: ContextBarProps): React.JSX.Element {
   const [contextIssue, setContextIssue] = useState<IssueDetail | null>(null);
   const [contextProject, setContextProject] = useState<ProjectDetail | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const chipsRegionId = useId();
 
   // 上下文 issue 解析(展示 identifier + 标题;失败回退展示 id)。
   useEffect(() => {
@@ -103,62 +110,106 @@ export function ContextBar(props: ContextBarProps): React.JSX.Element {
 
   const hasIssue = session.context_issue_id !== null;
   const hasProject = session.context_project_id !== null;
+  const issueLabel =
+    contextIssue !== null
+      ? `${contextIssue.identifier} ${contextIssue.title}`
+      : session.context_issue_id;
+  const projectLabel =
+    contextProject !== null ? contextProject.name : session.context_project_id;
+  // 收起态摘要:已关联上下文截断一行;二者皆无沿用弱化提示文案。
+  const summaryParts = [
+    hasIssue ? issueLabel : null,
+    hasProject ? projectLabel : null,
+  ].filter((part): part is string => part !== null);
+  const summaryText = summaryParts.length > 0 ? summaryParts.join(' · ') : t('chat.context.prompt');
 
   return (
-    <div className="mesh-chat__context-bar" data-testid="chat-context-bar">
-      {hasIssue ? (
-        <span className="mesh-chat__context-chip">
-          <span>{t('chat.context.linkedIssue')}</span>
-          <strong>
-            {contextIssue !== null
-              ? `${contextIssue.identifier} ${contextIssue.title}`
-              : session.context_issue_id}
-          </strong>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={t('chat.context.remove')}
-            data-testid="chat-context-remove"
-            onClick={() => void patchContext({ context_issue_id: null })}
-          >
-            ×
-          </Button>
+    <div
+      className="mesh-chat__context-bar"
+      data-testid="chat-context-bar"
+      data-collapsed={collapsed}
+    >
+      {collapsed ? (
+        <span className="mesh-chat__context-summary" data-testid="chat-context-summary">
+          {summaryText}
         </span>
       ) : null}
 
-      {hasProject ? (
-        <span className="mesh-chat__context-chip" data-testid="chat-context-project">
-          <span>{t('chat.context.linkedProject')}</span>
-          <strong>
-            {contextProject !== null ? contextProject.name : session.context_project_id}
-          </strong>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={t('chat.context.removeProject')}
-            data-testid="chat-context-project-remove"
-            onClick={() => void patchContext({ context_project_id: null })}
-          >
-            ×
-          </Button>
-        </span>
-      ) : null}
+      <div id={chipsRegionId} className="mesh-chat__context-chips" hidden={collapsed}>
+        {hasIssue ? (
+          <span className="mesh-chat__context-chip">
+            <span>{t('chat.context.linkedIssue')}</span>
+            <strong>{issueLabel}</strong>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('chat.context.remove')}
+              data-testid="chat-context-remove"
+              onClick={() => void patchContext({ context_issue_id: null })}
+            >
+              ×
+            </Button>
+          </span>
+        ) : null}
 
-      {!hasIssue && !hasProject ? (
-        <span className="mesh-chat__context-prompt" data-testid="chat-context-prompt">
-          {t('chat.context.prompt')}
-        </span>
-      ) : null}
+        {hasProject ? (
+          <span className="mesh-chat__context-chip" data-testid="chat-context-project">
+            <span>{t('chat.context.linkedProject')}</span>
+            <strong>{projectLabel}</strong>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={t('chat.context.removeProject')}
+              data-testid="chat-context-project-remove"
+              onClick={() => void patchContext({ context_project_id: null })}
+            >
+              ×
+            </Button>
+          </span>
+        ) : null}
 
-      <Button
-        variant="secondary"
-        size="sm"
-        className="mesh-chat__context-add"
-        data-testid="chat-context-add"
-        onClick={() => setPickerOpen(true)}
-      >
-        {t('chat.context.add')}
-      </Button>
+        {!hasIssue && !hasProject ? (
+          <span className="mesh-chat__context-prompt" data-testid="chat-context-prompt">
+            {t('chat.context.prompt')}
+          </span>
+        ) : null}
+
+        <Button
+          variant="secondary"
+          size="sm"
+          className="mesh-chat__context-add"
+          data-testid="chat-context-add"
+          onClick={() => setPickerOpen(true)}
+        >
+          {t('chat.context.add')}
+        </Button>
+      </div>
+
+      {collapsed ? (
+        <IconButton
+          label={t('chat.contextBar.expand')}
+          size="sm"
+          className="mesh-chat__context-toggle"
+          data-testid="chat-context-expand"
+          aria-expanded={false}
+          aria-controls={chipsRegionId}
+          onClick={() => setCollapsed(false)}
+        >
+          <Icon name="chevron-down" />
+        </IconButton>
+      ) : (
+        <IconButton
+          label={t('chat.contextBar.collapse')}
+          size="sm"
+          className="mesh-chat__context-toggle"
+          data-testid="chat-context-collapse"
+          aria-expanded={true}
+          aria-controls={chipsRegionId}
+          onClick={() => setCollapsed(true)}
+        >
+          <Icon name="chevron-up" />
+        </IconButton>
+      )}
 
       <ContextPicker
         open={pickerOpen}

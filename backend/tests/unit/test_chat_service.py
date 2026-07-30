@@ -442,6 +442,76 @@ async def test_send_links_attachments(service, world):
     assert calls[0]["linked_type"] == "chat_message"
 
 
+async def test_send_links_attachments_real_same_transaction(
+    service, world, session_factory, object_storage, attachment_settings_kwargs
+):
+    """link-at-send 必须复用发送事务(chat-session.md §2.4 / attachment.md §2.7)。
+
+    回归:host 消息行在发送事务内 flush 未 commit,link_attachment 若另开事务,
+    host 存在性校验读不到该行 → 404「chat_message not found」。经真实
+    AttachmentService(三段直传 + 真实链接落库)验证修复:发送成功且
+    attachment_links 落库,linked_id 即用户消息。
+    """
+    import httpx
+
+    from mesh.attachment.service import AttachmentService
+    from mesh.config import load_settings
+    from mesh.db.models.attachment import AttachmentLink
+
+    from tests.unit.attachment_support import make_png, sha256_hex
+
+    attachments = AttachmentService(
+        session_factory, load_settings(**attachment_settings_kwargs), object_storage
+    )
+    service.attachment_service = attachments
+
+    # 真实三段上传(预上传不预关联,§2.4):request → 直传 PUT → complete。
+    data = make_png()
+    response = await attachments.request_upload(
+        actor=world["owner"], workspace_id=world["ws"].id, file_name="batch3.png",
+        file_size=len(data), mime_type="image/png", content_hash=sha256_hex(data),
+    )
+    payload = response["data"]
+    assert payload["upload"] is not None and payload["upload"].get("method") == "PUT"
+    async with httpx.AsyncClient() as client:
+        put = await client.put(
+            payload["upload"]["url"], content=data, headers={"Content-Type": "image/png"}
+        )
+        assert put.status_code == 200, put.text
+    await attachments.complete_upload(
+        actor=world["owner"], workspace_id=world["ws"].id,
+        attachment_id=uuid.UUID(payload["id"]),
+    )
+
+    row = await _mk_session(service, world)
+    sid = uuid.UUID(row["id"])
+    result = await service.send_message(
+        actor=world["owner"], workspace_id=world["ws"].id, session_id=sid,
+        content="带真实附件", attachment_ids=[uuid.UUID(payload["id"])],
+    )
+
+    # 链接已落库 —— 关键回归:link_attachment 复用发送事务,方能读到 flush 未 commit
+    # 的 host 行;若另开事务则 _assert_host_write 读不到 → 发送 404,链接永不创建。
+    # 注:send_message 返回的 message_id 为 agent 流式回复,链接 host 为用户消息,
+    # 故断言 linked_id 指向同会话的 user 消息且附件已关联。
+    async with session_factory() as session:
+        link = await session.scalar(
+            select(AttachmentLink).where(
+                AttachmentLink.attachment_id == uuid.UUID(payload["id"])
+            )
+        )
+        user_msg_id = await session.scalar(
+            select(ChatMessage.id).where(
+                ChatMessage.session_id == sid,
+                ChatMessage.role == "user",
+            )
+        )
+    assert link is not None
+    assert link.linked_type == "chat_message"
+    assert link.linked_id == user_msg_id
+    assert result["message_id"]  # agent 流式回复 id 存在
+
+
 async def test_stop_generation_paths(service, world):
     row = await _mk_session(service, world)
     sid = uuid.UUID(row["id"])

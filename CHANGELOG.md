@@ -4,6 +4,18 @@ Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+### Added
+
+- **前端设计对齐 MES-111 批次③——成员/Agent 名册 + 收件箱 + 聊天(design-quality.md §3.2/§4.4/§7.2/§7.6/§8.2/§9.8)**:逐页落地设计 Spec 的视觉/排版/交互升级——
+  - **patterns 层新增**(§11.1,与批次② DataView/DetailLayout、批次④ SettingsLayout 同层共存,API 稳定):`ConversationLayout`(列表/详情双栏;手机 ≤720px 单栏经 `activePane` 路由化,组件不读路由/窗口宽,断点集中)与 `RunStateBadge`(§9.8 运行反馈五态统一语言:`queued/running/waiting/succeeded/failed` + 派生 `idle/unknown`,tone/图标单一事实源,`data-state` 钩子,running 脉冲经 `prefers-reduced-motion` 降级;文案经调用方 `runState.*` 统一)。
+  - **成员/Agent 名册**(`/members`):手写头像→底座 `Avatar`(人类缩写稳定 hash / agent 统一轮廓,https-only `src`);AI 徽标→`Badge accent`;名称/类型/角色/状态主次分行 + 排版刻度类;**行操作进底座 `Menu`**(桌面表格 + 手机卡片共享 handler);**A-05 收尾**:手机表格转主次行卡片(`member-card-*`),行操作进 Menu,无横向溢出;agent 行经真实 presence 订阅渲染五态徽标。`/agents/:agentId` 头部重做(`__identity` 簇 + 底座 Avatar/Badge/RunStateBadge + 容量三元组降级为 caption)+ 面板卡片化 + 排版刻度。
+  - **收件箱**(`/inbox` + 顶栏铃铛):`ConversationLayout` 双栏(分组列表 + 预览 `InboxPreviewPane`),手机单栏路由化(`/inbox/:notificationId` + 返回);预览含优先级 Badge(形+文案,非颜色唯一信号)+ 来源头像(agent/human)+ 删除源兜底;行含未读点/优先级/来源一致排列 + 行状态矩阵;选中即标已读(真实 POST + read_at 落库)+ 归档 + 深链;新增 quiet-hours 横幅(`quietHours.ts` 纯函数,临界事件穿透说明);铃铛 emoji→`IconButton bell` + 外部点击/Esc 关闭。
+  - **聊天**(`/chat`):路由化选中(`/chat/:sessionId`,桌面同步 + 手机列表/会话单栏 + 返回);`ConversationLayout` 双栏;输入区粘底 + `env(safe-area-inset-bottom)`;上下文条可收起(§3.2,`aria-expanded/controls`);流式头部 RunStateBadge(queued→running)+ 失败气泡五态徽标;长消息 CJK 断行;会话行 hover/selected/focus 状态矩阵。
+  - **i18n**:`runState.*` 五态统一词汇 + 名册/收件箱/聊天新增键(en/zh-CN 同步,djb2 版本重算)。
+  - **视觉回归**:重生成 members/chat/inbox 双主题 × 桌面/平板基线(其余页基线不变)。
+  - **存证**:`e2e/evidence/mes111-b3/` 桌面/手机 × 亮/暗四组合逐页逐按钮真实操作(真实后端栈同源形态;附件直传步沿用 dev server 联调口径,同 MES-59),58 张 md5 全互异 + README。
+- **后端修复:聊天 link-at-send 附件跨事务不可见致 404/500(attachment.md §2.7 / chat-session.md §2.4)**:`link_attachment` 新增可选 `session` 透传,聊天 `send_message` 复用发送事务链接刚 flush 未 commit 的用户消息 host 行(此前另开事务读不到该行→`chat_message not found`);顺带修正返回体从共享 blob 取 `mime_type/scan_status`、`byte_size` 取 `attachments.file_size`(原字段不存在,此前因 host 校验先 404 而从未触达)。
+- **后端安全加固:聊天附件读门补 L2 会话属主校验(安全审核 HIGH-1)**:link-at-send 修复后读路径首次可达,`_can_read_host` 的 `chat_message` 分支此前仅校验消息在工作区内存在,同空间成员持附件 UUID 即可越权下载他人私聊附件;现镜像写侧 `_assert_host_write`——JOIN `chat_sessions` 校验 `owner_id == viewer`,非属主统一 404(无存在性泄露)。写侧 L2 授权不变。新增「非属主读他人会话附件被拒」回归单测 + 真实 HTTP 读门探针验证。
 
 ## [0.26.0] - 2026-07-31
 
@@ -38,6 +50,7 @@ Mesh 项目的所有重要变更都记录于此文件。
   - **验证**:单测 3379 例全绿、per-file 与 diff 覆盖率门禁通过;真实后端 e2e 桌面 + 手机全过(含竞态/虚拟化/拖拽双路径回归);桌面 + 手机 × 亮暗存证更新;视觉回归基线按页面变更重生成并复验全绿;构建/lint/typecheck/对比度/存证唯一性全绿。
 - **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
 - **前端·执行行标签契约保真(MES-144,runtime.md §3.3)**:首页工作台「AI 运行」行与运行/执行详情页此前以执行摘要里的联表展示名(agent 名 / issue 标识)拼标签,而后端 `_render_execution` 从不返回这两字段;mock 契约栈却伪造了它们,致 e2e 看不出差异、真实环境恒退化为无信息兜底文案。修复**只动展示层与契约镜像**:新增纯工具 `executionLabel`(`trigger` 文案 + 执行短 ID 的行标签规范形),首页行标题改用它、元信息补「状态文案 · 相对时间」(复用 `formatRelativeTime`),运行/执行详情页同步改以 trigger+短 ID 与契约实际返回的 `agent_id`/`issue_id` 呈现;类型 `ExecutionSummary` 移除幽灵字段、补回真实 `issue_id`,与后端逐字段对齐。mock 列表与详情夹具同步删除幽灵字段、补齐 `_render_execution`/`_render_attempt` 全字段(`workspace_id`/`task_spec`/`config_snapshot`/`max_attempts`/`cancel_requested_at`/`retry_count` 与含 `value:'***'` 的凭证元信息),杜绝契约漂移再被掩盖。验证:新增 `executionLabel` 单测 + 三页单测更新,变更源文件逐文件覆盖率 ≥90%(runtimes 91.5–100%);mock 契约 e2e 工作台断言扩标签兜底路径,真实后端 runtimes e2e 全过;真实栈 + 真实浏览器实测首页「AI 运行」行显示「trigger · 短 ID」+「状态 · 相对时间」存证。
+- **前端修复:聊天会话内附件上传 400「workspace_id required」**:`ChatComposer` 预上传经 `useAttachmentUploader({ workspaceId })` 透传归属工作区(预上传不预关联、发送时关联的 §2.4 形态下 upload-requests 必带 workspace_id),由 `ConversationPanel` 注入;新增透传回归单测。
 
 ### 验证
 

@@ -96,6 +96,31 @@ describe('MessageBubble(§4.2)', () => {
     expect(screen.getByTestId('chat-interrupted-m-1')).toBeInTheDocument();
   });
 
+  it('失败 agent 气泡头部呈现运行五态徽标(data-state=failed,§9.8)', () => {
+    renderWithProviders(
+      <MessageBubble message={makeMessage({ generation_status: 'failed' })} locale="en" />,
+    );
+    const bubble = screen.getByTestId('chat-message-m-1');
+    expect(bubble.querySelector('[data-state="failed"]')).not.toBeNull();
+  });
+
+  it('中断态不呈现运行五态徽标(维持弱化提示)', () => {
+    renderWithProviders(
+      <MessageBubble message={makeMessage({ generation_status: 'interrupted' })} locale="en" />,
+    );
+    expect(screen.getByTestId('chat-message-m-1').querySelector('[data-state]')).toBeNull();
+  });
+
+  it('user 气泡即使失败态也不呈现运行五态徽标', () => {
+    renderWithProviders(
+      <MessageBubble
+        message={makeMessage({ role: 'user', generation_status: 'failed' })}
+        locale="en"
+      />,
+    );
+    expect(screen.getByTestId('chat-message-m-1').querySelector('[data-state]')).toBeNull();
+  });
+
   it('附件卡片渲染文件名与大小', () => {
     renderWithProviders(
       <MessageBubble

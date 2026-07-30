@@ -2,13 +2,29 @@
  * ChatPage 分支覆盖测试(chat-session.md §4.1):置顶乐观切换(成功/失败回滚)、
  * 新建会话全流程(对话框 → 创建 → 选中)、agent 过滤重载。
  */
+import type { ReactElement } from 'react';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import { ChatPage } from '../ChatPage';
+
+/** 选中态路由化:ChatPage 经 useParams 读取 :sessionId,测试须经 Routes 提供匹配。 */
+function chatRoutes(): ReactElement {
+  return (
+    <Routes>
+      <Route path="/chat" element={<ChatPage />} />
+      <Route path="/chat/:sessionId" element={<ChatPage />} />
+    </Routes>
+  );
+}
+
+function renderChatPage() {
+  return renderWithProviders(chatRoutes(), { route: '/chat' });
+}
 
 const me = { memberships: [{ workspace_id: 'ws-1' }] };
 const agent = { id: 'a-1', display_name: 'Builder', name: 'builder' };
@@ -71,7 +87,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByTestId('chat-session-pin-sess-1'));
     await waitFor(() =>
@@ -102,7 +118,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByTestId('chat-session-pin-sess-1'));
     await waitFor(() => expect(document.querySelector('.mesh-toast')).not.toBeNull());
@@ -127,7 +143,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByTestId('chat-new-session'));
     // 对话框加载 agent 后选择并创建
@@ -156,7 +172,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.change(screen.getByTestId('chat-filter-agent'), { target: { value: 'a-1' } });
     await waitFor(() =>
@@ -180,7 +196,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-panel');
     fireEvent.change(screen.getByTestId('chat-filter-status'), { target: { value: 'archived' } });
     await waitFor(() =>
@@ -210,7 +226,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByTestId('chat-session-pin-sess-1'));
     await waitFor(() =>
@@ -247,9 +263,8 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
       return null;
     });
     const { unmount } = renderWithProviders(
-      <RealtimeContext.Provider value={fakeRealtime}>
-        <ChatPage />
-      </RealtimeContext.Provider>,
+      <RealtimeContext.Provider value={fakeRealtime}>{chatRoutes()}</RealtimeContext.Provider>,
+      { route: '/chat' },
     );
     await screen.findByTestId('chat-session-sess-1');
     // 订阅在会话加载后于 effect 内异步建立,waitFor 兜底其建立时机
@@ -308,9 +323,8 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
       return null;
     });
     renderWithProviders(
-      <RealtimeContext.Provider value={fakeRealtime}>
-        <ChatPage />
-      </RealtimeContext.Provider>,
+      <RealtimeContext.Provider value={fakeRealtime}>{chatRoutes()}</RealtimeContext.Provider>,
+      { route: '/chat' },
     );
     await screen.findByTestId('chat-session-preview-sess-1');
     for (const cb of listeners)
@@ -336,7 +350,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         return fakeResponse({ body: { data: [makeSession('sess-1')], next_cursor: null } });
       return null;
     });
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByTestId('chat-new-session'));
     expect(await screen.findByTestId('chat-new-session-agent')).toBeInTheDocument();
@@ -360,7 +374,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       return null;
     });
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(await screen.findByTestId('chat-session-sess-1')).toBeInTheDocument();
     // favorites 失败 → 无置顶分组
     expect(screen.queryByText('Pinned')).toBeNull();
@@ -384,7 +398,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       return null;
     }, recorder);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     // 先选中 sess-1,再置顶 → setSelected 匹配分支
     fireEvent.click(screen.getByText('Chat sess-1'));
@@ -422,7 +436,7 @@ describe('ChatPage 分支覆盖(§4.1)', () => {
         });
       return null;
     });
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     fireEvent.click(screen.getByText('Chat sess-1'));
     await screen.findByTestId('chat-conversation');

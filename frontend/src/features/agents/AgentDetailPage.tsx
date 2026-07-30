@@ -12,7 +12,18 @@ import { AgentStatsCard } from '../analytics/AgentStatsCard';
 import { AgentSkillsTab } from '../skills/AgentSkillsTab';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import {
+  Avatar,
+  Badge,
+  Button,
+  EmptyState,
+  ErrorState,
+  Input,
+  RunStateBadge,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -31,6 +42,7 @@ import {
 } from './api';
 import type { AgentLifecycleVerb } from './api';
 import { AgentWizard } from './AgentWizard';
+import { presenceToRunState } from './runState';
 import type { AgentConfigVersion, AgentDetail } from './types';
 import { MODEL_TIER_ORDER, PLATFORM_MODELS, REASONING_EFFORT_ORDER } from './types';
 import './agents.css';
@@ -401,39 +413,38 @@ export function AgentDetailPage(): React.JSX.Element {
   }
 
   const verbs = VERBS_BY_STATUS[agent.lifecycle_status] ?? [];
+  // 运行态五态归一(§9.8):presence 三元组 → RunState;帧未至(null)→ unknown。
+  const runState = presenceToRunState(presence);
 
   return (
     <main className="mesh-agents-detail" data-testid="agent-detail-page">
       <div className="mesh-agents-detail__header">
-        <Button
-          variant="ghost"
-          data-testid="agent-detail-back"
-          onClick={() => navigate('/members')}
-        >
-          {t('agents.detail.back')}
-        </Button>
-        <span className="mesh-members__avatar mesh-members__avatar--agent" aria-hidden="true">
-          {agent.name.slice(0, 1).toUpperCase()}
-        </span>
-        <h1 className="mesh-agents-detail__title" data-testid="agent-detail-name">
-          {agent.name}
-        </h1>
-        <span className="mesh-members__badge" data-testid="agent-detail-badge">
-          {t('members.badge.agent')}
-        </span>
-        <span className="mesh-agents-detail__status" data-testid="agent-detail-status">
-          {t(`agents.lifecycle.${agent.lifecycle_status}`)}
-        </span>
-        {/* M-F2:容量三元组(§4.9/§6.12);runtime 未落地时为「—」。 */}
-        <span className="mesh-agents-detail__presence" data-testid="agent-detail-presence">
-          {presence === null
-            ? t('agents.presence.unknown')
-            : t('agents.presence.triple', {
-                running: presence.running,
-                queued: presence.queued,
-                awaiting: presence.awaiting,
-              })}
-        </span>
+        <div className="mesh-agents-detail__identity">
+          <Button
+            variant="ghost"
+            data-testid="agent-detail-back"
+            onClick={() => navigate('/members')}
+          >
+            {t('agents.detail.back')}
+          </Button>
+          <Avatar kind="agent" size={40} name={agent.name} src={agent.avatar_url ?? undefined} />
+          <h1 className="mesh-agents-detail__title mesh-text-title-2" data-testid="agent-detail-name">
+            {agent.name}
+          </h1>
+          <span data-testid="agent-detail-badge">
+            <Badge tone="accent">{t('members.badge.agent')}</Badge>
+          </span>
+          <span
+            className="mesh-agents-detail__status mesh-text-micro"
+            data-testid="agent-detail-status"
+          >
+            {t(`agents.lifecycle.${agent.lifecycle_status}`)}
+          </span>
+          {/* 运行态五态徽标(§9.8 统一语言);data-state 供测试与样式钩子。 */}
+          <span className="mesh-agents-detail__presence" data-testid="agent-detail-presence">
+            <RunStateBadge state={runState} label={t(`runState.${runState}`)} />
+          </span>
+        </div>
         {canManage ? (
           <div className="mesh-agents-detail__actions">
             {verbs.map((verb) => (
@@ -459,8 +470,22 @@ export function AgentDetailPage(): React.JSX.Element {
         ) : null}
       </div>
 
+      {/* M-F2:容量三元组说明(§4.9/§6.12);帧未至时为「Capacity: —」。 */}
+      <p
+        className="mesh-agents-detail__presence-caption mesh-text-caption mesh-tnum"
+        data-testid="agent-detail-presence-caption"
+      >
+        {presence === null
+          ? t('agents.presence.unknown')
+          : t('agents.presence.triple', {
+              running: presence.running,
+              queued: presence.queued,
+              awaiting: presence.awaiting,
+            })}
+      </p>
+
       {agent.role_tag !== null || agent.bio !== null ? (
-        <p className="mesh-agents-detail__subtitle">
+        <p className="mesh-agents-detail__subtitle mesh-text-body-sm">
           {agent.role_tag ?? ''}
           {agent.bio !== null && agent.bio !== '' ? ` · ${agent.bio}` : ''}
         </p>
@@ -473,7 +498,7 @@ export function AgentDetailPage(): React.JSX.Element {
             type="button"
             role="tab"
             aria-selected={activeTab === tab}
-            className="mesh-members__tab"
+            className="mesh-members__tab mesh-text-body"
             data-testid={`agent-tab-${tab}`}
             onClick={() => selectTab(tab)}
           >
@@ -485,14 +510,18 @@ export function AgentDetailPage(): React.JSX.Element {
       {activeTab === 'overview' ? (
         <section className="mesh-agents-detail__panel" data-testid="agent-panel-overview">
           <dl className="mesh-agents-detail__dl">
-            <dt>{t('agents.field.visibility')}</dt>
-            <dd>{t(`agents.visibility.${agent.visibility}`)}</dd>
-            <dt>{t('agents.field.triggerOnAssign')}</dt>
-            <dd>{agent.trigger_on_assign ? t('common.yes') : t('common.no')}</dd>
-            <dt>{t('agents.detail.modelTier')}</dt>
-            <dd>{t(`agents.tier.${agent.model_config.model_tier ?? 'balanced'}`)}</dd>
-            <dt>{t('agents.detail.created')}</dt>
-            <dd>{agent.created_at}</dd>
+            <dt className="mesh-text-caption">{t('agents.field.visibility')}</dt>
+            <dd className="mesh-text-body">{t(`agents.visibility.${agent.visibility}`)}</dd>
+            <dt className="mesh-text-caption">{t('agents.field.triggerOnAssign')}</dt>
+            <dd className="mesh-text-body">
+              {agent.trigger_on_assign ? t('common.yes') : t('common.no')}
+            </dd>
+            <dt className="mesh-text-caption">{t('agents.detail.modelTier')}</dt>
+            <dd className="mesh-text-body">
+              {t(`agents.tier.${agent.model_config.model_tier ?? 'balanced'}`)}
+            </dd>
+            <dt className="mesh-text-caption">{t('agents.detail.created')}</dt>
+            <dd className="mesh-text-body mesh-tnum">{agent.created_at}</dd>
           </dl>
           {/* 统计报表(analytics.md §4.4):agent 运行统计卡(名册深链唯一入口) */}
           {workspace !== null ? (
@@ -508,7 +537,7 @@ export function AgentDetailPage(): React.JSX.Element {
       {activeTab === 'config' ? (
         <section className="mesh-agents-detail__panel" data-testid="agent-panel-config">
           <fieldset className="mesh-agents-wizard__fieldset">
-            <legend>{t('agents.field.modelTier')}</legend>
+            <legend className="mesh-text-body-strong">{t('agents.field.modelTier')}</legend>
             {MODEL_TIER_ORDER.map((tier) => (
               <label key={tier} className="mesh-agents-wizard__radio">
                 <input
@@ -634,7 +663,7 @@ export function AgentDetailPage(): React.JSX.Element {
       {activeTab === 'visibility' ? (
         <section className="mesh-agents-detail__panel" data-testid="agent-panel-visibility">
           <fieldset className="mesh-agents-wizard__fieldset" disabled={!canManage}>
-            <legend>{t('agents.field.visibility')}</legend>
+            <legend className="mesh-text-body-strong">{t('agents.field.visibility')}</legend>
             <label className="mesh-agents-wizard__radio">
               <input
                 type="radio"
@@ -659,8 +688,10 @@ export function AgentDetailPage(): React.JSX.Element {
             </label>
           </fieldset>
           <dl className="mesh-agents-detail__dl">
-            <dt>{t('agents.field.triggerOnAssign')}</dt>
-            <dd>{agent.trigger_on_assign ? t('common.yes') : t('common.no')}</dd>
+            <dt className="mesh-text-caption">{t('agents.field.triggerOnAssign')}</dt>
+            <dd className="mesh-text-body">
+              {agent.trigger_on_assign ? t('common.yes') : t('common.no')}
+            </dd>
           </dl>
           {canManage ? (
             <div className="mesh-agents-detail__panel-footer">
@@ -699,7 +730,7 @@ export function AgentDetailPage(): React.JSX.Element {
                   return (
                     <tr key={version.id} data-testid={`agent-version-${version.id}`}>
                       <td>{version.change_summary ?? ''}</td>
-                      <td>{version.created_at}</td>
+                      <td className="mesh-tnum">{version.created_at}</td>
                       <td>
                         <div className="mesh-agents-detail__version-actions">
                           {previous !== undefined ? (
@@ -762,7 +793,7 @@ export function AgentDetailPage(): React.JSX.Element {
       {/* M-F1:暂停弹窗——选 in_flight_policy(§3.2/§4.10)+ 可选原因。 */}
       {pauseOpen ? (
         <div role="dialog" aria-modal="true" data-testid="agent-pause-dialog">
-          <h2>{t('agents.pause.title')}</h2>
+          <h2 className="mesh-text-title-3">{t('agents.pause.title')}</h2>
           <label className="mesh-agents-wizard__radio">
             <input
               type="radio"
@@ -805,7 +836,7 @@ export function AgentDetailPage(): React.JSX.Element {
       {/* H-F5:所有权转移弹窗(§3.1 :transfer)。 */}
       {transferOpen ? (
         <div role="dialog" aria-modal="true" data-testid="agent-transfer-dialog">
-          <h2>{t('agents.visibility.transferTitle')}</h2>
+          <h2 className="mesh-text-title-3">{t('agents.visibility.transferTitle')}</h2>
           <Input
             label={t('agents.visibility.transferLabel')}
             value={transferUserId}

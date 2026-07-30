@@ -879,12 +879,17 @@ class ChatService:
         if self.attachment_service is None:
             raise ServiceUnavailableError("attachment module unavailable")
         for attachment_id in attachment_ids:
+            # Reuse the send transaction: the user_message host row is flushed
+            # but uncommitted here — a separate transaction in link_attachment
+            # cannot see it and would fail the host-existence check with 404
+            # (chat-session.md §2.4 link-at-send; attachment.md §2.7).
             await self.attachment_service.link_attachment(
                 actor=actor,
                 workspace_id=workspace_id,
                 attachment_id=attachment_id,
                 linked_type="chat_message",
                 linked_id=linked_id,
+                session=session,
             )
 
     async def regenerate(self, *, actor: Member, workspace_id: uuid.UUID,

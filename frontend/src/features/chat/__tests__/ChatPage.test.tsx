@@ -5,10 +5,22 @@
  */
 import { screen } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
+import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { ChatPage } from '../ChatPage';
+
+/** 选中态路由化:ChatPage 经 useParams 读取 :sessionId,测试须经 Routes 提供匹配。 */
+function renderChatPage(route = '/chat') {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/chat" element={<ChatPage />} />
+      <Route path="/chat/:sessionId" element={<ChatPage />} />
+    </Routes>,
+    { route },
+  );
+}
 
 const me = { memberships: [{ workspace_id: 'ws-1' }] };
 const agent = { id: 'a-1', display_name: 'Builder', name: 'builder' };
@@ -56,7 +68,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('ChatPage(§4.1)', () => {
   it('解析工作区并加载会话列表 + agent 名册', async () => {
     stubApi(defaultRouter());
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(await screen.findByTestId('chat-session-sess-1')).toBeInTheDocument();
     // agent 过滤下拉含 Builder
     expect(screen.getByText('Builder')).toBeInTheDocument();
@@ -64,7 +76,7 @@ describe('ChatPage(§4.1)', () => {
 
   it('选中会话渲染 ConversationPanel', async () => {
     stubApi(defaultRouter());
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     fireEvent.click(await screen.findByText('First chat'));
     expect(await screen.findByTestId('chat-conversation')).toBeInTheDocument();
     expect(await screen.findByText('No messages yet')).toBeInTheDocument();
@@ -72,7 +84,7 @@ describe('ChatPage(§4.1)', () => {
 
   it('favorites 真源覆写请求方 pinned 快照', async () => {
     stubApi(defaultRouter({ favorites: [{ target_type: 'chat_session', target_id: 'sess-1' }] }));
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     await screen.findByTestId('chat-session-sess-1');
     // 被收藏 → 置顶分组出现
     expect(await screen.findByText('Pinned')).toBeInTheDocument();
@@ -85,7 +97,7 @@ describe('ChatPage(§4.1)', () => {
         ? fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } })
         : null,
     );
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
   });
 
@@ -93,14 +105,14 @@ describe('ChatPage(§4.1)', () => {
     stubApi((url) =>
       url.includes('/users/me') ? fakeResponse({ body: { data: { memberships: [] } } }) : null,
     );
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
   });
 
   it('工作区加载中呈现骨架', () => {
     // /users/me 永不 settle → 持续 loading
     vi.stubGlobal('fetch', (() => new Promise<Response>(() => undefined)) as unknown as typeof fetch);
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(screen.getByText('Loading…')).toBeInTheDocument();
   });
 
@@ -118,7 +130,7 @@ describe('ChatPage(§4.1)', () => {
       }
       return null;
     });
-    renderWithProviders(<ChatPage />);
+    renderChatPage();
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(await screen.findByTestId('chat-session-sess-1')).toBeInTheDocument();

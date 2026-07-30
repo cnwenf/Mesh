@@ -504,6 +504,59 @@ async def test_read_requires_uploader_or_host_access(service, tenant, member_fac
     assert visible["data"]["id"] == payload["id"]
 
 
+async def test_chat_message_read_requires_session_ownership(service, tenant, member_factory, session_factory):
+    """读侧 L2 属主校验(MES-111 批次③ HIGH-1 回归):链接到 chat_message 的附件,
+    仅其私聊会话属主可读;同空间非属主成员持 UUID 亦 404(镜像写侧 _assert_host_write)。"""
+    from mesh.db.models.agent import Agent
+    from mesh.db.models.chat import ChatMessage, ChatSession
+    from mesh.db.models.user import User
+    from mesh.db.tenant import set_tenant_context
+
+    workspace, owner = tenant
+    stranger = await member_factory(workspace)
+
+    async with session_factory() as session, session.begin():
+        await set_tenant_context(session, workspace.id)
+        agent_owner = User(email=f"ao-{uuid.uuid4().hex[:8]}@x.io", display_name="AO")
+        session.add(agent_owner)
+        await session.flush()
+        agent = Agent(workspace_id=workspace.id, name="bot", owner_user_id=agent_owner.id)
+        session.add(agent)
+        await session.flush()
+        chat_session = ChatSession(
+            workspace_id=workspace.id, owner_id=owner.id, agent_id=agent.id
+        )
+        session.add(chat_session)
+        await session.flush()
+        message = ChatMessage(
+            workspace_id=workspace.id, session_id=chat_session.id, role="user", content="hi"
+        )
+        session.add(message)
+        await session.flush()
+        message_id = message.id
+
+    # owner 上传(未预关联),随后链接到其私聊会话的消息。
+    payload = await _upload(service, owner, workspace)
+    attachment_id = uuid.UUID(payload["id"])
+    async with session_factory() as session, session.begin():
+        await set_tenant_context(session, workspace.id)
+        session.add(AttachmentLink(
+            workspace_id=workspace.id, attachment_id=attachment_id,
+            linked_type="chat_message", linked_id=message_id,
+        ))
+
+    # 非属主成员越权读取 → 404。
+    with pytest.raises(NotFoundError):
+        await service.get_attachment(
+            viewer=stranger, workspace_id=workspace.id, attachment_id=attachment_id,
+        )
+    # 属主本人可读。
+    visible = await service.get_attachment(
+        viewer=owner, workspace_id=workspace.id, attachment_id=attachment_id,
+    )
+    assert visible["data"]["id"] == payload["id"]
+
+
 async def test_cross_workspace_access_is_404(service, tenant, workspace_factory, member_factory):
     workspace, member = tenant
     other_ws = await workspace_factory()
@@ -1189,10 +1242,37 @@ async def test_comment_link_paths_with_table_present(monkeypatch):
 
     member = types.SimpleNamespace(role="member", id=uuid.uuid4())
 
-    # _can_read_host: exists → True; missing → False.
+    # _can_read_host: comment = 空间级可见(exists → True / missing → False);
+    # chat_message = 读侧 L2 属主校验(MES-111 批次③ HIGH-1)——存在且会话属主匹配 → True,
+    # 属主不匹配(含缺失) → False,镜像写侧 _assert_host_write。
+    class _OwnerSession(_StubSession):
+        """existence 查询返回 linked_id;属主查询返回指定 owner_id。"""
+
+        def __init__(self, exists: bool, owner_id):
+            super().__init__(exists)
+            self._owner_id = owner_id
+
+        async def scalar(self, *args, **kwargs):
+            sql = str(args[0]) if args else ""
+            if "owner_id" in sql:
+                return self._owner_id if self._exists else None
+            return linked_id if self._exists else None
+
     assert await svc._can_read_host(_StubSession(True), member, ws_id, "comment", linked_id) is True
     assert await svc._can_read_host(_StubSession(False), member, ws_id, "comment", linked_id) is False
-    assert await svc._can_read_host(_StubSession(True), member, ws_id, "chat_message", linked_id) is True
+    assert (
+        await svc._can_read_host(_OwnerSession(True, member.id), member, ws_id, "chat_message", linked_id)
+        is True
+    )
+    # 同空间非属主 → 读门拒绝(越权下载他人私聊附件被堵)。
+    assert (
+        await svc._can_read_host(_OwnerSession(True, uuid.uuid4()), member, ws_id, "chat_message", linked_id)
+        is False
+    )
+    assert (
+        await svc._can_read_host(_OwnerSession(False, member.id), member, ws_id, "chat_message", linked_id)
+        is False
+    )
 
     # _assert_host_write: exists passes; missing → NotFoundError.
     await svc._assert_host_write(_StubSession(True), member, ws_id,

@@ -294,7 +294,25 @@ class AttachmentService:
                 text(f"SELECT 1 FROM {table} WHERE id = :id AND workspace_id = :ws"),
                 {"id": linked_id, "ws": workspace_id},
             )
-            return exists is not None
+            if exists is None:
+                return False
+            # L2 读侧属主校验:镜像写侧 _assert_host_write —— chat_message 附件只对其
+            # 私聊会话属主可见;否则同空间成员持附件 UUID 即可越权下载他人私聊附件
+            # (MES-111 批次③ link-at-send 修复后该读路径首次可达)。评论为空间级可见,
+            # 不附加属主约束。拒绝统一 False → 调用方 404,无存在性泄露(§5.3)。
+            if linked_type == "chat_message":
+                owner_id = await session.scalar(
+                    text(
+                        "SELECT s.owner_id FROM chat_sessions s "
+                        "JOIN chat_messages m ON m.session_id = s.id "
+                        "AND m.workspace_id = s.workspace_id "
+                        "WHERE m.id = :id AND m.workspace_id = :ws"
+                    ),
+                    {"id": linked_id, "ws": workspace_id},
+                )
+                if owner_id is None or owner_id != member.id:
+                    return False
+            return True
         return False
 
     async def _assert_attachment_read(
@@ -1132,6 +1150,7 @@ class AttachmentService:
         linked_id: uuid.UUID,
         display: str | None = None,
         position: int = 0,
+        session: AsyncSession | None = None,
     ) -> dict[str, Any]:
         """Link an already-uploaded attachment to a host entity.
 
@@ -1141,25 +1160,44 @@ class AttachmentService:
         (attachment.md §2.7). Re-linking an existing pair is an idempotent
         no-op returning the existing link (``_create_link`` absorbs the
         ``uq_attachment_link`` conflict).
+
+        ``session``: reuse the caller's open transaction when given. Required
+        for hosts whose row is flushed but UNCOMMITTED in the caller's
+        transaction (chat send links the just-created user message): a
+        separate transaction cannot see that row and the host-existence check
+        would 404. Tenant context is assumed already set on a provided session
+        (``set_tenant_context``); a fresh transaction sets it itself.
         """
         link_to = {"type": linked_type, "id": linked_id, "position": position}
         if display is not None:
             link_to["display"] = display
-        async with self._factory() as session, session.begin():
-            await set_tenant_context(session, workspace_id)
-            attachment = await self._load_visible(session, workspace_id, attachment_id)
-            await self._assert_host_write(session, actor, workspace_id, link_to)
-            link = await self._create_link(session, workspace_id, attachment, link_to)
-            return {
-                "id": str(link.id),
-                "attachment_id": str(attachment.id),
-                "linked_type": link.linked_type,
-                "linked_id": str(link.linked_id),
-                "file_name": attachment.file_name,
-                "mime_type": attachment.mime_type,
-                "byte_size": attachment.byte_size,
-                "scan_status": attachment.scan_status,
-            }
+        if session is not None:
+            return await self._link_within(session, actor, workspace_id, attachment_id, link_to)
+        async with self._factory() as own_session, own_session.begin():
+            await set_tenant_context(own_session, workspace_id)
+            return await self._link_within(
+                own_session, actor, workspace_id, attachment_id, link_to
+            )
+
+    async def _link_within(self, session: AsyncSession, actor: Member,
+                           workspace_id: uuid.UUID, attachment_id: uuid.UUID,
+                           link_to: dict[str, Any]) -> dict[str, Any]:
+        """Visibility + host authorization + link insert on one session (§2.7)."""
+        attachment = await self._load_visible(session, workspace_id, attachment_id)
+        await self._assert_host_write(session, actor, workspace_id, link_to)
+        link = await self._create_link(session, workspace_id, attachment, link_to)
+        # mime/scan live on the shared blob (§2.3), not on the attachment row.
+        blob = await session.get(AttachmentBlob, attachment.blob_id)
+        return {
+            "id": str(link.id),
+            "attachment_id": str(attachment.id),
+            "linked_type": link.linked_type,
+            "linked_id": str(link.linked_id),
+            "file_name": attachment.file_name,
+            "mime_type": blob.mime_type if blob is not None else None,
+            "byte_size": attachment.file_size,
+            "scan_status": blob.scan_status if blob is not None else None,
+        }
 
     async def delete_attachment(
         self,

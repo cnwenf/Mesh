@@ -1,13 +1,15 @@
 /**
- * 顶栏铃铛(comment-inbox.md §4.2):未读数字徽标 + 红点;点击下拉最近 ~5 条通知,
- * 底部「查看全部」进 /inbox。工作区切换时轮询 unread-count;realtime 经
- * member:{me}:inbox 频道实时 +1(notification.created / inbox.unread_count)。
+ * 顶栏铃铛(comment-inbox.md §4.2,design-quality.md §7.1 禁 emoji):
+ * 底座 IconButton + bell 线性图标 + 未读数字徽标;点击下拉最近 ~5 条通知,
+ * 底部「查看全部」进 /inbox。外点(pointerdown)或 Esc 关闭下拉。
+ * 工作区切换时轮询 unread-count;realtime 经 member:{me}:inbox 频道实时同步
+ * (inbox.unread_count 为未读数权威源,notification.created 仅更新下拉预览)。
  * 点击通知直达 issue 评论锚点并自动标已读。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Icon } from '../../design';
+import { Icon, IconButton } from '../../design';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -30,6 +32,7 @@ export function InboxBell(): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const [latest, setLatest] = useState<readonly Notification[]>([]);
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // 工作区切换时拉取未读计数。
   useEffect(() => {
@@ -70,6 +73,24 @@ export function InboxBell(): React.JSX.Element {
     };
   }, [realtime, memberId]);
 
+  // 下拉打开时:外部 pointerdown 与 Esc 关闭(卸载/关闭时解绑)。
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const root = rootRef.current;
+      if (root !== null && !root.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
   const toggleOpen = useCallback(() => {
     setOpen((prev) => {
       const next = !prev;
@@ -96,26 +117,25 @@ export function InboxBell(): React.JSX.Element {
   );
 
   return (
-    <div className="mesh-inbox-bell">
-      <button
-        type="button"
+    <div className="mesh-inbox-bell" ref={rootRef}>
+      <IconButton
+        label={t('a11y.notifications')}
         className="mesh-inbox-bell__button"
         data-testid="inbox-bell"
-        aria-label={t('a11y.notifications')}
         aria-expanded={open}
         onClick={toggleOpen}
       >
         <Icon name="bell" size={20} />
-        {count > 0 ? (
-          <span className="mesh-inbox-bell__badge" data-testid="inbox-badge">
-            {count > 99 ? '99+' : count}
-          </span>
-        ) : null}
-      </button>
+      </IconButton>
+      {count > 0 ? (
+        <span className="mesh-inbox-bell__badge mesh-text-micro mesh-tnum" data-testid="inbox-badge">
+          {count > 99 ? '99+' : count}
+        </span>
+      ) : null}
       {open ? (
         <div className="mesh-inbox-bell__dropdown" role="menu" data-testid="inbox-dropdown">
           {latest.length === 0 ? (
-            <p className="mesh-inbox-bell__empty" data-testid="inbox-bell-empty">
+            <p className="mesh-inbox-bell__empty mesh-text-caption" data-testid="inbox-bell-empty">
               {t('inbox.empty')}
             </p>
           ) : (
@@ -129,9 +149,15 @@ export function InboxBell(): React.JSX.Element {
                     data-testid={`inbox-bell-item-${notification.id}`}
                     onClick={() => handleClick(notification)}
                   >
-                    <span className="mesh-inbox-bell__item-title">{notification.title}</span>
-                    <span className="mesh-inbox-bell__item-preview">{notification.preview}</span>
-                    <time>{formatRelativeTime(notification.created_at, { locale })}</time>
+                    <span className="mesh-inbox-bell__item-title mesh-text-body-sm">
+                      {notification.title}
+                    </span>
+                    <span className="mesh-inbox-bell__item-preview mesh-text-caption mesh-truncate">
+                      {notification.preview}
+                    </span>
+                    <time className="mesh-text-caption mesh-tnum">
+                      {formatRelativeTime(notification.created_at, { locale })}
+                    </time>
                   </button>
                 </li>
               ))}
