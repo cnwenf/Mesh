@@ -12,6 +12,7 @@ import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import { OnboardingChecklist } from '../OnboardingChecklist';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -113,8 +114,15 @@ function LocationProbe(): React.JSX.Element {
   return <span data-testid="location-probe">{location.pathname + location.search}</span>;
 }
 
-beforeEach(() => vi.unstubAllGlobals());
-afterEach(() => vi.unstubAllGlobals());
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
+});
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('OnboardingChecklist', () => {
   it('renders the five steps in activation order with progress values', async () => {

@@ -17,6 +17,40 @@ const FRONTEND_PORT = process.env.MES106_FRONTEND_PORT ?? '18310';
 const PASSWORD = 'Mesh-Demo#2026x';
 const LOAD_FAILED_TEXT = 'We could not load this content. Please try again.';
 
+/**
+ * 鉴权豁免端点(与 src/api/unauthorized.ts 的 AUTH_EXEMPT_PATHS 同义):
+ * 这些端点的 401 是业务错误(如登录凭证错),不属「会话失效」信号。
+ * 收窄的过滤(M1 验收教训:只滤 /workspaces 与 /me,漏掉真实端点
+ * /users/me)曾让匿名 shell 的受保护请求逃过断言。
+ */
+const AUTH_EXEMPT_API_PATHS: readonly string[] = [
+  '/api/v1/auth/login',
+  '/api/v1/auth/register',
+  '/api/v1/auth/mfa/verify',
+  '/api/v1/auth/forgot-password',
+  '/api/v1/auth/reset-password',
+  '/api/v1/auth/verify-email',
+  '/api/v1/auth/oauth/',
+];
+
+/** 判定 401 响应 URL 是否来自受保护 API(全部 /api/ 路径 - 鉴权豁免小集合) */
+function isProtectedApi401(url: string): boolean {
+  const pathname = new URL(url).pathname;
+  if (!pathname.startsWith('/api/')) return false;
+  return !AUTH_EXEMPT_API_PATHS.some((exempt) =>
+    exempt.endsWith('/') ? pathname.startsWith(exempt) : pathname === exempt,
+  );
+}
+
+/** 收集页面全部 401 响应 URL(断言侧经 isProtectedApi401 收敛) */
+function collect401(page: Page): string[] {
+  const urls: string[] = [];
+  page.on('response', (response) => {
+    if (response.status() === 401) urls.push(response.url());
+  });
+  return urls;
+}
+
 /** 每用例唯一邮箱(注册即登录;同邮箱重注会 409) */
 function uniqueEmail(suffix: string): string {
   return `mes106-${suffix}-${String(process.pid)}@example.com`;
@@ -41,10 +75,7 @@ async function expectNoLoadFailure(page: Page): Promise<void> {
 
 test.describe('MES-106 登录守卫 / 401 兜底 / WS 公网 HTTP', () => {
   test('未登录访问首页 → 自动跳 /login 并携带 next,不发起受保护请求', async ({ page }) => {
-    const unauthorizedUrls: string[] = [];
-    page.on('response', (response) => {
-      if (response.status() === 401) unauthorizedUrls.push(response.url());
-    });
+    const unauthorizedUrls = collect401(page);
 
     await page.goto('/');
     await page.waitForURL(/\/login\?next=/);
@@ -52,12 +83,19 @@ test.describe('MES-106 登录守卫 / 401 兜底 / WS 公网 HTTP', () => {
     expect(new URL(page.url()).searchParams.get('next')).toBe('/');
     await expect(page.getByTestId('login-email')).toBeVisible();
     await expectNoLoadFailure(page);
-    // 守卫在请求前拦截:受保护端点根本未被调用(不再有 401 风暴)
-    expect(
-      unauthorizedUrls.filter(
-        (url) => url.includes('/api/v1/workspaces') || url.includes('/api/v1/me'),
-      ),
-    ).toEqual([]);
+    // 守卫在请求前拦截:全部受保护端点(含 /users/me、/workspaces 与 shell
+    // 挂载的收件箱铃铛 / 上手清单解析)根本未被调用(不再有 401 风暴)
+    expect(unauthorizedUrls.filter(isProtectedApi401)).toEqual([]);
+  });
+
+  test('未登录访问公开邀请预览页 → 可达且无受保护请求(M1 回归)', async ({ page }) => {
+    const unauthorizedUrls = collect401(page);
+
+    await page.goto('/invite/invtk_nonexistent');
+    // 预览恒 200;不存在的令牌按 not_found 同形呈现(公开路由,守卫不拦)
+    await expect(page.getByTestId('invite-reason-not_found')).toBeVisible();
+    await expectNoLoadFailure(page);
+    expect(unauthorizedUrls.filter(isProtectedApi401)).toEqual([]);
   });
 
   test('未登录访问深层受保护路径 → next 携带原路径(含查询串)', async ({ page }) => {
@@ -68,10 +106,13 @@ test.describe('MES-106 登录守卫 / 401 兜底 / WS 公网 HTTP', () => {
   });
 
   test('登录后回跳原页面,内容正常加载(无加载失败、无 401)', async ({ page }) => {
+    const unauthorizedUrls = collect401(page);
     await registerAndContinue(page, uniqueEmail('back'), '/settings');
     await page.waitForURL((url) => new URL(url).pathname === '/settings');
     await expect(page.getByTestId('theme-select')).toBeVisible();
     await expectNoLoadFailure(page);
+    // 登录态全程无受保护端点 401(会话凭证有效)
+    expect(unauthorizedUrls.filter(isProtectedApi401)).toEqual([]);
   });
 
   test('已登录访问 /login → 回跳首页(避免重复登录)', async ({ page }) => {

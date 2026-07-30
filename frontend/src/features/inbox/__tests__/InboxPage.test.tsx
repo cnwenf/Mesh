@@ -11,6 +11,7 @@ import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import type { RealtimeEventFrame } from '../../../types/realtime';
 import { InboxPage } from '../InboxPage';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -76,11 +77,14 @@ function rtFrame(event: string, payload: unknown): RealtimeEventFrame {
   return { op: 'event', channel: 'member:mem-1:inbox', seq: 1, event, payload } as RealtimeEventFrame;
 }
 
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
 beforeEach(() => {
+  useAuthStore.getState().setToken('tok_test');
   pageFrame = null;
   vi.unstubAllGlobals();
 });
 afterEach(() => {
+  useAuthStore.getState().clearToken();
   vi.unstubAllGlobals();
 });
 
