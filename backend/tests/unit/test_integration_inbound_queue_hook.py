@@ -367,16 +367,49 @@ class TestRateLimitHintDeliveryFields:
             )
         return integration_id
 
+    @staticmethod
+    def _envelope(*, external_event_id: str, external_ref: str, conversation_type: str):
+        from mesh.integrations.connectors import VerifiedEnvelope
+
+        # The unified core's over-limit disposition derives the delivery
+        # fields from the verified envelope (the pre-truncation truth),
+        # not from the ledger row it is flipping to 'rejected'.
+        return VerifiedEnvelope(
+            provider="dingtalk",
+            provider_tenant_key=HINT_CORP,
+            external_event_id=external_event_id,
+            event_type="im.message.receive",
+            external_ref=external_ref,
+            conversation_type=conversation_type,
+            sender_key=HINT_STAFF,
+            text="flood message",
+            truncated=False,
+            msgtype="text",
+            raw_payload={
+                "conversationType": conversation_type,
+                "senderStaffId": HINT_STAFF,
+            },
+            channel="http",
+            is_direct_message=conversation_type == "1",
+            bot_mentioned=True,
+        )
+
     async def test_direct_conversation_hint_carries_type_and_target(
         self, session_factory, redis_client
     ):
-        from mesh.integrations.connectors import NormalizedEvent
-        from mesh.integrations.inbound import _reject_rate_limited
+        from datetime import UTC, datetime
+
+        from mesh.integrations.ingest import _reject_rate_limited
         from mesh.integrations.queue_keys import build_conversation_key
 
         world = await seed_world(session_factory)
         integration_id = await self._seed_dingtalk_world(session_factory, world)
         conversation_key = build_conversation_key("dingtalk", HINT_CORP, "cidHINT==")
+        envelope = self._envelope(
+            external_event_id="msgHintDirect",
+            external_ref="cidHINT==",
+            conversation_type="1",
+        )
         async with session_factory() as session, session.begin():
             from mesh.db.models.integration import Integration
 
@@ -389,24 +422,17 @@ class TestRateLimitHintDeliveryFields:
             )
             session.add(event_row)
             await session.flush()
-            status, body = await _reject_rate_limited(
+            result = await _reject_rate_limited(
                 session,
                 redis=redis_client,
                 integration=integration,
                 event_row=event_row,
-                external_event_id="msgHintDirect",
+                envelope=envelope,
                 conversation_key=conversation_key,
-                event=NormalizedEvent(
-                    external_event_id="msgHintDirect",
-                    event_type="im.message.receive",
-                    external_ref="cidHINT==",
-                    actor_key=HINT_STAFF,
-                    tenant_key=HINT_CORP,
-                    text="flood message",
-                ),
+                now=datetime.now(UTC),
             )
-        assert status == 200
-        assert body["process_status"] == "rejected"
+        assert result.status_code == 200
+        assert result.process_status == "rejected"
         sends = await _outbox(session_factory, "im.send")
         hints = [e for e in sends if e.payload.get("kind") == "rate_limit_hint"]
         assert len(hints) == 1
@@ -417,13 +443,19 @@ class TestRateLimitHintDeliveryFields:
     async def test_group_conversation_hint_carries_group_type(
         self, session_factory, redis_client
     ):
-        from mesh.integrations.connectors import NormalizedEvent
-        from mesh.integrations.inbound import _reject_rate_limited
+        from datetime import UTC, datetime
+
+        from mesh.integrations.ingest import _reject_rate_limited
         from mesh.integrations.queue_keys import build_conversation_key
 
         world = await seed_world(session_factory)
         integration_id = await self._seed_dingtalk_world(session_factory, world)
         conversation_key = build_conversation_key("dingtalk", HINT_CORP, "cidHINTGRP==")
+        envelope = self._envelope(
+            external_event_id="msgHintGroup",
+            external_ref="cidHINTGRP==",
+            conversation_type="2",
+        )
         async with session_factory() as session, session.begin():
             from mesh.db.models.integration import Integration
 
@@ -441,16 +473,9 @@ class TestRateLimitHintDeliveryFields:
                 redis=redis_client,
                 integration=integration,
                 event_row=event_row,
-                external_event_id="msgHintGroup",
+                envelope=envelope,
                 conversation_key=conversation_key,
-                event=NormalizedEvent(
-                    external_event_id="msgHintGroup",
-                    event_type="im.message.receive",
-                    external_ref="cidHINTGRP==",
-                    actor_key=HINT_STAFF,
-                    tenant_key=HINT_CORP,
-                    text="flood message",
-                ),
+                now=datetime.now(UTC),
             )
         sends = await _outbox(session_factory, "im.send")
         hints = [e for e in sends if e.payload.get("kind") == "rate_limit_hint"]

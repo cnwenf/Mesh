@@ -53,10 +53,17 @@ def _settings(**overrides):
         jwt_secret=TEST_SIGNING_SECRET,
         dingtalk_gateway_base="https://api.dingtalk.com",
         dingtalk_stream_scan_interval=0.05,
+        # The FULL IM layer field set (MES-88/89) the shared core reads —
+        # the unit wiring mirrors production Settings so the seam is tested
+        # with honest inputs, not a partial stand-in.
+        im_ack_coalesce_window_seconds=5.0,
         im_inbound_per_identity_per_min=20,
         im_inbound_per_conversation_per_min=60,
         im_queue_max_pending_per_conversation=50,
         im_inbound_text_max_chars=4000,
+        im_dispatch_lease_buffer_seconds=300,
+        context_append_max_count=20,
+        context_append_max_chars=32000,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -350,6 +357,79 @@ async def test_redelivered_frame_is_msg_id_deduped_and_still_acked(session_facto
     assert len(queues) == 1  # never queued twice
     assert len(fake_ws.sent) == 2  # BOTH frames ACKed (platform stops redelivering)
     assert all(ack["data"] == "received" for ack in fake_ws.sent)
+
+
+async def test_frame_ingest_survives_partial_settings_stand_in(session_factory):
+    """R2 root cause regression: the shared core's settings resolution is
+    TOTAL — a settings object missing every IM-layer field (the legacy
+    stand-in shape) must never AttributeError mid-ingest. An exception
+    there escapes to the per-frame isolation handler and the frame would
+    go un-ingested until platform redelivery, so the resolution fills the
+    gaps with the config-mirroring defaults instead."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    integration = await _stream_integration(session_factory, world)
+    frame = _message_frame(dingtalk_message_payload())
+    fake_ws = FakeWS([frame, TimeoutError()])
+    partial = types.SimpleNamespace(
+        jwt_secret=TEST_SIGNING_SECRET,
+        dingtalk_gateway_base="https://api.dingtalk.com",
+        dingtalk_stream_scan_interval=0.05,
+    )  # NO im_* / context_append_* fields at all
+    manager = _manager(session_factory, fake_ws, settings=partial)
+    client = DingTalkStreamClient(
+        app_key="k", app_secret="s", gateway_base="https://gateway.test",
+    )
+    client._ws = fake_ws
+
+    await manager._frame_loop(client, [integration], heartbeat=90, signal=asyncio.Event())
+
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+    assert event.process_status == "dispatched"  # ingested, not silently dropped
+    assert fake_ws.sent[0]["data"] == "received"  # ACKed
+
+
+async def test_frame_ingest_failure_is_isolated_but_never_silent(session_factory):
+    """R2 observability contract: when ingest raises inside the frame loop,
+    the frame is skipped WITHOUT an ACK (platform redelivers → msgId dedup
+    makes it idempotent — the at-least-once half) AND the failure leaves a
+    durable trace — exact in-memory count + throttled stream_state marker
+    (the §3.9 diagnostic truth source) — never a silent drop."""
+    from unittest.mock import patch
+
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    integration = await _stream_integration(session_factory, world)
+    frame = _message_frame(dingtalk_message_payload())
+    fake_ws = FakeWS([frame, TimeoutError()])
+    manager = _manager(session_factory, fake_ws)
+    client = DingTalkStreamClient(
+        app_key="k", app_secret="s", gateway_base="https://gateway.test",
+    )
+    client._ws = fake_ws
+
+    with patch(
+        "mesh.integrations.dingtalk_stream.ingest_verified_event",
+        side_effect=RuntimeError("boom-ingest-down"),
+    ):
+        await manager._frame_loop(
+            client, [integration], heartbeat=90, signal=asyncio.Event()
+        )
+
+    # Redelivery semantics: no ledger row, NO ACK sent.
+    async with session_factory() as session:
+        events = (await session.execute(select(IntegrationEvent))).scalars().all()
+    assert events == []
+    assert fake_ws.sent == []
+    # Observability half: exact count + durable stream_state marker.
+    assert manager._frame_error_count == 1
+    async with session_factory() as session:
+        row = await session.get(Integration, integration.id)
+    state = row.stream_state or {}
+    assert state["frame_error_count"] == 1
+    assert "boom-ingest-down" in state["last_frame_error"]
+    assert state["last_frame_error_at"]
 
 
 async def test_disconnect_frame_requests_immediate_reconnect(session_factory):

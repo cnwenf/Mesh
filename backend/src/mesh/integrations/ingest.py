@@ -98,23 +98,38 @@ IM_PROVIDERS = frozenset({"dingtalk", "feishu", "slack"})
 # conversation-queue pipeline's published copy).
 _RATE_LIMIT_HINT_TEXT = "Messages are arriving too fast — please slow down a little."
 
-# Fallbacks mirror mesh.config.Settings defaults for callers that do not
-# thread settings through (legacy unit tests); production always passes the
-# real Settings object (inbound_routes / the Stream manager).
+# Fallbacks mirror mesh.config.Settings defaults. Production always passes
+# the real Settings object (inbound_routes / the Stream manager); the merge
+# view below fills anything a PARTIAL settings object lacks so a wiring gap
+# can never raise mid-ingest — inside the Stream adapter, an exception here
+# escapes to the per-frame isolation handler and the frame goes un-ingested
+# until platform redelivery, so the resolution must be total.
+_IM_SETTINGS_FIELDS: tuple[tuple[str, object], ...] = (
+    ("im_ack_coalesce_window_seconds", 5.0),
+    ("im_inbound_per_identity_per_min", 20),
+    ("im_inbound_per_conversation_per_min", 60),
+    ("im_queue_max_pending_per_conversation", 50),
+    ("im_inbound_text_max_chars", 4000),
+    ("im_dispatch_lease_buffer_seconds", 300),
+    ("context_append_max_count", 20),
+    ("context_append_max_chars", 32000),
+)
+
 _IM_SETTINGS_DEFAULTS = SimpleNamespace(
-    im_ack_coalesce_window_seconds=5.0,
-    im_inbound_per_identity_per_min=20,
-    im_inbound_per_conversation_per_min=60,
-    im_queue_max_pending_per_conversation=50,
-    im_inbound_text_max_chars=4000,
-    im_dispatch_lease_buffer_seconds=300,
-    context_append_max_count=20,
-    context_append_max_chars=32000,
+    **{name: default for name, default in _IM_SETTINGS_FIELDS}
 )
 
 
 def _resolve_im_settings(settings: Any) -> Any:
-    return settings if settings is not None else _IM_SETTINGS_DEFAULTS
+    """The IM layer's settings view: every field the guards / queue / command
+    plane read, taken from ``settings`` where present, defaulted where not
+    (None → the full defaults). A real Settings object passes through with
+    identical values; a partial stand-in can never AttributeError downstream."""
+    if settings is None:
+        return _IM_SETTINGS_DEFAULTS
+    return SimpleNamespace(
+        **{name: getattr(settings, name, default) for name, default in _IM_SETTINGS_FIELDS}
+    )
 
 
 @dataclass(frozen=True)
@@ -309,23 +324,28 @@ async def _reject_rate_limited(
     )
 
 
-async def _reject_invalid_request(
+async def _reject_malformed_payload(
     session: AsyncSession,
     *,
     envelope: VerifiedEnvelope,
     event_row: IntegrationEvent,
     now: datetime,
 ) -> IngestResult:
-    """A key the §2.10 segment rules refuse (e.g. a colon-carrying segment
-    from a signed-but-hostile payload) is a REJECTION, not a 500: audit on
-    the existing ledger row and answer bare-JSON 200 — the platform must
-    never see a §6.14 envelope or a non-2xx retry trigger here."""
+    """SIGNED-VALID but malformed payload: a key the §2.10 segment rules
+    refuse (e.g. a colon-carrying segment from a signed-but-hostile
+    payload) is a REJECTION, not a 500: audit on the existing ledger row
+    and answer bare-JSON 200 — the platform must never see a §6.14
+    envelope or a non-2xx retry trigger here.
+
+    Reason label ``malformed_payload`` (NOT ``invalid_request`` — that
+    label is the signature/auth layer's; the signature here already
+    verified, the payload shape is what failed, §3.5 semantics)."""
     event_row.process_status = "rejected"
     # Re-run the §3.2 16KiB truncation on the flip (stored as 'received'
     # with the full payload — rejected rows keep only the forensic head).
     event_row.payload = {
         **audit_payload(event_row.payload or {}, "rejected"),
-        "_mesh_reject_reason": "invalid_request",  # survives truncation
+        "_mesh_reject_reason": "malformed_payload",  # survives truncation
     }
     event_row.updated_at = now
     await session.flush()
@@ -335,7 +355,7 @@ async def _reject_invalid_request(
             "received": True,
             "event_id": envelope.external_event_id,
             "process_status": "rejected",
-            "reason": "invalid_request",
+            "reason": "malformed_payload",
         },
         process_status="rejected",
         event_id=event_row.id,
@@ -481,7 +501,7 @@ async def ingest_verified_event(
             envelope.provider, envelope.provider_tenant_key, envelope.external_ref
         )
     except ValidationError:
-        return await _reject_invalid_request(
+        return await _reject_malformed_payload(
             session, envelope=envelope, event_row=event_row, now=now
         )
 
@@ -694,7 +714,7 @@ async def ingest_verified_event(
             now=now,
         )
     except ValidationError:
-        return await _reject_invalid_request(
+        return await _reject_malformed_payload(
             session, envelope=envelope, event_row=event_row, now=now
         )
 

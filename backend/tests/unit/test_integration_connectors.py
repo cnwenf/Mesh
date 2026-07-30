@@ -350,18 +350,6 @@ def test_adapter_for_all_kinds():
         assert adapter["secret_config_key"].endswith("_ref")
 
 
-def test_adapter_for_dingtalk_pending_inbound_adapter():
-    """im_dingtalk is registered in KIND_TO_PROVIDER by the outbound slice
-    (MES-89), but its INBOUND adapter (verify / normalize — HTTP callback
-    signature + payload normalization + Stream frame routing) ships with
-    the dual-receive ingestion slice (MES-87). Until that lands there is
-    no ADAPTERS["dingtalk"] entry, so adapter_for raises KeyError — the
-    outbound path never goes through adapter_for. When MES-87 merges,
-    fold im_dingtalk into test_adapter_for_all_kinds and drop this test."""
-    with pytest.raises(KeyError):
-        adapter_for("im_dingtalk")
-
-
 def test_adapter_for_webhook_outbound_raises():
     with pytest.raises(KeyError):
         adapter_for("webhook_outbound")

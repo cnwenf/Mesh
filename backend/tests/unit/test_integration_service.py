@@ -553,3 +553,150 @@ async def test_update_gitlab_config_rejects_forbidden_instance_url(session_facto
     async with session_factory() as session:
         row = await session.get(Integration, integration_id)
     assert (row.config or {}).get("instance_url") == "https://gitlab.corp.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Per-kind config defaults at every config write (R1, integrations.md
+# §2.7:295 / §2.10:649 / §3.2:826 — 「serial_conversation(钉钉默认)」)
+# ---------------------------------------------------------------------------
+
+
+async def _member(session_factory, world):
+    from mesh.db.models.member import Member
+
+    async with session_factory() as session:
+        return await session.get(Member, world["member"])
+
+
+async def test_create_dingtalk_defaults_inbound_queue_to_serial(session_factory):
+    """An API-created DingTalk integration without an explicit dispatch-mode
+    choice materializes the Spec default — serial_conversation. The queue
+    module's code-level fallback is parallel (the feishu/slack baseline),
+    so the DingTalk default must be made explicit at creation or real API
+    integrations would silently parallel direct-dispatch."""
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="dt-default",
+        config={"corp_id": "dingcorp0771"},
+    )
+    async with session_factory() as session:
+        row = await session.scalar(select(Integration).where(Integration.name == "dt-default"))
+    assert row.config["inbound_queue"] == "serial_conversation"
+
+
+async def test_create_dingtalk_explicit_inbound_queue_wins_over_default(session_factory):
+    """An explicit client choice is never overridden by the Spec default."""
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="dt-parallel",
+        config={"corp_id": "dingcorp0772", "inbound_queue": "parallel"},
+    )
+    async with session_factory() as session:
+        row = await session.scalar(select(Integration).where(Integration.name == "dt-parallel"))
+    assert row.config["inbound_queue"] == "parallel"
+
+
+async def test_create_slack_carries_no_inbound_queue_default(session_factory):
+    """The parallel baseline for feishu/slack stays the queue module's
+    code-level fallback — no key is materialized for non-DingTalk kinds."""
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_slack",
+        name="slack-no-default",
+        config={"team_id": "T_NODEFAULT"},
+    )
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(Integration).where(Integration.name == "slack-no-default")
+        )
+    assert "inbound_queue" not in (row.config or {})
+
+
+async def test_update_dingtalk_wholesale_config_rematerializes_serial_default(
+    session_factory,
+):
+    """A wholesale config replacement (update) must not silently drop a
+    DingTalk integration back onto the parallel code fallback — the Spec
+    default is re-materialized at every config write."""
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    created = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="dt-update",
+        config={"corp_id": "dingcorp0773", "inbound_queue": "parallel"},
+    )
+    integration_id = uuid.UUID(created["integration"]["id"])
+    await service.update_integration(
+        workspace_id=world["ws"],
+        integration_id=integration_id,
+        config={"corp_id": "dingcorp0773"},  # no inbound_queue this time
+    )
+    async with session_factory() as session:
+        row = await session.get(Integration, integration_id)
+    assert row.config["inbound_queue"] == "serial_conversation"
+
+
+async def test_api_created_dingtalk_default_config_enqueues_serial_pending(
+    session_factory,
+):
+    """End-to-end behavioral pin (unit level): an integration created
+    through the real service path with NO inbound_queue enqueues an
+    inbound text message as a SERIAL pending item (awaiting the queue
+    dispatcher) — never a parallel optimistic direct dispatch."""
+    from mesh.integrations.connectors import VerifiedEnvelope
+    from mesh.integrations.ingest import ingest_verified_event
+    from tests.unit.integrations_support import (
+        DINGTALK_CONVERSATION_ID,
+        NOW,
+        dingtalk_message_payload,
+        make_dingtalk_binding,
+    )
+
+    world = await seed_world(session_factory)
+    service = make_service(session_factory)
+    created = await service.create_integration(
+        workspace_id=world["ws"],
+        creator=await _member(session_factory, world),
+        kind="im_dingtalk",
+        name="dt-behavior",
+        config={"corp_id": "dingcorp0001"},  # matches the fixture payload corp
+    )
+    integration_id = uuid.UUID(created["integration"]["id"])
+    await make_dingtalk_binding(
+        session_factory, world={**world, "integ_dingtalk": integration_id}
+    )
+
+    from mesh.integrations.dingtalk import normalize_message_payload
+
+    envelope = normalize_message_payload(
+        dingtalk_message_payload(), max_chars=4000, channel="http"
+    )
+    assert isinstance(envelope, VerifiedEnvelope)
+    async with session_factory() as session:
+        integration = await session.get(Integration, integration_id)
+    async with session_factory() as session, session.begin():
+        result = await ingest_verified_event(
+            session, integration=integration, envelope=envelope, now=NOW
+        )
+    assert result.process_status == "dispatched"
+
+    from mesh.db.models.integration import IntegrationMessageQueue
+
+    async with session_factory() as session:
+        item = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
+    assert item.dispatch_mode == "serial_conversation"  # the Spec default
+    assert item.state == "pending"  # awaiting the dispatcher — NOT direct dispatch
+    assert item.conversation_key == f"dingtalk:dingcorp0001:{DINGTALK_CONVERSATION_ID}"

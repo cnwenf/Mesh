@@ -57,6 +57,7 @@ import json
 import logging
 import random
 import ssl
+import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -329,6 +330,11 @@ class StreamManager:
         self._served_ids: set[uuid.UUID] = set()
         self._group_integrations: dict[str, list[Integration]] = {}
         self._gateway_warned = False
+        # Per-frame failure diagnostics (R2: failures never disappear). The
+        # counter is exact in-memory; persistence into stream_state is
+        # throttled so an error storm cannot write-storm the ledger.
+        self._frame_error_count = 0
+        self._last_frame_error_persist = 0.0
         # §6.16 defense-in-depth: decrypted app_secret plaintexts are
         # registered here and scrubbed from every error log line this
         # manager emits (the wire-level guarantee is "never log the body";
@@ -733,20 +739,25 @@ class StreamManager:
                     # Card authorization chain — MES-89 wires the handler.
                     logger.info("dingtalk stream: card callback frame received (audit only)")
                     await client.send_ack(frame, "received")
-            except Exception:  # noqa: BLE001 — isolate per-frame failures
+            except Exception as exc:  # noqa: BLE001 — isolate per-frame failures
                 message, _hits = redact_text(
                     "dingtalk stream: frame handling failed — frame skipped "
                     "(redelivery is idempotent via msgId)",
                     self._redact_values,
                 )
                 logger.exception(message)
+                # Failures never disappear (R2): an exact in-memory count +
+                # a THROTTLED diagnostic marker persisted into stream_state
+                # — the §3.9 diagnostic truth source surfaced by
+                # stream-status. The frame stays un-ACKed, so the platform
+                # redelivers and msgId dedup keeps it idempotent; this
+                # marker is the observability half of that contract.
+                await self._record_frame_error(integrations, exc)
 
             # Persist last_frame_at (throttled, NO realtime broadcast —
             # transitions broadcast; liveness refresh is a state write
             # only). Runs on EVERY successfully received frame (M4).
-            import time as _time
-
-            now_epoch = _time.time()
+            now_epoch = time.time()
             if now_epoch - last_persist > _FRAME_PERSIST_INTERVAL_SECONDS:
                 last_persist = now_epoch
                 for integration in integrations:
@@ -757,6 +768,47 @@ class StreamManager:
                     except Exception:  # noqa: BLE001 — diagnostic persistence is best-effort
                         pass
         return False
+
+    async def _record_frame_error(
+        self, integrations: list[Integration], exc: Exception
+    ) -> None:
+        """Exact in-memory count + throttled stream_state marker for a
+        per-frame ingest/handling failure (R2 — failures never disappear).
+
+        Best-effort by contract: a diagnostic write must never mask the
+        isolation it reports. Throttled to at most one persistence per
+        ``_FRAME_PERSIST_INTERVAL_SECONDS`` even under a continuous error
+        cycle (the counter stays exact; the persisted value is the count at
+        write time). The marker fields (``frame_error_count`` /
+        ``last_frame_error_at`` / ``last_frame_error``) ride the
+        stream_state JSONB — the sole §3.9 diagnostic surface, read back by
+        ``GET .../stream-status`` — and the error text is redacted through
+        the same secret blacklist as every other log line this manager
+        writes."""
+        self._frame_error_count += 1
+        now_epoch = time.time()
+        if now_epoch - self._last_frame_error_persist < _FRAME_PERSIST_INTERVAL_SECONDS:
+            return
+        self._last_frame_error_persist = now_epoch
+        reason, _hits = redact_text(
+            f"{type(exc).__name__}: {exc}"[:200], self._redact_values
+        )
+        now = self._now()
+        for integration in integrations:
+            try:
+                async with self._session_factory() as session, session.begin():
+                    row = await session.get(Integration, integration.id)
+                    if row is None:
+                        continue
+                    row.stream_state = {
+                        **(row.stream_state or {}),
+                        "frame_error_count": self._frame_error_count,
+                        "last_frame_error_at": now.isoformat(),
+                        "last_frame_error": reason,
+                    }
+                    row.updated_at = now
+            except Exception:  # noqa: BLE001 — diagnostic persistence is best-effort
+                pass
 
     async def _ingest_message_frame(
         self,
