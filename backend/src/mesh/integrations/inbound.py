@@ -58,7 +58,7 @@ from mesh.integrations.inbound_guards import (
 )
 from mesh.integrations.matching import binding_matches, compute_im_signals
 from mesh.integrations.message_queue import enqueue_message
-from mesh.integrations.queue_keys import build_conversation_key
+from mesh.integrations.queue_keys import build_conversation_key, conversation_delivery_fields
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
@@ -588,11 +588,17 @@ async def _reject_rate_limited(
     event_row: IntegrationEvent,
     external_event_id: str,
     conversation_key: str,
+    event: NormalizedEvent,
 ) -> tuple[int, dict[str, Any]]:
     """Over-limit disposition (§2.10): NOT enqueued/executed/acked; rejected
     audit under the REAL msgId dedupe key; one bot hint per minute per
     conversation (notice-reflection guard); bare 200 (non-2xx would trigger
-    platform re-push amplification)."""
+    platform re-push amplification).
+
+    The hint payload is SELF-SPECIFIED: a rejected message is never
+    enqueued, so the relay's queue-item derivation has nothing to read —
+    the conversation type (and the direct-chat target) travel with the
+    payload (MES-122)."""
     event_row.process_status = "rejected"
     _mark_payload(event_row, "_mesh_reject_reason", "rate_limited")
     if redis is not None and await rate_limit_hint_allowed(
@@ -606,6 +612,9 @@ async def _reject_rate_limited(
                 "kind": "rate_limit_hint",
                 "integration_id": str(integration.id),
                 "conversation_key": conversation_key,
+                **conversation_delivery_fields(
+                    event_row.payload, actor_key=event.actor_key
+                ),
                 "text": _RATE_LIMIT_HINT_TEXT,
             },
             idempotency_key=f"im-hint:{event_row.id}",
@@ -680,6 +689,7 @@ async def _enqueue_im_or_reject(
                 event_row=event_row,
                 external_event_id=external_event_id,
                 conversation_key=conversation_key,
+                event=event,
             )
     try:
         await enqueue_message(
@@ -700,6 +710,7 @@ async def _enqueue_im_or_reject(
             event_row=event_row,
             external_event_id=external_event_id,
             conversation_key=conversation_key,
+            event=event,
         )
     except MeshValidationError:
         event_row.process_status = "rejected"

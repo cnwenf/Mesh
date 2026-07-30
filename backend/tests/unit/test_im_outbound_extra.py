@@ -654,8 +654,9 @@ async def test_command_feedback_kind_delivered(session_factory, redis_client):
 
 
 async def test_rate_limit_hint_kind_delivered(session_factory, redis_client):
-    """MES-88 §2.10 one-per-minute rate-limit hint (inbound.py shape — no
-    queue item exists for a rejected message; default group delivery)."""
+    """MES-88 §2.10 one-per-minute rate-limit hint — MES-122 emitter shape:
+    the payload is self-specified (no queue item exists for a rejected
+    message), carrying the conversation type explicitly; group delivery."""
     world = await _seed(session_factory)
     await _ensure_binding(session_factory, world)
     transport = ScriptedDingTalkTransport()
@@ -663,8 +664,60 @@ async def test_rate_limit_hint_kind_delivered(session_factory, redis_client):
         "kind": "rate_limit_hint",
         "integration_id": str(world["integ_dingtalk"]),
         "conversation_key": CONVERSATION_KEY,
+        "conversation_type": "group",
         "text": "消息太快了，先歇一下",
     }, "hint-1")
     await _relay(session_factory, redis_client, transport).run_once()
     (sent,) = transport.group_sends()
     assert "歇一下" in json.loads(sent.body["msgParam"])["content"]
+    assert transport.direct_sends() == []
+
+
+async def test_rate_limit_hint_direct_payload_oToMessages_delivery(
+    session_factory, redis_client
+):
+    """MES-122: the single-chat rate-limit hint (inbound.py emitter shape —
+    conversation_type=direct + target_user_key, no queue item) delivers via
+    oToMessages/batchSend with ZERO group sends."""
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    await _emit(session_factory, world, {
+        "kind": "rate_limit_hint",
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY,
+        "conversation_type": "direct",
+        "target_user_key": STAFF,
+        "text": "消息太快了，先歇一下",
+    }, "hint-direct")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.direct_sends()
+    assert sent.body["userIds"] == [STAFF]
+    assert transport.group_sends() == []
+    assert (await _event_status(session_factory))[0][0] == "published"
+
+
+async def test_command_feedback_immediate_direct_payload_oToMessages_delivery(
+    session_factory, redis_client
+):
+    """MES-122: immediate-stage /stop//btw feedback for a single chat
+    (commands.py emitter shape — self-specified, no queue_item_id needed)
+    delivers via oToMessages/batchSend with ZERO group sends."""
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    await _emit(session_factory, world, {
+        "kind": "command_feedback",
+        "stage": "immediate",
+        "command": "stop",
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY,
+        "conversation_type": "direct",
+        "target_user_key": STAFF,
+        "text": "⏳ Stopping task…",
+    }, "cmdfb-immediate-direct")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.direct_sends()
+    assert sent.body["userIds"] == [STAFF]
+    assert transport.group_sends() == []
+    assert (await _event_status(session_factory))[0][0] == "published"

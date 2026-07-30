@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Fixed
+
+- **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
+
 ## [0.24.0] - 2026-07-30
 
 前端登录阻断级缺陷修复(MES-129:HTTP 非安全上下文安全上下文无关 uuidv4,登录及一切写请求在 HTTP 部署下恢复可用)为主干,含集成消息队列与命令平面(MES-88)、钉钉出站与互动卡片(MES-89)、前端设计系统底座(MES-111 Phase 1)、第三方设计资产许可基线(MES-135 阶段一)与多项测试/夹具稳健性与文案一致性修复。
