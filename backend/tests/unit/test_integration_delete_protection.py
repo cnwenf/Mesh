@@ -50,6 +50,7 @@ async def _seed_item(
     conversation_key: str | None = None,
     binding_display: str = "room: C_PROTECT",
     excerpt: str = "protect me",
+    execution_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     async with session_factory() as session, session.begin():
         item = IntegrationMessageQueue(
@@ -63,6 +64,7 @@ async def _seed_item(
             state=state,
             message_excerpt=excerpt,
             sender_identity_key=f"slack:T_TEST:U_ITEM_{seq}",
+            execution_id=execution_id,
         )
         session.add(item)
         await session.flush()
@@ -195,6 +197,88 @@ async def test_delete_integration_force_cancel_drains_all_bindings(session_facto
     async with session_factory() as session:
         integration = await session.get(Integration, world["integ_slack"])
     assert integration is not None and integration.deleted_at is not None
+
+
+async def test_delete_binding_force_cancel_inflight_times_out(session_factory):
+    """In-flight (processing) item: the force path requests execution cancel
+    (persisted same-txn), waits the bounded window, then forces the survivor
+    cancelled with an alert (§3.9 ①: 在途项经 runtime 取消服务, 超时强制)."""
+    from mesh.db.models.runtime import TaskExecution
+
+    world = await seed_world(session_factory)
+    binding = await make_binding(
+        session_factory, world=world, provider="slack", external_ref="C_INFLIGHT"
+    )
+    # A running execution the processing item is bound to.
+    async with session_factory() as session, session.begin():
+        execution = TaskExecution(workspace_id=world["ws"], status="running")
+        session.add(execution)
+        await session.flush()
+        execution_id = execution.id
+    item_id = await _seed_item(
+        session_factory, world=world, binding=binding, state="processing",
+        execution_id=execution_id, binding_display="room: C_INFLIGHT",
+    )
+
+    await _service(session_factory).delete_binding(
+        workspace_id=world["ws"],
+        binding_id=binding.id,
+        force="cancel",
+        force_cancel_wait_seconds=0.2,
+        actor_member_id=world["member"],
+    )
+
+    # DELETE completed; the item is a forced-cancelled orphan.
+    assert not await _binding_exists(session_factory, binding.id)
+    (item,) = await _load_items(session_factory, [item_id])
+    assert item.binding_id is None
+    assert item.state == "cancelled"
+    assert item.finished_at is not None
+    assert item.binding_display == "room: C_INFLIGHT"
+    # The execution cancel intent was persisted (two-phase → still cancelling;
+    # the daemon completes the stop on recovery).
+    async with session_factory() as session:
+        reloaded = await session.get(TaskExecution, execution_id)
+    assert reloaded.cancel_requested_at is not None
+    assert reloaded.status == "cancelling"
+
+
+async def test_force_cancel_inflight_sql_fallback(session_factory, monkeypatch):
+    """When the in-transaction runtime cancel helper is unavailable, the force
+    path falls back to a direct conditional UPDATE persisting the same cancel
+    intent (claimed/running → cancelling); the heartbeat downlink finishes it."""
+    import mesh.runtime.attempts as attempts_mod
+    from mesh.db.models.runtime import TaskExecution
+
+    monkeypatch.setattr(attempts_mod, "request_execution_cancel_tx", None, raising=False)
+    world = await seed_world(session_factory)
+    binding = await make_binding(
+        session_factory, world=world, provider="slack", external_ref="C_FALLBACK"
+    )
+    async with session_factory() as session, session.begin():
+        execution = TaskExecution(workspace_id=world["ws"], status="running")
+        session.add(execution)
+        await session.flush()
+        execution_id = execution.id
+    item_id = await _seed_item(
+        session_factory, world=world, binding=binding, state="processing",
+        execution_id=execution_id,
+    )
+
+    await _service(session_factory).delete_binding(
+        workspace_id=world["ws"],
+        binding_id=binding.id,
+        force="cancel",
+        force_cancel_wait_seconds=0.2,
+        actor_member_id=world["member"],
+    )
+
+    (item,) = await _load_items(session_factory, [item_id])
+    assert item.state == "cancelled" and item.binding_id is None
+    async with session_factory() as session:
+        reloaded = await session.get(TaskExecution, execution_id)
+    assert reloaded.cancel_requested_at is not None
+    assert reloaded.status == "cancelling"
 
 
 # ---------------------------------------------------------------------------

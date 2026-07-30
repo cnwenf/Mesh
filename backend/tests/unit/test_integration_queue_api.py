@@ -634,3 +634,215 @@ async def test_queue_list_filters_state_and_conversation(app_client, session_fac
     conv_resp = await app_client.get(base, params={"conversation_key": conv_b}, headers=world["headers"])
     conv_only = conv_resp.json()["data"]
     assert {item["message_excerpt"] for item in conv_only} == {"B1"}
+
+
+# ---------------------------------------------------------------------------
+# Direct service-level tests (logic + branch coverage; the HTTP tests above
+# verify routing / envelopes / RBAC end-to-end through the real app)
+# ---------------------------------------------------------------------------
+
+
+def test_split_identity_triple_validation():
+    from mesh.integrations.queue_api import split_identity_triple
+
+    assert split_identity_triple("") is None
+    assert split_identity_triple("slack:T") is None  # too few segments
+    assert split_identity_triple("slack::U") is None  # empty tenant segment
+    assert split_identity_triple("slack:T:U:extra") is None  # ':' in third segment
+    assert split_identity_triple("slack:T_TEST:U_1") == ("slack", "T_TEST", "U_1")
+
+
+def test_render_fallbacks_without_sender():
+    from mesh.integrations.queue_api import render_audit_row, render_queue_item
+
+    item = IntegrationMessageQueue(
+        id=uuid.uuid4(), conversation_key="slack:T:C", seq=1, state="pending",
+        dispatch_mode="serial_conversation", message_excerpt="x",
+        sender_identity_key="slack:T:U", binding_display="b",
+    )
+    rendered = render_queue_item(item, position=None, sender=None, target_agent=None)
+    assert rendered["sender"]["linked"] is False
+    assert rendered["sender"]["identity_key"] == "slack:T:U"
+    assert rendered["target_agent"] is None
+    audit = render_audit_row(item, sender=None)
+    assert audit["sender"]["linked"] is False
+
+
+def test_path_uuid_invalid_raises():
+    from mesh.errors import NotFoundError
+    from mesh.integrations.queue_api import _path_uuid
+
+    with pytest.raises(NotFoundError):
+        _path_uuid("not-a-uuid", what="integration")
+
+
+async def _member_obj(session_factory, member_id):
+    async with session_factory() as session:
+        return await session.get(Member, member_id)
+
+
+async def _make_member_direct(session_factory, world, *, role: str):
+    async with session_factory() as session, session.begin():
+        user = User(
+            email=f"qa-direct-{uuid.uuid4().hex[:8]}@example.com",
+            display_name="Direct Member",
+            password_hash="unused",
+        )
+        session.add(user)
+        await session.flush()
+        member = Member(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            member_type="human",
+            user_id=user.id,
+            role=role,
+            status="active",
+        )
+        session.add(member)
+        await session.flush()
+        return member.id, user.id
+
+
+async def test_service_list_summary_audit_direct(app_client, session_factory):
+    from mesh.integrations import queue_api as qa
+
+    world = await make_world(app_client, session_factory, "direct")
+    integration_id = await seed_integration(session_factory, world)
+    binding_id = await seed_binding(session_factory, world, integration_id, external_ref="C_DIRECT")
+    conv = f"slack:{TENANT}:C_DIRECT"
+    await seed_identity(session_factory, provider="slack", tenant=TENANT,
+                        external_user_key="U_DIR", user_id=world["user_id"])
+    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
+                    seq=1, state="processing", conversation_key=conv,
+                    sender_identity_key=f"slack:{TENANT}:U_DIR",
+                    target_agent_id=uuid.UUID(world["agent_id"]), excerpt="D1")
+    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
+                    seq=2, state="pending", conversation_key=conv,
+                    sender_identity_key=f"slack:{TENANT}:U_DIR", excerpt="D2")
+    viewer = await _member_obj(session_factory, uuid.UUID(world["member_id"]))
+    ws = uuid.UUID(world["ws_id"])
+
+    listed = await qa.list_queue_items(
+        session_factory, workspace_id=ws, integration_id=integration_id, viewer=viewer
+    )
+    assert {i["message_excerpt"] for i in listed["data"]} == {"D1", "D2"}
+    assert _by_excerpt(listed["data"], "D2")["position"] == 1
+    assert _by_excerpt(listed["data"], "D1")["sender"]["linked"] is True
+    assert _by_excerpt(listed["data"], "D1")["target_agent"]["id"] == world["agent_id"]
+
+    summary = await qa.queue_summary(
+        session_factory, workspace_id=ws, integration_id=integration_id, viewer=viewer
+    )
+    entry = next(e for e in summary["data"] if e["conversation_key"] == conv)
+    assert entry["pending_count"] == 1
+    assert entry["in_flight"][0]["state"] == "processing"
+
+    audit = await qa.list_queue_audit(session_factory, workspace_id=ws, viewer=viewer)
+    assert audit["data"] == [], "no orphans yet"
+
+
+async def test_service_cancel_404_422_403_direct(app_client, session_factory):
+    from mesh.errors import BusinessRuleError, ForbiddenError, NotFoundError
+    from mesh.integrations import queue_api as qa
+
+    world = await make_world(app_client, session_factory, "cancel-direct")
+    outsider_id, _outsider_user = await _make_member_direct(session_factory, world, role="member")
+    integration_id = await seed_integration(session_factory, world)
+    binding_id = await seed_binding(session_factory, world, integration_id, external_ref="C_CD")
+    await seed_identity(session_factory, provider="slack", tenant=TENANT,
+                        external_user_key="U_CD_OWNER", user_id=world["user_id"])
+    pending_id = await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="pending", conversation_key=f"slack:{TENANT}:C_CD",
+        sender_identity_key=f"slack:{TENANT}:U_CD_OWNER", excerpt="CD1",
+    )
+    processing_id = await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="processing", conversation_key=f"slack:{TENANT}:C_CD2",
+        sender_identity_key=f"slack:{TENANT}:U_CD_OWNER", excerpt="CD2",
+    )
+    # Malformed sender key: triple resolution returns None → never authorized.
+    malformed_id = await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=2, state="pending", conversation_key=f"slack:{TENANT}:C_CD",
+        sender_identity_key="malformed-no-colons", excerpt="CD3",
+    )
+    ws = uuid.UUID(world["ws_id"])
+    owner = await _member_obj(session_factory, uuid.UUID(world["member_id"]))
+    outsider = await _member_obj(session_factory, outsider_id)
+
+    with pytest.raises(NotFoundError):
+        await qa.cancel_queue_item(session_factory, workspace_id=ws, integration_id=integration_id,
+                                   item_id=uuid.uuid4(), requester=owner)
+    with pytest.raises(ForbiddenError) as exc403:
+        await qa.cancel_queue_item(session_factory, workspace_id=ws, integration_id=integration_id,
+                                   item_id=pending_id, requester=outsider)
+    assert exc403.value.code == "command_forbidden"
+    # Malformed sender triple → resolution None → outsider still forbidden.
+    with pytest.raises(ForbiddenError):
+        await qa.cancel_queue_item(session_factory, workspace_id=ws, integration_id=integration_id,
+                                   item_id=malformed_id, requester=outsider)
+    with pytest.raises(BusinessRuleError) as exc422:
+        await qa.cancel_queue_item(session_factory, workspace_id=ws, integration_id=integration_id,
+                                   item_id=processing_id, requester=owner)
+    assert exc422.value.code == "queue_item_not_cancellable"
+    ok = await qa.cancel_queue_item(session_factory, workspace_id=ws, integration_id=integration_id,
+                                    item_id=pending_id, requester=owner)
+    assert ok["data"]["state"] == "cancelled"
+
+
+async def test_service_guest_visibility_and_no_target(app_client, session_factory):
+    from mesh.integrations import queue_api as qa
+
+    world = await make_world(app_client, session_factory, "guest")
+    guest_id, _guest_user = await _make_member_direct(session_factory, world, role="guest")
+    integration_id = await seed_integration(session_factory, world)
+    binding_id = await seed_binding(session_factory, world, integration_id, external_ref="C_GUEST")
+    # Workspace item with a malformed sender (unlinked) and NO target agent.
+    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
+                    seq=1, state="pending", conversation_key=f"slack:{TENANT}:C_GUEST",
+                    sender_identity_key="malformed-no-colons", excerpt="G1")
+    # Two orphans: a workspace-level one (visible to all) and one snapshotting a
+    # public project the guest has NO grant for (guests see only granted projects).
+    async with session_factory() as session, session.begin():
+        project = Project(workspace_id=uuid.UUID(world["ws_id"]), name="GPub",
+                          key=f"GG{uuid.uuid4().hex[:4].upper()}", visibility="public")
+        session.add(project)
+        await session.flush()
+        project_id = project.id
+    async with session_factory() as session, session.begin():
+        session.add(IntegrationMessageQueue(
+            workspace_id=uuid.UUID(world["ws_id"]), integration_id=None, binding_id=None,
+            binding_display="room: G_WS", project_id_snapshot=None,
+            conversation_key="slack:TG:CG_WS", seq=1, dispatch_mode="serial_conversation",
+            state="done", message_excerpt="G-ws-orphan", sender_identity_key="slack:TG:UG",
+        ))
+        session.add(IntegrationMessageQueue(
+            workspace_id=uuid.UUID(world["ws_id"]), integration_id=None, binding_id=None,
+            binding_display="room: G_PROJ", project_id_snapshot=project_id,
+            conversation_key="slack:TG:CG_PROJ", seq=1, dispatch_mode="serial_conversation",
+            state="done", message_excerpt="G-proj-orphan", sender_identity_key="slack:TG:UG",
+        ))
+    ws = uuid.UUID(world["ws_id"])
+    guest = await _member_obj(session_factory, guest_id)
+    owner = await _member_obj(session_factory, uuid.UUID(world["member_id"]))
+
+    # Guest list: guest visibility clause exercised; the workspace item is seen,
+    # unlinked sender falls back to the identity key, no target agent → null.
+    listed = await qa.list_queue_items(
+        session_factory, workspace_id=ws, integration_id=integration_id, viewer=guest
+    )
+    g1 = _by_excerpt(listed["data"], "G1")
+    assert g1["sender"]["linked"] is False
+    assert g1["sender"]["display_name"] == "malformed-no-colons"
+    assert g1["target_agent"] is None
+
+    # Guest audit: sees the workspace-level orphan, NOT the ungranted project's.
+    guest_audit = {r["message_excerpt"] for r in
+                   (await qa.list_queue_audit(session_factory, workspace_id=ws, viewer=guest))["data"]}
+    assert "G-ws-orphan" in guest_audit
+    assert "G-proj-orphan" not in guest_audit
+
+    # Owner (manager) audit: sees both.
+    owner_audit = {r["message_excerpt"] for r in
+                   (await qa.list_queue_audit(session_factory, workspace_id=ws, viewer=owner))["data"]}
+    assert {"G-ws-orphan", "G-proj-orphan"} <= owner_audit
