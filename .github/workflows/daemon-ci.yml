@@ -8,6 +8,10 @@
 #    a sandbox the runner cannot prove is a sandbox the daemon may not claim.
 # 2. hermetic unit/contract tests stay hermetic (FakeClock, scripted fake
 #    server over httpx.MockTransport) — no database, Redis, network or LLM.
+#
+# Governance (MES-145,与 backend-ci 统一治理):test job 显式 timeout-minutes
+# (实测 ~1min,ISO-01~14 红线矩阵两遍 + 慢 runner 余量 → 45min),workflow 级
+# concurrency 同 ref 新 run 取消旧 run——检查矩阵与覆盖率门禁语义不变。
 name: daemon-ci
 
 on:
@@ -21,10 +25,19 @@ on:
       - "daemon/**"
       - ".github/workflows/daemon-ci.yml"
 
+# MES-145: 同一 ref 的新 run 立即取消在跑的旧 run(PR ref=refs/pull/N/merge,重复
+# 推送即取消旧 run),避免多 run 互挤 runner。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: mesh-runtime 全量测试(含 ISO-01~14 红线矩阵,root 真环境,覆盖率 ≥90%)
     runs-on: ubuntu-latest
+    # MES-145: 实测 ~1min;ISO-01~14 红线矩阵两遍(套件内 + junit 存证)+
+    # 慢 runner 余量,45min 兜底。
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: daemon
