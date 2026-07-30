@@ -160,3 +160,12 @@ class ServiceUnavailableError(MeshError):
     status_code = 503
     code = "service_unavailable"
     message = "service unavailable"
+
+
+class UpstreamError(MeshError):
+    """502 — an external platform API call failed (integrations.md §3.5
+    ``upstream_error``: outbound adapter failures)."""
+
+    status_code = 502
+    code = "upstream_error"
+    message = "upstream platform error"

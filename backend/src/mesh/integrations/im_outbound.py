@@ -932,34 +932,22 @@ class IMSendRelay:
         cached = self._adapters.get(cache_key)
         if cached is not None:
             return cached
-        config = integration.config or {}
-        app_secret = decrypt_credential_value(integration.secret_ref, self._signing_secret)
-        app_key = str(config.get("app_key") or "")
-        robot_code = str(config.get("robot_code") or app_key)
-        client = self._http_client
-        if client is None:
-            client = httpx.AsyncClient(timeout=self._request_timeout)
-            self._http_client = client
-        token_manager = DingTalkTokenManager(
-            self._redis,
-            http_client=client,
-            integration_id=integration.id,
-            app_key=app_key,
-            app_secret=app_secret,
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=self._request_timeout)
+        adapter = await make_adapter(
+            redis=self._redis,
+            integration=integration,
+            signing_secret=self._signing_secret,
             api_base=self._api_base,
+            http_client=self._http_client,
+            max_chunks=self._max_chunks,
             refresh_timeout=self._token_refresh_timeout,
             lock_ttl=self._token_lock_ttl,
             follower_wait=self._token_follower_wait,
-        )
-        api_client = DingTalkClient(
-            token_manager,
-            http_client=client,
-            api_base=self._api_base,
-            robot_code=robot_code,
             request_timeout=self._request_timeout,
         )
-        adapter = DingTalkIMAdapter(api_client, max_chunks=self._max_chunks)
-        self._adapters[cache_key] = adapter
+        if adapter is not None:
+            self._adapters[cache_key] = adapter
         return adapter
 
 
@@ -970,6 +958,55 @@ def _uuid_or_none(value: Any) -> uuid.UUID | None:
         return uuid.UUID(str(value))
     except ValueError:
         return None
+
+
+async def make_adapter(
+    *,
+    redis: Any,
+    integration: Integration,
+    signing_secret: str,
+    api_base: str = "https://api.dingtalk.com",
+    http_client: httpx.AsyncClient | None = None,
+    max_chunks: int = 5,
+    refresh_timeout: float | None = None,
+    lock_ttl: int | None = None,
+    follower_wait: float | None = None,
+    request_timeout: float | None = None,
+) -> DingTalkIMAdapter | None:
+    """Build the outbound adapter for an integration instance (None when
+    the integration is inactive / has no credential). The decrypted
+    app_secret exists ONLY inside the token manager's memory (§6.16)."""
+    if integration is None or integration.status != "active" or not integration.secret_ref:
+        return None
+    config = integration.config or {}
+    app_secret = decrypt_credential_value(integration.secret_ref, signing_secret)
+    app_key = str(config.get("app_key") or "")
+    robot_code = str(config.get("robot_code") or app_key)
+    client = http_client or httpx.AsyncClient()
+    token_kwargs: dict[str, Any] = {}
+    if refresh_timeout is not None:
+        token_kwargs["refresh_timeout"] = refresh_timeout
+    if lock_ttl is not None:
+        token_kwargs["lock_ttl"] = lock_ttl
+    if follower_wait is not None:
+        token_kwargs["follower_wait"] = follower_wait
+    token_manager = DingTalkTokenManager(
+        redis,
+        http_client=client,
+        integration_id=integration.id,
+        app_key=app_key,
+        app_secret=app_secret,
+        api_base=api_base,
+        **token_kwargs,
+    )
+    client_kwargs: dict[str, Any] = {}
+    if request_timeout is not None:
+        client_kwargs["request_timeout"] = request_timeout
+    api_client = DingTalkClient(
+        token_manager, http_client=client, api_base=api_base, robot_code=robot_code,
+        **client_kwargs,
+    )
+    return DingTalkIMAdapter(api_client, max_chunks=max_chunks)
 
 
 __all__ = [
@@ -996,6 +1033,7 @@ __all__ = [
     "is_card_notification",
     "is_external_contact_key",
     "is_valid_staff_id_key",
+    "make_adapter",
     "normalize_dingtalk_user_key",
     "sanitize_no_mentions",
     "should_push_notification",

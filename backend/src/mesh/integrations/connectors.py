@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 KIND_TO_PROVIDER: dict[str, str] = {
     "im_feishu": "feishu",
     "im_slack": "slack",
+    "im_dingtalk": "dingtalk",
     "vcs_github": "github",
     "vcs_gitlab": "gitlab",
     "webhook_outbound": "webhook",

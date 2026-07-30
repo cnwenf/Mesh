@@ -82,6 +82,14 @@ class VcsResolveRequest(BaseModel):
     vcs_ref: VcsRefSpec
 
 
+class TestSendRequest(BaseModel):
+    """POST .../integrations/{id}/test-send (§3.9)."""
+
+    conversation_ref: str = Field(min_length=1, max_length=512)
+    conversation_type: str = Field(default="group", pattern=r"^(group|direct)$")
+    user_key: str = Field(default="", max_length=512)
+
+
 __all__ = [
     "CreateBindingRequest",
     "CreateIntegrationRequest",
@@ -92,6 +100,7 @@ __all__ = [
     "PatchIntegrationRequest",
     "PatchSubscriptionRequest",
     "RotateSecretRequest",
+    "TestSendRequest",
     "VcsLinkCreateRequest",
     "VcsResolveRequest",
     "VcsRefSpec",
