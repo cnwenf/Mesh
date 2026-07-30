@@ -6,10 +6,10 @@
 
 - 登录、注册与验证码状态
 - 工作区切换、创建与设置
-- 收件箱、聊天、我的工作
-- Issue 列表、Issue 详情、看板与拖拽
-- 项目、成员名册、智能体
-- Skill、自动化、分析与设置
+- 收件箱、聊天、My Issues
+- Issue 默认看板、Issue 详情、评论与拖拽
+- Projects、Agents、Squads、Runtimes
+- Skills、Autopilot、Usage 与 Settings
 - 空态、加载态、错误态展示
 - 桌面与移动响应式布局
 - 亮色、暗色与跟随系统主题
@@ -18,8 +18,8 @@
 
 - 点击左侧导航或移动端底栏切换页面。
 - 按 `⌘/Ctrl + K` 打开全局命令面板，按 `C` 新建 Issue。
-- 在看板中拖动卡片跨列移动。
-- 点击右上角主题按钮切换亮暗主题。
+- 新建 Issue 后可在看板中拖动卡片跨列移动。
+- 在 `Settings → Preferences → Theme` 切换 Light、Dark 或 System。
 - 点击工作区名称切换或创建工作区。
 - 页面路由写入 URL hash，可直接收藏或分享相对入口。
 

@@ -104,10 +104,11 @@
 
   const state = {
     route: "",
-    workspace: "Mesh Studio",
-    workspaceCode: "MS",
-    inboxSelected: 0,
-    settingsTab: "workspace",
+    workspace: "Mesh",
+    workspaceCode: "ME",
+    inboxSelected: -1,
+    chatSelected: -1,
+    settingsTab: "profile",
     commandQuery: "",
     issueSequence: 148,
     authEmail: "",
@@ -203,22 +204,11 @@
       },
     ],
     board: {
-      todo: [
-        { key: "MES-145", title: "项目概览补充里程碑健康度", label: "增强", person: "lin", priority: "normal" },
-        { key: "MES-141", title: "命令面板支持最近访问与模糊匹配", label: "效率", person: "qiao", priority: "normal" },
-        { key: "MES-139", title: "工作区邀请链接增加到期提示", label: "权限", person: "you", priority: "high" },
-      ],
-      progress: [
-        { key: "MES-147", title: "移动端看板横向滚动时保持列标题可见", label: "体验", person: "agent", priority: "urgent" },
-        { key: "MES-144", title: "运行时离线后显示重连与数据恢复进度", label: "可靠性", person: "agent", priority: "high" },
-      ],
-      review: [
-        { key: "MES-146", title: "登录成功后恢复用户原始访问路径", label: "安全", person: "you", priority: "high" },
-      ],
-      done: [
-        { key: "MES-143", title: "统一评论编辑器中的附件预览尺寸", label: "界面", person: "zhao", priority: "normal" },
-        { key: "MES-138", title: "分析页支持按项目筛选", label: "数据", person: "lin", priority: "normal" },
-      ],
+      backlog: [],
+      todo: [],
+      progress: [],
+      review: [],
+      done: [],
     },
     automations: [
       { name: "工作日站会摘要", detail: "汇总昨日进展与今日阻塞", schedule: "工作日 09:30", target: "项目动态", run: "今天 09:30", enabled: true },
@@ -229,22 +219,26 @@
   };
 
   const routeInfo = {
-    inbox: { label: "收件箱", icon: "inbox" },
-    chat: { label: "聊天", icon: "chat" },
-    my: { label: "我的工作", icon: "my" },
+    inbox: { label: "Inbox", icon: "inbox" },
+    chat: { label: "Chat", icon: "chat" },
+    my: { label: "My Issues", icon: "my" },
     issues: { label: "Issues", icon: "issues" },
-    board: { label: "看板", icon: "board" },
+    board: { label: "Issues", icon: "board" },
     issue: { label: "MES-147", icon: "issues" },
-    projects: { label: "项目", icon: "project" },
+    projects: { label: "Projects", icon: "project" },
     project: { label: "Mesh Web", icon: "project" },
-    members: { label: "成员", icon: "members" },
-    agents: { label: "智能体", icon: "agent" },
+    members: { label: "Members", icon: "members" },
+    agents: { label: "Agents", icon: "agent" },
     agent: { label: "Mesh 工程师", icon: "agent" },
     skills: { label: "Skills", icon: "skill" },
     skill: { label: "界面评审", icon: "skill" },
-    automations: { label: "自动化", icon: "zap" },
-    analytics: { label: "分析", icon: "chart" },
-    settings: { label: "设置", icon: "settings" },
+    autopilot: { label: "Autopilot", icon: "zap" },
+    automations: { label: "Autopilot", icon: "zap" },
+    squads: { label: "Squads", icon: "members" },
+    runtimes: { label: "Runtimes", icon: "runtime" },
+    usage: { label: "Usage", icon: "chart" },
+    analytics: { label: "Usage", icon: "chart" },
+    settings: { label: "Settings", icon: "settings" },
     states: { label: "状态画廊", icon: "state" },
   };
 
@@ -252,29 +246,28 @@
     {
       title: "",
       items: [
-        ["inbox", "收件箱", "inbox", "4"],
-        ["chat", "聊天", "chat", "2"],
-        ["my", "我的工作", "my", ""],
+        ["inbox", "Inbox", "inbox", "17"],
+        ["chat", "Chat", "chat", "5"],
+        ["my", "My Issues", "my", ""],
       ],
     },
     {
-      title: "工作区",
+      title: "Workspace",
       items: [
         ["issues", "Issues", "issues", ""],
-        ["board", "看板", "board", ""],
-        ["projects", "项目", "project", ""],
-        ["members", "成员", "members", ""],
-        ["automations", "自动化", "zap", ""],
-        ["agents", "智能体", "agent", ""],
-        ["analytics", "分析", "chart", ""],
+        ["projects", "Projects", "project", ""],
+        ["autopilot", "Autopilot", "zap", ""],
+        ["agents", "Agents", "agent", ""],
+        ["squads", "Squads", "members", ""],
+        ["usage", "Usage", "chart", ""],
       ],
     },
     {
-      title: "配置",
+      title: "Configure",
       items: [
+        ["runtimes", "Runtimes", "runtime", ""],
         ["skills", "Skills", "skill", ""],
-        ["settings", "设置", "settings", ""],
-        ["states", "状态画廊", "state", ""],
+        ["settings", "Settings", "settings", ""],
       ],
     },
   ];
@@ -323,16 +316,18 @@
     return `<aside class="side-panel ${innerClass}">
       <div class="side-panel__head">
         <button class="workspace-trigger" type="button" data-action="open-workspaces">
-          <span class="workspace-icon">${state.workspaceCode}</span>
+          <span class="mesh-workspace-mark" aria-hidden="true"><i></i></span>
           <span class="workspace-trigger__copy">
             <span class="workspace-trigger__name">${escapeHtml(state.workspace)}</span>
-            <span class="workspace-trigger__meta">产品与工程</span>
           </span>
           ${icon("down", "icon--sm")}
         </button>
       </div>
       <button class="side-search" type="button" data-action="open-command">
-        ${icon("search", "icon--sm")}<span>搜索或运行命令</span><kbd class="shortcut">⌘ K</kbd>
+        ${icon("search", "icon--sm")}<span>Search...</span><kbd class="shortcut">Ctrl K</kbd>
+      </button>
+      <button class="side-create" type="button" data-action="open-create-issue">
+        ${icon("edit", "icon--sm")}<span>New Issue</span><kbd class="shortcut">C</kbd>
       </button>
       <div class="side-panel__scroll">
         ${navGroups
@@ -345,14 +340,12 @@
           .join("")}
       </div>
       <div class="side-panel__foot">
-        <button class="profile-trigger" type="button" data-action="profile-menu">
-          ${avatar("you")}
-          <span class="profile-trigger__copy">
-            <span class="profile-trigger__name">陈闻峰</span>
-            <span class="profile-trigger__meta">cnwenf@outlook.com</span>
-          </span>
-          ${icon("more", "icon--sm")}
-        </button>
+        <aside class="community-note">
+          <span class="community-note__glyph">M</span>
+          <span><strong>Join the Mesh community</strong><small>Chat with teammates and builders.</small></span>
+          <button type="button" aria-label="Dismiss">${icon("close", "icon--sm")}</button>
+        </aside>
+        <button class="help-trigger" type="button" data-action="help" aria-label="Help">?</button>
       </div>
     </aside>`;
   }
@@ -360,26 +353,21 @@
   function pageBar(title, iconName, options = {}) {
     return `<header class="page-bar">
       <button class="ui-button ui-button--icon mobile-menu-button" type="button" data-action="mobile-menu" aria-label="打开导航">${icon("menu")}</button>
-      ${icon(iconName || "state")}
       <div class="page-bar__title">${title}</div>
       ${options.count ? `<span class="page-bar__count">${options.count}</span>` : ""}
       <div class="page-bar__actions">
         ${options.actions || ""}
-        <button class="ui-button ui-button--icon desktop-only" type="button" data-action="open-command" aria-label="搜索">${icon("search")}</button>
-        <button class="ui-button ui-button--icon" type="button" data-action="toggle-theme" aria-label="切换主题">
-          ${document.documentElement.dataset.theme === "dark" ? icon("sun") : icon("moon")}
-        </button>
       </div>
     </header>`;
   }
 
   function mobileTabs() {
     const items = [
-      ["inbox", "收件箱", "inbox"],
+      ["inbox", "Inbox", "inbox"],
       ["issues", "Issues", "issues"],
-      ["board", "看板", "board"],
-      ["chat", "聊天", "chat"],
-      ["settings", "更多", "menu"],
+      ["projects", "Projects", "project"],
+      ["chat", "Chat", "chat"],
+      ["settings", "More", "menu"],
     ];
     return `<nav class="mobile-tabs" aria-label="移动端导航">
       ${items
@@ -446,85 +434,63 @@
   }
 
   function issuesPage() {
-    const rows = state.issues
-      .map(
-        (issue) => `<tr data-route="issue">
-          <td>
-            <div class="issue-title-cell">
-              <span class="issue-title-cell__key">${issue.key}</span>
-              <span class="issue-title-cell__name">${issue.title}</span>
-            </div>
-          </td>
-          <td>${statusPill(issue.status, issue.statusText)}</td>
-          <td>${priority(issue.priority)}</td>
-          <td><span class="label ${issue.labelTone}">${issue.label}</span></td>
-          <td><div class="roster-person">${avatar(issue.assignee)}<span class="u-truncate">${people[issue.assignee].name}</span></div></td>
-          <td class="u-muted">${issue.updated}</td>
-        </tr>`,
-      )
-      .join("");
-
+    const columns = [
+      ["backlog", "Backlog", "board-column--backlog"],
+      ["todo", "Todo", "board-column--todo"],
+      ["progress", "In Progress", "board-column--progress"],
+      ["review", "In Review", "board-column--review"],
+    ];
     return `<div class="page-layout">
-      ${pageBar("Issues", "issues", {
-        count: state.issues.length,
-        actions: button("新建 Issue", "plus", "open-create-issue", "primary"),
-      })}
-      <div class="page-scroll">
-        <div class="page-content page-content--wide">
-          <div class="page-intro">
-            <div class="page-intro__copy"><h1>工作区 Issues</h1><p>规划、分派并跟踪人类与智能体的所有工作。</p></div>
-          </div>
-          <section class="surface-card">
-            <div class="toolbar">
-              <div class="segmented" role="tablist" aria-label="视图">
-                <button class="is-active" type="button">${icon("issues", "icon--sm")}列表</button>
-                <button type="button" data-route="board">${icon("board", "icon--sm")}看板</button>
-              </div>
-              ${button("全部状态", "filter", "filter-placeholder")}
-              ${button("最近更新", "sort", "sort-issues")}
-              <span class="u-spacer"></span>
-              <label class="search-field">${icon("search", "icon--sm")}<input class="ui-input" type="search" placeholder="筛选 Issues…" data-filter-issues /></label>
-            </div>
-            <div style="overflow:auto">
-              <table class="data-table">
-                <thead><tr><th style="width:42%">Issue</th><th style="width:13%">状态</th><th style="width:7%">优先级</th><th style="width:11%">标签</th><th style="width:15%">负责人</th><th style="width:12%">更新</th></tr></thead>
-                <tbody>${rows}</tbody>
-              </table>
-            </div>
-          </section>
+      ${pageBar("Issues")}
+      <div class="workspace-toolbar workspace-toolbar--issues">
+        <div class="workspace-tabs" role="tablist">
+          <button class="is-active" type="button">All</button>
+          <button type="button">Members</button>
+          <button type="button">Agents</button>
+        </div>
+        <span class="u-spacer"></span>
+        <button class="quiet-action working-count" type="button"><span class="presence-dot"></span><strong>0</strong><small>working</small></button>
+        ${button("Filter", "filter", "filter-placeholder")}
+        ${button("Manual", "sort", "filter-placeholder")}
+        ${button("Board", "board", "filter-placeholder")}
+      </div>
+      <div class="board-viewport board-viewport--workspace">
+        <div class="board board--workspace">
+          ${columns
+            .map(
+              ([key, label, tone]) => `<section class="board-column ${tone}" data-drop-column="${key}">
+                <header class="board-column__head"><span>${label}</span><span class="board-column__count">${state.board[key].length}</span></header>
+                <div class="board-stack">
+                  ${
+                    state.board[key].length
+                      ? state.board[key].map((card) => boardCard(card, key)).join("")
+                      : `<div class="board-empty">No issues</div>`
+                  }
+                </div>
+              </section>`,
+            )
+            .join("")}
         </div>
       </div>
     </div>`;
   }
 
   function myIssuesPage() {
-    const group = (title, status, issues) => `<section class="list-group">
-      <div class="list-group__title">${statusPill(status, title)}<span class="u-mono">${issues.length}</span></div>
-      ${issues
-        .map(
-          (issue) => `<div class="issue-row" data-route="issue">
-            ${priority(issue.priority)}
-            <span class="u-mono u-muted">${issue.key}</span>
-            <span class="issue-row__title">${issue.title}</span>
-            <span class="issue-row__project u-muted">${issue.project}</span>
-            ${avatar(issue.assignee)}
-            <span class="u-muted">${issue.updated}</span>
-          </div>`,
-        )
-        .join("")}
-    </section>`;
-    const assigned = state.issues.filter((issue) => ["agent", "you"].includes(issue.assignee));
     return `<div class="page-layout">
-      ${pageBar("我的工作", "my", { count: assigned.length, actions: button("新建 Issue", "plus", "open-create-issue", "primary") })}
-      <div class="page-scroll"><div class="page-content">
-        <div class="page-intro"><div class="page-intro__copy"><h1>我的工作</h1><p>聚焦正在处理、等待评审和接下来的事项。</p></div></div>
-        <div class="surface-card">
-          <div class="toolbar"><div class="segmented"><button class="is-active">指派给我</button><button>由我创建</button><button>已关注</button></div><span class="u-spacer"></span>${button("筛选", "filter", "filter-placeholder")}</div>
-          ${group("进行中", "progress", assigned.filter((item) => item.status === "progress"))}
-          ${group("待评审", "review", assigned.filter((item) => item.status === "review"))}
-          ${group("待办", "todo", assigned.filter((item) => item.status === "todo"))}
+      ${pageBar("My Issues")}
+      <div class="workspace-toolbar">
+        <div class="workspace-tabs" role="tablist">
+          <button class="is-active" type="button">All</button>
+          <button type="button">Assigned</button>
+          <button type="button">Created</button>
+          <button type="button">My Agents and Squads</button>
         </div>
-      </div></div>
+        <span class="u-spacer"></span>
+        ${button("Filter", "filter", "filter-placeholder")}
+        ${button("Manual", "sort", "filter-placeholder")}
+        ${button("Board", "board", "filter-placeholder")}
+      </div>
+      <div class="workspace-empty"><p>No issues</p></div>
     </div>`;
   }
 
@@ -541,35 +507,7 @@
   }
 
   function boardPage() {
-    const columns = [
-      ["todo", "待办", "u-faint"],
-      ["progress", "进行中", "u-brand"],
-      ["review", "待评审", ""],
-      ["done", "已完成", "u-success"],
-    ];
-    return `<div class="page-layout">
-      ${pageBar("看板", "board", { actions: button("新建 Issue", "plus", "open-create-issue", "primary") })}
-      <div class="toolbar">
-        <div class="segmented"><button class="is-active">产品迭代</button><button>全部 Issues</button></div>
-        ${button("筛选", "filter", "filter-placeholder")}
-        ${button("按状态分组", "sort", "filter-placeholder")}
-        <span class="u-spacer"></span>
-        <span class="u-muted" style="font-size:11px">拖动卡片可改变状态</span>
-      </div>
-      <div class="board-viewport">
-        <div class="board">
-          ${columns
-            .map(
-              ([key, label, tone]) => `<section class="board-column" data-drop-column="${key}">
-                <header class="board-column__head ${tone}"><span class="board-column__dot"></span><span>${label}</span><span class="board-column__count">${state.board[key].length}</span>${icon("more", "icon--sm")}</header>
-                <div class="board-stack">${state.board[key].map((card) => boardCard(card, key)).join("")}</div>
-                <button class="board-add" type="button" data-action="open-create-issue">${icon("plus", "icon--sm")}添加 Issue</button>
-              </section>`,
-            )
-            .join("")}
-        </div>
-      </div>
-    </div>`;
+    return issuesPage();
   }
 
   function issuePage() {
@@ -660,34 +598,32 @@
 
   function projectsPage() {
     const projects = [
-      { name: "Mesh Web", code: "MW", detail: "桌面与移动端产品体验、设计系统和前端工程。", progress: 68, tone: "", issues: 24, people: ["you", "agent", "design"] },
-      { name: "执行平台", code: "RT", detail: "智能体运行时、任务调度、日志与安全隔离。", progress: 47, tone: "avatar--violet", issues: 18, people: ["qiao", "agent"] },
-      { name: "协作体验", code: "CO", detail: "评论、收件箱、通知与实时协同能力。", progress: 82, tone: "avatar--green", issues: 12, people: ["lin", "zhao"] },
-      { name: "身份与权限", code: "ID", detail: "登录、组织权限、邀请和安全设置。", progress: 73, tone: "avatar--orange", issues: 9, people: ["you", "qiao"] },
-      { name: "数据与洞察", code: "DA", detail: "用量、成本、质量指标与项目健康度。", progress: 36, tone: "", issues: 16, people: ["lin", "design"] },
-      { name: "开发者工具", code: "DX", detail: "CLI、接口文档和本地开发工作流。", progress: 59, tone: "avatar--violet", issues: 11, people: ["agent", "zhao"] },
+      { name: "Mesh", code: "ME", detail: "AI-native workspace", progress: 68, tone: "", issues: 24, people: ["you", "agent", "design"] },
     ];
     return `<div class="page-layout">
-      ${pageBar("项目", "project", { count: projects.length, actions: button("新建项目", "plus", "create-project", "primary") })}
-      <div class="page-scroll"><div class="page-content">
-        <div class="page-intro"><div class="page-intro__copy"><h1>项目</h1><p>围绕目标组织工作、里程碑和团队上下文。</p></div></div>
-        <div class="card-grid">
-          ${projects
-            .map(
-              (project) => `<article class="entity-card" data-route="project">
-                <div class="entity-card__top">
-                  <span class="avatar avatar--large ${project.tone}">${project.code}</span>
-                  <div class="u-truncate"><h2 class="entity-card__title">${project.name}</h2><div class="u-muted" style="font-size:11px">${project.issues} 个活跃 Issue</div></div>
-                  <span class="u-spacer"></span>${icon("more", "icon--sm")}
-                </div>
-                <div class="entity-card__description">${project.detail}</div>
-                <div class="progress-track"><i style="width:${project.progress}%"></i></div>
-                <footer class="entity-card__footer"><span>${project.progress}% 已完成</span><span class="u-spacer"></span><span class="row-avatar-stack">${project.people.map((person) => avatar(person)).join("")}</span></footer>
-              </article>`,
-            )
-            .join("")}
-        </div>
-      </div></div>
+      ${pageBar("Projects")}
+      <div class="workspace-toolbar">
+        <label class="search-field">${icon("search", "icon--sm")}<input class="ui-input" type="search" placeholder="Search projects..." /></label>
+        ${button("Filter", "filter", "filter-placeholder")}
+        ${button("Updated", "sort", "filter-placeholder")}
+        <span class="u-spacer"></span>
+        ${button("New project", "plus", "create-project", "outline")}
+      </div>
+      <div class="workspace-table-wrap">
+        <table class="workspace-table">
+          <thead><tr><th>Name</th><th>Lead</th><th>Progress</th><th>Issues</th><th>Updated</th><th></th></tr></thead>
+          <tbody>
+            ${projects.map((project) => `<tr data-route="project">
+              <td><span class="project-tile">${project.code}</span><span><strong>${project.name}</strong><small>${project.detail}</small></span></td>
+              <td>${avatar("you")}<span>陈闻峰</span></td>
+              <td><span class="compact-progress"><i style="width:${project.progress}%"></i></span><span>${project.progress}%</span></td>
+              <td>${project.issues}</td>
+              <td>Today</td>
+              <td>${icon("more", "icon--sm")}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
     </div>`;
   }
 
@@ -759,27 +695,27 @@
 
   function agentsPage() {
     const agents = [
-      ["agent", "Mesh 工程师", "负责架构、跨模块开发与复杂问题排查。", "Claude Code", "正在执行 MES-147", "6 Skills"],
-      ["design", "设计助手", "负责体验审查、视觉规范与响应式走查。", "Codex", "18 分钟前活跃", "4 Skills"],
-      ["agent", "文档维护员", "维护产品 Spec、接口契约和版本说明。", "Claude Code", "昨天活跃", "5 Skills"],
-      ["design", "数据分析师", "汇总用量、成本与交付健康度。", "Codex", "2 小时前活跃", "3 Skills"],
+      ["agent", "Mesh 工程师", "Architecture and product engineering", "Claude Code", "Active now", "Private"],
+      ["design", "Mesh 设计师", "Product design and interface review", "Codex", "18m ago", "Workspace"],
     ];
     return `<div class="page-layout">
-      ${pageBar("智能体", "agent", { count: agents.length, actions: button("创建智能体", "plus", "create-agent", "primary") })}
-      <div class="page-scroll"><div class="page-content">
-        <div class="page-intro"><div class="page-intro__copy"><h1>智能体</h1><p>把可执行的 AI 队友加入工作区，并定义职责与能力边界。</p></div></div>
-        <div class="card-grid">
-          ${agents
-            .map(
-              ([person, name, detail, runtime, active, skills]) => `<article class="entity-card" data-route="agent">
-                <div class="entity-card__top">${avatar(person, true)}<div class="u-truncate"><h2 class="entity-card__title">${name}</h2><div class="u-muted" style="font-size:11px">${runtime}</div></div><span class="u-spacer"></span><span class="presence-dot"></span></div>
-                <div class="entity-card__description">${detail}</div>
-                <footer class="entity-card__footer"><span>${active}</span><span class="u-spacer"></span><span class="meta-pill">${skills}</span></footer>
-              </article>`,
-            )
-            .join("")}
-        </div>
-      </div></div>
+      ${pageBar("Agents")}
+      <div class="workspace-toolbar">
+        <div class="workspace-tabs"><button class="is-active" type="button">Mine</button><button type="button">All</button><button type="button">Archived</button></div>
+        <span class="u-spacer"></span>
+        ${button("Filter", "filter", "filter-placeholder")}
+        ${button("Updated", "sort", "filter-placeholder")}
+        ${button("New agent", "plus", "create-agent", "outline")}
+      </div>
+      <div class="workspace-table-wrap">
+        <table class="workspace-table">
+          <thead><tr><th>Name</th><th>Runtime</th><th>Visibility</th><th>Last active</th><th></th></tr></thead>
+          <tbody>${agents.map(([person, name, detail, runtime, active, visibility]) => `<tr data-route="agent">
+            <td>${avatar(person)}<span><strong>${name}</strong><small>${detail}</small></span></td>
+            <td>${runtime}</td><td>${visibility}</td><td>${active}</td><td>${icon("more", "icon--sm")}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </div>
     </div>`;
   }
 
@@ -823,31 +759,19 @@
   }
 
   function skillsPage() {
-    const skills = [
-      ["界面评审", "以真实浏览器验证布局、交互、主题和响应式质量。", "设计与体验", "12 个智能体"],
-      ["代码审查", "检查正确性、边界条件、安全性与可维护性。", "工程", "9 个智能体"],
-      ["发布准备", "运行门禁、整理变更并生成发布交接。", "交付", "5 个智能体"],
-      ["问题诊断", "从日志、代码与运行状态中定位根因。", "工程", "7 个智能体"],
-      ["数据洞察", "分析项目与智能体的效率、成本和失败趋势。", "分析", "3 个智能体"],
-      ["文档维护", "保持 Spec、接口说明和实现行为一致。", "文档", "4 个智能体"],
-    ];
     return `<div class="page-layout">
-      ${pageBar("Skills", "skill", { count: skills.length, actions: button("导入 Skill", "plus", "import-skill", "primary") })}
-      <div class="page-scroll"><div class="page-content">
-        <div class="page-intro"><div class="page-intro__copy"><h1>Skills</h1><p>把稳定的方法、知识和工具流程沉淀为可复用能力。</p></div></div>
-        <div class="toolbar surface-card" style="margin-bottom:12px;border-radius:10px"><div class="segmented"><button class="is-active">工作区</button><button>我的</button><button>推荐</button></div><span class="u-spacer"></span><label class="search-field">${icon("search", "icon--sm")}<input class="ui-input" placeholder="搜索 Skills…" /></label></div>
-        <div class="card-grid">
-          ${skills
-            .map(
-              ([name, detail, category, bound], index) => `<article class="entity-card" data-route="skill">
-                <div class="entity-card__top"><span class="entity-card__glyph" style="${index % 3 === 1 ? "color:var(--violet);background:color-mix(in srgb,var(--violet) 13%,transparent)" : index % 3 === 2 ? "color:var(--success);background:var(--success-soft)" : ""}">${icon("skill", "icon--lg")}</span><div class="u-truncate"><h2 class="entity-card__title">${name}</h2><div class="u-muted" style="font-size:11px">${category}</div></div><span class="u-spacer"></span>${icon("more", "icon--sm")}</div>
-                <div class="entity-card__description">${detail}</div>
-                <footer class="entity-card__footer"><span>${bound}</span><span class="u-spacer"></span><span>刚刚更新</span></footer>
-              </article>`,
-            )
-            .join("")}
-        </div>
-      </div></div>
+      ${pageBar("Skills")}
+      <div class="workspace-toolbar">
+        <label class="search-field">${icon("search", "icon--sm")}<input class="ui-input" placeholder="Search skills..." /></label>
+        <span class="u-spacer"></span>
+        ${button("New skill", "plus", "import-skill", "outline")}
+      </div>
+      <div class="workspace-empty workspace-empty--illustrated">
+        <span class="empty-glyph">${icon("skill", "icon--lg")}</span>
+        <h2>Create a reusable skill</h2>
+        <p>Skills give Mesh teammates a shared, repeatable way to work.</p>
+        ${button("New skill", "plus", "import-skill", "outline")}
+      </div>
     </div>`;
   }
 
@@ -872,9 +796,54 @@
     </div>`;
   }
 
+  function squadsPage() {
+    const squads = [
+      ["Mesh 产品小队", "产品、设计与工程协同", "you", "3 teammates", "Active now"],
+    ];
+    return `<div class="page-layout">
+      ${pageBar("Squads")}
+      <div class="workspace-toolbar">
+        <div class="workspace-tabs"><button class="is-active" type="button">Mine</button><button type="button">All</button></div>
+        <span class="u-spacer"></span>
+        ${button("Filter", "filter", "filter-placeholder")}
+        ${button("Updated", "sort", "filter-placeholder")}
+        ${button("New squad", "plus", "filter-placeholder", "outline")}
+      </div>
+      <div class="workspace-table-wrap">
+        <table class="workspace-table">
+          <thead><tr><th>Name</th><th>Leader</th><th>Members</th><th>Last active</th><th></th></tr></thead>
+          <tbody>${squads.map(([name, detail, leader, members, active]) => `<tr>
+            <td><span class="squad-tile">${icon("members", "icon--sm")}</span><span><strong>${name}</strong><small>${detail}</small></span></td>
+            <td>${avatar(leader)}<span>陈闻峰</span></td><td>${members}</td><td>${active}</td><td>${icon("more", "icon--sm")}</td>
+          </tr>`).join("")}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  function runtimesPage() {
+    return `<div class="page-layout">
+      ${pageBar("Runtimes")}
+      <div class="workspace-toolbar">
+        <span class="toolbar-label">Computers</span>
+        <span class="u-spacer"></span>
+        ${button("Add a computer", "plus", "filter-placeholder", "outline")}
+      </div>
+      <div class="runtime-list">
+        <article class="runtime-card">
+          <span class="runtime-device">${icon("runtime", "icon--lg")}</span>
+          <span class="runtime-card__copy"><strong>Mesh development computer</strong><small>Local runtime · v0.1.0</small></span>
+          <span class="runtime-state"><i></i>Online</span>
+          <span class="runtime-meta"><small>Last seen</small><strong>Just now</strong></span>
+          ${button("Manage", "settings", "filter-placeholder", "outline")}
+        </article>
+      </div>
+    </div>`;
+  }
+
   function automationsPage() {
     return `<div class="page-layout">
-      ${pageBar("自动化", "zap", { count: state.automations.length, actions: button("新建自动化", "plus", "create-automation", "primary") })}
+      ${pageBar("Autopilot")}
       <div class="page-scroll"><div class="page-content">
         <div class="page-intro"><div class="page-intro__copy"><h1>自动化</h1><p>让重复工作按计划、Webhook 或人工触发自动执行。</p></div></div>
         <div class="toolbar surface-card" style="margin-bottom:12px;border-radius:10px"><div class="segmented"><button class="is-active">全部</button><button>已启用</button><button>已暂停</button></div><span class="u-spacer"></span>${button("运行记录", "clock", "automation-runs")}</div>
@@ -904,12 +873,12 @@
       ["agent", "自动化运行完成", "高优先级 Issue 巡检发现 2 个即将超时的事项。", "2 小时"],
       ["zhao", "赵可回复了你的评论", "附件预览的尺寸已经统一，移动端也同步验证过了。", "昨天"],
     ];
-    const selected = notifications[state.inboxSelected] || notifications[0];
+    const selected = notifications[state.inboxSelected];
     return `<div class="page-layout">
-      ${pageBar("收件箱", "inbox", { count: "4", actions: button("全部标为已读", "check", "mark-read") })}
+      ${pageBar("Inbox")}
       <div class="split-workspace">
         <div class="split-list">
-          <div class="inbox-filter"><div class="segmented"><button class="is-active">收件箱</button><button>未读</button><button>已归档</button></div><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button">${icon("filter", "icon--sm")}</button></div>
+          <div class="inbox-filter"><div class="workspace-tabs"><button class="is-active">Inbox</button><button>Archive</button></div><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button">${icon("filter", "icon--sm")}</button></div>
           ${notifications
             .map(
               ([person, title, preview, time], index) => `<article class="inbox-item ${index < 4 ? "is-unread" : ""} ${state.inboxSelected === index ? "is-selected" : ""}" data-action="select-inbox" data-index="${index}">
@@ -920,13 +889,26 @@
             .join("")}
         </div>
         <article class="split-detail">
-          <div class="notification-detail">
-            <div class="notification-detail__eyebrow">MENTION · MES-147</div>
-            <h1>${selected[1]}</h1>
-            <div class="notification-detail__meta">${avatar(selected[0])}<span>${people[selected[0]].name}</span><span>·</span><span>${selected[3]}前</span></div>
-            <div class="notification-quote">${selected[2]}</div>
-            <div style="display:flex;gap:8px;margin-top:16px">${button("打开 Issue", "arrow", "open-selected-issue", "primary")}${button("归档", "check", "archive-notification")}</div>
-          </div>
+          ${
+            selected
+              ? `<div class="notification-detail">
+                  <div class="notification-detail__eyebrow">MES-147 · COMMENT</div>
+                  <h1>${selected[1]}</h1>
+                  <div class="notification-detail__meta">${avatar(selected[0])}<span>${people[selected[0]].name}</span><span>·</span><span>${selected[3]}前</span></div>
+                  <div class="notification-quote">
+                    <p>${selected[2]}</p>
+                    <pre><code>.board-column__head {
+  position: sticky;
+  top: 0;
+}</code></pre>
+                  </div>
+                  <form class="composer composer--compact" data-form="comment">
+                    <textarea class="ui-textarea" name="comment" placeholder="Leave a comment..."></textarea>
+                    <div class="composer__bar"><button class="ui-button ui-button--icon" type="button">${icon("attach")}</button><span class="u-spacer"></span><button class="ui-button ui-button--small ui-button--primary" type="submit">${icon("send", "icon--sm")}Send</button></div>
+                  </form>
+                </div>`
+              : `<div class="split-placeholder"><span>${icon("inbox", "icon--lg")}</span><p>Select an inbox item to view details</p></div>`
+          }
         </article>
       </div>
     </div>`;
@@ -941,31 +923,35 @@
       ["主题对比度", "设计助手", "周一"],
     ];
     return `<div class="page-layout">
-      ${pageBar("聊天", "chat", { actions: button("新对话", "plus", "new-chat", "primary") })}
+      ${pageBar("Chat")}
       <div class="chat-shell">
         <aside class="chat-sessions">
-          <div class="chat-sessions__head"><strong style="font-size:12px">最近对话</strong><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button">${icon("search", "icon--sm")}</button></div>
-          ${sessions.map(([title, agent, time], index) => `<div class="session-item ${index === 0 ? "is-active" : ""}"><div class="session-item__title">${title}</div><div class="session-item__meta"><span>${agent}</span><span>${time}</span></div></div>`).join("")}
+          <div class="chat-sessions__head"><strong>Conversations</strong><span class="u-spacer"></span>${button("New", "plus", "new-chat", "outline")}</div>
+          ${sessions.map(([title, agent, time], index) => `<button class="session-item ${state.chatSelected === index ? "is-active" : ""}" type="button" data-action="select-chat" data-index="${index}"><div class="session-item__title">${title}</div><div class="session-item__meta"><span>${agent}</span><span>${time}</span></div></button>`).join("")}
         </aside>
-        <section class="chat-room">
-          <header class="chat-room__head">${avatar("agent")}<div><strong style="display:block;font-size:12px">Mesh 工程师</strong><span class="u-success" style="font-size:10px">在线</span></div><span class="u-spacer"></span><span class="meta-pill">${icon("link", "icon--sm")}MES-147</span><button class="ui-button ui-button--icon" type="button">${icon("more")}</button></header>
-          <div class="chat-messages"><div class="chat-thread" data-chat-thread>
-            ${state.messages
-              .map(
-                (message) =>
-                  message.from === "me"
-                    ? `<div class="message message--me"><div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">${message.time}</div></div>${avatar("you")}</div>`
-                    : `<div class="message">${avatar("agent")}<div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">Mesh 工程师 · ${message.time}</div></div></div>`,
-              )
-              .join("")}
-          </div></div>
-          <div class="chat-compose-wrap">
-            <form class="chat-compose" data-form="chat">
-              <textarea name="message" placeholder="给 Mesh 工程师发送消息…" aria-label="消息"></textarea>
-              <div class="chat-compose__foot"><button class="ui-button ui-button--icon" type="button">${icon("attach")}</button><span class="meta-pill">${icon("link", "icon--sm")}MES-147</span><span class="u-spacer"></span><button class="ui-button ui-button--icon ui-button--primary" type="submit" aria-label="发送">${icon("send")}</button></div>
-            </form>
-          </div>
-        </section>
+        ${
+          state.chatSelected < 0
+            ? `<section class="chat-room chat-room--empty"><div class="split-placeholder"><span>${icon("chat", "icon--lg")}</span><p>Select a conversation to start chatting</p></div></section>`
+            : `<section class="chat-room">
+                <header class="chat-room__head">${avatar("agent")}<div><strong>Mesh 工程师</strong><span class="u-success">Online</span></div><span class="u-spacer"></span><span class="meta-pill">${icon("link", "icon--sm")}MES-147</span><button class="ui-button ui-button--icon" type="button">${icon("more")}</button></header>
+                <div class="chat-messages"><div class="chat-thread" data-chat-thread>
+                  ${state.messages
+                    .map(
+                      (message) =>
+                        message.from === "me"
+                          ? `<div class="message message--me"><div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">${message.time}</div></div>${avatar("you")}</div>`
+                          : `<div class="message">${avatar("agent")}<div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">Mesh 工程师 · ${message.time}</div></div></div>`,
+                    )
+                    .join("")}
+                </div></div>
+                <div class="chat-compose-wrap">
+                  <form class="chat-compose" data-form="chat">
+                    <textarea name="message" placeholder="Message Mesh 工程师…" aria-label="Message"></textarea>
+                    <div class="chat-compose__foot"><button class="ui-button ui-button--icon" type="button">${icon("attach")}</button><span class="u-spacer"></span><button class="ui-button ui-button--icon ui-button--primary" type="submit" aria-label="Send">${icon("send")}</button></div>
+                  </form>
+                </div>
+              </section>`
+        }
       </div>
     </div>`;
   }
@@ -1005,58 +991,58 @@
   }
 
   function settingsPage() {
-    const settingsItems = [
-      ["workspace", "工作区", "settings"],
-      ["profile", "个人资料", "my"],
-      ["appearance", "外观", "palette"],
-      ["notifications", "通知", "bell"],
-      ["security", "安全", "shield"],
-      ["runtime", "运行时", "runtime"],
+    const accountItems = [
+      ["profile", "Profile", "my"],
+      ["preferences", "Preferences", "palette"],
+      ["shortcuts", "Shortcuts", "command"],
+      ["chat", "Chat", "chat"],
+      ["notifications", "Notifications", "bell"],
+      ["tokens", "API Tokens", "link"],
     ];
+    const workspaceItems = [
+      ["general", "General", "settings"],
+      ["repositories", "Repositories", "project"],
+      ["github", "GitHub", "link"],
+      ["integrations", "Integrations", "zap"],
+      ["labs", "Labs", "skill"],
+      ["members", "Members", "members"],
+      ["labels", "Labels", "state"],
+    ];
+    const currentTheme = document.documentElement.dataset.theme;
+    const selectedLabel = [...accountItems, ...workspaceItems].find(([key]) => key === state.settingsTab)?.[1] || "Profile";
     let content = "";
-    if (state.settingsTab === "appearance") {
-      const current = document.documentElement.dataset.theme;
-      content = `<section class="settings-section"><h1>外观</h1><p>选择 Mesh 在此设备上的显示方式。</p>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">主题</div><div class="settings-block__hint">即时切换，无需刷新页面。</div></div>
-          <div class="theme-options">
-            <button class="theme-option ${current === "light" ? "is-selected" : ""}" data-action="set-theme" data-theme="light"><span class="theme-preview"></span><span class="theme-option__label">亮色</span></button>
-            <button class="theme-option ${current === "dark" ? "is-selected" : ""}" data-action="set-theme" data-theme="dark"><span class="theme-preview theme-preview--dark"></span><span class="theme-option__label">暗色</span></button>
-            <button class="theme-option" data-action="set-theme" data-theme="system"><span class="theme-preview theme-preview--system"></span><span class="theme-option__label">跟随系统</span></button>
-          </div>
-        </div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">界面密度</div><div class="settings-block__hint">控制列表与表格的行高。</div></div><select class="ui-select"><option>舒适</option><option>紧凑</option></select></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">减少动态效果</div><div class="settings-block__hint">弱化页面切换与反馈动效。</div></div><button class="switch" type="button" role="switch" aria-checked="false" data-action="toggle-switch"></button></div></div>
-      </section>`;
-    } else if (state.settingsTab === "notifications") {
-      content = `<section class="settings-section"><h1>通知</h1><p>控制收件箱、桌面提醒与摘要方式。</p>
-        ${["提及与回复", "Issue 指派", "状态与属性变更", "智能体运行失败", "每周摘要"].map((label, index) => `<div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">${label}</div><div class="settings-block__hint">${index < 2 ? "重要协作事件，建议保持开启。" : "可随时在收件箱中查看历史记录。"}</div></div><button class="switch" type="button" role="switch" aria-checked="${index !== 2}" data-action="toggle-switch"></button></div></div>`).join("")}
-      </section>`;
-    } else if (state.settingsTab === "security") {
-      content = `<section class="settings-section"><h1>安全</h1><p>管理活跃会话、登录方式和访问凭据。</p>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">邮箱登录</div><div class="settings-block__hint">使用一次性验证码，无需密码。</div></div><div><strong style="font-size:12px">cnwenf@outlook.com</strong><div class="u-success" style="font-size:11px;margin-top:3px">已验证</div></div></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">活跃会话</div><div class="settings-block__hint">3 台设备正在登录。</div></div><div>${button("查看会话", "arrow", "filter-placeholder")}</div></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label u-danger">退出所有设备</div><div class="settings-block__hint">撤销除当前设备外的全部会话。</div></div><div>${button("退出其他设备", "logout", "logout-others", "danger")}</div></div></div>
+    if (state.settingsTab === "preferences") {
+      content = `<section class="settings-section"><h1>Preferences</h1><h2>General</h2>
+        <div class="preference-card">
+          <label><span>Theme</span><select class="ui-select" aria-label="Theme" data-theme-select>
+            <option value="system">System</option><option value="light" ${currentTheme === "light" ? "selected" : ""}>Light</option><option value="dark" ${currentTheme === "dark" ? "selected" : ""}>Dark</option>
+          </select></label>
+          <label><span>Language</span><select class="ui-select" aria-label="Language"><option>English</option><option>简体中文</option></select></label>
+          <label><span><strong>Viewing Timezone</strong><small>Used for dashboards, charts, and any “today” label shown to you.</small></span><select class="ui-select"><option>Asia/Shanghai (browser)</option></select></label>
+          <label><span><strong>Sticky comment bar</strong><small>Keep the comment bar pinned while scrolling an issue page.</small></span><button class="switch" type="button" role="switch" aria-checked="true" data-action="toggle-switch"></button></label>
+        </div>
       </section>`;
     } else if (state.settingsTab === "profile") {
-      content = `<section class="settings-section"><h1>个人资料</h1><p>这些信息会展示在工作区名册和评论中。</p>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">头像</div><div class="settings-block__hint">建议使用清晰的方形图片。</div></div><div style="display:flex;align-items:center;gap:10px">${avatar("you", true)}${button("更换头像", "edit", "filter-placeholder")}</div></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">姓名</div></div><input class="ui-input" value="陈闻峰" /></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">时区</div></div><select class="ui-select"><option>Asia/Shanghai (UTC+8)</option></select></div></div>
-        <div style="display:flex;justify-content:flex-end">${button("保存更改", "check", "save-settings", "primary")}</div>
+      content = `<section class="settings-section"><h1>Profile</h1><h2>Personal information</h2>
+        <div class="profile-form">
+          <label class="avatar-field"><span>Avatar<small>Click to upload avatar</small></span>${avatar("you", true)}</label>
+          <label><span>Name</span><input class="ui-input" value="陈闻峰" /></label>
+          <label><span>About you<small>Shared with Mesh teammates working on your behalf.</small></span><textarea class="ui-textarea" rows="5">产品与工程负责人，关注 AI 原生协作体验与交付质量。</textarea></label>
+        </div>
       </section>`;
     } else {
-      content = `<section class="settings-section"><h1>${state.settingsTab === "runtime" ? "运行时" : "工作区设置"}</h1><p>${state.settingsTab === "runtime" ? "配置智能体执行任务时可用的运行环境。" : "管理名称、标识、默认语言和协作偏好。"}</p>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">${state.settingsTab === "runtime" ? "默认运行时" : "工作区名称"}</div><div class="settings-block__hint">${state.settingsTab === "runtime" ? "新智能体默认使用此环境。" : "展示在侧栏、邀请和通知中。"}</div></div>${state.settingsTab === "runtime" ? `<select class="ui-select"><option>本地开发机 · 在线</option><option>云端标准环境</option></select>` : `<input class="ui-input" value="${escapeHtml(state.workspace)}" />`}</div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">${state.settingsTab === "runtime" ? "任务并发数" : "工作区标识"}</div><div class="settings-block__hint">${state.settingsTab === "runtime" ? "限制同一环境的并行任务。" : "用于 Issue 编号和简短引用。"}</div></div><input class="ui-input" value="${state.settingsTab === "runtime" ? "4" : "MES"}" /></div></div>
-        <div class="settings-block"><div class="settings-block__row"><div><div class="settings-block__label">${state.settingsTab === "runtime" ? "自动更新" : "默认语言"}</div><div class="settings-block__hint">${state.settingsTab === "runtime" ? "运行时空闲时获取稳定版更新。" : "新成员首次进入时使用此语言。"}</div></div>${state.settingsTab === "runtime" ? `<button class="switch" type="button" role="switch" aria-checked="true" data-action="toggle-switch"></button>` : `<select class="ui-select"><option>简体中文</option><option>English</option></select>`}</div></div>
-        <div style="display:flex;justify-content:flex-end">${button("保存更改", "check", "save-settings", "primary")}</div>
+      content = `<section class="settings-section"><h1>${selectedLabel}</h1><h2>${accountItems.some(([key]) => key === state.settingsTab) ? "My Account" : "Mesh"}</h2>
+        <div class="preference-card"><label><span>${selectedLabel}</span><span class="u-muted">Configuration for this static prototype.</span></label></div>
       </section>`;
     }
     return `<div class="page-layout">
-      ${pageBar("设置", "settings")}
+      ${pageBar("Settings")}
       <div class="settings-layout">
         <nav class="settings-nav">
-          ${settingsItems.map(([key, label, iconName]) => `<button class="${state.settingsTab === key ? "is-active" : ""}" type="button" data-action="settings-tab" data-tab="${key}">${icon(iconName, "icon--sm")}${label}</button>`).join("")}
+          <div class="settings-nav__title">My Account</div>
+          ${accountItems.map(([key, label, iconName]) => `<button class="${state.settingsTab === key ? "is-active" : ""}" type="button" data-action="settings-tab" data-tab="${key}">${icon(iconName, "icon--sm")}${label}</button>`).join("")}
+          <div class="settings-nav__title">Mesh</div>
+          ${workspaceItems.map(([key, label, iconName]) => `<button class="${state.settingsTab === key ? "is-active" : ""}" type="button" data-action="settings-tab" data-tab="${key}">${icon(iconName, "icon--sm")}${label}</button>`).join("")}
         </nav>
         <div class="settings-content">${content}</div>
       </div>
@@ -1089,9 +1075,13 @@
     members: membersPage,
     agents: agentsPage,
     agent: agentPage,
+    squads: squadsPage,
+    runtimes: runtimesPage,
     skills: skillsPage,
     skill: skillPage,
+    autopilot: automationsPage,
     automations: automationsPage,
+    usage: analyticsPage,
     analytics: analyticsPage,
     settings: settingsPage,
     states: statesPage,
@@ -1188,14 +1178,14 @@
     const query = state.commandQuery.toLowerCase();
     const commands = [
       ["issues", "打开 Issues", "issues", "G I"],
-      ["board", "打开看板", "board", "G B"],
       ["projects", "打开项目", "project", "G P"],
-      ["members", "打开成员名册", "members", "G M"],
       ["agents", "管理智能体", "agent", ""],
-      ["analytics", "查看工作区分析", "chart", ""],
+      ["squads", "打开 Squads", "members", ""],
+      ["runtimes", "打开 Runtimes", "runtime", ""],
+      ["usage", "查看 Usage", "chart", ""],
       ["settings", "打开设置", "settings", ""],
       ["action:create", "新建 Issue", "plus", "C"],
-      ["action:theme", "切换亮暗主题", "moon", ""],
+      ["action:theme", "打开主题偏好", "palette", ""],
     ].filter((command) => command[1].toLowerCase().includes(query));
     openDialog(`
       <div class="command-field">${icon("search", "command-search-icon")}<input class="command-input" data-command-input placeholder="搜索页面、Issue 或运行命令…" value="${escapeHtml(state.commandQuery)}" autofocus /></div>
@@ -1213,7 +1203,6 @@
         <div class="roster-person" style="padding:4px 3px 12px">${avatar("you", true)}<div class="roster-person__copy"><div class="roster-person__name">陈闻峰</div><div class="roster-person__email">cnwenf@outlook.com</div></div></div>
         <div class="workspace-menu">
           <button class="command-item" type="button" data-action="go-profile">${icon("my")}个人资料</button>
-          <button class="command-item" type="button" data-action="toggle-theme">${icon(document.documentElement.dataset.theme === "dark" ? "sun" : "moon")}切换主题</button>
           <button class="command-item u-danger" type="button" data-route="login">${icon("logout")}退出登录</button>
         </div>
       </div>
@@ -1289,7 +1278,7 @@
       "mobile-menu": mobileDrawer,
       "profile-menu": profileDialog,
       "workspace-settings": () => {
-        state.settingsTab = "workspace";
+        state.settingsTab = "general";
         setRoute("settings");
         closeOverlay();
       },
@@ -1303,6 +1292,10 @@
       "archive-notification": () => showToast("通知已归档"),
       "select-inbox": () => {
         state.inboxSelected = Number(actionTarget.dataset.index || 0);
+        render();
+      },
+      "select-chat": () => {
+        state.chatSelected = Number(actionTarget.dataset.index || 0);
         render();
       },
       "settings-tab": () => {
@@ -1361,7 +1354,7 @@
       "logout-others": () => showToast("其他设备已退出", "当前会话保持登录。"),
       "new-chat": () => showToast("已创建新对话", "选择一个智能体开始协作。"),
       "project-settings": () => {
-        state.settingsTab = "workspace";
+        state.settingsTab = "general";
         setRoute("settings");
       },
       "edit-agent": () => showToast("智能体编辑面板已打开"),
@@ -1378,11 +1371,8 @@
       closeOverlay();
       if (route === "action:create") createIssueDialog();
       else if (route === "action:theme") {
-        const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-        document.documentElement.dataset.theme = theme;
-        localStorage.setItem("mesh-prototype-theme", theme);
-        render();
-        showToast("主题已切换");
+        state.settingsTab = "preferences";
+        setRoute("settings");
       } else setRoute(route);
       return;
     }
@@ -1399,7 +1389,7 @@
     else if (actionTarget.dataset.action === "open-workspaces") workspaceDialog();
     else if (actionTarget.dataset.action === "create-workspace") createWorkspaceDialog();
     else if (actionTarget.dataset.action === "workspace-settings") {
-      state.settingsTab = "workspace";
+      state.settingsTab = "general";
       closeOverlay();
       setRoute("settings");
     } else if (actionTarget.dataset.action === "select-workspace") {
@@ -1435,6 +1425,19 @@
         row.hidden = !row.textContent.toLowerCase().includes(query);
       });
     }
+  });
+
+  document.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-theme-select]")) return;
+    const requested = event.target.value;
+    const theme = requested === "system"
+      ? matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+      : requested;
+    document.documentElement.dataset.theme = theme;
+    if (requested === "system") localStorage.removeItem("mesh-prototype-theme");
+    else localStorage.setItem("mesh-prototype-theme", theme);
+    render();
+    showToast("Changes saved");
   });
 
   document.addEventListener("submit", (event) => {
