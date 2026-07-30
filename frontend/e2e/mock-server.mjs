@@ -397,6 +397,37 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  // ---- 工作区按 slug 解析(workspace.md §4.1 GET /workspaces/by-slug/{slug})
+  // 规范深链 /w/{slug}/* 的 WorkspaceProvider 真源;与 /users/me 成员资格同治具
+  // (单一工作区 Acme / ws-1,my_role=admin)。未知 slug → 404(与真实后端同信封)。
+  const bySlugMatch = /^\/api\/v1\/workspaces\/by-slug\/([^/]+)$/.exec(path);
+  if (bySlugMatch !== null && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    if (decodeURIComponent(bySlugMatch[1]) !== 'acme') {
+      sendJson(res, 404, errorEnvelope('not_found', 'workspace not found'));
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      envelope({
+        id: 'ws-1',
+        name: 'Acme',
+        slug: 'acme',
+        logo_url: null,
+        timezone: 'UTC',
+        settings: {},
+        my_role: 'admin',
+        created_at: isoAt(0),
+        updated_at: isoAt(0),
+      }),
+    );
+    return;
+  }
+
   // ---- 测试治具控制端点(非产品 API:重置内存态 / 注入帧 / 保留窗口清理)---
   if (path === '/api/v1/mock/reset' && req.method === 'POST') {
     resetState();

@@ -75,7 +75,7 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByTestId('marketplace-title')).toBeVisible();
   });
 
-  test('顶栏搜索即统一入口:键入展开命令面板并携带查询;Esc 关闭归还焦点', async ({ page }) => {
+  test('顶栏搜索即统一入口:键入展开命令面板并携带查询;Esc 分层关闭(§4.5)', async ({ page }) => {
     await login(page);
     await page.goto('/');
     const topbarSearch = page.getByTestId('topbar-search');
@@ -84,6 +84,9 @@ test.describe('手机可达性 @390×844', () => {
     const paletteInput = page.locator('.mesh-palette input');
     await expect(paletteInput).toBeVisible();
     await expect(paletteInput).toHaveValue('theme');
+    // §4.5 Esc 分层关闭栈:输入框获焦时首个 Esc 仅失焦,第二个 Esc 才关面板
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.locator('.mesh-palette')).toHaveCount(0);
   });
