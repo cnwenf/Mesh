@@ -41,7 +41,7 @@ import httpx
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from mesh.db.models.integration import Integration, IntegrationMessageQueue
+from mesh.db.models.integration import Integration, IntegrationEvent, IntegrationMessageQueue
 from mesh.db.models.notification import NotificationDelivery
 from mesh.db.models.outbox import (
     OUTBOX_STATUS_FAILED,
@@ -55,8 +55,10 @@ from mesh.integrations.ack import (
     IM_SEND_EVENT_TYPE,
     IM_SEND_KIND_ACK,
     IM_SEND_KIND_CARD,
+    IM_SEND_KIND_COMMAND_FEEDBACK,
     IM_SEND_KIND_FEEDBACK,
     IM_SEND_KIND_NOTIFICATION,
+    IM_SEND_KIND_RATE_LIMIT_HINT,
     compose_ack_text,
     position_hint,
 )
@@ -621,6 +623,12 @@ class IMSendRelay:
                     # explicit workspace_id predicate below).
                     await set_tenant_context(session, event.workspace_id)
                     payload = event.payload or {}
+                    # MES-88 cross-slice shape: the queue-plane ack payload
+                    # carries no workspace_id — the outbox row is the
+                    # authoritative carrier (copy-on-write: the ORM dict is
+                    # never mutated in place).
+                    if not payload.get("workspace_id"):
+                        payload = {**payload, "workspace_id": str(event.workspace_id)}
                     raw_item_id = str(payload.get("queue_item_id") or "")
                     try:
                         item_id = uuid.UUID(raw_item_id)
@@ -728,8 +736,6 @@ class IMSendRelay:
         NOT roll back the T2 queue-item writes (the at-most-once shape is
         fixed); the queue item's four ack fields remain the primary truth.
         Items without a linked inbound event skip the write gracefully."""
-        from mesh.db.models.integration import IntegrationEvent
-
         try:
             async with session.begin_nested():
                 item = await session.scalar(
@@ -759,6 +765,43 @@ class IMSendRelay:
         except Exception:  # noqa: BLE001 — ledger is best-effort (§3.8 audit)
             logger.exception("ack result ledger write failed item=%s", leader_id)
 
+    async def _fill_target_from_item(
+        self,
+        session: AsyncSession,
+        payload: dict[str, Any],
+        *,
+        item: IntegrationMessageQueue | None = None,
+    ) -> None:
+        """MES-88 cross-slice alignment: the queue-plane ``im.send`` payloads
+        (ack / command_feedback) carry only ``conversation_key``; the
+        conversation TYPE (group vs direct) and the direct-chat target user
+        key are derived here from the queue item and its source inbound
+        event (``conversationType`` / sender identity live in the ingested
+        payload). Fully-specified payloads (MES-89 emitters) pass through
+        unchanged. The payload dict is mutated in place for the caller."""
+        conv_type = str(payload.get("conversation_type") or "")
+        has_target = bool(payload.get("target_user_key"))
+        if conv_type and (has_target or conv_type == CONVERSATION_GROUP):
+            return
+        if item is None:
+            item_id = _uuid_or_none(payload.get("queue_item_id"))
+            if item_id is None:
+                return
+            item = await session.get(IntegrationMessageQueue, item_id)
+        if item is None:
+            return
+        if not conv_type:
+            resolved = CONVERSATION_GROUP
+            if item.integration_event_id is not None:
+                source = await session.get(IntegrationEvent, item.integration_event_id)
+                raw = str((source.payload or {}).get("conversationType") or "") if source else ""
+                if raw == "1":
+                    resolved = CONVERSATION_DIRECT
+            payload["conversation_type"] = resolved
+            conv_type = resolved
+        if conv_type == CONVERSATION_DIRECT and not has_target:
+            payload["target_user_key"] = item.sender_identity_key.rpartition(":")[2]
+
     async def _send_ack_message(self, payload: dict[str, Any]) -> SendOutcome:
         workspace_id = uuid.UUID(str(payload["workspace_id"]))
         template = str(payload.get("template") or DEFAULT_ACK_TEMPLATE)
@@ -772,8 +815,9 @@ class IMSendRelay:
             )
             if adapter is None:
                 return SendOutcome(SEND_STATUS_FAILED, reason=REASON_INTEGRATION_UNAVAILABLE)
-            target = self._target_from_payload(payload, workspace_id, integration_id)
             item = await session.get(IntegrationMessageQueue, uuid.UUID(str(payload["queue_item_id"])))
+            await self._fill_target_from_item(session, payload, item=item)
+            target = self._target_from_payload(payload, workspace_id, integration_id)
             position = await position_hint(session, item=item) if item is not None else 1
         text = compose_ack_text(template, position)
         return await adapter.send_text(target, text)
@@ -792,10 +836,14 @@ class IMSendRelay:
         payload = event.payload or {}
         kind = str(payload.get("kind") or "")
         await set_tenant_context(session, event.workspace_id)
-        if kind == IM_SEND_KIND_FEEDBACK:
+        if kind in (
+            IM_SEND_KIND_FEEDBACK,
+            IM_SEND_KIND_COMMAND_FEEDBACK,  # MES-88 /stop//btw two-phase feedback
+            IM_SEND_KIND_RATE_LIMIT_HINT,  # MES-88 §2.10 one-per-minute hint
+        ):
             outcome = await self._send_feedback(workspace_id=event.workspace_id, payload=payload)
             if not outcome.sent:
-                logger.warning("command feedback send failed reason=%s", outcome.reason)
+                logger.warning("conversational send failed kind=%s reason=%s", kind, outcome.reason)
             # Conversational reply: publish regardless (no retry, no ledger).
             self._mark_published(event)
             return
@@ -818,6 +866,9 @@ class IMSendRelay:
                 if integration_id
                 else None
             )
+            # MES-88 payloads carry only conversation_key (type/target
+            # derived from the queue item + its inbound event).
+            await self._fill_target_from_item(session, payload)
         if adapter is None:
             return SendOutcome(SEND_STATUS_FAILED, reason=REASON_INTEGRATION_UNAVAILABLE)
         target = self._target_from_payload(payload, workspace_id, integration_id)

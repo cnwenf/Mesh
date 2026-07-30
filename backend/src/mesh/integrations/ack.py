@@ -44,9 +44,14 @@ logger = logging.getLogger("mesh.integrations.ack")
 # Internal event type, NOT a README §6.7 realtime name (no vocab entry).
 IM_SEND_EVENT_TYPE = "im.send"
 
-# Payload ``kind`` values (consumer: IMSendRelay).
+# Payload ``kind`` values (consumer: IMSendRelay). The queue-plane kinds
+# (command_feedback / rate_limit_hint) are emitted by the MES-88 queue /
+# command / guard modules; the values here are the single source of truth
+# the relay matches against.
 IM_SEND_KIND_ACK = "ack"
 IM_SEND_KIND_FEEDBACK = "feedback"
+IM_SEND_KIND_COMMAND_FEEDBACK = "command_feedback"
+IM_SEND_KIND_RATE_LIMIT_HINT = "rate_limit_hint"
 IM_SEND_KIND_NOTIFICATION = "notification"
 IM_SEND_KIND_CARD = "card"
 
@@ -165,8 +170,10 @@ __all__ = [
     "IM_SEND_EVENT_TYPE",
     "IM_SEND_KIND_ACK",
     "IM_SEND_KIND_CARD",
+    "IM_SEND_KIND_COMMAND_FEEDBACK",
     "IM_SEND_KIND_FEEDBACK",
     "IM_SEND_KIND_NOTIFICATION",
+    "IM_SEND_KIND_RATE_LIMIT_HINT",
     "POSITION_HINT_TEMPLATE",
     "ack_idempotency_key",
     "compose_ack_text",

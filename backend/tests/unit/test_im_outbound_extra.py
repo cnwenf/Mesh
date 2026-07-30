@@ -545,3 +545,126 @@ async def test_card_busy_defers_without_budget_then_succeeds(
         row = await session.get(NotificationDelivery, delivery_id)
         assert row.state == "sent" and row.error is None
     assert len(transport.calls_for(CARD_CREATE_PATH)) == 1
+
+
+# ---------------------------------------------------------------------------
+# MES-88 cross-slice alignment: the relay consumes the queue-plane payload
+# shapes emitted by message_queue.py / queue_events.py / inbound.py
+# (no workspace_id / conversation_type / target_user_key in the ack and
+# command_feedback payloads — derived from the queue item + inbound event)
+# ---------------------------------------------------------------------------
+
+STAFF = "014728255240768602"
+
+
+async def _enqueue_item_with_event(session_factory, world, *, conversation_type: str):
+    """Queue item with a source inbound event (MES-88 wiring shape):
+    conversationType "1" = direct, "2" = group."""
+    from mesh.db.models.integration import IntegrationEvent, IntegrationMessageQueue
+
+    async with session_factory() as session, session.begin():
+        event = IntegrationEvent(
+            workspace_id=world["ws"],
+            integration_id=world["integ_dingtalk"],
+            external_event_id=f"msg-{uuid.uuid4().hex}",
+            event_type="im.message.receive_v1",
+            payload={"conversationType": conversation_type},
+            signature_status="valid",
+            process_status="dispatched",
+        )
+        session.add(event)
+        await session.flush()
+        item = IntegrationMessageQueue(
+            workspace_id=world["ws"],
+            integration_id=world["integ_dingtalk"],
+            binding_id=world["binding_dingtalk"],
+            integration_event_id=event.id,
+            conversation_key=CONVERSATION_KEY,
+            seq=1,
+            dispatch_mode="serial_conversation",
+            state="pending",
+            sender_identity_key=f"dingtalk:dingcorpTEST:{STAFF}",
+            ack_window_at=datetime.now(UTC),
+        )
+        session.add(item)
+        await session.flush()
+    return item
+
+
+def _mes88_ack_payload(world, item) -> dict:
+    """The exact ack payload message_queue.py emits — no workspace_id /
+    conversation_type / target_user_key."""
+    return {
+        "kind": "ack",
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY,
+        "queue_item_id": str(item.id),
+        "template": "✅ 已接收，处理中",
+        "position_snapshot": 1,
+    }
+
+
+async def test_ack_mes88_payload_group_delivery(session_factory, redis_client):
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    item = await _enqueue_item_with_event(session_factory, world, conversation_type="2")
+    await _emit(session_factory, world, _mes88_ack_payload(world, item), f"ack88g-{item.id}")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.group_sends()
+    assert sent.body["openConversationId"] == "cid6EUvB2O8qVF2RYQtHTKEsg=="
+    assert transport.direct_sends() == []
+    from mesh.db.models.integration import IntegrationMessageQueue
+
+    async with session_factory() as session:
+        row = await session.get(IntegrationMessageQueue, item.id)
+        assert row.ack_sent_at is not None  # T2 completed through the full path
+
+
+async def test_ack_mes88_payload_direct_delivery(session_factory, redis_client):
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    item = await _enqueue_item_with_event(session_factory, world, conversation_type="1")
+    await _emit(session_factory, world, _mes88_ack_payload(world, item), f"ack88d-{item.id}")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.direct_sends()
+    assert sent.body["userIds"] == [STAFF]  # derived from sender_identity_key
+    assert transport.group_sends() == []
+
+
+async def test_command_feedback_kind_delivered(session_factory, redis_client):
+    """MES-88 /stop//btw two-phase feedback (queue_events.py payload shape,
+    no workspace_id — the outbox row carries it)."""
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    item = await _enqueue_item_with_event(session_factory, world, conversation_type="2")
+    await _emit(session_factory, world, {
+        "kind": "command_feedback",
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY,
+        "queue_item_id": str(item.id),
+        "text": "⏳ 正在停止任务…",
+    }, f"cmdfb-{item.id}")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.group_sends()
+    assert "停止" in json.loads(sent.body["msgParam"])["content"]
+    assert (await _event_status(session_factory))[0][0] == "published"
+
+
+async def test_rate_limit_hint_kind_delivered(session_factory, redis_client):
+    """MES-88 §2.10 one-per-minute rate-limit hint (inbound.py shape — no
+    queue item exists for a rejected message; default group delivery)."""
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    await _emit(session_factory, world, {
+        "kind": "rate_limit_hint",
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY,
+        "text": "消息太快了，先歇一下",
+    }, "hint-1")
+    await _relay(session_factory, redis_client, transport).run_once()
+    (sent,) = transport.group_sends()
+    assert "歇一下" in json.loads(sent.body["msgParam"])["content"]
