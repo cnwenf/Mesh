@@ -9,7 +9,7 @@
  *   落点指示线、WIP 预检条(warn 放行 / block 禁落)、Esc 取消、aria-live 播报;
  * - 键盘移动(useBoardKeyboardMove,§10.2 非拖拽替代路径):方向键选列/位,Enter 确认;
  * - 触摸长按(BoardTouchMoveSheet,§8.3):列目标底部 sheet + 列内排序;
- * - 移动紧凑(BoardCompact,§8.3):容器 ≤599px 单泳道 + chips 切列;
+ * - 移动紧凑(BoardCompact,§8.1/§8.3):compact 视口(≤599px)单泳道 + chips 切列;
  * - 虚拟化(VirtualColumnBody,§11.4):列内 ≥200 卡片仅渲染可见窗口。
  *
  * a11y 模型:列体 role="list",卡片 role="listitem"(aria-roledescription 标注可拖拽、
@@ -21,7 +21,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../design';
 import { useT } from '../../i18n';
 import type { TranslateFn } from '../../i18n';
-import { BoardCompact, useContainerWidth } from './BoardCompact';
+import { BoardCompact, useIsCompactViewport } from './BoardCompact';
 import { BoardDragLayer } from './BoardDragLayer';
 import { BoardTouchMoveSheet } from './BoardTouchMoveSheet';
 import { VirtualColumnBody, shouldVirtualize } from './VirtualColumnBody';
@@ -35,9 +35,6 @@ import type { BoardCard } from './projection';
 import type { BoardColumn } from './types';
 import './board.css';
 import './board-drag.css';
-
-/** 紧凑模式容器宽度上限(design-quality §8.1,0–599px)。 */
-const COMPACT_MAX_WIDTH = 599;
 
 /** 状态类别的语义色 token(经 CSS 变量引用,禁硬编码色值,§6.12)。 */
 export function categoryColorClass(key: string): string {
@@ -402,9 +399,9 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
   } = props;
   const t = useT();
   const boardRef = useRef<HTMLDivElement>(null);
-  // 结构(非纯视觉)切换:紧凑 vs 完整渲染的 DOM 不同,故用容器宽度判定(§8.3)。
-  const width = useContainerWidth(boardRef);
-  const isCompact = width > 0 && width <= COMPACT_MAX_WIDTH;
+  // 形态切换基准为视口模式(§8.1 模式表 compact = 0–599px),matchMedia 即时
+  // 可得且稳定,杜绝容器宽度测量在负载下的时序抖动(验收第 3 轮打回根因)。
+  const isCompact = useIsCompactViewport();
   const [compactIndex, setCompactIndex] = useState(0);
   const [touchCardId, setTouchCardId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');

@@ -1,15 +1,17 @@
 /**
  * 移动端紧凑看板(design-quality §8.3)。
  *
- * 容器 ≤599px 时呈现:仅一个泳道。
+ * compact 视口(0–599px,§8.1 模式表)时呈现:仅一个泳道。
  * - 顶部横向 chips 切列(状态点 + 名称 + 计数),可横滚,chips 为可聚焦 button;
  * - 上一个/下一个 IconButton(chevron-left/right,带 label);
  * - 卡片区左右滑动切列(指针式,阈值 50px,仅水平向,不与纵向滚动冲突);
  * - 当前列内快速创建 + 长按移动仍可用。
  *
- * 结构(而非纯视觉)切换,故使用 ResizeObserver hook(文档化:结构性的)。
+ * 形态判定经 matchMedia 视口模式(§8.1 模式表),而非容器宽度测量——
+ * 测量时序在负载下不确定(平板视口下内容器宽可 ≤599,观测回调与截图时机竞争,
+ * 看板视觉用例间歇红,验收第 3 轮打回),视口模式即时可得且稳定。
  */
-/* eslint-disable react-refresh/only-export-components -- useContainerWidth 与紧凑组件同模块契约 */
+/* eslint-disable react-refresh/only-export-components -- useIsCompactViewport 与紧凑组件同模块契约 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, IconButton } from '../../design';
 import { useT } from '../../i18n';
@@ -19,6 +21,9 @@ import './board-drag.css';
 
 /** 滑动切列水平阈值(px)。 */
 const SWIPE_THRESHOLD = 50;
+
+/** compact 视口判定媒体(§8.1 模式表:compact = 0–599px)。 */
+const COMPACT_MEDIA_QUERY = '(max-width: 599px)';
 
 interface BoardCompactProps {
   readonly columns: readonly BoardColumn[];
@@ -30,22 +35,25 @@ interface BoardCompactProps {
 }
 
 /**
- * 容器宽度观察 hook(ResizeObserver)。
- * 文档化说明:紧凑 vs 完整是结构性切换(渲染的 DOM 不同),非纯视觉,
- * 故 §11.2「纯视觉勿用 JS 窗宽」不适用于此结构判定。
+ * compact 视口判定 hook(matchMedia)。
+ * 文档化说明:紧凑 vs 完整虽为结构性切换(渲染的 DOM 不同),但判定基准是
+ * §8.1 视口模式(0–599px),非容器内容宽度;matchMedia 即时可得、窗口变化经
+ * change 监听更新,不引入测量时序不确定性(§11.2 禁的是「JS 读窗宽做纯视觉
+ * 布局」,视口模式驱动的结构切换不在此列)。
  */
-export function useContainerWidth(ref: React.RefObject<HTMLElement | null>): number {
-  const [width, setWidth] = useState(0);
+export function useIsCompactViewport(): boolean {
+  const matches = (): boolean =>
+    typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_MEDIA_QUERY).matches;
+  const [isCompact, setIsCompact] = useState(matches);
   useEffect(() => {
-    const el = ref.current;
-    if (el === null) return;
-    const measure = (): void => setWidth(el.clientWidth);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [ref]);
-  return width;
+    if (typeof window.matchMedia !== 'function') return;
+    const media = window.matchMedia(COMPACT_MEDIA_QUERY);
+    const onChange = (): void => setIsCompact(media.matches);
+    onChange();
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, []);
+  return isCompact;
 }
 
 export function BoardCompact(props: BoardCompactProps): React.JSX.Element {

@@ -17,7 +17,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
-import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { createIssue, workspaceIssuesChannel } from '../issues/api';
@@ -46,14 +55,7 @@ import { SortConfigPanel } from './SortConfigPanel';
 import { ViewSaveBar } from './ViewSaveBar';
 import { ViewSwitcher } from './ViewSwitcher';
 import { WipConfigPanel } from './WipConfigPanel';
-import type {
-  BoardSettings,
-  Filters,
-  GroupByField,
-  SortRule,
-  View,
-  WipEnforcement,
-} from './types';
+import type { BoardSettings, Filters, GroupByField, SortRule, View, WipEnforcement } from './types';
 import './board.css';
 
 type LoadStatus = 'loading' | 'ready' | 'empty' | 'error';
@@ -153,7 +155,9 @@ export function BoardPage(): React.JSX.Element {
 
   // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
-  const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>({});
+  const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>(
+    {},
+  );
   const [boardStatus, setBoardStatus] = useState<LoadStatus>('loading');
   const [resyncing, setResyncing] = useState(false);
   const [movePreview, setMovePreview] = useState<{
@@ -389,7 +393,10 @@ export function BoardPage(): React.JSX.Element {
   if (wsStatus === 'empty' || membership === null) {
     return (
       <div className="mesh-board" data-testid="board-page">
-        <EmptyState title={t('board.noWorkspaceTitle')} description={t('board.noWorkspaceDescription')} />
+        <EmptyState
+          title={t('board.noWorkspaceTitle')}
+          description={t('board.noWorkspaceDescription')}
+        />
       </div>
     );
   }
@@ -504,7 +511,9 @@ export function BoardPage(): React.JSX.Element {
                 variant="secondary"
                 data-testid="board-empty-create"
                 onClick={() =>
-                  document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()
+                  document
+                    .querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')
+                    ?.click()
                 }
               >
                 + {t('board.newView')}
@@ -628,7 +637,11 @@ export function BoardPage(): React.JSX.Element {
       const card = group.data.find((item) => item.id === issueId);
       if (card === undefined) return group;
       moved = card;
-      return { ...group, count: Math.max(0, group.count - 1), data: group.data.filter((item) => item.id !== issueId) };
+      return {
+        ...group,
+        count: Math.max(0, group.count - 1),
+        data: group.data.filter((item) => item.id !== issueId),
+      };
     });
     if (moved === null) return groups as BoardGroup[];
     const updated: BoardCard = { ...(moved as BoardCard), ...patch, position };
@@ -658,7 +671,10 @@ export function BoardPage(): React.JSX.Element {
     return {
       state_category: toGroupKey,
       status_id: statusId ?? undefined,
-      status: statusId !== undefined ? { id: statusId, name: toGroupKey, category: toGroupKey } : undefined,
+      status:
+        statusId !== undefined
+          ? { id: statusId, name: toGroupKey, category: toGroupKey }
+          : undefined,
     };
   };
 
@@ -673,7 +689,9 @@ export function BoardPage(): React.JSX.Element {
     if (card === undefined) return;
 
     // 乐观落位(§4.3)。
-    setBoardGroups(moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)));
+    setBoardGroups(
+      moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)),
+    );
 
     try {
       const result = await moveCard(client, selectedView.id, {
@@ -765,12 +783,16 @@ export function BoardPage(): React.JSX.Element {
           <h1 className="mesh-board__title" data-testid="board-title">
             {selectedView.name}
           </h1>
-          <span className="mesh-board__layout-chip">{t('board.layout.' + selectedView.layout)}</span>
+          <span className="mesh-board__layout-chip">
+            {t('board.layout.' + selectedView.layout)}
+          </span>
           <Select
             label={t('board.groupByLabel')}
             value={draft.group_by ?? 'state_category'}
             disabled={!canWrite}
-            onChange={(event) => setDraft({ ...draft, group_by: event.target.value as GroupByField })}
+            onChange={(event) =>
+              setDraft({ ...draft, group_by: event.target.value as GroupByField })
+            }
             data-testid="group-by-select"
           >
             {GROUP_BY_OPTIONS.map((field) => (
@@ -786,7 +808,8 @@ export function BoardPage(): React.JSX.Element {
             onChange={(event) =>
               setDraft({
                 ...draft,
-                sub_group_by: event.target.value === '' ? null : (event.target.value as GroupByField),
+                sub_group_by:
+                  event.target.value === '' ? null : (event.target.value as GroupByField),
               })
             }
             data-testid="sub-group-by-select"
@@ -839,7 +862,10 @@ export function BoardPage(): React.JSX.Element {
         />
 
         {panel === 'filter' ? (
-          <FilterConfigPanel filters={draft.filters} onChange={(filters) => setDraft({ ...draft, filters })} />
+          <FilterConfigPanel
+            filters={draft.filters}
+            onChange={(filters) => setDraft({ ...draft, filters })}
+          />
         ) : null}
         {panel === 'sort' ? (
           <SortConfigPanel rules={draft.sort} onChange={(sort) => setDraft({ ...draft, sort })} />

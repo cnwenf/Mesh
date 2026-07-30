@@ -2,8 +2,8 @@
  * 移动紧凑看板测试(design-quality §8.3):容器 ≤599px 单泳道 + 顶部 chips 切列、
  * 上一个/下一个按钮、横向滑动切列(阈值 50px)、当前列快速创建。
  *
- * 紧凑判定为结构性切换(useContainerWidth,ResizeObserver)。测试以可编程
- * ResizeObserver 桩捕获回调,defineProperty clientWidth 后触发回调驱动宽度。
+ * 紧凑判定基准为视口模式(useIsCompactViewport,matchMedia,§8.1 模式表)。
+ * 测试以 matchMedia 桩(matches: true)驱动 compact 形态,无测量时序。
  */
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -26,21 +26,22 @@ function column(key: string): BoardColumn {
   return { key, label: `board.category.${key}`, collapsed: false, wip: null, count: 1, placeholder: false };
 }
 
-let roCallback: (() => void) | null = null;
-
-/** 可编程 ResizeObserver:捕获回调以驱动容器宽度(结构切换,非纯视觉)。 */
-class ProgrammableRO {
-  constructor(cb: () => void) {
-    roCallback = cb;
-  }
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
+/** compact 视口桩:matchMedia('(max-width: 599px)') → matches: true。 */
+function stubCompactViewport(): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(max-width: 599px)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
 }
 
-// 全局 setup 以 writable(非 configurable)定义 ResizeObserver,vi.stubGlobal 无法重定义;
-// 直接赋值并在 afterEach 复原。
-const originalResizeObserver = window.ResizeObserver;
+
 
 function renderCompact() {
   const onDropCard = vi.fn();
@@ -57,22 +58,15 @@ function renderCompact() {
       onQuickCreate={onQuickCreate}
     />,
   );
-  const wrap = screen.getByTestId('board-columns-wrap');
-  Object.defineProperty(wrap, 'clientWidth', { configurable: true, value: 400 });
-  act(() => {
-    roCallback?.();
-  });
   return { onDropCard, onQuickCreate };
 }
 
 describe('BoardCompact 紧凑看板(§8.3)', () => {
   beforeEach(() => {
     ensurePointerEvent();
-    roCallback = null;
-    window.ResizeObserver = ProgrammableRO as unknown as typeof ResizeObserver;
+    stubCompactViewport();
   });
   afterEach(() => {
-    window.ResizeObserver = originalResizeObserver;
     vi.unstubAllGlobals();
   });
 

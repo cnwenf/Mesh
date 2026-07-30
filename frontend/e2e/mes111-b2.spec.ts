@@ -30,7 +30,10 @@ async function applyTheme(page: Page, theme: 'light' | 'dark'): Promise<void> {
   await page.evaluate((mode) => {
     localStorage.setItem(
       'mesh.settings.v1',
-      JSON.stringify({ state: { preferences: { theme: mode, locale: null, timezone: 'UTC' } }, version: 2 }),
+      JSON.stringify({
+        state: { preferences: { theme: mode, locale: null, timezone: 'UTC' } },
+        version: 2,
+      }),
     );
   }, theme);
   await page.reload();
@@ -87,6 +90,11 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   page.on('console', (msg) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
   });
+  // 诊断辅助(建议排查项 3):记录非 2xx 响应的 URL,定位偶发 409 来源。
+  const failedResponses: string[] = [];
+  page.on('response', (resp) => {
+    if (resp.status() >= 400) failedResponses.push(`${resp.status()} ${resp.url()}`);
+  });
 
   await registerAndLogin(page, emailFor('desktop'));
   await createWorkspace(page);
@@ -111,7 +119,10 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   await expect(page.getByTestId('board-drag-clone')).toBeVisible();
   await page.mouse.up();
   await expect(
-    page.getByTestId('column-body-in_progress').locator('[data-testid^="board-card-"]').filter({ hasText: '评审设计稿' }),
+    page
+      .getByTestId('column-body-in_progress')
+      .locator('[data-testid^="board-card-"]')
+      .filter({ hasText: '评审设计稿' }),
   ).toBeVisible({ timeout: 15_000 });
   // live region 播报落位(§10.2;鼠标路径播报 dragDropped)
   await expect(page.getByTestId('board-live')).toContainText('Dropped');
@@ -128,7 +139,10 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   await page.keyboard.press('ArrowRight'); // 第二下:目标列切到 in_review
   await page.keyboard.press('Enter');
   await expect(
-    page.getByTestId('column-body-in_review').locator('[data-testid^="board-card-"]').filter({ hasText: '评审设计稿' }),
+    page
+      .getByTestId('column-body-in_review')
+      .locator('[data-testid^="board-card-"]')
+      .filter({ hasText: '评审设计稿' }),
   ).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-02-board-keyboard-move.png` });
 
@@ -142,7 +156,8 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   await page.getByTestId('view-create-submit').click();
   // 等待 URL 切到新视图 id,并以新视图投影响应(而非残留数据)为数据到位信号。
   await page.waitForURL(
-    (url) => url.toString().includes('/views/') && !url.toString().includes(oldViewId ?? '__none__'),
+    (url) =>
+      url.toString().includes('/views/') && !url.toString().includes(oldViewId ?? '__none__'),
     { timeout: 20_000 },
   );
   const newViewId = page.url().split('/views/')[1];
@@ -269,7 +284,9 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   // 7. 评论草稿自动保存 + 失败重试(§9.5.1/§9.5.4)
   const composer = page.getByTestId('composer-input');
   await composer.fill('来自 e2e 的第一条评论');
-  await expect(page.getByTestId('draft-status')).toContainText(/Draft saved|草稿已保存/, { timeout: 8_000 });
+  await expect(page.getByTestId('draft-status')).toContainText(/Draft saved|草稿已保存/, {
+    timeout: 8_000,
+  });
   // 注入一次提交失败:中断 POST /comments 一次
   let aborted = false;
   await page.route('**/comments', async (route) => {
@@ -290,7 +307,9 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-06-comment-retry.png` });
 
   // 8. 删除短时撤销(§9.5.5)
-  const commentCard = page.locator('[data-testid^="comment-card-"]').filter({ hasText: '来自 e2e 的第一条评论' });
+  const commentCard = page
+    .locator('[data-testid^="comment-card-"]')
+    .filter({ hasText: '来自 e2e 的第一条评论' });
   const deleteButton = commentCard.locator('[data-testid^="comment-delete-"]');
   await commentCard.hover();
   await deleteButton.click();
@@ -323,7 +342,7 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
 
   // 10. 灯箱(触控工具栏基础:缩放/旋转/下载按钮在场)
   const thumb = page.locator('[data-testid^="attachment-"]').locator('img').first();
-  if (await thumb.count() > 0) {
+  if ((await thumb.count()) > 0) {
     await thumb.click();
     await expect(page.getByRole('dialog')).toBeVisible({ timeout: 15_000 });
     await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-09-lightbox.png` });
@@ -343,11 +362,14 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-dark-03-detail.png` });
 
   // 控制台无应用错误(资源 404/favicon 噪音,与本用例故意注入的请求中断
-  // ERR_FAILED 除外)
+  // ERR_FAILED 除外)。断言消息附带非 2xx 响应清单以定位偶发 409 来源(建议项 3)。
   const appErrors = consoleErrors.filter(
     (text) => !text.includes('favicon') && !text.includes('404') && !text.includes('ERR_FAILED'),
   );
-  expect(appErrors, `console errors: ${appErrors.join(' | ')}`).toEqual([]);
+  expect(
+    appErrors,
+    `console errors: ${appErrors.join(' | ')}; non-2xx responses: ${failedResponses.join(' | ')}`,
+  ).toEqual([]);
 });
 
 test('批次②手机走查:紧凑看板/长按移动/属性抽屉 + 亮暗存证', async ({ page }, testInfo) => {
@@ -390,11 +412,17 @@ test('批次②手机走查:紧凑看板/长按移动/属性抽屉 + 亮暗存�
   await page.getByTestId('touch-column-done').click();
   // 紧凑模式当前列仍为 todo:卡片应已离开;切到 done 列确认落位。
   await expect(
-    page.getByTestId('column-body-todo').locator('[data-testid^="board-card-"]').filter({ hasText: '手机卡片' }),
+    page
+      .getByTestId('column-body-todo')
+      .locator('[data-testid^="board-card-"]')
+      .filter({ hasText: '手机卡片' }),
   ).toHaveCount(0, { timeout: 15_000 });
   await page.getByTestId('compact-chip-done').click();
   await expect(
-    page.getByTestId('column-body-done').locator('[data-testid^="board-card-"]').filter({ hasText: '手机卡片' }),
+    page
+      .getByTestId('column-body-done')
+      .locator('[data-testid^="board-card-"]')
+      .filter({ hasText: '手机卡片' }),
   ).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: `${EVIDENCE_DIR}/mobile-light-02-touch-move.png` });
 
@@ -415,9 +443,13 @@ test('批次②手机走查:紧凑看板/长按移动/属性抽屉 + 亮暗存�
   await page.getByTestId('composer-submit').click();
   await expect(page.getByText('手机评论').first()).toBeVisible({ timeout: 20_000 });
   // 等乐观本地卡被服务端副本替换(testid 前缀 local- 消失),避免卡片 rekey 抽走菜单
-  await expect(page.locator('[data-testid^="comment-card-local-"]')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('[data-testid^="comment-card-local-"]')).toHaveCount(0, {
+    timeout: 20_000,
+  });
   // 触控:次要操作收进常驻「更多」菜单(§9.5.6/§8.2)
-  const commentCard = page.locator('[data-testid^="comment-card-"]').filter({ hasText: '手机评论' });
+  const commentCard = page
+    .locator('[data-testid^="comment-card-"]')
+    .filter({ hasText: '手机评论' });
   await commentCard.getByRole('button', { name: 'More actions' }).click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
   await page.locator('.mesh-toast__action').click();
