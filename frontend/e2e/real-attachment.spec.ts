@@ -54,7 +54,12 @@ async function registerAndLogin(page: Page): Promise<void> {
     undefined,
     { timeout: 30_000 },
   );
-  if (await page.getByTestId('register-continue').isVisible().catch(() => false)) {
+  if (
+    await page
+      .getByTestId('register-continue')
+      .isVisible()
+      .catch(() => false)
+  ) {
     await page.getByTestId('register-continue').click();
   }
   // 若竞争落回登录页,直接进应用(会话已建立)。
@@ -68,7 +73,12 @@ async function registerAndLogin(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 30_000 });
 }
 
-async function apiJson(method: string, path: string, body?: unknown, authToken?: string): Promise<Record<string, unknown>> {
+async function apiJson(
+  method: string,
+  path: string,
+  body?: unknown,
+  authToken?: string,
+): Promise<Record<string, unknown>> {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
@@ -95,7 +105,9 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
         try {
           const state = (JSON.parse(raw) as { state?: { token?: string } }).state;
           if (state?.token) return state.token;
-        } catch { /* keep looking */ }
+        } catch {
+          /* keep looking */
+        }
       }
     }
     return '';
@@ -106,14 +118,17 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
   const ws = (await apiJson('POST', '/api/v1/workspaces', { name: 'Attach WS', slug: SLUG }, token))
     .data as { id: string };
   workspaceId = ws.id;
-  const statuses = (await apiJson('GET', `/api/v1/workspaces/${workspaceId}/statuses`, undefined, token))
-    .data as Array<{ id: string }>;
-  const issue = (await apiJson(
-    'POST',
-    `/api/v1/workspaces/${workspaceId}/issues`,
-    { title: 'Attachment walkthrough', status_id: statuses[0].id },
-    token,
-  )).data as { id: string };
+  const statuses = (
+    await apiJson('GET', `/api/v1/workspaces/${workspaceId}/statuses`, undefined, token)
+  ).data as Array<{ id: string }>;
+  const issue = (
+    await apiJson(
+      'POST',
+      `/api/v1/workspaces/${workspaceId}/issues`,
+      { title: 'Attachment walkthrough', status_id: statuses[0].id },
+      token,
+    )
+  ).data as { id: string };
   issueId = issue.id;
 
   // ---------- 3. issue 详情:空附件区 + composer 上传入口(§4.1)----------
@@ -134,7 +149,12 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
   // complete 后面板即刻重取:此刻 blob 尚在隔离区(worker 放行需 ~1s+),
   // 占位呈现「扫描中」且无下载按钮;随后 attachment.processed 实时合并为缩略图。
   const anyScanning = page.locator('[data-testid^="attachment-scanning-"]');
-  if (await anyScanning.first().isVisible({ timeout: 5_000 }).catch(() => false)) {
+  if (
+    await anyScanning
+      .first()
+      .isVisible({ timeout: 5_000 })
+      .catch(() => false)
+  ) {
     await expect(page.locator('[data-testid^="attachment-download-"]')).toHaveCount(0);
     await page.screenshot({ path: resolve(EVIDENCE_DIR, `03-scanning-gate-${RUN}.png`) });
   }
@@ -143,20 +163,32 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
   const thumb = page.locator('[data-testid^="attachment-thumb-"]').first();
   await expect(thumb).toBeVisible({ timeout: 90_000 });
   await expect(thumb.locator('img')).toHaveAttribute('src', /^http/, { timeout: 60_000 });
-  await page.waitForFunction(() => {
-    const img = document.querySelector('[data-testid^="attachment-thumb-"] img') as HTMLImageElement | null;
-    return img !== null && img.complete && img.naturalWidth > 0;
-  }, undefined, { timeout: 60_000 });
+  await page.waitForFunction(
+    () => {
+      const img = document.querySelector(
+        '[data-testid^="attachment-thumb-"] img',
+      ) as HTMLImageElement | null;
+      return img !== null && img.complete && img.naturalWidth > 0;
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
   await page.screenshot({ path: resolve(EVIDENCE_DIR, `04-image-released-${RUN}.png`) });
 
   // ---------- 7. 灯箱:缩放 / 旋转 / 重置 / 定位 / 下载(§4.3)----------
   await thumb.click();
   await expect(page.getByTestId('lightbox-image')).toBeVisible({ timeout: 30_000 });
   const lightboxImg = page.getByTestId('lightbox-image');
-  await page.waitForFunction(() => {
-    const img = document.querySelector('[data-testid="lightbox-image"]') as HTMLImageElement | null;
-    return img !== null && img.complete && img.naturalWidth > 0;
-  }, undefined, { timeout: 30_000 });
+  await page.waitForFunction(
+    () => {
+      const img = document.querySelector(
+        '[data-testid="lightbox-image"]',
+      ) as HTMLImageElement | null;
+      return img !== null && img.complete && img.naturalWidth > 0;
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
   await expect(lightboxImg).toHaveCSS('transform', /matrix/);
   await page.getByTestId('lightbox-zoom-in').click();
   await expect(lightboxImg).toHaveCSS('transform', 'matrix(1.5, 0, 0, 1.5, 0, 0)');
@@ -195,28 +227,39 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
     password: PASSWORD,
     display_name: 'Other Probe',
   });
-  const otherLogin = (await apiJson('POST', '/api/v1/auth/login', { email: otherEmail, password: PASSWORD }))
-    .data as { access_token: string };
-  const otherWs = (await apiJson('POST', '/api/v1/workspaces', { name: 'Other WS', slug: `atto${RUN}` }, otherLogin.access_token))
-    .data as { id: string };
-  const foreign = (await apiJson(
-    'POST',
-    '/api/v1/attachments/upload-requests',
-    {
-      workspace_id: otherWs.id,
-      file_name: 'steal.png',
-      file_size: PNG_BYTES.length,
-      mime_type: 'image/png',
-      content_hash: await sha256Hex(PNG_BYTES),
-    },
-    otherLogin.access_token,
-  )).data as { upload: { method?: string } | null };
+  const otherLogin = (
+    await apiJson('POST', '/api/v1/auth/login', { email: otherEmail, password: PASSWORD })
+  ).data as { access_token: string };
+  const otherWs = (
+    await apiJson(
+      'POST',
+      '/api/v1/workspaces',
+      { name: 'Other WS', slug: `atto${RUN}` },
+      otherLogin.access_token,
+    )
+  ).data as { id: string };
+  const foreign = (
+    await apiJson(
+      'POST',
+      '/api/v1/attachments/upload-requests',
+      {
+        workspace_id: otherWs.id,
+        file_name: 'steal.png',
+        file_size: PNG_BYTES.length,
+        mime_type: 'image/png',
+        content_hash: await sha256Hex(PNG_BYTES),
+      },
+      otherLogin.access_token,
+    )
+  ).data as { upload: { method?: string } | null };
   expect(foreign.upload).not.toBeNull(); // RED LINE:无 possession 强制完整上传
   expect(foreign.upload?.method).toBe('PUT');
 
   // 秒传附件经实时/重取并入网格(共享同一 blob,独立记录)。
   await page.goto(`/issues/${issueId}`);
-  await expect(page.locator('[data-testid^="attachment-thumb-"]')).toHaveCount(2, { timeout: 60_000 });
+  await expect(page.locator('[data-testid^="attachment-thumb-"]')).toHaveCount(2, {
+    timeout: 60_000,
+  });
   await page.screenshot({ path: resolve(EVIDENCE_DIR, `06-instant-dedup-${RUN}.png`) });
 
   // ---------- 9. 文本文件 → 文件卡片;删除 → 乐观移除 ----------
@@ -231,6 +274,8 @@ test('MES-59 attachment UI walkthrough (real backend + real MinIO)', async ({ pa
 
   const cardTestId = (await fileCard.getAttribute('data-testid')) ?? '';
   const cardId = cardTestId.replace('attachment-file-', '');
+  // 操作组 hover 呈现(design-quality §8.2):真人路径先悬停卡片,操作按钮可见后再点击。
+  await fileCard.hover();
   await page.getByTestId(`attachment-delete-${cardId}`).click();
   await expect(page.getByTestId(`attachment-file-${cardId}`)).toHaveCount(0);
   await page.screenshot({ path: resolve(EVIDENCE_DIR, `08-after-delete-${RUN}.png`) });

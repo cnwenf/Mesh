@@ -1941,6 +1941,7 @@
     "runtimes.execution.triggerKind.integration": "集成",
     "runtimes.execution.triggerKind.manual": "手动",
     "runtimes.execution.triggerKind.mention": "提及",
+    "runtimes.execution.triggerKind.unknown": "触发",
     "runtimes.execution.unknownReason": "未知原因",
     "runtimes.field.capabilities": "能力",
     "runtimes.field.concurrency": "并发",
@@ -2446,5 +2447,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "7bdd9867"
+  "version": "3eab811a"
 }
