@@ -13348,6 +13348,27 @@ paths:
           content:
             application/json:
               schema: {}
+  /api/v1/integrations/dingtalk/cards:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Dingtalk Cards
+      description: 'DingTalk interactive-card HTTP callback (``callbackType=''HTTP''``;
+
+        Stream mode delivers the same topic over the long connection and the
+
+        stream worker routes it to the same handler function). Signature
+
+        scheme: §3.2 DingTalk row (``timestamp`` + ``sign`` headers, official
+
+        ±3600s tolerance).'
+      operationId: dingtalk_cards_api_v1_integrations_dingtalk_cards_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
   /api/v1/ping:
     get:
       tags:
