@@ -229,7 +229,7 @@
 - [ ] 设备码确认页（CLI 配套）：手工录入 user_code + 工作区 0/1/多分流 + scope 展示 + 批准/拒绝（依据: auth.md §5.1）— 现状 ✅（MES-124 批次① 迁入 PublicFlowShell;单测覆盖绑定所录码/0-1-多工作区）
 - [ ] 回跳守卫 safeNextPath 防开放重定向（控字符预检 + origin 一致 + 路径 `/` 开头）（依据: auth.md §4.1）— 现状 ⬜ 待实机（构造恶意 next 验证）
 - [ ] **无脚手架残留**：dev token 直填入口移除、`login.phaseNote` 占位文案清除（依据: MES-107）— 现状 ✅（MES-124 批次① 核查:dev token 直填/`login.phaseNote`/`PlaceholderPage` 均无残留,旧 `mesh-login` 样式已删）
-- [ ] 四组合走查：登录/注册/忘记密码页 × 桌面亮/暗、手机亮/暗（手机端表单可用性重点）— 现状 ✅（MES-124 批次① 存证 `e2e/evidence/mes111-b1/`）
+- [ ] 四组合走查：登录/注册/忘记密码页 × 桌面亮/暗、手机亮/暗（手机端表单可用性重点）— 现状 ✅（MES-124 批次① + 整改补全 注册/找回 四组合,存证 `e2e/evidence/mes111-b1/`）
 
 ### 2.2 应用外壳（AppShell：TopBar / Sidebar / 布局）
 

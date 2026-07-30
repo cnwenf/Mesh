@@ -12,10 +12,12 @@
 import type { MeshApiClient } from '../../api';
 import { env } from '../../env';
 import type {
+  ApprovalSummary,
   AttemptSummary,
   CredentialMeta,
   ExecutionDetail,
   ExecutionLogPage,
+  ExecutionSummary,
   RuntimeDetail,
   RuntimeKind,
   RuntimeStatus,
@@ -31,6 +33,9 @@ const runtimePath = (workspaceId: string, runtimeId: string): string =>
 
 const workspaceExecutionsPath = (workspaceId: string): string =>
   `/api/v1/workspaces/${workspaceId}/executions`;
+
+const workspaceApprovalsPath = (workspaceId: string): string =>
+  `/api/v1/workspaces/${workspaceId}/approvals`;
 
 const executionPath = (workspaceId: string, executionId: string): string =>
   `${workspaceExecutionsPath(workspaceId)}/${executionId}`;
@@ -177,6 +182,49 @@ export async function listRuntimeExecutions(
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 
+/**
+ * 工作区级执行列表(契约层,design-quality §3.2 首页「AI 运行」块)。
+ * 后端 `GET /workspaces/{ws}/executions` 支持 status/agent_id/issue_id 过滤 + 游标分页;
+ * 首页取最近执行后按活跃/需关注态过滤渲染。
+ */
+export async function listWorkspaceExecutions(
+  client: MeshApiClient,
+  workspaceId: string,
+  params: {
+    readonly status?: string;
+    readonly agent_id?: string;
+    readonly issue_id?: string;
+    readonly cursor?: string;
+    readonly limit?: number;
+  } = {},
+): Promise<{ data: ExecutionSummary[]; nextCursor: string | null }> {
+  const envelope = await client.list<ExecutionSummary>(workspaceExecutionsPath(workspaceId), {
+    query: {
+      status: params.status,
+      agent_id: params.agent_id,
+      issue_id: params.issue_id,
+      cursor: params.cursor,
+      limit: params.limit,
+    },
+  });
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
+/**
+ * 工作区级审批列表(契约层,design-quality §3.2 首页「等待确认」块)。
+ * 后端 `GET /workspaces/{ws}/approvals?role=mine` = F9「待我审批」统一 inbox(pending)。
+ */
+export async function listWorkspaceApprovals(
+  client: MeshApiClient,
+  workspaceId: string,
+  params: { readonly role?: string; readonly status?: string } = {},
+): Promise<{ data: ApprovalSummary[]; nextCursor: string | null }> {
+  const envelope = await client.list<ApprovalSummary>(workspaceApprovalsPath(workspaceId), {
+    query: { role: params.role, status: params.status },
+  });
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
 export async function getExecution(
   client: MeshApiClient,
   workspaceId: string,
@@ -222,9 +270,13 @@ export async function listExecutionLogs(
   executionId: string,
   params: { readonly offset?: number; readonly stream?: string } = {},
 ): Promise<ExecutionLogPage> {
-  return client.request<ExecutionLogPage>('GET', `${executionPath(workspaceId, executionId)}/logs`, {
-    query: { offset: params.offset, stream: params.stream },
-  });
+  return client.request<ExecutionLogPage>(
+    'GET',
+    `${executionPath(workspaceId, executionId)}/logs`,
+    {
+      query: { offset: params.offset, stream: params.stream },
+    },
+  );
 }
 
 /**

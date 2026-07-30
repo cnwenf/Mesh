@@ -24,11 +24,38 @@ import type { MeResponse, Membership } from '../../features/members/types';
 import { OnboardingChecklist } from '../../features/onboarding';
 import { listProjects } from '../../features/projects/api';
 import type { ProjectSummary } from '../../features/projects/types';
+import { listWorkspaceApprovals, listWorkspaceExecutions } from '../../features/runtimes/api';
+import type { ApprovalSummary, ExecutionSummary } from '../../features/runtimes/types';
 import { CreateWorkspaceWizard } from '../../workspace/CreateWorkspaceWizard';
 import { useRealtimeContext } from '../AppShell';
 
 const DASHBOARD_PAGE_SIZE = 5;
 const PROJECTS_PAGE_SIZE = 6;
+const WORKBENCH_LIST_SIZE = 5;
+
+/** 「AI 运行」块呈现的执行态:在途 + 需关注(§9.8);终态成功/取消不占位。 */
+const ACTIVE_EXECUTION_STATUSES: ReadonlySet<string> = new Set([
+  'queued',
+  'claimed',
+  'running',
+  'cancelling',
+  'awaiting_approval',
+  'failed',
+  'timeout',
+]);
+
+/** 执行态 → 本地化文案键(文本为状态信号,颜色仅增强,§7.1/§10.2)。 */
+const EXECUTION_STATUS_LABEL_KEY: Readonly<Record<string, string>> = {
+  queued: 'home.execStatus.queued',
+  claimed: 'home.execStatus.claimed',
+  running: 'home.execStatus.running',
+  cancelling: 'home.execStatus.cancelling',
+  awaiting_approval: 'home.execStatus.awaitingApproval',
+  completed: 'home.execStatus.completed',
+  failed: 'home.execStatus.failed',
+  timeout: 'home.execStatus.timeout',
+  cancelled: 'home.execStatus.cancelled',
+};
 
 export interface HomePageProps {
   client?: MeshApiClient;
@@ -136,15 +163,21 @@ function HomeContent(props: HomeContentProps): React.JSX.Element {
       </section>
 
       {active !== null ? (
-        <ProjectsSection client={client} workspaceId={active.workspace_id} />
-      ) : null}
-
-      {active !== null ? (
         <IssueFeedSection
           client={client}
           workspaceId={active.workspace_id}
           workspaceName={active.workspace_name}
         />
+      ) : null}
+
+      {active !== null ? (
+        <WaitingSection client={client} workspaceId={active.workspace_id} />
+      ) : null}
+
+      {active !== null ? <AiRunsSection client={client} workspaceId={active.workspace_id} /> : null}
+
+      {active !== null ? (
+        <ProjectsSection client={client} workspaceId={active.workspace_id} />
       ) : null}
 
       <CreateWorkspaceWizard open={wizardOpen} onClose={closeWizard} client={client} />
@@ -209,6 +242,138 @@ function ProjectsSection(props: ProjectsSectionProps): React.JSX.Element | null 
             </Link>
           </li>
         ))}
+      </ul>
+    </section>
+  );
+}
+
+interface WorkspaceFeedSectionProps {
+  client: MeshApiClient;
+  workspaceId: string;
+}
+
+/**
+ * 「等待确认」小组件(design-quality §3.2 首页行)。真实 API:
+ * `listWorkspaceApprovals(role=mine)` = 待我审批(pending)。有数据渲染、空/失败不渲染
+ * (与最近项目同策略;失败不阻断工作台)。每行给可执行出口(深链执行详情)。
+ */
+function WaitingSection(props: WorkspaceFeedSectionProps): React.JSX.Element | null {
+  const { client, workspaceId } = props;
+  const t = useT();
+  const [approvals, setApprovals] = useState<readonly ApprovalSummary[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listWorkspaceApprovals(client, workspaceId, { role: 'mine' })
+      .then((page) => {
+        if (!cancelled) setApprovals(page.data);
+      })
+      .catch(() => {
+        if (!cancelled) setApprovals(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
+
+  if (approvals === null || approvals.length === 0) return null;
+
+  return (
+    <section
+      className="mesh-home__section"
+      aria-label={t('home.waitingTitle')}
+      data-testid="home-waiting"
+    >
+      <h2 className="mesh-home__heading mesh-text-title-3">{t('home.waitingTitle')}</h2>
+      <ul className="mesh-home__issue-list">
+        {approvals.map((approval) => {
+          const target =
+            approval.subject_execution_id !== null
+              ? '/executions/' + approval.subject_execution_id
+              : null;
+          const body = (
+            <>
+              <span className="mesh-home__issue-title">{approval.action_summary}</span>
+              <span className="mesh-home__issue-meta">{t('home.waitingStatus')}</span>
+            </>
+          );
+          return (
+            <li
+              key={approval.id}
+              className="mesh-home__issue"
+              data-testid={'home-waiting-' + approval.id}
+            >
+              {target !== null ? (
+                <Link className="mesh-home__issue-link" to={target}>
+                  {body}
+                </Link>
+              ) : (
+                <span className="mesh-home__issue-link">{body}</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * 「AI 运行」小组件(design-quality §3.2 首页行)。真实 API:
+ * `listWorkspaceExecutions` 取最近执行,客户端过滤在途/需关注态(§9.8)。
+ * 有数据渲染、过滤后空/失败不渲染(与最近项目同策略)。
+ */
+function AiRunsSection(props: WorkspaceFeedSectionProps): React.JSX.Element | null {
+  const { client, workspaceId } = props;
+  const t = useT();
+  const [executions, setExecutions] = useState<readonly ExecutionSummary[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listWorkspaceExecutions(client, workspaceId, { limit: WORKBENCH_LIST_SIZE })
+      .then((page) => {
+        if (!cancelled) setExecutions(page.data);
+      })
+      .catch(() => {
+        if (!cancelled) setExecutions(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, workspaceId]);
+
+  const active =
+    executions === null
+      ? null
+      : executions.filter((execution) => ACTIVE_EXECUTION_STATUSES.has(execution.status));
+
+  if (active === null || active.length === 0) return null;
+
+  return (
+    <section
+      className="mesh-home__section"
+      aria-label={t('home.aiRunsTitle')}
+      data-testid="home-ai-runs"
+    >
+      <h2 className="mesh-home__heading mesh-text-title-3">{t('home.aiRunsTitle')}</h2>
+      <ul className="mesh-home__issue-list">
+        {active.map((execution) => {
+          const label =
+            execution.agent_name ?? execution.issue_identifier ?? t('home.aiRunFallback');
+          const statusKey = EXECUTION_STATUS_LABEL_KEY[execution.status] ?? 'home.aiRunFallback';
+          return (
+            <li
+              key={execution.id}
+              className="mesh-home__issue"
+              data-testid={'home-ai-run-' + execution.id}
+            >
+              <Link className="mesh-home__issue-link" to={'/executions/' + execution.id}>
+                <span className="mesh-home__issue-title">{label}</span>
+                <span className="mesh-home__issue-meta">{t(statusKey)}</span>
+              </Link>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

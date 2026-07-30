@@ -557,3 +557,122 @@ describe('HomePage(最近项目小组件 + onboarding)', () => {
     await waitFor(() => expect(screen.getByTestId('home-onboarding')).toBeDefined());
   });
 });
+
+const EXECUTIONS_PATH = '/api/v1/workspaces/ws-1/executions';
+const APPROVALS_PATH = '/api/v1/workspaces/ws-1/approvals';
+
+function execRow(id: number, status: string): Record<string, unknown> {
+  return {
+    id: 'exec-' + String(id),
+    agent_id: 'agent-1',
+    agent_name: 'Coder',
+    issue_identifier: 'MESH-' + String(id),
+    trigger: 'assign',
+    status,
+    priority: 0,
+    required_capabilities: [],
+    label_requirements: {},
+    timeout_seconds: 600,
+    queued_at: '2026-07-30T00:00:00.000Z',
+    finished_at: null,
+    failure_reason: null,
+    result: null,
+  };
+}
+
+function approvalRow(id: number, executionId: string | null): Record<string, unknown> {
+  return {
+    id: 'appr-' + String(id),
+    subject_type: 'execution',
+    subject_execution_id: executionId,
+    subject_task_id: null,
+    status: 'pending',
+    action_summary: 'Approve deploy of MESH-' + String(id),
+    requested_at: '2026-07-30T00:00:00.000Z',
+    expires_at: '2026-07-31T00:00:00.000Z',
+    decided_at: null,
+    decision_comment: null,
+    execution_status: 'awaiting_approval',
+  };
+}
+
+describe('HomePage(等待确认 / AI 运行 小组件)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function install(
+    executions: Record<string, unknown>[],
+    approvals: Record<string, unknown>[],
+  ): void {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      if (url.includes(PROJECTS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+      }
+      if (url.includes(EXECUTIONS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: executions, next_cursor: null }));
+      }
+      if (url.includes(APPROVALS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: approvals, next_cursor: null }));
+      }
+      return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('有数据时渲染两块,过滤执行终态,行深链正确', async () => {
+    install(
+      [execRow(1, 'running'), execRow(2, 'awaiting_approval'), execRow(3, 'completed')],
+      [approvalRow(7, 'exec-9')],
+    );
+    renderHome(null);
+
+    const runs = await screen.findByTestId('home-ai-runs');
+    // completed 被过滤,仅剩 running + awaiting_approval 两行。
+    await waitFor(() => expect(within(runs).getAllByRole('listitem').length).toBe(2));
+    expect(within(runs).getByTestId('home-ai-run-exec-1').textContent).toContain('Coder');
+    const runLink = within(within(runs).getByTestId('home-ai-run-exec-1')).getByRole('link');
+    expect(runLink.getAttribute('href')).toBe('/executions/exec-1');
+
+    const waiting = screen.getByTestId('home-waiting');
+    const waitingItem = within(waiting).getByTestId('home-waiting-appr-7');
+    expect(waitingItem.textContent).toContain('Approve deploy of MESH-7');
+    expect(within(waitingItem).getByRole('link').getAttribute('href')).toBe('/executions/exec-9');
+  });
+
+  it('执行/审批为空时不渲染对应小组件(无演示内容)', async () => {
+    install([], []);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+  });
+
+  it('执行/审批接口失败安静隐藏,不阻断工作台', async () => {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      // projects/executions/approvals 全部 500。
+      return Promise.resolve(
+        jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.getByTestId('home-greeting')).toBeDefined();
+  });
+});

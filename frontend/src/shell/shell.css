@@ -383,6 +383,14 @@
   white-space: nowrap;
 }
 
+.mesh-home__issue-meta {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+}
+
 /* ── 邀请接受页(/invite/:token,PublicFlow 卡片形态;位于 AppShell 内) ── */
 
 .mesh-invite {

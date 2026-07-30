@@ -16,6 +16,8 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:5173',
     headless: true,
     trace: 'retain-on-failure',
+    // 稳定化截图基线:禁用动画/过渡,配合 settle()(networkidle + fonts.ready)。
+    reducedMotion: 'reduce',
   },
   webServer: [
     {
