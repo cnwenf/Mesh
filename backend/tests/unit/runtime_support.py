@@ -159,6 +159,61 @@ async def make_execution(
     return execution
 
 
+async def fetch_execution_finished_events(
+    session_factory, workspace_id: uuid.UUID, execution_id: uuid.UUID
+) -> list:
+    """All ``execution.finished`` outbox rows for one execution (runtime.md §3.6)."""
+    from sqlalchemy import select
+
+    from mesh.db.models.outbox import OutboxEvent
+
+    async with session_factory() as session:
+        rows = (
+            await session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.workspace_id == workspace_id,
+                    OutboxEvent.event_type == "execution.finished",
+                )
+            )
+        ).scalars().all()
+    return [
+        row
+        for row in rows
+        if (row.payload or {}).get("execution_id") == str(execution_id)
+    ]
+
+
+async def assert_execution_finished_fanout(
+    session_factory,
+    workspace_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    *,
+    status: str,
+    failure_reason: str | None = None,
+) -> None:
+    """Assert the §3.6 single terminal fan-out fired with the FULL five-field
+    payload ``{execution_id, workspace_id, status, failure_reason, finished_at}``.
+
+    Fails both when the event is absent (a terminal path that never emitted) and
+    when it is present but partial (an emitter that drops workspace_id /
+    finished_at) — the squad relay / result sink rely on the complete contract.
+    """
+    rows = await fetch_execution_finished_events(
+        session_factory, workspace_id, execution_id
+    )
+    assert len(rows) == 1, (
+        f"expected exactly one execution.finished outbox row for {execution_id}, "
+        f"got {len(rows)}"
+    )
+    payload = rows[0].payload
+    assert payload["execution_id"] == str(execution_id)
+    assert payload["workspace_id"] == str(workspace_id)
+    assert payload["status"] == status
+    assert payload["failure_reason"] == failure_reason
+    # A terminal transition always carries a finished_at timestamp.
+    assert payload["finished_at"] is not None
+
+
 async def issue_runtime_token(session_factory, runtime: Runtime) -> tuple[str, None]:
     """§2.4 S-11: set runtime_token_hash directly (single source of truth).
 

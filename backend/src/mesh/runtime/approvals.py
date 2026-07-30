@@ -41,9 +41,9 @@ from mesh.errors import (
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.attempts import (
     _assert_lease,
-    _emit_finished_event,
     _load_daemon_attempt,
     _release_capacity,
+    emit_execution_finished,
 )
 from mesh.runtime.context_appends import reset_context_receipts_tx
 from mesh.runtime.credentials import revoke_attempt_envelopes
@@ -296,9 +296,10 @@ async def decide_approval(
                         },
                         idempotency_key=f"execution:{execution.id}:cancelled",
                     )
-                    # Terminal single fan-out (§4.8): drives the integration
-                    # queue-item terminal write-back for this execution.
-                    await _emit_finished_event(session, execution=execution)
+                    # §3.6 single terminal fan-out: drives the integration
+                    # queue-item terminal write-back and squad observation for
+                    # this execution (no compensating sweep exists).
+                    await emit_execution_finished(session, execution=execution)
                 execution_status = execution.status
 
         run_status = None

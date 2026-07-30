@@ -14,11 +14,13 @@ from sqlalchemy import select
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.models.squad import SquadTask
 from mesh.realtime.auth import Principal
+from mesh.runtime.attempts import cancel_in_flight_for_agent
 from mesh.squad.channels import make_squad_channel_checker
 from mesh.squad.relay import (
     squad_execution_finished_handler,
     squad_plan_decided_handler,
 )
+from tests.unit.runtime_support import fetch_execution_finished_events
 from tests.unit.squad_support import (
     build_services,
     make_agent_member,
@@ -292,3 +294,90 @@ async def test_channel_checker_allows_member_and_admin(session_factory, workspac
     )
     # Dev (non-UUID subject) principal → allowed.
     assert await checker(Principal(subject="dev-user", workspace_ids=frozenset({ws.id})), channel)
+
+
+async def test_finished_fanout_squad_subtask_does_not_hang_on_supersede(
+    session_factory, workspace_factory
+):
+    """MES-96 P1-2 end-to-end hang scenario.
+
+    A squad subtask is in_progress on a QUEUED execution. The execution is
+    superseded (cancel_in_flight_for_agent, README §6.9). Before the fix that
+    terminal path emitted realtime only — NO execution.finished outbox event —
+    so the squad relay never observed it and the subtask hung in_progress
+    forever, blocking root aggregation (runtime.md §3.6 single fan-out, no
+    compensating sweep). After the fix the event lands in the outbox in the same
+    transaction; feeding it through the relay handler settles the subtask.
+    """
+    ws = await workspace_factory()
+    _, leader = await make_agent_member(session_factory, ws)
+    agent_coder, coder = await make_agent_member(session_factory, ws, name="coder")
+    squad = await make_squad(session_factory, ws, leader_member=leader)
+    from tests.unit.squad_support import add_member
+
+    await add_member(session_factory, ws, squad, coder, role="member")
+    issue = await seed_issue(session_factory, ws)
+    _, svc = build_services(session_factory)
+
+    class Body:
+        issue_id = str(issue.id)
+
+    r = await svc.assign_issue_to_squad(
+        actor=leader, workspace_id=ws.id, squad_id=squad.id, body=Body()
+    )
+    root_id = uuid.UUID(r["id"])
+    from mesh.squad.schemas import CreateSubtasksRequest, SubtaskInput
+
+    res = await svc.create_subtasks(
+        actor=leader,
+        workspace_id=ws.id,
+        squad_id=squad.id,
+        task_id=root_id,
+        body=CreateSubtasksRequest(
+            subtasks=[SubtaskInput(title="a", assignee={"member_id": str(coder.id)}, stage=1)]
+        ),
+    )
+    sub_id = uuid.UUID(res["created_subtasks"][0]["id"])
+    exec_id = uuid.uuid4()
+    # The subtask is in_progress on a QUEUED execution (dispatched, not claimed).
+    async with session_factory() as session, session.begin():
+        session.add(
+            TaskExecution(
+                id=exec_id,
+                workspace_id=ws.id,
+                agent_id=agent_coder.id,
+                issue_id=issue.id,
+                trigger="assign",
+                status="queued",
+                task_spec={"squad_task_id": str(sub_id), "squad_role": "executor"},
+            )
+        )
+        sub = await session.scalar(select(SquadTask).where(SquadTask.id == sub_id))
+        sub.status = "in_progress"
+        sub.execution_id = exec_id
+
+    # Supersede the agent's queued execution for the issue.
+    async with session_factory() as session, session.begin():
+        await cancel_in_flight_for_agent(
+            session,
+            workspace_id=ws.id,
+            agent_id=agent_coder.id,
+            issue_id=issue.id,
+            failure_reason="superseded",
+        )
+
+    # The terminal transition wrote the single fan-out event in-transaction.
+    rows = await fetch_execution_finished_events(session_factory, ws.id, exec_id)
+    assert len(rows) == 1, "supersede left no execution.finished event → squad hang"
+
+    # Feeding the real outbox event through the relay settles the subtask so the
+    # root can aggregate (cancelled → failed per the executor mapping).
+    event = SimpleNamespace(workspace_id=ws.id, payload=rows[0].payload)
+    async with session_factory() as session, session.begin():
+        await squad_execution_finished_handler(session, event)
+    async with session_factory() as session:
+        sub = await session.scalar(select(SquadTask).where(SquadTask.id == sub_id))
+    assert sub.status != "in_progress", "subtask still hung in_progress"
+    assert sub.status == "failed"
+    assert sub.failure_reason == "superseded"
+    assert sub.finished_at is not None

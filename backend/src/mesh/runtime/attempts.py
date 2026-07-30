@@ -120,6 +120,39 @@ async def _emit_terminal_notification(
     )
 
 
+async def emit_execution_finished(
+    session: AsyncSession, *, execution: TaskExecution
+) -> None:
+    """runtime.md §3.6: the SINGLE terminal fan-out source of truth.
+
+    Written in the same transaction as ANY terminal transition (daemon PATCH,
+    console/supersede cancel, reaper reclaim / max-retries / approval expiry,
+    approval reject, squad cascade). The squad relay and result sink subscribe
+    to this event alone — there is no compensating sweep — so a terminal path
+    that skips it strands orchestration forever. The idempotency key is keyed
+    by execution id, so duplicate paths de-duplicate instead of double-firing.
+    Payload is the full §3.6 five-field contract; consumers load the execution
+    row by id and read these by key (never positionally).
+    """
+    if execution.status not in EXECUTION_TERMINAL_STATUSES:
+        return
+    await emit_event(
+        session,
+        workspace_id=execution.workspace_id,
+        event_type="execution.finished",
+        payload={
+            "execution_id": str(execution.id),
+            "workspace_id": str(execution.workspace_id),
+            "status": execution.status,
+            "failure_reason": execution.failure_reason,
+            "finished_at": (
+                execution.finished_at.isoformat() if execution.finished_at else None
+            ),
+        },
+        idempotency_key=f"execution:{execution.id}:finished",
+    )
+
+
 async def _sync_execution_status(
     session: AsyncSession,
     *,
@@ -205,19 +238,10 @@ async def _sync_execution_status(
             session, workspace_id=execution.workspace_id, execution=execution
         )
         # Domain hook (squad.md §4.4): orchestration layers observe the terminal
-        # state. The squad module correlates via task_spec.squad_task_id and maps
-        # completed→done / failed|timeout|cancelled→failed on its subtask.
-        await emit_event(
-            session,
-            workspace_id=execution.workspace_id,
-            event_type="execution.finished",
-            payload={
-                "execution_id": str(execution.id),
-                "status": new_status,
-                "failure_reason": execution.failure_reason,
-            },
-            idempotency_key=f"execution:{execution.id}:finished",
-        )
+        # state via the §3.6 single fan-out event. The squad module correlates
+        # via task_spec.squad_task_id and maps completed→done /
+        # failed|timeout|cancelled→failed on its subtask.
+        await emit_execution_finished(session, execution=execution)
     return new_status
 
 
@@ -551,7 +575,7 @@ async def request_execution_cancel_tx(
             data={"execution_id": str(execution.id), "failure_reason": failure_reason},
             idempotency_key=f"execution:{execution.id}:cancelled",
         )
-        await _emit_finished_event(session, execution=execution)
+        await emit_execution_finished(session, execution=execution)
     elif execution.status == "awaiting_approval":
         from mesh.runtime.approvals import cancel_pending_approvals
 
@@ -569,7 +593,7 @@ async def request_execution_cancel_tx(
             data={"execution_id": str(execution.id), "failure_reason": failure_reason},
             idempotency_key=f"execution:{execution.id}:cancelled",
         )
-        await _emit_finished_event(session, execution=execution)
+        await emit_execution_finished(session, execution=execution)
     else:  # claimed / running: two-phase via daemon downlink
         execution.status = "cancelling"
         inflight = (
@@ -585,25 +609,6 @@ async def request_execution_cancel_tx(
             attempt.updated_at = now
     await session.flush()
     return execution
-
-
-async def _emit_finished_event(session: AsyncSession, *, execution: TaskExecution) -> None:
-    """execution.finished (runtime.md §4.8 single terminal fan-out source).
-
-    Same idempotency key as ``_sync_execution_status`` — a later daemon report
-    for the same execution de-duplicates instead of double-firing consumers.
-    """
-    await emit_event(
-        session,
-        workspace_id=execution.workspace_id,
-        event_type="execution.finished",
-        payload={
-            "execution_id": str(execution.id),
-            "status": execution.status,
-            "failure_reason": execution.failure_reason,
-        },
-        idempotency_key=f"execution:{execution.id}:finished",
-    )
 
 
 def _cancel_response(execution: TaskExecution) -> dict:
@@ -701,6 +706,9 @@ async def cancel_in_flight_for_agent(
                 data={"execution_id": str(execution.id), "failure_reason": failure_reason},
                 idempotency_key=f"execution:{execution.id}:cancelled",
             )
+            # §3.6 single terminal fan-out — a superseded queued execution must
+            # notify orchestration (squad relay / result sink) same-transaction.
+            await emit_execution_finished(session, execution=execution)
         else:
             execution.status = "cancelling"
             execution.cancel_requested_at = now
