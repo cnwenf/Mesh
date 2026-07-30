@@ -97,6 +97,8 @@ frontend/
     ├── types/                # 共享契约类型:包络(§6.14)/实时帧(§6.7)/骨架实体
     ├── api/                  # API 客户端契约层(§6.14)
     │   ├── client.ts         #   Bearer 鉴权、三类包络解析、If-Match、Idempotency-Key(§6.5)
+    │   ├── uuid.ts           #   安全上下文无关 uuidv4(MES-129):HTTP 部署下 crypto.randomUUID
+    │   │                     #   缺失,幂等键/本地 ID 一律经此生成(getRandomValues 兜底)
     │   ├── errors.ts         #   统一错误信封 → MeshApiError(code 具名分发)
     │   ├── pagination.ts     #   keyset 游标分页 hook
     │   ├── optimistic.ts     #   乐观更新 + 服务端版本校验 + 409 收敛

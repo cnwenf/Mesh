@@ -46,6 +46,7 @@ from mesh.db.models.realtime import RealtimeEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.models.user import User
 from mesh.workers.main import build_relay
+from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.e2e
 
@@ -163,7 +164,7 @@ async def _run_execution_to_completion(client, runtime_id: str, daemon_token: st
     assert running.status_code == 200, running.text
     done = await client.patch(
         f"/api/v1/daemon/attempts/{attempt['id']}",
-        json={"lease_seq": 1, "status": "completed", "result": {"exit_code": 0}},
+        json={"lease_seq": 1, "status": "completed", "result": valid_result_v1()},
         headers=_daemon(daemon_token),
     )
     assert done.status_code == 200, done.text

@@ -10,7 +10,11 @@ sequence:
 The cleaner works from a WHITELIST resource manifest built by the daemon
 itself — provider-supplied paths are never accepted. Deletion never follows
 symlinks and every target must resolve inside the attempt root. Failures are
-reported, never swallowed (§3.6: a cleanup failure isolates the runtime).
+reported, never swallowed: each step's outcome is recorded in the journal
+cleanup bits (cleanup_state) and reconciled at startup (§3.6 restart
+reconciliation). A cleanup failure does NOT isolate the runtime here —
+runtime isolation on cleanup failure is a deferred §4.4.1 ledger item,
+wired later with the doctor/isolated state (tracked under S-12).
 """
 
 from __future__ import annotations

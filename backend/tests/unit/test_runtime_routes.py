@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 
 from mesh.db.models.runtime import TaskExecution
+from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.unit
 
@@ -255,7 +256,7 @@ async def test_daemon_claim_report_cycle_over_http(app_client, session_factory):
     assert norepo.status_code == 422
     done = await app_client.patch(
         f"/api/v1/daemon/attempts/{attempt['id']}",
-        json={"lease_seq": 2, "status": "completed", "result": {"exit_code": 0}},
+        json={"lease_seq": 2, "status": "completed", "result": valid_result_v1()},
         headers=dh,
     )
     assert done.json()["data"]["execution_status"] == "completed"

@@ -31,8 +31,66 @@ class StubApi:
             raise self.errors.pop(0)
         if self.acks is not None:
             return self.acks.pop(0)
-        end = start_offset + sum(len(line.encode()) for line in lines)
+        # Server contract (backend/src/mesh/runtime/logs.py::_line_bytes): each
+        # line occupies its UTF-8 bytes PLUS the trailing newline.
+        end = start_offset + sum(len(line.encode()) + 1 for line in lines)
         return LogAck(accepted_end_offset=end, redacted_hits=0)
+
+
+class RecordingApi:
+    """Server-contract fake that enforces the single cumulative watermark.
+
+    Records every ACCEPTED batch as ``(stream, start, end, lines)`` where the
+    wire ``end`` mirrors the server's ``_line_bytes`` (UTF-8 bytes + trailing
+    newline). Like ``backend/src/mesh/runtime/logs.py``, a batch whose
+    ``start_offset`` differs from the accepted end is a 409 ``offset_mismatch``
+    (counted). ``fail_first_stdout`` drives the first stdout batch into the
+    spool with a transient error so the cross-stream replay path is exercised."""
+
+    def __init__(self, *, fail_first_stdout: bool = False):
+        self.accepted: list[tuple[str, int, int, list[str]]] = []
+        self.sealed_calls: list[tuple[str, int]] = []
+        self.offset_mismatch_count = 0
+        self._expected = 0
+        self._fail_first_stdout = fail_first_stdout
+
+    async def append_logs(self, attempt_id, *, lease_seq, stream, start_offset, lines, sealed=False):
+        if self._fail_first_stdout and stream == "stdout":
+            self._fail_first_stdout = False
+            raise ServerError("500")
+        if start_offset != self._expected:
+            self.offset_mismatch_count += 1
+            raise LeaseConflictError(
+                "409", code="offset_mismatch",
+                details={"expected": self._expected, "received": start_offset},
+            )
+        if sealed:
+            self.sealed_calls.append((stream, start_offset))
+        if not lines:
+            return LogAck(accepted_end_offset=self._expected, redacted_hits=0)
+        end = start_offset + sum(len(line.encode()) + 1 for line in lines)
+        self.accepted.append((stream, start_offset, end, list(lines)))
+        self._expected = end
+        return LogAck(accepted_end_offset=end, redacted_hits=0)
+
+    @property
+    def watermark(self) -> int:
+        return self._expected
+
+    def received_lines(self) -> dict[str, list[str]]:
+        """Accepted lines per stream, reconstructed in offset order."""
+        by_stream: dict[str, list[tuple[int, list[str]]]] = {}
+        for stream, start, _end, lines in self.accepted:
+            by_stream.setdefault(stream, []).append((start, lines))
+        return {
+            stream: [line for _, group in sorted(groups) for line in group]
+            for stream, groups in by_stream.items()
+        }
+
+    def no_overlap(self) -> bool:
+        """No two accepted [start, end) ranges overlap (across both streams)."""
+        ranges = sorted((start, end) for _, start, end, _ in self.accepted)
+        return all(ranges[i][1] <= ranges[i + 1][0] for i in range(len(ranges) - 1))
 
 
 @pytest.fixture
@@ -96,12 +154,12 @@ class TestOffsets:
         api, clock = StubApi(), FakeClock()
         up = uploader(api, journal, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", "abc")  # 3 bytes
-        await up.submit(ctx, "stdout", "de")   # next batch starts at 3
+        await up.submit(ctx, "stdout", "abc")  # 3 bytes + newline = 4 wire bytes
+        await up.submit(ctx, "stdout", "de")   # next batch starts at 4
         assert api.calls[0]["start_offset"] == 0
-        assert api.calls[1]["start_offset"] == 3
+        assert api.calls[1]["start_offset"] == 4
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 5
+        assert entry.log_offset_stdout == 7  # 4 + (2 + 1)
 
     async def test_offset_is_unified_across_streams(self, journal, ctx):
         # Server contract (MES-98): start_offset is cumulative BYTES per attempt
@@ -110,26 +168,79 @@ class TestOffsets:
         api, clock = StubApi(), FakeClock()
         up = uploader(api, journal, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", "abc")  # [0, 3)
-        await up.submit(ctx, "stderr", "xy")   # must start at 3, not 0
+        await up.submit(ctx, "stdout", "abc")  # [0, 4)
+        await up.submit(ctx, "stderr", "xy")   # must start at 4, not 0
         stderr_calls = [c for c in api.calls if c["stream"] == "stderr"]
-        assert stderr_calls[0]["start_offset"] == 3
+        assert stderr_calls[0]["start_offset"] == 4
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 5
-        assert entry.log_offset_stderr == 5
+        assert entry.log_offset_stdout == 7
+        assert entry.log_offset_stderr == 7
 
     async def test_interleaved_streams_keep_single_watermark(self, journal, ctx):
         api, clock = StubApi(), FakeClock()
         up = uploader(api, journal, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", "aaaa")  # [0, 4)
-        await up.submit(ctx, "stderr", "bb")    # [4, 6)
-        await up.submit(ctx, "stdout", "cc")    # [6, 8)
+        await up.submit(ctx, "stdout", "aaaa")  # [0, 5)
+        await up.submit(ctx, "stderr", "bb")    # [5, 8)
+        await up.submit(ctx, "stdout", "cc")    # [8, 11)
         starts = [(c["stream"], c["start_offset"]) for c in api.calls]
-        assert starts == [("stdout", 0), ("stderr", 4), ("stdout", 6)]
+        assert starts == [("stdout", 0), ("stderr", 5), ("stdout", 8)]
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 8
-        assert entry.log_offset_stderr == 8
+        assert entry.log_offset_stdout == 11
+        assert entry.log_offset_stderr == 11
+
+
+class TestCrossStreamWatermark:
+    async def test_other_stream_pending_blocks_overlapping_offsets(
+        self, journal, ctx, tmp_path
+    ):
+        """MES-96 P2-1: a transiently-failed stdout batch sits in the spool
+        occupying [0, 6). A following stderr flush must NOT start its batch at
+        that same offset — the single cumulative watermark is serialized across
+        BOTH streams' pending batches, so the spooled stdout batch replays first
+        (in offset order) and stderr continues right after it. Result: zero
+        overlapping uploads, zero offset_mismatch on the retry, and both
+        streams' lines fully delivered in order with one shared watermark."""
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        api = RecordingApi(fail_first_stdout=True)
+        up = uploader(api, journal, clock=FakeClock(), spool=spool, batch_lines=1)
+        await seed(journal, ctx)
+        # stdout trips the line threshold; the upload fails once -> spooled [0, 6)
+        await up.submit(ctx, "stdout", "out-1")
+        assert spool.has_pending(ctx.attempt_id, "stdout")
+        # stderr flush must replay stdout's spooled batch first, then continue
+        await up.submit(ctx, "stderr", "err-1")
+        await up.flush(ctx, sealed=True)  # terminal flush / replay settles it
+        assert api.received_lines() == {"stdout": ["out-1"], "stderr": ["err-1"]}
+        assert api.no_overlap()
+        assert api.offset_mismatch_count == 0
+        entry = await journal.get(ctx.attempt_id)
+        assert entry.log_offset_stdout == entry.log_offset_stderr == api.watermark
+
+    async def test_sealed_flush_drains_sibling_spool_before_certifying(
+        self, journal, ctx, tmp_path
+    ):
+        """MES-96 P2-1 (sealed completeness): a transiently-failed stdout batch
+        sits in the spool while a terminal SEALED flush is addressed to the
+        sibling stream. Incomplete logs may never certify completed — the
+        sealed flush must drain the sibling's un-acked batch FIRST (folding
+        both streams' pending in offset order), and ``sealed=True`` must land
+        exactly once, on the final drained batch. Pre-fix this sent an empty
+        sealed heartbeat on stderr and left stdout's lines spooled forever."""
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        api = RecordingApi(fail_first_stdout=True)
+        up = uploader(api, journal, clock=FakeClock(), spool=spool, batch_lines=1)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "out-1")  # fails once -> spooled [0, 6)
+        assert spool.has_pending(ctx.attempt_id, "stdout")
+        # Terminal flush addressed to the stream with no content of its own.
+        await up._flush_stream(ctx, "stderr", sealed=True)
+        assert api.received_lines() == {"stdout": ["out-1"]}
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+        # sealed landed exactly once — on the final drained batch, not on an
+        # empty heartbeat that would certify still-missing lines.
+        assert api.sealed_calls == [("stdout", 0)]
+        assert api.offset_mismatch_count == 0
 
 
 class TestRedaction:
@@ -148,9 +259,9 @@ class TestRedaction:
         redactor = RedactionPipeline(secrets=[SECRET], rule_version="v1")
         up = uploader(api, journal, redactor, clock=clock, batch_lines=1)
         await seed(journal, ctx)
-        await up.submit(ctx, "stdout", SECRET)        # redacted -> "***" (3 bytes)
+        await up.submit(ctx, "stdout", SECRET)        # redacted -> "***" (3 bytes + newline)
         await up.submit(ctx, "stdout", "x")
-        assert api.calls[1]["start_offset"] == 3  # redacted byte length, not original
+        assert api.calls[1]["start_offset"] == 4  # redacted wire length, not original
 
 
 class TestFlushAndReconcile:
@@ -206,7 +317,7 @@ class TestNoLossAndSpool:
         await up.flush(ctx, sealed=False)  # transient -> swallowed + re-buffered
         assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 0
         await up.flush(ctx, sealed=True)  # retry succeeds
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3  # not lost
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 4  # not lost
 
     async def test_transient_failure_does_not_fail_the_attempt_on_submit(self, journal, ctx):
         api, clock = StubApi(), FakeClock()
@@ -218,7 +329,7 @@ class TestNoLossAndSpool:
         await up.submit(ctx, "stdout", "abc")
         api.errors = []
         await up.flush(ctx, sealed=True)
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 4
 
     async def test_spool_replays_unacked_batch_after_transient_failure(self, journal, ctx, tmp_path):
         api, clock = StubApi(), FakeClock()
@@ -231,7 +342,7 @@ class TestNoLossAndSpool:
         assert spool.has_pending(ctx.attempt_id, "stdout")  # durable, not lost
         assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 0
         await up.flush(ctx, sealed=False)  # replays the spooled batch, acks it
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 4
         assert not spool.has_pending(ctx.attempt_id, "stdout")
 
     async def test_spool_survives_restart_and_replays(self, journal, ctx, tmp_path):
@@ -247,7 +358,7 @@ class TestNoLossAndSpool:
         spool2 = LogSpool(dir_, max_bytes=4096)
         up2 = uploader(api, journal, clock=clock, batch_lines=100, spool=spool2)
         await up2.flush(ctx, sealed=True)
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 3
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 4
         assert not spool2.has_pending(ctx.attempt_id, "stdout")
 
     async def test_sealed_flush_transient_failure_propagates_but_spool_retains(
@@ -291,10 +402,10 @@ class TestNoLossAndSpool:
         assert replay_a["start_offset"] == 0
         assert replay_a["sealed"] is False  # sealed must NOT ride the replay
         assert tail_b["lines"] == ["bb"]
-        assert tail_b["start_offset"] == 4  # continues right after A's bytes
+        assert tail_b["start_offset"] == 5  # continues right after A's wire bytes
         assert tail_b["sealed"] is True  # sealed lands on the TRUE last batch
         entry = await journal.get(ctx.attempt_id)
-        assert entry.log_offset_stdout == 6
+        assert entry.log_offset_stdout == 8
         assert not spool.has_pending(ctx.attempt_id, "stdout")
 
     async def test_sealed_flush_failure_retry_replays_all_and_seals_last(
@@ -319,7 +430,7 @@ class TestNoLossAndSpool:
         pending = spool.pending(ctx.attempt_id, "stdout")
         assert [(b.start_offset, b.lines) for b in pending] == [
             (0, ("AAAA",)),
-            (4, ("bb",)),
+            (5, ("bb",)),
         ]
         await up.flush(ctx, sealed=True)  # supervisor retry
         stdout_sealed = [
@@ -327,8 +438,8 @@ class TestNoLossAndSpool:
         ]
         assert len(stdout_sealed) == 1
         assert stdout_sealed[0]["lines"] == ["bb"]
-        assert stdout_sealed[0]["start_offset"] == 4
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        assert stdout_sealed[0]["start_offset"] == 5
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 8
         assert not spool.has_pending(ctx.attempt_id, "stdout")
 
     async def test_spool_full_backpressures_and_preserves_lines(self, journal, ctx, tmp_path):
@@ -382,7 +493,7 @@ class TestIntervalTimer:
         assert len(api.calls) == 1
         assert api.calls[0]["lines"] == ["lonely"]
         assert api.calls[0]["sealed"] is False  # timer flushes are never sealed
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 6
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 7
         await up.flush_due()  # idempotent — buffer already drained
         assert len(api.calls) == 1
 
@@ -464,7 +575,7 @@ class TestIntervalTimer:
         finally:
             await up.stop_ticking()
         assert api.calls[-1]["lines"] == ["retry-me"]  # same lines, not lost
-        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 8
+        assert (await journal.get(ctx.attempt_id)).log_offset_stdout == 9
 
     async def test_stop_ticking_is_idempotent(self, journal, ctx):
         api, clock = StubApi(), FakeClock()

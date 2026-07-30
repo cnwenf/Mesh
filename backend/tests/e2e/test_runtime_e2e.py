@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
+from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.e2e
 
@@ -386,7 +387,7 @@ async def test_t3_five_parallel_claims_vs_capacity_two(
         assert patch.status_code == 200, patch.text
         done = await api_client.patch(
             f"/api/v1/daemon/attempts/{attempt['id']}",
-            json={"lease_seq": 1, "status": "completed", "result": {"exit_code": 0}},
+            json={"lease_seq": 1, "status": "completed", "result": valid_result_v1()},
             headers=_daemon(daemon_token),
         )
         assert done.status_code == 200, done.text
@@ -713,7 +714,7 @@ async def test_env_name_gate_and_credential_redaction(
     )
     await api_client.patch(
         f"/api/v1/daemon/attempts/{attempt['id']}",
-        json={"lease_seq": 1, "status": "completed", "result": {}},
+        json={"lease_seq": 1, "status": "completed", "result": valid_result_v1()},
         headers=_daemon(daemon_token),
     )
     bad_claim = await _claim(api_client, created["id"], daemon_token)
@@ -949,7 +950,7 @@ async def test_logs_sse_fallback_smoke(api_client, runtime_worker, session_facto
     # Finish the attempt so the stream emits an end frame and closes.
     await api_client.patch(
         f"/api/v1/daemon/attempts/{attempt['id']}",
-        json={"lease_seq": 1, "status": "completed", "result": {}},
+        json={"lease_seq": 1, "status": "completed", "result": valid_result_v1()},
         headers=_daemon(daemon_token),
     )
     seen_log = seen_end = False

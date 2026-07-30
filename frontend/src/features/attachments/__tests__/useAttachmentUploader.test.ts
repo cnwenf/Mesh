@@ -20,7 +20,9 @@ import type { Attachment } from '../types';
 /* ---- 桩基础设施 ---- */
 
 interface MockXHR {
-  upload: { onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null };
+  upload: {
+    onprogress: ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null;
+  };
   onload: (() => void) | null;
   onerror: (() => void) | null;
   onabort: (() => void) | null;
@@ -111,6 +113,10 @@ function removeBlobArrayBuffer(): void {
   if (HAS_BLOB_ARRAY_BUFFER) return;
   delete (Blob.prototype as { arrayBuffer?: unknown }).arrayBuffer;
 }
+
+// 固化原生 getRandomValues:installCrypto 会用无 getRandomValues 的 stub 替换全局
+// crypto,MES-129 兜底分支测试仍需真实随机源(非安全上下文同样可用 getRandomValues)。
+const nativeGetRandomValues = crypto.getRandomValues.bind(crypto);
 
 let uuidCounter = 0;
 function installCrypto(): void {
@@ -224,9 +230,17 @@ describe('validateFile (client pre-validation)', () => {
   });
 
   it('enforces size limits (25MB images / 100MB files)', () => {
-    const bigImage = { size: DEFAULT_MAX_IMAGE_BYTES + 1, type: 'image/png', name: 'x.png' } as File;
+    const bigImage = {
+      size: DEFAULT_MAX_IMAGE_BYTES + 1,
+      type: 'image/png',
+      name: 'x.png',
+    } as File;
     expect(validateFile(bigImage)).toBe('error.file_too_large');
-    const bigFile = { size: DEFAULT_MAX_FILE_BYTES + 1, type: 'application/pdf', name: 'x.pdf' } as File;
+    const bigFile = {
+      size: DEFAULT_MAX_FILE_BYTES + 1,
+      type: 'application/pdf',
+      name: 'x.pdf',
+    } as File;
     expect(validateFile(bigFile)).toBe('error.file_too_large');
     const okFile = { size: DEFAULT_MAX_FILE_BYTES, type: 'application/pdf', name: 'x.pdf' } as File;
     expect(validateFile(okFile)).toBeNull();
@@ -246,9 +260,7 @@ describe('pipeline', () => {
     expect(result.current.uploads[0].attachment?.scan_status).toBe('clean');
     expect(result.current.uploads[0].attachment?.id).toBe('att-1');
     // 服务端已 completed:全程只有 upload-requests 一次调用,绝不打 /complete(重放必 409)。
-    expect(stub.calls.map((c) => c.url)).toEqual([
-      'http://api/api/v1/attachments/upload-requests',
-    ]);
+    expect(stub.calls.map((c) => c.url)).toEqual(['http://api/api/v1/attachments/upload-requests']);
     expect(stub.calls.some((c) => c.url.includes('/complete'))).toBe(false);
   });
 
@@ -317,7 +329,10 @@ describe('pipeline', () => {
         headers: {},
         expires_at: '2026-01-01T01:00:00Z',
       }),
-      fakeResponse({ status: 409, body: { error: { code: 'conflict', message: 'already completed' } } }),
+      fakeResponse({
+        status: 409,
+        body: { error: { code: 'conflict', message: 'already completed' } },
+      }),
       // 第二次:同文件重试命中秒传(服务端此前已建好附件),直接 completed。
       instantUploadResponse('clean'),
     );
@@ -376,7 +391,15 @@ describe('pipeline', () => {
         part_count: 2,
         expires_at: '2026-01-01T01:00:00Z',
       }),
-      fakeResponse({ body: { data: { part_urls: [{ part_number: 2, url: 'http://storage/part-2' }], part_size: 6, part_count: 2 } } }),
+      fakeResponse({
+        body: {
+          data: {
+            part_urls: [{ part_number: 2, url: 'http://storage/part-2' }],
+            part_size: 6,
+            part_count: 2,
+          },
+        },
+      }),
       fakeResponse({ body: { data: { upload_id: 'up-1' } } }),
       completeResponse('clean'),
     );
@@ -387,7 +410,10 @@ describe('pipeline', () => {
     act(() => result.current.addFiles([pngFile('a.png', 10)]));
     await waitFor(() => expect(result.current.uploads[0].phase).toBe('ready'));
     // 两个 part 各一次 PUT
-    expect(xhrs.map((x) => x.url).sort()).toEqual(['http://storage/part-1', 'http://storage/part-2']);
+    expect(xhrs.map((x) => x.url).sort()).toEqual([
+      'http://storage/part-1',
+      'http://storage/part-2',
+    ]);
     const completeCall = stub.calls.find((c) => c.url.includes('/multipart/up-1/complete'));
     const parts = JSON.parse(String(completeCall?.init?.body)).parts;
     expect(parts).toHaveLength(2);
@@ -458,8 +484,12 @@ describe('pipeline', () => {
     expect(result.current.uploads).toHaveLength(0);
   });
 
-  it('falls back to a generated local id when crypto.randomUUID is unavailable', async () => {
-    vi.stubGlobal('crypto', { subtle: { digest: vi.fn() } }); // 无 randomUUID
+  it('falls back to a uuidv4 local id when crypto.randomUUID is unavailable (MES-129)', async () => {
+    // 非安全上下文(HTTP 部署)现场:randomUUID 缺失,但 getRandomValues 依旧可用。
+    vi.stubGlobal('crypto', {
+      subtle: { digest: vi.fn() },
+      getRandomValues: nativeGetRandomValues,
+    });
     installXhr(true);
     stub = stubFetch();
     vi.stubGlobal('fetch', stub.fetchImpl);
@@ -468,7 +498,9 @@ describe('pipeline', () => {
     const exe = new File(['x'], 'tool.exe', { type: 'application/x-msdownload' });
     act(() => result.current.addFiles([exe]));
     await waitFor(() => expect(result.current.uploads[0].phase).toBe('error'));
-    expect(result.current.uploads[0].localId).toMatch(/^upload-/);
+    expect(result.current.uploads[0].localId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
   });
 
   it('maps single-PUT progress (incl. zero-total) then completes', async () => {
@@ -521,7 +553,15 @@ describe('pipeline', () => {
         part_count: 2,
         expires_at: 'x',
       }),
-      fakeResponse({ body: { data: { part_urls: [{ part_number: 2, url: 'http://s/p2' }], part_size: 6, part_count: 2 } } }),
+      fakeResponse({
+        body: {
+          data: {
+            part_urls: [{ part_number: 2, url: 'http://s/p2' }],
+            part_size: 6,
+            part_count: 2,
+          },
+        },
+      }),
       fakeResponse({ body: { data: { upload_id: 'up-1' } } }),
       completeResponse('clean'),
     );

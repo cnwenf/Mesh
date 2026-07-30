@@ -39,11 +39,9 @@ from mesh.db.tenant import set_tenant_context
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
 from mesh.runtime.attempts import (
-    _emit_finished_event as _emit_reaper_finished,
-)
-from mesh.runtime.attempts import (
     _emit_terminal_notification,
     _release_capacity,
+    emit_execution_finished,
 )
 from mesh.runtime.context_appends import reset_context_receipts_tx
 from mesh.runtime.credentials import revoke_attempt_envelopes
@@ -221,7 +219,7 @@ async def _reclaim_one(
             )
             # runtime.md §4.8: terminal single fan-out — the integration queue
             # item write-back (cancelling → cancelled) is driven by this event.
-            await _emit_reaper_finished(session, execution=execution)
+            await emit_execution_finished(session, execution=execution)
             return "cancelled"
 
         if attempt_count < execution.max_attempts:
@@ -278,7 +276,7 @@ async def _reclaim_one(
             data={"execution_id": str(execution.id), "failure_reason": "max_retries"},
             idempotency_key=f"execution:{execution.id}:failed",
         )
-        await _emit_reaper_finished(session, execution=execution)
+        await emit_execution_finished(session, execution=execution)
         await _emit_terminal_notification(session, workspace_id=workspace_id, execution=execution)
         return "failed_max_retries"
 
@@ -409,6 +407,9 @@ async def _expire_approvals(session_factory: async_sessionmaker[AsyncSession]) -
                     },
                     idempotency_key=f"execution:{execution.id}:cancelled",
                 )
+                # §3.6 single terminal fan-out — an expired-approval cancellation
+                # must notify orchestration same-transaction (no sweep exists).
+                await emit_execution_finished(session, execution=execution)
             if approval.subject_run_id is not None:
                 # autopilot_action subject (README §6.10 / autopilot.md §5.3):
                 # expiry cancels the parked run (approval_expired) + notifies.

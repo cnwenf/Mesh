@@ -12,6 +12,7 @@ import { useToast } from '../../design/components/Toast';
 import { useAttachmentUploader } from '../attachments/useAttachmentUploader';
 import { useT } from '../../i18n';
 import { errorToI18nKey } from '../../api/errors';
+import { uuidv4 } from '../../api/uuid';
 import { MeshApiError } from '../../api';
 import { useRealtimeContext } from '../../shell/AppShell';
 import {
@@ -132,7 +133,7 @@ export function ImportWizard(props: ImportWizardProps): React.JSX.Element | null
           ...(mapping !== null ? { mapping } : {}),
           ...(targetProjectId != null ? { target_project_id: targetProjectId } : {}),
         },
-        crypto.randomUUID(),
+        uuidv4(), // 非裸 crypto.randomUUID():HTTP 非安全上下文下缺失(MES-129)
       );
       setJob(created);
       setMapping(created.mapping);

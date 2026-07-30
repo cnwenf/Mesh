@@ -133,6 +133,14 @@ class AttemptTransitionRequest(BaseModel):
     result: dict[str, Any] | None = None
     failure_reason: str | None = Field(default=None, max_length=64)
 
+    @field_validator("result")
+    @classmethod
+    def _bound_result(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # §2.6 / L3: every daemon JSONB payload is size-capped (64 KiB → 422).
+        # ``result`` was the only transition field missing the guard. None
+        # passes through (``_bounded_json`` only measures dicts).
+        return _bounded_json(v, "result")  # type: ignore[return-value]
+
 
 class RenewLeaseRequest(BaseModel):
     """POST /daemon/attempts/{id}:renew-lease (§3.2)."""

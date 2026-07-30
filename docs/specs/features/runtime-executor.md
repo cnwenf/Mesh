@@ -1,6 +1,6 @@
 # Runtime 本地执行体架构 Spec
 
-> 状态：安全复评通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
+> 状态：评审通过、开发放行（S-01～S-13 设计回答已验证，2026-07-29 安全评审闭环）。
 >
 > 实现进度：A1 执行体骨架已落地于顶层 `daemon/` 包（`mesh-runtime`，fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流，单测+合同测试覆盖率 ≥90%），并按 A1 验收/安全审查完成加固：§3.9.3 持久化 redacted spool（写前落盘、ack 后清、幂等补传、冻结上限背压，瞬态失败不再丢日志或误杀 attempt）、claim 任务强引用与异常落诊断、result schema 严格校验（终止词表/exit_code/total_tokens 一致性/拒绝布尔冒充整数）、journal 状态目录 0700；**A2 安全执行面已落地**——真实 Linux namespace/cgroup 沙箱（mount/pid/net/ipc/uts + cgroup2 限额，fail-closed 不降级裸跑）、S-01 不可信配置隔离（空 HOME/XDG、只读私有配置、reserved env 二次清洗；§1.4 固定 argv 与 §1.5 三件套配置机制就绪、随 A3 真实 provider 接线端到端强制）、S-02 唯一 ToolBroker 闸门（SO_PEERCRED+cgroup+nonce 三重校验、动作→闸门唯一映射、confirm_required=取消+新 attempt 续跑）、S-04 egress gateway（可信解析→全 IP 过滤→钉死建连、沙箱 netns 无默认路由、重定向跳数上限）、checkout helper（只读凭证分离、精确 SHA、解析 IP 复核闸门、**git fetch 禁跨主机重定向 `http.followRedirects=false`**）、S-08 幂等清理（含启动对账残留清理）；ISO-01～14 隔离红线负向矩阵真实环境全绿（`daemon/tests/isolation/`，禁 mock/skip）。**A3 真实 Claude Code provider 已落地**——钉死版本 capability manifest（TOML 编码 §1.4 字段：provider/version/binary_sha256/required_flags/hard_limits）+ SHA-256/版本/flags fail-closed 探测（静态校验先于执行、inode/mtime/hash 变更即缓存失效、run() 再核验 digest、help `--flag[-suffix]` 简写展开）、§1.4 固定 argv（`--verbose` 为该版本 stream-json 输出所必需，已并入钉死 flag 集；prompt 只走 stdin、禁 shell）、§3.9 严格 stream-json 解析（固定 schema 白名单、未知/畸形/超大丢弃计诊断、thinking 永不入流）、S-07 daemon 层预算（usage/wall/idle 逐拍截断 → `budget_exceeded`/`timeout` 终结词汇、更严格者生效）、沙箱内只读 CA 信任库（provider TLS 校验）、session/usage/result schema v1 回流、doctor git/libcurl 工具链版本门禁；**真实 LLM e2e 全绿**（真实钉死二进制注册 online → 真实 claim → 沙箱内真实调用 → 日志/会话/token 回流、凭据零泄漏，`docs/evidence/mes-101/real-llm-e2e.json`）。**任务投递契约（验收修复轮）**：任务内容经 server 实际下发的 `task_spec.untrusted_context` 接线（非 daemon 侧臆造字段）；可信指令经 stdin user message 投递——`--bare` 下 `--system-prompt-file` 不生效（A/B 实证），user message 是唯一可靠通道，可信指令在前、untrusted 上下文经边界标记包裹在后（§3.7 隔离仍生效）；e2e 含功能性 MARKER 断言（指令真实送达并执行、frozen model 回流一致），不止「管线绿」。
 >
@@ -559,10 +559,10 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 
 ### 5.5 开发放行条件
 
-- [ ] 安全复评确认 S-01～S-04 的设计回答可验证；
-- [ ] S-05～S-13 均进入实现任务和自动化门禁；
-- [ ] server P0 先完成冻结 AgentConfig、task token、result/diff 脱敏、预算核账和 runtime token 单真源；
-- [ ] daemon fake-provider 合同测试通过；
-- [ ] T36 隔离红线矩阵全部通过；
-- [ ] 受保护的真实 LLM e2e 全链路通过；
-- [ ] 最终安全复测通过后才允许生产启用真实 provider。
+- [x] 安全复评确认 S-01～S-04 的设计回答可验证（A2 安全执行面落地 + ISO-01～14 隔离红线负向矩阵真实环境全绿，文首实现进度段已述）；
+- [x] S-05～S-13 均进入实现任务和自动化门禁（A2 安全执行面落地 + ISO-01～14 隔离红线负向矩阵真实环境全绿，文首实现进度段已述）；
+- [x] server P0 先完成冻结 AgentConfig、task token、result/diff 脱敏、预算核账和 runtime token 单真源（MES-98：runtime.md §2.x P0 契约已合入，v0.20.0）；
+- [x] daemon fake-provider 合同测试通过（daemon/tests/contract 绿，daemon-ci）；
+- [x] T36 隔离红线矩阵全部通过（ISO-01～14 真实环境 15/15，daemon/tests/isolation/）；
+- [x] 受保护的真实 LLM e2e 全链路通过（MES-95：.github/workflows/real-llm.yml，证据 `docs/evidence/mes-95/`）；
+- [x] 最终安全复测通过后才允许生产启用真实 provider（MES-97 闭环：S-06/S-11 修复核验 + B3 红线 ISO 15/15 + SEC-A～K，无 CRITICAL/HIGH，2026-07-30；评审通过、开发放行）。

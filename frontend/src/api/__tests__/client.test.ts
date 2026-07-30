@@ -116,12 +116,25 @@ describe('幂等键(README §6.5)', () => {
     await makeClient(fetchImpl).request('POST', '/x', { body: {}, idempotencyKey: 'fixed-key' });
     expect(headersOf(calls[0])['Idempotency-Key']).toBe('fixed-key');
   });
+
+  it('非安全上下文(HTTP 部署、crypto.randomUUID 缺失)仍自动生成幂等键且请求正常发出(MES-129)', async () => {
+    // 故障现场:HTTP 下 crypto.randomUUID 为 undefined,裸调抛 TypeError,
+    // fetch 不发出 → 写请求全挂。兜底后应照常携带合法 v4 键并完成请求。
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    const { fetchImpl, calls } = stubFetch(fakeResponse({ body: { data: {} } }));
+    await makeClient(fetchImpl).request('POST', '/x', { body: {} });
+    expect(headersOf(calls[0])['Idempotency-Key']).toMatch(UUID_RE);
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe('If-Match 与自定义头/信号', () => {
   it('ifMatch → If-Match 头', async () => {
     const { fetchImpl, calls } = stubFetch(fakeResponse({ body: { data: {} } }));
-    await makeClient(fetchImpl).request('PATCH', '/x', { body: {}, ifMatch: '2026-01-01T00:00:00Z' });
+    await makeClient(fetchImpl).request('PATCH', '/x', {
+      body: {},
+      ifMatch: '2026-01-01T00:00:00Z',
+    });
     expect(headersOf(calls[0])['If-Match']).toBe('2026-01-01T00:00:00Z');
   });
 
@@ -213,12 +226,16 @@ describe('list():列表包络(原样)', () => {
 
   it('非列表形状(data 非数组)→ internal_error', async () => {
     const { fetchImpl } = stubFetch(fakeResponse({ body: { data: { id: '1' } } }));
-    await expect(makeClient(fetchImpl).list('/items')).rejects.toMatchObject({ code: 'internal_error' });
+    await expect(makeClient(fetchImpl).list('/items')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
   });
 
   it('空响应体 → internal_error', async () => {
     const { fetchImpl } = stubFetch(fakeResponse({ rawText: '' }));
-    await expect(makeClient(fetchImpl).list('/items')).rejects.toMatchObject({ code: 'internal_error' });
+    await expect(makeClient(fetchImpl).list('/items')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
   });
 });
 
@@ -334,7 +351,9 @@ describe('429 Retry-After 解析', () => {
         headers: { 'Retry-After': pastDate },
       }),
     );
-    await expect(makeClient(fetchImpl).request('GET', '/x')).rejects.toMatchObject({ retryAfter: 0 });
+    await expect(makeClient(fetchImpl).request('GET', '/x')).rejects.toMatchObject({
+      retryAfter: 0,
+    });
   });
 
   it('429 无 Retry-After → undefined', async () => {
@@ -434,28 +453,34 @@ describe('401 全局兜底回调(MES-106)', () => {
       }),
     );
     const client = makeClientWithHook(fetchImpl, onUnauthorized);
-    await expect(
-      client.request('POST', '/api/v1/auth/login', { body: {} }),
-    ).rejects.toBeInstanceOf(MeshApiError);
+    await expect(client.request('POST', '/api/v1/auth/login', { body: {} })).rejects.toBeInstanceOf(
+      MeshApiError,
+    );
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 
   it('OAuth 前缀端点 401 → 不触发回调', async () => {
     const onUnauthorized = vi.fn();
-    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'x', message: '' } } }));
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 401, body: { error: { code: 'x', message: '' } } }),
+    );
     const client = makeClientWithHook(fetchImpl, onUnauthorized);
-    await expect(
-      client.request('GET', '/api/v1/auth/oauth/mock/callback'),
-    ).rejects.toBeInstanceOf(MeshApiError);
+    await expect(client.request('GET', '/api/v1/auth/oauth/mock/callback')).rejects.toBeInstanceOf(
+      MeshApiError,
+    );
     expect(onUnauthorized).not.toHaveBeenCalled();
   });
 
   it('403 / 500 / 429 等非 401 错误 → 不触发回调', async () => {
     for (const status of [403, 404, 429, 500]) {
       const onUnauthorized = vi.fn();
-      const { fetchImpl } = stubFetch(fakeResponse({ status, body: { error: { code: 'x', message: '' } } }));
+      const { fetchImpl } = stubFetch(
+        fakeResponse({ status, body: { error: { code: 'x', message: '' } } }),
+      );
       const client = makeClientWithHook(fetchImpl, onUnauthorized);
-      await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(MeshApiError);
+      await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(
+        MeshApiError,
+      );
       expect(onUnauthorized).not.toHaveBeenCalled();
     }
   });
@@ -475,14 +500,18 @@ describe('401 全局兜底回调(MES-106)', () => {
   });
 
   it('未注入回调时 401 不抛额外错误(仅 MeshApiError)', async () => {
-    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }));
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }),
+    );
     const client = makeClientWithHook(fetchImpl);
     await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(MeshApiError);
   });
 
   it('列表/分组入口同样接通兜底(共享 execute 路径)', async () => {
     const onUnauthorized = vi.fn();
-    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }));
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }),
+    );
     const client = makeClientWithHook(fetchImpl, onUnauthorized);
     await expect(client.list('/api/v1/issues')).rejects.toBeInstanceOf(MeshApiError);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);

@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
+import { uuidv4 } from '../../api/uuid';
 import { env } from '../../env';
 import {
   abortUpload,
@@ -126,12 +127,6 @@ function isMultipart(
 
 function isSingle(upload: UploadRequestResponse['upload']): upload is SingleUploadDescriptor {
   return upload !== null && 'method' in upload;
-}
-
-function makeLocalId(): string {
-  return typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `upload-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /** complete 之前的上传阶段:这些阶段内服务端台账为 pending/uploading,可 abort(§3.5 状态机)。 */
@@ -337,7 +332,7 @@ export function useAttachmentUploader(
       const fileList = Array.from(files);
       if (fileList.length === 0) return;
       const entries: UploadEntry[] = fileList.map((file) => ({
-        localId: makeLocalId(),
+        localId: uuidv4(), // 统一的安全上下文无关 UUID(MES-129),消除旧内联兜底重复实现
         fileName: file.name,
         fileSize: file.size,
         phase: 'validating',

@@ -175,8 +175,8 @@ zero credential leak anywhere. Operator prerequisites are the same as
 `real_llm_e2e.py` (`MES95_*` env vars fall back to `MES101_*`): pinned binary
 + `manifest.toml` + 0600 `provider.env`, root (real sandbox), a live local
 stack (API + worker). Evidence: `docs/evidence/mes-95/real-llm-squad-e2e.json`
-(first full real run: 4 executions / 4 distinct sessions / 45,408 tokens /
-0.188556 USD / issue done).
+(first full real run: 4 executions / 4 distinct sessions / 43,121 tokens /
+0.148545 USD / issue done).
 
 ## Install & run
 

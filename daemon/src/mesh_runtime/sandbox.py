@@ -165,7 +165,7 @@ class SandboxManager:
                 )
             created["veth"] = veth_host
             handle = await self._spawn_and_verify(
-                spec, cgroup_path=cgroup_path,
+                spec, created, cgroup_path=cgroup_path,
                 host_ip=host_ip, sandbox_ip=sandbox_ip,
                 veth_host=veth_host, veth_peer=veth_peer,
             )
@@ -213,6 +213,12 @@ class SandboxManager:
         return str(path)
 
     async def _reserve_link_addresses(self, attempt_id: str) -> tuple[str, str, str, str]:
+        # The probe loop shells out to ``ip`` synchronously; run it in a worker
+        # thread so a busy iproute2 never stalls the event loop (and widens the
+        # handshake-timeout window for concurrently-provisioning attempts).
+        return await asyncio.to_thread(self._probe_free_link, attempt_id)
+
+    def _probe_free_link(self, attempt_id: str) -> tuple[str, str, str, str]:
         digest = hashlib.sha256(attempt_id.encode()).digest()
         for salt in range(16):
             base_fourth = (digest[salt] % 63) * 4  # /30-aligned network base
@@ -233,7 +239,7 @@ class SandboxManager:
         raise SandboxUnavailableError("no free link-local /30 for the sandbox veth")
 
     async def _spawn_and_verify(
-        self, spec: SandboxSpec, *, cgroup_path: str,
+        self, spec: SandboxSpec, created: dict, *, cgroup_path: str,
         host_ip: str, sandbox_ip: str, veth_host: str, veth_peer: str,
     ) -> SandboxHandle:
         import json
@@ -285,7 +291,10 @@ class SandboxManager:
         )
         os.close(control_r)
         os.close(status_w)
-        self._pending_proc = proc  # rollback kills it if the handshake fails
+        # Per-attempt slot: rollback kills ONLY this attempt's process. A shared
+        # instance attribute would let one attempt's rollback reach across and
+        # kill a concurrently-provisioning sibling's sandbox (MES-96 P1-1).
+        created["proc"] = proc
         try:
             return await self._handshake(
                 spec, proc=proc, control_w=control_w, status_r=status_r,
@@ -444,16 +453,22 @@ class SandboxManager:
             await handle.proc.wait()
 
     async def _rollback(self, spec: SandboxSpec, created: dict) -> None:
-        proc = getattr(self, "_pending_proc", None)
+        # Kill ONLY this attempt's process (§5.2: rollback may not touch any
+        # other attempt). The proc lives in the per-attempt ``created`` slot,
+        # never a shared manager attribute.
+        proc = created.get("proc")
         if proc is not None and proc.returncode is None:
             proc.kill()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=2.0)
             except TimeoutError:
                 pass
-        self._pending_proc = None
+        created["proc"] = None
         if created.get("veth"):
-            subprocess.run(["ip", "link", "del", created["veth"]], capture_output=True)
+            await asyncio.to_thread(
+                subprocess.run, ["ip", "link", "del", created["veth"]],
+                capture_output=True,
+            )
         if created.get("cgroup"):
             cgroup = Path(created["cgroup"])
             kill_file = cgroup / "cgroup.kill"

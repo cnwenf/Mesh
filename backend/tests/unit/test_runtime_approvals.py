@@ -19,6 +19,7 @@ from mesh.runtime.approvals import decide_approval, request_tool_approval
 from mesh.runtime.claim import claim_execution
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
+    assert_execution_finished_fanout,
     make_runtime,
     seed_world,
 )
@@ -259,4 +260,38 @@ def _member_stub(world):
         member_type="human",
         role="admin",
         user_id=world["user_id"],
+    )
+
+
+async def test_finished_fanout_approval_reject_cancels_execution(session_factory):
+    """MES-96 P1-2: rejecting a tool approval cancels the awaiting execution
+    (approval_rejected) AND must write the execution.finished fan-out in the
+    same transaction (runtime.md §3.6) — the squad relay observes this event
+    alone; without it a rejected squad subtask hangs in_progress."""
+    world = await seed_world(session_factory)
+    runtime, execution, result = await _running_execution(session_factory, world)
+    data = await request_tool_approval(
+        session_factory,
+        execution_id=execution.id,
+        runtime=runtime,
+        attempt_id=uuid.UUID(result.attempt["id"]),
+        lease_seq=1,
+        action_summary={"action": "exec:shell"},
+        resume_context={},
+        approval_ttl=APPROVAL_TTL,
+    )
+    decided = await decide_approval(
+        session_factory,
+        approval_id=uuid.UUID(data["id"]),
+        workspace_id=world["ws_id"],
+        member=_member_stub(world),
+        approve=False,
+    )
+    assert decided["status"] == "rejected"
+    await assert_execution_finished_fanout(
+        session_factory,
+        world["ws_id"],
+        execution.id,
+        status="cancelled",
+        failure_reason="approval_rejected",
     )
