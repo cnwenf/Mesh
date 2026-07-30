@@ -121,7 +121,11 @@ test.describe('断线重连与重放(README §6.7:每频道 last_seq / resume_fr
     await page.context().setOffline(false);
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 20_000 });
     await expect(list.getByTestId('home-issue-MESH-200')).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/);
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible();
   });
 });
 
@@ -131,7 +135,11 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     await gotoHomeReady(page);
 
     // 先收几帧建立频道游标(重连时才会带 resume_from)
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/);
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible();
     for (let i = 0; i < 5; i++) {
       await emit(CHANNEL, 'issue.updated', {
         id: `issue-${i + 1}`,
@@ -174,8 +182,8 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     await expect(page.getByTestId('status-banner-resyncing')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 20_000 });
     await expect(page.getByTestId('status-banner-offline')).toBeHidden();
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
-      timeout: 20_000,
-    });
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 20_000 });
   });
 });

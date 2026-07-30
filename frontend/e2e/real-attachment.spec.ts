@@ -61,7 +61,11 @@ async function registerAndLogin(page: Page): Promise<void> {
   if (page.url().includes('/login')) {
     await page.goto('/');
   }
-  await expect(page.getByText('Connected')).toBeVisible({ timeout: 30_000 });
+  // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+  // 文本),经可访问名断言(与 TopBar 单测同口径)。
+  await expect(
+    page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 async function apiJson(method: string, path: string, body?: unknown, authToken?: string): Promise<Record<string, unknown>> {

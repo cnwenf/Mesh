@@ -79,9 +79,11 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     await page.goto('/');
 
     // 首帧鉴权通过(连接成功即证明 auth/auth_ok 握手与真实后端互通)
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
-      timeout: 20_000,
-    });
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 20_000 });
     await page.screenshot({ path: 'test-results/real-01-connected.png' });
 
     // settle:`Connected` 仅表示 auth_ok 握手完成;客户端随后才发 subscribe,网关侧
@@ -102,9 +104,11 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     // 登录落地即首页:全新上下文无游标 → 订阅不带 resume_from → 服务端全量重放
     // (不 reload:游标已持久化,reload 后 resume_from 会跳过存量事件 —— §6.7 游标语义使然)
     await loginReal(page);
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
-      timeout: 20_000,
-    });
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 20_000 });
 
     // 服务端全量重放存储事件 → 合并出行
     await expect(page.getByTestId('home-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
@@ -118,15 +122,19 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
     await page.context().setOffline(false);
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 30_000 });
     await expect(page.getByTestId('home-issue-REAL-2')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/);
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible();
     await page.screenshot({ path: 'test-results/real-03-resume-replay.png' });
   });
 
   test('游标过旧 → resync_required → REST 对账 → 无感恢复(§6.7 / T6)', async ({ page }) => {
     await loginReal(page);
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
-      timeout: 20_000,
-    });
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('home-issue-REAL-1')).toBeVisible({ timeout: 20_000 });
 
     const before = watermark();
@@ -143,9 +151,9 @@ test.describe('真实后端 v0.1.0 联调(§6.7 / §6.16)', () => {
 
     // 重连后 resume_from 过旧 → 服务端下发 resync_required →
     // 前端 REST /api/v1/realtime/events 对账(Bearer 鉴权)→ 水位对齐重订阅 → connected
-    await expect(page.getByTestId('conn-status')).toContainText(/Connected|已连接/, {
-      timeout: 30_000,
-    });
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 30_000 });
     // 对账拉回的事件完成合并
     await expect(page.getByTestId('home-issue-REAL-3')).toBeVisible({ timeout: 30_000 });
     await page.screenshot({ path: 'test-results/real-04-resync-reconciled.png' });
