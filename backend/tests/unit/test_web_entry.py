@@ -283,9 +283,9 @@ async def test_missing_dist_dir_degrades_to_404(db_url, redis_url, tmp_path):
 
 
 async def test_real_login_refresh_flows_through_cookie(app, client):
-    # End-to-end with the real credential pipeline: register + login (current
-    # Bearer model returns the refresh in the body); presenting it as the
-    # HttpOnly mesh_session cookie the entry middleware reads.
+    # End-to-end with the real credential pipeline: register + login. R4-H1:
+    # the refresh NEVER appears in the body — it arrives as the HttpOnly
+    # mesh_session cookie the entry middleware reads.
     await client.post(
         "/api/v1/auth/register",
         json={"email": "entry-real@corp.com", "password": PASSWORD, "display_name": "E"},
@@ -293,7 +293,11 @@ async def test_real_login_refresh_flows_through_cookie(app, client):
     login = await client.post(
         "/api/v1/auth/login", json={"email": "entry-real@corp.com", "password": PASSWORD}
     )
-    refresh = login.json()["data"]["refresh_token"]
+    assert "refresh_token" not in login.json()["data"]
+    session_cookie = next(
+        c for c in login.headers.get_list("set-cookie") if c.startswith("mesh_session=")
+    )
+    refresh = session_cookie.split(";", 1)[0].split("=", 1)[1]
 
     # No preference yet → no injection, but personalized (private, no-store).
     resp = await client.get(

@@ -16,6 +16,7 @@ import uuid
 import pytest
 from sqlalchemy import select, text
 
+from mesh.auth.deps import AuthenticatedPrincipal
 from mesh.auth.rbac import resolve_workspace_by_slug
 from mesh.db.models.audit import AuditLog
 from mesh.db.models.member import Member
@@ -237,7 +238,13 @@ async def test_slug_history_follows_most_recent_releaser(session_factory):
 
     # And by-slug resolution reaches B through the historic slug.
     async with session_factory() as session:
-        context = await resolve_workspace_by_slug(session, user=owner_b, slug="l5-shared")
+        context = await resolve_workspace_by_slug(
+            session,
+            principal=AuthenticatedPrincipal(
+                kind="session", user_id=owner_b.id, subject=owner_b.id
+            ),
+            slug="l5-shared",
+        )
     assert context.workspace.id == created_b["id"]
 
 

@@ -110,7 +110,10 @@ def test_validate_auth_settings_rejects_dev_key_in_production():
 
 def test_validate_auth_settings_accepts_strong_secret_in_production():
     settings = load_settings(
-        **REQUIRED, auth_mode="production", jwt_secret="a-real-production-secret-0123456789"
+        **REQUIRED,
+        auth_mode="production",
+        jwt_secret="a-real-production-secret-0123456789",
+        device_code_pepper="a-real-device-code-pepper-0123456789",
     )
     validate_auth_settings(settings)  # does not raise
 
@@ -154,6 +157,9 @@ def test_validate_search_settings_accepts_dev_key_in_dev_mode():
 def test_api_factory_refuses_dev_search_cursor_secret_in_production():
     # Fail-fast wiring: create_app rejects the public dev cursor key at
     # startup in production — raised before any engine/IO side effects.
+    # device_code_pepper (auth.md §2.4.2) and jwt_secret are satisfied so the
+    # earlier validate_auth_settings guard passes and this test isolates the
+    # search-cursor guard it targets (create_app runs auth → search → infra).
     from mesh.api.app import create_app
 
     with pytest.raises(ConfigError) as excinfo:
@@ -162,6 +168,7 @@ def test_api_factory_refuses_dev_search_cursor_secret_in_production():
                 **REQUIRED,
                 auth_mode="production",
                 jwt_secret="a-real-production-secret-0123456789",
+                device_code_pepper="a-real-device-code-pepper-0123456789",
             )
         )  # search_cursor_secret still the public dev default
     assert excinfo.value.missing_fields == ("search_cursor_secret",)
@@ -317,3 +324,60 @@ def test_validate_infra_settings_reports_every_weak_field_at_once():
         "storage_secret_key",
     }
     assert "MESH_" in excinfo.value.detail  # actionable env-var guidance
+# --- MES-80: device-code increment settings (auth.md §2.4.2 / §3.8 / cli.md) --
+
+
+def _base(monkeypatch, **env):
+    monkeypatch.delenv("MESH_DATABASE_URL", raising=False)
+    monkeypatch.delenv("MESH_REDIS_URL", raising=False)
+    monkeypatch.setenv("MESH_DATABASE_URL", REQUIRED["database_url"])
+    monkeypatch.setenv("MESH_REDIS_URL", REQUIRED["redis_url"])
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return load_settings()
+
+
+def test_device_code_settings_defaults(monkeypatch):
+    settings = _base(monkeypatch)
+    assert settings.device_code_ttl == timedelta(seconds=900)
+    assert settings.device_poll_interval == 5
+    assert settings.refresh_rotation_grace_seconds == 30
+    assert settings.device_code_pepper is None
+
+
+def test_device_code_settings_from_env(monkeypatch):
+    settings = _base(
+        monkeypatch,
+        MESH_DEVICE_CODE_TTL="PT600S",
+        MESH_DEVICE_POLL_INTERVAL="7",
+        MESH_REFRESH_ROTATION_GRACE_SECONDS="45",
+        MESH_DEVICE_CODE_PEPPER="s3cret-pepper",
+    )
+    assert settings.device_code_ttl == timedelta(seconds=600)
+    assert settings.device_poll_interval == 7
+    assert settings.refresh_rotation_grace_seconds == 45
+    assert settings.device_code_pepper == "s3cret-pepper"
+
+
+def test_validate_auth_settings_requires_pepper_in_production(monkeypatch):
+    # auth.md §2.4.2 / §5.5: the device-code HMAC pepper is fail-closed in
+    # production — a missing pepper must refuse startup, like the JWT secret.
+    settings = _base(monkeypatch, MESH_AUTH_MODE="production", MESH_JWT_SECRET="x" * 40)
+    with pytest.raises(ConfigError) as excinfo:
+        validate_auth_settings(settings)
+    assert "device_code_pepper" in excinfo.value.missing_fields
+
+
+def test_validate_auth_settings_accepts_pepper_in_production(monkeypatch):
+    settings = _base(
+        monkeypatch,
+        MESH_AUTH_MODE="production",
+        MESH_JWT_SECRET="x" * 40,
+        MESH_DEVICE_CODE_PEPPER="y" * 40,
+    )
+    validate_auth_settings(settings)  # must not raise
+
+
+def test_validate_auth_settings_pepper_optional_in_dev(monkeypatch):
+    settings = _base(monkeypatch, MESH_AUTH_MODE="dev")
+    validate_auth_settings(settings)  # must not raise

@@ -5,9 +5,35 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-30
+
+平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 371 例(覆盖率 98.65%) + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2526 例全绿 + typecheck 净。
+
+### Added
+
+- **mesh CLI(cli.md 五章)**:`cli/` 独立包(click + httpx + PyYAML);退码契约 `errors.py` 表驱动(HTTP→exit 数据驱动,用法错误归 3 不占鉴权专属 2);凭证存储 fail-closed(0600/0700/属主/拒符号链接,临时文件 0600 → fsync → 原子 rename);配置优先级 flag > env(`MESH_*`,空串=未设置)> file > default,`config list --all` 标注来源,alias 单级展开(不递归);HTTP 客户端:401 设备会话静默 refresh(单飞 + 宽限重读)、429/5xx 有界重试、verbose 仅 method/path/状态/耗时(`Authorization` 恒 `Bearer [REDACTED]`)、明文 http 默认拒绝(`--insecure` 单次 + 告警)、自定义 CA 三入口、代理 env-only;`execution logs --follow` SSE 帧解析 + offset 续传去重 + 行首 RFC3339(--timestamps=false 裸行);内置 jq 子集(`.`/`.f`/`.[]`/`.[n]`/管道/`select(==)`/字面量,编译/求值错误带位置 → 退码 3);四 shell 静态补全(bash/zsh/fish/powershell);`--web` 规范深链桥接。
+- **auth 设备码增量(auth.md §2.4.2/§3.1.1)**:`device_authorizations` 表(迁移 0028)——device_code/user_code 均 **HMAC-SHA256 服务端 pepper(`MESH_DEVICE_CODE_PEPPER`,生产缺失 fail-closed)** 仅存哈希;user_code ≥20bit 去歧义字符集(剔除 0/O/1/I/L,`XXXX-XXXX` 分组,活跃碰撞重试≤5);部分唯一索引仅覆盖 pending/approved(终态释放码空间);状态机 pending→approved/denied→consumed/expired/invalidated 终态不可逆;取码/轮询/确认页数据/批准/拒绝五端点;轮询双重限速(IP 全局 + 单码 1/interval,`slow_down` + Retry-After,单码违规 >5 作废 + `auth.device_invalidated` 审计);批准事务:名册行 `FOR UPDATE` + scope 服务端取交(请求 ∩ 角色权限)+ 批准者 web 会话不变量定位 + `authenticated_at` 快照;消费事务固定锁序(授权行 → 名册行 → 条件消费 → cli 会话),与成员移除/降权在名册行上线性化(无 TOCTOU);确认页 0/1/多工作区分流。
+- **会话与凭证契约**:`sessions` 增 `workspace_id`(cli 绑定,CHECK 非空)/`granted_scopes`/`device_authorization_id`(UNIQUE 单次消费)/`previous_token_hash`/`rotated_at`;access JWT 增 `sid`/`workspace_id`/`scope` 声明;§3.8 有界幂等 refresh 轮换(条件 UPDATE 行数控裁,胜者唯一下发新 refresh,宽限窗只发 access 不写库不二次轮换,过期/撤销会话两路径均 401 不复活);refresh 双传输(Web `mesh_session` HttpOnly/Secure/SameSite=Strict cookie + Origin/Referer 同源校验;CLI Bearer `mesh_rft_`;同请求只认一种);`GET/DELETE /auth/token` 自省/自撤销(PAT 即时、会话经 sid);统一 Bearer 依赖前缀路由(JWT/`mesh_pat_`/`mesh_agt_` 放行且权限恒为 scopes∩角色;`mesh_rt_`/`mesh_rft_` 常规路由拒绝;前缀⇄持有者类型语义校验);`POST /auth/reauth` step-up 再认证(密码/TOTP 分支排他,OAuth-only fail-closed 待 §2.4.3);Web 登录/注册 refresh 改 HttpOnly cookie 下发(R4-H1:响应体绝无 refresh 明文)。
+- **Web 设备确认页**:`/device` 公开路由——手工录入 user_code(预填仅便利,提交校验录入值防钓鱼)、scope 人类可读枚举 + 安全提示、工作区 0/1/多分流(0 禁用批准、1 自动绑定、多必选无默认)、批准默认焦点非默认确认;i18n 全外部化(zh-CN/en 目录)。
+- **OpenAPI 与分发(cli.md §5.4)**:`docs/api/openapi.yaml`(OpenAPI 3.1,FastAPI 生成)——`/api/v1/daemon/*` 与内部端点**完全剔除**(非 x-internal 标记);`tests/docs/check_openapi_surface.py` CI 门禁(daemon 路径零命中 + CLI 依赖端点齐全);后端契约测试防 yaml↔应用漂移;`cli-release.yml` 多平台单二进制(PyInstaller)+ SHA-256 + minisign 签名(公钥随仓库),`cli/install.sh` 校验和 + 签名双验安装。
+
+### Changed
+
+- Web 前端认证改 cookie 传输(R4-H1):`authStore` 去除 refreshToken(access-only,refresh 仅 HttpOnly cookie)、`refresh()`/`logout()` 空请求体、SecuritySettings 改密经 sid 识别当前会话;登录响应类型去除 `refresh_token`。
+- 登录类端点限速阈值改可配置(`MESH_AUTH_RATE_LIMIT`/`MESH_AUTH_RATE_WINDOW`,auth.md §3.6「阈值示例,可调」)。
+
 ## [0.21.0] - 2026-07-30
 
 ### Added
+
+- **mesh-runtime A3 真实 provider(MES-94 阶段2·开发A3/MES-101)**:daemon 本地执行体在 A2 安全执行面之上接入首个真实 coding CLI——钉死版本 Claude Code 适配 + 预算/流式/回流——
+  - **钉死版本供应链门禁(§1.4/§5.4)**:不可变 capability manifest(TOML 编码 §1.4 字段 `provider`/`version`/`binary_sha256`/`required_flags`/`hard_limits`,选 TOML 为零新增依赖);daemon 启动 fail-closed 校验二进制绝对路径/owner/mode/SHA-256/精确版本,并以空 HOME 无网络 `--help` 逐一比对必需 flags(help `--flag[-suffix]` 简写展开为具体 flag);探测结果按 `(dev,ino,mtime,size)` 缓存,二进制 inode/mtime/hash 任一变化即失效重探;`hard_limits.usd_budget/wall_timeout` 必须为真(无硬预算的真实 provider 拒绝运行,§3.5);`required_flags` 限定于 §1.4 固定 argv 集且禁含 §1.5 扩面参数。运维辅助 `mesh-runtime manifest hash --binary <path>` 输出钉死用 sha256/version。
+  - **§1.4 固定 argv + prompt 只走 stdin + 禁 shell**:daemon 唯一构造 argv(`--print`/stream-json 输入输出/`--bare`/`--setting-sources ""`/`--strict-mcp-config` + 显式 `--mcp-config`/attempt 私有只读 `--settings`/`--system-prompt-file`/daemon 生成 allow-deny 工具表/`bypassPermissions`/`--max-budget-usd`);**`--verbose` 为该版本 stream-json 输出所必需**(缺失即启动失败),已并入钉死 flag 集——仅启用记录流、不扩面。三份平台只读配置(settings/mcp/system.md)由 daemon 在 attempt run 目录生成并只读挂入沙箱,mcp.json 仅登记平台 task broker。
+  - **§3.9 严格 stream-json 解析**:固定 schema 白名单(system/init、assistant text/tool_use/usage、user tool_result、terminal result);未知/畸形/超大记录丢弃并计诊断(不抛错、不落盘、不回流);`thinking` 块永不产生事件(§3.7 不入日志/结果/resume)。
+  - **S-07 daemon 层预算**:生效限额取冻结快照与 daemon 上限**更严格者**;provider 上报 usage 与 wall/idle 时钟实时校验,违例 TERM→KILL 并以冻结词汇 `budget_exceeded`/`timeout` 终结;`UsageObserved.turns` 与 result `total_cost_usd` 回流 schema v1。
+  - **沙箱内只读 CA 信任库**:`sandbox_init` 只读绑定宿主公共 CA(`/etc/ssl/certs`,仅公共根证书、无宿主配置/secret),使 provider 可对钉死 egress 目标做 TLS 校验。
+  - **egress 健壮性**:钉死建连在已验证 IP 集内按序回退(首个地址不可达——如 IPv4-only 主机上的 IPv6 应答——回落下一已验证地址,而非整次失败;所有候选均已通过全量 IP 过滤),补负向回归。
+  - **验证**:**真实 LLM e2e 全绿**(`daemon/tests/integration/real_llm_e2e.py`,走公开 API 禁 psql seed)——注册/登录→建区→建 agent(model_config 冻结 budget + network_policy + model)→建 runtime→daemon 激活→**online**→指派 issue→真实 claim→钉死二进制在 namespace/cgroup 沙箱内真实调用 LLM→日志/会话/usage/result schema v1 回流且 provider 凭据零泄漏(同一脱敏器,§5.4.7)。**功能性断言(验收修复轮补强,非仅「管线绿」)**:e2e 断言任务指令(MARKER,置于可信 system_instructions)真实送达模型并执行——MARKER 出现在模型回流的最终 summary;frozen model 回流一致;usage 实测回流(total_tokens>0、turns、decimal cost、非空 session_id)。任务内容经 `task_spec.untrusted_context`(server 实际下发字段)接线、可信指令经 stdin user message 投递(`--bare` 下 `--system-prompt-file` 不生效,已 A/B 实证,user message 为唯一可靠通道且 §3.7 untrusted 隔离仍生效——注入指令被拒)。daemon 单测+合同+沙箱栈测试全绿,`pytest --cov=mesh_runtime` TOTAL 93%(≥90% 门禁、分支覆盖达标),新增模块(manifest/budget/stream_json/claude_code)均 ≥90%,ruff 净。证据 `docs/evidence/mes-101/real-llm-e2e.json`(verdict PASS、marker_found=true、summary==MARKER)。真实 provider 生产启用仍以最终安全复测通过为准。
 
 - **mesh-runtime A2 安全执行面(MES-94 阶段2·开发A2/MES-100)**:daemon 本地执行体在 A1 骨架之上落地真实内核隔离——
   - **namespace/cgroup 沙箱(fail-closed)**:每 attempt 独立 mount/pid/net/ipc/uts namespace + cgroup2 硬限额(memory/cpu/pids、swap 关闭),pivot_root 进入只读最小根(tmpfs `/tmp` `/home` `/xdg`、全新 `/proc`、`/dev` 仅 null/zero/urandom),降权至非特权 uid;沙箱 netns **无默认路由**,唯一出口为 veth /30 上的 per-attempt egress 代理;沙箱未就绪绝不降级裸跑(失败 attempt 以 `failed/sandbox_violation` 终结)。
@@ -17,7 +43,7 @@ Mesh 项目的所有重要变更都记录于此文件。
   - **checkout helper(§3.2)**:冻结 URL + allowlist + 公网地址闸门、精确 SHA checkout、只读凭证仅存在于 git 子进程环境(不进 remote URL / `.git/config` / provider env)。
   - **S-08 幂等清理**:按序白名单拆除(broker→吊销→cgroup kill→挂载→产物→spool 门禁→journal 清理位),不跟随 symlink,拒绝 attempt 根外路径。
   - **MES-98 P0 契约对齐**:claim/renew task token 字段、跨流统一日志 offset 水位、journal 在线迁移。
-  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 仍开发中,生产启用以最终安全复测为准。
+  - **验证**:ISO-01～14 隔离红线负向矩阵真实环境全绿(`daemon/tests/isolation/`,真实 namespace/cgroup/network,禁 mock/skip,非 root runner 判失败不跳过),证据 `docs/evidence/mes-100/iso-matrix-junit.xml`;与 server P0 契约真实联调通过(注册→激活→online→claim→沙箱执行→脱敏日志/result 回流,secret 全程 `***`),证据 `docs/evidence/mes-100/integration.json`;daemon 单测+合同+隔离测试覆盖率 ≥90%。A3 真实 Claude Code provider 已于本批次落地(见上条),生产启用以最终安全复测为准。
 
 
 平台能力层·设计系统级:主题与暗色模式全功能实现(MES-81,theme.md 五章)。协商链闭合(T4:三值语义写死 + 工作区默认级 + 邀请页 preview 同源解析)、首帧防闪烁三级可执行链路(T7/H2:入口注入 → 分区 locator → skeleton)、token 构建期生成单一事实源、CI 四门禁(对比度独立关卡 / AST 硬编码扫描 / 双主题视觉回归 / forced-colors 仿真)、存量 CSS 债务零命中收口。

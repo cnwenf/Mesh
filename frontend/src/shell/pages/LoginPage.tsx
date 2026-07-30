@@ -90,7 +90,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   }
 
   const finish = (tokens: SessionTokens): void => {
-    setSession({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token });
+    setSession({ accessToken: tokens.access_token });
     navigate(target);
   };
 
@@ -136,7 +136,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
         // 变更可能先于组件 state 刷新触发同步重渲)。
         registeredResultActive.current = true;
         setRegisteredEmail(email.trim());
-        setSession({ accessToken: result.access_token, refreshToken: result.refresh_token });
+        setSession({ accessToken: result.access_token });
         return;
       }
       finish(result);

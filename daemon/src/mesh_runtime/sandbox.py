@@ -52,6 +52,9 @@ class SandboxSpec:
     pids_max: int
     tmp_bytes: int
     gateway_port: int = 0  # per-attempt egress proxy port on the host veth IP
+    # Pipe the provider's stdin (§1.4: prompt travels via stdin ONLY). Default
+    # DEVNULL keeps the A2 plain-script provider surface unchanged.
+    stdin_pipe: bool = False
 
 
 @dataclass(frozen=True)
@@ -254,14 +257,28 @@ class SandboxManager:
             "ro_binds": list(spec.ro_binds),
             "tmp_bytes": spec.tmp_bytes,
         }
+        # The spec carries the provider env (incl. credentials): create it
+        # 0600 ATOMICALLY (never a transient world-readable mode), O_NOFOLLOW
+        # so a planted symlink is refused. The run dir is daemon-owned.
         spec_path = Path(spec.root) / "run" / "sandbox-spec.json"
-        spec_path.write_text(json.dumps(spec_payload))
+        spec_fd = os.open(
+            spec_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+        )
+        try:
+            os.write(spec_fd, json.dumps(spec_payload).encode("utf-8"))
+            os.fsync(spec_fd)
+        finally:
+            os.close(spec_fd)
         os.chmod(spec_path, 0o600)
         proc = await asyncio.create_subprocess_exec(
             self._python, "-m", "mesh_runtime.sandbox_init", str(spec_path),
-            stdin=subprocess.DEVNULL,
+            stdin=(asyncio.subprocess.PIPE if spec.stdin_pipe else subprocess.DEVNULL),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # Raise the stream reader's line ceiling above the parser's
+            # MAX_LINE_BYTES so a legitimate (≤1MiB) record is never truncated
+            # at asyncio's 64KiB default; oversized lines are dropped upstream.
+            limit=4 * 1024 * 1024,
             pass_fds=(control_r, status_w),
             cwd="/",
             env={"PATH": "/usr/bin:/bin"},

@@ -31,6 +31,9 @@ def app(db_url, redis_url):
         redis_url=redis_url,
         auth_mode="dev",
         jwt_secret="inprocess-auth-test-signing-secret",
+        # Plaintext loopback test transport — the Secure attribute is relaxed
+        # exactly like MESH_DAEMON_TLS_REQUIRED in e2e (production stays true).
+        session_cookie_secure=False,
     )
     return create_app(settings)
 
@@ -62,8 +65,18 @@ async def redis(redis_url):
     await c.aclose()
 
 
+SITE = "http://t"  # matches the client fixture's base_url (Host header)
+ORIGIN = {"Origin": SITE}
+
+
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+async def _refresh(client):
+    """Cookie-transport refresh (R4-H1): the refresh rides the mesh_session
+    cookie; the body carries nothing; Origin must be same-site."""
+    return await client.post("/api/v1/auth/refresh", headers=ORIGIN)
 
 
 async def _register_and_login(client):
@@ -84,6 +97,8 @@ async def test_register_login_me_inprocess(client):
     )
     assert reg.status_code == 201
     tokens = await _login(client)
+    # R4-H1: refresh delivered via HttpOnly cookie, not the body.
+    assert client.cookies.get("mesh_session", "").startswith("mesh_rft_")
     me = await client.get("/api/v1/me", headers=_auth(tokens["access_token"]))
     assert me.status_code == 200
     assert me.json()["data"]["email"] == EMAIL
@@ -91,7 +106,8 @@ async def test_register_login_me_inprocess(client):
 
 async def test_login_issues_httponly_session_cookie(client):
     # auth.md §5.5 / theme.md §2.3 ①: login sets the mesh_session HttpOnly
-    # cookie (additive channel the HTML entry reads for first-frame injection).
+    # cookie — the SOLE web refresh transport (R4-H1); the HTML entry reads it
+    # server-side for first-frame theme injection.
     await client.post(
         "/api/v1/auth/register",
         json={"email": EMAIL, "password": PASSWORD, "display_name": "API"},
@@ -107,7 +123,8 @@ async def test_login_issues_httponly_session_cookie(client):
     assert "samesite=strict" in header
     assert "path=/" in header
     # dev auth_mode → secure omitted (http loopback); production would set it.
-    assert resp.json()["data"]["refresh_token"]  # body refresh still present (additive)
+    # R4-H1: the body carries access ONLY — refresh never appears in plaintext.
+    assert "refresh_token" not in resp.json()["data"]
 
 
 async def test_me_returns_updated_at_for_pending_conflict_strategy(client):
@@ -120,12 +137,10 @@ async def test_me_returns_updated_at_for_pending_conflict_strategy(client):
 
 
 async def test_logout_clears_session_cookie(client):
-    tokens = await _register_and_login(client)
-    resp = await client.post(
-        "/api/v1/auth/logout",
-        headers=_auth(tokens["access_token"]),
-        json={"refresh_token": tokens["refresh_token"]},
-    )
+    # R4-H1 logout: the session is located via the presented mesh_session
+    # cookie (kept in the client jar since login) — no body, no Bearer.
+    await _register_and_login(client)
+    resp = await client.post("/api/v1/auth/logout")
     assert resp.status_code == 200
     cleared = [c for c in resp.headers.get_list("set-cookie") if c.startswith("mesh_session=")]
     assert cleared and "max-age=0" in cleared[0].lower()
@@ -135,7 +150,11 @@ async def _login(client, email=EMAIL, password=PASSWORD):
     resp = await client.post(
         "/api/v1/auth/login", json={"email": email, "password": password}
     )
-    return resp.json()["data"]
+    data = resp.json()["data"]
+    # R4-H1: the body NEVER carries a refresh — it rides the HttpOnly cookie.
+    if "access_token" in data:
+        assert "refresh_token" not in data
+    return data
 
 
 async def test_update_me_validation_errors_inprocess(client):
@@ -204,7 +223,7 @@ async def test_sessions_and_logout_all_inprocess(client):
 
 
 async def test_reset_and_verify_inprocess(client, redis):
-    tokens = await _register_and_login(client)
+    await _register_and_login(client)
     forgot = await client.post("/api/v1/auth/forgot-password", json={"email": EMAIL})
     assert forgot.status_code == 200
     reset_token = await redis.get(f"mesh:devmail:password_reset:{EMAIL}")
@@ -213,9 +232,8 @@ async def test_reset_and_verify_inprocess(client, redis):
         json={"token": reset_token, "new_password": "a-new-passw0rd"},
     )
     assert reset.status_code == 200
-    reused = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
+    # The reset revoked every session — the cookie refresh is dead.
+    reused = await _refresh(client)
     assert reused.status_code == 401
     # invalid reset token
     bad = await client.post(
@@ -225,16 +243,50 @@ async def test_reset_and_verify_inprocess(client, redis):
 
 
 async def test_logout_specific_and_refresh_inprocess(client):
-    tokens = await _register_and_login(client)
-    h = _auth(tokens["access_token"])
-    lo = await client.post(
-        "/api/v1/auth/logout", headers=h, json={"refresh_token": tokens["refresh_token"]}
-    )
+    await _register_and_login(client)
+    # Cookie-transport logout: the mesh_session cookie names the session.
+    lo = await client.post("/api/v1/auth/logout")
     assert lo.status_code == 200
-    refreshed = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": "bogus"}
-    )
+    # The cookie was cleared; a bogus cookie refresh is 401.
+    client.cookies.set("mesh_session", "mesh_rft_bogus", domain="t")
+    refreshed = await _refresh(client)
     assert refreshed.status_code == 401
+
+
+async def test_refresh_cross_origin_cookie_rejected_inprocess(client):
+    """R4-H1 CSRF shield: a cookie refresh without a same-site Origin → 403."""
+    await _register_and_login(client)
+    resp = await client.post(
+        "/api/v1/auth/refresh", headers={"Origin": "http://evil.example"}
+    )
+    assert resp.status_code == 403
+    # Missing Origin/Referer entirely — also denied (fail closed).
+    resp2 = await client.post("/api/v1/auth/refresh")
+    assert resp2.status_code == 403
+
+
+async def test_refresh_bearer_rft_transport_inprocess(client):
+    """CLI/device transport: Bearer mesh_rft_ rotates, body carries the new
+    refresh (no Set-Cookie), and the rotated-out token grace-yields access."""
+    tokens = await _register_and_login(client)
+    refresh = client.cookies.get("mesh_session")
+    client.cookies.clear()  # prove the Bearer path does not use the cookie
+    winner = await client.post(
+        "/api/v1/auth/refresh", headers=_auth(refresh)
+    )
+    assert winner.status_code == 200
+    body = winner.json()["data"]
+    assert body["refresh_token"].startswith("mesh_rft_")
+    assert "set-cookie" not in {k.lower() for k in winner.headers.keys()}
+    # Grace: the old token still yields access ONLY (never a refresh).
+    grace = await client.post("/api/v1/auth/refresh", headers=_auth(refresh))
+    assert grace.status_code == 200
+    assert "refresh_token" not in grace.json()["data"]
+    # A non-refresh Bearer on this endpoint is a protocol violation → 401.
+    bad = await client.post(
+        "/api/v1/auth/refresh", headers=_auth(tokens["access_token"])
+    )
+    assert bad.status_code == 401
 
 
 async def test_mfa_flow_inprocess(client):
@@ -358,55 +410,55 @@ def _request_for(app, token: str):
 
 @pytest.mark.parametrize("status", ["disabled", "deleted"])
 async def test_get_current_user_rejects_non_active_directly(app, status):
-    from mesh.auth.deps import get_current_user
+    from mesh.auth.deps import get_current_principal, get_current_user
     from mesh.errors import UnauthorizedError
 
     _uid, token = await _make_user(app, status=status)
     async with app.state.session_factory() as session:
+        principal = await get_current_principal(_request_for(app, token), session=session)
         with pytest.raises(UnauthorizedError):
-            await get_current_user(_request_for(app, token), session=session)
+            await get_current_user(
+                _request_for(app, token), principal=principal, session=session
+            )
 
 
 async def test_get_current_user_returns_active_user_directly(app):
-    from mesh.auth.deps import get_current_user
+    from mesh.auth.deps import get_current_principal, get_current_user
 
     uid, token = await _make_user(app, status="active")
     async with app.state.session_factory() as session:
-        user = await get_current_user(_request_for(app, token), session=session)
+        principal = await get_current_principal(_request_for(app, token), session=session)
+        user = await get_current_user(
+            _request_for(app, token), principal=principal, session=session
+        )
     assert user.id == uid
 
 
 # --- change password (auth.md §3.1/§4.2: 已登录态修改密码) ---------------------
 
 
-async def test_change_password_success_keeps_current_session_inprocess(client):
+async def test_change_password_success_keeps_current_session_inprocess(app, client):
     tokens = await _register_and_login(client)
     h = _auth(tokens["access_token"])
-    other = await _login(client)  # a second session (other device)
+    # A second session needs its own cookie jar (a second "device").
+    other_transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=other_transport, base_url=SITE) as other_client:
+        await _login(other_client)
 
-    changed = await client.post(
-        "/api/v1/auth/change-password",
-        headers=h,
-        json={
-            "old_password": PASSWORD,
-            "new_password": "a-new-passw0rd",
-            "refresh_token": tokens["refresh_token"],
-        },
-    )
-    assert changed.status_code == 200
-    assert changed.json()["data"]["status"] == "ok"
+        changed = await client.post(
+            "/api/v1/auth/change-password",
+            headers=h,
+            json={"old_password": PASSWORD, "new_password": "a-new-passw0rd"},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["data"]["status"] == "ok"
 
-    # The presenting session survives; the other session's refresh is dead.
-    # (Alive-first: presenting a revoked token triggers replay detection,
-    # which revokes the whole family — so the dead check goes last.)
-    alive = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-    )
-    assert alive.status_code == 200
-    dead = await client.post(
-        "/api/v1/auth/refresh", json={"refresh_token": other["refresh_token"]}
-    )
-    assert dead.status_code == 401
+        # The initiating session (identified by its access JWT sid) survives.
+        alive = await _refresh(client)
+        assert alive.status_code == 200
+        # The other device's session is revoked.
+        dead = await _refresh(other_client)
+        assert dead.status_code == 401
 
     # Old password rejected with the uniform named code; the new one logs in.
     old = await client.post(

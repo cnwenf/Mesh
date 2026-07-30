@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.api.pagination import decode_cursor, encode_cursor
 from mesh.auth.audit import write_audit
-from mesh.auth.rbac import role_satisfies
+from mesh.auth.rbac import assert_scope, role_satisfies
 from mesh.comment_inbox import subscriptions as inbox_subscriptions
 from mesh.comment_inbox.notifications import emit_issue_change_notifications
 from mesh.db.models.issue import (
@@ -370,8 +370,11 @@ class IssueService:
         """Write gate (issue.md §3.5): project write permission or member+.
 
         Guests need an explicit write grant on the issue's project;
-        project-less issues are not writable by guests.
+        project-less issues are not writable by guests. Scoped credentials
+        (PAT / agent / device) are additionally ∩-gated on ``issue:write``
+        (auth.md §2.5.1 — the role matrix is the ceiling, scopes the floor).
         """
+        assert_scope(actor, "issue:write")
         if role_satisfies(actor.role, "project:manage"):
             return
         project = await self._project_of(session, issue)
@@ -548,6 +551,7 @@ class IssueService:
         user_agent: str | None = None,
         template_skipped: list[dict] | None = None,
     ) -> dict:
+        assert_scope(actor, "issue:write")
         if body.priority not in ISSUE_PRIORITY_VALUES:
             raise ValidationError("invalid priority", details={"priority": body.priority})
         if body.estimate_unit is not None and body.estimate_unit not in ("points", "hours"):

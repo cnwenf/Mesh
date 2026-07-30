@@ -16,15 +16,24 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
     text,
 )
-from sqlalchemy.dialects.postgresql import INET, JSONB, TEXT, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, INET, JSONB, TEXT, TIMESTAMP, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from mesh.db.base import Base
 
 USER_STATUS_VALUES = ("active", "invited", "disabled", "deleted")
 SESSION_TYPE_VALUES = ("web", "cli", "api")
+DEVICE_AUTH_STATUS_VALUES = (
+    "pending",
+    "approved",
+    "denied",
+    "consumed",
+    "expired",
+    "invalidated",
+)
 
 
 class User(Base):
@@ -85,7 +94,32 @@ class Session(Base):
         nullable=False,
     )
     token_hash: Mapped[str] = mapped_column(TEXT, nullable=False)
+    # The pre-rotation refresh hash (auth.md §3.8 bounded idempotent rotation):
+    # identifies the loser credential during the grace window — a grace hit
+    # issues ONLY a fresh access token and is cleared afterwards.
+    previous_token_hash: Mapped[str | None] = mapped_column(TEXT, default=None)
+    rotated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     type: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'web'"))
+    # Workspace a CLI/device session is bound to (chosen on the browser
+    # approval page, auth.md §3.1.1); web sessions carry NULL and resolve the
+    # workspace per request. The CHECK below makes it mandatory for cli.
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        default=None,
+    )
+    # Fixed granted scopes = requested ∩ approver role perms; refresh renewal
+    # re-intersects with the holder's CURRENT role (auth.md §2.4).
+    granted_scopes: Mapped[list] = mapped_column(
+        ARRAY(TEXT), nullable=False, server_default=text("'{}'")
+    )
+    # The device grant that produced this session (single consumption → at
+    # most one session per grant, enforced by the UNIQUE index).
+    device_authorization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("device_authorizations.id", ondelete="SET NULL"),
+        default=None,
+    )
     user_agent: Mapped[str | None] = mapped_column(TEXT, default=None)
     ip_address: Mapped[str | None] = mapped_column(INET, default=None)
     created_at: Mapped[datetime] = mapped_column(
@@ -95,16 +129,97 @@ class Session(Base):
     expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     # Last primary authentication (password / TOTP); forwarded across silent
-    # refreshes to back step-up re-authentication (auth.md §5.5).
+    # refreshes to back step-up re-authentication (auth.md §5.5). Device cli
+    # sessions inherit the APPROVER's authenticated_at snapshot — never the
+    # consumption moment (R6-H3); NULL is a valid "no recent primary auth".
     authenticated_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
 
     __table_args__ = (
         CheckConstraint(f"type IN {SESSION_TYPE_VALUES!r}", name="type"),
+        CheckConstraint(
+            "type <> 'cli' OR workspace_id IS NOT NULL", name="cli_workspace_bound"
+        ),
         Index("uq_sessions_token_hash", "token_hash", unique=True),
+        Index("uq_sessions_device_auth", "device_authorization_id", unique=True),
         Index(
             "idx_sessions_user_active",
             "user_id",
             postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class DeviceAuthorization(Base):
+    """An OAuth device-code grant (auth.md §2.4.2, cli.md §3.2).
+
+    Codes are stored ONLY as HMAC-SHA256 hashes keyed by a server-side pepper
+    (never bare SHA-256 — the low-entropy user_code would be brute-forceable).
+    State machine, terminal states irreversible::
+
+        pending ──approve──► approved ──token endpoint──► consumed
+        pending ──deny────► denied
+        pending/approved ──TTL──► expired
+        pending ──guess/abuse limit──► invalidated
+    """
+
+    __tablename__ = "device_authorizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    device_code_hash: Mapped[str] = mapped_column(TEXT, nullable=False)
+    user_code_hash: Mapped[str] = mapped_column(TEXT, nullable=False)
+    status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'pending'"))
+    requested_scopes: Mapped[list] = mapped_column(
+        ARRAY(TEXT), nullable=False, server_default=text("'{}'")
+    )
+    granted_scopes: Mapped[list | None] = mapped_column(ARRAY(TEXT), default=None)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        default=None,
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="SET NULL"),
+        default=None,
+    )
+    failed_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    request_ip: Mapped[str | None] = mapped_column(INET, default=None)
+    # Snapshot of the approver web session's authenticated_at at approval time
+    # (R6-H3) — copied into the cli session on consumption.
+    approved_authenticated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), default=None
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    denied_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    consumed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
+    invalidated_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), default=None
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+    __table_args__ = (
+        CheckConstraint(f"status IN {DEVICE_AUTH_STATUS_VALUES!r}", name="status"),
+        # 128-bit device codes: no space pressure — unique across ALL history.
+        Index("uq_device_auth_device_code", "device_code_hash", unique=True),
+        # Low-entropy user codes: uniqueness over ACTIVE codes only so the
+        # 20-bit space is not exhausted by accumulated terminal rows (R2-M3).
+        Index(
+            "uq_device_auth_user_code_active",
+            "user_code_hash",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'approved')"),
+        ),
+        Index(
+            "idx_device_auth_pending",
+            "expires_at",
+            postgresql_where=text("status = 'pending'"),
         ),
     )
 

@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -272,6 +273,33 @@ async def test_iso09_malicious_repo_files_never_load(manager, iso_root, tmp_path
     assert "EVIL-PROC False" in text
     assert "FILES-ARE-PLAIN True" in text
     assert not beacon.exists()
+
+
+# ISO-09 closure on the REAL binary (not the python stand-in above). CRITICAL-1
+# proved flag semantics can deviate on a real release, so the isolation flags
+# must be proven effective on the ACTUAL pinned binary. Gated on the binary
+# being present (protected real-LLM environment); the python stand-in above
+# keeps the matrix green on runners without the binary.
+REAL_BINARY = os.environ.get(
+    "MES101_PROVIDER_PATH", "/opt/mesh/providers/claude/2.1.218/claude"
+)
+
+
+@pytest.mark.skipif(
+    not Path(REAL_BINARY).exists(),
+    reason=f"real provider binary not present at {REAL_BINARY} (protected real-LLM env)",
+)
+def test_iso09_real_binary_malicious_fixture_isolated():
+    from mesh_runtime.provider_probe import probe_isolation_fixture_sync
+
+    result = probe_isolation_fixture_sync(
+        REAL_BINARY, drop_uid=(65534 if os.getuid() == 0 else None)
+    )
+    assert result.launched, f"provider did not launch: {result.detail}"
+    assert not result.beacon_connected, "hostile .mcp.json loaded (beacon contacted)"
+    assert not result.hook_fired, "hostile settings hook executed"
+    assert not result.claudemd_followed, "CLAUDE.md injection followed"
+    assert result.isolated, f"ISO-09 isolation failed on real binary: {result.detail}"
 
 
 # -- ISO-10: no push / no cross-issue / no off-list upload ------------------------------

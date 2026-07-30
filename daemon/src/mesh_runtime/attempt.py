@@ -273,6 +273,7 @@ class AttemptSupervisor:
         summary = ""
         exit_code = 0
         hit_count = 0
+        termination_hint = ""
         try:
             while True:
                 event = await self._iter.__anext__()
@@ -284,11 +285,14 @@ class AttemptSupervisor:
                 elif isinstance(event, UsageObserved):
                     usage = Usage(
                         event.input_tokens, event.cache_creation_tokens,
-                        event.cache_read_tokens, event.output_tokens, 1, event.cost_usd,
+                        event.cache_read_tokens, event.output_tokens,
+                        event.turns, event.cost_usd,
                     )
                 elif isinstance(event, FinalResult):
                     summary = event.summary
                     exit_code = event.exit_code
+                    if event.termination in ("budget_exceeded", "timeout"):
+                        termination_hint = event.termination
         except StopAsyncIteration:
             pass
         except asyncio.CancelledError:
@@ -316,9 +320,32 @@ class AttemptSupervisor:
                 session_id, usage, "", exit_code, hit_count,
             )
             return
+        except Exception as exc:  # noqa: BLE001 — fail closed, never hang
+            # Any unexpected provider/transport error (e.g. a stdio ValueError,
+            # BrokenPipe, or adapter bug) must still terminate the attempt and
+            # set ``_done`` — otherwise supervise() blocks forever and, with a
+            # single slot, wedges the daemon until the server reaper reclaims
+            # the lease. Report a fenced failed terminal.
+            logger.exception("attempt %s provider crashed", ctx.attempt_id)
+            self._provider_done = True
+            await self._finalize(
+                ctx,
+                AttemptOutcome(ctx.attempt_id, "failed", _short_reason(exc)),
+                session_id, usage, "", exit_code or 1, hit_count,
+            )
+            return
         finally:
             self._provider_done = True
 
+        if termination_hint:
+            # S-07 / §3.5: the adapter truncated the provider — the frozen
+            # budget vocabulary lands in failure_reason AND result.termination.
+            await self._finalize(
+                ctx,
+                AttemptOutcome(ctx.attempt_id, "failed", termination_hint),
+                session_id, usage, summary, exit_code, hit_count,
+            )
+            return
         status = "completed" if exit_code == 0 else "failed"
         await self._finalize(
             ctx,
@@ -402,6 +429,11 @@ class AttemptSupervisor:
             hit_count += await self._security.export_diff(lease_seq=ctx.lease_seq, redactor=redactor)
             checkout_id = self._security.checkout_id
             diff_ref = self._security.diff_ref
+        # result.outcome.termination uses the precise frozen vocabulary when
+        # the failure reason carries it (budget_exceeded/timeout/sandbox_-
+        # violation/lease_lost — §3.9); otherwise it mirrors the status.
+        reason = outcome.failure_reason
+        termination = reason if reason in TERMINATIONS else status
         result = build_result(
             provider=self._provider_name,
             version=self._provider_version,
@@ -410,7 +442,7 @@ class AttemptSupervisor:
             usage=usage,
             exit_code=exit_code,
             summary=summary[:_SUMMARY_MAX],
-            termination=status,
+            termination=termination,
             checkout_id=checkout_id,
             diff_ref=diff_ref,
             rule_version=self._rule_version,

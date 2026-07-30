@@ -386,6 +386,51 @@ class TestResolutionFiltering:
         finally:
             await gw.stop()
 
+    async def test_unreachable_first_verified_ip_falls_through(self, upstream):
+        # Regression: pinning must not hard-fail when the FIRST verified
+        # address is unreachable (e.g. an IPv6 answer on an IPv4-only host).
+        # 127.0.0.2 is loopback but has no listener on the upstream port, so
+        # the gateway must fall through to the reachable 127.0.0.1 (both IPs
+        # already passed the filter — §3.4 step 5 selects within the verified
+        # set, never re-resolves).
+        async def fallback_resolver(host: str) -> list[str]:
+            return ["127.0.0.2", "127.0.0.1"]
+
+        gw = EgressGateway(
+            policy_for(upstream["port"]),
+            resolver=fallback_resolver,
+            address_filter=loopback_filter,
+        )
+        await gw.start()
+        try:
+            response = await proxy_get(gw.port, f"http://{HOST}:{upstream['port']}/fallback")
+            assert b"200 OK" in response
+            assert gw.stats["allowed"] >= 1
+            assert upstream["received"][-1]["request_line"].startswith("GET /fallback")
+        finally:
+            await gw.stop()
+
+    async def test_connect_unreachable_first_ip_falls_through(self, upstream):
+        async def fallback_resolver(host: str) -> list[str]:
+            return ["127.0.0.2", "127.0.0.1"]
+
+        gw = EgressGateway(
+            policy_for(upstream["port"]),
+            resolver=fallback_resolver,
+            address_filter=loopback_filter,
+        )
+        await gw.start()
+        try:
+            reader, writer = await asyncio.open_connection("127.0.0.1", gw.port)
+            writer.write(f"CONNECT {HOST}:{upstream['port']} HTTP/1.1\r\nHost: {HOST}\r\n\r\n".encode())
+            await writer.drain()
+            status_line = await reader.readline()
+            assert b"200" in status_line
+            writer.close()
+            assert gw.stats["allowed"] >= 1
+        finally:
+            await gw.stop()
+
     async def test_default_empty_policy_refuses_everything(self):
         gw = EgressGateway(
             NetworkPolicy.from_snapshot({}),

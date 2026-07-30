@@ -23,12 +23,18 @@ _KNOWN_KEYS = frozenset(
         "max_concurrent",
         "provider_path",
         "provider_version",
+        "provider_manifest",
+        "provider_env_file",
         "heartbeat_interval_seconds",
         "shutdown_grace_seconds",
         "allow_insecure_http",
         "sandbox_uid",
         "sandbox_gid",
         "sandbox_backend",
+        "sandbox_memory_bytes",
+        "sandbox_cpu_quota_us",
+        "sandbox_pids_max",
+        "sandbox_tmp_bytes",
         "runtime_kind",
     }
 )
@@ -48,12 +54,24 @@ class DaemonConfig:
     max_concurrent: int = 1
     provider_path: Path | None = None
     provider_version: str | None = None
+    # A3: pinned provider capability manifest (§1.4/§5.4) and the 0600 file
+    # holding administrator-owned provider credentials (§5.4.7). Setting the
+    # manifest switches the daemon from the fake provider to the pinned real
+    # provider; provider_path is then REQUIRED.
+    provider_manifest: Path | None = None
+    provider_env_file: Path | None = None
     heartbeat_interval_seconds: float = 15.0  # default; server response wins
     shutdown_grace_seconds: float = 20.0
     allow_insecure_http: bool = False
     sandbox_uid: int = 65534  # nobody — the sandbox drops to this uid
     sandbox_gid: int = 65534  # nogroup
     sandbox_backend: str = "linux_ns"  # "linux_ns" (fail-closed) | "none" (dev only)
+    # Daemon-local cgroup ceilings for one attempt (§4.3: the frozen snapshot
+    # may impose STRICTER limits; these are the local ceiling, never a floor).
+    sandbox_memory_bytes: int = 512 * 1024 * 1024
+    sandbox_cpu_quota_us: int = 100_000
+    sandbox_pids_max: int = 256
+    sandbox_tmp_bytes: int = 256 * 1024 * 1024
     runtime_kind: str = "self_hosted"  # self_hosted | platform_managed
     labels: dict[str, str] = field(default_factory=dict)
 
@@ -117,6 +135,34 @@ class DaemonConfig:
         if provider_version is not None:
             provider_version = str(provider_version)
 
+        provider_manifest: Path | None = None
+        if raw.get("provider_manifest") is not None:
+            provider_manifest = _require_path(raw, "provider_manifest")
+            if not provider_manifest.is_absolute():
+                raise ConfigError("provider_manifest must be an absolute path")
+            if provider_path is None:
+                raise ConfigError(
+                    "provider_manifest requires provider_path (the pinned binary location)"
+                )
+        provider_env_file: Path | None = None
+        if raw.get("provider_env_file") is not None:
+            provider_env_file = _require_path(raw, "provider_env_file")
+            if not provider_env_file.is_absolute():
+                raise ConfigError("provider_env_file must be an absolute path")
+
+        sandbox_memory_bytes = int(raw.get("sandbox_memory_bytes", 512 * 1024 * 1024))
+        sandbox_cpu_quota_us = int(raw.get("sandbox_cpu_quota_us", 100_000))
+        sandbox_pids_max = int(raw.get("sandbox_pids_max", 256))
+        sandbox_tmp_bytes = int(raw.get("sandbox_tmp_bytes", 256 * 1024 * 1024))
+        for name, value in (
+            ("sandbox_memory_bytes", sandbox_memory_bytes),
+            ("sandbox_cpu_quota_us", sandbox_cpu_quota_us),
+            ("sandbox_pids_max", sandbox_pids_max),
+            ("sandbox_tmp_bytes", sandbox_tmp_bytes),
+        ):
+            if value <= 0:
+                raise ConfigError(f"{name} must be > 0")
+
         sandbox_backend = str(raw.get("sandbox_backend", "linux_ns"))
         if sandbox_backend not in ("linux_ns", "none"):
             raise ConfigError("sandbox_backend must be 'linux_ns' or 'none'")
@@ -135,12 +181,18 @@ class DaemonConfig:
             max_concurrent=max_concurrent,
             provider_path=provider_path,
             provider_version=provider_version,
+            provider_manifest=provider_manifest,
+            provider_env_file=provider_env_file,
             heartbeat_interval_seconds=heartbeat,
             shutdown_grace_seconds=grace,
             allow_insecure_http=allow_insecure,
             sandbox_uid=sandbox_uid,
             sandbox_gid=sandbox_gid,
             sandbox_backend=sandbox_backend,
+            sandbox_memory_bytes=sandbox_memory_bytes,
+            sandbox_cpu_quota_us=sandbox_cpu_quota_us,
+            sandbox_pids_max=sandbox_pids_max,
+            sandbox_tmp_bytes=sandbox_tmp_bytes,
             runtime_kind=runtime_kind,
         )
 

@@ -20,9 +20,8 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.views.schemas import (
     CreateViewRequest,
@@ -64,11 +63,13 @@ def _client_meta(request: Request) -> dict:
     }
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"view-write:{user.id}:{client_ip}",
+        f"view-write:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -77,12 +78,14 @@ async def _rate_limit_write(request: Request, user: User, response: Response) ->
     response.headers["X-RateLimit-Reset"] = str(reset_in)
 
 
-async def _rate_limit_read(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_read(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     """Rate-limit view execution reads (kanban.md §5.3 → 429 rate_limited)."""
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"view-read:{user.id}:{client_ip}",
+        f"view-read:{principal.user_id or principal.member_id}:{client_ip}",
         limit=READ_LIMIT,
         window_seconds=READ_WINDOW_SECONDS,
     )
@@ -109,7 +112,7 @@ def _query_uuid(raw: str | None, *, field: str) -> uuid.UUID | None:
 
 
 async def _context_for(
-    user: User,
+    principal: AuthenticatedPrincipal,
     session: AsyncSession,
     workspace_id: uuid.UUID,
     *,
@@ -126,21 +129,24 @@ async def _context_for(
     """
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=None
+            session, principal=principal, workspace_id=workspace_id, permission=None
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
 
 
 async def _resolve_context(
-    request: Request, user: User, session: AsyncSession, view_id: uuid.UUID
+    request: Request,
+    principal: AuthenticatedPrincipal,
+    session: AsyncSession,
+    view_id: uuid.UUID,
 ) -> WorkspaceContext:
     """Workspace-less path: SECURITY DEFINER lookup, then membership gate."""
     service = _view_service(request)
     workspace_id = await service.resolve_view_workspace(view_id)
     if workspace_id is None:
         raise NotFoundError(_VIEW_NOT_FOUND)
-    return await _context_for(user, session, workspace_id, not_found_message=_VIEW_NOT_FOUND)
+    return await _context_for(principal, session, workspace_id, not_found_message=_VIEW_NOT_FOUND)
 
 
 # ----------------------------------------------------------------------
@@ -154,7 +160,7 @@ async def list_views(
     project_id: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     items, next_cursor = await _view_service(request).list_views(
@@ -172,10 +178,10 @@ async def create_view(
     body: CreateViewRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     created = await _view_service(request).create_view(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -190,10 +196,10 @@ async def reorder_views(
     body: ReorderViewsRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     view_ids = [_path_uuid(raw) for raw in body.view_ids]
     items = await _view_service(request).reorder_views(
         actor=context.member,
@@ -213,11 +219,11 @@ async def reorder_views(
 async def get_view(
     request: Request,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     data = await _view_service(request).get_view(
         viewer=context.member, workspace_id=context.workspace.id, view_id=parsed
     )
@@ -231,12 +237,12 @@ async def update_view(
     response: Response,
     view_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     fields = {name: getattr(body, name) for name in body.model_fields_set}
     data = await _view_service(request).update_view(
         actor=context.member,
@@ -254,12 +260,12 @@ async def delete_view(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     await _view_service(request).delete_view(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -273,12 +279,12 @@ async def duplicate_view(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     data = await _view_service(request).duplicate_view(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -294,12 +300,12 @@ async def patch_view_wip(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     data = await _view_service(request).patch_wip(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -322,7 +328,7 @@ async def list_view_issues(
     view_id: str,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Execute a view's config against issues → grouped overall-cursor envelope.
@@ -331,9 +337,9 @@ async def list_view_issues(
     directly (NOT wrapped in ``data``) — the README §6.14 grouped contract,
     same shape as the issue module's grouped list. Read rate-limited (§5.3).
     """
-    await _rate_limit_read(request, user, response)
+    await _rate_limit_read(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     return await _projection_service(request).execute_view(
         viewer=context.member,
         workspace_id=context.workspace.id,
@@ -349,16 +355,16 @@ async def move_view_card(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Atomic board drag (kanban §3.2): optimistic lock + advisory lock + WIP
     count + grouping-field change + per-view position upsert, one transaction.
     ``group_by=project`` routes through the cross-project two-step contract.
     """
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     data = await _board_move_service(request).move(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -379,13 +385,13 @@ async def reorder_view_cards(
     request: Request,
     response: Response,
     view_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     """In-column card reorder (kanban §4.3): per-view position only, no field change."""
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(view_id)
-    context = await _resolve_context(request, user, session, parsed)
+    context = await _resolve_context(request, principal, session, parsed)
     data = await _board_move_service(request).reorder(
         actor=context.member,
         workspace_id=context.workspace.id,

@@ -1,4 +1,10 @@
-"""Step-up re-authentication dependency tests (auth.md §5.5 — H3)."""
+"""Step-up re-authentication dependency tests (auth.md §5.5 — H3).
+
+Per the session-location invariant (auth.md §1.1, MES-80 A8), the freshness
+verdict reads the authoritative ``sessions.authenticated_at`` by the access
+JWT's ``sid`` — the claim alone never decides. Tests therefore mint a real
+web session row and bind the access token to it.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +16,9 @@ from sqlalchemy import text
 
 from mesh.auth import jwt as jwt_mod
 from mesh.auth.deps import require_recent_auth
+from mesh.auth.security import generate_refresh_token, hash_token
 from mesh.config import load_settings
+from mesh.db.models.user import Session
 from mesh.errors import ForbiddenError
 
 pytestmark = pytest.mark.unit
@@ -37,6 +45,21 @@ async def _create_user(session_factory) -> object:
         return await session.get(User, user_id)
 
 
+async def _create_web_session(session_factory, user_id, *, authenticated_at) -> Session:
+    now = datetime.now(UTC)
+    row = Session(
+        user_id=user_id,
+        token_hash=hash_token(generate_refresh_token()),
+        type="web",
+        expires_at=now + timedelta(days=14),
+        last_active_at=now,
+        authenticated_at=authenticated_at,
+    )
+    async with session_factory() as session, session.begin():
+        session.add(row)
+    return row
+
+
 def _request(settings, token: str):
     return SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(settings=settings)),
@@ -46,12 +69,16 @@ def _request(settings, token: str):
 
 async def test_fresh_authentication_is_allowed(settings, session_factory):
     user = await _create_user(session_factory)
+    row = await _create_web_session(
+        session_factory, user.id, authenticated_at=datetime.now(UTC)  # just authenticated
+    )
     token, _ = jwt_mod.encode_access_token(
         subject=user.id,
         secret=settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
         ttl=timedelta(minutes=15),
-        auth_time=datetime.now(UTC),  # just authenticated
+        auth_time=datetime.now(UTC),
+        session_id=row.id,
     )
     async with session_factory() as session:
         resolved = await require_recent_auth(_request(settings, token), session)
@@ -60,13 +87,18 @@ async def test_fresh_authentication_is_allowed(settings, session_factory):
 
 async def test_stale_authentication_requires_reauth(settings, session_factory):
     user = await _create_user(session_factory)
-    # Authenticated 20 minutes ago — beyond the 15-minute reauth window.
+    # Primary auth 20 minutes ago — beyond the 15-minute reauth window.
+    row = await _create_web_session(
+        session_factory, user.id,
+        authenticated_at=datetime.now(UTC) - timedelta(minutes=20),
+    )
     token, _ = jwt_mod.encode_access_token(
         subject=user.id,
         secret=settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
         ttl=timedelta(minutes=15),
         auth_time=datetime.now(UTC) - timedelta(minutes=20),
+        session_id=row.id,
     )
     async with session_factory() as session:
         with pytest.raises(ForbiddenError) as exc:

@@ -156,7 +156,7 @@ function resetStores(): void {
     lastSyncError: null,
     sessionProbed: false,
   });
-  useAuthStore.setState({ token: null, refreshToken: null });
+  useAuthStore.setState({ token: null });
   useWorkspaceThemeBridge.setState({ defaultTheme: null, loaded: false });
   setActiveUser(null);
   setActiveWorkspace(null);

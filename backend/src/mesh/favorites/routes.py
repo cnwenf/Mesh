@@ -15,10 +15,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import resolve_workspace_by_ref, resolve_workspace_context
 from mesh.db.models.chat import FAVORITE_TARGET_TYPE_VALUES
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.favorites.service import DEFAULT_LIMIT, MAX_LIMIT, FavoritesService
 
@@ -57,11 +56,13 @@ def _validate_target_type(target_type: str) -> str:
     return target_type
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"favorites-write:{user.id}:{client_ip}",
+        f"favorites-write:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -71,7 +72,10 @@ async def _rate_limit_write(request: Request, user: User, response: Response) ->
 
 
 async def _resolve_context(
-    session: AsyncSession, user: User, target_type: str, target_id: uuid.UUID
+    session: AsyncSession,
+    principal: AuthenticatedPrincipal,
+    target_type: str,
+    target_id: uuid.UUID,
 ):
     """Tenant lookup via the target's resolver, then the membership gate.
 
@@ -87,7 +91,7 @@ async def _resolve_context(
     if workspace_id is None:
         return None
     try:
-        return await resolve_workspace_context(session, user=user, workspace_id=workspace_id)
+        return await resolve_workspace_context(session, principal=principal, workspace_id=workspace_id)
     except NotFoundError:
         return None
 
@@ -99,13 +103,13 @@ async def put_favorite(
     request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> dict:
     """Favorite a target (idempotent — an existing row is returned as-is)."""
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     target_type = _validate_target_type(target_type)
     resolved_id = _path_uuid(target_id, message=_TARGET_NOT_FOUND)
-    context = await _resolve_context(session, user, target_type, resolved_id)
+    context = await _resolve_context(session, principal, target_type, resolved_id)
     if context is None:  # pragma: no cover - early-raise; exercised (404), untraced via ASGI
         raise NotFoundError(_TARGET_NOT_FOUND)
     created = await _service(request).put(
@@ -124,15 +128,15 @@ async def delete_favorite(
     request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> None:
     """Unfavorite a target (idempotent — absent rows delete silently)."""
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     target_type = _validate_target_type(target_type)
     resolved_id = _path_uuid(target_id, message=_TARGET_NOT_FOUND)
     # A gone target or a non-member both resolve to None — DELETE stays an
     # idempotent success either way (no existence leak).
-    context = await _resolve_context(session, user, target_type, resolved_id)
+    context = await _resolve_context(session, principal, target_type, resolved_id)
     if context is None:  # pragma: no cover - early-return; exercised (204), untraced via ASGI
         return None
     await _service(request).remove(
@@ -152,7 +156,7 @@ async def list_favorites(
     cursor: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     session: AsyncSession = Depends(get_session),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
 ) -> dict:
     """List the caller's favorites (newest first, dead targets pruned).
 
@@ -161,7 +165,7 @@ async def list_favorites(
     """
     if target_type is not None:
         _validate_target_type(target_type)
-    context = await resolve_workspace_by_ref(session, user=user, ref=workspace_id)
+    context = await resolve_workspace_by_ref(session, principal=principal, ref=workspace_id)
     page = await _service(request).list(
         actor=context.member,
         workspace_id=context.workspace.id,

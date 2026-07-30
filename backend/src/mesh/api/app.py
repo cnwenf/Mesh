@@ -32,6 +32,8 @@ from mesh.api.realtime_routes import router as realtime_router
 from mesh.attachment.routes import router as attachment_router
 from mesh.attachment.service import AttachmentService
 from mesh.attachment.storage import ObjectStorage, StorageConfig
+from mesh.auth.device_codes import DeviceCodeService
+from mesh.auth.device_routes import router as device_auth_router
 from mesh.auth.mailer import build_mailer
 from mesh.auth.oauth import MockOAuthProvider, OAuthService
 from mesh.auth.oauth_routes import router as oauth_router
@@ -209,6 +211,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     mailer = build_mailer(settings, app.state.redis)
     app.state.mailer = mailer
     app.state.auth_service = AuthService(session_factory, settings, deliver=mailer.deliver)
+    # Device-code authorization (auth.md §2.4.2/§3.1.1, cli.md §3.2): shares
+    # the auth service so the token exchange mints cli sessions atomically.
+    app.state.device_code_service = DeviceCodeService(
+        session_factory, settings, app.state.auth_service
+    )
     app.state.rate_limiter = RateLimiter(app.state.redis)
     # OAuth: vendor-neutral provider registry. Dev registers an in-process mock
     # provider so the full code+PKCE round-trip is testable without a vendor;
@@ -363,6 +370,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(html_entry_router)
     app.include_router(realtime_router)
     app.include_router(auth_router)
+    app.include_router(device_auth_router)
     app.include_router(oauth_router)
     app.include_router(workspace_router)
     app.include_router(member_router)

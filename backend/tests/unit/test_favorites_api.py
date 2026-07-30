@@ -118,6 +118,7 @@ async def test_favorites_routes_branches(client):
 @pytest.mark.asyncio
 async def test_favorites_resolver_helper_branches(client, session_factory):
     """Direct helper calls cover the resolver None / cross-tenant branches."""
+    from mesh.auth.deps import AuthenticatedPrincipal
     from mesh.db.models.user import User
     from mesh.db.tenant import set_tenant_context
     from mesh.errors import NotFoundError, ValidationError
@@ -134,14 +135,17 @@ async def test_favorites_resolver_helper_branches(client, session_factory):
     ag1 = await _agent(client, t1, ws1)
     sid1 = await _session(client, t1, ws1, ag1)
     foreign_user = User(id=uuid.uuid4(), email="foreign@x.io", display_name="F")
+    foreign = AuthenticatedPrincipal(
+        kind="session", user_id=foreign_user.id, subject=foreign_user.id
+    )
 
     # Resolver-None branch (target does not exist).
     async with session_factory() as session:
         await set_tenant_context(session, ws1)
-        assert await _resolve_context(session, foreign_user, "chat_session", uuid.uuid4()) is None
+        assert await _resolve_context(session, foreign, "chat_session", uuid.uuid4()) is None
     # Cross-tenant branch (target exists but user is not a member of its ws).
     async with session_factory() as session:
         await set_tenant_context(session, ws1)
         assert (
-            await _resolve_context(session, foreign_user, "chat_session", uuid.UUID(sid1)) is None
+            await _resolve_context(session, foreign, "chat_session", uuid.UUID(sid1)) is None
         )

@@ -7,7 +7,10 @@ allowed to mask a broken sandbox, provider, token file or egress setup.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
+import shutil
 import stat
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -15,6 +18,17 @@ from urllib.parse import urlparse
 from mesh_runtime.config import DaemonConfig
 from mesh_runtime.inventory import Inventory
 from mesh_runtime.token_store import FileTokenStore, TokenStoreError
+
+#: git < 2.31 ignores the ``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_N``/
+#: ``GIT_CONFIG_VALUE_N`` env vars the checkout helper uses to inject
+#: ``http.followRedirects=false`` — on such a git the §3.2 cross-host-redirect
+#: SSRF guard would be SILENTLY ineffective. doctor must fail-closed on it.
+_MIN_GIT_VERSION = (2, 31, 0)
+#: libcurl < 8.0 forwards the Authorization header across hosts on a redirect;
+#: the guard disables redirects entirely so this is hardening (a warning), not
+#: a live hole.
+_LIBCURL_AUTH_STRIP_VERSION = (8, 0)
+_TOOL_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -101,6 +115,80 @@ def _check_providers(inventory: Inventory) -> Check:
     )
 
 
+def _parse_version(text: str) -> tuple[int, ...] | None:
+    """First ``X[.Y[.Z]]`` run in ``text`` as an int tuple (None if absent)."""
+    match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+    if match is None:
+        return None
+    return tuple(int(group) for group in match.groups() if group is not None)
+
+
+async def _run_tool(argv: list[str]) -> str | None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_TOOL_TIMEOUT_SECONDS)
+    except (OSError, TimeoutError):
+        return None
+    return stdout.decode("utf-8", "replace")
+
+
+async def _detect_libcurl_version() -> str | None:
+    """Best-effort libcurl version from the curl CLI (``libcurl/X.Y.Z``). Git
+    links its own libcurl, so this is a proxy indicator, reported for parity."""
+    output = await _run_tool(["curl", "--version"])
+    if output is None:
+        return None
+    match = re.search(r"libcurl/([\d.]+)", output)
+    return match.group(1) if match else None
+
+
+async def _check_git_toolchain() -> Check:
+    """Fail-closed on a git too old to honour the checkout redirect guard;
+    report libcurl version as a cross-toolchain redirect-semantics signal."""
+    if shutil.which("git") is None:
+        return Check(
+            "git_toolchain", False, "git not found on PATH",
+            "install git >= 2.31 (checkout depends on it)",
+        )
+    version_text = await _run_tool(["git", "--version"])
+    if version_text is None:
+        return Check(
+            "git_toolchain", False, "could not run `git --version`",
+            "install/repair git >= 2.31",
+        )
+    version = _parse_version(version_text)
+    if version is None:
+        return Check(
+            "git_toolchain", False, f"unparseable git version {version_text.strip()!r}",
+            "install git >= 2.31",
+        )
+    if version < _MIN_GIT_VERSION:
+        return Check(
+            "git_toolchain", False,
+            "git " + ".".join(map(str, version)) + " < 2.31 — GIT_CONFIG_COUNT is "
+            "unavailable, so the http.followRedirects=false checkout SSRF guard "
+            "would be silently ignored",
+            "upgrade git to >= 2.31 so the checkout redirect guard takes effect",
+        )
+    detail = "git " + ".".join(map(str, version))
+    libcurl = await _detect_libcurl_version()
+    if libcurl is not None:
+        detail += f", libcurl {libcurl}"
+        libcurl_version = _parse_version(libcurl)
+        if libcurl_version is not None and libcurl_version < _LIBCURL_AUTH_STRIP_VERSION:
+            detail += (
+                " (libcurl < 8.0 forwards Authorization across hosts on redirect; "
+                "redirects are disabled by the checkout guard, so this is a "
+                "hardening note, not a live exposure)"
+            )
+    return Check("git_toolchain", True, detail)
+
+
 async def run_checks(config: DaemonConfig, inventory: Inventory) -> CheckReport:
     checks = [
         _check_server_url(config.server_url),
@@ -108,5 +196,6 @@ async def run_checks(config: DaemonConfig, inventory: Inventory) -> CheckReport:
         _check_dir("work_dir", config.work_dir),
         await _check_token_file(config),
         _check_providers(inventory),
+        await _check_git_toolchain(),
     ]
     return CheckReport(checks=tuple(checks))

@@ -66,16 +66,47 @@ def read_runtime_id(config: DaemonConfig) -> str | None:
 
 
 def build_adapters(config: DaemonConfig) -> list[ExecutorAdapter]:
-    """A1 ships the fake provider; the pinned Claude Code adapter lands in A3."""
+    """Adapters probed at activation/heartbeat and offered to the server.
+
+    With ``provider_manifest`` configured the pinned Claude Code adapter is
+    registered (A3, §1.4/§5.4); otherwise the A1 fake provider keeps the
+    contract path alive. Inventory reports only providers that PASS probing —
+    a digest/version/flag mismatch degrades the runtime, never claims (§1.4).
+    """
+    if config.provider_manifest is not None:
+        from mesh_runtime.manifest import load_provider_manifest
+        from mesh_runtime.providers.claude_code import ClaudeCodeAdapter
+
+        if config.provider_path is None:
+            raise DaemonError("provider_manifest requires provider_path")
+        manifest = load_provider_manifest(config.provider_manifest)
+        return [
+            ClaudeCodeAdapter(manifest=manifest, binary_path=str(config.provider_path))
+        ]
     return [FakeProvider(events=[])]
 
 
 async def cmd_doctor(config: DaemonConfig) -> int:
-    inventory = await Inventory.probe(build_adapters(config))
+    from mesh_runtime.doctor import Check, CheckReport
+
+    try:
+        adapters = build_adapters(config)
+    except DaemonError as exc:
+        report = CheckReport(
+            checks=(
+                Check(
+                    "provider_manifest",
+                    False,
+                    str(exc),
+                    "fix the pinned provider manifest (mesh-runtime manifest hash --binary PATH)",
+                ),
+            )
+        )
+        print(report.render())
+        return 1
+    inventory = await Inventory.probe(adapters)
     if config.provider_path is not None:
         probe = await probe_binary(str(config.provider_path))
-        from mesh_runtime.doctor import Check, CheckReport
-
         base = await run_checks(config, inventory)
         extra = Check(
             "provider_binary",
@@ -123,6 +154,16 @@ async def cmd_run(config: DaemonConfig) -> int:
     api = RuntimeApiClient(config.server_url, token)
     journal = Journal(config.journal_path)
     await journal.open()
+    sandbox_manager = None
+    if config.sandbox_backend == "linux_ns":
+        from mesh_runtime.sandbox import SandboxManager
+
+        sandbox_manager = SandboxManager(
+            state_root=config.state_dir / "sandbox",
+            sandbox_uid=config.sandbox_uid,
+            sandbox_gid=config.sandbox_gid,
+        )
+        await sandbox_manager.start()
     try:
         inventory = await Inventory.probe(build_adapters(config))
         app = RuntimeApp(
@@ -131,6 +172,7 @@ async def cmd_run(config: DaemonConfig) -> int:
             # a redaction secret, so any accidental echo into a relayed log
             # line is masked even before the per-attempt secret set applies.
             redaction_secrets=[token],
+            sandbox_manager=sandbox_manager,
         )
         app.set_runtime_id(runtime_id)
         loop = asyncio.get_running_loop()
@@ -142,6 +184,8 @@ async def cmd_run(config: DaemonConfig) -> int:
         await app.run()
         return 0
     finally:
+        if sandbox_manager is not None:
+            await sandbox_manager.shutdown()
         await journal.close()
         await api.close()
 
@@ -163,6 +207,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", help="run the daemon")
     p_run.add_argument("--config", required=True)
+
+    p_manifest = sub.add_parser(
+        "manifest", help="operator helpers for the pinned provider manifest"
+    )
+    manifest_sub = p_manifest.add_subparsers(dest="manifest_command", required=True)
+    p_hash = manifest_sub.add_parser(
+        "hash", help="print the SHA-256 + version to pin for a provider binary"
+    )
+    p_hash.add_argument("--binary", required=True)
     return parser
 
 
@@ -173,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "version":
         print(__version__)
         return 0
+
+    if args.command == "manifest":
+        if args.manifest_command == "hash":
+            return asyncio.run(cmd_manifest_hash(Path(args.binary)))
+        parser.error(f"unknown manifest command {args.manifest_command}")  # pragma: no cover
 
     config = DaemonConfig.load(Path(args.config))
 
@@ -194,3 +252,16 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"unknown command {args.command}")  # pragma: no cover
     return 2  # pragma: no cover
+
+
+async def cmd_manifest_hash(binary: Path) -> int:
+    """Operator helper: prints the values to pin in a provider manifest
+    (binary_sha256 + reported version). Never runs the binary beyond a
+    bare-env ``--version`` read (§1.4 step 2)."""
+    probe = await probe_binary(str(binary))
+    if not probe.ok:
+        print(f"binary rejected: {probe.reason}", file=sys.stderr)
+        return 2
+    print(f"binary_sha256 = \"{probe.sha256}\"")
+    print(f"version = \"{(probe.version or '').split()[0]}\"")
+    return 0

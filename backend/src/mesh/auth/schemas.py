@@ -27,21 +27,17 @@ class LoginRequest(BaseModel):
     remember: bool = False
 
 
-class RefreshRequest(BaseModel):
-    refresh_token: str = Field(min_length=1)
-
-
-class LogoutRequest(BaseModel):
-    refresh_token: str = Field(min_length=1)
-
-
 class TokenResponse(BaseModel):
-    """Issued on login / successful refresh (auth.md §3.4)."""
+    """Issued on login / successful refresh (auth.md §3.4, R4-H1).
+
+    The response body NEVER carries a refresh token — Web refresh lives in the
+    HttpOnly ``mesh_session`` cookie; CLI/device refresh is delivered exactly
+    once, by the device token endpoint (Bearer ``mesh_rft_…``).
+    """
 
     access_token: str
     token_type: str = "Bearer"
     expires_in: int
-    refresh_token: str
 
 
 class MfaRequiredResponse(BaseModel):
@@ -54,6 +50,51 @@ class MfaRequiredResponse(BaseModel):
 class MfaVerifyRequest(BaseModel):
     mfa_ticket: str = Field(min_length=1)
     code: str = Field(min_length=1, max_length=16)
+
+
+class ReauthRequest(BaseModel):
+    """Step-up re-authentication (auth.md §3.1 ``POST /auth/reauth``).
+
+    Branch-exclusive bodies: ``{password}`` for password accounts,
+    ``{totp_code}`` for TOTP-enabled accounts (password alone is rejected —
+    MES-78 LOW-2), ``{method: "oauth"}`` for OAuth-only accounts.
+    """
+
+    password: str | None = Field(default=None, max_length=256)
+    totp_code: str | None = Field(default=None, max_length=16)
+    method: str | None = None
+
+
+# --- device-code authorization (auth.md §3.1.1) -------------------------------
+
+DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
+
+class DeviceCodeRequest(BaseModel):
+    """``POST /auth/device/code`` — RFC 8628 issuance request."""
+
+    client_id: str = Field(default="mesh-cli", min_length=1, max_length=64)
+    scope: str | None = Field(default=None, max_length=512)  # space-joined
+
+
+class DeviceTokenRequest(BaseModel):
+    """``POST /auth/device/token`` — RFC 8628 polling request."""
+
+    grant_type: str = Field(min_length=1, max_length=128)
+    device_code: str = Field(min_length=1, max_length=512)
+    client_id: str = Field(default="mesh-cli", min_length=1, max_length=64)
+
+
+class DeviceApproveRequest(BaseModel):
+    """``POST /auth/device/approve`` — the TYPED user_code binds the approval;
+    the workspace is the approver's explicit choice (0/1/many page branch)."""
+
+    user_code: str = Field(min_length=1, max_length=32)
+    workspace_id: uuid.UUID
+
+
+class DeviceDenyRequest(BaseModel):
+    user_code: str = Field(min_length=1, max_length=32)
 
 
 # --- password reset / email verification -------------------------------------
@@ -69,16 +110,15 @@ class ResetPasswordRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    """Authenticated password change (auth.md §3.1/§4.2, MES-39).
+    """Authenticated password change (auth.md §3.1/§4.2, MES-39 / R7-M1).
 
-    ``refresh_token`` identifies the caller's *current* session so it survives
-    the change while every other session is revoked; omit it (or present an
-    unrecognised token) to revoke them all.
+    The initiating session survives the change (every other session is
+    revoked); it is identified by the caller's access JWT ``sid`` — the body
+    carries NO refresh token (R4-H1).
     """
 
     old_password: str = Field(min_length=1, max_length=256)
     new_password: str = Field(min_length=1, max_length=256)
-    refresh_token: str | None = None
 
 
 class VerifyEmailRequest(BaseModel):

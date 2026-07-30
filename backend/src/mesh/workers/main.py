@@ -69,6 +69,7 @@ from mesh.workers.attachment_processor import (
     attachment_maintenance_loop,
     attachment_scan_loop,
 )
+from mesh.workers.device_auth_sweep import device_auth_sweep_loop
 from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
@@ -355,6 +356,16 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     interval=settings.due_soon_sweep_interval,
                     horizon_hours=settings.due_soon_horizon_hours,
+                    stop=stop,
+                    clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "device-auth-sweep",
+                lambda: device_auth_sweep_loop(
+                    session_factory,
+                    settings=settings,
+                    interval=settings.device_auth_sweep_interval,
                     stop=stop,
                     clock=_utcnow,
                 ),

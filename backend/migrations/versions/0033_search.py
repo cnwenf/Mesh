@@ -1,7 +1,7 @@
 """search: global search normalization, projection and indexes.
 
 Platform-capability increment (search-command-palette.md §2.2, README §6.1 /
-§6.2). Single-head chain 0001 → 0030.
+§6.2). Single-head chain 0001 → 0033.
 
 - ``public.mesh_search_norm(TEXT)`` — the SINGLE normalization entry point
   (NFKD + unaccent + lower). plpgsql IMMUTABLE PARALLEL SAFE so expression
@@ -20,8 +20,8 @@ Platform-capability increment (search-command-palette.md §2.2, README §6.1 /
   ``uq_issues_identifier``), ≥3 char trigram (``*_trgm`` GIN gin_trgm_ops).
 - One-shot batched backfill (≤10k rows per UPDATE statement).
 
-Revision ID: 0029
-Revises: 0029
+Revision ID: 0033
+Revises: 0032
 Create Date: 2026-07-29
 """
 
@@ -29,8 +29,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0030"
-down_revision = "0029"
+revision = "0033"
+down_revision = "0032"
 branch_labels = None
 depends_on = None
 

@@ -255,3 +255,58 @@ class TestRunCommand:
         monkeypatch.setattr("sys.stdin", io.StringIO("   \n"))
         rc = main(["activate", "--config", str(cfg_file), "--activation-code-stdin"])
         assert rc == 2
+
+
+class TestManifestHashCommand:
+    def test_hash_prints_sha_and_version(self, tmp_path, capsys):
+        from mesh_runtime.cli import main
+
+        binary = tmp_path / "claude"
+        binary.write_text(
+            '#!/bin/sh\necho "7.7.7 (Claude Code)"\n', encoding="utf-8"
+        )
+        binary.chmod(0o755)
+        rc = main(["manifest", "hash", "--binary", str(binary)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert 'version = "7.7.7"' in out
+        assert "binary_sha256 = " in out
+
+    def test_hash_rejects_symlink(self, tmp_path, capsys):
+        from mesh_runtime.cli import main
+
+        real = tmp_path / "real"
+        real.write_text("#!/bin/sh\necho 1.0\n", encoding="utf-8")
+        real.chmod(0o755)
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        rc = main(["manifest", "hash", "--binary", str(link)])
+        assert rc == 2
+        assert "rejected" in capsys.readouterr().err
+
+
+class TestDoctorBrokenManifest:
+    def test_doctor_reports_broken_manifest(self, tmp_path, capsys):
+        from mesh_runtime.cli import main
+
+        config_path = tmp_path / "config.toml"
+        state = tmp_path / "state"
+        work = tmp_path / "work"
+        state.mkdir()
+        work.mkdir()
+        binary = tmp_path / "claude"
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        binary.chmod(0o755)
+        manifest = tmp_path / "manifest.toml"
+        manifest.write_text("provider = 5\n", encoding="utf-8")  # invalid
+        config_path.write_text(
+            f'server_url = "https://mesh.example.com"\n'
+            f'state_dir = "{state}"\nwork_dir = "{work}"\n'
+            f'provider_path = "{binary}"\nprovider_manifest = "{manifest}"\n',
+            encoding="utf-8",
+        )
+        rc = main(["doctor", "--config", str(config_path)])
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "provider_manifest" in out
+        assert "FAIL" in out

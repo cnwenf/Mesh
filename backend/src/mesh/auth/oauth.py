@@ -282,14 +282,22 @@ class OAuthService:
             )
             return {"status": "bound", "provider": provider_name}
         user_id = await self._login_or_register(provider_name=provider_name, userinfo=userinfo)
+        # A provider round trip just completed an interactive login — this is
+        # a fresh primary authentication (R6-H3); the mock/dev provider is
+        # interactive by definition (real providers' auth_time verification is
+        # the §2.4.3 increment). The refresh token rides the mesh_session
+        # cookie set by the route (R4-H1) — the body keeps only the access.
         tokens: TokenResult = await self._auth.issue_session(
-            user_id=user_id, ip_address=ip_address, user_agent=user_agent
+            user_id=user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            authenticated_at=datetime.now(UTC),
         )
         return {
             "access_token": tokens.access_token,
             "token_type": "Bearer",
             "expires_in": tokens.expires_in,
-            "refresh_token": tokens.refresh_token,
+            "refresh_token": tokens.refresh_token,  # route moves this to the cookie
         }
 
     async def _login_or_register(

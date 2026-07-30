@@ -8,11 +8,12 @@ lists bindings; ``DELETE /{provider}`` unbinds (keeping ≥1 login method).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 
-from mesh.auth.deps import get_current_user, require_recent_auth
+from mesh.auth.deps import get_current_user, require_recent_auth_web_only
 from mesh.auth.oauth import OAuthService
+from mesh.auth.routes import _set_session_cookie, _settings
 from mesh.db.models.user import User
 from mesh.errors import ValidationError
 
@@ -54,7 +55,7 @@ async def oauth_bind_start(
     provider: str,
     request: Request,
     redirect_uri: str | None = None,
-    user: User = Depends(require_recent_auth),  # §5.5 step-up: binding OAuth is sensitive
+    user: User = Depends(require_recent_auth_web_only),  # §1.1 matrix: OAuth link is web-only step-up
 ) -> RedirectResponse:
     """Authenticated bind start: 302 to the provider, returning to bind."""
     service = _oauth_service(request)
@@ -70,6 +71,7 @@ async def oauth_bind_start(
 async def oauth_callback(
     provider: str,
     request: Request,
+    response: Response,
     code: str | None = None,
     state: str | None = None,
 ) -> dict:
@@ -88,6 +90,11 @@ async def oauth_callback(
         ip_address=_client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
+    # R4-H1: a login-mode callback delivers the refresh via HttpOnly cookie —
+    # never in the JSON body (bind-mode responses carry no refresh).
+    refresh_token = data.pop("refresh_token", None)
+    if refresh_token is not None:
+        _set_session_cookie(response, refresh_token, _settings(request), remember=False)
     return {"data": data}
 
 
@@ -102,7 +109,10 @@ async def list_identities(
 
 @router.delete("/{provider}")
 async def unbind_identity(
-    provider: str, request: Request, user: User = Depends(require_recent_auth)  # §5.5 step-up
+    # §1.1 matrix: web-only step-up
+    provider: str,
+    request: Request,
+    user: User = Depends(require_recent_auth_web_only),
 ) -> dict:
     service = _oauth_service(request)
     await service.unbind_identity(user_id=user.id, provider_name=provider)

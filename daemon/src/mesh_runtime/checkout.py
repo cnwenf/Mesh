@@ -212,15 +212,20 @@ class CheckoutHelper:
             "GIT_TERMINAL_PROMPT": "0",  # never prompt; fail instead
             "HOME": "/nonexistent",  # no host gitconfig/credentials
         }
-        configs: list[tuple[str, str]] = []
+        # §3.2 SSRF hardening: git must NEVER follow a cross-host redirect on
+        # fetch. The public-address gate validates only the ORIGINAL url; an
+        # allowlisted repo returning 3xx could otherwise steer the fetch (and,
+        # on libcurl<8.0, the Authorization header) to an internal/metadata
+        # endpoint, bypassing the gate. Set UNCONDITIONALLY — independent of
+        # whether a read credential is present.
+        configs: list[tuple[str, str]] = [("http.followRedirects", "false")]
         if read_credential:
             configs.append(("http.extraHeader", f"Authorization: Bearer {read_credential}"))
         configs.extend(extra_configs)
-        if configs:
-            env["GIT_CONFIG_COUNT"] = str(len(configs))
-            for index, (key, value) in enumerate(configs):
-                env[f"GIT_CONFIG_KEY_{index}"] = key
-                env[f"GIT_CONFIG_VALUE_{index}"] = value
+        env["GIT_CONFIG_COUNT"] = str(len(configs))
+        for index, (key, value) in enumerate(configs):
+            env[f"GIT_CONFIG_KEY_{index}"] = key
+            env[f"GIT_CONFIG_VALUE_{index}"] = value
         return env
 
     async def _run(self, env: dict, *args: str) -> str:

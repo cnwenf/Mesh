@@ -127,6 +127,10 @@ def validate_model_config(config: dict) -> None:
         _check("model", "invalid_type")
     if (advanced := config.get("advanced")) is not None and not isinstance(advanced, dict):
         _check("advanced", "invalid_type")
+    if (budget := config.get("budget")) is not None and not isinstance(budget, dict):
+        _check("budget", "invalid_type")
+    if (netpol := config.get("network_policy")) is not None and not isinstance(netpol, dict):
+        _check("network_policy", "invalid_type")
     if problems:
         raise BusinessRuleError(
             "model_config failed validation",

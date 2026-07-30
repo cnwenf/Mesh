@@ -20,9 +20,8 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.api.deps import get_session
-from mesh.auth.deps import get_current_user
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal
 from mesh.auth.rbac import WorkspaceContext, require_workspace, resolve_workspace_context
-from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
 from mesh.labels.schemas import (
     CreateCustomFieldRequest,
@@ -61,11 +60,13 @@ def _client_meta(request: Request) -> dict:
     }
 
 
-async def _rate_limit_write(request: Request, user: User, response: Response) -> None:
+async def _rate_limit_write(
+    request: Request, principal: AuthenticatedPrincipal, response: Response
+) -> None:
     limiter = request.app.state.rate_limiter
     client_ip = request.client.host if request.client is not None else "unknown"
     remaining, reset_in = await limiter.check(
-        f"labels-write:{user.id}:{client_ip}",
+        f"labels-write:{principal.user_id or principal.member_id}:{client_ip}",
         limit=WRITE_LIMIT,
         window_seconds=WRITE_WINDOW_SECONDS,
     )
@@ -98,7 +99,7 @@ def _tri(value, present: bool):
 
 async def _context_for(
     request: Request,
-    user: User,
+    principal: AuthenticatedPrincipal,
     session: AsyncSession,
     workspace_id: uuid.UUID,
     *,
@@ -115,7 +116,7 @@ async def _context_for(
     """
     try:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=None
+            session, principal=principal, workspace_id=workspace_id, permission=None
         )
     except NotFoundError as exc:
         raise NotFoundError(not_found_message) from exc
@@ -132,7 +133,7 @@ async def list_labels(
     project_id: str | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     items, next_cursor = await _label_service(request).list_labels(
@@ -150,10 +151,10 @@ async def create_label(
     body: CreateLabelRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     created = await _label_service(request).create_label(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -173,17 +174,17 @@ async def update_label(
     response: Response,
     label_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(label_id, message=_LABEL_NOT_FOUND)
     service = _label_service(request)
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = LabelPatch(
@@ -207,17 +208,17 @@ async def delete_label(
     request: Request,
     response: Response,
     label_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(label_id, message=_LABEL_NOT_FOUND)
     service = _label_service(request)
     workspace_id = await service.resolve_label_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_LABEL_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_LABEL_NOT_FOUND
     )
     data = await service.delete_label(
         actor=context.member,
@@ -240,7 +241,7 @@ async def list_custom_fields(
     is_active: bool | None = Query(default=None),
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
     items, next_cursor = await _label_service(request).list_field_defs(
@@ -259,10 +260,10 @@ async def create_custom_field(
     body: CreateCustomFieldRequest,
     request: Request,
     response: Response,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     context: WorkspaceContext = Depends(require_workspace()),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     created = await _label_service(request).create_field_def(
         actor=context.member,
         workspace_id=context.workspace.id,
@@ -288,17 +289,17 @@ async def update_custom_field(
     response: Response,
     field_def_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
     service = _label_service(request)
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = FieldDefPatch(
@@ -326,17 +327,17 @@ async def delete_custom_field(
     request: Request,
     response: Response,
     field_def_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
     service = _label_service(request)
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     data = await service.delete_field_def(
         actor=context.member,
@@ -358,7 +359,7 @@ async def list_options(
     field_def_id: str,
     limit: int | None = Query(default=None),
     cursor: str | None = Query(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     parsed = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
@@ -367,7 +368,7 @@ async def list_options(
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     items, next_cursor = await service.list_options(
         viewer=context.member,
@@ -385,17 +386,17 @@ async def create_option(
     request: Request,
     response: Response,
     field_def_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
     service = _label_service(request)
     workspace_id = await service.resolve_field_def_workspace(parsed)
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     data = await service.create_option(
         actor=context.member,
@@ -417,10 +418,10 @@ async def update_option(
     field_def_id: str,
     option_id: str,
     if_match: str | None = Header(default=None),
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed_field = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
     parsed_option = _path_uuid(option_id, message=_OPTION_NOT_FOUND)
     service = _label_service(request)
@@ -428,7 +429,7 @@ async def update_option(
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     fields = body.model_fields_set
     patch = OptionPatch(
@@ -455,10 +456,10 @@ async def delete_option(
     response: Response,
     field_def_id: str,
     option_id: str,
-    user: User = Depends(get_current_user),
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    await _rate_limit_write(request, user, response)
+    await _rate_limit_write(request, principal, response)
     parsed_field = _path_uuid(field_def_id, message=_FIELD_DEF_NOT_FOUND)
     parsed_option = _path_uuid(option_id, message=_OPTION_NOT_FOUND)
     service = _label_service(request)
@@ -466,7 +467,7 @@ async def delete_option(
     if workspace_id is None:
         raise NotFoundError(_FIELD_DEF_NOT_FOUND)
     context = await _context_for(
-        request, user, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
+        request, principal, session, workspace_id, not_found_message=_FIELD_DEF_NOT_FOUND
     )
     data = await service.delete_option(
         actor=context.member,
