@@ -226,7 +226,7 @@ Mesh 由 **23 个功能模块**组成,分五层(MES-76 L1:计数与 §5 索引�
 | 20 | [i18n.md](features/i18n.md) | 平台能力 | locale 协商、字符串外部化、本地化渲染、时区化展示(存储 UTC) |
 | 21 | [search-command-palette.md](features/search-command-palette.md) | 平台能力 | 命令面板跨模块搜索(服务端权限过滤)、规范深链、power-user 快捷键四组 + `?` 上下文帮助层 + 输入框豁免 |
 | 22 | [cli.md](features/cli.md) | 平台能力 | `mesh` CLI 命令族(REST 瘦客户端)、PAT/设备码鉴权、日志 SSE 流式、导入导出联动、退出码契约、OpenAPI 3.1 |
-| 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令 |
+| 23 | [theme.md](features/theme.md) | 平台能力 | 三态主题与偏好协商链、语义 token + 暗色整组替换、WCAG AA 自证与 CI 门禁、组件硬编码色值禁令；视觉/排版/布局/交互的完成品规范见配套 [frontend-experience.md](features/frontend-experience.md) |
 
 runtime 的 Server 协议与数据模型以
 [runtime.md](features/runtime.md) 为唯一权威；本地执行进程的组件边界、CLI
@@ -554,6 +554,10 @@ CREATE UNIQUE INDEX uq_approvals_pending_task
 配置/技能/能力授权在运行期间变更**不影响在途执行**,只对后续入队生效。
 
 ### 6.12 设计系统与体验基线(唯一权威,B1/B3 硬约束)
+
+视觉、排版、布局、交互、响应式与逐页质量门禁的执行细则见
+[frontend-experience.md](features/frontend-experience.md)；颜色与主题契约见
+[theme.md](features/theme.md)。两者不得改写本节的全局权威契约。
 
 **全局信息架构(导航 / 面包屑 / 角色可见性矩阵)**:
 
