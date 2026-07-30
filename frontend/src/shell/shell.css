@@ -62,10 +62,27 @@
 }
 
 .mesh-topbar__brand {
+  /* §4.2 品牌链接:返回首页,保持品牌视觉,无下划线 */
   font-size: var(--font-size-lg);
   font-weight: 700;
   letter-spacing: 0.02em;
   color: var(--color-primary);
+  text-decoration: none;
+}
+
+.mesh-topbar__brand:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* 稳定连接态仅呈现状态点(§4.2):命中区经 tooltip 锚点扩大 */
+.mesh-topbar__conn .mesh-status {
+  display: inline-flex;
+  align-items: center;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+  justify-content: center;
 }
 
 .mesh-topbar__search {

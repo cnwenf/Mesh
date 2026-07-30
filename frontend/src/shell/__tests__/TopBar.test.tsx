@@ -1,5 +1,5 @@
 /**
- * TopBar — 品牌/搜索/连接状态点(文本始终在场)/命令面板与帮助入口回调。
+ * TopBar — 品牌链接(§4.2 返回首页)/搜索/连接状态(稳定态仅点 + tooltip,进行/异常态显文本)/入口回调。
  */
 import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,18 +17,36 @@ const LABELS: Record<ConnectionState, string> = {
 };
 
 describe('TopBar', () => {
-  it('渲染品牌与全局搜索框', () => {
+  it('渲染品牌链接(§4.2 返回首页)与全局搜索框', () => {
     renderWithProviders(<TopBar state="idle" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />);
-    expect(screen.getByText('Mesh')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/');
     expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
   });
 
-  it.each(Object.entries(LABELS))('连接状态 %s 的文本标签始终呈现', (state, label) => {
-    renderWithProviders(
-      <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
-    );
-    expect(screen.getByTestId('conn-status').textContent).toContain(label);
-  });
+  it.each(['connecting', 'reconnecting', 'resyncing', 'offline'])(
+    '进行/异常态 %s 显式呈现文本标签(§4.2)',
+    (state) => {
+      renderWithProviders(
+        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
+      );
+      expect(screen.getByTestId('conn-status').textContent).toContain(LABELS[state as ConnectionState]);
+    },
+  );
+
+  it.each(['connected', 'idle'])(
+    '稳定态 %s 仅呈现状态点 + tooltip 可读名,不显文本(§4.2 减常态噪音)',
+    (state) => {
+      renderWithProviders(
+        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
+      );
+      // 稳定态不渲染常驻可见文本标签(StatusDot 的 .mesh-status__label),
+      // 可读名由 tooltip 承载(role=img + aria-label 供读屏,颜色非唯一信号)。
+      const conn = screen.getByTestId('conn-status');
+      expect(conn.querySelector('.mesh-status__label')).toBeNull();
+      expect(screen.getByRole('img', { name: LABELS[state as ConnectionState] })).toBeInTheDocument();
+      expect(screen.getByRole('tooltip')).toHaveTextContent(LABELS[state as ConnectionState]);
+    },
+  );
 
   it('命令面板与帮助按钮触发对应回调', () => {
     const onOpenPalette = vi.fn();
