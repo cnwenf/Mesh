@@ -260,6 +260,40 @@ class TestFailClosed:
 
 
 class TestConcurrentRollback:
+    @staticmethod
+    async def _race_once(manager, root: Path):
+        """One concurrent-provision race: A's handshake failure is injected
+        only AFTER B's handshake has begun (B's proc is spawned and parked in
+        B's own ``created[]`` slot by then), so the overlap is deterministic.
+        Returns the two provision results."""
+        import asyncio
+
+        spec_a = make_spec(
+            root / "a", attempt_id="attempt-a-concurrent", argv=("/bin/sleep", "2")
+        )
+        spec_b = make_spec(
+            root / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
+        )
+        real_handshake = manager._handshake
+        b_handshake_started = asyncio.Event()
+
+        async def flaky_handshake(spec, **kw):
+            if spec.attempt_id == "attempt-a-concurrent":
+                await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
+                raise SandboxUnavailableError("injected handshake failure")
+            b_handshake_started.set()
+            return await real_handshake(spec, **kw)
+
+        manager._handshake = flaky_handshake
+        try:
+            return await asyncio.gather(
+                manager.provision(spec_a),
+                manager.provision(spec_b),
+                return_exceptions=True,
+            )
+        finally:
+            manager._handshake = real_handshake
+
     async def test_failed_attempt_rollback_kills_only_its_own_sandbox(
         self, manager, tmp_path
     ):
@@ -276,43 +310,15 @@ class TestConcurrentRollback:
         ``nsenter: cannot open /proc/...`` / dead-proc asserts). Such timeout
         attempts are retried so the assertions measure exactly the race under
         test; any OTHER failure mode fails immediately."""
-        import asyncio
-
         last_env_failure: object = None
-        for _ in range(5):
-            spec_a = make_spec(
-                tmp_path / "a", attempt_id="attempt-a-concurrent", argv=("/bin/sleep", "2")
-            )
-            spec_b = make_spec(
-                tmp_path / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
-            )
-            real_handshake = manager._handshake
-            # Deterministic overlap: A's injected failure fires only AFTER B's
-            # handshake has begun (B's proc is spawned and parked in B's own
-            # created[] slot by then) — a fixed sleep would make the pre-fix
-            # regression flaky under load.
-            b_handshake_started = asyncio.Event()
-
-            async def flaky_handshake(spec, **kw):
-                if spec.attempt_id == "attempt-a-concurrent":
-                    await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
-                    raise SandboxUnavailableError("injected handshake failure")
-                b_handshake_started.set()
-                return await real_handshake(spec, **kw)
-
-            manager._handshake = flaky_handshake
-            results = await asyncio.gather(
-                manager.provision(spec_a),
-                manager.provision(spec_b),
-                return_exceptions=True,
-            )
+        for attempt in range(5):
+            results = await self._race_once(manager, tmp_path / f"run{attempt}")
             handle_b = results[1]
             if (
                 isinstance(handle_b, SandboxUnavailableError)
                 and "handshake timeout" in str(handle_b)
             ):
                 last_env_failure = handle_b
-                manager._handshake = real_handshake
                 continue  # host load starvation — not the race under test
             assert isinstance(results[0], SandboxUnavailableError)
             assert not isinstance(handle_b, BaseException)
