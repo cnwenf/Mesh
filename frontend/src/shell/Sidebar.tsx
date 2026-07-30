@@ -52,7 +52,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     );
     // 折叠态:图标按钮语义经 Tooltip 补齐可读名(§7.1)
     return collapsed ? (
-      <Tooltip label={t('nav.' + item.key)}>{link}</Tooltip>
+      <Tooltip content={t('nav.' + item.key)}>{link}</Tooltip>
     ) : (
       link
     );
@@ -77,7 +77,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             {group.key === 'admin' && showWorkspaceSettings && workspace !== null ? (
               <li className="mesh-sidebar__item">
                 {collapsed ? (
-                  <Tooltip label={t('nav.workspaceSettings')}>
+                  <Tooltip content={t('nav.workspaceSettings')}>
                     <NavLink
                       to={`/w/${workspace.slug}/settings`}
                       data-testid="nav-workspace-settings"
@@ -103,7 +103,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         </section>
       ))}
       <div className="mesh-sidebar__footer">
-        <Tooltip label={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}>
+        <Tooltip content={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}>
           <button
             type="button"
             className="mesh-sidebar__toggle"

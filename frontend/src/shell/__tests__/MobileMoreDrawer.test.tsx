@@ -59,7 +59,7 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
   it('关闭按钮触发 onClose(鼠标/触控等价路径)', () => {
     const onClose = vi.fn();
     renderDrawer(true, onClose);
-    fireEvent.click(screen.getByTestId('mobile-drawer-close'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -73,7 +73,7 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
   it('Tab 在抽屉内循环(末项 Tab → 首项;首项 Shift+Tab → 末项)', async () => {
     renderDrawer();
     const dialog = screen.getByRole('dialog');
-    const close = screen.getByTestId('mobile-drawer-close');
+    const close = screen.getByRole('button', { name: 'Close navigation menu' });
     const lastLink = screen.getByTestId('mobile-drawer-nav-settings');
     // 末项 Tab → 回首项(关闭按钮为面板首个可聚焦元素)
     lastLink.focus();

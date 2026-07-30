@@ -78,7 +78,7 @@ export function SortConfigPanel(props: SortConfigPanelProps): React.JSX.Element 
             ↓
           </Button>
           <Button variant="secondary" onClick={() => removeAt(index)} aria-label={t('board.sortRemove')}>
-            <Icon name="x" size={16} />
+            <Icon name="close" size={16} />
           </Button>
         </div>
       ))}

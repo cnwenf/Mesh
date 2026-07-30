@@ -18,7 +18,8 @@ import { DataTable } from './components/DataTable';
 import type { DataTableColumn, DataTableSortState } from './components/DataTable';
 import { EmptyState } from './components/EmptyState';
 import { ErrorState } from './components/ErrorState';
-import { Icon, ICON_NAMES } from './components/icons';
+import { Icon, ICON_PATHS } from './components/Icon';
+import type { IconName } from './components/Icon';
 import { IconButton } from './components/IconButton';
 import { Input } from './components/Input';
 import { Kbd } from './components/Kbd';
@@ -29,7 +30,7 @@ import { Select } from './components/Select';
 import { Skeleton } from './components/Skeleton';
 import { StatusDot } from './components/StatusDot';
 import { Switch } from './components/Switch';
-import { Tabs, TabsList, TabsPanel, TabsTrigger } from './components/Tabs';
+import { Tabs } from './components/Tabs';
 import { Textarea } from './components/Textarea';
 import { Toolbar } from './components/Toolbar';
 import { Tooltip } from './components/Tooltip';
@@ -58,6 +59,8 @@ const TABLE_COLUMNS: ReadonlyArray<DataTableColumn<FixtureRow>> = [
 
 /** fixture 用无副作用回调(禁用控件/纯演示项的占位回调,集中一处便于覆盖) */
 const noop = (): void => undefined;
+
+const ICON_NAMES: ReadonlyArray<IconName> = Object.keys(ICON_PATHS) as ReadonlyArray<IconName>;
 
 function Section(props: { title: string; children: React.ReactNode }): React.JSX.Element {
   return (
@@ -102,7 +105,7 @@ export function StyleguidePage(): React.JSX.Element {
           <Button variant="secondary" size="lg">
             大 44
           </Button>
-          <Tooltip label="删除此项">
+          <Tooltip content="删除此项">
             <IconButton label="删除">
               <Icon name="trash" size={20} />
             </IconButton>
@@ -110,10 +113,9 @@ export function StyleguidePage(): React.JSX.Element {
           <Menu
             trigger={<Icon name="more-horizontal" size={20} />}
             triggerLabel="行操作"
-            label="示例行操作"
-            items={[
-              { id: 'edit', label: '编辑', icon: <Icon name="edit" size={16} />, onSelect: () => undefined },
-              { id: 'del', label: '删除', icon: <Icon name="trash" size={16} />, danger: true, onSelect: noop },
+            entries={[
+              { key: 'edit', label: '编辑', icon: 'edit', onSelect: noop },
+              { key: 'del', label: '删除', icon: 'trash', danger: true, onSelect: noop },
             ]}
           />
           <Popover trigger={<Icon name="filter" size={20} />} triggerLabel="筛选" label="筛选面板">
@@ -136,7 +138,7 @@ export function StyleguidePage(): React.JSX.Element {
       <Section title="表单">
         <div className="styleguide__form-grid">
           <Input label="标题" placeholder="输入工作项标题" hint="失焦后校验格式" />
-          <Input label="邮箱" type="email" size="lg" defaultValue="mesh@example.com" error="邮箱格式不正确" />
+          <Input label="邮箱" type="email" defaultValue="mesh@example.com" error="邮箱格式不正确" />
           <Select label="状态" defaultValue="todo">
             <option value="todo">待办</option>
             <option value="doing">进行中</option>
@@ -152,12 +154,12 @@ export function StyleguidePage(): React.JSX.Element {
 
       <Section title="徽标与头像">
         <div className="styleguide__row">
-          <Badge tone="success" label="成功" />
-          <Badge tone="warn" label="注意" />
-          <Badge tone="danger" label="失败" />
-          <Badge tone="info" label="同步中" />
-          <Badge tone="neutral" label="草稿" />
-          <Badge tone="accent" icon={<Icon name="sparkles" size={16} />} label="AI 运行中" />
+          <Badge tone="success">成功</Badge>
+          <Badge tone="warning">注意</Badge>
+          <Badge tone="danger">失败</Badge>
+          <Badge tone="info">同步中</Badge>
+          <Badge tone="neutral">草稿</Badge>
+          <Badge tone="accent">AI 运行中</Badge>
         </div>
         <div className="styleguide__row">
           <Avatar name="林一" size={20} />
@@ -175,16 +177,15 @@ export function StyleguidePage(): React.JSX.Element {
       </Section>
 
       <Section title="标签页">
-        <Tabs defaultValue="overview">
-          <TabsList label="详情分区">
-            <TabsTrigger value="overview">概览</TabsTrigger>
-            <TabsTrigger value="activity">动态</TabsTrigger>
-            <TabsTrigger value="settings">设置</TabsTrigger>
-          </TabsList>
-          <TabsPanel value="overview">概览内容:对象摘要与关键指标。</TabsPanel>
-          <TabsPanel value="activity">动态内容:活动时间线。</TabsPanel>
-          <TabsPanel value="settings">设置内容:二级配置。</TabsPanel>
-        </Tabs>
+        <Tabs
+          label="详情分区"
+          defaultValue="overview"
+          items={[
+            { value: 'overview', label: '概览', content: '概览内容:对象摘要与关键指标。' },
+            { value: 'activity', label: '动态', content: '动态内容:活动时间线。' },
+            { value: 'settings', label: '设置', content: '设置内容:二级配置。' },
+          ]}
+        />
       </Section>
 
       <Section title="反馈与状态">
@@ -207,16 +208,24 @@ export function StyleguidePage(): React.JSX.Element {
             onRetry={noop}
             retryLabel="重试"
             diagnosticId="diag-0001"
-            copyLabel="复制诊断编号"
           />
         </div>
       </Section>
 
       <Section title="页头 / 工具条 / 表格">
-        {/* DataView 模板演示:页头级标题在本 fixture 内降为 h3(全页唯一 h1 在页首,§1.2) */}
-        <div className="styleguide__stack">
-          <h3 className="mesh-text--title-2">工作项</h3>
-        </div>
+        {/* DataView 页头演示:fixture 内全页唯一 h1 在页首(§1.2),此处降级为 title-2 展示 */}
+        <header className="mesh-page-header">
+          <div className="mesh-page-header__main">
+            <div className="mesh-page-header__eyebrow">
+              <span>项目 / Mesh 前端</span>
+            </div>
+            <p className="mesh-text-title-2 styleguide__demo-title">工作项</p>
+            <p className="mesh-page-header__description">DataView 模板:页头 + 工具条 + 表格。</p>
+          </div>
+          <div className="mesh-page-header__actions">
+            <Button variant="primary">新建</Button>
+          </div>
+        </header>
         <Toolbar label="视图与筛选">
           <Button variant="ghost" size="sm">
             筛选
@@ -240,17 +249,17 @@ export function StyleguidePage(): React.JSX.Element {
 
       <Section title="排版">
         <div className="styleguide__stack">
-          <p className="mesh-text--display-lg">展示标题 Display LG 36/44</p>
-          <p className="mesh-text--display-sm">展示标题 Display SM 30/38</p>
-          <p className="mesh-text--title-1">页面标题 Title 1 24/32</p>
-          <p className="mesh-text--title-2">对象标题 Title 2 20/28</p>
-          <p className="mesh-text--title-3">分区标题 Title 3 18/26</p>
-          <p className="mesh-text--body-lg">长文本 Body LG 16/26:中文与 English、数字 123 混排示例。</p>
-          <p className="mesh-text--body">正文 Body 14/22:默认 UI 正文层级。</p>
-          <p className="mesh-text--body-strong">行标题 Body Strong 14/22</p>
-          <p className="mesh-text--body-sm">辅助信息 Body SM 13/20</p>
-          <p className="mesh-text--caption">元数据 Caption 12/18</p>
-          <p className="mesh-text--micro">状态标签 Micro 11/16</p>
+          <p className="mesh-text-display-lg">展示标题 Display LG 36/44</p>
+          <p className="mesh-text-display-sm">展示标题 Display SM 30/38</p>
+          <p className="mesh-text-title-1">页面标题 Title 1 24/32</p>
+          <p className="mesh-text-title-2">对象标题 Title 2 20/28</p>
+          <p className="mesh-text-title-3">分区标题 Title 3 18/26</p>
+          <p className="mesh-text-body-lg">长文本 Body LG 16/26:中文与 English、数字 123 混排示例。</p>
+          <p className="mesh-text-body">正文 Body 14/22:默认 UI 正文层级。</p>
+          <p className="mesh-text-body-strong">行标题 Body Strong 14/22</p>
+          <p className="mesh-text-body-sm">辅助信息 Body SM 13/20</p>
+          <p className="mesh-text-caption">元数据 Caption 12/18</p>
+          <p className="mesh-text-micro">状态标签 Micro 11/16</p>
           <p className="styleguide__mono">等宽 Mono:commit a1b2c3d、MES-123、0123456789</p>
         </div>
       </Section>

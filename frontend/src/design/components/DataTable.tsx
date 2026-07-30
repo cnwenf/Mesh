@@ -11,7 +11,7 @@
  *   本组件只保证表格自身不破版。无硬编码文案。
  */
 import type { ReactNode } from 'react';
-import { Icon } from './icons';
+import { Icon } from './Icon';
 import './components.css';
 
 export interface DataTableColumn<T> {

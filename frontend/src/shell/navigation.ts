@@ -62,8 +62,8 @@ export const NAV_GROUPS: ReadonlyArray<NavGroupDef> = [
   {
     key: 'team',
     items: [
-      { key: 'members', to: '/members', icon: 'users' },
-      { key: 'skills', to: '/skills', icon: 'sparkles' },
+      { key: 'members', to: '/members', icon: 'user' },
+      { key: 'skills', to: '/skills', icon: 'sparkle' },
       { key: 'squads', to: '/squads', icon: 'bot' },
       { key: 'chat', to: '/chat', icon: 'chat' },
     ],

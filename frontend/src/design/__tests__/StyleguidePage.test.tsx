@@ -30,6 +30,7 @@ describe('StyleguidePage(组件状态 fixture)', () => {
     expect(screen.getByText('还没有收件')).toBeInTheDocument();
     expect(screen.getByText('加载失败')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
+    expect(screen.getByText('diag-0001')).toBeInTheDocument();
   });
 
   it('表格排序可交互(点击表头上抛并翻转方向)', async () => {
@@ -51,6 +52,7 @@ describe('StyleguidePage(组件状态 fixture)', () => {
     await user.click(switchControl);
     expect(switchControl).toHaveAttribute('aria-checked', 'false');
   });
+
   it('浮层与反馈交互生效(Menu/Popover 开合、重试、半选切换)', async () => {
     const user = userEvent.setup();
     renderWithProviders(<StyleguidePage />);

@@ -119,7 +119,7 @@ export function AgentSkillsTab({
                       className="mesh-skills__source-flag"
                       title={t(`skills.source.${row.skill.source_type}`)}
                     >
-                      <Icon name="alert-triangle" size={16} />
+                      <Icon name="warning" size={16} />
                     </span>
                   ) : null}
                   {row.skill.name}

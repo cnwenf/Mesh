@@ -98,6 +98,7 @@ export const ICON_PATHS: Readonly<Record<string, ReadonlyArray<string>>> = Objec
   play: ['m6 3 14 9-14 9z'],
   list: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
   menu: ['M4 12h16', 'M4 6h16', 'M4 18h16'],
+  upload: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'm17 8-5-5-5 5', 'M12 3v12'],
 });
 
 export type IconName = keyof typeof ICON_PATHS;

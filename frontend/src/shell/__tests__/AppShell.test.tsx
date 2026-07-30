@@ -57,7 +57,7 @@ describe('AppShell', () => {
     expect(screen.getByTestId('mobile-nav-more')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('mobile-nav-more'));
     expect(screen.getByRole('dialog', { name: 'All navigation' })).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('mobile-drawer-close'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close navigation menu' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 

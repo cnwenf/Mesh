@@ -877,7 +877,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
                     disabled={state.actions.length <= 1}
                     aria-label={t('autopilots.editor.removeAction')}
                   >
-                    <Icon name="x" size={16} />
+                    <Icon name="close" size={16} />
                   </Button>
                 </div>
               </div>

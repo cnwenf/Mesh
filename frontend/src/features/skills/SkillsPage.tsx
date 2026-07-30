@@ -204,7 +204,7 @@ export function SkillsPage(): React.JSX.Element {
                   {skill.name}
                   {skill.has_scripts ? (
                     <span className="mesh-skills__script-flag" title={t('skills.hasScripts')}>
-                      <Icon name="alert-triangle" size={16} />
+                      <Icon name="warning" size={16} />
                     </span>
                   ) : null}
                   {skill.install_status === 'updated_available' ? (

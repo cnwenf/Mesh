@@ -216,7 +216,7 @@ function FilterGroupEditor(props: FilterGroupEditorProps): React.JSX.Element {
               onChange={(event) => replaceAt(index, { ...condition, value: event.target.value })}
             />
             <Button variant="secondary" onClick={() => removeAt(index)} aria-label={t('board.filterRemoveCondition')}>
-              <Icon name="x" size={16} />
+              <Icon name="close" size={16} />
             </Button>
           </div>
         ),

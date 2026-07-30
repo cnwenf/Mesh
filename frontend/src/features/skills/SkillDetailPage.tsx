@@ -292,7 +292,7 @@ export function SkillDetailPage(): React.JSX.Element {
         </span>
         {skill.has_scripts ? (
           <span className="mesh-skills__script-flag">
-            <Icon name="alert-triangle" size={16} />
+            <Icon name="warning" size={16} />
             {t('skills.hasScripts')}
           </span>
         ) : null}

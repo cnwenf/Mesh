@@ -7,7 +7,7 @@
 import type { InputHTMLAttributes } from 'react';
 import { forwardRef, useEffect, useId, useRef } from 'react';
 import { useCallback } from 'react';
-import { Icon } from './icons';
+import { Icon } from './Icon';
 import './components.css';
 
 export interface CheckboxProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
