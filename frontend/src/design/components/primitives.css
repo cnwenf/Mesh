@@ -16,6 +16,11 @@
   stroke-linejoin: round;
 }
 
+.mesh-icon--filled {
+  /* 实心强调态(置顶/已选):填充 currentColor,描边保留轮廓 */
+  fill: currentColor;
+}
+
 .mesh-icon--16 {
   inline-size: 16px;
   block-size: 16px;

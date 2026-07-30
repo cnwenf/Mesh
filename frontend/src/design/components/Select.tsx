@@ -6,7 +6,7 @@ import type { ReactNode, SelectHTMLAttributes } from 'react';
 import { forwardRef, useId } from 'react';
 import './components.css';
 
-export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
+export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'size'> {
   /** 可见标签(必填):渲染 <label htmlFor> */
   label: string;
   /** 错误文案插槽 */
