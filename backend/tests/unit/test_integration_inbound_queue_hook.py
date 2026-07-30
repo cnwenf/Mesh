@@ -233,7 +233,7 @@ class TestCommandHook:
         assert "check the logs please" in items[0].message_excerpt
         assert "/btw" not in items[0].message_excerpt
         sends = await _outbox(session_factory, "im.send")
-        assert any("new message" in e.payload.get("text", "") for e in sends)
+        assert any("已按新消息排队" in e.payload.get("text", "") for e in sends)
 
     async def test_mid_message_slash_not_a_command(self, session_factory, redis_client):
         world = await seed_world(session_factory)
