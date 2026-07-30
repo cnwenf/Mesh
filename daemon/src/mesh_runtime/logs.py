@@ -50,6 +50,22 @@ class SubmitResult:
     redacted_hits: int
 
 
+def _line_bytes(line: str) -> int:
+    """Wire bytes occupied by one line. MUST mirror the server's
+    ``backend/src/mesh/runtime/logs.py::_line_bytes`` — UTF-8 bytes PLUS the
+    trailing newline. The daemon's self-computed continuation offsets are
+    compared against the server watermark on the retry path; counting raw
+    ``len(utf8)`` (no newline) drifts them N bytes low (N = line count) and the
+    offset reconciliation then drops already-correct lines (MES-96 P2-1)."""
+    return len(line.encode("utf-8")) + 1
+
+
+def _batch_wire_end(batch: SpooledBatch) -> int:
+    """The exclusive end offset a batch occupies on the wire (§3.9 offset
+    protocol): its start plus every line's wire bytes (newline included)."""
+    return batch.start_offset + sum(_line_bytes(line) for line in batch.lines)
+
+
 class LogUploader:
     def __init__(
         self,
@@ -184,12 +200,18 @@ class LogUploader:
                 # Nothing buffered, but the stream still needs its sealed close.
                 await self._upload_one(ctx, stream, start, [], sealed=True)
                 return
-            last = len(batches) - 1
-            for index, (batch_offset, batch_lines) in enumerate(batches):
+            # The sealed (terminal) marker lands on the LAST batch belonging to
+            # THIS stream — the sibling stream's replayed batches ride along
+            # unsealed so the single cross-stream watermark stays contiguous.
+            last_own = max(
+                (i for i, (batch_stream, _, _) in enumerate(batches) if batch_stream == stream),
+                default=-1,
+            )
+            for index, (batch_stream, batch_offset, batch_lines) in enumerate(batches):
                 try:
                     await self._upload_one(
-                        ctx, stream, batch_offset, batch_lines,
-                        sealed=sealed and index == last,
+                        ctx, batch_stream, batch_offset, batch_lines,
+                        sealed=sealed and index == last_own,
                     )
                 except LeaseConflictError:
                     raise  # fencing — supervisor handles it
@@ -197,38 +219,54 @@ class LogUploader:
                     if self._spool is None:
                         # Re-queue BEFORE propagating so the supervisor's retry
                         # (sealed) or the next flush (mid-stream) re-sends the
-                        # very same lines — nothing is lost on failure.
-                        await self._rebuffer(ctx.attempt_id, stream, batch_lines)
+                        # very same lines — nothing is lost on failure. Rebuffer
+                        # under the batch's OWN stream key.
+                        await self._rebuffer(ctx.attempt_id, batch_stream, batch_lines)
                     # With a spool the batch is already durable on disk and is
                     # replayed by the next collect; no rebuffer needed.
                     if sealed:
                         raise  # terminal flush: supervisor retries, then demotes
                     break  # transient mid-stream failure: retry on the next flush
                 if self._spool is not None:
-                    self._spool.ack(ctx.attempt_id, stream, batch_offset)
+                    self._spool.ack(ctx.attempt_id, batch_stream, batch_offset)
 
     def _collect_batches(
         self, ctx: AttemptContext, stream: str, key: tuple[str, str], start: int
-    ) -> list[tuple[int, list[str]]]:
-        """Return the ``(start_offset, lines)`` batches to upload, in offset
-        order. Must run under ``ctx.lock``.
+    ) -> list[tuple[str, int, list[str]]]:
+        """Return the ``(stream, start_offset, lines)`` batches to upload, in
+        offset order. Must run under ``ctx.lock``.
 
-        Still-spooled batches (a previous upload failed transiently) are
-        replayed FIRST, then any in-memory buffer lines are collected as a
-        continuation batch starting right after the last spooled byte — so a
-        sealed (terminal) flush uploads the spooled batch AND the sparse tail
-        and lands ``sealed`` on the TRUE last batch (§3.9.2/§3.9.3). New
-        buffer lines are made durable in the spool before upload as well, so
-        offsets stay monotonic and replay stays idempotent."""
-        batches: list[tuple[int, list[str]]] = []
+        This stream's own still-spooled batches (a previous upload failed
+        transiently) are ALWAYS replayed first. When this flush ALSO carries new
+        buffered lines, the SIBLING stream's un-acked spooled batches are folded
+        in too, ascending by offset, so they upload BEFORE the new batch — the
+        offset is a single cumulative watermark ACROSS both streams, and a new
+        batch may never start inside a range the sibling's un-acked batch
+        already occupies. ``next_offset`` is the max wire end over every
+        replayed batch of either stream, so the continuation batch starts right
+        after the last spooled WIRE byte and the watermark stays monotonic
+        (MES-96 P2-1; §3.9.2/§3.9.3). New buffer lines are made durable in the
+        spool before upload as well, so offsets stay monotonic and replay stays
+        idempotent."""
+        batches: list[tuple[str, int, list[str]]] = []
         next_offset = start
-        if self._spool is not None and self._spool.has_pending(ctx.attempt_id, stream):
-            for batch in self._spool.pending(ctx.attempt_id, stream):
-                batches.append((batch.start_offset, list(batch.lines)))
-                next_offset = max(next_offset, batch.start_offset + batch.byte_size)
         lines = self._buffers.pop(key, [])
         self._buffer_bytes.pop(key, None)
         self._first_at.pop(key, None)
+        if self._spool is not None:
+            pending: list[SpooledBatch] = list(self._spool.pending(ctx.attempt_id, stream))
+            if lines:
+                # A new batch is going out: serialize it behind the sibling's
+                # un-acked range too, or the single watermark would overlap.
+                for pending_stream in ("stdout", "stderr"):
+                    if pending_stream != stream and self._spool.has_pending(
+                        ctx.attempt_id, pending_stream
+                    ):
+                        pending.extend(self._spool.pending(ctx.attempt_id, pending_stream))
+            pending.sort(key=lambda batch: batch.start_offset)
+            for batch in pending:
+                batches.append((batch.stream, batch.start_offset, list(batch.lines)))
+                next_offset = max(next_offset, _batch_wire_end(batch))
         if lines:
             if self._spool is not None:
                 try:
@@ -242,7 +280,7 @@ class LogUploader:
                     # supervisor.
                     self._rebuffer_sync(key, lines)
                     raise
-            batches.append((next_offset, lines))
+            batches.append((stream, next_offset, lines))
         return batches
 
     async def _upload_one(
@@ -288,13 +326,15 @@ class LogUploader:
 
 def _lines_after_bytes(lines: list[str], start: int, expected: int) -> list[str]:
     """Drop the prefix already confirmed by the server (``expected`` bytes from
-    ``start``); keep the first not-fully-confirmed line onward."""
+    ``start``); keep the first not-fully-confirmed line onward. Advances by the
+    WIRE bytes per line (newline included) so the prefix boundary lines up with
+    the server watermark, which counts the same way (``_line_bytes``)."""
     if expected <= start:
         return list(lines)
     running = start
     out: list[str] = []
     for line in lines:
-        end = running + len(line.encode("utf-8"))
+        end = running + _line_bytes(line)
         if end <= expected:
             running = end
             continue
