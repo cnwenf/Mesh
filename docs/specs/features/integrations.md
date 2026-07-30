@@ -667,7 +667,7 @@ processing ──execution.finished(status=completed)──► done             
     权威复检(§2.10,并发不可越限)→ ack 主从判定 §3.8)
   → ack 事件(§3.8)→ 审计 integration_events
 ```
-> 管线次序按 MES-88 已发布实现收口(命令平面先于频率护栏;msgtype 门与锁内深度复检保留)——**措辞待 Spec owner 复核**(MES-87 rebase 接缝统一,2026-07-30)。
+> 管线次序按 MES-88 已发布实现收口(命令平面先于频率护栏;msgtype 门与锁内深度复检保留)——**Spec owner 复核通过**(Leader,2026-07-30;MES-87 rebase 接缝统一措辞与发布实现及 Spec 原意一致:命令平面先于频率护栏为 MES-88 发布次序,fail-closed 与锁内深度复检保留)。
 > PR #58 现有 `process_inbound()`(HTTP 定位/验签与匹配/派发揉在一起)在 #58 rebase 到含本 Spec 的 main 时按此边界重构:拆出 HTTP 鉴权适配器 + 抽出 `ingest_verified_event(envelope)` 共享核心,Stream worker 复用同一核心(§3.2 Stream 小节「同一摄取服务函数」即指本函数)。
 
 ### 2.11 台账保留策略(入站事件 / 出向投递)
