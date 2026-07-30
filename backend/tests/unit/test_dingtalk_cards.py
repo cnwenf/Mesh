@@ -353,12 +353,11 @@ def test_action_extraction_malformed():
 # ---------------------------------------------------------------------------
 
 
-async def _adapter_client(transport: ScriptedDingTalkTransport):
-    import redis.asyncio as aioredis
-
+async def _adapter_client(redis_client, transport: ScriptedDingTalkTransport):
+    """Build a DingTalkClient on the ENV-DRIVEN redis fixture (CI parity —
+    never hardcode a redis URL; the test redis port differs per env)."""
     from mesh.integrations.dingtalk_api import DingTalkClient, DingTalkTokenManager
 
-    redis_client = aioredis.from_url("redis://127.0.0.1:6390/3", decode_responses=True)
     manager = DingTalkTokenManager(
         redis_client,
         http_client=make_client(transport),
@@ -370,11 +369,11 @@ async def _adapter_client(transport: ScriptedDingTalkTransport):
     return DingTalkClient(manager, http_client=make_client(transport), robot_code="robot-1")
 
 
-async def test_push_approval_card_wire_format(session_factory):
+async def test_push_approval_card_wire_format(session_factory, redis_client):
     world = await _seed(session_factory)
     approval = await _make_approval(session_factory, world)
     transport = ScriptedDingTalkTransport()
-    client = await _adapter_client(transport)
+    client = await _adapter_client(redis_client, transport)
     outcome = await push_approval_card(
         client,
         approval=approval,
@@ -392,11 +391,11 @@ async def test_push_approval_card_wire_format(session_factory):
     assert body["cardData"]["cardParamMap"]["title"].startswith("Mesh 审批请求")
 
 
-async def test_push_approval_card_direct_space(session_factory):
+async def test_push_approval_card_direct_space(session_factory, redis_client):
     world = await _seed(session_factory)
     approval = await _make_approval(session_factory, world)
     transport = ScriptedDingTalkTransport()
-    client = await _adapter_client(transport)
+    client = await _adapter_client(redis_client, transport)
     outcome = await push_approval_card(
         client,
         approval=approval,
@@ -407,11 +406,11 @@ async def test_push_approval_card_direct_space(session_factory):
     assert sent.body["openSpaceId"] == f"dtv1.card//IM_ROBOT.{STAFF_ID}"
 
 
-async def test_push_approval_card_rejects_action_card_template(session_factory):
+async def test_push_approval_card_rejects_action_card_template(session_factory, redis_client):
     world = await _seed(session_factory)
     approval = await _make_approval(session_factory, world)
     transport = ScriptedDingTalkTransport()
-    client = await _adapter_client(transport)
+    client = await _adapter_client(redis_client, transport)
     with pytest.raises(AssertionError):
         await push_approval_card(
             client, approval=approval, target=_target(world),
@@ -420,11 +419,11 @@ async def test_push_approval_card_rejects_action_card_template(session_factory):
     assert transport.calls_for("/v1.0/card/instances/createAndDeliver") == []
 
 
-async def test_push_approval_card_direct_external_contact_fails(session_factory):
+async def test_push_approval_card_direct_external_contact_fails(session_factory, redis_client):
     world = await _seed(session_factory)
     approval = await _make_approval(session_factory, world)
     transport = ScriptedDingTalkTransport()
-    client = await _adapter_client(transport)
+    client = await _adapter_client(redis_client, transport)
     outcome = await push_approval_card(
         client,
         approval=approval,
@@ -437,9 +436,9 @@ async def test_push_approval_card_direct_external_contact_fails(session_factory)
     assert outcome.reason == "no_staff_id"
 
 
-async def test_update_card_is_idempotent_by_out_track_id(session_factory):
+async def test_update_card_is_idempotent_by_out_track_id(session_factory, redis_client):
     transport = ScriptedDingTalkTransport()
-    client = await _adapter_client(transport)
+    client = await _adapter_client(redis_client, transport)
     approval_id = uuid.uuid4()
     body = {
         "outTrackId": derive_out_track_id(approval_id),
@@ -679,3 +678,37 @@ async def test_relay_card_kind_http_mode_uses_http_callback_type(session_factory
     await relay.run_once()
     (sent,) = transport.calls_for("/v1.0/card/instances/createAndDeliver")
     assert sent.body["callbackType"] == "HTTP"
+
+
+# ---------------------------------------------------------------------------
+# D — handler-level: callback forwarding internal error → §4.4 failed state
+# ---------------------------------------------------------------------------
+
+
+async def test_callback_forwarding_internal_error_failed_card_approval_unchanged(
+    session_factory, monkeypatch
+):
+    """Handler-level (not renderer-level) coverage of the forwarding-failure
+    branch: decide_approval raises a non-Forbidden/NotFound MeshError →
+    500 + 「处理失败」card writeback with the [回 Mesh 处理] deep link,
+    approval state UNCHANGED."""
+    from mesh.errors import BusinessRuleError
+
+    async def _forwarding_boom(*args, **kwargs):
+        raise BusinessRuleError("forwarding exploded", code="approval_forward_failed")
+
+    monkeypatch.setattr(
+        "mesh.integrations.dingtalk_cards.decide_approval", _forwarding_boom
+    )
+    world = await _seed(session_factory)
+    approval = await _make_approval(session_factory, world)
+    await _map_identity(session_factory, world)
+    status, body = await _run_callback(session_factory, world, _card_payload(approval.id))
+    assert status == 500
+    card_params = body["cardData"]["cardParamMap"]
+    assert "处理失败" in card_params["status_text"]
+    assert card_params["buttons_disabled"] == "true"
+    assert card_params["detail_url"].endswith(f"/approvals/{approval.id}")
+    assert card_params["fallback_label"] == "回 Mesh 处理"
+    # the failed writeback must not decide the approval
+    assert await _approval_status(session_factory, approval.id) == "pending"

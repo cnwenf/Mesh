@@ -411,6 +411,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         request_timeout=settings.dingtalk_request_timeout,
         rate_limit_base_seconds=settings.im_rate_limit_base_seconds,
         rate_limit_max_seconds=settings.im_rate_limit_max_seconds,
+        token_busy_backoff_seconds=settings.im_token_busy_backoff_seconds,
         card_pusher=push_card_from_event,
     )
 

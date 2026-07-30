@@ -69,6 +69,7 @@ from mesh.integrations.dingtalk_api import (
     DingTalkRateLimited,
     DingTalkTokenManager,
     InvalidCredentials,
+    TokenRefreshBusy,
 )
 from mesh.runtime.credentials import decrypt_credential_value
 
@@ -273,6 +274,7 @@ SEND_STATUS_FAILED = "failed"
 
 REASON_NO_STAFF_ID = "no_staff_id"
 REASON_RATE_LIMITED = "rate_limited"
+REASON_TOKEN_BUSY = "token_refresh_busy"
 REASON_INVALID_CREDENTIALS = "invalid_credentials"
 REASON_UPSTREAM_ERROR = "upstream_error"
 
@@ -430,6 +432,12 @@ class DingTalkIMAdapter:
             )
         except InvalidCredentials:
             return SendOutcome(SEND_STATUS_FAILED, reason=REASON_INVALID_CREDENTIALS)
+        except TokenRefreshBusy:
+            # §3.10 retryable NON-failure: another replica holds the refresh
+            # lease and the follower wait exhausted. MUST be classified before
+            # the DingTalkError catch-all (TokenRefreshBusy subclasses it) —
+            # the handlers defer available_at without consuming the budget.
+            return SendOutcome(SEND_STATUS_FAILED, reason=REASON_TOKEN_BUSY)
         except DingTalkError:
             return SendOutcome(SEND_STATUS_FAILED, reason=REASON_UPSTREAM_ERROR)
 
@@ -549,6 +557,7 @@ class IMSendRelay:
         request_timeout: float = 10.0,
         rate_limit_base_seconds: float = 2.0,
         rate_limit_max_seconds: float = 60.0,
+        token_busy_backoff_seconds: float = 2.0,
         http_client: httpx.AsyncClient | None = None,
         card_pusher: Callable[..., Awaitable[SendOutcome]] | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -568,6 +577,7 @@ class IMSendRelay:
         self._request_timeout = request_timeout
         self._rate_limit_base_seconds = rate_limit_base_seconds
         self._rate_limit_max_seconds = rate_limit_max_seconds
+        self._token_busy_backoff_seconds = token_busy_backoff_seconds
         self._http_client = http_client
         self._card_pusher = card_pusher
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -843,6 +853,9 @@ class IMSendRelay:
         if outcome.reason == REASON_RATE_LIMITED:
             self._defer_rate_limited(event, payload)
             return
+        if outcome.reason == REASON_TOKEN_BUSY:
+            await self._defer_token_busy(session, event, payload)
+            return
         if outcome.reason in (REASON_INVALID_CREDENTIALS, REASON_NO_STAFF_ID):
             await self._fail_delivery(session, payload, reason=outcome.reason)
             self._mark_published(event)
@@ -882,6 +895,9 @@ class IMSendRelay:
             return
         if outcome.reason == REASON_RATE_LIMITED:
             self._defer_rate_limited(event, payload)
+            return
+        if outcome.reason == REASON_TOKEN_BUSY:
+            await self._defer_token_busy(session, event, payload)
             return
         if outcome.reason in (
             REASON_INVALID_CREDENTIALS,
@@ -940,6 +956,35 @@ class IMSendRelay:
         event.available_at = self._clock() + timedelta(seconds=delay)
         # event stays pending; delivery_attempts untouched
 
+    async def _defer_token_busy(
+        self, session: AsyncSession, event: OutboxEvent, payload: dict[str, Any]
+    ) -> None:
+        """§3.10 ``token_refresh_busy`` — retryable NON-failure (written in
+        stone): only move ``available_at`` forward by a short fixed backoff
+        (anti-hot-loop), NEVER consume the failure budget, NEVER reach a
+        terminal state. The busy attempt is recorded on the delivery
+        ledger; the event stays pending until the backoff expires."""
+        event.available_at = self._clock() + timedelta(
+            seconds=self._token_busy_backoff_seconds
+        )
+        await self._record_busy_in_delivery(session, payload)
+        logger.info(
+            "im.send deferred: token refresh busy (budget untouched) event=%s",
+            event.id,
+        )
+
+    async def _record_busy_in_delivery(
+        self, session: AsyncSession, payload: dict[str, Any]
+    ) -> None:
+        """Ledger trace of a busy attempt (台账记一次 busy 尝试, §3.10)."""
+        delivery_id = _uuid_or_none(payload.get("delivery_id"))
+        if delivery_id is None:
+            return
+        delivery = await session.get(NotificationDelivery, delivery_id)
+        if delivery is not None and delivery.state == "pending":
+            delivery.error = REASON_TOKEN_BUSY
+            await session.flush()
+
     async def _record_chunk_progress(self, session: AsyncSession, payload: dict[str, Any]) -> None:
         delivery_id = _uuid_or_none(payload.get("delivery_id"))
         if delivery_id is None:
@@ -958,6 +1003,7 @@ class IMSendRelay:
         if sent_chunks >= chunks_total:
             delivery.state = "sent"
             delivery.sent_at = self._clock()
+            delivery.error = None  # clear any transient busy trace
         await session.flush()
 
     async def _mark_delivery_sent(self, session: AsyncSession, payload: dict[str, Any]) -> None:
@@ -968,6 +1014,7 @@ class IMSendRelay:
         if delivery is not None and delivery.state == "pending":
             delivery.state = "sent"
             delivery.sent_at = self._clock()
+            delivery.error = None  # clear any transient busy trace
             await session.flush()
 
     async def _fail_delivery(
@@ -1256,6 +1303,7 @@ __all__ = [
     "REASON_INVALID_CREDENTIALS",
     "REASON_NO_STAFF_ID",
     "REASON_RATE_LIMITED",
+    "REASON_TOKEN_BUSY",
     "REASON_UPSTREAM_ERROR",
     "SEND_STATUS_FAILED",
     "SEND_STATUS_SENT",

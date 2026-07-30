@@ -47,11 +47,13 @@ from mesh.integrations.dingtalk_api import (
     DingTalkError,
     DingTalkRateLimited,
     InvalidCredentials,
+    TokenRefreshBusy,
 )
 from mesh.integrations.im_outbound import (
     CONVERSATION_DIRECT,
     REASON_INVALID_CREDENTIALS,
     REASON_RATE_LIMITED,
+    REASON_TOKEN_BUSY,
     REASON_UPSTREAM_ERROR,
     SEND_STATUS_FAILED,
     SEND_STATUS_SENT,
@@ -374,6 +376,11 @@ async def push_approval_card(
         )
     except InvalidCredentials:
         return SendOutcome(SEND_STATUS_FAILED, reason=REASON_INVALID_CREDENTIALS)
+    except TokenRefreshBusy:
+        # §3.10 retryable NON-failure — classify before the DingTalkError
+        # catch-all (TokenRefreshBusy subclasses it); the relay defers
+        # available_at without consuming the failure budget.
+        return SendOutcome(SEND_STATUS_FAILED, reason=REASON_TOKEN_BUSY)
     except DingTalkError:
         return SendOutcome(SEND_STATUS_FAILED, reason=REASON_UPSTREAM_ERROR)
 

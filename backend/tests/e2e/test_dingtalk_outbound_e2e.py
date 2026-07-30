@@ -705,3 +705,104 @@ async def _seed_world_db(session_factory, *, suffix: str) -> dict:
         "integration_id": str(ids["integration"]),
         "binding_id": binding.id,
     }
+
+
+# ---------------------------------------------------------------------------
+# §5.6 / §3.10 — token_refresh_busy is NEVER terminal, never consumes budget
+# ---------------------------------------------------------------------------
+
+
+async def test_e2e_token_busy_never_terminal(
+    dt_worker, fake_dingtalk, session_factory, redis_client
+):
+    """A foreign replica holds the refresh lease while the worker delivers:
+    the event must stay PENDING with delivery_attempts == 0 (busy defers
+    ``available_at`` only — never terminal, never budget); after the lease
+    is released and the backoff expires, the same event succeeds."""
+    _base_url, state = fake_dingtalk
+    world = await _seed_world_db(session_factory, suffix="busy")
+    async with session_factory() as session, session.begin():
+        notification = Notification(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            recipient_id=uuid.UUID(world["member_id"]),
+            type="execution_finished",
+            priority="normal",
+        )
+        session.add(notification)
+        await session.flush()
+        delivery = NotificationDelivery(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            notification_id=notification.id,
+            channel="im",
+            provider="dingtalk",
+            destination_key=f"dingtalk:{world['binding_id']}:{CONV_REF}",
+            integration_id=uuid.UUID(world["integration_id"]),
+            binding_id=world["binding_id"],
+            external_target=json.dumps({"chunks_total": 1, "sent_chunks": 0}),
+            state="pending",
+        )
+        session.add(delivery)
+        await session.flush()
+        notification_id, delivery_id = notification.id, delivery.id
+    # Hold the refresh lease BEFORE the event exists — the worker can never
+    # acquire it until the test releases (deterministic busy window).
+    lock_key = f"dingtalk:token_lock:{world['integration_id']}"
+    await redis_client.set(lock_key, "e2e-foreign-owner", nx=True, ex=30)
+    async with session_factory() as session, session.begin():
+        await emit_event(
+            session,
+            workspace_id=uuid.UUID(world["ws_id"]),
+            event_type=IM_SEND_EVENT_TYPE,
+            payload={
+                "kind": "notification",
+                "workspace_id": world["ws_id"],
+                "integration_id": world["integration_id"],
+                "binding_id": str(world["binding_id"]),
+                "conversation_key": CONV_KEY,
+                "conversation_type": "group",
+                "chunk_index": 0,
+                "chunks_total": 1,
+                "text": "busy 窗口内不终态",
+                "delivery_id": str(delivery_id),
+            },
+            idempotency_key=chunk_idempotency_key(notification_id, 0),
+        )
+    # Worker pass 1: ~12s follower wait → retry still blocked (lock held
+    # ~13s) → busy → available_at deferred ~2s, attempts untouched.
+    await asyncio.sleep(13.2)
+    from mesh.db.models.outbox import OutboxEvent
+
+    async with session_factory() as session:
+        event = (
+            await session.execute(
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+            )
+        ).scalar_one()
+        assert event.status == "pending", "busy must keep the event pending"
+        assert event.delivery_attempts == 0, "busy must not consume the budget"
+        assert event.available_at is not None
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.state == "pending"
+        assert row.error == "token_refresh_busy"  # ledger records the busy try
+    assert state.group_sends() == []  # nothing delivered during the busy window
+
+    # Release the lease; after the short backoff the worker succeeds.
+    await redis_client.delete(lock_key)
+
+    async def _delivered():
+        async with session_factory() as session:
+            row = await session.get(NotificationDelivery, delivery_id)
+            return row.state == "sent"
+
+    assert await poll_until(_delivered, timeout=20), "busy event never delivered"
+    async with session_factory() as session:
+        event = (
+            await session.execute(
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+            )
+        ).scalar_one()
+        assert event.status == "published"
+        assert event.delivery_attempts == 0  # budget STILL untouched
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.error is None  # transient busy trace cleared
+    assert len(state.group_sends()) == 1

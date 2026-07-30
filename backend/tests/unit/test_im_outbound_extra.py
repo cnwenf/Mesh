@@ -5,14 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
 from mesh.db.models.notification import Notification, NotificationDelivery
+from mesh.db.models.outbox import OutboxEvent
 from mesh.integrations.dingtalk_cards import push_card_from_event
 from mesh.integrations.im_outbound import IM_SEND_EVENT_TYPE, IMSendRelay
 from mesh.outbox.service import emit_event
 from tests.unit.integrations_dingtalk_support import (
+    CARD_CREATE_PATH,
     ScriptedDingTalkTransport,
     make_client,
 )
@@ -381,3 +384,164 @@ async def test_card_upstream_error_exhausts_budget(session_factory, redis_client
     async with session_factory() as session:
         row = await session.get(NotificationDelivery, delivery_id)
         assert row.state == "failed"
+
+
+# ---------------------------------------------------------------------------
+# §3.10 token_refresh_busy — retryable NON-failure (B: budget untouched,
+# never terminal), exercised through the REAL relay + REAL Redis lock
+# ---------------------------------------------------------------------------
+
+
+async def _seed_chunk_delivery(session_factory, world) -> uuid.UUID:
+    async with session_factory() as session, session.begin():
+        notification = Notification(
+            workspace_id=world["ws"], recipient_id=world["member"],
+            type="execution_finished", priority="normal",
+        )
+        session.add(notification)
+        await session.flush()
+        delivery = NotificationDelivery(
+            workspace_id=world["ws"], notification_id=notification.id,
+            channel="im", provider="dingtalk",
+            destination_key=f"dingtalk:{world.get('binding_dingtalk', 'b')}:busy",
+            external_target=json.dumps({"chunks_total": 1, "sent_chunks": 0}),
+            state="pending",
+        )
+        session.add(delivery)
+        await session.flush()
+        delivery_id = delivery.id
+    return delivery_id
+
+
+def _busy_relay(session_factory, redis_client, transport, *, card_pusher=None):
+    return IMSendRelay(
+        session_factory,
+        redis=redis_client,
+        signing_secret=TEST_SIGNING_SECRET,
+        api_base="http://dingtalk.fake",
+        http_client=make_client(transport),
+        card_pusher=card_pusher,
+        rate_limit_base_seconds=0.05,
+        token_follower_wait=0.3,        # fast busy for the test
+        token_busy_backoff_seconds=0.2,
+    )
+
+
+async def test_notification_busy_defers_without_budget_then_succeeds(
+    session_factory, redis_client
+):
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    delivery_id = await _seed_chunk_delivery(session_factory, world)
+    await _emit(session_factory, world, {
+        "kind": "notification", "workspace_id": str(world["ws"]),
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY, "conversation_type": "group",
+        "chunk_index": 0, "chunks_total": 1, "text": "busy 结果",
+        "delivery_id": str(delivery_id),
+    }, "notif-busy")
+
+    # A foreign replica holds the refresh lease → this relay goes busy.
+    lock_key = f"dingtalk:token_lock:{world['integ_dingtalk']}"
+    await redis_client.set(lock_key, "foreign-owner", nx=True, ex=30)
+    relay = _busy_relay(session_factory, redis_client, transport)
+    await relay.run_once()
+
+    # Event stays PENDING, budget UNTOUCHED, deferred — not terminal.
+    async with session_factory() as session:
+        event = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+        )).scalar_one()
+        assert event.status == "pending"
+        assert event.delivery_attempts == 0
+        assert event.available_at > datetime.now(UTC)
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.state == "pending"
+        assert row.error == "token_refresh_busy"  # ledger records the busy try
+    assert transport.group_sends() == []
+
+    # Lock released + backoff expired → delivered, budget STILL zero.
+    await redis_client.delete(lock_key)
+    async with session_factory() as session, session.begin():
+        rows = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.status == "pending")
+        )).scalars().all()
+        for row in rows:
+            row.available_at = datetime.now(UTC)
+    await relay.run_once()
+    async with session_factory() as session:
+        event = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+        )).scalar_one()
+        assert event.status == "published"
+        assert event.delivery_attempts == 0  # never consumed
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.state == "sent"
+        assert row.error is None  # transient busy trace cleared
+    assert len(transport.group_sends()) == 1
+
+
+async def test_card_busy_defers_without_budget_then_succeeds(
+    session_factory, redis_client
+):
+    world = await _seed(session_factory)
+    await _ensure_binding(session_factory, world)
+    approval = await _make_approval(session_factory, world)
+    transport = ScriptedDingTalkTransport()
+    async with session_factory() as session, session.begin():
+        notification = Notification(
+            workspace_id=world["ws"], recipient_id=world["member"],
+            type="review_requested", priority="critical",
+        )
+        session.add(notification)
+        await session.flush()
+        delivery = NotificationDelivery(
+            workspace_id=world["ws"], notification_id=notification.id,
+            channel="im", provider="dingtalk",
+            destination_key=f"dingtalk:{world['binding_dingtalk']}:cardbusy",
+            external_target="{}", state="pending",
+        )
+        session.add(delivery)
+        await session.flush()
+        delivery_id = delivery.id
+    await _emit(session_factory, world, {
+        "kind": "card", "workspace_id": str(world["ws"]),
+        "integration_id": str(world["integ_dingtalk"]),
+        "conversation_key": CONVERSATION_KEY, "conversation_type": "group",
+        "approval_id": str(approval.id), "delivery_id": str(delivery_id),
+    }, "card-busy")
+
+    lock_key = f"dingtalk:token_lock:{world['integ_dingtalk']}"
+    await redis_client.set(lock_key, "foreign-owner", nx=True, ex=30)
+    relay = _busy_relay(
+        session_factory, redis_client, transport, card_pusher=push_card_from_event
+    )
+    await relay.run_once()
+    async with session_factory() as session:
+        event = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+        )).scalar_one()
+        assert event.status == "pending"
+        assert event.delivery_attempts == 0
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.state == "pending" and row.error == "token_refresh_busy"
+    assert transport.calls_for(CARD_CREATE_PATH) == []
+
+    await redis_client.delete(lock_key)
+    async with session_factory() as session, session.begin():
+        rows = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.status == "pending")
+        )).scalars().all()
+        for row in rows:
+            row.available_at = datetime.now(UTC)
+    await relay.run_once()
+    async with session_factory() as session:
+        event = (await session.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+        )).scalar_one()
+        assert event.status == "published"
+        assert event.delivery_attempts == 0
+        row = await session.get(NotificationDelivery, delivery_id)
+        assert row.state == "sent" and row.error is None
+    assert len(transport.calls_for(CARD_CREATE_PATH)) == 1

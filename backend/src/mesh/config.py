@@ -502,6 +502,10 @@ class Settings(BaseSettings):
     im_delivery_max_attempts: int = Field(default=5, ge=1)
     im_rate_limit_base_seconds: float = Field(default=2.0, gt=0)
     im_rate_limit_max_seconds: float = Field(default=60.0, gt=0)
+    # §3.10 token_refresh_busy: short fixed backoff that moves available_at
+    # forward WITHOUT consuming the failure budget (anti-hot-loop; the busy
+    # outcome is never terminal).
+    im_token_busy_backoff_seconds: float = Field(default=2.0, gt=0)
     # DingTalk OpenAPI transport (§3.10): platform bases are deployment-time
     # environment ONLY — never runtime config / admin-API writable (the
     # outbound target is fixed to the official platform domains; the override
