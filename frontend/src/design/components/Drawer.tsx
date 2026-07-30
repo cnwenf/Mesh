@@ -7,6 +7,7 @@
  */
 import { useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
+import { Icon } from './Icon';
 import { IconButton } from './IconButton';
 import { trapTabKey, useFocusTrap } from './useFocusTrap';
 import './overlays.css';
@@ -67,10 +68,9 @@ export function Drawer(props: DrawerProps): React.JSX.Element | null {
           <h2 className="mesh-drawer__title">{title}</h2>
           {closeLabel !== undefined ? (
             <IconButton label={closeLabel} className="mesh-drawer__close" onClick={onClose}>
-              ×
+              <Icon name="close" size={20} />
             </IconButton>
-          ) : null}
-        </div>
+          ) : null}        </div>
         <div className="mesh-drawer__body">{children}</div>
         {footer !== undefined ? <div className="mesh-drawer__footer">{footer}</div> : null}
       </div>

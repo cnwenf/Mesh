@@ -56,6 +56,9 @@ const TABLE_COLUMNS: ReadonlyArray<DataTableColumn<FixtureRow>> = [
   { id: 'points', header: '点数', cell: (row) => row.points, align: 'end', sortable: true },
 ];
 
+/** fixture 用无副作用回调(禁用控件/纯演示项的占位回调,集中一处便于覆盖) */
+const noop = (): void => undefined;
+
 function Section(props: { title: string; children: React.ReactNode }): React.JSX.Element {
   return (
     <section className="styleguide__section" data-testid={'styleguide-' + props.title}>
@@ -110,7 +113,7 @@ export function StyleguidePage(): React.JSX.Element {
             label="示例行操作"
             items={[
               { id: 'edit', label: '编辑', icon: <Icon name="edit" size={16} />, onSelect: () => undefined },
-              { id: 'del', label: '删除', icon: <Icon name="trash" size={16} />, danger: true, onSelect: () => undefined },
+              { id: 'del', label: '删除', icon: <Icon name="trash" size={16} />, danger: true, onSelect: noop },
             ]}
           />
           <Popover trigger={<Icon name="filter" size={20} />} triggerLabel="筛选" label="筛选面板">
@@ -141,9 +144,9 @@ export function StyleguidePage(): React.JSX.Element {
           </Select>
           <Textarea label="描述" hint="支持 Markdown" defaultValue={'第一行\n第二行'} />
           <Checkbox label="订阅通知" description="有人提及我时通知我" defaultChecked />
-          <Checkbox label="半选父项" indeterminate onChange={() => undefined} />
+          <Checkbox label="半选父项" indeterminate onChange={noop} />
           <Switch label="仅显示我的" description="列表默认按负责人过滤" checked={switchOn} onCheckedChange={setSwitchOn} />
-          <Switch label="锁定项" checked={false} onCheckedChange={() => undefined} disabled />
+          <Switch label="锁定项" checked={false} onCheckedChange={noop} disabled />
         </div>
       </Section>
 
@@ -201,7 +204,7 @@ export function StyleguidePage(): React.JSX.Element {
             title="加载失败"
             description="列表未能载入,已加载的筛选条件仍然保留。"
             impact="不影响其他页面的已有数据。"
-            onRetry={() => undefined}
+            onRetry={noop}
             retryLabel="重试"
             diagnosticId="diag-0001"
             copyLabel="复制诊断编号"

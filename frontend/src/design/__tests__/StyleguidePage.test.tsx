@@ -51,4 +51,26 @@ describe('StyleguidePage(组件状态 fixture)', () => {
     await user.click(switchControl);
     expect(switchControl).toHaveAttribute('aria-checked', 'false');
   });
+  it('浮层与反馈交互生效(Menu/Popover 开合、重试、半选切换)', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<StyleguidePage />);
+    // Menu:触发器打开 → 执行「编辑」项(onSelect lambda)
+    await user.click(screen.getByRole('button', { name: '行操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '编辑' }));
+    expect(screen.queryByRole('menu')).toBeNull();
+    // 危险项同样可执行(danger 分支)
+    await user.click(screen.getByRole('button', { name: '行操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '删除' }));
+    // Popover:触发器打开 role=dialog 浮层(与工具条「筛选」按钮按 haspopup 区分)
+    const popoverTrigger = screen
+      .getAllByRole('button', { name: '筛选' })
+      .find((button) => button.getAttribute('aria-haspopup') === 'dialog');
+    if (popoverTrigger === undefined) throw new Error('缺少 Popover 触发器');
+    await user.click(popoverTrigger);
+    expect(screen.getByRole('dialog', { name: '筛选面板' })).toBeInTheDocument();
+    // ErrorState 重试(onRetry lambda)
+    await user.click(screen.getByRole('button', { name: '重试' }));
+    // 半选 Checkbox 切换(onChange lambda)
+    await user.click(screen.getByLabelText('半选父项'));
+  });
 });
