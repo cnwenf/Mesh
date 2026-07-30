@@ -97,11 +97,19 @@ class OutboxRelay:
         non-failure results) stay invisible until their earliest-claim
         instant, and ``idx_outbox_pending (available_at, created_at)``
         provides the scan order.
+
+        Only event types with a REGISTERED handler are claimable: dedicated
+        fast relays own their event types exclusively (integrations.md §3.8
+        ``im.send`` ack fast relay) — this relay must neither claim nor
+        fail-budget events another consumer delivers.
         """
+        if not self._handlers:
+            return []
         stmt = (
             select(OutboxEvent)
             .where(OutboxEvent.status == OUTBOX_STATUS_PENDING)
             .where(OutboxEvent.available_at <= datetime.now(UTC))
+            .where(OutboxEvent.event_type.in_(tuple(self._handlers)))
             .order_by(
                 OutboxEvent.available_at.asc(),
                 OutboxEvent.created_at.asc(),

@@ -42,3 +42,20 @@ export type {
   ToastTimer,
   ToastTone,
 } from './components/Toast';
+export { Accordion } from './components/Accordion';
+export type { AccordionItem, AccordionProps } from './components/Accordion';
+export { Avatar, avatarHueIndex, avatarInitials } from './components/Avatar';
+export type { AvatarProps, AvatarSize } from './components/Avatar';
+export { Badge, BADGE_TONE_ICONS } from './components/Badge';
+export type { BadgeProps, BadgeSize, BadgeTone } from './components/Badge';
+export { Drawer } from './components/Drawer';
+export type { DrawerProps } from './components/Drawer';
+export { Icon, ICON_PATHS } from './components/Icon';
+export type { IconName, IconProps, IconSize } from './components/Icon';
+export { Menu } from './components/Menu';
+export type { MenuItem, MenuEntry, MenuProps } from './components/Menu';
+export { Tabs } from './components/Tabs';
+export type { TabItem, TabsProps } from './components/Tabs';
+export { Tooltip } from './components/Tooltip';
+export type { TooltipProps } from './components/Tooltip';
+export { focusableElements, trapTabKey, useFocusTrap } from './components/useFocusTrap';

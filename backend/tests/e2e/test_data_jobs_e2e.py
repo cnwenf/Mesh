@@ -40,6 +40,7 @@ from mesh.db.models.data_job import DataJob, DataJobRow
 from mesh.db.models.issue import Issue
 from mesh.db.models.notification import Notification
 from tests.conftest import get_test_database_url, get_test_redis_url
+from tests.e2e.conftest import pin_code_under_test
 
 pytestmark = pytest.mark.e2e
 
@@ -79,13 +80,7 @@ async def data_job_worker(provision_database):
     env["MESH_DATA_JOB_REAPER_INTERVAL"] = "1.0"
     env.update(_storage_env())
     # Force code under test (avoid stale editable install of another ws).
-    import re as _re
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _backend = os.path.dirname(os.path.dirname(_here))
-    _src = os.path.join(_backend, "src")
-    _ex = [x for x in env.get("PYTHONPATH", "").split(os.pathsep)
-           if x and not _re.search(r"/workspaces/[^/]+/workdir/Mesh/backend", x)]
-    env["PYTHONPATH"] = os.pathsep.join([_src, _backend] + _ex)
+    pin_code_under_test(env)
     process = subprocess.Popen(
         [sys.executable, "-m", "mesh.workers"],
         env=env,

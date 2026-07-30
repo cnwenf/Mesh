@@ -206,3 +206,70 @@ test.describe('手机可达性 @320×640(极窄视口)', () => {
     await page.screenshot({ path: `${EVIDENCE_DIR}/phone-home-320-light.png` });
   });
 });
+
+const FOUNDATION_EVIDENCE_DIR = 'e2e/evidence/mes111-foundation';
+
+test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
+  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await login(page);
+    await page.goto('/');
+    await expect(page.getByTestId('nav-home')).toBeVisible();
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-light.png` });
+
+    await page.goto('/settings');
+    await page.getByTestId('theme-select').selectOption('dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.goto('/');
+    await expect(page.getByTestId('nav-home')).toBeVisible();
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-dark.png` });
+  });
+
+  test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/login');
+    await expect(page.locator('input[type="email"], input[name="email"]').first()).toBeVisible();
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-light.png` });
+
+    // 暗色:经 mesh.settings.v1 持久化偏好预置(theme.md 协商链,防闪烁分区承载)
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        'mesh.settings.v1',
+        JSON.stringify({ state: { preferences: { theme: 'dark' } }, version: 2 }),
+      );
+    });
+    await page.goto('/login');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
+  });
+
+  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await login(page);
+    await page.goto('/');
+    await expect(page.getByTestId('mobile-nav-home')).toBeVisible();
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-home-light.png` });
+
+    await page.goto('/board');
+    await page.getByTestId('board-page').waitFor({ state: 'visible' });
+    const lightOverflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }));
+    expect(lightOverflow.scrollWidth).toBeLessThanOrEqual(lightOverflow.clientWidth);
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-board-light.png` });
+
+    await page.goto('/settings');
+    await page.getByTestId('theme-select').selectOption('dark');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.goto('/');
+    await expect(page.getByTestId('mobile-nav-home')).toBeVisible();
+    await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/phone-home-dark.png` });
+  });
+});

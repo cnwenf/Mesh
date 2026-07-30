@@ -21,7 +21,33 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+def resolve_backend_dir(anchor_file: str | os.PathLike[str]) -> Path:
+    """Backend package root derived from *anchor_file* alone — never the cwd.
+
+    Ascends from the anchor's directory to the nearest ancestor containing a
+    ``pyproject.toml`` (the backend project root), so any anchor in the tree
+    (``tests/conftest.py``, ``tests/e2e/conftest.py``, deeper helpers) yields
+    the same root regardless of nesting depth or the caller's working
+    directory. A hand-counted ``dirname`` depth once pointed the e2e
+    PYTHONPATH pin at ``backend/tests`` (MES-121), letting spawned servers
+    resolve ``mesh`` from a stale editable install of another checkout — the
+    anchor ascent removes the depth count entirely. Raises loudly if no
+    manifest is found: silent mis-derivation is the failure being prevented.
+    """
+    current = Path(anchor_file).resolve().parent
+    for _ in range(8):
+        if (current / "pyproject.toml").is_file():
+            return current
+        if current.parent == current:
+            break
+        current = current.parent
+    raise RuntimeError(
+        f"no pyproject.toml found above {anchor_file!s}; cannot resolve the backend root"
+    )
+
+
+BACKEND_DIR = resolve_backend_dir(__file__)
 REPO_ROOT = BACKEND_DIR.parent
 SPECS_DIR = REPO_ROOT / "docs" / "specs"
 

@@ -157,6 +157,16 @@ async def slack_cards(request: Request) -> JSONResponse:
     return await _run_card(request, "im_slack")
 
 
+@router.post("/dingtalk/cards")
+async def dingtalk_cards(request: Request) -> JSONResponse:
+    """DingTalk interactive-card HTTP callback (``callbackType='HTTP'``;
+    Stream mode delivers the same topic over the long connection and the
+    stream worker routes it to the same handler function). Signature
+    scheme: §3.2 DingTalk row (``timestamp`` + ``sign`` headers, official
+    ±3600s tolerance)."""
+    return await _run_card(request, "im_dingtalk")
+
+
 __all__ = [
     "INBOUND_BODY_MAX_BYTES",
     "INBOUND_RATE_LIMIT",

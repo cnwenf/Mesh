@@ -6,7 +6,8 @@
  * 弹层分层关闭栈(§4.5,评审 P3):打开期间经 overlayStack 登记——快捷键分发
  * 据此全屏蔽背景页面键;Esc 语义分层:弹层内输入控件获焦时首个 Esc 仅失焦
  * 输入控件,不关弹层;关闭后焦点归还触发元素,触发元素已不存在时回落页面
- * 主区域首个可聚焦元素(绝不落 body)。
+ * 主区域首个可聚焦元素(绝不落 body)。Tab/Shift+Tab 圈养经 trapTabKey 与
+ * Drawer/Menu 共用同一实现(design-quality §7.5/§10.2,杜绝多实现漂移)。
  */
 import { useEffect, useId, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
@@ -16,16 +17,8 @@ import {
   restoreOverlayFocus,
 } from '../../shortcuts/overlayStack';
 import { IconButton } from './IconButton';
+import { trapTabKey } from './useFocusTrap';
 import './components.css';
-
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ');
 
 export interface DialogProps {
   open: boolean;
@@ -41,6 +34,10 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
   const { open, onClose, title, closeLabel, children } = props;
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // §4.5 分层关闭:登记 overlayStack(快捷键分发全屏蔽背景键)并于关闭时归还
+  // 焦点;触发元素已不存在时经 restoreOverlayFocus 回落 main 首个可聚焦元素。
+  // 焦点圈养不复用 useFocusTrap 整体钩子:其归还路径无 overlayStack 登记与
+  // 触发元素失效回落(§6.12 绝不落 body),Tab 圈养已经共享 trapTabKey。
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -83,21 +80,8 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
     if (event.key !== 'Tab') return;
     const root = dialogRef.current;
     if (!root) return;
-    const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
-    if (focusables.length === 0) {
+    if (trapTabKey(root, event.shiftKey)) {
       event.preventDefault();
-      root.focus();
-      return;
-    }
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    const active = document.activeElement;
-    if (event.shiftKey && (active === first || active === root)) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && active === last) {
-      event.preventDefault();
-      first.focus();
     }
   };
 

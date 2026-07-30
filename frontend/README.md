@@ -115,12 +115,18 @@ frontend/
     │   ├── catalogLoader.ts  #   ETag 版本缓存 + 缺 key 三级回退
     │   ├── format.ts         #   日期/数字/相对时间本地化 + 时区化展示 + 输入解析回 UTC
     │   └── I18nProvider.tsx  #   react-intl 接线 + 开发期缺译可见标记
-    ├── design/               # 设计系统与体验基线骨架(§6.12)
-    │   ├── tokens*.css       #   语义 token(亮/暗两套,均过 WCAG 2.1 AA 4.5:1)
+    ├── design/               # 设计系统(design-quality.md §5–§9;README §6.12)
+    │   ├── tokenValues.ts    #   语义 token 单一事实源:三层令牌(表面/文本/边界层级、
+    │   │                     #   状态色 fg/bg/border 三元组、间距/布局/圆角/阴影/动效/
+    │   │                     #   z-index/排版)+ AA 对比度配对登记表
+    │   ├── tokens*.css       #   生成的 token CSS(亮/暗/打印三套,禁手改,CI 幂等)
+    │   ├── typography.css    #   type scale 工具类(§6.2 十一档 + 表格数字/等宽标识/中文排版)
     │   ├── contrast.ts       #   对比度计算(token AA 自证)
     │   ├── ThemeProvider.tsx #   light/dark/system 即时切换(无刷新)
-    │   └── components/       #   Button/Input/Select/Skeleton/EmptyState/ErrorState/Banner/
-    │                         #   Toast/Dialog(焦点圈养)/Kbd/StatusDot
+    │   └── components/       #   原语:Button(28/36/44 三档全状态)/IconButton/Input/Select/
+    │                         #   Badge/Avatar(稳定 hash 取色·agent 统一轮廓)/Icon(20px 线性集)/
+    │                         #   Tooltip/Menu/Tabs/Accordion/Drawer(焦点圈养)/Dialog/
+    │                         #   Skeleton/EmptyState/ErrorState(§7.7 四部分)/Banner/Toast/Kbd/StatusDot
     ├── shortcuts/            # 快捷键体系(§6.12)
     │   ├── registry.ts       #   分组命令/快捷键注册表(上下文感知)
     │   ├── ShortcutProvider.tsx  # 输入框豁免(除 Ctrl/Cmd 组合)、序列键 G→I/B/M/A

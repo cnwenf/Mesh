@@ -1,5 +1,7 @@
 /**
- * 按钮:variant(primary/secondary/ghost/danger)、size(sm/md)、isLoading。
+ * 按钮(design-quality.md §7.3):variant(primary/secondary/ghost/danger)、
+ * size(sm 28 / md 36 / lg 44,触控/认证场景用 lg)、isLoading。
+ * 状态矩阵完整:default/hover/focus-visible/pressed/loading/disabled(components.css)。
  * 原生 <button> 语义(Enter/Space 激活免费获得);isLoading 时禁用 + aria-busy,
  * 可访问名保持不变(子内容仍在,仅叠加 aria-hidden spinner)。
  * 无硬编码可见文案。
@@ -9,7 +11,7 @@ import { forwardRef } from 'react';
 import './components.css';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-export type ButtonSize = 'sm' | 'md';
+export type ButtonSize = 'sm' | 'md' | 'lg';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;

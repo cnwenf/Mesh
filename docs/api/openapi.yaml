@@ -12279,6 +12279,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/test-send:
+    post:
+      tags:
+      - integrations
+      summary: Test Send Integration
+      description: 'Test outbound (§3.9, diagnostics split): send a test text through
+
+        the OpenAPI adapter. Outbound never depends on the Stream receive
+
+        channel — a down receive channel does NOT fail this endpoint (no 503
+
+        ``stream_channel_unavailable`` here; failures are 502 ``upstream_error``).'
+      operationId: test_send_integration_api_v1_workspaces__workspace_id__integrations__integration_id__test_send_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestSendRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Test Send Integration Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Test Send Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/stream-status:
+    get:
+      tags:
+      - integrations
+      summary: Integration Stream Status
+      description: 'Receive-channel diagnostics (§3.9): reads the persisted
+
+        ``stream_state`` (written by the stream worker) — read-only, never
+
+        initiates outbound. ``state=''down''`` → 503 ``stream_channel_unavailable``
+
+        (the only endpoint where that code appears, §3.5).'
+      operationId: integration_stream_status_api_v1_workspaces__workspace_id__integrations__integration_id__stream_status_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Integration Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Stream Status Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings:
     get:
       tags:
@@ -13338,6 +13428,27 @@ paths:
       - integrations-inbound
       summary: Slack Cards
       operationId: slack_cards_api_v1_integrations_slack_cards_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/dingtalk/cards:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Dingtalk Cards
+      description: 'DingTalk interactive-card HTTP callback (``callbackType=''HTTP''``;
+
+        Stream mode delivers the same topic over the long connection and the
+
+        stream worker routes it to the same handler function). Signature
+
+        scheme: §3.2 DingTalk row (``timestamp`` + ``sign`` headers, official
+
+        ±3600s tolerance).'
+      operationId: dingtalk_cards_api_v1_integrations_dingtalk_cards_post
       responses:
         '200':
           description: Successful Response
@@ -16241,6 +16352,28 @@ components:
       type: object
       title: TestRunRequest
       description: POST /workspaces/{ws}/autopilots/{id}/test-run (§3.2).
+    TestSendRequest:
+      properties:
+        conversation_ref:
+          type: string
+          maxLength: 512
+          minLength: 1
+          title: Conversation Ref
+        conversation_type:
+          type: string
+          pattern: ^(group|direct)$
+          title: Conversation Type
+          default: group
+        user_key:
+          type: string
+          maxLength: 512
+          title: User Key
+          default: ''
+      type: object
+      required:
+      - conversation_ref
+      title: TestSendRequest
+      description: POST .../integrations/{id}/test-send (§3.9).
     TransferRequest:
       properties:
         new_owner_user_id:
