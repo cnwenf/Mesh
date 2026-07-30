@@ -165,23 +165,23 @@ async def _run_card(request: Request, kind: str) -> JSONResponse:
 async def dingtalk_events(request: Request) -> JSONResponse:
     """DingTalk HTTP receive mode callback (§3.2 ``receive_mode='http'``).
 
-    Guard order (unauthenticated surface — DoS hardening): shared per-IP
-    sliding window (429) + 1 MiB body cap, THEN locate the integration by
-    ``chatbotCorpId`` and apply the (integration, IP) pre-signature coarse
-    limit — over-limit callers get a SILENT 200 (auth.md §3.6: non-2xx
-    triggers platform retry amplification), audit + alert only. Signature
+    Guard order (unauthenticated surface — DoS hardening): the 1 MiB body
+    cap, THEN the pre-signature COARSE anti-abuse layer of auth.md §3.6 —
+    keyed by the (integration, IP) tuple (IP-only when the integration is
+    unlocatable), 120/min, answering over-limit callers with a SILENT 200
+    (non-2xx would trigger the platform's retry amplification), audit +
+    alert only. The generic per-IP 429 guard is deliberately NOT applied
+    here: §3.6 reserves 429 for the other endpoint classes. Signature
     verification runs afterwards, inside ``process_inbound``.
     """
-    guarded = await _guard(request)
-    if guarded is not None:
-        return guarded
     raw_body = await _read_body(request)
     if isinstance(raw_body, JSONResponse):
         return raw_body
 
-    # Locate the integration BEFORE signature work (the pre-signature limit
-    # is keyed by (integration, IP)). Unlocatable payloads fall through to
-    # process_inbound → indistinguishable from a bad signature (401).
+    # Locate the integration BEFORE signature work so the limiter can key
+    # on the (integration, IP) tuple. Unlocatable payloads still pass the
+    # IP-only limiter, then fall through to process_inbound →
+    # indistinguishable from a bad signature (401).
     corp_id = ""
     try:
         parsed = json.loads(raw_body.decode("utf-8")) if raw_body else {}
@@ -189,6 +189,7 @@ async def dingtalk_events(request: Request) -> JSONResponse:
             corp_id = str(parsed.get("chatbotCorpId") or "")
     except (UnicodeDecodeError, json.JSONDecodeError):
         parsed = None
+    integration_id: uuid.UUID | None = None
     if corp_id:
         session_factory = request.app.state.session_factory
         async with session_factory() as session:
@@ -197,37 +198,39 @@ async def dingtalk_events(request: Request) -> JSONResponse:
             )
         if rows:
             integration_id = rows[0][0]
-            exceeded = await _dingtalk_pre_limit_exceeded(
-                request, integration_id=integration_id
-            )
-            if exceeded:
-                # Silent 200 + audit/alert ONLY (auth.md §3.6).
-                logger.error(
-                    "dingtalk inbound pre-signature rate limit exceeded "
-                    "(integration=%s ip=%s) — silent 200, no distribution",
-                    integration_id,
-                    _client_ip(request),
-                )
-                return JSONResponse(
-                    status_code=200,
-                    content={"received": True, "process_status": "rate_limited"},
-                )
+    if await _dingtalk_pre_limit_exceeded(request, integration_id=integration_id):
+        # Silent 200 + audit/alert ONLY (auth.md §3.6).
+        logger.error(
+            "dingtalk inbound pre-signature rate limit exceeded "
+            "(integration=%s ip=%s) — silent 200, no distribution",
+            integration_id,
+            _client_ip(request),
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"received": True, "process_status": "rate_limited"},
+        )
 
     return await _run_inbound(request, "im_dingtalk", raw_body=raw_body)
 
 
-async def _dingtalk_pre_limit_exceeded(request: Request, *, integration_id: uuid.UUID) -> bool:
+async def _dingtalk_pre_limit_exceeded(
+    request: Request, *, integration_id: uuid.UUID | None
+) -> bool:
     """(integration, IP) sliding window — non-raising (silent-200 layer).
 
     Shares the Redis sliding-window primitive with the auth rate limiter
-    but NEVER raises: over-limit inbound callbacks must answer 200.
+    but NEVER raises: over-limit inbound callbacks must answer 200. When
+    the integration cannot be located the window degrades to IP-only (an
+    unattributable flood still meets a budget).
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
         return False  # fail OPEN here: signature verification is the gate
     moment = time.time()
     window = INBOUND_RATE_WINDOW_SECONDS
-    key = f"mesh:dingtalk-prelimit:{integration_id}:{_client_ip(request)}"
+    scope = str(integration_id) if integration_id is not None else "unlocated"
+    key = f"mesh:dingtalk-prelimit:{scope}:{_client_ip(request)}"
     pipe = redis.pipeline()
     pipe.zremrangebyscore(key, 0, moment - window)
     pipe.zcard(key)

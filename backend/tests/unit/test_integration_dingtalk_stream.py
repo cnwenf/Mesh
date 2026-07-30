@@ -394,8 +394,8 @@ async def test_advisory_lock_grants_single_instance(session_factory):
     manager_a = _manager(session_factory, FakeWS())
     manager_b = _manager(session_factory, FakeWS())
 
-    locked_a = await manager_a._load_locked_integrations()
-    locked_b = await manager_b._load_locked_integrations()  # A holds the lock
+    _active_a, locked_a = await manager_a._load_locked_integrations()
+    _active_b, locked_b = await manager_b._load_locked_integrations()  # A holds it
 
     assert len(locked_a) == 1
     assert locked_b == []
@@ -410,7 +410,7 @@ async def test_advisory_lock_grants_single_instance(session_factory):
             {"key": f"dingtalk_stream:{integration.id}"},
         )
         await hold.close()
-    locked_b2 = await manager_b._load_locked_integrations()
+    _active_b2, locked_b2 = await manager_b._load_locked_integrations()
     assert len(locked_b2) == 1
     for integration in locked_b2:
         await integration._lock_session.close()

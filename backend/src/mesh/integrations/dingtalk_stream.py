@@ -54,6 +54,7 @@ import json
 import logging
 import random
 import ssl
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -318,25 +319,32 @@ class StreamManager:
         self._group_signals: dict[str, asyncio.Event] = {}
         # (app_key, secret fingerprint) per running group — rotation detection.
         self._group_secrets: dict[str, str] = {}
+        # Integration ids currently served by THIS manager — the serving
+        # group holds their advisory locks on dedicated sessions; the scan
+        # must not try to re-acquire them (it would fail and then close the
+        # very group it serves — connection flapping).
+        self._served_ids: set[uuid.UUID] = set()
         self._gateway_warned = False
 
     # -- public entry ------------------------------------------------------
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
-        while stop is None or not stop.is_set():
-            try:
-                await self.scan_once()
-            except Exception:  # noqa: BLE001 — the supervisor keeps us alive
-                logger.exception("dingtalk stream scan failed")
-            interval = float(getattr(self._settings, "dingtalk_stream_scan_interval", 5.0))
-            if stop is not None:
+        try:
+            while stop is None or not stop.is_set():
                 try:
-                    await asyncio.wait_for(stop.wait(), timeout=interval)
-                except TimeoutError:
-                    pass
-            else:
-                await self._sleep(interval)
-        await self.shutdown()
+                    await self.scan_once()
+                except Exception:  # noqa: BLE001 — the supervisor keeps us alive
+                    logger.exception("dingtalk stream scan failed")
+                interval = float(getattr(self._settings, "dingtalk_stream_scan_interval", 5.0))
+                if stop is not None:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=interval)
+                    except TimeoutError:
+                        pass
+                else:
+                    await self._sleep(interval)
+        finally:
+            await self.shutdown()
 
     async def shutdown(self) -> None:
         for event in self._group_signals.values():
@@ -346,6 +354,7 @@ class StreamManager:
         self._groups.clear()
         self._group_signals.clear()
         self._group_secrets.clear()
+        self._served_ids.clear()
 
     # -- scan + reconciliation ----------------------------------------------
 
@@ -363,17 +372,27 @@ class StreamManager:
                 gateway_base,
             )
 
-        locked = await self._load_locked_integrations()
-        # Group by app_key — one physical connection per app (platform cap 50).
-        groups: dict[str, list[Integration]] = {}
-        for integration in locked:
-            app_key = str((integration.config or {}).get("app_key") or "")
-            if app_key:
-                groups.setdefault(app_key, []).append(integration)
+        # Two views: ALL active stream integrations (reconciliation truth —
+        # includes the ones this manager already serves) and the NEWLY
+        # LOCKED subset (candidates for a new group; served integrations are
+        # excluded — their advisory locks are held by the serving group's
+        # dedicated session, and re-acquiring would fail).
+        all_active, locked = await self._load_locked_integrations()
+
+        def _by_app(rows: list[Integration]) -> dict[str, list[Integration]]:
+            grouped: dict[str, list[Integration]] = {}
+            for integration in rows:
+                app_key = str((integration.config or {}).get("app_key") or "")
+                if app_key:
+                    grouped.setdefault(app_key, []).append(integration)
+            return grouped
+
+        active_groups = _by_app(all_active)
+        new_groups = _by_app(locked)
 
         # Stop groups whose app_key vanished / secret rotated.
         for app_key in list(self._groups.keys()):
-            current = groups.get(app_key)
+            current = active_groups.get(app_key)
             fingerprint = self._secrets_fingerprint(current or [])
             if not current or self._group_secrets.get(app_key) != fingerprint:
                 logger.info(
@@ -384,14 +403,18 @@ class StreamManager:
                 self._groups.pop(app_key, None)
                 self._group_signals.pop(app_key, None)
                 self._group_secrets.pop(app_key, None)
+                self._served_ids.difference_update(
+                    i.id for i in (current or [])
+                )
 
-        # Start groups we do not serve yet.
-        for app_key, integrations in groups.items():
+        # Start groups we do not serve yet (from the newly locked subset).
+        for app_key, integrations in new_groups.items():
             if app_key in self._groups:
                 continue
             signal = asyncio.Event()
             self._group_signals[app_key] = signal
             self._group_secrets[app_key] = self._secrets_fingerprint(integrations)
+            self._served_ids.update(i.id for i in integrations)
             self._groups[app_key] = asyncio.create_task(
                 self._serve_group(app_key, integrations, gateway_base, signal),
                 name=f"dingtalk-stream:{app_key}",
@@ -405,10 +428,17 @@ class StreamManager:
             refs.append(f"{integration.id}:{config.get('app_secret_ref') or integration.secret_ref}")
         return "|".join(refs)
 
-    async def _load_locked_integrations(self) -> list[Integration]:
-        """Active stream-mode integrations this process won the advisory
-        lock for (single-instance mutex; held on a dedicated session for
-        the connection's lifetime, released on close)."""
+    async def _load_locked_integrations(self) -> tuple[list[Integration], list[Integration]]:
+        """Returns ``(all_active_stream, newly_locked)``.
+
+        ``all_active_stream``: every active stream-mode integration (the
+        reconciliation truth — includes integrations this manager already
+        serves). ``newly_locked``: the subset this process just won the
+        advisory lock for (single-instance mutex; held on a dedicated
+        session for the connection's lifetime, released on close).
+        Already-served integrations are never re-locked here — their locks
+        live on the serving group's session.
+        """
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -419,13 +449,15 @@ class StreamManager:
                     )
                 )
             ).scalars().all()
-            candidates = [
+            active = [
                 integration
                 for integration in rows
                 if str((integration.config or {}).get("receive_mode") or "") == "stream"
             ]
         kept: list[Integration] = []
-        for integration in candidates:
+        for integration in active:
+            if integration.id in self._served_ids:
+                continue
             hold = self._session_factory()
             acquired = (
                 await hold.execute(
@@ -438,7 +470,7 @@ class StreamManager:
                 kept.append(integration)
             else:
                 await hold.close()
-        return kept
+        return active, kept
 
     # -- group serve loop ----------------------------------------------------
 
