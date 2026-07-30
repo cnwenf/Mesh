@@ -21,12 +21,10 @@ from mesh.integrations.dingtalk_api import (
     TokenRefreshBusy,
     redact_body_for_log,
 )
-
 from tests.unit.integrations_dingtalk_support import (
     ScriptedDingTalkTransport,
     make_client,
 )
-
 
 # ---------------------------------------------------------------------------
 # Platform catalog constants
