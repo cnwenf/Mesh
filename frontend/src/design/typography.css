@@ -1,0 +1,143 @@
+/*
+ * 排版体系(design-quality.md §6):type scale 工具类 + 数字/标识/代码专项。
+ * 仅引用语义 token(var(--*)),禁止硬编码;字体配对与字号/行高 token 见
+ * tokenValues.ts「字体配对」「Type scale」分组。
+ *
+ * 用法:页面标题用 .mesh-text-title-1,对象标题 title-2,分区/dialog 标题 title-3;
+ * 长文本 body-lg,默认 UI 正文 body(14/22),表格/卡片辅助 body-sm,
+ * 时间/徽标/元数据 caption,极短状态标签 micro(不用于正文)。
+ */
+
+/* ===== Type scale(§6.2:字号/行高/字重一次给全) ===== */
+
+.mesh-text-display-lg,
+.mesh-text-display-sm {
+  font-family: var(--font-family-display);
+  font-weight: var(--font-weight-display);
+
+  /* 短展示标题可平衡换行;正文类不用(§6.4) */
+  text-wrap: balance;
+}
+
+.mesh-text-display-lg {
+  font-size: var(--font-size-display-lg);
+  line-height: var(--line-height-display-lg);
+}
+
+.mesh-text-display-sm {
+  font-size: var(--font-size-display-sm);
+  line-height: var(--line-height-display-sm);
+}
+
+.mesh-text-title-1,
+.mesh-text-title-2,
+.mesh-text-title-3 {
+  font-family: var(--font-family-display);
+  color: var(--color-text-strong);
+  text-wrap: balance;
+}
+
+.mesh-text-title-1 {
+  font-size: var(--font-size-title-1);
+  line-height: var(--line-height-title-1);
+  font-weight: var(--font-weight-display);
+}
+
+.mesh-text-title-2 {
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+}
+
+.mesh-text-title-3 {
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mesh-text-body-lg {
+  font-size: var(--font-size-body-lg);
+  line-height: var(--line-height-body-lg);
+  font-weight: var(--font-weight-regular);
+}
+
+.mesh-text-body {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-regular);
+}
+
+.mesh-text-body-strong {
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.mesh-text-body-sm {
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  font-weight: var(--font-weight-regular);
+}
+
+.mesh-text-caption {
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+}
+
+.mesh-text-micro {
+  font-size: var(--font-size-micro);
+  line-height: var(--line-height-micro);
+  font-weight: var(--font-weight-semibold);
+
+  /* 极短状态标签:禁换行(§6.4) */
+  white-space: nowrap;
+}
+
+/* ===== 数字、标识与代码(§6.3) ===== */
+
+/* 数量/时间/百分比/表格数字:等宽数字位,列对齐不跳动 */
+.mesh-tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* issue 标识、commit、token 前缀、执行 ID:等宽字体,不抢标题层级 */
+.mesh-ident {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  color: var(--color-text-muted);
+
+  /* 长标识受控换行,短 key 不拆成孤立字符(§6.4) */
+  overflow-wrap: anywhere;
+  line-break: strict;
+}
+
+/* 日志区:默认 13/20 等宽(§6.3) */
+.mesh-log {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+/* ===== 中文排版细节(§6.4) ===== */
+
+/* 长文本阅读宽度:每行约 32–42 个汉字(32em ≈ 14px 下 448px,720px 上限兼容大字) */
+.mesh-prose {
+  max-inline-size: var(--content-readable);
+  line-break: strict;
+  overflow-wrap: anywhere;
+}
+
+.mesh-prose p {
+  margin-block-end: var(--space-3);
+}
+
+/* 省略必须有完整值:配合 title/aria-label 使用,样式只管截断 */
+.mesh-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

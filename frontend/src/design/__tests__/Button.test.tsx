@@ -2,7 +2,7 @@ import { createRef } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { Button } from '../components/Button';
+import { Button, buttonClasses } from '../components/Button';
 
 describe('Button', () => {
   it('渲染子内容并响应点击', async () => {
@@ -91,5 +91,28 @@ describe('Button', () => {
     render(<Button ref={ref}>R</Button>);
     expect(ref.current).toBeInstanceOf(HTMLButtonElement);
     expect(ref.current?.textContent).toContain('R');
+  });
+});
+
+describe('Button(design-quality.md §7.3 尺寸与状态矩阵)', () => {
+  it('默认 md;lg 触控档类名正确', () => {
+    const { rerender } = render(
+      <Button size="lg" isLoading>
+        提交
+      </Button>,
+    );
+    const button = screen.getByRole('button', { name: '提交' });
+    expect(button).toHaveClass('mesh-button--lg');
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    rerender(<Button size="sm">小</Button>);
+    expect(screen.getByRole('button', { name: '小' })).toHaveClass('mesh-button--sm');
+  });
+
+  it('buttonClasses 组合 variant/size/className,空值过滤', () => {
+    expect(buttonClasses('danger', 'lg')).toBe('mesh-button mesh-button--danger mesh-button--lg');
+    expect(buttonClasses('ghost', 'md', 'extra')).toBe(
+      'mesh-button mesh-button--ghost mesh-button--md extra',
+    );
   });
 });

@@ -1,10 +1,15 @@
 /*
- * 设计系统组件样式(README §6.12):仅引用语义 token(var(--*)),禁止硬编码色值;
+ * 设计系统组件样式(README §6.12;design-quality.md §7/§9):
+ * 仅引用语义 token(var(--*)),禁止硬编码色值;
  * 方向性间距一律逻辑属性(margin-inline / padding-block 等,RTL 预留)。
  * token 由应用根部的 design/base.css 提供(本文件不自行 @import token)。
+ *
+ * 每个交互组件覆盖完整状态矩阵(§9.1):default/hover/focus-visible/pressed/
+ * selected/disabled/loading/success/error。hover 仅增强不承载唯一信息;
+ * pressed 100ms 内出现(--motion-fast);focus-visible 2px ring + offset 不裁切。
  */
 
-/* ===== Button / IconButton ===== */
+/* ===== Button / IconButton(§7.3:primary/secondary/ghost/danger × sm 28 / md 36 / lg 44) ===== */
 .mesh-button {
   display: inline-flex;
   align-items: center;
@@ -13,52 +18,49 @@
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   font-family: var(--font-family);
-  font-size: var(--font-size-md);
-  font-weight: 500;
-  line-height: 1.25;
-  padding-block: var(--space-2);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-body);
+
+  /* md 默认 36px:行高 22 + 上下 padding 6×2 + 边框 2 */
+  min-block-size: 36px;
+  padding-block: var(--space-1-5);
   padding-inline: var(--space-4);
   cursor: pointer;
+  user-select: none;
   transition:
-    background-color var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
+    background-color var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter),
+    color var(--motion-fast) var(--ease-enter),
+    box-shadow var(--motion-fast) var(--ease-enter);
+}
+
+/* sm 28px:行高 20 + padding 3×2 + 边框 2 */
+.mesh-button--sm {
+  min-block-size: 28px;
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  padding-block: 3px;
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-sm);
+}
+
+/* lg 44px:触控/认证场景(§7.4),命中区 ≥44×44(§8.2) */
+.mesh-button--lg {
+  min-block-size: 44px;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-5);
 }
 
 .mesh-button:disabled {
   cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.mesh-button--sm {
-  font-size: var(--font-size-sm);
-  padding-block: var(--space-1);
-  padding-inline: var(--space-3);
-}
-
-.mesh-button--primary {
-  background-color: var(--color-primary);
-  color: var(--color-primary-contrast);
-}
-
-.mesh-button--secondary {
-  background-color: var(--color-surface);
-  color: var(--color-text);
-  border-color: var(--color-border);
-}
-
-.mesh-button--ghost {
-  background-color: transparent;
-  color: var(--color-text);
-}
-
-.mesh-button--danger {
-  background-color: var(--color-danger);
-  color: var(--color-danger-contrast);
+  opacity: 0.55;
 }
 
 .mesh-button__label {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
 }
 
 .mesh-button__spinner {
@@ -66,8 +68,8 @@
   block-size: 1em;
   border: 2px solid currentColor;
   border-block-end-color: transparent;
-  border-radius: 50%;
-  animation: mesh-spin calc(var(--duration-slow) * 2) linear infinite;
+  border-radius: var(--radius-full);
+  animation: mesh-spin calc(var(--motion-slow) * 2) linear infinite;
 }
 
 @keyframes mesh-spin {
@@ -76,14 +78,81 @@
   }
 }
 
+/* --- primary:品牌主操作(同一可视区域原则上一个,§7.3) --- */
+.mesh-button--primary {
+  background-color: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.mesh-button--primary:hover:not(:disabled) {
+  background-color: var(--color-accent-hover);
+}
+
+.mesh-button--primary:active:not(:disabled) {
+  background-color: var(--color-accent-pressed);
+}
+
+/* --- secondary:常规操作 --- */
+.mesh-button--secondary {
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+
+.mesh-button--secondary:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.mesh-button--secondary:active:not(:disabled) {
+  background-color: var(--color-surface-pressed);
+}
+
+/* --- ghost:低权重操作 --- */
+.mesh-button--ghost {
+  background-color: transparent;
+  color: var(--color-text);
+}
+
+.mesh-button--ghost:hover:not(:disabled) {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-button--ghost:active:not(:disabled) {
+  background-color: var(--color-surface-pressed);
+}
+
+/* --- danger:破坏性操作,默认不与 primary 同权重(§7.3) --- */
+.mesh-button--danger {
+  background-color: var(--color-danger-fg);
+  color: var(--color-danger-contrast);
+}
+
+.mesh-button--danger:hover:not(:disabled) {
+  background-color: var(--color-danger-hover);
+}
+
+.mesh-button--danger:active:not(:disabled) {
+  background-color: var(--color-danger-pressed);
+}
+
 .mesh-icon-button {
-  padding-block: var(--space-2);
-  padding-inline: var(--space-2);
+  /* 图标按钮命中区:md 36px 方形,触控场景用 lg(§8.2) */
+  min-inline-size: 36px;
+  padding-block: var(--space-1-5);
+  padding-inline: var(--space-1-5);
 }
 
 .mesh-icon-button--sm {
-  padding-block: var(--space-1);
-  padding-inline: var(--space-1);
+  min-inline-size: 28px;
+  padding-block: 3px;
+  padding-inline: 3px;
+}
+
+.mesh-icon-button--lg {
+  min-inline-size: 44px;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-2);
 }
 
 .mesh-icon-button__icon {
@@ -92,7 +161,7 @@
   justify-content: center;
 }
 
-/* ===== 表单控件(Input / Select) ===== */
+/* ===== 表单控件(Input / Select,§7.4) ===== */
 .mesh-field {
   display: flex;
   flex-direction: column;
@@ -100,36 +169,80 @@
 }
 
 .mesh-field__label {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text);
 }
 
 .mesh-field__control {
+  /* 默认 36px;iOS 聚焦不缩放:字号不低于 16px(§6.2) */
+  min-block-size: 36px;
   background-color: var(--color-surface-raised);
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding-block: var(--space-2);
+  padding-block: var(--space-1-5);
   padding-inline: var(--space-3);
-  transition: border-color var(--duration-fast) ease;
+  font-size: var(--font-size-control);
+  line-height: var(--line-height-body);
+  transition:
+    border-color var(--motion-fast) var(--ease-enter),
+    box-shadow var(--motion-fast) var(--ease-enter);
 }
 
-.mesh-field__control--invalid {
-  border-color: var(--color-danger);
+.mesh-field__control::placeholder {
+  color: var(--color-text-disabled);
+}
+
+.mesh-field__control:hover:not(:disabled, :focus) {
+  border-color: var(--color-border-strong);
+}
+
+.mesh-field__control:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* 触控/认证场景 44px(§7.4) */
+.mesh-field__control--lg {
+  min-block-size: 44px;
+  padding-block: var(--space-2);
+}
+
+.mesh-field__control:disabled {
+  background-color: var(--color-surface-subtle);
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+}
+
+.mesh-field__control:read-only:not(:disabled) {
+  background-color: var(--color-surface-subtle);
+}
+
+.mesh-field__control--invalid,
+.mesh-field__control--invalid:focus {
+  border-color: var(--color-danger-fg);
+  box-shadow: 0 0 0 3px var(--color-danger-bg);
 }
 
 .mesh-field__hint {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
   color: var(--color-text-muted);
 }
 
 .mesh-field__error {
-  font-size: var(--font-size-sm);
-  color: var(--color-danger);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  color: var(--color-danger-fg);
 }
 
-/* ===== Skeleton(loading) ===== */
+/* ===== Skeleton(loading;skeleton 与最终布局同形,§3.1) ===== */
 .mesh-skeleton {
   display: block;
 }
@@ -137,15 +250,15 @@
 .mesh-skeleton__shape {
   display: block;
   block-size: 1rem;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   background: linear-gradient(
     90deg,
-    var(--color-surface) 25%,
-    var(--color-surface-raised) 50%,
-    var(--color-surface) 75%
+    var(--color-surface-subtle) 25%,
+    var(--color-surface-hover) 50%,
+    var(--color-surface-subtle) 75%
   );
   background-size: 200% 100%;
-  animation: mesh-shimmer calc(var(--duration-slow) * 5) ease-in-out infinite;
+  animation: mesh-shimmer calc(var(--motion-slow) * 4) ease-in-out infinite;
 }
 
 @keyframes mesh-shimmer {
@@ -157,33 +270,96 @@
   }
 }
 
-/* ===== EmptyState / ErrorState ===== */
+/* ===== EmptyState(§7.7 四部分:插画/缘由/主操作/帮助) ===== */
 .mesh-empty-state,
 .mesh-error-state {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-6);
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-6);
   text-align: center;
   color: var(--color-text);
 }
 
+.mesh-empty-state__illustration,
+.mesh-error-state__illustration {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 56px;
+  block-size: 56px;
+  margin-block-end: var(--space-1);
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+}
+
 .mesh-empty-state__title,
 .mesh-error-state__title {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
 }
 
 .mesh-empty-state__description,
 .mesh-error-state__description {
-  font-size: var(--font-size-sm);
+  max-inline-size: var(--content-form);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body-lg);
   color: var(--color-text-muted);
+}
+
+/* 错误态:影响说明(哪部分受影响、输入是否保留,§7.7 第 2 部分) */
+.mesh-error-state__impact {
+  max-inline-size: var(--content-form);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body);
+  color: var(--color-text);
+}
+
+/* 错误态:诊断 ID 可复制(§7.7 第 4 部分) */
+.mesh-error-state__diagnostic {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface-subtle);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-muted);
+  user-select: all;
 }
 
 .mesh-empty-state__action,
 .mesh-error-state__action {
-  margin-block-start: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+
+.mesh-empty-state__help,
+.mesh-error-state__help {
+  margin-block-start: var(--space-1);
+  font-size: var(--font-size-body-sm);
+}
+
+.mesh-empty-state__help a,
+.mesh-error-state__help a {
+  color: var(--color-accent);
+}
+
+.mesh-empty-state__help a:hover,
+.mesh-error-state__help a:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
 }
 
 /* ===== Banner ===== */
@@ -224,7 +400,7 @@
   color: inherit;
 }
 
-/* ===== Toast ===== */
+/* ===== Toast(只承载跨区域结果,§3.1;z-index 经层级 token) ===== */
 .mesh-toast-region {
   position: fixed;
   inset-block-end: var(--space-5);
@@ -232,7 +408,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  z-index: 60;
+  z-index: var(--z-toast);
 }
 
 .mesh-toast {
@@ -240,10 +416,24 @@
   align-items: center;
   gap: var(--space-3);
   min-inline-size: 16rem;
+  max-inline-size: 24rem;
   padding-block: var(--space-3);
   padding-inline: var(--space-4);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-raised);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow-2);
+  animation: mesh-toast-in var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .mesh-toast__message {
@@ -254,7 +444,7 @@
   background: transparent;
   border: none;
   color: inherit;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   cursor: pointer;
   text-decoration: underline;
 }
@@ -279,7 +469,7 @@
   color: var(--color-danger-contrast);
 }
 
-/* ===== Dialog ===== */
+/* ===== Dialog(§7.5:焦点圈定/Esc/遮罩关闭;手机转底部 sheet 由页面层实现) ===== */
 .mesh-dialog__backdrop {
   position: fixed;
   inset: 0;
@@ -287,7 +477,17 @@
   align-items: center;
   justify-content: center;
   background-color: var(--color-scrim);
-  z-index: 50;
+  z-index: var(--z-overlay);
+  animation: mesh-fade-in var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .mesh-dialog {
@@ -300,7 +500,19 @@
   color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--shadow-3);
+  animation: mesh-dialog-in var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .mesh-dialog__header {
@@ -312,8 +524,11 @@
 }
 
 .mesh-dialog__title {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
 }
 
 /* ===== Kbd ===== */
@@ -324,43 +539,43 @@
   padding-inline: 0.4em;
   border: 1px solid var(--color-border);
   border-block-end-width: 2px;
-  border-radius: var(--radius-sm);
-  background-color: var(--color-surface);
+  border-radius: var(--radius-xs);
+  background-color: var(--color-surface-subtle);
   color: var(--color-text);
   font-family: var(--font-family);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 
-/* ===== StatusDot ===== */
+/* ===== StatusDot(状态色不只靠颜色:与文案成对出现,§7.2) ===== */
 .mesh-status {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--color-text);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-status__dot {
   inline-size: 0.5rem;
   block-size: 0.5rem;
-  border-radius: 50%;
+  border-radius: var(--radius-full);
 }
 
 .mesh-status__dot--success {
-  background-color: var(--color-success);
+  background-color: var(--color-success-fg);
 }
 
 .mesh-status__dot--warn {
-  background-color: var(--color-warn);
+  background-color: var(--color-warning-fg);
 }
 
 .mesh-status__dot--danger {
-  background-color: var(--color-danger);
+  background-color: var(--color-danger-fg);
 }
 
 .mesh-status__dot--info {
-  background-color: var(--color-info);
+  background-color: var(--color-info-fg);
 }
 
 .mesh-status__dot--neutral {
@@ -368,7 +583,7 @@
 }
 
 .mesh-status__dot--pulse {
-  animation: mesh-pulse calc(var(--duration-slow) * 4) ease-in-out infinite;
+  animation: mesh-pulse calc(var(--motion-slow) * 4) ease-in-out infinite;
 }
 
 @keyframes mesh-pulse {
@@ -393,14 +608,15 @@
   padding: var(--space-3);
   border-radius: var(--radius-md);
   overflow-x: auto;
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-lg);
 }
 
 .mesh-comments__body code,
 .mesh-chat__bubble-body code,
 .mesh-squads__plan code {
-  font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  font-family: var(--font-family-mono);
 }
 
 .mesh-comments__body :not(pre) > code,
@@ -409,7 +625,7 @@
   background-color: var(--color-code-bg);
   color: var(--color-code-text);
   padding: 0.1em 0.35em;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
 }
 
 .mesh-comments__body .token-keyword,

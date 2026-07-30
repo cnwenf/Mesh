@@ -1,6 +1,7 @@
 @import './tokens.css';
 @import './tokens-dark.css';
 @import './tokens-print.css';
+@import './typography.css';
 
 /*
  * 基线样式入口(README §6.12):语义 token + 最小 reset + 焦点可见 +
@@ -27,11 +28,14 @@
 }
 
 body {
-  background-color: var(--color-bg);
+  background-color: var(--color-canvas);
   color: var(--color-text);
   font-family: var(--font-family);
-  font-size: var(--font-size-md);
-  line-height: 1.5;
+
+  /* 默认产品 UI 正文 14/22(design-quality.md §6.2);iOS 表单控件经
+     --font-size-control 保持 16px 防聚焦缩放,桌面密度不受影响。 */
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -124,19 +128,71 @@ input:-webkit-autofill:focus {
   :root,
   :root[data-theme='dark'] {
     --color-bg: Canvas;
+    --color-canvas: Canvas;
     --color-surface: Canvas;
+    --color-surface-subtle: Canvas;
     --color-surface-raised: Canvas;
     --color-surface-hover: Canvas;
+    --color-surface-pressed: Canvas;
+    --color-surface-selected: Canvas;
     --color-surface-sunken: Canvas;
+    --color-text-strong: CanvasText;
     --color-text: CanvasText;
     --color-text-muted: GrayText;
+    --color-text-disabled: GrayText;
+    --color-border-subtle: CanvasText;
     --color-border: CanvasText;
+    --color-border-strong: CanvasText;
+    --color-accent: LinkText;
+    --color-accent-hover: LinkText;
+    --color-accent-pressed: LinkText;
+    --color-accent-soft: Canvas;
+    --color-accent-contrast: Canvas;
     --color-primary: LinkText;
     --color-primary-contrast: Canvas;
+    --color-primary-bg: Canvas;
+    --color-success-fg: CanvasText;
+    --color-success-bg: Canvas;
+    --color-success-border: CanvasText;
+    --color-warning-fg: CanvasText;
+    --color-warning-bg: Canvas;
+    --color-warning-border: CanvasText;
+    --color-danger-fg: CanvasText;
+    --color-danger-bg: Canvas;
+    --color-danger-border: CanvasText;
+    --color-danger-hover: CanvasText;
+    --color-danger-pressed: CanvasText;
+    --color-info-fg: CanvasText;
+    --color-info-bg: Canvas;
+    --color-info-border: CanvasText;
+    --color-neutral-fg: CanvasText;
+    --color-neutral-bg: Canvas;
+    --color-neutral-border: CanvasText;
     --color-focus-ring: Highlight;
     --color-selection-bg: Highlight;
     --color-selection-text: HighlightText;
     --color-scrim: Canvas;
+  }
+
+  /* 头像强制色:底色/前景归一到系统色板(身份改由名称文案表达) */
+  :root,
+  :root[data-theme='dark'] {
+    --color-avatar-h0-bg: Canvas;
+    --color-avatar-h0-fg: CanvasText;
+    --color-avatar-h1-bg: Canvas;
+    --color-avatar-h1-fg: CanvasText;
+    --color-avatar-h2-bg: Canvas;
+    --color-avatar-h2-fg: CanvasText;
+    --color-avatar-h3-bg: Canvas;
+    --color-avatar-h3-fg: CanvasText;
+    --color-avatar-h4-bg: Canvas;
+    --color-avatar-h4-fg: CanvasText;
+    --color-avatar-h5-bg: Canvas;
+    --color-avatar-h5-fg: CanvasText;
+    --color-avatar-h6-bg: Canvas;
+    --color-avatar-h6-fg: CanvasText;
+    --color-avatar-h7-bg: Canvas;
+    --color-avatar-h7-fg: CanvasText;
   }
 
   /* raised 表面显式 border 表达层级(阴影失效不破坏层级辨识) */

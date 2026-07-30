@@ -1,0 +1,299 @@
+/*
+ * 浮层与复合组件样式(design-quality.md §7.5):Menu / Tabs / Accordion / Drawer。
+ * 仅引用语义 token(var(--*)),禁止硬编码色值;方向性间距一律逻辑属性。
+ */
+
+/* ===== Menu(低频行操作;键盘:↑↓/Home/End/Esc;焦点圈定) ===== */
+.mesh-menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.mesh-menu {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline-start: 0;
+  z-index: var(--z-dropdown);
+  min-inline-size: 12rem;
+  max-block-size: 20rem;
+  overflow-y: auto;
+  padding-block: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  animation: mesh-menu-in var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--space-1) * -1));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 右对齐变体(靠右的操作列,避免出界) */
+.mesh-menu--end {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+}
+
+.mesh-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  inline-size: 100%;
+
+  /* 命中区 ≥36px,触控场景由页面层扩至 44px(§8.2) */
+  min-block-size: 36px;
+  padding-block: var(--space-1-5);
+  padding-inline: var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-menu__item:hover:not(:disabled),
+.mesh-menu__item:focus-visible {
+  background-color: var(--color-surface-hover);
+  outline: none;
+}
+
+.mesh-menu__item:active:not(:disabled) {
+  background-color: var(--color-surface-pressed);
+}
+
+.mesh-menu__item:disabled {
+  color: var(--color-text-disabled);
+  cursor: not-allowed;
+}
+
+.mesh-menu__item--danger {
+  color: var(--color-danger-fg);
+}
+
+.mesh-menu__item--danger:hover:not(:disabled),
+.mesh-menu__item--danger:focus-visible {
+  background-color: var(--color-danger-bg);
+}
+
+.mesh-menu__item-icon {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+
+.mesh-menu__separator {
+  block-size: 1px;
+  margin-block: var(--space-1);
+  background-color: var(--color-border-subtle);
+}
+
+/* ===== Tabs(§9.1:selected 与 hover 不同 + ARIA 状态;下划线强调) ===== */
+.mesh-tabs__list {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  border-block-end: 1px solid var(--color-border-subtle);
+  overflow-x: auto;
+}
+
+.mesh-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 40px;
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+  border: none;
+
+  /* 当前指示:2px 底部边缘,不用整块高饱和色(§4.1) */
+  border-block-end: 2px solid transparent;
+  margin-block-end: -1px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter),
+    background-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-tabs__tab:hover:not([aria-selected='true']) {
+  color: var(--color-text);
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-tabs__tab[aria-selected='true'] {
+  color: var(--color-accent);
+  border-block-end-color: var(--color-accent);
+}
+
+.mesh-tabs__panel {
+  padding-block-start: var(--space-4);
+}
+
+/* ===== Accordion(渐进披露:低频字段/技术细节进折叠区,§1.2) ===== */
+.mesh-accordion {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface);
+}
+
+.mesh-accordion__item + .mesh-accordion__item {
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+.mesh-accordion__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  inline-size: 100%;
+  min-block-size: 44px;
+  padding-block: var(--space-3);
+  padding-inline: var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--color-text-strong);
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  text-align: start;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-accordion__trigger:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-accordion__chevron {
+  color: var(--color-text-muted);
+  transition: transform var(--motion-standard) var(--ease-enter);
+}
+
+.mesh-accordion__trigger[aria-expanded='true'] .mesh-accordion__chevron {
+  transform: rotate(180deg);
+}
+
+.mesh-accordion__panel {
+  padding-block: var(--space-1) var(--space-4);
+  padding-inline: var(--space-4);
+  color: var(--color-text);
+}
+
+/* ===== Drawer(次级上下文:属性/筛选/成员;Esc 关闭 + 焦点圈定) ===== */
+.mesh-drawer__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: var(--color-scrim);
+  z-index: var(--z-overlay);
+  animation: mesh-fade-in-drawer var(--motion-standard) var(--ease-enter);
+}
+
+@keyframes mesh-fade-in-drawer {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.mesh-drawer {
+  position: fixed;
+  inset-block-start: 0;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  display: flex;
+  flex-direction: column;
+  inline-size: min(24rem, calc(100% - var(--space-8)));
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border-inline-start: 1px solid var(--color-border);
+  box-shadow: var(--shadow-3);
+  animation: mesh-drawer-in var(--motion-deliberate) var(--ease-enter);
+}
+
+@keyframes mesh-drawer-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* 手机转底部 sheet(§7.5):最大高度考虑软键盘与安全区 */
+@media (max-width: 599px) {
+  .mesh-drawer {
+    inset-inline-start: 0;
+    inset-inline-end: 0;
+    inset-block-start: auto;
+    inline-size: 100%;
+    max-block-size: calc(90vh - env(safe-area-inset-bottom, 0px));
+    border-inline-start: none;
+    border-block-start: 1px solid var(--color-border);
+    border-start-start-radius: var(--radius-xl);
+    border-start-end-radius: var(--radius-xl);
+    animation-name: mesh-sheet-in;
+  }
+
+  @keyframes mesh-sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+}
+
+.mesh-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-block: var(--space-4);
+  padding-inline: var(--space-5);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-drawer__title {
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+.mesh-drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding-block: var(--space-4);
+  padding-inline: var(--space-5);
+}
+
+.mesh-drawer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  padding-inline: var(--space-5);
+  border-block-start: 1px solid var(--color-border-subtle);
+}

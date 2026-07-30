@@ -4,6 +4,7 @@ import { defaultPreferences, useSettingsStore } from '../../state/settingsStore'
 import { useWorkspaceThemeBridge } from '../../state/workspaceThemeBridge';
 import { THEME_LOCATOR_KEY } from '../themeLocator';
 import { ThemeProvider, resolveTheme } from '../ThemeProvider';
+import { DARK_TOKENS, LIGHT_TOKENS } from '../tokenValues';
 
 type ChangeListener = (event: { matches: boolean }) => void;
 
@@ -315,8 +316,8 @@ describe('ThemeProvider meta theme-color 联动(theme.md §4.2)', () => {
       </ThemeProvider>,
     );
     const metas = document.querySelectorAll('meta[name="theme-color"]');
-    expect(metas[0].getAttribute('content')).toBe('#0f172a');
-    expect(metas[1].getAttribute('content')).toBe('#0f172a');
+    expect(metas[0].getAttribute('content')).toBe(DARK_TOKENS['--color-bg']);
+    expect(metas[1].getAttribute('content')).toBe(DARK_TOKENS['--color-bg']);
   });
 
   it('system 态恢复亮/暗双声明值', () => {
@@ -335,7 +336,7 @@ describe('ThemeProvider meta theme-color 联动(theme.md §4.2)', () => {
       </ThemeProvider>,
     );
     const metas = document.querySelectorAll('meta[name="theme-color"]');
-    expect(metas[0].getAttribute('content')).toBe('#ffffff');
-    expect(metas[1].getAttribute('content')).toBe('#0f172a');
+    expect(metas[0].getAttribute('content')).toBe(LIGHT_TOKENS['--color-bg']);
+    expect(metas[1].getAttribute('content')).toBe(DARK_TOKENS['--color-bg']);
   });
 });

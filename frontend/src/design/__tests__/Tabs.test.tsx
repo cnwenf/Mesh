@@ -1,0 +1,95 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it, vi } from 'vitest';
+import { Tabs } from '../components/Tabs';
+import type { TabItem } from '../components/Tabs';
+
+const ITEMS: TabItem[] = [
+  { value: 'overview', label: '概览', content: <div>概览内容</div> },
+  { value: 'issues', label: '工作项', content: <div>工作项内容</div> },
+  { value: 'settings', label: '设置', content: <div>设置内容</div>, disabled: true },
+];
+
+describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
+  it('非受控默认选中首个可用项,渲染对应 panel', () => {
+    render(<Tabs items={ITEMS} label="对象页签" />);
+    expect(screen.getByRole('tablist', { name: '对象页签' })).toBeInTheDocument();
+    const overview = screen.getByRole('tab', { name: '概览' });
+    expect(overview).toHaveAttribute('aria-selected', 'true');
+    expect(overview).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tab', { name: '工作项' })).toHaveAttribute('tabindex', '-1');
+    expect(screen.getByText('概览内容')).toBeInTheDocument();
+    expect(screen.queryByText('工作项内容')).toBeNull();
+    const panel = screen.getByRole('tabpanel');
+    expect(panel).toHaveAttribute('aria-labelledby', overview.id);
+    expect(overview).toHaveAttribute('aria-controls', panel.id);
+  });
+
+  it('defaultValue 指定初始页签', () => {
+    render(<Tabs items={ITEMS} label="t" defaultValue="issues" />);
+    expect(screen.getByRole('tab', { name: '工作项' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('点击切换并回调 onChange', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Tabs items={ITEMS} label="t" onChange={onChange} />);
+    await user.click(screen.getByRole('tab', { name: '工作项' }));
+    expect(onChange).toHaveBeenCalledWith('issues');
+    expect(screen.getByText('工作项内容')).toBeInTheDocument();
+  });
+
+  it('受控:value 不变则不切换,onChange 仍被调用', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Tabs items={ITEMS} label="t" value="overview" onChange={onChange} />);
+    await user.click(screen.getByRole('tab', { name: '工作项' }));
+    expect(onChange).toHaveBeenCalledWith('issues');
+    expect(screen.getByText('概览内容')).toBeInTheDocument();
+  });
+
+  it('ArrowRight/ArrowLeft 切换选中与焦点(跳过禁用项)', () => {
+    render(<Tabs items={ITEMS} label="t" />);
+    screen.getByRole('tab', { name: '概览' }).focus();
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
+    expect(screen.getByRole('tab', { name: '工作项' })).toHaveAttribute('aria-selected', 'true');
+    // 「设置」禁用 → 循环回「概览」
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '概览' }));
+    // ← 反向同样跳过禁用
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowLeft' });
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
+  });
+
+  it('Home/End 跳首末可用页签', () => {
+    render(<Tabs items={ITEMS} label="t" />);
+    const tablist = screen.getByRole('tablist');
+    fireEvent.keyDown(tablist, { key: 'End' });
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '工作项' }));
+    fireEvent.keyDown(tablist, { key: 'Home' });
+    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '概览' }));
+  });
+
+  it('无关按键不改变选中', () => {
+    render(<Tabs items={ITEMS} label="t" />);
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'Enter' });
+    expect(screen.getByRole('tab', { name: '概览' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('全部禁用时不崩溃且无 panel', () => {
+    render(
+      <Tabs
+        items={[{ value: 'x', label: 'X', content: null, disabled: true }]}
+        label="t"
+      />,
+    );
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    expect(screen.queryByRole('tabpanel')).toBeNull();
+  });
+
+  it('className 透传', () => {
+    const { container } = render(<Tabs items={ITEMS} label="t" className="custom" />);
+    expect(container.querySelector('.mesh-tabs')).toHaveClass('custom');
+  });
+});
