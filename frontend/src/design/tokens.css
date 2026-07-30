@@ -1,33 +1,88 @@
 /* 本文件由 scripts/gen-tokens.mjs 从 src/design/tokenValues.ts 生成 —— 禁止手改。 */
 :root {
-  /* 表面与文本 */
-  --color-bg: #ffffff;
-  --color-surface: #f9fafb;
+  /* 表面层级(design-quality.md §5.2:canvas→surface→raised 三层 + 交互表面) */
+  --color-canvas: #f7f8fa;
+  --color-bg: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f1f3f5;
   --color-surface-raised: #ffffff;
-  --color-surface-hover: #f3f4f6;
+  --color-surface-hover: #f4f5f7;
+  --color-surface-pressed: #e9ecf0;
+  --color-surface-selected: #eef2ff;
   --color-surface-sunken: #f1f5f9;
-  --color-text: #111827;
-  --color-text-muted: #4b5563;
-  --color-border: #d1d5db;
 
-  /* 品牌主色 */
-  --color-primary: #1d4ed8;
+  /* 文本层级(strong/text/muted/disabled 四级) */
+  --color-text-strong: #16181d;
+  --color-text: #2b2f36;
+  --color-text-muted: #5f6980;
+  --color-text-disabled: #98a2b3;
+
+  /* 边界(subtle/border/strong 三级) */
+  --color-border-subtle: #eaecf0;
+  --color-border: #d7dce3;
+  --color-border-strong: #b8c0cc;
+
+  /* 品牌强调色(accent 系,旧 primary 系别名见下) */
+  --color-accent: #4f46e5;
+  --color-accent-hover: #4338ca;
+  --color-accent-pressed: #3730a3;
+  --color-accent-soft: #eef2ff;
+  --color-accent-contrast: #ffffff;
+
+  /* 旧主色别名(迁移期保留一个发布周期,取值与 accent 系一致) */
+  --color-primary: #4f46e5;
   --color-primary-contrast: #ffffff;
+  --color-primary-bg: #eef2ff;
 
-  /* 状态色(文本/底色两用,与 *-contrast 配对均 ≥4.5:1;-bg 为浅底变体) */
+  /* 状态色三元组(fg/bg/border;颜色不作唯一信号,组件须配图标+文案) */
+  --color-success-fg: #15803d;
+  --color-success-bg: #dcfce7;
+  --color-success-border: #86efac;
+  --color-warning-fg: #92400e;
+  --color-warning-bg: #fef3c7;
+  --color-warning-border: #fcd34d;
+  --color-danger-fg: #b91c1c;
+  --color-danger-bg: #fee2e2;
+  --color-danger-border: #fca5a5;
+  --color-info-fg: #075985;
+  --color-info-bg: #e0f2fe;
+  --color-info-border: #7dd3fc;
+  --color-neutral-fg: #475467;
+  --color-neutral-bg: #f2f4f7;
+  --color-neutral-border: #d0d5dd;
+
+  /* 危险按钮交互态(组件级令牌:default/hover/pressed) */
+  --color-danger-hover: #991b1b;
+  --color-danger-pressed: #7f1d1d;
+
+  /* 旧状态色别名(迁移期保留,取值与三元组 fg/bg 一致;-bg 键即三元组同名键,不重复声明) */
   --color-danger: #b91c1c;
   --color-danger-contrast: #ffffff;
-  --color-danger-bg: #fee2e2;
   --color-warn: #92400e;
   --color-warn-contrast: #ffffff;
   --color-warn-bg: #fef3c7;
   --color-success: #15803d;
   --color-success-contrast: #ffffff;
-  --color-success-bg: #dcfce7;
   --color-info: #075985;
   --color-info-contrast: #ffffff;
-  --color-info-bg: #e0f2fe;
-  --color-primary-bg: #dbeafe;
+
+  /* 头像稳定配色(姓名 hash 取色,h0–h7 八组;亮/暗各自校准非简单反色) */
+  --color-avatar-h0-bg: #4f46e5;
+  --color-avatar-h0-fg: #ffffff;
+  --color-avatar-h1-bg: #0369a1;
+  --color-avatar-h1-fg: #ffffff;
+  --color-avatar-h2-bg: #047857;
+  --color-avatar-h2-fg: #ffffff;
+  --color-avatar-h3-bg: #b45309;
+  --color-avatar-h3-fg: #ffffff;
+  --color-avatar-h4-bg: #be123c;
+  --color-avatar-h4-fg: #ffffff;
+  --color-avatar-h5-bg: #7c3aed;
+  --color-avatar-h5-fg: #ffffff;
+  --color-avatar-h6-bg: #0f766e;
+  --color-avatar-h6-fg: #ffffff;
+  --color-avatar-h7-bg: #475467;
+  --color-avatar-h7-fg: #ffffff;
 
   /* 选区/强调(::selection 与 <mark>,亮/暗各定义,禁浏览器默认色) */
   --color-selection-bg: #bfdbfe;
@@ -49,34 +104,108 @@
   /* 焦点环 */
   --color-focus-ring: #2563eb;
 
-  /* 遮罩 */
-  --color-scrim: rgba(15, 23, 42, 0.45);
+  /* 遮罩(design-quality.md §5.2) */
+  --color-scrim: rgba(15, 23, 42, 0.52);
 
-  /* 间距刻度(4/8/12/16/24/32) */
+  /* 间距刻度(design-quality.md §5.3;存量 space-1..6 保持原值,新增 0/0-5/1-5/8/10/12/16(§5.3 表中 0_5/1_5 记法的 kebab 形式)) */
+  --space-0: 0px;
+  --space-0-5: 2px;
   --space-1: 4px;
+  --space-1-5: 6px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
 
-  /* 圆角 */
-  --radius-sm: 4px;
+  /* 布局变量(外壳/页边距/内容宽度,主题无关) */
+  --shell-sidebar-expanded: 240px;
+  --shell-sidebar-collapsed: 64px;
+  --page-gutter-compact: 16px;
+  --page-gutter-medium: 24px;
+  --page-gutter-wide: 32px;
+  --content-readable: 720px;
+  --content-form: 640px;
+  --content-standard: 1120px;
+  --content-wide: 1440px;
+
+  /* 圆角(design-quality.md §5.4:xs/sm/md/lg/xl/full 六档) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
 
-  /* 字号 */
+  /* 字号(旧三档兼容) */
   --font-size-sm: 0.875rem;
   --font-size-md: 1rem;
   --font-size-lg: 1.25rem;
 
-  /* 字体 */
-  --font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  /* Type scale 字号(design-quality.md §6.2:display→micro 十一档) */
+  --font-size-display-lg: 2.25rem;
+  --font-size-display-sm: 1.875rem;
+  --font-size-title-1: 1.5rem;
+  --font-size-title-2: 1.25rem;
+  --font-size-title-3: 1.125rem;
+  --font-size-body-lg: 1rem;
+  --font-size-body: 0.875rem;
+  --font-size-body-sm: 0.8125rem;
+  --font-size-caption: 0.75rem;
+  --font-size-micro: 0.6875rem;
+  --font-size-control: 1rem;
 
-  /* 阴影 */
+  /* Type scale 行高(与字号一一对应) */
+  --line-height-display-lg: 2.75rem;
+  --line-height-display-sm: 2.375rem;
+  --line-height-title-1: 2rem;
+  --line-height-title-2: 1.75rem;
+  --line-height-title-3: 1.625rem;
+  --line-height-body-lg: 1.625rem;
+  --line-height-body: 1.375rem;
+  --line-height-body-sm: 1.25rem;
+  --line-height-caption: 1.125rem;
+  --line-height-micro: 1rem;
+
+  /* 字重(展示标题 650 需可变字体;回退环境按 600 渲染) */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-display: 650;
+
+  /* 字体配对(design-quality.md §6.1:Display=Manrope+CJK,UI=Inter+CJK,等宽=JetBrains Mono;自托管字体文件随页面批次加载,未加载时回退系统栈) */
+  --font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-family-display: 'Manrope', 'Inter', system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+
+  /* 阴影(design-quality.md §5.4:1 轻浮起 / 2 浮层 / 3 对话框;暗色配合边框使用) */
+  --shadow-1: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.1);
+  --shadow-2: 0 2px 4px rgba(15, 23, 42, 0.06), 0 4px 8px rgba(15, 23, 42, 0.08);
+  --shadow-3: 0 4px 8px rgba(15, 23, 42, 0.08), 0 12px 32px rgba(15, 23, 42, 0.16);
   --shadow-raised: 0 4px 16px rgba(15, 23, 42, 0.16);
 
-  /* 动效时长 */
+  /* 动效时长(design-quality.md §5.5:instant/fast/standard/deliberate/slow;旧 duration-* 兼容) */
+  --motion-instant: 0ms;
+  --motion-fast: 100ms;
+  --motion-standard: 160ms;
+  --motion-deliberate: 240ms;
+  --motion-slow: 360ms;
   --duration-fast: 120ms;
   --duration-slow: 300ms;
+
+  /* 动效缓动(进入/退出/移动三条标准曲线) */
+  --ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-move: cubic-bezier(0.2, 0, 0, 1);
+
+  /* z-index 层级(base/sticky/dropdown/overlay/toast,禁业务自造近似值) */
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-dropdown: 200;
+  --z-overlay: 300;
+  --z-toast: 400;
 }

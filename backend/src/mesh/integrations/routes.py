@@ -35,6 +35,7 @@ from mesh.integrations.schemas import (
     PatchIntegrationRequest,
     PatchSubscriptionRequest,
     RotateSecretRequest,
+    TestSendRequest,
     VcsLinkCreateRequest,
     VcsResolveRequest,
 )
@@ -235,6 +236,54 @@ async def test_integration(
     await _rate_limit_write(request, user, response)
     return {
         "data": await _service(request).test_connection(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+        )
+    }
+
+
+@router.post("/workspaces/{workspace_id}/integrations/{integration_id}/test-send")
+async def test_send_integration(
+    request: Request,
+    response: Response,
+    workspace_id: str,
+    integration_id: str,
+    body: TestSendRequest,
+    context: WorkspaceContext = Depends(require_workspace("integration:manage")),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Test outbound (§3.9, diagnostics split): send a test text through
+    the OpenAPI adapter. Outbound never depends on the Stream receive
+    channel — a down receive channel does NOT fail this endpoint (no 503
+    ``stream_channel_unavailable`` here; failures are 502 ``upstream_error``)."""
+    await _rate_limit_write(request, user, response)
+    settings = request.app.state.settings
+    return {
+        "data": await _service(request).test_send(
+            workspace_id=context.workspace.id,
+            integration_id=_path_uuid(integration_id, what="integration"),
+            conversation_ref=body.conversation_ref,
+            conversation_type=body.conversation_type,
+            user_key=body.user_key,
+            redis=request.app.state.redis,
+            api_base=settings.dingtalk_api_base,
+        )
+    }
+
+
+@router.get("/workspaces/{workspace_id}/integrations/{integration_id}/stream-status")
+async def integration_stream_status(
+    request: Request,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    """Receive-channel diagnostics (§3.9): reads the persisted
+    ``stream_state`` (written by the stream worker) — read-only, never
+    initiates outbound. ``state='down'`` → 503 ``stream_channel_unavailable``
+    (the only endpoint where that code appears, §3.5)."""
+    return {
+        "data": await _service(request).get_stream_status(
             workspace_id=context.workspace.id,
             integration_id=_path_uuid(integration_id, what="integration"),
         )

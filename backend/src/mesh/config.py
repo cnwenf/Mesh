@@ -490,6 +490,35 @@ class Settings(BaseSettings):
     webhook_circuit_break_threshold: int = Field(default=20, ge=1)
     webhook_delivery_poll_interval: float = Field(default=1.0, gt=0)
     webhook_delivery_batch_size: int = Field(default=50, ge=1, le=1000)
+    # IM outbound adapter (integrations.md §3.8/§3.10): ack leading-edge
+    # coalescing window (lock-ordered ack_window_at clock, §3.8), long-result
+    # markdown chunk cap (truncation + in-app deep link beyond it, §3.10),
+    # and the ack fast-relay send timeout (T1/T2 protocol, §3.8).
+    im_ack_coalesce_window: float = Field(default=5.0, gt=0)
+    im_max_chunks: int = Field(default=5, ge=1)
+    im_ack_send_timeout: float = Field(default=3.0, gt=0)
+    im_send_poll_interval: float = Field(default=0.2, gt=0)
+    im_send_batch_size: int = Field(default=20, ge=1, le=1000)
+    im_delivery_max_attempts: int = Field(default=5, ge=1)
+    im_rate_limit_base_seconds: float = Field(default=2.0, gt=0)
+    im_rate_limit_max_seconds: float = Field(default=60.0, gt=0)
+    # §3.10 token_refresh_busy: short fixed backoff that moves available_at
+    # forward WITHOUT consuming the failure budget (anti-hot-loop; the busy
+    # outcome is never terminal).
+    im_token_busy_backoff_seconds: float = Field(default=2.0, gt=0)
+    # DingTalk OpenAPI transport (§3.10): platform bases are deployment-time
+    # environment ONLY — never runtime config / admin-API writable (the
+    # outbound target is fixed to the official platform domains; the override
+    # exists for e2e test doubles, mirroring the Stream gateway seam).
+    dingtalk_api_base: str = Field(default="https://api.dingtalk.com")
+    dingtalk_oapi_base: str = Field(default="https://oapi.dingtalk.com")
+    dingtalk_token_refresh_timeout: float = Field(default=10.0, gt=0)
+    dingtalk_token_lock_ttl: int = Field(default=30, ge=1)
+    dingtalk_request_timeout: float = Field(default=10.0, gt=0)
+    # Multi-replica token refresh follower bounded wait (§3.10: refresh
+    # timeout + buffer — a follower MUST outwait a legitimate leader
+    # refresh rather than terminally fail during it).
+    token_follower_wait: float = Field(default=12.0, gt=0)
 
 
 def load_settings(**overrides: object) -> Settings:
