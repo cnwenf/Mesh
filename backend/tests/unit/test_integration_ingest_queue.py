@@ -257,7 +257,7 @@ async def test_ack_leader_self_references_and_writes_im_send(session_factory):
         ).scalar_one()
     assert ack.payload["kind"] == "ack"
     assert ack.payload["queue_item_id"] == str(item.id)
-    assert ack.payload["template"] == "✅ 已接收，处理中"
+    assert ack.payload["template"] == "✅ 已接收,处理中"
     assert ack.payload["position_snapshot"] == 1
     # §6.5 registered key: sha256(queue_item_id | 'ack') (workspace-scoped).
     expected = hashlib.sha256(f"{item.id}|ack".encode()).hexdigest()
@@ -538,11 +538,11 @@ async def test_command_registry_dispatches_registered_command(session_factory, r
 
     calls = []
 
-    async def _handler(session, envelope, name, args):
+    async def _handler(session, envelope, event_row, name, args):
         calls.append((name, args))
         return CommandOutcome(process_status="processed")
 
-    COMMAND_REGISTRY["ping"] = _handler
+    COMMAND_REGISTRY["ping"] = {"permission": None, "handler": _handler}
     try:
         world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
         await make_dingtalk_binding(session_factory, world=world)
@@ -566,10 +566,11 @@ async def test_command_registry_dispatches_registered_command(session_factory, r
 async def test_unregistered_command_is_audited_not_triggered(session_factory, redis_client):
     from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
 
-    async def _noop(session, envelope, name, args):
+    async def _noop(session, envelope, event_row, name, args):
         return CommandOutcome()
 
-    COMMAND_REGISTRY["stop"] = _noop  # non-empty registry activates the plane
+    # non-empty registry activates the command plane
+    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
     try:
         world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
         await make_dingtalk_binding(session_factory, world=world)
@@ -587,10 +588,10 @@ async def test_unregistered_command_is_audited_not_triggered(session_factory, re
 async def test_mid_text_slash_is_not_a_command(session_factory, redis_client):
     from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
 
-    async def _noop(session, envelope, name, args):
+    async def _noop(session, envelope, event_row, name, args):
         return CommandOutcome()
 
-    COMMAND_REGISTRY["stop"] = _noop
+    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
     try:
         world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
         await make_dingtalk_binding(session_factory, world=world)
@@ -601,3 +602,82 @@ async def test_mid_text_slash_is_not_a_command(session_factory, redis_client):
         assert result.process_status == "dispatched"
     finally:
         del COMMAND_REGISTRY["stop"]
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-round fixes: M7/M8 (command audit four-tuple + help feedback)
+# ---------------------------------------------------------------------------
+
+
+async def test_unknown_command_help_feedback_and_audit_four_tuple(session_factory):
+    """§3.7:945/975 — unregistered /xxx: bot help feedback (im.send
+    command_feedback) + _mesh_command audit four-tuple {name,
+    actor_identity, target_item_ids, result}."""
+    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
+
+    async def _noop(session, envelope, event_row, name, args):
+        return CommandOutcome()
+
+    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
+    try:
+        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+        await make_dingtalk_binding(session_factory, world=world)
+        result = await _run(
+            session_factory, world, _envelope(text="/frobnicate args")
+        )
+        assert result.process_status == "processed"
+
+        async with session_factory() as session:
+            event = (await session.execute(select(IntegrationEvent))).scalar_one()
+            feedback = (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == IM_SEND_EVENT_TYPE,
+                        OutboxEvent.payload["kind"].astext == "command_feedback",
+                    )
+                )
+            ).scalars().all()
+        audit = event.payload["_mesh_command"]
+        assert audit["name"] == "frobnicate"
+        assert audit["actor_identity"] == "dingtalk:dingcorp0001:014728255240768602"
+        assert audit["target_item_ids"] == []
+        assert audit["result"] == "unknown_command"
+        assert len(feedback) == 1  # help text scheduled
+        assert "/stop" in feedback[0].payload["template"]
+        queues = await _queue_items(session_factory, world)
+        assert queues == []  # never queued / triggered
+    finally:
+        del COMMAND_REGISTRY["stop"]
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-round fix: M6 (MESH_IM_INBOUND_TEXT_MAX_CHARS wired on HTTP)
+# ---------------------------------------------------------------------------
+
+
+async def test_http_text_truncation_honors_configured_max_chars(session_factory):
+    """M6: process_inbound honors the injected text ceiling (settings
+    MESH_IM_INBOUND_TEXT_MAX_CHARS at the route) — the HTTP path no longer
+    hardcodes 4000, matching the Stream path."""
+    from mesh.integrations.inbound import process_inbound
+    from tests.unit.integrations_support import TEST_SIGNING_SECRET, dingtalk_request
+
+    world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+    await make_dingtalk_binding(session_factory, world=world)
+    body, headers = dingtalk_request(dingtalk_message_payload(text="x" * 100))
+
+    async with session_factory() as session, session.begin():
+        status, resp = await process_inbound(
+            session, kind="im_dingtalk", raw_body=body, headers=headers,
+            signing_secret=TEST_SIGNING_SECRET, now=NOW,
+            tolerance=__import__("datetime").timedelta(seconds=300),
+            text_max_chars=10,  # configured ceiling, far below the 4000 default
+        )
+    assert status == 200
+    assert resp["process_status"] == "dispatched"
+
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+        item = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
+    assert event.payload["truncated"] is True
+    assert len(item.message_excerpt) == 10  # truncated to the CONFIGURED ceiling

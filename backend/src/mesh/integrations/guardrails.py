@@ -73,14 +73,24 @@ class InboundGuardrails:
 
     async def _window_count(self, key: str, *, now: float) -> int:
         """Record one hit in the rolling window; return the hit count
-        (INCLUDING this hit) inside the trailing 60s."""
+        (INCLUDING this hit) inside the trailing 60s. Redis flakiness
+        fails OPEN (returns 0 — admit) so a Redis blip cannot turn every
+        callback into a 500 retry-amplifier; the pending-depth counter
+        (pure DB) still enforces the hard leg."""
         redis_key = f"mesh:im:guard:{key}"
-        pipe = self._redis.pipeline()
-        pipe.zremrangebyscore(redis_key, 0, now - _WINDOW_SECONDS)
-        pipe.zadd(redis_key, {f"{now}:{uuid.uuid4().hex}": now})
-        pipe.zcard(redis_key)
-        pipe.expire(redis_key, _WINDOW_SECONDS)
-        _removed, _added, count, _ttl = await pipe.execute()
+        try:
+            pipe = self._redis.pipeline()
+            pipe.zremrangebyscore(redis_key, 0, now - _WINDOW_SECONDS)
+            pipe.zadd(redis_key, {f"{now}:{uuid.uuid4().hex}": now})
+            pipe.zcard(redis_key)
+            pipe.expire(redis_key, _WINDOW_SECONDS)
+            _removed, _added, count, _ttl = await pipe.execute()
+        except Exception:  # noqa: BLE001 — redis flakiness ⇒ fail open
+            logger.warning(
+                "inbound window counter unavailable (redis) — failing open for key=%s",
+                redis_key,
+            )
+            return 0
         return int(count)
 
     async def _pending_depth(self, session: AsyncSession, conversation_key: str) -> int:
@@ -107,7 +117,18 @@ class InboundGuardrails:
         """The two Redis rolling-window counters (identity 20/min global,
         conversation 60/min). Runs BEFORE the command plane (§3.7:975 —
         command handling is constrained by the §2.10 counters too).
-        None = admit; ``'rate_limited'`` = reject (caller audits)."""
+        None = admit; ``'rate_limited'`` = reject (caller audits).
+
+        Redis unavailable ⇒ the two WINDOW counters degrade explicitly
+        (warn-once admit); the pending-DEPTH counter is pure DB and runs
+        regardless — the §2.10 three-counter hard constraint keeps its
+        DB-backed leg under a Redis outage."""
+        if self._redis is None:
+            logger.warning(
+                "inbound window guardrails degraded (redis unavailable) — "
+                "admitting; pending-depth counter still enforced"
+            )
+            return None
         moment = now_epoch if now_epoch is not None else time.time()
 
         identity_hits = await self._window_count(
@@ -167,11 +188,17 @@ class InboundGuardrails:
         flooding a conversation must not amplify outbound quota burn via
         N notice messages.
         """
+        if self._redis is None:
+            return False  # notice self-throttle needs redis; skip notice
         moment = now_epoch if now_epoch is not None else time.time()
         notice_key = f"mesh:im:guard:notice:{conversation_key}"
-        acquired = await self._redis.set(
-            notice_key, "1", nx=True, ex=_NOTICE_WINDOW_SECONDS
-        )
+        try:
+            acquired = await self._redis.set(
+                notice_key, "1", nx=True, ex=_NOTICE_WINDOW_SECONDS
+            )
+        except Exception:  # noqa: BLE001 — redis flakiness ⇒ skip notice
+            logger.warning("rate-limit notice self-throttle unavailable (redis)")
+            return False
         if not acquired:
             return False
         minute_bucket = int(moment // _NOTICE_WINDOW_SECONDS)

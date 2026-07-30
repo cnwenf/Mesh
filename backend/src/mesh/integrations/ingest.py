@@ -81,7 +81,7 @@ IM_PROVIDERS = frozenset({"dingtalk", "feishu", "slack"})
 # §3.8 leading-edge acknowledgement window (MESH_IM_ACK_COALESCE_WINDOW,
 # lock-order time — never transaction-start time).
 DEFAULT_ACK_COALESCE_WINDOW = timedelta(seconds=5)
-DEFAULT_ACK_TEMPLATE = "✅ 已接收，处理中"
+DEFAULT_ACK_TEMPLATE = "✅ 已接收,处理中"
 
 # §3.9 dispatch lease constants are owned by runtime.enqueue (the consumer
 # side) and re-exported here for the parallel optimistic dispatch path.
@@ -91,7 +91,7 @@ DEFAULT_ACK_TEMPLATE = "✅ 已接收，处理中"
 # queue fields — it lives in the event ledger payload).
 _EXCERPT_MAX_CHARS = 120
 _BINDING_DISPLAY_MAX_CHARS = 200
-_SANITIZE_RE = re.compile(r"[\x00-\x1f\x7f​-‍﻿]+")
+_SANITIZE_RE = re.compile(r"[\x00-\x1f\x7f\u200b-\u200d\ufeff]+")
 
 # §3.7 command detection: line-leading "/name args" (case-insensitive);
 # mid-text "/stop" is ordinary message content, not a command.
@@ -241,12 +241,21 @@ class CommandOutcome:
     body: dict[str, Any] | None = None
 
 
-# Extensible registry {name(lowercase): handler}. Handlers receive
-# (session, envelope, command, args) and return CommandOutcome; command
+# Extensible registry — the EXACT shape written in stone by §3.7:956:
+# ``{name: {permission, handler}}``. Handlers receive
+# ``(session, envelope, event_row, name, args)`` and return CommandOutcome;
+# the event_row is passed so handlers write the §3.7:975 audit
+# (``_mesh_command = {name, actor_identity, target_item_ids, result}``).
+# ``permission`` names the privilege checked for cross-user actions
+# (MES-88: ``execution:manage`` for stopping others' tasks). Command
 # messages never trigger executions and never enter the queue (§3.7).
 # MES-88 registers stop/btw/help. An EMPTY registry means command-shaped
 # text flows on as an ordinary message (MES-68-compatible behavior).
-COMMAND_REGISTRY: dict[str, Any] = {}
+COMMAND_REGISTRY: dict[str, dict[str, Any]] = {}
+
+# §3.7:975 help text for unregistered /xxx (feedback via im.send).
+COMMAND_HELP_TEXT = "可用命令:/stop 停止你的在途与排队任务;/btw <补充> 给在途任务追加说明;/help 显示本帮助"
+
 
 
 def parse_command(normalized_text: str) -> tuple[str, str] | None:
@@ -263,6 +272,10 @@ async def _run_command_plane(
     *,
     envelope: VerifiedEnvelope,
     event_row: IntegrationEvent,
+    sender_identity_key: str,
+    conversation_key: str,
+    workspace_id,
+    integration: Integration,
     now: datetime,
 ) -> IngestResult | None:
     """Delegate to the command registry; None = not a command / empty
@@ -273,24 +286,47 @@ async def _run_command_plane(
     if parsed is None:
         return None
     name, args = parsed
-    handler = COMMAND_REGISTRY.get(name)
-    if handler is None:
-        # Unregistered /xxx → help text feedback, processed, no trigger
-        # (prevents command probing injection, §3.7).
+    entry = COMMAND_REGISTRY.get(name)
+    if entry is None:
+        # Unregistered /xxx → help text feedback + processed, no trigger
+        # (prevents command probing injection, §3.7:945/975).
         event_row.process_status = "processed"
         event_row.updated_at = now
         event_row.payload = {
             **(event_row.payload or {}),
-            "_mesh_command": {"name": name, "result": "unknown_command"},
+            "_mesh_command": {
+                "name": name,
+                "actor_identity": sender_identity_key,
+                "target_item_ids": [],
+                "result": "unknown_command",
+            },
         }
         await session.flush()
+        await emit_event(
+            session,
+            workspace_id=workspace_id,
+            event_type=IM_SEND_EVENT_TYPE,
+            payload={
+                "kind": "command_feedback",
+                "integration_id": str(integration.id),
+                "conversation_key": conversation_key,
+                "external_ref": envelope.external_ref,
+                "sender_key": envelope.sender_key,
+                "template": COMMAND_HELP_TEXT,
+                "channel": envelope.channel,
+            },
+            idempotency_key=hashlib.sha256(
+                f"{event_row.id}|cmd-help".encode()
+            ).hexdigest(),
+        )
         return IngestResult(
             status_code=200,
             body={"received": True, "process_status": "processed", "command": name},
             process_status="processed",
             event_id=event_row.id,
         )
-    outcome: CommandOutcome = await handler(session, envelope, name, args)
+    handler = entry.get("handler")
+    outcome: CommandOutcome = await handler(session, envelope, event_row, name, args)
     event_row.process_status = outcome.process_status
     event_row.updated_at = now
     await session.flush()
@@ -661,9 +697,13 @@ async def _reject_rate_limited(
     scheduled, and HTTP still answers 200 (non-2xx would trigger platform
     retry amplification)."""
     event_row.process_status = "rejected"
+    # The row was stored as 'received' (FULL payload, up to the 1MiB route
+    # cap) — flipping to 'rejected' MUST re-run the §3.2 16KiB truncation,
+    # otherwise an over-limit flood sediments ≤1MiB ledger rows (the 16KiB
+    # defense exists precisely for rejected rows).
     event_row.payload = {
-        **(event_row.payload or {}),
-        "_mesh_reject_reason": "rate_limited",
+        **audit_payload(event_row.payload or {}, "rejected"),
+        "_mesh_reject_reason": "rate_limited",  # survives truncation (structured)
     }
     event_row.updated_at = now
     await session.flush()
@@ -726,8 +766,13 @@ async def ingest_verified_event(
                     process_status="rejected",
                     now=now,
                 )
-        except IntegrityError:
-            pass  # repeated event, same body — already audited
+        except IntegrityError as exc:
+            # repeated event, same body → already audited (dedup key); any
+            # other constraint violation is logged, never disguised as dedup.
+            if not _violates_constraint(exc, "uq_integration_event_dedup"):
+                logger.exception(
+                    "disabled-rejection audit insert failed on a non-dedup constraint"
+                )
         return IngestResult(
             status_code=401,
             body={
@@ -813,9 +858,11 @@ async def ingest_verified_event(
         )
     except ValidationError:
         event_row.process_status = "rejected"
+        # Re-run the §3.2 16KiB truncation on the flip (stored as 'received'
+        # with the full payload — rejected rows keep only the forensic head).
         event_row.payload = {
-            **(event_row.payload or {}),
-            "_mesh_reject_reason": "malformed_payload",
+            **audit_payload(event_row.payload or {}, "rejected"),
+            "_mesh_reject_reason": "malformed_payload",  # survives truncation
         }
         event_row.updated_at = now
         await session.flush()
@@ -854,8 +901,18 @@ async def ingest_verified_event(
             )
 
     # Command plane (§3.7) — registry-driven; commands never queue/trigger.
+    # Runs AFTER the frequency windows (§3.7:975 — commands are constrained
+    # by the §2.10 counters too); the sender triple and conversation key are
+    # available here for the §3.7:975 audit four-tuple.
     command_result = await _run_command_plane(
-        session, envelope=envelope, event_row=event_row, now=now
+        session,
+        envelope=envelope,
+        event_row=event_row,
+        sender_identity_key=sender_identity_key,
+        conversation_key=conversation_key,
+        workspace_id=workspace_id,
+        integration=integration,
+        now=now,
     )
     if command_result is not None:
         return command_result

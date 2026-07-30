@@ -964,7 +964,7 @@ async def _resource_workspace(request: Request, fn: str, resource_id: uuid.UUID)
 
 
 async def _context_for_resource(
-    request: Request, fn: str, resource_id: uuid.UUID, permission: str | None
+    request: Request, user: User, fn: str, resource_id: uuid.UUID, permission: str | None
 ):
     from mesh.auth.deps import AuthenticatedPrincipal
     from mesh.auth.rbac import resolve_workspace_context
@@ -993,7 +993,7 @@ async def create_vcs_link(
 ) -> dict:
     integration_id = _path_uuid(body.integration_id, what="integration")
     context = await _context_for_resource(
-        request, "mesh_integration_workspace_id", integration_id, "issue:write"
+        request, user, "mesh_integration_workspace_id", integration_id, "issue:write"
     )
     await _rate_limit_write(request, user, response)
     service = _service(request)
@@ -1031,7 +1031,7 @@ async def delete_vcs_link(
     user: User = Depends(get_current_user),
 ) -> Response:
     link_uuid = _path_uuid(link_id, what="vcs link")
-    context = await _context_for_resource(request, "mesh_vcs_link_workspace_id", link_uuid, None)
+    context = await _context_for_resource(request, user, "mesh_vcs_link_workspace_id", link_uuid, None)
     await _rate_limit_write(request, user, response)
     from mesh.db.tenant import set_tenant_context
 
@@ -1053,7 +1053,7 @@ async def list_issue_vcs_links(
     user: User = Depends(get_current_user),
 ) -> dict:
     issue_uuid = _path_uuid(issue_id, what="issue")
-    context = await _context_for_resource(request, "mesh_issue_workspace_id", issue_uuid, None)
+    context = await _context_for_resource(request, user, "mesh_issue_workspace_id", issue_uuid, None)
     from mesh.db.tenant import set_tenant_context
 
     async with request.app.state.session_factory() as session:
@@ -1073,7 +1073,7 @@ async def resolve_vcs_identifiers(
 ) -> dict:
     integration_id = _path_uuid(body.integration_id, what="integration")
     context = await _context_for_resource(
-        request, "mesh_integration_workspace_id", integration_id, None
+        request, user, "mesh_integration_workspace_id", integration_id, None
     )
     await _rate_limit_write(request, user, response)
     service = _service(request)

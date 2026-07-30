@@ -658,8 +658,11 @@ processing ──execution.finished(status=completed)──► done             
   verified envelope { provider, provider_tenant_key, external_event_id(msgId),
     event_type, external_ref(conversationId), conversation_type, sender_key,
     text(已 trim/截断), raw_payload, channel('http'|'stream') }
-  → 去重 → 命令平面(§3.7)→ 绑定匹配 → 频率护栏(§2.10)→ 入队 integration_message_queue
-  → ack 事件(§3.8)→ 审计 integration_events
+  → 去重 → msgtype 门(触发仅 text,非文本仅审计)
+  → 频率窗口护栏(§2.10 身份/会话 Redis 滑窗;命令平面同受约束,§3.7:975)
+  → 命令平面(§3.7)→ 绑定匹配
+  → imq_seq 咨询锁内 pending 深度计数(§2.10,并发不可越限)
+  → 入队 integration_message_queue → ack 事件(§3.8)→ 审计 integration_events
 ```
 > PR #58 现有 `process_inbound()`(HTTP 定位/验签与匹配/派发揉在一起)在 #58 rebase 到含本 Spec 的 main 时按此边界重构:拆出 HTTP 鉴权适配器 + 抽出 `ingest_verified_event(envelope)` 共享核心,Stream worker 复用同一核心(§3.2 Stream 小节「同一摄取服务函数」即指本函数)。
 
@@ -732,7 +735,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | POST | `/api/v1/integrations/dingtalk/events` | 钉钉/DingTalk | **HTTP 回调模式**(`config.receive_mode='http'`):请求头 `timestamp`(毫秒)+ `sign = Base64(HMAC_SHA256(app_secret, timestamp + "\n" + app_secret))`;恒定时间比较 + 时间戳防重放(**钉钉官方容差 ±3600s**,严于其上限即拒绝合法回调,不得收窄);经 body `chatbotCorpId`(+ `robotCode`)定位集成;`msgId` 作 `external_event_id`。**Stream 模式不经本端点**( Mesh 侧主动出连,见下) |
 
 > **未认证端点 DoS 硬化(硬约束,写死)**:入站回调端点对 Mesh 是**未认证面**(平台签名校验在请求处理之内),故在签名校验**之前**先过资源护栏——无凭据攻击者既不能烧 CPU 也不能灌库:
-> - **per-IP 滑动窗口限流**:六个入站回调端点**共享一份** per-IP 滑窗预算(键含来源 IP,Redis 滚动窗口),超限 → **429 `rate_limited`**(签名前粗粒度防刷,与 §2.10 签名后语义级频率护栏分层互补);
+> - **per-IP 滑动窗口限流**:六个入站回调端点**共享一份** per-IP 滑窗预算(键含来源 IP,Redis 滚动窗口),超限 → **429 `rate_limited`**(签名前粗粒度防刷,与 §2.10 签名后语义级频率护栏分层互补);**钉钉回调端点例外(以 auth.md §3.6 行为权威)**:其签名前护栏键维为 **(集成,IP)** 120/min、超限对平台侧**静默 200**(非 2xx 会触发钉钉重推放大),429 适用其余五类入站端点;
 > - **body 1MiB 上限**:请求体超 **1MiB** → **413**(`Content-Length` 预检 + 实读字节数复检双道,防 `Content-Length` 谎报绕过);
 > - **被拒台账载荷截断**:被拒事件落 `integration_events` 取证时,`payload` **截断至 16KiB 上限**(留存取证前缀 + 记原始字节数),防攻击者以超大被拒载荷灌爆台账存储。
 

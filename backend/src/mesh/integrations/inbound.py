@@ -34,6 +34,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.agent.snapshot import build_config_snapshot
+from mesh.db.constraints import violates as _violates_constraint
 from mesh.db.models.agent import Agent
 from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationEvent
 from mesh.db.tenant import set_tenant_context
@@ -46,6 +47,7 @@ from mesh.integrations.connectors import (
     VerifiedEnvelope,
     adapter_for,
 )
+from mesh.integrations.dingtalk import DEFAULT_INBOUND_TEXT_MAX_CHARS
 from mesh.integrations.ingest import (
     IM_PROVIDERS,
     REJECTED_KEY_PREFIX,
@@ -65,6 +67,16 @@ from mesh.runtime.credentials import decrypt_credential_value
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
 
 logger = logging.getLogger("mesh.integrations.inbound")
+
+
+def _is_event_dedup_conflict(exc: IntegrityError) -> bool:
+    """True only for the ledger dedup key (uq_integration_event_dedup).
+
+    Any OTHER constraint violation is a real defect — it must not be
+    disguised as idempotent dedup (same principle as the shared core's
+    narrowed catch, ingest.py).
+    """
+    return _violates_constraint(exc, "uq_integration_event_dedup")
 
 __all__ = [
     "REJECTED_KEY_PREFIX",
@@ -438,6 +450,7 @@ def _envelope_from_normalized(
     *,
     config: dict[str, Any],
     raw_payload: dict[str, Any],
+    max_chars: int = DEFAULT_INBOUND_TEXT_MAX_CHARS,
     channel: str = "http",
 ) -> VerifiedEnvelope:
     """Map the generic NormalizedEvent onto the shared VerifiedEnvelope.
@@ -447,13 +460,10 @@ def _envelope_from_normalized(
     directly (their platform IDs carry no colon-collapse hazard).
     """
     if provider == "dingtalk":
-        from mesh.integrations.dingtalk import (
-            DEFAULT_INBOUND_TEXT_MAX_CHARS,
-            normalize_message_payload,
-        )
+        from mesh.integrations.dingtalk import normalize_message_payload
 
         return normalize_message_payload(
-            raw_payload, max_chars=DEFAULT_INBOUND_TEXT_MAX_CHARS, channel=channel
+            raw_payload, max_chars=max_chars, channel=channel
         )
     bot_mentioned, is_direct_message = compute_im_signals(provider, event, config)
     msgtype = ""
@@ -461,10 +471,8 @@ def _envelope_from_normalized(
         msgtype = str(event.extra.get("message_type") or "")
     truncated = False
     text_value = event.text
-    from mesh.integrations.dingtalk import DEFAULT_INBOUND_TEXT_MAX_CHARS
-
-    if len(text_value) > DEFAULT_INBOUND_TEXT_MAX_CHARS:
-        text_value = text_value[:DEFAULT_INBOUND_TEXT_MAX_CHARS]
+    if len(text_value) > max_chars:
+        text_value = text_value[:max_chars]
         truncated = True
     return VerifiedEnvelope(
         provider=provider,
@@ -590,8 +598,11 @@ async def _ingest_vcs_event(
                     process_status="rejected",
                     now=now,
                 )
-        except IntegrityError:
-            pass
+        except IntegrityError as exc:
+            if not _is_event_dedup_conflict(exc):
+                logger.exception(
+                    "disabled-rejection audit insert failed on a non-dedup constraint"
+                )
         return 401, {
             "error": {
                 "code": "integration_disabled",
@@ -616,7 +627,9 @@ async def _ingest_vcs_event(
                 process_status="received",
                 now=now,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_event_dedup_conflict(exc):
+            raise  # a real defect, not a duplicate event
         return 200, {
             "received": True,
             "event_id": external_event_id,
@@ -764,6 +777,7 @@ async def process_inbound(
     tolerance: timedelta,
     guardrails=None,
     ack_window=None,
+    text_max_chars: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Full inbound pipeline; runs inside the caller's transaction.
 
@@ -813,12 +827,24 @@ async def process_inbound(
                         process_status="rejected",
                         now=now,
                     )
-            except IntegrityError:
-                pass  # repeated forgery, same body — already audited
+            except IntegrityError as exc:
+                # repeated forgery, same body → already audited (dedup key);
+                # any other constraint violation is logged, not disguised.
+                if not _is_event_dedup_conflict(exc):
+                    logger.exception(
+                        "signature-rejection audit insert failed on a non-dedup constraint"
+                    )
         # Unknown integration → indistinguishable from a bad signature.
         return 401, _invalid_signature_body()
 
-    assert integration is not None and event is not None  # signature valid
+    if integration is None or event is None:
+        # Invariant: a valid signature always resolves both. A violation is
+        # a server defect — surface it explicitly (never a bare assert in a
+        # production path).
+        raise RuntimeError(
+            "inbound invariant violated: valid signature without a resolved "
+            "integration/normalized event"
+        )
     await set_tenant_context(session, integration.workspace_id)
 
     if kind == "im_slack":
@@ -833,7 +859,15 @@ async def process_inbound(
         # ingestion core (§2.10:651-664; the Stream adapter lands here too).
         try:
             envelope = _envelope_from_normalized(
-                provider, event, config=dict(integration.config or {}), raw_payload=payload
+                provider,
+                event,
+                config=dict(integration.config or {}),
+                raw_payload=payload,
+                max_chars=(
+                    text_max_chars
+                    if text_max_chars is not None
+                    else DEFAULT_INBOUND_TEXT_MAX_CHARS
+                ),
             )
         except ValidationError:
             # Signed-but-malformed payload (missing msgId/conversationId,
@@ -866,8 +900,13 @@ async def process_inbound(
                         process_status="rejected",
                         now=now,
                     )
-            except IntegrityError:
-                pass  # same malformed body repeated — already audited
+            except IntegrityError as exc:
+                # same malformed body repeated → already audited (dedup key);
+                # any other constraint violation is logged, not disguised.
+                if not _is_event_dedup_conflict(exc):
+                    logger.exception(
+                        "malformed-payload audit insert failed on a non-dedup constraint"
+                    )
             return 200, {
                 "received": True,
                 "event_id": "",

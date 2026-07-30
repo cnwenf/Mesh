@@ -274,11 +274,11 @@ async def test_window_guardrail_runs_before_command_plane(session_factory, redis
 
     handled = []
 
-    async def _handler(session, envelope, name, args):
+    async def _handler(session, envelope, event_row, name, args):
         handled.append(name)
         return CommandOutcome()
 
-    COMMAND_REGISTRY["deploy"] = _handler
+    COMMAND_REGISTRY["deploy"] = {"permission": None, "handler": _handler}
     try:
         world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
         await make_dingtalk_binding(session_factory, world=world)
@@ -306,3 +306,79 @@ async def test_window_guardrail_runs_before_command_plane(session_factory, redis
         assert handled == ["deploy"]  # command plane NOT reached the 2nd time
     finally:
         del COMMAND_REGISTRY["deploy"]
+
+
+# ---------------------------------------------------------------------------
+# Acceptance-round fixes: M2 (16KiB truncation on the flip) +
+# M3 (depth counter survives a Redis outage)
+# ---------------------------------------------------------------------------
+
+
+async def test_rate_limited_flip_reapplies_16kib_truncation(session_factory, redis_client):
+    """M2: the ledger row is stored 'received' with the FULL payload (up to
+    the 1MiB route cap); flipping to 'rejected' must re-run the §3.2 16KiB
+    truncation — an over-limit flood must not sediment ≤1MiB rows."""
+    world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+    await make_dingtalk_binding(session_factory, world=world)
+    guardrails = _guardrails(redis_client, per_identity_per_min=1)
+
+    await _ingest(session_factory, world, _envelope(), guardrails)  # dispatched
+    # Over-limit message with a payload far beyond the 16KiB forensic cap.
+    huge = normalize_message_payload(
+        dingtalk_message_payload(text="填" * 30000), max_chars=4000, channel="http"
+    )
+    result = await _ingest(session_factory, world, huge, guardrails)
+    assert result.process_status == "rejected"
+
+    async with session_factory() as session:
+        event = (
+            await session.execute(
+                select(IntegrationEvent).where(
+                    IntegrationEvent.process_status == "rejected"
+                )
+            )
+        ).scalar_one()
+    # Truncation re-applied on the flip: forensic head + original byte
+    # count, with the reject reason kept STRUCTURED on top.
+    assert event.payload.get("_truncated") is True
+    assert event.payload["original_bytes"] > 16 * 1024
+    assert len(event.payload["head"]) <= 4096 + 64
+    assert event.payload["_mesh_reject_reason"] == "rate_limited"
+
+
+async def test_pending_depth_enforced_without_redis(session_factory):
+    """M3: Redis unavailable ⇒ window counters degrade explicitly, but the
+    pending-DEPTH counter (pure DB) still enforces the §2.10 hard cap."""
+    world = await seed_dingtalk_world(session_factory)  # serial → stays pending
+    binding = await make_dingtalk_binding(session_factory, world=world)
+    guardrails = _guardrails(None, max_pending_per_conversation=50)  # redis=None
+
+    conversation_key = f"dingtalk:dingcorp0001:{binding.external_ref}"
+    async with session_factory() as session, session.begin():
+        for seq in range(1, 51):
+            session.add(IntegrationMessageQueue(
+                workspace_id=world["ws"],
+                integration_id=world["integ_dingtalk"],
+                binding_id=binding.id,
+                conversation_key=conversation_key,
+                seq=seq,
+                dispatch_mode="serial_conversation",
+                state="pending",
+                sender_identity_key="dingtalk:dingcorp0001:someone",
+            ))
+
+    result = await _ingest(session_factory, world, _envelope(), guardrails)
+    assert result.process_status == "rejected"
+    assert result.body.get("reason") == "rate_limited"
+
+
+async def test_window_counters_degrade_open_without_redis(session_factory):
+    """M3: with Redis down and depth clear, messages flow (windows degrade
+    explicitly — a Redis blip must not 500/reject every callback)."""
+    world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+    await make_dingtalk_binding(session_factory, world=world)
+    guardrails = _guardrails(None, per_identity_per_min=1)  # would trip IF redis were up
+
+    for _ in range(3):
+        result = await _ingest(session_factory, world, _envelope(), guardrails)
+        assert result.process_status == "dispatched"  # windows degraded open
