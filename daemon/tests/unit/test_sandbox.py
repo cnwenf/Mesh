@@ -276,11 +276,17 @@ class TestConcurrentRollback:
             tmp_path / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
         )
         real_handshake = manager._handshake
+        # Deterministic overlap: A's injected failure fires only AFTER B's
+        # handshake has begun (B's proc is spawned and parked in B's own
+        # created[] slot by then) — a fixed sleep would make the pre-fix
+        # regression flaky under load.
+        b_handshake_started = asyncio.Event()
 
         async def flaky_handshake(spec, **kw):
             if spec.attempt_id == "attempt-a-concurrent":
-                await asyncio.sleep(0.05)  # let B spawn and claim its own slot
+                await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
                 raise SandboxUnavailableError("injected handshake failure")
+            b_handshake_started.set()
             return await real_handshake(spec, **kw)
 
         manager._handshake = flaky_handshake

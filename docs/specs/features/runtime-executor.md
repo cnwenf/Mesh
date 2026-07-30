@@ -561,7 +561,7 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 
 - [x] 安全复评确认 S-01～S-04 的设计回答可验证（A2 安全执行面落地 + ISO-01～14 隔离红线负向矩阵真实环境全绿，文首实现进度段已述）；
 - [x] S-05～S-13 均进入实现任务和自动化门禁（A2 安全执行面落地 + ISO-01～14 隔离红线负向矩阵真实环境全绿，文首实现进度段已述）；
-- [x] server P0 先完成冻结 AgentConfig、task token、result/diff 脱敏、预算核账和 runtime token 单真源（MES-98：runtime.md §2.x P0 契约已合入，v0.23.0）；
+- [x] server P0 先完成冻结 AgentConfig、task token、result/diff 脱敏、预算核账和 runtime token 单真源（MES-98：runtime.md §2.x P0 契约已合入，v0.20.0）；
 - [x] daemon fake-provider 合同测试通过（daemon/tests/contract 绿，daemon-ci）；
 - [x] T36 隔离红线矩阵全部通过（ISO-01～14 真实环境 15/15，daemon/tests/isolation/）；
 - [x] 受保护的真实 LLM e2e 全链路通过（MES-95：.github/workflows/real-llm.yml，证据 `docs/evidence/mes-95/`）；
