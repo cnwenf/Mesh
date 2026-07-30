@@ -9,6 +9,7 @@
     "a11y.openHelp": "打开键盘快捷键",
     "a11y.openPalette": "打开命令面板",
     "a11y.sidebar": "侧边导航栏",
+    "a11y.skipLink": "跳到主内容",
     "a11y.themeToggle": "切换主题",
     "a11y.topbar": "顶栏",
     "agents.detail.back": "返回成员",
@@ -1487,8 +1488,15 @@
     "members.tab.human": "人类",
     "members.title": "成员",
     "members.toast.roleUpdated": "角色已更新。",
-    "nav.automation": "自动化",
-    "nav.autopilots": "自动化",
+    "mobileNav.board": "看板",
+    "mobileNav.chat": "聊天",
+    "mobileNav.home": "工作台",
+    "mobileNav.issues": "工作项",
+    "mobileNav.more": "更多",
+    "mobileNav.moreClose": "关闭导航抽屉",
+    "mobileNav.moreTitle": "全部导航",
+    "nav.automation": "运行环境",
+    "nav.autopilots": "自动值守",
     "nav.board": "看板",
     "nav.chat": "聊天",
     "nav.cycles": "周期",
@@ -1844,6 +1852,7 @@
     "runtimes.wizard.step.waiting": "3. 等待激活",
     "runtimes.wizard.title": "新增 runtime",
     "runtimes.wizard.waiting": "正在等待守护进程上线…",
+    "search.openPalette": "打开搜索与命令面板",
     "security.changePassword": "修改密码",
     "security.changePasswordSubmit": "更新密码",
     "security.changePasswordSuccess": "密码已更新，其它会话已登出。",
@@ -2274,5 +2283,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "db8b548f"
+  "version": "723fcd1c"
 }

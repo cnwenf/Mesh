@@ -9,6 +9,7 @@
     "a11y.openHelp": "Open keyboard shortcuts",
     "a11y.openPalette": "Open command palette",
     "a11y.sidebar": "Sidebar navigation",
+    "a11y.skipLink": "Skip to main content",
     "a11y.themeToggle": "Toggle theme",
     "a11y.topbar": "Top bar",
     "agents.detail.back": "Back to members",
@@ -1487,6 +1488,13 @@
     "members.tab.human": "Humans",
     "members.title": "Members",
     "members.toast.roleUpdated": "Role updated.",
+    "mobileNav.board": "Board",
+    "mobileNav.chat": "Chat",
+    "mobileNav.home": "Home",
+    "mobileNav.issues": "Issues",
+    "mobileNav.more": "More",
+    "mobileNav.moreClose": "Close navigation menu",
+    "mobileNav.moreTitle": "All navigation",
     "nav.automation": "Automation",
     "nav.autopilots": "Autopilots",
     "nav.board": "Board",
@@ -1844,6 +1852,7 @@
     "runtimes.wizard.step.waiting": "3. Waiting",
     "runtimes.wizard.title": "New runtime",
     "runtimes.wizard.waiting": "Waiting for the daemon to come online…",
+    "search.openPalette": "Open search and command panel",
     "security.changePassword": "Change password",
     "security.changePasswordSubmit": "Update password",
     "security.changePasswordSuccess": "Password updated. Other sessions were signed out.",
@@ -2274,5 +2283,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "b738862d"
+  "version": "81351039"
 }

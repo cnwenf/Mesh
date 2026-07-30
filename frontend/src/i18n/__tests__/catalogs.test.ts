@@ -158,6 +158,33 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
     expect(zhKeys).toEqual(enKeys);
   });
 
+  it('中文导航:自动值守(Autopilots)与运行环境(Runtimes 入口)不再重名(design-quality §4.1)', () => {
+    const zh = builtinCatalogs['zh-CN'].messages;
+    expect(zh['nav.autopilots']).toBe('自动值守');
+    expect(zh['nav.automation']).toBe('运行环境');
+    expect(zh['nav.autopilots']).not.toBe(zh['nav.automation']);
+  });
+
+  it('skip link / 移动导航 / 统一搜索入口文案键两目录齐备(design-quality §4.3/§10.2)', () => {
+    const keys = [
+      'a11y.skipLink',
+      'mobileNav.home',
+      'mobileNav.issues',
+      'mobileNav.board',
+      'mobileNav.chat',
+      'mobileNav.more',
+      'mobileNav.moreTitle',
+      'mobileNav.moreClose',
+      'search.openPalette',
+    ];
+    for (const locale of ['en', 'zh-CN']) {
+      const messages = builtinCatalogs[locale].messages;
+      for (const key of keys) {
+        expect(messages[key], `${locale} 缺少键 ${key}`).toBeTruthy();
+      }
+    }
+  });
+
   it('覆盖基线必需键清单(导航/状态/错误/设置/快捷键/无障碍/首页)', () => {
     for (const locale of ['en', 'zh-CN']) {
       const keys = new Set(Object.keys(builtinCatalogs[locale].messages));
