@@ -53,11 +53,17 @@ from mesh.db.models.integration import (
     IntegrationMessageQueue,
 )
 from mesh.db.tenant import set_tenant_context
+from mesh.errors import ValidationError
 from mesh.integrations.connectors import NormalizedEvent, VerifiedEnvelope
 from mesh.integrations.dingtalk import build_conversation_key, build_sender_identity_key
 from mesh.integrations.matching import binding_matches
 from mesh.outbox.service import emit_event, emit_realtime
-from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
+from mesh.runtime.enqueue import (
+    DISPATCH_LEASE_SECONDS,
+    DISPATCH_TIMEOUT_SECONDS,
+    ENQUEUE_EVENT_TYPE,
+    LEASE_BUFFER_SECONDS,
+)
 
 logger = logging.getLogger("mesh.integrations.ingest")
 
@@ -77,10 +83,8 @@ IM_PROVIDERS = frozenset({"dingtalk", "feishu", "slack"})
 DEFAULT_ACK_COALESCE_WINDOW = timedelta(seconds=5)
 DEFAULT_ACK_TEMPLATE = "✅ 已接收，处理中"
 
-# §3.9 dispatch lease: execution timeout ceiling + buffer (the dispatcher /
-# lease repair — MES-88 — owns the authoritative constants; the optimistic
-# parallel dispatch uses the same shape at enqueue time).
-DISPATCH_LEASE_SECONDS = 1800 + 300
+# §3.9 dispatch lease constants are owned by runtime.enqueue (the consumer
+# side) and re-exported here for the parallel optimistic dispatch path.
 
 # Message excerpt / binding display sanitization (§2.10: ≤120 / ≤200 chars,
 # control chars + zero-width stripped; the full text is never exposed via
@@ -795,13 +799,37 @@ async def ingest_verified_event(
         )
 
     # Normalized keys (used by the guardrails, the queue protocol, and the
-    # ack plumbing; segment validation fails closed per §2.10 N-1).
-    conversation_key = build_conversation_key(
-        envelope.provider, envelope.provider_tenant_key, envelope.external_ref
-    )
-    sender_identity_key = build_sender_identity_key(
-        envelope.provider, envelope.provider_tenant_key, envelope.sender_key
-    )
+    # ack plumbing; segment validation fails closed per §2.10 N-1). A key
+    # the segment rules refuse (e.g. a colon-carrying conversationId from a
+    # signed-but-hostile payload) is a REJECTION, not a 500: audit on the
+    # existing ledger row and answer bare-JSON 200 — the platform must
+    # never see a §6.14 envelope or a non-2xx retry trigger here.
+    try:
+        conversation_key = build_conversation_key(
+            envelope.provider, envelope.provider_tenant_key, envelope.external_ref
+        )
+        sender_identity_key = build_sender_identity_key(
+            envelope.provider, envelope.provider_tenant_key, envelope.sender_key
+        )
+    except ValidationError:
+        event_row.process_status = "rejected"
+        event_row.payload = {
+            **(event_row.payload or {}),
+            "_mesh_reject_reason": "malformed_payload",
+        }
+        event_row.updated_at = now
+        await session.flush()
+        return IngestResult(
+            status_code=200,
+            body={
+                "received": True,
+                "event_id": envelope.external_event_id,
+                "process_status": "rejected",
+                "reason": "malformed_payload",
+            },
+            process_status="rejected",
+            event_id=event_row.id,
+        )
 
     # §2.10 frequency guardrails — Redis rolling windows — run BEFORE the
     # command plane (§3.7:975: command handling is constrained by the §2.10
@@ -1074,6 +1102,8 @@ __all__ = [
     "DEFAULT_ACK_COALESCE_WINDOW",
     "DEFAULT_ACK_TEMPLATE",
     "DISPATCH_LEASE_SECONDS",
+    "DISPATCH_TIMEOUT_SECONDS",
+    "LEASE_BUFFER_SECONDS",
     "IM_SEND_EVENT_TYPE",
     "IM_PROVIDERS",
     "IngestResult",

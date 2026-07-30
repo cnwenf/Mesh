@@ -25,6 +25,7 @@ import pytest
 from sqlalchemy import select
 
 from mesh.db.models.integration import Integration, IntegrationEvent, IntegrationMessageQueue
+from mesh.db.models.outbox import OutboxEvent
 from mesh.integrations.dingtalk_stream import (
     STATE_CONNECTED,
     STATE_DOWN,
@@ -704,3 +705,163 @@ async def test_pending_depth_counter_api(session_factory):
     guardrails = InboundGuardrails(None, max_pending_per_conversation=50)
     async with session_factory() as session:
         assert await guardrails.check_pending_depth(session, conversation_key) == "rate_limited"
+
+
+# ---------------------------------------------------------------------------
+# Review-round fixes: M2 (backoff reset) + M3 (transition-only broadcast,
+# undecryptable-secret backoff loop)
+# ---------------------------------------------------------------------------
+
+
+async def test_backoff_counter_resets_after_successful_connection(session_factory):
+    """M2: a cycle that REACHED CONNECTED is not a consecutive open
+    failure — the counter resets, so repeated connect-then-drop cycles
+    keep reconnecting at ~base instead of the historical maximum."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"endpoint": "wss://gw.test/c", "ticket": "t"})
+
+    async def ws_connect(url, *, ssl_context):
+        return FakeWS()  # recv blocks empty → heartbeat path; close to drop
+
+    manager = StreamManager(
+        session_factory, _settings(),
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ws_connect=ws_connect,
+        sleep=_instant_sleep,
+        rng=random.Random(11),
+    )
+    await manager.scan_once()
+    await asyncio.sleep(0.2)  # many connect→(drop via close)→reconnect cycles
+    try:
+        async with session_factory() as session:
+            row = (
+                await session.execute(
+                    select(Integration).where(
+                        Integration.id == (await session.execute(
+                            select(Integration.id)
+                        )).scalars().first()
+                    )
+                )
+            ).scalars().first()
+        # Backoff stayed at the FIRST rung (~2s ±20%) across many cycles —
+        # without the reset it would have grown 2→4→8→…→300.
+        assert (row.stream_state or {}).get("backoff_seconds", 0) <= 2.4
+    finally:
+        await manager.shutdown()
+
+
+async def test_backoff_grows_on_consecutive_open_failures(session_factory):
+    """M2 negative control: when the open itself keeps failing (never
+    CONNECTED), the counter grows — backoff visibly exceeds the base."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"code": "invalidAppSecret"})
+
+    manager = StreamManager(
+        session_factory, _settings(),
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ws_connect=lambda url, ssl_context: None,
+        sleep=_instant_sleep,
+        rng=random.Random(13),
+    )
+    from mesh.db.models.integration import Integration as IntegrationRow
+
+    # Let the real group loop run against the failing gateway.
+    await manager.scan_once()
+    # Poll: consecutive open failures ⇒ the persisted backoff grows past
+    # base and the group settles DOWN (snapshot-tolerant: a mid-cycle read
+    # may transiently show reconnecting).
+    deadline = asyncio.get_running_loop().time() + 10
+    backoff_seen = 0.0
+    state = None
+    while asyncio.get_running_loop().time() < deadline:
+        async with session_factory() as session:
+            row = (await session.execute(select(IntegrationRow))).scalar_one()
+        state = (row.stream_state or {}).get("state")
+        backoff_seen = max(backoff_seen, (row.stream_state or {}).get("backoff_seconds", 0))
+        if backoff_seen >= 3.0 and state == STATE_DOWN:
+            break
+        await asyncio.sleep(0.05)
+    try:
+        assert backoff_seen >= 3.0, f"backoff never grew past base (last={backoff_seen})"
+        assert state == STATE_DOWN
+    finally:
+        await manager.shutdown()
+
+
+async def test_undecryptable_secret_single_down_broadcast_then_recovery(session_factory):
+    """M3: an undecryptable app_secret keeps the group ALIVE (DOWN +
+    backoff, re-checking each cycle) and broadcasts the DOWN transition
+    EXACTLY ONCE (no outbox/realtime flood); fixing the ciphertext (a
+    rotation back to a valid secret) reconnects without a rescan."""
+    world = await seed_dingtalk_world(
+        session_factory,
+        receive_mode="stream",
+        config_extra={"app_secret_ref": "garbage-not-fernet-ciphertext"},
+    )
+    await make_dingtalk_binding(session_factory, world=world)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"endpoint": "wss://gw.test/c", "ticket": "t"})
+
+    async def ws_connect(url, *, ssl_context):
+        return FakeWS()
+
+    manager = StreamManager(
+        session_factory, _settings(),
+        http_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ws_connect=ws_connect,
+        sleep=_instant_sleep,
+        rng=random.Random(17),
+    )
+    await manager.scan_once()
+    await asyncio.sleep(0.25)  # many backoff cycles against the bad secret
+
+    async def _stream_broadcasts():
+        async with session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(OutboxEvent).where(
+                        OutboxEvent.event_type == "realtime.publish",
+                        OutboxEvent.payload["event"].astext == "integration.updated",
+                    )
+                )
+            ).scalars().all()
+        return [
+            r for r in rows
+            if (r.payload.get("data") or {}).get("subject") == "stream_channel"
+        ]
+
+    broadcasts = await _stream_broadcasts()
+    assert len(broadcasts) == 1, f"DOWN broadcast fired {len(broadcasts)} times (flood)"
+    async with session_factory() as session:
+        row = await session.get(Integration, world["integ_dingtalk"])
+    assert (row.stream_state or {}).get("state") == STATE_DOWN
+
+    # Rotate to a VALID ciphertext — the alive group re-decrypts each cycle
+    # and reconnects on its own (no rescan needed).
+    from tests.unit.integrations_support import encrypt as _encrypt
+
+    async with session_factory() as session, session.begin():
+        row = await session.get(Integration, world["integ_dingtalk"])
+        row.config = {**row.config, "app_secret_ref": _encrypt(DINGTALK_APP_SECRET)}
+
+    async def _connected():
+        async with session_factory() as session:
+            row = await session.get(Integration, world["integ_dingtalk"])
+        return (row.stream_state or {}).get("state") == STATE_CONNECTED
+
+    deadline = asyncio.get_running_loop().time() + 5
+    while asyncio.get_running_loop().time() < deadline:
+        if await _connected():
+            break
+        await asyncio.sleep(0.05)
+    try:
+        assert await _connected(), "group did not recover after secret rotation"
+    finally:
+        await manager.shutdown()

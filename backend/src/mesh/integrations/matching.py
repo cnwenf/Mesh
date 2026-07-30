@@ -165,6 +165,15 @@ def binding_matches(
     return False
 
 
+def _as_dingtalk_bool(value: object) -> bool:
+    """DingTalk boolean fields arrive as JSON booleans OR stringified
+    ('true'/'false'); mirror the ingestion normalizer's rules so this
+    branch never truth-evaluates a 'false' string."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
 def compute_im_signals(provider: str, event: NormalizedEvent, config: dict[str, Any]) -> tuple[bool, bool]:
     """Derive (bot_mentioned, is_direct_message) from the normalized event.
 
@@ -188,8 +197,10 @@ def compute_im_signals(provider: str, event: NormalizedEvent, config: dict[str, 
     if provider == "dingtalk":
         # Group @-bot = ``isInAtList=true`` (§3.2 normalization table);
         # direct messages (conversationType '1') are direct_message triggers.
+        # Parse the at-list flag with the SAME boolean rules the normalizer
+        # uses (_as_bool) — a raw string "false" must not truth-evaluate.
         is_dm = str(event.extra.get("conversation_type") or "") == "1"
-        mentioned = bool(event.extra.get("is_in_at_list")) or is_dm
+        mentioned = _as_dingtalk_bool(event.extra.get("is_in_at_list")) or is_dm
         return mentioned, is_dm
     return False, False
 

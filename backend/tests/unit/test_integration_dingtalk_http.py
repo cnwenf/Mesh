@@ -351,3 +351,88 @@ async def test_official_sample_ids_flow_through_http_path(session_factory):
     )
     assert queue.sender_identity_key.startswith("dingtalk:dingcorp0001:x=")
     assert ":" not in queue.sender_identity_key.split(":", 2)[2]
+
+
+# ---------------------------------------------------------------------------
+# Review-round fixes: H1 (Content-Length pre-check) + M1 (malformed closure)
+# ---------------------------------------------------------------------------
+
+
+def test_declared_body_too_large_pre_check():
+    """H1: the Content-Length PRE-CHECK rejects a declared-oversize body
+    before buffering (§3.2 item 2, first of the two passes)."""
+    from unittest.mock import Mock
+
+    from mesh.integrations.inbound_routes import (
+        INBOUND_BODY_MAX_BYTES,
+        _declared_body_too_large,
+    )
+
+    oversized = Mock()
+    oversized.headers = {"content-length": str(INBOUND_BODY_MAX_BYTES + 1)}
+    resp = _declared_body_too_large(oversized)
+    assert resp is not None
+    assert resp.status_code == 413
+
+    garbage = Mock()
+    garbage.headers = {"content-length": "not-a-number"}
+    assert _declared_body_too_large(garbage).status_code == 413
+
+    fine = Mock()
+    fine.headers = {"content-length": "1024"}
+    assert _declared_body_too_large(fine) is None
+
+    absent = Mock()  # chunked / absent → post-read pass still applies
+    absent.headers = {}
+    assert _declared_body_too_large(absent) is None
+
+
+async def test_malformed_payload_missing_msg_id_rejected_not_4xx(session_factory):
+    """M1: signed-but-malformed payload → bare-JSON 200 rejected + audit
+    row, never a §6.14 envelope / 4xx retry trigger, never dispatched."""
+    world = await seed_dingtalk_world(session_factory)
+    await make_dingtalk_binding(session_factory, world=world)
+    payload = dingtalk_message_payload()
+    del payload["msgId"]
+    body, headers = dingtalk_request(payload)
+
+    status, resp = await _run(session_factory, body, headers)
+
+    assert status == 200  # never non-2xx at the platform
+    assert resp == {
+        "received": True,
+        "event_id": "",
+        "process_status": "rejected",
+        "reason": "malformed_payload",
+    }
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+        queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
+    assert event.signature_status == "valid"  # signature WAS fine
+    assert event.process_status == "rejected"
+    assert event.external_event_id.startswith("rejected:")
+    assert queues == []
+
+
+async def test_malformed_conversation_id_colon_rejected_inside_core(session_factory):
+    """M1 (core layer): a colon-carrying conversationId that defeats the
+    §2.10 N-1 segment rules is a rejection inside ingest_verified_event —
+    audit on the ledger row with _mesh_reject_reason, bare-JSON 200."""
+    world = await seed_dingtalk_world(session_factory)
+    await make_dingtalk_binding(
+        session_factory, world=world, external_ref="cidWITHcolon:injection"
+    )
+    payload = dingtalk_message_payload(conversation_id="cidWITHcolon:injection")
+    body, headers = dingtalk_request(payload)
+
+    status, resp = await _run(session_factory, body, headers)
+
+    assert status == 200
+    assert resp["process_status"] == "rejected"
+    assert resp["reason"] == "malformed_payload"
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+        queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
+    assert event.process_status == "rejected"
+    assert event.payload["_mesh_reject_reason"] == "malformed_payload"
+    assert queues == []

@@ -37,6 +37,7 @@ from mesh.agent.snapshot import build_config_snapshot
 from mesh.db.models.agent import Agent
 from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationEvent
 from mesh.db.tenant import set_tenant_context
+from mesh.errors import ValidationError
 from mesh.integrations.connectors import (
     KIND_TO_PROVIDER,
     SIG_INVALID,
@@ -830,9 +831,49 @@ async def process_inbound(
     if provider in IM_PROVIDERS:
         # Auth layer done → normalized verified envelope → the ONE shared
         # ingestion core (§2.10:651-664; the Stream adapter lands here too).
-        envelope = _envelope_from_normalized(
-            provider, event, config=dict(integration.config or {}), raw_payload=payload
-        )
+        try:
+            envelope = _envelope_from_normalized(
+                provider, event, config=dict(integration.config or {}), raw_payload=payload
+            )
+        except ValidationError:
+            # Signed-but-malformed payload (missing msgId/conversationId,
+            # sender identity outside the §2.10 N-1 charset — possible only
+            # for the app_secret holder, but a real path): forensic audit in
+            # the rejected: namespace (payload truncated by store_event) and
+            # a bare-JSON 200 — NEVER dispatched, and never a §6.14 envelope
+            # or non-2xx back at the platform (that would trigger the retry
+            # amplification this module exists to avoid; mirrors the Stream
+            # path's catch-and-skip-frame closure, dingtalk_stream.py).
+            logger.warning(
+                "inbound %s payload failed normalization (integration=%s) — "
+                "rejected audit, bare 200, no distribution",
+                kind,
+                integration.id,
+            )
+            try:
+                async with session.begin_nested():
+                    await store_event(
+                        session,
+                        workspace_id=integration.workspace_id,
+                        integration_id=integration.id,
+                        external_event_id=(
+                            f"{REJECTED_KEY_PREFIX}"
+                            f"{hashlib.sha256(raw_body).hexdigest()}"
+                        ),
+                        event_type=str(event.event_type or kind),
+                        payload=payload,
+                        signature_status="valid",
+                        process_status="rejected",
+                        now=now,
+                    )
+            except IntegrityError:
+                pass  # same malformed body repeated — already audited
+            return 200, {
+                "received": True,
+                "event_id": "",
+                "process_status": "rejected",
+                "reason": "malformed_payload",
+            }
         ingest_kwargs: dict[str, Any] = {"guardrails": guardrails}
         if ack_window is not None:
             ingest_kwargs["ack_window"] = ack_window

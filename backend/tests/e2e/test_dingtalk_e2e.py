@@ -470,7 +470,9 @@ async def test_http_pre_signature_limit_silent_200_real_e2e(api_client):
             "/api/v1/integrations/dingtalk/events", content=body, headers=headers
         )
     assert last.status_code == 200  # silent — never 429 from this layer
-    assert last.json()["process_status"] == "rate_limited"
+    # Indistinguishable from ordinary acceptance — the over-limit caller
+    # learns nothing about the defense (audit trail carries the truth).
+    assert last.json() == {"received": True, "event_id": "", "process_status": "received"}
 
 
 # ---------------------------------------------------------------------------

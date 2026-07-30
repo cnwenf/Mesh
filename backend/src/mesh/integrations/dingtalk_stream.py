@@ -50,6 +50,7 @@ production boot triggers a startup warning + audit entry.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -506,6 +507,19 @@ class StreamManager:
 
     # -- group serve loop ----------------------------------------------------
 
+    async def _refresh_configs(self, integrations: list[Integration]) -> None:
+        """Re-read config/secret_ref from the DB each cycle so a credential
+        ROTATION becomes visible to the running group without a full rescan
+        (§3.2: 凭据轮换 → 断连并以新密文重连) — the decrypted-secret check
+        and the client-rebuild check below both key off the refreshed row."""
+        async with self._session_factory() as session:
+            for integration in integrations:
+                row = await session.get(Integration, integration.id)
+                if row is None:
+                    continue  # deleted — the scan reconciles the group away
+                integration.config = dict(row.config or {})
+                integration.secret_ref = row.secret_ref
+
     async def _serve_group(
         self,
         app_key: str,
@@ -514,32 +528,62 @@ class StreamManager:
         signal: asyncio.Event,
     ) -> None:
         integration = integrations[0]  # group representative for config/secret
-        app_secret = _decrypt_app_secret(integration, self._settings.jwt_secret)
-        if app_secret and app_secret not in self._redact_values:
-            self._redact_values.append(app_secret)  # §6.16 scrub registry
-        if not app_secret:
-            for item in integrations:
-                await self._set_stream_state(item, STATE_DOWN, backoff_seconds=0)
-            logger.error(
-                "dingtalk stream: undecryptable app_secret for app_key=%s — "
-                "zero ingestion (credential equivalent of invalid signature)",
-                app_key,
-            )
-            return
         base, maximum, heartbeat = _reconnect_config(integration)
-        client = DingTalkStreamClient(
-            app_key=app_key,
-            app_secret=app_secret,
-            gateway_base=gateway_base,
-            ssl_context=self._ssl_context,
-            http_factory=self._http_factory,
-            ws_connect=self._ws_connect,
-        )
+        client: DingTalkStreamClient | None = None
         attempt = 0
+        secret_was_bad = False
         try:
             while not signal.is_set():
+                await self._refresh_configs(integrations)
+                # M3: undecryptable app_secret (rotated ciphertext, revoked
+                # key) — the credential equivalent of "signature invalid".
+                # The group STAYS ALIVE: DOWN + capped backoff, re-trying
+                # decryption each cycle so a rotation to a valid ciphertext
+                # reconnects without a scan round-trip; the DOWN broadcast
+                # fires ONCE (transition-only) — no outbox/realtime flood.
+                app_secret = _decrypt_app_secret(integration, self._settings.jwt_secret)
+                if not app_secret:
+                    if not secret_was_bad:
+                        message, _hits = redact_text(
+                            "dingtalk stream: undecryptable app_secret for "
+                            f"app_key={app_key} — down + backoff, retrying "
+                            "decryption each cycle (zero ingestion until fixed)",
+                            self._redact_values,
+                        )
+                        logger.error(message)
+                        secret_was_bad = True
+                    await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
+                    await self._interruptible_sleep(
+                        compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
+                        signal,
+                    )
+                    attempt += 1
+                    continue
+                if secret_was_bad:
+                    logger.info(
+                        "dingtalk stream: app_secret for app_key=%s decrypts "
+                        "again — reconnecting",
+                        app_key,
+                    )
+                    secret_was_bad = False
+                    attempt = 0
+                if app_secret not in self._redact_values:
+                    self._redact_values.append(app_secret)  # §6.16 scrub registry
+                # Credential rotation ⇒ rebuild the client with the new
+                # plaintext (the old connection is dropped, §3.2).
+                if client is None or client._app_secret != app_secret:
+                    if client is not None:
+                        await client.close()
+                    client = DingTalkStreamClient(
+                        app_key=app_key,
+                        app_secret=app_secret,
+                        gateway_base=gateway_base,
+                        ssl_context=self._ssl_context,
+                        http_factory=self._http_factory,
+                        ws_connect=self._ws_connect,
+                    )
                 try:
-                    await self._serve_once(
+                    connected = await self._serve_once(
                         client, integrations, attempt, base, maximum, heartbeat, signal
                     )
                 except asyncio.CancelledError:
@@ -559,9 +603,17 @@ class StreamManager:
                     continue
                 if signal.is_set():
                     break
-                attempt += 1
+                if connected:
+                    # M2: the cycle reached CONNECTED — it is NOT a
+                    # consecutive open failure; reset the backoff counter so
+                    # the next drop reconnects at ~base instead of the
+                    # historical maximum.
+                    attempt = 0
+                else:
+                    attempt += 1
         finally:
-            await client.close()
+            if client is not None:
+                await client.close()
             for item in integrations:
                 lock_session = getattr(item, "_lock_session", None)
                 if lock_session is not None:
@@ -583,9 +635,11 @@ class StreamManager:
         maximum: float,
         heartbeat: float,
         signal: asyncio.Event,
-    ) -> None:
-        """One connect → frame-loop cycle (exceptions escape to the
-        crash-safe supervisor in _serve_group)."""
+    ) -> bool:
+        """One connect → frame-loop cycle. Returns True when the cycle
+        REACHED CONNECTED (caller resets the backoff counter — M2); False
+        when the open itself failed (consecutive-failure backoff grows).
+        Exceptions escape to the crash-safe supervisor in _serve_group."""
         await self._mark_group(integrations, STATE_RECONNECTING, attempt, base, maximum)
         try:
             await client.open_connection()
@@ -595,7 +649,7 @@ class StreamManager:
                 compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
                 signal,
             )
-            return
+            return False
         except (StreamOpenError, httpx.HTTPError, OSError) as exc:
             message, _hits = redact_text(
                 f"dingtalk stream open failed (app_key={integrations[0].config.get('app_key')}): {exc}",
@@ -607,18 +661,21 @@ class StreamManager:
                 compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
                 signal,
             )
-            return
+            return False
         await self._mark_group(integrations, STATE_CONNECTED, 0, base, maximum)
         immediate_reconnect = await self._frame_loop(
             client, integrations, heartbeat, signal
         )
         await client.close()
-        if signal.is_set() or immediate_reconnect:
-            return  # disconnect topic ⇒ caller loops with attempt unchanged
-        await self._interruptible_sleep(
-            compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-            signal,
-        )
+        if not immediate_reconnect and not signal.is_set():
+            # Connection dropped (close/heartbeat timeout) — back off before
+            # the next cycle (the counter itself is reset by the caller
+            # because this cycle did connect — M2).
+            await self._interruptible_sleep(
+                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
+                signal,
+            )
+        return True  # reached CONNECTED (disconnect topic ⇒ immediate redo)
 
     async def _frame_loop(
         self,
@@ -757,10 +814,20 @@ class StreamManager:
     # -- state persistence ---------------------------------------------------
 
     async def _interruptible_sleep(self, seconds: float, signal: asyncio.Event) -> None:
-        try:
-            await asyncio.wait_for(signal.wait(), timeout=max(0.0, seconds))
-        except TimeoutError:
-            pass
+        """Sleep ``seconds`` (through the INJECTED sleeper — real
+        asyncio.sleep in production, instant in tests) but wake IMMEDIATELY
+        when the stop signal fires."""
+        if signal.is_set():
+            return
+        stop_waiter = asyncio.ensure_future(signal.wait())
+        sleeper = asyncio.ensure_future(self._sleep(max(0.0, seconds)))
+        _done, pending = await asyncio.wait(
+            {stop_waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def _mark_group(
         self,
@@ -802,7 +869,11 @@ class StreamManager:
             previous = dict(row.stream_state or {})
             row.stream_state = {**previous, **payload_state}
             row.updated_at = now
-            if broadcast:
+            # M3: broadcast ONLY on state TRANSITIONS — a sustained
+            # reconnecting/down must not flood the outbox/realtime path
+            # (the idempotency key carries now.isoformat() precisely so
+            # repeats cannot dedup; the transition rule is the real gate).
+            if broadcast and previous.get("state") != state:
                 await emit_realtime(
                     session,
                     workspace_id=row.workspace_id,

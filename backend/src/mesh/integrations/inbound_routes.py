@@ -53,6 +53,27 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _declared_body_too_large(request: Request) -> JSONResponse | None:
+    """Content-Length PRE-CHECK (§3.2 DoS hardening item 2, first pass).
+
+    Rejects a declared-oversize body BEFORE it is buffered into memory;
+    ``_read_body`` re-checks the ACTUAL byte count after reading (second
+    pass — a lying Content-Length cannot bypass the cap). Both passes are
+    applied on EVERY inbound route, including the DingTalk callback (whose
+    pre-signature limiter replaces the shared per-IP 429, not the body cap).
+    """
+    declared = request.headers.get("content-length")
+    if declared is None:
+        return None  # chunked / absent → the post-read check still applies
+    try:
+        declared_bytes = int(declared)
+    except ValueError:
+        return JSONResponse(status_code=413, content={"error": "payload_too_large"})
+    if declared_bytes > INBOUND_BODY_MAX_BYTES:
+        return JSONResponse(status_code=413, content={"error": "payload_too_large"})
+    return None
+
+
 async def _guard(request: Request) -> JSONResponse | None:
     """Pre-body guards: per-IP rate limit + declared body size.
 
@@ -66,15 +87,7 @@ async def _guard(request: Request) -> JSONResponse | None:
     )
     if remaining < 0:
         return JSONResponse(status_code=429, content={"error": "rate_limited"})
-    declared = request.headers.get("content-length")
-    if declared is not None:
-        try:
-            declared_bytes = int(declared)
-        except ValueError:
-            return JSONResponse(status_code=413, content={"error": "payload_too_large"})
-        if declared_bytes > INBOUND_BODY_MAX_BYTES:
-            return JSONResponse(status_code=413, content={"error": "payload_too_large"})
-    return None
+    return _declared_body_too_large(request)
 
 
 async def _read_body(request: Request) -> bytes | JSONResponse:
@@ -167,17 +180,23 @@ async def dingtalk_events(request: Request) -> JSONResponse:
     """DingTalk HTTP receive mode callback (§3.2 ``receive_mode='http'``).
 
     Guard order (unauthenticated surface — DoS hardening): the 1 MiB body
-    cap, THEN the pre-signature COARSE anti-abuse layer of auth.md §3.6 —
-    keyed by the (integration, IP) tuple (IP-only when the integration is
-    unlocatable), 120/min, answering over-limit callers with a SILENT 200
-    (non-2xx would trigger the platform's retry amplification), audit +
-    alert only. The generic per-IP 429 guard is deliberately NOT applied
-    here: §3.6 reserves 429 for the other endpoint classes. Signature
-    verification runs afterwards, inside ``process_inbound``.
+    cap in BOTH passes (Content-Length PRE-CHECK before buffering + actual
+    byte-count re-check after reading — §3.2 item 2 "预检 + 复检双道,防
+    Content-Length 谎报绕过"), THEN the pre-signature COARSE anti-abuse
+    layer of auth.md §3.6 — keyed by the (integration, IP) tuple (IP-only
+    when the integration is unlocatable), 120/min, answering over-limit
+    callers with a SILENT 200 indistinguishable from acceptance (non-2xx
+    would trigger the platform's retry amplification), audit + alert only.
+    The generic per-IP 429 guard is deliberately NOT applied here: §3.6
+    reserves 429 for the other endpoint classes. Signature verification
+    runs afterwards, inside ``process_inbound``.
     """
+    oversized = _declared_body_too_large(request)
+    if oversized is not None:
+        return oversized  # pre-check pass: declared oversize → 413, never buffered
     raw_body = await _read_body(request)
     if isinstance(raw_body, JSONResponse):
-        return raw_body
+        return raw_body  # re-check pass: actual oversize (lying Content-Length)
 
     # Locate the integration BEFORE signature work so the limiter can key
     # on the (integration, IP) tuple. Unlocatable payloads still pass the
@@ -200,16 +219,24 @@ async def dingtalk_events(request: Request) -> JSONResponse:
         if rows:
             integration_id = rows[0][0]
     if await _dingtalk_pre_limit_exceeded(request, integration_id=integration_id):
-        # Silent 200 + audit/alert ONLY (auth.md §3.6).
+        # Silent 200 + audit/alert ONLY (auth.md §3.6). The body is
+        # deliberately INDISTINGUISHABLE from ordinary acceptance: telling
+        # an unauthenticated prober that a rate-limit defense exists only
+        # helps them calibrate around it ("静默" = silent to the caller,
+        # loud in the audit trail).
         logger.error(
-            "dingtalk inbound pre-signature rate limit exceeded "
+            "AUDIT: dingtalk inbound pre-signature rate limit exceeded "
             "(integration=%s ip=%s) — silent 200, no distribution",
             integration_id,
             _client_ip(request),
         )
         return JSONResponse(
             status_code=200,
-            content={"received": True, "process_status": "rate_limited"},
+            content={
+                "received": True,
+                "event_id": "",
+                "process_status": "received",
+            },
         )
 
     return await _run_inbound(request, "im_dingtalk", raw_body=raw_body)
@@ -218,26 +245,38 @@ async def dingtalk_events(request: Request) -> JSONResponse:
 async def _dingtalk_pre_limit_exceeded(
     request: Request, *, integration_id: uuid.UUID | None
 ) -> bool:
-    """(integration, IP) sliding window — non-raising (silent-200 layer).
+    """(integration, IP) sliding window — genuinely non-raising.
 
     Shares the Redis sliding-window primitive with the auth rate limiter
-    but NEVER raises: over-limit inbound callbacks must answer 200. When
-    the integration cannot be located the window degrades to IP-only (an
-    unattributable flood still meets a budget).
+    but NEVER raises: over-limit inbound callbacks must answer 200, and a
+    Redis hiccup must not turn every callback into a 500 (exactly the
+    retry amplification this layer exists to prevent) — fail OPEN, the
+    signature check is the hard gate. When the integration cannot be
+    located the window degrades to IP-only (an unattributable flood still
+    meets a budget).
     """
     redis = getattr(request.app.state, "redis", None)
     if redis is None:
-        return False  # fail OPEN here: signature verification is the gate
+        return False  # fail OPEN: signature verification is the gate
     moment = time.time()
     window = INBOUND_RATE_WINDOW_SECONDS
     scope = str(integration_id) if integration_id is not None else "unlocated"
     key = f"mesh:dingtalk-prelimit:{scope}:{_client_ip(request)}"
-    pipe = redis.pipeline()
-    pipe.zremrangebyscore(key, 0, moment - window)
-    pipe.zcard(key)
-    pipe.zadd(key, {f"{moment}:{uuid.uuid4().hex}": moment})
-    pipe.expire(key, window)
-    _removed, count, _added, _ttl = await pipe.execute()
+    try:
+        pipe = redis.pipeline()
+        pipe.zremrangebyscore(key, 0, moment - window)
+        pipe.zcard(key)
+        pipe.zadd(key, {f"{moment}:{uuid.uuid4().hex}": moment})
+        pipe.expire(key, window)
+        _removed, count, _added, _ttl = await pipe.execute()
+    except Exception:  # noqa: BLE001 — Redis flakiness ⇒ fail OPEN, never 500
+        logger.warning(
+            "dingtalk pre-signature limiter unavailable (redis) — failing open "
+            "for integration=%s ip=%s",
+            integration_id,
+            _client_ip(request),
+        )
+        return False
     return int(count) >= DINGTALK_PRE_LIMIT_PER_MIN
 
 
