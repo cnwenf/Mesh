@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-31
+
+前端设计优化批次②(MES-111 Stage 1 / MES-125)——看板 G7 必修项全部清偿(指针拖拽五反馈:dragover 列高亮/落点指示条随 index 移位/浮层阴影微缩放/原位占位/WIP warn·block 落下前文案、键盘移动模式、触控长按目标列 sheet、List 布局真实表格、≥200 卡列虚拟化窗口化),issue 列表 DataView 化与详情 DetailLayout 化(桌面两栏 + 属性侧栏/手机底部抽屉/内联标题/保存态弱提示/评论·活动 Tabs),评论时间线与草稿自动保存/失败保留重试/5s 撤销/AI 运行五态统一(§9.8),附件统一文件卡/进度环/扫描门禁/灯箱触控手势(§8.2/§3.2),页面模板层 src/design/patterns 沉淀(PageHeader/DataView/DetailLayout/FilterChips/BulkBar/useListKeyboardSelection,稳定 API 供后续批次复用)。含 MES-122 钉钉单聊补字段、MES-144 执行行标签契约保真、MES-145 CI 超时/并发治理。
+
 ### Changed
 
 - **工程·CI 治理:全 workflow 显式 timeout-minutes + concurrency(MES-145,MES-122 验收遗留)**:backend-ci / frontend / spec-checks / daemon-ci / cli-release 五 workflow 统一补齐显式 job 超时(按实测余量:后端主 test job 实测 ~45-48min → 60min;前端 quality/e2e/visual 30min、全栈走查 45min、contrast 15min;daemon 45min;文档/DDL/供应链短 job 实测 <1min → 15min;CLI 构建 45min、签名发布 20min)与 workflow 级 concurrency(同 ref 新 run 立即取消旧 run:`group: ${{ github.workflow }}-${{ github.ref }}` + `cancel-in-progress: true`,杜绝同分支/同 PR 多 run 互挤 runner——MES-122 遗留:无兜底时卡死 job 按 runner 默认 6h 阻塞门禁,事故复跑卡死 130+ 分钟;cli-release 发布流 `cancel-in-progress: false`,仅串行不取消进行中的签名/发布)。real-llm.yml 已有 concurrency + timeout-minutes(刻意设计)保持原样。检查矩阵、路径过滤与覆盖率门禁一律不变(仅配置变更);真实探针实测超时 job 被终止(annotation「exceeded the maximum execution time」,终止而非挂死)、重复推送旧 run 即时取消。
@@ -20,6 +24,10 @@ Mesh 项目的所有重要变更都记录于此文件。
   - **验证**:单测 3379 例全绿、per-file 与 diff 覆盖率门禁通过;真实后端 e2e 桌面 + 手机全过(含竞态/虚拟化/拖拽双路径回归);桌面 + 手机 × 亮暗存证更新;视觉回归基线按页面变更重生成并复验全绿;构建/lint/typecheck/对比度/存证唯一性全绿。
 - **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
 - **前端·执行行标签契约保真(MES-144,runtime.md §3.3)**:首页工作台「AI 运行」行与运行/执行详情页此前以执行摘要里的联表展示名(agent 名 / issue 标识)拼标签,而后端 `_render_execution` 从不返回这两字段;mock 契约栈却伪造了它们,致 e2e 看不出差异、真实环境恒退化为无信息兜底文案。修复**只动展示层与契约镜像**:新增纯工具 `executionLabel`(`trigger` 文案 + 执行短 ID 的行标签规范形),首页行标题改用它、元信息补「状态文案 · 相对时间」(复用 `formatRelativeTime`),运行/执行详情页同步改以 trigger+短 ID 与契约实际返回的 `agent_id`/`issue_id` 呈现;类型 `ExecutionSummary` 移除幽灵字段、补回真实 `issue_id`,与后端逐字段对齐。mock 列表与详情夹具同步删除幽灵字段、补齐 `_render_execution`/`_render_attempt` 全字段(`workspace_id`/`task_spec`/`config_snapshot`/`max_attempts`/`cancel_requested_at`/`retry_count` 与含 `value:'***'` 的凭证元信息),杜绝契约漂移再被掩盖。验证:新增 `executionLabel` 单测 + 三页单测更新,变更源文件逐文件覆盖率 ≥90%(runtimes 91.5–100%);mock 契约 e2e 工作台断言扩标签兜底路径,真实后端 runtimes e2e 全过;真实栈 + 真实浏览器实测首页「AI 运行」行显示「trigger · 短 ID」+「状态 · 相对时间」存证。
+
+### 验证
+
+本版经 Mesh 验收员四轮验收(MES-125):单测 3496 例全绿(328 文件),整体覆盖 98.15% / 分支 91.7%,新增代码 diff 覆盖 98.7%(4392/4448 行),per-file ≥90% 门禁通过;视觉回归基线按页面变更重生成后连跑两轮全绿(46 例 ×2);真实后端 e2e 桌面 + 手机全过(真实 API + PG + MinIO:List 视图切换竞态回归「切换落定后旧视图端点零请求」、210 卡虚拟化真实布局回归「内滚成立/窗口化部分渲染/窗口迁移」、拖拽鼠标 + 键盘双路径、评论草稿/失败重试/撤销、附件上传失败重试);验收员独立真机实测虚拟化:滚动容器 scrollHeight 17472px / clientHeight 389px、仅渲染 8/208 卡、scrollTop 窗口迁移至 posinset=69、listitem 双重嵌套消除;对比度 76 对 × 双主题与存证 md5 唯一性(175 张)门禁通过;全仓代码/注释/文档/提交历史/分支名无参考源泄漏,提交人 cnwenf、全链零 co-author;PR #104 CI 6 job 全绿(run 30588255335)squash 合入 main(3d52a838)。打回的 List 竞态/虚拟化真实布局失效/execution 五态未消费三项与附件 e2e 回归、两轮提交卫生与分支同步问题均已修复并复验通过。
 
 ## [0.24.0] - 2026-07-30
 
