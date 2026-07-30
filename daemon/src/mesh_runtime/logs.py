@@ -193,25 +193,30 @@ class LogUploader:
             # attempt ACROSS both streams — a single monotonic watermark, not
             # per-stream counters. Both journal fields mirror that watermark.
             start = max(entry.log_offset_stdout, entry.log_offset_stderr) if entry else 0
-            batches = self._collect_batches(ctx, stream, key, start)
+            batches = self._collect_batches(ctx, stream, key, start, sealed=sealed)
             if not batches:
                 if not sealed:
                     return
-                # Nothing buffered, but the stream still needs its sealed close.
+                # Nothing buffered anywhere, but the stream still needs its
+                # sealed close.
                 await self._upload_one(ctx, stream, start, [], sealed=True)
                 return
             # The sealed (terminal) marker lands on the LAST batch belonging to
             # THIS stream — the sibling stream's replayed batches ride along
             # unsealed so the single cross-stream watermark stays contiguous.
-            last_own = max(
-                (i for i, (batch_stream, _, _) in enumerate(batches) if batch_stream == stream),
-                default=-1,
-            )
+            # A sealed flush that carries ONLY sibling-stream replayed batches
+            # (this stream has nothing) seals the final drained batch — the
+            # terminal flush must never leave un-acked lines behind while
+            # certifying completion.
+            own_indices = [
+                i for i, (batch_stream, _, _) in enumerate(batches) if batch_stream == stream
+            ]
+            seal_at = own_indices[-1] if own_indices else len(batches) - 1
             for index, (batch_stream, batch_offset, batch_lines) in enumerate(batches):
                 try:
                     await self._upload_one(
                         ctx, batch_stream, batch_offset, batch_lines,
-                        sealed=sealed and index == last_own,
+                        sealed=sealed and index == seal_at,
                     )
                 except LeaseConflictError:
                     raise  # fencing — supervisor handles it
@@ -231,7 +236,8 @@ class LogUploader:
                     self._spool.ack(ctx.attempt_id, batch_stream, batch_offset)
 
     def _collect_batches(
-        self, ctx: AttemptContext, stream: str, key: tuple[str, str], start: int
+        self, ctx: AttemptContext, stream: str, key: tuple[str, str], start: int,
+        *, sealed: bool = False,
     ) -> list[tuple[str, int, list[str]]]:
         """Return the ``(stream, start_offset, lines)`` batches to upload, in
         offset order. Must run under ``ctx.lock``.
@@ -255,9 +261,13 @@ class LogUploader:
         self._first_at.pop(key, None)
         if self._spool is not None:
             pending: list[SpooledBatch] = list(self._spool.pending(ctx.attempt_id, stream))
-            if lines:
-                # A new batch is going out: serialize it behind the sibling's
-                # un-acked range too, or the single watermark would overlap.
+            if lines or sealed:
+                # A new batch is going out, OR this is the terminal (sealed)
+                # flush: serialize behind the sibling's un-acked range too.
+                # For new batches, the single watermark would overlap
+                # otherwise; for sealed flushes, the sibling's un-acked lines
+                # must drain BEFORE completion is certified — incomplete logs
+                # may never be sealed.
                 for pending_stream in ("stdout", "stderr"):
                     if pending_stream != stream and self._spool.has_pending(
                         ctx.attempt_id, pending_stream

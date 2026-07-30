@@ -49,6 +49,7 @@ class RecordingApi:
 
     def __init__(self, *, fail_first_stdout: bool = False):
         self.accepted: list[tuple[str, int, int, list[str]]] = []
+        self.sealed_calls: list[tuple[str, int]] = []
         self.offset_mismatch_count = 0
         self._expected = 0
         self._fail_first_stdout = fail_first_stdout
@@ -63,6 +64,8 @@ class RecordingApi:
                 "409", code="offset_mismatch",
                 details={"expected": self._expected, "received": start_offset},
             )
+        if sealed:
+            self.sealed_calls.append((stream, start_offset))
         if not lines:
             return LogAck(accepted_end_offset=self._expected, redacted_hits=0)
         end = start_offset + sum(len(line.encode()) + 1 for line in lines)
@@ -213,6 +216,31 @@ class TestCrossStreamWatermark:
         assert api.offset_mismatch_count == 0
         entry = await journal.get(ctx.attempt_id)
         assert entry.log_offset_stdout == entry.log_offset_stderr == api.watermark
+
+    async def test_sealed_flush_drains_sibling_spool_before_certifying(
+        self, journal, ctx, tmp_path
+    ):
+        """MES-96 P2-1 (sealed completeness): a transiently-failed stdout batch
+        sits in the spool while a terminal SEALED flush is addressed to the
+        sibling stream. Incomplete logs may never certify completed — the
+        sealed flush must drain the sibling's un-acked batch FIRST (folding
+        both streams' pending in offset order), and ``sealed=True`` must land
+        exactly once, on the final drained batch. Pre-fix this sent an empty
+        sealed heartbeat on stderr and left stdout's lines spooled forever."""
+        spool = LogSpool(tmp_path / "spool", max_bytes=4096)
+        api = RecordingApi(fail_first_stdout=True)
+        up = uploader(api, journal, clock=FakeClock(), spool=spool, batch_lines=1)
+        await seed(journal, ctx)
+        await up.submit(ctx, "stdout", "out-1")  # fails once -> spooled [0, 6)
+        assert spool.has_pending(ctx.attempt_id, "stdout")
+        # Terminal flush addressed to the stream with no content of its own.
+        await up._flush_stream(ctx, "stderr", sealed=True)
+        assert api.received_lines() == {"stdout": ["out-1"]}
+        assert not spool.has_pending(ctx.attempt_id, "stdout")
+        # sealed landed exactly once — on the final drained batch, not on an
+        # empty heartbeat that would certify still-missing lines.
+        assert api.sealed_calls == [("stdout", 0)]
+        assert api.offset_mismatch_count == 0
 
 
 class TestRedaction:
