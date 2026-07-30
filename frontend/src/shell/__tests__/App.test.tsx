@@ -142,15 +142,18 @@ describe('App 路由', () => {
     expect(screen.getByText('Keyboard shortcuts')).toBeInTheDocument();
   });
 
-  it('顶栏搜索键入即展开统一命令面板并携带查询(杜绝无行为输入框,A-02)', () => {
+  it('顶栏搜索键入即展开统一结果视图并携带查询(杜绝无行为输入框,A-02 / §4.9)', async () => {
     signIn();
     navigateTo('/');
     render(<App />);
-    fireEvent.change(screen.getByTestId('topbar-search'), { target: { value: 'theme' } });
-    // 命令面板(dialog)打开,其搜索框携带顶栏键入的查询
-    expect(screen.getByText('Command palette')).toBeInTheDocument();
-    const paletteInput = screen.getAllByRole('combobox').find((el) => el.closest('.mesh-palette'));
-    expect(paletteInput).toHaveValue('theme');
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'theme' } });
+    // 与命令面板同一结果视图(§4.9):弹层打开、输入携带查询、aria-expanded 同步
+    expect(screen.getByTestId('topbar-search-popover')).toBeInTheDocument();
+    expect(input).toHaveValue('theme');
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    // 本地命令同步零延迟呈现(§11.4)
+    await waitFor(() => expect(screen.getByText('Toggle theme')).toBeInTheDocument());
   });
 
   it('URL ?locale= 显式请求参数为最高优先(§6.18 请求显式参数级)', async () => {

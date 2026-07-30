@@ -102,6 +102,8 @@ from mesh.runtime.daemon_routes import router as runtime_daemon_router
 from mesh.runtime.routes import router as runtime_router
 from mesh.runtime.service import RuntimeService
 from mesh.runtime.task_routes import router as task_router
+from mesh.search.routes import router as search_router
+from mesh.search.service import SearchService
 from mesh.skill.bindings import BindingService
 from mesh.skill.content_store import ObjectStorageContentStore
 from mesh.skill.importer import ImportService, ImportSettings
@@ -335,6 +337,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Analytics module (analytics.md): read-only aggregates + materialized
     # cache; never writes source tables.
     app.state.analytics_service = AnalyticsService(session_factory, settings)
+    # Search module (search-command-palette.md §3): six-type object search
+    # with in-query visibility + signed keyset cursor; read-only.
+    app.state.search_service = SearchService(session_factory, settings)
     app.state.integration_service = IntegrationService(session_factory, settings.jwt_secret)
     # Verification codes for external-identity linking are delivered to the
     # claimed external account's DM (dev: Redis dev-outbox, tests read it).
@@ -382,6 +387,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(squad_router)
     app.include_router(autopilot_router)
     app.include_router(analytics_router)
+    app.include_router(search_router)
     app.include_router(integrations_router)
     app.include_router(integrations_inbound_router)
 

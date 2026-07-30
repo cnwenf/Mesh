@@ -62,12 +62,22 @@ import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
+import { AppearanceSettingsSection } from './shell/pages/settings/AppearanceSettingsSection';
+import { SecuritySettingsSection } from './shell/pages/settings/SecuritySettingsSection';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
-import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
-import { DataManagementPage } from './features/data-jobs/DataManagementPage';
-import { InboxPage } from './features/inbox';
+import { WorkspaceAuditSection } from './workspace/pages/settings/WorkspaceAuditSection';
+import { WorkspaceCustomFieldsSection } from './workspace/pages/settings/WorkspaceCustomFieldsSection';
+import { WorkspaceDangerSection } from './workspace/pages/settings/WorkspaceDangerSection';
+import { WorkspaceDataSection } from './workspace/pages/settings/WorkspaceDataSection';
+import { WorkspaceGeneralSection } from './workspace/pages/settings/WorkspaceGeneralSection';
+import { WorkspaceInvitationsSection } from './workspace/pages/settings/WorkspaceInvitationsSection';
+import { WorkspaceLabelsSection } from './workspace/pages/settings/WorkspaceLabelsSection';
+import { WorkspaceRolesSection } from './workspace/pages/settings/WorkspaceRolesSection';
+import { WorkspaceTokensSection } from './workspace/pages/settings/WorkspaceTokensSection';
+import { ApprovalsPage } from './features/approvals/ApprovalsPage';
+import { InboxPage, NotificationPreferencesSection } from './features/inbox';
 
 /**
  * 协商链「请求显式参数」级(§6.18):URL `?locale=` 为真正的每请求显式覆盖,
@@ -108,10 +118,15 @@ export default function App(): React.JSX.Element {
 
 /**
  * C6 深链:`#IDENTIFIER` 链接解析为同工作区 issue。后端渲染 `#MES-123` 为
- * `/issues/by-identifier/MES-123`;此路由用当前活跃工作区解析 identifier 后跳详情。
+ * `/issues/by-identifier/MES-123`;规范深链(search-command-palette §3.4)为
+ * `/w/{ws}/issues/by-identifier/{KEY-N}`——作用域优先取路径 slug 命中的成员身份,
+ * 无 slug(旧扁平链接)时回落当前活跃工作区;解析后跳 issue 详情。
  */
 function IssueByIdentifierRedirect(): React.JSX.Element {
-  const { identifier } = useParams<{ identifier: string }>();
+  const { identifier, workspaceSlug } = useParams<{
+    identifier: string;
+    workspaceSlug: string;
+  }>();
   const [target, setTarget] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
@@ -119,7 +134,11 @@ function IssueByIdentifierRedirect(): React.JSX.Element {
     void (async () => {
       try {
         const me = await fetchMe(client);
-        const active = activeWorkspace(me.memberships);
+        const scoped =
+          workspaceSlug !== undefined
+            ? me.memberships.find((m) => m.workspace_slug === workspaceSlug) ?? null
+            : null;
+        const active = scoped ?? activeWorkspace(me.memberships);
         if (active === null || identifier === undefined) {
           if (!cancelled) setTarget(null);
           return;
@@ -133,7 +152,7 @@ function IssueByIdentifierRedirect(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [identifier]);
+  }, [identifier, workspaceSlug]);
   if (target === undefined) return <></>;
   if (target === null) return <Navigate to="/not-found" replace />;
   return <Navigate to={`/issues/${target}`} replace />;
@@ -199,20 +218,33 @@ function ShellProviders(): React.JSX.Element {
                     由 API 层 401 全局兜底清 token,守卫随之生效(二者不重叠)。 */}
                 <Route element={<RequireAuth />}>
                   <Route index element={<HomePage />} />
-                  <Route path="settings" element={<SettingsPage />} />
+                  {/* 账号设置(design-quality §4.4 Settings 模板):二级导航 + 子路由分页 */}
+                  <Route path="settings" element={<SettingsPage />}>
+                    <Route index element={<Navigate to="appearance" replace />} />
+                    <Route path="appearance" element={<AppearanceSettingsSection />} />
+                    <Route path="notifications" element={<NotificationPreferencesSection />} />
+                    <Route path="security" element={<SecuritySettingsSection />} />
+                  </Route>
                   {/* 工作区 §4:当前工作区上下文路由(slug 寻址,含历史 slug 重定向) */}
                   <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
-                  <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
-                  {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
-                  <Route
-                    path="w/:workspaceSlug/settings/labels"
-                    element={<WorkspaceLabelsPage />}
-                  />
-                  <Route path="w/:workspaceSlug/settings/data" element={<DataManagementPage />} />
-                  <Route
-                    path="w/:workspaceSlug/settings/custom-fields"
-                    element={<WorkspaceCustomFieldsPage />}
-                  />
+                  {/* 工作区设置(workspace.md §4.1/§4.2):二级导航 + 九子页,危险区仅 owner */}
+                  <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />}>
+                    <Route index element={<Navigate to="general" replace />} />
+                    <Route path="general" element={<WorkspaceGeneralSection />} />
+                    <Route path="invitations" element={<WorkspaceInvitationsSection />} />
+                    <Route path="roles" element={<WorkspaceRolesSection />} />
+                    {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
+                    <Route path="labels" element={<WorkspaceLabelsSection />} />
+                    <Route path="custom-fields" element={<WorkspaceCustomFieldsSection />} />
+                    <Route path="data" element={<WorkspaceDataSection />} />
+                    <Route path="tokens" element={<WorkspaceTokensSection />} />
+                    <Route path="audit" element={<WorkspaceAuditSection />} />
+                    <Route path="danger" element={<WorkspaceDangerSection />} />
+                  </Route>
+                  {/* 统一审批页(search-command-palette §3.4 九条规范深链之一,G10):
+                      全局 /approvals 与 /w/{ws}/approvals 同页(工作区上下文由壳解析) */}
+                  <Route path="approvals" element={<ApprovalsPage />} />
+                  <Route path="w/:workspaceSlug/approvals" element={<ApprovalsPage />} />
                   <Route path="inbox" element={<InboxPage />} />
                   {/* 收件箱详情深链:桌面双栏选中 + 手机单栏路由化(design-quality §4.4 Conversation) */}
                   <Route path="inbox/:notificationId" element={<InboxPage />} />
@@ -223,6 +255,11 @@ function ShellProviders(): React.JSX.Element {
                   {/* C6 深链:#IDENTIFIER 链接 → 解析当前工作区 issue 后跳详情 */}
                   <Route
                     path="issues/by-identifier/:identifier"
+                    element={<IssueByIdentifierRedirect />}
+                  />
+                  {/* 规范深链(search-command-palette §3.4):/w/{ws}/issues/by-identifier/{KEY-N} */}
+                  <Route
+                    path="w/:workspaceSlug/issues/by-identifier/:identifier"
                     element={<IssueByIdentifierRedirect />}
                   />
                   <Route path="issues/:issueId" element={<IssueDetailPage />} />

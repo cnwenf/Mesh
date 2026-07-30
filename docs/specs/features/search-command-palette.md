@@ -97,6 +97,8 @@
 
 **数据模型事实**:member/agent 的「显示名」是 `members.display_override → users.display_name → users.email`(人类)/`agents.name`(agent)的**跨表解析**(README §6.1),PostgreSQL **不能对跨表表达式建普通索引**——直接对「members 显示名」建 GIN 不可行。本 Spec 采用**受控同步的搜索投影**方案:在 `members` 上维护 `search_name` 投影列(与 README §6.1 显示名链同算法),对投影建 trigram 索引;显示渲染仍用实时解析链,投影**仅供检索**。
 
+> **实现落地注记(MES-127 批次④,行为契约不变,仅记实现选择)**:① 「受控同步」以**数据库写路径触发器**实现——members/users/agents 的写事务同事务重算 `search_name`,与「单一归一函数同步」契约观测等价(自包含、不侵入他模块服务层);② ≥3 字符 trigram 路径在 `%` 相似度召回之外**OR 一段归一化子串包含**(`norm(col) LIKE '%'||escape(norm(q))||'%'`,LIKE 通配符转义):长 / 中英混合标题上 CJK 子查询的 trigram Jaccard 常被稀释到默认阈值 0.3 以下而漏召回,子串臂兜底保证 §4.6 `SUBSTRING` 桶(本就预期字面包含可被召回)真有候选进入排序;GIN trgm 同时支撑 `%` 与 `LIKE '%…%'`,子串臂在租户级数据量下不构成性能回退。两点均为召回增强,不改变可见性内联(§3.3)、键集游标(§3.2)与排序全序(§4.6)。
+
 **归一算法唯一入口(评审 R2-H3 写死:索引 / 查询 / 回填同一函数)**:
 
 ```sql

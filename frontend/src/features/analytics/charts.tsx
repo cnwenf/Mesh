@@ -6,7 +6,8 @@
 
 export type ChartColorToken = 'success' | 'danger' | 'info' | 'warn' | 'neutral';
 
-const TOKEN_VAR: Record<ChartColorToken, string> = {
+/** 语义色 token → CSS 变量(图例色块与图表系列共用同一映射,亮暗自如)。 */
+export const TOKEN_VAR: Record<ChartColorToken, string> = {
   success: 'var(--color-success)',
   danger: 'var(--color-danger)',
   info: 'var(--color-info)',

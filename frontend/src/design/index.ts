@@ -109,3 +109,13 @@ export { ConversationLayout } from './patterns/ConversationLayout';
 export type { ConversationLayoutProps, ConversationPane } from './patterns/ConversationLayout';
 export { RunStateBadge, RUN_STATE_ICONS, RUN_STATE_TONES } from './patterns/RunStateBadge';
 export type { RunState, RunStateBadgeProps } from './patterns/RunStateBadge';
+export { SettingsLayout } from './patterns/SettingsLayout';
+export type {
+  SettingsLayoutProps,
+  SettingsNavGroup,
+  SettingsNavItem,
+} from './patterns/SettingsLayout';
+export { SettingsSection } from './patterns/SettingsSection';
+export type { SettingsSectionProps, SettingsSectionTone } from './patterns/SettingsSection';
+export { SettingsFieldRow } from './patterns/SettingsFieldRow';
+export type { SettingsFieldRowProps } from './patterns/SettingsFieldRow';

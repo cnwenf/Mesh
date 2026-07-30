@@ -76,17 +76,19 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByTestId('marketplace-title')).toBeVisible();
   });
 
-  test('顶栏搜索即统一入口:键入展开命令面板并携带查询;Esc 关闭归还焦点', async ({ page }) => {
+  test('顶栏搜索即统一入口:键入展开同一结果视图弹层并携带查询;Esc 关闭焦点不离输入框', async ({ page }) => {
     await login(page);
     await page.goto('/');
     const topbarSearch = page.getByTestId('topbar-search');
     await topbarSearch.fill('theme');
-    // 命令面板打开,其搜索框携带顶栏键入的查询
-    const paletteInput = page.locator('.mesh-palette input');
-    await expect(paletteInput).toBeVisible();
-    await expect(paletteInput).toHaveValue('theme');
+    // §4.9:键入即展开与命令面板同一结果视图(PaletteResults)的弹层,顶栏输入框即查询载体
+    const popover = page.getByTestId('topbar-search-popover');
+    await expect(popover).toBeVisible();
+    await expect(topbarSearch).toHaveValue('theme');
+    await expect(topbarSearch).toHaveAttribute('aria-expanded', 'true');
     await page.keyboard.press('Escape');
-    await expect(page.locator('.mesh-palette')).toHaveCount(0);
+    await expect(popover).toHaveCount(0);
+    await expect(topbarSearch).toBeFocused();
   });
 
   test('顶栏搜索回车同样展开命令面板', async ({ page }) => {

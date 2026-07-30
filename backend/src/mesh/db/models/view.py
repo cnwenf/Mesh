@@ -128,6 +128,20 @@ class View(Base):
         ),
         Index("idx_views_owner", "owner_member_id"),
         Index("idx_views_visibility", "workspace_id", "visibility"),
+        # Search indexes (migration 0035, search-command-palette.md §2.2):
+        # expression indexes over the single normalization entry point.
+        Index(
+            "idx_views_name_trgm",
+            text("mesh_search_norm(name)"),
+            postgresql_using="gin",
+            postgresql_ops={"mesh_search_norm(name)": "gin_trgm_ops"},
+        ),
+        Index(
+            "idx_views_name_prefix",
+            "workspace_id",
+            text("mesh_search_norm(name)"),
+            postgresql_ops={"mesh_search_norm(name)": "text_pattern_ops"},
+        ),
         # Same-tenant composite FKs (README §6.2): project-scoped views follow
         # the project, owner references follow the member (members are
         # soft-deleted in practice; CASCADE matches kanban §2.2 DDL).
