@@ -25,6 +25,8 @@ import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
 import { registerShellShortcuts } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
 import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
+import { MobileMoreDrawer } from './MobileMoreDrawer';
+import { MobileNav } from './MobileNav';
 import { StatusBanner } from './StatusBanner';
 import { TopBar } from './TopBar';
 import './shell.css';
@@ -315,6 +317,8 @@ export function AppShell(): React.JSX.Element {
   const workspaceMatch = useMatch('/w/:workspaceSlug/*');
   const workspaceSlug = workspaceMatch?.params.workspaceSlug;
 
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+
   const layout = (
     <div className="mesh-shell">
       {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
@@ -329,6 +333,10 @@ export function AppShell(): React.JSX.Element {
         <OnboardingChecklist />
         <Outlet />
       </main>
+      {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;
+          ≥600px 经 CSS 隐藏,桌面侧栏为唯一主导航。 */}
+      <MobileNav onOpenMore={() => setMobileMoreOpen(true)} />
+      <MobileMoreDrawer open={mobileMoreOpen} onClose={() => setMobileMoreOpen(false)} />
     </div>
   );
 

@@ -51,6 +51,16 @@ describe('AppShell', () => {
     expect(main).toHaveAttribute('id', 'mesh-main-content');
   });
 
+  it('手机底部主导航与「更多」抽屉已接线(隐藏侧栏有等价入口,design-quality §4.3/A-03)', () => {
+    renderShell('/');
+    expect(screen.getByTestId('mobile-nav-home')).toBeInTheDocument();
+    expect(screen.getByTestId('mobile-nav-more')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('mobile-nav-more'));
+    expect(screen.getByRole('dialog', { name: 'All navigation' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('mobile-drawer-close'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('点击侧栏导航(鼠标路径)切换 Outlet 内容', () => {
     renderShell('/');
     expect(screen.getByTestId('child-stub')).toBeInTheDocument();
