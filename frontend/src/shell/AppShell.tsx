@@ -24,6 +24,9 @@ import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
 import { registerShellShortcuts } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
+import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
+import { MobileMoreDrawer } from './MobileMoreDrawer';
+import { MobileNav } from './MobileNav';
 import { StatusBanner } from './StatusBanner';
 import { TopBar } from './TopBar';
 import './shell.css';
@@ -43,6 +46,8 @@ export function useRealtimeContext(): RealtimeContextValue | null {
 export interface OverlayControls {
   openPalette: () => void;
   openHelp: () => void;
+  /** 统一搜索入口:携带查询展开命令面板(design-quality A-02) */
+  openSearch: (query: string) => void;
 }
 
 const OverlayControlsContext = createContext<OverlayControls | null>(null);
@@ -305,24 +310,33 @@ export function AppShell(): React.JSX.Element {
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
+  const openSearch = useOverlaySearch();
 
   // 工作区上下文(workspace.md §4.1):/w/:workspaceSlug/* 命中时以 WorkspaceProvider
   // 包裹整个布局子树(TopBar 切换器 / Sidebar 设置入口 / 页面共享当前工作区)。
   const workspaceMatch = useMatch('/w/:workspaceSlug/*');
   const workspaceSlug = workspaceMatch?.params.workspaceSlug;
 
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+
   const layout = (
     <div className="mesh-shell">
-      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
+      {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
+      <SkipLink label={t('a11y.skipLink')} />
+      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} onOpenSearch={openSearch} />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>
       <Sidebar />
-      <main className="mesh-shell__main">
+      <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />
         <Outlet />
       </main>
+      {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;
+          ≥600px 经 CSS 隐藏,桌面侧栏为唯一主导航。 */}
+      <MobileNav onOpenMore={() => setMobileMoreOpen(true)} />
+      <MobileMoreDrawer open={mobileMoreOpen} onClose={() => setMobileMoreOpen(false)} />
     </div>
   );
 
@@ -345,4 +359,15 @@ function useOverlayOpen(which: 'palette' | 'help'): () => void {
     if (which === 'palette') controls.openPalette();
     else controls.openHelp();
   }, [controls, which]);
+}
+
+/** 统一搜索打开器;未提供 OverlayControls 时为空操作(与 useOverlayOpen 同语义) */
+function useOverlaySearch(): (query: string) => void {
+  const controls = useOverlayControls();
+  return useCallback(
+    (query: string) => {
+      controls?.openSearch(query);
+    },
+    [controls],
+  );
 }

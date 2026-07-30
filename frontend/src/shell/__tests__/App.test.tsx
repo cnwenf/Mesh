@@ -111,6 +111,21 @@ describe('App 路由', () => {
     expect(screen.getByText('Page not found')).toBeInTheDocument();
   });
 
+  it('/skills/marketplace 直达市场页、旧 /marketplace 兼容重定向(design-quality A-01 死链修复)', async () => {
+    signIn();
+    navigateTo('/skills/marketplace');
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
+  });
+
+  it('/marketplace 兼容跳转收敛到 /skills/marketplace', async () => {
+    signIn();
+    navigateTo('/marketplace');
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
+    await waitFor(() => expect(window.location.pathname).toBe('/skills/marketplace'));
+  });
+
   it('/login 未登录时渲染登录页', () => {
     navigateTo('/login');
     render(<App />);
@@ -125,6 +140,17 @@ describe('App 路由', () => {
     expect(screen.getByText('Command palette')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('open-help'));
     expect(screen.getByText('Keyboard shortcuts')).toBeInTheDocument();
+  });
+
+  it('顶栏搜索键入即展开统一命令面板并携带查询(杜绝无行为输入框,A-02)', () => {
+    signIn();
+    navigateTo('/');
+    render(<App />);
+    fireEvent.change(screen.getByTestId('topbar-search'), { target: { value: 'theme' } });
+    // 命令面板(dialog)打开,其搜索框携带顶栏键入的查询
+    expect(screen.getByText('Command palette')).toBeInTheDocument();
+    const paletteInput = screen.getAllByRole('combobox').find((el) => el.closest('.mesh-palette'));
+    expect(paletteInput).toHaveValue('theme');
   });
 
   it('URL ?locale= 显式请求参数为最高优先(§6.18 请求显式参数级)', async () => {

@@ -3,10 +3,15 @@
 
 .mesh-board {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
   min-height: 60vh;
+}
+
+/* grid 子项默认 auto 最小宽,会撑破容器造成页面级横向溢出;显式归零(design-quality A-04) */
+.mesh-board__main {
+  min-inline-size: 0;
 }
 
 .mesh-board__skeleton {
@@ -265,12 +270,31 @@
 }
 
 .mesh-board__column {
-  min-width: 260px;
+  /* 列宽钳制:极窄视口下至少完整呈现一列,列容器内部横滚,不溢出页面(A-04) */
+  min-width: min(260px, 85vw);
   max-width: 300px;
-  flex: 1 0 260px;
+  flex: 1 0 min(260px, 85vw);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+}
+
+/* 手机(0–599px):视图导轨堆叠为横向滚动条,看板单列工作区(design-quality §8.3
+   完整单泳道模式由逐页批次实施;本阶段先消除页面级横向溢出,A-04 退出条件) */
+@media (max-width: 599px) {
+  .mesh-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-view-switcher__list {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-block-end: var(--space-1);
+  }
+
+  .mesh-view-switcher__item {
+    flex: 0 0 auto;
+  }
 }
 
 .mesh-board__column-head {
