@@ -4,7 +4,7 @@
  * - 承载实时连接:useRealtime({url: resolveWsGatewayUrl(env.wsBaseUrl), getToken, enabled, reconciler});
  *   网关地址为绝对 ws(s)://(同源部署 wsBaseUrl 空时由页面 location 派生,MES-106);
  *   reconciler 以 REST 整拉 resync_required 给出的 rest URL 对账(§6.7);
- * - RealtimeContext:向页面(如 HomePage 演示区)暴露 {state, client};shell 外为 null;
+ * - RealtimeContext:向页面(如首页工作区仪表盘)暴露 {state, client};shell 外为 null;
  * - OverlayControls:App 层持有命令面板/帮助层开关,经本 Context 下达 TopBar;
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */

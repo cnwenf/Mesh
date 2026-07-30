@@ -23,7 +23,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | --- | --- |
 | [docs/specs/](docs/specs/) | Spec 文档(所有实现的唯一依据) |
 | [backend/](backend/) | Python 后端(FastAPI REST + realtime 网关 + outbox/projector worker) |
-| [frontend/](frontend/) | Web 前端(阶段 1·B 骨架:工程脚手架、API/实时契约层、设计系统与体验基线、i18n 基线) |
+| [frontend/](frontend/) | Web 前端(React 19 + Vite 单页应用:真实产品 UI——工作区仪表盘首页、登录、看板、issue、成员、技能库等;设计系统 / 实时契约 / i18n 基线;详见 [frontend/README.md](frontend/README.md)) |
 | [tests/](tests/) | 文档级校验脚本(事件词汇、名册入口等) |
 
 开发任何功能前,请先阅读对应的功能 Spec;Spec 是本仓库所有实现的唯一依据。
@@ -37,6 +37,7 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 📐 Spec ready | MES-109 已完成当前基线逐页审查、手机/平板/桌面与亮暗主题存证、逐页差距清单，以及令牌、排版、组件、图标、响应式、触控、关键流程和视觉/无障碍门禁定义；实施顺序为“可达性与手机 P0 → Foundation → 外壳/页面模式 → 核心流程 → 全页收口” |
+| 前端生产就绪收尾(MES-107 去脚手架化) | ✅ 待发版 | 首页替换为真实工作区仪表盘(GET /users/me 问候 + 工作区卡片列表 + 活跃工作区 issue 仪表盘:游标分页 + 实时增量合并 + 快捷创建);登录页删除 dev 令牌块与过时 phaseNote;PlaceholderPage、placeholder/ 静态占位目录与全站占位/演示/即将上线文案清理(i18n 双语目录同步、版本哈希重算);/skills 路由与 agent 详情技能 Tab 接通;契约 mock 与 e2e 去 demo 化;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + 手机双视口 8/8);单测 2901 例、整体行覆盖 97.79%、变更代码 99.6%(双门禁通过) |
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |
 | auth 认证核心(auth.md 增量 1) | ✅ v0.2.0 | 注册/登录/会话/MFA/一次性令牌/账号偏好 + 应用路径 RLS 加固 |
 | workspace 工作区与多租户基础(workspace.md) | ✅ v0.4.0 | 工作区 CRUD 与 slug 重定向、邀请全生命周期与兑换分离、RBAC 裁决与审计、前缀注册表、租户表 fail-closed RLS;前端设置/邀请页面待前端脚手架增量接通 |
