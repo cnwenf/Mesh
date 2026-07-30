@@ -1,0 +1,341 @@
+/*
+ * PublicFlowShell 公共流程外壳(design-quality.md §4.4 PublicFlow 模板)。
+ * 仅引用语义 token(var(--*)),禁硬编码色值(stylelint mesh/no-hardcoded-colors)。
+ * 结构:品牌区 + 单任务卡 + 安全·帮助信息;移动优先,软键盘出现时内容可滚动不裁剪。
+ */
+
+.mesh-public-flow {
+  /* 动态视口高度:软键盘弹出时随可视区收缩,内容重新居中而不被遮挡(§8.2) */
+  min-block-size: 100vh;
+  min-block-size: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--page-gutter-compact, var(--space-4));
+  background-color: var(--color-canvas);
+
+  /* 内容高于视口(软键盘)时允许滚动,不产生页面级横向溢出 */
+  overflow-y: auto;
+}
+
+.mesh-public-flow__frame {
+  inline-size: 100%;
+  max-inline-size: var(--content-form, 420px);
+  max-inline-size: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ── 品牌区(§4.2:品牌是返回首页的链接) ── */
+.mesh-public-flow__brand {
+  display: flex;
+  justify-content: center;
+}
+
+.mesh-public-flow__brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-strong);
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+}
+
+a.mesh-public-flow__brand-link:hover {
+  color: var(--color-accent);
+}
+
+a.mesh-public-flow__brand-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-public-flow__mark {
+  color: var(--color-accent);
+  flex: none;
+}
+
+.mesh-public-flow__brand-name {
+  font-family: var(--font-family-display);
+  font-weight: var(--font-weight-display);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+}
+
+/* ── 单任务卡 ── */
+.mesh-public-flow__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  background-color: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-raised);
+}
+
+.mesh-public-flow__title {
+  margin: 0;
+}
+
+.mesh-public-flow__description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+/* ── 安全·帮助信息区 ── */
+.mesh-public-flow__footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+.mesh-public-flow__footer a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mesh-public-flow__footer a:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ── 卡内通用排列辅助(表单/按钮组/分隔/提示) ── */
+.mesh-public-flow__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-public-flow__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* 第三方 / 账号 分隔线(§3.2:第三方与账号分隔) */
+.mesh-public-flow__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-1) 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+}
+
+.mesh-public-flow__divider::before,
+.mesh-public-flow__divider::after {
+  content: '';
+  flex: 1;
+  block-size: 1px;
+  background-color: var(--color-border-subtle);
+}
+
+/* 模式切换(登录/注册)分段控件 */
+.mesh-public-flow__modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  background-color: var(--color-surface-subtle);
+  border-radius: var(--radius-md);
+}
+
+.mesh-public-flow__mode {
+  min-block-size: 36px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background-color: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter, ease),
+    color var(--motion-fast) var(--ease-enter, ease);
+}
+
+.mesh-public-flow__mode:hover {
+  color: var(--color-text);
+}
+
+.mesh-public-flow__mode:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-public-flow__mode[aria-selected='true'] {
+  background-color: var(--color-surface-raised);
+  color: var(--color-text-strong);
+  box-shadow: var(--shadow-1);
+}
+
+/* 行内辅助链接(忘记密码 / 返回登录) */
+.mesh-public-flow__inline-link {
+  color: var(--color-accent);
+  font-size: var(--font-size-body-sm);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  align-self: flex-start;
+}
+
+.mesh-public-flow__inline-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* 安全提示注记(设备授权等需要醒目但不喧宾夺主) */
+.mesh-public-flow__notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius-md);
+  color: var(--color-warning-fg);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+/* ── 可操作错误提示(§7.7 / §9.2:发生了什么 + 怎么办,贴近字段) ── */
+.mesh-public-flow__alert {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-danger-bg);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-md);
+}
+
+.mesh-public-flow__alert-message {
+  margin: 0;
+  color: var(--color-danger-fg);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-public-flow__alert-help {
+  margin: 0;
+  color: var(--color-danger-fg);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+/* ── 步骤 / 结果 / 提示(MFA 步骤、注册结果、弱提示) ── */
+.mesh-public-flow__step {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+.mesh-public-flow__recovery {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+.mesh-public-flow__result {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+.mesh-public-flow__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+/* 记住我(checkbox + 文案,触控目标充足) */
+.mesh-public-flow__remember {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 36px;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+}
+
+.mesh-public-flow__remember input {
+  inline-size: 18px;
+  block-size: 18px;
+  accent-color: var(--color-accent);
+}
+
+.mesh-public-flow__oauth {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-public-flow__oauth .mesh-public-flow__actions {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+/* 第三方 / OAuth 状态(回调 pending / 失败) */
+.mesh-public-flow__status {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+}
+
+/* 设备授权:scope 列表与确认分区 */
+.mesh-public-flow__scope-list {
+  margin: 0;
+  padding-inline-start: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--color-text);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+}
+
+.mesh-public-flow__scope-list code {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  color: var(--color-text-strong);
+}
+
+.mesh-public-flow__client {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+}
+
+.mesh-public-flow__field-note {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+}
+
+@media (max-width: 599px) {
+  .mesh-public-flow {
+    justify-content: flex-start;
+    padding-block: var(--space-8) var(--space-6);
+  }
+
+  .mesh-public-flow__card {
+    padding: var(--space-5) var(--space-4);
+  }
+}

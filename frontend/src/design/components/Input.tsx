@@ -1,22 +1,27 @@
 /**
  * 文本输入:`label` 渲染 <label htmlFor>;error/hint 经 aria-describedby 关联;
  * error 存在时 aria-invalid。受控友好(value/onChange 透传)。无硬编码文案。
+ * `size`:'md' 默认 36px;'lg' 44px(触控/认证场景,§7.4)。
  */
 import type { InputHTMLAttributes } from 'react';
 import { forwardRef, useId } from 'react';
 import './components.css';
 
-export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
+export type InputSize = 'md' | 'lg';
+
+export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
   /** 可见标签(必填):渲染 <label htmlFor> */
   label: string;
   /** 错误文案插槽 */
   error?: string;
   /** 提示文案插槽 */
   hint?: string;
+  /** 控件高度档:md 36px(默认)/ lg 44px(触控·认证,§7.4) */
+  size?: InputSize;
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { label, error, hint, id, className, ...rest },
+  { label, error, hint, size = 'md', id, className, ...rest },
   ref,
 ) {
   const autoId = useId();
@@ -24,10 +29,16 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   const errorId = `${inputId}-error`;
   const hintId = `${inputId}-hint`;
   const describedBy =
-    [error ? errorId : null, hint ? hintId : null].filter((part): part is string => Boolean(part)).join(' ') ||
-    undefined;
+    [error ? errorId : null, hint ? hintId : null]
+      .filter((part): part is string => Boolean(part))
+      .join(' ') || undefined;
 
-  const controlClasses = ['mesh-field__control', error ? 'mesh-field__control--invalid' : null, className]
+  const controlClasses = [
+    'mesh-field__control',
+    size === 'lg' ? 'mesh-field__control--lg' : null,
+    error ? 'mesh-field__control--invalid' : null,
+    className,
+  ]
     .filter((part): part is string => Boolean(part))
     .join(' ');
 

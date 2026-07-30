@@ -1,16 +1,20 @@
 /**
  * 登录页(auth.md §3.1 / §4.1 接通 auth 后端):邮箱/密码登录 + 注册切换 + MFA 二步
- * + 第三方登录按钮组 + 注册结果态。
+ * + 第三方登录按钮组 + 注册结果态。统一经 PublicFlowShell 公共流程外壳呈现
+ * (design-quality §4.4:品牌区 + 单任务卡 + 安全·帮助信息;§3.2 认证行)。
  *
  * - 登录成功将 access JWT(+ refresh)写入 authStore 并回跳 `?next=` 或首页;
  * - 启用 MFA 的账号:登录返回 mfa_required + ticket,本页进入二步验证码界面
- *   (TOTP / 备用码),`mfaVerify` 换会话凭证(§4.5 step 5);
+ *   (TOTP / 备用码),`mfaVerify` 换会话凭证(§4.5 step 5);界面显示步骤/目标/恢复路径;
  * - 注册成功自动登录(不阻塞登录态),呈现「已发验证邮件」结果页,「继续」入口回跳;
  * - 「使用第三方账号登录」按钮组:按 env.oauthProviders 渲染(vendor 中立;
  *   dev 走 mock 提供商),点击导航到后端 `start`(redirect_uri 指向前端回调路由,
  *   与后端 M1 redirect_uri 白名单精确协同),回跳路径经 sessionStorage 携带;
  * - 409 conflict / 400 weak_password(三 reason)/ 422 invalid_credentials /
- *   423 account_locked / 429 rate_limited 均具名呈现(§6.14);
+ *   423 account_locked / 429 rate_limited 均具名呈现(§6.14);错误可操作:贴近字段、
+ *   告知怎么办,密码字段失败不清空(§9.2);账号锁定/凭据错误/网络错误分开提示;
+ * - 移动端正确 inputmode / autocomplete / 键盘 Next·Go;首屏聚焦首个可编辑字段(§9.2);
+ * - 标签页标题随模式/步骤语义变化(G19);
  * - 「忘记密码」跳 /forgot;「记住我」延长 refresh。
  */
 import { useRef, useState } from 'react';
@@ -22,10 +26,11 @@ import { getApiClient } from '../../api/instance';
 import { isSessionTokens, login, mfaVerify, register } from '../../api/auth';
 import type { SessionTokens } from '../../api/auth';
 import { OAUTH_NEXT_STORAGE_KEY, oauthLoginUrl, oauthRedirectUri } from '../../api/oauth';
-import { Button, Input } from '../../design';
+import { Button, Input, PublicFlowShell } from '../../design';
 import { env } from '../../env';
 import { PasswordStrengthMeter } from '../../features/auth/PasswordStrengthMeter';
 import { safeNextPath } from '../../features/auth/safeNextPath';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
 
@@ -34,6 +39,17 @@ type AuthMode = 'login' | 'register';
 /** 目录内置本地名的提供商键(其余 ID vendor 中立地原样展示,不绑定厂商) */
 const PROVIDER_LABEL_KEYS: Readonly<Record<string, string>> = {
   mock: 'auth.oauthProvider.mock',
+};
+
+/**
+ * 错误 → 可操作恢复提示映射(§9.2:告诉用户怎么办;账号锁定/凭据/限流/网络分开)。
+ * 未列出的错误码不给附加提示(其本文文案已含恢复语义,如弱口令三 reason)。
+ */
+const ERROR_HELP_KEYS: Readonly<Record<string, string>> = {
+  'auth.invalidCredentials': 'auth.invalidCredentialsHelp',
+  'auth.accountLocked': 'auth.accountLockedHelp',
+  'auth.rateLimited': 'auth.rateLimitedHelp',
+  'error.network': 'auth.networkHelp',
 };
 
 /** 目录无本地名时的回退展示:首字母大写的提供商 ID */
@@ -49,6 +65,21 @@ export interface LoginPageProps {
   apiBaseUrl?: string;
   /** 第三方登录导航副作用(默认 window.location.assign;测试可注入断言) */
   onOAuthStart?: (url: string) => void;
+}
+
+/** 内联错误提示(role=alert):message 单独成元素(textContent 精确),help 为兄弟节点。 */
+function AuthErrorAlert(props: { errorKey: string; helpKey: string | null }): React.JSX.Element {
+  const t = useT();
+  return (
+    <div className="mesh-public-flow__alert" role="alert">
+      <p className="mesh-public-flow__alert-message" data-testid="login-error">
+        {t(props.errorKey)}
+      </p>
+      {props.helpKey !== null ? (
+        <p className="mesh-public-flow__alert-help">{t(props.helpKey)}</p>
+      ) : null}
+    </div>
+  );
 }
 
 export function LoginPage(props: LoginPageProps): React.JSX.Element {
@@ -84,6 +115,11 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   // 规范参数为 `?next=`(auth.md §4.1;路由守卫 / OAuth 往返 / 邀请接受共用);
   // `?redirect=` 作同义别名一并受理(MES-106),二者同经 safeNextPath 守卫。
   const target = safeNextPath(searchParams.get('next') ?? searchParams.get('redirect'));
+
+  // 标签页标题随模式/步骤语义变化(G19):MFA / 注册 / 登录。
+  const docTitleKey =
+    mfaTicket !== null ? 'title.mfa' : mode === 'register' ? 'title.register' : 'title.login';
+  useDocumentTitle(t(docTitleKey));
 
   if (token !== null && !registeredResultActive.current) {
     return <Navigate to={target} replace />;
@@ -180,55 +216,80 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
     return key !== undefined ? t(key) : fallbackProviderLabel(provider);
   };
 
+  const brandLabel = t('brand.name');
+  const footer = (
+    <>
+      <p>{t('auth.footerSecurity')}</p>
+      <p>{t('auth.footerHelp')}</p>
+    </>
+  );
+  const errorHelpKey = errorKey !== null ? (ERROR_HELP_KEYS[errorKey] ?? null) : null;
+
   if (mfaTicket !== null) {
     return (
-      <div className="mesh-login">
-        <h1 className="mesh-login__title">{t('auth.mfaTitle')}</h1>
-        <p className="mesh-login__description">{t('auth.mfaPrompt')}</p>
-        <form className="mesh-login__form" onSubmit={(event) => void handleMfaSubmit(event)}>
+      <PublicFlowShell
+        brandLabel={brandLabel}
+        brandHref="/"
+        title={t('auth.mfaTitle')}
+        description={t('auth.mfaPrompt')}
+        footer={footer}
+      >
+        <p className="mesh-public-flow__step" data-testid="mfa-step">
+          {t('auth.mfaStep')} · {t('auth.mfaTarget')}
+        </p>
+        <form className="mesh-public-flow__form" onSubmit={(event) => void handleMfaSubmit(event)}>
           <Input
             data-testid="mfa-code"
             label={t('auth.mfaCodeLabel')}
             value={mfaCode}
+            size="lg"
+            autoFocus
+            inputMode="numeric"
+            autoComplete="one-time-code"
             onChange={(event) => setMfaCode(event.target.value)}
           />
-          {errorKey !== null ? (
-            <p role="alert" data-testid="login-error">
-              {t(errorKey)}
-            </p>
-          ) : null}
-          <Button data-testid="mfa-submit" type="submit" isLoading={isSubmitting}>
+          {errorKey !== null ? <AuthErrorAlert errorKey={errorKey} helpKey={errorHelpKey} /> : null}
+          <Button data-testid="mfa-submit" type="submit" size="lg" isLoading={isSubmitting}>
             {t('auth.mfaVerifySubmit')}
           </Button>
         </form>
-      </div>
+        <p className="mesh-public-flow__recovery">{t('auth.mfaRecovery')}</p>
+      </PublicFlowShell>
     );
   }
 
   if (registeredEmail !== null) {
     return (
-      <div className="mesh-login">
-        <h1 className="mesh-login__title">{t('auth.verifyEmailTitle')}</h1>
-        <p className="mesh-login__description" data-testid="register-verify-sent">
+      <PublicFlowShell
+        brandLabel={brandLabel}
+        brandHref="/"
+        title={t('auth.verifyEmailTitle')}
+        footer={footer}
+      >
+        <p className="mesh-public-flow__result" data-testid="register-verify-sent">
           {t('auth.verifyEmailSent', { email: registeredEmail })}
         </p>
-        <p className="mesh-login__hint">{t('auth.verifyEmailNote')}</p>
-        <Button data-testid="register-continue" onClick={() => navigate(target)}>
+        <p className="mesh-public-flow__hint">{t('auth.verifyEmailNote')}</p>
+        <Button data-testid="register-continue" size="lg" onClick={() => navigate(target)}>
           {t('auth.verifyEmailContinue')}
         </Button>
-      </div>
+      </PublicFlowShell>
     );
   }
 
   return (
-    <div className="mesh-login">
-      <h1 className="mesh-login__title">{t('login.title')}</h1>
-      <p className="mesh-login__description">{t('login.description')}</p>
-
-      <div role="tablist" aria-label={t('auth.modeLabel')} className="mesh-login__modes">
+    <PublicFlowShell
+      brandLabel={brandLabel}
+      brandHref="/"
+      title={t('login.title')}
+      description={t('login.description')}
+      footer={footer}
+    >
+      <div role="tablist" aria-label={t('auth.modeLabel')} className="mesh-public-flow__modes">
         <button
           type="button"
           role="tab"
+          className="mesh-public-flow__mode"
           aria-selected={mode === 'login'}
           data-testid="login-mode-login"
           onClick={() => {
@@ -241,6 +302,7 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
         <button
           type="button"
           role="tab"
+          className="mesh-public-flow__mode"
           aria-selected={mode === 'register'}
           data-testid="login-mode-register"
           onClick={() => {
@@ -252,13 +314,16 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
         </button>
       </div>
 
-      <form className="mesh-login__form" onSubmit={(event) => void handleSubmit(event)}>
+      <form className="mesh-public-flow__form" onSubmit={(event) => void handleSubmit(event)}>
         {mode === 'register' ? (
           <Input
             data-testid="login-display-name"
             label={t('auth.displayNameLabel')}
             value={displayName}
             maxLength={80}
+            size="lg"
+            autoFocus
+            autoComplete="name"
             onChange={(event) => setDisplayName(event.target.value)}
           />
         ) : null}
@@ -267,6 +332,10 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
           label={t('auth.emailLabel')}
           type="email"
           value={email}
+          size="lg"
+          autoFocus={mode === 'login'}
+          inputMode="email"
+          autoComplete="email"
           onChange={(event) => setEmail(event.target.value)}
         />
         <Input
@@ -274,11 +343,13 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
           label={t('auth.passwordLabel')}
           type="password"
           value={password}
+          size="lg"
+          autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
           onChange={(event) => setPassword(event.target.value)}
         />
         {mode === 'register' ? <PasswordStrengthMeter password={password} /> : null}
         {mode === 'login' ? (
-          <label className="mesh-login__remember">
+          <label className="mesh-public-flow__remember">
             <input
               type="checkbox"
               data-testid="login-remember"
@@ -288,31 +359,32 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
             {t('auth.remember')}
           </label>
         ) : null}
-        {errorKey !== null ? (
-          <p role="alert" data-testid="login-error">
-            {t(errorKey)}
-          </p>
-        ) : null}
-        <Button data-testid="login-account-submit" type="submit" isLoading={isSubmitting}>
+        {errorKey !== null ? <AuthErrorAlert errorKey={errorKey} helpKey={errorHelpKey} /> : null}
+        <Button data-testid="login-account-submit" type="submit" size="lg" isLoading={isSubmitting}>
           {mode === 'register' ? t('auth.registerSubmit') : t('auth.loginSubmit')}
         </Button>
         {mode === 'login' ? (
-          <Link to="/forgot" data-testid="login-forgot">
+          <Link to="/forgot" className="mesh-public-flow__inline-link" data-testid="login-forgot">
             {t('auth.forgotPassword')}
           </Link>
         ) : null}
       </form>
 
       {providers.length > 0 ? (
-        <div className="mesh-login__oauth">
-          <p className="mesh-login__divider" aria-hidden="true">
+        <div className="mesh-public-flow__oauth">
+          <p className="mesh-public-flow__divider" aria-hidden="true">
             {t('auth.oauthDivider')}
           </p>
-          <div role="group" aria-label={t('auth.oauthContinue')} className="mesh-login__oauth-buttons">
+          <div
+            role="group"
+            aria-label={t('auth.oauthContinue')}
+            className="mesh-public-flow__actions"
+          >
             {providers.map((provider) => (
               <Button
                 key={provider}
                 variant="secondary"
+                size="lg"
                 data-testid={`oauth-provider-${provider}`}
                 onClick={() => handleOAuthStart(provider)}
               >
@@ -322,6 +394,6 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
           </div>
         </div>
       ) : null}
-    </div>
+    </PublicFlowShell>
   );
 }

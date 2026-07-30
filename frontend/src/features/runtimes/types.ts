@@ -11,12 +11,7 @@ export type RuntimeKind = 'platform_managed' | 'self_hosted';
 
 /** runtime 生命周期状态(runtime.md §2.2 runtimes.status)。 */
 export type RuntimeStatus =
-  | 'pending'
-  | 'online'
-  | 'unavailable'
-  | 'paused'
-  | 'draining'
-  | 'decommissioned';
+  'pending' | 'online' | 'unavailable' | 'paused' | 'draining' | 'decommissioned';
 
 /** 逻辑执行状态(runtime.md §4.7,含审批挂起 awaiting_approval)。 */
 export type ExecutionStatus =
@@ -41,7 +36,8 @@ export type AttemptStatus =
   | 'cancelled'
   | 'reclaimed';
 
-export type ExecutionTrigger = 'assign' | 'mention' | 'autopilot' | 'manual' | 'chat' | 'integration';
+export type ExecutionTrigger =
+  'assign' | 'mention' | 'autopilot' | 'manual' | 'chat' | 'integration';
 
 /** runtime 列表 / 详情共享的元数据面(runtime.md §2.2 runtimes 表)。 */
 export interface RuntimeSummary {
@@ -201,5 +197,25 @@ export const TERMINAL_EXECUTION_STATUSES: ReadonlySet<ExecutionStatus> = new Set
 ]);
 
 /** 成功类终态(绿色状态条);其余终态为失败类(红色,附 failure_reason)。 */
-export const SUCCESS_EXECUTION_STATUSES: ReadonlySet<ExecutionStatus> =
-  new Set<ExecutionStatus>(['completed']);
+export const SUCCESS_EXECUTION_STATUSES: ReadonlySet<ExecutionStatus> = new Set<ExecutionStatus>([
+  'completed',
+]);
+
+/**
+ * 审批项(契约层,README §6.10 统一审批 inbox;`GET /workspaces/{ws}/approvals`)。
+ * 字段镜像后端 `_approval_response`:`role=mine` 即「待我审批」= status pending。
+ */
+export interface ApprovalSummary {
+  readonly id: string;
+  readonly subject_type: string;
+  readonly subject_execution_id: string | null;
+  readonly subject_task_id: string | null;
+  readonly status: string;
+  /** 人类可读的动作摘要(后端预渲染,直接呈现)。 */
+  readonly action_summary: string;
+  readonly requested_at: string;
+  readonly expires_at: string;
+  readonly decided_at: string | null;
+  readonly decision_comment: string | null;
+  readonly execution_status: string | null;
+}

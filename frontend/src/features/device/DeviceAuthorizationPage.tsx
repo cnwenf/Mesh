@@ -1,6 +1,8 @@
 /**
  * 设备码授权确认页(auth.md §3.1.1 UX 增量,cli.md §3.2):CLI `mesh auth login`
- * 的浏览器批准侧。
+ * 的浏览器批准侧。统一经 PublicFlowShell 公共流程外壳呈现(design-quality §4.4 /
+ * §3.2 设备授权行:共用外壳、明确来源/权限/工作区/安全提示;过期·已处理·无工作区
+ * 均有恢复动作)。标签页标题随语义变化(G19)。
  *
  * 契约要点(写死):
  * - user_code **手工录入**——`?user_code=` 预填仅便利,输入控件始终可见且提交时
@@ -17,7 +19,8 @@ import type { MeshApiClient } from '../../api/client';
 import { approveDevice, denyDevice, fetchDeviceConfirmation } from '../../api/auth';
 import type { DeviceConfirmation } from '../../api/auth';
 import { getApiClient } from '../../api/instance';
-import { Button, Input } from '../../design';
+import { Button, Input, PublicFlowShell, Select } from '../../design';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useT } from '../../i18n';
 import { useAuthStore } from '../../state/authStore';
 
@@ -37,6 +40,8 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   const [errorMessage, setErrorMessage] = useState('');
 
   const client: MeshApiClient = getApiClient();
+
+  useDocumentTitle(t('title.device'));
 
   // 预填仅便利:有预填值时自动拉取确认页数据,输入控件仍可见可改。
   useEffect(() => {
@@ -110,15 +115,17 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
     }
   }
 
+  // 未登录:品牌区不作链接(本态仅一个「去登录」链接,getByRole('link') 唯一)。
   if (token === null) {
     return (
-      <main style={{ maxWidth: 420, margin: '80px auto', padding: '0 16px' }}>
-        <h1>{t('device.title')}</h1>
-        <p>
+      <PublicFlowShell brandLabel={t('brand.name')} title={t('device.title')}>
+        <p className="mesh-public-flow__field-note">
           {t('device.loginRequired')}{' '}
-          <Link to="/login?next=/device">{t('device.goLogin')}</Link>
+          <Link to="/login?next=/device" className="mesh-public-flow__inline-link">
+            {t('device.goLogin')}
+          </Link>
         </p>
-      </main>
+      </PublicFlowShell>
     );
   }
 
@@ -128,33 +135,42 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
   const approveDisabled = noWorkspace || (mustChoose && workspaceId === '');
 
   return (
-    <main style={{ maxWidth: 480, margin: '80px auto', padding: '0 16px' }}>
-      <h1>{t('device.title')}</h1>
-
-      <form onSubmit={onSubmitCode}>
+    <PublicFlowShell brandLabel={t('brand.name')} title={t('device.title')}>
+      <form className="mesh-public-flow__form" onSubmit={onSubmitCode}>
         <Input
           id="device-code"
           label={t('device.codeLabel')}
           value={codeInput}
+          size="lg"
           onChange={(event) => setCodeInput(event.target.value)}
           placeholder="WDJB-MJHT"
           autoComplete="off"
         />
-        <Button type="submit" disabled={phase === 'loading' || codeInput.trim() === ''}>
+        <Button type="submit" size="lg" disabled={phase === 'loading' || codeInput.trim() === ''}>
           {t('device.submitCode')}
         </Button>
       </form>
 
-      {phase === 'not_found' && <p role="alert">{t('device.notFound')}</p>}
-      {phase === 'error' && <p role="alert">{errorMessage}</p>}
+      {phase === 'not_found' ? (
+        <div className="mesh-public-flow__alert" role="alert">
+          <p className="mesh-public-flow__alert-message">{t('device.notFound')}</p>
+        </div>
+      ) : null}
+      {phase === 'error' ? (
+        <div className="mesh-public-flow__alert" role="alert">
+          <p className="mesh-public-flow__alert-message">{errorMessage}</p>
+        </div>
+      ) : null}
 
-      {phase === 'confirm' && confirmation !== null && (
-        <section aria-label={t('device.confirmSection')}>
-          <p>
+      {phase === 'confirm' && confirmation !== null ? (
+        <section className="mesh-public-flow__form" aria-label={t('device.confirmSection')}>
+          <p className="mesh-public-flow__client">
             <strong>{confirmation.client_name}</strong> {t('device.requestsAccess')}
           </p>
-          <p role="note">{t('device.securityNotice')}</p>
-          <ul aria-label={t('device.scopeList')}>
+          <p className="mesh-public-flow__notice" role="note">
+            {t('device.securityNotice')}
+          </p>
+          <ul className="mesh-public-flow__scope-list" aria-label={t('device.scopeList')}>
             {confirmation.requested_scopes.map((entry) => (
               <li key={entry.scope}>
                 <code>{entry.scope}</code> — {entry.description}
@@ -162,46 +178,48 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
             ))}
           </ul>
 
-          {noWorkspace && <p role="alert">{t('device.noWorkspace')}</p>}
-          {workspaces.length === 1 && (
-            <p>
+          {noWorkspace ? (
+            <div className="mesh-public-flow__alert" role="alert">
+              <p className="mesh-public-flow__alert-message">{t('device.noWorkspace')}</p>
+            </div>
+          ) : null}
+          {workspaces.length === 1 ? (
+            <p className="mesh-public-flow__field-note">
               {t('device.singleWorkspace')} <strong>{workspaces[0].name}</strong>
             </p>
-          )}
-          {mustChoose && (
-            <>
-              <label htmlFor="device-workspace">{t('device.chooseWorkspace')}</label>
-              <select
-                id="device-workspace"
-                value={workspaceId}
-                onChange={(event) => setWorkspaceId(event.target.value)}
-              >
-                <option value="">{t('device.chooseWorkspacePlaceholder')}</option>
-                {workspaces.map((ws) => (
-                  <option key={ws.id} value={ws.id}>
-                    {ws.name} ({ws.my_role})
-                  </option>
-                ))}
-              </select>
-            </>
-          )}
+          ) : null}
+          {mustChoose ? (
+            <Select
+              id="device-workspace"
+              label={t('device.chooseWorkspace')}
+              value={workspaceId}
+              onChange={(event) => setWorkspaceId(event.target.value)}
+            >
+              <option value="">{t('device.chooseWorkspacePlaceholder')}</option>
+              {workspaces.map((ws) => (
+                <option key={ws.id} value={ws.id}>
+                  {ws.name} ({ws.my_role})
+                </option>
+              ))}
+            </Select>
+          ) : null}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+          <div className="mesh-public-flow__actions">
             <Button onClick={() => void onApprove()} disabled={approveDisabled} autoFocus>
               {t('device.approve')}
             </Button>
-            <Button onClick={() => void onDeny()} type="button">
+            <Button onClick={() => void onDeny()} variant="secondary" type="button">
               {t('device.deny')}
             </Button>
           </div>
         </section>
-      )}
+      ) : null}
 
-      {phase === 'done' && (
-        <p role="status">
+      {phase === 'done' ? (
+        <p className="mesh-public-flow__result" role="status">
           {resultStatus === 'approved' ? t('device.resultApproved') : t('device.resultDenied')}
         </p>
-      )}
-    </main>
+      ) : null}
+    </PublicFlowShell>
   );
 }

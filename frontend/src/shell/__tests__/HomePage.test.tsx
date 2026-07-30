@@ -97,7 +97,9 @@ function renderHome(client: StubClient | null): ReturnType<typeof renderWithProv
 /** Input 设计组件把 data-testid 透传给原生 input;取原生元素以便 fireEvent.change。 */
 function nativeInput(testId: string): HTMLInputElement {
   const element = screen.getByTestId(testId);
-  return (element instanceof HTMLInputElement ? element : element.querySelector('input')) as HTMLInputElement;
+  return (
+    element instanceof HTMLInputElement ? element : element.querySelector('input')
+  ) as HTMLInputElement;
 }
 
 describe('HomePage(me 三态)', () => {
@@ -120,7 +122,10 @@ describe('HomePage(me 三态)', () => {
           );
         }
         return Promise.resolve(
-          jsonResponse({ data: [6, 7].map((n) => issue(n, 'Issue ' + String(n))), next_cursor: null }),
+          jsonResponse({
+            data: [6, 7].map((n) => issue(n, 'Issue ' + String(n))),
+            next_cursor: null,
+          }),
         );
       }
       if (url.includes(ISSUES_PATH) && init?.method === 'POST') {
@@ -405,9 +410,7 @@ describe('HomePage(实时增量合并)', () => {
       if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
       if (url.includes(ISSUES_PATH) && (init?.method ?? 'GET') === 'GET') {
         if (new URL(url).searchParams.get('cursor') === null) {
-          return Promise.resolve(
-            jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: 'c2' }),
-          );
+          return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: 'c2' }));
         }
         return Promise.resolve(
           jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500),
@@ -445,5 +448,231 @@ describe('HomePage(实时增量合并)', () => {
     fireEvent.click(screen.getByTestId('home-create'));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(2));
     expect(screen.getAllByTestId('home-issue-MESH-99').length).toBe(1);
+  });
+});
+
+const PROJECTS_PATH = '/api/v1/workspaces/ws-1/projects';
+
+function project(id: number, key: string, openIssues: number): Record<string, unknown> {
+  return {
+    id: 'proj-' + String(id),
+    workspace_id: 'ws-1',
+    name: 'Project ' + key,
+    key,
+    description: null,
+    icon: null,
+    color: null,
+    status: 'active',
+    health: null,
+    visibility: 'workspace',
+    lead: null,
+    lead_member_id: null,
+    start_date: null,
+    target_date: null,
+    progress: 0,
+    open_issues: openIssues,
+    done_issues: 0,
+    issue_seq: 1,
+    archived: false,
+    archived_at: null,
+    my_role: 'member',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-25T00:00:00.000Z',
+  };
+}
+
+/** 路由 ME / ISSUES / PROJECTS 的 fetch mock;projects 行为可配。 */
+function routedFetch(projectsResponse: () => Response): ReturnType<typeof vi.fn> {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+    if (url.includes(PROJECTS_PATH)) return Promise.resolve(projectsResponse());
+    if (url.includes(ISSUES_PATH) && (init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+    }
+    return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+  });
+}
+
+describe('HomePage(最近项目小组件 + onboarding)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('有项目时渲染最近项目小组件,卡片深链指向项目详情', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() =>
+        jsonResponse({ data: [project(1, 'ALPHA', 3), project(2, 'BETA', 0)], next_cursor: null }),
+      ),
+    );
+    renderHome(null);
+    const section = await screen.findByTestId('home-projects');
+    expect(within(section).getByTestId('home-project-ALPHA').textContent).toContain(
+      'Project ALPHA',
+    );
+    expect(within(section).getByTestId('home-project-ALPHA').textContent).toContain('3 open');
+    const link = within(within(section).getByTestId('home-project-BETA')).getByRole('link');
+    expect(link.getAttribute('href')).toBe('/projects/proj-2');
+  });
+
+  it('项目为空时不渲染小组件(有数据才呈现,无演示内容)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() => jsonResponse({ data: [], next_cursor: null })),
+    );
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+  });
+
+  it('项目加载失败安静隐藏小组件,不阻断工作台', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() => jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500)),
+    );
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+    // 工作台其余部分照常:问候语与工作区列表仍在。
+    expect(screen.getByTestId('home-greeting')).toBeDefined();
+  });
+
+  it('空工作区(无 issue)呈现 onboarding 区域', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+        if (url.includes(PROJECTS_PATH)) {
+          return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+        }
+        if (url.includes(ISSUES_PATH)) {
+          return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+        }
+        return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+      }),
+    );
+    renderHome(null);
+    await waitFor(() => expect(screen.getByTestId('home-onboarding')).toBeDefined());
+  });
+});
+
+const EXECUTIONS_PATH = '/api/v1/workspaces/ws-1/executions';
+const APPROVALS_PATH = '/api/v1/workspaces/ws-1/approvals';
+
+function execRow(id: number, status: string): Record<string, unknown> {
+  return {
+    id: 'exec-' + String(id),
+    agent_id: 'agent-1',
+    agent_name: 'Coder',
+    issue_identifier: 'MESH-' + String(id),
+    trigger: 'assign',
+    status,
+    priority: 0,
+    required_capabilities: [],
+    label_requirements: {},
+    timeout_seconds: 600,
+    queued_at: '2026-07-30T00:00:00.000Z',
+    finished_at: null,
+    failure_reason: null,
+    result: null,
+  };
+}
+
+function approvalRow(id: number, executionId: string | null): Record<string, unknown> {
+  return {
+    id: 'appr-' + String(id),
+    subject_type: 'execution',
+    subject_execution_id: executionId,
+    subject_task_id: null,
+    status: 'pending',
+    action_summary: 'Approve deploy of MESH-' + String(id),
+    requested_at: '2026-07-30T00:00:00.000Z',
+    expires_at: '2026-07-31T00:00:00.000Z',
+    decided_at: null,
+    decision_comment: null,
+    execution_status: 'awaiting_approval',
+  };
+}
+
+describe('HomePage(等待确认 / AI 运行 小组件)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function install(
+    executions: Record<string, unknown>[],
+    approvals: Record<string, unknown>[],
+  ): void {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      if (url.includes(PROJECTS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+      }
+      if (url.includes(EXECUTIONS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: executions, next_cursor: null }));
+      }
+      if (url.includes(APPROVALS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: approvals, next_cursor: null }));
+      }
+      return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('有数据时渲染两块,过滤执行终态,行深链正确', async () => {
+    install(
+      [execRow(1, 'running'), execRow(2, 'awaiting_approval'), execRow(3, 'completed')],
+      [approvalRow(7, 'exec-9')],
+    );
+    renderHome(null);
+
+    const runs = await screen.findByTestId('home-ai-runs');
+    // completed 被过滤,仅剩 running + awaiting_approval 两行。
+    await waitFor(() => expect(within(runs).getAllByRole('listitem').length).toBe(2));
+    expect(within(runs).getByTestId('home-ai-run-exec-1').textContent).toContain('Coder');
+    const runLink = within(within(runs).getByTestId('home-ai-run-exec-1')).getByRole('link');
+    expect(runLink.getAttribute('href')).toBe('/executions/exec-1');
+
+    const waiting = screen.getByTestId('home-waiting');
+    const waitingItem = within(waiting).getByTestId('home-waiting-appr-7');
+    expect(waitingItem.textContent).toContain('Approve deploy of MESH-7');
+    expect(within(waitingItem).getByRole('link').getAttribute('href')).toBe('/executions/exec-9');
+  });
+
+  it('执行/审批为空时不渲染对应小组件(无演示内容)', async () => {
+    install([], []);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+  });
+
+  it('执行/审批接口失败安静隐藏,不阻断工作台', async () => {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      // projects/executions/approvals 全部 500。
+      return Promise.resolve(
+        jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.getByTestId('home-greeting')).toBeDefined();
   });
 });

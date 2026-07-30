@@ -7,8 +7,19 @@ export type { Rgb } from './contrast';
 export { AA_CONTRAST_PAIRS, DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
 export { ThemeProvider, resolveTheme } from './ThemeProvider';
 export { ThemeSkeleton } from './ThemeSkeleton';
-export { resolveThemeChain, expectedRouteId, parseThemeLocator, isThemeMode } from './themeNegotiation';
-export type { ResolvedTheme, ThemeSource, ThemeMode, ChainInput, ChainResult } from './themeNegotiation';
+export {
+  resolveThemeChain,
+  expectedRouteId,
+  parseThemeLocator,
+  isThemeMode,
+} from './themeNegotiation';
+export type {
+  ResolvedTheme,
+  ThemeSource,
+  ThemeMode,
+  ChainInput,
+  ChainResult,
+} from './themeNegotiation';
 export { THEME_LOCATOR_KEY, writeThemeLocator, clearThemeLocators } from './themeLocator';
 export { guardUgcInlineColors, useUgcColorGuard, THEME_CHANGED_EVENT } from './ugcColorGuard';
 export { Banner } from './components/Banner';
@@ -24,7 +35,7 @@ export type { ErrorStateProps } from './components/ErrorState';
 export { IconButton } from './components/IconButton';
 export type { IconButtonProps } from './components/IconButton';
 export { Input } from './components/Input';
-export type { InputProps } from './components/Input';
+export type { InputProps, InputSize } from './components/Input';
 export { Kbd } from './components/Kbd';
 export type { KbdProps } from './components/Kbd';
 export { Select } from './components/Select';
@@ -54,6 +65,8 @@ export { Icon, ICON_PATHS } from './components/Icon';
 export type { IconName, IconProps, IconSize } from './components/Icon';
 export { Menu } from './components/Menu';
 export type { MenuItem, MenuEntry, MenuProps } from './components/Menu';
+export { PublicFlowShell } from './components/PublicFlowShell';
+export type { PublicFlowShellProps } from './components/PublicFlowShell';
 export { Tabs } from './components/Tabs';
 export type { TabItem, TabsProps } from './components/Tabs';
 export { Tooltip } from './components/Tooltip';
