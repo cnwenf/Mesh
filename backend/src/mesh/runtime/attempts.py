@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -35,6 +36,7 @@ from mesh.errors import (
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.credentials import revoke_attempt_envelopes, revoke_execution_envelopes
 from mesh.runtime.redaction import redact_result
+from mesh.runtime.result_schema import RESULT_SCHEMA_VERSION, validate_result_schema
 from mesh.runtime.task_tokens import revoke_attempt_task_tokens
 
 # Physical attempt machine (§4.7): source → allowed daemon-driven targets.
@@ -249,16 +251,18 @@ def _opt(value: uuid.UUID | None) -> str | None:
     return str(value) if value else None
 
 
-# §2.6 P0: structured result schema version.
-RESULT_SCHEMA_VERSION = 1
-
-
 def _extract_structured_result(attempt: ExecutionAttempt, result: dict | None) -> None:
     """Parse the versioned result schema (§2.6) into typed attempt columns.
 
     Extracts provider/model/usage/outcome fields for reliable verification,
     budget aggregation, and querying. ``result.output`` stays as the final
     summary; the structured columns are the queryable truth.
+
+    Only ever called on a result that already passed ``validate_result_schema``
+    (runtime-executor.md §3.9), so the stamp is honest and ``cost_usd`` is a
+    guaranteed-parseable decimal string — parsed as ``Decimal`` for the
+    ``Numeric(16,6)`` column (a ``float`` could carry binary noise; ``"nan"`` /
+    ``"inf"`` are rejected upstream and never reach storage as a 500).
     """
     if not result or not isinstance(result, dict):
         return
@@ -279,10 +283,7 @@ def _extract_structured_result(attempt: ExecutionAttempt, result: dict | None) -
         attempt.num_turns = _safe_int(usage.get("turns"))
         cost = usage.get("cost_usd")
         if cost is not None:
-            try:
-                attempt.cost_usd = float(cost)
-            except (TypeError, ValueError):
-                pass
+            attempt.cost_usd = Decimal(cost)
 
 
 def _safe_int(value: object) -> int | None:
@@ -389,6 +390,14 @@ async def transition_attempt(
                     result=result,
                     signing_secret=signing_secret,
                 )
+            # runtime-executor.md §3.9: server-side schema v1 strict validation
+            # — "The server 422s anything else". Runs AFTER redaction (validate
+            # what is persisted) and BEFORE persisting, so a non-conforming
+            # result (e.g. cost_usd "nan") 422s instead of 500'ing on the
+            # Numeric column, and the result_schema_version stamp below is only
+            # ever applied to a validated result.
+            if result is not None:
+                validate_result_schema(result)
             attempt.result = result
             attempt.redaction_hits = redaction_hits
             # §2.6 P0: parse structured result fields for reliable

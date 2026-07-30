@@ -240,7 +240,11 @@ class TestStructuredResult:
         assert attempt.completion_tokens == 500
         assert attempt.cache_tokens == 300  # 200 + 100
         assert attempt.num_turns == 5
-        assert attempt.cost_usd == pytest.approx(0.012345)
+        # §3.9: cost is parsed as an exact Decimal (no float noise) for the
+        # Numeric(16,6) column.
+        from decimal import Decimal
+
+        assert attempt.cost_usd == Decimal("0.012345")
 
     def test_extract_empty_result(self):
         from mesh.runtime.attempts import _extract_structured_result
@@ -259,13 +263,19 @@ class TestStructuredResult:
         assert attempt.provider == "test"
         assert attempt.prompt_tokens is None
 
-    def test_extract_invalid_cost(self):
-        from mesh.runtime.attempts import _extract_structured_result
+    def test_invalid_cost_rejected_upstream_by_schema_validation(self):
+        """§3.9: an invalid cost_usd never reaches ``_extract_structured_result``
+        — ``validate_result_schema`` 422s it before persistence (previously a
+        silent ``float()`` skip that 500'd on the Numeric column for "nan")."""
+        from mesh.errors import BusinessRuleError
+        from mesh.runtime.result_schema import validate_result_schema
+        from tests.unit.runtime_support import valid_result_v1
 
-        attempt = self._make_attempt()
-        result = {"usage": {"cost_usd": "not-a-number"}}
-        _extract_structured_result(attempt, result)
-        assert attempt.cost_usd is None
+        bad = valid_result_v1(cost_usd="not-a-number")
+        with pytest.raises(BusinessRuleError) as exc:
+            validate_result_schema(bad)
+        assert exc.value.code == "invalid_result_schema"
+        assert exc.value.details["field"] == "usage.cost_usd"
 
     def test_safe_int_helper(self):
         from mesh.runtime.attempts import _safe_int

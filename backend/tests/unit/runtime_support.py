@@ -34,6 +34,59 @@ def make_settings(**overrides):
     return load_settings(**base)
 
 
+def valid_result_v1(
+    *,
+    cost_usd: str = "0",
+    input_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
+    output_tokens: int = 0,
+    turns: int = 0,
+    termination: str = "completed",
+    exit_code: int = 0,
+    summary: str = "done",
+    session_id: str | None = None,
+    output: str | None = None,
+) -> dict:
+    """A fully conforming result schema v1 doc (runtime-executor.md §3.9).
+
+    Mirrors what the daemon's ``build_result`` emits — the only shape the server
+    now accepts (it 422s anything else). Tests that merely need to COMPLETE an
+    attempt use this instead of the old unrealistic ``{"exit_code": 0}`` stub.
+    ``total_tokens`` is computed so the sum invariant always holds.
+    """
+    result: dict = {
+        "schema_version": 1,
+        "provider": {
+            "name": "test-provider",
+            "version": "1.0.0",
+            "model": "test-model",
+            "session_id": session_id,
+        },
+        "usage": {
+            "input_tokens": input_tokens,
+            "cache_creation_tokens": cache_creation_tokens,
+            "cache_read_tokens": cache_read_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": (
+                input_tokens + cache_creation_tokens + cache_read_tokens + output_tokens
+            ),
+            "turns": turns,
+            "cost_usd": cost_usd,
+        },
+        "outcome": {
+            "exit_code": exit_code,
+            "termination": termination,
+            "summary": summary,
+        },
+        "artifacts": {"checkout_id": None, "diff_ref": None},
+        "redaction": {"rule_version": "test-rules", "hit_count": 0},
+    }
+    if output is not None:
+        result["output"] = output
+    return result
+
+
 async def seed_world(session_factory) -> dict:
     """Workspace + human admin member + agent with its roster member row.
 

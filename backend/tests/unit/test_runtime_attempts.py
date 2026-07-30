@@ -29,6 +29,7 @@ from tests.unit.runtime_support import (
     make_execution,
     make_runtime,
     seed_world,
+    valid_result_v1,
 )
 
 pytestmark = pytest.mark.unit
@@ -79,7 +80,7 @@ async def test_claimed_to_running_to_completed_mirrors_execution(session_factory
         assert execution.status == "running"
 
     response = await _transition(
-        session_factory, runtime, result, new_status="completed", result={"exit_code": 0}
+        session_factory, runtime, result, new_status="completed", result=valid_result_v1()
     )
     assert response["status"] == "completed"
     assert response["execution_status"] == "completed"
@@ -88,7 +89,7 @@ async def test_claimed_to_running_to_completed_mirrors_execution(session_factory
         attempt = (await session.execute(select(ExecutionAttempt))).scalar_one()
         fresh = await session.get(Runtime, runtime.id)
     assert execution.status == "completed"
-    assert execution.result == {"exit_code": 0}
+    assert execution.result["schema_version"] == 1
     assert execution.finished_at is not None
     assert attempt.status == "completed"
     assert fresh.current_load == 0
@@ -319,7 +320,7 @@ async def test_daemon_cannot_inject_awaiting_approval_reason(session_factory):
         ).scalars().all()
     assert executions[0].status == "running"
     await _transition(
-        session_factory, runtime, result, new_status="completed", result={"exit_code": 0}
+        session_factory, runtime, result, new_status="completed", result=valid_result_v1()
     )
     async with session_factory() as session:
         executions = (
@@ -371,7 +372,7 @@ async def test_finished_fanout_daemon_completed_full_payload(session_factory):
     result = await _claim_one(session_factory, runtime)
     await _transition(session_factory, runtime, result, new_status="running")
     await _transition(
-        session_factory, runtime, result, new_status="completed", result={"exit_code": 0}
+        session_factory, runtime, result, new_status="completed", result=valid_result_v1()
     )
     await assert_execution_finished_fanout(
         session_factory,
