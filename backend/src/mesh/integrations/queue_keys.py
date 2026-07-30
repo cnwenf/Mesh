@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import re
+from typing import Any
 
 from mesh.db.models.integration import BINDING_PROVIDER_VALUES
 from mesh.errors import ValidationError
@@ -112,6 +113,53 @@ def encode_external_user_key(*, staff_id: str | None, sender_id: str | None) -> 
         encoded = base64.urlsafe_b64encode(sender_id.encode("utf-8")).decode("ascii")
         return f"{_ENCODED_USER_KEY_PREFIX}{encoded.rstrip('=')}"
     raise _invalid("staff_id or sender_id is required")
+
+
+# ---------------------------------------------------------------------------
+# Conversation delivery fields for queue-item-less im.send payloads
+# (§2.10 rate-limit hint / §3.7 immediate command feedback)
+# ---------------------------------------------------------------------------
+
+# im.send payload conversation-type vocabulary — the exact strings the
+# consumer (mesh.integrations.im_outbound CONVERSATION_*) selects the
+# outbound channel on (group → groupMessages/send, direct →
+# oToMessages/batchSend). Kept literal-identical by contract; consumers
+# pass fully-specified payloads through unchanged.
+CONVERSATION_GROUP = "group"
+CONVERSATION_DIRECT = "direct"
+
+# Ingested DingTalk payload field (§3.2 normalization table): "1" = single
+# chat, "2" = group — the same single source of truth the relay-side queue
+# item derivation reads.
+_DINGTALK_CONVERSATION_TYPE_DIRECT = "1"
+
+
+def conversation_delivery_fields(
+    ingested_payload: dict[str, Any] | None, *, actor_key: str = ""
+) -> dict[str, str]:
+    """Self-specified outbound delivery fields for an ``im.send`` payload.
+
+    Two emitter paths have NO queue item to derive the conversation type /
+    direct-chat target from: the §2.10 rate-limit hint (a rejected message
+    is never enqueued) and §3.7 immediate command feedback (fires for empty
+    queues too — /help, unknown commands, /stop with nothing in flight).
+    Their payloads carry these fields directly so the relay delivers to the
+    right channel without queue-item derivation; fully-specified payloads
+    pass the consumer's predicate unchanged.
+
+    ``conversationType == "1"`` → direct + the actor as the single-chat
+    recipient (the robot replies to the sender via oToMessages); anything
+    else (including "2" and non-DingTalk payloads lacking the field) →
+    group. An external-contact actor key (``x=<base64url>``) is carried
+    verbatim — the no_staff_id degradation applies downstream (§3.10).
+    """
+    raw_type = str((ingested_payload or {}).get("conversationType") or "")
+    if raw_type != _DINGTALK_CONVERSATION_TYPE_DIRECT:
+        return {"conversation_type": CONVERSATION_GROUP}
+    fields = {"conversation_type": CONVERSATION_DIRECT}
+    if actor_key:
+        fields["target_user_key"] = actor_key
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +268,14 @@ def truncate_inbound_text(text: str, limit: int) -> tuple[str, bool]:
 
 
 __all__ = [
+    "CONVERSATION_DIRECT",
+    "CONVERSATION_GROUP",
     "EXCERPT_DEFAULT_LIMIT",
     "EXTERNAL_REF_RE",
     "STAFF_ID_RE",
     "build_conversation_key",
     "build_sender_identity_key",
+    "conversation_delivery_fields",
     "encode_external_user_key",
     "sanitize_excerpt",
     "truncate_inbound_text",

@@ -48,6 +48,7 @@ from mesh.db.models.user import User
 from mesh.errors import BusinessRuleError, MeshError
 from mesh.integrations.queue_events import IM_SEND_EVENT, emit_queue_updated
 from mesh.integrations.queue_keys import (
+    conversation_delivery_fields,
     sanitize_excerpt,
     truncate_inbound_text,
     validate_sender_identity_key,
@@ -135,14 +136,16 @@ async def maybe_handle_command(
         )
         await _feedback(
             session, integration=integration, event_row=event_row,
-            conversation_key=conversation_key, name=name, text=HELP_TEXT,
+            conversation_key=conversation_key, actor_key=user_key,
+            name=name, text=HELP_TEXT,
         )
         return CommandOutcome(handled=True)
     if name == "help":
         _audit_command(session, event_row, name=name, actor_key=user_key, targets=[], result="help")
         await _feedback(
             session, integration=integration, event_row=event_row,
-            conversation_key=conversation_key, name=name, text=HELP_TEXT,
+            conversation_key=conversation_key, actor_key=user_key,
+            name=name, text=HELP_TEXT,
         )
         return CommandOutcome(handled=True)
 
@@ -155,7 +158,8 @@ async def maybe_handle_command(
         )
         await _feedback(
             session, integration=integration, event_row=event_row,
-            conversation_key=conversation_key, name=name, text=_LINK_PROMPT_TEXT,
+            conversation_key=conversation_key, actor_key=user_key,
+            name=name, text=_LINK_PROMPT_TEXT,
         )
         return CommandOutcome(handled=True)
 
@@ -317,7 +321,8 @@ async def _handle_stop(
     )
     await _feedback(
         session, integration=integration, event_row=event_row,
-        conversation_key=conversation_key, name="stop", text=immediate,
+        conversation_key=conversation_key, actor_key=actor_key,
+        name="stop", text=immediate,
     )
     return CommandOutcome(handled=True)
 
@@ -343,7 +348,8 @@ async def _handle_btw(
         _audit_command(session, event_row, name="btw", actor_key=actor_key, targets=[], result="usage")
         await _feedback(
             session, integration=integration, event_row=event_row,
-            conversation_key=conversation_key, name="btw", text=_BTW_USAGE_TEXT,
+            conversation_key=conversation_key, actor_key=actor_key,
+            name="btw", text=_BTW_USAGE_TEXT,
         )
         return CommandOutcome(handled=True)
 
@@ -368,7 +374,8 @@ async def _handle_btw(
             )
             await _feedback(
                 session, integration=integration, event_row=event_row,
-                conversation_key=conversation_key, name="btw", text=_BTW_CANCELLING_TEXT,
+                conversation_key=conversation_key, actor_key=actor_key,
+                name="btw", text=_BTW_CANCELLING_TEXT,
             )
             return CommandOutcome(handled=True)
         if processing:
@@ -380,7 +387,8 @@ async def _handle_btw(
             )
             await _feedback(
                 session, integration=integration, event_row=event_row,
-                conversation_key=conversation_key, name="btw", text=_FORBIDDEN_TEXT,
+                conversation_key=conversation_key, actor_key=actor_key,
+                name="btw", text=_FORBIDDEN_TEXT,
             )
             return CommandOutcome(handled=True)
         # No in-flight item: strip the prefix and continue as an ordinary
@@ -390,7 +398,8 @@ async def _handle_btw(
         )
         await _feedback(
             session, integration=integration, event_row=event_row,
-            conversation_key=conversation_key, name="btw", text=_BTW_NO_ITEM_HINT,
+            conversation_key=conversation_key, actor_key=actor_key,
+            name="btw", text=_BTW_NO_ITEM_HINT,
         )
         return CommandOutcome(handled=True, passthrough_text=args)
 
@@ -427,7 +436,8 @@ async def _handle_btw(
             )
             await _feedback(
                 session, integration=integration, event_row=event_row,
-                conversation_key=conversation_key, name="btw", text=_BTW_LIMIT_TEXT,
+                conversation_key=conversation_key, actor_key=actor_key,
+                name="btw", text=_BTW_LIMIT_TEXT,
             )
             return CommandOutcome(handled=True)
         if exc.code in ("append_not_acceptable", "append_execution_terminal"):
@@ -437,7 +447,8 @@ async def _handle_btw(
             )
             await _feedback(
                 session, integration=integration, event_row=event_row,
-                conversation_key=conversation_key, name="btw", text=_BTW_CANCELLING_TEXT,
+                conversation_key=conversation_key, actor_key=actor_key,
+                name="btw", text=_BTW_CANCELLING_TEXT,
             )
             return CommandOutcome(handled=True)
         raise
@@ -447,7 +458,8 @@ async def _handle_btw(
     )
     await _feedback(
         session, integration=integration, event_row=event_row,
-        conversation_key=conversation_key, name="btw", text=_BTW_OK_TEXT,
+        conversation_key=conversation_key, actor_key=actor_key,
+        name="btw", text=_BTW_OK_TEXT,
     )
     return CommandOutcome(handled=True)
 
@@ -530,11 +542,19 @@ async def _feedback(
     integration: Integration,
     event_row: IntegrationEvent,
     conversation_key: str,
+    actor_key: str,
     name: str,
     text: str,
 ) -> None:
     """Conversational reply via im.send — NOT an ack: never coalesced, never
-    routed through notification_delivery (§3.8 ledger note)."""
+    routed through notification_delivery (§3.8 ledger note).
+
+    The payload is SELF-SPECIFIED: immediate feedback fires for empty
+    conversation queues too (/help, unknown commands, /stop with nothing
+    in flight), so it cannot rely on the relay's queue-item derivation —
+    the conversation type and the single-chat target (the command's
+    initiator, who the robot replies to) travel with the payload (MES-122).
+    """
     await emit_event(
         session,
         workspace_id=integration.workspace_id,
@@ -545,6 +565,7 @@ async def _feedback(
             "command": name,
             "integration_id": str(integration.id),
             "conversation_key": conversation_key,
+            **conversation_delivery_fields(event_row.payload, actor_key=actor_key),
             "text": sanitize_excerpt(text, limit=500),
         },
         idempotency_key=f"im-cmdfb:{event_row.id}:{name}",

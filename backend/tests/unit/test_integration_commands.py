@@ -94,12 +94,13 @@ async def _seed_world(session_factory, *, role: str = "member"):
     return {**ids, "integration": integration, "binding": binding}
 
 
-async def _event_id(session_factory, world, msg_id: str = "cmd-1") -> uuid.UUID:
+async def _event_id(session_factory, world, msg_id: str = "cmd-1", payload=None) -> uuid.UUID:
     async with session_factory() as session, session.begin():
         row = IntegrationEvent(
             workspace_id=world["ws"], integration_id=world["integration"],
             external_event_id=msg_id, event_type="im.message.receive",
-            payload={"text": {"content": "x"}}, signature_status="valid",
+            payload=payload if payload is not None else {"text": {"content": "x"}},
+            signature_status="valid",
             process_status="received",
         )
         session.add(row)
@@ -141,9 +142,11 @@ async def _execution(session_factory, world, *, status: str = "running") -> uuid
     return exec_id
 
 
-async def _run(session_factory, world, *, text: str, sender: str, settings=None):
+async def _run(session_factory, world, *, text: str, sender: str, settings=None,
+               event_payload=None):
     settings = settings or _settings()
-    event_id = await _event_id(session_factory, world, msg_id=f"cmd-{uuid.uuid4().hex[:8]}")
+    event_id = await _event_id(session_factory, world, msg_id=f"cmd-{uuid.uuid4().hex[:8]}",
+                               payload=event_payload)
     async with session_factory() as session, session.begin():
         integration = await session.get(Integration, world["integration"])
         # event row must be owned by THIS session (production passes the
@@ -173,6 +176,18 @@ async def _feedback_texts(session_factory) -> list[str]:
             ).scalars().all()
         )
     return [e.payload["text"] for e in events if e.payload.get("kind") == "command_feedback"]
+
+
+async def _feedback_events(session_factory) -> list[OutboxEvent]:
+    async with session_factory() as session:
+        events = (
+            (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == "im.send")
+                )
+            ).scalars().all()
+        )
+    return [e for e in events if e.payload.get("kind") == "command_feedback"]
 
 
 async def _load_item(session_factory, item_id):
@@ -576,3 +591,81 @@ class TestCopyConsistency:
             # No two consecutive English words — commands ("/stop", "/btw")
             # and the product name stay, but English prose must not.
             assert not _re.search(r"[A-Za-z]{2,}\s+[A-Za-z]{4,}", text), f"EN prose in {text!r}"
+
+
+class TestImmediateFeedbackDeliveryFields:
+    """MES-122: immediate-stage command feedback carries self-specified
+    conversation delivery fields — the payload must not depend on a queue
+    item (feedback fires for empty queues too: /help, unknown commands,
+    /stop with nothing in flight). conversationType "1"=单聊/"2"=群聊."""
+
+    async def test_stop_immediate_feedback_direct_carries_type_and_target(self, session_factory):
+        world = await _seed_world(session_factory)
+        exec_id = await _execution(session_factory, world, status="running")
+        await _item(
+            session_factory, world, seq=1, state="processing",
+            sender_key=ALICE_KEY, execution_id=exec_id, excerpt="deploy prod",
+        )
+        await _run(
+            session_factory, world, text="/stop", sender=ALICE_KEY,
+            event_payload={"conversationType": "1", "text": {"content": "/stop"}},
+        )
+        immediate = [
+            e for e in await _feedback_events(session_factory)
+            if e.payload.get("stage") == "immediate"
+        ]
+        assert len(immediate) == 1
+        assert immediate[0].payload["conversation_type"] == "direct"
+        assert immediate[0].payload["target_user_key"] == ALICE_KEY
+
+    async def test_stop_immediate_feedback_group_carries_group_type(self, session_factory):
+        world = await _seed_world(session_factory)
+        exec_id = await _execution(session_factory, world, status="running")
+        await _item(
+            session_factory, world, seq=1, state="processing",
+            sender_key=ALICE_KEY, execution_id=exec_id,
+        )
+        await _run(
+            session_factory, world, text="/stop", sender=ALICE_KEY,
+            event_payload={"conversationType": "2", "text": {"content": "/stop"}},
+        )
+        immediate = [
+            e for e in await _feedback_events(session_factory)
+            if e.payload.get("stage") == "immediate"
+        ]
+        assert len(immediate) == 1
+        assert immediate[0].payload["conversation_type"] == "group"
+        assert "target_user_key" not in immediate[0].payload  # group needs none
+
+    async def test_help_feedback_direct_self_sufficient_with_empty_queue(self, session_factory):
+        """Empty conversation queue — queue-item derivation would find
+        nothing, so the payload carries the fields itself."""
+        world = await _seed_world(session_factory)
+        await _run(
+            session_factory, world, text="/help", sender=ALICE_KEY,
+            event_payload={"conversationType": "1", "text": {"content": "/help"}},
+        )
+        feedbacks = await _feedback_events(session_factory)
+        assert len(feedbacks) == 1
+        assert feedbacks[0].payload["conversation_type"] == "direct"
+        assert feedbacks[0].payload["target_user_key"] == ALICE_KEY
+
+    async def test_btw_feedback_direct_carries_type_and_target(self, session_factory):
+        world = await _seed_world(session_factory)
+        exec_id = await _execution(session_factory, world, status="running")
+        await _item(
+            session_factory, world, seq=1, state="processing",
+            sender_key=ALICE_KEY, execution_id=exec_id,
+        )
+        await _run(
+            session_factory, world, text="/btw check the staging logs first",
+            sender=ALICE_KEY,
+            event_payload={"conversationType": "1", "text": {"content": "/btw x"}},
+        )
+        immediate = [
+            e for e in await _feedback_events(session_factory)
+            if e.payload.get("stage") == "immediate"
+        ]
+        assert len(immediate) == 1
+        assert immediate[0].payload["conversation_type"] == "direct"
+        assert immediate[0].payload["target_user_key"] == ALICE_KEY

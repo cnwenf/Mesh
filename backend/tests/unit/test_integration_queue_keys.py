@@ -12,6 +12,7 @@ from mesh.integrations.queue_keys import (
     STAFF_ID_RE,
     build_conversation_key,
     build_sender_identity_key,
+    conversation_delivery_fields,
     encode_external_user_key,
     sanitize_excerpt,
     truncate_inbound_text,
@@ -175,3 +176,45 @@ class TestTextHygiene:
         text, truncated = truncate_inbound_text("a" * 5000, 4000)
         assert truncated is True
         assert len(text) == 4000
+
+
+class TestConversationDeliveryFields:
+    """MES-122: emitter-side mapping ingested ``conversationType`` onto the
+    self-specified ``im.send`` delivery fields used by queue-item-less
+    payloads (rate-limit hint §2.10, command immediate feedback §3.7)."""
+
+    def test_dingtalk_direct_maps_to_direct_with_target(self):
+        fields = conversation_delivery_fields(
+            {"conversationType": "1"}, actor_key=OFFICIAL_STAFF_ID
+        )
+        assert fields == {
+            "conversation_type": "direct",
+            "target_user_key": OFFICIAL_STAFF_ID,
+        }
+
+    def test_dingtalk_group_maps_to_group(self):
+        assert conversation_delivery_fields(
+            {"conversationType": "2"}, actor_key=OFFICIAL_STAFF_ID
+        ) == {"conversation_type": "group"}
+
+    def test_missing_conversation_type_defaults_to_group(self):
+        # non-DingTalk providers (feishu/slack) carry no conversationType —
+        # group is the conservative default (same as the relay derivation).
+        assert conversation_delivery_fields({"text": "x"}, actor_key="u") == {
+            "conversation_type": "group"
+        }
+
+    def test_none_payload_defaults_to_group(self):
+        assert conversation_delivery_fields(None, actor_key="u") == {
+            "conversation_type": "group"
+        }
+
+    def test_direct_without_actor_key_omits_target(self):
+        assert conversation_delivery_fields({"conversationType": "1"}) == {
+            "conversation_type": "direct"
+        }
+
+    def test_encoded_external_contact_key_carried_verbatim(self):
+        encoded = encode_external_user_key(staff_id=None, sender_id=OFFICIAL_SENDER_ID)
+        fields = conversation_delivery_fields({"conversationType": "1"}, actor_key=encoded)
+        assert fields["target_user_key"] == encoded  # no_staff_id degradation downstream
