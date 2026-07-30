@@ -880,6 +880,35 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  // ---- 状态定义列表(issue.md §4.4 GET /workspaces/{ws}/statuses):IssuesPage 经
+  // Promise.all 与 listIssues 并发加载,缺此端点会让整页塌成 not_found 错误态,
+  // 致使命令面板跳转 /issues 的取证只能命中骨架/错误占位。补齐四类状态定义。
+  if (path === '/api/v1/workspaces/ws-1/statuses' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const defs = [
+      ['todo', 'Todo', '#94a3b8'],
+      ['in_progress', 'In Progress', '#3b82f6'],
+      ['in_review', 'In Review', '#a855f7'],
+      ['done', 'Done', '#22c55e'],
+    ].map(([category, name, color], idx) => ({
+      id: `status-${category}`,
+      project_id: null,
+      name,
+      category,
+      color,
+      position: idx,
+      is_default: idx === 0,
+      allowed_transitions: [],
+      created_at: isoAt(0),
+      updated_at: isoAt(0),
+    }));
+    sendJson(res, 200, { data: defs, next_cursor: null });
+    return;
+  }
+
   sendJson(res, 404, errorEnvelope('not_found', `no mock route for ${req.method} ${path}`));
 }
 
