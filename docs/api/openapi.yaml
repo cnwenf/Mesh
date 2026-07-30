@@ -9451,7 +9451,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PatchBindingRequest'
+              $ref: '#/components/schemas/mesh__skill__schemas__PatchBindingRequest'
       responses:
         '200':
           description: Successful Response
@@ -11684,6 +11684,1364 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations:
+    get:
+      tags:
+      - integrations
+      summary: List Integrations
+      operationId: list_integrations_api_v1_workspaces__workspace_id__integrations_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: kind
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Kind
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Integrations Api V1 Workspaces  Workspace Id  Integrations Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - integrations
+      summary: Create Integration
+      operationId: create_integration_api_v1_workspaces__workspace_id__integrations_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntegrationRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Integration Api V1 Workspaces  Workspace Id  Integrations Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}:
+    get:
+      tags:
+      - integrations
+      summary: Get Integration
+      operationId: get_integration_api_v1_workspaces__workspace_id__integrations__integration_id__get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - integrations
+      summary: Patch Integration
+      operationId: patch_integration_api_v1_workspaces__workspace_id__integrations__integration_id__patch
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchIntegrationRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Patch Integration Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - integrations
+      summary: Delete Integration
+      description: 'Soft-delete; ``?force=cancel`` first drains every binding''s queue
+
+        (§3.9 delete protection) before the soft delete.'
+      operationId: delete_integration_api_v1_workspaces__workspace_id__integrations__integration_id__delete
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Force
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/rotate-secret:
+    post:
+      tags:
+      - integrations
+      summary: Rotate Integration Secret
+      operationId: rotate_integration_secret_api_v1_workspaces__workspace_id__integrations__integration_id__rotate_secret_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateSecretRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Rotate Integration Secret Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Rotate Secret Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}:test:
+    post:
+      tags:
+      - integrations
+      summary: Test Integration
+      description: 'Test connection (§3.1, P1): lightweight platform API round-trip.
+
+
+        Verifies credentials/connectivity WITHOUT side effects and drives the
+
+        connector health fields (MEDIUM-P2): the outcome is persisted to
+
+        ``health_state`` / ``last_error`` / ``last_success_at`` so the §4.1
+
+        badge and "re-authorize" banner reflect reality.'
+      operationId: test_integration_api_v1_workspaces__workspace_id__integrations__integration_id__test_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Test Integration Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Test Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/bindings:
+    get:
+      tags:
+      - integrations
+      summary: List Bindings
+      operationId: list_bindings_api_v1_workspaces__workspace_id__integrations__integration_id__bindings_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Bindings Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Bindings Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - integrations
+      summary: Create Binding
+      operationId: create_binding_api_v1_workspaces__workspace_id__integrations__integration_id__bindings_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBindingRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Binding Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Bindings Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integration-bindings/{binding_id}:
+    patch:
+      tags:
+      - integrations
+      summary: Patch Binding
+      operationId: patch_binding_api_v1_workspaces__workspace_id__integration_bindings__binding_id__patch
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Binding Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/mesh__integrations__schemas__PatchBindingRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Patch Binding Api V1 Workspaces  Workspace Id  Integration Bindings  Binding
+                  Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - integrations
+      summary: Delete Binding
+      description: 'Delete a binding (physical). Delete protection (§3.9): non-terminal
+
+        queue items + no ``?force=cancel`` → 409 ``binding_has_active_queue``;
+
+        ``?force=cancel`` drains them first (orphans survive as audit rows).'
+      operationId: delete_binding_api_v1_workspaces__workspace_id__integration_bindings__binding_id__delete
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: binding_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Binding Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Force
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/events:
+    get:
+      tags:
+      - integrations
+      summary: List Events
+      operationId: list_events_api_v1_workspaces__workspace_id__integrations__integration_id__events_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: signature_status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Signature Status
+      - name: process_status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Process Status
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Events Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Events Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/external-identities:
+    get:
+      tags:
+      - integrations
+      summary: List External Identities
+      operationId: list_external_identities_api_v1_workspaces__workspace_id__external_identities_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List External Identities Api V1 Workspaces  Workspace Id  External Identities
+                  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/external-identities:link:
+    post:
+      tags:
+      - integrations
+      summary: Link External Identity
+      operationId: link_external_identity_api_v1_workspaces__workspace_id__external_identities_link_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkIdentityRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Link External Identity Api V1 Workspaces  Workspace Id  External Identities
+                  Link Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/external-identities:link-confirm:
+    post:
+      tags:
+      - integrations
+      summary: Confirm External Identity
+      operationId: confirm_external_identity_api_v1_workspaces__workspace_id__external_identities_link_confirm_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkConfirmRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Confirm External Identity Api V1 Workspaces  Workspace Id  External Identities
+                  Link Confirm Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/external-identities/{identity_id}:
+    delete:
+      tags:
+      - integrations
+      summary: Unlink External Identity
+      operationId: unlink_external_identity_api_v1_workspaces__workspace_id__external_identities__identity_id__delete
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: identity_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Identity Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions:
+    get:
+      tags:
+      - integrations
+      summary: List Subscriptions
+      operationId: list_subscriptions_api_v1_workspaces__workspace_id__webhook_subscriptions_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Subscriptions Api V1 Workspaces  Workspace Id  Webhook Subscriptions
+                  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - integrations
+      summary: Create Subscription
+      operationId: create_subscription_api_v1_workspaces__workspace_id__webhook_subscriptions_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Create Subscription Api V1 Workspaces  Workspace Id  Webhook Subscriptions
+                  Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}:
+    get:
+      tags:
+      - integrations
+      summary: Get Subscription
+      operationId: get_subscription_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Subscription Api V1 Workspaces  Workspace Id  Webhook Subscriptions  Subscription
+                  Id  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - integrations
+      summary: Patch Subscription
+      operationId: patch_subscription_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__patch
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchSubscriptionRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Patch Subscription Api V1 Workspaces  Workspace Id  Webhook Subscriptions  Subscription
+                  Id  Patch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - integrations
+      summary: Delete Subscription
+      operationId: delete_subscription_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__delete
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}/resume:
+    post:
+      tags:
+      - integrations
+      summary: Resume Subscription
+      operationId: resume_subscription_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__resume_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Resume Subscription Api V1 Workspaces  Workspace Id  Webhook Subscriptions  Subscription
+                  Id  Resume Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}:send-test:
+    post:
+      tags:
+      - integrations
+      summary: Send Subscription Test Event
+      description: 'Send test event (§3.1, P1): a synthetic ``webhook.test`` delivery.
+
+
+        Walks the FULL delivery path — the worker signs it (``Mesh-Signature``),
+
+        posts ``Mesh-Event: webhook.test`` + payload body, and records it in
+
+        the ledger like any domain-event delivery.'
+      operationId: send_subscription_test_event_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__send_test_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Send Subscription Test Event Api V1 Workspaces  Workspace Id  Webhook
+                  Subscriptions  Subscription Id  Send Test Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}/deliveries:
+    get:
+      tags:
+      - integrations
+      summary: List Deliveries
+      operationId: list_deliveries_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__deliveries_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      - name: state
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Deliveries Api V1 Workspaces  Workspace Id  Webhook Subscriptions  Subscription
+                  Id  Deliveries Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/webhook-subscriptions/{subscription_id}/deliveries/{delivery_id}/retry:
+    post:
+      tags:
+      - integrations
+      summary: Retry Delivery
+      operationId: retry_delivery_api_v1_workspaces__workspace_id__webhook_subscriptions__subscription_id__deliveries__delivery_id__retry_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: subscription_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Subscription Id
+      - name: delivery_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Delivery Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Retry Delivery Api V1 Workspaces  Workspace Id  Webhook Subscriptions  Subscription
+                  Id  Deliveries  Delivery Id  Retry Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/vcs/links:
+    post:
+      tags:
+      - integrations
+      summary: Create Vcs Link
+      operationId: create_vcs_link_api_v1_integrations_vcs_links_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VcsLinkCreateRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Create Vcs Link Api V1 Integrations Vcs Links Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/vcs/links/{link_id}:
+    delete:
+      tags:
+      - integrations
+      summary: Delete Vcs Link
+      operationId: delete_vcs_link_api_v1_integrations_vcs_links__link_id__delete
+      parameters:
+      - name: link_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Link Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/issues/{issue_id}/vcs-links:
+    get:
+      tags:
+      - integrations
+      summary: List Issue Vcs Links
+      operationId: list_issue_vcs_links_api_v1_issues__issue_id__vcs_links_get
+      parameters:
+      - name: issue_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Issue Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response List Issue Vcs Links Api V1 Issues  Issue Id  Vcs Links Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/vcs/resolve:
+    post:
+      tags:
+      - integrations
+      summary: Resolve Vcs Identifiers
+      operationId: resolve_vcs_identifiers_api_v1_integrations_vcs_resolve_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VcsResolveRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Resolve Vcs Identifiers Api V1 Integrations Vcs Resolve Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue
+      operationId: get_integration_queue_api_v1_workspaces__workspace_id__integrations__integration_id__queue_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: state
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
+      - name: conversation_key
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Conversation Key
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue/summary:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue Summary
+      operationId: get_integration_queue_summary_api_v1_workspaces__workspace_id__integrations__integration_id__queue_summary_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Summary Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue Summary Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue/{item_id}:cancel:
+    post:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Cancel Integration Queue Item
+      operationId: cancel_integration_queue_item_api_v1_workspaces__workspace_id__integrations__integration_id__queue__item_id__cancel_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Cancel Integration Queue Item Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue  Item Id  Cancel Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integration-queue-audit:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue Audit
+      operationId: get_integration_queue_audit_api_v1_workspaces__workspace_id__integration_queue_audit_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Audit Api V1 Workspaces  Workspace Id  Integration
+                  Queue Audit Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/feishu/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Feishu Events
+      operationId: feishu_events_api_v1_integrations_feishu_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/slack/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Slack Events
+      operationId: slack_events_api_v1_integrations_slack_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/github/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Github Events
+      operationId: github_events_api_v1_integrations_github_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/gitlab/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Gitlab Events
+      operationId: gitlab_events_api_v1_integrations_gitlab_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/feishu/cards:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Feishu Cards
+      operationId: feishu_cards_api_v1_integrations_feishu_cards_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/v1/integrations/slack/cards:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Slack Cards
+      operationId: slack_cards_api_v1_integrations_slack_cards_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
   /api/v1/ping:
     get:
       tags:
@@ -12182,6 +13540,35 @@ components:
       - trigger_type
       title: CreateAutopilotRequest
       description: POST /workspaces/{ws}/autopilots (§3.2 request example).
+    CreateBindingRequest:
+      properties:
+        external_ref:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: External Ref
+        scope:
+          type: string
+          title: Scope
+          default: workspace
+        project_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project Id
+        match_config:
+          additionalProperties: true
+          type: object
+          title: Match Config
+        bound_agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bound Agent Id
+      type: object
+      required:
+      - external_ref
+      title: CreateBindingRequest
     CreateChatSessionRequest:
       properties:
         agent_id:
@@ -12489,6 +13876,31 @@ components:
       - source_attachment_id
       title: CreateImportJobRequest
       description: POST /data-jobs/import (§3.2).
+    CreateIntegrationRequest:
+      properties:
+        kind:
+          type: string
+          title: Kind
+        name:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Name
+        config:
+          additionalProperties: true
+          type: object
+          title: Config
+        secret:
+          anyOf:
+          - type: string
+            maxLength: 65536
+          - type: 'null'
+          title: Secret
+      type: object
+      required:
+      - kind
+      - name
+      title: CreateIntegrationRequest
     CreateInvitationRequest:
       properties:
         emails:
@@ -12923,6 +14335,27 @@ components:
       - category
       title: CreateStatusRequest
       description: POST /workspaces/{ws}/statuses.
+    CreateSubscriptionRequest:
+      properties:
+        url:
+          type: string
+          maxLength: 2000
+          minLength: 1
+          title: Url
+        event_types:
+          items:
+            type: string
+          type: array
+          title: Event Types
+        integration_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Integration Id
+      type: object
+      required:
+      - url
+      title: CreateSubscriptionRequest
     CreateSubtasksRequest:
       properties:
         plan_markdown:
@@ -13452,6 +14885,44 @@ components:
       type: object
       title: LifecycleRequest
       description: POST /agents/{id}:pause — the only lifecycle verb carrying a body.
+    LinkConfirmRequest:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        integration_id:
+          type: string
+          title: Integration Id
+        code:
+          type: string
+          maxLength: 32
+          minLength: 1
+          title: Code
+      type: object
+      required:
+      - provider
+      - integration_id
+      - code
+      title: LinkConfirmRequest
+    LinkIdentityRequest:
+      properties:
+        provider:
+          type: string
+          title: Provider
+        integration_id:
+          type: string
+          title: Integration Id
+        external_user_key:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: External User Key
+      type: object
+      required:
+      - provider
+      - integration_id
+      - external_user_key
+      title: LinkIdentityRequest
     LinkTarget:
       properties:
         type:
@@ -13805,28 +15276,6 @@ components:
       type: object
       title: PatchAutopilotRequest
       description: PATCH /workspaces/{ws}/autopilots/{id} — every field optional.
-    PatchBindingRequest:
-      properties:
-        enabled:
-          anyOf:
-          - type: boolean
-          - type: 'null'
-          title: Enabled
-        auto_trigger:
-          anyOf:
-          - type: boolean
-          - type: 'null'
-          title: Auto Trigger
-        priority:
-          anyOf:
-          - type: integer
-            maximum: 1000.0
-            minimum: 0.0
-          - type: 'null'
-          title: Priority
-      type: object
-      title: PatchBindingRequest
-      description: PATCH /workspaces/{ws}/agents/{agent_id}/skills/{binding_id}.
     PatchChatSessionRequest:
       properties:
         title:
@@ -13878,6 +15327,28 @@ components:
       type: object
       title: PatchInstallationRequest
       description: PATCH /workspaces/{ws}/skill-installations/{id} — upgrade/toggle.
+    PatchIntegrationRequest:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 200
+            minLength: 1
+          - type: 'null'
+          title: Name
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Config
+      type: object
+      title: PatchIntegrationRequest
     PatchRuntimeRequest:
       properties:
         name:
@@ -13946,6 +15417,27 @@ components:
       type: object
       title: PatchSkillRequest
       description: PATCH /workspaces/{ws}/skills/{id} — metadata / lifecycle status.
+    PatchSubscriptionRequest:
+      properties:
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        event_types:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Event Types
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      type: object
+      title: PatchSubscriptionRequest
     PlanDecisionRequest:
       properties:
         comment:
@@ -14228,6 +15720,17 @@ components:
       - target_version_id
       title: RollbackRequest
       description: POST /workspaces/{ws}/skill-installations/{id}/rollback.
+    RotateSecretRequest:
+      properties:
+        secret:
+          type: string
+          maxLength: 65536
+          minLength: 1
+          title: Secret
+      type: object
+      required:
+      - secret
+      title: RotateSecretRequest
     RunDecisionRequest:
       properties:
         comment:
@@ -15120,6 +16623,62 @@ components:
       - msg
       - type
       title: ValidationError
+    VcsLinkCreateRequest:
+      properties:
+        integration_id:
+          type: string
+          title: Integration Id
+        vcs_ref:
+          $ref: '#/components/schemas/VcsRefSpec'
+        mesh_entity_type:
+          type: string
+          title: Mesh Entity Type
+          default: issue
+        issue_id:
+          type: string
+          title: Issue Id
+      type: object
+      required:
+      - integration_id
+      - vcs_ref
+      - issue_id
+      title: VcsLinkCreateRequest
+    VcsRefSpec:
+      properties:
+        type:
+          type: string
+          title: Type
+        url:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Url
+        id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Id
+      type: object
+      required:
+      - type
+      title: VcsRefSpec
+    VcsResolveRequest:
+      properties:
+        integration_id:
+          type: string
+          title: Integration Id
+        source_text:
+          type: string
+          maxLength: 8000
+          title: Source Text
+        vcs_ref:
+          $ref: '#/components/schemas/VcsRefSpec'
+      type: object
+      required:
+      - integration_id
+      - source_text
+      - vcs_ref
+      title: VcsResolveRequest
     VerifyEmailRequest:
       properties:
         token:
@@ -15180,6 +16739,30 @@ components:
       - content
       title: SendMessageRequest
       description: POST .../messages (§3.3 step 1 — creates a generation).
+    mesh__integrations__schemas__PatchBindingRequest:
+      properties:
+        match_config:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Match Config
+        bound_agent_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bound Agent Id
+        clear_bound_agent:
+          type: boolean
+          title: Clear Bound Agent
+          default: false
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      type: object
+      title: PatchBindingRequest
     mesh__issue__schemas__MoveRequest:
       properties:
         target_project_id:
@@ -15214,6 +16797,28 @@ components:
         envelope is exactly how clients that skipped step 1 learn the version to
 
         echo back.'
+    mesh__skill__schemas__PatchBindingRequest:
+      properties:
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+        auto_trigger:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Auto Trigger
+        priority:
+          anyOf:
+          - type: integer
+            maximum: 1000.0
+            minimum: 0.0
+          - type: 'null'
+          title: Priority
+      type: object
+      title: PatchBindingRequest
+      description: PATCH /workspaces/{ws}/agents/{agent_id}/skills/{binding_id}.
     mesh__squad__schemas__SendMessageRequest:
       properties:
         task_id:

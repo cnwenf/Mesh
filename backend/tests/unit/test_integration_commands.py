@@ -440,3 +440,60 @@ class TestParsingAndAudit:
             row = await session.get(IntegrationEvent, event_id)
         assert row.payload["_mesh_command"]["name"] == "btw"
         assert row.payload["_mesh_command"]["result"] == "passthrough"
+
+
+class TestEdgeBranches:
+    async def test_stop_all_terminal_no_in_flight_text(self, session_factory):
+        world = await _seed_world(session_factory)
+        await _item(session_factory, world, seq=1, state="done", sender_key=ALICE_KEY)
+        outcome, _ = await _run(session_factory, world, text="/stop", sender=ALICE_KEY)
+        assert outcome.handled is True
+        texts = await _feedback_texts(session_factory)
+        assert any("no in-flight task" in t for t in texts)
+
+    async def test_btw_processing_without_execution_passthrough(self, session_factory):
+        """Defensive: processing item lacking a bound execution (unreachable
+        via the consumer contract) falls through as an ordinary message."""
+        world = await _seed_world(session_factory)
+        await _item(session_factory, world, seq=1, state="processing",
+                    sender_key=ALICE_KEY, execution_id=None)
+        outcome, _ = await _run(
+            session_factory, world, text="/btw note here", sender=ALICE_KEY
+        )
+        assert outcome.handled is True
+        assert outcome.passthrough_text == "note here"
+
+    async def test_btw_execution_cancelling_at_runtime_not_acceptable(self, session_factory):
+        """Item still processing but the execution already cancelling at the
+        runtime layer → append gate refuses (append_not_acceptable)."""
+        world = await _seed_world(session_factory)
+        exec_id = await _execution(session_factory, world, status="cancelling")
+        await _item(session_factory, world, seq=1, state="processing",
+                    sender_key=ALICE_KEY, execution_id=exec_id)
+        outcome, _ = await _run(session_factory, world, text="/btw late note", sender=ALICE_KEY)
+        assert outcome.handled is True
+        texts = await _feedback_texts(session_factory)
+        assert any("stopping" in t for t in texts)
+
+    async def test_stop_item_with_malformed_sender_triple_is_foreign(self, session_factory):
+        """An item whose sender triple fails validation has no resolvable
+        owner — it is treated as someone else's item (never bare-key matched)."""
+        world = await _seed_world(session_factory)
+        exec_id = await _execution(session_factory, world)
+        item_id = uuid.uuid4()
+        async with session_factory() as session, session.begin():
+            session.add(
+                IntegrationMessageQueue(
+                    id=item_id, workspace_id=world["ws"],
+                    integration_id=world["integration"], binding_id=world["binding"],
+                    conversation_key=CONV_KEY, seq=1,
+                    dispatch_mode="serial_conversation", state="processing",
+                    execution_id=exec_id, target_agent_id=world["agent"],
+                    sender_identity_key="not-a-valid-triple",  # unparseable
+                )
+            )
+        await _run(session_factory, world, text="/stop", sender=ALICE_KEY)
+        item = await _load_item(session_factory, item_id)
+        assert item.state == "processing"  # untouched — not alice's
+        texts = await _feedback_texts(session_factory)
+        assert any("permission" in t for t in texts)

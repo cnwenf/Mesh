@@ -45,7 +45,7 @@ from mesh.db.models.integration import (
 )
 from mesh.db.models.member import Member
 from mesh.db.models.user import User
-from mesh.errors import BusinessRuleError
+from mesh.errors import BusinessRuleError, MeshError
 from mesh.integrations.queue_events import IM_SEND_EVENT, emit_queue_updated
 from mesh.integrations.queue_keys import (
     sanitize_excerpt,
@@ -488,7 +488,7 @@ async def _item_owner_user_id(
         return None
     try:
         provider, tenant, user_key = validate_sender_identity_key(item.sender_identity_key)
-    except BusinessRuleError:
+    except MeshError:  # unparseable triple → no resolvable owner
         return None
     return await resolve_actor_user_id(
         session, provider=provider, tenant_key=tenant, user_key=user_key
