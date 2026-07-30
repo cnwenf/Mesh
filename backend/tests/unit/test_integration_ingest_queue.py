@@ -29,14 +29,11 @@ from mesh.db.models.project import Project
 from mesh.integrations.connectors import VerifiedEnvelope
 from mesh.integrations.dingtalk import normalize_message_payload
 from mesh.integrations.ingest import (
-    DEFAULT_ACK_COALESCE_WINDOW,
-    IM_SEND_EVENT_TYPE,
     IngestResult,
     enqueue_idempotency_key,
     ingest_verified_event,
-    parse_command,
-    sanitize_excerpt,
 )
+from mesh.integrations.queue_events import IM_SEND_EVENT
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
 from tests.unit.integrations_support import (
     DINGTALK_CONVERSATION_ID,
@@ -56,12 +53,32 @@ async def _integration(session_factory, world, key="integ_dingtalk") -> Integrat
         return await session.get(Integration, world[key])
 
 
-async def _run(session_factory, world, envelope, *, ack_window=DEFAULT_ACK_COALESCE_WINDOW) -> IngestResult:
+def _settings(ack_window_seconds: float = 5.0):
+    """Settings stand-in mirroring mesh.config.Settings defaults (the core
+    resolves this fallback for callers that pass nothing; the ack window is
+    the test knob — §3.8 lock-order window width)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        im_ack_coalesce_window_seconds=ack_window_seconds,
+        im_inbound_per_identity_per_min=20,
+        im_inbound_per_conversation_per_min=60,
+        im_queue_max_pending_per_conversation=50,
+        im_inbound_text_max_chars=4000,
+        im_dispatch_lease_buffer_seconds=300,
+        context_append_max_count=20,
+        context_append_max_chars=32000,
+    )
+
+
+async def _run(
+    session_factory, world, envelope, *, ack_window_seconds: float = 5.0
+) -> IngestResult:
     integration = await _integration(session_factory, world)
     async with session_factory() as session, session.begin():
         return await ingest_verified_event(
             session, integration=integration, envelope=envelope, now=NOW,
-            ack_window=ack_window,
+            settings=_settings(ack_window_seconds),
         )
 
 
@@ -176,7 +193,7 @@ async def test_non_text_message_is_audit_only(session_factory):
         events = (await session.execute(select(IntegrationEvent))).scalars().all()
         acks = (
             await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT)
             )
         ).scalars().all()
     assert {e.process_status for e in events} == {"processed"}
@@ -252,12 +269,12 @@ async def test_ack_leader_self_references_and_writes_im_send(session_factory):
     async with session_factory() as session:
         ack = (
             await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT)
             )
         ).scalar_one()
     assert ack.payload["kind"] == "ack"
     assert ack.payload["queue_item_id"] == str(item.id)
-    assert ack.payload["template"] == "✅ 已接收,处理中"
+    assert ack.payload["template"] == "✅ 已接收，处理中"
     assert ack.payload["position_snapshot"] == 1
     # §6.5 registered key: sha256(queue_item_id | 'ack') (workspace-scoped).
     expected = hashlib.sha256(f"{item.id}|ack".encode()).hexdigest()
@@ -283,7 +300,7 @@ async def test_ack_window_follower_suppression_single_im_send(session_factory):
     async with session_factory() as session:
         acks = (
             await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT)
             )
         ).scalars().all()
     assert len(acks) == 1  # followers write NO im.send event
@@ -293,16 +310,14 @@ async def test_ack_outside_window_starts_new_leader(session_factory):
     world = await seed_dingtalk_world(session_factory)
     await make_dingtalk_binding(session_factory, world=world)
     # Zero-width window → every item is its own leader.
-    from datetime import timedelta
-
-    await _run(session_factory, world, _envelope(text="M1"), ack_window=timedelta(0))
-    await _run(session_factory, world, _envelope(text="M2"), ack_window=timedelta(0))
+    await _run(session_factory, world, _envelope(text="M1"), ack_window_seconds=0.0)
+    await _run(session_factory, world, _envelope(text="M2"), ack_window_seconds=0.0)
     items = await _queue_items(session_factory, world)
     assert all(i.ack_leader_id == i.id for i in items)
     async with session_factory() as session:
         acks = (
             await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT)
             )
         ).scalars().all()
     assert len(acks) == 2
@@ -319,7 +334,7 @@ async def test_ack_template_empty_disables_ack_entirely(session_factory):
     async with session_factory() as session:
         acks = (
             await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT_TYPE)
+                select(OutboxEvent).where(OutboxEvent.event_type == IM_SEND_EVENT)
             )
         ).scalars().all()
     assert acks == []
@@ -509,145 +524,48 @@ async def test_truncated_text_flagged_in_ledger(session_factory):
 
 
 # ---------------------------------------------------------------------------
-# Command plane parsing mechanism (§3.7 — registry is MES-88's)
+# Command plane through the shared core (§3.7 — MES-88 commands module)
 # ---------------------------------------------------------------------------
 
 
-def test_parse_command_line_leading_only():
-    assert parse_command("/stop") == ("stop", "")
-    assert parse_command("/btw 用 staging 环境") == ("btw", "用 staging 环境")
-    assert parse_command("/STOP") == ("stop", "")
-    assert parse_command("请 /stop 这个") is None  # mid-text is NOT a command
-    assert parse_command("帮我查报警") is None
-    assert parse_command("") is None
-    assert parse_command("/123bad") is None
+async def test_unknown_command_is_processed_audited_and_never_queued(session_factory):
+    """§3.7:945/975 — unregistered /xxx via the unified core: bot help
+    feedback (im.send command_feedback) + _mesh_command audit four-tuple
+    {name, actor_identity_key, target_item_ids, result}; commands never
+    queue and never trigger (probing defense)."""
+    world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+    await make_dingtalk_binding(session_factory, world=world)
+    result = await _run(session_factory, world, _envelope(text="/frobnicate args"))
+    assert result.process_status == "processed"
 
-
-def test_sanitize_excerpt_strips_control_chars():
-    assert sanitize_excerpt("a\x00b\nc​d" * 100).count("\n") == 0
-    assert len(sanitize_excerpt("x" * 500)) == 120
-
-
-# ---------------------------------------------------------------------------
-# Command plane mechanism (§3.7 — registry dispatch; handlers ship in MES-88)
-# ---------------------------------------------------------------------------
-
-
-async def test_command_registry_dispatches_registered_command(session_factory, redis_client):
-    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
-
-    calls = []
-
-    async def _handler(session, envelope, event_row, name, args):
-        calls.append((name, args))
-        return CommandOutcome(process_status="processed")
-
-    COMMAND_REGISTRY["ping"] = {"permission": None, "handler": _handler}
-    try:
-        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
-        await make_dingtalk_binding(session_factory, world=world)
-        result = await _run(session_factory, world, _envelope(text="/ping  hello "))
-        assert result.process_status == "processed"
-        assert calls == [("ping", "hello")]
-        # Command messages never queue, never trigger.
-        async with session_factory() as session:
-            queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
-            enqueues = (
-                await session.execute(
-                    select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+        feedback = (
+            await session.execute(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == IM_SEND_EVENT,
+                    OutboxEvent.payload["kind"].astext == "command_feedback",
                 )
-            ).scalars().all()
-        assert queues == []
-        assert enqueues == []
-    finally:
-        del COMMAND_REGISTRY["ping"]
+            )
+        ).scalars().all()
+    audit = event.payload["_mesh_command"]
+    assert audit["name"] == "frobnicate"
+    assert audit["actor_identity_key"] == "014728255240768602"
+    assert audit["target_item_ids"] == []
+    assert audit["result"] == "unknown_command"
+    assert len(feedback) == 1  # help text scheduled
+    assert "/stop" in feedback[0].payload["text"]
+    assert await _queue_items(session_factory, world) == []  # never queued
 
 
-async def test_unregistered_command_is_audited_not_triggered(session_factory, redis_client):
-    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
-
-    async def _noop(session, envelope, event_row, name, args):
-        return CommandOutcome()
-
-    # non-empty registry activates the command plane
-    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
-    try:
-        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
-        await make_dingtalk_binding(session_factory, world=world)
-        result = await _run(session_factory, world, _envelope(text="/unknowncmd args"))
-        assert result.process_status == "processed"
-        async with session_factory() as session:
-            event = (await session.execute(select(IntegrationEvent))).scalar_one()
-            queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
-        assert event.payload["_mesh_command"]["result"] == "unknown_command"
-        assert queues == []  # no trigger, no queue (probing defense)
-    finally:
-        del COMMAND_REGISTRY["stop"]
-
-
-async def test_mid_text_slash_is_not_a_command(session_factory, redis_client):
-    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
-
-    async def _noop(session, envelope, event_row, name, args):
-        return CommandOutcome()
-
-    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
-    try:
-        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
-        await make_dingtalk_binding(session_factory, world=world)
-        # "/stop" mid-text is ordinary content → normal dispatch path.
-        result = await _run(
-            session_factory, world, _envelope(text="please /stop by the office")
-        )
-        assert result.process_status == "dispatched"
-    finally:
-        del COMMAND_REGISTRY["stop"]
-
-
-# ---------------------------------------------------------------------------
-# Acceptance-round fixes: M7/M8 (command audit four-tuple + help feedback)
-# ---------------------------------------------------------------------------
-
-
-async def test_unknown_command_help_feedback_and_audit_four_tuple(session_factory):
-    """§3.7:945/975 — unregistered /xxx: bot help feedback (im.send
-    command_feedback) + _mesh_command audit four-tuple {name,
-    actor_identity, target_item_ids, result}."""
-    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
-
-    async def _noop(session, envelope, event_row, name, args):
-        return CommandOutcome()
-
-    COMMAND_REGISTRY["stop"] = {"permission": "execution:manage", "handler": _noop}
-    try:
-        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
-        await make_dingtalk_binding(session_factory, world=world)
-        result = await _run(
-            session_factory, world, _envelope(text="/frobnicate args")
-        )
-        assert result.process_status == "processed"
-
-        async with session_factory() as session:
-            event = (await session.execute(select(IntegrationEvent))).scalar_one()
-            feedback = (
-                await session.execute(
-                    select(OutboxEvent).where(
-                        OutboxEvent.event_type == IM_SEND_EVENT_TYPE,
-                        OutboxEvent.payload["kind"].astext == "command_feedback",
-                    )
-                )
-            ).scalars().all()
-        audit = event.payload["_mesh_command"]
-        assert audit["name"] == "frobnicate"
-        assert audit["actor_identity"] == "dingtalk:dingcorp0001:014728255240768602"
-        assert audit["target_item_ids"] == []
-        assert audit["result"] == "unknown_command"
-        assert len(feedback) == 1  # help text scheduled
-        assert "/stop" in feedback[0].payload["template"]
-        queues = await _queue_items(session_factory, world)
-        assert queues == []  # never queued / triggered
-    finally:
-        del COMMAND_REGISTRY["stop"]
+async def test_mid_text_slash_is_not_a_command(session_factory):
+    """/stop mid-text is ordinary content → normal dispatch path."""
+    world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+    await make_dingtalk_binding(session_factory, world=world)
+    result = await _run(
+        session_factory, world, _envelope(text="please /stop by the office")
+    )
+    assert result.process_status == "dispatched"
 
 
 # ---------------------------------------------------------------------------

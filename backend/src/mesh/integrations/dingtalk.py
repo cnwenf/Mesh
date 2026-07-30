@@ -54,6 +54,10 @@ from mesh.integrations.connectors import (
     SIG_VALID,
     VerifiedEnvelope,
 )
+from mesh.integrations.queue_keys import (
+    build_conversation_key,
+    build_sender_identity_key,
+)
 
 PROVIDER = "dingtalk"
 KIND = "im_dingtalk"
@@ -189,94 +193,13 @@ def encode_external_user_key(staff_id: str | None, sender_id: str | None) -> str
     return ""
 
 
-def _validate_key_segment(value: str, *, field: str) -> None:
-    """A key segment may never contain ':' (the triple separator) or control
-    characters — the separator-collapse defense (N-1)."""
-    if not value or _GENERIC_SEGMENT_FORBIDDEN.search(value):
-        raise ValidationError(
-            f"{field} contains a reserved separator or control character",
-            code="invalid_request",
-            details={"field": field},
-        )
-
-
-def _validate_user_key_segment(user_key: str) -> None:
-    """Third segment of sender_identity_key: a staffId-charset value or an
-    encoded ``x=<base64url>`` key — never a raw colon-carrying senderId."""
-    _validate_key_segment(user_key, field="external_user_key")
-    if user_key.startswith(_ENCODED_KEY_PREFIX):
-        return  # encoded external-contact key (colon-free by construction)
-    if not STAFF_ID_CHARSET.match(user_key):
-        raise ValidationError(
-            "external_user_key must be a staffId-charset value or an x=<base64url> key",
-            code="invalid_request",
-            details={"field": "external_user_key"},
-        )
-
-
-def build_conversation_key(provider: str, provider_tenant_key: str, external_ref: str) -> str:
-    """``provider:provider_tenant_key:external_ref`` with per-segment checks.
-
-    DingTalk: tenant must be a corpId (``ding[A-Za-z0-9]+``), external_ref
-    must match the colon-free superset ``[A-Za-z0-9_.@+/=-]+`` (official
-    base64-like conversationIds — 'cid…==' — pass; ':' injection is
-    refused). Other providers: generic no-separator/no-control rule.
-    """
-    from mesh.db.models.integration import BINDING_PROVIDER_VALUES
-
-    if provider not in BINDING_PROVIDER_VALUES:
-        raise ValidationError(
-            "unknown provider", code="invalid_request", details={"provider": provider}
-        )
-    # Tenant may be '' (bindings created without a platform tenant; the
-    # bindings table defaults provider_tenant_key to '') — when present it
-    # must be separator/control-free; DingTalk requires the corpId shape.
-    if provider_tenant_key:
-        _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
-    _validate_key_segment(external_ref, field="external_ref")
-    if provider == PROVIDER:
-        if not _CORP_ID_CHARSET.match(provider_tenant_key):
-            raise ValidationError(
-                "dingtalk provider_tenant_key must be a corpId (ding…)",
-                code="invalid_request",
-                details={"field": "provider_tenant_key"},
-            )
-        if not EXTERNAL_REF_CHARSET.match(external_ref):
-            raise ValidationError(
-                "dingtalk external_ref outside the official ID charset",
-                code="invalid_request",
-                details={"field": "external_ref"},
-            )
-    return f"{provider}:{provider_tenant_key}:{external_ref}"
-
-
-def build_sender_identity_key(provider: str, provider_tenant_key: str, external_user_key: str) -> str:
-    """``provider:provider_tenant_key:external_user_key`` (full triple).
-
-    The third segment is validated as a staffId-charset value or an encoded
-    ``x=<base64url>`` key — a raw senderId (with colons) is refused.
-    """
-    from mesh.db.models.integration import IDENTITY_PROVIDER_VALUES
-
-    if provider not in IDENTITY_PROVIDER_VALUES:
-        raise ValidationError(
-            "unknown provider", code="invalid_request", details={"provider": provider}
-        )
-    if provider_tenant_key:
-        _validate_key_segment(provider_tenant_key, field="provider_tenant_key")
-    if provider == PROVIDER:
-        if not _CORP_ID_CHARSET.match(provider_tenant_key):
-            raise ValidationError(
-                "dingtalk provider_tenant_key must be a corpId (ding…)",
-                code="invalid_request",
-                details={"field": "provider_tenant_key"},
-            )
-        # E-1 charset algebra: staffId-charset or x=<base64url> — a raw
-        # colon-carrying senderId is refused (separator-collapse defense).
-        _validate_user_key_segment(external_user_key)
-    else:
-        _validate_key_segment(external_user_key, field="external_user_key")
-    return f"{provider}:{provider_tenant_key}:{external_user_key}"
+# Key ASSEMBLY (build_conversation_key / build_sender_identity_key) is
+# re-exported from the §2.10/§3.10 single source of truth (queue_keys —
+# the MES-88 released module whose segment grammar the T39 validation SQL
+# anchors). This module keeps ONLY the sender-identity ENCODING above:
+# normalization admits sender-less payloads (both staffId and senderId
+# missing → '' audit-only), which the queue-side encoder (strict, raises)
+# must not.
 
 
 # ---------------------------------------------------------------------------

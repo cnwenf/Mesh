@@ -775,13 +775,17 @@ async def process_inbound(
     signing_secret: str,
     now: datetime,
     tolerance: timedelta,
-    guardrails=None,
-    ack_window=None,
+    redis: Any = None,
+    settings: Any = None,
     text_max_chars: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Full inbound pipeline; runs inside the caller's transaction.
 
     Returns ``(http_status, bare-JSON body)`` — NOT the §6.14 envelope.
+
+    ``redis`` / ``settings`` enable the MES-88 IM layer behind the shared
+    core (post-signature semantic guards — fail-closed — conversation
+    queue, command plane). Production always wires both (inbound_routes).
     """
     if kind not in KIND_TO_PROVIDER or kind == "webhook_outbound":
         return 401, _invalid_signature_body()
@@ -857,17 +861,23 @@ async def process_inbound(
     if provider in IM_PROVIDERS:
         # Auth layer done → normalized verified envelope → the ONE shared
         # ingestion core (§2.10:651-664; the Stream adapter lands here too).
+        # MESH_IM_INBOUND_TEXT_MAX_CHARS: the HTTP channel honors the same
+        # configured ceiling as the Stream channel (M3 — no drift between
+        # receive modes when ops tunes the cap).
+        effective_max_chars = text_max_chars
+        if effective_max_chars is None:
+            effective_max_chars = int(
+                getattr(
+                    settings, "im_inbound_text_max_chars", DEFAULT_INBOUND_TEXT_MAX_CHARS
+                )
+            )
         try:
             envelope = _envelope_from_normalized(
                 provider,
                 event,
                 config=dict(integration.config or {}),
                 raw_payload=payload,
-                max_chars=(
-                    text_max_chars
-                    if text_max_chars is not None
-                    else DEFAULT_INBOUND_TEXT_MAX_CHARS
-                ),
+                max_chars=effective_max_chars,
             )
         except ValidationError:
             # Signed-but-malformed payload (missing msgId/conversationId,
@@ -913,15 +923,13 @@ async def process_inbound(
                 "process_status": "rejected",
                 "reason": "malformed_payload",
             }
-        ingest_kwargs: dict[str, Any] = {"guardrails": guardrails}
-        if ack_window is not None:
-            ingest_kwargs["ack_window"] = ack_window
         result = await ingest_verified_event(
             session,
             integration=integration,
             envelope=envelope,
             now=now,
-            **ingest_kwargs,
+            redis=redis,
+            settings=settings,
         )
         return result.status_code, result.body
 

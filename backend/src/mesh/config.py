@@ -520,19 +520,6 @@ class Settings(BaseSettings):
     # refresh rather than terminally fail during it).
     token_follower_wait: float = Field(default=12.0, gt=0)
 
-    # -- IM inbound guardrails (integrations.md §2.10, MES-82/87) -----------
-    # Post-signature SEMANTIC rate limits (Redis rolling windows with the
-    # tenant dimension in the key; complementary to — not a replacement
-    # for — the pre-signature coarse (integration, IP) anti-abuse layer).
-    im_inbound_per_identity_per_min: int = Field(default=20, ge=1)
-    im_inbound_per_conversation_per_min: int = Field(default=60, ge=1)
-    im_queue_max_pending_per_conversation: int = Field(default=50, ge=1)
-    # Inbound text ceiling: message bodies and /btw args truncate here
-    # (prompt-injection surface + token-cost guard, §6.15 quantification).
-    im_inbound_text_max_chars: int = Field(default=4000, ge=1)
-    # §3.8 leading-edge ack coalescing window (LOCK-ORDER time).
-    im_ack_coalesce_window: timedelta = Field(default=timedelta(seconds=5), ge=0)
-
     # -- DingTalk Stream receive channel (integrations.md §3.2, MES-87) ----
     # DEPLOY-TIME test-injection door ONLY (M2): this value must never be
     # editable via integrations.config or any admin API — an admin-writable

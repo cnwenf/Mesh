@@ -22,7 +22,7 @@ from collections import deque
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mesh.db.models.integration import Integration, IntegrationEvent, IntegrationMessageQueue
 from mesh.db.models.outbox import OutboxEvent
@@ -38,6 +38,7 @@ from mesh.integrations.dingtalk_stream import (
 )
 from tests.unit.integrations_support import (
     DINGTALK_APP_SECRET,
+    NOW,
     TEST_SIGNING_SECRET,
     dingtalk_message_payload,
     make_dingtalk_binding,
@@ -680,10 +681,14 @@ async def test_group_task_crash_is_reaped_and_rebuilt(session_factory):
         await manager.shutdown()
 
 
-async def test_pending_depth_counter_api(session_factory):
-    """M1: the depth counter is a standalone check the ingest core runs
-    UNDER the imq_seq lock."""
-    from mesh.integrations.guardrails import InboundGuardrails
+async def test_pending_depth_gate_rejects_over_limit_through_core(session_factory):
+    """§2.10: the AUTHORITATIVE pending-depth re-check runs under the
+    imq_seq lock inside ``message_queue.enqueue_message`` — a conversation
+    already at the cap of 50 rejects the next message (bare 200, rejected
+    audit, real msgId keeps the dedupe slot) even with no Redis fast path."""
+    from mesh.integrations.dingtalk import normalize_message_payload
+    from mesh.integrations.ingest import ingest_verified_event
+    from tests.unit.integrations_support import dingtalk_message_payload
 
     world = await seed_dingtalk_world(session_factory)
     binding = await make_dingtalk_binding(session_factory, world=world)
@@ -702,9 +707,24 @@ async def test_pending_depth_counter_api(session_factory):
                 sender_identity_key="dingtalk:dingcorp0001:someone",
             ))
 
-    guardrails = InboundGuardrails(None, max_pending_per_conversation=50)
+    envelope = normalize_message_payload(
+        dingtalk_message_payload(), max_chars=4000, channel="stream"
+    )
     async with session_factory() as session:
-        assert await guardrails.check_pending_depth(session, conversation_key) == "rate_limited"
+        integration = await session.get(Integration, world["integ_dingtalk"])
+    async with session_factory() as session, session.begin():
+        result = await ingest_verified_event(
+            session, integration=integration, envelope=envelope, now=NOW
+        )
+    assert result.process_status == "rejected"
+    assert result.body["reason"] == "rate_limited"
+    assert result.status_code == 200
+    # The queue stayed at exactly the cap — nothing was enqueued.
+    async with session_factory() as session:
+        depth = (
+            await session.execute(select(func.count()).select_from(IntegrationMessageQueue))
+        ).scalar_one()
+    assert depth == 50
 
 
 # ---------------------------------------------------------------------------

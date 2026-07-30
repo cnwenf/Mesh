@@ -118,7 +118,6 @@ async def _run_inbound(
     session_factory = request.app.state.session_factory
     headers = dict(request.headers)
     now = datetime.now(UTC)
-    guardrails = _build_guardrails(request, settings)
     async with session_factory() as session, session.begin():
         status_code, body = await process_inbound(
             session,
@@ -128,26 +127,11 @@ async def _run_inbound(
             signing_secret=settings.jwt_secret,
             now=now,
             tolerance=_tolerance(request),
-            guardrails=guardrails,
-            ack_window=settings.im_ack_coalesce_window,
+            redis=getattr(request.app.state, "redis", None),
+            settings=settings,
             text_max_chars=settings.im_inbound_text_max_chars,
         )
     return JSONResponse(status_code=status_code, content=body)
-
-
-def _build_guardrails(request: Request, settings):
-    """Post-signature semantic guardrails (§2.10) — ALWAYS constructed: the
-    pending-depth counter is pure DB and must run even when Redis is down
-    (the §2.10 three counters are a hard constraint); the two Redis window
-    counters degrade explicitly inside the guardrails object."""
-    from mesh.integrations.guardrails import InboundGuardrails
-
-    return InboundGuardrails(
-        getattr(request.app.state, "redis", None),
-        per_identity_per_min=settings.im_inbound_per_identity_per_min,
-        per_conversation_per_min=settings.im_inbound_per_conversation_per_min,
-        max_pending_per_conversation=settings.im_queue_max_pending_per_conversation,
-    )
 
 
 async def _run_card(request: Request, kind: str) -> JSONResponse:

@@ -76,7 +76,7 @@ from mesh.integrations.dingtalk import (
     resolve_gateway_base,
     stream_user_agent,
 )
-from mesh.integrations.ingest import DEFAULT_ACK_COALESCE_WINDOW, ingest_verified_event
+from mesh.integrations.ingest import ingest_verified_event
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, redact_text
 
@@ -791,26 +791,18 @@ class StreamManager:
         except Exception:  # noqa: BLE001 — malformed payload: audit-log, never crash
             logger.exception("dingtalk stream: payload normalization failed")
             return
-        guardrails = None
-        if self._redis is not None:
-            from mesh.integrations.guardrails import InboundGuardrails
-
-            guardrails = InboundGuardrails(
-                self._redis,
-                per_identity_per_min=self._settings.im_inbound_per_identity_per_min,
-                per_conversation_per_min=self._settings.im_inbound_per_conversation_per_min,
-                max_pending_per_conversation=self._settings.im_queue_max_pending_per_conversation,
-            )
+        # Same shared core as the HTTP channel — the two receive modes
+        # differ ONLY in the auth adapter in front (§2.10:651-664). The
+        # §2.10 guards (fail-closed) and the §3.8 ack window read from the
+        # same Settings the HTTP routes use — no drift between channels.
         async with self._session_factory() as session, session.begin():
             await ingest_verified_event(
                 session,
                 integration=integration,
                 envelope=envelope,
                 now=self._now(),
-                guardrails=guardrails,
-                ack_window=getattr(
-                    self._settings, "im_ack_coalesce_window", DEFAULT_ACK_COALESCE_WINDOW
-                ),
+                redis=self._redis,
+                settings=self._settings,
             )
 
     # -- state persistence ---------------------------------------------------

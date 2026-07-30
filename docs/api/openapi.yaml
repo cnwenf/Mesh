@@ -12207,15 +12207,17 @@ paths:
     get:
       tags:
       - integrations
-      summary: Integration Stream Status
-      description: 'Receive-channel diagnostics (§3.9): reads the persisted
+      summary: Get Stream Status
+      description: 'Receive-channel diagnostic (Stream mode ONLY): reads the persisted
 
-        ``stream_state`` (written by the stream worker) — read-only, never
+        ``integrations.stream_state`` truth source (§2.2) — UI first paint and
 
-        initiates outbound. ``state=''down''`` → 503 ``stream_channel_unavailable``
+        diagnostics do not depend on the realtime event arriving first. This
 
-        (the only endpoint where that code appears, §3.5).'
-      operationId: integration_stream_status_api_v1_workspaces__workspace_id__integrations__integration_id__stream_status_get
+        endpoint is read-only receive-side state; outbound test-send is a
+
+        SEPARATE action (MES-89) and never reports ``stream_channel_unavailable``.'
+      operationId: get_stream_status_api_v1_workspaces__workspace_id__integrations__integration_id__stream_status_get
       parameters:
       - name: workspace_id
         in: path
@@ -12237,7 +12239,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-                title: Response Integration Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
+                title: Response Get Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
                   Id  Stream Status Get
         '422':
           description: Validation Error
@@ -13238,6 +13240,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/dingtalk/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Dingtalk Events
+      description: 'DingTalk HTTP receive mode callback (§3.2 ``receive_mode=''http''``).
+
+
+        Guard order (unauthenticated surface — DoS hardening): the 1 MiB body
+
+        cap in BOTH passes (Content-Length PRE-CHECK before buffering + actual
+
+        byte-count re-check after reading — §3.2 item 2 "预检 + 复检双道,防
+
+        Content-Length 谎报绕过"), THEN the pre-signature COARSE anti-abuse
+
+        layer of auth.md §3.6 — keyed by the (integration, IP) tuple (IP-only
+
+        when the integration is unlocatable), 120/min, answering over-limit
+
+        callers with a SILENT 200 indistinguishable from acceptance (non-2xx
+
+        would trigger the platform''s retry amplification), audit + alert only.
+
+        The generic per-IP 429 guard is deliberately NOT applied here: §3.6
+
+        reserves 429 for the other endpoint classes. Signature verification
+
+        runs afterwards, inside ``process_inbound``.'
+      operationId: dingtalk_events_api_v1_integrations_dingtalk_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
   /api/v1/integrations/feishu/events:
     post:
       tags:
@@ -13304,27 +13342,6 @@ paths:
       - integrations-inbound
       summary: Slack Cards
       operationId: slack_cards_api_v1_integrations_slack_cards_post
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-  /api/v1/integrations/dingtalk/cards:
-    post:
-      tags:
-      - integrations-inbound
-      summary: Dingtalk Cards
-      description: 'DingTalk interactive-card HTTP callback (``callbackType=''HTTP''``;
-
-        Stream mode delivers the same topic over the long connection and the
-
-        stream worker routes it to the same handler function). Signature
-
-        scheme: §3.2 DingTalk row (``timestamp`` + ``sign`` headers, official
-
-        ±3600s tolerance).'
-      operationId: dingtalk_cards_api_v1_integrations_dingtalk_cards_post
       responses:
         '200':
           description: Successful Response

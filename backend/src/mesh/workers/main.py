@@ -45,7 +45,6 @@ from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.integrations.dispatcher import dispatcher_loop, make_dispatch_wake_handler
-from mesh.integrations.ingest import IM_SEND_EVENT_TYPE
 from mesh.integrations.outbound import (
     WEBHOOK_DISPATCH_EVENT_TYPE,
     WebhookDeliveryWorker,
@@ -188,18 +187,6 @@ def _fanout_with_im_derivation(base_handler):
     return _handle
 
 
-async def _im_send_stub_handler(session, event) -> None:
-    """MES-87 stub for ``im.send`` — MES-89 replaces this with the real
-    at-most-once outbound relay (T1 gate + platform send + T2 result)."""
-    logger.warning(
-        "im.send event %s consumed by the MES-87 stub (IM outbound pending "
-        "MES-89); kind=%s — no platform message sent",
-        event.id,
-        (event.payload or {}).get("kind"),
-    )
-    return None
-
-
 def build_relay(
     settings: Settings,
     session_factory,
@@ -297,12 +284,10 @@ def build_relay(
         # notification); ``data_job.resume`` is the reaper recovery path.
         handlers[DATA_JOB_ENQUEUE_EVENT_TYPE] = data_job_worker.handle_enqueue
         handlers[DATA_JOB_RESUME_EVENT_TYPE] = data_job_worker.handle_resume
-    # integrations.md §3.8/§2.10 (MES-87): conversational IM outbound events
-    # (ack / rate-limit notice / command feedback). MES-89 owns the real
-    # at-most-once outbound relay (OpenAPI sender + §3.8 T1/T2 gate
-    # protocol); until then the stub consumes and publishes with an explicit
-    # log line so the events never poison the relay failure budget.
-    handlers[IM_SEND_EVENT_TYPE] = _im_send_stub_handler
+    # integrations.md §3.8/§2.10: conversational IM outbound events (ack /
+    # rate-limit notice / command feedback) are consumed SOLELY by the
+    # MES-89 IMSendRelay supervised task (at-most-once T1/T2 protocol) —
+    # the generic outbox relay deliberately registers NO im.send handler.
     return OutboxRelay(
         session_factory,
         handlers=handlers,

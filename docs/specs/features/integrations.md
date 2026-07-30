@@ -659,11 +659,15 @@ processing ──execution.finished(status=completed)──► done             
     event_type, external_ref(conversationId), conversation_type, sender_key,
     text(已 trim/截断), raw_payload, channel('http'|'stream') }
   → 去重 → msgtype 门(触发仅 text,非文本仅审计)
-  → 频率窗口护栏(§2.10 身份/会话 Redis 滑窗;命令平面同受约束,§3.7:975)
-  → 命令平面(§3.7)→ 绑定匹配
-  → imq_seq 咨询锁内 pending 深度计数(§2.10,并发不可越限)
-  → 入队 integration_message_queue → ack 事件(§3.8)→ 审计 integration_events
+  → 命令平面(§3.7,命令不入队不触发;/btw 无在途项剥前缀按普通消息继续)
+  → 绑定匹配(§6.9:未匹配/无目标 agent 仅审计)
+  → 频率窗口护栏(§2.10 身份/会话 Redis 滑窗,fail-closed:Redis 故障即回滚
+    摄取事务,平台重推、去重保安全,绝不静默放行)
+  → 入队 integration_message_queue(imq_seq 咨询锁 → 锁内 pending 深度
+    权威复检(§2.10,并发不可越限)→ ack 主从判定 §3.8)
+  → ack 事件(§3.8)→ 审计 integration_events
 ```
+> 管线次序按 MES-88 已发布实现收口(命令平面先于频率护栏;msgtype 门与锁内深度复检保留)——**措辞待 Spec owner 复核**(MES-87 rebase 接缝统一,2026-07-30)。
 > PR #58 现有 `process_inbound()`(HTTP 定位/验签与匹配/派发揉在一起)在 #58 rebase 到含本 Spec 的 main 时按此边界重构:拆出 HTTP 鉴权适配器 + 抽出 `ingest_verified_event(envelope)` 共享核心,Stream worker 复用同一核心(§3.2 Stream 小节「同一摄取服务函数」即指本函数)。
 
 ### 2.11 台账保留策略(入站事件 / 出向投递)
