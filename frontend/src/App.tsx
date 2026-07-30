@@ -141,12 +141,21 @@ function IssueByIdentifierRedirect(): React.JSX.Element {
 function ShellProviders(): React.JSX.Element {
   const t = useT();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
 
   const controls = useMemo<OverlayControls>(
     () => ({
-      openPalette: () => setPaletteOpen(true),
+      openPalette: () => {
+        setPaletteQuery('');
+        setPaletteOpen(true);
+      },
       openHelp: () => setHelpOpen(true),
+      // 统一搜索入口(design-quality A-02):顶栏搜索键入/回车携带查询展开同一面板
+      openSearch: (query: string) => {
+        setPaletteQuery(query);
+        setPaletteOpen(true);
+      },
     }),
     [],
   );
@@ -261,6 +270,7 @@ function ShellProviders(): React.JSX.Element {
             closeLabel={t('a11y.closeDialog')}
             searchPlaceholder={t('shortcuts.palettePlaceholder')}
             emptyText={t('shortcuts.paletteEmpty')}
+            initialQuery={paletteQuery}
           />
           <ShortcutHelp
             open={helpOpen}

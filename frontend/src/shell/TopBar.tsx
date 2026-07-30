@@ -2,7 +2,13 @@
  * 顶栏(README §6.12):品牌、全局搜索(/ 聚焦目标)、连接状态点、命令面板/快捷键帮助入口。
  * 纯展示:连接 state 与打开回调均经 prop 注入。
  * §6.12 硬约束:颜色不作唯一状态信号 —— StatusDot 的 label 文本始终在场。
+ *
+ * 搜索框即统一搜索入口(design-quality A-02 / search-command-palette.md S1):
+ * 键入首字符或回车即携带查询展开命令面板,随后焦点交接给面板搜索框;
+ * 不允许存在无行为输入框。Esc 仅清空本框。
  */
+import { useState } from 'react';
+import type { ChangeEvent, KeyboardEvent } from 'react';
 import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
@@ -14,6 +20,8 @@ export interface TopBarProps {
   state: ConnectionState;
   onOpenPalette: () => void;
   onOpenHelp: () => void;
+  /** 统一搜索入口:携带查询展开命令面板(见文件头注释) */
+  onOpenSearch: (query: string) => void;
 }
 
 const TONE_BY_STATE: Record<ConnectionState, StatusDotTone> = {
@@ -34,7 +42,31 @@ const PULSING_STATES: ReadonlySet<ConnectionState> = new Set<ConnectionState>([
 
 export function TopBar(props: TopBarProps): React.JSX.Element {
   const t = useT();
-  const { state, onOpenPalette, onOpenHelp } = props;
+  const { state, onOpenPalette, onOpenHelp, onOpenSearch } = props;
+  const [searchValue, setSearchValue] = useState('');
+
+  const handleSearchChange = (event: ChangeEvent<HTMLInputElement>): void => {
+    const value = event.target.value;
+    if (value.length === 0) {
+      setSearchValue('');
+      return;
+    }
+    // 续输入即展开统一搜索面板并交接(焦点将移入面板搜索框),本框清空。
+    setSearchValue('');
+    onOpenSearch(value);
+  };
+
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const query = searchValue;
+      setSearchValue('');
+      onOpenSearch(query);
+    } else if (event.key === 'Escape') {
+      setSearchValue('');
+    }
+  };
+
   return (
     <header className="mesh-topbar" aria-label={t('a11y.topbar')}>
       <span className="mesh-topbar__brand">Mesh</span>
@@ -45,6 +77,9 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
         type="search"
         placeholder={t('common.search')}
         aria-label={t('common.search')}
+        value={searchValue}
+        onChange={handleSearchChange}
+        onKeyDown={handleSearchKeyDown}
       />
       <span className="mesh-topbar__conn" data-testid="conn-status">
         <StatusDot tone={TONE_BY_STATE[state]} label={t('status.' + state)} pulse={PULSING_STATES.has(state)} />

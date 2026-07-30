@@ -44,6 +44,8 @@ export function useRealtimeContext(): RealtimeContextValue | null {
 export interface OverlayControls {
   openPalette: () => void;
   openHelp: () => void;
+  /** 统一搜索入口:携带查询展开命令面板(design-quality A-02) */
+  openSearch: (query: string) => void;
 }
 
 const OverlayControlsContext = createContext<OverlayControls | null>(null);
@@ -306,6 +308,7 @@ export function AppShell(): React.JSX.Element {
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
+  const openSearch = useOverlaySearch();
 
   // 工作区上下文(workspace.md §4.1):/w/:workspaceSlug/* 命中时以 WorkspaceProvider
   // 包裹整个布局子树(TopBar 切换器 / Sidebar 设置入口 / 页面共享当前工作区)。
@@ -316,7 +319,7 @@ export function AppShell(): React.JSX.Element {
     <div className="mesh-shell">
       {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
       <SkipLink label={t('a11y.skipLink')} />
-      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
+      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} onOpenSearch={openSearch} />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>
@@ -348,4 +351,15 @@ function useOverlayOpen(which: 'palette' | 'help'): () => void {
     if (which === 'palette') controls.openPalette();
     else controls.openHelp();
   }, [controls, which]);
+}
+
+/** 统一搜索打开器;未提供 OverlayControls 时为空操作(与 useOverlayOpen 同语义) */
+function useOverlaySearch(): (query: string) => void {
+  const controls = useOverlayControls();
+  return useCallback(
+    (query: string) => {
+      controls?.openSearch(query);
+    },
+    [controls],
+  );
 }
