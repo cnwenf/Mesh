@@ -5,7 +5,7 @@
  * REST 对账 → 无感恢复、离线横幅。
  */
 import { expect, test } from '@playwright/test';
-import { emit, gotoHomeReady, login, MOCK_BASE, resetMockServer } from './helpers';
+import { emit, gotoHomeReady, login, resetMockServer } from './helpers';
 
 const CHANNEL = 'workspace:ws-1:issues';
 
@@ -121,7 +121,8 @@ test.describe('断线重连与重放(README §6.7:每频道 last_seq / resume_fr
     await page.context().setOffline(false);
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 20_000 });
     await expect(list.getByTestId('home-issue-MESH-200')).toBeVisible({ timeout: 20_000 });
-    // §4.2 稳定态仅状态点:可读名经 aria-label 承载(Stage 1 设计收敛)。
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
     await expect(
       page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
     ).toBeVisible();
@@ -134,7 +135,8 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     await gotoHomeReady(page);
 
     // 先收几帧建立频道游标(重连时才会带 resume_from)
-    // §4.2 稳定态仅状态点:可读名经 aria-label 承载(Stage 1 设计收敛)。
+    // 稳定态连接指示为状态点 + aria-label(§4.2 减常态噪音,Stage 1 起无可见
+    // 文本),经可访问名断言(与 TopBar 单测同口径)。
     await expect(
       page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
     ).toBeVisible();
@@ -161,7 +163,7 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     }
     // 模拟保留窗口清理(后端 retention purge,§6.7):删除旧事件,
     // 使客户端游标(6)早于最小可重放 seq → resume_from 过旧
-    const purge = await fetch(`${MOCK_BASE}/api/v1/mock/purge`, {
+    const purge = await fetch('http://127.0.0.1:8901/api/v1/mock/purge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: CHANNEL, before_seq: 100 }),
@@ -180,9 +182,8 @@ test.describe('游标过旧 → resync_required → REST 对账(README §6.7)', 
     await expect(page.getByTestId('status-banner-resyncing')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('status-banner-resyncing')).toBeHidden({ timeout: 20_000 });
     await expect(page.getByTestId('status-banner-offline')).toBeHidden();
-    // §4.2 稳定态仅状态点:可读名经 aria-label 承载(Stage 1 设计收敛)。
-      await expect(
-        page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
-      ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      page.getByTestId('conn-status').getByRole('img', { name: /Connected|已连接/ }),
+    ).toBeVisible({ timeout: 20_000 });
   });
 });

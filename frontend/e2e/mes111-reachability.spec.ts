@@ -164,7 +164,9 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await page.goto('/');
     await expect(page.getByTestId('mobile-nav-home')).toBeVisible();
-    await page.screenshot({ path: `${EVIDENCE_DIR}/phone-home-dark.png` });
+    // 暗色首页态存证由 mes111-foundation/phone-home-dark.png 承载(同套件同状态
+    // 逐字节重复,check-evidence-unique.mjs md5 唯一性门禁禁止两份)——本测试仅留
+    // 暗色抽屉独有存证 + 底栏在场断言。
     await page.getByTestId('mobile-nav-more').click();
     await expect(page.getByRole('dialog', { name: 'All navigation' })).toBeVisible();
     await page.screenshot({ path: `${EVIDENCE_DIR}/phone-drawer-dark.png` });

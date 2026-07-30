@@ -38,8 +38,7 @@
 | 手机看板 · 亮 | [phone-board-light.png](phone-board-light.png) | 导轨堆叠、列容器内横滚、无页面级溢出 |
 | 手机成员抽屉流程 · 亮 | [phone-members-drawer-flow-light.png](phone-members-drawer-flow-light.png) | 抽屉点选跳转成员页 |
 | 手机抽屉中文导航 · 亮 | [phone-drawer-zh-nav-light.png](phone-drawer-zh-nav-light.png) | 「自动值守/运行环境」不再重名 |
-| 手机首页 · 暗 | [phone-home-dark.png](phone-home-dark.png) | 暗色底栏/抽屉 |
-| 手机抽屉 · 暗 | [phone-drawer-dark.png](phone-drawer-dark.png) | 暗色抽屉层级 |
+| 手机抽屉 · 暗 | [phone-drawer-dark.png](phone-drawer-dark.png) | 暗色底栏/抽屉层级(暗色首页态存证由 mes111-foundation/phone-home-dark.png 承载,同态不重复存证) |
 | 手机首页 · 320px | [phone-home-320-light.png](phone-home-320-light.png) | 极窄视口五入口可达 |
 
 截图由 `mes111-reachability.spec.ts` 在真实走查中生成,经 `scripts/check-evidence-unique.mjs` md5 唯一性校验。
