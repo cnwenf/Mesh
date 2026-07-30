@@ -41,8 +41,15 @@ describe('mesh/no-emoji-icons', () => {
             '};',
           ].join('\n'),
         },
-        // 有插值的模板串不参与静态门禁
+        // 带插值但字面片段干净的模板串放行
         { code: 'const mixed = `${prefix} 文本 ${suffix}`;' },
+        // 模板串例外注释(锚点为整个模板节点)
+        {
+          code: [
+            '// mesh-emoji-ok: 开发期诊断前缀,非产品 UI 图标',
+            'const marker = `⚠[${key}] ${text}`;',
+          ].join('\n'),
+        },
       ],
       invalid: [
         // JSX 文本 emoji
@@ -68,6 +75,21 @@ describe('mesh/no-emoji-icons', () => {
         // 无插值模板串
         {
           code: 'const pin = `★ 置顶`;',
+          errors: [{ messageId: 'emoji' }],
+        },
+        // 带插值模板串的字面片段夹带 emoji 同样命中(门禁不可绕过)
+        {
+          code: 'const badge = `✅ ${name}`;',
+          errors: [{ messageId: 'emoji' }],
+        },
+        // 国旗区(U+1F1E6–1F1FF)命中(JSX 文本节点整体一报)
+        {
+          code: 'const flag = <span>🇺🇸</span>;',
+          errors: [{ messageId: 'emoji' }],
+        },
+        // 字符串字面量内的 enclosed/麻将区(U+1F000–1F2FF)命中
+        {
+          code: "const tile = '🀄';",
           errors: [{ messageId: 'emoji' }],
         },
         // 例外注释隔了一行不生效
