@@ -14,7 +14,7 @@ const BASE = process.env.MESH_E2E_BASE ?? 'http://127.0.0.1:18130';
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: 'mes111-b3-evidence.spec.ts',
+  testMatch: 'real-mes111-b3-evidence.spec.ts',
   timeout: 300_000,
   retries: 0,
   workers: 1,
