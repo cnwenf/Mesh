@@ -6,7 +6,6 @@ describe('resolveEnv(运行时配置)', () => {
     const env = resolveEnv(undefined);
     expect(env.apiBaseUrl).toBe('http://127.0.0.1:8901');
     expect(env.wsBaseUrl).toBe('ws://127.0.0.1:8901');
-    expect(env.demoChannel).toBe('workspace:ws-1:issues');
     expect(env.pollingIntervalMs).toBe(4_000);
     expect(env.isDev).toBe(false);
     // 生产默认不渲染第三方登录按钮组(由运营方经 env 显式启用)
@@ -22,14 +21,12 @@ describe('resolveEnv(运行时配置)', () => {
     const env = resolveEnv({
       VITE_MESH_API_BASE_URL: 'http://127.0.0.1:8000',
       VITE_MESH_WS_BASE_URL: 'ws://127.0.0.1:8081',
-      VITE_MESH_DEMO_CHANNEL: 'workspace:abc:issues',
       VITE_MESH_POLLING_INTERVAL_MS: '500',
       VITE_MESH_OAUTH_PROVIDERS: ' mock , corp-sso ',
       DEV: true,
     } as unknown as ImportMetaEnv);
     expect(env.apiBaseUrl).toBe('http://127.0.0.1:8000');
     expect(env.wsBaseUrl).toBe('ws://127.0.0.1:8081');
-    expect(env.demoChannel).toBe('workspace:abc:issues');
     expect(env.pollingIntervalMs).toBe(500);
     expect(env.isDev).toBe(true);
     expect(env.oauthProviders).toEqual(['mock', 'corp-sso']);

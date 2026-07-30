@@ -1,5 +1,5 @@
 /**
- * Mesh 前端契约 mock 服务端(e2e 与骨架演示区共用)。
+ * Mesh 前端契约 mock 服务端(e2e 契约套件专用)。
  *
  * 实现 docs/specs/README.md 的权威契约:
  * - §6.14 三类成功包络 / 游标分页(keyset)/ 乐观并发(If-Match→409 conflict)/
@@ -11,7 +11,7 @@
  *         对账 REST(/api/v1/realtime/events?channel=&since=)、ping/pong
  * - §6.18 i18n 目录端点(ETag/304 版本缓存语义)
  *
- * 仅用于前端自测;不是后端实现(后端归阶段 1·A,已发版 v0.1.0)。
+ * 仅用于前端自测;不是后端实现(真实后端见 backend/)。
  */
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
@@ -35,12 +35,13 @@ function seedIssues() {
   const categories = ['todo', 'in_progress', 'in_review', 'done'];
   return Array.from({ length: 8 }, (_, i) => ({
     id: `issue-${i + 1}`,
+    workspace_id: 'ws-1',
     identifier: `MESH-${i + 1}`,
-    title: `骨架演示工作项 ${i + 1}`,
-    status_category: categories[i % categories.length],
+    title: `Acme 工作项 ${i + 1}`,
+    state_category: categories[i % categories.length],
     assignee_id: i % 2 === 0 ? 'member-human-1' : 'member-agent-1',
     updated_at: isoAt(i * 60_000),
-    visibility: { workspace_id: 'ws-1', project_id: i % 3 === 0 ? null : 'project-1' },
+    project_id: i % 3 === 0 ? null : 'project-1',
   }));
 }
 
@@ -268,7 +269,34 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  if (path === '/api/v1/demo/reset' && req.method === 'POST') {
+  // ---- 当前用户与成员身份(member.md §3.1 GET /users/me)------------------
+  if (path === '/api/v1/users/me' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(
+      res,
+      200,
+      envelope({
+        user: { id: 'user-1', email: 'jane@corp.com', display_name: 'Jane Doe' },
+        memberships: [
+          {
+            workspace_id: 'ws-1',
+            workspace_name: 'Acme',
+            workspace_slug: 'acme',
+            role: 'admin',
+            status: 'default',
+            joined_at: isoAt(0),
+          },
+        ],
+      }),
+    );
+    return;
+  }
+
+  // ---- 测试治具控制端点(非产品 API:重置内存态 / 注入帧 / 保留窗口清理)---
+  if (path === '/api/v1/mock/reset' && req.method === 'POST') {
     resetState();
     sendJson(res, 200, envelope({ reset: true }));
     return;
@@ -299,8 +327,12 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 列表包络:keyset 游标分页(§6.14)---------------------------------
-  if (path === '/api/v1/demo/issues' && req.method === 'GET') {
+  // ---- 列表包络:keyset 游标分页(§6.14;真实路径 /workspaces/{ws}/issues)---
+  if (path === '/api/v1/workspaces/ws-1/issues' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
     const cursor = url.searchParams.get('cursor');
     const since = url.searchParams.get('since');
     let items = state.issues;
@@ -317,25 +349,13 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 分组「整体游标」包络(§6.14 / kanban §3.4)-------------------------
-  if (path === '/api/v1/demo/board' && req.method === 'GET') {
-    const grouped = ['todo', 'in_progress', 'in_review', 'done'].map((key, idx) => {
-      const inGroup = state.issues.filter((i) => i.status_category === key);
-      return {
-        key,
-        label: key,
-        count: inGroup.length,
-        ...(idx === 1 ? { wip: 3 } : {}),
-        data: inGroup,
-      };
-    });
-    sendJson(res, 200, { groups: grouped, next_cursor: null });
-    return;
-  }
-
-  // ---- 单对象包络 + 乐观并发(§6.14:If-Match / 409 conflict)------------
-  const issueMatch = /^\/api\/v1\/demo\/issues\/([\w-]+)$/.exec(path);
+  // ---- 单对象包络 + 乐观并发(§6.14:If-Match / 409 conflict;真实路径 /issues/{id})
+  const issueMatch = /^\/api\/v1\/issues\/([\w-]+)$/.exec(path);
   if (issueMatch) {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
     const id = issueMatch[1];
     const issue = state.issues.find((i) => i.id === id);
 
@@ -378,7 +398,7 @@ async function handleRequest(req, res, url) {
         id: updated.id,
         identifier: updated.identifier,
         title: updated.title,
-        status_category: updated.status_category,
+        state_category: updated.state_category,
         updated_at: updated.updated_at,
       });
       sendJson(res, 200, envelope(updated));
@@ -386,8 +406,12 @@ async function handleRequest(req, res, url) {
     }
   }
 
-  // ---- 创建:Idempotency-Key 去重(§6.5/§6.14)----------------------------
-  if (path === '/api/v1/demo/issues' && req.method === 'POST') {
+  // ---- 创建:Idempotency-Key 去重(§6.5/§6.14;真实路径 /workspaces/{ws}/issues)
+  if (path === '/api/v1/workspaces/ws-1/issues' && req.method === 'POST') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
     const idemKey = req.headers['idempotency-key'];
     if (typeof idemKey === 'string' && state.idempotency.has(idemKey)) {
       const first = state.idempotency.get(idemKey);
@@ -401,20 +425,24 @@ async function handleRequest(req, res, url) {
     }
     const issue = {
       id: `issue-${state.issues.length + 1}`,
+      workspace_id: 'ws-1',
       identifier: `MESH-${state.issues.length + 1}`,
       title: body.title,
-      status_category: 'todo',
+      state_category: 'todo',
       assignee_id: null,
       updated_at: new Date().toISOString(),
-      visibility: { workspace_id: 'ws-1', project_id: null },
+      project_id: null,
     };
     state.issues = [...state.issues, issue];
     emitEvent(defaultChannelForIssue(), 'issue.created', {
-      id: issue.id,
-      identifier: issue.identifier,
-      title: issue.title,
-      status_category: issue.status_category,
-      updated_at: issue.updated_at,
+      issue: {
+        id: issue.id,
+        workspace_id: issue.workspace_id,
+        identifier: issue.identifier,
+        title: issue.title,
+        state_category: issue.state_category,
+        updated_at: issue.updated_at,
+      },
     });
     const responseBody = envelope(issue);
     if (typeof idemKey === 'string') {
@@ -425,7 +453,7 @@ async function handleRequest(req, res, url) {
   }
 
   // ---- 保留窗口清理(模拟后端 retention purge;后端 e2e 以 SQL DELETE 达成)---
-  if (path === '/api/v1/demo/purge' && req.method === 'POST') {
+  if (path === '/api/v1/mock/purge' && req.method === 'POST') {
     const body = (await readBody(req)) ?? {};
     const { channel, before_seq } = body;
     if (typeof channel !== 'string' || typeof before_seq !== 'number') {
@@ -440,7 +468,7 @@ async function handleRequest(req, res, url) {
   }
 
   // ---- 事件注入(e2e 触发实时帧;经唯一写入路径广播)----------------------
-  if (path === '/api/v1/demo/emit' && req.method === 'POST') {
+  if (path === '/api/v1/mock/emit' && req.method === 'POST') {
     const body = (await readBody(req)) ?? {};
     const { channel, event, payload } = body;
     if (typeof channel !== 'string' || typeof event !== 'string') {
@@ -449,55 +477,6 @@ async function handleRequest(req, res, url) {
     }
     const frame = emitEvent(channel, event, payload ?? {});
     sendJson(res, 201, envelope(frame));
-    return;
-  }
-
-  // ---- 过滤限制错误码(§6.14)--------------------------------------------
-  if (path === '/api/v1/demo/filter-limit' && req.method === 'GET') {
-    const kind = url.searchParams.get('kind');
-    if (kind === 'complex') {
-      sendJson(
-        res,
-        400,
-        errorEnvelope('filter_too_complex', 'filters exceed depth 3 / 20 conditions', {
-          max_depth: 3,
-          max_conditions: 20,
-        }),
-      );
-      return;
-    }
-    sendJson(
-      res,
-      422,
-      errorEnvelope('query_cost_exceeded', 'estimated query cost too high; narrow conditions'),
-    );
-    return;
-  }
-
-  // ---- 统一错误信封样本(§6.14)-------------------------------------------
-  const errorMatch = /^\/api\/v1\/demo\/errors\/([\w_]+)$/.exec(path);
-  if (errorMatch && req.method === 'GET') {
-    const code = errorMatch[1];
-    const table = {
-      unauthorized: [401, 'credentials missing or invalid'],
-      forbidden: [403, 'no permission'],
-      not_found: [404, 'resource not found'],
-      conflict: [409, 'version conflict'],
-      gone: [410, 'resource gone'],
-      locked: [423, 'resource locked'],
-      payload_too_large: [413, 'payload too large'],
-      unsupported_media_type: [415, 'unsupported media type'],
-      rate_limited: [429, 'rate limit exceeded'],
-      internal_error: [500, 'internal error'],
-      storage_error: [502, 'storage error'],
-    };
-    const entry = table[code];
-    if (!entry) {
-      sendJson(res, 404, errorEnvelope('not_found', `unknown error sample ${code}`));
-      return;
-    }
-    const headers = code === 'rate_limited' ? { 'Retry-After': '2' } : {};
-    sendJson(res, entry[0], errorEnvelope(code, entry[1]), headers);
     return;
   }
 
@@ -532,7 +511,7 @@ async function handleRequest(req, res, url) {
 
 /** 演示 CRUD 广播的默认频道(e2e helpers 显式指定频道时以 emit 端点为准) */
 function defaultChannelForIssue() {
-  return process.env.MESH_MOCK_DEMO_CHANNEL ?? 'workspace:ws-1:issues';
+  return 'workspace:ws-1:issues';
 }
 
 // ---------------------------------------------------------------------------

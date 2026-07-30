@@ -48,6 +48,9 @@ import { RuntimesPage } from './features/runtimes/RuntimesPage';
 import { SquadDetailPage } from './features/squads/SquadDetailPage';
 import { SquadTaskDetailPage } from './features/squads/SquadTaskDetailPage';
 import { SquadsPage } from './features/squads/SquadsPage';
+import { MarketplacePage } from './features/skills/MarketplacePage';
+import { SkillDetailPage } from './features/skills/SkillDetailPage';
+import { SkillsPage } from './features/skills/SkillsPage';
 import { ErrorBoundary } from './shell/pages/ErrorPage';
 import { RequireAuth } from './shell/RequireAuth';
 import { DeviceAuthorizationPage } from './features/device/DeviceAuthorizationPage';
@@ -220,6 +223,10 @@ function ShellProviders(): React.JSX.Element {
                   <Route path="squads/:squadId" element={<SquadDetailPage />} />
                   <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
                   <Route path="cycles" element={<CyclesPage />} />
+                {/* 技能库(skill.md §4.1/§4.2):库页 / 详情 / 市场 */}
+                <Route path="skills" element={<SkillsPage />} />
+                <Route path="skills/:skillId" element={<SkillDetailPage />} />
+                <Route path="marketplace" element={<MarketplacePage />} />
                   {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
                   <Route path="chat" element={<ChatPage />} />
                   {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}

@@ -11,7 +11,7 @@
  *   与后端 M1 redirect_uri 白名单精确协同),回跳路径经 sessionStorage 携带;
  * - 409 conflict / 400 weak_password(三 reason)/ 422 invalid_credentials /
  *   423 account_locked / 429 rate_limited 均具名呈现(§6.14);
- * - 「忘记密码」跳 /forgot;「记住我」延长 refresh;开发用 token 直填入口保留。
+ * - 「忘记密码」跳 /forgot;「记住我」延长 refresh。
  */
 import { useRef, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -61,14 +61,12 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   const [searchParams] = useSearchParams();
   const token = useAuthStore((state) => state.token);
   const setSession = useAuthStore((state) => state.setSession);
-  const setToken = useAuthStore((state) => state.setToken);
 
   const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [remember, setRemember] = useState(false);
-  const [devToken, setDevToken] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
 
@@ -180,14 +178,6 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   const providerLabel = (provider: string): string => {
     const key = PROVIDER_LABEL_KEYS[provider];
     return key !== undefined ? t(key) : fallbackProviderLabel(provider);
-  };
-
-  const handleDevTokenSubmit = (event: FormEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    const trimmed = devToken.trim();
-    if (trimmed.length === 0) return;
-    setToken(trimmed);
-    navigate(target);
   };
 
   if (mfaTicket !== null) {
@@ -332,22 +322,6 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
           </div>
         </div>
       ) : null}
-
-      <details className="mesh-login__dev">
-        <summary>{t('login.phaseNote')}</summary>
-        <form className="mesh-login__form" onSubmit={handleDevTokenSubmit}>
-          <Input
-            data-testid="login-token"
-            label={t('login.tokenLabel')}
-            placeholder={t('login.tokenPlaceholder')}
-            value={devToken}
-            onChange={(event) => setDevToken(event.target.value)}
-          />
-          <Button data-testid="login-submit" type="submit" variant="secondary">
-            {t('login.submit')}
-          </Button>
-        </form>
-      </details>
     </div>
   );
 }
