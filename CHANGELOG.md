@@ -5,12 +5,22 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Fixed
+
+- **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
+
 ## [0.24.0] - 2026-07-30
 
 前端登录阻断级缺陷修复(MES-129:HTTP 非安全上下文安全上下文无关 uuidv4,登录及一切写请求在 HTTP 部署下恢复可用)为主干,含集成消息队列与命令平面(MES-88)、钉钉出站与互动卡片(MES-89)、前端设计系统底座(MES-111 Phase 1)、第三方设计资产许可基线(MES-135 阶段一)与多项测试/夹具稳健性与文案一致性修复。
 
 ### Added
 
+- **前端系统层收敛(MES-115,design-quality.md §4.1/§7/§11——MES-111 Stage 1)**:在 MES-111 Phase 1 设计底座(下条)之上完成系统层收敛,为逐页优化提供唯一组件与布局基础——
+  - **基础组件补齐**:新增 Field(label/control/hint/error 一体外壳)/Textarea(自适应钳高)/Checkbox(含半选)/Switch(role=switch)/Popover(焦点进入归还 + 视口翻转定位)/PageHeader(页头唯一 h1)/Toolbar/DataTable(aria-sort 排序 + 双密度 + 空态槽);Icon 注册表扩至 50+ 枚(壳层分组/触发器/连接器等 24 枚增量 + filled 实心变体)。
+  - **全局壳层**:桌面侧栏按任务四分组(工作/团队/运行/管理)+ 可折叠 rail(240px ↔ 64px,折叠态 Tooltip 补可读名,偏好持久化);当前项浅强调背景 + 3px 边缘指示(不再整块高饱和色);自动值守/运行环境/技能各占明确入口,`nav.automation` 含糊旧键清偿为 `nav.runtimes`,命令面板补 skills/autopilots/runtimes;手机底栏与「更多」抽屉与桌面同源(navigation.ts 唯一入口表),图标 + 文字双通道。
+  - **图标清偿**:产品 UI 中 emoji/字符图标全站替换为统一 SVG Icon(skills 信任徽标、autopilots 触发器、board/chat/inbox/onboarding/comments/integrations 等);导航/按钮/状态/通知一律经 `<Icon>`(回应 emoji 为用户内容,例外)。
+  - **静态门禁**:eslint `mesh/no-emoji-icons`(UI 表意位禁 emoji/字符图标,含模板串字面片段与国旗区,UGC 回应例外)+ stylelint `mesh/zindex-token-only`(z-index 一律 `var(--z-*)` 层级令牌或局部 -1/0/1,存量散落值清偿),叠加既有 AST 级硬编码色值门禁。
+  - **视觉回归基础**:`/styleguide` 组件状态 fixture 页(静态确定性)+ playwright 视觉矩阵扩充 wide 1440×900 / phone 390×844 项目,合成四视口 × 亮暗拍摄基础。
 - **前端设计系统底座(MES-111 Phase 1,design-quality.md §5–§9)**:按设计优化 Spec 落地逐页工作所依赖的设计系统基础层——
   - **设计令牌扩展**(tokenValues.ts 单一事实源,三文件生成 + CI 幂等):表面五级层级(canvas/surface/subtle/raised/hover/pressed/selected)、文本四级(strong/text/muted/disabled)、边界三级(subtle/border/strong)、品牌强调色 accent 系(hover/pressed/soft/contrast,旧 primary 系作迁移期别名)、状态色 fg/bg/border 三元组(success/warning/danger/info/neutral)+ 危险按钮交互态令牌、头像稳定配色八组(亮/暗各自校准非简单反色);间距补齐(0/0.5/1.5/8/10/12/16 档)、布局变量(外壳宽度/页边距/内容宽度四档)、圆角六档(xs→full)、阴影三级(轻浮起/浮层/对话框,暗色配合边框)、动效五档时长 + 三条标准缓动、z-index 五层级;全部经对比度关卡逐对自证(76 对 × 亮暗双主题,text 4.5:1 / 大文本·图形 3:1)。
   - **排版体系**:Display=Manrope、UI=Inter、CJK=Noto Sans SC、等宽=JetBrains Mono 的字体配对令牌(自托管字体文件随页面批次加载,未加载回退系统栈)+ type scale 十一档(display-lg→micro 字号/行高/字重)+ 表格数字 tabular-nums、等宽标识、中文排版(严格换行/受控断行/阅读宽度)工具类;默认 UI 正文调整为 14/22,iOS 表单控件经控件专用令牌保持 16px 防聚焦缩放。

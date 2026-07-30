@@ -2,6 +2,7 @@
  * types.ts 运行时常量测试(连接器目录 / kind 枚举 / VCS 对象类型)。
  */
 import { describe, expect, it } from 'vitest';
+import { ICON_PATHS } from '../../../design';
 import {
   CONNECTOR_CATALOG,
   INTEGRATION_HEALTH_STATES,
@@ -42,8 +43,16 @@ describe('integration kind constants', () => {
 describe('connector catalog', () => {
   it('has one card per kind with capabilities', () => {
     expect(CONNECTOR_CATALOG.map((meta) => meta.kind)).toEqual([...INTEGRATION_KINDS]);
+    const expectedIcon = {
+      im_feishu: 'message',
+      im_slack: 'chat',
+      vcs_github: 'git-merge',
+      vcs_gitlab: 'git-merge',
+      webhook_outbound: 'upload',
+    } as const;
     for (const meta of CONNECTOR_CATALOG) {
-      expect(meta.icon.length).toBeGreaterThan(0);
+      expect(Object.keys(ICON_PATHS)).toContain(meta.icon);
+      expect(meta.icon).toBe(expectedIcon[meta.kind]);
       expect(meta.nameKey).toBe(`integrations.kind.${meta.kind}`);
       expect(meta.capabilityKeys.length).toBeGreaterThan(0);
     }

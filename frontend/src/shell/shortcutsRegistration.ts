@@ -46,7 +46,7 @@ export type NavKey =
   | 'members'
   | 'chat'
   | 'squads'
-  | 'automation'
+  | 'autopilots'
   | 'runtimes'
   | 'skills'
   | 'insights'
@@ -69,7 +69,7 @@ export interface ShellActionLabels {
   readonly goInbox: string;
   readonly goBoard: string;
   readonly goMembers: string;
-  readonly goAutomation: string;
+  readonly goAutopilot: string;
   readonly restoreOnboarding: string;
   readonly help: string;
   readonly copyDeepLink: string;
@@ -145,8 +145,8 @@ export function registerShellShortcuts(
     { key: 'members', to: wsPath('/members') },
     { key: 'chat', to: wsPath('/chat') },
     { key: 'squads', to: wsPath('/squads') },
-    { key: 'automation', to: wsPath('/automations/autopilots') },
-    // 自动化运营区三入口(§6.12 信息架构):autopilots(automation)+ Runtimes + Skills。
+    { key: 'autopilots', to: wsPath('/automations/autopilots') },
+    // 自动化运营区三入口(§6.12 信息架构):自动值守 + 运行环境 + 技能市场。
     { key: 'runtimes', to: wsPath('/automations/runtimes') },
     { key: 'skills', to: wsPath('/automations/skills') },
     { key: 'insights', to: wsPath('/insights') },
@@ -317,9 +317,9 @@ export function registerShellShortcuts(
     { id: 'go.board', combo: 'g b', label: labels.actions.goBoard, group: 'global', run: goTo(wsPath('/board')) },
     { id: 'go.members', combo: 'g m', label: labels.actions.goMembers, group: 'global', run: goTo(wsPath('/members')) },
     {
-      id: 'go.automation',
+      id: 'go.autopilot',
       combo: 'g a',
-      label: labels.actions.goAutomation,
+      label: labels.actions.goAutopilot,
       group: 'global',
       run: goTo(wsPath('/automations/autopilots')),
     },
@@ -381,7 +381,7 @@ export function ShellShortcutsRegistrar(): null {
             members: t('nav.members'),
             chat: t('nav.chat'),
             squads: t('nav.squads'),
-            automation: t('nav.automation'),
+            autopilots: t('nav.autopilots'),
             runtimes: t('nav.runtimes'),
             skills: t('nav.skills'),
             insights: t('nav.insights'),
@@ -400,7 +400,7 @@ export function ShellShortcutsRegistrar(): null {
             goInbox: t('shortcuts.actionGoInbox'),
             goBoard: t('shortcuts.actionGoBoard'),
             goMembers: t('shortcuts.actionGoMembers'),
-            goAutomation: t('shortcuts.actionGoAutomation'),
+            goAutopilot: t('shortcuts.actionGoAutopilot'),
             restoreOnboarding: t('onboarding.restoreHelp'),
             help: t('shortcuts.actionHelp'),
             copyDeepLink: t('shortcuts.actionCopyDeepLink'),

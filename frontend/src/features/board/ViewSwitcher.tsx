@@ -3,7 +3,7 @@
  * 新建视图、行内操作菜单(重命名 / 复制 / 设默认 / 删除)。
  */
 import { useState } from 'react';
-import { Button, Dialog, Input } from '../../design';
+import { Button, Dialog, Icon, Input } from '../../design';
 import { useT } from '../../i18n';
 import type { View } from './types';
 
@@ -19,9 +19,10 @@ interface ViewSwitcherProps {
   readonly onDelete: (view: View) => Promise<void>;
 }
 
-const LAYOUT_ICONS: Record<View['layout'], string> = {
+/** 布局图标:统一走 Icon 组件(design-quality §7.1),列表态用 list 图标。 */
+const LAYOUT_ICONS: Record<View['layout'], React.ReactNode> = {
   board: '▦',
-  list: '☰',
+  list: <Icon name="list" size={16} />,
   timeline: '⧗',
   table: '▤',
 };
@@ -91,11 +92,13 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                 aria-current={selected ? 'true' : undefined}
                 onClick={() => onSelect(view.id)}
               >
-                <span aria-hidden="true">{LAYOUT_ICONS[view.layout]}</span>
+                <span className="mesh-view-switcher__icon" aria-hidden="true">
+                  {LAYOUT_ICONS[view.layout]}
+                </span>
                 <span className="mesh-view-switcher__name">{view.name}</span>
                 {view.is_default ? (
                   <span className="mesh-view-switcher__default" title={t('board.defaultView')}>
-                    ★
+                    <Icon name="star" size={16} filled />
                   </span>
                 ) : null}
               </button>

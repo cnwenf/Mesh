@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Banner, Button, Dialog, ErrorState, Input, Skeleton, StatusDot, useToast } from '../../design';
+import { Banner, Button, Dialog, ErrorState, Icon, Input, Skeleton, StatusDot, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -256,7 +256,7 @@ export function IntegrationDetailPage(): React.JSX.Element {
     <div className="mesh-integrations__page" data-testid="integration-detail">
       <div className="mesh-integrations__header">
         <h1 className="mesh-integrations__title" data-testid="integration-detail-name">
-          <span aria-hidden="true">{KIND_ICON[integration.kind]} </span>
+          <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
           {integration.name}
         </h1>
         <StatusDot

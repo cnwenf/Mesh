@@ -93,3 +93,34 @@ describe('Tabs(ARIA tabs + 漫游 tabindex + 方向键)', () => {
     expect(container.querySelector('.mesh-tabs')).toHaveClass('custom');
   });
 });
+
+describe('Tabs 焦点兜底(验收 R1-M3)', () => {
+  const ITEMS = [
+    { value: 'a', label: '甲', content: '甲内容' },
+    { value: 'b', label: '乙', content: '乙内容' },
+  ];
+
+  it('受控 value 未命中任何项时,首个可用项可聚焦且呈现其面板(杜绝整组 tabIndex=-1)', () => {
+    render(<Tabs label="兜底" value="ghost" onChange={() => undefined} items={ITEMS} />);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs.filter((tab) => tab.getAttribute('tabindex') === '0')).toHaveLength(1);
+    expect(screen.getByRole('tab', { name: '甲' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('甲内容')).toBeInTheDocument();
+  });
+
+  it('受控 value 命中禁用项时同样回退首个可用项', () => {
+    render(
+      <Tabs
+        label="兜底禁用"
+        value="b"
+        onChange={() => undefined}
+        items={[
+          { value: 'a', label: '甲', content: '甲内容' },
+          { value: 'b', label: '乙', content: '乙内容', disabled: true },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('tab', { name: '甲' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tab', { name: '甲' })).toHaveAttribute('aria-selected', 'true');
+  });
+});

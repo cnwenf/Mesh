@@ -263,7 +263,11 @@ function emitEvent(channel, event, payload) {
   log.push(frame);
   state.eventLog.set(channel, log);
   for (const client of wsClients) {
-    if (client.mesh?.authenticated && client.mesh?.channels?.has(channel) && client.readyState === 1) {
+    if (
+      client.mesh?.authenticated &&
+      client.mesh?.channels?.has(channel) &&
+      client.readyState === 1
+    ) {
       client.send(JSON.stringify(frame));
     }
   }
@@ -733,6 +737,149 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  // ---- 找回密码 / 重置密码(auth.md §4.1;forgot→reset 全链 e2e 契约)----
+  if (path === '/api/v1/auth/forgot-password' && req.method === 'POST') {
+    // 恒成功(防枚举);不要求鉴权。
+    sendJson(res, 200, envelope({ status: 'sent' }));
+    return;
+  }
+
+  if (path === '/api/v1/auth/reset-password' && req.method === 'POST') {
+    const body = await readBody(req);
+    if (String(body?.token ?? '') === 'BAD-TOKEN') {
+      sendJson(res, 422, errorEnvelope('invalid_token', 'reset token invalid or expired'));
+      return;
+    }
+    sendJson(res, 200, envelope({ status: 'reset' }));
+    return;
+  }
+
+  // ---- 工作台:AI 运行(执行列表)+ 等待确认(审批列表)(design-quality §3.2)----
+  if (path === '/api/v1/workspaces/ws-1/executions' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, {
+      data: [
+        {
+          id: 'exec-1',
+          agent_id: 'agent-1',
+          agent_name: 'Coder',
+          issue_identifier: 'MESH-1',
+          trigger: 'assign',
+          status: 'running',
+          priority: 0,
+          required_capabilities: [],
+          label_requirements: {},
+          timeout_seconds: 600,
+          queued_at: '2026-07-30T00:00:00.000Z',
+          finished_at: null,
+          failure_reason: null,
+          result: null,
+        },
+        {
+          id: 'exec-2',
+          agent_id: 'agent-1',
+          agent_name: 'Coder',
+          issue_identifier: 'MESH-2',
+          trigger: 'mention',
+          status: 'awaiting_approval',
+          priority: 0,
+          required_capabilities: [],
+          label_requirements: {},
+          timeout_seconds: 600,
+          queued_at: '2026-07-30T00:00:00.000Z',
+          finished_at: null,
+          failure_reason: null,
+          result: null,
+        },
+        {
+          id: 'exec-3',
+          agent_id: 'agent-1',
+          agent_name: 'Coder',
+          issue_identifier: 'MESH-3',
+          trigger: 'assign',
+          status: 'completed',
+          priority: 0,
+          required_capabilities: [],
+          label_requirements: {},
+          timeout_seconds: 600,
+          queued_at: '2026-07-30T00:00:00.000Z',
+          finished_at: '2026-07-30T00:05:00.000Z',
+          failure_reason: null,
+          result: {},
+        },
+      ],
+      next_cursor: null,
+    });
+    return;
+  }
+
+  if (path === '/api/v1/workspaces/ws-1/approvals' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, {
+      data: [
+        {
+          id: 'appr-7',
+          subject_type: 'execution',
+          subject_execution_id: 'exec-2',
+          subject_task_id: null,
+          status: 'pending',
+          action_summary: 'Approve deploy of MESH-2',
+          requested_at: '2026-07-30T00:00:00.000Z',
+          expires_at: '2026-07-31T00:00:00.000Z',
+          decided_at: null,
+          decision_comment: null,
+          execution_status: 'awaiting_approval',
+        },
+      ],
+      next_cursor: null,
+    });
+    return;
+  }
+
+  if (path === '/api/v1/workspaces/ws-1/projects' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, {
+      data: [
+        {
+          id: 'proj-1',
+          workspace_id: 'ws-1',
+          name: 'Platform',
+          key: 'PLAT',
+          description: null,
+          icon: null,
+          color: null,
+          status: 'active',
+          health: 'on_track',
+          visibility: 'workspace',
+          lead: null,
+          lead_member_id: null,
+          start_date: null,
+          target_date: null,
+          progress: 0.4,
+          open_issues: 3,
+          done_issues: 2,
+          issue_seq: 5,
+          archived: false,
+          archived_at: null,
+          my_role: 'member',
+          created_at: '2026-07-01T00:00:00.000Z',
+          updated_at: '2026-07-30T00:00:00.000Z',
+        },
+      ],
+      next_cursor: null,
+    });
+    return;
+  }
+
   sendJson(res, 404, errorEnvelope('not_found', `no mock route for ${req.method} ${path}`));
 }
 
@@ -775,7 +922,9 @@ wss.on('connection', (socket) => {
   // 首帧鉴权超时(与后端 AUTH_TIMEOUT_SECONDS 对齐)
   socket.mesh.authTimer = setTimeout(() => {
     if (!socket.mesh.authenticated) {
-      socket.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authentication timed out' }));
+      socket.send(
+        JSON.stringify({ op: 'error', code: 'unauthorized', message: 'authentication timed out' }),
+      );
       socket.close();
     }
   }, AUTH_TIMEOUT_MS);
@@ -790,12 +939,22 @@ wss.on('connection', (socket) => {
 
     // ---- 首帧鉴权 -------------------------------------------------------
     if (!socket.mesh.authenticated) {
-      if (msg.op === 'auth' && typeof msg.token === 'string' && msg.token.startsWith(DEV_TOKEN_PREFIX)) {
+      if (
+        msg.op === 'auth' &&
+        typeof msg.token === 'string' &&
+        msg.token.startsWith(DEV_TOKEN_PREFIX)
+      ) {
         socket.mesh.authenticated = true;
         clearTimeout(socket.mesh.authTimer);
         socket.send(JSON.stringify({ op: 'auth_ok' }));
       } else {
-        socket.send(JSON.stringify({ op: 'error', code: 'unauthorized', message: 'first frame must be auth' }));
+        socket.send(
+          JSON.stringify({
+            op: 'error',
+            code: 'unauthorized',
+            message: 'first frame must be auth',
+          }),
+        );
         socket.close();
       }
       return;

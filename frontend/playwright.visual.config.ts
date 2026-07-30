@@ -52,6 +52,18 @@ export default defineConfig({
       name: 'tablet',
       use: { viewport: { width: 768, height: 1024 } },
     },
+    // MES-115 视觉矩阵扩充:1440 宽屏与 390 手机仅拍摄组件 fixture 页
+    // (核心页矩阵维持 desktop/tablet 双视口基线,不随扩充翻倍)。
+    {
+      name: 'wide',
+      use: { viewport: { width: 1440, height: 900 } },
+      testMatch: /styleguide\.spec\.ts/,
+    },
+    {
+      name: 'phone',
+      use: { viewport: { width: 390, height: 844 } },
+      testMatch: /styleguide\.spec\.ts/,
+    },
   ],
   webServer: [
     {

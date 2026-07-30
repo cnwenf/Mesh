@@ -645,3 +645,393 @@
 .mesh-squads__plan .token-comment {
   color: var(--color-code-comment);
 }
+
+/* ===== Field 必填标记(§7.4:label/control/hint/error 一体;星号 aria-hidden)===== */
+.mesh-field__required {
+  margin-inline-start: var(--space-0-5);
+  color: var(--color-danger-fg);
+}
+
+/* ===== Textarea(§7.4:自适应但有最大高度;与 Input 同族表面)===== */
+.mesh-textarea {
+  block-size: auto;
+  min-block-size: 4.5rem;
+  resize: none;
+  padding-block: var(--space-2);
+  line-height: 1.5;
+}
+
+/* ===== Checkbox(§7.4/§9.1:自绘盒体 + 原生键盘;命中区经行级 label)===== */
+.mesh-checkbox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-checkbox__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-block-size: 44px;
+  cursor: pointer;
+}
+
+.mesh-checkbox__box-wrap {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.mesh-checkbox__input {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  inline-size: 44px;
+  block-size: 44px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.mesh-checkbox__box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 18px;
+  block-size: 18px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xs);
+  background-color: var(--color-surface);
+  color: var(--color-accent-contrast);
+  pointer-events: none;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-checkbox__check {
+  opacity: 0;
+  transform: scale(0.6);
+  transition:
+    opacity var(--motion-fast) var(--ease-enter),
+    transform var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-checkbox__minus {
+  inline-size: 10px;
+  block-size: 2px;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+}
+
+.mesh-checkbox__input:checked + .mesh-checkbox__box {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.mesh-checkbox__input:checked + .mesh-checkbox__box .mesh-checkbox__check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.mesh-checkbox__input:indeterminate + .mesh-checkbox__box {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.mesh-checkbox__input:focus-visible + .mesh-checkbox__box {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-checkbox__input:disabled + .mesh-checkbox__box {
+  background-color: var(--color-surface-subtle);
+  border-color: var(--color-border);
+}
+
+.mesh-checkbox__input:disabled {
+  cursor: not-allowed;
+}
+
+.mesh-checkbox__label {
+  font-size: var(--font-size-control, var(--text-body-size));
+  line-height: var(--text-body-lh);
+  color: var(--color-text);
+}
+
+.mesh-checkbox__description {
+  margin: 0;
+  padding-inline-start: calc(18px + var(--space-3));
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm-size);
+  line-height: var(--text-body-sm-lh);
+}
+
+.mesh-checkbox--invalid .mesh-checkbox__box {
+  border-color: var(--color-danger-border);
+}
+
+/* ===== Switch(§9.1:role=switch;拇指位置即状态,颜色非唯一信号)===== */
+.mesh-switch__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-block-size: 44px;
+}
+
+.mesh-switch__text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+
+.mesh-switch__label {
+  color: var(--color-text);
+  font-size: var(--font-size-control, var(--text-body-size));
+  line-height: var(--text-body-lh);
+}
+
+.mesh-switch__description {
+  color: var(--color-text-muted);
+  font-size: var(--text-body-sm-size);
+  line-height: var(--text-body-sm-lh);
+}
+
+.mesh-switch__control {
+  position: relative;
+  flex: 0 0 auto;
+  inline-size: 44px;
+  block-size: 24px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-subtle);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter),
+    border-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-switch__thumb {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-start: 2px;
+  inline-size: 18px;
+  block-size: 18px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--motion-fast) var(--ease-move);
+}
+
+.mesh-switch__control--on {
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.mesh-switch__control--on .mesh-switch__thumb {
+  transform: translateX(20px);
+}
+
+.mesh-switch__control:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-switch__control:disabled {
+  cursor: not-allowed;
+  background-color: var(--color-surface-subtle);
+  border-color: var(--color-border);
+}
+
+.mesh-switch__control:disabled .mesh-switch__thumb {
+  box-shadow: none;
+}
+
+/* ===== Popover(§7.5:次级上下文浮层;surface-raised + shadow-2 + z-dropdown)===== */
+.mesh-popover-anchor {
+  display: inline-flex;
+}
+
+.mesh-popover {
+  position: absolute;
+  padding: var(--space-4);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  z-index: var(--z-dropdown);
+  animation: mesh-menu-in var(--motion-standard) var(--ease-enter);
+}
+
+.mesh-popover:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ===== PageHeader(§1.2/§4.4:一页一个主标题 + 一个主动作)===== */
+.mesh-page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3) var(--space-4);
+  margin-block-end: var(--space-5);
+}
+
+.mesh-page-header__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.mesh-page-header__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-lh);
+}
+
+.mesh-page-header__title {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: var(--text-title-1-size);
+  line-height: var(--text-title-1-lh);
+  font-weight: var(--text-title-1-weight);
+  color: var(--color-text-strong);
+  overflow-wrap: anywhere;
+}
+
+.mesh-page-header__description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-lh);
+  max-inline-size: var(--content-readable);
+}
+
+.mesh-page-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ===== Toolbar(§4.4:视图/筛选/批量操作容器;窄屏换行)===== */
+.mesh-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-block: var(--space-2);
+  margin-block-end: var(--space-3);
+}
+
+/* ===== DataTable(§7.6:语义表格 + 排序 + 密度;手机横滚由调用方受控)===== */
+.mesh-data-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-body-sm-size);
+  line-height: var(--text-body-sm-lh);
+}
+
+.mesh-data-table__caption {
+  caption-side: top;
+  text-align: start;
+  padding-block-end: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-caption-size);
+}
+
+.mesh-visually-hidden {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mesh-data-table__header {
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-lh);
+  font-weight: var(--text-caption-weight);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.mesh-data-table__cell {
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
+  color: var(--color-text);
+}
+
+.mesh-data-table__cell--end {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.mesh-data-table__header.mesh-data-table__cell--end {
+  text-align: end;
+}
+
+/* 行高:default 44px / comfortable 52px(§7.6) */
+.mesh-data-table__row > td {
+  block-size: 44px;
+}
+
+.mesh-data-table--comfortable .mesh-data-table__row > td {
+  block-size: 52px;
+}
+
+.mesh-data-table__row:hover > td {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-data-table__row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+.mesh-data-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.mesh-data-table__sort:hover {
+  color: var(--color-text);
+}
+
+.mesh-data-table__sort:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.mesh-data-table__sort-indicator {
+  display: inline-flex;
+  color: var(--color-accent);
+}
+
+.mesh-data-table__empty {
+  padding: var(--space-8) var(--space-4);
+  border-block-end: 1px solid var(--color-border-subtle);
+  text-align: center;
+}

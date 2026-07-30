@@ -66,6 +66,14 @@
   font-weight: 600;
 }
 
+/* 触发器列图标(design-quality §7.1):16px 统一 SVG,与文案间距走 --space-* 令牌。 */
+.mesh-autopilots__trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--space-1);
+  vertical-align: -0.15em;
+}
+
 .mesh-autopilots__actions {
   display: flex;
   gap: var(--space-1);

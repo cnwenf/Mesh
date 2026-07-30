@@ -24,6 +24,7 @@ import type { RealtimeEventFrame } from '../types/realtime';
 import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
 import { SeoMeta } from './SeoMeta';
 import { ShellShortcutsRegistrar } from './shortcutsRegistration';
+import { SIDEBAR_COLLAPSED_STORAGE_KEY } from './navigation';
 import { Sidebar } from './Sidebar';
 import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
 import { MobileMoreDrawer } from './MobileMoreDrawer';
@@ -284,9 +285,30 @@ export function AppShell(): React.JSX.Element {
   const workspaceSlug = workspaceMatch?.params.workspaceSlug;
 
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  // 桌面侧栏折叠偏好(design-quality §4.1):持久化到 localStorage,刷新后保持。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((previous) => {
+      const next = !previous;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, next ? '1' : '0');
+      } catch {
+        // 存储不可用(隐私模式等):仅本次会话内生效,不阻断切换。
+      }
+      return next;
+    });
+  }, []);
+
+  const shellClassName = sidebarCollapsed ? 'mesh-shell mesh-shell--sidebar-collapsed' : 'mesh-shell';
 
   const layout = (
-    <div className="mesh-shell">
+    <div className={shellClassName}>
       {/* SEO 契约(§3.4):认证内页面 noindex + canonical 规范深链 */}
       <SeoMeta />
       {/* 快捷键/命令注册:位于 WorkspaceProvider 子树内(工作区路由命中时),
@@ -298,7 +320,7 @@ export function AppShell(): React.JSX.Element {
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>
-      <Sidebar />
+      <Sidebar collapsed={sidebarCollapsed} onToggleCollapsed={toggleSidebar} />
       <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />

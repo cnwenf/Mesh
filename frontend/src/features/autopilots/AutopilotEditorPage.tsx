@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Button, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import { Button, ErrorState, Icon, Input, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { listAgents } from '../agents/api';
@@ -877,7 +877,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
                     disabled={state.actions.length <= 1}
                     aria-label={t('autopilots.editor.removeAction')}
                   >
-                    ✕
+                    <Icon name="close" size={16} />
                   </Button>
                 </div>
               </div>

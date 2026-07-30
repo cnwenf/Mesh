@@ -4,11 +4,13 @@
  * issue 仪表盘分页/快捷创建/实时增量合并(含归属过滤)、错误 toast。
  * 桩 client + mock fetch,不触真实网络。
  */
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { ReactElement } from 'react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test-utils/render';
 import type { RealtimeEventFrame } from '../../types/realtime';
+import { MeshApiClient } from '../../api/client';
 import { HomePage } from '../pages/HomePage';
 import { RealtimeContext } from '../AppShell';
 import type { RealtimeContextValue } from '../AppShell';
@@ -97,7 +99,9 @@ function renderHome(client: StubClient | null): ReturnType<typeof renderWithProv
 /** Input 设计组件把 data-testid 透传给原生 input;取原生元素以便 fireEvent.change。 */
 function nativeInput(testId: string): HTMLInputElement {
   const element = screen.getByTestId(testId);
-  return (element instanceof HTMLInputElement ? element : element.querySelector('input')) as HTMLInputElement;
+  return (
+    element instanceof HTMLInputElement ? element : element.querySelector('input')
+  ) as HTMLInputElement;
 }
 
 describe('HomePage(me 三态)', () => {
@@ -120,7 +124,10 @@ describe('HomePage(me 三态)', () => {
           );
         }
         return Promise.resolve(
-          jsonResponse({ data: [6, 7].map((n) => issue(n, 'Issue ' + String(n))), next_cursor: null }),
+          jsonResponse({
+            data: [6, 7].map((n) => issue(n, 'Issue ' + String(n))),
+            next_cursor: null,
+          }),
         );
       }
       if (url.includes(ISSUES_PATH) && init?.method === 'POST') {
@@ -405,9 +412,7 @@ describe('HomePage(实时增量合并)', () => {
       if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
       if (url.includes(ISSUES_PATH) && (init?.method ?? 'GET') === 'GET') {
         if (new URL(url).searchParams.get('cursor') === null) {
-          return Promise.resolve(
-            jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: 'c2' }),
-          );
+          return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: 'c2' }));
         }
         return Promise.resolve(
           jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500),
@@ -445,5 +450,495 @@ describe('HomePage(实时增量合并)', () => {
     fireEvent.click(screen.getByTestId('home-create'));
     await waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(2));
     expect(screen.getAllByTestId('home-issue-MESH-99').length).toBe(1);
+  });
+});
+
+const PROJECTS_PATH = '/api/v1/workspaces/ws-1/projects';
+
+function project(id: number, key: string, openIssues: number): Record<string, unknown> {
+  return {
+    id: 'proj-' + String(id),
+    workspace_id: 'ws-1',
+    name: 'Project ' + key,
+    key,
+    description: null,
+    icon: null,
+    color: null,
+    status: 'active',
+    health: null,
+    visibility: 'workspace',
+    lead: null,
+    lead_member_id: null,
+    start_date: null,
+    target_date: null,
+    progress: 0,
+    open_issues: openIssues,
+    done_issues: 0,
+    issue_seq: 1,
+    archived: false,
+    archived_at: null,
+    my_role: 'member',
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-25T00:00:00.000Z',
+  };
+}
+
+/** 路由 ME / ISSUES / PROJECTS 的 fetch mock;projects 行为可配。 */
+function routedFetch(projectsResponse: () => Response): ReturnType<typeof vi.fn> {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input.toString();
+    if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+    if (url.includes(PROJECTS_PATH)) return Promise.resolve(projectsResponse());
+    if (url.includes(ISSUES_PATH) && (init?.method ?? 'GET') === 'GET') {
+      return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+    }
+    return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+  });
+}
+
+describe('HomePage(最近项目小组件 + onboarding)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('有项目时渲染最近项目小组件,卡片深链指向项目详情', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() =>
+        jsonResponse({ data: [project(1, 'ALPHA', 3), project(2, 'BETA', 0)], next_cursor: null }),
+      ),
+    );
+    renderHome(null);
+    const section = await screen.findByTestId('home-projects');
+    expect(within(section).getByTestId('home-project-ALPHA').textContent).toContain(
+      'Project ALPHA',
+    );
+    expect(within(section).getByTestId('home-project-ALPHA').textContent).toContain('3 open');
+    const link = within(within(section).getByTestId('home-project-BETA')).getByRole('link');
+    expect(link.getAttribute('href')).toBe('/projects/proj-2');
+  });
+
+  it('项目为空时不渲染小组件(有数据才呈现,无演示内容)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() => jsonResponse({ data: [], next_cursor: null })),
+    );
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+  });
+
+  it('项目加载失败安静隐藏小组件,不阻断工作台', async () => {
+    vi.stubGlobal(
+      'fetch',
+      routedFetch(() => jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500)),
+    );
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+    // 工作台其余部分照常:问候语与工作区列表仍在。
+    expect(screen.getByTestId('home-greeting')).toBeDefined();
+  });
+
+  it('空工作区(无 issue)呈现 onboarding 区域', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+        if (url.includes(PROJECTS_PATH)) {
+          return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+        }
+        if (url.includes(ISSUES_PATH)) {
+          return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+        }
+        return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+      }),
+    );
+    renderHome(null);
+    await waitFor(() => expect(screen.getByTestId('home-onboarding')).toBeDefined());
+  });
+});
+
+const EXECUTIONS_PATH = '/api/v1/workspaces/ws-1/executions';
+const APPROVALS_PATH = '/api/v1/workspaces/ws-1/approvals';
+
+function execRow(id: number, status: string): Record<string, unknown> {
+  return {
+    id: 'exec-' + String(id),
+    agent_id: 'agent-1',
+    agent_name: 'Coder',
+    issue_identifier: 'MESH-' + String(id),
+    trigger: 'assign',
+    status,
+    priority: 0,
+    required_capabilities: [],
+    label_requirements: {},
+    timeout_seconds: 600,
+    queued_at: '2026-07-30T00:00:00.000Z',
+    finished_at: null,
+    failure_reason: null,
+    result: null,
+  };
+}
+
+function approvalRow(id: number, executionId: string | null): Record<string, unknown> {
+  return {
+    id: 'appr-' + String(id),
+    subject_type: 'execution',
+    subject_execution_id: executionId,
+    subject_task_id: null,
+    status: 'pending',
+    action_summary: 'Approve deploy of MESH-' + String(id),
+    requested_at: '2026-07-30T00:00:00.000Z',
+    expires_at: '2026-07-31T00:00:00.000Z',
+    decided_at: null,
+    decision_comment: null,
+    execution_status: 'awaiting_approval',
+  };
+}
+
+describe('HomePage(等待确认 / AI 运行 小组件)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function install(
+    executions: Record<string, unknown>[],
+    approvals: Record<string, unknown>[],
+  ): void {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      if (url.includes(PROJECTS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [], next_cursor: null }));
+      }
+      if (url.includes(EXECUTIONS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: executions, next_cursor: null }));
+      }
+      if (url.includes(APPROVALS_PATH)) {
+        return Promise.resolve(jsonResponse({ data: approvals, next_cursor: null }));
+      }
+      return Promise.resolve(jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('有数据时渲染两块,过滤执行终态,行深链正确', async () => {
+    install(
+      [execRow(1, 'running'), execRow(2, 'awaiting_approval'), execRow(3, 'completed')],
+      [approvalRow(7, 'exec-9')],
+    );
+    renderHome(null);
+
+    const runs = await screen.findByTestId('home-ai-runs');
+    // completed 被过滤,仅剩 running + awaiting_approval 两行。
+    await waitFor(() => expect(within(runs).getAllByRole('listitem').length).toBe(2));
+    expect(within(runs).getByTestId('home-ai-run-exec-1').textContent).toContain('Coder');
+    const runLink = within(within(runs).getByTestId('home-ai-run-exec-1')).getByRole('link');
+    expect(runLink.getAttribute('href')).toBe('/executions/exec-1');
+
+    const waiting = screen.getByTestId('home-waiting');
+    const waitingItem = within(waiting).getByTestId('home-waiting-appr-7');
+    expect(waitingItem.textContent).toContain('Approve deploy of MESH-7');
+    expect(within(waitingItem).getByRole('link').getAttribute('href')).toBe('/executions/exec-9');
+  });
+
+  it('审批无关联执行(subject_execution_id=null)时呈现为不可链接条目(per-file 分支门禁补测)', async () => {
+    install([], [approvalRow(8, null)]);
+    renderHome(null);
+    const waiting = await screen.findByTestId('home-waiting');
+    const item = within(waiting).getByTestId('home-waiting-appr-8');
+    expect(item.textContent).toContain('Approve deploy of MESH-8');
+    // 无执行关联 → 纯文本条目,不渲染深链
+    expect(within(item).queryByRole('link')).toBeNull();
+  });
+
+  it('执行/审批为空时不渲染对应小组件(无演示内容)', async () => {
+    install([], []);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.queryByTestId('home-projects')).toBeNull();
+  });
+
+  it('执行/审批接口失败安静隐藏,不阻断工作台', async () => {
+    fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes(ME_PATH)) return Promise.resolve(jsonResponse(ME_BODY));
+      if (url.includes(ISSUES_PATH)) {
+        return Promise.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+      }
+      // projects/executions/approvals 全部 500。
+      return Promise.resolve(
+        jsonResponse({ error: { code: 'internal_error', message: 'boom' } }, 500),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHome(null);
+    await screen.findByTestId('home-issue-list');
+    expect(screen.queryByTestId('home-ai-runs')).toBeNull();
+    expect(screen.queryByTestId('home-waiting')).toBeNull();
+    expect(screen.getByTestId('home-greeting')).toBeDefined();
+  });
+});
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe('HomePage(错误分流与竞态守卫)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('me 请求为非 API 异常 → 呈现网络错误文案', async () => {
+    const client = { request: vi.fn().mockRejectedValue(new Error('boom')) };
+    renderWithProviders(<HomePage client={client as never} />);
+
+    await waitFor(() => expect(screen.getByTestId('home-error')).toBeDefined());
+    expect(screen.getByTestId('home-error').textContent).toContain('Network error');
+  });
+
+  it('me 请求在卸载后才被拒绝 → 不向已拆除的渲染树派发错误态', async () => {
+    const pending = createDeferred<Response>();
+    const fetchMock = vi.fn(() => pending.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = renderWithProviders(<HomePage />);
+    expect(screen.getByTestId('home-loading')).toBeDefined();
+    result.unmount();
+
+    await act(async () => {
+      pending.reject(new TypeError('Failed to fetch'));
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).not.toContain('Retry');
+  });
+
+  it('仪表盘首载在卸载后才落定(resolve)→ 过期响应被丢弃', async () => {
+    const pending = createDeferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH)) return pending.promise;
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = renderWithProviders(<HomePage />);
+    await waitFor(() => expect(screen.getByTestId('home-dashboard')).toBeDefined());
+    result.unmount();
+
+    await act(async () => {
+      pending.resolve(jsonResponse({ data: [issue(1, 'Late arrival')], next_cursor: null }));
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).not.toContain('Late arrival');
+  });
+
+  it('仪表盘首载在卸载后才被拒绝 → 不派发错误态', async () => {
+    const pending = createDeferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH)) return pending.promise;
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = renderWithProviders(<HomePage />);
+    await waitFor(() => expect(screen.getByTestId('home-dashboard')).toBeDefined());
+    result.unmount();
+
+    await act(async () => {
+      pending.reject(new TypeError('Failed to fetch'));
+      await Promise.resolve();
+    });
+    expect(document.body.textContent).not.toContain('Retry');
+  });
+
+  it('仪表盘首载为非 API 异常 → 区内呈现网络错误文案', async () => {
+    const client = {
+      request: vi.fn().mockResolvedValue(ME_BODY.data),
+      list: vi.fn().mockRejectedValue(new Error('boom')),
+    };
+    renderWithProviders(<HomePage client={client as never} />);
+
+    const dashboard = await screen.findByTestId('home-dashboard');
+    await waitFor(() => expect(dashboard.textContent).toContain('Network error'));
+  });
+
+  it('首载未完成时到达的实时帧被丢弃(初始 null 守卫),随后首载照常渲染', async () => {
+    const pending = createDeferred<Response>();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH)) return pending.promise;
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = createStubClient();
+    renderHome(client);
+
+    await waitFor(() => expect(client.subscribe).toHaveBeenCalledWith('workspace:ws-1:issues'));
+    // issues 仍为 null(首载未完成):帧到达不得报错、不得成行
+    client.emit({
+      op: 'event',
+      channel: 'workspace:ws-1:issues',
+      seq: 1,
+      event: 'issue.created',
+      payload: { issue: issue(50, 'Early frame') },
+    });
+
+    await act(async () => {
+      pending.resolve(jsonResponse({ data: [issue(1, 'Issue 1')], next_cursor: null }));
+    });
+    await waitFor(() => expect(screen.getByTestId('home-issue-MESH-1')).toBeDefined());
+    expect(screen.queryByTestId('home-issue-MESH-50')).toBeNull();
+  });
+
+  it('快捷创建失败为非 API 异常 → 通用错误 toast', async () => {
+    const client = {
+      request: vi.fn(async (method: string, path: string) => {
+        if (method === 'POST' && path.includes(ISSUES_PATH)) {
+          throw new Error('boom');
+        }
+        return ME_BODY.data;
+      }),
+      list: vi.fn().mockResolvedValue({ data: [issue(1, 'Issue 1')], next_cursor: null }),
+    };
+    renderWithProviders(<HomePage client={client as never} />);
+    await screen.findByTestId('home-issue-list');
+
+    fireEvent.change(nativeInput('home-new-title'), { target: { value: 'boom' } });
+    fireEvent.click(screen.getByTestId('home-create'));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain('An unexpected error occurred'),
+    );
+  });
+
+  it('创建响应携带列表中已有 id(无帧先到)→ 按 id 去重不重复成行', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH) && init?.method === 'POST') {
+        // 与首屏 id-3 同 id:模拟 created 帧已先行合并后的重复响应
+        return jsonResponse({ data: issue(3, 'Duplicate of 3') }, 201);
+      }
+      if (url.includes(ISSUES_PATH)) {
+        return jsonResponse({
+          data: [1, 2, 3, 4, 5].map((n) => issue(n, 'Issue ' + String(n))),
+          next_cursor: null,
+        });
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithProviders(<HomePage />);
+    const list = await screen.findByTestId('home-issue-list');
+    await waitFor(() => expect(within(list).getAllByRole('listitem').length).toBe(5));
+
+    fireEvent.change(nativeInput('home-new-title'), { target: { value: 'Duplicate' } });
+    fireEvent.click(screen.getByTestId('home-create'));
+    // 输入框清空 = 创建成功路径已跑完
+    await waitFor(() => expect(nativeInput('home-new-title').value).toBe(''));
+    expect(screen.getAllByTestId('home-issue-MESH-3').length).toBe(1);
+    expect(within(list).getAllByRole('listitem').length).toBe(5);
+  });
+
+  it('client 实例切换后旧实例的过期分页响应被丢弃(初始 null 守卫)', async () => {
+    const deferredOldPage = createDeferred<Response>();
+    const deferredNewFirstPage = createDeferred<Response>();
+    const fetchOld = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH)) {
+        return new URL(url).searchParams.get('cursor') === null
+          ? jsonResponse({
+              data: [1, 2, 3].map((n) => issue(n, 'Old ' + String(n))),
+              next_cursor: 'c2',
+            })
+          : deferredOldPage.promise;
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    const fetchNew = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(ME_PATH)) return jsonResponse(ME_BODY);
+      if (url.includes(ISSUES_PATH)) return deferredNewFirstPage.promise;
+      return jsonResponse({ error: { code: 'not_found', message: 'nf' } }, 404);
+    });
+    const clientOld = new MeshApiClient({
+      baseUrl: 'http://old.test',
+      getToken: () => 'tok',
+      fetchImpl: fetchOld as unknown as typeof fetch,
+    });
+    const clientNew = new MeshApiClient({
+      baseUrl: 'http://new.test',
+      getToken: () => 'tok',
+      fetchImpl: fetchNew as unknown as typeof fetch,
+    });
+
+    function ClientSwapper(): ReactElement {
+      const [client, setClient] = useState<MeshApiClient>(clientOld);
+      return (
+        <>
+          <button type="button" data-testid="swap-client" onClick={() => setClient(clientNew)}>
+            swap
+          </button>
+          <HomePage client={client} />
+        </>
+      );
+    }
+
+    renderWithProviders(<ClientSwapper />);
+    const list = await screen.findByTestId('home-issue-list');
+    await waitFor(() => expect(within(list).getAllByRole('listitem').length).toBe(3));
+
+    // 旧实例的分页请求在途时切换 client → 列表先复位 null,再载入新实例首页
+    fireEvent.click(screen.getByTestId('home-load-more'));
+    fireEvent.click(screen.getByTestId('swap-client'));
+    await waitFor(() => expect(fetchNew).toHaveBeenCalled());
+
+    await act(async () => {
+      deferredOldPage.resolve(
+        jsonResponse({ data: [6, 7].map((n) => issue(n, 'Stale ' + String(n))), next_cursor: null }),
+      );
+      await Promise.resolve();
+    });
+    // 过期页不得混入(此刻列表仍为 null 或新实例数据)
+    expect(document.body.textContent).not.toContain('Stale 6');
+
+    await act(async () => {
+      deferredNewFirstPage.resolve(
+        jsonResponse({ data: [issue(9, 'Fresh 9')], next_cursor: null }),
+      );
+    });
+    const freshList = await screen.findByTestId('home-issue-list');
+    await waitFor(() => expect(within(freshList).getAllByRole('listitem').length).toBe(1));
+    expect(screen.getByTestId('home-issue-MESH-9').textContent).toContain('Fresh 9');
+    expect(document.body.textContent).not.toContain('Stale 6');
+    expect(document.body.textContent).not.toContain('Old 1');
   });
 });

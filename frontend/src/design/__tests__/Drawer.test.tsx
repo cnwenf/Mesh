@@ -142,3 +142,46 @@ describe('Drawer Tab 中间位置不拦截(trapTabKey 返回 false 分支)', () 
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe('Drawer 分支补强(焦点圈养边界)', () => {
+  it('抽屉内无可聚焦元素时 Tab 被拦截且焦点留在面板', () => {
+    render(
+      <Drawer open onClose={() => undefined} title="纯文本抽屉">
+        <p>没有可聚焦控件</p>
+      </Drawer>,
+    );
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(document.activeElement).toBe(dialog);
+  });
+
+  it('Shift+Tab 在面板自身聚焦时跳至末个可聚焦元素', () => {
+    render(
+      <Drawer open onClose={() => undefined} title="双控件抽屉">
+        <button type="button">首个</button>
+        <button type="button">末个</button>
+      </Drawer>,
+    );
+    const dialog = screen.getByRole('dialog');
+    dialog.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: '末个' })).toHaveFocus();
+  });
+
+  it('打开前焦点不在 HTMLElement 时关闭不抛错(activeElement 守卫)', () => {
+    const { rerender } = render(
+      <Drawer open onClose={() => undefined} title="守卫抽屉">
+        <p>内容</p>
+      </Drawer>,
+    );
+    // 模拟关闭前 activeElement 脱离 HTMLElement(body 仍为 HTMLElement,取 null 路径经 document 失焦)
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    rerender(
+      <Drawer open={false} onClose={() => undefined} title="守卫抽屉">
+        <p>内容</p>
+      </Drawer>,
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});

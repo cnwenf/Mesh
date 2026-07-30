@@ -243,7 +243,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  z-index: 60;
+  z-index: var(--z-toast); /* 浮层反馈层(§11.2 令牌;原 60 散落值清偿) */
 }
 
 .mesh-runtimes-rotate h2 {
@@ -621,7 +621,7 @@
   justify-content: center;
   gap: var(--space-3);
   background: var(--color-scrim);
-  z-index: 70;
+  z-index: var(--z-overlay); /* 取消确认遮罩(dialog 层,瞬时 toast 在其上;原 70 清偿) */
 }
 
 .mesh-executions__cancel-dialog h2 {

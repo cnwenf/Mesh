@@ -78,7 +78,7 @@ const REQUIRED_KEYS = [
   'nav.board',
   'nav.members',
   'nav.chat',
-  'nav.automation',
+  'nav.runtimes',
   'nav.settings',
   // theme.*
   'theme.label',
@@ -118,7 +118,7 @@ const REQUIRED_KEYS = [
   'shortcuts.actionGoInbox',
   'shortcuts.actionGoBoard',
   'shortcuts.actionGoMembers',
-  'shortcuts.actionGoAutomation',
+  'shortcuts.actionGoAutopilot',
   // a11y.*
   'a11y.themeToggle',
   'a11y.languageToggle',
@@ -161,8 +161,10 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
   it('中文导航:自动值守(Autopilots)与运行环境(Runtimes 入口)不再重名(design-quality §4.1)', () => {
     const zh = builtinCatalogs['zh-CN'].messages;
     expect(zh['nav.autopilots']).toBe('自动值守');
-    expect(zh['nav.automation']).toBe('运行环境');
-    expect(zh['nav.autopilots']).not.toBe(zh['nav.automation']);
+    // MES-115:含糊旧键 nav.automation 清偿为明确的 nav.runtimes(运行环境独立入口)
+    expect(zh['nav.runtimes']).toBe('运行环境');
+    expect(zh['nav.automation']).toBeUndefined();
+    expect(zh['nav.autopilots']).not.toBe(zh['nav.runtimes']);
   });
 
   it('skip link / 移动导航 / 统一搜索入口文案键两目录齐备(design-quality §4.3/§10.2)', () => {

@@ -7,24 +7,51 @@ export type { Rgb } from './contrast';
 export { AA_CONTRAST_PAIRS, DARK_TOKENS, LIGHT_TOKENS } from './tokenValues';
 export { ThemeProvider, resolveTheme } from './ThemeProvider';
 export { ThemeSkeleton } from './ThemeSkeleton';
-export { resolveThemeChain, expectedRouteId, parseThemeLocator, isThemeMode } from './themeNegotiation';
-export type { ResolvedTheme, ThemeSource, ThemeMode, ChainInput, ChainResult } from './themeNegotiation';
+export {
+  resolveThemeChain,
+  expectedRouteId,
+  parseThemeLocator,
+  isThemeMode,
+} from './themeNegotiation';
+export type {
+  ResolvedTheme,
+  ThemeSource,
+  ThemeMode,
+  ChainInput,
+  ChainResult,
+} from './themeNegotiation';
 export { THEME_LOCATOR_KEY, writeThemeLocator, clearThemeLocators } from './themeLocator';
 export { guardUgcInlineColors, useUgcColorGuard, THEME_CHANGED_EVENT } from './ugcColorGuard';
 export { Banner } from './components/Banner';
 export type { BannerProps, BannerTone } from './components/Banner';
 export { Button, buttonClasses } from './components/Button';
 export type { ButtonProps, ButtonSize, ButtonVariant } from './components/Button';
+export { Checkbox } from './components/Checkbox';
+export type { CheckboxProps } from './components/Checkbox';
+export { DataTable } from './components/DataTable';
+export type { DataTableColumn, DataTableProps, DataTableSortState } from './components/DataTable';
 export { Dialog } from './components/Dialog';
 export type { DialogProps } from './components/Dialog';
 export { EmptyState } from './components/EmptyState';
 export type { EmptyStateProps } from './components/EmptyState';
 export { ErrorState } from './components/ErrorState';
 export type { ErrorStateProps } from './components/ErrorState';
+export { Field } from './components/Field';
+export type { FieldControlProps, FieldProps, FieldRenderArgument } from './components/Field';
+export { PageHeader } from './components/PageHeader';
+export type { PageHeaderProps } from './components/PageHeader';
+export { Popover } from './components/Popover';
+export type { PopoverProps } from './components/Popover';
+export { Switch } from './components/Switch';
+export type { SwitchProps } from './components/Switch';
+export { Textarea, TEXTAREA_MAX_HEIGHT_PX } from './components/Textarea';
+export type { TextareaProps } from './components/Textarea';
+export { Toolbar } from './components/Toolbar';
+export type { ToolbarProps } from './components/Toolbar';
 export { IconButton } from './components/IconButton';
 export type { IconButtonProps } from './components/IconButton';
 export { Input } from './components/Input';
-export type { InputProps } from './components/Input';
+export type { InputProps, InputSize } from './components/Input';
 export { Kbd } from './components/Kbd';
 export type { KbdProps } from './components/Kbd';
 export { Select } from './components/Select';
@@ -54,6 +81,8 @@ export { Icon, ICON_PATHS } from './components/Icon';
 export type { IconName, IconProps, IconSize } from './components/Icon';
 export { Menu } from './components/Menu';
 export type { MenuItem, MenuEntry, MenuProps } from './components/Menu';
+export { PublicFlowShell } from './components/PublicFlowShell';
+export type { PublicFlowShellProps } from './components/PublicFlowShell';
 export { Tabs } from './components/Tabs';
 export type { TabItem, TabsProps } from './components/Tabs';
 export { Tooltip } from './components/Tooltip';

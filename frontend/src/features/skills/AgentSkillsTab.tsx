@@ -1,12 +1,12 @@
 /**
  * agent 详情页「技能」Tab(skill.md §4.2 agent 绑定区):已绑定技能列表
  * (启用复选 + 名称 + 版本 + 自动触发开关 + 优先级 + 解绑),底部「从库中绑定」
- * 选择 workspace 级安装;含脚本技能标注 ⚠(执行受沙箱与已授予权限约束)。
+ * 选择 workspace 级安装;第三方来源技能以警示图标标注(执行受沙箱与已授予权限约束)。
  * 替换 MES-60 留下的占位(agent.md 范围说明)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, Select, useToast } from '../../design';
+import { Button, EmptyState, Icon, Select, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import {
@@ -114,12 +114,23 @@ export function AgentSkillsTab({
                   />
                 </td>
                 <td>
-                  {row.skill.source_type === 'url' || row.skill.source_type === 'marketplace' ? '⚠ ' : ''}
+                  {row.skill.source_type === 'url' || row.skill.source_type === 'marketplace' ? (
+                    <span
+                      className="mesh-skills__source-flag"
+                      title={t(`skills.source.${row.skill.source_type}`)}
+                    >
+                      <Icon name="warning" size={16} />
+                    </span>
+                  ) : null}
                   {row.skill.name}
                 </td>
                 <td>
                   {row.version}
-                  {row.install_status === 'updated_available' ? ` ↻ ${t('skills.updateAvailable')}` : ''}
+                  {row.install_status === 'updated_available' ? (
+                    <span className="mesh-skills__update-flag">
+                      <Icon name="cycle" size={16} /> {t('skills.updateAvailable')}
+                    </span>
+                  ) : null}
                 </td>
                 <td>
                   <input

@@ -6,6 +6,21 @@ import { useShortcutRegistry } from '../../shortcuts';
 import { useSettingsStore } from '../../state/settingsStore';
 import { registerShellShortcuts } from '../shortcutsRegistration';
 import type { ShellShortcutEnv, ShellShortcutLabels } from '../shortcutsRegistration';
+import { MeshApiClient } from '../../api/client';
+import { renderWithProviders } from '../../test-utils/render';
+import { WorkspaceProvider } from '../../workspace/WorkspaceProvider';
+import { OverlayControlsProvider } from '../AppShell';
+import { ShellShortcutsRegistrar } from '../shortcutsRegistration';
+
+vi.mock('../../api/favorites', () => ({
+  listFavorites: vi.fn(async () => []),
+  putFavorite: vi.fn(async () => undefined),
+  deleteFavorite: vi.fn(async () => undefined),
+}));
+vi.mock('../../features/inbox', () => ({
+  getCurrentInboxView: vi.fn(() => ({ workspaceId: 'ws-1', filter: 'all' })),
+  readAll: vi.fn(async () => undefined),
+}));
 
 const LABELS: ShellShortcutLabels = {
   nav: {
@@ -15,11 +30,11 @@ const LABELS: ShellShortcutLabels = {
     issues: 'Issues',
     board: 'Board',
     members: 'Members',
+    skills: 'Skills',
     chat: 'Chat',
     squads: 'Squads',
-    automation: 'Automation',
+    autopilots: 'Autopilots',
     runtimes: 'Runtimes',
-    skills: 'Skills',
     insights: 'Insights',
     approvals: 'Approvals',
     settings: 'Settings',
@@ -32,7 +47,7 @@ const LABELS: ShellShortcutLabels = {
     goInbox: 'Go to Inbox',
     goBoard: 'Go to Board',
     goMembers: 'Go to Members',
-    goAutomation: 'Go to Automation',
+    goAutopilot: 'Go to Autopilots',
     restoreOnboarding: 'Show the getting-started checklist again',
     help: 'Show shortcuts',
     copyDeepLink: 'Copy link to current page',
@@ -258,5 +273,167 @@ describe('registerShellShortcuts', () => {
     unregister();
     expect(useShortcutRegistry.getState().commands).toHaveLength(0);
     expect(useShortcutRegistry.getState().shortcuts).toHaveLength(0);
+  });
+});
+
+describe('动作类命令执行体(§6.19 收藏 / §3.2 全部已读 / §3.4 深链 / §6.10 审批 / §6.12 设置门控)', () => {
+  const ISSUE_UUID = '0c2f6a1e-1111-2222-3333-444455556666';
+
+  function register(): () => void {
+    const navigate = vi.fn();
+    const unregister = registerShellShortcuts(navigate, LABELS, ENV_ADMIN, OVERLAY);
+    return unregister;
+  }
+
+  function runCommand(id: string): void {
+    useShortcutRegistry.getState().commands.find((command) => command.id === id)?.run();
+  }
+
+  function runShortcut(id: string): void {
+    useShortcutRegistry.getState().shortcuts.find((def) => def.id === id)?.run();
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('copy.deep.link:复制 origin + 规范路径 + 查询串(§3.4)', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+    window.history.replaceState({}, '', '/w/acme/board?view=x');
+    const unregister = register();
+    runCommand('copy.deep.link');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText).toHaveBeenCalledWith(window.location.origin + '/w/acme/board?view=x');
+    unregister();
+  });
+
+  it('favorite.toggle:资源路径派生四类目标,未收藏 → put(§6.19)', async () => {
+    const { listFavorites, putFavorite } = await import('../../api/favorites');
+    const unregister = register();
+    const cases: ReadonlyArray<[string, string, string]> = [
+      [`/w/acme/issues/${ISSUE_UUID}`, 'issue', ISSUE_UUID],
+      ['/w/acme/projects/p-1', 'project', 'p-1'],
+      ['/w/acme/views/v-1', 'view', 'v-1'],
+      ['/w/acme/chat/c-1', 'chat_session', 'c-1'],
+    ];
+    for (const [path, type, id] of cases) {
+      window.history.replaceState({}, '', path);
+      vi.mocked(listFavorites).mockResolvedValue([]);
+      runCommand('favorite.toggle');
+      await vi.waitFor(() => expect(putFavorite).toHaveBeenCalledWith(expect.anything(), type, id));
+      vi.mocked(putFavorite).mockClear();
+    }
+    unregister();
+  });
+
+  it('favorite.toggle:已收藏 → delete 分支', async () => {
+    const { listFavorites, deleteFavorite } = await import('../../api/favorites');
+    const unregister = register();
+    window.history.replaceState({}, '', `/w/acme/issues/${ISSUE_UUID}`);
+    vi.mocked(listFavorites).mockResolvedValue([
+      { target_type: 'issue', target_id: ISSUE_UUID },
+    ]);
+    runCommand('favorite.toggle');
+    await vi.waitFor(() =>
+      expect(deleteFavorite).toHaveBeenCalledWith(expect.anything(), 'issue', ISSUE_UUID),
+    );
+    unregister();
+  });
+
+  it('favorite.toggle:非资源路径为空操作(不触收藏端点)', async () => {
+    const { putFavorite, deleteFavorite } = await import('../../api/favorites');
+    const unregister = register();
+    window.history.replaceState({}, '', '/w/acme/board');
+    runCommand('favorite.toggle');
+    await Promise.resolve();
+    expect(putFavorite).not.toHaveBeenCalled();
+    expect(deleteFavorite).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it('mark.all.read:随当前收件箱视图 filter 口径标记全部已读(comment-inbox.md §3.2)', async () => {
+    const { getCurrentInboxView, readAll } = await import('../../features/inbox');
+    const unregister = register();
+    runCommand('mark.all.read');
+    await vi.waitFor(() => expect(readAll).toHaveBeenCalled());
+    expect(getCurrentInboxView).toHaveBeenCalled();
+    unregister();
+  });
+
+  it('mark.all.read:视图无工作区上下文时静默空操作', async () => {
+    const { getCurrentInboxView, readAll } = await import('../../features/inbox');
+    vi.mocked(getCurrentInboxView).mockReturnValue({ workspaceId: null, filter: 'all' });
+    const unregister = register();
+    runCommand('mark.all.read');
+    await Promise.resolve();
+    expect(readAll).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it('approvals.open 与设置子页命令经深链导航(§6.10 / §6.12 门控)', () => {
+    const navigate = vi.fn();
+    const unregister = registerShellShortcuts(navigate, LABELS, ENV_ADMIN, OVERLAY);
+    runCommand('approvals.open');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/approvals');
+    runCommand('settings.open');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/settings');
+    unregister();
+  });
+
+  it('help 快捷键 run 经 overlay 开启帮助层', () => {
+    const openHelp = vi.fn();
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_ADMIN, { openHelp });
+    runShortcut('help');
+    expect(openHelp).toHaveBeenCalled();
+    unregister();
+  });
+});
+
+describe('ShellShortcutsRegistrar(工作区上下文门控注册编排)', () => {
+  beforeEach(() => {
+    useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+  });
+
+  it('工作区路由命中即注册命令;help.open 经 overlay 控制句柄开启帮助层', async () => {
+    const openHelp = vi.fn();
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          data: {
+            id: 'ws-1',
+            slug: 'acme',
+            name: 'Acme',
+            my_role: 'owner',
+            settings: { default_issue_view: 'board' },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => 'tok', fetchImpl });
+    renderWithProviders(
+      <OverlayControlsProvider
+        value={{ openPalette: () => undefined, openHelp, openSearch: () => undefined }}
+      >
+        <WorkspaceProvider slug="acme" client={client}>
+          <ShellShortcutsRegistrar />
+        </WorkspaceProvider>
+      </OverlayControlsProvider>,
+      { route: '/w/acme/board' },
+    );
+    let helpCommand: { run: () => void } | undefined;
+    await vi.waitFor(() => {
+      helpCommand = useShortcutRegistry
+        .getState()
+        .commands.find((command) => command.id === 'help.open');
+      expect(helpCommand).toBeDefined();
+    });
+    helpCommand?.run();
+    expect(openHelp).toHaveBeenCalled();
   });
 });

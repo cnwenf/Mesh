@@ -5,7 +5,7 @@
  * 纯展示 + 回调;数据获取/置顶落库在父级(ChatPage)。
  */
 import { useState } from 'react';
-import { Button, EmptyState, ErrorState, IconButton, Select, Skeleton } from '../../design';
+import { Button, EmptyState, ErrorState, Icon, IconButton, Select, Skeleton } from '../../design';
 import { formatRelativeTime, useT } from '../../i18n';
 import type { AgentSummary } from '../agents/types';
 import { EmptyChatBubbles } from '../onboarding/illustrations';
@@ -92,7 +92,11 @@ function SessionRow(props: SessionRowProps): React.JSX.Element {
         data-pinned={session.pinned}
         onClick={() => props.onTogglePin(session)}
       >
-        {session.pinned ? '★' : '☆'}
+        {session.pinned ? (
+          <Icon name="star" size={16} filled />
+        ) : (
+          <Icon name="star" size={16} />
+        )}
       </IconButton>
     </li>
   );

@@ -2,6 +2,7 @@
  * format.ts 展示层纯函数测试(integrations.md §4)。
  */
 import { describe, expect, it } from 'vitest';
+import { ICON_PATHS } from '../../../design';
 import {
   BINDING_STATUS_TONE,
   DELIVERY_STATE_TONE,
@@ -45,10 +46,15 @@ describe('tone maps', () => {
     expect(VCS_LINK_STATUS_TONE.deleted).toBe('neutral');
   });
 
-  it('maps every kind to an icon', () => {
-    expect(KIND_ICON.im_feishu).toBeTruthy();
-    expect(KIND_ICON.vcs_github).toBeTruthy();
-    expect(KIND_ICON.webhook_outbound).toBeTruthy();
+  it('maps every kind to a registered SVG icon name', () => {
+    expect(KIND_ICON.im_feishu).toBe('message');
+    expect(KIND_ICON.im_slack).toBe('chat');
+    expect(KIND_ICON.vcs_github).toBe('git-merge');
+    expect(KIND_ICON.vcs_gitlab).toBe('git-merge');
+    expect(KIND_ICON.webhook_outbound).toBe('upload');
+    for (const name of Object.values(KIND_ICON)) {
+      expect(Object.keys(ICON_PATHS)).toContain(name);
+    }
   });
 
   it('maps health states to semantic tones', () => {
