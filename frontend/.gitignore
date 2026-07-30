@@ -9,3 +9,4 @@ tsconfig.tsbuildinfo
 e2e/.members-context.json
 e2e/mes106/stack.env
 e2e/mes107/stack.env
+e2e/mes111-b4/stack.env

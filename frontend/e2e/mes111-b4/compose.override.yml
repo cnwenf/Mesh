@@ -1,0 +1,25 @@
+# MES-111 批次④ 验收栈覆盖层:production 鉴权 + 公网 HTTP 体验复现。
+#
+# 与 mes106/mes107 同形:api/gateway/worker 需 MESH_JWT_SECRET /
+# MESH_DEVICE_CODE_PEPPER(auth_mode=production 失败关闭)。其余生产参数
+# (MESH_AUTH_MODE=production / MESH_SESSION_COOKIE_SECURE=false)经 stack.env
+# 由主 compose 既有 ${VAR:-default} 插值消费。
+#
+# 用法(仓库根目录):
+#   ./frontend/e2e/mes111-b4/gen-stack-env.sh          # 生成强口令 stack.env(不入库)
+#   docker compose -p mes111-b4 \
+#     -f docker-compose.yml -f frontend/e2e/mes111-b4/compose.override.yml \
+#     --env-file frontend/e2e/mes111-b4/stack.env up -d --build
+#   npx playwright test --config playwright.mes111-b4.config.ts   # 在 frontend/ 下
+services:
+  api:
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (frontend/e2e/mes111-b4/gen-stack-env.sh)}
+  gateway:
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (frontend/e2e/mes111-b4/gen-stack-env.sh)}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required (frontend/e2e/mes111-b4/gen-stack-env.sh)}
+  worker:
+    environment:
+      MESH_JWT_SECRET: ${MESH_JWT_SECRET:?MESH_JWT_SECRET is required (frontend/e2e/mes111-b4/gen-stack-env.sh)}
+      MESH_DEVICE_CODE_PEPPER: ${MESH_DEVICE_CODE_PEPPER:?MESH_DEVICE_CODE_PEPPER is required (frontend/e2e/mes111-b4/gen-stack-env.sh)}

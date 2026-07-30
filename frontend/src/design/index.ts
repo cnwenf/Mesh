@@ -59,3 +59,13 @@ export type { TabItem, TabsProps } from './components/Tabs';
 export { Tooltip } from './components/Tooltip';
 export type { TooltipProps } from './components/Tooltip';
 export { focusableElements, trapTabKey, useFocusTrap } from './components/useFocusTrap';
+export { SettingsLayout } from './patterns/SettingsLayout';
+export type {
+  SettingsLayoutProps,
+  SettingsNavGroup,
+  SettingsNavItem,
+} from './patterns/SettingsLayout';
+export { SettingsSection } from './patterns/SettingsSection';
+export type { SettingsSectionProps, SettingsSectionTone } from './patterns/SettingsSection';
+export { SettingsFieldRow } from './patterns/SettingsFieldRow';
+export type { SettingsFieldRowProps } from './patterns/SettingsFieldRow';

@@ -1,17 +1,38 @@
 /**
- * 命令面板(Ctrl/Cmd+K 打开,README §6.12)。
+ * 命令面板(Ctrl/Cmd+K 打开,README §6.12 / search-command-palette.md §4)。
  *
- * - 命令来自 useShortcutRegistry;按 label + keywords 文本过滤;
- * - ArrowUp/Down 循环移动选择(aria-activedescendant + listbox/option),Enter 执行并关闭,
- *   Esc 关闭;点击选项同样执行(鼠标等价路径);
- * - 复用 Dialog 获得 role=dialog/aria-modal、焦点圈养与焦点归还;打开即聚焦搜索框;
- * - 全部文案经 prop(title/searchPlaceholder/emptyText/closeLabel),无硬编码可见字符串。
+ * - 本地命令同步过滤零延迟先渲染;实体结果经 usePaletteData(防抖/可取消/旧响应丢弃),
+ *   skeleton 不阻塞本地命令(design-quality §11.4 首开交互 ≤100ms);
+ * - 空 query 唯一数据流(§4.2.1):favorites → recents → 常用命令;有 query 六类分组 + 命令;
+ * - 键盘:↑↓ 循环移动、Enter 激活(keydown 瞬间捕获目标,§4.3.1 竞态安全)、
+ *   mod+Enter 新标签打开规范深链、Tab 补全选中标题、Esc 关闭(Dialog);
+ * - 异步补入按稳定 id 维持选择(§4.3.1);ARIA combobox/listbox + live region 播报结果数;
+ * - 异常态(§4.2):error 行 + 重试;offline 降级本地命令;no-results 语法提示 +
+ *   有 issue:write 者可见的「新建 issue」预填入口(不直接提交)。
+ *
+ * prop 面向后兼容:既有 {open,onClose,closeLabel,searchPlaceholder,emptyText,title,
+ * initialQuery} 语义不变;工作区/用户缺省经 usePaletteContext 自解析(App 层可显式覆盖)。
  */
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Dialog } from '../design/components/Dialog';
-import { useShortcutRegistry } from './registry';
-import type { ShortcutCommand } from './registry';
+import { useNavigate } from 'react-router';
+import { errorToI18nKey } from '../api/errors';
+import { Dialog, Kbd } from '../design';
+import { useT } from '../i18n';
+import { PaletteResults } from './PaletteResults';
+import {
+  activatePaletteOption,
+  flattenSections,
+  moveSelection,
+  reconcileSelection,
+} from './paletteModel';
+import type { PaletteOption } from './paletteModel';
+import { pushRecent, trackCommandUse } from './recents';
+import type { RecentEntry } from './recents';
+import { detectMac } from './ShortcutProvider';
+import { usePaletteContext } from './usePaletteContext';
+import { isOfflineCondition, usePaletteData } from './usePaletteData';
+import type { FavoritesProvider } from './usePaletteData';
 import './shortcuts.css';
 
 export interface CommandPaletteProps {
@@ -30,77 +51,230 @@ export interface CommandPaletteProps {
    * search-command-palette.md S1)。仅在 open 由 false→true 时读取;缺省为清空。
    */
   initialQuery?: string;
+  /** 工作区 id;缺省经 usePaletteContext(GET /users/me)自解析 */
+  workspaceId?: string | null;
+  /** 工作区 slug(规范深链组装备用;当前结果 url 由服务端给出) */
+  workspaceSlug?: string | null;
+  /** 当前用户 id(recents 三元组隔离);缺省自解析 */
+  userId?: string | null;
+  /** 当前工作区是否有 issue:write(no-results「新建 issue」门控);缺省按角色派生 */
+  canCreateIssue?: boolean;
+  /** no-results「新建 issue」动作:仅预填创建入口,不直接提交(§4.2) */
+  onOpenIssueCreate?: (query: string) => void;
+  /** favorites 数据源注入(测试);缺省 GET /api/v1/favorites(§6.19) */
+  favoritesProvider?: FavoritesProvider;
 }
 
-function optionId(commandId: string): string {
-  return `mesh-palette-option-${commandId}`;
+const SEARCH_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'issue',
+  'member',
+  'agent',
+  'project',
+  'view',
+  'chat_session',
+]);
+
+function subscribeOnline(callback: () => void): () => void {
+  window.addEventListener('online', callback);
+  window.addEventListener('offline', callback);
+  return () => {
+    window.removeEventListener('online', callback);
+    window.removeEventListener('offline', callback);
+  };
+}
+
+function getIsOnline(): boolean {
+  return typeof navigator === 'undefined' ? true : navigator.onLine;
+}
+
+/** 选项 → recent 条目(命令/实体/收藏与无 item 的对象选项) */
+function recentEntryForOption(option: PaletteOption, at: number): RecentEntry | null {
+  if (option.command !== undefined) {
+    return {
+      kind: 'command',
+      id: option.command.id,
+      commandId: option.command.id,
+      title: option.command.label,
+      at,
+    };
+  }
+  if (option.item !== undefined) {
+    return {
+      kind: 'object',
+      type: option.item.type,
+      id: option.item.id,
+      title: option.item.title,
+      url: option.url,
+      at,
+    };
+  }
+  if (option.url === undefined) {
+    return null;
+  }
+  // favorites / recents 组选项:stableId 形如 `fav:{type}:{id}` 或 `{type}:{id}`
+  const parts = option.stableId.split(':');
+  const rawType = parts[0] === 'fav' ? (parts[1] ?? '') : parts[0];
+  const type = SEARCH_ITEM_TYPES.has(rawType) ? (rawType as RecentEntry['type']) : undefined;
+  const id = parts[0] === 'fav' ? (parts[2] ?? '') : parts.slice(1).join(':');
+  if (id === '') {
+    return null;
+  }
+  return { kind: 'object', type, id, title: option.title, url: option.url, at };
 }
 
 export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | null {
-  const { open, onClose, closeLabel, searchPlaceholder, emptyText, title, initialQuery } = props;
-  const commands = useShortcutRegistry((state) => state.commands);
+  const {
+    open,
+    onClose,
+    closeLabel,
+    searchPlaceholder,
+    emptyText,
+    title,
+    initialQuery,
+    favoritesProvider,
+  } = props;
+  // 注:workspaceSlug 为附加公开 prop(规范深链组装备用);当前结果 url 由服务端
+  // 规范深链给出,渲染不消费它(保留 prop 面以便 App 层显式传入,见接线说明)。
+  const t = useT();
+  const navigate = useNavigate();
+  const context = usePaletteContext();
+  const workspaceId = props.workspaceId !== undefined ? props.workspaceId : context.workspaceId;
+  const userId = props.userId !== undefined ? props.userId : context.userId;
+  const canCreateIssue =
+    props.canCreateIssue ?? (context.role !== null && context.role !== 'guest');
+
   const [query, setQuery] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  const lastIndexRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listId = useId();
+  const isOnline = useSyncExternalStore(subscribeOnline, getIsOnline, () => true);
 
-  const filtered = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (normalized.length === 0) {
-      return commands;
-    }
-    return commands.filter(
-      (command) =>
-        command.label.toLowerCase().includes(normalized) ||
-        (command.keywords ?? []).some((keyword) => keyword.toLowerCase().includes(normalized)),
-    );
-  }, [commands, query]);
+  const data = usePaletteData({
+    workspaceId,
+    userId,
+    query,
+    enabled: open && isOnline,
+    favoritesProvider,
+  });
+
+  const flat = useMemo(() => flattenSections(data.sections), [data.sections]);
+  const selection = useMemo(
+    () => reconcileSelection(flat, selectedId, lastIndexRef.current),
+    [flat, selectedId],
+  );
+  useEffect(() => {
+    lastIndexRef.current = selection.index < 0 ? 0 : selection.index;
+  }, [selection.index]);
+
+  const trimmed = query.trim();
 
   useEffect(() => {
     if (open) {
       setQuery(initialQuery ?? '');
+      setSelectedId(null);
+      lastIndexRef.current = 0;
       inputRef.current?.focus();
     }
   }, [open, initialQuery]);
 
   useEffect(() => {
-    setSelectedIndex(0);
+    setSelectedId(null);
   }, [query]);
+
+  // live region:每次检索落地播报结果数(§9.6 第 7 点)
+  useEffect(() => {
+    if (!open) {
+      setAnnouncement('');
+      return;
+    }
+    if (data.isSearching) {
+      return;
+    }
+    setAnnouncement(t('search.resultsCount', { count: data.flatCount }));
+  }, [open, data.isSearching, data.settledToken, data.flatCount, t]);
 
   if (!open) {
     return null;
   }
 
-  const runCommand = (command: ShortcutCommand): void => {
-    command.run();
+  const offline = isOfflineCondition(isOnline, data.error);
+  const showNoResults =
+    trimmed !== '' && data.flatCount === 0 && !data.isSearching && data.error === null;
+  const activeDescendant =
+    selection.stableId !== null ? `palette-opt-${selection.stableId}` : undefined;
+
+  const handleActivate = (option: PaletteOption, opts: { newTab: boolean }): void => {
+    activatePaletteOption(
+      option,
+      {
+        navigate,
+        openExternal: (url) => {
+          window.open(url, '_blank', 'noopener');
+        },
+        recordRecent: (target) => {
+          const entry = recentEntryForOption(target, Date.now());
+          if (entry !== null) {
+            pushRecent(entry);
+          }
+        },
+        recordCommandUse: trackCommandUse,
+        onAfter: () => {
+          data.noteLocalChange();
+          onClose();
+        },
+      },
+      opts,
+    );
+  };
+
+  const handleCreateIssue = (): void => {
+    if (props.onOpenIssueCreate !== undefined) {
+      props.onOpenIssueCreate(trimmed);
+      return;
+    }
+    navigate(`/issues?create=1&title=${encodeURIComponent(trimmed)}`);
     onClose();
   };
 
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      if (filtered.length > 0) {
-        setSelectedIndex((index) => (index + 1) % filtered.length);
-      }
-    } else if (event.key === 'ArrowUp') {
+      setSelectedId(moveSelection(flat, selection.stableId, 1));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
       event.preventDefault();
-      if (filtered.length > 0) {
-        setSelectedIndex((index) => (index - 1 + filtered.length) % filtered.length);
-      }
-    } else if (event.key === 'Enter') {
+      setSelectedId(moveSelection(flat, selection.stableId, -1));
+      return;
+    }
+    if (event.key === 'Enter') {
       event.preventDefault();
-      const command = filtered[selectedIndex];
-      if (command) {
-        runCommand(command);
+      const target = selection.index >= 0 ? flat[selection.index] : undefined;
+      if (target === undefined) {
+        return; // 无选项:不关闭不执行(既有语义)
+      }
+      const modPressed = detectMac() ? event.metaKey : event.ctrlKey;
+      handleActivate(target, { newTab: modPressed && target.url !== undefined });
+      return;
+    }
+    if (event.key === 'Tab') {
+      const target = selection.index >= 0 ? flat[selection.index] : undefined;
+      if (target !== undefined) {
+        event.preventDefault();
+        event.stopPropagation(); // 先于 Dialog 焦点圈养消费 Tab
+        setQuery(target.title);
       }
     }
   };
 
-  const selectedCommand = filtered[selectedIndex];
-
   return (
     <Dialog open={open} onClose={onClose} title={title} closeLabel={closeLabel}>
       <div className="mesh-palette">
+        {data.isSearching && trimmed !== '' ? (
+          <div className="mesh-palette__progress" aria-hidden="true" />
+        ) : null}
         <input
           ref={inputRef}
           type="text"
@@ -110,35 +284,81 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleInputKeyDown}
-          aria-expanded={filtered.length > 0}
+          aria-expanded={data.flatCount > 0}
           aria-controls={listId}
-          aria-activedescendant={selectedCommand ? optionId(selectedCommand.id) : undefined}
+          aria-activedescendant={activeDescendant}
           autoComplete="off"
         />
-        {filtered.length === 0 ? (
+        {trimmed === '' && data.flatCount === 0 ? (
           <p className="mesh-palette__empty">{emptyText}</p>
-        ) : (
-          <ul id={listId} role="listbox" className="mesh-palette__list" aria-label={title}>
-            {filtered.map((command, index) => (
-              <li
-                key={command.id}
-                id={optionId(command.id)}
-                role="option"
-                aria-selected={index === selectedIndex}
-                className={
-                  index === selectedIndex
-                    ? 'mesh-palette__option mesh-palette__option--active'
-                    : 'mesh-palette__option'
-                }
-                onMouseEnter={() => setSelectedIndex(index)}
-                onClick={() => runCommand(command)}
+        ) : null}
+        {trimmed !== '' && offline ? (
+          <p className="mesh-palette__offline" data-testid="palette-offline">
+            {t('search.offlineNote')}
+          </p>
+        ) : null}
+        {trimmed !== '' && !offline && data.error !== null ? (
+          <div className="mesh-palette__error" role="alert" data-testid="palette-error">
+            <span>{t(errorToI18nKey(data.error))}</span>
+            <button type="button" className="mesh-palette__retry" onClick={data.retry}>
+              {t('search.retry')}
+            </button>
+          </div>
+        ) : null}
+        {data.flatCount > 0 ? (
+          <PaletteResults
+            sections={data.sections}
+            selectedStableId={selection.stableId}
+            onOptionHover={setSelectedId}
+            onOptionActivate={handleActivate}
+            isSearching={data.isSearching && trimmed !== ''}
+            skeletonLabel={t('search.loading')}
+            listId={listId}
+            listLabel={title}
+          />
+        ) : null}
+        {showNoResults ? (
+          <div className="mesh-palette__no-results" data-testid="palette-no-results">
+            <p className="mesh-palette__empty">{emptyText}</p>
+            <p className="mesh-palette__no-results-title">{t('search.noResults', { q: trimmed })}</p>
+            <p className="mesh-palette__no-results-hints">{t('search.noResultsHints')}</p>
+            {canCreateIssue ? (
+              <button
+                type="button"
+                className="mesh-palette__create"
+                data-testid="palette-create-issue"
+                onClick={handleCreateIssue}
               >
-                {command.label}
-              </li>
-            ))}
-          </ul>
-        )}
+                {t('search.createIssue', { q: trimmed })}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        <div aria-live="polite" className="sr-only" data-testid="palette-live">
+          {announcement}
+        </div>
+        <div className="mesh-palette__footer">
+          <span className="mesh-palette__hint">
+            <Kbd>↑</Kbd>
+            <Kbd>↓</Kbd>
+            {t('search.hintNav')}
+          </span>
+          <span className="mesh-palette__hint">
+            <Kbd>Enter</Kbd>
+            {t('search.hintEnter')}
+          </span>
+          <span className="mesh-palette__hint">
+            <Kbd>Tab</Kbd>
+            {t('search.hintTab')}
+          </span>
+          <span className="mesh-palette__hint">
+            <Kbd>?</Kbd>
+            {t('search.hintHelp')}
+          </span>
+        </div>
       </div>
     </Dialog>
   );
 }
+
+export type { FavoritesProvider };

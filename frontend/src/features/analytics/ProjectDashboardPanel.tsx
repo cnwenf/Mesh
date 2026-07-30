@@ -1,11 +1,16 @@
 /**
  * 项目仪表盘页签(analytics.md §4.2):velocity + burndown + cycle time,
  * 时间范围预设切换即重查。burndown 的 count/points 切换单独重查该端点。
+ * 图表经 ChartFrame 统一外壳(标题 + 图例:文字 + 线型/色块,颜色非唯一信号);
+ * cycle time 数值走 KPI 条(tabular + 口径 hint),insufficient 诚实标注(§4.6)。
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { MeshApiClient } from '../../api';
 import { EmptyState, ErrorState, Skeleton } from '../../design';
 import { useT } from '../../i18n';
+import { ChartFrame } from './ChartFrame';
+import { Kpi } from './Kpi';
+import { KpiStrip } from './KpiStrip';
 import { fetchBurndown, fetchProjectDashboard } from './api';
 import { GroupedBarChart, LineChart } from './charts';
 import { formatDurationSeconds, windowEndIso, windowStartIso } from './format';
@@ -19,6 +24,28 @@ export interface ProjectDashboardPanelProps {
   readonly client: MeshApiClient;
   readonly workspaceId: string;
   readonly projectId: string;
+}
+
+/** burndown 理想线(虚线)与实际线(实线)序列;线型即信号(§4.5)。 */
+function burndownSeriesOf(
+  burndown: BurndownData | null,
+  idealLabel: string,
+  actualLabel: string,
+): Parameters<typeof LineChart>[0]['series'] {
+  if (burndown === null) return [];
+  return [
+    {
+      name: idealLabel,
+      colorToken: 'neutral' as const,
+      dashed: true,
+      points: burndown.ideal.map((p, i) => ({ x: i, y: p.remaining })),
+    },
+    {
+      name: actualLabel,
+      colorToken: 'info' as const,
+      points: burndown.actual.map((p, i) => ({ x: i, y: p.remaining })),
+    },
+  ];
 }
 
 export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.JSX.Element {
@@ -88,6 +115,8 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
   }
 
   const burndown = burndownOverride ?? data.burndown;
+  const idealLabel = t('analytics.burndown.ideal');
+  const actualLabel = t('analytics.burndown.actual');
   const velocityGroups = data.velocity.cycles.map((cycle) => ({
     label: cycle.name,
     bars: [
@@ -103,23 +132,6 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
       },
     ],
   }));
-
-  const burndownSeries =
-    burndown !== null
-      ? [
-          {
-            name: t('analytics.burndown.ideal'),
-            colorToken: 'neutral' as const,
-            dashed: true,
-            points: burndown.ideal.map((p, i) => ({ x: i, y: p.remaining })),
-          },
-          {
-            name: t('analytics.burndown.actual'),
-            colorToken: 'info' as const,
-            points: burndown.actual.map((p, i) => ({ x: i, y: p.remaining })),
-          },
-        ]
-      : [];
 
   return (
     <div className="mesh-analytics__grid-layout" data-testid="project-dashboard">
@@ -140,20 +152,38 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
         </label>
       </div>
 
-      <section className="mesh-analytics__card" data-testid="project-dashboard-velocity">
-        <h2 className="mesh-analytics__card-title">{t('analytics.velocity.title')}</h2>
+      <ChartFrame
+        testId="project-dashboard-velocity"
+        title={t('analytics.velocity.title')}
+        legend={[
+          { label: t('analytics.velocity.issues'), colorToken: 'info', mark: 'bar' },
+          { label: t('analytics.velocity.points'), colorToken: 'success', mark: 'bar' },
+        ]}
+        note={t('analytics.caliber.currentAttribution')}
+      >
         {velocityGroups.length === 0 ? (
           <EmptyState title={t('analytics.state.noData')} />
         ) : (
-          <GroupedBarChart groups={velocityGroups} ariaLabel={t('analytics.velocity.chartAria')} />
+          <GroupedBarChart
+            groups={velocityGroups}
+            ariaLabel={t('analytics.velocity.chartAria')}
+          />
         )}
-        <p className="mesh-analytics__card-note">
-          {t('analytics.caliber.currentAttribution')}
-        </p>
-      </section>
+      </ChartFrame>
 
-      <section className="mesh-analytics__card" data-testid="project-dashboard-burndown">
-        <h2 className="mesh-analytics__card-title">{t('analytics.burndown.title')}</h2>
+      <ChartFrame
+        testId="project-dashboard-burndown"
+        title={t('analytics.burndown.title')}
+        legend={
+          burndown !== null
+            ? [
+                { label: idealLabel, colorToken: 'neutral', lineStyle: 'dashed' as const },
+                { label: actualLabel, colorToken: 'info', lineStyle: 'solid' as const },
+              ]
+            : []
+        }
+        note={burndown !== null ? t('analytics.caliber.currentAttribution') : undefined}
+      >
         {burndown === null ? (
           <EmptyState title={t('analytics.burndown.noScope')} />
         ) : (
@@ -171,57 +201,38 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
                 </select>
               </label>
               <span className="mesh-analytics__card-note">
-                {t('analytics.burndown.total', { total: burndown.total })}
+                <span className="mesh-tnum">{t('analytics.burndown.total', { total: burndown.total })}</span>
               </span>
             </div>
             <LineChart
-              series={burndownSeries}
+              series={burndownSeriesOf(burndown, idealLabel, actualLabel)}
               xLabels={burndown.ideal.map((p) => p.date.slice(5))}
               ariaLabel={t('analytics.burndown.chartAria')}
             />
-            <div className="mesh-analytics__legend">
-              <span className="mesh-analytics__legend-item">
-                <span
-                  className="mesh-analytics__legend-swatch mesh-analytics__legend-swatch--dashed"
-                  style={{ borderTopColor: 'var(--color-text-muted)' }}
-                />
-                {t('analytics.burndown.ideal')}
-              </span>
-              <span className="mesh-analytics__legend-item">
-                <span
-                  className="mesh-analytics__legend-swatch"
-                  style={{ borderTopColor: 'var(--color-info)' }}
-                />
-                {t('analytics.burndown.actual')}
-              </span>
-            </div>
-            <p className="mesh-analytics__card-note">
-              {t('analytics.caliber.currentAttribution')}
-            </p>
           </>
         )}
-      </section>
+      </ChartFrame>
 
-      <section className="mesh-analytics__card" data-testid="project-dashboard-cycletime">
-        <h2 className="mesh-analytics__card-title">{t('analytics.cycleTime.title')}</h2>
-        <div className="mesh-analytics__kpi-row">
-          <div className="mesh-analytics__kpi">
-            <p className="mesh-analytics__kpi-label">{t('analytics.cycleTime.p50')}</p>
-            <p className="mesh-analytics__kpi-value">
-              {formatDurationSeconds(data.cycle_time.p50_seconds)}
-            </p>
-          </div>
-          <div className="mesh-analytics__kpi">
-            <p className="mesh-analytics__kpi-label">{t('analytics.cycleTime.p90')}</p>
-            <p className="mesh-analytics__kpi-value">
-              {formatDurationSeconds(data.cycle_time.p90_seconds)}
-            </p>
-          </div>
-          <div className="mesh-analytics__kpi">
-            <p className="mesh-analytics__kpi-label">{t('analytics.cycleTime.sample')}</p>
-            <p className="mesh-analytics__kpi-value">{data.cycle_time.sample_size}</p>
-          </div>
-        </div>
+      <ChartFrame testId="project-dashboard-cycletime" title={t('analytics.cycleTime.title')}>
+        <KpiStrip>
+          <Kpi
+            label={t('analytics.cycleTime.p50')}
+            value={formatDurationSeconds(data.cycle_time.p50_seconds)}
+            hint={t('analytics.cycleTime.caliberHint')}
+            tabular={false}
+          />
+          <Kpi
+            label={t('analytics.cycleTime.p90')}
+            value={formatDurationSeconds(data.cycle_time.p90_seconds)}
+            hint={t('analytics.cycleTime.caliberHint')}
+            tabular={false}
+          />
+          <Kpi
+            label={t('analytics.cycleTime.sample')}
+            value={data.cycle_time.sample_size}
+            hint={t('analytics.cycleTime.caliberHint')}
+          />
+        </KpiStrip>
         {data.cycle_time.meta.insufficient_data > 0 ? (
           <p className="mesh-analytics__card-note" data-testid="project-dashboard-insufficient">
             {t('analytics.cycleTime.insufficient', {
@@ -229,7 +240,7 @@ export function ProjectDashboardPanel(props: ProjectDashboardPanelProps): React.
             })}
           </p>
         ) : null}
-      </section>
+      </ChartFrame>
     </div>
   );
 }

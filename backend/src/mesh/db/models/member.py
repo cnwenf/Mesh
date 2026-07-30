@@ -50,6 +50,12 @@ class Member(Base):
     role: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'member'"))
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     display_override: Mapped[str | None] = mapped_column(TEXT, default=None)
+    # Search-only projection = public.mesh_search_norm(README §6.1 display-name
+    # resolution chain). NEVER used for rendering; kept in sync by database
+    # triggers (migration 0034, search-command-palette.md §2.2).
+    search_name: Mapped[str] = mapped_column(
+        TEXT, nullable=False, server_default=text("''")
+    )
     joined_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     disabled_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(

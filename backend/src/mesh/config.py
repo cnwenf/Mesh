@@ -467,6 +467,15 @@ class Settings(BaseSettings):
         default=timedelta(seconds=300), gt=0
     )
 
+    # -- Search module (search-command-palette.md §3.2) ----------------------
+    # HMAC key for the signed, query-bound search cursor. Optional: when
+    # unset the service falls back to ``jwt_secret`` (the existing server
+    # signing key) so cursors survive restarts / multi-replica deployments
+    # with zero extra configuration; the override exists to decouple cursor
+    # signatures from token signing. A process-random last resort (documented
+    # in mesh.search.cursor) applies only if both are somehow absent.
+    search_cursor_secret: str | None = None
+
     # -- Analytics module (analytics.md §2.5/§2.6) ------------------------------
     # Snapshot freshness: a cached aggregate older than this is recomputed
     # (§2.6 default 15 min; ``workload`` is never cached).

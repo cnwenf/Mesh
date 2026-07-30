@@ -7,6 +7,8 @@ import { useEffect, useState } from 'react';
 import type { MeshApiClient } from '../../api';
 import { Skeleton } from '../../design';
 import { useT } from '../../i18n';
+import { Kpi } from './Kpi';
+import { KpiStrip } from './KpiStrip';
 import { fetchAgentStats } from './api';
 import { formatDurationSeconds, formatRate, rateTone, windowEndIso, windowStartIso } from './format';
 import type { AgentStatsRow } from './types';
@@ -76,38 +78,42 @@ export function AgentStatsCard(props: AgentStatsCardProps): React.JSX.Element {
   }
 
   const tone = rateTone(stats.success_rate);
+  const kpiTone = tone === 'success' ? 'success' : tone === 'warn' ? 'warning' : 'danger';
   const coverage = stats.tokens.token_coverage;
+  // KPI 口径:近 30 天窗(本卡固定窗口,§4.4),大数字不孤立。
+  const windowHint = t('analytics.agents.windowHint');
 
   return (
     <section className="mesh-analytics__card" data-testid="agent-stats-card">
       <h2 className="mesh-analytics__card-title">{t('analytics.agents.cardTitle')}</h2>
-      <div className="mesh-analytics__kpi-row">
-        <div className="mesh-analytics__kpi">
-          <p className="mesh-analytics__kpi-label">{t('analytics.agents.successRate')}</p>
-          <p className={`mesh-analytics__kpi-value mesh-analytics__kpi-value--${tone}`}>
-            {formatRate(stats.success_rate)}
-          </p>
-        </div>
-        <div className="mesh-analytics__kpi">
-          <p className="mesh-analytics__kpi-label">{t('analytics.agents.avgDuration')}</p>
-          <p className="mesh-analytics__kpi-value">
-            {formatDurationSeconds(stats.avg_duration_seconds)}
-          </p>
-        </div>
-        <div className="mesh-analytics__kpi">
-          <p className="mesh-analytics__kpi-label">{t('analytics.agents.retryRate')}</p>
-          <p className="mesh-analytics__kpi-value">{formatRate(stats.retry_rate)}</p>
-        </div>
-        <div className="mesh-analytics__kpi">
-          <p className="mesh-analytics__kpi-label">{t('analytics.agents.timeoutRate')}</p>
-          <p className="mesh-analytics__kpi-value">{formatRate(stats.timeout_rate)}</p>
-        </div>
-      </div>
+      <KpiStrip>
+        <Kpi
+          label={t('analytics.agents.successRate')}
+          value={formatRate(stats.success_rate)}
+          tone={kpiTone}
+          hint={windowHint}
+        />
+        <Kpi
+          label={t('analytics.agents.avgDuration')}
+          value={formatDurationSeconds(stats.avg_duration_seconds)}
+          hint={windowHint}
+        />
+        <Kpi
+          label={t('analytics.agents.retryRate')}
+          value={formatRate(stats.retry_rate)}
+          hint={windowHint}
+        />
+        <Kpi
+          label={t('analytics.agents.timeoutRate')}
+          value={formatRate(stats.timeout_rate)}
+          hint={windowHint}
+        />
+      </KpiStrip>
       <p className="mesh-analytics__card-note" data-testid="agent-stats-executions">
         {t('analytics.agents.executionsCount', { count: stats.executions })}
       </p>
       <p className="mesh-analytics__card-note">
-        {t('analytics.agents.tokens', { total: stats.tokens.total_tokens })}
+        <span className="mesh-tnum">{t('analytics.agents.tokens', { total: stats.tokens.total_tokens })}</span>
       </p>
       {coverage !== null && coverage < 1 ? (
         <p className="mesh-analytics__token-note" data-testid="agent-stats-token-note">

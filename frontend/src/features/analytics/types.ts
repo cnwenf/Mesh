@@ -129,7 +129,11 @@ export interface WorkspaceDashboardData {
   readonly throughput: ThroughputData;
   readonly workload: WorkloadEnvelope;
   readonly agent_stats: AgentStatsMulti;
-  readonly meta: { readonly visibility_filtered: boolean };
+  readonly meta: {
+    readonly visibility_filtered: boolean;
+    /** 口径回显时区(若顶层未给,UI 回退 throughput.meta.calendar_timezone) */
+    readonly display_timezone?: string;
+  };
 }
 
 /** GET /dashboards/project/{id} (§4.2) */
