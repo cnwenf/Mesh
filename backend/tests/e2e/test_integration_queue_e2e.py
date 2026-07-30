@@ -430,7 +430,18 @@ async def test_queue_endpoints_list_summary_cancel(api_client, queue_worker, ses
         items = await _items(session_factory, world["ws_id"])
         return items if len(items) == 2 and items[0].state == "processing" else None
 
-    await poll_until(_m1_processing, timeout=15)
+    # The wait result is ASSERTED, not discarded: a silent timeout would
+    # otherwise cascade into the endpoint assertions below with both items
+    # still pending — a misleading "wrong excerpt" failure instead of the
+    # true root point (the serial dispatch never happened). The window
+    # covers the 1s-tick + relay-claim chain under a saturated CI runner
+    # (the 4000+-test serial suite); healthy dispatch lands in ~2-4s.
+    items = await poll_until(_m1_processing, timeout=30)
+    assert items is not None, (
+        "serial dispatcher never moved the first item to processing within "
+        "30s — the endpoint assertions below require the {processing, "
+        "pending} pair this wait establishes"
+    )
     ws = world["ws_id"]
     integ = world["integration_id"]
     headers = _auth(world["token"])
