@@ -51,7 +51,8 @@ test.describe('手机可达性 @390×844', () => {
       'squads',
       'cycles',
       'autopilots',
-      'automation',
+      // MES-115:含糊旧键 automation 清偿为明确的 runtimes(§4.1 运行环境独立入口)
+      'runtimes',
       'insights',
       'integrations',
       'settings',
