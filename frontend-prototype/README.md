@@ -20,6 +20,7 @@
 
 - 点击左侧导航或移动端底栏切换页面。
 - 按 `⌘/Ctrl + K` 打开全局命令面板，按 `C` 新建 Issue。
+- 看板列头的 `⋯` 可打开列菜单，`+` 可直接新建 Issue。
 - 新建 Issue 后可在看板中拖动卡片跨列移动。
 - 在 `Settings → Preferences → Theme` 切换 Light、Dark 或 System。
 - 点击工作区名称切换或创建工作区。

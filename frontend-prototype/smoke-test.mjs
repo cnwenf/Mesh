@@ -75,11 +75,25 @@ checks.push("offline-font");
 const initial = await evaluate(`({
   title: document.title,
   boardColumns: document.querySelectorAll("[data-drop-column]").length,
-  emptyColumns: document.querySelectorAll(".board-empty").length
+  emptyColumns: document.querySelectorAll(".board-empty").length,
+  columnDots: document.querySelectorAll(".board-column__dot").length,
+  columnActions: document.querySelectorAll("[data-board-action]").length,
+  dotColors: [...document.querySelectorAll(".board-column__dot")].map((dot) => getComputedStyle(dot).color)
 })`);
 assert(initial.title === "Issues · Mesh", "Issue page title did not render.");
 assert(initial.boardColumns === 4, "Default issue board is incomplete.");
 assert(initial.emptyColumns === 4, "Default issue board should show four empty states.");
+assert(initial.columnDots === 4, "Issue board column status dots are incomplete.");
+assert(initial.columnActions === 8, "Issue board column actions are incomplete.");
+assert(initial.dotColors[0] === initial.dotColors[1], "Neutral issue statuses should share a dot color.");
+assert(initial.dotColors[2] !== initial.dotColors[0], "In Progress is missing its warning status color.");
+assert(initial.dotColors[3] !== initial.dotColors[2], "In Review is missing its success status color.");
+await evaluate(`document.querySelector('[data-board-action="more"]').click()`);
+assert(await evaluate(`Boolean(document.querySelector(".board-menu"))`), "Board column more action did not open its menu.");
+await evaluate(`document.querySelector(".board-menu-layer").click()`);
+await evaluate(`document.querySelector('[data-board-action="add"]').click()`);
+assert(await evaluate(`Boolean(document.querySelector('[data-form="create-issue"]'))`), "Board column add action did not open issue creation.");
+await evaluate(`document.querySelector('[data-action="close-overlay"]').click()`);
 checks.push("issue-board");
 
 await evaluate(`document.querySelector('[data-action="open-command"]').click()`);

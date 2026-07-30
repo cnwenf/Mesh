@@ -457,7 +457,15 @@
           ${columns
             .map(
               ([key, label, tone]) => `<section class="board-column ${tone}" data-drop-column="${key}">
-                <header class="board-column__head"><span>${label}</span><span class="board-column__count">${state.board[key].length}</span></header>
+                <header class="board-column__head">
+                  <span class="board-column__dot" aria-hidden="true"></span>
+                  <span>${label}</span>
+                  <span class="board-column__count">${state.board[key].length}</span>
+                  <span class="board-column__actions">
+                    <button class="board-column__action" type="button" aria-label="More ${label} actions" data-action="board-column-menu" data-board-action="more" data-column-label="${label}">${icon("more", "icon--sm")}</button>
+                    <button class="board-column__action" type="button" aria-label="Add issue to ${label}" data-action="open-create-issue" data-board-action="add">${icon("plus", "icon--sm")}</button>
+                  </span>
+                </header>
                 <div class="board-stack">
                   ${
                     state.board[key].length
@@ -1115,6 +1123,20 @@
     overlayRoot.innerHTML = "";
   }
 
+  function boardColumnMenu(anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const width = 176;
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
+    const top = Math.min(window.innerHeight - 108, rect.bottom + 5);
+    const label = escapeHtml(anchor.dataset.columnLabel);
+    overlayRoot.innerHTML = `<div class="board-menu-layer" data-action="close-overlay">
+      <div class="board-menu" role="menu" aria-label="${label} column menu" data-dialog style="left:${left}px;top:${top}px">
+        <button type="button" role="menuitem" data-action="open-create-issue">${icon("plus", "icon--sm")}Add issue</button>
+        <button type="button" role="menuitem" data-action="column-settings">${icon("settings", "icon--sm")}Column settings</button>
+      </div>
+    </div>`;
+  }
+
   function openDialog(content, className = "") {
     overlayRoot.innerHTML = `<div class="overlay-backdrop" data-action="close-overlay"><section class="dialog ${className}" role="dialog" aria-modal="true" data-dialog>${content}</section></div>`;
     const autofocus = overlayRoot.querySelector("[autofocus]");
@@ -1266,6 +1288,7 @@
         showToast(theme === "dark" ? "已切换到暗色主题" : "已切换到亮色主题");
       },
       "open-create-issue": createIssueDialog,
+      "board-column-menu": () => boardColumnMenu(actionTarget),
       "open-workspaces": workspaceDialog,
       "create-workspace": createWorkspaceDialog,
       "close-overlay": closeOverlay,
@@ -1386,7 +1409,12 @@
     if (actionTarget.dataset.action === "close-overlay" && !event.target.closest("[data-dialog]")) closeOverlay();
     else if (actionTarget.dataset.action === "close-overlay") closeOverlay();
     else if (actionTarget.dataset.action === "open-workspaces") workspaceDialog();
+    else if (actionTarget.dataset.action === "open-create-issue") createIssueDialog();
     else if (actionTarget.dataset.action === "create-workspace") createWorkspaceDialog();
+    else if (actionTarget.dataset.action === "column-settings") {
+      closeOverlay();
+      showToast("Column settings", "Status automation and limits are ready to configure.");
+    }
     else if (actionTarget.dataset.action === "workspace-settings") {
       state.settingsTab = "general";
       closeOverlay();
