@@ -266,45 +266,68 @@ class TestConcurrentRollback:
         """MES-96 P1-1: two attempts provision concurrently; a handshake
         failure injected into A must roll back ONLY A's process. The shared
         ``SandboxManager`` may not let A's rollback reach across and kill B's
-        already-spawned sandbox (the cascading double sandbox_violation)."""
+        already-spawned sandbox (the cascading double sandbox_violation).
+
+        The property measured is rollback isolation: B completing with a live
+        process while A's rollback ran concurrently. On a saturated CI host
+        B's REAL kernel handshake can independently exceed its per-stage
+        deadline (``sandbox handshake timeout``) — an environmental class the
+        pre-fix bug did NOT produce (it killed B's process, surfacing as
+        ``nsenter: cannot open /proc/...`` / dead-proc asserts). Such timeout
+        attempts are retried so the assertions measure exactly the race under
+        test; any OTHER failure mode fails immediately."""
         import asyncio
 
-        spec_a = make_spec(
-            tmp_path / "a", attempt_id="attempt-a-concurrent", argv=("/bin/sleep", "2")
-        )
-        spec_b = make_spec(
-            tmp_path / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
-        )
-        real_handshake = manager._handshake
-        # Deterministic overlap: A's injected failure fires only AFTER B's
-        # handshake has begun (B's proc is spawned and parked in B's own
-        # created[] slot by then) — a fixed sleep would make the pre-fix
-        # regression flaky under load.
-        b_handshake_started = asyncio.Event()
+        last_env_failure: object = None
+        for _ in range(5):
+            spec_a = make_spec(
+                tmp_path / "a", attempt_id="attempt-a-concurrent", argv=("/bin/sleep", "2")
+            )
+            spec_b = make_spec(
+                tmp_path / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
+            )
+            real_handshake = manager._handshake
+            # Deterministic overlap: A's injected failure fires only AFTER B's
+            # handshake has begun (B's proc is spawned and parked in B's own
+            # created[] slot by then) — a fixed sleep would make the pre-fix
+            # regression flaky under load.
+            b_handshake_started = asyncio.Event()
 
-        async def flaky_handshake(spec, **kw):
-            if spec.attempt_id == "attempt-a-concurrent":
-                await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
-                raise SandboxUnavailableError("injected handshake failure")
-            b_handshake_started.set()
-            return await real_handshake(spec, **kw)
+            async def flaky_handshake(spec, **kw):
+                if spec.attempt_id == "attempt-a-concurrent":
+                    await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
+                    raise SandboxUnavailableError("injected handshake failure")
+                b_handshake_started.set()
+                return await real_handshake(spec, **kw)
 
-        manager._handshake = flaky_handshake
-        results = await asyncio.gather(
-            manager.provision(spec_a),
-            manager.provision(spec_b),
-            return_exceptions=True,
+            manager._handshake = flaky_handshake
+            results = await asyncio.gather(
+                manager.provision(spec_a),
+                manager.provision(spec_b),
+                return_exceptions=True,
+            )
+            handle_b = results[1]
+            if (
+                isinstance(handle_b, SandboxUnavailableError)
+                and "handshake timeout" in str(handle_b)
+            ):
+                last_env_failure = handle_b
+                manager._handshake = real_handshake
+                continue  # host load starvation — not the race under test
+            assert isinstance(results[0], SandboxUnavailableError)
+            assert not isinstance(handle_b, BaseException)
+            # B's sandbox process was NOT killed by A's rollback.
+            assert handle_b.proc.returncode is None
+            # A is gone from the live handles (its own process reaped, no orphan).
+            assert all(
+                h.attempt_id != "attempt-a-concurrent" for h in manager._handles.values()
+            )
+            await manager.destroy(handle_b)
+            return
+        raise AssertionError(
+            f"B's handshake timed out on 5/5 attempts — host too loaded to "
+            f"measure the rollback race: {last_env_failure!r}"
         )
-        assert isinstance(results[0], SandboxUnavailableError)
-        handle_b = results[1]
-        assert not isinstance(handle_b, BaseException)
-        # B's sandbox process was NOT killed by A's rollback.
-        assert handle_b.proc.returncode is None
-        # A is gone from the live handles (its own process reaped, no orphan).
-        assert all(
-            h.attempt_id != "attempt-a-concurrent" for h in manager._handles.values()
-        )
-        await manager.destroy(handle_b)
 
 
 class TestCapabilities:
