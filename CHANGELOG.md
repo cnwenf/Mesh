@@ -5,6 +5,32 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-30
+
+命脉层真 LLM 全链路 e2e 入库并真实跑通(MES-95,MES-91 交付物 B,runtime-executor.md §5.4):多 agent 组队、真烧 LLM、非桩非 mock,产品核心价值端到端可复跑验证。
+
+### Added
+
+- **命脉层 squad e2e(`daemon/tests/integration/real_llm_squad_e2e.py`)**:全程公开 API(禁 psql seed)——注册/登录 → workspace → 3 个真实 claude-code agent(冻结 budget + network_policy)→ 小队(leader + 2 成员)→ runtime 激活 → 动态 nonce issue 派发 → leader orchestrator 运行经 task broker `squad_members`/`squad_subtasks` 工具**真实拆解**两个子任务并分派 → 两名成员各自真实 claim + 真实 LLM 执行、经 `issue_comment` 回报 → leader aggregator 运行**真实汇总评论**并经 `issue_status` 置 issue done → relay 回写 leader 署名结论。断言:每次执行 completed 且 usage 真实回流(tokens/cost/session,成员会话互异)、日志非空且凭据零泄漏、nonce 出现在运行输出、issue 真 Done。
+- **命脉 workflow `.github/workflows/real-llm.yml`(§5.4.4)**:仅 workflow_dispatch/schedule 触发(无 pull_request),受保护 self-hosted runner 标签 + 仓库归属双闸门,`concurrency` 串行,凭证仅 secrets 0600 落盘,证据经同一脱敏器脱敏后上传;第三方 action SHA 钉死;`permissions: {}` 最小权限。
+- **task principal issue 路由(auth.md §2.5.1 / §2.2 S-05)**:`/api/v1/task/issues/{id}` 读/评论/状态——评论以 attempt 的 agent member 署名且 `suppress_triggers` 防回环;task principal squad 路由 `GET /task/squad/members`、`POST /task/squad/subtasks`(仅 `squad_role=orchestrator` 的 attempt,服务端再校验 orchestrator 身份并委派既有 squad 状态机,subtasks 上限 16);task token 角色化 scope 与冻结快照角色化 grants(orchestrator 追加 `squad:task:read`/`squad:task:decompose`)。
+- **squad 角色平台提示**:冻结 `task_spec.squad_role` 作为可信平台元数据附入 system prompt(orchestrator/aggregator/executor 相位区分),非任务内容、不破 §3.7 边界。
+
+### Fixed
+
+真链路实弹暴露并修复的三处阻断性产品缺陷(均单测 + 真 LLM 双验证):
+
+- **MCP 传输无效**:钉死 provider 仅支持 stdio/sse/http,mcp.json 的 unix-socket 登记被静默忽略(真实运行中 LLM 无任何 broker 工具)→ 改 stdio 传输 + 平台属主 0444 只读桥接脚本(MCP JSON-RPC ↔ broker socket/nonce 协议;不含凭证,task token 仍只在沙箱外)。
+- **broker 授权永不匹配**:`_broker_grants` 按 scope 名查表与冻结 grants(动作名键)不符 → 改按动作名直通 GATE_TABLE 合法授权(fail-closed);§3.3 表新增 `squad.members`/`squad.subtasks`。
+- **续租后 token 失效**:renew 同事务吊销旧 token 但 daemon 从不轮换 broker 明文 → `_apply_token_rotation` 同步 broker 并加入脱敏集。
+
+### Changed
+
+- 词汇治理:`tests/docs/check_event_vocab.py` 新增 `BROKER_GATE_ACTIONS` 白名单类别(§3.3 闸门表为唯一权威,处理方式同 `OUTBOX_EVENT_TYPES`),`squad.members`/`squad.subtasks` 归类为 broker 闸门动作词汇(非实时事件)。
+- e2e 临时账户密码改每次运行随机生成;openapi.yaml 重生成(含 task principal 路由)。
+
+验证:命脉 workflow 两次真实运行全绿;验收独立栈复跑真实链路 PASS(4 执行 / 4 互异 session / issue 真 Done / nonce 全覆盖 / 凭据零泄漏,证据交叉核实属实);daemon 全量套件含 ISO-01~14 红线矩阵全绿、覆盖率 93.56%(改动模块 ≥91%);backend 单测 + 真实 HTTP e2e 全绿(覆盖率 ≥90% 门禁);PR #83 CI 9/9 绿合入 main。
+
 ## [0.22.1] - 2026-07-30
 
 ### Fixed
