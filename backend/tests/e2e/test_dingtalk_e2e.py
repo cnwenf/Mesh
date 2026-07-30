@@ -40,7 +40,7 @@ from sqlalchemy import select
 
 from mesh.auth.security import encrypt_secret
 from mesh.config import DEV_JWT_SECRET
-from mesh.db.models.integration import Integration, IntegrationEvent, IntegrationMessageQueue
+from mesh.db.models.integration import IntegrationEvent, IntegrationMessageQueue
 
 PASSWORD = "DT-E2E-123456"
 APP_SECRET = "dt-e2e-app-secret-000000000000000000"
@@ -420,7 +420,7 @@ async def test_http_callback_reject_never_dispatches_real_e2e(api_client, sessio
 
 
 async def test_http_callback_dedup_real_e2e(api_client, session_factory):
-    world = await _make_dingtalk_world(api_client, "http3", receive_mode="http")
+    await _make_dingtalk_world(api_client, "http3", receive_mode="http")
     payload = _message(msg_id="msgE2EDEDUP000000000==")
     body = json.dumps(payload).encode()
     first = await api_client.post(
@@ -530,7 +530,7 @@ async def test_stream_message_frame_ingests_and_acks_real_e2e(
     api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
 ):
     pre_seq = fake_dingtalk_gateway.conn_seq
-    world = await _make_dingtalk_world(api_client, "stream2", receive_mode="stream")
+    await _make_dingtalk_world(api_client, "stream2", receive_mode="stream")
     conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
 
     msg_id = "msgE2ESTREAM00000000=="
@@ -566,7 +566,7 @@ async def test_stream_redelivery_is_msgid_deduped_real_e2e(
     api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
 ):
     pre_seq = fake_dingtalk_gateway.conn_seq
-    world = await _make_dingtalk_world(api_client, "stream3", receive_mode="stream")
+    await _make_dingtalk_world(api_client, "stream3", receive_mode="stream")
     conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
 
     msg_id = "msgE2EREPUSH00000000=="
@@ -607,7 +607,7 @@ async def test_stream_ping_acked_verbatim_real_e2e(
     api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
 ):
     pre_seq = fake_dingtalk_gateway.conn_seq
-    world = await _make_dingtalk_world(api_client, "stream4", receive_mode="stream")
+    await _make_dingtalk_world(api_client, "stream4", receive_mode="stream")
     conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
 
     ping = {
@@ -636,7 +636,7 @@ async def test_stream_disconnect_triggers_reconnect_real_e2e(
     api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
 ):
     pre_seq = fake_dingtalk_gateway.conn_seq
-    world = await _make_dingtalk_world(api_client, "stream5", receive_mode="stream")
+    await _make_dingtalk_world(api_client, "stream5", receive_mode="stream")
     conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
     opens_before = len(fake_dingtalk_gateway.open_requests)
 
