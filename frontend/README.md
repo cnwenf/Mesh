@@ -31,7 +31,7 @@ npm run dev          # http://127.0.0.1:5173
 开发默认连接本地 mock 契约服务端(`e2e/mock-server.mjs`,与后端 v0.1.0 线缆协议
 逐帧对齐的忠实镜像:§6.14 包络、§6.7 实时契约——首帧鉴权 `{op:'auth',token}` →
 `auth_ok`、`{op:'event',channel,seq,event,payload}`、`subscribed{channel,last_seq}`、
-resume_from 重放、resync_required + REST 对账),供骨架演示与 e2e 使用:
+resume_from 重放、resync_required + REST 对账),供契约 e2e 使用:
 
 ```bash
 node e2e/mock-server.mjs   # http://127.0.0.1:8901(dev 鉴权:mesh-dev:<workspace-uuid>)
@@ -42,7 +42,6 @@ node e2e/mock-server.mjs   # http://127.0.0.1:8901(dev 鉴权:mesh-dev:<workspac
 ```
 VITE_MESH_API_BASE_URL=http://127.0.0.1:8000
 VITE_MESH_WS_BASE_URL=ws://127.0.0.1:8081
-VITE_MESH_DEMO_CHANNEL=workspace:<workspace-uuid>:issues   # 演示区订阅频道
 VITE_MESH_POLLING_INTERVAL_MS=30000                        # 离线降级轮询间隔
 VITE_MESH_OAUTH_PROVIDERS=mock                             # 第三方登录按钮组(逗号分隔 ID;dev 默认 mock,生产默认空)
 ```
@@ -130,9 +129,9 @@ frontend/
     ├── state/                # 全局状态
     │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地镜像 + 服务端同步:PATCH /users/me,auth.md §3.1;preferencesSync/pendingSettingsQueue/usePreferencesBootstrap)
     │   └── authStore.ts      #   Bearer token 存取
-    └── shell/                # App shell 与占位页
+    └── shell/                # App shell(顶栏/侧栏/状态横幅/登录守卫)
         ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
-        └── pages/            #   登录占位页、404、错误页、首页骨架演示区
+        └── pages/            #   登录页、404、错误页、真实首页(工作区仪表盘,MES-107)
 ```
 
 ## 主题体系(theme.md — 设计系统级契约)
@@ -143,8 +142,9 @@ frontend/
 - **取色铁律(§5.4)**:组件一律 `var(--<语义 token>)`,禁硬编码色值——AST 级门禁(Stylelint + ESLint 自定义规则)CI 拦截;数据色例外(标签色板等)须「行级 `mesh-data-color` 注释 + `theme-lint-exemptions.json` 登记」双要件,禁整文件白名单。
 - **门禁命令**:`npm run check:contrast`(对比度独立关卡)、`npm run lint:css`(Stylelint)、`npm run test:e2e:visual`(双主题视觉回归,基线更新经独立 PR)。
 
-## 阶段 1·B 边界
+## 阶段 1·B 边界(历史边界说明,仅存档案价值)
 
-- 不实现业务页面(auth/workspace/member/issue 等 UI 归各阶段 Issue);首页为骨架演示区(playground)。
-- 偏好写入已接通服务端同步:`PATCH /api/v1/users/me`(auth.md §3.1,键级浅合并;失败写 pending 分区队列待重放,§4.5)+ `PATCH /api/v1/workspaces/{id}` 的 `settings.default_theme`(workspace.md,admin);本地持久化降级为镜像与防闪烁首帧用途(历史边界说明,仅存档案价值)。
+- 本阶段曾不实现业务页面、首页为骨架演示区(playground);上述边界已被后续各模块
+  Issue 全部突破(MES-107 起首页为真实工作区仪表盘,演示组件与占位页整体移除)。
+- 偏好写入已接通服务端同步:`PATCH /api/v1/users/me`(auth.md §3.1,键级浅合并;失败写 pending 分区队列待重放,§4.5)+ `PATCH /api/v1/workspaces/{id}` 的 `settings.default_theme`(workspace.md,admin);本地持久化降级为镜像与防闪烁首帧用途。
 - 前端容器化在后续 Issue 集成(本阶段以 dev server + 生产构建验证)。

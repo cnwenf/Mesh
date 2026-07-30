@@ -38,7 +38,14 @@ from mesh.db.models.runtime import (
 from mesh.db.tenant import set_tenant_context
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.approvals import SQUAD_PLAN_DECIDED_EVENT_TYPE
-from mesh.runtime.attempts import _emit_terminal_notification, _release_capacity
+from mesh.runtime.attempts import (
+    _emit_finished_event as _emit_reaper_finished,
+)
+from mesh.runtime.attempts import (
+    _emit_terminal_notification,
+    _release_capacity,
+)
+from mesh.runtime.context_appends import reset_context_receipts_tx
 from mesh.runtime.credentials import revoke_attempt_envelopes
 
 REAPER_BATCH_SIZE = 50
@@ -212,11 +219,20 @@ async def _reclaim_one(
                 data={"execution_id": str(execution.id), "failure_reason": "lease_expired"},
                 idempotency_key=f"execution:{execution.id}:cancelled",
             )
+            # runtime.md §4.8: terminal single fan-out — the integration queue
+            # item write-back (cancelling → cancelled) is driven by this event.
+            await _emit_reaper_finished(session, execution=execution)
             return "cancelled"
 
         if attempt_count < execution.max_attempts:
             execution.status = "queued"
             execution.updated_at = now
+            # R7-2 unified receipt reset (runtime.md「运行期上下文追加」): the
+            # new attempt (built by the next claim) must re-receive every
+            # append from seq 0 — at-least-once, duplicates allowed, never
+            # lost. Same execution row-lock transaction (lock order matches
+            # the heartbeat ACK path so both commit orders close).
+            await reset_context_receipts_tx(session, execution_id=execution.id)
             # Audit-preserving requeue (T4): the old attempt row stays; the
             # next claim creates attempt #N+1.
             await emit_realtime(
@@ -262,6 +278,7 @@ async def _reclaim_one(
             data={"execution_id": str(execution.id), "failure_reason": "max_retries"},
             idempotency_key=f"execution:{execution.id}:failed",
         )
+        await _emit_reaper_finished(session, execution=execution)
         await _emit_terminal_notification(session, workspace_id=workspace_id, execution=execution)
         return "failed_max_retries"
 

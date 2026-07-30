@@ -74,6 +74,11 @@ export interface CommandPaletteProps {
   canCreateIssue?: boolean;
   /** 测试可注入客户端;缺省全局单例 */
   client?: MeshApiClient;
+  /**
+   * 打开时的初始查询(统一搜索入口:顶栏搜索续输入/回车展开面板时携带已键入文本,
+   * search-command-palette.md S1)。非空时优先于顶栏桥接查询;缺省回落桥接/清空。
+   */
+  initialQuery?: string;
 }
 
 /** 行分区呈现计划:组头(消息目录键)+ 区内行 */
@@ -133,7 +138,7 @@ function useOnlineStatus(): boolean {
 }
 
 export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | null {
-  const { open, onClose, closeLabel, searchPlaceholder, emptyText, title, canCreateIssue = false } = props;
+  const { open, onClose, closeLabel, searchPlaceholder, emptyText, title, canCreateIssue = false, initialQuery } = props;
   const t = useT();
   const navigate = useNavigate();
   const client = props.client ?? getApiClient();
@@ -164,10 +169,12 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   });
 
   // 打开:消费顶栏桥接查询(§4.9 输入即展开同一视图)、复位选择、聚焦输入框、
-  // 加载本地 recents 与服务端 favorites(§4.2.1 唯一数据流)。
+  // 加载本地 recents 与服务端 favorites(§4.2.1 唯一数据流)。统一搜索入口
+  // (MES-111 S1)经 initialQuery 携带顶栏已键入文本,非空时优先于桥接查询。
   useEffect(() => {
     if (!open) return;
-    setQuery(takePaletteQuery());
+    const bridged = takePaletteQuery();
+    setQuery(initialQuery !== undefined && initialQuery !== '' ? initialQuery : bridged);
     setSelectedKey(null);
     setCounts(readCommandCounts(identity.userId));
     // 聚焦延后一拍:Dialog 自身的焦点移入效果(及 StrictMode 双调用下的焦点
@@ -176,7 +183,7 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
       inputRef.current?.focus();
     }, 0);
     return () => clearTimeout(timer);
-  }, [open, identity.userId]);
+  }, [open, identity.userId, initialQuery]);
 
   useEffect(() => {
     if (!open) return;

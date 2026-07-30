@@ -15,6 +15,7 @@ import { MeshApiClient, errorToI18nKey, getToken } from '../../api';
 import { MeshApiError } from '../../api/errors';
 import { env } from '../../env';
 import { useRealtimeContext } from '../../shell/AppShell';
+import { useAuthStore } from '../../state/authStore';
 import { activeWorkspace, fetchMe, listMembers } from '../members/api';
 import { listIssues } from '../issues/api';
 import type { HumanProfile } from '../members/types';
@@ -66,6 +67,9 @@ export interface UseOnboardingResult {
 export function useOnboarding(): UseOnboardingResult {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
+  // MES-106(验收 M1):工作区/成员派生为鉴权请求——未登录(匿名 shell 挂载)
+  // 不发起,保持 loading(清单加载中自隐藏);token 写入后随依赖补取。
+  const hasToken = useAuthStore((state) => state.token !== null);
 
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceSlug, setWorkspaceSlug] = useState<string | null>(null);
@@ -78,6 +82,7 @@ export function useOnboarding(): UseOnboardingResult {
 
   // 派生活跃工作区与当前成员(与 useInboxContext 同口径,多取 slug 供 CTA 深链)。
   useEffect(() => {
+    if (!hasToken) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -105,7 +110,7 @@ export function useOnboarding(): UseOnboardingResult {
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, hasToken]);
 
   // 清单进度加载:工作区就绪后拉取;reloadKey 变化(写操作后)重拉。
   useEffect(() => {

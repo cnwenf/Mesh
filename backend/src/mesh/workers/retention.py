@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
 
+from mesh.db.models.integration import IntegrationEvent, WebhookSubscriptionDelivery
 from mesh.db.models.outbox import (
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PUBLISHED,
@@ -120,6 +121,90 @@ async def outbox_retention_loop(
     """Periodically purge terminal outbox rows until ``stop`` is set."""
     while not stop.is_set():
         await purge_processed_outbox_events(session_factory, retention=retention, now=clock())
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=interval)
+        except TimeoutError:
+            pass
+
+# ---------------------------------------------------------------------------
+# Integration ledger retention (integrations.md §2.4/§2.6, MEDIUM-P3)
+# ---------------------------------------------------------------------------
+# Inbound event audits and outbound delivery ledgers store raw external
+# content (potentially PII) — GitHub keeps delivery logs ~30 days; we purge
+# on the same class of window. Pending deliveries are NEVER purged (they
+# are still in the retry/backoff cycle).
+
+
+async def purge_integration_events(
+    session_factory, *, retention: timedelta, now: datetime, batch_limit: int = 10_000
+) -> int:
+    """Delete inbound audit rows older than ``retention``; returns the count."""
+    cutoff = now - retention
+    expired_ids = (
+        select(IntegrationEvent.id)
+        .where(IntegrationEvent.received_at < cutoff)
+        .order_by(IntegrationEvent.received_at.asc())
+        .limit(batch_limit)
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                delete(IntegrationEvent).where(IntegrationEvent.id.in_(expired_ids))
+            )
+            deleted = result.rowcount or 0
+    if deleted:
+        logger.info(
+            "purged %d expired integration events (cutoff=%s)", deleted, cutoff.isoformat()
+        )
+    return deleted
+
+
+async def purge_webhook_deliveries(
+    session_factory, *, retention: timedelta, now: datetime, batch_limit: int = 10_000
+) -> int:
+    """Delete NON-pending delivery ledger rows older than ``retention``.
+
+    ``pending`` rows (including deferred retries) are never eligible —
+    purging them would silently drop queued outbound work.
+    """
+    cutoff = now - retention
+    expired_ids = (
+        select(WebhookSubscriptionDelivery.id)
+        .where(
+            WebhookSubscriptionDelivery.state != "pending",
+            WebhookSubscriptionDelivery.created_at < cutoff,
+        )
+        .order_by(WebhookSubscriptionDelivery.created_at.asc())
+        .limit(batch_limit)
+    )
+    async with session_factory() as session:
+        async with session.begin():
+            result = await session.execute(
+                delete(WebhookSubscriptionDelivery).where(
+                    WebhookSubscriptionDelivery.id.in_(expired_ids)
+                )
+            )
+            deleted = result.rowcount or 0
+    if deleted:
+        logger.info(
+            "purged %d expired webhook deliveries (cutoff=%s)", deleted, cutoff.isoformat()
+        )
+    return deleted
+
+
+async def integration_ledger_retention_loop(
+    session_factory,
+    *,
+    retention: timedelta,
+    interval: float,
+    stop: asyncio.Event,
+    clock=_utcnow,
+) -> None:
+    """Periodically purge both integration ledger tables until ``stop``."""
+    while not stop.is_set():
+        moment = clock()
+        await purge_integration_events(session_factory, retention=retention, now=moment)
+        await purge_webhook_deliveries(session_factory, retention=retention, now=moment)
         try:
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except TimeoutError:

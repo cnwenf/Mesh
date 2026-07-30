@@ -43,6 +43,32 @@ class TestExactMatcher:
         assert result.hit_count == 2
 
 
+class TestAddSecret:
+    def test_added_secret_redacted_after_rotation(self):
+        p = RedactionPipeline(secrets=["first-secret"], rule_version="v1")
+        assert p.redact("first-secret and mesh_task_later").hit_count == 1
+        p.add_secret("mesh_task_later")
+        r = p.redact("first-secret and mesh_task_later")
+        assert r.hit_count == 2
+        assert "mesh_task_later" not in r.text
+
+    def test_added_secret_expands_encoded_forms(self):
+        p = RedactionPipeline(secrets=[], rule_version="v1")
+        p.add_secret("long-rotated-token-value")
+        import base64
+
+        encoded = base64.b64encode(b"long-rotated-token-value").decode()
+        assert p.redact(f"x {encoded} y").hit_count == 1
+
+    def test_add_duplicate_or_blank_is_noop(self):
+        p = RedactionPipeline(secrets=["dup"], rule_version="v1")
+        n = len(p._patterns)
+        p.add_secret("dup")
+        p.add_secret("")
+        p.add_secret("   ")
+        assert len(p._patterns) == n
+
+
 class TestEncodedMatchers:
     def test_base64_encoded_secret_redacted(self):
         encoded = base64.b64encode(SECRET.encode()).decode()

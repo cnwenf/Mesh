@@ -144,7 +144,7 @@ daemon 启动时校验二进制绝对路径、文件摘要、版本和必需 fla
 
 1. 沙箱使用 attempt 私有空白 `HOME`，并清空/重定向 `XDG_CONFIG_HOME`、`XDG_DATA_HOME`、`XDG_CACHE_HOME`；不挂载宿主用户目录、daemon HOME 或历史 provider 状态；
 2. `--bare --disable-slash-commands --no-session-persistence --setting-sources ""` 禁止自动加载用户级、项目级、本地级设置、记忆、skill、plugin、hook、自定义命令、项目指令和历史 session；sandbox image 不包含 provider 的 admin-managed policy/config，根文件系统只读；
-3. `--strict-mcp-config` 配合显式 `--mcp-config`，MCP 唯一来源是平台 task broker；
+3. `--strict-mcp-config` 配合显式 `--mcp-config`，MCP 唯一来源是平台 task broker。传输为 **stdio**：mcp.json 登记平台属主的只读桥接脚本（随 attempt run dir 0444 绑定进沙箱，`/run/mesh_task_broker_mcp.py`），桥接把 MCP JSON-RPC 翻译为 attempt 私有 unix socket 上的 broker 协议（先投 daemon 注入的 nonce）。钉死 provider 只支持 stdio/sse/http 三种 MCP 传输（unix-socket 登记会被静默忽略），故不得改用裸 socket 登记；桥接脚本与 mcp.json/settings.json 同属平台只信任面，**不含任何凭证**——task token 仍只在沙箱外的 daemon broker；
 4. 禁止任务覆盖 argv，禁止 `--add-dir`、`--plugin-dir`、`--plugin-url`、`--agent` 等扩大加载面的参数；
 5. checkout 内 `.mcp.json`、`.claude/settings.json`、`.claude/settings.local.json`、hooks、`CLAUDE.md` 仅作为普通仓库文件可见，**不得被自动解释、加载或执行**；
 6. provider 版本升级前运行恶意 fixture：上述文件分别尝试启动 beacon MCP、执行 hook、改写 settings 和注入项目指令；只要发生进程启动、socket 建连、指令生效或 broker 外工具出现，升级门禁失败。
@@ -174,7 +174,9 @@ server 以 `config_snapshot` 为唯一冻结真源；daemon 不从 agent 当前�
 ### 2.2 S-05：task token 与 broker
 
 - server 为每个 attempt 签发 `mesh_task_` 短期 token，scope 精确到 workspace、attempt、agent、当前 issue/project 和允许方法；
-- TTL 取 `min(租约剩余时间 + 续租宽限, 5 分钟)`；每次 renew 返回新 token，server 在新 token 生效后立即吊销上一枚；
+- 默认方法 scope：`issue:read`、`issue:comment:write`、`issue:status:write`、`project:read`、`execution:read`；`agent:trigger` 默认拒绝（防回环）。**squad 编排者角色化扩展**：enqueue 冻结的 `task_spec.squad_role == "orchestrator"` 时追加 `squad:task:read`、`squad:task:decompose`（当前 squad task 操作）；executor/aggregator 不扩展——拆解是 leader 专属副作用；
+- task principal 路由（`/api/v1/task/...`，auth.md §2.5.1 显式声明接受 `mesh_task_`）：`GET /task/context`、`GET /task/executions/{id}`、`GET /task/issues/{id}`、`POST /task/issues/{id}/comments`（以 attempt 的 agent member 署名，`suppress_triggers` 防回环）、`PATCH /task/issues/{id}/status`、`GET /task/squad/members`、`POST /task/squad/subtasks`（仅 orchestrator attempt；服务端再校验调用 attempt 的 agent 即该任务 orchestrator，委派既有 squad 状态机）。常规 console 路由一律拒绝 `mesh_task_`；
+- TTL 取 `min(租约剩余时间 + 续租宽限, 5 分钟)`；每次 renew 返回新 token，server 在新 token 生效后立即吊销上一枚；**daemon 在续租成功后必须把新明文同步给 broker（rotate）并加入脱敏集**——旧 token 已在 server 同事务吊销，不轮换则后续一切 broker 调用 401；
 - task token 只进入 daemon 内的 task broker，**不进入沙箱 env、文件、stdin、provider settings 或日志**；
 - broker socket 按 attempt 隔离。daemon 以 peer UID、sandbox identity、attempt nonce 三者校验调用者；
 - server 每次调用同时校验 attempt 仍在途、`lease_seq`、runtime 归属和资源 scope，并按 token + attempt 双维度限速；
@@ -292,6 +294,8 @@ claim 与执行时序：
 | 修改当前 worktree | `write` | mount scope；不可触达宿主/其他 attempt | 只可写本 attempt |
 | 读取当前 issue/project | `read_only` | task broker + task token 资源 scope | 无 token，401/连接失败 |
 | 评论/更新当前 issue | `write` | task broker schema、scope、限速和幂等键 | 无 token，无法调用 Mesh API |
+| 读取当前 squad 任务成员名册（`squad.members`） | `read_only` | task broker + `squad:task:read` scope（orchestrator attempt 专属） | scope 拒绝 |
+| 拆解当前 squad 任务（`squad.subtasks`，幂等键强制） | `write` | task broker + `squad:task:decompose` scope + 服务端 orchestrator 身份校验与状态机 | scope 拒绝 |
 | 跨 issue/跨项目或批量写 | `confirm_required` | 人工 approval → exact targets 的一次性 delegation grant | task token scope 拒绝 |
 | push/建 PR | `confirm_required` | 人工 approval → action broker 校验并代执行 | 无 git 写凭证且网络策略拒绝 |
 | 非白名单出站/上传 | `confirm_required` | 人工 approval → 新 attempt 的精确临时 egress grant | egress gateway 默认拒绝 |
@@ -481,6 +485,8 @@ provider supervisor 逐条解析 `stream-json`，只接受固定 schema 的文�
 | ISO-01 覆盖 B 的 provider 配置/socket（§5.2 枚举） | worktree/tmp 已覆盖，provider 配置/socket 面随 A3 provider 资产出现后补齐 | A3 |
 | cleanup 失败隔离 runtime（§3.6） | 当前仅 warning + journal 位记录；隔离语义随 doctor/isolated 状态接线 | S-12 |
 | egress resolver 管理员可配置（§3.4 rule 2） | 当前固定系统解析器（安全属性成立：任务不可自定义） | S-12 |
+| §5.4.4 命脉层 `real_llm` workflow（MES-95 交付物 B） | **已落地**：`.github/workflows/real-llm.yml` 仅 workflow_dispatch/schedule 触发、受保护 self-hosted runner、`concurrency` 串行、凭证仅 secrets；跑 `daemon/tests/integration/real_llm_e2e.py`（单 agent）+ `real_llm_squad_e2e.py`（leader+2 成员组队真拆真干真聚合）；首次真实全链路 PASS 证据 `docs/evidence/mes-95/real-llm-squad-e2e.json` | B（已闭合） |
+| §2.2 task principal issue 路由 + §3.3 squad 动作（MES-95） | **已落地**：`/api/v1/task/issues/*`（读/评论/状态，评论 `suppress_triggers` 防回环）、`squad.members`/`squad.subtasks` broker 动作与 orchestrator 角色化 scope；MCP 传输修复为 stdio 桥接；续租 token 轮换同步 broker。真实 LLM 实弹验证（45k tokens / 4 独立 session / issue done / 凭据零泄漏） | B（已闭合） |
 
 ---
 

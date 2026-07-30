@@ -1,0 +1,143 @@
+{
+  "server_url": "http://127.0.0.1:58195",
+  "nonce": "MESH-SQUAD-2d648e7f",
+  "model": "qwen3.8-max-preview",
+  "steps": [
+    "auth: register+login ok",
+    "workspace e63b0d95-b5ad-4487-8aef-7a873671689b created",
+    "agents created: leader=664e5797-6807-4166-bd7e-22466034a24a a=ee3bf136-aab9-451e-9263-a795b41a5169 b=acd6a5ff-5181-4e57-b9df-79822e9aca6c",
+    "squad 96d0bd6a-f7d7-4d6f-9a80-0b833ac79adf created (leader + 2 members)",
+    "runtime d4eac662-8742-44a3-a4f1-db471cd7a45c pending; activation code issued",
+    "provider probed healthy: ['claude-code']",
+    "daemon activated; runtime_id=d4eac662-8742-44a3-a4f1-db471cd7a45c",
+    "runtime status after activate+heartbeat: online",
+    "issue 9ae4bea0-17c9-4e99-ad30-8f8d7e5b6351 (nonce MESH-SQUAD-2d648e7f) assigned to squad; root task 62042d63-021e-4324-a1bd-eca1d5e2389c",
+    "root task done; leader really decomposed into 2 subtasks",
+    "all 4 executions completed with real usage: tokens=43121 cost=0.148545 sessions=4",
+    "issue status done; comments: 4 total, 2 leader-authored, 2 member reports",
+    "logs non-empty & redacted for all 4 executions; nonce present in every run's output; credentials zero-leak",
+    "daemon graceful shutdown; sandbox resources released"
+  ],
+  "executions": {
+    "orchestrator": [
+      {
+        "id": "73b03446-efcd-4c70-a743-4cfa07b4eb76",
+        "status": "completed",
+        "session_id": "5d9f55e2-f7f5-4700-997b-9969573ea646",
+        "usage": {
+          "turns": 3,
+          "cost_usd": "0.024885",
+          "input_tokens": 18,
+          "total_tokens": 9799,
+          "output_tokens": 432,
+          "cache_read_tokens": 7728,
+          "cache_creation_tokens": 1621
+        },
+        "model": "qwen3.8-max-preview"
+      }
+    ],
+    "aggregator": [
+      {
+        "id": "710cede3-8102-4de5-b81b-49cb6c7f7df8",
+        "status": "completed",
+        "session_id": "a723bfe9-3152-41fc-bc59-d1f002e27d84",
+        "usage": {
+          "turns": 3,
+          "cost_usd": "0.042705",
+          "input_tokens": 18,
+          "total_tokens": 10726,
+          "output_tokens": 409,
+          "cache_read_tokens": 8079,
+          "cache_creation_tokens": 2220
+        },
+        "model": "qwen3.8-max-preview"
+      }
+    ],
+    "executor": [
+      {
+        "id": "c01624dd-0f59-4580-a552-7db6f72c17a6",
+        "status": "completed",
+        "session_id": "1f1d80a8-98c1-4dff-b795-78a5465420f0",
+        "usage": {
+          "turns": 3,
+          "cost_usd": "0.042846",
+          "input_tokens": 18,
+          "total_tokens": 11511,
+          "output_tokens": 918,
+          "cache_read_tokens": 8050,
+          "cache_creation_tokens": 2525
+        },
+        "model": "qwen3.8-max-preview"
+      },
+      {
+        "id": "9b0c3aab-1583-4471-acc2-ce3e016a3a92",
+        "status": "completed",
+        "session_id": "1230d963-2ac9-4237-8d81-0c935b0b2673",
+        "usage": {
+          "turns": 3,
+          "cost_usd": "0.038109",
+          "input_tokens": 18,
+          "total_tokens": 11085,
+          "output_tokens": 769,
+          "cache_read_tokens": 7925,
+          "cache_creation_tokens": 2373
+        },
+        "model": "qwen3.8-max-preview"
+      }
+    ]
+  },
+  "agents": {
+    "leader": {
+      "agent_id": "664e5797-6807-4166-bd7e-22466034a24a",
+      "member_id": "fb5488a3-3833-47cb-a8de-fb2278a859cf"
+    },
+    "worker_a": {
+      "agent_id": "ee3bf136-aab9-451e-9263-a795b41a5169",
+      "member_id": "8bffcdad-9091-4ce5-b103-e78e8bd59117"
+    },
+    "worker_b": {
+      "agent_id": "acd6a5ff-5181-4e57-b9df-79822e9aca6c",
+      "member_id": "312eb440-7eff-4c0d-82b9-dff4d83fe33e"
+    }
+  },
+  "squad_id": "96d0bd6a-f7d7-4d6f-9a80-0b833ac79adf",
+  "runtime_id": "d4eac662-8742-44a3-a4f1-db471cd7a45c",
+  "issue_id": "9ae4bea0-17c9-4e99-ad30-8f8d7e5b6351",
+  "root_task_id": "62042d63-021e-4324-a1bd-eca1d5e2389c",
+  "progress": {
+    "root_status": "done",
+    "children": [
+      {
+        "id": "f2c3107b-50a3-4542-8e99-5cea516deecb",
+        "title": "MESH-SQUAD-2d648e7f:partA",
+        "status": "done"
+      },
+      {
+        "id": "c75fcceb-9841-4d50-9bbc-fbc7160d27e7",
+        "title": "MESH-SQUAD-2d648e7f:partB",
+        "status": "done"
+      }
+    ]
+  },
+  "root_task_final": {
+    "status": "done",
+    "result_summary": "completed | completed"
+  },
+  "totals": {
+    "total_tokens": 43121,
+    "total_cost_usd": 0.148545,
+    "distinct_sessions": 4
+  },
+  "issue_status": "Done",
+  "comments": {
+    "total": 4,
+    "leader_authored": 2,
+    "member_nonce_reports": 2
+  },
+  "nonce_output_coverage": {
+    "covered": 4,
+    "total": 4,
+    "missing": []
+  },
+  "verdict": "PASS"
+}

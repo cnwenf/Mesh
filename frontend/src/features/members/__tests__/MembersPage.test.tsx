@@ -136,6 +136,15 @@ describe('MembersPage', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Members');
   });
 
+  it('名册表位于受控横向滚动容器内(窄屏不溢出页面,首列粘住,design-quality A-05/§7.6)', async () => {
+    stub([HUMAN, AGENT]);
+    const { container } = renderWithProviders(<MembersPage />, { route: '/members' });
+    await screen.findByText('Jane Doe');
+    const wrap = container.querySelector('.mesh-members__table-wrap');
+    expect(wrap).not.toBeNull();
+    expect(wrap).toContainElement(screen.getByRole('table'));
+  });
+
   it('「仅 Agent」是同一组件的筛选投影(?member_type=agent),仅显示 agent', async () => {
     const calls = stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members?member_type=agent' });

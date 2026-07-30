@@ -43,6 +43,14 @@ class OutboxEvent(Base):
     delivery_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
+    # Earliest claim instant (§6.6 authority, MES-82 R4-4): the relay claim
+    # predicate is ``status='pending' AND available_at <= now()``. Failure
+    # backoff and retryable non-failure results (e.g. integrations.md
+    # ``token_refresh_busy``) move this column forward; only failures consume
+    # the ``delivery_attempts`` budget.
+    available_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=text("now()")
     )
@@ -52,9 +60,11 @@ class OutboxEvent(Base):
         CheckConstraint(
             "status IN ('pending','published','failed')", name="outbox_events_status"
         ),
-        # Pending backlog scan index (§6.6).
+        # Pending backlog scan index (§6.6 authority: available_at first so the
+        # claim predicate ``available_at <= now()`` uses the index prefix).
         Index(
             "idx_outbox_pending",
+            "available_at",
             "created_at",
             postgresql_where=text("status = 'pending'"),
         ),

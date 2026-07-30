@@ -15,6 +15,8 @@ const EXPECTED: ReadonlyArray<{ testid: string; label: string; href: string }> =
   { testid: 'nav-chat', label: 'Chat', href: '/chat' },
   // 统一「待我审批」入口(README §6.10 / §3.4 规范深链)。
   { testid: 'nav-approvals', label: 'Approvals', href: '/approvals' },
+  // 集成平台(integrations.md §4):automations 运营区规范深链。
+  { testid: 'nav-integrations', label: 'Integrations', href: '/automations/integrations' },
   // 自动化运营区(§6.12 信息架构:Autopilots / Runtimes / Skills 三入口),
   // 无工作区上下文时为扁平路径(经 FlatRouteMigration 解析至规范路由)。
   { testid: 'nav-automation', label: 'Automation', href: '/automations/runtimes' },

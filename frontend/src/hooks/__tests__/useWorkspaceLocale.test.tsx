@@ -52,6 +52,18 @@ describe('useWorkspaceLocale(工作区默认 locale,§6.18 协商链第三级)',
     expect(result.current).toBeNull();
   });
 
+  it('client 由非空转 null(登出)→ 重置为 null,不沿用上一账号工作区默认', async () => {
+    const client = createMockClient(workspaceResponse('zh-CN'));
+    const { result, rerender } = renderHook(
+      ({ c }: { c: MeshApiClient | null }) => useWorkspaceLocale(c),
+      { initialProps: { c: client as MeshApiClient | null } },
+    );
+    await waitFor(() => expect(result.current).toBe('zh-CN'));
+
+    rerender({ c: null });
+    expect(result.current).toBeNull();
+  });
+
   it('成功获取工作区 default_locale(经列表→detail 两步)', async () => {
     const client = createMockClient(workspaceResponse('zh-CN'));
     const { result } = renderHook(() => useWorkspaceLocale(client));

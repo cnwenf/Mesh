@@ -44,6 +44,19 @@ from mesh.db.engine import create_engine_from_settings, create_session_factory
 from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
+from mesh.integrations.dispatcher import dispatcher_loop, make_dispatch_wake_handler
+from mesh.integrations.outbound import (
+    WEBHOOK_DISPATCH_EVENT_TYPE,
+    WebhookDeliveryWorker,
+    webhook_dispatch_handler,
+)
+from mesh.integrations.outbound import (
+    derive_dispatch_from_realtime as webhook_dispatch_derive,
+)
+from mesh.integrations.queue_events import (
+    DISPATCH_WAKE_EVENT,
+    queue_execution_finished_handler,
+)
 from mesh.issue.triggers import ASSIGN_EVENT_TYPE
 from mesh.onboarding.consumers import consume_realtime_event as onboarding_consume_realtime_event
 from mesh.outbox.projector import project_realtime_event
@@ -73,7 +86,12 @@ from mesh.workers.device_auth_sweep import device_auth_sweep_loop
 from mesh.workers.due_soon_sweep import due_soon_sweep_loop
 from mesh.workers.invitation_sweep import invitation_sweep_loop
 from mesh.workers.notification_digest import notification_digest_loop
-from mesh.workers.retention import outbox_retention_loop, retention_loop
+from mesh.workers.queue_retention import integration_queue_audit_retention_loop
+from mesh.workers.retention import (
+    integration_ledger_retention_loop,
+    outbox_retention_loop,
+    retention_loop,
+)
 from mesh.workers.search_reconcile import search_reconcile_loop
 from mesh.workers.supervisor import Supervisor, TaskSpec
 
@@ -116,12 +134,14 @@ def _build_scan_requested_handler(settings: Settings, storage: ObjectStorage):
 
 
 def _compose_execution_finished(squad_handler, comment_service):
-    """§3.7 S-09: compose squad handler + result sink for execution.finished.
+    """§3.7 S-09: compose squad handler + result sink + integration queue
+    write-back for execution.finished.
 
-    The relay dispatches one handler per event type. Both the squad relay
-    (squad task closure) and the result sink (regular issue result comment)
-    must observe execution.finished. The result sink internally skips
-    squad executions (checks task_spec.squad_task_id).
+    The relay dispatches one handler per event type. The squad relay (squad
+    task closure), the result sink (regular issue result comment) and the
+    integration message-queue terminal write-back (integrations.md §3.9 —
+    the ONLY driver of queue-item terminal states) must all observe
+    execution.finished. The result sink internally skips squad executions.
     """
 
     async def _handle(session, event):
@@ -137,6 +157,12 @@ def _compose_execution_finished(squad_handler, comment_service):
             )
         except Exception:  # noqa: BLE001
             logger.exception("result sink failed for event %s", event.id)
+        # Integration queue terminal write-back (done/failed/cancelled +
+        # dispatch wake + cancelling-item terminal feedback). Correctness
+        # path — failures propagate so the relay retries the event (the
+        # squad/result-sink effects above are idempotent under redelivery).
+        # No-op for executions with no queue item bound.
+        await queue_execution_finished_handler(session, event)
         return None
 
     return _handle
@@ -191,6 +217,12 @@ def build_relay(
             await onboarding_consume_realtime_event(session, event)
         except Exception:  # noqa: BLE001 — onboarding must not break projection
             logger.exception("onboarding event consumption failed for %s", event.id)
+        # integrations.md §3.4: outbound developer webhooks derive from the
+        # same domain-event stream (webhook.dispatch, deduped per event).
+        try:
+            await webhook_dispatch_derive(session, event)
+        except Exception:  # noqa: BLE001 — fan-out must not break projection
+            logger.exception("webhook dispatch derivation failed for %s", event.id)
         return frames
 
     handlers = {
@@ -220,6 +252,10 @@ def build_relay(
             make_squad_execution_finished_handler(squad_comment_service),
             squad_comment_service,
         ),
+        # integrations.md §3.4: outbound developer webhook fan-out — creates
+        # per-subscription deliveries (UNIQUE(subscription_id, event_ref)
+        # idempotency); the delivery worker posts them (separate loop below).
+        WEBHOOK_DISPATCH_EVENT_TYPE: webhook_dispatch_handler,
     }
     if data_job_worker is not None:
         # import-export.md §3.8: job execution flows through the outbox to
@@ -296,6 +332,12 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     )
     stop = stop or asyncio.Event()
 
+    # integrations.md §3.9: queue dispatcher wakes explicitly on terminal
+    # write-back (imq.dispatch_wake, written same-transaction) with a 1s tick
+    # fallback; the relay handler merely sets the shared event.
+    imq_wake = asyncio.Event()
+    relay.register(DISPATCH_WAKE_EVENT, make_dispatch_wake_handler(imq_wake))
+
     # skill.md §4.5 / §6.11: matching resolver feeds the enqueue handler; the
     # crash-recovery sweep drains import tasks left mid-pipeline by a crash.
     register_skill_matching_resolver(make_matching_resolver())
@@ -309,9 +351,29 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         marketplace_url=settings.skill_marketplace_url,
     )
 
+    # integrations.md §3.4: outbound developer webhook delivery worker —
+    # claims pending deliveries (created by the webhook.dispatch relay
+    # handler) and POSTs them with HMAC signature, exponential backoff and
+    # subscription-level circuit breaking.
+    webhook_delivery_worker = WebhookDeliveryWorker(
+        session_factory,
+        signing_secret=settings.jwt_secret,
+        max_attempts=settings.webhook_delivery_max_attempts,
+        base_seconds=settings.webhook_delivery_base_seconds,
+        max_seconds=settings.webhook_delivery_max_seconds,
+        timeout_seconds=settings.webhook_delivery_timeout_seconds,
+        break_threshold=settings.webhook_circuit_break_threshold,
+        poll_interval=settings.webhook_delivery_poll_interval,
+        batch_size=settings.webhook_delivery_batch_size,
+    )
+
     supervisor = Supervisor(
         [
             TaskSpec("outbox-relay", lambda: relay.run_forever(stop)),
+            TaskSpec(
+                "webhook-delivery",
+                lambda: webhook_delivery_worker.run_forever(stop),
+            ),
             TaskSpec(
                 "notification-digest",
                 lambda: notification_digest_loop(
@@ -337,6 +399,16 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     retention=settings.outbox_event_retention,
                     interval=settings.outbox_retention_interval,
+                    stop=stop,
+                    clock=_utcnow,
+                ),
+            ),
+            TaskSpec(
+                "integration-ledger-retention",
+                lambda: integration_ledger_retention_loop(
+                    session_factory,
+                    retention=settings.integration_ledger_retention,
+                    interval=settings.integration_ledger_retention_interval,
                     stop=stop,
                     clock=_utcnow,
                 ),
@@ -426,6 +498,22 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
                     session_factory,
                     interval=settings.search_reconcile_interval,
                     stop=stop,
+                ),
+            ),
+            # integrations.md §3.9: conversation FIFO queue dispatcher +
+            # crash-safe lease repair (five branches, outbox rearm).
+            TaskSpec(
+                "imq-dispatcher",
+                lambda: dispatcher_loop(
+                    session_factory, settings=settings, wake=imq_wake, stop=stop
+                ),
+            ),
+            # integrations.md §3.9: terminal orphan audit-row retention purge
+            # (binding_id IS NULL only; MESH_IM_QUEUE_AUDIT_RETENTION window).
+            TaskSpec(
+                "imq-audit-retention",
+                lambda: integration_queue_audit_retention_loop(
+                    session_factory, settings=settings, stop=stop
                 ),
             ),
         ]

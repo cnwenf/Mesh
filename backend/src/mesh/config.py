@@ -223,6 +223,45 @@ class Settings(BaseSettings):
     outbox_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_OUTBOX_RETENTION_DAYS))
     outbox_retention_interval: float = Field(default=3600.0, gt=0)
 
+    # Integration ledger retention (integrations.md §2.4/§2.6, MEDIUM-P3):
+    # inbound event audits + outbound delivery ledgers store raw external
+    # content (potentially PII); purged on a GitHub-delivery-log-class
+    # 30-day window. Pending deliveries are never purged.
+    integration_ledger_retention: timedelta = Field(default=timedelta(days=30))
+    integration_ledger_retention_interval: float = Field(default=3600.0, gt=0)
+
+    # IM message queue + command plane (integrations.md §2.10/§3.7/§3.8/§3.9).
+    # Leading-edge ack coalescing window measured on the lock-ordered
+    # ack_window_at (taken after the imq_seq advisory lock), never on
+    # enqueued_at/now().
+    im_ack_coalesce_window_seconds: float = Field(default=5.0, gt=0)
+    # Post-signature semantic inbound guards (Redis sliding windows keyed with
+    # the tenant dimension + DB pending-depth count).
+    im_inbound_per_identity_per_min: int = Field(default=20, ge=1)
+    im_inbound_per_conversation_per_min: int = Field(default=60, ge=1)
+    im_queue_max_pending_per_conversation: int = Field(default=50, ge=1)
+    # Inbound text / /btw argument length cap (truncated + audited).
+    im_inbound_text_max_chars: int = Field(default=4000, ge=1)
+    # Per-execution context-append caps (M3; enforced under the eca: advisory
+    # lock so concurrent writes cannot exceed them).
+    context_append_max_count: int = Field(default=20, ge=1)
+    context_append_max_chars: int = Field(default=32000, ge=1)
+    # Dispatcher lease = execution timeout + this buffer; an execution stuck
+    # `queued` beyond this window is failed(dispatch_stuck), never re-dispatched.
+    im_dispatch_lease_buffer_seconds: int = Field(default=300, ge=1)
+    im_queue_max_stuck_seconds: int = Field(default=3600, ge=1)
+    # Outbox consume SLA: a still-pending enqueue event older than this with a
+    # missing execution is treated as lost (derived-key rearm).
+    outbox_consume_sla_seconds: float = Field(default=2.0, gt=0)
+    im_dispatch_tick_seconds: float = Field(default=1.0, gt=0)
+    im_lease_repair_interval_seconds: float = Field(default=5.0, gt=0)
+    # DELETE ?force=cancel upper bound for waiting on in-flight cancellation.
+    im_force_cancel_wait_seconds: int = Field(default=30, ge=1)
+    # Terminal orphan audit rows (binding_id IS NULL) are physically purged
+    # after this window.
+    im_queue_audit_retention: timedelta = Field(default=timedelta(days=30))
+    im_queue_audit_retention_interval: float = Field(default=3600.0, gt=0)
+
     # Realtime retention window (README §6.7: default 7 days, configurable).
     realtime_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS))
     realtime_retention_interval: float = Field(default=3600.0, gt=0)
@@ -456,6 +495,21 @@ class Settings(BaseSettings):
     # returns the fresh value (dashboard first paint); ``True`` returns the
     # stale value and refreshes in the background (stale-while-revalidate).
     analytics_stale_while_revalidate: bool = False
+
+    # -- Integrations module (integrations.md §3.2/§3.4) -------------------
+    # Inbound platform signature timestamp tolerance window (§3.2: ±300s).
+    integration_signature_tolerance: timedelta = Field(
+        default=timedelta(seconds=300), gt=0
+    )
+    # Outbound webhook delivery: retry/backoff + subscription circuit
+    # breaker (§2.6 workspace-level constants).
+    webhook_delivery_max_attempts: int = Field(default=8, ge=1)
+    webhook_delivery_base_seconds: int = Field(default=30, ge=1)
+    webhook_delivery_max_seconds: int = Field(default=3600, ge=1)
+    webhook_delivery_timeout_seconds: int = Field(default=10, ge=1)
+    webhook_circuit_break_threshold: int = Field(default=20, ge=1)
+    webhook_delivery_poll_interval: float = Field(default=1.0, gt=0)
+    webhook_delivery_batch_size: int = Field(default=50, ge=1, le=1000)
 
 
 def load_settings(**overrides: object) -> Settings:

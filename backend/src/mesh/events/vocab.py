@@ -229,6 +229,19 @@ OUTBOX_INTERNAL_EVENT_TYPES: frozenset[str] = frozenset(
         # when the platform-driven generation terminates (relay handler:
         # mesh.runtime.enqueue.chat_generation_finished_handler).
         "chat.generation_finished",
+        # integrations.md §3.4: outbound developer webhook fan-out (relay
+        # derives it from realtime.publish; the dispatch handler creates
+        # per-subscription deliveries; the delivery worker posts them).
+        "webhook.dispatch",
+        # integrations.md §3.8: IM acknowledgement / command-feedback outbound
+        # (the queue enqueue transaction writes it for the ack window leader;
+        # the fast relay consumes it at-most-once and posts via the outbound
+        # adapter).
+        "im.send",
+        # integrations.md §3.9: explicit queue-dispatcher wakeup written in the
+        # same transaction as a queue-item terminal write-back (the 1s tick is
+        # only a fallback).
+        "imq.dispatch_wake",
     }
 )
 

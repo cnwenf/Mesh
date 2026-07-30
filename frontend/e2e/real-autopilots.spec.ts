@@ -13,6 +13,7 @@
  * 每步截图存证 e2e/evidence/autopilots(随 PR 提交;字节互异)。
  */
 import { expect, test } from '@playwright/test';
+import { injectSession } from './helpers';
 import type { Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -65,13 +66,9 @@ async function bootstrapWorld(): Promise<void> {
 }
 
 async function loginReal(page: Page): Promise<void> {
-  await page.goto('/login');
-  await page.locator('.mesh-login__dev').evaluate((el) => {
-    (el as HTMLDetailsElement).open = true;
-  });
-  await page.getByTestId('login-token').fill(TOKEN);
-  await page.getByTestId('login-submit').click();
-  await page.waitForURL('**/');
+  // dev-auth 栈无表单登录:会话经 authStore 持久化键注入(MES-107 起登录页无 dev 入口)
+  await injectSession(page, TOKEN);
+  await page.goto('/');
 }
 
 test.describe.configure({ mode: 'serial' });

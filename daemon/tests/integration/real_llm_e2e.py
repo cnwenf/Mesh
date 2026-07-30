@@ -21,6 +21,7 @@ provider.env(0600 凭据)。见 MES-101 交付说明。
 import asyncio
 import json
 import os
+import secrets
 import sys
 import uuid
 from pathlib import Path
@@ -38,7 +39,8 @@ from mesh_runtime.journal import Journal
 from mesh_runtime.sandbox import SandboxManager
 
 SERVER_URL = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:58100"
-PASSWORD = "Mesh-A3-Passw0rd!"
+# Fresh random password per run (L2 security-review suggestion).
+PASSWORD = f"Mesh-E2E-{secrets.token_urlsafe(18)}-Aa1!"
 
 # Operator-provided pinned provider install + credentials (see MES-101 notes).
 PROVIDER_PATH = os.environ.get("MES101_PROVIDER_PATH", "/opt/mesh/providers/claude/2.1.218/claude")

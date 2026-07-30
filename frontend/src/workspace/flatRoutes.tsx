@@ -66,6 +66,16 @@ export const FLAT_ROUTE_RULES: readonly FlatRouteRule[] = [
   { pattern: /^\/webhooks$/, build: (_m, slug) => `/w/${slug}/automations/webhooks` },
   { pattern: /^\/skills$/, build: (_m, slug) => `/w/${slug}/automations/skills` },
   { pattern: /^\/skills\/(.+)$/, build: (m, slug) => `/w/${slug}/automations/skills/${m[1]}` },
+  // 集成平台(MES-68):旧扁平 /integrations、/webhook-subscriptions 收敛至运营区规范深链。
+  { pattern: /^\/integrations$/, build: (_m, slug) => `/w/${slug}/automations/integrations` },
+  {
+    pattern: /^\/integrations\/([^/]+)$/,
+    build: (m, slug) => `/w/${slug}/automations/integrations/${m[1]}`,
+  },
+  {
+    pattern: /^\/webhook-subscriptions$/,
+    build: (_m, slug) => `/w/${slug}/automations/webhook-subscriptions`,
+  },
   { pattern: /^\/automations\/(.+)$/, build: (m, slug) => `/w/${slug}/automations/${m[1]}` },
   // 工作区设置子路径(admin+);裸 /settings 为账号设置,不在此表。
   {

@@ -24,6 +24,7 @@ export type NavKey =
   | 'chat'
   | 'approvals'
   | 'autopilots'
+  | 'integrations'
   | 'automation'
   | 'insights'
   | 'settings';
@@ -48,6 +49,8 @@ const NAV_ITEMS: ReadonlyArray<NavItem> = [
   { key: 'approvals', suffix: '/approvals' },
   // 自动化规则(autopilot.md §4):AI 队友值班表;运行时(runtime.md)运营区入口。
   { key: 'autopilots', suffix: '/automations/autopilots' },
+  // 集成平台(integrations.md §4):连接器 / 绑定 / 事件台账 / 出向订阅(automations 运营区规范深链)。
+  { key: 'integrations', suffix: '/automations/integrations' },
   { key: 'automation', suffix: '/automations/runtimes' },
   // 统计报表(analytics.md §4.1):工作区洞察仪表盘。
   { key: 'insights', suffix: '/insights' },

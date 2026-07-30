@@ -11,6 +11,7 @@ import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { renderWithProviders } from '../../../test-utils/render';
 import type { RealtimeEventFrame } from '../../../types/realtime';
 import { InboxBell } from '../InboxBell';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -60,11 +61,16 @@ function frame(event: string, payload: unknown): RealtimeEventFrame {
   return { op: 'event', channel: 'member:mem-1:inbox', seq: 1, event, payload } as RealtimeEventFrame;
 }
 
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
 beforeEach(() => {
+  useAuthStore.getState().setToken('tok_test');
   bellFrame = null;
   vi.unstubAllGlobals();
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('InboxBell', () => {
   it('shows the unread badge from the unread-count endpoint', async () => {

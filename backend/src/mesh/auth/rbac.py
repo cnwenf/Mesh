@@ -70,6 +70,7 @@ PERMISSION_MATRIX: dict[str, frozenset[str]] = {
     "agent:trigger": frozenset({"owner", "admin", "member"}),
     "agent:manage": frozenset({"owner", "admin"}),
     "autopilot:manage": frozenset({"owner", "admin"}),
+    "integration:manage": frozenset({"owner", "admin"}),  # integrations.md §3.1
     "token:manage": frozenset({"owner", "admin", "member"}),  # members: own tokens only
 }
 

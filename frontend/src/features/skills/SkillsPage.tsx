@@ -169,7 +169,7 @@ export function SkillsPage(): React.JSX.Element {
               </Button>
             </>
           ) : null}
-          <Link className="mesh-skills__market-link" to="/marketplace" data-testid="skills-market-link">
+          <Link className="mesh-skills__market-link" to="/skills/marketplace" data-testid="skills-market-link">
             {t('skills.marketplaceLink')}
           </Link>
         </div>

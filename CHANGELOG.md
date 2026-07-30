@@ -5,6 +5,73 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Added
+
+- **集成消息队列与命令平面(MES-88,integrations.md §2.10/§3.7/§3.8/§3.9 + runtime.md「运行期上下文追加」)**:IM 入站消息会话级 FIFO 队列 + /stop·/btw 命令平面落地(MES-82 切片 2/4;表结构与 T39 验证 DDL 随 MES-68 迁移 0033 先期落地,本次为服务/派发/端点全链路)——
+  - **会话级 FIFO 队列**:`enqueue_message` 在摄取事务内以 `pg_advisory_xact_lock('imq_seq:'||conversation_key)` 串行化同会话取号,持锁后取 `clock_timestamp()` 锁序窗口时间(ack 窗口判定真源,杜绝事务开始序倒挂),`seq = max+1` + `ON CONFLICT DO NOTHING` 有限重试背压;`dispatch_mode` 入队快照(排空-再切换:会话残留 serial 项时强制 serial,模式切换不追溯)、`target_agent_id` 快照(改目标不追溯、快照失效 `failed` 不静默改派)、`binding_display`/`project_id_snapshot` 孤儿自描述快照;`ack_template=''` 零窗口副作用,leader 摄取事务内按 seq 自指并写 `im.send`(§6.5 键 `sha256(item|'ack')`),follower 仅结构指向不发外部事件;parallel 乐观直派(dispatching + `execution.enqueue` 携带 `queue_item_id`)。
+  - **命令平面(§3.7)**:去重后、匹配前即时处理,不入队不触发;`/stop` 两阶段——本人 processing 项原子 `processing→cancelling` 守卫 + **同事务**经 `request_execution_cancel_tx` 持久化取消意图(不造新 outbox 事件类型,心跳下行停执行),cancelling 项**继续占串行 lane** 直至 `execution.finished(cancelled)`;本人 pending 项按 seq 即时批量 cancelled;多人同群各自取消互不牵连;未映射身份回建链提示零副作用;`/btw` 向本会话 processing 执行追加不可信上下文(`execution_context_appends`,`source='im_btw'`,§6.15 数据而非指令),双上限(`MESH_CONTEXT_APPEND_MAX_COUNT`=20/`MESH_CONTEXT_APPEND_MAX_CHARS`=32000,`eca:` 执行级咨询锁内校验并发不穿),cancelling 拒绝、无在途项剥前缀按普通消息下行;鉴权恒按全三元组经 `external_identities` 解析 `users.id` 比对(**禁裸键**,跨 provider 同名键不坍缩),`integration:manage`(admin/owner)可停他人任务;全程 `_mesh_command` 审计,两段式反馈经 `im.send`(非 ack、不合并)。
+  - **派发器与租约修复(§3.9)**:`mesh.workers` 内新增受监督任务(不新增 compose service)——1s tick 兜底 + `imq.dispatch_wake` outbox 事件显式唤醒(终态回写同事务写入);按首项快照 `dispatch_mode` 派发(serial/parallel fallback 前置同:会话无任何在途项),`FOR UPDATE SKIP LOCKED` 取 FIFO 首项,`uq_imq_conversation_active` 部分唯一索引数据库级串行独占(冲突即退避);租约修复五分支(执行终态补回写 / 在途续租对齐 attempt 租约不误杀 / queued 未超 `MESH_IM_QUEUE_MAX_STUCK_SECONDS` 续租等待 / 超阈 `failed` 告警**不重派发** / 执行缺失走 outbox rearm 四态:pending SLA 内等待、SLA 超与 published/missing 派生键 `K2=sha256(K|'rearm'|item_id)` 新写、failed 条件 `status='pending'+attempts=0+published_at=NULL` 更新,payload 恒携执行级键 K + `queue_item_id`);终态统一由内部事件 `execution.finished` 驱动(回写 done/failed/cancelled + 唤醒 + cancelling 终态段反馈 + `integration.queue_updated` 失效通知),补齐 runtime 终态单一扇出契约缺口(cancel 直终态 / reaper cancelling→cancelled 与 max_retries→failed / 审批拒绝四处补发,幂等键 `execution:{id}:finished` 去重)。
+  - **`execution.enqueue` 消费者 integration 作用域守卫(R5-2)**:仅 `trigger='integration'` 附加——payload 必携 `queue_item_id`,消费者事务先 `FOR UPDATE` 锁队列项守卫 `state='dispatching' AND execution_id IS NULL`,通过方建执行并同事务绑定 + 转 processing;原事件(行级键 K)与派生 rearm 事件(行级键 K2、payload 仍 K)任意顺序并发消费 → 恰好一个 execution、绑定一次、无孤儿(T39-17);其它触发(assign/mention/autopilot/chat)消费契约零改动。
+  - **运行期上下文追加(runtime.md)**:`append_context`(状态门 + `eca:` 锁 + 双上限 + 无缝 seq)、心跳 `context_progress` ACK(`FOR UPDATE` 执行行锁 + 归属/最新 attempt/`claimed·running`/`lease_seq` 精确匹配 fencing,任一不符整条 0 行;`IS DISTINCT FROM` 单指针覆盖 receipt;连续前缀找首个缺口重算服务端水位 `context_injected_through_seq`)、`GET /daemon/executions/{id}/context-appends`(attempt 作用域过滤)、`inject_context` 心跳下行(`from_seq` = 服务端水位)、**R7-2 统一重置**(失联 requeue 与审批批准续跑同执行行锁事务清空 receipt + 水位置 0,at-least-once 允许重复不得丢失)。
+  - **查询与操作端点(§3.9)**:`GET .../integrations/{id}/queue`(按会话分组、pending 实时位置、`target_agent` 快照解析、`message_excerpt` 截断净化、全文不经端点;project 可见性过滤;固定排除孤儿)、`.../queue/summary`、`.../queue/{item_id}:cancel`(原子 pending 守卫,0 行 → 422 `queue_item_not_cancellable`,三元组本人或 `integration:manage` 授权)、`GET .../integration-queue-audit`(孤儿唯一读取入口,已删私有项目快照仅 admin/owner 可见);`integration.queue_updated` 失效通知两形(workspace 级含 conversation_key;**project 级仅 `{integration_id, scope:'project'}` 不含会话键**,客户端 refetch 授权分片不本地 patch);删除保护——无 force 存在非终态项 409 `binding_has_active_queue`,`?force=cancel` 强制终止(pending→cancelled;在途经 runtime 取消服务,30s 上限超时强制 cancelled + 告警)后 DELETE 经 FK SET NULL 完成,孤儿审计行保留(`MESH_IM_QUEUE_AUDIT_RETENTION` 30 天后 worker 分批清理,仅 `binding_id IS NULL` 终态行);项目物理删除先经同一强制终止路径(fail-closed)。
+  - **入站语义级护栏(§2.10)**:签名后三道计数——每身份 20/min、每会话 60/min(Redis 滑窗含租户维)、会话 pending 深度 50(摄取事务 + 咨询锁下二次权威校验);超限不入队/不执行/不 ack,真实 msgId 占去重键,`rejected` + `_mesh_reject_reason='rate_limited'` 审计 + 同会话 1 次/分钟限频提示(防提示反射),HTTP 恒 200 防平台重推放大;入站文本/`/btw` 参数 `MESH_IM_INBOUND_TEXT_MAX_CHARS`(4000)截断审计;非文本 msgtype 审计专用(不触发/不入队/不 ack);`external-identities:link` 验证码签发叠加每成员 + 每目标频率限制(L1)+ dingtalk staffId 字符集守卫(`x=` 编码键冒充 staffId 被拒)。
+  - **验证**:schema_r2_validation.sql T39-1～19 全新库全绿(状态机词汇/serial 独占/parallel 豁免/cancelling 占位/fail-closed 删除保护/rearm 四态/键空间不相交/锁序窗口/receipt 六步闭合/busy 不耗预算/审批续跑链);新增单测(队列核心·派发器五分支·命令平面·摄取钩子·护栏·端点·运行期追加)+ 真实 e2e(串行 FIFO 全链路 M1→M2→M3 严格序·/stop 两阶段车道保持·/btw 真实落行·队列四端点·删除保护强制路径与孤儿审计)全绿。
+
+### Fixed
+
+- **integrations VCS 关联端点 principal 传参缺陷**:`_context_for_resource` 以 `user=` 调用 `resolve_workspace_context`(实际签名为 `principal=`)导致 VCS links 端点 500;改为由已认证用户构造 session 类 principal 传入(MES-68 遗留,既有单测 `test_vcs_link_endpoints` 由 FAILED 转绿)。
+- **runtime 终态单一扇出契约补齐**:`execution.finished` 内部事件此前仅 daemon 上报终态路径发出;console 取消(queued/awaiting_approval 直终态)、reaper(cancelling→cancelled、max_retries→failed)、审批拒绝四处补发(幂等键去重),使「所有终态下游消费者一律订阅本事件」契约闭合(队列项终态回写依赖之)。
+
+## [0.23.1] - 2026-07-30
+
+前端生产就绪收尾(MES-107 去脚手架化):消除用户手机端实测暴露的「半成品」观感,前端由工程脚手架形态收口为真实产品 UI。
+
+### Changed
+
+- **真实首页替换骨架演示区**:`HomePage` 重写为工作区仪表盘——`GET /users/me` 问候语 + 工作区卡片列表(深链 `/w/:slug` + 角色徽标)+ 活跃工作区 issue 仪表盘(`listIssues` 游标分页 + `workspace:{ws}:issues` 实时增量合并 + 快捷创建 + 加载失败重试);无成员身份呈空态 + 创建工作区向导入口。整体移除 demo 组件与对不存在端点 `/api/v1/demo/issues` 的依赖。
+- **登录页清理**:删除 dev 令牌直填块与过时 `login.phaseNote`。
+- **路由 / Tab 接通**:补齐 Sidebar 技能项缺失的 `/skills`、`/skills/:skillId`、`/marketplace` 路由(此前点击即 404);agent 详情「技能」Tab 接通已实现的 `AgentSkillsTab`(替换「即将上线」占位)。
+- **占位 / 演示残留清理**:`PlaceholderPage` 与前端根 `placeholder/` 静态占位目录删除;i18n 双目录清理 `demo.*` / `home.demo*` / `login.phaseNote` / `members.add.agentComingSoon` / `agents.skills.placeholder*` 等残留键并新增仪表盘键(版本哈希重算);`roles.rosterUnavailable` 过时文案改写;env 移除 `demoChannel`。
+- **契约 mock 与 e2e 去 demo 化**:mock 新增 `/users/me`、issue 端点挂真实路径、治具端点更名 `/api/v1/mock/*`;e2e helpers 改真实邮箱/密码登录 + 会话注入;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + Pixel 7 双视口)。
+- **文档与实现对齐**:根 README 目录总览表 frontend 行改为真实产品 UI 描述(消除与同源部署描述的自相矛盾)并补记本里程碑;`frontend/README.md` 同步;`AppShell` 头注「HomePage 演示区」改为「首页工作区仪表盘」。
+
+### 验证
+
+单测 2905/2905、整体行覆盖 97.78%(HomePage 99.63%)、per-file ≥90 与变更代码双门禁通过;typecheck / eslint+stylelint / 生产构建 0 错;mock 契约 e2e 25/25;真实 e2e(production 鉴权 + 公网 HTTP,桌面 + Pixel 7)8/8;验收员独立真机浏览器复测(桌面 + 手机)全过——守卫跳登录、登录页无 dev 块/phaseNote、首页真实加载无演示组件/加载失败、空态→向导建区→卡片深链、仪表盘快捷创建真实落库、`/skills` 与 `/marketplace` 非 404、agent 技能 Tab 接真实绑定 UI;全站 grep 无占位/演示残留、无参考源泄漏;PR #91 CI 6/6 绿合入 main。
+
+## [0.23.0] - 2026-07-30
+
+命脉层真 LLM 全链路 e2e 入库并真实跑通(MES-95,MES-91 交付物 B,runtime-executor.md §5.4):多 agent 组队、真烧 LLM、非桩非 mock,产品核心价值端到端可复跑验证。
+
+### Added
+
+- **命脉层 squad e2e(`daemon/tests/integration/real_llm_squad_e2e.py`)**:全程公开 API(禁 psql seed)——注册/登录 → workspace → 3 个真实 claude-code agent(冻结 budget + network_policy)→ 小队(leader + 2 成员)→ runtime 激活 → 动态 nonce issue 派发 → leader orchestrator 运行经 task broker `squad_members`/`squad_subtasks` 工具**真实拆解**两个子任务并分派 → 两名成员各自真实 claim + 真实 LLM 执行、经 `issue_comment` 回报 → leader aggregator 运行**真实汇总评论**并经 `issue_status` 置 issue done → relay 回写 leader 署名结论。断言:每次执行 completed 且 usage 真实回流(tokens/cost/session,成员会话互异)、日志非空且凭据零泄漏、nonce 出现在运行输出、issue 真 Done。
+- **命脉 workflow `.github/workflows/real-llm.yml`(§5.4.4)**:仅 workflow_dispatch/schedule 触发(无 pull_request),受保护 self-hosted runner 标签 + 仓库归属双闸门,`concurrency` 串行,凭证仅 secrets 0600 落盘,证据经同一脱敏器脱敏后上传;第三方 action SHA 钉死;`permissions: {}` 最小权限。
+- **task principal issue 路由(auth.md §2.5.1 / §2.2 S-05)**:`/api/v1/task/issues/{id}` 读/评论/状态——评论以 attempt 的 agent member 署名且 `suppress_triggers` 防回环;task principal squad 路由 `GET /task/squad/members`、`POST /task/squad/subtasks`(仅 `squad_role=orchestrator` 的 attempt,服务端再校验 orchestrator 身份并委派既有 squad 状态机,subtasks 上限 16);task token 角色化 scope 与冻结快照角色化 grants(orchestrator 追加 `squad:task:read`/`squad:task:decompose`)。
+- **squad 角色平台提示**:冻结 `task_spec.squad_role` 作为可信平台元数据附入 system prompt(orchestrator/aggregator/executor 相位区分),非任务内容、不破 §3.7 边界。
+
+### Fixed
+
+真链路实弹暴露并修复的三处阻断性产品缺陷(均单测 + 真 LLM 双验证):
+
+- **MCP 传输无效**:钉死 provider 仅支持 stdio/sse/http,mcp.json 的 unix-socket 登记被静默忽略(真实运行中 LLM 无任何 broker 工具)→ 改 stdio 传输 + 平台属主 0444 只读桥接脚本(MCP JSON-RPC ↔ broker socket/nonce 协议;不含凭证,task token 仍只在沙箱外)。
+- **broker 授权永不匹配**:`_broker_grants` 按 scope 名查表与冻结 grants(动作名键)不符 → 改按动作名直通 GATE_TABLE 合法授权(fail-closed);§3.3 表新增 `squad.members`/`squad.subtasks`。
+- **续租后 token 失效**:renew 同事务吊销旧 token 但 daemon 从不轮换 broker 明文 → `_apply_token_rotation` 同步 broker 并加入脱敏集。
+
+### Changed
+
+- 词汇治理:`tests/docs/check_event_vocab.py` 新增 `BROKER_GATE_ACTIONS` 白名单类别(§3.3 闸门表为唯一权威,处理方式同 `OUTBOX_EVENT_TYPES`),`squad.members`/`squad.subtasks` 归类为 broker 闸门动作词汇(非实时事件)。
+- e2e 临时账户密码改每次运行随机生成;openapi.yaml 重生成(含 task principal 路由)。
+
+验证:命脉 workflow 两次真实运行全绿;验收独立栈复跑真实链路 PASS(4 执行 / 4 互异 session / issue 真 Done / nonce 全覆盖 / 凭据零泄漏,证据交叉核实属实);daemon 全量套件含 ISO-01~14 红线矩阵全绿、覆盖率 93.56%(改动模块 ≥91%);backend 单测 + 真实 HTTP e2e 全绿(覆盖率 ≥90% 门禁);PR #83 CI 9/9 绿合入 main。
+
+## [0.22.1] - 2026-07-30
+
+### Fixed
+
+- **integrations 迁移链单头修复**:integrations 迁移重编号 `0030 → 0033`(`0030_integrations.py → 0033_integrations.py`;`revision` 0030→0033、`down_revision` 改接主干 device-auth 链 head `0032`)——MES-80 device-auth 链(`0030`/`0031`/`0032`)先期合入 main 后,原 `0030_integrations` 与之形成 alembic 多头及 revision ID 碰撞;重编号后 `alembic upgrade head` 单头单链(0001 → 0033)。纯链修复:无 DDL 变更,`0030_integrations` 从未随任何已发布 tag 落地,线上无迁移数据影响。
+- **MES-106 未登录守卫 / 401 全局兜底 / WS 公网 HTTP(MES-106,auth.md §4.1)**:修复手机端实测体验阻断——未登录访问首页等受保护页不再停在原页连收 401、满屏「内容加载失败」。`RequireAuth` pathless layout 守卫包裹全部受保护 shell 子路由:未登录访问不渲染受保护子树、不发起受保护请求,统一 `Navigate` 到 `/login?next=<原路径(含查询串,经编码)>`,登录成功经 `safeNextPath` 守卫回跳原页(登录页另受理 `?redirect=` 同义别名);邀请接受预览页留在守卫之外(匿名可见,预览 200 不受影响);已登录访问 `/login` 反向回跳。API 客户端 401 全局兜底:非鉴权豁免端点 401 统一「清 access token + 整页跳 `/login?next=<当前路径>`」;鉴权豁免端点(登录/注册/MFA 验证/忘记密码/重置/验证邮箱/OAuth 往返)业务错误就地呈现、登录页上仅清 token 不成环。匿名 shell 挂载零鉴权请求:`useWorkspaceLocale` / `usePreferencesBootstrap` / `useInboxContext` / `useOnboarding` 全部经 `hasToken` 门控(消除匿名守卫跳转窗口与公开邀请页的游离 `users/me` 401——即 issue 复现的后端日志症状)。实时网关地址归一绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空、nginx 反代 `/ws`)由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),显式 `http(s)://` 基址归一为 `ws(s)://`,公网 HTTP 实时可用。真实 e2e(production 鉴权 + 公网 HTTP + Pixel 7 视口隔离栈)7/7(守卫跳转 / 邀请预览无受保护请求 / 深层路径回跳 / 已登录反向回跳 / 篡改 token 401 全局跳转 / WS `auth_ok` 首帧)+ 验收独立脚本 13/13(含开放重定向防御 `//evil.example` 回落首页、错误密码就地呈现不成环);单测 2910 例,整体覆盖率 97.77%(branches 91.22%),变更行 133/133 = 100%。
+
 ## [0.22.0] - 2026-07-30
 
 平台能力层:开发者平台 CLI 全功能 + auth.md 设备码增量 + OpenAPI 3.1(MES-80,cli.md 五章)。`mesh` 命令行(REST 瘦客户端):设备码登录(RFC 8628 全链路,确认页绑定工作区即 CLI 默认,四轮询分支 authorization_pending/slow_down/access_denied/expired_token)+ PAT stdin 登录;issue/project/member/agent/execution/runtime 命令族 + `execution logs --follow`(SSE 降级通道 offset 续传去重)+ export/import(流式/--dry-run/--strict);退码契约表驱动(0/1/2/3/4/130);`--output json` 单一合法 JSON + 内置 jq 子集(`.[] | .identifier`);凭证 0600 fail-closed(属主校验/拒符号链接/原子写);四 shell 静态补全;代理/自定义 CA/`--insecure` 单次旗标(传输 fail-closed)。auth 增量:`device_authorizations`(HMAC-SHA256 服务端 pepper 仅存哈希、user_code ≥20bit 去歧义字符集、活跃码部分唯一索引、状态机、单码违规>5 作废 + 审计、双重限速);确认/拒绝/轮询端点(名册 FOR UPDATE 固定锁序 + scope 服务端取交 + 批准者会话不变量 + authenticated_at 快照继承);`sessions` 绑定列 + access JWT `sid`;§3.8 有界幂等 refresh 轮换(Web HttpOnly cookie / CLI Bearer 双传输,宽限窗只发 access、胜者唯一下发);`GET/DELETE /auth/token` 自省/自撤销;统一 Bearer 依赖(前缀路由 + scopes∩角色 + 代表性端点集成测试);Web 登录 refresh 改 cookie 下发(R4-H1);Web `/device` 确认页(手工录入防钓鱼 + 工作区分流)。OpenAPI 3.1 `docs/api/openapi.yaml`(daemon 命名空间完全剔除 + CI 零命中门禁 + 漂移契约测试);CLI 签名发布流。CLI 单测 371 例(覆盖率 98.65%) + 真实 e2e(PAT/设备码链路·退码·并发单次消费·consume↔移除锁线性化)全绿;后端单测全套绿;前端 2526 例全绿 + typecheck 净。
@@ -135,6 +202,44 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - 钉钉机器人接入 Spec 增补(MES-82:双接收模式/emoji 确认/`/stop`·`/btw`/消息队列,三视角评审通过)。
 - MES-92 daemon 真实执行体架构设计(`docs/specs/daemon-executor.md`,1021 行 Spec + specs 索引登记)+ 安全评审必修项收口。
 
+## [0.20.0] - 2026-07-29
+
+平台能力层 D:集成平台全功能实现(MES-68,integrations.md 五章)。统一第三方集成抽象——IM(飞书/Lark、Slack)/ VCS(GitHub/GitLab)/ 出向 Webhook 共用同一套注册绑定、凭据保险箱、摄取管线与投递台账;连接器只实现「签名校验 + 载荷归一 + 出站适配」三个适配点。入站摄取复用 autopilot `webhook_events` 范式(恒定时间签名 + ±300s 防重放 + `rejected:<hash>` 防预占命名空间 + 去重幂等 200 + 全程审计,invalid/missing 一律 401 绝不分发),经 §6.9「外部 IM 消息触发」行写 `execution.enqueue`(trigger='integration',幂等键 `sha256(agent|binding|external_event_id)`,载荷 §6.15 不可信隔离)。`external_identities` 全局身份表(R4/R5:映射全局 `users.id`、身份键含平台租户、无 workspace_id/无 workspace RLS、建链工作区删除映射保留、解链仅所属用户本人且 admin 无旁路);卡片回调鉴权链(点击者 → users.id → 名册 JOIN → §6.10 权限再校验 → 转发统一审批,未映射/无权限 403 审批不变);建链信任根(验证码投递至外部账号私聊,10 分钟 TTL 单次消费);VCS `vcs_links` 真源 + identifier 自动关联 + `auto_status_map` 状态流转(系统评论留痕、重复事件幂等);出向订阅经 outbox `webhook.dispatch` 派生 → 投递 worker(`Mesh-Signature` HMAC + 指数退避 + 订阅级熔断 + resume/手动重试),https-only + SSRF 私网/元数据拒绝;OAuth 授权码 + PKCE;凭据密文存储、明文仅显示一次、全通道不回显。T29 全断言与 §5 红线真实起服 e2e 全绿;模块单测覆盖率 ≥90%。
+
+### Added
+
+- **数据模型(integrations.md §2,迁移 0033)**:七表——`integrations`(kind∈im_feishu/im_slack/vcs_github/vcs_gitlab/webhook_outbound,非密 `config` + 密文 `secret_ref`)·`integration_bindings`(**外部身份全局唯一键** `UNIQUE(provider, provider_tenant_key, external_ref)`,跨工作区抢绑 INSERT 即拒 409 `binding_conflict`;scope 精确异或 CHECK;项目级绑定随项目物理删除 `ON DELETE CASCADE`;`bound_agent_id` 列级 `SET NULL`)·`integration_events`(同构 autopilot `webhook_events`:`UNIQUE(integration_id, external_event_id)` 去重 + `rejected:<body-hash>` 独立命名空间防预占)·`external_identities`(**全局身份表**:映射 `users.id`、`UNIQUE(provider, provider_tenant_key, external_user_key)`、`created_in_workspace_id ON DELETE SET NULL` 仅审计、用户注销级联;无 workspace RLS)·`webhook_subscriptions` + `webhook_subscription_deliveries`(`UNIQUE(subscription_id, event_ref)` 投递幂等)·`vcs_links`(active 部分唯一键 + 同租户复合 FK);全部 §2.8 索引 + fail-closed RLS + SECURITY DEFINER 引导函数(按 kind/config 定位集成、绑定路由、资源→工作区解析、`external_identity_unlink_allowed()` 可执行参照)。
+- **入站摄取(§3.2,复用 autopilot 范式)**:四平台签名(飞书 `SHA256(ts+nonce+encrypt_key+body)` / Slack `v0=HMAC_SHA256` / GitHub `X-Hub-Signature-256` / GitLab 共享密钥或 HMAC)恒定时间比较 + 时间戳防重放;签名无效/缺失 → 401 + 审计,**绝不分发**;飞书/Slack `url_verification` challenge;集成停用 401 `integration_disabled`;匹配绑定后经 §6.9 同事务写 `execution.enqueue`(trigger='integration',幂等键 `sha256(agent_id|binding_id|external_event_id)`,§6.11 快照,载荷经 §6.15 `untrusted_context` 隔离);未绑定/未匹配 agent 仅审计;`integration.event_ingested` 实时台账。
+- **连接器(§5.2)**:飞书/Lark(`im.message.receive_v1` 归一、tenant_key)、Slack(Events API、team_id 路由)、GitHub(installation 路由、PR/push 归一)、GitLab(绑定路由、MR Hook 归一);新增连接器 = 三个适配点。
+- **外部身份建链/解链(§3.1,HIGH-1/R4/R5)**:一次性验证码投递至该外部账号私聊(dev 经 Redis dev-outbox;生产经平台 API),10 分钟 TTL + 单次消费;建链目标固定请求者本人 `users.id`(不接受指向他人的参数);重复建链 409 `identity_already_linked`;**全局解链仅映射所属 `users.id` 本人,工作区 admin/owner 无旁路**(403 `identity_unlink_forbidden`,`external_identity_unlink_allowed()` 仅比对 users.id);建链/解链审计留痕。
+- **IM 卡片回调鉴权链(§3.2/§4.3)**:飞书交互卡片 / Slack Block Kit 回调 → 提取点击者外部身份 → `external_identities` 映射 `users.id` → 集成解析工作区 → JOIN 该工作区 `members` 名册行(active human)→ §6.10 权限再校验 → 转发统一审批端点(approve/reject 幂等);未映射/无名册行/无权限 → 403 审批状态不变 + 审计;同一映射行服务多工作区审批,建链工作区删除后其余工作区照常解析。
+- **VCS 关联与自动流转(§3.3)**:`vcs_links` 显式关联 / identifier(`WEB-123`)自动解析关联(落库幂等、抢关 409);`auto_status_map` 经 issue 状态流转移置目标状态(严格模式 `allowed_transitions` 校验)+ `external_state` 刷新 + `stale` 标记 + 系统评论留痕;重复事件幂等不重复改状态;issue 侧栏关联列表端点。
+- **出向 Webhook 订阅(§3.4/§5.3)**:订阅 CRUD(https-only 400 `invalid_url_scheme`;创建时 SSRF 私网/环回/链路本地/元数据拒绝 422 `ssrf_blocked`;HMAC 密钥创建后**仅显示一次**);经 outbox `webhook.dispatch`(relay 自 `realtime.publish` 派生,`UNIQUE(subscription_id, event_ref)` 幂等)→ 投递 worker:`Mesh-Signature: t=<ts>,v1=HMAC_SHA256` + `Mesh-Event` + `Mesh-Delivery` 头、指数退避(`min(base×2^n,max)×jitter`)、投递时解析地址二次 SSRF 校验、订阅级熔断(连续失败超阈值 `disabled` + 告警)、`resume` 清零、手动重试失败投递(熔断期 422 `subscription_circuit_open`)。
+- **OAuth 授权码 + PKCE(§3.1)**:`authorize` 302(S256 challenge + 单次消费 state)、回调换取 token(refresh token 仅存密文,最小 scope),失败 `oauth_failed`。
+- **前端(§4)**:集成管理页(连接器目录卡片 + 已连接列表 + OAuth/粘贴 token 添加,密钥掩码)、集成详情(概览/绑定抽屉——作用域异或 + 匹配规则 + 目标 agent「留空=仅审计」提示/事件台账——签名/处理状态徽章 + 载荷预览标注不可信数据 + rejected/deduped 高亮)、出向订阅页(密钥仅显示一次对话框 + 投递时间线 + 熔断横幅/恢复 + 手动重试)、外部身份建链/解链面板、issue 侧栏 VCS 关联区块;i18n 全外部化(zh-CN + en,per-file 90% 门禁);异常态矩阵(loading/empty/permission/offline/retry)。
+
+- **验收整改第一轮(验收员 04:32 打回清单全量收口)**:
+  - **出向投递真事件(HIGH-1,§3.4 行 599/P8)**:派发时捕获 `event_type`/`payload` 落 `webhook_subscription_deliveries` 新列;worker 的 `Mesh-Event` 头填**真实事件类型**(如 `issue.updated`),body = `{event, data, event_ref, delivery_id}`——订阅方从单个投递即可还原域事件(不再是两个不透明 UUID)。
+  - **测试连接 / 发送测试事件(HIGH-P1)**:`POST …/integrations/{id}:test`(轻量平台 API 只读往返:飞书 tenant_access_token / Slack auth.test / 钉钉 gettoken / GitHub·GitLab 身份端点;分类 healthy/auth_failed/unreachable,结果驱动连接器健康字段)+ `POST …/webhook-subscriptions/{id}:send-test`(合成 `webhook.test` 走完整签名+投递+台账)。
+  - **连接器健康度(MEDIUM-P2)**:`integrations` +`health_state`/`last_error`/`last_success_at`(§2.2);`:test` 与凭据校验结果驱动迁移;前端 §4.1 徽章 + `auth_failed`「重新授权」联动。
+  - **OAuth 回调持久化凭据(MEDIUM-1,§3.1 行 523)**:回调同程建集成行,refresh token(无则 access token)加密落 `secret_ref`;state 携带 `name`,成功重定向带集成 ID。
+  - **出向 SSRF DNS rebinding TOCTOU 闭合(MEDIUM-2)**:复用 `skill/ssrf.py` `resolve_pinned`(解析一次 + 全址校验 + pinned),httpx 自定义 network backend 只连已验证地址(TLS SNI/证书仍按原主机名),消除二次解析窗口;真实套接字负向用例。
+  - **入站 DoS 加固(MEDIUM-3)**:六端点 per-IP 滑窗限流(共享预算 429)+ body 1MiB 上限(413,预检 + 实读复检)+ rejected 台账载荷 16KiB 截断(取证前缀 + 原始字节数)。
+  - **台账保留窗口(MEDIUM-P3)**:`integration_ledger_retention_loop`(默认 30 天,GitHub 投递日志同级)清理 `integration_events` + `webhook_subscription_deliveries`(**pending 绝不删**)。
+  - **成功包络(MEDIUM-4)**:`POST /workspaces/{ws}/integrations` 响应套 `{"data"}`(§6.14 唯一偏差端点收口)。
+  - **VCS 三修(LOW)**:抢关 409 `ConflictError`(§5.2/§3.5)、`GET /issues/{id}/vcs-links` 仅返 active(§3.3)、render 对 `*_ref` 密文恒脱敏(§6.16 纵深)。
+  - **前端支撑字段**:已连接列表「近7天事件量」(`events_7d`)、订阅列表「成功率」(`success_rate` + 投递计数)、VCS 深链可点(`url` 字段,github/gitlab PR·MR·branch·commit·repo 映射)。
+  - **MES-82 rebase 衔接**:迁移 0033 含 `im_dingtalk` kind / `stream_state` 列 / provider +dingtalk / `integration_message_queue` + `execution_context_appends` 两表(与 T39 可执行参照逐约束对账)/ `notification_delivery` +dingtalk 与路由 FK / outbox `available_at` + 重键 pending 索引(relay 领取谓词 `available_at <= now()`,RetryableDelay 只后移不消耗失败预算)。
+
+### Verified
+
+- 真实 e2e(真实起服 + 真实 worker):T29 全断言(全局键抢绑 409 / scope 异或 / 项目级联 / 多工作区身份模型 + 建链工作区删除映射保留 / 结构与 RLS 负向 / 解链无旁路);签名拒绝 + 重放拒绝 + 去重幂等 + 防预占 + 停用拒绝;入站经真实 relay 落 `task_executions`(trigger='integration' + §6.9 幂等键);VCS 流程 C(PR 合并 → 自动置 done + 关联 + 评论,重复事件幂等);出向投递台账/重试/熔断/恢复;https-only + SSRF。
+- 单元测试:模块覆盖率 ≥90%(新增代码与整体双达标)。
+
+### Security
+
+- **集成安全审核整改(HIGH-1 / M-1)**:GitLab 自托管 `instance_url` SSRF 防护与 webhook 投递同构双层闭合——config 写入(create/update)强制 https + `is_forbidden_host`(私网/回环/link-local/云元数据一律 `ssrf_blocked`/`invalid_url_scheme` 拒绝,不可落库);连通性测试(`:test`)经共享 `resolve_pinned` 单次解析 + 校验 + 钉死 IP,仅连接已验证公网地址(DNS-rebinding TOCTOU 闭合)、不跟随重定向。外部身份建链验证码增失败限次(`MAX_CODE_ATTEMPTS=5`):失败计数保持剩余 TTL(失败不续期),额度耗尽即销毁该码,杜绝 10 分钟 TTL 内暴破 6 位验证码映射他人外部账号。另修复 `integrations.css` 3 处 color-function 记法(CI Lint 门禁)。
+
 ## [0.19.0] - 2026-07-29
 平台能力层 C:统计报表与仪表盘全功能实现(MES-71,analytics.md 五章)。只读聚合层消费 `issues`/`task_executions`/`execution_attempts`/`autopilot_runs` 真源,绝不回写;唯一物化缓存 `analytics_snapshots`(迁移 0028)以 `scope_key` 入唯一键实现跨权限缓存物理隔离。可见性红线:`visible_executions` 统一 CTE 逐字内联到四类 execution 聚合(workload-B / agent 主统计 / retry / token),关联 issue 的执行继承项目可见性、无 issue 执行归属 agent、private agent 先过 agent 可见性;workload / agent stats / workspace dashboard 共用同一构件。口径:cycle time 的 `insufficient_data` 诚实披露、velocity / burndown 的 `current_attribution` 当前归属、throughput 的 `calendar_timezone` 本地日历分桶(跨 DST 不错位)、token `token_coverage` 仅覆盖 autopilot 触发执行。8 端点 + 工作区/项目/agent 三处 UI(导航 + 命令面板唯一入口、名册深链)。
 
@@ -192,6 +297,7 @@ Housekeeping 补丁发版:schema-validation 命名漂移根因治理(显示名�
 - **B3(Spec §4.2/§5.1/§1.2.1)**:深链唯一真源 `deeplinks.ts`——清单 CTA 与空状态主操作同读一处;步骤 3 CTA 改指新建 issue 入口(`/issues?create=1`)、步骤 4 CTA 改指 issue 详情(分派 assignee / @ composer;工作区最新 issue 派生,无 issue 回退看板);CHANGELOG 措辞与代码对齐。
 - **§3.3 错误码对齐**:`workspace_id` 缺失/非法返回 400 `validation_error`(原文字面),合法 UUID 非成员保持 404 `not_found`(§5.3 不泄漏存在性)。
 - **非阻塞备注顺手清**:后端 `service.py`(1040 行)拆为 `completion.py`(守卫/进度)+ `attribution.py`(R4 触发者归属 / aha 证据链)+ `reconcile.py`(建状态全量 reconcile),`service.py` 降为 façade + 播种/渲染/路由事务(行为不变,测试全绿);死键 `a11y.onboarding.card`/`onboarding.dismissedNote` 与死码 `parseOnboardingFrame` 删除;restore 失败不再静默(帮助层 `role=alert` 提示);`OnboardingChecklist` 分支覆盖 90% 并纳入 per-file 门禁;`data-jobs/wizardFlow` 满载机偶发失败修为确定性等待(busy 禁用按钮竞态,非超时糊弄)。
+
 
 ## [0.17.2] - 2026-07-29
 

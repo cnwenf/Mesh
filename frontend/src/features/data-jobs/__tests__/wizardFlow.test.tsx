@@ -209,6 +209,12 @@ describe('ImportWizard full flow', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled());
 
     request.mockRejectedValueOnce(new Error('network down'));
+    // 竞态修复:首次 create 失败的 catch/finally(setBusy(false)) 在 reject 续体里
+    // 异步刷新;覆盖率插桩下第二次同步 click 可能落在按钮仍 busy 的瞬间被吞掉,
+    // 使 request 停留 1 次。等按钮重新可用(失败态已落定)再点击,与 i18n 文案无关。
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId('validate-summary')).toBeNull();

@@ -556,7 +556,7 @@ data: {"task_id":"st-root-9001","status":"done","result_summary":"已完成异�
 ### 3.4 分页 / 鉴权 / 限流
 
 - **分页**:游标分页 `?limit=<1..100,默认30>&cursor=<opaque>`,响应 `{"data":[...],"next_cursor"}`;游标内部为 `(created_at, id)` keyset 编码,`next_cursor` 为 null 表示末页。
-- **鉴权**:小队读需 workspace 成员且为小队成员/observer 或 admin;小队写(创建/编辑/归档/增删成员)需小队管理权限或 admin;**agent 不能自改自己所属小队的成员构成**(防越权)。给小队分派任务需对目标 issue 有分派权(或 autopilot)。leader 拆解/分派/汇报由 agent runtime 持 API token 代该 leader 调用,服务端校验"调用 agent 确为该任务的 orchestrator"。审核方案/取消任务需人类成员、observer 或 admin。
+- **鉴权**:小队读需 workspace 成员且为小队成员/observer 或 admin;小队写(创建/编辑/归档/增删成员)需小队管理权限或 admin;**agent 不能自改自己所属小队的成员构成**(防越权)。给小队分派任务需对目标 issue 有分派权(或 autopilot)。leader 拆解/分派/汇报经 **task broker 持短期 task token 代该 leader 调用**(runtime-executor §2.2/§3.3:`squad.members` 读名册、`squad.subtasks` 提交拆解,仅 `squad_role=orchestrator` 的 attempt 获此 scope;评论/状态经 `/api/v1/task/issues/*`,评论 `suppress_triggers` 防回环),服务端校验"调用 attempt 的 agent 确为该任务的 orchestrator",绝不注入长期 agent PAT。审核方案/取消任务需人类成员、observer 或 admin。
 - **限流**:写端点按 principal 限流;agent runtime 的拆解/分派端点单独限流(防 leader 高频刷派),见 auth.md。
 
 ### 3.5 实时通道(WebSocket 为主,SSE 用于编排长链路)

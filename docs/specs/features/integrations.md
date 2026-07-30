@@ -135,6 +135,9 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 | `status` | TEXT | NOT NULL,CHECK IN ('active','disabled') | `'active'` | 启用状态;`disabled` 时入站摄取拒绝分发、出站停发 |
 | `config` | JSONB | NOT NULL | `'{}'` | **非密**平台配置(app_id、外部租户标识、回调基址、默认卡片模板等;**严禁存任何 secret**,见 §2.7) |
 | `stream_state` | JSONB | NOT NULL | `'{}'` | **钉钉 Stream 连接状态持久真源**(MES-82;仅 `kind='im_dingtalk'` 且 `receive_mode='stream'` 使用):`{state:'connected'\|'reconnecting'\|'down', last_frame_at, last_attempt_at, backoff_seconds}`;由 Stream worker 在状态迁移事务内经 outbox 同步广播 `integration.updated(subject='stream_channel')`(README §6.6/§6.7);`GET .../integrations/{id}/stream-status`(§3.9)读取,UI 首屏与诊断不依赖实时事件先达 |
+| `health_state` | TEXT | NOT NULL,CHECK IN ('unknown','healthy','auth_failed','unreachable') | `'unknown'` | **连接器健康度**(独立于手动 `active`/`disabled` 的 `status`;由 `:test`(§3.1)与凭据刷新失败驱动;§4.1 健康徽章与「重新授权」联动) |
+| `last_error` | TEXT | NULL | NULL | 最近一次连接器健康检查 / 凭据刷新错误摘要(不泄漏内部细节) |
+| `last_success_at` | TIMESTAMPTZ | NULL | NULL | 最近一次连接器健康检查成功时刻 |
 | `secret_ref` | TEXT | NULL | NULL | 凭据加密密文引用(同 `runtime_credentials.encrypted_value` 契约,README §6.16;app secret / bot token / OAuth refresh token 只存密文,响应/日志不回显) |
 | `created_by` | UUID | NOT NULL,**复合 FK `(workspace_id, created_by) → members(workspace_id, id)` `ON DELETE RESTRICT`** | — | 创建者(人或 agent;判别 JOIN members,README §6.1/§6.2;成员软删除,不悬空) |
 | `deleted_at` | TIMESTAMPTZ | NULL | NULL | 软删除时间 |
@@ -239,6 +242,8 @@ workspaces ──隔离──► webhook_subscriptions(出向订阅:https URL + 
 | `workspace_id` | UUID | NOT NULL,FK→workspaces(id) `ON DELETE CASCADE` | — | 归属工作区 |
 | `subscription_id` | UUID | NOT NULL,**复合 FK `(workspace_id, subscription_id) → webhook_subscriptions(workspace_id, id)` `ON DELETE CASCADE`** | — | 所属订阅(README §6.2) |
 | `event_ref` | TEXT | NOT NULL | — | 源事件稳定引用(源 `outbox_events.id` 或领域事件 ID);参与投递幂等键 `sha256(subscription_id | event_ref)`(README §6.5) |
+| `event_type` | TEXT | NOT NULL | `''` | **派发时捕获的真实事件类型**(如 `issue.updated`)——出向投递 `Mesh-Event` 头的真值(§3.4),**绝非**不透明的 outbox 事件 UUID |
+| `payload` | JSONB | NOT NULL | `'{}'` | **派发时捕获的事件载荷**——body 携带 `event`+`data`(P8:订阅方可从单个投递还原完整域事件,§3.4) |
 | `state` | TEXT | NOT NULL,CHECK IN ('pending','sent','failed') | `'pending'` | 投递状态 |
 | `attempts` | INT | NOT NULL,CHECK (>= 0) | `0` | 已尝试次数 |
 | `next_retry_at` | TIMESTAMPTZ | NULL | NULL | 下次重试时刻(指数退避 + 抖动;终态为 NULL) |
@@ -310,6 +315,10 @@ CREATE TABLE integrations (
   status       TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   config       JSONB NOT NULL DEFAULT '{}',
   stream_state JSONB NOT NULL DEFAULT '{}',                                             -- 钉钉 Stream 连接状态持久真源(MES-82,§3.9 stream-status)
+  health_state TEXT NOT NULL DEFAULT 'unknown'
+               CHECK (health_state IN ('unknown','healthy','auth_failed','unreachable')),  -- 连接器健康度(:test / 凭据刷新驱动,独立于 status,§3.1/§4.1)
+  last_error   TEXT NULL,                                                               -- 最近健康检查 / 凭据刷新错误摘要
+  last_success_at TIMESTAMPTZ NULL,                                                     -- 最近健康检查成功时刻
   secret_ref   TEXT NULL,
   created_by   UUID NOT NULL,
   deleted_at   TIMESTAMPTZ NULL,
@@ -427,6 +436,8 @@ CREATE TABLE webhook_subscription_deliveries (
   workspace_id    UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   subscription_id UUID NOT NULL,
   event_ref       TEXT NOT NULL,
+  event_type      TEXT NOT NULL DEFAULT '',                                            -- 派发时捕获的真实事件类型(Mesh-Event 头真值,§3.4)
+  payload         JSONB NOT NULL DEFAULT '{}',                                         -- 派发时捕获的事件载荷(P8:单投递可还原域事件,§3.4)
   state           TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
   attempts        INT NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   next_retry_at   TIMESTAMPTZ NULL,
@@ -652,6 +663,14 @@ processing ──execution.finished(status=completed)──► done             
 ```
 > PR #58 现有 `process_inbound()`(HTTP 定位/验签与匹配/派发揉在一起)在 #58 rebase 到含本 Spec 的 main 时按此边界重构:拆出 HTTP 鉴权适配器 + 抽出 `ingest_verified_event(envelope)` 共享核心,Stream worker 复用同一核心(§3.2 Stream 小节「同一摄取服务函数」即指本函数)。
 
+### 2.11 台账保留策略(入站事件 / 出向投递)
+
+> 入站台账 `integration_events` 与出向投递台账 `webhook_subscription_deliveries` 均**存原始外部内容**(入站原始载荷、出向投递载荷,可能含 PII),不作永久保留:
+
+- **保留窗口默认 30 天**(与 GitHub 投递日志同级),经 worker **retention loop 定期分批删除**(`created_at` 早于窗口的行,分批限量删除避免长事务 / 锁争用)。
+- **`webhook_subscription_deliveries` 的 `pending` 投递绝不删**:仍在重试 / 退避周期(`state='pending'`,含 `next_retry_at` 未到)的投递行不受 retention 清理——retention 仅清理终态(`sent`/`failed`)且超窗的行,杜绝把尚待重试的投递误删导致漏发。
+- **入站载荷字节上限见 §3.2**(body 1MiB 上限 + 被拒台账载荷截断 16KiB):retention 管"存多久",§3.2 管"单条多大",二者正交。
+
 ---
 
 ## 3. 接口设计
@@ -668,6 +687,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | PATCH | `/workspaces/{ws}/integrations/{id}` | 更新配置/状态 | admin / `integration:manage` |
 | DELETE | `/workspaces/{ws}/integrations/{id}` | 软删除集成(软删后入站拒分发);**硬删除须先对其绑定逐项走绑定 DELETE 的强制终止路径**(§3.9 删除保护:队列项全部终态后父引用 SET NULL,删除实际完成) | admin / `integration:manage` |
 | POST | `/workspaces/{ws}/integrations/{id}/rotate-secret` | 轮换凭据(旧密文失效) | admin / `integration:manage` |
+| POST | `/workspaces/{ws}/integrations/{id}:test` | **测试连接**:轻量平台 API 只读往返校验凭据/连通性(飞书 `tenant_access_token` 换取 / Slack `auth.test` / 钉钉 `gettoken` / GitHub `GET /user` / GitLab `GET /api/v4/user`;`webhook_outbound` 无凭据恒 `healthy`),返回 `{data:{health_state, detail}}`,`health_state ∈ unknown/healthy/auth_failed/unreachable`;**结果同事务驱动连接器健康字段**(`integrations.health_state`/`last_error`/`last_success_at`,§2.2) | admin / `integration:manage`(写限流) |
 | GET | `/workspaces/{ws}/integrations/{id}/bindings` | 该集成的绑定列表 | 成员 |
 | POST | `/workspaces/{ws}/integrations/{id}/bindings` | 创建绑定(外部身份 + 作用域 + 匹配规则 + 目标 agent) | admin / `integration:manage` |
 | PATCH | `/workspaces/{ws}/integration-bindings/{id}` | 更新绑定(匹配规则/目标 agent/状态) | admin / `integration:manage` |
@@ -679,6 +699,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | PATCH | `/workspaces/{ws}/webhook-subscriptions/{id}` | 更新订阅(URL/事件过滤/状态) | admin / `integration:manage` |
 | DELETE | `/workspaces/{ws}/webhook-subscriptions/{id}` | 删除订阅 | admin / `integration:manage` |
 | POST | `/workspaces/{ws}/webhook-subscriptions/{id}/resume` | 恢复熔断/暂停的订阅(`fail_count` 清零) | admin / `integration:manage` |
+| POST | `/workspaces/{ws}/webhook-subscriptions/{id}:send-test` | **发送测试事件**:合成 `webhook.test` 事件走**完整签名 + 投递 + 台账**路径(经 outbox 投递 worker,与真实事件同一管线);成功返回 **201** 并落 delivery 台账行;**熔断期** → `422 subscription_circuit_open`;订阅**非 `active`**(paused/disabled)→ 422 拒绝 | admin / `integration:manage` |
 | GET | `/workspaces/{ws}/webhook-subscriptions/{id}/deliveries` | 投递台账(状态过滤,重试历史) | 成员 |
 | POST | `/workspaces/{ws}/webhook-subscriptions/{id}/deliveries/{delivery_id}/retry` | 手动重试某条失败投递 | admin / `integration:manage` |
 
@@ -687,7 +708,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | 方法 | 路径 | 说明 | 最低角色 |
 |------|------|------|----------|
 | GET | `/workspaces/{ws}/external-identities` | 列出**当前成员所属全局身份**已连接的外部身份(`external_identities.user_id` = 请求者经本工作区成员行解析的 `users.id`;全局表按所属用户过滤,非按工作区过滤,R5) | 成员(仅本人所属身份的映射) |
-| POST | `/workspaces/{ws}/external-identities:link` | **建链**:将请求者本人的外部平台账号关联到**请求者本人的全局登录身份 `users.id`**(经其本工作区成员行的 `user_id` 解析,R4;**建链目标固定为请求者本人,不接受指向他人用户/成员行的参数**);请求体 `{provider, integration_id, external_account_ref}`(`provider_tenant_key` 由 integration 实例归一,不由请求体提供;**`external_account_ref` = 请求者本人的外部账号标识(钉钉 `senderStaffId` 等),验证码模式下定向私聊的必备目标**——钉钉单聊经 `oToMessages` 需 staffId;OAuth 模式下该字段可选,以 OAuth 返回的平台身份为准);服务端经集成出站适配器**向该外部账号私聊下发一次性验证码**(或走外部平台 OAuth 确认,服务端核对 OAuth 返回的平台用户身份与请求者会话),验证码 TTL 10 分钟 + 单次消费(**实现期项 L1**:验证码签发叠加每成员 + 每目标 `external_account_ref` 频率限制,对齐登录类失败计数范式,防对已连企业内任意 staffId 发码骚扰/枚举);校验通过方写入 `external_identities` 行(映射为全局行,**`created_in_workspace_id` = `{ws}` 仅作建链来源审计,R5**) | 成员(仅本人) |
+| POST | `/workspaces/{ws}/external-identities:link` | **建链**:将请求者本人的外部平台账号关联到**请求者本人的全局登录身份 `users.id`**(经其本工作区成员行的 `user_id` 解析,R4;**建链目标固定为请求者本人,不接受指向他人用户/成员行的参数**);请求体 `{provider, integration_id, external_user_key}`(`provider_tenant_key` 由 integration 实例归一,不由请求体提供;**`external_user_key`(text,必填)= 验证码将投递到的具体外部账号(请求者本人的外部账号标识,钉钉 `senderStaffId` 等,与 `external_identities.external_user_key` 同口径,即此前所称 `external_account_ref`)——验证码必须送达声明者所称的账号,故请求体必须指名该账号**,钉钉单聊经 `oToMessages` 需 staffId;OAuth 模式下仍必填以指名目标,最终映射身份以 OAuth 返回的平台用户身份为准,服务端核对其与请求者会话);服务端经集成出站适配器**向该外部账号私聊下发一次性验证码**(或走外部平台 OAuth 确认,服务端核对 OAuth 返回的平台用户身份与请求者会话),验证码 TTL 10 分钟 + 单次消费(**实现期项 L1**:验证码签发叠加每成员 + 每目标 `external_account_ref` 频率限制,对齐登录类失败计数范式,防对已连企业内任意 staffId 发码骚扰/枚举);校验通过方写入 `external_identities` 行(映射为全局行,**`created_in_workspace_id` = `{ws}` 仅作建链来源审计,R5**) | 成员(仅本人) |
 | POST | `/workspaces/{ws}/external-identities:link-confirm` | **建链确认**:提交验证码 `{provider, integration_id, code}`;服务端校验验证码(匹配 + 未过期 + 未消费)→ 写入映射(`user_id` = 请求者全局身份,`created_in_workspace_id` = `{ws}` 审计);`UNIQUE(provider, provider_tenant_key, external_user_key)` 拒绝同一外部账号重复映射(409 `identity_already_linked`,R4 全局身份键) | 成员(仅本人) |
 | DELETE | `/workspaces/{ws}/external-identities/{id}` | **全局解链(R5:仅所属用户本人,无 admin 旁路)**:删除该全局映射;**仅当请求者经 `{ws}` 成员行解析的 `users.id` 等于映射的 `user_id`(映射所属用户本人)时放行**,否则 `403 identity_unlink_forbidden`——**工作区 admin/owner 不得解链他人的全局身份**(管理员只能经 member.md 撤销该用户在本工作区的使用权/成员资格,其卡片回调随之在本工作区回落 403,全局映射不动);解链后该外部身份的卡片点击在**所有工作区**立即恢复为「未映射 → 403」 | 成员(仅映射所属 `users.id` 本人) |
 
@@ -696,7 +717,7 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/workspaces/{ws}/integrations/oauth/{kind}/authorize` | 发起 OAuth 授权码 + PKCE(302 跳外部平台授权页,`state` 防 CSRF) |
-| GET | `/integrations/oauth/{kind}/callback` | 授权回调:校验 `state` + 换取 token,**refresh token 只存密文**(`secret_ref`),最小 scope |
+| GET | `/integrations/oauth/{kind}/callback` | 授权回调:校验 `state`(**携带发起授权时传入的可选 `name`**)+ 换取 token,**回调成功后即创建集成行**(不再由管理员在授权往返后另行创建);refresh token(**无 refresh token 的提供商如 GitHub 则为 access token**)加密落 `secret_ref`(**密文-only**,响应/日志不回显,§6.16),最小 scope;成功重定向 `/integrations?oauth=success&id=<integration_id>`,失败重定向 `/integrations?oauth=error` |
 
 ### 3.2 入站回调端点(平台签名校验,非 Bearer)
 
@@ -709,6 +730,11 @@ REST 基础路径 `/api/v1`;管理端点鉴权 `Authorization: Bearer <token>`,*
 | POST | `/api/v1/integrations/github/events` | GitHub | `X-Hub-Signature-256: sha256=HMAC_SHA256(webhook_secret, raw_body)`;`X-GitHub-Delivery` 作 `external_event_id`;`X-GitHub-Event` 作事件类型 |
 | POST | `/api/v1/integrations/gitlab/events` | GitLab | `X-Gitlab-Token`(共享密钥,恒定时间比较)或 `X-Gitlab-Signature`(HMAC);`X-Gitlab-Event` 作事件类型;`event_uuid` 作 `external_event_id` |
 | POST | `/api/v1/integrations/dingtalk/events` | 钉钉/DingTalk | **HTTP 回调模式**(`config.receive_mode='http'`):请求头 `timestamp`(毫秒)+ `sign = Base64(HMAC_SHA256(app_secret, timestamp + "\n" + app_secret))`;恒定时间比较 + 时间戳防重放(**钉钉官方容差 ±3600s**,严于其上限即拒绝合法回调,不得收窄);经 body `chatbotCorpId`(+ `robotCode`)定位集成;`msgId` 作 `external_event_id`。**Stream 模式不经本端点**( Mesh 侧主动出连,见下) |
+
+> **未认证端点 DoS 硬化(硬约束,写死)**:入站回调端点对 Mesh 是**未认证面**(平台签名校验在请求处理之内),故在签名校验**之前**先过资源护栏——无凭据攻击者既不能烧 CPU 也不能灌库:
+> - **per-IP 滑动窗口限流**:六个入站回调端点**共享一份** per-IP 滑窗预算(键含来源 IP,Redis 滚动窗口),超限 → **429 `rate_limited`**(签名前粗粒度防刷,与 §2.10 签名后语义级频率护栏分层互补);
+> - **body 1MiB 上限**:请求体超 **1MiB** → **413**(`Content-Length` 预检 + 实读字节数复检双道,防 `Content-Length` 谎报绕过);
+> - **被拒台账载荷截断**:被拒事件落 `integration_events` 取证时,`payload` **截断至 16KiB 上限**(留存取证前缀 + 记原始字节数),防攻击者以超大被拒载荷灌爆台账存储。
 
 **钉钉 Stream 模式入站通道(`config.receive_mode='stream'`,推荐)**:
 
@@ -864,6 +890,10 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 
 > **不**在业务事务外直接 POST 外部 URL(README §6.6 硬约束);出向投递是 outbox 的消费方。投递幂等键 `sha256(subscription_id | event_ref)`(README §6.5)。
 
+> **`Mesh-Event` 头与投递 body 携带真实域事件(P8,写死)**:`Mesh-Event: <event_type>` 取**派发时捕获的真实领域事件类型**(如 `issue.updated`,即 `webhook_subscription_deliveries.event_type`,派生订阅投递时自源 outbox 事件捕获),**绝不**以不透明的 outbox 事件 UUID 占位;投递 JSON body 为 `{"event": <event_type>, "data": <payload.data>, "event_ref": <event_ref>, "delivery_id": <delivery_id>}`(事件载荷捕获于 `webhook_subscription_deliveries.payload`,§2.6)——订阅方**仅凭单个投递即可还原完整域事件**,无需回查 Mesh(P8 出向订阅契约)。
+
+> **投递时 SSRF 守卫(单次解析,闭合 DNS-rebinding TOCTOU,写死)**:投递 worker 对目标 URL 主机**恰好解析一次**——经共享的固定解析守卫(pinned-resolve)把主机名解析为候选地址集,逐一校验并拒绝私网 / 环回 / link-local / 元数据地址段(README §6.16),随后**仅连接经校验的地址**(连接阶段不再二次解析),闭合"校验时解析到公网、连接时 DNS 重绑定到内网"的 TOCTOU(DNS-rebinding)攻击面;**TLS SNI 与证书校验仍锚定原始主机名**(连接用解析后的 IP,SNI / 证书 SAN 比对用原始 hostname,不因固定解析而降级证书校验)。
+
 ### 3.5 错误码表(本模块具名,通用码见 README §6.14)
 
 | HTTP | code | 场景 |
@@ -881,7 +911,7 @@ stream worker(常驻进程,与 outbox relay 同类的基础设施 worker)启动
 | 409 | `binding_has_active_queue` | 删除绑定/集成时仍存在非终态队列项且未使用强制终止路径(§3.9 删除保护;`?force=cancel` 经批量终止后放行) |
 | 409 | `conflict` | 名称重复 / 乐观锁冲突 |
 | 409 | `duplicate_event` | 入站去重命中(通常作 200 `deduped`,内部用) |
-| 410 | `integration_disabled` | 集成 `status='disabled'`,入站拒绝分发 / 出站停发 |
+| 401 | `integration_disabled` | 集成 `status='disabled'`,入站拒绝分发 / 出站停发(与 §3.2/§5.1 一致;原表 410 为笔误) |
 | 422 | `ssrf_blocked` | 出向目标命中私网地址段 / 元数据地址(README §6.16) |
 | 422 | `identifier_not_resolved` | VCS identifier(`WEB-123`)解析不到 issue(留痕,不阻塞摄取) |
 | 422 | `vcs_link_invalid` | VCS 关联的 issue/vcs_ref 非法或跨工作区 |

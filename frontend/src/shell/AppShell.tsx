@@ -1,9 +1,10 @@
 /**
  * App shell(README §6.12):TopBar + StatusBanner + Sidebar + <main><Outlet/></main>。
  *
- * - 承载实时连接:useRealtime({url: env.wsBaseUrl + '/ws', getToken, enabled, reconciler});
+ * - 承载实时连接:useRealtime({url: resolveWsGatewayUrl(env.wsBaseUrl), getToken, enabled, reconciler});
+ *   网关地址为绝对 ws(s)://(同源部署 wsBaseUrl 空时由页面 location 派生,MES-106);
  *   reconciler 以 REST 整拉 resync_required 给出的 rest URL 对账(§6.7);
- * - RealtimeContext:向页面(如 HomePage 演示区)暴露 {state, client};shell 外为 null;
+ * - RealtimeContext:向页面(如首页工作区仪表盘)暴露 {state, client};shell 外为 null;
  * - OverlayControls:App 层持有命令面板/帮助层开关,经本 Context 下达 TopBar;
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
@@ -12,9 +13,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from 'react';
 import { Outlet, useMatch } from 'react-router';
 import { MeshApiError, getToken } from '../api';
-import { env } from '../env';
-// theme.md §4.5 偏好回填(main 侧新增);MES-79 的 useT 消费已下沉到
-// ShellShortcutsRegistrar 内部(shortcutsRegistration),shell 层不再直接引用。
+import { env, resolveWsGatewayUrl } from '../env';
+import { useT } from '../i18n';
 import { usePreferencesBootstrap } from '../hooks/usePreferencesBootstrap';
 import { PollingFallback, useRealtime } from '../realtime';
 import type { ConnectionState, RealtimeClient, ResyncRequest } from '../realtime';
@@ -25,6 +25,9 @@ import { WorkspaceProvider } from '../workspace/WorkspaceProvider';
 import { SeoMeta } from './SeoMeta';
 import { ShellShortcutsRegistrar } from './shortcutsRegistration';
 import { Sidebar } from './Sidebar';
+import { MAIN_CONTENT_ID, SkipLink } from './SkipLink';
+import { MobileMoreDrawer } from './MobileMoreDrawer';
+import { MobileNav } from './MobileNav';
 import { StatusBanner } from './StatusBanner';
 import { TopBar } from './TopBar';
 import './shell.css';
@@ -44,6 +47,8 @@ export function useRealtimeContext(): RealtimeContextValue | null {
 export interface OverlayControls {
   openPalette: () => void;
   openHelp: () => void;
+  /** 统一搜索入口:携带查询展开命令面板(design-quality A-02) */
+  openSearch: (query: string) => void;
 }
 
 const OverlayControlsContext = createContext<OverlayControls | null>(null);
@@ -182,9 +187,8 @@ export interface OfflinePollingOptions {
   state: ConnectionState;
   /** 有 token 才轮询(对账端点需 Bearer 鉴权) */
   enabled: boolean;
-  channel: string;
-  /** 额外需轮询的频道(如页面已订阅的 project:/workspace: 频道);与 channel 去重 */
-  extraChannels?: readonly string[];
+  /** 需轮询的频道集合(页面已订阅的 workspace:/project:/issue: 频道);为空则不轮询 */
+  channels: readonly string[];
   intervalMs?: number;
   fetchImpl?: typeof fetch;
 }
@@ -193,20 +197,19 @@ export interface OfflinePollingOptions {
  * §3.2 离线降级轮询机制编排:WS 处于 reconnecting/resyncing/offline(非 idle)
  * 时启动 PollingFallback,按频道 seq 水位轮询 REST 对账端点,帧经
  * client.ingestReconciledEvent 与实时帧同路径合并(游标守卫天然去重);
- * 恢复 connected/idle 后自动停止。轮询覆盖演示频道 + 调用方已订阅的频道,
+ * 恢复 connected/idle 后自动停止。轮询覆盖调用方已订阅的频道,
  * 使 WS 不可用时(含首订阅竞态重试耗尽后)项目/工作区列表仍能增量更新。
  */
 export function useOfflinePolling(opts: OfflinePollingOptions): void {
-  const { client, state, enabled, channel } = opts;
-  const extraChannels = opts.extraChannels ?? [];
+  const { client, state, enabled, channels } = opts;
   const intervalMs = opts.intervalMs ?? env.pollingIntervalMs;
   const fetchImpl = opts.fetchImpl ?? fetch;
   // 稳定化频道集合,避免每次渲染重建依赖
-  const channelsKey = [channel, ...extraChannels].join('|');
+  const channelsKey = [...channels].sort().join('|');
   useEffect(() => {
     if (!enabled) return;
     if (state === 'connected' || state === 'idle') return;
-    const channels = Array.from(new Set([channel, ...extraChannels]));
+    if (channelsKey === '') return;
     const fallback = new PollingFallback({
       source: {
         fetch: async (ch: string, since: number) => ({
@@ -218,7 +221,7 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
     const offFrame = fallback.onFrame((frame) => {
       client.ingestReconciledEvent(frame);
     });
-    for (const ch of channels) {
+    for (const ch of channelsKey.split('|')) {
       const cursor = client.getCursor(ch);
       if (cursor !== undefined) fallback.seedSince(ch, cursor);
       fallback.subscribe(ch);
@@ -228,11 +231,11 @@ export function useOfflinePolling(opts: OfflinePollingOptions): void {
       offFrame();
       fallback.stop();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- channelsKey 稳定化频道集合
   }, [state, enabled, client, channelsKey, intervalMs, fetchImpl]);
 }
 
 export function AppShell(): React.JSX.Element {
+  const t = useT();
   const hasToken = useAuthStore((state) => state.token !== null);
   // theme.md §4.5:登录态偏好回填(GET /me 真源)+ pending 重放触发器。
   usePreferencesBootstrap();
@@ -241,7 +244,9 @@ export function AppShell(): React.JSX.Element {
   // 以稳定包装函数 + ref 延迟委派到绑定真实 client 的实现。
   const reconcilerRef = useRef<((req: ResyncRequest) => Promise<void>) | null>(null);
   const { state, client } = useRealtime({
-    url: env.wsBaseUrl + '/ws',
+    // 绝对 ws(s):// 网关地址(MES-106):同源部署 wsBaseUrl 为空时经
+    // resolveWsGatewayUrl 由页面 location 派生(WebSocket 构造器拒绝相对地址)。
+    url: resolveWsGatewayUrl(env.wsBaseUrl),
     getToken,
     enabled: hasToken,
     reconciler: (req: ResyncRequest) => {
@@ -264,19 +269,21 @@ export function AppShell(): React.JSX.Element {
     client,
     state,
     enabled: hasToken,
-    channel: env.demoChannel,
-    extraChannels: subscribedChannels,
+    channels: subscribedChannels,
     intervalMs: env.pollingIntervalMs,
   });
 
   const realtimeValue = useMemo<RealtimeContextValue>(() => ({ state, client }), [state, client]);
   const openPalette = useOverlayOpen('palette');
   const openHelp = useOverlayOpen('help');
+  const openSearch = useOverlaySearch();
 
   // 工作区上下文(workspace.md §4.1):/w/:workspaceSlug/* 命中时以 WorkspaceProvider
   // 包裹整个布局子树(TopBar 切换器 / Sidebar 设置入口 / 页面共享当前工作区)。
   const workspaceMatch = useMatch('/w/:workspaceSlug/*');
   const workspaceSlug = workspaceMatch?.params.workspaceSlug;
+
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
 
   const layout = (
     <div className="mesh-shell">
@@ -285,16 +292,22 @@ export function AppShell(): React.JSX.Element {
       {/* 快捷键/命令注册:位于 WorkspaceProvider 子树内(工作区路由命中时),
           按 slug/role 门控命令集;上下文变化自动重注册 */}
       <ShellShortcutsRegistrar />
-      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} />
+      {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
+      <SkipLink label={t('a11y.skipLink')} />
+      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} onOpenSearch={openSearch} />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>
       <Sidebar />
-      <main className="mesh-shell__main">
+      <main className="mesh-shell__main" id={MAIN_CONTENT_ID} tabIndex={-1}>
         {/* 上手清单(onboarding.md §4.1):核心页面顶部常驻,不适用时自隐藏 */}
         <OnboardingChecklist />
         <Outlet />
       </main>
+      {/* 手机导航(design-quality §4.3):0–599px 底部主导航 + 「更多」全高抽屉;
+          ≥600px 经 CSS 隐藏,桌面侧栏为唯一主导航。 */}
+      <MobileNav onOpenMore={() => setMobileMoreOpen(true)} />
+      <MobileMoreDrawer open={mobileMoreOpen} onClose={() => setMobileMoreOpen(false)} />
     </div>
   );
 
@@ -317,4 +330,15 @@ function useOverlayOpen(which: 'palette' | 'help'): () => void {
     if (which === 'palette') controls.openPalette();
     else controls.openHelp();
   }, [controls, which]);
+}
+
+/** 统一搜索打开器;未提供 OverlayControls 时为空操作(与 useOverlayOpen 同语义) */
+function useOverlaySearch(): (query: string) => void {
+  const controls = useOverlayControls();
+  return useCallback(
+    (query: string) => {
+      controls?.openSearch(query);
+    },
+    [controls],
+  );
 }

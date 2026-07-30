@@ -1,7 +1,8 @@
 /*
  * App shell 布局(README §6.12):顶栏 / 横幅 / 侧栏 / 主区网格;
  * 一切颜色经语义 token 引用(暗色由 tokens-dark 整组替换);
- * 响应式:<768px 折叠侧栏,移动端只读优先(§6.12 断点)。
+ * 响应式(design-quality §8.1):0–599px 紧凑外壳——手机顶栏 + 底部主导航 +
+ * 「更多」全高抽屉;≥600px 桌面侧栏。断点值集中,禁各页自造近似值。
  */
 
 .mesh-shell {
@@ -16,6 +17,29 @@
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-family);
+}
+
+/* 跳到主内容(design-quality §10.2):默认移出视口,键盘聚焦时滑入。
+   z-index 50 为浮层级(design-quality §11.2 z-index 令牌化后改 var(--z-overlay))。 */
+.mesh-skip-link {
+  position: absolute;
+  inset-inline-start: var(--space-2);
+  inset-block-start: var(--space-2);
+  z-index: 50;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  text-decoration: none;
+  font-weight: 600;
+  transform: translateY(-300%);
+  transition: transform var(--duration-fast) ease;
+}
+
+.mesh-skip-link:focus-visible {
+  transform: translateY(0);
 }
 
 /* ── 顶栏 ─────────────────────────────────────────────── */
@@ -259,7 +283,7 @@
   padding-inline-start: var(--space-4);
 }
 
-/* ── 首页演示区 ───────────────────────────────────────── */
+/* ── 首页 / 工作区仪表盘 ──────────────────────────────── */
 
 .mesh-home__hero {
   margin-block-end: var(--space-5);
@@ -290,40 +314,50 @@
   gap: var(--space-2);
 }
 
-.mesh-home__sample {
-  color: var(--color-text-muted);
-  margin: 0;
+.mesh-home__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
 }
 
-.mesh-home__hint {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  margin: var(--space-2) 0 0;
-}
-
-.mesh-home__shortcut-list {
+.mesh-home__workspace-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: var(--space-2);
-}
-
-.mesh-home__shortcut-list li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--font-size-sm);
-}
-
-.mesh-home__states {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--space-3);
 }
 
-.mesh-home__realtime {
+.mesh-home__workspace-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.mesh-home__workspace-link:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 8%));
+}
+
+.mesh-home__workspace-name {
+  font-weight: 600;
+}
+
+.mesh-home__workspace-meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-home__feed {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -338,7 +372,7 @@
   gap: var(--space-2);
 }
 
-.mesh-home__issue {
+.mesh-home__issue-link {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -346,6 +380,13 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--duration-fast) ease;
+}
+
+.mesh-home__issue-link:hover {
+  border-color: var(--color-primary);
 }
 
 .mesh-home__issue-key {
@@ -391,15 +432,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── 占位页 ───────────────────────────────────────────── */
-
-.mesh-placeholder {
-  padding: var(--space-6) 0;
-}
-
 /* ── 响应式:<768px 折叠侧栏(移动端只读优先,§6.12) ── */
 
-@media (max-width: 768px) {
+/* ── 手机导航(design-quality §4.3:0–599px 紧凑外壳)─────────────────────
+   桌面侧栏在 0–599px 隐藏,等价入口由底部主导航 + 「更多」全高抽屉提供
+   (禁止隐藏导航后无替代入口)。≥600px 底栏/抽屉隐藏,侧栏为唯一主导航。 */
+
+.mesh-mobile-nav,
+.mesh-mobile-drawer__scrim,
+.mesh-mobile-drawer__panel {
+  display: none;
+}
+
+@media (max-width: 599px) {
   .mesh-shell {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -424,8 +469,115 @@
     max-width: none;
   }
 
+  /* 底部主导航高度 + safe-area,防内容/弹窗被遮挡(§4.3) */
   .mesh-shell__main {
     padding: var(--space-3);
+    padding-block-end: calc(56px + env(safe-area-inset-bottom) + var(--space-3));
+  }
+
+  .mesh-mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    z-index: 40;
+    background-color: var(--color-surface-raised);
+    border-block-start: 1px solid var(--color-border);
+    box-shadow: var(--shadow-raised);
+    padding-block-end: env(safe-area-inset-bottom);
+  }
+
+  /* 命中区 ≥44×44px(§8.2 触控目标);视觉高 56px */
+  .mesh-mobile-nav__item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-inline-size: 44px;
+    min-block-size: 56px;
+    padding: var(--space-1) var(--space-2);
+    background-color: transparent;
+    border: none;
+    color: var(--color-text-muted);
+    font-family: var(--font-family);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  /* 当前页:3px 边缘指示 + 强文字,不使用整块高饱和色(§4.1 同构) */
+  .mesh-mobile-nav__item--active {
+    color: var(--color-primary);
+    font-weight: 600;
+    box-shadow: inset 0 3px 0 var(--color-primary);
+  }
+
+  .mesh-mobile-drawer__scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background-color: var(--color-scrim);
+  }
+
+  .mesh-mobile-drawer__panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    position: fixed;
+    inset-block: 0;
+    inset-inline-end: 0;
+    inline-size: min(320px, 85vw);
+    z-index: 46;
+    padding: var(--space-4);
+    padding-block-end: calc(var(--space-4) + env(safe-area-inset-bottom));
+    background-color: var(--color-surface-raised);
+    color: var(--color-text);
+    border-inline-start: 1px solid var(--color-border);
+    box-shadow: var(--shadow-raised);
+    overflow-y: auto;
+  }
+
+  .mesh-mobile-drawer__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .mesh-mobile-drawer__title {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+  }
+
+  .mesh-mobile-drawer__list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .mesh-mobile-drawer__link {
+    display: flex;
+    align-items: center;
+    min-block-size: 44px;
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    text-decoration: none;
+  }
+
+  .mesh-mobile-drawer__link:hover {
+    background-color: var(--color-surface-hover);
+  }
+
+  .mesh-mobile-drawer__link--active {
+    background-color: var(--color-primary-bg);
+    color: var(--color-primary);
+    font-weight: 600;
   }
 }
 

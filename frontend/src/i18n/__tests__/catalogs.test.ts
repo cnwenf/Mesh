@@ -43,7 +43,6 @@ const REQUIRED_KEYS = [
   'state.offline',
   'state.resyncing',
   'state.partialFailure',
-  'state.retryHint',
   // error.*(README §6.14 canonical + 模块具名码;§3.4 前端按 code 取本地文案)
   'error.unauthorized',
   'error.forbidden',
@@ -97,10 +96,6 @@ const REQUIRED_KEYS = [
   // login.*
   'login.title',
   'login.description',
-  'login.tokenLabel',
-  'login.tokenPlaceholder',
-  'login.submit',
-  'login.phaseNote',
   // status.*
   'status.connecting',
   'status.connected',
@@ -142,19 +137,18 @@ const REQUIRED_KEYS = [
   'errorPage.title',
   'errorPage.description',
   'errorPage.retry',
-  // home.*
-  'home.title',
+  // home.*(真实首页 / 工作区仪表盘,MES-107)
   'home.subtitle',
-  'home.demoTheme',
-  'home.demoLocale',
-  'home.demoShortcuts',
-  'home.demoStates',
-  'home.demoRealtime',
-  // demo.*(ICU plural/date/number 示例,§2.4)
-  'demo.commentCount',
-  'demo.duration',
-  'demo.joined',
-  'demo.position',
+  'home.greeting',
+  'home.workspacesTitle',
+  'home.noWorkspacesTitle',
+  'home.noWorkspacesDescription',
+  'home.createWorkspace',
+  'home.dashboardTitle',
+  'home.quickCreateLabel',
+  'home.feedEmptyTitle',
+  'home.feedEmptyDescription',
+  'home.loadMore',
 ] as const;
 
 describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查)', () => {
@@ -164,7 +158,34 @@ describe('消息目录完整性(§2.5:en 权威源,非 en locale 键覆盖检查
     expect(zhKeys).toEqual(enKeys);
   });
 
-  it('覆盖基线必需键清单(导航/状态/错误/设置/快捷键/无障碍/占位页/演示)', () => {
+  it('中文导航:自动值守(Autopilots)与运行环境(Runtimes 入口)不再重名(design-quality §4.1)', () => {
+    const zh = builtinCatalogs['zh-CN'].messages;
+    expect(zh['nav.autopilots']).toBe('自动值守');
+    expect(zh['nav.automation']).toBe('运行环境');
+    expect(zh['nav.autopilots']).not.toBe(zh['nav.automation']);
+  });
+
+  it('skip link / 移动导航 / 统一搜索入口文案键两目录齐备(design-quality §4.3/§10.2)', () => {
+    const keys = [
+      'a11y.skipLink',
+      'mobileNav.home',
+      'mobileNav.issues',
+      'mobileNav.board',
+      'mobileNav.chat',
+      'mobileNav.more',
+      'mobileNav.moreTitle',
+      'mobileNav.moreClose',
+      'search.openPalette',
+    ];
+    for (const locale of ['en', 'zh-CN']) {
+      const messages = builtinCatalogs[locale].messages;
+      for (const key of keys) {
+        expect(messages[key], `${locale} 缺少键 ${key}`).toBeTruthy();
+      }
+    }
+  });
+
+  it('覆盖基线必需键清单(导航/状态/错误/设置/快捷键/无障碍/首页)', () => {
     for (const locale of ['en', 'zh-CN']) {
       const keys = new Set(Object.keys(builtinCatalogs[locale].messages));
       for (const key of REQUIRED_KEYS) {
@@ -309,42 +330,69 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     }
   });
 
-  it('复数分支按 CLDR 类别选择:en 区分 one/other,zh-CN 仅 other', () => {
-    const en = createIntl({ locale: 'en', messages: builtinCatalogs.en.messages });
-    expect(en.formatMessage({ id: 'demo.commentCount' }, { count: 0 })).toBe('No comments');
-    expect(en.formatMessage({ id: 'demo.commentCount' }, { count: 1 })).toBe('1 comment');
-    expect(en.formatMessage({ id: 'demo.commentCount' }, { count: 5 })).toBe('5 comments');
-    expect(en.formatMessage({ id: 'demo.duration' }, { minutes: 1 })).toBe('Took 1 minute');
-    expect(en.formatMessage({ id: 'demo.duration' }, { minutes: 42 })).toBe('Took 42 minutes');
+  it('复数分支按 CLDR 类别选择:en 区分 one/other,zh-CN 仅 other(内联 ICU 样例)', () => {
+    const en = createIntl({
+      locale: 'en',
+      messages: {
+        commentCount: '{count, plural, =0 {No comments} one {# comment} other {# comments}}',
+        duration: 'Took {minutes, plural, one {# minute} other {# minutes}}',
+      },
+    });
+    expect(en.formatMessage({ id: 'commentCount' }, { count: 0 })).toBe('No comments');
+    expect(en.formatMessage({ id: 'commentCount' }, { count: 1 })).toBe('1 comment');
+    expect(en.formatMessage({ id: 'commentCount' }, { count: 5 })).toBe('5 comments');
+    expect(en.formatMessage({ id: 'duration' }, { minutes: 1 })).toBe('Took 1 minute');
+    expect(en.formatMessage({ id: 'duration' }, { minutes: 42 })).toBe('Took 42 minutes');
 
-    const zh = createIntl({ locale: 'zh-CN', messages: builtinCatalogs['zh-CN'].messages });
-    expect(zh.formatMessage({ id: 'demo.commentCount' }, { count: 0 })).toBe('暂无评论');
-    expect(zh.formatMessage({ id: 'demo.commentCount' }, { count: 5 })).toBe('5 条评论');
-    expect(zh.formatMessage({ id: 'demo.duration' }, { minutes: 42 })).toBe('耗时 42 分钟');
+    const zh = createIntl({
+      locale: 'zh-CN',
+      messages: {
+        commentCount: '{count, plural, =0 {暂无评论} other {# 条评论}}',
+        duration: '耗时 {minutes, plural, other {# 分钟}}',
+      },
+    });
+    expect(zh.formatMessage({ id: 'commentCount' }, { count: 0 })).toBe('暂无评论');
+    expect(zh.formatMessage({ id: 'commentCount' }, { count: 5 })).toBe('5 条评论');
+    expect(zh.formatMessage({ id: 'duration' }, { minutes: 42 })).toBe('耗时 42 分钟');
   });
 
-  it('date/number 占位:结构化参数渲染,不依赖后端拼接', () => {
-    const en = createIntl({ locale: 'en-US', messages: builtinCatalogs.en.messages });
-    expect(en.formatMessage({ id: 'demo.position' }, { n: 3, total: 10 })).toBe('Item 3 of 10');
-    const zh = createIntl({ locale: 'zh-CN', messages: builtinCatalogs['zh-CN'].messages });
-    expect(zh.formatMessage({ id: 'demo.position' }, { n: 3, total: 10 })).toBe(
+  it('date/number 占位:结构化参数渲染,不依赖后端拼接(内联 ICU 样例)', () => {
+    const en = createIntl({
+      locale: 'en-US',
+      messages: { position: 'Item {n, number} of {total, number}' },
+    });
+    expect(en.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe('Item 3 of 10');
+    const zh = createIntl({
+      locale: 'zh-CN',
+      messages: {
+        position: '第 {n, number} 项，共 {total, number} 项',
+        joined: '{name} 于 {date, date, medium} 加入',
+      },
+    });
+    expect(zh.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe(
       '第 3 项，共 10 项',
     );
     const joined = zh.formatMessage(
-      { id: 'demo.joined' },
+      { id: 'joined' },
       { name: 'Mesh', date: new Date('2026-07-25T08:00:00Z') },
     );
     expect(joined.startsWith('Mesh 于 ')).toBe(true);
     expect(joined.endsWith(' 加入')).toBe(true);
   });
 
-  it('en 与 zh-CN 的 ICU 结构占位符一致(同名参数)', () => {
+  it('en 与 zh-CN 的 ICU 结构占位符一致(同名参数;覆盖全部含参消息)', () => {
     // 仅匹配后随 `,` 或 `}` 的参数名,避开 `{No comments}` 等分支内字面量
     const placeholder = (text: string): string[] =>
       [...text.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)(?=[,}])/g)].map((m) => m[1]).sort();
-    for (const key of ['demo.commentCount', 'demo.duration', 'demo.joined', 'demo.position']) {
-      expect(placeholder(builtinCatalogs['zh-CN'].messages[key])).toEqual(
-        placeholder(builtinCatalogs.en.messages[key]),
+    const enMessages = builtinCatalogs.en.messages;
+    const zhMessages = builtinCatalogs['zh-CN'].messages;
+    const parameterized = Object.keys(enMessages).filter((key) =>
+      placeholder(enMessages[key]).length > 0,
+    );
+    expect(parameterized.length).toBeGreaterThan(0);
+    for (const key of parameterized) {
+      expect(placeholder(zhMessages[key]), `${key} 占位符不一致`).toEqual(
+        placeholder(enMessages[key]),
       );
     }
   });

@@ -305,6 +305,9 @@ export function MembersPage(): React.JSX.Element {
           }
         />
       ) : (
+        /* 受控横向滚动容器:窄屏(390px)表格不再溢出页面,首列粘住、右缘渐隐提示
+           (design-quality A-05/§7.6;主次行卡片化由逐页批次实施) */
+        <div className="mesh-members__table-wrap">
         <table className="mesh-members__table">
           <thead>
             <tr>
@@ -456,6 +459,7 @@ export function MembersPage(): React.JSX.Element {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {detail !== null ? (

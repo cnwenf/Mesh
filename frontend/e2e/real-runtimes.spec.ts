@@ -11,6 +11,7 @@
  * 每步截图存证 e2e/evidence/runtimes(随 PR 提交;字节互异,见 check-evidence-unique.mjs)。
  */
 import { expect, test } from '@playwright/test';
+import { injectSession } from './helpers';
 import type { Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
@@ -119,14 +120,9 @@ ON CONFLICT (id) DO UPDATE SET status = 'running', started_at = now();
 }
 
 async function loginReal(page: Page): Promise<void> {
-  await page.goto('/login');
-  // dev-token 直填入口在 <details> 内(默认折叠),展开后填写
-  await page.locator('.mesh-login__dev').evaluate((el) => {
-    (el as HTMLDetailsElement).open = true;
-  });
-  await page.getByTestId('login-token').fill(TOKEN);
-  await page.getByTestId('login-submit').click();
-  await page.waitForURL('**/');
+  // dev-auth 栈无表单登录:会话经 authStore 持久化键注入(MES-107 起登录页无 dev 入口)
+  await injectSession(page, TOKEN);
+  await page.goto('/');
 }
 
 test.describe.configure({ mode: 'serial' });

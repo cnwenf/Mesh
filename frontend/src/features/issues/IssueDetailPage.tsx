@@ -27,6 +27,7 @@ import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
 import { IssueCustomFieldsEditor } from '../labels/IssueCustomFieldsEditor';
 import { IssueLabelsEditor } from '../labels/IssueLabelsEditor';
+import { VcsLinksPanel } from '../integrations/VcsLinksPanel';
 import { IssueSquadAssignment } from './IssueSquadAssignment';
 import {
   addDependency,
@@ -718,6 +719,8 @@ export function IssueDetailPage(): React.JSX.Element {
             realtime={realtime}
             onIssueChanged={() => setReloadKey((k) => k + 1)}
           />
+          {/* integrations.md §4.2:issue 侧栏 VCS 关联区块(关联 PR/commit/branch + 状态)。 */}
+          <VcsLinksPanel workspaceId={issue.workspace_id} issueId={issue.id} />
           <p className="mesh-issues-detail__meta">
             {t('issues.detail.reporter')}:{' '}
             {issue.reporter !== null ? issue.reporter.name : t('issues.unassigned')}

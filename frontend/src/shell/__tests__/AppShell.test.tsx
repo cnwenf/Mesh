@@ -11,14 +11,19 @@ import { useSettingsStore } from '../../state/settingsStore';
 import { useShortcutRegistry } from '../../shortcuts';
 import { renderWithProviders } from '../../test-utils/render';
 import { AppShell, MAX_RESYNC_PAGES, channelEventsUrl, createReconciler, fetchRestEvents, resolveResyncUrl, useOfflinePolling } from '../AppShell';
-import { PlaceholderPage } from '../PlaceholderPage';
+import { useT } from '../../i18n';
+
+function InboxStub(): React.JSX.Element {
+  const t = useT();
+  return <div data-testid="inbox-stub">{t('state.emptyDescription')}</div>;
+}
 
 function renderShell(route = '/'): ReturnType<typeof renderWithProviders> {
   return renderWithProviders(
     <Routes>
       <Route path="/" element={<AppShell />}>
         <Route index element={<div data-testid="child-stub" />} />
-        <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
+        <Route path="inbox" element={<InboxStub />} />
       </Route>
     </Routes>,
     { route },
@@ -36,6 +41,24 @@ describe('AppShell', () => {
     expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
     expect(screen.getByTestId('nav-home')).toBeInTheDocument();
     expect(screen.getByTestId('child-stub')).toBeInTheDocument();
+  });
+
+  it('skip link 指向主区稳定锚点(键盘首焦直达主内容,design-quality §10.2)', () => {
+    renderShell('/');
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' });
+    expect(skipLink).toHaveAttribute('href', '#mesh-main-content');
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('id', 'mesh-main-content');
+  });
+
+  it('手机底部主导航与「更多」抽屉已接线(隐藏侧栏有等价入口,design-quality §4.3/A-03)', () => {
+    renderShell('/');
+    expect(screen.getByTestId('mobile-nav-home')).toBeInTheDocument();
+    expect(screen.getByTestId('mobile-nav-more')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('mobile-nav-more'));
+    expect(screen.getByRole('dialog', { name: 'All navigation' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('mobile-drawer-close'));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('点击侧栏导航(鼠标路径)切换 Outlet 内容', () => {
@@ -213,7 +236,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client,
         state: 'reconnecting',
         enabled: true,
-        channel: 'workspace:ws-1:issues',
+        channels: ['workspace:ws-1:issues'],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -238,7 +261,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client: stubClient(),
         state: 'connected',
         enabled: true,
-        channel: 'workspace:ws-1:issues',
+        channels: ['workspace:ws-1:issues'],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -256,7 +279,25 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client: stubClient(),
         state: 'reconnecting',
         enabled: false,
-        channel: 'c',
+        channels: ['c'],
+        intervalMs: 1,
+        fetchImpl: fetchMock,
+      }),
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('无已订阅频道(channels 为空)不轮询(MES-107:演示频道移除后无默认频道)', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    renderHook(() =>
+      useOfflinePolling({
+        client: stubClient(),
+        state: 'reconnecting',
+        enabled: true,
+        channels: [],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -279,7 +320,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
           client,
           state: props.state,
           enabled: true,
-          channel: 'workspace:ws-1:issues',
+          channels: ['workspace:ws-1:issues'],
           intervalMs: 1,
           fetchImpl: fetchMock,
         }),
@@ -292,5 +333,60 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(fetchMock.mock.calls.length).toBe(calls); // 不再新增
+  });
+});
+
+describe('AppShell 实时网关建连(MES-106:绝对 ws(s):// 地址)', () => {
+  /** 捕获构造 URL 的最小 WebSocket 替身(不触发任何回调) */
+  class FakeWebSocket {
+    static urls: string[] = [];
+
+    onopen: (() => void) | null = null;
+
+    onmessage: ((ev: { data: string }) => void) | null = null;
+
+    onclose: (() => void) | null = null;
+
+    onerror: (() => void) | null = null;
+
+    readyState = 0;
+
+    constructor(url: string) {
+      FakeWebSocket.urls.push(url);
+    }
+
+    send(): void {}
+
+    close(): void {}
+  }
+
+  afterEach(() => {
+    useAuthStore.getState().clearToken();
+    vi.unstubAllGlobals();
+    FakeWebSocket.urls = [];
+  });
+
+  it('有 token → 以绝对 ws:// URL 建连(env 基址 + /ws,绝不发相对地址)', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    // shell 内偏好回填/离线轮询的网络副作用静默桩平(与本用例断言无关)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 }),
+      ),
+    );
+    useAuthStore.getState().setToken('tok_valid');
+    renderShell('/');
+    expect(FakeWebSocket.urls.length).toBeGreaterThan(0);
+    for (const url of FakeWebSocket.urls) {
+      expect(url).toMatch(/^wss?:\/\//); // 绝对地址(相对 '/ws' 会被构造器拒绝)
+    }
+    expect(FakeWebSocket.urls[0]).toBe(`${env.wsBaseUrl}/ws`);
+  });
+
+  it('无 token → 不建连(不构造 WebSocket,不触 WS)', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    renderShell('/');
+    expect(FakeWebSocket.urls).toEqual([]);
   });
 });

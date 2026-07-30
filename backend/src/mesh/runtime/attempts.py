@@ -443,6 +443,8 @@ async def renew_lease(
         task_token_plaintext = None
         task_token_expires = None
         if execution is not None:
+            from mesh.runtime.task_tokens import squad_role_of_task_spec
+
             task_token_plaintext, token_row = await issue_task_token(
                 session,
                 workspace_id=runtime.workspace_id,
@@ -452,6 +454,7 @@ async def renew_lease(
                 lease_expires_at=attempt.lease_expires_at,
                 issue_id=execution.issue_id,
                 agent_id=execution.agent_id,
+                squad_role=squad_role_of_task_spec(execution.task_spec),
             )
             task_token_expires = token_row.expires_at.isoformat()
 
@@ -484,70 +487,123 @@ async def cancel_execution(
     """
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
-        execution = (
-            await session.execute(
-                select(TaskExecution)
-                .where(TaskExecution.id == execution_id, TaskExecution.workspace_id == workspace_id)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if execution is None:
-            raise NotFoundError("execution not found")
-
-        now = _now()
-        if execution.status in EXECUTION_TERMINAL_STATUSES:
-            return _cancel_response(execution)  # idempotent no-op
-        if execution.status == "cancelling":
-            return _cancel_response(execution)
-
-        execution.cancel_requested_by = member_id
-        execution.cancel_requested_at = now
-        execution.updated_at = now
-
-        if execution.status == "queued":
-            execution.status = "cancelled"
-            execution.failure_reason = failure_reason
-            execution.finished_at = now
-            await emit_realtime(
-                session,
-                workspace_id=workspace_id,
-                channel=f"execution:{execution.id}",
-                event="execution.cancelled",
-                data={"execution_id": str(execution.id), "failure_reason": failure_reason},
-                idempotency_key=f"execution:{execution.id}:cancelled",
-            )
-        elif execution.status == "awaiting_approval":
-            from mesh.runtime.approvals import cancel_pending_approvals
-
-            await cancel_pending_approvals(
-                session, workspace_id=workspace_id, execution_id=execution_id, now=now
-            )
-            execution.status = "cancelled"
-            execution.failure_reason = failure_reason
-            execution.finished_at = now
-            await emit_realtime(
-                session,
-                workspace_id=workspace_id,
-                channel=f"execution:{execution.id}",
-                event="execution.cancelled",
-                data={"execution_id": str(execution.id), "failure_reason": failure_reason},
-                idempotency_key=f"execution:{execution.id}:cancelled",
-            )
-        else:  # claimed / running: two-phase via daemon downlink
-            execution.status = "cancelling"
-            inflight = (
-                await session.execute(
-                    select(ExecutionAttempt).where(
-                        ExecutionAttempt.execution_id == execution_id,
-                        ExecutionAttempt.status.in_(sorted(ATTEMPT_INFLIGHT_STATUSES)),
-                    )
-                )
-            ).scalars().all()
-            for attempt in inflight:
-                attempt.status = "cancelling"
-                attempt.updated_at = now
-        await session.flush()
+        execution = await request_execution_cancel_tx(
+            session,
+            workspace_id=workspace_id,
+            execution_id=execution_id,
+            member_id=member_id,
+            failure_reason=failure_reason,
+        )
         return _cancel_response(execution)
+
+
+async def request_execution_cancel_tx(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    member_id: uuid.UUID | None = None,
+    failure_reason: str | None = None,
+) -> TaskExecution:
+    """Persist a cancel intent inside the CALLER's transaction (§3.7 写死).
+
+    The IM command plane (/stop) and forced binding deletion call this in the
+    same transaction that transitions the queue item processing→cancelling —
+    the cancel intent is DB-persisted atomically (no out-of-transaction network
+    call, no "committed then lost" window); the daemon learns via heartbeat
+    downlink. NO new outbox event type is created: terminal write-back is
+    driven by ``execution.finished`` when the daemon reports the graceful stop
+    (or, for direct-terminal paths below, emitted here so the queue item
+    terminal write-back fires — the single-fan-out contract, runtime.md §4.8).
+
+    Raises NotFoundError when the execution is absent. Idempotent on terminal
+    and ``cancelling`` states. Returns the locked execution row.
+    """
+    execution = (
+        await session.execute(
+            select(TaskExecution)
+            .where(TaskExecution.id == execution_id, TaskExecution.workspace_id == workspace_id)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if execution is None:
+        raise NotFoundError("execution not found")
+
+    now = _now()
+    if execution.status in EXECUTION_TERMINAL_STATUSES:
+        return execution  # idempotent no-op
+    if execution.status == "cancelling":
+        return execution
+
+    execution.cancel_requested_by = member_id
+    execution.cancel_requested_at = now
+    execution.updated_at = now
+
+    if execution.status == "queued":
+        execution.status = "cancelled"
+        execution.failure_reason = failure_reason
+        execution.finished_at = now
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=f"execution:{execution.id}",
+            event="execution.cancelled",
+            data={"execution_id": str(execution.id), "failure_reason": failure_reason},
+            idempotency_key=f"execution:{execution.id}:cancelled",
+        )
+        await _emit_finished_event(session, execution=execution)
+    elif execution.status == "awaiting_approval":
+        from mesh.runtime.approvals import cancel_pending_approvals
+
+        await cancel_pending_approvals(
+            session, workspace_id=workspace_id, execution_id=execution_id, now=now
+        )
+        execution.status = "cancelled"
+        execution.failure_reason = failure_reason
+        execution.finished_at = now
+        await emit_realtime(
+            session,
+            workspace_id=workspace_id,
+            channel=f"execution:{execution.id}",
+            event="execution.cancelled",
+            data={"execution_id": str(execution.id), "failure_reason": failure_reason},
+            idempotency_key=f"execution:{execution.id}:cancelled",
+        )
+        await _emit_finished_event(session, execution=execution)
+    else:  # claimed / running: two-phase via daemon downlink
+        execution.status = "cancelling"
+        inflight = (
+            await session.execute(
+                select(ExecutionAttempt).where(
+                    ExecutionAttempt.execution_id == execution_id,
+                    ExecutionAttempt.status.in_(sorted(ATTEMPT_INFLIGHT_STATUSES)),
+                )
+            )
+        ).scalars().all()
+        for attempt in inflight:
+            attempt.status = "cancelling"
+            attempt.updated_at = now
+    await session.flush()
+    return execution
+
+
+async def _emit_finished_event(session: AsyncSession, *, execution: TaskExecution) -> None:
+    """execution.finished (runtime.md §4.8 single terminal fan-out source).
+
+    Same idempotency key as ``_sync_execution_status`` — a later daemon report
+    for the same execution de-duplicates instead of double-firing consumers.
+    """
+    await emit_event(
+        session,
+        workspace_id=execution.workspace_id,
+        event_type="execution.finished",
+        payload={
+            "execution_id": str(execution.id),
+            "status": execution.status,
+            "failure_reason": execution.failure_reason,
+        },
+        idempotency_key=f"execution:{execution.id}:finished",
+    )
 
 
 def _cancel_response(execution: TaskExecution) -> dict:

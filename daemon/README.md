@@ -106,8 +106,15 @@ FAILS, never skips). Evidence: `docs/evidence/mes-100/` (ISO matrix junit +
 real-server integration: activate → online → claim → sandboxed execution →
 redacted reflow).
 
-Still ahead (B real-LLM workflow): the protected assign/mention → real claim →
-tool/approval → diff/result/comment/status workflow on top of A3.
+B lifeline layer (MES-95, delivered): the protected `real_llm` workflow
+(`.github/workflows/real-llm.yml` — manual/schedule only, protected
+self-hosted runner, `concurrency` serialized, secrets-only credentials) runs
+the two real-gate scripts on top of A3: single-agent `real_llm_e2e.py` and
+the multi-agent squad `real_llm_squad_e2e.py` (leader + 2 members: the leader
+REALLY decomposes via the `squad.members` / `squad.subtasks` broker tools,
+members really execute and report via `issue.comment`, the leader aggregator
+really summarizes via `issue.comment` + `issue.status`; issue ends `done`
+with real per-execution session/usage/cost reflow).
 
 A3 real pinned provider (a real coding CLI inside the A2 sandbox):
 
@@ -151,6 +158,25 @@ network policy) → runtime → daemon activate → **online** → assign → re
 → the pinned binary executes a real LLM call inside the namespace/cgroup
 sandbox → logs / session / usage / result reflow with the provider credential
 redacted. Evidence: `docs/evidence/mes-101/real-llm-e2e.json`.
+
+Proof (squad lifeline): `tests/integration/real_llm_squad_e2e.py` drives the
+full multi-agent chain over the public API: register → workspace → 3 agents
+(leader + 2 workers, frozen budget/network policy) → squad → runtime → daemon
+activate → **online** → dynamic-nonce issue assigned to the squad → leader
+orchestrator run REALLY decomposes into 2 subtasks through the task broker
+(`squad_members` + `squad_subtasks`, server-verified orchestrator identity) →
+both members claim and execute with real LLM calls, each posting its nonce
+report through `issue_comment` → all children terminal → leader aggregator
+run posts the summary and marks the issue `done` → root task `done`,
+assignment `completed`, relay writeback comment. Asserted: every execution
+completed with real usage (tokens/cost/session, distinct sessions), logs
+non-empty and credential-redacted, the nonce visible in every run's output,
+zero credential leak anywhere. Operator prerequisites are the same as
+`real_llm_e2e.py` (`MES95_*` env vars fall back to `MES101_*`): pinned binary
++ `manifest.toml` + 0600 `provider.env`, root (real sandbox), a live local
+stack (API + worker). Evidence: `docs/evidence/mes-95/real-llm-squad-e2e.json`
+(first full real run: 4 executions / 4 distinct sessions / 45,408 tokens /
+0.188556 USD / issue done).
 
 ## Install & run
 

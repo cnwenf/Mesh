@@ -242,6 +242,39 @@ class TestBuildRunRequest:
         assert req.untrusted_context == ""
         assert req.max_budget_usd == "0.000000"
 
+    def _claim_with_role(self, role: str | None) -> ClaimResponse:
+        task_spec: dict = {"kind": "issue_assignment"}
+        if role is not None:
+            task_spec["squad_role"] = role
+        return ClaimResponse(
+            execution={
+                "id": "e1",
+                "task_spec": task_spec,
+                "config_snapshot": {"system_instructions": "system voice"},
+            },
+            attempt={"id": "a1", "lease_seq": 1, "lease_expires_at": "t"},
+        )
+
+    def test_squad_role_notice_appended_to_trusted_layer(self):
+        # The frozen squad_role is platform metadata — appended to the
+        # TRUSTED system prompt, never the untrusted context (§3.7).
+        req = build_run_request(self._claim_with_role("orchestrator"))
+        assert req.system_prompt.startswith("system voice")
+        assert "ORCHESTRATOR" in req.system_prompt
+        assert "squad_subtasks" in req.system_prompt
+        assert req.untrusted_context == ""
+
+        agg = build_run_request(self._claim_with_role("aggregator"))
+        assert "AGGREGATOR" in agg.system_prompt
+        assert "NOT granted" in agg.system_prompt
+
+        ex = build_run_request(self._claim_with_role("executor"))
+        assert "EXECUTOR" in ex.system_prompt
+
+    def test_no_role_notice_for_non_squad_or_unknown_role(self):
+        assert build_run_request(self._claim_with_role(None)).system_prompt == "system voice"
+        assert build_run_request(self._claim_with_role("weird")).system_prompt == "system voice"
+
 
 class TestSerializeUntrustedContext:
     def test_renders_structured_dict_with_notice_and_fields(self):
@@ -261,6 +294,9 @@ class TestSerializeUntrustedContext:
         }
         out = serialize_untrusted_context(ctx)
         assert "externally sourced data" in out
+        # Frozen issue id is surfaced so the model can name the resource its
+        # task broker tools are scoped to (§2.2 S-05 issue/squad actions).
+        assert "Issue MES-7 id: i1" in out
         assert "Issue MES-7 title: <<<UNTRUSTED_DATA_BEGIN>>>fix bug" in out
         assert "details" in out
         assert "comments: c1" in out

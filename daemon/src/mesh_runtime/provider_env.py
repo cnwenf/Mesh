@@ -33,6 +33,11 @@ from pathlib import Path
 
 from mesh_runtime.errors import DaemonError
 
+#: Sandbox-side mount point of the attempt run dir (sandbox_init bind-mounts
+#: ``<attempt_root>/run`` read-only here). Canonical definition — the provider
+#: adapters re-export it.
+SANDBOX_RUN_DIR = "/run"
+
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 
 #: Exact reserved names (server parity NEW-M1 + daemon §3.8 additions).
@@ -280,6 +285,288 @@ class ProviderConfigPaths:
     settings_json: Path
     mcp_json: Path
     system_md: Path
+    mcp_bridge: Path | None = None
+
+
+#: Platform-owned MCP stdio bridge (runtime-executor §1.5 / §3.3). Written
+#: 0444 into the attempt's private run dir and bind-mounted read-only at
+#: /run; mcp.json registers it as the ONLY MCP server (type stdio — the only
+#: transport the pinned provider supports for local servers besides http/sse;
+#: a raw unix-socket entry is silently ignored by the provider). It speaks
+#: MCP JSON-RPC 2.0 over stdio and forwards tool calls to the daemon's
+#: ToolBroker over the attempt-private unix socket (nonce handshake first).
+#: It carries NO credentials — the task token stays with the daemon-side
+#: broker; the bridge only knows the socket path and the daemon-injected
+#: nonce (both already present in the sandbox env, §3.8).
+MCP_BRIDGE_SOURCE = r'''"""Mesh task broker MCP stdio bridge (platform-owned, read-only).
+
+Registered by mcp.json as the single MCP server. Forwards tool calls to the
+daemon ToolBroker over the attempt-private unix socket; holds no credentials.
+"""
+
+import hashlib
+import json
+import os
+import socket
+import sys
+
+SERVER_INFO = {"name": "mesh-task-broker", "version": "1.0.0"}
+PROTOCOL_VERSION = "2024-11-05"
+_BROKER_TIMEOUT_SECONDS = 120
+_RESULT_MAX_CHARS = 20000
+
+# MCP tool name -> broker action (the section 3.3 unique mapping, fail-closed).
+_TOOLS = [
+    {
+        "name": "issue_read",
+        "action": "issue.read",
+        "idempotent": False,
+        "description": "Read the current issue (identifier, title, description, status).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue_id": {"type": "string", "description": "The issue id to read."},
+            },
+            "required": ["issue_id"],
+        },
+    },
+    {
+        "name": "issue_comment",
+        "action": "issue.comment",
+        "idempotent": True,
+        "description": (
+            "Post a markdown comment on the current issue as this agent. "
+            "Retrying with identical arguments posts once (idempotent)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue_id": {"type": "string", "description": "The issue id to comment on."},
+                "body": {"type": "string", "description": "Markdown comment body."},
+            },
+            "required": ["issue_id", "body"],
+        },
+    },
+    {
+        "name": "issue_status",
+        "action": "issue.status",
+        "idempotent": True,
+        "description": (
+            "Change the current issue status. One of: todo, in_progress, "
+            "in_review, done, blocked, backlog, cancelled."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue_id": {"type": "string", "description": "The issue id."},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "todo", "in_progress", "in_review", "done",
+                        "blocked", "backlog", "cancelled",
+                    ],
+                },
+            },
+            "required": ["issue_id", "status"],
+        },
+    },
+    {
+        "name": "project_read",
+        "action": "project.read",
+        "idempotent": False,
+        "description": "Read a project by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_id": {"type": "string", "description": "The project id."},
+            },
+            "required": ["project_id"],
+        },
+    },
+    {
+        "name": "squad_members",
+        "action": "squad.members",
+        "idempotent": False,
+        "description": (
+            "List the members of the squad handling the current squad task "
+            "(member_id, name, role, member_type). Use it to pick subtask "
+            "assignees before decomposing."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "squad_subtasks",
+        "action": "squad.subtasks",
+        "idempotent": True,
+        "description": (
+            "Decompose the CURRENT squad task into subtasks and dispatch them "
+            "to squad members. Leader/orchestrator only. Each subtask needs a "
+            "title; assignee_member_id must come from squad_members; depends_on "
+            "references other subtasks by title. Idempotent on identical input."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "plan_markdown": {
+                    "type": "string",
+                    "description": "Optional human-readable plan summary.",
+                },
+                "subtasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "assignee_member_id": {"type": "string"},
+                            "stage": {"type": "integer"},
+                            "depends_on": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["title"],
+                    },
+                },
+            },
+            "required": ["subtasks"],
+        },
+    },
+]
+_TOOLS_BY_NAME = {t["name"]: t for t in _TOOLS}
+
+
+def _tool_schema(tool):
+    return {
+        "name": tool["name"],
+        "description": tool["description"],
+        "inputSchema": tool["inputSchema"],
+    }
+
+
+def _recv_line(conn):
+    buf = b""
+    while b"\n" not in buf:
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        buf += chunk
+    return buf.split(b"\n", 1)[0]
+
+
+def _broker_call(action, params):
+    sock_path = os.environ.get("MESH_BROKER_SOCKET")
+    if not sock_path:
+        raise RuntimeError("broker socket not configured")
+    nonce = os.environ.get("MESH_BROKER_NONCE")
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    conn.settimeout(_BROKER_TIMEOUT_SECONDS)
+    try:
+        conn.connect(sock_path)
+        if nonce:
+            conn.sendall((json.dumps({"nonce": nonce}) + "\n").encode())
+        # The broker acks the nonce handshake before accepting requests;
+        # a refusal here (bad nonce / peer / frozen) fails the call closed.
+        hello_line = _recv_line(conn)
+        if not hello_line:
+            raise RuntimeError("broker closed during handshake")
+        hello = json.loads(hello_line.decode())
+        if not hello.get("ok"):
+            code = (hello.get("error") or {}).get("code") or "broker_error"
+            raise RuntimeError("handshake refused: %s" % code)
+        request = {"id": "bridge-1", "method": action, "params": params}
+        conn.sendall((json.dumps(request) + "\n").encode())
+        reply_line = _recv_line(conn)
+    finally:
+        conn.close()
+    if not reply_line:
+        raise RuntimeError("broker closed without a reply")
+    reply = json.loads(reply_line.decode())
+    if not reply.get("ok"):
+        code = (reply.get("error") or {}).get("code") or "broker_error"
+        raise RuntimeError(str(code))
+    return reply.get("result")
+
+
+def _default_idempotency_key(action, args):
+    digest_src = json.dumps(args, sort_keys=True, default=str)
+    return hashlib.sha256((action + "|" + digest_src).encode()).hexdigest()[:32]
+
+
+def _reply(mid, result):
+    sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": mid, "result": result}) + "\n")
+    sys.stdout.flush()
+
+
+def _method_error(mid, code, message):
+    sys.stdout.write(
+        json.dumps({"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}})
+        + "\n"
+    )
+    sys.stdout.flush()
+
+
+def _handle_tools_call(mid, params):
+    name = params.get("name")
+    args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+    tool = _TOOLS_BY_NAME.get(name)
+    if tool is None:
+        _reply(mid, {
+            "content": [{"type": "text", "text": "unknown tool: %s" % name}],
+            "isError": True,
+        })
+        return
+    action_args = dict(args)
+    if tool["idempotent"]:
+        key = action_args.get("idempotency_key")
+        if not isinstance(key, str) or not key:
+            action_args["idempotency_key"] = _default_idempotency_key(tool["action"], action_args)
+    try:
+        result = _broker_call(tool["action"], action_args)
+    except Exception as exc:  # surface broker failures as tool errors
+        _reply(mid, {
+            "content": [{"type": "text", "text": "broker call failed: %s" % exc}],
+            "isError": True,
+        })
+        return
+    text = json.dumps(result, ensure_ascii=False)
+    if len(text) > _RESULT_MAX_CHARS:
+        text = text[:_RESULT_MAX_CHARS] + "...[truncated]"
+    _reply(mid, {"content": [{"type": "text", "text": text}], "isError": False})
+
+
+def main():
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(msg, dict):
+            continue
+        mid = msg.get("id")
+        method = msg.get("method")
+        params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        if mid is None:
+            continue  # notification (e.g. notifications/initialized)
+        if method == "initialize":
+            _reply(mid, {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": SERVER_INFO,
+            })
+        elif method == "ping":
+            _reply(mid, {})
+        elif method == "tools/list":
+            _reply(mid, {"tools": [_tool_schema(t) for t in _TOOLS]})
+        elif method == "tools/call":
+            _handle_tools_call(mid, params)
+        else:
+            _method_error(mid, -32601, "method not found: %s" % method)
+
+
+if __name__ == "__main__":
+    main()
+'''
 
 
 async def write_provider_configs(
@@ -289,31 +576,39 @@ async def write_provider_configs(
     broker_socket_path: str,
     settings: dict | None = None,
 ) -> ProviderConfigPaths:
-    """Write the three platform-owned config files into the attempt's private
+    """Write the platform-owned config files into the attempt's private
     run dir: daemon-owned, 0444, later bind-mounted read-only (§1.4/§2.3).
-    mcp.json registers the platform task broker and NOTHING else (§1.5)."""
+    mcp.json registers the platform task broker and NOTHING else (§1.5):
+    a stdio MCP server whose bridge script (also written here) forwards to
+    the broker unix socket — the pinned provider only supports stdio/sse/http
+    MCP transports, so a raw socket entry would be silently ignored."""
 
     def _write_sync() -> ProviderConfigPaths:
         root.mkdir(parents=True, exist_ok=True)
-        mcp_servers = (
-            {
+        bridge_path: Path | None = None
+        if broker_socket_path:
+            bridge_path = root / "mesh_task_broker_mcp.py"
+            mcp_servers = {
                 "mesh-task-broker": {
-                    "type": "unix-socket",
-                    "path": broker_socket_path,
+                    "type": "stdio",
+                    "command": "/usr/bin/python3",
+                    "args": [f"{SANDBOX_RUN_DIR}/{bridge_path.name}"],
                 }
             }
-            if broker_socket_path
-            else {}
-        )
+        else:
+            mcp_servers = {}
         mcp = {"mcpServers": mcp_servers}
         paths = ProviderConfigPaths(
             settings_json=root / "settings.json",
             mcp_json=root / "mcp.json",
             system_md=root / "system.md",
+            mcp_bridge=bridge_path,
         )
         _write_private(paths.settings_json, json.dumps(settings or {}))
         _write_private(paths.mcp_json, json.dumps(mcp))
         _write_private(paths.system_md, system_prompt)
+        if bridge_path is not None:
+            _write_private(bridge_path, MCP_BRIDGE_SOURCE)
         return paths
 
     return await asyncio.to_thread(_write_sync)

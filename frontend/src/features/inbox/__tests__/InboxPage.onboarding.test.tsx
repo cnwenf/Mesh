@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { InboxPage } from '../InboxPage';
+import { useAuthStore } from '../../../state/authStore';
 
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
@@ -37,8 +38,15 @@ const MEMBERS = {
   next_cursor: null,
 };
 
-beforeEach(() => vi.unstubAllGlobals());
-afterEach(() => vi.unstubAllGlobals());
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
+});
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+});
 
 describe('InboxPage onboarding empty state', () => {
   it('renders the four-element empty state with a deeplink to the board', async () => {

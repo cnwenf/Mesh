@@ -22,6 +22,17 @@ from mesh.db.models.autopilot import (
 from mesh.db.models.chat import ChatMessage, ChatSession, Favorite
 from mesh.db.models.comment import Comment, CommentMention, CommentReaction
 from mesh.db.models.data_job import DataJob, DataJobRow
+from mesh.db.models.integration import (
+    ExecutionContextAppend,
+    ExternalIdentity,
+    Integration,
+    IntegrationBinding,
+    IntegrationEvent,
+    IntegrationMessageQueue,
+    VcsLink,
+    WebhookSubscription,
+    WebhookSubscriptionDelivery,
+)
 from mesh.db.models.issue import (
     Issue,
     IssueActivity,
@@ -134,8 +145,14 @@ __all__ = [
     "EmailVerificationToken",
     "ExecutionAttempt",
     "ExecutionCredential",
+    "ExecutionContextAppend",
+    "ExternalIdentity",
     "Favorite",
     "IdentifierPrefixRegistry",
+    "Integration",
+    "IntegrationBinding",
+    "IntegrationEvent",
+    "IntegrationMessageQueue",
     "Issue",
     "IssueActivity",
     "IssueCustomFieldValue",
@@ -187,10 +204,13 @@ __all__ = [
     "TaskLogSegment",
     "UploadSession",
     "User",
+    "VcsLink",
     "View",
     "ViewIssuePosition",
     "WebhookEvent",
     "WebhookSecret",
+    "WebhookSubscription",
+    "WebhookSubscriptionDelivery",
     "Workspace",
     "WorkspaceInvitation",
     "WorkspaceInvitationRedemption",

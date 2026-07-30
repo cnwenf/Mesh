@@ -11,6 +11,7 @@ import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
 import { updatePreferences } from '../api';
 import { NotificationPreferencesSection } from '../NotificationPreferencesSection';
+import { useAuthStore } from '../../../state/authStore';
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>();
@@ -34,8 +35,13 @@ const MEMBERS = {
   next_cursor: null,
 };
 
-beforeEach(() => vi.unstubAllGlobals());
+// MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
+});
 afterEach(() => {
+  useAuthStore.getState().clearToken();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });

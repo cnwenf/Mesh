@@ -40,7 +40,7 @@ from mesh.db.tenant import set_tenant_context
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import DeliveredCredential, issue_envelopes
 from mesh.runtime.daemon_auth import validate_env_names
-from mesh.runtime.task_tokens import issue_task_token
+from mesh.runtime.task_tokens import issue_task_token, squad_role_of_task_spec
 
 
 @dataclass(frozen=True)
@@ -276,6 +276,7 @@ async def claim_execution(
                 lease_expires_at=attempt_row["lease_expires_at"],
                 issue_id=execution.issue_id,
                 agent_id=execution.agent_id,
+                squad_role=squad_role_of_task_spec(execution.task_spec),
             )
 
             # Observability: claim + queue depth (§3.6 channels).
