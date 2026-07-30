@@ -117,8 +117,8 @@ async def append_context(
             details={"status": execution.status},
         )
     if execution.status not in _APPEND_ACCEPTABLE_STATUSES:
-        # 'cancelling' renders "任务正在停止,无法补充"; 'awaiting_approval' is
-        # parked — neither accepts appends (integrations.md §3.7).
+        # 'cancelling' renders "任务正在停止，无法补充；停止完成后可重新派发";
+        # 'awaiting_approval' is parked — neither accepts appends (§3.7).
         raise BusinessRuleError(
             "execution is not accepting context appends",
             code="append_not_acceptable",

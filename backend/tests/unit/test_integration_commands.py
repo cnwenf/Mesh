@@ -200,7 +200,7 @@ class TestStop:
         # terminal PATCH report (two-phase); at request time the intent is
         # persisted via cancel_requested_at — no premature failure_reason.
         texts = await _feedback_texts(session_factory)
-        assert any("Stopping task" in t and "deploy prod" in t for t in texts)
+        assert any("正在停止任务" in t and "deploy prod" in t for t in texts)
 
     async def test_pending_cancelled_immediately(self, session_factory):
         world = await _seed_world(session_factory)
@@ -213,7 +213,7 @@ class TestStop:
         assert (await _load_item(session_factory, p1)).state == "cancelled"
         assert (await _load_item(session_factory, p2)).state == "cancelled"
         texts = await _feedback_texts(session_factory)
-        assert any("2" in t and "queued" in t for t in texts)
+        assert any("2" in t and "排队消息" in t for t in texts)
 
     async def test_multi_person_independent_cancel(self, session_factory):
         """B's /stop cancels B's pending; A's processing untouched."""
@@ -226,7 +226,7 @@ class TestStop:
         assert (await _load_item(session_factory, a_item)).state == "processing"
         assert (await _load_item(session_factory, b_item)).state == "cancelled"
         texts = await _feedback_texts(session_factory)
-        assert any("not yours" in t for t in texts)
+        assert any("不是你的" in t for t in texts)
 
     async def test_forbidden_on_others_inflight_only(self, session_factory):
         world = await _seed_world(session_factory)
@@ -240,7 +240,7 @@ class TestStop:
             execution = await session.get(TaskExecution, exec_id)
         assert execution.status == "running"
         texts = await _feedback_texts(session_factory)
-        assert any("permission" in t for t in texts)
+        assert any("没有权限" in t for t in texts)
 
     async def test_admin_manage_can_stop_others(self, session_factory):
         # bob is admin this time
@@ -265,7 +265,7 @@ class TestStop:
         await _run(session_factory, world, text="/stop", sender="stranger-key")
         assert (await _load_item(session_factory, item_id)).state == "processing"
         texts = await _feedback_texts(session_factory)
-        assert any("not linked" in t for t in texts)
+        assert any("连接你的外部账号" in t for t in texts)
 
     async def test_repeat_stop_idempotent(self, session_factory):
         world = await _seed_world(session_factory)
@@ -274,7 +274,7 @@ class TestStop:
                     sender_key=ALICE_KEY, execution_id=exec_id)
         await _run(session_factory, world, text="/stop", sender=ALICE_KEY)
         texts = await _feedback_texts(session_factory)
-        assert any("already stopping" in t for t in texts)
+        assert any("正在停止中" in t for t in texts)
 
     async def test_cross_provider_bare_key_no_impersonation(self, session_factory):
         """Same user_key string under another provider maps to another user —
@@ -336,7 +336,7 @@ class TestBtw:
         assert rows[0].payload["text"] == "use staging env"
         assert rows[0].payload["sender_display"] == "Alice"
         texts = await _feedback_texts(session_factory)
-        assert any("Appended" in t for t in texts)
+        assert any("已补充" in t for t in texts)
 
     async def test_cancelling_refused(self, session_factory):
         world = await _seed_world(session_factory)
@@ -346,7 +346,7 @@ class TestBtw:
         outcome, _ = await _run(session_factory, world, text="/btw note", sender=ALICE_KEY)
         assert outcome.handled is True
         texts = await _feedback_texts(session_factory)
-        assert any("stopping" in t for t in texts)
+        assert any("正在停止" in t for t in texts)
 
     async def test_no_inflight_passthrough(self, session_factory):
         world = await _seed_world(session_factory)
@@ -356,14 +356,14 @@ class TestBtw:
         assert outcome.handled is True
         assert outcome.passthrough_text == "check the logs"
         texts = await _feedback_texts(session_factory)
-        assert any("new message" in t for t in texts)
+        assert any("已按新消息排队" in t for t in texts)
 
     async def test_no_args_usage(self, session_factory):
         world = await _seed_world(session_factory)
         outcome, _ = await _run(session_factory, world, text="/btw", sender=ALICE_KEY)
         assert outcome.handled is True
         texts = await _feedback_texts(session_factory)
-        assert any("Usage" in t for t in texts)
+        assert any("用法" in t for t in texts)
 
     async def test_caps_enforced(self, session_factory):
         world = await _seed_world(session_factory)
@@ -374,7 +374,7 @@ class TestBtw:
         await _run(session_factory, world, text="/btw one", sender=ALICE_KEY, settings=settings)
         await _run(session_factory, world, text="/btw two", sender=ALICE_KEY, settings=settings)
         texts = await _feedback_texts(session_factory)
-        assert any("limit" in t for t in texts)
+        assert any("上限" in t for t in texts)
         from mesh.db.models.integration import ExecutionContextAppend
 
         async with session_factory() as session:
@@ -400,7 +400,7 @@ class TestBtw:
         assert outcome.handled is True
         assert outcome.passthrough_text is None
         texts = await _feedback_texts(session_factory)
-        assert any("permission" in t for t in texts)
+        assert any("没有权限" in t for t in texts)
 
 
 class TestParsingAndAudit:
@@ -414,7 +414,7 @@ class TestParsingAndAudit:
         outcome, _ = await _run(session_factory, world, text="/frobnicate", sender=ALICE_KEY)
         assert outcome.handled is True
         texts = await _feedback_texts(session_factory)
-        assert any("Available commands" in t for t in texts)
+        assert any("可用命令" in t for t in texts)
         # commands never enqueue
         async with session_factory() as session:
             count = len(
@@ -449,7 +449,7 @@ class TestEdgeBranches:
         outcome, _ = await _run(session_factory, world, text="/stop", sender=ALICE_KEY)
         assert outcome.handled is True
         texts = await _feedback_texts(session_factory)
-        assert any("no in-flight task" in t for t in texts)
+        assert any("当前没有进行中的任务" in t for t in texts)
 
     async def test_btw_processing_without_execution_passthrough(self, session_factory):
         """Defensive: processing item lacking a bound execution (unreachable
@@ -473,7 +473,7 @@ class TestEdgeBranches:
         outcome, _ = await _run(session_factory, world, text="/btw late note", sender=ALICE_KEY)
         assert outcome.handled is True
         texts = await _feedback_texts(session_factory)
-        assert any("stopping" in t for t in texts)
+        assert any("正在停止" in t for t in texts)
 
     async def test_stop_item_with_malformed_sender_triple_is_foreign(self, session_factory):
         """An item whose sender triple fails validation has no resolvable
@@ -496,4 +496,83 @@ class TestEdgeBranches:
         item = await _load_item(session_factory, item_id)
         assert item.state == "processing"  # untouched — not alice's
         texts = await _feedback_texts(session_factory)
-        assert any("permission" in t for t in texts)
+        assert any("没有权限" in t for t in texts)
+
+
+class TestCopyConsistency:
+    """§3.7 two-stage feedback is ONE bot voice (MES-121 regression guard).
+
+    The immediate stage (commands.py) and the terminal stage
+    (queue_events.stopped_feedback_text) must stay in the same language with
+    the same wording basis — the spec-pinned Chinese literals — and quote the
+    task excerpt identically (「…」) under stage-distinct emojis (⏳ → 🛑).
+    """
+
+    def test_stop_two_stage_same_voice_and_quoting(self):
+        from mesh.integrations.commands import (
+            stopping_feedback_text,
+            stopping_with_cancelled_feedback_text,
+        )
+        from mesh.integrations.queue_events import stopped_feedback_text
+
+        excerpt = "部署生产环境"
+        immediate = stopping_feedback_text(excerpt)
+        combined = stopping_with_cancelled_feedback_text(excerpt, 3)
+        terminal = stopped_feedback_text(excerpt)
+        # Spec §3.7 pinned literals
+        assert immediate == f"⏳ 正在停止任务「{excerpt}」…"
+        assert combined == f"⏳ 正在停止任务「{excerpt}」…，并已取消 3 条排队消息"
+        assert terminal == f"🛑 已停止任务「{excerpt}」"
+        # Both stages: same 「…」 excerpt quoting + CJK copy
+        for text in (immediate, combined, terminal):
+            assert f"「{excerpt}」" in text
+            assert any("一" <= ch <= "鿿" for ch in text)
+
+    def test_feedback_constants_match_spec_literals(self):
+        from mesh.integrations import commands as cmd
+
+        pinned = [
+            (cmd._CANCELLING_IN_PROGRESS_TEXT, "任务正在停止中"),
+            (cmd._TERMINAL_NO_TASK_TEXT, "当前没有进行中的任务"),
+            (cmd._NOTHING_TO_STOP_TEXT, "当前没有进行中或排队的任务（你的）"),
+            (cmd._FORBIDDEN_TEXT, "你没有权限操作该任务"),
+            (cmd._BTW_OK_TEXT, "已补充给正在处理的任务（将在下一步生效）"),
+            (cmd._BTW_CANCELLING_TEXT, "任务正在停止，无法补充；停止完成后可重新派发"),
+            (cmd._BTW_NO_ITEM_HINT, "当前没有进行中的任务，已按新消息排队"),
+            (cmd._BTW_LIMIT_TEXT, "补充已达上限，请直接新建任务说明"),
+            (
+                cmd._LINK_PROMPT_TEXT,
+                "请先在 Mesh 站内连接你的外部账号（网页端：设置 → 外部身份），连接成功后即可使用命令",
+            ),
+            (cmd._BTW_USAGE_TEXT, "用法：/btw <补充说明> — 向正在处理的任务追加上下文"),
+        ]
+        for actual, expected in pinned:
+            assert actual == expected
+
+    def test_all_feedback_copy_is_chinese(self):
+        """Every user-facing command literal carries CJK text and contains no
+        English sentence fragment (the MES-121 zh/en drift, guarded)."""
+        import re as _re
+
+        from mesh.integrations import commands as cmd
+
+        literals = [
+            cmd.HELP_TEXT,
+            cmd._LINK_PROMPT_TEXT,
+            cmd._FORBIDDEN_TEXT,
+            cmd._NOTHING_TO_STOP_TEXT,
+            cmd._CANCELLING_IN_PROGRESS_TEXT,
+            cmd._TERMINAL_NO_TASK_TEXT,
+            cmd._BTW_OK_TEXT,
+            cmd._BTW_CANCELLING_TEXT,
+            cmd._BTW_NO_ITEM_HINT,
+            cmd._BTW_LIMIT_TEXT,
+            cmd._BTW_USAGE_TEXT,
+            cmd.stopping_feedback_text("x"),
+            cmd.stopping_with_cancelled_feedback_text("x", 1),
+        ]
+        for text in literals:
+            assert _re.search(r"[一-鿿]", text), f"no CJK in {text!r}"
+            # No two consecutive English words — commands ("/stop", "/btw")
+            # and the product name stay, but English prose must not.
+            assert not _re.search(r"[A-Za-z]{2,}\s+[A-Za-z]{4,}", text), f"EN prose in {text!r}"
