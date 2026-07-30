@@ -421,6 +421,51 @@ async def list_events(
 
 
 # ---------------------------------------------------------------------------
+# DingTalk Stream receive-channel diagnostics (§3.9 stream-status, MES-87)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspaces/{workspace_id}/integrations/{integration_id}/stream-status")
+async def get_stream_status(
+    request: Request,
+    workspace_id: str,
+    integration_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    """Receive-channel diagnostic (Stream mode ONLY): reads the persisted
+    ``integrations.stream_state`` truth source (§2.2) — UI first paint and
+    diagnostics do not depend on the realtime event arriving first. This
+    endpoint is read-only receive-side state; outbound test-send is a
+    SEPARATE action (MES-89) and never reports ``stream_channel_unavailable``."""
+    from mesh.db.tenant import set_tenant_context
+
+    async with request.app.state.session_factory() as session:
+        await set_tenant_context(session, context.workspace.id)
+        integration = await session.get(
+            Integration, _path_uuid(integration_id, what="integration")
+        )
+    if integration is None or integration.workspace_id != context.workspace.id:
+        raise NotFoundError("integration not found")
+    state = dict(integration.stream_state or {})
+    receive_mode = str((integration.config or {}).get("receive_mode") or "stream")
+    if integration.status == "disabled":
+        resolved = "disabled"
+    elif integration.kind != "im_dingtalk" or receive_mode != "stream":
+        resolved = "disabled"  # no Stream channel for this integration
+    else:
+        resolved = str(state.get("state") or "reconnecting")
+    return {
+        "data": {
+            "integration_id": str(integration.id),
+            "state": resolved,
+            "last_frame_at": state.get("last_frame_at"),
+            "last_attempt_at": state.get("last_attempt_at"),
+            "backoff_seconds": state.get("backoff_seconds", 0),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # External identities (link / link-confirm / unlink, R5 owner-only)
 # ---------------------------------------------------------------------------
 

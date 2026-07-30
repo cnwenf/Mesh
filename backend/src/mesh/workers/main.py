@@ -45,6 +45,7 @@ from mesh.db.models.attachment import AttachmentBlob
 from mesh.errors import MeshError
 from mesh.events.vocab import REALTIME_PUBLISH
 from mesh.integrations.dispatcher import dispatcher_loop, make_dispatch_wake_handler
+from mesh.integrations.ingest import IM_SEND_EVENT_TYPE
 from mesh.integrations.outbound import (
     WEBHOOK_DISPATCH_EVENT_TYPE,
     WebhookDeliveryWorker,
@@ -187,6 +188,18 @@ def _fanout_with_im_derivation(base_handler):
     return _handle
 
 
+async def _im_send_stub_handler(session, event) -> None:
+    """MES-87 stub for ``im.send`` — MES-89 replaces this with the real
+    at-most-once outbound relay (T1 gate + platform send + T2 result)."""
+    logger.warning(
+        "im.send event %s consumed by the MES-87 stub (IM outbound pending "
+        "MES-89); kind=%s — no platform message sent",
+        event.id,
+        (event.payload or {}).get("kind"),
+    )
+    return None
+
+
 def build_relay(
     settings: Settings,
     session_factory,
@@ -284,6 +297,12 @@ def build_relay(
         # notification); ``data_job.resume`` is the reaper recovery path.
         handlers[DATA_JOB_ENQUEUE_EVENT_TYPE] = data_job_worker.handle_enqueue
         handlers[DATA_JOB_RESUME_EVENT_TYPE] = data_job_worker.handle_resume
+    # integrations.md §3.8/§2.10 (MES-87): conversational IM outbound events
+    # (ack / rate-limit notice / command feedback). MES-89 owns the real
+    # at-most-once outbound relay (OpenAPI sender + §3.8 T1/T2 gate
+    # protocol); until then the stub consumes and publishes with an explicit
+    # log line so the events never poison the relay failure budget.
+    handlers[IM_SEND_EVENT_TYPE] = _im_send_stub_handler
     return OutboxRelay(
         session_factory,
         handlers=handlers,
@@ -562,6 +581,18 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             ),
         ]
     )
+
+    # integrations.md §3.2 (MES-87): DingTalk Stream long-connection receive
+    # channel — a supervised task in THIS process (no new compose service):
+    # advisory-lock single-instance mutex, app_key-level connection sharing,
+    # wss-only + forced cert verification, exponential backoff 2→300s ±20%.
+    if settings.dingtalk_stream_enabled:
+        from mesh.integrations.dingtalk_stream import StreamManager
+
+        stream_manager = StreamManager(session_factory, settings, redis=redis_client)
+        supervisor.add_task(
+            TaskSpec("dingtalk-stream", lambda: stream_manager.run_forever(stop))
+        )
 
     try:
         await supervisor.run()
