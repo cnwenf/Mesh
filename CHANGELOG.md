@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Changed
+
+- **工程·CI 治理:全 workflow 显式 timeout-minutes + concurrency(MES-145,MES-122 验收遗留)**:backend-ci / frontend / spec-checks / daemon-ci / cli-release 五 workflow 统一补齐显式 job 超时(按实测余量:后端主 test job 实测 ~45-48min → 60min;前端 quality/e2e/visual 30min、全栈走查 45min、contrast 15min;daemon 45min;文档/DDL/供应链短 job 实测 <1min → 15min;CLI 构建 45min、签名发布 20min)与 workflow 级 concurrency(同 ref 新 run 立即取消旧 run:`group: ${{ github.workflow }}-${{ github.ref }}` + `cancel-in-progress: true`,杜绝同分支/同 PR 多 run 互挤 runner——MES-122 遗留:无兜底时卡死 job 按 runner 默认 6h 阻塞门禁,事故复跑卡死 130+ 分钟;cli-release 发布流 `cancel-in-progress: false`,仅串行不取消进行中的签名/发布)。real-llm.yml 已有 concurrency + timeout-minutes(刻意设计)保持原样。检查矩阵、路径过滤与覆盖率门禁一律不变(仅配置变更);真实探针实测超时 job 被终止(annotation「exceeded the maximum execution time」,终止而非挂死)、重复推送旧 run 即时取消。
+
 ### Fixed
 
 - **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
