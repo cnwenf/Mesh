@@ -1,0 +1,19 @@
+# MES-145 一次性探针(disposable probe,勿合入主干):真实验证 timeout-minutes
+# 在本仓库 GitHub-hosted runner 上确实于到时终止 job(而非按 runner 默认 6h 挂死)。
+# sleep 600s 的 job 配 timeout-minutes: 2 → 必于 ~2min 被终止、run 结论 failure
+# (step 报 "The operation was canceled")。验证完成即关闭本 PR 并删除分支。
+name: mes-145-timeout-probe
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/mes-145-timeout-probe.yml"
+
+jobs:
+  timeout-probe:
+    name: 超时终止探针(sleep 600s vs timeout-minutes 2 → ~2min 必被终止)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Sleep past the job timeout (must be killed at ~2min, not hang 6h)
+        run: sleep 600
