@@ -11,14 +11,19 @@ import { useSettingsStore } from '../../state/settingsStore';
 import { useShortcutRegistry } from '../../shortcuts';
 import { renderWithProviders } from '../../test-utils/render';
 import { AppShell, MAX_RESYNC_PAGES, channelEventsUrl, createReconciler, fetchRestEvents, resolveResyncUrl, useOfflinePolling } from '../AppShell';
-import { PlaceholderPage } from '../PlaceholderPage';
+import { useT } from '../../i18n';
+
+function InboxStub(): React.JSX.Element {
+  const t = useT();
+  return <div data-testid="inbox-stub">{t('state.emptyDescription')}</div>;
+}
 
 function renderShell(route = '/'): ReturnType<typeof renderWithProviders> {
   return renderWithProviders(
     <Routes>
       <Route path="/" element={<AppShell />}>
         <Route index element={<div data-testid="child-stub" />} />
-        <Route path="inbox" element={<PlaceholderPage kind="inbox" />} />
+        <Route path="inbox" element={<InboxStub />} />
       </Route>
     </Routes>,
     { route },
@@ -213,7 +218,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client,
         state: 'reconnecting',
         enabled: true,
-        channel: 'workspace:ws-1:issues',
+        channels: ['workspace:ws-1:issues'],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -238,7 +243,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client: stubClient(),
         state: 'connected',
         enabled: true,
-        channel: 'workspace:ws-1:issues',
+        channels: ['workspace:ws-1:issues'],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -256,7 +261,25 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
         client: stubClient(),
         state: 'reconnecting',
         enabled: false,
-        channel: 'c',
+        channels: ['c'],
+        intervalMs: 1,
+        fetchImpl: fetchMock,
+      }),
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('无已订阅频道(channels 为空)不轮询(MES-107:演示频道移除后无默认频道)', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    renderHook(() =>
+      useOfflinePolling({
+        client: stubClient(),
+        state: 'reconnecting',
+        enabled: true,
+        channels: [],
         intervalMs: 1,
         fetchImpl: fetchMock,
       }),
@@ -279,7 +302,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
           client,
           state: props.state,
           enabled: true,
-          channel: 'workspace:ws-1:issues',
+          channels: ['workspace:ws-1:issues'],
           intervalMs: 1,
           fetchImpl: fetchMock,
         }),

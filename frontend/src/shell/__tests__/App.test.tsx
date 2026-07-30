@@ -75,16 +75,17 @@ describe('App 路由', () => {
     navigateTo('/');
   });
 
-  it('/ 渲染首页(shell + 导航 + home 标题 + 实时演示区)', async () => {
+  it('/ 渲染真实首页(shell + 导航 + 问候 + 工作区卡片 + 仪表盘, MES-107)', async () => {
     signIn();
     navigateTo('/');
     render(<App />);
-    expect(screen.getByText('Welcome to Mesh')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('home-greeting')).toBeInTheDocument());
+    expect(screen.getByTestId('home-greeting').textContent).toContain('Owner');
     expect(screen.getByTestId('nav-home')).toBeInTheDocument();
     expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
-    // AppShell 内实时上下文非空:实时演示区渲染(创建表单 + 列表)
-    await waitFor(() => expect(screen.getByTestId('demo-issue-list')).toBeInTheDocument());
-    expect(screen.getByTestId('demo-create')).toBeInTheDocument();
+    expect(screen.getByTestId('home-workspace-ws')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('home-dashboard')).toBeInTheDocument());
+    expect(screen.getByTestId('home-create')).toBeInTheDocument();
   });
 
   it('/settings 渲染设置页(主题/语言/时区选择器)', () => {
@@ -113,7 +114,7 @@ describe('App 路由', () => {
   it('/login 未登录时渲染登录页', () => {
     navigateTo('/login');
     render(<App />);
-    expect(screen.getByTestId('login-token')).toBeInTheDocument();
+    expect(screen.getByTestId('login-email')).toBeInTheDocument();
   });
 
   it('TopBar 命令面板/帮助按钮开启对应对话框', () => {
@@ -126,19 +127,19 @@ describe('App 路由', () => {
     expect(screen.getByText('Keyboard shortcuts')).toBeInTheDocument();
   });
 
-  it('URL ?locale= 显式请求参数为最高优先(§6.18 请求显式参数级)', () => {
+  it('URL ?locale= 显式请求参数为最高优先(§6.18 请求显式参数级)', async () => {
     signIn();
     navigateTo('/?locale=zh-CN');
     render(<App />);
-    expect(screen.getByText('欢迎使用 Mesh')).toBeInTheDocument();
+    expect(await screen.findByText('欢迎回来,Owner')).toBeInTheDocument();
   });
 
-  it('navigator.languages 不可用时系统级候选为空,回退 en', () => {
+  it('navigator.languages 不可用时系统级候选为空,回退 en', async () => {
     signIn();
     const spy = vi.spyOn(navigator, 'languages', 'get').mockReturnValue(undefined as never);
     navigateTo('/');
     render(<App />);
-    expect(screen.getByText('Welcome to Mesh')).toBeInTheDocument();
+    expect(await screen.findByText('Welcome back, Owner')).toBeInTheDocument();
     spy.mockRestore();
   });
 });
@@ -171,7 +172,7 @@ describe('App 登录守卫(MES-106:未登录访问受保护页 → /login?next=)
   it('未登录访问首页 → 渲染登录页,URL 携带 next=/(编码)', () => {
     navigateTo('/');
     render(<App />);
-    expect(screen.getByTestId('login-token')).toBeInTheDocument();
+    expect(screen.getByTestId('login-email')).toBeInTheDocument();
     expect(window.location.pathname).toBe('/login');
     expect(window.location.search).toContain(`next=${encodeURIComponent('/')}`);
   });
@@ -179,7 +180,7 @@ describe('App 登录守卫(MES-106:未登录访问受保护页 → /login?next=)
   it('未登录访问深层受保护路径 → next 携带原路径与查询串', () => {
     navigateTo('/issues?focus=1');
     render(<App />);
-    expect(screen.getByTestId('login-token')).toBeInTheDocument();
+    expect(screen.getByTestId('login-email')).toBeInTheDocument();
     expect(window.location.pathname).toBe('/login');
     expect(window.location.search).toContain(`next=${encodeURIComponent('/issues?focus=1')}`);
   });
@@ -189,7 +190,7 @@ describe('App 登录守卫(MES-106:未登录访问受保护页 → /login?next=)
     render(<App />);
     // 邀请预览公开可见:mock 预览不可用(expired)→ reason 态呈现(公开路由可达,守卫未拦)
     await waitFor(() => expect(screen.getByTestId('invite-reason-expired')).toBeInTheDocument());
-    expect(screen.queryByTestId('login-token')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('login-email')).not.toBeInTheDocument();
   });
 
   it('未登录时受保护页不发起实时连接(不构造 WebSocket)', () => {

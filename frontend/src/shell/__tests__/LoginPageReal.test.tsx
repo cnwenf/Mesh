@@ -394,15 +394,11 @@ describe('LoginPage 真实账号登录(auth.md §3.1 接通)', () => {
     expect(useAuthStore.getState().token).toBe('at');
   });
 
-  it('开发用 token 直填入口保留(mock e2e 兼容:login-token/login-submit)', async () => {
-    const user = userEvent.setup();
+  it('开发用 token 直填入口已移除(MES-107 去脚手架化)', () => {
     renderLogin(stubFetch());
-
-    await user.type(screen.getByTestId('login-token'), 'mesh-dev:ws-1');
-    await user.click(screen.getByTestId('login-submit'));
-
-    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
-    expect(useAuthStore.getState().token).toBe('mesh-dev:ws-1');
+    expect(screen.queryByTestId('login-token')).toBeNull();
+    expect(screen.queryByTestId('login-submit')).toBeNull();
+    expect(screen.queryByText(/Phase 2/)).toBeNull();
   });
 
   it('已登录时按 next 重定向', () => {

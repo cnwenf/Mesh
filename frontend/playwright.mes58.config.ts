@@ -37,7 +37,6 @@ export default defineConfig({
       env: {
         VITE_MESH_API_BASE_URL: API_BASE_URL,
         VITE_MESH_WS_BASE_URL: WS_BASE_URL,
-        VITE_MESH_DEMO_CHANNEL: 'workspace:11111111-1111-1111-1111-111111111111:issues',
         VITE_MESH_POLLING_INTERVAL_MS: '1000',
       },
     },

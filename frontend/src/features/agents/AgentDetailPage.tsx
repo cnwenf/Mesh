@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AgentStatsCard } from '../analytics/AgentStatsCard';
+import { AgentSkillsTab } from '../skills/AgentSkillsTab';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
@@ -620,14 +621,14 @@ export function AgentDetailPage(): React.JSX.Element {
         </section>
       ) : null}
 
-      {activeTab === 'skills' ? (
-        <section className="mesh-agents-detail__panel" data-testid="agent-panel-skills">
-          {/* skill.md 模块 owns 绑定表;详情页仅留占位与接口面(agent.md 范围说明)。 */}
-          <EmptyState
-            title={t('agents.skills.placeholderTitle')}
-            description={t('agents.skills.placeholderDescription')}
-          />
-        </section>
+      {activeTab === 'skills' && workspace !== null && agentId !== undefined ? (
+        /* agent 技能绑定区(skill.md §4.2):已绑定列表 + 从库绑定(MES-107 接通;
+           面板外壳与 testid 由 AgentSkillsTab 自持,与其他 Tab 一致)。 */
+        <AgentSkillsTab
+          workspaceId={workspace.workspace_id}
+          agentId={agentId}
+          canManage={canManage}
+        />
       ) : null}
 
       {activeTab === 'visibility' ? (

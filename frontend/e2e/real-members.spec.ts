@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { injectSession } from './helpers';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const context = JSON.parse(readFileSync(resolve(ROOT, 'e2e', '.members-context.json'), 'utf8')) as {
@@ -17,15 +18,9 @@ const context = JSON.parse(readFileSync(resolve(ROOT, 'e2e', '.members-context.j
 };
 
 async function login(page: import('@playwright/test').Page): Promise<void> {
-  await page.goto('/login');
-  // 开发令牌表单位于折叠 <details> 内(登录页 OAuth 增量后),先展开再填写。
-  const devPanel = page.locator('details.mesh-login__dev');
-  if ((await devPanel.getAttribute('open')) === null) {
-    await devPanel.locator('summary').click();
-  }
-  await page.getByTestId('login-token').fill(context.ownerToken);
-  await page.getByTestId('login-submit').click();
-  await page.waitForURL('**/');
+  // dev-auth 栈无表单登录:会话经 authStore 持久化键注入(MES-107 起登录页无 dev 入口)
+  await injectSession(page, context.ownerToken);
+  await page.goto('/');
 }
 
 test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () => {
