@@ -21,10 +21,21 @@ on:
 permissions:
   contents: write
 
+# MES-145 (与 backend-ci 统一治理):
+# - concurrency 按 tag ref 分组、cancel-in-progress: false——同一 tag 被重推时
+#   串行化而**绝不取消**签名/发布进行中的 run(发布流不同于 CI 门禁,中途取消
+#   会留下签了一半的 Release)。
+# - 每个 job 显式 timeout-minutes:构建 job 45min(PyInstaller 四平台,macOS
+#   runner 偏慢)、签名发布 20min——无兜底时卡死 job 按默认 6h 挂着。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     name: 构建单二进制(${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45 # MES-145: PyInstaller 单二进制构建兜底(macOS runner 偏慢)
     strategy:
       fail-fast: true
       matrix:
@@ -79,6 +90,7 @@ jobs:
   sign-and-release:
     name: 签名 + 发布 Release(SHA-256 + minisign 双验)
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # MES-145: 签名 + Release 创建兜底
     needs: build
     steps:
       - uses: actions/checkout@v4

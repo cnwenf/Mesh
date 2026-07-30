@@ -3,6 +3,10 @@
 # 2) 成员名册唯一入口:tests/docs/check_roster_entry.py 防独立 Agents 列表页/第二创建入口回归(agent.md §4.2/§5.1,README §6.12);
 # 3) 语义级一致性:tests/docs/check_semantic_consistency.py 防默认值语义漂移/前缀⇄持有者类型错配/废弃前缀残留/深链执行层措辞回归(auth.md §2.5.1/§5.2,theme.md §2.1,search-command-palette.md §3.4);
 # 4) DDL 可执行性 + 行为验证:docs/specs/validation/schema_r2_validation.sql 在 PostgreSQL 16 实跑。
+#
+# Governance (MES-145,与 backend-ci 统一治理):每个 job 显式 timeout-minutes
+# (实测 <25s → 统一 15min 宽裕兜底),workflow 级 concurrency 同 ref 新 run 取消
+# 旧 run——检查矩阵与门禁语义不变。
 name: spec-checks
 
 on:
@@ -18,10 +22,17 @@ on:
       - "tests/docs/**"
       - ".github/workflows/spec-checks.yml"
 
+# MES-145: 同一 ref 的新 run 立即取消在跑的旧 run(PR ref=refs/pull/N/merge,重复
+# 推送即取消旧 run),避免多 run 互挤 runner。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   event-vocab:
     name: 事件词汇校验(§6.7 注册表)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # MES-145: 实测 <10s,短 job 统一 15min 兜底
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,6 +44,7 @@ jobs:
   roster-entry:
     name: 成员名册唯一入口校验(§6.12,T35)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # MES-145: 实测 <10s,短 job 统一 15min 兜底
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,6 +56,7 @@ jobs:
   semantic-consistency:
     name: 语义级一致性校验(MES-76 R2-M2:默认值语义/前缀类型绑定/执行层措辞)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # MES-145: 实测 <10s,短 job 统一 15min 兜底
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,6 +68,7 @@ jobs:
   schema-validation:
     name: DDL 与行为验证(PostgreSQL 16)
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # MES-145: 实测 <25s,短 job 统一 15min 兜底
     services:
       postgres:
         image: postgres:16

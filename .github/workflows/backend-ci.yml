@@ -5,6 +5,14 @@
 # 3) schema-validation — docs/specs/validation/schema_r2_validation.sql runs green on a disposable PG16;
 # 4) supply-chain — pip-audit against both lockfiles; any known CVE fails the build. Also re-runs weekly so
 #    newly disclosed CVEs in pinned versions are caught even without new commits.
+#
+# Governance (MES-145,MES-122 验收遗留):
+# - 每个 job 显式 timeout-minutes,按实测余量设定——主 test job 实测 ~45-48min
+#   (PR #102 同代码 CI 48min 全绿)→ 60min;文档/DDL/供应链短 job 实测 <1min → 15min。
+#   无此兜底时卡死 job 按 runner 默认 6h 阻塞门禁(MES-122 事故:合并推送触发的
+#   main 复跑卡死 130+ 分钟仍未完成)。
+# - workflow 级 concurrency(下方):同一 ref 的新 run 立即取消旧 run,杜绝同分支/
+#   同 PR 多 run 互挤 runner——检查矩阵、路径过滤与覆盖率门禁语义一律不变。
 name: backend-ci
 
 on:
@@ -30,10 +38,21 @@ on:
     # job runs on schedule; the other jobs gate themselves out below.
     - cron: "19 3 * * 1"
 
+# MES-145: 同一 ref 的新 run 立即取消在跑的旧 run,避免同分支/同 PR 多 run 互挤
+# runner(MES-122 遗留:合并推送触发的 main 复跑与在跑 run 并发互挤,无超时兜底
+# 卡死 130+ 分钟)。PR 的 ref 为 refs/pull/N/merge(按 PR 隔离,重复推送即取消旧
+# run);push 为 refs/heads/<branch>。周一定时 supply-chain 复跑与 main push 同组:
+# 即便被取消,触发取消的 push run 自身仍跑 supply-chain,CVE 审计覆盖不丢失。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docs-checks:
     name: 文档词汇/结构校验(§6.7, §6.12)
     runs-on: ubuntu-latest
+    # MES-145: 实测 <1min,15min 为宽裕兜底(短 job 统一 15min)。
+    timeout-minutes: 15
     if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +75,9 @@ jobs:
   test:
     name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%,lockfile 安装)
     runs-on: ubuntu-latest
+    # MES-145: 主 job 实测 ~45-48min(健康 run),60min 留 ~25% 余量;卡死时
+    # 60min 终止而非按 runner 默认 6h 挂死(MES-122 验收遗留)。
+    timeout-minutes: 60
     if: github.event_name != 'schedule'
     services:
       postgres:
@@ -142,6 +164,8 @@ jobs:
   schema-validation:
     name: DDL 与行为验证(PostgreSQL 16)
     runs-on: ubuntu-latest
+    # MES-145: 实测 <1min,15min 为宽裕兜底(短 job 统一 15min)。
+    timeout-minutes: 15
     if: github.event_name != 'schedule'
     services:
       postgres:
@@ -169,6 +193,8 @@ jobs:
   supply-chain:
     name: 供应链审计(pip-audit 对 lockfile,命中已知 CVE 即失败)
     runs-on: ubuntu-latest
+    # MES-145: 实测 <1min(含 OSV 数据拉取),15min 为宽裕兜底(短 job 统一 15min)。
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
