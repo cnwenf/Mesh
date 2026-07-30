@@ -4,6 +4,7 @@
  */
 export { MeshApiError, errorToI18nKey } from './errors';
 export type { MeshApiErrorOptions } from './errors';
+export { uuidv4 } from './uuid';
 export { AUTH_HEADER, bearerHeader, getToken, useAuthStore } from './tokenStore';
 export { MeshApiClient } from './client';
 export type { ClientOptions, HttpMethod, RequestOptions } from './client';

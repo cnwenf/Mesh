@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../../api';
 import { getToken } from '../../api';
+import { uuidv4 } from '../../api/uuid';
 import { Button, ErrorState, Skeleton, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -37,7 +38,8 @@ const RELOAD_EVENTS: ReadonlySet<string> = new Set([
 ]);
 
 function localId(): string {
-  return 'local-' + crypto.randomUUID();
+  // uuidv4 而非裸 crypto.randomUUID():后者在 HTTP 非安全上下文缺失(MES-129)。
+  return 'local-' + uuidv4();
 }
 
 function upsertById(list: readonly ChatMessage[], message: ChatMessage): ChatMessage[] {

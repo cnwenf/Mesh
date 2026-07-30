@@ -11,6 +11,7 @@ import { isErrorEnvelope } from '../types/envelopes';
 import { MeshApiError } from './errors';
 import { AUTH_HEADER, bearerHeader } from './tokenStore';
 import { isAuthExemptPath } from './unauthorized';
+import { uuidv4 } from './uuid';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -213,7 +214,9 @@ export class MeshApiClient {
     }
 
     if (IDEMPOTENT_METHODS.has(method)) {
-      headers[IDEMPOTENCY_KEY_HEADER] = opts.idempotencyKey ?? crypto.randomUUID();
+      // uuidv4 而非裸 crypto.randomUUID():后者在 HTTP 非安全上下文缺失,
+      // 抛 TypeError 令请求发不出去(MES-129)。
+      headers[IDEMPOTENCY_KEY_HEADER] = opts.idempotencyKey ?? uuidv4();
     }
 
     let response: Response;

@@ -5,6 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
+import { uuidv4 } from '../../api/uuid';
 import { env } from '../../env';
 import { useRealtimeContext } from '../../shell/AppShell';
 import {
@@ -87,7 +88,8 @@ export function toggleReactionLocal(
 const LOCAL_ID_PREFIX = 'local-';
 
 function localId(): string {
-  return LOCAL_ID_PREFIX + crypto.randomUUID();
+  // uuidv4 而非裸 crypto.randomUUID():后者在 HTTP 非安全上下文缺失(MES-129)。
+  return LOCAL_ID_PREFIX + uuidv4();
 }
 
 export interface SubmitOptions {
