@@ -18,6 +18,29 @@
   font-family: var(--font-family);
 }
 
+/* 跳到主内容(design-quality §10.2):默认移出视口,键盘聚焦时滑入。
+   z-index 50 为浮层级(design-quality §11.2 z-index 令牌化后改 var(--z-overlay))。 */
+.mesh-skip-link {
+  position: absolute;
+  inset-inline-start: var(--space-2);
+  inset-block-start: var(--space-2);
+  z-index: 50;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-raised);
+  text-decoration: none;
+  font-weight: 600;
+  transform: translateY(-300%);
+  transition: transform var(--duration-fast) ease;
+}
+
+.mesh-skip-link:focus-visible {
+  transform: translateY(0);
+}
+
 /* ── 顶栏 ─────────────────────────────────────────────── */
 
 .mesh-topbar {

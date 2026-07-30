@@ -43,6 +43,14 @@ describe('AppShell', () => {
     expect(screen.getByTestId('child-stub')).toBeInTheDocument();
   });
 
+  it('skip link 指向主区稳定锚点(键盘首焦直达主内容,design-quality §10.2)', () => {
+    renderShell('/');
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' });
+    expect(skipLink).toHaveAttribute('href', '#mesh-main-content');
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('id', 'mesh-main-content');
+  });
+
   it('点击侧栏导航(鼠标路径)切换 Outlet 内容', () => {
     renderShell('/');
     expect(screen.getByTestId('child-stub')).toBeInTheDocument();
