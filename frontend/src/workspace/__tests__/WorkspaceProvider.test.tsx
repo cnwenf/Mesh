@@ -270,7 +270,12 @@ describe('WorkspaceProvider(工作区上下文,workspace.md §4.1)', () => {
     const realtime = createFakeRealtime('connected');
     renderProvider('acme', client, realtime.value);
     await waitFor(() => expect(screen.getByTestId('probe-status').textContent).toBe('ready'));
-    expect(realtime.client.subscribe).toHaveBeenCalledWith(workspaceChannel('ws-1'));
+    // 等订阅 effect 登记完成再断言/发射,消除「探针 ready 早于 subscribe 注册」的
+    // 时序竞态(CI quality 间歇红因;与同文件 deleted 用例既有反竞态模式同构——
+    // subscribe 与 onFrame 同一 effect 登记,waitFor subscribe 即保证帧回调就绪)。
+    await waitFor(() =>
+      expect(realtime.client.subscribe).toHaveBeenCalledWith(workspaceChannel('ws-1')),
+    );
 
     act(() => {
       for (const cb of realtime.client.frames) {
