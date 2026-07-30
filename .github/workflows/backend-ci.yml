@@ -7,8 +7,9 @@
 #    newly disclosed CVEs in pinned versions are caught even without new commits.
 #
 # Governance (MES-145,MES-122 验收遗留):
-# - 每个 job 显式 timeout-minutes,按实测余量设定——主 test job 实测 ~45-48min
-#   (PR #102 同代码 CI 48min 全绿)→ 60min;文档/DDL/供应链短 job 实测 <1min → 15min。
+# - 每个 job 显式 timeout-minutes,按实测余量设定——主 test job 随套件扩容
+#   (4086 例)实测 52-60+min(饱和 runner 上 60min 已触顶被超时取消)→ 90min
+#   (~50% 浮动余量);文档/DDL/供应链短 job 实测 <1min → 15min。
 #   无此兜底时卡死 job 按 runner 默认 6h 阻塞门禁(MES-122 事故:合并推送触发的
 #   main 复跑卡死 130+ 分钟仍未完成)。
 # - workflow 级 concurrency(下方):同一 ref 的新 run 立即取消旧 run,杜绝同分支/
@@ -75,9 +76,12 @@ jobs:
   test:
     name: 单测 + 真实 e2e(PostgreSQL 16 + Redis,覆盖率 ≥90%,lockfile 安装)
     runs-on: ubuntu-latest
-    # MES-145: 主 job 实测 ~45-48min(健康 run),60min 留 ~25% 余量;卡死时
-    # 60min 终止而非按 runner 默认 6h 挂死(MES-122 验收遗留)。
-    timeout-minutes: 60
+    # MES-145: 套件扩容至 4086 例后实测 52-60+min(上一轮 52:29 压线通过、
+    # 本轮饱和 runner 恰 60min 触顶被超时取消——系超时非测试失败),60min 已
+    # 无余量 → 90min(~50% 浮动空间);卡死时 90min 终止而非按 runner 默认
+    # 6h 挂死(MES-122 验收遗留)。用例与覆盖率门禁不变,仅放宽执行窗口;
+    # 套件持续增长则测试并行化另立 follow-up。
+    timeout-minutes: 90
     if: github.event_name != 'schedule'
     services:
       postgres:
