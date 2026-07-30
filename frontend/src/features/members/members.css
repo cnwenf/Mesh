@@ -66,12 +66,18 @@
 }
 
 /* 受控横向滚动容器(design-quality A-05/§7.6):窄屏(390px)表格内部横滚,
-   不产生页面级横向溢出;右缘渐隐作为可滚动提示;首列粘住保持身份列常驻。 */
+   不产生页面级横向溢出;首列粘住保持身份列常驻。右缘渐隐提示仅在
+   0–599px 启用(桌面表格完整呈现,不做渐隐)。 */
 .mesh-members__table-wrap {
   overflow-x: auto;
   max-inline-size: 100%;
   border-radius: var(--radius-md);
-  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+}
+
+@media (max-width: 599px) {
+  .mesh-members__table-wrap {
+    mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+  }
 }
 
 .mesh-members__table {

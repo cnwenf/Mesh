@@ -59,6 +59,15 @@ describe('TopBar', () => {
     expect(onOpenSearch).toHaveBeenCalledWith('');
   });
 
+  it('顶栏搜索清空输入不展开面板(仅复位本框)', () => {
+    const onOpenSearch = vi.fn();
+    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(input).toHaveValue('');
+  });
+
   it('顶栏搜索 Escape 清空输入(不展开面板)', () => {
     const onOpenSearch = vi.fn();
     renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);

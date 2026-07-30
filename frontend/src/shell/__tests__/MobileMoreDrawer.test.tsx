@@ -60,6 +60,27 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('Tab 在抽屉内循环(末项 Tab → 首项;首项 Shift+Tab → 末项)', async () => {
+    renderDrawer();
+    const dialog = screen.getByRole('dialog');
+    const close = screen.getByTestId('mobile-drawer-close');
+    const lastLink = screen.getByTestId('mobile-drawer-nav-settings');
+    // 末项 Tab → 回首项(关闭按钮为面板首个可聚焦元素)
+    lastLink.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    // 首项 Shift+Tab → 回末项
+    close.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(lastLink).toHaveFocus();
+    // 面板自身聚焦时 Shift+Tab 同样跳末项;非 Tab 键不干预
+    dialog.focus();
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+    expect(lastLink).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: 'a' });
+    expect(lastLink).toHaveFocus();
+  });
+
   it('打开后焦点进入抽屉;关闭后归还触发元素', async () => {
     const user = userEvent.setup();
     function Harness(): React.JSX.Element {
