@@ -26,6 +26,7 @@ import {
   workspaceExecutionsChannel,
   workspaceRuntimesChannel,
 } from './api';
+import { executionDisplayLabel } from './executionLabel';
 import { formatDurationSeconds, formatMemoryMb } from './format';
 import type { ExecutionDetail, RuntimeDetail, RuntimeStatus } from './types';
 import './runtimes.css';
@@ -332,7 +333,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
               return (
                 <li key={execution.id} data-testid={`runtime-inflight-${execution.id}`}>
                   <span className="mesh-runtimes-detail__execution-name">
-                    {execution.agent_name ?? execution.id}
+                    {executionDisplayLabel(t, execution)}
                   </span>
                   <span data-testid={`runtime-inflight-status-${execution.id}`}>
                     {t(`runtimes.execution.status.${execution.status}`)}
@@ -375,7 +376,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
             {history.map((execution) => (
               <li key={execution.id} data-testid={`runtime-history-${execution.id}`}>
                 <span className="mesh-runtimes-detail__execution-name">
-                  {execution.agent_name ?? execution.id}
+                  {executionDisplayLabel(t, execution)}
                 </span>
                 <span>{t(`runtimes.execution.status.${execution.status}`)}</span>
                 <span>{execution.finished_at ?? execution.queued_at}</span>

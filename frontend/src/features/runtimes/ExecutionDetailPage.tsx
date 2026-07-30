@@ -34,6 +34,7 @@ import {
   latestAttempt,
   listExecutionLogs,
 } from './api';
+import { executionDisplayLabel } from './executionLabel';
 import { formatDurationSeconds } from './format';
 import type { ExecutionDetail, ExecutionStatus, LogFrame, LogLine } from './types';
 import { SUCCESS_EXECUTION_STATUSES, TERMINAL_EXECUTION_STATUSES } from './types';
@@ -318,7 +319,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
           {t('runtimes.execution.back')}
         </Button>
         <h1 className="mesh-executions__title" data-testid="execution-title">
-          {execution.agent_name ?? execution.id}
+          {executionDisplayLabel(t, execution)}
         </h1>
         <span data-testid="execution-status">
           <StatusDot
@@ -354,9 +355,9 @@ export function ExecutionDetailPage(): React.JSX.Element {
         <dt>{t('runtimes.execution.runtime')}</dt>
         <dd data-testid="execution-runtime-name">{attempt?.runtime_name ?? '—'}</dd>
         <dt>{t('runtimes.execution.agent')}</dt>
-        <dd data-testid="execution-agent">{execution.agent_name ?? '—'}</dd>
+        <dd data-testid="execution-agent">{execution.agent_id ?? '—'}</dd>
         <dt>{t('runtimes.execution.issue')}</dt>
-        <dd data-testid="execution-issue">{execution.issue_identifier ?? '—'}</dd>
+        <dd data-testid="execution-issue">{execution.issue_id ?? '—'}</dd>
         <dt>{t('runtimes.execution.trigger')}</dt>
         <dd data-testid="execution-trigger">
           {t(`runtimes.execution.triggerKind.${execution.trigger}`)}

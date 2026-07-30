@@ -53,11 +53,12 @@ const RUNTIME = {
   created_at: '2026-01-01T00:00:00Z',
 };
 
+// 字段集与后端 `_render_execution` 对齐(无联表展示名;行标签走 trigger + 短 ID)。
 const INFLIGHT = {
   id: 'e-1',
+  workspace_id: 'ws-1',
   agent_id: 'a-1',
-  agent_name: '小测',
-  issue_identifier: 'MES-42',
+  issue_id: 'i-42',
   trigger: 'assign',
   status: 'running',
   priority: 100,
@@ -87,7 +88,7 @@ const INFLIGHT = {
 const HISTORY = {
   ...INFLIGHT,
   id: 'e-2',
-  agent_name: '文档助手',
+  trigger: 'mention',
   status: 'completed',
   finished_at: '2026-07-26T09:00:00Z',
   attempts: [],
@@ -183,10 +184,11 @@ describe('RuntimeDetailPage', () => {
     setup();
     renderPage();
     await screen.findByTestId('runtime-detail-name');
-    expect(screen.getByTestId('runtime-inflight-e-1')).toHaveTextContent('小测');
+    // 行标签为 trigger 文案 + 短 ID(契约字段,不依赖联表展示名)。
+    expect(screen.getByTestId('runtime-inflight-e-1')).toHaveTextContent('Assign · e-1');
     expect(screen.getByTestId('runtime-inflight-status-e-1')).toHaveTextContent('Running');
     expect(screen.getByTestId('runtime-cancel-e-1')).toBeInTheDocument();
-    expect(screen.getByTestId('runtime-history-e-2')).toHaveTextContent('文档助手');
+    expect(screen.getByTestId('runtime-history-e-2')).toHaveTextContent('Mention · e-2');
   });
 
   it('取消在途执行 POST :cancel', async () => {
@@ -347,9 +349,9 @@ describe('RuntimeDetailPage', () => {
     expect(screen.getByTestId('runtime-detail-capabilities')).toHaveTextContent('—');
   });
 
-  it('执行无 agent_name 时回退 id;历史无 finished_at 时回退 queued_at', async () => {
-    const inflight = { ...INFLIGHT, agent_name: null };
-    const history = { ...HISTORY, agent_name: null, finished_at: null };
+  it('行标签恒为 trigger 文案 + 短 ID(不依赖后端不提供的展示名);历史无 finished_at 时回退 queued_at', async () => {
+    const inflight = { ...INFLIGHT, agent_id: null };
+    const history = { ...HISTORY, agent_id: null, finished_at: null };
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
@@ -360,8 +362,8 @@ describe('RuntimeDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
-    expect(await screen.findByTestId('runtime-inflight-e-1')).toHaveTextContent('e-1');
-    expect(screen.getByTestId('runtime-history-e-2')).toHaveTextContent('e-2');
+    expect(await screen.findByTestId('runtime-inflight-e-1')).toHaveTextContent('Assign · e-1');
+    expect(screen.getByTestId('runtime-history-e-2')).toHaveTextContent('Mention · e-2');
   });
 
   it('返回与查看按钮触发导航(路由外卸载详情)', async () => {

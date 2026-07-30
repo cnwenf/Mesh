@@ -35,11 +35,13 @@ const ME = {
   ],
 };
 
+// 字段集与后端 `_render_execution` 对齐:无联表展示名(agent_name / issue_identifier),
+// 详情页 agent / issue 行呈现契约实际返回的 id。
 const EXECUTION = {
   id: 'e-1',
+  workspace_id: 'ws-1',
   agent_id: 'a-1',
-  agent_name: '小测',
-  issue_identifier: 'MES-42',
+  issue_id: 'i-42',
   trigger: 'assign',
   status: 'running',
   priority: 100,
@@ -167,8 +169,11 @@ describe('ExecutionDetailPage 头部与元信息', () => {
     expect(await screen.findByTestId('execution-detail-page')).toBeInTheDocument();
     expect(screen.getByTestId('execution-status')).toHaveTextContent('Running');
     expect(screen.getByTestId('execution-runtime-name')).toHaveTextContent('intranet-build-01');
-    expect(screen.getByTestId('execution-agent')).toHaveTextContent('小测');
-    expect(screen.getByTestId('execution-issue')).toHaveTextContent('MES-42');
+    // agent / issue 行呈现契约实际返回的 id(后端不提供联表展示名)。
+    expect(screen.getByTestId('execution-agent')).toHaveTextContent('a-1');
+    expect(screen.getByTestId('execution-issue')).toHaveTextContent('i-42');
+    // 标题为 trigger 文案 + 短 ID(不依赖后端不提供的字段)。
+    expect(screen.getByTestId('execution-title')).toHaveTextContent('Assign · e-1');
     expect(screen.getByTestId('execution-trigger')).toHaveTextContent('Assign');
     expect(screen.getByTestId('execution-branch')).toHaveTextContent('agent/e-1/a1');
     expect(screen.getByTestId('execution-elapsed').textContent).toContain('/ 30:00');
@@ -415,19 +420,19 @@ describe('ExecutionDetailPage Tab / 凭证 / 取消', () => {
     expect(calls.some((c) => c.url.includes(':cancel'))).toBe(false);
   });
 
-  it('稀疏执行:无 attempt / 无 agent_name / 无 issue 的「—」回退', async () => {
+  it('稀疏执行:无 attempt / 无 agent_id / 无 issue_id 的「—」回退', async () => {
     const sparse = {
       ...EXECUTION,
-      agent_name: null,
-      issue_identifier: null,
+      agent_id: null,
+      issue_id: null,
       credentials: undefined,
       attempts: [],
     };
     setup(sparse);
     renderPage();
     expect(await screen.findByTestId('execution-detail-page')).toBeInTheDocument();
-    // 标题回退为执行 id
-    expect(screen.getByTestId('execution-title')).toHaveTextContent('e-1');
+    // 标题恒为 trigger 文案 + 短 ID(契约字段,不因稀疏数据退化)
+    expect(screen.getByTestId('execution-title')).toHaveTextContent('Assign · e-1');
     expect(screen.getByTestId('execution-runtime-name')).toHaveTextContent('—');
     expect(screen.getByTestId('execution-agent')).toHaveTextContent('—');
     expect(screen.getByTestId('execution-issue')).toHaveTextContent('—');

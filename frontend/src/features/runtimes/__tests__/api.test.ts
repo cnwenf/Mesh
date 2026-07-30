@@ -222,6 +222,7 @@ describe('latestAttempt 派生(§2.1:attempt 按 attempt_number 追加)', () => 
   const base = {
     id: 'e-1',
     agent_id: null,
+    issue_id: null,
     trigger: 'assign',
     status: 'running',
     priority: 100,
