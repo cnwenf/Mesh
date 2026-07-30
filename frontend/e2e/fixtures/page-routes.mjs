@@ -342,38 +342,56 @@ const CHAT_MESSAGES = [
 // 运行详情(ExecutionDetailPage,exec-1;终态 completed,无实时流)
 // ---------------------------------------------------------------------------
 
+// 字段集与后端 get_execution / `_render_execution` + `_render_attempt` 逐项对齐:
+// 后端不返回 agent_name / issue_identifier(无联表展示名),mock 同样不提供;
+// 凭证仅元信息,值恒为 '***'(§4.10 红线)。
 const EXECUTION_DETAIL = {
   id: 'exec-1',
+  workspace_id: 'ws-1',
   agent_id: 'agent-1',
-  agent_name: 'Mesh Agent',
-  issue_identifier: 'MESH-1',
+  issue_id: 'issue-1',
   trigger: 'manual',
   status: 'completed',
   priority: 0,
-  required_capabilities: [],
+  task_spec: { kind: 'issue_assignment', untrusted_context: {} },
   label_requirements: {},
-  timeout_seconds: 600,
+  required_capabilities: [],
+  config_snapshot: {},
+  max_attempts: 1,
   queued_at: isoAt(0),
   finished_at: isoAt(120_000),
+  timeout_seconds: 600,
   failure_reason: null,
   result: { summary: '完成暗色令牌生成。' },
-  max_attempts: 1,
+  cancel_requested_at: null,
   attempts: [
     {
       id: 'att-1',
       attempt_number: 1,
-      runtime_name: 'runner-01',
       runtime_id: 'rt-1',
+      runtime_name: 'runner-01',
       status: 'completed',
+      lease_seq: 1,
       claimed_at: isoAt(1_000),
       started_at: isoAt(2_000),
       finished_at: isoAt(120_000),
       working_branch: 'mesh/exec-1',
-      result: { summary: '完成' },
       failure_reason: null,
+      result: { summary: '完成' },
     },
   ],
-  credentials: [{ id: 'cred-1', name: 'GITHUB_TOKEN', kind: 'repo_token' }],
+  retry_count: 0,
+  credentials: [
+    {
+      id: 'cred-1',
+      name: 'GITHUB_TOKEN',
+      kind: 'repo_token',
+      attempt_id: 'att-1',
+      injected_at: isoAt(2_000),
+      revoked_at: null,
+      value: '***',
+    },
+  ],
 };
 
 const EXECUTION_LOGS = {

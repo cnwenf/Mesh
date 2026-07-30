@@ -281,6 +281,15 @@ test.describe('首页工作台 四组合 + 五块断言(design-quality §3.2 首
     await expect(page.getByTestId('home-waiting-appr-7')).toContainText('Approve deploy of MESH-2');
     await expect(page.getByTestId('home-ai-runs')).toBeVisible();
     await expect(page.getByTestId('home-ai-run-exec-1')).toBeVisible();
+    // 标签兜底路径(mock 已与真实响应对齐,不含 agent_name / issue_identifier):
+    // 行标题 = trigger 文案 + 短 ID;元信息 = 状态文案 + 相对时间。
+    const firstRun = page.getByTestId('home-ai-run-exec-1');
+    await expect(firstRun).toContainText(/Assign · exec-1|分派 · exec-1/);
+    const firstRunMeta = firstRun.locator('.mesh-home__issue-meta');
+    await expect(firstRunMeta).toContainText(/Running ·|运行中 ·/);
+    await expect(firstRunMeta).toContainText(/\d/); // 相对时间含数字(如 "1 day ago")
+    const secondRun = page.getByTestId('home-ai-run-exec-2');
+    await expect(secondRun).toContainText(/Mention · exec-2|提及 · exec-2/);
     // 终态成功执行被过滤,不在「AI 运行」块。
     await expect(page.getByTestId('home-ai-run-exec-3')).toHaveCount(0);
   });

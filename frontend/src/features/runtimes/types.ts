@@ -109,12 +109,17 @@ export interface AttemptSummary {
   readonly failure_reason: string | null;
 }
 
-/** 逻辑执行摘要(runtime.md §2.2 task_executions)。 */
+/**
+ * 逻辑执行摘要(runtime.md §2.2 task_executions)。
+ *
+ * 字段集与后端 `_render_execution` 逐一对齐(契约保真):后端不返回
+ * agent_name / issue_identifier 等联表展示名,展示层标签统一由
+ * trigger + 短 ID + 相对时间组成(executionLabel.ts),不依赖幽灵字段。
+ */
 export interface ExecutionSummary {
   readonly id: string;
   readonly agent_id: string | null;
-  readonly agent_name?: string | null;
-  readonly issue_identifier?: string | null;
+  readonly issue_id: string | null;
   readonly trigger: ExecutionTrigger;
   readonly status: ExecutionStatus;
   readonly priority: number;

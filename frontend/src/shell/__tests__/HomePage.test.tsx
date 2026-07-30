@@ -563,22 +563,27 @@ describe('HomePage(最近项目小组件 + onboarding)', () => {
 const EXECUTIONS_PATH = '/api/v1/workspaces/ws-1/executions';
 const APPROVALS_PATH = '/api/v1/workspaces/ws-1/approvals';
 
+/** 执行行最小形态:与后端 `_render_execution` 同字段(无联表展示名,标签走 trigger+短ID)。 */
 function execRow(id: number, status: string): Record<string, unknown> {
   return {
     id: 'exec-' + String(id),
+    workspace_id: 'ws-1',
     agent_id: 'agent-1',
-    agent_name: 'Coder',
-    issue_identifier: 'MESH-' + String(id),
+    issue_id: 'issue-' + String(id),
     trigger: 'assign',
     status,
     priority: 0,
-    required_capabilities: [],
+    task_spec: { kind: 'issue_assignment', untrusted_context: {} },
     label_requirements: {},
-    timeout_seconds: 600,
+    required_capabilities: [],
+    config_snapshot: {},
+    max_attempts: 3,
     queued_at: '2026-07-30T00:00:00.000Z',
     finished_at: null,
+    timeout_seconds: 600,
     failure_reason: null,
     result: null,
+    cancel_requested_at: null,
   };
 }
 
@@ -639,7 +644,12 @@ describe('HomePage(等待确认 / AI 运行 小组件)', () => {
     const runs = await screen.findByTestId('home-ai-runs');
     // completed 被过滤,仅剩 running + awaiting_approval 两行。
     await waitFor(() => expect(within(runs).getAllByRole('listitem').length).toBe(2));
-    expect(within(runs).getByTestId('home-ai-run-exec-1').textContent).toContain('Coder');
+    // 标签由契约实际字段组成:trigger 文案 + 短 ID;元信息为状态 + 相对时间。
+    const firstRow = within(runs).getByTestId('home-ai-run-exec-1').textContent ?? '';
+    expect(firstRow).toMatch(/分派|Assign/);
+    expect(firstRow).toContain('exec-1');
+    // 两个分隔符:标签(trigger · 短ID)+ 元信息(状态 · 相对时间)。
+    expect(firstRow.split(' · ').length - 1).toBe(2);
     const runLink = within(within(runs).getByTestId('home-ai-run-exec-1')).getByRole('link');
     expect(runLink.getAttribute('href')).toBe('/executions/exec-1');
 

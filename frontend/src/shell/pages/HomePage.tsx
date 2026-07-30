@@ -10,12 +10,13 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useIntl } from 'react-intl';
 import { Link } from 'react-router';
 import { errorToI18nKey, getApiClient, MeshApiError } from '../../api';
 import type { MeshApiClient } from '../../api';
 import { Button, EmptyState, ErrorState, Input, Skeleton, useToast } from '../../design';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
-import { useT } from '../../i18n';
+import { formatRelativeTime, useT } from '../../i18n';
 import { createIssue, listIssues, workspaceIssuesChannel } from '../../features/issues/api';
 import { applyIssueListFrame } from '../../features/issues/realtime';
 import type { IssueSummary } from '../../features/issues/types';
@@ -25,6 +26,7 @@ import { OnboardingChecklist } from '../../features/onboarding';
 import { listProjects } from '../../features/projects/api';
 import type { ProjectSummary } from '../../features/projects/types';
 import { listWorkspaceApprovals, listWorkspaceExecutions } from '../../features/runtimes/api';
+import { executionDisplayLabel } from '../../features/runtimes/executionLabel';
 import type { ApprovalSummary, ExecutionSummary } from '../../features/runtimes/types';
 import { CreateWorkspaceWizard } from '../../workspace/CreateWorkspaceWizard';
 import { useRealtimeContext } from '../AppShell';
@@ -326,6 +328,7 @@ function WaitingSection(props: WorkspaceFeedSectionProps): React.JSX.Element | n
 function AiRunsSection(props: WorkspaceFeedSectionProps): React.JSX.Element | null {
   const { client, workspaceId } = props;
   const t = useT();
+  const intl = useIntl();
   const [executions, setExecutions] = useState<readonly ExecutionSummary[] | null>(null);
 
   useEffect(() => {
@@ -358,9 +361,13 @@ function AiRunsSection(props: WorkspaceFeedSectionProps): React.JSX.Element | nu
       <h2 className="mesh-home__heading mesh-text-title-3">{t('home.aiRunsTitle')}</h2>
       <ul className="mesh-home__issue-list">
         {active.map((execution) => {
-          const label =
-            execution.agent_name ?? execution.issue_identifier ?? t('home.aiRunFallback');
+          // 标签只由契约实际返回的字段组成:trigger 文案 + 短 ID(后端不返回
+          // agent_name / issue_identifier,依赖幽灵字段会在真实环境恒为兜底常量)。
+          const label = executionDisplayLabel(t, execution);
           const statusKey = EXECUTION_STATUS_LABEL_KEY[execution.status] ?? 'home.aiRunFallback';
+          const queuedRelative = formatRelativeTime(execution.queued_at, {
+            locale: intl.locale,
+          });
           return (
             <li
               key={execution.id}
@@ -369,7 +376,11 @@ function AiRunsSection(props: WorkspaceFeedSectionProps): React.JSX.Element | nu
             >
               <Link className="mesh-home__issue-link" to={'/executions/' + execution.id}>
                 <span className="mesh-home__issue-title">{label}</span>
-                <span className="mesh-home__issue-meta">{t(statusKey)}</span>
+                <span className="mesh-home__issue-meta">
+                  {t(statusKey)}
+                  {' · '}
+                  {queuedRelative}
+                </span>
               </Link>
             </li>
           );
