@@ -46,7 +46,14 @@ function changedLines() {
       continue;
     }
     const hunkMatch = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (hunkMatch && file && /\.tsx?$/.test(file) && !file.includes('__tests__')) {
+    if (
+      hunkMatch &&
+      file &&
+      /\.tsx?$/.test(file) &&
+      !file.includes('__tests__') &&
+      // 测试文件自身不计入覆盖率(与 vite coverage exclude 同义,MES-106)
+      !/\.(test|spec)\.tsx?$/.test(file)
+    ) {
       const start = Number(hunkMatch[1]);
       const count = hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2]);
       if (count === 0) continue;
