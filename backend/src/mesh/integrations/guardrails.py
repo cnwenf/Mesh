@@ -97,16 +97,17 @@ class InboundGuardrails:
             ).scalar_one()
         )
 
-    async def check(
+    async def check_rate_windows(
         self,
-        session: AsyncSession,
         *,
-        envelope: VerifiedEnvelope,
-        conversation_key: str,
         sender_identity_key: str,
+        conversation_key: str,
         now_epoch: float | None = None,
     ) -> str | None:
-        """None = admit; ``'rate_limited'`` = reject (caller audits)."""
+        """The two Redis rolling-window counters (identity 20/min global,
+        conversation 60/min). Runs BEFORE the command plane (§3.7:975 —
+        command handling is constrained by the §2.10 counters too).
+        None = admit; ``'rate_limited'`` = reject (caller audits)."""
         moment = now_epoch if now_epoch is not None else time.time()
 
         identity_hits = await self._window_count(
@@ -131,6 +132,14 @@ class InboundGuardrails:
             )
             return VERDICT_RATE_LIMITED
 
+        return None
+
+    async def check_pending_depth(
+        self, session: AsyncSession, conversation_key: str
+    ) -> str | None:
+        """Pending-depth counter (DB count, hard cap 50). MUST run under the
+        conversation's imq_seq advisory lock (caller holds it) so concurrent
+        ingests cannot jointly exceed the §2.10 cap."""
         depth = await self._pending_depth(session, conversation_key)
         if depth >= self.max_pending_per_conversation:
             logger.warning(
@@ -139,7 +148,6 @@ class InboundGuardrails:
                 conversation_key,
             )
             return VERDICT_RATE_LIMITED
-
         return None
 
     async def maybe_emit_rate_limit_notice(
@@ -205,3 +213,4 @@ __all__: list[Any] = [
     "InboundGuardrails",
     "VERDICT_RATE_LIMITED",
 ]
+

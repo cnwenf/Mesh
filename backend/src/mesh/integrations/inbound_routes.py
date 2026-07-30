@@ -116,6 +116,7 @@ async def _run_inbound(
             now=now,
             tolerance=_tolerance(request),
             guardrails=guardrails,
+            ack_window=settings.im_ack_coalesce_window,
         )
     return JSONResponse(status_code=status_code, content=body)
 

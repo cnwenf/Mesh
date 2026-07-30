@@ -762,6 +762,7 @@ async def process_inbound(
     now: datetime,
     tolerance: timedelta,
     guardrails=None,
+    ack_window=None,
 ) -> tuple[int, dict[str, Any]]:
     """Full inbound pipeline; runs inside the caller's transaction.
 
@@ -832,12 +833,15 @@ async def process_inbound(
         envelope = _envelope_from_normalized(
             provider, event, config=dict(integration.config or {}), raw_payload=payload
         )
+        ingest_kwargs: dict[str, Any] = {"guardrails": guardrails}
+        if ack_window is not None:
+            ingest_kwargs["ack_window"] = ack_window
         result = await ingest_verified_event(
             session,
             integration=integration,
             envelope=envelope,
             now=now,
-            guardrails=guardrails,
+            **ingest_kwargs,
         )
         return result.status_code, result.body
 

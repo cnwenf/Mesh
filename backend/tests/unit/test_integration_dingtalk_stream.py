@@ -636,3 +636,71 @@ async def test_group_closes_on_secret_rotation(session_factory):
     await manager.scan_once()
     assert signal.is_set()  # group signalled to stop
     assert "dingappkey0001" not in manager._groups
+
+
+async def test_group_task_crash_is_reaped_and_rebuilt(session_factory):
+    """H1: a group task that dies (escaping exception) is reaped — the next
+    scan re-locks and rebuilds it; the app_key is never stranded."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"endpoint": "wss://gw.test/c", "ticket": "t"})
+
+    async def ws_connect(url, *, ssl_context):
+        return FakeWS()
+
+    manager = _manager(
+        session_factory, FakeWS(),
+    )
+    manager._http_factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    manager._ws_connect = ws_connect
+
+    await manager.scan_once()
+    await asyncio.sleep(0.1)
+    assert len(manager._groups) == 1
+
+    # Kill the group task with an escaping exception (simulates a bug that
+    # defeats the per-cycle isolation).
+    group_task = next(iter(manager._groups.values()))
+    group_task.cancel()
+    await asyncio.sleep(0.1)
+
+    # Reaped: bookkeeping cleared, served ids released.
+    assert manager._groups == {}
+    assert manager._served_ids == set()
+
+    # Next scan rebuilds the group (re-locks the integration).
+    await manager.scan_once()
+    await asyncio.sleep(0.1)
+    try:
+        assert len(manager._groups) == 1
+    finally:
+        await manager.shutdown()
+
+
+async def test_pending_depth_counter_api(session_factory):
+    """M1: the depth counter is a standalone check the ingest core runs
+    UNDER the imq_seq lock."""
+    from mesh.integrations.guardrails import InboundGuardrails
+
+    world = await seed_dingtalk_world(session_factory)
+    binding = await make_dingtalk_binding(session_factory, world=world)
+    conversation_key = f"dingtalk:dingcorp0001:{binding.external_ref}"
+
+    async with session_factory() as session, session.begin():
+        for seq in range(1, 51):
+            session.add(IntegrationMessageQueue(
+                workspace_id=world["ws"],
+                integration_id=world["integ_dingtalk"],
+                binding_id=binding.id,
+                conversation_key=conversation_key,
+                seq=seq,
+                dispatch_mode="serial_conversation",
+                state="pending",
+                sender_identity_key="dingtalk:dingcorp0001:someone",
+            ))
+
+    guardrails = InboundGuardrails(None, max_pending_per_conversation=50)
+    async with session_factory() as session:
+        assert await guardrails.check_pending_depth(session, conversation_key) == "rate_limited"

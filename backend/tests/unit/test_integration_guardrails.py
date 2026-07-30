@@ -253,3 +253,56 @@ async def test_within_limits_everything_dispatches(session_factory, redis_client
     for _ in range(5):
         result = await _ingest(session_factory, world, _envelope(), guardrails)
         assert result.process_status == "dispatched"
+
+
+async def test_window_guardrail_runs_before_command_plane(session_factory, redis_client):
+    """§3.7:975 — command handling is constrained by the §2.10 frequency
+    counters: an over-limit identity's /command is rejected before the
+    command plane ever sees it."""
+    from mesh.db.models.integration import Integration
+    from mesh.integrations.dingtalk import normalize_message_payload
+    from mesh.integrations.guardrails import InboundGuardrails
+    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome, ingest_verified_event
+    from tests.unit.integrations_support import (
+        NOW as _NOW,
+    )
+    from tests.unit.integrations_support import (
+        dingtalk_message_payload,
+        make_dingtalk_binding,
+        seed_dingtalk_world,
+    )
+
+    handled = []
+
+    async def _handler(session, envelope, name, args):
+        handled.append(name)
+        return CommandOutcome()
+
+    COMMAND_REGISTRY["deploy"] = _handler
+    try:
+        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+        await make_dingtalk_binding(session_factory, world=world)
+        guardrails = InboundGuardrails(redis_client, per_identity_per_min=1)
+
+        async with session_factory() as session:
+            integration = await session.get(Integration, world["integ_dingtalk"])
+
+        async def _send(text: str):
+            envelope = normalize_message_payload(
+                dingtalk_message_payload(text=text), max_chars=4000, channel="http"
+            )
+            async with session_factory() as session, session.begin():
+                return await ingest_verified_event(
+                    session, integration=integration, envelope=envelope,
+                    now=_NOW, guardrails=guardrails,
+                )
+
+        first = await _send("/deploy now")
+        assert first.process_status == "processed"  # command handled
+        assert handled == ["deploy"]
+        second = await _send("/deploy again")  # over the 1/min identity window
+        assert second.process_status == "rejected"
+        assert second.body.get("reason") == "rate_limited"
+        assert handled == ["deploy"]  # command plane NOT reached the 2nd time
+    finally:
+        del COMMAND_REGISTRY["deploy"]

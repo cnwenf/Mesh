@@ -73,9 +73,9 @@ from mesh.integrations.dingtalk import (
     resolve_gateway_base,
     stream_user_agent,
 )
-from mesh.integrations.ingest import ingest_verified_event
+from mesh.integrations.ingest import DEFAULT_ACK_COALESCE_WINDOW, ingest_verified_event
 from mesh.outbox.service import emit_realtime
-from mesh.runtime.credentials import decrypt_credential_value
+from mesh.runtime.credentials import decrypt_credential_value, redact_text
 
 logger = logging.getLogger("mesh.integrations.dingtalk_stream")
 
@@ -324,7 +324,13 @@ class StreamManager:
         # must not try to re-acquire them (it would fail and then close the
         # very group it serves — connection flapping).
         self._served_ids: set[uuid.UUID] = set()
+        self._group_integrations: dict[str, list[Integration]] = {}
         self._gateway_warned = False
+        # §6.16 defense-in-depth: decrypted app_secret plaintexts are
+        # registered here and scrubbed from every error log line this
+        # manager emits (the wire-level guarantee is "never log the body";
+        # this is the second wall).
+        self._redact_values: list[str] = []
 
     # -- public entry ------------------------------------------------------
 
@@ -415,10 +421,17 @@ class StreamManager:
             self._group_signals[app_key] = signal
             self._group_secrets[app_key] = self._secrets_fingerprint(integrations)
             self._served_ids.update(i.id for i in integrations)
-            self._groups[app_key] = asyncio.create_task(
+            self._group_integrations[app_key] = integrations
+            task = asyncio.create_task(
                 self._serve_group(app_key, integrations, gateway_base, signal),
                 name=f"dingtalk-stream:{app_key}",
             )
+            # H1 crash recovery: whatever ends the group task (clean close,
+            # cancel, or an escaping exception), reap ALL bookkeeping + the
+            # advisory-lock sessions so the next scan re-locks and rebuilds
+            # the group — a dead group must never strand the app_key.
+            task.add_done_callback(lambda _t, key=app_key: self._on_group_exit(key))
+            self._groups[app_key] = task
 
     def _secrets_fingerprint(self, integrations: list[Integration]) -> str:
         """Rotation detection: the ciphertext refs (never the plaintext)."""
@@ -427,6 +440,25 @@ class StreamManager:
             config = dict(integration.config or {})
             refs.append(f"{integration.id}:{config.get('app_secret_ref') or integration.secret_ref}")
         return "|".join(refs)
+
+    def _on_group_exit(self, app_key: str) -> None:
+        """Reap a finished group task: clear bookkeeping and close the
+        advisory-lock sessions (releasing the locks) so the next scan
+        re-acquires and rebuilds the group — crash-safe lifecycle (H1)."""
+        self._groups.pop(app_key, None)
+        self._group_signals.pop(app_key, None)
+        self._group_secrets.pop(app_key, None)
+        integrations = self._group_integrations.pop(app_key, [])
+        self._served_ids.difference_update(i.id for i in integrations)
+        for integration in integrations:
+            hold = getattr(integration, "_lock_session", None)
+            if hold is None:
+                continue
+            integration._lock_session = None  # type: ignore[attr-defined]
+            try:
+                asyncio.get_running_loop().create_task(hold.close())
+            except RuntimeError:
+                pass  # loop gone (process shutdown) — nothing to release
 
     async def _load_locked_integrations(self) -> tuple[list[Integration], list[Integration]]:
         """Returns ``(all_active_stream, newly_locked)``.
@@ -483,6 +515,8 @@ class StreamManager:
     ) -> None:
         integration = integrations[0]  # group representative for config/secret
         app_secret = _decrypt_app_secret(integration, self._settings.jwt_secret)
+        if app_secret and app_secret not in self._redact_values:
+            self._redact_values.append(app_secret)  # §6.16 scrub registry
         if not app_secret:
             for item in integrations:
                 await self._set_stream_state(item, STATE_DOWN, backoff_seconds=0)
@@ -504,10 +538,18 @@ class StreamManager:
         attempt = 0
         try:
             while not signal.is_set():
-                await self._mark_group(integrations, STATE_RECONNECTING, attempt, base, maximum)
                 try:
-                    await client.open_connection()
-                except StreamEndpointInsecure:
+                    await self._serve_once(
+                        client, integrations, attempt, base, maximum, heartbeat, signal
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:  # noqa: BLE001 — never let one bad cycle kill the group
+                    message, _hits = redact_text(
+                        "dingtalk stream: serve cycle crashed — backoff + retry",
+                        self._redact_values,
+                    )
+                    logger.exception(message)
                     await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
                     await self._interruptible_sleep(
                         compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
@@ -515,30 +557,9 @@ class StreamManager:
                     )
                     attempt += 1
                     continue
-                except (StreamOpenError, httpx.HTTPError, OSError) as exc:
-                    logger.error("dingtalk stream open failed (app_key=%s): %s", app_key, exc)
-                    await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
-                    await self._interruptible_sleep(
-                        compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                        signal,
-                    )
-                    attempt += 1
-                    continue
-                await self._mark_group(integrations, STATE_CONNECTED, 0, base, maximum)
-                attempt = 0
-                immediate_reconnect = await self._frame_loop(
-                    client, integrations, heartbeat, signal
-                )
-                await client.close()
                 if signal.is_set():
                     break
-                if not immediate_reconnect:
-                    await self._interruptible_sleep(
-                        compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                        signal,
-                    )
-                    attempt += 1
-                # disconnect topic ⇒ immediate reconnect (attempt stays low).
+                attempt += 1
         finally:
             await client.close()
             for item in integrations:
@@ -552,6 +573,52 @@ class StreamManager:
                     except Exception:  # noqa: BLE001 — unlock is best-effort
                         pass
                     await lock_session.close()
+
+    async def _serve_once(
+        self,
+        client: DingTalkStreamClient,
+        integrations: list[Integration],
+        attempt: int,
+        base: float,
+        maximum: float,
+        heartbeat: float,
+        signal: asyncio.Event,
+    ) -> None:
+        """One connect → frame-loop cycle (exceptions escape to the
+        crash-safe supervisor in _serve_group)."""
+        await self._mark_group(integrations, STATE_RECONNECTING, attempt, base, maximum)
+        try:
+            await client.open_connection()
+        except StreamEndpointInsecure:
+            await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
+            await self._interruptible_sleep(
+                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
+                signal,
+            )
+            return
+        except (StreamOpenError, httpx.HTTPError, OSError) as exc:
+            message, _hits = redact_text(
+                f"dingtalk stream open failed (app_key={integrations[0].config.get('app_key')}): {exc}",
+                self._redact_values,
+            )
+            logger.error(message)
+            await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
+            await self._interruptible_sleep(
+                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
+                signal,
+            )
+            return
+        await self._mark_group(integrations, STATE_CONNECTED, 0, base, maximum)
+        immediate_reconnect = await self._frame_loop(
+            client, integrations, heartbeat, signal
+        )
+        await client.close()
+        if signal.is_set() or immediate_reconnect:
+            return  # disconnect topic ⇒ caller loops with attempt unchanged
+        await self._interruptible_sleep(
+            compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
+            signal,
+        )
 
     async def _frame_loop(
         self,
@@ -582,40 +649,54 @@ class StreamManager:
             headers = frame.get("headers") or {}
             topic = str(headers.get("topic") or "")
 
-            if frame_type == "SYSTEM" and topic == "ping":
-                # MUST ACK — echo the original payload data verbatim.
-                ping_data = frame.get("data")
-                frame_payload = frame.get("payload")
-                if ping_data is None and isinstance(frame_payload, dict):
-                    ping_data = frame_payload.get("data")
-                await client.send_ack(frame, ping_data)
-                continue
             if frame_type == "SYSTEM" and topic == "disconnect":
                 logger.info("dingtalk stream: platform-requested disconnect — reconnecting")
                 return True
-            if frame_type == "CALLBACK" and topic == STREAM_MESSAGE_TOPIC:
-                await self._ingest_message_frame(integrations, by_robot_code, frame)
-                # ACK AFTER the ingest transaction commits — an un-ACKed
-                # frame is redelivered; msgId dedup makes that idempotent.
-                await client.send_ack(frame, "received")
-                continue
-            if frame_type == "CALLBACK" and topic == STREAM_CARD_TOPIC:
-                # Card authorization chain — MES-89 wires the handler.
-                logger.info("dingtalk stream: card callback frame received (audit only)")
-                await client.send_ack(frame, "received")
-                continue
+
+            # Per-frame isolation (H1): one bad frame (transient DB error,
+            # malformed payload, socket drop mid-ACK) must not escape and
+            # kill the group task — log and keep consuming. An un-ACKed
+            # frame is redelivered by the platform; msgId dedup makes that
+            # idempotent (§3.2).
+            try:
+                if frame_type == "SYSTEM" and topic == "ping":
+                    # MUST ACK — echo the original payload data verbatim.
+                    ping_data = frame.get("data")
+                    frame_payload = frame.get("payload")
+                    if ping_data is None and isinstance(frame_payload, dict):
+                        ping_data = frame_payload.get("data")
+                    await client.send_ack(frame, ping_data)
+                elif frame_type == "CALLBACK" and topic == STREAM_MESSAGE_TOPIC:
+                    await self._ingest_message_frame(integrations, by_robot_code, frame)
+                    # ACK AFTER the ingest transaction commits.
+                    await client.send_ack(frame, "received")
+                elif frame_type == "CALLBACK" and topic == STREAM_CARD_TOPIC:
+                    # Card authorization chain — MES-89 wires the handler.
+                    logger.info("dingtalk stream: card callback frame received (audit only)")
+                    await client.send_ack(frame, "received")
+            except Exception:  # noqa: BLE001 — isolate per-frame failures
+                message, _hits = redact_text(
+                    "dingtalk stream: frame handling failed — frame skipped "
+                    "(redelivery is idempotent via msgId)",
+                    self._redact_values,
+                )
+                logger.exception(message)
 
             # Persist last_frame_at (throttled, NO realtime broadcast —
-            # transitions broadcast; liveness refresh is a state write only).
+            # transitions broadcast; liveness refresh is a state write
+            # only). Runs on EVERY successfully received frame (M4).
             import time as _time
 
             now_epoch = _time.time()
             if now_epoch - last_persist > _FRAME_PERSIST_INTERVAL_SECONDS:
                 last_persist = now_epoch
                 for integration in integrations:
-                    await self._set_stream_state(
-                        integration, STATE_CONNECTED, backoff_seconds=0, broadcast=False
-                    )
+                    try:
+                        await self._set_stream_state(
+                            integration, STATE_CONNECTED, backoff_seconds=0, broadcast=False
+                        )
+                    except Exception:  # noqa: BLE001 — diagnostic persistence is best-effort
+                        pass
         return False
 
     async def _ingest_message_frame(
@@ -668,6 +749,9 @@ class StreamManager:
                 envelope=envelope,
                 now=self._now(),
                 guardrails=guardrails,
+                ack_window=getattr(
+                    self._settings, "im_ack_coalesce_window", DEFAULT_ACK_COALESCE_WINDOW
+                ),
             )
 
     # -- state persistence ---------------------------------------------------

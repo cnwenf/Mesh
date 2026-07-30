@@ -44,6 +44,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.agent.snapshot import build_config_snapshot
+from mesh.db.constraints import violates as _violates_constraint
 from mesh.db.models.agent import Agent
 from mesh.db.models.integration import (
     Integration,
@@ -53,6 +54,7 @@ from mesh.db.models.integration import (
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.integrations.connectors import NormalizedEvent, VerifiedEnvelope
+from mesh.integrations.dingtalk import build_conversation_key, build_sender_identity_key
 from mesh.integrations.matching import binding_matches
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
@@ -639,6 +641,48 @@ async def _emit_queue_updated(
 # ---------------------------------------------------------------------------
 
 
+async def _reject_rate_limited(
+    session,
+    *,
+    workspace_id,
+    integration,
+    envelope,
+    event_row,
+    conversation_key: str,
+    guardrails,
+    now,
+) -> IngestResult:
+    """Audit a guardrail rejection: the real msgId keeps the dedup slot,
+    ``_mesh_reject_reason`` marks the cause, the self-throttled notice is
+    scheduled, and HTTP still answers 200 (non-2xx would trigger platform
+    retry amplification)."""
+    event_row.process_status = "rejected"
+    event_row.payload = {
+        **(event_row.payload or {}),
+        "_mesh_reject_reason": "rate_limited",
+    }
+    event_row.updated_at = now
+    await session.flush()
+    await guardrails.maybe_emit_rate_limit_notice(
+        session,
+        workspace_id=workspace_id,
+        integration=integration,
+        envelope=envelope,
+        conversation_key=conversation_key,
+    )
+    return IngestResult(
+        status_code=200,
+        body={
+            "received": True,
+            "event_id": envelope.external_event_id,
+            "process_status": "rejected",
+            "reason": "rate_limited",
+        },
+        process_status="rejected",
+        event_id=event_row.id,
+    )
+
+
 async def ingest_verified_event(
     session: AsyncSession,
     *,
@@ -708,7 +752,11 @@ async def ingest_verified_event(
                 process_status="received",
                 now=now,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
+        # ONLY the dedup key maps to idempotent 200; any other constraint
+        # violation is a real defect and must surface (relay → alert).
+        if not _violates_constraint(exc, "uq_integration_event_dedup"):
+            raise
         return IngestResult(
             status_code=200,
             body={
@@ -729,15 +777,8 @@ async def ingest_verified_event(
         process_status="received",
     )
 
-    # Command plane (§3.7) — registry-driven; commands never queue/trigger.
-    command_result = await _run_command_plane(
-        session, envelope=envelope, event_row=event_row, now=now
-    )
-    if command_result is not None:
-        return command_result
-
     # msgtype matrix gate: non-text → audit-only (processed; no trigger,
-    # no queue, no ack — §3.2 matrix / C-1).
+    # no queue, no ack, no counters — §3.2 matrix / C-1).
     if not _is_triggering(envelope):
         event_row.process_status = "processed"
         event_row.updated_at = now
@@ -752,6 +793,44 @@ async def ingest_verified_event(
             process_status="processed",
             event_id=event_row.id,
         )
+
+    # Normalized keys (used by the guardrails, the queue protocol, and the
+    # ack plumbing; segment validation fails closed per §2.10 N-1).
+    conversation_key = build_conversation_key(
+        envelope.provider, envelope.provider_tenant_key, envelope.external_ref
+    )
+    sender_identity_key = build_sender_identity_key(
+        envelope.provider, envelope.provider_tenant_key, envelope.sender_key
+    )
+
+    # §2.10 frequency guardrails — Redis rolling windows — run BEFORE the
+    # command plane (§3.7:975: command handling is constrained by the §2.10
+    # counters too). Over-limit: reject, keep the real msgId dedup slot,
+    # schedule the self-throttled rate-limit notice. (The pending-DEPTH
+    # counter runs later, under the imq_seq lock — see the enqueue section.)
+    if guardrails is not None:
+        verdict = await guardrails.check_rate_windows(
+            sender_identity_key=sender_identity_key,
+            conversation_key=conversation_key,
+        )
+        if verdict == "rate_limited":
+            return await _reject_rate_limited(
+                session,
+                workspace_id=workspace_id,
+                integration=integration,
+                envelope=envelope,
+                event_row=event_row,
+                conversation_key=conversation_key,
+                guardrails=guardrails,
+                now=now,
+            )
+
+    # Command plane (§3.7) — registry-driven; commands never queue/trigger.
+    command_result = await _run_command_plane(
+        session, envelope=envelope, event_row=event_row, now=now
+    )
+    if command_result is not None:
+        return command_result
 
     # Binding match (§6.9: unmatched / no agent → audit only, no trigger).
     bindings = await match_bindings(
@@ -849,70 +928,29 @@ async def ingest_verified_event(
             event_id=event_row.id,
         )
 
-    # §2.10 semantic guardrails (injected; identity/conversation rolling
-    # windows + pending depth) — over-limit: reject, keep the real msgId
-    # dedup slot, schedule the self-throttled rate-limit notice.
-    if guardrails is not None:
-        from mesh.integrations.dingtalk import (
-            build_conversation_key,
-            build_sender_identity_key,
-        )
-
-        conversation_key = build_conversation_key(
-            envelope.provider, envelope.provider_tenant_key, envelope.external_ref
-        )
-        sender_identity_key = build_sender_identity_key(
-            envelope.provider, envelope.provider_tenant_key, envelope.sender_key
-        )
-        verdict = await guardrails.check(
-            session,
-            envelope=envelope,
-            conversation_key=conversation_key,
-            sender_identity_key=sender_identity_key,
-        )
-        if verdict == "rate_limited":
-            event_row.process_status = "rejected"
-            event_row.payload = {
-                **(event_row.payload or {}),
-                "_mesh_reject_reason": "rate_limited",
-            }
-            event_row.updated_at = now
-            await session.flush()
-            await guardrails.maybe_emit_rate_limit_notice(
-                session,
-                workspace_id=workspace_id,
-                integration=integration,
-                envelope=envelope,
-                conversation_key=conversation_key,
-            )
-            return IngestResult(
-                status_code=200,  # HTTP: 200 — non-2xx would trigger platform retry amplification
-                body={
-                    "received": True,
-                    "event_id": envelope.external_event_id,
-                    "process_status": "rejected",
-                    "reason": "rate_limited",
-                },
-                process_status="rejected",
-                event_id=event_row.id,
-            )
-
     # Enqueue under the conversation seq advisory lock (§2.10 protocol).
-    from mesh.integrations.dingtalk import (
-        build_conversation_key,
-        build_sender_identity_key,
-    )
-
-    conversation_key = build_conversation_key(
-        envelope.provider, envelope.provider_tenant_key, envelope.external_ref
-    )
-    sender_identity_key = build_sender_identity_key(
-        envelope.provider, envelope.provider_tenant_key, envelope.sender_key
-    )
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
         {"key": f"imq_seq:{conversation_key}"},
     )
+
+    # §2.10 pending-DEPTH guardrail — under the imq_seq lock so concurrent
+    # ingests cannot jointly exceed the hard cap of 50 (the depth count is
+    # serialized with every same-conversation enqueue).
+    if guardrails is not None:
+        depth_verdict = await guardrails.check_pending_depth(session, conversation_key)
+        if depth_verdict == "rate_limited":
+            return await _reject_rate_limited(
+                session,
+                workspace_id=workspace_id,
+                integration=integration,
+                envelope=envelope,
+                event_row=event_row,
+                conversation_key=conversation_key,
+                guardrails=guardrails,
+                now=now,
+            )
+
     item = await _enqueue_message(
         session,
         workspace_id=workspace_id,
