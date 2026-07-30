@@ -5,9 +5,14 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+### Changed
+
+- **工程·CI 治理:全 workflow 显式 timeout-minutes + concurrency(MES-145,MES-122 验收遗留)**:backend-ci / frontend / spec-checks / daemon-ci / cli-release 五 workflow 统一补齐显式 job 超时(按实测余量:后端主 test job 实测 ~45-48min → 60min;前端 quality/e2e/visual 30min、全栈走查 45min、contrast 15min;daemon 45min;文档/DDL/供应链短 job 实测 <1min → 15min;CLI 构建 45min、签名发布 20min)与 workflow 级 concurrency(同 ref 新 run 立即取消旧 run:`group: ${{ github.workflow }}-${{ github.ref }}` + `cancel-in-progress: true`,杜绝同分支/同 PR 多 run 互挤 runner——MES-122 遗留:无兜底时卡死 job 按 runner 默认 6h 阻塞门禁,事故复跑卡死 130+ 分钟;cli-release 发布流 `cancel-in-progress: false`,仅串行不取消进行中的签名/发布)。real-llm.yml 已有 concurrency + timeout-minutes(刻意设计)保持原样。检查矩阵、路径过滤与覆盖率门禁一律不变(仅配置变更);真实探针实测超时 job 被终止(annotation「exceeded the maximum execution time」,终止而非挂死)、重复推送旧 run 即时取消。
+
 ### Fixed
 
 - **集成·钉钉单聊限频提示/immediate 段反馈发射端补字段(MES-122,integrations.md §2.10/§3.7)**:定向复验裁定的 MES-88 发射端载荷缺字段修复——限频提示(`inbound.py::_reject_rate_limited`)与命令平面即时段反馈(`commands.py::_feedback`)的 `im.send` 载荷此前仅携 `conversation_key`,消费端(`IMSendRelay._fill_target_from_item`)的队列项派生对两者均不可得(被拒消息不入队、无队列项;即时段反馈可在空队列下触发),单聊会话按群通道默认投递 `conversationId` 致平台报错。修复在**发射端**、消费端不动:新增纯函数 `queue_keys.conversation_delivery_fields`(入站载荷 `conversationType` `"1"`→direct/其余→group 的单一事实源映射,与消费端派生同口径),两处发射载荷自携 `conversation_type` 与单聊 `target_user_key`(命令发起人即单聊收件人,外部联系人键原值直通走 §3.10 `no_staff_id` 降级);群聊不携目标键。at-most-once / published-无论结果 的会话性回复策略不变。验证:真实 PG+Redis 单测——发射端载荷形状断言(单聊/群聊 × 两路径)+ 真实 relay 经脚本化钉钉传输层实测单聊 `oToMessages/batchSend` 外呼且零群外呼、群聊零回归;新增单测覆盖率 ≥90%。
+- **前端·执行行标签契约保真(MES-144,runtime.md §3.3)**:首页工作台「AI 运行」行与运行/执行详情页此前以执行摘要里的联表展示名(agent 名 / issue 标识)拼标签,而后端 `_render_execution` 从不返回这两字段;mock 契约栈却伪造了它们,致 e2e 看不出差异、真实环境恒退化为无信息兜底文案。修复**只动展示层与契约镜像**:新增纯工具 `executionLabel`(`trigger` 文案 + 执行短 ID 的行标签规范形),首页行标题改用它、元信息补「状态文案 · 相对时间」(复用 `formatRelativeTime`),运行/执行详情页同步改以 trigger+短 ID 与契约实际返回的 `agent_id`/`issue_id` 呈现;类型 `ExecutionSummary` 移除幽灵字段、补回真实 `issue_id`,与后端逐字段对齐。mock 列表与详情夹具同步删除幽灵字段、补齐 `_render_execution`/`_render_attempt` 全字段(`workspace_id`/`task_spec`/`config_snapshot`/`max_attempts`/`cancel_requested_at`/`retry_count` 与含 `value:'***'` 的凭证元信息),杜绝契约漂移再被掩盖。验证:新增 `executionLabel` 单测 + 三页单测更新,变更源文件逐文件覆盖率 ≥90%(runtimes 91.5–100%);mock 契约 e2e 工作台断言扩标签兜底路径,真实后端 runtimes e2e 全过;真实栈 + 真实浏览器实测首页「AI 运行」行显示「trigger · 短 ID」+「状态 · 相对时间」存证。
 
 ## [0.24.0] - 2026-07-30
 

@@ -1,4 +1,10 @@
 # Mesh 前端 CI:lint → 类型检查 → 单元/组件测试(覆盖率 ≥90% 门禁)→ 生产构建 → 真实浏览器 e2e
+#
+# Governance (MES-145,与 backend-ci 统一治理):每个 job 显式 timeout-minutes(实测
+# 余量:quality ~5min → 30min;浏览器 e2e/视觉 ~2-3min、全栈走查 ~2min 热路径但冷
+# 路径含镜像拉取/pip/playwright 安装 → e2e·visual 30min、全栈走查 45min;contrast
+# ~20s → 15min),workflow 级 concurrency 同 ref 新 run 取消旧 run——检查矩阵与
+# 门禁语义不变。
 name: frontend
 
 on:
@@ -16,9 +22,17 @@ defaults:
   run:
     working-directory: frontend
 
+# MES-145: 同一 ref 的新 run 立即取消在跑的旧 run(PR ref=refs/pull/N/merge,重复
+# 推送即取消旧 run),避免多 run 互挤 runner 拖垮门禁。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
+    # MES-145: 实测 ~5min(npm ci + lint + typecheck + 覆盖率 + 构建),30min 兜底。
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +82,8 @@ jobs:
     # 对比度独立关卡(theme.md §5.4):tokenValues.ts 单一事实源逐对校验,
     # 亮/暗两套 × text 4.5:1 / large-text·graphic 3:1,任一不达标即失败。
     runs-on: ubuntu-latest
+    # MES-145: 实测 ~20s,15min 为宽裕兜底(短 job 统一 15min)。
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +101,8 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # MES-145: 实测 ~3min(含 Playwright 浏览器安装),30min 兜底。
+    timeout-minutes: 30
     needs: quality
     steps:
       - uses: actions/checkout@v4
@@ -118,6 +136,8 @@ jobs:
     # toHaveScreenshot 基线比对。常规跑只比对不更新;基线更新经独立 PR。
     # 独立端口(8911 / 5199)避免与默认 mock 套件(8901 / 5173)冲突。
     runs-on: ubuntu-latest
+    # MES-145: 实测 ~2min(6 页 × light/dark × 双视口截图比对),30min 兜底。
+    timeout-minutes: 30
     needs: quality
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +178,9 @@ jobs:
     # MinIO + uvicorn api/worker/gateway 全栈,真浏览器注册/上传(直传 MinIO)/
     # 隔离区闸门/灯箱缩放旋转/秒传 possession/删除,截图留证。
     runs-on: ubuntu-latest
+    # MES-145: 热路径实测 ~2min,冷路径含 PG/Redis 镜像拉取 + pip 安装 +
+    # Playwright 浏览器安装,45min 兜底。
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -304,6 +327,9 @@ jobs:
     # execution 可见 → 执行详情(日志面板/取消/凭证脱敏),截图留证。
     # playwright.runtimes.config.ts 的 psql 播种经 RUNTIMES_PG_* 直连 service。
     runs-on: ubuntu-latest
+    # MES-145: 热路径实测 ~2min,冷路径含 PG/Redis 镜像拉取 + pip 安装 +
+    # Playwright 浏览器安装,45min 兜底。
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16

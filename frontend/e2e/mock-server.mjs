@@ -31,6 +31,43 @@ function isoAt(offsetMs) {
   return new Date(BASE_TIME + offsetMs).toISOString();
 }
 
+/**
+ * 执行列表行 —— 字段集与后端 `_render_execution`(backend/src/mesh/runtime/service.py)
+ * 逐项对齐的忠实镜像:后端不返回 agent_name / issue_identifier 等联表展示名,
+ * mock 同样不提供(契约保真,杜绝前端依赖幽灵字段而 e2e 看不出的漂移)。
+ */
+function executionRow({
+  id,
+  agentId = 'agent-1',
+  issueId = null,
+  trigger = 'assign',
+  status,
+  queuedAt,
+  finishedAt = null,
+  result = null,
+}) {
+  return {
+    id,
+    workspace_id: 'ws-1',
+    agent_id: agentId,
+    issue_id: issueId,
+    trigger,
+    status,
+    priority: 0,
+    task_spec: { kind: 'issue_assignment', untrusted_context: {} },
+    label_requirements: {},
+    required_capabilities: [],
+    config_snapshot: {},
+    max_attempts: 3,
+    queued_at: queuedAt,
+    finished_at: finishedAt,
+    timeout_seconds: 600,
+    failure_reason: null,
+    result,
+    cancel_requested_at: null,
+  };
+}
+
 function seedIssues() {
   const categories = ['todo', 'in_progress', 'in_review', 'done'];
   return Array.from({ length: 8 }, (_, i) => ({
@@ -762,54 +799,29 @@ async function handleRequest(req, res, url) {
     }
     sendJson(res, 200, {
       data: [
-        {
+        executionRow({
           id: 'exec-1',
-          agent_id: 'agent-1',
-          agent_name: 'Coder',
-          issue_identifier: 'MESH-1',
+          issueId: 'issue-1',
           trigger: 'assign',
           status: 'running',
-          priority: 0,
-          required_capabilities: [],
-          label_requirements: {},
-          timeout_seconds: 600,
-          queued_at: '2026-07-30T00:00:00.000Z',
-          finished_at: null,
-          failure_reason: null,
-          result: null,
-        },
-        {
+          queuedAt: '2026-07-30T00:00:00.000Z',
+        }),
+        executionRow({
           id: 'exec-2',
-          agent_id: 'agent-1',
-          agent_name: 'Coder',
-          issue_identifier: 'MESH-2',
+          issueId: 'issue-2',
           trigger: 'mention',
           status: 'awaiting_approval',
-          priority: 0,
-          required_capabilities: [],
-          label_requirements: {},
-          timeout_seconds: 600,
-          queued_at: '2026-07-30T00:00:00.000Z',
-          finished_at: null,
-          failure_reason: null,
-          result: null,
-        },
-        {
+          queuedAt: '2026-07-30T00:00:00.000Z',
+        }),
+        executionRow({
           id: 'exec-3',
-          agent_id: 'agent-1',
-          agent_name: 'Coder',
-          issue_identifier: 'MESH-3',
+          issueId: 'issue-3',
           trigger: 'assign',
           status: 'completed',
-          priority: 0,
-          required_capabilities: [],
-          label_requirements: {},
-          timeout_seconds: 600,
-          queued_at: '2026-07-30T00:00:00.000Z',
-          finished_at: '2026-07-30T00:05:00.000Z',
-          failure_reason: null,
+          queuedAt: '2026-07-30T00:00:00.000Z',
+          finishedAt: '2026-07-30T00:05:00.000Z',
           result: {},
-        },
+        }),
       ],
       next_cursor: null,
     });

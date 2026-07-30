@@ -1838,6 +1838,7 @@
     "runtimes.execution.triggerKind.integration": "集成",
     "runtimes.execution.triggerKind.manual": "手动",
     "runtimes.execution.triggerKind.mention": "提及",
+    "runtimes.execution.triggerKind.unknown": "触发",
     "runtimes.execution.unknownReason": "未知原因",
     "runtimes.field.capabilities": "能力",
     "runtimes.field.concurrency": "并发",
@@ -2402,5 +2403,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "8aa56c39"
+  "version": "5b2712ac"
 }

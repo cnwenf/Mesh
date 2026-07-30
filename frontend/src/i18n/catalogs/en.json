@@ -1838,6 +1838,7 @@
     "runtimes.execution.triggerKind.integration": "Integration",
     "runtimes.execution.triggerKind.manual": "Manual",
     "runtimes.execution.triggerKind.mention": "Mention",
+    "runtimes.execution.triggerKind.unknown": "Triggered",
     "runtimes.execution.unknownReason": "unknown",
     "runtimes.field.capabilities": "Capabilities",
     "runtimes.field.concurrency": "Concurrency",
@@ -2402,5 +2403,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "e6d71a1c"
+  "version": "82fc2695"
 }
