@@ -125,8 +125,9 @@ test('Ctrl+K 命令面板:分组实体搜索 + Enter 规范深链 + 帮助层', 
   await expect(page.getByRole('option', { name: /走查员 MES79/ })).toBeVisible();
   await page.screenshot({ path: resolve(EVIDENCE_DIR, 'palette-groups.png') });
 
-  // Enter 直达 issue 规范深链(§3.4)
-  await page.getByText('走查登录页崩溃').click();
+  // 点击 option 直达 issue 规范深链(§3.4)——按 role 定位:真实首页仪表盘
+  // (MES-107)同屏呈现近期 issue 标题,裸 getByText 与面板项同名歧义(strict mode)。
+  await page.getByRole('option', { name: /走查登录页崩溃/ }).click();
   await page.waitForURL(`**/w/${SLUG}/issues/by-identifier/${identifier}`);
   await page.screenshot({ path: resolve(EVIDENCE_DIR, 'issue-deep-link.png') });
 

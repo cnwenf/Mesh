@@ -171,19 +171,29 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 打开:消费顶栏桥接查询(§4.9 输入即展开同一视图)、复位选择、聚焦输入框、
   // 加载本地 recents 与服务端 favorites(§4.2.1 唯一数据流)。统一搜索入口
   // (MES-111 S1)经 initialQuery 携带顶栏已键入文本,非空时优先于桥接查询。
+  //
+  // 依赖只取 open/initialQuery:**绝不**把 identity.userId 列入——users/me 慢解析
+  // 晚于用户键入抵达时,重跑会消费已空的顶栏桥并 setQuery('') 抹掉用户已键入的
+  // 查询(§4.9 键入即面板状态唯一真源;慢网实测竞态)。命令次数按 userId 的刷新
+  // 由下方独立 effect 承担(身份抵达即更新,不触查询/选择/焦点)。
   useEffect(() => {
     if (!open) return;
     const bridged = takePaletteQuery();
     setQuery(initialQuery !== undefined && initialQuery !== '' ? initialQuery : bridged);
     setSelectedKey(null);
-    setCounts(readCommandCounts(identity.userId));
     // 聚焦延后一拍:Dialog 自身的焦点移入效果(及 StrictMode 双调用下的焦点
     // 归还/重设)在同步 effect 阶段与输入框聚焦竞争,macrotask 延迟确保输入框最终获焦。
     const timer = setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => clearTimeout(timer);
-  }, [open, identity.userId, initialQuery]);
+  }, [open, initialQuery]);
+
+  // 命令运行次数为三元组用户维的本地增强(§4.2):身份解析抵达即按其 userId 刷新,
+  // 与打开 effect 解耦(打开 effect 重跑不得抹除已键入查询,见上注)。
+  useEffect(() => {
+    setCounts(readCommandCounts(identity.userId));
+  }, [identity.userId]);
 
   useEffect(() => {
     if (!open) return;
