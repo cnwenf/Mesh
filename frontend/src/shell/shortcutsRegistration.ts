@@ -1,9 +1,11 @@
 /**
  * shell 级快捷键/命令注册(README §6.12,group 恒 'global')。
  *
- * - 命令面板条目:导航(首页/收件箱/项目/看板/成员/聊天/自动化/设置)+
- *   主题(light/dark/system/循环切换);主题经 settingsStore.getState() 直接写入;
- * - 快捷键:G→I/B/M/A 序列跳收件箱/看板/成员/自动化;`c` 打开 issues 页展开快速创建
+ * - 命令面板条目:导航(首页/收件箱/项目/工作项/看板/成员/技能/聊天/自动值守/
+ *   运行环境/洞察/设置——与侧栏同源口径,自动值守与运行环境各占明确入口,
+ *   design-quality §4.1)+ 主题(light/dark/system/循环切换);主题经
+ *   settingsStore.getState() 直接写入;
+ * - 快捷键:G→I/B/M/A 序列跳收件箱/看板/成员/自动值守;`c` 打开 issues 页展开快速创建
  *   (issue.md §4.2);`/` 聚焦顶栏搜索;
  * - 所有快捷键均有等价鼠标路径(§6.12);返回合并注销函数。
  */
@@ -28,8 +30,10 @@ export type NavKey =
   | 'issues'
   | 'board'
   | 'members'
+  | 'skills'
   | 'chat'
-  | 'automation'
+  | 'autopilots'
+  | 'runtimes'
   | 'insights'
   | 'settings';
 
@@ -38,7 +42,7 @@ export interface ShellShortcutLabels {
   nav: Record<NavKey, string>;
   /** theme.<mode> 文案(light/dark/system) */
   theme: Record<string, string>;
-  /** 动作类文案(themeToggle/newIssue/focusSearch/goInbox/goBoard/goMembers/goAutomation) */
+  /** 动作类文案(themeToggle/newIssue/focusSearch/goInbox/goBoard/goMembers/goAutopilot) */
   actions: Record<string, string>;
 }
 
@@ -49,8 +53,11 @@ const NAV_COMMAND_ROUTES: ReadonlyArray<{ key: NavKey; to: string }> = [
   { key: 'issues', to: '/issues' },
   { key: 'board', to: '/board' },
   { key: 'members', to: '/members' },
+  { key: 'skills', to: '/skills' },
   { key: 'chat', to: '/chat' },
-  { key: 'automation', to: '/automation' },
+  // 自动值守与运行环境各占明确入口(§4.1);旧含糊 'automation' 键已移除。
+  { key: 'autopilots', to: '/autopilots' },
+  { key: 'runtimes', to: '/runtimes' },
   { key: 'insights', to: '/insights' },
   { key: 'settings', to: '/settings' },
 ];
@@ -132,11 +139,11 @@ export function registerShellShortcuts(
       run: goTo('/members'),
     },
     {
-      id: 'go.automation',
+      id: 'go.autopilot',
       combo: 'g a',
-      label: labels.actions.goAutomation,
+      label: labels.actions.goAutopilot,
       group: 'global',
-      run: goTo('/automation'),
+      run: goTo('/autopilots'),
     },
     // `c` 打开 issues 页并展开快速创建(issue.md §4.2)
     { id: 'new.issue', combo: 'c', label: labels.actions.newIssue, group: 'global', run: goTo('/issues?create=1') },

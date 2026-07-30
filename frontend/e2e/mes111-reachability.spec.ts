@@ -115,7 +115,7 @@ test.describe('手机可达性 @390×844', () => {
     await page.goto('/');
     await page.getByTestId('mobile-nav-more').click();
     await expect(page.getByTestId('mobile-drawer-nav-autopilots')).toHaveText('自动值守');
-    await expect(page.getByTestId('mobile-drawer-nav-automation')).toHaveText('运行环境');
+    await expect(page.getByTestId('mobile-drawer-nav-runtimes')).toContainText('运行环境');
     await page.screenshot({ path: `${EVIDENCE_DIR}/phone-drawer-zh-nav-light.png` });
   });
 

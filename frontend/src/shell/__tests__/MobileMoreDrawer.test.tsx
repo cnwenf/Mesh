@@ -25,18 +25,28 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
     for (const key of [
       'inbox',
       'projects',
+      'cycles',
       'members',
       'skills',
       'squads',
-      'cycles',
       'autopilots',
-      'automation',
+      'runtimes',
       'insights',
       'integrations',
       'settings',
     ]) {
-      expect(screen.getByTestId('mobile-drawer-nav-' + key)).toBeInTheDocument();
+      const link = screen.getByTestId('mobile-drawer-nav-' + key);
+      expect(link).toBeInTheDocument();
+      // 每项携带统一 SVG 图标(§7.1)
+      expect(link.querySelector('svg')).not.toBeNull();
     }
+  });
+
+  it('入口按 §4.1 分组呈现(组标题可见)', () => {
+    renderDrawer();
+    const titles = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+    // 抽屉自身标题之后依次为四分组标题
+    expect(titles.slice(-4)).toEqual(['Work', 'Team', 'Run', 'Admin']);
   });
 
   it('Esc 触发 onClose', () => {
