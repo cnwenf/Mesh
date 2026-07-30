@@ -240,12 +240,18 @@ async def test_queue_positions_and_refetch_after_cancel(app_client, session_fact
         user_id=world["user_id"],
     )
     # M1 processing (in-flight, position null), M2/M3 pending behind it.
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=1, state="processing", conversation_key=conv, sender_identity_key=sender, excerpt="M1")
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=2, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="M2")
-    m3 = await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                         seq=3, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="M3")
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="processing", conversation_key=conv, sender_identity_key=sender, excerpt="M1",
+    )
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=2, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="M2",
+    )
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=3, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="M3",
+    )
 
     base = f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration_id}/queue"
     listed = (await app_client.get(base, headers=world["headers"])).json()["data"]
@@ -581,12 +587,18 @@ async def test_summary_shape(app_client, session_factory):
     binding_id = await seed_binding(session_factory, world, integration_id, external_ref="C_SUM")
     conv = f"slack:{TENANT}:C_SUM"
     sender = f"slack:{TENANT}:U"
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=1, state="processing", conversation_key=conv, sender_identity_key=sender, excerpt="S1")
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=2, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="S2")
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=3, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="S3")
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="processing", conversation_key=conv, sender_identity_key=sender, excerpt="S1",
+    )
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=2, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="S2",
+    )
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=3, state="pending", conversation_key=conv, sender_identity_key=sender, excerpt="S3",
+    )
 
     summary = (
         await app_client.get(
@@ -606,13 +618,19 @@ async def test_queue_list_filters_state_and_conversation(app_client, session_fac
     conv_a = f"slack:{TENANT}:C_FILT_A"
     conv_b = f"slack:{TENANT}:C_FILT_B"
     sender = f"slack:{TENANT}:U"
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=1, state="pending", conversation_key=conv_a, sender_identity_key=sender, excerpt="A1")
-    await seed_item(session_factory, world, integration_id=integration_id, binding_id=binding_id,
-                    seq=1, state="done", conversation_key=conv_b, sender_identity_key=sender, excerpt="B1")
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="pending", conversation_key=conv_a, sender_identity_key=sender, excerpt="A1",
+    )
+    await seed_item(
+        session_factory, world, integration_id=integration_id, binding_id=binding_id,
+        seq=1, state="done", conversation_key=conv_b, sender_identity_key=sender, excerpt="B1",
+    )
 
     base = f"/api/v1/workspaces/{world['ws_id']}/integrations/{integration_id}/queue"
-    pending_only = (await app_client.get(base, params={"state": "pending"}, headers=world["headers"])).json()["data"]
+    pending_resp = await app_client.get(base, params={"state": "pending"}, headers=world["headers"])
+    pending_only = pending_resp.json()["data"]
     assert {item["message_excerpt"] for item in pending_only} == {"A1"}
-    conv_only = (await app_client.get(base, params={"conversation_key": conv_b}, headers=world["headers"])).json()["data"]
+    conv_resp = await app_client.get(base, params={"conversation_key": conv_b}, headers=world["headers"])
+    conv_only = conv_resp.json()["data"]
     assert {item["message_excerpt"] for item in conv_only} == {"B1"}

@@ -872,15 +872,20 @@ async def _resource_workspace(request: Request, fn: str, resource_id: uuid.UUID)
 async def _context_for_resource(
     request: Request, user: User, fn: str, resource_id: uuid.UUID, permission: str | None
 ):
+    from mesh.auth.deps import AuthenticatedPrincipal
     from mesh.auth.rbac import resolve_workspace_context
     from mesh.errors import NotFoundError as _NotFound
 
     workspace_id = await _resource_workspace(request, fn, resource_id)
     if workspace_id is None:
         raise _NotFound("resource not found")
+    # The routes authenticate via get_current_user; the RBAC resolver takes a
+    # principal — build a session-kind principal from the authenticated user
+    # (membership is resolved by user_id, same as the web-session path).
+    principal = AuthenticatedPrincipal(kind="session", user_id=user.id)
     async with request.app.state.session_factory() as session:
         return await resolve_workspace_context(
-            session, user=user, workspace_id=workspace_id, permission=permission
+            session, principal=principal, workspace_id=workspace_id, permission=permission
         )
 
 

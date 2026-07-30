@@ -96,6 +96,8 @@ async def _run_inbound(request: Request, kind: str) -> JSONResponse:
             signing_secret=settings.jwt_secret,
             now=now,
             tolerance=_tolerance(request),
+            redis=request.app.state.redis,
+            settings=settings,
         )
     return JSONResponse(status_code=status_code, content=body)
 

@@ -139,7 +139,10 @@ async def test_purge_removes_only_terminal_orphans_past_window(session_factory):
     # D: terminal orphan but RECENT → NOT eligible (inside the window).
     (d_id,) = await _seed(
         session_factory,
-        _orphan_item(workspace_id=ws, conversation_key="conv:orphan:d", seq=1, state="cancelled", updated_at=RECENT),
+        _orphan_item(
+            workspace_id=ws, conversation_key="conv:orphan:d", seq=1,
+            state="cancelled", updated_at=RECENT,
+        ),
     )
 
     deleted = await purge_queue_audit_orphans(session_factory, retention=RETENTION, now=NOW)
@@ -174,7 +177,9 @@ async def test_purge_batch_limit_caps_deletion(session_factory):
     ids = await _seed(
         session_factory,
         *[
-            _orphan_item(workspace_id=ws, conversation_key=f"conv:cap:{i}", seq=1, state="done", updated_at=OLD)
+            _orphan_item(
+                workspace_id=ws, conversation_key=f"conv:cap:{i}", seq=1, state="done", updated_at=OLD
+            )
             for i in range(3)
         ],
     )
