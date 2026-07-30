@@ -39,6 +39,7 @@ from mesh.db.models.integration import (
 )
 from mesh.db.models.issue import Issue
 from mesh.db.models.runtime import TaskExecution
+from tests.e2e.conftest import pin_code_under_test
 
 PASSWORD = "Intg-E2E-123456"
 NOW_TOLERANCE = timedelta(seconds=300)
@@ -70,17 +71,7 @@ async def integrations_worker(provision_database):
     env["MESH_STORAGE_ENDPOINT"] = os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100")
     env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
     env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
-    import re as _re
-
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _backend = os.path.dirname(_here)
-    _src = os.path.join(_backend, "src")
-    _existing = [
-        x
-        for x in env.get("PYTHONPATH", "").split(os.pathsep)
-        if x and not _re.search(r"/workspaces/[^/]+/workdir/Mesh/backend", x)
-    ]
-    env["PYTHONPATH"] = os.pathsep.join([_src, _backend] + _existing)
+    pin_code_under_test(env)
     log_file = open("/tmp/integrations_worker.log", "wb")
     process = subprocess.Popen(
         [sys.executable, "-m", "mesh.workers"],

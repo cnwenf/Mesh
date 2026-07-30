@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -21,13 +22,41 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.conftest import get_test_database_url, get_test_redis_url
+from tests.conftest import BACKEND_DIR, get_test_database_url, get_test_redis_url
 
 SERVER_READY_TIMEOUT_SECONDS = 30.0
 
 # Restricted app role created by migration 0002 (M1). The api/gateway servers
 # connect as this non-owner role so PostgreSQL RLS is enforced on the app path.
 APP_ROLE = "mesh_app"
+
+# Mesh backend checkouts inside agent-workspace sandboxes (any nesting depth
+# under .../workdir/Mesh/backend — single-level or multi-level layouts alike).
+# Inherited PYTHONPATH entries matching this are dropped before the pin below
+# so another checkout's paths can never shadow (or duplicate) this one.
+_STALE_BACKEND_PATH_RE = re.compile(r"/workdir/Mesh/backend")
+
+
+def pin_code_under_test(env: dict[str, str]) -> None:
+    """Pin PYTHONPATH to THIS checkout for spawned subprocesses (MES-121).
+
+    The pin anchors on ``BACKEND_DIR`` (resolved from ``__file__`` via the
+    ``pyproject.toml`` ascent in ``tests/conftest.py`` — independent of this
+    file's location depth and of the caller's cwd). A hand-counted dirname
+    here once pointed the pin at ``backend/tests`` (a nonexistent ``src``),
+    silently letting subprocesses resolve ``mesh`` from a stale editable
+    install of another checkout — the e2e false-negative root cause noted in
+    the MES-88 acceptance. Both the api/gateway servers and the worker must
+    run the code under test, so every spawned process gets the same pin.
+    """
+    backend = str(BACKEND_DIR)
+    src = str(BACKEND_DIR / "src")
+    kept = [
+        entry
+        for entry in env.get("PYTHONPATH", "").split(os.pathsep)
+        if entry and not _STALE_BACKEND_PATH_RE.search(entry)
+    ]
+    env["PYTHONPATH"] = os.pathsep.join([src, backend, *kept])
 
 
 def _free_port() -> int:
@@ -84,15 +113,7 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # Skill imports (skill.md §5.3): the import e2e fetches a loopback fixture
     # source server, which the SSRF guard only permits via the allowlist.
     env.setdefault("MESH_SKILL_SOURCE_HOST_ALLOWLIST", "127.0.0.1,localhost")
-    # Force the code UNDER TEST onto PYTHONPATH so e2e subprocesses do not
-    # resolve `mesh` from a stale editable install of another workspace.
-    import re as _re
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _backend = os.path.dirname(_here)
-    _src = os.path.join(_backend, "src")
-    _existing = [x for x in env.get("PYTHONPATH", "").split(os.pathsep)
-                 if x and not _re.search(r"/workspaces/[^/]+/workdir/Mesh/backend", x)]
-    env["PYTHONPATH"] = os.pathsep.join([_src, _backend] + _existing)
+    pin_code_under_test(env)
     return subprocess.Popen(
         [
             sys.executable,
@@ -235,6 +256,7 @@ async def runtime_worker(provision_database):
     env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
+    pin_code_under_test(env)
     process = subprocess.Popen(
         [sys.executable, "-m", "mesh.workers"],
         env=env,

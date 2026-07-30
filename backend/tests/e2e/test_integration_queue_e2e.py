@@ -19,6 +19,7 @@ import contextlib
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 
@@ -32,6 +33,7 @@ from mesh.db.models.integration import (
 )
 from mesh.db.models.runtime import TaskExecution
 from mesh.outbox.service import emit_event
+from tests.e2e.conftest import BACKEND_DIR, pin_code_under_test
 from tests.e2e.test_integrations_e2e import (
     _auth,
     encrypt,
@@ -63,26 +65,19 @@ async def queue_worker(provision_database):
     )
     env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
     env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
-    import re as _re
-
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _backend = os.path.dirname(_here)
-    _src = os.path.join(_backend, "src")
-    _existing = [
-        x
-        for x in env.get("PYTHONPATH", "").split(os.pathsep)
-        if x and not _re.search(r"/workspaces/[^/]+/workdir/Mesh/backend", x)
-    ]
-    env["PYTHONPATH"] = os.pathsep.join([_src, _backend] + _existing)
+    pin_code_under_test(env)
     log_file = open("/tmp/imq_worker.log", "wb")
     process = subprocess.Popen(
-        ["python", "-m", "mesh.workers"],
+        # sys.executable (NOT bare `python`): a shared machine's PATH python
+        # may carry another checkout's stale editable install (MES-121).
+        [sys.executable, "-m", "mesh.workers"],
         env=env,
         stdout=log_file,
         stderr=subprocess.STDOUT,
-        cwd=_backend,
+        cwd=str(BACKEND_DIR),
     )
     await asyncio.sleep(1.5)
+    assert process.poll() is None, "queue worker died during startup"
     yield process
     process.terminate()
     with contextlib.suppress(subprocess.TimeoutExpired):

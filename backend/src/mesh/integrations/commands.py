@@ -63,28 +63,42 @@ COMMAND_RE = re.compile(r"^/([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+([\s\S]*))?$", re.IGNO
 
 _KNOWN_COMMANDS = ("stop", "btw", "help")
 
+# User-facing bot copy — ONE voice (Chinese), pinned to the exact literals of
+# integrations.md §3.7 so the immediate stage here and the terminal stage in
+# queue_events.stopped_feedback_text never drift apart in language or wording.
 HELP_TEXT = (
-    "Available commands:\n"
-    "/stop [reason] — cancel your in-flight task and queued messages in this conversation\n"
-    "/btw <note> — append context to the task currently processing (takes effect next step)\n"
-    "/help — show this help"
+    "可用命令：\n"
+    "/stop [原因] — 取消你在本会话的进行中任务与排队消息\n"
+    "/btw <补充说明> — 向正在处理的任务追加上下文（下一步生效）\n"
+    "/help — 显示本帮助"
 )
 
 _LINK_PROMPT_TEXT = (
-    "Your external account is not linked to a Mesh user yet. "
-    "Please link it in the Mesh web app (Settings → External identities) first."
+    "请先在 Mesh 站内连接你的外部账号（网页端：设置 → 外部身份），连接成功后即可使用命令"
 )
-_FORBIDDEN_TEXT = "You don't have permission to operate on that task."
-_NOTHING_TO_STOP_TEXT = "There is no in-flight or queued task of yours in this conversation."
-_CANCELLING_IN_PROGRESS_TEXT = "The task is already stopping."
-_TERMINAL_NO_TASK_TEXT = "There is no in-flight task right now."
-_BTW_OK_TEXT = "Appended to the processing task (takes effect at its next step)."
-_BTW_CANCELLING_TEXT = (
-    "The task is stopping and cannot receive context; redispatch after it stops."
-)
-_BTW_NO_ITEM_HINT = "No task is processing right now; queued as a new message."
-_BTW_LIMIT_TEXT = "Context appends reached the limit; please open a new task instead."
-_BTW_USAGE_TEXT = "Usage: /btw <note> — append context to the processing task."
+_FORBIDDEN_TEXT = "你没有权限操作该任务"
+_NOTHING_TO_STOP_TEXT = "当前没有进行中或排队的任务（你的）"
+_CANCELLING_IN_PROGRESS_TEXT = "任务正在停止中"
+_TERMINAL_NO_TASK_TEXT = "当前没有进行中的任务"
+_BTW_OK_TEXT = "已补充给正在处理的任务（将在下一步生效）"
+_BTW_CANCELLING_TEXT = "任务正在停止，无法补充；停止完成后可重新派发"
+_BTW_NO_ITEM_HINT = "当前没有进行中的任务，已按新消息排队"
+_BTW_LIMIT_TEXT = "补充已达上限，请直接新建任务说明"
+_BTW_USAGE_TEXT = "用法：/btw <补充说明> — 向正在处理的任务追加上下文"
+
+
+def stopping_feedback_text(message_excerpt: str) -> str:
+    """Immediate-stage /stop feedback copy (§3.7 「⏳ 正在停止任务…」).
+
+    Mirror of ``queue_events.stopped_feedback_text`` (terminal stage): the
+    same 「…」 excerpt quoting, stage-distinct emoji (⏳ → 🛑).
+    """
+    return f"⏳ 正在停止任务「{message_excerpt}」…"
+
+
+def stopping_with_cancelled_feedback_text(message_excerpt: str, cancelled_count: int) -> str:
+    """Immediate-stage /stop copy when queued messages were also cancelled."""
+    return f"⏳ 正在停止任务「{message_excerpt}」…，并已取消 {cancelled_count} 条排队消息"
 
 
 @dataclass(frozen=True)
@@ -270,19 +284,16 @@ async def _handle_stop(
     # Two-stage feedback — immediate stage (terminal stage is written by the
     # execution.finished consumer when the graceful stop completes, §3.7).
     if stopped_excerpts and cancelled_count:
-        immediate = (
-            f"⏳ Stopping task 「{stopped_excerpts[0]}」…, "
-            f"and cancelled {cancelled_count} queued message(s)"
+        immediate = stopping_with_cancelled_feedback_text(
+            stopped_excerpts[0], cancelled_count
         )
         outcome = "stopping_and_cancelled"
     elif stopped_excerpts:
-        immediate = f"⏳ Stopping task 「{stopped_excerpts[0]}」…"
+        immediate = stopping_feedback_text(stopped_excerpts[0])
         outcome = "stopping"
     elif cancelled_count:
-        suffix = ""
-        if other_processing:
-            suffix = "; the in-flight task in this conversation is not yours"
-        immediate = f"Cancelled {cancelled_count} queued message(s){suffix}"
+        suffix = "；本会话进行中的任务不是你的" if other_processing else ""
+        immediate = f"已取消 {cancelled_count} 条排队消息{suffix}"
         outcome = "cancelled_queued"
     elif own_cancelling:
         immediate = _CANCELLING_IN_PROGRESS_TEXT  # idempotent repeat /stop
