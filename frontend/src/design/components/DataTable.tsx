@@ -129,7 +129,22 @@ export function DataTable<T>(props: DataTableProps<T>): React.JSX.Element {
               <tr
                 key={rowKey(row)}
                 className={rowClasses}
-                onClick={onRowClick !== undefined ? () => onRowClick(row) : undefined}
+                onClick={
+                  onRowClick !== undefined
+                    ? (event) => {
+                        // 守卫(验收 R1-M4):行内交互元素(链接/按钮/表单控件)的点击
+                        // 自行负责,不冒泡为整行导航(与 onKeyDown 的 target 守卫同构)。
+                        const target = event.target;
+                        if (
+                          target instanceof HTMLElement &&
+                          target.closest('a, button, [role="button"], input, select, textarea, label') !== null
+                        ) {
+                          return;
+                        }
+                        onRowClick(row);
+                      }
+                    : undefined
+                }
                 tabIndex={onRowClick !== undefined ? 0 : undefined}
                 onKeyDown={
                   onRowClick !== undefined

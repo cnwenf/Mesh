@@ -129,3 +129,28 @@ describe('DataTable(语义表格)', () => {
     expect(withRows.querySelector('.mesh-data-table__row')).not.toHaveAttribute('tabindex');
   });
 });
+
+describe('DataTable 行点击守卫(验收 R1-M4)', () => {
+  const COLUMNS: ReadonlyArray<DataTableColumn<{ id: string; name: string }>> = [
+    { id: 'name', header: '名称', cell: (row) => <button type="button">行内按钮 {row.name}</button> },
+  ];
+
+  it('点击行内按钮不冒泡为整行导航;点击行体触发 onRowClick', async () => {
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    render(
+      <DataTable
+        caption="守卫表"
+        columns={COLUMNS}
+        rows={[{ id: '1', name: '甲' }]}
+        rowKey={(row) => row.id}
+        onRowClick={onRowClick}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: '行内按钮 甲' }));
+    expect(onRowClick).not.toHaveBeenCalled();
+    const cell = screen.getByRole('cell');
+    await user.click(cell);
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+  });
+});

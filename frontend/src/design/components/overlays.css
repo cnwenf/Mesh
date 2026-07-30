@@ -9,6 +9,12 @@
   display: inline-flex;
 }
 
+.mesh-menu--above {
+  /* 视口下方空间不足时上翻(验收 R1-M6) */
+  inset-block-start: auto;
+  inset-block-end: calc(100% + var(--space-1));
+}
+
 .mesh-menu {
   position: absolute;
   inset-block-start: calc(100% + var(--space-1));

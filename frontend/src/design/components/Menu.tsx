@@ -7,7 +7,7 @@
  * - danger 变体用于破坏性操作(仍需页面层确认流程,§7.3)。
  * 无硬编码可见文案,全部文案来自 items。
  */
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react';
 import { Icon } from './Icon';
 import type { IconName } from './Icon';
@@ -68,6 +68,32 @@ export function Menu(props: MenuProps): React.JSX.Element {
     },
     [items, focusItem],
   );
+
+  // 视口夹持与上翻(验收 R1-M6,与 Popover 定位同构):超右缘左移、超左缘右移;
+  // 底部溢出且上方更宽裕时翻转到触发器上方,避免近边缘触发器菜单出屏。
+  useLayoutEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    const anchor = rootRef.current;
+    if (menu === null || anchor === null) return;
+    const VIEWPORT_MARGIN_PX = 8;
+    const rect = menu.getBoundingClientRect();
+    const shiftX =
+      rect.right > window.innerWidth - VIEWPORT_MARGIN_PX
+        ? window.innerWidth - VIEWPORT_MARGIN_PX - rect.right
+        : rect.left < VIEWPORT_MARGIN_PX
+          ? VIEWPORT_MARGIN_PX - rect.left
+          : 0;
+    if (shiftX !== 0) {
+      menu.style.translate = `${shiftX}px 0`;
+    }
+    if (rect.bottom > window.innerHeight - VIEWPORT_MARGIN_PX) {
+      const spaceAbove = anchor.getBoundingClientRect().top;
+      if (spaceAbove > rect.height + VIEWPORT_MARGIN_PX) {
+        menu.classList.add('mesh-menu--above');
+      }
+    }
+  }, [open]);
 
   // 外部 pointerdown 关闭
   useEffect(() => {

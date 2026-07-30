@@ -148,3 +148,36 @@ describe('Menu(§7.5 低频行操作 / 键盘漫游 / 焦点管理)', () => {
     expect(menu).toBeInTheDocument();
   });
 });
+
+describe('Menu 视口夹持与上翻(验收 R1-M6)', () => {
+  const ENTRIES = [{ key: 'a', label: '甲', onSelect: () => undefined }];
+
+  it('菜单超出右缘时左移夹持(translate 内联补偿)', () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: 100, bottom: 200, left: 1000, right: 1200, width: 200, height: 100, x: 1000, y: 100, toJSON: () => undefined,
+    });
+    try {
+      render(<Menu trigger="开" triggerLabel="夹持触发" entries={ENTRIES} />);
+      fireEvent.click(screen.getByRole('button', { name: '夹持触发' }));
+      const menu = screen.getByRole('menu');
+      // innerWidth 1024:right 1200 超界 → translate 负向补偿
+      expect(menu.style.translate).toContain('-');
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it('底部空间不足且上方宽裕时上翻(mesh-menu--above)', () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      top: 700, bottom: 900, left: 10, right: 200, width: 190, height: 200, x: 10, y: 700, toJSON: () => undefined,
+    });
+    try {
+      render(<Menu trigger="开" triggerLabel="上翻触发" entries={ENTRIES} />);
+      fireEvent.click(screen.getByRole('button', { name: '上翻触发' }));
+      const menu = screen.getByRole('menu');
+      expect(menu.classList.contains('mesh-menu--above')).toBe(true);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+});
