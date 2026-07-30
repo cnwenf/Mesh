@@ -1638,7 +1638,6 @@
     "mobileNav.more": "更多",
     "mobileNav.moreClose": "关闭导航抽屉",
     "mobileNav.moreTitle": "全部导航",
-    "nav.automation": "运行环境",
     "nav.autopilots": "自动值守",
     "nav.board": "看板",
     "nav.chat": "聊天",
@@ -1942,7 +1941,6 @@
     "runtimes.execution.triggerKind.integration": "集成",
     "runtimes.execution.triggerKind.manual": "手动",
     "runtimes.execution.triggerKind.mention": "提及",
-    "runtimes.execution.triggerKind.unknown": "触发",
     "runtimes.execution.unknownReason": "未知原因",
     "runtimes.field.capabilities": "能力",
     "runtimes.field.concurrency": "并发",
@@ -2052,7 +2050,6 @@
     "settings.timezoneBrowser": "跟随浏览器",
     "settings.title": "设置",
     "shortcuts.actionFocusSearch": "聚焦搜索",
-    "shortcuts.actionGoAutomation": "前往自动化",
     "shortcuts.actionGoAutopilot": "前往自动值守",
     "shortcuts.actionGoBoard": "前往看板",
     "shortcuts.actionGoInbox": "前往收件箱",
@@ -2449,5 +2446,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "308acfbd"
+  "version": "7bdd9867"
 }

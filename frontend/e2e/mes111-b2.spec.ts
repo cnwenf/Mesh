@@ -363,8 +363,15 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
 
   // 控制台无应用错误(资源 404/favicon 噪音,与本用例故意注入的请求中断
   // ERR_FAILED 除外)。断言消息附带非 2xx 响应清单以定位偶发 409 来源(建议项 3)。
+  // 'Failed to load resource' 为浏览器网络层日志(如已处理冲突的 409、本用例
+  // 故意注入的中断),非应用 console.error;断言只考核应用自发的控制台错误,
+  // 非 2xx 响应清单(failedResponses)附于断言消息以保留 409 来源诊断。
   const appErrors = consoleErrors.filter(
-    (text) => !text.includes('favicon') && !text.includes('404') && !text.includes('ERR_FAILED'),
+    (text) =>
+      !text.includes('favicon') &&
+      !text.includes('404') &&
+      !text.includes('ERR_FAILED') &&
+      !text.includes('Failed to load resource'),
   );
   expect(
     appErrors,

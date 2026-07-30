@@ -713,7 +713,10 @@ export function BoardPage(): React.JSX.Element {
       // WIP block / 其它失败 → 弹回原列 + 提示(§4.4)。
       setBoardGroups(snapshot);
       if (error instanceof MeshApiError && error.code === 'conflict') {
-        await loadBoard(selectedView); // 409 → 拉最新收敛(T9)。
+        // 409 → 拉最新静默收敛(§4.3/§5.2:后到事件覆盖,多人同拖同卡平滑收敛,
+        // 不 toast 噪音;浏览器网络层 409 日志属已处理冲突,非应用错误)。
+        await loadBoard(selectedView);
+        return;
       }
       toastError(error);
     }

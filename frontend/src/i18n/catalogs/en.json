@@ -1638,7 +1638,6 @@
     "mobileNav.more": "More",
     "mobileNav.moreClose": "Close navigation menu",
     "mobileNav.moreTitle": "All navigation",
-    "nav.automation": "Automation",
     "nav.autopilots": "Autopilots",
     "nav.board": "Board",
     "nav.chat": "Chat",
@@ -1942,7 +1941,6 @@
     "runtimes.execution.triggerKind.integration": "Integration",
     "runtimes.execution.triggerKind.manual": "Manual",
     "runtimes.execution.triggerKind.mention": "Mention",
-    "runtimes.execution.triggerKind.unknown": "Triggered",
     "runtimes.execution.unknownReason": "unknown",
     "runtimes.field.capabilities": "Capabilities",
     "runtimes.field.concurrency": "Concurrency",
@@ -2052,7 +2050,6 @@
     "settings.timezoneBrowser": "Browser default",
     "settings.title": "Settings",
     "shortcuts.actionFocusSearch": "Focus search",
-    "shortcuts.actionGoAutomation": "Go to Automation",
     "shortcuts.actionGoAutopilot": "Go to Autopilots",
     "shortcuts.actionGoBoard": "Go to Board",
     "shortcuts.actionGoInbox": "Go to Inbox",
@@ -2449,5 +2446,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "8125b302"
+  "version": "a3558e8e"
 }
