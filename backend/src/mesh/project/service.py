@@ -1011,6 +1011,18 @@ class ProjectService:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> dict:
+        # Delete protection (integrations.md §2.10 / §5.6 ④): a project deletion
+        # cascades its project-scoped integration bindings; that cascade would
+        # SET NULL their queue items, which ck_imq_orphan_terminal rejects while
+        # any item is non-terminal (the whole DELETE rolls back — no silent
+        # message loss). Fail closed up front: refuse while non-terminal items
+        # exist; the caller must drain them via the binding ?force=cancel path
+        # first. Lazy import avoids a project↔integrations import cycle.
+        from mesh.integrations.service import assert_no_active_project_queue
+
+        await assert_no_active_project_queue(
+            self._factory, workspace_id=workspace_id, project_id=project_id
+        )
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             project = await self._load_project(

@@ -12035,6 +12035,9 @@ paths:
       tags:
       - integrations
       summary: Delete Integration
+      description: 'Soft-delete; ``?force=cancel`` first drains every binding''s queue
+
+        (§3.9 delete protection) before the soft delete.'
       operationId: delete_integration_api_v1_workspaces__workspace_id__integrations__integration_id__delete
       parameters:
       - name: workspace_id
@@ -12049,6 +12052,14 @@ paths:
         schema:
           type: string
           title: Integration Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Force
       responses:
         '204':
           description: Successful Response
@@ -12264,6 +12275,11 @@ paths:
       tags:
       - integrations
       summary: Delete Binding
+      description: 'Delete a binding (physical). Delete protection (§3.9): non-terminal
+
+        queue items + no ``?force=cancel`` → 409 ``binding_has_active_queue``;
+
+        ``?force=cancel`` drains them first (orphans survive as audit rows).'
       operationId: delete_binding_api_v1_workspaces__workspace_id__integration_bindings__binding_id__delete
       parameters:
       - name: workspace_id
@@ -12278,6 +12294,14 @@ paths:
         schema:
           type: string
           title: Binding Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Force
       responses:
         '204':
           description: Successful Response
@@ -12924,6 +12948,200 @@ paths:
                 additionalProperties: true
                 type: object
                 title: Response Resolve Vcs Identifiers Api V1 Integrations Vcs Resolve Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue
+      operationId: get_integration_queue_api_v1_workspaces__workspace_id__integrations__integration_id__queue_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: state
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: State
+      - name: conversation_key
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Conversation Key
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue/summary:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue Summary
+      operationId: get_integration_queue_summary_api_v1_workspaces__workspace_id__integrations__integration_id__queue_summary_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Summary Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue Summary Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integrations/{integration_id}/queue/{item_id}:cancel:
+    post:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Cancel Integration Queue Item
+      operationId: cancel_integration_queue_item_api_v1_workspaces__workspace_id__integrations__integration_id__queue__item_id__cancel_post
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: integration_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Integration Id
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Cancel Integration Queue Item Api V1 Workspaces  Workspace Id  Integrations  Integration
+                  Id  Queue  Item Id  Cancel Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/integration-queue-audit:
+    get:
+      tags:
+      - integrations
+      - integrations-queue
+      summary: Get Integration Queue Audit
+      operationId: get_integration_queue_audit_api_v1_workspaces__workspace_id__integration_queue_audit_get
+      parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 200
+          minimum: 1
+          default: 50
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Integration Queue Audit Api V1 Workspaces  Workspace Id  Integration
+                  Queue Audit Get
         '422':
           description: Validation Error
           content:

@@ -220,6 +220,38 @@ class Settings(BaseSettings):
     integration_ledger_retention: timedelta = Field(default=timedelta(days=30))
     integration_ledger_retention_interval: float = Field(default=3600.0, gt=0)
 
+    # IM message queue + command plane (integrations.md §2.10/§3.7/§3.8/§3.9).
+    # Leading-edge ack coalescing window measured on the lock-ordered
+    # ack_window_at (taken after the imq_seq advisory lock), never on
+    # enqueued_at/now().
+    im_ack_coalesce_window_seconds: float = Field(default=5.0, gt=0)
+    # Post-signature semantic inbound guards (Redis sliding windows keyed with
+    # the tenant dimension + DB pending-depth count).
+    im_inbound_per_identity_per_min: int = Field(default=20, ge=1)
+    im_inbound_per_conversation_per_min: int = Field(default=60, ge=1)
+    im_queue_max_pending_per_conversation: int = Field(default=50, ge=1)
+    # Inbound text / /btw argument length cap (truncated + audited).
+    im_inbound_text_max_chars: int = Field(default=4000, ge=1)
+    # Per-execution context-append caps (M3; enforced under the eca: advisory
+    # lock so concurrent writes cannot exceed them).
+    context_append_max_count: int = Field(default=20, ge=1)
+    context_append_max_chars: int = Field(default=32000, ge=1)
+    # Dispatcher lease = execution timeout + this buffer; an execution stuck
+    # `queued` beyond this window is failed(dispatch_stuck), never re-dispatched.
+    im_dispatch_lease_buffer_seconds: int = Field(default=300, ge=1)
+    im_queue_max_stuck_seconds: int = Field(default=3600, ge=1)
+    # Outbox consume SLA: a still-pending enqueue event older than this with a
+    # missing execution is treated as lost (derived-key rearm).
+    outbox_consume_sla_seconds: float = Field(default=2.0, gt=0)
+    im_dispatch_tick_seconds: float = Field(default=1.0, gt=0)
+    im_lease_repair_interval_seconds: float = Field(default=5.0, gt=0)
+    # DELETE ?force=cancel upper bound for waiting on in-flight cancellation.
+    im_force_cancel_wait_seconds: int = Field(default=30, ge=1)
+    # Terminal orphan audit rows (binding_id IS NULL) are physically purged
+    # after this window.
+    im_queue_audit_retention: timedelta = Field(default=timedelta(days=30))
+    im_queue_audit_retention_interval: float = Field(default=3600.0, gt=0)
+
     # Realtime retention window (README §6.7: default 7 days, configurable).
     realtime_event_retention: timedelta = Field(default=timedelta(days=DEFAULT_REALTIME_RETENTION_DAYS))
     realtime_retention_interval: float = Field(default=3600.0, gt=0)

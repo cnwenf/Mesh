@@ -33,6 +33,10 @@ async def redis_client():
         os.environ.get("MESH_TEST_REDIS_URL", "redis://127.0.0.1:6399/1"),
         decode_responses=True,
     )
+    # L1 issuance rate limits (§3.1) keep per-target sliding windows keyed by
+    # the external account; flush so a shared target (e.g. U_CLICK) does not
+    # accumulate across tests and trip the window in an unrelated test.
+    await client.flushdb()
     yield client
     await client.aclose()
 

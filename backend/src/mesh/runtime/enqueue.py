@@ -17,11 +17,13 @@ Payload shapes (frozen by agent/guardrails.py):
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mesh.db.models.integration import IntegrationMessageQueue
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import TaskExecution
 from mesh.db.tenant import set_tenant_context
@@ -82,6 +84,38 @@ async def enqueue_execution_handler(
     trigger = payload.get("trigger", "assign")
     if trigger not in VALID_TRIGGERS:
         trigger = "assign"
+
+    # integrations.md §3.9 (R5-2, integration-scoped addition — other triggers
+    # keep the existing contract untouched): the consumer locks the queue item
+    # FIRST and guards its state, so the original event (row key K) and a
+    # derived rearm event (row key K2, payload still carrying K) consumed in
+    # any order / concurrently create EXACTLY ONE execution and bind it once —
+    # the losing consumer rolls back with no orphan execution (T39-17).
+    queue_item: IntegrationMessageQueue | None = None
+    if trigger == "integration":
+        queue_item_id = _parse_uuid(payload.get("queue_item_id"))
+        if queue_item_id is None:
+            # Contract violation by the producer — surface it (relay → failed).
+            raise ValueError("integration enqueue payload missing queue_item_id")
+        queue_item = (
+            await session.execute(
+                select(IntegrationMessageQueue)
+                .where(
+                    IntegrationMessageQueue.workspace_id == event.workspace_id,
+                    IntegrationMessageQueue.id == queue_item_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if (
+            queue_item is None
+            or queue_item.state != "dispatching"
+            or queue_item.execution_id is not None
+        ):
+            # Guard failure: item already bound by the other consumer, already
+            # terminal, or gone — never create an orphan execution.
+            return None
+
     label_requirements = payload.get("label_requirements") or {}
     if not isinstance(label_requirements, dict):
         # Producer contract is a string map; the agent module currently emits
@@ -124,6 +158,20 @@ async def enqueue_execution_handler(
         if idempotency_key and _is_idempotency_conflict(exc):
             return None
         raise
+    if queue_item is not None:
+        # Execution-association write-back (§3.9, both dispatch modes share
+        # this): dispatching → processing single transition + execution bind
+        # in the SAME transaction as execution creation. The queue panel's
+        # "processing item → execution deep link" holds in both modes.
+        from datetime import datetime, timedelta
+
+        queue_item.execution_id = execution.id
+        queue_item.state = "processing"
+        queue_item.started_at = datetime.now(UTC)
+        queue_item.lease_expires_at = datetime.now(UTC) + timedelta(
+            seconds=execution.timeout_seconds + 300
+        )
+        await session.flush()
     # §3.6: every enqueue is observable on the workspace executions channel
     # (F10 — agent triggers additionally emit on issue:{id}:runs; integration
     # / manual / issue-less triggers are covered here).

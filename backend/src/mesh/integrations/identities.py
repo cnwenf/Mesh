@@ -19,7 +19,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import secrets as pysecrets
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -32,7 +34,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mesh.auth.audit import write_audit
 from mesh.db.models.integration import ExternalIdentity, Integration
 from mesh.db.models.member import Member
-from mesh.errors import BusinessRuleError, ConflictError, ForbiddenError, NotFoundError
+from mesh.errors import (
+    BusinessRuleError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    RateLimitedError,
+)
 
 logger = logging.getLogger("mesh.integrations.identities")
 
@@ -46,6 +54,24 @@ CODE_LENGTH = 6
 # a success would map someone else's unlinked external account onto the
 # attacker's users.id (the card-callback chain resolves clickers by it).
 MAX_CODE_ATTEMPTS = 5
+
+# L1 (integrations.md §3.1): verification-code ISSUANCE rate limits. Each
+# :link call delivers a code to a claimed external account; without a cap an
+# authenticated member could spam/enumerate codes against any staffId in a
+# connected tenant. Two independent sliding windows mirror the login-failure
+# counting paradigm (auth.md §3.6): per member (issuer) AND per target
+# external account. Both are checked before any code is created/delivered.
+LINK_CODE_WINDOW_SECONDS = 600  # 10-minute sliding window
+LINK_CODE_PER_MEMBER_PER_WINDOW = 5
+LINK_CODE_PER_TARGET_PER_WINDOW = 3
+LINK_CODE_MEMBER_PREFIX = "mesh:identity-link:member:"
+LINK_CODE_TARGET_PREFIX = "mesh:identity-link:target:"
+
+# DingTalk staffId charset (integrations.md §2.10 — widest official caliber).
+# Encoded external-contact keys are 'x=<base64url>' and carry '=' as their
+# second character, which is OUTSIDE this set; a staffId field therefore can
+# never be an encoded key, and 'x=…' is rejected here (T39-15c).
+STAFF_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class CodeDelivery(Protocol):
@@ -117,6 +143,58 @@ async def external_identity_unlink_allowed(
 
 
 # ---------------------------------------------------------------------------
+# L1 issuance rate limit (integrations.md §3.1)
+# ---------------------------------------------------------------------------
+
+
+async def _sliding_window_count(redis: Redis, key: str, window_start: float) -> int:
+    """Count hits in the trailing window (ZSET sliding-window paradigm)."""
+    await redis.zremrangebyscore(key, 0, window_start)
+    return int(await redis.zcard(key))
+
+
+async def check_link_rate_limits(
+    redis: Redis,
+    *,
+    member_id: uuid.UUID,
+    provider: str,
+    tenant_key: str,
+    external_user_key: str,
+    now: float | None = None,
+) -> None:
+    """Raise 429 ``rate_limited`` once per-member OR per-target caps are hit.
+
+    Mirrors the auth sliding-window paradigm (auth.md §3.6). Both windows are
+    read BEFORE either is recorded so a target rejection does not inflate the
+    member window (and vice versa).
+    """
+    moment = now if now is not None else time.time()
+    window_start = moment - LINK_CODE_WINDOW_SECONDS
+    member_key = f"{LINK_CODE_MEMBER_PREFIX}{member_id}"
+    target_key = f"{LINK_CODE_TARGET_PREFIX}{provider}:{tenant_key}:{external_user_key}"
+    member_count = await _sliding_window_count(redis, member_key, window_start)
+    if member_count >= LINK_CODE_PER_MEMBER_PER_WINDOW:
+        raise RateLimitedError(
+            "too many verification codes requested",
+            retry_after=LINK_CODE_WINDOW_SECONDS,
+            details={"dimension": "member", "limit": LINK_CODE_PER_MEMBER_PER_WINDOW},
+        )
+    target_count = await _sliding_window_count(redis, target_key, window_start)
+    if target_count >= LINK_CODE_PER_TARGET_PER_WINDOW:
+        raise RateLimitedError(
+            "too many verification codes requested for this account",
+            retry_after=LINK_CODE_WINDOW_SECONDS,
+            details={"dimension": "target", "limit": LINK_CODE_PER_TARGET_PER_WINDOW},
+        )
+    pipe = redis.pipeline()
+    pipe.zadd(member_key, {f"{moment}:{uuid.uuid4().hex}": moment})
+    pipe.expire(member_key, LINK_CODE_WINDOW_SECONDS)
+    pipe.zadd(target_key, {f"{moment}:{uuid.uuid4().hex}": moment})
+    pipe.expire(target_key, LINK_CODE_WINDOW_SECONDS)
+    await pipe.execute()
+
+
+# ---------------------------------------------------------------------------
 # Link flow
 # ---------------------------------------------------------------------------
 
@@ -138,12 +216,31 @@ async def start_link(
     The link target is FIXED to the requester's own ``users.id`` — the
     endpoint accepts no parameter pointing at another user (HIGH-1).
     """
-    if provider not in ("feishu", "slack", "github", "gitlab"):
+    if provider not in ("feishu", "slack", "github", "gitlab", "dingtalk"):
         raise BusinessRuleError("unsupported provider", code="invalid_request")
     if not external_user_key:
         raise BusinessRuleError("external_user_key is required", code="invalid_request")
+    # L1 (§3.1 / §2.10 T39-15c): a DingTalk staffId must match the widest
+    # official charset. Encoded external-contact keys ('x=<base64url>') carry
+    # '=' outside this set, so they are rejected here — a staffId field can
+    # never impersonate an external-contact key.
+    if provider == "dingtalk" and not STAFF_ID_RE.match(external_user_key):
+        raise BusinessRuleError(
+            "invalid dingtalk staffId charset",
+            code="invalid_request",
+            details={"external_user_key": external_user_key[:64]},
+        )
     # Duplicate mapping pre-check (authoritative check stays at confirm).
     tenant_key = _tenant_key_for(provider, integration)
+    # L1 issuance rate limit (per member + per target) BEFORE any code is
+    # created/delivered (§3.1).
+    await check_link_rate_limits(
+        redis,
+        member_id=member.id,
+        provider=provider,
+        tenant_key=tenant_key,
+        external_user_key=external_user_key,
+    )
     existing = await session.scalar(
         select(ExternalIdentity).where(
             ExternalIdentity.provider == provider,
@@ -334,7 +431,20 @@ async def lookup_identity(
 def _tenant_key_for(provider: str, integration: Integration) -> str:
     from mesh.integrations.connectors import adapter_for
 
-    adapter = adapter_for(f"{'im' if provider in ('feishu', 'slack') else 'vcs'}_{provider}")
+    kind = f"{'im' if provider in ('feishu', 'slack', 'dingtalk') else 'vcs'}_{provider}"
+    try:
+        adapter = adapter_for(kind)
+    except KeyError:
+        # Provider connector not registered yet (e.g. DingTalk before its
+        # connector lands): derive a stable best-effort tenant key from config
+        # so the identity / rate-limit keys stay consistent.
+        config = integration.config or {}
+        return str(
+            config.get("provider_tenant_id")
+            or config.get("corp_id")
+            or config.get("tenant_key")
+            or ""
+        )
     return adapter["tenant_key_from_config"](integration.config or {})
 
 
@@ -363,8 +473,15 @@ __all__ = [
     "CODE_LENGTH",
     "CODE_TTL_SECONDS",
     "DEV_OUTBOX_PREFIX",
+    "LINK_CODE_MEMBER_PREFIX",
+    "LINK_CODE_PER_MEMBER_PER_WINDOW",
+    "LINK_CODE_PER_TARGET_PER_WINDOW",
+    "LINK_CODE_TARGET_PREFIX",
+    "LINK_CODE_WINDOW_SECONDS",
     "MAX_CODE_ATTEMPTS",
+    "STAFF_ID_RE",
     "RedisDevCodeDelivery",
+    "check_link_rate_limits",
     "confirm_link",
     "external_identity_unlink_allowed",
     "list_own_identities",
