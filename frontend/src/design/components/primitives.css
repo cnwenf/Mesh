@@ -1,0 +1,240 @@
+/*
+ * 基础原语样式(design-quality.md §7.1/§7.2):Icon / Badge / Avatar / Tooltip。
+ * 仅引用语义 token(var(--*)),禁止硬编码色值;方向性间距一律逻辑属性。
+ */
+
+/* ===== Icon(§7.1:统一 16/20/24 线性 SVG,描边 1.75 圆角端点) ===== */
+.mesh-icon {
+  /* 颜色跟随语境(currentColor),尺寸仅三档由组件属性约束 */
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mesh-icon--16 {
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+.mesh-icon--20 {
+  inline-size: 20px;
+  block-size: 20px;
+}
+
+.mesh-icon--24 {
+  inline-size: 24px;
+  block-size: 24px;
+}
+
+/* ===== Badge(§7.2:高度 20/24,图标+文案,颜色不是唯一信号) ===== */
+.mesh-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  block-size: 20px;
+  padding-inline: var(--space-1-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.mesh-badge--md {
+  block-size: 24px;
+  padding-inline: var(--space-2);
+}
+
+.mesh-badge__icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 中性:草稿/未知/未开始 */
+.mesh-badge--neutral {
+  background-color: var(--color-neutral-bg);
+  color: var(--color-neutral-fg);
+  border-color: var(--color-neutral-border);
+}
+
+/* 信息:同步/处理中/一般提示 */
+.mesh-badge--info {
+  background-color: var(--color-info-bg);
+  color: var(--color-info-fg);
+  border-color: var(--color-info-border);
+}
+
+/* 成功:完成/在线/通过 */
+.mesh-badge--success {
+  background-color: var(--color-success-bg);
+  color: var(--color-success-fg);
+  border-color: var(--color-success-border);
+}
+
+/* 警告:需注意/接近限制/待确认 */
+.mesh-badge--warning {
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning-fg);
+  border-color: var(--color-warning-border);
+}
+
+/* 危险:失败/阻断 */
+.mesh-badge--danger {
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger-fg);
+  border-color: var(--color-danger-border);
+}
+
+/* 强调:选中/AI 身份等品牌语义 */
+.mesh-badge--accent {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-color: var(--color-accent-soft);
+}
+
+/* ===== Avatar(§7.2:20/24/32/40/56;人类姓名缩写,agent 统一轮廓) ===== */
+.mesh-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  font-weight: var(--font-weight-semibold);
+  user-select: none;
+  overflow: hidden;
+}
+
+.mesh-avatar--20 {
+  inline-size: 20px;
+  block-size: 20px;
+  font-size: 9px;
+}
+
+.mesh-avatar--24 {
+  inline-size: 24px;
+  block-size: 24px;
+  font-size: 10px;
+}
+
+.mesh-avatar--32 {
+  inline-size: 32px;
+  block-size: 32px;
+  font-size: 12px;
+}
+
+.mesh-avatar--40 {
+  inline-size: 40px;
+  block-size: 40px;
+  font-size: 14px;
+}
+
+.mesh-avatar--56 {
+  inline-size: 56px;
+  block-size: 56px;
+  font-size: 20px;
+}
+
+.mesh-avatar img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+/* 稳定 hash 八组配色(tokenValues.ts 头像组,亮/暗各自校准) */
+.mesh-avatar--h0 {
+  background-color: var(--color-avatar-h0-bg);
+  color: var(--color-avatar-h0-fg);
+}
+
+.mesh-avatar--h1 {
+  background-color: var(--color-avatar-h1-bg);
+  color: var(--color-avatar-h1-fg);
+}
+
+.mesh-avatar--h2 {
+  background-color: var(--color-avatar-h2-bg);
+  color: var(--color-avatar-h2-fg);
+}
+
+.mesh-avatar--h3 {
+  background-color: var(--color-avatar-h3-bg);
+  color: var(--color-avatar-h3-fg);
+}
+
+.mesh-avatar--h4 {
+  background-color: var(--color-avatar-h4-bg);
+  color: var(--color-avatar-h4-fg);
+}
+
+.mesh-avatar--h5 {
+  background-color: var(--color-avatar-h5-bg);
+  color: var(--color-avatar-h5-fg);
+}
+
+.mesh-avatar--h6 {
+  background-color: var(--color-avatar-h6-bg);
+  color: var(--color-avatar-h6-fg);
+}
+
+.mesh-avatar--h7 {
+  background-color: var(--color-avatar-h7-bg);
+  color: var(--color-avatar-h7-fg);
+}
+
+/* agent 统一轮廓:sparkle glyph + 品牌浅色底,不依赖头像颜色/随机 emoji(§7.1) */
+.mesh-avatar--agent {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* ===== Tooltip(§9.1:focus-visible 与 hover 等价呈现;延迟出现) ===== */
+.mesh-tooltip-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.mesh-tooltip {
+  position: absolute;
+  inset-block-end: calc(100% + var(--space-1-5));
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-dropdown);
+  max-inline-size: 16rem;
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background-color: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-2);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity var(--motion-standard) var(--ease-enter),
+    visibility var(--motion-standard);
+  visibility: hidden;
+}
+
+/* hover 延迟出现(--motion-deliberate),focus 即时可见(§9.1) */
+.mesh-tooltip-anchor:hover .mesh-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: var(--motion-deliberate);
+}
+
+.mesh-tooltip-anchor:focus-within .mesh-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: var(--motion-instant);
+}

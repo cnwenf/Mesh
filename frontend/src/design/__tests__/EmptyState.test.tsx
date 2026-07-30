@@ -37,3 +37,25 @@ describe('EmptyState(异常态矩阵 empty 行)', () => {
     expect(screen.getByTestId('illo')).toBeInTheDocument();
   });
 });
+
+describe('EmptyState(design-quality.md §7.7 四部分扩展)', () => {
+  it('help 插槽渲染帮助链接/示例', () => {
+    render(<EmptyState title="暂无视图" help={<a href="/docs/views">了解保存视图</a>} />);
+    expect(screen.getByRole('link', { name: '了解保存视图' })).toBeInTheDocument();
+  });
+
+  it('四部分齐备时全部渲染(插画/缘由/主操作/帮助)', () => {
+    render(
+      <EmptyState
+        title="暂无工作项"
+        description="创建第一个工作项开始协作"
+        illustration={<svg data-testid="illo2" aria-hidden="true" />}
+        action={<button type="button">新建工作项</button>}
+        help={<a href="/docs">帮助</a>}
+      />,
+    );
+    expect(screen.getByTestId('illo2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '新建工作项' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '帮助' })).toBeInTheDocument();
+  });
+});
