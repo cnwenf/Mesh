@@ -11,12 +11,12 @@
  * - 首页/看板/成员页无页面级横向溢出(A-04/A-05);
  * - 320×640 极窄视口底部导航仍可达。
  *
- * 走查截图存证于 e2e/evidence/mes111/(md5 唯一性门禁)。
+ * 走查截图存证于 e2e/evidence/mes111-shell/(验收 R1 目录名统一;md5 唯一性门禁)。
  */
 import { expect, test } from '@playwright/test';
 import { login } from './helpers';
 
-const EVIDENCE_DIR = 'e2e/evidence/mes111';
+const EVIDENCE_DIR = 'e2e/evidence/mes111-shell';
 
 test.describe('手机可达性 @390×844', () => {
   test.use({ viewport: { width: 390, height: 844 } });
