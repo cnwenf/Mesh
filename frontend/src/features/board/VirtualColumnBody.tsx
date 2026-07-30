@@ -1,23 +1,38 @@
 /**
  * 虚拟化列体(design-quality §11.4 / kanban §5.3:1000 卡片 ≥50fps,焦点/AT 不破)。
  *
- * 包装层:测量滚动容器高度,仅渲染可见窗口 + spacer transform;
- * 每个卡片携带 aria-setsize/aria-posinset 与 role=listitem;
- * 聚焦/激活的卡片即使越出窗口也始终渲染;聚焦时 scroll-into-view。
+ * 包装层测量自身视口高度(flex:1 的确定高度,见 board.css 高度链),仅渲染可见
+ * 窗口 + spacer transform。aria-setsize/aria-posinset 经 renderCard 第三参交给
+ * 卡片本身承载(卡片即 role=listitem),包装层不再叠加 listitem,避免 AT 树
+ * listitem>listitem 双重嵌套(验收 Low 项)。
  *
- * 卡片须等高(标题单行截断 + 固定高度,CARD_HEIGHT 常量)。
+ * 聚焦/激活的卡片即使越出窗口也始终渲染;聚焦时 scroll-into-view。
+ * 卡片须经 CSS 约束等高(.mesh-board__virtual .mesh-board__card,CARD_HEIGHT 常量)。
  */
 /* eslint-disable react-refresh/only-export-components -- shouldVirtualize 与虚拟化组件同模块契约 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CARD_HEIGHT, VIRTUALIZE_THRESHOLD, computeVirtualWindow } from './useVirtualWindow';
 
+/** 虚拟化 a11y 坐标(承载于卡片 listitem 本身)。 */
+export interface VirtualItemA11y {
+  readonly setsize: number;
+  readonly posinset: number;
+}
+
 interface VirtualColumnBodyProps {
   readonly cards: readonly { readonly id: string }[];
-  /** 渲染单张卡片(index 为原始数据 index)。 */
-  readonly renderCard: (card: { readonly id: string }, index: number) => ReactNode;
+  /** 渲染单张卡片(index 为原始数据 index;virtualA11y 提供 setsize/posinset)。 */
+  readonly renderCard: (
+    card: { readonly id: string },
+    index: number,
+    virtualA11y: VirtualItemA11y,
+  ) => ReactNode;
   /** 当前聚焦/激活卡片 id(越窗仍渲染)。 */
   readonly activeCardId: string | null;
+  /** 拖拽落点指示线节点(自带样式/testid)与插入 index(null = 列尾;undefined = 不显示)。 */
+  readonly indicatorNode?: ReactNode;
+  readonly indicatorIndex?: number | null;
 }
 
 /** 聚焦卡片超出窗口时的滚动定位。 */
@@ -32,12 +47,12 @@ function scrollToCard(container: HTMLElement, index: number, viewportHeight: num
 }
 
 export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Element {
-  const { cards, renderCard, activeCardId } = props;
+  const { cards, renderCard, activeCardId, indicatorNode, indicatorIndex } = props;
   const containerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
 
-  // 测量滚动容器视口高度(ResizeObserver)。
+  // 测量滚动容器视口高度(ResizeObserver;flex 确定高度链见 board.css)。
   useEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
@@ -75,14 +90,8 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
     const card = cards[i];
     if (card === undefined) continue;
     visible.push(
-      <div
-        key={card.id}
-        role="listitem"
-        aria-setsize={cards.length}
-        aria-posinset={i + 1}
-        style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}
-      >
-        {renderCard(card, i)}
+      <div key={card.id} style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}>
+        {renderCard(card, i, { setsize: cards.length, posinset: i + 1 })}
       </div>,
     );
   }
@@ -95,16 +104,19 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
       activeNode = (
         <div
           key={`active-${card.id}`}
-          role="listitem"
-          aria-setsize={cards.length}
-          aria-posinset={activeIndex + 1}
           style={{ height: `${CARD_HEIGHT}px`, boxSizing: 'border-box' }}
         >
-          {renderCard(card, activeIndex)}
+          {renderCard(card, activeIndex, { setsize: cards.length, posinset: activeIndex + 1 })}
         </div>
       );
     }
   }
+
+  // 落点指示线:绝对定位于 index × 行高(null → 列尾),随 hit.index 移位(§9.4.2)。
+  const resolvedIndicatorIndex = indicatorIndex === null || indicatorIndex === undefined
+    ? cards.length
+    : Math.min(Math.max(indicatorIndex, 0), cards.length);
+  const showIndicator = indicatorNode !== undefined && indicatorIndex !== undefined;
 
   return (
     <div
@@ -112,7 +124,6 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
       className="mesh-board__virtual"
       data-testid="virtual-column-body"
       onScroll={handleScroll}
-      style={{ height: '100%', overflowY: 'auto', position: 'relative' }}
     >
       {/* 总高度 spacer,撑开滚动区域。 */}
       <div style={{ height: `${window.totalHeight}px`, position: 'relative' }}>
@@ -128,6 +139,14 @@ export function VirtualColumnBody(props: VirtualColumnBodyProps): React.JSX.Elem
           {visible}
           {activeNode}
         </div>
+        {showIndicator ? (
+          <div
+            aria-hidden="true"
+            style={{ position: 'absolute', left: 0, right: 0, top: `${resolvedIndicatorIndex * CARD_HEIGHT}px` }}
+          >
+            {indicatorNode}
+          </div>
+        ) : null}
       </div>
     </div>
   );

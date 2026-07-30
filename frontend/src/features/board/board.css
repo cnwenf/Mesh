@@ -275,6 +275,14 @@
   gap: var(--space-3);
   overflow-x: auto;
   padding-bottom: var(--space-3);
+
+  /* 确定高度链(验收必修 2 / §11.4 / kanban §5.3):列容器取视口派生定高
+     (顶栏 56px + 看板工具条约 10rem 的留白),列 stretch 撑满、列体 flex:1
+     内部滚动,虚拟化滚动容器的 flex 高度因此解析为真实像素而非退化为 auto。
+     min-height 保底矮视口可用。 */
+  align-items: stretch;
+  height: calc(100dvh - 12.5rem);
+  min-height: 24rem;
 }
 
 .mesh-board__column {
@@ -285,6 +293,9 @@
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* 手机(0–599px):视图导轨堆叠为横向滚动条,看板单列工作区(design-quality §8.3
@@ -372,10 +383,45 @@
 
 .mesh-board__column-body {
   padding: var(--space-3);
-  min-height: 160px;
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+
+  /* 确定高度链中段:撑满列剩余高度,溢出内滚(min-height:0 允许收缩,
+     使虚拟化容器 flex 高度解析为真实像素)。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 虚拟化滚动容器(确定高度链末段:flex 取列体剩余高度;内滚窗口化渲染)。 */
+.mesh-board__virtual {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* 虚拟化路径卡片等高约束(窗口化按 CARD_HEIGHT 计算):单行截断、固定高度。 */
+.mesh-board__virtual .mesh-board__card {
+  height: 100%;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+/* 紧凑模式确定高度链(§8.3 单泳道):列卡区取视口派生定高,列撑满,
+   列体内滚;虚拟化容器同桌面路径解析。 */
+.mesh-board-compact__body {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 15rem);
+  min-height: 24rem;
+}
+
+.mesh-board-compact__body .mesh-board__column {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
 }
 
 .mesh-board__quick-add {
@@ -524,6 +570,23 @@
   box-shadow: 0 0 0 1px var(--color-accent);
 }
 
+/* 创建成功插入高亮(§9.3.4):软背景 + 光环脉冲,1.2s 后由 BoardPage 定时清除。 */
+.mesh-board__card--highlight {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  animation: mesh-board-card-highlight var(--motion-deliberate) var(--ease-enter) 3;
+}
+
+@keyframes mesh-board-card-highlight {
+  0% {
+    box-shadow: 0 0 0 3px var(--color-accent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
 /* 拖拽悬停目标列:surface-hover 背景 + accent 边框(§9.4 droppable 态)。 */
 .mesh-board__column--drag-over {
   background: var(--color-surface-hover);
@@ -594,9 +657,13 @@
   }
 }
 
-/* prefers-reduced-motion:停 spinner 与拖拽过渡。 */
+/* prefers-reduced-motion:停 spinner 与插入高亮脉冲(软背景仍保留作状态信号)。 */
 @media (prefers-reduced-motion: reduce) {
   .mesh-board__quick-create-spinner {
+    animation: none;
+  }
+
+  .mesh-board__card--highlight {
     animation: none;
   }
 }

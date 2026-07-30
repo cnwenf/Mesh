@@ -528,6 +528,9 @@
     "board.compactPrev": "上一列",
     "board.defaultView": "默认视图",
     "board.deleteView": "删除",
+    "board.deleteViewConfirm": "删除",
+    "board.deleteViewConfirmBody": "确定删除视图「{name}」?此操作无法撤销。",
+    "board.deleteViewConfirmTitle": "删除视图",
     "board.discardChanges": "丢弃",
     "board.dragCancelled": "已取消拖拽 {identifier}",
     "board.dragDropped": "已放置 {identifier}",
@@ -609,8 +612,6 @@
     "board.list.title": "标题",
     "board.list.unassigned": "未分配",
     "board.list.updated": "更新时间",
-    "board.listPlaceholderDescription": "列表表格随 issue 投影增量渲染;上方视图配置已生效。",
-    "board.listPlaceholderTitle": "列表布局",
     "board.makeDefault": "设为默认",
     "board.moveBottom": "移至底部",
     "board.moveCancelled": "已取消移动模式",
@@ -639,7 +640,6 @@
     "board.priority.none": "无",
     "board.priority.urgent": "紧急",
     "board.quickAdd": "新增卡片",
-    "board.quickAddDisabled": "快速创建随 issue 投影增量落地",
     "board.renameView": "重命名",
     "board.renameViewTitle": "重命名视图",
     "board.reorder.bottom": "移至底部",
@@ -2449,5 +2449,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "89bbbe4a"
+  "version": "308acfbd"
 }

@@ -42,6 +42,7 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
     isLoading,
     error,
     placeholders,
+    retryExecution,
     reload,
     createTopLevel,
     createReply,
@@ -230,14 +231,25 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
               ),
             )
           )}
-          {/* AI 运行占位:统一五态组件(§9.8),realtime comment.created 到达后替换为真实评论。 */}
+          {/* AI 运行占位:统一五态组件(§9.8)。queued/running/waiting/failed 经
+              execution:{id} 频道生命周期帧迁移(验收必修 3);completed 由 agent
+              评论回流替换;failed 留失败占位 + 重试入口(comment-inbox §4.1)。 */}
           {placeholders.map((placeholder) => (
             <div
               className="mesh-comments__executing"
               key={placeholder.execution_id}
               data-testid={`executing-${placeholder.execution_id}`}
+              title={placeholder.failure_reason ?? undefined}
             >
-              <RunStatus status="running" agentName={placeholder.agent_name} />
+              <RunStatus
+                status={placeholder.status}
+                agentName={placeholder.agent_name}
+                onRetry={
+                  placeholder.status === 'failed'
+                    ? () => void retryExecution(placeholder.execution_id)
+                    : undefined
+                }
+              />
             </div>
           ))}
         </div>

@@ -14,6 +14,7 @@ import {
   addReaction as addReactionApi,
   createComment,
   deleteComment,
+  getComment,
   issueChannel,
   listComments,
   removeReaction as removeReactionApi,
@@ -24,7 +25,9 @@ import {
 import {
   applyCommentsFrame,
   applyExecutionFrame,
+  applyExecutionLifecycleFrame,
   clearPlaceholdersForAgentComment,
+  executionChannel,
 } from './realtime';
 import type { ExecutionPlaceholder } from './realtime';
 import type { Comment, CommentMemberRef, ReactionSummary } from './types';
@@ -127,6 +130,8 @@ export interface UseCommentsData {
   readonly isLoading: boolean;
   readonly error: string | null;
   readonly placeholders: readonly ExecutionPlaceholder[];
+  /** 失败占位重试(§9.8/comment-inbox §4.1):重发触发评论以重新入队执行。 */
+  readonly retryExecution: (executionId: string) => Promise<void>;
   readonly reload: () => void;
   readonly createTopLevel: (body: string, opts: SubmitOptions) => Promise<Comment>;
   readonly createReply: (parent: Comment, body: string, opts: SubmitOptions) => Promise<Comment>;
@@ -190,6 +195,51 @@ export function useCommentsData(
       realtime.client.unsubscribe(channel);
     };
   }, [realtime, issueId]);
+
+  // 执行生命周期频道订阅(验收必修 3):execution.queued 发布于 issue 频道,
+  // 而 started/awaiting_approval/failed/timeout/completed 发布于 execution:{id}
+  // 自身频道(后端 attempts/reaper),须按占位逐一订阅消费,驱动五态迁移,
+  // 否则失败/等待确认的执行永远停在「运行中」(§9.8)。占位集合变化 → 重订阅。
+  const placeholderIdsKey = placeholders.map((item) => item.execution_id).join('|');
+  useEffect(() => {
+    if (realtime === null || placeholders.length === 0) return;
+    const channels = placeholders.map((item) => executionChannel(item.execution_id));
+    channels.forEach((ch) => realtime.client.subscribe(ch));
+    const offFrames = realtime.client.onFrame((frame) => {
+      setPlaceholders((prev) => applyExecutionLifecycleFrame(prev, frame));
+    });
+    return () => {
+      offFrames();
+      channels.forEach((ch) => realtime.client.unsubscribe(ch));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅按占位 id 集合重订阅,函数式更新不依赖 placeholders 引用
+  }, [realtime, placeholderIdsKey]);
+
+  // 失败占位重试:取回触发评论原文并以相同正文/线程重发(§6.9 每条评论的
+  // agent 提及触发一次执行 → 重发即重新入队;新 execution.queued 会新增占位)。
+  const placeholdersRef = useRef(placeholders);
+  placeholdersRef.current = placeholders;
+  const retryExecution = useCallback(
+    async (executionId: string) => {
+      const placeholder = placeholdersRef.current.find((item) => item.execution_id === executionId);
+      if (placeholder === undefined || placeholder.comment_id === null) return;
+      try {
+        const original = await getComment(client, placeholder.comment_id);
+        await createComment(client, issueId, {
+          body_markdown: original.body_markdown,
+          parent_id: original.parent_id,
+        });
+        // 移除失败占位;新执行的 queued 帧会追加新占位。
+        setPlaceholders((prev) => prev.filter((item) => item.execution_id !== executionId));
+      } catch (err: unknown) {
+        toast.addToast(t(err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
+      }
+    },
+    [client, issueId, toast, t],
+  );
 
   const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
@@ -369,6 +419,7 @@ export function useCommentsData(
     isLoading,
     error,
     placeholders,
+    retryExecution,
     reload,
     createTopLevel,
     createReply,

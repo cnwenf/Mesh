@@ -126,7 +126,9 @@ export const ICON_PATHS: Readonly<Record<string, ReadonlyArray<string>>> = Objec
   ],
   flag: ['M5.5 21V4', 'M5.5 4.5h12l-2.5 3.75 2.5 3.75h-12'],
   eye: ['M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z', 'M14.5 12a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z'],
-
+  rotate: ['M20 12a8 8 0 1 1-2.34-5.66', 'M20 4v4.5h-4.5'],
+  'rotate-reset': ['M4 12a8 8 0 1 0 2.34-5.66', 'M4 4v4.5h4.5'],
+  minus: ['M5 12h14'],
 });
 
 export type IconName = keyof typeof ICON_PATHS;

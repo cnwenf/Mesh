@@ -19,7 +19,7 @@ const SLUG = `mesb2${RUN}`;
 const EVIDENCE_DIR = process.env.MES111B2_EVIDENCE_DIR ?? resolve(HERE, 'evidence', 'mes111-b2');
 const UPLOAD_FILE = resolve(HERE, 'fixtures', 'mesh-upload.png');
 
-test.describe.configure({ mode: 'serial' });
+test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
 function emailFor(project: string): string {
   return `mesb2-${project}-${RUN}@corp.example`;
@@ -132,15 +132,117 @@ test('批次②桌面走查:拖拽(鼠标+键盘)/List/详情/评论/附件 + �
   ).toBeVisible({ timeout: 15_000 });
   await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-02-board-keyboard-move.png` });
 
-  // 4. List 布局(G7 必修:占位 → 真实表格)
+  // 4. List 布局(G7 必修:占位 → 真实表格)+ 视图切换数据竞态回归(验收必修 1):
+  //    新视图必须经新视图 id 的投影请求收敛到正确数据;切换落定后旧视图 issues
+  //    端点不得再被请求(在途旧响应一律被丢弃,不得覆盖新视图数据)。
+  const oldViewId = page.url().split('/views/')[1];
   await page.getByTestId('view-create-open').click();
   await page.getByTestId('view-create-name').fill('全部议题(List)');
   await page.getByTestId('view-create-layout').selectOption('list');
   await page.getByTestId('view-create-submit').click();
+  // 等待 URL 切到新视图 id,并以新视图投影响应(而非残留数据)为数据到位信号。
+  await page.waitForURL(
+    (url) => url.toString().includes('/views/') && !url.toString().includes(oldViewId ?? '__none__'),
+    { timeout: 20_000 },
+  );
+  const newViewId = page.url().split('/views/')[1];
+  await page.waitForResponse(
+    (resp) => resp.url().includes(`/views/${newViewId}/issues`) && resp.status() === 200,
+    { timeout: 20_000 },
+  );
   const listTable = page.locator('table').first();
   await expect(listTable).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('联调接口').first()).toBeVisible();
+  // 切换落定后监听:旧视图 issues 端点不得再被请求(实时/重载均不得回流旧视图)。
+  if (oldViewId !== undefined) {
+    const staleAfterSwitch: string[] = [];
+    page.on('request', (req) => {
+      if (req.url().includes(`/views/${oldViewId}/issues`)) staleAfterSwitch.push(req.url());
+    });
+    await page.waitForTimeout(2000);
+    expect(
+      staleAfterSwitch,
+      `切换落定后旧视图 issues 端点仍被请求: ${staleAfterSwitch.join(', ')}`,
+    ).toEqual([]);
+  }
   await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-03-list-layout.png` });
+
+  // 4b. 虚拟化真实布局回归(验收必修 2 / kanban §5.3):经真实 API 批量造 ≥200 卡,
+  //     回到看板视图:列体确定高度链生效 → 内滚成立(scrollHeight > clientHeight),
+  //     窗口化只渲染一部分,滚动后渲染窗口迁移(首卡 posinset > 1)。
+  // 真实 API 基址(与本配置的 webServer env VITE_MESH_API_BASE_URL 一致)。
+  // 写端点限流 120/60s(issue/routes.ts WRITE_LIMIT):分两段(115 + 等待 62s + 95)
+  // 创建 210 卡(≥200 虚拟化阈值),429 时按 Retry-After 退避重试。
+  const API_BASE = 'http://127.0.0.1:8020';
+  const bulk = await page.evaluate(async (base) => {
+    const auth = JSON.parse(localStorage.getItem('mesh.auth.v1') ?? '{}') as {
+      state?: { token?: string };
+    };
+    const token = auth.state?.token ?? '';
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    const me = (await (await fetch(`${base}/api/v1/users/me`, { headers })).json()) as {
+      data: { memberships: { workspace_id: string }[] };
+    };
+    const workspaceId = me.data.memberships[0].workspace_id;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const createOne = async (i: number): Promise<number> => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const resp = await fetch(`${base}/api/v1/workspaces/${workspaceId}/issues`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ title: `批量卡 ${i}` }),
+        });
+        if (resp.status !== 429) return resp.status;
+        const retryAfter = Number(resp.headers.get('retry-after') ?? '5');
+        await sleep(Math.min(retryAfter, 62) * 1000 + 500);
+      }
+      return 429;
+    };
+    const statuses: number[] = [];
+    for (let start = 0; start < 115; start += 15) {
+      const batch = Array.from({ length: Math.min(15, 115 - start) }, (_, j) => start + j);
+      statuses.push(...(await Promise.all(batch.map(createOne))));
+    }
+    await sleep(62_000); // 等限流窗口滑过
+    for (let start = 115; start < 210; start += 15) {
+      const batch = Array.from({ length: Math.min(15, 210 - start) }, (_, j) => start + j);
+      statuses.push(...(await Promise.all(batch.map(createOne))));
+    }
+    const notCreated = statuses.filter((s) => s !== 201);
+    return { ok: notCreated.length === 0, total: statuses.length, notCreated };
+  }, API_BASE);
+  expect(bulk, `批量建卡(210)应全部 201,异常状态: ${bulk.notCreated.join(',')}`).toEqual({
+    ok: true,
+    total: 210,
+    notCreated: [],
+  });
+  if (oldViewId === undefined) throw new Error('board view id missing');
+  await page.goto(`/views/${oldViewId}`);
+  const virtual = page.getByTestId('virtual-column-body').first();
+  await expect(virtual).toBeVisible({ timeout: 30_000 });
+  const metrics = await virtual.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    rendered: el.querySelectorAll('[role="listitem"]').length,
+    setsize: Number(el.querySelector('[role="listitem"]')?.getAttribute('aria-setsize') ?? '0'),
+  }));
+  expect(metrics.setsize).toBeGreaterThanOrEqual(200);
+  expect(metrics.rendered).toBeLessThan(metrics.setsize);
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  await virtual.evaluate((el) => {
+    el.scrollTop = 3000;
+    el.dispatchEvent(new Event('scroll', { bubbles: true }));
+  });
+  await expect
+    .poll(
+      () =>
+        virtual.evaluate((el) =>
+          Number(el.querySelector('[role="listitem"]')?.getAttribute('aria-posinset') ?? '1'),
+        ),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(1);
+  await page.screenshot({ path: `${EVIDENCE_DIR}/desktop-light-03b-virtualization.png` });
 
   // 5. Issue 列表 DataView(标题栏/过滤 chips/表头/批量条/键盘选择)
   await page.goto('/issues');

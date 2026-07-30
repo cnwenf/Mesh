@@ -13,6 +13,8 @@ competitor-parity-checklist.md §2.7/§2.8/§2.10/§2.22 的批次②范围,四�
   目标列/位置 → Enter 确认,§10.2 非拖拽等价路径)。
 - `desktop-light-03-list-layout.png` — List 布局真实表格(G7 必修:占位 → 分组
   表格/列头排序/行内编辑/多选批量)。
+- `desktop-light-03b-virtualization.png` — 虚拟化真实布局回归:208 卡列窗口化
+  渲染(内滚成立、滚动后渲染窗口迁移,kanban §5.3)。
 - `desktop-light-04-issues-bulkbar.png` — issue 列表 DataView:标题栏 + 过滤
   chips + 表头 + 粘底批量条(全选后出现)。
 - `desktop-light-05-detail-tabs.png` — issue 详情 DetailLayout:桌面两栏 + 320px

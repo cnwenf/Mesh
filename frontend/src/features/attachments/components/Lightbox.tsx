@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { Button, Dialog, IconButton, Skeleton } from '../../../design';
+import { Button, Dialog, Icon, IconButton, Skeleton } from '../../../design';
 import {
   doubleTapScale,
   LIGHTBOX_MAX_SCALE,
@@ -128,7 +128,7 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
             disabled={props.imageUrl === null || scale <= MIN_SCALE}
             onClick={() => setScale((value) => Math.max(MIN_SCALE, value - SCALE_STEP))}
           >
-            <span aria-hidden="true">−</span>
+            <Icon name="minus" size={16} />
           </IconButton>
           <IconButton
             label={props.zoomInLabel}
@@ -137,7 +137,7 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
             disabled={props.imageUrl === null || scale >= MAX_SCALE}
             onClick={() => setScale((value) => Math.min(MAX_SCALE, value + SCALE_STEP))}
           >
-            <span aria-hidden="true">+</span>
+            <Icon name="plus" size={16} />
           </IconButton>
           <IconButton
             label={props.rotateLabel}
@@ -146,7 +146,7 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
             disabled={props.imageUrl === null}
             onClick={() => setRotation((value) => (value + 90) % 360)}
           >
-            <span aria-hidden="true">⟳</span>
+            <Icon name="rotate" size={16} />
           </IconButton>
           <IconButton
             label={props.resetLabel}
@@ -158,7 +158,7 @@ export function Lightbox(props: LightboxProps): React.JSX.Element {
               setRotation(0);
             }}
           >
-            <span aria-hidden="true">↺</span>
+            <Icon name="rotate-reset" size={16} />
           </IconButton>
           <Button variant="secondary" size="sm" onClick={props.onLocate} data-testid="lightbox-locate">
             {props.locateLabel}

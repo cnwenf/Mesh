@@ -7,6 +7,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
 import { VirtualColumnBody, shouldVirtualize } from '../VirtualColumnBody';
+import type { VirtualItemA11y } from '../VirtualColumnBody';
 
 /** 可编程 ResizeObserver:捕获回调以注入实测视口高度。 */
 let roCallback: (() => void) | null = null;
@@ -22,8 +23,18 @@ const originalResizeObserver = window.ResizeObserver;
 
 const cards = Array.from({ length: 300 }, (_, i) => ({ id: `c${i}` }));
 
-function renderItem(card: { id: string }): React.JSX.Element {
-  return <div data-testid={`item-${card.id}`}>{card.id}</div>;
+/** 卡片即 listitem,AT 坐标经第三参承载(与 BoardColumns 契约一致)。 */
+function renderItem(card: { id: string }, _index: number, a11y: VirtualItemA11y): React.JSX.Element {
+  return (
+    <div
+      data-testid={`item-${card.id}`}
+      role="listitem"
+      aria-setsize={a11y.setsize}
+      aria-posinset={a11y.posinset}
+    >
+      {card.id}
+    </div>
+  );
 }
 
 function renderVirtual(items = cards, activeCardId: string | null = null) {
@@ -69,6 +80,38 @@ describe('VirtualColumnBody 虚拟化渲染', () => {
   it('空列表渲染 0 项', () => {
     renderVirtual([]);
     expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('落点指示线按 index 移位;null 置于列尾;未提供不渲染', () => {
+    const indicator = <div data-testid="board-drop-indicator" />;
+    const { rerender } = render(
+      <VirtualColumnBody cards={cards} activeCardId={null} renderCard={renderItem} />,
+    );
+    expect(screen.queryByTestId('board-drop-indicator')).toBeNull();
+    // index=2 → top = 2 × 84 = 168px。
+    rerender(
+      <VirtualColumnBody
+        cards={cards}
+        activeCardId={null}
+        renderCard={renderItem}
+        indicatorNode={indicator}
+        indicatorIndex={2}
+      />,
+    );
+    const positioned = screen.getByTestId('board-drop-indicator').closest('div[style*="top"]');
+    expect(positioned?.getAttribute('style')).toContain('top: 168px');
+    // null → 列尾:300 × 84 = 25200px。
+    rerender(
+      <VirtualColumnBody
+        cards={cards}
+        activeCardId={null}
+        renderCard={renderItem}
+        indicatorNode={indicator}
+        indicatorIndex={null}
+      />,
+    );
+    const tail = screen.getByTestId('board-drop-indicator').closest('div[style*="top"]');
+    expect(tail?.getAttribute('style')).toContain('top: 25200px');
   });
 
   it('激活项在视口上方 → 向上滚动定位;在视口内 → 不滚动', () => {

@@ -25,6 +25,7 @@ import { BoardCompact, useContainerWidth } from './BoardCompact';
 import { BoardDragLayer } from './BoardDragLayer';
 import { BoardTouchMoveSheet } from './BoardTouchMoveSheet';
 import { VirtualColumnBody, shouldVirtualize } from './VirtualColumnBody';
+import type { VirtualItemA11y } from './VirtualColumnBody';
 import { useBoardDrag } from './useBoardDrag';
 import type { DragState } from './useBoardDrag';
 import { useBoardKeyboardMove } from './useBoardKeyboardMove';
@@ -140,15 +141,20 @@ function QuickCreate({
     <div className="mesh-board__quick-create">
       <input
         className="mesh-board__quick-create-input"
-        placeholder={'+ ' + t('board.quickAdd')}
+        placeholder={t('board.quickAdd')}
         value={title}
         disabled={!canWrite || pending}
         aria-label={t('board.quickAdd')}
         data-testid={`quick-add-${groupKey}`}
         onChange={(event) => setTitle(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') submit();
-          else if (event.key === 'Escape') setTitle('');
+          // §9.3.3:Enter / Cmd|Ctrl+Enter 提交,Esc 清空(有内容时即「关闭」)。
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            submit();
+          } else if (event.key === 'Escape') {
+            setTitle('');
+          }
         }}
       />
       {pending ? (
@@ -168,16 +174,25 @@ interface BoardCardItemProps {
   readonly columnKey: string;
   readonly isPlaceholder: boolean;
   readonly isSelected: boolean;
+  /** 创建成功后 1.2s 插入高亮(§9.3.4)。 */
+  readonly isHighlighted: boolean;
+  /** 虚拟化窗口的 AT 坐标(仅虚拟化路径提供;§10.2 不破坏读屏集合语义)。 */
+  readonly virtualSetSize?: number;
+  readonly virtualPosInSet?: number;
   readonly onCardPointerDown: (event: React.PointerEvent, cardId: string, identifier: string) => void;
   readonly onCardKeyDown: (event: React.KeyboardEvent, cardId: string, identifier: string, columnKey: string) => void;
 }
 
 function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
-  const { card, columnKey, isPlaceholder, isSelected, onCardPointerDown, onCardKeyDown } = props;
+  const {
+    card, columnKey, isPlaceholder, isSelected, isHighlighted, virtualSetSize, virtualPosInSet,
+    onCardPointerDown, onCardKeyDown,
+  } = props;
   const className = [
     'mesh-board__card',
     isPlaceholder ? 'mesh-board__card--placeholder' : '',
     isSelected ? 'mesh-board__card--selected' : '',
+    isHighlighted ? 'mesh-board__card--highlight' : '',
   ]
     .filter((part) => part !== '')
     .join(' ');
@@ -189,6 +204,8 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
       tabIndex={0}
       aria-roledescription="draggable card"
       aria-keyshortcuts="ArrowUp ArrowDown ArrowLeft ArrowRight Enter Escape"
+      aria-setsize={virtualSetSize}
+      aria-posinset={virtualPosInSet}
       onPointerDown={(event) => onCardPointerDown(event, card.id, card.identifier)}
       onKeyDown={(event) => onCardKeyDown(event, card.id, card.identifier, columnKey)}
     >
@@ -209,6 +226,29 @@ function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
   );
 }
 
+/**
+ * 非虚拟化路径的卡片渲染:落点指示线按 hit.index 插入卡片之间(§9.4.2 插入位
+ * 反馈;index 为 null 时置于列尾)。虚拟化路径由 VirtualColumnBody 内部绝对定位。
+ */
+function renderCardsWithIndicator(
+  cards: readonly BoardCard[],
+  showIndicator: boolean,
+  indicatorIndex: number | null,
+  renderCard: (card: BoardCard) => React.JSX.Element,
+): React.ReactNode[] {
+  const nodes: React.ReactNode[] = cards.map((card) => renderCard(card));
+  if (!showIndicator) return nodes;
+  const indicator = (
+    <div key="__drop-indicator" className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+  );
+  if (indicatorIndex === null || indicatorIndex >= nodes.length) {
+    nodes.push(indicator);
+  } else {
+    nodes.splice(Math.max(indicatorIndex, 0), 0, indicator);
+  }
+  return nodes;
+}
+
 interface BoardColumnCardProps {
   readonly column: BoardColumn;
   readonly label: string;
@@ -218,6 +258,7 @@ interface BoardColumnCardProps {
   readonly moveState: KeyboardMoveState | null;
   readonly onToggleCollapse: (key: string) => void;
   readonly onQuickCreate: (groupKey: string, title: string) => void | Promise<void>;
+  readonly highlightCardId: string | null;
   readonly onCardPointerDown: BoardCardItemProps['onCardPointerDown'];
   readonly onCardKeyDown: BoardCardItemProps['onCardKeyDown'];
 }
@@ -232,13 +273,16 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
     moveState,
     onToggleCollapse,
     onQuickCreate,
+    highlightCardId,
     onCardPointerDown,
     onCardKeyDown,
   } = props;
   const t = useT();
 
   // 拖拽悬停目标列 → 高亮;命中且未被 WIP block → 呈现落点指示线。
-  const isDragTarget = dragState !== null && dragState.hit?.columnKey === column.key;
+  // 回位动画阶段(returning)不再呈现目标列反馈,仅浮层滑回源卡(§9.4.4)。
+  const isDragTarget =
+    dragState !== null && dragState.returning !== true && dragState.hit?.columnKey === column.key;
   const showIndicator = isDragTarget && dragState !== null && !dragState.isBlocked;
   const isMoveTarget = moveState !== null && moveState.targetColumnKey === column.key;
   const stripTone: 'warn' | 'block' | null =
@@ -261,13 +305,16 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
   const wipFull =
     column.wip !== null && column.wip.enforcement === 'block' && column.count >= column.wip.limit;
 
-  const renderCard = (card: BoardCard): React.JSX.Element => (
+  const renderCard = (card: BoardCard, virtualA11y?: VirtualItemA11y): React.JSX.Element => (
     <BoardCardItem
       key={card.id}
       card={card}
       columnKey={column.key}
       isPlaceholder={dragState?.cardId === card.id}
       isSelected={moveState?.cardId === card.id}
+      isHighlighted={highlightCardId === card.id}
+      virtualSetSize={virtualA11y?.setsize}
+      virtualPosInSet={virtualA11y?.posinset}
       onCardPointerDown={onCardPointerDown}
       onCardKeyDown={onCardKeyDown}
     />
@@ -289,7 +336,7 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
           aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', { name: label })}
           onClick={() => onToggleCollapse(column.key)}
         >
-          {column.collapsed ? '▸' : '▾'}
+          <Icon name={column.collapsed ? 'chevron-right' : 'chevron-down'} size={16} />
         </button>
       </header>
       {column.collapsed ? null : (
@@ -299,19 +346,27 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
           role="list"
         >
           {stripTone !== null ? <WipStrip columnKey={column.key} tone={stripTone} /> : null}
-          {showIndicator ? (
-            <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
-          ) : null}
           {cards.length === 0 ? (
-            <p className="mesh-board__column-empty">{t('board.columnEmptyTitle')}</p>
+            <>
+              {showIndicator ? (
+                <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+              ) : null}
+              <p className="mesh-board__column-empty">{t('board.columnEmptyTitle')}</p>
+            </>
           ) : shouldVirtualize(cards.length) ? (
             <VirtualColumnBody
               cards={cards}
               activeCardId={moveState?.cardId ?? null}
-              renderCard={(card) => renderCard(card as BoardCard)}
+              renderCard={(card, _index, virtualA11y) => renderCard(card as BoardCard, virtualA11y)}
+              indicatorNode={
+                showIndicator ? (
+                  <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+                ) : undefined
+              }
+              indicatorIndex={showIndicator ? (dragState?.hit?.index ?? null) : undefined}
             />
           ) : (
-            cards.map((card) => renderCard(card))
+            renderCardsWithIndicator(cards, showIndicator, dragState?.hit?.index ?? null, renderCard)
           )}
           <QuickCreate groupKey={column.key} canWrite={canWrite} onQuickCreate={onQuickCreate} />
         </div>
@@ -329,6 +384,8 @@ interface BoardColumnsProps {
   readonly onToggleCollapse: (key: string) => void;
   readonly onDropCard: (issueId: string, toGroupKey: string, position: number) => void;
   readonly onQuickCreate: (groupKey: string, title: string) => void | Promise<void>;
+  /** 新建卡片 1.2s 插入高亮(§9.3.4);缺省无高亮。 */
+  readonly highlightCardId?: string | null;
 }
 
 export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
@@ -341,6 +398,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
     onToggleCollapse,
     onDropCard,
     onQuickCreate,
+    highlightCardId,
   } = props;
   const t = useT();
   const boardRef = useRef<HTMLDivElement>(null);
@@ -480,6 +538,7 @@ export function BoardColumns(props: BoardColumnsProps): React.JSX.Element {
       moveState={keyboard.moveState}
       onToggleCollapse={onToggleCollapse}
       onQuickCreate={onQuickCreate}
+      highlightCardId={highlightCardId ?? null}
       onCardPointerDown={drag.onPointerDown}
       onCardKeyDown={keyboard.handleCardKeyDown}
     />

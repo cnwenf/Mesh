@@ -4,6 +4,7 @@
  */
 import { useState } from 'react';
 import { Button, Dialog, Icon, Input } from '../../design';
+import type { IconName } from '../../design';
 import { useT } from '../../i18n';
 import type { View } from './types';
 
@@ -19,12 +20,13 @@ interface ViewSwitcherProps {
   readonly onDelete: (view: View) => Promise<void>;
 }
 
-/** 布局图标:统一走 Icon 组件(design-quality §7.1),列表态用 list 图标。 */
-const LAYOUT_ICONS: Record<View['layout'], React.ReactNode> = {
-  board: '▦',
-  list: <Icon name="list" size={16} />,
-  timeline: '⧗',
-  table: '▤',
+/* 布局图标一律经设计图标集(§13.2 禁字符图标)。timeline/table 为预留布局,
+   取语义最近的图标占位。 */
+const LAYOUT_ICONS: Record<View['layout'], IconName> = {
+  board: 'board',
+  list: 'list',
+  timeline: 'calendar',
+  table: 'list',
 };
 
 export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
@@ -46,6 +48,7 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
   const [createVisibility, setCreateVisibility] = useState<View['visibility']>('private');
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<View | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<View | null>(null);
   const [renameName, setRenameName] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -93,12 +96,12 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                 onClick={() => onSelect(view.id)}
               >
                 <span className="mesh-view-switcher__icon" aria-hidden="true">
-                  {LAYOUT_ICONS[view.layout]}
+                  <Icon name={LAYOUT_ICONS[view.layout]} size={16} />
                 </span>
                 <span className="mesh-view-switcher__name">{view.name}</span>
                 {view.is_default ? (
                   <span className="mesh-view-switcher__default" title={t('board.defaultView')}>
-                    <Icon name="star" size={16} filled />
+                    <Icon name="star" size={16} filled label={t('board.defaultView')} />
                   </span>
                 ) : null}
               </button>
@@ -156,8 +159,9 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
                         <button
                           type="button"
                           className="mesh-view-switcher__danger"
+                          data-testid={`view-delete-open-${view.id}`}
                           onClick={() => {
-                            void onDelete(view);
+                            setDeleteTarget(view);
                             setMenuFor(null);
                           }}
                         >
@@ -177,7 +181,7 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
         onClick={() => setCreateOpen(true)}
         data-testid="view-create-open"
       >
-        + {t('board.newView')}
+        <Icon name="plus" size={16} /> {t('board.newView')}
       </Button>
 
       <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title={t('board.newViewTitle')} closeLabel={t('common.close')}>
@@ -239,6 +243,38 @@ export function ViewSwitcher(props: ViewSwitcherProps): React.JSX.Element {
             </Button>
             <Button onClick={() => void submitRename()} disabled={renameName.trim() === '' || busy} data-testid="view-rename-submit">
               {t('common.save')}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* 视图删除确认(§13.3 destructive 明确确认;删除不可撤销) */}
+      <Dialog
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title={t('board.deleteViewConfirmTitle')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-view-switcher__dialog">
+          <p data-testid="view-delete-confirm-body">
+            {t('board.deleteViewConfirmBody', { name: deleteTarget?.name ?? '' })}
+          </p>
+          <div className="mesh-view-switcher__dialog-actions">
+            <Button variant="secondary" onClick={() => setDeleteTarget(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              data-testid="view-delete-confirm"
+              onClick={() => {
+                if (deleteTarget !== null) {
+                  void onDelete(deleteTarget);
+                }
+                setDeleteTarget(null);
+              }}
+            >
+              {t('board.deleteViewConfirm')}
             </Button>
           </div>
         </div>

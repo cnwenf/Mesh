@@ -142,8 +142,14 @@ describe('BoardColumns 渲染', () => {
 });
 
 describe('BoardColumns 指针拖拽(§9.4)', () => {
-  beforeEach(() => ensurePointerEvent());
-  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => {
+    ensurePointerEvent();
+    vi.useFakeTimers(); // 回位动画定时器(§9.4.4)经 fake timers 精确推进
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('阈值进入拖拽 → 浮层出现 → 目标列高亮 + 指示线 → 落点中点定位', () => {
     const { onDropCard, cardA } = setupDragScene();
@@ -159,6 +165,11 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     fireEvent.pointerUp(document, { clientX: 250, clientY: 150 });
     // 中点定位:(10+20)/2 = 15。
     expect(onDropCard).toHaveBeenCalledWith('a', 'done', 15);
+    // §9.4.4 回位动画:浮层先进入 returning(滑回源卡),动画结束后清除。
+    expect(screen.getByTestId('board-drag-clone').className).toContain('mesh-board-drag__clone--returning');
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
   });
 
@@ -177,6 +188,11 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     fireEvent.pointerMove(document, { clientX: 20, clientY: 10 });
     expect(screen.getByTestId('board-drag-clone')).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
+    // 取消也经回位动画后清除(§9.4.4)。
+    expect(screen.getByTestId('board-drag-clone').className).toContain('mesh-board-drag__clone--returning');
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
     expect(onDropCard).not.toHaveBeenCalled();
     expect(screen.getByTestId('board-live').textContent).toContain('Cancelled dragging WEB-a');
@@ -216,6 +232,9 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     expect(screen.queryByTestId('board-drop-indicator')).not.toBeInTheDocument();
     fireEvent.pointerUp(document, { clientX: 150, clientY: 300 });
     expect(onDropCard).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     expect(screen.queryByTestId('board-drag-clone')).not.toBeInTheDocument();
   });
 

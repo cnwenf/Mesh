@@ -330,6 +330,85 @@ describe('useCommentsData', () => {
   });
 });
 
+describe('执行占位五态与失败重试(验收必修 3 / §9.8 / comment-inbox §4.1)', () => {
+  const queuedFrame = {
+    op: 'event',
+    channel: 'issue:iss-1',
+    seq: 2,
+    event: 'execution.queued',
+    payload: { execution_id: 'e1', agent_member_id: 'mem-agent', agent_name: 'rev', comment_id: 'c-1' },
+  } as RealtimeEventFrame;
+  const failedFrame = {
+    op: 'event',
+    channel: 'execution:e1',
+    seq: 3,
+    event: 'execution.failed',
+    payload: { execution_id: 'e1', failure_reason: 'nonzero_exit' },
+  } as RealtimeEventFrame;
+
+  async function seedFailedPlaceholder() {
+    const utils = render();
+    await waitFor(() => expect(utils.result.current.isLoading).toBe(false));
+    act(() => frameListener?.(queuedFrame));
+    expect(utils.result.current.placeholders[0]?.status).toBe('queued');
+    // 占位出现后生命周期订阅生效(onFrame 单槽测试 fake:最新监听为生命周期处理器)。
+    act(() => frameListener?.(failedFrame));
+    expect(utils.result.current.placeholders[0]?.status).toBe('failed');
+    expect(utils.result.current.placeholders[0]?.failure_reason).toBe('nonzero_exit');
+    return utils;
+  }
+
+  it('failed 占位重试:取回原评论并重发(重新入队执行),移除失败占位', async () => {
+    const { result } = await seedFailedPlaceholder();
+    await act(async () => {
+      await result.current.retryExecution('e1');
+    });
+    const urls = calls.map((c) => `${c.method} ${c.url}`);
+    expect(urls.some((u) => u.startsWith('GET') && u.includes('/comments/c-1'))).toBe(true);
+    expect(urls.some((u) => u.startsWith('POST') && u.includes('/issues/iss-1/comments'))).toBe(true);
+    expect(result.current.placeholders.some((p) => p.execution_id === 'e1')).toBe(false);
+  });
+
+  it('重试请求失败 → 失败占位保留(供再次重试)', async () => {
+    const { result } = await seedFailedPlaceholder();
+    failNext = true;
+    await act(async () => {
+      await result.current.retryExecution('e1');
+    });
+    expect(result.current.placeholders).toHaveLength(1);
+    expect(result.current.placeholders[0]?.status).toBe('failed');
+  });
+
+  it('无 comment_id 的占位重试为无操作(不发请求)', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() =>
+      frameListener?.({
+        ...queuedFrame,
+        payload: { execution_id: 'e2', agent_member_id: 'mem-agent', agent_name: 'rev' },
+      }),
+    );
+    act(() =>
+      frameListener?.({ ...failedFrame, payload: { execution_id: 'e2', failure_reason: 'x' } }),
+    );
+    const before = calls.length;
+    await act(async () => {
+      await result.current.retryExecution('e2');
+    });
+    expect(calls.length).toBe(before);
+  });
+
+  it('completed 生命周期帧移除占位(agent 评论回流的补充路径)', async () => {
+    const { result } = render();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() => frameListener?.(queuedFrame));
+    act(() =>
+      frameListener?.({ ...failedFrame, event: 'execution.completed', payload: { execution_id: 'e1' } }),
+    );
+    expect(result.current.placeholders).toHaveLength(0);
+  });
+});
+
 describe('pure helpers', () => {
   it('patchCommentById patches nested replies and returns same ref on miss', () => {
     const withReply: Comment = { ...ROOT, preview_replies: [{ ...ROOT, id: 'c-2', parent_id: 'c-1' }] };

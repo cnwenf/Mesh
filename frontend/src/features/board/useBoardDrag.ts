@@ -29,6 +29,8 @@ export interface DragState {
   readonly hit: HitResult | null;
   readonly isBlocked: boolean;
   readonly isWarn: boolean;
+  /** 松手/取消后的回位动画阶段(§9.4.4:动画回原位);浮层滑回源卡后清除。 */
+  readonly returning?: boolean;
 }
 
 /** 拖拽事件回调(经 ref 持有,渲染层每次渲染更新)。 */
@@ -46,6 +48,9 @@ export interface BoardDragCallbacks {
 
 const DRAG_THRESHOLD = 6;
 const LONG_PRESS_MS = 350;
+
+/** 松手/取消后浮层回位动画时长(§9.4.4;与 board-drag.css 过渡时长一致)。 */
+const SNAPBACK_MS = 180;
 
 interface PendingDrag {
   readonly cardId: string;
@@ -96,6 +101,7 @@ export function useBoardDrag(
   /** 上一次播报的命中列(避免每帧重复播报,§9.4 目标变化才播报)。 */
   const lastHitColumnRef = useRef<string | null>(null);
 
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const commit = useCallback((next: DragState | null) => {
     dragStateRef.current = next;
     setDragState(next);
@@ -105,6 +111,16 @@ export function useBoardDrag(
     if (pendingRef.current?.timer != null) clearTimeout(pendingRef.current.timer);
     pendingRef.current = null;
   }, []);
+
+  /** §9.4.4 回位动画:置 returning → 浮层滑回源卡,动画结束后清除拖拽态。 */
+  const startSnapBack = (prev: DragState): void => {
+    commit({ ...prev, returning: true });
+    if (snapTimerRef.current !== null) clearTimeout(snapTimerRef.current);
+    snapTimerRef.current = setTimeout(() => {
+      // 仍处于回位态才清除(防止极少数情况下新拖拽已起、被旧定时器误清)。
+      if (dragStateRef.current?.returning === true) commit(null);
+    }, SNAPBACK_MS);
+  };
 
   // 处理器闭包经 ref 暴露,供 tracking effect 内的稳定包装器调用。
   const handlersRef = useRef<BoardDragHandlers>(null as unknown as BoardDragHandlers);
@@ -174,7 +190,9 @@ export function useBoardDrag(
             callbacksRef.current.t('board.dragDropped', { identifier: prev.cardIdentifier }),
           );
         }
-        commit(null);
+        // §9.4.4:松手(落位或落空)浮层动画回原位后再清除,非瞬时消失。
+        if (prev !== null) startSnapBack(prev);
+        else commit(null);
       }
       setTracking(false);
     },
@@ -189,15 +207,23 @@ export function useBoardDrag(
           callbacksRef.current.announce(
             callbacksRef.current.t('board.dragCancelled', { identifier: prev.cardIdentifier }),
           );
+          startSnapBack(prev);
+        } else {
+          commit(null);
         }
-        commit(null);
       }
       setTracking(false);
     },
   };
 
-  // 卸载时清掉长按计时器,杜绝卸载后 setState。
-  useEffect(() => clearPending, [clearPending]);
+  // 卸载时清掉长按/回位计时器,杜绝卸载后 setState。
+  useEffect(
+    () => () => {
+      clearPending();
+      if (snapTimerRef.current !== null) clearTimeout(snapTimerRef.current);
+    },
+    [clearPending],
+  );
 
   // tracking 期间挂 document 监听;结束(或卸载)即卸,包装器身份稳定。
   useEffect(() => {

@@ -25,9 +25,17 @@
   transition: transform var(--motion-instant) var(--ease-move);
 }
 
-/* prefers-reduced-motion:副本不做过渡,直接跟手。 */
+/* §9.4.4 回位动画:松手/取消后副本经过渡滑回源卡位置并收阴影;
+   拖拽中保持 --motion-instant 瞬时跟手。 */
+.mesh-board-drag__clone--returning {
+  transition: transform var(--motion-standard) var(--ease-exit);
+  box-shadow: var(--shadow-1);
+}
+
+/* prefers-reduced-motion:副本不做过渡,直接跟手/回位。 */
 @media (prefers-reduced-motion: reduce) {
-  .mesh-board-drag__clone {
+  .mesh-board-drag__clone,
+  .mesh-board-drag__clone--returning {
     transition: none;
   }
 }

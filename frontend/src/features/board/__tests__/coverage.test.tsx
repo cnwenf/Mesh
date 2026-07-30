@@ -203,6 +203,8 @@ describe('BoardPage 视图切换器/操作回调经页面接线', () => {
 
     fireEvent.click(screen.getByTestId('view-menu-v1'));
     fireEvent.click(within(screen.getByTestId("view-menu-list-v1")).getByText('Delete'));
+    // 删除经确认对话框二次确认(§13.3)。
+    fireEvent.click(screen.getByTestId('view-delete-confirm'));
     await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
   });
 
@@ -279,6 +281,8 @@ describe('ViewSwitcher 覆盖补强', () => {
 
     fireEvent.click(screen.getByTestId('view-menu-v1'));
     fireEvent.click(screen.getByText('Delete'));
+    // 删除先弹确认(§13.3),确认后才回调。
+    fireEvent.click(screen.getByTestId('view-delete-confirm'));
     expect(onDelete).toHaveBeenCalled();
 
     fireEvent.click(screen.getByTestId('view-menu-v1'));

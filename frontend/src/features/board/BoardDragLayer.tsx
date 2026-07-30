@@ -16,17 +16,24 @@ interface BoardDragLayerProps {
 
 export function BoardDragLayer({ dragState }: BoardDragLayerProps): React.JSX.Element {
   // 父级(BoardColumns)仅在 dragState 非空时渲染本组件,故此处无需空判。
-  const { sourceRect, pointerX, pointerY, cardIdentifier } = dragState;
+  const { sourceRect, pointerX, pointerY, cardIdentifier, returning } = dragState;
   const offsetX = sourceRect.width / 2;
   const offsetY = sourceRect.height / 2;
+  // §9.4.4 回位动画:returning 时浮层经 CSS 过渡滑回源卡位置并恢复原始尺寸。
+  const transform =
+    returning === true
+      ? `translate(${sourceRect.left}px, ${sourceRect.top}px) scale(1)`
+      : `translate(${pointerX - offsetX}px, ${pointerY - offsetY}px) scale(0.97)`;
+  const cloneClass =
+    returning === true ? 'mesh-board-drag__clone mesh-board-drag__clone--returning' : 'mesh-board-drag__clone';
   return createPortal(
     <div className="mesh-board-drag__layer" aria-hidden="true">
       <div
-        className="mesh-board-drag__clone"
+        className={cloneClass}
         data-testid="board-drag-clone"
         style={{
           width: `${sourceRect.width}px`,
-          transform: `translate(${pointerX - offsetX}px, ${pointerY - offsetY}px) scale(0.97)`,
+          transform,
         }}
       >
         <span className="mesh-board__card-id">{cardIdentifier}</span>

@@ -38,7 +38,7 @@ import {
 import { BoardColumns } from './BoardColumns';
 import { BoardListView } from './BoardListView';
 import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
-import { columnsForView, deriveColumns } from './columns';
+import { columnsForView, deriveColumns, isRenderableLayout } from './columns';
 import { FilterConfigPanel } from './FilterConfigPanel';
 import { fetchViewIssues, moveCard } from './projection';
 import type { BoardCard, BoardGroup, MovePlan, ViewProjection } from './projection';
@@ -96,6 +96,9 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
   'project',
   'label',
 ];
+
+/** 新建卡片插入高亮保持时长(§9.3.4)。 */
+const HIGHLIGHT_MS = 1200;
 
 /** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
 export async function loadAllGroups(
@@ -161,8 +164,26 @@ export function BoardPage(): React.JSX.Element {
     version: number;
   } | null>(null);
 
+  // 新建卡片 1.2s 插入高亮(§9.3.4):创建成功并重拉后闪烁新卡。
+  const [highlightCardId, setHighlightCardId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const flashHighlight = useCallback((cardId: string) => {
+    setHighlightCardId(cardId);
+    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightCardId(null), HIGHLIGHT_MS);
+  }, []);
+
   const boardGroupsRef = useRef(boardGroups);
   boardGroupsRef.current = boardGroups;
+
+  // 投影加载竞态防护(验收必修 1):loadSeq 单调递增,响应写回前校验序号与当前
+  // 视图 id——切换视图后,旧视图的在途/分页响应一律丢弃,不得覆盖新视图数据。
+  const loadSeqRef = useRef(0);
+  const selectedViewIdRef = useRef<string | null>(null);
+  // 视图加载键(id + 投影相关配置):views 列表 refetch 使选中视图对象换新引用但
+  // 内容未变时不重载(杜绝向旧视图 issues 端点发多余请求);配置变更(保存视图)
+  // 键变 → 正常重载。
+  const lastLoadedKeyRef = useRef<string | null>(null);
 
   // 当前生效分组(草稿 group_by;须在早期返回之前的 hooks 区计算,§ Rules of Hooks)。
   const effectiveGroupBy = draft?.group_by ?? 'state_category';
@@ -228,6 +249,7 @@ export function BoardPage(): React.JSX.Element {
     }
     return views.find((view) => view.is_default) ?? views[0] ?? null;
   }, [views, viewId]);
+  selectedViewIdRef.current = selectedView?.id ?? null;
 
   useEffect(() => {
     setDraft(selectedView === null ? null : draftFromView(selectedView));
@@ -246,13 +268,17 @@ export function BoardPage(): React.JSX.Element {
   // 切换视图时由下方 effect 先清空分组,走骨架屏路径。
   const loadBoard = useCallback(
     async (view: View) => {
+      const seq = ++loadSeqRef.current;
       if (boardGroupsRef.current.length === 0) setBoardStatus('loading');
       try {
         const projection = await loadAllGroups(client, view.id);
+        // 过期写回防护:加载期间视图已切换或已有更新的加载发起 → 丢弃结果。
+        if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
         setBoardGroups(projection.groups);
         setColumnTargetStatus(projection.column_target_status);
         setBoardStatus('ready');
       } catch (error) {
+        if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
         setBoardStatus('error');
         toastError(error);
       }
@@ -261,13 +287,29 @@ export function BoardPage(): React.JSX.Element {
   );
 
   useEffect(() => {
-    if (selectedView !== null && selectedView.layout === 'board') {
-      // 视图切换:清空旧视图分组并立即置 loading(避免短暂展示上一视图数据,
-      // §9.7 同类约束);boardGroupsRef 要到下一次渲染才同步,故显式置态。
+    // board 与 list 布局均为可渲染投影(§3.2 逐页差距:list 为真实表格布局,
+    // 不再是占位空态),选中视图变化 → 拉取投影。切换视图时使旧加载失效
+    // (loadSeq 递增于 loadBoard)并清空分组、立即置 loading,避免短暂展示
+    // 上一视图数据(§9.7 同类约束)。timeline/table 未实现 → 清空走占位分支。
+    if (selectedView !== null && isRenderableLayout(selectedView.layout)) {
+      const key =
+        selectedView.id +
+        JSON.stringify([
+          selectedView.layout,
+          selectedView.group_by,
+          selectedView.sub_group_by,
+          selectedView.filters,
+          selectedView.sort,
+          selectedView.board_settings,
+        ]);
+      if (lastLoadedKeyRef.current === key) return; // 同视图同配置(列表 refetch 换引用):不重载
+      lastLoadedKeyRef.current = key;
       setBoardGroups([]);
       setBoardStatus('loading');
       void loadBoard(selectedView);
     } else {
+      loadSeqRef.current += 1; // 使任何在途加载失效
+      lastLoadedKeyRef.current = null;
       setBoardGroups([]);
       setBoardStatus('ready');
     }
@@ -278,13 +320,18 @@ export function BoardPage(): React.JSX.Element {
   filtersRef.current = selectedView?.filters ?? {};
   useEffect(() => {
     if (realtime === null || selectedView === null || membership === null) return;
-    if (selectedView.layout !== 'board') return;
+    // board 与 list 布局均订阅增量合并(§3.5):list 同样是投影视图,
+    // issue.* 帧按 filters 重判归属,单卡插入/移动/移除,refetch 帧重拉。
+    if (!isRenderableLayout(selectedView.layout)) return;
     const wsChannel = workspaceIssuesChannel(membership.workspace_id);
     const vChannel = viewChannel(selectedView.id);
     realtime.client.subscribe(wsChannel);
     realtime.client.subscribe(vChannel);
     const offFrame = realtime.client.onFrame((frame) => {
       if (frame.channel !== wsChannel && frame.channel !== vChannel) return;
+      // 视图切换后晚到的帧属过期闭包:跳过(新视图订阅随即接管),
+      // 杜绝以旧视图 id 发起多余投影请求(验收必修 1 竞态收口)。
+      if (selectedViewIdRef.current !== selectedView.id) return;
       if (frame.event === 'view.presence') return;
       // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
       // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
@@ -692,8 +739,9 @@ export function BoardPage(): React.JSX.Element {
                 ? { project_id: groupKey === '__none__' ? null : groupKey }
                 : {};
     try {
-      await createIssue(client, workspaceId, { title, ...inherited });
+      const created = await createIssue(client, workspaceId, { title, ...inherited });
       await loadBoard(selectedView);
+      flashHighlight(created.id);
     } catch (error) {
       toastError(error);
     }
@@ -820,17 +868,29 @@ export function BoardPage(): React.JSX.Element {
                 void handleDropCard(issueId, toGroupKey, position)
               }
               onQuickCreate={(groupKey, title) => handleQuickCreate(groupKey, title)}
+              highlightCardId={highlightCardId}
             />
           )
         ) : selectedView.layout === 'list' ? (
-          <BoardListView
-            view={previewView}
-            groups={displayGroups}
-            columnTargetStatus={columnTargetStatus}
-            canWrite={canWrite}
-            onOpenIssue={(id: string) => navigate(`/issues/${id}`)}
-            onChanged={() => void loadBoard(selectedView)}
-          />
+          boardStatus === 'loading' ? (
+            <Skeleton loadingLabel={t('common.loading')} className="mesh-board__skeleton" />
+          ) : boardStatus === 'error' ? (
+            <ErrorState
+              title={t('state.errorTitle')}
+              description={t('state.errorDescription')}
+              retryLabel={t('common.retry')}
+              onRetry={() => void loadBoard(selectedView)}
+            />
+          ) : (
+            <BoardListView
+              view={previewView}
+              groups={displayGroups}
+              columnTargetStatus={columnTargetStatus}
+              canWrite={canWrite}
+              onOpenIssue={(id: string) => navigate(`/issues/${id}`)}
+              onChanged={() => void loadBoard(selectedView)}
+            />
+          )
         ) : (
           <EmptyState
             title={t('board.notImplementedTitle')}

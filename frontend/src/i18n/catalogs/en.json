@@ -528,6 +528,9 @@
     "board.compactPrev": "Previous column",
     "board.defaultView": "Default view",
     "board.deleteView": "Delete",
+    "board.deleteViewConfirm": "Delete",
+    "board.deleteViewConfirmBody": "Delete view \"{name}\"? This cannot be undone.",
+    "board.deleteViewConfirmTitle": "Delete view",
     "board.discardChanges": "Discard",
     "board.dragCancelled": "Cancelled dragging {identifier}",
     "board.dragDropped": "Dropped {identifier}",
@@ -609,8 +612,6 @@
     "board.list.title": "Title",
     "board.list.unassigned": "Unassigned",
     "board.list.updated": "Updated",
-    "board.listPlaceholderDescription": "The list table renders with the issue projection increment; the view configuration above is already active.",
-    "board.listPlaceholderTitle": "List layout",
     "board.makeDefault": "Set as default",
     "board.moveBottom": "Move to bottom",
     "board.moveCancelled": "Move mode cancelled",
@@ -639,7 +640,6 @@
     "board.priority.none": "None",
     "board.priority.urgent": "Urgent",
     "board.quickAdd": "New card",
-    "board.quickAddDisabled": "Quick create arrives with the issue projection increment",
     "board.renameView": "Rename",
     "board.renameViewTitle": "Rename view",
     "board.reorder.bottom": "moved to bottom",
@@ -2449,5 +2449,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "eab0ce4f"
+  "version": "8125b302"
 }
