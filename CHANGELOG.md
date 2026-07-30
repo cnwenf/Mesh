@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-30
+
+前端登录阻断级缺陷修复(MES-129:HTTP 非安全上下文安全上下文无关 uuidv4,登录及一切写请求在 HTTP 部署下恢复可用)为主干,含集成消息队列与命令平面(MES-88)、钉钉出站与互动卡片(MES-89)、前端设计系统底座(MES-111 Phase 1)、第三方设计资产许可基线(MES-135 阶段一)与多项测试/夹具稳健性与文案一致性修复。
+
 ### Added
 
 - **前端设计系统底座(MES-111 Phase 1,design-quality.md §5–§9)**:按设计优化 Spec 落地逐页工作所依赖的设计系统基础层——
@@ -34,6 +38,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 - **runtime 终态单一扇出契约补齐**:`execution.finished` 内部事件此前仅 daemon 上报终态路径发出;console 取消(queued/awaiting_approval 直终态)、reaper(cancelling→cancelled、max_retries→failed)、审批拒绝四处补发(幂等键去重),使「所有终态下游消费者一律订阅本事件」契约闭合(队列项终态回写依赖之)。
 - **e2e fixture backend 路径推导稳健化(MES-121,MES-88 验收非阻塞 LOW)**:`tests/e2e/conftest.py`、`test_integrations_e2e.py`、`test_integration_queue_e2e.py` 三处子进程 fixture 推导 backend 根**少一层 `dirname`**(指向 `backend/tests`),PYTHONPATH 钉子落空,共享机上子进程从其他检出的过期 editable 安装解析 `mesh`(队列 e2e 假阴性根因:worker 加载无 `mesh.integrations` 的旧代码,派发静默不发生);新增 `tests/conftest.resolve_backend_dir`(自 `__file__` 上溯锚定 `pyproject.toml`,不依赖调用方 cwd、不手数层数,找不到 manifest 即报错而非静默指错)+ `tests/e2e/conftest.pin_code_under_test` 统一五处子进程(api/gateway/三 worker fixture)PYTHONPATH 钉定本检出,队列 worker 裸 `python` 改 `sys.executable`(杜绝 PATH 上他工作区解释器),过期路径过滤按 `/workdir/Mesh/backend` 语义匹配任意深度沙箱布局。异构 cwd / 深层锚 / 无 manifest 报错 / 钉子排序与去重单测覆盖;本机(带过期 editable 安装的共享环境)队列 e2e 由基线 4/5 失败转 5/5 绿。
 - **/stop·/btw 命令反馈文案统一中文口径(MES-121,MES-88 验收非阻塞 LOW)**:命令平面即时段反馈与 `/btw` 全部文案原为英文,与终态段(`queue_events.stopped_feedback_text`「🛑 已停止任务…」)及 ack「✅ 已接收,处理中」的中文口径不一致;按 integrations.md §3.7 钉死文案逐条对齐——即时段「⏳ 正在停止任务「…」…」「⏳ 正在停止任务「…」…,并已取消 N 条排队消息」「已取消 N 条排队消息」「任务正在停止中」「当前没有进行中的任务」「当前没有进行中或排队的任务(你的)」,`/btw`「已补充给正在处理的任务(将在下一步生效)」「任务正在停止,无法补充;停止完成后可重新派发」「当前没有进行中的任务,已按新消息排队」「补充已达上限,请直接新建任务说明」,建链提示与 `/help` 同口径;即时段文案函数 `stopping_feedback_text`/`stopping_with_cancelled_feedback_text` 与终态段同构(同「…」摘要引述、⏳→🛑 阶段符)。队列/命令平面已验收行为零改动(仅字面量语言统一);新增文案一致性单测(Spec 字面量钉死 + 两阶段同语种同引述断言 + 全量反馈 CJK 扫描)。
+
+### 验证
+
+本版 MES-129 经验收员独立复验:本机全量单测 3025/3025 全绿(整体 lines 97.79% / branches 91.27%;`uuid.ts` 四项 100%;变更语句 29/29 = 100%,per-file ≥90% 与变更代码 ≥90% 双门禁通过),typecheck / eslint(0 error)绿;真实 e2e `npm run test:e2e:mes129` 3/3(LAN IP HTTP 非安全上下文前置断言 `isSecureContext=false` / `randomUUID` 缺失 + 真实后端栈 + 逐条 psql 落库校验);验收员独立真浏览器走查注册/登录/建工作区/建 issue/发评论全链路 ALL PASS 且全部写操作落库;全仓代码/注释/文档/提交历史/分支名无参考源泄漏;PR #98 CI 6/6 绿合入 main,主干 frontend CI(run 30551616656)全绿。MES-88 / MES-89 / MES-111 / MES-135 与各项修复均经各自验收与 CI 验证后合入(见上各条)。
 
 ## [0.23.1] - 2026-07-30
 
