@@ -127,22 +127,25 @@ class AttemptSecurity:
             await self.broker.start()
 
     def _broker_grants(self) -> dict:
-        """Map frozen capability_grants onto broker action names."""
-        mapping = {
-            "issue:read": ("issue.read", "read_only"),
-            "issue:comment:write": ("issue.comment", "write"),
-            "issue:status:write": ("issue.status", "write"),
-            "project:read": ("project.read", "read_only"),
-        }
+        """The frozen AttemptSpec's capability_grants are keyed BY BROKER
+        ACTION NAME (§3.3 — the server freezes e.g. ``issue.read`` /
+        ``squad.subtasks``; triggers.py mirrors the task-token scopes).
+        Pass through the well-formed ones; unknown keys are dropped
+        (fail-closed — the gate table remains the unique mapping)."""
+        from mesh_runtime.broker import GATE_TABLE
+
         grants: dict = {}
         raw = self.config.grants
         if isinstance(raw, dict):
-            for scope, (action, default_perm) in mapping.items():
-                perm = raw.get(scope)
-                if perm in ("read_only", "write"):
+            for action, perm in raw.items():
+                gate = GATE_TABLE.get(action)
+                if (
+                    isinstance(action, str)
+                    and gate is not None
+                    and gate.via == "broker"
+                    and perm in ("read_only", "write")
+                ):
                     grants[action] = perm
-                elif perm == "confirm_required" and default_perm == "write":
-                    grants[action] = "write"
         return grants
 
     @property

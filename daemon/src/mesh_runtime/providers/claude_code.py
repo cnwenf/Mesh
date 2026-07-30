@@ -95,9 +95,8 @@ _STDERR_CAP_BYTES = 64 * 1024
 #: non-root (bypassPermissions is refused as root), so the fixture must too.
 _SANDBOX_PROBE_UID = 65534
 
-#: Sandbox-side mount point of the attempt run dir (sandbox_init bind-mounts
-#: ``<attempt_root>/run`` read-only at this path).
-SANDBOX_RUN_DIR = "/run"
+#: Sandbox-side worktree cwd (sandbox_init bind-mounts the checkout rw here).
+#: SANDBOX_RUN_DIR lives in provider_env (canonical definition).
 SANDBOX_WORKTREE_CWD = "/worktree"
 
 #: Tool name the provider uses for platform task broker calls (§3.3): the ONLY

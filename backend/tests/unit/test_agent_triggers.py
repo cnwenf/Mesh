@@ -153,9 +153,25 @@ async def test_enqueue_writes_execution_event_with_snapshot_and_key(session_fact
     assert snapshot["skill_versions"] == {}
     assert snapshot["repo"] is None
     # §6.4 / §6.11 strict typing (empty until skill.md, but strict arrays).
+    # required_capabilities stays EMPTY (claim matching) — the §3.3 broker
+    # grants are authorization, not scheduling, and must never pollute it.
     assert payload["required_capabilities"] == []
-    assert snapshot["capability_grants"] == []
     assert payload["label_requirements"] == []
+    # §3.3 / §2.2: every agent execution freezes the default broker grants
+    # (issue read/comment/status + project read); squad grants are absent
+    # for a non-squad assign trigger.
+    grants = {g["capability"]: g["permission"] for g in snapshot["capability_grants"]}
+    assert grants == {
+        "issue.read": "read_only",
+        "issue.comment": "write",
+        "issue.status": "write",
+        "project.read": "read_only",
+    }
+    assert "squad.subtasks" not in grants
+    # §2.1 digest covers the final (grants-included) content.
+    from mesh.agent.snapshot import compute_snapshot_digest
+
+    assert snapshot["digest"] == compute_snapshot_digest(snapshot)
 
     # §6.15 untrusted issue context is structurally isolated.
     context = payload["task_spec"]["untrusted_context"]
@@ -167,6 +183,60 @@ async def test_enqueue_writes_execution_event_with_snapshot_and_key(session_fact
     assert len(queued) == 1
     assert queued[0].payload["channel"] == f"issue:{issue['id']}:runs"
     assert queued[0].payload["data"]["agent_id"] == agent["id"]
+
+
+@pytest.mark.unit
+async def test_squad_orchestrator_trigger_freezes_squad_grants(session_factory):
+    """§2.2 S-05 / §3.3: a squad-dispatched assign carrying squad_role=
+    orchestrator freezes the squad broker grants (decompose + roster read)
+    INTO the snapshot — and still never touches required_capabilities."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    payload = _assign_payload(issue_id=issue["id"], agent=agent)
+    payload["squad_task_id"] = str(uuid.uuid4())
+    payload["squad_role"] = "orchestrator"
+    await _run_handler(session_factory, workspace, payload)
+
+    events = await _enqueue_events(session_factory, workspace)
+    assert len(events) == 1
+    event_payload = events[0].payload
+    snapshot = event_payload["config_snapshot"]
+    grants = {g["capability"]: g["permission"] for g in snapshot["capability_grants"]}
+    assert grants["squad.subtasks"] == "write"
+    assert grants["squad.members"] == "read_only"
+    assert grants["issue.comment"] == "write"  # defaults still present
+    assert event_payload["required_capabilities"] == []
+    # The frozen task_spec carries the correlation the claim-time scope
+    # widening reads back (squad_role=orchestrator).
+    assert event_payload["task_spec"]["squad_role"] == "orchestrator"
+    from mesh.agent.snapshot import compute_snapshot_digest
+
+    assert snapshot["digest"] == compute_snapshot_digest(snapshot)
+
+
+@pytest.mark.unit
+async def test_squad_executor_trigger_gets_no_squad_grants(session_factory):
+    """Executor/aggregator wakes freeze ONLY the default broker grants."""
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_owner(session_factory, workspace)
+    agent = await _make_agent(session_factory, workspace, owner)
+    issue = await _make_issue(session_factory, workspace, owner)
+
+    payload = _assign_payload(issue_id=issue["id"], agent=agent)
+    payload["squad_task_id"] = str(uuid.uuid4())
+    payload["squad_role"] = "executor"
+    await _run_handler(session_factory, workspace, payload)
+
+    events = await _enqueue_events(session_factory, workspace)
+    grants = {
+        g["capability"] for g in events[0].payload["config_snapshot"]["capability_grants"]
+    }
+    assert "squad.subtasks" not in grants
+    assert "squad.members" not in grants
+    assert "issue.comment" in grants
 
 
 @pytest.mark.unit

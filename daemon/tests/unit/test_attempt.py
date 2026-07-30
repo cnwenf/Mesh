@@ -185,6 +185,63 @@ class TestSupervise:
         entry = await journal.get("att-1")
         assert entry.status == "lease_lost"
 
+    async def test_apply_token_rotation_pushes_token_to_broker_and_redactor(self):
+        """§2.2/§2.6: the rotated task token from renew-lease must reach the
+        broker (old token is revoked server-side) and the redactor."""
+
+        class FakeBroker:
+            def __init__(self):
+                self.rotated: list[str] = []
+
+            async def rotate_task_token(self, token: str) -> None:
+                self.rotated.append(token)
+
+        class FakeSecurity:
+            def __init__(self, broker):
+                self.broker = broker
+
+        broker = FakeBroker()
+        redactor = RedactionPipeline(secrets=["mesh_task_initial"], rule_version="v1")
+        sup = make_supervisor(
+            RenewOkApi(), journal, FakeClock(),
+            security=FakeSecurity(broker), redactor=redactor,
+        )
+        await sup._apply_token_rotation(
+            LeaseInfo(lease_seq=2, lease_expires_at="t", task_token="mesh_task_rotated_2")
+        )
+        assert broker.rotated == ["mesh_task_rotated_2"]
+        assert redactor.redact("leak mesh_task_rotated_2 end").hit_count == 1
+
+    async def test_apply_token_rotation_no_token_is_noop(self, journal):
+        """A renew response without a fresh token leaves broker/redactor alone."""
+
+        class FakeBroker:
+            def __init__(self):
+                self.rotated: list[str] = []
+
+            async def rotate_task_token(self, token: str) -> None:
+                self.rotated.append(token)
+
+        class FakeSecurity:
+            def __init__(self, broker):
+                self.broker = broker
+
+        broker = FakeBroker()
+        redactor = RedactionPipeline(secrets=[], rule_version="v1")
+        sup = make_supervisor(
+            RenewOkApi(), journal, FakeClock(),
+            security=FakeSecurity(broker), redactor=redactor,
+        )
+        await sup._apply_token_rotation(LeaseInfo(lease_seq=2, lease_expires_at="t"))
+        assert broker.rotated == []
+
+    async def test_apply_token_rotation_without_security_or_redactor(self, journal):
+        """Degrades safely when the attempt has no broker / no redactor."""
+        sup = make_supervisor(RenewOkApi(), journal, FakeClock())
+        await sup._apply_token_rotation(
+            LeaseInfo(lease_seq=2, lease_expires_at="t", task_token="mesh_task_x")
+        )  # no exception — nothing to rotate into
+
     async def test_renew_period_capped(self, journal, ctx):
         sup = make_supervisor(RenewOkApi(), journal, FakeClock())
         assert sup.renew_period(120.0) == 40.0  # min(40, 40)

@@ -40,9 +40,14 @@ import httpx
 
 #: Write actions that MUST carry a caller-supplied idempotency key (§3.3):
 #: retries replay the cached result instead of re-executing the side effect.
-_IDEMPOTENT_ACTIONS = frozenset({"issue.comment", "issue.status"})
+_IDEMPOTENT_ACTIONS = frozenset({"issue.comment", "issue.status", "squad.subtasks"})
 _IDEMPOTENCY_KEY_MAX = 200
 _IDEMPOTENCY_CACHE_MAX = 256
+
+#: Decomposition payload caps (defense in depth; the server re-validates the
+#: full schema and enforces depth/cycle/membership rules on its side).
+_SUBTASKS_MAX = 16
+_PLAN_MAX_CHARS = 8000
 
 _GATE_BROKER = "broker"
 _GATE_MOUNT = "mount"
@@ -66,6 +71,13 @@ GATE_TABLE: dict[str, GateSpec] = {
     "issue.comment": GateSpec("write", _GATE_BROKER, scope="issue:comment:write"),
     "issue.status": GateSpec("write", _GATE_BROKER, scope="issue:status:write"),
     "project.read": GateSpec("read_only", _GATE_BROKER, scope="project:read"),
+    # Current squad task operations (§2.2 S-05, squad.md §5.3): the leader's
+    # orchestrator attempt reads the squad roster and submits its
+    # decomposition of the CURRENT task through the task-principal routes.
+    # The server verifies the attempt's agent IS the task's orchestrator —
+    # the broker only forwards; scope + grant + server authz all apply.
+    "squad.members": GateSpec("read_only", _GATE_BROKER, scope="squad:task:read"),
+    "squad.subtasks": GateSpec("write", _GATE_BROKER, scope="squad:task:decompose"),
     "cross_issue.write": GateSpec("confirm_required", _GATE_ACTION),
     "git.push": GateSpec("confirm_required", _GATE_ACTION),
     "egress.grant": GateSpec("confirm_required", _GATE_ACTION),
@@ -293,15 +305,19 @@ class ToolBrokerServer:
                 await self._send(writer, {"id": call_id, "ok": True, "result": cached})
                 return
         try:
+            # Issue actions hit the TASK-PRINCIPAL routes (/api/v1/task/...):
+            # regular console routes reject mesh_task_ tokens (auth.md
+            # §2.5.1), so the broker must use the endpoints that explicitly
+            # accept them and re-validate scope server-side.
             if method == "issue.read":
-                response = await self._mesh_get(f"/api/v1/issues/{issue_id}")
+                response = await self._mesh_get(f"/api/v1/task/issues/{issue_id}")
             elif method == "issue.comment":
                 body = params.get("body")
                 if not isinstance(body, str) or not body:
                     await self._send(writer, self._reply(call_id, None, "invalid_params"))
                     return
                 response = await self._mesh_post(
-                    f"/api/v1/issues/{issue_id}/comments", {"body": body[:8000]}
+                    f"/api/v1/task/issues/{issue_id}/comments", {"body": body[:8000]}
                 )
             elif method == "issue.status":
                 status = params.get("status")
@@ -309,11 +325,26 @@ class ToolBrokerServer:
                     await self._send(writer, self._reply(call_id, None, "invalid_params"))
                     return
                 response = await self._mesh_patch(
-                    f"/api/v1/issues/{issue_id}", {"status": status}
+                    f"/api/v1/task/issues/{issue_id}/status", {"status": status}
                 )
             elif method == "project.read":
                 project_id = params.get("project_id")
                 response = await self._mesh_get(f"/api/v1/projects/{project_id}")
+            elif method == "squad.members":
+                response = await self._mesh_get("/api/v1/task/squad/members")
+            elif method == "squad.subtasks":
+                subtasks = params.get("subtasks")
+                if not isinstance(subtasks, list) or not subtasks or not all(
+                    isinstance(s, dict) and isinstance(s.get("title"), str) and s["title"]
+                    for s in subtasks
+                ):
+                    await self._send(writer, self._reply(call_id, None, "invalid_params"))
+                    return
+                body: dict = {"subtasks": subtasks[:_SUBTASKS_MAX]}
+                plan = params.get("plan_markdown")
+                if isinstance(plan, str) and plan:
+                    body["plan_markdown"] = plan[:_PLAN_MAX_CHARS]
+                response = await self._mesh_post("/api/v1/task/squad/subtasks", body)
             else:  # pragma: no cover — gate table drives reachability
                 await self._send(writer, self._reply(call_id, None, "unknown_action"))
                 return

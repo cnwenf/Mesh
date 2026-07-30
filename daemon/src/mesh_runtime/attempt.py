@@ -233,6 +233,7 @@ class AttemptSupervisor:
                     async with ctx.lock:
                         info = await self._api.renew_lease(ctx.attempt_id, lease_seq=ctx.lease_seq)
                         ctx.lease_seq = info.lease_seq
+                    await self._apply_token_rotation(info)
                     consecutive_failures = 0
                 except LeaseConflictError:
                     await self._on_lease_lost(ctx)
@@ -244,6 +245,20 @@ class AttemptSupervisor:
                         return
         except asyncio.CancelledError:
             raise
+
+    async def _apply_token_rotation(self, info) -> None:
+        """§2.2/§2.6: renew-lease rotates the task token in the SAME server
+        transaction — the OLD plaintext is revoked there, so the broker must
+        switch to the fresh token or every gated call answers 401 for the
+        rest of the attempt; the rotated plaintext also joins the redaction
+        pipeline (defense in depth, §5.4.7)."""
+        token = getattr(info, "task_token", None)
+        if not token:
+            return
+        if self._security is not None and self._security.broker is not None:
+            await self._security.broker.rotate_task_token(token)
+        if self._redactor is not None:
+            self._redactor.add_secret(token)
 
     async def _on_lease_lost(self, ctx: AttemptContext) -> None:
         # Fencing: kill the provider, stop reporting, leave the attempt to the

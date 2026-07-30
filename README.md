@@ -31,6 +31,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 ## 实现状态
 
 > Runtime 服务端协议已实现；本地执行体 `mesh-runtime` 安全评审已通过、开发放行——A1 执行体骨架(fake provider、claim→执行→回流状态机、崩溃对账、脱敏日志回流)、**A2 安全执行面**(真实 Linux namespace/cgroup 沙箱 fail-closed、S-01 不可信配置隔离、S-02 唯一 ToolBroker 闸门、S-04 egress gateway、checkout 只读凭证分离、S-08 幂等清理；ISO-01～14 隔离红线负向矩阵真实环境全绿、与 server P0 契约真实联调通过，证据见 `docs/evidence/mes-100/`)与 **A3 真实 provider**(钉死版本 Claude Code 适配——capability manifest + SHA-256/版本/flags fail-closed 探测、§1.4 固定 argv + prompt 只走 stdin、§3.9 严格 stream-json 解析、S-07 预算实时截断、沙箱内只读 CA 信任库、session/usage/result schema v1 回流；真实 LLM e2e 全绿，证据见 `docs/evidence/mes-101/`)已落地于 [`daemon/`](daemon/README.md)，权威设计见 [`runtime-executor.md`](docs/specs/features/runtime-executor.md)；真实 provider 的生产启用以最终安全复测通过为准。
+>
+> **命脉层真 LLM 全链路 e2e(MES-95，已入库)**:两层测试策略——常规 CI(`backend-ci`/`daemon-ci`)用 fake provider 覆盖状态机/崩溃恢复/隔离红线/脱敏/预算，**fake 永不冒充命脉测试**;命脉层 `.github/workflows/real-llm.yml`(仅手动/定时触发、受保护 self-hosted runner、`concurrency` 串行、凭证仅 secrets、外部 PR 绝不执行)跑 `daemon/tests/integration/real_llm_squad_e2e.py`:本地真实 Claude Code 注册为 runtime → leader + 2 成员组小队 → 动态 nonce issue 派发 → leader **真实拆解**(经 task broker `squad.members`/`squad.subtasks` 工具、服务端校验 orchestrator 身份)→ 两名成员**真实认领执行**并经 `issue.comment` 回报 → leader 聚合运行**真实汇总评论**并置 issue `done` → 全程执行日志/session/token/cost 真实回流、凭据零泄漏。首次完整真实运行 PASS(4 执行/4 独立 session/45k tokens，证据见 `docs/evidence/mes-95/real-llm-squad-e2e.json`);运行方式见 [`daemon/README.md`](daemon/README.md)。
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
