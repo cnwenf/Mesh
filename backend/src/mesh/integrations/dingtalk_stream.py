@@ -1,7 +1,7 @@
 """DingTalk Stream long-connection receive channel (integrations.md §3.2, MES-87).
 
 Mesh dials the DingTalk gateway itself (no public callback address, no
-inbound port). Re-review round (f3d7389d): backoff reset on CONNECTED,
+inbound port). Re-review round: backoff reset on CONNECTED,
 transition-only state broadcast, alive undecryptable-secret retry loop
 with per-cycle config refresh (rotation self-heal).
 
