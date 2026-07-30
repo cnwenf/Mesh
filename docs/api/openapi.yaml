@@ -12207,17 +12207,15 @@ paths:
     get:
       tags:
       - integrations
-      summary: Get Stream Status
-      description: 'Receive-channel diagnostic (Stream mode ONLY): reads the persisted
+      summary: Integration Stream Status
+      description: 'Receive-channel diagnostics (§3.9): reads the persisted
 
-        ``integrations.stream_state`` truth source (§2.2) — UI first paint and
+        ``stream_state`` (written by the stream worker) — read-only, never
 
-        diagnostics do not depend on the realtime event arriving first. This
+        initiates outbound. ``state=''down''`` → 503 ``stream_channel_unavailable``
 
-        endpoint is read-only receive-side state; outbound test-send is a
-
-        SEPARATE action (MES-89) and never reports ``stream_channel_unavailable``.'
-      operationId: get_stream_status_api_v1_workspaces__workspace_id__integrations__integration_id__stream_status_get
+        (the only endpoint where that code appears, §3.5).'
+      operationId: integration_stream_status_api_v1_workspaces__workspace_id__integrations__integration_id__stream_status_get
       parameters:
       - name: workspace_id
         in: path
@@ -12239,7 +12237,7 @@ paths:
               schema:
                 type: object
                 additionalProperties: true
-                title: Response Get Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
+                title: Response Integration Stream Status Api V1 Workspaces  Workspace Id  Integrations  Integration
                   Id  Stream Status Get
         '422':
           description: Validation Error

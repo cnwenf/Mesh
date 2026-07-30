@@ -748,8 +748,10 @@ class StreamManager:
                 logger.exception(message)
                 # Failures never disappear (R2): an exact in-memory count +
                 # a THROTTLED diagnostic marker persisted into stream_state
-                # — the §3.9 diagnostic truth source surfaced by
-                # stream-status. The frame stays un-ACKed, so the platform
+                # — the §3.9 diagnostic truth source (the stream-status
+                # endpoint serves the whitelisted state fields; the error
+                # markers ride the same JSONB, readable from the truth
+                # source row). The frame stays un-ACKed, so the platform
                 # redelivers and msgId dedup keeps it idempotent; this
                 # marker is the observability half of that contract.
                 await self._record_frame_error(integrations, exc)
@@ -781,10 +783,11 @@ class StreamManager:
         cycle (the counter stays exact; the persisted value is the count at
         write time). The marker fields (``frame_error_count`` /
         ``last_frame_error_at`` / ``last_frame_error``) ride the
-        stream_state JSONB — the sole §3.9 diagnostic surface, read back by
-        ``GET .../stream-status`` — and the error text is redacted through
-        the same secret blacklist as every other log line this manager
-        writes."""
+        stream_state JSONB — the §3.9 diagnostic truth source that
+        ``GET .../stream-status`` reads (the endpoint serves the
+        whitelisted state view; the markers stay queryable on the truth
+        source row itself). The error text is redacted through the same
+        secret blacklist as every other log line this manager writes."""
         self._frame_error_count += 1
         now_epoch = time.time()
         if now_epoch - self._last_frame_error_persist < _FRAME_PERSIST_INTERVAL_SECONDS:
