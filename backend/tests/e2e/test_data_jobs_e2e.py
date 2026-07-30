@@ -40,7 +40,7 @@ from mesh.db.models.data_job import DataJob, DataJobRow
 from mesh.db.models.issue import Issue
 from mesh.db.models.notification import Notification
 from tests.conftest import get_test_database_url, get_test_redis_url
-from tests.e2e.conftest import pin_code_under_test
+from tests.e2e.conftest import _drain_stdout, pin_code_under_test
 
 pytestmark = pytest.mark.e2e
 
@@ -87,6 +87,7 @@ async def data_job_worker(provision_database):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _drain_stdout(process)  # 防管道写满阻塞 worker(同 conftest 注)
     await asyncio.sleep(WORKER_READY_WAIT_SECONDS)
     assert process.poll() is None, "worker process died on startup"
     yield process

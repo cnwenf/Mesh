@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 
@@ -114,7 +115,7 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
     # source server, which the SSRF guard only permits via the allowlist.
     env.setdefault("MESH_SKILL_SOURCE_HOST_ALLOWLIST", "127.0.0.1,localhost")
     pin_code_under_test(env)
-    return subprocess.Popen(
+    process = subprocess.Popen(
         [
             sys.executable,
             "-m",
@@ -136,6 +137,8 @@ def _spawn(app_module: str, port: int) -> subprocess.Popen:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _drain_stdout(process)
+    return process
 
 
 async def _wait_ready(base_url: str) -> None:
@@ -150,6 +153,26 @@ async def _wait_ready(base_url: str) -> None:
                 pass
             await asyncio.sleep(0.2)
     raise RuntimeError(f"server at {base_url} did not become ready")
+
+
+def _drain_stdout(process: subprocess.Popen) -> threading.Thread:
+    """Daemon pump 持续读子进程 stdout,防 64KB 管道缓冲写满阻塞子进程。
+
+    API 自带 mesh.access 逐请求访问日志(§5.3,stderr→本管道),套件累计数千
+    请求;无消费者时管道写满后子进程永久阻塞于 pipe_write,全量 e2e 在百余
+    用例处雪崩式超时。测试不消费子进程输出,读出即弃。
+    """
+    def _pump() -> None:
+        assert process.stdout is not None
+        try:
+            while process.stdout.read(4096):
+                pass
+        except (OSError, ValueError):
+            pass  # 子进程退出,管道关闭
+
+    thread = threading.Thread(target=_pump, daemon=True)
+    thread.start()
+    return thread
 
 
 def _terminate(server: RunningServer) -> None:
@@ -263,6 +286,7 @@ async def runtime_worker(provision_database):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _drain_stdout(process)
     await asyncio.sleep(WORKER_READY_WAIT_SECONDS)
     assert process.poll() is None, "worker died during startup"
     yield process
