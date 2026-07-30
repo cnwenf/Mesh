@@ -42,8 +42,8 @@ from tests.unit.integrations_support import (
     DINGTALK_CONVERSATION_ID,
     NOW,
     dingtalk_message_payload,
-    make_dingtalk_binding,
     make_binding,
+    make_dingtalk_binding,
     seed_dingtalk_world,
     seed_world,
 )
@@ -526,3 +526,78 @@ def test_parse_command_line_leading_only():
 def test_sanitize_excerpt_strips_control_chars():
     assert sanitize_excerpt("a\x00b\nc​d" * 100).count("\n") == 0
     assert len(sanitize_excerpt("x" * 500)) == 120
+
+
+# ---------------------------------------------------------------------------
+# Command plane mechanism (§3.7 — registry dispatch; handlers ship in MES-88)
+# ---------------------------------------------------------------------------
+
+
+async def test_command_registry_dispatches_registered_command(session_factory, redis_client):
+    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
+
+    calls = []
+
+    async def _handler(session, envelope, name, args):
+        calls.append((name, args))
+        return CommandOutcome(process_status="processed")
+
+    COMMAND_REGISTRY["ping"] = _handler
+    try:
+        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+        await make_dingtalk_binding(session_factory, world=world)
+        result = await _run(session_factory, world, _envelope(text="/ping  hello "))
+        assert result.process_status == "processed"
+        assert calls == [("ping", "hello")]
+        # Command messages never queue, never trigger.
+        async with session_factory() as session:
+            queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
+            enqueues = (
+                await session.execute(
+                    select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")
+                )
+            ).scalars().all()
+        assert queues == []
+        assert enqueues == []
+    finally:
+        del COMMAND_REGISTRY["ping"]
+
+
+async def test_unregistered_command_is_audited_not_triggered(session_factory, redis_client):
+    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
+
+    async def _noop(session, envelope, name, args):
+        return CommandOutcome()
+
+    COMMAND_REGISTRY["stop"] = _noop  # non-empty registry activates the plane
+    try:
+        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+        await make_dingtalk_binding(session_factory, world=world)
+        result = await _run(session_factory, world, _envelope(text="/unknowncmd args"))
+        assert result.process_status == "processed"
+        async with session_factory() as session:
+            event = (await session.execute(select(IntegrationEvent))).scalar_one()
+            queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
+        assert event.payload["_mesh_command"]["result"] == "unknown_command"
+        assert queues == []  # no trigger, no queue (probing defense)
+    finally:
+        del COMMAND_REGISTRY["stop"]
+
+
+async def test_mid_text_slash_is_not_a_command(session_factory, redis_client):
+    from mesh.integrations.ingest import COMMAND_REGISTRY, CommandOutcome
+
+    async def _noop(session, envelope, name, args):
+        return CommandOutcome()
+
+    COMMAND_REGISTRY["stop"] = _noop
+    try:
+        world = await seed_dingtalk_world(session_factory, inbound_queue="parallel")
+        await make_dingtalk_binding(session_factory, world=world)
+        # "/stop" mid-text is ordinary content → normal dispatch path.
+        result = await _run(
+            session_factory, world, _envelope(text="please /stop by the office")
+        )
+        assert result.process_status == "dispatched"
+    finally:
+        del COMMAND_REGISTRY["stop"]

@@ -546,3 +546,93 @@ async def test_non_default_gateway_base_triggers_audit_warning():
             if "AUDIT" in str(c.args[0]) and "non-default" in str(c.args[0])
         ]
         assert len(audit_calls_2) == 1
+
+
+# ---------------------------------------------------------------------------
+# Frame-ingest edge cases (malformed payloads / routing / rotation)
+# ---------------------------------------------------------------------------
+
+
+async def test_ingest_message_frame_unparseable_payload_is_skipped(session_factory):
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    integration = await _stream_integration(session_factory, world)
+    manager = _manager(session_factory, FakeWS())
+    frame = {
+        "specVersion": "1.0",
+        "type": "CALLBACK",
+        "headers": {"topic": "/v1.0/im/bot/messages/get", "messageId": "bad-1"},
+        "data": "{not-json",
+    }
+    await manager._ingest_message_frame([integration], {}, frame)
+    async with session_factory() as session:
+        events = (await session.execute(select(IntegrationEvent))).scalars().all()
+    assert events == []  # unparseable → audit-log, never crash, never ingest
+
+
+async def test_ingest_message_frame_routes_by_robot_code(session_factory):
+    """Shared connection: frames route to the integration whose robotCode
+    matches (two integrations, distinct robot codes)."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    integration = await _stream_integration(session_factory, world)
+
+    from mesh.db.models.integration import Integration as IntegrationRow
+    from tests.unit.integrations_support import encrypt as _encrypt
+
+    other_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        session.add(IntegrationRow(
+            id=other_id, workspace_id=world["ws"], kind="im_dingtalk",
+            name="dt-other-robot",
+            config={
+                "app_key": "dingappkey0001",
+                "corp_id": "dingcorp0001",
+                "robot_code": "dingOTHERrobot",
+                "receive_mode": "stream",
+                "inbound_queue": "serial_conversation",
+                "app_secret_ref": _encrypt("other-secret"),
+            },
+            created_by=world["member"],
+        ))
+    async with session_factory() as session:
+        other = await session.get(IntegrationRow, other_id)
+
+    manager = _manager(session_factory, FakeWS())
+    frame = _message_frame(dingtalk_message_payload(msg_id="msgROUTE000000000000=="))
+    by_robot = {"dingappkey0001": integration, "dingOTHERrobot": other}
+    await manager._ingest_message_frame([integration, other], by_robot, frame)
+
+    async with session_factory() as session:
+        event = (await session.execute(select(IntegrationEvent))).scalar_one()
+    # The frame's robotCode (dingappkey0001) selects the first integration.
+    assert event.integration_id == world["integ_dingtalk"]
+
+
+async def test_group_closes_on_secret_rotation(session_factory):
+    """Reconciliation: a changed app_secret_ref fingerprint closes the
+    running group so it reconnects with the new credential."""
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    integration = await _stream_integration(session_factory, world)
+
+    manager = _manager(session_factory, FakeWS())
+    # Simulate a started group (no real connection task — record bookkeeping).
+    signal = asyncio.Event()
+    manager._group_signals["dingappkey0001"] = signal
+    manager._group_secrets["dingappkey0001"] = manager._secrets_fingerprint([integration])
+    manager._served_ids.add(integration.id)
+    manager._groups["dingappkey0001"] = asyncio.get_running_loop().create_future()  # placeholder
+
+    # Rotate the ciphertext ref in the DB.
+    from mesh.db.models.integration import Integration as IntegrationRow
+
+    async with session_factory() as session, session.begin():
+        row = await session.get(IntegrationRow, world["integ_dingtalk"])
+        row.config = {**row.config, "app_secret_ref": "rotated-ciphertext"}
+
+    # Make the placeholder awaitable-completable; scan_once pops the group.
+    manager._groups["dingappkey0001"].set_result(None)
+    await manager.scan_once()
+    assert signal.is_set()  # group signalled to stop
+    assert "dingappkey0001" not in manager._groups
