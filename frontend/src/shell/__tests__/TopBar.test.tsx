@@ -1,5 +1,5 @@
 /**
- * TopBar — 品牌/搜索/连接状态点(文本始终在场)/命令面板与帮助入口回调。
+ * TopBar — 品牌链接(§4.2 返回首页)/搜索/连接状态(稳定态仅点 + tooltip,进行/异常态显文本)/入口回调。
  */
 import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -17,18 +17,38 @@ const LABELS: Record<ConnectionState, string> = {
 };
 
 describe('TopBar', () => {
-  it('渲染品牌与全局搜索框', () => {
+  it('渲染品牌链接(§4.2 返回首页)与全局搜索框', () => {
     renderWithProviders(<TopBar state="idle" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />);
-    expect(screen.getByText('Mesh')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/');
     expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
   });
 
-  it.each(Object.entries(LABELS))('连接状态 %s 的文本标签始终呈现', (state, label) => {
-    renderWithProviders(
-      <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
-    );
-    expect(screen.getByTestId('conn-status').textContent).toContain(label);
-  });
+  it.each(['connecting', 'reconnecting', 'resyncing', 'offline'])(
+    '进行/异常态 %s 显式呈现文本标签(§4.2)',
+    (state) => {
+      renderWithProviders(
+        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
+      );
+      expect(screen.getByTestId('conn-status').textContent).toContain(LABELS[state as ConnectionState]);
+    },
+  );
+
+  it.each(['connected', 'idle'])(
+    '稳定态 %s 仅呈现状态点 + tooltip 可读名,不显文本(§4.2 减常态噪音)',
+    (state) => {
+      renderWithProviders(
+        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
+      );
+      // 稳定态不渲染常驻可见文本标签(StatusDot 的 .mesh-status__label),
+      // 可读名由 tooltip 承载(role=img + aria-label 供读屏,颜色非唯一信号)。
+      const conn = screen.getByTestId('conn-status');
+      expect(conn.querySelector('.mesh-status__label')).toBeNull();
+      const img = screen.getByRole('img', { name: LABELS[state as ConnectionState] });
+      expect(img).toBeInTheDocument();
+      // 悬停提示经 title 承载(零布局副作用,不撑出 320px 横向滚动)
+      expect(img).toHaveAttribute('title', LABELS[state as ConnectionState]);
+    },
+  );
 
   it('命令面板与帮助按钮触发对应回调', () => {
     const onOpenPalette = vi.fn();
@@ -63,6 +83,22 @@ describe('TopBar', () => {
     const onOpenSearch = vi.fn();
     renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
     const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(input).toHaveValue('');
+  });
+
+  it('清空后的空值变更真正抵达 onChange 时,命中空值提前返回(仅复位本框,不展开面板)', () => {
+    const onOpenSearch = vi.fn();
+    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+    const input = screen.getByTestId('topbar-search');
+    // 组件在任何变更后即提交清空(受控值恒为 ''),React 受控输入按节点值快照
+    // (_valueTracker)去重,会吞掉 ''→'' 的 change 事件。先将快照改写为脏值,
+    // 使本次空值变更真实触达 onChange,从而校验 handleSearchChange 的空值提前返回。
+    const tracker = (input as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })
+      ._valueTracker;
+    expect(tracker).toBeDefined();
+    tracker?.setValue('dirty');
     fireEvent.change(input, { target: { value: '' } });
     expect(onOpenSearch).not.toHaveBeenCalled();
     expect(input).toHaveValue('');

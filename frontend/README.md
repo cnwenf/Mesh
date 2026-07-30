@@ -125,10 +125,13 @@ frontend/
     │   ├── typography.css    #   type scale 工具类(§6.2 十一档 + 表格数字/等宽标识/中文排版)
     │   ├── contrast.ts       #   对比度计算(token AA 自证)
     │   ├── ThemeProvider.tsx #   light/dark/system 即时切换(无刷新)
+    │   ├── StyleguidePage.tsx#   /styleguide 组件状态 fixture(四视口×亮暗视觉回归拍摄对象,MES-115)
     │   └── components/       #   原语:Button(28/36/44 三档全状态)/IconButton/Input/Select/
-    │                         #   Badge/Avatar(稳定 hash 取色·agent 统一轮廓)/Icon(20px 线性集)/
-    │                         #   Tooltip/Menu/Tabs/Accordion/Drawer(焦点圈养)/Dialog/
+    │                         #   Badge/Avatar(稳定 hash 取色·agent 统一轮廓)/Icon(20px 线性集 50+,
+    │                         #   filled 变体)/Tooltip/Menu/Tabs/Accordion/Drawer(焦点圈养)/Dialog/
     │                         #   Skeleton/EmptyState/ErrorState(§7.7 四部分)/Banner/Toast/Kbd/StatusDot
+    │                         #   + MES-115 增补:Field/Textarea/Checkbox(半选)/Switch/Popover(翻转定位)/
+    │                         #   PageHeader/Toolbar/DataTable(aria-sort 排序)
     ├── shortcuts/            # 快捷键体系(§6.12)
     │   ├── registry.ts       #   分组命令/快捷键注册表(上下文感知)
     │   ├── ShortcutProvider.tsx  # 输入框豁免(除 Ctrl/Cmd 组合)、序列键 G→I/B/M/A
@@ -138,7 +141,10 @@ frontend/
     │   ├── settingsStore.ts  #   theme/locale/timezone 偏好(本地镜像 + 服务端同步:PATCH /users/me,auth.md §3.1;preferencesSync/pendingSettingsQueue/usePreferencesBootstrap)
     │   └── authStore.ts      #   Bearer token 存取
     └── shell/                # App shell(顶栏/侧栏/状态横幅/登录守卫)
-        ├── AppShell/TopBar/Sidebar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
+        ├── navigation.ts     #   全局导航唯一事实源:四分组入口表(桌面侧栏/手机底栏/更多抽屉同源)
+        ├── AppShell/TopBar/StatusBanner(offline/重连·重放→「正在重新同步」横幅,§6.12/§6.7)
+        ├── Sidebar           #   桌面分组可折叠侧栏(240px ↔ 64px rail,§4.1)
+        ├── MobileNav/MobileMoreDrawer  # 手机底栏 + 「更多」全高抽屉(§4.3)
         └── pages/            #   登录页、404、错误页、真实首页(工作区仪表盘,MES-107)
 ```
 

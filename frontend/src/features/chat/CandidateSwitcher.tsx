@@ -9,7 +9,7 @@
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { MeshApiClient } from '../../api';
-import { Button, useToast } from '../../design';
+import { Button, Icon, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { listChatMessages, selectCandidate } from './api';
 import { toErrorKey } from './errors';
@@ -138,7 +138,7 @@ export function CandidateSwitcher(props: CandidateSwitcherProps): React.JSX.Elem
             className="mesh-chat__candidate-selected"
             data-testid="chat-candidate-selected-mark"
           >
-            ✓ {t('chat.candidate.selected')}
+            <Icon name="check" size={16} /> {t('chat.candidate.selected')}
           </span>
         ) : null}
         <Button

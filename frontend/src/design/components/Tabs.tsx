@@ -36,6 +36,10 @@ export function Tabs(props: TabsProps): React.JSX.Element {
     () => defaultValue ?? firstEnabled?.value ?? '',
   );
   const current = value ?? internalValue;
+  // 兜底(验收 R1-M3):受控 value 未命中任何可用项(或命中禁用项)时,回退首个
+  // 可用项为可聚焦/选中,杜绝整组 tabIndex=-1 使键盘永远进不去 tablist。
+  const currentMatches = items.some((item) => item.value === current && item.disabled !== true);
+  const effective = currentMatches ? current : (firstEnabled?.value ?? '');
 
   const select = (next: string): void => {
     if (value === undefined) {
@@ -49,7 +53,7 @@ export function Tabs(props: TabsProps): React.JSX.Element {
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     const enabledValues = enabledItems.map((item) => item.value);
     if (enabledValues.length === 0) return;
-    const position = enabledValues.indexOf(current);
+    const position = enabledValues.indexOf(effective);
     let next: string | null = null;
     if (event.key === 'ArrowRight') {
       next = enabledValues[(position + 1) % enabledValues.length];
@@ -67,7 +71,7 @@ export function Tabs(props: TabsProps): React.JSX.Element {
     }
   };
 
-  const activeItem = items.find((item) => item.value === current);
+  const activeItem = items.find((item) => item.value === effective);
   const rootClasses = ['mesh-tabs', className]
     .filter((part): part is string => Boolean(part))
     .join(' ');
@@ -76,7 +80,7 @@ export function Tabs(props: TabsProps): React.JSX.Element {
     <div className={rootClasses}>
       <div role="tablist" aria-label={label} className="mesh-tabs__list" onKeyDown={handleKeyDown}>
         {items.map((item) => {
-          const selected = item.value === current;
+          const selected = item.value === effective;
           return (
             <button
               key={item.value}

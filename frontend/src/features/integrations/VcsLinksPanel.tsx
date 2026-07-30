@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Button, Dialog, EmptyState, Input, Select, Skeleton, StatusDot, useToast } from '../../design';
+import { Button, Dialog, EmptyState, Icon, Input, Select, Skeleton, StatusDot, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { createVcsLink, deleteVcsLink, listIntegrations, listIssueVcsLinks } from './api';
@@ -127,7 +127,7 @@ export function VcsLinksPanel(props: VcsLinksPanelProps): React.JSX.Element {
             return (
               <li key={link.id} className="mesh-integrations__vcs-item" data-testid={`vcs-link-row-${link.id}`}>
                 <span>
-                  <span aria-hidden="true">{KIND_ICON[link.provider === 'github' ? 'vcs_github' : 'vcs_gitlab']}</span>{' '}
+                  <Icon name={KIND_ICON[link.provider === 'github' ? 'vcs_github' : 'vcs_gitlab']} size={16} />{' '}
                   {link.url !== null && isSafeWebUrl(link.url) ? (
                     <a
                       className="mesh-integrations__vcs-ref"

@@ -42,6 +42,63 @@ export const ICON_PATHS: Readonly<Record<string, ReadonlyArray<string>>> = Objec
   filter: ['M4 5h16l-6 7v5.5l-4 2V12L4 5z'],
   grip: ['M9 6h.01', 'M15 6h.01', 'M9 12h.01', 'M15 12h.01', 'M9 18h.01', 'M15 18h.01'],
   logout: ['M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3', 'M16 17l5-5-5-5', 'M21 12H9'],
+  // ── MES-115 壳层/产品图标增量(导航分组 · 触发器 · 状态 · 连接器)──────────
+  issues: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0', 'M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0'],
+  cycle: ['M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16', 'M8 16H3v5'],
+  zap: ['M13 2 3 14h9l-1 8 10-12h-9l1-8z'],
+  server: [
+    'M2 4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z',
+    'M2 16a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z',
+    'M6 6h.01',
+    'M6 18h.01',
+  ],
+  insights: ['M3 3v16a2 2 0 0 0 2 2h16', 'M18 17V9', 'M13 17V5', 'M8 17v-3'],
+  plug: ['M12 22v-5', 'M9 8V2', 'M15 8V2', 'M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z'],
+  'panel-left': [
+    'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+    'M9 3v18',
+  ],
+  bot: ['M12 8V4H8', 'M4 8h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z', 'M2 14h2', 'M20 14h2', 'M15 13v2', 'M9 13v2'],
+  shield: [
+    'M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z',
+  ],
+  store: [
+    'M3 9 4.5 4.5A1.8 1.8 0 0 1 6.24 3h11.52A1.8 1.8 0 0 1 19.5 4.5L21 9',
+    'M3 9h18v3a2.25 2.25 0 0 1-4.5 0 2.25 2.25 0 0 1-4.5 0 2.25 2.25 0 0 1-4.5 0A2.25 2.25 0 0 1 3 12z',
+    'M5 12.5V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6.5',
+    'M9.5 21v-5h5v5',
+  ],
+  'badge-check': [
+    'M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76',
+    'm9 12 2 2 4-4',
+  ],
+  download: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'm7 10 5 5 5-5', 'M12 15V3'],
+  star: ['m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z'],
+  clock: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0', 'M12 6v6l4 2'],
+  'git-merge': [
+    'M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6',
+    'M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6',
+    'M18 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6',
+    'M6 9v3a6 6 0 0 0 6 6h3',
+  ],
+  'file-text': [
+    'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z',
+    'M14 2v6h6',
+    'M16 13H8',
+    'M16 17H8',
+    'M10 9H8',
+  ],
+  message: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  megaphone: ['M3 11 18 5v14L3 13z', 'M3 11v2a2 2 0 0 0 2 2h1', 'M7 15v4a2 2 0 0 0 2 2h1a1 1 0 0 0 1-1v-3', 'M18 8a4 4 0 0 1 0 8'],
+  link: [
+    'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71',
+    'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+  ],
+  pause: ['M10 4H6v16h4z', 'M18 4h-4v16h4z'],
+  play: ['m6 3 14 9-14 9z'],
+  list: ['M8 6h13', 'M8 12h13', 'M8 18h13', 'M3 6h.01', 'M3 12h.01', 'M3 18h.01'],
+  menu: ['M4 12h16', 'M4 6h16', 'M4 18h16'],
+  upload: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'm17 8-5-5-5 5', 'M12 3v12'],
 });
 
 export type IconName = keyof typeof ICON_PATHS;
@@ -53,15 +110,17 @@ export interface IconProps {
   name: IconName;
   /** 尺寸(px),仅 16/20/24,默认 20 */
   size?: IconSize;
+  /** 实心变体(默认描边镂空;置顶/已选等强调态用实心,如星标) */
+  filled?: boolean;
   /** 独立使用时的可访问名;伴随可见文案时留空(图标对读屏隐藏) */
   label?: string;
   className?: string;
 }
 
 export function Icon(props: IconProps): React.JSX.Element {
-  const { name, size = 20, label, className } = props;
+  const { name, size = 20, filled = false, label, className } = props;
   const paths = ICON_PATHS[name];
-  const classes = ['mesh-icon', `mesh-icon--${size}`, className]
+  const classes = ['mesh-icon', `mesh-icon--${size}`, filled ? 'mesh-icon--filled' : null, className]
     .filter((part): part is string => Boolean(part))
     .join(' ');
   return (

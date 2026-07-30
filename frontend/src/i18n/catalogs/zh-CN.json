@@ -9,6 +9,8 @@
     "a11y.openHelp": "打开键盘快捷键",
     "a11y.openPalette": "打开命令面板",
     "a11y.sidebar": "侧边导航栏",
+    "a11y.sidebarCollapse": "折叠侧栏",
+    "a11y.sidebarExpand": "展开侧栏",
     "a11y.skipLink": "跳到主内容",
     "a11y.themeToggle": "切换主题",
     "a11y.topbar": "顶栏",
@@ -1530,11 +1532,14 @@
     "mobileNav.more": "更多",
     "mobileNav.moreClose": "关闭导航抽屉",
     "mobileNav.moreTitle": "全部导航",
-    "nav.automation": "运行环境",
     "nav.autopilots": "自动值守",
     "nav.board": "看板",
     "nav.chat": "聊天",
     "nav.cycles": "周期",
+    "nav.group.admin": "管理",
+    "nav.group.run": "运行",
+    "nav.group.team": "团队",
+    "nav.group.work": "工作",
     "nav.home": "首页",
     "nav.inbox": "收件箱",
     "nav.insights": "洞察",
@@ -1542,6 +1547,7 @@
     "nav.issues": "工作项",
     "nav.members": "成员",
     "nav.projects": "项目",
+    "nav.runtimes": "运行环境",
     "nav.settings": "设置",
     "nav.skills": "技能",
     "nav.squads": "小队",
@@ -1931,7 +1937,7 @@
     "settings.timezoneBrowser": "跟随浏览器",
     "settings.title": "设置",
     "shortcuts.actionFocusSearch": "聚焦搜索",
-    "shortcuts.actionGoAutomation": "前往自动化",
+    "shortcuts.actionGoAutopilot": "前往自动值守",
     "shortcuts.actionGoBoard": "前往看板",
     "shortcuts.actionGoInbox": "前往收件箱",
     "shortcuts.actionGoMembers": "前往成员",
@@ -2327,5 +2333,5 @@
     "wsCreate.stepName": "新建工作区——名称",
     "wsCreate.stepSlug": "新建工作区——slug"
   },
-  "version": "49ca2abb"
+  "version": "0ee000c6"
 }

@@ -12,6 +12,7 @@
  * - `ExternalIdentity`:全局身份映射(外部平台账号 ↔ Mesh `users.id`,§2.4.1)。
  * - `VcsLink`:VCS 对象 ↔ issue 关联真源(§2.8 / §3.3)。
  */
+import type { IconName } from '../../design';
 
 export type IntegrationKind =
   | 'im_feishu'
@@ -212,7 +213,8 @@ export interface CreateIntegrationResult {
 /** 连接器目录卡片的展示元数据(§4.2:图标 + 名称 key + 能力标签)。 */
 export interface ConnectorMeta {
   readonly kind: IntegrationKind;
-  readonly icon: string;
+  /** 连接器目录卡片图标(统一 SVG 图标名,§7.1;经 design `<Icon>` 渲染)。 */
+  readonly icon: IconName;
   readonly nameKey: string;
   readonly capabilityKeys: ReadonlyArray<string>;
 }
@@ -220,7 +222,7 @@ export interface ConnectorMeta {
 export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorMeta> = [
   {
     kind: 'im_feishu',
-    icon: '🐦',
+    icon: 'message',
     nameKey: 'integrations.kind.im_feishu',
     capabilityKeys: [
       'integrations.capability.im_notify',
@@ -230,7 +232,7 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorMeta> = [
   },
   {
     kind: 'im_slack',
-    icon: '💬',
+    icon: 'chat',
     nameKey: 'integrations.kind.im_slack',
     capabilityKeys: [
       'integrations.capability.im_notify',
@@ -240,19 +242,19 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorMeta> = [
   },
   {
     kind: 'vcs_github',
-    icon: '🐙',
+    icon: 'git-merge',
     nameKey: 'integrations.kind.vcs_github',
     capabilityKeys: ['integrations.capability.vcs_link', 'integrations.capability.status_flow'],
   },
   {
     kind: 'vcs_gitlab',
-    icon: '🦊',
+    icon: 'git-merge',
     nameKey: 'integrations.kind.vcs_gitlab',
     capabilityKeys: ['integrations.capability.vcs_link', 'integrations.capability.status_flow'],
   },
   {
     kind: 'webhook_outbound',
-    icon: '📤',
+    icon: 'upload',
     nameKey: 'integrations.kind.webhook_outbound',
     capabilityKeys: ['integrations.capability.outbound'],
   },

@@ -6,7 +6,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { MeshApiClient, getToken, useCursorPagination } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
+import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -17,12 +28,12 @@ import { ImportWizard } from './ImportWizard';
 import type { SkillSourceType } from './types';
 import './skills.css';
 
-/** 来源信任徽标(§4.2):builtin 盾形 / user / marketplace / url ⚠。 */
-const TRUST_BADGES: Record<string, string> = {
-  builtin: '🛡',
-  user: '👤',
-  marketplace: '🏪',
-  url: '⚠',
+/** 来源信任徽标(§4.2):builtin 盾形 / user / marketplace / url 警示;一律走统一 Icon(§7.1)。 */
+const TRUST_BADGES: Record<string, IconName> = {
+  builtin: 'shield',
+  user: 'user',
+  marketplace: 'store',
+  url: 'alert-triangle',
 };
 
 export function SkillsPage(): React.JSX.Element {
@@ -188,14 +199,18 @@ export function SkillsPage(): React.JSX.Element {
               <Link className="mesh-skills__card-link" to={`/skills/${skill.id}`}>
                 <span className="mesh-skills__card-name">
                   <span className="mesh-skills__card-badge" title={t('skills.trustBadge')}>
-                    {TRUST_BADGES[skill.source_type ?? 'user'] ?? '👤'}
+                    <Icon name={TRUST_BADGES[skill.source_type ?? 'user'] ?? 'user'} size={16} />
                   </span>
                   {skill.name}
                   {skill.has_scripts ? (
-                    <span className="mesh-skills__script-flag" title={t('skills.hasScripts')}>⚠</span>
+                    <span className="mesh-skills__script-flag" title={t('skills.hasScripts')}>
+                      <Icon name="warning" size={16} />
+                    </span>
                   ) : null}
                   {skill.install_status === 'updated_available' ? (
-                    <span className="mesh-skills__update-flag" title={t('skills.updateAvailable')}>↻</span>
+                    <span className="mesh-skills__update-flag" title={t('skills.updateAvailable')}>
+                      <Icon name="cycle" size={16} />
+                    </span>
                   ) : null}
                 </span>
                 <span className="mesh-skills__card-summary">{skill.summary}</span>

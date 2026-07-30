@@ -32,6 +32,7 @@ const KEY_DISPLAY_NAMES: Record<string, string> = {
   arrowdown: '↓',
   arrowleft: '←',
   arrowright: '→',
+  // mesh-emoji-ok: 键帽符号 ⌫ 为键盘按键排版记号(与 ↑↓←→/Kbd 同族),非 UI 表意图标
   backspace: '⌫',
   delete: 'Del',
   home: 'Home',

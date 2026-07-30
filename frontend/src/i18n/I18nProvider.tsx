@@ -137,6 +137,7 @@ export function useT(): TranslateFn {
         reporter.report(locale, key, resolved.fallback);
       }
       const showDevMarker = import.meta.env.DEV && resolved.fallback !== 'none';
+      // mesh-emoji-ok: 开发期缺译诊断前缀(仅 DEV 可见的开发者标记,非产品 UI 图标)
       const defaultMessage = showDevMarker ? `⚠[${key}] ${resolved.text}` : resolved.text;
       return intl.formatMessage(
         { id: key, defaultMessage },

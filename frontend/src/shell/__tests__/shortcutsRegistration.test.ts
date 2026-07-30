@@ -15,8 +15,10 @@ const LABELS: ShellShortcutLabels = {
     issues: 'Issues',
     board: 'Board',
     members: 'Members',
+    skills: 'Skills',
     chat: 'Chat',
-    automation: 'Automation',
+    autopilots: 'Autopilots',
+    runtimes: 'Runtimes',
     insights: 'Insights',
     settings: 'Settings',
   },
@@ -28,7 +30,7 @@ const LABELS: ShellShortcutLabels = {
     goInbox: 'Go to Inbox',
     goBoard: 'Go to Board',
     goMembers: 'Go to Members',
-    goAutomation: 'Go to Automation',
+    goAutopilot: 'Go to Autopilots',
     restoreOnboarding: 'Show the getting-started checklist again',
   },
 };
@@ -42,8 +44,8 @@ describe('registerShellShortcuts', () => {
   it('注册导航命令、主题命令与快捷键', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS);
     const state = useShortcutRegistry.getState();
-    // 10 导航(含 insights,MES-71) + 3 主题 + 1 切换 + 1 上手清单恢复(MES-69) = 15 命令
-    expect(state.commands).toHaveLength(15);
+    // 12 导航(自动值守/运行环境/技能各占明确入口,MES-115) + 3 主题 + 1 切换 + 1 上手清单恢复 = 17 命令
+    expect(state.commands).toHaveLength(17);
     // g i / g b / g m / g a / c / / = 6 快捷键
     expect(state.shortcuts).toHaveLength(6);
     unregister();

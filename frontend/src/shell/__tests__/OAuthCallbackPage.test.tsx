@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -214,5 +215,60 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
       ),
     );
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('未注入 client 时经全局默认 client 完成交换并回跳首页', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    vi.stubGlobal('fetch', fetchImpl);
+    render(
+      <MemoryRouter initialEntries={['/auth/oauth/callback/mock?code=c&state=s']}>
+        <ThemeProvider>
+          <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+            <ToastProvider regionLabel="notifications">
+              <Routes>
+                <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />
+                <Route path="/" element={<span data-testid="at-home" />} />
+              </Routes>
+            </ToastProvider>
+          </I18nProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+    expect(useAuthStore.getState().token).toBe('jwt-oauth');
+    const [url] = fetchImpl.mock.calls[0] as [string];
+    expect(url).toContain('/api/v1/auth/oauth/mock/callback?code=c&state=s');
+  });
+
+  it('StrictMode 双调用下交换只发起一次(一次性 state 守卫,防止重复消费)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/auth/oauth/callback/mock?code=c&state=s']}>
+          <ThemeProvider>
+            <I18nProvider
+              workspaceDefaultLocale={null}
+              reporter={{ report: () => undefined, reported: [] }}
+            >
+              <ToastProvider regionLabel="notifications">
+                <Routes>
+                  <Route
+                    path="/auth/oauth/callback/:provider"
+                    element={<OAuthCallbackPage client={stubClient(fetchImpl) as never} />}
+                  />
+                  <Route path="/" element={<span data-testid="at-home" />} />
+                </Routes>
+              </ToastProvider>
+            </I18nProvider>
+          </ThemeProvider>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+    // state 为一次性:即便 effect 被双调用,交换请求至多一次
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().token).toBe('jwt-oauth');
   });
 });

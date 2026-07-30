@@ -26,5 +26,26 @@ describe('design 桶导出', () => {
     expect(design.Dialog).toBeTypeOf('function');
     expect(design.Kbd).toBeTypeOf('function');
     expect(design.StatusDot).toBeTypeOf('function');
+    expect(design.Icon).toBeTypeOf('function');
+    expect(Object.keys(design.ICON_PATHS).length).toBeGreaterThanOrEqual(50);
+    expect(design.Badge).toBeTypeOf('function');
+    expect(design.Avatar).toBeTypeOf('function');
+    expect(design.avatarInitials).toBeTypeOf('function');
+    expect(design.avatarHueIndex).toBeTypeOf('function');
+    expect(design.Tooltip).toBeTypeOf('function');
+    expect(design.Menu).toBeTypeOf('function');
+    expect(design.Drawer).toBeTypeOf('function');
+    expect(design.Tabs).toBeTypeOf('function');
+    expect(design.Accordion).toBeTypeOf('function');
+    // MES-115 新增基础组件
+    expect(design.Field).toBeTypeOf('function');
+    expect(design.Textarea).toBeTruthy();
+    expect(design.TEXTAREA_MAX_HEIGHT_PX).toBe(320);
+    expect(design.Checkbox).toBeTruthy();
+    expect(design.Switch).toBeTypeOf('function');
+    expect(design.Popover).toBeTypeOf('function');
+    expect(design.PageHeader).toBeTypeOf('function');
+    expect(design.Toolbar).toBeTypeOf('function');
+    expect(design.DataTable).toBeTypeOf('function');
   });
 });

@@ -1,10 +1,16 @@
 {
-  "extends": ["stylelint-config-standard"],
-  "plugins": ["./stylelint-plugins/no-hardcoded-colors.mjs"],
+  "extends": [
+    "stylelint-config-standard"
+  ],
+  "plugins": [
+    "./stylelint-plugins/no-hardcoded-colors.mjs",
+    "./stylelint-plugins/zindex-token-only.mjs"
+  ],
   "ignoreFiles": [
     "src/design/tokens.css",
     "src/design/tokens-dark.css",
-    "src/design/tokens-print.css"
+    "src/design/tokens-print.css",
+    "src/design/skeleton.css"
   ],
   "rules": {
     "mesh/no-hardcoded-colors": true,
@@ -18,6 +24,7 @@
     "color-hex-length": null,
     "font-family-name-quotes": null,
     "alpha-value-notation": null,
-    "import-notation": null
+    "import-notation": null,
+    "mesh/zindex-token-only": true
   }
 }

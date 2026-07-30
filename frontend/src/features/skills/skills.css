@@ -112,9 +112,36 @@
   border-color: var(--color-danger);
 }
 
+/* 脚本/来源警示标记:内联图标与配对文本对齐(§7.1 统一 SVG 图标替代字符图标) */
 .mesh-skills__script-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   color: var(--color-warn);
   font-size: 0.85rem;
+}
+
+/* 卡片元信息统计(下载量/评分):内联图标与数字对齐(§7.1) */
+.mesh-skills__meta-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* 维护方认证徽标(§7.1):语义成功色 + title 提示,颜色/图标非唯一信号 */
+.mesh-skills__cert-flag {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-success);
+}
+
+/* url/marketplace 来源警示(§7.1):表格单元格内图标基线对齐 */
+.mesh-skills__source-flag {
+  display: inline-flex;
+  align-items: center;
+  margin-right: var(--space-1);
+  color: var(--color-warn);
+  vertical-align: text-bottom;
 }
 
 .mesh-skills__needs-review {
@@ -405,9 +432,12 @@
   color: var(--color-text-muted);
 }
 .mesh-skills__update-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: var(--space-1);
   color: var(--color-primary);
-  font-size: 0.85rem;
-  margin-left: 4px;
+  font-size: var(--text-body-sm-size);
 }
 
 /* 导入向导进度条 (§3.5/§4.6) */
@@ -475,3 +505,10 @@
 }
 .mesh-skills__market-preview dt { color: var(--color-text-muted); }
 .mesh-skills__market-preview dd { margin: 0; }
+
+/* 当前版本标记(cycle/check 线性图标对齐;颜色仅增强,版本状态列另有文本信号) */
+.mesh-skills__current-mark {
+  margin-inline-start: var(--space-1);
+  vertical-align: -2px;
+  color: var(--color-success-fg);
+}

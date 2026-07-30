@@ -9,6 +9,8 @@
     "a11y.openHelp": "Open keyboard shortcuts",
     "a11y.openPalette": "Open command palette",
     "a11y.sidebar": "Sidebar navigation",
+    "a11y.sidebarCollapse": "Collapse sidebar",
+    "a11y.sidebarExpand": "Expand sidebar",
     "a11y.skipLink": "Skip to main content",
     "a11y.themeToggle": "Toggle theme",
     "a11y.topbar": "Top bar",
@@ -1530,11 +1532,14 @@
     "mobileNav.more": "More",
     "mobileNav.moreClose": "Close navigation menu",
     "mobileNav.moreTitle": "All navigation",
-    "nav.automation": "Automation",
     "nav.autopilots": "Autopilots",
     "nav.board": "Board",
     "nav.chat": "Chat",
     "nav.cycles": "Cycles",
+    "nav.group.admin": "Admin",
+    "nav.group.run": "Run",
+    "nav.group.team": "Team",
+    "nav.group.work": "Work",
     "nav.home": "Home",
     "nav.inbox": "Inbox",
     "nav.insights": "Insights",
@@ -1542,6 +1547,7 @@
     "nav.issues": "Issues",
     "nav.members": "Members",
     "nav.projects": "Projects",
+    "nav.runtimes": "Runtimes",
     "nav.settings": "Settings",
     "nav.skills": "Skills",
     "nav.squads": "Squads",
@@ -1931,7 +1937,7 @@
     "settings.timezoneBrowser": "Browser default",
     "settings.title": "Settings",
     "shortcuts.actionFocusSearch": "Focus search",
-    "shortcuts.actionGoAutomation": "Go to Automation",
+    "shortcuts.actionGoAutopilot": "Go to Autopilots",
     "shortcuts.actionGoBoard": "Go to Board",
     "shortcuts.actionGoInbox": "Go to Inbox",
     "shortcuts.actionGoMembers": "Go to Members",
@@ -2327,5 +2333,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "1949edd6"
+  "version": "fc077d8d"
 }

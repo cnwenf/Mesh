@@ -1,101 +1,122 @@
 /**
- * 侧边导航(README §6.12 全局信息架构):首页/收件箱/项目/看板/成员/聊天/自动化/设置。
- * 全部为 NavLink(鼠标可达);快捷键仅为加速器(§6.12:所有快捷键有等价鼠标路径)。
- * 激活态经 className 回调应用,首页链接 `end` 精确匹配。
+ * 桌面侧栏(design-quality §4.1):任务四分组(工作/团队/运行/管理)+ 可折叠 rail。
+ *
+ * - 展开 240px(--shell-sidebar-expanded):组标题 + 图标 + 文字;
+ *   折叠 64px(--shell-sidebar-collapsed):仅图标,Tooltip 补齐可读名(§7.1
+ *   图标按钮必须有 tooltip);折叠偏好持久化(localStorage,外壳偏好非业务状态)。
+ * - 当前项:浅强调背景 + 强文字 + 3px 边缘指示(不以整块高饱和色作唯一信号,
+ *   与手机底栏同构);aria-current=page 由 NavLink 自动表达。
+ * - 入口表唯一真源见 navigation.ts;「看板」在 /views/{id} 下保持激活(§4.2)。
+ * - 工作区设置入口按角色出现(admin+,member/guest 不可见,§6.12 角色可见性)。
  */
 import { NavLink, useLocation } from 'react-router';
+import { Icon, Tooltip } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
+import { NAV_GROUPS } from './navigation';
+import type { NavItemDef } from './navigation';
 
-export type NavKey =
-  | 'home'
-  | 'inbox'
-  | 'projects'
-  | 'issues'
-  | 'board'
-  | 'members'
-  | 'skills'
-  | 'squads'
-  | 'cycles'
-  | 'chat'
-  | 'autopilots'
-  | 'integrations'
-  | 'automation'
-  | 'insights'
-  | 'settings';
-
-interface NavItem {
-  readonly key: NavKey;
-  readonly to: string;
+export interface SidebarProps {
+  /** 折叠为 64px rail(仅图标 + tooltip) */
+  collapsed: boolean;
+  /** 折叠/展开切换回调 */
+  onToggleCollapsed: () => void;
 }
-
-const NAV_ITEMS: ReadonlyArray<NavItem> = [
-  { key: 'home', to: '/' },
-  { key: 'inbox', to: '/inbox' },
-  { key: 'projects', to: '/projects' },
-  { key: 'issues', to: '/issues' },
-  { key: 'board', to: '/board' },
-  { key: 'members', to: '/members' },
-  { key: 'skills', to: '/skills' },
-  { key: 'squads', to: '/squads' },
-  { key: 'cycles', to: '/cycles' },
-  { key: 'chat', to: '/chat' },
-  // 自动化规则(autopilot.md §4):AI 队友值班表;运行时(runtime.md)单独入口。
-  { key: 'autopilots', to: '/autopilots' },
-  // 集成平台(integrations.md §4):连接器 / 绑定 / 事件台账 / 出向订阅。
-  { key: 'integrations', to: '/integrations' },
-  { key: 'automation', to: '/runtimes' },
-  // 统计报表(analytics.md §4.1):工作区洞察仪表盘。
-  { key: 'insights', to: '/insights' },
-  { key: 'settings', to: '/settings' },
-];
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return isActive ? 'mesh-sidebar__link mesh-sidebar__link--active' : 'mesh-sidebar__link';
 }
 
-export function Sidebar(): React.JSX.Element {
+export function Sidebar(props: SidebarProps): React.JSX.Element {
+  const { collapsed, onToggleCollapsed } = props;
   const t = useT();
   const location = useLocation();
-  // 工作区上下文内 admin+ 呈现「工作区设置」入口(§6.12 角色可见性;member/guest 不可见)
   const workspaceContext = useOptionalWorkspace();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
 
+  const renderItem = (item: NavItemDef, testKey: string): React.JSX.Element => {
+    /* 「看板」入口在选中视图路由 /views/{id} 下保持激活(§4.2 视图 URL 同步) */
+    const isBoardView = item.key === 'board' && location.pathname.startsWith('/views/');
+    const link = (
+      <NavLink
+        to={item.to}
+        end={item.end === true}
+        data-testid={'nav-' + testKey}
+        className={({ isActive }) => navLinkClassName({ isActive: isActive || isBoardView })}
+      >
+        <Icon name={item.icon} size={20} className="mesh-sidebar__link-icon" />
+        <span className="mesh-sidebar__link-label">{t('nav.' + item.key)}</span>
+      </NavLink>
+    );
+    // 折叠态:图标按钮语义经 Tooltip 补齐可读名(§7.1)
+    return collapsed ? (
+      <Tooltip content={t('nav.' + item.key)}>{link}</Tooltip>
+    ) : (
+      link
+    );
+  };
+
   return (
-    <nav className="mesh-sidebar" aria-label={t('a11y.sidebar')}>
-      <ul className="mesh-sidebar__list">
-        {NAV_ITEMS.map((item) => (
-          <li key={item.key} className="mesh-sidebar__item">
-            {/* 「看板」入口在选中视图路由 /views/{id} 下保持激活(§4.2 视图 URL 同步) */}
-            <NavLink
-              to={item.to}
-              end={item.to === '/'}
-              data-testid={'nav-' + item.key}
-              className={({ isActive }) =>
-                navLinkClassName({
-                  isActive:
-                    isActive || (item.key === 'board' && location.pathname.startsWith('/views/')),
-                })
-              }
-            >
-              {t('nav.' + item.key)}
-            </NavLink>
-          </li>
-        ))}
-        {showWorkspaceSettings && workspace !== null ? (
-          <li className="mesh-sidebar__item">
-            <NavLink
-              to={`/w/${workspace.slug}/settings`}
-              data-testid="nav-workspace-settings"
-              className={navLinkClassName}
-            >
-              {t('nav.workspaceSettings')}
-            </NavLink>
-          </li>
-        ) : null}
-      </ul>
+    <nav
+      className={collapsed ? 'mesh-sidebar mesh-sidebar--collapsed' : 'mesh-sidebar'}
+      aria-label={t('a11y.sidebar')}
+    >
+      {NAV_GROUPS.map((group) => (
+        <section key={group.key} className="mesh-sidebar__group">
+          {collapsed ? null : (
+            <h2 className="mesh-sidebar__group-title">{t('nav.group.' + group.key)}</h2>
+          )}
+          <ul className="mesh-sidebar__list">
+            {group.items.map((item) => (
+              <li key={item.key} className="mesh-sidebar__item">
+                {renderItem(item, item.key)}
+              </li>
+            ))}
+            {group.key === 'admin' && showWorkspaceSettings && workspace !== null ? (
+              <li className="mesh-sidebar__item">
+                {collapsed ? (
+                  <Tooltip content={t('nav.workspaceSettings')}>
+                    <NavLink
+                      to={`/w/${workspace.slug}/settings`}
+                      data-testid="nav-workspace-settings"
+                      className={navLinkClassName}
+                    >
+                      <Icon name="settings" size={20} className="mesh-sidebar__link-icon" />
+                      <span className="mesh-sidebar__link-label">{t('nav.workspaceSettings')}</span>
+                    </NavLink>
+                  </Tooltip>
+                ) : (
+                  <NavLink
+                    to={`/w/${workspace.slug}/settings`}
+                    data-testid="nav-workspace-settings"
+                    className={navLinkClassName}
+                  >
+                    <Icon name="settings" size={20} className="mesh-sidebar__link-icon" />
+                    <span className="mesh-sidebar__link-label">{t('nav.workspaceSettings')}</span>
+                  </NavLink>
+                )}
+              </li>
+            ) : null}
+          </ul>
+        </section>
+      ))}
+      <div className="mesh-sidebar__footer">
+        <Tooltip content={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}>
+          <button
+            type="button"
+            className="mesh-sidebar__toggle"
+            data-testid="sidebar-toggle"
+            aria-label={collapsed ? t('a11y.sidebarExpand') : t('a11y.sidebarCollapse')}
+            aria-expanded={!collapsed}
+            onClick={onToggleCollapsed}
+          >
+            <Icon name="panel-left" size={20} className="mesh-sidebar__toggle-icon" />
+            <span className="mesh-sidebar__link-label">{t('a11y.sidebarCollapse')}</span>
+          </button>
+        </Tooltip>
+      </div>
     </nav>
   );
 }
