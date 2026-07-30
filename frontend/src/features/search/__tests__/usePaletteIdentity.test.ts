@@ -83,6 +83,43 @@ describe('usePaletteIdentity', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('未登录 + URL slug:scope 取 slug、角色 null(公开页规范深链直达同样不探测)', () => {
+    useAuthStore.getState().clearToken();
+    const fetchImpl = vi.fn();
+    const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => null, fetchImpl });
+    const { result } = renderHook(() => usePaletteIdentity({ client, pathname: '/w/acme/board' }));
+    expect(result.current.userId).toBe(ANONYMOUS_USER_ID);
+    expect(result.current.workspaceId).toBe('acme');
+    expect(result.current.workspaceSlug).toBe('acme');
+    expect(result.current.role).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('slug 切换后迟到的 me 解析被 cancelled 守卫丢弃(不覆写新 scope)', async () => {
+    let resolveMe: (response: Response) => void = () => undefined;
+    const fetchImpl = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveMe = resolve;
+        }),
+    );
+    const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => 'tok', fetchImpl });
+    const { result, rerender } = renderHook(
+      ({ pathname }: { pathname: string }) => usePaletteIdentity({ client, pathname }),
+      { initialProps: { pathname: '/' } },
+    );
+    // slug 变化 → 旧 effect 清理(cancelled=true);迟到的首轮 me 不得覆写新 scope。
+    rerender({ pathname: '/w/other/board' });
+    resolveMe(
+      new Response(
+        JSON.stringify({ data: { user: { id: 'late', email: 'e', display_name: 'd' }, memberships: [] } }),
+        { status: 200 },
+      ),
+    );
+    await waitFor(() => expect(result.current.workspaceSlug).toBe('other'));
+    expect(result.current.workspaceId).toBe('other');
+  });
+
   it('token 出现后自动升级为真身解析(登录/OAuth 回调换牌路径)', async () => {
     useAuthStore.getState().clearToken();
     const client = clientReturning({
