@@ -223,10 +223,12 @@ function ShellProviders(): React.JSX.Element {
                   <Route path="squads/:squadId" element={<SquadDetailPage />} />
                   <Route path="squads/:squadId/tasks/:taskId" element={<SquadTaskDetailPage />} />
                   <Route path="cycles" element={<CyclesPage />} />
-                {/* 技能库(skill.md §4.1/§4.2):库页 / 详情 / 市场 */}
+                {/* 技能库(skill.md §4.1/§4.2 / design-quality §2.6):库页 / 市场 / 详情。
+                    市场路由规范深链为 /skills/marketplace(侧栏技能入口同族);旧 /marketplace 兼容重定向。 */}
                 <Route path="skills" element={<SkillsPage />} />
+                <Route path="skills/marketplace" element={<MarketplacePage />} />
                 <Route path="skills/:skillId" element={<SkillDetailPage />} />
-                <Route path="marketplace" element={<MarketplacePage />} />
+                <Route path="marketplace" element={<Navigate to="/skills/marketplace" replace />} />
                   {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
                   <Route path="chat" element={<ChatPage />} />
                   {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}

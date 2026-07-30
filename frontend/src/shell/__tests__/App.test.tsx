@@ -111,6 +111,21 @@ describe('App 路由', () => {
     expect(screen.getByText('Page not found')).toBeInTheDocument();
   });
 
+  it('/skills/marketplace 直达市场页、旧 /marketplace 兼容重定向(design-quality A-01 死链修复)', async () => {
+    signIn();
+    navigateTo('/skills/marketplace');
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
+  });
+
+  it('/marketplace 兼容跳转收敛到 /skills/marketplace', async () => {
+    signIn();
+    navigateTo('/marketplace');
+    render(<App />);
+    await waitFor(() => expect(screen.getByTestId('marketplace-title')).toBeInTheDocument());
+    await waitFor(() => expect(window.location.pathname).toBe('/skills/marketplace'));
+  });
+
   it('/login 未登录时渲染登录页', () => {
     navigateTo('/login');
     render(<App />);
