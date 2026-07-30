@@ -15,6 +15,7 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  Icon,
   IconButton,
   Input,
   Select,
@@ -22,6 +23,7 @@ import {
   StatusDot,
   useToast,
 } from '../../design';
+import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -66,7 +68,7 @@ function newClient(): MeshApiClient {
 
 interface ConnectorCardProps {
   readonly kind: IntegrationKind;
-  readonly icon: string;
+  readonly icon: IconName;
   readonly nameKey: string;
   readonly capabilityKeys: ReadonlyArray<string>;
   readonly connectedCount: number;
@@ -80,7 +82,7 @@ function ConnectorCard(props: ConnectorCardProps): React.JSX.Element {
   return (
     <div className="mesh-integrations__card" data-testid={`connector-card-${kind}`}>
       <span className="mesh-integrations__card-icon" aria-hidden="true">
-        {icon}
+        <Icon name={icon} size={24} />
       </span>
       <h4 className="mesh-integrations__card-name">{t(nameKey)}</h4>
       <div className="mesh-integrations__card-caps">
@@ -514,7 +516,7 @@ export function IntegrationsPage(): React.JSX.Element {
                   {integration.name}
                 </td>
                 <td>
-                  <span aria-hidden="true">{KIND_ICON[integration.kind]} </span>
+                  <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
                   {t(`integrations.kind.${integration.kind}`)}
                 </td>
                 <td>
@@ -543,7 +545,7 @@ export function IntegrationsPage(): React.JSX.Element {
                     onClick={() => navigate(`/integrations/${integration.id}`)}
                     data-testid={`integration-detail-${integration.id}`}
                   >
-                    ⚙
+                    <Icon name="settings" size={16} />
                   </IconButton>
                   {isAdmin &&
                     integration.health_state === 'auth_failed' &&
@@ -579,7 +581,11 @@ export function IntegrationsPage(): React.JSX.Element {
                       onClick={() => setDisableTarget(integration)}
                       data-testid={`integration-toggle-${integration.id}`}
                     >
-                      {integration.status === 'active' ? '⏸' : '▶'}
+                      {integration.status === 'active' ? (
+                        <Icon name="pause" size={16} />
+                      ) : (
+                        <Icon name="play" size={16} />
+                      )}
                     </IconButton>
                   )}
                   {isAdmin && (

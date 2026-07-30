@@ -3,7 +3,7 @@
  * 行级字段 + 方向 + 上移/下移/删除。
  */
 /* eslint-disable react-refresh/only-export-components -- SORT_FIELD_OPTIONS 与组件同模块契约 */
-import { Button, Select } from '../../design';
+import { Button, Icon, Select } from '../../design';
 import { useT } from '../../i18n';
 import type { SortRule } from './types';
 
@@ -78,7 +78,7 @@ export function SortConfigPanel(props: SortConfigPanelProps): React.JSX.Element 
             ↓
           </Button>
           <Button variant="secondary" onClick={() => removeAt(index)} aria-label={t('board.sortRemove')}>
-            ✕
+            <Icon name="x" size={16} />
           </Button>
         </div>
       ))}

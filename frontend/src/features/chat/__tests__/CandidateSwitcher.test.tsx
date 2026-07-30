@@ -1,7 +1,7 @@
 /**
  * CandidateSwitcher 测试(chat-session.md §4.2 / §3.2):
  * ‹ › 仅切换本地查看索引(懒加载候选,不写库,无 /select);「使用此条」独立落库(select);
- * 已持久化选中候选呈现「✓ 已选用」标记且禁用「使用此条」;端点禁用;失败 toast。
+ * 已持久化选中候选呈现「已选用」标记(check 图标 + 文案)且禁用「使用此条」;端点禁用;失败 toast。
  */
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

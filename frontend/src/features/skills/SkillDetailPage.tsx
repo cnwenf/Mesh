@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
+import { Button, EmptyState, ErrorState, Icon, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -290,7 +290,12 @@ export function SkillDetailPage(): React.JSX.Element {
         <span className={`mesh-skills__status mesh-skills__status--${skill.status}`}>
           {t(`skills.status.${skill.status}`)}
         </span>
-        {skill.has_scripts ? <span className="mesh-skills__script-flag">⚠ {t('skills.hasScripts')}</span> : null}
+        {skill.has_scripts ? (
+          <span className="mesh-skills__script-flag">
+            <Icon name="alert-triangle" size={16} />
+            {t('skills.hasScripts')}
+          </span>
+        ) : null}
       </header>
 
       <nav className="mesh-skills-detail__tabs" aria-label={t('skills.detailTabs')}>
@@ -333,7 +338,12 @@ export function SkillDetailPage(): React.JSX.Element {
               <tbody>
                 {versions.map((version) => (
                   <tr key={version.id} data-testid={`skill-version-${version.version}`}>
-                    <td>{version.version}{version.is_current ? ' ●' : ''}</td>
+                    <td>
+                      {version.version}
+                      {version.is_current ? (
+                        <Icon name="check" size={16} className="mesh-skills__current-mark" />
+                      ) : null}
+                    </td>
                     <td>{version.status}</td>
                     <td>{version.changelog ?? ''}</td>
                     <td>
@@ -494,7 +504,9 @@ export function SkillDetailPage(): React.JSX.Element {
 
           {canManage && installation !== null && installation.install_status === 'updated_available' ? (
             <div className="mesh-skills-detail__update" data-testid="skill-update-row">
-              <span className="mesh-skills__update-flag">↻ {t('skills.updateAvailable')}</span>
+              <span className="mesh-skills__update-flag">
+                <Icon name="cycle" size={16} /> {t('skills.updateAvailable')}
+              </span>
               <Button onClick={() => void doUpdateNow(installation)} data-testid="skill-update-now">
                 {t('skills.updateNow')}
               </Button>

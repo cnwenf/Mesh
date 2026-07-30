@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
+import { Icon } from '../../design';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -104,7 +105,7 @@ export function InboxBell(): React.JSX.Element {
         aria-expanded={open}
         onClick={toggleOpen}
       >
-        <span aria-hidden="true">🔔</span>
+        <Icon name="bell" size={20} />
         {count > 0 ? (
           <span className="mesh-inbox-bell__badge" data-testid="inbox-badge">
             {count > 99 ? '99+' : count}

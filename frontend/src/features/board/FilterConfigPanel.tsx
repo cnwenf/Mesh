@@ -4,7 +4,7 @@
  * 权威执行,此处仅做 UI 编辑)。实时预览命中数属投影增量,本切片呈现占位「—」。
  */
 /* eslint-disable react-refresh/only-export-components -- 草稿互转纯函数与面板组件同模块契约(测试直接引用) */
-import { Button, Input, Select } from '../../design';
+import { Button, Icon, Input, Select } from '../../design';
 import { useT } from '../../i18n';
 import type { FilterCondition, FilterGroup, Filters, FilterOp } from './types';
 
@@ -216,7 +216,7 @@ function FilterGroupEditor(props: FilterGroupEditorProps): React.JSX.Element {
               onChange={(event) => replaceAt(index, { ...condition, value: event.target.value })}
             />
             <Button variant="secondary" onClick={() => removeAt(index)} aria-label={t('board.filterRemoveCondition')}>
-              ✕
+              <Icon name="x" size={16} />
             </Button>
           </div>
         ),

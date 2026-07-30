@@ -1125,14 +1125,39 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-last-run-ap-a')).toBeInTheDocument());
     expect(screen.getByTestId('autopilot-last-run-ap-a').textContent).toMatch(/failed|失败/i);
-    // trigger icon present (schedule → ⏰)
-    expect(screen.getByTestId('autopilot-trigger-ap-a').textContent).toContain('⏰');
+    // trigger icon present (schedule → clock SVG,design-quality §7.1 禁 emoji)
+    const triggerIcon = screen.getByTestId('autopilot-trigger-ap-a').querySelector('svg');
+    expect(triggerIcon).not.toBeNull();
+    expect(triggerIcon).toHaveAttribute('aria-hidden', 'true');
     // kill dialog: confirm disabled until reason typed
     await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
     const confirm = screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     await userEvent.type(screen.getByTestId('autopilot-kill-reason'), 'reason');
     expect((screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('list renders settings fallback icon for unknown trigger type', async () => {
+    stub((url, method) => {
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/kill-switch') && method === 'GET')
+        return fakeResponse({ body: { data: { kill_switch: false } } });
+      return fakeResponse({
+        body: {
+          data: [{ ...RULE, id: 'ap-x', trigger_type: 'future_trigger', trigger_config: {} }],
+          next_cursor: null,
+        },
+      });
+    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/autopilots" element={<AutopilotsPage />} />
+      </Routes>,
+      { route: '/autopilots' },
+    );
+    // 后端新增的未知触发类型回落 settings 图标,Icon 不因未注册名抛错
+    const triggerIcon = await screen.findByTestId('autopilot-trigger-ap-x');
+    expect(triggerIcon.querySelector('svg')).not.toBeNull();
   });
 
   it('run detail artifacts link to app routes', async () => {

@@ -12,12 +12,14 @@ import {
   Dialog,
   EmptyState,
   ErrorState,
+  Icon,
   Input,
   Select,
   Skeleton,
   StatusDot,
   useToast,
 } from '../../design';
+import type { IconName } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -39,7 +41,7 @@ import {
   formatSuccessRate,
   scheduleSummary,
 } from './format';
-import type { AutopilotRule } from './types';
+import type { AutopilotRule, AutopilotTriggerType } from './types';
 import { TRIGGER_TYPES } from './types';
 import './autopilots.css';
 
@@ -47,15 +49,15 @@ const PAGE_LIMIT = 50;
 const STATUS_ALL = 'all';
 const TYPE_ALL = 'all';
 
-/** §4.1 触发器列「图标 + 文案」。 */
-const TRIGGER_ICONS: Record<string, string> = {
-  schedule: '⏰',
-  issue_status_changed: '🔀',
-  issue_created: '➕',
-  issue_field_changed: '📝',
-  comment_created: '💬',
-  agent_mentioned: '📣',
-  webhook_received: '🔗',
+/** §4.1 触发器列「图标 + 文案」(design-quality §7.1:触发器禁用 emoji,统一走 Icon)。 */
+const TRIGGER_ICONS: Record<AutopilotTriggerType, IconName> = {
+  schedule: 'clock',
+  issue_status_changed: 'git-merge',
+  issue_created: 'plus',
+  issue_field_changed: 'file-text',
+  comment_created: 'message',
+  agent_mentioned: 'megaphone',
+  webhook_received: 'link',
 };
 
 /** 监听即重拉的实时事件(§3.5)。 */
@@ -93,7 +95,9 @@ function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
         {rule.name}
       </td>
       <td data-testid={`autopilot-trigger-${rule.id}`}>
-        <span aria-hidden="true">{TRIGGER_ICONS[rule.trigger_type] ?? '⚙️'} </span>
+        <span className="mesh-autopilots__trigger-icon" aria-hidden="true">
+          <Icon name={TRIGGER_ICONS[rule.trigger_type] ?? 'settings'} size={16} />
+        </span>
         {t(`autopilots.trigger.${rule.trigger_type}`)}
         {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
       </td>

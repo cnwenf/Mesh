@@ -2,7 +2,7 @@
  * 集成平台展示层格式化(integrations.md §4 / README §6.18:本地化仅展示层)。
  * 纯函数 + 色调映射,无副作用,便于单测。
  */
-import type { StatusDotTone } from '../../design';
+import type { IconName, StatusDotTone } from '../../design';
 import type {
   BindingStatus,
   DeliveryState,
@@ -16,13 +16,13 @@ import type {
 } from './types';
 import { INTEGRATION_HEALTH_STATES } from './types';
 
-/** 集成 kind 图标(§4.1 类型图标列)。 */
-export const KIND_ICON: Record<IntegrationKind, string> = {
-  im_feishu: '🐦',
-  im_slack: '💬',
-  vcs_github: '🐙',
-  vcs_gitlab: '🦊',
-  webhook_outbound: '📤',
+/** 集成 kind 图标(§4.1 类型图标列;统一 SVG 图标名,经 design `<Icon>` 渲染,§7.1)。 */
+export const KIND_ICON: Record<IntegrationKind, IconName> = {
+  im_feishu: 'message',
+  im_slack: 'chat',
+  vcs_github: 'git-merge',
+  vcs_gitlab: 'git-merge',
+  webhook_outbound: 'upload',
 };
 
 export const INTEGRATION_STATUS_TONE: Record<IntegrationStatus, StatusDotTone> = {

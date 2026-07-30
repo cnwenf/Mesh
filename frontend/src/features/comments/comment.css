@@ -159,7 +159,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-raised);
   padding: var(--space-1);
-  z-index: 5;
+  z-index: var(--z-dropdown); /* 浮动操作菜单层(§11.2 令牌;原 5 散落值清偿) */
 }
 
 .mesh-comments__reaction-picker button {

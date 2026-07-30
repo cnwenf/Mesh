@@ -157,7 +157,7 @@ describe('OnboardingChecklist', () => {
     expect(screen.getByTestId('onboarding-step-dispatch_or_mention_agent').className).not.toContain(
       'mesh-onboarding__step--current',
     );
-    // 完成态 ✓ 勾选(图标 + 文字标签,非颜色唯一信号)
+    // 完成态 check 图标勾选(图标 + 文字标签,非颜色唯一信号)
     expect(screen.getByTestId('onboarding-check-create_workspace')).toHaveAttribute(
       'aria-label',
       'Done',
@@ -233,5 +233,31 @@ describe('OnboardingChecklist', () => {
     );
     expect(screen.queryByTestId('onboarding-card')).toBeNull();
     expect(screen.queryByTestId('onboarding-aha-card')).toBeNull();
+  });
+
+  it('renders safely with zero progress total and a missing step entry', async () => {
+    // 防御态:进度分母 total=0(百分比钳制为 0)+ 缺少一个步骤条目(渲染跳过)
+    // + 全部步骤已完成(无 pending,首未完成步骤为 null,不高亮)。
+    stubApi({
+      progress: { total: 0, completed: 0, skipped: 0 },
+      steps: [
+        step('create_workspace', 'completed', 'manual', '2026-07-24T10:00:00Z'),
+        step('invite_member_or_add_agent', 'completed', 'manual', '2026-07-24T10:05:00Z'),
+        step('create_first_issue', 'completed', 'manual', '2026-07-24T10:08:00Z'),
+        step('dispatch_or_mention_agent', 'completed', 'manual', '2026-07-24T10:12:00Z'),
+      ],
+    });
+    renderWithProviders(
+      <RealtimeContext.Provider value={noRealtime}>
+        <OnboardingChecklist />
+      </RealtimeContext.Provider>,
+    );
+    await waitFor(() => expect(screen.getByTestId('onboarding-card')).toBeInTheDocument());
+    // 缺失的步骤条目跳过渲染,其余四步照常;无当前高亮步骤。
+    expect(screen.queryByTestId('onboarding-step-see_agent_reply_in_inbox')).toBeNull();
+    expect(screen.getByTestId('onboarding-step-create_workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('onboarding-step-create_workspace').className).not.toContain(
+      'mesh-onboarding__step--current',
+    );
   });
 });

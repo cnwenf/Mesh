@@ -7,7 +7,7 @@
  * - 进度真源在数据库(§3.7):CTA 仅深链,步骤推进经领域事件 + 实时帧重拉。
  */
 import { useNavigate } from 'react-router';
-import { Button } from '../../design';
+import { Button, Icon } from '../../design';
 import { useT } from '../../i18n';
 import { AhaCelebration } from './illustrations';
 import { stepDeeplink } from './deeplinks';
@@ -41,7 +41,7 @@ function StepRow(props: StepRowProps): React.JSX.Element {
             aria-label={t('onboarding.completedBadge')}
             data-testid={`onboarding-check-${step.step_key}`}
           >
-            ✓
+            <Icon name="check" size={16} />
           </span>
         ) : (
           <span className="mesh-onboarding__check" aria-hidden="true" />

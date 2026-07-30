@@ -5,7 +5,16 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, Input, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Input,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { activeWorkspace, fetchMe } from '../members/api';
@@ -91,15 +100,30 @@ export function MarketplacePage(): React.JSX.Element {
           {entries.map((entry) => (
             <li key={entry.id} className="mesh-skills__card" data-testid={`market-entry-${entry.id}`}>
               <span className="mesh-skills__card-name">
-                {entry.certified ? <span title={t('skills.certified')}>✅ </span> : null}
+                {entry.certified ? (
+                  <span className="mesh-skills__cert-flag" title={t('skills.certified')}>
+                    <Icon name="badge-check" size={16} />
+                  </span>
+                ) : null}
                 {entry.name}
               </span>
               <span className="mesh-skills__card-summary">{entry.summary}</span>
               <span className="mesh-skills__card-meta">
                 <span>v{entry.version}</span>
-                <span>⬇ {entry.downloads}</span>
-                <span>★ {entry.rating.toFixed(1)}</span>
-                {entry.has_scripts ? <span className="mesh-skills__script-flag">⚠ {t('skills.hasScripts')}</span> : null}
+                <span className="mesh-skills__meta-stat">
+                  <Icon name="download" size={16} />
+                  {entry.downloads}
+                </span>
+                <span className="mesh-skills__meta-stat">
+                  <Icon name="star" size={16} />
+                  {entry.rating.toFixed(1)}
+                </span>
+                {entry.has_scripts ? (
+                  <span className="mesh-skills__script-flag">
+                    <Icon name="alert-triangle" size={16} />
+                    {t('skills.hasScripts')}
+                  </span>
+                ) : null}
               </span>
               <div className="mesh-skills__card-actions">
                 {entry.has_scripts ? (
@@ -158,11 +182,23 @@ export function MarketplacePage(): React.JSX.Element {
               <dt>{t('skills.marketplaceDownloads')}</dt>
               <dd>{previewEntry.downloads}</dd>
               <dt>{t('skills.marketplaceRating')}</dt>
-              <dd>★ {previewEntry.rating.toFixed(1)}</dd>
+              <dd className="mesh-skills__meta-stat">
+                <Icon name="star" size={16} />
+                {previewEntry.rating.toFixed(1)}
+              </dd>
               <dt>{t('skills.marketplaceCertified')}</dt>
               <dd>{previewEntry.certified ? t('skills.marketplaceYes') : t('skills.marketplaceNo')}</dd>
               <dt>{t('skills.marketplaceScripts')}</dt>
-              <dd>{previewEntry.has_scripts ? `⚠ ${t('skills.hasScripts')}` : t('skills.marketplaceNo')}</dd>
+              <dd>
+                {previewEntry.has_scripts ? (
+                  <span className="mesh-skills__script-flag">
+                    <Icon name="alert-triangle" size={16} />
+                    {t('skills.hasScripts')}
+                  </span>
+                ) : (
+                  t('skills.marketplaceNo')
+                )}
+              </dd>
             </dl>
             {canManage ? (
               <Button

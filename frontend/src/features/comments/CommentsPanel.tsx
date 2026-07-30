@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
-import { ErrorState, Skeleton, useToast } from '../../design';
+import { ErrorState, Icon, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
 import { CommentCard } from './CommentCard';
@@ -223,7 +223,7 @@ export function CommentsPanel(props: CommentsPanelProps): React.JSX.Element {
               key={placeholder.execution_id}
               data-testid={`executing-${placeholder.execution_id}`}
             >
-              ⏳ {t('comments.executing', { name: placeholder.agent_name })}
+              <Icon name="clock" size={16} /> {t('comments.executing', { name: placeholder.agent_name })}
             </div>
           ))}
         </div>
