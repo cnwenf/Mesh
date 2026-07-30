@@ -65,6 +65,15 @@
   min-inline-size: 220px;
 }
 
+/* 受控横向滚动容器(design-quality A-05/§7.6):窄屏(390px)表格内部横滚,
+   不产生页面级横向溢出;右缘渐隐作为可滚动提示;首列粘住保持身份列常驻。 */
+.mesh-members__table-wrap {
+  overflow-x: auto;
+  max-inline-size: 100%;
+  border-radius: var(--radius-md);
+  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+}
+
 .mesh-members__table {
   inline-size: 100%;
   border-collapse: collapse;
@@ -80,6 +89,15 @@
   padding: var(--space-3);
   border-block-end: 1px solid var(--color-border);
   vertical-align: middle;
+}
+
+/* 首列粘住:横滚时身份列常驻(§7.6);底色取表面 token 保证覆盖 */
+.mesh-members__table th:first-child,
+.mesh-members__table td:first-child {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background-color: var(--color-surface-raised);
 }
 
 .mesh-members__table th {
