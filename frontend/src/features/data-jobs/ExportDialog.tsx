@@ -11,6 +11,7 @@ import { Dialog } from '../../design/components/Dialog';
 import { useToast } from '../../design/components/Toast';
 import { useT } from '../../i18n';
 import { errorToI18nKey } from '../../api/errors';
+import { uuidv4 } from '../../api/uuid';
 import { MeshApiError } from '../../api';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { createExportJob, downloadDataJobProduct, getDataJob } from './api';
@@ -117,7 +118,7 @@ export function ExportDialog(props: ExportDialogProps): React.JSX.Element | null
           ...(scope === 'project' && projectId != null ? { project_id: projectId } : {}),
           ...(filters !== undefined ? { filters } : {}),
         },
-        crypto.randomUUID(),
+        uuidv4(), // 非裸 crypto.randomUUID():HTTP 非安全上下文下缺失(MES-129)
       );
       setJob(created);
       // 异步作业:短轮询兜底(无实时通道时也能收敛)。
