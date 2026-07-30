@@ -77,3 +77,25 @@ describe('ForgotPasswordPage(auth.md §4.1 / A4)', () => {
     await waitFor(() => expect(screen.getByTestId('forgot-sent')).toBeTruthy());
   });
 });
+
+describe('ForgotPasswordPage(默认 client 回落)', () => {
+  it('未注入 client 时经全局默认 client 发起重置(恒成功呈现不变)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { status: 'ok' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchImpl);
+    const user = userEvent.setup();
+    renderWithProviders(<ForgotPasswordPage />);
+
+    await user.type(screen.getByTestId('forgot-email'), 'jane@corp.com');
+    await user.click(screen.getByTestId('forgot-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('forgot-sent')).toBeTruthy());
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v1/auth/forgot-password');
+    expect(String(init.body)).toContain('jane@corp.com');
+  });
+});

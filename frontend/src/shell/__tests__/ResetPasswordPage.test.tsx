@@ -71,4 +71,63 @@ describe('ResetPasswordPage(auth.md §4.1 / A4)', () => {
     await waitFor(() => expect(screen.getByTestId('password-strength')).toBeTruthy());
     expect(screen.getByTestId('password-rules').textContent).toContain('at least 8');
   });
+
+  it('弱口令 needs_letter_and_digit 呈现字母+数字文案', async () => {
+    const user = userEvent.setup();
+    const client = stubClient([
+      {
+        status: 400,
+        body: {
+          error: { code: 'weak_password', message: 'x', details: { reason: 'needs_letter_and_digit' } },
+        },
+      },
+    ]);
+    renderWithProviders(<ResetPasswordPage client={client} />, { route: '/reset?token=RST' });
+
+    await user.type(screen.getByTestId('reset-password'), 'password');
+    await user.click(screen.getByTestId('reset-submit'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('reset-error').textContent).toContain('letters and digits'),
+    );
+  });
+
+  it('弱口令无 details 时回退通用弱口令文案', async () => {
+    const user = userEvent.setup();
+    const client = stubClient([
+      { status: 400, body: { error: { code: 'weak_password', message: 'x' } } },
+    ]);
+    renderWithProviders(<ResetPasswordPage client={client} />, { route: '/reset?token=RST' });
+
+    await user.type(screen.getByTestId('reset-password'), 'qwerty12345');
+    await user.click(screen.getByTestId('reset-submit'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('reset-error').textContent).toContain('too common'),
+    );
+  });
+});
+
+describe('ResetPasswordPage(默认 client 回落 / 无 URL 令牌)', () => {
+  it('URL 无 token 时重置码默认空,手动录入后经全局默认 client 完成重置', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: { status: 'ok' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchImpl);
+    const user = userEvent.setup();
+    renderWithProviders(<ResetPasswordPage />, { route: '/reset' });
+
+    expect((screen.getByTestId('reset-code') as HTMLInputElement).value).toBe('');
+    await user.type(screen.getByTestId('reset-code'), 'MANUAL-CODE');
+    await user.type(screen.getByTestId('reset-password'), 'new-pass-1');
+    await user.click(screen.getByTestId('reset-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('reset-done')).toBeTruthy());
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/v1/auth/reset-password');
+    expect(String(init.body)).toContain('"token":"MANUAL-CODE"');
+  });
 });

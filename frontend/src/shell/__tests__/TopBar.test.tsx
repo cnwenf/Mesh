@@ -86,6 +86,22 @@ describe('TopBar', () => {
     expect(input).toHaveValue('');
   });
 
+  it('清空后的空值变更真正抵达 onChange 时,命中空值提前返回(仅复位本框,不展开面板)', () => {
+    const onOpenSearch = vi.fn();
+    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+    const input = screen.getByTestId('topbar-search');
+    // 组件在任何变更后即提交清空(受控值恒为 ''),React 受控输入按节点值快照
+    // (_valueTracker)去重,会吞掉 ''→'' 的 change 事件。先将快照改写为脏值,
+    // 使本次空值变更真实触达 onChange,从而校验 handleSearchChange 的空值提前返回。
+    const tracker = (input as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })
+      ._valueTracker;
+    expect(tracker).toBeDefined();
+    tracker?.setValue('dirty');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(input).toHaveValue('');
+  });
+
   it('顶栏搜索 Escape 清空输入(不展开面板)', () => {
     const onOpenSearch = vi.fn();
     renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);

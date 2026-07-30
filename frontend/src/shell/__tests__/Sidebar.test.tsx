@@ -2,10 +2,12 @@
  * Sidebar — 分组侧栏(design-quality §4.1):四分组 + 折叠 rail + 图标 + 激活态。
  */
 import { useState } from 'react';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../test-utils/render';
+import { WorkspaceProvider, useWorkspace } from '../../workspace/WorkspaceProvider';
+import type { WorkspaceRole } from '../../api/workspace';
 import { Sidebar } from '../Sidebar';
 
 const EXPECTED: ReadonlyArray<{ testid: string; label: string; href: string }> = [
@@ -107,5 +109,90 @@ describe('Sidebar 折叠状态联动(AppShell 契约)', () => {
     await user.click(screen.getByTestId('sidebar-toggle'));
     expect(nav.className).toContain('mesh-sidebar--collapsed');
     expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+  });
+});
+
+/** 工作区全量桩(与 WorkspaceProvider 测试同构:by-slug 返回 detail 信封) */
+const WORKSPACE_DETAIL = {
+  id: 'ws-1',
+  name: 'Acme',
+  slug: 'acme',
+  logo_url: null,
+  timezone: 'UTC',
+  settings: { default_locale: 'en' },
+  my_role: 'owner',
+  created_at: '2026-07-25T00:00:00Z',
+  updated_at: '2026-07-25T00:00:00Z',
+};
+
+function stubWorkspaceClient(myRole: WorkspaceRole): unknown {
+  const fetchImpl = vi.fn().mockImplementation(() =>
+    Promise.resolve(
+      new Response(JSON.stringify({ data: { ...WORKSPACE_DETAIL, my_role: myRole } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ),
+  );
+  return {
+    baseUrl: 'http://localhost',
+    request: async (method: string, path: string): Promise<unknown> => {
+      const response = (await fetchImpl(`http://localhost${path}`, { method })) as Response;
+      const body = (await response.json()) as { data?: unknown };
+      return body.data;
+    },
+  };
+}
+
+/** 上下文状态探针:断言「缺席」前先确认工作区已就绪,避免异步时序假判。 */
+function WorkspaceStatusProbe(): React.JSX.Element {
+  const context = useWorkspace();
+  return <span data-testid="ws-probe-status">{context.status}</span>;
+}
+
+function renderSidebarInWorkspace(opts: {
+  myRole: WorkspaceRole;
+  collapsed?: boolean;
+}): ReturnType<typeof renderWithProviders> {
+  const client = stubWorkspaceClient(opts.myRole);
+  return renderWithProviders(
+    <WorkspaceProvider slug="acme" client={client as never}>
+      <Sidebar collapsed={opts.collapsed ?? false} onToggleCollapsed={() => undefined} />
+      <WorkspaceStatusProbe />
+    </WorkspaceProvider>,
+  );
+}
+
+describe('Sidebar 工作区设置入口(§6.12 角色可见性)', () => {
+  it('admin 工作区就绪后展开态呈现设置入口,指向当前工作区设置页', async () => {
+    renderSidebarInWorkspace({ myRole: 'owner' });
+    const link = await screen.findByTestId('nav-workspace-settings');
+    expect(link.getAttribute('href')).toBe('/w/acme/settings');
+    expect(link.textContent).toBe('Workspace settings');
+    // 统一 SVG 图标(§7.1);展开态不经 Tooltip 包裹
+    expect(link.querySelector('svg')).not.toBeNull();
+    expect(link.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('折叠态设置入口经 Tooltip 包裹补齐可读名,链接与 testid 保留(§7.1)', async () => {
+    renderSidebarInWorkspace({ myRole: 'admin', collapsed: true });
+    const link = await screen.findByTestId('nav-workspace-settings');
+    expect(link.getAttribute('href')).toBe('/w/acme/settings');
+    // 折叠态经 Tooltip 包裹:aria-describedby 关联到 role=tooltip 可读名
+    const describedBy = link.getAttribute('aria-describedby');
+    expect(describedBy).not.toBeNull();
+    const tooltip = describedBy !== null ? document.getElementById(describedBy) : null;
+    expect(tooltip?.textContent).toBe('Workspace settings');
+  });
+
+  it('member 角色不呈现工作区设置入口', async () => {
+    renderSidebarInWorkspace({ myRole: 'member' });
+    await waitFor(() => expect(screen.getByTestId('ws-probe-status').textContent).toBe('ready'));
+    expect(screen.queryByTestId('nav-workspace-settings')).toBeNull();
+  });
+
+  it('无工作区上下文(顶层路由)不呈现设置入口', () => {
+    renderSidebar();
+    expect(screen.queryByTestId('nav-workspace-settings')).toBeNull();
   });
 });
