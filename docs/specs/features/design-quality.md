@@ -1,10 +1,10 @@
-# 前端设计质量与体验升级 Spec
+# 前端设计质量与体验 Spec
 
-> Issue：MES-109
+> Issue：MES-133（承接并取代 MES-109 的实施基线）
 >
-> 状态：**Ready for implementation**
+> 状态：**Architecture / UX reviewed — Ready for implementation**
 >
-> 基线：`b62e6baf`（2026-07-30）
+> 代码基线：`4bbff27a`（2026-07-30）
 >
 > 适用范围：Mesh Web SPA 全部公开页、应用页、浮层、状态与响应式形态
 >
@@ -29,6 +29,32 @@
 - **P0**：阻断关键路径或让页面不可达/不可用。
 - **P1**：显著增加认知负担、误操作或跨设备失败。
 - **P2**：一致性和完成度问题，不阻断主要任务。
+
+### 0.1 Clean-room 来源与合规边界
+
+本 Spec 是 Mesh 的原创实现合同。设计输入仅来自以下两类：
+
+1. Mesh 已有业务 Spec、当前运行界面、测试存证和公开产品需求；
+2. 对合法公开、可见界面进行的黑盒观察，只记录通用布局规律、可测尺寸、状态转换和操作结果。
+
+全流程 MUST 遵守：
+
+- 不读取、检索、反编译或复制任何外部产品的源代码、CSS、source map、私有接口、私有素材或设计文件。
+- 不提交外部界面截图、品牌名、Logo、URL、文案、图标、插画、组件命名或可识别创意素材。
+- 观察截图只可作为临时测量输入，不进入仓库、Issue 附件、测试 fixture 或视觉基线。
+- 本文给出的 token、组件 API、文案结构、图标规则和代码分层均由 Mesh 独立决定；实施者只按本文编码，不接触观察输入。
+- 第三方字体、图标或库仅可选用 MIT、Apache-2.0、BSD、OFL 等允许项目使用的许可；引入前在依赖清单记录包名、版本、许可证和 NOTICE 要求。
+- 无法由黑盒观察确认的行为，以 Mesh 业务 Spec、可访问性和一致性原则独立决策，不推断外部内部实现。
+
+黑盒测量方法固定为：在浏览器 CSS 像素坐标系中记录外框、间距、字阶和状态出现顺序；同一对象至少在两个视口复测；尺寸归一到 §5 的令牌；颜色只归入语义角色并由 Mesh 独立色板重新取值；动效以录屏帧差估算后归一到 §5.5 的时长。仓库只保留归一后的原创决定和验证方法。
+
+### 0.2 权威关系与可验收写法
+
+- 本文是前端视觉、布局、交互状态、响应式和视觉测试环境的唯一权威。
+- `theme.md` 继续拥有主题协商和持久化；本文拥有主题落到布局和组件后的表现。
+- 各业务 Spec 继续拥有字段、权限、状态机和 API；本文不得改变其业务含义。
+- “与现状接近”“保持一致”“体验良好”不是验收条件。本文所有 MUST 均需落到数值、状态、可操作结果或自动化断言。
+- §13 的矩阵是阶段 2 实施和阶段 3 验收的共同 case 清单；任何 `N/A` 必须由业务 Spec 明确证明，不得由实现者自行删项。
 
 ---
 
@@ -70,58 +96,61 @@
 
 ### 2.1 审查范围
 
-- 路由树：46 个 `<Route>` 节点。
-- 页面实现：45 个 `*Page.tsx`。
-- 样式：26 个产品 CSS 文件。
+- 路由树：51 个 `<Route>` 节点。
+- 页面实现：44 个 `*Page.tsx`。
+- 样式：29 个产品 CSS 文件。
 - 视觉基线：24 张核心页亮/暗、桌面/平板快照。
 - 功能存证：117 张 PNG，覆盖主要业务域与关键状态。
-- 本轮实跑：53 个浏览器用例，其中视觉/主题 38 个、关键交互 14 个、手机宽度补充 1 个。
+- 存量走查：53 个浏览器用例，其中视觉/主题 38 个、关键交互 14 个、手机宽度补充 1 个。
 
 ### 2.2 已具备的基础
 
 - 主题有 `light/dark/system` 协商、防闪烁、打印、forced-colors、reduced-motion 和对比度门禁。
-- 颜色已基本经语义 token 使用，硬编码色值有检查。
-- 页面普遍具备 Skeleton、EmptyState、ErrorState、Toast 等状态组件。
+- `tokenValues.ts` 已包含亮暗语义色、字阶、间距、圆角、阴影、动效和 z-index，生成产物有幂等检查。
+- 设计层已有 Button、Input、Select、Dialog、Drawer、Menu、Tabs、Tooltip、Avatar、Badge、Skeleton、EmptyState、ErrorState、Toast 等原语及单测。
+- 顶栏搜索已接入统一命令面板；Skills 路由已挂载；手机已有底部主导航、“更多”抽屉和安全区适配。
 - i18n 已覆盖中英文，时间与数字有集中格式化基础。
 - 评论、附件、看板、聊天、运行、收件箱等复杂流程已有真实浏览器用例和截图。
 - 无障碍标记较多，核心视觉套件的 forced-colors 用例通过。
 
 这些能力 MUST 保留；实施不得以视觉重构为由退化现有业务状态、实时行为、主题协商或无障碍能力。
 
-### 2.3 阻断级事实
+### 2.3 MES-133 基线差距
 
-| ID   | 优先级 | 事实                                                     | 用户影响                               | 必须修复                                                              |
-| ---- | ------ | -------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------- |
-| A-01 | P0     | 侧栏存在“技能”入口，但路由树未挂载技能列表、市场和详情页 | 点击后进入 404，已实现功能不可达       | 挂载 `/skills`、`/skills/marketplace`、`/skills/:skillId`，补路由 E2E |
-| A-02 | P0     | 顶栏“搜索”是无行为的 `<input>`                           | 用户被暗示可搜索，但输入和回车均无结果 | 与全局搜索/命令面板共用入口、查询、历史和权限过滤                     |
-| A-03 | P0     | 768px 以下侧栏直接隐藏，无抽屉或底部导航                 | 手机上失去全部主导航                   | 实现紧凑顶栏 + 底部主导航 + “更多”抽屉                                |
-| A-04 | P0     | 390px 看板整体横向溢出，首列被推到视口之外               | 手机无法可靠浏览和拖动工作项           | 改为单列泳道轮播/分组切换，不允许页面级横向溢出                       |
-| A-05 | P1     | 390px 成员表右侧内容和操作超出视口                       | 无法查看状态和管理成员                 | 紧凑卡片/主次行模式，行操作进入菜单                                   |
-| A-06 | P1     | 26 个 CSS 文件仅 4 个包含宽度断点                        | 大量页面只在偶然情况下可缩放           | 页面模式统一引入 compact/medium/wide 规则和容器查询                   |
+下表只描述 `4bbff27a` 到本文目标的差距；已在 §2.2 落地的基础不得重复实现。
+
+| ID   | 优先级 | 基线事实                                                               | 用户影响                                   | 阶段 2 必须交付                                                        |
+| ---- | ------ | ---------------------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------- |
+| B-01 | P0     | 桌面侧栏仍为单层文字列表，宽度 232px，未分组、未折叠                    | 导航扫描慢，大屏占位与规范值不一致         | §4.1 分组侧栏，240/64px 双态，状态与权限驱动入口                       |
+| B-02 | P0     | 顶栏品牌不是首页链接，帮助/命令等仍使用字符作为图标                     | 返回路径不稳定，图标语言不统一             | 品牌链接、20px 原创 SVG 图标、统一 tooltip/aria-label                  |
+| B-03 | P0     | 手机顶栏把搜索框折成第二行，占用 88–104px                              | 小屏首屏内容不足，键盘弹出前已浪费空间     | 单行 56px 顶栏；搜索改为图标入口，输入只存在于命令面板                 |
+| B-04 | P0     | 手机看板仅把横向滚动限制在容器内，尚未完成单泳道与触控移动路径          | 可浏览但难以切列、移动和快速创建           | §8.3 单泳道、列 chips、长按移动 sheet、WIP 预告和回滚                  |
+| B-05 | P0     | Issue 详情在窄屏仍是长页面，属性没有底部 sheet，活动与评论缺少清晰模式 | 核心操作被元数据淹没，返回位置不可预测     | §9.9 详情双栏/单栏、属性 sheet、时间线、草稿和返回位置恢复             |
+| B-06 | P0     | 设计层缺 Combobox、Popover、DataTable、Card、Editor、Comment、Activity、CommandPalette、Board 模式 | feature 继续自造会造成状态与键盘行为分叉   | §7.8 所列组件全部进入 design 层或明确 pattern 层，feature 只做业务组合 |
+| B-07 | P1     | 路由和页面导入集中在 `App.tsx`，页面级错误/加载边界粒度不足             | 首包增长，单模块异常可能影响整个应用       | §11.1 路由清单化、按页面族 lazy、每族 Suspense/ErrorBoundary           |
+| B-08 | P1     | 现有截图视口、fixture、字体和命名不完全统一，状态覆盖不构成笛卡尔矩阵  | 视觉差异不可稳定复现，漏测边界状态         | §13.5–§13.7 固定环境、数据夹具、命名和完整 case 生成器                 |
+| B-09 | P1     | feature CSS 仍存在自造密度、控件和浮层结构                              | 视觉换肤后仍会出现局部拼装感               | 按 §11 依赖方向迁移，迁完一页即删除该页重复原语                       |
 
 ### 2.4 设计系统缺口
 
-当前基础 token 有 52 项，但粒度不足：
+基础 token 与第一批原语已完成，剩余缺口位于“复合组件 + 页面模式 + 迁移纪律”：
 
-- 字号 3 档，无法稳定表达数据标签、正文、页标题、数字和展示标题。
-- 圆角 3 档、阴影 1 档，浮层、卡片和选中态缺少明确层级。
-- 动效时长 2 档，无法区分即时反馈、浮层进入和布局变化。
-- 缺少 hover/pressed/selected/disabled surface，组件自行组合状态。
-- `Button` 基础 CSS 没有统一 hover/active 规则。
-- 图标混用字符、emoji、内联 SVG 和文字；粗细、尺寸和对齐不一致。
-- 大量 `px/rem` 尺寸散落在业务 CSS，密度和触控目标不可全局调整。
-- 通用 `.mesh-page` 固定 `760px`，报表和管理页在大屏浪费空间，编辑页又缺少分区宽度规则。
+- Combobox、Popover、DataTable、Card、Editor、Comment、Activity、Command Palette、Board 尚无统一状态合同。
+- 字符和 emoji 图标仍存在于顶栏、导航和局部操作；必须迁移到原创 SVG 图标系统。
+- `.mesh-page` 仍固定 760px；数据页、详情页、设置页没有统一的 pattern 组件。
+- feature CSS 仍可自造近似间距和断点；需要静态检查与容器级布局约束。
+- overlay 分别维护焦点圈养、滚动锁和 Esc；需要统一 OverlayManager 与层级栈。
+- 视觉用例覆盖页面正常态多，组件边界态、权限态、冲突态和输入法组合态不足。
 
 ### 2.5 信息架构与交互缺口
 
-- 中文侧栏两个“自动化”入口无法区分 Autopilots 与 Runtimes。
-- 导航项目过多且没有分组，业务、AI 能力、平台设置混在一列。
-- 品牌不是返回首页的链接；当前位置主要靠高饱和整块选中态表达。
-- issue 详情把核心内容、讨论和大量元数据堆成超长页，手机上尤其明显。
-- 看板、表格和筛选器使用较多原生控件外观，和设计组件不一致。
-- 空状态已有组件，但插画、标题、说明、主操作和帮助链接的组合未形成一致模板。
-- 错误文案普遍能显示失败，但不总能说明影响、恢复动作和是否保留用户输入。
-- AI 状态目前主要靠 “AI” 徽标和普通状态文字，运行中/待确认/失败的跨页面表达不统一。
+- 桌面导航已区分名称但仍未按“工作/团队/运行/管理”分组，当前项仍依赖大面积强调色。
+- 手机已有全量入口，但顶栏、底栏和页面 sticky 区的垂直预算没有统一。
+- Issue 详情、聊天、收件箱尚未使用同一“桌面双栏、手机路由化单栏”返回协议。
+- 看板、表格、筛选器和业务选择器仍混用原生控件与 feature 自造组件。
+- 空态和错误态已有原语，但权限、离线、冲突、输入保留等组合缺少页面级统一。
+- AI 运行五态已在业务中出现，但图标、文案、时间和恢复动作尚未统一为跨页面 pattern。
+- URL 尚未成为所有筛选、排序、tab 和详情返回上下文的真源，刷新或后退可能丢状态。
 
 ### 2.6 路由与浮层盘点
 
@@ -138,7 +167,7 @@
 | 工作项     | `/issues`、`/issues/by-identifier/:identifier`、`/issues/:issueId`                                          | DataView、深链、详情、属性、评论、附件、标签、VCS、小队分派       |
 | 看板       | `/board`、`/views/:viewId`                                                                                  | 保存视图、筛选、WIP、桌面拖拽、手机单泳道                         |
 | 名册/Agent | `/members`、`/agents/:agentId`                                                                              | 人机同册、筛选、创建向导、详情和运行状态                          |
-| Skills     | 侧栏 `/skills`；组件已有但生产路由缺失                                                                      | 补 `/skills`、`/skills/marketplace`、`/skills/:skillId`，消除死链 |
+| Skills     | `/skills`、`/skills/marketplace`、`/skills/:skillId`                                                        | 保持列表、市场、详情真实刷新可达；统一安装、权限和可信度层级       |
 | Squads     | `/squads`、`/squads/:squadId`、`/squads/:squadId/tasks/:taskId`                                             | 列表、详情、计划审批、拆解树、任务看板                            |
 | 聊天       | `/chat`                                                                                                     | 会话列表、对话、上下文、附件、流式和手机单栏                      |
 | 运行环境   | `/runtimes`、`/runtimes/:runtimeId`、`/executions/:executionId`                                             | 名册、注册向导、详情、日志、凭据与取消                            |
@@ -159,14 +188,14 @@
 
 | 切面      | 当前                               | 目标                                                               |
 | --------- | ---------------------------------- | ------------------------------------------------------------------ |
-| 导航      | 单层长侧栏；手机直接隐藏；技能死链 | 分组侧栏、可折叠 rail、手机底栏与抽屉；所有入口可达                |
-| 搜索      | 顶栏假搜索；命令面板另有入口       | 搜索框就是命令面板入口；统一结果、最近项、命令与深链               |
+| 导航      | 单层长侧栏；手机底栏/抽屉已可达    | 分组侧栏、可折叠 rail；桌面/手机入口、权限和名称同源                |
+| 搜索      | 顶栏已接命令面板，业务对象检索不足 | 统一结果、最近项、命令、权限过滤、深链和无结果创建                  |
 | 密度      | 局部过空、局部控件拥挤             | 页面模板按浏览/编辑/监控三种密度组织                               |
 | 层级      | 主要靠蓝色、边框和粗体             | 通过 surface、排版、留白、图标和状态共同表达                       |
 | 图标      | emoji、字符和 SVG 混用             | 统一 16/20/24px SVG 图标系统，文字标签为语义真源                   |
 | 反馈      | toast 和局部状态并存但位置不稳定   | 即时局部反馈优先，toast 只承载跨区域结果，危险操作可撤销或二次确认 |
-| 手机      | 多数页面没有专门规则               | 关键流程在 320px 可完成；无页面级横向溢出                          |
-| 暗色      | 技术实现完整，层级偏平、蓝色偏亮   | 独立校准 surface、边界、焦点、状态和图表，不做简单反色             |
+| 手机      | 外壳可达，复杂页仍多为缩窄桌面版   | 关键流程在 320px 可完成；无页面级横向溢出                          |
+| 暗色      | token 与门禁完整，部分 feature 层级偏平 | 独立校准 surface、边界、焦点、状态和图表，不做简单反色         |
 | 加载      | 大多有 skeleton                    | skeleton 与最终布局同形；局部刷新不抹掉已有内容                    |
 | 空态      | 功能上存在                         | 与用户权限、上下文和下一步动作匹配                                 |
 | 错误      | 多数有重试                         | 说明发生了什么、影响什么、怎么恢复、输入是否保留                   |
@@ -181,16 +210,16 @@
 | ---------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | 登录/注册/MFA/找回/重置      | 卡片可用但品牌、层级和模式切换较朴素；窄屏顶部留白不稳定 | 单一认证框架；展示品牌价值、当前步骤、第三方/账号分隔；错误贴近字段                         | 自动填充、密码管理器、软键盘、错误不清空输入           |
 | 设备授权/邀请接受/OAuth 回调 | 状态完整但公共页之间缺少一致外壳                         | 共用 PublicFlowShell；明确来源、权限、工作区和安全提示                                      | 过期、已使用、无工作区、回调失败均有恢复动作           |
-| 首页/工作区首页              | 更像组件演示与技术状态汇总                               | 工作台：我的工作、等待确认、AI 运行、最近项目、快速创建                                     | 无数据时进入 onboarding；有数据时不继续展示演示内容    |
+| 首页/工作区首页              | 已有工作区和最近 Issue，但缺少待确认、运行态和清晰优先级 | 工作台：我的工作、等待确认、AI 运行、最近项目、快速创建                                     | 无数据时进入 onboarding；有数据时优先展示待处理工作    |
 | Onboarding                   | 有清单和存证，但和工作台/空状态的视觉关系弱              | 轻量进度卡 + 情境 CTA；完成后自动收起，可从帮助恢复                                         | 每一步只有一个主操作，实时完成不跳动                   |
 | 项目列表/详情/设置/周期      | 卡片、表格、面板混杂；大屏利用不足                       | 项目列表采用密集行/网格切换；详情采用 Overview/Issues/Updates/Dashboard；设置独立二级导航   | 健康度、里程碑、周期、归档状态在列表一眼可读           |
 | Issue 列表                   | 筛选和批量能力强，但控件密度与层级不统一                 | 标准 DataView：标题栏、保存视图、过滤 chips、表头、行、批量条                               | 320px 转主次行；批量条粘底；键盘上下选择               |
 | Issue 详情                   | 主任务与元数据同权；手机超长；标识换行突兀               | 桌面 2 栏；内容/讨论为主，属性为 320px 侧栏；手机属性进入底部抽屉                           | 标题可内联编辑；活动/评论可切换；保存与冲突状态清楚    |
 | 评论/提及/回应               | 功能完整，操作文字过密，执行占位表达弱                   | 时间线视觉；悬停/聚焦显示次要操作；agent 触发预览独立提示                                   | 草稿、附件、提及、发布、失败重试、撤销均不丢输入       |
 | 附件/灯箱                    | 状态丰富但卡片和上传区视觉偏工程化                       | 统一文件卡、缩略图、扫描状态、进度环、失败操作；触控灯箱工具栏                              | 粘贴、拖拽、多文件、扫描中、感染、签名过期             |
-| 看板/保存视图                | 桌面列宽和空白失衡；手机不可用；面板入口分散             | 桌面自适应列；手机单泳道切换；视图配置集中为一处；卡片突出标识/标题/责任人/状态             | 拖拽、键盘移动、触控长按、WIP 弹回、离线、跨项目确认   |
+| 看板/保存视图                | 桌面列宽和空白失衡；手机仅内部横滚；面板入口分散         | 桌面自适应列；手机单泳道切换；视图配置集中为一处；卡片突出标识/标题/责任人/状态             | 拖拽、键盘移动、触控长按、WIP 弹回、离线、跨项目确认   |
 | 成员/Agent                   | 手机表格溢出；人和 agent 信息密度不平衡                  | 同一名册；头像、名称、类型、角色、状态主次分行；agent 运行态增强                            | 搜索、筛选、角色改动、停用、详情深链、唯一创建入口     |
-| Skills                       | 组件存在但路由未挂载                                     | 补齐列表、市场、详情路由；统一安装/权限/可信度信息架构                                      | 从侧栏和 Agent 详情均可达，路由刷新不 404              |
+| Skills                       | 列表、市场、详情已可达，但页面 pattern 与权限层级不统一 | 保留路由；统一安装/权限/可信度信息架构                                                      | 从侧栏和 Agent 详情均可达，路由刷新不 404              |
 | Squads/任务                  | 拆解树、看板、审批信息量大                               | 概览 + 成员 + 计划 + 任务四区；审批作为显著但克制的决策卡                                   | 计划变更、阻塞、重试、leader 状态和依赖可读            |
 | 收件箱                       | 功能和聚合完整，行层级与批量动作不够稳定                 | 双栏：分组列表 + 预览；手机单栏；未读、优先级、来源、对象一致排列                           | 标已读、归档、深链、实时新通知、空态和 quiet hours     |
 | 聊天                         | 平板可用；手机把列表和对话纵向串联                       | 桌面双栏，手机列表/会话二选一；输入区粘底；上下文作为可收起条                               | 流式、停止、重生成、候选切换、附件、引用、长消息       |
@@ -199,7 +228,7 @@
 | Integrations/订阅            | 功能多，目录、连接、绑定、事件和订阅入口分散             | 集成目录与已连接分区；详情使用 Overview/Bindings/Events/Health；订阅独立但有互链            | 健康、重授权、绑定冲突、测试连接、投递失败恢复         |
 | Analytics                    | 图表可用但信息层级与数字排版弱；窄屏可能裁切             | KPI 条 + 图表网格 + 口径说明；数字使用 tabular；图表支持横向缩放或重排                      | 无数据、数据不足、权限过滤、时区、亮暗和颜色非唯一信号 |
 | 账号/工作区设置              | 长页面堆叠，危险区与普通偏好距离不足                     | 左侧/顶部二级设置导航；内容按 Appearance/Notifications/Security/Data/Danger 分页            | dirty state、保存结果、权限不可见、危险操作确认        |
-| 搜索/命令面板/帮助           | 命令面板可用但顶栏搜索未接通                             | 一个统一入口；最近项、导航、对象、命令分组；输入时展示权限过滤结果                          | `Cmd/Ctrl+K`、`/`、方向键、回车、Esc、读屏结果计数     |
+| 搜索/命令面板/帮助           | 顶栏已接统一面板，但业务对象、最近项和无结果动作不完整   | 一个统一入口；最近项、导航、对象、命令分组；输入时展示权限过滤结果                          | `Cmd/Ctrl+K`、`/`、方向键、回车、Esc、读屏结果计数     |
 | 404/全局错误/离线            | 基础错误页存在，缺少品牌和上下文                         | 保留应用外壳（无权限泄露场景除外），给返回、重试、状态页/诊断 ID                            | 路由错误、权限、服务失败、离线、重同步分开表达         |
 
 ---
@@ -257,6 +286,22 @@
 
 每个模板 MUST 允许业务页通过 slot 扩展，但不得复制外壳、页标题和状态组件。
 
+### 4.5 外壳几何与滚动所有权
+
+| 模式 | 顶栏 | 主导航 | 页面 gutter | 内容区 | 固定区域 |
+| --- | --- | --- | --- | --- | --- |
+| compact `0–599` | 56px 单行 | 56px 底栏 + safe area；更多为全高 drawer | 16px | `100%`，最小宽 0 | 仅顶栏、底栏；页面工具条可在顶栏下 sticky |
+| medium `600–1023` | 56px | 64px rail；可打开 320px drawer | 24px | `minmax(0, 1fr)` | 顶栏、rail |
+| wide `1024–1439` | 56px | 240px 展开侧栏 | 24px | 标准页最大 1120px，数据页可占满 | 顶栏、侧栏 |
+| xwide `≥1440` | 56px | 240px 展开侧栏 | 32px | 标准页 1120px，宽数据页最大 1440px | 顶栏、侧栏 |
+
+- `body` 不作为应用页的业务滚动容器；`AppShell main` 是默认纵向滚动所有者。
+- Dialog、Drawer、Command Palette 打开时锁住背景滚动并保存原滚动位置；关闭后恢复。
+- Conversation 和 Board 可拥有内部滚动区，但不得再让 `main` 同方向滚动；同一手势方向最多一个滚动所有者。
+- sticky 工具条的 `inset-block-start` 必须为顶栏 56px 加当前状态横幅实际高度。
+- 页面锚点和焦点滚入视图时保留 16px 空隙，不得被 sticky 区遮挡。
+- 宽数据页在 xwide 不居中压成阅读列；表单和正文仍分别受 640px/720px 上限约束。
+
 ---
 
 ## 5. 设计令牌
@@ -273,7 +318,7 @@
 
 ### 5.2 语义色
 
-下表为实施起始值；合入前 MUST 通过仓库对比度脚本，必要时只调整值、不改变语义名。
+下表为规范值。任何调整必须先修订本文并在同一 PR 更新 `tokenValues.ts`、对比度登记和视觉基线；不得由页面或组件临时偏移。
 
 | Token                      | Light                | Dark              | 用途             |
 | -------------------------- | -------------------- | ----------------- | ---------------- |
@@ -284,9 +329,10 @@
 | `--color-surface-hover`    | `#F4F5F7`            | `#252B36`         | hover            |
 | `--color-surface-pressed`  | `#E9ECF0`            | `#2B3240`         | pressed          |
 | `--color-surface-selected` | `#EEF2FF`            | `#24263F`         | selected         |
+| `--color-surface-sunken`   | `#F1F5F9`            | `#162032`         | 输入、代码、内嵌区 |
 | `--color-text-strong`      | `#16181D`            | `#F4F6F8`         | 标题和主数据     |
 | `--color-text`             | `#2B2F36`            | `#D7DBE0`         | 正文             |
-| `--color-text-muted`       | `#667085`            | `#9AA3AF`         | 辅助信息         |
+| `--color-text-muted`       | `#5F6980`            | `#9AA3AF`         | 辅助信息         |
 | `--color-text-disabled`    | `#98A2B3`            | `#697386`         | 禁用态           |
 | `--color-border-subtle`    | `#EAECF0`            | `#252B35`         | 轻分隔           |
 | `--color-border`           | `#D7DCE3`            | `#343C49`         | 控件与卡片边界   |
@@ -295,6 +341,7 @@
 | `--color-accent-hover`     | `#4338CA`            | `#A5B4FC`         | 主操作 hover     |
 | `--color-accent-pressed`   | `#3730A3`            | `#6366F1`         | 主操作 pressed   |
 | `--color-accent-soft`      | `#EEF2FF`            | `#24263F`         | 选中背景         |
+| `--color-accent-contrast`  | `#FFFFFF`            | `#10131A`         | 强调色上的文字/图标 |
 | `--color-focus-ring`       | `#2563EB`            | `#93C5FD`         | 焦点环           |
 | `--color-scrim`            | `rgba(15,23,42,.52)` | `rgba(0,0,0,.72)` | 遮罩             |
 
@@ -308,6 +355,16 @@
 
 状态色不允许同时充当优先级色、成员色和图表系列色。
 
+状态三元组的规范值：
+
+| 语义 | Light `fg / bg / border` | Dark `fg / bg / border` |
+| --- | --- | --- |
+| success | `#15803D / #DCFCE7 / #86EFAC` | `#4ADE80 / #052E16 / #14532D` |
+| warning | `#92400E / #FEF3C7 / #FCD34D` | `#FBBF24 / #451A03 / #78350F` |
+| danger | `#B91C1C / #FEE2E2 / #FCA5A5` | `#F87171 / #450A0A / #7F1D1D` |
+| info | `#075985 / #E0F2FE / #7DD3FC` | `#38BDF8 / #082F49 / #0C4A6E` |
+| neutral | `#475467 / #F2F4F7 / #D0D5DD` | `#98A2B3 / #252B36 / #343C49` |
+
 ### 5.3 间距与布局
 
 | Token       | 值   | 典型用途         |
@@ -319,12 +376,15 @@
 | `space-2`   | 8px  | 控件内部         |
 | `space-3`   | 12px | 行内组           |
 | `space-4`   | 16px | 卡片、手机页边距 |
-| `space-5`   | 20px | 紧凑分区         |
-| `space-6`   | 24px | 标准分区         |
+| `space-5`   | 24px | 标准分区         |
+| `space-6`   | 32px | 大分区           |
 | `space-8`   | 32px | 页面段落         |
 | `space-10`  | 40px | 大段落           |
 | `space-12`  | 48px | 页面顶部         |
 | `space-16`  | 64px | 展示间距         |
+
+`space-5`、`space-6` 是存量兼容键；新增代码 MUST 使用
+`0/0_5/1/1_5/2/3/4/8/10/12/16` 的 4/8pt 主刻度，不得利用兼容键与主刻度的重复值表达新语义。
 
 布局变量：
 
@@ -340,13 +400,20 @@
 
 ### 5.4 圆角、边框和阴影
 
-- 圆角：`radius-xs 4px`、`sm 6px`、`md 8px`、`lg 12px`、`xl 16px`、`full 999px`。
-- 边框：`1px` 常规；选中指示可用 `2px`；禁止用多层重边框制造层级。
-- 阴影：
-  - `shadow-1`：轻浮起菜单/卡片。
-  - `shadow-2`：popover、sticky 工具条。
-  - `shadow-3`：dialog、drawer。
-- 暗色阴影必须配合边框，不能只依靠黑色阴影。
+| 类别 | Token / 值 | 用途 |
+| --- | --- | --- |
+| 圆角 | `xs 4 / sm 6 / md 8 / lg 12 / xl 16 / full 999px` | xs 小标签；sm 控件；md 菜单/卡；lg 大卡；xl sheet；full 头像/chip |
+| 边框 | `1px` 常规；`2px` selected/focus 辅助指示 | 禁止多层重边框；focus ring 不计布局 |
+| `shadow-1` Light | `0 1px 2px rgba(15,23,42,.06), 0 1px 3px rgba(15,23,42,.10)` | 轻浮起卡/菜单 |
+| `shadow-1` Dark | `0 1px 2px rgba(0,0,0,.40), 0 1px 3px rgba(0,0,0,.50)` | 同上，必须同时有 border |
+| `shadow-2` Light | `0 2px 4px rgba(15,23,42,.06), 0 4px 8px rgba(15,23,42,.08)` | Popover、sticky toolbar |
+| `shadow-2` Dark | `0 2px 4px rgba(0,0,0,.40), 0 4px 8px rgba(0,0,0,.45)` | 同上，必须同时有 border |
+| `shadow-3` Light | `0 4px 8px rgba(15,23,42,.08), 0 12px 32px rgba(15,23,42,.16)` | Dialog、Drawer |
+| `shadow-3` Dark | `0 4px 8px rgba(0,0,0,.50), 0 12px 32px rgba(0,0,0,.60)` | 同上，必须同时有 border |
+
+存量 `--shadow-raised` 是迁移别名（Light `0 4px 16px rgba(15,23,42,.16)`；Dark `0 4px 16px rgba(0,0,0,.55)`），M8 删除；新增代码不得引用。
+
+层级只使用 `--z-base:0`、`--z-sticky:100`、`--z-dropdown:200`、`--z-overlay:300`、`--z-toast:400`。业务 CSS 不得创建 `99/999/9999` 等近似层级；同层顺序由 DOM/OverlayManager 管理。
 
 ### 5.5 动效
 
@@ -365,6 +432,25 @@
 - 移动：`cubic-bezier(.2,0,0,1)`
 
 `prefers-reduced-motion: reduce` 下，非必要动画缩短至近零；拖拽位置、加载进度和焦点仍必须可辨。
+
+### 5.6 动效行为表
+
+| 场景 | 属性 | 时长 / easing | 完成反馈 | reduced-motion |
+| --- | --- | --- | --- | --- |
+| Button hover/pressed | `background-color, border-color, color, transform` | 100ms / move | pressed 最大下移 1px，不缩小文案 | 颜色即时切换，移除 transform |
+| Tooltip | `opacity, transform` | 延迟 400ms；进入 160ms / enter；退出 100ms / exit | 指向关系保持 | 0ms，仍保留 400ms 延迟 |
+| Menu/Popover | `opacity, transform` | 进入 160ms / enter；退出 100ms / exit | 焦点已进入首个可操作项 | 0ms |
+| Dialog | `opacity, transform` | 进入 240ms / enter；退出 160ms / exit | 打开完成前即可聚焦，不能等动画 | 0ms |
+| Drawer/Sheet | `transform, opacity(scrim)` | 240ms / move | 终态与安全区对齐 | 0ms，直接落终态 |
+| Toast | `opacity, transform` | 160ms / enter；退出 160ms / exit | `status/alert` 同步宣布 | 0ms |
+| Tabs 指示 | `transform, inline-size` | 160ms / move | panel 同一帧切换，不交叉淡化正文 | 0ms |
+| Skeleton | `background-position` | 800ms linear 循环 | 不改变占位尺寸 | 静态 base/highlight 中间值 |
+| 乐观插入/更新 | 背景高亮 | 1200ms 后 240ms 淡出 | 成功原位确认；失败回滚 | 直接显示 1200ms 静态轮廓 |
+| Board 拖拽 | `transform, box-shadow` | 每帧跟手；落位 160ms / move | 占位、目标列和 live region 同步 | 不做惯性/缩放，位置仍跟手 |
+| 冲突回滚 | `transform` + 原位 error | 240ms / move | 回原位并显示原因/重试 | 直接回位并聚焦 error |
+| Onboarding 完成 | `opacity, transform` | 360ms / enter，仅一次 | 完成文案、下一步和可恢复入口 | 0ms，不播放庆祝动画 |
+
+动画只允许 `opacity`、`transform` 和必要的颜色过渡；不得动画 `width/height/top/left` 造成持续 layout。进度条、上传百分比和日志滚动是状态可视化，不得因 reduced-motion 被隐藏。
 
 ---
 
@@ -485,6 +571,60 @@
 
 禁止仅显示“出错了”“请求失败”或裸错误码。
 
+### 7.8 组件实施矩阵
+
+本节是组件 API 和状态验收的最低合同。表中尺寸均为 CSS px；compact/touch 命中区最低 44×44px。所有交互组件共同覆盖
+`default / hover / focus-visible / pressed / selected / disabled / loading / error`
+中适用的状态；不适用状态必须在组件测试中显式注明。
+
+#### 7.8.1 输入与浮层
+
+| 组件 | 尺寸与结构 | 状态和鼠标/触控 | 键盘与焦点 | 禁用、错误、加载与语义 |
+| --- | --- | --- | --- | --- |
+| Button | `sm 28 / md 36 / lg 44` 高；横向 padding `10/14/18`；图标 16/20；同一尺寸切 loading 不改宽 | primary/secondary/ghost/danger；pressed 下移 ≤1px；触控命中 ≥44 | `Enter/Space` 激活；focus ring 2px + offset 2px；提交后焦点留在按钮 | disabled 不触发且有原因；loading `aria-busy=true`、阻止重复提交；danger 进入确认或可撤销流程 |
+| IconButton | 视觉 28/36/44，图标 16/20/24；无可见文字时命中区 ≥44 | hover/pressed 与 Button 同构；active/current 另有轮廓或底色 | `Enter/Space`；focus 不被圆角裁切 | 必须 `aria-label`；桌面 hover/focus 显示 Tooltip；loading 用同尺寸 spinner；禁止字符/emoji 充当产品图标 |
+| Input / Textarea | 输入高 36，认证/触控 44；textarea 最小 88、最大 320 后内部滚动；label→control→hint/error 间距 6/6 | placeholder 不代替 label；clear 仅有值且可编辑时出现；输入中不抖动布局 | Tab 顺序为 label 后 control 再辅助操作；`Esc` 仅清局部建议，不清已提交值；IME composing 不触发快捷键 | disabled 与 readonly 分开；error 1px danger border + 原位文字；异步检查显示 checking/success/error；`aria-invalid`、`aria-describedby` 完整 |
+| Select | 36/44 高；右侧 20px 展开图标；菜单宽度 ≥trigger、≤360 | pointer 打开；选中行有 check + selected 背景；触控使用 bottom sheet（选项 >8 或含搜索时） | `Alt+↓/Space` 打开；↑↓、Home/End、首字母跳转、Enter、Esc；关闭归还 trigger | disabled 不打开且说明原因；loading 菜单内 skeleton；请求失败保留旧值和重试；`role=combobox/listbox` 或原生 select 二选一，不混搭 |
+| Combobox | 输入 36/44；popup `min-width:trigger`、最大 560；行高 36/44；组头 28 | 120ms 防抖，可取消请求；命中字符用字重/下划线，不只用颜色；支持单选/多选明确分型 | 输入保持焦点，`aria-activedescendant` 指向活动项；↑↓、Home/End、Enter、Esc；Tab 接受当前值仅在 API 明示时启用 | empty/error/loading 在同一 popup 原位；disabled 不请求；多选 chip 可 Delete/Backspace；`aria-expanded/controls/autocomplete` 必须正确 |
+| Dialog | 宽 `sm 400 / md 560 / lg 720`，最大 `calc(100vw - 32px)`，高 ≤85vh；标题/正文/操作区 padding 24；compact 转底部 sheet | scrim 点击仅关闭非破坏、无 dirty 的任务；打开锁背景滚动；提交中不可重复关闭 | 初焦点：错误摘要→首字段→主容器；Tab 圈定；Esc 关闭非破坏态；关闭归还 trigger | `role=dialog`、`aria-modal`、label/description；loading 保持结构；错误聚焦摘要且保留表单；danger confirm 必须复述对象 |
+| Drawer / Sheet | 桌面宽 `sm 360 / md 480 / lg 640`；compact 全宽、顶部圆角 16、最大高 `calc(100dvh - 24px)` | 适合次级上下文；拖动手柄只作提示，不作为唯一关闭路径；背景锁定 | 与 Dialog 同一 OverlayManager、焦点圈定和归还；Esc 规则相同 | dirty 时关闭确认；loading skeleton 同形；错误不关闭 drawer；`role=dialog` + `aria-modal` |
+| Popover | 宽由内容决定，最小 180、最大 360；padding 8/12；与 trigger 间距 6 | 点击或显式快捷键打开；点击外部关闭；不得承载多步骤长表单 | trigger 用 `aria-expanded/controls`；首个可操作项获焦；Esc 关闭并归还 | 请求型内容显示局部 skeleton/error/retry；disabled trigger 不打开；非模态，不阻断背景读屏 |
+| Tooltip | 最大宽 280，padding 6×8，字号 12/18；距离 trigger 6 | hover/focus 延迟 400ms；离开 100ms 关闭；触控不承载唯一信息 | focus 可触发；Esc 关闭；tooltip 自身不可获得焦点 | 只放简短补充，不放按钮/错误/关键说明；`role=tooltip`，trigger `aria-describedby`；disabled 控件由可聚焦 wrapper 提供说明 |
+| Menu | 宽 180–320；行 36/44；图标列 20，快捷键列右对齐；分隔 1px | 单次低频操作；submenu 延迟 200ms；危险项位于末组且有文案 | 打开聚焦首个可用项；↑↓、Home/End、首字母、Enter/Space、Esc、←/→ 子菜单；关闭归还 | disabled 项可聚焦并说明原因但不可激活；执行中仅目标项 loading；失败关闭后用原位/toast 说明；`role=menu/menuitem` |
+| Tabs | tab 高 36/44；间距 4；指示条 2px；窄屏单行横向滚动 | active 与 hover 不同；切 tab 不丢共享编辑草稿；深链 tab 写 URL | Arrow 切焦，Home/End；默认 automatic activation 仅在 panel 即时可用时启用，否则 Enter/Space 激活 | loading 在 panel 内，不禁用整个 tablist；无权 tab 不渲染；`tablist/tab/tabpanel`、`aria-selected/controls` 配对 |
+| Toast / Banner | Toast 宽 ≤360，间距 8，桌面右下/compact 顶部；Banner 高度由 40 起，正文最多 2 行 | success 4s、info 6s、warning/danger 不自动消失或 ≥8s；同 key 合并；可操作结果优先原位反馈 | Toast 操作可 Tab 到达，关闭后不抢回业务焦点；Banner 操作按 DOM 顺序 | `status` 用 polite，破坏失败 `alert`；loading 不用 toast；错误含恢复动作；离线/重同步使用全局 Banner，不刷屏 |
+
+#### 7.8.2 数据展示与反馈
+
+| 组件 | 尺寸与结构 | 状态和交互 | 键盘与焦点 | 禁用、错误、加载与语义 |
+| --- | --- | --- | --- | --- |
+| Avatar | `20/24/32/40/56`；圆形；状态点为尺寸的 25%，最小 6 | 图片→稳定缩写→agent 原创轮廓三级回退；hover 只增强 | 可点击头像使用 Link/Button 外壳，头像图本身不入 Tab | 图片加载失败无破图；状态必须有文字/tooltip；`alt=""` 当相邻已有姓名，否则 alt 为姓名 |
+| Badge / Status | 高 20/24；水平 padding 6/8；图标 12/16；单行 | neutral/info/success/warning/danger；selected chip 另有 remove；颜色不作唯一信号 | 可删除 chip 的 remove 独立可聚焦；静态 badge 不入 Tab | loading 用文案“处理中”而非 spinner-only；未知值为 neutral + 原始安全文案；状态 badge 有可读文本 |
+| DataTable | 表头 36；行 compact 44 / comfortable 52；cell padding 8×12；首列/表头可 sticky | hover、selected、expanded、dirty；行点击只作用于主链接，不能让整行伪装按钮 | sortable header 为 button；↑↓ 行导航仅在 grid 模式启用；Space 多选；批量条随选择出现 | loading 保留表头 + 同列 skeleton；empty/error/permission 占完整列宽；排序 `aria-sort`；虚拟化维持可读行序 |
+| Card / ListRow | Card padding 12/16，最小高由内容；ListRow 高 44/52；主次信息间距 4/8 | default/hover/focus-within/selected/dragging；整卡可点时内部不能嵌套交互链接 | 主链接在 Tab 序；行菜单后置；focus-within 显示次要操作 | loading 用同形 skeleton；错误卡说明受影响对象；只读保留可复制信息；语义优先 `article/li`，不滥用 `button` |
+| Skeleton | 圆角跟随目标；文本高 12/16，标题 20/24；数量和最终区块相同 | 首次加载显示；refreshing 保留已有内容，不回退整页 skeleton | 不入焦点、不影响读屏顺序 | 容器 `aria-busy=true`，skeleton `aria-hidden=true`；reduced-motion 静态；超过 10s 切换为可解释 loading + 取消/重试 |
+| EmptyState | 图形 48–96；正文宽 ≤480；主操作 36/44 | first-use / filtered-empty / completed-empty / permission-empty 分型 | 标题后按主操作→次操作→帮助链接排序 | 不把无权限伪装成无数据；数据仍加载时不得提前闪 empty；使用 heading + description，不强制 live announce |
+| ErrorState | 图形 32–64；正文宽 ≤560；诊断 ID 等宽；恢复操作 36/44 | recoverable / forbidden / not-found / conflict / fatal 分型 | 错误出现后聚焦摘要（提交错误）或保持原焦点（后台刷新失败） | 必须说明发生、影响、保留和恢复；禁止裸异常；`role=alert` 仅用于用户刚触发的失败，页面初始错误用普通 region |
+
+#### 7.8.3 协作产品模式
+
+| 组件 | 尺寸与结构 | 状态和交互 | 键盘与焦点 | 禁用、错误、加载与语义 |
+| --- | --- | --- | --- | --- |
+| Editor / Composer | toolbar 高 36；编辑区最小 96、最大 320 后滚动；附件区在正文下；底栏放状态与提交 | empty/draft/saving/saved/uploading/submitting/failed/readonly；粘贴链接、图片和文件；`@` 用 Combobox | `Mod+Enter` 提交，`Shift+Enter` 换行；IME composing 时 Enter 不提交；Esc 先关候选再退出编辑 | 本地草稿按 workspace+resource+member 隔离；失败保留正文/mention/附件；readonly 仍可复制；`aria-multiline`、toolbar 按钮可读 |
+| Comment | Avatar 32；内容列间距 12；正文最大 720；meta 12/18；线程缩进桌面 44、compact 16 | sending/sent/edited/failed/deleted/resolved/highlighted；hover/focus 显示回应/更多；触控常驻更多 | 主体按作者→时间→正文→附件→操作；`R` 回应仅在非输入上下文；深链到达后聚焦 heading 并高亮 1.2s | 发送失败原位重试/编辑；删除保留墓碑；agent 触发在发布前可见提示；`article` + 可访问作者/时间 |
+| Activity / Timeline | 行最小 40；轨道 1px；节点 8；时间列桌面 112，compact 放正文下 | event/comment/execution/system 分型；可折叠连续同类事件；实时插入不抢滚动 | 折叠按钮 Enter/Space；“跳到最新”可聚焦；用户离底部 >80px 时不自动滚动 | 加载 older 显示顶部 skeleton；失败保留已读事件；事件有自然语言文本，不以图标/颜色代替；`ol` 保持时间顺序 |
+| Command Palette | 桌面宽 640、最大高 `min(720px, 72vh)`；compact 全屏；搜索 44；结果行 44；组头 28 | idle/recent/searching/results/empty/offline/error；120ms 防抖；本地结果立即、远程增量；活动项不因旧响应跳动 | 打开即聚焦输入；↑↓、Home/End、Enter、Esc；Tab 只到页脚动作；`Mod+K` 切换；关闭归还触发点 | 无权结果服务端和前端双过滤；离线只显示本地命令；loading 不清旧结果；`combobox/listbox/option` + live 结果计数 |
+| Board / Kanban | 桌面列宽 280–320、间距 12；列头 44 sticky；卡片最小高 72、padding 12；compact 一次一列 | loading/empty/filtered/offline/dragging/drop-valid/drop-blocked/optimistic/conflict；pointer 移动阈值 6px，touch 长按 350ms | 卡片 roving tabindex；Enter 打开；`M` 进入移动模式，方向键选列/位置，Enter 确认、Esc 取消；live 宣布 | WIP block 在提交前显示；失败回原位并保留焦点；offline 禁止不可安全排队的移动；列/卡使用可读 heading/list 语义，提供非拖拽菜单路径 |
+
+### 7.9 组件 API 与测试约束
+
+- 原语 props 只表达语义（`tone/size/state`），禁止向 feature 暴露任意颜色、阴影或 z-index。
+- Overlay 统一注册到一个栈：同层最多一个 modal；Esc 只关闭栈顶；Toast 不参与焦点栈。
+- `disabledReason`、`errorMessage`、`loadingLabel` 是可见/可读文案，不允许只传 boolean 后由组件猜测。
+- 异步组件以稳定 request id 丢弃过期响应；unmount 后不得写状态。
+- 每个表中组件至少具备：状态单测、键盘单测、axe 自动扫描、light/dark/forced-colors 视觉用例和 compact 触控命中区断言。
+- Editor、Comment、Activity、Command Palette、Board 属 pattern；业务模块可注入数据和命令，不得 fork 其交互状态机。
+
 ---
 
 ## 8. 响应式与触控
@@ -602,6 +742,64 @@
 
 同一执行在 issue、评论占位、收件箱、agent 详情和执行页使用相同文案、图标和 tone。
 
+### 9.9 逐页几何、状态与返回路径
+
+| 页面/入口 | 桌面（wide/xwide） | compact（320/390） | 主操作与状态 | 返回路径 |
+| --- | --- | --- | --- | --- |
+| 登录/注册/找回/重置 `/login` `/forgot` `/reset` | PublicFlow 单卡宽 420，距顶 `min(12vh, 96px)`，padding 32，字段 44 高 | 卡片去阴影和外框，宽 100%，padding 24/16，顶距 32 | 每步一个 44 高 primary；登录/注册切换不清共享字段；loading/error/locked/verified | 成功进安全 `next` 或工作台；找回/重置完成回登录并保留账号 |
+| 首次引导 | 工作台右侧/首区 360 宽进度卡，主内容仍可操作 | 工作台首区全宽；一次只展开当前步骤 | 当前步骤唯一 CTA；实时完成后 360ms 收起；loading/empty/error/dismissed/completed | 完成留在工作台；关闭后可从帮助恢复到同一步 |
+| 工作区首页 `/` `/w/:slug` | 内容宽 1120；4 个 KPI（每格最小 180）+ 2:1 主次网格；区块间 24 | 单列；KPI 2 列，320 下 1 列；快速创建 44 高 | 新建工作项；loading/first-use/ready/offline/permission/long-data | 卡片进入对象；返回恢复首页滚动和工作区 |
+| 看板 `/board` `/views/:id` | 占宽数据模板；toolbar 44；列 280–320；工具条→列头→卡片三层 sticky 不重叠 | 一次一列；顶部列 chips 44；卡片全宽；移动经 sheet | 新建工作项；drag/keyboard/touch move、WIP、filtered-empty、offline、conflict | 打开详情记录 `from`、view/filter/scroll；返回定位原卡 |
+| Issue 列表 `/issues` | 内容最大 1440；页头 48、筛选条 44、行 44；批量条粘底 | 主次行卡片 64–88；筛选 bottom sheet；批量条在底栏上方 | 新建工作项；loading/refresh/empty/error/readonly/offline/selected | 详情返回保留 query、页码/游标、选择和滚动 |
+| 创建 Issue（全局浮层） | md Dialog 宽 640；标题首字段；常用属性一行，低频字段折叠 | 全屏 sheet；标题和提交在软键盘上方；属性分组 | 快速创建只需标题；`Mod+Enter`；dirty close confirm；submitting/error/success | 成功默认回来源并高亮；“创建并打开”进入详情；取消归还触发点 |
+| Issue 详情 `/issues/:id` | Detail 两栏：主列 `minmax(0,720)`，属性列 320，间距 32；对象头 + Description + Activity | 单列；标题下保留状态/负责人 chips；属性按钮开 sheet；活动/评论单一时间线 | 编辑/评论；loading/partial/error/readonly/offline/conflict/deleted | 浏览器返回优先 `from`；无 `from` 回同工作区 Issue 列表 |
+| 评论/活动（详情内） | 正文宽 ≤720；评论头像 32；线程缩进 44；composer 在时间线尾 | 缩进 16；composer sticky 于底栏上方；操作进更多菜单 | 评论、回复、提及、附件；draft/uploading/sending/failed/resolved | 深链关闭高亮后仍在详情；取消回复回原评论并恢复焦点 |
+| 成员/邀请 `/members` `/invite/:token` | 成员 DataTable；筛选条 44；邀请 Dialog 560；详情可用 Drawer 480 | 成员卡 72；筛选 sheet；邀请 PublicFlow/全屏 sheet | 邀请/新建 agent 权限化；loading/empty/error/readonly/expired/used | 管理 drawer 关闭回原行；邀请接受后进目标工作区首页 |
+| 收件箱 `/inbox` | Conversation 双栏：列表 360，详情 `minmax(0,1fr)`；批量菜单在列表头 | 列表/详情二选一；详情用 query/子路由；明确返回收件箱 | 标已读/归档/恢复；loading/empty/error/offline/realtime-new | 返回恢复筛选、分组、scroll；目标对象深链带 `from=inbox` |
+| 聊天 `/chat` `/w/:ws/chat/:sessionId` | 会话列表 320 + 对话主列；消息宽 ≤720；composer 粘底 | 会话列表/对话路由化；顶栏返回；composer 适配键盘/safe area | 新会话/发送/停止；streaming/waiting/failed/offline/long-message | 返回会话列表保留草稿和滚动；对象引用打开后可回原消息 |
+| 搜索/命令面板 | 居中宽 640、高 ≤72vh；搜索 44；分组结果 | 全屏；顶部搜索 + 返回；结果触控行 44 | 搜索/导航/创建；idle/searching/results/empty/offline/error | 关闭回触发点；打开结果写 `from`，返回恢复 query 和活动项 |
+| 设置 `/settings` `/w/:slug/settings/*` | Settings：二级导航 240 + 表单列 640；danger 独立页/末组 | 二级导航改页面内 select/分组列表；表单全宽；保存条在底栏上方 | 保存；pristine/dirty/saving/saved/error/readonly/conflict | 离开 dirty 页确认；保存后留当前 section；危险动作完成回安全父页 |
+
+公共流程不渲染私有应用侧栏；鉴权失效从受保护页跳登录时必须把规范路径、query 和 hash 编码为安全 `next`，回跳后不得显示上一工作区数据。
+
+### 9.10 关键用户旅程与步骤预算
+
+步骤数按“需要用户作出一次独立决定或提交”计，页面加载和自动实时更新不计。
+
+| 旅程 | 最长主步骤 | 必须行为 | 成功反馈 |
+| --- | --- | --- | --- |
+| 注册/登录 | 2（账号信息→必要验证） | 首字段自动聚焦；错误不清安全允许保留的输入；安全 `next` 回跳 | 进入原目标或工作台；不经过空白成功页 |
+| 首次激活 | 5（工作区→成员/agent→Issue→分派/提及→查看回评） | 一次只强调当前步骤；已存在事实自动补证；可关闭和恢复 | 工作台原位完成，明确下一项真实工作 |
+| 创建 Issue | 2（输入标题→提交） | 从页面、空态、看板列、`C`、命令面板同一表单；来源上下文可见 | 来源列表/列原位插入并高亮 |
+| 分派 agent | 3（打开负责人→选择→确认触发后果） | picker 中人/agent/小队同册分组；不可运行项说明原因；确认显示将触发的状态 | 属性原位更新；运行态在 1s 内出现或显示排队原因 |
+| 推进看板 | 1（移动并确认落位；pointer 直接落位等价） | 提交前显示 WIP；键盘/触控有等价路径；409 收敛 | 卡片留在服务端确认位置，失败回滚并保留焦点 |
+| 评论/提及 | 2（输入→发布） | 草稿自动保存；agent 提及后果在发布前可见；失败不丢正文/附件 | 新评论原位出现并短暂高亮 |
+| 处理收件箱 | 2（选择→标已读/归档或进入对象） | 选择即标已读的行为可预测；批量操作报告部分失败 | 下一项稳定选中；列表不因实时插入跳焦 |
+| 发起聊天 | 2（选 agent/会话→发送） | streaming 可停止；IME 不误发；离线保留草稿 | 首个 token/排队态 ≤1s 可见，失败有重试 |
+| 全局搜索 | 2（打开并输入→打开结果/命令） | `Mod+K`、顶栏、`/` 共用状态；权限过滤；精确 identifier 立即顶置 | 打开规范深链；返回恢复搜索上下文 |
+| 修改设置 | 2（修改→保存） | dirty 可见；服务端校验原位；冲突展示最新值与本地值 | saved 原位反馈，不用无上下文 toast |
+
+### 9.11 导航、URL 与焦点恢复协议
+
+- URL 拥有：工作区、资源 id、tab、保存视图、筛选、排序、搜索 query、分页游标和列表→详情的 `from`。临时 hover、popover 和未提交字段不进 URL。
+- 进入详情前记录 `{route, search, hash, scrollAnchor, activeItemId}`；返回时先按稳定 id 定位，再恢复像素滚动，禁止只调用 `history.back()` 猜测来源。
+- modal/drawer 关闭后聚焦原 trigger；原 trigger 已删除时聚焦同组最近可用项，再退到页面 `h1`。
+- route 切换后聚焦 `main h1`，但浏览器前进/后退恢复列表时聚焦原活动项，不重复打断读屏。
+- 手机列表/详情使用规范子路由或 query 表达；CSS 隐藏其中一栏不算路由化。
+- 所有外链、通知和复制链接使用规范工作区深链；旧扁平路由只做 replace 兼容且保留 query/hash。
+
+### 9.12 实时、离线与冲突呈现
+
+| 情况 | 已有数据 | 写操作 | 可见反馈 | 恢复 |
+| --- | --- | --- | --- | --- |
+| reconnecting | 保留 | 幂等、可安全排队的操作允许；其余禁用 | 顶部 warning Banner + 最后同步时间 | 自动重连；不刷新整页 |
+| offline | 保留并标 stale | 评论/编辑保留本地草稿；移动、删除等禁用 | danger/neutral Banner（按真实原因），禁用项说明 | online 后用户确认重试，不静默重放危险动作 |
+| resyncing | 保留，只读 | 暂停依赖旧版本的写 | info Banner + 局部 refreshing | REST 对账完成后原位解除 |
+| optimistic pending | 显示本地预期值 | 同对象重复写合并或排队 | 行/卡局部 pending，不用全局 spinner | 成功去 pending；失败回滚 |
+| 409 conflict | 显示服务端最新值并保留本地草稿 | 阻止覆盖提交 | 原位比较“最新值/你的更改” | 重新应用或放弃；焦点回冲突字段 |
+| permission revoked | 立即移除不可见数据 | 全部阻止 | 当前页 permission state，不泄漏对象详情 | 回安全父页；清 feature 缓存 |
+| realtime insert | 保留用户滚动/选择 | 正常 | 用户靠近顶部/底部时原位插入；否则显示“有 N 条更新” | 用户触发后批量合入并保持活动项 |
+
 ---
 
 ## 10. 页面状态、无障碍与国际化
@@ -668,6 +866,58 @@ features/
 
 当前目录可渐进迁移，不要求一次性移动所有文件；但新组件必须遵循该依赖方向：`features → patterns → primitives → foundations`，禁止反向依赖。
 
+规范依赖图：
+
+```text
+App providers
+  ├─ auth / workspace / theme / i18n
+  ├─ realtime cursor + connection
+  ├─ overlay manager + toast
+  └─ router
+       └─ route module (lazy + error/loading boundary)
+            └─ feature controller (API、权限、乐观状态、event reducer)
+                 └─ design pattern
+                      └─ primitive
+                           └─ semantic token
+```
+
+- `design/` 不得导入 router、API client、workspace 或任一 feature。
+- pattern 可接收数据、状态和回调，但不得直接请求 API 或订阅 WebSocket。
+- feature 之间不得导入对方 Page/私有 store；跨域关系通过共享契约类型、规范深链或后端聚合端点。
+- route module 按 PublicFlow、Workbench、Issues/Board、Conversation、Team、Automation、Settings 七个页面族拆包；初始 AppShell 不静态导入其 Page。
+- 每个 route module 有自己的 Suspense skeleton 和 ErrorBoundary；全局边界只兜住 provider/shell 级异常。
+
+状态所有权：
+
+| 状态 | 唯一所有者 | 持久化/同步 | 禁止 |
+| --- | --- | --- | --- |
+| 路由、tab、filter、sort、cursor、search | URL | history + 可复制深链 | 另建 Zustand 副本 |
+| auth、用户偏好、工作区选择 | 现有 Zustand store | 服务端真源 + 本地首帧镜像 | feature 复制用户/工作区对象 |
+| 服务端实体 | 对应 feature resource controller | REST 首取 + WebSocket reducer + `version/updated_at` | 把整个后端缓存塞进全局 store |
+| 表单与未提交草稿 | 组件/feature draft store | 必要时按 member+workspace+resource 分区本地保存 | 通过 URL 暴露敏感正文 |
+| overlay 栈、焦点归还 | OverlayManager | 内存 | 每个 feature 自造 document listener |
+| 连接态、频道 cursor | RealtimeProvider | session/local cursor store | 页面各自开 WebSocket |
+| Toast | ToastProvider | 内存、按 id 去重 | 用 toast 替代字段错误或持续状态 |
+
+读写与实时合并协议：
+
+1. route loader/controller 发 REST 请求，先验证统一包络、权限和资源版本。
+2. 写操作带 `Idempotency-Key`；可逆、低冲突字段可乐观更新，危险/跨资源操作等待服务端确认。
+3. 每个 feature 只维护一个纯函数 event reducer；按 `seq` 去重、按 `updated_at/version` 防回退、按 `visibility` 移除失权/移出筛选对象。
+4. 缺帧或过滤条件无法可靠本地重算时，按稳定 id 局部 refetch；不得整页 reload。
+5. `resync_required` 经统一 REST 对账并原子替换快照；对账期间保留旧数据只读。
+6. API 401 由全局 unauthorized handler 清会话并安全回登录；403/404/409 由 route/feature 原位呈现，禁止混为“网络错误”。
+
+服务端继续采用既有 Python `API → service → data` 分层、PostgreSQL 真源和 outbox→WebSocket 投影，不因前端视觉迁移新增并行协议。前端只依赖业务 Spec 的 REST/WS 合同；若界面需要新的聚合数据，先修订对应业务 Spec 和服务层，禁止浏览器 N+1 拼接或读取数据库形状。
+
+可测试性边界：
+
+- primitive/pattern 以纯 props fixture 测试，不启动路由和网络。
+- feature controller 用 mock API + 真实 event reducer 测 loading/empty/error/offline/conflict。
+- route 测试使用 MemoryRouter 验证 deep link、返回上下文和权限。
+- E2E 使用忠实 mock 合同与真实后端两层；视觉测试只使用 §13.6 固定 fixture。
+- 测试通过 role/name/稳定业务 id 定位，不使用 CSS 类、DOM 层级或像素坐标驱动交互。
+
 ### 11.2 CSS 策略
 
 - token/基础组件使用全局稳定类；业务样式使用 feature 前缀。
@@ -699,59 +949,27 @@ features/
 
 ## 12. 实施顺序
 
-### Phase 0：正确性与手机可达（P0）
+阶段 1（本 Issue）只冻结本文，不改生产 UI。阶段 2 必须按下列顺序渐进迁移；后续页面不得绕过未完成的前置层。
 
-- 补 Skills 路由。
-- 顶栏搜索接通统一搜索/命令面板。
-- 增加手机顶栏、底栏和更多抽屉。
-- 修复看板、成员表在 320/390px 的溢出。
-- 增加 skip link。
-- 中文区分“自动值守/运行环境”。
+| 顺序 | 交付单元 | 主要改动 | 可并行边界 | 退出条件 |
+| --- | --- | --- | --- | --- |
+| M0 | 基线与门禁 | 建 `design-quality-v1` fixture/manifest/case 生成器；固定 token 快照；登记现存豁免 | 仅测试与文档，可单独 PR | 当前主干全部基线可复现；没有把临时观察截图带入仓库 |
+| M1 | Foundation 完成 | 原创 SVG Icon；Combobox/Popover/DataTable/Card；统一 OverlayManager；补 §7.8 全状态 | 原语可按文件并行，API 在首个 PR 冻结 | 组件状态、键盘、axe、四主题模式测试全绿；feature 尚未换肤 |
+| M2 | Product patterns | Editor/Comment/Activity/CommandPalette/Board；PageHeader/DataView/Detail/Conversation/Settings | pattern 可按族并行，不接业务 API | 纯 fixture 下覆盖 §7.8；patterns 不导入 feature/router/API |
+| M3 | AppShell 与路由 | 56px 顶栏、240/64 侧栏、compact 单行顶栏；route modules lazy；滚动/焦点协议 | shell 和 route 拆包可并行，合入前联调 | 全部入口桌面/手机可达；无死链、无双滚动、首包预算通过 |
+| M4 | 激活路径 | 登录/注册/找回/邀请、Onboarding、工作区首页 | PublicFlow 与 Workbench 两组可并行 | 首次激活旅程 ≤§9.10 步数；所有状态/主题/视口 tuple 通过 |
+| M5 | 工作核心 | Issue 列表、创建、详情、评论/活动/附件、Board | 列表/详情与 Board 在 patterns 冻结后并行 | 创建、分派、评论、三输入方式移动、冲突/离线 E2E 通过 |
+| M6 | 协作入口 | 成员/邀请、收件箱、聊天、搜索/命令面板 | 四页面族可并行，共享 Conversation/Combobox 不得 fork | 列表↔详情返回、实时插入、草稿和权限矩阵通过 |
+| M7 | 设置与平台页 | 账号/工作区设置、项目、周期、Skills、Squads、Runtimes、执行、自动值守、集成、洞察 | 低耦合页面族并行，复用前述 patterns | 所有生产路由采用页面模板；设置 dirty/conflict 与管理权限通过 |
+| M8 | 清理与冻结 | 删除旧 token alias、重复组件/样式、字符图标和过期截图；生成最终矩阵 | 只能在所有消费者迁完后开始 | §13 全绿；静态扫描零未登记豁免；阶段 3 获得固定验收输入 |
 
-退出条件：所有主导航在 320px 可达；无死链、假搜索和页面级横向溢出。
+每个交付单元：
 
-### Phase 1：Foundation
-
-- 扩展 token、字体、图标、动效和 z-index。
-- 重做 Button/Input/Select/Badge/Avatar/Menu/Tooltip/Drawer。
-- 保留并迁移 Skeleton/EmptyState/ErrorState/Toast。
-- 加入 token 使用和组件状态测试。
-
-退出条件：基础组件具备完整状态矩阵，亮暗与 forced-colors 全绿。
-
-### Phase 2：应用外壳与页面模式
-
-- 桌面分组侧栏、折叠 rail、新顶栏。
-- PageHeader、DataView、DetailLayout、SettingsLayout、ConversationLayout。
-- 工作台替换组件演示式首页。
-
-退出条件：所有页面使用统一页头和内容宽度策略。
-
-### Phase 3：核心工作流
-
-- Issue 列表/详情/评论/附件。
-- 看板与创建 issue。
-- 收件箱、聊天、成员/agent。
-- 搜索/命令面板和工作区切换。
-
-退出条件：六条关键流程完成鼠标、键盘和触控 E2E。
-
-### Phase 4：平台与管理页
-
-- 项目、周期、Skills、Squads。
-- Runtimes、执行、自动值守。
-- Integrations、Analytics、设置、公共流程。
-
-退出条件：页面状态矩阵和响应式矩阵无遗漏。
-
-### Phase 5：门禁与收口
-
-- 全页视觉基线。
-- 无障碍、对比度、硬编码和 overflow 扫描。
-- 中英文、亮暗、forced-colors、reduced-motion。
-- 删除旧 token、旧布局和重复 CSS。
-
-退出条件：§13 全部验收项通过。
+1. 先加新实现和适配器，业务行为测试保持绿色；
+2. 按一个页面族迁移并在同 PR 删除该族旧视觉实现；
+3. 禁止全局 feature flag 长期保留双 UI；若必须灰度，开关最长一个发布周期并记录删除日期；
+4. 任何 token 变化单独 PR，附 light/dark 对比度与全组件视觉 diff；
+5. 一个单元未达到退出条件，不得晋级依赖它的下一单元。
 
 ---
 
@@ -759,7 +977,7 @@ features/
 
 ### 13.1 全局
 
-- [ ] 所有 46 个路由节点及其公开/权限状态有可达性测试。
+- [ ] 当前 51 个路由节点及其公开/权限状态有可达性测试；新增路由自动进入 manifest，不以固定计数逃逸。
 - [ ] `/skills`、市场和详情路由真实刷新可达。
 - [ ] 顶栏搜索输入、回车、鼠标点击和快捷键进入同一结果系统。
 - [ ] 桌面导航分组明确，中文无两个同名“自动化”。
@@ -796,32 +1014,163 @@ features/
 
 ### 13.5 视觉与交互门禁
 
-视觉矩阵至少包含：
+矩阵不是抽样清单，而是 case 生成规则。页面行的
+`视口 × 主题 × 状态 × 交互`
+取笛卡尔积；每个 tuple 都必须有功能断言，造成不同可见终态的 tuple 还必须有截图断言。
 
-- 视口：390×844、768×1024、1024×768、1440×900。
-- 主题：light、dark。
-- 核心页：登录、工作台、issue 列表、issue 详情、看板、成员、收件箱、聊天、执行详情、自动值守、Integrations、Analytics、设置。
-- 状态：正常、loading、empty、error、长内容；核心页另含 offline/permission。
+视口：
 
-自动化门禁：
+- `D`：1440×900，DPR 1，鼠标/键盘。
+- `W`：1024×768，DPR 1，鼠标/键盘；覆盖 wide 断点下界。
+- `T`：768×1024，DPR 1，鼠标/键盘/触控。
+- `M`：390×844，DPR 2，触控/外接键盘。
+- `N`：320×800，DPR 1，触控/外接键盘；同时在 200% zoom 下跑 reflow。
 
-- [ ] token 生成幂等。
-- [ ] 对比度检查。
-- [ ] 硬编码颜色检查。
-- [ ] 关键组件状态单测。
-- [ ] 路由可达性测试。
-- [ ] 视觉 diff。
-- [ ] 自动无障碍扫描 + 键盘 E2E。
-- [ ] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
+主题为 `L=light`、`K=dark`。交互集按视口固定：
+
+- `D/W={P,K,R,N}`：pointer、keyboard、realtime、navigation/return。
+- `T={P,K,C,R,N}`：增加 touch。
+- `M/N={C,K,R,N}`。
+- PublicFlow 没有业务实时流时移除 `R`，但必须保留 offline；纯展示状态的 `P/K/C` 断言为“无伪交互、Tab 顺序稳定”。
+
+状态代码：
+
+| 代码 | 含义 |
+| --- | --- |
+| `ready` | 正常、有数据、可操作 |
+| `loading` | 首次加载，同形 skeleton |
+| `refresh` | 已有数据局部刷新 |
+| `empty` | 有权限但无数据 |
+| `readonly` | 无创建/写权限或权限刚撤销 |
+| `forbidden` | 无页面/对象读取权限；不泄漏对象是否存在 |
+| `error` | 可恢复请求失败 |
+| `offline` | 断网且保留 stale data/draft |
+| `conflict` | 409 或实时版本冲突 |
+| `long` | 长中文、1.4× 英文、长标识、大数量、缺头像 |
+| `pending` | 乐观写、上传、发送或运行中 |
+
+完整页面矩阵：
+
+| Page code | 页面/模式 | 视口 | 主题 | 状态集合 |
+| --- | --- | --- | --- | --- |
+| `auth` | 登录/注册/找回/重置 | D,W,T,M,N | L,K | ready,loading,error,offline,pending,long |
+| `onboarding` | 首次引导 | D,W,T,M,N | L,K | ready,loading,error,offline,pending,long |
+| `home` | 工作台/工作区首页 | D,W,T,M,N | L,K | ready,loading,refresh,empty,readonly,forbidden,error,offline,long |
+| `issue-list` | Issue DataView | D,W,T,M,N | L,K | ready,loading,refresh,empty,readonly,forbidden,error,offline,pending,long |
+| `issue-create` | 创建浮层 | D,W,T,M,N | L,K | ready,loading,readonly,forbidden,error,offline,pending,long |
+| `issue-detail` | Issue 详情/属性 | D,W,T,M,N | L,K | ready,loading,refresh,readonly,forbidden,error,offline,conflict,pending,long |
+| `comment-activity` | 评论/活动/附件 | D,W,T,M,N | L,K | ready,loading,empty,readonly,forbidden,error,offline,conflict,pending,long |
+| `board` | 看板/保存视图 | D,W,T,M,N | L,K | ready,loading,refresh,empty,readonly,forbidden,error,offline,conflict,pending,long |
+| `members` | 成员名册/管理 | D,W,T,M,N | L,K | ready,loading,refresh,empty,readonly,forbidden,error,offline,pending,long |
+| `invite` | 邀请创建/接受 | D,W,T,M,N | L,K | ready,loading,readonly,forbidden,error,offline,pending,long |
+| `inbox` | 收件箱列表/详情 | D,W,T,M,N | L,K | ready,loading,refresh,empty,forbidden,error,offline,pending,long |
+| `chat` | 会话列表/消息/输入 | D,W,T,M,N | L,K | ready,loading,empty,readonly,forbidden,error,offline,pending,long |
+| `palette` | 搜索/命令面板 | D,W,T,M,N | L,K | ready,loading,empty,readonly,forbidden,error,offline,pending,long |
+| `settings` | 账号/工作区设置 | D,W,T,M,N | L,K | ready,loading,readonly,forbidden,error,offline,conflict,pending,long |
+
+平台页面（项目、周期、Skills、Squads、Runtimes、执行、自动值守、集成、洞察）按其页面模板继承上表：DataView 用 `issue-list` 状态集，Detail 用 `issue-detail`，Conversation 用 `inbox`，Settings 用 `settings`；每条生产路由必须在 manifest 中映射到且仅映射到一个 page code。
+
+每个 tuple 的自动断言：
+
+- 页面只有一个 `h1`，焦点/Tab 顺序和主操作符合 §9。
+- 没有页面级横向溢出；显式 Board/DataTable 内滚动容器有名称和边缘提示。
+- light/dark 无硬编码色回退，对比度达标。
+- 状态文字、图标和恢复动作完整，输入在 error/offline/conflict 下不丢。
+- pointer/keyboard/touch 到达同一业务终态；realtime 不抢焦点/滚动；return 恢复 URL 和稳定对象。
+
+### 13.6 固定浏览器、字体与数据夹具
+
+视觉基线只在仓库提供的 Linux 容器中生成：
+
+| 项 | 固定值 |
+| --- | --- |
+| OS/架构 | Ubuntu 24.04 LTS x86_64 容器；禁止本机直接更新基线 |
+| 浏览器 | `package-lock.json` 对应 Playwright bundled Chromium；运行时 `browser.version()` 必须与 baseline manifest 完全相等 |
+| 色彩 | sRGB、无 HDR、默认 contrast；forced-colors/prefers-contrast 在独立功能用例跑 |
+| locale/timezone | 主矩阵 `zh-CN` / `Asia/Shanghai`；扩张用例 `en-US` / `America/Los_Angeles` |
+| 字体 | 仓库自托管 Manrope 600、Inter 400/500/600、Noto Sans SC 400/500/600、JetBrains Mono 400/500；`document.fonts.ready` 后截图 |
+| 时钟 | `2026-07-30T12:00:00+08:00`；relative time、cron、日期输入均冻结 |
+| 网络 | 默认零延迟；loading/pending 由可控 deferred response；offline 用 BrowserContext 切换 |
+| 动画 | 截图用例注入 reduced motion 并等待两个 animation frame；§5.6 的时长/轨迹由独立非截图用例验证 |
+| 光标/选择 | 隐藏 caret，清除文本 selection；不得 mask 产品内容或整块区域 |
+
+`design-quality-v1` 数据夹具必须确定性生成：
+
+- 工作区“星桥实验室”；owner“林然”、member“顾一”、agent“构建助手”、squad“发布小队”。
+- 项目“控制台重构”；Issue `MESH-101` 至 `MESH-112`，覆盖 7 个状态类别、5 个优先级、无负责人、人类、agent 和 squad。
+- 看板 5 个可见列：Backlog 2、Todo 3、In Progress 2（WIP=2）、In Review 1、Done 2；另有一个 blocked 和一个跨项目移动 case。
+- 详情含 3 段 Markdown、父子项、依赖、4 个属性、根评论/回复/系统活动/agent 运行各至少一条，以及 clean/scanning/failed 三种附件。
+- 收件箱含未读、已读、归档、提及、分派、运行失败各一项；同 Issue 的更新可聚合。
+- 聊天含普通消息、长代码块、上传、streaming、waiting、failed；每个会话有稳定 id。
+- `long` fixture 含 80 个 CJK 字符标题、180 个 Latin 字符名称、不可断长标识、9999+ 计数、无头像和空可选字段。
+- `readonly` 使用 guest；`conflict` 返回新 `version`；所有 UUID、时间、排序和相对时间固定。
+
+fixture schema 变更必须提升 `fixture_version`；基线 manifest 记录 seed、schema version 和内容 hash。
+
+### 13.7 截图命名、diff 与更新纪律
+
+文件名：
+
+```text
+dqv1__{page-code}__{viewport}__{theme}__{state}__{interaction}__{locale}.png
+```
+
+示例：
+
+```text
+dqv1__issue-detail__M__K__conflict__C__zh-CN.png
+```
+
+- 字段只用上文代码；禁止 `final/new/fixed/2` 等非稳定后缀。
+- 同一容器、浏览器、字体 hash、fixture 和 DPR 下 `maxDiffPixels=0`；环境任一项不匹配时测试必须 fail-fast，不得放宽阈值。
+- 截图前等待网络 idle 不是充分条件；必须等待页面专用 `data-visual-ready`、字体就绪和两个 animation frame。
+- baseline 更新独立 PR，附 manifest diff 和变更原因；不得在修功能的同一提交中批量接受未知视觉变化。
+- 仓库基线只包含 Mesh 原创界面和 fixture，不得放入任何观察输入、外部品牌、URL 或素材。
+
+自动化总门禁：
+
+- [ ] token 生成幂等、亮暗键集合一致。
+- [ ] 对比度、硬编码颜色、原始 z-index/断点/间距静态检查。
+- [ ] §7.8 全组件状态、键盘、axe 与 forced-colors 测试。
+- [ ] 全生产路由可达且映射 page code。
+- [ ] §13.5 case 生成结果无缺口，视觉 diff 为零。
+- [ ] 自动无障碍扫描 + 关键流程键盘/触控 E2E。
+- [ ] 320px/200% zoom overflow 检查（显式横向滚动容器除外）。
+- [ ] `prefers-reduced-motion`、`prefers-contrast`、forced-colors、打印模式通过。
 
 ---
 
 ## 14. 最终决策
 
 1. 保留现有 React、主题协商、i18n、实时和业务组件逻辑，采用渐进式设计系统迁移。
-2. 首先解决可达性和手机 P0，再做视觉精修；P0 不与大规模组件换肤绑在同一 PR。
+2. 已落地的可达性、手机外壳和基础原语作为不可退化基线；阶段 2 从复合组件和页面模式开始。
 3. 统一搜索入口，不维护“顶栏搜索”和“命令面板搜索”两套状态。
 4. 采用分组桌面侧栏 + 手机底栏/抽屉；禁止隐藏导航后无替代入口。
 5. Issue 详情采用“主内容 + 属性栏/抽屉”，看板手机采用单泳道模式。
 6. 主题基础继续由 `theme.md` 拥有；本 Spec 扩展层级和组件语义，不复制主题协商协议。
-7. 本 Spec 已覆盖全部页面、亮暗主题、响应式、令牌、排版、交互、状态、可访问性和验收门禁，**可进入实施阶段**。
+7. URL 是可分享页面状态的真源；服务端实体由 feature controller 管理；实时只经一个连接层和纯 event reducer 合并。
+8. 视觉验收以 §13 的原创 fixture 和固定环境为唯一仓库基线，外部观察截图永不进入仓库。
+
+### 14.1 技术架构评审
+
+结论：**架构评审通过**。
+
+- 分层明确为 route module → feature controller → pattern → primitive → token，依赖方向可由 lint/边界测试验证。
+- 保留既有 Python API/service/data、REST 包络、OCC、outbox/WebSocket 与 i18n/theme 真源，不以视觉重构制造第二套协议。
+- URL、服务端实体、草稿、overlay、实时 cursor 的所有权唯一，消除了多 store 双写和页面各自订阅的风险。
+- M0–M8 允许逐页迁移、逐页删旧实现；组件 API 先冻结，页面族再并行，降低大分支和 CSS 互相覆盖风险。
+- route lazy、局部边界、性能预算、fixture 分层和纯 reducer 使单元、组件、真实 E2E、视觉回归均可稳定测试。
+
+非阻断实施提醒：M1 首个 PR 必须先冻结 OverlayManager、Combobox 和 pattern props；任何需要新聚合接口的页面先修订业务 Spec，不允许前端 N+1 补洞。
+
+### 14.2 UX 评审
+
+结论：**UX 评审通过**。
+
+- 登录→激活→创建→分派→回评形成有步骤预算的闭环，每一页只有一个主 CTA 和明确返回路径。
+- 桌面、平板、390px、320px、亮暗主题、loading/empty/error/permission/offline/conflict/长内容均进入可生成矩阵，不再依赖“看起来接近”的主观判断。
+- Issue、Board、Comment、Inbox、Chat、Search 的高频路径同时定义 pointer、keyboard、touch 和 realtime 行为；移动端不是缩窄桌面版。
+- 焦点恢复、IME、dirty draft、冲突、WIP、失权和断线都有保值/恢复策略，避免用户输入丢失和静默失败。
+- 信息密度、表面层级、字阶、44px 触控目标、颜色非唯一信号和 WCAG 2.2 AA 已形成统一合同。
+
+本 Spec 已覆盖阶段 1 的全部交付物并完成技术架构/UX 双评审，**允许进入阶段 2 原创实现；阶段 3 验收仍由专责角色执行**。
