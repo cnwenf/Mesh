@@ -294,3 +294,58 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
     expect(fetchMock.mock.calls.length).toBe(calls); // 不再新增
   });
 });
+
+describe('AppShell 实时网关建连(MES-106:绝对 ws(s):// 地址)', () => {
+  /** 捕获构造 URL 的最小 WebSocket 替身(不触发任何回调) */
+  class FakeWebSocket {
+    static urls: string[] = [];
+
+    onopen: (() => void) | null = null;
+
+    onmessage: ((ev: { data: string }) => void) | null = null;
+
+    onclose: (() => void) | null = null;
+
+    onerror: (() => void) | null = null;
+
+    readyState = 0;
+
+    constructor(url: string) {
+      FakeWebSocket.urls.push(url);
+    }
+
+    send(): void {}
+
+    close(): void {}
+  }
+
+  afterEach(() => {
+    useAuthStore.getState().clearToken();
+    vi.unstubAllGlobals();
+    FakeWebSocket.urls = [];
+  });
+
+  it('有 token → 以绝对 ws:// URL 建连(env 基址 + /ws,绝不发相对地址)', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    // shell 内偏好回填/离线轮询的网络副作用静默桩平(与本用例断言无关)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 }),
+      ),
+    );
+    useAuthStore.getState().setToken('tok_valid');
+    renderShell('/');
+    expect(FakeWebSocket.urls.length).toBeGreaterThan(0);
+    for (const url of FakeWebSocket.urls) {
+      expect(url).toMatch(/^wss?:\/\//); // 绝对地址(相对 '/ws' 会被构造器拒绝)
+    }
+    expect(FakeWebSocket.urls[0]).toBe(`${env.wsBaseUrl}/ws`);
+  });
+
+  it('无 token → 不建连(不构造 WebSocket,不触 WS)', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    renderShell('/');
+    expect(FakeWebSocket.urls).toEqual([]);
+  });
+});

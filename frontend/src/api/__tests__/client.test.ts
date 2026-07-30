@@ -395,3 +395,98 @@ describe('默认 fetchImpl', () => {
     }
   });
 });
+
+describe('401 全局兜底回调(MES-106)', () => {
+  function makeClientWithHook(fetchImpl: typeof fetch, onUnauthorized?: () => void) {
+    return new MeshApiClient({
+      baseUrl: 'https://api.mesh.test',
+      getToken: () => 'tok',
+      fetchImpl,
+      onUnauthorized,
+    });
+  }
+
+  it('受保护端点 401 → 触发回调,且仍照常抛 MeshApiError(401)', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(
+      fakeResponse({
+        status: 401,
+        body: { error: { code: 'unauthorized', message: 'token expired' } },
+      }),
+    );
+    const client = makeClientWithHook(fetchImpl, onUnauthorized);
+    try {
+      await client.request('GET', '/api/v1/workspaces');
+      expect.fail('应当抛出');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MeshApiError);
+      expect((err as MeshApiError).status).toBe(401);
+    }
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it('鉴权豁免端点 401(登录业务错误)→ 不触发回调', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(
+      fakeResponse({
+        status: 401,
+        body: { error: { code: 'invalid_credentials', message: 'bad' } },
+      }),
+    );
+    const client = makeClientWithHook(fetchImpl, onUnauthorized);
+    await expect(
+      client.request('POST', '/api/v1/auth/login', { body: {} }),
+    ).rejects.toBeInstanceOf(MeshApiError);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('OAuth 前缀端点 401 → 不触发回调', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'x', message: '' } } }));
+    const client = makeClientWithHook(fetchImpl, onUnauthorized);
+    await expect(
+      client.request('GET', '/api/v1/auth/oauth/mock/callback'),
+    ).rejects.toBeInstanceOf(MeshApiError);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('403 / 500 / 429 等非 401 错误 → 不触发回调', async () => {
+    for (const status of [403, 404, 429, 500]) {
+      const onUnauthorized = vi.fn();
+      const { fetchImpl } = stubFetch(fakeResponse({ status, body: { error: { code: 'x', message: '' } } }));
+      const client = makeClientWithHook(fetchImpl, onUnauthorized);
+      await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(MeshApiError);
+      expect(onUnauthorized).not.toHaveBeenCalled();
+    }
+  });
+
+  it('2xx 成功 → 不触发回调', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(fakeResponse({ body: { data: {} } }));
+    await makeClientWithHook(fetchImpl, onUnauthorized).request('GET', '/api/v1/me');
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('网络失败(status=0)→ 不触发回调', async () => {
+    const onUnauthorized = vi.fn();
+    const client = makeClientWithHook(failingFetch(), onUnauthorized);
+    await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(MeshApiError);
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('未注入回调时 401 不抛额外错误(仅 MeshApiError)', async () => {
+    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }));
+    const client = makeClientWithHook(fetchImpl);
+    await expect(client.request('GET', '/api/v1/workspaces')).rejects.toBeInstanceOf(MeshApiError);
+  });
+
+  it('列表/分组入口同样接通兜底(共享 execute 路径)', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }));
+    const client = makeClientWithHook(fetchImpl, onUnauthorized);
+    await expect(client.list('/api/v1/issues')).rejects.toBeInstanceOf(MeshApiError);
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
+    await expect(client.grouped('/api/v1/issues/grouped')).rejects.toBeInstanceOf(MeshApiError);
+    expect(onUnauthorized).toHaveBeenCalledTimes(2);
+  });
+});

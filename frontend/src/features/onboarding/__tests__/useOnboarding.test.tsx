@@ -7,6 +7,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
+import { useAuthStore } from '../../../state/authStore';
 import { RealtimeContext } from '../../../shell/AppShell';
 import type { RealtimeContextValue } from '../../../shell/AppShell';
 import type { RealtimeEventFrame } from '../../../types/realtime';
@@ -130,14 +131,17 @@ function withRealtime(props: { children: ReactNode }): React.JSX.Element {
   );
 }
 
+// 上手清单解析为鉴权请求(MES-106 M1):用例以登录态为前置。
 beforeEach(() => {
   pageFrame = null;
   fakeClient.subscribe.mockClear();
   fakeClient.unsubscribe.mockClear();
   vi.unstubAllGlobals();
+  useAuthStore.getState().setToken('tok_test');
 });
 
 afterEach(() => {
+  useAuthStore.getState().clearToken();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -437,4 +441,30 @@ describe('useOnboarding', () => {
     expect(result.current.state).toBeNull();
   });
 
+  it('未登录时不发起鉴权请求(MES-106 M1):保持 loading,fetch 零调用', async () => {
+    useAuthStore.getState().clearToken();
+    const { fetchImpl, routed } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(routed.calls).toEqual([]);
+    expect(result.current.loading).toBe(true);
+    expect(result.current.workspaceId).toBeNull();
+    expect(result.current.state).toBeNull();
+  });
+
+  it('token 写入后随依赖补取(登录态变化 → 派生 + 清单加载)', async () => {
+    useAuthStore.getState().clearToken();
+    const { fetchImpl, routed } = routedFetch();
+    vi.stubGlobal('fetch', fetchImpl);
+    const { result } = renderHook(() => useOnboarding());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(routed.calls).toEqual([]);
+    act(() => {
+      useAuthStore.getState().setToken('tok_new');
+    });
+    await waitFor(() => expect(result.current.state).not.toBeNull());
+    expect(result.current.workspaceId).toBe('ws-1');
+    expect(routed.stateLoads()).toBeGreaterThanOrEqual(1);
+  });
 });

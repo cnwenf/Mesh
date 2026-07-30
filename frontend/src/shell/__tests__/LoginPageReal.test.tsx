@@ -112,6 +112,42 @@ describe('LoginPage 真实账号登录(auth.md §3.1 接通)', () => {
     await waitFor(() => expect(screen.getByTestId('at-invite')).toBeTruthy());
   });
 
+  it('?redirect= 同义别名同样回跳(MES-106;经同一 safeNextPath 守卫)', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?redirect=/invite/invtk_x');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-invite')).toBeTruthy());
+  });
+
+  it('?next= 优先于 ?redirect=(二者并存时取规范参数)', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?next=/invite/invtk_x&redirect=/');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-invite')).toBeTruthy());
+  });
+
+  it('?redirect= 外站目标 → 守卫拒绝并回落首页(与 next 同策略)', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });
+    renderLogin(fetchImpl, '/login?redirect=//evil.example');
+
+    await user.type(screen.getByTestId('login-email'), 'jane@corp.com');
+    await user.type(screen.getByTestId('login-password'), 'secret123');
+    await user.click(screen.getByTestId('login-account-submit'));
+
+    await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
+  });
+
   it('next 参数仅接受站内路径(防开放重定向)', async () => {
     const user = userEvent.setup();
     const fetchImpl = stubFetch({ status: 200, body: { data: TOKENS } });

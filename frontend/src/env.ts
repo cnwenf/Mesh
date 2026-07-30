@@ -54,3 +54,27 @@ export function resolveEnv(meta: ImportMetaEnv | undefined): MeshEnv {
 }
 
 export const env: MeshEnv = resolveEnv(import.meta.env as ImportMetaEnv | undefined);
+
+/** 实时网关路径(README §6.7 / §6.16;nginx 同源反代 location /ws) */
+const WS_GATEWAY_PATH = '/ws';
+
+/**
+ * 实时网关绝对 URL(MES-106)。WebSocket 构造器只接受**绝对** ws(s):// URL,
+ * 相对地址(`/ws`)直接抛 SyntaxError——同源部署(Dockerfile 以空
+ * VITE_MESH_WS_BASE_URL 构建,nginx 反代 /ws → gateway)必须由页面 location
+ * 派生:https 页面用 wss,http 页面用 ws(公网 HTTP 场景据此可用)。
+ *
+ * 显式基址(http://… / https://…)归一为对应 ws(s):// scheme,杜绝运行期
+ * 构造错误;基址尾斜杠剔除后拼 /ws。location 可注入以便单测(缺省 window)。
+ */
+export function resolveWsGatewayUrl(
+  wsBaseUrl: string,
+  location: Pick<Location, 'protocol' | 'host'> = window.location,
+): string {
+  const trimmed = wsBaseUrl.trim();
+  const base =
+    trimmed === ''
+      ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host
+      : trimmed.replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://');
+  return base.replace(/\/+$/, '') + WS_GATEWAY_PATH;
+}

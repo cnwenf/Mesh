@@ -83,7 +83,9 @@ export function LoginPage(props: LoginPageProps): React.JSX.Element {
   const registeredResultActive = useRef(false);
 
   // 回跳目标站内路径守卫(防开放重定向,`//` 与 `/\` 反斜杠变体同款拒绝)。
-  const target = safeNextPath(searchParams.get('next'));
+  // 规范参数为 `?next=`(auth.md §4.1;路由守卫 / OAuth 往返 / 邀请接受共用);
+  // `?redirect=` 作同义别名一并受理(MES-106),二者同经 safeNextPath 守卫。
+  const target = safeNextPath(searchParams.get('next') ?? searchParams.get('redirect'));
 
   if (token !== null && !registeredResultActive.current) {
     return <Navigate to={target} replace />;

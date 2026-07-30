@@ -30,6 +30,9 @@ export default defineConfig({
         'src/**/*.d.ts',
         'src/types/**',
         'src/**/__tests__/**',
+        // 根级测试文件(如 src/env.test.ts)与 __tests__/ 同义排除:
+        // 测试自身不进覆盖率统计(MES-106 变更代码门禁曾误计此文件)。
+        'src/**/*.test.{ts,tsx}',
         'src/test-utils/**',
       ],
       // README §3.2 / MES-16 acceptance: overall coverage gate >= 90%

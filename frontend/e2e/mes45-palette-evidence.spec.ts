@@ -7,8 +7,10 @@
  * 随默认 e2e 配置常态守护(兼取证)。
  */
 import { expect, test } from '@playwright/test';
+import { login } from './helpers';
 
 test('MES-45 取证:Ctrl+K 输入 issues/home 均命中且 Enter 可跳转', async ({ page }) => {
+  await login(page); // MES-106:受保护页位于登录守卫之后,取证前先写 dev token
   await page.goto('/');
   await page.keyboard.press('Control+k');
   const palette = page.getByRole('dialog', { name: 'Command palette' });

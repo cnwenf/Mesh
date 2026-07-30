@@ -134,6 +134,8 @@ curl http://localhost:3001/api/v1/ping      # 经 nginx 同源代理到 API
 
 > **前端部署形态(H5)**:`docker compose up --build` 会用 `frontend/Dockerfile` 构建真实 SPA 并由 nginx 在 `:3001` **同源**承载,`/api` 反代到 `api:8000`、`/ws` 反代到 `gateway:8081`,因此浏览器对 API/WS 的请求**同源**,后端无需开 CORS(生产部署形态,auth.md §5.5)。直接打开 http://localhost:3001/chat 即可与 agent 实时对话。compose 真栈 `/chat` 全链路冒烟见 `frontend/e2e/real-chat-compose.spec.ts`(配置 `frontend/playwright.chat-compose.config.ts`,前置:`docker compose up --build -d`,无 webServer)。
 >
+> **会话与登录守卫(MES-106,auth.md §4.1)**:受保护路由未登录访问统一跳 `/login?next=<原路径>`,登录后回跳原页;token 失效(受保护端点 401)由 API 客户端全局兜底清 token 并跳登录页(鉴权豁免端点的业务错误就地呈现,不受影响)。实时网关地址为绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空)时由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),公网 HTTP 部署实时可用。
+>
 > **本地开发替代**:若用 Vite dev server(`cd frontend && npm run dev`),以同源代理配置启动:`VITE_MESH_API_BASE_URL="" VITE_MESH_WS_BASE_URL="" npx vite --config vite.local.config.ts`(该配置把 `/api`、`/ws` 代理到 `127.0.0.1:8000/8081`),同样同源、无需 CORS。
 
 API 启动时自动执行 `alembic upgrade head`(建表 + RLS 策略);worker 进程运行 outbox relay、realtime projector 与保留期清理。

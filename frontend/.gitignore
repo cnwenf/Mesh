@@ -7,3 +7,4 @@ test-results
 *.log
 tsconfig.tsbuildinfo
 e2e/.members-context.json
+e2e/mes106/stack.env
