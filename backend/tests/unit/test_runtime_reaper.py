@@ -17,6 +17,7 @@ from mesh.db.models.runtime import Approval, ExecutionAttempt, Runtime, TaskExec
 from mesh.runtime.reaper import run_reaper_pass
 from tests.unit.runtime_support import (
     TEST_JWT_SECRET,
+    assert_execution_finished_fanout,
     make_execution,
     make_runtime,
     seed_world,
@@ -214,3 +215,101 @@ async def test_reaper_expires_pending_approvals_and_cancels_execution(session_fa
     assert approval.status == "expired"
     assert stored.status == "cancelled"
     assert stored.failure_reason == "approval_expired"
+
+
+# ---------------------------------------------------------------------------
+# MES-96 P1-2 — reaper terminal paths must write execution.finished (runtime.md
+# §3.6) in the same transaction, full five-field payload. The squad relay /
+# result sink subscribe to this event alone; a daemon that dies mid-cancel, an
+# execution that exhausts retries, or an approval that expires must all fan out
+# or the orchestration layer hangs forever (no compensating sweep).
+# ---------------------------------------------------------------------------
+
+
+async def test_finished_fanout_reaper_completes_cancelling_as_cancelled(session_factory):
+    """Daemon died mid-cancel → reaper finishes the cancellation AND fans out."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(
+        session_factory, world["ws_id"], world["agent_id"], status="cancelling"
+    )
+    await _seed_expired_attempt(
+        session_factory, world["ws_id"], execution, runtime, status="cancelling"
+    )
+
+    counts = await run_reaper_pass(session_factory)
+    assert counts["cancelled"] == 1
+    await assert_execution_finished_fanout(
+        session_factory,
+        world["ws_id"],
+        execution.id,
+        status="cancelled",
+        failure_reason=None,
+    )
+
+
+async def test_finished_fanout_reaper_max_retries_failure(session_factory):
+    """Retries exhausted → execution failed(max_retries) AND fan-out fires."""
+    world = await seed_world(session_factory)
+    runtime = await make_runtime(session_factory, world["ws_id"])
+    execution = await make_execution(
+        session_factory, world["ws_id"], world["agent_id"], status="running", max_attempts=2
+    )
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO execution_attempts "
+                "(workspace_id, execution_id, attempt_number, runtime_id, status, "
+                " failure_reason, finished_at, claimed_at) "
+                "VALUES (:ws, :e, 1, :r, 'failed', 'nonzero_exit', now(), now())"
+            ),
+            {"ws": world["ws_id"], "e": execution.id, "r": runtime.id},
+        )
+    await _seed_expired_attempt(
+        session_factory, world["ws_id"], execution, runtime, number=2
+    )
+
+    counts = await run_reaper_pass(session_factory)
+    assert counts["failed_max_retries"] == 1
+    await assert_execution_finished_fanout(
+        session_factory,
+        world["ws_id"],
+        execution.id,
+        status="failed",
+        failure_reason="max_retries",
+    )
+
+
+async def test_finished_fanout_reaper_approval_expiry_cancels_execution(session_factory):
+    """Approval expired → awaiting_approval execution cancelled(approval_expired)
+    AND fan-out fires (previously emitted realtime only → squad hang)."""
+    world = await seed_world(session_factory)
+    execution = await make_execution(
+        session_factory, world["ws_id"], world["agent_id"], status="awaiting_approval"
+    )
+    approval_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        await session.execute(
+            text(
+                "INSERT INTO approvals (id, workspace_id, subject_type, subject_execution_id, "
+                "requested_by_member_id, action_summary, expires_at, status) "
+                "VALUES (:id, :ws, 'tool_call', :e, :m, '{}'::jsonb, "
+                "now() - interval '1 minute', 'pending')"
+            ),
+            {
+                "id": approval_id,
+                "ws": world["ws_id"],
+                "e": execution.id,
+                "m": world["member_id"],
+            },
+        )
+
+    counts = await run_reaper_pass(session_factory)
+    assert counts["approvals_expired"] == 1
+    await assert_execution_finished_fanout(
+        session_factory,
+        world["ws_id"],
+        execution.id,
+        status="cancelled",
+        failure_reason="approval_expired",
+    )

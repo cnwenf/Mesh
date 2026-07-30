@@ -21,6 +21,7 @@ from tests.unit.runtime_support import (
     make_execution,
     make_runtime,
     seed_world,
+    valid_result_v1,
 )
 
 pytestmark = pytest.mark.unit
@@ -132,7 +133,7 @@ async def test_t3_terminal_transitions_return_load_to_zero(session_factory):
             runtime=runtime,
             lease_seq=1,
             new_status=status,
-            result={"exit_code": 0} if status == "completed" else None,
+            result=valid_result_v1() if status == "completed" else None,
             failure_reason=None if status == "completed" else "nonzero_exit",
         )
 
@@ -165,7 +166,7 @@ async def test_t3_duplicate_terminal_report_no_double_release(session_factory):
             runtime=runtime,
             lease_seq=1,
             new_status="completed",
-            result={"exit_code": 0},
+            result=valid_result_v1(),
         )
 
     async with session_factory() as session:

@@ -407,6 +407,12 @@ async def _cancel_execution(
             data={"execution_id": str(execution.id), "failure_reason": reason},
             idempotency_key=f"execution:{execution.id}:cancelled",
         )
+        # runtime.md §3.6 single terminal fan-out: the queued→cancelled cascade
+        # must write execution.finished in the same transaction so observers of
+        # this execution (relay / result sink) learn of it — no sweep exists.
+        from mesh.runtime.attempts import emit_execution_finished
+
+        await emit_execution_finished(session, execution=execution)
     else:
         # claimed / running / cancelling → two-phase cancel (daemon finalizes).
         execution.status = "cancelling"

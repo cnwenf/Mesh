@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 
 from fastapi import Request
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.security import hash_token
@@ -171,7 +171,6 @@ async def resolve_task_principal(request: Request):
     Only routes that explicitly declare task principal support should
     use this dependency — regular console routes reject mesh_task_.
     """
-    from mesh.db.models.runtime import AttemptTaskToken
     from mesh.db.tenant import set_tenant_context
     from mesh.runtime.task_tokens import _hash_token, validate_task_token
 
@@ -185,20 +184,22 @@ async def resolve_task_principal(request: Request):
 
     session_factory = request.app.state.session_factory
     async with session_factory() as session:
-        # Preliminary lookup to get workspace_id for tenant context.
-        # attempt_task_tokens has no RLS, so this works without GUC.
+        # Bootstrap the tenant context from the presented token. The table is
+        # fail-closed RLS (migration 0034), so the workspace probe goes through
+        # the SECURITY DEFINER function — an owner read that bypasses RLS for
+        # the one indexed token-hash lookup (the workspace is unknown until it
+        # succeeds), exactly mirroring mesh_runtime_by_token_hash. Every read
+        # AFTER set_tenant_context (validate_task_token's token / attempt
+        # queries) then runs fail-closed under the tenant policy.
         token_hash = _hash_token(token)
-        row = (
+        workspace_id = (
             await session.execute(
-                select(AttemptTaskToken.workspace_id).where(
-                    AttemptTaskToken.token_hash == token_hash,
-                )
+                text("SELECT mesh_attempt_task_token_workspace_id(:h)"),
+                {"h": token_hash},
             )
         ).scalar_one_or_none()
-        if row is None:
+        if workspace_id is None:
             raise UnauthorizedError("invalid task token")
-        # Set tenant context BEFORE validate_task_token queries
-        # execution_attempts (which has RLS on workspace_id).
-        await set_tenant_context(session, row)
+        await set_tenant_context(session, workspace_id)
         task_token = await validate_task_token(session, token=token)
         return task_token

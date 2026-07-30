@@ -259,6 +259,83 @@ class TestFailClosed:
         assert not Path(f"/proc/{inner}").exists()
 
 
+class TestConcurrentRollback:
+    @staticmethod
+    async def _race_once(manager, root: Path):
+        """One concurrent-provision race: A's handshake failure is injected
+        only AFTER B's handshake has begun (B's proc is spawned and parked in
+        B's own ``created[]`` slot by then), so the overlap is deterministic.
+        Returns the two provision results."""
+        import asyncio
+
+        spec_a = make_spec(
+            root / "a", attempt_id="attempt-a-concurrent", argv=("/bin/sleep", "2")
+        )
+        spec_b = make_spec(
+            root / "b", attempt_id="attempt-b-concurrent", argv=("/bin/sleep", "2")
+        )
+        real_handshake = manager._handshake
+        b_handshake_started = asyncio.Event()
+
+        async def flaky_handshake(spec, **kw):
+            if spec.attempt_id == "attempt-a-concurrent":
+                await asyncio.wait_for(b_handshake_started.wait(), timeout=10.0)
+                raise SandboxUnavailableError("injected handshake failure")
+            b_handshake_started.set()
+            return await real_handshake(spec, **kw)
+
+        manager._handshake = flaky_handshake
+        try:
+            return await asyncio.gather(
+                manager.provision(spec_a),
+                manager.provision(spec_b),
+                return_exceptions=True,
+            )
+        finally:
+            manager._handshake = real_handshake
+
+    async def test_failed_attempt_rollback_kills_only_its_own_sandbox(
+        self, manager, tmp_path
+    ):
+        """MES-96 P1-1: two attempts provision concurrently; a handshake
+        failure injected into A must roll back ONLY A's process. The shared
+        ``SandboxManager`` may not let A's rollback reach across and kill B's
+        already-spawned sandbox (the cascading double sandbox_violation).
+
+        The property measured is rollback isolation: B completing with a live
+        process while A's rollback ran concurrently. On a saturated CI host
+        B's REAL kernel handshake can independently exceed its per-stage
+        deadline (``sandbox handshake timeout``) — an environmental class the
+        pre-fix bug did NOT produce (it killed B's process, surfacing as
+        ``nsenter: cannot open /proc/...`` / dead-proc asserts). Such timeout
+        attempts are retried so the assertions measure exactly the race under
+        test; any OTHER failure mode fails immediately."""
+        last_env_failure: object = None
+        for attempt in range(5):
+            results = await self._race_once(manager, tmp_path / f"run{attempt}")
+            handle_b = results[1]
+            if (
+                isinstance(handle_b, SandboxUnavailableError)
+                and "handshake timeout" in str(handle_b)
+            ):
+                last_env_failure = handle_b
+                continue  # host load starvation — not the race under test
+            assert isinstance(results[0], SandboxUnavailableError)
+            assert not isinstance(handle_b, BaseException)
+            # B's sandbox process was NOT killed by A's rollback.
+            assert handle_b.proc.returncode is None
+            # A is gone from the live handles (its own process reaped, no orphan).
+            assert all(
+                h.attempt_id != "attempt-a-concurrent" for h in manager._handles.values()
+            )
+            await manager.destroy(handle_b)
+            return
+        raise AssertionError(
+            f"B's handshake timed out on 5/5 attempts — host too loaded to "
+            f"measure the rollback race: {last_env_failure!r}"
+        )
+
+
 class TestCapabilities:
     async def test_probe_reports_linux_ns_when_root(self, tmp_path):
         _require_root()

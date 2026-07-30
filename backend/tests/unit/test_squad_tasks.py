@@ -20,6 +20,7 @@ from mesh.squad.tasks import (
     observe_execution_finished_tx,
     on_issue_assignee_changed_tx,
 )
+from tests.unit.runtime_support import assert_execution_finished_fanout
 from tests.unit.squad_support import (
     add_member,
     build_services,
@@ -949,3 +950,54 @@ async def test_leader_evaluated_failed(session_factory, workspace_factory):
         )
     assert len(evaluated) == 1
     assert evaluated[0].payload["result"] == "failed"
+
+
+async def test_finished_fanout_cascade_cancel_queued_execution(
+    session_factory, workspace_factory
+):
+    """MES-96 P1-2 (#8): cascade-cancelling a squad task whose execution is still
+    QUEUED drives the execution queued→cancelled — that terminal transition must
+    write execution.finished in the same transaction (runtime.md §3.6), or any
+    observer of the subtask execution (relay / result sink) never learns of it."""
+    from datetime import UTC, datetime
+
+    ws = await workspace_factory()
+    _, leader = await make_agent_member(session_factory, ws)
+    squad = await make_squad(session_factory, ws, leader_member=leader)
+    issue = await seed_issue(session_factory, ws)
+    exec_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        session.add(TaskExecution(id=exec_id, workspace_id=ws.id, status="queued"))
+        session.add(
+            SquadTask(
+                id=task_id,
+                workspace_id=ws.id,
+                squad_id=squad.id,
+                issue_id=issue.id,
+                title_snapshot="cancel-me",
+                status="in_progress",
+                execution_id=exec_id,
+            )
+        )
+
+    async with session_factory() as session, session.begin():
+        task = await session.get(SquadTask, task_id)
+        await squad_tasks.cascade_cancel_task(
+            session,
+            workspace_id=ws.id,
+            task=task,
+            reason="root_cancelled",
+            now=datetime.now(UTC),
+        )
+
+    async with session_factory() as session:
+        stored_exec = await session.get(TaskExecution, exec_id)
+    assert stored_exec.status == "cancelled"
+    await assert_execution_finished_fanout(
+        session_factory,
+        ws.id,
+        exec_id,
+        status="cancelled",
+        failure_reason="root_cancelled",
+    )
