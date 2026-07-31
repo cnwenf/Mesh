@@ -4,7 +4,7 @@
  * 依赖乐观移除 + 失败回滚 / 错误态重试。
  * fetch 桩按调用序:GET issue → statuses / children / dependencies / activity / members。
  */
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, headersOf } from '../../../api/__tests__/fetchStub';
@@ -13,7 +13,7 @@ import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
 import type { MissingReporter } from '../../../i18n';
 import { useSettingsStore } from '../../../state/settingsStore';
-import { IssueDetailPage } from '../IssueDetailPage';
+import { IssueDetailPage, categoryTone } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
@@ -42,7 +42,7 @@ const DETAIL = {
   state_category: 'todo',
   priority: 'medium',
   assignee: null,
-  assignee_id: null,
+  assignee_id: null as string | null,
   reporter: { id: 'mem-1', name: 'Owner', member_type: 'human' },
   reporter_id: 'mem-1',
   estimate: null,
@@ -296,7 +296,80 @@ describe('IssueDetailPage', () => {
     );
     expect(screen.getByTestId('issue-detail-deps')).toBeTruthy();
     expect(screen.getByText('WS-7')).toBeTruthy();
+    // DetailLayout + summary chips(§8.3:关键状态保留在标题下)
+    expect(screen.getByTestId('detail-layout')).toBeTruthy();
+    expect(screen.getByTestId('issue-chip-status').textContent).toContain('Todo');
+    expect(screen.getByTestId('issue-chip-priority').textContent).toContain('Medium');
+    expect(screen.getByTestId('issue-chip-assignee').textContent).toContain('Unassigned');
+    expect(screen.getByTestId('issue-chip-due')).toBeTruthy();
+    // 活动流在「活动」Tab 内(默认评论 Tab,§3.2 活动/评论可切换)
+    expect(screen.queryByTestId('issue-detail-activity')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
     expect(screen.getByTestId('issue-detail-activity')).toBeTruthy();
+    // 切回评论 Tab(草稿经 localStorage 持久化,切换安全)
+    fireEvent.click(screen.getByRole('tab', { name: 'Comments' }));
+    expect(screen.queryByTestId('issue-detail-activity')).toBeNull();
+  });
+
+  it('reverts the title draft on Escape and saves on Enter (§3.2 标题可内联编辑)', async () => {
+    const updated = { ...DETAIL, title: 'Via enter', version: 4 };
+    const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));
+    renderDetail();
+    const title = (await screen.findByTestId('issue-detail-title')) as HTMLInputElement;
+    // Esc 还原为服务端标题
+    fireEvent.change(title, { target: { value: 'Scratch' } });
+    fireEvent.keyDown(title, { key: 'Escape' });
+    expect(title.value).toBe('First issue');
+    // Enter 保存
+    fireEvent.change(title, { target: { value: 'Via enter' } });
+    fireEvent.keyDown(title, { key: 'Enter' });
+    await waitFor(() => {
+      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+      expect(patchCalls.length).toBe(1);
+      expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({
+        title: 'Via enter',
+        version: 3,
+      });
+    });
+  });
+
+  it('surfaces a transient conflict notice after 409 convergence (§3.2 保存与冲突状态清楚)', async () => {
+    const server = { ...DETAIL, title: 'Someone else', version: 9 };
+    queue(
+      // PATCH → 409 conflict → 收敛 GET(服务端最新)→ 整轮重取
+      fakeResponse({ status: 409, body: { error: { code: 'conflict', message: 'stale' } } }),
+      fakeResponse({ body: { data: server } }),
+      ...reloadRound(server),
+    );
+    renderDetail();
+    const title = await screen.findByTestId('issue-detail-title');
+    fireEvent.change(title, { target: { value: 'Renamed' } });
+    fireEvent.blur(title);
+    // 冲突弱提示:role=status + conflictNotice 文案 + data-phase=conflict
+    const indicator = await screen.findByTestId('issue-save-indicator');
+    await waitFor(() => expect(indicator.getAttribute('data-phase')).toBe('conflict'));
+    expect(indicator.textContent).toContain('Updated by someone else; latest version loaded');
+  });
+
+  it('deletes the issue only after the confirm dialog (§13.3 destructive 确认)', async () => {
+    const stub = queue(fakeResponse({ body: { id: 'iss-1', deleted: true } }));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    // 动作菜单 → 删除 → 确认
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    // 未确认前不发 DELETE;先经对话框关闭按钮(×)取消(触发 Dialog onClose)
+    expect(stub.calls.filter((c) => c.init?.method === 'DELETE').length).toBe(0);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // 再次打开并确认删除
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(await screen.findByTestId('issue-delete-confirm'));
+    await waitFor(() => {
+      expect(stub.calls.filter((c) => c.init?.method === 'DELETE').length).toBe(1);
+    });
   });
 
   it('renders with a malformed children_progress envelope instead of blanking the page (defensive default)', async () => {
@@ -342,6 +415,10 @@ describe('IssueDetailPage', () => {
       expect(body).toEqual({ title: 'Renamed', version: 3 });
       expect(headersOf(patchCalls[0])['If-Match']).toBe('2026-07-02T00:00:00Z');
     });
+    // 保存成功弱提示:phase → saved(随后自动淡出,§3.2)
+    await waitFor(() =>
+      expect(screen.getByTestId('issue-save-indicator').getAttribute('data-phase')).toBe('saved'),
+    );
   });
 
   it('reports circular dependency inline without creating the edge (§5.3)', async () => {
@@ -553,8 +630,9 @@ describe('IssueDetailPage', () => {
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
-    // 类型选择器存在(§4.2/§4.3:选类型)
+    // 类型选择器存在(§4.2/§4.3:选类型)并切换类型(覆盖 dep-type onChange)
     expect(screen.getByTestId('dep-type-select')).toBeTruthy();
+    fireEvent.change(screen.getByTestId('dep-type-select'), { target: { value: 'blocks' } });
     fireEvent.change(screen.getByTestId('dep-target-input'), { target: { value: 'WS-9' } });
     fireEvent.click(screen.getByText('Add dependency'));
     await waitFor(() => {
@@ -562,7 +640,7 @@ describe('IssueDetailPage', () => {
       expect(posts.length).toBe(1);
       expect(JSON.parse(String(posts[0].init?.body))).toEqual({
         depends_on_id: 'iss-9',
-        type: 'blocked_by',
+        type: 'blocks',
       });
     });
   });
@@ -731,6 +809,139 @@ describe('IssueDetailPage', () => {
     expect(cleared).toContain('labels_v2(brand_new_reason)');
   });
 
+  /**
+   * 两次侧栏字段变更的通用流程(沿用 estimate/start 测试的时序收敛:先等第一轮
+   * 重取落定 calls≥22 再发第二次变更,避免 React 19 批处理合并 reloadKey 错位队列)。
+   */
+  async function twoSidebarChanges(
+    first: { testId: string; value: string; body: unknown },
+    second: { testId: string; value: string; body: unknown },
+  ): Promise<void> {
+    const stub = queue(
+      fakeResponse({ body: { data: DETAIL } }),
+      ...reloadRound(),
+      fakeResponse({ body: { data: DETAIL } }),
+      ...reloadRound(),
+    );
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    fireEvent.change(screen.getByTestId(first.testId), { target: { value: first.value } });
+    await waitFor(
+      () => {
+        const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+        expect(patchCalls.length).toBe(1);
+        expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual(first.body);
+      },
+      { timeout: 5000 },
+    );
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(22), { timeout: 5000 });
+    fireEvent.change(screen.getByTestId(second.testId), { target: { value: second.value } });
+    await waitFor(
+      () => {
+        const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+        expect(patchCalls.length).toBe(2);
+        expect(JSON.parse(String(patchCalls[1].init?.body))).toEqual(second.body);
+      },
+      { timeout: 5000 },
+    );
+  }
+
+  it('patches priority and assignee from the sidebar (§4.2)', async () => {
+    await twoSidebarChanges(
+      { testId: 'issue-detail-priority', value: 'high', body: { priority: 'high', version: 3 } },
+      { testId: 'issue-detail-assignee', value: 'mem-1', body: { assignee_id: 'mem-1', version: 3 } },
+    );
+  });
+
+  it('patches due date and estimate unit from the sidebar (§4.2)', async () => {
+    await twoSidebarChanges(
+      { testId: 'issue-detail-due', value: '2026-09-01', body: { due_date: '2026-09-01', version: 3 } },
+      {
+        testId: 'issue-detail-estimate-unit',
+        value: 'points',
+        body: { estimate_unit: 'points', version: 3 },
+      },
+    );
+  });
+
+  it('patches milestone and cycle from the sidebar (§4.2)', async () => {
+    await twoSidebarChanges(
+      { testId: 'issue-detail-milestone', value: 'ms-1', body: { milestone_id: 'ms-1', version: 3 } },
+      { testId: 'issue-detail-cycle', value: 'cyc-1', body: { cycle_id: 'cyc-1', version: 3 } },
+    );
+  });
+
+  it('clears milestone and cycle back to null with empty select values (§4.2 三态清空)', async () => {
+    await twoSidebarChanges(
+      { testId: 'issue-detail-milestone', value: '', body: { milestone_id: null, version: 3 } },
+      { testId: 'issue-detail-cycle', value: '', body: { cycle_id: null, version: 3 } },
+    );
+  });
+
+  it('renders a fully-populated issue with all sidebar fields non-null (缺字段分支对照)', async () => {
+    const FULL = {
+      ...DETAIL,
+      estimate: 5,
+      estimate_unit: 'points',
+      start_date: '2026-08-01',
+      due_date: '2026-09-01',
+      milestone_id: 'ms-1',
+      cycle_id: 'cyc-1',
+      assignee: { id: 'mem-1', name: 'Owner', member_type: 'human' },
+      assignee_id: 'mem-1',
+    };
+    const stub = detailStub(
+      fakeResponse({ body: { data: FULL } }),
+      ...detailResponses().slice(1),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    expect((screen.getByTestId('issue-detail-estimate') as HTMLInputElement).value).toBe('5');
+    expect((screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement).value).toBe(
+      'points',
+    );
+    expect((screen.getByTestId('issue-detail-start') as HTMLInputElement).value).toBe('2026-08-01');
+    expect((screen.getByTestId('issue-detail-due') as HTMLInputElement).value).toBe('2026-09-01');
+    expect((screen.getByTestId('issue-detail-milestone') as HTMLSelectElement).value).toBe('ms-1');
+    expect((screen.getByTestId('issue-detail-cycle') as HTMLSelectElement).value).toBe('cyc-1');
+    // chips 呈现已填值(负责人 / 截止日)
+    expect(screen.getByTestId('issue-chip-assignee').textContent).toContain('Owner');
+    expect(screen.getByTestId('issue-chip-due').textContent).toContain('2026-09-01');
+  });
+
+  it('clears assignee back to unassigned with an empty select value', async () => {
+    const assigned = { ...DETAIL, assignee_id: 'mem-1' };
+    const stub = queue(fakeResponse({ body: { data: assigned } }), ...reloadRound(assigned));
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    fireEvent.change(screen.getByTestId('issue-detail-assignee'), { target: { value: '' } });
+    await waitFor(() => {
+      const patchCalls = stub.calls.filter((c) => c.init?.method === 'PATCH');
+      expect(patchCalls.length).toBe(1);
+      expect(JSON.parse(String(patchCalls[0].init?.body))).toEqual({
+        assignee_id: null,
+        version: 3,
+      });
+    });
+  });
+
+  it('shows Unassigned when the reporter is missing (报告人回退分支)', async () => {
+    const noReporter = { ...DETAIL, reporter: null, reporter_id: null };
+    const stub = detailStub(
+      fakeResponse({ body: { data: noReporter } }),
+      ...detailResponses().slice(1),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+    expect(document.querySelector('.mesh-issues-detail__meta')?.textContent).toContain('Unassigned');
+  });
+
   it('localizes estimate unit options (LOW-2:points/hours 不再硬编码英文)', async () => {
     const stub = queue();
     renderDetail();
@@ -839,5 +1050,17 @@ describe('IssueDetailPage', () => {
     expect(
       await screen.findByText('Moving this item changes some fields. Please review and confirm the move.'),
     ).toBeTruthy();
+  });
+});
+
+describe('categoryTone(状态类别 → 徽标 tone 纯映射)', () => {
+  it('覆盖全部 7 个类别', () => {
+    expect(categoryTone('backlog')).toBe('neutral');
+    expect(categoryTone('todo')).toBe('info');
+    expect(categoryTone('in_progress')).toBe('accent');
+    expect(categoryTone('in_review')).toBe('warning');
+    expect(categoryTone('blocked')).toBe('danger');
+    expect(categoryTone('done')).toBe('success');
+    expect(categoryTone('cancelled')).toBe('neutral');
   });
 });

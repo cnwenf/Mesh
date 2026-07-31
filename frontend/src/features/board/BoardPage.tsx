@@ -12,12 +12,21 @@
  * 渲染序:无工作区空态 → 错误态(可重试)→ 骨架 → 视图空态(新建视图)→ 内容。
  * 选中视图 URL 同步 /views/{id}(§4.2 可分享/收藏)。
  */
-/* eslint-disable react-refresh/only-export-components -- 模块契约:loadAllGroups 与页面组件同文件导出 */
+/* eslint-disable react-refresh/only-export-components -- loadAllGroups 与页面组件同模块契约(测试复用) */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMatch, useNavigate, useParams } from 'react-router';
 import { getApiClient } from '../../api/instance';
 import { MeshApiError } from '../../api/errors';
-import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { usePageContext, useShortcutRegistry } from '../../shortcuts';
@@ -37,8 +46,9 @@ import {
   viewChannel,
 } from './api';
 import { BoardColumns, computeDropPosition } from './BoardColumns';
+import { BoardListView } from './BoardListView';
 import { applyBoardFrame, cardBelongsToView, rebucketGroups } from './boardRealtime';
-import { columnsForView, deriveColumns } from './columns';
+import { columnsForView, deriveColumns, isRenderableLayout } from './columns';
 import { buildBoardGrid, columnKeyOfCard, moveCardSelection, nextColumnKey } from './keyboardNav';
 import type { BoardDirection, BoardGrid } from './keyboardNav';
 import { FilterConfigPanel } from './FilterConfigPanel';
@@ -48,14 +58,7 @@ import { SortConfigPanel } from './SortConfigPanel';
 import { ViewSaveBar } from './ViewSaveBar';
 import { ViewSwitcher } from './ViewSwitcher';
 import { WipConfigPanel } from './WipConfigPanel';
-import type {
-  BoardSettings,
-  Filters,
-  GroupByField,
-  SortRule,
-  View,
-  WipEnforcement,
-} from './types';
+import type { BoardSettings, Filters, GroupByField, SortRule, View, WipEnforcement } from './types';
 import './board.css';
 
 type LoadStatus = 'loading' | 'ready' | 'empty' | 'error';
@@ -98,6 +101,9 @@ const GROUP_BY_OPTIONS: readonly GroupByField[] = [
   'project',
   'label',
 ];
+
+/** 新建卡片插入高亮保持时长(§9.3.4)。 */
+const HIGHLIGHT_MS = 1200;
 
 /** 从整体游标分组包络拉取整板卡片(遍历 next_cursor 至末页,§6.14)。 */
 export async function loadAllGroups(
@@ -152,7 +158,9 @@ export function BoardPage(): React.JSX.Element {
 
   // 投影层状态:整板分组 + 列目标状态映射 + 加载态。
   const [boardGroups, setBoardGroups] = useState<readonly BoardGroup[]>([]);
-  const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>({});
+  const [columnTargetStatus, setColumnTargetStatus] = useState<Readonly<Record<string, string>>>(
+    {},
+  );
   const [boardStatus, setBoardStatus] = useState<LoadStatus>('loading');
   const [resyncing, setResyncing] = useState(false);
   const [movePreview, setMovePreview] = useState<{
@@ -162,6 +170,15 @@ export function BoardPage(): React.JSX.Element {
     position: number;
     version: number;
   } | null>(null);
+
+  // 新建卡片 1.2s 插入高亮(§9.3.4):创建成功并重拉后闪烁新卡。
+  const [highlightCardId, setHighlightCardId] = useState<string | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
+  const flashHighlight = useCallback((cardId: string) => {
+    setHighlightCardId(cardId);
+    if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightCardId(null), HIGHLIGHT_MS);
+  }, []);
 
   const boardGroupsRef = useRef(boardGroups);
   boardGroupsRef.current = boardGroups;
@@ -216,6 +233,15 @@ export function BoardPage(): React.JSX.Element {
       { id: 'board.filter', combo: 'f', label: t('shortcuts.boardFilter'), group: 'board', run: () => actions().toggleFilter() },
     ]);
   }, [t]);
+
+  // 投影加载竞态防护(验收必修 1):loadSeq 单调递增,响应写回前校验序号与当前
+  // 视图 id——切换视图后,旧视图的在途/分页响应一律丢弃,不得覆盖新视图数据。
+  const loadSeqRef = useRef(0);
+  const selectedViewIdRef = useRef<string | null>(null);
+  // 视图加载键(id + 投影相关配置):views 列表 refetch 使选中视图对象换新引用但
+  // 内容未变时不重载(杜绝向旧视图 issues 端点发多余请求);配置变更(保存视图)
+  // 键变 → 正常重载。
+  const lastLoadedKeyRef = useRef<string | null>(null);
 
   // 当前生效分组(草稿 group_by;须在早期返回之前的 hooks 区计算,§ Rules of Hooks)。
   const effectiveGroupBy = draft?.group_by ?? 'state_category';
@@ -281,6 +307,7 @@ export function BoardPage(): React.JSX.Element {
     }
     return views.find((view) => view.is_default) ?? views[0] ?? null;
   }, [views, viewId]);
+  selectedViewIdRef.current = selectedView?.id ?? null;
 
   useEffect(() => {
     setDraft(selectedView === null ? null : draftFromView(selectedView));
@@ -294,15 +321,22 @@ export function BoardPage(): React.JSX.Element {
   );
 
   // 投影加载:选中视图变化 → 执行视图配置拉取整板(§3.2)。
+  // 已有内容时保持渲染(§10.1/§13.3 局部刷新不清空已有内容):快速创建/移动后
+  // 的整板重拉不卸载 BoardColumns,紧凑模式当前列与滚动位置得以保持;
+  // 切换视图时由下方 effect 先清空分组,走骨架屏路径。
   const loadBoard = useCallback(
     async (view: View) => {
-      setBoardStatus('loading');
+      const seq = ++loadSeqRef.current;
+      if (boardGroupsRef.current.length === 0) setBoardStatus('loading');
       try {
         const projection = await loadAllGroups(client, view.id);
+        // 过期写回防护:加载期间视图已切换或已有更新的加载发起 → 丢弃结果。
+        if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
         setBoardGroups(projection.groups);
         setColumnTargetStatus(projection.column_target_status);
         setBoardStatus('ready');
       } catch (error) {
+        if (seq !== loadSeqRef.current || selectedViewIdRef.current !== view.id) return;
         setBoardStatus('error');
         toastError(error);
       }
@@ -311,9 +345,29 @@ export function BoardPage(): React.JSX.Element {
   );
 
   useEffect(() => {
-    if (selectedView !== null && selectedView.layout === 'board') {
+    // board 与 list 布局均为可渲染投影(§3.2 逐页差距:list 为真实表格布局,
+    // 不再是占位空态),选中视图变化 → 拉取投影。切换视图时使旧加载失效
+    // (loadSeq 递增于 loadBoard)并清空分组、立即置 loading,避免短暂展示
+    // 上一视图数据(§9.7 同类约束)。timeline/table 未实现 → 清空走占位分支。
+    if (selectedView !== null && isRenderableLayout(selectedView.layout)) {
+      const key =
+        selectedView.id +
+        JSON.stringify([
+          selectedView.layout,
+          selectedView.group_by,
+          selectedView.sub_group_by,
+          selectedView.filters,
+          selectedView.sort,
+          selectedView.board_settings,
+        ]);
+      if (lastLoadedKeyRef.current === key) return; // 同视图同配置(列表 refetch 换引用):不重载
+      lastLoadedKeyRef.current = key;
+      setBoardGroups([]);
+      setBoardStatus('loading');
       void loadBoard(selectedView);
     } else {
+      loadSeqRef.current += 1; // 使任何在途加载失效
+      lastLoadedKeyRef.current = null;
       setBoardGroups([]);
       setBoardStatus('ready');
     }
@@ -324,13 +378,18 @@ export function BoardPage(): React.JSX.Element {
   filtersRef.current = selectedView?.filters ?? {};
   useEffect(() => {
     if (realtime === null || selectedView === null || membership === null) return;
-    if (selectedView.layout !== 'board') return;
+    // board 与 list 布局均订阅增量合并(§3.5):list 同样是投影视图,
+    // issue.* 帧按 filters 重判归属,单卡插入/移动/移除,refetch 帧重拉。
+    if (!isRenderableLayout(selectedView.layout)) return;
     const wsChannel = workspaceIssuesChannel(membership.workspace_id);
     const vChannel = viewChannel(selectedView.id);
     realtime.client.subscribe(wsChannel);
     realtime.client.subscribe(vChannel);
     const offFrame = realtime.client.onFrame((frame) => {
       if (frame.channel !== wsChannel && frame.channel !== vChannel) return;
+      // 视图切换后晚到的帧属过期闭包:跳过(新视图订阅随即接管),
+      // 杜绝以旧视图 id 发起多余投影请求(验收必修 1 竞态收口)。
+      if (selectedViewIdRef.current !== selectedView.id) return;
       if (frame.event === 'view.presence') return;
       // §4.4/§5.1: warn 超限放行后,服务端广播 view.wip_exceeded → 顶部 toast
       // (拖拽者本人与同视图协作者均可见),与列头红色徽章并存。
@@ -388,7 +447,10 @@ export function BoardPage(): React.JSX.Element {
   if (wsStatus === 'empty' || membership === null) {
     return (
       <div className="mesh-board" data-testid="board-page">
-        <EmptyState title={t('board.noWorkspaceTitle')} description={t('board.noWorkspaceDescription')} />
+        <EmptyState
+          title={t('board.noWorkspaceTitle')}
+          description={t('board.noWorkspaceDescription')}
+        />
       </div>
     );
   }
@@ -503,7 +565,9 @@ export function BoardPage(): React.JSX.Element {
                 variant="secondary"
                 data-testid="board-empty-create"
                 onClick={() =>
-                  document.querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')?.click()
+                  document
+                    .querySelector<HTMLButtonElement>('[data-testid="view-create-open"]')
+                    ?.click()
                 }
               >
                 + {t('board.newView')}
@@ -712,7 +776,11 @@ export function BoardPage(): React.JSX.Element {
       const card = group.data.find((item) => item.id === issueId);
       if (card === undefined) return group;
       moved = card;
-      return { ...group, count: Math.max(0, group.count - 1), data: group.data.filter((item) => item.id !== issueId) };
+      return {
+        ...group,
+        count: Math.max(0, group.count - 1),
+        data: group.data.filter((item) => item.id !== issueId),
+      };
     });
     if (moved === null) return groups as BoardGroup[];
     const updated: BoardCard = { ...(moved as BoardCard), ...patch, position };
@@ -742,7 +810,10 @@ export function BoardPage(): React.JSX.Element {
     return {
       state_category: toGroupKey,
       status_id: statusId ?? undefined,
-      status: statusId !== undefined ? { id: statusId, name: toGroupKey, category: toGroupKey } : undefined,
+      status:
+        statusId !== undefined
+          ? { id: statusId, name: toGroupKey, category: toGroupKey }
+          : undefined,
     };
   };
 
@@ -757,7 +828,9 @@ export function BoardPage(): React.JSX.Element {
     if (card === undefined) return;
 
     // 乐观落位(§4.3)。
-    setBoardGroups(moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)));
+    setBoardGroups(
+      moveCardInGroups(snapshot, issueId, toGroupKey, position, targetPatchFor(toGroupKey)),
+    );
 
     try {
       const result = await moveCard(client, selectedView.id, {
@@ -779,7 +852,10 @@ export function BoardPage(): React.JSX.Element {
       // WIP block / 其它失败 → 弹回原列 + 提示(§4.4)。
       setBoardGroups(snapshot);
       if (error instanceof MeshApiError && error.code === 'conflict') {
-        await loadBoard(selectedView); // 409 → 拉最新收敛(T9)。
+        // 409 → 拉最新静默收敛(§4.3/§5.2:后到事件覆盖,多人同拖同卡平滑收敛,
+        // 不 toast 噪音;浏览器网络层 409 日志属已处理冲突,非应用错误)。
+        await loadBoard(selectedView);
+        return;
       }
       toastError(error);
     }
@@ -823,8 +899,9 @@ export function BoardPage(): React.JSX.Element {
                 ? { project_id: groupKey === '__none__' ? null : groupKey }
                 : {};
     try {
-      await createIssue(client, workspaceId, { title, ...inherited });
+      const created = await createIssue(client, workspaceId, { title, ...inherited });
       await loadBoard(selectedView);
+      flashHighlight(created.id);
     } catch (error) {
       toastError(error);
     }
@@ -848,12 +925,16 @@ export function BoardPage(): React.JSX.Element {
           <h1 className="mesh-board__title" data-testid="board-title">
             {selectedView.name}
           </h1>
-          <span className="mesh-board__layout-chip">{t('board.layout.' + selectedView.layout)}</span>
+          <span className="mesh-board__layout-chip">
+            {t('board.layout.' + selectedView.layout)}
+          </span>
           <Select
             label={t('board.groupByLabel')}
             value={draft.group_by ?? 'state_category'}
             disabled={!canWrite}
-            onChange={(event) => setDraft({ ...draft, group_by: event.target.value as GroupByField })}
+            onChange={(event) =>
+              setDraft({ ...draft, group_by: event.target.value as GroupByField })
+            }
             data-testid="group-by-select"
           >
             {GROUP_BY_OPTIONS.map((field) => (
@@ -869,7 +950,8 @@ export function BoardPage(): React.JSX.Element {
             onChange={(event) =>
               setDraft({
                 ...draft,
-                sub_group_by: event.target.value === '' ? null : (event.target.value as GroupByField),
+                sub_group_by:
+                  event.target.value === '' ? null : (event.target.value as GroupByField),
               })
             }
             data-testid="sub-group-by-select"
@@ -922,7 +1004,10 @@ export function BoardPage(): React.JSX.Element {
         />
 
         {panel === 'filter' ? (
-          <FilterConfigPanel filters={draft.filters} onChange={(filters) => setDraft({ ...draft, filters })} />
+          <FilterConfigPanel
+            filters={draft.filters}
+            onChange={(filters) => setDraft({ ...draft, filters })}
+          />
         ) : null}
         {panel === 'sort' ? (
           <SortConfigPanel rules={draft.sort} onChange={(sort) => setDraft({ ...draft, sort })} />
@@ -946,20 +1031,34 @@ export function BoardPage(): React.JSX.Element {
               cardsByKey={cardsByKey}
               canWrite={canWrite}
               dragEnabled={canWrite && !dirty}
-              selectedCardId={selectedCardId}
-              onSelectCard={setSelectedCardId}
               onToggleCollapse={toggleCollapse}
               onDropCard={(issueId, toGroupKey, position) =>
                 void handleDropCard(issueId, toGroupKey, position)
               }
-              onQuickCreate={(groupKey, title) => void handleQuickCreate(groupKey, title)}
+              onQuickCreate={(groupKey, title) => handleQuickCreate(groupKey, title)}
+              highlightCardId={highlightCardId}
             />
           )
         ) : selectedView.layout === 'list' ? (
-          <EmptyState
-            title={t('board.listPlaceholderTitle')}
-            description={t('board.listPlaceholderDescription')}
-          />
+          boardStatus === 'loading' ? (
+            <Skeleton loadingLabel={t('common.loading')} className="mesh-board__skeleton" />
+          ) : boardStatus === 'error' ? (
+            <ErrorState
+              title={t('state.errorTitle')}
+              description={t('state.errorDescription')}
+              retryLabel={t('common.retry')}
+              onRetry={() => void loadBoard(selectedView)}
+            />
+          ) : (
+            <BoardListView
+              view={previewView}
+              groups={displayGroups}
+              columnTargetStatus={columnTargetStatus}
+              canWrite={canWrite}
+              onOpenIssue={(id: string) => navigate(`/issues/${id}`)}
+              onChanged={() => void loadBoard(selectedView)}
+            />
+          )
         ) : (
           <EmptyState
             title={t('board.notImplementedTitle')}

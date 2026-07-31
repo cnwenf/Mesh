@@ -3,7 +3,7 @@
  * @ 补全 agent 副作用提示措辞、trigger preview、显式抑制开关、Cmd+Enter 提交、
  * 草稿本地暂存、乐观提交失败重试。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '../../../test-utils/render';
 import { CommentComposer } from '../CommentComposer';
@@ -30,10 +30,14 @@ beforeEach(() => {
 });
 
 describe('CommentComposer', () => {
-  it('shows the agent side-effect hint with the exact wording in the autocomplete', () => {
+  it('shows the agent will-run badge (sparkle icon + wording) in the autocomplete', () => {
     renderComposer();
     typeInto('@code');
-    expect(screen.getByTestId('mention-agent-hint').textContent).toBe('Will trigger a run after posting');
+    const hint = screen.getByTestId('mention-agent-hint');
+    // 文案键(§9.5.2「发布后将触发一次运行」),locale=en 渲染实际英文
+    expect(hint.textContent).toContain('Will trigger a run after posting');
+    // sparkle 图标(非仅颜色信号)
+    expect(hint.querySelector('.mesh-comments__mention-run-icon')).not.toBeNull();
     expect(screen.getByTestId('mention-item-mem-2')).toBeTruthy();
   });
 
@@ -95,6 +99,27 @@ describe('CommentComposer', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(2));
   });
 
+  it('preserves body AND mentions on failure and shows recoverable wording (§9.5.4)', async () => {
+    const onSubmit = vi.fn().mockRejectedValue(new Error('boom'));
+    renderComposer(onSubmit);
+    // 输入正文并插入一个 agent 提及
+    typeInto('please review ');
+    typeInto('please review @code');
+    fireEvent.mouseDown(screen.getByTestId('mention-item-mem-2'));
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement;
+    expect(input.value).toContain('mention://member/mem-2');
+    fireEvent.click(screen.getByTestId('composer-submit'));
+    const error = await screen.findByTestId('composer-error');
+    // 四部分错误文案键(发生了什么/保留什么/怎么办)
+    expect(error.textContent).toContain("Couldn't post the comment");
+    // 正文 + 提及均保留在输入框与草稿中
+    const after = screen.getByTestId('composer-input') as HTMLTextAreaElement;
+    expect(after.value).toContain('mention://member/mem-2');
+    expect(window.localStorage.getItem('mesh.comments.draft.iss-test')).toContain('mention://member/mem-2');
+    // retry 按钮可达
+    expect(screen.getByTestId('composer-retry')).toBeTruthy();
+  });
+
   it('toggles the markdown preview', () => {
     renderComposer();
     typeInto('**bold**');
@@ -105,5 +130,37 @@ describe('CommentComposer', () => {
   it('disables submit when the body is empty', () => {
     renderComposer();
     expect((screen.getByTestId('composer-submit') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('shows the draft autosave indicator: saving → saved (§9.5.1)', () => {
+    vi.useFakeTimers();
+    try {
+      renderComposer();
+      // 初始无提示
+      expect(screen.queryByTestId('draft-status')).toBeNull();
+      fireEvent.change(screen.getByTestId('composer-input'), { target: { value: 'typing' } });
+      // dirty 阶段即显示「保存中」
+      expect(screen.getByTestId('draft-status').textContent).toContain('Saving draft…');
+      // 防抖窗口(600ms)到期 → saving,过渡(200ms)后 → saved
+      act(() => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(screen.getByTestId('draft-status').textContent).toContain('Saving draft…');
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(screen.getByTestId('draft-status').textContent).toContain('Draft saved ·');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows a one-time "draft restored" hint when a saved draft loads (§9.5.1)', () => {
+    window.localStorage.setItem('mesh.comments.draft.iss-test', 'earlier draft');
+    renderComposer();
+    expect(screen.getByTestId('draft-restored')).toBeTruthy();
+    // 用户一编辑,提示消失
+    fireEvent.change(screen.getByTestId('composer-input'), { target: { value: 'new text' } });
+    expect(screen.queryByTestId('draft-restored')).toBeNull();
   });
 });

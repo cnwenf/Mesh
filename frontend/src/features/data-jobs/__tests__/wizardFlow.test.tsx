@@ -53,6 +53,7 @@ const READY_UPLOAD = {
   progress: 1,
 };
 
+/** dataJobs.export.runningHint 的渲染值(en)。 */
 const RUNNING_HINT =
   "The export runs in the background; you can close this dialog — you'll be notified when it finishes.";
 
@@ -263,9 +264,14 @@ describe('ExportDialog branches', () => {
   it('polls via REST when no realtime channel, then resolves the download', async () => {
     const running = makeJob({ kind: 'export', status: 'running' });
     const completed = makeJob({ kind: 'export', status: 'completed', result_attachment_id: 'a-2' });
+    // 首轮轮询仍返回 running,保证「后台运行提示」稳定可见一个轮询周期(避免收敛竞态)。
+    let pollCount = 0;
     const request = routedRequest({
       'POST /api/v1/data-jobs/export': running,
-      'GET /api/v1/data-jobs/dj-1': completed,
+      'GET /api/v1/data-jobs/dj-1': () => {
+        pollCount += 1;
+        return pollCount === 1 ? running : completed;
+      },
       'GET /api/v1/data-jobs/dj-1/download': {
         url: 'https://cdn/p.csv',
         file_name: 'p.csv',

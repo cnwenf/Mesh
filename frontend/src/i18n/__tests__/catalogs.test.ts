@@ -318,6 +318,11 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     // analytics §4 文案占位符(MES-71):净流量 / 日历时区回显
     net: 2,
     tz: 'UTC',
+    // MES-111 批次② 看板拖拽/键盘移动/触控/评论草稿占位符
+    identifier: 'WEB-12',
+    position: 2,
+    direction: 'moved up',
+    time: '10:30',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

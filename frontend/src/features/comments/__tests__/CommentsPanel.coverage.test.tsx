@@ -200,11 +200,16 @@ describe('CommentsPanel moderation callbacks', () => {
     await waitFor(() => expect(calls.some((c) => c.method === 'PATCH')).toBe(true));
   });
 
-  it('deletes a comment via the delete button', async () => {
+  it('deletes a comment via the delete button (deferred, §9.5.5)', async () => {
     renderPanel();
     await screen.findByTestId('comment-delete-c-1');
     fireEvent.click(screen.getByTestId('comment-delete-c-1'));
-    await waitFor(() => expect(calls.some((c) => c.method === 'DELETE')).toBe(true));
+    // 乐观隐藏:卡片立即移除;撤销窗口内尚未真正调用 DELETE
+    await waitFor(() => expect(screen.queryByTestId('comment-card-c-1')).toBeNull());
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    // 撤销提示 toast 出现(含撤销动作与实际文案)
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toContain('Comment deleted');
   });
 });
 

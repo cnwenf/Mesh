@@ -7,11 +7,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, DragEvent } from 'react';
 import type { MeshApiClient } from '../../../api';
-import { Button, IconButton } from '../../../design';
+import { Button, Icon, IconButton } from '../../../design';
 import { useT } from '../../../i18n';
+import { formatFileSize } from '../format';
 import { useAttachmentUploader } from '../useAttachmentUploader';
 import type { Attachment, AttachmentLinkTo, UploadEntry } from '../types';
 import { FileIcon } from './FileIcon';
+import { ProgressRing } from './ProgressRing';
 import '../attachments.css';
 
 /** 进行中阶段:这些阶段内提交按钮禁用(§4.2 全部完成方可提交)。 */
@@ -110,41 +112,65 @@ export function AttachmentComposer(props: AttachmentComposerProps): React.JSX.El
 
   const renderCard = (entry: UploadEntry): React.JSX.Element => {
     const percent = Math.round(entry.progress * 100);
+    const isError = entry.phase === 'error';
+    // validating/completing 无可靠字节进度 → 不确定环(§3.2 进度环)。
+    const isIndeterminate = entry.phase === 'validating' || entry.phase === 'completing';
+    const ringLabel =
+      entry.phase === 'validating'
+        ? t('attachments.validating')
+        : entry.phase === 'completing'
+          ? t('attachments.completing')
+          : `${entry.fileName}: ${percent}%`;
     return (
       <li key={entry.localId} className="mesh-attachments-composer__card" data-testid={`upload-card-${entry.localId}`}>
-        <FileIcon mimeType={null} extension={null} isImage={false} className="mesh-attachments-composer__card-icon" />
+        {isError ? (
+          <FileIcon mimeType={null} extension={null} isImage={false} className="mesh-attachments-composer__card-icon" />
+        ) : (
+          <ProgressRing
+            value={isIndeterminate ? 0 : percent}
+            indeterminate={isIndeterminate}
+            label={ringLabel}
+            size={40}
+          />
+        )}
         <span className="mesh-attachments-composer__card-body">
           <span className="mesh-attachments-composer__card-name">{entry.fileName}</span>
-          {entry.phase === 'error' ? (
-            <span className="mesh-attachments-composer__error" role="alert">
+          <span className="mesh-attachments-composer__card-size mesh-tnum">
+            {formatFileSize(entry.fileSize)}
+          </span>
+          {isError ? (
+            /* 失败卡(§3.2 / parity §2.22):保留文件名/大小 + 具名错误(error.* 四部分文案)+ 重试/移除。 */
+            <span className="mesh-attachments-composer__error" role="alert" data-testid={`upload-error-${entry.localId}`}>
               {t(entry.errorKey ?? 'common.unknownError')}
             </span>
-          ) : (
-            <progress
-              className="mesh-attachments-composer__progress"
-              value={entry.progress}
-              max={1}
-              aria-label={`${entry.fileName}: ${percent}%`}
-              data-testid={`upload-progress-${entry.localId}`}
-            />
-          )}
-          {entry.phase === 'scanning' ? (
+          ) : entry.phase === 'scanning' ? (
             <span className="mesh-attachments__scanning">{t('attachments.scanning')}</span>
           ) : null}
         </span>
-        {entry.phase === 'error' ? (
-          <Button size="sm" variant="ghost" onClick={() => retry(entry)} data-testid={`upload-retry-${entry.localId}`}>
-            {t('common.retry')}
-          </Button>
-        ) : null}
-        <IconButton
-          label={`${t('common.cancel')}: ${entry.fileName}`}
-          size="sm"
-          data-testid={`upload-cancel-${entry.localId}`}
-          onClick={() => uploader.cancel(entry.localId)}
-        >
-          <span aria-hidden="true">×</span>
-        </IconButton>
+        {isError ? (
+          <span className="mesh-attachments-composer__card-actions">
+            <Button size="sm" onClick={() => retry(entry)} data-testid={`upload-retry-${entry.localId}`}>
+              {t('attachments.retry')}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => uploader.cancel(entry.localId)}
+              data-testid={`upload-cancel-${entry.localId}`}
+            >
+              {t('attachments.remove')}
+            </Button>
+          </span>
+        ) : (
+          <IconButton
+            label={`${t('common.cancel')}: ${entry.fileName}`}
+            size="sm"
+            data-testid={`upload-cancel-${entry.localId}`}
+            onClick={() => uploader.cancel(entry.localId)}
+          >
+            <Icon name="close" size={16} />
+          </IconButton>
+        )}
       </li>
     );
   };
@@ -180,9 +206,7 @@ export function AttachmentComposer(props: AttachmentComposerProps): React.JSX.El
         data-testid="attachment-paperclip"
         onClick={() => inputRef.current?.click()}
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
-          <path d="M21 11l-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7L10.2 17" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <Icon name="paperclip" size={20} />
       </IconButton>
       <p className="mesh-attachments-composer__hint">{t('attachments.dropHint')}</p>
       {uploader.uploads.length > 0 ? (

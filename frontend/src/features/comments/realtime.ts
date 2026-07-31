@@ -160,16 +160,26 @@ export function applyCommentsFrame(
   return comments as Comment[];
 }
 
-/** 执行占位卡片状态:提及 agent 入队后,直至该 agent 评论回流前显示「正在执行…」。 */
+/** 执行占位卡片状态(design-quality §9.8 五态;succeeded → 占位移除,由真实评论替换)。 */
+export type ExecutionPlaceholderStatus = 'queued' | 'running' | 'waiting' | 'failed';
+
+/** 执行占位卡片:提及 agent 入队后,直至该 agent 评论回流/执行终态前显示运行态。 */
 export interface ExecutionPlaceholder {
   readonly execution_id: string;
   readonly comment_id: string | null;
   readonly agent_id: string;
   readonly agent_name: string;
+  readonly status: ExecutionPlaceholderStatus;
+  readonly failure_reason: string | null;
+}
+
+/** 执行生命周期帧所在频道(后端按执行 id 发布,不在 issue 频道)。 */
+export function executionChannel(executionId: string): string {
+  return `execution:${executionId}`;
 }
 
 /**
- * execution.queued → 追加占位(去重);其余帧原样返回。
+ * execution.queued → 追加占位(去重;五态初始 queued);其余帧原样返回。
  * 载荷形态:`{execution_id, agent_member_id, comment_id, status, trigger}` +
  * 可选 `agent_name`(无则以 agent_member_id 兜底显示)。
  */
@@ -190,7 +200,61 @@ export function applyExecutionFrame(
   }
   const agentName = typeof payload.agent_name === 'string' ? payload.agent_name : agentId;
   const commentId = typeof payload.comment_id === 'string' ? payload.comment_id : null;
-  return [...placeholders, { execution_id: executionId, comment_id: commentId, agent_id: agentId, agent_name: agentName }];
+  return [
+    ...placeholders,
+    {
+      execution_id: executionId,
+      comment_id: commentId,
+      agent_id: agentId,
+      agent_name: agentName,
+      status: 'queued',
+      failure_reason: null,
+    },
+  ];
+}
+
+/**
+ * 执行生命周期帧 → 占位五态迁移(验收必修 3 / §9.8 / comment-inbox §4.1):
+ * started→running;awaiting_approval→waiting(等待确认);failed/timeout→failed
+ * (留失败占位 + 原因,配重试入口);completed/cancelled→移除占位(completed 由
+ * agent 评论回流替换;cancelled 为主动取消,不再占位)。其余帧原样返回。
+ */
+export function applyExecutionLifecycleFrame(
+  placeholders: readonly ExecutionPlaceholder[],
+  frame: RealtimeEventFrame,
+): ExecutionPlaceholder[] {
+  const payload = payloadOf(frame);
+  const executionId = typeof payload.execution_id === 'string' ? payload.execution_id : undefined;
+  if (executionId === undefined) return placeholders as ExecutionPlaceholder[];
+  switch (frame.event) {
+    case 'execution.started':
+      return patchPlaceholder(placeholders, executionId, { status: 'running' });
+    case 'execution.awaiting_approval':
+      return patchPlaceholder(placeholders, executionId, { status: 'waiting' });
+    case 'execution.failed':
+    case 'execution.timeout': {
+      const reason = typeof payload.failure_reason === 'string' ? payload.failure_reason : null;
+      return patchPlaceholder(placeholders, executionId, { status: 'failed', failure_reason: reason });
+    }
+    case 'execution.completed':
+    case 'execution.cancelled':
+      return placeholders.filter((item) => item.execution_id !== executionId);
+    default:
+      return placeholders as ExecutionPlaceholder[];
+  }
+}
+
+function patchPlaceholder(
+  placeholders: readonly ExecutionPlaceholder[],
+  executionId: string,
+  patch: Partial<Pick<ExecutionPlaceholder, 'status' | 'failure_reason'>>,
+): ExecutionPlaceholder[] {
+  if (!placeholders.some((item) => item.execution_id === executionId)) {
+    return placeholders as ExecutionPlaceholder[];
+  }
+  return placeholders.map((item) =>
+    item.execution_id === executionId ? { ...item, ...patch } : item,
+  );
 }
 
 /**

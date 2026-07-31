@@ -1,0 +1,320 @@
+/**
+ * 看板「列表」布局样式。
+ * 颜色一律语义 token(var(--color-*));间距/圆角/阴影/层级/动效走各自 token;
+ * 桌面呈现 <table>,≤599px 切换为堆叠卡片(两套 DOM 由 display 切换)。
+ */
+
+.mesh-board-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  inline-size: 100%;
+}
+
+.mesh-board-list__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding-block: var(--space-1);
+}
+
+/* ---- 表格 ---- */
+
+.mesh-board-list__table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.mesh-board-list__th {
+  padding-block: var(--space-1-5);
+  padding-inline: var(--space-2);
+  text-align: start;
+  background-color: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.mesh-board-list__th--select,
+.mesh-board-list__td--select {
+  inline-size: var(--space-6);
+  text-align: center;
+}
+
+.mesh-board-list__th--actions,
+.mesh-board-list__td--actions {
+  inline-size: var(--space-6);
+  text-align: end;
+}
+
+.mesh-board-list__sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
+  font: inherit;
+  color: var(--color-text-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.mesh-board-list__sort-button:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/* ---- 分组头 ---- */
+
+.mesh-board-list__group-cell {
+  padding-block: var(--space-1);
+  padding-inline: var(--space-2);
+  background-color: var(--color-surface-subtle);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-board-list__group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-block-size: var(--space-5);
+  padding-inline: var(--space-1);
+  font: inherit;
+  color: var(--color-text-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.mesh-board-list__group-toggle:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-board-list__group-count {
+  color: var(--color-text-muted);
+}
+
+/* ---- 数据行 ---- */
+
+.mesh-board-list__row {
+  border-block-end: 1px solid var(--color-border-subtle);
+  transition: background-color var(--motion-fast);
+}
+
+.mesh-board-list__row:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-board-list__row--selected {
+  background-color: var(--color-surface-selected);
+}
+
+.mesh-board-list__td {
+  padding-block: var(--space-1-5);
+  padding-inline: var(--space-2);
+  vertical-align: middle;
+  color: var(--color-text);
+}
+
+.mesh-board-list__identifier {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.mesh-board-list__title-link {
+  display: inline-block;
+  max-inline-size: 100%;
+  padding: 0;
+  overflow: hidden;
+  font: inherit;
+  color: var(--color-accent);
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.mesh-board-list__title-link:hover {
+  text-decoration: underline;
+}
+
+.mesh-board-list__title-wrap,
+.mesh-board-list__title-edit,
+.mesh-board-list__priority,
+.mesh-board-list__status {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  align-items: flex-start;
+}
+
+.mesh-board-list__title-input {
+  inline-size: 100%;
+  min-inline-size: var(--space-16);
+  padding-block: var(--space-0-5);
+  padding-inline: var(--space-1);
+  color: var(--color-text);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-xs);
+}
+
+.mesh-board-list__cell-error {
+  color: var(--color-danger-fg);
+}
+
+.mesh-board-list__priority {
+  flex-direction: row;
+  gap: var(--space-0-5);
+  align-items: center;
+}
+
+.mesh-board-list__assignee,
+.mesh-board-list__card-secondary > .mesh-board-list__priority {
+  display: inline-flex;
+  gap: var(--space-0-5);
+  align-items: center;
+}
+
+.mesh-board-list__assignee-empty {
+  color: var(--color-text-disabled);
+}
+
+.mesh-board-list__updated {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* ---- 行操作菜单:hover/focus-within 显现,触屏恒显 ---- */
+
+.mesh-board-list__row-actions {
+  opacity: 0;
+  transition: opacity var(--motion-fast);
+}
+
+.mesh-board-list__row:hover .mesh-board-list__row-actions,
+.mesh-board-list__row:focus-within .mesh-board-list__row-actions,
+.mesh-board-list__card:hover .mesh-board-list__row-actions,
+.mesh-board-list__card:focus-within .mesh-board-list__row-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .mesh-board-list__row-actions {
+    opacity: 1;
+  }
+}
+
+/* ---- 移动卡片清单(桌面隐藏) ---- */
+
+.mesh-board-list__mobile {
+  display: none;
+}
+
+.mesh-board-list__cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-board-list__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+}
+
+.mesh-board-list__card-primary {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.mesh-board-list__card-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  align-items: center;
+}
+
+/* ---- 批量操作与对话框动作区 ---- */
+
+.mesh-board-list__bulk-actions {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+}
+
+.mesh-board-list__dialog-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  padding-block-start: var(--space-3);
+}
+
+/* ---- 空态 ---- */
+
+.mesh-board-list__empty-title {
+  margin: 0;
+  color: var(--color-text-strong);
+}
+
+.mesh-board-list__empty-description {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* ---- 焦点可见(2px 语义焦点环) ---- */
+
+.mesh-board-list__sort-button:focus-visible,
+.mesh-board-list__group-toggle:focus-visible,
+.mesh-board-list__title-link:focus-visible,
+.mesh-board-list__title-input:focus-visible,
+.mesh-board-list__row-checkbox:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+
+/* ---- 移动端(≤599px):隐藏表格,呈现堆叠卡片;触控目标 ≥44px ---- */
+
+@media (max-width: 599px) {
+  .mesh-board-list__table {
+    display: none;
+  }
+
+  .mesh-board-list__mobile {
+    display: block;
+  }
+
+  /* 触控目标 ≥44px(§8.2):--space-12 = 48px */
+  .mesh-board-list__row-checkbox {
+    min-inline-size: var(--space-12);
+    min-block-size: var(--space-12);
+  }
+
+  .mesh-board-list__card-secondary .mesh-icon-button,
+  .mesh-board-list__row-actions .mesh-icon-button {
+    min-inline-size: var(--space-12);
+    min-block-size: var(--space-12);
+  }
+}
+
+/* ---- 减少动效偏好 ---- */
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-board-list__row,
+  .mesh-board-list__row-actions {
+    transition: none;
+  }
+}

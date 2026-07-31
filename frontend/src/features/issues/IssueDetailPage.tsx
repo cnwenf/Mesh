@@ -1,17 +1,32 @@
 /**
- * Issue 详情页(issue.md §4.1/§4.2/§4.3):
- * 头部(编号 / 可编辑标题 / 状态选择器按 category 分组 / 删除)+
- * 主体(可编辑描述、子 issue 区(进度 3/5)、依赖区(成环就地报错)、活动流)+
- * 属性侧栏(每字段点击即编辑,§4.2:状态/优先级/负责人/估算/起止日/项目/里程碑/周期)+
- * 跨项目迁移两步式(§4.3:改项目 → 预览映射/清除清单 → 确认单事务迁移)。
- * 乐观更新 + version 冲突收敛(§3.4/T9:useOptimisticMutation,If-Match: updated_at)。
+ * Issue 详情页(design-quality.md §3.2 详情行 / §8.3;issue.md §4.1-§4.3):
+ * DetailLayout 模板 —— 对象头(编号 + 内联标题编辑 + 版本 + 保存态弱提示 + 动作菜单)、
+ * 标题下 summary chips(状态/优先级/负责人/截止日,桌面手机均可见)、主内容
+ * (描述/子项/依赖/附件 + 评论·活动 Tabs 切换)、属性经 aside 槽呈现(桌面 320px
+ * 侧栏,窄屏自动收为「属性」按钮 + 底部 sheet)。
+ * 乐观更新 + version 冲突收敛(useOptimisticMutation,If-Match: updated_at);
+ * 保存/冲突态经 useSaveIndicator 弱提示(§3.2:保存与冲突状态清楚)。
  * 实时经 issue:{id} 频道按 id 合并(§3.6/§6.7)。
- * 状态渲染序:错误态(可重试)→ 骨架 → 内容。
  */
+/* eslint-disable react-refresh/only-export-components -- categoryTone/saveIndicatorText 为页面内纯助手,与组件同模块契约 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
-import { Button, ErrorState, Select, Skeleton, useToast } from '../../design';
+import {
+  Avatar,
+  Badge,
+  Button,
+  DetailLayout,
+  Dialog,
+  ErrorState,
+  Icon,
+  Menu,
+  Select,
+  Skeleton,
+  Tabs,
+  useToast,
+} from '../../design';
+import type { BadgeTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -25,10 +40,6 @@ import { fetchMe, listMembers } from '../members/api';
 import type { HumanProfile, MemberSummary } from '../members/types';
 import { listCycles, listMilestones, listProjects } from '../projects/api';
 import type { Cycle, Milestone, ProjectSummary } from '../projects/types';
-import { IssueCustomFieldsEditor } from '../labels/IssueCustomFieldsEditor';
-import { IssueLabelsEditor } from '../labels/IssueLabelsEditor';
-import { VcsLinksPanel } from '../integrations/VcsLinksPanel';
-import { IssueSquadAssignment } from './IssueSquadAssignment';
 import {
   addDependency,
   deleteIssue,
@@ -42,6 +53,7 @@ import {
   movePreview,
   removeDependency as removeDependencyApi,
 } from './api';
+import { IssueProperties } from './IssueProperties';
 import { MoveProjectDialog } from './MoveProjectDialog';
 import { applyIssueDetailFrame } from './realtime';
 import type {
@@ -49,13 +61,33 @@ import type {
   DependencyEntry,
   DependencyType,
   IssueDetail,
-  IssuePriority,
-  IssueStatusRef,
   IssueSummary,
+  IssueStatusRef,
   MovePreview,
+  StateCategory,
 } from './types';
-import { PRIORITY_ORDER, STATE_CATEGORY_ORDER } from './types';
+import { useSaveIndicator } from './useSaveIndicator';
+import type { SavePhase } from './useSaveIndicator';
 import './issues.css';
+
+/** 状态类别 → 徽标 tone(图标 + 文案承载语义,颜色非唯一信号,§7.2)。 */
+export function categoryTone(category: StateCategory): BadgeTone {
+  switch (category) {
+    case 'todo':
+      return 'info';
+    case 'in_progress':
+      return 'accent';
+    case 'in_review':
+      return 'warning';
+    case 'blocked':
+      return 'danger';
+    case 'done':
+      return 'success';
+    case 'backlog':
+    case 'cancelled':
+      return 'neutral';
+  }
+}
 
 interface AddDependencyFormProps {
   readonly issueId: string;
@@ -162,6 +194,37 @@ function toMentionCandidates(members: readonly MemberSummary[]): MentionCandidat
     .map((member) => ({ id: member.id, name: member.display_name, member_type: member.member_type }));
 }
 
+interface ActivityListProps {
+  readonly activity: readonly ActivityEntry[];
+}
+
+/** 原始活动流(评论区在另一 Tab 内交织呈现系统活动,§9.5)。 */
+function ActivityList(props: ActivityListProps): React.JSX.Element {
+  const t = useT();
+  if (props.activity.length === 0) {
+    return <p className="mesh-issues-detail__empty">{t('issues.detail.noActivity')}</p>;
+  }
+  return (
+    <ul className="mesh-issues-detail__activity" data-testid="issue-detail-activity">
+      {props.activity.map((entry, index) => (
+        <li key={entry.id ?? `act-${index}`}>
+          <strong>{entry.actor !== null ? entry.actor.name : t('issues.systemActor')}</strong>
+          {t('issues.activity.changed', { field: entry.field })}
+          <time>{new Date(entry.created_at).toLocaleString()}</time>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** 保存态弱提示文案(idle 为空串;role=status 由读屏适时朗读,§10.2)。 */
+function saveIndicatorText(phase: SavePhase, t: (key: string) => string): string {
+  if (phase === 'saving') return t('issues.saving');
+  if (phase === 'saved') return t('issues.savedAt');
+  if (phase === 'conflict') return t('issues.conflictNotice');
+  return '';
+}
+
 export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
@@ -170,6 +233,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
   const locale = useSettingsStore((state) => state.preferences.locale) ?? 'en';
+  const indicator = useSaveIndicator();
 
   // issue 详情上下文组(§4.3 S11):['global','board','issue'] —— issue 特异性
   // 最高,同键仲裁胜出(详情抽屉叠于看板之上时 board 组共存而不冲突)。
@@ -217,6 +281,8 @@ export function IssueDetailPage(): React.JSX.Element {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('comments');
 
   // t 的函数身份每次渲染都变;经 ref 读取,避免加载副作用反复重建(重叠请求竞态)。
   const tRef = useRef(t);
@@ -227,7 +293,7 @@ export function IssueDetailPage(): React.JSX.Element {
     path: `/api/v1/issues/${issueId ?? ''}`,
     getServerVersion: (current) => current.updated_at,
     onConflict: async (server) => {
-      // 收敛到服务端最新写(T9:不丢更新,冲突 toast 提示)
+      // 收敛到服务端最新写(T9:不丢更新,冲突弱提示 + toast)
       setIssue(server);
       setTitleDraft(server.title);
       setDescriptionDraft(server.description ?? '');
@@ -301,13 +367,14 @@ export function IssueDetailPage(): React.JSX.Element {
   const patchAndToast = useCallback(
     async (changes: Partial<IssueDetail>) => {
       if (issue === null) return;
-      // 乐观更新:让受控 <select>/输入立即反映所选值。受控组件只在 re-render 时
-      // 才会把显示值收敛回 value 属性;若不在此同步 setState,异步等待间隙里
-      // <select> 会悬停在用户所选的(严格模式下可能被禁的)目标值上(§4.4/§5.2)。
+      // 乐观更新:让受控 <select>/输入立即反映所选值(异步间隙不悬停目标值,§4.4/§5.2)。
       const snapshot = issue;
       setIssue({ ...issue, ...changes });
+      indicator.begin();
       try {
         const { conflicted } = await mutation.mutate(snapshot, changes);
+        if (conflicted) indicator.conflict();
+        else indicator.succeed();
         toast.addToast(t(conflicted ? 'issues.conflictToast' : 'issues.savedToast'), {
           tone: conflicted ? 'warn' : 'success',
           closeLabel: t('common.close'),
@@ -320,11 +387,12 @@ export function IssueDetailPage(): React.JSX.Element {
         setIssue(snapshot);
         setTitleDraft(snapshot.title);
         setDescriptionDraft(snapshot.description ?? '');
+        indicator.reset();
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
         toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
       }
     },
-    [issue, mutation, toast, t],
+    [issue, mutation, toast, t, indicator],
   );
 
   const saveTitle = useCallback(async () => {
@@ -397,336 +465,198 @@ export function IssueDetailPage(): React.JSX.Element {
     return <Skeleton loadingLabel={t('common.loading')} />;
   }
 
-  const groupedStatuses = STATE_CATEGORY_ORDER.map((category) => ({
-    category,
-    items: statuses.filter((s) => s.category === category),
-  })).filter((group) => group.items.length > 0);
-  // F7:进度以服务端 children_progress 为准(不受本地分页截断影响)。
-  // 防御性默认:服务端信封畸形(children_progress 缺失/字段非数)时不得在
-  // 渲染期抛错拖白整页——按 unknown 收窄后回退 0(单条坏响应只影响该计数)。
+  // F7:进度以服务端 children_progress 为准;畸形信封按 unknown 收窄后回退 0(不白屏)。
   const progress = issue.children_progress as { done?: unknown; total?: unknown } | null | undefined;
   const doneChildren = typeof progress?.done === 'number' ? progress.done : 0;
   const totalChildren = typeof progress?.total === 'number' ? progress.total : 0;
 
+  const header = (
+    <header className="mesh-issues-detail__head">
+      <span className="mesh-issues-detail__identifier" data-testid="issue-detail-identifier">
+        {issue.identifier}
+      </span>
+      <input
+        className="mesh-issues-detail__title"
+        value={titleDraft}
+        onChange={(event) => setTitleDraft(event.target.value)}
+        onBlur={() => void saveTitle()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') void saveTitle();
+          if (event.key === 'Escape') setTitleDraft(issue.title);
+        }}
+        aria-label={t('issues.detail.title')}
+        data-testid="issue-detail-title"
+      />
+      <span className="mesh-issues-detail__version" data-testid="issue-detail-version">
+        v{issue.version}
+      </span>
+      <span
+        className="mesh-issues-detail__save-state"
+        data-phase={indicator.phase}
+        data-testid="issue-save-indicator"
+        role="status"
+      >
+        {saveIndicatorText(indicator.phase, t)}
+      </span>
+      <Menu
+        align="end"
+        triggerLabel={t('issues.actions')}
+        trigger={<Icon name="more-horizontal" size={16} />}
+        entries={[
+          {
+            key: 'delete',
+            label: t('issues.detail.delete'),
+            icon: 'trash',
+            danger: true,
+            onSelect: () => setDeleteConfirmOpen(true),
+          },
+        ]}
+      />
+    </header>
+  );
+
+  const summaryChips = (
+    <div className="mesh-issues-detail__chips">
+      <span className="mesh-issues-detail__chip" data-testid="issue-chip-status">
+        <Badge tone={categoryTone(issue.state_category)}>
+          {issue.status !== null ? issue.status.name : t(`issues.category.${issue.state_category}`)}
+        </Badge>
+      </span>
+      <span className="mesh-issues-detail__chip" data-testid="issue-chip-priority">
+        <Icon name="flag" size={16} />
+        {t(`issues.priority.${issue.priority}`)}
+      </span>
+      <span className="mesh-issues-detail__chip" data-testid="issue-chip-assignee">
+        {issue.assignee !== null ? (
+          <>
+            <Avatar name={issue.assignee.name} kind={issue.assignee.member_type} size={20} />
+            {issue.assignee.name}
+          </>
+        ) : (
+          t('issues.unassigned')
+        )}
+      </span>
+      <span className="mesh-issues-detail__chip" data-testid="issue-chip-due">
+        <Icon name="calendar" size={16} />
+        {issue.due_date !== null ? issue.due_date : t('issues.detail.noDue')}
+      </span>
+    </div>
+  );
+
+  const main = (
+    <section className="mesh-issues-detail__main">
+      <h2>{t('issues.detail.description')}</h2>
+      <textarea
+        className="mesh-issues-detail__description"
+        value={descriptionDraft}
+        onChange={(event) => setDescriptionDraft(event.target.value)}
+        onBlur={() => void saveDescription()}
+        placeholder={t('issues.detail.noDescription')}
+        aria-label={t('issues.detail.description')}
+        data-testid="issue-detail-description"
+        rows={4}
+      />
+
+      <h2>
+        {t('issues.detail.children')}（{doneChildren}/{totalChildren}）
+      </h2>
+      {children.length === 0 ? (
+        <p className="mesh-issues-detail__empty">{t('issues.detail.noChildren')}</p>
+      ) : (
+        <ul className="mesh-issues-detail__children" data-testid="issue-detail-children">
+          {children.map((child) => (
+            <li key={child.id}>
+              <Link to={`/issues/${child.id}`}>
+                {child.identifier} · {child.title}
+              </Link>
+              <span>{t(`issues.category.${child.state_category}`)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h2>{t('issues.detail.dependencies')}</h2>
+      {dependencies.length === 0 ? (
+        <p className="mesh-issues-detail__empty">{t('issues.detail.noDependencies')}</p>
+      ) : (
+        <ul className="mesh-issues-detail__deps" data-testid="issue-detail-deps">
+          {dependencies.map((dep) => (
+            <li key={dep.id}>
+              <span data-testid={`dep-type-${dep.id}`}>{t(`issues.deps.type.${dep.type}`)}</span>
+              <Link to={`/issues/${dep.depends_on_id}`} data-testid={`dep-link-${dep.id}`}>
+                {dep.depends_on_identifier ?? dep.depends_on_id.slice(0, 8)}
+              </Link>
+              <Button size="sm" variant="ghost" onClick={() => void removeDependency(dep)}>
+                {t('issues.deps.remove')}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <AddDependencyForm
+        issueId={issue.id}
+        workspaceId={issue.workspace_id}
+        onAdded={(entry) => setDependencies((prev) => [...prev, entry])}
+      />
+
+      <AttachmentPanel workspaceId={issue.workspace_id} issueId={issue.id} />
+
+      {/* 讨论/活动切换(§3.2:活动/评论可切换;默认评论 —— 其已交织系统活动,§9.5)。
+          仅渲染活动 Tab 内容;评论草稿经 localStorage 持久化,切换不丢(useCommentDraft)。 */}
+      <Tabs
+        label={t('issues.tabsLabel')}
+        value={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            value: 'comments',
+            label: t('issues.tabComments'),
+            content: (
+              <CommentsPanel
+                issueId={issue.id}
+                workspaceId={issue.workspace_id}
+                locale={locale}
+                candidates={toMentionCandidates(members)}
+                currentMember={currentMember}
+              />
+            ),
+          },
+          {
+            value: 'activity',
+            label: t('issues.tabActivity'),
+            content: <ActivityList activity={activity} />,
+          },
+        ]}
+      />
+    </section>
+  );
+
   return (
     <div className="mesh-issues-detail" data-testid="issue-detail">
-      <header className="mesh-issues-detail__head">
-        <span className="mesh-issues-detail__identifier" data-testid="issue-detail-identifier">
-          {issue.identifier}
-        </span>
-        <input
-          className="mesh-issues-detail__title"
-          value={titleDraft}
-          onChange={(event) => setTitleDraft(event.target.value)}
-          onBlur={() => void saveTitle()}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') void saveTitle();
-          }}
-          aria-label={t('issues.detail.title')}
-          data-testid="issue-detail-title"
-        />
-        <span className="mesh-issues-detail__version" data-testid="issue-detail-version">
-          v{issue.version}
-        </span>
-        <Button variant="danger" size="sm" onClick={() => void remove()}>
-          {t('issues.detail.delete')}
-        </Button>
-      </header>
-
-      <div className="mesh-issues-detail__body">
-        <section className="mesh-issues-detail__main">
-          <h2>{t('issues.detail.description')}</h2>
-          <textarea
-            className="mesh-issues-detail__description"
-            value={descriptionDraft}
-            onChange={(event) => setDescriptionDraft(event.target.value)}
-            onBlur={() => void saveDescription()}
-            placeholder={t('issues.detail.noDescription')}
-            aria-label={t('issues.detail.description')}
-            data-testid="issue-detail-description"
-            rows={4}
-          />
-
-          <h2>
-            {t('issues.detail.children')}（{doneChildren}/{totalChildren}）
-          </h2>
-          {children.length === 0 ? (
-            <p className="mesh-issues-detail__empty">{t('issues.detail.noChildren')}</p>
-          ) : (
-            <ul className="mesh-issues-detail__children" data-testid="issue-detail-children">
-              {children.map((child) => (
-                <li key={child.id}>
-                  <Link to={`/issues/${child.id}`}>
-                    {child.identifier} · {child.title}
-                  </Link>
-                  <span>{t(`issues.category.${child.state_category}`)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <h2>{t('issues.detail.dependencies')}</h2>
-          {dependencies.length === 0 ? (
-            <p className="mesh-issues-detail__empty">{t('issues.detail.noDependencies')}</p>
-          ) : (
-            <ul className="mesh-issues-detail__deps" data-testid="issue-detail-deps">
-              {dependencies.map((dep) => (
-                <li key={dep.id}>
-                  <span data-testid={`dep-type-${dep.id}`}>
-                    {t(`issues.deps.type.${dep.type}`)}
-                  </span>
-                  <Link
-                    to={`/issues/${dep.depends_on_id}`}
-                    data-testid={`dep-link-${dep.id}`}
-                  >
-                    {dep.depends_on_identifier ?? dep.depends_on_id.slice(0, 8)}
-                  </Link>
-                  <Button size="sm" variant="ghost" onClick={() => void removeDependency(dep)}>
-                    {t('issues.deps.remove')}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <AddDependencyForm
-            issueId={issue.id}
-            workspaceId={issue.workspace_id}
-            onAdded={(entry) => setDependencies((prev) => [...prev, entry])}
-          />
-
-          <AttachmentPanel workspaceId={issue.workspace_id} issueId={issue.id} />
-
-          <h2>{t('issues.detail.activity')}</h2>
-          {activity.length === 0 ? (
-            <p className="mesh-issues-detail__empty">{t('issues.detail.noActivity')}</p>
-          ) : (
-            <ul className="mesh-issues-detail__activity" data-testid="issue-detail-activity">
-              {activity.map((entry, index) => (
-                <li key={entry.id ?? `act-${index}`}>
-                  <strong>{entry.actor != null ? entry.actor.name : t('issues.systemActor')}</strong>
-                  {t('issues.activity.changed', { field: entry.field })}
-                  <time>{new Date(entry.created_at).toLocaleString()}</time>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* 评论与协作时间线(comment-inbox.md §4.1):系统活动 + 评论卡片 + 线程 + 执行占位 */}
-          <CommentsPanel
-            issueId={issue.id}
-            workspaceId={issue.workspace_id}
-            locale={locale}
-            candidates={toMentionCandidates(members)}
-            currentMember={currentMember}
-          />
-        </section>
-
-        <aside className="mesh-issues-detail__sidebar" aria-label={t('issues.detail.properties')}>
-          <Select
-            label={t('issues.columns.status')}
-            value={issue.status_id}
-            data-testid="issue-detail-status"
-            onChange={(event) =>
-              void patchAndToast({ status_id: event.target.value, version: issue.version })
-            }
-          >
-            {groupedStatuses.map((group) => (
-              <optgroup key={group.category} label={t(`issues.category.${group.category}`)}>
-                {group.items.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </Select>
-          <Select
-            label={t('issues.priority.label')}
-            value={issue.priority}
-            data-testid="issue-detail-priority"
-            onChange={(event) =>
-              void patchAndToast({
-                priority: event.target.value as IssuePriority,
-                version: issue.version,
-              })
-            }
-          >
-            {PRIORITY_ORDER.map((p) => (
-              <option key={p} value={p}>
-                {t(`issues.priority.${p}`)}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label={t('issues.columns.assignee')}
-            value={issue.assignee_id ?? ''}
-            data-testid="issue-detail-assignee"
-            onChange={(event) => {
-              const value = event.target.value;
-              void patchAndToast({
-                assignee_id: value === '' ? null : value,
-                version: issue.version,
-              });
-            }}
-          >
-            <option value="">{t('issues.unassigned')}</option>
-            {members
-              .filter((m) => m.status === 'active')
-              .map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.display_name}
-                  {m.member_type === 'agent' ? ` (${t('issues.agentBadge')})` : ''}
-                </option>
-              ))}
-          </Select>
-          {/* 小队分派(§4.3-2):单一责任主体徽章 + 分派给小队入口(独立于人类负责人下拉)。 */}
-          <IssueSquadAssignment
-            workspaceId={issue.workspace_id}
-            issueId={issue.id}
-            onChanged={() => setReloadKey((k) => k + 1)}
-          />
-          <label className="mesh-issues__field">
-            <span>{t('issues.detail.estimate')}</span>
-            <input
-              type="number"
-              min="0"
-              step="0.5"
-              value={issue.estimate ?? ''}
-              onChange={(event) =>
-                void patchAndToast({
-                  estimate: event.target.value === '' ? null : Number(event.target.value),
-                  version: issue.version,
-                })
-              }
-              aria-label={t('issues.detail.estimate')}
-              data-testid="issue-detail-estimate"
-            />
-          </label>
-          <Select
-            label={t('issues.detail.estimateUnit')}
-            value={issue.estimate_unit ?? ''}
-            data-testid="issue-detail-estimate-unit"
-            onChange={(event) =>
-              void patchAndToast({
-                estimate_unit: event.target.value === '' ? null : event.target.value,
-                version: issue.version,
-              } as Partial<IssueDetail>)
-            }
-          >
-            <option value="">{t('issues.detail.noneOption')}</option>
-            <option value="points">{t('issues.detail.estimateUnit.points')}</option>
-            <option value="hours">{t('issues.detail.estimateUnit.hours')}</option>
-          </Select>
-          <label className="mesh-issues__field">
-            <span>{t('issues.detail.start')}</span>
-            <input
-              type="date"
-              value={issue.start_date ?? ''}
-              onChange={(event) =>
-                void patchAndToast({
-                  start_date: event.target.value === '' ? null : event.target.value,
-                  version: issue.version,
-                })
-              }
-              aria-label={t('issues.detail.start')}
-              data-testid="issue-detail-start"
-            />
-          </label>
-          <label className="mesh-issues__field">
-            <span>{t('issues.columns.due')}</span>
-            <input
-              type="date"
-              value={issue.due_date ?? ''}
-              onChange={(event) =>
-                void patchAndToast({
-                  due_date: event.target.value === '' ? null : event.target.value,
-                  version: issue.version,
-                })
-              }
-              aria-label={t('issues.columns.due')}
-              data-testid="issue-detail-due"
-            />
-          </label>
-          <Select
-            label={t('issues.detail.milestone')}
-            value={issue.milestone_id ?? ''}
-            data-testid="issue-detail-milestone"
-            onChange={(event) =>
-              void patchAndToast({
-                milestone_id: event.target.value === '' ? null : event.target.value,
-                version: issue.version,
-              } as Partial<IssueDetail>)
-            }
-          >
-            <option value="">{t('issues.detail.noneOption')}</option>
-            {milestones.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.title}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label={t('issues.detail.cycle')}
-            value={issue.cycle_id ?? ''}
-            data-testid="issue-detail-cycle"
-            onChange={(event) =>
-              void patchAndToast({
-                cycle_id: event.target.value === '' ? null : event.target.value,
-                version: issue.version,
-              } as Partial<IssueDetail>)
-            }
-          >
-            <option value="">{t('issues.detail.noneOption')}</option>
-            {cycles.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
-          <Select
-            label={t('issues.detail.project')}
-            value={issue.project_id ?? ''}
-            data-testid="issue-detail-project"
-            onChange={(event) =>
-              void requestMove(event.target.value === '' ? null : event.target.value)
-            }
-          >
-            <option value="">{t('issues.detail.inbox')}</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}（{p.key}）
-              </option>
-            ))}
-          </Select>
-          {/* label-property.md §4.2/§4.3 关联层:标签 picker + 自定义字段面板 */}
-          <IssueLabelsEditor
-            client={client}
-            workspaceId={issue.workspace_id}
-            projectId={issue.project_id}
-            issueId={issue.id}
-            reloadKey={reloadKey}
-            issueUpdatedAt={issue.updated_at}
-            realtime={realtime}
-            onIssueChanged={() => setReloadKey((k) => k + 1)}
-          />
-          <IssueCustomFieldsEditor
-            client={client}
-            workspaceId={issue.workspace_id}
-            issueId={issue.id}
-            issueUpdatedAt={issue.updated_at}
+      <DetailLayout
+        header={header}
+        summaryChips={summaryChips}
+        main={main}
+        aside={
+          <IssueProperties
+            issue={issue}
+            statuses={statuses}
             members={members}
-            reloadKey={reloadKey}
+            projects={projects}
+            milestones={milestones}
+            cycles={cycles}
+            client={client}
             realtime={realtime}
+            reloadKey={reloadKey}
+            onPatch={(changes) => void patchAndToast(changes)}
+            onRequestMove={(target) => void requestMove(target)}
             onIssueChanged={() => setReloadKey((k) => k + 1)}
           />
-          {/* integrations.md §4.2:issue 侧栏 VCS 关联区块(关联 PR/commit/branch + 状态)。 */}
-          <VcsLinksPanel workspaceId={issue.workspace_id} issueId={issue.id} />
-          <p className="mesh-issues-detail__meta">
-            {t('issues.detail.reporter')}:{' '}
-            {issue.reporter !== null ? issue.reporter.name : t('issues.unassigned')}
-          </p>
-        </aside>
-      </div>
+        }
+        asideTitle={t('issues.propertiesTitle')}
+        asideTriggerLabel={t('issues.openProperties')}
+        closeLabel={t('common.close')}
+      />
 
       {movePreviewData !== null ? (
         <MoveProjectDialog
@@ -746,6 +676,30 @@ export function IssueDetailPage(): React.JSX.Element {
           onPreviewRefresh={setMovePreviewData}
         />
       ) : null}
+
+      <Dialog
+        open={deleteConfirmOpen}
+        onClose={() => setDeleteConfirmOpen(false)}
+        title={t('issues.deleteConfirmTitle')}
+        closeLabel={t('common.close')}
+      >
+        <p className="mesh-text-body-sm">{t('issues.deleteConfirmBody', { identifier: issue.identifier })}</p>
+        <div className="mesh-issues__confirm-actions">
+          <Button
+            variant="danger"
+            data-testid="issue-delete-confirm"
+            onClick={() => {
+              setDeleteConfirmOpen(false);
+              void remove();
+            }}
+          >
+            {t('issues.detail.delete')}
+          </Button>
+          <Button variant="ghost" onClick={() => setDeleteConfirmOpen(false)}>
+            {t('common.cancel')}
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }

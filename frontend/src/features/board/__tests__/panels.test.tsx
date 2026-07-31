@@ -180,9 +180,10 @@ describe('ViewSwitcher', () => {
     renderSwitcher();
     const active = screen.getByTestId('view-entry-v1');
     expect(active.className).toContain('--active');
-    // 默认视图星标由统一 Icon(star 实心)呈现,字符「★」已移除
+    // 默认视图星标由统一 Icon(star 实心 + label)呈现,字符「★」已移除
     const defaultMarker = within(active).getByTitle('Default view');
     expect(defaultMarker.querySelector('svg')).not.toBeNull();
+    expect(within(active).getByRole('img', { name: 'Default view' })).toBeInTheDocument();
     expect(within(active).queryByText('★')).not.toBeInTheDocument();
     expect(screen.getByTestId('view-menu-v1')).toBeInTheDocument();
     expect(screen.queryByTestId('view-menu-v2')).not.toBeInTheDocument();

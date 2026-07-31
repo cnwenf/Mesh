@@ -153,6 +153,44 @@ describe('CommentCard', () => {
     expect(onCopy).toHaveBeenCalledWith(COMMENT);
   });
 
+  it('exposes the same actions in the touch "more" menu and invokes handlers (§9.5.6)', () => {
+    const onDelete = vi.fn();
+    const onCopy = vi.fn();
+    const onReply = vi.fn();
+    const onResolve = vi.fn();
+    renderCard({ onDelete, onCopyLink: onCopy, onReply, onResolve });
+    const openMenu = (): void => {
+      fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    };
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply' }));
+    expect(onReply).toHaveBeenCalledWith(COMMENT);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Resolve' }));
+    expect(onResolve).toHaveBeenCalledWith(COMMENT);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy link' }));
+    expect(onCopy).toHaveBeenCalledWith(COMMENT);
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    expect(onDelete).toHaveBeenCalledWith(COMMENT);
+  });
+
+  it('opens the edit form from the touch menu', () => {
+    renderCard();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    expect(screen.getByTestId('comment-edit-form-c-1')).toBeTruthy();
+  });
+
+  it('omits edit/delete from the touch menu when the user cannot modify', () => {
+    renderCard({ canModify: false });
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    expect(screen.getByRole('menuitem', { name: 'Reply' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Delete' })).toBeNull();
+  });
+
   it('escapeHtml escapes the injection-relevant chars', () => {
     const out = escapeHtml(`<img src=x onerror="alert(1)">&`);
     expect(out).not.toContain('<');

@@ -1,26 +1,22 @@
 /**
- * Issue 模块样式(issue.md §4)。颜色一律经语义 token(design/tokens.css),
- * 暗色模式由 token 集整体替换实现(README §6.12)。
+ * Issue 模块样式(design-quality.md §3.2/§7.6/§8.3)。颜色一律经语义 token
+ * (design/tokens.css);z-index 用层级 token;动效经 motion token 并尊重
+ * prefers-reduced-motion;触控目标 ≥44px(§8.2)。
  */
 
-.mesh-issues {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4);
-}
+/* ---- 列表:DataView 工具条(保存视图 + 过滤 + chips) ---- */
 
-.mesh-issues__head {
+.mesh-issues__toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
 }
 
-.mesh-issues__head h1 {
-  margin: 0;
-  font-size: var(--font-size-lg);
-  color: var(--color-text);
+.mesh-issues__saved-views {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .mesh-issues__filters {
@@ -47,6 +43,8 @@
   font-size: var(--font-size-sm);
 }
 
+/* ---- 列表:快速创建(§9.3) ---- */
+
 .mesh-issues__create {
   display: flex;
   flex-wrap: wrap;
@@ -56,6 +54,7 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
+  margin-bottom: var(--space-3);
 }
 
 .mesh-issues__field {
@@ -74,9 +73,15 @@
   color: var(--color-text);
 }
 
-.mesh-issues__create-actions {
+.mesh-issues__create-actions,
+.mesh-issues__confirm-actions {
   display: flex;
   gap: var(--space-2);
+}
+
+.mesh-issues__confirm-actions {
+  justify-content: flex-end;
+  margin-top: var(--space-3);
 }
 
 .mesh-issues__create-error {
@@ -85,38 +90,102 @@
   margin: 0;
 }
 
+.mesh-issues__saved-view-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- 列表:表格(§7.6 表头 12–13px,行高 44px) ---- */
+
+.mesh-issues__list-container {
+  overflow-x: auto;
+}
+
 .mesh-issues__table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-body-sm);
 }
 
 .mesh-issues__table th,
 .mesh-issues__table td {
   text-align: left;
   padding: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
   color: var(--color-text);
+  vertical-align: middle;
 }
 
 .mesh-issues__table th {
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.mesh-issues__row {
+  transition: background-color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-issues__row:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-issues__row--selected {
+  background: var(--color-surface-selected);
+}
+
+.mesh-issues__row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+.mesh-issues__sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  padding: var(--space-1);
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+
+.mesh-issues__sort-button:hover {
+  color: var(--color-text-strong);
+  background: var(--color-surface-hover);
+}
+
+.mesh-issues__sort-button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
 }
 
 .mesh-issues__identifier {
-  font-family: monospace;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
   color: var(--color-text-muted);
   white-space: nowrap;
 }
 
 .mesh-issues__title-link {
-  color: var(--color-primary);
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-medium);
   text-decoration: none;
 }
 
 .mesh-issues__title-link:hover {
   text-decoration: underline;
+  color: var(--color-accent);
+}
+
+.mesh-issues__title-link:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .mesh-issues__status-chip {
@@ -127,92 +196,238 @@
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   white-space: nowrap;
+  font-size: var(--font-size-caption);
 }
 
-.mesh-issues__more {
-  display: flex;
-  justify-content: center;
+.mesh-issues__cell--assignee {
+  display: table-cell;
 }
 
-.mesh-issues__bulkbar {
-  position: sticky;
-  bottom: var(--space-3);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-raised);
-  font-size: var(--font-size-sm);
-  color: var(--color-text);
+.mesh-issues__cell--assignee span {
+  vertical-align: middle;
+  margin-left: var(--space-1);
 }
 
-/* ---- 详情页 ---- */
+/* 次要操作:hover / focus-within 显示;触控(hover:none)常驻(§8.2) */
+.mesh-issues__cell--actions {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-enter);
+  text-align: right;
+}
 
-.mesh-issues-detail {
+.mesh-issues__row:hover .mesh-issues__cell--actions,
+.mesh-issues__row:focus-within .mesh-issues__cell--actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .mesh-issues__cell--actions {
+    opacity: 1;
+  }
+}
+
+/* ---- 列表:骨架(与行同形,§13.3) ---- */
+
+.mesh-issues__skeleton {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.mesh-issues__skeleton-row {
+  display: block;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--color-skeleton-base);
+  animation: mesh-issues-skeleton-pulse var(--motion-slow) var(--ease-move) infinite alternate;
+}
+
+@keyframes mesh-issues-skeleton-pulse {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-issues__skeleton-row {
+    animation: none;
+  }
+}
+
+/* ---- 列表:手机 ≤599px 表格 → 主次行卡片(§7.6/§8.3,纯 CSS 重排单一 DOM) ---- */
+
+@media (max-width: 599px) {
+  .mesh-issues__table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .mesh-issues__table,
+  .mesh-issues__table tbody {
+    display: block;
+  }
+
+  .mesh-issues__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+  }
+
+  .mesh-issues__row td {
+    border: none;
+    padding: 0;
+  }
+
+  /* 主行:勾选 + 编号 + 标题 */
+  .mesh-issues__cell--select {
+    order: 0;
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .mesh-issues__cell--select input {
+    min-width: 24px;
+    min-height: 24px;
+  }
+
+  .mesh-issues__identifier {
+    order: 1;
+  }
+
+  .mesh-issues__cell--title {
+    order: 2;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .mesh-issues__cell--actions {
+    order: 3;
+    margin-left: auto;
+  }
+
+  /* 次行:状态 / 优先级 / 负责人 / 截止日 徽章带 */
+  .mesh-issues__cell--status,
+  .mesh-issues__cell--priority,
+  .mesh-issues__cell--assignee,
+  .mesh-issues__cell--due {
+    order: 4;
+    flex: 0 1 auto;
+    font-size: var(--font-size-caption);
+    color: var(--color-text-muted);
+  }
+}
+
+/* ---- 详情页(DetailLayout 槽内容) ---- */
+
+.mesh-issues-detail {
   padding: var(--space-4);
 }
 
 .mesh-issues-detail__head {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
 }
 
 .mesh-issues-detail__identifier {
-  font-family: monospace;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
   color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
+/* 内联标题编辑:透明底,hover/focus 下划线(§3.2 标题可内联编辑);长标题不溢出 */
 .mesh-issues-detail__title {
-  flex: 1;
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-title-2);
+  font-weight: var(--font-weight-semibold);
+  padding: var(--space-1) var(--space-0-5);
+  border: none;
+  border-bottom: 1px solid transparent;
+  border-radius: 0;
   background: transparent;
-  color: var(--color-text);
+  color: var(--color-text-strong);
 }
 
-.mesh-issues-detail__title:hover,
+.mesh-issues-detail__title:hover {
+  border-bottom-color: var(--color-border-strong);
+}
+
 .mesh-issues-detail__title:focus {
-  border-color: var(--color-border);
-  background: var(--color-surface);
   outline: none;
+  border-bottom-color: var(--color-accent);
+}
+
+.mesh-issues-detail__title:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .mesh-issues-detail__version {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
+  font-family: var(--font-family-mono);
+  white-space: nowrap;
 }
 
-.mesh-issues-detail__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18rem;
-  gap: var(--space-4);
+/* 保存/冲突弱提示(§3.2:保存与冲突状态清楚) */
+.mesh-issues-detail__save-state {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-muted);
+  min-height: 1em;
 }
 
-@media (max-width: 1023px) {
-  .mesh-issues-detail__body {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.mesh-issues-detail__save-state[data-phase='conflict'] {
+  color: var(--color-warn);
+}
+
+/* summary chips(标题下,桌面手机均可见,§8.3) */
+.mesh-issues-detail__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-issues-detail__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  white-space: nowrap;
 }
 
 .mesh-issues-detail__main h2 {
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-title-3);
   margin: var(--space-4) 0 var(--space-2);
-  color: var(--color-text);
-}
-
-.mesh-issues-detail__description {
-  color: var(--color-text-muted);
-  white-space: pre-wrap;
+  color: var(--color-text-strong);
 }
 
 .mesh-issues-detail__empty {
@@ -249,15 +464,11 @@
   color: var(--color-text-muted);
 }
 
-.mesh-issues-detail__sidebar {
+/* 属性侧栏内容(桌面 aside / 手机 Drawer sheet 共用) */
+.mesh-issues-detail__properties {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  align-self: start;
 }
 
 .mesh-issues-detail__meta {
@@ -289,6 +500,19 @@
   flex-basis: 100%;
 }
 
+/* ---- 描述编辑 ---- */
+
+textarea.mesh-issues-detail__description {
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  white-space: pre-wrap;
+}
+
 /* ---- 跨项目迁移确认对话框(§4.3/§3.8) ---- */
 
 .mesh-issues__move-overlay {
@@ -297,12 +521,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--color-bg) 70%, transparent);
-  z-index: var(--z-overlay); /* 全屏遮罩层(§11.2 令牌;原 50 散落值清偿) */
+  background: var(--color-scrim);
+  z-index: var(--z-overlay);
 }
 
 .mesh-issues__move-dialog {
-  min-width: 24rem;
+  min-width: min(24rem, 100%);
   max-width: 36rem;
   padding: var(--space-4);
   border: 1px solid var(--color-border);
@@ -329,7 +553,7 @@
 }
 
 .mesh-issues__move-identifier {
-  font-family: monospace;
+  font-family: var(--font-family-mono);
   color: var(--color-text-muted);
   margin: 0;
 }
@@ -351,19 +575,6 @@
   margin-top: var(--space-3);
 }
 
-/* ---- 描述编辑 ---- */
-
-textarea.mesh-issues-detail__description {
-  width: 100%;
-  padding: var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  white-space: pre-wrap;
-}
-
 /* ---- 小队分派(§4.3-2):单一责任主体徽章 + 分派对话框 ---- */
 
 .mesh-issues__squad {
@@ -382,11 +593,11 @@ textarea.mesh-issues-detail__description {
   background: var(--color-surface-raised);
   color: var(--color-text);
   text-decoration: none;
-  transition: border-color var(--space-1) ease;
+  transition: border-color var(--motion-fast) var(--ease-enter);
 }
 
 .mesh-issues__squad-badge:hover {
-  border-color: var(--color-primary);
+  border-color: var(--color-accent);
 }
 
 .mesh-issues__squad-badge-avatar {
@@ -395,11 +606,11 @@ textarea.mesh-issues-detail__description {
   justify-content: center;
   width: var(--space-4);
   height: var(--space-4);
-  border-radius: 50%;
-  background: var(--color-primary);
-  color: var(--color-surface);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-issues__squad-badge-text {
@@ -439,7 +650,7 @@ textarea.mesh-issues-detail__description {
 }
 
 .mesh-issues__squad-item-name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
 

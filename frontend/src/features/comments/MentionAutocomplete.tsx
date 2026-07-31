@@ -4,6 +4,7 @@
  * 键盘:↑/↓ 移动高亮,Enter 选择,Esc 关闭(由 composer 转发 keydown)。
  * 纯展示 + 回调。
  */
+import { Icon } from '../../design';
 import { useT } from '../../i18n';
 import type { MentionCandidate } from './mentions';
 
@@ -46,8 +47,13 @@ export function MentionAutocomplete(props: MentionAutocompleteProps): React.JSX.
               </span>
             ) : null}
             {isAgent ? (
-              <span className="mesh-comments__mention-hint" data-testid="mention-agent-hint">
-                {t('comments.composer.agentHint')}
+              /* @agent 候选显示「发布后将触发一次运行」(§9.5.2 / parity §2.10):
+                 sparkle 图标 + 徽标双信号,措辞不暗示选中即触发。 */
+              <span className="mesh-comments__mention-run" data-testid="mention-agent-hint">
+                <Icon name="sparkle" size={16} className="mesh-comments__mention-run-icon" />
+                <span className="mesh-comments__badge mesh-comments__badge--run">
+                  {t('comments.mentionWillRun')}
+                </span>
               </span>
             ) : null}
           </li>

@@ -7,6 +7,8 @@
  */
 import { useEffect, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
+import { Avatar, Icon, Menu } from '../../design';
+import type { MenuEntry } from '../../design';
 import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
 import { formatRelativeTime, useT } from '../../i18n';
@@ -143,118 +145,197 @@ export function CommentCard(props: CommentCardProps): React.JSX.Element {
     .filter((part): part is string => part !== null)
     .join(' ');
 
+  // 触控「更多」菜单(§9.5.6 / §8.2):承载与桌面操作条相同的动作;
+  // 桌面端经 CSS 隐藏(hover:none 时显示),触控端常驻,命中区 ≥44px。
+  const menuEntries: ReadonlyArray<MenuEntry> = deleted
+    ? []
+    : [
+        {
+          key: 'reply',
+          label: t('comments.action.reply'),
+          icon: 'message',
+          onSelect: () => props.onReply(comment),
+        },
+        ...(comment.parent_id === null
+          ? resolved
+            ? [
+                {
+                  key: 'reopen',
+                  label: t('comments.action.reopen'),
+                  icon: 'refresh',
+                  onSelect: () => props.onReopen(comment),
+                },
+              ]
+            : [
+                {
+                  key: 'resolve',
+                  label: t('comments.action.resolve'),
+                  icon: 'check',
+                  onSelect: () => props.onResolve(comment),
+                },
+              ]
+          : []),
+        {
+          key: 'copy',
+          label: t('comments.action.copyLink'),
+          icon: 'link',
+          onSelect: () => props.onCopyLink(comment),
+        },
+        ...(props.canModify
+          ? [
+              {
+                key: 'edit',
+                label: t('comments.action.edit'),
+                icon: 'edit',
+                onSelect: startEdit,
+              },
+              {
+                key: 'delete',
+                label: t('comments.action.delete'),
+                icon: 'trash',
+                danger: true,
+                onSelect: () => props.onDelete(comment),
+              },
+            ]
+          : []),
+      ];
+
   return (
     <article
       className={cardClass}
       id={`comment-${comment.id}`}
       data-testid={`comment-card-${comment.id}`}
     >
-      <header className="mesh-comments__card-head">
-        <span className="mesh-comments__author" data-testid={`comment-author-${comment.id}`}>
-          {author !== null ? author.name : t('comments.unknownAuthor')}
-        </span>
-        {isAgent ? (
-          <span className="mesh-comments__badge mesh-comments__badge--agent" data-testid="agent-badge">
-            {t('comments.badge.agent')}
-          </span>
-        ) : null}
-        <time className="mesh-comments__time">{formatRelativeTime(comment.created_at, { locale: props.locale })}</time>
-        {comment.edited_at !== null ? (
-          <span className="mesh-comments__edited" data-testid="comment-edited">
-            {t('comments.edited')}
-          </span>
-        ) : null}
-        {resolved ? (
-          <span className="mesh-comments__resolved-tag" data-testid="comment-resolved-tag">
-            {t('comments.resolved')}
-          </span>
-        ) : null}
-      </header>
+      {/* 时间线头像列(40px):头像下接连接线(CSS),系统活动与回复共用同一左轨。 */}
+      <div className="mesh-comments__avatar-col" aria-hidden="true">
+        <Avatar
+          name={author !== null ? author.name : '?'}
+          kind={isAgent ? 'agent' : 'human'}
+          size={40}
+          className="mesh-comments__avatar"
+        />
+      </div>
 
-      {deleted ? (
-        <p className="mesh-comments__deleted" data-testid="comment-deleted">
-          {t('comments.deleted')}
-        </p>
-      ) : editing ? (
-        <div className="mesh-comments__edit" data-testid={`comment-edit-form-${comment.id}`}>
-          <textarea
-            className="mesh-comments__edit-input"
-            data-testid={`comment-edit-input-${comment.id}`}
-            value={editValue}
-            aria-label={t('comments.action.edit')}
-            rows={3}
-            onChange={(event) => setEditValue(event.target.value)}
-          />
-          {editError !== null ? (
-            <p className="mesh-comments__edit-error" role="alert" data-testid="comment-edit-error">
-              {editError}
-            </p>
+      <div className="mesh-comments__card-main">
+        <header className="mesh-comments__card-head">
+          <span className="mesh-comments__author" data-testid={`comment-author-${comment.id}`}>
+            {author !== null ? author.name : t('comments.unknownAuthor')}
+          </span>
+          {isAgent ? (
+            <span className="mesh-comments__badge mesh-comments__badge--agent" data-testid="agent-badge">
+              {t('comments.badge.agent')}
+            </span>
           ) : null}
-          <div className="mesh-comments__edit-actions">
-            <button type="button" data-testid={`comment-edit-save-${comment.id}`} disabled={editBusy} onClick={() => void saveEdit()}>
-              {t('common.save')}
-            </button>
-            <button type="button" data-testid={`comment-edit-cancel-${comment.id}`} onClick={() => setEditing(false)}>
-              {t('common.cancel')}
-            </button>
+          <time className="mesh-comments__time">{formatRelativeTime(comment.created_at, { locale: props.locale })}</time>
+          {comment.edited_at !== null ? (
+            <span className="mesh-comments__edited" data-testid="comment-edited">
+              {t('comments.edited')}
+            </span>
+          ) : null}
+          {resolved ? (
+            <span className="mesh-comments__resolved-tag" data-testid="comment-resolved-tag">
+              {t('comments.resolved')}
+            </span>
+          ) : null}
+        </header>
+
+        {deleted ? (
+          <p className="mesh-comments__deleted" data-testid="comment-deleted">
+            {t('comments.deleted')}
+          </p>
+        ) : editing ? (
+          <div className="mesh-comments__edit" data-testid={`comment-edit-form-${comment.id}`}>
+            <textarea
+              className="mesh-comments__edit-input"
+              data-testid={`comment-edit-input-${comment.id}`}
+              value={editValue}
+              aria-label={t('comments.action.edit')}
+              rows={3}
+              onChange={(event) => setEditValue(event.target.value)}
+            />
+            {editError !== null ? (
+              <p className="mesh-comments__edit-error" role="alert" data-testid="comment-edit-error">
+                {editError}
+              </p>
+            ) : null}
+            <div className="mesh-comments__edit-actions">
+              <button type="button" data-testid={`comment-edit-save-${comment.id}`} disabled={editBusy} onClick={() => void saveEdit()}>
+                {t('common.save')}
+              </button>
+              <button type="button" data-testid={`comment-edit-cancel-${comment.id}`} onClick={() => setEditing(false)}>
+                {t('common.cancel')}
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        <div
-          className="mesh-comments__body"
-          data-testid={`comment-body-${comment.id}`}
-          ref={ugcGuard}
-          // body_html 为服务端白名单净化后的 HTML(comment-inbox.md §5.1),系唯一允许的注入源;
-          // C6 卡片水合仅替换受控的 mesh-issue-link 锚点,卡片文本已转义。
-          // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
-          dangerouslySetInnerHTML={{ __html: hydratedBody }}
-        />
-      )}
+        ) : (
+          <div
+            className="mesh-comments__body"
+            data-testid={`comment-body-${comment.id}`}
+            ref={ugcGuard}
+            // body_html 为服务端白名单净化后的 HTML(comment-inbox.md §5.1),系唯一允许的注入源;
+            // C6 卡片水合仅替换受控的 mesh-issue-link 锚点,卡片文本已转义。
+            // UGC 内联色对比兜底(theme.md §4.3 T5③)经 ugcGuard 回调 ref 执行。
+            dangerouslySetInnerHTML={{ __html: hydratedBody }}
+          />
+        )}
 
-      {!deleted ? (
-        <ReactionBar
-          reactions={comment.reactions}
-          onToggle={(emoji) => props.onToggleReaction(comment, emoji)}
-          onAdd={(emoji) => props.onAddReaction(comment, emoji)}
-        />
-      ) : null}
+        {!deleted ? (
+          <ReactionBar
+            reactions={comment.reactions}
+            onToggle={(emoji) => props.onToggleReaction(comment, emoji)}
+            onAdd={(emoji) => props.onAddReaction(comment, emoji)}
+          />
+        ) : null}
 
-      {!deleted ? (
-        <footer className="mesh-comments__actions">
-          <button type="button" data-testid={`comment-reply-${comment.id}`} onClick={() => props.onReply(comment)}>
-            {t('comments.action.reply')}
-          </button>
-          {comment.parent_id === null ? (
-            resolved ? (
-              <button type="button" data-testid={`comment-reopen-${comment.id}`} onClick={() => props.onReopen(comment)}>
-                {t('comments.action.reopen')}
-              </button>
-            ) : (
-              <button type="button" data-testid={`comment-resolve-${comment.id}`} onClick={() => props.onResolve(comment)}>
-                {t('comments.action.resolve')}
-              </button>
-            )
-          ) : null}
-          <button type="button" data-testid={`comment-copy-${comment.id}`} onClick={() => props.onCopyLink(comment)}>
-            {t('comments.action.copyLink')}
-          </button>
-          {props.canModify ? (
-            <>
-              <button type="button" data-testid={`comment-edit-${comment.id}`} onClick={startEdit}>
-                {t('comments.action.edit')}
-              </button>
-              <button
-                type="button"
-                className="mesh-comments__action-danger"
-                data-testid={`comment-delete-${comment.id}`}
-                onClick={() => props.onDelete(comment)}
-              >
-                {t('comments.action.delete')}
-              </button>
-            </>
-          ) : null}
-        </footer>
-      ) : null}
+        {!deleted ? (
+          /* 桌面次要操作条:仅 hover/focus-within 显示(CSS opacity+visibility),保留键盘可达。 */
+          <footer className="mesh-comments__actions">
+            <button type="button" data-testid={`comment-reply-${comment.id}`} onClick={() => props.onReply(comment)}>
+              {t('comments.action.reply')}
+            </button>
+            {comment.parent_id === null ? (
+              resolved ? (
+                <button type="button" data-testid={`comment-reopen-${comment.id}`} onClick={() => props.onReopen(comment)}>
+                  {t('comments.action.reopen')}
+                </button>
+              ) : (
+                <button type="button" data-testid={`comment-resolve-${comment.id}`} onClick={() => props.onResolve(comment)}>
+                  {t('comments.action.resolve')}
+                </button>
+              )
+            ) : null}
+            <button type="button" data-testid={`comment-copy-${comment.id}`} onClick={() => props.onCopyLink(comment)}>
+              {t('comments.action.copyLink')}
+            </button>
+            {props.canModify ? (
+              <>
+                <button type="button" data-testid={`comment-edit-${comment.id}`} onClick={startEdit}>
+                  {t('comments.action.edit')}
+                </button>
+                <button
+                  type="button"
+                  className="mesh-comments__action-danger"
+                  data-testid={`comment-delete-${comment.id}`}
+                  onClick={() => props.onDelete(comment)}
+                >
+                  {t('comments.action.delete')}
+                </button>
+              </>
+            ) : null}
+          </footer>
+        ) : null}
+
+        {!deleted && menuEntries.length > 0 ? (
+          <div className="mesh-comments__actions-touch">
+            <Menu
+              trigger={<Icon name="more-horizontal" size={20} />}
+              triggerLabel={t('comments.moreActions')}
+              entries={menuEntries}
+              align="end"
+            />
+          </div>
+        ) : null}
+      </div>
     </article>
   );
 }
