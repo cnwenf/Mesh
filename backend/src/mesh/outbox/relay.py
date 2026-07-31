@@ -26,6 +26,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.outbox import (
@@ -40,6 +41,42 @@ logger = logging.getLogger("mesh.outbox.relay")
 
 # handler(session, event) → optional [(channel, frame)] to fan out after commit
 Handler = Callable[[AsyncSession, OutboxEvent], Awaitable[list[tuple[str, dict]] | None]]
+
+
+async def isolated_optional_step(
+    session: AsyncSession, label: str, event_id: object, step: Awaitable[None]
+) -> None:
+    """Run a handler's OPTIONAL consumer step in its own savepoint.
+
+    MES-147 deadlock-recovery contract: a failure inside the step rolls back
+    to the step's savepoint and never poisons the surrounding batch
+    transaction — the failure mode that previously wedged the relay (a
+    deadlock swallowed by a bare ``except`` left the transaction aborted;
+    every later statement in the batch then failed with "current transaction
+    is aborted" and the event could never be marked published).
+
+    - Database errors (deadlock victim, serialization failure, connection
+      error) are re-raised AFTER the savepoint rollback: the event falls into
+      the relay failure budget and is redelivered whole, so an optional step's
+      DB failure never silently drops its side effects, and the batch
+      transaction remains usable for the failure bookkeeping.
+    - Non-database errors (logic bugs in the optional consumer) are logged and
+      swallowed: an optional step must not turn a poison event into a
+      permanently failing batch (the primary projection outcome still lands).
+    """
+    try:
+        async with session.begin_nested():
+            await step
+    except DBAPIError:
+        logger.warning(
+            "%s hit a database error for event %s; savepoint rolled back, event will retry",
+            label,
+            event_id,
+            exc_info=True,
+        )
+        raise
+    except Exception:  # noqa: BLE001 — optional step: log + skip, keep batch alive
+        logger.exception("%s failed for event %s (rolled back to savepoint)", label, event_id)
 
 
 class RetryableDelay(Exception):
@@ -77,6 +114,7 @@ class OutboxRelay:
         batch_size: int = 50,
         max_attempts: int = 5,
         poll_interval: float = 1.0,
+        error_backoff: float = 1.0,
         fanout: RedisFanOut | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -84,6 +122,7 @@ class OutboxRelay:
         self._batch_size = batch_size
         self._max_attempts = max_attempts
         self._poll_interval = poll_interval
+        self._error_backoff = error_backoff
         self._fanout = fanout
 
     def register(self, event_type: str, handler: Handler) -> None:
@@ -205,15 +244,37 @@ class OutboxRelay:
         return RelayResult(claimed=len(events), published=published, failed=failed)
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
-        """Loop until ``stop`` is set (or forever when None)."""
+        """Loop until ``stop`` is set (or forever when None).
+
+        A failed pass (transient DB error — deadlock victim, serialization
+        failure, connection reset) does NOT terminate the loop: its
+        transaction was already rolled back by ``run_once``'s session scope,
+        so the relay sleeps a short backoff and retries. Dying here would make
+        the outbox publisher depend entirely on the external supervisor for
+        recovery (MES-147: a wedged publisher leaves e2e waits pending until
+        job timeout).
+        """
         while stop is None or not stop.is_set():
-            result = await self.run_once()
+            try:
+                result = await self.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 — transient infra failure: back off + retry
+                logger.exception(
+                    "outbox relay pass failed; retrying in %.1fs", self._error_backoff
+                )
+                await self._idle_sleep(stop, self._error_backoff)
+                continue
             if result.claimed == 0:
-                if stop is not None:
-                    with _suppress_cancel():
-                        await asyncio.wait_for(stop.wait(), timeout=self._poll_interval)
-                else:
-                    await asyncio.sleep(self._poll_interval)
+                await self._idle_sleep(stop, self._poll_interval)
+
+    async def _idle_sleep(self, stop: asyncio.Event | None, seconds: float) -> None:
+        """Sleep ``seconds``, returning early when ``stop`` is set."""
+        if stop is not None:
+            with _suppress_cancel():
+                await asyncio.wait_for(stop.wait(), timeout=seconds)
+        else:
+            await asyncio.sleep(seconds)
 
 
 class _suppress_cancel:

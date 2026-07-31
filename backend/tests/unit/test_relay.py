@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 
 from mesh.db.models.outbox import (
     OUTBOX_STATUS_FAILED,
@@ -12,7 +14,7 @@ from mesh.db.models.outbox import (
     OUTBOX_STATUS_PUBLISHED,
     OutboxEvent,
 )
-from mesh.outbox.relay import OutboxRelay, RelayResult
+from mesh.outbox.relay import OutboxRelay, RelayResult, isolated_optional_step
 from mesh.outbox.service import emit_event
 
 
@@ -271,3 +273,125 @@ async def test_plain_failure_increments_budget_contrast(session_factory, workspa
         row = await session.get(OutboxEvent, event.id)
         assert row.status == OUTBOX_STATUS_PENDING
         assert row.delivery_attempts == 1
+
+
+# ---------------------------------------------------------------------------
+# MES-147: deadlock-recovery robustness (publisher must not wedge)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_forever_survives_transient_pass_failure(session_factory, workspace_factory):
+    """A failed relay pass (deadlock / connection reset) must NOT kill the loop.
+
+    The publisher backs off briefly and retries; pending events still publish.
+    Dying here leaves recovery to the external supervisor only — the wedge
+    that held e2e waits pending until job timeout (MES-147).
+    """
+    workspace = await workspace_factory()
+    await _seed(session_factory, workspace.id, count=2)
+
+    async def handler(session, event_):
+        return None
+
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        poll_interval=0.01,
+        error_backoff=0.01,
+    )
+    original_run_once = relay.run_once
+    failures = {"count": 0}
+
+    async def flaky_run_once():
+        if failures["count"] == 0:
+            failures["count"] += 1
+            raise RuntimeError("simulated transient db failure")
+        return await original_run_once()
+
+    relay.run_once = flaky_run_once
+    stop = asyncio.Event()
+    task = asyncio.create_task(relay.run_forever(stop))
+    try:
+        deadline = asyncio.get_running_loop().time() + 10
+        while True:
+            async with session_factory() as session:
+                pending = (
+                    await session.execute(
+                        select(OutboxEvent).where(OutboxEvent.status == OUTBOX_STATUS_PENDING)
+                    )
+                ).scalars().all()
+            if len(pending) == 0:
+                break
+            assert asyncio.get_running_loop().time() < deadline, "relay never recovered"
+            await asyncio.sleep(0.02)
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=5)
+    assert failures["count"] == 1, "exactly the injected pass failed"
+    assert not task.cancelled()
+
+
+async def test_isolated_optional_step_swallows_non_db_error(session_factory):
+    """Non-DB failure in an optional step: logged, skipped, txn stays usable."""
+    ran: list[str] = []
+
+    async def logic_bug():
+        ran.append("step")
+        raise ValueError("matcher logic bug")
+
+    async with session_factory() as session, session.begin():
+        await isolated_optional_step(session, "unit-step", "evt-1", logic_bug())
+        # Outer transaction still fully usable after the swallowed failure.
+        assert (await session.execute(select(1))).scalar() == 1
+    assert ran == ["step"]
+
+
+async def test_isolated_optional_step_reraises_db_error_and_keeps_txn_usable(session_factory):
+    """DB failure in an optional step: savepoint rolls back, error re-raised,
+    and the surrounding transaction is NOT aborted (the MES-147 wedge)."""
+    async with session_factory() as session, session.begin():
+        async def db_failure():
+            # Real aborting statement (undefined table) — same abort semantics
+            # as a deadlock victim inside the step.
+            await session.execute(text('SELECT 1 FROM "mesh_mes147_missing"'))
+
+        with pytest.raises(DBAPIError):
+            await isolated_optional_step(session, "unit-step", "evt-1", db_failure())
+        # The wedge was exactly this: statements after the swallowed deadlock
+        # failed with "current transaction is aborted". Must work now.
+        assert (await session.execute(select(1))).scalar() == 1
+
+
+async def test_relay_batch_survives_optional_step_db_error_and_redelivers(
+    session_factory, workspace_factory
+):
+    """End-to-end: a DB error in an isolated optional step consumes ONE failure
+    attempt, keeps the batch transaction usable, and the event redelivers to
+    published on the next pass — no wedged publisher, no lost event."""
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id, count=1)
+    failed_once = {"done": False}
+
+    async def handler(session, event_):
+        async def optional_step():
+            if not failed_once["done"]:
+                failed_once["done"] = True
+                await session.execute(text('SELECT 1 FROM "mesh_mes147_missing"'))
+
+        await isolated_optional_step(session, "optional", event_.id, optional_step())
+        return None
+
+    relay = OutboxRelay(session_factory, handlers={"test.event": handler}, max_attempts=5)
+
+    first = await relay.run_once()
+    assert first == RelayResult(claimed=1, published=0, failed=0)
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.status == OUTBOX_STATUS_PENDING, "event stays pending for redelivery"
+        assert row.delivery_attempts == 1, "failure budget consumed exactly once"
+
+    second = await relay.run_once()
+    assert second == RelayResult(claimed=1, published=1, failed=0)
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.status == OUTBOX_STATUS_PUBLISHED
