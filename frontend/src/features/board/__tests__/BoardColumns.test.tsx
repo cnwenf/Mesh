@@ -7,6 +7,8 @@
  */
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useShortcutRegistry } from '../../../shortcuts/registry';
+import { ShortcutProvider } from '../../../shortcuts/ShortcutProvider';
 import { renderWithProviders } from '../../../test-utils/render';
 import { BoardColumns } from '../BoardColumns';
 import type { BoardCard } from '../projection';
@@ -353,6 +355,71 @@ describe('BoardColumns 键盘移动模式(§9.4.5/§10.2)', () => {
     fireEvent.keyDown(cardA, { key: 'Escape' });
     expect(screen.getByTestId('board-live').textContent).toContain('Move mode cancelled');
     fireEvent.keyDown(cardA, { key: 'Enter' });
+    expect(onDropCard).not.toHaveBeenCalled();
+  });
+});
+
+describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移动模式 > 卡片打开)', () => {
+  beforeEach(() => {
+    ensurePointerEvent();
+    useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+  });
+
+  /** 真实分发链路:卡片 React onKeyDown + window 级 ShortcutProvider 同栈共存。 */
+  function setupArbitration() {
+    const openCard = vi.fn();
+    const onDropCard = vi.fn();
+    act(() => {
+      useShortcutRegistry.getState().registerShortcuts([
+        { id: 'board.open.card', combo: 'enter', label: 'open', group: 'board', run: openCard },
+      ]);
+      useShortcutRegistry.getState().setContexts(['board']);
+    });
+    renderWithProviders(
+      <ShortcutProvider isMac={false}>
+        <BoardColumns
+          columns={[column({ key: 'todo' }), column({ key: 'in_progress', label: 'board.category.in_progress' })]}
+          groupBy="state_category"
+          cardsByKey={{ todo: [card('a', 2)], in_progress: [] }}
+          canWrite
+          dragEnabled
+          onToggleCollapse={vi.fn()}
+          onDropCard={onDropCard}
+          onQuickCreate={vi.fn()}
+        />
+      </ShortcutProvider>,
+    );
+    return { openCard, onDropCard, cardA: screen.getByTestId('board-card-a') };
+  }
+
+  it('移动模式中 Enter 只确认移动,不触发 board.open.card(一次按键一个 handler)', () => {
+    const { openCard, onDropCard, cardA } = setupArbitration();
+    fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 进入移动模式
+    fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 选目标列 in_progress
+    fireEvent.keyDown(cardA, { key: 'Enter' }); // 确认移动
+    expect(onDropCard).toHaveBeenCalledWith('a', 'in_progress', 1);
+    expect(screen.getByTestId('board-live').textContent).toContain('Moved WEB-a to In Progress');
+    expect(openCard).not.toHaveBeenCalled();
+  });
+
+  it('移动模式中方向键不穿透为选中移动(排他消费,选中态不散失)', () => {
+    const { openCard, cardA } = setupArbitration();
+    fireEvent.keyDown(cardA, { key: 'ArrowDown' }); // 进入移动模式
+    fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 选目标列
+    // 最近播报为目标列(移动模式内);卡片保持选中;window 分发器未另触发打开。
+    expect(screen.getByTestId('board-live').textContent).toContain('Target column In Progress');
+    expect(cardA.className).toContain('mesh-board__card--selected');
+    expect(openCard).not.toHaveBeenCalled();
+  });
+
+  it('非移动模式 Enter 打开卡片:board.open.card 正常触发(既有行为不回归)', () => {
+    const { openCard, onDropCard, cardA } = setupArbitration();
+    fireEvent.keyDown(cardA, { key: 'Enter' });
+    expect(openCard).toHaveBeenCalledTimes(1);
     expect(onDropCard).not.toHaveBeenCalled();
   });
 });

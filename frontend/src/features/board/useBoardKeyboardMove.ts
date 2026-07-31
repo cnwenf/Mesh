@@ -7,6 +7,13 @@
  * - Enter 确认 → onDropCard;
  * - Esc 取消。
  *
+ * §4.3.1 一键一 handler 仲裁:移动模式激活期间,被消费的按键(方向键 /
+ * Enter / Esc)在 preventDefault 之外额外 stopPropagation——React 合成事件
+ * 的 stopPropagation 同时阻止原生事件继续冒泡,window 级快捷键分发器
+ * (ShortcutProvider)不再看到该按键,从而移动模式排他于 board.open.card
+ * (Enter 打开卡片)、board.move.*(方向键移选中)等看板上下文快捷键。
+ * 非移动模式的按键不消费、不阻止传播(Enter 打开卡片等既有行为不变)。
+ *
  * 播报经 aria-live 区域(board-live);文案一律走 i18n key(board.*)。
  */
 import { useCallback, useState } from 'react';
@@ -110,9 +117,12 @@ export function useBoardKeyboardMove(
         return;
       }
 
-      // 已在移动模式:仅响应当前卡片。
+      // 已在移动模式:仅响应当前卡片。preventDefault + stopPropagation 排他
+      // 消费本次按键(§4.3.1 一键一 handler):window 级分发器不再仲裁出
+      // board.open.card / board.move.* 等,杜绝 Enter 确认移动的同时又打开详情。
       if (moveState.cardId !== cardId) return;
       event.preventDefault();
+      event.stopPropagation();
 
       if (event.key === 'Escape') {
         cancelMove();

@@ -27,9 +27,13 @@ function setup(overrides: Partial<UseBoardKeyboardMoveOptions> = {}) {
   return { hook, announce, onDropCard };
 }
 
-/** 构造一个最小 React.KeyboardEvent 桩(仅用到 key + preventDefault)。 */
+/** 构造一个最小 React.KeyboardEvent 桩(用到 key + preventDefault + stopPropagation)。 */
 function keyEvent(key: string): React.KeyboardEvent {
-  return { key, preventDefault: vi.fn() } as unknown as React.KeyboardEvent;
+  return {
+    key,
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  } as unknown as React.KeyboardEvent;
 }
 
 describe('useBoardKeyboardMove', () => {
@@ -144,6 +148,66 @@ describe('useBoardKeyboardMove', () => {
     });
     expect(onDropCard).not.toHaveBeenCalled();
     expect(hook.result.current.moveState?.cardId).toBe('a');
+  });
+
+  // —— §4.3.1 一键一 handler 仲裁:移动模式排他消费,非移动模式放行 ——
+
+  it('移动模式中 Enter 排他消费:preventDefault + stopPropagation(不冒泡至卡片打开)', () => {
+    const { hook, onDropCard } = setup();
+    act(() => {
+      hook.result.current.handleCardKeyDown(keyEvent('ArrowRight'), 'a', 'WEB-A', 'todo');
+    });
+    const enter = keyEvent('Enter');
+    act(() => {
+      hook.result.current.handleCardKeyDown(enter, 'a', 'WEB-A', 'todo');
+    });
+    expect(onDropCard).toHaveBeenCalled();
+    expect(enter.preventDefault).toHaveBeenCalled();
+    expect(enter.stopPropagation).toHaveBeenCalled();
+  });
+
+  it('移动模式中方向键与 Esc 同样排他消费(stopPropagation)', () => {
+    const { hook } = setup();
+    act(() => {
+      hook.result.current.handleCardKeyDown(keyEvent('ArrowDown'), 'a', 'WEB-A', 'todo');
+    });
+    const arrow = keyEvent('ArrowRight');
+    act(() => {
+      hook.result.current.handleCardKeyDown(arrow, 'a', 'WEB-A', 'todo');
+    });
+    expect(arrow.stopPropagation).toHaveBeenCalled();
+    const esc = keyEvent('Escape');
+    act(() => {
+      hook.result.current.handleCardKeyDown(esc, 'a', 'WEB-A', 'todo');
+    });
+    expect(esc.stopPropagation).toHaveBeenCalled();
+    expect(hook.result.current.moveState).toBeNull();
+  });
+
+  it('非移动模式 Enter/Esc 不消费:不阻止传播(卡片打开等上层仲裁照常)', () => {
+    const { hook } = setup();
+    const enter = keyEvent('Enter');
+    const esc = keyEvent('Escape');
+    act(() => {
+      hook.result.current.handleCardKeyDown(enter, 'a', 'WEB-A', 'todo');
+      hook.result.current.handleCardKeyDown(esc, 'a', 'WEB-A', 'todo');
+    });
+    expect(enter.preventDefault).not.toHaveBeenCalled();
+    expect(enter.stopPropagation).not.toHaveBeenCalled();
+    expect(esc.stopPropagation).not.toHaveBeenCalled();
+  });
+
+  it('移动模式中其它卡片的按键不消费:不阻止传播', () => {
+    const { hook } = setup();
+    act(() => {
+      hook.result.current.handleCardKeyDown(keyEvent('ArrowDown'), 'a', 'WEB-A', 'todo');
+    });
+    const otherEnter = keyEvent('Enter');
+    act(() => {
+      hook.result.current.handleCardKeyDown(otherEnter, 'b', 'WEB-B', 'todo');
+    });
+    expect(otherEnter.preventDefault).not.toHaveBeenCalled();
+    expect(otherEnter.stopPropagation).not.toHaveBeenCalled();
   });
 
   it('空列集合:左右键回退到当前目标列', () => {
