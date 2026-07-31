@@ -97,29 +97,51 @@
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   max-width: 60rem;
   margin: 0 auto;
 }
 
+/* 头部:身份簇 + 操作行,底部分隔线与节奏间距(design-quality §3.2 详情头)。 */
 .mesh-agents-detail__header {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
   flex-wrap: wrap;
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-agents-detail__identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  min-inline-size: 0;
+  flex: 1 1 auto;
 }
 
 .mesh-agents-detail__title {
-  font-size: var(--font-size-lg);
   margin: 0;
+  color: var(--color-text-strong);
 }
 
 .mesh-agents-detail__status {
-  font-size: var(--font-size-sm);
   color: var(--color-text-muted);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  padding: var(--space-0) var(--space-2);
+}
+
+.mesh-agents-detail__presence {
+  display: inline-flex;
+  align-items: center;
+}
+
+.mesh-agents-detail__presence-caption {
+  margin: 0;
+  color: var(--color-text-muted);
 }
 
 .mesh-agents-detail__actions {
@@ -134,11 +156,16 @@
   color: var(--color-text-muted);
 }
 
+/* 面板卡片化:抬升表面 + 细边 + radius-lg + shadow-1(design-quality §7.6)。 */
 .mesh-agents-detail__panel {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3) 0;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-agents-detail__panel-footer {
@@ -155,11 +182,11 @@
 
 .mesh-agents-detail__dl dt {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
 }
 
 .mesh-agents-detail__dl dd {
   margin: 0;
+  color: var(--color-text);
 }
 
 .mesh-agents-detail__hint {
@@ -176,5 +203,62 @@
 .mesh-agents-detail__versions td {
   text-align: left;
   padding: var(--space-2);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.mesh-agents-detail__versions th {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* 版本行 hover 状态(§8.2)。 */
+.mesh-agents-detail__versions tbody tr {
+  transition: background-color var(--motion-fast) var(--ease-move);
+}
+
+.mesh-agents-detail__versions tbody tr:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/* 版本对比:双栏 + 代码块下沉表面(design-quality §7.6)。 */
+.mesh-agents-detail__compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  margin-block-start: var(--space-3);
+}
+
+.mesh-agents-detail__compare pre {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+}
+
+@media (max-width: 599px) {
+  .mesh-agents-detail__compare {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 页内弹窗(暂停 / 转移):卡片化 + 层级(design-quality §7.3/§7.6)。 */
+.mesh-agents-detail > [role='dialog'] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  position: relative;
+  z-index: var(--z-dropdown);
+}
+
+.mesh-agents-detail > [role='dialog'] h2 {
+  margin: 0;
 }

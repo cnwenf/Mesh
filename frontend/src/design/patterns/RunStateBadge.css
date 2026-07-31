@@ -1,0 +1,30 @@
+/*
+ * RunStateBadge 样式(design-quality.md §9.8):仅 running 态附加轻量脉冲,
+ * 动画不作唯一信号(图标 + 文案 + tone 三通道常驻);prefers-reduced-motion 降级。
+ * 颜色一律经语义 token(Badge 已承担 tone 三元组),此处只做动效包装。
+ */
+
+.mesh-run-state-badge {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+.mesh-run-state-badge--running .mesh-badge__icon {
+  animation: mesh-run-state-pulse var(--motion-slow) var(--ease-move) infinite alternate;
+}
+
+@keyframes mesh-run-state-pulse {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-run-state-badge--running .mesh-badge__icon {
+    animation: none;
+  }
+}

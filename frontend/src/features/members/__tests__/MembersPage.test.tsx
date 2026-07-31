@@ -1,14 +1,18 @@
 /**
  * MembersPage 组件测试(member.md §4,README §6.12/T35)。
  * 以 fetch 桩驱动:名册渲染(人+agent 同表 + AI 徽章)、「仅 Agent」筛选投影为同一路由/
- * 同一组件、唯一 `[ + 新建 Agent ]` 入口(占位态)、agent 行 owner 选项禁用、角色变更经
- * PATCH、停用确认弹窗、空态。
+ * 同一组件、唯一 `[ + 新建 Agent ]` 入口、agent 行 owner 选项禁用、角色变更经 PATCH、
+ * 停用/移除经底座 Menu 二次确认、空态;A-05 手机卡片结构 + 运行态五态徽标(§9.8 实时帧)。
+ *
+ * 桌面表格与手机卡片同源渲染(卡片默认 CSS 隐藏),故文本断言一律收敛到表格容器内
+ * (within(table)),行操作经「Row actions」菜单展开后按 menuitem 可访问名点击。
  */
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
+import { RealtimeContext } from '../../../shell/AppShell';
 import { MembersPage } from '../MembersPage';
 
 const ME = {
@@ -117,6 +121,20 @@ function stub(members: unknown[]) {
   return calls;
 }
 
+/** 等待名册表格渲染(桌面表格容器),后续文本断言收敛其内(卡片同源渲染会重复文本)。 */
+async function waitForTable(): Promise<HTMLElement> {
+  return screen.findByRole('table');
+}
+
+/** 打开某行(桌面表格)的行操作菜单,返回后按 menuitem 可访问名点击。 */
+async function openRowMenu(
+  user: ReturnType<typeof userEvent.setup>,
+  id: string,
+): Promise<void> {
+  const row = screen.getByTestId(`member-open-${id}`).closest('tr') as HTMLElement;
+  await user.click(within(row).getByRole('button', { name: 'Row actions' }));
+}
+
 describe('MembersPage', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -125,21 +143,24 @@ describe('MembersPage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('渲染人与 agent 同名册,agent 行带 AI 徽章', async () => {
+  it('渲染人与 agent 同名册,agent 行带 AI 徽章(design Badge accent)', async () => {
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
 
-    expect(await screen.findByText('Jane Doe')).toBeInTheDocument();
-    expect(screen.getByText('Code Bot')).toBeInTheDocument();
-    expect(screen.getByText('AI')).toBeInTheDocument();
-    // 标题为「成员」(en: Members)
+    const table = await waitForTable();
+    expect(within(table).getByText('Jane Doe')).toBeInTheDocument();
+    expect(within(table).getByText('Code Bot')).toBeInTheDocument();
+    expect(within(table).getByText('AI')).toBeInTheDocument();
+    // 徽章出自 design Badge(accent tone,默认 sparkle 图标)
+    expect(screen.getByTestId('ai-badge-mem-a').querySelector('.mesh-badge--accent')).not.toBeNull();
+    // 标题为「成员」(en: Members),h1 用 title-1 工具类
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Members');
   });
 
   it('名册表位于受控横向滚动容器内(窄屏不溢出页面,首列粘住,design-quality A-05/§7.6)', async () => {
     stub([HUMAN, AGENT]);
     const { container } = renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     const wrap = container.querySelector('.mesh-members__table-wrap');
     expect(wrap).not.toBeNull();
     expect(wrap).toContainElement(screen.getByRole('table'));
@@ -149,8 +170,9 @@ describe('MembersPage', () => {
     const calls = stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members?member_type=agent' });
 
-    expect(await screen.findByText('Code Bot')).toBeInTheDocument();
-    expect(screen.queryByText('Jane Doe')).not.toBeInTheDocument();
+    const table = await waitForTable();
+    expect(within(table).getByText('Code Bot')).toBeInTheDocument();
+    expect(within(table).queryByText('Jane Doe')).not.toBeInTheDocument();
     // 名册请求确实带 member_type=agent(同一端点的投影)
     await waitFor(() =>
       expect(
@@ -164,10 +186,8 @@ describe('MembersPage', () => {
   it('agent 行展示类型/角色标签/生命周期,无工作区角色下拉(H-F1)', async () => {
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Code Bot');
+    await waitForTable();
 
-    // H-F1:agent 行有显式「Agent」类型列 + role_tag 列 + 生命周期列,
-    // 且不再有工作区角色下拉(role-select 仅人类行)。
     expect(screen.getByTestId('member-type-mem-a')).toHaveTextContent('Agent');
     expect(screen.getByTestId('member-role-tag-mem-a')).toHaveTextContent('测试工程师');
     expect(screen.getByTestId('member-lifecycle-mem-a')).toBeInTheDocument();
@@ -180,7 +200,7 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
     await user.click(screen.getByTestId('new-agent-button'));
     expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
@@ -191,7 +211,7 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     const calls = stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
     await user.selectOptions(screen.getByTestId('role-select-mem-h'), 'admin');
     await waitFor(() =>
@@ -203,13 +223,14 @@ describe('MembersPage', () => {
     expect(patch?.init?.body).toContain('"role":"admin"');
   });
 
-  it('停用成员打开二次确认弹窗', async () => {
+  it('停用成员:行操作菜单 → 二次确认弹窗(Menu 承载低频行操作,§7.5)', async () => {
     const user = userEvent.setup();
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
-    await user.click(screen.getByTestId('disable-mem-h'));
+    await openRowMenu(user, 'mem-h');
+    await user.click(screen.getByRole('menuitem', { name: 'Disable' }));
     expect(await screen.findByText('Disable member')).toBeInTheDocument();
   });
 
@@ -217,7 +238,7 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
     await user.click(screen.getByTestId('member-open-mem-h'));
     const drawer = await screen.findByTestId('member-drawer');
@@ -225,13 +246,14 @@ describe('MembersPage', () => {
     expect(drawer).toHaveTextContent('3'); // open_issues_assigned
   });
 
-  it('停用成员行显示启用按钮,点击以 PATCH status=active 恢复', async () => {
+  it('停用成员行菜单含启用项,点击以 PATCH status=active 恢复', async () => {
     const user = userEvent.setup();
     const calls = stub([{ ...HUMAN, status: 'disabled' }]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
-    await user.click(screen.getByTestId('enable-mem-h'));
+    await openRowMenu(user, 'mem-h');
+    await user.click(screen.getByRole('menuitem', { name: 'Enable' }));
     await waitFor(() =>
       expect(
         calls.some(
@@ -241,13 +263,14 @@ describe('MembersPage', () => {
     );
   });
 
-  it('移除成员:确认后以 DELETE 调用(不带转派目标)', async () => {
+  it('移除成员:行操作菜单(破坏性)→ 确认后 DELETE(不带转派目标)', async () => {
     const user = userEvent.setup();
     const calls = stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
 
-    await user.click(screen.getByTestId('remove-mem-h'));
+    await openRowMenu(user, 'mem-h');
+    await user.click(screen.getByRole('menuitem', { name: 'Remove' }));
     expect(await screen.findByText('Remove member')).toBeInTheDocument();
     await user.click(screen.getByTestId('remove-confirm'));
     await waitFor(() =>
@@ -299,11 +322,13 @@ describe('MembersPage', () => {
     stub([HUMAN, removed]);
     const user = userEvent.setup();
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    let table = await waitForTable();
     await user.click(screen.getByRole('tab', { name: 'Disabled' }));
-    expect(await screen.findByText('Left Guy')).toBeInTheDocument();
+    table = await waitForTable();
+    expect(within(table).getByText('Left Guy')).toBeInTheDocument();
     await user.click(screen.getByRole('tab', { name: 'Humans' }));
-    expect(await screen.findByText('Jane Doe')).toBeInTheDocument();
+    table = await waitForTable();
+    expect(within(table).getByText('Jane Doe')).toBeInTheDocument();
   });
 
   it('agent 行 role_tag 为 null 时渲染空;subtext 回退', async () => {
@@ -315,7 +340,7 @@ describe('MembersPage', () => {
     };
     stub([agentNoTag]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    expect(await screen.findByText('No Tag Bot')).toBeInTheDocument();
+    await waitForTable();
     const tag = screen.getByTestId('member-role-tag-mem-a2');
     expect(tag.textContent).toBe('');
   });
@@ -329,10 +354,11 @@ describe('MembersPage', () => {
     };
     stub([noEmail]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    expect(await screen.findByText('No Mail')).toBeInTheDocument();
+    const table = await waitForTable();
+    expect(within(table).getByText('No Mail')).toBeInTheDocument();
   });
 
-  it('guest 角色:角色下拉与操作按钮不可用(canManage 否分支)', async () => {
+  it('guest 角色:角色下拉禁用,无行操作菜单(canManage 否分支)', async () => {
     const guestMe = { ...ME, memberships: [{ ...ME.memberships[0], role: 'guest' }] };
     const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -348,20 +374,19 @@ describe('MembersPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
-    // 人类行角色下拉渲染但禁用;操作按钮整列不渲染。
+    await waitForTable();
+    // 人类行角色下拉渲染但禁用;行操作菜单整列不渲染。
     expect((screen.getByTestId(`role-select-${HUMAN.id}`) as HTMLSelectElement).disabled).toBe(
       true,
     );
-    expect(screen.queryByTestId(`remove-${HUMAN.id}`)).not.toBeInTheDocument();
-    expect(screen.queryByTestId(`disable-${HUMAN.id}`)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Row actions' })).not.toBeInTheDocument();
   });
 
   it('邀请人类:打开弹窗,填邮箱选角色后发送(invite 全链路)', async () => {
     const user = userEvent.setup();
     const calls = stub([HUMAN]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     await user.click(screen.getByTestId('invite-human-button'));
     await user.type(screen.getByTestId('invite-email'), 'new@acme.com');
     await user.selectOptions(screen.getByTestId('invite-role'), 'admin');
@@ -378,7 +403,7 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     stub([HUMAN]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     await user.click(screen.getByTestId('invite-human-button'));
     expect((screen.getByTestId('invite-submit') as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -389,7 +414,7 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     const calls = stub([HUMAN]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     // 打开后以对话框关闭按钮关闭 → onClose。
     await user.click(screen.getByTestId('new-agent-button'));
     expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
@@ -415,13 +440,14 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     stub([HUMAN, AGENT]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     await user.type(screen.getByTestId('member-search'), 'Code');
     await waitFor(
-      () => expect(screen.queryByText('Jane Doe')).not.toBeInTheDocument(),
+      () => expect(screen.queryAllByText('Jane Doe')).toHaveLength(0),
       { timeout: 3000 },
     );
-    expect(screen.getByText('Code Bot')).toBeInTheDocument();
+    const table = await waitForTable();
+    expect(within(table).getByText('Code Bot')).toBeInTheDocument();
   });
 
   it('名册加载失败后点击重试恢复', async () => {
@@ -447,14 +473,15 @@ describe('MembersPage', () => {
     renderWithProviders(<MembersPage />, { route: '/members' });
     expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText('Jane Doe')).toBeInTheDocument();
+    const table = await waitForTable();
+    expect(within(table).getByText('Jane Doe')).toBeInTheDocument();
   });
 
   it('成员抽屉:打开后可经关闭按钮关闭', async () => {
     const user = userEvent.setup();
     stub([HUMAN]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Jane Doe');
+    await waitForTable();
     await user.click(screen.getByTestId(`member-open-${HUMAN.id}`));
     expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Close' }));
@@ -466,8 +493,155 @@ describe('MembersPage', () => {
     const user = userEvent.setup();
     stub([agentNoProfile]);
     renderWithProviders(<MembersPage />, { route: '/members' });
-    await screen.findByText('Code Bot');
+    await waitForTable();
     await user.click(screen.getByTestId('member-open-mem-anp'));
     expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
   });
+
+  // --- A-05 手机主次行卡片 + 运行态五态(§9.8)---------------------------------
+
+  it('手机卡片与表格同源渲染(结构存在;桌面隐藏由 CSS 控制)', async () => {
+    stub([HUMAN, AGENT]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+    // 卡片结构与表格同一 members 数组(每成员一张卡)。
+    expect(screen.getByTestId('member-card-mem-h')).toBeInTheDocument();
+    expect(screen.getByTestId('member-card-mem-a')).toBeInTheDocument();
+    // 卡片含名称 / AI 徽章 / 行操作菜单(共享 handlers)。
+    const card = screen.getByTestId('member-card-mem-a');
+    expect(within(card).getByTestId('card-ai-badge-mem-a')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Row actions' })).toBeInTheDocument();
+  });
+
+  it('卡片点击名称共享 handlers:人类行开抽屉', async () => {
+    const user = userEvent.setup();
+    stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+    await user.click(screen.getByTestId('member-card-open-mem-h'));
+    expect(await screen.findByTestId('member-drawer')).toBeInTheDocument();
+  });
+
+  it('卡片角色下拉共享 handlers:变更经 PATCH', async () => {
+    const user = userEvent.setup();
+    const calls = stub([HUMAN]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+    await user.selectOptions(screen.getByTestId('card-role-select-mem-h'), 'admin');
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.init?.method === 'PATCH' && c.url.includes('/members/mem-h')),
+      ).toBe(true),
+    );
+  });
+
+  it('卡片加入时间 caption 渲染(joined_at);为 null 时不渲染', async () => {
+    const noJoined = { ...HUMAN, id: 'mem-nj', joined_at: null };
+    stub([HUMAN, noJoined]);
+    renderWithProviders(<MembersPage />, { route: '/members' });
+    await waitForTable();
+    // 有 joined_at → 卡片含 Joined 文案;null → 无。
+    expect(within(screen.getByTestId('member-card-mem-h')).getByText(/Joined/)).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('member-card-mem-nj')).queryByText(/Joined/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('agent 行运行态:无帧 → unknown;presence 帧 → running(§9.8 data-state)', async () => {
+    const rt = makeFakeRealtime();
+    stub([HUMAN, AGENT]);
+    renderWithProviders(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身
+      <RealtimeContext.Provider value={rt as any}>
+        <MembersPage />
+      </RealtimeContext.Provider>,
+      { route: '/members' },
+    );
+    await waitForTable();
+    // 订阅该 agent 的 presence 频道(profile.id = agt-9)。
+    expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence');
+    // 无帧 → unknown 态(表格与卡片一致)。
+    expect(
+      screen.getByTestId('member-presence-mem-a').querySelector('[data-state="unknown"]'),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId('card-member-presence-mem-a').querySelector('[data-state="unknown"]'),
+    ).not.toBeNull();
+    // 人类行无运行态徽标(presence 单元不渲染)。
+    expect(screen.queryByTestId('member-presence-mem-h')).toBeNull();
+
+    // presence 帧到达 → running 态。
+    act(() => {
+      rt.emit({ channel: 'agent:agt-9:presence', payload: { running: 1, queued: 0, awaiting_approval: 0 } });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('member-presence-mem-a').querySelector('[data-state="running"]'),
+      ).not.toBeNull(),
+    );
+  });
+
+  it('agent 行运行态:queued / waiting 归一(三元组优先级)', async () => {
+    const rt = makeFakeRealtime();
+    stub([AGENT]);
+    renderWithProviders(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试替身
+      <RealtimeContext.Provider value={rt as any}>
+        <MembersPage />
+      </RealtimeContext.Provider>,
+      { route: '/members' },
+    );
+    await waitForTable();
+    act(() => {
+      rt.emit({ channel: 'agent:agt-9:presence', payload: { queued: 2 } });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('member-presence-mem-a').querySelector('[data-state="queued"]'),
+      ).not.toBeNull(),
+    );
+    act(() => {
+      rt.emit({ channel: 'agent:agt-9:presence', payload: { awaiting_approval: 1 } });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('member-presence-mem-a').querySelector('[data-state="waiting"]'),
+      ).not.toBeNull(),
+    );
+    // 全 0 → idle
+    act(() => {
+      rt.emit({ channel: 'agent:agt-9:presence', payload: {} });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('member-presence-mem-a').querySelector('[data-state="idle"]'),
+      ).not.toBeNull(),
+    );
+  });
 });
+
+interface FakeFrame {
+  channel: string;
+  payload?: unknown;
+}
+
+function makeFakeRealtime() {
+  const handlers: Array<(frame: FakeFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((handler: (frame: FakeFrame) => void) => {
+      handlers.push(handler);
+      return (): void => {
+        const index = handlers.indexOf(handler);
+        if (index >= 0) handlers.splice(index, 1);
+      };
+    }),
+  };
+  return {
+    client,
+    emit: (frame: FakeFrame): void => {
+      for (const handler of [...handlers]) handler(frame);
+    },
+  };
+}

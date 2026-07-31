@@ -47,9 +47,18 @@ export function Menu(props: MenuProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
   const menuId = useId();
 
   const items = entries.filter((entry): entry is MenuItem => !isSeparator(entry));
+
+  // M3/§7.5:关闭(Esc/选中/外部点击)后焦点落回触发钮,避免键盘用户失去焦点上下文。
+  // 仅 open→closed 转换时归还(跳过首次挂载 open=false)。
+  useEffect(() => {
+    if (wasOpenRef.current && !open) triggerRef.current?.focus();
+    wasOpenRef.current = open;
+  }, [open]);
 
   const focusItem = useCallback((index: number): void => {
     const node = menuRef.current?.querySelector<HTMLElement>(`[data-menu-index="${index}"]`);
@@ -176,6 +185,7 @@ export function Menu(props: MenuProps): React.JSX.Element {
   return (
     <div className={anchorClasses} ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="mesh-button mesh-button--ghost mesh-icon-button mesh-icon-button--sm"
         aria-label={triggerLabel}

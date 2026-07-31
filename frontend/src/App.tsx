@@ -214,6 +214,8 @@ function ShellProviders(): React.JSX.Element {
                     element={<WorkspaceCustomFieldsPage />}
                   />
                   <Route path="inbox" element={<InboxPage />} />
+                  {/* 收件箱详情深链:桌面双栏选中 + 手机单栏路由化(design-quality §4.4 Conversation) */}
+                  <Route path="inbox/:notificationId" element={<InboxPage />} />
                   <Route path="projects" element={<ProjectsPage />} />
                   <Route path="projects/:projectId" element={<ProjectDetailPage />} />
                   <Route path="projects/:projectId/settings" element={<ProjectSettingsPage />} />
@@ -242,8 +244,10 @@ function ShellProviders(): React.JSX.Element {
                 <Route path="skills/marketplace" element={<MarketplacePage />} />
                 <Route path="skills/:skillId" element={<SkillDetailPage />} />
                 <Route path="marketplace" element={<Navigate to="/skills/marketplace" replace />} />
-                  {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀) */}
+                  {/* 聊天模块(chat-session.md §4):agent 会话(流式 / 候选 / 中断 / 沉淀);
+                      /chat/:sessionId 桌面同步选中 + 手机列表/会话单栏路由化(design-quality §4.4) */}
                   <Route path="chat" element={<ChatPage />} />
+                  <Route path="chat/:sessionId" element={<ChatPage />} />
                   {/* runtime.md §4:自动化入口落地为 Runtimes 模块(注册 / 监控 / 执行详情) */}
                   <Route path="runtimes" element={<RuntimesPage />} />
                   <Route path="runtimes/:runtimeId" element={<RuntimeDetailPage />} />

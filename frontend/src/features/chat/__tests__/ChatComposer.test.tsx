@@ -16,10 +16,15 @@ const holder = vi.hoisted(() => ({
   uploads: [] as unknown[],
   addFiles: vi.fn(),
   cancel: vi.fn(),
+  /** 记录每次 useAttachmentUploader(options) 的入参(归属工作区透传断言用)。 */
+  lastOptions: undefined as { workspaceId?: string } | undefined,
 }));
 
 vi.mock('../../attachments/useAttachmentUploader', () => ({
-  useAttachmentUploader: () => holder,
+  useAttachmentUploader: (options?: { workspaceId?: string }) => {
+    holder.lastOptions = options;
+    return holder;
+  },
 }));
 
 function quoteMessage(): ChatMessage {
@@ -238,5 +243,22 @@ describe('ChatComposer(§4.2)', () => {
     const input = screen.getByTestId('chat-composer-input');
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('workspaceId 透传 useAttachmentUploader(预上传归属工作区,attachment.md §3.1)', () => {
+    const onSend = vi.fn();
+    const first = renderWithProviders(
+      <ChatComposer
+        onSend={onSend}
+        quoteMessage={null}
+        onClearQuote={vi.fn()}
+        workspaceId="ws-1"
+      />,
+    );
+    expect(holder.lastOptions).toEqual({ workspaceId: 'ws-1' });
+    first.unmount();
+    // 未传 workspaceId → options.workspaceId 为 undefined(兼容旧调用)。
+    renderWithProviders(<ChatComposer onSend={onSend} quoteMessage={null} onClearQuote={vi.fn()} />);
+    expect(holder.lastOptions).toEqual({ workspaceId: undefined });
   });
 });

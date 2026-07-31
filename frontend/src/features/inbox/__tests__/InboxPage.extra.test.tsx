@@ -1,9 +1,10 @@
 /**
- * InboxPage 补充覆盖:行主体 onClick(handleOpen,L229)、工具条「归档已读」
- * (handleArchiveRead,L141-144)、非 MeshApiError 错误态(branch L68)、
- * 无 issue 快照分组(branch L205 退回 issueId / L216 issueId==='none' 不渲染静音)。
+ * InboxPage 补充覆盖:工具条「归档已读」(handleArchiveRead)、无 issue 快照分组
+ * (组头退回 issueId / 'none' 组不渲染静音)、已读行无圆点(仅归档/已读态分支)。
+ * fetch 桩按序:me → members → inbox → prefs。
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import type { FetchStub } from '../../../api/__tests__/fetchStub';
@@ -37,13 +38,24 @@ function queue(inboxBody: unknown = { data: [NOTIF], next_cursor: null }): Fetch
     fakeResponse({ body: { data: ME } }),
     fakeResponse({ body: MEMBERS }),
     fakeResponse({ body: inboxBody }),
+    fakeResponse({ body: { data: [], next_cursor: null } }),
     fakeResponse({ body: inboxBody }),
-    fakeResponse({ body: { data: { updated: 1 } } }),
+    fakeResponse({ body: inboxBody }),
     fakeResponse({ body: { data: { archived: 1 } } }),
     fakeResponse({ body: { data: NOTIF } }),
+    fakeResponse({ body: inboxBody }),
   );
   vi.stubGlobal('fetch', stub.fetchImpl);
   return stub;
+}
+
+function renderInbox(route = '/inbox'): ReturnType<typeof renderWithProviders> {
+  return renderWithProviders(
+    <Routes>
+      <Route path="/inbox/:notificationId?" element={<InboxPage />} />
+    </Routes>,
+    { route },
+  );
 }
 
 // MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
@@ -57,21 +69,9 @@ afterEach(() => {
 });
 
 describe('InboxPage (补充覆盖)', () => {
-  it('marks read and navigates when the row main button is clicked (onClick L229)', async () => {
+  it('archives all read notifications via the toolbar (handleArchiveRead)', async () => {
     const stub = queue();
-    renderWithProviders(<InboxPage />);
-    await screen.findByTestId('inbox-row-n-1');
-    const rowMain = screen.getByTestId('inbox-row-n-1').querySelector('.mesh-inbox__row-main');
-    expect(rowMain).not.toBeNull();
-    fireEvent.click(rowMain as HTMLElement);
-    await waitFor(() => {
-      expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/read'))).toBe(true);
-    });
-  });
-
-  it('archives all read notifications via the toolbar (handleArchiveRead L141-144)', async () => {
-    const stub = queue();
-    renderWithProviders(<InboxPage />);
+    renderInbox();
     await screen.findByTestId('inbox-row-n-1');
     fireEvent.click(screen.getByTestId('inbox-archive-read'));
     await waitFor(() => {
@@ -79,13 +79,36 @@ describe('InboxPage (补充覆盖)', () => {
     });
   });
 
-  it('renders the none group without a mute button and falls back to the issueId header (branches L205 + L216)', async () => {
+  it('renders the none group without a mute button and falls back to the issueId header', async () => {
     // issue_id=null → 归入 'none' 组;issue 快照缺失 → 组头退回 issueId;'none' 组不渲染静音按钮。
     queue({ data: [{ ...NOTIF, issue_id: null, issue: undefined }], next_cursor: null });
-    renderWithProviders(<InboxPage />);
+    renderInbox();
     const group = await screen.findByTestId('inbox-group-none');
     expect(group.textContent).toContain('none');
     expect(group.textContent).not.toContain('WS-1 · Login bug');
     expect(screen.queryByTestId('inbox-mute-none')).toBeNull();
+  });
+
+  it('renders a read notification without the unread dot or mark-read action', async () => {
+    queue({ data: [{ ...NOTIF, read_at: '2026-07-02T00:00:00Z' }], next_cursor: null });
+    renderInbox();
+    await screen.findByTestId('inbox-row-n-1');
+    expect(screen.queryByTestId('inbox-unread-dot-n-1')).toBeNull();
+    expect(screen.queryByTestId('inbox-mark-read-n-1')).toBeNull();
+    // 归档操作仍在。
+    expect(screen.getByTestId('inbox-archive-n-1')).toBeTruthy();
+    // 已读行不带 --unread 修饰类。
+    expect(screen.getByTestId('inbox-row-n-1').className).not.toContain('mesh-inbox__row--unread');
+  });
+
+  it('does not re-POST read when selecting an already-read notification', async () => {
+    const stub = queue({ data: [{ ...NOTIF, read_at: '2026-07-02T00:00:00Z' }], next_cursor: null });
+    renderInbox();
+    await screen.findByTestId('inbox-row-n-1');
+    const rowMain = screen.getByTestId('inbox-row-n-1').querySelector('.mesh-inbox__row-main');
+    fireEvent.click(rowMain as HTMLElement);
+    // 选中路由生效(预览窗格出现),但不发标已读请求。
+    expect(await screen.findByTestId('inbox-preview-title')).toBeTruthy();
+    expect(stub.calls.some((c) => String(c.url).includes('/api/v1/inbox/n-1/read'))).toBe(false);
   });
 });

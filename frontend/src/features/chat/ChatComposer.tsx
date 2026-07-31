@@ -37,11 +37,17 @@ export interface ChatComposerProps {
   readonly onClearQuote: () => void;
   /** 会话非 active 或流式进行中时禁用发送。 */
   readonly disabled?: boolean;
+  /**
+   * 预上传归属工作区(attachment.md §3.1):聊天附件预上传不预关联实体(§2.4
+   * 发送时关联),此时 upload-requests 必带 workspace_id,否则后端 400
+   * 「workspace_id is required when link_to is absent」。
+   */
+  readonly workspaceId?: string;
 }
 
 export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
   const t = useT();
-  const uploader = useAttachmentUploader();
+  const uploader = useAttachmentUploader({ workspaceId: props.workspaceId });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [value, setValue] = useState('');
   const [sending, setSending] = useState(false);

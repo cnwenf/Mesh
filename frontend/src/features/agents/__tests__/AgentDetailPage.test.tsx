@@ -104,12 +104,21 @@ function renderPage() {
 }
 
 describe('AgentDetailPage', () => {
-  it('渲染详情头 + 概览 + presence 脚手架(—)', async () => {
+  it('渲染详情头(底座 Avatar/Badge/运行态徽标)+ 概览 + presence 脚手架', async () => {
     setup();
     renderPage();
     expect(await screen.findByTestId('agent-detail-name')).toHaveTextContent('小测');
-    expect(screen.getByTestId('agent-detail-badge')).toBeInTheDocument();
-    expect(screen.getByTestId('agent-detail-presence')).toHaveTextContent('—');
+    // 底座 Avatar(agent 统一轮廓)替代手写头像。
+    expect(document.querySelector('.mesh-avatar--agent')).not.toBeNull();
+    // AI 徽章出自 design Badge(accent),testid 保留在外层包装。
+    expect(
+      screen.getByTestId('agent-detail-badge').querySelector('.mesh-badge--accent'),
+    ).not.toBeNull();
+    // 运行态徽标:无帧 → unknown(data-state);容量说明为「Capacity: —」。
+    expect(
+      screen.getByTestId('agent-detail-presence').querySelector('[data-state="unknown"]'),
+    ).not.toBeNull();
+    expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent('—');
     expect(screen.getByTestId('agent-panel-overview')).toBeInTheDocument();
   });
 
@@ -548,16 +557,20 @@ describe('AgentDetailPage 扩展覆盖', () => {
     await waitFor(() =>
       expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument(),
     );
-    // presence 帧 → 容量三元组。
+    // presence 帧 → 运行态 running(data-state)+ 容量三元组说明。
     rt.emit({
       event: 'agent.presence',
       payload: { running: 1, queued: 2, awaiting_approval: 3 },
     });
     await waitFor(() =>
-      expect(screen.getByTestId('agent-detail-presence')).toHaveTextContent('1'),
+      expect(
+        screen.getByTestId('agent-detail-presence').querySelector('[data-state="running"]'),
+      ).not.toBeNull(),
     );
-    expect(screen.getByTestId('agent-detail-presence')).toHaveTextContent('2');
-    expect(screen.getByTestId('agent-detail-presence')).toHaveTextContent('3');
+    const caption = screen.getByTestId('agent-detail-presence-caption');
+    expect(caption).toHaveTextContent('1');
+    expect(caption).toHaveTextContent('2');
+    expect(caption).toHaveTextContent('3');
     void detailsBefore;
   });
 
@@ -608,9 +621,13 @@ describe('AgentDetailPage 扩展覆盖', () => {
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
     rt.emit({ event: 'agent.presence', payload: {} });
+    // 缺字段回退 0 → 三元组全 0 → idle 态;容量说明含 0。
     await waitFor(() =>
-      expect(screen.getByTestId('agent-detail-presence')).toHaveTextContent('0'),
+      expect(
+        screen.getByTestId('agent-detail-presence').querySelector('[data-state="idle"]'),
+      ).not.toBeNull(),
     );
+    expect(screen.getByTestId('agent-detail-presence-caption')).toHaveTextContent('0');
     rt.emit({ event: 'agent.lifecycle_changed', payload: { data: { id: 'a-1' } } });
     await waitFor(() => expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument());
   });

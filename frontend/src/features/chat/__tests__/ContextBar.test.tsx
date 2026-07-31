@@ -200,4 +200,53 @@ describe('ContextBar(§4.2)', () => {
     await user.click(screen.getByTestId('chat-context-picker-cancel'));
     await waitFor(() => expect(screen.queryByTestId('chat-context-picker')).toBeNull());
   });
+
+  it('收起/展开:触发器 aria-expanded + chips 区隐藏/恢复(§3.2 可收起条)', () => {
+    const recorder: Recorder = { calls: [] };
+    const client = routedClient(standardRouter(), recorder);
+    renderBar(makeSession({ context_issue_id: 'iss-1' }), client);
+    const collapse = screen.getByTestId('chat-context-collapse');
+    expect(collapse).toHaveAttribute('aria-expanded', 'true');
+    const chips = document.querySelector('.mesh-chat__context-chips');
+    expect(chips).not.toBeNull();
+    expect(chips).toBeVisible();
+    // 收起:chips 经 hidden 隐藏(不销毁),摘要 + 展开触发器呈现
+    fireEvent.click(collapse);
+    expect(chips).not.toBeVisible();
+    expect(screen.getByTestId('chat-context-summary')).toBeInTheDocument();
+    const expand = screen.getByTestId('chat-context-expand');
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(expand.getAttribute('aria-controls')).toBe(chips?.getAttribute('id'));
+    expect(collapse.getAttribute('aria-controls')).toBe(chips?.getAttribute('id'));
+    // 展开恢复
+    fireEvent.click(expand);
+    expect(chips).toBeVisible();
+    expect(screen.queryByTestId('chat-context-expand')).toBeNull();
+    expect(screen.getByTestId('chat-context-collapse')).toBeInTheDocument();
+  });
+
+  it('收起态摘要:已关联上下文截断一行', async () => {
+    const recorder: Recorder = { calls: [] };
+    const client = routedClient(standardRouter(), recorder);
+    const bar = renderBar(
+      makeSession({ context_issue_id: 'iss-1', context_project_id: 'prj-1' }),
+      client,
+    ).container;
+    // 待两路详情解析完成后再收起(摘要取已解析标签)
+    await waitFor(() => expect(bar.textContent).toContain('WEB-1'));
+    await waitFor(() => expect(bar.textContent).toContain('Atlas'));
+    fireEvent.click(screen.getByTestId('chat-context-collapse'));
+    const summary = screen.getByTestId('chat-context-summary');
+    expect(summary.textContent).toContain('WEB-1 Bug');
+    expect(summary.textContent).toContain('Atlas');
+    expect(screen.getByTestId('chat-context-bar').getAttribute('data-collapsed')).toBe('true');
+  });
+
+  it('收起态摘要:无上下文回退弱化提示文案', () => {
+    const recorder: Recorder = { calls: [] };
+    const client = routedClient(standardRouter(), recorder);
+    renderBar(makeSession(), client);
+    fireEvent.click(screen.getByTestId('chat-context-collapse'));
+    expect(screen.getByTestId('chat-context-summary').textContent).toContain('Link an issue');
+  });
 });

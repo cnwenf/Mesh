@@ -1,5 +1,6 @@
 /*
  * 成员名册页样式(README §6.12 设计系统:一切颜色经语义 token,无硬编码色值)。
+ * 排版走 type-scale 工具类(见各元素 mesh-text-*);A-05:桌面表格 / 手机主次行卡片。
  */
 .mesh-members {
   display: flex;
@@ -21,8 +22,7 @@
 
 .mesh-members__title {
   margin: 0;
-  font-size: var(--font-size-lg);
-  color: var(--color-text);
+  color: var(--color-text-strong);
 }
 
 .mesh-members__actions {
@@ -41,7 +41,7 @@
 .mesh-members__tabs {
   display: flex;
   gap: var(--space-1);
-  border-block-end: 1px solid var(--color-border);
+  border-block-end: 1px solid var(--color-border-subtle);
 }
 
 .mesh-members__tab {
@@ -53,63 +53,83 @@
   color: var(--color-text-muted);
   cursor: pointer;
   border-block-end: 2px solid transparent;
+  transition: color var(--motion-fast) var(--ease-move),
+    border-block-end-color var(--motion-fast) var(--ease-move);
+}
+
+.mesh-members__tab:hover {
+  color: var(--color-text-strong);
+}
+
+.mesh-members__tab:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
 }
 
 .mesh-members__tab[aria-selected='true'] {
-  color: var(--color-primary);
-  border-block-end-color: var(--color-primary);
-  font-weight: 600;
+  color: var(--color-accent);
+  border-block-end-color: var(--color-accent);
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-members__search {
   min-inline-size: 220px;
 }
 
-/* 受控横向滚动容器(design-quality A-05/§7.6):窄屏(390px)表格内部横滚,
-   不产生页面级横向溢出;首列粘住保持身份列常驻。右缘渐隐提示仅在
-   0–599px 启用(桌面表格完整呈现,不做渐隐)。 */
+/* --- 桌面表格(卡片化表面;0–599px 隐藏,改主次行卡片)---------------------- */
+
+/* 受控横向滚动容器 + 卡片表面(design-quality §7.6):窄屏表格内部横滚不溢出页面,
+   首列粘住保持身份列常驻;桌面整体作为抬升卡片(表面 + 细边 + radius-lg + shadow-1)。 */
 .mesh-members__table-wrap {
   overflow-x: auto;
   max-inline-size: 100%;
-  border-radius: var(--radius-md);
-}
-
-@media (max-width: 599px) {
-  .mesh-members__table-wrap {
-    mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
-  }
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-members__table {
   inline-size: 100%;
   border-collapse: collapse;
-  background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
 }
 
 .mesh-members__table th,
 .mesh-members__table td {
   text-align: start;
   padding: var(--space-3);
-  border-block-end: 1px solid var(--color-border);
+  border-block-end: 1px solid var(--color-border-subtle);
   vertical-align: middle;
 }
 
-/* 首列粘住:横滚时身份列常驻(§7.6);底色取表面 token 保证覆盖 */
+/* 首列粘住:横滚时身份列常驻(§7.6);底色取表面 token 保证覆盖滚过的单元格 */
 .mesh-members__table th:first-child,
 .mesh-members__table td:first-child {
   position: sticky;
   inset-inline-start: 0;
   z-index: 1;
-  background-color: var(--color-surface-raised);
+  background-color: var(--color-surface);
 }
 
 .mesh-members__table th {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
+}
+
+/* 行状态矩阵:default / hover / focus-visible / removed(§8.2)。 */
+.mesh-members__row {
+  transition: background-color var(--motion-fast) var(--ease-move);
+}
+
+.mesh-members__row:hover {
+  background-color: var(--color-surface-hover);
+}
+
+/* hover 时首列(粘性,自有底色)同步换色,避免身份列与行脱节 */
+.mesh-members__row:hover td:first-child {
+  background-color: var(--color-surface-hover);
 }
 
 .mesh-members__row:last-child td {
@@ -120,51 +140,52 @@
   opacity: 0.6;
 }
 
+/* --- 身份簇(头像 + 名称/徽章 + 次要行,整体按钮开详情)---------------------- */
 .mesh-members__identity {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-inline-size: 0;
+  inline-size: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
 }
 
-.mesh-members__avatar {
-  inline-size: 32px;
-  block-size: 32px;
-  border-radius: 50%;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  display: inline-flex;
+.mesh-members__identity:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.mesh-members__identity-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  min-inline-size: 0;
+}
+
+.mesh-members__identity-primary {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  flex: none;
-}
-
-.mesh-members__avatar--agent {
-  background: var(--color-info);
-  color: var(--color-info-contrast);
-  border-color: transparent;
+  gap: var(--space-2);
+  min-inline-size: 0;
 }
 
 .mesh-members__name {
-  color: var(--color-text);
-  font-weight: 500;
+  color: var(--color-text-strong);
 }
 
-.mesh-members__badge {
-  display: inline-block;
-  padding: 0 var(--space-1);
-  border-radius: var(--radius-sm);
-  background: var(--color-info);
-  color: var(--color-info-contrast);
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+.mesh-members__subtext {
+  color: var(--color-text-muted);
 }
 
 .mesh-members__sub {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
 }
 
 .mesh-members__role-select {
@@ -176,29 +197,110 @@
   color: var(--color-text);
 }
 
-.mesh-members__row-actions {
-  display: flex;
-  gap: var(--space-1);
+/* --- A-05 手机主次行卡片(默认隐藏;0–599px 显示,替代表格)------------------ */
+.mesh-members__cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
+.mesh-members__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  transition: background-color var(--motion-fast) var(--ease-move);
+}
+
+.mesh-members__card:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.mesh-members__card--removed {
+  opacity: 0.6;
+}
+
+.mesh-members__card-primary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.mesh-members__card-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-inline-size: 0;
+  color: var(--color-text-muted);
+}
+
+.mesh-members__card-joined {
+  color: var(--color-text-muted);
+}
+
+/* 触控目标 ≥44px(§8.2):卡片内行操作菜单触发钮与身份按钮放大到可点尺寸。 */
+.mesh-members__card .mesh-icon-button {
+  min-inline-size: 44px;
+  min-block-size: 44px;
+}
+
+.mesh-members__card .mesh-members__identity {
+  min-block-size: 44px;
+}
+
+@media (max-width: 599px) {
+  .mesh-members__table-wrap {
+    display: none;
+  }
+
+  .mesh-members__cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+}
+
+/* M2/§8.2:平板(600–1023px 仍渲染桌面表格)与粗指针设备,行内控件命中区放大到
+   ≥44px(桌面表格的行菜单触发钮/角色下拉此前约 28–30px,不满足触控硬门槛)。 */
+@media (pointer: coarse), (min-width: 600px) and (max-width: 1023px) {
+  .mesh-members__table .mesh-icon-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+
+  .mesh-members__role-select {
+    min-block-size: 44px;
+  }
+}
+
+/* --- 详情抽屉 ------------------------------------------------------------- */
 .mesh-members__drawer {
   position: fixed;
   inset-block: 0;
   inset-inline-end: 0;
   inline-size: min(360px, 90vw);
   background: var(--color-surface-raised);
-  border-inline-start: 1px solid var(--color-border);
-  box-shadow: var(--shadow-raised);
+  border-inline-start: 1px solid var(--color-border-subtle);
+  box-shadow: var(--shadow-3);
   padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  z-index: var(--z-overlay); /* 浮起面板层(§11.2 令牌;原 40 散落值清偿) */
+  z-index: var(--z-overlay); /* 浮起面板层(§11.2 令牌) */
 }
 
 .mesh-members__drawer-title {
   margin: 0;
-  font-size: var(--font-size-lg);
+  color: var(--color-text-strong);
 }
 
 .mesh-members__drawer-dl {
@@ -229,14 +331,7 @@
   gap: var(--space-2);
 }
 
-.mesh-members__placeholder {
-  padding: var(--space-4);
-  border: 1px dashed var(--color-border);
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  background: var(--color-surface);
-}
-
+/* 对话框内联错误文案(AddMemberDialog / RemoveMemberDialog 共用)。 */
 .mesh-members__error {
   color: var(--color-danger);
 }

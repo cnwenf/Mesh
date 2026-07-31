@@ -23,6 +23,16 @@ async function login(page: import('@playwright/test').Page): Promise<void> {
   await page.goto('/');
 }
 
+/**
+ * 行文本定位助手(验收 B1):A-05 双渲染(桌面表格 + 手机卡片同名节点同 DOM 共存)使裸
+ * `getByText` 在 strict-mode 下命中 2 节点而抛错;统一经 `.first()` 取首匹配消歧。
+ * 全 spec 同类裸 `getByText` 均改走本助手(仅 `toHaveCount(0)` 这类「计数=0」断言保留裸
+ * 查询,因其语义为「无任何匹配」,经 `.first()` 会破坏计数语义)。
+ */
+function rst(page: import('@playwright/test').Page, text: string) {
+  return page.getByText(text).first();
+}
+
 test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () => {
   test('名册渲染人+agent、AI 徽章、仅 Agent 同路由投影、单一新建入口', async ({ page }) => {
     await login(page);
@@ -30,15 +40,17 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
 
     // 标题「成员」
     await expect(page.getByRole('heading', { level: 1 })).toContainText(/Members|成员/);
-    // 人类成员(Joiner)与 agent(代码助手)同表,agent 带 AI 徽章
-    await expect(page.getByText('Joiner').first()).toBeVisible();
-    await expect(page.getByText('代码助手')).toBeVisible();
-    await expect(page.getByText('AI').first()).toBeVisible();
+    // 人类成员(Joiner)与 agent(代码助手)同表,agent 带 AI 徽章。
+    // A-05 双渲染(桌面表格 + 手机卡片同名节点同 DOM 共存)→ 文本查询命中 2 节点,
+    // 用 .first() 消歧(strict-mode 验收 R4)。
+    await expect(rst(page, 'Joiner')).toBeVisible();
+    await expect(rst(page, '代码助手')).toBeVisible();
+    await expect(rst(page, 'AI')).toBeVisible();
 
     // 「仅 Agent」是同一路由的筛选投影
     await page.getByTestId('tab-agent').click();
     await expect(page).toHaveURL(/member_type=agent/);
-    await expect(page.getByText('代码助手')).toBeVisible();
+    await expect(rst(page, '代码助手')).toBeVisible();
     await expect(page.getByText('Joiner')).toHaveCount(0);
     // 同一 [+ 新建 Agent ] 入口仍在
     await expect(page.getByTestId('new-agent-button')).toBeVisible();
@@ -64,13 +76,13 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
     // ④ 可见性 → 完成:真实 POST /agents,新 agent 出现在同一名册
     await expect(page.getByTestId('agent-wizard-visibility')).toBeVisible();
     await page.getByTestId('agent-wizard-finish').click();
-    await expect(page.getByText('小测')).toBeVisible();
+    await expect(rst(page, '小测')).toBeVisible();
   });
 
   test('agent 行深链进入详情页(配置 / 历史 Tab 可用)', async ({ page }) => {
     await login(page);
     await page.goto('/members?member_type=agent');
-    await page.getByText('代码助手').first().click();
+    await rst(page, '代码助手').click();
     await expect(page.getByTestId('agent-detail-page')).toBeVisible();
     await expect(page.getByTestId('agent-detail-name')).toContainText('代码助手');
     await expect(page.getByTestId('agent-detail-badge')).toBeVisible();
@@ -97,13 +109,44 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
     await page.getByTestId(`role-select-${joiner}`).selectOption('admin');
     await expect(page.getByTestId(`role-select-${joiner}`)).toHaveValue('admin');
 
-    // 停用:二次确认后状态变为已停用(行内出现「启用」)
-    await page.getByTestId(`disable-${joiner}`).click();
-    await page.getByTestId('remove-confirm').click();
-    await expect(page.getByTestId(`enable-${joiner}`)).toBeVisible();
+    // 行操作已迁入底座 Menu(验收 H1/B2):展开该行「Row actions」后按 menuitem 文案点击。
+    // openRowMenu 幂等化(验收 B2):开菜单前若菜单已开(残留 menuitem)先 Esc 关闭并等其缺席,
+    // 规避「触发钮再点即关」的 toggle 时序 / 行状态刷新后旧菜单实例残留的竞态。
+    const row = page.getByTestId(`member-row-${joiner}`);
+    const trigger = row.getByRole('button', { name: 'Row actions' });
+    const openRowMenu = async () => {
+      // 幂等化(验收 B2):若菜单已开(role=menu 仍在 DOM——上一次 menuitem 点击未关或旧实例
+      // 残留),用 trigger 的 toggle 确定性地关掉它(Esc 依赖焦点在菜单内,菜单外按 Esc 不关,
+      // 不可靠),等其卸载后再点一次确定性地展开,等首条 menuitem 可见。
+      const openMenu = row.locator('[role="menu"]');
+      if (await openMenu.isVisible().catch(() => false)) {
+        await trigger.click();
+        await expect(openMenu).toBeHidden({ timeout: 5_000 });
+      }
+      await trigger.click();
+      await expect(page.getByRole('menuitem').first()).toBeVisible({ timeout: 10_000 });
+    };
 
-    // 移除:确认后软删除,默认名册不再展示该成员
-    await page.getByTestId(`remove-${joiner}`).click();
+    // 停用:二次确认后状态变为已停用(行菜单出现「Enable」)
+    await openRowMenu();
+    await page
+      .getByRole('menuitem', { name: 'Disable' })
+      .click({ timeout: 10_000 });
+    await page.getByTestId('remove-confirm').click();
+    await openRowMenu();
+    await expect(page.getByRole('menuitem', { name: 'Enable' })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // 移除:确认后软删除,默认名册不再展示该成员(Remove 等待加明确超时 + 诊断,验收 B2)
+    await openRowMenu();
+    const removeItem = page.getByRole('menuitem', { name: 'Remove' });
+    await expect(removeItem, {
+      message:
+        'Remove 菜单项未在超时内出现:行菜单可能未展开或行状态刷新竞态;诊断 row 存在性=' +
+        (await row.count()),
+    }).toBeVisible({ timeout: 10_000 });
+    await removeItem.click({ timeout: 10_000 });
     await page.getByTestId('remove-confirm').click();
     await expect(page.getByTestId(`role-select-${joiner}`)).toHaveCount(0);
   });
