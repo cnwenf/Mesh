@@ -232,6 +232,42 @@ class TestDispatcherPass:
         assert evt.payload["trigger"] == "integration"
         assert evt.idempotency_key == scope_idempotency_key(world["ws"], k)
 
+    async def test_head_transiently_locked_waits_then_dispatches_true_head(
+        self, session_factory
+    ):
+        """§3.9 strict order regression: while the FIFO head is transiently
+        row-locked (ack-window write / lease repair / cancel / replica), the
+        head selection must WAIT for it — never skip to seq N+1, which would
+        dispatch out of order and strand the head behind the active-lane
+        unique index until the wrong item's terminal."""
+        world = await _seed_world(session_factory)
+        ids = [await _seed_item(session_factory, world, seq=i) for i in (1, 2)]
+        settings = _settings()
+
+        async def _hold_head_briefly():
+            holder = session_factory()
+            await holder.begin()
+            await holder.execute(
+                select(IntegrationMessageQueue)
+                .where(IntegrationMessageQueue.id == ids[0][0])
+                .with_for_update()
+            )
+            await asyncio.sleep(0.4)
+            await holder.rollback()
+            await holder.close()
+
+        holder_task = asyncio.create_task(_hold_head_briefly())
+        await asyncio.sleep(0.1)  # let the holder grab the head lock first
+        dispatched = await run_dispatcher_pass(session_factory, settings=settings)
+        await holder_task
+
+        # Waited out the transient lock, then dispatched the TRUE head.
+        assert dispatched == 1
+        first = await _item(session_factory, ids[0][0])
+        second = await _item(session_factory, ids[1][0])
+        assert first.state == "dispatching"
+        assert second.state == "pending"
+
     async def test_lane_occupied_no_dispatch(self, session_factory):
         world = await _seed_world(session_factory)
         await _seed_item(session_factory, world, seq=1, state="processing")
