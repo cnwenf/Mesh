@@ -183,6 +183,50 @@ async def _executions(session_factory, ws_id):
         return list(rows)
 
 
+async def _dispatch_forensics(session_factory, ws_id) -> str:
+    """Snapshot pinning WHERE the dispatch chain is stuck — embedded in the
+    wait-failure diagnostic so a CI failure self-locates from the log alone:
+    items pending with NO execution.enqueue outbox row ⇒ the dispatcher
+    sweep never ran (worker tick/pool stall); outbox row present but no
+    execution ⇒ relay claim lag; execution queued but the item still
+    pending ⇒ bind/write-back lag."""
+    from mesh.db.models.outbox import OutboxEvent
+
+    async with session_factory() as session:
+        items = (
+            await session.execute(
+                select(IntegrationMessageQueue)
+                .where(IntegrationMessageQueue.workspace_id == uuid.UUID(ws_id))
+                .order_by(IntegrationMessageQueue.seq)
+            )
+        ).scalars().all()
+        execs = (
+            await session.execute(
+                select(TaskExecution).where(
+                    TaskExecution.workspace_id == uuid.UUID(ws_id)
+                )
+            )
+        ).scalars().all()
+        outbox = (
+            await session.execute(
+                select(OutboxEvent.event_type, OutboxEvent.status).where(
+                    OutboxEvent.workspace_id == uuid.UUID(ws_id),
+                    OutboxEvent.event_type == "execution.enqueue",
+                )
+            )
+        ).all()
+    return " | ".join([
+        "items=["
+        + ", ".join(
+            f"seq{i.seq}:{i.state}:exec={'y' if i.execution_id else 'n'}"
+            for i in items
+        )
+        + "]",
+        "execs=[" + ", ".join(f"{e.status}@{e.queued_at}" for e in execs) + "]",
+        "enqueue_outbox=[" + ", ".join(f"{t}:{s}" for t, s in outbox) + "]",
+    ])
+
+
 async def _emit_finished(session_factory, ws_id, execution_id, status):
     """Write execution.finished exactly like the runtime state machine does
     (same event type, same idempotency key) — the worker consumes it."""
@@ -241,7 +285,7 @@ async def test_serial_fifo_strict_order(api_client, queue_worker, session_factor
         items = await _items(session_factory, world["ws_id"])
         return items if len(items) == 3 and items[0].state == "processing" else None
 
-    items = await poll_until(_m1_processing, timeout=15)
+    items = await poll_until(_m1_processing, timeout=60)
     assert items is not None, "M1 never reached processing via the dispatcher"
     assert [i.state for i in items] == ["processing", "pending", "pending"]
     execs = await _executions(session_factory, world["ws_id"])
@@ -256,7 +300,7 @@ async def test_serial_fifo_strict_order(api_client, queue_worker, session_factor
         items = await _items(session_factory, world["ws_id"])
         return items if items[0].state == "done" and items[1].state == "processing" else None
 
-    items = await poll_until(_m2_processing, timeout=15)
+    items = await poll_until(_m2_processing, timeout=60)
     assert items is not None, "M2 never dispatched after M1 terminal wake"
 
     execs = await _executions(session_factory, world["ws_id"])
@@ -267,7 +311,7 @@ async def test_serial_fifo_strict_order(api_client, queue_worker, session_factor
         items = await _items(session_factory, world["ws_id"])
         return items if items[1].state == "done" and items[2].state == "processing" else None
 
-    items = await poll_until(_m3_processing, timeout=15)
+    items = await poll_until(_m3_processing, timeout=60)
     assert items is not None, "M3 never dispatched"
     # strict execution order by started_at
     started = [i.started_at for i in items]
@@ -293,7 +337,7 @@ async def test_stop_two_phase_holds_lane(api_client, queue_worker, session_facto
         items = await _items(session_factory, world["ws_id"])
         return items if len(items) == 2 and items[0].state == "processing" else None
 
-    items = await poll_until(_m1_processing, timeout=15)
+    items = await poll_until(_m1_processing, timeout=60)
     assert items is not None
 
     # Simulate the daemon having claimed the execution (no daemon in e2e):
@@ -317,7 +361,7 @@ async def test_stop_two_phase_holds_lane(api_client, queue_worker, session_facto
         items = await _items(session_factory, world["ws_id"])
         return items if items[0].state == "cancelling" else None
 
-    items = await poll_until(_cancelling, timeout=10)
+    items = await poll_until(_cancelling, timeout=60)
     assert items is not None, "M1 never entered cancelling"
     # /stop two-target semantics (§3.7): the initiator's pending item cancels
     # immediately, the in-flight item keeps the lane until terminal.
@@ -335,7 +379,7 @@ async def test_stop_two_phase_holds_lane(api_client, queue_worker, session_facto
         items = await _items(session_factory, world["ws_id"])
         return items if items[0].state == "cancelled" else None
 
-    items = await poll_until(_terminal, timeout=15)
+    items = await poll_until(_terminal, timeout=60)
     assert items is not None, "cancelling item never reached cancelled"
     # terminal-stage feedback written by the finished handler (im.send outbox)
     async with session_factory() as session:
@@ -375,7 +419,7 @@ async def test_btw_appends_context_row(api_client, queue_worker, session_factory
         items = await _items(session_factory, world["ws_id"])
         return items if items and items[0].state in ("dispatching", "processing") else None
 
-    items = await poll_until(_processing, timeout=15)
+    items = await poll_until(_processing, timeout=60)
     assert items is not None
 
     resp = await _post_inbound(
@@ -402,7 +446,7 @@ async def test_btw_appends_context_row(api_client, queue_worker, session_factory
             )
             return list(rows) if rows else None
 
-    rows = await poll_until(_append_row, timeout=10)
+    rows = await poll_until(_append_row, timeout=60)
     assert rows is not None, "/btw never wrote an append row"
     assert rows[0].source == "im_btw"
     assert rows[0].seq == 1
@@ -433,14 +477,23 @@ async def test_queue_endpoints_list_summary_cancel(api_client, queue_worker, ses
     # The wait result is ASSERTED, not discarded: a silent timeout would
     # otherwise cascade into the endpoint assertions below with both items
     # still pending — a misleading "wrong excerpt" failure instead of the
-    # true root point (the serial dispatch never happened). The window
-    # covers the 1s-tick + relay-claim chain under a saturated CI runner
-    # (the 4000+-test serial suite); healthy dispatch lands in ~2-4s.
-    items = await poll_until(_m1_processing, timeout=30)
+    # true root point (the serial dispatch never happened).
+    #
+    # Window rationale (60s): a healthy dispatch lands in ~2-4s (0.2s tick
+    # + dispatcher sweep + 0.2s relay claim + bind, measured); the cap is
+    # ~15x the healthy time, so reaching it means a TRANSIENT infrastructure
+    # stall (observed: worker QueuePool checkout blocked 30s under
+    # table-lock contention on a saturated runner — the per-test TRUNCATE
+    # vs. worker transactions interleave), never a healthy slow path. The
+    # stall self-resolves (pool timeout → retry → chain completes), so a
+    # poll-through-stall wait is correct; the forensics snapshot makes a
+    # cap hit self-locating (which chain stage is stuck).
+    items = await poll_until(_m1_processing, timeout=60)
     assert items is not None, (
         "serial dispatcher never moved the first item to processing within "
-        "30s — the endpoint assertions below require the {processing, "
-        "pending} pair this wait establishes"
+        "60s — the endpoint assertions below require the {processing, "
+        "pending} pair this wait establishes; forensics: "
+        + await _dispatch_forensics(session_factory, world["ws_id"])
     )
     ws = world["ws_id"]
     integ = world["integration_id"]
@@ -508,7 +561,16 @@ async def test_delete_protection_force_orphans(api_client, queue_worker, session
         items = await _items(session_factory, world["ws_id"])
         return items if len(items) == 2 and items[0].state == "processing" else None
 
-    await poll_until(_m1_processing, timeout=15)
+    # Asserted, not discarded (same rationale as the endpoints test above:
+    # the delete-protection flow below requires the {processing, pending}
+    # pair; a silent timeout would fail at the 409/force assertions with a
+    # misleading shape).
+    items = await poll_until(_m1_processing, timeout=60)
+    assert items is not None, (
+        "serial dispatcher never moved the first item to processing within "
+        "60s; forensics: "
+        + await _dispatch_forensics(session_factory, world["ws_id"])
+    )
     headers = _auth(world["token"])
     ws = world["ws_id"]
 
@@ -531,7 +593,7 @@ async def test_delete_protection_force_orphans(api_client, queue_worker, session
         items = await _items(session_factory, world["ws_id"])
         return items if items and all(i.binding_id is None for i in items) else None
 
-    items = await poll_until(_orphans, timeout=15)
+    items = await poll_until(_orphans, timeout=60)
     assert items is not None, "items never became orphans after forced delete"
     assert all(i.state in ("done", "failed", "cancelled") for i in items)
     assert all(i.binding_display for i in items)  # self-describing snapshot

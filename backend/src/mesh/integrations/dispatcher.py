@@ -143,6 +143,16 @@ async def _dispatch_conversation_head(
     """Dispatch the FIFO head of one conversation (own transaction)."""
     async with session_factory() as session, session.begin():
         await set_tenant_context(session, workspace_id)
+        # WAIT for the FIFO head — never SKIP LOCKED: skipping a
+        # transiently-locked head dispatches a LATER item out of order
+        # (observed: seq2 dispatched while seq1, briefly row-locked by a
+        # concurrent short transaction, stayed pending forever — a §3.9
+        # seq-order violation). Waiting keeps dispatch strictly at the
+        # head; the holder is always a short transaction (the row lock is
+        # released in milliseconds). Multi-replica contention still
+        # resolves safely: a genuine double-dispatch dies on
+        # uq_imq_conversation_active (IntegrityError → backoff, below in
+        # run_dispatcher_pass).
         item = (
             (
                 await session.execute(
@@ -153,14 +163,14 @@ async def _dispatch_conversation_head(
                     )
                     .order_by(IntegrationMessageQueue.seq.asc())
                     .limit(1)
-                    .with_for_update(skip_locked=True)
+                    .with_for_update()
                 )
             )
             .scalars()
             .first()
         )
         if item is None:
-            return False  # head taken by another replica
+            return False  # no pending item left (head taken by another replica)
 
         # Snapshot target validation (§2.10: no silent repoint at a retargeted
         # binding; a vanished/disabled snapshot target fails the item).
