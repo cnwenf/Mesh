@@ -318,9 +318,14 @@ test.describe('MES-111 批次③ 四组合真实走查', () => {
       .not.toBeNull();
     if (isPhone) {
       // 单栏下预览窗标已读无可视差异(列表隐藏);返回列表截「已读态」(未读点消失),
-      // 保证与 05 预览截图互异(存证 md5 唯一性 #1)。
+      // 保证与 05 预览截图互异(存证 md5 唯一性 #1)。返回后须等列表行真实渲染,
+      // 否则路由切换瞬间预览仍在屏 → 与 05 逐字节重复。
       await page.getByTestId('inbox-preview-back').click();
       await page.waitForURL(/\/inbox$/, { timeout: 15_000 });
+      await page.locator('[data-testid^="inbox-row-"]').first().waitFor({
+        state: 'visible',
+        timeout: 15_000,
+      });
     }
     await page.screenshot({ path: `${shot}-06-inbox-read.png` });
 
@@ -413,13 +418,26 @@ test.describe('MES-111 批次③ 四组合真实走查', () => {
     });
     await page.screenshot({ path: `${shot}-11-chat-stopped.png` });
 
-    // 重生成:对最近一条 agent 消息点重生成 → 新流式回复。不再静默跳过(验收 #11):
-    // 等待重生成入口出现并滚入视口(手机会话视图下可能需滚动),缺则硬失败。
-    const regenerate = page.locator('[data-testid^="chat-regenerate-"]').last();
-    await regenerate.waitFor({ state: 'visible', timeout: 30_000 });
-    await regenerate.scrollIntoViewIfNeeded();
+    // 重生成:对最近一条 agent 消息点重生成 → 新流式回复。不再静默跳过(验收 #11)。
+    // R5:停止后终态 reload 会换 DOM,使此前解析的 regenerate 节点 detach;
+    // scrollIntoViewIfNeeded 不像 click 那样对 detach 自动重试,故用「每次重解析
+    // locator + 重试」的稳定化循环(click 自带滚入视口),消除「Element is not
+    // attached to the DOM」竞态。
     const beforeCount = await page.locator('[data-testid^="chat-body-"]').count();
-    await regenerate.click();
+    const regenDeadline = Date.now() + 30_000;
+    let regenClicked = false;
+    while (Date.now() < regenDeadline) {
+      try {
+        const regenerate = page.locator('[data-testid^="chat-regenerate-"]').last();
+        await regenerate.waitFor({ state: 'visible', timeout: 3_000 });
+        await regenerate.click({ timeout: 3_000 });
+        regenClicked = true;
+        break;
+      } catch {
+        // 节点 detach / 暂未可见 → 重新解析 locator 再试。
+      }
+    }
+    if (!regenClicked) throw new Error('regenerate control never became clickable');
     await expect
       .poll(async () => page.locator('[data-testid^="chat-body-"]').count(), { timeout: 60_000 })
       .toBeGreaterThanOrEqual(beforeCount);

@@ -457,7 +457,6 @@ async def test_send_links_attachments_real_same_transaction(
     from mesh.attachment.service import AttachmentService
     from mesh.config import load_settings
     from mesh.db.models.attachment import AttachmentLink
-
     from tests.unit.attachment_support import make_png, sha256_hex
 
     attachments = AttachmentService(
@@ -512,7 +511,9 @@ async def test_send_links_attachments_real_same_transaction(
     assert result["message_id"]  # agent 流式回复 id 存在
 
 
-async def test_list_messages_renders_attachment_from_blob(service, world, session_factory, object_storage, attachment_settings_kwargs):
+async def test_list_messages_renders_attachment_from_blob(
+    service, world, session_factory, object_storage, attachment_settings_kwargs
+):
     """读路径回归(验收 CRITICAL #3):带附件会话 `list_messages` 不得 500。
 
     mime/scan 取自共享 blob、size 取 attachments.file_size;此前 `_message_attachments`

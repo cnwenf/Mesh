@@ -222,12 +222,25 @@ export function MembersPage(): React.JSX.Element {
     }
   };
 
+  // 乐观更新某成员状态:让行菜单在 reload 骨架/网络往返窗口内即反映新态,
+  // 杜绝「停用/启用后重开菜单仍按旧态计算条目」的竞态(验收 R4:Remove 120s 超时)。
+  const patchMemberStatus = useCallback(
+    (memberId: string, status: MemberSummary['status']): void => {
+      setMembers((prev) =>
+        prev.map((item) => (item.id === memberId ? { ...item, status } : item)),
+      );
+    },
+    [],
+  );
+
   const handleEnable = async (member: MemberSummary): Promise<void> => {
     if (workspace === null) return;
+    patchMemberStatus(member.id, 'active');
     try {
       await updateMember(client, workspace.workspace_id, member.id, { status: 'active' });
       setReloadKey((key) => key + 1);
     } catch (err) {
+      patchMemberStatus(member.id, member.status);
       toast.addToast(err instanceof Error ? err.message : t('common.unknownError'), {
         tone: 'danger',
         closeLabel: t('common.close'),
@@ -646,7 +659,14 @@ export function MembersPage(): React.JSX.Element {
               workspaceId={workspace.workspace_id}
               member={confirm.member}
               reassignTargets={reassignTargets}
-              onChanged={() => setReloadKey((key) => key + 1)}
+              onChanged={() => {
+                // 乐观更新:disable→disabled、remove→removed,使行菜单立即按新态重算。
+                patchMemberStatus(
+                  confirm.member.id,
+                  confirm.mode === 'remove' ? 'removed' : 'disabled',
+                );
+                setReloadKey((key) => key + 1);
+              }}
             />
           ) : null}
           <Dialog

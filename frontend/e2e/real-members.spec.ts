@@ -30,15 +30,17 @@ test.describe('成员名册页真实操作(member.md §4 / README §6.12)', () =
 
     // 标题「成员」
     await expect(page.getByRole('heading', { level: 1 })).toContainText(/Members|成员/);
-    // 人类成员(Joiner)与 agent(代码助手)同表,agent 带 AI 徽章
+    // 人类成员(Joiner)与 agent(代码助手)同表,agent 带 AI 徽章。
+    // A-05 双渲染(桌面表格 + 手机卡片同名节点同 DOM 共存)→ 文本查询命中 2 节点,
+    // 用 .first() 消歧(strict-mode 验收 R4)。
     await expect(page.getByText('Joiner').first()).toBeVisible();
-    await expect(page.getByText('代码助手')).toBeVisible();
+    await expect(page.getByText('代码助手').first()).toBeVisible();
     await expect(page.getByText('AI').first()).toBeVisible();
 
     // 「仅 Agent」是同一路由的筛选投影
     await page.getByTestId('tab-agent').click();
     await expect(page).toHaveURL(/member_type=agent/);
-    await expect(page.getByText('代码助手')).toBeVisible();
+    await expect(page.getByText('代码助手').first()).toBeVisible();
     await expect(page.getByText('Joiner')).toHaveCount(0);
     // 同一 [+ 新建 Agent ] 入口仍在
     await expect(page.getByTestId('new-agent-button')).toBeVisible();

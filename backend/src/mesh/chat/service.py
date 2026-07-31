@@ -15,7 +15,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, case, func, or_, select, text, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy import delete as sa_delete
 from sqlalchemy.exc import IntegrityError
 
