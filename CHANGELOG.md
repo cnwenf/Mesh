@@ -5,6 +5,10 @@ Mesh 项目的所有重要变更都记录于此文件。
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-31
+
+钉钉双接收摄取(MES-87,MES-82 流水线切片 1/4)——钉钉企业内部应用机器人 HTTP 回调 + Stream 长连接双接收模式落地:两模式仅替换鉴权适配层、共享唯一摄取核心 `ingest_verified_event()`,命令平面 / 签名后 fail-closed 护栏 / 会话队列接缝统一采纳 MES-88/89 发布实现(rebase 合并后无并行实现)。历经三轮验收整改(1H+9M → R1-R3)与两轮接缝定向复验,独立实机全绿(单测 + 13 项真实 e2e:真实 PG16+Redis + 真实 worker 进程 + TLS 假网关真实证书校验)、PR CI 全量门禁通过(4088 例,覆盖率 91.5%)、安全审核通过(全量 + 增量 scoped)、Spec 收口(`_mesh_reject_reason` 被拒命名空间词汇落盘、§2.10 管线图按实现定稿)。合入附带:队列派发器 FIFO 头选择去 SKIP LOCKED(§3.9 按序派发正确性修复,等待绝不跳过)、backend-ci 主 test job 超时 60→90min;`data_jobs` ×2 饱和 CI 时序竞态标 `@pytest.mark.flaky(reruns=2)`(理由显式钉入注释,确定性收敛跟踪 MES-149)。
+
 ### Added
 
 - **集成·钉钉双接收摄取(MES-87,integrations.md §3.2/§3.7/§5.6)**:钉钉企业内部应用机器人**双接收模式**落地,两种模式仅替换鉴权适配层、其后共享唯一摄取核心 `ingest_verified_event()`(§2.10:651-664 摄取分层边界);命令平面 / 签名后护栏 / 会话队列复用 MES-88 发布实现(`commands.maybe_handle_command` / `inbound_guards` fail-closed / `message_queue.enqueue_message` 含锁内 pending 深度权威复检),本切片不另起并行实现:
