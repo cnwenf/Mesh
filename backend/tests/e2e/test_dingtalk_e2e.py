@@ -378,9 +378,29 @@ async def test_http_callback_valid_signature_ingests_real_e2e(api_client, sessio
     assert event.signature_status == "valid"
     assert event.process_status == "dispatched"
     assert event.payload["_mesh_channel"] == "http"
-    async with session_factory() as session:
-        queue = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
-    assert queue.state == "pending"  # serial default — awaits dispatcher (MES-88)
+    # Deterministic state wait, NOT a transient snapshot. This test does
+    # not request the worker fixture (the module's worker spins up at the
+    # first stream test, AFTER this one), so the item normally stays
+    # pending — but when a worker IS live (test reordering / selection),
+    # the serial item walks pending → dispatching → processing. Accept
+    # every in-chain non-terminal state so the assertion is deterministic
+    # in both contexts (converges immediately — the ingest transaction
+    # has already committed the item by the time we get here).
+    async def _http_in_queue_chain():
+        async with session_factory() as session:
+            rows = (
+                await session.execute(select(IntegrationMessageQueue))
+            ).scalars().all()
+        if len(rows) != 1 or rows[0].state not in (
+            "pending",
+            "dispatching",
+            "processing",
+        ):
+            return None
+        return rows[0]
+
+    queue = await poll_until(_http_in_queue_chain, timeout=15.0)
+    assert queue is not None, "queue item never reached the queue chain"
     assert queue.seq == 1
     assert queue.conversation_key == f"dingtalk:{CORP_ID}:{CONVERSATION_ID}"
 
@@ -559,9 +579,17 @@ async def test_stream_message_frame_ingests_and_acks_real_e2e(
     assert acks, "no 'received' ACK returned to the gateway"
     assert acks[0]["code"] == 200
 
-    async with session_factory() as session:
-        queue = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
-    assert queue.state == "pending"
+    async def _in_dispatch_chain():
+        async with session_factory() as session:
+            rows = (
+                await session.execute(select(IntegrationMessageQueue))
+            ).scalars().all()
+        if len(rows) != 1 or rows[0].state not in ("dispatching", "processing"):
+            return None
+        return rows[0]
+
+    queue = await poll_until(_in_dispatch_chain, timeout=15.0)
+    assert queue is not None, "queue item never reached dispatching/processing"
 
 
 async def test_stream_redelivery_is_msgid_deduped_real_e2e(
