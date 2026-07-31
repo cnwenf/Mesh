@@ -69,7 +69,8 @@ export default async function globalSetup() {
         ...process.env,
         MESH_DATABASE_URL: DB_URL,
         MESH_APP_DATABASE_URL: APP_DB_URL,
-        MESH_REDIS_URL: 'redis://127.0.0.1:6379/2',
+        // 验收 B2:redis 地址可经 MESH_E2E_REDIS_URL 覆写,免硬编码 6379(并行/隔离环境端口各异)。
+        MESH_REDIS_URL: process.env.MESH_E2E_REDIS_URL ?? 'redis://127.0.0.1:6379/2',
         MESH_AUTH_MODE: 'dev',
       },
       stdio: 'ignore',
