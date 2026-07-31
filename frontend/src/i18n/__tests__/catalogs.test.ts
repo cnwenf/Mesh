@@ -319,7 +319,7 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     net: 2,
     tz: 'UTC',
     // MES-111 批次② 看板拖拽/键盘移动/触控/评论草稿占位符
-    identifier: 'WEB-12',
+    // (identifier 复用上方 WEB-124 占位,合并去重)
     position: 2,
     direction: 'moved up',
     time: '10:30',
