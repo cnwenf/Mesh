@@ -14,6 +14,12 @@ function isoAt(offsetMs) {
 
 const WORKSPACE_ID = 'ws-1';
 
+/** issue 主键 UUID 形态别名(issue-1 同一 issue 的规范主键寻址,§5.1)。
+ * by-identifier 解析返回本形态,使 `/w/{ws}/issues/{uuid}` 直达详情渲染——
+ * 若返回 `issue-1` 这类 identifier 形态 id,规范路由会再次触发 by-identifier
+ * 重定向构成自循环(MES-79 路由态:IssueByIdRedirect 对 identifier 形态 id 跳解析)。 */
+const ISSUE_UUID = '0d3a1f7c-9b2e-4c5a-8f1d-6e7b8c9a0d1e';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
@@ -479,6 +485,30 @@ export function handlePageRoute(req, res, url, ctx) {
   }
   const path = url.pathname;
 
+  // ---- issue by-identifier 契约(search-command-palette.md §3.4)---------
+  // 规范深链 `/issues/by-identifier/{KEY-N}` 的解析端点:identifier 归一大写匹配,
+  // 命中返回主键 UUID 形态(直达详情,杜绝 identifier 形态 id 的二次重定向自循环)。
+  const byIdentifierMatch = path.match(
+    new RegExp(`^/api/v1/workspaces/${WORKSPACE_ID}/issues/by-identifier/([^/]+)$`),
+  );
+  if (byIdentifierMatch !== null) {
+    const identifier = decodeURIComponent(byIdentifierMatch[1]).toUpperCase();
+    if (identifier === ISSUE_DETAIL.identifier) {
+      sendJson(res, 200, single({ ...ISSUE_DETAIL, id: ISSUE_UUID }));
+    } else {
+      sendJson(res, 404, { error: { code: 'not_found', message: 'issue not found' } });
+    }
+    return true;
+  }
+
+  // UUID 规范主键形态与 issue-1 端点集等价(同一 issue 的两种寻址,§5.1)。
+  const effectivePath = path
+    .replaceAll(`/api/v1/issues/${ISSUE_UUID}`, '/api/v1/issues/issue-1')
+    .replace(
+      `/squads/assignments/by-issue/${ISSUE_UUID}`,
+      '/squads/assignments/by-issue/issue-1',
+    );
+
   // ---- 看板 -------------------------------------------------------------
   if (path === `/api/v1/workspaces/${WORKSPACE_ID}/views`) {
     sendJson(res, 200, list([VIEW]));
@@ -489,24 +519,27 @@ export function handlePageRoute(req, res, url, ctx) {
     return true;
   }
 
-  // ---- issue 详情(issue-1)---------------------------------------------
-  if (path === '/api/v1/issues/issue-1') {
-    sendJson(res, 200, single(ISSUE_DETAIL));
+  // ---- issue 详情(issue-1 / UUID 规范形态等价)--------------------------
+  if (effectivePath === '/api/v1/issues/issue-1') {
+    // UUID 形态寻址回包主键与请求一致(§5.1:同一 issue,寻址形态保真)。
+    const detail =
+      path === `/api/v1/issues/${ISSUE_UUID}` ? { ...ISSUE_DETAIL, id: ISSUE_UUID } : ISSUE_DETAIL;
+    sendJson(res, 200, single(detail));
     return true;
   }
   if (path === `/api/v1/workspaces/${WORKSPACE_ID}/statuses`) {
     sendJson(res, 200, list(ISSUE_STATUSES));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/children') {
+  if (effectivePath === '/api/v1/issues/issue-1/children') {
     sendJson(res, 200, list(ISSUE_CHILDREN));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/dependencies') {
+  if (effectivePath === '/api/v1/issues/issue-1/dependencies') {
     sendJson(res, 200, list(ISSUE_DEPENDENCIES));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/activity') {
+  if (effectivePath === '/api/v1/issues/issue-1/activity') {
     sendJson(res, 200, list(ISSUE_ACTIVITY));
     return true;
   }
@@ -518,15 +551,15 @@ export function handlePageRoute(req, res, url, ctx) {
     sendJson(res, 200, list(CYCLES));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/attachments') {
+  if (effectivePath === '/api/v1/issues/issue-1/attachments') {
     sendJson(res, 200, list([]));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/comments') {
+  if (effectivePath === '/api/v1/issues/issue-1/comments') {
     sendJson(res, 200, list(ISSUE_COMMENTS));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/labels') {
+  if (effectivePath === '/api/v1/issues/issue-1/labels') {
     sendJson(res, 200, list(ISSUE_LABELS));
     return true;
   }
@@ -534,11 +567,11 @@ export function handlePageRoute(req, res, url, ctx) {
     sendJson(res, 200, list(WORKSPACE_LABELS));
     return true;
   }
-  if (path === '/api/v1/issues/issue-1/custom-field-values') {
+  if (effectivePath === '/api/v1/issues/issue-1/custom-field-values') {
     sendJson(res, 200, list([]));
     return true;
   }
-  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/squads/assignments/by-issue/issue-1`) {
+  if (effectivePath === `/api/v1/workspaces/${WORKSPACE_ID}/squads/assignments/by-issue/issue-1`) {
     sendJson(res, 200, single(null));
     return true;
   }

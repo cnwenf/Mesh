@@ -70,8 +70,11 @@ export const PAGES: Record<string, VisualPageSpec> = {
   },
   'issue 详情': {
     // 评论/活动时间戳为相对时间(冻结时钟下仍 mask 兜底);标签色来自 seed。
+    // 深链走规范 by-identifier 形态(§3.4 一跳可解析):fixture 解析返回 UUID 主键
+    // 形态后直达详情渲染;旧 `/issues/issue-1` 扁平形态在 MES-79 路由态下构成
+    // identifier 重定向自循环,不再使用。
     snapshotKey: 'issue-detail',
-    path: '/issues/issue-1',
+    path: '/issues/by-identifier/MESH-1',
     ready: async (page) => {
       await page.getByTestId('issue-detail').waitFor({ state: 'visible' });
       await page.getByTestId('comments-panel').waitFor({ state: 'visible' });
