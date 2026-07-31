@@ -70,16 +70,65 @@ function executionRow({
 
 function seedIssues() {
   const categories = ['todo', 'in_progress', 'in_review', 'done'];
-  return Array.from({ length: 8 }, (_, i) => ({
-    id: `issue-${i + 1}`,
-    workspace_id: 'ws-1',
-    identifier: `MESH-${i + 1}`,
-    title: `Acme 工作项 ${i + 1}`,
-    state_category: categories[i % categories.length],
-    assignee_id: i % 2 === 0 ? 'member-human-1' : 'member-agent-1',
-    updated_at: isoAt(i * 60_000),
-    project_id: i % 3 === 0 ? null : 'project-1',
-  }));
+  const categoryNames = {
+    todo: '待办',
+    in_progress: '进行中',
+    in_review: '评审中',
+    done: '已完成',
+  };
+  const priorities = ['urgent', 'high', 'medium', 'low'];
+  // 与真实后端 IssueSummary 契约逐字段对齐(issues/types.ts):列表渲染(DataView
+  // 行)直接读 assignee/status/priority/due_date,缺键即渲染崩溃——mock 不得以
+  // 精简形状替代完整契约。
+  return Array.from({ length: 8 }, (_, i) => {
+    const category = categories[i % categories.length];
+    const isHuman = i % 2 === 0;
+    const hasProject = i % 3 !== 0;
+    return {
+      id: `issue-${i + 1}`,
+      workspace_id: 'ws-1',
+      project_id: hasProject ? 'project-1' : null,
+      project: hasProject ? { id: 'project-1', name: '平台', key: 'PLAT' } : null,
+      identifier_namespace_key: 'MESH',
+      number: i + 1,
+      identifier: `MESH-${i + 1}`,
+      title: `Acme 工作项 ${i + 1}`,
+      description: null,
+      status: {
+        id: `st-${category}`,
+        project_id: null,
+        name: categoryNames[category],
+        category,
+        color: null,
+        position: i % 4,
+        is_default: category === 'todo',
+        allowed_transitions: [],
+        created_at: isoAt(0),
+        updated_at: isoAt(0),
+      },
+      status_id: `st-${category}`,
+      state_category: category,
+      priority: priorities[i % priorities.length],
+      assignee: isHuman
+        ? { id: 'member-human-1', name: 'Jane Doe', member_type: 'human' }
+        : { id: 'member-agent-1', name: 'Code Assistant', member_type: 'agent' },
+      assignee_id: isHuman ? 'member-human-1' : 'member-agent-1',
+      reporter: { id: 'member-human-1', name: 'Jane Doe', member_type: 'human' },
+      reporter_id: 'member-human-1',
+      estimate: null,
+      estimate_unit: null,
+      due_date: i % 4 === 1 ? '2026-08-01' : null,
+      start_date: null,
+      milestone_id: null,
+      cycle_id: null,
+      parent_id: null,
+      position: i,
+      completed_at: category === 'done' ? isoAt(i * 60_000) : null,
+      version: 1,
+      created_at: isoAt(0),
+      updated_at: isoAt(i * 60_000),
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
