@@ -66,6 +66,14 @@ class Supervisor:
                     pass
                 backoff = min(backoff * 2, self._max_backoff)
 
+    def add_task(self, spec: TaskSpec) -> None:
+        """Register an additional loop BEFORE :meth:`run` (conditional tasks,
+        e.g. the DingTalk Stream worker when enabled in settings)."""
+        if self._running:
+            raise RuntimeError("cannot add tasks after the supervisor started")
+        self._specs.append(spec)
+        self.restart_counts.setdefault(spec.name, 0)
+
     async def run(self) -> None:
         """Run all loops until :meth:`stop` is called (or external cancel)."""
         self._running = [asyncio.create_task(self._supervise(spec), name=spec.name) for spec in self._specs]

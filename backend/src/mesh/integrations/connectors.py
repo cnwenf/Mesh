@@ -64,6 +64,35 @@ class NormalizedEvent:
     extra: dict[str, Any] = field(default_factory=dict)  # vcs action/state etc.
 
 
+@dataclass(frozen=True)
+class VerifiedEnvelope:
+    """The ingestion layering boundary (integrations.md §2.10:651-664).
+
+    Both receive modes — the HTTP callback adapter (per-request platform
+    signature) and the Stream channel adapter (connection-level app_key /
+    app_secret authentication, frame authenticity established once at
+    ``connections/open``) — normalize into THIS single structure; everything
+    downstream (dedup / command plane / matching / guardrails / queueing /
+    ack / audit) is the one shared ``ingest_verified_event()`` core.
+    """
+
+    provider: str  # normalized provider ('dingtalk' / 'feishu' / 'slack' / …)
+    provider_tenant_key: str  # corp_id / tenant_key / team_id
+    external_event_id: str  # msgId / event_id — the dedup key
+    event_type: str  # normalized event type for the ledger
+    external_ref: str  # conversationId / chat_id / channel_id
+    conversation_type: str | None  # IM conversation kind ('1' DM / '2' group); None for VCS
+    sender_key: str  # normalized sender identity segment (staffId or x=<b64url>)
+    text: str  # trimmed/truncated message text — UNTRUSTED data (§6.15)
+    truncated: bool  # True when the text hit MESH_IM_INBOUND_TEXT_MAX_CHARS
+    msgtype: str  # platform message type ('text' / 'richText' / … ; '' for VCS)
+    raw_payload: dict[str, Any]  # full original payload for the audit ledger
+    channel: str  # receive channel: 'http' | 'stream'
+    is_direct_message: bool = False
+    bot_mentioned: bool = False
+    extra: dict[str, Any] = field(default_factory=dict)
+
+
 def _constant_time_equals(expected: str, presented: str) -> bool:
     return hmac.compare_digest(expected.lower(), (presented or "").lower())
 
@@ -347,6 +376,70 @@ def gitlab_normalize(payload: dict[str, Any], headers: dict[str, str]) -> Normal
 
 
 # ---------------------------------------------------------------------------
+# DingTalk — sign = Base64(HMAC_SHA256(app_secret, timestamp + "\n" + secret))
+# ---------------------------------------------------------------------------
+
+
+def dingtalk_verify(
+    *,
+    app_secret: str,
+    raw_body: bytes,  # noqa: ARG001 — the signed string covers ONLY timestamp+"\n"+secret
+    headers: dict[str, str],
+    now: datetime,
+    tolerance: timedelta,
+) -> str:
+    """DingTalk HTTP callback signature (§3.2 / §5.6 M1).
+
+    The official ±3600s replay window is the FLOOR — ``max(tolerance,
+    official)`` guarantees a narrower global setting can never reject
+    legitimate platform callbacks. Constant-time compare; body untouched
+    (TLS guarantees body integrity — the signed string never covers it).
+    """
+    from mesh.integrations.dingtalk import (
+        DINGTALK_SIGNATURE_TOLERANCE,
+        verify_callback_signature,
+    )
+
+    effective = max(tolerance, DINGTALK_SIGNATURE_TOLERANCE)
+    return verify_callback_signature(
+        app_secret=app_secret, headers=headers, now=now, tolerance=effective
+    )
+
+
+def dingtalk_tenant_key_from_config(config: dict[str, Any]) -> str:
+    """DingTalk provider tenant = enterprise corpId (``chatbotCorpId``)."""
+    return str(config.get("corp_id") or "")
+
+
+def dingtalk_normalize(payload: dict[str, Any], headers: dict[str, str]) -> NormalizedEvent:
+    """Normalize the bot-message payload onto the generic event shape.
+
+    The ingestion core consumes the richer ``VerifiedEnvelope`` built by
+    ``dingtalk.normalize_message_payload`` (msgtype matrix / truncation /
+    identity encoding); this mapping exists for adapter-registry parity
+    (locate-and-verify returns a NormalizedEvent for every platform).
+    """
+    from mesh.integrations.dingtalk import encode_external_user_key
+
+    text_field = payload.get("text")
+    text = str((text_field or {}).get("content") or "").strip() if isinstance(text_field, dict) else ""
+    return NormalizedEvent(
+        external_event_id=str(payload.get("msgId") or ""),
+        event_type="im.bot.message",
+        external_ref=str(payload.get("conversationId") or ""),
+        actor_key=encode_external_user_key(payload.get("senderStaffId"), payload.get("senderId")),
+        tenant_key=str(payload.get("chatbotCorpId") or ""),
+        text=text,
+        extra={
+            "msgtype": payload.get("msgtype"),
+            "conversation_type": payload.get("conversationType"),
+            "is_in_at_list": payload.get("isInAtList"),
+            "robot_code": payload.get("robotCode"),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Adapter registry
 # ---------------------------------------------------------------------------
 
@@ -374,6 +467,14 @@ ADAPTERS: dict[str, dict[str, Any]] = {
         "normalize": gitlab_normalize,
         "tenant_key_from_config": gitlab_tenant_key_from_config,
         "secret_config_key": "webhook_token_ref",
+    },
+    "dingtalk": {
+        "verify": dingtalk_verify,
+        "normalize": dingtalk_normalize,
+        "tenant_key_from_config": dingtalk_tenant_key_from_config,
+        # Enterprise-internal-app app_secret (signature verification +
+        # accessToken exchange) — ciphertext-only, README §6.16.
+        "secret_config_key": "app_secret_ref",
     },
 }
 
@@ -618,11 +719,15 @@ __all__ = [
     "GITLAB_EVENT_HEADER",
     "KIND_TO_PROVIDER",
     "NormalizedEvent",
+    "VerifiedEnvelope",
     "PROVIDER_TO_KIND",
     "SIG_INVALID",
     "SIG_MISSING",
     "SIG_VALID",
     "adapter_for",
+    "dingtalk_normalize",
+    "dingtalk_tenant_key_from_config",
+    "dingtalk_verify",
     "feishu_normalize",
     "feishu_tenant_key_from_config",
     "feishu_verify",

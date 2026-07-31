@@ -1,22 +1,19 @@
-"""Inbound ingestion pipeline (integrations.md §3.2).
+"""Inbound HTTP callback pipeline (integrations.md §3.2).
 
-Reuses the autopilot ``webhook_events`` paradigm (autopilot.md §2.5/§3.2)
-with platform-specific signature algorithms swapped in via ``connectors.py``:
+The platform-auth adaptation layer for the HTTP receive mode:
 
     locate integration (signature-auth routing — NOT Bearer)
       → verify platform signature (constant-time + replay window)
         invalid/missing → audit ``rejected`` (``rejected:<body-hash>``
         namespace, anti pre-occupation) + 401, NEVER dispatched
-      → integration disabled → audit ``rejected`` + 401 ``integration_disabled``
-      → dedup INSERT ``UNIQUE(integration_id, external_event_id)``
-        (conflict → idempotent 200 ``deduped``, never twice)
-      → audit + realtime ``integration.event_ingested``
-      → match bindings (external_ref + match_config)
-        none / no agent / multiple → audit only (§6.9)
-        exactly one with agent → same-transaction ``execution.enqueue``
-        outbox (trigger='integration', key
-        sha256(agent_id|binding_id|external_event_id), §6.5/§6.9),
-        task_spec carries the payload under ``untrusted_context`` (§6.15)
+      → IM providers (dingtalk/feishu/slack): normalize into a
+        ``VerifiedEnvelope`` and delegate to the SHARED ingestion core
+        ``ingest.ingest_verified_event()`` — the same core the Stream
+        channel adapter uses (the two receive modes differ ONLY in this
+        auth layer, §2.10:651-664)
+      → VCS providers keep the direct §6.9 path (audit → match → same-tx
+        ``execution.enqueue`` outbox; VCS events are not conversation
+        messages and never enter the IM queue)
 
 Responses are the bare JSON contract with external platforms (NOT the
 §6.14 success envelope — same exemption as autopilot inbound webhooks).
@@ -29,64 +26,71 @@ import hmac
 import json
 import logging
 import uuid
-from dataclasses import replace
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import flag_modified
 
 from mesh.agent.snapshot import build_config_snapshot
+from mesh.db.constraints import violates as _violates_constraint
 from mesh.db.models.agent import Agent
 from mesh.db.models.integration import Integration, IntegrationBinding, IntegrationEvent
 from mesh.db.tenant import set_tenant_context
-from mesh.errors import ValidationError as MeshValidationError
+from mesh.errors import ValidationError
 from mesh.integrations.connectors import (
     KIND_TO_PROVIDER,
     SIG_INVALID,
     SIG_MISSING,
     NormalizedEvent,
+    VerifiedEnvelope,
     adapter_for,
 )
-from mesh.integrations.inbound_guards import (
-    InboundGuardRejected,
-    check_inbound_guards,
-    rate_limit_hint_allowed,
+from mesh.integrations.dingtalk import DEFAULT_INBOUND_TEXT_MAX_CHARS
+from mesh.integrations.ingest import (
+    IM_PROVIDERS,
+    REJECTED_KEY_PREFIX,
+    REJECTED_PAYLOAD_HEAD_BYTES,
+    REJECTED_PAYLOAD_MAX_BYTES,
+    enqueue_idempotency_key,
+    ingest_verified_event,
+    match_bindings,
+    store_event,
+)
+from mesh.integrations.ingest import (
+    audit_payload as _audit_payload,
 )
 from mesh.integrations.matching import binding_matches, compute_im_signals
-from mesh.integrations.message_queue import enqueue_message
-from mesh.integrations.queue_keys import build_conversation_key, conversation_delivery_fields
 from mesh.outbox.service import emit_event, emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
 
 logger = logging.getLogger("mesh.integrations.inbound")
 
-REJECTED_KEY_PREFIX = "rejected:"
 
-# MEDIUM-3: rejected rows audit UNTRUSTED external content (potentially
-# PII, potentially attacker-inflated). Persisting the full payload lets a
-# credential-less forger amplify storage; rejected audits keep only a
-# size-capped head (the forensic prefix) + the original byte size.
-REJECTED_PAYLOAD_MAX_BYTES = 16 * 1024
-REJECTED_PAYLOAD_HEAD_BYTES = 4 * 1024
+def _is_event_dedup_conflict(exc: IntegrityError) -> bool:
+    """True only for the ledger dedup key (uq_integration_event_dedup).
 
+    Any OTHER constraint violation is a real defect — it must not be
+    disguised as idempotent dedup (same principle as the shared core's
+    narrowed catch, ingest.py).
+    """
+    return _violates_constraint(exc, "uq_integration_event_dedup")
 
-def _audit_payload(payload: dict[str, Any], process_status: str) -> dict[str, Any]:
-    """Truncate rejected-audit payloads (valid events keep full payloads)."""
-    if process_status != "rejected":
-        return payload
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
-    if len(encoded) <= REJECTED_PAYLOAD_MAX_BYTES:
-        return payload
-    return {
-        "_truncated": True,
-        "original_bytes": len(encoded),
-        "head": encoded[:REJECTED_PAYLOAD_HEAD_BYTES].decode("utf-8", "replace"),
-    }
+__all__ = [
+    "REJECTED_KEY_PREFIX",
+    "REJECTED_PAYLOAD_HEAD_BYTES",
+    "REJECTED_PAYLOAD_MAX_BYTES",
+    "_audit_payload",
+    "_decrypt_ref",
+    "_integration_from_row",
+    "_lookup_active_by_kind",
+    "_lookup_by_config_value",
+    "enqueue_idempotency_key",
+    "process_inbound",
+]
+
 
 # Only benign headers are persisted — never Authorization/Cookie/signatures.
 _STORED_HEADERS = (
@@ -96,15 +100,6 @@ _STORED_HEADERS = (
     "x-github-delivery",
     "x-gitlab-event",
 )
-
-
-def enqueue_idempotency_key(
-    *, agent_id: uuid.UUID, binding_id: uuid.UUID, external_event_id: str
-) -> str:
-    """README §6.9 / integrations.md §3.2: sha256(agent|binding|external_event)."""
-    return hashlib.sha256(
-        f"{agent_id}|{binding_id}|{external_event_id}".encode()
-    ).hexdigest()
 
 
 def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -295,6 +290,23 @@ async def _locate_and_verify(
             candidates = await _lookup_by_config_value(
                 session, kind=kind, key="team_id", value=team_id
             )
+    elif kind == "im_dingtalk":
+        # §3.2: locate by body chatbotCorpId (+ robotCode disambiguation).
+        corp_id = str(payload.get("chatbotCorpId") or "")
+        if corp_id:
+            candidates = await _lookup_by_config_value(
+                session, kind=kind, key="corp_id", value=corp_id
+            )
+            robot_code = str(payload.get("robotCode") or "")
+            if robot_code:
+                robot_matches = [
+                    row
+                    for row in candidates
+                    if str((row[4] or {}).get("robot_code") or "") == robot_code
+                    or str((row[4] or {}).get("app_key") or "") == robot_code
+                ]
+                if robot_matches:
+                    candidates = robot_matches
     elif kind == "vcs_github":
         installation = payload.get("installation") or {}
         installation_id = str(installation.get("id") or "")
@@ -345,13 +357,16 @@ async def _locate_and_verify(
             integration = _integration_from_row(row)
             normalized = adapter["normalize"](payload, lowered)
             # Refine gitlab tenant key from the integration instance config.
-            if provider == "gitlab":
+            if provider == "gitlab" or (
+                provider == "feishu" and not normalized.tenant_key
+            ):
                 normalized = NormalizedEvent(
                     external_event_id=normalized.external_event_id,
                     event_type=normalized.event_type,
                     external_ref=normalized.external_ref,
                     actor_key=normalized.actor_key,
-                    tenant_key=adapter["tenant_key_from_config"](config),
+                    tenant_key=adapter["tenant_key_from_config"](config)
+                    or normalized.tenant_key,
                     text=normalized.text,
                     extra=normalized.extra,
                 )
@@ -375,6 +390,7 @@ def _verify_kwargs(secret_config_key: str, plaintext: str) -> dict[str, str]:
         "signing_secret_ref": "signing_secret",
         "webhook_secret_ref": "webhook_secret",
         "webhook_token_ref": "webhook_token",
+        "app_secret_ref": "app_secret",
     }
     return {mapping[secret_config_key]: plaintext}
 
@@ -383,6 +399,7 @@ def _any_signature_header(kind: str, lowered: dict[str, str]) -> bool:
     per_kind = {
         "im_feishu": ("x-lark-signature", "x-feishu-signature"),
         "im_slack": ("x-slack-signature",),
+        "im_dingtalk": ("sign",),
         "vcs_github": ("x-hub-signature-256",),
         "vcs_gitlab": ("x-gitlab-token", "x-gitlab-signature"),
     }
@@ -423,60 +440,65 @@ def _slack_challenge_response(payload: dict[str, Any]) -> tuple[int, dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# Audit + dedup + dispatch
+# Envelope construction (auth layer → shared core boundary, §2.10:651-664)
 # ---------------------------------------------------------------------------
 
 
-async def _store_event(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    integration_id: uuid.UUID,
-    external_event_id: str,
-    event_type: str,
-    payload: dict[str, Any],
-    signature_status: str,
-    process_status: str,
-    now: datetime,
-) -> IntegrationEvent:
-    event = IntegrationEvent(
-        workspace_id=workspace_id,
-        integration_id=integration_id,
-        external_event_id=external_event_id,
-        event_type=event_type,
-        payload=_audit_payload(payload, process_status),
-        signature_status=signature_status,
-        process_status=process_status,
-        received_at=now,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(event)
-    await session.flush()
-    return event
-
-
-async def _match_bindings(
-    session: AsyncSession,
-    *,
-    workspace_id: uuid.UUID,
-    integration: Integration,
+def _envelope_from_normalized(
     provider: str,
     event: NormalizedEvent,
-) -> list[IntegrationBinding]:
-    """Active bindings whose external_ref equals the event's external object."""
-    rows = (await session.execute(
-        select(IntegrationBinding).where(
-            IntegrationBinding.workspace_id == workspace_id,
-            IntegrationBinding.integration_id == integration.id,
-            IntegrationBinding.external_ref == event.external_ref,
-            IntegrationBinding.status == "active",
+    *,
+    config: dict[str, Any],
+    raw_payload: dict[str, Any],
+    max_chars: int = DEFAULT_INBOUND_TEXT_MAX_CHARS,
+    channel: str = "http",
+) -> VerifiedEnvelope:
+    """Map the generic NormalizedEvent onto the shared VerifiedEnvelope.
+
+    DingTalk delegates to its full normalization (msgtype matrix / @-prefix
+    trim / truncation / staffId-vs-encoded identity keys); feishu/slack map
+    directly (their platform IDs carry no colon-collapse hazard).
+    """
+    if provider == "dingtalk":
+        from mesh.integrations.dingtalk import normalize_message_payload
+
+        return normalize_message_payload(
+            raw_payload, max_chars=max_chars, channel=channel
         )
-    )).scalars().all()
-    return list(rows)
+    bot_mentioned, is_direct_message = compute_im_signals(provider, event, config)
+    msgtype = ""
+    if provider == "feishu":
+        msgtype = str(event.extra.get("message_type") or "")
+    truncated = False
+    text_value = event.text
+    if len(text_value) > max_chars:
+        text_value = text_value[:max_chars]
+        truncated = True
+    return VerifiedEnvelope(
+        provider=provider,
+        provider_tenant_key=event.tenant_key,
+        external_event_id=event.external_event_id,
+        event_type=event.event_type,
+        external_ref=event.external_ref,
+        conversation_type=None,
+        sender_key=event.actor_key,
+        text=text_value,
+        truncated=truncated,
+        msgtype=msgtype,
+        raw_payload=dict(raw_payload),
+        channel=channel,
+        is_direct_message=is_direct_message,
+        bot_mentioned=bot_mentioned,
+        extra=dict(event.extra),
+    )
 
 
-async def _enqueue_execution(
+# ---------------------------------------------------------------------------
+# VCS direct path (§6.9 — VCS events are not conversation messages)
+# ---------------------------------------------------------------------------
+
+
+async def _enqueue_vcs_execution(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
@@ -545,279 +567,30 @@ async def _enqueue_execution(
     )
 
 
-# ---------------------------------------------------------------------------
-# MES-88 IM layer helpers (§2.10 guards + queue, §3.7 command plane)
-# ---------------------------------------------------------------------------
-
-_IM_PROVIDERS = ("feishu", "slack", "dingtalk")
-
-# Fallbacks mirror mesh.config.Settings defaults for callers that do not
-# thread settings through (legacy unit tests); production always passes the
-# real Settings object.
-_IM_SETTINGS_DEFAULTS = SimpleNamespace(
-    im_ack_coalesce_window_seconds=5.0,
-    im_inbound_per_identity_per_min=20,
-    im_inbound_per_conversation_per_min=60,
-    im_queue_max_pending_per_conversation=50,
-    im_inbound_text_max_chars=4000,
-    im_dispatch_lease_buffer_seconds=300,
-    context_append_max_count=20,
-    context_append_max_chars=32000,
-)
-
-_RATE_LIMIT_HINT_TEXT = "Messages are arriving too fast — please slow down a little."
-
-
-def _resolve_im_settings(settings: Any) -> Any:
-    return settings if settings is not None else _IM_SETTINGS_DEFAULTS
-
-
-def _mark_payload(event_row: IntegrationEvent, key: str, value: Any) -> None:
-    """Set one audit marker on the event payload (JSONB mutation-safe)."""
-    payload = dict(event_row.payload or {})
-    payload[key] = value
-    event_row.payload = payload
-    flag_modified(event_row, "payload")
-
-
-async def _reject_rate_limited(
+async def _ingest_vcs_event(
     session: AsyncSession,
     *,
-    redis: Any,
     integration: Integration,
-    event_row: IntegrationEvent,
-    external_event_id: str,
-    conversation_key: str,
-    event: NormalizedEvent,
-) -> tuple[int, dict[str, Any]]:
-    """Over-limit disposition (§2.10): NOT enqueued/executed/acked; rejected
-    audit under the REAL msgId dedupe key; one bot hint per minute per
-    conversation (notice-reflection guard); bare 200 (non-2xx would trigger
-    platform re-push amplification).
-
-    The hint payload is SELF-SPECIFIED: a rejected message is never
-    enqueued, so the relay's queue-item derivation has nothing to read —
-    the conversation type (and the direct-chat target) travel with the
-    payload (MES-122)."""
-    event_row.process_status = "rejected"
-    _mark_payload(event_row, "_mesh_reject_reason", "rate_limited")
-    if redis is not None and await rate_limit_hint_allowed(
-        redis, conversation_key=conversation_key
-    ):
-        await emit_event(
-            session,
-            workspace_id=integration.workspace_id,
-            event_type="im.send",
-            payload={
-                "kind": "rate_limit_hint",
-                "integration_id": str(integration.id),
-                "conversation_key": conversation_key,
-                **conversation_delivery_fields(
-                    event_row.payload, actor_key=event.actor_key
-                ),
-                "text": _RATE_LIMIT_HINT_TEXT,
-            },
-            idempotency_key=f"im-hint:{event_row.id}",
-        )
-    await session.flush()
-    logger.warning(
-        "inbound rate-limited: event %s conversation %s", event_row.id, conversation_key
-    )
-    return 200, {
-        "received": True,
-        "event_id": external_event_id,
-        "process_status": "rejected",
-    }
-
-
-async def _enqueue_im_or_reject(
-    session: AsyncSession,
-    *,
-    redis: Any,
-    settings: Any,
-    integration: Integration,
-    binding: IntegrationBinding,
-    event_row: IntegrationEvent,
-    event: NormalizedEvent,
     provider: str,
-    external_event_id: str,
-) -> tuple[int | None, dict[str, Any] | None]:
-    """Guards + conversation-queue enqueue for matched IM messages (§2.10).
-
-    ``(None, None)`` → enqueued (caller marks ``dispatched``); otherwise a
-    terminal ``(status, body)`` the caller returns directly. A message with
-    no sender identity is audit-only (never enqueued — authorization would
-    be impossible and queue items must carry a resolvable triple).
-    """
-    if not event.actor_key:
-        event_row.process_status = "matched"
-        _mark_payload(event_row, "_mesh_trigger_skipped", "no_sender_identity")
-        await session.flush()
-        return 200, {
-            "received": True,
-            "event_id": external_event_id,
-            "process_status": "matched",
-        }
-    tenant_key = event.tenant_key or binding.provider_tenant_key
-    try:
-        conversation_key = build_conversation_key(provider, tenant_key, event.external_ref)
-    except MeshValidationError:
-        event_row.process_status = "rejected"
-        _mark_payload(event_row, "_mesh_reject_reason", "invalid_request")
-        await session.flush()
-        return 200, {
-            "received": True,
-            "event_id": external_event_id,
-            "process_status": "rejected",
-        }
-    if redis is not None:
-        try:
-            await check_inbound_guards(
-                redis,
-                session,
-                settings=settings,
-                provider=provider,
-                tenant_key=tenant_key,
-                user_key=event.actor_key,
-                conversation_key=conversation_key,
-            )
-        except InboundGuardRejected:
-            return await _reject_rate_limited(
-                session,
-                redis=redis,
-                integration=integration,
-                event_row=event_row,
-                external_event_id=external_event_id,
-                conversation_key=conversation_key,
-                event=event,
-            )
-    try:
-        await enqueue_message(
-            session,
-            settings=settings,
-            integration=integration,
-            binding=binding,
-            event_row=event_row,
-            event=event,
-            provider=provider,
-        )
-    except InboundGuardRejected:
-        # Authoritative pending-depth re-check under the conversation lock.
-        return await _reject_rate_limited(
-            session,
-            redis=redis,
-            integration=integration,
-            event_row=event_row,
-            external_event_id=external_event_id,
-            conversation_key=conversation_key,
-            event=event,
-        )
-    except MeshValidationError:
-        event_row.process_status = "rejected"
-        _mark_payload(event_row, "_mesh_reject_reason", "invalid_request")
-        await session.flush()
-        return 200, {
-            "received": True,
-            "event_id": external_event_id,
-            "process_status": "rejected",
-        }
-    return None, None
-
-
-# ---------------------------------------------------------------------------
-# The pipeline
-# ---------------------------------------------------------------------------
-
-
-async def process_inbound(
-    session: AsyncSession,
-    *,
-    kind: str,
-    raw_body: bytes,
-    headers: dict[str, str],
-    signing_secret: str,
+    event: NormalizedEvent,
+    payload: dict[str, Any],
     now: datetime,
-    tolerance: timedelta,
-    redis: Any = None,
-    settings: Any = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Full inbound pipeline; runs inside the caller's transaction.
+    """The VCS direct path: audit → dedup → auto-link → match → dispatch.
 
-    Returns ``(http_status, bare-JSON body)`` — NOT the §6.14 envelope.
-
-    ``redis`` / ``settings`` enable the MES-88 IM layer (command plane,
-    post-signature frequency guards, conversation queue). Production always
-    wires both (inbound_routes); callers that pass neither keep the legacy
-    direct-dispatch behavior for IM kinds without guards.
+    Behavior-preserving MES-68 flow (VCS events never enter the IM queue —
+    they are not conversation messages).
     """
-    if kind not in KIND_TO_PROVIDER or kind == "webhook_outbound":
-        return 401, _invalid_signature_body()
-    payload = _parse_body(raw_body)
-
-    # URL verification challenges (feishu validates its own token; slack
-    # echoes after the signature verifies below).
-    if kind == "im_feishu":
-        challenge = await _handle_feishu_challenge(
-            session, payload=payload, signing_secret=signing_secret
-        )
-        if challenge is not None:
-            return challenge
-
-    integration, signature_status, event = await _locate_and_verify(
-        session,
-        kind=kind,
-        raw_body=raw_body,
-        headers=headers,
-        payload=payload,
-        signing_secret=signing_secret,
-        now=now,
-        tolerance=tolerance,
-    )
-
-    if signature_status in (SIG_INVALID, SIG_MISSING):
-        if integration is not None:
-            # Attributable rejection → audit in the integration's workspace.
-            await set_tenant_context(session, integration.workspace_id)
-            try:
-                async with session.begin_nested():
-                    await _store_event(
-                        session,
-                        workspace_id=integration.workspace_id,
-                        integration_id=integration.id,
-                        external_event_id=(
-                            f"{REJECTED_KEY_PREFIX}"
-                            f"{hashlib.sha256(raw_body).hexdigest()}"
-                        ),
-                        event_type=str(payload.get("type") or kind),
-                        payload=payload,
-                        signature_status=signature_status,
-                        process_status="rejected",
-                        now=now,
-                    )
-            except IntegrityError:
-                pass  # repeated forgery, same body — already audited
-        # Unknown integration → indistinguishable from a bad signature.
-        return 401, _invalid_signature_body()
-
-    assert integration is not None and event is not None  # signature valid
-    await set_tenant_context(session, integration.workspace_id)
-
-    if kind == "im_slack":
-        challenge = _slack_challenge_response(payload)
-        if challenge is not None:
-            return challenge  # signature verified above; echo bare JSON
-
     if integration.status == "disabled":
-        # Disabled integration → reject distribution (§5.1: 401 + rejected).
         try:
             async with session.begin_nested():
-                await _store_event(
+                await store_event(
                     session,
                     workspace_id=integration.workspace_id,
                     integration_id=integration.id,
                     external_event_id=(
                         f"{REJECTED_KEY_PREFIX}"
-                        f"{hashlib.sha256(raw_body).hexdigest()}"
+                        f"{hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()}"
                     ),
                     event_type=event.event_type,
                     payload=payload,
@@ -825,8 +598,11 @@ async def process_inbound(
                     process_status="rejected",
                     now=now,
                 )
-        except IntegrityError:
-            pass
+        except IntegrityError as exc:
+            if not _is_event_dedup_conflict(exc):
+                logger.exception(
+                    "disabled-rejection audit insert failed on a non-dedup constraint"
+                )
         return 401, {
             "error": {
                 "code": "integration_disabled",
@@ -835,14 +611,12 @@ async def process_inbound(
             }
         }
 
-    # Dedup INSERT — first writer wins; conflict → idempotent 200 (never
-    # dispatch twice, §6.9). The rejected namespace (above) cannot collide.
     external_event_id = event.external_event_id or (
-        f"sha256:{hashlib.sha256(raw_body).hexdigest()}"
+        f"sha256:{hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()}"
     )
     try:
         async with session.begin_nested():
-            event_row = await _store_event(
+            event_row = await store_event(
                 session,
                 workspace_id=integration.workspace_id,
                 integration_id=integration.id,
@@ -853,14 +627,15 @@ async def process_inbound(
                 process_status="received",
                 now=now,
             )
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_event_dedup_conflict(exc):
+            raise  # a real defect, not a duplicate event
         return 200, {
             "received": True,
             "event_id": external_event_id,
             "process_status": "deduped",
         }
 
-    provider = KIND_TO_PROVIDER[kind]
     await emit_realtime(
         session,
         workspace_id=integration.workspace_id,
@@ -889,93 +664,30 @@ async def process_inbound(
         idempotency_key=f"integration-event:{event_row.id}:ingested:detail",
     )
 
-    # ---- MES-88 IM layer: command plane + non-text matrix (§3.7/§2.10/§3.2)
-    working_event = event
-    if provider in _IM_PROVIDERS:
-        im_text = (event.text or "").strip()
-        if not im_text:
-            # Non-text msgtypes are audit-only: no trigger, no queue, no ack
-            # (msgtype matrix, §3.2 — processed, payload carries the marker).
-            event_row.process_status = "processed"
-            _mark_payload(event_row, "_mesh_trigger_skipped", "non_text")
-            event_row.updated_at = now
-            await session.flush()
-            return 200, {
-                "received": True,
-                "event_id": external_event_id,
-                "process_status": "processed",
-            }
-        if event.actor_key:
-            from mesh.integrations.commands import maybe_handle_command
-
-            try:
-                conversation_key = build_conversation_key(
-                    provider, event.tenant_key, event.external_ref
-                )
-            except MeshValidationError:
-                event_row.process_status = "rejected"
-                _mark_payload(event_row, "_mesh_reject_reason", "invalid_request")
-                event_row.updated_at = now
-                await session.flush()
-                return 200, {
-                    "received": True,
-                    "event_id": external_event_id,
-                    "process_status": "rejected",
-                }
-            outcome = await maybe_handle_command(
-                session,
-                settings=_resolve_im_settings(settings),
-                integration=integration,
-                event_row=event_row,
-                normalized_text=im_text,
-                provider=provider,
-                tenant_key=event.tenant_key,
-                user_key=event.actor_key,
-                conversation_key=conversation_key,
-            )
-            if outcome is not None:
-                event_row.process_status = "processed"
-                event_row.updated_at = now
-                await session.flush()
-                if outcome.passthrough_text is not None:
-                    # /btw with no in-flight item: the stripped argument
-                    # continues through matching as an ordinary message.
-                    working_event = replace(event, text=outcome.passthrough_text)
-                else:
-                    return 200, {
-                        "received": True,
-                        "event_id": external_event_id,
-                        "process_status": "processed",
-                    }
-
     # VCS auto-linking + status flow (best effort, audit-only failures —
     # identifier_not_resolved must never block ingestion, §3.3).
-    if provider in ("github", "gitlab"):
-        from mesh.integrations import vcs_links as vcs_links_mod
+    from mesh.integrations import vcs_links as vcs_links_mod
 
-        try:
-            await vcs_links_mod.ingest_vcs_event(
-                session,
-                workspace_id=integration.workspace_id,
-                integration=integration,
-                provider=provider,
-                event=event,
-                event_row=event_row,
-                now=now,
-            )
-        except Exception:  # noqa: BLE001 — linking must not break ingestion
-            logger.exception("vcs auto-link failed for event %s", event_row.id)
+    try:
+        await vcs_links_mod.ingest_vcs_event(
+            session,
+            workspace_id=integration.workspace_id,
+            integration=integration,
+            provider=provider,
+            event=event,
+            event_row=event_row,
+            now=now,
+        )
+    except Exception:  # noqa: BLE001 — linking must not break ingestion
+        logger.exception("vcs auto-link failed for event %s", event_row.id)
 
-    # Binding match → dispatch (§6.9 「外部 IM 消息触发」 row).
-    bindings = await _match_bindings(
+    bindings = await match_bindings(
         session,
         workspace_id=integration.workspace_id,
         integration=integration,
-        provider=provider,
-        event=event,
+        external_ref=event.external_ref,
     )
     if len(bindings) > 1:
-        # Ambiguous routing → audit + alert, trigger NOTHING (§5.4).
         logger.error(
             "multiple bindings matched inbound event %s (integration %s) — "
             "dispatch suppressed",
@@ -996,40 +708,25 @@ async def process_inbound(
         binding = bindings[0]
         config = dict(integration.config or {})
         match_config = dict(binding.match_config or {})
-        bot_mentioned, is_dm = compute_im_signals(provider, working_event, config)
+        bot_mentioned, is_dm = compute_im_signals(provider, event, config)
         bound_agent = str(binding.bound_agent_id) if binding.bound_agent_id else None
         if binding_matches(
             provider,
             match_config,
-            working_event,
+            event,
             bot_mentioned=bot_mentioned,
             is_direct_message=is_dm,
             bound_agent_id=bound_agent,
         ):
             if binding.bound_agent_id is not None:
-                if provider in _IM_PROVIDERS:
-                    status, body = await _enqueue_im_or_reject(
-                        session,
-                        redis=redis,
-                        settings=_resolve_im_settings(settings),
-                        integration=integration,
-                        binding=binding,
-                        event_row=event_row,
-                        event=working_event,
-                        provider=provider,
-                        external_event_id=external_event_id,
-                    )
-                    if body is not None:
-                        return status, body  # guard-rejected / audit-only (bare 200)
-                else:
-                    await _enqueue_execution(
-                        session,
-                        workspace_id=integration.workspace_id,
-                        binding=binding,
-                        event_row=event_row,
-                        event=working_event,
-                        provider=provider,
-                    )
+                await _enqueue_vcs_execution(
+                    session,
+                    workspace_id=integration.workspace_id,
+                    binding=binding,
+                    event_row=event_row,
+                    event=event,
+                    provider=provider,
+                )
                 event_row.process_status = "dispatched"
                 dispatched = True
             else:
@@ -1064,6 +761,189 @@ async def process_inbound(
     }
 
 
+# ---------------------------------------------------------------------------
+# The pipeline entry
+# ---------------------------------------------------------------------------
+
+
+async def process_inbound(
+    session: AsyncSession,
+    *,
+    kind: str,
+    raw_body: bytes,
+    headers: dict[str, str],
+    signing_secret: str,
+    now: datetime,
+    tolerance: timedelta,
+    redis: Any = None,
+    settings: Any = None,
+    text_max_chars: int | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Full inbound pipeline; runs inside the caller's transaction.
+
+    Returns ``(http_status, bare-JSON body)`` — NOT the §6.14 envelope.
+
+    ``redis`` / ``settings`` enable the MES-88 IM layer behind the shared
+    core (post-signature semantic guards — fail-closed — conversation
+    queue, command plane). Production always wires both (inbound_routes).
+    """
+    if kind not in KIND_TO_PROVIDER or kind == "webhook_outbound":
+        return 401, _invalid_signature_body()
+    payload = _parse_body(raw_body)
+
+    # URL verification challenges (feishu validates its own token; slack
+    # echoes after the signature verifies below).
+    if kind == "im_feishu":
+        challenge = await _handle_feishu_challenge(
+            session, payload=payload, signing_secret=signing_secret
+        )
+        if challenge is not None:
+            return challenge
+
+    integration, signature_status, event = await _locate_and_verify(
+        session,
+        kind=kind,
+        raw_body=raw_body,
+        headers=headers,
+        payload=payload,
+        signing_secret=signing_secret,
+        now=now,
+        tolerance=tolerance,
+    )
+
+    if signature_status in (SIG_INVALID, SIG_MISSING):
+        if integration is not None:
+            # Attributable rejection → audit in the integration's workspace.
+            await set_tenant_context(session, integration.workspace_id)
+            try:
+                async with session.begin_nested():
+                    await store_event(
+                        session,
+                        workspace_id=integration.workspace_id,
+                        integration_id=integration.id,
+                        external_event_id=(
+                            f"{REJECTED_KEY_PREFIX}"
+                            f"{hashlib.sha256(raw_body).hexdigest()}"
+                        ),
+                        event_type=str(payload.get("type") or kind),
+                        payload=payload,
+                        signature_status=signature_status,
+                        process_status="rejected",
+                        now=now,
+                    )
+            except IntegrityError as exc:
+                # repeated forgery, same body → already audited (dedup key);
+                # any other constraint violation is logged, not disguised.
+                if not _is_event_dedup_conflict(exc):
+                    logger.exception(
+                        "signature-rejection audit insert failed on a non-dedup constraint"
+                    )
+        # Unknown integration → indistinguishable from a bad signature.
+        return 401, _invalid_signature_body()
+
+    if integration is None or event is None:
+        # Invariant: a valid signature always resolves both. A violation is
+        # a server defect — surface it explicitly (never a bare assert in a
+        # production path).
+        raise RuntimeError(
+            "inbound invariant violated: valid signature without a resolved "
+            "integration/normalized event"
+        )
+    await set_tenant_context(session, integration.workspace_id)
+
+    if kind == "im_slack":
+        challenge = _slack_challenge_response(payload)
+        if challenge is not None:
+            return challenge  # signature verified above; echo bare JSON
+
+    provider = KIND_TO_PROVIDER[kind]
+
+    if provider in IM_PROVIDERS:
+        # Auth layer done → normalized verified envelope → the ONE shared
+        # ingestion core (§2.10:651-664; the Stream adapter lands here too).
+        # MESH_IM_INBOUND_TEXT_MAX_CHARS: the HTTP channel honors the same
+        # configured ceiling as the Stream channel (M3 — no drift between
+        # receive modes when ops tunes the cap).
+        effective_max_chars = text_max_chars
+        if effective_max_chars is None:
+            effective_max_chars = int(
+                getattr(
+                    settings, "im_inbound_text_max_chars", DEFAULT_INBOUND_TEXT_MAX_CHARS
+                )
+            )
+        try:
+            envelope = _envelope_from_normalized(
+                provider,
+                event,
+                config=dict(integration.config or {}),
+                raw_payload=payload,
+                max_chars=effective_max_chars,
+            )
+        except ValidationError:
+            # Signed-but-malformed payload (missing msgId/conversationId,
+            # sender identity outside the §2.10 N-1 charset — possible only
+            # for the app_secret holder, but a real path): forensic audit in
+            # the rejected: namespace (payload truncated by store_event) and
+            # a bare-JSON 200 — NEVER dispatched, and never a §6.14 envelope
+            # or non-2xx back at the platform (that would trigger the retry
+            # amplification this module exists to avoid; mirrors the Stream
+            # path's catch-and-skip-frame closure, dingtalk_stream.py).
+            logger.warning(
+                "inbound %s payload failed normalization (integration=%s) — "
+                "rejected audit, bare 200, no distribution",
+                kind,
+                integration.id,
+            )
+            try:
+                async with session.begin_nested():
+                    await store_event(
+                        session,
+                        workspace_id=integration.workspace_id,
+                        integration_id=integration.id,
+                        external_event_id=(
+                            f"{REJECTED_KEY_PREFIX}"
+                            f"{hashlib.sha256(raw_body).hexdigest()}"
+                        ),
+                        event_type=str(event.event_type or kind),
+                        payload=payload,
+                        signature_status="valid",
+                        process_status="rejected",
+                        now=now,
+                    )
+            except IntegrityError as exc:
+                # same malformed body repeated → already audited (dedup key);
+                # any other constraint violation is logged, not disguised.
+                if not _is_event_dedup_conflict(exc):
+                    logger.exception(
+                        "malformed-payload audit insert failed on a non-dedup constraint"
+                    )
+            return 200, {
+                "received": True,
+                "event_id": "",
+                "process_status": "rejected",
+                "reason": "malformed_payload",
+            }
+        result = await ingest_verified_event(
+            session,
+            integration=integration,
+            envelope=envelope,
+            now=now,
+            redis=redis,
+            settings=settings,
+        )
+        return result.status_code, result.body
+
+    # VCS providers: the direct §6.9 path (no conversation queue).
+    return await _ingest_vcs_event(
+        session,
+        integration=integration,
+        provider=provider,
+        event=event,
+        payload=payload,
+        now=now,
+    )
+
+
 def _invalid_signature_body() -> dict[str, Any]:
     return {
         "error": {
@@ -1072,10 +952,3 @@ def _invalid_signature_body() -> dict[str, Any]:
             "details": {},
         }
     }
-
-
-__all__ = [
-    "REJECTED_KEY_PREFIX",
-    "enqueue_idempotency_key",
-    "process_inbound",
-]
