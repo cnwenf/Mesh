@@ -86,6 +86,22 @@ describe('registerShellShortcuts', () => {
     unregister();
   });
 
+  it('可选导航文案缺失时跳过该命令,待审批文案回退到导航文案', () => {
+    const { integrations, ...nav } = LABELS.nav;
+    const { pendingApprovals, ...actions } = LABELS.actions;
+    void integrations;
+    void pendingApprovals;
+    const labels: ShellShortcutLabels = { ...LABELS, nav, actions };
+    const unregister = registerShellShortcuts(vi.fn(), labels);
+
+    expect(commandIds()).not.toContain('nav.integrations');
+    expect(
+      useShortcutRegistry.getState().commands.find((command) => command.id === 'approvals.pending')
+        ?.label,
+    ).toBe('Approvals');
+    unregister();
+  });
+
   it('admin/owner + 工作区:设置七子页注册且落工作区规范路由;guest 不注册(§1.2 S3 门控)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS, {
@@ -183,6 +199,79 @@ describe('registerShellShortcuts', () => {
     });
     expect(commandIds()).not.toContain('favorites.toggle');
     unregister2();
+    vi.unstubAllGlobals();
+    resetApiClient();
+  });
+
+  it('favorites.toggle 对已收藏资源发送 DELETE', async () => {
+    const { fakeResponse } = await import('../../api/__tests__/fetchStub');
+    const { resetApiClient } = await import('../../api/instance');
+    const calls: Array<{ url: string; method?: string }> = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, method: init?.method });
+      if (url.includes('/api/v1/favorites') && (init?.method ?? 'GET') === 'GET') {
+        return fakeResponse({
+          body: {
+            data: [{ target_type: 'issue', target_id: 'iss-9' }],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ status: 204 });
+    }) as typeof fetch);
+    resetApiClient();
+
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, {
+      role: 'member',
+      workspaceId: 'ws-1',
+      path: '/issues/iss-9',
+    });
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'favorites.toggle')
+      ?.run();
+    await vi.waitFor(() =>
+      expect(
+        calls.some(
+          (call) => call.url.includes('/favorites/issue/iss-9') && call.method === 'DELETE',
+        ),
+      ).toBe(true),
+    );
+
+    unregister();
+    vi.unstubAllGlobals();
+    resetApiClient();
+  });
+
+  it('favorites.toggle 端点失败时保持静默且不通知', async () => {
+    const { fakeResponse } = await import('../../api/__tests__/fetchStub');
+    const { resetApiClient } = await import('../../api/instance');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return fakeResponse({ status: 500, body: { error: { code: 'internal_error' } } });
+    }) as typeof fetch);
+    resetApiClient();
+    const notify = vi.fn();
+
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, {
+      role: 'member',
+      workspaceId: 'ws-1',
+      path: '/issues/iss-9',
+      notify,
+    });
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'favorites.toggle')
+      ?.run();
+    await vi.waitFor(() =>
+      expect(calls.some((url) => url.includes('/api/v1/favorites'))).toBe(true),
+    );
+    await Promise.resolve();
+    expect(notify).not.toHaveBeenCalled();
+
+    unregister();
     vi.unstubAllGlobals();
     resetApiClient();
   });
