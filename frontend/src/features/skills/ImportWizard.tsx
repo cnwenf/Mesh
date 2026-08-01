@@ -3,7 +3,7 @@
  * 权限最小化勾选) → ③ 审批安装。进度经 GET import/{task_id} 轮询(3~5s 退化方案,
  * §3.5);含脚本的 marketplace/url 来源强制人工审阅,未审批不得安装(§5.3)。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
 import { Button, Dialog, Input, useToast } from '../../design';
 import { env } from '../../env';
@@ -95,8 +95,9 @@ export function ImportWizard({
     };
   }, [realtime, task, workspaceId]);
 
-  // 预览就绪时,默认最小化授权:建议拒绝项(高危)预置不勾选(§4.2)。
-  useEffect(() => {
+  // 预览就绪时,默认最小化授权:建议拒绝项(高危)预置不勾选(§4.2)。在浏览器
+  // 绘制可交互控件前完成重置,避免被动 effect 覆盖刚发生的确认操作。
+  useLayoutEffect(() => {
     if (task?.preview === undefined || task.preview === null) return;
     setGranted(new Set());
     setConfirmedScripts(new Set());
