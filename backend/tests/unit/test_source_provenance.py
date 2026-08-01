@@ -80,7 +80,7 @@ def test_scan_diagnostics_do_not_echo_pattern_or_source_line() -> None:
     assert marker not in repr(violations)
 
 
-def test_repository_scan_covers_tracked_text_commit_messages_and_refs(tmp_path: Path) -> None:
+def test_repository_scan_covers_current_commit_messages_and_refs(tmp_path: Path) -> None:
     checker = _module()
     marker = "synthetic-blocked.invalid"
     _run("git", "init", "-q", cwd=tmp_path)
@@ -97,6 +97,45 @@ def test_repository_scan_covers_tracked_text_commit_messages_and_refs(tmp_path: 
 
     assert result.files_scanned == 1
     assert sources == {"<git-log>", "<git-refs>"}
+
+
+def test_repository_scan_and_cli_cover_commit_unique_to_another_ref(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    checker = _module()
+    marker = "synthetic-blocked.invalid"
+    _run("git", "init", "-q", "-b", "main", cwd=tmp_path)
+    _run("git", "config", "user.name", "Test User", cwd=tmp_path)
+    _run("git", "config", "user.email", "test@example.invalid", cwd=tmp_path)
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("safe\n", encoding="utf-8")
+    _run("git", "add", "tracked.txt", cwd=tmp_path)
+    _run("git", "commit", "-qm", "safe main commit", cwd=tmp_path)
+
+    _run("git", "switch", "-q", "-c", "audit-only", cwd=tmp_path)
+    alternate = tmp_path / "alternate.txt"
+    alternate.write_text("safe alternate content\n", encoding="utf-8")
+    _run("git", "add", "alternate.txt", cwd=tmp_path)
+    _run("git", "commit", "-qm", marker, cwd=tmp_path)
+    _run("git", "switch", "-q", "main", cwd=tmp_path)
+
+    assert marker not in _run("git", "log", "--format=%B", "HEAD", cwd=tmp_path).stdout
+    assert marker in _run("git", "log", "--all", "--format=%B", cwd=tmp_path).stdout
+
+    patterns = [re.compile(re.escape(marker), re.IGNORECASE)]
+    result = checker.scan_repository(tmp_path, patterns)
+    sources = {item.source for item in result.violations}
+
+    pattern_file = tmp_path / "external-patterns.txt"
+    pattern_file.write_text(re.escape(marker), encoding="utf-8")
+    exit_code = checker.main(["--root", str(tmp_path), "--patterns-file", str(pattern_file)])
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+
+    assert result.files_scanned == 1
+    assert (sources, exit_code, payload["status"]) == ({"<git-log>"}, 1, "failed")
+    assert {item["source"] for item in payload["violations"]} == {"<git-log>"}
+    assert marker not in output
 
 
 def test_repository_scan_reports_current_tracked_file_and_skips_binary(tmp_path: Path) -> None:
