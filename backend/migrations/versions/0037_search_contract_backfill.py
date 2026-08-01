@@ -1,10 +1,12 @@
 """Backfill the complete search database contract on existing installs.
 
 Some databases reached revision 0036 from an earlier 0035 artifact that did
-not yet contain ``mesh_search_text_score`` or ``mesh_resync_search_name`` and
+not yet contain ``mesh_search_text_score`` or ``mesh_resync_search_name``,
 left the extension ownership ledger writable through default app-role table
-privileges. Fresh installs are protected in 0035; this forward migration is
-the idempotent repair path for already-versioned databases.
+privileges, and retained the default PUBLIC EXECUTE grant on the
+SECURITY-DEFINER member projection helper. Fresh installs are protected in
+0035; this forward migration is the idempotent repair path for
+already-versioned databases.
 
 Revision ID: 0037
 Revises: 0036
@@ -29,6 +31,16 @@ def upgrade() -> None:
     op.execute("REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM PUBLIC")
     op.execute(
         f"REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM {APP_ROLE}"
+    )
+    # Earlier 0035 artifacts created this cross-tenant SECURITY DEFINER helper
+    # without revoking PostgreSQL's default PUBLIC EXECUTE grant. Trigger
+    # execution does not require caller privileges, so remove both inherited
+    # and any explicit app-role access on the forward-repair path.
+    op.execute(
+        "REVOKE ALL ON FUNCTION public.mesh_member_search_name(UUID) FROM PUBLIC"
+    )
+    op.execute(
+        f"REVOKE ALL ON FUNCTION public.mesh_member_search_name(UUID) FROM {APP_ROLE}"
     )
     _create_score_function()
     _create_resync_function()
