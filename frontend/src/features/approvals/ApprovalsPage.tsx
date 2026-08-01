@@ -249,7 +249,7 @@ export function ApprovalsPage(): React.JSX.Element {
     );
 
   return (
-    <main className="mesh-page mesh-approvals">
+    <main className="mesh-page mesh-approvals" data-testid="approvals-page">
       <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
       <Tabs
         items={tabItems.map((item) => ({ ...item, content: listPanel }))}

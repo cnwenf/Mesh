@@ -32,8 +32,9 @@ export async function emit(
   return body.data;
 }
 
-/** 真实邮箱/密码登录(mock 契约账号 jane@corp.com;像真人一样操作登录页) */
+/** 真实邮箱/密码登录(mock 契约账号 jane@corp.com;每个用例先复位服务端状态以隔离账号偏好) */
 export async function login(page: Page): Promise<void> {
+  await resetMockServer();
   await page.goto('/login');
   await page.getByTestId('login-email').fill('jane@corp.com');
   await page.getByTestId('login-password').fill('secret123');

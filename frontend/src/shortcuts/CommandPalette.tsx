@@ -179,7 +179,6 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
       setSelectedId(null);
       lastIndexRef.current = 0;
       lastStableIdRef.current = null;
-      inputRef.current?.focus();
     }
   }, [open, initialQuery]);
 
@@ -297,7 +296,13 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title={title} closeLabel={closeLabel}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={title}
+      closeLabel={closeLabel}
+      initialFocusRef={inputRef}
+    >
       <div
         className="mesh-palette"
         onClickCapture={(event) => {

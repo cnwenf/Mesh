@@ -9,6 +9,7 @@
 import { NavLink } from 'react-router';
 import { Icon } from '../design';
 import { useT } from '../i18n';
+import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
 import { MOBILE_PRIMARY_KEYS, findNavItem } from './navigation';
 import type { NavItemDef } from './navigation';
 
@@ -32,23 +33,36 @@ const MOBILE_PRIMARY_ITEMS: ReadonlyArray<NavItemDef> = MOBILE_PRIMARY_KEYS.map(
 export function MobileNav(props: MobileNavProps): React.JSX.Element {
   const { onOpenMore } = props;
   const t = useT();
+  const workspaceContext = useOptionalWorkspace();
+  const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
+  const deepTarget = (to: string): string => {
+    if (workspace === null) return to;
+    return to === '/' ? `/w/${workspace.slug}` : `/w/${workspace.slug}${to}`;
+  };
   return (
     <nav className="mesh-mobile-nav" aria-label={t('mobileNav.moreTitle')}>
       {MOBILE_PRIMARY_ITEMS.map((item) => (
         <NavLink
           key={item.key}
-          to={item.to}
+          to={deepTarget(item.to)}
           end={item.end === true}
           data-testid={'mobile-nav-' + item.key}
           className={({ isActive }) =>
-            isActive ? 'mesh-mobile-nav__item mesh-mobile-nav__item--active' : 'mesh-mobile-nav__item'
+            isActive
+              ? 'mesh-mobile-nav__item mesh-mobile-nav__item--active'
+              : 'mesh-mobile-nav__item'
           }
         >
           <Icon name={item.icon} size={20} className="mesh-mobile-nav__icon" />
           <span className="mesh-mobile-nav__label">{t('mobileNav.' + item.key)}</span>
         </NavLink>
       ))}
-      <button type="button" data-testid="mobile-nav-more" className="mesh-mobile-nav__item" onClick={onOpenMore}>
+      <button
+        type="button"
+        data-testid="mobile-nav-more"
+        className="mesh-mobile-nav__item"
+        onClick={onOpenMore}
+      >
         <Icon name="menu" size={20} className="mesh-mobile-nav__icon" />
         <span className="mesh-mobile-nav__label">{t('mobileNav.more')}</span>
       </button>

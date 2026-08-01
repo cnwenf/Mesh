@@ -96,7 +96,7 @@ export function HighlightedTitle(props: {
     <span className="mesh-palette__title" title={title}>
       {spans.map((span, index) =>
         span.marked ? (
-          <mark key={index} className="mesh-palette__mark">
+          <mark key={index} className="mesh-palette__mark mesh-palette__hit">
             {span.text}
           </mark>
         ) : (

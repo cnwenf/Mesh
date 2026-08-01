@@ -4,6 +4,7 @@
  * 内联结果弹层(与面板同一 PaletteResults),↑↓ 选择、Enter 激活选中或提交
  * 展开完整面板、Esc 关闭/清空、点击导航。
  */
+import { useState } from 'react';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetApiClient } from '../../api/instance';
@@ -66,6 +67,25 @@ function renderTopBar(props: Partial<React.ComponentProps<typeof TopBar>> = {}) 
       favoritesProvider={props.favoritesProvider ?? (async () => [])}
       {...props}
     />,
+  );
+}
+
+function SearchModeHarness(props: { onOpenSearch: (query: string) => void }): React.JSX.Element {
+  const [searchMode, setSearchMode] = useState<'inline' | 'palette'>('inline');
+  return (
+    <>
+      <button type="button" onClick={() => setSearchMode('palette')}>
+        Use palette mode
+      </button>
+      <TopBar
+        state="connected"
+        onOpenPalette={vi.fn()}
+        onOpenHelp={vi.fn()}
+        onOpenSearch={props.onOpenSearch}
+        favoritesProvider={async () => []}
+        searchMode={searchMode}
+      />
+    </>
   );
 }
 
@@ -150,6 +170,23 @@ describe('TopBar', () => {
     expect(input).not.toHaveAttribute('aria-activedescendant');
   });
 
+  it('palette 模式把首字符交给完整面板,空值不触发交接且本框不残留状态', () => {
+    const onOpenSearch = vi.fn();
+    renderWithProviders(<SearchModeHarness onOpenSearch={onOpenSearch} />);
+    const input = screen.getByTestId('topbar-search');
+
+    fireEvent.change(input, { target: { value: 'seed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use palette mode' }));
+    fireEvent.change(input, { target: { value: '' } });
+    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(input).toHaveValue('');
+
+    fireEvent.change(input, { target: { value: 'a' } });
+    expect(onOpenSearch).toHaveBeenCalledWith('a');
+    expect(input).toHaveValue('');
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+  });
+
   it('Enter 无选中项 → 携带查询展开完整命令面板并清空本框(统一入口 S1)', async () => {
     const onOpenSearch = vi.fn();
     renderTopBar({ state: 'connected', onOpenSearch });
@@ -169,7 +206,10 @@ describe('TopBar', () => {
     fireEvent.change(input, { target: { value: 'alpha' } });
     await screen.findByTestId('topbar-search-popover');
     fireEvent.keyDown(input, { key: 'ArrowDown' });
-    expect(screen.getByTestId('palette-opt-cmd:cmd-alpha')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('palette-opt-cmd:cmd-alpha')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(input).toHaveAttribute('aria-activedescendant', 'palette-opt-cmd:cmd-alpha');
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(runSpy).toHaveBeenCalledTimes(1);
@@ -287,7 +327,9 @@ describe('TopBar', () => {
     const input = screen.getByTestId('topbar-search');
     fireEvent.change(input, { target: { value: 'zzz' } });
     await waitFor(() =>
-      expect(screen.getByTestId('topbar-search-popover').textContent).toContain('No matching commands'),
+      expect(screen.getByTestId('topbar-search-popover').textContent).toContain(
+        'No matching commands',
+      ),
     );
   });
 });

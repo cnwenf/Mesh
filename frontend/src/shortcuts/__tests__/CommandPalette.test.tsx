@@ -5,7 +5,7 @@
  *
  * 新 i18n 键(search.*)不断言译文,断言 testid/role/结构;既有 prop 文案照旧断言。
  */
-import { useState } from 'react';
+import { StrictMode, useState } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -170,6 +170,36 @@ describe('CommandPalette — 既有 prop 面回归', () => {
     expect(options[0]).toHaveTextContent('Create issue');
     expect(options[0]).toHaveAttribute('aria-selected', 'true');
     expect(input).toHaveAttribute('aria-activedescendant', options[0]?.id ?? '');
+  });
+
+  it('由关闭态动态打开后搜索框保持聚焦', async () => {
+    const user = userEvent.setup();
+    function Harness(): React.JSX.Element {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open palette
+          </button>
+          <CommandPalette
+            open={open}
+            onClose={() => setOpen(false)}
+            {...PALETTE_PROPS}
+            workspaceId="ws-1"
+            userId="u-1"
+            favoritesProvider={EMPTY_FAVORITES}
+          />
+        </div>
+      );
+    }
+
+    renderWithProviders(
+      <StrictMode>
+        <Harness />
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open palette' }));
+    expect(screen.getByRole('combobox')).toHaveFocus();
   });
 
   it('按 label / keywords 过滤', async () => {

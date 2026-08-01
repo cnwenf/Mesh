@@ -2132,7 +2132,7 @@
     "search.loading": "Searching…",
     "search.memberType.agent": "Agent",
     "search.memberType.human": "Member",
-    "search.noResults": "No results matched “{q}”",
+    "search.noResults": "No results for “{q}”",
     "search.noResultsHint": "Check the spelling or try fewer keywords.",
     "search.noResultsHints": "Check the spelling or use fewer keywords",
     "search.offline": "Network offline — showing local commands",
@@ -2646,5 +2646,5 @@
     "wsCreate.stepName": "New workspace — name",
     "wsCreate.stepSlug": "New workspace — slug"
   },
-  "version": "4d8f4f35"
+  "version": "c7717ac6"
 }

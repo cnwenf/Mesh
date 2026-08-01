@@ -66,6 +66,7 @@ describe('PaletteResults', () => {
     );
     const mark = container.querySelector('mark.mesh-palette__mark');
     expect(mark).not.toBeNull();
+    expect(mark).toHaveClass('mesh-palette__hit');
     expect(mark?.textContent).toBe('登录');
     // 标题全文经 title 属性提供(省略号场景可查全名)
     const titleSpan = container.querySelector('.mesh-palette__title');
@@ -102,7 +103,10 @@ describe('PaletteResults', () => {
             group: 'members',
             title: 'Ada',
             icon: 'user',
-            subtitle: { key: 'search.subtitle.member', params: { memberType: 'human', role: 'admin' } },
+            subtitle: {
+              key: 'search.subtitle.member',
+              params: { memberType: 'human', role: 'admin' },
+            },
           },
         ],
       },
@@ -128,7 +132,10 @@ describe('PaletteResults', () => {
             group: 'projects',
             title: 'Web',
             icon: 'info',
-            subtitle: { key: 'search.subtitle.project', params: { key: 'WEB', visibility: 'private' } },
+            subtitle: {
+              key: 'search.subtitle.project',
+              params: { key: 'WEB', visibility: 'private' },
+            },
           },
         ],
       },
@@ -136,9 +143,9 @@ describe('PaletteResults', () => {
     const { container } = renderWithProviders(
       <PaletteResults {...DEFAULTS} sections={sections} selectedStableId={null} />,
     );
-    const subtitles = Array.from(
-      container.querySelectorAll('.mesh-palette__subtitle'),
-    ).map((node) => node.textContent ?? '');
+    const subtitles = Array.from(container.querySelectorAll('.mesh-palette__subtitle')).map(
+      (node) => node.textContent ?? '',
+    );
     expect(subtitles).toHaveLength(3);
     // 枚举参数经目录解析为本地化文案(en 权威源)
     expect(subtitles[0]).toContain('Member');
@@ -236,7 +243,20 @@ describe('HighlightedTitle(单元)', () => {
   it('多段区间交替渲染 mark/普通分段', () => {
     const item = issueWithHighlight();
     const sections: ReadonlyArray<PaletteSection> = buildQuerySections(
-      [{ ...item, highlight: { title: { unit: 'codepoint', ranges: [[0, 2], [5, 7]] } } }],
+      [
+        {
+          ...item,
+          highlight: {
+            title: {
+              unit: 'codepoint',
+              ranges: [
+                [0, 2],
+                [5, 7],
+              ],
+            },
+          },
+        },
+      ],
       [],
       'x',
     );

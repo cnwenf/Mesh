@@ -76,20 +76,25 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByTestId('marketplace-title')).toBeVisible();
   });
 
-  test('顶栏搜索即统一入口:键入展开同一结果视图弹层并携带查询;Esc 关闭焦点不离输入框', async ({
+  test('顶栏搜索即统一入口:键入把查询交给完整命令面板;分层 Esc 后焦点回输入框', async ({
     page,
   }) => {
     await login(page);
     await page.goto('/');
     const topbarSearch = page.getByTestId('topbar-search');
     await topbarSearch.fill('theme');
-    // §4.9:键入即展开与命令面板同一结果视图(PaletteResults)的弹层,顶栏输入框即查询载体
-    const popover = page.getByTestId('topbar-search-popover');
-    await expect(popover).toBeVisible();
-    await expect(topbarSearch).toHaveValue('theme');
-    await expect(topbarSearch).toHaveAttribute('aria-expanded', 'true');
+    // §4.9:首字符即携查询把焦点交给完整命令面板,顶栏不保留第二份查询状态。
+    const palette = page.getByRole('dialog', { name: 'Command palette' });
+    const paletteSearch = palette.getByRole('combobox');
+    await expect(palette).toBeVisible();
+    await expect(paletteSearch).toHaveValue('theme');
+    await expect(topbarSearch).toHaveValue('');
+    // 分层关闭:首个 Esc 只把焦点从查询框交给 dialog,第二个才关闭并恢复触发点。
     await page.keyboard.press('Escape');
-    await expect(popover).toHaveCount(0);
+    await expect(palette).toBeVisible();
+    await expect(paletteSearch).not.toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
     await expect(topbarSearch).toBeFocused();
   });
 

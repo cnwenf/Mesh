@@ -336,6 +336,7 @@ export function AppShell(): React.JSX.Element {
         onOpenPalette={openPalette}
         onOpenHelp={openHelp}
         onOpenSearch={openSearch}
+        searchMode="palette"
       />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />

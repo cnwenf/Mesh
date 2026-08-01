@@ -14,6 +14,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
+  RefObject,
 } from 'react';
 import { isFormFieldElement, pushOverlay, restoreOverlayFocus } from '../../shortcuts/overlayStack';
 import { IconButton } from './IconButton';
@@ -27,11 +28,13 @@ export interface DialogProps {
   title: string;
   /** 关闭按钮可访问名;提供时渲染关闭按钮(鼠标等价路径) */
   closeLabel?: string;
+  /** 打开后的首焦目标;缺省聚焦 dialog 容器。 */
+  initialFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
 export function Dialog(props: DialogProps): React.JSX.Element | null {
-  const { open, onClose, title, closeLabel, children } = props;
+  const { open, onClose, title, closeLabel, initialFocusRef, children } = props;
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
   // §4.5 分层关闭:登记 overlayStack(快捷键分发全屏蔽背景键)并于关闭时归还
@@ -44,7 +47,7 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
     if (!open) return;
     previouslyFocusedRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    dialogRef.current?.focus();
+    (initialFocusRef?.current ?? dialogRef.current)?.focus();
     const removeOverlay = pushOverlay({
       id: titleId,
       returnFocusTo: previouslyFocusedRef.current,
@@ -54,7 +57,7 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
       // 触发元素已不在文档中时回落 main 首个可聚焦元素(§6.12,绝不落 body)。
       restoreOverlayFocus(previouslyFocusedRef.current);
     };
-  }, [open, titleId]);
+  }, [open, titleId, initialFocusRef]);
 
   if (!open) {
     return null;

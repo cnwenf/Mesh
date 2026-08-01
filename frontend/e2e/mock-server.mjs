@@ -136,7 +136,14 @@ function seedIssues() {
 // 消息目录徽章 + codepoint 高亮区间;url 为 §3.4 规范深链)
 // ---------------------------------------------------------------------------
 
-const SEARCH_ENTITY_TYPES = new Set(['issue', 'member', 'agent', 'project', 'view', 'chat_session']);
+const SEARCH_ENTITY_TYPES = new Set([
+  'issue',
+  'member',
+  'agent',
+  'project',
+  'view',
+  'chat_session',
+]);
 
 const SEARCH_FIXTURES = [
   {
@@ -150,7 +157,12 @@ const SEARCH_FIXTURES = [
     },
     icon: 'issue',
     url: '/w/acme/issues/by-identifier/WEB-124',
-    badge: { kind: 'status', label_key: 'issue.status.name', label_params: { name: 'In Progress' }, color: 'info' },
+    badge: {
+      kind: 'status',
+      label_key: 'issue.status.name',
+      label_params: { name: 'In Progress' },
+      color: 'info',
+    },
   },
   {
     type: 'issue',
@@ -163,7 +175,12 @@ const SEARCH_FIXTURES = [
     },
     icon: 'issue',
     url: '/w/acme/issues/by-identifier/WEB-130',
-    badge: { kind: 'status', label_key: 'issue.status.name', label_params: { name: 'Todo' }, color: 'status' },
+    badge: {
+      kind: 'status',
+      label_key: 'issue.status.name',
+      label_params: { name: 'Todo' },
+      color: 'status',
+    },
   },
   {
     type: 'member',
@@ -194,7 +211,12 @@ const SEARCH_FIXTURES = [
     context: { visibility: 'public', key: 'WEB' },
     icon: 'project',
     url: '/w/acme/projects/sr-project-1',
-    badge: { kind: 'visibility', label_key: 'project.visibility.public', label_params: {}, color: 'success' },
+    badge: {
+      kind: 'visibility',
+      label_key: 'project.visibility.public',
+      label_params: {},
+      color: 'success',
+    },
   },
   {
     type: 'view',
@@ -238,6 +260,7 @@ const state = {
   idempotency: new Map(), // key → { status, body }
   eventLog: new Map(), // channel → [{ op:'event', channel, seq, event, payload }]
   seqs: new Map(), // channel → last seq
+  userPreferences: { timezone: 'UTC', settings: {}, updatedAt: isoAt(0) },
 };
 
 function resetState() {
@@ -245,6 +268,24 @@ function resetState() {
   state.idempotency.clear();
   state.eventLog.clear();
   state.seqs.clear();
+  state.userPreferences = { timezone: 'UTC', settings: {}, updatedAt: isoAt(0) };
+}
+
+function currentUserFixture() {
+  return {
+    id: 'user-1',
+    email: 'jane@corp.com',
+    email_verified: true,
+    display_name: 'Jane Doe',
+    avatar_url: null,
+    status: 'active',
+    timezone: state.userPreferences.timezone,
+    settings: { ...state.userPreferences.settings },
+    mfa_enabled: false,
+    last_login_at: isoAt(0),
+    created_at: isoAt(0),
+    updated_at: state.userPreferences.updatedAt,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +502,40 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- 当前用户与成员身份(member.md §3.1 GET /users/me)------------------
+  // ---- 当前 principal 与成员身份(auth.md / member.md)-------------------
+  if (path === '/api/v1/me' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, envelope(currentUserFixture()));
+    return;
+  }
+
+  if (path === '/api/v1/users/me' && req.method === 'PATCH') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    const body = (await readBody(req)) ?? {};
+    const nextSettings = { ...state.userPreferences.settings };
+    if (body.settings && typeof body.settings === 'object') {
+      for (const key of ['locale', 'theme']) {
+        if (Object.prototype.hasOwnProperty.call(body.settings, key)) {
+          if (body.settings[key] === null) delete nextSettings[key];
+          else nextSettings[key] = body.settings[key];
+        }
+      }
+    }
+    state.userPreferences = {
+      timezone: typeof body.timezone === 'string' ? body.timezone : state.userPreferences.timezone,
+      settings: nextSettings,
+      updatedAt: new Date().toISOString(),
+    };
+    sendJson(res, 200, envelope(currentUserFixture()));
+    return;
+  }
+
   if (path === '/api/v1/users/me' && req.method === 'GET') {
     if (!isAuthorized(req)) {
       sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
@@ -784,7 +858,9 @@ async function handleRequest(req, res, url) {
       sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
       return;
     }
-    const favorites = [...FAVORITES_FIXTURES].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    const favorites = [...FAVORITES_FIXTURES].sort((a, b) =>
+      a.created_at < b.created_at ? 1 : -1,
+    );
     sendJson(res, 200, { data: favorites, next_cursor: null });
     return;
   }
@@ -801,9 +877,7 @@ async function handleRequest(req, res, url) {
     }
     const ref = decodeURIComponent(issueDetailMatch[1]);
     const fixture = SEARCH_FIXTURES.find(
-      (f) =>
-        f.type === 'issue' &&
-        (f.id === ref || (f.context && f.context.identifier === ref)),
+      (f) => f.type === 'issue' && (f.id === ref || (f.context && f.context.identifier === ref)),
     );
     if (!fixture) {
       sendJson(res, 404, errorEnvelope('not_found', `issue ${ref} not found`));

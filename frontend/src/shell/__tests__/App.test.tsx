@@ -56,7 +56,14 @@ describe('App 路由', () => {
     const me = {
       user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
       memberships: [
-        { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner', status: 'active', joined_at: null },
+        {
+          workspace_id: 'ws-1',
+          workspace_name: 'WS',
+          workspace_slug: 'ws',
+          role: 'owner',
+          status: 'active',
+          joined_at: null,
+        },
       ],
     };
     vi.stubGlobal(
@@ -173,10 +180,10 @@ describe('App 路由', () => {
     render(<App />);
     const input = screen.getByTestId('topbar-search');
     fireEvent.change(input, { target: { value: 'theme' } });
-    // 与命令面板同一结果视图(§4.9):弹层打开、输入携带查询、aria-expanded 同步
-    expect(screen.getByTestId('topbar-search-popover')).toBeInTheDocument();
-    expect(input).toHaveValue('theme');
-    expect(input).toHaveAttribute('aria-expanded', 'true');
+    // §4.9 明确要求键入即展开命令面板同一结果视图并交接焦点/查询。
+    expect(screen.getByRole('dialog', { name: 'Command palette' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox')).toHaveValue('theme');
+    expect(input).toHaveValue('');
     // 本地命令同步零延迟呈现(§11.4)
     await waitFor(() => expect(screen.getByText('Toggle theme')).toBeInTheDocument());
   });

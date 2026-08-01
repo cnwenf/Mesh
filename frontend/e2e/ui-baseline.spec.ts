@@ -21,7 +21,14 @@ test.describe('主题切换(README §6.12:即时生效、无刷新、暗色整�
   test('暗色主题在刷新后保持(持久化)', async ({ page }) => {
     await login(page);
     await page.goto('/settings');
+    const persisted = page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/users/me') &&
+        response.request().method() === 'PATCH' &&
+        response.ok(),
+    );
     await page.getByTestId('theme-select').selectOption('dark');
+    await persisted;
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });

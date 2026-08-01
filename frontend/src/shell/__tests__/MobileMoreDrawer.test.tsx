@@ -46,7 +46,9 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
 
   it('入口按 §4.1 分组呈现(组标题可见)', () => {
     renderDrawer();
-    const titles = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+    const titles = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((heading) => heading.textContent);
     // 抽屉自身标题之后依次为四分组标题
     expect(titles.slice(-4)).toEqual(['Work', 'Team', 'Run', 'Admin']);
   });
@@ -172,6 +174,10 @@ describe('MobileMoreDrawer 工作区设置入口(§6.12 角色可见性)', () =>
     renderDrawerInWorkspace({ myRole: 'owner', onClose });
     const link = await screen.findByTestId('mobile-drawer-nav-workspace-settings');
     expect(link.getAttribute('href')).toBe('/w/acme/settings');
+    expect(screen.getByTestId('mobile-drawer-nav-members')).toHaveAttribute(
+      'href',
+      '/w/acme/members',
+    );
     expect(link.textContent).toBe('Workspace settings');
     expect(link.querySelector('svg')).not.toBeNull();
     fireEvent.click(link);
