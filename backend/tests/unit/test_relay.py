@@ -72,6 +72,112 @@ async def test_concurrent_relays_do_not_double_process(session_factory, workspac
     assert len(set(processed)) == 10  # every event exactly once
 
 
+async def test_slow_event_does_not_preclaim_later_rows_from_concurrent_relay(
+    session_factory, workspace_factory
+):
+    """A slow handler may lock its own row, never the rest of the batch.
+
+    This is the deterministic MES-152 regression for the production lock
+    cycle: the old batch-wide transaction selected and locked every row before
+    dispatching the first one.  A single blocked handler therefore prevented a
+    second replica (and maintenance needing ``AccessExclusive``) from making
+    progress on otherwise independent rows.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    workspace = await workspace_factory()
+    events = await _seed(session_factory, workspace.id, count=2)
+    moment = datetime.now(UTC)
+    async with session_factory() as session, session.begin():
+        first_row = await session.get(OutboxEvent, events[0].id)
+        second_row = await session.get(OutboxEvent, events[1].id)
+        first_row.available_at = moment - timedelta(seconds=2)
+        first_row.created_at = moment - timedelta(seconds=2)
+        second_row.available_at = moment - timedelta(seconds=1)
+        second_row.created_at = moment - timedelta(seconds=1)
+    slow_started = asyncio.Event()
+    release_slow = asyncio.Event()
+    processed: list[int] = []
+
+    async def handler(session, event):
+        event_number = int(event.payload["i"])
+        processed.append(event_number)
+        if event_number == 0:
+            slow_started.set()
+            await release_slow.wait()
+        return None
+
+    first = OutboxRelay(session_factory, handlers={"test.event": handler}, batch_size=2)
+    contender = OutboxRelay(session_factory, handlers={"test.event": handler}, batch_size=1)
+    first_task = asyncio.create_task(first.run_once())
+    contender_result: RelayResult | None = None
+    try:
+        await asyncio.wait_for(slow_started.wait(), timeout=5)
+        contender_result = await asyncio.wait_for(contender.run_once(), timeout=5)
+    finally:
+        release_slow.set()
+        first_result = await asyncio.wait_for(first_task, timeout=5)
+
+    assert contender_result == RelayResult(claimed=1, published=1, failed=0)
+    assert first_result == RelayResult(claimed=1, published=1, failed=0)
+    assert sorted(processed) == [0, 1]
+
+
+async def test_relay_applies_bounded_lock_timeout_to_handler_transaction(
+    session_factory, workspace_factory
+):
+    workspace = await workspace_factory()
+    await _seed(session_factory, workspace.id)
+    observed: list[str] = []
+
+    async def handler(session, event):
+        observed.append(str((await session.execute(text("SHOW lock_timeout"))).scalar_one()))
+        return None
+
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        lock_timeout=0.25,
+    )
+    assert await relay.run_once() == RelayResult(claimed=1, published=1, failed=0)
+    assert observed == ["250ms"]
+
+
+async def test_lock_timeout_defers_event_without_consuming_failure_budget(
+    session_factory, workspace_factory
+):
+    """Real PostgreSQL contention yields quickly and preserves retry budget."""
+    from datetime import UTC, datetime
+
+    workspace = await workspace_factory()
+    (event,) = await _seed(session_factory, workspace.id)
+
+    async def handler(session, event_):
+        await session.execute(text("SELECT count(*) FROM webhook_subscriptions"))
+        return None
+
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        lock_timeout=0.05,
+        failure_backoff=0.2,
+    )
+    async with session_factory() as blocker:
+        await blocker.begin()
+        await blocker.execute(text("LOCK TABLE webhook_subscriptions IN ACCESS EXCLUSIVE MODE"))
+        try:
+            result = await asyncio.wait_for(relay.run_once(), timeout=2)
+        finally:
+            await blocker.rollback()
+
+    assert result == RelayResult(claimed=1, published=0, failed=0)
+    async with session_factory() as session:
+        row = await session.get(OutboxEvent, event.id)
+        assert row.status == OUTBOX_STATUS_PENDING
+        assert row.delivery_attempts == 0
+        assert row.available_at > datetime.now(UTC)
+
+
 async def test_handler_failure_increments_attempts_then_fails(session_factory, workspace_factory):
     workspace = await workspace_factory()
     (event,) = await _seed(session_factory, workspace.id, count=1)
@@ -79,7 +185,13 @@ async def test_handler_failure_increments_attempts_then_fails(session_factory, w
     async def boom(session, event_):
         raise RuntimeError("downstream exploded")
 
-    relay = OutboxRelay(session_factory, handlers={"test.event": boom}, max_attempts=3)
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": boom},
+        max_attempts=3,
+        failure_backoff=0,
+        failure_backoff_max=0,
+    )
     await relay.run_once()
     async with session_factory() as session:
         row = await session.get(OutboxEvent, event.id)
@@ -151,6 +263,48 @@ async def test_frames_are_fanned_out_after_commit(session_factory, workspace_fac
     assert published_frames == [("issue:x", {"op": "event", "seq": 1})]
 
 
+async def test_committed_frames_are_fanned_out_before_a_later_claim_failure(
+    session_factory, workspace_factory
+):
+    """A later transaction failure cannot strand an already-committed frame."""
+    workspace = await workspace_factory()
+    await _seed(session_factory, workspace.id, count=2)
+    published_frames: list[tuple[str, dict]] = []
+
+    class FakeFanOut:
+        async def publish_frames(self, frames):
+            published_frames.extend(frames)
+
+    async def handler(session, event):
+        return [("issue:x", {"op": "event", "event_id": str(event.id)})]
+
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        batch_size=2,
+        fanout=FakeFanOut(),
+    )
+    configure_calls = 0
+    original_configure = relay._configure_transaction
+
+    async def fail_second_transaction(session):
+        nonlocal configure_calls
+        configure_calls += 1
+        if configure_calls == 2:
+            raise RuntimeError("later claim failed")
+        await original_configure(session)
+
+    relay._configure_transaction = fail_second_transaction
+    with pytest.raises(RuntimeError, match="later claim failed"):
+        await relay.run_once()
+
+    assert len(published_frames) == 1
+    async with session_factory() as session:
+        statuses = (await session.execute(select(OutboxEvent.status))).scalars().all()
+    assert statuses.count(OUTBOX_STATUS_PUBLISHED) == 1
+    assert statuses.count(OUTBOX_STATUS_PENDING) == 1
+
+
 async def test_db_error_poison_event_does_not_block_batch(session_factory, workspace_factory):
     """A handler DB error fails only that event (savepoint); the batch proceeds."""
     from sqlalchemy import text
@@ -172,7 +326,13 @@ async def test_db_error_poison_event_does_not_block_batch(session_factory, works
             await session.execute(text("SELECT 1/0"))
         return None
 
-    relay = OutboxRelay(session_factory, handlers={"test.event": handler}, max_attempts=2)
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        max_attempts=2,
+        failure_backoff=0,
+        failure_backoff_max=0,
+    )
     result = await relay.run_once()
     assert result.claimed == 3
     assert result.published == 2  # healthy events delivered in the same batch
@@ -261,6 +421,8 @@ async def test_retryable_delay_defers_without_consuming_budget(session_factory, 
 
 async def test_plain_failure_increments_budget_contrast(session_factory, workspace_factory):
     """Contrast: a plain handler failure DOES increment delivery_attempts."""
+    from datetime import UTC, datetime
+
     workspace = await workspace_factory()
     (event,) = await _seed(session_factory, workspace.id, count=1)
 
@@ -273,6 +435,8 @@ async def test_plain_failure_increments_budget_contrast(session_factory, workspa
         row = await session.get(OutboxEvent, event.id)
         assert row.status == OUTBOX_STATUS_PENDING
         assert row.delivery_attempts == 1
+        assert row.available_at > datetime.now(UTC), "failures back off instead of hot-looping"
+    assert (await relay.run_once()).claimed == 0
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +545,13 @@ async def test_relay_batch_survives_optional_step_db_error_and_redelivers(
         await isolated_optional_step(session, "optional", event_.id, optional_step())
         return None
 
-    relay = OutboxRelay(session_factory, handlers={"test.event": handler}, max_attempts=5)
+    relay = OutboxRelay(
+        session_factory,
+        handlers={"test.event": handler},
+        max_attempts=5,
+        failure_backoff=0,
+        failure_backoff_max=0,
+    )
 
     first = await relay.run_once()
     assert first == RelayResult(claimed=1, published=0, failed=0)

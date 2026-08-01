@@ -20,10 +20,14 @@ from dataclasses import dataclass
 
 import httpx
 import pytest_asyncio
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.conftest import BACKEND_DIR, get_test_database_url, get_test_redis_url
+from tests.conftest import (
+    BACKEND_DIR,
+    get_test_database_url,
+    get_test_redis_url,
+    truncate_tables_with_retry,
+)
 
 SERVER_READY_TIMEOUT_SECONDS = 30.0
 
@@ -210,26 +214,6 @@ async def api_client(api_server) -> httpx.AsyncClient:
         yield client
 
 
-async def _truncate_all(engine, tables: str) -> None:
-    """TRUNCATE with deadlock retry: background worker processes (relay /
-    reaper) hold brief locks that can deadlock against AccessExclusive
-    TRUNCATE (40P01); their transactions are short, so a retry resolves it."""
-    import asyncio
-
-    from sqlalchemy.exc import DBAPIError
-
-    for attempt in range(6):
-        try:
-            async with engine.begin() as conn:
-                await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
-            return
-        except DBAPIError as exc:
-            if getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01" and attempt < 5:
-                await asyncio.sleep(0.3 * (attempt + 1))
-                continue
-            raise
-
-
 @pytest_asyncio.fixture(autouse=True)
 async def clean_tables_after_each_e2e_test(provision_database):
     """TRUNCATE every table before each e2e test for isolation."""
@@ -238,9 +222,9 @@ async def clean_tables_after_each_e2e_test(provision_database):
 
     tables = ", ".join(table.name for table in reversed(Base.metadata.sorted_tables))
     engine = create_async_engine(get_test_database_url())
-    await _truncate_all(engine, tables)
+    await truncate_tables_with_retry(engine, tables)
     yield
-    await _truncate_all(engine, tables)
+    await truncate_tables_with_retry(engine, tables)
     await engine.dispose()
 
 

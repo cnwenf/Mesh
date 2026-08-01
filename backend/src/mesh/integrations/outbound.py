@@ -38,14 +38,15 @@ import logging
 import random
 import socket
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
 import httpcore
 import httpx
-from sqlalchemy import func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.db.models.integration import WebhookSubscription, WebhookSubscriptionDelivery
@@ -458,26 +459,39 @@ async def webhook_dispatch_handler(
         .all()
     )
     data = payload.get("data") or {}
+    rows: list[dict[str, Any]] = []
     for subscription in subscriptions:
         if not _event_matches(subscription, event_type):
             continue
         # Persist the event type + payload at derivation time so the
         # delivery worker sends the REAL Mesh-Event header + full body
         # (§3.4 / P8) even long after the source outbox row is purged.
-        delivery = WebhookSubscriptionDelivery(
-            workspace_id=event.workspace_id,
-            subscription_id=subscription.id,
-            event_ref=source_event_ref,
-            event_type=event_type,
-            payload={"event": event_type, "data": data},
-            state="pending",
+        rows.append(
+            {
+                "workspace_id": event.workspace_id,
+                "subscription_id": subscription.id,
+                "event_ref": source_event_ref,
+                "event_type": event_type,
+                "payload": {"event": event_type, "data": data},
+                "state": "pending",
+            }
         )
-        session.add(delivery)
-        try:
-            async with session.begin_nested():
-                await session.flush()
-        except IntegrityError:
-            continue  # duplicate dequeue — the ledger row already exists
+    if rows:
+        # Idempotency is a normal control path, not an exception path.  Native
+        # ON CONFLICT avoids aborting a savepoint/outer relay transaction when
+        # two replicas derive the same (subscription_id, event_ref), and one
+        # set-based statement also shortens the handler's lock window.
+        statement = (
+            insert(WebhookSubscriptionDelivery)
+            .values(rows)
+            .on_conflict_do_nothing(
+                index_elements=[
+                    WebhookSubscriptionDelivery.subscription_id,
+                    WebhookSubscriptionDelivery.event_ref,
+                ]
+            )
+        )
+        await session.execute(statement)
     return None
 
 
@@ -517,6 +531,7 @@ class WebhookDeliveryWorker:
         break_threshold: int = DEFAULT_CIRCUIT_BREAK_THRESHOLD,
         poll_interval: float = 1.0,
         batch_size: int = 50,
+        lock_timeout: float = 0.5,
         http_client_factory=None,
         resolver=None,
         clock=None,
@@ -530,6 +545,7 @@ class WebhookDeliveryWorker:
         self._break_threshold = break_threshold
         self._poll_interval = poll_interval
         self._batch_size = batch_size
+        self._lock_timeout = max(0.0, float(lock_timeout))
         self._http_client_factory = http_client_factory
         self._resolver = resolver
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -548,27 +564,59 @@ class WebhookDeliveryWorker:
             )
         return httpx.AsyncClient(timeout=self._timeout_seconds, follow_redirects=False)
 
-    async def claim_due(self, session: AsyncSession) -> list[WebhookSubscriptionDelivery]:
+    async def claim_due(
+        self,
+        session: AsyncSession,
+        *,
+        limit: int | None = None,
+        exclude_ids: Collection[object] = (),
+    ) -> list[WebhookSubscriptionDelivery]:
         now = self._clock()
         stmt = (
             select(WebhookSubscriptionDelivery)
+            .join(
+                WebhookSubscription,
+                (
+                    WebhookSubscription.id
+                    == WebhookSubscriptionDelivery.subscription_id
+                )
+                & (
+                    WebhookSubscription.workspace_id
+                    == WebhookSubscriptionDelivery.workspace_id
+                ),
+            )
             .where(
                 WebhookSubscriptionDelivery.state == "pending",
+                WebhookSubscription.status == "active",
                 or_(
                     WebhookSubscriptionDelivery.next_retry_at.is_(None),
                     WebhookSubscriptionDelivery.next_retry_at <= now,
                 ),
             )
             .order_by(WebhookSubscriptionDelivery.created_at.asc())
-            .limit(self._batch_size)
-            .with_for_update(skip_locked=True)
+            .limit(self._batch_size if limit is None else max(0, int(limit)))
+            .with_for_update(of=WebhookSubscriptionDelivery, skip_locked=True)
         )
+        if exclude_ids:
+            stmt = stmt.where(WebhookSubscriptionDelivery.id.not_in(tuple(exclude_ids)))
         return list((await session.execute(stmt)).scalars().all())
 
-    async def deliver_one(self, session: AsyncSession, delivery: WebhookSubscriptionDelivery) -> None:
-        subscription = await session.get(WebhookSubscription, delivery.subscription_id)
+    async def deliver_one(
+        self, session: AsyncSession, delivery: WebhookSubscriptionDelivery
+    ) -> bool:
+        # Delivery locks prevent duplicate POST of one ledger row; this second
+        # SKIP LOCKED mutex serializes *different* rows for the same
+        # subscription so fail_count/circuit-break state has one writer.
+        subscription = await session.scalar(
+            select(WebhookSubscription)
+            .where(
+                WebhookSubscription.id == delivery.subscription_id,
+                WebhookSubscription.workspace_id == delivery.workspace_id,
+            )
+            .with_for_update(skip_locked=True)
+        )
         if subscription is None or subscription.status != "active":
-            return  # deleted / paused / breaker-open: leave pending until resume
+            return False  # deleted / paused / breaker-open / busy: leave pending
         secret = decrypt_credential_value(subscription.secret_ref, self._signing_secret)
         # §3.4 / P8: the body carries the REAL event type + data so the
         # subscriber can reconstruct the domain event (e.g. issue.updated)
@@ -594,7 +642,7 @@ class WebhookDeliveryWorker:
             delivery.response_status = None
             delivery.last_error = exc.code
             await self._register_failure(session, subscription, delivery, now=now)
-            return
+            return True
         timestamp = int(now.timestamp())
         headers = {
             "Mesh-Signature": format_signature_header(signature_headers(secret, body, timestamp)),
@@ -625,6 +673,7 @@ class WebhookDeliveryWorker:
             await self._register_failure(session, subscription, delivery, now=now)
         subscription.updated_at = now
         await session.flush()
+        return True
 
     async def _register_failure(
         self,
@@ -664,13 +713,36 @@ class WebhookDeliveryWorker:
                 delivery.attempts, base_seconds=self._base_seconds, max_seconds=self._max_seconds
             )
 
+    async def _configure_transaction(self, session: AsyncSession) -> None:
+        if self._lock_timeout <= 0:
+            return
+        timeout_ms = max(1, int(self._lock_timeout * 1000))
+        await session.execute(text(f"SET LOCAL lock_timeout = '{timeout_ms}ms'"))
+
     async def run_once(self) -> int:
-        async with self._session_factory() as session:
-            async with session.begin():
-                deliveries = await self.claim_due(session)
-                for delivery in deliveries:
-                    await self.deliver_one(session, delivery)
-        return len(deliveries)
+        """Process up to ``batch_size`` deliveries, one short transaction each."""
+        processed = 0
+        attempted_ids: set[object] = set()
+        for _ in range(self._batch_size):
+            delivery_id: object | None = None
+            delivered = False
+            async with self._session_factory() as session:
+                async with session.begin():
+                    await self._configure_transaction(session)
+                    deliveries = await self.claim_due(
+                        session,
+                        limit=1,
+                        exclude_ids=attempted_ids,
+                    )
+                    if deliveries:
+                        delivery = deliveries[0]
+                        delivery_id = delivery.id
+                        delivered = await self.deliver_one(session, delivery)
+            if delivery_id is None:
+                break
+            attempted_ids.add(delivery_id)
+            processed += int(delivered)
+        return processed
 
     async def run_forever(self, stop: asyncio.Event | None = None) -> None:
         while stop is None or not stop.is_set():

@@ -61,6 +61,10 @@ def test_load_settings_reads_env_and_defaults(monkeypatch):
     assert settings.realtime_event_retention == timedelta(days=7)
     assert settings.outbox_batch_size == 50
     assert settings.outbox_max_attempts == 5
+    assert settings.outbox_lock_timeout_seconds == 0.5
+    assert settings.outbox_failure_backoff_seconds == 1.0
+    assert settings.outbox_failure_backoff_max_seconds == 60.0
+    assert settings.outbox_error_backoff_seconds == 1.0
 
 
 def test_overrides_take_precedence():

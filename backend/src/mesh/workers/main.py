@@ -304,6 +304,10 @@ def build_relay(
         batch_size=settings.outbox_batch_size,
         max_attempts=settings.outbox_max_attempts,
         poll_interval=settings.outbox_poll_interval,
+        error_backoff=settings.outbox_error_backoff_seconds,
+        failure_backoff=settings.outbox_failure_backoff_seconds,
+        failure_backoff_max=settings.outbox_failure_backoff_max_seconds,
+        lock_timeout=settings.outbox_lock_timeout_seconds,
         fanout=fanout,
     )
 
@@ -400,6 +404,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         break_threshold=settings.webhook_circuit_break_threshold,
         poll_interval=settings.webhook_delivery_poll_interval,
         batch_size=settings.webhook_delivery_batch_size,
+        lock_timeout=settings.outbox_lock_timeout_seconds,
     )
 
     # integrations.md §3.8/§3.10: the im.send fast relay — sole consumer of

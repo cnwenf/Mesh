@@ -23,6 +23,7 @@ from sqlalchemy import select, text
 
 from mesh.db.models.outbox import OutboxEvent
 from mesh.db.models.runtime import ExecutionAttempt, Runtime, TaskExecution
+from tests.e2e.conftest import _drain_stdout, pin_code_under_test
 from tests.unit.runtime_support import valid_result_v1
 
 pytestmark = pytest.mark.e2e
@@ -59,12 +60,14 @@ async def runtime_worker(provision_database):
     env["MESH_STORAGE_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_PUBLIC_ENDPOINT"] = storage_endpoint
     env["MESH_STORAGE_BUCKET"] = os.environ.get("MESH_TEST_STORAGE_BUCKET", "mesh-e2e")
+    pin_code_under_test(env)
     process = subprocess.Popen(
         [sys.executable, "-m", "mesh.workers"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    _drain_stdout(process)
     await asyncio.sleep(WORKER_READY_WAIT_SECONDS)
     assert process.poll() is None, "worker died during startup"
     yield process
