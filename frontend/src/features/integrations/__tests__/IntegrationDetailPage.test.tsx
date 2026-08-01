@@ -2,7 +2,7 @@
  * IntegrationDetailPage 组件测试(integrations.md §4.1):概览(只读配置 + 编辑 +
  * 状态切换 + 凭据轮换 + has_secret 指示)+ tab 切换(绑定 / 事件台账)+ 实时重拉。
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -35,6 +35,21 @@ const INTEGRATION = {
   updated_at: '2026-07-01T00:00:00Z',
 };
 
+const DINGTALK_INTEGRATION = {
+  ...INTEGRATION,
+  id: 'int-1',
+  kind: 'im_dingtalk',
+  name: 'DingTalk R&D',
+  config: {
+    app_key: 'ding-app',
+    corp_id: 'dingCorp01',
+    receive_mode: 'stream',
+    inbound_queue: 'serial_conversation',
+    verbosity: 'final_only',
+    ack_template: '✅ 已接收，处理中',
+  },
+};
+
 function makeMe(role: string) {
   return {
     user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
@@ -54,6 +69,7 @@ function makeMe(role: string) {
 interface Recorded {
   url: string;
   method: string;
+  body?: string;
 }
 
 interface SetupFlags {
@@ -71,27 +87,53 @@ function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Reco
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
-    calls.push({ url, method });
+    calls.push({ url, method, body: typeof init?.body === 'string' ? init.body : undefined });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
     if (url.endsWith('/integrations/int-1') && method === 'GET') {
       getCount += 1;
       if (flags.failReloadGet && getCount > 1)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: integration } });
+    }
+    if (url.endsWith('/stream-status')) {
+      return fakeResponse({
+        body: {
+          data: {
+            state: 'connected',
+            last_frame_at: '2026-08-01T10:00:00Z',
+            last_attempt_at: '2026-08-01T09:59:59Z',
+            backoff_seconds: null,
+          },
+        },
+      });
     }
     if (method === 'PATCH') {
       if (flags.failPatch)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
-      return fakeResponse({ body: { data: { ...INTEGRATION, name: '新名称', status: 'disabled' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
+      return fakeResponse({
+        body: { data: { ...INTEGRATION, name: '新名称', status: 'disabled' } },
+      });
     }
     if (method === 'POST' && url.endsWith(':test')) {
       if (flags.failTest)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: { health_state: 'healthy', detail: null } } });
     }
     if (method === 'POST' && url.endsWith('/rotate-secret')) {
       if (flags.failRotate)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: { ...INTEGRATION, has_secret: true } } });
     }
     return fakeResponse({ body: { data: [], next_cursor: null } });
@@ -150,7 +192,9 @@ describe('IntegrationDetailPage', () => {
   it('shows the disabled note for a disabled integration', async () => {
     setup({ ...INTEGRATION, status: 'disabled' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-disabled-note')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-disabled-note')).toBeInTheDocument(),
+    );
   });
 
   it('edits the integration through the dialog', async () => {
@@ -161,7 +205,9 @@ describe('IntegrationDetailPage', () => {
     fireEvent.change(screen.getByTestId('integration-edit-name'), { target: { value: '新名称' } });
     await userEvent.click(screen.getByTestId('integration-edit-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -181,10 +227,14 @@ describe('IntegrationDetailPage', () => {
   it('toggles the integration status', async () => {
     const calls = setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('integration-status-toggle'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -196,7 +246,9 @@ describe('IntegrationDetailPage', () => {
     await userEvent.type(screen.getByTestId('integration-rotate-secret'), 'newsecret');
     await userEvent.click(screen.getByTestId('integration-rotate-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1/rotate-secret'))).toBe(true),
+      expect(calls.some((call) => call.url.endsWith('/integrations/int-1/rotate-secret'))).toBe(
+        true,
+      ),
     );
   });
 
@@ -216,7 +268,9 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    const initial = calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET').length;
+    const initial = calls.filter(
+      (call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET',
+    ).length;
     realtime.emit({
       channel: 'integration:int-1',
       event: 'integration.updated',
@@ -225,7 +279,8 @@ describe('IntegrationDetailPage', () => {
     } as unknown as RealtimeEventFrame);
     await waitFor(() =>
       expect(
-        calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET').length,
+        calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET')
+          .length,
       ).toBeGreaterThan(initial),
     );
   });
@@ -234,7 +289,10 @@ describe('IntegrationDetailPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: makeMe('owner') } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
@@ -258,7 +316,9 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByTestId('integration-edit-name')).toBeNull());
     await userEvent.click(screen.getByTestId('integration-rotate'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByTestId('integration-rotate-secret')).toBeNull());
   });
@@ -268,7 +328,9 @@ describe('IntegrationDetailPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-rotate')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('integration-rotate'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-submit')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-submit')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('integration-rotate-submit')).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: /close/i }));
   });
@@ -285,17 +347,23 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByTestId('integration-rotate'));
     await userEvent.type(screen.getByTestId('integration-rotate-secret'), 'newsecret');
     await userEvent.click(screen.getByTestId('integration-rotate-submit'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument(),
+    );
   });
 
   it('enables a disabled integration (toggle to active)', async () => {
     const calls = setup({ ...INTEGRATION, status: 'disabled' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('integration-status-toggle').textContent).toMatch(/Enable/);
     await userEvent.click(screen.getByTestId('integration-status-toggle'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -305,8 +373,18 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({ channel: 'workspace:other', event: 'integration.updated', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
-    realtime.emit({ channel: 'integration:int-1', event: 'integration.event_ingested', seq: 2, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'workspace:other',
+      event: 'integration.updated',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'integration:int-1',
+      event: 'integration.event_ingested',
+      seq: 2,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -316,7 +394,12 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({ channel: 'integration:int-1', event: 'integration.updated', seq: 3, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'integration:int-1',
+      event: 'integration.updated',
+      seq: 3,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -381,7 +464,9 @@ describe('IntegrationDetailPage', () => {
     resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     unmount();
-    resolveGet?.(fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }));
+    resolveGet?.(
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
@@ -400,7 +485,9 @@ describe('IntegrationDetailPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me'))
-        return fakeResponse({ body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } } });
+        return fakeResponse({
+          body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -425,7 +512,9 @@ describe('IntegrationDetailPage', () => {
     try {
       setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: 'token_expired' });
       renderPage();
-      await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+      );
       expect(screen.getByTestId('integration-last-error').textContent).toBe('token_expired');
       await userEvent.click(screen.getByTestId('integration-reauthorize'));
       expect(locationAssign).toHaveBeenCalledWith(
@@ -439,15 +528,24 @@ describe('IntegrationDetailPage', () => {
   it('hides the re-authorize button and error subtext when not applicable', async () => {
     setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: null }, { role: 'member' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
     expect(screen.queryByTestId('integration-last-error')).toBeNull();
   });
 
   it('hides re-authorize for auth-failed non-oauth connectors', async () => {
-    setup({ ...INTEGRATION, kind: 'webhook_outbound', health_state: 'auth_failed', last_error: 'bad' });
+    setup({
+      ...INTEGRATION,
+      kind: 'webhook_outbound',
+      health_state: 'auth_failed',
+      last_error: 'bad',
+    });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
   });
 
@@ -460,7 +558,9 @@ describe('IntegrationDetailPage', () => {
       if (url.endsWith('/integrations/int-1') && method === 'GET')
         return fakeResponse({ body: { data: INTEGRATION } });
       if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ body: { data: { health_state: 'auth_failed', detail: 'token_revoked' } } });
+        return fakeResponse({
+          body: { data: { health_state: 'auth_failed', detail: 'token_revoked' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -468,7 +568,9 @@ describe('IntegrationDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
     expect(screen.queryByTestId('integration-auth-failed-banner')).toBeNull();
     await userEvent.click(screen.getByTestId('integration-test'));
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('integration-health').textContent).toContain('Auth failed'),
     );
@@ -483,10 +585,14 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByTestId('integration-test'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.url.endsWith('/integrations/int-1:test') && call.method === 'POST'),
+        calls.some(
+          (call) => call.url.endsWith('/integrations/int-1:test') && call.method === 'POST',
+        ),
       ).toBe(true),
     );
-    await waitFor(() => expect(screen.getByTestId('integration-health').textContent).toContain('Healthy'));
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-health').textContent).toContain('Healthy'),
+    );
     await waitFor(() => expect(screen.getByText(/Connection test completed/)).toBeInTheDocument());
   });
 
@@ -506,8 +612,7 @@ describe('IntegrationDetailPage', () => {
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
       if (url.endsWith('/integrations/int-1') && method === 'GET')
         return fakeResponse({ body: { data: INTEGRATION } });
-      if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ body: { data: null } });
+      if (method === 'POST' && url.endsWith(':test')) return fakeResponse({ body: { data: null } });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -522,5 +627,217 @@ describe('IntegrationDetailPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     expect(screen.queryByTestId('integration-test')).toBeNull();
+  });
+
+  it('renders DingTalk-specific connection and queue navigation without the generic test action', async () => {
+    setup(DINGTALK_INTEGRATION);
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId('dingtalk-connection-panel')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('integration-tab-queue')).toBeInTheDocument();
+    expect(screen.queryByTestId('integration-test')).toBeNull();
+    expect(screen.getByTestId('dingtalk-test-send')).toBeInTheDocument();
+    expect(screen.getByTestId('dingtalk-diagnose')).toBeInTheDocument();
+  });
+
+  it('edits DingTalk through structured fields and never writes a secret-like config key', async () => {
+    const calls = setup(DINGTALK_INTEGRATION);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-edit')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-edit'));
+    expect(screen.queryByTestId('integration-edit-config')).toBeNull();
+    expect(screen.getByTestId('integration-edit-dingtalk-app-key')).toHaveValue('ding-app');
+    expect(screen.getByTestId('integration-edit-dingtalk-receive-mode')).toHaveValue('stream');
+    await userEvent.selectOptions(
+      screen.getByTestId('integration-edit-dingtalk-receive-mode'),
+      'http',
+    );
+    await userEvent.selectOptions(
+      screen.getByTestId('integration-edit-dingtalk-verbosity'),
+      'progress',
+    );
+    await userEvent.click(screen.getByTestId('integration-edit-submit'));
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
+    );
+    const patchCall = calls.find(
+      (call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH',
+    );
+    const body = JSON.parse(patchCall?.body ?? '{}') as { config: Record<string, unknown> };
+    expect(body.config).toMatchObject({
+      app_key: 'ding-app',
+      corp_id: 'dingCorp01',
+      receive_mode: 'http',
+      inbound_queue: 'serial_conversation',
+      verbosity: 'progress',
+      ack_template: '✅ 已接收，处理中',
+    });
+    expect(Object.keys(body.config).some((key) => /secret/i.test(key))).toBe(false);
+  });
+
+  it('initializes and edits the alternate DingTalk mode, verbosity, and acknowledgement', async () => {
+    setup({
+      ...DINGTALK_INTEGRATION,
+      config: {
+        ...DINGTALK_INTEGRATION.config,
+        receive_mode: 'http',
+        verbosity: 'progress',
+      },
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-edit')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-edit'));
+    expect(screen.getByTestId('integration-edit-dingtalk-receive-mode')).toHaveValue('http');
+    expect(screen.getByTestId('integration-edit-dingtalk-verbosity')).toHaveValue('progress');
+
+    await userEvent.selectOptions(
+      screen.getByTestId('integration-edit-dingtalk-receive-mode'),
+      'stream',
+    );
+    await userEvent.selectOptions(
+      screen.getByTestId('integration-edit-dingtalk-verbosity'),
+      'final_only',
+    );
+    await userEvent.clear(screen.getByTestId('integration-edit-dingtalk-ack-template'));
+    await userEvent.type(screen.getByTestId('integration-edit-dingtalk-ack-template'), 'Received');
+
+    expect(screen.getByTestId('integration-edit-dingtalk-receive-mode')).toHaveValue('stream');
+    expect(screen.getByTestId('integration-edit-dingtalk-verbosity')).toHaveValue('final_only');
+    expect(screen.getByTestId('integration-edit-dingtalk-ack-template')).toHaveValue('Received');
+  });
+
+  it('turns queue_updated frames into authorized refetches instead of local queue patches', async () => {
+    const calls = setup(DINGTALK_INTEGRATION);
+    const realtime = makeRealtime();
+    renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-queue')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-queue'));
+    await waitFor(() => expect(screen.getByTestId('integration-queue-panel')).toBeInTheDocument());
+
+    const conversation = 'dingtalk:dingCorp01:cid-visible';
+    const targetedBefore = calls.length;
+    act(() => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:integrations',
+        event: 'integration.queue_updated',
+        seq: 10,
+        payload: { integration_id: 'int-1', conversation_key: conversation },
+      });
+    });
+    await waitFor(() =>
+      expect(
+        calls
+          .slice(targetedBefore)
+          .some((call) =>
+            call.url.includes(`conversation_key=${encodeURIComponent(conversation)}`),
+          ),
+      ).toBe(true),
+    );
+
+    const batchedBefore = calls.length;
+    const secondConversation = 'dingtalk:dingCorp01:cid-second';
+    const thirdConversation = 'dingtalk:dingCorp01:cid-third';
+    act(() => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:integrations',
+        event: 'integration.queue_updated',
+        seq: 12,
+        payload: { integration_id: 'int-1', conversation_key: secondConversation },
+      });
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:integrations',
+        event: 'integration.queue_updated',
+        seq: 13,
+        payload: { integration_id: 'int-1', conversation_key: thirdConversation },
+      });
+    });
+    await waitFor(() => {
+      const newCalls = calls.slice(batchedBefore);
+      expect(
+        newCalls.some((call) =>
+          call.url.includes(`conversation_key=${encodeURIComponent(secondConversation)}`),
+        ),
+      ).toBe(true);
+      expect(
+        newCalls.some((call) =>
+          call.url.includes(`conversation_key=${encodeURIComponent(thirdConversation)}`),
+        ),
+      ).toBe(true);
+    });
+
+    const projectBefore = calls.length;
+    act(() => {
+      realtime.emit({
+        op: 'event',
+        channel: 'workspace:ws-1:integrations',
+        event: 'integration.queue_updated',
+        seq: 11,
+        payload: { integration_id: 'int-1', scope: 'project' },
+      });
+    });
+    await waitFor(() =>
+      expect(
+        calls
+          .slice(projectBefore)
+          .some(
+            (call) =>
+              call.url.includes('/queue?limit=100') && !call.url.includes('conversation_key='),
+          ),
+      ).toBe(true),
+    );
+  });
+
+  it('consumes the initial queue load without starting a refetch loop', async () => {
+    const calls = setup(DINGTALK_INTEGRATION);
+    renderPage();
+    await waitFor(() => expect(screen.getByTestId('integration-tab-queue')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('integration-tab-queue'));
+    await waitFor(() =>
+      expect(calls.some((call) => call.url.includes('/queue?limit=100'))).toBe(true),
+    );
+    const stableCount = calls.filter((call) => call.url.includes('/queue?limit=100')).length;
+    expect(stableCount).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.filter((call) => call.url.includes('/queue?limit=100'))).toHaveLength(stableCount);
+  });
+
+  it('bounds hidden-tab invalidations and lets the mount-wide fetch supersede them', async () => {
+    const calls = setup(DINGTALK_INTEGRATION);
+    const realtime = makeRealtime();
+    renderPage(realtime);
+    await waitFor(() => expect(screen.getByTestId('integration-tab-queue')).toBeInTheDocument());
+
+    act(() => {
+      for (const [seq, conversation] of [
+        [20, 'dingtalk:dingCorp01:hidden-a'],
+        [21, 'dingtalk:dingCorp01:hidden-b'],
+        [22, 'dingtalk:dingCorp01:hidden-c'],
+      ] as const) {
+        realtime.emit({
+          op: 'event',
+          channel: 'workspace:ws-1:integrations',
+          event: 'integration.queue_updated',
+          seq,
+          payload: { integration_id: 'int-1', conversation_key: conversation },
+        });
+      }
+    });
+
+    const beforeOpen = calls.length;
+    await userEvent.click(screen.getByTestId('integration-tab-queue'));
+    await waitFor(() =>
+      expect(
+        calls.slice(beforeOpen).filter((call) => call.url.includes('/queue?limit=100')),
+      ).toHaveLength(1),
+    );
+    const queueCalls = calls.slice(beforeOpen).filter((call) => call.url.includes('/queue?'));
+    expect(queueCalls).toHaveLength(1);
+    expect(queueCalls[0]?.url).not.toContain('conversation_key=');
   });
 });

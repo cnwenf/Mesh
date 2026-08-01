@@ -8,15 +8,25 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, Input, Select, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Select,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { listMembers } from '../members/api';
 import type { MemberSummary } from '../members/types';
-import { listProjects } from '../projects/api';
 import type { ProjectSummary } from '../projects/types';
 import { createBinding, deleteBinding, listBindings } from './api';
 import { BINDING_STATUS_TONE } from './format';
+import { listAllVisibleProjects } from './projectVisibility';
 import type { Binding, IntegrationKind, MatchConfig } from './types';
 import './integrations.css';
 
@@ -56,6 +66,11 @@ function splitKeywords(value: string): string[] {
     .filter((entry) => entry !== '');
 }
 
+/** 名册行的 `id` 是 members.id；绑定外键需要 profile 内的 agents.id。 */
+function agentEntityId(agent: MemberSummary): string {
+  return agent.profile?.id ?? agent.id;
+}
+
 export interface BindingDrawerProps {
   readonly workspaceId: string;
   readonly integrationId: string;
@@ -91,15 +106,24 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
     const client = newClient();
     void (async () => {
       try {
-        const [bindingListing, agentListing, projectListing] = await Promise.all([
+        const [bindingListing, agentListing, visibleProjects] = await Promise.all([
           listBindings(client, workspaceId, integrationId),
           listMembers(client, workspaceId, { memberType: 'agent', limit: 100 }),
-          listProjects(client, workspaceId, { limit: 100 }),
+          listAllVisibleProjects(client, workspaceId),
         ]);
         if (cancelled) return;
-        setBindings(bindingListing.data);
+        const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
+        setBindings(
+          isAdmin
+            ? bindingListing.data
+            : bindingListing.data.filter(
+                (binding) =>
+                  binding.scope === SCOPE_WORKSPACE ||
+                  (binding.project_id !== null && visibleProjectIds.has(binding.project_id)),
+              ),
+        );
         setAgents(agentListing.data);
-        setProjects(projectListing.data);
+        setProjects(visibleProjects.filter((project) => !project.archived));
         setErrorKey(null);
       } catch (error) {
         if (cancelled) return;
@@ -110,7 +134,7 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, integrationId, reloadKey, localReloadKey]);
+  }, [workspaceId, integrationId, isAdmin, reloadKey, localReloadKey]);
 
   const resetDrawer = useCallback((): void => {
     setExternalRef('');
@@ -198,7 +222,9 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
           tone: 'success',
           closeLabel: t('common.close'),
         });
-        setBindings((prev) => (prev === null ? prev : prev.filter((binding) => binding.id !== bindingId)));
+        setBindings((prev) =>
+          prev === null ? prev : prev.filter((binding) => binding.id !== bindingId),
+        );
       } catch (error) {
         toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
           tone: 'danger',
@@ -212,7 +238,7 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
   const agentName = useCallback(
     (agentId: string | null): string => {
       if (agentId === null) return t('integrations.bindings.auditOnly');
-      return agents.find((agent) => agent.id === agentId)?.display_name ?? agentId;
+      return agents.find((agent) => agentEntityId(agent) === agentId)?.display_name ?? agentId;
     },
     [agents, t],
   );
@@ -247,7 +273,9 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
           onRetry={() => setLocalReloadKey((key) => key + 1)}
         />
       )}
-      {bindings === null && errorKey === null && <Skeleton loadingLabel={t('integrations.loading')} />}
+      {bindings === null && errorKey === null && (
+        <Skeleton loadingLabel={t('integrations.loading')} />
+      )}
       {bindings !== null && bindings.length === 0 && errorKey === null && (
         <EmptyState title={t('integrations.bindings.empty')} description="" />
       )}
@@ -271,7 +299,9 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
                     ? `${t('integrations.bindings.scopeProject')}`
                     : t('integrations.bindings.scopeWorkspace')}
                 </td>
-                <td data-testid={`binding-agent-${binding.id}`}>{agentName(binding.bound_agent_id)}</td>
+                <td data-testid={`binding-agent-${binding.id}`}>
+                  {agentName(binding.bound_agent_id)}
+                </td>
                 <td>
                   <StatusDot
                     tone={BINDING_STATUS_TONE[binding.status]}
@@ -312,7 +342,9 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
         <Select
           label={t('integrations.bindings.scopeLabel')}
           value={scope}
-          onChange={(event) => setScope(event.target.value === SCOPE_PROJECT ? SCOPE_PROJECT : SCOPE_WORKSPACE)}
+          onChange={(event) =>
+            setScope(event.target.value === SCOPE_PROJECT ? SCOPE_PROJECT : SCOPE_WORKSPACE)
+          }
           data-testid="binding-scope"
         >
           <option value={SCOPE_WORKSPACE}>{t('integrations.bindings.scopeWorkspace')}</option>
@@ -400,7 +432,7 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
         >
           <option value={AGENT_NONE}>{t('integrations.bindings.auditOnly')}</option>
           {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
+            <option key={agent.id} value={agentEntityId(agent)}>
               {agent.display_name}
             </option>
           ))}

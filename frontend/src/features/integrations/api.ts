@@ -12,11 +12,16 @@ import type {
   Binding,
   CreateIntegrationResult,
   Delivery,
+  DingTalkStreamStatus,
+  DingTalkTestSendResult,
   ExternalIdentity,
   Integration,
   IntegrationEvent,
   IntegrationKind,
   MatchConfig,
+  QueueAuditItem,
+  QueueConversationSummary,
+  QueueItem,
   VcsLink,
   VcsObjectType,
   WebhookSubscription,
@@ -37,6 +42,9 @@ const bindingPath = (workspaceId: string, bindingId: string): string =>
 const integrationEventsPath = (workspaceId: string, integrationId: string): string =>
   `${integrationPath(workspaceId, integrationId)}/events`;
 
+const integrationQueuePath = (workspaceId: string, integrationId: string): string =>
+  `${integrationPath(workspaceId, integrationId)}/queue`;
+
 const subscriptionsPath = (workspaceId: string): string =>
   `/api/v1/workspaces/${workspaceId}/webhook-subscriptions`;
 
@@ -56,6 +64,12 @@ export const integrationChannel = (integrationId: string): string => `integratio
 export const integrationAuthorizeUrl = (workspaceId: string, kind: IntegrationKind): string => {
   const base = env.apiBaseUrl || window.location.origin;
   return `${base}/api/v1/workspaces/${workspaceId}/integrations/oauth/${kind}/authorize`;
+};
+
+/** 钉钉 HTTP 接收回调地址；不含 workspace、integration 或凭据。 */
+export const dingtalkCallbackUrl = (): string => {
+  const base = env.apiBaseUrl || window.location.origin;
+  return `${base}/api/v1/integrations/dingtalk/events`;
 };
 
 export interface ListIntegrationsParams {
@@ -163,14 +177,110 @@ export async function testIntegration(
   );
 }
 
+export interface DingTalkTestSendBody {
+  readonly conversation_ref: string;
+  readonly conversation_type: 'group' | 'direct';
+  readonly user_key?: string;
+}
+
+/** 出站测试：刻意与接收信道诊断分离(§3.9 / §5.6)。 */
+export async function testDingTalkSend(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+  body: DingTalkTestSendBody,
+): Promise<DingTalkTestSendResult> {
+  return client.request<DingTalkTestSendResult>(
+    'POST',
+    `${integrationPath(workspaceId, integrationId)}/test-send`,
+    { body },
+  );
+}
+
+/** Stream 接收信道持久状态；down 时后端以 503 + details 返回同一状态体。 */
+export async function getDingTalkStreamStatus(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+): Promise<DingTalkStreamStatus> {
+  return client.request<DingTalkStreamStatus>(
+    'GET',
+    `${integrationPath(workspaceId, integrationId)}/stream-status`,
+  );
+}
+
+export interface ListQueueItemsParams {
+  readonly state?: string;
+  readonly conversationKey?: string;
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+/** 已授权、已按项目可见性过滤且固定排除孤儿的队列切片。 */
+export async function listQueueItems(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+  params: ListQueueItemsParams = {},
+): Promise<{ data: QueueItem[]; nextCursor: string | null }> {
+  const envelope = await client.list<QueueItem>(integrationQueuePath(workspaceId, integrationId), {
+    query: {
+      state: params.state,
+      conversation_key: params.conversationKey,
+      cursor: params.cursor,
+      limit: params.limit,
+    },
+  });
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
+export async function getQueueSummary(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+): Promise<{ data: QueueConversationSummary[]; nextCursor: string | null }> {
+  const envelope = await client.list<QueueConversationSummary>(
+    `${integrationQueuePath(workspaceId, integrationId)}/summary`,
+  );
+  return { data: envelope.data, nextCursor: envelope.next_cursor ?? null };
+}
+
+export async function cancelQueueItem(
+  client: MeshApiClient,
+  workspaceId: string,
+  integrationId: string,
+  itemId: string,
+): Promise<{ id: string; state: 'cancelled' }> {
+  return client.request<{ id: string; state: 'cancelled' }>(
+    'POST',
+    `${integrationQueuePath(workspaceId, integrationId)}/${itemId}:cancel`,
+    { body: {} },
+  );
+}
+
+export interface ListQueueAuditParams {
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+export async function listQueueAudit(
+  client: MeshApiClient,
+  workspaceId: string,
+  params: ListQueueAuditParams = {},
+): Promise<{ data: QueueAuditItem[]; nextCursor: string | null }> {
+  const envelope = await client.list<QueueAuditItem>(
+    `/api/v1/workspaces/${workspaceId}/integration-queue-audit`,
+    { query: { cursor: params.cursor, limit: params.limit } },
+  );
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
 export async function listBindings(
   client: MeshApiClient,
   workspaceId: string,
   integrationId: string,
 ): Promise<{ data: Binding[]; nextCursor: string | null }> {
-  const envelope = await client.list<Binding>(
-    integrationBindingsPath(workspaceId, integrationId),
-  );
+  const envelope = await client.list<Binding>(integrationBindingsPath(workspaceId, integrationId));
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 
@@ -272,10 +382,7 @@ export async function getSubscription(
   workspaceId: string,
   subscriptionId: string,
 ): Promise<WebhookSubscription> {
-  return client.request<WebhookSubscription>(
-    'GET',
-    subscriptionPath(workspaceId, subscriptionId),
-  );
+  return client.request<WebhookSubscription>('GET', subscriptionPath(workspaceId, subscriptionId));
 }
 
 export interface PatchSubscriptionBody {

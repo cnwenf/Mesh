@@ -33,6 +33,8 @@ import type { Membership } from '../members/types';
 import {
   createIntegration,
   deleteIntegration,
+  dingtalkCallbackUrl,
+  getDingTalkStreamStatus,
   integrationAuthorizeUrl,
   listBindings,
   listIntegrations,
@@ -41,17 +43,38 @@ import {
   workspaceIntegrationsChannel,
 } from './api';
 import { ExternalIdentitiesPanel } from './ExternalIdentitiesPanel';
-import { HEALTH_STATE_TONE, INTEGRATION_STATUS_TONE, KIND_ICON, toHealthState } from './format';
-import type { Integration, IntegrationKind } from './types';
-import { CONNECTOR_CATALOG, INTEGRATION_KINDS, OAUTH_KINDS } from './types';
+import {
+  DINGTALK_STREAM_STATE_TONE,
+  HEALTH_STATE_TONE,
+  INTEGRATION_STATUS_TONE,
+  KIND_ICON,
+  toDingTalkStreamState,
+  toHealthState,
+} from './format';
+import type {
+  DingTalkReceiveMode,
+  DingTalkStreamStatus,
+  DingTalkVerbosity,
+  Integration,
+  IntegrationKind,
+} from './types';
+import { listAllVisibleProjects } from './projectVisibility';
+import {
+  CONNECTOR_CATALOG,
+  DINGTALK_DEFAULT_ACK_TEMPLATE,
+  INTEGRATION_KINDS,
+  OAUTH_KINDS,
+} from './types';
 import './integrations.css';
 
 const PAGE_LIMIT = 100;
 
 /** 各 kind 的非密 config JSON 占位提示(§2.7;密钥走 secret 字段,不入 config)。 */
 const CONFIG_HINTS: Record<IntegrationKind, string> = {
-  im_feishu: '{ "app_id": "cli_xxx", "callback_base": "https://mesh.example.com/api/v1/integrations/feishu" }',
+  im_feishu:
+    '{ "app_id": "cli_xxx", "callback_base": "https://mesh.example.com/api/v1/integrations/feishu" }',
   im_slack: '{ "app_id": "A0xxx", "team_id": "T0xxx", "bot_user_id": "U0xxx" }',
+  im_dingtalk: '{ "app_key": "dingxxx", "corp_id": "dingcorp" }',
   vcs_github: '{ "installation_id": "1234567", "api_base": "https://api.github.com" }',
   vcs_gitlab: '{ "instance_url": "https://gitlab.com" }',
   webhook_outbound: '{}',
@@ -101,7 +124,12 @@ function ConnectorCard(props: ConnectorCardProps): React.JSX.Element {
           <span className="mesh-integrations__muted">{t('integrations.catalog.notConnected')}</span>
         )}
         {isAdmin && (
-          <Button variant="secondary" size="sm" onClick={() => onConnect(kind)} data-testid={`connector-connect-${kind}`}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onConnect(kind)}
+            data-testid={`connector-connect-${kind}`}
+          >
             {t('integrations.catalog.connect')}
           </Button>
         )}
@@ -116,7 +144,12 @@ interface AddIntegrationDialogProps {
   readonly initialKind: IntegrationKind;
   readonly busy: boolean;
   readonly onClose: () => void;
-  readonly onSubmit: (input: { kind: IntegrationKind; name: string; config: string; secret: string }) => void;
+  readonly onSubmit: (input: {
+    kind: IntegrationKind;
+    name: string;
+    config: string | Readonly<Record<string, unknown>>;
+    secret: string;
+  }) => void;
   readonly onOAuth: (kind: IntegrationKind) => void;
 }
 
@@ -127,6 +160,11 @@ function AddIntegrationDialog(props: AddIntegrationDialogProps): React.JSX.Eleme
   const [name, setName] = useState('');
   const [config, setConfig] = useState('');
   const [secret, setSecret] = useState('');
+  const [dingtalkAppKey, setDingtalkAppKey] = useState('');
+  const [dingtalkCorpId, setDingtalkCorpId] = useState('');
+  const [dingtalkReceiveMode, setDingtalkReceiveMode] = useState<DingTalkReceiveMode>('stream');
+  const [dingtalkVerbosity, setDingtalkVerbosity] = useState<DingTalkVerbosity>('final_only');
+  const [dingtalkAckTemplate, setDingtalkAckTemplate] = useState(DINGTALK_DEFAULT_ACK_TEMPLATE);
 
   useEffect(() => {
     if (open) {
@@ -134,13 +172,36 @@ function AddIntegrationDialog(props: AddIntegrationDialogProps): React.JSX.Eleme
       setName('');
       setConfig('');
       setSecret('');
+      setDingtalkAppKey('');
+      setDingtalkCorpId('');
+      setDingtalkReceiveMode('stream');
+      setDingtalkVerbosity('final_only');
+      setDingtalkAckTemplate(DINGTALK_DEFAULT_ACK_TEMPLATE);
     }
   }, [open, initialKind]);
 
   const supportsOAuth = OAUTH_KINDS.has(kind);
+  const isDingTalk = kind === 'im_dingtalk';
+  const dingTalkConfig = {
+    app_key: dingtalkAppKey.trim(),
+    corp_id: dingtalkCorpId.trim(),
+    receive_mode: dingtalkReceiveMode,
+    inbound_queue: 'serial_conversation',
+    verbosity: dingtalkVerbosity,
+    ack_template: dingtalkAckTemplate,
+  } as const;
+  const canSubmit =
+    name.trim() !== '' &&
+    (!isDingTalk ||
+      (dingtalkAppKey.trim() !== '' && dingtalkCorpId.trim() !== '' && secret.trim() !== ''));
 
   return (
-    <Dialog open={open} onClose={onClose} title={t('integrations.add.title')} closeLabel={t('common.close')}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('integrations.add.title')}
+      closeLabel={t('common.close')}
+    >
       <Select
         label={t('integrations.add.kindLabel')}
         value={kind}
@@ -159,18 +220,75 @@ function AddIntegrationDialog(props: AddIntegrationDialogProps): React.JSX.Eleme
         onChange={(event) => setName(event.target.value)}
         data-testid="integration-add-name"
       />
-      <div className="mesh-integrations__field">
-        <label htmlFor="integration-add-config">{t('integrations.add.configLabel')}</label>
-        <textarea
-          id="integration-add-config"
-          rows={4}
-          value={config}
-          placeholder={CONFIG_HINTS[kind]}
-          onChange={(event) => setConfig(event.target.value)}
-          data-testid="integration-add-config"
-        />
-        <span className="mesh-integrations__muted">{t('integrations.add.configHint')}</span>
-      </div>
+      {isDingTalk ? (
+        <>
+          <Input
+            label={t('integrations.dingtalk.appKey')}
+            value={dingtalkAppKey}
+            onChange={(event) => setDingtalkAppKey(event.target.value)}
+            data-testid="integration-dingtalk-app-key"
+          />
+          <Input
+            label={t('integrations.dingtalk.corpId')}
+            value={dingtalkCorpId}
+            onChange={(event) => setDingtalkCorpId(event.target.value)}
+            data-testid="integration-dingtalk-corp-id"
+          />
+          <Select
+            label={t('integrations.dingtalk.receiveMode')}
+            value={dingtalkReceiveMode}
+            onChange={(event) => setDingtalkReceiveMode(event.target.value as DingTalkReceiveMode)}
+            data-testid="integration-dingtalk-receive-mode"
+          >
+            <option value="stream">{t('integrations.dingtalk.receive.stream')}</option>
+            <option value="http">{t('integrations.dingtalk.receive.http')}</option>
+          </Select>
+          {dingtalkReceiveMode === 'stream' ? (
+            <p className="mesh-integrations__muted" data-testid="integration-dingtalk-stream-hint">
+              {t('integrations.dingtalk.streamHint')}
+            </p>
+          ) : (
+            <div
+              className="mesh-integrations__field"
+              data-testid="integration-dingtalk-callback-url"
+            >
+              <span>{t('integrations.dingtalk.callbackUrl')}</span>
+              <code>{dingtalkCallbackUrl()}</code>
+              <span className="mesh-integrations__muted">
+                {t('integrations.dingtalk.httpHint')}
+              </span>
+            </div>
+          )}
+          <Select
+            label={t('integrations.dingtalk.verbosity')}
+            value={dingtalkVerbosity}
+            onChange={(event) => setDingtalkVerbosity(event.target.value as DingTalkVerbosity)}
+            data-testid="integration-dingtalk-verbosity"
+          >
+            <option value="final_only">{t('integrations.dingtalk.verbosity.final_only')}</option>
+            <option value="progress">{t('integrations.dingtalk.verbosity.progress')}</option>
+          </Select>
+          <Input
+            label={t('integrations.dingtalk.ackTemplate')}
+            value={dingtalkAckTemplate}
+            onChange={(event) => setDingtalkAckTemplate(event.target.value)}
+            data-testid="integration-dingtalk-ack-template"
+          />
+        </>
+      ) : (
+        <div className="mesh-integrations__field">
+          <label htmlFor="integration-add-config">{t('integrations.add.configLabel')}</label>
+          <textarea
+            id="integration-add-config"
+            rows={4}
+            value={config}
+            placeholder={CONFIG_HINTS[kind]}
+            onChange={(event) => setConfig(event.target.value)}
+            data-testid="integration-add-config"
+          />
+          <span className="mesh-integrations__muted">{t('integrations.add.configHint')}</span>
+        </div>
+      )}
       <Input
         label={t('integrations.add.secretLabel')}
         type="password"
@@ -195,8 +313,15 @@ function AddIntegrationDialog(props: AddIntegrationDialogProps): React.JSX.Eleme
         <Button
           variant="primary"
           isLoading={busy}
-          disabled={name.trim() === ''}
-          onClick={() => onSubmit({ kind, name: name.trim(), config, secret })}
+          disabled={!canSubmit}
+          onClick={() =>
+            onSubmit({
+              kind,
+              name: name.trim(),
+              config: isDingTalk ? dingTalkConfig : config,
+              secret,
+            })
+          }
           data-testid="integration-add-submit"
         >
           {t('common.confirm')}
@@ -216,6 +341,7 @@ export function IntegrationsPage(): React.JSX.Element {
   const [membership, setMembership] = useState<Membership | null>(null);
   const [integrations, setIntegrations] = useState<Integration[] | null>(null);
   const [bindingCounts, setBindingCounts] = useState<Record<string, number>>({});
+  const [streamStatuses, setStreamStatuses] = useState<Record<string, DingTalkStreamStatus>>({});
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
@@ -242,16 +368,73 @@ export function IntegrationsPage(): React.JSX.Element {
           return;
         }
         setMembership(workspace);
-        const listing = await listIntegrations(client, workspace.workspace_id, { limit: PAGE_LIMIT });
-        const counts = await Promise.all(
-          listing.data.map(async (integration) => {
-            const bindings = await listBindings(client, workspace.workspace_id, integration.id);
-            return [integration.id, bindings.data.length] as const;
-          }),
-        );
+        const canViewEveryProject = canViewSettings(workspace.role);
+        const [listing, visibleProjects] = await Promise.all([
+          listIntegrations(client, workspace.workspace_id, { limit: PAGE_LIMIT }),
+          canViewEveryProject
+            ? Promise.resolve(null)
+            : listAllVisibleProjects(client, workspace.workspace_id),
+        ]);
+        const visibleProjectIds = new Set(visibleProjects?.map((project) => project.id) ?? []);
+        const [counts, streamEntries] = await Promise.all([
+          Promise.all(
+            listing.data.map(async (integration) => {
+              const bindings = await listBindings(client, workspace.workspace_id, integration.id);
+              const visibleBindings = canViewEveryProject
+                ? bindings.data
+                : bindings.data.filter(
+                    (binding) =>
+                      binding.scope === 'workspace' ||
+                      (binding.project_id !== null && visibleProjectIds.has(binding.project_id)),
+                  );
+              return [integration.id, visibleBindings.length] as const;
+            }),
+          ),
+          Promise.all(
+            listing.data
+              .filter(
+                (integration) =>
+                  integration.kind === 'im_dingtalk' && integration.config.receive_mode !== 'http',
+              )
+              .map(async (integration) => {
+                try {
+                  return [
+                    integration.id,
+                    await getDingTalkStreamStatus(client, workspace.workspace_id, integration.id),
+                  ] as const;
+                } catch (error) {
+                  if (
+                    error instanceof MeshApiError &&
+                    error.code === 'stream_channel_unavailable'
+                  ) {
+                    return [
+                      integration.id,
+                      {
+                        state: toDingTalkStreamState(String(error.details?.state ?? 'down')),
+                        last_frame_at:
+                          typeof error.details?.last_frame_at === 'string'
+                            ? error.details.last_frame_at
+                            : null,
+                        last_attempt_at:
+                          typeof error.details?.last_attempt_at === 'string'
+                            ? error.details.last_attempt_at
+                            : null,
+                        backoff_seconds:
+                          typeof error.details?.backoff_seconds === 'number'
+                            ? error.details.backoff_seconds
+                            : null,
+                      } satisfies DingTalkStreamStatus,
+                    ] as const;
+                  }
+                  return null;
+                }
+              }),
+          ),
+        ]);
         if (cancelled) return;
         setIntegrations(listing.data);
         setBindingCounts(Object.fromEntries(counts));
+        setStreamStatuses(Object.fromEntries(streamEntries.filter((entry) => entry !== null)));
         setErrorKey(null);
       } catch (error) {
         if (cancelled) return;
@@ -327,10 +510,15 @@ export function IntegrationsPage(): React.JSX.Element {
   );
 
   const submitAdd = useCallback(
-    (input: { kind: IntegrationKind; name: string; config: string; secret: string }): void => {
+    (input: {
+      kind: IntegrationKind;
+      name: string;
+      config: string | Readonly<Record<string, unknown>>;
+      secret: string;
+    }): void => {
       if (membership === null) return;
       let configObject: Record<string, unknown> | undefined;
-      if (input.config.trim() !== '') {
+      if (typeof input.config === 'string' && input.config.trim() !== '') {
         try {
           configObject = JSON.parse(input.config) as Record<string, unknown>;
         } catch {
@@ -340,6 +528,8 @@ export function IntegrationsPage(): React.JSX.Element {
           });
           return;
         }
+      } else if (typeof input.config !== 'string') {
+        configObject = { ...input.config };
       }
       setBusy(true);
       void runAction(
@@ -364,8 +554,13 @@ export function IntegrationsPage(): React.JSX.Element {
       if (membership === null) return;
       const nextStatus = integration.status === 'active' ? 'disabled' : 'active';
       void runAction(
-        () => patchIntegration(newClient(), membership.workspace_id, integration.id, { status: nextStatus }),
-        nextStatus === 'active' ? t('integrations.toast.enabled') : t('integrations.toast.disabled'),
+        () =>
+          patchIntegration(newClient(), membership.workspace_id, integration.id, {
+            status: nextStatus,
+          }),
+        nextStatus === 'active'
+          ? t('integrations.toast.enabled')
+          : t('integrations.toast.disabled'),
       );
       setDisableTarget(null);
     },
@@ -390,7 +585,11 @@ export function IntegrationsPage(): React.JSX.Element {
       setTestingId(integration.id);
       void (async () => {
         try {
-          const result = await testIntegration(newClient(), membership.workspace_id, integration.id);
+          const result = await testIntegration(
+            newClient(),
+            membership.workspace_id,
+            integration.id,
+          );
           const nextState = toHealthState(result.health_state);
           setIntegrations((prev) =>
             prev === null
@@ -406,10 +605,13 @@ export function IntegrationsPage(): React.JSX.Element {
             closeLabel: t('common.close'),
           });
         } catch (error) {
-          toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
-            tone: 'danger',
-            closeLabel: t('common.close'),
-          });
+          toast.addToast(
+            t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
+            {
+              tone: 'danger',
+              closeLabel: t('common.close'),
+            },
+          );
         } finally {
           setTestingId(null);
         }
@@ -426,10 +628,18 @@ export function IntegrationsPage(): React.JSX.Element {
     return counts;
   }, [integrations]);
 
-  if (membership === null && integrations !== null && integrations.length === 0 && errorKey === null) {
+  if (
+    membership === null &&
+    integrations !== null &&
+    integrations.length === 0 &&
+    errorKey === null
+  ) {
     return (
       <div className="mesh-integrations__page">
-        <EmptyState title={t('integrations.noWorkspace.title')} description={t('integrations.noWorkspace.description')} />
+        <EmptyState
+          title={t('integrations.noWorkspace.title')}
+          description={t('integrations.noWorkspace.description')}
+        />
       </div>
     );
   }
@@ -439,7 +649,11 @@ export function IntegrationsPage(): React.JSX.Element {
       <div className="mesh-integrations__header">
         <h1 className="mesh-integrations__title">{t('integrations.title')}</h1>
         {isAdmin && (
-          <Button variant="primary" onClick={() => openAdd('im_feishu')} data-testid="integration-create">
+          <Button
+            variant="primary"
+            onClick={() => openAdd('im_feishu')}
+            data-testid="integration-create"
+          >
             {t('integrations.add.trigger')}
           </Button>
         )}
@@ -488,9 +702,14 @@ export function IntegrationsPage(): React.JSX.Element {
           onRetry={() => setReloadKey((key) => key + 1)}
         />
       )}
-      {integrations === null && errorKey === null && <Skeleton loadingLabel={t('integrations.loading')} />}
+      {integrations === null && errorKey === null && (
+        <Skeleton loadingLabel={t('integrations.loading')} />
+      )}
       {integrations !== null && integrations.length === 0 && errorKey === null && (
-        <EmptyState title={t('integrations.empty.title')} description={t('integrations.empty.description')} />
+        <EmptyState
+          title={t('integrations.empty.title')}
+          description={t('integrations.empty.description')}
+        />
       )}
       {integrations !== null && integrations.length > 0 && (
         <table className="mesh-integrations__table" data-testid="integrations-table">
@@ -512,7 +731,10 @@ export function IntegrationsPage(): React.JSX.Element {
                 data-testid={`integration-row-${integration.id}`}
                 onClick={() => navigate(`/integrations/${integration.id}`)}
               >
-                <td className="mesh-integrations__cell-name" data-testid={`integration-name-${integration.id}`}>
+                <td
+                  className="mesh-integrations__cell-name"
+                  data-testid={`integration-name-${integration.id}`}
+                >
                   {integration.name}
                 </td>
                 <td>
@@ -533,12 +755,35 @@ export function IntegrationsPage(): React.JSX.Element {
                       label={t(`integrations.health.${integration.health_state}`)}
                     />
                   </span>
+                  {integration.kind === 'im_dingtalk' &&
+                    integration.config.receive_mode === 'http' && (
+                      <span data-testid={`integration-receive-mode-${integration.id}`}>
+                        <StatusDot tone="neutral" label={t('integrations.dingtalk.receive.http')} />
+                      </span>
+                    )}
+                  {integration.kind === 'im_dingtalk' &&
+                    integration.config.receive_mode !== 'http' &&
+                    streamStatuses[integration.id] !== undefined && (
+                      <span data-testid={`integration-stream-${integration.id}`}>
+                        <StatusDot
+                          tone={DINGTALK_STREAM_STATE_TONE[streamStatuses[integration.id].state]}
+                          label={t(
+                            `integrations.dingtalk.stream.${streamStatuses[integration.id].state}`,
+                          )}
+                        />
+                      </span>
+                    )}
                 </td>
                 <td data-testid={`integration-bindings-${integration.id}`}>
                   {bindingCounts[integration.id] ?? 0}
                 </td>
-                <td data-testid={`integration-events7d-${integration.id}`}>{integration.events_7d}</td>
-                <td className="mesh-integrations__actions" onClick={(event) => event.stopPropagation()}>
+                <td data-testid={`integration-events7d-${integration.id}`}>
+                  {integration.events_7d}
+                </td>
+                <td
+                  className="mesh-integrations__actions"
+                  onClick={(event) => event.stopPropagation()}
+                >
                   <IconButton
                     label={t('integrations.actions.detail')}
                     size="sm"
@@ -559,7 +804,7 @@ export function IntegrationsPage(): React.JSX.Element {
                         {t('integrations.actions.reauthorize')}
                       </Button>
                     )}
-                  {isAdmin && (
+                  {isAdmin && integration.kind !== 'im_dingtalk' && (
                     <Button
                       variant="secondary"
                       size="sm"

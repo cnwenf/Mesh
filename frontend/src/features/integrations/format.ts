@@ -6,20 +6,24 @@ import type { IconName, StatusDotTone } from '../../design';
 import type {
   BindingStatus,
   DeliveryState,
+  DingTalkStreamState,
+  ExternalIdentity,
   IntegrationHealthState,
   IntegrationKind,
   IntegrationStatus,
   ProcessStatus,
+  QueueItemState,
   SignatureStatus,
   SubscriptionStatus,
   VcsLinkStatus,
 } from './types';
-import { INTEGRATION_HEALTH_STATES } from './types';
+import { DINGTALK_STREAM_STATES, INTEGRATION_HEALTH_STATES } from './types';
 
 /** 集成 kind 图标(§4.1 类型图标列;统一 SVG 图标名,经 design `<Icon>` 渲染,§7.1)。 */
 export const KIND_ICON: Record<IntegrationKind, IconName> = {
   im_feishu: 'message',
   im_slack: 'chat',
+  im_dingtalk: 'message',
   vcs_github: 'git-merge',
   vcs_gitlab: 'git-merge',
   webhook_outbound: 'upload',
@@ -38,11 +42,91 @@ export const HEALTH_STATE_TONE: Record<IntegrationHealthState, StatusDotTone> = 
   unreachable: 'warn',
 };
 
+export const DINGTALK_STREAM_STATE_TONE: Record<DingTalkStreamState, StatusDotTone> = {
+  connected: 'success',
+  reconnecting: 'warn',
+  down: 'danger',
+  disabled: 'neutral',
+};
+
+export const QUEUE_STATE_TONE: Record<QueueItemState, StatusDotTone> = {
+  pending: 'neutral',
+  dispatching: 'info',
+  processing: 'info',
+  cancelling: 'warn',
+  done: 'success',
+  failed: 'danger',
+  cancelled: 'neutral',
+};
+
 /** 健康度收窄(`:test` 响应为 string 契约;未知值归 `unknown`,边界处防御,§6.15)。 */
 export function toHealthState(value: string): IntegrationHealthState {
   return (INTEGRATION_HEALTH_STATES as ReadonlyArray<string>).includes(value)
     ? (value as IntegrationHealthState)
     : 'unknown';
+}
+
+/** 未知持久状态 fail-closed 渲染为 down，不伪装为健康。 */
+export function toDingTalkStreamState(value: string): DingTalkStreamState {
+  return (DINGTALK_STREAM_STATES as ReadonlyArray<string>).includes(value)
+    ? (value as DingTalkStreamState)
+    : 'down';
+}
+
+/** 只展示会话键的外部 ref 段；畸形键原样回退，便于排障。 */
+export function conversationDisplayName(conversationKey: string): string {
+  const first = conversationKey.indexOf(':');
+  const second = first < 0 ? -1 : conversationKey.indexOf(':', first + 1);
+  return second < 0 || second === conversationKey.length - 1
+    ? conversationKey
+    : conversationKey.slice(second + 1);
+}
+
+/** 防御性摘要净化；API 同样保证 ≤120 字且不含控制符，前端边界再收窄一次。 */
+export function sanitizeMessageExcerpt(excerpt: string): string {
+  const stripped = Array.from(excerpt)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return !(
+        codePoint <= 0x1f ||
+        (codePoint >= 0x7f && codePoint <= 0x9f) ||
+        codePoint === 0x00ad ||
+        codePoint === 0x180e ||
+        (codePoint >= 0x200b && codePoint <= 0x200f) ||
+        (codePoint >= 0x2028 && codePoint <= 0x202f) ||
+        (codePoint >= 0x2060 && codePoint <= 0x2064) ||
+        (codePoint >= 0x2066 && codePoint <= 0x206f) ||
+        codePoint === 0xfeff
+      );
+    })
+    .join('');
+  return Array.from(stripped.replace(/\s+/gu, ' ').trim()).slice(0, 120).join('');
+}
+
+/** 当前用户 external identities 与队列 sender.identity_key 的完整三元组比对键。 */
+export function externalIdentityTriple(
+  identity: Pick<ExternalIdentity, 'provider' | 'provider_tenant_key' | 'external_user_key'>,
+): string {
+  return `${identity.provider}:${identity.provider_tenant_key}:${identity.external_user_key}`;
+}
+
+/** Queue runtime in a compact, locale-neutral timer shape (m:ss or h:mm:ss). */
+export function formatQueueDuration(
+  startedAt: string,
+  finishedAt: string | null,
+  nowMs: number,
+): string | null {
+  const startMs = Date.parse(startedAt);
+  const endMs = finishedAt === null ? nowMs : Date.parse(finishedAt);
+  if (Number.isNaN(startMs) || !Number.isFinite(endMs)) return null;
+  const totalSeconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const paddedSeconds = String(seconds).padStart(2, '0');
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${paddedSeconds}`
+    : `${minutes}:${paddedSeconds}`;
 }
 
 export const SIGNATURE_STATUS_TONE: Record<SignatureStatus, StatusDotTone> = {
