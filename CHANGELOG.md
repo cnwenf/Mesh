@@ -4,6 +4,11 @@ Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [0.27.0] - 2026-08-01
+
+前端设计优化 Stage 1 批次③/④(MES-111 / MES-126 / MES-127)——成员与 Agent 名册、收件箱、聊天、账号/工作区设置、统一搜索/命令面板、Analytics 与统一审批页完成逐页设计对齐；沉淀 `ConversationLayout`、`RunStateBadge`、`SettingsLayout` 等稳定 patterns，核销 G3/G4/G10/G11/G19，并落地六类全局搜索与迁移 0035。审批入口补齐真实 `/me` agent principal 双路由门禁，快捷键补齐 IME 全局豁免、`G —` 等待态及 `/` 默认行为抑制；聊天附件事务可见性与会话属主读门同步加固。前端 3856 例单测全绿，整体行覆盖 98.3%、分支覆盖 92.82%、变更覆盖 99.0%，逐文件 189 文件 ≥90%；批次④ production 鉴权桌面/手机真实 E2E 10/10、后端 CI 4148 例与覆盖率 91.07%、GitHub 14 项门禁全绿。合入同时包含浏览器 mock e2e 稳定化、来源审计外置/容器 Node 版本对齐，以及 `brace-expansion` 拒绝服务漏洞补丁。
+
 ### Added
 
 - **前端设计对齐 MES-111 剩余页面族（MES-116，design-quality.md Phase 4）**：项目/周期、Agent/Skills、Squads/任务、自动值守/webhook、Runtimes/执行、Integrations/subscriptions 及标签/自定义字段/数据导入导出/错误公共页统一落入既有页面模式；Agent 工具面板接入 `skill_installations.granted_capabilities` 的真实薄封装 API，支持逐项启停、权限分级、绑定与移除，workspace 安装在首次 Agent 变更时写时复制，不污染其他 Agent；Integration 详情补齐健康 Tab，长数据与 320px overflow 边界收口。专项真实 API + Chromium 对 25 路由逐页执行业务交互与 320px 扫描，桌面/平板/手机 × light/dark 六组合完整覆盖 25 页（150 张视觉证据）；项目、Runtime、自动值守三条既有真实链路同步复验，证据位于 `frontend/e2e/evidence/mes116/`。
