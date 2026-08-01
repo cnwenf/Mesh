@@ -98,17 +98,38 @@ async def _outbox_events(session_factory, name: str):
 async def test_project_full_flow_durable(api_client, session_factory):
     owner = await _register_and_login(api_client, "owner-flow@corp.com")
     ws = await _create_workspace(api_client, owner, "e2e-flow")
-    created = await _create_project(api_client, owner, ws["id"], target_date="2026-08-31")
+    malicious_color = "url(https://attacker.invalid/pixel)"
+    rejected_create = await api_client.post(
+        f"/api/v1/workspaces/{ws['id']}/projects",
+        json={"name": "Unsafe", "key": "UNS", "color": malicious_color},
+        headers=_auth(owner),
+    )
+    assert rejected_create.status_code == 400
+    assert rejected_create.json()["error"]["code"] == "validation_error"
+
+    created = await _create_project(
+        api_client,
+        owner,
+        ws["id"],
+        target_date="2026-08-31",
+        color="#a1b2c3",
+    )
+    assert created["color"] == "#A1B2C3"
     pid = created["id"]
     # Durable in the database (real write, not just an HTTP echo).
     async with session_factory() as session:
         row = (
             await session.execute(
-                text("SELECT name, key, status FROM projects WHERE id = :id"),
+                text("SELECT name, key, status, color FROM projects WHERE id = :id"),
                 {"id": uuid.UUID(pid)},
             )
         ).one()
-    assert (row.name, row.key, row.status) == ("Site Revamp", "WEB", "planning")
+    assert (row.name, row.key, row.status, row.color) == (
+        "Site Revamp",
+        "WEB",
+        "planning",
+        "#A1B2C3",
+    )
     # Prefix registered in the same transaction.
     async with session_factory() as session:
         registry = (
@@ -146,6 +167,13 @@ async def test_project_full_flow_durable(api_client, session_factory):
     assert len(await _outbox_events(session_factory, "project_update.added")) == 1
     assert len(await _outbox_events(session_factory, "project.created")) == 2  # both channels
     # PATCH durable + milestone durable.
+    rejected_patch = await api_client.patch(
+        f"/api/v1/projects/{pid}",
+        json={"color": malicious_color},
+        headers=_auth(owner),
+    )
+    assert rejected_patch.status_code == 400
+    assert rejected_patch.json()["error"]["code"] == "validation_error"
     resp = await api_client.patch(
         f"/api/v1/projects/{pid}", json={"status": "active"}, headers=_auth(owner)
     )

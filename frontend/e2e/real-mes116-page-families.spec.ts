@@ -6,13 +6,13 @@
  */
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { injectSession } from './helpers';
 
 const API_BASE = process.env.MES116_API_BASE ?? 'http://127.0.0.1:8000';
 const EVIDENCE_DIR = resolve('e2e', 'evidence', 'mes116');
-const PASSWORD = 'MES-116-Real#2026';
 const RUN = `${Date.now().toString(36)}${Math.floor(Math.random() * 10_000).toString(36)}`;
 
 interface World {
@@ -59,10 +59,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 async function bootstrapWorld(): Promise<World> {
   const email = `mes116-${RUN}@example.com`;
+  const password = `Mm6!${randomBytes(24).toString('base64url')}`;
   const register = await fetch(`${API_BASE}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: PASSWORD, display_name: 'MES-116 Owner' }),
+    body: JSON.stringify({ email, password, display_name: 'MES-116 Owner' }),
   });
   if (register.status !== 201) {
     throw new Error(`register -> ${register.status}: ${await register.text()}`);
@@ -70,7 +71,7 @@ async function bootstrapWorld(): Promise<World> {
   const login = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: PASSWORD }),
+    body: JSON.stringify({ email, password }),
   });
   if (!login.ok) throw new Error(`login -> ${login.status}: ${await login.text()}`);
   token = ((await login.json()) as { data: { access_token: string } }).data.access_token;
@@ -421,6 +422,15 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   world = await bootstrapWorld();
+});
+
+test.afterAll(async () => {
+  if (token === '' || world === undefined) return;
+  await request('DELETE', `/api/v1/workspaces/${world.workspaceId}`, {
+    confirm_slug: world.workspaceSlug,
+  });
+  await request('POST', '/api/v1/auth/logout-all', {});
+  token = '';
 });
 
 test('all remaining routes are reachable and core controls work against the real API', async ({

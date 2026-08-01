@@ -529,6 +529,14 @@ describe('ProjectDetailPage', () => {
     expect(await screen.findByTestId('health-update-form')).toBeDefined();
   });
 
+  it('历史非法项目颜色 fail closed,不渲染色块', async () => {
+    stubFetch({ project: makeProject({ color: 'url(https://attacker.invalid/pixel)' }) });
+    renderDetail();
+
+    await screen.findByTestId('project-detail-header');
+    expect(screen.queryByTestId('project-color')).toBeNull();
+  });
+
   it('从里程碑 Tab 点回概览 Tab 移除 tab 参数', async () => {
     stubFetch();
     const user = userEvent.setup();

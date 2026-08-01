@@ -205,6 +205,23 @@ async def test_create_project_name_validation(session_factory):
         )
 
 
+async def test_create_project_color_is_normalized_and_rejects_css(session_factory):
+    workspace, member, service = await _setup(session_factory)
+    created = await service.create_project(
+        actor=member,
+        workspace_id=workspace.id,
+        body=_body(color="#a1b2c3"),
+    )
+    assert created["color"] == "#A1B2C3"
+
+    with pytest.raises(ValidationError):
+        await service.create_project(
+            actor=member,
+            workspace_id=workspace.id,
+            body=_body(name="Beacon", key="BCN", color="url(https://attacker.invalid/pixel)"),
+        )
+
+
 async def test_create_project_invalid_enums_and_dates(session_factory):
     workspace, member, service = await _setup(session_factory)
     with pytest.raises(ValidationError):
@@ -589,6 +606,16 @@ async def test_update_project_validation(session_factory):
             actor=admin, workspace_id=workspace.id, project_id=project_id,
             patch=ProjectPatch(lead_member_id=uuid.uuid4()),
         )
+    with pytest.raises(ValidationError):
+        await service.update_project(
+            actor=admin, workspace_id=workspace.id, project_id=project_id,
+            patch=ProjectPatch(color="url(https://attacker.invalid/pixel)"),
+        )
+    updated_color = await service.update_project(
+        actor=admin, workspace_id=workspace.id, project_id=project_id,
+        patch=ProjectPatch(color="#c0ffee"),
+    )
+    assert updated_color["color"] == "#C0FFEE"
     # Nulling health is allowed (valid enum check skipped for None).
     updated = await service.update_project(
         actor=admin, workspace_id=workspace.id, project_id=project_id,

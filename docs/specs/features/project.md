@@ -137,7 +137,7 @@ workspaces ──1:N──► cycles(周期常为工作区级,可绑定项目)
 | `key` | TEXT | NOT NULL | — | 项目前缀,大写,如 `WEB`,`^[A-Z][A-Z0-9_]{1,11}$` |
 | `description` | TEXT | NULL | NULL | 富文本/Markdown |
 | `icon` | TEXT | NULL | NULL | 图标标识 |
-| `color` | TEXT | NULL | NULL | 主题色(十六进制或调色板键) |
+| `color` | TEXT | NULL | NULL | 主题色；仅接受 `#RRGGBB`，服务端规范化为大写；历史非法值在客户端不渲染 |
 | `status` | TEXT | NOT NULL, CHECK IN ('planning','active','paused','completed','cancelled') | `'planning'` | 项目状态 |
 | `health` | TEXT | NULL, CHECK IN ('on_track','at_risk','off_track') | NULL | 健康度 |
 | `visibility` | TEXT | NOT NULL, CHECK IN ('public','private') | `'public'` | 可见性 |

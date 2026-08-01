@@ -612,7 +612,17 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
     expect(await screen.findByTestId('project-card-prj-9')).toBeDefined();
     expect(screen.getByTestId('project-icon-prj-9').textContent).toBe('🚀');
-    expect(screen.getByTestId('project-color-prj-9').style.background).not.toBe('');
+    expect(screen.getByTestId('project-color-prj-9').style.backgroundColor).not.toBe('');
+  });
+
+  it('历史非法项目颜色 fail closed,不创建可触发资源请求的样式', async () => {
+    stub([
+      { ...PROJECT_A, id: 'prj-unsafe', color: 'url(https://attacker.invalid/pixel)' },
+    ] as unknown as readonly ListProjectsProject[]);
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+
+    expect(await screen.findByTestId('project-card-prj-unsafe')).toBeDefined();
+    expect(screen.queryByTestId('project-color-prj-unsafe')).toBeNull();
   });
 
   it('状态筛选重置为 All 时移除 URL 参数并重拉全量列表', async () => {

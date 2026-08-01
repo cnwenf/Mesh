@@ -25,6 +25,7 @@ import type { Membership } from '../members/types';
 import { EmptyFolder } from '../onboarding/illustrations';
 import { listProjects, workspaceProjectsChannel } from './api';
 import { CreateProjectDialog } from './CreateProjectDialog';
+import { safeProjectColor } from './color';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
 import { applyProjectListFrame } from './realtime';
 import type { ProjectStatus, ProjectSummary } from './types';
@@ -51,15 +52,16 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
   const { project, onHealthClick } = props;
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  const projectColor = safeProjectColor(project.color);
   return (
     <li className="mesh-projects__card" data-testid={`project-card-${project.id}`}>
       <div className="mesh-projects__card-head">
         <span className="mesh-projects__card-identity">
-          {project.color !== null ? (
+          {projectColor !== null ? (
             <span
               className="mesh-projects__color-swatch"
               data-testid={`project-color-${project.id}`}
-              style={{ background: project.color }}
+              style={{ backgroundColor: projectColor }}
               aria-hidden="true"
             />
           ) : null}

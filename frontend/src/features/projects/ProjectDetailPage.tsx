@@ -33,6 +33,7 @@ import {
 import { ExportDialog } from '../data-jobs/ExportDialog';
 import { ImportWizard } from '../data-jobs/ImportWizard';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
+import { safeProjectColor } from './color';
 import { MilestonesPanel } from './MilestonesPanel';
 import { applyMilestoneFrame, applyUpdateFrame, mergeProjectHeader } from './realtime';
 import { UpdatesPanel } from './UpdatesPanel';
@@ -263,6 +264,7 @@ export function ProjectDetailPage(): React.JSX.Element {
 
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  const projectColor = safeProjectColor(project.color);
 
   return (
     <main className="mesh-projects">
@@ -270,11 +272,11 @@ export function ProjectDetailPage(): React.JSX.Element {
         header={
           <div className="mesh-projects__detail-header" data-testid="project-detail-header">
             <div className="mesh-projects__detail-title-row">
-              {project.color !== null ? (
+              {projectColor !== null ? (
                 <span
                   className="mesh-projects__color-swatch"
                   data-testid="project-color"
-                  style={{ background: project.color }}
+                  style={{ backgroundColor: projectColor }}
                   aria-hidden="true"
                 />
               ) : null}

@@ -14,7 +14,7 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
-import { renderMarkdownPreview } from '../comments/markdown';
+import { renderAgentMarkdown } from '../comments/markdown';
 import {
   approvePlan,
   cancelTask,
@@ -304,7 +304,7 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   const subtasks = [...index.values()].filter((node) => node.id !== task.id);
   const planHtml =
     task.plan_markdown !== null && task.plan_markdown !== ''
-      ? renderMarkdownPreview(task.plan_markdown)
+      ? renderAgentMarkdown(task.plan_markdown)
       : '';
 
   return (

