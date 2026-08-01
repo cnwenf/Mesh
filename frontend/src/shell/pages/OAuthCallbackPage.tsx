@@ -73,6 +73,7 @@ export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Elem
       <PublicFlowShell
         brandLabel={t('brand.name')}
         brandHref="/"
+        skipLabel={t('a11y.skipLink')}
         title={t('auth.oauthFailedTitle')}
       >
         <div className="mesh-public-flow__alert" role="alert">
@@ -92,7 +93,12 @@ export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Elem
   }
 
   return (
-    <PublicFlowShell brandLabel={t('brand.name')} brandHref="/" title={t('title.oauth')}>
+    <PublicFlowShell
+      brandLabel={t('brand.name')}
+      brandHref="/"
+      skipLabel={t('a11y.skipLink')}
+      title={t('title.oauth')}
+    >
       <p className="mesh-public-flow__status" role="status" data-testid="oauth-callback-pending">
         {t('auth.oauthPending')}
       </p>

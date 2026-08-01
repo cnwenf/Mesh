@@ -11,12 +11,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
   pull_request:
     paths:
-      - 'frontend/**'
-      - '.github/workflows/frontend.yml'
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
 
 defaults:
   run:
@@ -52,6 +52,15 @@ jobs:
 
       - name: Lint CSS (hardcoded color gate, theme.md §5.4)
         run: npm run lint:css
+
+      - name: Responsive contract (central breakpoints + safe-area)
+        run: npm run check:responsive
+
+      - name: Accessibility structure contract (landmarks + overlays + tables)
+        run: npm run check:a11y-contract
+
+      - name: Legacy token debt does not increase
+        run: npm run check:legacy-token-debt
 
       - name: Type check
         run: npm run typecheck
@@ -131,12 +140,12 @@ jobs:
           retention-days: 7
 
   visual:
-    # 暗色视觉回归门禁(theme.md §5.4):6 页 × light/dark × 桌面/平板固定矩阵,
+    # 视觉回归门禁(theme.md §5.4):13 页 × light/dark × 手机/平板/桌面/宽屏固定矩阵,
     # 确定性环境(冻结时钟 / UTC / zh-CN / 内置字体锁定 / 动态区 mask)下
     # toHaveScreenshot 基线比对。常规跑只比对不更新;基线更新经独立 PR。
     # 独立端口(8911 / 5199)避免与默认 mock 套件(8901 / 5173)冲突。
     runs-on: ubuntu-latest
-    # MES-145: 实测 ~2min(6 页 × light/dark × 双视口截图比对),30min 兜底。
+    # MES-128:104 个主题/视口基线 + 媒体偏好检查,30min 兜底。
     timeout-minutes: 30
     needs: quality
     steps:
@@ -171,6 +180,37 @@ jobs:
         with:
           name: visual-test-results
           path: frontend/test-results
+          retention-days: 7
+
+  accessibility-e2e:
+    # MES-128:axe WCAG A/AA 扫描,桌面 + 真实触控手机,确定性 mock + fresh production preview。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run axe WCAG A/AA gate
+        run: npm run test:e2e:a11y
+
+      - name: Upload Playwright report (accessibility)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accessibility-playwright-report
+          path: frontend/playwright-report
           retention-days: 7
 
   attachment-e2e:

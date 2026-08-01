@@ -16,20 +16,46 @@ import { useAuthStore } from '../../../state/authStore';
 const ME = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'WS',
+      workspace_slug: 'ws',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 const MEMBERS = {
   data: [
-    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active', display_name: 'Owner', joined_at: null,
-      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null } },
+    {
+      id: 'mem-1',
+      member_type: 'human',
+      role: 'owner',
+      status: 'active',
+      display_name: 'Owner',
+      joined_at: null,
+      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null },
+    },
   ],
   next_cursor: null,
 };
 const NOTIF = {
-  id: 'n-1', type: 'mentioned', priority: 'normal', issue_id: 'iss-1', comment_id: 'c-1',
-  execution_id: null, group_key: null, actor: null, preview: 'hey', title: 'Mentioned',
-  count: 1, read_at: null, archived_at: null, created_at: '2026-07-01T00:00:00Z', latest_comment_id: 'c-1',
+  id: 'n-1',
+  type: 'mentioned',
+  priority: 'normal',
+  issue_id: 'iss-1',
+  comment_id: 'c-1',
+  execution_id: null,
+  group_key: null,
+  actor: null,
+  preview: 'hey',
+  title: 'Mentioned',
+  count: 1,
+  read_at: null,
+  archived_at: null,
+  created_at: '2026-07-01T00:00:00Z',
+  latest_comment_id: 'c-1',
 };
 
 function queue(): FetchStub {
@@ -58,7 +84,13 @@ const fakeClient = {
 const realtimeValue = { state: 'connected', client: fakeClient } as unknown as RealtimeContextValue;
 
 function frame(event: string, payload: unknown): RealtimeEventFrame {
-  return { op: 'event', channel: 'member:mem-1:inbox', seq: 1, event, payload } as RealtimeEventFrame;
+  return {
+    op: 'event',
+    channel: 'member:mem-1:inbox',
+    seq: 1,
+    event,
+    payload,
+  } as RealtimeEventFrame;
 }
 
 // MES-106 M1:收件箱/上手清单解析为鉴权请求,用例以登录态为前置。
@@ -78,6 +110,8 @@ describe('InboxBell', () => {
     renderWithProviders(<InboxBell />);
     await screen.findByTestId('inbox-badge');
     expect(screen.getByTestId('inbox-badge').textContent).toBe('3');
+    expect(screen.getByTestId('inbox-badge')).toHaveAttribute('role', 'status');
+    expect(screen.getByTestId('inbox-badge')).toHaveAttribute('aria-live', 'polite');
   });
 
   it('opens the dropdown with latest notifications', async () => {

@@ -9,7 +9,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Button,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import type { StatusDotTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
@@ -190,22 +198,22 @@ export function RuntimeDetailPage(): React.JSX.Element {
 
   if (error !== null) {
     return (
-      <main className="mesh-runtimes-detail">
+      <div className="mesh-runtimes-detail">
         <ErrorState
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
           onRetry={() => setReloadKey((key) => key + 1)}
         />
-      </main>
+      </div>
     );
   }
 
   if (isLoading || runtime === null) {
     return (
-      <main className="mesh-runtimes-detail">
+      <div className="mesh-runtimes-detail">
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
@@ -215,7 +223,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
   const canResume = runtime.status === 'paused';
 
   return (
-    <main className="mesh-runtimes-detail" data-testid="runtime-detail-page">
+    <div className="mesh-runtimes-detail" data-testid="runtime-detail-page">
       <div className="mesh-runtimes-detail__header">
         <Button
           variant="ghost"
@@ -394,18 +402,16 @@ export function RuntimeDetailPage(): React.JSX.Element {
         )}
       </section>
 
-      {rotatedToken !== null ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('runtimes.rotate.title')}
-          className="mesh-runtimes-rotate"
-          data-testid="runtime-rotate-dialog"
-        >
-          <h2>{t('runtimes.rotate.title')}</h2>
+      <Dialog
+        open={rotatedToken !== null}
+        onClose={() => setRotatedToken(null)}
+        title={t('runtimes.rotate.title')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-runtimes-rotate" data-testid="runtime-rotate-dialog">
           <p className="mesh-runtimes-rotate__warning">{t('runtimes.rotate.warning')}</p>
           <code className="mesh-runtimes-rotate__token" data-testid="runtime-rotate-token">
-            {rotatedToken}
+            {rotatedToken ?? ''}
           </code>
           <div className="mesh-runtimes-rotate__actions">
             <Button
@@ -425,7 +431,7 @@ export function RuntimeDetailPage(): React.JSX.Element {
             </Button>
           </div>
         </div>
-      ) : null}
-    </main>
+      </Dialog>
+    </div>
   );
 }

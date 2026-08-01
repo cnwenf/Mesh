@@ -15,12 +15,7 @@ import { errorToI18nKey } from '../../api/errors';
 import { uuidv4 } from '../../api/uuid';
 import { MeshApiError } from '../../api';
 import { useRealtimeContext } from '../../shell/AppShell';
-import {
-  createImportJob,
-  getDataJob,
-  runImportJob,
-  validateImportJob,
-} from './api';
+import { createImportJob, getDataJob, runImportJob, validateImportJob } from './api';
 import { applyDataJobFrame } from './realtime';
 import type {
   DataJob,
@@ -280,11 +275,7 @@ export function ImportWizard(props: ImportWizardProps): React.JSX.Element | null
                   </option>
                 ))}
               </select>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => removeColumn(index)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => removeColumn(index)}>
                 {t('dataJobs.import.removeColumn')}
               </Button>
             </div>
@@ -312,12 +303,13 @@ export function ImportWizard(props: ImportWizardProps): React.JSX.Element | null
           {errors.length > 0 && (
             <div className="mesh-import-wizard__errors">
               <table>
+                <caption className="sr-only">{t('dataJobs.import.errorMessage')}</caption>
                 <thead>
                   <tr>
-                    <th>{t('dataJobs.import.errorRow')}</th>
-                    <th>{t('dataJobs.import.errorField')}</th>
-                    <th>{t('dataJobs.import.errorCode')}</th>
-                    <th>{t('dataJobs.import.errorMessage')}</th>
+                    <th scope="col">{t('dataJobs.import.errorRow')}</th>
+                    <th scope="col">{t('dataJobs.import.errorField')}</th>
+                    <th scope="col">{t('dataJobs.import.errorCode')}</th>
+                    <th scope="col">{t('dataJobs.import.errorMessage')}</th>
                   </tr>
                 </thead>
                 <tbody>

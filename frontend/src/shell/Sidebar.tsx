@@ -48,6 +48,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     const link = (
       <NavLink
         to={resolveNavTarget(item, workspace?.slug ?? null)}
+        title={t('nav.' + item.key)}
         end={item.end === true}
         data-testid={'nav-' + testKey}
         className={({ isActive }) => navLinkClassName({ isActive: isActive || isBoardView })}
@@ -82,6 +83,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                   <Tooltip content={t('nav.workspaceSettings')}>
                     <NavLink
                       to={`/w/${workspace.slug}/settings`}
+                      title={t('nav.workspaceSettings')}
                       data-testid="nav-workspace-settings"
                       className={navLinkClassName}
                     >
@@ -92,6 +94,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                 ) : (
                   <NavLink
                     to={`/w/${workspace.slug}/settings`}
+                    title={t('nav.workspaceSettings')}
                     data-testid="nav-workspace-settings"
                     className={navLinkClassName}
                   >

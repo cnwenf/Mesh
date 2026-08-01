@@ -500,6 +500,11 @@
 
 业务组件 SHOULD 使用 container query，而不是只依赖 viewport。断点值集中为 token/常量，禁止各 CSS 文件随意创建近似值。
 
+> **MES-128 实施记录（2026-08-02）**：断点单一事实源落在
+> `frontend/src/design/tokenValues.ts`，运行时帮助函数落在 `frontend/src/design/responsive.ts`；
+> `frontend/scripts/check-responsive-contract.mjs` 在 CI 中拒绝自造近似 viewport 断点，
+> container query 使用独立规则，不与 viewport 阈值混淆。
+
 ### 8.2 通用规则
 
 - 320px 宽、200% zoom 下不得丢失主操作或产生页面级双向滚动。
@@ -634,6 +639,10 @@
 - 状态更新使用合适的 `status`/`alert`，不重复朗读。
 - 200% zoom 与 320 CSS px 下 reflow。
 - forced-colors、prefers-contrast、reduced-motion 继续纳入 CI。
+
+> **MES-128 自动化边界**：§13.5 的 13 个核心页已纳入桌面/触控手机 axe、
+> 320/390/200% 等效 reflow、44px 触控目标与媒体偏好门禁。axe 不能替代 NVDA/VoiceOver
+> 人工读屏；完整状态盘点与未闭环项见 `docs/audits/mes128-state-accessibility-matrix.md`。
 
 ### 10.3 i18n 与时区
 
@@ -814,6 +823,10 @@ features/
 - [ ] 自动无障碍扫描 + 键盘 E2E。
 - [ ] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
 - [ ] mock 契约浏览器套件每次使用新鲜的生产构建预览与 mock 服务进程；不使用 Vite dev/HMR 源码模块图，不复用已存在进程，且 `retries: 0`。
+
+MES-128 已建立正常态工程基线：13 核心页 × 4 视口 × 2 主题 = 104 个视觉快照，
+另有 13 核心页 × 手机/桌面 × 2 主题 = 52 张走查证据；证据目录由 manifest 校验
+文件名、数量、宽度和 md5 唯一性。其余状态的逐页视觉缺口不得视作已勾选，详见上述审计文档。
 
 ---
 

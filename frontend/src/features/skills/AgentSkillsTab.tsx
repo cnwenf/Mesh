@@ -9,13 +9,7 @@ import { MeshApiClient, getToken } from '../../api';
 import { Button, EmptyState, Icon, Select, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import {
-  bindSkill,
-  listAgentSkills,
-  listInstallations,
-  unbindSkill,
-  updateBinding,
-} from './api';
+import { bindSkill, listAgentSkills, listInstallations, unbindSkill, updateBinding } from './api';
 import type { AgentSkillRow, SkillInstallation } from './types';
 
 export function AgentSkillsTab({
@@ -49,7 +43,11 @@ export function AgentSkillsTab({
         setInstallations(available.data);
       })
       .catch(() => {
-        if (!cancelled) toast.addToast(t('skills.loadError'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        if (!cancelled)
+          toast.addToast(t('skills.loadError'), {
+            tone: 'danger',
+            closeLabel: t('a11y.closeDialog'),
+          });
       });
     return () => {
       cancelled = true;
@@ -77,17 +75,21 @@ export function AgentSkillsTab({
   return (
     <section className="mesh-agents-detail__panel" data-testid="agent-panel-skills">
       {rows.length === 0 ? (
-        <EmptyState title={t('skills.agentEmptyTitle')} description={t('skills.agentEmptyDescription')} />
+        <EmptyState
+          title={t('skills.agentEmptyTitle')}
+          description={t('skills.agentEmptyDescription')}
+        />
       ) : (
         <table className="mesh-skills-detail__versions" data-testid="agent-skills-table">
+          <caption className="sr-only">{t('skills.agentNameCol')}</caption>
           <thead>
             <tr>
-              <th>{t('skills.agentEnabledCol')}</th>
-              <th>{t('skills.agentNameCol')}</th>
-              <th>{t('skills.agentVersionCol')}</th>
-              <th>{t('skills.agentAutoTriggerCol')}</th>
-              <th>{t('skills.agentPriorityCol')}</th>
-              <th>{t('skills.agentActionsCol')}</th>
+              <th scope="col">{t('skills.agentEnabledCol')}</th>
+              <th scope="col">{t('skills.agentNameCol')}</th>
+              <th scope="col">{t('skills.agentVersionCol')}</th>
+              <th scope="col">{t('skills.agentAutoTriggerCol')}</th>
+              <th scope="col">{t('skills.agentPriorityCol')}</th>
+              <th scope="col">{t('skills.agentActionsCol')}</th>
             </tr>
           </thead>
           <tbody>
@@ -106,7 +108,10 @@ export function AgentSkillsTab({
                           });
                           refresh();
                         } catch {
-                          toast.addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                          toast.addToast(t('skills.bindFailed'), {
+                            tone: 'danger',
+                            closeLabel: t('a11y.closeDialog'),
+                          });
                         }
                       })();
                     }}
@@ -145,7 +150,10 @@ export function AgentSkillsTab({
                           });
                           refresh();
                         } catch {
-                          toast.addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                          toast.addToast(t('skills.bindFailed'), {
+                            tone: 'danger',
+                            closeLabel: t('a11y.closeDialog'),
+                          });
                         }
                       })();
                     }}
@@ -171,7 +179,10 @@ export function AgentSkillsTab({
                             });
                             refresh();
                           } catch {
-                            toast.addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                            toast.addToast(t('skills.bindFailed'), {
+                              tone: 'danger',
+                              closeLabel: t('a11y.closeDialog'),
+                            });
                           }
                         })();
                       }}
@@ -190,7 +201,10 @@ export function AgentSkillsTab({
                             await unbindSkill(client, workspaceId, agentId, row.binding_id);
                             refresh();
                           } catch {
-                            toast.addToast(t('skills.unbindFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                            toast.addToast(t('skills.unbindFailed'), {
+                              tone: 'danger',
+                              closeLabel: t('a11y.closeDialog'),
+                            });
                           }
                         })();
                       }}
@@ -208,15 +222,24 @@ export function AgentSkillsTab({
 
       {canManage ? (
         <div className="mesh-skills__bind-row" data-testid="agent-skill-bind-row">
-          <Select label={t('skills.bindPick')} value={pick} onChange={(event) => setPick(event.target.value)}>
+          <Select
+            label={t('skills.bindPick')}
+            value={pick}
+            onChange={(event) => setPick(event.target.value)}
+          >
             <option value="">{t('skills.bindPickPlaceholder')}</option>
             {bindable.map((installation) => (
               <option key={installation.id} value={installation.id}>
-                {installation.skill_id.slice(0, 8)}… ({t(`skills.installStatus.${installation.install_status}`)})
+                {installation.skill_id.slice(0, 8)}… (
+                {t(`skills.installStatus.${installation.install_status}`)})
               </option>
             ))}
           </Select>
-          <Button onClick={() => void onBind()} disabled={pick === ''} data-testid="agent-skill-bind">
+          <Button
+            onClick={() => void onBind()}
+            disabled={pick === ''}
+            data-testid="agent-skill-bind"
+          >
             {t('skills.bindButton')}
           </Button>
         </div>

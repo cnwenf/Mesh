@@ -13,6 +13,10 @@
     "preview": "vite preview",
     "lint": "eslint . && stylelint \"src/**/*.css\"",
     "lint:css": "stylelint \"src/**/*.css\"",
+    "check:responsive": "node scripts/check-responsive-contract.mjs",
+    "check:a11y-contract": "node scripts/check-a11y-contract.mjs",
+    "check:legacy-token-debt": "node scripts/check-legacy-token-debt.mjs",
+    "check:evidence": "node scripts/check-evidence-unique.mjs",
     "check:contrast": "node scripts/check-contrast.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -21,6 +25,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage && node scripts/verify-perfile-coverage.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:a11y": "playwright test -c playwright.a11y.config.ts",
     "serve:e2e": "npm run build && vite preview --port 5173 --strictPort --host 127.0.0.1",
     "test:e2e:visual": "playwright test -c playwright.visual.config.ts",
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts",
@@ -38,6 +43,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@eslint/js": "^9.17.0",
     "@playwright/test": "^1.49.1",
     "@testing-library/dom": "^10.4.0",

@@ -17,6 +17,11 @@ describe('NotFoundPage', () => {
       { route: '/definitely-not-a-route' },
     );
     expect(screen.getByText('Page not found')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#mesh-main-content',
+    );
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'mesh-main-content');
     expect(screen.getByText(/does not exist/)).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('notfound-home'));
     expect(screen.getByTestId('home-stub')).toBeInTheDocument();

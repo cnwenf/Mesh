@@ -20,6 +20,7 @@ import {
   Badge,
   Button,
   Dialog,
+  Drawer,
   EmptyState,
   ErrorState,
   Icon,
@@ -226,9 +227,7 @@ export function MembersPage(): React.JSX.Element {
   // 杜绝「停用/启用后重开菜单仍按旧态计算条目」的竞态(验收 R4:Remove 120s 超时)。
   const patchMemberStatus = useCallback(
     (memberId: string, status: MemberSummary['status']): void => {
-      setMembers((prev) =>
-        prev.map((item) => (item.id === memberId ? { ...item, status } : item)),
-      );
+      setMembers((prev) => prev.map((item) => (item.id === memberId ? { ...item, status } : item)));
     },
     [],
   );
@@ -398,7 +397,10 @@ export function MembersPage(): React.JSX.Element {
       />
       <span className="mesh-members__identity-text">
         <span className="mesh-members__identity-primary">
-          <span className="mesh-members__name mesh-text-body-strong mesh-truncate" title={member.display_name}>
+          <span
+            className="mesh-members__name mesh-text-body-strong mesh-truncate"
+            title={member.display_name}
+          >
             {member.display_name}
           </span>
           {member.member_type === 'agent' ? (
@@ -421,14 +423,16 @@ export function MembersPage(): React.JSX.Element {
     if (member.member_type !== 'agent') return null;
     const state = runStateOf(member);
     return (
-      <span data-testid={isCard ? `card-member-presence-${member.id}` : `member-presence-${member.id}`}>
+      <span
+        data-testid={isCard ? `card-member-presence-${member.id}` : `member-presence-${member.id}`}
+      >
         <RunStateBadge state={state} label={t(`runState.${state}`)} size="sm" />
       </span>
     );
   };
 
   return (
-    <main className="mesh-members">
+    <div className="mesh-members">
       <div className="mesh-members__header">
         <h1 className="mesh-members__title mesh-text-title-1">{t('members.title')}</h1>
         <div className="mesh-members__actions">
@@ -522,6 +526,7 @@ export function MembersPage(): React.JSX.Element {
           {/* 桌面表格(0–599px 隐藏,改卡片):受控横向滚动容器,首列粘住(A-05/§7.6)。 */}
           <div className="mesh-members__table-wrap">
             <table className="mesh-members__table">
+              <caption className="sr-only">{t('members.title')}</caption>
               <thead>
                 <tr>
                   <th scope="col">{t('members.col.name')}</th>
@@ -607,14 +612,13 @@ export function MembersPage(): React.JSX.Element {
       )}
 
       {detail !== null ? (
-        <aside
-          className="mesh-members__drawer"
-          role="dialog"
-          aria-label={detail.display_name}
-          data-testid="member-drawer"
+        <Drawer
+          open
+          onClose={() => setDetail(null)}
+          title={detail.display_name}
+          closeLabel={t('common.close')}
         >
-          <h2 className="mesh-members__drawer-title mesh-text-title-3">{detail.display_name}</h2>
-          <dl className="mesh-members__drawer-dl">
+          <dl className="mesh-members__drawer-dl" data-testid="member-drawer">
             <dt className="mesh-text-caption">{t('members.col.role')}</dt>
             <dd className="mesh-text-body">{t(`members.role.${detail.role}`)}</dd>
             <dt className="mesh-text-caption">{t('members.col.status')}</dt>
@@ -622,10 +626,7 @@ export function MembersPage(): React.JSX.Element {
             <dt className="mesh-text-caption">{t('members.detail.openIssues')}</dt>
             <dd className="mesh-text-body mesh-tnum">{detail.counts.open_issues_assigned}</dd>
           </dl>
-          <Button variant="secondary" onClick={() => setDetail(null)}>
-            {t('common.close')}
-          </Button>
-        </aside>
+        </Drawer>
       ) : null}
 
       {workspace !== null ? (
@@ -693,6 +694,6 @@ export function MembersPage(): React.JSX.Element {
           </Dialog>
         </>
       ) : null}
-    </main>
+    </div>
   );
 }

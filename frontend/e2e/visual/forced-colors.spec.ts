@@ -7,43 +7,12 @@
  * 真机核对清单(Windows 高对比/对比主题,Edge)见 .github/pull_request_template.md。
  */
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
-import { prepareVisualPage } from './visual-helpers';
-
-interface ForcedColorsPage {
-  readonly key: string;
-  readonly path: string;
-  readonly ready: (page: Page) => Promise<void>;
-}
-
-const PAGES: readonly ForcedColorsPage[] = [
-  {
-    key: 'board',
-    path: '/board',
-    ready: async (page) => {
-      await page.getByTestId('board-columns').waitFor({ state: 'visible' });
-    },
-  },
-  {
-    key: 'members',
-    path: '/members',
-    ready: async (page) => {
-      await page.getByTestId('member-open-member-human-1').waitFor({ state: 'visible' });
-    },
-  },
-  {
-    key: 'inbox',
-    path: '/inbox',
-    ready: async (page) => {
-      await page.getByTestId('inbox-page').waitFor({ state: 'visible' });
-    },
-  },
-];
+import { PAGES, prepareVisualPage } from './visual-helpers';
 
 test.describe('forced-colors 仿真(§5.4 验收)', () => {
-  for (const visualPage of PAGES) {
+  for (const [name, visualPage] of Object.entries(PAGES)) {
     for (const theme of ['light', 'dark'] as const) {
-      test(`核心页「${visualPage.key}」(${theme}) forced-colors 系统色重映射`, async ({ page }) => {
+      test(`核心页「${name}」(${theme}) forced-colors 系统色重映射`, async ({ page }) => {
         await page.emulateMedia({ forcedColors: 'active' });
         await prepareVisualPage(page, theme);
         await page.goto(visualPage.path, { waitUntil: 'load' });
@@ -79,7 +48,7 @@ test.describe('forced-colors 仿真(§5.4 验收)', () => {
     await page.emulateMedia({ forcedColors: 'active' });
     await prepareVisualPage(page, 'light');
     await page.goto('/board', { waitUntil: 'load' });
-    await page.getByTestId('board-columns').waitFor({ state: 'visible' });
+    await PAGES['看板'].ready(page);
 
     // ②/③ 样式规则集中存在:forced-colors 块内 .mesh-dialog 显式 border、
     // .mesh-forced-colors-keep 的 forced-color-adjust: none 声明。

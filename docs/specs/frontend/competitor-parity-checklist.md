@@ -32,6 +32,30 @@
 
 路由唯一配置于 `frontend/src/App.tsx`（BrowserRouter + Routes，无懒加载）。共 33 条路由，除首页为脚手架演示舞台外均已真实实现；`/skills` 为 Sidebar 死链（路由未注册）。详见各模块条目。
 
+### 0.4 MES-128 跨切面复验（2026-08-02）
+
+本表记录收尾批对 §1.1–§1.16 的逐节复验，不覆盖仍为开放状态的原始断言。自动化结果、
+页面状态矩阵及不可自动替代的人工项见 `docs/audits/mes128-state-accessibility-matrix.md`。
+
+| 节 | 复验结论 | 本轮证据 / 保留缺口 |
+| --- | --- | --- |
+| 1.1 信息架构 | 🟡 | 13 核心路由视觉/axe 通过；全 46 路由最终语义验收仍开放 |
+| 1.2 令牌与视觉 | 🟡 | type scale、基础/中间层组件已落地；旧别名 263 次已建 fail-closed 基线 |
+| 1.3 主题 | ✅ | 13 页 × 四视口 × 亮暗 104 基线；forced-colors/contrast/motion 门禁 |
+| 1.4 响应式 | ✅（核心页） | 规范四断点、320/390/200% 等效 reflow、coarse pointer 44px、52 张存证 |
+| 1.5 i18n/时区 | 🟡 | 本轮无契约变化；核心中文视觉覆盖，长英文状态矩阵仍开放 |
+| 1.6 搜索 | ✅（沿用批次④） | axe/触控回归未退化 |
+| 1.7 快捷键 | 🟡 | 全局组与非拖拽看板路径存在；G9 上下文组仍开放 |
+| 1.8 异常态 | 🟡 | 逐页实现盘点完成；正常态视觉完整，全状态逐页视觉 fixture 尚未完整 |
+| 1.9 实时重连 | 🟡 | 连接/重同步状态回归；跨模块离线队列不在本轮扩写 |
+| 1.10 通知收件箱 | ✅（本轮范围） | 双视口 axe、reflow、live region 和视觉回归通过 |
+| 1.11 a11y | 🟡 | 26 个 axe 页面扫描、landmark/overlay/table 静态门禁；人工读屏仍开放 |
+| 1.12 收藏 | — | 本轮无行为变化 |
+| 1.13 统一审批 | ✅（沿用批次④） | 本轮表格语义/媒体偏好回归未退化 |
+| 1.14 微交互 | ✅（G8） | 基础组件 hover/pressed/focus 与 reduced-motion 回归通过 |
+| 1.15 批量/flags | 🟡 | sticky 批量条偏移已修；G15 因 Spec 仍属未来规划保持开放 |
+| 1.16 安全渲染 | 🟡 | axe/主题未发现呈现回归；安全红队与抓包不由本轮替代 |
+
 ---
 
 ## 1. 全局跨切面验收条目
@@ -51,7 +75,7 @@
 ### 1.2 设计令牌与视觉语言
 
 - [ ] 颜色/间距/圆角/字号/阴影/动效时长全部经语义 token（单一事实源生成，TS↔CSS 漂移有测试守卫），组件禁硬编码色值并有 CI 扫描（依据: theme.md §2/§5.4）— 现状 ✅（`design/tokenValues.ts` + `scripts/gen-tokens.mjs`）
-- [ ] 完整 type scale：显示字体 + 正文字体配对，标题/正文/辅助/数字层级对比强烈且一致；中英文混排行距/段距/标点经过处理（依据: MES-108 排版优化）— 现状 🟡（token 仅 sm/md/lg 三档字号，无完整 type scale 与中文排版专项处理）
+- [x] 完整 type scale：显示字体 + 正文字体配对，标题/正文/辅助/数字层级对比强烈且一致；中英文混排行距/段距/标点经过处理（依据: MES-108 排版优化）— 现状 ✅（`design/tokenValues.ts` + `design/typography.css`；MES-128 四视口双主题基线复验）
 - [ ] 基础组件齐备：Button/IconButton/Input/Select/Dialog/Toast/Banner/EmptyState/ErrorState/Skeleton/StatusDot/Kbd（依据: theme.md/README §6.12）— 现状 ✅（13 个，均带单测）
 - [ ] 中间层复合组件统一提供而非各 feature 自造：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion（依据: MES-108 视觉优化「杜绝东拼西凑」）— 现状 ❌（五者均无设计层实现；Avatar 由 chat/squads 各自造，Tabs 由 projects/integrations/agents 各自内联）
 - [ ] 图标体系统一（同一来源/线宽/尺寸网格），无混用多套图标风格（依据: MES-108 视觉优化）— 现状 ⬜ 待实机
@@ -76,15 +100,15 @@
 
 ### 1.4 响应式与移动端（四组合之手机两套）
 
-- [ ] 断点系统：≥1024 桌面 / 768 平板两档布局适配，有统一断点工具（hook 或 CSS 约定）（依据: README §6.12）— 现状 ❌（无断点系统；全库仅 5 处零散 `@media`）
-- [ ] 移动端主导航可用：≤768px 侧栏不得直接消失，须有汉堡菜单/抽屉替代，可到达全部一级页面（依据: MES-108 移动端适配）— 现状 ❌（`shell.css:402` 侧栏 `display:none` 无替代，移动端仅余工作区切换器/铃铛/命令面板）
-- [ ] 触控目标 ≥44×44px（按钮/图标按钮/链接行），有全局最小尺寸规则（依据: MES-108 交互优化「触控目标」）— 现状 ❌（Button 实测高约 36px，IconButton 更小，无最小尺寸规则）
-- [ ] 移动端「只读优先」落地细则：核心页面（收件箱/issue 详情/看板/聊天）手机端布局与降级方案（依据: README §6.12 方针）— 现状 ❌（Spec 仅一句方针，无任何模块细则；**须补进 Spec**）
-- [ ] issue 详情 ≤1023px 双栏折单栏，属性侧栏可折叠/后置（依据: 竞品详情页抽屉/全屏双形态，issue.md §4.1）— 现状 🟡（折单栏已实现 `issues.css:201`，无抽屉形态与侧栏折叠交互）
-- [ ] 聊天 ≤720px 会话列表折单栏且有列表↔会话切换交互（依据: chat-session.md §4.1）— 现状 🟡（折单栏已实现 `chat.css:14`，无切换交互）
-- [ ] 看板移动端：横向滚动列 + 卡片全宽，拖拽降级为状态菜单操作（依据: kanban.md 视图体系 + 移动端方针）— 现状 ❌（未适配）
+- [x] 断点系统：compact 0–599 / medium 600–1023 / wide 1024–1439 / xwide ≥1440，集中常量与静态门禁（依据: design-quality.md §8.1）— 现状 ✅（`design/tokenValues.ts`、`design/responsive.ts`、`check-responsive-contract.mjs`）
+- [x] 移动端主导航可用：compact 使用底部主导航 +「更多」抽屉，可到达全部一级页面（依据: MES-108 移动端适配）— 现状 ✅（`MobileNav.tsx`、`MobileMoreDrawer.tsx`，320/390 reflow E2E）
+- [x] 触控目标 ≥44×44px（按钮/图标按钮/链接行），有 coarse-pointer 全局规则与浏览器几何门禁（依据: MES-108 交互优化「触控目标」）— 现状 ✅（13 核心页真实触控扫描）
+- [x] 移动端核心页面布局与降级细则已写入 design-quality.md §8.3，并由 13 核心页 reflow/视觉矩阵复验（依据: README §6.12 方针）— 现状 ✅（非核心路由的全状态扩展见 MES-128 审计）
+- [x] issue 详情 ≤1023px 双栏折单栏，属性侧栏后置为 sheet（依据: issue.md §4.1）— 现状 ✅（DetailLayout container query + 属性 Drawer）
+- [x] 聊天 compact 会话列表折单栏且有列表↔会话切换交互（依据: chat-session.md §4.1）— 现状 ✅（ConversationLayout container query + 手机回退入口）
+- [x] 看板移动端：单泳道 chips 切换，拖拽降级为目标列 sheet/非拖拽操作（依据: kanban.md 视图体系 + 移动端方针）— 现状 ✅（BoardCompact + board live region）
 - [ ] 表单/弹窗移动端适配：Dialog 全屏化、输入区不被软键盘遮挡（依据: MES-108 移动端适配）— 现状 ⬜ 待实机
-- [ ] 四组合：每个模块验收须附手机+亮、手机+暗走查存证（依据: 本 Issue 验收标准）— 现状 ❌（移动端实质不可用，无法走查）
+- [x] 四组合：13 核心页附手机+亮、手机+暗、桌面+亮、桌面+暗走查存证（依据: 本 Issue 验收标准）— 现状 ✅（`e2e/evidence/mes111-b5/manifest.json`，52 张互异）
 
 ### 1.5 国际化与时区
 
@@ -185,7 +209,7 @@
 
 ### 1.14 微交互与动效
 
-- [ ] 设计层基础组件（Button/IconButton/Input/Select）具备 hover/active/focus 完整状态（依据: MES-108 交互优化）— 现状 ❌（components.css 内 :hover/:active 规则数为 0，hover 由各 feature 分散自补，同系统内并存有/无反馈）
+- [x] 设计层基础组件（Button/IconButton/Input/Select）具备 hover/active/focus 完整状态（依据: MES-108 交互优化）— 现状 ✅（组件状态单测 + 13 页 reduced-motion/媒体偏好回归）
 - [ ] 拖拽视觉反馈：dragover 目标列高亮、落点占位条、拖拽 ghost/降透明度样式（依据: kanban.md §4.3「目标列高亮」）— 现状 ❌（board.css drag 相关规则数为 0，拖拽过程零视觉反馈）
 - [ ] 过渡动画克制统一（时长经 token fast/slow），keyframes 仅用于必要反馈（spinner/骨架/脉冲/流式光标/高亮闪现）（依据: theme.md 非颜色 token）— 现状 ✅
 - [ ] Toast：role=status + aria-live=polite，4 tone，自动消失 + 手动关闭 + 可选 action（依据: README §6.12）— 现状 ✅
@@ -590,22 +614,22 @@
 | # | 缺口 | 位置 | 影响 | 补充建议 |
 | --- | --- | --- | --- | --- |
 | G1 | 首页为脚手架演示舞台（demo 区块 + mock 端点），非真实产品首页 | `shell/pages/HomePage.tsx` | 产品第一印象；MES-107 核心 | 工作台视角首页：我的 issue/收件箱摘要/进行中运行/最近项目 |
-| G2 | 移动端导航不可用：≤768px 侧栏 `display:none` 无抽屉替代 | `shell/shell.css:402` | 手机 × 两套组合整体不通过 | 汉堡菜单 + 抽屉侧栏；断点系统（≥1024/768）；触控目标 ≥44px；**移动端布局细则须补进各模块 Spec** |
+| G2 | ✅ 已核销：compact 底部导航 + 更多抽屉，规范四断点及 44px 触控门禁 | `shell/MobileNav.tsx`、`shell/MobileMoreDrawer.tsx`、`design/responsive.ts` | 13 核心页手机双主题通过 | MES-128：320/390/200% 等效 reflow + coarse pointer 浏览器门禁 |
 | G3 | ✅ 已核销：顶栏搜索已接入真实查询，键入即展开与命令面板同源结果视图 | `shell/TopBar.tsx`、`shortcuts/PaletteResults.tsx` | 竞品核心入口；onboarding 键盘提示依赖它 | MES-111 批次④；`TopBar.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 palette 存证 |
 | G4 | ✅ 主体已核销：六类对象搜索、favorites/recents 空态、identifier 直达、no-results 建 issue 已落地 | `backend/src/mesh/search/`、`shortcuts/CommandPalette.tsx` | 竞品最高频能力差距 | 后端真实 e2e `backend/tests/e2e/test_search_e2e.py` + 浏览器真实 e2e/四组合存证；命令表新建 issue 与失权 recent 自动清理为残余建议，见 §1.6 🟡 边界 |
 | G5 | `/skills` 路由未注册：Sidebar 死链 + features/skills 整套孤儿代码 | `App.tsx` / `Sidebar.tsx:39` | 功能不可达；导航破窗 | 注册路由并接线 agent 详情「技能与工具」Tab |
 | G6 | Agent 详情「技能与工具」Tab 为占位 EmptyState | `AgentDetailPage.tsx:627` | 工具权限（只读/可写/需确认）无管理面 | 接线 skills 绑定区 + 工具权限下拉 |
 | G7 | 看板 List 布局占位、快速建卡禁用、拖拽零视觉反馈、无虚拟滚动（性能线 1000 卡 ≥50fps 不达） | `features/board/` | 竞品看板核心体验 | List 视图落地；dragover 高亮/落点条/ghost；虚拟滚动 |
-| G8 | 设计层基础组件无 hover/active 状态；全库 :active 仅 1 条 | `design/components.css` | 微交互一致性差距 | hover/active/pressed 状态令牌化补入组件层 |
-| G9 | 上下文快捷键组（看板/issue 详情）Spec 已定义但页面无注册 | `shell/shortcutsRegistration.ts` | 键盘效率承诺未兑现 | 按 search-command-palette.md §4.3 注册 + 等价鼠标路径核对 |
+| G8 | ✅ 已核销：基础组件 hover/active/pressed/focus 状态令牌化并覆盖媒体偏好 | `design/components/components.css` | 微交互一致性门禁已建立 | 组件单测 + 13 核心页 reduced-motion 回归 |
+| G9 | ⏳ 仍开放：上下文快捷键组（看板/issue 详情）Spec 已定义但页面未完整注册 | `shell/shortcutsRegistration.ts` | 键盘效率承诺未兑现 | 需独立实现并跑六流程真实键盘验收；MES-128 不以 axe 代替 |
 | G10 | ✅ 已核销：`/approvals` 与 `/w/{ws}/approvals` 聚合工具/squad 计划/autopilot 动作审批 | `App.tsx`、`features/approvals/` | 审批入口分散；深链断 | `ApprovalsPage.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 approvals 存证 |
 | G11 | ✅ 已核销：admin 可配置工作区默认主题并接通用户偏好缺省时的协商链 | `workspace/pages/settings/WorkspaceGeneralSection.tsx`、`state/workspaceThemeBridge.ts` | 协商链中段无管理面 | `WorkspaceSettingsPage.test.tsx` + `ThemeProvider.test.tsx` + 四组合 ws-settings 存证 |
 | G12 | 脚手架/增量期文案残留：`login.phaseNote`、`members.add.agentComingSoon`、dev token 直填入口、`PlaceholderPage.tsx` | `catalogs/*.json`、`shell/` | 完成品观感 | 清除并加 CI 守卫（coming soon/placeholder 关键词扫描） |
-| G13 | type scale 不完整（仅三档字号，无中英字体配对/数字表格化专项） | `design/tokenValues.ts` | 排版品质差距 | 显示+正文字体配对、完整字号/字重/行高阶梯、表格数字等宽 |
+| G13 | ✅ 已核销：显示/正文字体、字号/字重/行高阶梯与数字等宽工具已集中 | `design/tokenValues.ts`、`design/typography.css` | 四视口双主题复验通过 | 104 个核心页视觉基线 |
 | G14 | 中间层组件缺失：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion 各 feature 自造 | `design/` | 视觉漂移、重复造轮子 | 设计层统一供给并迁移各 feature |
-| G15 | Feature flags 前端消费机制缺失 | 全库 | 工作区功能开关无 UI 呈现 | flag 下发 + 条件渲染约定 |
-| G16 | 移动端 Spec 细则缺失：README 仅「只读优先」一句方针 | README §6.12 | 移动验收无据可依 | **须补进 Spec**：各核心页移动端布局/降级/手势细则 |
-| G17 | `agent.trigger_skipped` 呈现方式 Spec 未细化 | agent.md §3.6 | 验收无组件级依据 | **须补进 Spec**：toast 或内联提示选型 |
+| G15 | ⏳ 仍开放：Feature flags 前端消费机制缺失，且当前产品 Spec 将其列为未来规划 | 全库 / `workspace.md` | 工作区功能开关无 UI 呈现 | 先由产品 Spec 裁决，再定义 flag 下发 + 条件渲染约定 |
+| G16 | ✅ 核心范围已核销：design-quality.md §8.3 明确核心页重排/降级/触控规则 | `design-quality.md` §8、MES-128 审计 | 13 核心页有可执行验收依据 | 非核心路由状态扩展继续按审计缺口推进 |
+| G17 | ⏳ 仍开放：`agent.trigger_skipped` 呈现方式 Spec 未细化 | agent.md §3.6 | 验收无组件级依据 | 先补权威 Spec，明确 toast 或内联提示后实现 |
 | G18 | 个人资料编辑缺失：无头像/昵称/bio 编辑界面（`PATCH /users/me` 仅偏好键） | `api/userPreferences.ts` | 竞品成员模型基本项 | 个人设置增 Profile section（头像上传 + 显示名 + bio） |
 | G19 | ✅ 基线缺口已核销：公共 `useDocumentTitle` 已建立并接入公开页、首页及批次④页面 | `hooks/useDocumentTitle.ts`、`shell/hooks/useDocumentTitle.ts` | 多标签工作流辨识度；完成品基本项 | 单测覆盖写入/异步更新/卸载复位；其余应用实体页与未读标题/favicon 仍属 §1.1 残余范围 |
 

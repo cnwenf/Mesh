@@ -173,7 +173,7 @@
   justify-content: flex-end;
   gap: var(--space-2);
   position: sticky;
-  bottom: 0;
+  bottom: var(--shell-mobile-nav-offset);
   padding: var(--space-3) 0;
   background: var(--color-surface);
 }
@@ -204,7 +204,7 @@
   padding: var(--space-4);
 }
 
-.mesh-autopilots__card h3 {
+.mesh-autopilots__card h2 {
   margin: 0 0 var(--space-2);
   font-size: 1rem;
 }

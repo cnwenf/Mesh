@@ -6,7 +6,7 @@
 - `desktop-home-light.png` / `desktop-home-dark.png`:1440×900 首页,亮暗双主题。
   canvas→surface→raised 表面分层、品牌强调色、14px 正文密度、状态色三元组。
 - `desktop-login-light.png` / `desktop-login-dark.png`:1440×900 登录页 PublicFlow
-  框架;暗色经 `mesh.settings.v1` 持久化偏好预置(theme.md 协商链,防闪烁)。
+  已填邮箱空闲态框架;暗色经 `mesh.settings.v1` 持久化偏好预置(theme.md 协商链,防闪烁)。
 - `phone-home-light.png` / `phone-home-dark.png` / `phone-board-light.png`:
   390×844 手机形态,底部导航在场、无页面级横向溢出。
 

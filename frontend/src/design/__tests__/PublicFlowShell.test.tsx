@@ -73,4 +73,17 @@ describe('PublicFlowShell(design-quality §4.4 PublicFlow 模板)', () => {
     const heading = screen.getByRole('heading', { level: 1 });
     expect(heading.className).toContain('mesh-text-title-1');
   });
+
+  it('公共流程提供 skip link 与稳定主内容锚点', () => {
+    render(
+      <PublicFlowShell brandLabel="Mesh" title="Heading" skipLabel="Skip to main content">
+        <p>x</p>
+      </PublicFlowShell>,
+    );
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#mesh-main-content',
+    );
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'mesh-main-content');
+  });
 });

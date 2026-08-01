@@ -227,6 +227,8 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
           type="search"
           placeholder={t('common.search')}
           aria-label={t('common.search')}
+          role="combobox"
+          aria-haspopup="listbox"
           value={searchValue}
           onChange={handleSearchChange}
           onKeyDown={handleSearchKeyDown}

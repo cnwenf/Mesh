@@ -114,11 +114,15 @@ export function CyclesPage(): React.JSX.Element {
   };
 
   return (
-    <main className="mesh-projects">
+    <div className="mesh-projects">
       <div className="mesh-projects__header">
         <h1 className="mesh-projects__title">{t('cycles.title')}</h1>
         {workspace !== null ? (
-          <Button variant="primary" data-testid="new-cycle-button" onClick={() => setCreateOpen(true)}>
+          <Button
+            variant="primary"
+            data-testid="new-cycle-button"
+            onClick={() => setCreateOpen(true)}
+          >
             {t('cycles.new')}
           </Button>
         ) : null}
@@ -162,7 +166,11 @@ export function CyclesPage(): React.JSX.Element {
         <>
           <ul className="mesh-projects__cycle-list" data-testid="cycle-list">
             {cycles.map((cycle) => (
-              <li key={cycle.id} className="mesh-projects__cycle-row" data-testid={`cycle-row-${cycle.id}`}>
+              <li
+                key={cycle.id}
+                className="mesh-projects__cycle-row"
+                data-testid={`cycle-row-${cycle.id}`}
+              >
                 <div className="mesh-projects__cycle-info">
                   <span className="mesh-projects__cycle-name">{cycle.name}</span>
                   <span className="mesh-projects__cycle-sub">
@@ -170,7 +178,9 @@ export function CyclesPage(): React.JSX.Element {
                     {cycle.auto_roll ? ` · ${t('cycles.autoRollTag')}` : ''}
                   </span>
                 </div>
-                <span className={`mesh-projects__cycle-state mesh-projects__cycle-state--${cycle.state}`}>
+                <span
+                  className={`mesh-projects__cycle-state mesh-projects__cycle-state--${cycle.state}`}
+                >
                   {t(`cycles.state.${cycle.state}`)}
                 </span>
                 <div className="mesh-projects__milestone-actions">
@@ -220,6 +230,6 @@ export function CyclesPage(): React.JSX.Element {
           onCreated={(cycle) => setCycles((prev) => [cycle, ...prev])}
         />
       ) : null}
-    </main>
+    </div>
   );
 }

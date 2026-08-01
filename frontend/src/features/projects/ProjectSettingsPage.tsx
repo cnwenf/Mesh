@@ -6,7 +6,13 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
+import {
+  MeshApiClient,
+  MeshApiError,
+  errorToI18nKey,
+  getToken,
+  useOptimisticMutation,
+} from '../../api';
 import { Button, Dialog, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
@@ -150,10 +156,13 @@ export function ProjectSettingsPage(): React.JSX.Element {
         changes as Partial<ProjectDetail>,
       );
       setProject((prev) => (prev === null ? prev : { ...prev, ...result }));
-      toast.addToast(t(conflicted ? 'projects.settings.conflictToast' : 'projects.settings.saved'), {
-        tone: conflicted ? 'warn' : 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(conflicted ? 'projects.settings.conflictToast' : 'projects.settings.saved'),
+        {
+          tone: conflicted ? 'warn' : 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -167,10 +176,13 @@ export function ProjectSettingsPage(): React.JSX.Element {
         ? await unarchiveProject(client, projectId)
         : await archiveProject(client, projectId);
       setProject((prev) => (prev === null ? prev : { ...prev, ...updated }));
-      toast.addToast(t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'), {
-        tone: 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'),
+        {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -182,7 +194,10 @@ export function ProjectSettingsPage(): React.JSX.Element {
     setIsDeleting(true);
     try {
       await deleteProject(client, projectId);
-      toast.addToast(t('projects.detail.deleted'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('projects.detail.deleted'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       navigate('/projects');
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
@@ -194,21 +209,21 @@ export function ProjectSettingsPage(): React.JSX.Element {
 
   if (error !== null) {
     return (
-      <main className="mesh-projects">
+      <div className="mesh-projects">
         <ErrorState
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
           onRetry={() => setReloadKey((key) => key + 1)}
         />
-      </main>
+      </div>
     );
   }
   if (isLoading || project === null || form === null) {
     return (
-      <main className="mesh-projects">
+      <div className="mesh-projects">
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
@@ -219,8 +234,10 @@ export function ProjectSettingsPage(): React.JSX.Element {
     (workspace !== null && (workspace.role === 'owner' || workspace.role === 'admin'));
 
   return (
-    <main className="mesh-projects">
-      <h1 className="mesh-projects__title">{t('projects.settings.title', { name: project.name })}</h1>
+    <div className="mesh-projects">
+      <h1 className="mesh-projects__title">
+        {t('projects.settings.title', { name: project.name })}
+      </h1>
 
       <form
         className="mesh-projects__form mesh-projects__settings-form"
@@ -310,17 +327,11 @@ export function ProjectSettingsPage(): React.JSX.Element {
       <ProjectMembersSection client={client} projectId={project.id} roster={roster} />
 
       {/* label-property.md §4.1 项目设置:项目级标签与自定义字段定义管理 */}
-      <section
-        className="mesh-projects__settings-section"
-        aria-label={t('labels.sectionTitle')}
-      >
+      <section className="mesh-projects__settings-section" aria-label={t('labels.sectionTitle')}>
         <h2 className="mesh-projects__settings-subtitle">{t('labels.sectionTitle')}</h2>
         <LabelsPanel client={client} workspaceId={project.workspace_id} projectId={project.id} />
       </section>
-      <section
-        className="mesh-projects__settings-section"
-        aria-label={t('fields.sectionTitle')}
-      >
+      <section className="mesh-projects__settings-section" aria-label={t('fields.sectionTitle')}>
         <h2 className="mesh-projects__settings-subtitle">{t('fields.sectionTitle')}</h2>
         <CustomFieldsPanel
           client={client}
@@ -377,6 +388,6 @@ export function ProjectSettingsPage(): React.JSX.Element {
           </div>
         </Dialog>
       ) : null}
-    </main>
+    </div>
   );
 }

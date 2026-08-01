@@ -71,7 +71,7 @@
 /* ---------- BulkBar(粘底,§3.2 / §8.2 安全区) ---------- */
 .mesh-bulk-bar {
   position: sticky;
-  bottom: calc(var(--space-3) + env(safe-area-inset-bottom));
+  bottom: calc(var(--space-3) + var(--shell-mobile-nav-offset));
   z-index: var(--z-sticky);
   display: flex;
   align-items: center;
@@ -286,7 +286,7 @@
 }
 
 /* 宽容器:两栏,侧栏 320px sticky(§3.2 属性 320px 侧栏)。 */
-@container (min-width: 900px) {
+@container (min-width: 1024px) {
   .mesh-detail-layout__columns {
     grid-template-columns: minmax(0, 1fr) 320px;
   }
@@ -296,8 +296,8 @@
     flex-direction: column;
     gap: var(--space-3);
     position: sticky;
-    top: var(--space-4);
-    max-block-size: calc(100vh - var(--space-8));
+    top: calc(var(--shell-topbar-offset) + var(--space-4));
+    max-block-size: calc(100dvh - var(--shell-topbar-offset) - var(--space-8));
     overflow-y: auto;
     padding: var(--space-3);
     border: 1px solid var(--color-border-subtle);
@@ -339,7 +339,7 @@
 
 .mesh-settings-layout__nav {
   position: sticky;
-  inset-block-start: var(--space-4);
+  inset-block-start: calc(var(--shell-topbar-offset) + var(--space-4));
   display: flex;
   flex-direction: column;
   gap: var(--space-4);

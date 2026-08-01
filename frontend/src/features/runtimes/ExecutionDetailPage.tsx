@@ -14,6 +14,7 @@ import { MeshApiClient, getToken } from '../../api';
 import {
   Banner,
   Button,
+  Dialog,
   EmptyState,
   ErrorState,
   Skeleton,
@@ -278,8 +279,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
     startIso !== null ? Math.max(0, Math.floor((nowMs - Date.parse(startIso)) / 1000)) : 0;
   const isTerminal = execution !== null && TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const isSuccess = execution !== null && SUCCESS_EXECUTION_STATUSES.has(execution.status);
-  const canCancel =
-    execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
+  const canCancel = execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const timeoutPct =
     execution !== null && execution.timeout_seconds > 0
       ? Math.min(100, Math.round((elapsedSeconds / execution.timeout_seconds) * 100))
@@ -287,35 +287,31 @@ export function ExecutionDetailPage(): React.JSX.Element {
 
   if (error !== null) {
     return (
-      <main className="mesh-executions">
+      <div className="mesh-executions">
         <ErrorState
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
           onRetry={() => setReloadKey((key) => key + 1)}
         />
-      </main>
+      </div>
     );
   }
 
   if (isLoading || execution === null) {
     return (
-      <main className="mesh-executions">
+      <div className="mesh-executions">
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
   const credentials = execution.credentials ?? [];
 
   return (
-    <main className="mesh-executions" data-testid="execution-detail-page">
+    <div className="mesh-executions" data-testid="execution-detail-page">
       <div className="mesh-executions__header">
-        <Button
-          variant="ghost"
-          data-testid="execution-back"
-          onClick={() => navigate(-1)}
-        >
+        <Button variant="ghost" data-testid="execution-back" onClick={() => navigate(-1)}>
           {t('runtimes.execution.back')}
         </Button>
         <h1 className="mesh-executions__title" data-testid="execution-title">
@@ -383,7 +379,11 @@ export function ExecutionDetailPage(): React.JSX.Element {
         <div className="mesh-executions__progress-fill" style={{ width: `${timeoutPct}%` }} />
       </div>
 
-      <div className="mesh-executions__tabs" role="tablist" aria-label={t('runtimes.execution.tabsLabel')}>
+      <div
+        className="mesh-executions__tabs"
+        role="tablist"
+        aria-label={t('runtimes.execution.tabsLabel')}
+      >
         {TAB_KEYS.map((tab) => (
           <button
             key={tab}
@@ -475,6 +475,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
             />
           ) : (
             <table className="mesh-executions__credentials">
+              <caption className="sr-only">{t('runtimes.execution.tab.credentials')}</caption>
               <thead>
                 <tr>
                   <th scope="col">{t('runtimes.credential.name')}</th>
@@ -497,15 +498,13 @@ export function ExecutionDetailPage(): React.JSX.Element {
         </section>
       ) : null}
 
-      {cancelOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('runtimes.execution.cancelTitle')}
-          className="mesh-executions__cancel-dialog"
-          data-testid="execution-cancel-dialog"
-        >
-          <h2>{t('runtimes.execution.cancelTitle')}</h2>
+      <Dialog
+        open={cancelOpen}
+        onClose={() => setCancelOpen(false)}
+        title={t('runtimes.execution.cancelTitle')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-executions__cancel-dialog" data-testid="execution-cancel-dialog">
           <p>{t('runtimes.execution.cancelDescription')}</p>
           <div className="mesh-executions__cancel-actions">
             <Button
@@ -524,7 +523,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
             </Button>
           </div>
         </div>
-      ) : null}
-    </main>
+      </Dialog>
+    </div>
   );
 }

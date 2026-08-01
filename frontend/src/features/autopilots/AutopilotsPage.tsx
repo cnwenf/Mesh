@@ -102,7 +102,10 @@ function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
         {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
       </td>
       <td>
-        <StatusDot tone={RULE_STATUS_TONE[rule.status]} label={t(`autopilots.status.${rule.status}`)} />
+        <StatusDot
+          tone={RULE_STATUS_TONE[rule.status]}
+          label={t(`autopilots.status.${rule.status}`)}
+        />
       </td>
       <td data-testid={`autopilot-last-run-${rule.id}`}>
         {rule.last_run_status !== null && rule.last_run_status !== undefined ? (
@@ -244,10 +247,10 @@ export function AutopilotsPage(): React.JSX.Element {
         toast.addToast(successMessage, { tone: 'success', closeLabel: t('common.close') });
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       }
     },
     [toast, t],
@@ -255,7 +258,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const handlePause = useCallback(
     (rule: AutopilotRule) => {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => pauseAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.paused'),
@@ -266,7 +269,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const handleResume = useCallback(
     (rule: AutopilotRule) => {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => resumeAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.resumed'),
@@ -277,7 +280,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const applyKillSwitch = useCallback(
     async (enabled: boolean) => {
-        setKillBusy(true);
+      setKillBusy(true);
       try {
         const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const result = await setKillSwitch(client, membership!.workspace_id, {
@@ -295,10 +298,10 @@ export function AutopilotsPage(): React.JSX.Element {
         setKillReason('');
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       } finally {
         setKillBusy(false);
       }
@@ -393,8 +396,11 @@ export function AutopilotsPage(): React.JSX.Element {
       </div>
 
       {errorKey !== null && (
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => setReloadKey((key) => key + 1)}
+        />
       )}
       {rules === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
       {rules !== null && rules.length === 0 && errorKey === null && (
@@ -415,15 +421,16 @@ export function AutopilotsPage(): React.JSX.Element {
       )}
       {rules !== null && rules.length > 0 && (
         <table className="mesh-autopilots__table" data-testid="autopilots-table">
+          <caption className="sr-only">{t('autopilots.title')}</caption>
           <thead>
             <tr>
-              <th>{t('autopilots.columns.name')}</th>
-              <th>{t('autopilots.columns.trigger')}</th>
-              <th>{t('autopilots.columns.status')}</th>
-              <th>{t('autopilots.columns.lastRun')}</th>
-              <th>{t('autopilots.columns.successRate')}</th>
-              <th>{t('autopilots.columns.nextRun')}</th>
-              <th>{t('autopilots.columns.actions')}</th>
+              <th scope="col">{t('autopilots.columns.name')}</th>
+              <th scope="col">{t('autopilots.columns.trigger')}</th>
+              <th scope="col">{t('autopilots.columns.status')}</th>
+              <th scope="col">{t('autopilots.columns.lastRun')}</th>
+              <th scope="col">{t('autopilots.columns.successRate')}</th>
+              <th scope="col">{t('autopilots.columns.nextRun')}</th>
+              <th scope="col">{t('autopilots.columns.actions')}</th>
             </tr>
           </thead>
           <tbody>

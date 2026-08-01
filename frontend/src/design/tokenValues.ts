@@ -24,6 +24,20 @@
 
 import type { ContrastKind } from './contrast';
 
+/**
+ * 全局视口模式边界(design-quality.md §8.1)。
+ *
+ * CSS 的 @media/@container 不能可靠引用 custom property，因此样式表仍会出现
+ * 数字边界；`scripts/check-responsive-contract.mjs` 会从本常量读取允许值并扫描
+ * 全部业务 CSS，任何 359/720/800 等近似断点都会令 CI 失败。
+ */
+export const VIEWPORT_BREAKPOINTS = Object.freeze({
+  compact: Object.freeze({ min: 0, max: 599 }),
+  medium: Object.freeze({ min: 600, max: 1023 }),
+  wide: Object.freeze({ min: 1024, max: 1439 }),
+  xwide: Object.freeze({ min: 1440 }),
+});
+
 /** token 分组(供生成器输出分组注释;顺序即 CSS 中的声明顺序)。 */
 export interface TokenGroup {
   readonly title: string;
@@ -184,7 +198,8 @@ export const LIGHT_TOKEN_GROUPS: ReadonlyArray<TokenGroup> = [
     },
   },
   {
-    title: '间距刻度(design-quality.md §5.3;存量 space-1..6 保持原值,新增 0/0-5/1-5/8/10/12/16(§5.3 表中 0_5/1_5 记法的 kebab 形式))',
+    title:
+      '间距刻度(design-quality.md §5.3;存量 space-1..6 保持原值,新增 0/0-5/1-5/8/10/12/16(§5.3 表中 0_5/1_5 记法的 kebab 形式))',
     tokens: {
       '--space-0': '0px',
       '--space-0-5': '2px',
@@ -206,6 +221,8 @@ export const LIGHT_TOKEN_GROUPS: ReadonlyArray<TokenGroup> = [
     tokens: {
       '--shell-sidebar-expanded': '240px',
       '--shell-sidebar-collapsed': '64px',
+      '--shell-topbar-offset': '69px',
+      '--shell-mobile-nav-offset': 'env(safe-area-inset-bottom)',
       '--page-gutter-compact': '16px',
       '--page-gutter-medium': '24px',
       '--page-gutter-wide': '32px',
@@ -276,7 +293,8 @@ export const LIGHT_TOKEN_GROUPS: ReadonlyArray<TokenGroup> = [
     },
   },
   {
-    title: '字体配对(design-quality.md §6.1:Display=Manrope+CJK,UI=Inter+CJK,等宽=JetBrains Mono;自托管字体文件随页面批次加载,未加载时回退系统栈)',
+    title:
+      '字体配对(design-quality.md §6.1:Display=Manrope+CJK,UI=Inter+CJK,等宽=JetBrains Mono;自托管字体文件随页面批次加载,未加载时回退系统栈)',
     tokens: {
       '--font-family':
         "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
@@ -296,7 +314,8 @@ export const LIGHT_TOKEN_GROUPS: ReadonlyArray<TokenGroup> = [
     },
   },
   {
-    title: '动效时长(design-quality.md §5.5:instant/fast/standard/deliberate/slow;旧 duration-* 兼容)',
+    title:
+      '动效时长(design-quality.md §5.5:instant/fast/standard/deliberate/slow;旧 duration-* 兼容)',
     tokens: {
       '--motion-instant': '0ms',
       '--motion-fast': '100ms',

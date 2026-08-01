@@ -437,20 +437,68 @@
   color: var(--color-neutral-fg);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 599px) {
   .mesh-integrations__page {
     padding: var(--space-3, 12px);
   }
 
-  .mesh-integrations__table,
+  .mesh-integrations__catalog {
+    grid-template-columns: 1fr;
+  }
+
   .mesh-integrations__tabs {
     display: block;
     max-width: 100%;
     overflow-x: auto;
   }
 
-  .mesh-integrations__table {
+  /* 表格在紧凑断点转为卡片堆叠(thead 视觉隐藏 + td 以 data-label 伪元素作列名),§8/§10.2 响应式+可访问性。 */
+  .mesh-integrations__table,
+  .mesh-integrations__table tbody,
+  .mesh-integrations__table tr,
+  .mesh-integrations__table td {
+    display: block;
+    inline-size: 100%;
+  }
+
+  .mesh-integrations__table thead {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
     white-space: nowrap;
+    border: 0;
+  }
+
+  .mesh-integrations__table tr {
+    padding: var(--space-3, 12px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 8px);
+    background: var(--color-surface-raised);
+  }
+
+  .mesh-integrations__table td {
+    display: grid;
+    grid-template-columns: minmax(5.5rem, 38%) minmax(0, 1fr);
+    gap: var(--space-2, 8px);
+    align-items: center;
+    padding: var(--space-2, 8px) 0;
+    border-bottom-color: var(--color-border-subtle);
+    overflow-wrap: anywhere;
+  }
+
+  .mesh-integrations__table td::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-caption);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .mesh-integrations__table td:last-child {
+    border-bottom: 0;
   }
 
   .mesh-integrations__kv {

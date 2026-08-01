@@ -281,13 +281,14 @@ export function BindingDrawer(props: BindingDrawerProps): React.JSX.Element {
       )}
       {bindings !== null && bindings.length > 0 && (
         <table className="mesh-integrations__table" data-testid="binding-table">
+          <caption className="sr-only">{t('integrations.bindings.title')}</caption>
           <thead>
             <tr>
-              <th>{t('integrations.bindings.externalRef')}</th>
-              <th>{t('integrations.bindings.scope')}</th>
-              <th>{t('integrations.bindings.agent')}</th>
-              <th>{t('integrations.bindings.status')}</th>
-              <th />
+              <th scope="col">{t('integrations.bindings.externalRef')}</th>
+              <th scope="col">{t('integrations.bindings.scope')}</th>
+              <th scope="col">{t('integrations.bindings.agent')}</th>
+              <th scope="col">{t('integrations.bindings.status')}</th>
+              <th scope="col">{t('integrations.columns.actions')}</th>
             </tr>
           </thead>
           <tbody>

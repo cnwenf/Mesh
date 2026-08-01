@@ -26,11 +26,7 @@ import './projects.css';
 const PAGE_LIMIT = 20;
 const STATUS_ALL = 'all';
 
-function matchesListFilters(
-  project: ProjectSummary,
-  status: string,
-  archived: boolean,
-): boolean {
+function matchesListFilters(project: ProjectSummary, status: string, archived: boolean): boolean {
   if (project.archived !== archived) return false;
   if (status !== STATUS_ALL && project.status !== status) return false;
   return true;
@@ -62,7 +58,11 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
           />
         ) : null}
         {project.icon !== null ? (
-          <span className="mesh-projects__icon" data-testid={`project-icon-${project.id}`} aria-hidden="true">
+          <span
+            className="mesh-projects__icon"
+            data-testid={`project-icon-${project.id}`}
+            aria-hidden="true"
+          >
             {project.icon}
           </span>
         ) : null}
@@ -202,7 +202,7 @@ export function ProjectsPage(): React.JSX.Element {
   };
 
   return (
-    <main className="mesh-projects">
+    <div className="mesh-projects">
       <div className="mesh-projects__header">
         <h1 className="mesh-projects__title">{t('projects.title')}</h1>
         {workspace !== null ? (
@@ -327,6 +327,6 @@ export function ProjectsPage(): React.JSX.Element {
           }}
         />
       ) : null}
-    </main>
+    </div>
   );
 }

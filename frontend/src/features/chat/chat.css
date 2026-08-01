@@ -64,7 +64,9 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease;
+  transition:
+    background-color var(--motion-fast) ease,
+    border-color var(--motion-fast) ease;
 }
 
 /* 行状态矩阵(§8.2):default / hover / selected / focus-visible。 */
@@ -170,7 +172,7 @@
   display: none;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 599px) {
   .mesh-chat__back {
     display: inline-flex;
     flex: none;

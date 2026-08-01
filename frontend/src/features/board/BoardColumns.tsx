@@ -45,10 +45,7 @@ export function categoryColorClass(key: string): string {
  * 浮点中点法定位(kanban §4.3):插入 index 处取相邻中点;列顶 = 首张 -1;
  * 列底/空列 = 末张 +1(空列 = 1)。
  */
-export function computeDropPosition(
-  cards: readonly BoardCard[],
-  index: number | null,
-): number {
+export function computeDropPosition(cards: readonly BoardCard[], index: number | null): number {
   if (cards.length === 0) return 1;
   if (index === null || index >= cards.length) {
     return (cards[cards.length - 1]?.position ?? 0) + 1;
@@ -99,7 +96,13 @@ function WipBadge({ column }: { column: BoardColumn }): React.JSX.Element | null
 }
 
 /** 拖拽预检 WIP 提示条(warn 放行 / block 禁落,图标+文字非仅颜色,§9.4.3)。 */
-function WipStrip({ columnKey, tone }: { columnKey: string; tone: 'warn' | 'block' }): React.JSX.Element {
+function WipStrip({
+  columnKey,
+  tone,
+}: {
+  columnKey: string;
+  tone: 'warn' | 'block';
+}): React.JSX.Element {
   const t = useT();
   return (
     <div
@@ -176,14 +179,30 @@ interface BoardCardItemProps {
   /** 虚拟化窗口的 AT 坐标(仅虚拟化路径提供;§10.2 不破坏读屏集合语义)。 */
   readonly virtualSetSize?: number;
   readonly virtualPosInSet?: number;
-  readonly onCardPointerDown: (event: React.PointerEvent, cardId: string, identifier: string) => void;
-  readonly onCardKeyDown: (event: React.KeyboardEvent, cardId: string, identifier: string, columnKey: string) => void;
+  readonly onCardPointerDown: (
+    event: React.PointerEvent,
+    cardId: string,
+    identifier: string,
+  ) => void;
+  readonly onCardKeyDown: (
+    event: React.KeyboardEvent,
+    cardId: string,
+    identifier: string,
+    columnKey: string,
+  ) => void;
 }
 
 function BoardCardItem(props: BoardCardItemProps): React.JSX.Element {
   const {
-    card, columnKey, isPlaceholder, isSelected, isHighlighted, virtualSetSize, virtualPosInSet,
-    onCardPointerDown, onCardKeyDown,
+    card,
+    columnKey,
+    isPlaceholder,
+    isSelected,
+    isHighlighted,
+    virtualSetSize,
+    virtualPosInSet,
+    onCardPointerDown,
+    onCardKeyDown,
   } = props;
   const className = [
     'mesh-board__card',
@@ -236,7 +255,12 @@ function renderCardsWithIndicator(
   const nodes: React.ReactNode[] = cards.map((card) => renderCard(card));
   if (!showIndicator) return nodes;
   const indicator = (
-    <div key="__drop-indicator" className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+    <div
+      key="__drop-indicator"
+      className="mesh-board__drop-indicator"
+      data-testid="board-drop-indicator"
+      aria-hidden="true"
+    />
   );
   if (indicatorIndex === null || indicatorIndex >= nodes.length) {
     nodes.push(indicator);
@@ -318,7 +342,11 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
   );
 
   return (
-    <section className={columnClassName} data-testid={`board-column-${column.key}`} aria-label={label}>
+    <section
+      className={columnClassName}
+      data-testid={`board-column-${column.key}`}
+      aria-label={label}
+    >
       <header className="mesh-board__column-head">
         <span className={`mesh-board__dot ${categoryColorClass(column.key)}`} aria-hidden="true" />
         <span className="mesh-board__column-name">{label}</span>
@@ -330,7 +358,9 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
           type="button"
           className="mesh-board__collapse"
           aria-expanded={!column.collapsed}
-          aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', { name: label })}
+          aria-label={t(column.collapsed ? 'board.expandColumn' : 'board.collapseColumn', {
+            name: label,
+          })}
           onClick={() => onToggleCollapse(column.key)}
         >
           <Icon name={column.collapsed ? 'chevron-right' : 'chevron-down'} size={16} />
@@ -340,13 +370,16 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
         <div
           className={`mesh-board__column-body ${wipFull ? 'mesh-board__column-body--blocked' : ''}`.trim()}
           data-testid={`column-body-${column.key}`}
-          role="list"
         >
           {stripTone !== null ? <WipStrip columnKey={column.key} tone={stripTone} /> : null}
           {cards.length === 0 ? (
             <>
               {showIndicator ? (
-                <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+                <div
+                  className="mesh-board__drop-indicator"
+                  data-testid="board-drop-indicator"
+                  aria-hidden="true"
+                />
               ) : null}
               <p className="mesh-board__column-empty">{t('board.columnEmptyTitle')}</p>
             </>
@@ -357,13 +390,24 @@ function BoardColumnCard(props: BoardColumnCardProps): React.JSX.Element {
               renderCard={(card, _index, virtualA11y) => renderCard(card as BoardCard, virtualA11y)}
               indicatorNode={
                 showIndicator ? (
-                  <div className="mesh-board__drop-indicator" data-testid="board-drop-indicator" aria-hidden="true" />
+                  <div
+                    className="mesh-board__drop-indicator"
+                    data-testid="board-drop-indicator"
+                    aria-hidden="true"
+                  />
                 ) : undefined
               }
               indicatorIndex={showIndicator ? (dragState?.hit?.index ?? null) : undefined}
             />
           ) : (
-            renderCardsWithIndicator(cards, showIndicator, dragState?.hit?.index ?? null, renderCard)
+            <div role="list" className="mesh-board__card-list">
+              {renderCardsWithIndicator(
+                cards,
+                showIndicator,
+                dragState?.hit?.index ?? null,
+                renderCard,
+              )}
+            </div>
           )}
           <QuickCreate groupKey={column.key} canWrite={canWrite} onQuickCreate={onQuickCreate} />
         </div>

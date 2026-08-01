@@ -94,28 +94,60 @@ function renderDetail(): void {
 }
 
 const PROJECT_A = {
-  id: 'prj-1', name: 'Apollo', key: 'APL', status: 'active', health: null,
-  visibility: 'public', lead: null, lead_member_id: null, start_date: null,
-  target_date: null, progress: 0, open_issues: 0, done_issues: 0, issue_seq: 1,
-  archived: false, archived_at: null, my_role: 'lead',
-  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+  id: 'prj-1',
+  name: 'Apollo',
+  key: 'APL',
+  status: 'active',
+  health: null,
+  visibility: 'public',
+  lead: null,
+  lead_member_id: null,
+  start_date: null,
+  target_date: null,
+  progress: 0,
+  open_issues: 0,
+  done_issues: 0,
+  issue_seq: 1,
+  archived: false,
+  archived_at: null,
+  my_role: 'lead',
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 };
 const PROJECT_B = { ...PROJECT_A, id: 'prj-2', name: 'Borealis', key: 'BOR' };
 const CYCLE_1 = {
-  id: 'cyc-1', project_id: null, name: 'Sprint 1', starts_at: '2026-08-01',
-  ends_at: '2026-08-14', state: 'active', auto_roll: false,
-  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+  id: 'cyc-1',
+  project_id: null,
+  name: 'Sprint 1',
+  starts_at: '2026-08-01',
+  ends_at: '2026-08-14',
+  state: 'active',
+  auto_roll: false,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 };
 const MILESTONE_1 = {
-  id: 'ms-1', project_id: 'prj-1', title: 'v1.0', description: null,
-  target_date: '2026-09-30', state: 'open', overdue: false,
-  created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
+  id: 'ms-1',
+  project_id: 'prj-1',
+  title: 'v1.0',
+  description: null,
+  target_date: '2026-09-30',
+  state: 'open',
+  overdue: false,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
 };
 const MEMBERS_PAGE = {
   data: [
-    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active',
-      display_name: 'Owner', joined_at: null,
-      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null } },
+    {
+      id: 'mem-1',
+      member_type: 'human',
+      role: 'owner',
+      status: 'active',
+      display_name: 'Owner',
+      joined_at: null,
+      profile: { id: 'usr-1', full_name: 'Owner', email: 'o@c.com', avatar_url: null },
+    },
   ],
   next_cursor: null,
 };
@@ -123,8 +155,14 @@ const MEMBERS_PAGE = {
 const ME_PAGE = {
   user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'WS', workspace_slug: 'ws', role: 'owner',
-      status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'WS',
+      workspace_slug: 'ws',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 /** 评论区首屏(comments 集成:面板挂载后拉取,空列表)。 */
@@ -290,6 +328,7 @@ describe('IssueDetailPage', () => {
       timeout: 5000,
     });
     expect(screen.getByTestId('issue-detail-identifier').textContent).toBe('APL-1');
+    expect(screen.getByRole('heading', { level: 1, name: 'First issue' })).toHaveClass('sr-only');
     expect(screen.getByTestId('issue-detail-version').textContent).toBe('v3');
     expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe(
       'Detailed description',
@@ -395,7 +434,9 @@ describe('IssueDetailPage', () => {
         </MemoryRouter>,
       );
       expect(await screen.findByTestId('issue-detail')).toBeTruthy();
-      expect((screen.getByTestId('issue-detail-title') as HTMLInputElement).value).toBe('First issue');
+      expect((screen.getByTestId('issue-detail-title') as HTMLInputElement).value).toBe(
+        'First issue',
+      );
       unmount();
       vi.unstubAllGlobals();
     }
@@ -513,9 +554,12 @@ describe('IssueDetailPage', () => {
       },
       { timeout: 5000 },
     );
-    await waitFor(() => {
-      expect(stub.calls.length).toBeGreaterThanOrEqual(22);
-    }, { timeout: 5000 });
+    await waitFor(
+      () => {
+        expect(stub.calls.length).toBeGreaterThanOrEqual(22);
+      },
+      { timeout: 5000 },
+    );
     fireEvent.change(screen.getByTestId('issue-detail-start'), {
       target: { value: '2026-08-01' },
     });
@@ -850,13 +894,21 @@ describe('IssueDetailPage', () => {
   it('patches priority and assignee from the sidebar (§4.2)', async () => {
     await twoSidebarChanges(
       { testId: 'issue-detail-priority', value: 'high', body: { priority: 'high', version: 3 } },
-      { testId: 'issue-detail-assignee', value: 'mem-1', body: { assignee_id: 'mem-1', version: 3 } },
+      {
+        testId: 'issue-detail-assignee',
+        value: 'mem-1',
+        body: { assignee_id: 'mem-1', version: 3 },
+      },
     );
   });
 
   it('patches due date and estimate unit from the sidebar (§4.2)', async () => {
     await twoSidebarChanges(
-      { testId: 'issue-detail-due', value: '2026-09-01', body: { due_date: '2026-09-01', version: 3 } },
+      {
+        testId: 'issue-detail-due',
+        value: '2026-09-01',
+        body: { due_date: '2026-09-01', version: 3 },
+      },
       {
         testId: 'issue-detail-estimate-unit',
         value: 'points',
@@ -867,7 +919,11 @@ describe('IssueDetailPage', () => {
 
   it('patches milestone and cycle from the sidebar (§4.2)', async () => {
     await twoSidebarChanges(
-      { testId: 'issue-detail-milestone', value: 'ms-1', body: { milestone_id: 'ms-1', version: 3 } },
+      {
+        testId: 'issue-detail-milestone',
+        value: 'ms-1',
+        body: { milestone_id: 'ms-1', version: 3 },
+      },
       { testId: 'issue-detail-cycle', value: 'cyc-1', body: { cycle_id: 'cyc-1', version: 3 } },
     );
   });
@@ -891,10 +947,7 @@ describe('IssueDetailPage', () => {
       assignee: { id: 'mem-1', name: 'Owner', member_type: 'human' },
       assignee_id: 'mem-1',
     };
-    const stub = detailStub(
-      fakeResponse({ body: { data: FULL } }),
-      ...detailResponses().slice(1),
-    );
+    const stub = detailStub(fakeResponse({ body: { data: FULL } }), ...detailResponses().slice(1));
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderDetail();
     await screen.findByTestId('issue-detail');
@@ -939,7 +992,9 @@ describe('IssueDetailPage', () => {
     renderDetail();
     await screen.findByTestId('issue-detail');
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
-    expect(document.querySelector('.mesh-issues-detail__meta')?.textContent).toContain('Unassigned');
+    expect(document.querySelector('.mesh-issues-detail__meta')?.textContent).toContain(
+      'Unassigned',
+    );
   });
 
   it('localizes estimate unit options (LOW-2:points/hours 不再硬编码英文)', async () => {
@@ -951,8 +1006,7 @@ describe('IssueDetailPage', () => {
     await waitFor(() => expect(stub.calls.length).toBeGreaterThanOrEqual(12), {
       timeout: 5000,
     });
-    const options = (screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement)
-      .options;
+    const options = (screen.getByTestId('issue-detail-estimate-unit') as HTMLSelectElement).options;
     expect(options[1].value).toBe('points');
     expect(options[1].text).toBe('Points');
     expect(options[2].value).toBe('hours');
@@ -1048,7 +1102,9 @@ describe('IssueDetailPage', () => {
     fireEvent.click(screen.getByTestId('move-confirm'));
     await waitFor(() => expect(screen.queryByTestId('move-dialog')).toBeNull());
     expect(
-      await screen.findByText('Moving this item changes some fields. Please review and confirm the move.'),
+      await screen.findByText(
+        'Moving this item changes some fields. Please review and confirm the move.',
+      ),
     ).toBeTruthy();
   });
 });

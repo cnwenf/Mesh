@@ -34,6 +34,12 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 >
 > **命脉层真 LLM 全链路 e2e(MES-95，已入库)**:两层测试策略——常规 CI(`backend-ci`/`daemon-ci`)用 fake provider 覆盖状态机/崩溃恢复/隔离红线/脱敏/预算，**fake 永不冒充命脉测试**;命脉层 `.github/workflows/real-llm.yml`(仅手动/定时触发、受保护 self-hosted runner、`concurrency` 串行、凭证仅 secrets、外部 PR 绝不执行)跑 `daemon/tests/integration/real_llm_squad_e2e.py`:本地真实 Claude Code 注册为 runtime → leader + 2 成员组小队 → 动态 nonce issue 派发 → leader **真实拆解**(经 task broker `squad.members`/`squad.subtasks` 工具、服务端校验 orchestrator 身份)→ 两名成员**真实认领执行**并经 `issue.comment` 回报 → leader 聚合运行**真实汇总评论**并置 issue `done` → 全程执行日志/session/token/cost 真实回流、凭据零泄漏。首次完整真实运行 PASS(4 执行/4 独立 session/43,121 tokens/0.148545 USD，证据见 `docs/evidence/mes-95/real-llm-squad-e2e.json`);运行方式见 [`daemon/README.md`](daemon/README.md)。
 
+> **MES-128 前端收尾门禁**：统一 compact/medium/wide/xwide 断点、safe-area/sticky
+> offset 与 coarse-pointer 44px 命中区；13 个核心页已纳入桌面/触控手机 axe、
+> 320/390/200% 等效 reflow、forced-colors/prefers-contrast/reduced-motion，以及
+> 4 视口 × 2 主题共 104 个视觉基线。走查证据为 52 张互异截图，状态与人工读屏
+> 边界记录在 [`docs/audits/mes128-state-accessibility-matrix.md`](docs/audits/mes128-state-accessibility-matrix.md)。
+>
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
 | 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 🚧 实施中(MES-111) | MES-109 完成逐页审查 + 设计 Spec(MES-110 竞品对照清单 343 条验收基线);MES-107 去脚手架化 v0.23.1;MES-111 已完成 Phase 0(手机可达性:底栏/更多抽屉/统一搜索入口/技能死链/390px 溢出)与 Phase 1 设计系统底座(令牌三层扩展 + 双主题校准、排版体系、Icon/Badge/Avatar/Tooltip/Menu/Tabs/Accordion/Drawer 原语与组件全状态矩阵、错误态四部分模板);Stage 1 系统层收敛(MES-115)已在底座上补齐 Field/Textarea/Checkbox/Switch/Popover/PageHeader/Toolbar/DataTable 与 Icon 注册表扩充、桌面分组可折叠侧栏 + 手机底栏/抽屉同源导航(navigation.ts 唯一入口表)、emoji/字符图标全站清偿、静态门禁(eslint mesh/no-emoji-icons + stylelint mesh/zindex-token-only)、/styleguide 组件 fixture 与 1440/1024/768/390 × 亮暗视觉回归基础;**MES-127 批次④(已完成)**:账号/工作区设置二级导航(SettingsLayout 沉淀至 `design/patterns`,dirty + 保存反馈 + 危险区 + 权限不可见)+ **G11** 工作区默认主题前端入口(协商链真实生效)+ 统一搜索/命令面板(顶栏同一结果视图 + Ctrl/Cmd+K 六类业务对象检索 + favorites/recents + identifier 直达 + 120ms 防抖/可取消/旧响应不覆盖新查询 + 键盘全流程 + aria-live 播报 + `/` 聚焦)+ `/insights` 洞察 UI 重做(KPI 条 + 口径/时区回显行 + 空窗/数据不足/可见性过滤态 + tabular-nums + 颜色非唯一信号)+ `/approvals` 统一审批页(**G10**)+ **G19** 动态标签页标题公共 hook + 模态 Esc 任意焦点可关(修复焦点圈养竞态漏关);真实 e2e 桌面 + 手机双视口 10/10 全绿 + 四组合走查存证 22 张互异;单测 3856 例、逐文件 90% 门禁(189 文件)全过。后续逐页分批(移动收尾/剩余页面族/路由收口)经 MES-111 并行子 Issue 调度 |

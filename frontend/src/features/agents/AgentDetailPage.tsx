@@ -16,6 +16,7 @@ import {
   Avatar,
   Badge,
   Button,
+  Dialog,
   EmptyState,
   ErrorState,
   Input,
@@ -393,22 +394,22 @@ export function AgentDetailPage(): React.JSX.Element {
 
   if (error !== null) {
     return (
-      <main className="mesh-agents-detail">
+      <div className="mesh-agents-detail">
         <ErrorState
           title={t('state.errorTitle')}
           description={error}
           retryLabel={t('common.retry')}
           onRetry={() => setReloadKey((key) => key + 1)}
         />
-      </main>
+      </div>
     );
   }
 
   if (isLoading || agent === null) {
     return (
-      <main className="mesh-agents-detail">
+      <div className="mesh-agents-detail">
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
@@ -417,7 +418,7 @@ export function AgentDetailPage(): React.JSX.Element {
   const runState = presenceToRunState(presence);
 
   return (
-    <main className="mesh-agents-detail" data-testid="agent-detail-page">
+    <div className="mesh-agents-detail" data-testid="agent-detail-page">
       <div className="mesh-agents-detail__header">
         <div className="mesh-agents-detail__identity">
           <Button
@@ -428,7 +429,10 @@ export function AgentDetailPage(): React.JSX.Element {
             {t('agents.detail.back')}
           </Button>
           <Avatar kind="agent" size={40} name={agent.name} src={agent.avatar_url ?? undefined} />
-          <h1 className="mesh-agents-detail__title mesh-text-title-2" data-testid="agent-detail-name">
+          <h1
+            className="mesh-agents-detail__title mesh-text-title-2"
+            data-testid="agent-detail-name"
+          >
             {agent.name}
           </h1>
           <span data-testid="agent-detail-badge">
@@ -716,6 +720,7 @@ export function AgentDetailPage(): React.JSX.Element {
             <EmptyState title={t('state.emptyTitle')} description={t('agents.history.empty')} />
           ) : (
             <table className="mesh-agents-detail__versions">
+              <caption className="sr-only">{t('agents.tab.history')}</caption>
               <thead>
                 <tr>
                   <th scope="col">{t('agents.history.summary')}</th>
@@ -791,9 +796,13 @@ export function AgentDetailPage(): React.JSX.Element {
       ) : null}
 
       {/* M-F1:暂停弹窗——选 in_flight_policy(§3.2/§4.10)+ 可选原因。 */}
-      {pauseOpen ? (
-        <div role="dialog" aria-modal="true" data-testid="agent-pause-dialog">
-          <h2 className="mesh-text-title-3">{t('agents.pause.title')}</h2>
+      <Dialog
+        open={pauseOpen}
+        onClose={() => setPauseOpen(false)}
+        title={t('agents.pause.title')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-agents-detail__dialog-body" data-testid="agent-pause-dialog">
           <label className="mesh-agents-wizard__radio">
             <input
               type="radio"
@@ -831,12 +840,16 @@ export function AgentDetailPage(): React.JSX.Element {
             {t('agents.verb.pause')}
           </Button>
         </div>
-      ) : null}
+      </Dialog>
 
       {/* H-F5:所有权转移弹窗(§3.1 :transfer)。 */}
-      {transferOpen ? (
-        <div role="dialog" aria-modal="true" data-testid="agent-transfer-dialog">
-          <h2 className="mesh-text-title-3">{t('agents.visibility.transferTitle')}</h2>
+      <Dialog
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        title={t('agents.visibility.transferTitle')}
+        closeLabel={t('common.close')}
+      >
+        <div className="mesh-agents-detail__dialog-body" data-testid="agent-transfer-dialog">
           <Input
             label={t('agents.visibility.transferLabel')}
             value={transferUserId}
@@ -858,7 +871,7 @@ export function AgentDetailPage(): React.JSX.Element {
             {t('agents.visibility.transfer')}
           </Button>
         </div>
-      ) : null}
-    </main>
+      </Dialog>
+    </div>
   );
 }

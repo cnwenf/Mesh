@@ -68,6 +68,7 @@ export function ResetPasswordPage(props: ResetPasswordPageProps): React.JSX.Elem
       <PublicFlowShell
         brandLabel={t('brand.name')}
         brandHref="/"
+        skipLabel={t('a11y.skipLink')}
         title={t('reset.title')}
         footer={footer}
       >
@@ -82,6 +83,7 @@ export function ResetPasswordPage(props: ResetPasswordPageProps): React.JSX.Elem
     <PublicFlowShell
       brandLabel={t('brand.name')}
       brandHref="/"
+      skipLabel={t('a11y.skipLink')}
       title={t('reset.title')}
       footer={footer}
     >

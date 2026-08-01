@@ -165,14 +165,15 @@ export function InvitationList(props: InvitationListProps): React.JSX.Element {
   return (
     <div className="mesh-invite-list" data-testid="invitation-list">
       <table>
+        <caption className="sr-only">{t('invitations.sectionTitle')}</caption>
         <thead>
           <tr>
-            <th>{t('invitations.colTarget')}</th>
-            <th>{t('invitations.colRole')}</th>
-            <th>{t('invitations.colStatus')}</th>
-            <th>{t('invitations.colUses')}</th>
-            <th>{t('invitations.colExpires')}</th>
-            <th>{t('invitations.colAction')}</th>
+            <th scope="col">{t('invitations.colTarget')}</th>
+            <th scope="col">{t('invitations.colRole')}</th>
+            <th scope="col">{t('invitations.colStatus')}</th>
+            <th scope="col">{t('invitations.colUses')}</th>
+            <th scope="col">{t('invitations.colExpires')}</th>
+            <th scope="col">{t('invitations.colAction')}</th>
           </tr>
         </thead>
         <tbody>
@@ -181,14 +182,12 @@ export function InvitationList(props: InvitationListProps): React.JSX.Element {
             return (
               <tr key={invitation.id} data-testid="invitation-row">
                 <td>
-                  {invitation.email ?? t('invitations.linkTarget', { prefix: invitation.token_prefix })}
+                  {invitation.email ??
+                    t('invitations.linkTarget', { prefix: invitation.token_prefix })}
                 </td>
                 <td>{t(`roles.${invitation.role}`)}</td>
                 <td>
-                  <StatusDot
-                    tone={STATUS_TONE[status]}
-                    label={t(`invitations.status.${status}`)}
-                  />
+                  <StatusDot tone={STATUS_TONE[status]} label={t(`invitations.status.${status}`)} />
                 </td>
                 <td data-testid="invitation-uses">
                   {invitation.used_count}/{invitation.max_uses}

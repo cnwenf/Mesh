@@ -293,7 +293,7 @@ export function RuntimesPage(): React.JSX.Element {
   }, [runtimes, search]);
 
   return (
-    <main className="mesh-runtimes">
+    <div className="mesh-runtimes">
       <div className="mesh-runtimes__header">
         <h1 className="mesh-runtimes__title">{t('runtimes.title')}</h1>
         {workspace !== null ? (
@@ -373,6 +373,7 @@ export function RuntimesPage(): React.JSX.Element {
         <EmptyState title={t('state.emptyTitle')} description={t('runtimes.empty')} />
       ) : (
         <table className="mesh-runtimes__table" data-testid="runtimes-table">
+          <caption className="sr-only">{t('runtimes.title')}</caption>
           <thead>
             <tr>
               <th scope="col">{t('runtimes.col.status')}</th>
@@ -423,6 +424,6 @@ export function RuntimesPage(): React.JSX.Element {
           onRegistered={() => setReloadKey((key) => key + 1)}
         />
       ) : null}
-    </main>
+    </div>
   );
 }

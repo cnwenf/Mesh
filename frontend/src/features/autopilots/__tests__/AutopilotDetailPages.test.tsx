@@ -21,7 +21,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -76,8 +83,28 @@ const RUN_WAITING = {
   is_test: false,
   created_at: '2026-07-27T00:00:00Z',
   updated_at: '2026-07-27T00:00:00Z',
-  attempts: [{ attempt_number: 1, status: 'running', execution_id: null, started_at: null, finished_at: null, error: null, prompt_tokens: null, completion_tokens: null }],
-  artifacts: [{ id: 'a-1', artifact_type: 'comment', ref_table: 'comments', ref_id: 'c-1', summary: 'ok', created_at: '2026-07-27T00:00:00Z' }],
+  attempts: [
+    {
+      attempt_number: 1,
+      status: 'running',
+      execution_id: null,
+      started_at: null,
+      finished_at: null,
+      error: null,
+      prompt_tokens: null,
+      completion_tokens: null,
+    },
+  ],
+  artifacts: [
+    {
+      id: 'a-1',
+      artifact_type: 'comment',
+      ref_table: 'comments',
+      ref_id: 'c-1',
+      summary: 'ok',
+      created_at: '2026-07-27T00:00:00Z',
+    },
+  ],
 };
 
 interface Recorded {
@@ -93,8 +120,11 @@ function setupDetail(): Recorded[] {
     calls.push({ url, method });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
     if (url.includes('/preview-schedule'))
-      return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } } });
-    if (url.includes('/runs')) return fakeResponse({ body: { data: [RUN_WAITING], next_cursor: null } });
+      return fakeResponse({
+        body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } },
+      });
+    if (url.includes('/runs'))
+      return fakeResponse({ body: { data: [RUN_WAITING], next_cursor: null } });
     if (method !== 'GET') return fakeResponse({ body: { data: { ...RULE, status: 'paused' } } });
     return fakeResponse({ body: { data: RULE } });
   }) as typeof fetch;
@@ -113,8 +143,12 @@ describe('AutopilotDetailPage', () => {
       </Routes>,
       { route: '/autopilots/ap-1' },
     );
-    await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toHaveTextContent('每日汇总'));
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-detail-name')).toHaveTextContent('每日汇总'),
+    );
     await waitFor(() => expect(screen.getByTestId('autopilot-runs-table')).toBeInTheDocument());
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(2);
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     expect(screen.getByTestId('autopilot-run-row-run-1')).toBeInTheDocument();
     // clicking a run row navigates to the run detail
     await userEvent.click(screen.getByTestId('autopilot-run-row-run-1'));
@@ -130,12 +164,16 @@ describe('AutopilotDetailPage', () => {
       </Routes>,
       { route: '/autopilots/ap-1' },
     );
-    await waitFor(() => expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-detail-test-run')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-detail-test-run'));
     await userEvent.click(screen.getByTestId('autopilot-test-dry-run'));
     await userEvent.click(screen.getByTestId('autopilot-test-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.includes('/test-run') && call.method === 'POST')).toBe(true),
+      expect(calls.some((call) => call.url.includes('/test-run') && call.method === 'POST')).toBe(
+        true,
+      ),
     );
   });
 
@@ -181,14 +219,14 @@ describe('AutopilotRunDetailPage', () => {
       { route: '/autopilots/runs/run-1' },
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-run-snapshot')).toBeInTheDocument());
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(4);
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     expect(screen.getByTestId('autopilot-run-approve')).toBeInTheDocument();
     expect(screen.getByTestId('autopilot-run-reject')).toBeInTheDocument();
     expect(screen.getByTestId('autopilot-run-attempts')).toBeInTheDocument();
     expect(screen.getByTestId('autopilot-run-artifacts')).toBeInTheDocument();
     await userEvent.click(screen.getByTestId('autopilot-run-approve'));
-    await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/approve'))).toBe(true),
-    );
+    await waitFor(() => expect(calls.some((call) => call.url.endsWith('/approve'))).toBe(true));
   });
 
   it('shows cancel for running runs and hides approval actions', async () => {
@@ -227,9 +265,31 @@ describe('WebhookConfigPage', () => {
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST')
         return fakeResponse({
-          body: { data: { id: 'sec-1', label: 'default', status: 'active', token: 'whk_tok', secret: 'whs_sec', created_at: '2026-07-27T00:00:00Z' } },
+          body: {
+            data: {
+              id: 'sec-1',
+              label: 'default',
+              status: 'active',
+              token: 'whk_tok',
+              secret: 'whs_sec',
+              created_at: '2026-07-27T00:00:00Z',
+            },
+          },
         });
-      return fakeResponse({ body: { data: [{ id: 'sec-1', label: 'default', status: 'active', created_at: '2026-07-27T00:00:00Z', revoked_at: null }], next_cursor: null } });
+      return fakeResponse({
+        body: {
+          data: [
+            {
+              id: 'sec-1',
+              label: 'default',
+              status: 'active',
+              created_at: '2026-07-27T00:00:00Z',
+              revoked_at: null,
+            },
+          ],
+          next_cursor: null,
+        },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(
@@ -239,11 +299,15 @@ describe('WebhookConfigPage', () => {
       { route: '/webhooks' },
     );
     await waitFor(() => expect(screen.getByTestId('webhook-create-secret')).toBeInTheDocument());
+    expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(1);
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     await userEvent.click(screen.getByTestId('webhook-create-secret'));
     await waitFor(() => expect(screen.getByTestId('webhook-fresh-credential')).toBeInTheDocument());
     expect(screen.getByTestId('webhook-fresh-secret')).toHaveTextContent('whs_sec');
     expect(screen.getByTestId('webhook-fresh-url').textContent).toContain('whk_tok');
-    expect(calls.some((call) => call.url.includes('/webhook-secrets') && call.method === 'POST')).toBe(true);
+    expect(
+      calls.some((call) => call.url.includes('/webhook-secrets') && call.method === 'POST'),
+    ).toBe(true);
   });
 
   it('lists existing secrets without echoing material', async () => {
@@ -251,7 +315,18 @@ describe('WebhookConfigPage', () => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       return fakeResponse({
-        body: { data: [{ id: 'sec-9', label: 'prod', status: 'active', created_at: '2026-07-27T00:00:00Z', revoked_at: null }], next_cursor: null },
+        body: {
+          data: [
+            {
+              id: 'sec-9',
+              label: 'prod',
+              status: 'active',
+              created_at: '2026-07-27T00:00:00Z',
+              revoked_at: null,
+            },
+          ],
+          next_cursor: null,
+        },
       });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);

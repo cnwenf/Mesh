@@ -4,7 +4,7 @@
  */
 import { useCallback, useMemo, useState } from 'react';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, useToast } from '../../design';
+import { Button, Dialog, useToast } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { moveIssue } from './api';
@@ -95,16 +95,20 @@ export function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
   }, [client, preview, props, toast, t]);
 
   return (
-    <div className="mesh-issues__move-overlay" data-testid="move-dialog">
-      <div className="mesh-issues__move-dialog" role="dialog" aria-label={t('issues.move.title')}>
-        <h3>{t('issues.move.title')}</h3>
+    <Dialog
+      open
+      onClose={props.onCancel}
+      title={t('issues.move.title')}
+      closeLabel={t('common.close')}
+    >
+      <div className="mesh-issues__move-dialog" data-testid="move-dialog">
         <p className="mesh-issues__move-identifier">{preview.identifier}</p>
         <p className="mesh-issues__move-target" data-testid="move-target">
           {t('issues.move.targetProject', { name: props.targetProjectName })}
         </p>
         {preview.mapped_fields.length > 0 ? (
           <section data-testid="move-mapped">
-            <h4>{t('issues.move.mapped')}</h4>
+            <h3>{t('issues.move.mapped')}</h3>
             <ul>
               {preview.mapped_fields.map((field: MovePreviewField) => {
                 const from = field.from as { name?: string } | undefined;
@@ -120,7 +124,7 @@ export function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
         ) : null}
         {preview.cleared_fields.length > 0 ? (
           <section data-testid="move-cleared">
-            <h4>{t('issues.move.cleared')}</h4>
+            <h3>{t('issues.move.cleared')}</h3>
             <ul>
               {preview.cleared_fields.map((field: MovePreviewField) => (
                 <li key={field.field}>
@@ -140,6 +144,6 @@ export function MoveProjectDialog(props: MoveDialogProps): React.JSX.Element {
           </Button>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }

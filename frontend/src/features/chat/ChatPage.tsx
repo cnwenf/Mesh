@@ -235,6 +235,9 @@ export function ChatPage(): React.JSX.Element {
       ? bootstrappedSession
       : null;
   }, [sessionId, sessions, bootstrappedSession]);
+  const pageTitle =
+    selected?.title ??
+    (sessionId !== undefined ? t('chat.conversation.label') : t('chat.list.label'));
 
   // H6:确证坏/失效深链 → 回列表路由,消除手机死胡同(§8.3)与桌面悬空 URL。
   useEffect(() => {
@@ -294,22 +297,25 @@ export function ChatPage(): React.JSX.Element {
 
   if (bootError !== null) {
     return (
-      <main className="mesh-chat-page" data-testid="chat-page">
+      <div className="mesh-chat-page" data-testid="chat-page">
+        <h1 className="sr-only">{pageTitle}</h1>
         <ErrorState title={t('state.errorTitle')} description={t(bootError)} />
-      </main>
+      </div>
     );
   }
 
   if (workspaceId === null) {
     return (
-      <main className="mesh-chat-page" data-testid="chat-page">
+      <div className="mesh-chat-page" data-testid="chat-page">
+        <h1 className="sr-only">{pageTitle}</h1>
         <Skeleton loadingLabel={t('common.loading')} />
-      </main>
+      </div>
     );
   }
 
   return (
-    <main className="mesh-chat-page" data-testid="chat-page">
+    <div className="mesh-chat-page" data-testid="chat-page">
+      <h1 className="sr-only">{pageTitle}</h1>
       <ConversationLayout
         className="mesh-chat"
         listLabel={t('chat.list.label')}
@@ -360,6 +366,6 @@ export function ChatPage(): React.JSX.Element {
         onClose={() => setNewOpen(false)}
         onCreate={handleCreate}
       />
-    </main>
+    </div>
   );
 }

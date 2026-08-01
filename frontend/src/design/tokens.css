@@ -125,6 +125,8 @@
   /* 布局变量(外壳/页边距/内容宽度,主题无关) */
   --shell-sidebar-expanded: 240px;
   --shell-sidebar-collapsed: 64px;
+  --shell-topbar-offset: 69px;
+  --shell-mobile-nav-offset: env(safe-area-inset-bottom);
   --page-gutter-compact: 16px;
   --page-gutter-medium: 24px;
   --page-gutter-wide: 32px;

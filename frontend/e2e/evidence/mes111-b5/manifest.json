@@ -1,0 +1,30 @@
+{
+  "issue": "MES-128",
+  "generated_by": "e2e/a11y/mes128-axe.spec.ts",
+  "modes": {
+    "mobile": { "width": 390, "height": 844 },
+    "desktop": { "width": 1440, "height": 900 }
+  },
+  "themes": ["light", "dark"],
+  "pages": [
+    { "key": "login", "path": "/login" },
+    { "key": "home", "path": "/" },
+    { "key": "issues", "path": "/issues" },
+    { "key": "board", "path": "/board" },
+    { "key": "issue-detail", "path": "/issues/issue-1" },
+    { "key": "members", "path": "/members" },
+    { "key": "chat", "path": "/chat" },
+    { "key": "execution", "path": "/executions/exec-1" },
+    { "key": "inbox", "path": "/inbox" },
+    { "key": "autopilots", "path": "/autopilots" },
+    { "key": "integrations", "path": "/integrations" },
+    { "key": "insights", "path": "/insights" },
+    { "key": "settings", "path": "/settings/appearance" }
+  ],
+  "expected_screenshots": 52,
+  "non_screenshot_checks": [
+    "axe-wcag-a-aa-desktop-and-touch-phone",
+    "reflow-320-390-and-200-percent-equivalent",
+    "coarse-pointer-targets-at-least-44px"
+  ]
+}

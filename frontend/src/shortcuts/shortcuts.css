@@ -5,7 +5,7 @@
 /* 序列键首键待决提示：使用 toast 层级，避免被页面内容遮挡。 */
 .mesh-shortcut-sequence-status {
   position: fixed;
-  inset-block-end: var(--space-4);
+  inset-block-end: calc(var(--space-4) + var(--shell-mobile-nav-offset));
   inset-inline-start: 50%;
   z-index: var(--z-toast);
   transform: translateX(-50%);

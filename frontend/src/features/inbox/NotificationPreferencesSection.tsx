@@ -66,7 +66,10 @@ export function NotificationPreferencesSection(): React.JSX.Element {
   }, [client, workspaceId]);
 
   const setRow = useCallback((eventType: string, patch: Partial<RowState>) => {
-    setRows((prev) => ({ ...prev, [eventType]: { ...(prev[eventType] ?? DEFAULT_ROW), ...patch } }));
+    setRows((prev) => ({
+      ...prev,
+      [eventType]: { ...(prev[eventType] ?? DEFAULT_ROW), ...patch },
+    }));
   }, []);
 
   const save = useCallback(async () => {
@@ -81,7 +84,10 @@ export function NotificationPreferencesSection(): React.JSX.Element {
     }));
     try {
       await updatePreferences(client, workspaceId, preferences);
-      toast.addToast(t('notifications.savedToast'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('notifications.savedToast'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
     } catch (err: unknown) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -127,14 +133,19 @@ export function NotificationPreferencesSection(): React.JSX.Element {
   };
 
   return (
-    <section className="mesh-notif-prefs" aria-label={t('notifications.title')} data-testid="notification-prefs">
+    <section
+      className="mesh-notif-prefs"
+      aria-label={t('notifications.title')}
+      data-testid="notification-prefs"
+    >
       <h3>{t('notifications.title')}</h3>
       <table className="mesh-notif-prefs__table">
+        <caption className="sr-only">{t('notifications.title')}</caption>
         <thead>
           <tr>
-            <th>{t('notifications.col.event')}</th>
-            <th>{t('notifications.inApp')}</th>
-            <th>{t('notifications.email')}</th>
+            <th scope="col">{t('notifications.col.event')}</th>
+            <th scope="col">{t('notifications.inApp')}</th>
+            <th scope="col">{t('notifications.email')}</th>
           </tr>
         </thead>
         <tbody>{regularTypes.map((type) => renderRow(type))}</tbody>
@@ -142,6 +153,14 @@ export function NotificationPreferencesSection(): React.JSX.Element {
 
       <h4 className="mesh-notif-prefs__agent-heading">{t('notifications.agentSection')}</h4>
       <table className="mesh-notif-prefs__table">
+        <caption className="sr-only">{t('notifications.agentSection')}</caption>
+        <thead>
+          <tr className="sr-only">
+            <th scope="col">{t('notifications.col.event')}</th>
+            <th scope="col">{t('notifications.inApp')}</th>
+            <th scope="col">{t('notifications.email')}</th>
+          </tr>
+        </thead>
         <tbody>{renderRow(AGENT_EVENT)}</tbody>
       </table>
 

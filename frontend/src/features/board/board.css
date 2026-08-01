@@ -332,18 +332,42 @@
 }
 
 /* 状态类别语义色(经语义 token;暗色集整体替换) */
-.mesh-board__dot--backlog { background: var(--color-text-muted); }
-.mesh-board__dot--todo { background: var(--color-info); }
-.mesh-board__dot--in_progress { background: var(--color-primary); }
-.mesh-board__dot--in_review { background: var(--color-warn); }
-.mesh-board__dot--blocked { background: var(--color-danger); }
-.mesh-board__dot--done { background: var(--color-success); }
-.mesh-board__dot--cancelled { background: var(--color-text-muted); }
-.mesh-board__dot--urgent { background: var(--color-danger); }
-.mesh-board__dot--high { background: var(--color-warn); }
-.mesh-board__dot--medium { background: var(--color-info); }
-.mesh-board__dot--low { background: var(--color-text-muted); }
-.mesh-board__dot--none { background: var(--color-border); }
+.mesh-board__dot--backlog {
+  background: var(--color-text-muted);
+}
+.mesh-board__dot--todo {
+  background: var(--color-info);
+}
+.mesh-board__dot--in_progress {
+  background: var(--color-primary);
+}
+.mesh-board__dot--in_review {
+  background: var(--color-warn);
+}
+.mesh-board__dot--blocked {
+  background: var(--color-danger);
+}
+.mesh-board__dot--done {
+  background: var(--color-success);
+}
+.mesh-board__dot--cancelled {
+  background: var(--color-text-muted);
+}
+.mesh-board__dot--urgent {
+  background: var(--color-danger);
+}
+.mesh-board__dot--high {
+  background: var(--color-warn);
+}
+.mesh-board__dot--medium {
+  background: var(--color-info);
+}
+.mesh-board__dot--low {
+  background: var(--color-text-muted);
+}
+.mesh-board__dot--none {
+  background: var(--color-border);
+}
 
 .mesh-board__column-name {
   font-weight: 600;
@@ -392,6 +416,12 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+}
+
+.mesh-board__card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 /* 虚拟化滚动容器(确定高度链末段:flex 取列体剩余高度;内滚窗口化渲染)。 */

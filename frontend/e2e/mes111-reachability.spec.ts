@@ -259,7 +259,11 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
   test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/login');
-    await expect(page.locator('input[type="email"], input[name="email"]').first()).toBeVisible();
+    const email = page.locator('input[type="email"], input[name="email"]').first();
+    await expect(email).toBeVisible();
+    await email.fill('member@example.test');
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(email).not.toBeFocused();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-light.png` });
 
     // 暗色:经 mesh.settings.v1 持久化偏好预置(theme.md 协商链,防闪烁分区承载)
@@ -271,6 +275,9 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     });
     await page.goto('/login');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await email.fill('member@example.test');
+    await page.getByRole('heading', { level: 1 }).click();
+    await expect(email).not.toBeFocused();
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
   });
 

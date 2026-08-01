@@ -81,7 +81,7 @@ describe('DeviceAuthorizationPage', () => {
     authState.token = null;
     renderPage();
     // Not signed in → a sign-in link is offered.
-    expect(screen.getByRole('link')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign in' })).toBeTruthy();
   });
 
   it('prefills but keeps the input editable and validates the typed code', async () => {

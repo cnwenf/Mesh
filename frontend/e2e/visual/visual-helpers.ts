@@ -12,7 +12,7 @@
  *   @font-face 分层(latin / 简中)+ `* { font-family: 'Mesh Visual Font' }` 强制
  *   覆盖 + `font-display: block` + document.fonts.ready 等待,杜绝字体回退抖动;
  * - 冻结时钟:page.clock.install 固定时间戳,相对时间恒定(动态时间区另以 mask 排除);
- * - 预热(warmUpPages):首跑前预编译六路由模块,消除 Vite 按需编译/依赖再优化与
+ * - 预热(warmUpPages):首跑前预编译核心路由模块,消除 Vite 按需编译/依赖再优化与
  *   被测导航的竞争(冷启动偶发 ErrorBoundary 的确定性漏洞)。
  */
 import type { Browser, Locator, Page } from '@playwright/test';
@@ -55,15 +55,44 @@ export interface VisualPageSpec {
 
 /**
  * 核心页注册表(键为中文页名,供 navigateToPage 与 forced-colors 共用)。
- * 六页:看板 / issue 详情 / 成员 / 聊天 / 运行详情 / 收件箱(§5.4 异常态矩阵页面)。
+ * design-quality §13.5 的 13 个核心页。注册表也是视觉、媒体偏好、axe、reflow
+ * 与证据矩阵的单一真源；新增核心页必须在这里登记，避免门禁之间页面集漂移。
  */
 export const PAGES: Record<string, VisualPageSpec> = {
+  登录: {
+    snapshotKey: 'login',
+    path: '/login',
+    ready: async (page) => {
+      await page.getByTestId('login-account-submit').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  工作台: {
+    snapshotKey: 'home',
+    path: '/',
+    ready: async (page) => {
+      await page.getByTestId('home-greeting').waitFor({ state: 'visible' });
+      await page.getByTestId('home-dashboard').waitFor({ state: 'visible' });
+    },
+    masks: (page) => [page.locator('.mesh-home time')],
+  },
+  'issue 列表': {
+    snapshotKey: 'issues',
+    path: '/issues',
+    ready: async (page) => {
+      await page.getByTestId('issue-row-MESH-1').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
   看板: {
     // 卡片/列计数全由 seed 决定,无时间/随机色;遮罩重同步横幅。
     snapshotKey: 'board',
     path: '/board',
     ready: async (page) => {
-      await page.getByTestId('board-columns').waitFor({ state: 'visible' });
+      const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
+      await page
+        .getByTestId(compact ? 'board-compact' : 'board-columns')
+        .waitFor({ state: 'visible' });
       await page.getByTestId('board-card-issue-1').waitFor({ state: 'visible' });
     },
     masks: (page) => [page.locator('[data-testid="board-resync-banner"]')],
@@ -90,8 +119,10 @@ export const PAGES: Record<string, VisualPageSpec> = {
     snapshotKey: 'members',
     path: '/members',
     ready: async (page) => {
-      await page.locator('table.mesh-members__table').waitFor({ state: 'visible' });
-      await page.getByTestId('member-open-member-human-1').waitFor({ state: 'visible' });
+      const compact = await page.evaluate(() => matchMedia('(max-width: 599px)').matches);
+      await page
+        .getByTestId(compact ? 'member-card-member-human-1' : 'member-open-member-human-1')
+        .waitFor({ state: 'visible' });
     },
     masks: () => [],
   },
@@ -136,6 +167,38 @@ export const PAGES: Record<string, VisualPageSpec> = {
     },
     masks: (page) => [page.locator('.mesh-inbox__row time')],
   },
+  自动值守: {
+    snapshotKey: 'autopilots',
+    path: '/autopilots',
+    ready: async (page) => {
+      await page.getByTestId('autopilot-row-autopilot-1').waitFor({ state: 'visible' });
+    },
+    masks: (page) => [page.locator('[data-testid^="autopilot-last-run-"]')],
+  },
+  集成: {
+    snapshotKey: 'integrations',
+    path: '/integrations',
+    ready: async (page) => {
+      await page.getByTestId('integration-row-integration-1').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  洞察: {
+    snapshotKey: 'insights',
+    path: '/insights',
+    ready: async (page) => {
+      await page.getByTestId('insights-range').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
+  设置: {
+    snapshotKey: 'settings',
+    path: '/settings/appearance',
+    ready: async (page) => {
+      await page.getByTestId('theme-select').waitFor({ state: 'visible' });
+    },
+    masks: () => [],
+  },
 };
 
 /** 由内置 woff2(视觉 mock 分发)构造分层 @font-face + 强制覆盖样式表。 */
@@ -165,10 +228,16 @@ export function buildFontFaceCss(): string {
 export async function injectSession(page: Page, theme: 'light' | 'dark'): Promise<void> {
   await page.addInitScript(
     ({ token, theme: mode }) => {
-      window.localStorage.setItem(
-        'mesh.auth.v1',
-        JSON.stringify({ state: { token, refreshToken: null }, version: 0 }),
-      );
+      // /login 是核心视觉矩阵中的公开页。每次文档初始化按目标 path 建立准确
+      // 会话态，使同一注册表既能跑公开页，也能跑受保护页，且循环导航不串态。
+      if (window.location.pathname === '/login') {
+        window.localStorage.removeItem('mesh.auth.v1');
+      } else {
+        window.localStorage.setItem(
+          'mesh.auth.v1',
+          JSON.stringify({ state: { token, refreshToken: null }, version: 0 }),
+        );
+      }
       window.localStorage.setItem(
         'mesh.settings.v1',
         JSON.stringify({

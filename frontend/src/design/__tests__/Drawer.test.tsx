@@ -92,7 +92,12 @@ describe('Drawer(§7.5 次级上下文浮层)', () => {
 
   it('footer 插槽渲染为底部操作区', () => {
     render(
-      <Drawer open onClose={() => undefined} title="属性" footer={<button type="button">保存</button>}>
+      <Drawer
+        open
+        onClose={() => undefined}
+        title="属性"
+        footer={<button type="button">保存</button>}
+      >
         内容
       </Drawer>,
     );

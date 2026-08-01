@@ -151,10 +151,10 @@ export function AutopilotDetailPage(): React.JSX.Element {
         }
         setReloadRunsKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       }
     },
     [membership, autopilotId, toast, t],
@@ -186,10 +186,10 @@ export function AutopilotDetailPage(): React.JSX.Element {
       setTestDialogOpen(false);
       setReloadRunsKey((key) => key + 1);
     } catch (error) {
-      toast.addToast(
-        t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-        { tone: 'danger', closeLabel: t('common.close') },
-      );
+      toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
     } finally {
       setTestBusy(false);
     }
@@ -198,8 +198,11 @@ export function AutopilotDetailPage(): React.JSX.Element {
   if (errorKey !== null) {
     return (
       <div className="mesh-autopilots__page">
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => navigate('/autopilots')} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => navigate('/autopilots')}
+        />
       </div>
     );
   }
@@ -221,7 +224,11 @@ export function AutopilotDetailPage(): React.JSX.Element {
           {rule.name}
         </h1>
         <div className="mesh-autopilots__toolbar">
-          <Button variant="secondary" size="sm" onClick={() => navigate(`/autopilots/${rule.id}/edit`)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate(`/autopilots/${rule.id}/edit`)}
+          >
             {t('autopilots.actions.edit')}
           </Button>
           {rule.status === 'active' && (
@@ -231,7 +238,12 @@ export function AutopilotDetailPage(): React.JSX.Element {
               onClick={() =>
                 membership !== null &&
                 runAction(
-                  () => pauseAutopilot(new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), membership!.workspace_id, rule.id),
+                  () =>
+                    pauseAutopilot(
+                      new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
+                      membership!.workspace_id,
+                      rule.id,
+                    ),
                   t('autopilots.toast.paused'),
                 )
               }
@@ -247,7 +259,12 @@ export function AutopilotDetailPage(): React.JSX.Element {
               onClick={() =>
                 membership !== null &&
                 runAction(
-                  () => resumeAutopilot(new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), membership!.workspace_id, rule.id),
+                  () =>
+                    resumeAutopilot(
+                      new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }),
+                      membership!.workspace_id,
+                      rule.id,
+                    ),
                   t('autopilots.toast.resumed'),
                 )
               }
@@ -256,7 +273,12 @@ export function AutopilotDetailPage(): React.JSX.Element {
               {t('autopilots.actions.resume')}
             </Button>
           )}
-          <Button variant="primary" size="sm" onClick={() => setTestDialogOpen(true)} data-testid="autopilot-detail-test-run">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setTestDialogOpen(true)}
+            data-testid="autopilot-detail-test-run"
+          >
             {t('autopilots.actions.testRun')}
           </Button>
           <Button variant="danger" size="sm" onClick={() => setConfirmDeleteOpen(true)}>
@@ -266,7 +288,7 @@ export function AutopilotDetailPage(): React.JSX.Element {
       </div>
 
       <div className="mesh-autopilots__card">
-        <h3>{t('autopilots.detail.configTitle')}</h3>
+        <h2>{t('autopilots.detail.configTitle')}</h2>
         <dl className="mesh-autopilots__kv">
           <dt>{t('autopilots.columns.status')}</dt>
           <dd>
@@ -276,7 +298,9 @@ export function AutopilotDetailPage(): React.JSX.Element {
             />
           </dd>
           <dt>{t('autopilots.columns.trigger')}</dt>
-          <dd data-testid="autopilot-detail-trigger">{t(`autopilots.trigger.${rule.trigger_type}`)}</dd>
+          <dd data-testid="autopilot-detail-trigger">
+            {t(`autopilots.trigger.${rule.trigger_type}`)}
+          </dd>
           <dt>{t('autopilots.detail.triggerConfig')}</dt>
           <dd>
             <pre className="mesh-autopilots__json" data-testid="autopilot-detail-trigger-config">
@@ -285,7 +309,9 @@ export function AutopilotDetailPage(): React.JSX.Element {
           </dd>
           <dt>{t('autopilots.detail.filterConfig')}</dt>
           <dd>
-            <pre className="mesh-autopilots__json">{JSON.stringify(rule.filter_config, null, 2)}</pre>
+            <pre className="mesh-autopilots__json">
+              {JSON.stringify(rule.filter_config, null, 2)}
+            </pre>
           </dd>
           <dt>{t('autopilots.detail.actions')}</dt>
           <dd data-testid="autopilot-detail-actions">
@@ -326,20 +352,28 @@ export function AutopilotDetailPage(): React.JSX.Element {
 
       <div className="mesh-autopilots__card">
         <div className="mesh-autopilots__header">
-          <h3>{t('autopilots.runs.title')}</h3>
+          <h2>{t('autopilots.runs.title')}</h2>
           <Select
             label={t('autopilots.filters.status')}
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
           >
             <option value={RUN_STATUS_ALL}>{t('autopilots.filters.all')}</option>
-            {(['pending', 'running', 'waiting_approval', 'retrying', 'succeeded', 'failed', 'cancelled'] as AutopilotRunStatus[]).map(
-              (status) => (
-                <option key={status} value={status}>
-                  {t(`autopilots.runStatus.${status}`)}
-                </option>
-              ),
-            )}
+            {(
+              [
+                'pending',
+                'running',
+                'waiting_approval',
+                'retrying',
+                'succeeded',
+                'failed',
+                'cancelled',
+              ] as AutopilotRunStatus[]
+            ).map((status) => (
+              <option key={status} value={status}>
+                {t(`autopilots.runStatus.${status}`)}
+              </option>
+            ))}
           </Select>
         </div>
         {runs === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
@@ -348,14 +382,15 @@ export function AutopilotDetailPage(): React.JSX.Element {
         )}
         {runs !== null && runs.length > 0 && (
           <table className="mesh-autopilots__runs-table" data-testid="autopilot-runs-table">
+            <caption className="sr-only">{t('autopilots.runs.title')}</caption>
             <thead>
               <tr>
-                <th>{t('autopilots.runs.status')}</th>
-                <th>{t('autopilots.runs.triggered')}</th>
-                <th>{t('autopilots.runs.duration')}</th>
-                <th>{t('autopilots.runs.tokens')}</th>
-                <th>{t('autopilots.runs.retries')}</th>
-                <th>{t('autopilots.runs.error')}</th>
+                <th scope="col">{t('autopilots.runs.status')}</th>
+                <th scope="col">{t('autopilots.runs.triggered')}</th>
+                <th scope="col">{t('autopilots.runs.duration')}</th>
+                <th scope="col">{t('autopilots.runs.tokens')}</th>
+                <th scope="col">{t('autopilots.runs.retries')}</th>
+                <th scope="col">{t('autopilots.runs.error')}</th>
               </tr>
             </thead>
             <tbody>
@@ -439,7 +474,7 @@ export function AutopilotDetailPage(): React.JSX.Element {
           <Button
             variant="danger"
             onClick={() => {
-                        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+              const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
               void deleteAutopilot(client, membership!.workspace_id, rule.id)
                 .then(() => navigate('/autopilots'))
                 .catch((error: unknown) =>

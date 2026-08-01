@@ -178,13 +178,14 @@ export function EventLedger(props: EventLedgerProps): React.JSX.Element {
       )}
       {events !== null && events.length > 0 && (
         <table className="mesh-integrations__table" data-testid="event-table">
+          <caption className="sr-only">{t('integrations.tab.events')}</caption>
           <thead>
             <tr>
-              <th>{t('integrations.events.time')}</th>
-              <th>{t('integrations.events.type')}</th>
-              <th>{t('integrations.events.signature')}</th>
-              <th>{t('integrations.events.process')}</th>
-              <th />
+              <th scope="col">{t('integrations.events.time')}</th>
+              <th scope="col">{t('integrations.events.type')}</th>
+              <th scope="col">{t('integrations.events.signature')}</th>
+              <th scope="col">{t('integrations.events.process')}</th>
+              <th scope="col">{t('integrations.columns.actions')}</th>
             </tr>
           </thead>
           <tbody>

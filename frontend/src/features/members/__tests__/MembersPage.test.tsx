@@ -559,7 +559,9 @@ describe('MembersPage', () => {
     );
     await waitForTable();
     // 订阅该 agent 的 presence 频道(profile.id = agt-9)。
-    expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence');
+    await waitFor(() =>
+      expect(rt.client.subscribe).toHaveBeenCalledWith('agent:agt-9:presence'),
+    );
     // 无帧 → unknown 态(表格与卡片一致)。
     expect(
       screen.getByTestId('member-presence-mem-a').querySelector('[data-state="unknown"]'),

@@ -11,7 +11,13 @@
 /* eslint-disable react-refresh/only-export-components -- categoryTone/saveIndicatorText 为页面内纯助手,与组件同模块契约 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
+import {
+  MeshApiClient,
+  MeshApiError,
+  errorToI18nKey,
+  getToken,
+  useOptimisticMutation,
+} from '../../api';
 import {
   Avatar,
   Badge,
@@ -191,7 +197,11 @@ function resolveCurrentMember(
 function toMentionCandidates(members: readonly MemberSummary[]): MentionCandidate[] {
   return members
     .filter((member) => member.status === 'active')
-    .map((member) => ({ id: member.id, name: member.display_name, member_type: member.member_type }));
+    .map((member) => ({
+      id: member.id,
+      name: member.display_name,
+      member_type: member.member_type,
+    }));
 }
 
 interface ActivityListProps {
@@ -466,12 +476,14 @@ export function IssueDetailPage(): React.JSX.Element {
   }
 
   // F7:进度以服务端 children_progress 为准;畸形信封按 unknown 收窄后回退 0(不白屏)。
-  const progress = issue.children_progress as { done?: unknown; total?: unknown } | null | undefined;
+  const progress = issue.children_progress as
+    { done?: unknown; total?: unknown } | null | undefined;
   const doneChildren = typeof progress?.done === 'number' ? progress.done : 0;
   const totalChildren = typeof progress?.total === 'number' ? progress.total : 0;
 
   const header = (
     <header className="mesh-issues-detail__head">
+      <h1 className="sr-only">{issue.title}</h1>
       <span className="mesh-issues-detail__identifier" data-testid="issue-detail-identifier">
         {issue.identifier}
       </span>
@@ -683,7 +695,9 @@ export function IssueDetailPage(): React.JSX.Element {
         title={t('issues.deleteConfirmTitle')}
         closeLabel={t('common.close')}
       >
-        <p className="mesh-text-body-sm">{t('issues.deleteConfirmBody', { identifier: issue.identifier })}</p>
+        <p className="mesh-text-body-sm">
+          {t('issues.deleteConfirmBody', { identifier: issue.identifier })}
+        </p>
         <div className="mesh-issues__confirm-actions">
           <Button
             variant="danger"

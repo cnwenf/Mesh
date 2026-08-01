@@ -60,7 +60,7 @@ export function DataManagementPage(): React.JSX.Element {
   );
 
   return (
-    <main className="mesh-settings__page" aria-label={t('dataJobs.page.title')}>
+    <div className="mesh-settings__page" aria-label={t('dataJobs.page.title')}>
       <h1>{t('dataJobs.page.title')}</h1>
       <p>{t('dataJobs.page.subtitle', { workspace: workspaceSlug ?? '' })}</p>
 
@@ -91,9 +91,7 @@ export function DataManagementPage(): React.JSX.Element {
         />
       )}
 
-      {!loadError && jobs === null && (
-        <Skeleton loadingLabel={t('dataJobs.page.loading')} />
-      )}
+      {!loadError && jobs === null && <Skeleton loadingLabel={t('dataJobs.page.loading')} />}
 
       {!loadError && jobs !== null && jobs.length === 0 && (
         <EmptyState
@@ -104,14 +102,15 @@ export function DataManagementPage(): React.JSX.Element {
 
       {!loadError && jobs !== null && jobs.length > 0 && (
         <table className="mesh-data-jobs__table" aria-label={t('dataJobs.page.tableLabel')}>
+          <caption className="sr-only">{t('dataJobs.page.tableLabel')}</caption>
           <thead>
             <tr>
-              <th>{t('dataJobs.page.col.kind')}</th>
-              <th>{t('dataJobs.page.col.entity')}</th>
-              <th>{t('dataJobs.page.col.status')}</th>
-              <th>{t('dataJobs.page.col.rows')}</th>
-              <th>{t('dataJobs.page.col.created')}</th>
-              <th>{t('dataJobs.page.col.actions')}</th>
+              <th scope="col">{t('dataJobs.page.col.kind')}</th>
+              <th scope="col">{t('dataJobs.page.col.entity')}</th>
+              <th scope="col">{t('dataJobs.page.col.status')}</th>
+              <th scope="col">{t('dataJobs.page.col.rows')}</th>
+              <th scope="col">{t('dataJobs.page.col.created')}</th>
+              <th scope="col">{t('dataJobs.page.col.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -165,6 +164,6 @@ export function DataManagementPage(): React.JSX.Element {
           />
         </>
       )}
-    </main>
+    </div>
   );
 }

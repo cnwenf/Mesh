@@ -8,7 +8,13 @@ import { renderWithProviders } from '../../../test-utils/render';
 import { RUN_STATUS_CONFIG, RunStatus } from '../RunStatus';
 import type { RunStatusKind } from '../RunStatus';
 
-const ALL_STATES: readonly RunStatusKind[] = ['queued', 'running', 'waiting', 'succeeded', 'failed'];
+const ALL_STATES: readonly RunStatusKind[] = [
+  'queued',
+  'running',
+  'waiting',
+  'succeeded',
+  'failed',
+];
 
 /** 各状态文案键在 en 目录下的实际渲染文案(测试 locale=en)。 */
 const EXPECTED_TEXT: Readonly<Record<RunStatusKind, string>> = {
@@ -38,6 +44,14 @@ describe('RunStatus', () => {
   it('renders the agent name alongside the status text', () => {
     renderWithProviders(<RunStatus status="running" agentName="code-reviewer" />);
     expect(screen.getByTestId('run-status-running').textContent).toContain('code-reviewer');
+  });
+
+  it('announces async state changes through a polite atomic live region', () => {
+    renderWithProviders(<RunStatus status="running" />);
+    const node = screen.getByTestId('run-status-running');
+    expect(node).toHaveAttribute('role', 'status');
+    expect(node).toHaveAttribute('aria-live', 'polite');
+    expect(node).toHaveAttribute('aria-atomic', 'true');
   });
 
   it('marks only the running state with the pulse modifier', () => {

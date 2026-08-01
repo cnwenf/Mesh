@@ -1,5 +1,5 @@
 /**
- * 视觉回归六核心页恒定 fixture 路由(theme.md §5.4)。
+ * 视觉回归核心页恒定 fixture 路由(theme.md §5.4 / design-quality §13.5)。
  *
  * 由 mock-server-visual.mjs 引入,仅处理页面专有数据路由;外壳引导路由与字体分发
  * 仍在 mock-server-visual.mjs。所有内容为受控常量(时间戳取自固定基准),供
@@ -170,10 +170,54 @@ const ISSUE_DETAIL = {
 };
 
 const ISSUE_STATUSES = [
-  { id: 'st-todo', project_id: null, name: '待办', category: 'todo', color: '#6b7280', position: 0, is_default: true, allowed_transitions: [], created_at: isoAt(0), updated_at: isoAt(0) },
-  { id: 'st-in_progress', project_id: null, name: '进行中', category: 'in_progress', color: '#2563eb', position: 1, is_default: false, allowed_transitions: [], created_at: isoAt(0), updated_at: isoAt(0) },
-  { id: 'st-in_review', project_id: null, name: '评审中', category: 'in_review', color: '#d97706', position: 2, is_default: false, allowed_transitions: [], created_at: isoAt(0), updated_at: isoAt(0) },
-  { id: 'st-done', project_id: null, name: '已完成', category: 'done', color: '#16a34a', position: 3, is_default: false, allowed_transitions: [], created_at: isoAt(0), updated_at: isoAt(0) },
+  {
+    id: 'st-todo',
+    project_id: null,
+    name: '待办',
+    category: 'todo',
+    color: '#6b7280',
+    position: 0,
+    is_default: true,
+    allowed_transitions: [],
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
+  {
+    id: 'st-in_progress',
+    project_id: null,
+    name: '进行中',
+    category: 'in_progress',
+    color: '#2563eb',
+    position: 1,
+    is_default: false,
+    allowed_transitions: [],
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
+  {
+    id: 'st-in_review',
+    project_id: null,
+    name: '评审中',
+    category: 'in_review',
+    color: '#d97706',
+    position: 2,
+    is_default: false,
+    allowed_transitions: [],
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
+  {
+    id: 'st-done',
+    project_id: null,
+    name: '已完成',
+    category: 'done',
+    color: '#16a34a',
+    position: 3,
+    is_default: false,
+    allowed_transitions: [],
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
 ];
 
 const ISSUE_CHILDREN = [
@@ -265,12 +309,42 @@ const ISSUE_COMMENTS = [
 ];
 
 const ISSUE_LABELS = [
-  { id: 'lbl-1', workspace_id: WORKSPACE_ID, project_id: null, name: 'theme', color: '#7c3aed', description: null, scope: 'workspace', created_at: isoAt(0), updated_at: isoAt(0) },
+  {
+    id: 'lbl-1',
+    workspace_id: WORKSPACE_ID,
+    project_id: null,
+    name: 'theme',
+    color: '#7c3aed',
+    description: null,
+    scope: 'workspace',
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
 ];
 
 const WORKSPACE_LABELS = [
-  { id: 'lbl-1', workspace_id: WORKSPACE_ID, project_id: null, name: 'theme', color: '#7c3aed', description: null, scope: 'workspace', created_at: isoAt(0), updated_at: isoAt(0) },
-  { id: 'lbl-2', workspace_id: WORKSPACE_ID, project_id: null, name: 'a11y', color: '#0891b2', description: null, scope: 'workspace', created_at: isoAt(0), updated_at: isoAt(0) },
+  {
+    id: 'lbl-1',
+    workspace_id: WORKSPACE_ID,
+    project_id: null,
+    name: 'theme',
+    color: '#7c3aed',
+    description: null,
+    scope: 'workspace',
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
+  {
+    id: 'lbl-2',
+    workspace_id: WORKSPACE_ID,
+    project_id: null,
+    name: 'a11y',
+    color: '#0891b2',
+    description: null,
+    scope: 'workspace',
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -472,6 +546,147 @@ const NOTIFICATIONS = [
 ];
 
 // ---------------------------------------------------------------------------
+// 其余 §13.5 核心页(工作台 / issue 列表 / 自动值守 / 集成 / 洞察)
+// ---------------------------------------------------------------------------
+
+const AUTOPILOTS = [
+  {
+    id: 'autopilot-1',
+    workspace_id: WORKSPACE_ID,
+    name: '每日待办巡检',
+    description: '每天检查逾期工作项并通知负责人。',
+    trigger_type: 'schedule',
+    trigger_config: { cron: '0 9 * * 1-5', timezone: 'UTC' },
+    filter_config: {},
+    action_config: [{ type: 'send_notification', message: '请检查逾期工作项' }],
+    executor_agent_id: null,
+    status: 'active',
+    guardrails: {
+      rate_limit_overflow: 'queue',
+      dedup_window_seconds: 300,
+      dedup_key_template: '{{issue.id}}',
+      daily_run_budget: 100,
+      daily_token_budget: 100000,
+      approval_required_actions: [],
+      kill_switch_paused: false,
+      agent_loop_detection: true,
+      cascade_max_depth: 3,
+      agent_loop_window_seconds: 600,
+    },
+    max_retries: 3,
+    retry_backoff: 'exponential',
+    retry_base_seconds: 5,
+    retry_max_seconds: 300,
+    rate_limit_max: 20,
+    rate_limit_window_seconds: 60,
+    concurrency_limit: 1,
+    require_approval: false,
+    next_run_at: isoAt(86_400_000),
+    last_run_at: isoAt(3_600_000),
+    last_run_status: 'succeeded',
+    created_by: 'member-human-1',
+    created_at: isoAt(0),
+    updated_at: isoAt(3_600_000),
+    stats: { runs_30d: 22, success_rate: 0.95 },
+  },
+];
+
+const INTEGRATIONS = [
+  {
+    id: 'integration-1',
+    workspace_id: WORKSPACE_ID,
+    kind: 'vcs_github',
+    name: '代码托管',
+    status: 'active',
+    config: { organization: 'acme' },
+    has_secret: true,
+    health_state: 'healthy',
+    last_error: null,
+    last_success_at: isoAt(7_200_000),
+    events_7d: 128,
+    created_by: 'member-human-1',
+    created_at: isoAt(0),
+    updated_at: isoAt(7_200_000),
+  },
+];
+
+const WORKSPACE_DASHBOARD = {
+  throughput: {
+    granularity: 'day',
+    series: [
+      {
+        label: '07-24',
+        bucket: '2026-07-24',
+        window_start: '2026-07-24T00:00:00Z',
+        window_end: '2026-07-25T00:00:00Z',
+        created: 8,
+        completed: 5,
+        net: 3,
+      },
+      {
+        label: '07-25',
+        bucket: '2026-07-25',
+        window_start: '2026-07-25T00:00:00Z',
+        window_end: '2026-07-26T00:00:00Z',
+        created: 4,
+        completed: 7,
+        net: -3,
+      },
+    ],
+    meta: { calendar_timezone: 'UTC', net_window: 0 },
+  },
+  workload: {
+    data: [
+      {
+        member_id: 'member-human-1',
+        display_name: 'Ana',
+        member_type: 'human',
+        open_issues: 6,
+        running: null,
+        queued: null,
+        awaiting_approval: null,
+      },
+      {
+        member_id: 'member-agent-1',
+        display_name: 'Mesh Agent',
+        member_type: 'agent',
+        open_issues: 3,
+        running: 1,
+        queued: 2,
+        awaiting_approval: 0,
+      },
+    ],
+    next_cursor: null,
+  },
+  agent_stats: {
+    agents: [
+      {
+        agent_id: 'agent-1',
+        display_name: 'Mesh Agent',
+        member_type: 'agent',
+        executions: 20,
+        succeeded: 18,
+        terminal: 20,
+        cancelled_count: 0,
+        success_rate: 0.9,
+        timeout_rate: 0.05,
+        avg_duration_seconds: 42,
+        retry_rate: 0.1,
+        tokens: {
+          prompt_tokens: 24000,
+          completion_tokens: 8000,
+          total_tokens: 32000,
+          token_coverage: 1,
+        },
+        meta: { token_note: 'autopilot executions' },
+      },
+    ],
+    meta: {},
+  },
+  meta: { visibility_filtered: false, display_timezone: 'UTC' },
+};
+
+// ---------------------------------------------------------------------------
 // 路由匹配
 // ---------------------------------------------------------------------------
 
@@ -607,6 +822,42 @@ export function handlePageRoute(req, res, url, ctx) {
   // ---- 收件箱 -----------------------------------------------------------
   if (path === '/api/v1/inbox') {
     sendJson(res, 200, list(NOTIFICATIONS));
+    return true;
+  }
+
+  // ---- 工作台 -----------------------------------------------------------
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/executions`) {
+    sendJson(res, 200, list([]));
+    return true;
+  }
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/approvals`) {
+    sendJson(res, 200, list([]));
+    return true;
+  }
+
+  // ---- 自动值守 ---------------------------------------------------------
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/autopilots/kill-switch`) {
+    sendJson(res, 200, single({ kill_switch: false }));
+    return true;
+  }
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/autopilots`) {
+    sendJson(res, 200, list(AUTOPILOTS));
+    return true;
+  }
+
+  // ---- 集成 -------------------------------------------------------------
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/integrations`) {
+    sendJson(res, 200, list(INTEGRATIONS));
+    return true;
+  }
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/integrations/integration-1/bindings`) {
+    sendJson(res, 200, list([]));
+    return true;
+  }
+
+  // ---- 洞察 -------------------------------------------------------------
+  if (path === `/api/v1/workspaces/${WORKSPACE_ID}/dashboards/workspace`) {
+    sendJson(res, 200, single(WORKSPACE_DASHBOARD));
     return true;
   }
 

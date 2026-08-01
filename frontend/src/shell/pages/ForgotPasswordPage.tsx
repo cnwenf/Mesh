@@ -50,6 +50,7 @@ export function ForgotPasswordPage(props: ForgotPasswordPageProps): React.JSX.El
     <PublicFlowShell
       brandLabel={t('brand.name')}
       brandHref="/"
+      skipLabel={t('a11y.skipLink')}
       title={t('forgot.title')}
       description={t('forgot.description')}
       footer={

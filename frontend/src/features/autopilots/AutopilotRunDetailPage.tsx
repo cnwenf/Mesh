@@ -13,13 +13,7 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
-import {
-  approveRun,
-  autopilotChannel,
-  cancelRun,
-  getAutopilotRun,
-  rejectRun,
-} from './api';
+import { approveRun, autopilotChannel, cancelRun, getAutopilotRun, rejectRun } from './api';
 import { RUN_STATUS_TONE, errorSummary, formatDurationMs } from './format';
 import type { AutopilotRun, RunArtifact } from './types';
 
@@ -113,10 +107,10 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
         );
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       }
     },
     [membership, runId, toast, t],
@@ -133,18 +127,21 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
       });
       setReloadKey((key) => key + 1);
     } catch (error) {
-      toast.addToast(
-        t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-        { tone: 'danger', closeLabel: t('common.close') },
-      );
+      toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+        tone: 'danger',
+        closeLabel: t('common.close'),
+      });
     }
   }, [membership, runId, toast, t]);
 
   if (errorKey !== null) {
     return (
       <div className="mesh-autopilots__page">
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => setReloadKey((key) => key + 1)}
+        />
       </div>
     );
   }
@@ -157,14 +154,21 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
   }
 
   return (
-    <div className="mesh-autopilots__page mesh-autopilots__run-detail" data-testid="autopilot-run-detail">
+    <div
+      className="mesh-autopilots__page mesh-autopilots__run-detail"
+      data-testid="autopilot-run-detail"
+    >
       <div className="mesh-autopilots__header">
         <h1 className="mesh-autopilots__title">
           {t('autopilots.runDetail.title')}
           {run.is_test ? ` · ${t('autopilots.runs.test')}` : ''}
         </h1>
         <div className="mesh-autopilots__toolbar">
-          <Button variant="ghost" size="sm" onClick={() => navigate(`/autopilots/${run.autopilot_id}`)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate(`/autopilots/${run.autopilot_id}`)}
+          >
             {t('autopilots.runDetail.backToRule')}
           </Button>
           {APPROVABLE_STATUSES.has(run.status) && (
@@ -188,7 +192,12 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
             </>
           )}
           {CANCELLABLE_STATUSES.has(run.status) && (
-            <Button variant="secondary" size="sm" onClick={() => void cancel()} data-testid="autopilot-run-cancel">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void cancel()}
+              data-testid="autopilot-run-cancel"
+            >
               {t('autopilots.actions.cancelRun')}
             </Button>
           )}
@@ -196,11 +205,14 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
       </div>
 
       <div className="mesh-autopilots__card">
-        <h3>{t('autopilots.runDetail.overview')}</h3>
+        <h2>{t('autopilots.runDetail.overview')}</h2>
         <dl className="mesh-autopilots__kv">
           <dt>{t('autopilots.runs.status')}</dt>
           <dd data-testid="autopilot-run-status">
-            <StatusDot tone={RUN_STATUS_TONE[run.status]} label={t(`autopilots.runStatus.${run.status}`)} />
+            <StatusDot
+              tone={RUN_STATUS_TONE[run.status]}
+              label={t(`autopilots.runStatus.${run.status}`)}
+            />
           </dd>
           <dt>{t('autopilots.runDetail.triggerType')}</dt>
           <dd>{t(`autopilots.trigger.${run.trigger_type}`)}</dd>
@@ -222,7 +234,11 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
             <>
               <dt>{t('autopilots.runDetail.execution')}</dt>
               <dd>
-                <Button variant="ghost" size="sm" onClick={() => navigate(`/executions/${run.execution_id}`)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate(`/executions/${run.execution_id}`)}
+                >
                   {run.execution_id}
                 </Button>
               </dd>
@@ -231,33 +247,36 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
           {run.error !== null && (
             <>
               <dt>{t('autopilots.runs.error')}</dt>
-              <dd data-testid="autopilot-run-error">{errorSummary(run.error as Record<string, unknown>)}</dd>
+              <dd data-testid="autopilot-run-error">
+                {errorSummary(run.error as Record<string, unknown>)}
+              </dd>
             </>
           )}
         </dl>
       </div>
 
       <div className="mesh-autopilots__card">
-        <h3>{t('autopilots.runDetail.snapshotTitle')}</h3>
+        <h2>{t('autopilots.runDetail.snapshotTitle')}</h2>
         <pre className="mesh-autopilots__json" data-testid="autopilot-run-snapshot">
           {JSON.stringify(run.trigger_snapshot, null, 2)}
         </pre>
       </div>
 
       <div className="mesh-autopilots__card">
-        <h3>{t('autopilots.runDetail.attemptsTitle')}</h3>
+        <h2>{t('autopilots.runDetail.attemptsTitle')}</h2>
         {run.attempts === undefined || run.attempts.length === 0 ? (
           <p>{t('autopilots.runDetail.noAttempts')}</p>
         ) : (
           <table className="mesh-autopilots__runs-table" data-testid="autopilot-run-attempts">
+            <caption className="sr-only">{t('autopilots.runDetail.attemptsTitle')}</caption>
             <thead>
               <tr>
-                <th>#</th>
-                <th>{t('autopilots.runs.status')}</th>
-                <th>{t('autopilots.runDetail.startedAt')}</th>
-                <th>{t('autopilots.runDetail.finishedAt')}</th>
-                <th>{t('autopilots.runs.tokens')}</th>
-                <th>{t('autopilots.runs.error')}</th>
+                <th scope="col">#</th>
+                <th scope="col">{t('autopilots.runs.status')}</th>
+                <th scope="col">{t('autopilots.runDetail.startedAt')}</th>
+                <th scope="col">{t('autopilots.runDetail.finishedAt')}</th>
+                <th scope="col">{t('autopilots.runs.tokens')}</th>
+                <th scope="col">{t('autopilots.runs.error')}</th>
               </tr>
             </thead>
             <tbody>
@@ -265,8 +284,12 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
                 <tr key={attempt.attempt_number}>
                   <td>{attempt.attempt_number}</td>
                   <td>{attempt.status}</td>
-                  <td>{attempt.started_at ? new Date(attempt.started_at).toLocaleString() : '—'}</td>
-                  <td>{attempt.finished_at ? new Date(attempt.finished_at).toLocaleString() : '—'}</td>
+                  <td>
+                    {attempt.started_at ? new Date(attempt.started_at).toLocaleString() : '—'}
+                  </td>
+                  <td>
+                    {attempt.finished_at ? new Date(attempt.finished_at).toLocaleString() : '—'}
+                  </td>
                   <td>{(attempt.prompt_tokens ?? 0) + (attempt.completion_tokens ?? 0)}</td>
                   <td>{errorSummary(attempt.error as Record<string, unknown> | null) ?? '—'}</td>
                 </tr>
@@ -277,16 +300,17 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
       </div>
 
       <div className="mesh-autopilots__card">
-        <h3>{t('autopilots.runDetail.artifactsTitle')}</h3>
+        <h2>{t('autopilots.runDetail.artifactsTitle')}</h2>
         {run.artifacts === undefined || run.artifacts.length === 0 ? (
           <p>{t('autopilots.runDetail.noArtifacts')}</p>
         ) : (
           <table className="mesh-autopilots__runs-table" data-testid="autopilot-run-artifacts">
+            <caption className="sr-only">{t('autopilots.runDetail.artifactsTitle')}</caption>
             <thead>
               <tr>
-                <th>{t('autopilots.runDetail.artifactType')}</th>
-                <th>{t('autopilots.runDetail.artifactRef')}</th>
-                <th>{t('autopilots.runDetail.artifactSummary')}</th>
+                <th scope="col">{t('autopilots.runDetail.artifactType')}</th>
+                <th scope="col">{t('autopilots.runDetail.artifactRef')}</th>
+                <th scope="col">{t('autopilots.runDetail.artifactSummary')}</th>
               </tr>
             </thead>
             <tbody>
