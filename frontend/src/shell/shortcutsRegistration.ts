@@ -32,6 +32,7 @@ import { useSettingsStore } from '../state/settingsStore';
 import type { ThemeMode } from '../state/settingsStore';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
 import { useOverlayControls } from './AppShell';
+import { findNavItem, resolveNavTarget } from './navigation';
 
 export const TOPBAR_SEARCH_SELECTOR = '[data-testid="topbar-search"]';
 
@@ -173,6 +174,14 @@ function requireActionLabel(labels: ShellShortcutLabels, key: keyof ShellActionL
   return value;
 }
 
+function resolveNavCommandTarget(key: NavKey, workspaceSlug: string | null): string {
+  const item = findNavItem(key);
+  if (item === undefined) {
+    throw new Error(`Shell navigation entry missing: ${key}`);
+  }
+  return resolveNavTarget(item, workspaceSlug);
+}
+
 function registerLegacyShellShortcuts(
   navigate: (to: string) => void,
   labels: ShellShortcutLabels,
@@ -189,27 +198,27 @@ function registerLegacyShellShortcuts(
   const wsPath = (suffix: string): string =>
     env.workspaceSlug !== null ? `/w/${env.workspaceSlug}${suffix}` : suffix;
 
-  const navRoutes: ReadonlyArray<{ key: NavKey; to: string }> = [
-    { key: 'home', to: '/' },
-    { key: 'inbox', to: wsPath('/inbox') },
-    { key: 'projects', to: wsPath('/projects') },
-    { key: 'issues', to: wsPath('/issues') },
-    { key: 'board', to: wsPath('/board') },
-    { key: 'members', to: wsPath('/members') },
-    { key: 'chat', to: wsPath('/chat') },
-    { key: 'squads', to: wsPath('/squads') },
-    { key: 'autopilots', to: wsPath('/automations/autopilots') },
-    // 自动化运营区三入口(§6.12 信息架构):自动值守 + 运行环境 + 技能市场。
-    { key: 'runtimes', to: wsPath('/automations/runtimes') },
-    { key: 'skills', to: wsPath('/automations/skills') },
-    { key: 'insights', to: wsPath('/insights') },
-    { key: 'integrations', to: wsPath('/integrations') },
-    { key: 'approvals', to: wsPath('/approvals') },
-    { key: 'settings', to: wsPath('/settings') },
+  const navKeys: ReadonlyArray<NavKey> = [
+    'home',
+    'inbox',
+    'projects',
+    'issues',
+    'board',
+    'members',
+    'chat',
+    'squads',
+    'autopilots',
+    'runtimes',
+    'skills',
+    'insights',
+    'integrations',
+    'approvals',
+    'settings',
   ];
-  for (const { key, to } of navRoutes) {
+  for (const key of navKeys) {
     const label = labels.nav[key];
     if (label === undefined) continue;
+    const to = resolveNavCommandTarget(key, env.workspaceSlug);
     unregisters.push(
       registry.registerCommand({
         id: 'nav.' + key,
@@ -510,27 +519,27 @@ function registerModernShellShortcuts(
   const wsPath = (suffix: string): string =>
     workspaceSlug !== null ? `/w/${workspaceSlug}${suffix}` : suffix;
 
-  const navRoutes: ReadonlyArray<{ key: NavKey; suffix: string }> = [
-    { key: 'home', suffix: '/' },
-    { key: 'inbox', suffix: '/inbox' },
-    { key: 'projects', suffix: '/projects' },
-    { key: 'issues', suffix: '/issues' },
-    { key: 'board', suffix: '/board' },
-    { key: 'members', suffix: '/members' },
-    { key: 'chat', suffix: '/chat' },
-    { key: 'insights', suffix: '/insights' },
-    { key: 'settings', suffix: '/settings' },
-    { key: 'squads', suffix: '/squads' },
-    { key: 'skills', suffix: '/automations/skills' },
-    { key: 'autopilots', suffix: '/automations/autopilots' },
-    { key: 'runtimes', suffix: '/automations/runtimes' },
-    { key: 'integrations', suffix: '/integrations' },
-    { key: 'approvals', suffix: '/approvals' },
+  const navKeys: ReadonlyArray<NavKey> = [
+    'home',
+    'inbox',
+    'projects',
+    'issues',
+    'board',
+    'members',
+    'chat',
+    'insights',
+    'settings',
+    'squads',
+    'skills',
+    'autopilots',
+    'runtimes',
+    'integrations',
+    'approvals',
   ];
-  for (const { key, suffix } of navRoutes) {
+  for (const key of navKeys) {
     const label = labels.nav[key];
     if (label === undefined) continue;
-    const to = suffix === '/' ? '/' : wsPath(suffix);
+    const to = resolveNavCommandTarget(key, workspaceSlug);
     unregisters.push(
       registry.registerCommand({
         id: `nav.${key}`,

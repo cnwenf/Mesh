@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetApiClient } from '../../api/instance';
 import { fakeResponse } from '../../api/__tests__/fetchStub';
 import type { SearchItem } from '../../api/search';
-import { pushRecent, setRecentsScope } from '../recents';
+import { listRecents, pushRecent, setRecentsScope } from '../recents';
 import { usePaletteData } from '../usePaletteData';
 
 function issue(id: string, title: string): SearchItem {
@@ -86,8 +86,171 @@ describe('usePaletteData 空态唯一数据流(§4.2.1)', () => {
     expect(result.current.isSearching).toBe(false);
   });
 
+  it('真实 favorites 仅含 target id 时解析标题与规范深链,不渲染 UUID 死行', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/favorites')) {
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'favorite-row-1',
+                workspace_id: 'ws-1',
+                member_id: 'member-1',
+                target_type: 'issue',
+                target_id: 'fav-1',
+                created_at: '2026-02-01T00:00:00Z',
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      if (url.includes('/issues/fav-1')) {
+        return fakeResponse({
+          body: {
+            data: { id: 'fav-1', identifier: 'WEB-7', title: 'Resolved favorite' },
+          },
+        });
+      }
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    });
+    vi.stubGlobal('fetch', fetchImpl as typeof fetch);
+    const { result } = renderHook(() =>
+      usePaletteData({
+        workspaceId: 'ws-1',
+        workspaceSlug: 'acme',
+        userId: 'u-1',
+        query: '',
+        enabled: true,
+      }),
+    );
+
+    await waitFor(() => {
+      const favorite = result.current.sections.find((section) => section.key === 'favorites');
+      expect(favorite?.options[0]).toMatchObject({
+        title: 'Resolved favorite',
+        url: '/w/acme/issues/by-identifier/WEB-7',
+      });
+    });
+    expect(
+      result.current.sections.some((section) =>
+        section.options.some((option) => option.title === 'fav-1'),
+      ),
+    ).toBe(false);
+  });
+
+  it('打开空态时 403/404 对象 recent 会从 UI 与 localStorage 同步剪枝', async () => {
+    pushRecent({
+      kind: 'object',
+      type: 'issue',
+      id: 'private-1',
+      title: 'Revoked private issue',
+      url: '/w/acme/issues/private-1',
+      at: 9,
+    });
+    const detailCalls = vi.fn();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/favorites')) {
+          return fakeResponse({ body: { data: [], next_cursor: null } });
+        }
+        if (url.includes('/issues/private-1')) {
+          detailCalls();
+          return fakeResponse({
+            status: 403,
+            body: { error: { code: 'forbidden', message: 'forbidden' } },
+          });
+        }
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as typeof fetch,
+    );
+
+    const { result } = renderHook(() =>
+      usePaletteData({
+        workspaceId: 'ws-1',
+        workspaceSlug: 'acme',
+        userId: 'u-1',
+        query: '',
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(detailCalls).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(
+        result.current.sections.some((section) =>
+          section.options.some((option) => option.title === 'Revoked private issue'),
+        ),
+      ).toBe(false);
+    });
+    expect(listRecents()).toEqual([]);
+  });
+
+  it('核验期间新增的跨标签 recent 不会被旧快照清理', async () => {
+    pushRecent({
+      kind: 'object',
+      type: 'issue',
+      id: 'private-1',
+      title: 'Revoked issue',
+      url: '/w/acme/issues/private-1',
+      at: 9,
+    });
+    let resolvePrivate: ((response: Response) => void) | undefined;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/favorites')) {
+          return Promise.resolve(fakeResponse({ body: { data: [], next_cursor: null } }));
+        }
+        if (url.includes('/issues/private-1')) {
+          return new Promise<Response>((resolve) => {
+            resolvePrivate = resolve;
+          });
+        }
+        return Promise.resolve(
+          fakeResponse({ body: { data: { id: 'new-2', identifier: 'WEB-2', title: 'New' } } }),
+        );
+      }) as typeof fetch,
+    );
+
+    renderHook(() =>
+      usePaletteData({
+        workspaceId: 'ws-1',
+        workspaceSlug: 'acme',
+        userId: 'u-1',
+        query: '',
+        enabled: true,
+      }),
+    );
+    await waitFor(() => expect(resolvePrivate).toBeDefined());
+
+    pushRecent({
+      kind: 'object',
+      type: 'issue',
+      id: 'new-2',
+      title: 'Concurrent recent',
+      url: '/w/acme/issues/new-2',
+      at: 10,
+    });
+    resolvePrivate?.(
+      fakeResponse({
+        status: 403,
+        body: { error: { code: 'forbidden', message: 'forbidden' } },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(listRecents().map((entry) => entry.id)).toEqual(['new-2']);
+    });
+  });
+
   it('favorites 提供器失败 → 空态降级(收藏区不出现,不崩溃)', async () => {
-    stubFetch(() => fakeResponse({ status: 500, body: { error: { code: 'server', message: 'x' } } }));
+    stubFetch(() =>
+      fakeResponse({ status: 500, body: { error: { code: 'server', message: 'x' } } }),
+    );
     const { result } = renderHook(() =>
       usePaletteData({ workspaceId: 'ws-1', userId: 'u-1', query: '', enabled: true }),
     );
@@ -103,7 +266,12 @@ describe('usePaletteData 空态唯一数据流(§4.2.1)', () => {
     const initial: Props = { workspaceId: null, enabled: true };
     const { result, rerender } = renderHook(
       (props: Props) =>
-        usePaletteData({ workspaceId: props.workspaceId, userId: 'u-1', query: '', enabled: props.enabled }),
+        usePaletteData({
+          workspaceId: props.workspaceId,
+          userId: 'u-1',
+          query: '',
+          enabled: props.enabled,
+        }),
       { initialProps: initial },
     );
     await act(async () => {
@@ -140,7 +308,14 @@ describe('usePaletteData 空态唯一数据流(§4.2.1)', () => {
     );
     await waitFor(() => expect(result.current.error).toBeNull());
     // object 类 recent 不依赖命令注册表(命令类 recent 失效即剔除)
-    pushRecent({ kind: 'object', type: 'issue', id: 'r1', title: 'Recent issue', url: '/issues/r1', at: 9 });
+    pushRecent({
+      kind: 'object',
+      type: 'issue',
+      id: 'r1',
+      title: 'Recent issue',
+      url: '/issues/r1',
+      at: 9,
+    });
     act(() => {
       result.current.noteLocalChange();
     });

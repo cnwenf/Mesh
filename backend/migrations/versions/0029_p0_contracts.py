@@ -11,8 +11,8 @@ Revision ID: 0029
 Revises: 0028
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0029"
@@ -25,13 +25,25 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     op.create_table(
         "attempt_task_tokens",
-        sa.Column("id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), primary_key=True),
-        sa.Column("workspace_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "id", postgresql.UUID(as_uuid=True), server_default=sa.text("gen_random_uuid()"), primary_key=True
+        ),
+        sa.Column(
+            "workspace_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("workspaces.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("runtime_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("lease_seq", sa.Integer(), nullable=False),
         sa.Column("token_hash", sa.Text(), nullable=False),
-        sa.Column("scopes", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default=sa.text("'{}'::jsonb")),
+        sa.Column(
+            "scopes",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'{}'::jsonb"),
+        ),
         sa.Column("expires_at", sa.TIMESTAMP(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
@@ -89,23 +101,35 @@ def upgrade() -> None:
     op.add_column("execution_attempts", sa.Column("prompt_tokens", sa.Integer(), nullable=True))
     op.add_column("execution_attempts", sa.Column("completion_tokens", sa.Integer(), nullable=True))
     op.add_column("execution_attempts", sa.Column("cache_tokens", sa.Integer(), nullable=True))
-    op.add_column("execution_attempts", sa.Column("cost_usd", sa.Numeric(precision=16, scale=6), nullable=True))
+    op.add_column(
+        "execution_attempts", sa.Column("cost_usd", sa.Numeric(precision=16, scale=6), nullable=True)
+    )
     op.add_column("execution_attempts", sa.Column("num_turns", sa.Integer(), nullable=True))
     op.add_column("execution_attempts", sa.Column("result_schema_version", sa.Integer(), nullable=True))
-    op.add_column("execution_attempts", sa.Column("redaction_hits", sa.Integer(), nullable=True, server_default=sa.text("0")))
+    op.add_column(
+        "execution_attempts",
+        sa.Column("redaction_hits", sa.Integer(), nullable=True, server_default=sa.text("0")),
+    )
 
     # ------------------------------------------------------------------
     # 3. config_snapshot schema version on task_executions (§2.1)
     # ------------------------------------------------------------------
-    op.add_column("task_executions", sa.Column("snapshot_schema_version", sa.Integer(), nullable=True, server_default=sa.text("1")))
+    op.add_column(
+        "task_executions",
+        sa.Column("snapshot_schema_version", sa.Integer(), nullable=True, server_default=sa.text("1")),
+    )
 
     # ------------------------------------------------------------------
     # 4. protocol_version on runtimes (§2.6 activate/heartbeat)
     # ------------------------------------------------------------------
     op.add_column("runtimes", sa.Column("protocol_version", sa.Integer(), nullable=True))
     op.add_column("runtimes", sa.Column("daemon_version", sa.Text(), nullable=True))
-    op.add_column("runtimes", sa.Column("provider_manifest", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.add_column("runtimes", sa.Column("daemon_features", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
+    op.add_column(
+        "runtimes", sa.Column("provider_manifest", postgresql.JSONB(astext_type=sa.Text()), nullable=True)
+    )
+    op.add_column(
+        "runtimes", sa.Column("daemon_features", postgresql.JSONB(astext_type=sa.Text()), nullable=True)
+    )
 
     # ------------------------------------------------------------------
     # 5. claim_request_id on execution_attempts (§13.1)
@@ -175,7 +199,9 @@ def upgrade() -> None:
     # models/runtime.py). No CHECK constraint exists on failure_reason —
     # these DROP IF EXISTS are defensive no-ops for forward compatibility.
     op.execute("ALTER TABLE task_executions DROP CONSTRAINT IF EXISTS task_executions_failure_reason_check")
-    op.execute("ALTER TABLE execution_attempts DROP CONSTRAINT IF EXISTS execution_attempts_failure_reason_check")
+    op.execute(
+        "ALTER TABLE execution_attempts DROP CONSTRAINT IF EXISTS execution_attempts_failure_reason_check"
+    )
 
     # ------------------------------------------------------------------
     # 8. Grant DML on new table to app role
@@ -205,7 +231,14 @@ def downgrade() -> None:
 
     # Restore runtime_token_id column.
     op.add_column("runtimes", sa.Column("runtime_token_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.create_foreign_key("runtimes_runtime_token_id_fkey", "runtimes", "api_tokens", ["runtime_token_id"], ["id"], ondelete="SET NULL")
+    op.create_foreign_key(
+        "runtimes_runtime_token_id_fkey",
+        "runtimes",
+        "api_tokens",
+        ["runtime_token_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
 
     # Drop new columns.
     op.drop_column("execution_attempts", "claim_request_id")
@@ -214,9 +247,19 @@ def downgrade() -> None:
     op.drop_column("runtimes", "daemon_version")
     op.drop_column("runtimes", "protocol_version")
     op.drop_column("task_executions", "snapshot_schema_version")
-    for col in ("provider", "provider_version", "provider_session_id", "model",
-                "prompt_tokens", "completion_tokens", "cache_tokens", "cost_usd",
-                "num_turns", "result_schema_version", "redaction_hits"):
+    for col in (
+        "provider",
+        "provider_version",
+        "provider_session_id",
+        "model",
+        "prompt_tokens",
+        "completion_tokens",
+        "cache_tokens",
+        "cost_usd",
+        "num_turns",
+        "result_schema_version",
+        "redaction_hits",
+    ):
         op.drop_column("execution_attempts", col)
 
     op.drop_table("attempt_task_tokens")

@@ -44,6 +44,7 @@ Revision ID: 0023
 Revises: 0022
 Create Date: 2026-07-28
 """
+
 from __future__ import annotations
 
 from alembic import op
@@ -125,13 +126,11 @@ def upgrade() -> None:
     )
     # Event matcher: candidate rules by trigger type + status.
     op.execute(
-        "CREATE INDEX idx_autopilot_trigger ON autopilots(trigger_type, status) "
-        "WHERE deleted_at IS NULL"
+        "CREATE INDEX idx_autopilot_trigger ON autopilots(trigger_type, status) WHERE deleted_at IS NULL"
     )
     # Name uniqueness within the soft-delete scope.
     op.execute(
-        "CREATE UNIQUE INDEX uq_autopilot_ws_name ON autopilots(workspace_id, name) "
-        "WHERE deleted_at IS NULL"
+        "CREATE UNIQUE INDEX uq_autopilot_ws_name ON autopilots(workspace_id, name) WHERE deleted_at IS NULL"
     )
 
     # -- webhook_events: inbound external events (§2.5) -----------------------
@@ -163,11 +162,10 @@ def upgrade() -> None:
     op.execute("CREATE UNIQUE INDEX uq_webhook_event_ws_id ON webhook_events(workspace_id, id)")
     # Dedup key: first INSERT wins; a unique-conflict means "duplicate event"
     # (return 200 deduped, never dispatch twice).
+    op.execute("CREATE UNIQUE INDEX uq_webhook_event_idem ON webhook_events(workspace_id, idempotency_key)")
     op.execute(
-        "CREATE UNIQUE INDEX uq_webhook_event_idem ON webhook_events(workspace_id, idempotency_key)"
-    )
-    op.execute(
-        "CREATE INDEX idx_webhook_event_route ON webhook_events(autopilot_id, process_status, received_at DESC)"
+        "CREATE INDEX idx_webhook_event_route "
+        "ON webhook_events(autopilot_id, process_status, received_at DESC)"
     )
 
     # -- autopilot_runs: one row per rule execution (§2.3) --------------------
@@ -225,10 +223,7 @@ def upgrade() -> None:
         "CREATE INDEX idx_run_status ON autopilot_runs(status) "
         "WHERE status IN ('running','retrying','waiting_approval','pending')"
     )
-    op.execute(
-        "CREATE INDEX idx_run_parent ON autopilot_runs(parent_run_id) "
-        "WHERE parent_run_id IS NOT NULL"
-    )
+    op.execute("CREATE INDEX idx_run_parent ON autopilot_runs(parent_run_id) WHERE parent_run_id IS NOT NULL")
 
     # -- autopilot_run_attempts: retry detail (§2.4) ---------------------------
     op.execute(
@@ -253,8 +248,7 @@ def upgrade() -> None:
     )
     op.execute("CREATE UNIQUE INDEX uq_run_attempt ON autopilot_run_attempts(run_id, attempt_number)")
     op.execute(
-        "CREATE UNIQUE INDEX uq_autopilot_run_attempts_ws_id "
-        "ON autopilot_run_attempts(workspace_id, id)"
+        "CREATE UNIQUE INDEX uq_autopilot_run_attempts_ws_id ON autopilot_run_attempts(workspace_id, id)"
     )
 
     # -- autopilot_artifacts: decoupled product references (§2.4) --------------

@@ -104,7 +104,10 @@ export type SearchItem =
   | (SearchItemBase & { readonly type: 'member' | 'agent'; readonly context: SearchMemberContext })
   | (SearchItemBase & { readonly type: 'project'; readonly context: SearchProjectContext })
   | (SearchItemBase & { readonly type: 'view'; readonly context: SearchViewContext })
-  | (SearchItemBase & { readonly type: 'chat_session'; readonly context: SearchChatSessionContext });
+  | (SearchItemBase & {
+      readonly type: 'chat_session';
+      readonly context: SearchChatSessionContext;
+    });
 
 export interface SearchParams {
   readonly q: string;
@@ -193,7 +196,7 @@ export function highlightRangesToSpans(
 
 /* ===== 面板空态 favorites 数据源(§4.2.1 唯一服务端来源,§6.19) ===== */
 
-/** 收藏条目;title/url 服务端可选携带(缺失时前端以 target_id 兜底渲染) */
+/** 收藏条目;真实端点仅保证 target 元数据,title/url 缺失时由面板详情解析层补齐。 */
 export interface PaletteFavorite {
   readonly target_type: string;
   readonly target_id: string;

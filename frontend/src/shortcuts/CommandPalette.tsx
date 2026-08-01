@@ -15,7 +15,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 import { errorToI18nKey } from '../api/errors';
 import { Dialog, Kbd } from '../design';
 import { useT } from '../i18n';
@@ -137,8 +137,11 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
   // 规范深链给出,渲染不消费它(保留 prop 面以便 App 层显式传入,见接线说明)。
   const t = useT();
   const navigate = useNavigate();
-  const context = usePaletteContext();
+  const location = useLocation();
+  const context = usePaletteContext(location.pathname);
   const workspaceId = props.workspaceId !== undefined ? props.workspaceId : context.workspaceId;
+  const workspaceSlug =
+    props.workspaceSlug !== undefined ? props.workspaceSlug : context.workspaceSlug;
   const userId = props.userId !== undefined ? props.userId : context.userId;
   const canCreateIssue =
     props.canCreateIssue ?? (context.role !== null && context.role !== 'guest');
@@ -159,6 +162,7 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element | 
 
   const data = usePaletteData({
     workspaceId,
+    workspaceSlug,
     userId,
     query,
     enabled: open && isOnline,

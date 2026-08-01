@@ -51,6 +51,9 @@ describe('MobileNav(手机底部主导航)', () => {
 
     const board = screen.getByTestId('mobile-nav-board');
     await waitFor(() => expect(board).toHaveAttribute('href', '/w/acme/board'));
+    expect(screen.getByTestId('mobile-nav-home')).toHaveAttribute('href', '/w/acme');
+    expect(screen.getByTestId('mobile-nav-issues')).toHaveAttribute('href', '/w/acme/issues');
+    expect(screen.getByTestId('mobile-nav-chat')).toHaveAttribute('href', '/w/acme/chat');
     expect(board).toHaveAttribute('aria-current', 'page');
   });
 

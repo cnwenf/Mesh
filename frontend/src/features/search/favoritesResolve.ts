@@ -13,13 +13,12 @@
  */
 import type { MeshApiClient } from '../../api/client';
 import { MeshApiError } from '../../api/errors';
-import { getAgent } from '../agents/api';
 import { getView } from '../board/api';
 import { getChatSession } from '../chat/api';
 import { getIssue } from '../issues/api';
 import { getMember } from '../members/api';
 import { getProject } from '../projects/api';
-import type { FavoriteEntry, SearchResultType } from './types';
+import type { SearchResultType } from './types';
 
 /** 解析所得:可展示标题 + 规范深链(§3.4) */
 export interface ResolvedTarget {
@@ -40,7 +39,13 @@ export interface ResolveScope {
 }
 
 function isMissing(err: unknown): boolean {
-  return err instanceof MeshApiError && (err.status === 404 || err.code === 'not_found');
+  return (
+    err instanceof MeshApiError &&
+    (err.status === 403 ||
+      err.status === 404 ||
+      err.code === 'forbidden' ||
+      err.code === 'not_found')
+  );
 }
 
 /** 规范深链前缀(§3.4);无 slug 上下文时落扁平路由(经迁移解析)。 */
@@ -105,11 +110,13 @@ export async function resolveTarget(
         };
       }
       case 'agent': {
-        const detail = await getAgent(client, scope.workspaceId, id);
+        // Search agent ids are members.id (the roster is the canonical
+        // member/agent projection), so validate and link through members.
+        const detail = await getMember(client, scope.workspaceId, id);
         return {
           status: 'ok',
           title: detail.display_name,
-          url: deepLink(scope, `/agents/${detail.id}`, `/agents/${detail.id}`),
+          url: deepLink(scope, `/members/${detail.id}`, `/members/${detail.id}`),
         };
       }
     }
@@ -124,7 +131,10 @@ export async function resolveTarget(
  */
 export async function resolveFavoriteTargets(
   client: MeshApiClient,
-  favorites: readonly FavoriteEntry[],
+  favorites: ReadonlyArray<{
+    readonly target_type: SearchResultType;
+    readonly target_id: string;
+  }>,
   scope: ResolveScope,
 ): Promise<ReadonlyMap<string, ResolvedTarget>> {
   const entries = await Promise.all(

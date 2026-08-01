@@ -126,6 +126,13 @@ def _create_extensions_guarded() -> None:
         )
         """
     )
+    # The ledger controls what downgrade may DROP. Default privileges grant
+    # the app role DML on new tables, so revoke immediately while retaining
+    # migration-owner access. Keep each statement separate for asyncpg.
+    op.execute("REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM PUBLIC")
+    op.execute(
+        f"REVOKE ALL PRIVILEGES ON TABLE mesh_search_ext_ledger FROM {APP_ROLE}"
+    )
     op.execute(
         """
         DO $$

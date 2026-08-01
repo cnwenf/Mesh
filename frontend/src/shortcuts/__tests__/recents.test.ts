@@ -92,6 +92,36 @@ describe('LRU 语义', () => {
 });
 
 describe('损坏数据守卫', () => {
+  it('兼容旧版对象 schema 与 window host 键,读取时迁移为当前 epoch/kind 形状', () => {
+    const legacyKey = recentsKey(window.location.host, 'u-1', 'ws-1');
+    window.localStorage.setItem(
+      legacyKey,
+      JSON.stringify([
+        {
+          type: 'issue',
+          id: 'legacy-1',
+          title: 'Legacy issue',
+          url: '/issues/legacy-1',
+          at: '2026-01-02T03:04:05.000Z',
+        },
+      ]),
+    );
+
+    expect(listRecents()).toEqual([
+      {
+        kind: 'object',
+        type: 'issue',
+        id: 'legacy-1',
+        title: 'Legacy issue',
+        url: '/issues/legacy-1',
+        at: Date.parse('2026-01-02T03:04:05.000Z'),
+      },
+    ]);
+    expect(window.localStorage.getItem(recentsKey(stableHost(), 'u-1', 'ws-1'))).toContain(
+      '"kind":"object"',
+    );
+  });
+
   it('非法 JSON / 非数组 / 形状不符条目 → 空列表(不抛错)', () => {
     const key = recentsKey(stableHost(), 'u-1', 'ws-1');
     window.localStorage.setItem(key, '{broken');
@@ -138,6 +168,26 @@ describe('removeRecent / clearRecents', () => {
     expect(listRecents()).toHaveLength(0);
     setRecentsScope({ userId: 'u-1', workspaceId: 'ws-2' });
     expect(listRecents()).toHaveLength(1);
+  });
+
+  it('clearRecents 同时清理尚未迁移的旧 window.host 键,不会在下次读取时复活', () => {
+    const legacyKey = recentsKey(window.location.host, 'u-1', 'ws-1');
+    window.localStorage.setItem(
+      legacyKey,
+      JSON.stringify([
+        {
+          type: 'issue',
+          id: 'legacy',
+          title: 'Legacy',
+          at: '2026-01-02T03:04:05.000Z',
+        },
+      ]),
+    );
+
+    clearRecents();
+
+    expect(window.localStorage.getItem(legacyKey)).toBeNull();
+    expect(listRecents()).toEqual([]);
   });
 });
 
@@ -212,9 +262,7 @@ describe('作用域缺省与 stableHost 兜底', () => {
   });
 
   it('recentIdentity 命令缺 commandId 时落 id;对象缺 type 时落空串', () => {
-    expect(
-      recentIdentity({ kind: 'command', id: 'fb', title: 't', at: 1 }),
-    ).toBe('command:fb');
+    expect(recentIdentity({ kind: 'command', id: 'fb', title: 't', at: 1 })).toBe('command:fb');
     expect(recentIdentity({ kind: 'object', id: 'x', title: 't', at: 1 })).toBe('object::x');
   });
 });

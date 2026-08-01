@@ -1,4 +1,4 @@
-"""Migration 0035 contract: normalization function, projection, index set.
+"""Search migration contract: normalization, projection, indexes, and repair.
 
 Mirrors the schema validation assertions (docs/specs/validation/
 schema_r2_validation.sql T37) against the migrated test database.
@@ -6,8 +6,14 @@ schema_r2_validation.sql T37) against the migrated test database.
 
 from __future__ import annotations
 
+import uuid
+from pathlib import Path
+
 import pytest
-from sqlalchemy import text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
 
 pytestmark = pytest.mark.unit
 
@@ -28,6 +34,19 @@ SEARCH_INDEXES = frozenset(
         "idx_chat_sessions_title_prefix",
     }
 )
+
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def _alembic_config(database_url: str) -> Config:
+    config = Config(str(BACKEND_DIR / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def _sync_url(database_url: str) -> str:
+    return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
 
 
 async def test_mesh_search_norm_behavior(db_session):
@@ -169,3 +188,131 @@ async def test_members_search_name_column(db_session):
     ).one()
     assert column.is_nullable == "NO"
     assert "''" in column.column_default
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "INSERT INTO mesh_search_ext_ledger(name) VALUES ('security-probe')",
+        "UPDATE mesh_search_ext_ledger SET name = name WHERE FALSE",
+        "DELETE FROM mesh_search_ext_ledger WHERE FALSE",
+    ],
+)
+async def test_app_role_cannot_mutate_extension_ledger(db_session, statement):
+    """The deployment role cannot tamper with downgrade ownership evidence."""
+    await db_session.execute(text("SET LOCAL ROLE mesh_app"))
+    with pytest.raises(DBAPIError) as exc_info:
+        await db_session.execute(text(statement))
+    assert getattr(exc_info.value.orig, "sqlstate", None) == "42501"
+    # The failed statement aborts this test transaction; rollback also resets
+    # SET LOCAL ROLE so fixture teardown continues as the migration owner.
+    await db_session.rollback()
+
+
+async def test_extension_ledger_remains_owned_by_migration_role(db_session):
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT current_user AS migration_user, "
+                "pg_get_userbyid(c.relowner) AS table_owner "
+                "FROM pg_class c "
+                "WHERE c.oid = 'mesh_search_ext_ledger'::regclass"
+            )
+        )
+    ).one()
+    assert row.table_owner == row.migration_user
+
+
+def test_0037_backfills_legacy_0036_search_contract(db_url):
+    """A previously upgraded 0036 database receives the complete contract."""
+    database_name = f"mesh_search_0037_{uuid.uuid4().hex}"
+    database_url = f"{db_url.rsplit('/', 1)[0]}/{database_name}"
+    maintenance_url = f"{_sync_url(db_url).rsplit('/', 1)[0]}/postgres"
+    maintenance_engine = create_engine(maintenance_url, isolation_level="AUTOCOMMIT")
+    database_engine = None
+
+    try:
+        with maintenance_engine.connect() as connection:
+            connection.exec_driver_sql(f'CREATE DATABASE "{database_name}"')
+
+        config = _alembic_config(database_url)
+        command.upgrade(config, "0036")
+        database_engine = create_engine(_sync_url(database_url))
+
+        # Reproduce databases that consumed the original 0035 before these
+        # two late search-contract functions and the ledger ACL fix existed.
+        with database_engine.begin() as connection:
+            connection.exec_driver_sql(
+                "DROP FUNCTION public.mesh_search_text_score(TEXT, TEXT)"
+            )
+            connection.exec_driver_sql(
+                "DROP FUNCTION public.mesh_resync_search_name(TEXT, UUID)"
+            )
+            connection.exec_driver_sql(
+                "GRANT ALL PRIVILEGES ON TABLE mesh_search_ext_ledger "
+                "TO PUBLIC, mesh_app"
+            )
+
+        command.upgrade(config, "0037")
+
+        with database_engine.connect() as connection:
+            repaired = connection.exec_driver_sql(
+                "SELECT "
+                "to_regprocedure('public.mesh_search_text_score(text,text)') IS NOT NULL, "
+                "to_regprocedure('public.mesh_resync_search_name(text,uuid)') IS NOT NULL, "
+                "public.mesh_search_text_score('Project Alpha', 'pro'), "
+                "public.mesh_resync_search_name('all', NULL)"
+            ).one()
+            assert repaired == (True, True, 80, 0)
+
+            unauthorized_acl_count = connection.exec_driver_sql(
+                "SELECT count(*) "
+                "FROM pg_class c "
+                "CROSS JOIN LATERAL aclexplode(COALESCE("
+                "c.relacl, acldefault('r', c.relowner))) acl "
+                "LEFT JOIN pg_roles r ON r.oid = acl.grantee "
+                "WHERE c.oid = 'mesh_search_ext_ledger'::regclass "
+                "AND (acl.grantee = 0 OR r.rolname = 'mesh_app')"
+            ).scalar_one()
+            assert unauthorized_acl_count == 0
+
+        with database_engine.connect() as connection:
+            transaction = connection.begin()
+            connection.exec_driver_sql("SET LOCAL ROLE mesh_app")
+            with pytest.raises(DBAPIError) as exc_info:
+                connection.exec_driver_sql(
+                    "INSERT INTO mesh_search_ext_ledger(name) VALUES ('security-probe')"
+                )
+            assert getattr(exc_info.value.orig, "sqlstate", None) == "42501"
+            transaction.rollback()
+
+        # The security revokes must not lock out the owning migration role.
+        # A full 0037 -> 0034 downgrade reads the ledger and removes exactly
+        # the extensions that 0035 created.
+        database_engine.dispose()
+        database_engine = None
+        command.downgrade(config, "0034")
+        database_engine = create_engine(_sync_url(database_url))
+        with database_engine.connect() as connection:
+            assert connection.exec_driver_sql(
+                "SELECT version_num FROM alembic_version"
+            ).scalar_one() == "0034"
+            assert connection.exec_driver_sql(
+                "SELECT to_regclass('public.mesh_search_ext_ledger') IS NULL"
+            ).scalar_one()
+            assert connection.exec_driver_sql(
+                "SELECT to_regprocedure("
+                "'public.mesh_search_text_score(text,text)') IS NULL"
+            ).scalar_one()
+            assert connection.exec_driver_sql(
+                "SELECT to_regprocedure("
+                "'public.mesh_resync_search_name(text,uuid)') IS NULL"
+            ).scalar_one()
+    finally:
+        if database_engine is not None:
+            database_engine.dispose()
+        with maintenance_engine.connect() as connection:
+            connection.exec_driver_sql(
+                f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'
+            )
+        maintenance_engine.dispose()

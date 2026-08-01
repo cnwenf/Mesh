@@ -43,6 +43,26 @@ const DEFAULTS = {
 };
 
 describe('PaletteResults', () => {
+  it('selectedStableId 变化时把共享结果行滚动到最近可见位置', () => {
+    const scrollIntoView = vi.fn();
+    const original = window.HTMLElement.prototype.scrollIntoView;
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const sections = buildQuerySections([issueWithHighlight()], [], '登录');
+      renderWithProviders(
+        <PaletteResults {...DEFAULTS} sections={sections} selectedStableId="issue:i-1" />,
+      );
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    } finally {
+      if (original === undefined) {
+        // @ts-expect-error jsdom 可无该 DOM API,恢复为原始缺席状态。
+        delete window.HTMLElement.prototype.scrollIntoView;
+      } else {
+        window.HTMLElement.prototype.scrollIntoView = original;
+      }
+    }
+  });
+
   it('分组组头以 i18n 键标注;选项具稳定 DOM id(palette-opt-{stableId})', () => {
     const sections = buildQuerySections([issueWithHighlight()], [], '登录');
     renderWithProviders(

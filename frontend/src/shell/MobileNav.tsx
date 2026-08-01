@@ -10,7 +10,7 @@ import { NavLink } from 'react-router';
 import { Icon } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
-import { MOBILE_PRIMARY_KEYS, findNavItem } from './navigation';
+import { MOBILE_PRIMARY_KEYS, findNavItem, resolveNavTarget } from './navigation';
 import type { NavItemDef } from './navigation';
 
 export interface MobileNavProps {
@@ -35,16 +35,12 @@ export function MobileNav(props: MobileNavProps): React.JSX.Element {
   const t = useT();
   const workspaceContext = useOptionalWorkspace();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
-  const deepTarget = (to: string): string => {
-    if (workspace === null) return to;
-    return to === '/' ? `/w/${workspace.slug}` : `/w/${workspace.slug}${to}`;
-  };
   return (
     <nav className="mesh-mobile-nav" aria-label={t('mobileNav.moreTitle')}>
       {MOBILE_PRIMARY_ITEMS.map((item) => (
         <NavLink
           key={item.key}
-          to={deepTarget(item.to)}
+          to={resolveNavTarget(item, workspace?.slug ?? null)}
           end={item.end === true}
           data-testid={'mobile-nav-' + item.key}
           className={({ isActive }) =>

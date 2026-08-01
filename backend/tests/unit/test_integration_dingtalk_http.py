@@ -276,9 +276,10 @@ async def test_parallel_config_dispatches_optimistically(session_factory):
 # ---------------------------------------------------------------------------
 
 
-async def test_pre_limit_sliding_window_exceeds_at_120(redis_client):
+async def test_pre_limit_sliding_window_exceeds_at_120(redis_client, monkeypatch):
     from unittest.mock import Mock
 
+    from mesh.integrations import inbound_routes as ir
     from mesh.integrations.inbound_routes import (
         DINGTALK_PRE_LIMIT_PER_MIN,
         _dingtalk_pre_limit_exceeded,
@@ -289,13 +290,16 @@ async def test_pre_limit_sliding_window_exceeds_at_120(redis_client):
     request = Mock()
     request.app.state.redis = redis_client
     request.client = Mock(host="203.0.113.7")
+    monkeypatch.setattr(ir.time, "time", lambda: 1_754_000_000.0)
 
     verdicts = [
         await _dingtalk_pre_limit_exceeded(request, integration_id=integration_id)
-        for _ in range(125)
+        for _ in range(10_000)
     ]
     assert verdicts[:120] == [False] * 120
     assert all(verdicts[120:])  # over-limit → silent-200 signal
+    key = f"mesh:dingtalk-prelimit:{integration_id}:203.0.113.7"
+    assert await redis_client.zcard(key) == DINGTALK_PRE_LIMIT_PER_MIN
 
 
 async def test_pre_limit_is_scoped_per_integration_and_ip(redis_client):

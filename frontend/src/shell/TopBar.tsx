@@ -16,9 +16,8 @@
  * - 无工作区上下文时弹层仅呈现本地命令(workspaceId null → 不请求,§3.2)。
  */
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { NavLink } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import type { ChangeEvent, KeyboardEvent } from 'react';
-import { useNavigate } from 'react-router';
 import { IconButton, StatusDot } from '../design';
 import type { StatusDotTone } from '../design';
 import { InboxBell } from '../features/inbox';
@@ -88,10 +87,12 @@ export function TopBar(props: TopBarProps): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const listId = useId();
-  const context = usePaletteContext();
+  const location = useLocation();
+  const context = usePaletteContext(location.pathname);
 
   const data = usePaletteData({
     workspaceId: context.workspaceId,
+    workspaceSlug: context.workspaceSlug,
     userId: context.userId,
     query: searchValue,
     enabled: popoverOpen,

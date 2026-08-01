@@ -140,6 +140,31 @@ describe('registerShellShortcuts', () => {
     unregisterGuest();
   });
 
+  it('options 注册器复用导航规范目标,Integrations 落 automations 且账号设置保持全局', () => {
+    const navigate = vi.fn();
+    const unregister = registerShellShortcuts(navigate, LABELS, {
+      role: 'member',
+      workspaceSlug: 'acme',
+    });
+    const run = (id: string): void => {
+      useShortcutRegistry
+        .getState()
+        .commands.find((command) => command.id === id)
+        ?.run();
+    };
+    run('nav.home');
+    run('nav.integrations');
+    run('nav.skills');
+    run('nav.settings');
+    expect(navigate.mock.calls.map(([target]) => target)).toEqual([
+      '/w/acme',
+      '/w/acme/automations/integrations',
+      '/w/acme/automations/skills',
+      '/settings',
+    ]);
+    unregister();
+  });
+
   it('agent 身份(isHuman=false)即使是 admin 也不注册设置命令', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS, {
       role: 'admin',
@@ -461,5 +486,9 @@ describe('parseFavoritablePath', () => {
     expect(parseFavoritablePath('/board')).toBeNull();
     expect(parseFavoritablePath('/issues')).toBeNull();
     expect(parseFavoritablePath('/issues/by-identifier/WEB-1')).toBeNull();
+  });
+
+  it('损坏的百分号编码安全降级为 null', () => {
+    expect(parseFavoritablePath('/issues/%E0%A4%A')).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ import { NavLink } from 'react-router';
 import { Drawer, Icon } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
-import { NAV_GROUPS, MORE_DRAWER_KEYS } from './navigation';
+import { NAV_GROUPS, MORE_DRAWER_KEYS, resolveNavTarget } from './navigation';
 import type { NavGroupDef, NavItemDef } from './navigation';
 
 export interface MobileMoreDrawerProps {
@@ -33,9 +33,6 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
-  const deepTarget = (to: string): string =>
-    workspace === null ? to : `/w/${workspace.slug}${to}`;
-
   if (!open) {
     return null;
   }
@@ -43,7 +40,7 @@ export function MobileMoreDrawer(props: MobileMoreDrawerProps): React.JSX.Elemen
   const renderItem = (item: NavItemDef): React.JSX.Element => (
     <li key={item.key} className="mesh-mobile-drawer__item">
       <NavLink
-        to={deepTarget(item.to)}
+        to={resolveNavTarget(item, workspace?.slug ?? null)}
         data-testid={'mobile-drawer-nav-' + item.key}
         className={({ isActive }) =>
           isActive

@@ -36,6 +36,7 @@ const LABELS: ShellShortcutLabels = {
     autopilots: 'Autopilots',
     runtimes: 'Runtimes',
     insights: 'Insights',
+    integrations: 'Integrations',
     approvals: 'Approvals',
     settings: 'Settings',
   },
@@ -77,10 +78,10 @@ describe('registerShellShortcuts', () => {
   it('注册导航命令、主题命令与快捷键', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
     const state = useShortcutRegistry.getState();
-    // 14 导航(+审批 MES-79 / +insights MES-71 / +小队·Runtimes·Skills MES-79 S3 闭合) +
+    // 15 导航(+审批 / 洞察 / 小队 / Runtimes / Skills / Integrations) +
     // 3 主题 + 1 切换 + 上手清单恢复 + 新建 issue(面板命令) + 帮助层 + 复制深链 +
-    // 收藏切换 = 23 命令(无工作区上下文口径;标记全部已读 M10 门控,workspaceId=null 不注册)
-    expect(state.commands).toHaveLength(23);
+    // 收藏切换 = 24 命令(无工作区上下文口径;标记全部已读 M10 门控,workspaceId=null 不注册)
+    expect(state.commands).toHaveLength(24);
     // g i / g b / g m / g a / c / / / ? = 7 快捷键
     expect(state.shortcuts).toHaveLength(7);
     unregister();
@@ -91,7 +92,13 @@ describe('registerShellShortcuts', () => {
     const unregister = registerShellShortcuts(navigate, LABELS, ENV_ADMIN, OVERLAY);
     const commands = useShortcutRegistry.getState().commands;
     const ids = commands.map((command) => command.id);
-    for (const id of ['issue.new', 'nav.squads', 'nav.runtimes', 'nav.skills']) {
+    for (const id of [
+      'issue.new',
+      'nav.squads',
+      'nav.runtimes',
+      'nav.skills',
+      'nav.integrations',
+    ]) {
       expect(ids, `missing command ${id}`).toContain(id);
     }
     const runCommand = (id: string): void => {
@@ -105,6 +112,10 @@ describe('registerShellShortcuts', () => {
     expect(navigate).toHaveBeenCalledWith('/w/acme/automations/runtimes');
     runCommand('nav.skills');
     expect(navigate).toHaveBeenCalledWith('/w/acme/automations/skills');
+    runCommand('nav.integrations');
+    expect(navigate).toHaveBeenCalledWith('/w/acme/automations/integrations');
+    runCommand('nav.settings');
+    expect(navigate).toHaveBeenCalledWith('/settings');
     unregister();
   });
 
@@ -153,17 +164,34 @@ describe('registerShellShortcuts', () => {
     unregisterAdmin();
   });
 
+  it('legacy 注册器缺失必需动作文案时 fail-fast,不注册空 label', () => {
+    const labels: ShellShortcutLabels = {
+      ...LABELS,
+      actions: { ...LABELS.actions, openApprovals: '' },
+    };
+
+    expect(() => registerShellShortcuts(vi.fn(), labels, ENV_ADMIN, OVERLAY)).toThrow(
+      'Missing shell shortcut label: openApprovals',
+    );
+  });
+
   it('工作区上下文内导航命令落规范深链 /w/{slug}/…', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS, ENV_ADMIN, OVERLAY);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.board')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.board')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/w/acme/board');
     useShortcutRegistry
       .getState()
       .commands.find((command) => command.id === 'settings.danger')
       ?.run();
     expect(navigate).toHaveBeenCalledWith('/w/acme/settings/danger');
-    useShortcutRegistry.getState().shortcuts.find((def) => def.id === 'go.inbox')?.run();
+    useShortcutRegistry
+      .getState()
+      .shortcuts.find((def) => def.id === 'go.inbox')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/w/acme/inbox');
     unregister();
   });
@@ -172,36 +200,36 @@ describe('registerShellShortcuts', () => {
     const { fakeResponse } = await import('../../api/__tests__/fetchStub');
     const { resetApiClient } = await import('../../api/instance');
     const calls: string[] = [];
-    vi.stubGlobal(
-      'fetch',
-      (async (input: RequestInfo | URL) => {
-        const url = String(input);
-        calls.push(url);
-        if (url.includes('/users/me')) {
-          return fakeResponse({
-            body: {
-              data: {
-                user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
-                memberships: [
-                  {
-                    workspace_id: 'ws-1',
-                    workspace_name: 'WS',
-                    workspace_slug: 'ws',
-                    role: 'owner',
-                    status: 'active',
-                    joined_at: null,
-                  },
-                ],
-              },
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              user: { id: 'usr-1', email: 'o@c.com', display_name: 'Owner' },
+              memberships: [
+                {
+                  workspace_id: 'ws-1',
+                  workspace_name: 'WS',
+                  workspace_slug: 'ws',
+                  role: 'owner',
+                  status: 'active',
+                  joined_at: null,
+                },
+              ],
             },
-          });
-        }
-        return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: null } } });
-      }) as typeof fetch,
-    );
+          },
+        });
+      }
+      return fakeResponse({ body: { data: { id: 'obs-1', dismissed_at: null } } });
+    }) as typeof fetch);
     resetApiClient();
     const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'onboarding.restore')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'onboarding.restore')
+      ?.run();
     await vi.waitFor(() =>
       expect(calls.some((url) => url.includes('/onboarding/restore'))).toBe(true),
     );
@@ -213,11 +241,20 @@ describe('registerShellShortcuts', () => {
   it('导航命令调用 navigate(对应路由)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS, ENV_PLAIN, OVERLAY);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.inbox')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.inbox')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/inbox');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.home')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.home')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/');
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.issues')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'nav.issues')
+      ?.run();
     expect(navigate).toHaveBeenCalledWith('/issues');
     unregister();
   });
@@ -231,18 +268,24 @@ describe('registerShellShortcuts', () => {
       expect(command.label.length).toBeGreaterThan(0);
     }
     // issues 导航命令必须带映射文案,而非 undefined
-    expect(useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.issues')?.label).toBe(
-      'Issues',
-    );
+    expect(
+      useShortcutRegistry.getState().commands.find((command) => command.id === 'nav.issues')?.label,
+    ).toBe('Issues');
     unregister();
   });
 
   it('主题命令与切换命令写 settingsStore', () => {
     const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'theme.dark')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'theme.dark')
+      ?.run();
     expect(useSettingsStore.getState().preferences.theme).toBe('dark');
     // dark → 切换 → system
-    useShortcutRegistry.getState().commands.find((command) => command.id === 'theme.toggle')?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === 'theme.toggle')
+      ?.run();
     expect(useSettingsStore.getState().preferences.theme).toBe('system');
     unregister();
   });
@@ -261,7 +304,10 @@ describe('registerShellShortcuts', () => {
   it('/ 快捷键聚焦顶栏搜索框', () => {
     document.body.innerHTML = '<input data-testid="topbar-search" />';
     const unregister = registerShellShortcuts(vi.fn(), LABELS, ENV_PLAIN, OVERLAY);
-    useShortcutRegistry.getState().shortcuts.find((def) => def.id === 'focus.search')?.run();
+    useShortcutRegistry
+      .getState()
+      .shortcuts.find((def) => def.id === 'focus.search')
+      ?.run();
     expect(document.querySelector('[data-testid="topbar-search"]')).toBe(document.activeElement);
     unregister();
     document.body.innerHTML = '';
@@ -286,11 +332,17 @@ describe('动作类命令执行体(§6.19 收藏 / §3.2 全部已读 / §3.4 �
   }
 
   function runCommand(id: string): void {
-    useShortcutRegistry.getState().commands.find((command) => command.id === id)?.run();
+    useShortcutRegistry
+      .getState()
+      .commands.find((command) => command.id === id)
+      ?.run();
   }
 
   function runShortcut(id: string): void {
-    useShortcutRegistry.getState().shortcuts.find((def) => def.id === id)?.run();
+    useShortcutRegistry
+      .getState()
+      .shortcuts.find((def) => def.id === id)
+      ?.run();
   }
 
   beforeEach(() => {
@@ -335,9 +387,7 @@ describe('动作类命令执行体(§6.19 收藏 / §3.2 全部已读 / §3.4 �
     const { listFavorites, deleteFavorite } = await import('../../api/favorites');
     const unregister = register();
     window.history.replaceState({}, '', `/w/acme/issues/${ISSUE_UUID}`);
-    vi.mocked(listFavorites).mockResolvedValue([
-      { target_type: 'issue', target_id: ISSUE_UUID },
-    ]);
+    vi.mocked(listFavorites).mockResolvedValue([{ target_type: 'issue', target_id: ISSUE_UUID }]);
     runCommand('favorite.toggle');
     await vi.waitFor(() =>
       expect(deleteFavorite).toHaveBeenCalledWith(expect.anything(), 'issue', ISSUE_UUID),
@@ -401,21 +451,26 @@ describe('ShellShortcutsRegistrar(工作区上下文门控注册编排)', () => 
 
   it('工作区路由命中即注册命令;help.open 经 overlay 控制句柄开启帮助层', async () => {
     const openHelp = vi.fn();
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          data: {
-            id: 'ws-1',
-            slug: 'acme',
-            name: 'Acme',
-            my_role: 'owner',
-            settings: { default_issue_view: 'board' },
-          },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              id: 'ws-1',
+              slug: 'acme',
+              name: 'Acme',
+              my_role: 'owner',
+              settings: { default_issue_view: 'board' },
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
     );
-    const client = new MeshApiClient({ baseUrl: 'http://api.test', getToken: () => 'tok', fetchImpl });
+    const client = new MeshApiClient({
+      baseUrl: 'http://api.test',
+      getToken: () => 'tok',
+      fetchImpl,
+    });
     renderWithProviders(
       <OverlayControlsProvider
         value={{ openPalette: () => undefined, openHelp, openSearch: () => undefined }}

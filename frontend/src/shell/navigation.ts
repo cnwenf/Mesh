@@ -32,7 +32,7 @@ export type NavGroupKey = 'work' | 'team' | 'run' | 'admin';
 
 export interface NavItemDef {
   readonly key: NavItemKey;
-  /** 静态路由(工作区设置为动态路由,由消费方按角色单独挂载) */
+  /** 静态/迁移路由;规范工作区目标由 resolveNavTarget 统一生成 */
   readonly to: string;
   /** 统一图标(§7.1:导航禁用 emoji/字符图标) */
   readonly icon: IconName;
@@ -109,12 +109,39 @@ export const MORE_DRAWER_KEYS: ReadonlyArray<NavItemKey> = [
 ];
 
 const ITEM_INDEX: ReadonlyMap<NavItemKey, NavItemDef> = new Map(
-  NAV_GROUPS.flatMap((group) => group.items.map((item): [NavItemKey, NavItemDef] => [item.key, item])),
+  NAV_GROUPS.flatMap((group) =>
+    group.items.map((item): [NavItemKey, NavItemDef] => [item.key, item]),
+  ),
 );
 
 /** 按入口键取定义(未知键返回 undefined,fail-safe 由调用方兜底) */
 export function findNavItem(key: NavItemKey): NavItemDef | undefined {
   return ITEM_INDEX.get(key);
+}
+
+const AUTOMATION_NAV_KEYS: ReadonlySet<NavItemKey> = new Set([
+  'skills',
+  'autopilots',
+  'runtimes',
+  'integrations',
+]);
+
+/**
+ * Resolve the canonical target shared by every shell navigation surface.
+ * Account settings stay global; operational tools live under the workspace's
+ * automation area, while the remaining entries use the normal workspace root.
+ */
+export function resolveNavTarget(item: NavItemDef, workspaceSlug: string | null): string {
+  if (workspaceSlug === null || item.key === 'settings') {
+    return item.to;
+  }
+  if (item.key === 'home') {
+    return `/w/${workspaceSlug}`;
+  }
+  if (AUTOMATION_NAV_KEYS.has(item.key)) {
+    return `/w/${workspaceSlug}/automations/${item.key}`;
+  }
+  return `/w/${workspaceSlug}${item.to}`;
 }
 
 /** 侧栏折叠态持久化键(外壳偏好,非业务状态) */

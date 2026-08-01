@@ -31,17 +31,16 @@ function meBody(options: MeBodyOptions = {}): unknown {
   return {
     data: {
       user: { id: options.userId ?? 'u-1', email: 'u@c.com', display_name: 'U' },
-      memberships:
-        options.memberships ?? [
-          {
-            workspace_id: 'ws-1',
-            workspace_name: 'WS',
-            workspace_slug: 'ws',
-            role: 'member',
-            status: 'active',
-            joined_at: null,
-          },
-        ],
+      memberships: options.memberships ?? [
+        {
+          workspace_id: 'ws-1',
+          workspace_name: 'WS',
+          workspace_slug: 'ws',
+          role: 'member',
+          status: 'active',
+          joined_at: null,
+        },
+      ],
     },
   };
 }
@@ -73,6 +72,7 @@ function countMeCalls(fetchImpl: ReturnType<typeof vi.fn>): number {
 }
 
 beforeEach(() => {
+  window.history.replaceState({}, '', '/');
   resetPaletteContextCache();
   resetApiClient();
   useAuthStore.setState({ token: null });
@@ -86,6 +86,49 @@ afterEach(() => {
 });
 
 describe('usePaletteContext', () => {
+  it('当前 /w/{slug} 路由优先于 memberships 顺序,路由切换复用缓存并重解析', async () => {
+    const memberships = [
+      {
+        workspace_id: 'ws-a',
+        workspace_name: 'A',
+        workspace_slug: 'a',
+        role: 'member',
+        status: 'active',
+        joined_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        workspace_id: 'ws-b',
+        workspace_name: 'B',
+        workspace_slug: 'b',
+        role: 'admin',
+        status: 'active',
+        joined_at: '2026-02-01T00:00:00Z',
+      },
+    ];
+    const fetchImpl = vi.fn(async () => fakeResponse({ body: meBody({ memberships }) }));
+    vi.stubGlobal('fetch', fetchImpl);
+    window.history.replaceState({}, '', '/w/b/issues');
+    setToken('token-a');
+
+    const { result, rerender } = renderHook(() => usePaletteContext(window.location.pathname));
+    await flush();
+    expect(result.current).toMatchObject({
+      workspaceId: 'ws-b',
+      workspaceSlug: 'b',
+      role: 'admin',
+    });
+
+    window.history.pushState({}, '', '/w/a/board');
+    rerender();
+    await flush();
+    expect(result.current).toMatchObject({
+      workspaceId: 'ws-a',
+      workspaceSlug: 'a',
+      role: 'member',
+    });
+    expect(countMeCalls(fetchImpl)).toBe(1);
+  });
+
   it('首帧未解析(EMPTY_CONTEXT);me 落地后三元组齐备', async () => {
     stubMeFetch(() => fakeResponse({ body: meBody() }));
     setToken('token-a');
@@ -175,9 +218,7 @@ describe('usePaletteContext', () => {
     await flush();
     expect(result.current.userId).toBe('u-1');
     // 切换到另一账号(token-b):缓存失效 → 重新请求
-    fetchImpl.mockImplementation(async () =>
-      fakeResponse({ body: meBody({ userId: 'u-2' }) }),
-    );
+    fetchImpl.mockImplementation(async () => fakeResponse({ body: meBody({ userId: 'u-2' }) }));
     setToken('token-b');
     await flush();
     expect(countMeCalls(fetchImpl)).toBe(2);
@@ -215,9 +256,7 @@ describe('usePaletteContext', () => {
   });
 
   it('模块级缓存:多个消费者共享一次 GET /users/me;reset 后重新请求', async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
-      fakeResponse({ body: meBody() }),
-    );
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) => fakeResponse({ body: meBody() }));
     vi.stubGlobal('fetch', fetchImpl);
     setToken('token-a');
     const first = renderHook(() => usePaletteContext());

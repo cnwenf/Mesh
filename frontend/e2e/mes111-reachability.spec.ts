@@ -39,7 +39,7 @@ test.describe('手机可达性 @390×844', () => {
 
   test('「更多」抽屉承载全部次级导航,点选后关闭并跳转', async ({ page }) => {
     await login(page);
-    await page.goto('/');
+    await page.goto('/w/acme/board');
     await page.getByTestId('mobile-nav-more').click();
     const drawer = page.getByRole('dialog', { name: 'All navigation' });
     await expect(drawer).toBeVisible();
@@ -59,10 +59,33 @@ test.describe('手机可达性 @390×844', () => {
     ]) {
       await expect(page.getByTestId('mobile-drawer-nav-' + key)).toBeVisible();
     }
-    await page.getByTestId('mobile-drawer-nav-members').click();
-    await page.waitForURL('**/members');
+    await expect(page.getByTestId('mobile-drawer-nav-skills')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/skills',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-autopilots')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/autopilots',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-runtimes')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/runtimes',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-integrations')).toHaveAttribute(
+      'href',
+      '/w/acme/automations/integrations',
+    );
+    await expect(page.getByTestId('mobile-drawer-nav-settings')).toHaveAttribute(
+      'href',
+      '/settings',
+    );
+    await page.getByTestId('mobile-drawer-nav-integrations').click();
+    await page.waitForURL('**/w/acme/automations/integrations');
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await page.screenshot({ path: `${EVIDENCE_DIR}/phone-members-drawer-flow-light.png` });
+    await expect(page.getByText('Page not found')).toHaveCount(0);
+    await page.getByTestId('mobile-nav-more').click();
+    await page.getByTestId('mobile-drawer-nav-settings').click();
+    await page.waitForURL('**/settings');
   });
 
   test('/skills/marketplace 刷新直达(死链修复),旧 /marketplace 兼容重定向', async ({ page }) => {

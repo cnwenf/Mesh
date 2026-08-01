@@ -8,15 +8,15 @@
  *   与手机底栏同构);aria-current=page 由 NavLink 自动表达。
  * - 入口表唯一真源见 navigation.ts;「看板」在 /views/{id} 下保持激活(§4.2)。
  * - 工作区设置入口按角色出现(admin+,member/guest 不可见,§6.12 角色可见性)。
- * - 链接形态(search-command-palette.md §3.4):工作区上下文内(/w/{slug}/*)一律
- *   生成规范深链 /w/{slug}/…;上下文外保持 navigation.ts 的静态路径(经
- *   FlatRouteMigration 解析 active workspace 后 replace 至规范路由)。
+ * - 链接形态(search-command-palette.md §3.4):工作区资源生成规范深链
+ *   /w/{slug}/…(运行类入口归入 automations);账号设置保持全局 /settings。
+ *   上下文外保持 navigation.ts 的静态路径,由 FlatRouteMigration 迁移。
  */
 import { NavLink, useLocation } from 'react-router';
 import { Icon, Tooltip } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
-import { NAV_GROUPS } from './navigation';
+import { NAV_GROUPS, resolveNavTarget } from './navigation';
 import type { NavItemDef } from './navigation';
 
 export interface SidebarProps {
@@ -39,12 +39,6 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
 
-  /* §3.4 规范深链:工作区上下文内把静态入口改写为 /w/{slug}/…(首页 = /w/{slug})。 */
-  const deepTarget = (to: string): string => {
-    if (workspace === null) return to;
-    return to === '/' ? `/w/${workspace.slug}` : `/w/${workspace.slug}${to}`;
-  };
-
   const renderItem = (item: NavItemDef, testKey: string): React.JSX.Element => {
     /* 「看板」入口在选中视图路由下保持激活(§4.2 视图 URL 同步;扁平/深链两形) */
     const isBoardView =
@@ -53,7 +47,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         (workspace !== null && location.pathname.startsWith(`/w/${workspace.slug}/views/`)));
     const link = (
       <NavLink
-        to={deepTarget(item.to)}
+        to={resolveNavTarget(item, workspace?.slug ?? null)}
         end={item.end === true}
         data-testid={'nav-' + testKey}
         className={({ isActive }) => navLinkClassName({ isActive: isActive || isBoardView })}
@@ -63,11 +57,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
       </NavLink>
     );
     // 折叠态:图标按钮语义经 Tooltip 补齐可读名(§7.1)
-    return collapsed ? (
-      <Tooltip content={t('nav.' + item.key)}>{link}</Tooltip>
-    ) : (
-      link
-    );
+    return collapsed ? <Tooltip content={t('nav.' + item.key)}>{link}</Tooltip> : link;
   };
 
   return (

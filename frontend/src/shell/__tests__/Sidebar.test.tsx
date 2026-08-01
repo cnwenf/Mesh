@@ -33,7 +33,9 @@ const EXPECTED: ReadonlyArray<{ testid: string; label: string; href: string }> =
 ];
 
 function renderSidebar(route: string = '/') {
-  return renderWithProviders(<Sidebar collapsed={false} onToggleCollapsed={() => undefined} />, { route });
+  return renderWithProviders(<Sidebar collapsed={false} onToggleCollapsed={() => undefined} />, {
+    route,
+  });
 }
 
 describe('Sidebar(分组 + 图标 + 激活态)', () => {
@@ -50,7 +52,9 @@ describe('Sidebar(分组 + 图标 + 激活态)', () => {
 
   it('四分组标题按 §4.1 呈现(工作/团队/运行/管理)', () => {
     renderSidebar();
-    const titles = screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+    const titles = screen
+      .getAllByRole('heading', { level: 2 })
+      .map((heading) => heading.textContent);
     expect(titles).toEqual(['Work', 'Team', 'Run', 'Admin']);
   });
 
@@ -104,7 +108,9 @@ describe('Sidebar 折叠状态联动(AppShell 契约)', () => {
     const user = userEvent.setup();
     function Harness(): React.JSX.Element {
       const [collapsed, setCollapsed] = useState(false);
-      return <Sidebar collapsed={collapsed} onToggleCollapsed={() => setCollapsed((prev) => !prev)} />;
+      return (
+        <Sidebar collapsed={collapsed} onToggleCollapsed={() => setCollapsed((prev) => !prev)} />
+      );
     }
     renderWithProviders(<Harness />);
     const nav = screen.getByLabelText('Sidebar navigation');
@@ -167,6 +173,32 @@ function renderSidebarInWorkspace(opts: {
 }
 
 describe('Sidebar 工作区设置入口(§6.12 角色可见性)', () => {
+  it('工作区上下文内全部侧栏入口使用规范目标,账号设置保持全局', async () => {
+    renderSidebarInWorkspace({ myRole: 'owner' });
+    await screen.findByTestId('nav-workspace-settings');
+    const expected: Readonly<Record<string, string>> = {
+      home: '/w/acme',
+      inbox: '/w/acme/inbox',
+      projects: '/w/acme/projects',
+      issues: '/w/acme/issues',
+      board: '/w/acme/board',
+      cycles: '/w/acme/cycles',
+      members: '/w/acme/members',
+      skills: '/w/acme/automations/skills',
+      squads: '/w/acme/squads',
+      chat: '/w/acme/chat',
+      approvals: '/w/acme/approvals',
+      autopilots: '/w/acme/automations/autopilots',
+      runtimes: '/w/acme/automations/runtimes',
+      insights: '/w/acme/insights',
+      integrations: '/w/acme/automations/integrations',
+      settings: '/settings',
+    };
+    for (const [key, href] of Object.entries(expected)) {
+      expect(screen.getByTestId(`nav-${key}`)).toHaveAttribute('href', href);
+    }
+  });
+
   it('admin 工作区就绪后展开态呈现设置入口,指向当前工作区设置页', async () => {
     renderSidebarInWorkspace({ myRole: 'owner' });
     const link = await screen.findByTestId('nav-workspace-settings');

@@ -31,6 +31,7 @@ describe('MobileMoreDrawer(「更多」导航抽屉)', () => {
       'members',
       'skills',
       'squads',
+      'approvals',
       'autopilots',
       'runtimes',
       'insights',
@@ -169,6 +170,32 @@ function renderDrawerInWorkspace(opts: {
 }
 
 describe('MobileMoreDrawer 工作区设置入口(§6.12 角色可见性)', () => {
+  it('工作区上下文内逐项提供并执行全部 More 规范链接,账号设置保持全局', async () => {
+    const onClose = vi.fn();
+    renderDrawerInWorkspace({ myRole: 'owner', onClose });
+    await screen.findByTestId('mobile-drawer-nav-workspace-settings');
+    const expected: Readonly<Record<string, string>> = {
+      inbox: '/w/acme/inbox',
+      projects: '/w/acme/projects',
+      cycles: '/w/acme/cycles',
+      members: '/w/acme/members',
+      skills: '/w/acme/automations/skills',
+      squads: '/w/acme/squads',
+      approvals: '/w/acme/approvals',
+      autopilots: '/w/acme/automations/autopilots',
+      runtimes: '/w/acme/automations/runtimes',
+      insights: '/w/acme/insights',
+      integrations: '/w/acme/automations/integrations',
+      settings: '/settings',
+    };
+    for (const [key, href] of Object.entries(expected)) {
+      const link = screen.getByTestId(`mobile-drawer-nav-${key}`);
+      expect(link).toHaveAttribute('href', href);
+      fireEvent.click(link);
+    }
+    expect(onClose).toHaveBeenCalledTimes(Object.keys(expected).length);
+  });
+
   it('admin 工作区就绪后抽屉呈现设置入口,点击后关闭抽屉', async () => {
     const onClose = vi.fn();
     renderDrawerInWorkspace({ myRole: 'owner', onClose });
