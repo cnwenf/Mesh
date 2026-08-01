@@ -102,6 +102,19 @@ describe('registerShellShortcuts', () => {
     unregister();
   });
 
+  it('autopilot feature flag=false 时不注册导航命令与 G A 快捷键', () => {
+    const unregister = registerShellShortcuts(vi.fn(), LABELS, {
+      role: 'member',
+      featureFlags: { autopilot: false },
+    });
+    expect(commandIds()).not.toContain('nav.autopilots');
+    expect(useShortcutRegistry.getState().shortcuts.map((entry) => entry.id)).not.toContain(
+      'go.autopilot',
+    );
+    expect(commandIds()).toContain('nav.runtimes');
+    unregister();
+  });
+
   it('admin/owner + 工作区:设置七子页注册且落工作区规范路由;guest 不注册(§1.2 S3 门控)', () => {
     const navigate = vi.fn();
     const unregister = registerShellShortcuts(navigate, LABELS, {

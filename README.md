@@ -37,8 +37,20 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 > **MES-128 前端收尾门禁**：统一 compact/medium/wide/xwide 断点、safe-area/sticky
 > offset 与 coarse-pointer 44px 命中区；13 个核心页已纳入桌面/触控手机 axe、
 > 320/390/200% 等效 reflow、forced-colors/prefers-contrast/reduced-motion，以及
-> 4 视口 × 2 主题共 104 个视觉基线。走查证据为 52 张互异截图，状态与人工读屏
-> 边界记录在 [`docs/audits/mes128-state-accessibility-matrix.md`](docs/audits/mes128-state-accessibility-matrix.md)。
+> 4 视口 × 2 主题共 104 个视觉基线。另有 production-auth 隔离栈在 320/390px
+> 分别完成“登录→建 issue→非拖拽移卡→评论→切工作区→搜索”，逐步核验真实 HTTP
+> 响应与 PostgreSQL 落库；走查、状态与人工读屏边界记录在
+> [`docs/audits/mes128-state-accessibility-matrix.md`](docs/audits/mes128-state-accessibility-matrix.md)。
+>
+> 从仓库根目录复现真栈流程：
+>
+> ```bash
+> ./frontend/e2e/mes128-real/gen-stack-env.sh --force
+> ./frontend/e2e/mes128-real/run-e2e.sh
+> ```
+>
+> runner 只将前端绑定到 `127.0.0.1`；PostgreSQL、Redis、MinIO、API 与 gateway 不发布
+> 宿主端口。随机强凭据写入 gitignored、mode 600 的本地 `stack.env`，结束时删除容器和卷。
 >
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |

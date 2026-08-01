@@ -205,6 +205,9 @@ function serveFont(res, name) {
 // ---------------------------------------------------------------------------
 
 // 页面数据路由表由 page-routes.mjs 注入(核心页恒定 fixture),保持本文件聚焦引导层。
+import { handleExtendedCollaborationRoute } from './extended-routes-collaboration.mjs';
+import { handleExtendedSettingsRoute } from './extended-routes-settings.mjs';
+import { handleExtendedAutomationRoute } from './extended-routes-automation.mjs';
 import { handlePageRoute } from './page-routes.mjs';
 
 async function handleRequest(req, res, url) {
@@ -228,6 +231,12 @@ async function handleRequest(req, res, url) {
   }
 
   // ---- 外壳引导:当前用户 / 工作区(每个鉴权页 đều 触发)-----------------
+  if (path === '/api/v1/me' && req.method === 'GET') {
+    // credential-polymorphic principal endpoint；视觉会话固定为 human。
+    sendJson(res, 200, envelope(ME.user));
+    return;
+  }
+
   if (path === '/api/v1/users/me' && req.method === 'GET') {
     sendJson(res, 200, envelope(ME));
     return;
@@ -265,6 +274,12 @@ async function handleRequest(req, res, url) {
     return;
   }
 
+  if (path === '/api/v1/notification-preferences' && req.method === 'GET') {
+    // 收件箱 quiet-hours 为 best-effort；显式空表使正常态不依赖 404 降级。
+    sendJson(res, 200, listEnvelope([]));
+    return;
+  }
+
   if (path === '/api/v1/onboarding/state' && req.method === 'GET') {
     // data:null → 上手清单卡片隐藏,避免动态进度进入截图。
     sendJson(res, 200, envelope(null));
@@ -285,7 +300,15 @@ async function handleRequest(req, res, url) {
     return;
   }
 
-  // ---- §13.5 核心页专有数据路由 --------------------------------------
+  // ---- 非核心正常态 + §13.5 核心页专有数据路由 -----------------------
+  if (
+    handleExtendedSettingsRoute(req, res, url) ||
+    handleExtendedCollaborationRoute(req, res, url) ||
+    handleExtendedAutomationRoute(req, res, url)
+  ) {
+    return;
+  }
+
   if (handlePageRoute(req, res, url, { kind: 'general' })) {
     return;
   }

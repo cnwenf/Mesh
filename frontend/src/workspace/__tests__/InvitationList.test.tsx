@@ -48,7 +48,9 @@ function stubClient(fetchImpl: ReturnType<typeof vi.fn>) {
   };
 }
 
-function stubFetch(...responses: Array<{ status: number; body: unknown }>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  ...responses: Array<{ status: number; body: unknown }>
+): ReturnType<typeof vi.fn> {
   const fetchImpl = vi.fn();
   for (const response of responses) {
     fetchImpl.mockImplementationOnce(() =>
@@ -78,13 +80,14 @@ function renderList(
   fetchImpl: ReturnType<typeof vi.fn>,
   realtime?: RealtimeContextValue | null,
 ): ReturnType<typeof render> {
-  const list = (
-    <InvitationList workspaceId="ws-1" client={stubClient(fetchImpl) as never} />
-  );
+  const list = <InvitationList workspaceId="ws-1" client={stubClient(fetchImpl) as never} />;
   return render(
     <MemoryRouter>
       <ThemeProvider>
-        <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+        <I18nProvider
+          workspaceDefaultLocale={null}
+          reporter={{ report: () => undefined, reported: [] }}
+        >
           <ToastProvider regionLabel="notifications">
             {realtime !== undefined ? (
               <RealtimeContext.Provider value={realtime}>{list}</RealtimeContext.Provider>
@@ -98,7 +101,10 @@ function renderList(
   );
 }
 
-function createFakeRealtime(): { value: RealtimeContextValue; frames: Array<(f: unknown) => void> } {
+function createFakeRealtime(): {
+  value: RealtimeContextValue;
+  frames: Array<(f: unknown) => void>;
+} {
   const frames: Array<(f: unknown) => void> = [];
   const client = {
     subscribe: vi.fn(),
@@ -207,6 +213,13 @@ describe('InvitationList(邀请列表,§4.2/§4.5)', () => {
     await waitFor(() => expect(screen.getByTestId('invitation-list-empty')).toBeTruthy());
   });
 
+  it('首次加载网络异常 → 通用错误态', async () => {
+    const fetchImpl = vi.fn().mockRejectedValueOnce(new Error('network down'));
+    renderList(fetchImpl);
+    expect(await screen.findByTestId('invitation-list-error')).toBeTruthy();
+    expect(screen.getByText('An unexpected error occurred. Please try again.')).toBeTruthy();
+  });
+
   it('next_cursor → load more 追加', async () => {
     const user = userEvent.setup();
     const fetchImpl = stubFetch(
@@ -221,6 +234,18 @@ describe('InvitationList(邀请列表,§4.2/§4.5)', () => {
 
     await user.click(screen.getByTestId('invitation-load-more'));
     await waitFor(() => expect(screen.getAllByTestId('invitation-row')).toHaveLength(2));
+  });
+
+  it('load more 失败显示错误 toast 并保留已有行', async () => {
+    const user = userEvent.setup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: [makeInvitation()], next_cursor: 'c1' }))
+      .mockRejectedValueOnce(new Error('network'));
+    renderList(fetchImpl);
+    await user.click(await screen.findByTestId('invitation-load-more'));
+    expect(await screen.findByText('An unexpected error occurred. Please try again.')).toBeTruthy();
+    expect(screen.getAllByTestId('invitation-row')).toHaveLength(1);
   });
 
   it('realtime invitation.redeemed → used_count 合并(达上限呈 exhausted)', async () => {
@@ -246,5 +271,41 @@ describe('InvitationList(邀请列表,§4.2/§4.5)', () => {
 
     await waitFor(() => expect(screen.getByTestId('invitation-uses').textContent).toBe('1/1'));
     await waitFor(() => expect(screen.getByText('exhausted')).toBeTruthy());
+  });
+
+  it('realtime 忽略无关/坏帧并在缺 used_count 时本地递增目标行', async () => {
+    const fetchImpl = stubFetch({
+      status: 200,
+      body: {
+        data: [makeInvitation(), makeInvitation({ id: 'inv-2', email: 'other@corp.com' })],
+        next_cursor: null,
+      },
+    });
+    const realtime = createFakeRealtime();
+    renderList(fetchImpl, realtime.value);
+    await waitFor(() => expect(screen.getAllByTestId('invitation-row')).toHaveLength(2));
+
+    act(() => {
+      const emit = realtime.frames[0];
+      emit({ channel: 'workspace:other', event: 'invitation.redeemed', payload: {} });
+      emit({ channel: workspaceChannel('ws-1'), event: 'other', payload: {} });
+      emit({
+        channel: workspaceChannel('ws-1'),
+        event: 'invitation.redeemed',
+        payload: { invitation_id: 42 },
+      });
+      emit({
+        channel: workspaceChannel('ws-1'),
+        event: 'invitation.redeemed',
+        payload: { invitation_id: 'inv-1' },
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId('invitation-uses').map((node) => node.textContent)).toEqual([
+        '1/10',
+        '0/10',
+      ]),
+    );
   });
 });

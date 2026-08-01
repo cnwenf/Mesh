@@ -175,6 +175,19 @@ describe('DataManagementPage', () => {
     fireEvent.click(screen.getByText('Download'));
   });
 
+  it('renders an empty creation date when the API omits it', async () => {
+    const client = makeClient({
+      list: vi.fn().mockResolvedValue({
+        data: [makeJob({ created_at: null as unknown as string })],
+        next_cursor: null,
+      }),
+    });
+    vi.mocked(getApiClient).mockReturnValue(client);
+    renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });
+    const row = await screen.findByTestId('job-row-dj-1');
+    expect(row.querySelectorAll('td')[4]?.textContent).toBe('');
+  });
+
   it('renders the empty state when there are no jobs', async () => {
     vi.mocked(getApiClient).mockReturnValue(makeClient());
     renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });

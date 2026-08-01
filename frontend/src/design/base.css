@@ -69,25 +69,45 @@ textarea {
   color: inherit;
 }
 
-/* 粗指针命中区(design-quality §8.2):视觉尺寸可小于 44px，但所有原生/ARIA
-   操作控件的命中盒不得小于 44×44。桌面密度不受影响。 */
+/* 粗指针命中区(design-quality §8.2):所有原生/ARIA 操作控件的实际命中矩形
+   均不得小于 44×44；不以相邻留白替代尺寸。桌面密度不受影响。 */
 @media (pointer: coarse) {
   :root
     :is(
       button,
-      input:not([type='hidden'], [type='checkbox'], [type='radio']),
+      input:not([type='hidden']),
       select,
       textarea,
       summary,
       [role='button'],
+      [role='checkbox'],
+      [role='combobox'],
+      [role='gridcell'],
+      [role='link'],
       [role='menuitem'],
-      [role='tab']
+      [role='menuitemcheckbox'],
+      [role='menuitemradio'],
+      [role='option'],
+      [role='radio'],
+      [role='scrollbar'],
+      [role='searchbox'],
+      [role='slider'],
+      [role='spinbutton'],
+      [role='switch'],
+      [role='tab'],
+      [role='textbox'],
+      [role='treeitem'],
+      [contenteditable]:not([contenteditable='false']),
+      [tabindex]:not([tabindex='-1'])
     ) {
     min-inline-size: 44px;
     min-block-size: 44px;
   }
 
-  :root :is(nav a[href], [role='navigation'] a[href]) {
+  :root a[href] {
+    display: inline-flex;
+    align-items: center;
+    min-inline-size: 44px;
     min-block-size: 44px;
   }
 }

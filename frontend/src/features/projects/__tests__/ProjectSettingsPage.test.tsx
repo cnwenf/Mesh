@@ -93,7 +93,24 @@ interface StubOptions {
   readonly serverNameAfterConflict?: string;
   /** 覆盖默认项目 fixture(如字段全 null 的三态预填场景) */
   readonly project?: ReturnType<typeof makeProject>;
+  /** PATCH 项目时模拟浏览器网络层直接抛错。 */
+  readonly rawPatchError?: boolean;
+  /** PATCH 项目时返回具名 API 错误。 */
+  readonly patchErrorStatus?: number;
+  /** 归档响应体读取失败,用于验证非 API 异常回退。 */
+  readonly rawArchiveError?: boolean;
+  /** 初始项目响应体读取失败,用于验证加载异常回退。 */
+  readonly rawProjectLoadError?: boolean;
 }
+
+const unreadableResponse = (): Response =>
+  ({
+    ok: true,
+    status: 200,
+    text: async () => {
+      throw new Error('response body read failed');
+    },
+  }) as unknown as Response;
 
 function stubFetch(opts: StubOptions = {}) {
   const calls: RecordedCall[] = [];
@@ -136,6 +153,13 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({ body: { data: { id: 'mem-2', removed: true } } });
     }
     if (method === 'PATCH' && url.match(/\/projects\/[^/]+$/)) {
+      if (opts.rawPatchError === true) return unreadableResponse();
+      if (opts.patchErrorStatus !== undefined) {
+        return fakeResponse({
+          status: opts.patchErrorStatus,
+          body: { error: { code: 'internal_error', message: 'save failed' } },
+        });
+      }
       if (patchFailures > 0) {
         patchFailures -= 1;
         conflictHappened = true;
@@ -148,7 +172,8 @@ function stubFetch(opts: StubOptions = {}) {
       project = { ...project, ...body, updated_at: '2026-07-02T00:00:00Z' };
       return fakeResponse({ body: { data: project } });
     }
-    if (method === 'POST' && url.includes('/archive')) {
+    if (method === 'POST' && (url.includes('/archive') || url.includes('/unarchive'))) {
+      if (opts.rawArchiveError === true) return unreadableResponse();
       project = { ...project, archived: !project.archived };
       return fakeResponse({ body: { data: project } });
     }
@@ -156,6 +181,7 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({ body: { data: { id: 'prj-1', deleted: true } } });
     }
     if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+      if (opts.rawProjectLoadError === true) return unreadableResponse();
       const served =
         opts.serverNameAfterConflict !== undefined && conflictHappened
           ? { ...project, name: opts.serverNameAfterConflict }
@@ -299,6 +325,21 @@ describe('ProjectSettingsPage', () => {
     expect(await screen.findByText('Project archived.')).toBeDefined();
   });
 
+  it('unarchives an archived project and cancels delete confirmation', async () => {
+    const calls = stubFetch({ project: makeProject({ archived: true }) });
+    renderSettings();
+    const user = userEvent.setup();
+    await screen.findByTestId('settings-name');
+    await user.click(screen.getByTestId('settings-archive-toggle'));
+    expect(await screen.findByText('Project unarchived.')).toBeDefined();
+    expect(calls.some((call) => call.url.includes('/unarchive'))).toBe(true);
+
+    await user.click(screen.getByTestId('settings-delete'));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete project' });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Delete project' })).toBeNull();
+  });
+
   it('deletes the project after confirmation and navigates away', async () => {
     const calls = stubFetch();
     renderSettings();
@@ -332,6 +373,15 @@ describe('ProjectSettingsPage', () => {
     vi.stubGlobal('fetch', impl);
     renderSettings();
     expect(await screen.findByText('Something went wrong')).toBeDefined();
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  });
+
+  it('renders the generic error state when the project response body cannot be read', async () => {
+    stubFetch({ rawProjectLoadError: true });
+    renderSettings();
+    expect(
+      await screen.findByText('We could not load this content. Please try again.'),
+    ).toBeDefined();
   });
 
   it('shows a danger toast when archiving fails', async () => {
@@ -573,6 +623,9 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
     renderSettings();
     await screen.findByTestId('settings-form');
 
+    const description = screen.getByLabelText('Description');
+    await user.clear(description);
+    await user.type(description, 'Mars landing');
     await user.selectOptions(screen.getByTestId('settings-status'), 'paused');
     await user.selectOptions(screen.getByTestId('settings-visibility'), 'private');
     fireEvent.change(screen.getByTestId('settings-start-date'), {
@@ -590,6 +643,7 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
       unknown
     >;
     expect(body).toEqual({
+      description: 'Mars landing',
       status: 'paused',
       visibility: 'private',
       start_date: '2026-02-01',
@@ -597,6 +651,32 @@ describe('ProjectSettingsPage 分支级补充(MES-30 覆盖加固)', () => {
       lead_member_id: 'mem-2',
     });
     expect(await screen.findByText('Settings saved.')).toBeDefined();
+  });
+
+  it('非 API 保存异常回退通用错误提示', async () => {
+    const calls = stubFetch({ rawPatchError: true });
+    const user = userEvent.setup();
+    renderSettings();
+    const name = await screen.findByTestId('settings-name');
+    await user.clear(name);
+    await user.type(name, 'Offline edit');
+    await user.click(screen.getByTestId('settings-save'));
+    await waitFor(() => expect(patchProjectCalls(calls).length).toBe(1));
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeDefined();
+  });
+
+  it('API 保存失败显示具名错误且归档响应读取失败回退通用错误', async () => {
+    stubFetch({ patchErrorStatus: 500, rawArchiveError: true });
+    const user = userEvent.setup();
+    renderSettings();
+    const name = await screen.findByTestId('settings-name');
+    await user.clear(name);
+    await user.type(name, 'Rejected edit');
+    await user.click(screen.getByTestId('settings-save'));
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+
+    await user.click(screen.getByTestId('settings-archive-toggle'));
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeDefined();
   });
 
   it('清空日期与负责人发送 null(三态)', async () => {

@@ -434,7 +434,7 @@ erDiagram
 
 - 事件来源：`issue.assigned`（assignee 为 agent 且 `trigger_on_assign=true`）、`comment.created` / `comment.updated`（评论模块按 §6.9 对提及集合 diff 后产生 `mention.added` 派生事件）。**业务写库与 outbox 事件在同一事务提交**，杜绝"业务已提交但任务未入队"的永久丢失。
 - 处理器 `enqueue_agent_run(agent_id, issue_id, trigger, trigger_event_id)`（由 outbox relay 调用）：
-  1. 校验 agent `lifecycle_status='active'` 且 `members.status='active'`，否则发 `agent.trigger_skipped`（原因 `paused/disabled`）并提示，不入队；
+  1. 校验 agent 与触发护栏，被拒绝时发 `agent.trigger_skipped` 并不入队；`reason` 稳定枚为 `agent_not_found` / `lifecycle_not_active` / `member_not_active` / `trigger_on_assign_disabled` / `rate_limited` / `chain_depth_exceeded`，前端呈现契约见 §3.6；
   2. 按 README §6.9 去重：同一触发事件不重复入队（幂等键兜底）；替换分派时前任 agent 的在途执行被取消（`failure_reason='superseded'`）；
   3. 组装 issue 上下文（标题 / 描述 / 评论 / 附件 / 标签），**所有外部来源内容注入 agent 上下文时显式标记为不可信数据并做结构隔离**（README §6.15「不可信内容处理」），生成幂等键 `idempotency_key = sha256(agent_id|issue_id|trigger_event_id)`（README §6.5）；**运行期上下文追加**（runtime.md `execution_context_appends`，如 IM `/btw` 命令，integrations.md §3.7）经心跳 `inject_context` 下行、daemon 在**下一 agent turn 边界**以不可信数据块注入当前对话（LLM 单轮不可打断；追加内容不作为指令执行，高风险动作仍走 `confirm_required`）；
   4. **冻结入队快照** `config_snapshot`（README §6.11）：`agent_config_version_id`、绑定 skill 版本清单、`capability_grants`（**严格对象数组** `[{capability, permission}]`，由下述归一算法从绑定技能声明派生，README §6.11，**无工具主键**）、repo/base SHA、`trigger_event_id`——运行可复现可审计；配置后续变更不影响在途执行；
@@ -502,8 +502,16 @@ erDiagram
 | `workspace:{ws}:agents` | `agent.lifecycle_changed` | 暂停 / 停用 / 归档 / 恢复，含前后状态 |
 | `agent:{id}:presence` | `agent.presence` | 容量三元组「运行中 N / 排队 M / 需审批 K」（README §6.12，由 `task_executions` 聚合 + `approvals` 计数推导） |
 | `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.awaiting_approval` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致，均取自 README §6.7 注册表），卡片忙碌指示与进度条 |
-| `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 因 paused/disabled 未触发 |
+| `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 被生命周期、成员状态、用户开关、频率或链深护栏拒绝 |
 | `workspace:{ws}:approvals` / `execution:{id}` | `approval.created` / `approval.decided` | 高风险工具需人工确认——**统一 `approvals` 实体**（README §6.10），带内联批准 / 拒绝与过期时间 |
+
+`agent.trigger_skipped` 的 payload 固定为
+`{agent_id: string|null, issue_id: string|null, trigger: string, reason: string, trigger_event_id: string|null}`。
+AppShell 在当前 `workspace:{ws}:agents` 频道收到该帧后，必须显示 12 秒可关闭 toast：
+`trigger_on_assign_disabled` 为 info（用户显式选择），其余已知原因为 warn，未知原因用
+通用本地化文案。带有 `issue_id` 时 toast 提供“打开 Issue”动作并导航到
+`/issues/{issue_id}`；频道、事件名或必填字段畸形的帧安全忽略。该 toast 是本事件的
+**权威呈现选型**，不再由各业务页自建内联提示。
 
 帧示例：
 
@@ -749,7 +757,7 @@ stateDiagram-v2
 - [ ] **入队经 transactional outbox**（README §6.6）：业务提交与事件入队同事务，kill relay 后重启不丢触发（集成测试 T5）。
 - [ ] **入队快照**（README §6.11）：`task_executions.config_snapshot` 冻结 agent_config_version、skill 版本、`capability_grants`（capability key + permission，**无工具主键**）、repo/base SHA、trigger_event_id；配置变更不影响在途执行。
 - [ ] **入队写权威能力需求**（README §6.4）：创建 `task_executions` 时写入权威 `label_requirements` 与 `required_capabilities`（**严格 capability key 字符串数组**，经 §3.3 入队归一算法从绑定技能声明派生——字符串条目与 `{capability,permission}` 对象条目一律归一为纯 key 集合，**任何对象形态不得进入 `required_capabilities`**，否则 claim 的 JSONB `<@` 匹配永不命中），claim 时以 `e.required_capabilities <@ runtimes.capabilities` 做服务端能力匹配；授权快照 `config_snapshot.capability_grants` 为严格 `[{capability,permission}]` 对象数组（集成测试 T28）。
-- [ ] **暂停 / 停用拦截**：agent 处于 paused/disabled 时分派 / @ 不触发运行，发 `agent.trigger_skipped` 并提示。
+- [x] **触发护栏拦截与呈现**：agent 处于 paused/disabled，或触发被成员状态、opt-out、频率/链深护栏拒绝时不入队；发 `agent.trigger_skipped`，AppShell 依 §3.6 呈现可导航 toast（后端触发 e2e + 前端 parser/AppShell 单测）。
 - [ ] **运行状态回流**：运行开始 / 进行 / 完成 / 失败实时回写 issue（卡片忙碌指示、进度、评论），agent 接单自动置「进行中」、产出置「待评审」。
 - [ ] 全场景 AI 徽章不可关闭：列表、卡片、评论、@候选、分派选择器均显示；@候选提示为「**发布后将触发一次运行**」，提交前有 trigger preview 与显式抑制开关（README §6.9）。
 - [ ] 高风险能力（`confirm_required`）执行前创建统一 `approvals` 审批（README §6.10 唯一协议）：执行进入 `awaiting_approval` 时**当前 attempt 置 `cancelled(awaiting_approval)`、租约结束、容量幂等释放**（无在途租约，reaper 无需特殊处理）；批准后执行回 `queued`，下一次领取建 attempt #N+1，凭审批请求时冻结的 `resume_context`（检查点引用 + 已完成步骤水位 + 待执行工具调用参数）**从审批点续跑**；拒绝/过期转 `cancelled`；「待我审批」入口聚合展示动作/权限（capability + permission）/影响范围/成本/过期时间。

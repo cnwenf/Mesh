@@ -149,6 +149,10 @@ describe('AutopilotDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('autopilot-runs-table')).toBeInTheDocument());
     expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(2);
     expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
+    expect(document.querySelectorAll('.mesh-autopilots__json')).toHaveLength(3);
+    for (const jsonRegion of document.querySelectorAll('.mesh-autopilots__json')) {
+      expect(jsonRegion).toHaveAttribute('tabindex', '0');
+    }
     expect(screen.getByTestId('autopilot-run-row-run-1')).toBeInTheDocument();
     // clicking a run row navigates to the run detail
     await userEvent.click(screen.getByTestId('autopilot-run-row-run-1'));
@@ -219,6 +223,7 @@ describe('AutopilotRunDetailPage', () => {
       { route: '/autopilots/runs/run-1' },
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-run-snapshot')).toBeInTheDocument());
+    expect(screen.getByTestId('autopilot-run-snapshot')).toHaveAttribute('tabindex', '0');
     expect(screen.getAllByRole('heading', { level: 2 })).toHaveLength(4);
     expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     expect(screen.getByTestId('autopilot-run-approve')).toBeInTheDocument();

@@ -74,8 +74,8 @@ jobs:
       - name: Verify new/changed code coverage >= 90%
         run: node scripts/verify-coverage.mjs --base origin/${{ github.base_ref || 'main' }}
 
-      - name: Evidence screenshots are unique (no duplicated step evidence)
-        run: node scripts/check-evidence-unique.mjs
+      - name: Evidence screenshots are complete and unique
+        run: npm run check:evidence
 
       - name: Production build
         run: npm run build
@@ -211,6 +211,52 @@ jobs:
         with:
           name: accessibility-playwright-report
           path: frontend/playwright-report
+          retention-days: 7
+
+  mes128-real-stack-e2e:
+    # MES-128:production 鉴权隔离栈；320/390px 分别完成六段键盘旅程，
+    # 同时断言真实 HTTP 响应和容器内 PostgreSQL 真值。只有 loopback 前端端口
+    # 发布到宿主，所有中间件凭据均为本 job 即时生成的强随机值。
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate isolated strong credentials
+        run: ./e2e/mes128-real/gen-stack-env.sh --force
+
+      - name: Run 320/390 real-stack keyboard journeys
+        run: ./e2e/mes128-real/run-e2e.sh
+
+      - name: Upload redacted journey evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mes128-real-stack-evidence
+          path: frontend/e2e/evidence/mes111-b5-real
+          retention-days: 14
+
+      - name: Upload Playwright report (real stack)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mes128-real-stack-playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
           retention-days: 7
 
   attachment-e2e:

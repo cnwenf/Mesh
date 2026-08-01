@@ -225,9 +225,35 @@ export function buildFontFaceCss(): string {
  * 经 addInitScript 在每个文档脚本执行前写入 localStorage,ThemeProvider 直接读取
  * 显式偏好整组切换 data-theme,不经工作区协商链。
  */
-export async function injectSession(page: Page, theme: 'light' | 'dark'): Promise<void> {
+export interface VisualPreferenceOverrides {
+  readonly locale?: string;
+  readonly timezone?: string;
+}
+
+/**
+ * The visual fixture injects an explicit local preference per test. Keep the
+ * account-preference bootstrap on its documented local-mirror fallback path;
+ * otherwise a generic `/api/v1/me` fixture without per-test settings can race
+ * the screenshot and replace a requested dark theme with the workspace default.
+ */
+export async function preserveInjectedPreferences(page: Page): Promise<void> {
+  await page.route('**/api/v1/me', async (route, request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me') {
+      await route.abort('failed');
+      return;
+    }
+    await route.fallback();
+  });
+}
+
+export async function injectSession(
+  page: Page,
+  theme: 'light' | 'dark',
+  overrides: VisualPreferenceOverrides = {},
+): Promise<void> {
+  await preserveInjectedPreferences(page);
   await page.addInitScript(
-    ({ token, theme: mode }) => {
+    ({ token, theme: mode, locale, timezone }) => {
       // /login 是核心视觉矩阵中的公开页。每次文档初始化按目标 path 建立准确
       // 会话态，使同一注册表既能跑公开页，也能跑受保护页，且循环导航不串态。
       if (window.location.pathname === '/login') {
@@ -241,19 +267,37 @@ export async function injectSession(page: Page, theme: 'light' | 'dark'): Promis
       window.localStorage.setItem(
         'mesh.settings.v1',
         JSON.stringify({
-          state: { preferences: { theme: mode, locale: 'zh-CN', timezone: 'UTC' } },
+          state: { preferences: { theme: mode, locale, timezone } },
           version: 2,
         }),
       );
     },
-    { token: VISUAL_TOKEN, theme },
+    {
+      token: VISUAL_TOKEN,
+      theme,
+      locale: overrides.locale ?? 'zh-CN',
+      timezone: overrides.timezone ?? 'UTC',
+    },
   );
 }
 
 /** 注入字体样式表并等待字体就绪(杜绝字体回退/渐显抖动)。 */
 export async function applyFonts(page: Page): Promise<void> {
   await page.addStyleTag({ content: buildFontFaceCss() });
-  await page.evaluate(() => document.fonts.ready);
+  const loadedWeights = await page.evaluate(
+    async ({ family, weights }) => {
+      const sample = 'Mesh 中文 0123456789';
+      const loaded = await Promise.all(
+        weights.map((weight) => document.fonts.load(`${weight} 16px "${family}"`, sample)),
+      );
+      await document.fonts.ready;
+      return loaded.map((faces) => faces.length);
+    },
+    { family: VISUAL_FONT_FAMILY, weights: [...FONT_WEIGHTS] },
+  );
+  if (loadedWeights.some((count) => count === 0)) {
+    throw new Error(`visual font preload failed for weights: ${loadedWeights.join(',')}`);
+  }
 }
 
 /**
@@ -300,9 +344,13 @@ export function commonMasks(page: Page): Locator[] {
  * 准备一个确定性的可视化页面上下文:冻结时钟 → 注入会话/偏好。
  * 调用方随后 navigateToPage → waitForStable → (mask →)toHaveScreenshot。
  */
-export async function prepareVisualPage(page: Page, theme: 'light' | 'dark'): Promise<void> {
+export async function prepareVisualPage(
+  page: Page,
+  theme: 'light' | 'dark',
+  overrides: VisualPreferenceOverrides = {},
+): Promise<void> {
   await page.clock.install({ time: FIXED_NOW });
-  await injectSession(page, theme);
+  await injectSession(page, theme, overrides);
 }
 
 /**

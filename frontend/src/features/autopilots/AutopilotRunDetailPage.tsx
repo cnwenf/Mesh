@@ -257,7 +257,7 @@ export function AutopilotRunDetailPage(): React.JSX.Element {
 
       <div className="mesh-autopilots__card">
         <h2>{t('autopilots.runDetail.snapshotTitle')}</h2>
-        <pre className="mesh-autopilots__json" data-testid="autopilot-run-snapshot">
+        <pre className="mesh-autopilots__json" data-testid="autopilot-run-snapshot" tabIndex={0}>
           {JSON.stringify(run.trigger_snapshot, null, 2)}
         </pre>
       </div>

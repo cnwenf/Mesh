@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
-import { PAGES, VISUAL_TOKEN } from '../visual/visual-helpers';
+import { PAGES, preserveInjectedPreferences, VISUAL_TOKEN } from '../visual/visual-helpers';
+import { findTouchTargetViolations, TOUCH_TARGET_SELECTOR } from './touch-targets';
 
 const WCAG_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] as const;
 const EVIDENCE_DIR = 'e2e/evidence/mes111-b5';
@@ -18,6 +19,7 @@ function violationSummary(
 }
 
 async function injectAuthenticatedTheme(page: import('@playwright/test').Page): Promise<void> {
+  await preserveInjectedPreferences(page);
   await page.addInitScript((token: string) => {
     if (window.location.pathname === '/login') {
       window.localStorage.removeItem('mesh.auth.v1');
@@ -97,31 +99,72 @@ test('coarse-pointer controls meet the 44px target floor on core pages', async (
     await page.goto(pageSpec.path);
     await readyForCorePage(page, name, pageSpec, true);
     const undersized = await page
-      .locator('button, input, select, textarea, [role="tab"], [role="menuitem"]')
-      .evaluateAll((elements) =>
-        elements.flatMap((element) => {
-          const node = element as HTMLElement;
-          const style = getComputedStyle(node);
-          const rect = node.getBoundingClientRect();
-          if (
-            style.display === 'none' ||
-            style.visibility === 'hidden' ||
-            rect.width === 0 ||
-            rect.height === 0 ||
-            (element instanceof HTMLInputElement &&
-              ['hidden', 'checkbox', 'radio'].includes(element.type))
-          ) {
-            return [];
-          }
-          return rect.width + 0.5 < 44 || rect.height + 0.5 < 44
-            ? [
-                `${node.tagName.toLowerCase()}${node.dataset.testid ? `[data-testid=${node.dataset.testid}]` : ''}=${Math.round(rect.width)}x${Math.round(rect.height)}`,
-              ]
-            : [];
-        }),
-      );
+      .locator(TOUCH_TARGET_SELECTOR)
+      .evaluateAll(findTouchTargetViolations);
     expect(undersized, `${name} has undersized coarse-pointer controls`).toEqual([]);
   }
+});
+
+test('touch-target audit includes every native and custom interactive category', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'phone-touch', 'phone-touch project owns target-size checks');
+  await page.setContent(`
+    <style>
+      .fixture-target { box-sizing: border-box; display: inline-block; width: 20px; height: 20px; padding: 0; }
+      main { display: flex; align-items: start; gap: 0; }
+      details { display: inline-block; width: 20px; height: 20px; }
+    </style>
+    <main>
+      <a class="fixture-target" data-testid="link" href="#target">L</a>
+      <div class="fixture-target" data-testid="role-button" role="button">B</div>
+      <details><summary class="fixture-target" data-testid="summary">S</summary></details>
+      <div class="fixture-target" data-testid="custom-switch" role="switch">W</div>
+      <div class="fixture-target" data-testid="custom-tabindex" tabindex="0">T</div>
+      <input class="fixture-target" data-testid="checkbox" type="checkbox" />
+      <input class="fixture-target" data-testid="radio" type="radio" />
+    </main>
+  `);
+
+  const audited = await page.locator(TOUCH_TARGET_SELECTOR).evaluateAll(findTouchTargetViolations);
+  expect(audited.map(({ target }) => target)).toEqual([
+    'link',
+    'role-button',
+    'summary',
+    'custom-switch',
+    'custom-tabindex',
+    'checkbox',
+    'radio',
+  ]);
+});
+
+test('touch-target audit rejects isolated undersized links and accepts a 44px label target', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'phone-touch', 'phone-touch project owns target-size checks');
+  await page.setContent(`
+    <style>
+      .isolated { position: absolute; box-sizing: border-box; display: block; width: 20px; height: 20px; }
+      .first { inset: 8px auto auto 8px; }
+      .second { inset: 72px auto auto 72px; }
+      .checkbox-target { position: absolute; inset: 136px auto auto 136px; display: flex; align-items: center; width: 88px; min-height: 44px; }
+      .checkbox-target input { width: 16px; height: 16px; }
+    </style>
+    <a class="isolated first" data-testid="isolated-link-one" href="#one">1</a>
+    <a class="isolated second" data-testid="isolated-link-two" href="#two">2</a>
+    <label class="checkbox-target">
+      <input data-testid="labeled-checkbox" type="checkbox" />
+      <span>Receive alerts</span>
+    </label>
+  `);
+
+  const violations = await page
+    .locator(TOUCH_TARGET_SELECTOR)
+    .evaluateAll(findTouchTargetViolations);
+  expect(violations.map(({ target }) => target)).toEqual([
+    'isolated-link-one',
+    'isolated-link-two',
+  ]);
 });
 
 test('desktop/mobile × light/dark core-page evidence matrix', async ({ page }, testInfo) => {

@@ -39,21 +39,21 @@
 
 | 节 | 复验结论 | 本轮证据 / 保留缺口 |
 | --- | --- | --- |
-| 1.1 信息架构 | 🟡 | 13 核心路由视觉/axe 通过；全 46 路由最终语义验收仍开放 |
+| 1.1 信息架构 | ✅ | 63 个叶子路由与 App AST 对账；公开/鉴权/权限/重定向及所有普通路由正常态均有浏览器断言 |
 | 1.2 令牌与视觉 | 🟡 | type scale、基础/中间层组件已落地；旧别名 263 次已建 fail-closed 基线 |
 | 1.3 主题 | ✅ | 13 页 × 四视口 × 亮暗 104 基线；forced-colors/contrast/motion 门禁 |
-| 1.4 响应式 | ✅（核心页） | 规范四断点、320/390/200% 等效 reflow、coarse pointer 44px、52 张存证 |
+| 1.4 响应式 | ✅ | core 与 extended 路由覆盖 320/390/640/768/1024/1440 reflow；完整 44px 候选门禁；112 四组合单元格 |
 | 1.5 i18n/时区 | 🟡 | 本轮无契约变化；核心中文视觉覆盖，长英文状态矩阵仍开放 |
 | 1.6 搜索 | ✅（沿用批次④） | axe/触控回归未退化 |
-| 1.7 快捷键 | 🟡 | 全局组与非拖拽看板路径存在；G9 上下文组仍开放 |
-| 1.8 异常态 | 🟡 | 逐页实现盘点完成；正常态视觉完整，全状态逐页视觉 fixture 尚未完整 |
+| 1.7 快捷键 | ✅（G9） | Board/Issue 动态上下文组、帮助层同源，原生激活/输入/IME 不被接管；真栈非拖拽路径通过 |
+| 1.8 异常态 | ✅（核心页） | 13×7=91 显式 cell；73 个适用异常态×双主题=146 快照，5 个 N/A 绑定源码证据 |
 | 1.9 实时重连 | 🟡 | 连接/重同步状态回归；跨模块离线队列不在本轮扩写 |
 | 1.10 通知收件箱 | ✅（本轮范围） | 双视口 axe、reflow、live region 和视觉回归通过 |
-| 1.11 a11y | 🟡 | 26 个 axe 页面扫描、landmark/overlay/table 静态门禁；人工读屏仍开放 |
+| 1.11 a11y | 🟡 | 13 core + 46 extended 正常态双项目 axe、完整 44px/landmark/overlay/table 门禁通过；NVDA/VoiceOver 人工签署仍开放 |
 | 1.12 收藏 | — | 本轮无行为变化 |
 | 1.13 统一审批 | ✅（沿用批次④） | 本轮表格语义/媒体偏好回归未退化 |
 | 1.14 微交互 | ✅（G8） | 基础组件 hover/pressed/focus 与 reduced-motion 回归通过 |
-| 1.15 批量/flags | 🟡 | sticky 批量条偏移已修；G15 因 Spec 仍属未来规划保持开放 |
+| 1.15 批量/flags | ✅（G15） | sticky 批量条偏移已修；工作区 `autopilot` 开关已有 admin UI、类型校验和入口/路由条件呈现 |
 | 1.16 安全渲染 | 🟡 | axe/主题未发现呈现回归；安全红队与抓包不由本轮替代 |
 
 ---
@@ -224,7 +224,7 @@
 - [ ] issue 批量：多选浮出底栏（状态/优先级/assignee/标签/删除），提交后「成功 N,失败 M」逐条原因（依据: issue.md §1.2.5）— 现状 ✅（issues 列表批量已实现）
 - [ ] 收件箱批量已读/归档；成员批量转派；技能一绑多 agent；邀请多邮箱批量（依据: comment-inbox.md §3.2；member.md §3.1；skill.md §1.5；workspace.md §3.2）— 现状 ⬜ 待实机逐项核对
 - [ ] 批量失败可选短时撤销（依据: issue.md §1.2.5「可选」）— 现状 ⚪ 可选
-- [ ] Feature flags 前端消费机制（工作区级功能开关下发 → UI 条件渲染）（依据: workspace.md §2.1 settings「功能开关」）— 现状 ❌（全库无 feature flag 代码，仅构建期 env）
+- [x] Feature flags 前端消费机制（工作区级功能开关下发 → UI 条件渲染）（依据: workspace.md §2.2 settings「功能开关」）— 现状 ✅（`workspace/featureFlags.tsx`；`autopilot` 关闭时同步过滤 Sidebar/MobileMoreDrawer/命令快捷键，直达路由显示禁用态；`featureFlags.test.ts` + `WorkspaceSettingsPage.test.tsx`）
 - [ ] 浏览器桌面通知（Notification 权限流 + 尊重免打扰）（依据: comment-inbox.md §4.3「可选桌面 toast」）— 现状 ⚪ 可选
 - [ ] Presence / 在线协作感知：成员在线状态、agent 忙碌指示（运行中 N/排队 M/需审批 K 三元组）、看板谁在查看（依据: agent.md §4.9；member.md §5.3；kanban.md §1.4）— 现状 🟡（agent presence 已接入成员页/看板；成员人类在线状态与看板 viewer presence 待验/可选）
 - [ ] API 契约 UI 面：限流 429 + Retry-After 的退避提示、Deprecation/Sunset 头的用户可见提示（依据: cli.md §8）— 现状 ⬜ 待实机
@@ -419,7 +419,7 @@
 - [ ] 分派即开工可观测：卡片「●处理中」+ 时间线「已开始处理」+ claimed 显示 runtime + started 日志流 + 终态通知附 failure_reason/日志摘要/深链（依据: agent.md §4.7）— 现状 ⬜ 待实机（全链路 e2e）
 - [ ] 生命周期操作：pause（cancel_current/finish_current）、resume、disable、archive、restore、所有权转移；软删除后历史评论「已停用 agent」占位（依据: agent.md §4.8）— 现状 ⬜ 待实机
 - [ ] 人类干预：运行进度条「停止本次运行」；产物批准/打回；配置回滚（依据: agent.md §4.10）— 现状 ⬜ 待实机
-- [ ] `agent.trigger_skipped`（paused/disabled 未触发）UI 提示（依据: agent.md §3.6）— 现状 ⬜ 待实机（呈现方式 Spec 未细化，**须补进 Spec**）
+- [x] `agent.trigger_skipped` 六类护栏原因 UI 提示（依据: agent.md §3.6）— 现状 ✅（权威选型为 AppShell toast，opt-out 为 info、其余为 warn，可携 `issue_id` 深链；`agentTriggerNotice.test.ts` + `AppShell.test.tsx`）
 - [ ] 四组合走查：agent 详情各 Tab × 四组合 — 现状 ⬜
 
 ### 2.13 Runtime 与执行
@@ -567,38 +567,43 @@
 
 ## 3. 四组合走查矩阵（桌面/手机 × 亮色/暗色）
 
-> 阶段三对下表每个单元格**真实打开页面操作并截图存证**（桌面 1440×900、手机 390×844 两档基准；亮/暗各切主题后走查）。单元格填 ✅+存证链接 或 ❌+问题编号。任一 ❌ = 该页不通过。
+> 下表 112 个单元格均由浏览器在桌面 1440×900、手机 390×844、light/dark 四组合下
+> 打开并等待页面专属 ready assertion 后截图。每个 ✅ 直接链接对应 PNG；路径、尺寸、SHA-256、
+> 页面 route、shown scope 与 backend kind 由
+> `frontend/e2e/evidence/mes128-checklist/manifest.json` 做 fail-closed 校验。截图仅证明所列
+> shown scope 的 UI，不把 mock-contract 图片解释为数据库证据；真实写入旅程另见
+> `frontend/e2e/evidence/mes111-b5-real/manifest.json`。
 
 | # | 页面 / 视图 | 桌面+亮 | 桌面+暗 | 手机+亮 | 手机+暗 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 登录 / 注册 / 忘记密码 | ✅ | ✅ | ✅ | ✅ |
-| 2 | OAuth 回调 / 设备码确认 / 邀请接受 | ✅ | ⬜ | ⬜ | ⬜ |
-| 3 | 首页（真实产品首页） | ✅ | ✅ | ✅ | ✅ |
-| 4 | AppShell（TopBar/Sidebar/导航） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 5 | 命令面板 / 快捷键帮助层 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 6 | 收件箱 / 铃铛下拉 / 通知偏好 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 7 | 项目列表 / 项目详情各 Tab | ⬜ | ⬜ | ⬜ | ⬜ |
-| 8 | 周期页 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 9 | Issue 列表（筛选/批量） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 10 | Issue 详情（属性/评论/附件/活动） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 11 | 看板（拖拽/WIP/过滤/视图切换） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 12 | 成员名册 / 详情抽屉 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 13 | Agent 详情五 Tab / 创建向导 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 14 | 技能库 / 详情 / 导入向导 / 市场 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 15 | 聊天（流式/候选/沉淀） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 16 | 小队列表 / 详情 / 任务详情 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 17 | Runtime 列表 / 详情 / 注册引导 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 18 | 执行详情（日志/产物/凭证） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 19 | Autopilot 列表 / 编辑器 / 运行详情 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 20 | Webhook / 出向订阅 / 集成目录 / 台账 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 21 | 洞察仪表盘 / 项目仪表盘 / 图表 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 22 | 导入导出向导 / 作业列表 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 23 | 工作区设置（基本信息/邀请/标签/字段/数据/Tokens/审计/Danger） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 24 | 个人设置（外观/语言/时区/安全/通知） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 25 | 统一审批页 /approvals | ⬜ | ⬜ | ⬜ | ⬜ |
-| 26 | Onboarding 清单 / aha 庆祝 / 六空态 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 27 | 附件灯箱（缩放/旋转/下载） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 28 | 404 / 错误页 / 无权限页 / 离线横幅 | ⬜ | ⬜ | ⬜ | ⬜ |
+| 1 | 登录 / 注册 / 忘记密码 | [✅](../../../frontend/e2e/evidence/mes111-b1/desktop-login-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/desktop-login-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/phone-login-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/phone-login-dark.png) |
+| 2 | OAuth 回调 / 设备码确认 / 邀请接受 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-02-device-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-02-device-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-02-device-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-02-device-dark.png) |
+| 3 | 首页（真实产品首页） | [✅](../../../frontend/e2e/evidence/mes111-b1/desktop-home-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/desktop-home-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/phone-home-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b1/phone-home-dark.png) |
+| 4 | AppShell（TopBar/Sidebar/导航） | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-04-app-shell-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-04-app-shell-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-04-app-shell-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-04-app-shell-dark.png) |
+| 5 | 命令面板 / 快捷键帮助层 | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-palette-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-palette-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-palette-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-palette-dark.png) |
+| 6 | 收件箱 / 铃铛下拉 / 通知偏好 | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-light-05-inbox-preview.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-dark-05-inbox-preview.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-light-05-inbox-preview.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-dark-05-inbox-preview.png) |
+| 7 | 项目列表 / 项目详情各 Tab | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-07-projects-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-07-projects-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-07-projects-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-07-projects-dark.png) |
+| 8 | 周期页 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-08-cycles-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-08-cycles-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-08-cycles-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-08-cycles-dark.png) |
+| 9 | Issue 列表（筛选/批量） | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-issues-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-issues-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-issues-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-issues-dark.png) |
+| 10 | Issue 详情（属性/评论/附件/活动） | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-issue-detail-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-issue-detail-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-issue-detail-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-issue-detail-dark.png) |
+| 11 | 看板（拖拽/WIP/过滤/视图切换） | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-board-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-board-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-board-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-board-dark.png) |
+| 12 | 成员名册 / 详情抽屉 | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-light-01-members-roster.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-dark-01-members-roster.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-light-01-members-roster.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-dark-01-members-roster.png) |
+| 13 | Agent 详情五 Tab / 创建向导 | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-light-03-agent-detail.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-dark-03-agent-detail.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-light-03-agent-detail.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-dark-03-agent-detail.png) |
+| 14 | 技能库 / 详情 / 导入向导 / 市场 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-14-skills-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-14-skills-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-14-skills-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-14-skills-dark.png) |
+| 15 | 聊天（流式/候选/沉淀） | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-light-10-chat-streamed.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/desktop-dark-10-chat-streamed.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-light-10-chat-streamed.png) | [✅](../../../frontend/e2e/evidence/mes111-b3/phone-dark-10-chat-streamed.png) |
+| 16 | 小队列表 / 详情 / 任务详情 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-16-squads-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-16-squads-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-16-squads-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-16-squads-dark.png) |
+| 17 | Runtime 列表 / 详情 / 注册引导 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-17-runtimes-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-17-runtimes-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-17-runtimes-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-17-runtimes-dark.png) |
+| 18 | 执行详情（日志/产物/凭证） | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-execution-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-execution-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-execution-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-execution-dark.png) |
+| 19 | Autopilot 列表 / 编辑器 / 运行详情 | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-autopilots-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-autopilots-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-autopilots-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-autopilots-dark.png) |
+| 20 | Webhook / 出向订阅 / 集成目录 / 台账 | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-integrations-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/desktop-integrations-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-integrations-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b5/mobile-integrations-dark.png) |
+| 21 | 洞察仪表盘 / 项目仪表盘 / 图表 | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-insights-data-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-insights-data-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-insights-data-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-insights-data-dark.png) |
+| 22 | 导入导出向导 / 作业列表 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-22-data-management-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-22-data-management-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-22-data-management-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-22-data-management-dark.png) |
+| 23 | 工作区设置（基本信息/邀请/标签/字段/数据/Tokens/审计/Danger） | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-ws-settings-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-ws-settings-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-ws-settings-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-ws-settings-dark.png) |
+| 24 | 个人设置（外观/语言/时区/安全/通知） | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-settings-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-settings-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-settings-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-settings-dark.png) |
+| 25 | 统一审批页 /approvals | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-approvals-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/desktop-approvals-dark.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-approvals-light.png) | [✅](../../../frontend/e2e/evidence/mes111-b4/mobile-approvals-dark.png) |
+| 26 | Onboarding 清单 / aha 庆祝 / 六空态 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-26-onboarding-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-26-onboarding-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-26-onboarding-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-26-onboarding-dark.png) |
+| 27 | 附件灯箱（缩放/旋转/下载） | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-27-attachment-lightbox-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-27-attachment-lightbox-dark.png) |
+| 28 | 404 / 错误页 / 无权限页 / 离线横幅 | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-28-not-found-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/desktop-28-not-found-dark.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-28-not-found-light.png) | [✅](../../../frontend/e2e/evidence/mes128-checklist/mobile-28-not-found-dark.png) |
 
 **走查关注点（每个单元格通用）**：
 1. 亮/暗：无硬编码色值漏网（白底黑字块、刺眼边框）、图表双色板可读、焦点环可见、原生控件随 color-scheme；
@@ -613,23 +618,23 @@
 
 | # | 缺口 | 位置 | 影响 | 补充建议 |
 | --- | --- | --- | --- | --- |
-| G1 | 首页为脚手架演示舞台（demo 区块 + mock 端点），非真实产品首页 | `shell/pages/HomePage.tsx` | 产品第一印象；MES-107 核心 | 工作台视角首页：我的 issue/收件箱摘要/进行中运行/最近项目 |
+| G1 | ✅ 已核销：首页为真实工作区工作台，加载我的 issue、收件箱、运行与项目摘要 | `shell/pages/HomePage.tsx` | 脚手架端点与演示区块已删除 | HomePage 单测 + 13 页视觉基线 + MES-128 真栈登录后首页存证 |
 | G2 | ✅ 已核销：compact 底部导航 + 更多抽屉，规范四断点及 44px 触控门禁 | `shell/MobileNav.tsx`、`shell/MobileMoreDrawer.tsx`、`design/responsive.ts` | 13 核心页手机双主题通过 | MES-128：320/390/200% 等效 reflow + coarse pointer 浏览器门禁 |
 | G3 | ✅ 已核销：顶栏搜索已接入真实查询，键入即展开与命令面板同源结果视图 | `shell/TopBar.tsx`、`shortcuts/PaletteResults.tsx` | 竞品核心入口；onboarding 键盘提示依赖它 | MES-111 批次④；`TopBar.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 palette 存证 |
 | G4 | ✅ 主体已核销：六类对象搜索、favorites/recents 空态、identifier 直达、no-results 建 issue 已落地 | `backend/src/mesh/search/`、`shortcuts/CommandPalette.tsx` | 竞品最高频能力差距 | 后端真实 e2e `backend/tests/e2e/test_search_e2e.py` + 浏览器真实 e2e/四组合存证；命令表新建 issue 与失权 recent 自动清理为残余建议，见 §1.6 🟡 边界 |
-| G5 | `/skills` 路由未注册：Sidebar 死链 + features/skills 整套孤儿代码 | `App.tsx` / `Sidebar.tsx:39` | 功能不可达；导航破窗 | 注册路由并接线 agent 详情「技能与工具」Tab |
-| G6 | Agent 详情「技能与工具」Tab 为占位 EmptyState | `AgentDetailPage.tsx:627` | 工具权限（只读/可写/需确认）无管理面 | 接线 skills 绑定区 + 工具权限下拉 |
-| G7 | 看板 List 布局占位、快速建卡禁用、拖拽零视觉反馈、无虚拟滚动（性能线 1000 卡 ≥50fps 不达） | `features/board/` | 竞品看板核心体验 | List 视图落地；dragover 高亮/落点条/ghost；虚拟滚动 |
+| G5 | ✅ 已核销：`/skills`、详情、市场与兼容重定向均有真实路由 | `App.tsx`、`features/skills/` | Sidebar 不再死链 | 路由可达性测试 + skills 页面单测 |
+| G6 | ✅ 已核销：Agent 详情技能 Tab 接入绑定、版本、启停、优先级与权限管理 | `AgentDetailPage.tsx`、`features/skills/AgentSkillsTab.tsx` | 不再渲染占位 EmptyState | `AgentSkillsTab.test.tsx` |
+| G7 | ✅ 已核销：List 视图、快速建卡、拖拽反馈、批量操作与 ≥200 卡虚拟化均已落地 | `features/board/BoardListView.tsx`、`BoardColumns.tsx`、`VirtualColumnBody.tsx` | 看板核心交互与大列表路径可用 | board 组件测试 + `mes111-b2.spec.ts` + 真栈非拖拽移卡 |
 | G8 | ✅ 已核销：基础组件 hover/active/pressed/focus 状态令牌化并覆盖媒体偏好 | `design/components/components.css` | 微交互一致性门禁已建立 | 组件单测 + 13 核心页 reduced-motion 回归 |
-| G9 | ⏳ 仍开放：上下文快捷键组（看板/issue 详情）Spec 已定义但页面未完整注册 | `shell/shortcutsRegistration.ts` | 键盘效率承诺未兑现 | 需独立实现并跑六流程真实键盘验收；MES-128 不以 axe 代替 |
+| G9 | ✅ 已核销：看板与 issue 详情注册动态上下文组，同键位由页面上下文优先且保留原生控件激活 | `features/board/BoardColumns.tsx`、`features/issues/issueShortcuts.ts`、`shortcuts/ShortcutProvider.tsx` | 帮助层、命令与按键共用注册源 | Shortcut/Board/Issue 单测 + MES-128 两档真栈六流程 |
 | G10 | ✅ 已核销：`/approvals` 与 `/w/{ws}/approvals` 聚合工具/squad 计划/autopilot 动作审批 | `App.tsx`、`features/approvals/` | 审批入口分散；深链断 | `ApprovalsPage.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 approvals 存证 |
 | G11 | ✅ 已核销：admin 可配置工作区默认主题并接通用户偏好缺省时的协商链 | `workspace/pages/settings/WorkspaceGeneralSection.tsx`、`state/workspaceThemeBridge.ts` | 协商链中段无管理面 | `WorkspaceSettingsPage.test.tsx` + `ThemeProvider.test.tsx` + 四组合 ws-settings 存证 |
-| G12 | 脚手架/增量期文案残留：`login.phaseNote`、`members.add.agentComingSoon`、dev token 直填入口、`PlaceholderPage.tsx` | `catalogs/*.json`、`shell/` | 完成品观感 | 清除并加 CI 守卫（coming soon/placeholder 关键词扫描） |
+| G12 | ✅ 已核销：phase note、coming-soon、dev token 入口和 PlaceholderPage 已删除，目录扫描守卫无命中 | `catalogs/*.json`、`shell/`、前端静态门禁 | 产品界面不再暴露增量脚手架文案 | 双语目录同步测试 + placeholder/coming-soon 扫描 |
 | G13 | ✅ 已核销：显示/正文字体、字号/字重/行高阶梯与数字等宽工具已集中 | `design/tokenValues.ts`、`design/typography.css` | 四视口双主题复验通过 | 104 个核心页视觉基线 |
-| G14 | 中间层组件缺失：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion 各 feature 自造 | `design/` | 视觉漂移、重复造轮子 | 设计层统一供给并迁移各 feature |
-| G15 | ⏳ 仍开放：Feature flags 前端消费机制缺失，且当前产品 Spec 将其列为未来规划 | 全库 / `workspace.md` | 工作区功能开关无 UI 呈现 | 先由产品 Spec 裁决，再定义 flag 下发 + 条件渲染约定 |
-| G16 | ✅ 核心范围已核销：design-quality.md §8.3 明确核心页重排/降级/触控规则 | `design-quality.md` §8、MES-128 审计 | 13 核心页有可执行验收依据 | 非核心路由状态扩展继续按审计缺口推进 |
-| G17 | ⏳ 仍开放：`agent.trigger_skipped` 呈现方式 Spec 未细化 | agent.md §3.6 | 验收无组件级依据 | 先补权威 Spec，明确 toast 或内联提示后实现 |
+| G14 | ✅ 已核销：Menu、Avatar、Tabs、Tooltip、Accordion 已由 design 层统一供给并有组件状态测试 | `design/components/` | 中间层原语有单一实现 | 设计组件单测 + styleguide/视觉基线 |
+| G15 | ✅ 已核销：工作区 `autopilot` 开关从 detail 下发，admin 可修改，入口/命令/路由统一条件呈现 | `workspace/featureFlags.tsx`、`WorkspaceGeneralSection.tsx`、`App.tsx` | 关闭功能不再暴露可失败入口 | workspace.md §2.2 权威契约 + 前后端类型/呈现单测 |
+| G16 | ✅ 已核销：design-quality.md §8.3 明确重排/降级/触控规则，全部普通路由具有可执行正常态与六档 reflow 断言 | `design-quality.md` §8、MES-128 审计、`app-routes.spec.ts` | 63 路由 fail-closed 清单；13 核心页另有完整异常态矩阵 | core 104/146 基线 + extended 正常态浏览器 crawl |
+| G17 | ✅ 已核销：`agent.trigger_skipped` 在 AppShell 呈现本地化 toast，六原因分级且可跳 issue | agent.md §3.6、`shell/agentTriggerNotice.ts`、`AppShell.tsx` | 呈现选型和畸形帧边界已可验收 | parser 分支单测 + 真实 WebSocket 帧形 AppShell 组件测试 |
 | G18 | 个人资料编辑缺失：无头像/昵称/bio 编辑界面（`PATCH /users/me` 仅偏好键） | `api/userPreferences.ts` | 竞品成员模型基本项 | 个人设置增 Profile section（头像上传 + 显示名 + bio） |
 | G19 | ✅ 基线缺口已核销：公共 `useDocumentTitle` 已建立并接入公开页、首页及批次④页面 | `hooks/useDocumentTitle.ts`、`shell/hooks/useDocumentTitle.ts` | 多标签工作流辨识度；完成品基本项 | 单测覆盖写入/异步更新/卸载复位；其余应用实体页与未读标题/favicon 仍属 §1.1 残余范围 |
 

@@ -10,8 +10,17 @@ import { useAuthStore } from '../../state/authStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useShortcutRegistry } from '../../shortcuts';
 import { renderWithProviders } from '../../test-utils/render';
-import { AppShell, MAX_RESYNC_PAGES, channelEventsUrl, createReconciler, fetchRestEvents, resolveResyncUrl, useOfflinePolling } from '../AppShell';
+import {
+  AppShell,
+  MAX_RESYNC_PAGES,
+  channelEventsUrl,
+  createReconciler,
+  fetchRestEvents,
+  resolveResyncUrl,
+  useOfflinePolling,
+} from '../AppShell';
 import { useT } from '../../i18n';
+import { resetPaletteContextCache } from '../../shortcuts/usePaletteContext';
 
 function InboxStub(): React.JSX.Element {
   const t = useT();
@@ -126,19 +135,20 @@ describe('AppShell', () => {
   it('/w/:workspaceSlug 命中以 WorkspaceProvider 包裹布局子树(workspace.md §4.1)', () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(
-          JSON.stringify({
-            data: {
-              id: 'ws-1',
-              name: 'Acme',
-              slug: 'acme',
-              settings: {},
-              created_at: '2026-07-01T00:00:00.000Z',
-            },
-          }),
-          { status: 200 },
-        ),
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: {
+                id: 'ws-1',
+                name: 'Acme',
+                slug: 'acme',
+                settings: {},
+                created_at: '2026-07-01T00:00:00.000Z',
+              },
+            }),
+            { status: 200 },
+          ),
       ),
     );
     renderWithProviders(
@@ -155,11 +165,9 @@ describe('AppShell', () => {
   });
 
   it('localStorage 读取失败时折叠偏好回退展开态(隐私模式降级,不抛错)', () => {
-    const getItem = vi
-      .spyOn(Storage.prototype, 'getItem')
-      .mockImplementation(() => {
-        throw new Error('storage denied');
-      });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage denied');
+    });
     renderShell('/');
     expect(document.querySelector('.mesh-shell')?.className).not.toContain(
       'mesh-shell--sidebar-collapsed',
@@ -168,11 +176,9 @@ describe('AppShell', () => {
   });
 
   it('localStorage 写入失败时折叠切换仍会话内生效(存储降级不阻断切换)', () => {
-    const setItem = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(() => {
-        throw new Error('storage denied');
-      });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage denied');
+    });
     renderShell('/');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
     expect(document.querySelector('.mesh-shell')?.className).toContain(
@@ -196,13 +202,29 @@ describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
   };
 
   it('2xx 时聚合事件帧(op:event 形态)并携带 Bearer 头', async () => {
-    const fetchMock = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
-      new Response(JSON.stringify(EVENT_BODY), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(JSON.stringify(EVENT_BODY), { status: 200 }),
     );
-    const frames = await fetchRestEvents('http://api/api/v1/realtime/events?channel=issue%3A1&since=7', fetchMock);
+    const frames = await fetchRestEvents(
+      'http://api/api/v1/realtime/events?channel=issue%3A1&since=7',
+      fetchMock,
+    );
     expect(frames).toEqual([
-      { op: 'event', channel: 'issue:1', seq: 8, event: 'issue.updated', payload: { id: 'x', v: 1 } },
-      { op: 'event', channel: 'issue:1', seq: 9, event: 'issue.updated', payload: { id: 'y', v: 2 } },
+      {
+        op: 'event',
+        channel: 'issue:1',
+        seq: 8,
+        event: 'issue.updated',
+        payload: { id: 'x', v: 1 },
+      },
+      {
+        op: 'event',
+        channel: 'issue:1',
+        seq: 9,
+        event: 'issue.updated',
+        payload: { id: 'y', v: 2 },
+      },
     ]);
     const init = fetchMock.mock.calls[0][1] as RequestInit;
     expect((init.headers as Record<string, string>).Authorization).toBeUndefined(); // 无 token 不带头
@@ -212,7 +234,9 @@ describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
     const page1 = { data: [EVENT_BODY.data[0]], next_cursor: 'cur-1' };
     const page2 = { data: [EVENT_BODY.data[1]], next_cursor: null };
     const fetchMock = vi
-      .fn(async (_url: URL | RequestInfo, _init?: RequestInit) => new Response('{}', { status: 200 }))
+      .fn(
+        async (_url: URL | RequestInfo, _init?: RequestInit) => new Response('{}', { status: 200 }),
+      )
       .mockResolvedValueOnce(new Response(JSON.stringify(page1), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(page2), { status: 200 }));
     const frames = await fetchRestEvents('http://api/events?since=7', fetchMock);
@@ -223,22 +247,32 @@ describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
 
   it('非 2xx 时抛 MeshApiError(触发客户端退避重试)', async () => {
     await expect(
-      fetchRestEvents('http://api/events', vi.fn(async () => new Response('', { status: 500 }))),
+      fetchRestEvents(
+        'http://api/events',
+        vi.fn(async () => new Response('', { status: 500 })),
+      ),
     ).rejects.toBeInstanceOf(MeshApiError);
   });
 
   it('createReconciler:拉取 rest 并经 client.ingestReconciledEvent 注入帧', async () => {
-    const fetchMock = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
-      new Response(JSON.stringify(EVENT_BODY), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(JSON.stringify(EVENT_BODY), { status: 200 }),
     );
     vi.stubGlobal('fetch', fetchMock);
     const client = { ingestReconciledEvent: vi.fn() } as never;
     const reconciler = createReconciler(client);
-    await reconciler({ channel: 'issue:1', watermark: 9, rest: '/api/v1/realtime/events?channel=issue%3A1&since=7' });
+    await reconciler({
+      channel: 'issue:1',
+      watermark: 9,
+      rest: '/api/v1/realtime/events?channel=issue%3A1&since=7',
+    });
     expect(fetchMock.mock.calls[0][0]).toBe(
       env.apiBaseUrl + '/api/v1/realtime/events?channel=issue%3A1&since=7',
     );
-    expect((client as { ingestReconciledEvent: ReturnType<typeof vi.fn> }).ingestReconciledEvent).toHaveBeenCalledTimes(2);
+    expect(
+      (client as { ingestReconciledEvent: ReturnType<typeof vi.fn> }).ingestReconciledEvent,
+    ).toHaveBeenCalledTimes(2);
   });
 
   it('channelEventsUrl 生成对账/轮询共用的频道事件 URL', () => {
@@ -249,8 +283,9 @@ describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
 
   it('next_cursor 永不为空时翻页到达上限即停(防恶意游标死循环,MEDIUM-1)', async () => {
     const page = { data: [EVENT_BODY.data[0]], next_cursor: 'never-null' };
-    const fetchMock = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
-      new Response(JSON.stringify(page), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(JSON.stringify(page), { status: 200 }),
     );
     const frames = await fetchRestEvents('http://api/api/v1/realtime/events?since=1', fetchMock);
     expect(fetchMock).toHaveBeenCalledTimes(MAX_RESYNC_PAGES); // 不无限翻页
@@ -294,7 +329,9 @@ describe('resolveResyncUrl / createReconciler 同源校验(MEDIUM-1:token 不得
       reconciler({ channel: 'issue:1', watermark: 9, rest: 'https://evil.example/api/v1/x' }),
     ).rejects.toBeInstanceOf(MeshApiError);
     expect(fetchMock).not.toHaveBeenCalled(); // token 绝无外泄
-    expect((client as { ingestReconciledEvent: ReturnType<typeof vi.fn> }).ingestReconciledEvent).not.toHaveBeenCalled();
+    expect(
+      (client as { ingestReconciledEvent: ReturnType<typeof vi.fn> }).ingestReconciledEvent,
+    ).not.toHaveBeenCalled();
   });
 });
 
@@ -304,7 +341,9 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
   });
 
   const FRAMES_BODY = {
-    data: [{ channel: 'workspace:ws-1:issues', seq: 9, event: 'issue.updated', payload: { id: 'p1' } }],
+    data: [
+      { channel: 'workspace:ws-1:issues', seq: 9, event: 'issue.updated', payload: { id: 'p1' } },
+    ],
     next_cursor: null,
   };
 
@@ -314,8 +353,9 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
 
   it('reconnecting 时启动轮询:按游标水位拉取 REST 事件并经 ingest 注入(携带 Bearer)', async () => {
     useAuthStore.getState().setToken('mesh-dev:ws');
-    const fetchMock = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
-      new Response(JSON.stringify(FRAMES_BODY), { status: 200 }),
+    const fetchMock = vi.fn(
+      async (_url: URL | RequestInfo, _init?: RequestInit) =>
+        new Response(JSON.stringify(FRAMES_BODY), { status: 200 }),
     );
     const client = stubClient();
     renderHook(() =>
@@ -396,9 +436,7 @@ describe('useOfflinePolling(§3.2 离线降级轮询编排)', () => {
   });
 
   it('恢复 connected 后停止轮询', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify(FRAMES_BODY), { status: 200 }),
-    );
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(FRAMES_BODY), { status: 200 }));
     const client = stubClient();
     const initialProps: { state: 'reconnecting' | 'connected' } = { state: 'reconnecting' };
     const { rerender } = renderHook(
@@ -458,8 +496,8 @@ describe('AppShell 实时网关建连(MES-106:绝对 ws(s):// 地址)', () => {
     // shell 内偏好回填/离线轮询的网络副作用静默桩平(与本用例断言无关)
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 }),
+      vi.fn(
+        async () => new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 }),
       ),
     );
     useAuthStore.getState().setToken('tok_valid');
@@ -477,7 +515,6 @@ describe('AppShell 实时网关建连(MES-106:绝对 ws(s):// 地址)', () => {
     expect(FakeWebSocket.urls).toEqual([]);
   });
 });
-
 
 describe('AppShell resync 对账委派(§6.7:resync_required 帧经 shell 注入的 reconciler 走 REST)', () => {
   class ResyncSocket {
@@ -566,5 +603,118 @@ describe('AppShell resync 对账委派(§6.7:resync_required 帧经 shell 注入
         expect.anything(),
       ),
     );
+  });
+});
+
+describe('AppShell agent.trigger_skipped 呈现(G17)', () => {
+  class NoticeSocket {
+    static instances: NoticeSocket[] = [];
+
+    onopen: (() => void) | null = null;
+    onmessage: ((ev: { data: string }) => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readyState = 1;
+    sent: string[] = [];
+
+    constructor() {
+      NoticeSocket.instances.push(this);
+    }
+
+    send(data: string): void {
+      this.sent.push(data);
+    }
+
+    close(): void {}
+  }
+
+  beforeEach(() => {
+    NoticeSocket.instances = [];
+    resetPaletteContextCache();
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().clearToken();
+    resetPaletteContextCache();
+    vi.unstubAllGlobals();
+  });
+
+  it('订阅工作区 agents 频道，并将跳过原因呈现为带 issue 动作的 warning toast', async () => {
+    vi.stubGlobal('WebSocket', NoticeSocket);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/users/me')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                user: { id: 'u-1', email: 'u@c.com', display_name: 'U' },
+                memberships: [
+                  {
+                    workspace_id: 'ws-1',
+                    workspace_name: 'WS',
+                    workspace_slug: 'ws',
+                    role: 'member',
+                    status: 'active',
+                    joined_at: null,
+                  },
+                ],
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes('/workspaces/ws-1')) {
+          return new Response(
+            JSON.stringify({
+              data: {
+                id: 'ws-1',
+                name: 'WS',
+                slug: 'ws',
+                settings: {},
+                my_role: 'member',
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 });
+      }),
+    );
+    useAuthStore.getState().setToken('tok_notice');
+    renderShell('/');
+    const socket = NoticeSocket.instances[0];
+    expect(socket).toBeDefined();
+    act(() => socket.onopen?.());
+    act(() => socket.onmessage?.({ data: JSON.stringify({ op: 'auth_ok' }) }));
+    await waitFor(() =>
+      expect(socket.sent.some((raw) => raw.includes('workspace:ws-1:agents'))).toBe(true),
+    );
+
+    act(() =>
+      socket.onmessage?.({
+        data: JSON.stringify({
+          op: 'event',
+          seq: 1,
+          channel: 'workspace:ws-1:agents',
+          event: 'agent.trigger_skipped',
+          payload: {
+            agent_id: 'agent-1',
+            issue_id: 'issue-1',
+            trigger: 'assign',
+            reason: 'lifecycle_not_active',
+          },
+        }),
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        'The agent did not start because it is paused, disabled, or archived.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open issue' })).toBeInTheDocument();
+    expect(document.querySelector('.mesh-toast--warn')).toBeInTheDocument();
   });
 });

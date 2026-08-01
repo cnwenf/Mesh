@@ -5,28 +5,45 @@
  *
  * 拖拽经指针事件模拟(jsdom 无 PointerEvent/布局,见 dragTestUtils 说明)。
  */
+import { useState } from 'react';
+import { useLocation } from 'react-router';
 import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useShortcutRegistry } from '../../../shortcuts/registry';
 import { ShortcutProvider } from '../../../shortcuts/ShortcutProvider';
 import { renderWithProviders } from '../../../test-utils/render';
-import { BoardColumns } from '../BoardColumns';
+import { useShortcutRegistry } from '../../../shortcuts';
+import { BoardColumns, computeDropPosition } from '../BoardColumns';
 import type { BoardCard } from '../projection';
 import type { BoardColumn } from '../types';
 import { ensurePointerEvent, mockRect } from './dragTestUtils';
 
 function card(id: string, position: number): BoardCard {
   return {
-    id, identifier: `WEB-${id}`, title: `Card ${id}`, state_category: 'todo',
-    status: { id: 'st', name: 'Todo', category: 'todo' }, status_id: 'st', priority: 'high',
-    assignee: null, assignee_id: null, project_id: null, position, version: 1, updated_at: '',
+    id,
+    identifier: `WEB-${id}`,
+    title: `Card ${id}`,
+    state_category: 'todo',
+    status: { id: 'st', name: 'Todo', category: 'todo' },
+    status_id: 'st',
+    priority: 'high',
+    assignee: null,
+    assignee_id: null,
+    project_id: null,
+    position,
+    version: 1,
+    updated_at: '',
   };
 }
 
 function column(overrides: Partial<BoardColumn> = {}): BoardColumn {
   return {
-    key: 'todo', label: 'board.category.todo', collapsed: false, wip: null, count: 0,
-    placeholder: false, ...overrides,
+    key: 'todo',
+    label: 'board.category.todo',
+    collapsed: false,
+    wip: null,
+    count: 0,
+    placeholder: false,
+    ...overrides,
   };
 }
 
@@ -36,7 +53,7 @@ function render(props: RenderProps = {}) {
   const onDropCard = vi.fn();
   const onQuickCreate = vi.fn();
   const onToggleCollapse = vi.fn();
-  renderWithProviders(
+  const view = renderWithProviders(
     <BoardColumns
       columns={[column()]}
       groupBy="state_category"
@@ -49,7 +66,12 @@ function render(props: RenderProps = {}) {
       {...props}
     />,
   );
-  return { onDropCard, onQuickCreate, onToggleCollapse };
+  return { onDropCard, onQuickCreate, onToggleCollapse, ...view };
+}
+
+function LocationProbe(): React.JSX.Element {
+  const location = useLocation();
+  return <output data-testid="location-probe">{`${location.pathname}${location.search}`}</output>;
 }
 
 /** 两列(todo 源 / done 目标)+ 矩形 mock,返回拖拽起点卡。 */
@@ -76,8 +98,18 @@ function setupDragScene() {
 }
 
 describe('BoardColumns 渲染', () => {
-  beforeEach(() => ensurePointerEvent());
+  beforeEach(() => {
+    ensurePointerEvent();
+    useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+  });
   afterEach(() => vi.unstubAllGlobals());
+
+  it('落点计算在投影数组暂态稀疏时仍使用安全位置回退', () => {
+    const sparse = Array<BoardCard>(2);
+    expect(computeDropPosition(sparse, null)).toBe(1);
+    expect(computeDropPosition(sparse, 0)).toBe(-1);
+    expect(computeDropPosition(sparse, 1)).toBe(0);
+  });
 
   it('渲染列内卡片;无卡片呈现空态文案', () => {
     render({ cardsByKey: { todo: [card('a', 1), card('b', 2)] } });
@@ -90,6 +122,191 @@ describe('BoardColumns 渲染', () => {
     const cardA = screen.getByTestId('board-card-a');
     expect(cardA).toHaveAttribute('tabindex', '0');
     expect(cardA).toHaveAttribute('aria-keyshortcuts');
+  });
+
+  it('挂载时激活 board 上下文并注册 Spec 全量快捷键，卸载即复位', () => {
+    const view = render({ cardsByKey: { todo: [card('a', 1)] } });
+    expect(useShortcutRegistry.getState().activeContexts).toEqual(['board']);
+    expect(
+      useShortcutRegistry
+        .getState()
+        .shortcuts.filter((entry) => entry.group === 'board')
+        .map((entry) => entry.combo)
+        .sort(),
+    ).toEqual(['a', 'c', 'enter', 'f', 'h', 'j', 'k', 'l', 's'].sort());
+
+    view.unmount();
+    expect(useShortcutRegistry.getState().activeContexts).toEqual([]);
+    expect(
+      useShortcutRegistry.getState().shortcuts.filter((entry) => entry.group === 'board'),
+    ).toEqual([]);
+  });
+
+  it('J/K/H/L 选择卡片，C 聚焦当前列快速创建', () => {
+    render({
+      columns: [column({ key: 'todo' }), column({ key: 'done', label: 'board.category.done' })],
+      cardsByKey: { todo: [card('a', 1), card('b', 2)], done: [card('c', 1)] },
+    });
+    const run = (combo: string): void => {
+      const shortcut = useShortcutRegistry
+        .getState()
+        .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo);
+      expect(shortcut).toBeDefined();
+      act(() => shortcut?.run());
+    };
+
+    run('j');
+    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
+    run('j');
+    expect(screen.getByTestId('board-card-b')).toHaveAttribute('aria-current', 'true');
+    run('l');
+    expect(screen.getByTestId('board-card-c')).toHaveFocus();
+
+    run('c');
+    expect(screen.getByTestId('quick-add-done')).toHaveFocus();
+  });
+
+  it('页面默认动作直接走 issue 深链与真实筛选按钮，无需 BoardPage 包装回调', () => {
+    const filterClick = vi.fn();
+    renderWithProviders(
+      <>
+        <button type="button" data-testid="panel-toggle-filter" onClick={filterClick} />
+        <LocationProbe />
+        <BoardColumns
+          columns={[column()]}
+          groupBy="state_category"
+          cardsByKey={{ todo: [card('a', 1)] }}
+          canWrite
+          dragEnabled
+          onToggleCollapse={vi.fn()}
+          onDropCard={vi.fn()}
+          onQuickCreate={vi.fn()}
+        />
+      </>,
+      { route: '/board' },
+    );
+    const run = (combo: string): void => {
+      act(() =>
+        useShortcutRegistry
+          .getState()
+          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
+          ?.run(),
+      );
+    };
+
+    run('s');
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a?focus=status');
+    run('a');
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a?focus=assignee');
+    run('enter');
+    expect(screen.getByTestId('location-probe')).toHaveTextContent('/issues/a');
+    run('f');
+    expect(filterClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('网格导航跳过空列并在边界夹紧，数据删除选中卡后回到首卡', () => {
+    const columns = [
+      column({ key: 'todo' }),
+      column({ key: 'empty', label: 'Empty' }),
+      column({ key: 'done', label: 'board.category.done' }),
+    ];
+    const baseProps = {
+      columns,
+      groupBy: 'state_category',
+      canWrite: true,
+      dragEnabled: true,
+      onToggleCollapse: vi.fn(),
+      onDropCard: vi.fn(),
+      onQuickCreate: vi.fn(),
+    } as const;
+    function RefreshHarness(): React.JSX.Element {
+      const [cardsByKey, setCardsByKey] = useState({
+        todo: [card('a', 1), card('b', 2)],
+        empty: [] as BoardCard[],
+        done: [card('c', 1)],
+      });
+      return (
+        <>
+          <button
+            type="button"
+            data-testid="remove-selected-card"
+            onClick={() => setCardsByKey({ todo: [card('a', 1)], empty: [], done: [] })}
+          />
+          <BoardColumns {...baseProps} cardsByKey={cardsByKey} />
+        </>
+      );
+    }
+    renderWithProviders(<RefreshHarness />);
+    const run = (combo: string): void => {
+      act(() =>
+        useShortcutRegistry
+          .getState()
+          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
+          ?.run(),
+      );
+    };
+
+    run('j');
+    run('k');
+    run('h');
+    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
+    run('j');
+    run('j');
+    expect(screen.getByTestId('board-card-b')).toHaveAttribute('aria-current', 'true');
+    run('l');
+    expect(screen.getByTestId('board-card-c')).toHaveFocus();
+    run('l');
+    expect(screen.getByTestId('board-card-c')).toHaveFocus();
+
+    fireEvent.click(screen.getByTestId('remove-selected-card'));
+    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('空看板上的快捷键与未提供回调都是安全 no-op', () => {
+    render({ columns: [], cardsByKey: {} });
+    for (const combo of ['j', 'k', 'h', 'l', 'c', 's', 'a', 'enter', 'f']) {
+      expect(() => {
+        act(() =>
+          useShortcutRegistry
+            .getState()
+            .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
+            ?.run(),
+        );
+      }).not.toThrow();
+    }
+  });
+
+  it('未提供可选动作时，选中卡的 S/A/Enter/F 也不会抛错', () => {
+    render({ cardsByKey: { todo: [card('a', 1)] } });
+    fireEvent.focus(screen.getByTestId('board-card-a'));
+    for (const combo of ['s', 'a', 'enter', 'f']) {
+      act(() =>
+        useShortcutRegistry
+          .getState()
+          .shortcuts.find((entry) => entry.group === 'board' && entry.combo === combo)
+          ?.run(),
+      );
+    }
+    expect(screen.getByTestId('board-card-a')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('紧凑视口通过单泳道渲染列体', () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: true,
+        media: '(max-width: 599px)',
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
+    render({ cardsByKey: { todo: [card('a', 1)] } });
+    expect(screen.getByTestId('board-compact')).toBeInTheDocument();
+    expect(screen.getByTestId('compact-body')).toContainElement(screen.getByTestId('board-card-a'));
   });
 
   it('折叠列不渲染列体;展开/折叠回调', () => {
@@ -112,7 +329,10 @@ describe('BoardColumns 渲染', () => {
   });
 
   it('priority 分组列走 i18n 标签', () => {
-    render({ groupBy: 'priority', columns: [column({ key: 'high', label: 'board.priority.high' })] });
+    render({
+      groupBy: 'priority',
+      columns: [column({ key: 'high', label: 'board.priority.high' })],
+    });
     expect(screen.getByTestId('board-column-high')).toHaveTextContent('High');
   });
 
@@ -162,13 +382,17 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
 
     fireEvent.pointerMove(document, { clientX: 250, clientY: 150 }); // 命中 done,index 1
     expect(screen.getByTestId('board-drop-indicator')).toBeInTheDocument();
-    expect(screen.getByTestId('board-column-done').className).toContain('mesh-board__column--drag-over');
+    expect(screen.getByTestId('board-column-done').className).toContain(
+      'mesh-board__column--drag-over',
+    );
 
     fireEvent.pointerUp(document, { clientX: 250, clientY: 150 });
     // 中点定位:(10+20)/2 = 15。
     expect(onDropCard).toHaveBeenCalledWith('a', 'done', 15);
     // §9.4.4 回位动画:浮层先进入 returning(滑回源卡),动画结束后清除。
-    expect(screen.getByTestId('board-drag-clone').className).toContain('mesh-board-drag__clone--returning');
+    expect(screen.getByTestId('board-drag-clone').className).toContain(
+      'mesh-board-drag__clone--returning',
+    );
     act(() => {
       vi.advanceTimersByTime(200);
     });
@@ -191,7 +415,9 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     expect(screen.getByTestId('board-drag-clone')).toBeInTheDocument();
     fireEvent.keyDown(document, { key: 'Escape' });
     // 取消也经回位动画后清除(§9.4.4)。
-    expect(screen.getByTestId('board-drag-clone').className).toContain('mesh-board-drag__clone--returning');
+    expect(screen.getByTestId('board-drag-clone').className).toContain(
+      'mesh-board-drag__clone--returning',
+    );
     act(() => {
       vi.advanceTimersByTime(200);
     });
@@ -226,6 +452,24 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     expect(onDropCard).toHaveBeenCalledWith('a', 'done', 15);
   });
 
+  it('触摸长按打开等价移动 sheet，选列后落库路径并关闭', () => {
+    const { onDropCard, cardA } = setupDragScene();
+    fireEvent.pointerDown(cardA, {
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+      pointerType: 'touch',
+    });
+    act(() => {
+      vi.advanceTimersByTime(350);
+    });
+    expect(screen.getByTestId('board-touch-sheet')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('touch-column-done'));
+    expect(onDropCard).toHaveBeenCalledWith('a', 'done', 21);
+    expect(screen.queryByTestId('board-touch-sheet')).not.toBeInTheDocument();
+    fireEvent.pointerUp(document, { clientX: 10, clientY: 10 });
+  });
+
   it('拖到列间隙(未命中任何列)抬起 → 不落点', () => {
     const { onDropCard, cardA } = setupDragScene();
     fireEvent.pointerDown(cardA, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
@@ -246,7 +490,12 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
       <BoardColumns
         columns={[
           column({ key: 'todo' }),
-          column({ key: 'in_progress', label: 'board.category.in_progress', wip: { limit: 1, enforcement: 'block' }, count: 1 }),
+          column({
+            key: 'in_progress',
+            label: 'board.category.in_progress',
+            wip: { limit: 1, enforcement: 'block' },
+            count: 1,
+          }),
         ]}
         groupBy="state_category"
         cardsByKey={{ todo: [card('a', 2)], in_progress: [card('x', 5)] }}
@@ -259,7 +508,12 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     );
     mockRect(screen.getByTestId('board-card-a'), { left: 0, top: 0, right: 100, bottom: 40 });
     mockRect(screen.getByTestId('board-column-todo'), { left: 0, top: 0, right: 100, bottom: 600 });
-    mockRect(screen.getByTestId('board-column-in_progress'), { left: 200, top: 0, right: 300, bottom: 600 });
+    mockRect(screen.getByTestId('board-column-in_progress'), {
+      left: 200,
+      top: 0,
+      right: 300,
+      bottom: 600,
+    });
     const cardA = screen.getByTestId('board-card-a');
     fireEvent.pointerDown(cardA, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
     fireEvent.pointerMove(document, { clientX: 20, clientY: 10 });
@@ -278,7 +532,12 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
       <BoardColumns
         columns={[
           column({ key: 'todo' }),
-          column({ key: 'in_progress', label: 'board.category.in_progress', wip: { limit: 1, enforcement: 'warn' }, count: 1 }),
+          column({
+            key: 'in_progress',
+            label: 'board.category.in_progress',
+            wip: { limit: 1, enforcement: 'warn' },
+            count: 1,
+          }),
         ]}
         groupBy="state_category"
         cardsByKey={{ todo: [card('a', 2)], in_progress: [card('x', 5)] }}
@@ -291,14 +550,21 @@ describe('BoardColumns 指针拖拽(§9.4)', () => {
     );
     mockRect(screen.getByTestId('board-card-a'), { left: 0, top: 0, right: 100, bottom: 40 });
     mockRect(screen.getByTestId('board-column-todo'), { left: 0, top: 0, right: 100, bottom: 600 });
-    mockRect(screen.getByTestId('board-column-in_progress'), { left: 200, top: 0, right: 300, bottom: 600 });
+    mockRect(screen.getByTestId('board-column-in_progress'), {
+      left: 200,
+      top: 0,
+      right: 300,
+      bottom: 600,
+    });
     const cardA = screen.getByTestId('board-card-a');
     fireEvent.pointerDown(cardA, { clientX: 10, clientY: 10, button: 0, pointerType: 'mouse' });
     fireEvent.pointerMove(document, { clientX: 20, clientY: 10 });
     fireEvent.pointerMove(document, { clientX: 250, clientY: 300 });
     const strip = screen.getByTestId('board-wip-strip-in_progress');
     expect(strip.className).toContain('warn');
-    expect(strip.textContent).toContain('This column will exceed its WIP limit (warning, drop allowed)');
+    expect(strip.textContent).toContain(
+      'This column will exceed its WIP limit (warning, drop allowed)',
+    );
     expect(screen.getByTestId('board-drop-indicator')).toBeInTheDocument();
     fireEvent.pointerUp(document, { clientX: 250, clientY: 300 });
     // 空位(卡 x 之下)→ 末张+1 = 6。
@@ -314,7 +580,10 @@ describe('BoardColumns 键盘移动模式(§9.4.5/§10.2)', () => {
     const onDropCard = vi.fn();
     renderWithProviders(
       <BoardColumns
-        columns={[column({ key: 'todo' }), column({ key: 'in_progress', label: 'board.category.in_progress' })]}
+        columns={[
+          column({ key: 'todo' }),
+          column({ key: 'in_progress', label: 'board.category.in_progress' }),
+        ]}
         groupBy="state_category"
         cardsByKey={{ todo: [card('a', 2)], in_progress: [] }}
         canWrite
@@ -334,11 +603,29 @@ describe('BoardColumns 键盘移动模式(§9.4.5/§10.2)', () => {
     expect(cardA.className).toContain('mesh-board__card--selected');
     // 再按右键 → 目标列切到 in_progress。
     fireEvent.keyDown(cardA, { key: 'ArrowRight' });
-    expect(screen.getByTestId('board-column-in_progress').className).toContain('mesh-board__column--move-target');
+    expect(screen.getByTestId('board-column-in_progress').className).toContain(
+      'mesh-board__column--move-target',
+    );
     fireEvent.keyDown(cardA, { key: 'Enter' });
     // 空列 → computeDropPosition([], null) = 1。
     expect(onDropCard).toHaveBeenCalledWith('a', 'in_progress', 1);
     expect(screen.getByTestId('board-live').textContent).toContain('Moved WEB-a to In Progress');
+  });
+
+  it('移动模式已消费的 Enter 不再冒泡到 window 全局快捷键层', () => {
+    const { onDropCard, cardA } = setupMove();
+    const bubbled = vi.fn();
+    window.addEventListener('keydown', bubbled);
+    try {
+      fireEvent.keyDown(cardA, { key: 'ArrowRight' });
+      fireEvent.keyDown(cardA, { key: 'ArrowRight' });
+      bubbled.mockClear();
+      fireEvent.keyDown(cardA, { key: 'Enter' });
+      expect(onDropCard).toHaveBeenCalledTimes(1);
+      expect(bubbled).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', bubbled);
+    }
   });
 
   it('上下键调整列内位置', () => {
@@ -371,18 +658,15 @@ describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移�
 
   /** 真实分发链路:卡片 React onKeyDown + window 级 ShortcutProvider 同栈共存。 */
   function setupArbitration() {
-    const openCard = vi.fn();
     const onDropCard = vi.fn();
-    act(() => {
-      useShortcutRegistry.getState().registerShortcuts([
-        { id: 'board.open.card', combo: 'enter', label: 'open', group: 'board', run: openCard },
-      ]);
-      useShortcutRegistry.getState().setContexts(['board']);
-    });
     renderWithProviders(
       <ShortcutProvider isMac={false}>
+        <LocationProbe />
         <BoardColumns
-          columns={[column({ key: 'todo' }), column({ key: 'in_progress', label: 'board.category.in_progress' })]}
+          columns={[
+            column({ key: 'todo' }),
+            column({ key: 'in_progress', label: 'board.category.in_progress' }),
+          ]}
           groupBy="state_category"
           cardsByKey={{ todo: [card('a', 2)], in_progress: [] }}
           canWrite
@@ -392,34 +676,39 @@ describe('BoardColumns ↔ 快捷键分发仲裁(§4.3.1 一键一 handler:移�
           onQuickCreate={vi.fn()}
         />
       </ShortcutProvider>,
+      { route: '/board' },
     );
-    return { openCard, onDropCard, cardA: screen.getByTestId('board-card-a') };
+    return {
+      onDropCard,
+      cardA: screen.getByTestId('board-card-a'),
+      location: screen.getByTestId('location-probe'),
+    };
   }
 
-  it('移动模式中 Enter 只确认移动,不触发 board.open.card(一次按键一个 handler)', () => {
-    const { openCard, onDropCard, cardA } = setupArbitration();
+  it('移动模式中 Enter 只确认移动,不触发 board.open(一次按键一个 handler)', () => {
+    const { onDropCard, cardA, location } = setupArbitration();
     fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 进入移动模式
     fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 选目标列 in_progress
     fireEvent.keyDown(cardA, { key: 'Enter' }); // 确认移动
     expect(onDropCard).toHaveBeenCalledWith('a', 'in_progress', 1);
     expect(screen.getByTestId('board-live').textContent).toContain('Moved WEB-a to In Progress');
-    expect(openCard).not.toHaveBeenCalled();
+    expect(location).toHaveTextContent('/board');
   });
 
   it('移动模式中方向键不穿透为选中移动(排他消费,选中态不散失)', () => {
-    const { openCard, cardA } = setupArbitration();
+    const { cardA, location } = setupArbitration();
     fireEvent.keyDown(cardA, { key: 'ArrowDown' }); // 进入移动模式
     fireEvent.keyDown(cardA, { key: 'ArrowRight' }); // 选目标列
     // 最近播报为目标列(移动模式内);卡片保持选中;window 分发器未另触发打开。
     expect(screen.getByTestId('board-live').textContent).toContain('Target column In Progress');
     expect(cardA.className).toContain('mesh-board__card--selected');
-    expect(openCard).not.toHaveBeenCalled();
+    expect(location).toHaveTextContent('/board');
   });
 
-  it('非移动模式 Enter 打开卡片:board.open.card 正常触发(既有行为不回归)', () => {
-    const { openCard, onDropCard, cardA } = setupArbitration();
+  it('非移动模式 Enter 打开卡片:board.open 正常触发(既有行为不回归)', () => {
+    const { onDropCard, cardA, location } = setupArbitration();
     fireEvent.keyDown(cardA, { key: 'Enter' });
-    expect(openCard).toHaveBeenCalledTimes(1);
+    expect(location).toHaveTextContent('/issues/a');
     expect(onDropCard).not.toHaveBeenCalled();
   });
 });
@@ -486,6 +775,20 @@ describe('BoardColumns 虚拟化开关(§11.4)', () => {
     render({ cardsByKey: { todo: many } });
     expect(screen.getByTestId('virtual-column-body')).toBeInTheDocument();
     expect(screen.getByTestId('board-card-c0')).toBeInTheDocument();
+    expect(screen.queryByTestId('board-card-c249')).not.toBeInTheDocument();
+  });
+
+  it('可切换为完整读屏列表并连续挂载全部卡片，再切回高性能窗口', () => {
+    const many = Array.from({ length: 250 }, (_, i) => card(`c${i}`, i + 1));
+    render({ cardsByKey: { todo: many } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use complete screen reader list' }));
+    expect(screen.queryByTestId('virtual-column-body')).not.toBeInTheDocument();
+    expect(screen.getByTestId('board-card-c249')).toBeInTheDocument();
+    expect(screen.getByTestId('board-columns-wrap')).toHaveAttribute('data-a11y-list-mode', 'full');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use high-performance virtual list' }));
+    expect(screen.getByTestId('virtual-column-body')).toBeInTheDocument();
     expect(screen.queryByTestId('board-card-c249')).not.toBeInTheDocument();
   });
 

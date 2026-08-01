@@ -96,17 +96,23 @@ function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
 
   return (
     <tr className="mesh-runtimes__row" data-testid={`runtime-row-${runtime.id}`}>
-      <td className="mesh-runtimes__cell-status">
+      <td className="mesh-runtimes__cell-status" data-label={t('runtimes.col.status')}>
         <StatusDot
           tone={STATUS_TONE[runtime.status]}
           label={t(`runtimes.status.${runtime.status}`)}
         />
       </td>
-      <td className="mesh-runtimes__cell-name" data-testid={`runtime-name-${runtime.id}`}>
+      <td
+        className="mesh-runtimes__cell-name"
+        data-label={t('runtimes.col.name')}
+        data-testid={`runtime-name-${runtime.id}`}
+      >
         {runtime.name}
       </td>
-      <td className="mesh-runtimes__cell-kind">{t(`runtimes.kind.${runtime.kind}`)}</td>
-      <td className="mesh-runtimes__cell-load">
+      <td className="mesh-runtimes__cell-kind" data-label={t('runtimes.col.kind')}>
+        {t(`runtimes.kind.${runtime.kind}`)}
+      </td>
+      <td className="mesh-runtimes__cell-load" data-label={t('runtimes.col.load')}>
         <div
           className="mesh-runtimes__load"
           role="meter"
@@ -122,10 +128,14 @@ function RuntimeRow(props: RuntimeRowProps): React.JSX.Element {
           {runtime.current_load}/{runtime.max_concurrent}
         </span>
       </td>
-      <td className="mesh-runtimes__cell-heartbeat" data-testid={`runtime-heartbeat-${runtime.id}`}>
+      <td
+        className="mesh-runtimes__cell-heartbeat"
+        data-label={t('runtimes.col.heartbeat')}
+        data-testid={`runtime-heartbeat-${runtime.id}`}
+      >
         {heartbeatLabel}
       </td>
-      <td className="mesh-runtimes__cell-actions">
+      <td className="mesh-runtimes__cell-actions" data-label={t('runtimes.col.actions')}>
         <Button
           variant="ghost"
           size="sm"

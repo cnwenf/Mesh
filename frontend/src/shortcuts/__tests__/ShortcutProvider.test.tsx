@@ -150,6 +150,46 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
     expect(onOpenPalette).toHaveBeenCalledTimes(1);
   });
 
+  it('原生与 ARIA 交互控件的 Enter/Space 保留给控件，不触发页面裸键', () => {
+    const runEnter = vi.fn();
+    const runSpace = vi.fn();
+    registerShortcuts([
+      { id: 'open', combo: 'enter', label: 'Open selected', group: 'global', run: runEnter },
+      { id: 'toggle', combo: 'space', label: 'Toggle selected', group: 'global', run: runSpace },
+    ]);
+    render(
+      <ShortcutProvider isMac={false}>
+        <button type="button">Native button</button>
+        <a href="/target">Native link</a>
+        <details>
+          <summary>Native summary</summary>
+          Details
+        </details>
+        <div role="button" tabIndex={0}>
+          Custom button
+        </div>
+        <div tabIndex={0}>Plain focus target</div>
+      </ShortcutProvider>,
+    );
+
+    for (const element of [
+      screen.getByRole('button', { name: 'Native button' }),
+      screen.getByRole('link', { name: 'Native link' }),
+      screen.getByText('Native summary'),
+      screen.getByRole('button', { name: 'Custom button' }),
+    ]) {
+      fireEvent.keyDown(element, { key: 'Enter' });
+      fireEvent.keyDown(element, { key: ' ' });
+    }
+    expect(runEnter).not.toHaveBeenCalled();
+    expect(runSpace).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByText('Plain focus target'), { key: 'Enter' });
+    fireEvent.keyDown(screen.getByText('Plain focus target'), { key: ' ' });
+    expect(runEnter).toHaveBeenCalledTimes(1);
+    expect(runSpace).toHaveBeenCalledTimes(1);
+  });
+
   it('裸 ? 打开帮助层;输入框内 ? 不触发', () => {
     const onOpenHelp = vi.fn();
     render(
@@ -411,6 +451,52 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
     );
     fireEvent.keyDown(window, { key: 'j', ctrlKey: true });
     expect(runJump).toHaveBeenCalledTimes(1);
+  });
+
+  it('页面上下文快捷键覆盖同 combo 的 global 快捷键(§4.3.1 特异性仲裁)', () => {
+    const runGlobal = vi.fn();
+    const runBoard = vi.fn();
+    registerShortcuts([
+      { id: 'global-create', combo: 'c', label: 'New issue', group: 'global', run: runGlobal },
+      { id: 'board-create', combo: 'c', label: 'New card here', group: 'board', run: runBoard },
+    ]);
+    act(() => useShortcutRegistry.getState().setContexts(['board']));
+    render(
+      <ShortcutProvider isMac={false}>
+        <div />
+      </ShortcutProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: 'c' });
+
+    expect(runBoard).toHaveBeenCalledTimes(1);
+    expect(runGlobal).not.toHaveBeenCalled();
+  });
+
+  it('组件已处理并 preventDefault 的按键不会被 window 快捷键重复提交', () => {
+    const runSubmit = vi.fn();
+    registerShortcuts([
+      {
+        id: 'issue-submit',
+        combo: 'mod+enter',
+        label: 'Submit comment',
+        group: 'issue',
+        run: runSubmit,
+      },
+    ]);
+    act(() => useShortcutRegistry.getState().setContexts(['issue']));
+    render(
+      <ShortcutProvider isMac={false}>
+        <textarea aria-label="composer" onKeyDown={(event) => event.preventDefault()} />
+      </ShortcutProvider>,
+    );
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'composer' }), {
+      key: 'Enter',
+      ctrlKey: true,
+    });
+
+    expect(runSubmit).not.toHaveBeenCalled();
   });
 
   it('alt 组合按 combo 路由,且终结序列待决态', () => {

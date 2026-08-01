@@ -674,6 +674,23 @@
   animation: mesh-board-spin var(--motion-standard) linear infinite;
 }
 
+/* 大列表读屏连续性:默认保留虚拟化性能，用户可显式切换全量 DOM。 */
+.mesh-board__a11y-list-toggle {
+  align-self: flex-start;
+  min-block-size: 44px;
+  margin-block-end: var(--space-2);
+  padding-inline: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+}
+
+.mesh-board__a11y-list-toggle:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
 @keyframes mesh-board-spin {
   to {
     transform: rotate(360deg);

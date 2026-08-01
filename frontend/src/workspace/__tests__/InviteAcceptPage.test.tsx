@@ -189,6 +189,20 @@ describe('InviteAcceptPage(邀请接受页,§4.3/§4.4)', () => {
     await waitFor(() => expect(screen.getByTestId('invite-reason-exhausted')).toBeTruthy());
   });
 
+  it('接受 invitation_invalid 缺少 reason → not_found 兜底', async () => {
+    useAuthStore.getState().setToken('jwt-user');
+    const fetchImpl = stubFetch(
+      { status: 200, body: { data: PREVIEW_VALID } },
+      {
+        status: 422,
+        body: { error: { code: 'invitation_invalid', message: 'invalid' } },
+      },
+    );
+    renderInvite(fetchImpl);
+    await userEvent.click(await screen.findByTestId('invite-accept'));
+    expect(await screen.findByTestId('invite-reason-not_found')).toBeTruthy();
+  });
+
   it('接受其他错误 → not_found 同形兜底', async () => {
     useAuthStore.getState().setToken('jwt-user');
     const user = userEvent.setup();

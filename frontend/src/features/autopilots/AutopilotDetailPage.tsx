@@ -303,13 +303,17 @@ export function AutopilotDetailPage(): React.JSX.Element {
           </dd>
           <dt>{t('autopilots.detail.triggerConfig')}</dt>
           <dd>
-            <pre className="mesh-autopilots__json" data-testid="autopilot-detail-trigger-config">
+            <pre
+              className="mesh-autopilots__json"
+              data-testid="autopilot-detail-trigger-config"
+              tabIndex={0}
+            >
               {JSON.stringify(rule.trigger_config, null, 2)}
             </pre>
           </dd>
           <dt>{t('autopilots.detail.filterConfig')}</dt>
           <dd>
-            <pre className="mesh-autopilots__json">
+            <pre className="mesh-autopilots__json" tabIndex={0}>
               {JSON.stringify(rule.filter_config, null, 2)}
             </pre>
           </dd>
@@ -323,7 +327,9 @@ export function AutopilotDetailPage(): React.JSX.Element {
           </dd>
           <dt>{t('autopilots.detail.guardrails')}</dt>
           <dd>
-            <pre className="mesh-autopilots__json">{JSON.stringify(rule.guardrails, null, 2)}</pre>
+            <pre className="mesh-autopilots__json" tabIndex={0}>
+              {JSON.stringify(rule.guardrails, null, 2)}
+            </pre>
           </dd>
           <dt>{t('autopilots.detail.retry')}</dt>
           <dd>

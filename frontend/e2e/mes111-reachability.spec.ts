@@ -84,6 +84,12 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.getByText('Page not found')).toHaveCount(0);
     await page.getByTestId('mobile-nav-more').click();
+    await page.getByTestId('mobile-drawer-nav-members').click();
+    await page.waitForURL('**/w/acme/members');
+    await expect(page.getByRole('heading', { level: 1, name: 'Members' })).toBeVisible();
+    await expect(page.getByTestId('member-card-member-human-1')).toBeVisible();
+    await page.screenshot({ path: `${EVIDENCE_DIR}/phone-members-drawer-flow-light.png` });
+    await page.getByTestId('mobile-nav-more').click();
     await page.getByTestId('mobile-drawer-nav-settings').click();
     await page.waitForURL('**/settings');
   });

@@ -279,10 +279,46 @@ const ISSUE_ACTIVITY = [
 ];
 
 const PROJECTS = [
-  { id: 'project-1', name: '平台', key: 'PLAT', created_at: isoAt(0), updated_at: isoAt(0) },
+  {
+    id: 'project-1',
+    workspace_id: WORKSPACE_ID,
+    name: '平台',
+    key: 'PLAT',
+    description: '核心协作平台',
+    icon: null,
+    color: '#2563eb',
+    status: 'active',
+    health: 'on_track',
+    visibility: 'public',
+    lead: { id: 'member-human-1', name: 'Ana', member_type: 'human' },
+    lead_member_id: 'member-human-1',
+    start_date: '2026-07-01',
+    target_date: '2026-08-31',
+    progress: 0.6,
+    open_issues: 2,
+    done_issues: 3,
+    issue_seq: 5,
+    archived: false,
+    archived_at: null,
+    my_role: 'lead',
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
 ];
 
-const CYCLES = [{ id: 'cycle-1', name: 'Sprint 1', created_at: isoAt(0), updated_at: isoAt(0) }];
+const CYCLES = [
+  {
+    id: 'cycle-1',
+    project_id: null,
+    name: 'Sprint 1',
+    starts_at: '2026-07-21',
+    ends_at: '2026-08-03',
+    state: 'active',
+    auto_roll: true,
+    created_at: isoAt(0),
+    updated_at: isoAt(0),
+  },
+];
 
 const ISSUE_COMMENTS = [
   {

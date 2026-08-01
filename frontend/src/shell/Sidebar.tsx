@@ -16,6 +16,7 @@ import { NavLink, useLocation } from 'react-router';
 import { Icon, Tooltip } from '../design';
 import { useT } from '../i18n';
 import { useOptionalWorkspace } from '../workspace/WorkspaceProvider';
+import { isNavItemEnabled, useWorkspaceFeatureFlagsContext } from '../workspace/featureFlags';
 import { NAV_GROUPS, resolveNavTarget } from './navigation';
 import type { NavItemDef } from './navigation';
 
@@ -35,6 +36,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
   const t = useT();
   const location = useLocation();
   const workspaceContext = useOptionalWorkspace();
+  const featureFlags = useWorkspaceFeatureFlagsContext();
   const workspace = workspaceContext !== null ? workspaceContext.workspace : null;
   const showWorkspaceSettings =
     workspaceContext !== null && workspace !== null && workspaceContext.isAdmin;
@@ -72,11 +74,13 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             <h2 className="mesh-sidebar__group-title">{t('nav.group.' + group.key)}</h2>
           )}
           <ul className="mesh-sidebar__list">
-            {group.items.map((item) => (
-              <li key={item.key} className="mesh-sidebar__item">
-                {renderItem(item, item.key)}
-              </li>
-            ))}
+            {group.items
+              .filter((item) => isNavItemEnabled(item.key, featureFlags))
+              .map((item) => (
+                <li key={item.key} className="mesh-sidebar__item">
+                  {renderItem(item, item.key)}
+                </li>
+              ))}
             {group.key === 'admin' && showWorkspaceSettings && workspace !== null ? (
               <li className="mesh-sidebar__item">
                 {collapsed ? (

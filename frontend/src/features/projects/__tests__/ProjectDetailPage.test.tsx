@@ -199,6 +199,23 @@ describe('ProjectDetailPage', () => {
     expect(screen.getByText('Moon landing')).toBeDefined();
   });
 
+  it('opens and closes project export and import dialogs', async () => {
+    stubFetch();
+    const user = userEvent.setup();
+    renderDetail();
+    await screen.findByText('Apollo');
+
+    await user.click(screen.getByTestId('export-project-button'));
+    const exportDialog = await screen.findByRole('dialog', { name: 'Export data' });
+    await user.click(within(exportDialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Export data' })).toBeNull());
+
+    await user.click(screen.getByTestId('import-project-button'));
+    const importDialog = await screen.findByRole('dialog', { name: 'Import data' });
+    await user.click(within(importDialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Import data' })).toBeNull());
+  });
+
   it('shows milestones with overdue marking on the milestones tab', async () => {
     stubFetch();
     renderDetail();
@@ -319,9 +336,7 @@ describe('ProjectDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderDetail();
-    expect(
-      await screen.findByText('You are not a member of any workspace yet.'),
-    ).toBeDefined();
+    expect(await screen.findByText('You are not a member of any workspace yet.')).toBeDefined();
   });
 
   it('shows the dialog error when posting a health update fails', async () => {
@@ -362,7 +377,10 @@ describe('ProjectDetailPage', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       }
       if (method !== 'GET' && url.includes('/milestones')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -386,7 +404,9 @@ describe('ProjectDetailPage', () => {
     await user.click(screen.getByTestId('milestone-delete-ms-1'));
     await user.click(await screen.findByTestId('milestone-delete-confirm'));
     await waitFor(() => {
-      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText('An internal error occurred. Please try again.').length,
+      ).toBeGreaterThan(0);
     });
   });
 
@@ -396,7 +416,10 @@ describe('ProjectDetailPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST' && url.includes('/updates')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/updates')) {
         return fakeResponse({ body: { data: [], next_cursor: null } });
@@ -516,7 +539,6 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('delete-confirm')).toBeNull();
     expect(callsTo(calls, 'DELETE', '/projects/').length).toBe(0);
   });
-
 });
 
 // ---- 实时帧合并(project:{id} 频道,§3.5/§6.7)----

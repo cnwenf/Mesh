@@ -1,0 +1,1378 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-01T23:03:31.432Z",
+  "stack": {
+    "auth_mode": "production",
+    "browser_entrypoint": "frontend-loopback-only",
+    "mocked_routes": 0,
+    "database": "PostgreSQL",
+    "host_published_ports": [
+      "127.0.0.1:18430->frontend:80/tcp"
+    ],
+    "private_services": [
+      "PostgreSQL",
+      "Redis",
+      "MinIO",
+      "API",
+      "gateway"
+    ]
+  },
+  "projects": {
+    "phone-320": {
+      "viewport": {
+        "width": 320,
+        "height": 720
+      },
+      "journey": [
+        "keyboard login",
+        "keyboard issue create",
+        "arrow-key non-drag board move",
+        "Ctrl+Enter comment",
+        "keyboard workspace switch",
+        "slash search, ArrowDown selection, Enter activation"
+      ],
+      "api_responses": [
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/auth/register"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/auth/login"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "PATCH",
+          "status": 400,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "PATCH",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/views"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/issues"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/executions?limit=5"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/approvals?role=mine"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?sort=created_at&order=desc&limit=5"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/projects?limit=6"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?sort=created_at&order=desc&limit=25"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/statuses"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/onboarding/steps/create_first_issue/complete?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/views?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/views/8a6ada7d-a845-482d-90ff-58a1c0827407/issues?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/views/8a6ada7d-a845-482d-90ff-58a1c0827407/issues?limit=200"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/views/8a6ada7d-a845-482d-90ff-58a1c0827407/moves"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/statuses"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/dependencies"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/projects?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/children"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/activity"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/cycles?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/labels?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/squads/assignments/by-issue/19caf696-bb0c-40e8-a494-8c7aa7571afc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/comments?limit=50&include=replies&order=asc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/attachments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/custom-field-values"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/integrations?limit=50"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/labels"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/vcs-links"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/issues/19caf696-bb0c-40e8-a494-8c7aa7571afc/comments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/by-slug/m128b-phone320-msaz9eu0-v0njc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/favorites?workspace_id=ae642a01-a404-4d17-9c3c-33f94687b82f"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/search?q=Search+target+phone320-msaz9eu0-v0njc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/issues/by-identifier/WS-1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/dependencies"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/statuses"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/children"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/projects?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/activity"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/cycles?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=8fda8009-f11d-4421-96d5-9ddd601a9184"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/8fda8009-f11d-4421-96d5-9ddd601a9184/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/labels?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/squads/assignments/by-issue/9a833b39-41d4-4089-bc38-0a9496bd8769"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/labels"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/attachments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/comments?limit=50&include=replies&order=asc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/custom-field-values"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/ae642a01-a404-4d17-9c3c-33f94687b82f/integrations?limit=50"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/9a833b39-41d4-4089-bc38-0a9496bd8769/vcs-links"
+        }
+      ],
+      "database": {
+        "user_count": 1,
+        "session_count": 1,
+        "membership_count": 2,
+        "autopilot_enabled": false,
+        "first_issue": {
+          "id": "19caf696-bb0c-40e8-a494-8c7aa7571afc",
+          "workspace_id": "8fda8009-f11d-4421-96d5-9ddd601a9184",
+          "title": "Keyboard issue phone320-msaz9eu0-v0njc",
+          "state_category": "in_progress",
+          "version": 2
+        },
+        "comment_count": 1,
+        "second_issue_count": 1
+      },
+      "database_assertions": {
+        "user_count": "equals 1",
+        "active_session_count": "equals 1 after login rotation",
+        "active_membership_count": "equals 2 across the two workspaces",
+        "first_workspace_autopilot_flag": "equals false after rejecting a non-boolean value",
+        "first_issue_state": "equals in_progress with version incremented by 1",
+        "exact_comment_count": "equals 1 for the submitted body",
+        "second_workspace_search_issue": "exists exactly once in the second workspace"
+      },
+      "screenshots": [
+        {
+          "file": "phone-320-01-login.png",
+          "sha256": "f9cdc2f73470c6427b6d2906d31e5211f8d18c3af28df00a0f96915734cd4df7",
+          "width": 320,
+          "height": 720
+        },
+        {
+          "file": "phone-320-02-issue-created.png",
+          "sha256": "7e8266259f82caa66464aca7ccd9309ea223a916f92289c6af890b8895cf0344",
+          "width": 320,
+          "height": 720
+        },
+        {
+          "file": "phone-320-03-keyboard-moved.png",
+          "sha256": "f8b0be46858d6501a42ca71260646f9781a3f263f0da8384cfb880542507550f",
+          "width": 320,
+          "height": 2116
+        },
+        {
+          "file": "phone-320-04-comment.png",
+          "sha256": "abbd836ae8b544df724e0342fde29aca79f9a72495fe62c1172f38d5775b44d5",
+          "width": 320,
+          "height": 2829
+        },
+        {
+          "file": "phone-320-05-workspace-switched.png",
+          "sha256": "928cb5ad6e76f4f5870f7362e2e09608c4f34247b1e7e84994c8feb7d9289ced",
+          "width": 320,
+          "height": 720
+        },
+        {
+          "file": "phone-320-06-search-opened.png",
+          "sha256": "b6bbd33ad65a39f98a3deddaf971392e8bf7297001a84d24eae6420fc6a8576b",
+          "width": 320,
+          "height": 2336
+        }
+      ]
+    },
+    "phone-390": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "journey": [
+        "keyboard login",
+        "keyboard issue create",
+        "arrow-key non-drag board move",
+        "Ctrl+Enter comment",
+        "keyboard workspace switch",
+        "slash search, ArrowDown selection, Enter activation"
+      ],
+      "api_responses": [
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/auth/register"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/auth/login"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "PATCH",
+          "status": 400,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "PATCH",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/views"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/issues"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/executions?limit=5"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/projects?limit=6"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?sort=created_at&order=desc&limit=5"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/approvals?role=mine"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/statuses"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?sort=created_at&order=desc&limit=25"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/onboarding/steps/create_first_issue/complete?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/views?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/views/c4ebd290-ffa9-4d85-b8fe-3b54882956d2/issues?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/views/c4ebd290-ffa9-4d85-b8fe-3b54882956d2/issues?limit=200"
+        },
+        {
+          "method": "POST",
+          "status": 200,
+          "path": "/api/v1/views/c4ebd290-ffa9-4d85-b8fe-3b54882956d2/moves"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/statuses"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/dependencies"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/activity"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/projects?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/children"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/cycles?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/labels?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/squads/assignments/by-issue/5690b550-3802-41a6-99ef-8d28c82455b2"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/comments?limit=50&include=replies&order=asc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/attachments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/labels"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/custom-field-values"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/integrations?limit=50"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/vcs-links"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "POST",
+          "status": 201,
+          "path": "/api/v1/issues/5690b550-3802-41a6-99ef-8d28c82455b2/comments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/by-slug/m128b-phone390-msaz9iep-1hx2m"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/favorites?workspace_id=29b68b47-5a97-4e56-8768-4d0862d54221"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/search?q=Search+target+phone390-msaz9iep-1hx2m"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/issues/by-identifier/WS-1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/statuses"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/children"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/dependencies"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/activity"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/users/me"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/projects?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/cycles?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/inbox/unread-count?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/members?limit=100"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/labels?limit=200"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/squads/assignments/by-issue/876ae65c-94ba-40a3-8023-88282a076acb"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/comments?limit=50&include=replies&order=asc"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/attachments"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/labels"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/custom-field-values"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/29b68b47-5a97-4e56-8768-4d0862d54221/integrations?limit=50"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/workspaces/e0693e9d-d269-45ab-bcfe-3bf98e989c45/issues?limit=1"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/issues/876ae65c-94ba-40a3-8023-88282a076acb/vcs-links"
+        },
+        {
+          "method": "GET",
+          "status": 200,
+          "path": "/api/v1/onboarding/state?workspace_id=e0693e9d-d269-45ab-bcfe-3bf98e989c45"
+        }
+      ],
+      "database": {
+        "user_count": 1,
+        "session_count": 1,
+        "membership_count": 2,
+        "autopilot_enabled": false,
+        "first_issue": {
+          "id": "5690b550-3802-41a6-99ef-8d28c82455b2",
+          "workspace_id": "e0693e9d-d269-45ab-bcfe-3bf98e989c45",
+          "title": "Keyboard issue phone390-msaz9iep-1hx2m",
+          "state_category": "in_progress",
+          "version": 2
+        },
+        "comment_count": 1,
+        "second_issue_count": 1
+      },
+      "database_assertions": {
+        "user_count": "equals 1",
+        "active_session_count": "equals 1 after login rotation",
+        "active_membership_count": "equals 2 across the two workspaces",
+        "first_workspace_autopilot_flag": "equals false after rejecting a non-boolean value",
+        "first_issue_state": "equals in_progress with version incremented by 1",
+        "exact_comment_count": "equals 1 for the submitted body",
+        "second_workspace_search_issue": "exists exactly once in the second workspace"
+      },
+      "screenshots": [
+        {
+          "file": "phone-390-01-login.png",
+          "sha256": "61c5443a5298108b4f2356a8af43961e26c93b31b28a3fc3ccd3ae70163fb88f",
+          "width": 390,
+          "height": 844
+        },
+        {
+          "file": "phone-390-02-issue-created.png",
+          "sha256": "9396f9cd3b46114b38a7e2e78519c2a421f037ca5b1b082788fd156e79952e84",
+          "width": 390,
+          "height": 844
+        },
+        {
+          "file": "phone-390-03-keyboard-moved.png",
+          "sha256": "d86319c28e31e74f10d0cc1cc4c6ad35067c631c7ad20b89889f1736e75efc88",
+          "width": 390,
+          "height": 2020
+        },
+        {
+          "file": "phone-390-04-comment.png",
+          "sha256": "40291bac13dce408f86a10ec5ec93b78c3f820233ed4d4393c9f222320735048",
+          "width": 390,
+          "height": 2431
+        },
+        {
+          "file": "phone-390-05-workspace-switched.png",
+          "sha256": "ff311ad1b455f5789143b1ec14e64471eb43c67aac9eeed59e2b7a449f393da2",
+          "width": 390,
+          "height": 844
+        },
+        {
+          "file": "phone-390-06-search-opened.png",
+          "sha256": "ac7231660ae6910874245008e2c85a70b6112d0a2dcee10aeda68b860cdce815",
+          "width": 390,
+          "height": 1200
+        }
+      ]
+    }
+  }
+}

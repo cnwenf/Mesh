@@ -12,7 +12,11 @@ import type { FetchStub } from '../../../api/__tests__/fetchStub';
 import { ThemeProvider, ToastProvider } from '../../../design';
 import { I18nProvider, useT } from '../../../i18n';
 import type { MissingReporter } from '../../../i18n';
+import type { RealtimeClient } from '../../../realtime';
+import { RealtimeContext } from '../../../shell/AppShell';
+import type { RealtimeContextValue } from '../../../shell/AppShell';
 import { useSettingsStore } from '../../../state/settingsStore';
+import type { RealtimeEventFrame } from '../../../types/realtime';
 import { IssueDetailPage, categoryTone } from '../IssueDetailPage';
 
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
@@ -86,6 +90,56 @@ function renderDetail(): void {
             <Routes>
               <Route path="/issues/:issueId" element={<IssueDetailPage />} />
             </Routes>
+          </ToastLayer>
+        </I18nProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+interface FakeRealtime {
+  readonly value: RealtimeContextValue;
+  readonly client: {
+    readonly subscribe: ReturnType<typeof vi.fn>;
+    readonly unsubscribe: ReturnType<typeof vi.fn>;
+    readonly onFrame: ReturnType<typeof vi.fn>;
+  };
+  readonly emit: (frame: RealtimeEventFrame) => void;
+}
+
+function makeFakeRealtime(): FakeRealtime {
+  const listeners: Array<(frame: RealtimeEventFrame) => void> = [];
+  const client = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+    onFrame: vi.fn((listener: (frame: RealtimeEventFrame) => void) => {
+      listeners.push(listener);
+      return () => {
+        const index = listeners.indexOf(listener);
+        if (index >= 0) listeners.splice(index, 1);
+      };
+    }),
+  };
+  return {
+    value: { state: 'connected', client: client as unknown as RealtimeClient },
+    client,
+    emit: (frame) => {
+      for (const listener of listeners) listener(frame);
+    },
+  };
+}
+
+function renderDetailWithRealtime(realtime: RealtimeContextValue): ReturnType<typeof render> {
+  return render(
+    <MemoryRouter initialEntries={['/issues/iss-1']}>
+      <ThemeProvider>
+        <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
+          <ToastLayer>
+            <RealtimeContext.Provider value={realtime}>
+              <Routes>
+                <Route path="/issues/:issueId" element={<IssueDetailPage />} />
+              </Routes>
+            </RealtimeContext.Provider>
           </ToastLayer>
         </I18nProvider>
       </ThemeProvider>
@@ -350,6 +404,147 @@ describe('IssueDetailPage', () => {
     expect(screen.queryByTestId('issue-detail-activity')).toBeNull();
   });
 
+  it('renders sparse issue/member/activity envelopes through their defensive fallbacks', async () => {
+    const sparseIssue = {
+      ...DETAIL,
+      project_id: null,
+      project: null,
+      status: null,
+      status_id: null,
+      state_category: 'backlog',
+      description: null,
+      due_date: '2026-10-01',
+      assignee: { id: 'mem-email', name: 'Email match', member_type: 'human' },
+      assignee_id: 'mem-email',
+    };
+    const child = {
+      ...DETAIL,
+      id: 'iss-child',
+      identifier: 'APL-2',
+      number: 2,
+      title: 'Child issue',
+      state_category: 'done',
+    };
+    const members = {
+      data: [
+        {
+          ...MEMBERS_PAGE.data[0],
+          id: 'agent-1',
+          member_type: 'agent',
+          display_name: 'Robot',
+          profile: { id: 'usr-1', full_name: 'Robot', email: 'o@c.com', avatar_url: null },
+        },
+        {
+          ...MEMBERS_PAGE.data[0],
+          id: 'mem-no-profile',
+          display_name: 'No profile',
+          profile: null,
+        },
+        {
+          ...MEMBERS_PAGE.data[0],
+          id: 'mem-email',
+          display_name: 'Unmatched human',
+          profile: {
+            id: 'usr-other',
+            full_name: 'Unmatched human',
+            email: 'other@c.com',
+            avatar_url: null,
+          },
+        },
+      ],
+      next_cursor: null,
+    };
+    const stub = detailStub(
+      fakeResponse({ body: { data: sparseIssue } }),
+      fakeResponse({ body: { data: [STATUS_IN_PROGRESS], next_cursor: null } }),
+      fakeResponse({ body: { data: [child], next_cursor: null } }),
+      fakeResponse({
+        body: {
+          data: [
+            {
+              id: 'dep-fallback',
+              issue_id: 'iss-1',
+              depends_on_id: '12345678-1234-1234-1234-123456789012',
+              depends_on_identifier: null,
+              type: 'relates_to',
+              created_by: null,
+              created_at: '2026-07-01T00:00:00Z',
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+      fakeResponse({
+        body: {
+          data: [
+            {
+              id: null,
+              issue_id: 'iss-1',
+              actor: null,
+              field: 'status',
+              old_value: null,
+              new_value: 'backlog',
+              created_at: '2026-07-01T00:00:00Z',
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+      fakeResponse({ body: members }),
+      fakeResponse({ body: { data: [PROJECT_A, PROJECT_B], next_cursor: null } }),
+      fakeResponse({ body: { data: [CYCLE_1], next_cursor: null } }),
+      fakeResponse({ body: { data: ME_PAGE } }),
+      ...associationResponses(),
+      fakeResponse({ body: COMMENTS_EMPTY }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    expect(screen.getByTestId('issue-chip-status').textContent).toContain('Backlog');
+    expect(screen.getByTestId('issue-chip-assignee').textContent).toContain('Email match');
+    expect(screen.getByTestId('issue-chip-due').textContent).toContain('2026-10-01');
+    expect((screen.getByTestId('issue-detail-description') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByTestId('issue-detail-children').textContent).toContain('Child issue');
+    expect(screen.getByTestId('dep-link-dep-fallback').textContent).toBe('12345678');
+
+    const title = screen.getByTestId('issue-detail-title');
+    fireEvent.change(title, { target: { value: '   ' } });
+    fireEvent.blur(title);
+    fireEvent.blur(screen.getByTestId('issue-detail-description'));
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: '' } });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+    expect(screen.getByTestId('issue-detail-activity').textContent).toContain('System');
+  });
+
+  it('subscribes to the detail channel, merges a fresh frame and cleans up', async () => {
+    queue();
+    const realtime = makeFakeRealtime();
+    const view = renderDetailWithRealtime(realtime.value);
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(realtime.client.subscribe).toHaveBeenCalledWith('issue:iss-1'));
+
+    act(() => {
+      realtime.emit({
+        op: 'event',
+        channel: 'issue:iss-1',
+        seq: 7,
+        event: 'issue.updated',
+        payload: {
+          id: 'iss-1',
+          changes: { due_date: '2026-11-30' },
+          version: 4,
+          updated_at: '2099-01-01T00:00:00Z',
+        },
+      });
+    });
+    expect(screen.getByTestId('issue-chip-due').textContent).toContain('2026-11-30');
+
+    view.unmount();
+    expect(realtime.client.unsubscribe).toHaveBeenCalledWith('issue:iss-1');
+  });
+
   it('reverts the title draft on Escape and saves on Enter (§3.2 标题可内联编辑)', async () => {
     const updated = { ...DETAIL, title: 'Via enter', version: 4 };
     const stub = queue(fakeResponse({ body: { data: updated } }), ...reloadRound(updated));
@@ -373,12 +568,12 @@ describe('IssueDetailPage', () => {
   });
 
   it('surfaces a transient conflict notice after 409 convergence (§3.2 保存与冲突状态清楚)', async () => {
-    const server = { ...DETAIL, title: 'Someone else', version: 9 };
+    const server = { ...DETAIL, title: 'Someone else', description: null, version: 9 };
     queue(
       // PATCH → 409 conflict → 收敛 GET(服务端最新)→ 整轮重取
       fakeResponse({ status: 409, body: { error: { code: 'conflict', message: 'stale' } } }),
       fakeResponse({ body: { data: server } }),
-      ...reloadRound(server),
+      ...reloadRound(server as unknown as typeof DETAIL),
     );
     renderDetail();
     const title = await screen.findByTestId('issue-detail-title');
@@ -506,6 +701,63 @@ describe('IssueDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('WS-7')).toBeTruthy();
     });
+  });
+
+  it('maps transport failures for dependency add/remove, delete and move preview', async () => {
+    const base = detailStub(...detailResponses(), ...reloadRound());
+    const failures = { add: 0, remove: 0, delete: 0, move: 0 };
+    const unreadableResponse = (): Response =>
+      ({
+        ok: true,
+        status: 200,
+        text: async () => {
+          throw new Error('response body read failed');
+        },
+      }) as unknown as Response;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url.endsWith('/dependencies')) {
+        failures.add += 1;
+        return unreadableResponse();
+      }
+      if (method === 'DELETE' && url.includes('/dependencies/')) {
+        failures.remove += 1;
+        return unreadableResponse();
+      }
+      if (method === 'DELETE' && url.endsWith('/issues/iss-1')) {
+        failures.delete += 1;
+        return unreadableResponse();
+      }
+      if (method === 'POST' && url.endsWith('/move-preview')) {
+        failures.move += 1;
+        return unreadableResponse();
+      }
+      return base.fetchImpl(input, init);
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', fetchImpl);
+    renderDetail();
+    await screen.findByTestId('issue-detail');
+    await waitFor(() => expect(base.calls.length).toBeGreaterThanOrEqual(12), { timeout: 5000 });
+
+    fireEvent.change(screen.getByTestId('dep-target-input'), {
+      target: { value: '33333333-3333-3333-3333-333333333333' },
+    });
+    fireEvent.click(screen.getByText('Add dependency'));
+    await screen.findByTestId('dep-error');
+    expect(failures.add).toBe(1);
+
+    fireEvent.click(screen.getByText('Remove'));
+    await waitFor(() => expect(screen.getByText('WS-7')).toBeTruthy());
+    expect(failures.remove).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(await screen.findByTestId('issue-delete-confirm'));
+    await waitFor(() => expect(failures.delete).toBe(1));
+
+    fireEvent.change(screen.getByTestId('issue-detail-project'), { target: { value: 'prj-2' } });
+    await waitFor(() => expect(failures.move).toBe(1));
   });
 
   it('saves the description on blur (§4.1 描述可编辑)', async () => {
@@ -813,13 +1065,17 @@ describe('IssueDetailPage', () => {
       issue_id: 'iss-1',
       identifier: 'APL-1',
       from_project_id: 'prj-1',
-      target_project_id: 'prj-2',
+      target_project_id: 'prj-missing',
       mapped_fields: [
         {
           field: 'status',
           from: { name: 'Dev' },
           to: { name: 'Todo' },
           reason: '项目私有 status → 目标项目同 category 默认 status',
+        },
+        {
+          field: 'labels',
+          reason: '项目级标签',
         },
       ],
       cleared_fields: [
@@ -844,7 +1100,10 @@ describe('IssueDetailPage', () => {
     const cleared = screen.getByTestId('move-cleared').textContent ?? '';
     // 字段技术键 → 本地化字段名
     expect(mapped).toContain('Status: Dev → Todo');
+    expect(mapped).toContain('Labels: ? → ?');
     expect(mapped).not.toContain('status:');
+    // 预览返回当前项目目录之外的目标时,名称回退为稳定 id。
+    expect(screen.getByTestId('move-target').textContent).toContain('prj-missing');
     expect(cleared).toContain('Milestone(Project-private milestone)');
     expect(cleared).toContain('Cycle(Project-bound cycle)');
     expect(cleared).not.toContain('milestone_id');

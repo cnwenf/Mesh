@@ -15,6 +15,7 @@
  */
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
+import { SETTINGS_MEMBERS } from './fixtures/extended-routes-settings.mjs';
 
 const PORT = Number(process.env.MESH_MOCK_PORT ?? 8901);
 const AUTH_TIMEOUT_MS = 10_000;
@@ -1041,6 +1042,16 @@ async function handleRequest(req, res, url) {
       updated_at: isoAt(0),
     }));
     sendJson(res, 200, { data: defs, next_cursor: null });
+    return;
+  }
+
+  // ---- 成员名册:手机「更多」→成员流程必须落到已就绪页面，而不是 404 证据。----
+  if (path === '/api/v1/workspaces/ws-1/members' && req.method === 'GET') {
+    if (!isAuthorized(req)) {
+      sendJson(res, 401, errorEnvelope('unauthorized', 'missing bearer token'));
+      return;
+    }
+    sendJson(res, 200, { data: SETTINGS_MEMBERS, next_cursor: null });
     return;
   }
 

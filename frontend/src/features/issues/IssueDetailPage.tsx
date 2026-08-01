@@ -10,7 +10,7 @@
  */
 /* eslint-disable react-refresh/only-export-components -- categoryTone/saveIndicatorText 为页面内纯助手,与组件同模块契约 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
   MeshApiClient,
   MeshApiError,
@@ -60,6 +60,7 @@ import {
   removeDependency as removeDependencyApi,
 } from './api';
 import { IssueProperties } from './IssueProperties';
+import { focusIssueProperty, registerIssueContextShortcuts } from './issueShortcuts';
 import { MoveProjectDialog } from './MoveProjectDialog';
 import { applyIssueDetailFrame } from './realtime';
 import type {
@@ -239,6 +240,7 @@ export function IssueDetailPage(): React.JSX.Element {
   const t = useT();
   const toast = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const { issueId } = useParams<{ issueId: string }>();
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const realtime = useRealtimeContext();
@@ -293,6 +295,24 @@ export function IssueDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('comments');
+
+  useEffect(
+    () =>
+      registerIssueContextShortcuts({
+        labels: {
+          edit: t('shortcuts.issueEdit'),
+          status: t('shortcuts.issueStatus'),
+          assignee: t('shortcuts.issueAssignee'),
+          priority: t('shortcuts.issuePriority'),
+          labels: t('shortcuts.issueLabels'),
+          milestone: t('shortcuts.issueMilestone'),
+          submitComment: t('shortcuts.issueSubmitComment'),
+          close: t('shortcuts.issueClose'),
+        },
+        close: () => navigate(-1),
+      }),
+    [navigate, t],
+  );
 
   // t 的函数身份每次渲染都变;经 ref 读取,避免加载副作用反复重建(重叠请求竞态)。
   const tRef = useRef(t);
@@ -358,6 +378,15 @@ export function IssueDetailPage(): React.JSX.Element {
       cancelled = true;
     };
   }, [client, issueId, reloadKey]);
+
+  // 看板 S/A 的等价 UI 路径:详情渲染完成后聚焦对应属性控件，并清理一次性 query。
+  useEffect(() => {
+    if (issue === null) return;
+    const target = new URLSearchParams(location.search).get('focus');
+    if (focusIssueProperty(target)) {
+      navigate(location.pathname, { replace: true });
+    }
+  }, [issue, location.pathname, location.search, navigate]);
 
   // 详情级实时合并(§3.6:issue:{id} 频道)
   const issueKey = issue !== null ? issue.id : null;

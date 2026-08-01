@@ -859,7 +859,7 @@ Mesh 提供官方命令行工具 `mesh`(与 Web 同源 REST API,经 `api_tokens`
 
 | # | 能力 | 决定 | 说明 |
 | --- | --- | --- | --- |
-| 12 | Feature Flags / 灰度开关系统 | 未来规划(工程基建) | 技能版本灰度/回滚(skill.md)已有;产品级功能开关系统偏内部工程基建,未产品化。`workspaces.settings.feature_flags` 仅作简易开关位预留 |
+| 12 | Feature Flags / 灰度开关系统 | **基础工作区开关已产品化；高级灰度未来规划** | `workspaces.settings.feature_flags.autopilot` 已有 admin 设置 UI、类型校验、导航/命令/路由条件呈现，具体契约见 workspace.md §2.2。百分比灰度、人群规则、实验分流和集中运营平台仍属后续工程基建 |
 | 13 | SSO/SAML + SCIM 企业目录 | 未来规划(企业版) | 第三方 OAuth + TOTP 2FA(auth.md)覆盖当前需求;SAML SSO 与 SCIM 账户同步列企业版规划 |
 | 14 | 提醒 Snooze / 重新提醒 | 可选增强,默认不实现 | due_date/里程碑/邀请过期提醒已有(issue/project/workspace);Snooze 保持 comment-inbox §1 已声明的可选增强 |
 | 15 | 路线图 / 时间线 / 甘特视图 | **确认本期不做**(Leader 决定) | 维持 kanban.md 已声明的 YAGNI 延期;`views.layout` 保留 `timeline` 枚举占位,不实现 UI;后续立项时基于既有视图投影模型扩展 |

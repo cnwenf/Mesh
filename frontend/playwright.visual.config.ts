@@ -46,18 +46,27 @@ export default defineConfig({
   projects: [
     {
       name: 'desktop',
+      testIgnore: /state-matrix\.spec\.ts/,
       use: { viewport: { width: 1024, height: 768 } },
     },
     {
       name: 'tablet',
+      testIgnore: /state-matrix\.spec\.ts/,
       use: { viewport: { width: 768, height: 1024 } },
     },
     {
       name: 'wide',
+      testIgnore: /state-matrix\.spec\.ts/,
       use: { viewport: { width: 1440, height: 900 } },
     },
     {
       name: 'phone',
+      testIgnore: /state-matrix\.spec\.ts/,
+      use: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
+    },
+    {
+      name: 'state-phone',
+      testMatch: /state-matrix\.spec\.ts/,
       use: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
     },
   ],
