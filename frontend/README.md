@@ -79,8 +79,14 @@ npm run test            # vitest 单元/组件测试
 npm run test:coverage   # 覆盖率(整体 lines/functions/branches/statements ≥90% 门禁)
 node scripts/verify-coverage.mjs --base origin/main   # 新增/变更代码覆盖率 ≥90% 校验
 npm run build           # 生产构建(gen:tokens + tsc -b + vite build)
-npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与 dev server)
+npm run test:e2e        # Playwright 真实浏览器 e2e(自动拉起 mock 服务端与生产构建预览)
 ```
+
+mock 契约套件在每次运行时先生成一次生产构建,再由 `vite preview`
+服务该静态构建;不复用已存在的服务进程,且 Playwright 保持 `retries: 0`。
+这使命令面板、抽屉和实时契约的验证面与发布产物一致,并避免开发期
+HMR/源码模块图参与门禁结果。测试构建会显式启用内置 `mock` OAuth
+提供商,不依赖 `import.meta.env.DEV` 的开发默认值。
 
 CI:`.github/workflows/frontend.yml` 在 `frontend/**` 变更时跑 lint → typecheck → test:coverage → 新增代码覆盖率校验 → build → e2e。
 
