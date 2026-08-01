@@ -14,7 +14,9 @@ import { useApprovalsWorkspace } from '../useApprovalsWorkspace';
 
 const state = vi.hoisted(() => ({
   optionalContext: null as unknown,
+  principal: null as unknown,
   me: null as unknown,
+  requestCalls: [] as Array<{ method: string; path: string }>,
   listCalls: [] as Array<{ path: string; query?: Record<string, unknown> }>,
   postCalls: [] as Array<{ path: string; body?: unknown }>,
   listShouldFail: false,
@@ -37,6 +39,8 @@ vi.mock('../../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../api')>();
   class StubMeshApiClient {
     async request(method: string, path: string, opts?: { body?: unknown }) {
+      state.requestCalls.push({ method, path });
+      if (method === 'GET' && path === '/api/v1/me') return state.principal;
       if (method === 'GET' && path === '/api/v1/users/me') {
         if (state.meShouldFail) {
           throw new actual.MeshApiError({ status: 500, code: 'internal_error', message: 'boom' });
@@ -172,7 +176,9 @@ const HUMAN_ME = {
 
 beforeEach(() => {
   state.optionalContext = null;
+  state.principal = HUMAN_ME.user;
   state.me = HUMAN_ME;
+  state.requestCalls = [];
   state.listCalls = [];
   state.postCalls = [];
   state.listShouldFail = false;
@@ -312,13 +318,51 @@ describe('ApprovalsPage states', () => {
     });
   });
 
-  it('gates out agent principals with the human-only notice', async () => {
-    state.me = { ...HUMAN_ME, member_type: 'agent' };
+  it('gates the flat route from the active agent principal without listing approvals', async () => {
+    state.principal = {
+      kind: 'agent',
+      id: 'member-agent',
+      member_type: 'agent',
+      workspace_id: 'ws1',
+      role: 'member',
+      name: 'Builder',
+      scopes: ['approval:read'],
+    };
     renderWithProviders(<ApprovalsPage />, { route: '/approvals' });
     await waitFor(() => {
       expect(screen.getByTestId('approvals-agent-gated')).toBeInTheDocument();
     });
     expect(state.listCalls).toHaveLength(0); // 门控前置,不发列表请求
+    expect(state.requestCalls).not.toContainEqual({ method: 'GET', path: '/api/v1/users/me' });
+  });
+
+  it('gates the workspace route from its matching agent principal without listing approvals', async () => {
+    state.optionalContext = {
+      status: 'ready',
+      workspace: { id: 'ws2', slug: 'team-b' },
+      error: null,
+      isAdmin: false,
+      isOwner: false,
+      refresh: vi.fn(),
+      patch: vi.fn(),
+    };
+    state.principal = {
+      kind: 'agent',
+      id: 'member-agent',
+      member_type: 'agent',
+      workspace_id: 'ws2',
+      role: 'member',
+      name: 'Builder',
+      scopes: ['approval:read'],
+    };
+
+    renderWithProviders(<ApprovalsPage />, { route: '/w/team-b/approvals' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('approvals-agent-gated')).toBeInTheDocument();
+    });
+    expect(state.listCalls).toHaveLength(0);
+    expect(state.requestCalls).not.toContainEqual({ method: 'GET', path: '/api/v1/users/me' });
   });
 
   it('shows the empty state when the inbox has nothing pending', async () => {
@@ -354,13 +398,24 @@ describe('ApprovalsPage states', () => {
       refresh: vi.fn(),
       patch: vi.fn(),
     };
+    state.me = {
+      ...HUMAN_ME,
+      memberships: [
+        HUMAN_ME.memberships[0],
+        {
+          ...HUMAN_ME.memberships[0],
+          workspace_id: 'ws2',
+          workspace_slug: 'team-b',
+        },
+      ],
+    };
     renderWithProviders(<ApprovalsPage />, { route: '/w/team-b/approvals' });
     await waitFor(() => {
       expect(screen.getByTestId('approvals-list')).toBeInTheDocument();
     });
     expect(state.listCalls[0]?.path).toBe('/api/v1/workspaces/ws2/approvals');
-    // Provider 路径不发 /users/me
-    expect(state.listCalls.every((c) => c.path !== '/api/v1/users/me')).toBe(true);
+    // Provider 只提供路由工作区;human principal 仍需按 workspace_id 匹配 active membership。
+    expect(state.requestCalls).toContainEqual({ method: 'GET', path: '/api/v1/users/me' });
   });
 
   it('shows the error state when the provider workspace is unavailable', async () => {

@@ -1,7 +1,7 @@
 """search: global search indexes, members.search_name projection + sync
 triggers, mesh_search_norm normalizer (search-command-palette.md §2.2).
 
-Single-head chain 0001 → 0034, chained after integrations 0033.
+Single-head chain 0001 → 0035, chained after task-token RLS 0034.
 
 Objects created:
 
@@ -26,8 +26,8 @@ this batch — test databases are fresh; production first-deploy notes go in
 the runbook. ``normalize(t, NFKD)`` + the explicit ``'public.unaccent'``
 regdictionary are PG16 verbatim per spec.
 
-Revision ID: 0034
-Revises: 0033
+Revision ID: 0035
+Revises: 0034
 Create Date: 2026-07-30
 """
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Search normalization — the Python mirror of ``public.mesh_search_norm``.
 
-The database function (migration 0034, search-command-palette.md §2.2) is the
+The database function (migration 0035, search-command-palette.md §2.2) is the
 single authoritative normalizer for recall: ``lower(unaccent(normalize(t,
 NFKD)))``. This module mirrors it in Python for two purposes that never touch
 recall:

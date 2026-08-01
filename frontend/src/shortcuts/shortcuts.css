@@ -2,6 +2,25 @@
  * 命令面板与快捷键帮助层样式(README §6.12):仅引用语义 token,方向性间距用逻辑属性。
  */
 
+/* 序列键首键待决提示：使用 toast 层级，避免被页面内容遮挡。 */
+.mesh-shortcut-sequence-status {
+  position: fixed;
+  inset-block-end: var(--space-4);
+  inset-inline-start: 50%;
+  z-index: var(--z-toast);
+  transform: translateX(-50%);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  color: var(--color-text-strong);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  pointer-events: none;
+}
+
 /* ===== CommandPalette ===== */
 .mesh-palette {
   display: flex;

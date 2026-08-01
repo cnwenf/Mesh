@@ -3,6 +3,7 @@
  *
  * 行为:
  * - window keydown 监听,卸载即清理;
+ * - IME 组合输入期间豁免所有快捷键分发;
  * - `mod` = macOS 上 metaKey、其他平台 ctrlKey(isMac 可注入以便测试);
  * - 输入框(input/textarea/select/contentEditable)聚焦时忽略裸键,仅保留 Ctrl/Cmd 组合;
  * - `mod+k` → onOpenPalette;裸 `?` → onOpenHelp;
@@ -10,9 +11,10 @@
  *   与 `c` / `/` 等一律按归一化 combo 路由到注册表(ShortcutDef),受 activeContexts 过滤
  *   (global 恒激活);注册发生在 shell 层,本 Provider 只做路由。
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useShortcutRegistry } from './registry';
+import './shortcuts.css';
 
 /** 序列键(G→…)第二键窗口,毫秒 */
 export const SEQUENCE_WINDOW_MS = 1000;
@@ -124,18 +126,50 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
   const propsRef = useRef(props);
   propsRef.current = props;
   const pendingRef = useRef<PendingSequence | null>(null);
+  const pendingTimerRef = useRef<number | null>(null);
+  const [sequencePending, setSequencePending] = useState(false);
 
   useEffect(() => {
-    const runRegistered = (combo: string): void => {
+    const runRegistered = (combo: string): boolean => {
       const { shortcuts, activeContexts } = useShortcutRegistry.getState();
       const def = shortcuts.find(
         (item) =>
           item.combo === combo && (item.group === 'global' || activeContexts.includes(item.group)),
       );
-      def?.run();
+      if (def === undefined) {
+        return false;
+      }
+      def.run();
+      return true;
+    };
+
+    const clearPending = (): void => {
+      pendingRef.current = null;
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+      setSequencePending(false);
+    };
+
+    const beginPending = (at: number, windowMs: number): void => {
+      clearPending();
+      pendingRef.current = { at };
+      setSequencePending(true);
+      pendingTimerRef.current = window.setTimeout(() => {
+        pendingRef.current = null;
+        pendingTimerRef.current = null;
+        setSequencePending(false);
+      }, windowMs);
     };
 
     const handleKeyDown = (event: KeyboardEvent): void => {
+      // 候选词阶段的所有按键(包括 Enter 和序列第二键)都属于 IME，
+      // 不阻止默认行为、不分发快捷键，也不改变当前序列待决态。
+      if (event.isComposing) {
+        return;
+      }
+
       const current = propsRef.current;
       const isMac = current.isMac ?? detectMac();
       const sequenceWindowMs = current.sequenceWindowMs ?? SEQUENCE_WINDOW_MS;
@@ -143,6 +177,13 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
 
       const lower = event.key.toLowerCase();
       if (MODIFIER_ONLY_KEYS.has(lower)) {
+        return;
+      }
+
+      // Esc 是序列待决态的全局取消键，即使焦点已转入表单字段也要清理。
+      if (lower === 'escape' && pendingRef.current !== null) {
+        clearPending();
+        event.preventDefault();
         return;
       }
 
@@ -171,7 +212,7 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
 
       // 其他带修饰键组合:直接按 combo 匹配,并终结序列待决态
       if (modMatches || event.altKey) {
-        pendingRef.current = null;
+        clearPending();
         runRegistered(comboFromEvent(event));
         return;
       }
@@ -179,7 +220,7 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
       // 序列键:G → I/B/M/A(窗口内)
       const pending = pendingRef.current;
       if (pending !== null) {
-        pendingRef.current = null;
+        clearPending();
         if (now() - pending.at <= sequenceWindowMs && SEQUENCE_SECOND_KEYS.has(lower)) {
           event.preventDefault();
           runRegistered(`${SEQUENCE_PREFIX} ${lower}`);
@@ -189,16 +230,41 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
       }
 
       if (lower === SEQUENCE_PREFIX) {
-        pendingRef.current = { at: now() };
+        beginPending(now(), sequenceWindowMs);
         return;
       }
 
-      runRegistered(comboFromEvent(event));
+      const combo = comboFromEvent(event);
+      const matched = runRegistered(combo);
+      if (combo === '/' && matched) {
+        event.preventDefault();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      pendingRef.current = null;
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+    };
   }, []);
 
-  return <>{props.children}</>;
+  return (
+    <>
+      {props.children}
+      {sequencePending ? (
+        <output
+          className="mesh-shortcut-sequence-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          G —
+        </output>
+      ) : null}
+    </>
+  );
 }

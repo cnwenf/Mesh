@@ -13,6 +13,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -180,6 +181,73 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
     expect(runSlash).toHaveBeenCalledTimes(1);
   });
 
+  it("'/' 命中聚焦搜索快捷键时阻止浏览器默认行为", () => {
+    const runSlash = vi.fn();
+    registerShortcuts([
+      { id: 'search', combo: '/', label: 'Focus search', group: 'global', run: runSlash },
+    ]);
+    render(
+      <ShortcutProvider isMac={false}>
+        <div />
+      </ShortcutProvider>,
+    );
+
+    const event = new KeyboardEvent('keydown', { key: '/', bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(runSlash).toHaveBeenCalledTimes(1);
+  });
+
+  it('IME 组合态全局豁免面板、帮助、裸键、序列键与 Enter', () => {
+    const onOpenPalette = vi.fn();
+    const onOpenHelp = vi.fn();
+    const runC = vi.fn();
+    const runInbox = vi.fn();
+    const runEnter = vi.fn();
+    registerShortcuts([
+      { id: 'new', combo: 'c', label: 'New issue', group: 'global', run: runC },
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+      { id: 'send', combo: 'enter', label: 'Send', group: 'global', run: runEnter },
+    ]);
+    render(
+      <ShortcutProvider
+        isMac={false}
+        now={() => clock.now}
+        onOpenPalette={onOpenPalette}
+        onOpenHelp={onOpenHelp}
+      >
+        <div />
+      </ShortcutProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true, isComposing: true });
+    fireEvent.keyDown(window, { key: '?', shiftKey: true, isComposing: true });
+    fireEvent.keyDown(window, { key: 'c', isComposing: true });
+    fireEvent.keyDown(window, { key: 'Enter', isComposing: true });
+    // 组合态的首键不得建立待决序列。
+    fireEvent.keyDown(window, { key: 'g', isComposing: true });
+    fireEvent.keyDown(window, { key: 'i' });
+
+    expect(onOpenPalette).not.toHaveBeenCalled();
+    expect(onOpenHelp).not.toHaveBeenCalled();
+    expect(runC).not.toHaveBeenCalled();
+    expect(runEnter).not.toHaveBeenCalled();
+    expect(runInbox).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    // 已有待决序列时，组合态第二键同样不分发、不消费待决态。
+    fireEvent.keyDown(window, { key: 'g' });
+    fireEvent.keyDown(window, { key: 'i', isComposing: true });
+    expect(runInbox).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('G —');
+
+    fireEvent.keyDown(window, { key: 'i' });
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(runInbox).toHaveBeenCalledTimes(1);
+    expect(runEnter).toHaveBeenCalledTimes(1);
+  });
+
   it('未注册的裸键不触发任何动作', () => {
     const runC = vi.fn();
     registerShortcuts([{ id: 'new', combo: 'c', label: 'New', group: 'global', run: runC }]);
@@ -209,7 +277,9 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
 
   it('序列键 G→I 在 1s 窗口内触发 g i(注入时钟)', () => {
     const runInbox = vi.fn();
-    registerShortcuts([{ id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox }]);
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
     render(
       <ShortcutProvider isMac={false} now={() => clock.now}>
         <div />
@@ -221,10 +291,54 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
     expect(runInbox).toHaveBeenCalledTimes(1);
   });
 
+  it('序列首键显示可访问的 G — 待决状态，超时后自动清除', () => {
+    vi.useFakeTimers();
+    const runInbox = vi.fn();
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
+    render(
+      <ShortcutProvider isMac={false}>
+        <div />
+      </ShortcutProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: 'g' });
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('G —');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+
+    act(() => vi.advanceTimersByTime(SEQUENCE_WINDOW_MS));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'i' });
+    expect(runInbox).not.toHaveBeenCalled();
+  });
+
+  it('Esc 清除序列待决状态且后续第二键不触发', () => {
+    const runInbox = vi.fn();
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
+    render(
+      <ShortcutProvider isMac={false}>
+        <input aria-label="field" />
+      </ShortcutProvider>,
+    );
+
+    fireEvent.keyDown(window, { key: 'g' });
+    expect(screen.getByRole('status')).toHaveTextContent('G —');
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'i' });
+    expect(runInbox).not.toHaveBeenCalled();
+  });
+
   it('序列键超出窗口失效(默认窗口常量 SEQUENCE_WINDOW_MS)', () => {
     expect(SEQUENCE_WINDOW_MS).toBe(1000);
     const runInbox = vi.fn();
-    registerShortcuts([{ id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox }]);
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
     render(
       <ShortcutProvider isMac={false} now={() => clock.now}>
         <div />
@@ -238,7 +352,9 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
 
   it('序列键第二键不匹配时不触发', () => {
     const runInbox = vi.fn();
-    registerShortcuts([{ id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox }]);
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
     render(
       <ShortcutProvider isMac={false} now={() => clock.now}>
         <div />
@@ -251,7 +367,9 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
 
   it('序列键同样受上下文分组约束(g b 属 board)', () => {
     const runBoard = vi.fn();
-    registerShortcuts([{ id: 'board', combo: 'g b', label: 'Board', group: 'board', run: runBoard }]);
+    registerShortcuts([
+      { id: 'board', combo: 'g b', label: 'Board', group: 'board', run: runBoard },
+    ]);
     render(
       <ShortcutProvider isMac={false} now={() => clock.now}>
         <div />
@@ -268,7 +386,9 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
 
   it('输入框内的 g 不进入序列待决态', () => {
     const runInbox = vi.fn();
-    registerShortcuts([{ id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox }]);
+    registerShortcuts([
+      { id: 'inbox', combo: 'g i', label: 'Inbox', group: 'global', run: runInbox },
+    ]);
     render(
       <ShortcutProvider isMac={false} now={() => clock.now}>
         <input aria-label="field" />
@@ -281,7 +401,9 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
 
   it('其他 mod 组合(mod+k 之外)按 combo 路由注册定义', () => {
     const runJump = vi.fn();
-    registerShortcuts([{ id: 'jump', combo: 'mod+j', label: 'Jump', group: 'global', run: runJump }]);
+    registerShortcuts([
+      { id: 'jump', combo: 'mod+j', label: 'Jump', group: 'global', run: runJump },
+    ]);
     render(
       <ShortcutProvider isMac={false}>
         <div />
@@ -343,7 +465,8 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
     expect(onOpenHelp).not.toHaveBeenCalled();
   });
 
-  it('卸载后移除 window 监听器', () => {
+  it('卸载后移除 window 监听器并清理序列超时器', () => {
+    vi.useFakeTimers();
     const runC = vi.fn();
     registerShortcuts([{ id: 'new', combo: 'c', label: 'New', group: 'global', run: runC }]);
     const { unmount } = render(
@@ -351,7 +474,10 @@ describe('ShortcutProvider(§6.12 快捷键体系)', () => {
         <div />
       </ShortcutProvider>,
     );
+    fireEvent.keyDown(window, { key: 'g' });
+    expect(vi.getTimerCount()).toBe(1);
     unmount();
+    expect(vi.getTimerCount()).toBe(0);
     fireEvent.keyDown(window, { key: 'c' });
     expect(runC).not.toHaveBeenCalled();
   });

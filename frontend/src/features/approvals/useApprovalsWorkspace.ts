@@ -1,20 +1,15 @@
 /**
  * 审批页工作区解析(双路由支持):
- * - `/w/:workspaceSlug/approvals`(AppShell 命中 WorkspaceProvider)→ 用上下文;
- * - 平直 `/approvals`(Provider 外)→ fetchMe → activeWorkspace(memberships)。
- * 同时探测当前 principal 是否为 agent 型成员(审批仅对人类开放,§6.10)。
- * 返回值经 useMemo 稳定,供消费方放心放入 effect 依赖。
+ * - 先经统一 `/me` 判定当前 credential 的真实 principal;
+ * - agent 直接使用其 workspace-scoped active roster identity 并门控;
+ * - human 再经 `/users/me` 解析平直路由的 active workspace,或匹配 Provider workspace。
+ * 两条路由都必须在 principal 判定完成后才进入 ready,避免 agent 抢先发审批列表请求。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { fetchPrincipal, isAgentPrincipal } from '../../api';
 import type { MeshApiClient } from '../../api';
-import { activeWorkspace, fetchMe } from '../members/api';
-import type { MeResponse } from '../members/types';
+import { activeWorkspace, fetchMe as fetchMemberships } from '../members/api';
 import { useOptionalWorkspace } from '../../workspace/WorkspaceProvider';
-
-/** 防御性扩展:principal 类型标记(后端若随 /users/me 下发即生效)。 */
-interface MeWithPrincipal extends MeResponse {
-  readonly member_type?: 'human' | 'agent';
-}
 
 export type ApprovalsWorkspaceState =
   | { readonly kind: 'loading' }
@@ -30,49 +25,90 @@ const LOADING: ApprovalsWorkspaceState = { kind: 'loading' };
 const NO_WORKSPACE: ApprovalsWorkspaceState = { kind: 'no_workspace' };
 const ERROR: ApprovalsWorkspaceState = { kind: 'error' };
 
-/** 工作区上下文可用时同步派生;为 null 时返回 null 走 fetchMe 路径。 */
-function fromProvider(context: ReturnType<typeof useOptionalWorkspace>): ApprovalsWorkspaceState | null {
-  if (context === null) return null;
+/** Provider 尚不可解析时阻断请求;null 表示可以开始 principal + membership 解析。 */
+function providerBarrier(
+  context: ReturnType<typeof useOptionalWorkspace>,
+): ApprovalsWorkspaceState | null {
+  if (context === null || (context.status === 'ready' && context.workspace !== null)) return null;
   if (context.status === 'loading') return LOADING;
-  if (context.status === 'ready' && context.workspace !== null) {
-    return { kind: 'ready', workspaceId: context.workspace.id, isAgentPrincipal: false };
-  }
   return ERROR; // not_found / error:与 WorkspaceGate 同语义
+}
+
+interface TaggedResolution {
+  readonly client: MeshApiClient;
+  readonly targetKey: string;
+  readonly value: ApprovalsWorkspaceState;
 }
 
 export function useApprovalsWorkspace(client: MeshApiClient): ApprovalsWorkspaceState {
   const provider = useOptionalWorkspace();
-  const providerState = fromProvider(provider);
-  const [flatState, setFlatState] = useState<ApprovalsWorkspaceState>(LOADING);
+  const barrier = providerBarrier(provider);
+  const providerWorkspaceId =
+    provider !== null && provider.status === 'ready' && provider.workspace !== null
+      ? provider.workspace.id
+      : null;
+  const targetKey = provider === null ? 'flat' : `provider:${providerWorkspaceId ?? 'unavailable'}`;
+  const [resolution, setResolution] = useState<TaggedResolution>({
+    client,
+    targetKey: '',
+    value: LOADING,
+  });
 
   useEffect(() => {
-    if (providerState !== null) return; // 工作区路由已由 Provider 解析
+    if (barrier !== null) return;
     let cancelled = false;
-    setFlatState(LOADING);
-    fetchMe(client)
-      .then((me) => {
+    setResolution({ client, targetKey, value: LOADING });
+    void (async () => {
+      try {
+        const principal = await fetchPrincipal(client);
         if (cancelled) return;
-        const membership = activeWorkspace(me.memberships);
-        if (membership === null) {
-          setFlatState(NO_WORKSPACE);
+
+        if (isAgentPrincipal(principal)) {
+          if (providerWorkspaceId !== null && principal.workspace_id !== providerWorkspaceId) {
+            setResolution({ client, targetKey, value: NO_WORKSPACE });
+            return;
+          }
+          setResolution({
+            client,
+            targetKey,
+            value: {
+              kind: 'ready',
+              workspaceId: providerWorkspaceId ?? principal.workspace_id,
+              isAgentPrincipal: true,
+            },
+          });
           return;
         }
-        setFlatState({
-          kind: 'ready',
-          workspaceId: membership.workspace_id,
-          isAgentPrincipal: (me as MeWithPrincipal).member_type === 'agent',
+
+        const me = await fetchMemberships(client);
+        if (cancelled) return;
+        const membership =
+          providerWorkspaceId === null
+            ? activeWorkspace(me.memberships)
+            : (me.memberships.find((item) => item.workspace_id === providerWorkspaceId) ?? null);
+        if (membership === null) {
+          setResolution({ client, targetKey, value: NO_WORKSPACE });
+          return;
+        }
+        setResolution({
+          client,
+          targetKey,
+          value: {
+            kind: 'ready',
+            workspaceId: membership.workspace_id,
+            isAgentPrincipal: false,
+          },
         });
-      })
-      .catch(() => {
-        if (!cancelled) setFlatState(ERROR);
-      });
+      } catch {
+        if (!cancelled) setResolution({ client, targetKey, value: ERROR });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [client, providerState]);
+  }, [barrier, client, providerWorkspaceId, targetKey]);
 
-  return useMemo<ApprovalsWorkspaceState>(() => {
-    if (providerState !== null) return providerState;
-    return flatState;
-  }, [providerState, flatState]);
+  if (barrier !== null) return barrier;
+  if (resolution.client !== client || resolution.targetKey !== targetKey) return LOADING;
+  return resolution.value;
 }

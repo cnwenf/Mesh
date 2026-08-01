@@ -79,19 +79,16 @@ export {
   listMembers,
   updateMemberRole,
 } from './members';
-export type {
-  MemberListQuery,
-  MemberStatus,
-  MemberSummary,
-  MemberType,
-} from './members';
+export type { MemberListQuery, MemberStatus, MemberSummary, MemberType } from './members';
 export {
   ERROR_ACCOUNT_LOCKED,
   ERROR_INVALID_CREDENTIALS,
   ERROR_WEAK_PASSWORD,
   changePassword,
   fetchMe,
+  fetchPrincipal,
   forgotPassword,
+  isAgentPrincipal,
   isSessionTokens,
   listSessions,
   login,
@@ -109,6 +106,8 @@ export {
 } from './auth';
 export type {
   ChangePasswordInput,
+  CurrentAgentPrincipal,
+  CurrentPrincipal,
   CurrentUser,
   LoginInput,
   LoginResult,

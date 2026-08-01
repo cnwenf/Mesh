@@ -42,7 +42,12 @@ function uniqueEmail(suffix: string): string {
 /** 新用户引导清单(移动端整屏遮罩)在截图前关闭,保证存证为真实目标页。
  *  弹层(命令面板)打开时背景被 backdrop 拦截点击,且清单在其后非目标——跳过。 */
 async function dismissOnboarding(page: Page): Promise<void> {
-  if (await page.locator('.mesh-dialog__backdrop').isVisible({ timeout: 0 }).catch(() => false)) {
+  if (
+    await page
+      .locator('.mesh-dialog__backdrop')
+      .isVisible({ timeout: 0 })
+      .catch(() => false)
+  ) {
     return;
   }
   const dismiss = page.getByText("Don't show again");
@@ -170,9 +175,7 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   });
 
-  test('命令面板:六类检索 + identifier 直达 + 键盘全流程;顶栏同一结果视图', async ({
-    page,
-  }) => {
+  test('命令面板:六类检索 + identifier 直达 + 键盘全流程;顶栏同一结果视图', async ({ page }) => {
     const isMobile = test.info().project.name === 'mobile';
     await registerAndContinue(page, uniqueEmail('pal'), 'MES-127 Palette');
     const slug = `mes127c-${String(Date.now()).slice(-8)}`;
@@ -194,6 +197,58 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
     await expect(page.getByText('Toggle theme').first()).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('topbar-search-popover')).toHaveCount(0);
+
+    // §4.5 快捷键契约：IME 组合输入不触发全局快捷键；`/` 命中搜索时
+    // 阻止浏览器快速查找并聚焦顶栏；序列首键呈现等待提示且 Esc/超时清除。
+    await topbarSearch.evaluate((element) => element.blur());
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'k',
+          ctrlKey: true,
+          isComposing: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'g',
+          isComposing: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toHaveCount(0);
+    await expect(page.locator('.mesh-shortcut-sequence-status')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      window.addEventListener(
+        'keydown',
+        (event) => {
+          if (event.key === '/') {
+            document.documentElement.dataset.e2eSlashDefaultPrevented = String(
+              event.defaultPrevented,
+            );
+          }
+        },
+        { once: true },
+      );
+    });
+    await page.keyboard.press('/');
+    await expect(topbarSearch).toBeFocused();
+    await expect(page.locator('html')).toHaveAttribute('data-e2e-slash-default-prevented', 'true');
+
+    await topbarSearch.evaluate((element) => element.blur());
+    await page.keyboard.press('g');
+    const sequenceStatus = page.locator('.mesh-shortcut-sequence-status');
+    await expect(sequenceStatus).toHaveText('G —');
+    await page.keyboard.press('Escape');
+    await expect(sequenceStatus).toHaveCount(0);
+    await page.keyboard.press('g');
+    await expect(sequenceStatus).toHaveText('G —');
+    await expect(sequenceStatus).toHaveCount(0, { timeout: 1500 });
 
     // —— Ctrl/Cmd+K(桌面)/ 顶栏 Enter 交接(手机)开启完整面板 ——
     if (isMobile) {
@@ -235,9 +290,7 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
     }
     await expect(dialog).toBeVisible();
     await dialog.getByRole('combobox').fill(identifier);
-    await expect(
-      dialog.locator(`[data-testid^="palette-opt-issue:"]`).first(),
-    ).toBeVisible();
+    await expect(dialog.locator(`[data-testid^="palette-opt-issue:"]`).first()).toBeVisible();
     await dialog.getByRole('combobox').press('Enter');
     await page.waitForURL(/\/issues\//);
     // 激活即关面板(显式等关闭落地,杜绝后续重开的时序竞争)
@@ -284,7 +337,13 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
     );
     await page.goto('/insights');
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      if (await kpiStrip.first().isVisible().catch(() => false)) break;
+      if (
+        await kpiStrip
+          .first()
+          .isVisible()
+          .catch(() => false)
+      )
+        break;
       await page.waitForTimeout(1500);
       await page.reload();
     }
@@ -323,6 +382,82 @@ test.describe('MES-111 批次④ 设置 / 搜索命令面板 / Analytics / 审�
     await expect(
       page.getByTestId('approvals-list').or(page.locator('.mesh-empty-state')),
     ).toBeVisible();
+
+    // README §6.10：真实创建 agent principal + agent token，验证两条前端路由
+    // 都在列表请求前呈现人类专属门控。token 仅存本次隔离栈/localStorage，不输出。
+    const ownerToken = await page.evaluate(() => {
+      const raw = localStorage.getItem('mesh.auth.v1');
+      if (raw === null) throw new Error('missing authenticated session');
+      const token = (JSON.parse(raw) as { state?: { token?: unknown } }).state?.token;
+      if (typeof token !== 'string') throw new Error('missing access token');
+      return token;
+    });
+    const authHeaders = { Authorization: `Bearer ${ownerToken}` };
+    const workspacesResponse = await page.request.get('/api/v1/workspaces', {
+      headers: authHeaders,
+    });
+    expect(workspacesResponse.status()).toBe(200);
+    const workspacesBody = (await workspacesResponse.json()) as {
+      data: Array<{ id: string; slug: string }>;
+    };
+    const workspaceId = workspacesBody.data.find((item) => item.slug === slug)?.id;
+    expect(workspaceId).toBeTruthy();
+
+    const agentResponse = await page.request.post(`/api/v1/workspaces/${workspaceId}/agents`, {
+      headers: authHeaders,
+      data: {
+        name: 'MES-127 Approval Gate Agent',
+        role_tag: 'Reviewer',
+        bio: 'Agent-principal approval gate verification.',
+        system_instructions: 'Verify the human-only approval presentation gate.',
+        model_config: { model_tier: 'balanced', temperature: 0.2, max_tokens: 1024 },
+      },
+    });
+    expect(agentResponse.status()).toBe(201);
+    const agentBody = (await agentResponse.json()) as { data: { member: { id: string } } };
+    const tokenResponse = await page.request.post(`/api/v1/workspaces/${workspaceId}/api-tokens`, {
+      headers: authHeaders,
+      data: {
+        name: 'MES-127 approval gate',
+        owner_member_id: agentBody.data.member.id,
+        scopes: [],
+      },
+    });
+    expect(tokenResponse.status()).toBe(201);
+    const tokenBody = (await tokenResponse.json()) as { data: { token: string } };
+    const agentToken = tokenBody.data.token;
+    expect(agentToken.startsWith('mesh_agt_')).toBe(true);
+
+    const approvalListRequests: string[] = [];
+    page.on('request', (request) => {
+      if (
+        request.method() === 'GET' &&
+        /\/api\/v1\/workspaces\/[^/]+\/approvals(?:\?|$)/.test(request.url())
+      ) {
+        approvalListRequests.push(request.url());
+      }
+    });
+    await page.evaluate((token) => {
+      const raw = localStorage.getItem('mesh.auth.v1');
+      if (raw === null) throw new Error('missing auth storage');
+      const persisted = JSON.parse(raw) as { state: { token: string | null } };
+      persisted.state.token = token;
+      localStorage.setItem('mesh.auth.v1', JSON.stringify(persisted));
+    }, agentToken);
+    await page.goto('/approvals');
+    await expect(page.getByTestId('approvals-agent-gated')).toBeVisible();
+    await page.goto(`/w/${slug}/approvals`);
+    await expect(page.getByTestId('approvals-agent-gated')).toBeVisible();
+    expect(approvalListRequests).toHaveLength(0);
+
+    // 恢复人类 session，继续暗色深链存证。
+    await page.evaluate((token) => {
+      const raw = localStorage.getItem('mesh.auth.v1');
+      if (raw === null) throw new Error('missing auth storage');
+      const persisted = JSON.parse(raw) as { state: { token: string | null } };
+      persisted.state.token = token;
+      localStorage.setItem('mesh.auth.v1', JSON.stringify(persisted));
+    }, ownerToken);
 
     await setTheme(page, 'dark');
     await page.goto('/approvals');
