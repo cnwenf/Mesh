@@ -4,6 +4,11 @@ Mesh 项目的所有重要变更都记录于此文件。
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [0.27.0] - 2026-08-01
+
+前端设计优化 Stage 1 批次③/④(MES-111 / MES-126 / MES-127)——成员与 Agent 名册、收件箱、聊天、账号/工作区设置、统一搜索/命令面板、Analytics 与统一审批页完成逐页设计对齐；沉淀 `ConversationLayout`、`RunStateBadge`、`SettingsLayout` 等稳定 patterns，核销 G3/G4/G10/G11/G19，并落地六类全局搜索与迁移 0035。审批入口补齐真实 `/me` agent principal 双路由门禁，快捷键补齐 IME 全局豁免、`G —` 等待态及 `/` 默认行为抑制；聊天附件事务可见性与会话属主读门同步加固。前端 3856 例单测全绿，整体行覆盖 98.3%、分支覆盖 92.82%、变更覆盖 99.0%，逐文件 189 文件 ≥90%；批次④ production 鉴权桌面/手机真实 E2E 10/10、后端 CI 4148 例与覆盖率 91.07%、GitHub 14 项门禁全绿。合入同时包含浏览器 mock e2e 稳定化、来源审计外置/容器 Node 版本对齐，以及 `brace-expansion` 拒绝服务漏洞补丁。
+
 ### Added
 
 - **设置 + 搜索/命令面板 + Analytics + 审批 前端批次④(MES-111 / MES-127,design-quality.md §3.2/§4.4/§9.6/§11.4 + search-command-palette.md 全条 + analytics.md §4 + competitor-parity G3/G4/G10/G11/G19)**——
