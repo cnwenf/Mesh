@@ -36,7 +36,7 @@ const LOAD_FAILED_TEXT = 'We could not load this content. Please try again.';
 
 /** 每用例唯一邮箱(注册即登录;同邮箱重注会 409) */
 function uniqueEmail(suffix: string): string {
-  return `mes127-${suffix}-${String(process.pid)}@example.com`;
+  return `mes127-${suffix}-${String(process.pid)}-${String(Date.now())}@example.com`;
 }
 
 /** 新用户引导清单(移动端整屏遮罩)在截图前关闭,保证存证为真实目标页。

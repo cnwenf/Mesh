@@ -416,10 +416,10 @@ describe('默认 fetchImpl', () => {
 });
 
 describe('401 全局兜底回调(MES-106)', () => {
-  function makeClientWithHook(fetchImpl: typeof fetch, onUnauthorized?: () => void) {
+  function makeClientWithHook(fetchImpl: typeof fetch, onUnauthorized?: () => void, token = 'tok') {
     return new MeshApiClient({
       baseUrl: 'https://api.mesh.test',
-      getToken: () => 'tok',
+      getToken: () => token,
       fetchImpl,
       onUnauthorized,
     });
@@ -457,6 +457,30 @@ describe('401 全局兜底回调(MES-106)', () => {
       MeshApiError,
     );
     expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('agent 凭证访问人类专属端点的 401 不清凭证，留给 /me principal 门禁', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }),
+    );
+    const client = makeClientWithHook(fetchImpl, onUnauthorized, 'mesh_agt_test');
+
+    await expect(client.request('GET', '/api/v1/users/me')).rejects.toBeInstanceOf(MeshApiError);
+
+    expect(onUnauthorized).not.toHaveBeenCalled();
+  });
+
+  it('agent 凭证的权威 /me 自省返回 401 时仍清凭证', async () => {
+    const onUnauthorized = vi.fn();
+    const { fetchImpl } = stubFetch(
+      fakeResponse({ status: 401, body: { error: { code: 'unauthorized', message: '' } } }),
+    );
+    const client = makeClientWithHook(fetchImpl, onUnauthorized, 'mesh_agt_revoked');
+
+    await expect(client.request('GET', '/api/v1/me')).rejects.toBeInstanceOf(MeshApiError);
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 
   it('OAuth 前缀端点 401 → 不触发回调', async () => {
