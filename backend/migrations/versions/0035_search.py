@@ -1,30 +1,37 @@
-"""search: global search normalization, projection and indexes.
+"""search: global search indexes, members.search_name projection + sync
+triggers, mesh_search_norm normalizer (search-command-palette.md §2.2).
 
-Platform-capability increment (search-command-palette.md §2.2, README §6.1 /
-§6.2). Single-head chain 0001 → 0036.
+Single-head chain 0001 → 0035, chained after task-token RLS 0034.
 
+Objects created:
+
+- extensions ``pg_trgm`` + ``unaccent`` (guarded — only when absent; a
+  ledger table records what THIS migration created so downgrade drops
+  exactly and only those);
 - ``public.mesh_search_norm(TEXT)`` — the SINGLE normalization entry point
-  (NFKD + unaccent + lower). plpgsql IMMUTABLE PARALLEL SAFE so expression
-  indexes stay matchable across planner versions (§2.2 R5-H3). Every search
-  normalization — projection writes, index expressions, query expressions,
-  backfills — goes through this function only.
-- ``members.search_name`` — controlled search projection of the README §6.1
-  display-name resolution chain (display_override → users.display_name →
-  users.email / agents.name). Search-only; never rendered. Synced by the
-  service-layer single function ``sync_member_search_name`` plus a daily
-  reconcile (search-command-palette.md §2.2 sync contract).
-- 11 search indexes (9 ``mesh_search_norm`` expression indexes + 2 member
-  projection column indexes) + 2 tenant/status support indexes. Three query
-  paths map 1:1 onto them: 1–2 char prefix (``*_prefix`` B-tree
-  text_pattern_ops), canonical identifier equality (existing
-  ``uq_issues_identifier``), ≥3 char trigram (``*_trgm`` GIN gin_trgm_ops).
-- One-shot batched backfill (≤10k rows per UPDATE statement).
+  (NFKD + unaccent + lower; plpgsql IMMUTABLE PARALLEL SAFE so expression
+  indexes stay matched across planner versions, spec §2.2 R5-H3);
+- ``public.mesh_search_text_score(TEXT, TEXT)`` — the integer §4.6 scoring
+  ladder used by SQL ordering/keyset paging and mirrored by ``scoring.py``;
+- ``members.search_name`` — search-only projection of the README §6.1
+  display-name resolution chain, backfilled in ≤10k-row batches;
+- 11 search indexes (9 mesh_search_norm expression indexes + 2 projection
+  column indexes) plus 2 tenant/status support indexes — names verbatim
+  per spec §2.2 (R4-M2 count);
+- sync triggers: members (insert / display_override / status), users
+  (display_name / email rename → ALL member rows of that user), agents
+  (name rename → that agent's member rows). Display rendering never reads
+  the projection — it is search-only (spec §2.2 同步契约).
+
+Transactional by design: plain CREATE INDEX (not CONCURRENTLY) is fine for
+this batch — test databases are fresh; production first-deploy notes go in
+the runbook. ``normalize(t, NFKD)`` + the explicit ``'public.unaccent'``
+regdictionary are PG16 verbatim per spec.
 
 Revision ID: 0035
 Revises: 0034
-Create Date: 2026-07-29
+Create Date: 2026-07-30
 """
-
 from __future__ import annotations
 
 from alembic import op
@@ -36,116 +43,481 @@ depends_on = None
 
 APP_ROLE = "mesh_app"
 
-SEARCH_INDEXES = (
+# The display-name resolution chain (README §6.1 / member.md §2.4) computed
+# in SQL over a members row + its optional users/agents JOINs — shared by the
+# backfill and the sync trigger helper so projection and trigger never drift.
+SEARCH_NAME_CHAIN_SQL = """COALESCE(
+  NULLIF(BTRIM(m.display_override), ''),
+  CASE m.member_type
+    WHEN 'human' THEN COALESCE(NULLIF(BTRIM(u.display_name), ''),
+                               NULLIF(split_part(u.email, '@', 1), ''))
+    WHEN 'agent' THEN NULLIF(BTRIM(a.name), '')
+  END,
+  CASE WHEN m.member_type = 'human' THEN 'member-' || left(m.id::text, 8)
+       ELSE 'agent-' || left(m.agent_id::text, 8) END,
+  '')"""
+
+SEARCH_INDEXES: tuple[str, ...] = (
+    # 1a/1b — member projection column indexes (column is pre-normalized).
     "idx_members_search_name_trgm",
     "idx_members_search_name_prefix",
+    # 2b/2c — issue expression indexes (title trigram, title + identifier prefix).
     "idx_issues_title_trgm",
     "idx_issues_title_prefix",
     "idx_issues_identifier_prefix",
+    # 3 — project expression indexes.
     "idx_projects_name_trgm",
     "idx_projects_name_prefix",
+    # 4 — view expression indexes.
     "idx_views_name_trgm",
     "idx_views_name_prefix",
+    # 5 — chat_session expression indexes.
     "idx_chat_sessions_title_trgm",
     "idx_chat_sessions_title_prefix",
 )
 
+SUPPORT_INDEXES: tuple[str, ...] = (
+    "idx_members_ws_type_active",
+    "idx_issues_ws_not_deleted",
+)
+
 
 def upgrade() -> None:
-    # -- extensions (idempotent) ------------------------------------------------
-    op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    op.execute("CREATE EXTENSION IF NOT EXISTS unaccent")
+    _create_extensions_guarded()
+    _create_norm_function()
+    _create_score_function()
+    _add_projection_column()
+    _backfill_projection()
+    _create_indexes()
+    _create_sync_triggers()
+    _create_resync_function()
 
-    # -- single normalization entry point (search-command-palette.md §2.2) ------
-    # unaccent(text) is STABLE (reads the dictionary); the two-argument form
-    # pins an explicit regdictionary so the IMMUTABLE declaration is honest.
-    # plpgsql (never inlined) keeps expression-index indexprs matching the
-    # query expression across planner versions (R5-H3).
+
+def downgrade() -> None:
+    # Triggers first (they call the helper), then helper + normalizer.
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_resync_search_name(TEXT, UUID)")
+    op.execute("DROP TRIGGER IF EXISTS trg_agents_search_name ON agents")
+    op.execute("DROP TRIGGER IF EXISTS trg_users_search_name ON users")
+    op.execute("DROP TRIGGER IF EXISTS trg_members_search_name ON members")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_sync_agent()")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_sync_user()")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_sync_member()")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_member_search_name(UUID)")
+    for name in SUPPORT_INDEXES + SEARCH_INDEXES:
+        op.execute(f"DROP INDEX IF EXISTS {name}")
+    # The normalizer has expression-index dependents — they must be gone
+    # first (above); DROP refusal is the integrity backstop.
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_text_score(TEXT, TEXT)")
+    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_norm(TEXT)")
+    op.execute("ALTER TABLE members DROP COLUMN IF EXISTS search_name")
+    _drop_guarded_extensions()
+
+
+# ---------------------------------------------------------------------------
+# Extensions — guarded so downgrade drops only what this migration created.
+# ---------------------------------------------------------------------------
+
+
+def _create_extensions_guarded() -> None:
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS mesh_search_ext_ledger (
+          name TEXT PRIMARY KEY
+        )
+        """
+    )
+    op.execute(
+        """
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+            CREATE EXTENSION pg_trgm;
+            INSERT INTO mesh_search_ext_ledger(name) VALUES ('pg_trgm')
+            ON CONFLICT (name) DO NOTHING;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'unaccent') THEN
+            CREATE EXTENSION unaccent;
+            INSERT INTO mesh_search_ext_ledger(name) VALUES ('unaccent')
+            ON CONFLICT (name) DO NOTHING;
+          END IF;
+        END $$;
+        """
+    )
+
+
+def _drop_guarded_extensions() -> None:
+    op.execute(
+        """
+        DO $$
+        DECLARE ext_name TEXT;
+        BEGIN
+          FOR ext_name IN SELECT name FROM mesh_search_ext_ledger LOOP
+            EXECUTE format('DROP EXTENSION IF EXISTS %I', ext_name);
+          END LOOP;
+        END $$;
+        """
+    )
+    op.execute("DROP TABLE IF EXISTS mesh_search_ext_ledger")
+
+
+# ---------------------------------------------------------------------------
+# Normalizer + projection.
+# ---------------------------------------------------------------------------
+
+
+def _create_norm_function() -> None:
+    # Verbatim per spec §2.2: plpgsql (never inlined — indexprs stay matched
+    # across planner versions, R5-H3), explicit regdictionary pins the
+    # dictionary so the IMMUTABLE claim holds (R3-M1).
     op.execute(
         """
         CREATE OR REPLACE FUNCTION public.mesh_search_norm(t TEXT) RETURNS TEXT
         LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
         $$ BEGIN
-          RETURN lower(public.unaccent('public.unaccent'::regdictionary, normalize(t, NFKD)));
-        END $$
+          RETURN lower(public.unaccent('public.unaccent'::regdictionary,
+                                       normalize(t, NFKD)));
+        END $$;
         """
     )
-    # The API connects as the restricted mesh_app role (README §6.2 rule 5);
-    # query expressions call the function, so it needs EXECUTE.
-    op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_search_norm(TEXT) TO {APP_ROLE}")
 
-    # -- §4.6 scoring ladder — single source of truth (M6) -----------------------
-    # The service SELECTs use this function as score_bucket; scoring.py
-    # mirrors the identical algorithm for unit tests, so SQL and Python can
-    # never diverge (M6: the previous parallel SQL CASE / Python ladder
-    # disagreed on separator handling and lacked acronym/word-boundary
-    # tiers). Inputs are expected ALREADY normalized (mesh_search_norm).
-    #   8 exact > 7 prefix > 6 token-prefix (every query token prefixes
-    #   some title token; separators - _ / . count as token boundaries)
-    #   > 5 acronym (query chars = initials of successive title tokens)
-    #   > 3 contiguous substring > 1 trigram fuzzy fallback.
+
+def _create_score_function() -> None:
+    """Create the database mirror of ``mesh.search.scoring.match_bucket``."""
     op.execute(
-        """
+        r"""
         CREATE OR REPLACE FUNCTION public.mesh_search_text_score(t TEXT, q TEXT)
         RETURNS INT
         LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE RETURNS NULL ON NULL INPUT AS
         $$
         DECLARE
-          toks_t TEXT[];
-          toks_q TEXT[];
-          tok TEXT;
-          flat_q TEXT;
-          p INT;
-          all_prefixed BOOLEAN;
-          non_empty INT := 0;
+          nt TEXT := public.mesh_search_norm(t);
+          nq TEXT := public.mesh_search_norm(q);
+          title_tokens TEXT[];
+          query_tokens TEXT[];
+          boundary_tokens TEXT[];
+          acronym TEXT := '';
+          token TEXT;
+          query_token TEXT;
+          all_match BOOLEAN;
+          needle TEXT;
+          needle_pos INT;
+          index_pos INT;
         BEGIN
-          IF q = '' THEN RETURN 1; END IF;
-          IF t = q THEN RETURN 8; END IF;
-          IF t LIKE q || '%' THEN RETURN 7; END IF;
-          -- Separator normalization: - _ / . (and space) are token boundaries.
-          toks_t := string_to_array(regexp_replace(t, '[-_/. ]+', ' ', 'g'), ' ');
-          toks_q := string_to_array(regexp_replace(q, '[-_/. ]+', ' ', 'g'), ' ');
-          -- Token-prefix: every non-empty query token prefixes some title token.
-          all_prefixed := TRUE;
-          FOREACH tok IN ARRAY toks_q LOOP
-            IF tok = '' THEN CONTINUE; END IF;
-            non_empty := non_empty + 1;
-            IF NOT EXISTS (
-              SELECT 1 FROM unnest(toks_t) AS tt
-              WHERE tt <> '' AND tt LIKE tok || '%'
-            ) THEN
-              all_prefixed := FALSE;
-              EXIT;
-            END IF;
-          END LOOP;
-          IF non_empty > 0 AND all_prefixed THEN RETURN 6; END IF;
-          -- Acronym: the query's characters (sans separators) match the
-          -- first characters of successive title tokens in order.
-          flat_q := regexp_replace(q, '[-_/. ]+', '', 'g');
-          IF flat_q <> '' AND array_length(toks_t, 1) >= length(flat_q) THEN
-            p := 1;
-            FOREACH tok IN ARRAY toks_t LOOP
-              IF p > length(flat_q) THEN EXIT; END IF;
-              IF tok <> '' AND left(tok, 1) = substring(flat_q FROM p FOR 1) THEN
-                p := p + 1;
+          IF nq = '' OR nt = '' THEN RETURN 0; END IF;
+          IF nt = nq THEN RETURN 90; END IF;
+          IF nt LIKE nq || '%' THEN RETURN 80; END IF;
+
+          title_tokens := regexp_split_to_array(nt, '[[:space:]_./-]+');
+          query_tokens := regexp_split_to_array(nq, '[[:space:]_./-]+');
+
+          IF cardinality(query_tokens) > 1 THEN
+            all_match := TRUE;
+            FOREACH query_token IN ARRAY query_tokens LOOP
+              IF query_token = '' OR NOT EXISTS (
+                SELECT 1 FROM unnest(title_tokens) AS tt
+                WHERE tt <> '' AND tt LIKE query_token || '%'
+              ) THEN
+                all_match := FALSE;
+                EXIT;
               END IF;
             END LOOP;
-            IF p > length(flat_q) THEN RETURN 5; END IF;
+            IF all_match THEN RETURN 70; END IF;
+
+            all_match := TRUE;
+            FOREACH query_token IN ARRAY query_tokens LOOP
+              IF query_token = '' OR NOT EXISTS (
+                SELECT 1 FROM unnest(title_tokens) AS tt
+                WHERE tt <> '' AND position(query_token IN tt) > 0
+              ) THEN
+                all_match := FALSE;
+                EXIT;
+              END IF;
+            END LOOP;
+            IF all_match THEN RETURN 40; END IF;
+            needle := array_to_string(query_tokens, ' ');
+          ELSE
+            FOREACH token IN ARRAY title_tokens LOOP
+              IF token <> '' AND token LIKE nq || '%' THEN RETURN 70; END IF;
+              IF token <> '' THEN acronym := acronym || left(token, 1); END IF;
+            END LOOP;
+            IF length(nq) >= 2 AND acronym = nq THEN RETURN 60; END IF;
+
+            boundary_tokens := regexp_split_to_array(
+              public.mesh_search_norm(
+                regexp_replace(t, '([[:lower:][:digit:]])([[:upper:]])', E'\\1 \\2', 'g')
+              ),
+              '[[:space:]_./-]+'
+            );
+            FOREACH token IN ARRAY boundary_tokens LOOP
+              IF token <> '' AND token LIKE nq || '%' THEN RETURN 50; END IF;
+            END LOOP;
+            IF position(nq IN nt) > 0 THEN RETURN 40; END IF;
+            needle := nq;
           END IF;
-          IF position(q in t) > 0 THEN RETURN 3; END IF;
-          RETURN 1;
-        END $$
+
+          needle_pos := 1;
+          FOR index_pos IN 1..length(nt) LOOP
+            IF substring(nt FROM index_pos FOR 1) =
+               substring(needle FROM needle_pos FOR 1) THEN
+              needle_pos := needle_pos + 1;
+              IF needle_pos > length(needle) THEN RETURN 20; END IF;
+            END IF;
+          END LOOP;
+
+          -- This function is evaluated only for rows recalled by a prefix or
+          -- trigram/substring predicate. An otherwise unclassified trigram hit
+          -- receives the deterministic fuzzy floor.
+          RETURN 10;
+        END $$;
         """
     )
-    op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_search_text_score(TEXT, TEXT) TO {APP_ROLE}")
+    op.execute(
+        f"GRANT EXECUTE ON FUNCTION public.mesh_search_text_score(TEXT, TEXT) TO {APP_ROLE}"
+    )
 
-    # -- single search_name resync entry point (§2.2 sync contract) --------------
-    # SECURITY DEFINER so the app role can resync across workspaces (a user
-    # rename touches that user's member rows in EVERY workspace — the tenant
-    # GUC / RLS would hide the other workspaces' rows otherwise; same pattern
-    # as the mesh_<entity>_workspace_id resolvers). All normalization goes
-    # through public.mesh_search_norm; the IS DISTINCT FROM guard keeps it a
-    # no-op when already consistent.
+
+def _add_projection_column() -> None:
+    op.execute(
+        "ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT ''"
+    )
+    op.execute(
+        """
+        COMMENT ON COLUMN members.search_name IS
+          '检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);'
+          '仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2'
+        """
+    )
+
+
+def _backfill_projection() -> None:
+    # Batches of ≤10k rows (spec §2.2 回填迁移): the migration transaction
+    # holds until commit, so this is chunked work inside it rather than
+    # separate commits — acceptable for first-deploy/fresh test DBs.
+    # The chain is resolved inside the derived table (LEFT JOINs cannot see
+    # the UPDATE target as a sibling FROM entry — PostgreSQL scope rule);
+    # the members alias there is ``mm``.
+    chain_alias_sql = SEARCH_NAME_CHAIN_SQL.replace("m.", "mm.")
+    op.execute(
+        """
+        DO $$
+        DECLARE batch_rows INT;
+        BEGIN
+          LOOP
+            UPDATE members m
+            SET search_name = public.mesh_search_norm(sub.display_chain)
+            FROM (
+              SELECT mm.id AS mid, """ + chain_alias_sql + """ AS display_chain
+              FROM (SELECT id FROM members WHERE search_name = ''
+                    ORDER BY id LIMIT 10000) bb
+              JOIN members mm ON mm.id = bb.id
+              LEFT JOIN users u ON u.id = mm.user_id
+              LEFT JOIN agents a ON a.id = mm.agent_id AND a.workspace_id = mm.workspace_id
+            ) sub
+            WHERE m.id = sub.mid;
+            GET DIAGNOSTICS batch_rows = ROW_COUNT;
+            EXIT WHEN batch_rows = 0;
+          END LOOP;
+        END $$;
+        """
+    )
+
+
+# ---------------------------------------------------------------------------
+# Indexes — query expressions must match these verbatim (spec §2.2).
+# ---------------------------------------------------------------------------
+
+
+def _create_indexes() -> None:
+    op.execute(
+        "CREATE INDEX idx_members_search_name_trgm"
+        " ON members USING gin (search_name gin_trgm_ops)"
+    )
+    op.execute(
+        "CREATE INDEX idx_members_search_name_prefix"
+        " ON members (workspace_id, search_name text_pattern_ops)"
+        " WHERE status <> 'removed'"
+    )
+    op.execute(
+        "CREATE INDEX idx_members_ws_type_active"
+        " ON members (workspace_id, member_type)"
+        " WHERE status <> 'removed'"
+    )
+    op.execute(
+        "CREATE INDEX idx_issues_title_trgm"
+        " ON issues USING gin ((public.mesh_search_norm(title)) gin_trgm_ops)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_issues_title_prefix"
+        " ON issues (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_issues_identifier_prefix"
+        " ON issues (workspace_id, (public.mesh_search_norm(identifier)) text_pattern_ops)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_issues_ws_not_deleted"
+        " ON issues (workspace_id, project_id)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_projects_name_trgm"
+        " ON projects USING gin ((public.mesh_search_norm(name)) gin_trgm_ops)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_projects_name_prefix"
+        " ON projects (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops)"
+        " WHERE deleted_at IS NULL"
+    )
+    op.execute(
+        "CREATE INDEX idx_views_name_trgm"
+        " ON views USING gin ((public.mesh_search_norm(name)) gin_trgm_ops)"
+    )
+    op.execute(
+        "CREATE INDEX idx_views_name_prefix"
+        " ON views (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops)"
+    )
+    op.execute(
+        "CREATE INDEX idx_chat_sessions_title_trgm"
+        " ON chat_sessions USING gin ((public.mesh_search_norm(title)) gin_trgm_ops)"
+    )
+    op.execute(
+        "CREATE INDEX idx_chat_sessions_title_prefix"
+        " ON chat_sessions (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sync triggers — the controlled-sync contract (spec §2.2 写死).
+# ---------------------------------------------------------------------------
+
+
+def _create_sync_triggers() -> None:
+    # Single helper: recompute ONE member row's projection through the same
+    # chain the backfill used (index/query/backfill share mesh_search_norm).
+    # SECURITY DEFINER (owner): the helper reads members across workspaces and
+    # is invoked from trigger contexts that either span tenants (a user rename
+    # recomputes ALL workspaces' rows) or carry no tenant GUC at all (a global
+    # PATCH /users/me) — the app role's RLS policy
+    # (``workspace_id = current_setting('mesh.workspace_id')::uuid``) would
+    # refuse or fail-closed-error those reads. Owner execution bypasses RLS
+    # (no FORCE ROW LEVEL SECURITY anywhere); the body is a fixed statement
+    # with a single UUID parameter — no caller-influenced SQL. search_path is
+    # pinned (same hardening as the 0034 bootstrap function).
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_member_search_name(p_member_id UUID)
+        RETURNS TEXT
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
+        $$
+          SELECT public.mesh_search_norm(""" + SEARCH_NAME_CHAIN_SQL + """)
+          FROM members m
+          LEFT JOIN users u ON u.id = m.user_id
+          LEFT JOIN agents a ON a.id = m.agent_id AND a.workspace_id = m.workspace_id
+          WHERE m.id = p_member_id
+        $$;
+        """
+    )
+
+    # members: enrollment + override/status changes. The sync UPDATE below
+    # touches ONLY search_name, so it cannot re-fire this column-list
+    # trigger (no recursion). All three sync functions are SECURITY DEFINER
+    # (see mesh_member_search_name above): the projection recompute is a
+    # cross-tenant maintenance write that must not depend on the caller's
+    # tenant GUC — the users trigger fires from global (non-workspace)
+    # requests where the GUC is never set.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_search_sync_member()
+        RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
+        $$
+        BEGIN
+          UPDATE members
+          SET search_name = public.mesh_member_search_name(NEW.id)
+          WHERE id = NEW.id;
+          RETURN NULL;
+        END $$;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_members_search_name
+        AFTER INSERT OR UPDATE OF display_override, status ON members
+        FOR EACH ROW EXECUTE FUNCTION public.mesh_search_sync_member()
+        """
+    )
+
+    # users: a rename recomputes ALL member rows of that user (cross-workspace).
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_search_sync_user()
+        RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
+        $$
+        BEGIN
+          UPDATE members
+          SET search_name = public.mesh_member_search_name(id)
+          WHERE user_id = NEW.id;
+          RETURN NULL;
+        END $$;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_users_search_name
+        AFTER UPDATE OF display_name, email ON users
+        FOR EACH ROW EXECUTE FUNCTION public.mesh_search_sync_user()
+        """
+    )
+
+    # agents: a rename recomputes that agent's member row(s).
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.mesh_search_sync_agent()
+        RETURNS trigger
+        LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
+        $$
+        BEGIN
+          UPDATE members
+          SET search_name = public.mesh_member_search_name(id)
+          WHERE agent_id = NEW.id AND workspace_id = NEW.workspace_id;
+          RETURN NULL;
+        END $$;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER trg_agents_search_name
+        AFTER UPDATE OF name ON agents
+        FOR EACH ROW EXECUTE FUNCTION public.mesh_search_sync_agent()
+        """
+    )
+
+    # These SECURITY DEFINER helpers are trigger internals. PostgreSQL grants
+    # EXECUTE to PUBLIC for new functions by default; leaving that grant in
+    # place would let an app connection call the cross-tenant lookup helper
+    # directly. Trigger execution does not require caller EXECUTE privileges.
+    for signature in (
+        "public.mesh_member_search_name(UUID)",
+        "public.mesh_search_sync_member()",
+        "public.mesh_search_sync_user()",
+        "public.mesh_search_sync_agent()",
+    ):
+        op.execute(f"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC")
+
+
+def _create_resync_function() -> None:
+    """Compatibility entry point for write paths and the reconcile worker.
+
+    Main's triggers keep the projection current for ordinary writes. Existing
+    service write paths still call this function in the same transaction, and
+    the daily worker uses ``kind='all'`` to repair out-of-band drift. Both paths
+    share the trigger helper, so there is still one display-chain computation.
+    """
     op.execute(
         """
         CREATE OR REPLACE FUNCTION public.mesh_resync_search_name(
@@ -155,175 +527,32 @@ def upgrade() -> None:
         LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS
         $$
         DECLARE
-          v_count BIGINT;
+          changed BIGINT;
         BEGIN
           IF p_kind NOT IN ('member', 'user', 'agent', 'all') THEN
             RAISE EXCEPTION 'mesh_resync_search_name: unknown kind %', p_kind;
           END IF;
+          IF p_kind <> 'all' AND p_id IS NULL THEN
+            RAISE EXCEPTION 'mesh_resync_search_name: id is required for kind %', p_kind;
+          END IF;
+
           UPDATE members m
-          SET search_name = src.norm
-          FROM (
-            SELECT m2.id AS mid,
-                   public.mesh_search_norm(COALESCE(
-                     NULLIF(m2.display_override, ''),
-                     CASE m2.member_type
-                       WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email)
-                       WHEN 'agent' THEN a.name
-                     END,
-                     ''
-                   )) AS norm
-            FROM members m2
-            LEFT JOIN users u ON u.id = m2.user_id
-            LEFT JOIN agents a ON a.id = m2.agent_id
-            WHERE (p_kind = 'all')
-               OR (p_kind = 'member' AND m2.id = p_id)
-               OR (p_kind = 'user' AND m2.user_id = p_id)
-               OR (p_kind = 'agent' AND m2.agent_id = p_id)
-          ) src
-          WHERE m.id = src.mid
-            AND m.search_name IS DISTINCT FROM src.norm;
-          GET DIAGNOSTICS v_count = ROW_COUNT;
-          RETURN v_count;
-        END $$
+          SET search_name = public.mesh_member_search_name(m.id)
+          WHERE (
+              p_kind = 'all'
+              OR (p_kind = 'member' AND m.id = p_id)
+              OR (p_kind = 'user' AND m.user_id = p_id)
+              OR (p_kind = 'agent' AND m.agent_id = p_id)
+            )
+            AND m.search_name IS DISTINCT FROM public.mesh_member_search_name(m.id);
+          GET DIAGNOSTICS changed = ROW_COUNT;
+          RETURN changed;
+        END $$;
         """
     )
-    op.execute(f"GRANT EXECUTE ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) TO {APP_ROLE}")
-
-    # -- members.search_name projection (README §6.1 registered snapshot) --------
-    op.execute("ALTER TABLE members ADD COLUMN IF NOT EXISTS search_name TEXT NOT NULL DEFAULT ''")
     op.execute(
-        "COMMENT ON COLUMN members.search_name IS "
-        "'检索专用投影 = public.mesh_search_norm(README §6.1 显示名解析链结果);"
-        "仅用于检索,不用于显示渲染。同步契约见 search-command-palette.md §2.2'"
-    )
-
-    # -- backfill before building indexes (fresh databases: no-op) ---------------
-    # Batched walk (§2.2 「每批 ≤1 万行,不持长事务」 — M3: the previous
-    # single-UPDATE form violated the batch contract): keyset walk over
-    # members.id, ≤10 000 rows per UPDATE statement, same normalization
-    # chain the service layer and the daily reconcile use.
-    op.execute(
-        """
-        DO $$
-        DECLARE
-          v_batch CONSTANT INT := 10000;
-          v_last UUID := '00000000-0000-0000-0000-000000000000';
-          v_ids UUID[];
-        BEGIN
-          LOOP
-            SELECT array_agg(id ORDER BY id) INTO v_ids
-            FROM (SELECT id FROM members WHERE id > v_last ORDER BY id LIMIT v_batch) b;
-            EXIT WHEN v_ids IS NULL;
-            v_last := v_ids[array_length(v_ids, 1)];
-            UPDATE members m
-            SET search_name = src.norm
-            FROM (
-              SELECT m2.id,
-                     public.mesh_search_norm(COALESCE(
-                       NULLIF(m2.display_override, ''),
-                       CASE m2.member_type
-                         WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email)
-                         WHEN 'agent' THEN a.name
-                       END,
-                       ''
-                     )) AS norm
-              FROM members m2
-              LEFT JOIN users u ON u.id = m2.user_id
-              LEFT JOIN agents a ON a.id = m2.agent_id
-              WHERE m2.id = ANY (v_ids)
-            ) src
-            WHERE m.id = src.id
-              AND m.search_name IS DISTINCT FROM src.norm;
-          END LOOP;
-        END $$
-        """
-    )
-
-    # -- member/agent: projection column indexes (§2.2 items 1a–1c) ---------------
-    # ≥3 char fuzzy: trigram GIN on the already-normalized column.
-    op.execute(
-        "CREATE INDEX idx_members_search_name_trgm ON members USING gin (search_name gin_trgm_ops)"
-    )
-    # 1–2 char prefix: B-tree pattern index, workspace-scoped. The partial
-    # predicate mirrors the roster visibility predicate carried by queries.
-    op.execute(
-        "CREATE INDEX idx_members_search_name_prefix "
-        "ON members (workspace_id, search_name text_pattern_ops) WHERE status <> 'removed'"
-    )
-    # Tenant/type/status support index (not one of the 11 search indexes).
-    op.execute(
-        "CREATE INDEX idx_members_ws_type_active "
-        "ON members (workspace_id, member_type) WHERE status <> 'removed'"
-    )
-
-    # -- issues (§2.2 item 2) ------------------------------------------------------
-    op.execute(
-        "CREATE INDEX idx_issues_title_trgm "
-        "ON issues USING gin ((public.mesh_search_norm(title)) gin_trgm_ops) "
-        "WHERE deleted_at IS NULL"
+        "REVOKE ALL ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) FROM PUBLIC"
     )
     op.execute(
-        "CREATE INDEX idx_issues_title_prefix "
-        "ON issues (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops) "
-        "WHERE deleted_at IS NULL"
+        f"GRANT EXECUTE ON FUNCTION public.mesh_resync_search_name(TEXT, UUID) TO {APP_ROLE}"
     )
-    op.execute(
-        "CREATE INDEX idx_issues_identifier_prefix "
-        "ON issues (workspace_id, (public.mesh_search_norm(identifier)) text_pattern_ops) "
-        "WHERE deleted_at IS NULL"
-    )
-    # Tenant/soft-delete support index (BitmapAnd partner; not a search index).
-    op.execute(
-        "CREATE INDEX idx_issues_ws_not_deleted "
-        "ON issues (workspace_id, project_id) WHERE deleted_at IS NULL"
-    )
-
-    # -- projects (§2.2 item 3) ----------------------------------------------------
-    op.execute(
-        "CREATE INDEX idx_projects_name_trgm "
-        "ON projects USING gin ((public.mesh_search_norm(name)) gin_trgm_ops) "
-        "WHERE deleted_at IS NULL"
-    )
-    op.execute(
-        "CREATE INDEX idx_projects_name_prefix "
-        "ON projects (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops) "
-        "WHERE deleted_at IS NULL"
-    )
-
-    # -- views (§2.2 item 4) -------------------------------------------------------
-    op.execute(
-        "CREATE INDEX idx_views_name_trgm "
-        "ON views USING gin ((public.mesh_search_norm(name)) gin_trgm_ops)"
-    )
-    op.execute(
-        "CREATE INDEX idx_views_name_prefix "
-        "ON views (workspace_id, (public.mesh_search_norm(name)) text_pattern_ops)"
-    )
-
-    # -- chat_sessions (§2.2 item 5) ------------------------------------------------
-    op.execute(
-        "CREATE INDEX idx_chat_sessions_title_trgm "
-        "ON chat_sessions USING gin ((public.mesh_search_norm(title)) gin_trgm_ops)"
-    )
-    op.execute(
-        "CREATE INDEX idx_chat_sessions_title_prefix "
-        "ON chat_sessions (workspace_id, (public.mesh_search_norm(title)) text_pattern_ops)"
-    )
-
-    op.execute("ANALYZE members")
-    op.execute("ANALYZE issues")
-    op.execute("ANALYZE projects")
-    op.execute("ANALYZE views")
-    op.execute("ANALYZE chat_sessions")
-
-
-def downgrade() -> None:
-    for name in SEARCH_INDEXES:
-        op.execute(f"DROP INDEX IF EXISTS {name}")
-    op.execute("DROP INDEX IF EXISTS idx_issues_ws_not_deleted")
-    op.execute("DROP INDEX IF EXISTS idx_members_ws_type_active")
-    op.execute("ALTER TABLE members DROP COLUMN IF EXISTS search_name")
-    op.execute("DROP FUNCTION IF EXISTS public.mesh_resync_search_name(TEXT, UUID)")
-    op.execute("DROP FUNCTION IF EXISTS public.mesh_search_norm(TEXT)")
-    # Extensions are intentionally kept: other databases may rely on them and
-    # dropping shared extensions is not reversible safely from one module.

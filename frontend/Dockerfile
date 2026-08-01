@@ -2,7 +2,7 @@
 # Two-stage build for the real SPA front-door (H5). The bundle is built with
 # empty API/WS bases so the browser talks to its own origin; nginx then
 # reverse-proxies /api and /ws to the api / gateway services (see nginx.conf).
-FROM node:20-alpine AS build
+FROM node:22.22.0-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install

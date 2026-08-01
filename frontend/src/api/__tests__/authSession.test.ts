@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../client';
 import {
+  changePassword,
   forgotPassword,
   listSessions,
   logout,
@@ -83,6 +84,19 @@ describe('auth session API(auth.md §3.1 续期/登出/重置/MFA/会话)', () =
     expect(calledBody(fetchImpl)).toEqual({ token: 'rst', new_password: 'new-pass-1' });
   });
 
+  it('changePassword maps the UI field names to the authenticated endpoint contract', async () => {
+    const fetchImpl = createMockFetch(200, { data: { status: 'ok' } });
+    await changePassword(createClient(fetchImpl), {
+      oldPassword: 'old-pass-1',
+      newPassword: 'new-pass-1',
+    });
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/auth/change-password');
+    expect(calledBody(fetchImpl)).toEqual({
+      old_password: 'old-pass-1',
+      new_password: 'new-pass-1',
+    });
+  });
+
   it('verifyEmail 发送验证令牌', async () => {
     const fetchImpl = createMockFetch(200, { data: { status: 'ok' } });
     await verifyEmail(createClient(fetchImpl), 'vt');
@@ -139,7 +153,9 @@ describe('auth session API(auth.md §3.1 续期/登出/重置/MFA/会话)', () =
   it('revokeSession 发 DELETE 到具体会话', async () => {
     const fetchImpl = createMockFetch(200, { data: { status: 'ok' } });
     await revokeSession(createClient(fetchImpl), 'ses-1');
-    const init = ((fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit])[1];
+    const init = (
+      (fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
+    )[1];
     expect(init.method).toBe('DELETE');
     expect(calledUrl(fetchImpl)).toContain('/api/v1/sessions/ses-1');
   });

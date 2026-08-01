@@ -1,9 +1,4 @@
-"""members.search_name sync contract (search-command-palette.md §2.2).
-
-Writes go through the single ``sync_member_search_name`` function; renames
-recompute every member row of the identity (across workspaces); the daily
-reconcile repairs drift.
-"""
+"""members.search_name trigger + compatibility resync contract (§2.2)."""
 
 from __future__ import annotations
 
@@ -64,9 +59,10 @@ async def test_sync_member_search_name_human_chain(db_session):
     member, user = await _human_member(
         db_session, ws, name="José Àncône", email="jose@corp.example"
     )
-    assert member.search_name == ""  # nothing synced yet
+    await db_session.refresh(member)
+    assert member.search_name == "jose ancone"  # INSERT trigger is synchronous
 
-    await sync_member_search_name(db_session, member.id)
+    assert await sync_member_search_name(db_session, member.id) == 0
     await db_session.flush()
     await db_session.refresh(member)
     assert member.search_name == "jose ancone"
@@ -75,7 +71,7 @@ async def test_sync_member_search_name_human_chain(db_session):
     # so the override must be flushed first (service paths do this).
     member.display_override = "ZHANG Wei"
     await db_session.flush()
-    await sync_member_search_name(db_session, member.id)
+    assert await sync_member_search_name(db_session, member.id) == 0
     await db_session.flush()
     await db_session.refresh(member)
     assert member.search_name == "zhang wei"
@@ -87,10 +83,9 @@ async def test_sync_member_search_name_agent(db_session):
     _, owner = await _human_member(db_session, ws, name="Owner", email="o@corp.example")
     member, _ = await _agent_member(db_session, ws, name="代码助手", owner=owner)
 
-    await sync_member_search_name(db_session, member.id)
-    await db_session.flush()
     await db_session.refresh(member)
     assert member.search_name == "代码助手"
+    assert await sync_member_search_name(db_session, member.id) == 0
 
 
 async def test_recompute_for_user_updates_all_workspaces(db_session):
@@ -111,7 +106,7 @@ async def test_recompute_for_user_updates_all_workspaces(db_session):
     fixed = await recompute_for_user(db_session, user.id)
     await db_session.flush()
 
-    assert fixed == 2
+    assert fixed == 0  # UPDATE trigger already synchronized both workspaces
     synced = (
         (
             await db_session.execute(
@@ -134,7 +129,7 @@ async def test_recompute_for_agent(db_session):
     fixed = await recompute_for_agent(db_session, agent.id)
     await db_session.flush()
     await db_session.refresh(member)
-    assert fixed == 1
+    assert fixed == 0  # UPDATE trigger already synchronized the roster row
     assert member.search_name == "new bot"
 
 
@@ -173,3 +168,19 @@ async def test_resync_unknown_kind_rejected(db_session):
 async def test_unknown_member_sync_is_noop(db_session):
     fixed = await sync_member_search_name(db_session, uuid.uuid4())
     assert fixed == 0
+
+
+async def test_security_definer_helper_is_not_publicly_callable(db_session):
+    helper, resync = (
+        await db_session.execute(
+            text(
+                "SELECT "
+                "has_function_privilege('mesh_app', "
+                "'public.mesh_member_search_name(uuid)', 'EXECUTE'), "
+                "has_function_privilege('mesh_app', "
+                "'public.mesh_resync_search_name(text,uuid)', 'EXECUTE')"
+            )
+        )
+    ).one()
+    assert helper is False
+    assert resync is True

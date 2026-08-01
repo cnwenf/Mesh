@@ -6,6 +6,16 @@ Mesh 项目的所有重要变更都记录于此文件。
 ## [Unreleased]
 ### Added
 
+- **设置 + 搜索/命令面板 + Analytics + 审批 前端批次④(MES-111 / MES-127,design-quality.md §3.2/§4.4/§9.6/§11.4 + search-command-palette.md 全条 + analytics.md §4 + competitor-parity G3/G4/G10/G11/G19)**——
+  - **设置(SettingsLayout 页面模式沉淀至 `src/design/patterns`)**:账号 `/settings` 与工作区 `/w/:slug/settings` 二级导航(桌面左栏 / 手机顶部分组列表)+ 内容按 Appearance/Notifications/Security + 工作区 general/invitations/roles/labels/custom-fields/data/tokens/audit/danger 子路由分页;dirty 提示 + 保存 toast + 刷新持久化;危险区仅 owner 导航(权限不可见,非禁用);**G11** 工作区默认主题三态入口(admin,「成员未单独设置时生效」)写 `settings.default_theme` 后对账号偏好缺省的在线成员真实生效(协商链:账号缺省 → 工作区默认 → 系统)。
+  - **统一搜索/命令面板(`src/shortcuts/`,§9.6 全条)**:顶栏搜索为真实控件,键入即展开与 Ctrl/Cmd+K 同一结果视图(PaletteResults 同组件同数据源),`/` 聚焦;六类业务对象分组检索(工作项/成员·agent/项目/视图/聊天/命令)+ 空态 favorites(服务端唯一来源)/recents(本地三元组隔离) + identifier 等值快路径直达(跳防抖)+ no-results 语法提示 + 建 issue 入口(预填不直提);120ms 防抖 + AbortController 取消 + 单调令牌丢弃陈旧响应;↑↓/Enter/Esc/mod+Enter 新标签/Tab 补全 键盘全流程 + aria-live 播报结果数;本地命令同步零延迟先渲染、远程 skeleton 不阻塞(§11.4)。
+  - **Analytics(`/insights` + 项目仪表盘 + agent 统计卡)**:Workbench KPI 条(窗口聚合客户端派生)+ 图表网格 + 口径/时区回显行;数字 tabular-nums;空窗 / 数据不足 / 可见性过滤 三态 + 线型虚实 + 图标 + 文字叠加(颜色非唯一信号)+ 暗色双主题。
+  - **G10 统一审批页 `/approvals` 与 `/w/:slug/approvals`**:聚合工具 / squad 计划 / autopilot 动作三类,展示动作/所需权限(capability+permission)/影响范围/预估成本/过期/续跑提示,过期「已过期 + 重新发起」,agent 不可审批。
+  - **G19 动态标签页标题**:`shell/hooks/useDocumentTitle` 公共 hook(导出),本批页面接入。
+  - **后端全局搜索模块** `backend/src/mesh/search/`(迁移 0035):pg_trgm + unaccent + `public.mesh_search_norm` IMMUTABLE 归一化 + `members.search_name` 投影列 + 写路径触发器同事务同步 + §2.2 十一索引;`GET /api/v1/workspaces/{ws}/search` 六类召回 + identifier 快路径 + 查询内可见性内联 + 键集游标(HMAC 绑定)+ §4.6 整数桶全序 + code point 高亮;trigram 路径 OR 归一化子串兜底,**修 CJK 长混合标题因相似度稀释漏召回**;workspace 作用域仅自路径解析;原始查询不落地日志(§5.3)。
+  - **模态可关性修正**:`Dialog` 改 document 级 Esc 监听,任意焦点位置(含焦点圈养竞态落到 body)均可 Esc 关闭,Tab 圈养不变(§7.5/§10.2)。
+  - **i18n**:search.*/approvals.*/analytics.* 等约 118 键 zh-CN + en 双语补齐(目录版本哈希重算,parity + ICU 可渲染门禁绿)。
+  - **验证**:单测 3856 例全绿、逐文件 90% 门禁(189 文件)通过;后端搜索真实 e2e 44 例全绿;前端批次④真实 e2e 桌面 + 手机双视口 10/10 全绿 + 四组合走查存证 22 张互异(`e2e/evidence/mes111-b4/`);lint/typecheck/build/对比度/视觉回归(38)全绿。
 - **前端设计对齐 MES-111 批次③——成员/Agent 名册 + 收件箱 + 聊天(design-quality.md §3.2/§4.4/§7.2/§7.6/§8.2/§9.8)**:逐页落地设计 Spec 的视觉/排版/交互升级——
   - **patterns 层新增**(§11.1,与批次② DataView/DetailLayout、批次④ SettingsLayout 同层共存,API 稳定):`ConversationLayout`(列表/详情双栏;手机 ≤720px 单栏经 `activePane` 路由化,组件不读路由/窗口宽,断点集中)与 `RunStateBadge`(§9.8 运行反馈五态统一语言:`queued/running/waiting/succeeded/failed` + 派生 `idle/unknown`,tone/图标单一事实源,`data-state` 钩子,running 脉冲经 `prefers-reduced-motion` 降级;文案经调用方 `runState.*` 统一)。
   - **成员/Agent 名册**(`/members`):手写头像→底座 `Avatar`(人类缩写稳定 hash / agent 统一轮廓,https-only `src`);AI 徽标→`Badge accent`;名称/类型/角色/状态主次分行 + 排版刻度类;**行操作进底座 `Menu`**(桌面表格 + 手机卡片共享 handler);**A-05 收尾**:手机表格转主次行卡片(`member-card-*`),行操作进 Menu,无横向溢出;agent 行经真实 presence 订阅渲染五态徽标。`/agents/:agentId` 头部重做(`__identity` 簇 + 底座 Avatar/Badge/RunStateBadge + 容量三元组降级为 caption)+ 面板卡片化 + 排版刻度。

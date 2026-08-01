@@ -1,4 +1,4 @@
-"""Search cursor contract (§3.2): signing, binding, tamper rejection."""
+"""Search cursor contract (§3.2): signing, binding and fail-closed parsing."""
 
 from __future__ import annotations
 
@@ -11,96 +11,113 @@ import pytest
 from mesh.errors import ValidationError
 from mesh.search.cursor import (
     binding_fingerprint,
-    decode_search_cursor,
-    encode_search_cursor,
+    canonical_sort_factors,
+    decode_cursor,
+    encode_cursor,
+    factors_as_sort_key,
 )
+from mesh.search.service import validate_search_params
 
 pytestmark = pytest.mark.unit
 
-SECRET = "unit-test-secret"
+SECRET = b"unit-test-search-cursor-secret"
 
 
-def _encoded(**overrides) -> str:
-    params = {
-        "score_bucket": 6,
+def _factors(**overrides) -> list:
+    values = {
+        "score_bucket": 80,
         "title_len": 9,
         "title_lex": "登录页崩溃",
         "result_type": "issue",
-        "row_id": uuid.uuid4(),
-        "fingerprint": overrides.pop("fingerprint", "fp-1"),
-        "secret": overrides.pop("secret", SECRET),
+        "result_id": str(uuid.uuid4()),
     }
-    params.update(overrides)
-    return encode_search_cursor(**params)
+    values.update(overrides)
+    return canonical_sort_factors(**values)
 
 
-def test_roundtrip():
-    row_id = uuid.uuid4()
-    raw = encode_search_cursor(
-        score_bucket=8,
-        title_len=3,
-        title_lex="abc",
-        result_type="member",
-        row_id=row_id,
-        fingerprint="fp-x",
-        secret=SECRET,
-    )
-    decoded = decode_search_cursor(raw, expected_fingerprint="fp-x", secret=SECRET)
-    assert decoded.score_bucket == 8
-    assert decoded.title_len == 3
-    assert decoded.title_lex == "abc"
-    assert decoded.result_type == "member"
-    assert decoded.row_id == row_id
+def _encoded(*, fp: str = "fp-1", secret: bytes = SECRET, factors: list | None = None) -> str:
+    return encode_cursor(secret, fp=fp, factors=factors or _factors())
 
 
-def test_tampered_payload_rejected():
-    raw = _encoded()
-    envelope = json.loads(base64.urlsafe_b64decode(raw))
-    envelope["b"]["t"][0] = 9  # inflate the score bucket
-    tampered = base64.urlsafe_b64encode(
-        json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
-    ).decode()
-    with pytest.raises(ValidationError) as exc:
-        decode_search_cursor(tampered, expected_fingerprint="fp-1", secret=SECRET)
-    assert exc.value.code == "validation_error"
+def _envelope(raw: str) -> dict:
+    return json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
 
 
-def test_tampered_signature_rejected():
-    raw = _encoded()
-    envelope = json.loads(base64.urlsafe_b64decode(raw))
-    envelope["s"] = "0" * 64
-    tampered = base64.urlsafe_b64encode(
-        json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
-    ).decode()
+def _pack(envelope: dict) -> str:
+    return base64.urlsafe_b64encode(
+        json.dumps(envelope, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
+
+
+def test_roundtrip() -> None:
+    factors = _factors(score_bucket=90, title_len=3, title_lex="abc", result_type="member")
+    raw = _encoded(fp="fp-x", factors=factors)
+    fp, decoded = decode_cursor(SECRET, raw)
+    assert fp == "fp-x"
+    assert decoded == factors
+    assert factors_as_sort_key(decoded) == (-90, 3, "abc", "member", factors[4])
+
+
+def test_tampered_payload_rejected() -> None:
+    envelope = _envelope(_encoded())
+    envelope["t"][0] = 999
+    with pytest.raises(ValidationError) as excinfo:
+        decode_cursor(SECRET, _pack(envelope))
+    assert excinfo.value.code == "validation_error"
+
+
+def test_tampered_signature_and_wrong_secret_rejected() -> None:
+    envelope = _envelope(_encoded())
+    envelope["sig"] = "0" * 64
     with pytest.raises(ValidationError):
-        decode_search_cursor(tampered, expected_fingerprint="fp-1", secret=SECRET)
-
-
-def test_wrong_secret_rejected():
-    raw = _encoded(secret="other-secret")
+        decode_cursor(SECRET, _pack(envelope))
     with pytest.raises(ValidationError):
-        decode_search_cursor(raw, expected_fingerprint="fp-1", secret=SECRET)
+        decode_cursor(b"another-secret", _encoded())
 
 
-def test_cross_query_reuse_rejected():
-    raw = _encoded(fingerprint="fp-a")
-    with pytest.raises(ValidationError) as exc:
-        decode_search_cursor(raw, expected_fingerprint="fp-b", secret=SECRET)
-    assert exc.value.code == "validation_error"
+def test_cross_query_reuse_rejected_by_request_binding() -> None:
+    ws = uuid.uuid4()
+    fp = binding_fingerprint("q-a", ("issue",), ws)
+    raw = _encoded(fp=fp)
+    with pytest.raises(ValidationError) as excinfo:
+        validate_search_params(
+            q="q-b",
+            types=("issue",),
+            limit=20,
+            cursor_raw=raw,
+            workspace_id=ws,
+            secret=SECRET,
+        )
+    assert excinfo.value.code == "validation_error"
 
 
-def test_garbage_rejected():
+def test_garbage_rejected() -> None:
     for garbage in ("", "!!!", "aGVsbG8=", base64.urlsafe_b64encode(b"{}").decode()):
         with pytest.raises(ValidationError):
-            decode_search_cursor(garbage, expected_fingerprint="fp-1", secret=SECRET)
+            decode_cursor(SECRET, garbage)
 
 
-def test_fingerprint_order_independent_over_types():
-    fp1 = binding_fingerprint("q", frozenset({"issue", "member"}), uuid.UUID(int=1))
-    fp2 = binding_fingerprint("q", frozenset({"member", "issue"}), uuid.UUID(int=1))
-    fp3 = binding_fingerprint("q2", frozenset({"issue", "member"}), uuid.UUID(int=1))
-    fp4 = binding_fingerprint("q", frozenset({"issue", "member"}), uuid.UUID(int=2))
-    assert fp1 == fp2
-    assert {fp1, fp3, fp4} == {fp1, fp3, fp4}  # distinct inputs → distinct fingerprints
-    assert fp1 != fp3
-    assert fp1 != fp4
+def test_fingerprint_caller_sorts_types_and_binds_query_and_workspace() -> None:
+    ws_a, ws_b = uuid.uuid4(), uuid.uuid4()
+    types_a = tuple(sorted({"issue", "member"}))
+    types_b = tuple(sorted({"member", "issue"}))
+    base = binding_fingerprint("q", types_a, ws_a)
+    assert binding_fingerprint("q", types_b, ws_a) == base
+    assert binding_fingerprint("q2", types_a, ws_a) != base
+    assert binding_fingerprint("q", types_a, ws_b) != base
+
+
+@pytest.mark.parametrize(
+    "factors",
+    [
+        [80, 3, "abc", "issue"],
+        [80, 3, "abc", "issue", "not-a-uuid"],
+        [80, 3, "abc", "unknown_type", str(uuid.uuid4())],
+        [True, 3, "abc", "issue", str(uuid.uuid4())],
+        [80, -1, "abc", "issue", str(uuid.uuid4())],
+    ],
+)
+def test_validly_signed_malformed_factors_fail_closed(factors: list) -> None:
+    _, decoded = decode_cursor(SECRET, _encoded(factors=factors))
+    with pytest.raises(ValidationError):
+        factors_as_sort_key(decoded)

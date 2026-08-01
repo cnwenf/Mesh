@@ -4,7 +4,7 @@ Three query paths routed by input shape (§2.2):
 
 - **canonical identifier** (normalized ``^[a-z0-9]+-\\d+$``): uppercase
   equality fast path on ``UNIQUE(workspace_id, identifier)`` — hit pinned
-  top (score bucket 9), regular path fills the rest;
+  top (score bucket 95), regular path fills the rest;
 - **1–2 chars**: normalized prefix match (``*_prefix`` pattern indexes);
 - **≥3 chars**: trigram similarity (``*_trgm`` GIN expression indexes).
 
@@ -35,49 +35,53 @@ from mesh.db.models.member import Member
 from mesh.db.models.workspace import Workspace
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import BusinessRuleError, ValidationError
+from mesh.search import schemas
 from mesh.search.cursor import (
-    SearchCursor,
     binding_fingerprint,
-    decode_search_cursor,
-    encode_search_cursor,
+    canonical_sort_factors,
+    decode_cursor,
+    encode_cursor,
+    factors_as_sort_key,
+    resolve_cursor_secret,
 )
-from mesh.search.scoring import normalize_search_text
-from mesh.search.shapes import render_result
+from mesh.search.norm import search_norm
+from mesh.search.scoring import BUCKET_IDENTIFIER_EXACT, highlight_ranges
 
-SEARCH_TYPES: tuple[str, ...] = (
-    "issue",
-    "member",
-    "agent",
-    "project",
-    "view",
-    "chat_session",
-)
+SEARCH_TYPES = schemas.SEARCH_TYPES
 # member rows split into member/agent; the SQL query type for both:
 _MEMBER_QUERY_TYPES = frozenset({"member", "agent"})
 
-MAX_QUERY_LENGTH = 120
-DEFAULT_LIMIT = 20
-MAX_LIMIT = 50
+MAX_QUERY_LENGTH = schemas.MAX_QUERY_LENGTH
+DEFAULT_LIMIT = schemas.DEFAULT_LIMIT
+MAX_LIMIT = schemas.MAX_LIMIT
 PREFIX_TYPE_CAP = 5  # §2.2 candidate caps
 FUZZY_TYPE_CAP = 20
 STATEMENT_TIMEOUT_MS = 3000
 
 IDENTIFIER_PATTERN = re.compile(r"^[a-z0-9]+-\d+$")
 
-# §4.6 quantized ladder — single source of truth is the DB function
-# ``public.mesh_search_text_score`` (migration 0029): exact 8 > prefix 7 >
-# token-prefix 6 (every query token prefixes some title token; separators
-# - _ / . normalized to spaces) > acronym 5 (query chars = initials of
-# successive title tokens) > substring 3 > fuzzy 1. ``scoring.py`` mirrors
-# the identical algorithm for unit tests — no SQL/Python divergence (M6).
-_SQL_SCORE = "public.mesh_search_text_score({norm}, :nq)"
+_MEMBER_TITLE_SQL = """COALESCE(
+  NULLIF(BTRIM(m.display_override), ''),
+  CASE m.member_type
+    WHEN 'human' THEN COALESCE(NULLIF(BTRIM(u.display_name), ''),
+                               NULLIF(split_part(u.email, '@', 1), ''))
+    WHEN 'agent' THEN NULLIF(BTRIM(a.name), '')
+  END,
+  CASE WHEN m.member_type = 'human' THEN 'member-' || left(m.id::text, 8)
+       ELSE 'agent-' || left(m.agent_id::text, 8) END
+)"""
+
+# §4.6 quantized ladder — single source of truth is the DB function created by
+# migration 0035. It mirrors scoring.py exactly: exact 90 > prefix 80 > token
+# prefix 70 > acronym 60 > word boundary 50 > substring 40 > subsequence 20 >
+# trigram floor 10. SQL computes every cursor factor before keyset filtering.
+_SQL_SCORE = "public.mesh_search_text_score({title}, :nq)"
 
 # Issue score: the title ladder, lifted to ≥6 when the identifier itself
 # prefix-matches (M1 — identifier retrieval on the 1–2 char path).
 _ISSUE_SCORE = (
-    "GREATEST(public.mesh_search_text_score({norm}, :nq), "
-    "CASE WHEN public.mesh_search_norm(i.identifier) LIKE :prefix_pat ESCAPE '\\' "
-    "THEN 6 ELSE 0 END)"
+    "GREATEST(public.mesh_search_text_score(i.title, :nq), "
+    "public.mesh_search_text_score(i.identifier, :nq))"
 )
 
 
@@ -89,7 +93,30 @@ class SearchParams:
     normalized: str
     types: frozenset[str]
     limit: int
-    cursor: SearchCursor | None
+    cursor: CursorBoundary | None
+
+
+@dataclass(frozen=True)
+class CursorBoundary:
+    """Verified full ordering tuple used by each per-type SQL keyset."""
+
+    score_bucket: int
+    title_len: int
+    title_lex: str
+    result_type: str
+    row_id: uuid.UUID
+
+    @classmethod
+    def from_factors(cls, factors: list) -> CursorBoundary:
+        # factors_as_sort_key performs fail-closed structural/type validation.
+        factors_as_sort_key(factors)
+        return cls(
+            score_bucket=factors[0],
+            title_len=factors[1],
+            title_lex=factors[2],
+            result_type=factors[3],
+            row_id=uuid.UUID(factors[4]),
+        )
 
 
 @dataclass(frozen=True)
@@ -106,18 +133,14 @@ class Row:
     payload: dict
 
 
-def _like_escape(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def validate_search_params(
     *,
     q: str | None,
-    types: str | None,
+    types: tuple[str, ...] | str | None,
     limit: int | None,
     cursor_raw: str | None,
     workspace_id: uuid.UUID,
-    secret: str,
+    secret: bytes,
 ) -> SearchParams | None:
     """Validate + decode; returns None when q is empty (§3.2 empty rule)."""
     query = (q or "").strip()
@@ -127,9 +150,15 @@ def validate_search_params(
             details={"max_length": MAX_QUERY_LENGTH},
         )
 
-    if types is None or types.strip() == "":
+    if types is None or (isinstance(types, str) and types.strip() == ""):
         selected = frozenset(SEARCH_TYPES)
+    elif isinstance(types, tuple):
+        invalid = [item for item in types if item not in SEARCH_TYPES]
+        if invalid:
+            raise ValidationError("invalid types filter", code="validation_error")
+        selected = frozenset(types)
     else:
+        assert isinstance(types, str)
         parts = [t.strip() for t in types.split(",") if t.strip()]
         invalid = [t for t in parts if t not in SEARCH_TYPES]
         if invalid or not parts:
@@ -151,16 +180,17 @@ def validate_search_params(
         # assembled client-side (favorites endpoint + local recents, §4.2.1).
         return None
 
-    fingerprint = binding_fingerprint(query, selected, workspace_id)
+    fingerprint = binding_fingerprint(query, tuple(sorted(selected)), workspace_id)
     cursor = None
     if cursor_raw is not None:
-        cursor = decode_search_cursor(
-            cursor_raw, expected_fingerprint=fingerprint, secret=secret
-        )
+        decoded_fp, factors = decode_cursor(secret, cursor_raw)
+        if decoded_fp != fingerprint:
+            raise ValidationError("invalid cursor", code="validation_error")
+        cursor = CursorBoundary.from_factors(factors)
 
     return SearchParams(
         q=query,
-        normalized=normalize_search_text(query),
+        normalized=search_norm(query),
         types=selected,
         limit=page_limit,
         cursor=cursor,
@@ -209,7 +239,7 @@ def issue_visibility_clause(viewer: Member) -> str:
     )
 
 
-def keyset_clause(entity_type: str, cursor: SearchCursor | None) -> str:
+def keyset_clause(entity_type: str, cursor: CursorBoundary | None) -> str:
     """Keyset filter for one entity list, given the merged-order cursor.
 
     ``title_lex`` comparisons are forced to ``COLLATE "C"`` (code-point
@@ -245,15 +275,23 @@ def keyset_clause(entity_type: str, cursor: SearchCursor | None) -> str:
     )
 
 
+def _escaped_norm_q() -> str:
+    return (
+        "replace(replace(replace(public.mesh_search_norm(:nq), "
+        "E'\\\\', E'\\\\\\\\'), '%', E'\\\\%'), '_', E'\\\\_')"
+    )
+
+
 def match_clause(mode: str, norm_expr: str) -> str:
+    escaped = _escaped_norm_q()
     if mode == "prefix":
-        return f"{norm_expr} LIKE :prefix_pat ESCAPE '\\'"
+        return f"{norm_expr} LIKE {escaped} || '%' ESCAPE E'\\\\'"
     # ≥3 chars: trigram similarity (fuzzy) OR contiguous substring (§4.6
     # 「连续子串」tier — also the recall path for CJK titles, where raw
     # similarity of a short query inside a long title stays below the
     # threshold). Both forms use the same GIN trigram index.
     return (
-        f"({norm_expr} LIKE :substr_pat ESCAPE '\\' "
+        f"({norm_expr} LIKE '%' || {escaped} || '%' ESCAPE E'\\\\' "
         f"OR {norm_expr} % public.mesh_search_norm(:nq))"
     )
 
@@ -307,17 +345,17 @@ def build_issue_rows(rows: Sequence[Mapping]) -> list[Row]:
 
 
 def build_pin_row(row: Mapping | None) -> Row | None:
-    """Identifier exact hit → bucket 9 pin (top of the total order)."""
+    """Identifier exact hit → bucket 95 pin (top of the total order)."""
     if row is None:
         return None
     title = row["title"]
-    normalized = normalize_search_text(title)
+    normalized = search_norm(title)
     return Row(
-        sort_key=(-9, len(title), normalized, "issue", str(row["id"])),
+        sort_key=(-BUCKET_IDENTIFIER_EXACT, len(title), normalized, "issue", str(row["id"])),
         type="issue",
         id=row["id"],
         title=title,
-        score_bucket=9,
+        score_bucket=BUCKET_IDENTIFIER_EXACT,
         title_len=len(title),
         title_lex=normalized,
         payload=issue_payload(row),
@@ -450,28 +488,100 @@ def apply_capacities(agent_rows: Sequence[Row], capacities: Mapping) -> None:
 
 
 def paginate_rows(
-    rows: list[Row], limit: int, fingerprint: str, secret: str
+    rows: list[Row], limit: int, fingerprint: str, secret: bytes
 ) -> tuple[list[Row], str | None]:
     """Global-order slice + next cursor (tuple mirrors §4.6 factor-for-factor)."""
     ordered = sorted(rows, key=lambda r: r.sort_key)
     if len(ordered) > limit:
         page = ordered[:limit]
         last = page[-1]
-        cursor = encode_search_cursor(
+        cursor = encode_cursor(
+            secret,
+            fp=fingerprint,
+            factors=canonical_sort_factors(
             score_bucket=last.score_bucket,
             title_len=last.title_len,
             title_lex=last.title_lex,
             result_type=last.type,
-            row_id=last.id,
-            fingerprint=fingerprint,
-            secret=secret,
+            result_id=str(last.id),
+            ),
         )
         return page, cursor
     return ordered, None
 
 
-def row_to_dict(r: Row) -> dict[str, Any]:
-    return {"type": r.type, "id": r.id, "title": r.title, "payload": r.payload}
+def render_row(r: Row, *, workspace_slug: str, norm_query: str) -> dict[str, Any]:
+    """Render one ranked row using main's public search-result contract."""
+    payload = r.payload
+    badge: dict | None = None
+    if r.type == "issue":
+        project = None
+        if payload["project_id"] is not None:
+            project = {
+                "id": str(payload["project_id"]),
+                "name": payload["project_name"],
+            }
+        context = {
+            "identifier": payload["identifier"],
+            "project": project,
+            "status": {
+                "id": str(payload["status_id"]),
+                "name": payload["status_name"],
+                "category": payload["state_category"],
+            },
+        }
+        url = schemas.issue_url(workspace_slug, payload["identifier"])
+        badge = schemas.status_badge(payload["status_name"], payload["state_category"])
+    elif r.type in _MEMBER_QUERY_TYPES:
+        context = {"member_type": "agent" if r.type == "agent" else "human",
+                   "role": payload["role"]}
+        if r.type == "agent":
+            context["capacity"] = payload.get(
+                "capacity", {"running": 0, "queued": 0, "awaiting_approval": 0}
+            )
+        url = schemas.member_url(workspace_slug, str(r.id))
+        badge = schemas.member_type_badge(context["member_type"])
+    elif r.type == "project":
+        context = {"visibility": payload["visibility"], "key": payload["key"]}
+        url = schemas.project_url(workspace_slug, str(r.id))
+        if payload["visibility"] == "private":
+            badge = schemas.private_visibility_badge()
+    elif r.type == "view":
+        context = {
+            "scope": "project" if payload["project_id"] is not None else "workspace"
+        }
+        if payload["project_id"] is not None:
+            context["project"] = {
+                "id": str(payload["project_id"]),
+                "name": payload["project_name"],
+            }
+        if payload["visibility"] == "private":
+            context["owner_only"] = True
+        url = schemas.view_url(workspace_slug, str(r.id))
+    else:
+        agent = None
+        if payload["agent_id"] is not None:
+            agent = {"id": str(payload["agent_id"]), "name": payload["agent_name"] or "agent"}
+        context = {
+            "participants_count": 2 if agent is not None else 1,
+            "agent": agent,
+        }
+        url = schemas.chat_url(workspace_slug, str(r.id))
+
+    item: dict[str, Any] = {
+        "type": r.type,
+        "id": str(r.id),
+        "title": r.title,
+        "context": context,
+        "icon": r.type,
+        "url": url,
+    }
+    if badge is not None:
+        item["badge"] = badge
+    ranges = highlight_ranges(r.score_bucket, norm_query, r.title)
+    if ranges:
+        item["highlight"] = {"title": {"unit": "codepoint", "ranges": ranges}}
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -482,18 +592,18 @@ def row_to_dict(r: Row) -> dict[str, Any]:
 class SearchService:
     """Stateless search orchestrator; one transaction per request."""
 
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], *, secret: str):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession], settings):
         self._sf = session_factory
-        self._secret = secret
+        self._secret = resolve_cursor_secret(settings)
 
     async def search(
         self,
         *,
-        viewer: Member,
+        actor: Member,
         workspace: Workspace,
-        q: str | None,
-        types: str | None,
-        limit: int | None,
+        q: str,
+        types: tuple[str, ...],
+        limit: int,
         cursor: str | None,
     ) -> dict[str, Any]:
         params = validate_search_params(
@@ -507,14 +617,16 @@ class SearchService:
         if params is None:
             return {"data": [], "next_cursor": None}
 
-        fingerprint = binding_fingerprint(params.q, params.types, workspace.id)
+        fingerprint = binding_fingerprint(
+            params.q, tuple(sorted(params.types)), workspace.id
+        )
         try:
             async with self._sf() as session, session.begin():
                 await set_tenant_context(session, workspace.id)
                 await session.execute(
                     text(f"SET LOCAL statement_timeout = {STATEMENT_TIMEOUT_MS}")
                 )
-                rows = await self._collect(session, viewer=viewer, workspace=workspace, p=params)
+                rows = await self._collect(session, viewer=actor, workspace=workspace, p=params)
         except (DBAPIError, asyncpg.exceptions.QueryCanceledError) as exc:
             # statement_timeout backstop (§2.2 / §3.5 query_cost_exceeded).
             # asyncpg's QueryCanceledError can surface raw or DBAPI-wrapped.
@@ -527,10 +639,8 @@ class SearchService:
             raise
 
         page, next_cursor = paginate_rows(rows, params.limit, fingerprint, self._secret)
-        rendered = [
-            render_result(row_to_dict(r), workspace_slug=workspace.slug, query=params.q)
-            for r in page
-        ]
+        rendered = [render_row(r, workspace_slug=workspace.slug, norm_query=params.normalized)
+                    for r in page]
         return {"data": rendered, "next_cursor": next_cursor}
 
     async def _collect(
@@ -555,10 +665,8 @@ class SearchService:
             "mid": viewer.id,
             "viewer_user_id": viewer.user_id,
             "viewer_is_admin": is_admin_role(viewer),
-            "nq": nq,
-            "prefix_pat": f"{_like_escape(nq)}%",
-            "token_pat": f"% {_like_escape(nq)}%",
-            "substr_pat": f"%{_like_escape(nq)}%",
+            "nq": p.q,
+            "raw_q": p.q,
             # Not an SQL bind — the per-entity queries read this to build
             # their keyset clause (SQLAlchemy ignores unbound dict keys).
             "_cursor": p.cursor,
@@ -574,17 +682,14 @@ class SearchService:
             )
 
         rows: list[Row] = []
-        pinned_id: uuid.UUID | None = None
-
-        # Identifier canonical fast path — page one only (pin is bucket 9).
+        # Identifier canonical fast path — page one only (pin is bucket 95).
         if p.cursor is None and IDENTIFIER_PATTERN.fullmatch(nq) and "issue" in p.types:
             pinned = build_pin_row(await self._fetch_identifier_pin(session, base_params, viewer, p.q))
             if pinned is not None:
-                pinned_id = pinned.id
                 rows.append(pinned)
 
         if "issue" in p.types:
-            sql_rows = await self._fetch_issues(session, base_params, viewer, mode, fetch, pinned_id)
+            sql_rows = await self._fetch_issues(session, base_params, viewer, mode, fetch)
             rows.extend(build_issue_rows(sql_rows))
         if p.types & _MEMBER_QUERY_TYPES:
             sql_rows = await self._fetch_members(session, base_params, viewer, mode, fetch)
@@ -607,11 +712,11 @@ class SearchService:
     ) -> Mapping | None:
         sql = text(
             """
-            SELECT i.id, i.identifier, i.title, i.state_category,
+            SELECT i.id, i.identifier, i.title, s.category AS state_category,
                    i.status_id, s.name AS status_name,
                    p.id AS project_id, p.name AS project_name
             FROM issues i
-            LEFT JOIN issue_statuses s
+            JOIN issue_statuses s
               ON s.workspace_id = i.workspace_id AND s.id = i.status_id
             LEFT JOIN projects p
               ON p.workspace_id = i.workspace_id AND p.id = i.project_id
@@ -633,33 +738,34 @@ class SearchService:
         viewer: Member,
         mode: str,
         cap: int,
-        pinned_id: uuid.UUID | None,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(i.title)"
-        score_case = _ISSUE_SCORE.format(norm=norm)
-        pin_filter = "AND i.id <> :pinned_id" if pinned_id is not None else ""
-        if mode == "prefix":
-            # 1–2 char path matches title OR identifier prefix (M1 — §1.2 S2
-            # promises identifier retrieval; idx_issues_identifier_prefix is
-            # built exactly for this, §2.2 DDL 2c).
-            issue_match = (
-                f"({norm} LIKE :prefix_pat ESCAPE '\\' "
-                "OR public.mesh_search_norm(i.identifier) LIKE :prefix_pat ESCAPE '\\')"
-            )
-        else:
-            issue_match = match_clause(mode, norm)
+        score_case = _ISSUE_SCORE
+        # Identifier prefixes are searchable on both text paths. Exact-shape
+        # hits are rendered once as the page-one pin and excluded from the
+        # regular stream on every page, preventing a later duplicate.
+        issue_match = (
+            f"({match_clause(mode, norm)} OR "
+            "public.mesh_search_norm(i.identifier) LIKE "
+            f"{_escaped_norm_q()} || '%' ESCAPE E'\\\\')"
+        )
+        pin_filter = (
+            "AND i.identifier <> upper(trim(:raw_q))"
+            if IDENTIFIER_PATTERN.fullmatch(search_norm(params["nq"]))
+            else ""
+        )
         sql = text(
             f"""
             SELECT * FROM (
               SELECT i.id AS id, i.identifier AS identifier, i.title AS title,
-                     i.state_category AS state_category, i.status_id AS status_id,
+                     s.category AS state_category, i.status_id AS status_id,
                      s.name AS status_name,
                      p.id AS project_id, p.name AS project_name,
                      {score_case} AS score_bucket,
                      char_length(i.title) AS title_len,
                      {norm} AS title_lex
               FROM issues i
-              LEFT JOIN issue_statuses s
+              JOIN issue_statuses s
                 ON s.workspace_id = i.workspace_id AND s.id = i.status_id
               LEFT JOIN projects p
                 ON p.workspace_id = i.workspace_id AND p.id = i.project_id
@@ -672,10 +778,7 @@ class SearchService:
             {order_limit(cap)}
             """
         )
-        bound = dict(params)
-        if pinned_id is not None:
-            bound["pinned_id"] = pinned_id
-        return (await session.execute(sql, bound)).mappings().all()
+        return (await session.execute(sql, params)).mappings().all()
 
     async def _fetch_members(
         self,
@@ -686,17 +789,13 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "m.search_name"
-        score_case = _SQL_SCORE.format(norm=norm)
         # The title expression MUST mirror the projection's display chain
         # exactly (M4 — §2.2 「杜绝漂移」): NULLIF(display_name,'') so an
         # empty display_name falls through to email exactly as search_name
         # was computed. title_lex IS the projection column itself, so the
         # ordering key cannot diverge from the rendered title by construction.
-        title_expr = (
-            "COALESCE(NULLIF(m.display_override, ''), "
-            "CASE m.member_type WHEN 'human' THEN COALESCE(NULLIF(u.display_name, ''), u.email) "
-            "WHEN 'agent' THEN a.name END, '')"
-        )
+        title_expr = _MEMBER_TITLE_SQL
+        score_case = _SQL_SCORE.format(title=title_expr)
         # Private agents are visible to their owner and admins ONLY (§3.3):
         # non-privileged viewers never see them — not in results, not in
         # counts, not in defaults (existence is never exposed).
@@ -737,7 +836,7 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(p.name)"
-        score_case = _SQL_SCORE.format(norm=norm)
+        score_case = _SQL_SCORE.format(title="p.name")
         if is_admin_role(viewer):
             vis = "TRUE"
         else:
@@ -770,7 +869,7 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(v.name)"
-        score_case = _SQL_SCORE.format(norm=norm)
+        score_case = _SQL_SCORE.format(title="v.name")
         # Private views: OWNER ONLY — §3.3 is explicit (「私有视图仅 owner」),
         # so even admins do not see other members' private views here (no
         # admin bypass). Project-owned views AND with project visibility
@@ -808,7 +907,7 @@ class SearchService:
         cap: int,
     ) -> Sequence[Mapping]:
         norm = "public.mesh_search_norm(c.title)"
-        score_case = _SQL_SCORE.format(norm=norm)
+        score_case = _SQL_SCORE.format(title="c.title")
         # Participant model: sessions are 1:1 owner + agent — only the owner
         # member row sees the session (§3.3).
         sql = text(

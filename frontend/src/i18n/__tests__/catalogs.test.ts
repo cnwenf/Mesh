@@ -323,6 +323,17 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     position: 2,
     direction: 'moved up',
     time: '10:30',
+    // analytics KPI 条 / 口径注记占位符(§4.3):窗天数 / 分桶粒度
+    days: 30,
+    granularity: '日',
+    // approvals §6.10 审批卡占位符:预估成本 / 决定备注 / 相对过期时间 / 工具调用 / 续跑步数
+    cost: '$0.42',
+    comment: '请补充影响评估',
+    tool: 'http_request',
+    steps: 3,
+    // search-command-palette §4 文案占位符(MES-127):成员类型
+    // (查询词/项目/key/可见性/scope 复用上方搜索占位,避免对象重名键)
+    memberType: 'human',
   };
 
   it('全部键在各自 locale 下均可成功渲染(语法合法、无占位符解析错误)', () => {

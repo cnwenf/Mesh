@@ -252,7 +252,7 @@ async def test_six_object_types_grouped(client, world):
     assert issue_item["context"]["identifier"] == world["issue_hit"]["identifier"]
     assert issue_item["context"]["project"]["name"] == "登录官网改版"
     assert issue_item["context"]["status"]["category"]
-    assert issue_item["badge"]["label_key"] == "issue.status.name"
+    assert issue_item["badge"]["label_key"] == "search.badge.status"
     assert issue_item["url"] == (
         f"/w/{world['slug']}/issues/by-identifier/{issue_item['context']['identifier']}"
     )
@@ -264,7 +264,7 @@ async def test_six_object_types_grouped(client, world):
         "queued": 0,
         "awaiting_approval": 0,
     }
-    assert agent_item["badge"]["label_key"] == "member.type.agent"
+    assert agent_item["badge"]["label_key"] == "search.badge.memberType.agent"
     assert agent_item["url"] == f"/w/{world['slug']}/members/{agent_item['id']}"
 
     project_item = next(i for i in data if i["id"] == world["public_project"])
@@ -356,11 +356,13 @@ async def test_cursor_security(client, world):
     ).status_code in (400, 404)
 
     # Tampered internals (signature mismatch) → 400.
-    envelope = json.loads(base64.urlsafe_b64decode(cursor.encode()))
-    envelope["b"]["t"][0] = 99
+    envelope = json.loads(
+        base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4))
+    )
+    envelope["t"][0] = 99
     tampered = base64.urlsafe_b64encode(
-        json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
-    ).decode()
+        json.dumps(envelope, separators=(",", ":")).encode()
+    ).rstrip(b"=").decode()
     assert (await _search(client, token, ws, "登录", cursor=tampered)).status_code == 400
     assert (await _search(client, token, ws, "登录", cursor="garbage")).status_code == 400
 
@@ -492,7 +494,7 @@ async def test_prefix_path_one_two_chars(client, world):
 async def test_rate_limit_429(client, world):
     token, ws = world["owner_token"], world["ws_id"]
     status = None
-    for _ in range(130):
+    for _ in range(310):
         r = await _search(client, token, ws, "登录")
         status = r.status_code
         if status == 429:

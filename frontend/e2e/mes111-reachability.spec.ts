@@ -76,20 +76,21 @@ test.describe('手机可达性 @390×844', () => {
     await expect(page.getByTestId('marketplace-title')).toBeVisible();
   });
 
-  test('顶栏搜索即统一入口:键入展开命令面板并携带查询;Esc 分层关闭(§4.5)', async ({ page }) => {
+  test('顶栏搜索即统一入口:键入展开同一结果视图弹层并携带查询;Esc 关闭焦点不离输入框', async ({
+    page,
+  }) => {
     await login(page);
     await page.goto('/');
     const topbarSearch = page.getByTestId('topbar-search');
     await topbarSearch.fill('theme');
-    // 命令面板打开,其搜索框携带顶栏键入的查询
-    const paletteInput = page.locator('.mesh-palette input');
-    await expect(paletteInput).toBeVisible();
-    await expect(paletteInput).toHaveValue('theme');
-    // §4.5 Esc 分层关闭栈:输入框获焦时首个 Esc 仅失焦,第二个 Esc 才关面板
+    // §4.9:键入即展开与命令面板同一结果视图(PaletteResults)的弹层,顶栏输入框即查询载体
+    const popover = page.getByTestId('topbar-search-popover');
+    await expect(popover).toBeVisible();
+    await expect(topbarSearch).toHaveValue('theme');
+    await expect(topbarSearch).toHaveAttribute('aria-expanded', 'true');
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.mesh-palette')).toHaveCount(0);
+    await expect(popover).toHaveCount(0);
+    await expect(topbarSearch).toBeFocused();
   });
 
   test('顶栏搜索回车同样展开命令面板', async ({ page }) => {
@@ -212,9 +213,7 @@ test.describe('手机可达性 @320×640(极窄视口)', () => {
 const FOUNDATION_EVIDENCE_DIR = 'e2e/evidence/mes111-foundation';
 
 test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
-  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({
-    page,
-  }) => {
+  test('桌面 1440×900 首页亮/暗:新令牌体系(表面分层/强调色/排版节奏)真实渲染', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await login(page);
     await page.goto('/');
@@ -229,9 +228,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-home-dark.png` });
   });
 
-  test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({
-    page,
-  }) => {
+  test('桌面登录页亮/暗:PublicFlow 框架随底座令牌升级(暗色经持久化偏好预置)', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto('/login');
     await expect(page.locator('input[type="email"], input[name="email"]').first()).toBeVisible();
@@ -249,9 +246,7 @@ test.describe('Phase 1 设计系统底座:双端双主题走查存证', () => {
     await page.screenshot({ path: `${FOUNDATION_EVIDENCE_DIR}/desktop-login-dark.png` });
   });
 
-  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({
-    page,
-  }) => {
+  test('手机 390×844 首页/看板亮/暗:令牌体系在紧凑视口一致呈现且无横向溢出', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await login(page);
     await page.goto('/');

@@ -1,32 +1,108 @@
 /**
- * 工作区「洞察」仪表盘(analytics.md §4.3):吞吐量趋势 + workload 排行 +
- * agent 统计区。聚合按请求者项目可见性过滤,UI 给轻提示(§4.3 R3)。
- * 数据获取走 fetchWorkspaceDashboard 一次聚合端点。
+ * 工作区「洞察」仪表盘(analytics.md §4.3,design-quality.md §3.2 Analytics 行):
+ * 标题 + 口径说明(可见性/时区/粒度)→ KPI 条(窗内聚合,客户端派生不加请求)
+ * → 图表网格(吞吐/workload/agent)。数字 tabular-nums;空窗/成本超限/通用错误
+ * 四部分呈现;骨架与最终布局同形。聚合按请求者可见性过滤并给轻提示(§4.3 R3)。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MeshApiClient, getToken } from '../../api';
-import { EmptyState, ErrorState, Skeleton } from '../../design';
+import { Link } from 'react-router';
+import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
+import { EmptyState, ErrorState } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
+import { useDocumentTitle } from '../../shell/hooks';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { ChartFrame } from './ChartFrame';
+import { Kpi } from './Kpi';
+import { KpiStrip } from './KpiStrip';
 import { fetchWorkspaceDashboard } from './api';
 import { LineChart } from './charts';
-import { formatDurationSeconds, formatRate, rateTone, windowEndIso, windowStartIso } from './format';
+import { InsightsAgentsPanel, InsightsWorkloadPanel } from './InsightsPanels';
+import { windowEndIso, windowStartIso } from './format';
 import type { Granularity, WorkspaceDashboardData } from './types';
 import './analytics.css';
 
 const RANGE_PRESETS = [30, 90] as const;
 type RangeDays = (typeof RANGE_PRESETS)[number];
 const GRANULARITIES: readonly Granularity[] = ['day', 'week', 'month'];
+const COST_EXCEEDED_CODE = 'query_cost_exceeded';
+
+/** 窗内聚合 KPI:全部由已取回的仪表盘响应客户端派生,不新增后端请求。 */
+export interface WindowKpis {
+  readonly created: number;
+  readonly completed: number;
+  readonly net: number;
+  readonly openIssues: number;
+  readonly agentsTracked: number;
+}
+
+export function deriveWindowKpis(data: WorkspaceDashboardData): WindowKpis {
+  const series = data.throughput.series;
+  return {
+    created: series.reduce((acc, b) => acc + b.created, 0),
+    completed: series.reduce((acc, b) => acc + b.completed, 0),
+    net: data.throughput.meta.net_window,
+    openIssues: data.workload.data.reduce((acc, row) => acc + row.open_issues, 0),
+    agentsTracked: data.agent_stats.agents.length,
+  };
+}
+
+/** 整窗为空:三区块同时无数据 → 页面级空态(调整范围/新建 issue,§4.6)。 */
+export function isWindowEmpty(data: WorkspaceDashboardData): boolean {
+  return (
+    data.throughput.series.length === 0 &&
+    data.workload.data.length === 0 &&
+    data.agent_stats.agents.length === 0
+  );
+}
+
+/** 归一错误:非 MeshApiError 归为 unknown(映射到既有 error.unknown 文案)。 */
+function toApiError(err: unknown): MeshApiError {
+  if (err instanceof MeshApiError) return err;
+  return new MeshApiError({ status: 0, code: 'unknown', message: 'unknown error' });
+}
+
+function diagnosticOf(err: MeshApiError): string | undefined {
+  const value = err.details?.diagnostic_id;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** 口径回显时区:优先顶层 meta.display_timezone,回退吞吐 calendar_timezone。 */
+function echoTimezone(data: WorkspaceDashboardData): string {
+  return data.meta.display_timezone ?? data.throughput.meta.calendar_timezone;
+}
+
+/** 加载骨架:与最终布局同形(KPI 条 + 三张图表卡),单一 status 区。 */
+function InsightsSkeleton(props: { readonly label: string }): React.JSX.Element {
+  return (
+    <div role="status" data-testid="insights-loading">
+      <span className="sr-only">{props.label}</span>
+      <div
+        className="mesh-analytics__kpi-strip mesh-analytics__kpi-strip--skeleton"
+        aria-hidden="true"
+      >
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span className="mesh-skeleton__shape" key={i} />
+        ))}
+      </div>
+      <div className="mesh-analytics__charts" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <span className="mesh-skeleton__shape mesh-analytics__card-skeleton" key={i} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function InsightsPage(): React.JSX.Element {
   const t = useT();
+  useDocumentTitle(t('analytics.insights.title')); // G19 标签页标题
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [data, setData] = useState<WorkspaceDashboardData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<MeshApiError | null>(null);
   const [rangeDays, setRangeDays] = useState<RangeDays>(30);
   const [granularity, setGranularity] = useState<Granularity>('day');
   const [reloadKey, setReloadKey] = useState(0);
@@ -37,13 +113,13 @@ export function InsightsPage(): React.JSX.Element {
       .then((me) => {
         if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
       })
-      .catch(() => {
-        if (!cancelled) setError(t('analytics.state.error'));
+      .catch((err: unknown) => {
+        if (!cancelled) setError(toApiError(err));
       });
     return () => {
       cancelled = true;
     };
-  }, [client, t]);
+  }, [client]);
 
   const load = useCallback(() => {
     if (workspace === null) {
@@ -59,32 +135,50 @@ export function InsightsPage(): React.JSX.Element {
       granularity,
     })
       .then((result) => setData(result))
-      .catch(() => setError(t('analytics.state.error')))
+      .catch((err: unknown) => setError(toApiError(err)))
       .finally(() => setIsLoading(false));
-  }, [client, workspace, rangeDays, granularity, t]);
+  }, [client, workspace, rangeDays, granularity]);
 
   useEffect(() => {
     load();
   }, [load, reloadKey]);
 
   if (isLoading) {
-    return <Skeleton loadingLabel={t('analytics.state.loading')} className="mesh-analytics__card" />;
+    return (
+      <main className="mesh-page">
+        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
+        <InsightsSkeleton label={t('analytics.state.loading')} />
+      </main>
+    );
   }
   if (error !== null) {
+    const isCostExceeded = error.code === COST_EXCEEDED_CODE;
     return (
-      <ErrorState
-        title={t('analytics.state.errorTitle')}
-        description={error}
-        retryLabel={t('analytics.state.retry')}
-        onRetry={() => setReloadKey((k) => k + 1)}
-      />
+      <main className="mesh-page">
+        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
+        <ErrorState
+          title={t('analytics.state.errorTitle')}
+          description={t(isCostExceeded ? 'analytics.state.costExceeded' : errorToI18nKey(error))}
+          impact={isCostExceeded ? undefined : t('analytics.state.errorImpact')}
+          retryLabel={t('analytics.state.retry')}
+          onRetry={() => setReloadKey((k) => k + 1)}
+          diagnosticId={diagnosticOf(error)}
+        />
+      </main>
     );
   }
   if (workspace === null || data === null) {
-    return <EmptyState title={t('analytics.state.empty')} />;
+    return (
+      <main className="mesh-page">
+        <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
+        <EmptyState title={t('analytics.state.empty')} />
+      </main>
+    );
   }
 
   const throughput = data.throughput;
+  const kpis = deriveWindowKpis(data);
+  const windowHint = t('analytics.kpi.windowHint', { days: rangeDays });
   const throughputSeries = [
     {
       name: t('analytics.throughput.created'),
@@ -100,12 +194,19 @@ export function InsightsPage(): React.JSX.Element {
 
   return (
     <main className="mesh-page">
-      <h1 className="mesh-page__title">{t('analytics.insights.title')}</h1>
-      {data.meta.visibility_filtered ? (
-        <p className="mesh-analytics__visibility-note" data-testid="insights-visibility-note">
-          {t('analytics.insights.visibilityNote')}
+      <h1 className="mesh-text-title-1">{t('analytics.insights.title')}</h1>
+      <div className="mesh-analytics__caliber">
+        {data.meta.visibility_filtered ? (
+          <p data-testid="insights-visibility-note">{t('analytics.insights.visibilityNote')}</p>
+        ) : null}
+        <p data-testid="insights-tz-note">{t('analytics.tzNote', { tz: echoTimezone(data) })}</p>
+        <p data-testid="insights-caliber">
+          {t('analytics.caliber.window', {
+            days: rangeDays,
+            granularity: t(`analytics.granularity.${granularity}`),
+          })}
         </p>
-      ) : null}
+      </div>
       <div className="mesh-analytics__toolbar">
         <label>
           {t('analytics.range.label')}
@@ -135,124 +236,72 @@ export function InsightsPage(): React.JSX.Element {
             ))}
           </select>
         </label>
-        <span className="mesh-analytics__card-note">
-          {t('analytics.tz.echo', { tz: throughput.meta.calendar_timezone })}
-        </span>
       </div>
 
-      <div className="mesh-analytics__grid-layout">
-        <section className="mesh-analytics__card" data-testid="insights-throughput">
-          <h2 className="mesh-analytics__card-title">{t('analytics.throughput.title')}</h2>
-          {throughput.series.length === 0 ? (
-            <EmptyState title={t('analytics.state.noData')} />
-          ) : (
-            <>
-              <LineChart
-                series={throughputSeries}
-                xLabels={throughput.series.map((b) => b.label)}
-                ariaLabel={t('analytics.throughput.chartAria')}
-              />
-              <div className="mesh-analytics__legend">
-                <span className="mesh-analytics__legend-item">
-                  <span
-                    className="mesh-analytics__legend-swatch"
-                    style={{ borderTopColor: 'var(--color-info)' }}
-                  />
-                  {t('analytics.throughput.created')}
-                </span>
-                <span className="mesh-analytics__legend-item">
-                  <span
-                    className="mesh-analytics__legend-swatch"
-                    style={{ borderTopColor: 'var(--color-success)' }}
-                  />
-                  {t('analytics.throughput.completed')}
-                </span>
-              </div>
-              <p className="mesh-analytics__card-note">
-                {t('analytics.throughput.net', { net: throughput.meta.net_window })}
-              </p>
-            </>
-          )}
-        </section>
+      {isWindowEmpty(data) ? (
+        <EmptyState
+          title={t('analytics.state.windowEmpty')}
+          description={t('analytics.state.windowEmptyHint')}
+          action={
+            <Link className="mesh-page__link" to="/issues?create=1">
+              {t('analytics.state.createIssue')}
+            </Link>
+          }
+        />
+      ) : (
+        <>
+          <KpiStrip label={t('analytics.kpi.stripLabel')}>
+            <Kpi label={t('analytics.kpi.created')} value={kpis.created} hint={windowHint} />
+            <Kpi
+              label={t('analytics.kpi.completed')}
+              value={kpis.completed}
+              tone="success"
+              hint={windowHint}
+            />
+            <Kpi
+              label={t('analytics.kpi.net')}
+              value={kpis.net}
+              tone={kpis.net < 0 ? 'warning' : 'default'}
+              hint={windowHint}
+            />
+            <Kpi
+              label={t('analytics.kpi.openWorkload')}
+              value={kpis.openIssues}
+              hint={t('analytics.kpi.snapshotHint')}
+            />
+            <Kpi
+              label={t('analytics.kpi.agentsTracked')}
+              value={kpis.agentsTracked}
+              hint={windowHint}
+            />
+          </KpiStrip>
 
-        <section className="mesh-analytics__card" data-testid="insights-workload">
-          <h2 className="mesh-analytics__card-title">{t('analytics.workload.title')}</h2>
-          {data.workload.data.length === 0 ? (
-            <EmptyState title={t('analytics.state.noData')} />
-          ) : (
-            <table className="mesh-analytics__table">
-              <thead>
-                <tr>
-                  <th>{t('analytics.workload.member')}</th>
-                  <th>{t('analytics.workload.openIssues')}</th>
-                  <th>{t('analytics.workload.running')}</th>
-                  <th>{t('analytics.workload.queued')}</th>
-                  <th>{t('analytics.workload.awaitingApproval')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.workload.data.map((row) => (
-                  <tr key={row.member_id}>
-                    <td>
-                      {row.display_name}{' '}
-                      {t(
-                        row.member_type === 'agent'
-                          ? 'analytics.workload.typeAgent'
-                          : 'analytics.workload.typeHuman',
-                      )}
-                    </td>
-                    <td>{row.open_issues}</td>
-                    <td>{row.running ?? '—'}</td>
-                    <td>{row.queued ?? '—'}</td>
-                    <td>{row.awaiting_approval ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+          <div className="mesh-analytics__charts">
+            <ChartFrame
+              testId="insights-throughput"
+              title={t('analytics.throughput.title')}
+              legend={[
+                { label: t('analytics.throughput.created'), colorToken: 'info' },
+                { label: t('analytics.throughput.completed'), colorToken: 'success' },
+              ]}
+              note={t('analytics.throughput.net', { net: throughput.meta.net_window })}
+            >
+              {throughput.series.length === 0 ? (
+                <EmptyState title={t('analytics.state.noData')} />
+              ) : (
+                <LineChart
+                  series={throughputSeries}
+                  xLabels={throughput.series.map((b) => b.label)}
+                  ariaLabel={t('analytics.throughput.chartAria')}
+                />
+              )}
+            </ChartFrame>
 
-        <section className="mesh-analytics__card" data-testid="insights-agents">
-          <h2 className="mesh-analytics__card-title">{t('analytics.agents.title')}</h2>
-          {data.agent_stats.agents.length === 0 ? (
-            <EmptyState title={t('analytics.state.noAgents')} />
-          ) : (
-            <div className="mesh-analytics__agent-grid">
-              {data.agent_stats.agents.map((agent) => {
-                const tone = rateTone(agent.success_rate);
-                return (
-                  <div className="mesh-analytics__agent-card" key={agent.agent_id}>
-                    <p className="mesh-analytics__agent-name">{agent.display_name}</p>
-                    <div className="mesh-analytics__agent-metrics">
-                      <span>
-                        {t('analytics.agents.successRate')}:{' '}
-                        <strong className={`mesh-analytics__kpi-value--${tone}`}>
-                          {formatRate(agent.success_rate)}
-                        </strong>
-                      </span>
-                      <span>
-                        {t('analytics.agents.executions')}: {agent.executions}
-                      </span>
-                      <span>
-                        {t('analytics.agents.avgDuration')}:{' '}
-                        {formatDurationSeconds(agent.avg_duration_seconds)}
-                      </span>
-                      <span>
-                        {t('analytics.agents.retryRate')}: {formatRate(agent.retry_rate)}
-                      </span>
-                    </div>
-                    {agent.tokens.token_coverage !== null && agent.tokens.token_coverage < 1 ? (
-                      <p className="mesh-analytics__token-note">
-                        {t('analytics.agents.tokenNote')}
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      </div>
+            <InsightsWorkloadPanel workload={data.workload} />
+            <InsightsAgentsPanel agents={data.agent_stats.agents} />
+          </div>
+        </>
+      )}
     </main>
   );
 }

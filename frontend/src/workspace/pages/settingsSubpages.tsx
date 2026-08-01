@@ -10,7 +10,8 @@ import type { ReactNode } from 'react';
 import { getApiClient } from '../../api/instance';
 import { Skeleton } from '../../design';
 import { listApprovals } from '../../features/approvals/api';
-import type { Approval } from '../../features/approvals/types';
+import type { Approval } from '../../features/approvals/api';
+import { actionHeadline } from '../../features/approvals/summary';
 import { listStatuses } from '../../features/issues/api';
 import type { IssueStatusRef } from '../../features/issues/types';
 import { useT } from '../../i18n';
@@ -97,8 +98,8 @@ function ApprovalsPolicySection(props: {
   useEffect(() => {
     let cancelled = false;
     void listApprovals(getApiClient(), props.workspaceId, { status: 'pending' })
-      .then((rows) => {
-        if (!cancelled) setApprovals(rows);
+      .then(({ data }) => {
+        if (!cancelled) setApprovals(data);
       })
       .catch(() => {
         if (!cancelled) setApprovals([]);
@@ -126,12 +127,18 @@ function ApprovalsPolicySection(props: {
       ) : (
         <ul data-testid="ws-approvals-policy-list">
           {approvals.map((approval) => (
-            <li key={approval.id}>{approval.action_summary}</li>
+            <li key={approval.id}>{approvalHeadline(approval)}</li>
           ))}
         </ul>
       )}
     </section>
   );
+}
+
+function approvalHeadline(approval: Approval): string {
+  const summary: unknown = approval.action_summary;
+  if (typeof summary === 'string' && summary.trim() !== '') return summary;
+  return actionHeadline(approval.action_summary) ?? approval.subject_type;
 }
 
 /** settings/fields — 状态与字段:工作区状态清单 + 标签/自定义字段子页入口。 */

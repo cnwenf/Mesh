@@ -296,9 +296,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         buffer_ttl_seconds=settings.chat_generation_buffer_ttl_seconds,
     )
     app.state.favorites_service = FavoritesService(session_factory)
-    app.state.search_service = SearchService(
-        session_factory, secret=settings.search_cursor_secret
-    )
     app.state.onboarding_service = OnboardingService(session_factory)
     app.state.chat_service = ChatService(
         session_factory,
@@ -352,6 +349,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Analytics module (analytics.md): read-only aggregates + materialized
     # cache; never writes source tables.
     app.state.analytics_service = AnalyticsService(session_factory, settings)
+    # Search module (search-command-palette.md §3): six-type object search
+    # with in-query visibility + signed keyset cursor; read-only.
+    app.state.search_service = SearchService(session_factory, settings)
     app.state.integration_service = IntegrationService(session_factory, settings.jwt_secret)
     # Verification codes for external-identity linking are delivered to the
     # claimed external account's DM (dev: Redis dev-outbox, tests read it).

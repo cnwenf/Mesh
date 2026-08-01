@@ -1,4 +1,4 @@
-"""Migration 0028 contract: normalization function, projection, index set.
+"""Migration 0035 contract: normalization function, projection, index set.
 
 Mirrors the schema validation assertions (docs/specs/validation/
 schema_r2_validation.sql T37) against the migrated test database.

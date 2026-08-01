@@ -1,0 +1,77 @@
+{
+  "keys": {
+    "search.group.favorites": { "en": "Favorites", "zh": "收藏" },
+    "search.group.recents": { "en": "Recent", "zh": "最近访问" },
+    "search.group.commands": { "en": "Commands", "zh": "常用命令" },
+    "search.group.issues": { "en": "Issues", "zh": "工作项" },
+    "search.group.members": { "en": "Members & agents", "zh": "成员与 agent" },
+    "search.group.projects": { "en": "Projects", "zh": "项目" },
+    "search.group.views": { "en": "Views", "zh": "视图" },
+    "search.group.chats": { "en": "Chats", "zh": "聊天" },
+    "search.noResults": {
+      "en": "No results matched “{q}”",
+      "zh": "未找到与 “{q}” 匹配的结果"
+    },
+    "search.noResultsHints": {
+      "en": "Check the spelling or use fewer keywords",
+      "zh": "检查拼写、减少关键词"
+    },
+    "search.createIssue": {
+      "en": "New issue “{q}”",
+      "zh": "新建 issue “{q}”"
+    },
+    "search.retry": { "en": "Retry", "zh": "重试" },
+    "search.offlineNote": {
+      "en": "Network unavailable — showing local commands only",
+      "zh": "网络已断开,显示本地命令"
+    },
+    "search.resultsCount": { "en": "{count} results", "zh": "{count} 个结果" },
+    "search.loading": { "en": "Searching…", "zh": "搜索中…" },
+    "search.hintNav": { "en": "Navigate", "zh": "导航" },
+    "search.hintEnter": { "en": "Open", "zh": "打开" },
+    "search.hintTab": { "en": "Complete", "zh": "补全" },
+    "search.hintHelp": { "en": "Shortcuts", "zh": "快捷键" },
+    "search.subtitle.issue": {
+      "en": "{identifier} · {project} · {status}",
+      "zh": "{identifier} · {project} · {status}"
+    },
+    "search.subtitle.member": {
+      "en": "{memberType} · {role}",
+      "zh": "{memberType} · {role}"
+    },
+    "search.subtitle.agent": {
+      "en": "{role} · {running} running · {queued} queued · {awaiting} awaiting approval",
+      "zh": "{role} · 运行中 {running} · 排队 {queued} · 待审批 {awaiting}"
+    },
+    "search.subtitle.project": {
+      "en": "{key} · {visibility}",
+      "zh": "{key} · {visibility}"
+    },
+    "search.subtitle.view": { "en": "{scope}", "zh": "{scope}" },
+    "search.subtitle.chat": {
+      "en": "{count} participants",
+      "zh": "{count} 位参与者"
+    },
+    "search.memberType.human": { "en": "Member", "zh": "成员" },
+    "search.memberType.agent": { "en": "Agent", "zh": "Agent" },
+    "search.viewScope.project": { "en": "Project view", "zh": "项目视图" },
+    "search.viewScope.workspace": { "en": "Workspace view", "zh": "工作区视图" },
+    "search.visibility.public": { "en": "public", "zh": "公开" },
+    "search.visibility.private": { "en": "private", "zh": "私有" },
+    "nav.runtimes": { "en": "Runtimes", "zh": "运行环境" },
+    "nav.approvals": { "en": "Approvals", "zh": "审批" },
+    "shortcuts.actionPendingApprovals": { "en": "Pending approvals", "zh": "待我审批" },
+    "shortcuts.actionCopyDeepLink": { "en": "Copy link to current page", "zh": "复制当前深链" },
+    "shortcuts.actionToggleFavorite": { "en": "Toggle favorite", "zh": "收藏/取消收藏" },
+    "shortcuts.actionMarkAllRead": { "en": "Mark all as read", "zh": "标记全部已读" },
+    "shortcuts.copiedDeepLink": { "en": "Link copied", "zh": "已复制深链" },
+    "shortcuts.markedAllRead": { "en": "All notifications marked as read", "zh": "已全部标记为已读" },
+    "shortcuts.settingsGeneral": { "en": "Workspace settings", "zh": "工作区设置" },
+    "shortcuts.settingsLabels": { "en": "Labels settings", "zh": "标签设置" },
+    "shortcuts.settingsCustomFields": { "en": "Custom fields settings", "zh": "自定义字段设置" },
+    "shortcuts.settingsData": { "en": "Data management", "zh": "数据管理" },
+    "shortcuts.settingsTokens": { "en": "API tokens", "zh": "API 令牌" },
+    "shortcuts.settingsAudit": { "en": "Audit log", "zh": "审计日志" },
+    "shortcuts.settingsDanger": { "en": "Danger zone", "zh": "危险操作" }
+  }
+}

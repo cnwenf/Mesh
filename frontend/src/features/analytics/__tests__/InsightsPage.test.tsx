@@ -74,8 +74,12 @@ const DASHBOARD = {
 let dashboardToReturn: unknown = DASHBOARD;
 let shouldFail = false;
 
-vi.mock('../../../api', () => {
+vi.mock('../../../api', async (importOriginal) => {
+  // 保留真实 MeshApiError / errorToI18nKey(页面经 instanceof 归一错误),
+  // 仅替换 MeshApiClient 与 getToken。
+  const actual = await importOriginal<typeof import('../../../api')>();
   return {
+    ...actual,
     MeshApiClient: class {
       async request(_method: string, path: string, opts?: { query?: Record<string, unknown> }) {
         requestCalls.push({ path, query: opts?.query });
@@ -140,7 +144,7 @@ describe('InsightsPage', () => {
     expect(screen.queryByTestId('insights-visibility-note')).toBeNull();
   });
 
-  it('shows empty states when sections have no data', async () => {
+  it('shows the window-level empty state with a create-issue action when all sections are empty', async () => {
     dashboardToReturn = {
       throughput: {
         granularity: 'day',
@@ -153,10 +157,26 @@ describe('InsightsPage', () => {
     };
     renderWithProviders(<InsightsPage />, { route: '/insights' });
     await waitFor(() => {
+      // 空窗 → 页面级空态(§4.6),工具栏保留以便调整范围
+      expect(screen.getByTestId('insights-range')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('insights-throughput')).toBeNull();
+    const action = screen.getByRole('link');
+    expect(action).toHaveAttribute('href', '/issues?create=1');
+  });
+
+  it('keeps per-section empty states when only some sections are empty', async () => {
+    dashboardToReturn = {
+      ...DASHBOARD,
+      workload: { data: [], next_cursor: null },
+      agent_stats: { agents: [], meta: {} },
+    };
+    renderWithProviders(<InsightsPage />, { route: '/insights' });
+    await waitFor(() => {
       expect(screen.getByTestId('insights-throughput')).toBeInTheDocument();
     });
-    // 三个空态标题 + 无 agent 空态
-    expect(screen.getAllByText('No data in this window.').length).toBeGreaterThanOrEqual(2);
+    // workload/agents 卡内空态(吞吐有数据,不触发整窗空态)
+    expect(screen.getAllByText('No data in this window.').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('No agent executions in this window.')).toBeInTheDocument();
   });
 

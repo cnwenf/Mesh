@@ -2,6 +2,25 @@
  * 命令面板与快捷键帮助层样式(README §6.12):仅引用语义 token,方向性间距用逻辑属性。
  */
 
+/* 序列键首键待决提示：使用 toast 层级，避免被页面内容遮挡。 */
+.mesh-shortcut-sequence-status {
+  position: fixed;
+  inset-block-end: var(--space-4);
+  inset-inline-start: 50%;
+  z-index: var(--z-toast);
+  transform: translateX(-50%);
+  padding-block: var(--space-2);
+  padding-inline: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-raised);
+  box-shadow: var(--shadow-2);
+  color: var(--color-text-strong);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  pointer-events: none;
+}
+
 /* ===== CommandPalette ===== */
 .mesh-palette {
   display: flex;
@@ -51,6 +70,283 @@
   padding: var(--space-4);
   text-align: center;
   color: var(--color-text-muted);
+}
+
+/* ===== 分组与选项(六类检索 + favorites/recents/命令,§4.1) ===== */
+.mesh-palette__group-title {
+  padding-block: var(--space-1);
+  padding-inline: var(--space-3);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-palette__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.mesh-palette__option-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.mesh-palette__option--active .mesh-palette__option-icon {
+  color: var(--color-primary-contrast);
+}
+
+.mesh-palette__option-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.mesh-palette__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命中高亮:字重 + 下划线叠加,颜色非唯一信号(§6.12) */
+.mesh-palette__mark {
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background-color: var(--color-mark-bg);
+  color: var(--color-mark-text);
+  border-radius: var(--radius-xs);
+}
+
+.mesh-palette__option--active .mesh-palette__mark {
+  background-color: transparent;
+  color: inherit;
+}
+
+.mesh-palette__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mesh-palette__option--active .mesh-palette__subtitle {
+  color: var(--color-primary-contrast);
+}
+
+.mesh-palette__combo {
+  flex: none;
+  display: inline-flex;
+}
+
+/* ===== 检索进度条(§4.2 loading;reduced-motion 下降级为静态) ===== */
+.mesh-palette__progress {
+  block-size: 2px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface-sunken);
+  overflow: hidden;
+  position: relative;
+}
+
+.mesh-palette__progress::after {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inline-size: 40%;
+  border-radius: var(--radius-full);
+  background-color: var(--color-primary);
+  animation: mesh-palette-progress 1.2s ease-in-out infinite;
+}
+
+@keyframes mesh-palette-progress {
+  from {
+    inset-inline-start: -40%;
+  }
+  to {
+    inset-inline-start: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh-palette__progress::after {
+    animation: none;
+    inset-inline-start: 0;
+    inline-size: 100%;
+    opacity: 0.6;
+  }
+}
+
+/* ===== skeleton(远程结果占位;不阻塞本地命令,§11.4) ===== */
+.mesh-palette__skeletons {
+  padding-block: var(--space-2);
+  padding-inline: var(--space-3);
+}
+
+.mesh-palette__skeleton-row {
+  display: block;
+  block-size: 4.5rem;
+  inline-size: 100%;
+}
+
+/* ===== 异常态(§4.2) ===== */
+.mesh-palette__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-md);
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger-fg);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__retry {
+  flex: none;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.mesh-palette__retry:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.mesh-palette__offline {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background-color: var(--color-warn-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__no-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  text-align: center;
+}
+
+.mesh-palette__no-results-title {
+  color: var(--color-text);
+}
+
+.mesh-palette__no-results-hints {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__create {
+  align-self: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  padding: var(--space-2) var(--space-4);
+  cursor: pointer;
+}
+
+.mesh-palette__create:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-palette__create:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* ===== 底部提示条(§4.1) ===== */
+.mesh-palette__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  padding-block-start: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.mesh-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* ===== 顶栏搜索内联弹层(§4.9 同一结果视图) ===== */
+.mesh-topbar__search-wrap {
+  position: relative;
+  flex: 1;
+  max-inline-size: 420px;
+  display: flex;
+}
+
+.mesh-topbar__search-wrap > .mesh-topbar__search {
+  inline-size: 100%;
+}
+
+.mesh-topbar__search-popover {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline-start: 0;
+  inline-size: min(32rem, 90vw);
+  max-block-size: 24rem;
+  overflow: auto;
+  z-index: var(--z-dropdown);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 var(--space-2) var(--space-5) var(--color-scrim);
+  padding-block: var(--space-2);
+}
+
+.mesh-topbar__search-popover .mesh-palette__list {
+  max-block-size: none;
+  overflow: visible;
+}
+
+/* ===== forced-colors:高亮与选中经系统语义保持可辨 ===== */
+@media (forced-colors: active) {
+  .mesh-palette__mark {
+    text-decoration: underline;
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .mesh-palette__option--active {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .mesh-topbar__search-popover {
+    outline: 1px solid CanvasText;
+  }
 }
 
 /* ===== ShortcutHelp ===== */

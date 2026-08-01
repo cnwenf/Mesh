@@ -1,0 +1,57 @@
+{
+  "keys": {
+    "approvals.agentGated.hint": {
+      "en": "To prevent self-approval, only human members can review approvals.",
+      "zh": "为防止自我审批,审批仅对人类成员开放。"
+    },
+    "approvals.agentGated.title": { "en": "Agents can't approve", "zh": "Agent 无法审批" },
+    "approvals.approve": { "en": "Approve", "zh": "批准" },
+    "approvals.chip.capability": { "en": "Capability", "zh": "能力" },
+    "approvals.chip.permission": { "en": "Permission", "zh": "权限" },
+    "approvals.cost": { "en": "Est. cost: {cost}", "zh": "预估成本:{cost}" },
+    "approvals.decisionComment": { "en": "Comment: {comment}", "zh": "审批备注:{comment}" },
+    "approvals.empty.hint": {
+      "en": "New approval requests will show up here.",
+      "zh": "新的审批请求会出现在这里。"
+    },
+    "approvals.empty.title": { "en": "No approvals waiting for you", "zh": "暂无待你审批的事项" },
+    "approvals.emptyStatus.hint": {
+      "en": "Approvals will show here once they reach this status.",
+      "zh": "审批进入该状态后会显示在这里。"
+    },
+    "approvals.emptyStatus.title": { "en": "No approvals in this status", "zh": "该状态下暂无审批" },
+    "approvals.expiredBadge": { "en": "Expired", "zh": "已过期" },
+    "approvals.expires": { "en": "Expires", "zh": "过期时间" },
+    "approvals.expiresIn": { "en": "{time}", "zh": "{time}" },
+    "approvals.impact": { "en": "Impact: {scope}", "zh": "影响范围:{scope}" },
+    "approvals.noWorkspace.title": { "en": "No workspace available.", "zh": "没有可用工作区。" },
+    "approvals.openSubject": { "en": "Open", "zh": "打开" },
+    "approvals.pendingToolCall": { "en": "Pending tool call: {tool}", "zh": "待执行:{tool}" },
+    "approvals.reject": { "en": "Reject", "zh": "拒绝" },
+    "approvals.reject.cancel": { "en": "Cancel", "zh": "取消" },
+    "approvals.reject.commentLabel": { "en": "Reason (optional)", "zh": "原因(可选)" },
+    "approvals.reject.confirm": { "en": "Reject approval", "zh": "确认拒绝" },
+    "approvals.reject.title": { "en": "Reject approval", "zh": "拒绝审批" },
+    "approvals.rel.day": { "en": "in {count} days", "zh": "{count} 天后" },
+    "approvals.rel.hour": { "en": "in {count} hours", "zh": "{count} 小时后" },
+    "approvals.rel.minute": { "en": "in {count} minutes", "zh": "{count} 分钟后" },
+    "approvals.rel.past": { "en": "any moment now", "zh": "已到期" },
+    "approvals.relaunch": { "en": "Relaunch", "zh": "重新发起" },
+    "approvals.resumeHint": {
+      "en": "Resumes from the approval point as a new attempt: {steps} steps completed.",
+      "zh": "将从审批点以新尝试恢复:已完成 {steps} 步。"
+    },
+    "approvals.status.approved": { "en": "Approved", "zh": "已批准" },
+    "approvals.status.cancelled": { "en": "Cancelled", "zh": "已取消" },
+    "approvals.status.expired": { "en": "Expired", "zh": "已过期" },
+    "approvals.status.pending": { "en": "Pending", "zh": "待审批" },
+    "approvals.status.rejected": { "en": "Rejected", "zh": "已拒绝" },
+    "approvals.subject.autopilotAction": { "en": "Autopilot action", "zh": "Autopilot 动作" },
+    "approvals.subject.squadPlan": { "en": "Squad plan", "zh": "小队计划" },
+    "approvals.subject.toolCall": { "en": "Tool call", "zh": "工具调用" },
+    "approvals.tabsLabel": { "en": "Approval status", "zh": "审批状态" },
+    "approvals.title": { "en": "Approvals", "zh": "审批" },
+    "approvals.toast.approved": { "en": "Approved", "zh": "已批准" },
+    "approvals.toast.rejected": { "en": "Rejected", "zh": "已拒绝" }
+  }
+}

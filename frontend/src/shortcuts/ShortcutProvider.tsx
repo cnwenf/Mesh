@@ -134,17 +134,40 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
   const propsRef = useRef(props);
   propsRef.current = props;
   const pendingRef = useRef<PendingSequence | null>(null);
+  const pendingTimerRef = useRef<number | null>(null);
   const composingRef = useRef(false);
   const [sequencePending, setSequencePending] = useState(false);
 
-  const clearPending = (): void => {
-    if (pendingRef.current !== null) {
-      pendingRef.current = null;
-      setSequencePending(false);
-    }
-  };
-
   useEffect(() => {
+    /** 第 3/4 层:注册表确定性仲裁(§4.3.1),每次按键只执行一个 handler。 */
+    const runArbitrated = (combo: string): boolean => {
+      const { shortcuts, activeContexts } = useShortcutRegistry.getState();
+      const def = arbitrateShortcut(shortcuts, combo, activeContexts);
+      if (def === null) return false;
+      def.run();
+      return true;
+    };
+
+    const clearPending = (): void => {
+      pendingRef.current = null;
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+      setSequencePending(false);
+    };
+
+    const beginPending = (at: number, windowMs: number): void => {
+      clearPending();
+      pendingRef.current = { at };
+      setSequencePending(true);
+      pendingTimerRef.current = window.setTimeout(() => {
+        pendingRef.current = null;
+        pendingTimerRef.current = null;
+        setSequencePending(false);
+      }, windowMs);
+    };
+
     const onCompositionStart = (): void => {
       composingRef.current = true;
       // 组合输入开始即终结序列待决态(组合中的字符不是序列第二键)。
@@ -152,21 +175,6 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
     };
     const onCompositionEnd = (): void => {
       composingRef.current = false;
-    };
-    window.addEventListener('compositionstart', onCompositionStart);
-    window.addEventListener('compositionend', onCompositionEnd);
-    return () => {
-      window.removeEventListener('compositionstart', onCompositionStart);
-      window.removeEventListener('compositionend', onCompositionEnd);
-    };
-  }, []);
-
-  useEffect(() => {
-    /** 第 3/4 层:注册表确定性仲裁(§4.3.1),每次按键只执行一个 handler。 */
-    const runArbitrated = (combo: string): void => {
-      const { shortcuts, activeContexts } = useShortcutRegistry.getState();
-      const def = arbitrateShortcut(shortcuts, combo, activeContexts);
-      def?.run();
     };
 
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -185,21 +193,24 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
         return;
       }
 
-      const modMatches = isMac ? event.metaKey : event.ctrlKey;
-      const inField = isFormFieldElement(event.target);
-
-      // —— 第 1 层:输入控件。只放行显式 mod 组合;Esc/Tab/Enter 为浏览器
-      // 原生表单语义,不由分发器路由(评审 R4 注)。
-      if (inField && !modMatches) {
+      // Esc 是序列待决态的全局取消键,即使焦点已经转入表单字段也须清理。
+      if (lower === 'escape' && pendingRef.current !== null) {
+        clearPending();
+        event.preventDefault();
         return;
       }
 
+      const modMatches = isMac ? event.metaKey : event.ctrlKey;
+      const inField = isFormFieldElement(event.target);
+
       // —— 第 2 层:最上层弹层。背景页面快捷键全屏蔽,仅弹层自身键绑定
-      // 与 Esc 分层关闭语义生效(§4.3.1 / §4.5)。
+      // 与 Esc 分层关闭语义生效(§4.3.1 / §4.5)。Esc 即使来自弹层输入框,
+      // 也先交给关闭栈完成「首按仅失焦」语义。
       const overlay = topOverlay();
       if (overlay !== null) {
         overlay.onKeyDown?.(event);
         if (lower === 'escape') {
+          event.preventDefault();
           handleOverlayEscape();
         }
         return;
@@ -210,6 +221,11 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
         event.preventDefault();
         clearPending();
         current.onOpenPalette?.();
+        return;
+      }
+
+      // —— 第 1 层:输入控件。除上方显式 mod+K 外,裸键不进入页面快捷键分发。
+      if (inField && !modMatches) {
         return;
       }
 
@@ -243,41 +259,47 @@ export function ShortcutProvider(props: ShortcutProviderProps): React.JSX.Elemen
       }
 
       if (lower === SEQUENCE_PREFIX) {
-        pendingRef.current = { at: now() };
-        setSequencePending(true);
-        const windowMs = sequenceWindowMs;
-        window.setTimeout(() => {
-          // 窗口到期且仍处于同一待决态 → 收起提示(缓冲在下次按键时失效)。
-          const still = pendingRef.current;
-          if (still !== null && now() - still.at >= windowMs) {
-            clearPending();
-          }
-        }, windowMs + 20);
+        beginPending(now(), sequenceWindowMs);
         return;
       }
 
       // —— 第 3/4 层:页面上下文组 > 全局组(同一仲裁,§4.3.1)。
       const combo = comboFromEvent(event);
-      if (combo === '/') {
+      const matched = runArbitrated(combo);
+      if (combo === '/' && matched) {
         // '/' 聚焦搜索须 preventDefault,回避浏览器内置快速查找冲突(§4.5)。
         event.preventDefault();
       }
-      runArbitrated(combo);
     };
 
+    window.addEventListener('compositionstart', onCompositionStart);
+    window.addEventListener('compositionend', onCompositionEnd);
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('compositionstart', onCompositionStart);
+      window.removeEventListener('compositionend', onCompositionEnd);
+      window.removeEventListener('keydown', handleKeyDown);
+      pendingRef.current = null;
+      if (pendingTimerRef.current !== null) {
+        window.clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
+    };
   }, []);
-
-  const showHint = sequencePending && props.sequencePendingLabel !== undefined;
 
   return (
     <>
       {props.children}
-      {showHint ? (
-        <div className="mesh-sequence-hint" data-testid="sequence-hint" role="status">
-          {props.sequencePendingLabel}
-        </div>
+      {sequencePending ? (
+        <output
+          className="mesh-shortcut-sequence-status mesh-sequence-hint"
+          data-testid="sequence-hint"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {props.sequencePendingLabel ?? 'G —'}
+        </output>
       ) : null}
     </>
   );

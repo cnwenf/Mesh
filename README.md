@@ -36,7 +36,8 @@ Mesh 是一个 **AI 原生的团队工作区**:AI agent 被当作真正的队友
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 🚧 实施中(MES-111) | MES-109 完成逐页审查 + 设计 Spec(MES-110 竞品对照清单 343 条验收基线);MES-107 去脚手架化 v0.23.1;MES-111 已完成 Phase 0(手机可达性:底栏/更多抽屉/统一搜索入口/技能死链/390px 溢出)与 Phase 1 设计系统底座(令牌三层扩展 + 双主题校准、排版体系、Icon/Badge/Avatar/Tooltip/Menu/Tabs/Accordion/Drawer 原语与组件全状态矩阵、错误态四部分模板);Stage 1 系统层收敛(MES-115)已在底座上补齐 Field/Textarea/Checkbox/Switch/Popover/PageHeader/Toolbar/DataTable 与 Icon 注册表扩充、桌面分组可折叠侧栏 + 手机底栏/抽屉同源导航(navigation.ts 唯一入口表)、emoji/字符图标全站清偿、静态门禁(eslint mesh/no-emoji-icons + stylelint mesh/zindex-token-only)、/styleguide 组件 fixture 与 1440/1024/768/390 × 亮暗视觉回归基础;后续逐页分批实施经 MES-111 并行子 Issue 调度 |
+| 前端设计质量与体验升级([design-quality.md](docs/specs/features/design-quality.md)) | 🚧 实施中(MES-111) | MES-109 完成逐页审查 + 设计 Spec(MES-110 竞品对照清单 343 条验收基线);MES-107 去脚手架化 v0.23.1;MES-111 已完成 Phase 0(手机可达性:底栏/更多抽屉/统一搜索入口/技能死链/390px 溢出)与 Phase 1 设计系统底座(令牌三层扩展 + 双主题校准、排版体系、Icon/Badge/Avatar/Tooltip/Menu/Tabs/Accordion/Drawer 原语与组件全状态矩阵、错误态四部分模板);Stage 1 系统层收敛(MES-115)已在底座上补齐 Field/Textarea/Checkbox/Switch/Popover/PageHeader/Toolbar/DataTable 与 Icon 注册表扩充、桌面分组可折叠侧栏 + 手机底栏/抽屉同源导航(navigation.ts 唯一入口表)、emoji/字符图标全站清偿、静态门禁(eslint mesh/no-emoji-icons + stylelint mesh/zindex-token-only)、/styleguide 组件 fixture 与 1440/1024/768/390 × 亮暗视觉回归基础;**MES-127 批次④(已完成)**:账号/工作区设置二级导航(SettingsLayout 沉淀至 `design/patterns`,dirty + 保存反馈 + 危险区 + 权限不可见)+ **G11** 工作区默认主题前端入口(协商链真实生效)+ 统一搜索/命令面板(顶栏同一结果视图 + Ctrl/Cmd+K 六类业务对象检索 + favorites/recents + identifier 直达 + 120ms 防抖/可取消/旧响应不覆盖新查询 + 键盘全流程 + aria-live 播报 + `/` 聚焦)+ `/insights` 洞察 UI 重做(KPI 条 + 口径/时区回显行 + 空窗/数据不足/可见性过滤态 + tabular-nums + 颜色非唯一信号)+ `/approvals` 统一审批页(**G10**)+ **G19** 动态标签页标题公共 hook + 模态 Esc 任意焦点可关(修复焦点圈养竞态漏关);真实 e2e 桌面 + 手机双视口 10/10 全绿 + 四组合走查存证 22 张互异;单测 3856 例、逐文件 90% 门禁(189 文件)全过。后续逐页分批(移动收尾/剩余页面族/路由收口)经 MES-111 并行子 Issue 调度 |
+| 全局搜索 / 命令面板后端(search-command-palette.md §3/§4/§5) | 🚧 MES-127 批次④ | **新增全局搜索模块** `backend/src/mesh/search/`(迁移 0035:pg_trgm + unaccent 扩展 + `public.mesh_search_norm` IMMUTABLE 归一化 + `members.search_name` 投影列 + 写路径触发器同事务同步 + §2.2 十一索引 + 支撑索引);`GET /api/v1/workspaces/{ws}/search` 六类对象召回(issue/member/agent/project/view/chat_session)+ identifier 等值快路径(小写输入规范化置顶,跳防抖)+ 1–2 字符前缀 / ≥3 字符 trigram 双路径(**trigram 路径 OR 归一化子串兜底,修 CJK 长混合标题相似度稀释漏召回**)+ 查询内可见性内联(§3.3 绝不先取后滤,私密对象不泄露存在性)+ 键集游标分页(HMAC 绑定 q/types/workspace,§3.2)+ §4.6 整数桶全序(score_bucket→title_len→title_lex→type→id)+ 高亮 code point 区间(§3.2);workspace 作用域仅自路径 `{ws}` 解析;原始查询不落地任何日志/指标(§5.3);**前端命令面板见上一行批次④**。真实 e2e 44 例全绿(六类召回/identifier/可见性负向/游标无重复无缺口/触发器同步/重音与大小写/CJK 子串)+ 前端双视口命令面板 e2e 全绿 |
 | 前端生产就绪收尾(MES-107 去脚手架化) | ✅ v0.23.1 | 首页替换为真实工作区仪表盘(GET /users/me 问候 + 工作区卡片列表 + 活跃工作区 issue 仪表盘:游标分页 + 实时增量合并 + 快捷创建);登录页删除 dev 令牌块与过时 phaseNote;PlaceholderPage、placeholder/ 静态占位目录与全站占位/演示/即将上线文案清理(i18n 双语目录同步、版本哈希重算);/skills 路由与 agent 详情技能 Tab 接通;契约 mock 与 e2e 去 demo 化;新增 mes107 隔离验收栈(production 鉴权 + 公网 HTTP,桌面 + 手机双视口 8/8);单测 2901 例、整体行覆盖 97.79%、变更代码 99.6%(双门禁通过) |
 | 工程骨架与全局契约(§6) | ✅ v0.1.0 | 错误信封/分页包络、事件词汇注册表、outbox → realtime 唯一写入路径、多租户构件、realtime 网关骨架 |
 | auth 认证核心(auth.md 增量 1) | ✅ v0.2.0 | 注册/登录/会话/MFA/一次性令牌/账号偏好 + 应用路径 RLS 加固 |
@@ -86,6 +87,7 @@ docker compose up --build -d
 ```
 
 > `docker-compose.yml` 中**所有凭据都是必填项、无默认值**(MES-83 加固):缺失任一口令时 `docker compose up` 直接报错而非以弱口令启动。本地开发用 `scripts/gen-dev-secrets.sh` 一次性生成强随机 `.env`(已 git-ignore);如需轮换,加 `--force` 重新生成。
+> 前端容器 builder 固定使用 Node 22.22.0，与 `frontend/package.json#engines.node` 的最低版本一致；Compose 构建不得出现 `EBADENGINE`。
 
 服务与端口(可用 `.env` 覆盖,见 [.env.example](.env.example)):
 
@@ -145,6 +147,10 @@ curl http://localhost:3001/api/v1/ping      # 经 nginx 同源代理到 API
 > **会话与登录守卫(MES-106,auth.md §4.1)**:受保护路由未登录访问统一跳 `/login?next=<原路径>`,登录后回跳原页;token 失效(受保护端点 401)由 API 客户端全局兜底清 token 并跳登录页(鉴权豁免端点的业务错误就地呈现,不受影响)。实时网关地址为绝对 `ws(s)://`:同源部署(`VITE_MESH_WS_BASE_URL` 为空)时由页面 `location` 派生(`http:` 页 → `ws://<host>/ws`,`https:` 页 → `wss://<host>/ws`),公网 HTTP 部署实时可用。
 >
 > **本地开发替代**:若用 Vite dev server(`cd frontend && npm run dev`),以同源代理配置启动:`VITE_MESH_API_BASE_URL="" VITE_MESH_WS_BASE_URL="" npx vite --config vite.local.config.ts`(该配置把 `/api`、`/ws` 代理到 `127.0.0.1:8000/8081`),同样同源、无需 CORS。
+>
+> **前端 mock E2E 门禁**:`cd frontend && npm run test:e2e` 每次自动构建并预览生产 SPA，同时拉起新的契约 mock 服务；不复用现有进程、不使用 Vite dev/HMR 模块图、不配置失败重试。
+>
+> **来源审计门禁**:`source-provenance` workflow 扫描全部受管文本、完整提交信息和 refs。匹配规则仅由仓库外的 Actions secret 注入；缺失配置会 fail closed，诊断不会回显规则或命中原文。
 
 API 启动时自动执行 `alembic upgrade head`(建表 + RLS 策略);worker 进程运行 outbox relay、realtime projector 与保留期清理。
 

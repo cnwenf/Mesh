@@ -97,117 +97,33 @@ npm ci --dry-run
 
 ---
 
-## 4. 自检脚本（S3-C 残留审计复用）
+## 4. 自动化残留审计
 
-以下脚本可在 CI 或本地一键执行，检测代码仓库中是否存在参考产品残留。
+`mesh.compliance.source_provenance` 是唯一自动化入口，扫描 `git ls-files` 返回的全部
+受管文本、完整提交信息/作者以及所有 refs。扫描器只输出规则编号与文件/行号，绝不把
+匹配规则或命中原文复制到日志。
 
-### 4.1 敏感词 / 域名 / 署名 grep
+### 4.1 规则必须从仓库外注入
 
-```bash
-#!/usr/bin/env bash
-# clean-room-grep.sh — 扫描仓库中是否存在参考产品残留
-# 用法: ./scripts/clean-room-grep.sh [目录，默认仓库根]
-# 退出码: 0=通过, 1=发现残留
-
-set -euo pipefail
-ROOT="${1:-.}"
-VIOLATIONS=0
-
-# ─── 敏感词表（小写匹配）───
-# 注意：此表本身不得包含参考产品真名——用正则模式匹配
-SENSITIVE_PATTERNS=(
-  # 参考产品品牌名（按实际脱敏需要维护，此处为模式占位）
-  "multica"
-  "mlt\.dev"
-  "multica\.ai"
-  "multica\.com"
-  "multica\.io"
-  # 参考产品 GitHub org / 仓库路径
-  "github\.com/multica"
-  # 参考产品 npm 包名前缀
-  "@multica/"
-  # 常见代号/别名（按需追加）
-  "the-reference-product"
-)
-
-echo "=== Clean-room 敏感词扫描 ==="
-echo "扫描目录: $ROOT"
-echo ""
-
-for pattern in "${SENSITIVE_PATTERNS[@]}"; do
-  # 排除本文件自身、git 目录、node_modules、lockfile
-  HITS=$(grep -rnil "$pattern" "$ROOT" \
-    --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" \
-    --include="*.css" --include="*.scss" --include="*.html" --include="*.json" \
-    --include="*.md" --include="*.yml" --include="*.yaml" --include="*.toml" \
-    --include="*.py" --include="*.sh" --include="*.env*" \
-    --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist \
-    --exclude="package-lock.json" --exclude="clean-room-grep.sh" \
-    2>/dev/null || true)
-
-  if [ -n "$HITS" ]; then
-    echo "❌ 发现匹配 '$pattern':"
-    echo "$HITS" | while read -r f; do echo "   $f"; done
-    VIOLATIONS=$((VIOLATIONS + 1))
-  fi
-done
-
-echo ""
-if [ "$VIOLATIONS" -gt 0 ]; then
-  echo "❌ 扫描未通过：发现 $VIOLATIONS 类敏感词残留，须逐一排查清理。"
-  exit 1
-else
-  echo "✅ 扫描通过：未发现参考产品残留。"
-  exit 0
-fi
-```
-
-### 4.2 提交历史扫描
+匹配词表不得出现在代码、注释、文档、提交信息或 refs 中。CI 必须通过受控 repository
+Actions secret `MESH_FORBIDDEN_SOURCE_PATTERNS` 注入换行分隔的正则；本地审核使用位于仓库
+外、权限受控的规则文件：
 
 ```bash
-#!/usr/bin/env bash
-# clean-room-git-log.sh — 扫描提交信息/作者中的参考产品残留
-# 用法: ./scripts/clean-room-git-log.sh [起始ref，默认全量]
-
-set -euo pipefail
-REF="${1:-}"
-VIOLATIONS=0
-
-PATTERNS="multica|mlt\.dev|multica\.ai|multica\.com|@multica/"
-
-echo "=== 提交历史扫描 ==="
-
-if [ -n "$REF" ]; then
-  LOG_CMD="git log $REF..HEAD --format=%H|%s|%an|%ae"
-else
-  LOG_CMD="git log --format=%H|%s|%an|%ae"
-fi
-
-HITS=$($LOG_CMD | grep -iE "$PATTERNS" || true)
-
-if [ -n "$HITS" ]; then
-  echo "❌ 提交历史中发现敏感词:"
-  echo "$HITS" | head -20
-  VIOLATIONS=1
-fi
-
-# 检查分支名
-BRANCH_HITS=$(git branch -a | grep -iE "$PATTERNS" || true)
-if [ -n "$BRANCH_HITS" ]; then
-  echo "❌ 分支名中发现敏感词:"
-  echo "$BRANCH_HITS"
-  VIOLATIONS=1
-fi
-
-echo ""
-if [ "$VIOLATIONS" -gt 0 ]; then
-  echo "❌ 扫描未通过。"
-  exit 1
-else
-  echo "✅ 提交历史与分支名无残留。"
-  exit 0
-fi
+PYTHONPATH=backend/src python -m mesh.compliance.source_provenance \
+  --root . --patterns-file /secure/path/source-provenance-patterns.txt
 ```
+
+缺少外部规则、规则为空、正则非法或 Git 元数据不可读时均返回退出码 `2`，不得跳过；
+发现残留返回 `1`；全部受管文本、提交信息和 refs 零命中才返回 `0`。规则文件与 secret
+均不得写入仓库、构建产物或 CI artifact。
+
+### 4.2 扫描边界
+
+- 当前版本：扫描全部 Git 受管 UTF-8 文本；二进制文件不作字符串推断，仍走 §4.3 素材来源核查。
+- Git 元数据：`fetch-depth: 0` 后扫描完整 commit message/author 与 `refs/*`。
+- 日志脱敏：诊断仅含 `{source, line, rule}`，禁止输出命中行、规则正文或上下文。
+- 任何变更：`.github/workflows/source-provenance.yml` 在 push 与 pull request 上 fail closed 执行。
 
 ### 4.3 素材来源核查步骤
 
@@ -244,27 +160,27 @@ echo "无法回答来源的文件 = 不合规，须删除或替换。"
 
 ---
 
-## 5. CI 集成建议
+## 5. CI 集成
 
-在 PR 检查流水线中加入：
+仓库门禁 `.github/workflows/source-provenance.yml` 采用以下契约：
 
 ```yaml
-# .github/workflows/clean-room.yml（示意）
-clean-room-check:
+repository-audit:
   runs-on: ubuntu-latest
   steps:
     - uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # 全量历史
-    - name: 敏感词扫描
-      run: bash scripts/clean-room-grep.sh .
-    - name: 提交历史扫描
-      run: bash scripts/clean-room-git-log.sh origin/main
-    - name: 依赖许可扫描
-      run: cd frontend && npm ci && npx license-checker --summary --onlyAllow "MIT;ISC;Apache-2.0;OFL-1.1;BSD-2-Clause;BSD-3-Clause;CC-BY-4.0;CC0-1.0"
-    - name: 漏洞检查
-      run: cd frontend && npm audit --audit-level=high
+        fetch-depth: 0
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: 来源审计
+      env:
+        MESH_FORBIDDEN_SOURCE_PATTERNS: ${{ secrets.MESH_FORBIDDEN_SOURCE_PATTERNS }}
+      run: PYTHONPATH=backend/src python -m mesh.compliance.source_provenance --root .
 ```
+
+依赖许可与漏洞检查仍按 §3 独立执行，不与来源匹配规则混用。
 
 ---
 

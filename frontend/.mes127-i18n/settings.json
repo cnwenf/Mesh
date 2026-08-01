@@ -1,0 +1,48 @@
+{
+  "keys": {
+    "settings.navLabel": {
+      "en": "Settings navigation",
+      "zh": "设置导航"
+    },
+    "settings.savedToast": {
+      "en": "Preference saved.",
+      "zh": "偏好已保存。"
+    },
+    "settings.unsavedTitle": {
+      "en": "Discard unsaved changes?",
+      "zh": "放弃未保存的更改？"
+    },
+    "settings.unsavedDescription": {
+      "en": "You have unsaved changes. If you leave now, they will be lost.",
+      "zh": "你有未保存的更改。现在离开将会丢失这些更改。"
+    },
+    "settings.unsavedStay": {
+      "en": "Keep editing",
+      "zh": "继续编辑"
+    },
+    "settings.unsavedDiscard": {
+      "en": "Discard changes",
+      "zh": "放弃更改"
+    },
+    "workspaceSettings.navLabel": {
+      "en": "Workspace settings navigation",
+      "zh": "工作区设置导航"
+    },
+    "workspaceSettings.groupWorkspace": {
+      "en": "Workspace",
+      "zh": "工作区"
+    },
+    "workspaceSettings.groupCustomize": {
+      "en": "Customize",
+      "zh": "自定义"
+    },
+    "workspaceSettings.groupAdvanced": {
+      "en": "Advanced",
+      "zh": "高级"
+    },
+    "workspaceSettings.unsavedHint": {
+      "en": "Unsaved changes",
+      "zh": "有未保存的更改"
+    }
+  }
+}

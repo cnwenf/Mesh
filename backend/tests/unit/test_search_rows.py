@@ -11,8 +11,9 @@ import uuid
 
 import pytest
 
-from mesh.search.cursor import SearchCursor, decode_search_cursor
+from mesh.search.cursor import decode_cursor
 from mesh.search.service import (
+    CursorBoundary,
     Row,
     apply_capacities,
     build_chat_rows,
@@ -73,7 +74,7 @@ def test_build_pin_row_none_and_hit():
     assert build_pin_row(None) is None
     pin = build_pin_row(_issue_row(title="WEB 精确"))
     assert pin is not None
-    assert pin.score_bucket == 9
+    assert pin.score_bucket == 95
     assert pin.sort_key < build_issue_rows([_issue_row()])[0].sort_key
 
 
@@ -194,23 +195,24 @@ def test_paginate_rows_cursor_roundtrip():
         )
 
     rows = [mk(6, f"t{i:02d}") for i in range(5)]
-    page, cursor = paginate_rows(rows, limit=3, fingerprint="fp", secret="s")
+    page, cursor = paginate_rows(rows, limit=3, fingerprint="fp", secret=b"s")
     assert len(page) == 3
     assert cursor is not None
-    decoded = decode_search_cursor(cursor, expected_fingerprint="fp", secret="s")
-    assert decoded.result_type == "issue"
-    assert decoded.title_lex == page[-1].title_lex
-    assert decoded.row_id == page[-1].id
+    decoded_fp, factors = decode_cursor(b"s", cursor)
+    assert decoded_fp == "fp"
+    assert factors[3] == "issue"
+    assert factors[2] == page[-1].title_lex
+    assert factors[4] == str(page[-1].id)
 
     # No overflow → no cursor.
-    page2, cursor2 = paginate_rows(rows[:2], limit=3, fingerprint="fp", secret="s")
+    page2, cursor2 = paginate_rows(rows[:2], limit=3, fingerprint="fp", secret=b"s")
     assert len(page2) == 2
     assert cursor2 is None
 
 
 def test_keyset_clause_all_branches():
     assert keyset_clause("issue", None) == "TRUE"
-    cursor = SearchCursor(
+    cursor = CursorBoundary(
         score_bucket=6, title_len=4, title_lex="mmm", result_type="member", row_id=uuid.uuid4()
     )
     # entity type < cursor type → strictly-before-tuple form
@@ -236,9 +238,12 @@ def test_order_limit_collates_code_point():
 
 
 def test_match_and_order_fragments():
-    assert match_clause("prefix", "E") == "E LIKE :prefix_pat ESCAPE '\\'"
+    prefix = match_clause("prefix", "E")
+    assert "public.mesh_search_norm(:nq)" in prefix
+    assert "replace(replace(replace" in prefix
+    assert "|| '%'" in prefix
     trigram = match_clause("trigram", "E")
-    assert ":substr_pat" in trigram and "% public.mesh_search_norm(:nq)" in trigram
+    assert "LIKE '%' ||" in trigram and "% public.mesh_search_norm(:nq)" in trigram
     assert "ORDER BY score_bucket DESC" in order_limit(20)
     assert "LIMIT 20" in order_limit(20)
 
@@ -260,10 +265,10 @@ def test_visibility_fragments_by_role():
 def test_validate_search_params_sync():
     ws = uuid.uuid4()
     assert validate_search_params(
-        q="", types=None, limit=None, cursor_raw=None, workspace_id=ws, secret="s"
+        q="", types=None, limit=None, cursor_raw=None, workspace_id=ws, secret=b"s"
     ) is None
     params = validate_search_params(
-        q="  José ", types="issue, view", limit=10, cursor_raw=None, workspace_id=ws, secret="s"
+        q="  José ", types="issue, view", limit=10, cursor_raw=None, workspace_id=ws, secret=b"s"
     )
     assert params is not None
     assert params.q == "José"
@@ -276,25 +281,25 @@ def test_validate_search_params_sync():
 
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x" * 121, types=None, limit=None, cursor_raw=None, workspace_id=ws, secret="s"
+            q="x" * 121, types=None, limit=None, cursor_raw=None, workspace_id=ws, secret=b"s"
         )
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x", types="bogus", limit=None, cursor_raw=None, workspace_id=ws, secret="s"
+            q="x", types="bogus", limit=None, cursor_raw=None, workspace_id=ws, secret=b"s"
         )
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x", types=" , ", limit=None, cursor_raw=None, workspace_id=ws, secret="s"
+            q="x", types=" , ", limit=None, cursor_raw=None, workspace_id=ws, secret=b"s"
         )
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x", types=None, limit=99, cursor_raw=None, workspace_id=ws, secret="s"
+            q="x", types=None, limit=99, cursor_raw=None, workspace_id=ws, secret=b"s"
         )
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x", types=None, limit=0, cursor_raw=None, workspace_id=ws, secret="s"
+            q="x", types=None, limit=0, cursor_raw=None, workspace_id=ws, secret=b"s"
         )
     with pytest.raises(ValidationError):
         validate_search_params(
-            q="x", types=None, limit=None, cursor_raw="junk", workspace_id=ws, secret="s"
+            q="x", types=None, limit=None, cursor_raw="junk", workspace_id=ws, secret=b"s"
         )

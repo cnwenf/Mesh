@@ -131,6 +131,20 @@ class ChatSession(Base):
             "context_issue_id",
             postgresql_where=text("context_issue_id IS NOT NULL"),
         ),
+        # Search indexes (migration 0035, search-command-palette.md §2.2):
+        # expression indexes over the single normalization entry point.
+        Index(
+            "idx_chat_sessions_title_trgm",
+            text("mesh_search_norm(title)"),
+            postgresql_using="gin",
+            postgresql_ops={"mesh_search_norm(title)": "gin_trgm_ops"},
+        ),
+        Index(
+            "idx_chat_sessions_title_prefix",
+            "workspace_id",
+            text("mesh_search_norm(title)"),
+            postgresql_ops={"mesh_search_norm(title)": "text_pattern_ops"},
+        ),
         # Owner history must never dangle (members are soft-removed → RESTRICT).
         ForeignKeyConstraint(
             ("workspace_id", "owner_id"),

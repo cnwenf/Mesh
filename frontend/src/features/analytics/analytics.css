@@ -54,41 +54,84 @@
   margin-block-end: var(--space-4);
 }
 
-.mesh-analytics__kpi-row {
+/* ===== KPI 条(§3.2:KPI 条 + 图表网格 + 口径说明;§8.3 窄屏两列/单列) ===== */
+
+.mesh-analytics__kpi-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--space-3);
+  margin-block-end: var(--space-4);
 }
 
-.mesh-analytics__kpi {
+@media (max-width: 599px) {
+  .mesh-analytics__kpi-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 359px) {
+  .mesh-analytics__kpi-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mesh-analytics__kpi-cell {
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
-.mesh-analytics__kpi-label {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+.mesh-analytics__kpi-caption {
   margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
 }
 
-.mesh-analytics__kpi-value {
-  font-size: var(--font-size-lg);
-  font-weight: 600;
-  margin: var(--space-1) 0 0;
-  color: var(--color-text);
+/* 大数字:title 字阶 + 等宽数字位(tabular 经 .mesh-tnum 叠加,§6.3) */
+.mesh-analytics__kpi-big {
+  margin: 0;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-display);
+  color: var(--color-text-strong);
 }
 
-.mesh-analytics__kpi-value--success {
+.mesh-analytics__kpi-big--success {
   color: var(--color-success);
 }
 
-.mesh-analytics__kpi-value--warn {
+.mesh-analytics__kpi-big--warning {
   color: var(--color-warn);
 }
 
-.mesh-analytics__kpi-value--danger {
+.mesh-analytics__kpi-big--danger {
   color: var(--color-danger);
+}
+
+.mesh-analytics__kpi-unit {
+  font-size: var(--font-size-body-sm);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+  margin-inline-start: var(--space-1);
+}
+
+.mesh-analytics__kpi-hint {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-text-muted);
+}
+
+/* KPI 骨架占位(与最终布局同形) */
+.mesh-analytics__kpi-strip--skeleton .mesh-skeleton__shape {
+  block-size: 84px;
 }
 
 .mesh-analytics__agent-grid {
@@ -172,4 +215,79 @@
 
 .mesh-analytics__legend-swatch--dashed {
   border-block-start-style: dashed;
+}
+
+/* 柱状图图例:实心心形色块(无线型语义) */
+.mesh-analytics__legend-swatch--bar {
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: var(--radius-xs, 2px);
+  border-block-start: 0;
+}
+
+/* 图例线型注词(虚线/实线):文字信号,颜色非唯一依据(§4.5) */
+.mesh-analytics__legend-style {
+  color: var(--color-text-muted);
+}
+
+/* ===== 图表网格(§3.2:2 列 → ≤899px 单列,重排不压缩文字,§8.3) ===== */
+
+.mesh-analytics__charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 899px) {
+  .mesh-analytics__charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 卡片头:标题 + 右侧附加(如切换器),窄屏换行不溢出 */
+.mesh-analytics__card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-block-end: var(--space-3);
+}
+
+.mesh-analytics__card-header .mesh-analytics__card-title {
+  margin: 0;
+}
+
+/* 口径说明行(时区/粒度/可见性) */
+.mesh-analytics__caliber {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-analytics__caliber > * {
+  margin: 0;
+}
+
+/* 指标语义色(agent 成功率等;颜色非唯一信号,总伴随标签文本) */
+.mesh-analytics__metric--success {
+  color: var(--color-success);
+}
+
+.mesh-analytics__metric--warn {
+  color: var(--color-warn);
+}
+
+.mesh-analytics__metric--danger {
+  color: var(--color-danger);
+}
+
+/* 图表卡骨架占位高度(与真实卡片量级一致) */
+.mesh-analytics__card-skeleton {
+  display: block;
+  min-block-size: 220px;
 }

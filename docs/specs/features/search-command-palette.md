@@ -97,6 +97,8 @@
 
 **数据模型事实**:member/agent 的「显示名」是 `members.display_override → users.display_name → users.email`(人类)/`agents.name`(agent)的**跨表解析**(README §6.1),PostgreSQL **不能对跨表表达式建普通索引**——直接对「members 显示名」建 GIN 不可行。本 Spec 采用**受控同步的搜索投影**方案:在 `members` 上维护 `search_name` 投影列(与 README §6.1 显示名链同算法),对投影建 trigram 索引;显示渲染仍用实时解析链,投影**仅供检索**。
 
+> **实现落地注记(MES-127 批次④,行为契约不变,仅记实现选择)**:① 「受控同步」以**数据库写路径触发器**实现——members/users/agents 的写事务同事务重算 `search_name`,与「单一归一函数同步」契约观测等价(自包含、不侵入他模块服务层);② ≥3 字符 trigram 路径在 `%` 相似度召回之外**OR 一段归一化子串包含**(`norm(col) LIKE '%'||escape(norm(q))||'%'`,LIKE 通配符转义):长 / 中英混合标题上 CJK 子查询的 trigram Jaccard 常被稀释到默认阈值 0.3 以下而漏召回,子串臂兜底保证 §4.6 `SUBSTRING` 桶(本就预期字面包含可被召回)真有候选进入排序;GIN trgm 同时支撑 `%` 与 `LIKE '%…%'`,子串臂在租户级数据量下不构成性能回退。两点均为召回增强,不改变可见性内联(§3.3)、键集游标(§3.2)与排序全序(§4.6)。
+
 **归一算法唯一入口(评审 R2-H3 写死:索引 / 查询 / 回填同一函数)**:
 
 ```sql
@@ -195,7 +197,7 @@ CREATE INDEX idx_chat_sessions_title_prefix ON chat_sessions (workspace_id, (pub
 | 输入形态 | 路径 | 命中索引 | 候选上限 |
 |----------|------|----------|----------|
 | 1–2 字符 | trigram 在 <3 字符不可用:仅走**归一前缀匹配**(`public.mesh_search_norm(<col>) LIKE public.mesh_search_norm($q)\|\|'%'`)+ 本地命令匹配;对象类结果**仅前缀命中**,不做模糊 | 各实体 `*_prefix`(B-tree `text_pattern_ops`,workspace-scoped) | 每类 ≤5 |
-| 完整 identifier(归一后匹配 `^[a-z0-9]+-\d+$`) | **identifier 等值快路径**(`UNIQUE(workspace_id, identifier)`,**canonical uppercase 规范化等值**:`identifier = upper(trim($q))`——identifier 存储即大写规范形(README §6.3 `KEY-N`),输入 `web-124` 经 `upper()` 命中 `WEB-124`;R3-M4 收口:此前「原始值等值」使小写输入进快路径却落空),跳过 150ms 防抖,命中即顶置 | `uq_issues_identifier` 唯一索引 | 1(顶置)+ 常规路径补齐 |
+| 完整 identifier(归一后匹配 `^[a-z0-9]+-\d+$`) | **identifier 等值快路径**(`UNIQUE(workspace_id, identifier)`,**canonical uppercase 规范化等值**:`identifier = upper(trim($q))`——identifier 存储即大写规范形(README §6.3 `KEY-N`),输入 `web-124` 经 `upper()` 命中 `WEB-124`;R3-M4 收口:此前「原始值等值」使小写输入进快路径却落空),跳过 120ms 防抖,命中即顶置 | `uq_issues_identifier` 唯一索引 | 1(顶置)+ 常规路径补齐 |
 | ≥3 字符 | trigram 相似度(`public.mesh_search_norm(<col>) % public.mesh_search_norm($q)`)+ §4.6 分层打分;可见性 JOIN 在查询内(§3.3) | 各实体 `*_trgm`(GIN)+ 租户/软删部分索引 BitmapAnd | 每类 ≤20,合并后 ≤ `limit×2` |
 
 - 一切查询 SQL 携带 `workspace_id` 复合前缀谓词 + RLS 纵深防御(§6.2);
@@ -479,7 +481,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 
 ### 4.7 防抖、焦点与无障碍
 
-- 本地命令过滤同步执行(零延迟先渲染);服务端检索**防抖 150ms** + 过期请求取消;完整 identifier 命中跳过防抖;
+- 本地命令过滤同步执行(零延迟先渲染);服务端检索**防抖 120ms** + 过期请求取消;完整 identifier 命中跳过防抖;
 - ARIA combobox + listbox:`role=combobox` + `aria-expanded`/`aria-controls`/`aria-activedescendant`;结果项 `role=option` + `aria-selected`;结果变化 `aria-live=polite` 播报;
 - 打开陷落焦点、关闭归还触发元素;全键盘可达、焦点可见(§6.12);
 - **尊重 `prefers-reduced-motion`**:浮层动画/高亮脉冲降级为即时/静态。
@@ -520,7 +522,7 @@ README §6.12 定义的规范深链是**一切资源外链的唯一形态**;前�
 ### 5.2 性能(§10 基准)
 
 - [ ] 搜索 P95 < 300ms(热缓存,10 万 issue / 1 万成员工作区,q 为常见短词);identifier 精确命中 P95 < 100ms。**基准按 README §10**:k6 50 VU 稳态 + 100 VU 峰值、冷/热缓存各标注;查询携带**真实可见性 JOIN**(成员资格/项目可见性/私有 agent 谓词,§3.3),不以去权限的简化查询充数(评审 H3 收口)。
-- [ ] 命令面板本地命令过滤 < 16ms(单帧内);服务端结果防抖 150ms + 过期取消,无可感卡顿。
+- [ ] 命令面板本地命令过滤 < 16ms(单帧内);服务端结果防抖 120ms + 过期取消,无可感卡顿。
 - [ ] **三条查询路径各有 `EXPLAIN (ANALYZE, BUFFERS)`**(§2.2):1–2 字符前缀路径(**命中各实体 `*_prefix` B-tree pattern 索引,无全表顺序扫描**)、完整 identifier 快路径(唯一索引)、≥3 字符 trigram 路径(归一表达式 GIN + 租户/软删 BitmapAnd),在 10 万 issue / 1 万成员分布下逐条证明;**索引表达式 / 查询表达式 / 回填三方统一经 `public.mesh_search_norm`**(大写 + 带重音输入命中归一投影,EXPLAIN 仍走索引——表达式漂移即索引失效,本项即其回归断言);`members.search_name` 投影改名后即时可搜(同步契约验收)。
 
 ### 5.3 安全与一致性

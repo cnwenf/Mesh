@@ -31,6 +31,18 @@ const RETRY_AFTER_HEADER = 'Retry-After';
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_UNAUTHORIZED = 401;
 const HTTP_NO_CONTENT = 204;
+const AGENT_TOKEN_PREFIX = 'mesh_agt_';
+
+/**
+ * Agent credentials are valid for the unified principal endpoint but some
+ * human-only shell bootstrap endpoints answer 401 for that principal kind.
+ * Only `/me` is authoritative for invalidating an agent credential; treating
+ * every other 401 as an expired web session would erase the token before a
+ * page can render its explicit agent presentation gate.
+ */
+function shouldNotifyUnauthorized(path: string, token: string | null): boolean {
+  return token === null || !token.startsWith(AGENT_TOKEN_PREFIX) || path === '/api/v1/me';
+}
 
 export interface ClientOptions {
   baseUrl: string;
@@ -232,8 +244,13 @@ export class MeshApiClient {
     }
 
     if (!response.ok) {
-      // MES-106:非鉴权豁免端点的 401 = 会话失效 → 全局兜底(清 token + 跳登录)。
-      if (response.status === HTTP_UNAUTHORIZED && !isAuthExemptPath(path)) {
+      // MES-106:会话/PAT 的受保护端点 401 走全局兜底；agent token
+      // 则只以统一 `/me` 自省为失效依据，避免人类专属端点的 401 误清凭证。
+      if (
+        response.status === HTTP_UNAUTHORIZED &&
+        !isAuthExemptPath(path) &&
+        shouldNotifyUnauthorized(path, token)
+      ) {
         this.onUnauthorized?.();
       }
       throw await this.buildHttpError(response);

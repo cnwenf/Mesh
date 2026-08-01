@@ -1,7 +1,11 @@
-"""Global search module (search-command-palette.md).
+"""Global search module (search-command-palette.md §2.2/§3/§4.6).
 
-Server-side unified search over the six workspace object types with
-visibility filtering pushed into the query (§3.3), HMAC-signed keyset
-cursors (§3.2), and the ``public.mesh_search_norm`` single normalization
-entry point (§2.2).
+Server-side object search over the six searchable resource types
+(issue / member / agent / project / view / chat_session) with in-query
+visibility filtering, a layered scoring ladder and keyset paging through a
+signed, query-bound opaque cursor. The single normalization entry point on
+the database side is ``public.mesh_search_norm`` (migration 0035); the
+Python mirror in :mod:`mesh.search.norm` is used ONLY for scoring and
+highlight mapping — recall always goes through the SQL function so index
+and query expressions never drift.
 """

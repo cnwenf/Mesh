@@ -51,8 +51,9 @@ class Member(Base):
     status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'active'"))
     display_override: Mapped[str | None] = mapped_column(TEXT, default=None)
     # Search-only projection = public.mesh_search_norm(README §6.1 display-name
-    # chain). Never rendered; synced via sync_member_search_name + reconcile
-    # (search-command-palette.md §2.2 sync contract).
+    # resolution chain). NEVER used for rendering; kept in sync by database
+    # triggers (migration 0035, search-command-palette.md §2.2). The comment
+    # is part of the migrated schema — the drift gate requires it verbatim.
     search_name: Mapped[str] = mapped_column(
         TEXT,
         nullable=False,
@@ -70,7 +71,6 @@ class Member(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )
-
     __table_args__ = (
         CheckConstraint(f"member_type IN {MEMBER_TYPE_VALUES!r}", name="members_member_type"),
         CheckConstraint(f"role IN {MEMBER_ROLE_VALUES!r}", name="members_role"),
@@ -104,19 +104,24 @@ class Member(Base):
         Index("idx_members_user", "user_id"),
         Index("idx_members_agent", "agent_id"),
         Index("idx_members_type", "workspace_id", "member_type"),
-        # Search indexes (search-command-palette.md §2.2). The projection
-        # column is already normalized, so these are plain column indexes.
+        # Search indexes (migration 0035, search-command-palette.md §2.2).
+        # The projection column is pre-normalized, so the trigram index is a
+        # plain GIN over search_name; the prefix index scopes per tenant and
+        # excludes removed rows like the query path does.
         Index(
             "idx_members_search_name_trgm",
-            text("search_name gin_trgm_ops"),
+            "search_name",
             postgresql_using="gin",
+            postgresql_ops={"search_name": "gin_trgm_ops"},
         ),
         Index(
             "idx_members_search_name_prefix",
             "workspace_id",
-            text("search_name text_pattern_ops"),
+            "search_name",
+            postgresql_ops={"search_name": "text_pattern_ops"},
             postgresql_where=text("status <> 'removed'"),
         ),
+        # Tenant/status support index for the member search query (§2.2).
         Index(
             "idx_members_ws_type_active",
             "workspace_id",

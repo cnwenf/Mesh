@@ -119,7 +119,7 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run real-browser e2e (mock contract server + dev server)
+      - name: Run real-browser e2e (mock contract server + production preview)
         run: npm run test:e2e
 
       - name: Upload Playwright report

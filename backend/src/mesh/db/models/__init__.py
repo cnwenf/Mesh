@@ -77,6 +77,7 @@ from mesh.db.models.runtime import (
     TaskExecution,
     TaskLogSegment,
 )
+from mesh.db.models.search import mesh_search_ext_ledger
 from mesh.db.models.skill import (
     AgentSkill,
     Skill,
@@ -166,6 +167,7 @@ __all__ = [
     "LoginAttempt",
     "Member",
     "MemberProjectAccess",
+    "mesh_search_ext_ledger",
     "Milestone",
     "Notification",
     "NotificationDelivery",

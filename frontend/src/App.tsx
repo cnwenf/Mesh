@@ -67,19 +67,27 @@ import { NotFoundPage } from './shell/pages/NotFoundPage';
 import { OAuthCallbackPage } from './shell/pages/OAuthCallbackPage';
 import { ResetPasswordPage } from './shell/pages/ResetPasswordPage';
 import { SettingsPage } from './shell/pages/SettingsPage';
+import { AppearanceSettingsSection } from './shell/pages/settings/AppearanceSettingsSection';
+import { SecuritySettingsSection } from './shell/pages/settings/SecuritySettingsSection';
 import { FlatRouteMigration } from './workspace/flatRoutes';
 import { InviteAcceptPage } from './workspace/pages/InviteAcceptPage';
 import { WorkspaceHomePage } from './workspace/pages/WorkspaceHomePage';
 import { WorkspaceSettingsPage } from './workspace/pages/WorkspaceSettingsPage';
 import {
   WorkspaceApprovalsSettingsPage,
-  WorkspaceDangerSettingsPage,
   WorkspaceFieldsSettingsPage,
   WorkspaceMembersSettingsPage,
 } from './workspace/pages/settingsSubpages';
-import { WorkspaceCustomFieldsPage, WorkspaceLabelsPage } from './features/labels';
-import { DataManagementPage } from './features/data-jobs/DataManagementPage';
-import { InboxPage } from './features/inbox';
+import { WorkspaceAuditSection } from './workspace/pages/settings/WorkspaceAuditSection';
+import { WorkspaceCustomFieldsSection } from './workspace/pages/settings/WorkspaceCustomFieldsSection';
+import { WorkspaceDangerSection } from './workspace/pages/settings/WorkspaceDangerSection';
+import { WorkspaceDataSection } from './workspace/pages/settings/WorkspaceDataSection';
+import { WorkspaceGeneralSection } from './workspace/pages/settings/WorkspaceGeneralSection';
+import { WorkspaceInvitationsSection } from './workspace/pages/settings/WorkspaceInvitationsSection';
+import { WorkspaceLabelsSection } from './workspace/pages/settings/WorkspaceLabelsSection';
+import { WorkspaceRolesSection } from './workspace/pages/settings/WorkspaceRolesSection';
+import { WorkspaceTokensSection } from './workspace/pages/settings/WorkspaceTokensSection';
+import { InboxPage, NotificationPreferencesSection } from './features/inbox';
 import { useWorkspace } from './workspace/WorkspaceProvider';
 import { WorkspacePickerPage } from './workspace/WorkspacePickerPage';
 
@@ -160,8 +168,7 @@ function ShellProviders(): React.JSX.Element {
   // guest/失权(role null)不可。面板渲染于 Provider 树顶层(工作区路由之外),故经
   // usePaletteIdentity 的成员身份角色解析(§3.4 解析序)取角色,而非 useOptionalWorkspace。
   const paletteIdentity = usePaletteIdentity({ client: getApiClient() });
-  const canCreateIssue =
-    paletteIdentity.role !== null && paletteIdentity.role !== 'guest';
+  const canCreateIssue = paletteIdentity.role !== null && paletteIdentity.role !== 'guest';
 
   const controls = useMemo<OverlayControls>(
     () => ({
@@ -221,10 +228,17 @@ function ShellProviders(): React.JSX.Element {
                     由 API 层 401 全局兜底清 token,守卫随之生效(二者不重叠)。 */}
                 <Route element={<RequireAuth />}>
                   <Route index element={<HomePage />} />
-                  {/* 账号设置(主题/语言/时区/安全/通知偏好):保持扁平路由,非工作区设置 */}
-                  <Route path="settings" element={<SettingsPage />} />
+                  {/* 账号设置(design-quality §4.4 Settings 模板):二级导航 + 子路由分页 */}
+                  <Route path="settings" element={<SettingsPage />}>
+                    <Route index element={<Navigate to="appearance" replace />} />
+                    <Route path="appearance" element={<AppearanceSettingsSection />} />
+                    <Route path="notifications" element={<NotificationPreferencesSection />} />
+                    <Route path="security" element={<SecuritySettingsSection />} />
+                  </Route>
                   {/* 多工作区无上下文 → 选择页(search-command-palette.md §3.4 解析序 ⑤) */}
                   <Route path="workspace-picker" element={<WorkspacePickerPage />} />
+                  {/* 侧栏兼容入口:页面内解析当前 active workspace;搜索结果仍使用下方规范深链。 */}
+                  <Route path="approvals" element={<ApprovalsPage />} />
 
                   {/* ===== 规范深链(workspace-scoped,§3.4 九条清单闭合)===== */}
                   <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
@@ -239,7 +253,10 @@ function ShellProviders(): React.JSX.Element {
                   <Route path="w/:workspaceSlug/members/:memberId" element={<MemberDetailPage />} />
                   <Route path="w/:workspaceSlug/agents/:agentId" element={<AgentDetailPage />} />
                   <Route path="w/:workspaceSlug/projects" element={<ProjectsPage />} />
-                  <Route path="w/:workspaceSlug/projects/:projectId" element={<ProjectDetailPage />} />
+                  <Route
+                    path="w/:workspaceSlug/projects/:projectId"
+                    element={<ProjectDetailPage />}
+                  />
                   <Route
                     path="w/:workspaceSlug/projects/:projectId/settings"
                     element={<ProjectSettingsPage />}
@@ -269,7 +286,10 @@ function ShellProviders(): React.JSX.Element {
                   {/* 统一「待我审批」入口(README §6.10) */}
                   <Route path="w/:workspaceSlug/approvals" element={<ApprovalsPage />} />
                   {/* 自动化运营区(§6.12 信息架构:Autopilots / Runtimes / Skills 三入口) */}
-                  <Route path="w/:workspaceSlug/automations/autopilots" element={<AutopilotsPage />} />
+                  <Route
+                    path="w/:workspaceSlug/automations/autopilots"
+                    element={<AutopilotsPage />}
+                  />
                   <Route
                     path="w/:workspaceSlug/automations/autopilots/new"
                     element={<AutopilotEditorPage />}
@@ -291,7 +311,10 @@ function ShellProviders(): React.JSX.Element {
                     path="w/:workspaceSlug/automations/runtimes/:runtimeId"
                     element={<RuntimeDetailPage />}
                   />
-                  <Route path="w/:workspaceSlug/automations/webhooks" element={<WebhookConfigPage />} />
+                  <Route
+                    path="w/:workspaceSlug/automations/webhooks"
+                    element={<WebhookConfigPage />}
+                  />
                   <Route path="w/:workspaceSlug/automations/skills" element={<SkillsPage />} />
                   <Route
                     path="w/:workspaceSlug/automations/skills/marketplace"
@@ -317,15 +340,21 @@ function ShellProviders(): React.JSX.Element {
                     path="w/:workspaceSlug/automations/webhook-subscriptions"
                     element={<WebhooksPage />}
                   />
-                  {/* 工作区设置(admin+;§6.12 管理员区五子页) */}
-                  <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
-                  {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
-                  <Route path="w/:workspaceSlug/settings/labels" element={<WorkspaceLabelsPage />} />
-                  <Route path="w/:workspaceSlug/settings/data" element={<DataManagementPage />} />
-                  <Route
-                    path="w/:workspaceSlug/settings/custom-fields"
-                    element={<WorkspaceCustomFieldsPage />}
-                  />
+                  {/* 工作区设置(workspace.md §4.1/§4.2):二级导航 + 九子页,危险区仅 owner */}
+                  <Route path="w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />}>
+                    <Route index element={<Navigate to="general" replace />} />
+                    <Route path="general" element={<WorkspaceGeneralSection />} />
+                    <Route path="invitations" element={<WorkspaceInvitationsSection />} />
+                    <Route path="roles" element={<WorkspaceRolesSection />} />
+                    {/* label-property.md §4.1:工作区级标签 / 自定义字段定义管理 */}
+                    <Route path="labels" element={<WorkspaceLabelsSection />} />
+                    <Route path="custom-fields" element={<WorkspaceCustomFieldsSection />} />
+                    <Route path="data" element={<WorkspaceDataSection />} />
+                    <Route path="tokens" element={<WorkspaceTokensSection />} />
+                    <Route path="audit" element={<WorkspaceAuditSection />} />
+                    <Route path="danger" element={<WorkspaceDangerSection />} />
+                  </Route>
+                  {/* 搜索 Spec 既有管理员命令深链继续可达;新版设置导航使用 roles 等子页。 */}
                   <Route
                     path="w/:workspaceSlug/settings/members"
                     element={<WorkspaceMembersSettingsPage />}
@@ -338,17 +367,16 @@ function ShellProviders(): React.JSX.Element {
                     path="w/:workspaceSlug/settings/fields"
                     element={<WorkspaceFieldsSettingsPage />}
                   />
-                  <Route
-                    path="w/:workspaceSlug/settings/danger"
-                    element={<WorkspaceDangerSettingsPage />}
-                  />
                   {/* 统计报表(analytics.md §4.1):工作区洞察仪表盘(规范深链;
                       旧扁平 /insights 经 FlatRouteMigration 迁移至此) */}
                   <Route path="w/:workspaceSlug/insights" element={<InsightsPage />} />
 
                   {/* 技能市场旧入口重定向(design-quality §2.6 / MES-111 死链闭合):
                       /marketplace → /skills/marketplace,再经 FlatRouteMigration 落规范路由 */}
-                  <Route path="marketplace" element={<Navigate to="/skills/marketplace" replace />} />
+                  <Route
+                    path="marketplace"
+                    element={<Navigate to="/skills/marketplace" replace />}
+                  />
                   {/* 自动化运营区旧入口重定向:/automation → /autopilots,经迁移表落规范路由 */}
                   <Route path="automation" element={<Navigate to="/autopilots" replace />} />
 

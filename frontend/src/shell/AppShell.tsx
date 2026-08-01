@@ -9,7 +9,15 @@
  * - 快捷键/命令注册一次(见 shortcutsRegistration),卸载即注销。
  */
 /* eslint-disable react-refresh/only-export-components -- 模块契约:Context/hook/Provider/外壳组件同文件共存 */
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ReactNode } from 'react';
 import { Outlet, useMatch } from 'react-router';
 import { MeshApiError, getToken } from '../api';
@@ -133,7 +141,12 @@ export async function fetchRestEvents(
       });
     }
     const body = (await response.json()) as {
-      data: Array<{ channel: string; seq: number; event: string; payload: Record<string, unknown> }>;
+      data: Array<{
+        channel: string;
+        seq: number;
+        event: string;
+        payload: Record<string, unknown>;
+      }>;
       next_cursor: string | null;
     };
     for (const item of body.data) {
@@ -305,7 +318,9 @@ export function AppShell(): React.JSX.Element {
     });
   }, []);
 
-  const shellClassName = sidebarCollapsed ? 'mesh-shell mesh-shell--sidebar-collapsed' : 'mesh-shell';
+  const shellClassName = sidebarCollapsed
+    ? 'mesh-shell mesh-shell--sidebar-collapsed'
+    : 'mesh-shell';
 
   const layout = (
     <div className={shellClassName}>
@@ -316,7 +331,12 @@ export function AppShell(): React.JSX.Element {
       <ShellShortcutsRegistrar />
       {/* 跳到主内容(design-quality §10.2):键盘首焦直达,绕过顶栏/侧栏 */}
       <SkipLink label={t('a11y.skipLink')} />
-      <TopBar state={state} onOpenPalette={openPalette} onOpenHelp={openHelp} onOpenSearch={openSearch} />
+      <TopBar
+        state={state}
+        onOpenPalette={openPalette}
+        onOpenHelp={openHelp}
+        onOpenSearch={openSearch}
+      />
       <div className="mesh-shell__banner">
         <StatusBanner state={state} />
       </div>

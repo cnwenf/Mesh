@@ -93,6 +93,93 @@ describe('AppShell', () => {
     expect(issues).toBeDefined();
     expect(issues?.label).toBe('Issues');
   });
+
+  it('shell 命令反馈经 notify 注入 toast(复制深链成功提示,§1.2 S3 ⑥)', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    renderShell('/');
+    const command = useShortcutRegistry
+      .getState()
+      .commands.find((entry) => entry.id === 'clipboard.copyDeepLink');
+    expect(command).toBeDefined();
+    act(() => {
+      command?.run();
+    });
+    expect(writeText).toHaveBeenCalledWith(window.location.href);
+    expect(await screen.findByText('Link copied')).toBeInTheDocument();
+    delete (navigator as { clipboard?: unknown }).clipboard;
+  });
+
+  it('桌面侧栏折叠切换即时生效并持久化(design-quality §4.1 rail 240↔64)', () => {
+    renderShell('/');
+    expect(document.querySelector('.mesh-shell')?.className).not.toContain(
+      'mesh-shell--sidebar-collapsed',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(document.querySelector('.mesh-shell')?.className).toContain(
+      'mesh-shell--sidebar-collapsed',
+    );
+    // 折叠态按钮可读名切换为展开(折叠 rail 的 Tooltip 补可读名等价路径)
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+  });
+
+  it('/w/:workspaceSlug 命中以 WorkspaceProvider 包裹布局子树(workspace.md §4.1)', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              id: 'ws-1',
+              name: 'Acme',
+              slug: 'acme',
+              settings: {},
+              created_at: '2026-07-01T00:00:00.000Z',
+            },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    renderWithProviders(
+      <Routes>
+        <Route path="/w/:workspaceSlug/*" element={<AppShell />}>
+          <Route index element={<div data-testid="ws-child-stub" />} />
+        </Route>
+      </Routes>,
+      { route: '/w/acme' },
+    );
+    expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
+    expect(screen.getByTestId('ws-child-stub')).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
+  it('localStorage 读取失败时折叠偏好回退展开态(隐私模式降级,不抛错)', () => {
+    const getItem = vi
+      .spyOn(Storage.prototype, 'getItem')
+      .mockImplementation(() => {
+        throw new Error('storage denied');
+      });
+    renderShell('/');
+    expect(document.querySelector('.mesh-shell')?.className).not.toContain(
+      'mesh-shell--sidebar-collapsed',
+    );
+    getItem.mockRestore();
+  });
+
+  it('localStorage 写入失败时折叠切换仍会话内生效(存储降级不阻断切换)', () => {
+    const setItem = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new Error('storage denied');
+      });
+    renderShell('/');
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse sidebar' }));
+    expect(document.querySelector('.mesh-shell')?.className).toContain(
+      'mesh-shell--sidebar-collapsed',
+    );
+    setItem.mockRestore();
+  });
 });
 
 describe('fetchRestEvents / createReconciler(resync REST 对账,§6.7)', () => {
@@ -388,5 +475,96 @@ describe('AppShell 实时网关建连(MES-106:绝对 ws(s):// 地址)', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     renderShell('/');
     expect(FakeWebSocket.urls).toEqual([]);
+  });
+});
+
+
+describe('AppShell resync 对账委派(§6.7:resync_required 帧经 shell 注入的 reconciler 走 REST)', () => {
+  class ResyncSocket {
+    static instances: ResyncSocket[] = [];
+
+    onopen: (() => void) | null = null;
+
+    onmessage: ((ev: { data: string }) => void) | null = null;
+
+    onclose: (() => void) | null = null;
+
+    onerror: (() => void) | null = null;
+
+    readyState = 1;
+
+    constructor() {
+      ResyncSocket.instances.push(this);
+    }
+
+    send(): void {}
+
+    close(): void {}
+  }
+
+  beforeEach(() => {
+    ResyncSocket.instances = [];
+  });
+
+  afterEach(() => {
+    useAuthStore.getState().clearToken();
+    vi.unstubAllGlobals();
+    ResyncSocket.instances = [];
+  });
+
+  it('resync_required 帧触发 AppShell 注入的 reconciler 包装并对账拉取(REST)', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      // 面板身份上下文(§3.2):有 token 即拉 /users/me,返回合法名册体
+      if (url.includes('/users/me')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              user: { id: 'u-1', email: 'u@c.com', display_name: 'U' },
+              memberships: [
+                {
+                  workspace_id: 'ws-1',
+                  workspace_name: 'WS',
+                  workspace_slug: 'ws',
+                  role: 'member',
+                  status: 'active',
+                  joined_at: null,
+                },
+              ],
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ data: [], next_cursor: null }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('WebSocket', ResyncSocket);
+    useAuthStore.getState().setToken('tok_resync');
+    renderShell('/');
+    const socket = ResyncSocket.instances[0];
+    expect(socket).toBeDefined();
+    act(() => {
+      socket.onopen?.();
+    });
+    act(() => {
+      socket.onmessage?.({ data: JSON.stringify({ op: 'auth_ok' }) });
+    });
+    act(() => {
+      socket.onmessage?.({
+        data: JSON.stringify({
+          op: 'resync_required',
+          channel: 'issue:1',
+          watermark: 9,
+          rest: '/api/v1/realtime/events?channel=issue%3A1&since=7',
+        }),
+      });
+    });
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/realtime/events?channel=issue%3A1&since=7'),
+        expect.anything(),
+      ),
+    );
   });
 });

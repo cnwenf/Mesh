@@ -10,12 +10,12 @@
  * Drawer/Menu 共用同一实现(design-quality §7.5/§10.2,杜绝多实现漂移)。
  */
 import { useEffect, useId, useRef } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import {
-  isFormFieldElement,
-  pushOverlay,
-  restoreOverlayFocus,
-} from '../../shortcuts/overlayStack';
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from 'react';
+import { isFormFieldElement, pushOverlay, restoreOverlayFocus } from '../../shortcuts/overlayStack';
 import { IconButton } from './IconButton';
 import { trapTabKey } from './useFocusTrap';
 import './components.css';
