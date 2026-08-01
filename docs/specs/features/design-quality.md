@@ -813,6 +813,7 @@ features/
 - [ ] 视觉 diff。
 - [ ] 自动无障碍扫描 + 键盘 E2E。
 - [ ] 手机 overflow 检查（`scrollWidth <= clientWidth`，显式横向滚动容器除外）。
+- [ ] mock 契约浏览器套件每次使用新鲜的生产构建预览与 mock 服务进程；不使用 Vite dev/HMR 源码模块图，不复用已存在进程，且 `retries: 0`。
 
 ---
 

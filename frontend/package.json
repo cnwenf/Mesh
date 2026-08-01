@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage && node scripts/verify-perfile-coverage.mjs",
     "test:e2e": "playwright test",
+    "serve:e2e": "npm run build && vite preview --port 5173 --strictPort --host 127.0.0.1",
     "test:e2e:visual": "playwright test -c playwright.visual.config.ts",
     "test:e2e:mes32": "playwright test -c playwright.mes32.config.ts",
     "test:e2e:runtimes": "playwright test -c playwright.runtimes.config.ts",
