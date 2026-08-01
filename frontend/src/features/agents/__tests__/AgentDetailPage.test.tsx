@@ -35,7 +35,11 @@ function setup(): Recorded[] {
     if (url.includes('/executions')) {
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }
-    if (url.includes('/agents/a-1/skills') || url.includes('/skill-installations')) {
+    if (
+      url.includes('/agents/a-1/skills') ||
+      url.includes('/agents/a-1/tools') ||
+      url.includes('/skill-installations')
+    ) {
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }
     if (url.includes('/config-versions')) {
@@ -369,7 +373,11 @@ function setupWith(opts: StubOptions = {}): Recorded[] {
     if (url.includes('/executions')) {
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }
-    if (url.includes('/agents/a-1/skills') || url.includes('/skill-installations')) {
+    if (
+      url.includes('/agents/a-1/skills') ||
+      url.includes('/agents/a-1/tools') ||
+      url.includes('/skill-installations')
+    ) {
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }
     if (url.includes('/config-versions')) {
@@ -567,7 +575,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
 
   it('非管理角色:无编辑/动作/保存/转移控件,配置只读', async () => {
     const user = userEvent.setup();
-    setupWith({ me: MEMBER_ME });
+    setupWith({ me: MEMBER_ME, agent: { owner_user_id: 'u-other' } });
     renderPage();
     await screen.findByTestId('agent-detail-name');
     expect(screen.queryByTestId('agent-edit-button')).not.toBeInTheDocument();
@@ -579,6 +587,21 @@ describe('AgentDetailPage 扩展覆盖', () => {
     );
     await user.click(screen.getByTestId('agent-tab-visibility'));
     expect(screen.queryByTestId('agent-transfer-button')).not.toBeInTheDocument();
+  });
+
+  it('普通 member 是 agent owner_user_id 时可以管理自建 agent', async () => {
+    const user = userEvent.setup();
+    setupWith({ me: MEMBER_ME, agent: { owner_user_id: 'u-1' } });
+    renderPage();
+
+    await screen.findByTestId('agent-detail-name');
+    expect(screen.getByTestId('agent-edit-button')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-pause-button')).toBeInTheDocument();
+    await user.click(screen.getByTestId('agent-tab-config'));
+    expect(screen.getByTestId('agent-config-save')).toBeInTheDocument();
+    expect(screen.getByTestId('agent-detail-temperature')).not.toBeDisabled();
+    await user.click(screen.getByTestId('agent-tab-visibility'));
+    expect(screen.getByTestId('agent-transfer-button')).toBeInTheDocument();
   });
 
   it('paused 状态展示 resume 动词(active 的 pause 不出现)', async () => {
@@ -617,19 +640,45 @@ describe('AgentDetailPage 扩展覆盖', () => {
   });
 
   it('实时帧:agent.updated 重拉、异 id 忽略、presence 三元组渲染', async () => {
+    const user = userEvent.setup();
     const rt = makeFakeRealtime();
-    setupWith();
+    const calls = setupWith();
     renderPageWithRealtime(rt);
     await screen.findByTestId('agent-detail-name');
     expect(rt.client.subscribe).toHaveBeenCalledWith('workspace:ws-1:agents');
+    expect(rt.client.subscribe).toHaveBeenCalledWith('agent:a-1');
     expect(rt.client.subscribe).toHaveBeenCalledWith('agent:a-1:presence');
 
-    const detailsBefore = 1;
+    await user.click(screen.getByTestId('agent-tab-skills'));
+    await screen.findByTestId('agent-panel-skills');
+    await waitFor(() => {
+      expect(calls.filter((call) => call.url.includes('/agents/a-1/skills')).length).toBe(1);
+      expect(calls.filter((call) => call.url.includes('/agents/a-1/tools')).length).toBe(1);
+    });
+
+    const detailsBefore = calls.filter(
+      (call) => call.method === 'GET' && call.url.endsWith('/agents/a-1'),
+    ).length;
+    const skillsBefore = calls.filter((call) => call.url.includes('/agents/a-1/skills')).length;
+    const toolsBefore = calls.filter((call) => call.url.includes('/agents/a-1/tools')).length;
     // 其它 agent 的帧 → 忽略。
-    rt.emit({ event: 'agent.updated', payload: { data: { id: 'other' } } });
-    // 本 agent 的 agent.updated → 重拉。
-    rt.emit({ event: 'agent.updated', payload: { data: { id: 'a-1' } } });
-    await waitFor(() => expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument());
+    rt.emit({ event: 'agent.updated', payload: { agent_id: 'other', data: { id: 'a-1' } } });
+    expect(
+      calls.filter((call) => call.method === 'GET' && call.url.endsWith('/agents/a-1')).length,
+    ).toBe(detailsBefore);
+    // Projector 的真实顶层 agent_id shape → 本 agent 重拉。
+    rt.emit({ event: 'agent.updated', payload: { agent_id: 'a-1' } });
+    await waitFor(() => {
+      expect(
+        calls.filter((call) => call.method === 'GET' && call.url.endsWith('/agents/a-1')).length,
+      ).toBeGreaterThan(detailsBefore);
+      expect(
+        calls.filter((call) => call.url.includes('/agents/a-1/skills')).length,
+      ).toBeGreaterThan(skillsBefore);
+      expect(calls.filter((call) => call.url.includes('/agents/a-1/tools')).length).toBeGreaterThan(
+        toolsBefore,
+      );
+    });
     // presence 帧 → 运行态 running(data-state)+ 容量三元组说明。
     rt.emit({
       event: 'agent.presence',
@@ -644,7 +693,18 @@ describe('AgentDetailPage 扩展覆盖', () => {
     expect(caption).toHaveTextContent('1');
     expect(caption).toHaveTextContent('2');
     expect(caption).toHaveTextContent('3');
-    void detailsBefore;
+  });
+
+  it('卸载详情页时退订 workspace 与受保护的 agent 资源频道', async () => {
+    const rt = makeFakeRealtime();
+    setupWith();
+    const view = renderPageWithRealtime(rt);
+    await screen.findByTestId('agent-detail-name');
+
+    view.unmount();
+
+    expect(rt.client.unsubscribe).toHaveBeenCalledWith('workspace:ws-1:agents');
+    expect(rt.client.unsubscribe).toHaveBeenCalledWith('agent:a-1');
   });
 
   it('实时帧:agent.deleted 跳回名册', async () => {
@@ -732,7 +792,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
       if (url.includes('/config-versions')) {
         return fakeResponse({ body: { data: versionsWithNull, next_cursor: null } });
       }
-      return fakeResponse({ body: { data: AGENT } });
+      return fakeResponse({ body: { data: { ...AGENT, owner_user_id: 'u-other' } } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();

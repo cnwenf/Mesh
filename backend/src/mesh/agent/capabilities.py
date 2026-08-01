@@ -51,7 +51,9 @@ class CapabilityInvalidError(ValueError):
         super().__init__(f"capability_invalid: {message}")
 
 
-def normalize_capability_declarations(declared: Any) -> dict[str, list]:
+def normalize_capability_declarations(
+    declared: Any, *, allow_enabled: bool = False
+) -> dict[str, list]:
     """Normalize mixed capability declarations into strict scheduling fields.
 
     Input: a list of entries, each either a string capability key or an
@@ -76,6 +78,13 @@ def normalize_capability_declarations(declared: Any) -> dict[str, list]:
             key, permission = item, _DEFAULT_PERMISSION
         elif isinstance(item, dict) and isinstance(item.get("capability"), str):
             key = item["capability"]
+            if "enabled" in item:
+                if not allow_enabled:
+                    raise CapabilityInvalidError(
+                        f"enabled is only valid on granted capabilities ({key})"
+                    )
+                if not isinstance(item["enabled"], bool):
+                    raise CapabilityInvalidError(f"enabled must be a boolean ({key})")
             raw_permission = item.get("permission")
             if raw_permission is None:
                 # Object entry without an annotated permission → strictest.

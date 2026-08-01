@@ -25,6 +25,15 @@ export type CapabilityPermission = 'read_only' | 'write' | 'confirm_required';
 export type CapabilityDeclaration =
   string | { readonly capability: string; readonly permission?: CapabilityPermission };
 
+/** 安装授权可单独停用；required declaration 不携带运行态 enabled。 */
+export type CapabilityGrant =
+  | string
+  | {
+      readonly capability: string;
+      readonly permission?: CapabilityPermission;
+      readonly enabled?: boolean;
+    };
+
 export interface SkillSummary {
   readonly id: string;
   readonly workspace_id: string;
@@ -106,7 +115,7 @@ export interface SkillInstallation {
   readonly agent_id: string | null;
   readonly install_status: InstallStatus;
   readonly auto_update: boolean;
-  readonly granted_capabilities: readonly CapabilityDeclaration[];
+  readonly granted_capabilities: readonly CapabilityGrant[];
   readonly installed_by: string;
   readonly installed_at: string;
   readonly created_at: string;
@@ -146,6 +155,13 @@ export interface AgentSkillRow {
   readonly priority: number;
 }
 
+/** Agent Tools 是 granted_capabilities 的可管理投影，capability key 即稳定标识。 */
+export interface AgentToolGrant {
+  readonly capability: string;
+  readonly permission: CapabilityPermission;
+  readonly enabled: boolean;
+}
+
 export interface ImportPreviewScript {
   readonly path: string;
   readonly runtime: string;
@@ -176,7 +192,7 @@ export interface ImportTask {
   readonly skill_id: string | null;
   readonly skill_version_id: string | null;
   readonly installation_id: string | null;
-  readonly granted_capabilities: readonly CapabilityDeclaration[];
+  readonly granted_capabilities: readonly CapabilityGrant[];
   readonly error: string | null;
   readonly decision_comment: string | null;
   readonly reviewed_by: string | null;

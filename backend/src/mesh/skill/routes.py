@@ -424,6 +424,7 @@ async def list_installations(
 ) -> dict:
     service = _installation_service(request)
     items, next_cursor = await service.list_installations(
+        actor=context.member,
         workspace_id=context.workspace.id,
         skill_id=_body_uuid(skill_id, field="skill_id") if skill_id else None,
         scope=scope,
@@ -547,6 +548,7 @@ async def list_agent_skills(
 ) -> dict:
     service = _binding_service(request)
     items, next_cursor = await service.list_agent_skills(
+        actor=context.member,
         workspace_id=context.workspace.id,
         agent_id=_path_uuid(agent_id, not_found="agent not found"),
         limit=limit,

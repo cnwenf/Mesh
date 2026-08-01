@@ -11,10 +11,10 @@ the members roster's SINGLE ``[ + 新建 Agent ]`` entry (agent.md §4.2 /
 README §6.12, T35): there is no second creation entry (``POST
 /workspaces/{ws}/members`` keeps rejecting ``member_type='agent'``).
 
-Deferred to later increments (agent.md scope note): ``GET
-/agents/{id}/executions`` (runtime.md owns ``task_executions``) and the
-``/agents/{id}/skills`` + ``/agents/{id}/tools`` surfaces (skill.md owns
-bindings — the detail page ships a placeholder tab).
+``/agents/{id}/tools`` is the capability-grant thin wrapper required by
+agent.md §2.5: it mutates skill installation grants, never a separate tool
+catalog.  Both the exact Spec route and the workspace-qualified compatibility
+route share one service.
 """
 
 from __future__ import annotations
@@ -24,14 +24,21 @@ import uuid
 from fastapi import APIRouter, Depends, Request, Response
 
 from mesh.agent.schemas import (
+    AgentToolBindResponse,
+    AgentToolErrorResponse,
+    AgentToolListResponse,
+    AgentToolResponse,
+    BindToolsRequest,
     CreateAgentRequest,
     LifecycleRequest,
     PatchAgentRequest,
+    PatchToolRequest,
     TransferRequest,
     UpdateConfigRequest,
 )
 from mesh.agent.service import UNSET, AgentProfilePatch, AgentService
-from mesh.auth.deps import get_current_user
+from mesh.agent.tools import AgentToolService
+from mesh.auth.deps import AuthenticatedPrincipal, get_current_principal, get_current_user
 from mesh.auth.rbac import WorkspaceContext, require_workspace
 from mesh.db.models.user import User
 from mesh.errors import NotFoundError, ValidationError
@@ -44,6 +51,28 @@ WRITE_WINDOW_SECONDS = 60
 
 _NOT_FOUND = "agent not found"
 
+_TOOL_ERROR_RESPONSES = {
+    400: {
+        "model": AgentToolErrorResponse,
+        "description": "Invalid request shape, capability key, or permission value.",
+    },
+    401: {"model": AgentToolErrorResponse, "description": "Missing or invalid bearer token."},
+    403: {
+        "model": AgentToolErrorResponse,
+        "description": "Agent ownership, role, or token scope does not permit the mutation.",
+    },
+    404: {"model": AgentToolErrorResponse, "description": "Agent or capability grant not found."},
+    409: {
+        "model": AgentToolErrorResponse,
+        "description": "Duplicate or ambiguous capability binding.",
+    },
+    422: {
+        "model": AgentToolErrorResponse,
+        "description": "Capability is outside the bound skill's approved authorization ceiling.",
+    },
+    429: {"model": AgentToolErrorResponse, "description": "Write rate limit exceeded."},
+}
+
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
@@ -51,6 +80,10 @@ def _client_ip(request: Request) -> str | None:
 
 def _agent_service(request: Request) -> AgentService:
     return request.app.state.agent_service
+
+
+def _agent_tool_service(request: Request) -> AgentToolService:
+    return request.app.state.agent_tool_service
 
 
 def _client_meta(request: Request) -> dict:
@@ -224,6 +257,286 @@ async def delete_agent(
         workspace_id=context.workspace.id,
         agent_id=_path_uuid(agent_id),
         **_client_meta(request),
+    )
+
+
+# --- capability grants (agent.md §2.5 / §3.1) ---------------------------------
+
+
+async def _list_tools(*, request: Request, actor, workspace_id: uuid.UUID, agent_id: uuid.UUID) -> dict:
+    items = await _agent_tool_service(request).list_tools(
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+    )
+    return {"data": items, "next_cursor": None}
+
+
+async def _bind_tools(
+    *,
+    body: BindToolsRequest,
+    request: Request,
+    response: Response,
+    user: User,
+    actor,
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    items = await _agent_tool_service(request).bind_tools(
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        grants=body.grants(),
+        **_client_meta(request),
+    )
+    return {"data": items if body.is_batch else items[0]}
+
+
+async def _patch_tool(
+    *,
+    body: PatchToolRequest,
+    request: Request,
+    response: Response,
+    user: User,
+    actor,
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    capability_key: str,
+) -> dict:
+    await _rate_limit_write(request, user, response)
+    item = await _agent_tool_service(request).update_tool(
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        capability=capability_key,
+        permission=body.permission,
+        enabled=body.enabled,
+        **_client_meta(request),
+    )
+    return {"data": item}
+
+
+async def _delete_tool(
+    *,
+    request: Request,
+    response: Response,
+    user: User,
+    actor,
+    workspace_id: uuid.UUID,
+    agent_id: uuid.UUID,
+    capability_key: str,
+) -> None:
+    await _rate_limit_write(request, user, response)
+    await _agent_tool_service(request).unbind_tool(
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=agent_id,
+        capability=capability_key,
+        **_client_meta(request),
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agents/{agent_id}/tools",
+    response_model=AgentToolListResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def list_agent_tools_in_workspace(
+    request: Request,
+    agent_id: str,
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    return await _list_tools(
+        request=request,
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        agent_id=_path_uuid(agent_id),
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agents/{agent_id}/tools",
+    status_code=201,
+    response_model=AgentToolBindResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def bind_agent_tools_in_workspace(
+    body: BindToolsRequest,
+    request: Request,
+    response: Response,
+    agent_id: str,
+    user: User = Depends(get_current_user),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    return await _bind_tools(
+        body=body,
+        request=request,
+        response=response,
+        user=user,
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        agent_id=_path_uuid(agent_id),
+    )
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/agents/{agent_id}/tools/{capability_key:path}",
+    response_model=AgentToolResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def patch_agent_tool_in_workspace(
+    body: PatchToolRequest,
+    request: Request,
+    response: Response,
+    agent_id: str,
+    capability_key: str,
+    user: User = Depends(get_current_user),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> dict:
+    return await _patch_tool(
+        body=body,
+        request=request,
+        response=response,
+        user=user,
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        agent_id=_path_uuid(agent_id),
+        capability_key=capability_key,
+    )
+
+
+@router.delete(
+    "/workspaces/{workspace_id}/agents/{agent_id}/tools/{capability_key:path}",
+    status_code=204,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def delete_agent_tool_in_workspace(
+    request: Request,
+    response: Response,
+    agent_id: str,
+    capability_key: str,
+    user: User = Depends(get_current_user),
+    context: WorkspaceContext = Depends(require_workspace()),
+) -> None:
+    await _delete_tool(
+        request=request,
+        response=response,
+        user=user,
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        agent_id=_path_uuid(agent_id),
+        capability_key=capability_key,
+    )
+
+
+@router.get(
+    "/agents/{agent_id}/tools",
+    response_model=AgentToolListResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def list_agent_tools_exact(
+    request: Request,
+    agent_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    user: User = Depends(get_current_user),
+) -> dict:
+    parsed_id = _path_uuid(agent_id)
+    workspace_id, actor = await _agent_tool_service(request).resolve_actor(
+        principal=principal, agent_id=parsed_id
+    )
+    return await _list_tools(
+        request=request,
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=parsed_id,
+    )
+
+
+@router.post(
+    "/agents/{agent_id}/tools",
+    status_code=201,
+    response_model=AgentToolBindResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def bind_agent_tools_exact(
+    body: BindToolsRequest,
+    request: Request,
+    response: Response,
+    agent_id: str,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    user: User = Depends(get_current_user),
+) -> dict:
+    parsed_id = _path_uuid(agent_id)
+    workspace_id, actor = await _agent_tool_service(request).resolve_actor(
+        principal=principal, agent_id=parsed_id
+    )
+    return await _bind_tools(
+        body=body,
+        request=request,
+        response=response,
+        user=user,
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=parsed_id,
+    )
+
+
+@router.patch(
+    "/agents/{agent_id}/tools/{capability_key:path}",
+    response_model=AgentToolResponse,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def patch_agent_tool_exact(
+    body: PatchToolRequest,
+    request: Request,
+    response: Response,
+    agent_id: str,
+    capability_key: str,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    user: User = Depends(get_current_user),
+) -> dict:
+    parsed_id = _path_uuid(agent_id)
+    workspace_id, actor = await _agent_tool_service(request).resolve_actor(
+        principal=principal, agent_id=parsed_id
+    )
+    return await _patch_tool(
+        body=body,
+        request=request,
+        response=response,
+        user=user,
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=parsed_id,
+        capability_key=capability_key,
+    )
+
+
+@router.delete(
+    "/agents/{agent_id}/tools/{capability_key:path}",
+    status_code=204,
+    responses=_TOOL_ERROR_RESPONSES,
+)
+async def delete_agent_tool_exact(
+    request: Request,
+    response: Response,
+    agent_id: str,
+    capability_key: str,
+    principal: AuthenticatedPrincipal = Depends(get_current_principal),
+    user: User = Depends(get_current_user),
+) -> None:
+    parsed_id = _path_uuid(agent_id)
+    workspace_id, actor = await _agent_tool_service(request).resolve_actor(
+        principal=principal, agent_id=parsed_id
+    )
+    await _delete_tool(
+        request=request,
+        response=response,
+        user=user,
+        actor=actor,
+        workspace_id=workspace_id,
+        agent_id=parsed_id,
+        capability_key=capability_key,
     )
 
 

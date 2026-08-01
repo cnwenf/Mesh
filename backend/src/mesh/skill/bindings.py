@@ -23,7 +23,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.agent.capabilities import normalize_capability_declarations
+from mesh.agent.service import AgentService
 from mesh.auth.audit import write_audit
+from mesh.auth.rbac import assert_scope
 from mesh.db.constraints import violates
 from mesh.db.models.agent import Agent
 from mesh.db.models.member import Member
@@ -33,6 +36,7 @@ from mesh.db.models.skill import (
     SkillInstallation,
     SkillSource,
     SkillVersion,
+    installation_matches_binding_agent,
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
@@ -41,7 +45,7 @@ from mesh.errors import (
     ValidationError,
 )
 from mesh.outbox.service import emit_realtime
-from mesh.skill.service import SkillService, skills_channel
+from mesh.skill.service import SkillService
 
 BINDING_NOT_FOUND = "skill binding not found"
 AGENT_NOT_FOUND = "agent not found"
@@ -131,7 +135,6 @@ class BindingService:
         ``skill_version_id`` defaults to the installation's current version;
         pinning another historic version supports canary / rollback (§5.1).
         """
-        SkillService.require_manage(actor)
         if not 0 <= priority <= 1000:
             raise ValidationError(
                 "priority out of range",
@@ -140,6 +143,8 @@ class BindingService:
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             agent = await self.load_agent(session, workspace_id, agent_id)
+            assert_scope(actor, "agent:manage")
+            AgentService._assert_can_manage(actor, agent)
             installation = await session.scalar(
                 select(SkillInstallation).where(
                     SkillInstallation.workspace_id == workspace_id,
@@ -148,6 +153,8 @@ class BindingService:
                 )
             )
             if installation is None:
+                raise NotFoundError("skill installation not found")
+            if installation.scope == "agent" and installation.agent_id != agent.id:
                 raise NotFoundError("skill installation not found")
             skill = await SkillService.load_skill(
                 session, workspace_id, installation.skill_id
@@ -170,6 +177,7 @@ class BindingService:
                 )
 
             now = _now(self._clock)
+            agent.updated_at = now
             binding = AgentSkill(
                 workspace_id=workspace_id,
                 agent_id=agent.id,
@@ -205,13 +213,17 @@ class BindingService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=skills_channel(workspace_id),
-                event="skill.changed",
+                channel=f"agent:{agent.id}",
+                event="agent.updated",
                 data={
+                    "id": str(agent.id),
                     "skill_id": str(skill.id),
                     "installation_id": str(installation.id),
                     "change_type": "bound",
                     "agent_id": str(agent.id),
+                    "binding": rendered,
+                    "visibility": agent.visibility,
+                    "updated_at": now.isoformat(),
                 },
             )
             await write_audit(
@@ -237,6 +249,7 @@ class BindingService:
     async def list_agent_skills(
         self,
         *,
+        actor: Member,
         workspace_id: uuid.UUID,
         agent_id: uuid.UUID,
         limit: int = 20,
@@ -249,7 +262,8 @@ class BindingService:
         limit = max(1, min(limit, 100))
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
-            await self.load_agent(session, workspace_id, agent_id)
+            agent = await self.load_agent(session, workspace_id, agent_id)
+            AgentService._assert_visible(actor, agent)
             stmt = (
                 select(AgentSkill, Skill, SkillVersion, SkillInstallation, SkillSource)
                 .join(
@@ -265,7 +279,8 @@ class BindingService:
                 .join(
                     SkillInstallation,
                     (SkillInstallation.workspace_id == AgentSkill.workspace_id)
-                    & (SkillInstallation.id == AgentSkill.skill_installation_id),
+                    & (SkillInstallation.id == AgentSkill.skill_installation_id)
+                    & installation_matches_binding_agent(),
                 )
                 .outerjoin(
                     SkillSource,
@@ -331,7 +346,6 @@ class BindingService:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> dict:
-        SkillService.require_manage(actor)
         if priority is not None and not 0 <= priority <= 1000:
             raise ValidationError(
                 "priority out of range",
@@ -339,7 +353,9 @@ class BindingService:
             )
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            await self.load_agent(session, workspace_id, agent_id)
+            agent = await self.load_agent(session, workspace_id, agent_id)
+            assert_scope(actor, "agent:manage")
+            AgentService._assert_can_manage(actor, agent)
             binding = await self.load_binding(session, workspace_id, binding_id)
             if binding.agent_id != agent_id:
                 raise NotFoundError(BINDING_NOT_FOUND)
@@ -357,18 +373,23 @@ class BindingService:
             if not changed:
                 return self.render_binding(binding)
             binding.updated_at = now
+            agent.updated_at = now
             await session.flush()
             rendered = self.render_binding(binding)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=skills_channel(workspace_id),
-                event="skill.changed",
+                channel=f"agent:{agent_id}",
+                event="agent.updated",
                 data={
+                    "id": str(agent_id),
                     "skill_id": str(binding.skill_id),
                     "installation_id": str(binding.skill_installation_id),
                     "change_type": "binding_updated",
                     "agent_id": str(agent_id),
+                    "binding": rendered,
+                    "visibility": agent.visibility,
+                    "updated_at": now.isoformat(),
                 },
             )
             await write_audit(
@@ -395,26 +416,33 @@ class BindingService:
         ip_address: str | None = None,
         user_agent: str | None = None,
     ) -> None:
-        SkillService.require_manage(actor)
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
-            await self.load_agent(session, workspace_id, agent_id)
+            agent = await self.load_agent(session, workspace_id, agent_id)
+            assert_scope(actor, "agent:manage")
+            AgentService._assert_can_manage(actor, agent)
             binding = await self.load_binding(session, workspace_id, binding_id)
             if binding.agent_id != agent_id:
                 raise NotFoundError(BINDING_NOT_FOUND)
             skill_id = binding.skill_id
             installation_id = binding.skill_installation_id
+            now = _now(self._clock)
+            agent.updated_at = now
             await session.delete(binding)
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=skills_channel(workspace_id),
-                event="skill.changed",
+                channel=f"agent:{agent_id}",
+                event="agent.updated",
                 data={
+                    "id": str(agent_id),
                     "skill_id": str(skill_id),
                     "installation_id": str(installation_id),
                     "change_type": "unbound",
                     "agent_id": str(agent_id),
+                    "binding_id": str(binding.id),
+                    "visibility": agent.visibility,
+                    "updated_at": now.isoformat(),
                 },
             )
             await write_audit(
@@ -454,7 +482,8 @@ class BindingService:
                     SkillInstallation,
                     (SkillInstallation.workspace_id == AgentSkill.workspace_id)
                     & (SkillInstallation.id == AgentSkill.skill_installation_id)
-                    & (SkillInstallation.deleted_at.is_(None)),
+                    & (SkillInstallation.deleted_at.is_(None))
+                    & installation_matches_binding_agent(),
                 )
                 .join(
                     Skill,
@@ -500,7 +529,8 @@ class BindingService:
                     SkillInstallation,
                     (SkillInstallation.workspace_id == AgentSkill.workspace_id)
                     & (SkillInstallation.id == AgentSkill.skill_installation_id)
-                    & (SkillInstallation.deleted_at.is_(None)),
+                    & (SkillInstallation.deleted_at.is_(None))
+                    & installation_matches_binding_agent(),
                 )
                 .join(
                     Skill,
@@ -522,7 +552,15 @@ class BindingService:
         }
         declared: list = []
         for _, _, granted in rows:
-            declared.extend(granted or [])
+            for item in granted or []:
+                normalized = normalize_capability_declarations(
+                    [item], allow_enabled=True
+                )["grants"][0]
+                if isinstance(item, dict) and item.get("enabled") is False:
+                    continue
+                # The normalizer validates persisted legacy JSON and strips
+                # the grant-only switch from the immutable authorization input.
+                declared.append(normalized)
         return {"skill_versions": skill_versions, "declared_capabilities": declared}
 
 

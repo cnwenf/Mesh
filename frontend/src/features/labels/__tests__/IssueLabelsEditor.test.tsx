@@ -47,18 +47,26 @@ function stubClient(current: Label[], catalog: Label[]): Stub {
   return { client: { list, request } as unknown as MeshApiClient, list, request };
 }
 
-function renderEditor(stub: Stub, realtime: RealtimeContextValue | null = null) {
+function renderEditor(
+  stub: Stub,
+  realtime: RealtimeContextValue | null = null,
+  options: { projectId?: string | null; onIssueChanged?: () => void } = {},
+) {
   return render(
-    <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+    <I18nProvider
+      workspaceDefaultLocale={null}
+      reporter={{ report: () => undefined, reported: [] }}
+    >
       <ToastProvider regionLabel="notifications">
         <IssueLabelsEditor
           client={stub.client}
           workspaceId="ws-1"
-          projectId={null}
+          projectId={options.projectId ?? null}
           issueId="iss-1"
           reloadKey={0}
           issueUpdatedAt="2026-07-26T12:00:00Z"
           realtime={realtime}
+          onIssueChanged={options.onIssueChanged}
         />
       </ToastProvider>
     </I18nProvider>,
@@ -94,8 +102,9 @@ describe('IssueLabelsEditor', () => {
 
   it('adds a label from the suggestion list', async () => {
     const stub = stubClient([BUG], [BUG, UX]);
+    const onIssueChanged = vi.fn();
     stub.request.mockResolvedValue({ labels: [BUG, UX] });
-    renderEditor(stub);
+    renderEditor(stub, null, { onIssueChanged });
     await screen.findByTestId('issue-label-chips');
     const search = screen.getByTestId('issue-label-search');
     await userEvent.type(search, 'ux');
@@ -103,30 +112,27 @@ describe('IssueLabelsEditor', () => {
     expect(suggest.textContent).toContain('ux');
     await userEvent.click(screen.getByText('ux'));
     await waitFor(() =>
-      expect(stub.request).toHaveBeenCalledWith(
-        'POST',
-        '/api/v1/issues/iss-1/labels/lbl-ux',
-      ),
+      expect(stub.request).toHaveBeenCalledWith('POST', '/api/v1/issues/iss-1/labels/lbl-ux'),
     );
     await waitFor(() =>
       expect(screen.getByTestId('issue-label-chips').textContent).toContain('ux'),
     );
+    expect(onIssueChanged).toHaveBeenCalledTimes(1);
   });
 
   it('removes a label via the chip × button', async () => {
     const stub = stubClient([BUG, UX], [BUG, UX]);
+    const onIssueChanged = vi.fn();
     stub.request.mockResolvedValue({ labels: [UX] });
-    renderEditor(stub);
+    renderEditor(stub, null, { onIssueChanged });
     await userEvent.click(await screen.findByLabelText('Remove label bug'));
     await waitFor(() =>
-      expect(stub.request).toHaveBeenCalledWith(
-        'DELETE',
-        '/api/v1/issues/iss-1/labels/lbl-bug',
-      ),
+      expect(stub.request).toHaveBeenCalledWith('DELETE', '/api/v1/issues/iss-1/labels/lbl-bug'),
     );
     await waitFor(() =>
       expect(screen.getByTestId('issue-label-chips').textContent).not.toContain('bug'),
     );
+    expect(onIssueChanged).toHaveBeenCalledTimes(1);
   });
 
   it('offers inline creation when no suggestion matches', async () => {
@@ -147,11 +153,31 @@ describe('IssueLabelsEditor', () => {
       }),
     );
     await waitFor(() =>
-      expect(stub.request).toHaveBeenCalledWith(
-        'POST',
-        '/api/v1/issues/iss-1/labels/lbl-new',
-      ),
+      expect(stub.request).toHaveBeenCalledWith('POST', '/api/v1/issues/iss-1/labels/lbl-new'),
     );
+  });
+
+  it('closes inline creation through both cancel and dialog close actions', async () => {
+    const stub = stubClient([], [BUG]);
+    renderEditor(stub);
+    await userEvent.type(await screen.findByTestId('issue-label-search'), 'fresh');
+    await userEvent.click(await screen.findByTestId('issue-label-create-inline'));
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    await userEvent.click(screen.getByTestId('issue-label-create-inline'));
+    await userEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('subscribes and unsubscribes the project label channel', async () => {
+    const stub = stubClient([BUG], [BUG]);
+    const rt = fakeRealtime();
+    const view = renderEditor(stub, rt.value, { projectId: 'project-1' });
+    await screen.findByTestId('issue-label-chips');
+    expect(rt.client.subscribe).toHaveBeenCalledWith('project:project-1');
+    view.unmount();
+    expect(rt.client.unsubscribe).toHaveBeenCalledWith('project:project-1');
   });
 
   it('merges issue.labels_changed frames into the chip set (§3.5)', async () => {
@@ -239,7 +265,10 @@ describe('IssueLabelsEditor', () => {
     });
     const client = { list, request: vi.fn() } as unknown as MeshApiClient;
     render(
-      <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+      <I18nProvider
+        workspaceDefaultLocale={null}
+        reporter={{ report: () => undefined, reported: [] }}
+      >
         <ToastProvider regionLabel="notifications">
           <IssueLabelsEditor
             client={client}
@@ -273,7 +302,9 @@ describe('IssueLabelsEditor', () => {
     await userEvent.type(screen.getByTestId('issue-label-search'), 'bug');
     const suggest = await screen.findByTestId('issue-label-suggest');
     await userEvent.click(within(suggest).getByText('bug'));
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeTruthy();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeTruthy();
   });
 
   it('toasts when removing a label fails', async () => {
@@ -281,7 +312,9 @@ describe('IssueLabelsEditor', () => {
     stub.request.mockRejectedValue(new Error('boom'));
     renderEditor(stub);
     await userEvent.click(await screen.findByLabelText('Remove label bug'));
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeTruthy();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeTruthy();
   });
 
   it('toasts when inline creation fails', async () => {
@@ -292,14 +325,19 @@ describe('IssueLabelsEditor', () => {
     await userEvent.type(screen.getByTestId('issue-label-search'), 'fresh');
     await userEvent.click(await screen.findByTestId('issue-label-create-inline'));
     await userEvent.click(await screen.findByText('Create'));
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeTruthy();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeTruthy();
   });
 
   it('toasts when the initial label load fails', async () => {
     const list = vi.fn().mockRejectedValue(new Error('boom'));
     const client = { list, request: vi.fn() } as unknown as MeshApiClient;
     render(
-      <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+      <I18nProvider
+        workspaceDefaultLocale={null}
+        reporter={{ report: () => undefined, reported: [] }}
+      >
         <ToastProvider regionLabel="notifications">
           <IssueLabelsEditor
             client={client}
@@ -313,7 +351,9 @@ describe('IssueLabelsEditor', () => {
         </ToastProvider>
       </I18nProvider>,
     );
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeTruthy();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeTruthy();
   });
 });
 
@@ -339,7 +379,10 @@ describe('IssueLabelsEditor branch coverage', () => {
     });
     const client = { list, request: vi.fn() } as unknown as MeshApiClient;
     render(
-      <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+      <I18nProvider
+        workspaceDefaultLocale={null}
+        reporter={{ report: () => undefined, reported: [] }}
+      >
         <ToastProvider regionLabel="notifications">
           <IssueLabelsEditor
             client={client}
@@ -365,7 +408,10 @@ describe('IssueLabelsEditor branch coverage', () => {
     let resolveAdd!: (value: unknown) => void;
     const stub = stubClient([], [BUG]);
     stub.request.mockImplementation(
-      () => new Promise((resolve) => { resolveAdd = resolve; }),
+      () =>
+        new Promise((resolve) => {
+          resolveAdd = resolve;
+        }),
     );
     renderEditor(stub);
     await userEvent.type(screen.getByTestId('issue-label-search'), 'bug');

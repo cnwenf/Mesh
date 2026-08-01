@@ -39,6 +39,7 @@ from mesh.db.models.skill import (
     SkillInstallation,
     SkillTrigger,
     SkillVersion,
+    installation_matches_binding_agent,
 )
 
 DEFAULT_TOP_N = 5
@@ -125,7 +126,8 @@ async def match_skills_for_task(
                 SkillInstallation,
                 (SkillInstallation.workspace_id == AgentSkill.workspace_id)
                 & (SkillInstallation.id == AgentSkill.skill_installation_id)
-                & (SkillInstallation.deleted_at.is_(None)),
+                & (SkillInstallation.deleted_at.is_(None))
+                & installation_matches_binding_agent(),
             )
             .join(
                 Skill,

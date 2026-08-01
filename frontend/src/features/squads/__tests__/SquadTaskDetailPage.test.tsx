@@ -13,6 +13,21 @@ import { I18nProvider, useT } from '../../../i18n';
 import type { MissingReporter } from '../../../i18n';
 import { SquadTaskDetailPage } from '../SquadTaskDetailPage';
 
+const realtimeHarness = vi.hoisted(() => ({
+  current: null as null | {
+    client: {
+      subscribe: ReturnType<typeof vi.fn>;
+      unsubscribe: ReturnType<typeof vi.fn>;
+      onFrame: ReturnType<typeof vi.fn>;
+    };
+  },
+}));
+
+vi.mock('../../../shell/AppShell', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../shell/AppShell')>();
+  return { ...actual, useRealtimeContext: () => realtimeHarness.current };
+});
+
 const silentReporter: MissingReporter = { report: () => undefined, reported: [] };
 
 const ME = {
@@ -86,8 +101,8 @@ function ToastLayer(props: { children: React.ReactNode }): React.JSX.Element {
   return <ToastProvider regionLabel={t('a11y.notifications')}>{props.children}</ToastProvider>;
 }
 
-function renderPage(): void {
-  render(
+function renderPage(): ReturnType<typeof render> {
+  return render(
     <MemoryRouter initialEntries={['/squads/sq-1/tasks/tk-1']}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={silentReporter}>
@@ -107,6 +122,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  realtimeHarness.current = null;
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -139,6 +155,26 @@ describe('SquadTaskDetailPage', () => {
     expect(screen.getByTestId('squad-tree-blocked-tk-3').textContent).toContain('Write tests');
     // 非终态可取消
     expect(screen.getByTestId('squad-task-cancel')).toBeTruthy();
+  });
+
+  it('subscribes to the squad realtime channel when a connection is available', async () => {
+    const subscribe = vi.fn();
+    const unsubscribe = vi.fn();
+    const off = vi.fn();
+    const onFrame = vi.fn().mockReturnValue(off);
+    realtimeHarness.current = { client: { subscribe, unsubscribe, onFrame } };
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: treeFixture({ status: 'done' }) } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const view = renderPage();
+
+    await screen.findByTestId('squad-task-page');
+    expect(subscribe).toHaveBeenCalledWith('squad:sq-1');
+    view.unmount();
+    expect(off).toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledWith('squad:sq-1');
   });
 
   it('renders fallback titles, human ownership, unknown dependencies, and failure context', async () => {
@@ -208,6 +244,19 @@ describe('SquadTaskDetailPage', () => {
     const retry = await screen.findByText('Retry');
     fireEvent.click(retry);
     await screen.findByTestId('squad-task-page');
+  });
+
+  it('maps an unexpected tree transport failure to the generic error copy', async () => {
+    const impl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(fakeResponse({ body: { data: ME } }))
+      .mockRejectedValueOnce(new Error('socket closed'));
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeTruthy();
   });
 
   it('approves a pending plan and reloads the tree', async () => {
@@ -418,5 +467,70 @@ describe('SquadTaskDetailPage', () => {
     await screen.findByText('That move is not allowed.');
     const patches = stub.calls.filter((c) => c.init?.method === 'PATCH');
     expect(patches.length).toBe(0);
+  });
+
+  it('keeps the task usable when cancel, approval and kanban mutations fail', async () => {
+    const calls: { url: string; method: string }[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/stream')) return fakeResponse({});
+      if (method !== 'GET') {
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'mutation failed' } },
+        });
+      }
+      if (url.includes('/status')) {
+        return fakeResponse({
+          body: { data: { task_id: 'tk-1', status: 'awaiting_plan_approval' } },
+        });
+      }
+      return fakeResponse({
+        body: {
+          data: treeFixture({ status: 'awaiting_plan_approval', plan_markdown: null }),
+        },
+      });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    await screen.findByTestId('squad-task-approval');
+    expect(screen.queryByTestId('squad-task-plan')).toBeNull();
+    fireEvent.click(screen.getByTestId('squad-task-cancel'));
+    fireEvent.click(screen.getByTestId('squad-task-approve'));
+    fireEvent.click(screen.getByTestId('squad-view-kanban'));
+    fireEvent.drop(await screen.findByTestId('squad-kanban-col-in_progress'), {
+      dataTransfer: { getData: () => 'tk-3' },
+    });
+
+    await waitFor(() => expect(calls.filter((call) => call.method !== 'GET')).toHaveLength(3));
+    expect(await screen.findByTestId('squad-task-page')).toBeTruthy();
+  });
+
+  it('silently retries after a transient polling failure', async () => {
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/stream')) return fakeResponse({});
+      if (url.includes('/status')) {
+        statusCalls += 1;
+        throw new Error('temporary network failure');
+      }
+      return fakeResponse({ body: { data: treeFixture() } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+    await vi.waitFor(() => expect(screen.getByTestId('squad-task-page')).toBeTruthy());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(statusCalls).toBe(1);
+    expect(screen.getByTestId('squad-task-page')).toBeTruthy();
   });
 });

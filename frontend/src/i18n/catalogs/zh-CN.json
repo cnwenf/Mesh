@@ -2205,7 +2205,7 @@
     "skills.agentSkillsTitle": "技能",
     "skills.agentToolsEmptyDescription": "已绑定技能未授予任何能力。",
     "skills.agentToolsEmptyTitle": "暂无有效工具",
-    "skills.agentToolsTitle": "有效工具",
+    "skills.agentToolsTitle": "工具权限",
     "skills.agentVersionCol": "版本",
     "skills.approvalRequiredToast": "有第三方技能等待审阅。",
     "skills.approveFailed": "审批失败。",
@@ -2325,10 +2325,15 @@
     "skills.tab.scripts": "脚本",
     "skills.tab.triggers": "触发条件",
     "skills.tab.versions": "版本历史",
+    "skills.toolAdd": "添加能力",
     "skills.toolCapabilityCol": "能力",
+    "skills.toolCapabilityInput": "能力键",
     "skills.toolEnabledCol": "启用",
+    "skills.toolManageHint": "能力条目保存在技能授权中；高风险能力默认需要确认。",
+    "skills.toolNewPermission": "新能力权限",
     "skills.toolPermissionCol": "权限",
-    "skills.toolReadOnlyHint": "有效权限来自技能安装时的授权，此处仅供查看。",
+    "skills.toolRemove": "移除",
+    "skills.toolSaveFailed": "无法更新能力授权，请重试。",
     "skills.triggerType.keyword": "关键词",
     "skills.triggerType.semantic": "语义",
     "skills.triggerType.tag": "标签",
@@ -2617,5 +2622,5 @@
     "chat.contextBar.expand": "展开上下文",
     "inbox.preview.notFound": "未找到该通知——可能已归档或不在当前列表内。"
   },
-  "version": "cc26c961"
+  "version": "65fa60fe"
 }

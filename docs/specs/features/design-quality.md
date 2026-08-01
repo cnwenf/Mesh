@@ -747,10 +747,10 @@ features/
 #### Phase 4 实施记录（MES-116）
 
 - 项目、周期、Skills、Squads、Runtimes、执行、自动值守与 Integrations 页面统一采用 `DataView`、`DetailLayout`、`SettingsSection` 等既有页面模式；列表/网格切换、详情分区、设置操作与状态反馈不再自建平行布局。
-- Agent「技能与工具」与创建向导均展示由已绑定 Skill 能力授权推导出的有效工具及权限。现有服务端没有合法的 Agent 级工具权限写接口，因此工具权限只读，管理动作只使用真实的 Skill 绑定、解绑与绑定配置接口。
+- Agent「技能与工具」与创建向导均展示由已绑定 Skill 能力声明派生的工具授权。管理员可通过 Agent Tools API 逐项启用/停用、切换只读/可写/需确认权限、添加或移除声明范围内的 capability；变更使用 agent 级隔离安装记录持久化，不影响复用同一工作区 Skill 的其他 Agent。
 - Squad 详情补齐成员墙、阶段摘要与任务树/看板双视图；自动值守补齐固定摘要、执行时间线、熔断横幅及 webhook 一次性凭据确认；Runtime 执行日志工具条在长日志下保持可操作。
 - Integration 详情固定为概览、绑定、事件台账、健康四个 Tab，并与 webhook subscription 列表共用长内容与窄屏滚动边界；标签、自定义字段、数据导入导出、404、错误恢复与 OAuth 回调沿用设置/错误页面模式。
-- 真实 API + Chromium 验收覆盖 25 个目标路由、实际 Tab/向导/列表-网格/树-看板/webhook 展开操作，以及全部路由 320 CSS px 的 `scrollWidth <= clientWidth` 检查。视觉矩阵覆盖桌面/平板/手机 × light/dark，证据位于 `frontend/e2e/evidence/mes116/`。
+- 真实 API + Chromium 验收覆盖 25 个目标路由的逐页控件操作，包括工具启停/权限写入并由 API 读回、Tab/向导/列表-网格/树-看板与 webhook 展开；全部路由在 320 CSS px 及六种视觉组合中断言 `scrollWidth <= clientWidth`。视觉证据按 25 页逐页生成桌面/平板/手机 × light/dark 共 150 张矩阵，位于 `frontend/e2e/evidence/mes116/matrix/`。
 
 ### Phase 5：门禁与收口
 

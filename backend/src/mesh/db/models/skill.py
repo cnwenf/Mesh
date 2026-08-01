@@ -716,3 +716,16 @@ class SkillImportTask(Base):
             postgresql_where=text("status IN ('parsing', 'validating', 'sandbox_preview')"),
         ),
     )
+
+
+def installation_matches_binding_agent():
+    """SQL predicate enforcing ownership of agent-scoped installations.
+
+    Workspace installations may be shared by any binding. An agent-scoped
+    installation is private state and is valid only when its ``agent_id``
+    matches the binding's target. Keeping this relational invariant in one
+    expression lets every legacy-row consumer fail closed consistently.
+    """
+    return (SkillInstallation.scope == "workspace") | (
+        SkillInstallation.agent_id == AgentSkill.agent_id
+    )

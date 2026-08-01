@@ -44,7 +44,8 @@ def make_agent_channel_checker(session_factory) -> PrefixChecker:
         if info is None:
             return False
         key = info.key
-        if key.endswith(_PRESENCE_SUFFIX):
+        is_presence = key.endswith(_PRESENCE_SUFFIX)
+        if is_presence:
             key = key[: -len(_PRESENCE_SUFFIX)]
         try:
             agent_id = uuid.UUID(key)
@@ -61,7 +62,7 @@ def make_agent_channel_checker(session_factory) -> PrefixChecker:
                 )
                 if agent is None:
                     continue
-                if agent.deleted_at is not None:
+                if agent.deleted_at is not None and is_presence:
                     return False
                 if agent.visibility == "workspace":
                     return True

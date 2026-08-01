@@ -17,7 +17,7 @@ import {
   listSkills,
   unbindSkill,
 } from '../skills/api';
-import { effectiveCapabilities, permissionTone } from '../skills/capabilities';
+import { effectiveGrants, permissionTone } from '../skills/capabilities';
 import type { AgentSkillRow, SkillInstallation, SkillSummary } from '../skills/types';
 import { createAgent, getAgent, listAgents, updateAgent, updateAgentConfig } from './api';
 import type {
@@ -328,7 +328,7 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
 
   const selectedTools = useMemo(
     () =>
-      effectiveCapabilities(
+      effectiveGrants(
         skillChoices
           .filter((choice) => selectedSkillIds.has(choice.skill.id))
           .flatMap((choice) => choice.installation.granted_capabilities),

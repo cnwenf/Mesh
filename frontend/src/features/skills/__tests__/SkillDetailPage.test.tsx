@@ -132,7 +132,9 @@ describe('SkillDetailPage', () => {
   it('渲染概览 + 含脚本标记 + 右侧详情', async () => {
     setup();
     renderPage();
-    expect(await screen.findByTestId('skill-detail-name')).toHaveTextContent('发布检查清单');
+    const title = await screen.findByTestId('skill-detail-name');
+    expect(title).toHaveTextContent('发布检查清单');
+    expect(title).toHaveClass('mesh-text-title-1');
     expect(screen.getByText(/含脚本|Contains scripts/)).toBeTruthy();
     expect(screen.queryByTestId('skill-install')).toBeNull();
     const side = screen.getByTestId('skill-side-actions');
@@ -284,7 +286,8 @@ describe('SkillDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
-    expect(await screen.findByTestId('skill-enable-button')).toBeTruthy();
+    fireEvent.click(await screen.findByTestId('skill-enable-button'));
+    await waitFor(() => expect(screen.getByTestId('skill-detail')).toBeTruthy());
   });
 
   it('版本表回滚按钮 → 调用回滚接口', async () => {
@@ -364,6 +367,7 @@ describe('SkillDetailPage', () => {
     vi.stubGlobal('fetch', impl);
     renderPage();
     expect(await screen.findByTestId('skill-update-now')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('skill-update-later'));
     fireEvent.click(screen.getByTestId('skill-update-now'));
     await waitFor(() =>
       expect(
@@ -440,5 +444,172 @@ describe('SkillDetailPage', () => {
     renderPage();
     fireEvent.click(await screen.findByTestId('skill-install'));
     await waitFor(() => expect(screen.getByTestId('skill-install')).toBeTruthy());
+  });
+
+  it('详情加载失败时渲染错误态', async () => {
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      throw new Error('network unavailable');
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    expect(await screen.findByText(/Something went wrong|技能加载失败/)).toBeTruthy();
+  });
+
+  it('覆盖缺省元数据、未选版本空态与安全脚本字段', async () => {
+    const nullableSkill = {
+      ...SKILL,
+      source_type: null,
+      trust_level: null,
+      current_version: null,
+      required_capabilities: null,
+      tags: null,
+      has_scripts: false,
+    };
+    const safeVersion = {
+      ...VERSION,
+      changelog: null,
+      scripts: [
+        {
+          ...VERSION.scripts[0],
+          entrypoint: false,
+          required_capabilities: [{ capability: 'read:code', reason: 'read only' }],
+          content: null,
+        },
+      ],
+      references: [{ ...VERSION.references[0], summary: null }],
+    };
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/versions/v-1')) return fakeResponse({ body: { data: safeVersion } });
+      if (url.includes('/versions')) {
+        return fakeResponse({ body: { data: [safeVersion], next_cursor: null } });
+      }
+      if (url.includes('/skill-installations')) {
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      }
+      return fakeResponse({ body: { data: nullableSkill } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    await screen.findByTestId('skill-detail-name');
+    for (const tab of ['scripts', 'references', 'triggers']) {
+      fireEvent.click(screen.getByTestId(`skill-tab-${tab}`));
+      expect(screen.getByTestId(`skill-panel-${tab}`)).toBeTruthy();
+    }
+    fireEvent.click(screen.getByTestId('skill-tab-versions'));
+    fireEvent.click(screen.getByTestId('skill-view-1.0.0'));
+    expect(await screen.findByText(/scripts\/check\.sh/)).toBeTruthy();
+    fireEvent.click(screen.getByTestId('skill-tab-references'));
+    expect(screen.getByTestId('skill-panel-references')).toHaveTextContent('docs/r.md');
+    fireEvent.click(screen.getByTestId('skill-tab-triggers'));
+    expect(screen.getByTestId('skill-panel-triggers')).toHaveTextContent('发布');
+  });
+
+  it('未定义的版本集合按空集合处理', async () => {
+    const missingCollections = {
+      ...VERSION,
+      scripts: undefined,
+      references: undefined,
+      triggers: undefined,
+    };
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/versions/v-1')) {
+        return fakeResponse({ body: { data: missingCollections } });
+      }
+      if (url.includes('/versions')) {
+        return fakeResponse({ body: { data: [missingCollections], next_cursor: null } });
+      }
+      if (url.includes('/skill-installations')) {
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      }
+      return fakeResponse({ body: { data: SKILL } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    await screen.findByTestId('skill-detail-name');
+    fireEvent.click(screen.getByTestId('skill-tab-versions'));
+    fireEvent.click(screen.getByTestId('skill-view-1.0.0'));
+    await screen.findByTestId('skill-panel-scripts');
+    fireEvent.click(screen.getByTestId('skill-tab-references'));
+    fireEvent.click(screen.getByTestId('skill-tab-triggers'));
+    expect(screen.getByTestId('skill-panel-triggers')).toBeTruthy();
+  });
+
+  it('生命周期从已弃用切换到停用并呈现恢复选项', async () => {
+    let status = 'deprecated';
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (method === 'PATCH' && url.endsWith('/skills/s-1')) {
+        status = 'disabled';
+        return fakeResponse({ body: { data: { ...SKILL, status } } });
+      }
+      if (url.includes('/versions')) {
+        return fakeResponse({ body: { data: [VERSION], next_cursor: null } });
+      }
+      if (url.includes('/skill-installations')) {
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      }
+      return fakeResponse({ body: { data: { ...SKILL, status } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    const lifecycle = await screen.findByTestId('skill-lifecycle-select');
+    expect(lifecycle).toHaveTextContent(/Disable|停用/);
+    fireEvent.change(lifecycle, { target: { value: 'disabled' } });
+    await waitFor(() =>
+      expect(screen.getByTestId('skill-lifecycle-select')).toHaveTextContent(/Restore|恢复/),
+    );
+  });
+
+  it('差异视图覆盖两端剩余行并可再次点击收起', async () => {
+    const current = {
+      ...VERSION,
+      id: 'v-current',
+      version: '2.0.0',
+      instructions: 'a\nb\nx',
+      is_current: true,
+    };
+    const old = {
+      ...VERSION,
+      id: 'v-old',
+      version: '1.0.0',
+      instructions: 'b\nc\nd',
+      changelog: null,
+      is_current: false,
+    };
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/versions')) {
+        return fakeResponse({ body: { data: [current, old], next_cursor: null } });
+      }
+      if (url.includes('/skill-installations')) {
+        return fakeResponse({ body: { data: [INSTALLATION], next_cursor: null } });
+      }
+      return fakeResponse({
+        body: {
+          data: { ...SKILL, current_version_id: 'v-current', current_version: '2.0.0' },
+        },
+      });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId('skill-tab-versions'));
+    fireEvent.click(screen.getByTestId('skill-diff-1.0.0'));
+    expect(await screen.findByTestId('skill-diff-view')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('skill-diff-1.0.0'));
+    await waitFor(() => expect(screen.queryByTestId('skill-diff-view')).toBeNull());
   });
 });

@@ -6,7 +6,10 @@ import type { MeshApiClient } from '../../api';
 import type {
   AgentSkillBinding,
   AgentSkillRow,
+  AgentToolGrant,
   CapabilityDeclaration,
+  CapabilityGrant,
+  CapabilityPermission,
   ImportTask,
   MarketplaceEntry,
   SkillDetail,
@@ -22,6 +25,7 @@ const installationsPath = (workspaceId: string): string =>
   `/api/v1/workspaces/${workspaceId}/skill-installations`;
 const agentSkillsPath = (workspaceId: string, agentId: string): string =>
   `/api/v1/workspaces/${workspaceId}/agents/${agentId}/skills`;
+const agentToolsPath = (agentId: string): string => `/api/v1/agents/${agentId}/tools`;
 
 /** 实时频道(README §6.7):技能域事件走 workspace 级 skills 频道。 */
 export const workspaceSkillsChannel = (workspaceId: string): string =>
@@ -108,10 +112,9 @@ export async function listVersions(
   skillId: string,
   params: { limit?: number; cursor?: string } = {},
 ): Promise<{ data: SkillVersion[]; nextCursor: string | null }> {
-  const envelope = await client.list<SkillVersion>(
-    `${skillPath(workspaceId, skillId)}/versions`,
-    { query: { limit: params.limit, cursor: params.cursor } },
-  );
+  const envelope = await client.list<SkillVersion>(`${skillPath(workspaceId, skillId)}/versions`, {
+    query: { limit: params.limit, cursor: params.cursor },
+  });
   return { data: envelope.data, nextCursor: envelope.next_cursor };
 }
 
@@ -193,7 +196,7 @@ export async function getImportTask(
 
 export interface ApproveBody {
   readonly task_id: string;
-  readonly granted_capabilities: CapabilityDeclaration[];
+  readonly granted_capabilities: CapabilityGrant[];
   readonly decision?: 'approve' | 'reject';
   readonly comment?: string | null;
 }
@@ -354,4 +357,46 @@ export async function unbindSkill(
   bindingId: string,
 ): Promise<void> {
   await client.request<null>('DELETE', `${agentSkillsPath(workspaceId, agentId)}/${bindingId}`);
+}
+
+// --- agent 工具授权(agent.md §3.1) -------------------------------------------
+
+export async function listAgentTools(
+  client: MeshApiClient,
+  agentId: string,
+): Promise<{ data: AgentToolGrant[]; nextCursor: string | null }> {
+  const envelope = await client.list<AgentToolGrant>(agentToolsPath(agentId));
+  return { data: envelope.data, nextCursor: envelope.next_cursor };
+}
+
+export async function bindAgentTool(
+  client: MeshApiClient,
+  agentId: string,
+  body: { readonly capability: string; readonly permission?: CapabilityPermission },
+): Promise<AgentToolGrant> {
+  return client.request<AgentToolGrant>('POST', agentToolsPath(agentId), { body });
+}
+
+export async function updateAgentTool(
+  client: MeshApiClient,
+  agentId: string,
+  capability: string,
+  body: { readonly permission?: CapabilityPermission; readonly enabled?: boolean },
+): Promise<AgentToolGrant> {
+  return client.request<AgentToolGrant>(
+    'PATCH',
+    `${agentToolsPath(agentId)}/${encodeURIComponent(capability)}`,
+    { body },
+  );
+}
+
+export async function unbindAgentTool(
+  client: MeshApiClient,
+  agentId: string,
+  capability: string,
+): Promise<void> {
+  await client.request<void>(
+    'DELETE',
+    `${agentToolsPath(agentId)}/${encodeURIComponent(capability)}`,
+  );
 }

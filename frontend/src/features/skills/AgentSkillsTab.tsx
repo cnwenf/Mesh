@@ -1,17 +1,40 @@
 /**
  * Agent 详情「技能与工具」真实双列管理面(agent.md §4.3 / skill.md §4.2):
- * 左列管理合法的 agent_skills 绑定;右列从已绑定安装记录的
- * granted_capabilities 推导有效工具与权限。当前后端没有合法的 per-agent
- * capability mutation,因此权限控件如实只读,不模拟保存成功。
+ * 左列管理 agent_skills 绑定;右列通过 Agent Tools 薄封装管理
+ * skill_installations.granted_capabilities，capability key 是稳定标识。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Icon, Select, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Input,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
-import { bindSkill, listAgentSkills, listInstallations, unbindSkill, updateBinding } from './api';
-import { effectiveCapabilities, permissionTone } from './capabilities';
-import type { AgentSkillRow, SkillInstallation } from './types';
+import {
+  bindAgentTool,
+  bindSkill,
+  listAgentSkills,
+  listAgentTools,
+  listInstallations,
+  unbindAgentTool,
+  unbindSkill,
+  updateAgentTool,
+  updateBinding,
+} from './api';
+import { permissionTone } from './capabilities';
+import type {
+  AgentSkillRow,
+  AgentToolGrant,
+  CapabilityPermission,
+  SkillInstallation,
+} from './types';
 
 export function AgentSkillsTab({
   workspaceId,
@@ -29,10 +52,15 @@ export function AgentSkillsTab({
   const client = useMemo(() => new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken }), []);
   const [rows, setRows] = useState<AgentSkillRow[]>([]);
   const [installations, setInstallations] = useState<SkillInstallation[]>([]);
+  const [tools, setTools] = useState<AgentToolGrant[]>([]);
   const [pick, setPick] = useState('');
+  const [toolCapability, setToolCapability] = useState('');
+  const [toolPermission, setToolPermission] = useState<CapabilityPermission>('confirm_required');
   const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [mutationPending, setMutationPending] = useState(false);
+  const mutationPendingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,11 +69,13 @@ export function AgentSkillsTab({
     Promise.all([
       listAgentSkills(client, workspaceId, agentId, { limit: 100 }),
       listInstallations(client, workspaceId, { scope: 'workspace', limit: 100 }),
+      listAgentTools(client, agentId),
     ])
-      .then(([bound, available]) => {
+      .then(([bound, available, grantedTools]) => {
         if (cancelled) return;
         setRows(bound.data);
         setInstallations(available.data);
+        setTools(grantedTools.data);
       })
       .catch(() => {
         if (!cancelled) setLoadError(true);
@@ -60,40 +90,63 @@ export function AgentSkillsTab({
 
   const refresh = useCallback(() => setReloadKey((k) => k + 1), []);
 
+  const runMutation = useCallback(
+    async (operation: () => Promise<void>, onError: () => void): Promise<void> => {
+      if (mutationPendingRef.current) return;
+      mutationPendingRef.current = true;
+      setMutationPending(true);
+      try {
+        await operation();
+      } catch {
+        onError();
+      } finally {
+        mutationPendingRef.current = false;
+        setMutationPending(false);
+      }
+    },
+    [],
+  );
+
   const onBind = useCallback(async () => {
     if (pick === '') return;
-    try {
-      await bindSkill(client, workspaceId, agentId, { skill_installation_id: pick });
-      setPick('');
-      refresh();
-    } catch {
-      toast.addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
-    }
-  }, [client, workspaceId, agentId, pick, refresh, t, toast]);
+    await runMutation(
+      async () => {
+        await bindSkill(client, workspaceId, agentId, { skill_installation_id: pick });
+        setPick('');
+        refresh();
+      },
+      () => {
+        toast.addToast(t('skills.bindFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
+      },
+    );
+  }, [client, workspaceId, agentId, pick, refresh, runMutation, t, toast]);
+
+  const onBindTool = useCallback(async () => {
+    const capability = toolCapability.trim();
+    if (capability === '') return;
+    await runMutation(
+      async () => {
+        await bindAgentTool(client, agentId, { capability, permission: toolPermission });
+        setToolCapability('');
+        setToolPermission('confirm_required');
+        refresh();
+      },
+      () => {
+        toast.addToast(t('skills.toolSaveFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
+      },
+    );
+  }, [agentId, client, refresh, runMutation, t, toast, toolCapability, toolPermission]);
 
   const bindable = installations.filter(
     (installation) =>
       installation.install_status !== 'disabled' &&
       !rows.some((row) => row.skill.id === installation.skill_id),
-  );
-
-  const boundInstallations = installations.filter((installation) =>
-    rows.some((row) => row.skill.id === installation.skill_id),
-  );
-  const effectiveTools = effectiveCapabilities(
-    boundInstallations.flatMap((installation) => installation.granted_capabilities),
-  );
-  const enabledSkillIds = new Set(rows.filter((row) => row.enabled).map((row) => row.skill.id));
-  const enabledToolKeys = new Set(
-    effectiveCapabilities(
-      boundInstallations
-        .filter(
-          (installation) =>
-            installation.install_status !== 'disabled' &&
-            enabledSkillIds.has(installation.skill_id),
-        )
-        .flatMap((installation) => installation.granted_capabilities),
-    ).map((tool) => tool.capability),
   );
 
   if (loading) {
@@ -118,7 +171,11 @@ export function AgentSkillsTab({
   }
 
   return (
-    <section className="mesh-agents-detail__panel" data-testid="agent-panel-skills">
+    <section
+      className="mesh-agents-detail__panel"
+      data-testid="agent-panel-skills"
+      aria-busy={mutationPending}
+    >
       <div className="mesh-skills-agent-grid">
         <section className="mesh-skills-agent-grid__column" data-testid="agent-skills-column">
           <h2 className="mesh-text-title-3">{t('skills.agentSkillsTitle')}</h2>
@@ -147,26 +204,27 @@ export function AgentSkillsTab({
                         <input
                           type="checkbox"
                           checked={row.enabled}
-                          disabled={!canManage}
+                          disabled={!canManage || mutationPending}
                           onChange={(event) => {
-                            void (async () => {
-                              try {
+                            void runMutation(
+                              async () => {
                                 await updateBinding(client, workspaceId, agentId, row.binding_id, {
                                   enabled: event.target.checked,
                                 });
                                 refresh();
-                              } catch {
+                              },
+                              () => {
                                 toast.addToast(t('skills.bindFailed'), {
                                   tone: 'danger',
                                   closeLabel: t('a11y.closeDialog'),
                                 });
-                              }
-                            })();
+                              },
+                            );
                           }}
-                          aria-label={t('skills.agentEnabledCol')}
+                          aria-label={`${t('skills.agentEnabledCol')} ${row.skill.name}`}
                         />
                       </td>
-                      <td>
+                      <th scope="row">
                         {row.skill.source_type === 'url' ||
                         row.skill.source_type === 'marketplace' ? (
                           <span
@@ -177,7 +235,7 @@ export function AgentSkillsTab({
                           </span>
                         ) : null}
                         {row.skill.name}
-                      </td>
+                      </th>
                       <td>
                         {row.version}
                         {row.install_status === 'updated_available' ? (
@@ -190,23 +248,24 @@ export function AgentSkillsTab({
                         <input
                           type="checkbox"
                           checked={row.auto_trigger}
-                          disabled={!canManage}
+                          disabled={!canManage || mutationPending}
                           onChange={(event) => {
-                            void (async () => {
-                              try {
+                            void runMutation(
+                              async () => {
                                 await updateBinding(client, workspaceId, agentId, row.binding_id, {
                                   auto_trigger: event.target.checked,
                                 });
                                 refresh();
-                              } catch {
+                              },
+                              () => {
                                 toast.addToast(t('skills.bindFailed'), {
                                   tone: 'danger',
                                   closeLabel: t('a11y.closeDialog'),
                                 });
-                              }
-                            })();
+                              },
+                            );
                           }}
-                          aria-label={t('skills.agentAutoTriggerCol')}
+                          aria-label={`${t('skills.agentAutoTriggerCol')} ${row.skill.name}`}
                         />
                       </td>
                       <td>
@@ -216,13 +275,14 @@ export function AgentSkillsTab({
                             min={0}
                             max={1000}
                             defaultValue={row.priority}
-                            aria-label={t('skills.agentPriorityCol')}
+                            disabled={mutationPending}
+                            aria-label={`${t('skills.agentPriorityCol')} ${row.skill.name}`}
                             data-testid={`agent-priority-${row.binding_id}`}
                             onBlur={(event) => {
                               const value = Number(event.target.value);
                               if (Number.isNaN(value) || value === row.priority) return;
-                              void (async () => {
-                                try {
+                              void runMutation(
+                                async () => {
                                   await updateBinding(
                                     client,
                                     workspaceId,
@@ -233,13 +293,14 @@ export function AgentSkillsTab({
                                     },
                                   );
                                   refresh();
-                                } catch {
+                                },
+                                () => {
                                   toast.addToast(t('skills.bindFailed'), {
                                     tone: 'danger',
                                     closeLabel: t('a11y.closeDialog'),
                                   });
-                                }
-                              })();
+                                },
+                              );
                             }}
                           />
                         ) : (
@@ -250,18 +311,21 @@ export function AgentSkillsTab({
                         {canManage ? (
                           <Button
                             variant="secondary"
+                            disabled={mutationPending}
+                            aria-label={`${t('skills.unbindButton')} ${row.skill.name}`}
                             onClick={() => {
-                              void (async () => {
-                                try {
+                              void runMutation(
+                                async () => {
                                   await unbindSkill(client, workspaceId, agentId, row.binding_id);
                                   refresh();
-                                } catch {
+                                },
+                                () => {
                                   toast.addToast(t('skills.unbindFailed'), {
                                     tone: 'danger',
                                     closeLabel: t('a11y.closeDialog'),
                                   });
-                                }
-                              })();
+                                },
+                              );
                             }}
                             data-testid={`agent-unbind-${row.binding_id}`}
                           >
@@ -281,6 +345,7 @@ export function AgentSkillsTab({
               <Select
                 label={t('skills.bindPick')}
                 value={pick}
+                disabled={mutationPending}
                 onChange={(event) => setPick(event.target.value)}
               >
                 <option value="">{t('skills.bindPickPlaceholder')}</option>
@@ -293,7 +358,7 @@ export function AgentSkillsTab({
               </Select>
               <Button
                 onClick={() => void onBind()}
-                disabled={pick === ''}
+                disabled={pick === '' || mutationPending}
                 data-testid="agent-skill-bind"
               >
                 {t('skills.bindButton')}
@@ -304,7 +369,7 @@ export function AgentSkillsTab({
 
         <section className="mesh-skills-agent-grid__column" data-testid="agent-tools-column">
           <h2 className="mesh-text-title-3">{t('skills.agentToolsTitle')}</h2>
-          {effectiveTools.length === 0 ? (
+          {tools.length === 0 ? (
             <EmptyState
               title={t('skills.agentToolsEmptyTitle')}
               description={t('skills.agentToolsEmptyDescription')}
@@ -320,10 +385,11 @@ export function AgentSkillsTab({
                     <th scope="col">{t('skills.toolEnabledCol')}</th>
                     <th scope="col">{t('skills.toolCapabilityCol')}</th>
                     <th scope="col">{t('skills.toolPermissionCol')}</th>
+                    <th scope="col">{t('skills.agentActionsCol')}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {effectiveTools.map((tool) => (
+                  {tools.map((tool) => (
                     <tr
                       key={tool.capability}
                       className={`mesh-skills__permission-row mesh-skills__permission-row--${permissionTone(tool.permission)}`}
@@ -332,20 +398,55 @@ export function AgentSkillsTab({
                       <td>
                         <input
                           type="checkbox"
-                          checked={enabledToolKeys.has(tool.capability)}
-                          disabled
-                          aria-label={t('skills.toolEnabledCol')}
+                          checked={tool.enabled}
+                          disabled={!canManage || mutationPending}
+                          data-testid={`agent-tool-enabled-${tool.capability}`}
+                          onChange={(event) => {
+                            void runMutation(
+                              async () => {
+                                await updateAgentTool(client, agentId, tool.capability, {
+                                  enabled: event.target.checked,
+                                });
+                                refresh();
+                              },
+                              () => {
+                                toast.addToast(t('skills.toolSaveFailed'), {
+                                  tone: 'danger',
+                                  closeLabel: t('a11y.closeDialog'),
+                                });
+                              },
+                            );
+                          }}
+                          aria-label={`${t('skills.toolEnabledCol')} ${tool.capability}`}
                         />
                       </td>
-                      <td>
+                      <th scope="row">
                         <code>{tool.capability}</code>
-                      </td>
+                      </th>
                       <td>
                         <Select
                           label={t('skills.toolPermissionCol')}
+                          aria-label={`${t('skills.toolPermissionCol')} ${tool.capability}`}
                           value={tool.permission}
-                          disabled
+                          disabled={!canManage || mutationPending}
                           data-testid={`agent-tool-permission-${tool.capability}`}
+                          onChange={(event) => {
+                            const permission = event.target.value as CapabilityPermission;
+                            void runMutation(
+                              async () => {
+                                await updateAgentTool(client, agentId, tool.capability, {
+                                  permission,
+                                });
+                                refresh();
+                              },
+                              () => {
+                                toast.addToast(t('skills.toolSaveFailed'), {
+                                  tone: 'danger',
+                                  closeLabel: t('a11y.closeDialog'),
+                                });
+                              },
+                            );
+                          }}
                         >
                           <option value="read_only">{t('skills.permission.read_only')}</option>
                           <option value="write">{t('skills.permission.write')}</option>
@@ -354,13 +455,66 @@ export function AgentSkillsTab({
                           </option>
                         </Select>
                       </td>
+                      <td>
+                        {canManage ? (
+                          <Button
+                            variant="secondary"
+                            disabled={mutationPending}
+                            aria-label={`${t('skills.toolRemove')} ${tool.capability}`}
+                            data-testid={`agent-tool-remove-${tool.capability}`}
+                            onClick={() => {
+                              void runMutation(
+                                async () => {
+                                  await unbindAgentTool(client, agentId, tool.capability);
+                                  refresh();
+                                },
+                                () => {
+                                  toast.addToast(t('skills.toolSaveFailed'), {
+                                    tone: 'danger',
+                                    closeLabel: t('a11y.closeDialog'),
+                                  });
+                                },
+                              );
+                            }}
+                          >
+                            {t('skills.toolRemove')}
+                          </Button>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          <p className="mesh-skills__bind-note">{t('skills.toolReadOnlyHint')}</p>
+          {canManage ? (
+            <div className="mesh-skills__bind-row" data-testid="agent-tool-bind-row">
+              <Input
+                label={t('skills.toolCapabilityInput')}
+                value={toolCapability}
+                disabled={mutationPending}
+                onChange={(event) => setToolCapability(event.target.value)}
+              />
+              <Select
+                label={t('skills.toolNewPermission')}
+                value={toolPermission}
+                disabled={mutationPending}
+                onChange={(event) => setToolPermission(event.target.value as CapabilityPermission)}
+              >
+                <option value="read_only">{t('skills.permission.read_only')}</option>
+                <option value="write">{t('skills.permission.write')}</option>
+                <option value="confirm_required">{t('skills.permission.confirm_required')}</option>
+              </Select>
+              <Button
+                data-testid="agent-tool-add"
+                disabled={toolCapability.trim() === '' || mutationPending}
+                onClick={() => void onBindTool()}
+              >
+                {t('skills.toolAdd')}
+              </Button>
+            </div>
+          ) : null}
+          <p className="mesh-skills__bind-note">{t('skills.toolManageHint')}</p>
         </section>
       </div>
       <p className="mesh-skills__bind-note">{t('skills.agentBindNote')}</p>

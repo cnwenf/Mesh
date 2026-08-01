@@ -16,6 +16,7 @@ from mesh import __version__
 from mesh.agent.channels import register_agent_checkers
 from mesh.agent.routes import router as agent_router
 from mesh.agent.service import AgentService
+from mesh.agent.tools import AgentToolService
 from mesh.agent.triggers import (
     register_skill_context_resolver,
     register_skill_matching_resolver,
@@ -294,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.chat_service.engine = app.state.chat_engine
     app.state.agent_service = AgentService(session_factory)
+    app.state.agent_tool_service = AgentToolService(session_factory)
     # skill.md: four-layer skill module. Script/reference bodies live in the
     # shared object bucket via content_ref; the import service is SSRF-guarded
     # (host allowlist from settings) and the §6.11 / §4.5 resolvers feed the

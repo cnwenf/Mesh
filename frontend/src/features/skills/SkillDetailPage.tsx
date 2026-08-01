@@ -311,7 +311,9 @@ export function SkillDetailPage(): React.JSX.Element {
   return (
     <div className="mesh-skills-detail" data-testid="skill-detail">
       <header className="mesh-skills-detail__header">
-        <h1 data-testid="skill-detail-name">{skill.name}</h1>
+        <h1 className="mesh-text-title-1" data-testid="skill-detail-name">
+          {skill.name}
+        </h1>
         <span className={`mesh-skills__status mesh-skills__status--${skill.status}`}>
           {t(`skills.status.${skill.status}`)}
         </span>

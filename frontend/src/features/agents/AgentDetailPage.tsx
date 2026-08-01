@@ -33,6 +33,7 @@ import { listWorkspaceExecutions, workspaceExecutionsChannel } from '../runtimes
 import type { ExecutionSummary } from '../runtimes/types';
 import {
   agentPresenceChannel,
+  agentResourceChannel,
   getAgent,
   listConfigVersions,
   rollbackConfig,
@@ -77,6 +78,7 @@ export function AgentDetailPage(): React.JSX.Element {
   const activeTab = tabFromParam(searchParams.get('tab'));
 
   const [workspace, setWorkspace] = useState<Membership | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [versions, setVersions] = useState<AgentConfigVersion[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -123,7 +125,10 @@ export function AgentDetailPage(): React.JSX.Element {
     let cancelled = false;
     fetchMe(client)
       .then((me) => {
-        if (!cancelled) setWorkspace(activeWorkspace(me.memberships));
+        if (!cancelled) {
+          setCurrentUserId(me.user.id);
+          setWorkspace(activeWorkspace(me.memberships));
+        }
       })
       .catch(() => {
         if (!cancelled) setError(t('state.errorDescription'));
@@ -195,12 +200,19 @@ export function AgentDetailPage(): React.JSX.Element {
 
   // 实时:agent 域事件 → 重拉或回名册(README §6.7)。
   useEffect(() => {
-    if (realtime === null || workspace === null) return;
-    const channel = workspaceAgentsChannel(workspace.workspace_id);
-    realtime.client.subscribe(channel);
+    if (realtime === null || workspace === null || agentId === undefined) return;
+    const channels = [
+      workspaceAgentsChannel(workspace.workspace_id),
+      agentResourceChannel(agentId),
+    ];
+    for (const channel of channels) realtime.client.subscribe(channel);
     const unsubscribe = realtime.client.onFrame((frame) => {
-      const payload = frame.payload as { data?: { id?: string; agent_id?: string } };
-      const targetId = payload.data?.agent_id ?? payload.data?.id;
+      const payload = frame.payload as {
+        id?: string;
+        agent_id?: string;
+        data?: { id?: string; agent_id?: string };
+      };
+      const targetId = payload.agent_id ?? payload.id ?? payload.data?.agent_id ?? payload.data?.id;
       if (targetId !== agentId) return;
       if (frame.event === 'agent.deleted') {
         navigate('/members');
@@ -212,7 +224,7 @@ export function AgentDetailPage(): React.JSX.Element {
     });
     return () => {
       unsubscribe();
-      realtime.client.unsubscribe(channel);
+      for (const channel of channels) realtime.client.unsubscribe(channel);
     };
   }, [realtime, workspace, agentId, navigate]);
 
@@ -433,7 +445,11 @@ export function AgentDetailPage(): React.JSX.Element {
   };
 
   const canManage =
-    workspace !== null && (workspace.role === 'owner' || workspace.role === 'admin');
+    workspace !== null &&
+    agent !== null &&
+    (workspace.role === 'owner' ||
+      workspace.role === 'admin' ||
+      (currentUserId !== null && agent.owner_user_id === currentUserId));
 
   if (error !== null) {
     return (
@@ -733,6 +749,7 @@ export function AgentDetailPage(): React.JSX.Element {
           workspaceId={workspace.workspace_id}
           agentId={agentId}
           canManage={canManage}
+          reloadSignal={reloadKey}
         />
       ) : null}
 

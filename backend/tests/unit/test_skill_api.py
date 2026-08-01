@@ -407,6 +407,27 @@ async def test_approve_paths(client, app) -> None:
     assert mal.status_code == 422
     assert mal.json()["error"]["code"] == "capability_invalid"
 
+    bad_enabled = await _seed_awaiting_review(
+        app, uuid.UUID(ws), await _member_id(app, uuid.UUID(ws), token)
+    )
+    non_boolean = await client.post(
+        f"/api/v1/workspaces/{ws}/skills/{bad_enabled['skill_id']}/approve",
+        json={
+            "task_id": str(bad_enabled["task_id"]),
+            "granted_capabilities": [
+                {
+                    "capability": "exec:shell",
+                    "permission": "confirm_required",
+                    "enabled": "false",
+                }
+            ],
+            "decision": "approve",
+        },
+        headers=_auth(token),
+    )
+    assert non_boolean.status_code == 422
+    assert non_boolean.json()["error"]["code"] == "capability_invalid"
+
     # HIGH-3: permission ESCALATION (declare read_only-ish, grant write) → 422
     esc = await _seed_awaiting_review(app, uuid.UUID(ws), await _member_id(app, uuid.UUID(ws), token))
     # re-declare the version's required caps as read_only for exec:shell via a

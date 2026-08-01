@@ -7,7 +7,10 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse, stubFetch } from '../../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../../test-utils/render';
+import type { Membership } from '../../members/types';
+import { EditSquadDialog } from '../EditSquadDialog';
 import { SquadsPage } from '../SquadsPage';
+import type { Squad } from '../types';
 
 const ME = {
   user: { id: 'usr-1', email: 'owner@acme.com', display_name: 'Owner' },
@@ -156,8 +159,12 @@ describe('SquadsPage', () => {
     fireEvent.change(screen.getByTestId('squad-create-kind'), { target: { value: 'task_scoped' } });
     fireEvent.click(screen.getByTestId('squad-create-require-approval'));
     // 选取 mem-1 为组长(leader 闸门满足后方可创建)
-    fireEvent.change(screen.getByTestId('squad-create-member-select'), { target: { value: 'mem-1' } });
-    fireEvent.change(screen.getByTestId('squad-create-member-role'), { target: { value: 'leader' } });
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-1' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-member-role'), {
+      target: { value: 'leader' },
+    });
     fireEvent.click(screen.getByTestId('squad-create-member-add'));
     fireEvent.click(screen.getByTestId('squad-create-submit'));
     await screen.findByText('Brand new');
@@ -185,12 +192,18 @@ describe('SquadsPage', () => {
     expect(submit.disabled).toBe(true);
     expect(screen.getByTestId('squad-create-leader-gate')).toBeTruthy();
     // 加一名 member(非组长)→ 仍置灰
-    fireEvent.change(screen.getByTestId('squad-create-member-select'), { target: { value: 'mem-2' } });
-    fireEvent.change(screen.getByTestId('squad-create-member-role'), { target: { value: 'member' } });
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-2' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-member-role'), {
+      target: { value: 'member' },
+    });
     fireEvent.click(screen.getByTestId('squad-create-member-add'));
     expect((screen.getByTestId('squad-create-submit') as HTMLButtonElement).disabled).toBe(true);
     // 把该成员改为 leader → 闸门满足,Create 启用
-    fireEvent.change(screen.getByTestId('squad-create-picked-role-mem-2'), { target: { value: 'leader' } });
+    fireEvent.change(screen.getByTestId('squad-create-picked-role-mem-2'), {
+      target: { value: 'leader' },
+    });
     expect((screen.getByTestId('squad-create-submit') as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByTestId('squad-create-leader-gate')).toBeNull();
   });
@@ -218,9 +231,7 @@ describe('SquadsPage', () => {
   });
 
   it('renders the no-workspace empty state when the user has no membership', async () => {
-    const stub = stubFetch(
-      fakeResponse({ body: { data: { ...ME, memberships: [] } } }),
-    );
+    const stub = stubFetch(fakeResponse({ body: { data: { ...ME, memberships: [] } } }));
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderWithProviders(<SquadsPage />, { route: '/squads' });
     await screen.findByText('Select a workspace to view its squads.');
@@ -242,6 +253,20 @@ describe('SquadsPage', () => {
     await waitFor(() => {
       expect(stub.calls.some((c) => String(c.url).includes('status=archived'))).toBe(true);
     });
+    fireEvent.change(selects[0], { target: { value: 'all' } });
+    fireEvent.change(selects[1], { target: { value: 'all' } });
+  });
+
+  it('renders archived squads with the neutral status treatment', async () => {
+    const archived = squadFixture('sq-archived', 'Archived squad', { status: 'archived' });
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({ body: { data: [archived], next_cursor: null } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderWithProviders(<SquadsPage />, { route: '/squads' });
+    expect(await screen.findByText('Archived squad')).toBeTruthy();
+    expect(screen.getAllByText('Archived').length).toBeGreaterThan(0);
   });
 
   it('captures description, instructions and decompose depth in the create dialog', async () => {
@@ -261,10 +286,20 @@ describe('SquadsPage', () => {
     fireEvent.change(screen.getByTestId('squad-create-instructions'), {
       target: { value: 'Prefer small batches' },
     });
+    fireEvent.change(screen.getByTestId('squad-create-avatar'), {
+      target: { value: 'https://cdn.example/squad.png' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-leader-mode'), {
+      target: { value: 'multi' },
+    });
     fireEvent.change(screen.getByTestId('squad-create-depth'), { target: { value: '4' } });
     // leader 闸门:加一名组长后方可创建
-    fireEvent.change(screen.getByTestId('squad-create-member-select'), { target: { value: 'mem-1' } });
-    fireEvent.change(screen.getByTestId('squad-create-member-role'), { target: { value: 'leader' } });
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-1' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-member-role'), {
+      target: { value: 'leader' },
+    });
     fireEvent.click(screen.getByTestId('squad-create-member-add'));
     fireEvent.click(screen.getByTestId('squad-create-submit'));
     await screen.findByText('Deep squad');
@@ -273,8 +308,74 @@ describe('SquadsPage', () => {
       name: 'Deep squad',
       description: 'Owns depth',
       instructions: 'Prefer small batches',
+      avatar_url: 'https://cdn.example/squad.png',
+      leader_mode: 'multi',
       max_decompose_depth: 4,
     });
+  });
+
+  it('edits roles, ignores a duplicate pick and removes a picked member', async () => {
+    queueInitialLoad(fakeResponse({ body: ROSTER_PAGE }));
+    renderWithProviders(<SquadsPage />, { route: '/squads' });
+    await screen.findByText('Platform');
+    fireEvent.click(screen.getByTestId('squad-open-create'));
+    await screen.findByTestId('squad-create-member-select');
+
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-1' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-member-role'), {
+      target: { value: 'leader' },
+    });
+    fireEvent.click(screen.getByTestId('squad-create-member-add'));
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-1' },
+    });
+    fireEvent.click(screen.getByTestId('squad-create-member-add'));
+    expect(screen.getAllByTestId('squad-create-picked-mem-1')).toHaveLength(1);
+
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-2' },
+    });
+    fireEvent.click(screen.getByTestId('squad-create-member-add'));
+    fireEvent.change(screen.getByTestId('squad-create-picked-role-mem-1'), {
+      target: { value: 'observer' },
+    });
+    fireEvent.click(screen.getByTestId('squad-create-picked-remove-mem-2'));
+    expect(screen.queryByTestId('squad-create-picked-mem-2')).toBeNull();
+  });
+
+  it('shows a create error while keeping the completed form open', async () => {
+    const stub = queueInitialLoad(
+      fakeResponse({ body: ROSTER_PAGE }),
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
+    );
+    renderWithProviders(<SquadsPage />, { route: '/squads' });
+    await screen.findByText('Platform');
+    fireEvent.click(screen.getByTestId('squad-open-create'));
+    await screen.findByTestId('squad-create-member-select');
+    fireEvent.change(screen.getByTestId('squad-create-name'), { target: { value: 'Broken' } });
+    fireEvent.change(screen.getByTestId('squad-create-member-select'), {
+      target: { value: 'mem-1' },
+    });
+    fireEvent.change(screen.getByTestId('squad-create-member-role'), {
+      target: { value: 'leader' },
+    });
+    fireEvent.click(screen.getByTestId('squad-create-member-add'));
+    fireEvent.click(screen.getByTestId('squad-create-submit'));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(stub.calls.some((call) => call.init?.method === 'POST')).toBe(true);
+  });
+
+  it('leaves the create form usable when the workspace roster fails', async () => {
+    queueInitialLoad(
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
+    );
+    renderWithProviders(<SquadsPage />, { route: '/squads' });
+    await screen.findByText('Platform');
+    fireEvent.click(screen.getByTestId('squad-open-create'));
+    expect(await screen.findByTestId('squad-create-form')).toBeTruthy();
+    expect(screen.getByTestId('squad-create-member-select')).toHaveTextContent('Select member');
   });
 
   it('opens the create dialog from the empty state action', async () => {
@@ -291,9 +392,7 @@ describe('SquadsPage', () => {
   });
 
   it('reloads after the debounced search input writes the q param', async () => {
-    const stub = queueInitialLoad(
-      fakeResponse({ body: { data: [SQUAD_2], next_cursor: null } }),
-    );
+    const stub = queueInitialLoad(fakeResponse({ body: { data: [SQUAD_2], next_cursor: null } }));
     renderWithProviders(<SquadsPage />, { route: '/squads' });
     await screen.findByText('Platform');
     fireEvent.change(screen.getByTestId('squad-filter-q'), { target: { value: 'growth' } });
@@ -301,5 +400,82 @@ describe('SquadsPage', () => {
       const urls = stub.calls.map((c) => String(c.url));
       expect(urls.some((u) => u.includes('/squads?') && u.includes('q=growth'))).toBe(true);
     });
+  });
+});
+
+describe('EditSquadDialog', () => {
+  it('submits every editable field and calls the save lifecycle callbacks', async () => {
+    const updated = squadFixture('sq-edit', 'Renamed', {
+      description: 'New description',
+      instructions: 'New instructions',
+      avatar_url: 'https://cdn.example/edit.png',
+      kind: 'adhoc',
+      leader_mode: 'multi',
+      require_plan_approval: true,
+      max_decompose_depth: 4,
+    }) as Squad;
+    const stub = stubFetch(fakeResponse({ body: { data: updated } }));
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    const onSaved = vi.fn();
+    const onClose = vi.fn();
+    renderWithProviders(
+      <EditSquadDialog
+        workspace={ME.memberships[0] as Membership}
+        squad={squadFixture('sq-edit', 'Original') as Squad}
+        onSaved={onSaved}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('squad-edit-name'), { target: { value: 'Renamed' } });
+    fireEvent.change(screen.getByTestId('squad-edit-description'), {
+      target: { value: 'New description' },
+    });
+    fireEvent.change(screen.getByTestId('squad-edit-instructions'), {
+      target: { value: 'New instructions' },
+    });
+    fireEvent.change(screen.getByTestId('squad-edit-avatar'), {
+      target: { value: 'https://cdn.example/edit.png' },
+    });
+    fireEvent.change(screen.getByTestId('squad-edit-kind'), { target: { value: 'adhoc' } });
+    fireEvent.change(screen.getByTestId('squad-edit-leader-mode'), { target: { value: 'multi' } });
+    fireEvent.click(screen.getByTestId('squad-edit-require-approval'));
+    fireEvent.change(screen.getByTestId('squad-edit-depth'), { target: { value: '4' } });
+    fireEvent.click(screen.getByTestId('squad-edit-submit'));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(updated));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(stub.calls[0].init?.body))).toMatchObject({
+      name: 'Renamed',
+      description: 'New description',
+      instructions: 'New instructions',
+      avatar_url: 'https://cdn.example/edit.png',
+      kind: 'adhoc',
+      leader_mode: 'multi',
+      require_plan_approval: true,
+      max_decompose_depth: 4,
+    });
+  });
+
+  it('guards blank names and surfaces a failed update', async () => {
+    const stub = stubFetch(
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderWithProviders(
+      <EditSquadDialog
+        workspace={ME.memberships[0] as Membership}
+        squad={squadFixture('sq-edit', 'Original') as Squad}
+        onSaved={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('squad-edit-name'), { target: { value: '   ' } });
+    fireEvent.submit(screen.getByTestId('squad-edit-form'));
+    expect(stub.calls).toHaveLength(0);
+
+    fireEvent.change(screen.getByTestId('squad-edit-name'), { target: { value: 'Retry name' } });
+    fireEvent.click(screen.getByTestId('squad-edit-submit'));
+    expect(await screen.findByRole('alert')).toBeTruthy();
   });
 });

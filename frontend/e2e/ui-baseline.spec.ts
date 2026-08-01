@@ -76,7 +76,17 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     await page.keyboard.press('Control+k');
     const palette = page.getByRole('dialog', { name: 'Command palette' });
     await expect(palette).toBeVisible();
-    await palette.getByRole('combobox').fill('Settings');
+    const input = palette.getByRole('combobox');
+    await input.fill('Settings');
+    // Filtering resets the stable selection in a React effect while remote
+    // entity search may settle in a later render. Wait for the exact local
+    // command to become the ARIA-active option before sending Enter; pressing
+    // Enter immediately after fill races the previous render in slower CI.
+    const settingsOption = palette.getByRole('option', { name: 'Settings', exact: true });
+    await expect(settingsOption).toBeVisible();
+    const settingsOptionId = await settingsOption.getAttribute('id');
+    expect(settingsOptionId).not.toBeNull();
+    await expect(input).toHaveAttribute('aria-activedescendant', settingsOptionId ?? '');
     await page.keyboard.press('Enter');
     await page.waitForURL('**/settings');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();

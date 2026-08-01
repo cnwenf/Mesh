@@ -7311,6 +7311,562 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/workspaces/{workspace_id}/agents/{agent_id}/tools:
+    get:
+      tags:
+      - agent
+      summary: List Agent Tools In Workspace
+      operationId: list_agent_tools_in_workspace_api_v1_workspaces__workspace_id__agents__agent_id__tools_get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolListResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+    post:
+      tags:
+      - agent
+      summary: Bind Agent Tools In Workspace
+      operationId: bind_agent_tools_in_workspace_api_v1_workspaces__workspace_id__agents__agent_id__tools_post
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindToolsRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolBindResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+  /api/v1/workspaces/{workspace_id}/agents/{agent_id}/tools/{capability_key}:
+    patch:
+      tags:
+      - agent
+      summary: Patch Agent Tool In Workspace
+      operationId: patch_agent_tool_in_workspace_api_v1_workspaces__workspace_id__agents__agent_id__tools__capability_key__patch
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: capability_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Capability Key
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchToolRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+    delete:
+      tags:
+      - agent
+      summary: Delete Agent Tool In Workspace
+      operationId: delete_agent_tool_in_workspace_api_v1_workspaces__workspace_id__agents__agent_id__tools__capability_key__delete
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: capability_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Capability Key
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Workspace Id
+      responses:
+        '204':
+          description: Successful Response
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+  /api/v1/agents/{agent_id}/tools:
+    get:
+      tags:
+      - agent
+      summary: List Agent Tools Exact
+      operationId: list_agent_tools_exact_api_v1_agents__agent_id__tools_get
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolListResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+    post:
+      tags:
+      - agent
+      summary: Bind Agent Tools Exact
+      operationId: bind_agent_tools_exact_api_v1_agents__agent_id__tools_post
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BindToolsRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolBindResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+  /api/v1/agents/{agent_id}/tools/{capability_key}:
+    patch:
+      tags:
+      - agent
+      summary: Patch Agent Tool Exact
+      operationId: patch_agent_tool_exact_api_v1_agents__agent_id__tools__capability_key__patch
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: capability_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Capability Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchToolRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolResponse'
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+    delete:
+      tags:
+      - agent
+      summary: Delete Agent Tool Exact
+      operationId: delete_agent_tool_exact_api_v1_agents__agent_id__tools__capability_key__delete
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Agent Id
+      - name: capability_key
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Capability Key
+      responses:
+        '204':
+          description: Successful Response
+        '400':
+          description: Invalid request shape, capability key, or permission value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '403':
+          description: Agent ownership, role, or token scope does not permit the mutation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '404':
+          description: Agent or capability grant not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '409':
+          description: Duplicate or ambiguous capability binding.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '422':
+          description: Capability is outside the bound skill's approved authorization ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
+        '429':
+          description: Write rate limit exceeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolErrorResponse'
   /api/v1/workspaces/{workspace_id}/agents/{agent_id}/config:
     patch:
       tags:
@@ -13499,6 +14055,92 @@ components:
       required:
       - emoji
       title: AddReactionRequest
+    AgentToolBindResponse:
+      properties:
+        data:
+          anyOf:
+          - $ref: '#/components/schemas/AgentToolGrant'
+          - items:
+              $ref: '#/components/schemas/AgentToolGrant'
+            type: array
+          title: Data
+      type: object
+      required:
+      - data
+      title: AgentToolBindResponse
+    AgentToolError:
+      properties:
+        code:
+          type: string
+          title: Code
+        message:
+          type: string
+          title: Message
+        details:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Details
+      type: object
+      required:
+      - code
+      - message
+      title: AgentToolError
+    AgentToolErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/AgentToolError'
+      type: object
+      required:
+      - error
+      title: AgentToolErrorResponse
+    AgentToolGrant:
+      properties:
+        capability:
+          type: string
+          title: Capability
+        permission:
+          type: string
+          enum:
+          - read_only
+          - write
+          - confirm_required
+          title: Permission
+        enabled:
+          type: boolean
+          title: Enabled
+      type: object
+      required:
+      - capability
+      - permission
+      - enabled
+      title: AgentToolGrant
+      description: Persisted capability grant returned by the tools API.
+    AgentToolListResponse:
+      properties:
+        data:
+          items:
+            $ref: '#/components/schemas/AgentToolGrant'
+          type: array
+          title: Data
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - data
+      title: AgentToolListResponse
+    AgentToolResponse:
+      properties:
+        data:
+          $ref: '#/components/schemas/AgentToolGrant'
+      type: object
+      required:
+      - data
+      title: AgentToolResponse
     ApprovalDecideRequest:
       properties:
         comment:
@@ -13583,6 +14225,31 @@ components:
       - skill_installation_id
       title: BindRequest
       description: POST /workspaces/{ws}/agents/{agent_id}/skills.
+    BindToolsRequest:
+      properties:
+        capability:
+          anyOf:
+          - type: string
+            maxLength: 256
+            minLength: 1
+          - type: 'null'
+          title: Capability
+        permission:
+          type: string
+          pattern: ^(read_only|write|confirm_required)$
+          title: Permission
+          default: confirm_required
+        capabilities:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/ToolGrantInput'
+            type: array
+            minItems: 1
+          - type: 'null'
+          title: Capabilities
+      type: object
+      title: BindToolsRequest
+      description: POST tools accepts the table's single form and §3.2 batch form.
     BulkChanges:
       properties:
         status_id:
@@ -15791,6 +16458,22 @@ components:
           title: Status
       type: object
       title: PatchSubscriptionRequest
+    PatchToolRequest:
+      properties:
+        permission:
+          anyOf:
+          - type: string
+            pattern: ^(read_only|write|confirm_required)$
+          - type: 'null'
+          title: Permission
+        enabled:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Enabled
+      type: object
+      title: PatchToolRequest
+      description: PATCH one capability grant's permission and/or effective switch.
     PlanDecisionRequest:
       properties:
         comment:
@@ -16314,6 +16997,23 @@ components:
       - conversation_ref
       title: TestSendRequest
       description: POST .../integrations/{id}/test-send (§3.9).
+    ToolGrantInput:
+      properties:
+        capability:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Capability
+        permission:
+          type: string
+          pattern: ^(read_only|write|confirm_required)$
+          title: Permission
+          default: confirm_required
+      type: object
+      required:
+      - capability
+      title: ToolGrantInput
+      description: One capability grant; omitted permission takes the high-risk default.
     TransferRequest:
       properties:
         new_owner_user_id:

@@ -131,6 +131,30 @@ def test_non_array_input_rejected():
 
 
 @pytest.mark.unit
+def test_required_declarations_reject_the_grant_only_enabled_switch():
+    with pytest.raises(CapabilityInvalidError, match="enabled is only valid"):
+        normalize_capability_declarations(
+            [{"capability": "repo:read", "permission": "read_only", "enabled": False}]
+        )
+
+
+@pytest.mark.unit
+def test_grant_declarations_accept_only_boolean_enabled_switches():
+    assert normalize_capability_declarations(
+        [{"capability": "repo:read", "permission": "read_only", "enabled": False}],
+        allow_enabled=True,
+    ) == {
+        "required": ["repo:read"],
+        "grants": [{"capability": "repo:read", "permission": "read_only"}],
+    }
+    with pytest.raises(CapabilityInvalidError, match="enabled must be a boolean"):
+        normalize_capability_declarations(
+            [{"capability": "repo:read", "permission": "read_only", "enabled": "false"}],
+            allow_enabled=True,
+        )
+
+
+@pytest.mark.unit
 def test_snapshot_builder_derives_both_fields_from_one_normalization():
     import uuid
 

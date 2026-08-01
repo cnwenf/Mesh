@@ -175,7 +175,7 @@ Agent 是 Mesh 的差异化核心：**AI agent 与人类成员同为 workspace �
 
 > **agent 与技能、工具的绑定与授权唯一权威定义在 skill.md**（四层解耦：定义—版本—安装—绑定；绑定携带具体 `skill_version_id`，支持灰度/回滚）。本模块**不重复建表**（R1/MES-2 必修-3：`agent_skill_bindings`、`agent_tool_bindings`、`tools` 表已全部删除）：
 > - 技能绑定 = skill.md 的 `agent_skills`（经 `skill_installations` 引用版本）；
-> - **工具权限并入 skill 的能力语义**：工具由技能声明（`required_capabilities`），安装时按最小权限授予（`skill_installations.granted_capabilities`），**权限分级（`read_only`/`write`/`confirm_required`）作为能力条目上的 `permission` 字段表达**（见 skill.md），**不存在独立的工具目录主键（`tools`/`agent_tool_bindings` 表已删除，无工具主键可冻结）**；高风险能力默认 `confirm_required`，执行时经统一 `approvals` 闸门（README §6.10）；
+> - **工具权限并入 skill 的能力语义**：工具由技能声明（`required_capabilities`），安装时按最小权限授予（`skill_installations.granted_capabilities`），**权限分级（`read_only`/`write`/`confirm_required`）作为能力条目上的 `permission` 字段表达**（见 skill.md）；授权条目另可带 `enabled`（默认 `true`），`PATCH enabled=false` 时保留该条目供 UI 展示与再次启用，但入队归一必须过滤它，禁止进入运行授权快照；**不存在独立的工具目录主键（`tools`/`agent_tool_bindings` 表已删除，无工具主键可冻结）**；高风险能力默认 `confirm_required`，执行时经统一 `approvals` 闸门（README §6.10）；
 > - `GET/POST/DELETE /agents/{id}/skills`、`/agents/{id}/tools` 等端点操作的均为 skill.md 的安装/绑定/授权实体（薄封装，不新增数据模型）；其中 `/agents/{id}/tools` 系列端点操作的为 `skill_installations.granted_capabilities` 的**能力条目**（`capability` key + `permission` 的薄封装，**无工具主键**）；
 > - 入队时绑定版本与授权清单冻结进 `task_executions.config_snapshot`（`skill_versions` + `capability_grants`，README §6.11）。
 
@@ -312,7 +312,7 @@ erDiagram
 | GET | `/api/v1/agents/{id}/tools` | 列出绑定的能力条目（`skill_installations.granted_capabilities`，capability key + permission，**无工具主键**） |
 | POST | `/api/v1/agents/{id}/tools` | 绑定能力条目（`{"capability": "<key>", "permission": "..."}`，带 permission） |
 | DELETE | `/api/v1/agents/{id}/tools/{capability_key}` | 解绑该能力条目 |
-| PATCH | `/api/v1/agents/{id}/tools/{capability_key}` | 改该 capability 条目的 permission / 启停 |
+| PATCH | `/api/v1/agents/{id}/tools/{capability_key}` | 改该 capability 条目的 permission / 启停（禁用持久化为条目 `enabled=false`，运行授权过滤；可再次启用） |
 | GET | `/api/v1/agents/{id}/config-versions` | 配置版本历史 |
 | POST | `/api/v1/agents/{id}/config-versions/{version_id}:rollback` | 回滚到指定版本 |
 | GET | `/api/v1/agents/{id}/executions` | 该 agent 的运行历史（只读，源自 runtime 模块） |
@@ -487,7 +487,7 @@ erDiagram
 
 - 游标分页：agent 列表按 `(lifecycle_status, created_at, id)` 排序编码游标；`next_cursor=null` 表示末页。
 - 鉴权：
-  - 读取 agent：workspace 成员可见 `visibility='workspace'` 的 agent；`private` 仅所有者与 admin 可见。
+  - 读取 agent：workspace 成员可见 `visibility='workspace'` 的 agent；`private` 仅所有者与 admin 可见。该约束同时适用于 agent REST、成员名册列表/详情与实时 roster 事件，禁止从统一名册旁路枚举 private agent。
   - 写配置 / 绑定 / 生命周期：所有者或 admin（按 workspace 编辑策略）。
   - 触发（分派 / @）：与可见性一致；`private` agent 仅所有者可触发。
   - 转移所有权：仅当前所有者或 admin。
@@ -498,12 +498,14 @@ erDiagram
 
 | 频道 | 事件 | 说明 |
 |------|------|------|
-| `workspace:{ws}:agents` | `agent.created` / `agent.updated` / `agent.deleted` | 列表与候选实时刷新 |
-| `workspace:{ws}:agents` | `agent.lifecycle_changed` | 暂停 / 停用 / 归档 / 恢复，含前后状态 |
+| `workspace:{ws}:agents` | `agent.created` / `agent.updated` / `agent.deleted` / `agent.lifecycle_changed` | 仅 `visibility=workspace` 的 agent 列表、候选、配置与状态实时刷新 |
+| `agent:{id}` | `agent.created` / `agent.updated` / `agent.deleted` / `agent.lifecycle_changed` | private agent 的全部域事件，以及 skill binding / capability grant 变更；payload 带完整变更对象、`visibility` 与 `updated_at`，详情页按 `id` 轻量重拉 |
 | `agent:{id}:presence` | `agent.presence` | 容量三元组「运行中 N / 排队 M / 需审批 K」（README §6.12，由 `task_executions` 聚合 + `approvals` 计数推导） |
 | `issue:{id}:runs` | `execution.queued` / `execution.started` / `execution.progress` / `execution.awaiting_approval` / `execution.completed` / `execution.failed` | 运行状态回流（事件词汇与 runtime.md 一致，均取自 README §6.7 注册表），卡片忙碌指示与进度条 |
 | `workspace:{ws}:agents` | `agent.trigger_skipped` | 分派 / @ 因 paused/disabled 未触发 |
 | `workspace:{ws}:approvals` / `execution:{id}` | `approval.created` / `approval.decided` | 高风险工具需人工确认——**统一 `approvals` 实体**（README §6.10），带内联批准 / 拒绝与过期时间 |
+
+`agent:{id}` 与 `agent:{id}:presence` 均通过 agent 资源 checker 重做可见性鉴权：workspace 可见 agent 对成员开放，`private` 仅所有者/admin 可订阅。鉴权不只发生在订阅时；gateway 在 replay 每页及每个 live frame 发送前重新鉴权，visibility/ownership 改变后立即退订并返回 `forbidden`，旧订阅不得继续收帧。新建 agent 在首个 projector 事件前尚无 `realtime_channels` 行，authorizer 必须先由 `agents` 表解析 workspace 再运行 checker，禁止首帧竞态；删除后的非 presence 频道仍允许所有者/admin 接收并重放终态，presence 则立即拒绝。private agent 的创建、配置、状态、删除、roster、工具与技能绑定变更一律不得发到仅做 workspace 成员校验的频道，尤其不得广播 agent/member id、`system_instructions`、`model_config` 或 capability。工具/绑定类 `agent.updated` 的 `change_type` 分别为 `tool_grant_changed` / `bound` / `binding_updated` / `unbound`；payload 携带该项完整字段、当前 `visibility`、单调收敛水位 `updated_at`，客户端据 agent id 轻量重拉详情，不在前端重算任意嵌套状态。
 
 帧示例：
 
@@ -701,7 +703,7 @@ stateDiagram-v2
 
 - **在线 / 容量状态**：agent 呈现从二元「空闲 / 处理中」改为 **「运行中 N / 排队 M / 需审批 K」**（README §6.12），由 `task_executions` 按 agent 聚合 + `approvals` 计数推导，经 `agent:{id}:presence` 频道推送；列表与卡片上的指示即时变化（处理中辅以脉冲动画，但**动画/颜色不作为唯一状态信号**，恒有文字/图标，README §6.12）。
 - **运行进度**：每次运行有独立事件流，把「开始 / 阶段进展 / 完成 / 失败」推给订阅了该 issue 或该 agent 的客户端，卡片与详情页实时刷新。
-- **配置 / 状态变更**：agent 的生命周期与配置变更经 workspace 级频道广播，多端同步。
+- **配置 / 状态变更**：workspace 可见 agent 的域事件经 workspace 级频道广播；private agent 的创建、配置、生命周期、删除以及所有 skill binding / capability grant 变更均经受可见性保护的 `agent:{id}` 频道广播，多端同步且不泄露私密配置或能力。
 - **降级**：`/ws` 断线时回退到带 `updated_at` 的轮询（如每 5s 拉一次相关 agent 的轻量状态），重连后凭 `since_seq` 增量补齐。
 - **一致性**：所有实时事件携带单调递增 `seq` / `updated_at`，客户端按序去重，避免乱序覆盖。
 

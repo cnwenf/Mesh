@@ -100,6 +100,7 @@ async def list_members(
 ) -> dict:
     service = _member_service(request)
     items, next_cursor = await service.list_members(
+        actor=context.member,
         workspace_id=context.workspace.id,
         member_type=member_type,
         status=status,
@@ -175,7 +176,9 @@ async def get_member(
 ) -> dict:
     service = _member_service(request)
     detail = await service.get_member(
-        workspace_id=context.workspace.id, member_id=_path_uuid(member_id)
+        actor=context.member,
+        workspace_id=context.workspace.id,
+        member_id=_path_uuid(member_id),
     )
     return {"data": detail}
 

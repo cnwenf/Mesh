@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.expression import tuple_
 
+from mesh.agent.capabilities import CapabilityInvalidError, normalize_capability_declarations
 from mesh.auth.audit import write_audit
 from mesh.auth.rbac import role_satisfies
 from mesh.db.models.member import Member
@@ -46,6 +47,7 @@ from mesh.db.models.skill import (
 )
 from mesh.db.tenant import set_tenant_context
 from mesh.errors import (
+    BusinessRuleError,
     ConflictError,
     ForbiddenError,
     LockedError,
@@ -140,6 +142,18 @@ class SkillService:
         """skill.md §3.4: create / write / install / bind = admin-level role."""
         if not role_satisfies(actor.role, "agent:manage"):
             raise ForbiddenError("skill management requires an admin role")
+
+    @staticmethod
+    def validate_required_capabilities(required: list | None) -> None:
+        """Validate declaration-only shape before persisting a draft skill."""
+        try:
+            normalize_capability_declarations(required or [])
+        except CapabilityInvalidError as exc:
+            raise BusinessRuleError(
+                "required capabilities are malformed",
+                code="capability_invalid",
+                details={"reason": str(exc)},
+            ) from exc
 
     # -- loading -----------------------------------------------------------------
 
@@ -325,6 +339,7 @@ class SkillService:
     ) -> dict:
         """Create a user-sourced skill definition (status=draft, no version)."""
         self.require_manage(actor)
+        self.validate_required_capabilities(required_capabilities)
         if slug is not None and not SLUG_PATTERN.match(slug):
             raise ValidationError(
                 "invalid slug",
@@ -521,6 +536,8 @@ class SkillService:
     ) -> dict:
         """Update metadata and/or run a lifecycle transition (§4.4)."""
         self.require_manage(actor)
+        if patch.required_capabilities is not None:
+            self.validate_required_capabilities(patch.required_capabilities)
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             skill = await self.load_skill(session, workspace_id, skill_id)

@@ -18,6 +18,7 @@ from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select, text
 
+from mesh.db.models.agent import Agent
 from mesh.db.models.chat import ChatSession
 from mesh.db.models.member import Member
 from mesh.db.models.realtime import RealtimeChannel
@@ -208,6 +209,19 @@ class DefaultChannelAuthorizer:
                 return None
             return owner
 
+        # agent:{id} / agent:{id}:presence: a newly-created agent has no
+        # realtime_channels row until its first resource event is projected.
+        # Resolve from the agent table first, then require the registered
+        # checker to enforce private-agent visibility.
+        if info.entity == "agent":
+            owner = await self._agent_workspace(principal, info.key)
+            if owner is None:
+                return None
+            checker = self._prefix_checkers.get(info.entity)
+            if checker is None or not await checker(principal, channel):
+                return None
+            return owner
+
         owner = await self._owning_workspace(principal, channel)
         if owner is None:
             return None
@@ -276,6 +290,34 @@ class DefaultChannelAuthorizer:
                     select(ChatSession.workspace_id).where(
                         ChatSession.id == session_id,
                         ChatSession.workspace_id == workspace_id,
+                    )
+                )
+            if owner is not None:
+                return owner
+        return None
+
+    async def _agent_workspace(
+        self, principal: Principal, agent_raw: str
+    ) -> uuid.UUID | None:
+        """Resolve a fresh agent resource channel without a projector row."""
+        is_presence = agent_raw.endswith(":presence")
+        raw_id = agent_raw.removesuffix(":presence")
+        try:
+            agent_id = uuid.UUID(raw_id)
+        except ValueError:
+            return None
+        for workspace_id in sorted(principal.workspace_ids):
+            async with self._session_factory() as session:
+                await set_tenant_context(session, workspace_id)
+                owner = await session.scalar(
+                    select(Agent.workspace_id).where(
+                        Agent.id == agent_id,
+                        Agent.workspace_id == workspace_id,
+                        *(
+                            (Agent.deleted_at.is_(None),)
+                            if is_presence
+                            else ()
+                        ),
                     )
                 )
             if owner is not None:

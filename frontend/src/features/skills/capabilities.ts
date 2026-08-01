@@ -1,4 +1,4 @@
-import type { CapabilityDeclaration, CapabilityPermission } from './types';
+import type { CapabilityDeclaration, CapabilityGrant, CapabilityPermission } from './types';
 
 export interface EffectiveCapability {
   readonly capability: string;
@@ -44,6 +44,15 @@ export function effectiveCapabilities(
   }
   return [...byCapability.values()].sort((left, right) =>
     left.capability.localeCompare(right.capability),
+  );
+}
+
+/** Installation grants add runtime enabled state on top of declaration fields. */
+export function effectiveGrants(
+  grants: readonly CapabilityGrant[],
+): readonly EffectiveCapability[] {
+  return effectiveCapabilities(
+    grants.filter((grant) => typeof grant === 'string' || grant.enabled !== false),
   );
 }
 

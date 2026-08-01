@@ -331,6 +331,19 @@ class RealtimeSession:
         if channel in self._state.subscriptions:
             await self._note_view_presence(channel, owner, joined=True)
 
+    async def _current_channel_owner(self, channel: str):
+        """Re-evaluate dynamic resource ACLs for replay and live delivery."""
+        principal = self._state.principal
+        if principal is None:
+            return None
+        return await self._authorizer.authorize(principal, channel)
+
+    async def _revoke_subscription(self, channel: str) -> None:
+        """Drop an authorization-stale channel before forwarding its frame."""
+        self._state.subscriptions.discard(channel)
+        await self._note_view_presence(channel, None, joined=False)
+        await self._send_error("forbidden", "not authorized for channel", channel=channel)
+
     async def _replay(self, channel: str, resume_from: int, owner_workspace) -> None:
         """Replay stored events from ``resume_from``; emit resync_required when stale.
 
@@ -339,6 +352,11 @@ class RealtimeSession:
         owning workspace's tenant GUC is set on every session so the queries work
         under the restricted (RLS-enforced) app role (M1, §6.2 rule 5).
         """
+        current_owner = await self._current_channel_owner(channel)
+        if current_owner is None:
+            await self._revoke_subscription(channel)
+            return
+        owner_workspace = current_owner
         async with self._session_factory() as session:
             await set_tenant_context(session, owner_workspace)
             watermark = await session.scalar(
@@ -367,6 +385,11 @@ class RealtimeSession:
 
         next_seq = resume_from
         while True:
+            current_owner = await self._current_channel_owner(channel)
+            if current_owner is None:
+                await self._revoke_subscription(channel)
+                return
+            owner_workspace = current_owner
             async with self._session_factory() as session:
                 await set_tenant_context(session, owner_workspace)
                 rows = (
@@ -377,6 +400,10 @@ class RealtimeSession:
                         .limit(self._replay_page_size)
                     )
                 ).all()
+            current_owner = await self._current_channel_owner(channel)
+            if current_owner is None:
+                await self._revoke_subscription(channel)
+                return
             for seq, event, payload in rows:
                 await self._send(
                     {
@@ -391,6 +418,11 @@ class RealtimeSession:
                 break
             next_seq = rows[-1][0] + 1
 
+        current_owner = await self._current_channel_owner(channel)
+        if current_owner is None:
+            await self._revoke_subscription(channel)
+            return
+        owner_workspace = current_owner
         async with self._session_factory() as session:
             await set_tenant_context(session, owner_workspace)
             last_seq = (
@@ -410,6 +442,9 @@ class RealtimeSession:
                 if self._closed.is_set():
                     return
                 if channel in self._state.subscriptions:
+                    if await self._current_channel_owner(channel) is None:
+                        await self._revoke_subscription(channel)
+                        continue
                     await self._send(frame)
         except asyncio.CancelledError:
             raise

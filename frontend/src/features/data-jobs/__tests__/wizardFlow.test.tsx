@@ -129,6 +129,30 @@ beforeEach(() => {
 });
 
 describe('ImportWizard full flow', () => {
+  it('passes selected files to the attachment uploader', () => {
+    mockUploads = [
+      {
+        localId: 'uploading-1',
+        phase: 'uploading',
+        fileName: 'issues.csv',
+        attachmentId: null,
+        progress: 0.5,
+      },
+    ];
+    renderWithProviders(
+      <ImportWizard
+        open
+        onClose={vi.fn()}
+        workspaceId="ws-1"
+        client={makeClient(routedRequest({}))}
+      />,
+    );
+    expect(screen.getByTestId('upload-uploading')).toHaveTextContent('50%');
+    const file = new File(['title'], 'issues.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByTestId('import-file-input'), { target: { files: [file] } });
+    expect(mockAddFiles).toHaveBeenCalledWith(expect.objectContaining({ 0: file, length: 1 }));
+  });
+
   it('walks upload → mapping(edit/remove) → validate → confirm → progress', async () => {
     mockUploads = [READY_UPLOAD];
     const created = makeJob({
@@ -149,7 +173,12 @@ describe('ImportWizard full flow', () => {
         { row: 3, field: 'title', code: 'required_field_missing', message: 'title missing' },
       ],
     });
-    const running = makeJob({ status: 'running', total_rows: 3, succeeded_rows: 2, failed_rows: 1 });
+    const running = makeJob({
+      status: 'running',
+      total_rows: 3,
+      succeeded_rows: 2,
+      failed_rows: 1,
+    });
     const request = routedRequest({
       'POST /api/v1/data-jobs/import': created,
       'POST /api/v1/data-jobs/import/dj-1/validate': validated,
@@ -160,7 +189,9 @@ describe('ImportWizard full flow', () => {
     );
 
     // upload 步:有就绪上传 → Next 可用,点击进入 mapping。
-    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
 
     // mapping 步:改首列 transform + 删除一列。
@@ -192,8 +223,6 @@ describe('ImportWizard full flow', () => {
     );
   });
 
-
-
   it('surfaces a toast and stays on upload when create fails (typed + untyped error)', async () => {
     mockUploads = [READY_UPLOAD];
     const request = routedRequest({});
@@ -214,11 +243,136 @@ describe('ImportWizard full flow', () => {
     // 异步刷新;覆盖率插桩下第二次同步 click 可能落在按钮仍 busy 的瞬间被吞掉,
     // 使 request 停留 1 次。等按钮重新可用(失败态已落定)再点击,与 i18n 文案无关。
     await waitFor(() =>
-      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(false),
+      expect((screen.getByRole('button', { name: 'Next' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
     );
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(screen.queryByTestId('validate-summary')).toBeNull();
+  });
+
+  it('recreates a JSON job with the edited mapping and target project after going back', async () => {
+    mockUploads = [{ ...READY_UPLOAD, fileName: 'issues.json' }];
+    const created = makeJob({
+      format: 'json',
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const request = routedRequest({ 'POST /api/v1/data-jobs/import': created });
+    renderWithProviders(
+      <ImportWizard
+        open
+        onClose={vi.fn()}
+        workspaceId="ws-1"
+        targetProjectId="project-1"
+        client={makeClient(request)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1][2]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          format: 'json',
+          auto_infer: false,
+          mapping: created.mapping,
+          target_project_id: 'project-1',
+        }),
+      }),
+    );
+  });
+
+  it('polls validation and renders a failed terminal job with its report', async () => {
+    mockUploads = [READY_UPLOAD];
+    const created = makeJob({
+      total_rows: 2,
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const validating = makeJob({ ...created, status: 'validating' });
+    const validated = makeJob({ ...created, status: 'pending', error_report: undefined });
+    const failed = makeJob({
+      ...created,
+      status: 'failed',
+      failure_reason: 'invalid_rows',
+      result_attachment_id: 'report-1',
+    });
+    const request = routedRequest({
+      'POST /api/v1/data-jobs/import': created,
+      'POST /api/v1/data-jobs/import/dj-1/validate': validating,
+      'GET /api/v1/data-jobs/dj-1': validated,
+      'POST /api/v1/data-jobs/import/dj-1/run': failed,
+    });
+    renderWithProviders(
+      <ImportWizard open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await screen.findByTestId('validate-summary', {}, { timeout: 2000 });
+    expect(request).toHaveBeenCalledWith('GET', '/api/v1/data-jobs/dj-1', expect.anything());
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    expect(await screen.findByText('Failure reason: invalid_rows')).toBeTruthy();
+    expect(screen.getByTestId('error-report-link')).toHaveAttribute(
+      'href',
+      '/api/v1/data-jobs/dj-1/download',
+    );
+  });
+
+  it('keeps mapping and confirmation steps usable when their requests fail', async () => {
+    mockUploads = [READY_UPLOAD];
+    const created = makeJob({
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const request = routedRequest({
+      'POST /api/v1/data-jobs/import': created,
+      'POST /api/v1/data-jobs/import/dj-1/validate': new Error('validation failed'),
+    });
+    renderWithProviders(
+      <ImportWizard open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Title')).toBeTruthy();
+  });
+
+  it('keeps the confirmation step open when starting the import fails', async () => {
+    mockUploads = [READY_UPLOAD];
+    const created = makeJob({
+      mapping: {
+        columns: [{ source: 'Title', target: 'title', transform: { type: 'direct' } }],
+      },
+    });
+    const request = routedRequest({
+      'POST /api/v1/data-jobs/import': created,
+      'POST /api/v1/data-jobs/import/dj-1/validate': created,
+      'POST /api/v1/data-jobs/import/dj-1/run': new Error('run failed'),
+    });
+    renderWithProviders(
+      <ImportWizard open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await screen.findByText('Title');
+    fireEvent.click(screen.getByRole('button', { name: 'Validate (dry run)' }));
+    await screen.findByTestId('validate-summary');
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByTestId('confirm-import-button'));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(screen.getByTestId('confirm-import-button')).toBeTruthy();
+    expect(screen.queryByTestId('progress-status')).toBeNull();
   });
 });
 
@@ -325,7 +479,11 @@ describe('ExportDialog branches', () => {
   });
 
   it('shows failure reason + toast on a failed export', async () => {
-    const failed = makeJob({ kind: 'export', status: 'failed', failure_reason: 'export_too_large' });
+    const failed = makeJob({
+      kind: 'export',
+      status: 'failed',
+      failure_reason: 'export_too_large',
+    });
     const request = routedRequest({ 'POST /api/v1/data-jobs/export': failed });
     renderWithProviders(
       <ExportDialog open onClose={vi.fn()} workspaceId="ws-1" client={makeClient(request)} />,

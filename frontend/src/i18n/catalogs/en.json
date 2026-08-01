@@ -2205,7 +2205,7 @@
     "skills.agentSkillsTitle": "Skills",
     "skills.agentToolsEmptyDescription": "Bound skills do not grant any capabilities.",
     "skills.agentToolsEmptyTitle": "No effective tools",
-    "skills.agentToolsTitle": "Effective tools",
+    "skills.agentToolsTitle": "Tool permissions",
     "skills.agentVersionCol": "Version",
     "skills.approvalRequiredToast": "A third-party skill is waiting for review.",
     "skills.approveFailed": "Approval failed.",
@@ -2325,10 +2325,15 @@
     "skills.tab.scripts": "Scripts",
     "skills.tab.triggers": "Triggers",
     "skills.tab.versions": "Version history",
+    "skills.toolAdd": "Add capability",
     "skills.toolCapabilityCol": "Capability",
+    "skills.toolCapabilityInput": "Capability key",
     "skills.toolEnabledCol": "Enabled",
+    "skills.toolManageHint": "Capability entries are stored in granted skill permissions. High-risk capabilities default to confirmation required.",
+    "skills.toolNewPermission": "New capability permission",
     "skills.toolPermissionCol": "Permission",
-    "skills.toolReadOnlyHint": "Effective permissions come from installed skill grants and are read-only here.",
+    "skills.toolRemove": "Remove",
+    "skills.toolSaveFailed": "Could not update the capability grant. Try again.",
     "skills.triggerType.keyword": "Keyword",
     "skills.triggerType.semantic": "Semantic",
     "skills.triggerType.tag": "Tag",
@@ -2617,5 +2622,5 @@
     "chat.contextBar.expand": "Show context",
     "inbox.preview.notFound": "This notification wasn’t found — it may have been archived or is outside the loaded list."
   },
-  "version": "090a86dc"
+  "version": "6f025a13"
 }

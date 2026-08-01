@@ -176,9 +176,11 @@ describe('MarketplacePage', () => {
   it('预览按钮打开预览对话框', async () => {
     setup();
     renderWithProviders(<MarketplacePage />);
-    await screen.findByTestId('market-preview-1');
-    fireEvent.click(screen.getByTestId('market-preview-1'));
-    expect(await screen.findByTestId('market-preview-dialog')).toBeTruthy();
+    await screen.findByTestId('market-preview-2');
+    fireEvent.click(screen.getByTestId('market-preview-2'));
+    const preview = await screen.findByTestId('market-preview-dialog');
+    expect(preview).toHaveTextContent(/No|否/);
+    expect(preview).toHaveTextContent(/Contains scripts|含脚本/);
   });
 
   it('预览对话框内导入(无 manifest)→ 提示', async () => {
@@ -190,5 +192,30 @@ describe('MarketplacePage', () => {
     fireEvent.click(screen.getByTestId('market-preview-import'));
     // dialog closes + no wizard opens (manifest empty path)
     await waitFor(() => expect(screen.queryByTestId('import-step-source')).toBeNull());
+  });
+
+  it('预览与导入对话框均可通过各自关闭回调退出', async () => {
+    setup();
+    renderWithProviders(<MarketplacePage />);
+
+    fireEvent.click(await screen.findByTestId('market-preview-1'));
+    await screen.findByTestId('market-preview-dialog');
+    fireEvent.click(screen.getByRole('button', { name: /Close dialog|关闭对话框/ }));
+    await waitFor(() => expect(screen.queryByTestId('market-preview-dialog')).toBeNull());
+
+    fireEvent.click(screen.getByTestId('market-import-1'));
+    await screen.findByTestId('import-scripts');
+    fireEvent.click(screen.getByRole('button', { name: /Close dialog|关闭对话框/ }));
+    await waitFor(() => expect(screen.queryByTestId('import-scripts')).toBeNull());
+  });
+
+  it('导入向导完成拒绝后清理所选市场条目', async () => {
+    setup();
+    renderWithProviders(<MarketplacePage />);
+
+    fireEvent.click(await screen.findByTestId('market-import-2'));
+    await screen.findByTestId('import-scripts');
+    fireEvent.click(screen.getByTestId('import-reject'));
+    await waitFor(() => expect(screen.queryByTestId('import-scripts')).toBeNull());
   });
 });

@@ -25,12 +25,14 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mesh.auth.audit import write_audit
+from mesh.auth.rbac import role_satisfies
 from mesh.db.constraints import violates
+from mesh.db.models.agent import Agent
 from mesh.db.models.member import Member
 from mesh.db.models.skill import (
     Skill,
@@ -310,6 +312,7 @@ class InstallationService:
     async def list_installations(
         self,
         *,
+        actor: Member,
         workspace_id: uuid.UUID,
         skill_id: uuid.UUID | None = None,
         scope: str = "all",
@@ -327,6 +330,27 @@ class InstallationService:
                 SkillInstallation.workspace_id == workspace_id,
                 SkillInstallation.deleted_at.is_(None),
             )
+            if not role_satisfies(actor.role, "agent:manage"):
+                stmt = stmt.outerjoin(
+                    Agent,
+                    and_(
+                        SkillInstallation.scope == "agent",
+                        Agent.workspace_id == SkillInstallation.workspace_id,
+                        Agent.id == SkillInstallation.agent_id,
+                        Agent.deleted_at.is_(None),
+                    ),
+                ).where(
+                    or_(
+                        SkillInstallation.scope == "workspace",
+                        and_(
+                            Agent.id.is_not(None),
+                            or_(
+                                Agent.visibility == "workspace",
+                                Agent.owner_user_id == actor.user_id,
+                            ),
+                        ),
+                    )
+                )
             if skill_id is not None:
                 stmt = stmt.where(SkillInstallation.skill_id == skill_id)
             if scope != "all":

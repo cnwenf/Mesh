@@ -155,6 +155,77 @@ async def test_create_agent_emits_agent_created_and_member_added(session_factory
 
 
 @pytest.mark.unit
+async def test_private_agent_events_keep_detail_payloads_on_the_protected_resource_channel(
+    session_factory, agent_service
+):
+    workspace = await _make_workspace(session_factory)
+    owner = await _make_member(session_factory, workspace, role="owner")
+    created = await _create_agent(
+        agent_service,
+        owner,
+        workspace,
+        visibility="private",
+        system_instructions="private instructions",
+        model_config={"model": "private-model", "temperature": 0.2},
+    )
+    agent_id = uuid.UUID(created["id"])
+
+    updated = await agent_service.update_config(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=agent_id,
+        system_instructions="rotated private instructions",
+    )
+    await agent_service.rollback_config(
+        actor=owner,
+        workspace_id=workspace.id,
+        agent_id=agent_id,
+        version_id=uuid.UUID(created["active_config_version_id"]),
+    )
+    await agent_service.delete_agent(
+        actor=owner, workspace_id=workspace.id, agent_id=agent_id
+    )
+
+    detail_events = [
+        *(await _events(session_factory, "agent.created")),
+        *(await _events(session_factory, "agent.updated")),
+    ]
+    own_events = [event for event in detail_events if event.payload["data"]["id"] == created["id"]]
+    assert len(own_events) == 3
+    assert all(event.payload["channel"] == f"agent:{agent_id}" for event in own_events)
+    assert not [
+        event
+        for event in own_events
+        if event.payload["channel"] == f"workspace:{workspace.id}:agents"
+    ]
+    deleted = [
+        event
+        for event in await _events(session_factory, "agent.deleted")
+        if event.payload["data"]["id"] == created["id"]
+    ]
+    assert len(deleted) == 1
+    assert deleted[0].payload["channel"] == f"agent:{agent_id}"
+    assert deleted[0].payload["data"]["visibility"] == "private"
+    assert deleted[0].payload["data"]["updated_at"]
+
+    private_roster_events = [
+        *(await _events(session_factory, "member.added")),
+        *(await _events(session_factory, "member.removed")),
+    ]
+    private_roster_events = [
+        event
+        for event in private_roster_events
+        if event.payload["data"]["member_id"] == created["member"]["id"]
+    ]
+    assert len(private_roster_events) == 2
+    assert all(
+        event.payload["channel"] == f"agent:{agent_id}"
+        for event in private_roster_events
+    )
+    assert updated["system_instructions"] == "rotated private instructions"
+
+
+@pytest.mark.unit
 async def test_create_agent_is_member_self_service_but_not_guest(session_factory, agent_service):
     """§4.4/§4.5/F7: any non-guest member may create (becoming owner); guests read-only."""
     workspace = await _make_workspace(session_factory)

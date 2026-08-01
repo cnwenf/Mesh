@@ -32,6 +32,7 @@ interface World {
 }
 
 interface ReadyRoute {
+  key: string;
   path: string;
   testId: string;
 }
@@ -244,46 +245,95 @@ async function bootstrapWorld(): Promise<World> {
 
 function targetRoutes(): ReadyRoute[] {
   return [
-    { path: '/projects', testId: 'projects-view' },
-    { path: `/projects/${world.projectId}`, testId: 'project-detail-header' },
-    { path: `/projects/${world.projectId}/settings`, testId: 'settings-form' },
-    { path: '/cycles', testId: `cycle-row-${world.cycleId}` },
-    { path: `/agents/${world.agentId}`, testId: 'agent-detail-page' },
-    { path: '/squads', testId: 'squad-grid' },
-    { path: `/squads/${world.squadId}`, testId: 'squad-detail-page' },
+    { key: '01-projects', path: '/projects', testId: 'projects-view' },
     {
+      key: '02-project-detail',
+      path: `/projects/${world.projectId}`,
+      testId: 'project-detail-header',
+    },
+    {
+      key: '03-project-settings',
+      path: `/projects/${world.projectId}/settings`,
+      testId: 'settings-form',
+    },
+    { key: '04-cycles', path: '/cycles', testId: `cycle-row-${world.cycleId}` },
+    {
+      key: '05-agent-detail',
+      path: `/agents/${world.agentId}`,
+      testId: 'agent-detail-page',
+    },
+    { key: '06-squads', path: '/squads', testId: 'squad-grid' },
+    {
+      key: '07-squad-detail',
+      path: `/squads/${world.squadId}`,
+      testId: 'squad-detail-page',
+    },
+    {
+      key: '08-squad-task',
       path: `/squads/${world.squadId}/tasks/${world.taskId}`,
       testId: 'squad-task-page',
     },
-    { path: '/autopilots', testId: 'autopilots-page' },
-    { path: '/autopilots/new', testId: 'autopilot-editor' },
-    { path: `/autopilots/${world.autopilotId}`, testId: 'autopilot-detail' },
-    { path: '/webhooks', testId: 'webhook-config-page' },
-    { path: '/runtimes', testId: 'runtimes-table' },
-    { path: `/runtimes/${world.runtimeId}`, testId: 'runtime-detail-page' },
-    { path: '/skills', testId: 'skills-page-title' },
-    { path: '/skills/marketplace', testId: 'marketplace-title' },
-    { path: `/skills/${world.skillId}`, testId: 'skill-detail' },
-    { path: '/integrations', testId: 'integrations-page' },
-    { path: `/integrations/${world.integrationId}`, testId: 'integration-detail' },
+    { key: '09-autopilots', path: '/autopilots', testId: 'autopilots-page' },
+    { key: '10-autopilot-new', path: '/autopilots/new', testId: 'autopilot-editor' },
     {
+      key: '11-autopilot-detail',
+      path: `/autopilots/${world.autopilotId}`,
+      testId: 'autopilot-detail',
+    },
+    { key: '12-webhook-config', path: '/webhooks', testId: 'webhook-config-page' },
+    { key: '13-runtimes', path: '/runtimes', testId: 'runtimes-table' },
+    {
+      key: '14-runtime-detail',
+      path: `/runtimes/${world.runtimeId}`,
+      testId: 'runtime-detail-page',
+    },
+    { key: '15-skills', path: '/skills', testId: 'skills-page-title' },
+    {
+      key: '16-skill-marketplace',
+      path: '/skills/marketplace',
+      testId: 'marketplace-title',
+    },
+    {
+      key: '17-skill-detail',
+      path: `/skills/${world.skillId}`,
+      testId: 'skill-detail',
+    },
+    { key: '18-integrations', path: '/integrations', testId: 'integrations-page' },
+    {
+      key: '19-integration-detail',
+      path: `/integrations/${world.integrationId}`,
+      testId: 'integration-detail',
+    },
+    {
+      key: '20-webhook-subscriptions',
       path: '/webhook-subscriptions',
       testId: `webhook-card-${world.subscriptionId}`,
     },
     {
+      key: '21-labels',
       path: `/w/${world.workspaceSlug}/settings/labels`,
       testId: 'labels-panel',
     },
     {
+      key: '22-custom-fields',
       path: `/w/${world.workspaceSlug}/settings/custom-fields`,
       testId: 'custom-fields-panel',
     },
     {
+      key: '23-data-management',
       path: `/w/${world.workspaceSlug}/settings/data`,
       testId: 'data-management-section',
     },
-    { path: '/this-route-does-not-exist', testId: 'notfound-home' },
-    { path: '/auth/oauth/callback/github', testId: 'oauth-callback-error' },
+    {
+      key: '24-not-found',
+      path: '/this-route-does-not-exist',
+      testId: 'notfound-home',
+    },
+    {
+      key: '25-oauth-error',
+      path: '/auth/oauth/callback/github',
+      testId: 'oauth-callback-error',
+    },
   ];
 }
 
@@ -297,10 +347,40 @@ async function dismissOnboarding(page: Page): Promise<void> {
 
 async function openReady(page: Page, route: ReadyRoute): Promise<void> {
   await page.goto(route.path);
-  await expect(page.getByTestId(route.testId).first()).toBeVisible();
+  const target = page.getByTestId(route.testId).first();
+  // A freshly bootstrapped real workspace can finish resolving its active
+  // workspace context just after the first client-side route mount. Recover
+  // once with a new document navigation; response/page-error collectors still
+  // fail the scenario if the first attempt exposed a real server/runtime error.
+  if (!(await target.isVisible({ timeout: 10_000 }).catch(() => false))) {
+    await page.goto(route.path);
+  }
+  await expect(target).toBeVisible();
   // The checklist is loaded asynchronously after the target page. Dismiss it
   // after readiness so screenshots cannot accidentally capture the overlay.
   await dismissOnboarding(page);
+}
+
+async function prepareEvidenceState(page: Page, route: ReadyRoute): Promise<void> {
+  if (route.key === '05-agent-detail') {
+    await page.getByTestId('agent-tab-skills').click();
+    await expect(page.getByTestId('agent-tools-table')).toBeVisible();
+    await expect(page.getByTestId('agent-tool-enabled-exec:shell')).not.toBeChecked();
+    await expect(page.getByTestId('agent-tool-permission-exec:shell')).toHaveValue('read_only');
+  }
+  if (route.key === '08-squad-task') {
+    const kanban = page.getByTestId('squad-view-kanban');
+    await kanban.click();
+    await expect(kanban).toHaveAttribute('aria-selected', 'true');
+  }
+  if (route.key === '19-integration-detail') {
+    await page.getByTestId('integration-tab-health').click();
+    await expect(page.getByTestId('integration-health-panel')).toBeVisible();
+  }
+  if (route.key === '20-webhook-subscriptions') {
+    await page.getByTestId(`webhook-expand-${world.subscriptionId}`).click();
+    await expect(page.getByTestId(`webhook-detail-${world.subscriptionId}`)).toBeVisible();
+  }
 }
 
 async function setTheme(page: Page, mode: 'light' | 'dark'): Promise<void> {
@@ -329,7 +409,7 @@ function collectUnexpectedFailures(page: Page): {
 } {
   const pageErrors: string[] = [];
   const serverErrors: string[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('pageerror', (error) => pageErrors.push(`${error.message} at ${page.url()}`));
   page.on('response', (response) => {
     if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
   });
@@ -351,25 +431,46 @@ test('all remaining routes are reachable and core controls work against the real
   await page.setViewportSize({ width: 1440, height: 900 });
   await setTheme(page, 'light');
 
-  for (const route of targetRoutes()) await openReady(page, route);
-
-  await openReady(page, { path: '/projects', testId: 'projects-view' });
+  await openReady(page, targetRoutes()[0]!);
   await page.getByTestId('projects-view-grid').click();
   await expect(page.getByTestId(`project-card-${world.projectId}`)).toBeVisible();
   await page.getByTestId('projects-view-list').click();
+  await expect(page.getByTestId(`project-card-${world.projectId}`)).toBeVisible();
 
-  await openReady(page, {
-    path: `/projects/${world.projectId}`,
-    testId: 'project-detail-header',
-  });
-  await page.getByTestId('tab-issues').click();
-  await expect(page.getByTestId('project-issue-list')).toBeVisible();
-  await page.getByTestId('tab-overview').click();
+  await openReady(page, targetRoutes()[1]!);
+  for (const tab of ['issues', 'milestones', 'updates', 'dashboard', 'overview']) {
+    const control = page.getByTestId(`tab-${tab}`);
+    await control.click();
+    await expect(control).toHaveAttribute('aria-selected', 'true');
+  }
 
-  await openReady(page, { path: `/agents/${world.agentId}`, testId: 'agent-detail-page' });
+  await openReady(page, targetRoutes()[2]!);
+  const projectName = page.getByTestId('settings-name');
+  const originalProjectName = await projectName.inputValue();
+  await projectName.fill(`${originalProjectName} interaction draft`);
+  await expect(projectName).toHaveValue(`${originalProjectName} interaction draft`);
+  await projectName.fill(originalProjectName);
+
+  await openReady(page, targetRoutes()[3]!);
+  const cycleFilter = page.getByTestId('cycles-state-filter');
+  await cycleFilter.selectOption('active');
+  await expect(page.getByTestId(`cycle-row-${world.cycleId}`)).toBeVisible();
+  await cycleFilter.selectOption('all');
+
+  await openReady(page, targetRoutes()[4]!);
+  const agentTabs = [
+    ['config', 'agent-panel-config'],
+    ['skills', 'agent-panel-skills'],
+    ['visibility', 'agent-panel-visibility'],
+    ['history', 'agent-panel-history'],
+    ['overview', 'agent-panel-overview'],
+  ] as const;
+  for (const [tab, panel] of agentTabs) {
+    await page.getByTestId(`agent-tab-${tab}`).click();
+    await expect(page.getByTestId(panel)).toBeVisible();
+  }
   await page.getByTestId('agent-tab-skills').click();
   await expect(page.getByTestId('agent-tools-table')).toBeVisible();
-  await expect(page.getByTestId('agent-tool-permission-read:code')).toBeVisible();
   await page.getByTestId('agent-edit-button').click();
   await page.getByTestId('agent-wizard-next').click();
   await page.getByTestId('agent-wizard-next').click();
@@ -377,26 +478,176 @@ test('all remaining routes are reachable and core controls work against the real
   await expect(page.getByTestId('agent-wizard-tool-read:code')).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: /close/i }).click();
 
-  await openReady(page, {
-    path: `/squads/${world.squadId}/tasks/${world.taskId}`,
-    testId: 'squad-task-page',
-  });
-  await page.getByTestId('squad-view-kanban').click();
-  await page.getByTestId('squad-view-tree').click();
+  await openReady(page, targetRoutes()[5]!);
+  const squadSearch = page.getByTestId('squad-filter-q');
+  await squadSearch.fill('no-squad-matches-this-query');
+  await expect(page.getByTestId(`squad-card-${world.squadId}`)).toBeHidden();
+  await squadSearch.fill('');
+  await expect(page.getByTestId(`squad-card-${world.squadId}`)).toBeVisible();
+  await page.getByTestId('squad-open-create').click();
+  await expect(page.getByTestId('squad-create-form')).toBeVisible();
+  await page.keyboard.press('Escape');
 
-  await openReady(page, {
-    path: `/integrations/${world.integrationId}`,
-    testId: 'integration-detail',
-  });
-  await page.getByTestId('integration-tab-health').click();
-  await expect(page.getByTestId('integration-health-panel')).toBeVisible();
+  await openReady(page, targetRoutes()[6]!);
+  await page.getByTestId('squad-edit-toggle').click();
+  await expect(page.getByTestId('squad-edit-form')).toBeVisible();
+  await page.keyboard.press('Escape');
+  const activityFilter = page.getByTestId('squad-activity-filter');
+  const activityOptions = await activityFilter.locator('option').allTextContents();
+  expect(activityOptions.length).toBeGreaterThan(1);
+  await activityFilter.selectOption({ index: 1 });
+  await activityFilter.selectOption({ index: 0 });
 
-  await openReady(page, {
-    path: '/webhook-subscriptions',
-    testId: `webhook-card-${world.subscriptionId}`,
-  });
+  await openReady(page, targetRoutes()[7]!);
+  const squadKanban = page.getByTestId('squad-view-kanban');
+  await squadKanban.click();
+  await expect(squadKanban).toHaveAttribute('aria-selected', 'true');
+  const squadTree = page.getByTestId('squad-view-tree');
+  await squadTree.click();
+  await expect(squadTree).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('squad-task-tree-pane')).toBeVisible();
+
+  await openReady(page, targetRoutes()[8]!);
+  const autopilotSearch = page.getByTestId('autopilot-search');
+  await autopilotSearch.fill('no-autopilot-matches-this-query');
+  await expect(page.getByTestId(`autopilot-row-${world.autopilotId}`)).toBeHidden();
+  await autopilotSearch.fill('');
+  await expect(page.getByTestId(`autopilot-row-${world.autopilotId}`)).toBeVisible();
+
+  await openReady(page, targetRoutes()[9]!);
+  const autopilotName = page.getByTestId('autopilot-editor-name');
+  await autopilotName.fill('Interactive draft automation');
+  await expect(page.getByTestId('autopilot-summary-name')).toHaveText(
+    'Interactive draft automation',
+  );
+  await page.getByTestId('autopilot-step-trigger').click();
+  await expect(page.getByTestId('autopilot-editor-trigger-type')).toBeVisible();
+
+  await openReady(page, targetRoutes()[10]!);
+  await page.getByTestId('autopilot-detail-test-run').click();
+  await expect(page.getByTestId('autopilot-test-payload')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[11]!);
+  const webhookLabel = page.getByTestId('webhook-label-input');
+  await webhookLabel.fill('MES-116 interaction credential');
+  await page.getByTestId('webhook-create-secret').click();
+  await expect(page.getByTestId('webhook-fresh-credential')).toBeVisible();
+
+  await openReady(page, targetRoutes()[12]!);
+  const runtimeSearch = page.getByTestId('runtimes-search');
+  await runtimeSearch.fill('no-runtime-matches-this-query');
+  await expect(page.getByTestId(`runtime-row-${world.runtimeId}`)).toBeHidden();
+  await runtimeSearch.fill('');
+  await expect(page.getByTestId(`runtime-row-${world.runtimeId}`)).toBeVisible();
+
+  await openReady(page, targetRoutes()[13]!);
+  await page.getByTestId('runtime-detail-rotate').click();
+  await expect(page.getByTestId('runtime-rotate-dialog')).toBeVisible();
+  await expect(page.getByTestId('runtime-rotate-token')).not.toHaveText('');
+  await page.getByTestId('runtime-rotate-close').click();
+
+  await openReady(page, targetRoutes()[14]!);
+  const skillSearch = page.getByTestId('skills-search');
+  await skillSearch.fill('no-skill-matches-this-query');
+  await expect(page.getByTestId(`skill-card-${world.skillId}`)).toBeHidden();
+  await skillSearch.fill('');
+  await expect(page.getByTestId(`skill-card-${world.skillId}`)).toBeVisible();
+  await page.getByTestId('skills-import-open').click();
+  await expect(page.getByTestId('import-uri')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[15]!);
+  const marketplaceSearch = page.getByRole('textbox').first();
+  await marketplaceSearch.fill('responsive verification');
+  await expect(marketplaceSearch).toHaveValue('responsive verification');
+  await marketplaceSearch.fill('');
+
+  await openReady(page, targetRoutes()[16]!);
+  for (const tab of ['versions', 'scripts', 'references', 'triggers', 'overview']) {
+    const control = page.getByTestId(`skill-tab-${tab}`);
+    await control.click();
+    await expect(control).toHaveClass(/is-active/);
+  }
+
+  await openReady(page, targetRoutes()[17]!);
+  const connectButton = page.locator('[data-testid^="connector-connect-"]').last();
+  await expect(connectButton).toBeVisible();
+  await connectButton.click();
+  await expect(page.getByTestId('integration-add-name')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[18]!);
+  const integrationTabs = [
+    ['bindings', 'binding-drawer'],
+    ['events', 'event-ledger'],
+    ['health', 'integration-health-panel'],
+    ['overview', 'integration-overview'],
+  ] as const;
+  for (const [tab, panel] of integrationTabs) {
+    await page.getByTestId(`integration-tab-${tab}`).click();
+    await expect(page.getByTestId(panel)).toBeVisible();
+  }
+
+  await openReady(page, targetRoutes()[19]!);
   await page.getByTestId(`webhook-expand-${world.subscriptionId}`).click();
   await expect(page.getByTestId(`webhook-detail-${world.subscriptionId}`)).toBeVisible();
+
+  await openReady(page, targetRoutes()[20]!);
+  await page.getByTestId('labels-create').click();
+  await expect(page.getByTestId('label-name-input')).toBeVisible();
+  await page.getByTestId('label-name-input').fill('Interaction draft label');
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[21]!);
+  await page.getByTestId('fields-create').click();
+  await expect(page.getByTestId('field-name-input')).toBeVisible();
+  await page.getByTestId('field-name-input').fill('Interaction draft field');
+  await page.getByTestId('field-type-select').selectOption('single_select');
+  await expect(page.getByTestId('field-options-editor')).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[22]!);
+  await page.getByTestId('open-export-dialog').click();
+  await expect(page.getByTestId('export-format-select')).toBeVisible();
+  await page.getByTestId('export-format-select').selectOption('csv');
+  await page.keyboard.press('Escape');
+
+  await openReady(page, targetRoutes()[23]!);
+  await page.getByTestId('notfound-home').click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('home-dashboard')).toBeVisible();
+
+  await openReady(page, targetRoutes()[24]!);
+  await page.getByTestId('oauth-callback-back').click();
+  // The recovery target is /login; an already authenticated user is then
+  // intentionally forwarded to the product home instead of seeing sign-in.
+  await expect(page.getByTestId('home-dashboard')).toBeVisible();
+
+  // Finish with the highest-risk write path so every other page family is
+  // exercised even when the tool contract regresses. The controlled inputs
+  // update only after PATCH + list reload, and the direct API read proves the
+  // visible state is durable rather than an optimistic-only UI change.
+  await openReady(page, targetRoutes()[4]!);
+  await page.getByTestId('agent-tab-skills').click();
+  const enabledTool = page.getByTestId('agent-tool-enabled-exec:shell');
+  const toolPermission = page.getByTestId('agent-tool-permission-exec:shell');
+  await expect(enabledTool).toBeChecked();
+  await toolPermission.selectOption('read_only');
+  await expect(toolPermission).toHaveValue('read_only');
+  await enabledTool.click();
+  await expect(enabledTool).not.toBeChecked();
+  await expect
+    .poll(async () => {
+      const tools = await request<
+        Array<{ capability: string; enabled: boolean; permission: string }>
+      >('GET', `/api/v1/agents/${world.agentId}/tools`);
+      const saved = tools.find((tool) => tool.capability === 'exec:shell');
+      return saved === undefined
+        ? null
+        : { capability: saved.capability, enabled: saved.enabled, permission: saved.permission };
+    })
+    .toEqual({ capability: 'exec:shell', enabled: false, permission: 'read_only' });
 
   expect(failures.pageErrors).toEqual([]);
   expect(failures.serverErrors).toEqual([]);
@@ -415,77 +666,36 @@ test('all remaining routes keep document overflow contained at 320 CSS px', asyn
   expect(failures.serverErrors).toEqual([]);
 });
 
-test('desktop/tablet/mobile light/dark visual evidence matrix', async ({ page }) => {
-  const failures = collectUnexpectedFailures(page);
-  await injectSession(page, world.token);
-  const shot = async (
-    name: string,
-    viewport: { width: number; height: number },
-    theme: 'light' | 'dark',
-    route: ReadyRoute,
-    prepare?: () => Promise<void>,
-  ): Promise<void> => {
-    await page.setViewportSize(viewport);
-    await setTheme(page, theme);
-    await openReady(page, route);
-    if (prepare !== undefined) await prepare();
-    await expectNoDocumentOverflow(page);
-    await page.screenshot({
-      path: resolve(EVIDENCE_DIR, `${name}.png`),
-      animations: 'disabled',
-    });
-  };
+const VISUAL_MATRIX = [
+  { name: 'desktop-light', viewport: { width: 1440, height: 900 }, theme: 'light' },
+  { name: 'desktop-dark', viewport: { width: 1440, height: 900 }, theme: 'dark' },
+  { name: 'tablet-light', viewport: { width: 768, height: 1024 }, theme: 'light' },
+  { name: 'tablet-dark', viewport: { width: 768, height: 1024 }, theme: 'dark' },
+  { name: 'mobile-light', viewport: { width: 390, height: 844 }, theme: 'light' },
+  { name: 'mobile-dark', viewport: { width: 390, height: 844 }, theme: 'dark' },
+] as const;
 
-  await shot('01-desktop-light-project-detail', { width: 1440, height: 900 }, 'light', {
-    path: `/projects/${world.projectId}`,
-    testId: 'project-detail-header',
-  });
-  await shot(
-    '02-desktop-dark-agent-effective-tools',
-    { width: 1440, height: 900 },
-    'dark',
-    { path: `/agents/${world.agentId}`, testId: 'agent-detail-page' },
-    async () => {
-      await page.getByTestId('agent-tab-skills').click();
-      await expect(page.getByTestId('agent-tools-table')).toBeVisible();
-    },
-  );
-  await shot('03-tablet-light-squad-detail', { width: 768, height: 1024 }, 'light', {
-    path: `/squads/${world.squadId}`,
-    testId: 'squad-detail-page',
-  });
-  await shot(
-    '04-tablet-dark-autopilot-editor',
-    { width: 768, height: 1024 },
-    'dark',
-    { path: '/autopilots/new', testId: 'autopilot-editor' },
-    async () => {
-      await expect(page.getByTestId('autopilot-editor-summary')).toBeVisible();
-    },
-  );
-  await shot('05-mobile-light-runtime-detail', { width: 390, height: 844 }, 'light', {
-    path: `/runtimes/${world.runtimeId}`,
-    testId: 'runtime-detail-page',
-  });
-  await shot(
-    '06-mobile-dark-integration-health',
-    { width: 390, height: 844 },
-    'dark',
-    { path: `/integrations/${world.integrationId}`, testId: 'integration-detail' },
-    async () => {
-      await page.getByTestId('integration-tab-health').click();
-      await expect(page.getByTestId('integration-health-panel')).toBeVisible();
-      const tabsFit = await page.getByTestId('integration-tabs').evaluate((tablist) => {
-        const boundary = tablist.getBoundingClientRect();
-        return [...tablist.children].every((tab) => {
-          const bounds = tab.getBoundingClientRect();
-          return bounds.left >= boundary.left - 1 && bounds.right <= boundary.right + 1;
-        });
+for (const scenario of VISUAL_MATRIX) {
+  test(`25-page visual evidence: ${scenario.name}`, async ({ page }) => {
+    const failures = collectUnexpectedFailures(page);
+    const scenarioDir = resolve(EVIDENCE_DIR, 'matrix', scenario.name);
+    mkdirSync(scenarioDir, { recursive: true });
+    await injectSession(page, world.token);
+    await page.setViewportSize(scenario.viewport);
+    await setTheme(page, scenario.theme);
+
+    for (const route of targetRoutes()) {
+      await openReady(page, route);
+      await prepareEvidenceState(page, route);
+      await expectNoDocumentOverflow(page);
+      await page.screenshot({
+        path: resolve(scenarioDir, `${route.key}.png`),
+        animations: 'disabled',
+        fullPage: true,
       });
-      expect(tabsFit).toBe(true);
-    },
-  );
+    }
 
-  expect(failures.pageErrors).toEqual([]);
-  expect(failures.serverErrors).toEqual([]);
-});
+    expect(failures.pageErrors).toEqual([]);
+    expect(failures.serverErrors).toEqual([]);
+  });
+}

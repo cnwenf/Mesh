@@ -13,7 +13,8 @@ import pytest
 from skill_test_support import make_agent, make_member, make_workspace
 from sqlalchemy import select
 
-from mesh.db.models.skill import Skill, SkillSource, SkillVersion
+from mesh.agent.capabilities import CapabilityInvalidError
+from mesh.db.models.skill import Skill, SkillInstallation, SkillSource, SkillVersion
 from mesh.errors import ConflictError, NotFoundError
 from mesh.skill.bindings import BindingService
 from mesh.skill.installations import InstallationService
@@ -184,7 +185,9 @@ class TestListAgentSkills:
             priority=120,
         )
         items, cursor = await binding_service.list_agent_skills(
-            workspace_id=world["workspace"].id, agent_id=world["agent"].id
+            actor=world["admin"],
+            workspace_id=world["workspace"].id,
+            agent_id=world["agent"].id,
         )
         assert cursor is None
         assert len(items) == 1
@@ -252,6 +255,36 @@ class TestEnqueueContext:
                 session, world["workspace"].id, world["agent"].id
             )
         assert context["skill_versions"] == {}
+
+    async def test_malformed_persisted_enabled_value_fails_closed(
+        self, binding_service, session_factory
+    ) -> None:
+        world = await _installed_world(
+            session_factory, InstallationService(session_factory)
+        )
+        await binding_service.bind(
+            actor=world["admin"],
+            workspace_id=world["workspace"].id,
+            agent_id=world["agent"].id,
+            skill_installation_id=world["installation_id"],
+        )
+        async with session_factory() as session, session.begin():
+            installation = await session.get(
+                SkillInstallation, world["installation_id"]
+            )
+            installation.granted_capabilities = [
+                {
+                    "capability": "repo:write",
+                    "permission": "write",
+                    "enabled": "false",
+                }
+            ]
+
+        async with session_factory() as session:
+            with pytest.raises(CapabilityInvalidError):
+                await binding_service.collect_enqueue_context(
+                    session, world["workspace"].id, world["agent"].id
+                )
 
     async def test_resolver_hook_integration(
         self, binding_service, session_factory

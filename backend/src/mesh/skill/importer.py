@@ -827,7 +827,9 @@ class ImportService:
             # skill_installations.granted_capabilities (which would later poison
             # the enqueue normalizer and stall the agent's dispatch).
             try:
-                normalize_capability_declarations(granted_capabilities)
+                normalize_capability_declarations(
+                    granted_capabilities, allow_enabled=True
+                )
             except CapabilityInvalidError as exc:
                 raise BusinessRuleError(
                     "granted capabilities are malformed",

@@ -18,9 +18,11 @@ const workspaceAgentsPath = (workspaceId: string): string =>
 const agentPath = (workspaceId: string, agentId: string): string =>
   `${workspaceAgentsPath(workspaceId)}/${agentId}`;
 
-/** 实时频道(README §6.7):agent 域事件走 workspace 级频道, presence 走 agent 级频道。 */
+/** 实时频道(README §6.7):列表事件走 workspace，私有资源变更走 agent 资源频道。 */
 export const workspaceAgentsChannel = (workspaceId: string): string =>
   `workspace:${workspaceId}:agents`;
+
+export const agentResourceChannel = (agentId: string): string => `agent:${agentId}`;
 
 export const agentPresenceChannel = (agentId: string): string => `agent:${agentId}:presence`;
 
@@ -142,13 +144,7 @@ export async function rollbackConfig(
   );
 }
 
-export type AgentLifecycleVerb =
-  | 'pause'
-  | 'resume'
-  | 'disable'
-  | 'enable'
-  | 'archive'
-  | 'restore';
+export type AgentLifecycleVerb = 'pause' | 'resume' | 'disable' | 'enable' | 'archive' | 'restore';
 
 /** 生命周期动作端点(:verb 后缀,agent.md §3.1 / §4.8 状态机)。 */
 export async function transitionAgentLifecycle(
@@ -156,7 +152,10 @@ export async function transitionAgentLifecycle(
   workspaceId: string,
   agentId: string,
   verb: AgentLifecycleVerb,
-  body?: { readonly reason?: string; readonly in_flight_policy?: 'finish_current' | 'cancel_current' },
+  body?: {
+    readonly reason?: string;
+    readonly in_flight_policy?: 'finish_current' | 'cancel_current';
+  },
 ): Promise<AgentSummary> {
   return client.request<AgentSummary>('POST', `${agentPath(workspaceId, agentId)}:${verb}`, {
     body: body ?? {},

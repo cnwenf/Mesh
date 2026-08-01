@@ -134,9 +134,9 @@ async def _audits(session_factory, action):
 
 
 async def test_list_returns_humans_and_agents_same_roster(session_factory):
-    service, ws, _owner, plain, _uid = await _setup(session_factory)
+    service, ws, owner, plain, _uid = await _setup(session_factory)
     await _add_agent_member(session_factory, ws)
-    items, cursor = await service.list_members(workspace_id=ws)
+    items, cursor = await service.list_members(actor=owner, workspace_id=ws)
     assert cursor is None
     types = {item["member_type"] for item in items}
     assert types == {"human", "agent"}
@@ -144,10 +144,12 @@ async def test_list_returns_humans_and_agents_same_roster(session_factory):
 
 
 async def test_list_agent_filter_is_projection_of_same_roster(session_factory):
-    service, ws, _owner, _plain, _uid = await _setup(session_factory)
+    service, ws, owner, _plain, _uid = await _setup(session_factory)
     agent_id = await _add_agent_member(session_factory, ws)
-    all_items, _ = await service.list_members(workspace_id=ws)
-    agent_items, _ = await service.list_members(workspace_id=ws, member_type="agent")
+    all_items, _ = await service.list_members(actor=owner, workspace_id=ws)
+    agent_items, _ = await service.list_members(
+        actor=owner, workspace_id=ws, member_type="agent"
+    )
     assert [i["id"] for i in agent_items] == [
         i["id"] for i in all_items if i["member_type"] == "agent"
     ]
@@ -155,33 +157,35 @@ async def test_list_agent_filter_is_projection_of_same_roster(session_factory):
 
 
 async def test_list_default_status_hides_removed(session_factory):
-    service, ws, _owner, plain, _uid = await _setup(session_factory)
+    service, ws, owner, plain, _uid = await _setup(session_factory)
     async with session_factory() as session, session.begin():
         await session.execute(
             text("UPDATE members SET status='removed' WHERE id=:id"), {"id": plain.id}
         )
-    default_items, _ = await service.list_members(workspace_id=ws)
+    default_items, _ = await service.list_members(actor=owner, workspace_id=ws)
     assert all(i["status"] != "removed" for i in default_items)
-    removed_items, _ = await service.list_members(workspace_id=ws, status="removed")
+    removed_items, _ = await service.list_members(
+        actor=owner, workspace_id=ws, status="removed"
+    )
     assert [str(i["id"]) for i in removed_items] == [str(plain.id)]
-    all_items, _ = await service.list_members(workspace_id=ws, status="all")
+    all_items, _ = await service.list_members(actor=owner, workspace_id=ws, status="all")
     assert len(all_items) == 2
 
 
 async def test_list_role_filter_and_q_search(session_factory):
     service, ws, owner, plain, _uid = await _setup(session_factory)
     # role filter
-    owners, _ = await service.list_members(workspace_id=ws, role="owner")
+    owners, _ = await service.list_members(actor=owner, workspace_id=ws, role="owner")
     assert [str(i["id"]) for i in owners] == [str(owner.id)]
     # q search hits users.display_name ("Plain Person")
-    hits, _ = await service.list_members(workspace_id=ws, q="Plain Person")
+    hits, _ = await service.list_members(actor=owner, workspace_id=ws, q="Plain Person")
     assert [str(i["id"]) for i in hits] == [str(plain.id)]
     # q search hits display_override
     async with session_factory() as session, session.begin():
         await session.execute(
             text("UPDATE members SET display_override='小李' WHERE id=:id"), {"id": plain.id}
         )
-    hits2, _ = await service.list_members(workspace_id=ws, q="小李")
+    hits2, _ = await service.list_members(actor=owner, workspace_id=ws, q="小李")
     assert [str(i["id"]) for i in hits2] == [str(plain.id)]
 
 
@@ -192,7 +196,7 @@ async def test_list_q_search_escapes_like_wildcards(session_factory):
     wildcards — ``q=%`` enumerated the whole roster. The query stays
     parameterised; only the match set must not widen.
     """
-    service, ws, _owner, _plain, _uid = await _setup(session_factory)
+    service, ws, owner, _plain, _uid = await _setup(session_factory)
     named = {}
     for display in ("100% Club", "100X Club", "a_b Lead", "axb Lead"):
         uid = await _add_user(session_factory, display)
@@ -212,24 +216,24 @@ async def test_list_q_search_escapes_like_wildcards(session_factory):
         return {str(i["id"]) for i in items}
 
     # literal "%" only matches the display containing a real percent sign
-    percent, _ = await service.list_members(workspace_id=ws, q="100%")
+    percent, _ = await service.list_members(actor=owner, workspace_id=ws, q="100%")
     assert hit_ids(percent) == {str(named["100% Club"])}
 
     # literal "_" must not behave as a single-char wildcard
-    underscore, _ = await service.list_members(workspace_id=ws, q="a_b")
+    underscore, _ = await service.list_members(actor=owner, workspace_id=ws, q="a_b")
     assert hit_ids(underscore) == {str(named["a_b Lead"])}
 
     # the old `_` wildcard would have hit "100% Club" ("1_0" ~ "100")
-    wildcard, _ = await service.list_members(workspace_id=ws, q="1_0")
+    wildcard, _ = await service.list_members(actor=owner, workspace_id=ws, q="1_0")
     assert wildcard == []
 
     # q=% no longer enumerates the roster — only literal-% rows match
-    bare, _ = await service.list_members(workspace_id=ws, q="%")
+    bare, _ = await service.list_members(actor=owner, workspace_id=ws, q="%")
     assert hit_ids(bare) == {str(named["100% Club"])}
 
 
 async def test_list_pagination_walks_all_rows_once(session_factory):
-    service, ws, _owner, _plain, _uid = await _setup(session_factory)
+    service, ws, owner, _plain, _uid = await _setup(session_factory)
     # add 5 more humans with distinct joined_at
     from datetime import UTC, datetime, timedelta
 
@@ -249,7 +253,9 @@ async def test_list_pagination_walks_all_rows_once(session_factory):
     seen = []
     cursor = None
     for _ in range(10):
-        items, cursor = await service.list_members(workspace_id=ws, limit=2, cursor=cursor)
+        items, cursor = await service.list_members(
+            actor=owner, workspace_id=ws, limit=2, cursor=cursor
+        )
         seen.extend(str(i["id"]) for i in items)
         if cursor is None:
             break
@@ -257,19 +263,19 @@ async def test_list_pagination_walks_all_rows_once(session_factory):
 
 
 async def test_list_invalid_filters_raise(session_factory):
-    service, ws, *_ = await _setup(session_factory)
+    service, ws, owner, *_ = await _setup(session_factory)
     with pytest.raises(ValidationError):
-        await service.list_members(workspace_id=ws, member_type="robot")
+        await service.list_members(actor=owner, workspace_id=ws, member_type="robot")
     with pytest.raises(ValidationError):
-        await service.list_members(workspace_id=ws, status="sleeping")
+        await service.list_members(actor=owner, workspace_id=ws, status="sleeping")
     with pytest.raises(ValidationError):
-        await service.list_members(workspace_id=ws, role="superadmin")
+        await service.list_members(actor=owner, workspace_id=ws, role="superadmin")
 
 
 async def test_list_is_scoped_to_workspace(session_factory):
-    service, ws_a, *_ = await _setup(session_factory, slug="scope-a")
+    service, ws_a, owner_a, *_ = await _setup(session_factory, slug="scope-a")
     _sb, ws_b, *_b = await _setup(session_factory, slug="scope-b")
-    items_a, _ = await service.list_members(workspace_id=ws_a)
+    items_a, _ = await service.list_members(actor=owner_a, workspace_id=ws_a)
     async with session_factory() as session:
         ids_b = {
             str(m.id)
@@ -282,8 +288,8 @@ async def test_list_is_scoped_to_workspace(session_factory):
 
 
 async def test_get_member_detail_shape(session_factory):
-    service, ws, _owner, plain, _uid = await _setup(session_factory)
-    detail = await service.get_member(workspace_id=ws, member_id=plain.id)
+    service, ws, owner, plain, _uid = await _setup(session_factory)
+    detail = await service.get_member(actor=owner, workspace_id=ws, member_id=plain.id)
     assert detail["member_type"] == "human"
     assert detail["display_name"] == "Plain Person"
     assert detail["profile"]["full_name"] == "Plain Person"
@@ -292,19 +298,19 @@ async def test_get_member_detail_shape(session_factory):
 
 
 async def test_get_member_not_found_and_cross_workspace(session_factory):
-    service, ws, *_ = await _setup(session_factory, slug="nf-a")
+    service, ws, owner, *_ = await _setup(session_factory, slug="nf-a")
     _sb, ws_b, owner_b, *_b = await _setup(session_factory, slug="nf-b")
     with pytest.raises(NotFoundError):
-        await service.get_member(workspace_id=ws, member_id=uuid.uuid4())
+        await service.get_member(actor=owner, workspace_id=ws, member_id=uuid.uuid4())
     # A member of workspace B is invisible from workspace A (composite scope).
     with pytest.raises(NotFoundError):
-        await service.get_member(workspace_id=ws, member_id=owner_b.id)
+        await service.get_member(actor=owner, workspace_id=ws, member_id=owner_b.id)
 
 
 async def test_render_agent_profile_and_display_fallback(session_factory):
-    service, ws, *_ = await _setup(session_factory)
+    service, ws, owner, *_ = await _setup(session_factory)
     agent_id = await _add_agent_member(session_factory, ws)
-    detail = await service.get_member(workspace_id=ws, member_id=agent_id)
+    detail = await service.get_member(actor=owner, workspace_id=ws, member_id=agent_id)
     assert detail["member_type"] == "agent"
     # The agents table (agent.md) backs the profile; display name resolves
     # from agents.name (README §6.1 order).

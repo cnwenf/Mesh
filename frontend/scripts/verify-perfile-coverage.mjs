@@ -37,6 +37,11 @@ const PER_FILE_DIRS = [
   'src/features/autopilots/',
   'src/features/chat/',
   'src/features/analytics/',
+  'src/features/data-jobs/',
+  'src/features/skills/',
+  'src/features/squads/',
+  'src/features/projects/',
+  'src/features/labels/',
   'src/hooks/',
   'src/state/',
   'src/design/',
@@ -63,9 +68,7 @@ for (const [file, data] of Object.entries(summary)) {
   const rel = file.includes('/src/') ? `src/${file.split('/src/').slice(1).join('/src/')}` : '';
   if (!PER_FILE_DIRS.some((dir) => rel.startsWith(dir))) continue;
   gated += 1;
-  const failed = METRICS.filter((m) => data[m].pct < THRESHOLD).map(
-    (m) => `${m}=${data[m].pct}%`,
-  );
+  const failed = METRICS.filter((m) => data[m].pct < THRESHOLD).map((m) => `${m}=${data[m].pct}%`);
   if (failed.length > 0) failures.push(`${rel}  [${failed.join(', ')}]`);
 }
 

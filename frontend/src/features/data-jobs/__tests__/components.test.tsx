@@ -195,6 +195,23 @@ describe('DataManagementPage', () => {
     openWindow.mockRestore();
   });
 
+  it('falls back safely for missing and invalid creation timestamps', async () => {
+    const client = makeClient({
+      list: vi.fn().mockResolvedValue({
+        data: [
+          makeJob({ id: 'invalid-date', created_at: 'not-a-date' }),
+          makeJob({ id: 'missing-date', created_at: null }),
+        ],
+        next_cursor: null,
+      }),
+    });
+    vi.mocked(getApiClient).mockReturnValue(client);
+    renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });
+
+    expect(await screen.findByTestId('job-row-invalid-date')).toHaveTextContent('not-a-date');
+    expect(screen.getByTestId('job-row-missing-date').querySelector('time')).toHaveTextContent('');
+  });
+
   it('renders the empty state when there are no jobs', async () => {
     vi.mocked(getApiClient).mockReturnValue(makeClient());
     renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });

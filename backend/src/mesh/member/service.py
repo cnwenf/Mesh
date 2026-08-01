@@ -164,6 +164,7 @@ class MemberService:
     async def list_members(
         self,
         *,
+        actor: Member,
         workspace_id: uuid.UUID,
         member_type: str = "all",
         status: str = "default",
@@ -198,6 +199,14 @@ class MemberService:
             .outerjoin(Agent, Member.agent_id == Agent.id)
             .where(Member.workspace_id == workspace_id)
         )
+        if not role_satisfies(actor.role, "agent:manage"):
+            stmt = stmt.where(
+                or_(
+                    Member.member_type != "agent",
+                    Agent.visibility == "workspace",
+                    Agent.owner_user_id == actor.user_id,
+                )
+            )
         if member_type != "all":
             stmt = stmt.where(Member.member_type == member_type)
         if status == "default":
@@ -242,12 +251,18 @@ class MemberService:
     # -- M-detail ----------------------------------------------------------------
 
     async def get_member(
-        self, *, workspace_id: uuid.UUID, member_id: uuid.UUID
+        self, *, actor: Member, workspace_id: uuid.UUID, member_id: uuid.UUID
     ) -> dict:
         async with self._factory() as session:
             await set_tenant_context(session, workspace_id)
             member, user = await self._load_row(session, workspace_id, member_id)
             agent = await self._agent_for(session, member)
+            if agent is not None and (
+                agent.visibility == "private"
+                and agent.owner_user_id != actor.user_id
+                and not role_satisfies(actor.role, "agent:manage")
+            ):
+                raise NotFoundError(_NOT_FOUND)
             open_issues = await self._reassigner.open_issues_assigned(
                 session, workspace_id=workspace_id, member_id=member_id
             )
@@ -436,7 +451,9 @@ class MemberService:
         has_display = not isinstance(patch.display_override, _Unset)
         if not has_status and not has_display:
             # Role-only (or no-op) change: return the current detail view.
-            return await self.get_member(workspace_id=workspace_id, member_id=member_id)
+            return await self.get_member(
+                actor=actor, workspace_id=workspace_id, member_id=member_id
+            )
 
         async with self._factory() as session, session.begin():
             await set_tenant_context(session, workspace_id)

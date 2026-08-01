@@ -93,7 +93,11 @@ describe('SkillsPage', () => {
     renderWithProviders(<SkillsPage />);
     fireEvent.click(await screen.findByTestId('skills-create-open'));
     fireEvent.change(screen.getByTestId('skill-create-name'), { target: { value: 'N' } });
+    fireEvent.change(screen.getByTestId('skill-create-slug'), { target: { value: 'custom-slug' } });
     fireEvent.change(screen.getByTestId('skill-create-summary'), { target: { value: 'S' } });
+    fireEvent.change(screen.getByTestId('skill-create-tags'), {
+      target: { value: 'review, quality,  ' },
+    });
     fireEvent.click(screen.getByTestId('skill-create-submit'));
     await waitFor(() => {
       expect(calls.some((c) => c.method === 'POST' && c.url.endsWith('/skills'))).toBe(true);
@@ -167,6 +171,8 @@ describe('SkillsPage', () => {
     fireEvent.click(await screen.findByTestId('skills-import-open'));
     // wizard opens on the source step (onDone wired to refresh the list)
     expect(await screen.findByTestId('import-step-source')).toBeTruthy();
+    fireEvent.click(screen.getByText(/取消|Cancel/));
+    await waitFor(() => expect(screen.queryByTestId('import-step-source')).toBeNull());
   });
 
   it('状态筛选变更触发重拉', async () => {
@@ -184,7 +190,40 @@ describe('SkillsPage', () => {
     fireEvent.change(screen.getByTestId('skills-status-filter'), {
       target: { value: 'published' },
     });
+    fireEvent.change(screen.getByTestId('skills-source-filter'), {
+      target: { value: 'builtin' },
+    });
     await waitFor(() => expect(fetches).toBeGreaterThan(before));
+  });
+
+  it('渲染可选元数据缺省值、更新提示并加载下一页', async () => {
+    const sparseSkill = {
+      ...SKILLS[0],
+      id: 's-sparse',
+      name: 'Sparse skill',
+      source_type: null,
+      trust_level: null,
+      current_version: null,
+      install_status: 'updated_available',
+      has_scripts: false,
+      required_capabilities: null,
+    };
+    let page = 0;
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      page += 1;
+      return page === 1
+        ? fakeResponse({ body: { data: [sparseSkill], next_cursor: 'next-page' } })
+        : fakeResponse({ body: { data: SKILLS, next_cursor: null } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderWithProviders(<SkillsPage />);
+
+    const sparse = await screen.findByTestId('skill-card-s-sparse');
+    expect(sparse).toHaveTextContent(/Update available|有可用更新/);
+    fireEvent.click(screen.getByTestId('skills-load-more'));
+    expect(await screen.findByTestId('skill-card-s-1')).toBeTruthy();
   });
 });
 

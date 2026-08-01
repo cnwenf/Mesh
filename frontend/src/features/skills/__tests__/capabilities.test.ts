@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveCapabilities, normalizeCapability, permissionTone } from '../capabilities';
+import {
+  effectiveCapabilities,
+  effectiveGrants,
+  normalizeCapability,
+  permissionTone,
+} from '../capabilities';
+import type { CapabilityDeclaration, CapabilityGrant } from '../types';
 
 describe('capability declaration presentation', () => {
   it('normalizes bare declarations to confirm_required', () => {
@@ -27,6 +33,27 @@ describe('capability declaration presentation', () => {
       { capability: 'exec:shell', permission: 'confirm_required' },
       { capability: 'repo:read', permission: 'write' },
     ]);
+  });
+
+  it('grant normalization excludes explicitly disabled grants', () => {
+    expect(
+      effectiveGrants([
+        { capability: 'exec:shell', permission: 'confirm_required', enabled: false },
+        { capability: 'repo:read', permission: 'read_only', enabled: true },
+        'issue:read',
+      ]),
+    ).toEqual([
+      { capability: 'issue:read', permission: 'confirm_required' },
+      { capability: 'repo:read', permission: 'read_only' },
+    ]);
+  });
+
+  it('keeps enabled state exclusive to grant declarations', () => {
+    const grant: CapabilityGrant = { capability: 'exec:shell', enabled: false };
+    // @ts-expect-error required declarations intentionally have no runtime enabled state.
+    const required: CapabilityDeclaration = { capability: 'exec:shell', enabled: false };
+    expect(grant).toHaveProperty('enabled', false);
+    expect(required).toHaveProperty('enabled', false);
   });
 
   it('maps every permission to a non-color-only presentation tone', () => {

@@ -81,6 +81,20 @@ def _agents_channel(workspace_id: uuid.UUID) -> str:
     return WORKSPACE_AGENTS_CHANNEL.format(workspace_id=workspace_id)
 
 
+def _agent_event_channel(workspace_id: uuid.UUID, agent: Agent) -> str:
+    """Route private-agent events through the visibility-checked channel."""
+    if agent.visibility == "private":
+        return f"agent:{agent.id}"
+    return _agents_channel(workspace_id)
+
+
+def _agent_roster_event_channel(workspace_id: uuid.UUID, agent: Agent) -> str:
+    """Keep private-agent roster identity off the membership-only channel."""
+    if agent.visibility == "private":
+        return f"agent:{agent.id}"
+    return _workspace_channel(workspace_id)
+
+
 def _workspace_channel(workspace_id: uuid.UUID) -> str:
     return WORKSPACE_CHANNEL.format(workspace_id=workspace_id)
 
@@ -420,14 +434,14 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.created",
                 data=self.render_detail(agent, member, version),
             )
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_workspace_channel(workspace_id),
+                channel=_agent_roster_event_channel(workspace_id, agent),
                 event="member.added",
                 data={
                     "member_id": str(member.id),
@@ -606,7 +620,7 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.updated",
                 data=rendered,
             )
@@ -688,7 +702,7 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.updated",
                 data=rendered,
             )
@@ -818,7 +832,7 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.updated",
                 data=rendered,
             )
@@ -895,7 +909,7 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.lifecycle_changed",
                 data={
                     "id": str(agent.id),
@@ -906,6 +920,8 @@ class AgentService:
                     "reason": reason,
                     "in_flight_policy": in_flight_policy if action == "pause" else None,
                     "actor_member_id": str(actor.id),
+                    "visibility": agent.visibility,
+                    "updated_at": now.isoformat(),
                 },
             )
             await write_audit(
@@ -957,15 +973,20 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.deleted",
-                data={"id": str(agent.id), "agent_id": str(agent.id)},
+                data={
+                    "id": str(agent.id),
+                    "agent_id": str(agent.id),
+                    "visibility": agent.visibility,
+                    "updated_at": now.isoformat(),
+                },
             )
             if member is not None:
                 await emit_realtime(
                     session,
                     workspace_id=workspace_id,
-                    channel=_workspace_channel(workspace_id),
+                    channel=_agent_roster_event_channel(workspace_id, agent),
                     event="member.removed",
                     data={"member_id": str(member.id), "member_type": "agent"},
                 )
@@ -1031,7 +1052,7 @@ class AgentService:
             await emit_realtime(
                 session,
                 workspace_id=workspace_id,
-                channel=_agents_channel(workspace_id),
+                channel=_agent_event_channel(workspace_id, agent),
                 event="agent.updated",
                 data=rendered,
             )

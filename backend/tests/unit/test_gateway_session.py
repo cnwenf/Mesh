@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+import pytest
 from sqlalchemy import text
 
 from mesh.realtime.auth import Principal
@@ -43,6 +44,25 @@ class DenyAuthorizer:
         return None
 
 
+class ToggleAuthorizer:
+    def __init__(self) -> None:
+        self.allowed = True
+
+    async def authorize(self, principal, channel):
+        return ALLOW_WS if self.allowed else None
+
+
+class CallLimitedAuthorizer:
+    def __init__(self, allowed_calls: int, owner: uuid.UUID = ALLOW_WS) -> None:
+        self.allowed_calls = allowed_calls
+        self.owner = owner
+        self.calls = 0
+
+    async def authorize(self, principal, channel):
+        self.calls += 1
+        return self.owner if self.calls <= self.allowed_calls else None
+
+
 class FakeSubscriber:
     async def start(self):
         pass
@@ -53,6 +73,26 @@ class FakeSubscriber:
 
     async def close(self):
         pass
+
+
+class ControlledSubscriber(FakeSubscriber):
+    def __init__(self, channel: str) -> None:
+        self.channel = channel
+        self.release = asyncio.Event()
+
+    async def frames(self):
+        await self.release.wait()
+        yield (
+            self.channel,
+            {
+                "op": FRAME_EVENT,
+                "channel": self.channel,
+                "seq": 1,
+                "event": "agent.updated",
+                "payload": {"system_instructions": "must stay private"},
+            },
+        )
+        await asyncio.Event().wait()
 
 
 class FakeTransport:
@@ -192,6 +232,31 @@ async def test_replay_pages_through_backlog_larger_than_page_size(
     assert subscribed[-1]["last_seq"] == 5
 
 
+async def test_replay_reauthorizes_before_sending_a_page(
+    session_factory, workspace_factory
+):
+    channel = "agent:22222222-2222-2222-2222-222222222222"
+    workspace = await workspace_factory()
+    await _seed_events(session_factory, workspace.id, channel, 1)
+    transport = FakeTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": channel},
+        ]
+    )
+    # Subscribe + replay setup + page query remain authorized; the check made
+    # immediately before sending the queried page observes the ACL revocation.
+    authorizer = CallLimitedAuthorizer(allowed_calls=3, owner=workspace.id)
+    await _session(transport, session_factory, authorizer=authorizer).run()
+
+    assert not [frame for frame in transport.sent if frame.get("op") == FRAME_EVENT]
+    assert any(
+        frame.get("op") == FRAME_ERROR and frame.get("code") == "forbidden"
+        for frame in transport.sent
+    )
+    assert FRAME_SUBSCRIBED not in _ops(transport)
+
+
 async def test_subscribe_without_resume_replays_everything(session_factory, workspace_factory):
     workspace = await workspace_factory()
     await _seed_events(session_factory, workspace.id, "issue:all", 2)
@@ -284,6 +349,54 @@ async def test_forbidden_channel_keeps_connection_alive(session_factory, workspa
     assert errors[0]["code"] == "forbidden"
     assert not transport.closed  # connection survives a denied subscription
     assert _ops(transport)[-1] == FRAME_PING  # ping still answered
+
+
+async def test_live_delivery_reauthorizes_and_revokes_a_stale_resource_subscription(
+    session_factory,
+):
+    channel = "agent:11111111-1111-1111-1111-111111111111"
+    transport = BlockingTransport(
+        [
+            {"op": "auth", "token": TOKEN},
+            {"op": "subscribe", "channel": channel},
+        ]
+    )
+    authorizer = ToggleAuthorizer()
+    subscriber = ControlledSubscriber(channel)
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=authorizer,
+        subscriber_factory=lambda: subscriber,
+        replay_page_size=100,
+        ping_interval=3600,
+    )
+    task = asyncio.create_task(session.run())
+    try:
+        deadline = asyncio.get_event_loop().time() + 5
+        while not any(frame.get("op") == FRAME_SUBSCRIBED for frame in transport.sent):
+            if asyncio.get_event_loop().time() > deadline:
+                raise AssertionError("subscription was not established")
+            await asyncio.sleep(0.01)
+
+        # Models a workspace-visible agent becoming private after subscribe.
+        authorizer.allowed = False
+        subscriber.release.set()
+        while not any(
+            frame.get("op") == FRAME_ERROR and frame.get("code") == "forbidden"
+            for frame in transport.sent
+        ):
+            if asyncio.get_event_loop().time() > deadline:
+                raise AssertionError("stale subscription was not revoked")
+            await asyncio.sleep(0.01)
+
+        assert not [frame for frame in transport.sent if frame.get("event") == "agent.updated"]
+        assert channel not in session._state.subscriptions
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 async def test_unsubscribe_and_unknown_op(session_factory):

@@ -6,6 +6,8 @@
 > - **现状列性质**：代码/静态勘察快照（含 i18n 目录、CSS、路由表全量扫描），**非最终验收结论**；阶段三以真实 e2e + 真实 UI 操作复验后改写为最终判定并附存证。
 > - **竞品依据**：`docs/research/*.md`（设计调研原始记录）+ `docs/specs/features/*.md` 与 `docs/specs/README.md` §6 全局契约（二者冲突以 specs 为准）。
 > - **本清单只产基线，不做最终验收**；最终验收（逐项核对实施结果、存证、放行合入发版）在阶段三另起 Issue。
+>
+> **MES-116 增量复核（2026-08-02）**：Phase 4 范围已按模块、用户旅程、跨切面三趟复核；本次核销项以真实 API + Chromium 操作和 `frontend/e2e/evidence/mes116/matrix/` 的 25 页 × 六组合证据为准。未在 MES-116 范围内实测的历史条目仍保持原标记，不由本批次代替最终验收。
 
 ---
 
@@ -13,13 +15,13 @@
 
 ### 0.1 现状标注
 
-| 标记 | 含义 |
-| --- | --- |
-| ✅ 已覆盖 | 勘察确认已实现，与竞品/Spec 要求一致 |
-| 🟡 部分覆盖 | 已实现但与竞品存在明确差距，或仅部分场景实现 |
-| ❌ 缺失 | 竞品/Spec 要求但未实现（**必修**，列入 §4） |
-| ⬜ 待实机 | 静态勘察不能定论，阶段三实机走查判定 |
-| ⚪ 可选 | 竞品明确标注「可选增强」，本期非必做（列入 §5 备查） |
+| 标记        | 含义                                                 |
+| ----------- | ---------------------------------------------------- |
+| ✅ 已覆盖   | 勘察确认已实现，与竞品/Spec 要求一致                 |
+| 🟡 部分覆盖 | 已实现但与竞品存在明确差距，或仅部分场景实现         |
+| ❌ 缺失     | 竞品/Spec 要求但未实现（**必修**，列入 §4）          |
+| ⬜ 待实机   | 静态勘察不能定论，阶段三实机走查判定                 |
+| ⚪ 可选     | 竞品明确标注「可选增强」，本期非必做（列入 §5 备查） |
 
 ### 0.2 勾选规则
 
@@ -30,7 +32,7 @@
 
 ### 0.3 页面路由速查（勘察快照）
 
-路由唯一配置于 `frontend/src/App.tsx`（BrowserRouter + Routes，无懒加载）。共 33 条路由，除首页为脚手架演示舞台外均已真实实现；`/skills` 为 Sidebar 死链（路由未注册）。详见各模块条目。
+路由唯一配置于 `frontend/src/App.tsx`（BrowserRouter + Routes，无懒加载）。Phase 4 的项目、周期、Agent、Skills、Squad、Autopilot、Runtime、Integration、数据管理和异常页路由均已注册并经真实浏览器直达；历史基线中的 `/skills` 死链已在 MES-116 核销。详见各模块条目。
 
 ---
 
@@ -39,14 +41,14 @@
 ### 1.1 信息架构与导航
 
 - [ ] 顶层导航固定为：收件箱/我的任务、项目、看板/视图、Issue、成员（人+agent 同册）、聊天、小队、自动化（Autopilots/Runtimes）、洞察、集成、设置；guest/agent 角色不见管理区（依据: README §6.12）— 现状 ✅（Sidebar 条目齐全，`shell/Sidebar.tsx`）
-- [ ] Sidebar 所有导航项均有对应路由，**点击任何条目不得落入 404**（依据: README §6.12）— 现状 ❌（Sidebar 注册 `/skills` 入口但 App.tsx 无该路由，点击进入 NotFoundPage，`Sidebar.tsx:39`）
+- [x] Sidebar 所有导航项均有对应路由，**点击任何条目不得落入 404**（依据: README §6.12）— MES-116 已核销 `/skills` 路由与管理页接线；专项逐页可达性覆盖 Phase 4 的 25 个目标路由。
 - [ ] Settings 不维护独立 Agents 名册；agent 唯一名册入口在成员页（依据: README §6.12「Agent 入口去重」）— 现状 ✅
 - [ ] 九条规范深链全部可直达且用于通知/邮件外链：`/w/{ws}/issues/by-identifier/{KEY-N}`、`/projects/{id}`、`/members/{member_id}`、`/agents/{id}`、`/views/{view_id}`、`/executions/{id}`、`/chat/{session_id}`、`/squads/{squad_id}(/tasks/{task_id})`、`/approvals`（依据: README §6.12）— 现状 🟡（MES-111 批次④已补 `/approvals` 与 `/w/{ws}/approvals`，由 `App.tsx`、`features/approvals/ApprovalsPage.tsx` 及 `e2e/real-mes111-b4.spec.ts` 实测；`/members/{member_id}` 仍缺）
 - [ ] 旧扁平路由（`/inbox`、`/board`…）经前端路由 replace 迁移到规范路由并保留 query/hash（依据: search-command-palette.md §3.4）— 现状 ⬜ 待实机
 - [ ] URL 状态同步：列表筛选/分页/排序、详情 Tab、看板视图等页面状态同步到 URL，刷新不丢失、可分享可收藏（依据: kanban.md §5.1 视图 URL；MES-108 交互优化）— 现状 🟡（看板 `/views/{id}`、issue 列表 useSearchParams 已实现；其余页面待验）
 - [ ] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— 现状 🟡（MES-124 批次①经 `hooks/useDocumentTitle` 覆盖登录/注册/MFA/找回/重置/设备/邀请/首页；MES-111 批次④经 `shell/hooks/useDocumentTitle` 补设置、工作区设置、洞察、审批页及异步名称组合，单测见 `shell/hooks/__tests__/useDocumentTitle.test.ts`；其余应用实体页与未读标题/favicon 仍待补）
 - [ ] 工作区切换器（左上角下拉）列出用户全部工作区 +「创建工作区」，切换后整页上下文刷新（依据: workspace.md §4.1）— 现状 ✅
-- [ ] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— 现状 ⬜ 待实机
+- [x] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— MES-116 真实点击 `notfound-home` 并验证返回工作台。
 
 ### 1.2 设计令牌与视觉语言
 
@@ -287,9 +289,9 @@
 - [ ] 进度条基于 issue 完成率，悬停 done/total，project.updated 实时刷新（依据: project.md §4.2）— 现状 ⬜ 待实机
 - [ ] 里程碑时间线横向时间轴，逾期标红（依据: project.md §4.2）— 现状 ✅
 - [ ] 周期页：头部燃尽与点数 +「待办·未排期」区拖入排期；周期结束未完成 issue 顺延提示；auto-roll（依据: project.md §4.3）— 现状 ✅
-- [ ] 创建项目 key 实时去重校验；删除二次确证明示前缀永久保留（依据: project.md §4.3）— 现状 ⬜ 待实机
+- [x] 创建项目 key 实时去重校验；删除二次确证明示前缀永久保留（依据: project.md §4.3）— 现状 ✅（真实项目流程覆盖 key 冲突与归档只读；危险操作确认文案由组件测试覆盖）
 - [ ] 项目状态更新流（状态更新留痕：作者+时间+说明）（依据: project.md §2.4）— 现状 ✅
-- [ ] 四组合走查：项目列表/详情/周期 × 四组合 — 现状 ⬜
+- [x] 四组合走查：项目列表/详情/周期 × 四组合 — 现状 ✅（MES-116 逐页六组合矩阵另含 tablet，且每组合均做文档级 overflow 断言）
 
 ### 2.7 Issue
 
@@ -345,7 +347,7 @@
 - [ ] 必填校验：状态流转到配置 category 时缺失就地阻断 `required_field_missing`（依据: label-property.md §4.5）— 现状 ⬜ 待实机
 - [ ] 卡片/行标签色点紧凑呈现，多标签溢出 `+N`（依据: label-property.md §4.2）— 现状 ⬜ 待实机
 - [ ] 枚举选项停用后所有打开下拉的客户端即时更新（依据: label-property.md §5.3）— 现状 ⬜ 待实机（双开验证）
-- [ ] 四组合走查：标签/字段设置页 × 四组合 — 现状 ⬜
+- [x] 四组合走查：标签/字段设置页 × 四组合 — 现状 ✅（MES-116 逐页六组合矩阵；真实打开新增标签/字段表单并切换字段类型）
 
 ### 2.10 评论与活动流
 
@@ -385,18 +387,18 @@
 
 页面：`/agents/:agentId`（详情），创建经成员页唯一入口（依据: agent.md §4）。
 
-- [ ] 详情页五 Tab：概览 / 配置 / 技能与工具 / 可见性与权限 / 历史（依据: agent.md §4.3）— 现状 🟡（「技能与工具」Tab 为占位 EmptyState「arrive with the skills increment」）
+- [x] 详情页五 Tab：概览 / 配置 / 技能与工具 / 可见性与权限 / 历史（依据: agent.md §4.3）— 现状 ✅（MES-116 真实逐 Tab 点击并验证对应 panel）
 - [ ] 配置 Tab：模型档位单选 + 具体模型下拉 + System Instructions 多行编辑器 + 温度/top_p/max_tokens/推理强度 + 预设套用；越界值红字拦截；保存生成新版本（依据: agent.md §4.3）— 现状 ✅
-- [ ] 技能与工具 Tab：双列清单逐项开关；工具权限下拉（只读/可写/需确认），高风险默认「需确认」+警示色（依据: agent.md §4.3）— 现状 ❌（占位）
+- [x] 技能与工具 Tab：双列清单逐项开关；工具权限下拉（只读/可写/需确认），高风险默认「需确认」+警示色（依据: agent.md §4.3）— 现状 ✅（双列管理面接入 Agent Tools API；MES-116 真实切换 enabled 与 permission 并由 API 读回落库状态）
 - [ ] 历史 Tab：配置版本时间线，「对比上一版」「回滚到此版本」（依据: agent.md §4.3）— 现状 ✅
-- [ ] 四步创建向导：基本信息→模型与指令→技能与工具(可稍后)→可见性；每步独立校验可后退不丢数据；步骤指示器；「从现有复制」「从模板创建」（依据: agent.md §4.4）— 现状 ⬜ 待实机
+- [x] 四步创建向导：基本信息→模型与指令→技能与工具(可稍后)→可见性；每步独立校验可后退不丢数据；步骤指示器；「从现有复制」「从模板创建」（依据: agent.md §4.4）— 现状 ✅（真实打开编辑向导、推进至技能与工具并验证 capability 摘要；各步回退/模板路径由组件测试覆盖）
 - [ ] 全场景 AI 徽章不可关闭（列表/卡片/评论/@候选/分派选择器）（依据: agent.md §5.1）— 现状 ✅
 - [ ] 容量三元组「运行中 N / 排队 M / 需审批 K」经 presence 推送，列表与卡片即时变化（依据: agent.md §4.9）— 现状 ⬜ 待实机
 - [ ] 分派即开工可观测：卡片「●处理中」+ 时间线「已开始处理」+ claimed 显示 runtime + started 日志流 + 终态通知附 failure_reason/日志摘要/深链（依据: agent.md §4.7）— 现状 ⬜ 待实机（全链路 e2e）
 - [ ] 生命周期操作：pause（cancel_current/finish_current）、resume、disable、archive、restore、所有权转移；软删除后历史评论「已停用 agent」占位（依据: agent.md §4.8）— 现状 ⬜ 待实机
 - [ ] 人类干预：运行进度条「停止本次运行」；产物批准/打回；配置回滚（依据: agent.md §4.10）— 现状 ⬜ 待实机
 - [ ] `agent.trigger_skipped`（paused/disabled 未触发）UI 提示（依据: agent.md §3.6）— 现状 ⬜ 待实机（呈现方式 Spec 未细化，**须补进 Spec**）
-- [ ] 四组合走查：agent 详情各 Tab × 四组合 — 现状 ⬜
+- [x] 四组合走查：agent 详情各 Tab × 四组合 — 现状 ✅（MES-116 Agent 详情逐页六组合证据固定展示工具启停与权限写入后的状态）
 
 ### 2.13 Runtime 与执行
 
@@ -406,24 +408,24 @@
 - [ ] 详情页：状态/主机/OS/CPU/内存/并发/版本/标签/能力清单；心跳曲线（1h）；正在执行列表；历史任务；暂停/轮换 token（依据: runtime.md §4.2）— 现状 ✅
 - [ ] 注册引导三步：①基本信息 ②安装命令块（逐条可复制可审，**无 curl|sh 盲管道**）③等待激活（WS 监听 ⏳→✅ 无需刷新）（依据: runtime.md §4.3）— 现状 ✅
 - [ ] 执行详情页：状态 + 运行时长/超时进度条 + agent[AI]+issue+触发方式+分支；Tab[实时日志][产物/Diff][凭证(已脱敏)]；日志「跟随尾部」+ offset 续传 + 下载完整日志；取消二次确认（依据: runtime.md §4.4）— 现状 ✅
-- [ ] 凭证 Tab 仅元信息值恒 `***`（依据: runtime.md §2.4）— 现状 ⬜ 待实机
+- [x] 凭证 Tab 仅元信息值恒 `***`（依据: runtime.md §2.4）— 现状 ✅（真实 Runtime/执行流程验证凭证脱敏与一次性激活信息）
 - [ ] runtime 四态可行动：Online/Degraded（精确列出缺失能力+受影响任务类型+修复命令）/Paused/Isolated；**禁止泛化「运行失败」**（依据: runtime-executor.md §4.1）— 现状 ⬜ 待实机
 - [ ] 执行按 attempt 展示：provider/version/model、冻结预算 vs 实际 usage、claim/running/approval/requeue/terminal 时间线、高风险动作「请求—审批人—grant—结果」（依据: runtime-executor.md §4.2）— 现状 ⬜ 待实机
 - [ ] issue 详情反查其所有 task_executions（依据: runtime.md §4.5）— 现状 ⬜ 待实机
-- [ ] 四组合走查：runtime 三页 × 四组合 — 现状 ⬜
+- [x] 四组合走查：runtime 三页 × 四组合 — 现状 ✅（MES-116 Runtime 列表/详情逐页六组合矩阵；执行详情另由真实 Runtime 流程存证）
 
 ### 2.14 技能
 
 页面：技能库/详情/版本历史/导入向导/市场/agent 绑定区（依据: skill.md §4）。
 
-- [ ] **路由接线**：`/skills` 路由注册，Sidebar 入口可达（非死链）（依据: skill.md §4.1；README §6.12）— 现状 ❌（整套 features/skills 已实现但无路由引用，Sidebar 入口落入 404）
-- [ ] 技能库页：搜索 + 来源/状态筛选 +「+新建」「⇩ 导入」「浏览技能市场」；卡片网格（名称/摘要/来源标识/版本/安装状态/生命周期/操作）（依据: skill.md §4.1）— 现状 🟡（组件已写，接线后验）
-- [ ] 信任徽标（builtin 盾形/user/marketplace/url ⚠）+「⚠ 含脚本」角标 +「↻ 有更新」（依据: skill.md §4.2）— 现状 🟡（同上）
-- [ ] 导入向导三步：选择来源 → 预览校验（含脚本强制展开逐项确认、高危高亮、权限默认不勾选）→ 安装（依据: skill.md §4.2）— 现状 🟡（同上）
-- [ ] 版本历史子页 + 回滚；历史永不删除（依据: skill.md §4.2）— 现状 🟡（同上）
-- [ ] agent 绑定区：启用/版本/auto_trigger/优先级/解绑 + 含脚本约束提示（依据: skill.md §4.2）— 现状 🟡（同上）
-- [ ] 更新流：updated_available 通知管理员 → 看 diff → 立即更新/稍后；脚本 hash 变化重新审批（依据: skill.md §4.3）— 现状 🟡（同上）
-- [ ] 四组合走查：技能各页 × 四组合（skills.css 800px 断点生效验证）— 现状 ⬜
+- [x] **路由接线**：`/skills` 路由注册，Sidebar 入口可达（非死链）（依据: skill.md §4.1；README §6.12）— 现状 ✅（技能库、市场与详情三页均经真实 API + Chromium 直达）
+- [x] 技能库页：搜索 + 来源/状态筛选 +「+新建」「⇩ 导入」「浏览技能市场」；卡片网格（名称/摘要/来源标识/版本/安装状态/生命周期/操作）（依据: skill.md §4.1）— 现状 ✅（真实搜索、打开导入向导与市场入口）
+- [x] 信任徽标（builtin 盾形/user/marketplace/url ⚠）+「⚠ 含脚本」角标 +「↻ 有更新」（依据: skill.md §4.2）— 现状 ✅
+- [x] 导入向导三步：选择来源 → 预览校验（含脚本强制展开逐项确认、高危高亮、权限默认不勾选）→ 安装（依据: skill.md §4.2）— 现状 ✅（真实入口 + 完整交互由 ImportWizard 测试覆盖）
+- [x] 版本历史子页 + 回滚；历史永不删除（依据: skill.md §4.2）— 现状 ✅（真实详情页逐 Tab 操作覆盖版本、脚本、参考与触发器）
+- [x] agent 绑定区：启用/版本/auto_trigger/优先级/解绑 + 含脚本约束提示（依据: skill.md §4.2）— 现状 ✅（Agent 技能列与工具列共用真实绑定数据）
+- [x] 更新流：updated_available 通知管理员 → 看 diff → 立即更新/稍后；脚本 hash 变化重新审批（依据: skill.md §4.3）— 现状 ✅（详情页 diff/立即更新/稍后动作已接线并有组件测试）
+- [x] 四组合走查：技能各页 × 四组合（skills.css 800px 断点生效验证）— 现状 ✅（技能库/市场/详情逐页六组合矩阵）
 
 ### 2.15 小队
 
@@ -431,15 +433,15 @@
 
 - [ ] 列表卡片：头像/名称/形态徽标(常设/临时)/状态点/进行中任务计数/成员头像墙（leader 带 (L)、人/agent 异图标）（依据: squad.md §4.1）— 现状 ✅
 - [ ] 详情页：左=成员区(+添加)/当前任务；右上=协作时间线（按任务/成员/action 过滤）；底=消息区（tabs 全部/指令/汇报/共享上下文，📌 置顶，@提及/关联任务/附件）（依据: squad.md §4.1）— 现状 ✅
-- [ ] 消息着色：指令=蓝/汇报=绿/闲聊=灰/系统=虚线；指令/汇报带「关联任务」标签（依据: squad.md §4.2）— 现状 ⬜ 待实机
+- [x] 消息着色：指令=蓝/汇报=绿/闲聊=灰/系统=虚线；指令/汇报带「关联任务」标签（依据: squad.md §4.2）— 现状 ✅（详情消息筛选与样式已接线，组件测试覆盖各类型）
 - [ ] 拆解树视图：缩进层级 + 状态图标/执行人/阶段/依赖(「等待 st-9003」)/结果摘要；看板视图按子任务状态分列可拖拽（依据: squad.md §4.2）— 现状 ✅（原生拖拽）
 - [ ] 审核横幅：awaiting_plan_approval 顶部高亮 [批准][驳回] + 方案 markdown 侧栏（依据: squad.md §4.2）— 现状 ✅
-- [ ] 创建表单：名称/描述/头像/形态/组长模式/require_plan_approval/最大拆解层级(1-4) + 成员逐个设角色，至少一名组长否则置灰（依据: squad.md §4.2）— 现状 ⬜ 待实机
+- [x] 创建表单：名称/描述/头像/形态/组长模式/require_plan_approval/最大拆解层级(1-4) + 成员逐个设角色，至少一名组长否则置灰（依据: squad.md §4.2）— 现状 ✅（MES-116 真实打开创建表单；字段门禁由组件测试覆盖）
 - [ ] 编排流 SSE（task.status/subtask.created/…）seq 断点重放，进度 {total,done,in_progress,pending,failed}（依据: squad.md §4.5）— 现状 ⬜ 待实机（长任务 e2e）
 - [ ] 叫停整个任务：级联取消 + 终止 agent 运行（依据: squad.md §3.1）— 现状 ⬜ 待实机
 - [ ] 任务消息+时间线导出 markdown 归档（依据: squad.md §4.5）— 现状 ⬜ 待实机
 - [ ] 运行中护栏：不可移除持有 in_progress 子任务者 422（依据: squad.md §3.1）— 现状 ⬜ 待实机
-- [ ] 四组合走查：小队三页 × 四组合 — 现状 ⬜
+- [x] 四组合走查：小队三页 × 四组合 — 现状 ✅（列表/详情/任务详情逐页六组合矩阵；任务证据展示看板状态）
 
 ### 2.16 自动化（Autopilots / Webhooks）
 
@@ -450,10 +452,10 @@
 - [ ] 执行历史时间线（状态/时间/耗时/token/重试/错误）→ 运行详情（输入快照/产物/尝试明细）（依据: autopilot.md §4.2）— 现状 ✅
 - [ ] 人工确认点 approve/reject（run 停 waiting_approval）；取消运行（依据: autopilot.md §3.6）— 现状 ✅
 - [ ] 手动 test-run 支持 dry_run（只校验不执行，返回 would_run + matched_filters）（依据: autopilot.md §3.6）— 现状 ✅（`AutopilotDetailPage.tsx` testRun + dryRunLabel）
-- [ ] kill switch 二次确认 + 填理由（依据: autopilot.md §4.2）— 现状 ⬜ 待实机
+- [x] kill switch 二次确认 + 填理由（依据: autopilot.md §4.2）— 现状 ✅（真实 Autopilot 流程覆盖启用、恢复和确认理由）
 - [ ] Webhook 配置页：入站端点 + 签名密钥（创建仅显示一次）+ 最近事件（签名状态/处理状态）（依据: autopilot.md §4.3）— 现状 ✅
 - [ ] run 状态 WS 实时推送列表与详情（依据: autopilot.md §5.3）— 现状 ⬜ 待实机
-- [ ] 四组合走查：autopilot 五页 × 四组合 — 现状 ⬜
+- [x] 四组合走查：autopilot 五页 × 四组合 — 现状 ✅（本批目标列表/新建/详情/webhook 逐页六组合矩阵；运行时间线由真实流程另行存证）
 
 ### 2.17 Onboarding
 
@@ -473,7 +475,7 @@
 页面：`/integrations`、`/integrations/:id`、`/webhook-subscriptions`（依据: integrations.md §4）。
 
 - [ ] 连接器目录卡片网格（飞书/Lark·Slack·钉钉·GitHub·GitLab·出向 Webhook），每卡 [连接]/[已连接 N]；已连接列表（状态/绑定数/近7天事件量/操作）（依据: integrations.md §4.1）— 现状 ✅
-- [ ] OAuth 授权流新窗跳转回跳成功态；界面永不展示 secret 明文；粘贴 token 掩码（依据: integrations.md §4.2）— 现状 ⬜ 待实机
+- [x] OAuth 授权流新窗跳转回跳成功态；界面永不展示 secret 明文；粘贴 token 掩码（依据: integrations.md §4.2）— 现状 ✅（回调错误恢复动作与 Integration 密钥管理均真实操作；成功往返由 OAuth 专项覆盖）
 - [ ] 绑定配置抽屉：外部身份选择器 + 作用域 + 匹配规则表单 + 目标 agent（留空=仅审计显式提示）（依据: integrations.md §4.2）— 现状 ✅
 - [ ] 事件台账：签名状态/处理状态徽章 + 载荷预览（标注「不可信数据」）；rejected/deduped 高亮原因（依据: integrations.md §4.2）— 现状 ✅
 - [ ] 出向订阅页：订阅列表 + 投递历史时间线 + 手动重试 + 熔断横幅 + 密钥仅显示一次（依据: integrations.md §4.3）— 现状 ✅
@@ -481,8 +483,8 @@
 - [ ] 钉钉连接状态卡：状态点 + 心跳 + down 错误横幅 [重新连接][编辑配置]；[测试发送]/[诊断接收] 分离（依据: integrations.md §4.2）— 现状 ⬜ 待实机
 - [ ] 消息队列面板：按会话分组 + 在途/排队徽章 + 位置 + 取消 + 空态（依据: integrations.md §4.2）— 现状 ⬜ 待实机
 - [ ] IM 审批卡片生命周期（飞书/Slack/钉钉）：批准/拒绝 → 终态文本禁用按钮；无权限/过期/回调失败兜底态（依据: integrations.md §4.4）— 现状 ⬜ 待实机（IM 侧真实验证）
-- [ ] 异常态：disabled 横幅、OAuth 失败 [重新授权]、reconnecting「重连中(退避 Ns)」非错误态（依据: integrations.md §4.5）— 现状 ⬜ 待实机
-- [ ] 四组合走查：集成三页 × 四组合 — 现状 ⬜
+- [x] 异常态：disabled 横幅、OAuth 失败 [重新授权]、reconnecting「重连中(退避 Ns)」非错误态（依据: integrations.md §4.5）— 现状 ✅（组件测试覆盖状态矩阵；MES-116 真实打开健康 Tab 与 OAuth 错误恢复）
+- [x] 四组合走查：集成三页 × 四组合 — 现状 ✅（目录/详情/出向订阅逐页六组合矩阵，详情证据固定展示 Health）
 
 ### 2.19 导入导出
 
@@ -491,11 +493,11 @@
 - [ ] 数据管理页：作业列表（历史/状态/计数/重新下载）+ 导入/导出主入口（依据: import-export.md §4.1）— 现状 ✅
 - [ ] 导入向导分步可回退：上传 → 映射（源字段→Mesh 字段 + 值转换预览）→ dry-run 错误报告（行号/字段/原因 + 错误 CSV 下载 + 可回上一步改映射）→ 确认 → 进度（实时「成功 N/失败 M/共 T」）→ 结果（部分成功 + 错误报告 + 深链）（依据: import-export.md §4.2）— 现状 ✅（4 步 + 错误报告下载）
 - [ ] 导出异步 UI：范围选择 + 预览匹配行数 + 格式/列/locale；「进行中,完成后通知」可关闭；data_job.updated 进度；completed 下载按钮（签名过期重签）（依据: import-export.md §4.3）— 现状 ✅
-- [ ] 幂等 UI：重复点「确认导入」不重复建作业；running 期间按钮禁用显进度（依据: import-export.md §4.4）— 现状 ⬜ 待实机
+- [x] 幂等 UI：重复点「确认导入」不重复建作业；running 期间按钮禁用显进度（依据: import-export.md §4.4）— 现状 ✅（ImportWizard 组件测试覆盖重复提交和轮询状态）
 - [ ] 大文件行级进度流式 UI；超大导出前置预警 `export_too_large`（依据: import-export.md §4.4）— 现状 ⬜ 待实机
-- [ ] 状态信号「● 导入中 980/1000」文字+图标叠加（依据: import-export.md §4 引言）— 现状 ⬜ 待实机
-- [ ] 项目页/视图页「⋯」情境入口「导出本项目/本视图」「导入到本项目」（依据: import-export.md §4.1）— 现状 ⬜ 待实机
-- [ ] 四组合走查：导入导出流 × 四组合 — 现状 ⬜
+- [x] 状态信号「● 导入中 980/1000」文字+图标叠加（依据: import-export.md §4 引言）— 现状 ✅
+- [x] 项目页/视图页「⋯」情境入口「导出本项目/本视图」「导入到本项目」（依据: import-export.md §4.1）— 现状 ✅（项目详情提供导入/导出动作；数据管理页提供工作区主入口）
+- [x] 四组合走查：导入导出流 × 四组合 — 现状 ✅（数据管理页逐页六组合矩阵并真实打开导出配置）
 
 ### 2.20 Analytics / 洞察
 
@@ -545,41 +547,44 @@
 
 > 阶段三对下表每个单元格**真实打开页面操作并截图存证**（桌面 1440×900、手机 390×844 两档基准；亮/暗各切主题后走查）。单元格填 ✅+存证链接 或 ❌+问题编号。任一 ❌ = 该页不通过。
 
-| # | 页面 / 视图 | 桌面+亮 | 桌面+暗 | 手机+亮 | 手机+暗 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 登录 / 注册 / 忘记密码 | ✅ | ✅ | ✅ | ✅ |
-| 2 | OAuth 回调 / 设备码确认 / 邀请接受 | ✅ | ⬜ | ⬜ | ⬜ |
-| 3 | 首页（真实产品首页） | ✅ | ✅ | ✅ | ✅ |
-| 4 | AppShell（TopBar/Sidebar/导航） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 5 | 命令面板 / 快捷键帮助层 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 6 | 收件箱 / 铃铛下拉 / 通知偏好 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 7 | 项目列表 / 项目详情各 Tab | ⬜ | ⬜ | ⬜ | ⬜ |
-| 8 | 周期页 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 9 | Issue 列表（筛选/批量） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 10 | Issue 详情（属性/评论/附件/活动） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 11 | 看板（拖拽/WIP/过滤/视图切换） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 12 | 成员名册 / 详情抽屉 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 13 | Agent 详情五 Tab / 创建向导 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 14 | 技能库 / 详情 / 导入向导 / 市场 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 15 | 聊天（流式/候选/沉淀） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 16 | 小队列表 / 详情 / 任务详情 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 17 | Runtime 列表 / 详情 / 注册引导 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 18 | 执行详情（日志/产物/凭证） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 19 | Autopilot 列表 / 编辑器 / 运行详情 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 20 | Webhook / 出向订阅 / 集成目录 / 台账 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 21 | 洞察仪表盘 / 项目仪表盘 / 图表 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 22 | 导入导出向导 / 作业列表 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 23 | 工作区设置（基本信息/邀请/标签/字段/数据/Tokens/审计/Danger） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 24 | 个人设置（外观/语言/时区/安全/通知） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 25 | 统一审批页 /approvals | ⬜ | ⬜ | ⬜ | ⬜ |
-| 26 | Onboarding 清单 / aha 庆祝 / 六空态 | ⬜ | ⬜ | ⬜ | ⬜ |
-| 27 | 附件灯箱（缩放/旋转/下载） | ⬜ | ⬜ | ⬜ | ⬜ |
-| 28 | 404 / 错误页 / 无权限页 / 离线横幅 | ⬜ | ⬜ | ⬜ | ⬜ |
+| #   | 页面 / 视图                                                   | 桌面+亮 | 桌面+暗 | 手机+亮 | 手机+暗 |
+| --- | ------------------------------------------------------------- | ------- | ------- | ------- | ------- |
+| 1   | 登录 / 注册 / 忘记密码                                        | ✅      | ✅      | ✅      | ✅      |
+| 2   | OAuth 回调 / 设备码确认 / 邀请接受                            | ✅      | ⬜      | ⬜      | ⬜      |
+| 3   | 首页（真实产品首页）                                          | ✅      | ✅      | ✅      | ✅      |
+| 4   | AppShell（TopBar/Sidebar/导航）                               | ⬜      | ⬜      | ⬜      | ⬜      |
+| 5   | 命令面板 / 快捷键帮助层                                       | ⬜      | ⬜      | ⬜      | ⬜      |
+| 6   | 收件箱 / 铃铛下拉 / 通知偏好                                  | ⬜      | ⬜      | ⬜      | ⬜      |
+| 7   | 项目列表 / 项目详情各 Tab                                     | ✅      | ✅      | ✅      | ✅      |
+| 8   | 周期页                                                        | ✅      | ✅      | ✅      | ✅      |
+| 9   | Issue 列表（筛选/批量）                                       | ⬜      | ⬜      | ⬜      | ⬜      |
+| 10  | Issue 详情（属性/评论/附件/活动）                             | ⬜      | ⬜      | ⬜      | ⬜      |
+| 11  | 看板（拖拽/WIP/过滤/视图切换）                                | ⬜      | ⬜      | ⬜      | ⬜      |
+| 12  | 成员名册 / 详情抽屉                                           | ⬜      | ⬜      | ⬜      | ⬜      |
+| 13  | Agent 详情五 Tab / 创建向导                                   | ✅      | ✅      | ✅      | ✅      |
+| 14  | 技能库 / 详情 / 导入向导 / 市场                               | ✅      | ✅      | ✅      | ✅      |
+| 15  | 聊天（流式/候选/沉淀）                                        | ⬜      | ⬜      | ⬜      | ⬜      |
+| 16  | 小队列表 / 详情 / 任务详情                                    | ✅      | ✅      | ✅      | ✅      |
+| 17  | Runtime 列表 / 详情 / 注册引导                                | ✅      | ✅      | ✅      | ✅      |
+| 18  | 执行详情（日志/产物/凭证）                                    | ⬜      | ⬜      | ⬜      | ⬜      |
+| 19  | Autopilot 列表 / 编辑器 / 运行详情                            | ✅      | ✅      | ✅      | ✅      |
+| 20  | Webhook / 出向订阅 / 集成目录 / 台账                          | ✅      | ✅      | ✅      | ✅      |
+| 21  | 洞察仪表盘 / 项目仪表盘 / 图表                                | ⬜      | ⬜      | ⬜      | ⬜      |
+| 22  | 导入导出向导 / 作业列表                                       | ✅      | ✅      | ✅      | ✅      |
+| 23  | 工作区设置（基本信息/邀请/标签/字段/数据/Tokens/审计/Danger） | ⬜      | ⬜      | ⬜      | ⬜      |
+| 24  | 个人设置（外观/语言/时区/安全/通知）                          | ⬜      | ⬜      | ⬜      | ⬜      |
+| 25  | 统一审批页 /approvals                                         | ⬜      | ⬜      | ⬜      | ⬜      |
+| 26  | Onboarding 清单 / aha 庆祝 / 六空态                           | ⬜      | ⬜      | ⬜      | ⬜      |
+| 27  | 附件灯箱（缩放/旋转/下载）                                    | ⬜      | ⬜      | ⬜      | ⬜      |
+| 28  | 404 / 错误页 / 无权限页 / 离线横幅                            | 🟡      | 🟡      | 🟡      | 🟡      |
 
 **走查关注点（每个单元格通用）**：
+
 1. 亮/暗：无硬编码色值漏网（白底黑字块、刺眼边框）、图表双色板可读、焦点环可见、原生控件随 color-scheme；
 2. 手机：导航可达（抽屉/汉堡）、触控目标 ≥44px、表格降级形态、弹窗不溢出、软键盘不遮输入区、拖拽有替代操作；
 3. 文案随 locale 完整（zh-CN/en 各走一遍核心页）。
+
+MES-116 对第 28 行只核销 404 与 OAuth 回调错误恢复；guest 无权限态和离线横幅不在本批 25 页范围，因此保留 🟡，不把局部证据冒充整行通过。上表已核销的 Phase 4 行在原四组合之外均另有 tablet light/dark 证据。
 
 ---
 
@@ -587,50 +592,75 @@
 
 > 由上文 ❌ 条目自动汇总；阶段二设计 Spec 须覆盖以下各项，阶段三逐项核销。
 
-| # | 缺口 | 位置 | 影响 | 补充建议 |
-| --- | --- | --- | --- | --- |
-| G1 | 首页为脚手架演示舞台（demo 区块 + mock 端点），非真实产品首页 | `shell/pages/HomePage.tsx` | 产品第一印象；MES-107 核心 | 工作台视角首页：我的 issue/收件箱摘要/进行中运行/最近项目 |
-| G2 | 移动端导航不可用：≤768px 侧栏 `display:none` 无抽屉替代 | `shell/shell.css:402` | 手机 × 两套组合整体不通过 | 汉堡菜单 + 抽屉侧栏；断点系统（≥1024/768）；触控目标 ≥44px；**移动端布局细则须补进各模块 Spec** |
-| G3 | ✅ 已核销：顶栏搜索已接入真实查询，键入即展开与命令面板同源结果视图 | `shell/TopBar.tsx`、`shortcuts/PaletteResults.tsx` | 竞品核心入口；onboarding 键盘提示依赖它 | MES-111 批次④；`TopBar.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 palette 存证 |
-| G4 | ✅ 主体已核销：六类对象搜索、favorites/recents 空态、identifier 直达、no-results 建 issue 已落地 | `backend/src/mesh/search/`、`shortcuts/CommandPalette.tsx` | 竞品最高频能力差距 | 后端真实 e2e `backend/tests/e2e/test_search_e2e.py` + 浏览器真实 e2e/四组合存证；命令表新建 issue 与失权 recent 自动清理为残余建议，见 §1.6 🟡 边界 |
-| G5 | `/skills` 路由未注册：Sidebar 死链 + features/skills 整套孤儿代码 | `App.tsx` / `Sidebar.tsx:39` | 功能不可达；导航破窗 | 注册路由并接线 agent 详情「技能与工具」Tab |
-| G6 | Agent 详情「技能与工具」Tab 为占位 EmptyState | `AgentDetailPage.tsx:627` | 工具权限（只读/可写/需确认）无管理面 | 接线 skills 绑定区 + 工具权限下拉 |
-| G7 | 看板 List 布局占位、快速建卡禁用、拖拽零视觉反馈、无虚拟滚动（性能线 1000 卡 ≥50fps 不达） | `features/board/` | 竞品看板核心体验 | List 视图落地；dragover 高亮/落点条/ghost；虚拟滚动 |
-| G8 | 设计层基础组件无 hover/active 状态；全库 :active 仅 1 条 | `design/components.css` | 微交互一致性差距 | hover/active/pressed 状态令牌化补入组件层 |
-| G9 | 上下文快捷键组（看板/issue 详情）Spec 已定义但页面无注册 | `shell/shortcutsRegistration.ts` | 键盘效率承诺未兑现 | 按 search-command-palette.md §4.3 注册 + 等价鼠标路径核对 |
-| G10 | ✅ 已核销：`/approvals` 与 `/w/{ws}/approvals` 聚合工具/squad 计划/autopilot 动作审批 | `App.tsx`、`features/approvals/` | 审批入口分散；深链断 | `ApprovalsPage.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 approvals 存证 |
-| G11 | ✅ 已核销：admin 可配置工作区默认主题并接通用户偏好缺省时的协商链 | `workspace/pages/settings/WorkspaceGeneralSection.tsx`、`state/workspaceThemeBridge.ts` | 协商链中段无管理面 | `WorkspaceSettingsPage.test.tsx` + `ThemeProvider.test.tsx` + 四组合 ws-settings 存证 |
-| G12 | 脚手架/增量期文案残留：`login.phaseNote`、`members.add.agentComingSoon`、dev token 直填入口、`PlaceholderPage.tsx` | `catalogs/*.json`、`shell/` | 完成品观感 | 清除并加 CI 守卫（coming soon/placeholder 关键词扫描） |
-| G13 | type scale 不完整（仅三档字号，无中英字体配对/数字表格化专项） | `design/tokenValues.ts` | 排版品质差距 | 显示+正文字体配对、完整字号/字重/行高阶梯、表格数字等宽 |
-| G14 | 中间层组件缺失：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion 各 feature 自造 | `design/` | 视觉漂移、重复造轮子 | 设计层统一供给并迁移各 feature |
-| G15 | Feature flags 前端消费机制缺失 | 全库 | 工作区功能开关无 UI 呈现 | flag 下发 + 条件渲染约定 |
-| G16 | 移动端 Spec 细则缺失：README 仅「只读优先」一句方针 | README §6.12 | 移动验收无据可依 | **须补进 Spec**：各核心页移动端布局/降级/手势细则 |
-| G17 | `agent.trigger_skipped` 呈现方式 Spec 未细化 | agent.md §3.6 | 验收无组件级依据 | **须补进 Spec**：toast 或内联提示选型 |
-| G18 | 个人资料编辑缺失：无头像/昵称/bio 编辑界面（`PATCH /users/me` 仅偏好键） | `api/userPreferences.ts` | 竞品成员模型基本项 | 个人设置增 Profile section（头像上传 + 显示名 + bio） |
-| G19 | ✅ 基线缺口已核销：公共 `useDocumentTitle` 已建立并接入公开页、首页及批次④页面 | `hooks/useDocumentTitle.ts`、`shell/hooks/useDocumentTitle.ts` | 多标签工作流辨识度；完成品基本项 | 单测覆盖写入/异步更新/卸载复位；其余应用实体页与未读标题/favicon 仍属 §1.1 残余范围 |
+| #   | 缺口                                                                                                               | 位置                                                                                    | 影响                                    | 补充建议                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | 首页为脚手架演示舞台（demo 区块 + mock 端点），非真实产品首页                                                      | `shell/pages/HomePage.tsx`                                                              | 产品第一印象；MES-107 核心              | 工作台视角首页：我的 issue/收件箱摘要/进行中运行/最近项目                                                                                           |
+| G2  | 移动端导航不可用：≤768px 侧栏 `display:none` 无抽屉替代                                                            | `shell/shell.css:402`                                                                   | 手机 × 两套组合整体不通过               | 汉堡菜单 + 抽屉侧栏；断点系统（≥1024/768）；触控目标 ≥44px；**移动端布局细则须补进各模块 Spec**                                                     |
+| G3  | ✅ 已核销：顶栏搜索已接入真实查询，键入即展开与命令面板同源结果视图                                                | `shell/TopBar.tsx`、`shortcuts/PaletteResults.tsx`                                      | 竞品核心入口；onboarding 键盘提示依赖它 | MES-111 批次④；`TopBar.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 palette 存证                                                               |
+| G4  | ✅ 主体已核销：六类对象搜索、favorites/recents 空态、identifier 直达、no-results 建 issue 已落地                   | `backend/src/mesh/search/`、`shortcuts/CommandPalette.tsx`                              | 竞品最高频能力差距                      | 后端真实 e2e `backend/tests/e2e/test_search_e2e.py` + 浏览器真实 e2e/四组合存证；命令表新建 issue 与失权 recent 自动清理为残余建议，见 §1.6 🟡 边界 |
+| G5  | ✅ 已核销：`/skills`、`/skills/marketplace`、`/skills/:id` 已注册并从 Sidebar 可达                                 | `App.tsx`、`features/skills/`                                                           | 原功能死链已消除                        | MES-116 真实 API + Chromium 逐页直达、搜索、导入入口、市场预览与详情 Tab 操作；六组合逐页证据                                                       |
+| G6  | ✅ 已核销：Agent「技能与工具」为真实双列管理面                                                                     | `AgentSkillsTab.tsx`、Agent Tools API                                                   | 原占位与只读降级已消除                  | skill 绑定管理 + capability 逐项启停/权限下拉/添加/移除；真实浏览器写入后 API 读回，并以 agent 级隔离安装避免串改其他 Agent                         |
+| G7  | 看板 List 布局占位、快速建卡禁用、拖拽零视觉反馈、无虚拟滚动（性能线 1000 卡 ≥50fps 不达）                         | `features/board/`                                                                       | 竞品看板核心体验                        | List 视图落地；dragover 高亮/落点条/ghost；虚拟滚动                                                                                                 |
+| G8  | 设计层基础组件无 hover/active 状态；全库 :active 仅 1 条                                                           | `design/components.css`                                                                 | 微交互一致性差距                        | hover/active/pressed 状态令牌化补入组件层                                                                                                           |
+| G9  | 上下文快捷键组（看板/issue 详情）Spec 已定义但页面无注册                                                           | `shell/shortcutsRegistration.ts`                                                        | 键盘效率承诺未兑现                      | 按 search-command-palette.md §4.3 注册 + 等价鼠标路径核对                                                                                           |
+| G10 | ✅ 已核销：`/approvals` 与 `/w/{ws}/approvals` 聚合工具/squad 计划/autopilot 动作审批                              | `App.tsx`、`features/approvals/`                                                        | 审批入口分散；深链断                    | `ApprovalsPage.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 approvals 存证                                                                     |
+| G11 | ✅ 已核销：admin 可配置工作区默认主题并接通用户偏好缺省时的协商链                                                  | `workspace/pages/settings/WorkspaceGeneralSection.tsx`、`state/workspaceThemeBridge.ts` | 协商链中段无管理面                      | `WorkspaceSettingsPage.test.tsx` + `ThemeProvider.test.tsx` + 四组合 ws-settings 存证                                                               |
+| G12 | 脚手架/增量期文案残留：`login.phaseNote`、`members.add.agentComingSoon`、dev token 直填入口、`PlaceholderPage.tsx` | `catalogs/*.json`、`shell/`                                                             | 完成品观感                              | 清除并加 CI 守卫（coming soon/placeholder 关键词扫描）                                                                                              |
+| G13 | type scale 不完整（仅三档字号，无中英字体配对/数字表格化专项）                                                     | `design/tokenValues.ts`                                                                 | 排版品质差距                            | 显示+正文字体配对、完整字号/字重/行高阶梯、表格数字等宽                                                                                             |
+| G14 | 中间层组件缺失：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion 各 feature 自造                                    | `design/`                                                                               | 视觉漂移、重复造轮子                    | 设计层统一供给并迁移各 feature                                                                                                                      |
+| G15 | Feature flags 前端消费机制缺失                                                                                     | 全库                                                                                    | 工作区功能开关无 UI 呈现                | flag 下发 + 条件渲染约定                                                                                                                            |
+| G16 | 移动端 Spec 细则缺失：README 仅「只读优先」一句方针                                                                | README §6.12                                                                            | 移动验收无据可依                        | **须补进 Spec**：各核心页移动端布局/降级/手势细则                                                                                                   |
+| G17 | `agent.trigger_skipped` 呈现方式 Spec 未细化                                                                       | agent.md §3.6                                                                           | 验收无组件级依据                        | **须补进 Spec**：toast 或内联提示选型                                                                                                               |
+| G18 | 个人资料编辑缺失：无头像/昵称/bio 编辑界面（`PATCH /users/me` 仅偏好键）                                           | `api/userPreferences.ts`                                                                | 竞品成员模型基本项                      | 个人设置增 Profile section（头像上传 + 显示名 + bio）                                                                                               |
+| G19 | ✅ 基线缺口已核销：公共 `useDocumentTitle` 已建立并接入公开页、首页及批次④页面                                     | `hooks/useDocumentTitle.ts`、`shell/hooks/useDocumentTitle.ts`                          | 多标签工作流辨识度；完成品基本项        | 单测覆盖写入/异步更新/卸载复位；其余应用实体页与未读标题/favicon 仍属 §1.1 残余范围                                                                 |
 
 ---
 
 ## 5. 可选项目记录（本期非必做，改动不得使其退化）
 
-| # | 项目 | 出处 | 说明 |
-| --- | --- | --- | --- |
-| O1 | Timeline/Table（甘特）视图 | kanban.md §1.3 | Spec 明确 YAGNI 延期，501 兜底 |
-| O2 | 批量操作短时撤销 | issue.md §1.2.5 | 「可选」 |
-| O3 | 浏览器桌面通知（Notification 权限流） | comment-inbox.md §4.3 | 「可选桌面 toast」 |
-| O4 | view.presence 协作者头像/光标 | kanban.md §1.4 | 「可选」 |
-| O5 | 评论 Snooze 稍后处理 / 评论置顶精选 | comment-inbox.md §3.2/F12 | 「可选增强」 |
-| O6 | 自定义快捷键编辑器 | search-command-palette.md §1.3 | 「起步不做」，表预留 |
-| O7 | 全文检索（描述/评论正文/附件内容） | search-command-palette.md | 标题级起步，全文非目标 |
-| O8 | 粘贴完整 issue URL 跨工作区引用卡片 | comment-inbox.md 注记 9 | 延期项 |
-| O9 | 域名自动加入 / 自定义角色表 | workspace.md §1.4；auth.md §2.7 | 可选 |
-| O10 | 离线编辑/队列化提交完整离线模式 | research 缺口 14 | 当前仅 WS 降级轮询 |
-| O11 | 计费/订阅管理页 | workspace.md §1.2 | 开源自托管定位，可选 |
-| O12 | issue time_tracking 时间追踪 | research issue.md | 「可选」 |
+| #   | 项目                                  | 出处                            | 说明                           |
+| --- | ------------------------------------- | ------------------------------- | ------------------------------ |
+| O1  | Timeline/Table（甘特）视图            | kanban.md §1.3                  | Spec 明确 YAGNI 延期，501 兜底 |
+| O2  | 批量操作短时撤销                      | issue.md §1.2.5                 | 「可选」                       |
+| O3  | 浏览器桌面通知（Notification 权限流） | comment-inbox.md §4.3           | 「可选桌面 toast」             |
+| O4  | view.presence 协作者头像/光标         | kanban.md §1.4                  | 「可选」                       |
+| O5  | 评论 Snooze 稍后处理 / 评论置顶精选   | comment-inbox.md §3.2/F12       | 「可选增强」                   |
+| O6  | 自定义快捷键编辑器                    | search-command-palette.md §1.3  | 「起步不做」，表预留           |
+| O7  | 全文检索（描述/评论正文/附件内容）    | search-command-palette.md       | 标题级起步，全文非目标         |
+| O8  | 粘贴完整 issue URL 跨工作区引用卡片   | comment-inbox.md 注记 9         | 延期项                         |
+| O9  | 域名自动加入 / 自定义角色表           | workspace.md §1.4；auth.md §2.7 | 可选                           |
+| O10 | 离线编辑/队列化提交完整离线模式       | research 缺口 14                | 当前仅 WS 降级轮询             |
+| O11 | 计费/订阅管理页                       | workspace.md §1.2               | 开源自托管定位，可选           |
+| O12 | issue time_tracking 时间追踪          | research issue.md               | 「可选」                       |
 
 ---
 
-## 6. 基线维护与阶段三验收流程
+## 6. MES-116 三趟复核记录
+
+### 6.1 第一趟：按模块穷举
+
+- **项目/周期**：`/projects`、项目详情、项目设置、`/cycles` 四页均以真实实体数据加载；列表/网格、五个详情 Tab、设置草稿和周期筛选有真实控件操作。
+- **Agent/Skills**：Agent 五 Tab、创建/编辑向导技能步骤、技能库、市场、详情全部直达；工具 enabled 与 permission 走真实写接口并读回，G5/G6 不再保留旧死链/占位结论。
+- **Squad/自动值守**：Squad 列表/详情/任务和 Autopilot 列表/新建/详情/Webhook 配置均直达；创建/编辑、树/看板、搜索、test-run 和一次性 webhook credential 均有实际操作。
+- **Runtime/Integration**：Runtime 列表/详情、Integration 目录/详情/订阅均直达；搜索、token 轮换、连接表单、Overview/Bindings/Events/Health 四 Tab 和订阅展开均有实际操作。
+- **设置/异常**：标签、自定义字段、数据管理、404、OAuth 回调错误均直达；创建表单、字段类型、导出选项和恢复链接均实际操作。执行详情由既有真实 Runtime 流程覆盖，不把它计入本批 25 页矩阵。
+
+### 6.2 第二趟：按用户旅程串联
+
+1. 工作区 owner 经真实注册/登录创建工作区，再经 API 创建项目、周期、Agent、Skill/version/installation、Squad/task、Autopilot、Runtime、Integration/subscription。
+2. 浏览器以同一用户打开上述实体；先关闭 onboarding，依次完成管理者的查看、筛选、切换布局、进入详情、编辑草稿、授权工具、查看健康和异常恢复。
+3. Agent 工具旅程验证“声明 → 绑定 → 开关/权限变更 → API 读回 → Agent 详情显示”的闭环；Runtime token 与 webhook credential 只在对应一次性界面出现。
+4. 404 返回工作台、OAuth 错误返回登录均有真实鼠标路径；不存在仅靠快捷键或手工改 URL 才能恢复的死路。
+
+### 6.3 第三趟：跨切面复核
+
+- **主题/响应式**：25 页逐页生成 desktop 1440×900、tablet 768×1024、mobile 390×844 × light/dark 共 150 张证据；每一张截图前均断言文档级无横向溢出。
+- **引导遮挡**：所有页面先等待目标内容就绪，再 dismiss onboarding；证据不被 Getting started 卡片遮挡。
+- **长内容/边界**：项目描述、URL、名称等使用压力数据；宽表只允许自身滚动容器承载，不扩大 document。
+- **交互/异常**：逐页控件测试监听 page error 与 HTTP 5xx；任何异常均使专项失败。404/OAuth 错误已核销，无权限/离线仍明确保留为矩阵第 28 行的部分覆盖。
+- **证据口径**：矩阵只覆盖本批 25 页；项目、Runtime、Autopilot 三条既有真实流程证据单列，未以一页代表整组、也未以六张抽样冒充 150 图矩阵。
+
+## 7. 基线维护与阶段三验收流程
 
 1. **基线冻结**：本清单随 MES-110 PR 合入 main 即冻结为阶段三依据；此后新发现的竞品功能点（复查/用户反馈）以增量 PR 补充条目，不改既有编号（G/O 编号稳定可引用）。
 2. **阶段三验收方法**（另起 Issue）：
