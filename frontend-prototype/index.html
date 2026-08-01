@@ -7,16 +7,12 @@
       name="description"
       content="Mesh AI 原生团队工作区可交互静态原型"
     />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; media-src 'none'; worker-src 'none'"
+    />
     <title>Mesh · 团队工作区</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script>
-      (() => {
-        const saved = localStorage.getItem("mesh-prototype-theme");
-        const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-        document.documentElement.dataset.theme =
-          saved === "dark" || (!saved && dark) ? "dark" : "light";
-      })();
-    </script>
     <script defer src="./app.js"></script>
   </head>
   <body>

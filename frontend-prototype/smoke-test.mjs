@@ -1,36 +1,92 @@
 /**
- * Dependency-free browser smoke test.
+ * Browser smoke and security regression test.
  *
- * Start Chrome with a DevTools port, then run:
- *   node smoke-test.mjs
+ * Start an isolated Chrome instance as documented in README.md, then run:
+ *   npm test
  */
 
-import { createRequire } from "node:module";
+import WebSocketClient from "ws";
 
-const require = createRequire(import.meta.url);
-const WebSocketClient = globalThis.WebSocket ?? require("ws");
-const endpoint = process.env.MESH_CDP_ENDPOINT ?? "http://127.0.0.1:9222";
-const targets = await fetch(`${endpoint}/json/list`).then((response) => response.json());
-const target = targets.find((item) => item.type === "page");
-
-if (!target?.webSocketDebuggerUrl) {
-  throw new Error("No debuggable page was found.");
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
 }
 
-const socket = new WebSocketClient(target.webSocketDebuggerUrl);
+function parseCdpEndpoint(value) {
+  let endpoint;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error("MESH_CDP_ENDPOINT must be a valid URL.");
+  }
+  assert(endpoint.protocol === "http:", "CDP endpoint must use http://.");
+  assert(endpoint.hostname === "127.0.0.1", "CDP endpoint must bind to 127.0.0.1.");
+  assert(Boolean(endpoint.port), "CDP endpoint must include an explicit port.");
+  assert(!endpoint.username && !endpoint.password, "CDP endpoint must not contain credentials.");
+  assert(endpoint.pathname === "/" && !endpoint.search && !endpoint.hash, "CDP endpoint must not contain a path, query, or fragment.");
+  return endpoint;
+}
+
+function normalizePrototypeUrl(value) {
+  const url = new URL(value);
+  url.hash = "";
+  return url.href;
+}
+
+const endpoint = parseCdpEndpoint(process.env.MESH_CDP_ENDPOINT ?? "http://127.0.0.1:9222");
+const targetListUrl = new URL("/json/list", endpoint);
+const targetResponse = await fetch(targetListUrl, { signal: AbortSignal.timeout(5000) });
+assert(targetResponse.ok, `CDP target list failed with HTTP ${targetResponse.status}.`);
+const targets = await targetResponse.json();
+assert(Array.isArray(targets), "CDP target list returned an invalid payload.");
+
+const prototypeUrl = new URL("./index.html", import.meta.url).href;
+const target = targets.find((item) => {
+  if (item?.type !== "page" || typeof item.url !== "string") return false;
+  try {
+    return normalizePrototypeUrl(item.url) === prototypeUrl;
+  } catch {
+    return false;
+  }
+});
+assert(target?.webSocketDebuggerUrl, "The CDP endpoint does not expose this prototype's index.html page.");
+assert(typeof target.id === "string" && target.id.length > 0, "The selected CDP page is missing a target id.");
+
+const debuggerUrl = new URL(target.webSocketDebuggerUrl);
+assert(debuggerUrl.protocol === "ws:", "CDP WebSocket must use ws://.");
+assert(debuggerUrl.hostname === endpoint.hostname && debuggerUrl.port === endpoint.port, "CDP WebSocket must be same-origin with the approved endpoint.");
+assert(!debuggerUrl.username && !debuggerUrl.password && !debuggerUrl.search && !debuggerUrl.hash, "CDP WebSocket URL contains unexpected components.");
+assert(debuggerUrl.pathname === `/devtools/page/${target.id}`, "CDP WebSocket does not match the selected prototype page.");
+
+const socket = new WebSocketClient(debuggerUrl, {
+  handshakeTimeout: 5000,
+  maxPayload: 1024 * 1024,
+  perMessageDeflate: false,
+});
 await new Promise((resolve, reject) => {
-  socket.addEventListener("open", resolve, { once: true });
-  socket.addEventListener("error", reject, { once: true });
+  const timeout = setTimeout(() => {
+    socket.terminate();
+    reject(new Error("Timed out connecting to the approved CDP page."));
+  }, 5000);
+  socket.once("open", () => {
+    clearTimeout(timeout);
+    resolve();
+  });
+  socket.once("error", (error) => {
+    clearTimeout(timeout);
+    reject(error);
+  });
 });
 
+try {
 let nextId = 0;
 const pending = new Map();
 
 socket.addEventListener("message", (event) => {
   const message = JSON.parse(String(event.data));
   if (!message.id || !pending.has(message.id)) return;
-  const { resolve, reject } = pending.get(message.id);
+  const { resolve, reject, timeout } = pending.get(message.id);
   pending.delete(message.id);
+  clearTimeout(timeout);
   if (message.error) reject(new Error(message.error.message));
   else resolve(message.result);
 });
@@ -38,8 +94,14 @@ socket.addEventListener("message", (event) => {
 function command(method, params = {}) {
   nextId += 1;
   const id = nextId;
-  socket.send(JSON.stringify({ id, method, params }));
-  return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error(`CDP command timed out: ${method}`));
+    }, 5000);
+    pending.set(id, { resolve, reject, timeout });
+    socket.send(JSON.stringify({ id, method, params }));
+  });
 }
 
 async function evaluate(expression) {
@@ -54,12 +116,22 @@ async function evaluate(expression) {
   return response.result.value;
 }
 
-function assert(condition, message) {
-  if (!condition) throw new Error(message);
-}
-
 await command("Runtime.enable");
 const checks = [];
+
+const securityPolicy = await evaluate(`document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || ""`);
+for (const directive of [
+  "default-src 'none'",
+  "script-src 'self'",
+  "script-src-attr 'none'",
+  "connect-src 'none'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+]) {
+  assert(securityPolicy.includes(directive), `Content Security Policy is missing: ${directive}`);
+}
+checks.push("content-security-policy");
 
 await evaluate(`document.fonts.ready.then(() => true)`);
 const fontState = await evaluate(`({
@@ -117,6 +189,90 @@ assert(
   "Issue creation did not update the board.",
 );
 checks.push("issue-create");
+
+const maliciousTitles = [
+  `<img src=x onerror="document.body.dataset.xss='img'">`,
+  `<svg onload="document.body.dataset.xss='svg'"></svg>`,
+  `</div><img src=x onerror="document.body.dataset.xss='closed'"><div>`,
+  `\"><script>document.body.dataset.xss='script'</script><span data-break=\"`,
+  `<b title="'&\"">quoted & tagged</b>`,
+];
+
+await evaluate(`delete document.body.dataset.xss`);
+for (const title of maliciousTitles) {
+  await evaluate(`document.querySelector('[data-action="open-create-issue"]').click()`);
+  await evaluate(`(() => {
+    const form = document.querySelector('[data-form="create-issue"]');
+    form.elements.title.value = ${JSON.stringify(title)};
+    form.elements.status.value = "todo";
+    form.requestSubmit();
+  })()`);
+  await evaluate(`new Promise(resolve => setTimeout(resolve, 120))`);
+  const result = await evaluate(`(() => {
+    const expected = ${JSON.stringify(title)};
+    const card = [...document.querySelectorAll(".board-card")]
+      .find((item) => item.querySelector(".board-card__title")?.textContent === expected);
+    const titleNode = card?.querySelector(".board-card__title");
+    const descendants = card ? [...card.querySelectorAll("*")] : [];
+    return {
+      found: Boolean(card),
+      exactText: titleNode?.textContent === expected,
+      titleChildren: titleNode?.children.length ?? -1,
+      executableNodes: card?.querySelectorAll("img, svg, script, iframe, object, embed, math").length ?? -1,
+      eventAttributes: descendants.flatMap((node) => [...node.attributes]).filter((attribute) => attribute.name.toLowerCase().startsWith("on")).length,
+      executed: document.body.dataset.xss || ""
+    };
+  })()`);
+  assert(result.found && result.exactText, "A hostile issue title did not render as literal text.");
+  assert(result.titleChildren === 0, "A hostile issue title created child elements.");
+  assert(result.executableNodes === 0, "A hostile issue title created an executable node.");
+  assert(result.eventAttributes === 0, "A hostile issue title created an event attribute.");
+  assert(!result.executed, "A hostile issue title executed script in the page context.");
+}
+
+await evaluate(`location.hash = "#/project"`);
+await evaluate(`new Promise(resolve => setTimeout(resolve, 80))`);
+const projectTitleSafety = await evaluate(`(() => {
+  const expected = ${JSON.stringify(maliciousTitles)};
+  const rows = [...document.querySelectorAll(".issue-row__title")];
+  return expected.every((title) => {
+    const row = rows.find((item) => item.textContent === title);
+    return row && row.children.length === 0 && ![...row.attributes].some((attribute) => attribute.name.toLowerCase().startsWith("on"));
+  });
+})()`);
+assert(projectTitleSafety, "Project issue list did not preserve hostile titles as literal text.");
+await evaluate(`location.hash = "#/issues"`);
+await evaluate(`new Promise(resolve => setTimeout(resolve, 80))`);
+checks.push("hostile-title-xss");
+
+for (const [field, value] of [
+  ["status", "done<script>"],
+  ["priority", "urgent\" onmouseover=alert(1)"],
+  ["assignee", "unknown-agent"],
+  ["project", "<svg onload=alert(1)>"],
+]) {
+  const before = await evaluate(`document.querySelectorAll(".board-card").length`);
+  await evaluate(`document.querySelector("#toast-region").replaceChildren()`);
+  await evaluate(`document.querySelector('[data-action="open-create-issue"]').click()`);
+  await evaluate(`(() => {
+    const form = document.querySelector('[data-form="create-issue"]');
+    const field = form.elements[${JSON.stringify(field)}];
+    field.append(new Option("tampered", ${JSON.stringify(value)}, true, true));
+    form.elements.title.value = "字段边界回归";
+    form.requestSubmit();
+  })()`);
+  await evaluate(`new Promise(resolve => setTimeout(resolve, 40))`);
+  const rejected = await evaluate(`({
+    count: document.querySelectorAll(".board-card").length,
+    dialogOpen: Boolean(document.querySelector('[data-form="create-issue"]')),
+    feedback: document.querySelector("#toast-region")?.textContent || ""
+  })`);
+  assert(rejected.count === before, `Unsupported ${field} value created an issue.`);
+  assert(rejected.dialogOpen, `Unsupported ${field} value closed the issue form.`);
+  assert(rejected.feedback.includes("不受支持"), `Unsupported ${field} value did not show validation feedback.`);
+  await evaluate(`document.querySelector('[data-action="close-overlay"]').click()`);
+}
+checks.push("issue-field-boundaries");
 
 const dragResult = await evaluate(`(() => {
   const source = document.querySelector('[data-card-key="MES-149"]');
@@ -250,7 +406,7 @@ await evaluate(`(() => {
   const form = document.querySelector('[data-form="login"]');
   const input = form.elements.email;
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-  setter.call(input, "test@mesh.local");
+  setter.call(input, "tester@example.test");
   input.dispatchEvent(new Event("input", { bubbles: true }));
   form.requestSubmit();
 })()`);
@@ -269,5 +425,17 @@ await evaluate(`new Promise(resolve => setTimeout(resolve, 40))`);
 assert(await evaluate(`location.hash === "#/issues"`), "Code verification did not enter the workspace.");
 checks.push("auth-flow");
 
-socket.close();
 console.log(JSON.stringify({ ok: true, checks }, null, 2));
+} finally {
+await new Promise((resolve) => {
+  const timeout = setTimeout(() => {
+    socket.terminate();
+    resolve();
+  }, 1000);
+  socket.once("close", () => {
+    clearTimeout(timeout);
+    resolve();
+  });
+  socket.close();
+});
+}

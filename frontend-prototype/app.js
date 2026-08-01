@@ -1,6 +1,11 @@
 (() => {
   "use strict";
 
+  const savedTheme = localStorage.getItem("mesh-prototype-theme");
+  const prefersDark = matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme =
+    savedTheme === "dark" || (!savedTheme && prefersDark) ? "dark" : "light";
+
   const root = document.querySelector("#prototype-root");
   const overlayRoot = document.querySelector("#overlay-root");
   const toastRegion = document.querySelector("#toast-region");
@@ -89,7 +94,7 @@
       .replaceAll("'", "&#039;");
 
   const people = {
-    you: { initials: "闻", tone: "", name: "陈闻峰" },
+    you: { initials: "李", tone: "", name: "李然" },
     lin: { initials: "林", tone: "avatar--green", name: "林澄" },
     zhao: { initials: "赵", tone: "avatar--orange", name: "赵可" },
     qiao: { initials: "乔", tone: "avatar--violet", name: "乔远" },
@@ -99,8 +104,21 @@
 
   const avatar = (key, large = false) => {
     const person = people[key] || people.you;
-    return `<span class="avatar ${person.tone} ${large ? "avatar--large" : ""}" title="${person.name}">${person.initials}</span>`;
+    return `<span class="avatar ${escapeHtml(person.tone)} ${large ? "avatar--large" : ""}" title="${escapeHtml(person.name)}">${escapeHtml(person.initials)}</span>`;
   };
+
+  const issueFieldOptions = {
+    status: new Set(["todo", "progress"]),
+    priority: new Set(["normal", "high", "urgent"]),
+    assignee: new Set(["agent", "you", "lin"]),
+    project: new Set(["移动体验", "身份与权限", "协作体验"]),
+  };
+  const issueStatusClasses = new Set(["backlog", "todo", "progress", "review", "done"]);
+  const availableWorkspaces = [
+    ["MS", "Mesh Studio", "产品与工程"],
+    ["PL", "产品实验室", "6 位成员"],
+    ["IF", "Infra", "基础设施"],
+  ];
 
   const state = {
     route: "",
@@ -272,15 +290,19 @@
     },
   ];
 
-  const priority = (level) =>
-    `<span class="priority-mark priority-mark--${level}" title="优先级"><i></i><i></i><i></i></span>`;
+  const priority = (level) => {
+    const safeLevel = issueFieldOptions.priority.has(level) ? level : "normal";
+    return `<span class="priority-mark priority-mark--${safeLevel}" title="优先级"><i></i><i></i><i></i></span>`;
+  };
 
-  const statusPill = (status, label) =>
-    `<span class="status-pill status-pill--${status}">${label}</span>`;
+  const statusPill = (status, label) => {
+    const safeStatus = issueStatusClasses.has(status) ? status : "todo";
+    return `<span class="status-pill status-pill--${safeStatus}">${escapeHtml(label)}</span>`;
+  };
 
   const button = (label, iconName, action, variant = "outline", extra = "") =>
-    `<button class="ui-button ui-button--small ui-button--${variant} ${extra}" type="button" data-action="${action}">
-      ${iconName ? icon(iconName, "icon--sm") : ""}<span>${label}</span>
+    `<button class="ui-button ui-button--small ui-button--${escapeHtml(variant)} ${escapeHtml(extra)}" type="button" data-action="${escapeHtml(action)}">
+      ${iconName ? icon(iconName, "icon--sm") : ""}<span>${escapeHtml(label)}</span>
     </button>`;
 
   function currentRoute() {
@@ -350,8 +372,8 @@
   function pageBar(title, iconName, options = {}) {
     return `<header class="page-bar">
       <button class="ui-button ui-button--icon mobile-menu-button" type="button" data-action="mobile-menu" aria-label="打开导航">${icon("menu")}</button>
-      <div class="page-bar__title">${title}</div>
-      ${options.count ? `<span class="page-bar__count">${options.count}</span>` : ""}
+      <div class="page-bar__title">${escapeHtml(title)}</div>
+      ${options.count ? `<span class="page-bar__count">${escapeHtml(options.count)}</span>` : ""}
       <div class="page-bar__actions">
         ${options.actions || ""}
       </div>
@@ -501,12 +523,12 @@
   }
 
   function boardCard(card, column) {
-    return `<article class="board-card" draggable="true" data-card-key="${card.key}" data-column="${column}" data-route="issue">
-      <div class="board-card__key">${card.key}</div>
-      <div class="board-card__title">${card.title}</div>
+    return `<article class="board-card" draggable="true" data-card-key="${escapeHtml(card.key)}" data-column="${escapeHtml(column)}" data-route="issue">
+      <div class="board-card__key">${escapeHtml(card.key)}</div>
+      <div class="board-card__title">${escapeHtml(card.title)}</div>
       <div class="board-card__meta">
         ${priority(card.priority)}
-        <span class="label">${card.label}</span>
+        <span class="label">${escapeHtml(card.label)}</span>
         ${avatar(card.person)}
       </div>
     </article>`;
@@ -530,7 +552,7 @@
               ${statusPill("progress", "进行中")}
               <span class="label">体验</span>
               <span class="u-muted u-mono">MES-147</span>
-              <span class="u-muted">由 陈闻峰 创建 · 3 分钟前</span>
+              <span class="u-muted">由 李然 创建 · 3 分钟前</span>
             </div>
           </header>
           <div class="prose">
@@ -621,7 +643,7 @@
           <tbody>
             ${projects.map((project) => `<tr data-route="project">
               <td><span class="project-tile">${project.code}</span><span><strong>${project.name}</strong><small>${project.detail}</small></span></td>
-              <td>${avatar("you")}<span>陈闻峰</span></td>
+              <td>${avatar("you")}<span>李然</span></td>
               <td><span class="compact-progress"><i style="width:${project.progress}%"></i></span><span>${project.progress}%</span></td>
               <td>${project.issues}</td>
               <td>Today</td>
@@ -650,7 +672,7 @@
         <div class="chart-grid">
           <section class="surface-card">
             <div class="surface-card__head"><h2>最近 Issues</h2><span class="u-spacer"></span><button class="auth-switch" data-route="issues">查看全部</button></div>
-            ${state.issues.slice(0, 5).map((issue) => `<div class="issue-row" style="grid-template-columns:24px 62px minmax(0,1fr) 84px 42px">${priority(issue.priority)}<span class="u-mono u-muted">${issue.key}</span><span class="issue-row__title">${issue.title}</span>${statusPill(issue.status, issue.statusText)}${avatar(issue.assignee)}</div>`).join("")}
+            ${state.issues.slice(0, 5).map((issue) => `<div class="issue-row" style="grid-template-columns:24px 62px minmax(0,1fr) 84px 42px">${priority(issue.priority)}<span class="u-mono u-muted">${escapeHtml(issue.key)}</span><span class="issue-row__title">${escapeHtml(issue.title)}</span>${statusPill(issue.status, issue.statusText)}${avatar(issue.assignee)}</div>`).join("")}
           </section>
           <section class="surface-card">
             <div class="surface-card__head"><h2>里程碑</h2><span class="u-spacer"></span>${icon("more", "icon--sm")}</div>
@@ -667,10 +689,10 @@
 
   function membersPage() {
     const members = [
-      ["you", "陈闻峰", "cnwenf@outlook.com", "所有者", "在线", "2026-05-18"],
-      ["lin", "林澄", "lin@mesh.team", "管理员", "在线", "2026-05-21"],
-      ["zhao", "赵可", "zhao@mesh.team", "成员", "2 小时前", "2026-06-03"],
-      ["qiao", "乔远", "qiao@mesh.team", "成员", "昨天", "2026-06-12"],
+      ["you", "李然", "demo.user@example.test", "所有者", "在线", "2026-05-18"],
+      ["lin", "林澄", "lin@example.test", "管理员", "在线", "2026-05-21"],
+      ["zhao", "赵可", "zhao@example.test", "成员", "2 小时前", "2026-06-03"],
+      ["qiao", "乔远", "qiao@example.test", "成员", "昨天", "2026-06-12"],
       ["agent", "Mesh 工程师", "智能体 · 私有", "智能体", "正在工作", "2026-07-10"],
       ["design", "设计助手", "智能体 · 工作区", "智能体", "18 分钟前", "2026-07-14"],
     ];
@@ -686,10 +708,10 @@
           ${members
             .map(
               ([person, name, email, role, active, joined]) => `<div class="roster-row">
-                <div class="roster-person">${avatar(person, true)}<div class="roster-person__copy"><div class="roster-person__name">${name}</div><div class="roster-person__email">${email}</div></div></div>
-                <div class="roster-row__role"><span class="meta-pill">${role}</span></div>
-                <div class="${active.includes("在线") || active.includes("正在") ? "u-success" : "u-muted"}">${active}</div>
-                <div class="roster-row__joined u-muted">${joined}</div>
+                <div class="roster-person">${avatar(person, true)}<div class="roster-person__copy"><div class="roster-person__name">${escapeHtml(name)}</div><div class="roster-person__email">${escapeHtml(email)}</div></div></div>
+                <div class="roster-row__role"><span class="meta-pill">${escapeHtml(role)}</span></div>
+                <div class="${active.includes("在线") || active.includes("正在") ? "u-success" : "u-muted"}">${escapeHtml(active)}</div>
+                <div class="roster-row__joined u-muted">${escapeHtml(joined)}</div>
                 <button class="ui-button ui-button--icon" type="button">${icon("more", "icon--sm")}</button>
               </div>`,
             )
@@ -820,7 +842,7 @@
           <thead><tr><th>Name</th><th>Leader</th><th>Members</th><th>Last active</th><th></th></tr></thead>
           <tbody>${squads.map(([name, detail, leader, members, active]) => `<tr>
             <td><span class="squad-tile">${icon("members", "icon--sm")}</span><span><strong>${name}</strong><small>${detail}</small></span></td>
-            <td>${avatar(leader)}<span>陈闻峰</span></td><td>${members}</td><td>${active}</td><td>${icon("more", "icon--sm")}</td>
+            <td>${avatar(leader)}<span>李然</span></td><td>${escapeHtml(members)}</td><td>${escapeHtml(active)}</td><td>${icon("more", "icon--sm")}</td>
           </tr>`).join("")}</tbody>
         </table>
       </div>
@@ -945,8 +967,8 @@
                     .map(
                       (message) =>
                         message.from === "me"
-                          ? `<div class="message message--me"><div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">${message.time}</div></div>${avatar("you")}</div>`
-                          : `<div class="message">${avatar("agent")}<div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">Mesh 工程师 · ${message.time}</div></div></div>`,
+                          ? `<div class="message message--me"><div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">${escapeHtml(message.time)}</div></div>${avatar("you")}</div>`
+                          : `<div class="message">${avatar("agent")}<div class="message__body"><p>${escapeHtml(message.text)}</p><div class="message__meta">Mesh 工程师 · ${escapeHtml(message.time)}</div></div></div>`,
                     )
                     .join("")}
                 </div></div>
@@ -1032,7 +1054,7 @@
       content = `<section class="settings-section"><h1>Profile</h1><h2>Personal information</h2>
         <div class="profile-form">
           <label class="avatar-field"><span>Avatar<small>Click to upload avatar</small></span>${avatar("you", true)}</label>
-          <label><span>Name</span><input class="ui-input" value="陈闻峰" /></label>
+          <label><span>Name</span><input class="ui-input" value="李然" /></label>
           <label><span>About you<small>Shared with Mesh teammates working on your behalf.</small></span><textarea class="ui-textarea" rows="5">产品与工程负责人，关注 AI 原生协作体验与交付质量。</textarea></label>
         </div>
       </section>`;
@@ -1148,11 +1170,11 @@
       <div class="dialog__head"><h2>新建 Issue</h2><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button" data-action="close-overlay">${icon("close")}</button></div>
       <form data-form="create-issue">
         <div class="dialog__body modal-form">
-          <div class="form-field"><label class="form-label" for="issue-title">标题</label><input id="issue-title" class="ui-input" name="title" placeholder="需要完成什么？" required autofocus /></div>
+          <div class="form-field"><label class="form-label" for="issue-title">标题</label><input id="issue-title" class="ui-input" name="title" maxlength="200" placeholder="需要完成什么？" required autofocus /></div>
           <div class="form-field"><label class="form-label" for="issue-description">描述</label><textarea id="issue-description" class="ui-textarea" name="description" placeholder="补充背景、范围与完成标准…"></textarea></div>
           <div class="modal-form__row">
             <div class="form-field"><label class="form-label">状态</label><select class="ui-select" name="status"><option value="todo">待办</option><option value="progress">进行中</option></select></div>
-            <div class="form-field"><label class="form-label">负责人</label><select class="ui-select" name="assignee"><option value="agent">Mesh 工程师</option><option value="you">陈闻峰</option><option value="lin">林澄</option></select></div>
+            <div class="form-field"><label class="form-label">负责人</label><select class="ui-select" name="assignee"><option value="agent">Mesh 工程师</option><option value="you">李然</option><option value="lin">林澄</option></select></div>
           </div>
           <div class="modal-form__row">
             <div class="form-field"><label class="form-label">优先级</label><select class="ui-select" name="priority"><option value="normal">普通</option><option value="high">高</option><option value="urgent">紧急</option></select></div>
@@ -1165,16 +1187,11 @@
   }
 
   function workspaceDialog() {
-    const workspaces = [
-      ["MS", "Mesh Studio", "产品与工程"],
-      ["PL", "产品实验室", "6 位成员"],
-      ["IF", "Infra", "基础设施"],
-    ];
     openDialog(`
       <div class="dialog__head"><h2>切换工作区</h2><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button" data-action="close-overlay">${icon("close")}</button></div>
       <div class="dialog__body">
         <div class="workspace-menu">
-          ${workspaces.map(([code, name, detail]) => `<button class="workspace-option ${state.workspace === name ? "is-active" : ""}" type="button" data-action="select-workspace" data-code="${code}" data-name="${name}"><span class="workspace-icon">${code}</span><span class="workspace-trigger__copy"><strong>${name}</strong><span class="u-muted" style="font-size:11px">${detail}</span></span>${state.workspace === name ? icon("check") : ""}</button>`).join("")}
+          ${availableWorkspaces.map(([code, name, detail]) => `<button class="workspace-option ${state.workspace === name ? "is-active" : ""}" type="button" data-action="select-workspace" data-code="${escapeHtml(code)}" data-name="${escapeHtml(name)}"><span class="workspace-icon">${escapeHtml(code)}</span><span class="workspace-trigger__copy"><strong>${escapeHtml(name)}</strong><span class="u-muted" style="font-size:11px">${escapeHtml(detail)}</span></span>${state.workspace === name ? icon("check") : ""}</button>`).join("")}
         </div>
       </div>
       <div class="dialog__foot" style="justify-content:space-between"><button class="ui-button ui-button--small" type="button" data-action="workspace-settings">${icon("settings", "icon--sm")}工作区设置</button><button class="ui-button ui-button--small ui-button--primary" type="button" data-action="create-workspace">${icon("plus", "icon--sm")}创建工作区</button></div>
@@ -1186,8 +1203,8 @@
       <div class="dialog__head"><button class="ui-button ui-button--icon" type="button" data-action="open-workspaces">${icon("chevron", "icon--sm")}</button><h2>创建工作区</h2><span class="u-spacer"></span><button class="ui-button ui-button--icon" type="button" data-action="close-overlay">${icon("close")}</button></div>
       <form data-form="create-workspace">
         <div class="dialog__body modal-form">
-          <div class="form-field"><label class="form-label" for="workspace-name">工作区名称</label><input id="workspace-name" class="ui-input" name="name" placeholder="例如：产品团队" required autofocus /><span class="form-hint">稍后可以在工作区设置中修改。</span></div>
-          <div class="form-field"><label class="form-label" for="workspace-code">Issue 标识</label><input id="workspace-code" class="ui-input u-mono" name="code" value="MES" maxlength="4" required /></div>
+          <div class="form-field"><label class="form-label" for="workspace-name">工作区名称</label><input id="workspace-name" class="ui-input" name="name" maxlength="80" placeholder="例如：产品团队" required autofocus /><span class="form-hint">稍后可以在工作区设置中修改。</span></div>
+          <div class="form-field"><label class="form-label" for="workspace-code">Issue 标识</label><input id="workspace-code" class="ui-input u-mono" name="code" value="MES" minlength="2" maxlength="4" pattern="[A-Za-z0-9]{2,4}" required /></div>
         </div>
         <div class="dialog__foot"><button class="ui-button ui-button--small ui-button--outline" type="button" data-action="open-workspaces">返回</button><button class="ui-button ui-button--small ui-button--primary" type="submit">创建工作区</button></div>
       </form>
@@ -1220,7 +1237,7 @@
   function profileDialog() {
     openDialog(`
       <div class="dialog__body">
-        <div class="roster-person" style="padding:4px 3px 12px">${avatar("you", true)}<div class="roster-person__copy"><div class="roster-person__name">陈闻峰</div><div class="roster-person__email">cnwenf@outlook.com</div></div></div>
+        <div class="roster-person" style="padding:4px 3px 12px">${avatar("you", true)}<div class="roster-person__copy"><div class="roster-person__name">李然</div><div class="roster-person__email">demo.user@example.test</div></div></div>
         <div class="workspace-menu">
           <button class="command-item" type="button" data-action="go-profile">${icon("my")}个人资料</button>
           <button class="command-item u-danger" type="button" data-route="login">${icon("logout")}退出登录</button>
@@ -1256,6 +1273,7 @@
         event.preventDefault();
         if (!dragged) return;
         const destination = column.dataset.dropColumn;
+        if (!Object.hasOwn(state.board, dragged.column) || !Object.hasOwn(state.board, destination)) return;
         const source = state.board[dragged.column];
         const index = source.findIndex((card) => card.key === dragged.key);
         if (index === -1 || destination === dragged.column) return;
@@ -1346,8 +1364,14 @@
         showToast(state.automations[index].enabled ? "自动化已启用" : "自动化已暂停", state.automations[index].name);
       },
       "select-workspace": () => {
-        state.workspace = actionTarget.dataset.name;
-        state.workspaceCode = actionTarget.dataset.code;
+        const workspace = availableWorkspaces.find(
+          ([code, name]) => code === actionTarget.dataset.code && name === actionTarget.dataset.name,
+        );
+        if (!workspace) {
+          showToast("无法切换工作区", "工作区标识无效。");
+          return;
+        }
+        [state.workspaceCode, state.workspace] = workspace;
         closeOverlay();
         render();
         showToast(`已切换到 ${state.workspace}`);
@@ -1420,8 +1444,14 @@
       closeOverlay();
       setRoute("settings");
     } else if (actionTarget.dataset.action === "select-workspace") {
-      state.workspace = actionTarget.dataset.name;
-      state.workspaceCode = actionTarget.dataset.code;
+      const workspace = availableWorkspaces.find(
+        ([code, name]) => code === actionTarget.dataset.code && name === actionTarget.dataset.name,
+      );
+      if (!workspace) {
+        showToast("无法切换工作区", "工作区标识无效。");
+        return;
+      }
+      [state.workspaceCode, state.workspace] = workspace;
       closeOverlay();
       render();
       showToast(`已切换到 ${state.workspace}`);
@@ -1494,24 +1524,39 @@
         break;
       case "create-issue": {
         const title = String(data.get("title") || "").trim();
-        if (!title) return;
+        const fields = {
+          status: String(data.get("status") || ""),
+          priority: String(data.get("priority") || ""),
+          assignee: String(data.get("assignee") || ""),
+          project: String(data.get("project") || ""),
+        };
+        const invalidField = Object.entries(fields).find(
+          ([name, value]) => !issueFieldOptions[name].has(value),
+        );
+        if (!title || title.length > 200) {
+          showToast("无法创建 Issue", "标题需为 1–200 个字符。");
+          return;
+        }
+        if (invalidField) {
+          showToast("无法创建 Issue", "表单包含不受支持的字段值。");
+          return;
+        }
         state.issueSequence += 1;
         const key = `MES-${state.issueSequence}`;
-        const status = String(data.get("status") || "todo");
         const issue = {
           key,
           title,
-          status,
-          statusText: status === "progress" ? "进行中" : "待办",
-          priority: String(data.get("priority") || "normal"),
-          assignee: String(data.get("assignee") || "agent"),
-          project: String(data.get("project") || "移动体验"),
+          status: fields.status,
+          statusText: fields.status === "progress" ? "进行中" : "待办",
+          priority: fields.priority,
+          assignee: fields.assignee,
+          project: fields.project,
           updated: "刚刚",
           label: "新建",
           labelTone: "",
         };
         state.issues.unshift(issue);
-        state.board[status].unshift({
+        state.board[fields.status].unshift({
           key,
           title,
           label: "新建",
@@ -1525,8 +1570,11 @@
       }
       case "create-workspace": {
         const name = String(data.get("name") || "").trim();
-        const code = String(data.get("code") || "MS").trim().slice(0, 3).toUpperCase();
-        if (!name) return;
+        const code = String(data.get("code") || "").trim().toUpperCase();
+        if (!name || name.length > 80 || !/^[A-Z0-9]{2,4}$/.test(code)) {
+          showToast("无法创建工作区", "请提供有效的名称和 2–4 位字母数字标识。");
+          return;
+        }
         state.workspace = name;
         state.workspaceCode = code;
         closeOverlay();
