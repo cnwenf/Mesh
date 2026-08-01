@@ -94,11 +94,18 @@ export function MarketplacePage(): React.JSX.Element {
       ) : error !== null ? (
         <ErrorState title={t('state.errorTitle')} description={error} />
       ) : entries.length === 0 ? (
-        <EmptyState title={t('skills.marketplaceEmptyTitle')} description={t('skills.marketplaceEmptyDescription')} />
+        <EmptyState
+          title={t('skills.marketplaceEmptyTitle')}
+          description={t('skills.marketplaceEmptyDescription')}
+        />
       ) : (
         <ul className="mesh-skills__grid" data-testid="marketplace-grid">
           {entries.map((entry) => (
-            <li key={entry.id} className="mesh-skills__card" data-testid={`market-entry-${entry.id}`}>
+            <li
+              key={entry.id}
+              className="mesh-skills__card"
+              data-testid={`market-entry-${entry.id}`}
+            >
               <span className="mesh-skills__card-name">
                 {entry.certified ? (
                   <span className="mesh-skills__cert-flag" title={t('skills.certified')}>
@@ -110,6 +117,10 @@ export function MarketplacePage(): React.JSX.Element {
               <span className="mesh-skills__card-summary">{entry.summary}</span>
               <span className="mesh-skills__card-meta">
                 <span>v{entry.version}</span>
+                <span>{t('skills.source.marketplace')}</span>
+                <span>
+                  {entry.certified ? t('skills.trust.reviewed') : t('skills.trust.untrusted')}
+                </span>
                 <span className="mesh-skills__meta-stat">
                   <Icon name="download" size={16} />
                   {entry.downloads}
@@ -127,7 +138,9 @@ export function MarketplacePage(): React.JSX.Element {
               </span>
               <div className="mesh-skills__card-actions">
                 {entry.has_scripts ? (
-                  <span className="mesh-skills__needs-review">{t('skills.marketplaceNeedsReview')}</span>
+                  <span className="mesh-skills__needs-review">
+                    {t('skills.marketplaceNeedsReview')}
+                  </span>
                 ) : null}
                 <Button
                   variant="secondary"
@@ -141,7 +154,10 @@ export function MarketplacePage(): React.JSX.Element {
                     variant="secondary"
                     onClick={() => {
                       if (entry.manifest_url === '') {
-                        toast.addToast(t('skills.marketplaceNoManifest'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                        toast.addToast(t('skills.marketplaceNoManifest'), {
+                          tone: 'danger',
+                          closeLabel: t('a11y.closeDialog'),
+                        });
                         return;
                       }
                       setImportEntry(entry);
@@ -187,7 +203,9 @@ export function MarketplacePage(): React.JSX.Element {
                 {previewEntry.rating.toFixed(1)}
               </dd>
               <dt>{t('skills.marketplaceCertified')}</dt>
-              <dd>{previewEntry.certified ? t('skills.marketplaceYes') : t('skills.marketplaceNo')}</dd>
+              <dd>
+                {previewEntry.certified ? t('skills.marketplaceYes') : t('skills.marketplaceNo')}
+              </dd>
               <dt>{t('skills.marketplaceScripts')}</dt>
               <dd>
                 {previewEntry.has_scripts ? (
@@ -206,7 +224,10 @@ export function MarketplacePage(): React.JSX.Element {
                   const e = previewEntry;
                   setPreviewEntry(null);
                   if (e.manifest_url === '') {
-                    toast.addToast(t('skills.marketplaceNoManifest'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+                    toast.addToast(t('skills.marketplaceNoManifest'), {
+                      tone: 'danger',
+                      closeLabel: t('a11y.closeDialog'),
+                    });
                     return;
                   }
                   setImportEntry(e);

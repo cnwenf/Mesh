@@ -12,6 +12,7 @@ import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api
 import {
   Banner,
   Button,
+  DataView,
   Dialog,
   EmptyState,
   ErrorState,
@@ -50,7 +51,8 @@ const PAGE_LIMIT = 100;
 
 /** 各 kind 的非密 config JSON 占位提示(§2.7;密钥走 secret 字段,不入 config)。 */
 const CONFIG_HINTS: Record<IntegrationKind, string> = {
-  im_feishu: '{ "app_id": "cli_xxx", "callback_base": "https://mesh.example.com/api/v1/integrations/feishu" }',
+  im_feishu:
+    '{ "app_id": "cli_xxx", "callback_base": "https://mesh.example.com/api/v1/integrations/feishu" }',
   im_slack: '{ "app_id": "A0xxx", "team_id": "T0xxx", "bot_user_id": "U0xxx" }',
   vcs_github: '{ "installation_id": "1234567", "api_base": "https://api.github.com" }',
   vcs_gitlab: '{ "instance_url": "https://gitlab.com" }',
@@ -101,7 +103,12 @@ function ConnectorCard(props: ConnectorCardProps): React.JSX.Element {
           <span className="mesh-integrations__muted">{t('integrations.catalog.notConnected')}</span>
         )}
         {isAdmin && (
-          <Button variant="secondary" size="sm" onClick={() => onConnect(kind)} data-testid={`connector-connect-${kind}`}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onConnect(kind)}
+            data-testid={`connector-connect-${kind}`}
+          >
             {t('integrations.catalog.connect')}
           </Button>
         )}
@@ -116,7 +123,12 @@ interface AddIntegrationDialogProps {
   readonly initialKind: IntegrationKind;
   readonly busy: boolean;
   readonly onClose: () => void;
-  readonly onSubmit: (input: { kind: IntegrationKind; name: string; config: string; secret: string }) => void;
+  readonly onSubmit: (input: {
+    kind: IntegrationKind;
+    name: string;
+    config: string;
+    secret: string;
+  }) => void;
   readonly onOAuth: (kind: IntegrationKind) => void;
 }
 
@@ -140,7 +152,12 @@ function AddIntegrationDialog(props: AddIntegrationDialogProps): React.JSX.Eleme
   const supportsOAuth = OAUTH_KINDS.has(kind);
 
   return (
-    <Dialog open={open} onClose={onClose} title={t('integrations.add.title')} closeLabel={t('common.close')}>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t('integrations.add.title')}
+      closeLabel={t('common.close')}
+    >
       <Select
         label={t('integrations.add.kindLabel')}
         value={kind}
@@ -242,7 +259,9 @@ export function IntegrationsPage(): React.JSX.Element {
           return;
         }
         setMembership(workspace);
-        const listing = await listIntegrations(client, workspace.workspace_id, { limit: PAGE_LIMIT });
+        const listing = await listIntegrations(client, workspace.workspace_id, {
+          limit: PAGE_LIMIT,
+        });
         const counts = await Promise.all(
           listing.data.map(async (integration) => {
             const bindings = await listBindings(client, workspace.workspace_id, integration.id);
@@ -364,8 +383,13 @@ export function IntegrationsPage(): React.JSX.Element {
       if (membership === null) return;
       const nextStatus = integration.status === 'active' ? 'disabled' : 'active';
       void runAction(
-        () => patchIntegration(newClient(), membership.workspace_id, integration.id, { status: nextStatus }),
-        nextStatus === 'active' ? t('integrations.toast.enabled') : t('integrations.toast.disabled'),
+        () =>
+          patchIntegration(newClient(), membership.workspace_id, integration.id, {
+            status: nextStatus,
+          }),
+        nextStatus === 'active'
+          ? t('integrations.toast.enabled')
+          : t('integrations.toast.disabled'),
       );
       setDisableTarget(null);
     },
@@ -390,7 +414,11 @@ export function IntegrationsPage(): React.JSX.Element {
       setTestingId(integration.id);
       void (async () => {
         try {
-          const result = await testIntegration(newClient(), membership.workspace_id, integration.id);
+          const result = await testIntegration(
+            newClient(),
+            membership.workspace_id,
+            integration.id,
+          );
           const nextState = toHealthState(result.health_state);
           setIntegrations((prev) =>
             prev === null
@@ -406,10 +434,13 @@ export function IntegrationsPage(): React.JSX.Element {
             closeLabel: t('common.close'),
           });
         } catch (error) {
-          toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
-            tone: 'danger',
-            closeLabel: t('common.close'),
-          });
+          toast.addToast(
+            t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
+            {
+              tone: 'danger',
+              closeLabel: t('common.close'),
+            },
+          );
         } finally {
           setTestingId(null);
         }
@@ -426,186 +457,227 @@ export function IntegrationsPage(): React.JSX.Element {
     return counts;
   }, [integrations]);
 
-  if (membership === null && integrations !== null && integrations.length === 0 && errorKey === null) {
+  if (
+    membership === null &&
+    integrations !== null &&
+    integrations.length === 0 &&
+    errorKey === null
+  ) {
     return (
       <div className="mesh-integrations__page">
-        <EmptyState title={t('integrations.noWorkspace.title')} description={t('integrations.noWorkspace.description')} />
+        <DataView title={t('integrations.title')}>
+          <EmptyState
+            title={t('integrations.noWorkspace.title')}
+            description={t('integrations.noWorkspace.description')}
+          />
+        </DataView>
       </div>
     );
   }
 
   return (
     <div className="mesh-integrations__page" data-testid="integrations-page">
-      <div className="mesh-integrations__header">
-        <h1 className="mesh-integrations__title">{t('integrations.title')}</h1>
-        {isAdmin && (
-          <Button variant="primary" onClick={() => openAdd('im_feishu')} data-testid="integration-create">
-            {t('integrations.add.trigger')}
-          </Button>
+      <DataView
+        title={t('integrations.title')}
+        actions={
+          isAdmin ? (
+            <Button
+              variant="primary"
+              onClick={() => openAdd('im_feishu')}
+              data-testid="integration-create"
+            >
+              {t('integrations.add.trigger')}
+            </Button>
+          ) : undefined
+        }
+      >
+        {oauthResult === 'success' && (
+          <div data-testid="oauth-success-banner">
+            <Banner tone="success" onDismiss={dismissOAuth} dismissLabel={t('common.close')}>
+              {t('integrations.oauth.success')}
+            </Banner>
+          </div>
         )}
-      </div>
+        {oauthResult === 'error' && (
+          <div data-testid="oauth-error-banner">
+            <Banner tone="danger" onDismiss={dismissOAuth} dismissLabel={t('common.close')}>
+              {t('integrations.oauth.error')}
+            </Banner>
+          </div>
+        )}
+        {!isAdmin && membership !== null && (
+          <div data-testid="integrations-readonly-banner">
+            <Banner tone="info">{t('integrations.readonly')}</Banner>
+          </div>
+        )}
 
-      {oauthResult === 'success' && (
-        <div data-testid="oauth-success-banner">
-          <Banner tone="success" onDismiss={dismissOAuth} dismissLabel={t('common.close')}>
-            {t('integrations.oauth.success')}
-          </Banner>
+        {/* 连接器目录卡片网格(§4.2)。 */}
+        <div className="mesh-integrations__catalog" data-testid="integrations-catalog">
+          {CONNECTOR_CATALOG.map((meta) => (
+            <ConnectorCard
+              key={meta.kind}
+              kind={meta.kind}
+              icon={meta.icon}
+              nameKey={meta.nameKey}
+              capabilityKeys={meta.capabilityKeys}
+              connectedCount={connectedByKind[meta.kind] ?? 0}
+              isAdmin={isAdmin}
+              onConnect={handleConnect}
+            />
+          ))}
         </div>
-      )}
-      {oauthResult === 'error' && (
-        <div data-testid="oauth-error-banner">
-          <Banner tone="danger" onDismiss={dismissOAuth} dismissLabel={t('common.close')}>
-            {t('integrations.oauth.error')}
-          </Banner>
-        </div>
-      )}
-      {!isAdmin && membership !== null && (
-        <div data-testid="integrations-readonly-banner">
-          <Banner tone="info">{t('integrations.readonly')}</Banner>
-        </div>
-      )}
 
-      {/* 连接器目录卡片网格(§4.2)。 */}
-      <div className="mesh-integrations__catalog" data-testid="integrations-catalog">
-        {CONNECTOR_CATALOG.map((meta) => (
-          <ConnectorCard
-            key={meta.kind}
-            kind={meta.kind}
-            icon={meta.icon}
-            nameKey={meta.nameKey}
-            capabilityKeys={meta.capabilityKeys}
-            connectedCount={connectedByKind[meta.kind] ?? 0}
-            isAdmin={isAdmin}
-            onConnect={handleConnect}
+        {errorKey !== null && (
+          <ErrorState
+            title={t(errorKey)}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((key) => key + 1)}
           />
-        ))}
-      </div>
-
-      {errorKey !== null && (
-        <ErrorState
-          title={t(errorKey)}
-          retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
-        />
-      )}
-      {integrations === null && errorKey === null && <Skeleton loadingLabel={t('integrations.loading')} />}
-      {integrations !== null && integrations.length === 0 && errorKey === null && (
-        <EmptyState title={t('integrations.empty.title')} description={t('integrations.empty.description')} />
-      )}
-      {integrations !== null && integrations.length > 0 && (
-        <table className="mesh-integrations__table" data-testid="integrations-table">
-          <thead>
-            <tr>
-              <th>{t('integrations.columns.name')}</th>
-              <th>{t('integrations.columns.kind')}</th>
-              <th>{t('integrations.columns.status')}</th>
-              <th>{t('integrations.columns.bindings')}</th>
-              <th>{t('integrations.columns.events7d')}</th>
-              <th>{t('integrations.columns.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {integrations.map((integration) => (
-              <tr
-                key={integration.id}
-                className="mesh-integrations__row"
-                data-testid={`integration-row-${integration.id}`}
-                onClick={() => navigate(`/integrations/${integration.id}`)}
-              >
-                <td className="mesh-integrations__cell-name" data-testid={`integration-name-${integration.id}`}>
-                  {integration.name}
-                </td>
-                <td>
-                  <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
-                  {t(`integrations.kind.${integration.kind}`)}
-                </td>
-                <td>
-                  <StatusDot
-                    tone={INTEGRATION_STATUS_TONE[integration.status]}
-                    label={t(`integrations.status.${integration.status}`)}
-                  />
-                  <span
-                    data-testid={`integration-health-${integration.id}`}
-                    title={integration.last_error ?? undefined}
-                  >
-                    <StatusDot
-                      tone={HEALTH_STATE_TONE[integration.health_state]}
-                      label={t(`integrations.health.${integration.health_state}`)}
-                    />
-                  </span>
-                </td>
-                <td data-testid={`integration-bindings-${integration.id}`}>
-                  {bindingCounts[integration.id] ?? 0}
-                </td>
-                <td data-testid={`integration-events7d-${integration.id}`}>{integration.events_7d}</td>
-                <td className="mesh-integrations__actions" onClick={(event) => event.stopPropagation()}>
-                  <IconButton
-                    label={t('integrations.actions.detail')}
-                    size="sm"
+        )}
+        {integrations === null && errorKey === null && (
+          <Skeleton loadingLabel={t('integrations.loading')} />
+        )}
+        {integrations !== null && integrations.length === 0 && errorKey === null && (
+          <EmptyState
+            title={t('integrations.empty.title')}
+            description={t('integrations.empty.description')}
+          />
+        )}
+        {integrations !== null && integrations.length > 0 && (
+          <div className="mesh-integrations__table-scroll" data-testid="integrations-table-scroll">
+            <table className="mesh-integrations__table" data-testid="integrations-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t('integrations.columns.name')}</th>
+                  <th scope="col">{t('integrations.columns.kind')}</th>
+                  <th scope="col">{t('integrations.columns.status')}</th>
+                  <th scope="col">{t('integrations.columns.bindings')}</th>
+                  <th scope="col">{t('integrations.columns.events7d')}</th>
+                  <th scope="col">{t('integrations.columns.actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {integrations.map((integration) => (
+                  <tr
+                    key={integration.id}
+                    className="mesh-integrations__row"
+                    data-testid={`integration-row-${integration.id}`}
+                    tabIndex={0}
                     onClick={() => navigate(`/integrations/${integration.id}`)}
-                    data-testid={`integration-detail-${integration.id}`}
-                  >
-                    <Icon name="settings" size={16} />
-                  </IconButton>
-                  {isAdmin &&
-                    integration.health_state === 'auth_failed' &&
-                    OAUTH_KINDS.has(integration.kind) && (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => startOAuth(integration.kind)}
-                        data-testid={`integration-reauth-${integration.id}`}
-                      >
-                        {t('integrations.actions.reauthorize')}
-                      </Button>
-                    )}
-                  {isAdmin && (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      isLoading={testingId === integration.id}
-                      onClick={() => testConnection(integration)}
-                      data-testid={`integration-test-${integration.id}`}
-                    >
-                      {t('integrations.actions.test')}
-                    </Button>
-                  )}
-                  {isAdmin && (
-                    <IconButton
-                      label={
-                        integration.status === 'active'
-                          ? t('integrations.actions.disable')
-                          : t('integrations.actions.enable')
+                    onKeyDown={(event) => {
+                      if (
+                        event.target === event.currentTarget &&
+                        (event.key === 'Enter' || event.key === ' ')
+                      ) {
+                        event.preventDefault();
+                        navigate(`/integrations/${integration.id}`);
                       }
-                      size="sm"
-                      onClick={() => setDisableTarget(integration)}
-                      data-testid={`integration-toggle-${integration.id}`}
+                    }}
+                  >
+                    <td
+                      className="mesh-integrations__cell-name"
+                      data-testid={`integration-name-${integration.id}`}
                     >
-                      {integration.status === 'active' ? (
-                        <Icon name="pause" size={16} />
-                      ) : (
-                        <Icon name="play" size={16} />
+                      {integration.name}
+                    </td>
+                    <td>
+                      <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
+                      {t(`integrations.kind.${integration.kind}`)}
+                    </td>
+                    <td>
+                      <StatusDot
+                        tone={INTEGRATION_STATUS_TONE[integration.status]}
+                        label={t(`integrations.status.${integration.status}`)}
+                      />
+                      <span
+                        data-testid={`integration-health-${integration.id}`}
+                        title={integration.last_error ?? undefined}
+                      >
+                        <StatusDot
+                          tone={HEALTH_STATE_TONE[integration.health_state]}
+                          label={t(`integrations.health.${integration.health_state}`)}
+                        />
+                      </span>
+                    </td>
+                    <td data-testid={`integration-bindings-${integration.id}`}>
+                      {bindingCounts[integration.id] ?? 0}
+                    </td>
+                    <td data-testid={`integration-events7d-${integration.id}`}>
+                      {integration.events_7d}
+                    </td>
+                    <td
+                      className="mesh-integrations__actions"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <IconButton
+                        label={t('integrations.actions.detail')}
+                        size="sm"
+                        onClick={() => navigate(`/integrations/${integration.id}`)}
+                        data-testid={`integration-detail-${integration.id}`}
+                      >
+                        <Icon name="settings" size={16} />
+                      </IconButton>
+                      {isAdmin &&
+                        integration.health_state === 'auth_failed' &&
+                        OAUTH_KINDS.has(integration.kind) && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => startOAuth(integration.kind)}
+                            data-testid={`integration-reauth-${integration.id}`}
+                          >
+                            {t('integrations.actions.reauthorize')}
+                          </Button>
+                        )}
+                      {isAdmin && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          isLoading={testingId === integration.id}
+                          onClick={() => testConnection(integration)}
+                          data-testid={`integration-test-${integration.id}`}
+                        >
+                          {t('integrations.actions.test')}
+                        </Button>
                       )}
-                    </IconButton>
-                  )}
-                  {isAdmin && (
-                    <IconButton
-                      label={t('integrations.actions.delete')}
-                      size="sm"
-                      onClick={() => setDeleteTarget(integration)}
-                      data-testid={`integration-delete-${integration.id}`}
-                    >
-                      ⋯
-                    </IconButton>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+                      {isAdmin && (
+                        <IconButton
+                          label={
+                            integration.status === 'active'
+                              ? t('integrations.actions.disable')
+                              : t('integrations.actions.enable')
+                          }
+                          size="sm"
+                          onClick={() => setDisableTarget(integration)}
+                          data-testid={`integration-toggle-${integration.id}`}
+                        >
+                          {integration.status === 'active' ? (
+                            <Icon name="pause" size={16} />
+                          ) : (
+                            <Icon name="play" size={16} />
+                          )}
+                        </IconButton>
+                      )}
+                      {isAdmin && (
+                        <IconButton
+                          label={t('integrations.actions.delete')}
+                          size="sm"
+                          onClick={() => setDeleteTarget(integration)}
+                          data-testid={`integration-delete-${integration.id}`}
+                        >
+                          ⋯
+                        </IconButton>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-      {membership !== null && <ExternalIdentitiesPanel workspaceId={membership.workspace_id} />}
+        {membership !== null && <ExternalIdentitiesPanel workspaceId={membership.workspace_id} />}
+      </DataView>
 
       <AddIntegrationDialog
         open={addOpen}

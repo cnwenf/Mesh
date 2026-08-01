@@ -82,9 +82,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
   });
 
   it('code+state 交换成功 → 写入会话并回跳首页', async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=mockcode&state=mockstate');
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
@@ -97,9 +95,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
 
   it('携带 sessionStorage 回跳目标时回跳原路径(并清除键)', async () => {
     sessionStorage.setItem('mesh.oauth.next', '/invite/invtk_x');
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() => expect(screen.getByTestId('at-invite')).toBeTruthy());
@@ -108,9 +104,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
 
   it('next 仅接受站内路径(防开放重定向)', async () => {
     sessionStorage.setItem('mesh.oauth.next', '//evil.example');
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
@@ -118,9 +112,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
 
   it('next 反斜杠变体 /\\evil.example(协议相对绕过)→ 回落首页', async () => {
     sessionStorage.setItem('mesh.oauth.next', '/\\evil.example');
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
@@ -129,9 +121,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
   it('next 控制字符变体 TAB 夹带(WHATWG 解析器归一化绕过)→ 回落首页', async () => {
     // 不在源码中书写控制字符字面量:经字符码构造 `/<TAB>/evil.example`
     sessionStorage.setItem('mesh.oauth.next', '/' + String.fromCharCode(9) + '/evil.example');
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
@@ -139,9 +129,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
 
   it('next 绝对 URL(https://evil.example)→ 回落首页', async () => {
     sessionStorage.setItem('mesh.oauth.next', 'https://evil.example');
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(200, { data: TOKENS }));
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() => expect(screen.getByTestId('at-home')).toBeTruthy());
@@ -157,6 +145,7 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
       ),
     );
     expect(fetchImpl).not.toHaveBeenCalled();
+    expect(screen.getByTestId('oauth-callback-impact')).toHaveTextContent(/not signed in/i);
 
     await userEvent.setup().click(screen.getByTestId('oauth-callback-back'));
     await waitFor(() => expect(screen.getByTestId('at-login')).toBeTruthy());
@@ -192,9 +181,11 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
   });
 
   it('交换服务异常(500)→ 通用错误', async () => {
-    const fetchImpl = vi.fn().mockResolvedValueOnce(
-      jsonResponse(500, { error: { code: 'internal_error', message: 'x' } }),
-    );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(500, { error: { code: 'internal_error', message: 'x' } }),
+      );
     renderCallback(fetchImpl, '/auth/oauth/callback/mock?code=c&state=s');
 
     await waitFor(() =>
@@ -223,7 +214,10 @@ describe('OAuthCallbackPage(auth.md §4.1 / §4.5 step 5)', () => {
     render(
       <MemoryRouter initialEntries={['/auth/oauth/callback/mock?code=c&state=s']}>
         <ThemeProvider>
-          <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
+          <I18nProvider
+            workspaceDefaultLocale={null}
+            reporter={{ report: () => undefined, reported: [] }}
+          >
             <ToastProvider regionLabel="notifications">
               <Routes>
                 <Route path="/auth/oauth/callback/:provider" element={<OAuthCallbackPage />} />

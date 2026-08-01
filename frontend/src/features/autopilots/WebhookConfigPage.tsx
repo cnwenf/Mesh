@@ -72,14 +72,15 @@ export function WebhookConfigPage(): React.JSX.Element {
     setBusy(true);
     try {
       const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
-      const created = await createWebhookSecret(client, membership!.workspace_id, label.trim() || 'default');
+      const created = await createWebhookSecret(
+        client,
+        membership!.workspace_id,
+        label.trim() || 'default',
+      );
       setFreshCredential(created);
       setReloadKey((key) => key + 1);
     } catch (error) {
-      toast.addToast(
-        t(errorKeyOf(error)),
-        { tone: 'danger', closeLabel: t('common.close') },
-      );
+      toast.addToast(t(errorKeyOf(error)), { tone: 'danger', closeLabel: t('common.close') });
     } finally {
       setBusy(false);
     }
@@ -87,17 +88,14 @@ export function WebhookConfigPage(): React.JSX.Element {
 
   const rotateSecret = useCallback(
     async (secretId: string) => {
-        setBusy(true);
+      setBusy(true);
       try {
         const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const rotated = await rotateWebhookSecret(client, membership!.workspace_id, secretId);
         setFreshCredential(rotated);
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(errorKeyOf(error)),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(errorKeyOf(error)), { tone: 'danger', closeLabel: t('common.close') });
       } finally {
         setBusy(false);
       }
@@ -114,9 +112,16 @@ export function WebhookConfigPage(): React.JSX.Element {
       <p>{t('autopilots.webhook.intro')}</p>
 
       {freshCredential !== null && (
-        <div className="mesh-autopilots__secret-box" data-testid="webhook-fresh-credential">
+        <div
+          className="mesh-autopilots__secret-box"
+          data-testid="webhook-fresh-credential"
+          aria-labelledby="webhook-fresh-credential-title"
+        >
           <Banner tone="warn">
-            <strong>{t('autopilots.webhook.showOnceTitle')}</strong> {t('autopilots.webhook.showOnceBody')}
+            <strong id="webhook-fresh-credential-title">
+              {t('autopilots.webhook.showOnceTitle')}
+            </strong>{' '}
+            {t('autopilots.webhook.showOnceBody')}
           </Banner>
           <div>
             <strong>{t('autopilots.webhook.urlLabel')}</strong>
@@ -147,13 +152,24 @@ export function WebhookConfigPage(): React.JSX.Element {
           onChange={(event) => setLabel(event.target.value)}
           data-testid="webhook-label-input"
         />
-        <Button variant="primary" isLoading={busy} onClick={() => void createSecret()} data-testid="webhook-create-secret">
+        <Button
+          variant="primary"
+          isLoading={busy}
+          disabled={freshCredential !== null}
+          onClick={() => void createSecret()}
+          data-testid="webhook-create-secret"
+        >
           {t('autopilots.webhook.create')}
         </Button>
       </div>
 
-      {errorKey !== null && <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)} />}
+      {errorKey !== null && (
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => setReloadKey((key) => key + 1)}
+        />
+      )}
       {secrets === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
       {secrets !== null && secrets.length === 0 && (
         <EmptyState title={t('autopilots.webhook.empty')} description="" />
@@ -178,6 +194,7 @@ export function WebhookConfigPage(): React.JSX.Element {
                   <Button
                     variant="secondary"
                     size="sm"
+                    disabled={freshCredential !== null}
                     onClick={() => void rotateSecret(secret.id)}
                     data-testid={`webhook-rotate-${secret.id}`}
                   >

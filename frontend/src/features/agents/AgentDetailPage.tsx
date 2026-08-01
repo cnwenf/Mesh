@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AgentStatsCard } from '../analytics/AgentStatsCard';
 import { AgentSkillsTab } from '../skills/AgentSkillsTab';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
 import {
   Avatar,
@@ -29,6 +29,8 @@ import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
+import { listWorkspaceExecutions, workspaceExecutionsChannel } from '../runtimes/api';
+import type { ExecutionSummary } from '../runtimes/types';
 import {
   agentPresenceChannel,
   getAgent,
@@ -42,7 +44,7 @@ import {
 } from './api';
 import type { AgentLifecycleVerb } from './api';
 import { AgentWizard } from './AgentWizard';
-import { presenceToRunState } from './runState';
+import { agentRunState } from './runState';
 import type { AgentConfigVersion, AgentDetail } from './types';
 import { MODEL_TIER_ORDER, PLATFORM_MODELS, REASONING_EFFORT_ORDER } from './types';
 import './agents.css';
@@ -82,6 +84,8 @@ export function AgentDetailPage(): React.JSX.Element {
   const [reloadKey, setReloadKey] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [latestExecution, setLatestExecution] = useState<ExecutionSummary | null>(null);
+  const [executionReloadKey, setExecutionReloadKey] = useState(0);
 
   // 配置 Tab 的本地编辑态(保存时 PATCH /config → 新版本)。
   const [instructions, setInstructions] = useState('');
@@ -153,6 +157,26 @@ export function AgentDetailPage(): React.JSX.Element {
     loadAgent();
   }, [loadAgent, reloadKey]);
 
+  // Capacity presence cannot express terminal success/failure. The most recent
+  // execution supplies those two states through the legal workspace list API.
+  useEffect(() => {
+    if (workspace === null || agentId === undefined) return;
+    let cancelled = false;
+    setLatestExecution(null);
+    listWorkspaceExecutions(client, workspace.workspace_id, { agent_id: agentId, limit: 1 })
+      .then((result) => {
+        if (!cancelled) {
+          setLatestExecution(Array.isArray(result.data) ? (result.data[0] ?? null) : null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLatestExecution(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, client, executionReloadKey, workspace]);
+
   // 历史 Tab 需要版本列表。
   useEffect(() => {
     if (workspace === null || agentId === undefined || activeTab !== 'history') return;
@@ -191,6 +215,26 @@ export function AgentDetailPage(): React.JSX.Element {
       realtime.client.unsubscribe(channel);
     };
   }, [realtime, workspace, agentId, navigate]);
+
+  useEffect(() => {
+    if (realtime === null || workspace === null || agentId === undefined) return;
+    const channel = workspaceExecutionsChannel(workspace.workspace_id);
+    realtime.client.subscribe(channel);
+    const unsubscribe = realtime.client.onFrame((frame) => {
+      if (!frame.event.startsWith('execution.')) return;
+      const payload = (frame.payload ?? {}) as {
+        data?: { agent_id?: string };
+        agent_id?: string;
+      };
+      if ((payload.data?.agent_id ?? payload.agent_id) === agentId) {
+        setExecutionReloadKey((key) => key + 1);
+      }
+    });
+    return () => {
+      unsubscribe();
+      realtime.client.unsubscribe(channel);
+    };
+  }, [agentId, realtime, workspace]);
 
   // M-F2:presence 容量三元组订阅脚手架(§4.9/§6.12)。runtime 落地 task_executions
   // 后才会发 agent.presence 帧;在此之前 presence 保持 null,UI 渲染「—」。
@@ -413,8 +457,8 @@ export function AgentDetailPage(): React.JSX.Element {
   }
 
   const verbs = VERBS_BY_STATUS[agent.lifecycle_status] ?? [];
-  // 运行态五态归一(§9.8):presence 三元组 → RunState;帧未至(null)→ unknown。
-  const runState = presenceToRunState(presence);
+  // 运行态五态归一(§9.8):活跃态来自 presence,终态来自最近 execution。
+  const runState = agentRunState(presence, latestExecution?.status ?? null);
 
   return (
     <main className="mesh-agents-detail" data-testid="agent-detail-page">
@@ -428,7 +472,10 @@ export function AgentDetailPage(): React.JSX.Element {
             {t('agents.detail.back')}
           </Button>
           <Avatar kind="agent" size={40} name={agent.name} src={agent.avatar_url ?? undefined} />
-          <h1 className="mesh-agents-detail__title mesh-text-title-2" data-testid="agent-detail-name">
+          <h1
+            className="mesh-agents-detail__title mesh-text-title-2"
+            data-testid="agent-detail-name"
+          >
             {agent.name}
           </h1>
           <span data-testid="agent-detail-badge">
@@ -523,6 +570,35 @@ export function AgentDetailPage(): React.JSX.Element {
             <dt className="mesh-text-caption">{t('agents.detail.created')}</dt>
             <dd className="mesh-text-body mesh-tnum">{agent.created_at}</dd>
           </dl>
+          {latestExecution !== null ? (
+            <section
+              className="mesh-agents-detail__latest-execution"
+              data-testid="agent-latest-execution"
+            >
+              <div>
+                <h2 className="mesh-text-title-3">{t('agents.detail.latestExecution')}</h2>
+                <RunStateBadge state={runState} label={t(`runState.${runState}`)} size="sm" />
+              </div>
+              <p>
+                {latestExecution.status === 'completed'
+                  ? t('runtimes.execution.terminalSuccess')
+                  : latestExecution.status === 'failed' ||
+                      latestExecution.status === 'timeout' ||
+                      latestExecution.status === 'cancelled'
+                    ? t('runtimes.execution.terminalFailure', {
+                        reason:
+                          latestExecution.failure_reason ?? t('runtimes.execution.unknownReason'),
+                      })
+                    : t(`runtimes.execution.status.${latestExecution.status}`)}
+              </p>
+              <Link
+                to={`/executions/${latestExecution.id}`}
+                data-testid="agent-latest-execution-link"
+              >
+                {t('runtimes.action.view')}
+              </Link>
+            </section>
+          ) : null}
           {/* 统计报表(analytics.md §4.4):agent 运行统计卡(名册深链唯一入口) */}
           {workspace !== null ? (
             <AgentStatsCard

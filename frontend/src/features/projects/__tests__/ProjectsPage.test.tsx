@@ -243,6 +243,29 @@ describe('ProjectsPage', () => {
     expect(screen.queryByTestId('project-date-prj-2')).not.toBeInTheDocument();
   });
 
+  it('默认使用密集行并可在 URL 同源的行/网格视图间切换', async () => {
+    const user = userEvent.setup();
+    stub([PROJECT_A, PROJECT_B]);
+    renderWithProviders(<ProjectsPage />, { route: '/projects' });
+
+    const view = await screen.findByTestId('projects-view');
+    expect(view).toHaveClass('mesh-projects__view--list');
+    expect(screen.getByTestId('projects-view-list')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(screen.getByTestId('projects-view-grid'));
+
+    expect(view).toHaveClass('mesh-projects__view--grid');
+    expect(screen.getByTestId('projects-view-grid')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('归档项目在行内有非颜色状态提示', async () => {
+    stub([PROJECT_A, PROJECT_ARCHIVED]);
+    renderWithProviders(<ProjectsPage />, { route: '/projects?archived=true' });
+
+    const archived = await screen.findByTestId('project-card-prj-3');
+    expect(within(archived).getByText('Archived')).toBeInTheDocument();
+  });
+
   it('无项目时显示空态(onboarding 四要素)', async () => {
     stub([]);
     renderWithProviders(<ProjectsPage />, { route: '/projects' });
@@ -384,9 +407,7 @@ describe('ProjectsPage', () => {
 
     await user.click(screen.getByTestId('projects-load-more'));
 
-    expect(
-      await screen.findByText('Something went wrong. Please try again.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Something went wrong. Please try again.')).toBeInTheDocument();
   });
 
   it('实时帧 project.created 按当前筛选合并进列表', async () => {
@@ -487,10 +508,7 @@ describe('CreateProjectDialog(经 ProjectsPage 打开)', () => {
 
     await waitFor(() =>
       expect(
-        calls.some(
-          (c) =>
-            c.init?.method === 'POST' && c.url.includes('/workspaces/ws-1/projects'),
-        ),
+        calls.some((c) => c.init?.method === 'POST' && c.url.includes('/workspaces/ws-1/projects')),
       ).toBe(true),
     );
     const post = calls.find((c) => c.init?.method === 'POST');
@@ -570,7 +588,9 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     const nameInput = await screen.findByLabelText('Name');
     await user.type(nameInput, 'Broken');
     await user.click(screen.getByTestId('create-project-submit'));
-    expect(await screen.findByText('Network error. Please check your connection and try again.')).toBeDefined();
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeDefined();
   });
 
   it('名称为空时提交被禁用,不发请求', async () => {
@@ -618,9 +638,8 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     const listCountBefore = listCalls(calls).length;
 
     const card = screen.getByTestId('project-card-prj-1');
-    const healthZone = card.querySelector('span[role="presentation"]');
-    expect(healthZone).not.toBeNull();
-    await user.click(healthZone as HTMLElement);
+    const healthButton = within(card).getByRole('button', { name: 'Update status' });
+    await user.click(healthButton);
     expect(await screen.findByTestId('health-update-form')).toBeDefined();
 
     await user.click(screen.getByTestId('health-update-submit'));
@@ -629,5 +648,4 @@ describe('CreateProjectDialog(独立渲染:client 注入)', () => {
     await waitFor(() => expect(listCalls(calls).length).toBeGreaterThan(listCountBefore));
     await waitFor(() => expect(screen.queryByText('Update status')).toBeNull());
   });
-
 });

@@ -38,6 +38,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2, 0.5rem);
+  min-width: 0;
   padding: var(--space-2, 0.5rem) var(--space-3, 0.75rem);
   border-bottom: 1px solid var(--color-border);
 }
@@ -55,17 +56,22 @@
 }
 
 .mesh-labels__name {
+  min-width: 0;
   font-weight: 600;
   color: var(--color-text);
+  overflow-wrap: anywhere;
 }
 
 .mesh-labels__hex {
+  min-width: 0;
   font-family: var(--font-family-mono, monospace);
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
 .mesh-labels__desc {
+  min-width: 0;
   flex: 1 1 auto;
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
@@ -196,10 +202,35 @@
   display: flex;
   align-items: flex-end;
   gap: var(--space-2, 0.5rem);
+  min-width: 0;
 }
 
 .mesh-labels__option-draft > :first-child {
   flex: 1 1 auto;
+  min-width: 0;
+}
+
+@media (max-width: 599px) {
+  .mesh-labels__row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .mesh-labels__desc {
+    flex-basis: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .mesh-labels__actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
+
+  .mesh-labels__option-draft {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 /* ---------------------------------------------------------------------------

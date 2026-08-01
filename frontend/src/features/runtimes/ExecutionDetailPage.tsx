@@ -278,8 +278,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
     startIso !== null ? Math.max(0, Math.floor((nowMs - Date.parse(startIso)) / 1000)) : 0;
   const isTerminal = execution !== null && TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const isSuccess = execution !== null && SUCCESS_EXECUTION_STATUSES.has(execution.status);
-  const canCancel =
-    execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
+  const canCancel = execution !== null && !TERMINAL_EXECUTION_STATUSES.has(execution.status);
   const timeoutPct =
     execution !== null && execution.timeout_seconds > 0
       ? Math.min(100, Math.round((elapsedSeconds / execution.timeout_seconds) * 100))
@@ -311,11 +310,7 @@ export function ExecutionDetailPage(): React.JSX.Element {
   return (
     <main className="mesh-executions" data-testid="execution-detail-page">
       <div className="mesh-executions__header">
-        <Button
-          variant="ghost"
-          data-testid="execution-back"
-          onClick={() => navigate(-1)}
-        >
+        <Button variant="ghost" data-testid="execution-back" onClick={() => navigate(-1)}>
           {t('runtimes.execution.back')}
         </Button>
         <h1 className="mesh-executions__title" data-testid="execution-title">
@@ -383,7 +378,11 @@ export function ExecutionDetailPage(): React.JSX.Element {
         <div className="mesh-executions__progress-fill" style={{ width: `${timeoutPct}%` }} />
       </div>
 
-      <div className="mesh-executions__tabs" role="tablist" aria-label={t('runtimes.execution.tabsLabel')}>
+      <div
+        className="mesh-executions__tabs"
+        role="tablist"
+        aria-label={t('runtimes.execution.tabsLabel')}
+      >
         {TAB_KEYS.map((tab) => (
           <button
             key={tab}
@@ -401,20 +400,6 @@ export function ExecutionDetailPage(): React.JSX.Element {
 
       {activeTab === 'logs' ? (
         <section className="mesh-executions__panel" data-testid="execution-panel-logs">
-          <div className="mesh-executions__log-toolbar">
-            <label className="mesh-executions__follow">
-              <input
-                type="checkbox"
-                checked={followTail}
-                data-testid="execution-follow-toggle"
-                onChange={(event) => setFollowTail(event.target.checked)}
-              />
-              {t('runtimes.execution.followTail')}
-            </label>
-            <span className="mesh-executions__offset" data-testid="execution-offset">
-              {t('runtimes.execution.logOffset', { offset: maxOffsetRef.current })}
-            </span>
-          </div>
           {logsUnavailable ? (
             <p className="mesh-executions__logs-note" data-testid="execution-logs-unavailable">
               {t('runtimes.execution.logsUnavailable')}
@@ -425,7 +410,11 @@ export function ExecutionDetailPage(): React.JSX.Element {
               {t('runtimes.execution.logEnded', { status: endStatus })}
             </p>
           ) : null}
-          <div className="mesh-executions__log-panel" ref={logPanelRef}>
+          <div
+            className="mesh-executions__log-panel"
+            ref={logPanelRef}
+            data-testid="execution-log-panel"
+          >
             {logs.length === 0 ? (
               <p className="mesh-executions__log-empty">{t('runtimes.execution.noLogs')}</p>
             ) : (
@@ -440,6 +429,24 @@ export function ExecutionDetailPage(): React.JSX.Element {
                 </div>
               ))
             )}
+          </div>
+          <div
+            className="mesh-executions__log-toolbar"
+            data-testid="execution-log-toolbar"
+            data-sticky-toolbar="true"
+          >
+            <label className="mesh-executions__follow">
+              <input
+                type="checkbox"
+                checked={followTail}
+                data-testid="execution-follow-toggle"
+                onChange={(event) => setFollowTail(event.target.checked)}
+              />
+              {t('runtimes.execution.followTail')}
+            </label>
+            <span className="mesh-executions__offset" data-testid="execution-offset">
+              {t('runtimes.execution.logOffset', { offset: maxOffsetRef.current })}
+            </span>
           </div>
         </section>
       ) : null}

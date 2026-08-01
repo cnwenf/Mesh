@@ -76,22 +76,36 @@ function setup(integration: unknown = INTEGRATION, flags: SetupFlags = {}): Reco
     if (url.endsWith('/integrations/int-1') && method === 'GET') {
       getCount += 1;
       if (flags.failReloadGet && getCount > 1)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: integration } });
     }
     if (method === 'PATCH') {
       if (flags.failPatch)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
-      return fakeResponse({ body: { data: { ...INTEGRATION, name: '新名称', status: 'disabled' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
+      return fakeResponse({
+        body: { data: { ...INTEGRATION, name: '新名称', status: 'disabled' } },
+      });
     }
     if (method === 'POST' && url.endsWith(':test')) {
       if (flags.failTest)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: { health_state: 'healthy', detail: null } } });
     }
     if (method === 'POST' && url.endsWith('/rotate-secret')) {
       if (flags.failRotate)
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: { ...INTEGRATION, has_secret: true } } });
     }
     return fakeResponse({ body: { data: [], next_cursor: null } });
@@ -139,6 +153,28 @@ function renderPage(realtime?: ReturnType<typeof makeRealtime>) {
 }
 
 describe('IntegrationDetailPage', () => {
+  it('exposes the shared detail layout and a dedicated Health tab', async () => {
+    setup();
+    renderPage();
+    expect(await screen.findByTestId('detail-layout')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('integration-tab-health'));
+    const healthPanel = await screen.findByTestId('integration-health-panel');
+    expect(healthPanel).toHaveTextContent('Healthy');
+    expect(healthPanel).toHaveTextContent('Jul');
+    expect(screen.getByTestId('integration-health-test')).toBeInTheDocument();
+  });
+
+  it('shows empty health timestamps and read-only guidance to non-admins', async () => {
+    setup({ ...INTEGRATION, last_success_at: null, last_error: null }, { role: 'member' });
+    renderPage();
+    await userEvent.click(await screen.findByTestId('integration-tab-health'));
+    const healthPanel = await screen.findByTestId('integration-health-panel');
+    expect(healthPanel).toHaveTextContent('—');
+    expect(healthPanel).toHaveTextContent('No recent error');
+    expect(healthPanel).toHaveTextContent('read-only');
+    expect(screen.queryByTestId('integration-health-test')).toBeNull();
+  });
+
   it('renders overview with config and has-secret indicator', async () => {
     setup();
     renderPage();
@@ -150,7 +186,9 @@ describe('IntegrationDetailPage', () => {
   it('shows the disabled note for a disabled integration', async () => {
     setup({ ...INTEGRATION, status: 'disabled' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-disabled-note')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-disabled-note')).toBeInTheDocument(),
+    );
   });
 
   it('edits the integration through the dialog', async () => {
@@ -161,7 +199,9 @@ describe('IntegrationDetailPage', () => {
     fireEvent.change(screen.getByTestId('integration-edit-name'), { target: { value: '新名称' } });
     await userEvent.click(screen.getByTestId('integration-edit-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -181,10 +221,14 @@ describe('IntegrationDetailPage', () => {
   it('toggles the integration status', async () => {
     const calls = setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('integration-status-toggle'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -196,7 +240,9 @@ describe('IntegrationDetailPage', () => {
     await userEvent.type(screen.getByTestId('integration-rotate-secret'), 'newsecret');
     await userEvent.click(screen.getByTestId('integration-rotate-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1/rotate-secret'))).toBe(true),
+      expect(calls.some((call) => call.url.endsWith('/integrations/int-1/rotate-secret'))).toBe(
+        true,
+      ),
     );
   });
 
@@ -216,7 +262,9 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    const initial = calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET').length;
+    const initial = calls.filter(
+      (call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET',
+    ).length;
     realtime.emit({
       channel: 'integration:int-1',
       event: 'integration.updated',
@@ -225,7 +273,8 @@ describe('IntegrationDetailPage', () => {
     } as unknown as RealtimeEventFrame);
     await waitFor(() =>
       expect(
-        calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET').length,
+        calls.filter((call) => call.url.endsWith('/integrations/int-1') && call.method === 'GET')
+          .length,
       ).toBeGreaterThan(initial),
     );
   });
@@ -234,7 +283,10 @@ describe('IntegrationDetailPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: makeMe('owner') } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
@@ -258,7 +310,9 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByTestId('integration-edit-name')).toBeNull());
     await userEvent.click(screen.getByTestId('integration-rotate'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByTestId('integration-rotate-secret')).toBeNull());
   });
@@ -268,7 +322,9 @@ describe('IntegrationDetailPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-rotate')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('integration-rotate'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-submit')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-submit')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('integration-rotate-submit')).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: /close/i }));
   });
@@ -285,17 +341,23 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByTestId('integration-rotate'));
     await userEvent.type(screen.getByTestId('integration-rotate-secret'), 'newsecret');
     await userEvent.click(screen.getByTestId('integration-rotate-submit'));
-    await waitFor(() => expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-rotate-secret')).toBeInTheDocument(),
+    );
   });
 
   it('enables a disabled integration (toggle to active)', async () => {
     const calls = setup({ ...INTEGRATION, status: 'disabled' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-status-toggle')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('integration-status-toggle').textContent).toMatch(/Enable/);
     await userEvent.click(screen.getByTestId('integration-status-toggle'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -305,8 +367,18 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({ channel: 'workspace:other', event: 'integration.updated', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
-    realtime.emit({ channel: 'integration:int-1', event: 'integration.event_ingested', seq: 2, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'workspace:other',
+      event: 'integration.updated',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'integration:int-1',
+      event: 'integration.event_ingested',
+      seq: 2,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -316,7 +388,12 @@ describe('IntegrationDetailPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('integration:int-1'));
-    realtime.emit({ channel: 'integration:int-1', event: 'integration.updated', seq: 3, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'integration:int-1',
+      event: 'integration.updated',
+      seq: 3,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await waitFor(() => expect(screen.getByTestId('integration-detail-name')).toBeInTheDocument());
   });
 
@@ -381,7 +458,9 @@ describe('IntegrationDetailPage', () => {
     resolveMe?.(fakeResponse({ body: { data: makeMe('owner') } }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     unmount();
-    resolveGet?.(fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }));
+    resolveGet?.(
+      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
@@ -400,7 +479,9 @@ describe('IntegrationDetailPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me'))
-        return fakeResponse({ body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } } });
+        return fakeResponse({
+          body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -425,7 +506,9 @@ describe('IntegrationDetailPage', () => {
     try {
       setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: 'token_expired' });
       renderPage();
-      await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+      await waitFor(() =>
+        expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+      );
       expect(screen.getByTestId('integration-last-error').textContent).toBe('token_expired');
       await userEvent.click(screen.getByTestId('integration-reauthorize'));
       expect(locationAssign).toHaveBeenCalledWith(
@@ -439,15 +522,24 @@ describe('IntegrationDetailPage', () => {
   it('hides the re-authorize button and error subtext when not applicable', async () => {
     setup({ ...INTEGRATION, health_state: 'auth_failed', last_error: null }, { role: 'member' });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
     expect(screen.queryByTestId('integration-last-error')).toBeNull();
   });
 
   it('hides re-authorize for auth-failed non-oauth connectors', async () => {
-    setup({ ...INTEGRATION, kind: 'webhook_outbound', health_state: 'auth_failed', last_error: 'bad' });
+    setup({
+      ...INTEGRATION,
+      kind: 'webhook_outbound',
+      health_state: 'auth_failed',
+      last_error: 'bad',
+    });
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     expect(screen.queryByTestId('integration-reauthorize')).toBeNull();
   });
 
@@ -460,7 +552,9 @@ describe('IntegrationDetailPage', () => {
       if (url.endsWith('/integrations/int-1') && method === 'GET')
         return fakeResponse({ body: { data: INTEGRATION } });
       if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ body: { data: { health_state: 'auth_failed', detail: 'token_revoked' } } });
+        return fakeResponse({
+          body: { data: { health_state: 'auth_failed', detail: 'token_revoked' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -468,7 +562,9 @@ describe('IntegrationDetailPage', () => {
     await waitFor(() => expect(screen.getByTestId('integration-test')).toBeInTheDocument());
     expect(screen.queryByTestId('integration-auth-failed-banner')).toBeNull();
     await userEvent.click(screen.getByTestId('integration-test'));
-    await waitFor(() => expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-auth-failed-banner')).toBeInTheDocument(),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('integration-health').textContent).toContain('Auth failed'),
     );
@@ -483,10 +579,14 @@ describe('IntegrationDetailPage', () => {
     await userEvent.click(screen.getByTestId('integration-test'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.url.endsWith('/integrations/int-1:test') && call.method === 'POST'),
+        calls.some(
+          (call) => call.url.endsWith('/integrations/int-1:test') && call.method === 'POST',
+        ),
       ).toBe(true),
     );
-    await waitFor(() => expect(screen.getByTestId('integration-health').textContent).toContain('Healthy'));
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-health').textContent).toContain('Healthy'),
+    );
     await waitFor(() => expect(screen.getByText(/Connection test completed/)).toBeInTheDocument());
   });
 
@@ -506,8 +606,7 @@ describe('IntegrationDetailPage', () => {
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
       if (url.endsWith('/integrations/int-1') && method === 'GET')
         return fakeResponse({ body: { data: INTEGRATION } });
-      if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ body: { data: null } });
+      if (method === 'POST' && url.endsWith(':test')) return fakeResponse({ body: { data: null } });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);

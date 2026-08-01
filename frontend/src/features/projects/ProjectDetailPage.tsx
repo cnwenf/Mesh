@@ -7,11 +7,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Button, Dialog, EmptyState, ErrorState, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  DetailLayout,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
+import { listIssues } from '../issues/api';
+import type { IssueSummary } from '../issues/types';
 import {
   archiveProject,
   deleteProject,
@@ -32,9 +42,9 @@ import type { Milestone, ProjectDetail, ProjectUpdateEntry } from './types';
 import { AvatarInitial, HealthIndicator, ProgressBar, StatusBadge } from './widgets';
 import './projects.css';
 
-type TabKey = 'overview' | 'milestones' | 'updates' | 'dashboard';
+type TabKey = 'overview' | 'issues' | 'milestones' | 'updates' | 'dashboard';
 
-const TAB_KEYS: readonly TabKey[] = ['overview', 'milestones', 'updates', 'dashboard'];
+const TAB_KEYS: readonly TabKey[] = ['overview', 'issues', 'milestones', 'updates', 'dashboard'];
 
 function tabFromParam(raw: string | null): TabKey {
   return TAB_KEYS.includes(raw as TabKey) ? (raw as TabKey) : 'overview';
@@ -62,6 +72,10 @@ export function ProjectDetailPage(): React.JSX.Element {
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [updates, setUpdates] = useState<ProjectUpdateEntry[]>([]);
+  const [issues, setIssues] = useState<IssueSummary[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
+  const [issuesReloadKey, setIssuesReloadKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -95,7 +109,10 @@ export function ProjectDetailPage(): React.JSX.Element {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    Promise.all([getProject(client, projectId), listProjectUpdates(client, projectId, { limit: 50 })])
+    Promise.all([
+      getProject(client, projectId),
+      listProjectUpdates(client, projectId, { limit: 50 }),
+    ])
       .then(([detail, page]) => {
         if (cancelled) return;
         setProject(detail);
@@ -114,6 +131,29 @@ export function ProjectDetailPage(): React.JSX.Element {
       cancelled = true;
     };
   }, [client, workspace, projectId, reloadKey, t]);
+
+  // Issues 页签按需加载,避免概览首屏为非当前内容付出请求成本。
+  useEffect(() => {
+    if (activeTab !== 'issues' || workspace === null || projectId === undefined) return;
+    let cancelled = false;
+    setIssuesLoading(true);
+    setIssuesError(null);
+    listIssues(client, workspace.workspace_id, { project_id: projectId, limit: 50 })
+      .then((page) => {
+        if (!cancelled) setIssues([...page.data]);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
+        setIssuesError(t(key));
+      })
+      .finally(() => {
+        if (!cancelled) setIssuesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, client, workspace, projectId, issuesReloadKey, t]);
 
   // 实时:project:{id} 全量事件(含 private)
   useEffect(() => {
@@ -162,10 +202,13 @@ export function ProjectDetailPage(): React.JSX.Element {
         ? await unarchiveProject(client, projectId)
         : await archiveProject(client, projectId);
       setProject((prev) => (prev === null ? prev : { ...prev, ...updated }));
-      toast.addToast(t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'), {
-        tone: 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'),
+        {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -177,7 +220,10 @@ export function ProjectDetailPage(): React.JSX.Element {
     setIsDeleting(true);
     try {
       await deleteProject(client, projectId);
-      toast.addToast(t('projects.detail.deleted'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('projects.detail.deleted'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       navigate('/projects');
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
@@ -220,89 +266,233 @@ export function ProjectDetailPage(): React.JSX.Element {
 
   return (
     <main className="mesh-projects">
-      <div className="mesh-projects__detail-header" data-testid="project-detail-header">
-        <div className="mesh-projects__detail-title-row">
-          {project.color !== null ? (
-            <span
-              className="mesh-projects__color-swatch"
-              data-testid="project-color"
-              style={{ background: project.color }}
-              aria-hidden="true"
+      <DetailLayout
+        header={
+          <div className="mesh-projects__detail-header" data-testid="project-detail-header">
+            <div className="mesh-projects__detail-title-row">
+              {project.color !== null ? (
+                <span
+                  className="mesh-projects__color-swatch"
+                  data-testid="project-color"
+                  style={{ background: project.color }}
+                  aria-hidden="true"
+                />
+              ) : null}
+              {project.icon !== null ? (
+                <span className="mesh-projects__icon" data-testid="project-icon" aria-hidden="true">
+                  {project.icon}
+                </span>
+              ) : null}
+              <h1 className="mesh-projects__title">{project.name}</h1>
+            </div>
+            <div className="mesh-projects__detail-actions">
+              <Button
+                variant="secondary"
+                disabled={project.archived}
+                data-testid="update-status-button"
+                onClick={() => setHealthOpen(true)}
+              >
+                {t('projects.detail.updateStatus')}
+              </Button>
+              <Link
+                to={`/projects/${project.id}/settings`}
+                className="mesh-projects__settings-link"
+                data-testid="settings-link"
+              >
+                {t('projects.detail.settings')}
+              </Link>
+              <Button
+                variant="secondary"
+                data-testid="archive-toggle-button"
+                onClick={() => void handleArchiveToggle()}
+              >
+                {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
+              </Button>
+              <Button
+                variant="danger"
+                data-testid="delete-project-button"
+                onClick={() => setDeleteOpen(true)}
+              >
+                {t('projects.detail.delete')}
+              </Button>
+              <Button
+                variant="secondary"
+                data-testid="export-project-button"
+                onClick={() => setExportOpen(true)}
+              >
+                {t('dataJobs.page.exportProject')}
+              </Button>
+              {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
+                <Button
+                  variant="secondary"
+                  data-testid="import-project-button"
+                  onClick={() => setImportOpen(true)}
+                >
+                  {t('dataJobs.page.importProject')}
+                </Button>
+              )}
+            </div>
+          </div>
+        }
+        summaryChips={
+          <div className="mesh-projects__detail-summary">
+            <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
+            <HealthIndicator
+              health={project.health}
+              updateLabel={t('projects.detail.updateStatus')}
+              onClick={project.archived ? undefined : () => setHealthOpen(true)}
             />
-          ) : null}
-          {project.icon !== null ? (
-            <span className="mesh-projects__icon" data-testid="project-icon" aria-hidden="true">
-              {project.icon}
-            </span>
-          ) : null}
-          <h1 className="mesh-projects__title">{project.name}</h1>
-          <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
-          {/* §4.2 健康度灯可点击更新;归档只读时不可点 */}
-          <HealthIndicator
-            health={project.health}
-            onClick={project.archived ? undefined : () => setHealthOpen(true)}
-          />
-        </div>
-        <div className="mesh-projects__detail-meta">
-          <ProgressBar progress={project.progress} title={progressTitle} />
-          {project.lead !== null ? (
-            <span className="mesh-projects__detail-lead">
-              <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
-              {project.lead.name}
-            </span>
-          ) : null}
-          {project.target_date !== null ? (
-            <span>{t('projects.card.due', { date: project.target_date })}</span>
-          ) : null}
-        </div>
-        <div className="mesh-projects__detail-actions">
-          <Button
-            variant="secondary"
-            data-testid="update-status-button"
-            onClick={() => setHealthOpen(true)}
-          >
-            {t('projects.detail.updateStatus')}
-          </Button>
-          <Link
-            to={`/projects/${project.id}/settings`}
-            className="mesh-projects__settings-link"
-            data-testid="settings-link"
-          >
-            {t('projects.detail.settings')}
-          </Link>
-          <Button
-            variant="secondary"
-            data-testid="archive-toggle-button"
-            onClick={() => void handleArchiveToggle()}
-          >
-            {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
-          </Button>
-          <Button
-            variant="danger"
-            data-testid="delete-project-button"
-            onClick={() => setDeleteOpen(true)}
-          >
-            {t('projects.detail.delete')}
-          </Button>
-          {/* import-export.md §4.1 情境入口:导出本项目(读权限)/ 导入到本项目(写权限) */}
-          <Button
-            variant="secondary"
-            data-testid="export-project-button"
-            onClick={() => setExportOpen(true)}
-          >
-            {t('dataJobs.page.exportProject')}
-          </Button>
-          {(workspace?.role === 'admin' || workspace?.role === 'owner') && (
-            <Button
-              variant="secondary"
-              data-testid="import-project-button"
-              onClick={() => setImportOpen(true)}
+            {project.archived ? (
+              <span className="mesh-projects__archive-badge">{t('projects.filter.archived')}</span>
+            ) : null}
+          </div>
+        }
+        main={
+          <>
+            <div
+              className="mesh-projects__tabs"
+              role="tablist"
+              aria-label={t('projects.tab.label')}
             >
-              {t('dataJobs.page.importProject')}
-            </Button>
-          )}
-        </div>
-      </div>
+              {TAB_KEYS.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === tab}
+                  tabIndex={activeTab === tab ? 0 : -1}
+                  className="mesh-projects__tab"
+                  data-testid={`tab-${tab}`}
+                  onClick={() => selectTab(tab)}
+                >
+                  {tab === 'issues' ? t('issues.pageTitle') : t(`projects.tab.${tab}`)}
+                </button>
+              ))}
+            </div>
+
+            {activeTab === 'overview' ? (
+              <section className="mesh-projects__panel" aria-label={t('projects.tab.overview')}>
+                <p className="mesh-projects__description" data-testid="project-description">
+                  {project.description !== null && project.description !== ''
+                    ? project.description
+                    : t('projects.detail.noDescription')}
+                </p>
+                {milestones.length === 0 ? (
+                  <p className="mesh-projects__sub">{t('projects.milestones.empty')}</p>
+                ) : (
+                  <ul
+                    className="mesh-projects__milestone-list"
+                    data-testid="overview-milestone-list"
+                  >
+                    {milestones.map((milestone) => (
+                      <li
+                        key={milestone.id}
+                        className={
+                          milestone.overdue
+                            ? 'mesh-projects__milestone mesh-projects__milestone--overdue'
+                            : 'mesh-projects__milestone'
+                        }
+                      >
+                        <span className="mesh-projects__milestone-title">{milestone.title}</span>
+                        <span className="mesh-projects__milestone-sub">
+                          {t(`projects.milestones.state.${milestone.state}`)}
+                          {milestone.target_date !== null ? ` · ${milestone.target_date}` : ''}
+                          {milestone.overdue ? ` · ${t('projects.milestones.overdue')}` : ''}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ) : null}
+
+            {activeTab === 'issues' ? (
+              <section className="mesh-projects__panel" aria-label={t('issues.pageTitle')}>
+                {issuesLoading ? (
+                  <Skeleton loadingLabel={t('common.loading')} />
+                ) : issuesError !== null ? (
+                  <ErrorState
+                    title={t('state.errorTitle')}
+                    description={issuesError}
+                    retryLabel={t('common.retry')}
+                    onRetry={() => setIssuesReloadKey((key) => key + 1)}
+                  />
+                ) : issues.length === 0 ? (
+                  <EmptyState
+                    title={t('issues.empty.title')}
+                    description={t('issues.empty.description')}
+                  />
+                ) : (
+                  <ul className="mesh-projects__issue-list" data-testid="project-issue-list">
+                    {issues.map((issue) => (
+                      <li key={issue.id} className="mesh-projects__issue-row">
+                        <Link to={`/issues/${issue.id}`} className="mesh-projects__issue-link">
+                          <span className="mesh-projects__issue-identifier">
+                            {issue.identifier}
+                          </span>
+                          <span className="mesh-projects__issue-title">{issue.title}</span>
+                        </Link>
+                        <span className="mesh-projects__issue-state">
+                          {t(`issues.category.${issue.state_category}`)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            ) : null}
+
+            {activeTab === 'milestones' ? (
+              <MilestonesPanel
+                client={client}
+                projectId={project.id}
+                milestones={milestones}
+                upsertMilestone={(milestone) =>
+                  setMilestones((prev) => upsertById(prev, milestone))
+                }
+                removeMilestone={(milestoneId) =>
+                  setMilestones((prev) => prev.filter((m) => m.id !== milestoneId))
+                }
+              />
+            ) : null}
+
+            {activeTab === 'updates' ? (
+              <UpdatesPanel
+                client={client}
+                projectId={project.id}
+                updates={updates}
+                prependUpdate={(update) => setUpdates((prev) => [update, ...prev])}
+                onSubmitted={reload}
+              />
+            ) : null}
+
+            {activeTab === 'dashboard' && workspace !== null ? (
+              <ProjectDashboardPanel
+                client={client}
+                workspaceId={workspace.workspace_id}
+                projectId={project.id}
+              />
+            ) : null}
+          </>
+        }
+        aside={
+          <div className="mesh-projects__detail-meta">
+            <ProgressBar progress={project.progress} title={progressTitle} />
+            {project.lead !== null ? (
+              <span className="mesh-projects__detail-lead">
+                <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
+                {project.lead.name}
+              </span>
+            ) : null}
+            {project.target_date !== null ? (
+              <span>{t('projects.card.due', { date: new Date(project.target_date) })}</span>
+            ) : null}
+          </div>
+        }
+        asideTitle={t('issues.detail.properties')}
+        asideTriggerLabel={t('issues.openProperties')}
+        closeLabel={t('common.close')}
+      />
 
       {workspace !== null && (
         <>
@@ -323,86 +513,6 @@ export function ProjectDetailPage(): React.JSX.Element {
         </>
       )}
 
-      <div className="mesh-members__tabs" role="tablist" aria-label={t('projects.tab.label')}>
-        {TAB_KEYS.map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab}
-            className="mesh-members__tab"
-            data-testid={`tab-${tab}`}
-            onClick={() => selectTab(tab)}
-          >
-            {t(`projects.tab.${tab}`)}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === 'overview' ? (
-        <section className="mesh-projects__panel" aria-label={t('projects.tab.overview')}>
-          <p className="mesh-projects__description" data-testid="project-description">
-            {project.description !== null && project.description !== ''
-              ? project.description
-              : t('projects.detail.noDescription')}
-          </p>
-          {milestones.length === 0 ? (
-            <p className="mesh-projects__sub">{t('projects.milestones.empty')}</p>
-          ) : (
-            <ul className="mesh-projects__milestone-list" data-testid="overview-milestone-list">
-              {milestones.map((milestone) => (
-                <li
-                  key={milestone.id}
-                  className={
-                    milestone.overdue
-                      ? 'mesh-projects__milestone mesh-projects__milestone--overdue'
-                      : 'mesh-projects__milestone'
-                  }
-                >
-                  <span className="mesh-projects__milestone-title">{milestone.title}</span>
-                  <span className="mesh-projects__milestone-sub">
-                    {t(`projects.milestones.state.${milestone.state}`)}
-                    {milestone.target_date !== null ? ` · ${milestone.target_date}` : ''}
-                    {milestone.overdue ? ` · ${t('projects.milestones.overdue')}` : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      ) : null}
-
-      {activeTab === 'milestones' ? (
-        <MilestonesPanel
-          client={client}
-          projectId={project.id}
-          milestones={milestones}
-          upsertMilestone={(milestone) => setMilestones((prev) => upsertById(prev, milestone))}
-          removeMilestone={(milestoneId) =>
-            setMilestones((prev) => prev.filter((m) => m.id !== milestoneId))
-          }
-        />
-      ) : null}
-
-      {activeTab === 'updates' ? (
-        <UpdatesPanel
-          client={client}
-          projectId={project.id}
-          updates={updates}
-          prependUpdate={(update) => setUpdates((prev) => [update, ...prev])}
-          onSubmitted={reload}
-        />
-      ) : null}
-
-      {/* 统计报表(analytics.md §4.2):velocity + burndown + cycle time */}
-      {activeTab === 'dashboard' && workspace !== null ? (
-        <ProjectDashboardPanel
-          client={client}
-          workspaceId={workspace.workspace_id}
-          projectId={project.id}
-        />
-      ) : null}
-
       <HealthUpdateDialog
         open={healthOpen}
         onClose={() => setHealthOpen(false)}
@@ -418,7 +528,9 @@ export function ProjectDetailPage(): React.JSX.Element {
           title={t('projects.detail.deleteTitle')}
           closeLabel={t('common.close')}
         >
-          <p data-testid="delete-confirm-text">{t('projects.detail.deleteConfirm', { name: project.name })}</p>
+          <p data-testid="delete-confirm-text">
+            {t('projects.detail.deleteConfirm', { name: project.name })}
+          </p>
           <div className="mesh-projects__form-actions">
             <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
               {t('common.cancel')}

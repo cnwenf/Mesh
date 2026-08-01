@@ -93,6 +93,8 @@ interface StubOptions {
   readonly serverNameAfterConflict?: string;
   /** 覆盖默认项目 fixture(如字段全 null 的三态预填场景) */
   readonly project?: ReturnType<typeof makeProject>;
+  readonly patchRejects?: boolean;
+  readonly projectLoadRejects?: boolean;
 }
 
 function stubFetch(opts: StubOptions = {}) {
@@ -136,6 +138,7 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({ body: { data: { id: 'mem-2', removed: true } } });
     }
     if (method === 'PATCH' && url.match(/\/projects\/[^/]+$/)) {
+      if (opts.patchRejects === true) throw new TypeError('network down');
       if (patchFailures > 0) {
         patchFailures -= 1;
         conflictHappened = true;
@@ -148,7 +151,7 @@ function stubFetch(opts: StubOptions = {}) {
       project = { ...project, ...body, updated_at: '2026-07-02T00:00:00Z' };
       return fakeResponse({ body: { data: project } });
     }
-    if (method === 'POST' && url.includes('/archive')) {
+    if (method === 'POST' && (url.includes('/archive') || url.includes('/unarchive'))) {
       project = { ...project, archived: !project.archived };
       return fakeResponse({ body: { data: project } });
     }
@@ -156,6 +159,15 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({ body: { data: { id: 'prj-1', deleted: true } } });
     }
     if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
+      if (opts.projectLoadRejects === true) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => {
+            throw new TypeError('response body unreadable');
+          },
+        } as unknown as Response;
+      }
       const served =
         opts.serverNameAfterConflict !== undefined && conflictHappened
           ? { ...project, name: opts.serverNameAfterConflict }
@@ -168,8 +180,8 @@ function stubFetch(opts: StubOptions = {}) {
   return calls;
 }
 
-function renderSettings(): void {
-  renderWithProviders(
+function renderSettings() {
+  return renderWithProviders(
     <Routes>
       <Route path="/projects" element={<div data-testid="projects-list-page" />} />
       <Route path="/projects/:projectId/settings" element={<ProjectSettingsPage />} />
@@ -199,6 +211,27 @@ describe('ProjectSettingsPage', () => {
     expect((screen.getByTestId('settings-status') as HTMLSelectElement).value).toBe('active');
     expect((screen.getByTestId('settings-visibility') as HTMLSelectElement).value).toBe('public');
     expect((screen.getByTestId('settings-lead') as HTMLSelectElement).value).toBe('mem-lead');
+  });
+
+  it('提供独立二级导航并将设置内容拆成可直达分区', async () => {
+    stubFetch();
+    renderSettings();
+    await screen.findByTestId('settings-form');
+
+    const nav = screen.getByRole('navigation', { name: 'Settings navigation' });
+    expect(within(nav).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '#general');
+    expect(within(nav).getByRole('link', { name: 'Members' })).toHaveAttribute('href', '#members');
+    expect(within(nav).getByRole('link', { name: 'Labels' })).toHaveAttribute('href', '#labels');
+    expect(within(nav).getByRole('link', { name: 'Custom fields' })).toHaveAttribute(
+      'href',
+      '#custom-fields',
+    );
+    expect(within(nav).getByRole('link', { name: 'Danger zone' })).toHaveAttribute(
+      'href',
+      '#danger',
+    );
+    expect(document.getElementById('general')).not.toBeNull();
+    expect(document.getElementById('danger')).not.toBeNull();
   });
 
   it('saves changes with If-Match optimistic concurrency', async () => {
@@ -250,6 +283,31 @@ describe('ProjectSettingsPage', () => {
     expect(String(patchProjectCalls(calls)[0].init?.body)).toContain('"description":null');
   });
 
+  it('sends a trimmed non-empty description and surfaces network save failures', async () => {
+    const calls = stubFetch();
+    const user = userEvent.setup();
+    const first = renderSettings();
+    const description = await screen.findByLabelText('Description');
+    await user.clear(description);
+    await user.type(description, '  Revised mission  ');
+    await user.click(screen.getByTestId('settings-save'));
+    await waitFor(() => expect(patchProjectCalls(calls)).toHaveLength(1));
+    expect(String(patchProjectCalls(calls)[0].init?.body)).toContain(
+      '"description":"Revised mission"',
+    );
+    first.unmount();
+
+    stubFetch({ patchRejects: true });
+    renderSettings();
+    const name = await screen.findByTestId('settings-name');
+    await user.clear(name);
+    await user.type(name, 'Network edit');
+    await user.click(screen.getByTestId('settings-save'));
+    expect(
+      await screen.findByText('Network error. Please check your connection and try again.'),
+    ).toBeInTheDocument();
+  });
+
   it('lists members, adds, changes role and removes', async () => {
     const calls = stubFetch();
     renderSettings();
@@ -299,6 +357,21 @@ describe('ProjectSettingsPage', () => {
     expect(await screen.findByText('Project archived.')).toBeDefined();
   });
 
+  it('unarchives an archived project and can cancel deletion', async () => {
+    const calls = stubFetch({
+      project: makeProject({ archived: true, archived_at: '2026-06-01T00:00:00Z' }),
+    });
+    renderSettings();
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('settings-archive-toggle'));
+    await waitFor(() => expect(calls.some((call) => call.url.includes('/unarchive'))).toBe(true));
+    expect(await screen.findByText('Project unarchived.')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('settings-delete'));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('settings-delete-confirm-text')).toBeNull();
+  });
+
   it('deletes the project after confirmation and navigates away', async () => {
     const calls = stubFetch();
     renderSettings();
@@ -332,6 +405,29 @@ describe('ProjectSettingsPage', () => {
     vi.stubGlobal('fetch', impl);
     renderSettings();
     expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
+
+  it('renders the generic recovery state for an unexpected response read failure', async () => {
+    stubFetch({ projectLoadRejects: true });
+    renderSettings();
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+  });
+
+  it('guards project requests when rendered without a project route parameter', async () => {
+    const calls: RecordedCall[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      return fakeResponse({ status: 404, body: { error: { code: 'not_found', message: 'nf' } } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+
+    const view = renderWithProviders(<ProjectSettingsPage />, { route: '/settings' });
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+    await waitFor(() => expect(calls.some((call) => call.url.includes('/users/me'))).toBe(true));
+    expect(calls.some((call) => call.url.includes('/projects/'))).toBe(false);
+    view.unmount();
   });
 
   it('shows a danger toast when archiving fails', async () => {

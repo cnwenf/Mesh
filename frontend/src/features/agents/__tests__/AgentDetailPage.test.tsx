@@ -32,6 +32,12 @@ function setup(): Recorded[] {
     const method = init?.method ?? 'GET';
     calls.push({ url, method, init });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (url.includes('/executions')) {
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }
+    if (url.includes('/agents/a-1/skills') || url.includes('/skill-installations')) {
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }
     if (url.includes('/config-versions')) {
       if (method === 'POST') return fakeResponse({ body: { data: AGENT } }); // rollback
       return fakeResponse({ body: { data: VERSIONS, next_cursor: null } });
@@ -89,8 +95,22 @@ const AGENT = {
 };
 
 const VERSIONS = [
-  { id: 'v-2', agent_id: 'a-1', snapshot: { model_config: { temperature: 0.7 } }, change_summary: '改', changed_by: 'm-1', created_at: '2026-01-02T00:00:00Z' },
-  { id: 'v-1', agent_id: 'a-1', snapshot: { model_config: { temperature: 0.2 } }, change_summary: '初', changed_by: 'm-1', created_at: '2026-01-01T00:00:00Z' },
+  {
+    id: 'v-2',
+    agent_id: 'a-1',
+    snapshot: { model_config: { temperature: 0.7 } },
+    change_summary: '改',
+    changed_by: 'm-1',
+    created_at: '2026-01-02T00:00:00Z',
+  },
+  {
+    id: 'v-1',
+    agent_id: 'a-1',
+    snapshot: { model_config: { temperature: 0.2 } },
+    change_summary: '初',
+    changed_by: 'm-1',
+    created_at: '2026-01-01T00:00:00Z',
+  },
 ];
 
 function renderPage() {
@@ -104,6 +124,53 @@ function renderPage() {
 }
 
 describe('AgentDetailPage', () => {
+  it('最近执行完成时展示统一 succeeded 状态与执行深链', async () => {
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/executions')) {
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'e-1',
+                agent_id: 'a-1',
+                issue_id: null,
+                trigger: 'manual',
+                status: 'completed',
+                priority: 0,
+                required_capabilities: [],
+                label_requirements: {},
+                timeout_seconds: 600,
+                queued_at: '2026-01-02T00:00:00Z',
+                finished_at: '2026-01-02T00:01:00Z',
+                failure_reason: null,
+                result: {},
+              },
+            ],
+            next_cursor: null,
+          },
+        });
+      }
+      return fakeResponse({ body: { data: AGENT } });
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderPage();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('agent-detail-presence').querySelector('[data-state="succeeded"]'),
+      ).not.toBeNull(),
+    );
+    expect(screen.getByTestId('agent-latest-execution')).toHaveTextContent(
+      /completed successfully|成功完成/i,
+    );
+    expect(screen.getByTestId('agent-latest-execution-link')).toHaveAttribute(
+      'href',
+      '/executions/e-1',
+    );
+  });
+
   it('渲染详情头(底座 Avatar/Badge/运行态徽标)+ 概览 + presence 脚手架', async () => {
     setup();
     renderPage();
@@ -175,7 +242,9 @@ describe('AgentDetailPage', () => {
     expect(screen.getByTestId('agent-transfer-dialog')).toBeInTheDocument();
     await user.type(screen.getByTestId('agent-transfer-user-id'), 'u-9');
     await user.click(screen.getByTestId('agent-transfer-confirm'));
-    await waitFor(() => expect(screen.queryByTestId('agent-transfer-dialog')).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByTestId('agent-transfer-dialog')).not.toBeInTheDocument(),
+    );
   });
 
   it('暂停弹窗选 cancel_current 发 body(M-F1)', async () => {
@@ -297,6 +366,12 @@ function setupWith(opts: StubOptions = {}): Recorded[] {
     const method = init?.method ?? 'GET';
     calls.push({ url, method, init });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: opts.me ?? ME } });
+    if (url.includes('/executions')) {
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }
+    if (url.includes('/agents/a-1/skills') || url.includes('/skill-installations')) {
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }
     if (url.includes('/config-versions')) {
       if (method === 'POST') return fakeResponse({ body: { data: agent } });
       return fakeResponse({ body: { data: VERSIONS, next_cursor: null } });
@@ -523,12 +598,12 @@ describe('AgentDetailPage 扩展覆盖', () => {
     expect(await screen.findByTestId('agent-wizard-basic')).toBeInTheDocument();
     // onClose:点击对话框关闭按钮。
     await user.click(screen.getByRole('button', { name: 'Close dialog' }));
-    await waitFor(() =>
-      expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('agent-wizard-basic')).not.toBeInTheDocument());
     // onSaved:重开并走完四步 → PATCH + PATCH /config → 重拉详情。
     await user.click(screen.getByTestId('agent-edit-button'));
-    const detailsBefore = calls.filter((c) => c.method === 'GET' && c.url.includes('/agents/')).length;
+    const detailsBefore = calls.filter(
+      (c) => c.method === 'GET' && c.url.includes('/agents/'),
+    ).length;
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));
@@ -554,9 +629,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
     rt.emit({ event: 'agent.updated', payload: { data: { id: 'other' } } });
     // 本 agent 的 agent.updated → 重拉。
     rt.emit({ event: 'agent.updated', payload: { data: { id: 'a-1' } } });
-    await waitFor(() =>
-      expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument());
     // presence 帧 → 运行态 running(data-state)+ 容量三元组说明。
     rt.emit({
       event: 'agent.presence',
@@ -602,9 +675,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
     const subtitle = document.querySelector('.mesh-agents-detail__subtitle');
     expect(subtitle?.textContent).toContain('bio');
     await user.click(screen.getByTestId('agent-tab-config'));
-    expect((screen.getByTestId('agent-detail-instructions') as HTMLTextAreaElement).value).toBe(
-      '',
-    );
+    expect((screen.getByTestId('agent-detail-instructions') as HTMLTextAreaElement).value).toBe('');
   });
 
   it('未知生命周期状态无动作按钮(VERBS 回退空)', async () => {
@@ -632,8 +703,6 @@ describe('AgentDetailPage 扩展覆盖', () => {
     await waitFor(() => expect(screen.getByTestId('agent-detail-name')).toBeInTheDocument());
   });
 
-
-
   it('保存配置:空 instructions 落 null;预设选「无」为 no-op', async () => {
     const user = userEvent.setup();
     const calls = setupWith();
@@ -653,10 +722,7 @@ describe('AgentDetailPage 扩展覆盖', () => {
 
   it('历史:change_summary 缺省渲染空;非管理角色看只读历史', async () => {
     const user = userEvent.setup();
-    const versionsWithNull = [
-      { ...VERSIONS[0], change_summary: null },
-      VERSIONS[1],
-    ];
+    const versionsWithNull = [{ ...VERSIONS[0], change_summary: null }, VERSIONS[1]];
     const calls: Recorded[] = [];
     const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

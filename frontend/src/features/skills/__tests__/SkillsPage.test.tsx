@@ -71,8 +71,11 @@ describe('SkillsPage', () => {
   it('渲染技能卡片与来源/状态标签', async () => {
     setup();
     renderWithProviders(<SkillsPage />);
-    expect(await screen.findByTestId('skill-card-s-1')).toBeTruthy();
+    const card = await screen.findByTestId('skill-card-s-1');
     expect(screen.getByText('代码评审规范')).toBeTruthy();
+    expect(card).toHaveTextContent(/Reviewed|已审查/);
+    expect(card).toHaveTextContent('read:code');
+    expect(card).toHaveTextContent(/confirm|确认/i);
   });
 
   it('搜索触发带 q 参数的列表拉取', async () => {
@@ -118,7 +121,10 @@ describe('SkillsPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(<SkillsPage />);
@@ -175,7 +181,9 @@ describe('SkillsPage', () => {
     renderWithProviders(<SkillsPage />);
     await screen.findByTestId('skills-page-title');
     const before = fetches;
-    fireEvent.change(screen.getByTestId('skills-status-filter'), { target: { value: 'published' } });
+    fireEvent.change(screen.getByTestId('skills-status-filter'), {
+      target: { value: 'published' },
+    });
     await waitFor(() => expect(fetches).toBeGreaterThan(before));
   });
 });

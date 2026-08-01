@@ -64,8 +64,22 @@ function squadFixture(overrides: Record<string, unknown> = {}) {
 
 const MEMBERS = {
   data: [
-    { id: 'sm-1', member_id: 'mem-1', member_type: 'human', name: 'Owner', role: 'leader', joined_at: '2026-07-01T00:00:00Z' },
-    { id: 'sm-2', member_id: 'mem-2', member_type: 'agent', name: 'Builder', role: 'member', joined_at: '2026-07-01T00:00:00Z' },
+    {
+      id: 'sm-1',
+      member_id: 'mem-1',
+      member_type: 'human',
+      name: 'Owner',
+      role: 'leader',
+      joined_at: '2026-07-01T00:00:00Z',
+    },
+    {
+      id: 'sm-2',
+      member_id: 'mem-2',
+      member_type: 'agent',
+      name: 'Builder',
+      role: 'member',
+      joined_at: '2026-07-01T00:00:00Z',
+    },
   ],
   next_cursor: null,
 };
@@ -161,9 +175,33 @@ const MESSAGES = {
 
 const ROSTER = {
   data: [
-    { id: 'mem-1', member_type: 'human', role: 'owner', status: 'active', display_name: 'Owner', joined_at: null, profile: null },
-    { id: 'mem-2', member_type: 'agent', role: 'member', status: 'active', display_name: 'Builder', joined_at: null, profile: null },
-    { id: 'mem-3', member_type: 'human', role: 'member', status: 'active', display_name: 'Newbie', joined_at: null, profile: null },
+    {
+      id: 'mem-1',
+      member_type: 'human',
+      role: 'owner',
+      status: 'active',
+      display_name: 'Owner',
+      joined_at: null,
+      profile: null,
+    },
+    {
+      id: 'mem-2',
+      member_type: 'agent',
+      role: 'member',
+      status: 'active',
+      display_name: 'Builder',
+      joined_at: null,
+      profile: null,
+    },
+    {
+      id: 'mem-3',
+      member_type: 'human',
+      role: 'member',
+      status: 'active',
+      display_name: 'Newbie',
+      joined_at: null,
+      profile: null,
+    },
   ],
   next_cursor: null,
 };
@@ -248,16 +286,28 @@ describe('SquadDetailPage', () => {
     renderPage(rt.value);
     await screen.findByTestId('squad-detail-page');
     expect(screen.getByTestId('squad-title').textContent).toBe('Platform');
+    // design-quality §3.2:detail information is grouped into four scannable areas.
+    expect(screen.getByTestId('squad-overview-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('squad-members-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('squad-plan-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('squad-tasks-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('squad-overview-leader')).toHaveTextContent('Owner');
+    expect(screen.getByTestId('squad-plan-leader')).toHaveTextContent('Owner');
     // members
     expect(screen.getByTestId('squad-member-mem-1')).toBeTruthy();
     expect(screen.getByTestId('squad-member-mem-2')).toBeTruthy();
     // task deep link
     expect(screen.getByText('Fix login')).toBeTruthy();
+    expect(screen.getByTestId('squad-task-assignee-tk-1')).toHaveTextContent('Builder');
     // activity timeline entries(action 文案亦出现在过滤下拉,经 testid 断言时间线条目)
     expect(screen.getByTestId('squad-activity-act-1')).toBeTruthy();
     expect(screen.getByTestId('squad-activity-act-2')).toBeTruthy();
     // messages
     expect(screen.getByText('Build is green')).toBeTruthy();
+    expect(screen.getByTestId('squad-message-msg-1')).toHaveClass('mesh-squads__message--report');
+    expect(screen.getByTestId('squad-message-msg-2')).toHaveClass(
+      'mesh-squads__message--instruction',
+    );
     expect(rt.subscribe).toHaveBeenCalledWith('squad:sq-1');
   });
 
@@ -281,15 +331,118 @@ describe('SquadDetailPage', () => {
 
   it('archives the squad and flips the header to archived/restore', async () => {
     const stub = queueInitialLoad(
-      fakeResponse({ body: { data: squadFixture({ status: 'archived', archived_at: '2026-07-03T00:00:00Z' }) } }),
+      fakeResponse({
+        body: { data: squadFixture({ status: 'archived', archived_at: '2026-07-03T00:00:00Z' }) },
+      }),
+      fakeResponse({ body: { data: squadFixture() } }),
     );
     renderPage(makeFakeRealtime().value);
     await screen.findByTestId('squad-detail-page');
     fireEvent.click(screen.getByTestId('squad-archive-toggle'));
-    await screen.findByText('Archived');
-    expect(screen.getByTestId('squad-archive-toggle').textContent).toBe('Restore');
+    await waitFor(() =>
+      expect(screen.getByTestId('squad-archive-toggle').textContent).toBe('Restore'),
+    );
+    expect(screen.getAllByText('Archived')).not.toHaveLength(0);
+    fireEvent.click(screen.getByTestId('squad-archive-toggle'));
+    await waitFor(() =>
+      expect(screen.getByTestId('squad-archive-toggle').textContent).toBe('Archive'),
+    );
     const posts = stub.calls.filter((c) => c.init?.method === 'POST');
     expect(String(posts[0].url)).toContain('/squads/sq-1/archive');
+    expect(String(posts[1].url)).toContain('/squads/sq-1/restore');
+  });
+
+  it('renders sparse leadership and rich task, activity, and system-message signals', async () => {
+    const sparseTask = taskFixture({
+      id: 'tk-sparse',
+      title_snapshot: null,
+      assignee: OWNER_SNAP,
+      stage: 3,
+      blocked_by: ['tk-upstream'],
+      failure_reason: 'Dependency failed',
+    });
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({
+        body: {
+          data: squadFixture({
+            description: 'Coordinates platform delivery',
+            instructions: null,
+            primary_leader_id: null,
+            primary_leader: null,
+            require_plan_approval: true,
+          }),
+        },
+      }),
+      fakeResponse({ body: { data: [], next_cursor: null } }),
+      fakeResponse({
+        body: {
+          data: [sparseTask, taskFixture({ id: 'tk-unassigned', assignee: null })],
+          next_cursor: null,
+        },
+      }),
+      fakeResponse({
+        body: {
+          data: [
+            {
+              ...ACTIVITY.data[0],
+              id: 'act-system',
+              actor: null,
+              created_at: 'not-a-date',
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+      fakeResponse({
+        body: {
+          data: [
+            {
+              ...MESSAGES.data[0],
+              id: 'msg-system',
+              sender: null,
+              kind: 'system',
+              body_markdown: 'Automated update',
+              created_at: 'not-a-date',
+            },
+          ],
+          next_cursor: null,
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage(makeFakeRealtime().value);
+
+    await screen.findByTestId('squad-detail-page');
+    expect(screen.getByText('Coordinates platform delivery')).toBeInTheDocument();
+    expect(screen.getByTestId('squad-members-pane')).toHaveTextContent('No members yet');
+    expect(screen.getAllByText('Unassigned').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('squad-task-tk-sparse')).toHaveTextContent('tk-sparse');
+    expect(screen.getByTestId('squad-task-assignee-tk-sparse')).toHaveTextContent('Owner');
+    expect(screen.getByTestId('squad-task-tk-sparse')).toHaveTextContent('3');
+    expect(screen.getByTestId('squad-task-tk-sparse')).toHaveTextContent('tk-upstream');
+    expect(screen.getByTestId('squad-task-tk-sparse')).toHaveTextContent('Dependency failed');
+    expect(screen.getByTestId('squad-activity-act-system')).toHaveTextContent('System');
+    expect(screen.getByTestId('squad-activity-act-system')).toHaveTextContent('not-a-date');
+    expect(screen.getByTestId('squad-message-msg-system')).toHaveTextContent('Automated update');
+    expect(screen.getByTestId('squad-message-msg-system')).toHaveTextContent('not-a-date');
+    fireEvent.change(screen.getByTestId('squad-activity-filter'), {
+      target: { value: 'missing-action' },
+    });
+    expect(screen.getByText('No activity yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('squad-msgtab-instruction'));
+    expect(await screen.findByTestId('squad-messages-empty')).toBeInTheDocument();
+  });
+
+  it('ignores empty add-member and message form submissions', async () => {
+    queueInitialLoad(fakeResponse({ body: ROSTER }));
+    renderPage(makeFakeRealtime().value);
+    await screen.findByTestId('squad-detail-page');
+    fireEvent.submit(screen.getByTestId('squad-composer'));
+    fireEvent.click(screen.getByTestId('squad-add-member'));
+    await screen.findByTestId('squad-add-member-form');
+    fireEvent.submit(screen.getByTestId('squad-add-member-form'));
+    expect(screen.getByTestId('squad-add-member-form')).toBeInTheDocument();
   });
 
   it('edits the squad via the dialog and PATCHes updateSquad', async () => {
@@ -337,7 +490,9 @@ describe('SquadDetailPage', () => {
       expect(JSON.parse(String(patches[0].init?.body))).toEqual({ role: 'observer' });
     });
     await waitFor(() => {
-      expect((screen.getByTestId('squad-member-role-mem-2') as HTMLSelectElement).value).toBe('observer');
+      expect((screen.getByTestId('squad-member-role-mem-2') as HTMLSelectElement).value).toBe(
+        'observer',
+      );
     });
   });
 
@@ -366,7 +521,14 @@ describe('SquadDetailPage', () => {
         body: {
           data: [
             ...MEMBERS.data,
-            { id: 'sm-3', member_id: 'mem-3', member_type: 'human', name: 'Newbie', role: 'member', joined_at: '2026-07-03T00:00:00Z' },
+            {
+              id: 'sm-3',
+              member_id: 'mem-3',
+              member_type: 'human',
+              name: 'Newbie',
+              role: 'member',
+              joined_at: '2026-07-03T00:00:00Z',
+            },
           ],
           next_cursor: null,
         },
@@ -439,7 +601,9 @@ describe('SquadDetailPage', () => {
     const stub = queueInitialLoad(fakeResponse({ status: 201, body: { data: sent } }));
     renderPage(makeFakeRealtime().value);
     await screen.findByText('Build is green');
-    fireEvent.change(screen.getByTestId('squad-composer-body'), { target: { value: 'Hello squad' } });
+    fireEvent.change(screen.getByTestId('squad-composer-body'), {
+      target: { value: 'Hello squad' },
+    });
     fireEvent.submit(screen.getByTestId('squad-composer'));
     await screen.findByText('Hello squad');
     const posts = stub.calls.filter((c) => c.init?.method === 'POST');
@@ -454,7 +618,9 @@ describe('SquadDetailPage', () => {
     renderPage(makeFakeRealtime().value);
     await screen.findByTestId('squad-activity-act-1');
     expect(screen.getByTestId('squad-activity-act-2')).toBeTruthy();
-    fireEvent.change(screen.getByTestId('squad-activity-filter'), { target: { value: 'squad_created' } });
+    fireEvent.change(screen.getByTestId('squad-activity-filter'), {
+      target: { value: 'squad_created' },
+    });
     await waitFor(() => expect(screen.queryByTestId('squad-activity-act-1')).toBeNull());
     expect(screen.getByTestId('squad-activity-act-2')).toBeTruthy();
   });
@@ -464,13 +630,25 @@ describe('SquadDetailPage', () => {
       // reload round after frame: squad → members → tasks → activity → messages
       fakeResponse({ body: { data: squadFixture() } }),
       fakeResponse({ body: MEMBERS }),
-      fakeResponse({ body: { data: [taskFixture({ title_snapshot: 'Fix login v2' })], next_cursor: null } }),
+      fakeResponse({
+        body: { data: [taskFixture({ title_snapshot: 'Fix login v2' })], next_cursor: null },
+      }),
       fakeResponse({ body: ACTIVITY }),
       fakeResponse({ body: MESSAGES }),
     );
     const rt = makeFakeRealtime();
     renderPage(rt.value);
     await screen.findByText('Fix login');
+    await act(async () => {
+      rt.emit({
+        op: 'event',
+        channel: 'squad:another',
+        seq: 1,
+        event: 'squad_task.updated',
+        payload: { task_id: 'tk-1' },
+      } as RealtimeEventFrame);
+    });
+    expect(screen.getByText('Fix login')).toBeInTheDocument();
     await act(async () => {
       rt.emit({
         op: 'event',

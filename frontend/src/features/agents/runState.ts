@@ -6,6 +6,7 @@
  * 图标与 tone 由 design 层 RunStateBadge 集中持有,本模块只负责「三元组 → 状态」。
  */
 import type { RunState } from '../../design';
+import type { ExecutionStatus } from '../runtimes/types';
 
 /** presence 容量三元组(运行中 / 排队 / 等待人工确认)。 */
 export interface PresenceTriple {
@@ -28,4 +29,33 @@ export function presenceToRunState(presence: PresenceTriple | null): RunState {
   if (presence.queued > 0) return 'queued';
   if (presence.awaiting > 0) return 'waiting';
   return 'idle';
+}
+
+/** Runtime execution contract → the shared five-state presentation language. */
+export function executionToRunState(status: ExecutionStatus): RunState {
+  if (status === 'queued') return 'queued';
+  if (status === 'awaiting_approval') return 'waiting';
+  if (status === 'completed') return 'succeeded';
+  if (status === 'failed' || status === 'timeout' || status === 'cancelled') {
+    return 'failed';
+  }
+  return 'running';
+}
+
+/**
+ * Live presence wins while work is in flight. Once presence is idle (or has not
+ * arrived), the latest execution supplies the success/failure states that a
+ * capacity triple cannot represent.
+ */
+export function agentRunState(
+  presence: PresenceTriple | null,
+  latestExecutionStatus: ExecutionStatus | null,
+): RunState {
+  const presenceState = presenceToRunState(presence);
+  if (presenceState === 'running' || presenceState === 'queued' || presenceState === 'waiting') {
+    return presenceState;
+  }
+  return latestExecutionStatus === null
+    ? presenceState
+    : executionToRunState(latestExecutionStatus);
 }

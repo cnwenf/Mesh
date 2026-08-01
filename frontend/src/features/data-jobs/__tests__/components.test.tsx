@@ -148,7 +148,21 @@ describe('ExportDialog', () => {
 });
 
 describe('DataManagementPage', () => {
+  it('uses the shared settings section and keeps the history table in an overflow boundary', async () => {
+    const client = makeClient({
+      list: vi.fn().mockResolvedValue({ data: [makeJob()], next_cursor: null }),
+    });
+    vi.mocked(getApiClient).mockReturnValue(client);
+    renderWithProviders(<DataManagementPage />, { route: '/w/acme/settings/data' });
+    expect(
+      await screen.findByRole('heading', { level: 2, name: /data management/i }),
+    ).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: /data jobs/i });
+    expect(await screen.findByTestId('data-jobs-table-scroll')).toContainElement(table);
+  });
+
   it('renders the jobs table with counts and download action', async () => {
+    const openWindow = vi.spyOn(window, 'open').mockImplementation(() => null);
     const client = makeClient({
       list: vi.fn().mockResolvedValue({
         data: [
@@ -173,6 +187,12 @@ describe('DataManagementPage', () => {
     expect(screen.getByText('Completed with errors')).toBeTruthy();
     expect(screen.getByText('90 ok / 10 failed / 100 total')).toBeTruthy();
     fireEvent.click(screen.getByText('Download'));
+    expect(openWindow).toHaveBeenCalledWith(
+      '/api/v1/data-jobs/dj-1/download',
+      '_blank',
+      'noopener',
+    );
+    openWindow.mockRestore();
   });
 
   it('renders the empty state when there are no jobs', async () => {

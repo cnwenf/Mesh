@@ -26,7 +26,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -159,7 +166,9 @@ describe('AutopilotEditorPage coverage fill', () => {
   it('exercises every trigger type field set', async () => {
     stub(() => fakeResponse({ body: { data: [], next_cursor: null } }));
     renderEditor('/autopilots/new');
-    await waitFor(() => expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument(),
+    );
     const select = screen.getByTestId('autopilot-editor-trigger-type');
     await userEvent.selectOptions(select, 'issue_status_changed');
     await userEvent.selectOptions(select, 'issue_field_changed');
@@ -171,7 +180,11 @@ describe('AutopilotEditorPage coverage fill', () => {
   });
 
   it('adds, reorders and removes actions of each kind', async () => {
-    stub(() => fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } }));
+    stub(() =>
+      fakeResponse({
+        body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null },
+      }),
+    );
     renderEditor('/autopilots/new');
     await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
@@ -179,7 +192,10 @@ describe('AutopilotEditorPage coverage fill', () => {
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     // switch action kinds to render every field block
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'run_agent_prompt');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'run_agent_prompt',
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-1'), 'add_comment');
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-2'), 'create_issue');
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-3'), 'http_request');
@@ -214,11 +230,18 @@ describe('AutopilotEditorPage coverage fill', () => {
   it('patches an existing rule in edit mode', async () => {
     const calls = stub((url, method) => {
       if (method === 'GET' && url.includes('/agents'))
-        return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/webhook-secrets'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (method === 'GET') return fakeResponse({ body: { data: RULE } });
       return fakeResponse({ body: { data: RULE } });
     });
@@ -228,17 +251,24 @@ describe('AutopilotEditorPage coverage fill', () => {
     );
     // guardrails section renders with prefilled checkboxes
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
-    expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(false);
+    expect(
+      (screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked,
+    ).toBe(false);
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() =>
-      expect(calls.some((call) => call.method === 'PATCH' && call.url.includes('/autopilots/ap-1'))).toBe(true),
+      expect(
+        calls.some((call) => call.method === 'PATCH' && call.url.includes('/autopilots/ap-1')),
+      ).toBe(true),
     );
   });
 
   it('surfaces an error state when the rule load fails', async () => {
     stub((url, method) => {
       if (method === 'GET' && !url.includes('/users/me'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       return null;
     });
     renderEditor('/autopilots/ap-1/edit');
@@ -264,7 +294,9 @@ describe('AutopilotDetailPage coverage fill', () => {
   it('resumes a paused rule and edits', async () => {
     const calls = stub((url, method) => {
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (method === 'GET' && url.includes('/runs'))
         return fakeResponse({ body: { data: [], next_cursor: null } });
       if (method === 'GET') return fakeResponse({ body: { data: { ...RULE, status: 'paused' } } });
@@ -273,9 +305,7 @@ describe('AutopilotDetailPage coverage fill', () => {
     renderDetail();
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-resume')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('autopilot-detail-resume'));
-    await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/resume'))).toBe(true),
-    );
+    await waitFor(() => expect(calls.some((call) => call.url.endsWith('/resume'))).toBe(true));
   });
 
   it('deletes through the confirmation dialog', async () => {
@@ -289,15 +319,17 @@ describe('AutopilotDetailPage coverage fill', () => {
     await waitFor(() => expect(screen.getByTestId('autopilot-detail-name')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /actions\.delete|^Delete$/ }));
     await userEvent.click(screen.getByTestId('autopilot-delete-confirm'));
-    await waitFor(() =>
-      expect(calls.some((call) => call.method === 'DELETE')).toBe(true),
-    );
+    await waitFor(() => expect(calls.some((call) => call.method === 'DELETE')).toBe(true));
   });
 
   it('reloads on realtime frames and filters runs by status', async () => {
     const calls = stub((url, method) => {
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } } });
+        return fakeResponse({
+          body: {
+            data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] },
+          },
+        });
       if (method === 'GET' && url.includes('/runs'))
         return fakeResponse({ body: { data: [{ ...RUN }], next_cursor: null } });
       if (method === 'GET') return fakeResponse({ body: { data: RULE } });
@@ -307,8 +339,18 @@ describe('AutopilotDetailPage coverage fill', () => {
     renderDetail(realtime);
     await waitFor(() => expect(screen.getByTestId('autopilot-runs-table')).toBeInTheDocument());
     const before = calls.filter((call) => call.url.includes('/runs')).length;
-    realtime.emit({ channel: 'autopilot:ap-1', event: 'autopilot_runs.status_changed', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
-    realtime.emit({ channel: 'autopilot:ap-1', event: 'autopilot.updated', seq: 2, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'autopilot:ap-1',
+      event: 'autopilot_runs.status_changed',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'autopilot:ap-1',
+      event: 'autopilot.updated',
+      seq: 2,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await waitFor(() =>
       expect(calls.filter((call) => call.url.includes('/runs')).length).toBeGreaterThan(before),
     );
@@ -387,7 +429,10 @@ describe('AutopilotRunDetailPage coverage fill', () => {
   it('shows the error state when the run fails to load', async () => {
     stub((url, method) => {
       if (method === 'GET' && !url.includes('/users/me'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       return null;
     });
     renderWithProviders(
@@ -414,9 +459,12 @@ describe('AutopilotsPage coverage fill', () => {
 
   it('resumes a paused rule and navigates via row click and webhooks', async () => {
     const calls = stub((url, method) => {
-      if (url.endsWith('/autopilots/kill-switch')) return fakeResponse({ body: { data: { kill_switch: false } } });
+      if (url.endsWith('/autopilots/kill-switch'))
+        return fakeResponse({ body: { data: { kill_switch: false } } });
       if (method === 'GET')
-        return fakeResponse({ body: { data: [{ ...RULE, id: 'ap-2', status: 'paused' }], next_cursor: null } });
+        return fakeResponse({
+          body: { data: [{ ...RULE, id: 'ap-2', status: 'paused' }], next_cursor: null },
+        });
       return fakeResponse({ body: { data: RULE } });
     });
     renderList();
@@ -432,16 +480,22 @@ describe('AutopilotsPage coverage fill', () => {
       if (url.endsWith('/autopilots/kill-switch') && method === 'GET')
         return fakeResponse({ body: { data: { kill_switch: true } } });
       if (url.endsWith('/autopilots/kill-switch') && method === 'POST')
-        return fakeResponse({ body: { data: { kill_switch: false, paused_autopilots: 1, updated_at: 'x' } } });
+        return fakeResponse({
+          body: { data: { kill_switch: false, paused_autopilots: 1, updated_at: 'x' } },
+        });
       if (method === 'GET') return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: {} } });
     });
     renderList();
-    await waitFor(() => expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument());
-    await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
-    await userEvent.click(screen.getByTestId('autopilot-kill-confirm'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/kill-switch') && call.method === 'POST')).toBe(true),
+      expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
+    await userEvent.click(await screen.findByTestId('autopilot-kill-confirm'));
+    await waitFor(() =>
+      expect(
+        calls.some((call) => call.url.endsWith('/kill-switch') && call.method === 'POST'),
+      ).toBe(true),
     );
   });
 
@@ -457,7 +511,8 @@ describe('AutopilotsPage coverage fill', () => {
 
   it('filters by status through the select', async () => {
     const calls = stub((url, method) => {
-      if (url.endsWith('/autopilots/kill-switch')) return fakeResponse({ body: { data: { kill_switch: false } } });
+      if (url.endsWith('/autopilots/kill-switch'))
+        return fakeResponse({ body: { data: { kill_switch: false } } });
       if (method === 'GET') return fakeResponse({ body: { data: [RULE], next_cursor: null } });
       return fakeResponse({ body: { data: RULE } });
     });
@@ -477,9 +532,33 @@ describe('WebhookConfigPage coverage fill', () => {
   it('rotates a credential and dismisses the fresh box', async () => {
     const calls = stub((url, method) => {
       if (method === 'POST' && url.includes('/rotate'))
-        return fakeResponse({ body: { data: { id: 'sec-1', label: 'prod', status: 'active', token: 'whk_new', secret: 'whs_new', created_at: 'x' } } });
+        return fakeResponse({
+          body: {
+            data: {
+              id: 'sec-1',
+              label: 'prod',
+              status: 'active',
+              token: 'whk_new',
+              secret: 'whs_new',
+              created_at: 'x',
+            },
+          },
+        });
       if (method === 'GET')
-        return fakeResponse({ body: { data: [{ id: 'sec-1', label: 'prod', status: 'active', created_at: '2026-07-27T00:00:00Z', revoked_at: null }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [
+              {
+                id: 'sec-1',
+                label: 'prod',
+                status: 'active',
+                created_at: '2026-07-27T00:00:00Z',
+                revoked_at: null,
+              },
+            ],
+            next_cursor: null,
+          },
+        });
       return fakeResponse({ body: { data: {} } });
     });
     renderWithProviders(
@@ -499,7 +578,10 @@ describe('WebhookConfigPage coverage fill', () => {
   it('shows the empty state and surfaces create errors as toasts', async () => {
     const calls = stub((_url, method) => {
       if (method === 'POST')
-        return fakeResponse({ status: 429, body: { error: { code: 'rate_limited', message: 'slow down' } } });
+        return fakeResponse({
+          status: 429,
+          body: { error: { code: 'rate_limited', message: 'slow down' } },
+        });
       if (method === 'GET') return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: {} } });
     });
@@ -509,17 +591,26 @@ describe('WebhookConfigPage coverage fill', () => {
       </Routes>,
       { route: '/webhooks' },
     );
-    await waitFor(() => expect(screen.getByText(/No webhook credentials|autopilots\.webhook\.empty/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(/No webhook credentials|autopilots\.webhook\.empty/),
+      ).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('webhook-create-secret'));
     await waitFor(() =>
-      expect(calls.some((call) => call.method === 'POST' && call.url.includes('/webhook-secrets'))).toBe(true),
+      expect(
+        calls.some((call) => call.method === 'POST' && call.url.includes('/webhook-secrets')),
+      ).toBe(true),
     );
   });
 
   it('renders the error state on load failure', async () => {
     stub((url, method) => {
       if (method === 'GET' && !url.includes('/users/me'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       return null;
     });
     renderWithProviders(
@@ -555,21 +646,35 @@ describe('editor: exercise every input + error toasts', () => {
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'n');
     await userEvent.type(screen.getByTestId('autopilot-editor-description'), 'd');
     // webhook fields
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'webhook_received');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'webhook_received',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-event-types'), 'a, b');
     // status trigger fields
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_status_changed');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_status_changed',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-from-status'), 'todo');
     await userEvent.type(screen.getByTestId('autopilot-editor-to-status'), 'in_progress');
     // field trigger
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_field_changed');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_field_changed',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-watch-fields'), 'priority');
     // mention trigger
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'agent_mentioned');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'agent_mentioned',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-target-agents'), 'ag-1');
     // back to schedule: cron/timezone/misfire/one-time
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'schedule');
-    fireEvent.change(screen.getByTestId('autopilot-editor-cron'), { target: { value: '0 8 * * *' } });
+    fireEvent.change(screen.getByTestId('autopilot-editor-cron'), {
+      target: { value: '0 8 * * *' },
+    });
     fireEvent.change(screen.getByTestId('autopilot-editor-timezone'), { target: { value: 'UTC' } });
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-misfire'), 'skip');
     fireEvent.change(screen.getByTestId('autopilot-editor-one-time'), { target: { value: '' } });
@@ -586,12 +691,22 @@ describe('editor: exercise every input + error toasts', () => {
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
     await userEvent.click(screen.getByTestId('autopilot-add-action'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'run_agent_prompt');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'run_agent_prompt',
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-1'), 'add_comment');
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-2'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-2'),
+      'send_notification',
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-3'), 'create_issue');
     await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-4'), 'http_request');
-    fireEvent.change(screen.getAllByTestId('autopilot-action-prompt-0')[0] ?? screen.getByTestId('autopilot-action-prompt-0'), { target: { value: 'p' } });
+    fireEvent.change(
+      screen.getAllByTestId('autopilot-action-prompt-0')[0] ??
+        screen.getByTestId('autopilot-action-prompt-0'),
+      { target: { value: 'p' } },
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-action-executor'), 'ag-1');
     await userEvent.type(screen.getByTestId('autopilot-editor-action-content'), 'c');
     await userEvent.type(screen.getByTestId('autopilot-editor-action-message'), 'm');
@@ -602,32 +717,52 @@ describe('editor: exercise every input + error toasts', () => {
     // guardrails numerics + checkboxes + backoff
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
     fireEvent.change(screen.getByTestId('autopilot-editor-rate-max'), { target: { value: '5' } });
-    fireEvent.change(screen.getByTestId('autopilot-editor-rate-window'), { target: { value: '60' } });
-    fireEvent.change(screen.getByTestId('autopilot-editor-concurrency'), { target: { value: '2' } });
-    fireEvent.change(screen.getByTestId('autopilot-editor-dedup-window'), { target: { value: '30' } });
-    fireEvent.change(screen.getByTestId('autopilot-editor-max-retries'), { target: { value: '1' } });
+    fireEvent.change(screen.getByTestId('autopilot-editor-rate-window'), {
+      target: { value: '60' },
+    });
+    fireEvent.change(screen.getByTestId('autopilot-editor-concurrency'), {
+      target: { value: '2' },
+    });
+    fireEvent.change(screen.getByTestId('autopilot-editor-dedup-window'), {
+      target: { value: '30' },
+    });
+    fireEvent.change(screen.getByTestId('autopilot-editor-max-retries'), {
+      target: { value: '1' },
+    });
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-backoff'), 'fixed');
-    fireEvent.change(screen.getByTestId('autopilot-editor-daily-runs'), { target: { value: '10' } });
-    fireEvent.change(screen.getByTestId('autopilot-editor-daily-tokens'), { target: { value: '1000' } });
+    fireEvent.change(screen.getByTestId('autopilot-editor-daily-runs'), {
+      target: { value: '10' },
+    });
+    fireEvent.change(screen.getByTestId('autopilot-editor-daily-tokens'), {
+      target: { value: '1000' },
+    });
     fireEvent.change(screen.getByTestId('autopilot-editor-cascade'), { target: { value: '2' } });
     await userEvent.click(screen.getByTestId('autopilot-editor-require-approval'));
     await userEvent.click(screen.getByTestId('autopilot-editor-loop-detection'));
     await userEvent.click(screen.getByTestId('autopilot-editor-approval-http'));
     await userEvent.click(screen.getByTestId('autopilot-editor-approval-create-issue'));
-    expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(true);
+    expect(
+      (screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked,
+    ).toBe(true);
   });
 
   it('shows an error toast when create fails', async () => {
     stub((_url, method) => {
       if (method === 'POST')
-        return fakeResponse({ status: 422, body: { error: { code: 'executor_required', message: 'x' } } });
+        return fakeResponse({
+          status: 422,
+          body: { error: { code: 'executor_required', message: 'x' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     });
     renderEditor('/autopilots/new');
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'x');
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByRole('status').textContent).not.toBe(''));
   });
@@ -672,11 +807,22 @@ describe('page error toasts', () => {
   it('webhook: failed rotate toasts and label input changes', async () => {
     stub((_url, method) => {
       if (method === 'POST')
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       if (method === 'GET')
         return fakeResponse({
           body: {
-            data: [{ id: 'sec-1', label: 'prod', status: 'active', created_at: '2026-07-27T00:00:00Z', revoked_at: null }],
+            data: [
+              {
+                id: 'sec-1',
+                label: 'prod',
+                status: 'active',
+                created_at: '2026-07-27T00:00:00Z',
+                revoked_at: null,
+              },
+            ],
             next_cursor: null,
           },
         });
@@ -703,7 +849,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
         return fakeResponse({ body: { data: [{ ...RUN }], next_cursor: null } });
       if (method === 'GET' && failNext) {
         failNext = false;
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET') return fakeResponse({ body: { data: RULE } });
       return fakeResponse({ body: { data: RULE } });
@@ -727,7 +876,9 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
   it('detail: run status filter + test dialog cancel + delete dialog cancel', async () => {
     stub((url, method) => {
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (method === 'GET' && url.includes('/runs'))
         return fakeResponse({ body: { data: [{ ...RUN }], next_cursor: null } });
       if (method === 'GET') return fakeResponse({ body: { data: RULE } });
@@ -746,7 +897,9 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     await userEvent.selectOptions(filterSelect, 'failed');
     // test dialog: type payload, cancel with ghost button
     await userEvent.click(screen.getByTestId('autopilot-detail-test-run'));
-    fireEvent.change(screen.getByTestId('autopilot-test-payload'), { target: { value: '{"a":1}' } });
+    fireEvent.change(screen.getByTestId('autopilot-test-payload'), {
+      target: { value: '{"a":1}' },
+    });
     const dialogCancels = screen.getAllByRole('button', { name: /common\.cancel|^Cancel$/ });
     await userEvent.click(dialogCancels[dialogCancels.length - 1]);
     await waitFor(() => expect(screen.queryByTestId('autopilot-test-payload')).toBeNull());
@@ -760,7 +913,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
   it('detail: error state retry navigates to the list', async () => {
     stub((url, method) => {
       if (method === 'GET' && !url.includes('/users/me'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       return null;
     });
     renderWithProviders(
@@ -770,7 +926,9 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
       </Routes>,
       { route: '/autopilots/ap-1' },
     );
-    await waitFor(() => expect(screen.getByText(/could not find|error|unexpected/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/could not find|error|unexpected/i)).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByRole('button', { name: /retry/i }));
     await waitFor(() => expect(screen.getByText('list-page')).toBeInTheDocument());
   });
@@ -797,11 +955,25 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     };
     stub((url, method) => {
       if (method === 'GET' && url.includes('/agents'))
-        return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/webhook-secrets'))
-        return fakeResponse({ body: { data: [{ id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null }], next_cursor: null } });
+        return fakeResponse({
+          body: {
+            data: [
+              { id: 'sec-1', label: 'prod', status: 'active', created_at: 'x', revoked_at: null },
+            ],
+            next_cursor: null,
+          },
+        });
       if (method === 'GET' && url.includes('/preview-schedule'))
-        return fakeResponse({ body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } } });
+        return fakeResponse({
+          body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: [] } },
+        });
       if (method === 'GET' && url.includes('/autopilots/sparse/edit'))
         return fakeResponse({ body: { data: SPARSE_RULE } });
       if (method === 'GET' && url.match(/autopilots\/sparse$/))
@@ -821,12 +993,18 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     await waitFor(() => expect(screen.getByTestId('autopilot-editor-name')).toBeInTheDocument());
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'wh');
     // webhook trigger + select the secret + event types
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'webhook_received');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'webhook_received',
+    );
     fireEvent.change(screen.getByTestId('autopilot-editor-secret'), { target: { value: 'sec-1' } });
     await userEvent.type(screen.getByTestId('autopilot-editor-event-types'), 'deploy');
     // switch the prompt action to a notification so no executor is required
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     // one-time field with a real value
     await userEvent.click(screen.getByTestId('autopilot-section-trigger-toggle'));
     await userEvent.click(screen.getByTestId('autopilot-section-trigger-toggle'));
@@ -863,7 +1041,9 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     );
     // switch to schedule: the cron state fell back to the default
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'schedule');
-    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 9 * * 1-5');
+    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe(
+      '0 9 * * 1-5',
+    );
     // schedule branch: type a one-time value
     fireEvent.change(screen.getByTestId('autopilot-editor-one-time'), {
       target: { value: '2026-08-01T00:00:00Z' },
@@ -871,7 +1051,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     // the sparse rule falls back to a prompt action without executor →
     // switch it to a notification so saving is enabled
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'send_notification');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'send_notification',
+    );
     // save & activate → PATCH
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
@@ -880,7 +1063,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
   it('editor: error state retry goes to the list', async () => {
     stub((url, method) => {
       if (method === 'GET' && !url.includes('/users/me'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       return null;
     });
     renderWithProviders(
@@ -920,10 +1106,7 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     );
     await waitFor(() => expect(screen.getByTestId('autopilot-row-ap-1')).toBeInTheDocument());
     // type filter + search inputs
-    await userEvent.selectOptions(
-      screen.getByTestId('autopilot-filter-type'),
-      'issue_created',
-    );
+    await userEvent.selectOptions(screen.getByTestId('autopilot-filter-type'), 'issue_created');
     await userEvent.type(screen.getByTestId('autopilot-search'), 'daily');
     // row detail button (the ghost 详情 action)
     const detailButtons = screen.getAllByRole('button', { name: /actions\.detail|^Detail$/ });
@@ -944,7 +1127,9 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
       </Routes>,
       { route: '/autopilots' },
     );
-    await waitFor(() => expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
     const cancels = screen.getAllByRole('button', { name: /common\.cancel|^Cancel$/ });
     await userEvent.click(cancels[cancels.length - 1]);
@@ -958,7 +1143,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
         return fakeResponse({ body: { data: { kill_switch: false } } });
       if (method === 'GET' && failed) {
         failed = false;
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET') return fakeResponse({ body: { data: [RULE], next_cursor: null } });
       return fakeResponse({ body: { data: RULE } });
@@ -979,7 +1167,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     stub((url, method) => {
       if (method === 'GET' && failed && !url.includes('/users/me')) {
         failed = false;
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET') return fakeResponse({ body: { data: RUN } });
       return fakeResponse({ body: { data: {} } });
@@ -1003,7 +1194,10 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
     stub((url, method) => {
       if (method === 'GET' && failed && !url.includes('/users/me')) {
         failed = false;
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET') return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: {} } });
@@ -1020,7 +1214,6 @@ describe('remaining callbacks: retries, dialogs, filters, nav links', () => {
   });
 });
 
-
 describe('acceptance round 2: new editor/list/run/webhook controls', () => {
   function renderEditorAt(route: string, stubFn: (url: string, method: string) => Response | null) {
     stub(stubFn);
@@ -1036,11 +1229,17 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
   const baseStub = (preview: 'ok' | 'fail' | 'none') => (url: string, method: string) => {
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
     if (url.includes('/agents'))
-      return fakeResponse({ body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null } });
-    if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      return fakeResponse({
+        body: { data: [{ id: 'ag-1', name: 'A', lifecycle_status: 'active' }], next_cursor: null },
+      });
+    if (url.includes('/webhook-secrets'))
+      return fakeResponse({ body: { data: [], next_cursor: null } });
     if (method === 'POST' && url.includes('/preview-schedule')) {
       if (preview === 'fail')
-        return fakeResponse({ status: 400, body: { error: { code: 'invalid_cron', message: 'x' } } });
+        return fakeResponse({
+          status: 400,
+          body: { error: { code: 'invalid_cron', message: 'x' } },
+        });
       return fakeResponse({
         body: { data: { cron: '0 9 * * *', timezone: 'UTC', next_runs: ['2026-07-28T09:00:00Z'] } },
       });
@@ -1051,10 +1250,14 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
 
   it('cron preset fills the cron field; custom shows manual value', async () => {
     renderEditorAt('/autopilots/new', baseStub('ok'));
-    await waitFor(() => expect(screen.getByTestId('autopilot-editor-cron-preset')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-editor-cron-preset')).toBeInTheDocument(),
+    );
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-cron-preset'), 'daily9');
     await waitFor(() =>
-      expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 9 * * *'),
+      expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe(
+        '0 9 * * *',
+      ),
     );
     // custom option keeps the manual value
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-cron-preset'), 'custom');
@@ -1063,31 +1266,41 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
 
   it('live preview renders next runs (create mode) and invalid state on error', async () => {
     renderEditorAt('/autopilots/new', baseStub('ok'));
-    await waitFor(() => expect(screen.getByTestId('autopilot-schedule-preview')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-schedule-preview')).toBeInTheDocument(),
+    );
     // failing preview → invalid hint
     renderEditorAt('/autopilots/new', baseStub('fail'));
-    await waitFor(() => expect(screen.getByTestId('autopilot-preview-invalid')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-preview-invalid')).toBeInTheDocument(),
+    );
   });
 
   it('template variable buttons append to the prompt', async () => {
     renderEditorAt('/autopilots/new', baseStub('none'));
     await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
-    await userEvent.selectOptions(screen.getByTestId('autopilot-action-type-0'), 'run_agent_prompt');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-action-type-0'),
+      'run_agent_prompt',
+    );
     const vars = screen.getByTestId('autopilot-template-vars-0');
     const firstVar = vars.querySelector('button');
     expect(firstVar).not.toBeNull();
     await userEvent.click(firstVar as HTMLElement);
-    expect((screen.getByTestId('autopilot-action-prompt-0') as HTMLTextAreaElement).value).toContain(
-      '{{trigger.',
-    );
+    expect(
+      (screen.getByTestId('autopilot-action-prompt-0') as HTMLTextAreaElement).value,
+    ).toContain('{{trigger.');
   });
 
   it('exposes scope/filter project+actor inputs and overflow control', async () => {
     renderEditorAt('/autopilots/new', baseStub('none'));
     await waitFor(() => expect(screen.getByTestId('autopilot-editor')).toBeInTheDocument());
     // event trigger shows scope projects
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'issue_created');
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'issue_created',
+    );
     await userEvent.type(screen.getByTestId('autopilot-editor-scope-projects'), 'p1, p2');
     // filter section: projects + actors
     await userEvent.click(screen.getByTestId('autopilot-section-filter-toggle'));
@@ -1096,7 +1309,9 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
     // guardrails: overflow control
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-overflow'), 'queue');
-    expect((screen.getByTestId('autopilot-editor-overflow') as HTMLSelectElement).value).toBe('queue');
+    expect((screen.getByTestId('autopilot-editor-overflow') as HTMLSelectElement).value).toBe(
+      'queue',
+    );
     // timezone datalist present
     expect(document.getElementById('autopilot-tz-list')).not.toBeNull();
   });
@@ -1110,7 +1325,12 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
         return fakeResponse({
           body: {
             data: [
-              { ...RULE, id: 'ap-a', last_run_status: 'failed', last_run_at: '2026-07-27T00:00:00Z' },
+              {
+                ...RULE,
+                id: 'ap-a',
+                last_run_status: 'failed',
+                last_run_at: '2026-07-27T00:00:00Z',
+              },
             ],
             next_cursor: null,
           },
@@ -1134,7 +1354,9 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
     const confirm = screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement;
     expect(confirm.disabled).toBe(true);
     await userEvent.type(screen.getByTestId('autopilot-kill-reason'), 'reason');
-    expect((screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('autopilot-kill-confirm') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it('list renders settings fallback icon for unknown trigger type', async () => {
@@ -1171,8 +1393,22 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
             status: 'succeeded',
             trigger_snapshot: { issue: { id: issueId } },
             artifacts: [
-              { id: 'art-1', artifact_type: 'comment', ref_table: 'comments', ref_id: 'c-1', summary: 'ok', created_at: '2026-07-27T00:00:00Z' },
-              { id: 'art-2', artifact_type: 'issue', ref_table: 'issues', ref_id: issueId, summary: 'created', created_at: '2026-07-27T00:00:00Z' },
+              {
+                id: 'art-1',
+                artifact_type: 'comment',
+                ref_table: 'comments',
+                ref_id: 'c-1',
+                summary: 'ok',
+                created_at: '2026-07-27T00:00:00Z',
+              },
+              {
+                id: 'art-2',
+                artifact_type: 'issue',
+                ref_table: 'issues',
+                ref_id: issueId,
+                summary: 'created',
+                created_at: '2026-07-27T00:00:00Z',
+              },
             ],
           },
         },
@@ -1185,7 +1421,9 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
       </Routes>,
       { route: '/autopilots/runs/run-1' },
     );
-    await waitFor(() => expect(screen.getByTestId('autopilot-artifact-link-art-2')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-artifact-link-art-2')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-artifact-link-art-2'));
     await waitFor(() => expect(screen.getByText('issue-page')).toBeInTheDocument());
   });
@@ -1212,7 +1450,8 @@ describe('acceptance round 2: new editor/list/run/webhook controls', () => {
             next_cursor: null,
           },
         });
-      if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/webhook-secrets'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       return fakeResponse({ body: { data: {} } });
     });
     renderWithProviders(

@@ -180,6 +180,10 @@ describe('IntegrationsPage', () => {
     expect(screen.getByTestId('connector-card-webhook_outbound')).toBeInTheDocument();
     expect(screen.getByTestId('integration-bindings-int-1').textContent).toBe('1');
     expect(screen.getByTestId('connector-count-im_slack').textContent).toContain('1');
+    expect(screen.getByTestId('data-view')).toBeInTheDocument();
+    expect(screen.getByTestId('integrations-table-scroll')).toContainElement(
+      screen.getByTestId('integrations-table'),
+    );
   });
 
   it('shows the read-only banner and hides write actions for non-admins', async () => {
@@ -215,15 +219,17 @@ describe('IntegrationsPage', () => {
     fireEvent.change(screen.getByTestId('integration-add-config'), { target: { value: '{bad' } });
     await userEvent.click(screen.getByTestId('integration-add-submit'));
     await waitFor(() => expect(screen.getByTestId('integrations-table')).toBeInTheDocument());
-    expect(
-      calls.some((call) => call.url.endsWith('/integrations') && call.method === 'POST'),
-    ).toBe(false);
+    expect(calls.some((call) => call.url.endsWith('/integrations') && call.method === 'POST')).toBe(
+      false,
+    );
   });
 
   it('starts oauth from the card and from the dialog', async () => {
     setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('connector-connect-vcs_github')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('connector-connect-vcs_github')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('connector-connect-vcs_github'));
     expect(locationAssign).toHaveBeenCalledWith(
       expect.stringContaining('/integrations/oauth/vcs_github/authorize'),
@@ -241,7 +247,9 @@ describe('IntegrationsPage', () => {
     await userEvent.click(screen.getByTestId('integration-toggle-int-1'));
     await userEvent.click(screen.getByTestId('integration-toggle-confirm'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -252,7 +260,9 @@ describe('IntegrationsPage', () => {
     await userEvent.click(screen.getByTestId('integration-delete-int-1'));
     await userEvent.click(screen.getByTestId('integration-delete-confirm'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'DELETE')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-1') && call.method === 'DELETE'),
+      ).toBe(true),
     );
   });
 
@@ -288,14 +298,18 @@ describe('IntegrationsPage', () => {
       payload: {},
     } as unknown as RealtimeEventFrame);
     await waitFor(() =>
-      expect(calls.filter((call) => call.url.includes('/integrations?')).length).toBeGreaterThan(initial),
+      expect(calls.filter((call) => call.url.includes('/integrations?')).length).toBeGreaterThan(
+        initial,
+      ),
     );
   });
 
   it('shows the empty state without integrations', async () => {
     setup({ integrations: [] });
     renderPage();
-    await waitFor(() => expect(screen.getByText(/Connect your first integration/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Connect your first integration/)).toBeInTheDocument(),
+    );
   });
 
   it('shows the no-workspace state without memberships', async () => {
@@ -306,7 +320,10 @@ describe('IntegrationsPage', () => {
 
   it('shows the error state on fetch failure', async () => {
     const impl = (async () =>
-      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } })) as typeof fetch;
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument());
@@ -316,7 +333,10 @@ describe('IntegrationsPage', () => {
     const calls: Recorded[] = [];
     const impl = (async (input: RequestInfo | URL) => {
       calls.push({ url: String(input), method: 'GET' });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
@@ -354,7 +374,9 @@ describe('IntegrationsPage', () => {
   });
 
   it('enables a disabled integration through the toggle dialog', async () => {
-    const calls = setup({ integrations: [INTEGRATION, { ...INTEGRATION, id: 'int-2', status: 'disabled' }] });
+    const calls = setup({
+      integrations: [INTEGRATION, { ...INTEGRATION, id: 'int-2', status: 'disabled' }],
+    });
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-toggle-int-2')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('integration-toggle-int-2'));
@@ -362,7 +384,9 @@ describe('IntegrationsPage', () => {
     expect(screen.getByTestId('integration-toggle-text').textContent).toMatch(/Enable/);
     await userEvent.click(screen.getByTestId('integration-toggle-confirm'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-2') && call.method === 'PATCH')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations/int-2') && call.method === 'PATCH'),
+      ).toBe(true),
     );
   });
 
@@ -391,7 +415,9 @@ describe('IntegrationsPage', () => {
     await userEvent.type(screen.getByTestId('integration-add-secret'), 'topsecret');
     await userEvent.click(screen.getByTestId('integration-add-submit'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations') && call.method === 'POST')).toBe(true),
+      expect(
+        calls.some((call) => call.url.endsWith('/integrations') && call.method === 'POST'),
+      ).toBe(true),
     );
   });
 
@@ -403,12 +429,17 @@ describe('IntegrationsPage', () => {
       const method = init?.method ?? 'GET';
       calls.push({ url, method });
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
-      if (url.includes('/external-identities')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (/\/integrations\/[^/]+\/bindings/.test(url)) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/external-identities'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (/\/integrations\/[^/]+\/bindings/.test(url))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/integrations') && method === 'GET')
         return fakeResponse({ body: { data: [INTEGRATION], next_cursor: null } });
       if (method === 'PATCH')
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -416,7 +447,12 @@ describe('IntegrationsPage', () => {
     renderPage(realtime);
     await waitFor(() => expect(screen.getByTestId('integration-toggle-int-1')).toBeInTheDocument());
     await waitFor(() => expect(realtime.subscribed).toContain('workspace:ws-1:integrations'));
-    realtime.emit({ channel: 'workspace:other', event: 'integration.updated', seq: 1, payload: {} } as unknown as RealtimeEventFrame);
+    realtime.emit({
+      channel: 'workspace:other',
+      event: 'integration.updated',
+      seq: 1,
+      payload: {},
+    } as unknown as RealtimeEventFrame);
     await userEvent.click(screen.getByTestId('integration-toggle-int-1'));
     await userEvent.click(screen.getByTestId('integration-toggle-confirm'));
     await waitFor(() => expect(screen.getByText(/internal error/i)).toBeInTheDocument());
@@ -457,7 +493,9 @@ describe('IntegrationsPage', () => {
   it('renders the events-7d column and a health badge per row', async () => {
     setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('integration-events7d-int-1')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('integration-events7d-int-1')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('integration-events7d-int-1').textContent).toBe('12');
     expect(screen.getByText('Events (7d)')).toBeInTheDocument();
     expect(screen.getByTestId('integration-health-int-1').textContent).toContain('Healthy');
@@ -468,7 +506,9 @@ describe('IntegrationsPage', () => {
     renderPage();
     await waitFor(() => expect(screen.getByTestId('integration-health-int-9')).toBeInTheDocument());
     expect(screen.getByTestId('integration-health-int-9').textContent).toContain('Auth failed');
-    expect(screen.getByTestId('integration-health-int-9').getAttribute('title')).toBe('token_expired');
+    expect(screen.getByTestId('integration-health-int-9').getAttribute('title')).toBe(
+      'token_expired',
+    );
   });
 
   it('offers re-authorize for auth-failed oauth connectors and jumps to the authorize url', async () => {
@@ -494,7 +534,11 @@ describe('IntegrationsPage', () => {
     await waitFor(() => expect(screen.getByTestId('integration-test-int-9')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('integration-test-int-9'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integrations/int-9:test') && call.method === 'POST')).toBe(true),
+      expect(
+        calls.some(
+          (call) => call.url.endsWith('/integrations/int-9:test') && call.method === 'POST',
+        ),
+      ).toBe(true),
     );
     await waitFor(() =>
       expect(screen.getByTestId('integration-health-int-9').textContent).toContain('Healthy'),
@@ -510,12 +554,16 @@ describe('IntegrationsPage', () => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
-      if (url.includes('/external-identities')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (/\/integrations\/[^/]+\/bindings/.test(url)) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/external-identities'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (/\/integrations\/[^/]+\/bindings/.test(url))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/integrations') && method === 'GET')
         return fakeResponse({ body: { data: [INTEGRATION], next_cursor: null } });
       if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ body: { data: { health_state: 'unreachable', detail: 'dial tcp timeout' } } });
+        return fakeResponse({
+          body: { data: { health_state: 'unreachable', detail: 'dial tcp timeout' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -526,7 +574,9 @@ describe('IntegrationsPage', () => {
       expect(screen.getByTestId('integration-health-int-1').textContent).toContain('Unreachable'),
     );
     await waitFor(() =>
-      expect(screen.getByTestId('integration-health-int-1').getAttribute('title')).toBe('dial tcp timeout'),
+      expect(screen.getByTestId('integration-health-int-1').getAttribute('title')).toBe(
+        'dial tcp timeout',
+      ),
     );
   });
 
@@ -536,12 +586,17 @@ describe('IntegrationsPage', () => {
       const url = String(input);
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
-      if (url.includes('/external-identities')) return fakeResponse({ body: { data: [], next_cursor: null } });
-      if (/\/integrations\/[^/]+\/bindings/.test(url)) return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (url.includes('/external-identities'))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      if (/\/integrations\/[^/]+\/bindings/.test(url))
+        return fakeResponse({ body: { data: [], next_cursor: null } });
       if (url.includes('/integrations') && method === 'GET')
         return fakeResponse({ body: { data: [INTEGRATION], next_cursor: null } });
       if (method === 'POST' && url.endsWith(':test'))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);

@@ -515,10 +515,18 @@
 }
 
 .mesh-executions__log-toolbar {
+  position: sticky;
+  bottom: calc(var(--space-2) + env(safe-area-inset-bottom));
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  padding: var(--space-2);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 8%));
 }
 
 .mesh-executions__follow {

@@ -6,8 +6,23 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
-import { MeshApiClient, MeshApiError, errorToI18nKey, getToken, useOptimisticMutation } from '../../api';
-import { Button, Dialog, ErrorState, Input, Select, Skeleton, useToast } from '../../design';
+import {
+  MeshApiClient,
+  MeshApiError,
+  errorToI18nKey,
+  getToken,
+  useOptimisticMutation,
+} from '../../api';
+import {
+  Button,
+  Dialog,
+  ErrorState,
+  Input,
+  Select,
+  SettingsSection,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { CustomFieldsPanel, LabelsPanel } from '../labels';
@@ -150,10 +165,13 @@ export function ProjectSettingsPage(): React.JSX.Element {
         changes as Partial<ProjectDetail>,
       );
       setProject((prev) => (prev === null ? prev : { ...prev, ...result }));
-      toast.addToast(t(conflicted ? 'projects.settings.conflictToast' : 'projects.settings.saved'), {
-        tone: conflicted ? 'warn' : 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(conflicted ? 'projects.settings.conflictToast' : 'projects.settings.saved'),
+        {
+          tone: conflicted ? 'warn' : 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -167,10 +185,13 @@ export function ProjectSettingsPage(): React.JSX.Element {
         ? await unarchiveProject(client, projectId)
         : await archiveProject(client, projectId);
       setProject((prev) => (prev === null ? prev : { ...prev, ...updated }));
-      toast.addToast(t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'), {
-        tone: 'success',
-        closeLabel: t('common.close'),
-      });
+      toast.addToast(
+        t(project.archived ? 'projects.detail.unarchived' : 'projects.detail.archived'),
+        {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        },
+      );
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
       toast.addToast(t(key), { tone: 'danger', closeLabel: t('common.close') });
@@ -182,7 +203,10 @@ export function ProjectSettingsPage(): React.JSX.Element {
     setIsDeleting(true);
     try {
       await deleteProject(client, projectId);
-      toast.addToast(t('projects.detail.deleted'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('projects.detail.deleted'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       navigate('/projects');
     } catch (err) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'common.unknownError';
@@ -220,137 +244,166 @@ export function ProjectSettingsPage(): React.JSX.Element {
 
   return (
     <main className="mesh-projects">
-      <h1 className="mesh-projects__title">{t('projects.settings.title', { name: project.name })}</h1>
+      <h1 className="mesh-projects__title">
+        {t('projects.settings.title', { name: project.name })}
+      </h1>
+      <div className="mesh-projects__settings-layout">
+        <nav className="mesh-projects__settings-nav" aria-label={t('settings.navLabel')}>
+          <a href="#general">{t('projects.detail.settings')}</a>
+          <a href="#members">{t('projects.settings.members.title')}</a>
+          <a href="#labels">{t('labels.sectionTitle')}</a>
+          <a href="#custom-fields">{t('fields.sectionTitle')}</a>
+          <a href="#danger">{t('projects.settings.dangerTitle')}</a>
+        </nav>
 
-      <form
-        className="mesh-projects__form mesh-projects__settings-form"
-        data-testid="settings-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void handleSave();
-        }}
-      >
-        <Input
-          label={t('projects.settings.name')}
-          value={form.name}
-          data-testid="settings-name"
-          onChange={(event) => updateForm({ name: event.target.value })}
-        />
-        <LabeledTextarea
-          label={t('projects.settings.description')}
-          value={form.description}
-          onChange={(value) => updateForm({ description: value })}
-        />
-        <Select
-          label={t('projects.settings.status')}
-          value={form.status}
-          data-testid="settings-status"
-          onChange={(event) => updateForm({ status: event.target.value as ProjectStatus })}
-        >
-          {PROJECT_STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>
-              {t(`projects.status.${status}`)}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label={t('projects.settings.visibility')}
-          value={form.visibility}
-          data-testid="settings-visibility"
-          onChange={(event) => updateForm({ visibility: event.target.value as ProjectVisibility })}
-        >
-          <option value="public">{t('projects.visibility.public')}</option>
-          <option value="private">{t('projects.visibility.private')}</option>
-        </Select>
-        <Input
-          type="date"
-          label={t('projects.settings.startDate')}
-          value={form.startDate}
-          data-testid="settings-start-date"
-          onChange={(event) => updateForm({ startDate: event.target.value })}
-        />
-        <Input
-          type="date"
-          label={t('projects.settings.targetDate')}
-          value={form.targetDate}
-          data-testid="settings-target-date"
-          onChange={(event) => updateForm({ targetDate: event.target.value })}
-        />
-        <Select
-          label={t('projects.settings.lead')}
-          value={form.leadMemberId}
-          data-testid="settings-lead"
-          disabled={!canManageLead}
-          onChange={(event) => updateForm({ leadMemberId: event.target.value })}
-        >
-          <option value="">{t('projects.settings.leadNone')}</option>
-          {roster.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.display_name}
-            </option>
-          ))}
-        </Select>
-        {canManageLead ? null : (
-          <p className="mesh-field__hint" data-testid="settings-lead-hint">
-            {t('projects.settings.leadReadOnly')}
-          </p>
-        )}
-        <div className="mesh-projects__form-actions">
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={mutation.isMutating || form.name.trim().length === 0}
-            data-testid="settings-save"
+        <div className="mesh-projects__settings-content">
+          <form
+            id="general"
+            className="mesh-projects__settings-form"
+            data-testid="settings-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSave();
+            }}
           >
-            {t('projects.settings.save')}
-          </Button>
+            <SettingsSection
+              title={t('projects.detail.settings')}
+              footer={
+                <div className="mesh-projects__form-actions">
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={mutation.isMutating || form.name.trim().length === 0}
+                    data-testid="settings-save"
+                  >
+                    {t('projects.settings.save')}
+                  </Button>
+                </div>
+              }
+            >
+              <div className="mesh-projects__form">
+                <Input
+                  label={t('projects.settings.name')}
+                  value={form.name}
+                  data-testid="settings-name"
+                  onChange={(event) => updateForm({ name: event.target.value })}
+                />
+                <LabeledTextarea
+                  label={t('projects.settings.description')}
+                  value={form.description}
+                  onChange={(value) => updateForm({ description: value })}
+                />
+                <Select
+                  label={t('projects.settings.status')}
+                  value={form.status}
+                  data-testid="settings-status"
+                  onChange={(event) => updateForm({ status: event.target.value as ProjectStatus })}
+                >
+                  {PROJECT_STATUS_ORDER.map((status) => (
+                    <option key={status} value={status}>
+                      {t(`projects.status.${status}`)}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  label={t('projects.settings.visibility')}
+                  value={form.visibility}
+                  data-testid="settings-visibility"
+                  onChange={(event) =>
+                    updateForm({ visibility: event.target.value as ProjectVisibility })
+                  }
+                >
+                  <option value="public">{t('projects.visibility.public')}</option>
+                  <option value="private">{t('projects.visibility.private')}</option>
+                </Select>
+                <Input
+                  type="date"
+                  label={t('projects.settings.startDate')}
+                  value={form.startDate}
+                  data-testid="settings-start-date"
+                  onChange={(event) => updateForm({ startDate: event.target.value })}
+                />
+                <Input
+                  type="date"
+                  label={t('projects.settings.targetDate')}
+                  value={form.targetDate}
+                  data-testid="settings-target-date"
+                  onChange={(event) => updateForm({ targetDate: event.target.value })}
+                />
+                <Select
+                  label={t('projects.settings.lead')}
+                  value={form.leadMemberId}
+                  data-testid="settings-lead"
+                  disabled={!canManageLead}
+                  onChange={(event) => updateForm({ leadMemberId: event.target.value })}
+                >
+                  <option value="">{t('projects.settings.leadNone')}</option>
+                  {roster.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.display_name}
+                    </option>
+                  ))}
+                </Select>
+                {canManageLead ? null : (
+                  <p className="mesh-field__hint" data-testid="settings-lead-hint">
+                    {t('projects.settings.leadReadOnly')}
+                  </p>
+                )}
+              </div>
+            </SettingsSection>
+          </form>
+
+          <div id="members" className="mesh-projects__settings-anchor">
+            <ProjectMembersSection client={client} projectId={project.id} roster={roster} />
+          </div>
+
+          <section
+            id="labels"
+            className="mesh-projects__settings-section mesh-projects__settings-anchor"
+            aria-label={t('labels.sectionTitle')}
+          >
+            <h2 className="mesh-projects__settings-subtitle">{t('labels.sectionTitle')}</h2>
+            <LabelsPanel
+              client={client}
+              workspaceId={project.workspace_id}
+              projectId={project.id}
+            />
+          </section>
+          <section
+            id="custom-fields"
+            className="mesh-projects__settings-section mesh-projects__settings-anchor"
+            aria-label={t('fields.sectionTitle')}
+          >
+            <h2 className="mesh-projects__settings-subtitle">{t('fields.sectionTitle')}</h2>
+            <CustomFieldsPanel
+              client={client}
+              workspaceId={project.workspace_id}
+              projectId={project.id}
+            />
+          </section>
+
+          <div id="danger" className="mesh-projects__settings-anchor">
+            <SettingsSection title={t('projects.settings.dangerTitle')} tone="danger">
+              <div className="mesh-projects__form-actions">
+                <Button
+                  variant="secondary"
+                  data-testid="settings-archive-toggle"
+                  onClick={() => void handleArchiveToggle()}
+                >
+                  {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
+                </Button>
+                <Button
+                  variant="danger"
+                  data-testid="settings-delete"
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  {t('projects.detail.delete')}
+                </Button>
+              </div>
+            </SettingsSection>
+          </div>
         </div>
-      </form>
-
-      <ProjectMembersSection client={client} projectId={project.id} roster={roster} />
-
-      {/* label-property.md §4.1 项目设置:项目级标签与自定义字段定义管理 */}
-      <section
-        className="mesh-projects__settings-section"
-        aria-label={t('labels.sectionTitle')}
-      >
-        <h2 className="mesh-projects__settings-subtitle">{t('labels.sectionTitle')}</h2>
-        <LabelsPanel client={client} workspaceId={project.workspace_id} projectId={project.id} />
-      </section>
-      <section
-        className="mesh-projects__settings-section"
-        aria-label={t('fields.sectionTitle')}
-      >
-        <h2 className="mesh-projects__settings-subtitle">{t('fields.sectionTitle')}</h2>
-        <CustomFieldsPanel
-          client={client}
-          workspaceId={project.workspace_id}
-          projectId={project.id}
-        />
-      </section>
-
-      <section
-        className="mesh-projects__settings-section mesh-projects__danger-zone"
-        aria-label={t('projects.settings.dangerTitle')}
-      >
-        <h2 className="mesh-projects__settings-subtitle">{t('projects.settings.dangerTitle')}</h2>
-        <div className="mesh-projects__form-actions">
-          <Button
-            variant="secondary"
-            data-testid="settings-archive-toggle"
-            onClick={() => void handleArchiveToggle()}
-          >
-            {project.archived ? t('projects.detail.unarchive') : t('projects.detail.archive')}
-          </Button>
-          <Button
-            variant="danger"
-            data-testid="settings-delete"
-            onClick={() => setDeleteOpen(true)}
-          >
-            {t('projects.detail.delete')}
-          </Button>
-        </div>
-      </section>
+      </div>
 
       {deleteOpen ? (
         <Dialog

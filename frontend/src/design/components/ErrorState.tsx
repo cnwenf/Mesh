@@ -13,9 +13,11 @@ import './components.css';
 
 export interface ErrorStateProps {
   title: string;
+  /** 标题语义层级;页面级错误可选 h1,嵌入式错误默认 p 以避免破坏页面标题层级。 */
+  titleElement?: 'p' | 'h1' | 'h2' | 'h3';
   description?: string;
   /** 影响说明:哪部分受影响、已有输入/数据是否保留(§7.7 第 2 部分) */
-  impact?: string;
+  impact?: ReactNode;
   /** 重试回调 */
   onRetry?: () => void;
   /** 重试按钮文案(来自调用方,配合 onRetry 使用) */
@@ -31,21 +33,34 @@ export interface ErrorStateProps {
 }
 
 export function ErrorState(props: ErrorStateProps): React.JSX.Element {
-  const { title, description, impact, onRetry, retryLabel, action, diagnosticId, help, illustration } = props;
+  const {
+    title,
+    titleElement = 'p',
+    description,
+    impact,
+    onRetry,
+    retryLabel,
+    action,
+    diagnosticId,
+    help,
+    illustration,
+  } = props;
   const showRetry = onRetry !== undefined && retryLabel !== undefined;
+  const TitleElement = titleElement;
   return (
     <div className="mesh-error-state">
       {illustration ? <div className="mesh-error-state__illustration">{illustration}</div> : null}
-      <p className="mesh-error-state__title">{title}</p>
+      <TitleElement className="mesh-error-state__title">{title}</TitleElement>
       {description ? <p className="mesh-error-state__description">{description}</p> : null}
       {impact ? <p className="mesh-error-state__impact">{impact}</p> : null}
-      {action ?? (showRetry ? (
-        <div className="mesh-error-state__action">
-          <Button variant="secondary" onClick={onRetry}>
-            {retryLabel}
-          </Button>
-        </div>
-      ) : null)}
+      {action ??
+        (showRetry ? (
+          <div className="mesh-error-state__action">
+            <Button variant="secondary" onClick={onRetry}>
+              {retryLabel}
+            </Button>
+          </div>
+        ) : null)}
       {diagnosticId !== undefined && diagnosticId.length > 0 ? (
         <code className="mesh-error-state__diagnostic">{diagnosticId}</code>
       ) : null}

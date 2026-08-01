@@ -60,7 +60,13 @@ const RULE_ACTIVE = {
   stats: { runs_30d: 20, success_rate: 0.95 },
 };
 
-const RULE_PAUSED = { ...RULE_ACTIVE, id: 'ap-2', name: '值班介入', status: 'paused', trigger_type: 'agent_mentioned' };
+const RULE_PAUSED = {
+  ...RULE_ACTIVE,
+  id: 'ap-2',
+  name: '值班介入',
+  status: 'paused',
+  trigger_type: 'agent_mentioned',
+};
 
 interface Recorded {
   url: string;
@@ -77,7 +83,11 @@ function setup(rules: unknown[] = [RULE_ACTIVE, RULE_PAUSED], killSwitch = false
     if (url.endsWith('/autopilots/kill-switch') && method === 'GET')
       return fakeResponse({ body: { data: { kill_switch: killSwitch } } });
     if (url.endsWith('/autopilots/kill-switch') && method === 'POST')
-      return fakeResponse({ body: { data: { kill_switch: true, paused_autopilots: 2, updated_at: '2026-07-27T00:00:00Z' } } });
+      return fakeResponse({
+        body: {
+          data: { kill_switch: true, paused_autopilots: 2, updated_at: '2026-07-27T00:00:00Z' },
+        },
+      });
     if (method !== 'GET') return fakeResponse({ body: { data: RULE_PAUSED } });
     return fakeResponse({ body: { data: rules, next_cursor: null } });
   }) as typeof fetch;
@@ -160,7 +170,9 @@ describe('AutopilotsPage', () => {
   it('runs the kill switch confirmation flow', async () => {
     const calls = setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-kill-switch-button')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-kill-switch-button'));
     await userEvent.type(screen.getByTestId('autopilot-kill-reason'), '紧急止血');
     await userEvent.click(screen.getByTestId('autopilot-kill-confirm'));
@@ -171,6 +183,14 @@ describe('AutopilotsPage', () => {
         ),
       ).toBe(true),
     );
+  });
+
+  it('renders the active kill switch as an assertive safety banner', async () => {
+    setup([RULE_ACTIVE, RULE_PAUSED], true);
+    renderPage();
+    const switchRegion = await screen.findByTestId('autopilot-kill-switch');
+    await waitFor(() => expect(switchRegion.querySelector('[role="alert"]')).not.toBeNull());
+    expect(switchRegion).toHaveTextContent('All paused');
   });
 
   it('reloads when an autopilot realtime frame arrives', async () => {
@@ -205,7 +225,11 @@ describe('AutopilotsPage', () => {
   });
 
   it('shows the error state on fetch failure', async () => {
-    const impl = (async () => fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } })) as typeof fetch;
+    const impl = (async () =>
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
     await waitFor(() => expect(screen.getByText(/error|unexpected/i)).toBeInTheDocument());

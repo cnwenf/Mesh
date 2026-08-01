@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { MeshApiClient, MeshApiError, errorToI18nKey, getToken } from '../../api';
-import { Banner, Button, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
+import { Banner, Button, ErrorState, Icon, Skeleton, StatusDot, useToast } from '../../design';
 import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { env } from '../../env';
 import { useT } from '../../i18n';
@@ -54,9 +54,8 @@ interface TreeNodeProps {
 function TaskTreeNode(props: TreeNodeProps): React.JSX.Element {
   const t = useT();
   const { task, depth, index } = props;
-  const blockers = task.blocked_by
-    .map((id) => index.get(id)?.title_snapshot ?? id)
-    .join(', ');
+  const blockers = task.blocked_by.map((id) => index.get(id)?.title_snapshot ?? id).join(', ');
+  const dependencies = task.depends_on.map((id) => index.get(id)?.title_snapshot ?? id).join(', ');
   return (
     <>
       <li
@@ -64,10 +63,23 @@ function TaskTreeNode(props: TreeNodeProps): React.JSX.Element {
         style={{ paddingInlineStart: `calc(var(--space-3) * ${depth})` }}
         data-testid={`squad-tree-node-${task.id}`}
       >
-        <StatusDot tone={TASK_STATUS_TONE[task.status]} label={t(`squads.task.status.${task.status}`)} />
+        <StatusDot
+          tone={TASK_STATUS_TONE[task.status]}
+          label={t(`squads.task.status.${task.status}`)}
+        />
         <span className="mesh-squads__tree-title">{task.title_snapshot ?? task.id}</span>
-        <span className="mesh-squads__tree-assignee">
-          {task.assignee !== null ? task.assignee.name : t('squads.task.unassigned')}
+        <span
+          className="mesh-squads__tree-assignee mesh-squads__identity"
+          data-testid={`squad-tree-assignee-${task.id}`}
+        >
+          {task.assignee !== null ? (
+            <>
+              <Icon name={task.assignee.member_type === 'agent' ? 'agent' : 'user'} size={16} />
+              <span>{task.assignee.name}</span>
+            </>
+          ) : (
+            t('squads.task.unassigned')
+          )}
         </span>
         {task.stage !== null ? (
           <span className="mesh-squads__tree-stage">
@@ -78,6 +90,18 @@ function TaskTreeNode(props: TreeNodeProps): React.JSX.Element {
           <span className="mesh-squads__tree-blocked" data-testid={`squad-tree-blocked-${task.id}`}>
             {t('squads.task.waitingOn', { count: task.blocked_by.length, names: blockers })}
           </span>
+        ) : null}
+        {task.depends_on.length > 0 ? (
+          <span
+            className="mesh-squads__tree-dependencies"
+            data-testid={`squad-tree-dependencies-${task.id}`}
+          >
+            <Icon name="link" size={16} />
+            <span>{dependencies}</span>
+          </span>
+        ) : null}
+        {task.failure_reason !== null && task.failure_reason !== '' ? (
+          <span className="mesh-squads__tree-blocked">{task.failure_reason}</span>
         ) : null}
       </li>
       {(task.children ?? []).map((child) => (
@@ -203,7 +227,10 @@ export function SquadTaskDetailPage(): React.JSX.Element {
       if (workspace === null || squadId === undefined) return;
       try {
         await moveTaskStatus(client, workspace.workspace_id, squadId, movedTaskId, { status });
-        toast.addToast(t('squads.kanban.moved'), { tone: 'success', closeLabel: t('common.close') });
+        toast.addToast(t('squads.kanban.moved'), {
+          tone: 'success',
+          closeLabel: t('common.close'),
+        });
         setReloadKey((k) => k + 1);
       } catch (err: unknown) {
         const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -240,7 +267,10 @@ export function SquadTaskDetailPage(): React.JSX.Element {
     if (workspace === null || squadId === undefined || taskId === undefined) return;
     try {
       await cancelTask(client, workspace.workspace_id, squadId, taskId);
-      toast.addToast(t('squads.toast.cancelled'), { tone: 'success', closeLabel: t('common.close') });
+      toast.addToast(t('squads.toast.cancelled'), {
+        tone: 'success',
+        closeLabel: t('common.close'),
+      });
       setReloadKey((k) => k + 1);
     } catch (err: unknown) {
       const key = err instanceof MeshApiError ? errorToI18nKey(err) : 'state.errorDescription';
@@ -266,7 +296,9 @@ export function SquadTaskDetailPage(): React.JSX.Element {
   const doneCount = progress?.done ?? 0;
   const totalCount = progress?.total ?? 0;
   const progressPct =
-    totalCount > 0 ? Math.min(PROGRESS_FULL, Math.round((doneCount / totalCount) * PROGRESS_FULL)) : 0;
+    totalCount > 0
+      ? Math.min(PROGRESS_FULL, Math.round((doneCount / totalCount) * PROGRESS_FULL))
+      : 0;
   const index = flattenTree(task);
   /** 看板用子任务(不含根):整树节点剔除根本身。 */
   const subtasks = [...index.values()].filter((node) => node.id !== task.id);
@@ -283,10 +315,18 @@ export function SquadTaskDetailPage(): React.JSX.Element {
         </Link>
         <h1 data-testid="squad-task-title">{task.title_snapshot ?? task.id}</h1>
         <span data-testid="squad-task-status">
-          <StatusDot tone={TASK_STATUS_TONE[task.status]} label={t(`squads.task.status.${task.status}`)} />
+          <StatusDot
+            tone={TASK_STATUS_TONE[task.status]}
+            label={t(`squads.task.status.${task.status}`)}
+          />
         </span>
         {!isTerminal ? (
-          <Button variant="danger" size="sm" onClick={() => void onCancel()} data-testid="squad-task-cancel">
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={() => void onCancel()}
+            data-testid="squad-task-cancel"
+          >
             {t('squads.task.cancel')}
           </Button>
         ) : null}
@@ -309,25 +349,40 @@ export function SquadTaskDetailPage(): React.JSX.Element {
 
       {task.status === 'awaiting_plan_approval' ? (
         <Banner tone="warn" politeness="assertive">
-          <div data-testid="squad-task-approval">
-            <h2>{t('squads.task.approvalTitle')}</h2>
-            <p>{t('squads.task.approvalHint')}</p>
-            {planHtml !== '' ? (
-              <div
-                className="mesh-squads__plan"
-                data-testid="squad-task-plan"
-                ref={ugcGuard}
-                dangerouslySetInnerHTML={{ __html: planHtml }}
-              />
-            ) : null}
-            <div className="mesh-squads__approval-actions">
-              <Button onClick={() => void decide(true)} data-testid="squad-task-approve">
-                {t('squads.task.approve')}
-              </Button>
-              <Button variant="danger" onClick={() => void decide(false)} data-testid="squad-task-reject">
-                {t('squads.task.reject')}
-              </Button>
+          <div
+            className="mesh-squads__decision-card"
+            data-testid="squad-task-approval"
+            aria-labelledby="squad-task-approval-title"
+          >
+            <div className="mesh-squads__decision-copy">
+              <div className="mesh-squads__decision-heading">
+                <h2 id="squad-task-approval-title">{t('squads.task.approvalTitle')}</h2>
+                <StatusDot tone="warn" label={t('squads.task.status.awaiting_plan_approval')} />
+              </div>
+              <p>{t('squads.task.approvalHint')}</p>
+              <div className="mesh-squads__approval-actions">
+                <Button onClick={() => void decide(true)} data-testid="squad-task-approve">
+                  {t('squads.task.approve')}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void decide(false)}
+                  data-testid="squad-task-reject"
+                >
+                  {t('squads.task.reject')}
+                </Button>
+              </div>
             </div>
+            {planHtml !== '' ? (
+              <aside className="mesh-squads__decision-plan" aria-label={t('squads.task.subtasks')}>
+                <div
+                  className="mesh-squads__plan"
+                  data-testid="squad-task-plan"
+                  ref={ugcGuard}
+                  dangerouslySetInnerHTML={{ __html: planHtml }}
+                />
+              </aside>
+            ) : null}
           </div>
         </Banner>
       ) : null}

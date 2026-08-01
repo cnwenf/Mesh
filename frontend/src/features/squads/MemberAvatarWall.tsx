@@ -26,8 +26,8 @@ function AgentGlyph(): React.JSX.Element {
   return (
     <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true" focusable="false">
       <rect x="3" y="4" width="10" height="8" rx="1.5" fill="currentColor" />
-      <rect x="6" y="6.5" width="1.4" height="1.4" fill="var(--color-surface, #fff)" />
-      <rect x="8.8" y="6.5" width="1.4" height="1.4" fill="var(--color-surface, #fff)" />
+      <rect x="6" y="6.5" width="1.4" height="1.4" fill="var(--color-surface)" />
+      <rect x="8.8" y="6.5" width="1.4" height="1.4" fill="var(--color-surface)" />
       <rect x="7.3" y="1" width="1.4" height="3" fill="currentColor" />
     </svg>
   );
@@ -74,7 +74,10 @@ export function MemberAvatarWall(props: MemberAvatarWallProps): React.JSX.Elemen
               {member.member_type === 'agent' ? <AgentGlyph /> : <HumanGlyph />}
             </span>
             {isLeader ? (
-              <span className="mesh-squads__avatar-leader" data-testid={`squad-avatar-leader-${member.member_id}`}>
+              <span
+                className="mesh-squads__avatar-leader"
+                data-testid={`squad-avatar-leader-${member.member_id}`}
+              >
                 {t('squads.avatar.leaderMark')}
               </span>
             ) : null}

@@ -11,9 +11,10 @@
  * 每步截图存证 e2e/evidence/runtimes(随 PR 提交;字节互异,见 check-evidence-unique.mjs)。
  */
 import { expect, test } from '@playwright/test';
-import { injectSession } from './helpers';
+import { dismissOnboarding, injectSession } from './helpers';
 import type { Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,9 +24,11 @@ const EVIDENCE_DIR = process.env.RUNTIMES_EVIDENCE_DIR ?? resolve(HERE, 'evidenc
 const API_BASE = process.env.VITE_MESH_API_BASE_URL ?? 'http://127.0.0.1:8000';
 const PG_CONTAINER = 'mesh-postgres-1';
 
-const RUNTIME_ID = '22222222-2222-2222-2222-222222222201';
-const EXECUTION_ID = '33333333-3333-3333-3333-333333333301';
-const ATTEMPT_ID = '44444444-4444-4444-4444-444444444401';
+// Per-run IDs keep repeated real-stack runs tenant-correct; fixed IDs would
+// retain the first run's workspace through ON CONFLICT and disappear here.
+const RUNTIME_ID = randomUUID();
+const EXECUTION_ID = randomUUID();
+const ATTEMPT_ID = randomUUID();
 
 // Real register + workspace over the API (the REST surface accepts real JWTs
 // only — dev tokens are gateway-only): the walkthrough then runs as a real
@@ -42,7 +45,8 @@ async function bootstrapWorld(): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, display_name: 'RT Walkthrough' }),
   });
-  if (register.status !== 201) throw new Error(`register failed: ${register.status} ${await register.text()}`);
+  if (register.status !== 201)
+    throw new Error(`register failed: ${register.status} ${await register.text()}`);
   const login = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -54,7 +58,8 @@ async function bootstrapWorld(): Promise<void> {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
     body: JSON.stringify({ name: 'RT Walkthrough WS', slug: `rt-walk-${RUN_SUFFIX}` }),
   });
-  if (ws.status !== 201) throw new Error(`workspace create failed: ${ws.status} ${await ws.text()}`);
+  if (ws.status !== 201)
+    throw new Error(`workspace create failed: ${ws.status} ${await ws.text()}`);
   WORKSPACE_ID = ((await ws.json()) as { data: { id: string } }).data.id;
 }
 
@@ -65,13 +70,22 @@ function psql(sql: string): string {
     return execFileSync(
       'psql',
       [
-        '-h', host,
-        '-p', process.env.RUNTIMES_PG_PORT ?? '5432',
-        '-U', process.env.RUNTIMES_PG_USER ?? 'mesh',
-        '-d', process.env.RUNTIMES_PG_DATABASE ?? 'mesh',
-        '-tAc', sql,
+        '-h',
+        host,
+        '-p',
+        process.env.RUNTIMES_PG_PORT ?? '5432',
+        '-U',
+        process.env.RUNTIMES_PG_USER ?? 'mesh',
+        '-d',
+        process.env.RUNTIMES_PG_DATABASE ?? 'mesh',
+        '-tAc',
+        sql,
       ],
-      { encoding: 'utf8', timeout: 30_000, env: { ...process.env, PGPASSWORD: process.env.RUNTIMES_PG_PASSWORD ?? 'mesh' } },
+      {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, PGPASSWORD: process.env.RUNTIMES_PG_PASSWORD ?? 'mesh' },
+      },
     );
   }
   return execFileSync(
@@ -138,6 +152,7 @@ test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   // ① 列表页(自动化入口 → /runtimes)
   await page.goto('/runtimes');
   await expect(page.getByTestId('new-runtime-button')).toBeVisible({ timeout: 30_000 });
+  await dismissOnboarding(page);
   await page.screenshot({ path: `${EVIDENCE_DIR}/01-runtimes-list.png` });
 
   // ② 向导创建:基本信息 → 激活码 + 安装脚本
@@ -172,9 +187,7 @@ test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await expect(page.getByTestId('execution-detail-page')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('execution-panel-logs')).toBeVisible();
   await expect(page.getByTestId('execution-cancel-button')).toBeVisible();
-  await expect(page.getByTestId('execution-branch')).toContainText(
-    `agent/${EXECUTION_ID}/a1`,
-  );
+  await expect(page.getByTestId('execution-branch')).toContainText(`agent/${EXECUTION_ID}/a1`);
   await page.screenshot({ path: `${EVIDENCE_DIR}/05-execution-detail.png` });
 
   // 凭证 Tab:值恒 ***(§4.10 红线)——有注入凭证时才断言内容

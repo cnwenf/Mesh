@@ -334,6 +334,14 @@
   text-underline-offset: 2px;
 }
 
+.mesh-page__error-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
 /* 密码强度条(§4.1:注册/重置共用;文字档位不以颜色单独表意) */
 .mesh-password-strength {
   display: flex;

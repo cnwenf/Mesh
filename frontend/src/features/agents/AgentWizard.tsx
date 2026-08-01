@@ -1,15 +1,24 @@
 /**
  * Agent 创建/编辑向导(agent.md §4.4):四步 —— 基本信息 → 模型与指令 →
- * 技能与工具(占位「稍后配置」,skill.md 落地后接通)→ 可见性 → 完成。
+ * 技能与工具(从合法安装记录选择,创建后绑定)→ 可见性 → 完成。
  *
  * 唯一创建入口:仅从成员名册页「+ 新建 Agent」打开(README §6.12,T35)。
  * 编辑复用同一组件(预填现有值,完成时 PATCH);每步独立校验、可后退不丢数据。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MeshApiClient } from '../../api';
 import { MeshApiError, errorToI18nKey } from '../../api/errors';
 import { Button, Dialog, Input, Select, useToast } from '../../design';
 import { useT } from '../../i18n';
+import {
+  bindSkill,
+  listAgentSkills,
+  listInstallations,
+  listSkills,
+  unbindSkill,
+} from '../skills/api';
+import { effectiveCapabilities, permissionTone } from '../skills/capabilities';
+import type { AgentSkillRow, SkillInstallation, SkillSummary } from '../skills/types';
 import { createAgent, getAgent, listAgents, updateAgent, updateAgentConfig } from './api';
 import type {
   AgentDetail,
@@ -58,6 +67,11 @@ const PRESETS: Record<string, PresetParams> = {
 const NAME_MAX = 120;
 const TEMPERATURE_MIN = 0;
 const TEMPERATURE_MAX = 2;
+
+interface SkillChoice {
+  readonly skill: SkillSummary;
+  readonly installation: SkillInstallation;
+}
 
 interface WizardState {
   readonly name: string;
@@ -143,6 +157,12 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
   const [isSubmitting, setIsSubmitting] = useState(false);
   // M-F3:「从现有 agent 复制」候选列表(仅创建态拉取)。
   const [copySources, setCopySources] = useState<AgentSummary[]>([]);
+  const [skillChoices, setSkillChoices] = useState<SkillChoice[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [existingBindings, setExistingBindings] = useState<AgentSkillRow[]>([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+  const [skillsLoadError, setSkillsLoadError] = useState(false);
+  const [skillsReloadKey, setSkillsReloadKey] = useState(0);
 
   const isEdit = agent !== null;
 
@@ -153,6 +173,8 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
       setState(stateFromAgent(agent));
       setErrorKey(null);
       setIsSubmitting(false);
+      setSelectedSkillIds(new Set());
+      setExistingBindings([]);
     }
   }, [open, agent]);
 
@@ -174,6 +196,52 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
       cancelled = true;
     };
   }, [open, isEdit, client, workspaceId]);
+
+  // 技能定义与安装记录是两层实体:只有已安装且未禁用的技能才可绑定。
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setSkillsLoading(true);
+    setSkillsLoadError(false);
+    Promise.all([
+      listSkills(client, workspaceId, { limit: 100 }),
+      listInstallations(client, workspaceId, { scope: 'workspace', limit: 100 }),
+      agent === null
+        ? Promise.resolve({ data: [] as AgentSkillRow[], nextCursor: null })
+        : listAgentSkills(client, workspaceId, agent.id, { limit: 100 }),
+    ])
+      .then(([skills, installations, bindings]) => {
+        if (cancelled) return;
+        const installationBySkill = new Map<string, SkillInstallation>();
+        for (const installation of installations.data) {
+          if (
+            installation.install_status !== 'disabled' &&
+            !installationBySkill.has(installation.skill_id)
+          ) {
+            installationBySkill.set(installation.skill_id, installation);
+          }
+        }
+        setSkillChoices(
+          skills.data.flatMap((skill) => {
+            const installation = installationBySkill.get(skill.id);
+            return installation === undefined ? [] : [{ skill, installation }];
+          }),
+        );
+        setExistingBindings(bindings.data);
+        if (agent !== null) {
+          setSelectedSkillIds(new Set(bindings.data.map((binding) => binding.skill.id)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSkillsLoadError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setSkillsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agent, client, open, skillsReloadKey, workspaceId]);
 
   const applyTemplate = (key: string): void => {
     const tpl = TEMPLATES[key];
@@ -201,6 +269,8 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
         visibility: detail.visibility,
         triggerOnAssign: detail.trigger_on_assign,
       });
+      const sourceBindings = await listAgentSkills(client, workspaceId, sourceId, { limit: 100 });
+      setSelectedSkillIds(new Set(sourceBindings.data.map((binding) => binding.skill.id)));
     } catch (err) {
       addToast(err instanceof Error ? err.message : t('common.unknownError'), {
         tone: 'danger',
@@ -256,6 +326,48 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
     preset: state.preset,
   });
 
+  const selectedTools = useMemo(
+    () =>
+      effectiveCapabilities(
+        skillChoices
+          .filter((choice) => selectedSkillIds.has(choice.skill.id))
+          .flatMap((choice) => choice.installation.granted_capabilities),
+      ),
+    [selectedSkillIds, skillChoices],
+  );
+
+  const toggleSkill = (skillId: string, checked: boolean): void => {
+    setSelectedSkillIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(skillId);
+      else next.delete(skillId);
+      return next;
+    });
+  };
+
+  const reconcileSkillBindings = async (agentId: string): Promise<boolean> => {
+    // A load failure must never be interpreted as "remove every binding".
+    if (skillsLoading || skillsLoadError) return true;
+    const currentSkillIds = new Set(existingBindings.map((binding) => binding.skill.id));
+    const operations: Promise<unknown>[] = [];
+    for (const binding of existingBindings) {
+      if (!selectedSkillIds.has(binding.skill.id)) {
+        operations.push(unbindSkill(client, workspaceId, agentId, binding.binding_id));
+      }
+    }
+    for (const choice of skillChoices) {
+      if (selectedSkillIds.has(choice.skill.id) && !currentSkillIds.has(choice.skill.id)) {
+        operations.push(
+          bindSkill(client, workspaceId, agentId, {
+            skill_installation_id: choice.installation.id,
+          }),
+        );
+      }
+    }
+    const results = await Promise.allSettled(operations);
+    return results.every((result) => result.status === 'fulfilled');
+  };
+
   const finish = async (): Promise<void> => {
     setIsSubmitting(true);
     setErrorKey(null);
@@ -274,7 +386,11 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
           model_config: buildModelConfig(),
           system_instructions: state.systemInstructions === '' ? null : state.systemInstructions,
         });
+        const skillsSaved = await reconcileSkillBindings(agent.id);
         addToast(t('agents.toast.updated'), { tone: 'success', closeLabel: t('common.close') });
+        if (!skillsSaved) {
+          addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('common.close') });
+        }
         onSaved(agent.id);
       } else {
         const created = await createAgent(client, workspaceId, {
@@ -287,7 +403,11 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
           system_instructions: state.systemInstructions === '' ? null : state.systemInstructions,
           model_config: buildModelConfig(),
         });
+        const skillsSaved = await reconcileSkillBindings(created.id);
         addToast(t('agents.toast.created'), { tone: 'success', closeLabel: t('common.close') });
+        if (!skillsSaved) {
+          addToast(t('skills.bindFailed'), { tone: 'danger', closeLabel: t('common.close') });
+        }
         onSaved(created.id);
       }
       onClose();
@@ -477,8 +597,65 @@ export function AgentWizard(props: AgentWizardProps): React.JSX.Element {
 
         {step === 'skills' ? (
           <div className="mesh-agents-wizard__body" data-testid="agent-wizard-skills">
-            {/* skill.md 落地前的占位步:允许「稍后配置」,先建最小 agent 再补能力(§4.4)。 */}
-            <p className="mesh-agents-wizard__placeholder">{t('agents.wizard.skillsLater')}</p>
+            <p className="mesh-agents-wizard__skills-hint">{t('agents.wizard.skillsOptional')}</p>
+            {skillsLoading ? <p role="status">{t('state.loading')}</p> : null}
+            {skillsLoadError ? (
+              <div className="mesh-agents-wizard__skills-error" role="alert">
+                <p>{t('skills.loadError')}</p>
+                <Button
+                  variant="secondary"
+                  onClick={() => setSkillsReloadKey((value) => value + 1)}
+                >
+                  {t('common.retry')}
+                </Button>
+              </div>
+            ) : null}
+            {!skillsLoading && !skillsLoadError && skillChoices.length === 0 ? (
+              <p>{t('skills.agentEmptyDescription')}</p>
+            ) : null}
+            {!skillsLoading && !skillsLoadError && skillChoices.length > 0 ? (
+              <fieldset className="mesh-agents-wizard__fieldset mesh-agents-wizard__skills-list">
+                <legend>{t('skills.agentSkillsTitle')}</legend>
+                {skillChoices.map((choice) => (
+                  <label key={choice.skill.id} className="mesh-agents-wizard__skill-choice">
+                    <input
+                      type="checkbox"
+                      checked={selectedSkillIds.has(choice.skill.id)}
+                      data-testid={`agent-wizard-skill-${choice.skill.id}`}
+                      onChange={(event) => toggleSkill(choice.skill.id, event.target.checked)}
+                    />
+                    <span>
+                      <strong>{choice.skill.name}</strong>
+                      <span className="mesh-agents-wizard__skill-meta">
+                        {choice.skill.source_type === null
+                          ? null
+                          : t(`skills.source.${choice.skill.source_type}`)}
+                        {' · '}
+                        {t(`skills.installStatus.${choice.installation.install_status}`)}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            ) : null}
+            {selectedTools.length > 0 ? (
+              <section className="mesh-agents-wizard__tools" aria-labelledby="wizard-tools-title">
+                <h3 id="wizard-tools-title">{t('skills.agentToolsTitle')}</h3>
+                <ul>
+                  {selectedTools.map((tool) => (
+                    <li
+                      key={tool.capability}
+                      className={`mesh-agents-wizard__tool mesh-agents-wizard__tool--${permissionTone(tool.permission)}`}
+                      data-testid={`agent-wizard-tool-${tool.capability}`}
+                    >
+                      <code>{tool.capability}</code>
+                      <span>{t(`skills.permission.${tool.permission}`)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mesh-agents-wizard__skills-hint">{t('skills.toolReadOnlyHint')}</p>
+              </section>
+            ) : null}
           </div>
         ) : null}
 

@@ -13,6 +13,7 @@ import { MeshApiClient, getToken } from '../../api';
 import {
   Banner,
   Button,
+  DataView,
   EmptyState,
   ErrorState,
   Select,
@@ -294,125 +295,133 @@ export function RuntimesPage(): React.JSX.Element {
 
   return (
     <main className="mesh-runtimes">
-      <div className="mesh-runtimes__header">
-        <h1 className="mesh-runtimes__title">{t('runtimes.title')}</h1>
-        {workspace !== null ? (
-          <Button
-            variant="primary"
-            data-testid="new-runtime-button"
-            onClick={() => setWizardOpen(true)}
+      <DataView
+        title={t('runtimes.title')}
+        actions={
+          workspace !== null ? (
+            <Button
+              variant="primary"
+              data-testid="new-runtime-button"
+              onClick={() => setWizardOpen(true)}
+            >
+              {t('runtimes.new')}
+            </Button>
+          ) : undefined
+        }
+        toolbar={
+          <div
+            className="mesh-runtimes__toolbar"
+            role="group"
+            aria-label={t('runtimes.filterLabel')}
           >
-            {t('runtimes.new')}
-          </Button>
-        ) : null}
-      </div>
-
-      {queueDepth !== null ? (
-        <Banner tone={queueDepth > 0 ? 'warn' : 'info'}>
-          <span data-testid="runtimes-queue-depth">
-            {t('runtimes.queueDepth', { count: queueDepth })}
-          </span>
-        </Banner>
-      ) : null}
-
-      <div className="mesh-runtimes__toolbar" role="group" aria-label={t('runtimes.filterLabel')}>
-        <Select
-          label={t('runtimes.filter.status')}
-          value={statusFilter}
-          data-testid="runtimes-status-filter"
-          onChange={(event) =>
-            updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
-          }
-        >
-          <option value={STATUS_ALL}>{t('runtimes.filter.all')}</option>
-          {RUNTIME_STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>
-              {t(`runtimes.status.${status}`)}
-            </option>
-          ))}
-        </Select>
-        <Select
-          label={t('runtimes.filter.kind')}
-          value={kindFilter}
-          data-testid="runtimes-kind-filter"
-          onChange={(event) =>
-            updateParam('kind', event.target.value === KIND_ALL ? null : event.target.value)
-          }
-        >
-          <option value={KIND_ALL}>{t('runtimes.filter.all')}</option>
-          {RUNTIME_KIND_ORDER.map((kind) => (
-            <option key={kind} value={kind}>
-              {t(`runtimes.kind.${kind}`)}
-            </option>
-          ))}
-        </Select>
-        <label className="mesh-runtimes__search">
-          <span className="mesh-runtimes__search-label">{t('common.search')}</span>
-          <input
-            type="search"
-            value={search}
-            data-testid="runtimes-search"
-            placeholder={t('runtimes.searchPlaceholder')}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </label>
-      </div>
-
-      {workspace === null && !isLoading && error === null ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('runtimes.noWorkspace')} />
-      ) : error !== null ? (
-        <ErrorState
-          title={t('state.errorTitle')}
-          description={error}
-          retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
-        />
-      ) : isLoading ? (
-        <Skeleton loadingLabel={t('common.loading')} />
-      ) : filtered.length === 0 ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('runtimes.empty')} />
-      ) : (
-        <table className="mesh-runtimes__table" data-testid="runtimes-table">
-          <thead>
-            <tr>
-              <th scope="col">{t('runtimes.col.status')}</th>
-              <th scope="col">{t('runtimes.col.name')}</th>
-              <th scope="col">{t('runtimes.col.kind')}</th>
-              <th scope="col">{t('runtimes.col.load')}</th>
-              <th scope="col">{t('runtimes.col.heartbeat')}</th>
-              <th scope="col">{t('runtimes.col.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((runtime) => (
-              <RuntimeRow
-                key={runtime.id}
-                runtime={runtime}
-                nowMs={nowMs}
-                onOpen={(r) => navigate(`/runtimes/${r.id}`)}
-                onPause={(r) =>
-                  void runAction(
-                    () => pauseRuntime(client, workspace?.workspace_id ?? '', r.id),
-                    t('runtimes.toast.paused'),
-                  )
-                }
-                onResume={(r) =>
-                  void runAction(
-                    () => resumeRuntime(client, workspace?.workspace_id ?? '', r.id),
-                    t('runtimes.toast.resumed'),
-                  )
-                }
-                onDelete={(r) =>
-                  void runAction(
-                    () => deleteRuntime(client, workspace?.workspace_id ?? '', r.id),
-                    t('runtimes.toast.deleted'),
-                  )
-                }
+            <Select
+              label={t('runtimes.filter.status')}
+              value={statusFilter}
+              data-testid="runtimes-status-filter"
+              onChange={(event) =>
+                updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
+              }
+            >
+              <option value={STATUS_ALL}>{t('runtimes.filter.all')}</option>
+              {RUNTIME_STATUS_ORDER.map((status) => (
+                <option key={status} value={status}>
+                  {t(`runtimes.status.${status}`)}
+                </option>
+              ))}
+            </Select>
+            <Select
+              label={t('runtimes.filter.kind')}
+              value={kindFilter}
+              data-testid="runtimes-kind-filter"
+              onChange={(event) =>
+                updateParam('kind', event.target.value === KIND_ALL ? null : event.target.value)
+              }
+            >
+              <option value={KIND_ALL}>{t('runtimes.filter.all')}</option>
+              {RUNTIME_KIND_ORDER.map((kind) => (
+                <option key={kind} value={kind}>
+                  {t(`runtimes.kind.${kind}`)}
+                </option>
+              ))}
+            </Select>
+            <label className="mesh-runtimes__search">
+              <span className="mesh-runtimes__search-label">{t('common.search')}</span>
+              <input
+                type="search"
+                value={search}
+                data-testid="runtimes-search"
+                placeholder={t('runtimes.searchPlaceholder')}
+                onChange={(event) => setSearch(event.target.value)}
               />
-            ))}
-          </tbody>
-        </table>
-      )}
+            </label>
+          </div>
+        }
+      >
+        {queueDepth !== null ? (
+          <Banner tone={queueDepth > 0 ? 'warn' : 'info'}>
+            <span data-testid="runtimes-queue-depth">
+              {t('runtimes.queueDepth', { count: queueDepth })}
+            </span>
+          </Banner>
+        ) : null}
+
+        {workspace === null && !isLoading && error === null ? (
+          <EmptyState title={t('state.emptyTitle')} description={t('runtimes.noWorkspace')} />
+        ) : error !== null ? (
+          <ErrorState
+            title={t('state.errorTitle')}
+            description={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((key) => key + 1)}
+          />
+        ) : isLoading ? (
+          <Skeleton loadingLabel={t('common.loading')} />
+        ) : filtered.length === 0 ? (
+          <EmptyState title={t('state.emptyTitle')} description={t('runtimes.empty')} />
+        ) : (
+          <table className="mesh-runtimes__table" data-testid="runtimes-table">
+            <caption className="sr-only">{t('runtimes.title')}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{t('runtimes.col.status')}</th>
+                <th scope="col">{t('runtimes.col.name')}</th>
+                <th scope="col">{t('runtimes.col.kind')}</th>
+                <th scope="col">{t('runtimes.col.load')}</th>
+                <th scope="col">{t('runtimes.col.heartbeat')}</th>
+                <th scope="col">{t('runtimes.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((runtime) => (
+                <RuntimeRow
+                  key={runtime.id}
+                  runtime={runtime}
+                  nowMs={nowMs}
+                  onOpen={(r) => navigate(`/runtimes/${r.id}`)}
+                  onPause={(r) =>
+                    void runAction(
+                      () => pauseRuntime(client, workspace?.workspace_id ?? '', r.id),
+                      t('runtimes.toast.paused'),
+                    )
+                  }
+                  onResume={(r) =>
+                    void runAction(
+                      () => resumeRuntime(client, workspace?.workspace_id ?? '', r.id),
+                      t('runtimes.toast.resumed'),
+                    )
+                  }
+                  onDelete={(r) =>
+                    void runAction(
+                      () => deleteRuntime(client, workspace?.workspace_id ?? '', r.id),
+                      t('runtimes.toast.deleted'),
+                    )
+                  }
+                />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </DataView>
 
       {workspace !== null ? (
         <RegisterRuntimeWizard

@@ -30,6 +30,7 @@ const ME = {
 };
 
 const AGENT_SNAP = { member_id: 'mem-2', member_type: 'agent', name: 'Builder' };
+const HUMAN_SNAP = { member_id: 'mem-1', member_type: 'human', name: 'Owner' };
 
 function taskNode(id: string, title: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -121,7 +122,9 @@ describe('SquadTaskDetailPage', () => {
     await screen.findByTestId('squad-task-page');
     expect(screen.getByTestId('squad-task-title').textContent).toBe('Fix login');
     // 进度:1/2 完成 → 50%
-    expect(screen.getByTestId('squad-task-progress-label').textContent).toBe('1 of 2 subtasks done');
+    expect(screen.getByTestId('squad-task-progress-label').textContent).toBe(
+      '1 of 2 subtasks done',
+    );
     expect(screen.getByTestId('squad-task-progress').getAttribute('aria-valuenow')).toBe('50');
     // 子任务节点
     expect(screen.getByTestId('squad-tree-node-tk-2')).toBeTruthy();
@@ -129,10 +132,69 @@ describe('SquadTaskDetailPage', () => {
     // 负责人 / 阶段
     expect(screen.getByText('Builder')).toBeTruthy();
     expect(screen.getByText('Stage 1')).toBeTruthy();
+    expect(screen.getByTestId('squad-tree-assignee-tk-2')).toHaveTextContent('Builder');
+    // Dependencies remain readable after the blocker finishes; active blockers retain explicit waiting copy.
+    expect(screen.getByTestId('squad-tree-dependencies-tk-3')).toHaveTextContent('Write tests');
     // blocked_by「等待 X」
     expect(screen.getByTestId('squad-tree-blocked-tk-3').textContent).toContain('Write tests');
     // 非终态可取消
     expect(screen.getByTestId('squad-task-cancel')).toBeTruthy();
+  });
+
+  it('renders fallback titles, human ownership, unknown dependencies, and failure context', async () => {
+    const richChild = taskNode('tk-human', 'ignored', {
+      title_snapshot: null,
+      assignee: HUMAN_SNAP,
+      blocked_by: ['missing-blocker'],
+      depends_on: ['missing-dependency'],
+      failure_reason: 'Dependency failed',
+      children: [taskNode('tk-nested', 'Nested', { failure_reason: '' })],
+    });
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({
+        body: {
+          data: treeFixture({
+            title_snapshot: null,
+            status: 'done',
+            progress: undefined,
+            children: [richChild],
+          }),
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage();
+
+    await screen.findByTestId('squad-task-page');
+    expect(screen.getByTestId('squad-task-title')).toHaveTextContent('tk-1');
+    expect(screen.getByTestId('squad-task-progress-label')).toHaveTextContent('0 of 0');
+    expect(screen.getByTestId('squad-tree-node-tk-human')).toHaveTextContent('tk-human');
+    expect(screen.getByTestId('squad-tree-assignee-tk-human')).toHaveTextContent('Owner');
+    expect(screen.getByTestId('squad-tree-blocked-tk-human')).toHaveTextContent('missing-blocker');
+    expect(screen.getByTestId('squad-tree-dependencies-tk-human')).toHaveTextContent(
+      'missing-dependency',
+    );
+    expect(screen.getByTestId('squad-tree-node-tk-human')).toHaveTextContent('Dependency failed');
+    expect(screen.getByTestId('squad-tree-node-tk-nested')).toBeInTheDocument();
+  });
+
+  it('shows empty states in both task views when children are omitted', async () => {
+    const stub = stubFetch(
+      fakeResponse({ body: { data: ME } }),
+      fakeResponse({
+        body: {
+          data: treeFixture({ status: 'done', children: undefined }),
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', stub.fetchImpl);
+    renderPage();
+
+    await screen.findByTestId('squad-task-page');
+    expect(screen.getByText('No subtasks yet')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('squad-view-kanban'));
+    expect(screen.getByText('No subtasks yet')).toBeInTheDocument();
   });
 
   it('shows the error state with retry when the tree request fails', async () => {
@@ -175,8 +237,10 @@ describe('SquadTaskDetailPage', () => {
     vi.stubGlobal('fetch', stub.fetchImpl);
     renderPage();
     await screen.findByTestId('squad-task-approval');
+    expect(screen.getByTestId('squad-task-approval')).toHaveClass('mesh-squads__decision-card');
     // 方案 Markdown 经净化渲染
     expect(screen.getByTestId('squad-task-plan').textContent).toContain('My Plan');
+    expect(screen.getByTestId('squad-task-plan').closest('aside')).not.toBeNull();
     fireEvent.click(screen.getByTestId('squad-task-approve'));
     await waitFor(() => {
       const posts = stub.calls.filter((c) => c.init?.method === 'POST');
@@ -248,9 +312,13 @@ describe('SquadTaskDetailPage', () => {
       // 编排流尝试:无主体 → 不可用,静默退出,由轮询兜底(§3.5)。不消耗后续队列语义。
       fakeResponse({}),
       // poll #1: no change
-      fakeResponse({ body: { data: { task_id: 'tk-1', status: 'in_progress', result_summary: null } } }),
+      fakeResponse({
+        body: { data: { task_id: 'tk-1', status: 'in_progress', result_summary: null } },
+      }),
       // poll #2: changed → reload tree
-      fakeResponse({ body: { data: { task_id: 'tk-1', status: 'done', result_summary: 'All good' } } }),
+      fakeResponse({
+        body: { data: { task_id: 'tk-1', status: 'done', result_summary: 'All good' } },
+      }),
       fakeResponse({ body: { data: treeFixture({ status: 'done', result_summary: 'All good' }) } }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);
@@ -310,7 +378,9 @@ describe('SquadTaskDetailPage', () => {
       fakeResponse({}),
       fakeResponse({ body: { data: moved } }),
       fakeResponse({
-        body: { data: treeFixture({ children: [taskNode('tk-3', 'Ship it', { status: 'in_progress' })] }) },
+        body: {
+          data: treeFixture({ children: [taskNode('tk-3', 'Ship it', { status: 'in_progress' })] }),
+        },
       }),
     );
     vi.stubGlobal('fetch', stub.fetchImpl);

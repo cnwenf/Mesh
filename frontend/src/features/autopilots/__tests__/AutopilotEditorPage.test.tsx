@@ -18,7 +18,14 @@ afterEach(() => {
 const ME = {
   user: { id: 'u-1', email: 'o@x.com', display_name: 'Owner' },
   memberships: [
-    { workspace_id: 'ws-1', workspace_name: 'T', workspace_slug: 't', role: 'owner', status: 'active', joined_at: null },
+    {
+      workspace_id: 'ws-1',
+      workspace_name: 'T',
+      workspace_slug: 't',
+      role: 'owner',
+      status: 'active',
+      joined_at: null,
+    },
   ],
 };
 
@@ -85,9 +92,12 @@ function setup(existing: boolean): Recorded[] {
     calls.push({ url, method, body });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
     if (url.includes('/agents')) return fakeResponse({ body: { data: AGENTS, next_cursor: null } });
-    if (url.includes('/webhook-secrets')) return fakeResponse({ body: { data: [], next_cursor: null } });
+    if (url.includes('/webhook-secrets'))
+      return fakeResponse({ body: { data: [], next_cursor: null } });
     if (url.includes('/preview-schedule'))
-      return fakeResponse({ body: { data: { cron: '0 8 * * *', timezone: 'UTC', next_runs: ['2026-07-28T08:00:00Z'] } } });
+      return fakeResponse({
+        body: { data: { cron: '0 8 * * *', timezone: 'UTC', next_runs: ['2026-07-28T08:00:00Z'] } },
+      });
     if (method === 'GET' && existing) return fakeResponse({ body: { data: RULE } });
     return fakeResponse({ body: { data: { ...RULE, id: 'ap-new', name: 'new' } } });
   }) as typeof fetch;
@@ -119,10 +129,16 @@ describe('AutopilotEditorPage', () => {
     await userEvent.selectOptions(screen.getByTestId('autopilot-editor-executor'), 'ag-1');
     await userEvent.click(screen.getByTestId('autopilot-editor-save'));
     await waitFor(() =>
-      expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(true),
+      expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(
+        true,
+      ),
     );
     const create = calls.find((call) => call.method === 'POST' && call.url.endsWith('/autopilots'));
-    expect(create?.body).toMatchObject({ name: '每日汇总', trigger_type: 'schedule', status: 'active' });
+    expect(create?.body).toMatchObject({
+      name: '每日汇总',
+      trigger_type: 'schedule',
+      status: 'active',
+    });
     await waitFor(() => expect(screen.getByText('detail-page')).toBeInTheDocument());
   });
 
@@ -145,16 +161,22 @@ describe('AutopilotEditorPage', () => {
       ).toBeInTheDocument(),
     );
     // nothing was submitted
-    expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(false);
+    expect(calls.some((call) => call.method === 'POST' && call.url.endsWith('/autopilots'))).toBe(
+      false,
+    );
   });
 
   it('prefills from an existing rule in edit mode', async () => {
     setup(true);
     renderEditor('/autopilots/ap-1/edit');
     await waitFor(() =>
-      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe('既有规则'),
+      expect((screen.getByTestId('autopilot-editor-name') as HTMLInputElement).value).toBe(
+        '既有规则',
+      ),
     );
-    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe('0 8 * * *');
+    expect((screen.getByTestId('autopilot-editor-cron') as HTMLInputElement).value).toBe(
+      '0 8 * * *',
+    );
     expect((screen.getByTestId('autopilot-editor-timezone') as HTMLInputElement).value).toBe('UTC');
   });
 
@@ -171,19 +193,49 @@ describe('AutopilotEditorPage', () => {
   it('toggles sections open and closed', async () => {
     setup(false);
     renderEditor('/autopilots/new');
-    await waitFor(() => expect(screen.getByTestId('autopilot-section-trigger-body')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-section-trigger-body')).toBeInTheDocument(),
+    );
     await userEvent.click(screen.getByTestId('autopilot-section-trigger-toggle'));
     expect(screen.queryByTestId('autopilot-section-trigger-body')).toBeNull();
     await userEvent.click(screen.getByTestId('autopilot-section-guardrails-toggle'));
     expect(screen.getByTestId('autopilot-section-guardrails-body')).toBeInTheDocument();
-    expect((screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked).toBe(false);
+    expect(
+      (screen.getByTestId('autopilot-editor-require-approval') as HTMLInputElement).checked,
+    ).toBe(false);
+  });
+
+  it('keeps a right-hand configuration summary in sync and uses design-system glyphs', async () => {
+    setup(false);
+    renderEditor('/autopilots/new');
+    const summary = await screen.findByTestId('autopilot-editor-summary');
+    expect(summary).toHaveTextContent('Schedule');
+    await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'Daily triage');
+    expect(summary).toHaveTextContent('Daily triage');
+
+    await userEvent.click(screen.getByTestId('autopilot-section-actions-toggle'));
+    expect(summary).toHaveTextContent('Run agent prompt');
+    expect(screen.getByRole('button', { name: 'Move up' }).querySelector('svg')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Move down' }).querySelector('svg')).not.toBeNull();
+    expect(
+      screen.getByTestId('autopilot-section-actions-toggle').querySelector('svg'),
+    ).not.toBeNull();
+
+    await userEvent.click(screen.getByTestId('autopilot-step-guardrails'));
+    expect(screen.getByTestId('autopilot-section-guardrails-body')).toBeInTheDocument();
+    expect(screen.getByTestId('autopilot-step-guardrails')).toHaveAttribute('aria-current', 'step');
   });
 
   it('shows webhook secret selector for webhook triggers', async () => {
     setup(false);
     renderEditor('/autopilots/new');
-    await waitFor(() => expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument());
-    await userEvent.selectOptions(screen.getByTestId('autopilot-editor-trigger-type'), 'webhook_received');
+    await waitFor(() =>
+      expect(screen.getByTestId('autopilot-editor-trigger-type')).toBeInTheDocument(),
+    );
+    await userEvent.selectOptions(
+      screen.getByTestId('autopilot-editor-trigger-type'),
+      'webhook_received',
+    );
     expect(screen.getByTestId('autopilot-editor-secret')).toBeInTheDocument();
     // without a secret selected, save stays disabled even with a name
     await userEvent.type(screen.getByTestId('autopilot-editor-name'), 'wh rule');

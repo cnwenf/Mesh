@@ -9,7 +9,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Button,
+  DetailLayout,
+  EmptyState,
+  ErrorState,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import type { StatusDotTone } from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
@@ -216,183 +224,212 @@ export function RuntimeDetailPage(): React.JSX.Element {
 
   return (
     <main className="mesh-runtimes-detail" data-testid="runtime-detail-page">
-      <div className="mesh-runtimes-detail__header">
-        <Button
-          variant="ghost"
-          data-testid="runtime-detail-back"
-          onClick={() => navigate('/runtimes')}
-        >
-          {t('runtimes.detail.back')}
-        </Button>
-        <h1 className="mesh-runtimes-detail__title" data-testid="runtime-detail-name">
-          {runtime.name}
-        </h1>
-        <span data-testid="runtime-detail-status">
-          <StatusDot
-            tone={STATUS_TONE[runtime.status]}
-            label={t(`runtimes.status.${runtime.status}`)}
-          />
-        </span>
-        <div className="mesh-runtimes-detail__actions">
-          {canPause ? (
+      <DetailLayout
+        header={
+          <div className="mesh-runtimes-detail__header">
             <Button
-              variant="secondary"
-              size="sm"
-              data-testid="runtime-detail-pause"
-              onClick={() =>
-                void act(
-                  () => pauseRuntime(client, workspace?.workspace_id ?? '', runtime.id),
-                  t('runtimes.toast.paused'),
-                )
-              }
+              variant="ghost"
+              data-testid="runtime-detail-back"
+              onClick={() => navigate('/runtimes')}
             >
-              {t('runtimes.action.pause')}
+              {t('runtimes.detail.back')}
             </Button>
-          ) : null}
-          {canResume ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              data-testid="runtime-detail-resume"
-              onClick={() =>
-                void act(
-                  () => resumeRuntime(client, workspace?.workspace_id ?? '', runtime.id),
-                  t('runtimes.toast.resumed'),
-                )
-              }
-            >
-              {t('runtimes.action.resume')}
-            </Button>
-          ) : null}
-          <Button
-            variant="secondary"
-            size="sm"
-            data-testid="runtime-detail-rotate"
-            onClick={() => void handleRotate()}
-          >
-            {t('runtimes.action.rotateToken')}
-          </Button>
-        </div>
-      </div>
-
-      <dl className="mesh-runtimes-detail__meta">
-        <dt>{t('runtimes.field.hostname')}</dt>
-        <dd data-testid="runtime-detail-host">{runtime.hostname ?? '—'}</dd>
-        <dt>{t('runtimes.field.os')}</dt>
-        <dd data-testid="runtime-detail-os">{runtime.os ?? '—'}</dd>
-        <dt>{t('runtimes.field.cpu')}</dt>
-        <dd data-testid="runtime-detail-cpu">
-          {runtime.cpu_cores === null ? '—' : t('runtimes.cpuCores', { count: runtime.cpu_cores })}
-        </dd>
-        <dt>{t('runtimes.field.memory')}</dt>
-        <dd data-testid="runtime-detail-memory">{memory ?? '—'}</dd>
-        <dt>{t('runtimes.field.concurrency')}</dt>
-        <dd data-testid="runtime-detail-concurrency">
-          {runtime.current_load}/{runtime.max_concurrent}
-        </dd>
-        <dt>{t('runtimes.field.version')}</dt>
-        <dd data-testid="runtime-detail-version">
-          {runtime.version === null ? '—' : `v${runtime.version}`}
-        </dd>
-      </dl>
-
-      <div className="mesh-runtimes-detail__chips" data-testid="runtime-detail-labels">
-        <span className="mesh-runtimes-detail__chips-title">{t('runtimes.field.labels')}</span>
-        {labelEntries.length === 0 ? <span>—</span> : null}
-        {labelEntries.map(([key, value]) => (
-          <span key={key} className="mesh-runtimes-detail__chip">
-            {key}={value}
-          </span>
-        ))}
-      </div>
-
-      <div className="mesh-runtimes-detail__chips" data-testid="runtime-detail-capabilities">
-        <span className="mesh-runtimes-detail__chips-title">
-          {t('runtimes.field.capabilities')}
-        </span>
-        {runtime.capabilities.length === 0 ? <span>—</span> : null}
-        {runtime.capabilities.map((capability) => (
-          <span key={capability} className="mesh-runtimes-detail__chip">
-            {capability}
-          </span>
-        ))}
-      </div>
-
-      <section className="mesh-runtimes-detail__section">
-        <h2>{t('runtimes.detail.inflight', { count: inflight.length })}</h2>
-        {inflight.length === 0 ? (
-          <EmptyState title={t('state.emptyTitle')} description={t('runtimes.detail.noInflight')} />
-        ) : (
-          <ul className="mesh-runtimes-detail__executions" data-testid="runtime-inflight-list">
-            {inflight.map((execution) => {
-              const startAt = execution.attempts.find((a) => a.started_at !== null)?.started_at;
-              const elapsedSeconds =
-                startAt !== undefined && startAt !== null
-                  ? Math.max(0, Math.floor((nowMs - Date.parse(startAt)) / 1000))
-                  : 0;
-              return (
-                <li key={execution.id} data-testid={`runtime-inflight-${execution.id}`}>
-                  <span className="mesh-runtimes-detail__execution-name">
-                    {executionDisplayLabel(t, execution)}
-                  </span>
-                  <span data-testid={`runtime-inflight-status-${execution.id}`}>
-                    {t(`runtimes.execution.status.${execution.status}`)}
-                  </span>
-                  <span>{formatDurationSeconds(elapsedSeconds)}</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    data-testid={`runtime-view-${execution.id}`}
-                    onClick={() => navigate(`/executions/${execution.id}`)}
-                  >
-                    {t('runtimes.action.view')}
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    data-testid={`runtime-cancel-${execution.id}`}
-                    onClick={() =>
-                      void act(
-                        () => cancelExecution(client, workspace?.workspace_id ?? '', execution.id),
-                        t('runtimes.toast.cancelled'),
-                      )
-                    }
-                  >
-                    {t('runtimes.action.cancel')}
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
-      <section className="mesh-runtimes-detail__section">
-        <h2>{t('runtimes.detail.history')}</h2>
-        {history.length === 0 ? (
-          <EmptyState title={t('state.emptyTitle')} description={t('runtimes.detail.noHistory')} />
-        ) : (
-          <ul className="mesh-runtimes-detail__executions" data-testid="runtime-history-list">
-            {history.map((execution) => (
-              <li key={execution.id} data-testid={`runtime-history-${execution.id}`}>
-                <span className="mesh-runtimes-detail__execution-name">
-                  {executionDisplayLabel(t, execution)}
-                </span>
-                <span>{t(`runtimes.execution.status.${execution.status}`)}</span>
-                <span>{execution.finished_at ?? execution.queued_at}</span>
+            <h1 className="mesh-runtimes-detail__title" data-testid="runtime-detail-name">
+              {runtime.name}
+            </h1>
+            <div className="mesh-runtimes-detail__actions">
+              {canPause ? (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="sm"
-                  data-testid={`runtime-history-view-${execution.id}`}
-                  onClick={() => navigate(`/executions/${execution.id}`)}
+                  data-testid="runtime-detail-pause"
+                  onClick={() =>
+                    void act(
+                      () => pauseRuntime(client, workspace?.workspace_id ?? '', runtime.id),
+                      t('runtimes.toast.paused'),
+                    )
+                  }
                 >
-                  {t('runtimes.action.view')}
+                  {t('runtimes.action.pause')}
                 </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+              ) : null}
+              {canResume ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  data-testid="runtime-detail-resume"
+                  onClick={() =>
+                    void act(
+                      () => resumeRuntime(client, workspace?.workspace_id ?? '', runtime.id),
+                      t('runtimes.toast.resumed'),
+                    )
+                  }
+                >
+                  {t('runtimes.action.resume')}
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                size="sm"
+                data-testid="runtime-detail-rotate"
+                onClick={() => void handleRotate()}
+              >
+                {t('runtimes.action.rotateToken')}
+              </Button>
+            </div>
+          </div>
+        }
+        summaryChips={
+          <span data-testid="runtime-detail-status">
+            <StatusDot
+              tone={STATUS_TONE[runtime.status]}
+              label={t(`runtimes.status.${runtime.status}`)}
+            />
+          </span>
+        }
+        main={
+          <>
+            <dl className="mesh-runtimes-detail__meta">
+              <dt>{t('runtimes.field.hostname')}</dt>
+              <dd data-testid="runtime-detail-host">{runtime.hostname ?? '—'}</dd>
+              <dt>{t('runtimes.field.os')}</dt>
+              <dd data-testid="runtime-detail-os">{runtime.os ?? '—'}</dd>
+              <dt>{t('runtimes.field.cpu')}</dt>
+              <dd data-testid="runtime-detail-cpu">
+                {runtime.cpu_cores === null
+                  ? '—'
+                  : t('runtimes.cpuCores', { count: runtime.cpu_cores })}
+              </dd>
+              <dt>{t('runtimes.field.memory')}</dt>
+              <dd data-testid="runtime-detail-memory">{memory ?? '—'}</dd>
+              <dt>{t('runtimes.field.concurrency')}</dt>
+              <dd data-testid="runtime-detail-concurrency">
+                {runtime.current_load}/{runtime.max_concurrent}
+              </dd>
+              <dt>{t('runtimes.field.version')}</dt>
+              <dd data-testid="runtime-detail-version">
+                {runtime.version === null ? '—' : `v${runtime.version}`}
+              </dd>
+            </dl>
+
+            <div className="mesh-runtimes-detail__chips" data-testid="runtime-detail-labels">
+              <span className="mesh-runtimes-detail__chips-title">
+                {t('runtimes.field.labels')}
+              </span>
+              {labelEntries.length === 0 ? <span>—</span> : null}
+              {labelEntries.map(([key, value]) => (
+                <span key={key} className="mesh-runtimes-detail__chip">
+                  {key}={value}
+                </span>
+              ))}
+            </div>
+
+            <div className="mesh-runtimes-detail__chips" data-testid="runtime-detail-capabilities">
+              <span className="mesh-runtimes-detail__chips-title">
+                {t('runtimes.field.capabilities')}
+              </span>
+              {runtime.capabilities.length === 0 ? <span>—</span> : null}
+              {runtime.capabilities.map((capability) => (
+                <span key={capability} className="mesh-runtimes-detail__chip">
+                  {capability}
+                </span>
+              ))}
+            </div>
+
+            <section className="mesh-runtimes-detail__section">
+              <h2>{t('runtimes.detail.inflight', { count: inflight.length })}</h2>
+              {inflight.length === 0 ? (
+                <EmptyState
+                  title={t('state.emptyTitle')}
+                  description={t('runtimes.detail.noInflight')}
+                />
+              ) : (
+                <ul
+                  className="mesh-runtimes-detail__executions"
+                  data-testid="runtime-inflight-list"
+                >
+                  {inflight.map((execution) => {
+                    const startAt = execution.attempts.find(
+                      (a) => a.started_at !== null,
+                    )?.started_at;
+                    const elapsedSeconds =
+                      startAt !== undefined && startAt !== null
+                        ? Math.max(0, Math.floor((nowMs - Date.parse(startAt)) / 1000))
+                        : 0;
+                    return (
+                      <li key={execution.id} data-testid={`runtime-inflight-${execution.id}`}>
+                        <span className="mesh-runtimes-detail__execution-name">
+                          {executionDisplayLabel(t, execution)}
+                        </span>
+                        <span data-testid={`runtime-inflight-status-${execution.id}`}>
+                          {t(`runtimes.execution.status.${execution.status}`)}
+                        </span>
+                        <span>{formatDurationSeconds(elapsedSeconds)}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          data-testid={`runtime-view-${execution.id}`}
+                          onClick={() => navigate(`/executions/${execution.id}`)}
+                        >
+                          {t('runtimes.action.view')}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          data-testid={`runtime-cancel-${execution.id}`}
+                          onClick={() =>
+                            void act(
+                              () =>
+                                cancelExecution(
+                                  client,
+                                  workspace?.workspace_id ?? '',
+                                  execution.id,
+                                ),
+                              t('runtimes.toast.cancelled'),
+                            )
+                          }
+                        >
+                          {t('runtimes.action.cancel')}
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="mesh-runtimes-detail__section">
+              <h2>{t('runtimes.detail.history')}</h2>
+              {history.length === 0 ? (
+                <EmptyState
+                  title={t('state.emptyTitle')}
+                  description={t('runtimes.detail.noHistory')}
+                />
+              ) : (
+                <ul className="mesh-runtimes-detail__executions" data-testid="runtime-history-list">
+                  {history.map((execution) => (
+                    <li key={execution.id} data-testid={`runtime-history-${execution.id}`}>
+                      <span className="mesh-runtimes-detail__execution-name">
+                        {executionDisplayLabel(t, execution)}
+                      </span>
+                      <span>{t(`runtimes.execution.status.${execution.status}`)}</span>
+                      <span>{execution.finished_at ?? execution.queued_at}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        data-testid={`runtime-history-view-${execution.id}`}
+                        onClick={() => navigate(`/executions/${execution.id}`)}
+                      >
+                        {t('runtimes.action.view')}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </>
+        }
+      />
 
       {rotatedToken !== null ? (
         <div

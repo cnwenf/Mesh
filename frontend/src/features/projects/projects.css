@@ -4,13 +4,16 @@
  * 健康度:on_track=success / at_risk=warn / off_track=danger。
  */
 .mesh-projects {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-5);
-  max-inline-size: 960px;
+  padding: var(--page-gutter-compact);
+  max-inline-size: var(--content-standard);
   margin-inline: auto;
   inline-size: 100%;
+  min-inline-size: 0;
+  box-sizing: border-box;
 }
 
 .mesh-projects__header {
@@ -32,6 +35,8 @@
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--space-3);
+  inline-size: 100%;
+  min-inline-size: 0;
 }
 
 .mesh-projects__check {
@@ -43,11 +48,24 @@
   padding-block-end: var(--space-2);
 }
 
-/* ---- 卡片网格 ---- */
-.mesh-projects__grid {
+/* ---- 项目密集行 / 网格 ---- */
+.mesh-projects__view {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.mesh-projects__view--grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
   gap: var(--space-4);
+}
+
+.mesh-projects__view--list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .mesh-projects__card {
@@ -58,12 +76,20 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  text-decoration: none;
   color: var(--color-text);
+  min-inline-size: 0;
 }
 
 .mesh-projects__card:hover {
   border-color: var(--color-primary);
+}
+
+.mesh-projects__view--list .mesh-projects__card {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(12rem, 1.35fr) minmax(8rem, 0.8fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 
 .mesh-projects__card-head {
@@ -71,11 +97,39 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.mesh-projects__card-identity,
+.mesh-projects__card-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.mesh-projects__card-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .mesh-projects__card-name {
   font-weight: 600;
   overflow-wrap: anywhere;
+  color: var(--color-text-strong);
+  text-decoration: none;
+  min-inline-size: 0;
+}
+
+.mesh-projects__card-name:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.mesh-projects__card-name:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .mesh-projects__card-meta {
@@ -85,10 +139,25 @@
   gap: var(--space-3);
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+  min-inline-size: 0;
 }
 
 .mesh-projects__card-date {
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.mesh-projects__view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-inline-start: auto;
+}
+
+.mesh-projects__view-toggle .mesh-button__label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
 }
 
 /* ---- 状态徽章 ---- */
@@ -124,6 +193,19 @@
 .mesh-projects__badge--cancelled {
   background: var(--color-danger);
   color: var(--color-danger-contrast);
+}
+
+.mesh-projects__archive-badge {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--space-6);
+  padding-inline: var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ---- 头像首字圆 ---- */
@@ -191,6 +273,12 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.mesh-projects__detail-title-row .mesh-projects__title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 
 .mesh-projects__detail-meta {
@@ -206,6 +294,15 @@
   max-inline-size: 240px;
 }
 
+.mesh-detail-layout__aside .mesh-projects__detail-meta {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.mesh-detail-layout__aside .mesh-projects__detail-meta .mesh-projects__progress {
+  max-inline-size: none;
+}
+
 .mesh-projects__detail-lead {
   display: inline-flex;
   align-items: center;
@@ -219,12 +316,28 @@
   gap: var(--space-2);
 }
 
+.mesh-projects__detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
 .mesh-projects__settings-link {
   display: inline-flex;
   align-items: center;
   padding: var(--space-2) var(--space-3);
   color: var(--color-primary);
   font-size: var(--font-size-sm);
+  min-block-size: 44px;
+  box-sizing: border-box;
+  border-radius: var(--radius-md);
+}
+
+.mesh-projects__settings-link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .mesh-projects__panel {
@@ -241,6 +354,7 @@
 .mesh-projects__description {
   margin: 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--color-text);
 }
 
@@ -248,6 +362,103 @@
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.mesh-projects__tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  margin-block-end: var(--space-4);
+  border-block-end: 1px solid var(--color-border);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.mesh-projects__tab {
+  flex: 0 0 auto;
+  min-block-size: 44px;
+  padding-inline: var(--space-3);
+  border: 0;
+  border-block-end: 3px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.mesh-projects__tab[aria-selected='true'] {
+  border-block-end-color: var(--color-primary);
+  color: var(--color-text-strong);
+  font-weight: 600;
+}
+
+.mesh-projects__tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.mesh-projects__tab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.mesh-projects__issue-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-projects__issue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-inline-size: 0;
+  padding: var(--space-2) var(--space-3);
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+
+.mesh-projects__issue-link {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-inline-size: 0;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.mesh-projects__issue-link:hover .mesh-projects__issue-title {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+
+.mesh-projects__issue-link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.mesh-projects__issue-identifier {
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.mesh-projects__issue-title {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.mesh-projects__issue-state {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
 }
 
 /* ---- 里程碑 ---- */
@@ -288,6 +499,7 @@
 
 .mesh-projects__milestone-title {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .mesh-projects__milestone-sub {
@@ -343,6 +555,7 @@
 .mesh-projects__update-message {
   margin: var(--space-2) 0 0;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .mesh-projects__health-chip {
@@ -369,7 +582,64 @@
 
 /* ---- 设置页 ---- */
 .mesh-projects__settings-form {
-  max-inline-size: 480px;
+  max-inline-size: var(--content-form);
+}
+
+.mesh-projects__settings-layout {
+  display: grid;
+  grid-template-columns: minmax(10rem, 13rem) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-6);
+  min-inline-size: 0;
+}
+
+.mesh-projects__settings-nav {
+  position: sticky;
+  inset-block-start: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.mesh-projects__settings-nav a {
+  display: flex;
+  align-items: center;
+  min-block-size: 44px;
+  padding-inline: var(--space-3);
+  border-inline-start: 3px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.mesh-projects__settings-nav a:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.mesh-projects__settings-nav a:focus-visible {
+  border-inline-start-color: var(--color-primary);
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+  color: var(--color-text-strong);
+  font-weight: 600;
+}
+
+.mesh-projects__settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-inline-size: 0;
+}
+
+.mesh-projects__settings-anchor,
+.mesh-projects__settings-section,
+.mesh-projects__settings-form {
+  scroll-margin-block-start: var(--space-5);
+  min-inline-size: 0;
 }
 
 .mesh-projects__settings-section {
@@ -382,12 +652,6 @@
   margin: 0;
   font-size: var(--font-size-md);
   color: var(--color-text);
-}
-
-.mesh-projects__danger-zone {
-  padding: var(--space-4);
-  border: 1px solid var(--color-danger);
-  border-radius: var(--radius-md);
 }
 
 .mesh-projects__member-list {
@@ -408,11 +672,14 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  min-inline-size: 0;
 }
 
 .mesh-projects__member-name {
   font-weight: 600;
   padding-block-end: var(--space-2);
+  overflow-wrap: anywhere;
+  min-inline-size: 0;
 }
 
 .mesh-projects__member-add {
@@ -423,6 +690,59 @@
 }
 
 /* ---- 周期 ---- */
+.mesh-projects__cycle-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  min-inline-size: 0;
+}
+
+.mesh-projects__cycle-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.mesh-projects__metric-chip {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--space-7);
+  padding-inline: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.mesh-projects__cycle-summary-body {
+  display: grid;
+  grid-template-columns: auto auto minmax(8rem, 1fr);
+  align-items: center;
+  gap: var(--space-4);
+  min-inline-size: 0;
+}
+
+.mesh-projects__cycle-remaining {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+}
+
+.mesh-projects__cycle-remaining strong {
+  color: var(--color-text-strong);
+  font-size: var(--font-size-md);
+}
+
 .mesh-projects__cycle-list {
   list-style: none;
   margin: 0;
@@ -442,21 +762,25 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  min-inline-size: 0;
 }
 
 .mesh-projects__cycle-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
+  min-inline-size: 0;
 }
 
 .mesh-projects__cycle-name {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .mesh-projects__cycle-sub {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
 .mesh-projects__cycle-state {
@@ -512,4 +836,120 @@
 .mesh-projects__health-button:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+@media (min-width: 600px) {
+  .mesh-projects {
+    padding: var(--page-gutter-medium);
+  }
+}
+
+@container (min-width: 600px) and (max-width: 1023px) {
+  .mesh-projects__view--list .mesh-projects__card {
+    grid-template-columns: minmax(0, 1fr) minmax(10rem, 0.7fr);
+  }
+
+  .mesh-projects__view--list .mesh-projects__progress {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 599px) {
+  .mesh-projects__toolbar > .mesh-field {
+    flex: 1 1 100%;
+  }
+
+  .mesh-projects__check {
+    min-block-size: 44px;
+    padding-block-end: 0;
+  }
+
+  .mesh-projects__view-toggle {
+    inline-size: 100%;
+    margin-inline-start: 0;
+  }
+
+  .mesh-projects__view-toggle .mesh-button {
+    flex: 1 1 50%;
+  }
+
+  .mesh-projects__view--list .mesh-projects__card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-projects__card-head {
+    align-items: flex-start;
+  }
+
+  .mesh-projects__card-badges {
+    justify-content: flex-start;
+  }
+
+  .mesh-projects__detail-header,
+  .mesh-projects__cycle-summary {
+    padding: var(--space-3);
+  }
+
+  .mesh-projects__detail-actions > .mesh-button,
+  .mesh-projects__detail-actions > .mesh-projects__settings-link {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .mesh-projects__issue-row,
+  .mesh-projects__issue-link,
+  .mesh-projects__cycle-summary-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mesh-projects__issue-state {
+    white-space: normal;
+  }
+
+  .mesh-projects__settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .mesh-projects__settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .mesh-projects__settings-nav a {
+    flex: 0 0 auto;
+    border-inline-start: 0;
+    border-block-end: 3px solid transparent;
+  }
+
+  .mesh-projects__member-row,
+  .mesh-projects__member-add {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .mesh-projects__cycle-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .mesh-projects__cycle-row .mesh-projects__milestone-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (pointer: coarse) {
+  .mesh-projects__health-button {
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+
+  .mesh-projects__card-name,
+  .mesh-projects__issue-link {
+    min-block-size: 44px;
+    align-items: center;
+  }
 }

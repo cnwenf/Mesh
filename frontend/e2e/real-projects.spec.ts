@@ -10,6 +10,7 @@ import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { dismissOnboarding } from './helpers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RUN = String(Date.now()).slice(-7);
@@ -28,6 +29,10 @@ async function registerAndLogin(page: Page): Promise<void> {
   await page.getByTestId('login-email').fill(EMAIL);
   await page.getByTestId('login-password').fill(PASSWORD);
   await page.getByTestId('login-account-submit').click();
+  // Production registration now lands on the explicit verification result
+  // before continuing with the authenticated session.
+  await expect(page.getByTestId('register-verify-sent')).toContainText(EMAIL);
+  await page.getByTestId('register-continue').click();
   await expect(page.locator('.mesh-shell')).toBeVisible({ timeout: 30_000 });
 }
 
@@ -52,6 +57,7 @@ test('project 模块真实走查 + 截图存证', async ({ page }) => {
   // 列表页(空态)
   await page.goto('/projects');
   await expect(page.getByTestId('new-project-button')).toBeVisible({ timeout: 15_000 });
+  await dismissOnboarding(page);
   await page.screenshot({ path: `${EVIDENCE_DIR}/01-projects-empty.png` });
 
   // 新建项目(中文名无 Latin 字符 → 无自动建议,手动填 key 校验格式)

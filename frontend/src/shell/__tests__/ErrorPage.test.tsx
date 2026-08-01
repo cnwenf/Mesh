@@ -37,6 +37,8 @@ describe('ErrorBoundary / ErrorPage', () => {
     );
     expect(screen.getByText('Something went wrong')).toBeInTheDocument();
     expect(screen.queryByTestId('bomb-ok')).not.toBeInTheDocument();
+    expect(screen.getByTestId('errorpage-impact')).toHaveTextContent('workspace');
+    expect(screen.getByTestId('errorpage-home')).toHaveAttribute('href', '/');
   });
 
   it('重试清除边界状态,子树恢复渲染', () => {
