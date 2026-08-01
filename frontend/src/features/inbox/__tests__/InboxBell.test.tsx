@@ -98,6 +98,45 @@ describe('InboxBell', () => {
     await screen.findByTestId('inbox-bell-all');
   });
 
+  it('uses the design bell icon instead of an emoji', async () => {
+    queue();
+    renderWithProviders(<InboxBell />);
+    await screen.findByTestId('inbox-badge');
+    const button = screen.getByTestId('inbox-bell');
+    expect(button.textContent).not.toContain('🔔');
+    expect(button.querySelector('svg.mesh-icon')).not.toBeNull();
+  });
+
+  it('closes the dropdown on an outside pointerdown', async () => {
+    queue();
+    renderWithProviders(<InboxBell />);
+    await screen.findByTestId('inbox-badge');
+    fireEvent.click(screen.getByTestId('inbox-bell'));
+    await screen.findByTestId('inbox-dropdown');
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByTestId('inbox-dropdown')).toBeNull());
+  });
+
+  it('closes the dropdown on Escape', async () => {
+    queue();
+    renderWithProviders(<InboxBell />);
+    await screen.findByTestId('inbox-badge');
+    fireEvent.click(screen.getByTestId('inbox-bell'));
+    await screen.findByTestId('inbox-dropdown');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('inbox-dropdown')).toBeNull());
+  });
+
+  it('keeps the dropdown open for pointerdown inside the bell root', async () => {
+    queue();
+    renderWithProviders(<InboxBell />);
+    await screen.findByTestId('inbox-badge');
+    fireEvent.click(screen.getByTestId('inbox-bell'));
+    const dropdown = await screen.findByTestId('inbox-dropdown');
+    fireEvent.pointerDown(dropdown);
+    expect(screen.queryByTestId('inbox-dropdown')).not.toBeNull();
+  });
+
   it('marks a notification read and navigates on click', async () => {
     const stub = queue();
     renderWithProviders(<InboxBell />);

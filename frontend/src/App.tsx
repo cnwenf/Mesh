@@ -229,6 +229,8 @@ function ShellProviders(): React.JSX.Element {
                   {/* ===== 规范深链(workspace-scoped,§3.4 九条清单闭合)===== */}
                   <Route path="w/:workspaceSlug" element={<WorkspaceHomePage />} />
                   <Route path="w/:workspaceSlug/inbox" element={<InboxPage />} />
+                  {/* 收件箱详情:桌面双栏选中 + 手机单栏路由化(design-quality §4.4) */}
+                  <Route path="w/:workspaceSlug/inbox/:notificationId" element={<InboxPage />} />
                   {/* 看板与视图(kanban.md):默认视图 / 选中视图 URL 同步(§4.2 可分享/收藏) */}
                   <Route path="w/:workspaceSlug/board" element={<BoardPage />} />
                   <Route path="w/:workspaceSlug/views/:viewId" element={<BoardPage />} />

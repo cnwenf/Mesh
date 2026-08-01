@@ -13362,6 +13362,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/integrations/dingtalk/events:
+    post:
+      tags:
+      - integrations-inbound
+      summary: Dingtalk Events
+      description: 'DingTalk HTTP receive mode callback (§3.2 ``receive_mode=''http''``).
+
+
+        Guard order (unauthenticated surface — DoS hardening): the 1 MiB body
+
+        cap in BOTH passes (Content-Length PRE-CHECK before buffering + actual
+
+        byte-count re-check after reading — §3.2 item 2 "预检 + 复检双道,防
+
+        Content-Length 谎报绕过"), THEN the pre-signature COARSE anti-abuse
+
+        layer of auth.md §3.6 — keyed by the (integration, IP) tuple (IP-only
+
+        when the integration is unlocatable), 120/min, answering over-limit
+
+        callers with a SILENT 200 indistinguishable from acceptance (non-2xx
+
+        would trigger the platform''s retry amplification), audit + alert only.
+
+        The generic per-IP 429 guard is deliberately NOT applied here: §3.6
+
+        reserves 429 for the other endpoint classes. Signature verification
+
+        runs afterwards, inside ``process_inbound``.'
+      operationId: dingtalk_events_api_v1_integrations_dingtalk_events_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
   /api/v1/integrations/feishu/events:
     post:
       tags:

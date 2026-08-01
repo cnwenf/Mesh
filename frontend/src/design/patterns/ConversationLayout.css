@@ -1,0 +1,41 @@
+/*
+ * ConversationLayout 样式(design-quality.md §4.4 Conversation 模板):
+ * 桌面双栏(分组列表 + 预览/会话),手机(≤720px)单栏路由化——经根节点
+ * `data-active-pane` 切换可见窗格,组件不读窗口宽度,断点集中于此文件。
+ *
+ * 720px 阈值沿用 chat 双栏既有折叠口径(会话类页面列表列需 ~16rem 起步,
+ * 600–720px 区间双栏已不可读;§8.1 compact 0–599 为外壳导航断点,二者分工不同)。
+ * 颜色经语义 token;两栏各自滚动(min-height: 0 释放 grid 轨道溢出)。
+ */
+
+.mesh-conversation-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr);
+  gap: var(--space-4);
+  inline-size: 100%;
+  block-size: 100%;
+  min-block-size: 0;
+}
+
+.mesh-conversation-layout__list,
+.mesh-conversation-layout__detail {
+  min-block-size: 0;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 720px) {
+  .mesh-conversation-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 单栏路由化:仅渲染当前窗格(另一窗格由调用方经路由卸载/此处兜底隐藏)。 */
+  .mesh-conversation-layout[data-active-pane='list'] .mesh-conversation-layout__detail {
+    display: none;
+  }
+
+  .mesh-conversation-layout[data-active-pane='detail'] .mesh-conversation-layout__list {
+    display: none;
+  }
+}

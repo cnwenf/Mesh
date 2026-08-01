@@ -39,11 +39,17 @@ export interface ChatComposerProps {
   readonly disabled?: boolean;
   /** mod+↑ 编辑上一条:nonce 变化即以 content 预填草稿并聚焦(§4.3 S12)。 */
   readonly draftSeed?: { readonly nonce: number; readonly content: string } | null;
+  /**
+   * 预上传归属工作区(attachment.md §3.1):聊天附件预上传不预关联实体(§2.4
+   * 发送时关联),此时 upload-requests 必带 workspace_id,否则后端 400
+   * 「workspace_id is required when link_to is absent」。
+   */
+  readonly workspaceId?: string;
 }
 
 export function ChatComposer(props: ChatComposerProps): React.JSX.Element {
   const t = useT();
-  const uploader = useAttachmentUploader();
+  const uploader = useAttachmentUploader({ workspaceId: props.workspaceId });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [value, setValue] = useState('');

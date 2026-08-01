@@ -98,6 +98,7 @@ afterEach(() => {
 describe('matchFlatRoute(§3.4 旧→新映射表逐条)', () => {
   const cases: ReadonlyArray<[string, string]> = [
     ['/inbox', '/w/acme/inbox'],
+    ['/inbox/n-1', '/w/acme/inbox/n-1'],
     ['/board', '/w/acme/board'],
     ['/views/v-1', '/w/acme/views/v-1'],
     ['/members', '/w/acme/members'],

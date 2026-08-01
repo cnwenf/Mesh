@@ -294,6 +294,10 @@ def build_relay(
         # notification); ``data_job.resume`` is the reaper recovery path.
         handlers[DATA_JOB_ENQUEUE_EVENT_TYPE] = data_job_worker.handle_enqueue
         handlers[DATA_JOB_RESUME_EVENT_TYPE] = data_job_worker.handle_resume
+    # integrations.md §3.8/§2.10: conversational IM outbound events (ack /
+    # rate-limit notice / command feedback) are consumed SOLELY by the
+    # MES-89 IMSendRelay supervised task (at-most-once T1/T2 protocol) —
+    # the generic outbox relay deliberately registers NO im.send handler.
     return OutboxRelay(
         session_factory,
         handlers=handlers,
@@ -580,6 +584,18 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             ),
         ]
     )
+
+    # integrations.md §3.2 (MES-87): DingTalk Stream long-connection receive
+    # channel — a supervised task in THIS process (no new compose service):
+    # advisory-lock single-instance mutex, app_key-level connection sharing,
+    # wss-only + forced cert verification, exponential backoff 2→300s ±20%.
+    if settings.dingtalk_stream_enabled:
+        from mesh.integrations.dingtalk_stream import StreamManager
+
+        stream_manager = StreamManager(session_factory, settings, redis=redis_client)
+        supervisor.add_task(
+            TaskSpec("dingtalk-stream", lambda: stream_manager.run_forever(stop))
+        )
 
     try:
         await supervisor.run()

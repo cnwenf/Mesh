@@ -30,7 +30,7 @@ from mesh.integrations.connectors import NormalizedEvent
 
 DEFAULT_IM_TRIGGERS = ("mention", "direct_message")
 
-IM_PROVIDERS = frozenset({"feishu", "slack"})
+IM_PROVIDERS = frozenset({"feishu", "slack", "dingtalk"})
 VCS_PROVIDERS = frozenset({"github", "gitlab"})
 
 
@@ -165,6 +165,15 @@ def binding_matches(
     return False
 
 
+def _as_dingtalk_bool(value: object) -> bool:
+    """DingTalk boolean fields arrive as JSON booleans OR stringified
+    ('true'/'false'); mirror the ingestion normalizer's rules so this
+    branch never truth-evaluates a 'false' string."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() == "true"
+
+
 def compute_im_signals(provider: str, event: NormalizedEvent, config: dict[str, Any]) -> tuple[bool, bool]:
     """Derive (bot_mentioned, is_direct_message) from the normalized event.
 
@@ -184,6 +193,14 @@ def compute_im_signals(provider: str, event: NormalizedEvent, config: dict[str, 
         mentions = event.extra.get("mentions") or []
         mentioned = len(mentions) > 0 or "@" in event.text
         is_dm = str(event.extra.get("chat_type") or "") == "p2p"
+        return mentioned, is_dm
+    if provider == "dingtalk":
+        # Group @-bot = ``isInAtList=true`` (§3.2 normalization table);
+        # direct messages (conversationType '1') are direct_message triggers.
+        # Parse the at-list flag with the SAME boolean rules the normalizer
+        # uses (_as_bool) — a raw string "false" must not truth-evaluate.
+        is_dm = str(event.extra.get("conversation_type") or "") == "1"
+        mentioned = _as_dingtalk_bool(event.extra.get("is_in_at_list")) or is_dm
         return mentioned, is_dm
     return False, False
 

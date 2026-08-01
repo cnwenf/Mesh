@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router';
 import type { MeshApiClient } from '../../api';
 import { getToken } from '../../api';
 import { uuidv4 } from '../../api/uuid';
-import { Button, ErrorState, Skeleton, useToast } from '../../design';
+import { Button, ErrorState, Icon, IconButton, RunStateBadge, Skeleton, useToast } from '../../design';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import {
@@ -274,22 +274,40 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
   );
   const canDistill = session.context_issue_id !== null;
   const isArchived = session.status !== 'active';
+  // §9.8 运行反馈五态(统一语言):尚无流内容 → queued(已排队),有内容 → running(运行中)。
+  const liveRunState =
+    stream.liveMessage !== null && stream.liveMessage.content !== '' ? 'running' : 'queued';
 
   return (
     <section className="mesh-chat__conversation" data-testid="chat-conversation">
       <header className="mesh-chat__conversation-head">
+        {/* 手机单栏(detail 窗格)返回列表入口;桌面经 CSS 隐藏(§8.3 明确返回)。 */}
+        <IconButton
+          label={t('chat.back')}
+          variant="ghost"
+          className="mesh-chat__back"
+          data-testid="chat-back"
+          onClick={() => navigate('/chat')}
+        >
+          <Icon name="chevron-left" />
+        </IconButton>
         <h2 className="mesh-chat__conversation-title" data-testid="chat-conversation-title">
           {session.title}
         </h2>
         {stream.isStreaming ? (
-          <Button
-            variant="danger"
-            size="sm"
-            data-testid="chat-stop"
-            onClick={() => void handleStop()}
-          >
-            {t('chat.action.stop')}
-          </Button>
+          <>
+            <span className="mesh-chat__run-state" data-testid="chat-run-state">
+              <RunStateBadge state={liveRunState} label={t(`runState.${liveRunState}`)} size="sm" />
+            </span>
+            <Button
+              variant="danger"
+              size="sm"
+              data-testid="chat-stop"
+              onClick={() => void handleStop()}
+            >
+              {t('chat.action.stop')}
+            </Button>
+          </>
         ) : null}
         <Button
           variant="secondary"
@@ -343,6 +361,7 @@ export function ConversationPanel(props: ConversationPanelProps): React.JSX.Elem
         onClearQuote={() => setQuoteMessage(null)}
         disabled={isArchived || stream.isStreaming}
         draftSeed={draftSeed}
+        workspaceId={workspaceId}
       />
 
       <DistillDialog

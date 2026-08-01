@@ -215,3 +215,35 @@ def test_validate_match_config_accepts_valid():
         {"branch_pattern": "^main$", "vcs_events": ["push"]},
     )
     validate_match_config("slack", {"trigger_on": ["mention", "keyword"]})
+
+
+def test_dingtalk_at_list_string_false_is_not_mentioned():
+    """LOW fix: the dingtalk signal branch parses isInAtList with the same
+    boolean rules as the normalizer — a stringified 'false' must NOT
+    truth-evaluate into a phantom mention."""
+    from mesh.integrations.connectors import NormalizedEvent
+    from mesh.integrations.matching import compute_im_signals
+
+    event = NormalizedEvent(
+        external_event_id="m1",
+        event_type="im.bot.message",
+        external_ref="cidGROUP==",
+        actor_key="staff1",
+        tenant_key="dingcorp0001",
+        text="hello",
+        extra={"conversation_type": "2", "is_in_at_list": "false"},
+    )
+    mentioned, is_dm = compute_im_signals("dingtalk", event, {})
+    assert mentioned is False
+    assert is_dm is False
+
+    event_true = NormalizedEvent(
+        external_event_id="m2",
+        event_type="im.bot.message",
+        external_ref="cidGROUP==",
+        actor_key="staff1",
+        tenant_key="dingcorp0001",
+        text="hello",
+        extra={"conversation_type": "2", "is_in_at_list": "true"},
+    )
+    assert compute_im_signals("dingtalk", event_true, {}) == (True, False)

@@ -33,6 +33,7 @@ export interface FlatRouteRule {
  */
 export const FLAT_ROUTE_RULES: readonly FlatRouteRule[] = [
   { pattern: /^\/inbox$/, build: (_m, slug) => `/w/${slug}/inbox` },
+  { pattern: /^\/inbox\/([^/]+)$/, build: (m, slug) => `/w/${slug}/inbox/${m[1]}` },
   { pattern: /^\/board$/, build: (_m, slug) => `/w/${slug}/board` },
   { pattern: /^\/views\/([^/]+)$/, build: (m, slug) => `/w/${slug}/views/${m[1]}` },
   { pattern: /^\/members$/, build: (_m, slug) => `/w/${slug}/members` },

@@ -79,6 +79,28 @@ def assert_config_non_secret(config: dict[str, Any]) -> None:
             )
 
 
+# Per-kind config defaults materialized at EVERY config write (R1,
+# integrations.md §2.7:295 / §2.10:649 / §3.2:826): a DingTalk integration
+# with no explicit dispatch-mode choice gets the SPEC default —
+# ``serial_conversation`` (conversation FIFO, at most one in-flight
+# execution). The queue module reads ``config.inbound_queue`` at enqueue
+# time and its code-level fallback is ``parallel`` (the feishu/slack
+# §6.9 baseline), so the DingTalk default MUST be made explicit here —
+# an API-created/updated integration without the key would otherwise
+# silently parallel direct-dispatch against the Spec. Explicit client
+# values always win over the defaults.
+_KIND_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
+    "im_dingtalk": {"inbound_queue": "serial_conversation"},
+}
+
+
+def _config_with_kind_defaults(kind: str, config: dict[str, Any]) -> dict[str, Any]:
+    defaults = _KIND_CONFIG_DEFAULTS.get(kind)
+    if not defaults:
+        return config
+    return {**defaults, **config}
+
+
 class IntegrationService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession], signing_secret: str):
         self._sf = session_factory
@@ -105,7 +127,7 @@ class IntegrationService:
                 code="invalid_request",
                 details={"kind": kind, "allowed": list(VALID_KINDS)},
             )
-        config = dict(config or {})
+        config = _config_with_kind_defaults(kind, dict(config or {}))
         assert_config_non_secret(config)
         validate_integration_config(kind, config)
         moment = now or datetime.now(UTC)
@@ -398,6 +420,10 @@ class IntegrationService:
             if config is not None:
                 # §6.16: per-kind guards at EVERY config write (the row's
                 # kind is authoritative — config carries no kind of its own).
+                # R1: the per-kind Spec defaults are materialized here too —
+                # a wholesale config replacement must not silently drop a
+                # DingTalk integration back onto the parallel code fallback.
+                config = _config_with_kind_defaults(integration.kind, dict(config))
                 validate_integration_config(integration.kind, config)
             if name is not None:
                 integration.name = name

@@ -6,7 +6,7 @@
  * 附件卡片 + 引用预览。纯展示 + 回调;候选分支切换见 CandidateSwitcher(父级编排)。
  */
 import type { MeshApiClient } from '../../api';
-import { Button } from '../../design';
+import { Button, RunStateBadge } from '../../design';
 import { useUgcColorGuard } from '../../design/ugcColorGuard';
 import { formatRelativeTime, useT } from '../../i18n';
 import { renderMarkdownPreview } from '../comments/markdown';
@@ -86,7 +86,11 @@ export function MessageBubble(props: MessageBubbleProps): React.JSX.Element {
             {t('chat.message.aiBadge')}
           </span>
         ) : null}
-        <time className="mesh-chat__bubble-time">
+        {/* §9.8 运行反馈五态:agent 失败气泡头部统一徽标(interrupted 维持弱化提示,不徽标)。 */}
+        {isAgent && isFailed ? (
+          <RunStateBadge state="failed" label={t('runState.failed')} size="sm" />
+        ) : null}
+        <time className="mesh-chat__bubble-time" dateTime={message.created_at}>
           {formatRelativeTime(message.created_at, { locale: props.locale })}
         </time>
       </header>

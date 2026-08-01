@@ -175,6 +175,11 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStream {
 
   const abort = useCallback(() => {
     teardown();
+    // M4:本地即置 interrupted,避免终态 effect 把仍为 'streaming' 的 liveMessage
+    // upsert 成永久流式幽灵(无 WS 二次对账时尤为明显)。服务端 stop 由视图层另发。
+    setLiveMessage((prev) =>
+      prev === null ? prev : { ...prev, generation_status: 'interrupted' as GenerationStatus },
+    );
     setIsStreaming(false);
   }, [teardown]);
 

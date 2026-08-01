@@ -540,6 +540,16 @@ class Settings(BaseSettings):
     # refresh rather than terminally fail during it).
     token_follower_wait: float = Field(default=12.0, gt=0)
 
+    # -- DingTalk Stream receive channel (integrations.md §3.2, MES-87) ----
+    # DEPLOY-TIME test-injection door ONLY (M2): this value must never be
+    # editable via integrations.config or any admin API — an admin-writable
+    # gateway base would be a Stream-MITM privilege-escalation path
+    # exfiltrating the in-memory app_secret. A non-default value triggers
+    # a startup warning + audit entry (dingtalk_stream.py).
+    dingtalk_gateway_base: str = "https://api.dingtalk.com"
+    dingtalk_stream_enabled: bool = True
+    dingtalk_stream_scan_interval: float = Field(default=5.0, gt=0)
+
 
 def load_settings(**overrides: object) -> Settings:
     """Build :class:`Settings`, failing fast with a clear error on missing keys."""

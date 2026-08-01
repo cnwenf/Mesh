@@ -1,12 +1,35 @@
 /**
- * 收件箱 / 通知偏好样式(comment-inbox.md §4.2)。颜色一律经语义 token。
+ * 收件箱 / 通知偏好样式(comment-inbox.md §4.2,design-quality.md §3.2/§4.4)。
+ * 颜色一律经语义 token;排版经 type scale 工具类(时间/元数据 caption + tnum)。
+ * ConversationLayout(底座 patterns 层)承载桌面双栏 / 手机(≤720px)单栏路由化,
+ * 本文件仅做收件箱专属的列表行状态矩阵与预览窗格。
  */
 
-.mesh-inbox {
+/* ── 页面骨架 ─────────────────────────────────────────── */
+
+.mesh-inbox-page {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  padding: var(--space-4);
+  block-size: 100%;
+  min-block-size: 0;
+}
+
+/* ConversationLayout 根节点(底座为双栏 grid):撑满剩余高度,两栏各自滚动。 */
+.mesh-inbox {
+  flex: 1;
+  min-block-size: 0;
+}
+
+.mesh-inbox .mesh-conversation-layout__list {
+  gap: var(--space-3);
+  overflow-y: auto;
+  padding-block-end: var(--space-2);
+}
+
+.mesh-inbox .mesh-conversation-layout__detail {
+  overflow-y: auto;
+  padding-block-end: var(--space-2);
 }
 
 .mesh-inbox__skeleton {
@@ -18,12 +41,12 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  flex: none;
 }
 
 .mesh-inbox__head h1 {
   margin: 0;
-  font-size: var(--font-size-lg);
-  color: var(--color-text);
+  color: var(--color-text-strong);
 }
 
 .mesh-inbox__toolbar {
@@ -31,37 +54,59 @@
   gap: var(--space-2);
 }
 
+/* ── 筛选 tabs ────────────────────────────────────────── */
+
 .mesh-inbox__tabs {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+  flex: none;
 }
 
 .mesh-inbox__tab {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   color: var(--color-text-muted);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   padding: var(--space-1) var(--space-3);
+  min-block-size: 2rem;
   cursor: pointer;
+  transition: background-color var(--motion-fast), color var(--motion-fast);
+}
+
+.mesh-inbox__tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.mesh-inbox__tab:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .mesh-inbox__tab--active {
-  background: var(--color-primary);
-  color: var(--color-primary-contrast);
-  border-color: var(--color-primary);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-color: var(--color-accent);
 }
+
+.mesh-inbox__quiet {
+  flex: none;
+}
+
+/* ── 分组与行(§3.2 行状态矩阵)───────────────────────── */
 
 .mesh-inbox__groups {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .mesh-inbox__group {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
   background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
 }
 
 .mesh-inbox__group-head {
@@ -70,12 +115,12 @@
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .mesh-inbox__group-title {
   font-weight: 600;
-  color: var(--color-text);
+  color: var(--color-text-strong);
 }
 
 .mesh-inbox__mute {
@@ -84,10 +129,20 @@
   color: var(--color-text-muted);
   cursor: pointer;
   font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  min-block-size: 2.75rem;
+  border-radius: var(--radius-sm);
+  transition: color var(--motion-fast), background-color var(--motion-fast);
 }
 
 .mesh-inbox__mute:hover {
   color: var(--color-danger);
+  background: var(--color-surface-hover);
+}
+
+.mesh-inbox__mute:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
 }
 
 .mesh-inbox__rows {
@@ -100,20 +155,37 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
+  min-block-size: 2.75rem;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-inline-start: 3px solid transparent;
+  transition: background-color var(--motion-fast);
 }
 
 .mesh-inbox__row:last-child {
   border-bottom: none;
+  border-end-start-radius: calc(var(--radius-lg) - 1px);
+  border-end-end-radius: calc(var(--radius-lg) - 1px);
 }
 
+.mesh-inbox__row:hover {
+  background: var(--color-surface-hover);
+}
+
+/* 未读:圆点 + 选中面底色 + 加粗标题(非仅颜色信号,§6.3)。 */
 .mesh-inbox__row--unread {
-  background: var(--color-surface);
+  background: var(--color-surface-selected);
+}
+
+/* 选中(匹配 /inbox/:notificationId):选中面 + 起始侧 3px 强调边。 */
+.mesh-inbox__row--selected {
+  background: var(--color-surface-selected);
+  border-inline-start-color: var(--color-accent);
 }
 
 .mesh-inbox__row-main {
   flex: 1;
+  min-inline-size: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -122,41 +194,84 @@
   cursor: pointer;
   text-align: start;
   color: var(--color-text);
+  padding: var(--space-1) 0;
+  border-radius: var(--radius-sm);
+}
+
+.mesh-inbox__row-main:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+.mesh-inbox__row-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  min-inline-size: var(--space-5);
+}
+
+.mesh-inbox__row-actor {
+  display: inline-flex;
+  flex: none;
 }
 
 .mesh-inbox__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-danger);
+  background: var(--color-accent);
   flex: none;
 }
 
+.mesh-inbox__row-body {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .mesh-inbox__row-title {
-  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mesh-inbox__row-preview {
   color: var(--color-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 24rem;
+  max-inline-size: 100%;
 }
 
 .mesh-inbox__row-count {
   color: var(--color-info);
   font-size: var(--font-size-sm);
+  flex: none;
 }
 
+.mesh-inbox__row-priority {
+  display: inline-flex;
+  flex: none;
+}
+
+.mesh-inbox__row-time {
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+/* 行操作:hover / focus-within 出现;≤720px 触控常驻(§8.2)。 */
 .mesh-inbox__row-actions {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  flex: none;
   opacity: 0;
-  transition: opacity var(--duration-fast);
+  transition: opacity var(--motion-fast);
 }
 
-.mesh-inbox__row:hover .mesh-inbox__row-actions {
+.mesh-inbox__row:hover .mesh-inbox__row-actions,
+.mesh-inbox__row:focus-within .mesh-inbox__row-actions {
   opacity: 1;
 }
 
@@ -166,49 +281,149 @@
   color: var(--color-text-muted);
   cursor: pointer;
   font-size: var(--font-size-sm);
+  padding: var(--space-1) var(--space-2);
+  min-inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+  border-radius: var(--radius-sm);
+  transition: color var(--motion-fast), background-color var(--motion-fast);
 }
 
 .mesh-inbox__row-actions button:hover {
-  color: var(--color-primary);
+  color: var(--color-accent);
+  background: var(--color-surface-hover);
 }
 
-/* 顶栏铃铛 */
+.mesh-inbox__row-actions button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .mesh-inbox__row-actions {
+    opacity: 1;
+  }
+
+  .mesh-inbox__head {
+    flex-wrap: wrap;
+  }
+}
+
+/* ── 预览窗格(Conversation 详情栏)────────────────────── */
+
+.mesh-inbox-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.mesh-inbox-preview--empty {
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.mesh-inbox-preview__skeleton {
+  min-height: 12rem;
+}
+
+.mesh-inbox-preview__back {
+  align-self: flex-start;
+}
+
+/* 手机单栏(ConversationLayout 同断点)才需要返回;桌面双栏隐藏。 */
+@media (min-width: 721px) {
+  .mesh-inbox-preview__back {
+    display: none;
+  }
+}
+
+.mesh-inbox-preview__title {
+  margin: 0;
+  color: var(--color-text-strong);
+}
+
+.mesh-inbox-preview__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-inbox-preview__priority {
+  display: inline-flex;
+}
+
+.mesh-inbox-preview__actor {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.mesh-inbox-preview__note {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.mesh-inbox-preview__body {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.mesh-inbox-preview__time {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.mesh-inbox-preview__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block-start: var(--space-2);
+}
+
+/* ── 顶栏铃铛 ─────────────────────────────────────────── */
+
 .mesh-inbox-bell {
   position: relative;
-}
-
-.mesh-inbox-bell__button {
-  position: relative;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  font-size: var(--font-size-lg);
+  display: inline-flex;
+  align-items: center;
 }
 
 .mesh-inbox-bell__badge {
   position: absolute;
-  top: -2px;
-  right: -4px;
-  min-width: 1rem;
+  top: -4px;
+  right: -6px;
+  min-inline-size: 1rem;
   padding: 0 var(--space-1);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: var(--color-danger);
   color: var(--color-danger-contrast);
-  font-size: 0.7rem;
   line-height: 1rem;
   text-align: center;
+  pointer-events: none;
 }
 
 .mesh-inbox-bell__dropdown {
   position: absolute;
-  top: 100%;
+  top: calc(100% + var(--space-1));
   right: 0;
-  width: 20rem;
+  inline-size: 20rem;
+  max-inline-size: calc(100vw - var(--space-4));
   background: var(--color-surface-raised);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-raised);
-  z-index: var(--z-dropdown); /* 弹层面板层(§11.2 令牌;原 10 散落值清偿) */
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  z-index: var(--z-dropdown); /* 弹层面板层(§11.2 令牌) */
   padding: var(--space-2);
 }
 
@@ -235,31 +450,53 @@
   padding: var(--space-2);
   border-radius: var(--radius-sm);
   color: var(--color-text);
+  transition: background-color var(--motion-fast);
 }
 
 .mesh-inbox-bell__item:hover {
-  background: var(--color-surface);
+  background: var(--color-surface-hover);
+}
+
+.mesh-inbox-bell__item:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+.mesh-inbox-bell__item-title {
+  color: var(--color-text-strong);
 }
 
 .mesh-inbox-bell__item-preview {
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+  max-inline-size: 100%;
 }
 
 .mesh-inbox-bell__all {
   display: block;
   width: 100%;
   margin-top: var(--space-2);
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border-subtle);
   background: transparent;
   border-inline: none;
   border-bottom: none;
-  color: var(--color-primary);
+  color: var(--color-accent);
   cursor: pointer;
   padding: var(--space-2);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  transition: background-color var(--motion-fast);
 }
 
-/* 通知偏好 */
+.mesh-inbox-bell__all:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-inbox-bell__all:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+/* ── 通知偏好 ─────────────────────────────────────────── */
+
 .mesh-notif-prefs {
   display: flex;
   flex-direction: column;

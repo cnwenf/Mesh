@@ -3,34 +3,30 @@
  * 暗色模式由 token 集整体替换实现(README §6.12)。左列表 + 右会话响应式布局。
  */
 
-.mesh-chat {
-  display: grid;
-  grid-template-columns: minmax(16rem, 20rem) 1fr;
-  gap: var(--space-4);
-  height: 100%;
-  min-height: 0;
-}
-
-@media (max-width: 720px) {
-  .mesh-chat {
-    grid-template-columns: 1fr;
-  }
+/* 布局骨架移交底座 ConversationLayout(design §4.4):桌面双栏 / 手机单栏路由化
+   (data-active-pane 切窗格),本页仅保留页面外壳高度与会话类专用样式。 */
+.mesh-chat-page {
+  block-size: 100%;
+  min-block-size: 0;
 }
 
 .mesh-chat__placeholder {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+  min-block-size: 0;
 }
 
 /* ---- 会话列表 ---- */
 
+/* 列表窗格:细边(subtle)分隔双栏表面,右内边距形成呼吸(§7)。 */
 .mesh-chat__sessions {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   min-height: 0;
-  border-right: 1px solid var(--color-border);
+  border-right: 1px solid var(--color-border-subtle);
   padding-right: var(--space-3);
 }
 
@@ -64,21 +60,31 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  min-inline-size: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+  transition: background-color var(--motion-fast) ease, border-color var(--motion-fast) ease;
 }
 
-.mesh-chat__session--selected {
-  border-color: var(--color-primary);
-  background: var(--color-surface-raised);
+/* 行状态矩阵(§8.2):default / hover / selected / focus-visible。 */
+.mesh-chat__session:hover {
+  background: var(--color-surface-hover);
+}
+
+.mesh-chat__session--selected,
+.mesh-chat__session--selected:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface-selected);
+  box-shadow: inset 3px 0 0 0 var(--color-accent);
 }
 
 .mesh-chat__session-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0-5);
+  min-inline-size: 0;
   text-align: left;
   padding: var(--space-2);
   background: none;
@@ -87,17 +93,34 @@
   color: var(--color-text);
 }
 
+.mesh-chat__session-main:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 排版(§6):标题 body-strong、agent/预览 caption、时间 caption + 等宽数字(§6.3);
+   标题/预览单行截断(长标题不撑破行高,§6.4)。 */
 .mesh-chat__session-title {
-  font-weight: 600;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
 }
 
 .mesh-chat__session-agent {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
   color: var(--color-text-muted);
 }
 
 .mesh-chat__session-preview {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
   color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -105,8 +128,10 @@
 }
 
 .mesh-chat__session-time {
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
   color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- 会话面板 ---- */
@@ -115,19 +140,49 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
+/* 头部节奏(§7 间距):gap 2、块向 3/4 呼吸。 */
 .mesh-chat__conversation-head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  padding-block: var(--space-1) var(--space-2);
 }
 
 .mesh-chat__conversation-title {
   flex: 1;
+  min-inline-size: 0;
   margin: 0;
-  font-size: var(--font-size-lg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-family-display);
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+}
+
+/* 返回列表(§8.3):桌面双栏恒可见列表,故隐藏;手机 detail 单栏常驻(≥44px 触控)。 */
+.mesh-chat__back {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .mesh-chat__back {
+    display: inline-flex;
+    flex: none;
+    min-inline-size: 44px;
+    min-block-size: 44px;
+  }
+}
+
+.mesh-chat__run-state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
 }
 
 .mesh-chat__context-bar {
@@ -189,7 +244,7 @@
 }
 
 .mesh-chat__bubble-role {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
 
@@ -201,8 +256,12 @@
   font-size: var(--font-size-sm);
 }
 
+/* 气泡时间:caption + 等宽数字(§6.3),右对齐。 */
 .mesh-chat__bubble-time {
   margin-left: auto;
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-variant-numeric: tabular-nums;
 }
 
 .mesh-chat__quote {
@@ -217,8 +276,14 @@
   margin-right: var(--space-1);
 }
 
+/* 长消息(§6.4 CJK):任意点断行兜底超长不可断串,strict 禁标点悬挂/禁 CJK 松断;
+   word-break 保持 normal(不牺牲英文词完整性),min-inline-size 释放 flex 溢出。 */
 .mesh-chat__bubble-body {
   margin-top: var(--space-1);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  line-break: strict;
 }
 
 .mesh-chat__bubble-error {
@@ -297,12 +362,18 @@
 
 /* ---- 输入框 ---- */
 
+/* 输入区粘底(§3.2):sticky 兜底滚动容器差异;表面 token 兜底,滚动内容不透出;
+   底部安全区经 env(safe-area-inset-bottom) 计算(刘海屏 HOME 指示条,§8.3)。 */
 .mesh-chat__composer {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   border-top: 1px solid var(--color-border);
   padding-top: var(--space-2);
+  position: sticky;
+  inset-block-end: 0;
+  padding-block-end: calc(var(--space-3) + env(safe-area-inset-bottom));
+  background: var(--color-surface);
 }
 
 .mesh-chat__composer-quote {
@@ -337,7 +408,7 @@
 }
 
 .mesh-chat__composer-upload-name {
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .mesh-chat__composer-upload-meta {
@@ -482,14 +553,44 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   font-size: var(--font-size-sm);
 }
 
-/* ---- 上下文条:项目 / 添加入口 / 空提示(§4.2) ---- */
+/* ---- 上下文条:可收起条 / 项目 / 添加入口 / 空提示(§4.2 / §3.2) ---- */
 
 .mesh-chat__context-bar {
   flex-wrap: wrap;
+}
+
+/* chips 区(aria-controls 目标):收起经 hidden 切换,不销毁子树。 */
+.mesh-chat__context-chips {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* H3:作者 display:flex 会盖过 UA 的 [hidden]{display:none},致收起失效且与
+   aria-expanded 矛盾;显式兜底(不依赖全局规则,保持本组件自洽)。 */
+.mesh-chat__context-chips[hidden] {
+  display: none;
+}
+
+/* 收起态摘要:已关联上下文截断一行。 */
+.mesh-chat__context-summary {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+
+.mesh-chat__context-toggle {
+  flex: none;
 }
 
 .mesh-chat__context-chip {
@@ -532,7 +633,7 @@
 .mesh-chat__candidate-selected {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   color: var(--color-primary);
 }
 

@@ -3,7 +3,7 @@
  * 空态四要素(邀请成员 + 添加 agent 双主操作,沿用既有入口)、管理员重置上手进度
  * (仅人类成员行 + 二次确认 + toast)。
  */
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fakeResponse } from '../../../api/__tests__/fetchStub';
@@ -112,11 +112,16 @@ describe('MembersPage onboarding reset (admin only)', () => {
     renderWithProviders(<MembersPage />);
     await waitFor(() => expect(screen.getByTestId('member-open-mem-h')).toBeInTheDocument());
 
-    // 仅人类成员行有重置入口,agent 行没有
-    expect(screen.getByTestId('reset-onboarding-mem-h')).toBeInTheDocument();
-    expect(screen.queryByTestId('reset-onboarding-mem-a')).toBeNull();
+    // agent 行菜单不含「Reset onboarding」(仅人类成员行,§3.5)。
+    const agentRow = screen.getByTestId('member-open-mem-a').closest('tr') as HTMLElement;
+    await user.click(within(agentRow).getByRole('button', { name: 'Row actions' }));
+    expect(screen.queryByRole('menuitem', { name: 'Reset onboarding' })).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId('reset-onboarding-mem-h'));
+    // 人类成员行菜单含「Reset onboarding」→ 二次确认。
+    // (点击人类行触发钮的 pointerdown 在 agent 菜单之外,自动关闭 agent 菜单。)
+    const humanRow = screen.getByTestId('member-open-mem-h').closest('tr') as HTMLElement;
+    await user.click(within(humanRow).getByRole('button', { name: 'Row actions' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Reset onboarding' }));
     expect(screen.getByTestId('reset-onboarding-body')).toBeInTheDocument();
 
     await user.click(screen.getByTestId('reset-onboarding-confirm'));
@@ -137,6 +142,7 @@ describe('MembersPage onboarding reset (admin only)', () => {
     stubRoster([HUMAN], ME_MEMBER);
     renderWithProviders(<MembersPage />);
     await waitFor(() => expect(screen.getByTestId('member-open-mem-h')).toBeInTheDocument());
-    expect(screen.queryByTestId('reset-onboarding-mem-h')).toBeNull();
+    // 非管理员无行操作菜单(canManage 否),自然无重置入口。
+    expect(screen.queryByRole('button', { name: 'Row actions' })).not.toBeInTheDocument();
   });
 });
