@@ -28,6 +28,9 @@ npm install          # 需要 Node ≥22.22.0(react-router 8 引擎要求)
 npm run dev          # http://127.0.0.1:5173
 ```
 
+Compose/生产镜像的 builder 同样固定为 Node 22.22.0，必须与上述引擎下限一致；
+`docker compose build frontend` 不得出现 `EBADENGINE`。
+
 开发默认连接本地 mock 契约服务端(`e2e/mock-server.mjs`,与后端 v0.1.0 线缆协议
 逐帧对齐的忠实镜像:§6.14 包络、§6.7 实时契约——首帧鉴权 `{op:'auth',token}` →
 `auth_ok`、`{op:'event',channel,seq,event,payload}`、`subscribed{channel,last_seq}`、

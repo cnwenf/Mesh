@@ -84,6 +84,7 @@ docker compose up --build -d
 ```
 
 > `docker-compose.yml` 中**所有凭据都是必填项、无默认值**(MES-83 加固):缺失任一口令时 `docker compose up` 直接报错而非以弱口令启动。本地开发用 `scripts/gen-dev-secrets.sh` 一次性生成强随机 `.env`(已 git-ignore);如需轮换,加 `--force` 重新生成。
+> 前端容器 builder 固定使用 Node 22.22.0，与 `frontend/package.json#engines.node` 的最低版本一致；Compose 构建不得出现 `EBADENGINE`。
 
 服务与端口(可用 `.env` 覆盖,见 [.env.example](.env.example)):
 
@@ -145,6 +146,8 @@ curl http://localhost:3001/api/v1/ping      # 经 nginx 同源代理到 API
 > **本地开发替代**:若用 Vite dev server(`cd frontend && npm run dev`),以同源代理配置启动:`VITE_MESH_API_BASE_URL="" VITE_MESH_WS_BASE_URL="" npx vite --config vite.local.config.ts`(该配置把 `/api`、`/ws` 代理到 `127.0.0.1:8000/8081`),同样同源、无需 CORS。
 >
 > **前端 mock E2E 门禁**:`cd frontend && npm run test:e2e` 每次自动构建并预览生产 SPA，同时拉起新的契约 mock 服务；不复用现有进程、不使用 Vite dev/HMR 模块图、不配置失败重试。
+>
+> **来源审计门禁**:`source-provenance` workflow 扫描全部受管文本、完整提交信息和 refs。匹配规则仅由仓库外的 Actions secret 注入；缺失配置会 fail closed，诊断不会回显规则或命中原文。
 
 API 启动时自动执行 `alembic upgrade head`(建表 + RLS 策略);worker 进程运行 outbox relay、realtime projector 与保留期清理。
 

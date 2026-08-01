@@ -1,0 +1,26 @@
+name: source-provenance
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-audit:
+    name: 受管文本、提交信息与 refs 来源审计
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run fail-closed provenance scan
+        env:
+          MESH_FORBIDDEN_SOURCE_PATTERNS: ${{ secrets.MESH_FORBIDDEN_SOURCE_PATTERNS }}
+        run: PYTHONPATH=backend/src python -m mesh.compliance.source_provenance --root .
