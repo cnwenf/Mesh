@@ -136,7 +136,9 @@ const REQUIRED_KEYS = [
   // errorPage.*
   'errorPage.title',
   'errorPage.description',
+  'errorPage.impact',
   'errorPage.retry',
+  'errorPage.backHome',
   // home.*(真实首页 / 工作区仪表盘,MES-107)
   'home.subtitle',
   'home.greeting',
@@ -382,9 +384,7 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
         joined: '{name} 于 {date, date, medium} 加入',
       },
     });
-    expect(zh.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe(
-      '第 3 项，共 10 项',
-    );
+    expect(zh.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe('第 3 项，共 10 项');
     const joined = zh.formatMessage(
       { id: 'joined' },
       { name: 'Mesh', date: new Date('2026-07-25T08:00:00Z') },
@@ -399,8 +399,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
       [...text.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)(?=[,}])/g)].map((m) => m[1]).sort();
     const enMessages = builtinCatalogs.en.messages;
     const zhMessages = builtinCatalogs['zh-CN'].messages;
-    const parameterized = Object.keys(enMessages).filter((key) =>
-      placeholder(enMessages[key]).length > 0,
+    const parameterized = Object.keys(enMessages).filter(
+      (key) => placeholder(enMessages[key]).length > 0,
     );
     expect(parameterized.length).toBeGreaterThan(0);
     for (const key of parameterized) {

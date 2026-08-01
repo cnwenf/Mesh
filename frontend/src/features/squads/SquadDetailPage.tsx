@@ -13,6 +13,7 @@ import {
   Button,
   Dialog,
   ErrorState,
+  Icon,
   Select,
   Skeleton,
   StatusDot,
@@ -157,10 +158,18 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
   const candidates = roster.filter((m) => !existingIds.has(m.id));
 
   return (
-    <section className="mesh-squads__pane" data-testid="squad-members-pane">
+    <section
+      className="mesh-squads__pane mesh-squads__area mesh-squads__area--members"
+      data-testid="squad-members-pane"
+    >
       <div className="mesh-squads__pane-head">
         <h2>{t('squads.members')}</h2>
-        <Button size="sm" variant="secondary" onClick={() => setAddOpen(true)} data-testid="squad-add-member">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => setAddOpen(true)}
+          data-testid="squad-add-member"
+        >
           {t('squads.detail.addMember')}
         </Button>
       </div>
@@ -169,7 +178,11 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
       ) : (
         <ul className="mesh-squads__members">
           {members.map((member) => (
-            <li key={member.id} className="mesh-squads__member" data-testid={`squad-member-${member.member_id}`}>
+            <li
+              key={member.id}
+              className="mesh-squads__member"
+              data-testid={`squad-member-${member.member_id}`}
+            >
               <span className="mesh-squads__member-name">{member.name}</span>
               <span className="mesh-squads__member-type">
                 {member.member_type === 'agent' ? t('squads.agentBadge') : t('squads.humanBadge')}
@@ -178,7 +191,9 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
                 label={t('squads.detail.role')}
                 value={member.role}
                 data-testid={`squad-member-role-${member.member_id}`}
-                onChange={(event) => onChangeRole(member.member_id, event.target.value as SquadRole)}
+                onChange={(event) =>
+                  onChangeRole(member.member_id, event.target.value as SquadRole)
+                }
               >
                 {SQUAD_ROLE_ORDER.map((role) => (
                   <option key={role} value={role}>
@@ -199,8 +214,17 @@ function MembersPane(props: MembersPaneProps): React.JSX.Element {
         </ul>
       )}
       {addOpen ? (
-        <Dialog open onClose={() => setAddOpen(false)} title={t('squads.detail.addMember')} closeLabel={t('common.close')}>
-          <form className="mesh-squads__form" data-testid="squad-add-member-form" onSubmit={(event) => void onAdd(event)}>
+        <Dialog
+          open
+          onClose={() => setAddOpen(false)}
+          title={t('squads.detail.addMember')}
+          closeLabel={t('common.close')}
+        >
+          <form
+            className="mesh-squads__form"
+            data-testid="squad-add-member-form"
+            onSubmit={(event) => void onAdd(event)}
+          >
             <Select
               label={t('squads.detail.selectMember')}
               value={pickMemberId}
@@ -322,11 +346,17 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
       ) : (
         <ul className="mesh-squads__messages">
           {visible.map((message) => (
-            <li key={message.id} className="mesh-squads__message" data-testid={`squad-message-${message.id}`}>
+            <li
+              key={message.id}
+              className={`mesh-squads__message mesh-squads__message--${message.kind}`}
+              data-testid={`squad-message-${message.id}`}
+            >
               <span className="mesh-squads__message-sender">
                 {message.sender !== null ? message.sender.name : t('squads.messageKind.system')}
               </span>
-              <span className="mesh-squads__message-kind">{t(`squads.messageKind.${message.kind}`)}</span>
+              <span className="mesh-squads__message-kind">
+                {t(`squads.messageKind.${message.kind}`)}
+              </span>
               <span className="mesh-squads__message-time">
                 {timestamp(message.created_at, intl.locale)}
               </span>
@@ -335,7 +365,11 @@ function MessagesPane(props: MessagesPaneProps): React.JSX.Element {
           ))}
         </ul>
       )}
-      <form className="mesh-squads__composer" data-testid="squad-composer" onSubmit={(event) => void submit(event)}>
+      <form
+        className="mesh-squads__composer"
+        data-testid="squad-composer"
+        onSubmit={(event) => void submit(event)}
+      >
         <Select
           label={t('squads.kind')}
           value={draftKind}
@@ -533,35 +567,158 @@ export function SquadDetailPage(): React.JSX.Element {
         </Button>
       </header>
 
-      <MembersPane
-        workspace={workspace}
-        squad={squad}
-        members={members}
-        onRoleChanged={handleRoleChanged}
-        onRemoved={handleRemoved}
-        onAdded={refreshMembers}
-      />
+      <div className="mesh-squads__detail-grid" data-testid="squad-detail-areas">
+        <section
+          className="mesh-squads__pane mesh-squads__area mesh-squads__area--overview"
+          data-testid="squad-overview-pane"
+        >
+          <h2>{t('squads.detail.overview')}</h2>
+          {squad.description !== null && squad.description !== '' ? (
+            <p className="mesh-squads__overview-description">{squad.description}</p>
+          ) : null}
+          <dl className="mesh-squads__facts">
+            <dt>{t('squads.filters.status')}</dt>
+            <dd>
+              <StatusDot
+                tone={squad.status === 'active' ? 'success' : 'neutral'}
+                label={t(`squads.status.${squad.status}`)}
+              />
+            </dd>
+            <dt>{t('squads.kind')}</dt>
+            <dd>{t(`squads.kind.${squad.kind}`)}</dd>
+            <dt>{t('squads.role.leader')}</dt>
+            <dd className="mesh-squads__identity" data-testid="squad-overview-leader">
+              {squad.primary_leader !== null ? (
+                <>
+                  <Icon
+                    name={squad.primary_leader.member_type === 'agent' ? 'agent' : 'user'}
+                    size={16}
+                  />
+                  <span>{squad.primary_leader.name}</span>
+                </>
+              ) : (
+                t('squads.task.unassigned')
+              )}
+            </dd>
+            <dt>{t('squads.members')}</dt>
+            <dd>{t('squads.memberCount', { count: squad.member_count })}</dd>
+            <dt>{t('squads.tasks')}</dt>
+            <dd>{t('squads.taskCount', { count: squad.active_task_count })}</dd>
+          </dl>
+        </section>
 
-      <section className="mesh-squads__pane" data-testid="squad-tasks-pane">
-        <h2>{t('squads.detail.tasks')}</h2>
-        {tasks.length === 0 ? (
-          <p className="mesh-squads__pane-empty">{t('squads.detail.noTasks')}</p>
-        ) : (
-          <ul className="mesh-squads__tasks">
-            {tasks.map((task) => (
-              <li key={task.id} className="mesh-squads__task" data-testid={`squad-task-${task.id}`}>
-                <Link to={`/squads/${squad.id}/tasks/${task.id}`} className="mesh-squads__task-link">
-                  {task.title_snapshot ?? task.id}
-                </Link>
-                <StatusDot
-                  tone={TASK_STATUS_TONE[task.status]}
-                  label={t(`squads.task.status.${task.status}`)}
-                />
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <MembersPane
+          workspace={workspace}
+          squad={squad}
+          members={members}
+          onRoleChanged={handleRoleChanged}
+          onRemoved={handleRemoved}
+          onAdded={refreshMembers}
+        />
+
+        <section
+          className="mesh-squads__pane mesh-squads__area mesh-squads__area--plan"
+          data-testid="squad-plan-pane"
+        >
+          <div className="mesh-squads__pane-head">
+            <h2>{t('squads.task.subtasks')}</h2>
+            <span className="mesh-squads__identity" data-testid="squad-plan-leader">
+              {squad.primary_leader !== null ? (
+                <>
+                  <Icon
+                    name={squad.primary_leader.member_type === 'agent' ? 'agent' : 'user'}
+                    size={16}
+                  />
+                  <span>{squad.primary_leader.name}</span>
+                </>
+              ) : (
+                t('squads.task.unassigned')
+              )}
+            </span>
+          </div>
+          {squad.instructions !== null && squad.instructions !== '' ? (
+            <div className="mesh-squads__plan-instructions">
+              <strong>{t('squads.instructions')}</strong>
+              <p>{squad.instructions}</p>
+            </div>
+          ) : null}
+          <dl className="mesh-squads__facts mesh-squads__facts--compact">
+            <dt>{t('squads.requirePlanApproval')}</dt>
+            <dd>{t(squad.require_plan_approval ? 'common.yes' : 'common.no')}</dd>
+            <dt>{t('squads.maxDecomposeDepth')}</dt>
+            <dd>{squad.max_decompose_depth}</dd>
+            <dt>{t('squads.leaderMode')}</dt>
+            <dd>{t(`squads.leaderMode.${squad.leader_mode}`)}</dd>
+          </dl>
+        </section>
+
+        <section
+          className="mesh-squads__pane mesh-squads__area mesh-squads__area--tasks"
+          data-testid="squad-tasks-pane"
+        >
+          <h2>{t('squads.detail.tasks')}</h2>
+          {tasks.length === 0 ? (
+            <p className="mesh-squads__pane-empty">{t('squads.detail.noTasks')}</p>
+          ) : (
+            <ul className="mesh-squads__tasks">
+              {tasks.map((task) => (
+                <li
+                  key={task.id}
+                  className="mesh-squads__task"
+                  data-testid={`squad-task-${task.id}`}
+                >
+                  <div className="mesh-squads__task-primary">
+                    <Link
+                      to={`/squads/${squad.id}/tasks/${task.id}`}
+                      className="mesh-squads__task-link"
+                    >
+                      {task.title_snapshot ?? task.id}
+                    </Link>
+                    <StatusDot
+                      tone={TASK_STATUS_TONE[task.status]}
+                      label={t(`squads.task.status.${task.status}`)}
+                    />
+                  </div>
+                  <div className="mesh-squads__task-signals">
+                    <span
+                      className="mesh-squads__identity"
+                      data-testid={`squad-task-assignee-${task.id}`}
+                    >
+                      {task.assignee !== null ? (
+                        <>
+                          <Icon
+                            name={task.assignee.member_type === 'agent' ? 'agent' : 'user'}
+                            size={16}
+                          />
+                          <span>{task.assignee.name}</span>
+                        </>
+                      ) : (
+                        t('squads.task.unassigned')
+                      )}
+                    </span>
+                    {task.stage !== null ? (
+                      <span>
+                        {t('squads.task.stage')} {task.stage}
+                      </span>
+                    ) : null}
+                    {task.blocked_by.length > 0 ? (
+                      <span className="mesh-squads__task-blocked">
+                        {t('squads.task.waitingOn', {
+                          count: task.blocked_by.length,
+                          names: task.blocked_by.join(', '),
+                        })}
+                      </span>
+                    ) : null}
+                    {task.failure_reason !== null && task.failure_reason !== '' ? (
+                      <span className="mesh-squads__task-blocked">{task.failure_reason}</span>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
 
       <section className="mesh-squads__pane" data-testid="squad-activity-pane">
         <div className="mesh-squads__pane-head">
@@ -585,7 +742,11 @@ export function SquadDetailPage(): React.JSX.Element {
         ) : (
           <ul className="mesh-squads__activity">
             {visibleActivity.map((entry) => (
-              <li key={entry.id} className="mesh-squads__activity-item" data-testid={`squad-activity-${entry.id}`}>
+              <li
+                key={entry.id}
+                className="mesh-squads__activity-item"
+                data-testid={`squad-activity-${entry.id}`}
+              >
                 <span className="mesh-squads__activity-action">
                   {t(`squads.activity.action.${entry.action}`)}
                 </span>

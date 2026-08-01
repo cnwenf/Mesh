@@ -10,6 +10,11 @@ describe('ErrorState(异常态矩阵 retry 行)', () => {
     expect(screen.getByText('The server returned an error.')).toBeInTheDocument();
   });
 
+  it('页面级错误可选择 h1 标题语义', () => {
+    render(<ErrorState title="Failed to load" titleElement="h1" />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Failed to load' })).toBeInTheDocument();
+  });
+
   it('onRetry + retryLabel → 重试按钮,点击回调', async () => {
     const onRetry = vi.fn();
     const user = userEvent.setup();

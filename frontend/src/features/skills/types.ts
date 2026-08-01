@@ -19,10 +19,11 @@ export type ImportStatus =
   | 'failed'
   | 'rejected';
 
+export type CapabilityPermission = 'read_only' | 'write' | 'confirm_required';
+
 /** 能力声明:纯字符串 key 或 {capability, permission} 对象(声明层混合格式)。 */
 export type CapabilityDeclaration =
-  | string
-  | { readonly capability: string; readonly permission?: 'read_only' | 'write' | 'confirm_required' };
+  string | { readonly capability: string; readonly permission?: CapabilityPermission };
 
 export interface SkillSummary {
   readonly id: string;

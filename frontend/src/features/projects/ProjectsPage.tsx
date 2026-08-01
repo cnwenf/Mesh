@@ -7,7 +7,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, getToken } from '../../api';
-import { Button, EmptyState, ErrorState, Select, Skeleton, useToast } from '../../design';
+import {
+  Button,
+  DataView,
+  EmptyState,
+  ErrorState,
+  Icon,
+  Select,
+  Skeleton,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
@@ -16,6 +25,7 @@ import type { Membership } from '../members/types';
 import { EmptyFolder } from '../onboarding/illustrations';
 import { listProjects, workspaceProjectsChannel } from './api';
 import { CreateProjectDialog } from './CreateProjectDialog';
+import { safeProjectColor } from './color';
 import { HealthUpdateDialog } from './HealthUpdateDialog';
 import { applyProjectListFrame } from './realtime';
 import type { ProjectStatus, ProjectSummary } from './types';
@@ -26,11 +36,7 @@ import './projects.css';
 const PAGE_LIMIT = 20;
 const STATUS_ALL = 'all';
 
-function matchesListFilters(
-  project: ProjectSummary,
-  status: string,
-  archived: boolean,
-): boolean {
+function matchesListFilters(project: ProjectSummary, status: string, archived: boolean): boolean {
   if (project.archived !== archived) return false;
   if (status !== STATUS_ALL && project.status !== status) return false;
   return true;
@@ -46,41 +52,45 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
   const { project, onHealthClick } = props;
   const total = project.done_issues + project.open_issues;
   const progressTitle = t('projects.card.progress', { done: project.done_issues, total });
+  const projectColor = safeProjectColor(project.color);
   return (
-    <Link
-      to={`/projects/${project.id}`}
-      className="mesh-projects__card"
-      data-testid={`project-card-${project.id}`}
-    >
+    <li className="mesh-projects__card" data-testid={`project-card-${project.id}`}>
       <div className="mesh-projects__card-head">
-        {project.color !== null ? (
-          <span
-            className="mesh-projects__color-swatch"
-            data-testid={`project-color-${project.id}`}
-            style={{ background: project.color }}
-            aria-hidden="true"
-          />
-        ) : null}
-        {project.icon !== null ? (
-          <span className="mesh-projects__icon" data-testid={`project-icon-${project.id}`} aria-hidden="true">
-            {project.icon}
-          </span>
-        ) : null}
-        <span className="mesh-projects__card-name">{project.name}</span>
-        <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
+        <span className="mesh-projects__card-identity">
+          {projectColor !== null ? (
+            <span
+              className="mesh-projects__color-swatch"
+              data-testid={`project-color-${project.id}`}
+              style={{ backgroundColor: projectColor }}
+              aria-hidden="true"
+            />
+          ) : null}
+          {project.icon !== null ? (
+            <span
+              className="mesh-projects__icon"
+              data-testid={`project-icon-${project.id}`}
+              aria-hidden="true"
+            >
+              {project.icon}
+            </span>
+          ) : null}
+          <Link to={`/projects/${project.id}`} className="mesh-projects__card-name">
+            {project.name}
+          </Link>
+        </span>
+        <span className="mesh-projects__card-badges">
+          <StatusBadge status={project.status} label={t(`projects.status.${project.status}`)} />
+          {project.archived ? (
+            <span className="mesh-projects__archive-badge">{t('projects.filter.archived')}</span>
+          ) : null}
+        </span>
       </div>
       <div className="mesh-projects__card-meta">
-        {/* §4.2 健康度灯可点击:阻止卡片导航,打开页面级更新对话框 */}
-        <span
-          role="presentation"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onHealthClick(project);
-          }}
-        >
-          <HealthIndicator health={project.health} />
-        </span>
+        <HealthIndicator
+          health={project.health}
+          updateLabel={t('projects.detail.updateStatus')}
+          onClick={() => onHealthClick(project)}
+        />
         {project.lead !== null ? (
           <AvatarInitial name={project.lead.name} accessibleName={project.lead.name} />
         ) : null}
@@ -91,7 +101,7 @@ function ProjectCard(props: ProjectCardProps): React.JSX.Element {
         ) : null}
       </div>
       <ProgressBar progress={project.progress} title={progressTitle} />
-    </Link>
+    </li>
   );
 }
 
@@ -106,6 +116,7 @@ export function ProjectsPage(): React.JSX.Element {
   const statusFilter = searchParams.get('status') ?? STATUS_ALL;
   const showArchived = searchParams.get('archived') === 'true';
   const mineOnly = searchParams.get('mine') === 'true';
+  const viewMode = searchParams.get('view') === 'grid' ? 'grid' : 'list';
 
   const [workspace, setWorkspace] = useState<Membership | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -203,93 +214,88 @@ export function ProjectsPage(): React.JSX.Element {
 
   return (
     <main className="mesh-projects">
-      <div className="mesh-projects__header">
-        <h1 className="mesh-projects__title">{t('projects.title')}</h1>
-        {workspace !== null ? (
-          <Button
-            variant="primary"
-            data-testid="new-project-button"
-            onClick={() => setCreateOpen(true)}
-          >
-            {t('projects.new')}
-          </Button>
-        ) : null}
-      </div>
-
-      <div className="mesh-projects__toolbar" role="group" aria-label={t('projects.filterLabel')}>
-        <Select
-          label={t('projects.filter.status')}
-          value={statusFilter}
-          data-testid="projects-status-filter"
-          onChange={(event) =>
-            updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
-          }
-        >
-          <option value={STATUS_ALL}>{t('projects.status.all')}</option>
-          {PROJECT_STATUS_ORDER.map((status) => (
-            <option key={status} value={status}>
-              {t(`projects.status.${status}`)}
-            </option>
-          ))}
-        </Select>
-        <label className="mesh-projects__check">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            data-testid="projects-archived-filter"
-            onChange={(event) => updateParam('archived', event.target.checked ? 'true' : null)}
-          />
-          {t('projects.filter.archived')}
-        </label>
-        <label className="mesh-projects__check">
-          <input
-            type="checkbox"
-            checked={mineOnly}
-            data-testid="projects-mine-filter"
-            onChange={(event) => updateParam('mine', event.target.checked ? 'true' : null)}
-          />
-          {t('projects.filter.mine')}
-        </label>
-      </div>
-
-      {workspace === null && !isLoading && error === null ? (
-        <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
-      ) : error !== null ? (
-        <ErrorState
-          title={t('state.errorTitle')}
-          description={error}
-          retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)}
-        />
-      ) : isLoading ? (
-        <Skeleton loadingLabel={t('common.loading')} />
-      ) : projects.length === 0 ? (
-        <EmptyState
-          illustration={<EmptyFolder />}
-          title={t('onboarding.empty.projects.title')}
-          description={t('onboarding.empty.projects.description')}
-          action={
+      <DataView
+        title={t('projects.title')}
+        actions={
+          workspace !== null ? (
             <Button
               variant="primary"
-              data-testid="projects-empty-create"
+              data-testid="new-project-button"
               onClick={() => setCreateOpen(true)}
             >
-              {t('onboarding.empty.projects.action')}
+              {t('projects.new')}
             </Button>
-          }
-        />
-      ) : (
-        <>
-          <div className="mesh-projects__grid" data-testid="projects-grid">
-            {projects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                onHealthClick={(p) => setHealthTarget(p)}
+          ) : null
+        }
+        toolbar={
+          <div
+            className="mesh-projects__toolbar"
+            role="group"
+            aria-label={t('projects.filterLabel')}
+          >
+            <Select
+              label={t('projects.filter.status')}
+              value={statusFilter}
+              data-testid="projects-status-filter"
+              onChange={(event) =>
+                updateParam('status', event.target.value === STATUS_ALL ? null : event.target.value)
+              }
+            >
+              <option value={STATUS_ALL}>{t('projects.status.all')}</option>
+              {PROJECT_STATUS_ORDER.map((status) => (
+                <option key={status} value={status}>
+                  {t(`projects.status.${status}`)}
+                </option>
+              ))}
+            </Select>
+            <label className="mesh-projects__check">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                data-testid="projects-archived-filter"
+                onChange={(event) => updateParam('archived', event.target.checked ? 'true' : null)}
               />
-            ))}
+              {t('projects.filter.archived')}
+            </label>
+            <label className="mesh-projects__check">
+              <input
+                type="checkbox"
+                checked={mineOnly}
+                data-testid="projects-mine-filter"
+                onChange={(event) => updateParam('mine', event.target.checked ? 'true' : null)}
+              />
+              {t('projects.filter.mine')}
+            </label>
+            <div
+              className="mesh-projects__view-toggle"
+              role="group"
+              aria-label={t('board.viewLayoutLabel')}
+            >
+              <Button
+                size="sm"
+                variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                aria-pressed={viewMode === 'list'}
+                data-testid="projects-view-list"
+                onClick={() => updateParam('view', null)}
+              >
+                <Icon name="list" size={16} />
+                {t('board.layout.list')}
+              </Button>
+              <Button
+                size="sm"
+                variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+                aria-pressed={viewMode === 'grid'}
+                data-testid="projects-view-grid"
+                onClick={() => updateParam('view', 'grid')}
+              >
+                <Icon name="board" size={16} />
+                {t('board.layout.board')}
+              </Button>
+            </div>
           </div>
-          {nextCursor !== null ? (
+        }
+        footer={
+          nextCursor !== null ? (
             <Button
               variant="secondary"
               data-testid="projects-load-more"
@@ -298,9 +304,51 @@ export function ProjectsPage(): React.JSX.Element {
             >
               {t('projects.loadMore')}
             </Button>
-          ) : null}
-        </>
-      )}
+          ) : undefined
+        }
+      >
+        {workspace === null && !isLoading && error === null ? (
+          <EmptyState title={t('state.emptyTitle')} description={t('projects.noWorkspace')} />
+        ) : error !== null ? (
+          <ErrorState
+            title={t('state.errorTitle')}
+            description={error}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((key) => key + 1)}
+          />
+        ) : isLoading ? (
+          <Skeleton loadingLabel={t('common.loading')} />
+        ) : projects.length === 0 ? (
+          <EmptyState
+            illustration={<EmptyFolder />}
+            title={t('onboarding.empty.projects.title')}
+            description={t('onboarding.empty.projects.description')}
+            action={
+              <Button
+                variant="primary"
+                data-testid="projects-empty-create"
+                onClick={() => setCreateOpen(true)}
+              >
+                {t('onboarding.empty.projects.action')}
+              </Button>
+            }
+          />
+        ) : (
+          <ul
+            className={`mesh-projects__view mesh-projects__view--${viewMode}`}
+            data-testid="projects-view"
+            aria-label={t('projects.title')}
+          >
+            {projects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onHealthClick={(p) => setHealthTarget(p)}
+              />
+            ))}
+          </ul>
+        )}
+      </DataView>
 
       {workspace !== null ? (
         <CreateProjectDialog

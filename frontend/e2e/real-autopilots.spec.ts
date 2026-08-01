@@ -13,8 +13,9 @@
  * 每步截图存证 e2e/evidence/autopilots(随 PR 提交;字节互异)。
  */
 import { expect, test } from '@playwright/test';
-import { injectSession } from './helpers';
+import { dismissOnboarding, injectSession } from './helpers';
 import type { Page } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,9 +28,14 @@ const API_BASE = process.env.AUTOPILOTS_API_BASE ?? 'http://127.0.0.1:8160';
 
 const RUN_SUFFIX = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
 let WORKSPACE_ID = '';
+let WORKSPACE_SLUG = '';
 let TOKEN = '';
 
-async function api(method: string, path: string, body?: unknown): Promise<{ status: number; data: never }> {
+async function api<T = unknown>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; data: T }> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
@@ -38,31 +44,58 @@ async function api(method: string, path: string, body?: unknown): Promise<{ stat
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const json = (await resp.json().catch(() => ({}))) as { data: never };
-  if (resp.status >= 400) throw new Error(`${method} ${path} → ${resp.status}: ${JSON.stringify(json)}`);
+  const json = (await resp.json().catch(() => ({}))) as { data: T };
+  if (resp.status >= 400)
+    throw new Error(`${method} ${path} → ${resp.status}: ${JSON.stringify(json)}`);
   return { status: resp.status, data: json.data };
 }
 
 async function bootstrapWorld(): Promise<void> {
   const email = `ap-walkthrough-${RUN_SUFFIX}@example.com`;
-  const password = 'Ap-Walkthrough-12345';
+  const password = `Ap1!${randomBytes(24).toString('base64url')}`;
   const register = await fetch(`${API_BASE}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, display_name: 'AP Walkthrough' }),
   });
-  if (register.status !== 201) throw new Error(`register failed: ${register.status} ${await register.text()}`);
+  if (register.status !== 201)
+    throw new Error(`register failed: ${register.status} ${await register.text()}`);
   const login = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
   TOKEN = ((await login.json()) as { data: { access_token: string } }).data.access_token;
-  const ws = await api('POST', '/api/v1/workspaces', { name: 'AP Walkthrough WS', slug: `ap-walk-${RUN_SUFFIX}` });
-  WORKSPACE_ID = (ws.data as { id: string }).id;
+  WORKSPACE_SLUG = `ap-walk-${RUN_SUFFIX}`;
+  const ws = await api<{ id: string }>('POST', '/api/v1/workspaces', {
+    name: 'AP Walkthrough WS',
+    slug: WORKSPACE_SLUG,
+  });
+  WORKSPACE_ID = ws.data.id;
   // provision an agent member so the rule editor's executor pickers have an
   // entry (the id itself is never referenced by the walkthrough)
-  await api('POST', `/api/v1/workspaces/${WORKSPACE_ID}/agents`, { name: `ap-agent-${RUN_SUFFIX}` });
+  await api('POST', `/api/v1/workspaces/${WORKSPACE_ID}/agents`, {
+    name: `ap-agent-${RUN_SUFFIX}`,
+  });
+}
+
+async function cleanupWorld(): Promise<void> {
+  if (TOKEN === '' || WORKSPACE_ID === '') return;
+
+  // Rotation invalidates every token that could have appeared during a failed
+  // assertion while discarding the replacement plaintext without rendering it.
+  const secrets = await api<Array<{ id: string; status: string }>>(
+    'GET',
+    `/api/v1/workspaces/${WORKSPACE_ID}/webhook-secrets`,
+  );
+  for (const secret of secrets.data) {
+    if (secret.status === 'active') {
+      await api('POST', `/api/v1/workspaces/${WORKSPACE_ID}/webhook-secrets/${secret.id}/rotate`);
+    }
+  }
+  await api('DELETE', `/api/v1/workspaces/${WORKSPACE_ID}`, { confirm_slug: WORKSPACE_SLUG });
+  await api('POST', '/api/v1/auth/logout-all', {});
+  TOKEN = '';
 }
 
 async function loginReal(page: Page): Promise<void> {
@@ -72,6 +105,10 @@ async function loginReal(page: Page): Promise<void> {
 }
 
 test.describe.configure({ mode: 'serial' });
+
+test.afterAll(async () => {
+  await cleanupWorld();
+});
 
 test('autopilot 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await bootstrapWorld();
@@ -85,6 +122,7 @@ test('autopilot 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await page.goto('/autopilots');
   await expect(page.getByTestId('autopilots-page')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('autopilot-create')).toBeVisible();
+  await dismissOnboarding(page);
   await page.screenshot({ path: `${EVIDENCE_DIR}/01-autopilots-list-empty.png` });
 
   // ② 编辑器:四段折叠区块,创建定时规则(send_notification 动作)
@@ -106,7 +144,9 @@ test('autopilot 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   // 保存并启用 → 跳转详情页
   await page.getByTestId('autopilot-editor-save').click();
   await expect(page.getByTestId('autopilot-detail-name')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId('autopilot-detail-name')).toContainText(`每日进展汇总-${RUN_SUFFIX}`);
+  await expect(page.getByTestId('autopilot-detail-name')).toContainText(
+    `每日进展汇总-${RUN_SUFFIX}`,
+  );
   await page.screenshot({ path: `${EVIDENCE_DIR}/04-rule-detail.png` });
 
   // ③ 手动 test-run → 跳转运行详情页;worker executor 真实执行 send_notification
@@ -123,7 +163,9 @@ test('autopilot 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await page.goto('/autopilots');
   await page.locator('tr[data-testid^="autopilot-row-"]').first().click();
   await expect(page.getByTestId('autopilot-runs-table')).toBeVisible({ timeout: 30_000 });
-  const firstRunRow = page.locator('tr[data-testid^="autopilot-run-row-"]').first();
+  // Run history is an accessible timeline button list rather than a table row;
+  // keep the stable test id independent from the presentation element.
+  const firstRunRow = page.locator('[data-testid^="autopilot-run-row-"]').first();
   await expect(firstRunRow).toContainText(/succeeded|成功/i, { timeout: 30_000 });
   await page.screenshot({ path: `${EVIDENCE_DIR}/06-runs-timeline.png` });
 
@@ -136,7 +178,10 @@ test('autopilot 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await expect(fresh).toBeVisible({ timeout: 30_000 });
   await expect(fresh).toContainText('whk_');
   await expect(fresh).toContainText('whs_');
-  await page.screenshot({ path: `${EVIDENCE_DIR}/07-webhook-credential-once.png` });
+  await fresh.getByRole('button').click();
+  await expect(fresh).not.toBeVisible();
+  await expect(page.getByTestId('webhook-secrets-table')).toBeVisible();
+  await page.screenshot({ path: `${EVIDENCE_DIR}/07-webhook-credential-dismissed.png` });
 
   // ⑥ kill switch:二次确认暂停全部 → 规则 paused → 恢复
   await page.goto('/autopilots');

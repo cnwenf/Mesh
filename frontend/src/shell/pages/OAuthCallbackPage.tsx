@@ -80,6 +80,9 @@ export function OAuthCallbackPage(props: OAuthCallbackPageProps): React.JSX.Elem
             {t(errorKey)}
           </p>
         </div>
+        <p className="mesh-public-flow__status" data-testid="oauth-callback-impact">
+          {t('auth.oauthImpact')}
+        </p>
         <Link
           to="/login"
           className="mesh-public-flow__inline-link"

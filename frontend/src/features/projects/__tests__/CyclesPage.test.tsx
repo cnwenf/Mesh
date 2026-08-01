@@ -45,22 +45,66 @@ interface StubOptions {
   readonly cycles?: readonly ReturnType<typeof makeCycle>[];
   /** PATCH 响应附带 next_cycle(auto_roll 顺延) */
   readonly nextCycle?: ReturnType<typeof makeCycle>;
+  readonly burndown?: Record<string, unknown>;
+  readonly failBurndownOnce?: boolean;
+  readonly failListOnce?: boolean;
+  readonly nextCursor?: string;
+  readonly nextPage?: readonly ReturnType<typeof makeCycle>[];
 }
 
 function stubFetch(opts: StubOptions = {}) {
   const calls: RecordedCall[] = [];
   const cycles = opts.cycles ?? [makeCycle()];
+  let burndownFailures = opts.failBurndownOnce === true ? 1 : 0;
+  let listFailures = opts.failListOnce === true ? 1 : 0;
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, init });
     if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+    if (method === 'GET' && url.includes('/analytics/burndown')) {
+      if (burndownFailures > 0) {
+        burndownFailures -= 1;
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'burndown failed' } },
+        });
+      }
+      return fakeResponse({
+        body: {
+          data: opts.burndown ?? {
+            scope: { type: 'cycle', id: 'cyc-2' },
+            window: { start: '2026-08-01', end: '2026-08-14' },
+            metric: 'points',
+            total: 8,
+            ideal: [
+              { date: '2026-08-01', remaining: 8 },
+              { date: '2026-08-14', remaining: 0 },
+            ],
+            actual: [
+              { date: '2026-08-01', remaining: 8 },
+              { date: '2026-08-07', remaining: 5 },
+            ],
+            meta: { scope_caliber: 'current_attribution' },
+          },
+        },
+      });
+    }
     if (method === 'GET' && url.includes('/cycles')) {
       const params = new URL(url).searchParams;
+      if (listFailures > 0) {
+        listFailures -= 1;
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'list failed' } },
+        });
+      }
+      if (params.get('cursor') !== null) {
+        return fakeResponse({ body: { data: opts.nextPage ?? [], next_cursor: null } });
+      }
       const state = params.get('state');
-      const data =
-        state === null ? cycles : cycles.filter((cycle) => cycle.state === state);
-      return fakeResponse({ body: { data, next_cursor: null } });
+      const data = state === null ? cycles : cycles.filter((cycle) => cycle.state === state);
+      return fakeResponse({ body: { data, next_cursor: opts.nextCursor ?? null } });
     }
     if (method === 'POST' && url.includes('/cycles')) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -102,6 +146,63 @@ describe('CyclesPage', () => {
     expect(within(screen.getByTestId('cycle-row-cyc-2')).getByText('Active')).toBeDefined();
   });
 
+  it('活动周期头部展示 points 燃尽摘要并按 cycle_id 请求统计', async () => {
+    const calls = stubFetch({
+      cycles: [makeCycle({ id: 'cyc-2', name: 'Sprint 11', state: 'active' })],
+    });
+    renderWithProviders(<CyclesPage />, { route: '/cycles' });
+
+    const summary = await screen.findByTestId('cycle-burndown-summary');
+    expect(within(summary).getByText('Burndown')).toBeInTheDocument();
+    expect(within(summary).getByText('Points')).toBeInTheDocument();
+    expect(await within(summary).findByText('Scope total: 8')).toBeInTheDocument();
+    expect(
+      calls.some((call) => {
+        const url = new URL(call.url);
+        return (
+          url.pathname.endsWith('/analytics/burndown') &&
+          url.searchParams.get('cycle_id') === 'cyc-2' &&
+          url.searchParams.get('metric') === 'points'
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it('燃尽请求失败后可在局部错误态重试', async () => {
+    stubFetch({
+      cycles: [makeCycle({ id: 'cyc-2', state: 'active' })],
+      failBurndownOnce: true,
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<CyclesPage />, { route: '/cycles' });
+
+    expect(await screen.findByText('An internal error occurred. Please try again.')).toBeDefined();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByText('Scope total: 8')).toBeInTheDocument();
+  });
+
+  it('列表支持游标追加并在首屏错误后重试', async () => {
+    const nextCycle = makeCycle({ id: 'cyc-next', name: 'Sprint 13' });
+    const calls = stubFetch({
+      cycles: [makeCycle()],
+      nextCursor: 'cursor-2',
+      nextPage: [nextCycle],
+    });
+    const user = userEvent.setup();
+    const first = renderWithProviders(<CyclesPage />, { route: '/cycles' });
+    await user.click(await screen.findByTestId('cycles-load-more'));
+    expect(await screen.findByTestId('cycle-row-cyc-next')).toBeInTheDocument();
+    expect(calls.some((call) => call.url.includes('cursor=cursor-2'))).toBe(true);
+    first.unmount();
+
+    stubFetch({ failListOnce: true });
+    renderWithProviders(<CyclesPage />, { route: '/cycles' });
+    expect(await screen.findByText('list failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('cycle-row-cyc-1')).toBeInTheDocument();
+  });
+
   it('filters by state via the select', async () => {
     const calls = stubFetch({
       cycles: [makeCycle(), makeCycle({ id: 'cyc-2', name: 'Sprint 11', state: 'active' })],
@@ -133,9 +234,7 @@ describe('CyclesPage', () => {
       target: { value: '2026-08-01' },
     });
     // 起止倒置:行内错误文案 + 提交禁用(不依赖点击,故无请求)
-    expect(
-      await screen.findByText('End date must be on or after the start date.'),
-    ).toBeDefined();
+    expect(await screen.findByText('End date must be on or after the start date.')).toBeDefined();
     const submit = screen.getByTestId('create-cycle-submit') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
     expect(
@@ -208,9 +307,7 @@ describe('CyclesPage', () => {
   it('renders the empty state when there are no cycles', async () => {
     stubFetch({ cycles: [] });
     renderWithProviders(<CyclesPage />, { route: '/cycles' });
-    expect(
-      await screen.findByText('No cycles match the current filters.'),
-    ).toBeDefined();
+    expect(await screen.findByText('No cycles match the current filters.')).toBeDefined();
   });
 
   it('shows the dialog error when creating a cycle fails', async () => {
@@ -219,7 +316,10 @@ describe('CyclesPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST' && url.includes('/cycles')) {
-        return fakeResponse({ status: 400, body: { error: { code: 'validation_error', message: 'x' } } });
+        return fakeResponse({
+          status: 400,
+          body: { error: { code: 'validation_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/cycles')) {
         return fakeResponse({ body: { data: [makeCycle()], next_cursor: null } });
@@ -243,7 +343,10 @@ describe('CyclesPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'PATCH' && url.includes('/cycles/')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/cycles')) {
         return fakeResponse({ body: { data: [makeCycle()], next_cursor: null } });
@@ -268,9 +371,7 @@ describe('CyclesPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', implNoWs);
     const { unmount } = renderWithProviders(<CyclesPage />, { route: '/cycles' });
-    expect(
-      await screen.findByText('You are not a member of any workspace yet.'),
-    ).toBeDefined();
+    expect(await screen.findByText('You are not a member of any workspace yet.')).toBeDefined();
     unmount();
     // auto_roll 标签
     stubFetch({ cycles: [makeCycle({ auto_roll: true })] });
@@ -282,7 +383,10 @@ describe('CyclesPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'x' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderWithProviders(<CyclesPage />, { route: '/cycles' });

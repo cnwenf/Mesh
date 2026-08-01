@@ -250,6 +250,36 @@
   font-size: 0.8rem;
 }
 
+.mesh-skills__capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mesh-skills__capability {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px var(--space-2);
+  font-size: var(--font-size-xs);
+}
+
+.mesh-skills__capability--danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+}
+
+.mesh-skills__capability--warning,
+.mesh-skills__capabilities--risky .mesh-skills__capability {
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+
 .mesh-skills-detail__installation,
 .mesh-skills-detail__lifecycle {
   display: flex;
@@ -425,6 +455,62 @@
   font-size: 0.8rem;
 }
 
+/* Agent detail: legal skill bindings + derived capability grants. */
+.mesh-skills-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.mesh-skills-agent-grid__column {
+  min-width: 0;
+}
+
+.mesh-skills-agent-grid__column > h2 {
+  margin-block-start: 0;
+}
+
+.mesh-skills__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mesh-skills-agent-grid__tools-table {
+  min-width: 24rem;
+  table-layout: fixed;
+}
+
+.mesh-skills-agent-grid__tools-table th:first-child {
+  width: 5.5rem;
+}
+
+.mesh-skills-agent-grid__tools-table th:nth-child(2) {
+  width: 8rem;
+}
+
+.mesh-skills__permission-row--danger code,
+.mesh-skills__permission-row--danger .mesh-field__label {
+  color: var(--color-danger);
+}
+
+.mesh-skills__permission-row--warning code,
+.mesh-skills__permission-row--warning .mesh-field__label {
+  color: var(--color-warn);
+}
+
+@media (max-width: 1023px) {
+  .mesh-skills-agent-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 599px) {
+  .mesh-skills__bind-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 /* 卡片: 版本/安装态/角标 (§4.1) */
 .mesh-skills__card-version,
 .mesh-skills__card-install {
@@ -478,9 +564,15 @@
   overflow-x: auto;
   font-size: 0.82rem;
 }
-.mesh-skills-detail__diff-add { color: var(--color-success); }
-.mesh-skills-detail__diff-del { color: var(--color-danger); }
-.mesh-skills-detail__diff-eq { color: var(--color-text-muted); }
+.mesh-skills-detail__diff-add {
+  color: var(--color-success);
+}
+.mesh-skills-detail__diff-del {
+  color: var(--color-danger);
+}
+.mesh-skills-detail__diff-eq {
+  color: var(--color-text-muted);
+}
 .mesh-skills-detail__diff-legend {
   font-size: 0.8rem;
   color: var(--color-text-muted);
@@ -503,8 +595,12 @@
   gap: 4px 12px;
   margin: 8px 0;
 }
-.mesh-skills__market-preview dt { color: var(--color-text-muted); }
-.mesh-skills__market-preview dd { margin: 0; }
+.mesh-skills__market-preview dt {
+  color: var(--color-text-muted);
+}
+.mesh-skills__market-preview dd {
+  margin: 0;
+}
 
 /* 当前版本标记(cycle/check 线性图标对齐;颜色仅增强,版本状态列另有文本信号) */
 .mesh-skills__current-mark {

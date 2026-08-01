@@ -5,11 +5,23 @@
  * 频道 integration.updated 重拉配置、integration.event_ingested 重拉台账(§3.6)。
  */
 import { useCallback, useEffect, useState } from 'react';
+import { useIntl } from 'react-intl';
 import { useNavigate, useParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Banner, Button, Dialog, ErrorState, Icon, Input, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Banner,
+  Button,
+  DetailLayout,
+  Dialog,
+  ErrorState,
+  Icon,
+  Input,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
-import { useT } from '../../i18n';
+import { formatDateTime, useT } from '../../i18n';
 import { useRealtimeContext } from '../../shell/AppShell';
 import { canViewSettings } from '../../workspace/permissions';
 import { activeWorkspace, fetchMe } from '../members/api';
@@ -30,7 +42,7 @@ import type { Integration } from './types';
 import { OAUTH_KINDS } from './types';
 import './integrations.css';
 
-type TabKey = 'overview' | 'bindings' | 'events';
+type TabKey = 'overview' | 'bindings' | 'events' | 'health';
 
 function newClient(): MeshApiClient {
   return new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
@@ -38,6 +50,7 @@ function newClient(): MeshApiClient {
 
 export function IntegrationDetailPage(): React.JSX.Element {
   const t = useT();
+  const intl = useIntl();
   const toast = useToast();
   const navigate = useNavigate();
   const realtime = useRealtimeContext();
@@ -160,7 +173,9 @@ export function IntegrationDetailPage(): React.JSX.Element {
       });
       setIntegration(updated);
       toast.addToast(
-        nextStatus === 'active' ? t('integrations.toast.enabled') : t('integrations.toast.disabled'),
+        nextStatus === 'active'
+          ? t('integrations.toast.enabled')
+          : t('integrations.toast.disabled'),
         { tone: 'success', closeLabel: t('common.close') },
       );
     } catch (error) {
@@ -229,7 +244,11 @@ export function IntegrationDetailPage(): React.JSX.Element {
   if (errorKey !== null) {
     return (
       <div className="mesh-integrations__page">
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')} onRetry={() => navigate('/integrations')} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => navigate('/integrations')}
+        />
       </div>
     );
   }
@@ -244,7 +263,13 @@ export function IntegrationDetailPage(): React.JSX.Element {
   const tabButton = (key: TabKey, label: string): React.JSX.Element => (
     <button
       type="button"
-      className={tab === key ? 'mesh-integrations__tab mesh-integrations__tab--active' : 'mesh-integrations__tab'}
+      role="tab"
+      aria-selected={tab === key}
+      className={
+        tab === key
+          ? 'mesh-integrations__tab mesh-integrations__tab--active'
+          : 'mesh-integrations__tab'
+      }
       onClick={() => setTab(key)}
       data-testid={`integration-tab-${key}`}
     >
@@ -254,131 +279,215 @@ export function IntegrationDetailPage(): React.JSX.Element {
 
   return (
     <div className="mesh-integrations__page" data-testid="integration-detail">
-      <div className="mesh-integrations__header">
-        <h1 className="mesh-integrations__title" data-testid="integration-detail-name">
-          <Icon name={KIND_ICON[integration.kind]} size={16} />{' '}
-          {integration.name}
-        </h1>
-        <StatusDot
-          tone={INTEGRATION_STATUS_TONE[integration.status]}
-          label={t(`integrations.status.${integration.status}`)}
-        />
-        <span data-testid="integration-health" title={integration.last_error ?? undefined}>
-          <StatusDot
-            tone={HEALTH_STATE_TONE[integration.health_state]}
-            label={t(`integrations.health.${integration.health_state}`)}
-          />
-        </span>
-      </div>
-
-      {integration.status === 'disabled' && (
-        <div className="mesh-integrations__muted" data-testid="integration-disabled-note">
-          {t('integrations.detail.disabledNote')}
-        </div>
-      )}
-
-      {integration.health_state === 'auth_failed' && (
-        <div data-testid="integration-auth-failed-banner">
-          <Banner tone="danger">
-            {t('integrations.detail.authFailed')}
-            {isAdmin && OAUTH_KINDS.has(integration.kind) && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={reauthorize}
-                data-testid="integration-reauthorize"
-              >
-                {t('integrations.actions.reauthorize')}
-              </Button>
-            )}
-          </Banner>
-          {integration.last_error !== null && (
-            <div className="mesh-integrations__muted" data-testid="integration-last-error">
-              {integration.last_error}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="mesh-integrations__tabs">
-        {tabButton('overview', t('integrations.tab.overview'))}
-        {tabButton('bindings', t('integrations.tab.bindings'))}
-        {tabButton('events', t('integrations.tab.events'))}
-      </div>
-
-      {tab === 'overview' && (
-        <div className="mesh-integrations__section" data-testid="integration-overview">
+      <DetailLayout
+        header={
           <div className="mesh-integrations__header">
-            <h3>{t('integrations.detail.configTitle')}</h3>
-            {isAdmin && (
-              <div className="mesh-integrations__toolbar">
-                <Button variant="secondary" size="sm" onClick={openEdit} data-testid="integration-edit">
-                  {t('integrations.actions.edit')}
-                </Button>
-                <Button variant="secondary" size="sm" onClick={() => void toggleStatus()} data-testid="integration-status-toggle">
-                  {integration.status === 'active'
-                    ? t('integrations.actions.disable')
-                    : t('integrations.actions.enable')}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => {
-                    setRotateSecret('');
-                    setRotateOpen(true);
-                  }}
-                  data-testid="integration-rotate"
-                >
-                  {t('integrations.detail.rotate')}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  isLoading={testing}
-                  onClick={() => void runTest()}
-                  data-testid="integration-test"
-                >
-                  {t('integrations.actions.test')}
-                </Button>
+            <h1 className="mesh-integrations__title" data-testid="integration-detail-name">
+              <Icon name={KIND_ICON[integration.kind]} size={16} /> {integration.name}
+            </h1>
+          </div>
+        }
+        summaryChips={
+          <>
+            <StatusDot
+              tone={INTEGRATION_STATUS_TONE[integration.status]}
+              label={t(`integrations.status.${integration.status}`)}
+            />
+            <span data-testid="integration-health" title={integration.last_error ?? undefined}>
+              <StatusDot
+                tone={HEALTH_STATE_TONE[integration.health_state]}
+                label={t(`integrations.health.${integration.health_state}`)}
+              />
+            </span>
+          </>
+        }
+        main={
+          <>
+            {integration.status === 'disabled' && (
+              <div className="mesh-integrations__muted" data-testid="integration-disabled-note">
+                {t('integrations.detail.disabledNote')}
               </div>
             )}
-          </div>
-          <dl className="mesh-integrations__kv">
-            <dt>{t('integrations.columns.kind')}</dt>
-            <dd>{t(`integrations.kind.${integration.kind}`)}</dd>
-            <dt>{t('integrations.detail.credential')}</dt>
-            <dd data-testid="integration-has-secret">
-              {integration.has_secret
-                ? t('integrations.detail.hasSecret')
-                : t('integrations.detail.noSecret')}
-            </dd>
-            <dt>{t('integrations.detail.configTitle')}</dt>
-            <dd>
-              <pre className="mesh-integrations__json" data-testid="integration-config">
-                {JSON.stringify(integration.config, null, 2)}
-              </pre>
-            </dd>
-          </dl>
-        </div>
-      )}
 
-      {tab === 'bindings' && membership !== null && (
-        <BindingDrawer
-          workspaceId={membership.workspace_id}
-          integrationId={integration.id}
-          integrationKind={integration.kind}
-          isAdmin={isAdmin}
-          reloadKey={tabReloadKey}
-        />
-      )}
+            {integration.health_state === 'auth_failed' && (
+              <div data-testid="integration-auth-failed-banner">
+                <Banner tone="danger">
+                  {t('integrations.detail.authFailed')}
+                  {isAdmin && OAUTH_KINDS.has(integration.kind) && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={reauthorize}
+                      data-testid="integration-reauthorize"
+                    >
+                      {t('integrations.actions.reauthorize')}
+                    </Button>
+                  )}
+                </Banner>
+                {integration.last_error !== null && (
+                  <div className="mesh-integrations__muted" data-testid="integration-last-error">
+                    {integration.last_error}
+                  </div>
+                )}
+              </div>
+            )}
 
-      {tab === 'events' && membership !== null && (
-        <EventLedger
-          workspaceId={membership.workspace_id}
-          integrationId={integration.id}
-          reloadKey={tabReloadKey}
-        />
-      )}
+            <div
+              className="mesh-integrations__tabs"
+              role="tablist"
+              aria-label={t('integrations.detail.tabsLabel')}
+              data-testid="integration-tabs"
+            >
+              {tabButton('overview', t('integrations.tab.overview'))}
+              {tabButton('bindings', t('integrations.tab.bindings'))}
+              {tabButton('events', t('integrations.tab.events'))}
+              {tabButton('health', t('integrations.tab.health'))}
+            </div>
+
+            {tab === 'overview' && (
+              <div className="mesh-integrations__section" data-testid="integration-overview">
+                <div className="mesh-integrations__header">
+                  <h3>{t('integrations.detail.configTitle')}</h3>
+                  {isAdmin && (
+                    <div className="mesh-integrations__toolbar">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={openEdit}
+                        data-testid="integration-edit"
+                      >
+                        {t('integrations.actions.edit')}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void toggleStatus()}
+                        data-testid="integration-status-toggle"
+                      >
+                        {integration.status === 'active'
+                          ? t('integrations.actions.disable')
+                          : t('integrations.actions.enable')}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setRotateSecret('');
+                          setRotateOpen(true);
+                        }}
+                        data-testid="integration-rotate"
+                      >
+                        {t('integrations.detail.rotate')}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        isLoading={testing}
+                        onClick={() => void runTest()}
+                        data-testid="integration-test"
+                      >
+                        {t('integrations.actions.test')}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                <dl className="mesh-integrations__kv">
+                  <dt>{t('integrations.columns.kind')}</dt>
+                  <dd>{t(`integrations.kind.${integration.kind}`)}</dd>
+                  <dt>{t('integrations.detail.credential')}</dt>
+                  <dd data-testid="integration-has-secret">
+                    {integration.has_secret
+                      ? t('integrations.detail.hasSecret')
+                      : t('integrations.detail.noSecret')}
+                  </dd>
+                  <dt>{t('integrations.detail.configTitle')}</dt>
+                  <dd>
+                    <pre className="mesh-integrations__json" data-testid="integration-config">
+                      {JSON.stringify(integration.config, null, 2)}
+                    </pre>
+                  </dd>
+                </dl>
+              </div>
+            )}
+
+            {tab === 'bindings' && membership !== null && (
+              <BindingDrawer
+                workspaceId={membership.workspace_id}
+                integrationId={integration.id}
+                integrationKind={integration.kind}
+                isAdmin={isAdmin}
+                reloadKey={tabReloadKey}
+              />
+            )}
+
+            {tab === 'events' && membership !== null && (
+              <EventLedger
+                workspaceId={membership.workspace_id}
+                integrationId={integration.id}
+                reloadKey={tabReloadKey}
+              />
+            )}
+
+            {tab === 'health' && (
+              <section
+                className="mesh-integrations__section"
+                data-testid="integration-health-panel"
+              >
+                <div className="mesh-integrations__header">
+                  <div>
+                    <h2 className="mesh-integrations__section-title">
+                      {t('integrations.healthPanel.title')}
+                    </h2>
+                    <p className="mesh-integrations__muted">
+                      {t('integrations.healthPanel.description')}
+                    </p>
+                  </div>
+                  {isAdmin ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      isLoading={testing}
+                      onClick={() => void runTest()}
+                      data-testid="integration-health-test"
+                    >
+                      {t('integrations.actions.test')}
+                    </Button>
+                  ) : null}
+                </div>
+                <dl className="mesh-integrations__kv">
+                  <dt>{t('integrations.healthPanel.state')}</dt>
+                  <dd>
+                    <StatusDot
+                      tone={HEALTH_STATE_TONE[integration.health_state]}
+                      label={t(`integrations.health.${integration.health_state}`)}
+                    />
+                  </dd>
+                  <dt>{t('integrations.healthPanel.lastSuccess')}</dt>
+                  <dd>
+                    {integration.last_success_at === null ? (
+                      '—'
+                    ) : (
+                      <time dateTime={integration.last_success_at}>
+                        {formatDateTime(integration.last_success_at, {
+                          locale: intl.locale,
+                          timeZone: 'UTC',
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
+                      </time>
+                    )}
+                  </dd>
+                  <dt>{t('integrations.healthPanel.lastError')}</dt>
+                  <dd>{integration.last_error ?? t('integrations.healthPanel.noError')}</dd>
+                </dl>
+                {!isAdmin ? (
+                  <p className="mesh-integrations__muted">{t('integrations.readonly')}</p>
+                ) : null}
+              </section>
+            )}
+          </>
+        }
+      />
 
       <Dialog
         open={editOpen}

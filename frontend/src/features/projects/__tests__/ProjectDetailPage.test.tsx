@@ -63,6 +63,38 @@ const UPDATE_1 = {
   created_at: '2026-07-20T10:00:00Z',
 };
 
+const ISSUE_1 = {
+  id: 'iss-1',
+  workspace_id: 'ws-1',
+  project_id: 'prj-1',
+  project: { id: 'prj-1', name: 'Apollo', key: 'APL' },
+  identifier_namespace_key: 'APL',
+  number: 7,
+  identifier: 'APL-7',
+  title: 'Prepare launch checklist',
+  description: null,
+  status: null,
+  status_id: 'status-todo',
+  state_category: 'todo',
+  priority: 'high',
+  assignee: null,
+  assignee_id: null,
+  reporter: null,
+  reporter_id: null,
+  estimate: 3,
+  estimate_unit: 'points',
+  due_date: null,
+  start_date: null,
+  milestone_id: null,
+  cycle_id: null,
+  parent_id: null,
+  position: 0,
+  completed_at: null,
+  version: 1,
+  created_at: '2026-07-01T00:00:00Z',
+  updated_at: '2026-07-01T00:00:00Z',
+};
+
 function makeProject(overrides: Record<string, unknown> = {}) {
   return {
     id: 'prj-1',
@@ -99,6 +131,7 @@ interface StubOptions {
   readonly updates?: readonly unknown[];
   readonly archiveStatus?: number;
   readonly deleteStatus?: number;
+  readonly issues?: readonly unknown[];
 }
 
 function stubFetch(opts: StubOptions = {}) {
@@ -113,6 +146,9 @@ function stubFetch(opts: StubOptions = {}) {
       return fakeResponse({
         body: { data: opts.updates ?? [UPDATE_1], next_cursor: null },
       });
+    }
+    if (method === 'GET' && url.includes('/workspaces/ws-1/issues')) {
+      return fakeResponse({ body: { data: opts.issues ?? [ISSUE_1], next_cursor: null } });
     }
     if (method === 'POST' && url.includes('/updates')) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -197,6 +233,46 @@ describe('ProjectDetailPage', () => {
     expect(screen.getByText('Active')).toBeDefined();
     expect(screen.getByText('On track')).toBeDefined();
     expect(screen.getByText('Moon landing')).toBeDefined();
+    expect(screen.getByTestId('detail-layout')).toBeInTheDocument();
+    expect(screen.getByText(/Due .+2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/date, medium/)).toBeNull();
+  });
+
+  it('项目 Issues Tab 按 project_id 懒加载密集 issue 行', async () => {
+    const calls = stubFetch();
+    renderDetail();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByTestId('tab-issues'));
+
+    expect(await screen.findByText('APL-7')).toBeInTheDocument();
+    expect(screen.getByText('Prepare launch checklist')).toBeInTheDocument();
+    expect(
+      calls.some((call) => {
+        const url = new URL(call.url);
+        return (
+          url.pathname.endsWith('/workspaces/ws-1/issues') &&
+          url.searchParams.get('project_id') === 'prj-1'
+        );
+      }),
+    ).toBe(true);
+  });
+
+  it('项目情境导入/导出对话框可打开并由关闭按钮恢复焦点流程', async () => {
+    stubFetch();
+    renderDetail();
+    const user = userEvent.setup();
+    await screen.findByTestId('project-detail-header');
+
+    await user.click(screen.getByTestId('export-project-button'));
+    expect(await screen.findByTestId('export-scope-select')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('export-scope-select')).toBeNull());
+
+    await user.click(screen.getByTestId('import-project-button'));
+    expect(await screen.findByTestId('import-file-input')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByTestId('import-file-input')).toBeNull());
   });
 
   it('shows milestones with overdue marking on the milestones tab', async () => {
@@ -319,9 +395,7 @@ describe('ProjectDetailPage', () => {
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderDetail();
-    expect(
-      await screen.findByText('You are not a member of any workspace yet.'),
-    ).toBeDefined();
+    expect(await screen.findByText('You are not a member of any workspace yet.')).toBeDefined();
   });
 
   it('shows the dialog error when posting a health update fails', async () => {
@@ -362,7 +436,10 @@ describe('ProjectDetailPage', () => {
         return fakeResponse({ body: { data: [], next_cursor: null } });
       }
       if (method !== 'GET' && url.includes('/milestones')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.match(/\/projects\/[^/]+$/)) {
         return fakeResponse({ body: { data: makeProject() } });
@@ -386,7 +463,9 @@ describe('ProjectDetailPage', () => {
     await user.click(screen.getByTestId('milestone-delete-ms-1'));
     await user.click(await screen.findByTestId('milestone-delete-confirm'));
     await waitFor(() => {
-      expect(screen.getAllByText('An internal error occurred. Please try again.').length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText('An internal error occurred. Please try again.').length,
+      ).toBeGreaterThan(0);
     });
   });
 
@@ -396,7 +475,10 @@ describe('ProjectDetailPage', () => {
       const method = init?.method ?? 'GET';
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
       if (method === 'POST' && url.includes('/updates')) {
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'x' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'x' } },
+        });
       }
       if (method === 'GET' && url.includes('/updates')) {
         return fakeResponse({ body: { data: [], next_cursor: null } });
@@ -445,6 +527,14 @@ describe('ProjectDetailPage', () => {
 
     await user.click(screen.getByTestId('health-light-button'));
     expect(await screen.findByTestId('health-update-form')).toBeDefined();
+  });
+
+  it('历史非法项目颜色 fail closed,不渲染色块', async () => {
+    stubFetch({ project: makeProject({ color: 'url(https://attacker.invalid/pixel)' }) });
+    renderDetail();
+
+    await screen.findByTestId('project-detail-header');
+    expect(screen.queryByTestId('project-color')).toBeNull();
   });
 
   it('从里程碑 Tab 点回概览 Tab 移除 tab 参数', async () => {
@@ -497,6 +587,7 @@ describe('ProjectDetailPage', () => {
     renderDetail();
     const toggle = await screen.findByTestId('archive-toggle-button');
     expect(toggle.textContent).toBe('Unarchive');
+    expect(screen.getByText('Archived')).toBeInTheDocument();
 
     await user.click(toggle);
 
@@ -516,7 +607,6 @@ describe('ProjectDetailPage', () => {
     expect(screen.queryByTestId('delete-confirm')).toBeNull();
     expect(callsTo(calls, 'DELETE', '/projects/').length).toBe(0);
   });
-
 });
 
 // ---- 实时帧合并(project:{id} 频道,§3.5/§6.7)----

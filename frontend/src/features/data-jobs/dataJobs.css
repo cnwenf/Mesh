@@ -1,6 +1,19 @@
 /* 数据管理页与导入/导出向导(仅主题令牌,无硬编码颜色)。 */
+.mesh-data-jobs__page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.mesh-data-jobs__table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .mesh-data-jobs__table {
   width: 100%;
+  min-width: 42rem;
   border-collapse: collapse;
   font-size: 0.9rem;
 }

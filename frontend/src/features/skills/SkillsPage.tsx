@@ -24,6 +24,7 @@ import { useRealtimeContext } from '../../shell/AppShell';
 import { activeWorkspace, fetchMe } from '../members/api';
 import type { Membership } from '../members/types';
 import { createSkill, listSkills, workspaceSkillsChannel } from './api';
+import { CapabilitySignals } from './CapabilitySignals';
 import { ImportWizard } from './ImportWizard';
 import type { SkillSourceType } from './types';
 import './skills.css';
@@ -94,10 +95,16 @@ export function SkillsPage(): React.JSX.Element {
     const unsubscribe = realtime.client.onFrame((frame) => {
       if (String(frame.channel) !== channel) return;
       if (frame.event === 'skill.approval_required') {
-        toast.addToast(t('skills.approvalRequiredToast'), { tone: 'info', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.approvalRequiredToast'), {
+          tone: 'info',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
       if (frame.event === 'skill.update_available') {
-        toast.addToast(t('skills.updateAvailableToast'), { tone: 'info', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.updateAvailableToast'), {
+          tone: 'info',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
       setReloadKey((k) => k + 1);
     });
@@ -172,7 +179,11 @@ export function SkillsPage(): React.JSX.Element {
           </Select>
           {canManage ? (
             <>
-              <Button variant="secondary" onClick={() => setImportOpen(true)} data-testid="skills-import-open">
+              <Button
+                variant="secondary"
+                onClick={() => setImportOpen(true)}
+                data-testid="skills-import-open"
+              >
                 {t('skills.importButton')}
               </Button>
               <Button onClick={() => setCreateOpen(true)} data-testid="skills-create-open">
@@ -180,7 +191,11 @@ export function SkillsPage(): React.JSX.Element {
               </Button>
             </>
           ) : null}
-          <Link className="mesh-skills__market-link" to="/skills/marketplace" data-testid="skills-market-link">
+          <Link
+            className="mesh-skills__market-link"
+            to="/skills/marketplace"
+            data-testid="skills-market-link"
+          >
             {t('skills.marketplaceLink')}
           </Link>
         </div>
@@ -202,11 +217,6 @@ export function SkillsPage(): React.JSX.Element {
                     <Icon name={TRUST_BADGES[skill.source_type ?? 'user'] ?? 'user'} size={16} />
                   </span>
                   {skill.name}
-                  {skill.has_scripts ? (
-                    <span className="mesh-skills__script-flag" title={t('skills.hasScripts')}>
-                      <Icon name="warning" size={16} />
-                    </span>
-                  ) : null}
                   {skill.install_status === 'updated_available' ? (
                     <span className="mesh-skills__update-flag" title={t('skills.updateAvailable')}>
                       <Icon name="cycle" size={16} />
@@ -227,9 +237,23 @@ export function SkillsPage(): React.JSX.Element {
                     </span>
                   ) : null}
                   <span className="mesh-skills__card-source">
-                    {skill.source_type === null ? '' : t(`skills.source.${skill.source_type as SkillSourceType}`)}
+                    {skill.source_type === null
+                      ? ''
+                      : t(`skills.source.${skill.source_type as SkillSourceType}`)}
                   </span>
+                  {skill.trust_level !== null ? (
+                    <span className="mesh-skills__card-trust">
+                      {t(`skills.trust.${skill.trust_level}`)}
+                    </span>
+                  ) : null}
+                  {skill.has_scripts ? (
+                    <span className="mesh-skills__script-flag">
+                      <Icon name="warning" size={16} />
+                      {t('skills.hasScripts')}
+                    </span>
+                  ) : null}
                 </span>
+                <CapabilitySignals declarations={skill.required_capabilities ?? []} />
               </Link>
             </li>
           ))}
@@ -293,7 +317,10 @@ function CreateSkillDialog({
         name.trim(),
         slug,
         summary.trim(),
-        tags.split(',').map((tag) => tag.trim()).filter((tag) => tag !== ''),
+        tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter((tag) => tag !== ''),
       );
     } catch {
       setError(t('skills.createFailed'));
@@ -303,18 +330,47 @@ function CreateSkillDialog({
   };
 
   return (
-    <Dialog open title={t('skills.createTitle')} onClose={onClose} closeLabel={t('a11y.closeDialog')}>
+    <Dialog
+      open
+      title={t('skills.createTitle')}
+      onClose={onClose}
+      closeLabel={t('a11y.closeDialog')}
+    >
       <div className="mesh-skills__form">
-        <Input label={t('skills.fieldName')} value={name} onChange={(e) => setName(e.target.value)} data-testid="skill-create-name" />
-        <Input label={t('skills.fieldSlug')} value={slug} onChange={(e) => setSlug(e.target.value)} data-testid="skill-create-slug" />
-        <Input label={t('skills.fieldSummary')} value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="skill-create-summary" />
-        <Input label={t('skills.fieldTags')} value={tags} onChange={(e) => setTags(e.target.value)} data-testid="skill-create-tags" />
+        <Input
+          label={t('skills.fieldName')}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          data-testid="skill-create-name"
+        />
+        <Input
+          label={t('skills.fieldSlug')}
+          value={slug}
+          onChange={(e) => setSlug(e.target.value)}
+          data-testid="skill-create-slug"
+        />
+        <Input
+          label={t('skills.fieldSummary')}
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+          data-testid="skill-create-summary"
+        />
+        <Input
+          label={t('skills.fieldTags')}
+          value={tags}
+          onChange={(e) => setTags(e.target.value)}
+          data-testid="skill-create-tags"
+        />
         {error !== null ? <p className="mesh-skills__form-error">{error}</p> : null}
         <div className="mesh-skills__form-actions">
           <Button variant="secondary" onClick={onClose}>
             {t('skills.cancel')}
           </Button>
-          <Button onClick={() => void submit()} disabled={submitting} data-testid="skill-create-submit">
+          <Button
+            onClick={() => void submit()}
+            disabled={submitting}
+            data-testid="skill-create-submit"
+          >
             {t('skills.createSubmit')}
           </Button>
         </div>

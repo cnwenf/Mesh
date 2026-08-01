@@ -6,7 +6,7 @@
  * 非法迁移由服务端 409 拒绝(父级 toast + 重取);客户端判定的无效落点就地提示。
  */
 import { useCallback, useState } from 'react';
-import { StatusDot, useToast } from '../../design';
+import { Icon, StatusDot, useToast } from '../../design';
 import { useT } from '../../i18n';
 import type { SquadTask, SquadTaskStatus } from './types';
 
@@ -32,7 +32,9 @@ const KANBAN_COLUMNS: readonly KanbanColumnDef[] = [
 
 /** 未显式归列的中间态(拆解 / 待审批 / 聚合)回退 Pending 列,确保无卡片丢失。 */
 const COLUMN_BY_STATUS: ReadonlyMap<SquadTaskStatus, KanbanColumnKey> = new Map(
-  KANBAN_COLUMNS.flatMap((column) => column.statuses.map((status) => [status, column.key] as const)),
+  KANBAN_COLUMNS.flatMap((column) =>
+    column.statuses.map((status) => [status, column.key] as const),
+  ),
 );
 
 function columnOf(status: SquadTaskStatus): KanbanColumnKey {
@@ -63,9 +65,8 @@ interface KanbanCardProps {
 function KanbanCard(props: KanbanCardProps): React.JSX.Element {
   const t = useT();
   const { task, index } = props;
-  const blockers = task.blocked_by
-    .map((id) => index.get(id)?.title_snapshot ?? id)
-    .join(', ');
+  const blockers = task.blocked_by.map((id) => index.get(id)?.title_snapshot ?? id).join(', ');
+  const dependencies = task.depends_on.map((id) => index.get(id)?.title_snapshot ?? id).join(', ');
   return (
     <li
       className="mesh-squads__kanban-card"
@@ -77,8 +78,15 @@ function KanbanCard(props: KanbanCardProps): React.JSX.Element {
       }}
     >
       <span className="mesh-squads__kanban-card-title">{task.title_snapshot ?? task.id}</span>
-      <span className="mesh-squads__kanban-card-assignee">
-        {task.assignee !== null ? task.assignee.name : t('squads.task.unassigned')}
+      <span className="mesh-squads__kanban-card-assignee mesh-squads__identity">
+        {task.assignee !== null ? (
+          <>
+            <Icon name={task.assignee.member_type === 'agent' ? 'agent' : 'user'} size={16} />
+            <span>{task.assignee.name}</span>
+          </>
+        ) : (
+          t('squads.task.unassigned')
+        )}
       </span>
       {task.stage !== null ? (
         <span className="mesh-squads__kanban-card-stage">
@@ -86,9 +94,21 @@ function KanbanCard(props: KanbanCardProps): React.JSX.Element {
         </span>
       ) : null}
       {task.blocked_by.length > 0 ? (
-        <span className="mesh-squads__kanban-card-blocked" data-testid={`squad-kanban-blocked-${task.id}`}>
+        <span
+          className="mesh-squads__kanban-card-blocked"
+          data-testid={`squad-kanban-blocked-${task.id}`}
+        >
           {t('squads.task.waitingOn', { count: task.blocked_by.length, names: blockers })}
         </span>
+      ) : null}
+      {task.depends_on.length > 0 ? (
+        <span className="mesh-squads__kanban-card-dependencies">
+          <Icon name="link" size={16} />
+          <span>{dependencies}</span>
+        </span>
+      ) : null}
+      {task.failure_reason !== null && task.failure_reason !== '' ? (
+        <span className="mesh-squads__kanban-card-blocked">{task.failure_reason}</span>
       ) : null}
     </li>
   );
@@ -149,12 +169,17 @@ export function SquadTaskKanban(props: SquadTaskKanbanProps): React.JSX.Element 
               event.preventDefault();
               setDragOverColumn(column.key);
             }}
-            onDragLeave={() => setDragOverColumn((current) => (current === column.key ? null : current))}
+            onDragLeave={() =>
+              setDragOverColumn((current) => (current === column.key ? null : current))
+            }
             onDrop={(event) => handleDrop(event, column.key)}
           >
             <h3 className="mesh-squads__kanban-col-head">
               <StatusDot tone={column.tone} label={t(`squads.kanban.column.${column.key}`)} />
-              <span className="mesh-squads__kanban-col-count" data-testid={`squad-kanban-count-${column.key}`}>
+              <span
+                className="mesh-squads__kanban-col-count"
+                data-testid={`squad-kanban-count-${column.key}`}
+              >
                 {cards.length}
               </span>
             </h3>

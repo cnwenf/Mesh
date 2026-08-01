@@ -11,9 +11,10 @@
  * 每步截图存证 e2e/evidence/runtimes(随 PR 提交;字节互异,见 check-evidence-unique.mjs)。
  */
 import { expect, test } from '@playwright/test';
-import { injectSession } from './helpers';
+import { dismissOnboarding, injectSession } from './helpers';
 import type { Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -23,39 +24,103 @@ const EVIDENCE_DIR = process.env.RUNTIMES_EVIDENCE_DIR ?? resolve(HERE, 'evidenc
 const API_BASE = process.env.VITE_MESH_API_BASE_URL ?? 'http://127.0.0.1:8000';
 const PG_CONTAINER = 'mesh-postgres-1';
 
-const RUNTIME_ID = '22222222-2222-2222-2222-222222222201';
-const EXECUTION_ID = '33333333-3333-3333-3333-333333333301';
-const ATTEMPT_ID = '44444444-4444-4444-4444-444444444401';
+// Per-run IDs keep repeated real-stack runs tenant-correct; fixed IDs would
+// retain the first run's workspace through ON CONFLICT and disappear here.
+const RUNTIME_ID = randomUUID();
+const EXECUTION_ID = randomUUID();
+const ATTEMPT_ID = randomUUID();
 
 // Real register + workspace over the API (the REST surface accepts real JWTs
 // only — dev tokens are gateway-only): the walkthrough then runs as a real
 // workspace owner. IDs are per-run so the spec is repeatable on a fresh DB.
 const RUN_SUFFIX = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`;
 let WORKSPACE_ID = '';
+let WORKSPACE_SLUG = '';
 let TOKEN = '';
+let WIZARD_RUNTIME_ID = '';
+let PENDING_ACTIVATION_CODE = '';
+let SEEDED_RUNTIME = false;
+
+async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(TOKEN === '' ? {} : { Authorization: `Bearer ${TOKEN}` }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  const payload = text === '' ? {} : (JSON.parse(text) as { data?: T });
+  if (!response.ok) throw new Error(`${method} ${path} → ${response.status}: ${text}`);
+  return (payload.data ?? payload) as T;
+}
 
 async function bootstrapWorld(): Promise<void> {
   const email = `rt-walkthrough-${RUN_SUFFIX}@example.com`;
-  const password = 'Rt-Walkthrough-12345';
+  const password = `Rt1!${randomBytes(24).toString('base64url')}`;
   const register = await fetch(`${API_BASE}/api/v1/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, display_name: 'RT Walkthrough' }),
   });
-  if (register.status !== 201) throw new Error(`register failed: ${register.status} ${await register.text()}`);
+  if (register.status !== 201)
+    throw new Error(`register failed: ${register.status} ${await register.text()}`);
   const login = await fetch(`${API_BASE}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   });
   TOKEN = ((await login.json()) as { data: { access_token: string } }).data.access_token;
-  const ws = await fetch(`${API_BASE}/api/v1/workspaces`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
-    body: JSON.stringify({ name: 'RT Walkthrough WS', slug: `rt-walk-${RUN_SUFFIX}` }),
+  WORKSPACE_SLUG = `rt-walk-${RUN_SUFFIX}`;
+  const ws = await api<{ id: string }>('POST', '/api/v1/workspaces', {
+    name: 'RT Walkthrough WS',
+    slug: WORKSPACE_SLUG,
   });
-  if (ws.status !== 201) throw new Error(`workspace create failed: ${ws.status} ${await ws.text()}`);
-  WORKSPACE_ID = ((await ws.json()) as { data: { id: string } }).data.id;
+  WORKSPACE_ID = ws.id;
+}
+
+async function consumeActivationCode(code: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/daemon/runtimes:activate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      // CI runs the API on loopback behind the same trusted-proxy contract as
+      // production TLS termination; keep the daemon TLS gate enabled.
+      'X-Forwarded-Proto': 'https',
+    },
+    body: JSON.stringify({
+      activation_code: code,
+      metadata: { hostname: 'e2e-consumer', os: 'linux', capabilities: [] },
+      protocol_version: 1,
+      provider_manifest: {},
+      daemon_features: {},
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `runtime activation cleanup failed: ${response.status} ${await response.text()}`,
+    );
+  }
+  // Consume and immediately discard the one-time daemon token response.
+  await response.arrayBuffer();
+}
+
+async function cleanupWorld(): Promise<void> {
+  if (PENDING_ACTIVATION_CODE !== '') {
+    await consumeActivationCode(PENDING_ACTIVATION_CODE);
+    PENDING_ACTIVATION_CODE = '';
+  }
+  if (TOKEN === '' || WORKSPACE_ID === '') return;
+  const runtimeIds = [WIZARD_RUNTIME_ID, ...(SEEDED_RUNTIME ? [RUNTIME_ID] : [])];
+  for (const runtimeId of runtimeIds) {
+    if (runtimeId !== '') {
+      await api('DELETE', `/api/v1/workspaces/${WORKSPACE_ID}/runtimes/${runtimeId}`);
+    }
+  }
+  await api('DELETE', `/api/v1/workspaces/${WORKSPACE_ID}`, { confirm_slug: WORKSPACE_SLUG });
+  await api('POST', '/api/v1/auth/logout-all', {});
+  TOKEN = '';
 }
 
 function psql(sql: string): string {
@@ -65,13 +130,22 @@ function psql(sql: string): string {
     return execFileSync(
       'psql',
       [
-        '-h', host,
-        '-p', process.env.RUNTIMES_PG_PORT ?? '5432',
-        '-U', process.env.RUNTIMES_PG_USER ?? 'mesh',
-        '-d', process.env.RUNTIMES_PG_DATABASE ?? 'mesh',
-        '-tAc', sql,
+        '-h',
+        host,
+        '-p',
+        process.env.RUNTIMES_PG_PORT ?? '5432',
+        '-U',
+        process.env.RUNTIMES_PG_USER ?? 'mesh',
+        '-d',
+        process.env.RUNTIMES_PG_DATABASE ?? 'mesh',
+        '-tAc',
+        sql,
       ],
-      { encoding: 'utf8', timeout: 30_000, env: { ...process.env, PGPASSWORD: process.env.RUNTIMES_PG_PASSWORD ?? 'mesh' } },
+      {
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: { ...process.env, PGPASSWORD: process.env.RUNTIMES_PG_PASSWORD ?? 'mesh' },
+      },
     );
   }
   return execFileSync(
@@ -117,6 +191,7 @@ VALUES
    now(), now(), 'agent/${EXECUTION_ID}/a1')
 ON CONFLICT (id) DO UPDATE SET status = 'running', started_at = now();
 `);
+  SEEDED_RUNTIME = true;
 }
 
 async function loginReal(page: Page): Promise<void> {
@@ -126,6 +201,10 @@ async function loginReal(page: Page): Promise<void> {
 }
 
 test.describe.configure({ mode: 'serial' });
+
+test.afterAll(async () => {
+  await cleanupWorld();
+});
 
 test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await bootstrapWorld();
@@ -138,6 +217,7 @@ test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   // ① 列表页(自动化入口 → /runtimes)
   await page.goto('/runtimes');
   await expect(page.getByTestId('new-runtime-button')).toBeVisible({ timeout: 30_000 });
+  await dismissOnboarding(page);
   await page.screenshot({ path: `${EVIDENCE_DIR}/01-runtimes-list.png` });
 
   // ② 向导创建:基本信息 → 激活码 + 安装脚本
@@ -152,11 +232,25 @@ test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   const activationCode = page.getByTestId('runtime-wizard-activation-code');
   await expect(activationCode).toBeVisible({ timeout: 30_000 });
   await expect(activationCode).not.toHaveText(/^\s*$/);
+  PENDING_ACTIVATION_CODE = ((await activationCode.textContent()) ?? '').trim();
+  expect(PENDING_ACTIVATION_CODE).not.toBe('');
   const script = (await page.getByTestId('runtime-wizard-install-script').textContent()) ?? '';
   expect(script).toContain('sha256sum -c -');
   expect(script).toContain('--activation-file');
   expect(script).not.toMatch(/curl[^|\n]*\|\s*sh/);
-  await page.screenshot({ path: `${EVIDENCE_DIR}/03-wizard-activation-code.png` });
+  const runtimes = await api<Array<{ id: string; name: string }>>(
+    'GET',
+    `/api/v1/workspaces/${WORKSPACE_ID}/runtimes`,
+  );
+  WIZARD_RUNTIME_ID = runtimes.find((runtime) => runtime.name === 'e2e-wizard-runtime')?.id ?? '';
+  expect(WIZARD_RUNTIME_ID).not.toBe('');
+  await consumeActivationCode(PENDING_ACTIVATION_CODE);
+  PENDING_ACTIVATION_CODE = '';
+  await page.goto('/runtimes');
+  await expect(page.getByTestId(`runtime-row-${WIZARD_RUNTIME_ID}`)).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.screenshot({ path: `${EVIDENCE_DIR}/03-wizard-activation-consumed.png` });
 
   // ③ 落库一台 online runtime + running execution → 列表可见
   seedOnlineRuntimeAndExecution();
@@ -172,9 +266,7 @@ test('runtimes 模块真实走查 + 截图存证(§4)', async ({ page }) => {
   await expect(page.getByTestId('execution-detail-page')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('execution-panel-logs')).toBeVisible();
   await expect(page.getByTestId('execution-cancel-button')).toBeVisible();
-  await expect(page.getByTestId('execution-branch')).toContainText(
-    `agent/${EXECUTION_ID}/a1`,
-  );
+  await expect(page.getByTestId('execution-branch')).toContainText(`agent/${EXECUTION_ID}/a1`);
   await page.screenshot({ path: `${EVIDENCE_DIR}/05-execution-detail.png` });
 
   // 凭证 Tab:值恒 ***(§4.10 红线)——有注入凭证时才断言内容

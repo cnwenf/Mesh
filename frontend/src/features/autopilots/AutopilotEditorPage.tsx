@@ -63,6 +63,8 @@ const IANA_TIMEZONES: readonly string[] =
     : TIMEZONE_SUGGESTIONS;
 type SectionKey = 'trigger' | 'filter' | 'actions' | 'guardrails';
 
+const EDITOR_SECTION_KEYS: readonly SectionKey[] = ['trigger', 'filter', 'actions', 'guardrails'];
+
 interface EditorState {
   name: string;
   description: string;
@@ -167,9 +169,13 @@ function stateFromRule(rule: AutopilotRule): EditorState {
     timezone: typeof trigger.timezone === 'string' ? trigger.timezone : 'UTC',
     misfirePolicy: typeof trigger.misfire_policy === 'string' ? trigger.misfire_policy : 'run_once',
     oneTimeAt: typeof trigger.one_time_at === 'string' ? trigger.one_time_at : '',
-    fromStatus: Array.isArray(trigger.from_status) ? (trigger.from_status as string[]).join(', ') : '',
+    fromStatus: Array.isArray(trigger.from_status)
+      ? (trigger.from_status as string[]).join(', ')
+      : '',
     toStatus: Array.isArray(trigger.to_status) ? (trigger.to_status as string[]).join(', ') : '',
-    watchFields: Array.isArray(trigger.watch_fields) ? (trigger.watch_fields as string[]).join(', ') : '',
+    watchFields: Array.isArray(trigger.watch_fields)
+      ? (trigger.watch_fields as string[]).join(', ')
+      : '',
     targetAgentIds: Array.isArray(trigger.target_agent_ids)
       ? (trigger.target_agent_ids as string[]).join(', ')
       : '',
@@ -177,7 +183,9 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? (trigger.scope_project_ids as string[]).join(', ')
       : '',
     secretId: typeof trigger.secret_id === 'string' ? trigger.secret_id : '',
-    eventTypes: Array.isArray(trigger.event_types) ? (trigger.event_types as string[]).join(', ') : '',
+    eventTypes: Array.isArray(trigger.event_types)
+      ? (trigger.event_types as string[]).join(', ')
+      : '',
     filterProjectIds: Array.isArray(filter.project_ids)
       ? (filter.project_ids as string[]).join(', ')
       : '',
@@ -185,7 +193,9 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? (filter.actor_ids as string[]).join(', ')
       : '',
     filterLabels: Array.isArray(filter.labels) ? (filter.labels as string[]).join(', ') : '',
-    filterPriorities: Array.isArray(filter.priorities) ? (filter.priorities as string[]).join(', ') : '',
+    filterPriorities: Array.isArray(filter.priorities)
+      ? (filter.priorities as string[]).join(', ')
+      : '',
     filterKeywordInclude: Array.isArray(filter.keyword_include)
       ? (filter.keyword_include as string[]).join(', ')
       : '',
@@ -196,7 +206,10 @@ function stateFromRule(rule: AutopilotRule): EditorState {
       ? JSON.stringify(filter.payload_match, null, 2)
       : '',
     executorAgentId: rule.executor_agent_id ?? '',
-    actions: rule.action_config.length > 0 ? [...rule.action_config] : [{ type: 'run_agent_prompt', prompt: '' }],
+    actions:
+      rule.action_config.length > 0
+        ? [...rule.action_config]
+        : [{ type: 'run_agent_prompt', prompt: '' }],
     maxRetries: rule.max_retries,
     retryBackoff: rule.retry_backoff,
     retryBaseSeconds: rule.retry_base_seconds,
@@ -233,16 +246,19 @@ function buildPayload(state: EditorState): Record<string, unknown> {
     triggerConfig.misfire_policy = state.misfirePolicy;
     if (state.oneTimeAt) triggerConfig.one_time_at = state.oneTimeAt;
   } else if (state.triggerType === 'issue_status_changed') {
-    if (splitCsv(state.fromStatus).length > 0) triggerConfig.from_status = splitCsv(state.fromStatus);
+    if (splitCsv(state.fromStatus).length > 0)
+      triggerConfig.from_status = splitCsv(state.fromStatus);
     if (splitCsv(state.toStatus).length > 0) triggerConfig.to_status = splitCsv(state.toStatus);
   } else if (state.triggerType === 'issue_field_changed') {
-    if (splitCsv(state.watchFields).length > 0) triggerConfig.watch_fields = splitCsv(state.watchFields);
+    if (splitCsv(state.watchFields).length > 0)
+      triggerConfig.watch_fields = splitCsv(state.watchFields);
   } else if (state.triggerType === 'agent_mentioned') {
     if (splitCsv(state.targetAgentIds).length > 0)
       triggerConfig.target_agent_ids = splitCsv(state.targetAgentIds);
   } else if (state.triggerType === 'webhook_received') {
     triggerConfig.secret_id = state.secretId;
-    if (splitCsv(state.eventTypes).length > 0) triggerConfig.event_types = splitCsv(state.eventTypes);
+    if (splitCsv(state.eventTypes).length > 0)
+      triggerConfig.event_types = splitCsv(state.eventTypes);
   }
   // §2.6 event triggers: optional project scope
   if (state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received') {
@@ -351,7 +367,7 @@ function EditorSection(props: SectionProps): React.JSX.Element {
         data-testid={`${testId}-toggle`}
       >
         <span>{title}</span>
-        <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} />
       </button>
       {expanded && (
         <div className="mesh-autopilots__section-body" data-testid={`${testId}-body`}>
@@ -455,17 +471,14 @@ export function AutopilotEditorPage(): React.JSX.Element {
     };
   }, [membership, state.triggerType, state.cron, state.timezone]);
 
-  const updateAction = useCallback(
-    (index: number, partial: Partial<ActionConfigItem>) => {
-      setState((prev) => ({
-        ...prev,
-        actions: prev.actions.map((action, actionIndex) =>
-          actionIndex === index ? { ...action, ...partial } : action,
-        ),
-      }));
-    },
-    [],
-  );
+  const updateAction = useCallback((index: number, partial: Partial<ActionConfigItem>) => {
+    setState((prev) => ({
+      ...prev,
+      actions: prev.actions.map((action, actionIndex) =>
+        actionIndex === index ? { ...action, ...partial } : action,
+      ),
+    }));
+  }, []);
 
   const moveAction = useCallback((index: number, direction: -1 | 1) => {
     setState((prev) => {
@@ -480,7 +493,7 @@ export function AutopilotEditorPage(): React.JSX.Element {
 
   const save = useCallback(
     async (activate: boolean) => {
-        setSaving(true);
+      setSaving(true);
       try {
         const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const payload = buildPayload(state);
@@ -488,7 +501,9 @@ export function AutopilotEditorPage(): React.JSX.Element {
           await patchAutopilot(client, membership!.workspace_id, autopilotId, payload);
           if (!activate) {
             // 保存草稿语义:暂停规则
-            await patchAutopilot(client, membership!.workspace_id, autopilotId, { status: 'paused' });
+            await patchAutopilot(client, membership!.workspace_id, autopilotId, {
+              status: 'paused',
+            });
           }
         } else {
           const created = await createAutopilot(client, membership!.workspace_id, {
@@ -533,20 +548,24 @@ export function AutopilotEditorPage(): React.JSX.Element {
   if (errorKey !== null) {
     return (
       <div className="mesh-autopilots__page">
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => navigate('/autopilots')} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => navigate('/autopilots')}
+        />
       </div>
     );
   }
 
   const nameValid = state.name.trim().length > 0 && state.name.trim().length <= 200;
   const scheduleValid =
-    state.triggerType !== 'schedule' || (state.cron.trim().length > 0 && state.timezone.trim().length > 0);
+    state.triggerType !== 'schedule' ||
+    (state.cron.trim().length > 0 && state.timezone.trim().length > 0);
   const webhookValid = state.triggerType !== 'webhook_received' || state.secretId.length > 0;
   const promptActionsValid = state.actions.every(
     (action) =>
       action.type !== 'run_agent_prompt' ||
-      ((action.executor_agent_id ?? state.executorAgentId) ?? '').length > 0,
+      (action.executor_agent_id ?? state.executorAgentId ?? '').length > 0,
   );
   const canSave = nameValid && scheduleValid && webhookValid && promptActionsValid;
 
@@ -563,591 +582,697 @@ export function AutopilotEditorPage(): React.JSX.Element {
           <option key={zone} value={zone} />
         ))}
       </datalist>
-      <div className="mesh-autopilots__editor">
-        <div className="mesh-autopilots__field">
-          <Input
-            label={t('autopilots.editor.nameLabel')}
-            value={state.name}
-            onChange={(event) => patch({ name: event.target.value })}
-            error={state.name.length > 0 && !nameValid ? t('autopilots.editor.nameInvalid') : undefined}
-            data-testid="autopilot-editor-name"
-          />
-        </div>
-        <div className="mesh-autopilots__field">
-          <Input
-            label={t('autopilots.editor.descriptionLabel')}
-            value={state.description}
-            onChange={(event) => patch({ description: event.target.value })}
-            data-testid="autopilot-editor-description"
-          />
-        </div>
-
-        <EditorSection
-          title={t('autopilots.editor.sectionTrigger')}
-          sectionKey="trigger"
-          open={openSection}
-          onToggle={(key) => setOpenSection(key === openSection ? null : key)}
-          testId="autopilot-section-trigger"
-        >
-          <Select
-            label={t('autopilots.editor.triggerTypeLabel')}
-            value={state.triggerType}
-            onChange={(event) => patch({ triggerType: event.target.value as AutopilotTriggerType })}
-            data-testid="autopilot-editor-trigger-type"
-          >
-            {TRIGGER_TYPES.map((triggerType) => (
-              <option key={triggerType} value={triggerType}>
-                {t(`autopilots.trigger.${triggerType}`)}
-              </option>
-            ))}
-          </Select>
-
-          {state.triggerType === 'schedule' && (
-            <>
-              <div className="mesh-autopilots__field-grid">
-                <Select
-                  label={t('autopilots.editor.cronPresetLabel')}
-                  data-testid="autopilot-editor-cron-preset"
-                  value={CRON_PRESETS.find((preset) => preset.cron === state.cron)?.key ?? 'custom'}
-                  onChange={(event) => {
-                    const preset = CRON_PRESETS.find((item) => item.key === event.target.value);
-                    if (preset) patch({ cron: preset.cron });
-                  }}
-                >
-                  <option value="custom">{t('autopilots.editor.preset.custom')}</option>
-                  {CRON_PRESETS.map((preset) => (
-                    <option key={preset.key} value={preset.key}>
-                      {t(`autopilots.editor.preset.${preset.key}`)}
-                    </option>
-                  ))}
-                </Select>
-                <Input
-                  label={t('autopilots.editor.cronLabel')}
-                  value={state.cron}
-                  onChange={(event) => patch({ cron: event.target.value })}
-                  hint={t('autopilots.editor.cronHint')}
-                  data-testid="autopilot-editor-cron"
-                />
-                <Input
-                  label={t('autopilots.editor.timezoneLabel')}
-                  value={state.timezone}
-                  onChange={(event) => patch({ timezone: event.target.value })}
-                  hint={t('autopilots.editor.timezoneHint')}
-                  list="autopilot-tz-list"
-                  data-testid="autopilot-editor-timezone"
-                />
-                <Select
-                  label={t('autopilots.editor.misfireLabel')}
-                  data-testid="autopilot-editor-misfire"
-                  value={state.misfirePolicy}
-                  onChange={(event) => patch({ misfirePolicy: event.target.value })}
-                >
-                  <option value="run_once">{t('autopilots.misfire.run_once')}</option>
-                  <option value="skip">{t('autopilots.misfire.skip')}</option>
-                  <option value="run_all">{t('autopilots.misfire.run_all')}</option>
-                </Select>
-                <Input
-                  label={t('autopilots.editor.oneTimeLabel')}
-                  data-testid="autopilot-editor-one-time"
-                  value={state.oneTimeAt}
-                  onChange={(event) => patch({ oneTimeAt: event.target.value })}
-                  hint={t('autopilots.editor.oneTimeHint')}
-                />
-              </div>
-              {preview !== null && (
-                <div className="mesh-autopilots__preview" data-testid="autopilot-schedule-preview">
-                  {t('autopilots.editor.previewTitle')}
-                  <ul>
-                    {preview.map((moment) => (
-                      <li key={moment}>{new Date(moment).toLocaleString()}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {previewInvalid && (
-                <div className="mesh-autopilots__preview" data-testid="autopilot-preview-invalid">
-                  {t('autopilots.editor.previewInvalid')}
-                </div>
-              )}
-            </>
-          )}
-
-          {state.triggerType === 'issue_status_changed' && (
-            <div className="mesh-autopilots__field-grid">
-              <Input
-                label={t('autopilots.editor.fromStatusLabel')}
-                  data-testid="autopilot-editor-from-status"
-                value={state.fromStatus}
-                onChange={(event) => patch({ fromStatus: event.target.value })}
-                hint={t('autopilots.editor.csvHint')}
-              />
-              <Input
-                label={t('autopilots.editor.toStatusLabel')}
-                  data-testid="autopilot-editor-to-status"
-                value={state.toStatus}
-                onChange={(event) => patch({ toStatus: event.target.value })}
-                hint={t('autopilots.editor.csvHint')}
-              />
-            </div>
-          )}
-
-          {state.triggerType === 'issue_field_changed' && (
+      <div className="mesh-autopilots__editor-layout">
+        <div className="mesh-autopilots__editor">
+          <div className="mesh-autopilots__field">
             <Input
-              label={t('autopilots.editor.watchFieldsLabel')}
-                  data-testid="autopilot-editor-watch-fields"
-              value={state.watchFields}
-              onChange={(event) => patch({ watchFields: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-          )}
-
-          {state.triggerType === 'agent_mentioned' && (
-            <Input
-              label={t('autopilots.editor.targetAgentsLabel')}
-                  data-testid="autopilot-editor-target-agents"
-              value={state.targetAgentIds}
-              onChange={(event) => patch({ targetAgentIds: event.target.value })}
-              hint={t('autopilots.editor.targetAgentsHint')}
-            />
-          )}
-
-          {state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received' && (
-            <Input
-              label={t('autopilots.editor.scopeProjectsLabel')}
-              data-testid="autopilot-editor-scope-projects"
-              value={state.scopeProjectIds}
-              onChange={(event) => patch({ scopeProjectIds: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-          )}
-
-          {state.triggerType === 'webhook_received' && (
-            <div className="mesh-autopilots__field-grid">
-              <Select
-                label={t('autopilots.editor.secretLabel')}
-                value={state.secretId}
-                onChange={(event) => patch({ secretId: event.target.value })}
-                data-testid="autopilot-editor-secret"
-              >
-                <option value="">{t('autopilots.editor.secretPlaceholder')}</option>
-                {secrets.map((secret) => (
-                  <option key={secret.id} value={secret.id}>
-                    {secret.label} ({secret.status})
-                  </option>
-                ))}
-              </Select>
-              <Input
-                label={t('autopilots.editor.eventTypesLabel')}
-                  data-testid="autopilot-editor-event-types"
-                value={state.eventTypes}
-                onChange={(event) => patch({ eventTypes: event.target.value })}
-                hint={t('autopilots.editor.csvHint')}
-              />
-            </div>
-          )}
-        </EditorSection>
-
-        <EditorSection
-          title={t('autopilots.editor.sectionFilter')}
-          sectionKey="filter"
-          open={openSection}
-          onToggle={(key) => setOpenSection(key === openSection ? null : key)}
-          testId="autopilot-section-filter"
-        >
-          <div className="mesh-autopilots__field-grid">
-            <Input
-              label={t('autopilots.editor.filterProjects')}
-              data-testid="autopilot-editor-filter-projects"
-              value={state.filterProjectIds}
-              onChange={(event) => patch({ filterProjectIds: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-            <Input
-              label={t('autopilots.editor.filterActors')}
-              data-testid="autopilot-editor-filter-actors"
-              value={state.filterActorIds}
-              onChange={(event) => patch({ filterActorIds: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-            <Input
-              label={t('autopilots.editor.filterLabels')}
-                  data-testid="autopilot-editor-filter-labels"
-              value={state.filterLabels}
-              onChange={(event) => patch({ filterLabels: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-            <Input
-              label={t('autopilots.editor.filterPriorities')}
-                  data-testid="autopilot-editor-filter-priorities"
-              value={state.filterPriorities}
-              onChange={(event) => patch({ filterPriorities: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-            <Input
-              label={t('autopilots.editor.keywordInclude')}
-                  data-testid="autopilot-editor-keyword-include"
-              value={state.filterKeywordInclude}
-              onChange={(event) => patch({ filterKeywordInclude: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
-            />
-            <Input
-              label={t('autopilots.editor.keywordExclude')}
-                  data-testid="autopilot-editor-keyword-exclude"
-              value={state.filterKeywordExclude}
-              onChange={(event) => patch({ filterKeywordExclude: event.target.value })}
-              hint={t('autopilots.editor.csvHint')}
+              label={t('autopilots.editor.nameLabel')}
+              value={state.name}
+              onChange={(event) => patch({ name: event.target.value })}
+              error={
+                state.name.length > 0 && !nameValid ? t('autopilots.editor.nameInvalid') : undefined
+              }
+              data-testid="autopilot-editor-name"
             />
           </div>
           <div className="mesh-autopilots__field">
-            <label htmlFor="autopilot-payload-match">{t('autopilots.editor.payloadMatch')}</label>
-            <textarea
-              id="autopilot-payload-match"
-              rows={4}
-              value={state.filterPayloadMatch}
-              onChange={(event) => patch({ filterPayloadMatch: event.target.value })}
-              placeholder='[{"path": "alert.severity", "op": "in", "value": ["critical"]}]'
-              data-testid="autopilot-editor-payload-match"
+            <Input
+              label={t('autopilots.editor.descriptionLabel')}
+              value={state.description}
+              onChange={(event) => patch({ description: event.target.value })}
+              data-testid="autopilot-editor-description"
             />
           </div>
-        </EditorSection>
 
-        <EditorSection
-          title={t('autopilots.editor.sectionActions')}
-          sectionKey="actions"
-          open={openSection}
-          onToggle={(key) => setOpenSection(key === openSection ? null : key)}
-          testId="autopilot-section-actions"
-        >
-          <Select
-            label={t('autopilots.editor.executorLabel')}
-            value={state.executorAgentId}
-            onChange={(event) => patch({ executorAgentId: event.target.value })}
-            data-testid="autopilot-editor-executor"
+          <EditorSection
+            title={t('autopilots.editor.sectionTrigger')}
+            sectionKey="trigger"
+            open={openSection}
+            onToggle={(key) => setOpenSection(key === openSection ? null : key)}
+            testId="autopilot-section-trigger"
           >
-            <option value="">{t('autopilots.editor.executorPlaceholder')}</option>
-            {agents.map((agent) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}
-              </option>
-            ))}
-          </Select>
-          {state.actions.map((action, index) => (
-            <div className="mesh-autopilots__action-item" key={index} data-testid={`autopilot-action-${index}`}>
-              <div className="mesh-autopilots__action-head">
-                <Select
-                  label={t('autopilots.editor.actionTypeLabel')}
-                  value={action.type}
-                  data-testid={`autopilot-action-type-${index}`}
-                  onChange={(event) =>
-                    updateAction(index, { type: event.target.value as ActionKind })
-                  }
-                >
-                  {ACTION_KINDS.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {t(`autopilots.action.${kind}`)}
-                    </option>
-                  ))}
-                </Select>
-                <div className="mesh-autopilots__actions">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => moveAction(index, -1)}
-                    aria-label={t('autopilots.editor.moveUp')}
-                  >
-                    ↑
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => moveAction(index, 1)}
-                    aria-label={t('autopilots.editor.moveDown')}
-                  >
-                    ↓
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setState((prev) => ({
-                        ...prev,
-                        actions: prev.actions.filter((_, filtered) => filtered !== index),
-                      }))
-                    }
-                    disabled={state.actions.length <= 1}
-                    aria-label={t('autopilots.editor.removeAction')}
-                  >
-                    <Icon name="close" size={16} />
-                  </Button>
-                </div>
-              </div>
-              {action.type === 'run_agent_prompt' && (
-                <>
+            <Select
+              label={t('autopilots.editor.triggerTypeLabel')}
+              value={state.triggerType}
+              onChange={(event) =>
+                patch({ triggerType: event.target.value as AutopilotTriggerType })
+              }
+              data-testid="autopilot-editor-trigger-type"
+            >
+              {TRIGGER_TYPES.map((triggerType) => (
+                <option key={triggerType} value={triggerType}>
+                  {t(`autopilots.trigger.${triggerType}`)}
+                </option>
+              ))}
+            </Select>
+
+            {state.triggerType === 'schedule' && (
+              <>
+                <div className="mesh-autopilots__field-grid">
                   <Select
-                    label={t('autopilots.editor.actionExecutorLabel')}
-                  data-testid="autopilot-editor-action-executor"
-                    value={action.executor_agent_id ?? state.executorAgentId}
-                    onChange={(event) => updateAction(index, { executor_agent_id: event.target.value })}
+                    label={t('autopilots.editor.cronPresetLabel')}
+                    data-testid="autopilot-editor-cron-preset"
+                    value={
+                      CRON_PRESETS.find((preset) => preset.cron === state.cron)?.key ?? 'custom'
+                    }
+                    onChange={(event) => {
+                      const preset = CRON_PRESETS.find((item) => item.key === event.target.value);
+                      if (preset) patch({ cron: preset.cron });
+                    }}
                   >
-                    <option value="">{t('autopilots.editor.executorPlaceholder')}</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name}
+                    <option value="custom">{t('autopilots.editor.preset.custom')}</option>
+                    {CRON_PRESETS.map((preset) => (
+                      <option key={preset.key} value={preset.key}>
+                        {t(`autopilots.editor.preset.${preset.key}`)}
                       </option>
                     ))}
                   </Select>
-                  <div className="mesh-autopilots__field">
-                    <label htmlFor={`autopilot-prompt-${index}`}>{t('autopilots.editor.promptLabel')}</label>
-                    <div
-                      className="mesh-autopilots__template-vars"
-                      data-testid={`autopilot-template-vars-${index}`}
-                    >
-                      <span>{t('autopilots.editor.templateVarsLabel')}</span>
-                      {TEMPLATE_VARIABLES.map((variable) => (
-                        <button
-                          key={variable}
-                          type="button"
-                          className="mesh-autopilots__template-var"
-                          onClick={() =>
-                            updateAction(index, {
-                              prompt: `${action.prompt ?? ''}${variable}`,
-                            })
-                          }
-                        >
-                          {variable}
-                        </button>
-                      ))}
-                    </div>
-                    <textarea
-                      id={`autopilot-prompt-${index}`}
-                      rows={3}
-                      value={action.prompt ?? ''}
-                      onChange={(event) => updateAction(index, { prompt: event.target.value })}
-                      data-testid={`autopilot-action-prompt-${index}`}
-                    />
-                  </div>
-                </>
-              )}
-              {action.type === 'add_comment' && (
-                <Input
-                  label={t('autopilots.editor.commentLabel')}
-                  data-testid="autopilot-editor-action-content"
-                  value={action.content ?? ''}
-                  onChange={(event) => updateAction(index, { content: event.target.value })}
-                />
-              )}
-              {action.type === 'send_notification' && (
-                <Input
-                  label={t('autopilots.editor.notificationLabel')}
-                  data-testid="autopilot-editor-action-message"
-                  value={action.message ?? ''}
-                  onChange={(event) => updateAction(index, { message: event.target.value })}
-                />
-              )}
-              {action.type === 'create_issue' && (
-                <div className="mesh-autopilots__field-grid">
                   <Input
-                    label={t('autopilots.editor.issueTitleLabel')}
-                  data-testid="autopilot-editor-action-issue-title"
-                    value={action.title ?? ''}
-                    onChange={(event) => updateAction(index, { title: event.target.value })}
+                    label={t('autopilots.editor.cronLabel')}
+                    value={state.cron}
+                    onChange={(event) => patch({ cron: event.target.value })}
+                    hint={t('autopilots.editor.cronHint')}
+                    data-testid="autopilot-editor-cron"
                   />
                   <Input
-                    label={t('autopilots.editor.issueDescriptionLabel')}
-                  data-testid="autopilot-editor-action-issue-description"
-                    value={action.description ?? ''}
-                    onChange={(event) => updateAction(index, { description: event.target.value })}
-                  />
-                </div>
-              )}
-              {action.type === 'http_request' && (
-                <div className="mesh-autopilots__field-grid">
-                  <Input
-                    label={t('autopilots.editor.urlLabel')}
-                  data-testid="autopilot-editor-action-url"
-                    value={action.url ?? ''}
-                    onChange={(event) => updateAction(index, { url: event.target.value })}
-                    hint={t('autopilots.editor.urlHint')}
+                    label={t('autopilots.editor.timezoneLabel')}
+                    value={state.timezone}
+                    onChange={(event) => patch({ timezone: event.target.value })}
+                    hint={t('autopilots.editor.timezoneHint')}
+                    list="autopilot-tz-list"
+                    data-testid="autopilot-editor-timezone"
                   />
                   <Select
-                    label={t('autopilots.editor.methodLabel')}
-                  data-testid="autopilot-editor-action-method"
-                    value={action.method ?? 'POST'}
-                    onChange={(event) => updateAction(index, { method: event.target.value })}
+                    label={t('autopilots.editor.misfireLabel')}
+                    data-testid="autopilot-editor-misfire"
+                    value={state.misfirePolicy}
+                    onChange={(event) => patch({ misfirePolicy: event.target.value })}
                   >
-                    <option value="POST">POST</option>
-                    <option value="PUT">PUT</option>
-                    <option value="PATCH">PATCH</option>
+                    <option value="run_once">{t('autopilots.misfire.run_once')}</option>
+                    <option value="skip">{t('autopilots.misfire.skip')}</option>
+                    <option value="run_all">{t('autopilots.misfire.run_all')}</option>
                   </Select>
+                  <Input
+                    label={t('autopilots.editor.oneTimeLabel')}
+                    data-testid="autopilot-editor-one-time"
+                    value={state.oneTimeAt}
+                    onChange={(event) => patch({ oneTimeAt: event.target.value })}
+                    hint={t('autopilots.editor.oneTimeHint')}
+                  />
                 </div>
-              )}
+                {preview !== null && (
+                  <div
+                    className="mesh-autopilots__preview"
+                    data-testid="autopilot-schedule-preview"
+                  >
+                    {t('autopilots.editor.previewTitle')}
+                    <ul>
+                      {preview.map((moment) => (
+                        <li key={moment}>{new Date(moment).toLocaleString()}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {previewInvalid && (
+                  <div className="mesh-autopilots__preview" data-testid="autopilot-preview-invalid">
+                    {t('autopilots.editor.previewInvalid')}
+                  </div>
+                )}
+              </>
+            )}
+
+            {state.triggerType === 'issue_status_changed' && (
+              <div className="mesh-autopilots__field-grid">
+                <Input
+                  label={t('autopilots.editor.fromStatusLabel')}
+                  data-testid="autopilot-editor-from-status"
+                  value={state.fromStatus}
+                  onChange={(event) => patch({ fromStatus: event.target.value })}
+                  hint={t('autopilots.editor.csvHint')}
+                />
+                <Input
+                  label={t('autopilots.editor.toStatusLabel')}
+                  data-testid="autopilot-editor-to-status"
+                  value={state.toStatus}
+                  onChange={(event) => patch({ toStatus: event.target.value })}
+                  hint={t('autopilots.editor.csvHint')}
+                />
+              </div>
+            )}
+
+            {state.triggerType === 'issue_field_changed' && (
+              <Input
+                label={t('autopilots.editor.watchFieldsLabel')}
+                data-testid="autopilot-editor-watch-fields"
+                value={state.watchFields}
+                onChange={(event) => patch({ watchFields: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+            )}
+
+            {state.triggerType === 'agent_mentioned' && (
+              <Input
+                label={t('autopilots.editor.targetAgentsLabel')}
+                data-testid="autopilot-editor-target-agents"
+                value={state.targetAgentIds}
+                onChange={(event) => patch({ targetAgentIds: event.target.value })}
+                hint={t('autopilots.editor.targetAgentsHint')}
+              />
+            )}
+
+            {state.triggerType !== 'schedule' && state.triggerType !== 'webhook_received' && (
+              <Input
+                label={t('autopilots.editor.scopeProjectsLabel')}
+                data-testid="autopilot-editor-scope-projects"
+                value={state.scopeProjectIds}
+                onChange={(event) => patch({ scopeProjectIds: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+            )}
+
+            {state.triggerType === 'webhook_received' && (
+              <div className="mesh-autopilots__field-grid">
+                <Select
+                  label={t('autopilots.editor.secretLabel')}
+                  value={state.secretId}
+                  onChange={(event) => patch({ secretId: event.target.value })}
+                  data-testid="autopilot-editor-secret"
+                >
+                  <option value="">{t('autopilots.editor.secretPlaceholder')}</option>
+                  {secrets.map((secret) => (
+                    <option key={secret.id} value={secret.id}>
+                      {secret.label} ({secret.status})
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  label={t('autopilots.editor.eventTypesLabel')}
+                  data-testid="autopilot-editor-event-types"
+                  value={state.eventTypes}
+                  onChange={(event) => patch({ eventTypes: event.target.value })}
+                  hint={t('autopilots.editor.csvHint')}
+                />
+              </div>
+            )}
+          </EditorSection>
+
+          <EditorSection
+            title={t('autopilots.editor.sectionFilter')}
+            sectionKey="filter"
+            open={openSection}
+            onToggle={(key) => setOpenSection(key === openSection ? null : key)}
+            testId="autopilot-section-filter"
+          >
+            <div className="mesh-autopilots__field-grid">
+              <Input
+                label={t('autopilots.editor.filterProjects')}
+                data-testid="autopilot-editor-filter-projects"
+                value={state.filterProjectIds}
+                onChange={(event) => patch({ filterProjectIds: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+              <Input
+                label={t('autopilots.editor.filterActors')}
+                data-testid="autopilot-editor-filter-actors"
+                value={state.filterActorIds}
+                onChange={(event) => patch({ filterActorIds: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+              <Input
+                label={t('autopilots.editor.filterLabels')}
+                data-testid="autopilot-editor-filter-labels"
+                value={state.filterLabels}
+                onChange={(event) => patch({ filterLabels: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+              <Input
+                label={t('autopilots.editor.filterPriorities')}
+                data-testid="autopilot-editor-filter-priorities"
+                value={state.filterPriorities}
+                onChange={(event) => patch({ filterPriorities: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+              <Input
+                label={t('autopilots.editor.keywordInclude')}
+                data-testid="autopilot-editor-keyword-include"
+                value={state.filterKeywordInclude}
+                onChange={(event) => patch({ filterKeywordInclude: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
+              <Input
+                label={t('autopilots.editor.keywordExclude')}
+                data-testid="autopilot-editor-keyword-exclude"
+                value={state.filterKeywordExclude}
+                onChange={(event) => patch({ filterKeywordExclude: event.target.value })}
+                hint={t('autopilots.editor.csvHint')}
+              />
             </div>
-          ))}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() =>
-              setState((prev) => ({
-                ...prev,
-                actions: [...prev.actions, { type: 'send_notification', message: '' }],
-              }))
-            }
-            data-testid="autopilot-add-action"
-          >
-            {t('autopilots.editor.addAction')}
-          </Button>
-        </EditorSection>
+            <div className="mesh-autopilots__field">
+              <label htmlFor="autopilot-payload-match">{t('autopilots.editor.payloadMatch')}</label>
+              <textarea
+                id="autopilot-payload-match"
+                rows={4}
+                value={state.filterPayloadMatch}
+                onChange={(event) => patch({ filterPayloadMatch: event.target.value })}
+                placeholder='[{"path": "alert.severity", "op": "in", "value": ["critical"]}]'
+                data-testid="autopilot-editor-payload-match"
+              />
+            </div>
+          </EditorSection>
 
-        <EditorSection
-          title={t('autopilots.editor.sectionGuardrails')}
-          sectionKey="guardrails"
-          open={openSection}
-          onToggle={(key) => setOpenSection(key === openSection ? null : key)}
-          testId="autopilot-section-guardrails"
-        >
-          <div className="mesh-autopilots__field-grid">
-            <Input
-              label={t('autopilots.editor.rateLimitLabel')}
-                  data-testid="autopilot-editor-rate-max"
-              type="number"
-              min={0}
-              value={state.rateLimitMax}
-              onChange={(event) => patch({ rateLimitMax: Number(event.target.value) })}
-            />
-            <Input
-              label={t('autopilots.editor.rateWindowLabel')}
-                  data-testid="autopilot-editor-rate-window"
-              type="number"
-              min={1}
-              value={state.rateLimitWindowSeconds}
-              onChange={(event) => patch({ rateLimitWindowSeconds: Number(event.target.value) })}
-            />
+          <EditorSection
+            title={t('autopilots.editor.sectionActions')}
+            sectionKey="actions"
+            open={openSection}
+            onToggle={(key) => setOpenSection(key === openSection ? null : key)}
+            testId="autopilot-section-actions"
+          >
             <Select
-              label={t('autopilots.editor.overflowLabel')}
-              data-testid="autopilot-editor-overflow"
-              value={state.rateLimitOverflow}
-              onChange={(event) =>
-                patch({ rateLimitOverflow: event.target.value as 'drop' | 'queue' | 'alert_only' })
+              label={t('autopilots.editor.executorLabel')}
+              value={state.executorAgentId}
+              onChange={(event) => patch({ executorAgentId: event.target.value })}
+              data-testid="autopilot-editor-executor"
+            >
+              <option value="">{t('autopilots.editor.executorPlaceholder')}</option>
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                </option>
+              ))}
+            </Select>
+            {state.actions.map((action, index) => (
+              <div
+                className="mesh-autopilots__action-item"
+                key={index}
+                data-testid={`autopilot-action-${index}`}
+              >
+                <div className="mesh-autopilots__action-head">
+                  <Select
+                    label={t('autopilots.editor.actionTypeLabel')}
+                    value={action.type}
+                    data-testid={`autopilot-action-type-${index}`}
+                    onChange={(event) =>
+                      updateAction(index, { type: event.target.value as ActionKind })
+                    }
+                  >
+                    {ACTION_KINDS.map((kind) => (
+                      <option key={kind} value={kind}>
+                        {t(`autopilots.action.${kind}`)}
+                      </option>
+                    ))}
+                  </Select>
+                  <div className="mesh-autopilots__actions">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => moveAction(index, -1)}
+                      aria-label={t('autopilots.editor.moveUp')}
+                    >
+                      <Icon name="arrow-up" size={16} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => moveAction(index, 1)}
+                      aria-label={t('autopilots.editor.moveDown')}
+                    >
+                      <Icon name="arrow-down" size={16} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setState((prev) => ({
+                          ...prev,
+                          actions: prev.actions.filter((_, filtered) => filtered !== index),
+                        }))
+                      }
+                      disabled={state.actions.length <= 1}
+                      aria-label={t('autopilots.editor.removeAction')}
+                    >
+                      <Icon name="close" size={16} />
+                    </Button>
+                  </div>
+                </div>
+                {action.type === 'run_agent_prompt' && (
+                  <>
+                    <Select
+                      label={t('autopilots.editor.actionExecutorLabel')}
+                      data-testid="autopilot-editor-action-executor"
+                      value={action.executor_agent_id ?? state.executorAgentId}
+                      onChange={(event) =>
+                        updateAction(index, { executor_agent_id: event.target.value })
+                      }
+                    >
+                      <option value="">{t('autopilots.editor.executorPlaceholder')}</option>
+                      {agents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <div className="mesh-autopilots__field">
+                      <label htmlFor={`autopilot-prompt-${index}`}>
+                        {t('autopilots.editor.promptLabel')}
+                      </label>
+                      <div
+                        className="mesh-autopilots__template-vars"
+                        data-testid={`autopilot-template-vars-${index}`}
+                      >
+                        <span>{t('autopilots.editor.templateVarsLabel')}</span>
+                        {TEMPLATE_VARIABLES.map((variable) => (
+                          <button
+                            key={variable}
+                            type="button"
+                            className="mesh-autopilots__template-var"
+                            onClick={() =>
+                              updateAction(index, {
+                                prompt: `${action.prompt ?? ''}${variable}`,
+                              })
+                            }
+                          >
+                            {variable}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        id={`autopilot-prompt-${index}`}
+                        rows={3}
+                        value={action.prompt ?? ''}
+                        onChange={(event) => updateAction(index, { prompt: event.target.value })}
+                        data-testid={`autopilot-action-prompt-${index}`}
+                      />
+                    </div>
+                  </>
+                )}
+                {action.type === 'add_comment' && (
+                  <Input
+                    label={t('autopilots.editor.commentLabel')}
+                    data-testid="autopilot-editor-action-content"
+                    value={action.content ?? ''}
+                    onChange={(event) => updateAction(index, { content: event.target.value })}
+                  />
+                )}
+                {action.type === 'send_notification' && (
+                  <Input
+                    label={t('autopilots.editor.notificationLabel')}
+                    data-testid="autopilot-editor-action-message"
+                    value={action.message ?? ''}
+                    onChange={(event) => updateAction(index, { message: event.target.value })}
+                  />
+                )}
+                {action.type === 'create_issue' && (
+                  <div className="mesh-autopilots__field-grid">
+                    <Input
+                      label={t('autopilots.editor.issueTitleLabel')}
+                      data-testid="autopilot-editor-action-issue-title"
+                      value={action.title ?? ''}
+                      onChange={(event) => updateAction(index, { title: event.target.value })}
+                    />
+                    <Input
+                      label={t('autopilots.editor.issueDescriptionLabel')}
+                      data-testid="autopilot-editor-action-issue-description"
+                      value={action.description ?? ''}
+                      onChange={(event) => updateAction(index, { description: event.target.value })}
+                    />
+                  </div>
+                )}
+                {action.type === 'http_request' && (
+                  <div className="mesh-autopilots__field-grid">
+                    <Input
+                      label={t('autopilots.editor.urlLabel')}
+                      data-testid="autopilot-editor-action-url"
+                      value={action.url ?? ''}
+                      onChange={(event) => updateAction(index, { url: event.target.value })}
+                      hint={t('autopilots.editor.urlHint')}
+                    />
+                    <Select
+                      label={t('autopilots.editor.methodLabel')}
+                      data-testid="autopilot-editor-action-method"
+                      value={action.method ?? 'POST'}
+                      onChange={(event) => updateAction(index, { method: event.target.value })}
+                    >
+                      <option value="POST">POST</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            ))}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() =>
+                setState((prev) => ({
+                  ...prev,
+                  actions: [...prev.actions, { type: 'send_notification', message: '' }],
+                }))
               }
+              data-testid="autopilot-add-action"
             >
-              <option value="drop">{t('autopilots.editor.overflow.drop')}</option>
-              <option value="queue">{t('autopilots.editor.overflow.queue')}</option>
-              <option value="alert_only">{t('autopilots.editor.overflow.alert_only')}</option>
-            </Select>
-            <Input
-              label={t('autopilots.editor.concurrencyLabel')}
-                  data-testid="autopilot-editor-concurrency"
-              type="number"
-              min={1}
-              value={state.concurrencyLimit}
-              onChange={(event) => patch({ concurrencyLimit: Number(event.target.value) })}
-            />
-            <Input
-              label={t('autopilots.editor.dedupWindowLabel')}
-                  data-testid="autopilot-editor-dedup-window"
-              type="number"
-              min={0}
-              value={state.dedupWindowSeconds}
-              onChange={(event) => patch({ dedupWindowSeconds: Number(event.target.value) })}
-            />
-            <Input
-              label={t('autopilots.editor.maxRetriesLabel')}
-                  data-testid="autopilot-editor-max-retries"
-              type="number"
-              min={0}
-              value={state.maxRetries}
-              onChange={(event) => patch({ maxRetries: Number(event.target.value) })}
-            />
-            <Select
-              label={t('autopilots.editor.backoffLabel')}
-                  data-testid="autopilot-editor-backoff"
-              value={state.retryBackoff}
-              onChange={(event) => patch({ retryBackoff: event.target.value as RetryBackoff })}
-            >
-              <option value="exponential">{t('autopilots.backoff.exponential')}</option>
-              <option value="linear">{t('autopilots.backoff.linear')}</option>
-              <option value="fixed">{t('autopilots.backoff.fixed')}</option>
-            </Select>
-            <Input
-              label={t('autopilots.editor.dailyRunBudgetLabel')}
-                  data-testid="autopilot-editor-daily-runs"
-              type="number"
-              min={0}
-              value={state.dailyRunBudget}
-              onChange={(event) => patch({ dailyRunBudget: Number(event.target.value) })}
-            />
-            <Input
-              label={t('autopilots.editor.dailyTokenBudgetLabel')}
-                  data-testid="autopilot-editor-daily-tokens"
-              type="number"
-              min={0}
-              value={state.dailyTokenBudget}
-              onChange={(event) => patch({ dailyTokenBudget: Number(event.target.value) })}
-            />
-            <Input
-              label={t('autopilots.editor.cascadeDepthLabel')}
-                  data-testid="autopilot-editor-cascade"
-              type="number"
-              min={0}
-              value={state.cascadeMaxDepth}
-              onChange={(event) => patch({ cascadeMaxDepth: Number(event.target.value) })}
-            />
-          </div>
-          <label>
-            <input
-              type="checkbox"
-              checked={state.requireApproval}
-              onChange={(event) => patch({ requireApproval: event.target.checked })}
-              data-testid="autopilot-editor-require-approval"
-            />{' '}
-            {t('autopilots.editor.requireApprovalLabel')}
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={state.agentLoopDetection}
-              onChange={(event) => patch({ agentLoopDetection: event.target.checked })}
-              data-testid="autopilot-editor-loop-detection"
-            />{' '}
-            {t('autopilots.editor.loopDetectionLabel')}
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={state.approvalHttp}
-              onChange={(event) => patch({ approvalHttp: event.target.checked })}
-              data-testid="autopilot-editor-approval-http"
-            />{' '}
-            {t('autopilots.editor.approvalHttpLabel')}
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={state.approvalCreateIssue}
-              onChange={(event) => patch({ approvalCreateIssue: event.target.checked })}
-              data-testid="autopilot-editor-approval-create-issue"
-            />{' '}
-            {t('autopilots.editor.approvalCreateIssueLabel')}
-          </label>
-        </EditorSection>
+              {t('autopilots.editor.addAction')}
+            </Button>
+          </EditorSection>
 
-        <div className="mesh-autopilots__footer">
-          <Button variant="ghost" onClick={() => navigate('/autopilots')}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="secondary" isLoading={saving} disabled={!canSave} onClick={() => void save(false)}>
-            {t('autopilots.editor.saveDraft')}
-          </Button>
-          <Button
-            variant="primary"
-            isLoading={saving}
-            disabled={!canSave}
-            onClick={() => void save(true)}
-            data-testid="autopilot-editor-save"
+          <EditorSection
+            title={t('autopilots.editor.sectionGuardrails')}
+            sectionKey="guardrails"
+            open={openSection}
+            onToggle={(key) => setOpenSection(key === openSection ? null : key)}
+            testId="autopilot-section-guardrails"
           >
-            {t('autopilots.editor.saveActivate')}
-          </Button>
+            <div className="mesh-autopilots__field-grid">
+              <Input
+                label={t('autopilots.editor.rateLimitLabel')}
+                data-testid="autopilot-editor-rate-max"
+                type="number"
+                min={0}
+                value={state.rateLimitMax}
+                onChange={(event) => patch({ rateLimitMax: Number(event.target.value) })}
+              />
+              <Input
+                label={t('autopilots.editor.rateWindowLabel')}
+                data-testid="autopilot-editor-rate-window"
+                type="number"
+                min={1}
+                value={state.rateLimitWindowSeconds}
+                onChange={(event) => patch({ rateLimitWindowSeconds: Number(event.target.value) })}
+              />
+              <Select
+                label={t('autopilots.editor.overflowLabel')}
+                data-testid="autopilot-editor-overflow"
+                value={state.rateLimitOverflow}
+                onChange={(event) =>
+                  patch({
+                    rateLimitOverflow: event.target.value as 'drop' | 'queue' | 'alert_only',
+                  })
+                }
+              >
+                <option value="drop">{t('autopilots.editor.overflow.drop')}</option>
+                <option value="queue">{t('autopilots.editor.overflow.queue')}</option>
+                <option value="alert_only">{t('autopilots.editor.overflow.alert_only')}</option>
+              </Select>
+              <Input
+                label={t('autopilots.editor.concurrencyLabel')}
+                data-testid="autopilot-editor-concurrency"
+                type="number"
+                min={1}
+                value={state.concurrencyLimit}
+                onChange={(event) => patch({ concurrencyLimit: Number(event.target.value) })}
+              />
+              <Input
+                label={t('autopilots.editor.dedupWindowLabel')}
+                data-testid="autopilot-editor-dedup-window"
+                type="number"
+                min={0}
+                value={state.dedupWindowSeconds}
+                onChange={(event) => patch({ dedupWindowSeconds: Number(event.target.value) })}
+              />
+              <Input
+                label={t('autopilots.editor.maxRetriesLabel')}
+                data-testid="autopilot-editor-max-retries"
+                type="number"
+                min={0}
+                value={state.maxRetries}
+                onChange={(event) => patch({ maxRetries: Number(event.target.value) })}
+              />
+              <Select
+                label={t('autopilots.editor.backoffLabel')}
+                data-testid="autopilot-editor-backoff"
+                value={state.retryBackoff}
+                onChange={(event) => patch({ retryBackoff: event.target.value as RetryBackoff })}
+              >
+                <option value="exponential">{t('autopilots.backoff.exponential')}</option>
+                <option value="linear">{t('autopilots.backoff.linear')}</option>
+                <option value="fixed">{t('autopilots.backoff.fixed')}</option>
+              </Select>
+              <Input
+                label={t('autopilots.editor.dailyRunBudgetLabel')}
+                data-testid="autopilot-editor-daily-runs"
+                type="number"
+                min={0}
+                value={state.dailyRunBudget}
+                onChange={(event) => patch({ dailyRunBudget: Number(event.target.value) })}
+              />
+              <Input
+                label={t('autopilots.editor.dailyTokenBudgetLabel')}
+                data-testid="autopilot-editor-daily-tokens"
+                type="number"
+                min={0}
+                value={state.dailyTokenBudget}
+                onChange={(event) => patch({ dailyTokenBudget: Number(event.target.value) })}
+              />
+              <Input
+                label={t('autopilots.editor.cascadeDepthLabel')}
+                data-testid="autopilot-editor-cascade"
+                type="number"
+                min={0}
+                value={state.cascadeMaxDepth}
+                onChange={(event) => patch({ cascadeMaxDepth: Number(event.target.value) })}
+              />
+            </div>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.requireApproval}
+                onChange={(event) => patch({ requireApproval: event.target.checked })}
+                data-testid="autopilot-editor-require-approval"
+              />{' '}
+              {t('autopilots.editor.requireApprovalLabel')}
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.agentLoopDetection}
+                onChange={(event) => patch({ agentLoopDetection: event.target.checked })}
+                data-testid="autopilot-editor-loop-detection"
+              />{' '}
+              {t('autopilots.editor.loopDetectionLabel')}
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.approvalHttp}
+                onChange={(event) => patch({ approvalHttp: event.target.checked })}
+                data-testid="autopilot-editor-approval-http"
+              />{' '}
+              {t('autopilots.editor.approvalHttpLabel')}
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={state.approvalCreateIssue}
+                onChange={(event) => patch({ approvalCreateIssue: event.target.checked })}
+                data-testid="autopilot-editor-approval-create-issue"
+              />{' '}
+              {t('autopilots.editor.approvalCreateIssueLabel')}
+            </label>
+          </EditorSection>
+
+          <div className="mesh-autopilots__footer">
+            <Button variant="ghost" onClick={() => navigate('/autopilots')}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="secondary"
+              isLoading={saving}
+              disabled={!canSave}
+              onClick={() => void save(false)}
+            >
+              {t('autopilots.editor.saveDraft')}
+            </Button>
+            <Button
+              variant="primary"
+              isLoading={saving}
+              disabled={!canSave}
+              onClick={() => void save(true)}
+              data-testid="autopilot-editor-save"
+            >
+              {t('autopilots.editor.saveActivate')}
+            </Button>
+          </div>
         </div>
+
+        <aside
+          className="mesh-autopilots__editor-summary"
+          aria-label={t('autopilots.detail.configTitle')}
+          data-testid="autopilot-editor-summary"
+        >
+          <h2>{t('autopilots.detail.configTitle')}</h2>
+          <nav className="mesh-autopilots__stepper" aria-label={t('autopilots.detail.configTitle')}>
+            <ol>
+              {EDITOR_SECTION_KEYS.map((sectionKey, index) => (
+                <li key={sectionKey}>
+                  <button
+                    type="button"
+                    aria-current={openSection === sectionKey ? 'step' : undefined}
+                    data-testid={`autopilot-step-${sectionKey}`}
+                    onClick={() => setOpenSection(sectionKey)}
+                  >
+                    <span className="mesh-autopilots__step-number">{index + 1}</span>
+                    <span>
+                      {t(
+                        `autopilots.editor.section${sectionKey[0].toUpperCase()}${sectionKey.slice(1)}`,
+                      )}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </nav>
+          <dl className="mesh-autopilots__summary-list">
+            <div>
+              <dt>{t('autopilots.editor.nameLabel')}</dt>
+              <dd data-testid="autopilot-summary-name">{state.name.trim() || '—'}</dd>
+            </div>
+            <div>
+              <dt>{t('autopilots.detail.triggerConfig')}</dt>
+              <dd>{t(`autopilots.trigger.${state.triggerType}`)}</dd>
+            </div>
+            <div>
+              <dt>{t('autopilots.detail.filterConfig')}</dt>
+              <dd>
+                {[
+                  state.filterProjectIds,
+                  state.filterActorIds,
+                  state.filterLabels,
+                  state.filterPriorities,
+                  state.filterKeywordInclude,
+                  state.filterKeywordExclude,
+                ]
+                  .filter((value) => value.trim() !== '')
+                  .join(' · ') || t('autopilots.filters.all')}
+              </dd>
+            </div>
+            <div>
+              <dt>{t('autopilots.detail.actions')}</dt>
+              <dd>
+                <ol className="mesh-autopilots__summary-actions">
+                  {state.actions.map((action, index) => (
+                    <li key={`${action.type}-${index}`}>{t(`autopilots.action.${action.type}`)}</li>
+                  ))}
+                </ol>
+              </dd>
+            </div>
+            <div>
+              <dt>{t('autopilots.detail.guardrails')}</dt>
+              <dd>
+                {t('autopilots.detail.rateLimit')} {state.rateLimitMax}/
+                {state.rateLimitWindowSeconds}s{' · '}
+                {t('autopilots.detail.concurrency')} {state.concurrencyLimit}
+                {' · '}
+                {t('autopilots.detail.retry')} {state.maxRetries}
+              </dd>
+            </div>
+            {state.triggerType === 'schedule' && preview !== null ? (
+              <div>
+                <dt>{t('autopilots.editor.previewTitle')}</dt>
+                <dd>{preview[0] !== undefined ? new Date(preview[0]).toLocaleString() : '—'}</dd>
+              </div>
+            ) : null}
+          </dl>
+        </aside>
       </div>
     </div>
   );

@@ -154,7 +154,9 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
       <Route
         path="/runtimes/:runtimeId"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
@@ -165,6 +167,12 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
 }
 
 describe('RuntimeDetailPage', () => {
+  it('uses the shared DetailLayout page pattern', async () => {
+    setup();
+    renderPage();
+    expect(await screen.findByTestId('detail-layout')).toBeInTheDocument();
+  });
+
   it('渲染头部元数据 + 标签 / 能力 chips', async () => {
     setup();
     renderPage();
@@ -283,7 +291,9 @@ describe('RuntimeDetailPage', () => {
     await screen.findByTestId('runtime-detail-name');
     expect(realtime.subscribed).toContain('workspace:ws-1:runtimes');
     expect(realtime.subscribed).toContain('workspace:ws-1:executions');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -398,7 +408,9 @@ describe('RuntimeDetailPage', () => {
     const realtime = makeRealtime();
     renderPage(realtime);
     await screen.findByTestId('runtime-detail-name');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -429,7 +441,9 @@ describe('RuntimeDetailPage', () => {
     const realtime = makeRealtime();
     renderPage(realtime);
     await screen.findByTestId('runtime-detail-name');
-    const before = calls.filter((c) => c.url.includes('/runtimes/r-1') && c.method === 'GET').length;
+    const before = calls.filter(
+      (c) => c.url.includes('/runtimes/r-1') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',

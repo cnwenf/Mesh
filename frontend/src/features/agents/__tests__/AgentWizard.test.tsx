@@ -39,7 +39,9 @@ const DETAIL: AgentDetail = {
   current_version: null,
 };
 
-function makeClient(opts: { failCreate?: boolean; failCopy?: boolean; failCreateApi?: boolean } = {}) {
+function makeClient(
+  opts: { failCreate?: boolean; failCopy?: boolean; failCreateApi?: boolean } = {},
+) {
   const { fetchImpl, calls } = stubFetch(fakeResponse({ body: { data: { id: 'a-new' } } }));
   const request = vi.fn(async (_m: string, _p: string, bodyOpts?: { body?: unknown }) => {
     await fetchImpl(_p, {
@@ -53,9 +55,45 @@ function makeClient(opts: { failCreate?: boolean; failCopy?: boolean; failCreate
     }
     return { id: 'a-new' };
   });
-  const list = vi.fn(async () => {
-    await fetchImpl('/agents', {});
-    return { data: [{ id: 'src-1', display_name: '源 agent' }], nextCursor: null };
+  const list = vi.fn(async (path: string) => {
+    await fetchImpl(path, {});
+    if (path.endsWith('/agents')) {
+      return { data: [{ id: 'src-1', display_name: '源 agent' }], next_cursor: null };
+    }
+    if (path.includes('/agents/') && path.endsWith('/skills')) {
+      return { data: [], next_cursor: null };
+    }
+    if (path.endsWith('/skills')) {
+      return {
+        data: [
+          {
+            id: 's-1',
+            name: '发布检查清单',
+            source_type: 'builtin',
+            trust_level: 'trusted',
+            status: 'published',
+          },
+        ],
+        next_cursor: null,
+      };
+    }
+    if (path.endsWith('/skill-installations')) {
+      return {
+        data: [
+          {
+            id: 'i-1',
+            skill_id: 's-1',
+            install_status: 'installed',
+            granted_capabilities: [
+              { capability: 'repo:read', permission: 'read_only' },
+              'exec:shell',
+            ],
+          },
+        ],
+        next_cursor: null,
+      };
+    }
+    return { data: [], next_cursor: null };
   });
   // getAgent (copy-from) returns DETAIL via request GET — or throws on failCopy.
   request.mockImplementation(async (m, p) => {
@@ -100,6 +138,44 @@ function renderWizard(client: MeshApiClient, agent: AgentDetail | null = null) {
 }
 
 describe('AgentWizard 创建流程', () => {
+  it('技能步骤选择已安装技能,显示有效权限并在创建后真实绑定', async () => {
+    const user = userEvent.setup();
+    const { client, request } = makeClient();
+    renderWizard(client);
+    await user.type(screen.getByTestId('agent-wizard-name'), '小测');
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+
+    const choice = await screen.findByTestId('agent-wizard-skill-s-1');
+    await user.click(choice);
+    expect(screen.getByTestId('agent-wizard-tool-repo:read')).toHaveTextContent('repo:read');
+    expect(screen.getByTestId('agent-wizard-tool-exec:shell')).toHaveTextContent('exec:shell');
+
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-finish'));
+
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        'POST',
+        '/api/v1/workspaces/ws-1/agents/a-new/skills',
+        expect.objectContaining({ body: { skill_installation_id: 'i-1' } }),
+      ),
+    );
+  });
+
+  it('技能选择后前后切换不丢失', async () => {
+    const user = userEvent.setup();
+    const { client } = makeClient();
+    renderWizard(client);
+    await user.type(screen.getByTestId('agent-wizard-name'), '小测');
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(await screen.findByTestId('agent-wizard-skill-s-1'));
+    await user.click(screen.getByTestId('agent-wizard-next'));
+    await user.click(screen.getByTestId('agent-wizard-back'));
+    expect(screen.getByTestId('agent-wizard-skill-s-1')).toBeChecked();
+  });
+
   it('名称为空时下一步禁用;填写后可编辑', async () => {
     const user = userEvent.setup();
     const { client } = makeClient();
@@ -309,7 +385,10 @@ describe('AgentWizard 编辑流程', () => {
     await user.type(screen.getByTestId('agent-wizard-avatar'), 'https://cdn.example/a.png');
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.type(screen.getByTestId('agent-wizard-instructions'), '你是测试工程师。');
-    await user.selectOptions(screen.getByTestId('agent-wizard-model-select'), 'mainstream-llm-light');
+    await user.selectOptions(
+      screen.getByTestId('agent-wizard-model-select'),
+      'mainstream-llm-light',
+    );
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-finish'));
@@ -330,7 +409,14 @@ describe('AgentWizard 编辑流程', () => {
   it('编辑态字段清空后保存 → avatar / 说明书落 null', async () => {
     const user = userEvent.setup();
     const { client, request } = makeClient();
-    renderWizard(client, { ...DETAIL, avatar_url: 'https://cdn.example/o.png', bio: null, role_tag: null, system_instructions: null, model_config: {} });
+    renderWizard(client, {
+      ...DETAIL,
+      avatar_url: 'https://cdn.example/o.png',
+      bio: null,
+      role_tag: null,
+      system_instructions: null,
+      model_config: {},
+    });
     await user.clear(screen.getByTestId('agent-wizard-avatar'));
     await user.click(screen.getByTestId('agent-wizard-next'));
     await user.click(screen.getByTestId('agent-wizard-next'));

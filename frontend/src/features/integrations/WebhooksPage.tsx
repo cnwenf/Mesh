@@ -8,7 +8,18 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
-import { Banner, Button, Dialog, EmptyState, ErrorState, Input, Skeleton, StatusDot, useToast } from '../../design';
+import {
+  Banner,
+  Button,
+  DataView,
+  Dialog,
+  EmptyState,
+  ErrorState,
+  Input,
+  Skeleton,
+  StatusDot,
+  useToast,
+} from '../../design';
 import { env } from '../../env';
 import { useT } from '../../i18n';
 import { canViewSettings } from '../../workspace/permissions';
@@ -58,12 +69,20 @@ function DeliveryTimeline(props: DeliveryTimelineProps): React.JSX.Element {
   const { deliveries, isAdmin, nowMs, locale, onRetry } = props;
   const t = useT();
   if (deliveries.length === 0) {
-    return <p className="mesh-integrations__muted" data-testid="deliveries-empty">{t('integrations.webhooks.deliveriesEmpty')}</p>;
+    return (
+      <p className="mesh-integrations__muted" data-testid="deliveries-empty">
+        {t('integrations.webhooks.deliveriesEmpty')}
+      </p>
+    );
   }
   return (
     <ul className="mesh-integrations__timeline" data-testid="delivery-timeline">
       {deliveries.map((delivery) => (
-        <li key={delivery.id} className="mesh-integrations__timeline-item" data-testid={`delivery-row-${delivery.id}`}>
+        <li
+          key={delivery.id}
+          className="mesh-integrations__timeline-item"
+          data-testid={`delivery-row-${delivery.id}`}
+        >
           <div className="mesh-integrations__timeline-head">
             <StatusDot
               tone={DELIVERY_STATE_TONE[delivery.state]}
@@ -76,18 +95,29 @@ function DeliveryTimeline(props: DeliveryTimelineProps): React.JSX.Element {
           </div>
           <span className="mesh-integrations__muted">{delivery.event_ref}</span>
           {delivery.state === 'pending' && delivery.next_retry_at !== null && (
-            <span className="mesh-integrations__muted" data-testid={`delivery-retry-${delivery.id}`}>
+            <span
+              className="mesh-integrations__muted"
+              data-testid={`delivery-retry-${delivery.id}`}
+            >
               {t('integrations.webhooks.nextRetry')}{' '}
               {formatRelativeTime(delivery.next_retry_at, nowMs, locale)}
             </span>
           )}
           {delivery.last_error !== null && (
-            <span className="mesh-integrations__muted" data-testid={`delivery-error-${delivery.id}`}>
+            <span
+              className="mesh-integrations__muted"
+              data-testid={`delivery-error-${delivery.id}`}
+            >
               {delivery.last_error}
             </span>
           )}
           {delivery.state === 'failed' && isAdmin && (
-            <Button variant="secondary" size="sm" onClick={() => onRetry(delivery)} data-testid={`delivery-retry-btn-${delivery.id}`}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => onRetry(delivery)}
+              data-testid={`delivery-retry-btn-${delivery.id}`}
+            >
               {t('integrations.webhooks.retry')}
             </Button>
           )}
@@ -150,7 +180,9 @@ export function WebhooksPage(): React.JSX.Element {
     async (subscriptionId: string): Promise<void> => {
       if (membership === null) return;
       try {
-        const listing = await listDeliveries(newClient(), membership.workspace_id, subscriptionId, { limit: 30 });
+        const listing = await listDeliveries(newClient(), membership.workspace_id, subscriptionId, {
+          limit: 30,
+        });
         setDeliveries(listing.data);
       } catch {
         setDeliveries([]);
@@ -232,7 +264,13 @@ export function WebhooksPage(): React.JSX.Element {
     (delivery: Delivery): void => {
       if (membership === null) return;
       void runAction(
-        () => retryDelivery(newClient(), membership.workspace_id, delivery.subscription_id, delivery.id),
+        () =>
+          retryDelivery(
+            newClient(),
+            membership.workspace_id,
+            delivery.subscription_id,
+            delivery.id,
+          ),
         t('integrations.webhooks.retriedToast'),
       ).then(() => void loadDeliveries(delivery.subscription_id));
     },
@@ -254,7 +292,10 @@ export function WebhooksPage(): React.JSX.Element {
     (subscription: WebhookSubscription): void => {
       if (membership === null) return;
       void runAction(
-        () => patchSubscription(newClient(), membership.workspace_id, subscription.id, { status: 'active' }),
+        () =>
+          patchSubscription(newClient(), membership.workspace_id, subscription.id, {
+            status: 'active',
+          }),
         t('integrations.webhooks.enabledToast'),
       );
     },
@@ -291,126 +332,175 @@ export function WebhooksPage(): React.JSX.Element {
 
   return (
     <div className="mesh-integrations__page" data-testid="webhooks-page">
-      <div className="mesh-integrations__header">
-        <h1 className="mesh-integrations__title">{t('integrations.webhooks.title')}</h1>
-        {isAdmin && (
-          <Button variant="primary" onClick={() => setCreateOpen(true)} data-testid="webhook-create">
-            {t('integrations.webhooks.create')}
-          </Button>
+      <DataView
+        title={t('integrations.webhooks.title')}
+        actions={
+          isAdmin ? (
+            <Button
+              variant="primary"
+              onClick={() => setCreateOpen(true)}
+              data-testid="webhook-create"
+            >
+              {t('integrations.webhooks.create')}
+            </Button>
+          ) : undefined
+        }
+      >
+        {!isAdmin && membership !== null && (
+          <div data-testid="webhooks-readonly-banner">
+            <Banner tone="info">{t('integrations.readonly')}</Banner>
+          </div>
         )}
-      </div>
 
-      {!isAdmin && membership !== null && (
-        <div data-testid="webhooks-readonly-banner">
-          <Banner tone="info">{t('integrations.readonly')}</Banner>
-        </div>
-      )}
-
-      {errorKey !== null && (
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')} onRetry={() => setReloadKey((key) => key + 1)} />
-      )}
-      {subscriptions === null && errorKey === null && <Skeleton loadingLabel={t('integrations.loading')} />}
-      {subscriptions !== null && subscriptions.length === 0 && errorKey === null && (
-        <EmptyState title={t('integrations.webhooks.empty')} description="" />
-      )}
-      {subscriptions !== null && subscriptions.length > 0 && (
-        <div data-testid="webhooks-list">
-          {subscriptions.map((subscription) => {
-            const tripped = isTripped(subscription);
-            const expanded = expandedId === subscription.id;
-            return (
-              <div key={subscription.id} className="mesh-integrations__section" data-testid={`webhook-card-${subscription.id}`}>
-                <div className="mesh-integrations__header">
-                  <span className="mesh-integrations__vcs-ref" data-testid={`webhook-url-${subscription.id}`}>
-                    {subscription.url}
-                  </span>
-                  <StatusDot
-                    tone={SUBSCRIPTION_STATUS_TONE[subscription.status]}
-                    label={
-                      tripped
-                        ? t('integrations.webhooks.status.tripped')
-                        : t(`integrations.webhooks.status.${subscription.status}`)
-                    }
-                  />
-                </div>
-                <div className="mesh-integrations__card-caps">
-                  {subscription.event_types.length === 0 ? (
-                    <span className="mesh-integrations__tag">{t('integrations.webhooks.allEvents')}</span>
-                  ) : (
-                    subscription.event_types.map((eventType) => (
-                      <span key={eventType} className="mesh-integrations__tag">
-                        {eventType}
-                      </span>
-                    ))
-                  )}
-                </div>
-
-                <span className="mesh-integrations__muted" data-testid={`webhook-success-rate-${subscription.id}`}>
-                  {t('integrations.webhooks.successRate')} {formatSuccessRate(subscription.success_rate)}
-                  {' · '}
-                  {t('integrations.webhooks.deliveriesTotal', { count: subscription.deliveries_total })}
-                </span>
-
-                {tripped && (
-                  <div data-testid={`webhook-breaker-${subscription.id}`}>
-                    <Banner tone="danger">
-                      {t('integrations.webhooks.breaker', { count: subscription.fail_count })}
-                      {isAdmin && (
-                        <Button variant="secondary" size="sm" onClick={() => resume(subscription)} data-testid={`webhook-resume-${subscription.id}`}>
-                          {t('integrations.webhooks.resume')}
-                        </Button>
-                      )}
-                    </Banner>
+        {errorKey !== null && (
+          <ErrorState
+            title={t(errorKey)}
+            retryLabel={t('common.retry')}
+            onRetry={() => setReloadKey((key) => key + 1)}
+          />
+        )}
+        {subscriptions === null && errorKey === null && (
+          <Skeleton loadingLabel={t('integrations.loading')} />
+        )}
+        {subscriptions !== null && subscriptions.length === 0 && errorKey === null && (
+          <EmptyState title={t('integrations.webhooks.empty')} description="" />
+        )}
+        {subscriptions !== null && subscriptions.length > 0 && (
+          <div data-testid="webhooks-list">
+            {subscriptions.map((subscription) => {
+              const tripped = isTripped(subscription);
+              const expanded = expandedId === subscription.id;
+              return (
+                <div
+                  key={subscription.id}
+                  className="mesh-integrations__section"
+                  data-testid={`webhook-card-${subscription.id}`}
+                >
+                  <div className="mesh-integrations__header">
+                    <span
+                      className="mesh-integrations__vcs-ref"
+                      data-testid={`webhook-url-${subscription.id}`}
+                    >
+                      {subscription.url}
+                    </span>
+                    <StatusDot
+                      tone={SUBSCRIPTION_STATUS_TONE[subscription.status]}
+                      label={
+                        tripped
+                          ? t('integrations.webhooks.status.tripped')
+                          : t(`integrations.webhooks.status.${subscription.status}`)
+                      }
+                    />
                   </div>
-                )}
-                {subscription.status === 'paused' && isAdmin && (
-                  <Button variant="secondary" size="sm" onClick={() => enable(subscription)} data-testid={`webhook-enable-${subscription.id}`}>
-                    {t('integrations.webhooks.enable')}
-                  </Button>
-                )}
+                  <div className="mesh-integrations__card-caps">
+                    {subscription.event_types.length === 0 ? (
+                      <span className="mesh-integrations__tag">
+                        {t('integrations.webhooks.allEvents')}
+                      </span>
+                    ) : (
+                      subscription.event_types.map((eventType) => (
+                        <span key={eventType} className="mesh-integrations__tag">
+                          {eventType}
+                        </span>
+                      ))
+                    )}
+                  </div>
 
-                <div className="mesh-integrations__toolbar">
-                  <Button variant="ghost" size="sm" onClick={() => toggleExpand(subscription.id)} data-testid={`webhook-expand-${subscription.id}`}>
-                    {expanded ? t('integrations.webhooks.hideDeliveries') : t('integrations.webhooks.showDeliveries')}
-                  </Button>
-                  {isAdmin && (
+                  <span
+                    className="mesh-integrations__muted"
+                    data-testid={`webhook-success-rate-${subscription.id}`}
+                  >
+                    {t('integrations.webhooks.successRate')}{' '}
+                    {formatSuccessRate(subscription.success_rate)}
+                    {' · '}
+                    {t('integrations.webhooks.deliveriesTotal', {
+                      count: subscription.deliveries_total,
+                    })}
+                  </span>
+
+                  {tripped && (
+                    <div data-testid={`webhook-breaker-${subscription.id}`}>
+                      <Banner tone="danger">
+                        {t('integrations.webhooks.breaker', { count: subscription.fail_count })}
+                        {isAdmin && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => resume(subscription)}
+                            data-testid={`webhook-resume-${subscription.id}`}
+                          >
+                            {t('integrations.webhooks.resume')}
+                          </Button>
+                        )}
+                      </Banner>
+                    </div>
+                  )}
+                  {subscription.status === 'paused' && isAdmin && (
                     <Button
                       variant="secondary"
                       size="sm"
-                      isLoading={sendTestId === subscription.id}
-                      onClick={() => sendTest(subscription)}
-                      data-testid={`webhook-send-test-${subscription.id}`}
+                      onClick={() => enable(subscription)}
+                      data-testid={`webhook-enable-${subscription.id}`}
                     >
-                      {t('integrations.webhooks.sendTest')}
+                      {t('integrations.webhooks.enable')}
                     </Button>
                   )}
-                  {isAdmin && (
-                    <Button variant="ghost" size="sm" onClick={() => setConfirmDeleteId(subscription.id)} data-testid={`webhook-delete-${subscription.id}`}>
-                      {t('integrations.actions.delete')}
-                    </Button>
-                  )}
-                </div>
 
-                {expanded && (
-                  <div data-testid={`webhook-detail-${subscription.id}`}>
-                    {deliveries === null ? (
-                      <Skeleton loadingLabel={t('integrations.loading')} />
-                    ) : (
-                      <DeliveryTimeline
-                        deliveries={deliveries}
-                        isAdmin={isAdmin}
-                        nowMs={nowMs}
-                        locale={locale}
-                        onRetry={handleRetry}
-                      />
+                  <div className="mesh-integrations__toolbar">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggleExpand(subscription.id)}
+                      data-testid={`webhook-expand-${subscription.id}`}
+                    >
+                      {expanded
+                        ? t('integrations.webhooks.hideDeliveries')
+                        : t('integrations.webhooks.showDeliveries')}
+                    </Button>
+                    {isAdmin && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        isLoading={sendTestId === subscription.id}
+                        onClick={() => sendTest(subscription)}
+                        data-testid={`webhook-send-test-${subscription.id}`}
+                      >
+                        {t('integrations.webhooks.sendTest')}
+                      </Button>
+                    )}
+                    {isAdmin && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmDeleteId(subscription.id)}
+                        data-testid={`webhook-delete-${subscription.id}`}
+                      >
+                        {t('integrations.actions.delete')}
+                      </Button>
                     )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+
+                  {expanded && (
+                    <div data-testid={`webhook-detail-${subscription.id}`}>
+                      {deliveries === null ? (
+                        <Skeleton loadingLabel={t('integrations.loading')} />
+                      ) : (
+                        <DeliveryTimeline
+                          deliveries={deliveries}
+                          isAdmin={isAdmin}
+                          nowMs={nowMs}
+                          locale={locale}
+                          onRetry={handleRetry}
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </DataView>
 
       <Dialog
         open={createOpen}
@@ -460,13 +550,24 @@ export function WebhooksPage(): React.JSX.Element {
           {t('integrations.webhooks.secretShowOnceBody')}
         </Banner>
         <div className="mesh-integrations__secret-box" data-testid="webhook-fresh-secret-box">
-          <code data-testid="webhook-fresh-secret">{freshSecret !== null ? freshSecret.secret : ''}</code>
-          <Button variant="secondary" size="sm" onClick={() => void copySecret()} data-testid="webhook-copy-secret">
+          <code data-testid="webhook-fresh-secret">
+            {freshSecret !== null ? freshSecret.secret : ''}
+          </code>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void copySecret()}
+            data-testid="webhook-copy-secret"
+          >
             {t('integrations.webhooks.copySecret')}
           </Button>
         </div>
         <div className="mesh-integrations__footer">
-          <Button variant="primary" onClick={() => setFreshSecret(null)} data-testid="webhook-secret-done">
+          <Button
+            variant="primary"
+            onClick={() => setFreshSecret(null)}
+            data-testid="webhook-secret-done"
+          >
             {t('integrations.webhooks.secretSaved')}
           </Button>
         </div>

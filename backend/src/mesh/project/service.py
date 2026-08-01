@@ -76,6 +76,7 @@ from mesh.project.schemas import (
 from mesh.workspace.service import occupy_project_prefix
 
 PROJECT_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,11}$")
+PROJECT_COLOR_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 PROJECT_CHANNEL = "project:{project_id}"
 WORKSPACE_PROJECTS_CHANNEL = "workspace:{workspace_id}:projects"
 
@@ -160,6 +161,14 @@ def _validate_project_key(key: str) -> None:
 def _validate_name(name: str, *, field: str = "name") -> None:
     if not isinstance(name, str) or not 1 <= len(name) <= NAME_MAX_LENGTH:
         raise ValidationError(f"{field} must be 1-{NAME_MAX_LENGTH} characters")
+
+
+def _normalize_project_color(color: str | None) -> str | None:
+    if color is None:
+        return None
+    if not isinstance(color, str) or PROJECT_COLOR_PATTERN.fullmatch(color) is None:
+        raise ValidationError("color must be a #RRGGBB hexadecimal value")
+    return color.upper()
 
 
 def _validate_date_range(start: date | None, target: date | None) -> None:
@@ -597,6 +606,7 @@ class ProjectService:
         _validate_enum(body.status, PROJECT_STATUS_VALUES, field="status")
         _validate_enum(body.visibility, PROJECT_VISIBILITY_VALUES, field="visibility")
         _validate_date_range(body.start_date, body.target_date)
+        color = _normalize_project_color(body.color)
 
         project = Project(
             id=uuid.uuid4(),
@@ -605,7 +615,7 @@ class ProjectService:
             key=body.key,
             description=body.description,
             icon=body.icon,
-            color=body.color,
+            color=color,
             status=body.status,
             visibility=body.visibility,
             start_date=body.start_date,
@@ -883,8 +893,10 @@ class ProjectService:
                 changes["description"] = patch.description
             if not isinstance(patch.icon, _Unset) and patch.icon != project.icon:
                 changes["icon"] = patch.icon
-            if not isinstance(patch.color, _Unset) and patch.color != project.color:
-                changes["color"] = patch.color
+            if not isinstance(patch.color, _Unset):
+                color = _normalize_project_color(patch.color)
+                if color != project.color:
+                    changes["color"] = color
             if not isinstance(patch.status, _Unset) and patch.status != project.status:
                 _validate_enum(patch.status, PROJECT_STATUS_VALUES, field="status")
                 changes["status"] = patch.status

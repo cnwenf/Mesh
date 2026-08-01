@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { MeshApiClient, errorToI18nKey, getToken, MeshApiError } from '../../api';
 import {
+  Banner,
   Button,
   Dialog,
   EmptyState,
@@ -102,7 +103,10 @@ function AutopilotRow(props: AutopilotRowProps): React.JSX.Element {
         {summary && rule.trigger_type === 'schedule' ? ` · ${summary}` : ''}
       </td>
       <td>
-        <StatusDot tone={RULE_STATUS_TONE[rule.status]} label={t(`autopilots.status.${rule.status}`)} />
+        <StatusDot
+          tone={RULE_STATUS_TONE[rule.status]}
+          label={t(`autopilots.status.${rule.status}`)}
+        />
       </td>
       <td data-testid={`autopilot-last-run-${rule.id}`}>
         {rule.last_run_status !== null && rule.last_run_status !== undefined ? (
@@ -244,10 +248,10 @@ export function AutopilotsPage(): React.JSX.Element {
         toast.addToast(successMessage, { tone: 'success', closeLabel: t('common.close') });
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       }
     },
     [toast, t],
@@ -255,7 +259,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const handlePause = useCallback(
     (rule: AutopilotRule) => {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => pauseAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.paused'),
@@ -266,7 +270,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const handleResume = useCallback(
     (rule: AutopilotRule) => {
-        const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
+      const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
       void runAction(
         () => resumeAutopilot(client, membership!.workspace_id, rule.id),
         t('autopilots.toast.resumed'),
@@ -277,7 +281,7 @@ export function AutopilotsPage(): React.JSX.Element {
 
   const applyKillSwitch = useCallback(
     async (enabled: boolean) => {
-        setKillBusy(true);
+      setKillBusy(true);
       try {
         const client = new MeshApiClient({ baseUrl: env.apiBaseUrl, getToken });
         const result = await setKillSwitch(client, membership!.workspace_id, {
@@ -295,10 +299,10 @@ export function AutopilotsPage(): React.JSX.Element {
         setKillReason('');
         setReloadKey((key) => key + 1);
       } catch (error) {
-        toast.addToast(
-          t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'),
-          { tone: 'danger', closeLabel: t('common.close') },
-        );
+        toast.addToast(t(error instanceof MeshApiError ? errorToI18nKey(error) : 'error.unknown'), {
+          tone: 'danger',
+          closeLabel: t('common.close'),
+        });
       } finally {
         setKillBusy(false);
       }
@@ -326,24 +330,33 @@ export function AutopilotsPage(): React.JSX.Element {
         <h1 className="mesh-autopilots__title">{t('autopilots.title')}</h1>
         <div className="mesh-autopilots__toolbar">
           <div className="mesh-autopilots__kill-switch" data-testid="autopilot-kill-switch">
-            <StatusDot
-              tone={killSwitchOn === true ? 'warn' : 'success'}
-              label={
-                killSwitchOn === true
-                  ? t('autopilots.killSwitch.paused')
-                  : t('autopilots.killSwitch.on')
-              }
-            />
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => setKillDialogOpen(true)}
-              data-testid="autopilot-kill-switch-button"
-            >
-              {killSwitchOn === true
-                ? t('autopilots.killSwitch.restore')
-                : t('autopilots.killSwitch.trigger')}
-            </Button>
+            {killSwitchOn === true ? (
+              <Banner tone="warn" politeness="assertive">
+                <div className="mesh-autopilots__kill-switch-content">
+                  <StatusDot tone="warn" label={t('autopilots.killSwitch.paused')} />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => setKillDialogOpen(true)}
+                    data-testid="autopilot-kill-switch-button"
+                  >
+                    {t('autopilots.killSwitch.restore')}
+                  </Button>
+                </div>
+              </Banner>
+            ) : (
+              <div className="mesh-autopilots__kill-switch-content">
+                <StatusDot tone="success" label={t('autopilots.killSwitch.on')} />
+                <Button
+                  variant="danger"
+                  size="sm"
+                  onClick={() => setKillDialogOpen(true)}
+                  data-testid="autopilot-kill-switch-button"
+                >
+                  {t('autopilots.killSwitch.trigger')}
+                </Button>
+              </div>
+            )}
           </div>
           <Button
             variant="primary"
@@ -393,8 +406,11 @@ export function AutopilotsPage(): React.JSX.Element {
       </div>
 
       {errorKey !== null && (
-        <ErrorState title={t(errorKey)} retryLabel={t('common.retry')}
-          onRetry={() => setReloadKey((key) => key + 1)} />
+        <ErrorState
+          title={t(errorKey)}
+          retryLabel={t('common.retry')}
+          onRetry={() => setReloadKey((key) => key + 1)}
+        />
       )}
       {rules === null && errorKey === null && <Skeleton loadingLabel={t('autopilots.loading')} />}
       {rules !== null && rules.length === 0 && errorKey === null && (

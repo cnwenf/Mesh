@@ -23,6 +23,7 @@ import {
   updateSkill,
   workspaceSkillsChannel,
 } from './api';
+import { CapabilitySignals } from './CapabilitySignals';
 import type { SkillDetail, SkillInstallation, SkillVersion } from './types';
 import './skills.css';
 
@@ -199,10 +200,16 @@ export function SkillDetailPage(): React.JSX.Element {
           skill_version_id: version.id,
           scope: 'workspace',
         });
-        toast.addToast(t('skills.installSucceeded'), { tone: 'success', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.installSucceeded'), {
+          tone: 'success',
+          closeLabel: t('a11y.closeDialog'),
+        });
         setReloadKey((k) => k + 1);
       } catch {
-        toast.addToast(t('skills.installFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.installFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
     },
     [client, workspaceId, skill, t, toast],
@@ -215,7 +222,10 @@ export function SkillDetailPage(): React.JSX.Element {
         await updateSkill(client, workspaceId, skill.id, { status });
         setReloadKey((k) => k + 1);
       } catch {
-        toast.addToast(t('skills.statusChangeFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.statusChangeFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
     },
     [client, workspaceId, skill, t, toast],
@@ -230,7 +240,10 @@ export function SkillDetailPage(): React.JSX.Element {
         });
         setReloadKey((k) => k + 1);
       } catch {
-        toast.addToast(t('skills.statusChangeFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.statusChangeFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
     },
     [client, workspaceId, t, toast],
@@ -246,10 +259,16 @@ export function SkillDetailPage(): React.JSX.Element {
         await rollbackInstallation(client, workspaceId, installation.id, {
           target_version_id: version.id,
         });
-        toast.addToast(t('skills.rollbackSucceeded'), { tone: 'success', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.rollbackSucceeded'), {
+          tone: 'success',
+          closeLabel: t('a11y.closeDialog'),
+        });
         setReloadKey((k) => k + 1);
       } catch {
-        toast.addToast(t('skills.rollbackFailed'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.rollbackFailed'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
     },
     [client, workspaceId, t, toast],
@@ -263,11 +282,17 @@ export function SkillDetailPage(): React.JSX.Element {
         await updateInstallation(client, workspaceId, installation.id, {
           skill_version_id: skill.current_version_id,
         });
-        toast.addToast(t('skills.updateSucceeded'), { tone: 'success', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.updateSucceeded'), {
+          tone: 'success',
+          closeLabel: t('a11y.closeDialog'),
+        });
         setReloadKey((k) => k + 1);
       } catch {
         // 422 approval_required surfaces here when scripts changed (§4.4).
-        toast.addToast(t('skills.updateNeedsApproval'), { tone: 'danger', closeLabel: t('a11y.closeDialog') });
+        toast.addToast(t('skills.updateNeedsApproval'), {
+          tone: 'danger',
+          closeLabel: t('a11y.closeDialog'),
+        });
       }
     },
     [client, workspaceId, skill, t, toast],
@@ -281,7 +306,7 @@ export function SkillDetailPage(): React.JSX.Element {
   }
 
   const currentVersion = versions.find((v) => v.id === skill.current_version_id) ?? null;
-  const installation = installations[0] ?? null;
+  const installation = installations.find((candidate) => candidate.scope === 'workspace') ?? null;
 
   return (
     <div className="mesh-skills-detail" data-testid="skill-detail">
@@ -318,9 +343,14 @@ export function SkillDetailPage(): React.JSX.Element {
             <div data-testid="skill-panel-overview">
               <p>{skill.summary}</p>
               {currentVersion !== null ? (
-                <pre className="mesh-skills-wizard__instructions">{currentVersion.instructions}</pre>
+                <pre className="mesh-skills-wizard__instructions">
+                  {currentVersion.instructions}
+                </pre>
               ) : (
-                <EmptyState title={t('skills.noVersionTitle')} description={t('skills.noVersionDescription')} />
+                <EmptyState
+                  title={t('skills.noVersionTitle')}
+                  description={t('skills.noVersionDescription')}
+                />
               )}
             </div>
           ) : null}
@@ -392,9 +422,15 @@ export function SkillDetailPage(): React.JSX.Element {
           {tab === 'scripts' ? (
             <div data-testid="skill-panel-scripts">
               {selectedVersion === null ? (
-                <EmptyState title={t('skills.pickVersionTitle')} description={t('skills.pickVersionDescription')} />
+                <EmptyState
+                  title={t('skills.pickVersionTitle')}
+                  description={t('skills.pickVersionDescription')}
+                />
               ) : (selectedVersion.scripts ?? []).length === 0 ? (
-                <EmptyState title={t('skills.noScriptsTitle')} description={t('skills.noScriptsDescription')} />
+                <EmptyState
+                  title={t('skills.noScriptsTitle')}
+                  description={t('skills.noScriptsDescription')}
+                />
               ) : (
                 (selectedVersion.scripts ?? []).map((script) => (
                   <details key={script.id} className="mesh-skills-detail__script" open>
@@ -402,16 +438,18 @@ export function SkillDetailPage(): React.JSX.Element {
                       <code>{script.path}</code> · {script.runtime}
                       {script.entrypoint ? ` · ${t('skills.entrypoint')}` : ''}
                     </summary>
-                    <ul className="mesh-skills-detail__script-caps">
-                      {(script.required_capabilities ?? []).map((cap, index) => {
-                        const key = typeof cap === 'string' ? cap : cap.capability;
-                        return (
-                          <li key={`${key}-${index}`} className={RISKY_CAPABILITY_PATTERN.test(key) ? 'is-risky' : ''}>
-                            {key}
-                          </li>
-                        );
-                      })}
-                    </ul>
+                    <CapabilitySignals
+                      declarations={script.required_capabilities ?? []}
+                      className={
+                        (script.required_capabilities ?? []).some((capability) =>
+                          RISKY_CAPABILITY_PATTERN.test(
+                            typeof capability === 'string' ? capability : capability.capability,
+                          ),
+                        )
+                          ? 'mesh-skills__capabilities--risky'
+                          : ''
+                      }
+                    />
                     <pre>{script.content ?? script.content_ref}</pre>
                   </details>
                 ))
@@ -422,7 +460,10 @@ export function SkillDetailPage(): React.JSX.Element {
           {tab === 'references' ? (
             <div data-testid="skill-panel-references">
               {selectedVersion === null || (selectedVersion.references ?? []).length === 0 ? (
-                <EmptyState title={t('skills.noReferencesTitle')} description={t('skills.noReferencesDescription')} />
+                <EmptyState
+                  title={t('skills.noReferencesTitle')}
+                  description={t('skills.noReferencesDescription')}
+                />
               ) : (
                 <ul>
                   {(selectedVersion.references ?? []).map((reference) => (
@@ -439,12 +480,16 @@ export function SkillDetailPage(): React.JSX.Element {
           {tab === 'triggers' ? (
             <div data-testid="skill-panel-triggers">
               {selectedVersion === null || (selectedVersion.triggers ?? []).length === 0 ? (
-                <EmptyState title={t('skills.noTriggersTitle')} description={t('skills.noTriggersDescription')} />
+                <EmptyState
+                  title={t('skills.noTriggersTitle')}
+                  description={t('skills.noTriggersDescription')}
+                />
               ) : (
                 <ul>
                   {(selectedVersion.triggers ?? []).map((trigger) => (
                     <li key={trigger.id}>
-                      {t(`skills.triggerType.${trigger.trigger_type}`)}: {trigger.pattern} (×{trigger.weight})
+                      {t(`skills.triggerType.${trigger.trigger_type}`)}: {trigger.pattern} (×
+                      {trigger.weight})
                     </li>
                   ))}
                 </ul>
@@ -464,16 +509,13 @@ export function SkillDetailPage(): React.JSX.Element {
             <dd>{skill.current_version ?? '—'}</dd>
             <dt>{t('skills.sideRequiredCaps')}</dt>
             <dd>
-              {(skill.required_capabilities ?? []).map((cap, index) => {
-                const key = typeof cap === 'string' ? cap : cap.capability;
-                return <span key={`${key}-${index}`} className="mesh-skills__cap-chip">{key}</span>;
-              })}
+              <CapabilitySignals declarations={skill.required_capabilities ?? []} />
             </dd>
             <dt>{t('skills.sideTags')}</dt>
             <dd>{(skill.tags ?? []).join(', ') || '—'}</dd>
           </dl>
 
-          {canManage && currentVersion !== null ? (
+          {canManage && currentVersion !== null && installation === null ? (
             <Button onClick={() => void doInstall(currentVersion)} data-testid="skill-install">
               {t('skills.installButton')}
             </Button>
@@ -502,7 +544,9 @@ export function SkillDetailPage(): React.JSX.Element {
             </div>
           ) : null}
 
-          {canManage && installation !== null && installation.install_status === 'updated_available' ? (
+          {canManage &&
+          installation !== null &&
+          installation.install_status === 'updated_available' ? (
             <div className="mesh-skills-detail__update" data-testid="skill-update-row">
               <span className="mesh-skills__update-flag">
                 <Icon name="cycle" size={16} /> {t('skills.updateAvailable')}
@@ -537,7 +581,9 @@ export function SkillDetailPage(): React.JSX.Element {
                     <option value="disabled">{t('skills.actionDisable')}</option>
                   </>
                 ) : null}
-                {skill.status === 'deprecated' ? <option value="disabled">{t('skills.actionDisable')}</option> : null}
+                {skill.status === 'deprecated' ? (
+                  <option value="disabled">{t('skills.actionDisable')}</option>
+                ) : null}
                 {skill.status === 'disabled' ? (
                   <>
                     <option value="published">{t('skills.actionRestore')}</option>

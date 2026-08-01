@@ -53,6 +53,18 @@ export async function injectSession(page: Page, token: string): Promise<void> {
   );
 }
 
+/** Keep page-family evidence focused after a fresh workspace creates its checklist. */
+export async function dismissOnboarding(page: Page): Promise<void> {
+  const dismiss = page.getByTestId('onboarding-dismiss');
+  const appeared = await dismiss
+    .waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!appeared) return;
+  await dismiss.click();
+  await dismiss.waitFor({ state: 'hidden' });
+}
+
 /** 等待真实首页(工作区列表)就绪 */
 export async function gotoHomeReady(page: Page): Promise<void> {
   await page.goto('/');

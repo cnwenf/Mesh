@@ -128,6 +128,30 @@ async def test_create_project_envelope(client):
     assert resp.json()["error"]["code"] == "project_key_taken"
 
 
+async def test_project_color_rejects_css_at_create_and_patch_boundaries(client):
+    owner = await _register_and_login(client, "owner-color@corp.com")
+    ws = await _create_workspace(client, owner, "prj-color")
+    malicious = "url(https://attacker.invalid/pixel)"
+
+    rejected_create = await client.post(
+        f"/api/v1/workspaces/{ws['id']}/projects",
+        json={"name": "Unsafe", "key": "UNS", "color": malicious},
+        headers=_auth(owner),
+    )
+    assert rejected_create.status_code == 400
+    assert rejected_create.json()["error"]["code"] == "validation_error"
+
+    created = await _create_project(client, owner, ws["id"], color="#a1b2c3")
+    assert created["color"] == "#A1B2C3"
+    rejected_patch = await client.patch(
+        f"/api/v1/projects/{created['id']}",
+        json={"color": malicious},
+        headers=_auth(owner),
+    )
+    assert rejected_patch.status_code == 400
+    assert rejected_patch.json()["error"]["code"] == "validation_error"
+
+
 async def test_create_project_requires_membership(client):
     owner = await _register_and_login(client, "owner-m@corp.com")
     ws = await _create_workspace(client, owner, "prj-m")

@@ -89,7 +89,8 @@ function setup(runtimes: unknown[] = [RUNTIME_ONLINE, RUNTIME_PAUSED]): Recorded
               release: {
                 artifact_url: 'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz',
                 sha256: 'ab'.repeat(32),
-                signature_url: 'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz.sig',
+                signature_url:
+                  'https://releases.mesh.example/runtime/1.4.2/mesh-runtime.tar.gz.sig',
                 signing_key_url: 'https://releases.mesh.example/mesh-release.pub',
               },
               activate_hint: 'mesh-runtime activate --activation-file ./activation.txt',
@@ -141,7 +142,9 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
       <Route
         path="/"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
@@ -152,6 +155,13 @@ function renderPage(realtime: ReturnType<typeof makeRealtime> | null = null) {
 }
 
 describe('RuntimesPage', () => {
+  it('uses the shared DataView page pattern for the runtime inventory', async () => {
+    setup();
+    renderPage();
+    expect(await screen.findByTestId('data-view')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Runtimes' })).toBeInTheDocument();
+  });
+
   it('渲染行:状态文本 + 名称 + 类型 + 负载 + 心跳新鲜度', async () => {
     setup();
     renderPage();
@@ -196,7 +206,9 @@ describe('RuntimesPage', () => {
     renderPage(realtime);
     await screen.findByTestId('runtime-row-r-1');
     expect(realtime.subscribed).toContain('workspace:ws-1:runtimes');
-    const listCallsBefore = calls.filter((c) => c.url.includes('/runtimes') && c.method === 'GET').length;
+    const listCallsBefore = calls.filter(
+      (c) => c.url.includes('/runtimes') && c.method === 'GET',
+    ).length;
     realtime.emit({
       op: 'event',
       channel: 'workspace:ws-1:runtimes',
@@ -286,7 +298,9 @@ describe('RuntimesPage', () => {
     await user.selectOptions(screen.getByTestId('runtimes-status-filter'), 'online');
     await user.selectOptions(screen.getByTestId('runtimes-kind-filter'), 'self_hosted');
     await waitFor(() =>
-      expect(calls.some((c) => c.url.includes('status=online') && c.url.includes('kind=self_hosted'))).toBe(true),
+      expect(
+        calls.some((c) => c.url.includes('status=online') && c.url.includes('kind=self_hosted')),
+      ).toBe(true),
     );
   });
 

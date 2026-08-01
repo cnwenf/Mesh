@@ -142,7 +142,9 @@ function renderPage(
       <Route
         path="/executions/:executionId"
         element={
-          realtime === null ? page : (
+          realtime === null ? (
+            page
+          ) : (
             <RealtimeContext.Provider value={realtime.value}>{page}</RealtimeContext.Provider>
           )
         }
@@ -200,6 +202,15 @@ describe('ExecutionDetailPage 头部与元信息', () => {
 });
 
 describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
+  it('places a sticky follow/offset toolbar after the scrollable log stream', async () => {
+    setup();
+    renderPage();
+    const panel = await screen.findByTestId('execution-log-panel');
+    const toolbar = screen.getByTestId('execution-log-toolbar');
+    expect(toolbar).toHaveAttribute('data-sticky-toolbar', 'true');
+    expect(panel.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
   it('REST 补历史后 WS 帧追加,按 offset 去重不重', async () => {
     setup();
     const realtime = makeRealtime();
@@ -233,9 +244,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
     });
     expect(await screen.findByTestId('execution-log-end')).toHaveTextContent('completed');
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -261,9 +270,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
       payload: { type: 'status', status: 'running' },
     });
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -282,9 +289,7 @@ describe('ExecutionDetailPage 实时日志(§4.9 三段合一)', () => {
       payload: { data: { id: 'e-1' } },
     });
     await waitFor(() =>
-      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(
-        before,
-      ),
+      expect(calls.filter((c) => c.url.endsWith('/executions/e-1')).length).toBeGreaterThan(before),
     );
   });
 
@@ -481,7 +486,8 @@ describe('ExecutionDetailPage Tab / 凭证 / 取消', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
-      if (url.includes('/logs')) return fakeResponse({ body: { data: { lines: [], next_offset: 0 } } });
+      if (url.includes('/logs'))
+        return fakeResponse({ body: { data: { lines: [], next_offset: 0 } } });
       return fakeResponse({
         status: 404,
         body: { error: { code: 'not_found', message: 'missing' } },

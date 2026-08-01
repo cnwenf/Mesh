@@ -18,27 +18,128 @@ type SanitizeConfig = NonNullable<Parameters<typeof DOMPurify.sanitize>[1]>;
 /** DOMPurify 白名单配置:允许常见排版标签,禁止脚本/事件属性(默认即剥离)。 */
 const SANITIZE_CONFIG: SanitizeConfig = {
   ALLOWED_TAGS: [
-    'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'strong', 'em', 'del', 's', 'blockquote', 'code', 'pre',
-    'ul', 'ol', 'li', 'a', 'img', 'table', 'thead', 'tbody',
-    'tr', 'th', 'td', 'span', 'div', 'input',
+    'p',
+    'br',
+    'hr',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'strong',
+    'em',
+    'del',
+    's',
+    'blockquote',
+    'code',
+    'pre',
+    'ul',
+    'ol',
+    'li',
+    'a',
+    'img',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'th',
+    'td',
+    'span',
+    'div',
+    'input',
   ],
-  ALLOWED_ATTR: ['href', 'title', 'src', 'alt', 'class', 'target', 'rel', 'checked', 'disabled', 'type'],
+  ALLOWED_ATTR: [
+    'href',
+    'title',
+    'src',
+    'alt',
+    'class',
+    'target',
+    'rel',
+    'checked',
+    'disabled',
+    'type',
+  ],
   ALLOW_DATA_ATTR: false,
 };
+
+/**
+ * 已持久化 agent 输出使用更窄的策略。它只保留被动排版能力，显式剥离
+ * 浏览器会自动拉取资源的标签和属性，避免审批人打开页面即产生外部请求。
+ */
+const AGENT_SANITIZE_CONFIG: SanitizeConfig = {
+  ALLOWED_TAGS: [
+    'p',
+    'br',
+    'hr',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'strong',
+    'em',
+    'del',
+    's',
+    'blockquote',
+    'code',
+    'pre',
+    'ul',
+    'ol',
+    'li',
+    'a',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'th',
+    'td',
+  ],
+  ALLOWED_ATTR: ['href', 'title', 'target', 'rel'],
+  FORBID_TAGS: [
+    'img',
+    'audio',
+    'video',
+    'source',
+    'track',
+    'iframe',
+    'embed',
+    'object',
+    'link',
+    'style',
+    'svg',
+    'math',
+    'form',
+    'input',
+    'button',
+  ],
+  FORBID_ATTR: ['src', 'srcset', 'poster', 'style'],
+  ALLOW_DATA_ATTR: false,
+};
+
+function renderWithConfig(markdown: string, config: SanitizeConfig): string {
+  const trimmed = markdown.trim();
+  if (trimmed === '') return '';
+  try {
+    const rawHtml = marked.parse(trimmed) as string;
+    // sanitize 在启用 RETURN_TRUSTED_TYPE 时可返回 TrustedHTML;此处强制 string。
+    return DOMPurify.sanitize(rawHtml, config) as string;
+  } catch {
+    return '';
+  }
+}
 
 /**
  * 把 Markdown 草稿渲染为净化后的 HTML 字符串(供 dangerouslySetInnerHTML)。
  * 空输入返回空串。净化失败时回退空串(绝不返回未净化内容)。
  */
 export function renderMarkdownPreview(markdown: string): string {
-  const trimmed = markdown.trim();
-  if (trimmed === '') return '';
-  try {
-    const rawHtml = marked.parse(trimmed) as string;
-    // sanitize 在启用 RETURN_TRUSTED_TYPE 时可返回 TrustedHTML;此处强制 string。
-    return DOMPurify.sanitize(rawHtml, SANITIZE_CONFIG) as string;
-  } catch {
-    return '';
-  }
+  return renderWithConfig(markdown, SANITIZE_CONFIG);
+}
+
+/** 为审批页等位置渲染已持久化的 agent Markdown，禁止自动远程资源。 */
+export function renderAgentMarkdown(markdown: string): string {
+  return renderWithConfig(markdown, AGENT_SANITIZE_CONFIG);
 }

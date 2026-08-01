@@ -6,6 +6,7 @@ Mesh 项目的所有重要变更都记录于此文件。
 ## [Unreleased]
 ### Added
 
+- **前端设计对齐 MES-111 剩余页面族（MES-116，design-quality.md Phase 4）**：项目/周期、Agent/Skills、Squads/任务、自动值守/webhook、Runtimes/执行、Integrations/subscriptions 及标签/自定义字段/数据导入导出/错误公共页统一落入既有页面模式；Agent 工具权限由真实 Skill 授权推导并诚实只读，Integration 详情补齐健康 Tab，长数据与 320px overflow 边界收口。专项真实 API + Chromium 25 路由可达/交互、25 路由 320px 扫描、桌面/平板/手机 × light/dark 六组合视觉矩阵全绿；项目、Runtime、自动值守三条既有真实链路复验通过，27 张证据互异（`frontend/e2e/evidence/mes116/`）。
 - **设置 + 搜索/命令面板 + Analytics + 审批 前端批次④(MES-111 / MES-127,design-quality.md §3.2/§4.4/§9.6/§11.4 + search-command-palette.md 全条 + analytics.md §4 + competitor-parity G3/G4/G10/G11/G19)**——
   - **设置(SettingsLayout 页面模式沉淀至 `src/design/patterns`)**:账号 `/settings` 与工作区 `/w/:slug/settings` 二级导航(桌面左栏 / 手机顶部分组列表)+ 内容按 Appearance/Notifications/Security + 工作区 general/invitations/roles/labels/custom-fields/data/tokens/audit/danger 子路由分页;dirty 提示 + 保存 toast + 刷新持久化;危险区仅 owner 导航(权限不可见,非禁用);**G11** 工作区默认主题三态入口(admin,「成员未单独设置时生效」)写 `settings.default_theme` 后对账号偏好缺省的在线成员真实生效(协商链:账号缺省 → 工作区默认 → 系统)。
   - **统一搜索/命令面板(`src/shortcuts/`,§9.6 全条)**:顶栏搜索为真实控件,键入即展开与 Ctrl/Cmd+K 同一结果视图(PaletteResults 同组件同数据源),`/` 聚焦;六类业务对象分组检索(工作项/成员·agent/项目/视图/聊天/命令)+ 空态 favorites(服务端唯一来源)/recents(本地三元组隔离) + identifier 等值快路径直达(跳防抖)+ no-results 语法提示 + 建 issue 入口(预填不直提);120ms 防抖 + AbortController 取消 + 单调令牌丢弃陈旧响应;↑↓/Enter/Esc/mod+Enter 新标签/Tab 补全 键盘全流程 + aria-live 播报结果数;本地命令同步零延迟先渲染、远程 skeleton 不阻塞(§11.4)。

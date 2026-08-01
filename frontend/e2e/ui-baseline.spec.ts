@@ -77,6 +77,9 @@ test.describe('快捷键体系与命令面板(README §6.12)', () => {
     const palette = page.getByRole('dialog', { name: 'Command palette' });
     await expect(palette).toBeVisible();
     await palette.getByRole('combobox').fill('Settings');
+    // fill() 可先于 React 把本地过滤结果提交到 DOM；等待精确候选后再按 Enter，
+    // 避免慢 CI 上按键落在上一帧空结果中。
+    await expect(palette.getByRole('option', { name: 'Settings', exact: true })).toBeVisible();
     await page.keyboard.press('Enter');
     await page.waitForURL('**/settings');
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();

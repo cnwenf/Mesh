@@ -100,7 +100,9 @@ interface Recorded {
   method: string;
 }
 
-function setup(opts: { readonly role?: string; readonly subscriptions?: unknown[] } = {}): Recorded[] {
+function setup(
+  opts: { readonly role?: string; readonly subscriptions?: unknown[] } = {},
+): Recorded[] {
   const calls: Recorded[] = [];
   const role = opts.role ?? 'owner';
   const subscriptions = opts.subscriptions ?? [SUB_ACTIVE, SUB_TRIPPED, SUB_PAUSED];
@@ -149,6 +151,7 @@ describe('WebhooksPage', () => {
     await waitFor(() => expect(screen.getByTestId('webhook-url-sub-1')).toBeInTheDocument());
     expect(screen.getByTestId('webhook-card-sub-2')).toBeInTheDocument();
     expect(screen.getAllByText('issue.updated').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('data-view')).toBeInTheDocument();
   });
 
   it('shows the read-only banner and hides create for non-admins', async () => {
@@ -221,7 +224,9 @@ describe('WebhooksPage', () => {
     await waitFor(() => expect(screen.getByTestId('webhook-breaker-sub-2')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('webhook-resume-sub-2'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/webhook-subscriptions/sub-2/resume'))).toBe(true),
+      expect(calls.some((call) => call.url.endsWith('/webhook-subscriptions/sub-2/resume'))).toBe(
+        true,
+      ),
     );
   });
 
@@ -232,7 +237,9 @@ describe('WebhooksPage', () => {
     await userEvent.click(screen.getByTestId('webhook-enable-sub-3'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.url.endsWith('/webhook-subscriptions/sub-3') && call.method === 'PATCH'),
+        calls.some(
+          (call) => call.url.endsWith('/webhook-subscriptions/sub-3') && call.method === 'PATCH',
+        ),
       ).toBe(true),
     );
   });
@@ -245,7 +252,9 @@ describe('WebhooksPage', () => {
     await userEvent.click(screen.getByTestId('webhook-delete-confirm'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.url.endsWith('/webhook-subscriptions/sub-1') && call.method === 'DELETE'),
+        calls.some(
+          (call) => call.url.endsWith('/webhook-subscriptions/sub-1') && call.method === 'DELETE',
+        ),
       ).toBe(true),
     );
   });
@@ -258,7 +267,10 @@ describe('WebhooksPage', () => {
 
   it('shows the error state on fetch failure', async () => {
     const impl = (async () =>
-      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } })) as typeof fetch;
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument());
@@ -286,7 +298,10 @@ describe('WebhooksPage', () => {
     const calls: Recorded[] = [];
     const impl = (async (input: RequestInfo | URL) => {
       calls.push({ url: String(input), method: 'GET' });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderPage();
@@ -352,7 +367,10 @@ describe('WebhooksPage', () => {
       const url = String(input);
       if (url.includes('/users/me')) return fakeResponse({ body: { data: me } });
       if (/\/deliveries/.test(url))
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: [SUB_ACTIVE], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -366,7 +384,9 @@ describe('WebhooksPage', () => {
     const impl = (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/users/me'))
-        return fakeResponse({ body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } } });
+        return fakeResponse({
+          body: { data: { user: { id: 'u-1', email: 'o@x.com', display_name: 'O' } } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -400,7 +420,10 @@ describe('WebhooksPage', () => {
       if (method === 'GET' && url.includes('/webhook-subscriptions'))
         return fakeResponse({ body: { data: [SUB_TRIPPED], next_cursor: null } });
       if (method === 'POST')
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
@@ -415,7 +438,12 @@ describe('WebhooksPage', () => {
   });
 
   it('collapses deliveries and shows the all-events chip', async () => {
-    const allEvents = { ...SUB_ACTIVE, id: 'sub-9', url: 'https://example.com/all', event_types: [] };
+    const allEvents = {
+      ...SUB_ACTIVE,
+      id: 'sub-9',
+      url: 'https://example.com/all',
+      event_types: [],
+    };
     setup({ subscriptions: [allEvents] });
     renderPage();
     await waitFor(() => expect(screen.getByTestId('webhook-expand-sub-9')).toBeInTheDocument());
@@ -443,7 +471,9 @@ describe('WebhooksPage', () => {
   it('shows the success rate and delivery totals per subscription', async () => {
     setup();
     renderPage();
-    await waitFor(() => expect(screen.getByTestId('webhook-success-rate-sub-1')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('webhook-success-rate-sub-1')).toBeInTheDocument(),
+    );
     expect(screen.getByTestId('webhook-success-rate-sub-1').textContent).toContain('95%');
     expect(screen.getByTestId('webhook-success-rate-sub-1').textContent).toContain('20');
     // null success_rate (zero deliveries) renders as an em dash
@@ -458,7 +488,8 @@ describe('WebhooksPage', () => {
     await waitFor(() =>
       expect(
         calls.some(
-          (call) => call.url.endsWith('/webhook-subscriptions/sub-1:send-test') && call.method === 'POST',
+          (call) =>
+            call.url.endsWith('/webhook-subscriptions/sub-1:send-test') && call.method === 'POST',
         ),
       ).toBe(true),
     );
@@ -481,7 +512,10 @@ describe('WebhooksPage', () => {
       if (method === 'GET' && url.includes('/webhook-subscriptions'))
         return fakeResponse({ body: { data: [SUB_ACTIVE], next_cursor: null } });
       if (method === 'POST')
-        return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+        return fakeResponse({
+          status: 500,
+          body: { error: { code: 'internal_error', message: 'boom' } },
+        });
       return fakeResponse({ body: { data: [], next_cursor: null } });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);

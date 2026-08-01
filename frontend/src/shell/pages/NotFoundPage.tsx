@@ -7,7 +7,7 @@ import { useT } from '../../i18n';
 export function NotFoundPage(): React.JSX.Element {
   const t = useT();
   return (
-    <div className="mesh-page mesh-page--centered" role="alert">
+    <main className="mesh-page mesh-page--centered" role="alert">
       <p className="mesh-page__code" aria-hidden="true">
         404
       </p>
@@ -16,6 +16,6 @@ export function NotFoundPage(): React.JSX.Element {
       <Link data-testid="notfound-home" className="mesh-page__link" to="/">
         {t('notFound.backHome')}
       </Link>
-    </div>
+    </main>
   );
 }
