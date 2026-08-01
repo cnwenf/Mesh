@@ -2,6 +2,10 @@
 
 > 方法：requesting-code-review；基线 `7841b281`，范围为本次合规扫描、CI、Node builder、
 > 测试与文档变更。
+>
+> **2026-08-02 更正**：本记录对“扫描范围完整”的结论已被 alternate-ref 负向复验推翻。
+> 原实现的 `git log` 仅遍历 `HEAD` 可达提交，不能覆盖其他 ref 独有提交；原测试也没有建立
+> 真实分叉拓扑。修复与新 review 证据见 `2026-08-02-mes151-all-refs-regression.md`。
 
 ## 审查清单
 
@@ -9,7 +13,7 @@
 |---|---|---|
 | 仓库中不保存真实匹配规则 | 通过 | 实现只接受外部文件或 Actions secret，规范与 workflow 均无规则正文 |
 | 缺配置时 fail closed | 通过 | 空配置、缺失文件、非法正则、非法 Git root 均有单测；CLI 返回非零 |
-| 扫描范围完整 | 通过 | 当前全部受管文本、完整 commit message/author 与 refs 均进入扫描；CI 完整检出历史 |
+| 扫描范围完整 | 原结论撤回 | `git log` 缺少 all-refs revision selection；后续负向复验发现确定性漏检 |
 | 日志不二次泄漏 | 通过 | 命中只输出规则编号、来源与行号；单测断言规则和命中正文不出现在 JSON |
 | 外部规则误报控制 | 通过 | 对短 token 使用边界约束；修正后全仓扫描零命中，不在仓库记录规则正文 |
 | Docker 与项目引擎一致 | 通过 | 测试从 `package.json` 解析下限并校验 Docker 精确 patch；镜像实测 Node v22.22.0 |
@@ -25,9 +29,10 @@
    增补异常与文件边界测试后，97 statements / 28 branches 均 100%。
 3. **已验证（中）**：Compose 原配置为对象存储暴露开发端口。验收复跑使用临时 override
    清空映射，并确认 PostgreSQL、Redis、MinIO 的 `docker port` 均为空；override 未纳入提交。
-4. **无未解决阻断项**：当前 diff 未发现秘密、规则正文、弱凭据、运行时版本漂移或未覆盖的新逻辑。
+4. **后续发现（高）**：alternate ref 独有提交不在原 `git log` 的 revision set 中；本记录
+   当时使用的测试让 ref 指向当前提交，没有覆盖该拓扑，因此“无未解决阻断项”结论撤回。
 
 ## Review 结论
 
-代码层审查通过，可进入 PR CI。合并条件为 source-provenance、backend、frontend、Spec
-相关 checks 全绿；合并后需核对远端 `main` 再提交复验。
+本记录的原通过结论已失效，不再作为放行依据。后续修复必须以真实 alternate-ref 回归、
+source-provenance 与 backend 完整 CI，以及新的 review 结论为准。

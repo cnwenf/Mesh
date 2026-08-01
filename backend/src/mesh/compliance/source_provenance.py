@@ -120,7 +120,9 @@ def scan_repository(root: Path, patterns: list[re.Pattern[str]]) -> ScanResult:
     for source, text in tracked:
         violations.extend(scan_text(source, text, patterns))
 
-    log_text = _git(root, "log", "--format=%H%n%B%n%an%n%ae%n--END--").decode("utf-8", errors="replace")
+    log_text = _git(root, "log", "--all", "--format=%H%n%B%n%an%n%ae%n--END--").decode(
+        "utf-8", errors="replace"
+    )
     ref_text = _git(root, "for-each-ref", "--format=%(refname)").decode("utf-8", errors="replace")
     violations.extend(scan_text("<git-log>", log_text, patterns))
     violations.extend(scan_text("<git-refs>", ref_text, patterns))
