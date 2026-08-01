@@ -41,10 +41,10 @@
 - [ ] 顶层导航固定为：收件箱/我的任务、项目、看板/视图、Issue、成员（人+agent 同册）、聊天、小队、自动化（Autopilots/Runtimes）、洞察、集成、设置；guest/agent 角色不见管理区（依据: README §6.12）— 现状 ✅（Sidebar 条目齐全，`shell/Sidebar.tsx`）
 - [ ] Sidebar 所有导航项均有对应路由，**点击任何条目不得落入 404**（依据: README §6.12）— 现状 ❌（Sidebar 注册 `/skills` 入口但 App.tsx 无该路由，点击进入 NotFoundPage，`Sidebar.tsx:39`）
 - [ ] Settings 不维护独立 Agents 名册；agent 唯一名册入口在成员页（依据: README §6.12「Agent 入口去重」）— 现状 ✅
-- [ ] 九条规范深链全部可直达且用于通知/邮件外链：`/w/{ws}/issues/by-identifier/{KEY-N}`、`/projects/{id}`、`/members/{member_id}`、`/agents/{id}`、`/views/{view_id}`、`/executions/{id}`、`/chat/{session_id}`、`/squads/{squad_id}(/tasks/{task_id})`、`/approvals`（依据: README §6.12）— 现状 🟡（`/approvals` 统一审批页、`/members/{member_id}` 成员深链缺失，其余已实现）
+- [ ] 九条规范深链全部可直达且用于通知/邮件外链：`/w/{ws}/issues/by-identifier/{KEY-N}`、`/projects/{id}`、`/members/{member_id}`、`/agents/{id}`、`/views/{view_id}`、`/executions/{id}`、`/chat/{session_id}`、`/squads/{squad_id}(/tasks/{task_id})`、`/approvals`（依据: README §6.12）— 现状 🟡（MES-111 批次④已补 `/approvals` 与 `/w/{ws}/approvals`，由 `App.tsx`、`features/approvals/ApprovalsPage.tsx` 及 `e2e/real-mes111-b4.spec.ts` 实测；`/members/{member_id}` 仍缺）
 - [ ] 旧扁平路由（`/inbox`、`/board`…）经前端路由 replace 迁移到规范路由并保留 query/hash（依据: search-command-palette.md §3.4）— 现状 ⬜ 待实机
 - [ ] URL 状态同步：列表筛选/分页/排序、详情 Tab、看板视图等页面状态同步到 URL，刷新不丢失、可分享可收藏（依据: kanban.md §5.1 视图 URL；MES-108 交互优化）— 现状 🟡（看板 `/views/{id}`、issue 列表 useSearchParams 已实现；其余页面待验）
-- [ ] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— 现状 🟡（MES-124 批次① 经 `hooks/useDocumentTitle` 在登录/注册/MFA/找回/重置/设备/邀请/首页落地「<页面> · Mesh」;其余应用页随后续批次补齐,未读反映标题待做）
+- [ ] 浏览器标签页标题随页面语义变化（如「MES-123 修复登录 · Mesh」），通知未读可反映到标题/favicon（依据: MES-108 完成品体验）— 现状 🟡（MES-124 批次①经 `hooks/useDocumentTitle` 覆盖登录/注册/MFA/找回/重置/设备/邀请/首页；MES-111 批次④经 `shell/hooks/useDocumentTitle` 补设置、工作区设置、洞察、审批页及异步名称组合，单测见 `shell/hooks/__tests__/useDocumentTitle.test.ts`；其余应用实体页与未读标题/favicon 仍待补）
 - [ ] 工作区切换器（左上角下拉）列出用户全部工作区 +「创建工作区」，切换后整页上下文刷新（依据: workspace.md §4.1）— 现状 ✅
 - [ ] 404 页提供回首页/回工作区的可操作出口，非裸错误（依据: README §6.12 异常态矩阵）— 现状 ⬜ 待实机
 
@@ -69,7 +69,7 @@
 - [ ] `color-scheme` 联动原生控件（滚动条/下拉/焦点环随主题）；`meta theme-color` 双声明（依据: theme.md §4.2）— 现状 ✅
 - [ ] forced-colors 适配、打印强制亮色、prefers-reduced-motion 关动画、prefers-contrast: more 增强、reduced-transparency 降级（依据: theme.md §4.2/§4.3）— 现状 ✅（`design/base.css`）
 - [ ] 跨标签页主题同步（storage 事件）（依据: theme.md §3.3）— 现状 ⬜ 待实机
-- [ ] **工作区默认主题设置入口**（admin 可见，「成员未单独设置时生效」）（依据: theme.md §4.1）— 现状 ❌（Spec 自认「当前无此入口，随协商链一并落地」）
+- [x] **工作区默认主题设置入口**（admin 可见，「成员未单独设置时生效」）（依据: theme.md §4.1）— 现状 ✅（MES-111 批次④：`WorkspaceGeneralSection.tsx` 写入 `settings.default_theme`，`WorkspaceProvider.tsx` + `workspaceThemeBridge.ts` 接通协商链；`WorkspaceSettingsPage.test.tsx` 覆盖门控/载荷，真实四组合存证见 `e2e/evidence/mes111-b4/`）
 - [ ] 未登录邀请接受页主题随工作区默认（经公开 invitation preview，不暴露完整 workspace detail）（依据: theme.md §2.2/§3.1）— 现状 ⬜ 待实机
 - [ ] UGC 内联色（标签 chip/头像底色）双主题对比达标，on-color 按亮度阈值自动取黑/白，有颜色守卫（依据: theme.md §2.5）— 现状 ✅（`design/ugcColorGuard.ts`）
 - [ ] 四组合：主题相关改动须在桌面+亮、桌面+暗走查通过（暗色视觉回归基线门禁 maxDiffPixelRatio ≤0.01）（依据: theme.md §5.4）— 现状 ✅（`playwright.visual.config.ts`）/ ⬜ 新页面待补基线
@@ -100,18 +100,18 @@
 
 ### 1.6 搜索与命令面板
 
-- [ ] `Ctrl/Cmd+K` 任意页面（含输入框内）打开命令面板；居中浮层 ~640px，限高内滚动，选中行始终可视（依据: search-command-palette.md §4.1）— 现状 ✅（`shortcuts/CommandPalette.tsx`）
-- [ ] **六类对象跨模块搜索**：issue（identifier/标题）、成员、agent、项目、视图、聊天会话，按类型分组组头（依据: search-command-palette.md §1.2 S2）— 现状 ❌（仅检索已注册命令，不检索任何业务对象）
-- [ ] 顶栏搜索框为真实控件：输入即展开同一结果视图，`/` 聚焦（依据: search-command-palette.md §1.2）— 现状 ❌（TopBar 搜索框无任何 onChange/提交逻辑，纯装饰，`shell/TopBar.tsx:42-48`）
-- [ ] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 🟡（仅导航 10 条 + 主题 3 条 + onboarding 恢复）
-- [ ] 空 query 数据流：favorites → recents（本地三元组隔离键）→ 常用命令；失权对象惰性清理（依据: search-command-palette.md §4.2.1）— 现状 ❌（无 favorites/recents 区）
-- [ ] identifier 精确命中（`web-124` → `WEB-124`）顶置直达，跳过防抖（依据: search-command-palette.md §2.2）— 现状 ❌（依赖对象搜索）
-- [ ] 模糊搜索分层打分 + 命中字符高亮（字重/下划线叠加，不以颜色为唯一信号）（依据: search-command-palette.md §3.1/§4.1）— 现状 ❌（依赖对象搜索）
-- [ ] no-results：提示 + 建议 +「新建 issue "xxx"」快捷动作（仅有权限者可见，预填不直接提交）（依据: search-command-palette.md §4.2）— 现状 ❌
-- [ ] 离线态：仅本地命令可用 +「网络已断开」提示（依据: search-command-palette.md §4.2）— 现状 ⬜ 待实机
-- [ ] 键盘导航 ↑/↓/Enter/Esc/Tab 补全；ARIA combobox+listbox + aria-live=polite；焦点陷落/归还；mod+Enter 新标签打开（依据: search-command-palette.md §1.3/§5.5）— 现状 ⬜ 待实机
-- [ ] 底部操作提示条「↑↓ 导航 · Enter 打开 · Tab 补全 · ? 快捷键」（依据: search-command-palette.md §4.1）— 现状 ⬜ 待实机
-- [ ] 防抖 120–200ms + 取消过期请求；异步补入按稳定 id 维持选中项不移位（依据: search-command-palette.md §3.3/§4.3.1）— 现状 ⬜ 待实机（对象搜索落地后验）
+- [x] `Ctrl/Cmd+K` 任意页面（含输入框内）打开命令面板；居中浮层 ~640px，限高内滚动，选中行始终可视（依据: search-command-palette.md §4.1）— 现状 ✅（`shortcuts/CommandPalette.tsx`；`e2e/real-mes111-b4.spec.ts` 桌面真实键盘路径）
+- [x] **六类对象跨模块搜索**：issue（identifier/标题）、成员、agent、项目、视图、聊天会话，按类型分组组头（依据: search-command-palette.md §1.2 S2）— 现状 ✅（MES-111 批次④：`backend/src/mesh/search/` + `shortcuts/usePaletteData.ts`/`PaletteResults.tsx`；后端真实 e2e 见 `backend/tests/e2e/test_search_e2e.py`，浏览器存证见 `e2e/evidence/mes111-b4/`）
+- [x] 顶栏搜索框为真实控件：输入即展开同一结果视图，`/` 聚焦（依据: search-command-palette.md §1.2）— 现状 ✅（MES-111 批次④：`shell/TopBar.tsx` 与面板共用 `PaletteResults` + `usePaletteData`；`TopBar.test.tsx` 与 `e2e/real-mes111-b4.spec.ts` 覆盖输入、键盘、鼠标路径）
+- [ ] 命令全集九组：顶层导航、设置子页、待审批、新建 issue、主题×4、复制当前深链、收藏/取消收藏、标记全部已读（随当前 filter）、帮助层；无权命令不注册不渲染（依据: search-command-palette.md §1.2 S3）— 现状 🟡（MES-111 批次④已由 `shell/shortcutsRegistration.ts` 落地顶层导航、角色门控设置、待审批、主题×4、复制深链、收藏、随 filter 全部已读及帮助层；新建 issue 当前仅有 `C` 快捷键/鼠标入口，尚未注册为面板命令，见 `shortcutsRegistration.test.ts`）
+- [ ] 空 query 数据流：favorites → recents（本地三元组隔离键）→ 常用命令；失权对象惰性清理（依据: search-command-palette.md §4.2.1）— 现状 🟡（MES-111 批次④已由 `usePaletteData.ts`/`recents.ts`/`paletteModel.ts` 落地三段组装、同目标去重与 host+user+workspace 隔离；`removeRecent` 清理出口已有，但失权对象打开面板即自动剔除尚未接线）
+- [x] identifier 精确命中（`web-124` → `WEB-124`）顶置直达，跳过防抖（依据: search-command-palette.md §2.2）— 现状 ✅（`useEntitySearch.ts` 跳过 120ms 防抖；`backend/tests/e2e/test_search_e2e.py` 与 `e2e/real-mes111-b4.spec.ts` 覆盖大小写直达）
+- [x] 模糊搜索分层打分 + 命中字符高亮（字重/下划线叠加，不以颜色为唯一信号）（依据: search-command-palette.md §3.1/§4.1）— 现状 ✅（`backend/src/mesh/search/scoring.py` 分层打分，`PaletteResults.tsx` 以 `<mark>` 字重+下划线渲染；对应后端 e2e 与 `PaletteResults.test.tsx`）
+- [x] no-results：提示 + 建议 +「新建 issue "xxx"」快捷动作（仅有权限者可见，预填不直接提交）（依据: search-command-palette.md §4.2）— 现状 ✅（`CommandPalette.tsx` 权限门控并只打开预填入口；`CommandPalette.test.tsx` 覆盖有权/无权与不直提）
+- [x] 离线态：仅本地命令可用 +「网络已断开」提示（依据: search-command-palette.md §4.2）— 现状 ✅（`CommandPalette.tsx` + `usePaletteData.ts` 降级；`CommandPalette.test.tsx` 覆盖断网不发搜索请求）
+- [x] 键盘导航 ↑/↓/Enter/Esc/Tab 补全；ARIA combobox+listbox + aria-live=polite；焦点陷落/归还；mod+Enter 新标签打开（依据: search-command-palette.md §1.3/§5.5）— 现状 ✅（`CommandPalette.tsx`/`PaletteResults.tsx`；组件单测覆盖全键位与焦点，`e2e/real-mes111-b4.spec.ts` 真实走查 ↑/↓/Enter/Esc 与 live region）
+- [x] 底部操作提示条「↑↓ 导航 · Enter 打开 · Tab 补全 · ? 快捷键」（依据: search-command-palette.md §4.1）— 现状 ✅（`CommandPalette.tsx` 的 `mesh-palette__footer`，四组合截图见 `e2e/evidence/mes111-b4/*palette*`）
+- [x] 防抖 120–200ms + 取消过期请求；异步补入按稳定 id 维持选中项不移位（依据: search-command-palette.md §3.3/§4.3.1）— 现状 ✅（`useEntitySearch.ts` 采用 120ms + AbortController + 单调令牌，`CommandPalette.tsx` 按 stable id 收敛；`useEntitySearch.test.ts`/`CommandPalette.test.tsx` 覆盖时序与选中不移位）
 
 ### 1.7 键盘快捷键
 
@@ -178,10 +178,10 @@
 
 ### 1.13 统一审批
 
-- [ ] 「待我审批」聚合页 `/approvals`：三类审批（工具/squad 计划/autopilot 动作）统一入口（依据: README §6.10）— 现状 ❌（无 /approvals 路由；审批分散在 squad 页与 run 页）
-- [ ] 每条审批显示：动作、所需权限（capability+permission）、影响范围、预估成本、过期时间、续跑提示「将从审批点以新尝试恢复:已完成 N 步」（依据: README §6.10）— 现状 ⬜ 待实机（分散入口内核对）
-- [ ] 过期显示「已过期」+「重新发起」（依据: README §6.12）— 现状 ⬜ 待实机
-- [ ] agent 不可审批，审批入口仅对人类呈现（依据: README §6.10）— 现状 ⬜ 待实机
+- [x] 「待我审批」聚合页 `/approvals`：三类审批（工具/squad 计划/autopilot 动作）统一入口（依据: README §6.10）— 现状 ✅（MES-111 批次④：`App.tsx` 注册平直/工作区双路由，`ApprovalsPage.tsx` 聚合三类；真实深链 e2e 与四组合存证见 `e2e/real-mes111-b4.spec.ts`、`e2e/evidence/mes111-b4/`）
+- [x] 每条审批显示：动作、所需权限（capability+permission）、影响范围、预估成本、过期时间、续跑提示「将从审批点以新尝试恢复:已完成 N 步」（依据: README §6.10）— 现状 ✅（`ApprovalCard.tsx` + `summary.ts`，`ApprovalCard.test.tsx` 逐字段断言）
+- [x] 过期显示「已过期」+「重新发起」（依据: README §6.12）— 现状 ✅（`ApprovalCard.tsx` 的过期分支与 subject 深链；`ApprovalCard.test.tsx` 回归）
+- [x] agent 不可审批，审批入口仅对人类呈现（依据: README §6.10）— 现状 ✅（`ApprovalsPage.tsx` 请求前门控；`ApprovalsPage.test.tsx` 覆盖平直/工作区两种 agent 身份）
 
 ### 1.14 微交互与动效
 
@@ -591,15 +591,15 @@
 | --- | --- | --- | --- | --- |
 | G1 | 首页为脚手架演示舞台（demo 区块 + mock 端点），非真实产品首页 | `shell/pages/HomePage.tsx` | 产品第一印象；MES-107 核心 | 工作台视角首页：我的 issue/收件箱摘要/进行中运行/最近项目 |
 | G2 | 移动端导航不可用：≤768px 侧栏 `display:none` 无抽屉替代 | `shell/shell.css:402` | 手机 × 两套组合整体不通过 | 汉堡菜单 + 抽屉侧栏；断点系统（≥1024/768）；触控目标 ≥44px；**移动端布局细则须补进各模块 Spec** |
-| G3 | 全局搜索为死输入框（无 onChange/提交） | `shell/TopBar.tsx:42-48` | 竞品核心入口；onboarding 键盘提示依赖它 | 接入与命令面板同一结果视图 |
-| G4 | 命令面板不检索业务对象（六类对象搜索缺失）、无 favorites/recents 空态、无 identifier 直达、无 no-results 建 issue | `shortcuts/CommandPalette.tsx` | 竞品最高频能力差距 | 按 search-command-palette.md §1.2/§4.2 全量落地 |
+| G3 | ✅ 已核销：顶栏搜索已接入真实查询，键入即展开与命令面板同源结果视图 | `shell/TopBar.tsx`、`shortcuts/PaletteResults.tsx` | 竞品核心入口；onboarding 键盘提示依赖它 | MES-111 批次④；`TopBar.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 palette 存证 |
+| G4 | ✅ 主体已核销：六类对象搜索、favorites/recents 空态、identifier 直达、no-results 建 issue 已落地 | `backend/src/mesh/search/`、`shortcuts/CommandPalette.tsx` | 竞品最高频能力差距 | 后端真实 e2e `backend/tests/e2e/test_search_e2e.py` + 浏览器真实 e2e/四组合存证；命令表新建 issue 与失权 recent 自动清理为残余建议，见 §1.6 🟡 边界 |
 | G5 | `/skills` 路由未注册：Sidebar 死链 + features/skills 整套孤儿代码 | `App.tsx` / `Sidebar.tsx:39` | 功能不可达；导航破窗 | 注册路由并接线 agent 详情「技能与工具」Tab |
 | G6 | Agent 详情「技能与工具」Tab 为占位 EmptyState | `AgentDetailPage.tsx:627` | 工具权限（只读/可写/需确认）无管理面 | 接线 skills 绑定区 + 工具权限下拉 |
 | G7 | 看板 List 布局占位、快速建卡禁用、拖拽零视觉反馈、无虚拟滚动（性能线 1000 卡 ≥50fps 不达） | `features/board/` | 竞品看板核心体验 | List 视图落地；dragover 高亮/落点条/ghost；虚拟滚动 |
 | G8 | 设计层基础组件无 hover/active 状态；全库 :active 仅 1 条 | `design/components.css` | 微交互一致性差距 | hover/active/pressed 状态令牌化补入组件层 |
 | G9 | 上下文快捷键组（看板/issue 详情）Spec 已定义但页面无注册 | `shell/shortcutsRegistration.ts` | 键盘效率承诺未兑现 | 按 search-command-palette.md §4.3 注册 + 等价鼠标路径核对 |
-| G10 | 统一审批页 `/approvals` 缺失（九条规范深链之一） | `App.tsx` | 审批入口分散；深链断 | 聚合三类审批的独立页 |
-| G11 | 工作区默认主题设置入口缺失（Spec 自认未落地） | theme.md §4.1 | 协商链中段无管理面 | 工作区设置外观 section |
+| G10 | ✅ 已核销：`/approvals` 与 `/w/{ws}/approvals` 聚合工具/squad 计划/autopilot 动作审批 | `App.tsx`、`features/approvals/` | 审批入口分散；深链断 | `ApprovalsPage.test.tsx` + `e2e/real-mes111-b4.spec.ts` + 四组合 approvals 存证 |
+| G11 | ✅ 已核销：admin 可配置工作区默认主题并接通用户偏好缺省时的协商链 | `workspace/pages/settings/WorkspaceGeneralSection.tsx`、`state/workspaceThemeBridge.ts` | 协商链中段无管理面 | `WorkspaceSettingsPage.test.tsx` + `ThemeProvider.test.tsx` + 四组合 ws-settings 存证 |
 | G12 | 脚手架/增量期文案残留：`login.phaseNote`、`members.add.agentComingSoon`、dev token 直填入口、`PlaceholderPage.tsx` | `catalogs/*.json`、`shell/` | 完成品观感 | 清除并加 CI 守卫（coming soon/placeholder 关键词扫描） |
 | G13 | type scale 不完整（仅三档字号，无中英字体配对/数字表格化专项） | `design/tokenValues.ts` | 排版品质差距 | 显示+正文字体配对、完整字号/字重/行高阶梯、表格数字等宽 |
 | G14 | 中间层组件缺失：Dropdown/Menu、Avatar、Tabs、Tooltip、Accordion 各 feature 自造 | `design/` | 视觉漂移、重复造轮子 | 设计层统一供给并迁移各 feature |
@@ -607,7 +607,7 @@
 | G16 | 移动端 Spec 细则缺失：README 仅「只读优先」一句方针 | README §6.12 | 移动验收无据可依 | **须补进 Spec**：各核心页移动端布局/降级/手势细则 |
 | G17 | `agent.trigger_skipped` 呈现方式 Spec 未细化 | agent.md §3.6 | 验收无组件级依据 | **须补进 Spec**：toast 或内联提示选型 |
 | G18 | 个人资料编辑缺失：无头像/昵称/bio 编辑界面（`PATCH /users/me` 仅偏好键） | `api/userPreferences.ts` | 竞品成员模型基本项 | 个人设置增 Profile section（头像上传 + 显示名 + bio） |
-| G19 | 浏览器标签页标题全站静态（无 document.title 逐页设置） | 全库 | 多标签工作流辨识度；完成品基本项 | 路由级标题（实体页带 identifier/名称），未读可反映标题/favicon |
+| G19 | ✅ 基线缺口已核销：公共 `useDocumentTitle` 已建立并接入公开页、首页及批次④页面 | `hooks/useDocumentTitle.ts`、`shell/hooks/useDocumentTitle.ts` | 多标签工作流辨识度；完成品基本项 | 单测覆盖写入/异步更新/卸载复位；其余应用实体页与未读标题/favicon 仍属 §1.1 残余范围 |
 
 ---
 

@@ -315,3 +315,240 @@
     animation: none;
   }
 }
+
+/*
+ * patterns 层样式(design-quality.md §11.1:features → patterns → primitives → foundations)。
+ * 设置页模板(§4.4 Settings:二级导航 + 内容列 + dirty/save 区)。
+ *
+ * 断点复用外壳集中值(shell.css / §8.1 compact 0–599px):桌面左栏二级导航,
+ * ≤599px 折叠为内容上方的分组列表(§8.3「设置:二级导航变顶部分组列表」)。
+ * 一切颜色经语义 token,禁硬编码;触控目标 ≥44px(§8.2)。
+ */
+
+/* ── SettingsLayout:二级导航 + 内容列 ─────────────────────────────── */
+
+.mesh-settings-layout {
+  /* 内容约束:设置导航列固定宽(布局常量,非颜色)。 */
+  --settings-nav-width: 224px;
+
+  display: grid;
+  grid-template-columns: var(--settings-nav-width) minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.mesh-settings-layout__nav {
+  position: sticky;
+  inset-block-start: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-inline-size: 0;
+}
+
+.mesh-settings-layout__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-settings-layout__title {
+  font-size: var(--font-size-title-2);
+  line-height: var(--line-height-title-2);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  margin: 0;
+}
+
+.mesh-settings-layout__description {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  margin: 0;
+}
+
+.mesh-settings-layout__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-settings-layout__group-label {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-caption);
+  line-height: var(--line-height-caption);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-inline: var(--space-3);
+  margin: 0;
+}
+
+.mesh-settings-layout__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+}
+
+/* 导航项:触控目标 ≥44px(§8.2);当前项 = 浅强调底 + 强文字 + 字重 +
+   3px 边缘指示(§4.1:不以颜色作唯一信号,叠加字重与形状)。 */
+.mesh-settings-layout__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: 44px;
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-md);
+  border-inline-start: 3px solid transparent;
+  color: var(--color-text);
+  font-weight: var(--font-weight-regular);
+  text-decoration: none;
+  transition:
+    background-color var(--motion-fast) var(--ease-enter),
+    color var(--motion-fast) var(--ease-enter);
+}
+
+.mesh-settings-layout__link:hover {
+  background-color: var(--color-surface-hover);
+  color: var(--color-text-strong);
+}
+
+.mesh-settings-layout__link:active {
+  background-color: var(--color-surface-pressed);
+}
+
+.mesh-settings-layout__link.is-active {
+  background-color: var(--color-accent-soft);
+  color: var(--color-text-strong);
+  font-weight: var(--font-weight-semibold);
+  border-inline-start-color: var(--color-accent);
+}
+
+.mesh-settings-layout__link-icon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.mesh-settings-layout__link.is-active .mesh-settings-layout__link-icon {
+  color: var(--color-accent);
+}
+
+.mesh-settings-layout__content {
+  min-inline-size: 0;
+  max-inline-size: var(--content-form, 640px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ── 手机(≤599px,§8.1 compact / §8.3):导航折叠为内容上方分组列表 ── */
+
+@media (max-width: 599px) {
+  .mesh-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .mesh-settings-layout__nav {
+    position: static;
+    inset-block-start: auto;
+    padding-block-end: var(--space-3);
+    border-block-end: 1px solid var(--color-border-subtle);
+  }
+
+  .mesh-settings-layout__content {
+    max-inline-size: none;
+  }
+}
+
+/* ── SettingsSection:卡片表面分区(默认 / danger 两态)────────────── */
+
+.mesh-settings-section {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mesh-settings-section__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-settings-section__title {
+  font-size: var(--font-size-title-3);
+  line-height: var(--line-height-title-3);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  margin: 0;
+}
+
+.mesh-settings-section__description {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body);
+  margin: 0;
+}
+
+.mesh-settings-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mesh-settings-section__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-block-start: var(--space-3);
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+/* danger 分区(design-quality §3.2:危险区与普通偏好距离不足 → 语义边界 +
+   标题着危险色;颜色不作唯一信号,调用方配图标/文案与确认流程)。 */
+.mesh-settings-section--danger {
+  border-color: var(--color-danger-border);
+}
+
+.mesh-settings-section--danger .mesh-settings-section__title {
+  color: var(--color-danger-fg);
+}
+
+/* ── SettingsFieldRow:label + control + hint 行(§7.4 表单)────────── */
+
+.mesh-settings-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.mesh-settings-field-row__label {
+  color: var(--color-text);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+}
+
+.mesh-settings-field-row__hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-body-sm);
+  line-height: var(--line-height-body-sm);
+  margin: 0;
+}
+
+/* ── 脏表单离开确认 Dialog 内容布局 ─────────────────────────────────── */
+
+.mesh-settings-guard__description {
+  color: var(--color-text);
+  margin: 0 0 var(--space-4);
+}
+
+.mesh-settings-guard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}

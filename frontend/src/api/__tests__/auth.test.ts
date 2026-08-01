@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MeshApiClient } from '../client';
-import { fetchMe, isSessionTokens, login, register } from '../auth';
+import {
+  fetchMe,
+  fetchPrincipal,
+  isAgentPrincipal,
+  isSessionTokens,
+  login,
+  register,
+} from '../auth';
 import type { CurrentUser } from '../auth';
 
 function createMockFetch(status: number, body: unknown): typeof fetch {
@@ -141,5 +148,28 @@ describe('auth API(auth.md §3.1 注册/登录/当前用户)', () => {
 
     expect(result.settings.locale).toBe('zh-CN');
     expect(calledUrl(fetchImpl)).toContain('/api/v1/me');
+  });
+
+  it('fetchPrincipal preserves the unified agent principal response', async () => {
+    const agent = {
+      kind: 'agent' as const,
+      id: 'member-agent',
+      member_type: 'agent' as const,
+      workspace_id: 'ws-agent',
+      role: 'member',
+      name: 'Builder',
+      scopes: ['approval:read'],
+    };
+    const fetchImpl = createMockFetch(200, { data: agent });
+
+    const result = await fetchPrincipal(createClient(fetchImpl));
+
+    expect(isAgentPrincipal(result)).toBe(true);
+    if (isAgentPrincipal(result)) expect(result.workspace_id).toBe('ws-agent');
+    expect(calledUrl(fetchImpl)).toContain('/api/v1/me');
+  });
+
+  it('does not classify a human /me response as an agent principal', () => {
+    expect(isAgentPrincipal(USER)).toBe(false);
   });
 });

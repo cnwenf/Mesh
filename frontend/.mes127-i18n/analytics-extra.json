@@ -1,0 +1,42 @@
+{
+  "keys": {
+    "analytics.agents.windowHint": { "en": "Last 30 days", "zh": "近 30 天" },
+    "analytics.caliber.window": {
+      "en": "Last {days} days · {granularity} buckets",
+      "zh": "近 {days} 天 · 按{granularity}分桶"
+    },
+    "analytics.chart.legendLabel": { "en": "Chart legend", "zh": "图例" },
+    "analytics.cycleTime.caliberHint": {
+      "en": "From completed items with a state-change trail.",
+      "zh": "取自有状态变更留痕的已完成工作项。"
+    },
+    "analytics.kpi.agentsTracked": { "en": "Agents tracked", "zh": "Agent 数" },
+    "analytics.kpi.completed": { "en": "Completed", "zh": "完成" },
+    "analytics.kpi.created": { "en": "Created", "zh": "新建" },
+    "analytics.kpi.net": { "en": "Net flow", "zh": "净流量" },
+    "analytics.kpi.openWorkload": { "en": "Open workload", "zh": "在途负荷" },
+    "analytics.kpi.snapshotHint": {
+      "en": "Current snapshot, no time window.",
+      "zh": "当前快照,无时间窗。"
+    },
+    "analytics.kpi.stripLabel": { "en": "Key metrics", "zh": "关键指标" },
+    "analytics.kpi.windowHint": { "en": "Last {days} days", "zh": "近 {days} 天" },
+    "analytics.legend.dashed": { "en": "dashed", "zh": "虚线" },
+    "analytics.legend.solid": { "en": "solid", "zh": "实线" },
+    "analytics.state.costExceeded": {
+      "en": "Narrow the time range or dimensions, then retry.",
+      "zh": "收窄时间范围或维度后重试。"
+    },
+    "analytics.state.createIssue": { "en": "New issue", "zh": "新建工作项" },
+    "analytics.state.errorImpact": {
+      "en": "Charts and key metrics are unavailable until the request succeeds.",
+      "zh": "图表与关键指标在请求成功前不可用。"
+    },
+    "analytics.state.windowEmpty": { "en": "No activity in this window", "zh": "该时间窗内暂无动态" },
+    "analytics.state.windowEmptyHint": {
+      "en": "Try a wider time range, or create an issue to get started.",
+      "zh": "试试更大的时间范围,或新建一个工作项开始使用。"
+    },
+    "analytics.tzNote": { "en": "All times shown in {tz}.", "zh": "时间均按 {tz} 显示。" }
+  }
+}

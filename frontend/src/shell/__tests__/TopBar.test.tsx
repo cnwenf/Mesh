@@ -1,9 +1,18 @@
 /**
- * TopBar — 品牌链接(§4.2 返回首页)/搜索/连接状态(稳定态仅点 + tooltip,进行/异常态显文本)/入口回调。
+ * TopBar — 品牌链接(§4.2 返回首页)/搜索/连接状态(稳定态仅点 + tooltip,
+ * 进行/异常态显文本)/面板与帮助入口;搜索为真实控件(§4.9):受控输入 +
+ * 内联结果弹层(与面板同一 PaletteResults),↑↓ 选择、Enter 激活选中或提交
+ * 展开完整面板、Esc 关闭/清空、点击导航。
  */
-import { fireEvent, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetApiClient } from '../../api/instance';
+import { fakeResponse } from '../../api/__tests__/fetchStub';
 import { renderWithProviders } from '../../test-utils/render';
+import { useShortcutRegistry } from '../../shortcuts';
+import { useAuthStore } from '../../state/authStore';
+import { resetPaletteContextCache } from '../../shortcuts/usePaletteContext';
+import { setRecentsScope } from '../../shortcuts/recents';
 import { TopBar } from '../TopBar';
 import type { ConnectionState } from '../../realtime';
 
@@ -16,29 +25,97 @@ const LABELS: Record<ConnectionState, string> = {
   resyncing: 'Resyncing',
 };
 
+const runSpy = vi.fn();
+
+function stubNetwork(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) {
+        return fakeResponse({
+          body: {
+            data: {
+              user: { id: 'u-1', email: 'u@c.com', display_name: 'U' },
+              memberships: [
+                {
+                  workspace_id: 'ws-1',
+                  workspace_name: 'WS',
+                  workspace_slug: 'ws',
+                  role: 'member',
+                  status: 'active',
+                  joined_at: null,
+                },
+              ],
+            },
+          },
+        });
+      }
+      return fakeResponse({ body: { data: [], next_cursor: null } });
+    }) as typeof fetch,
+  );
+}
+
+function renderTopBar(props: Partial<React.ComponentProps<typeof TopBar>> = {}) {
+  return renderWithProviders(
+    <TopBar
+      state="idle"
+      onOpenPalette={props.onOpenPalette ?? vi.fn()}
+      onOpenHelp={props.onOpenHelp ?? vi.fn()}
+      onOpenSearch={props.onOpenSearch ?? vi.fn()}
+      favoritesProvider={props.favoritesProvider ?? (async () => [])}
+      {...props}
+    />,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useShortcutRegistry.setState({ commands: [], shortcuts: [], activeContexts: [] });
+  act(() => {
+    useShortcutRegistry
+      .getState()
+      .registerCommand({ id: 'cmd-alpha', label: 'Alpha command', group: 'global', run: runSpy });
+    useShortcutRegistry
+      .getState()
+      .registerCommand({ id: 'cmd-beta', label: 'Beta command', group: 'global', run: vi.fn() });
+  });
+  window.localStorage.clear();
+  setRecentsScope({ userId: 'u-1', workspaceId: 'ws-1' });
+  resetPaletteContextCache();
+  resetApiClient();
+  stubNetwork();
+});
+
+afterEach(() => {
+  useAuthStore.getState().clearToken();
+  vi.unstubAllGlobals();
+  resetPaletteContextCache();
+  resetApiClient();
+});
+
 describe('TopBar', () => {
-  it('渲染品牌链接(§4.2 返回首页)与全局搜索框', () => {
-    renderWithProviders(<TopBar state="idle" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />);
+  it('渲染品牌链接(§4.2 返回首页)与全局搜索框(初始无弹层)', () => {
+    renderTopBar();
     expect(screen.getByRole('link', { name: 'Mesh' })).toHaveAttribute('href', '/');
     expect(screen.getByTestId('topbar-search')).toBeInTheDocument();
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
   });
 
   it.each(['connecting', 'reconnecting', 'resyncing', 'offline'])(
     '进行/异常态 %s 显式呈现文本标签(§4.2)',
     (state) => {
-      renderWithProviders(
-        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
+      renderTopBar({ state: state as ConnectionState });
+      expect(screen.getByTestId('conn-status').textContent).toContain(
+        LABELS[state as ConnectionState],
       );
-      expect(screen.getByTestId('conn-status').textContent).toContain(LABELS[state as ConnectionState]);
     },
   );
 
   it.each(['connected', 'idle'])(
     '稳定态 %s 仅呈现状态点 + tooltip 可读名,不显文本(§4.2 减常态噪音)',
     (state) => {
-      renderWithProviders(
-        <TopBar state={state as ConnectionState} onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={vi.fn()} />,
-      );
+      renderTopBar({ state: state as ConnectionState });
       // 稳定态不渲染常驻可见文本标签(StatusDot 的 .mesh-status__label),
       // 可读名由 tooltip 承载(role=img + aria-label 供读屏,颜色非唯一信号)。
       const conn = screen.getByTestId('conn-status');
@@ -53,63 +130,164 @@ describe('TopBar', () => {
   it('命令面板与帮助按钮触发对应回调', () => {
     const onOpenPalette = vi.fn();
     const onOpenHelp = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={onOpenPalette} onOpenHelp={onOpenHelp} onOpenSearch={vi.fn()} />);
+    renderTopBar({ state: 'connected', onOpenPalette, onOpenHelp });
     fireEvent.click(screen.getByTestId('open-palette'));
     fireEvent.click(screen.getByTestId('open-help'));
     expect(onOpenPalette).toHaveBeenCalledTimes(1);
     expect(onOpenHelp).toHaveBeenCalledTimes(1);
   });
 
-  it('顶栏搜索是统一搜索入口:键入即携带查询展开面板并交接焦点(design-quality A-02 / S1)', () => {
-    const onOpenSearch = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+  it('键入展开内联结果弹层(同一 PaletteResults);输入框保留键入值', async () => {
+    renderTopBar({ state: 'connected' });
     const input = screen.getByTestId('topbar-search');
-    fireEvent.change(input, { target: { value: '看' } });
-    expect(onOpenSearch).toHaveBeenCalledWith('看');
-    // 交接后本框清空(焦点将由命令面板接管)
-    expect(input).toHaveValue('');
+    fireEvent.change(input, { target: { value: 'alp' } });
+    expect(input).toHaveValue('alp');
+    expect(await screen.findByTestId('topbar-search-popover')).toBeInTheDocument();
+    // 本地命令同步过滤呈现(共享 palette-opt-* 稳定 id)
+    expect(screen.getByTestId('palette-opt-cmd:cmd-alpha')).toBeInTheDocument();
+    expect(screen.queryByTestId('palette-opt-cmd:cmd-beta')).not.toBeInTheDocument();
+    // 弹层默认无选中(Enter 语义为提交)
+    expect(input).not.toHaveAttribute('aria-activedescendant');
   });
 
-  it('顶栏搜索 Enter 携带当前查询展开面板', () => {
+  it('Enter 无选中项 → 携带查询展开完整命令面板并清空本框(统一入口 S1)', async () => {
     const onOpenSearch = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+    renderTopBar({ state: 'connected', onOpenSearch });
     const input = screen.getByTestId('topbar-search');
-    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.change(input, { target: { value: '看板' } });
+    await screen.findByTestId('topbar-search-popover');
     fireEvent.keyDown(input, { key: 'Enter' });
-    expect(onOpenSearch).toHaveBeenCalledWith('');
-  });
-
-  it('顶栏搜索清空输入不展开面板(仅复位本框)', () => {
-    const onOpenSearch = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
-    const input = screen.getByTestId('topbar-search');
-    fireEvent.change(input, { target: { value: '' } });
-    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(onOpenSearch).toHaveBeenCalledWith('看板');
     expect(input).toHaveValue('');
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
   });
 
-  it('清空后的空值变更真正抵达 onChange 时,命中空值提前返回(仅复位本框,不展开面板)', () => {
+  it('ArrowDown 进入弹层选择;Enter 激活选中项(命令执行)并收起', async () => {
     const onOpenSearch = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+    renderTopBar({ state: 'connected', onOpenSearch });
     const input = screen.getByTestId('topbar-search');
-    // 组件在任何变更后即提交清空(受控值恒为 ''),React 受控输入按节点值快照
-    // (_valueTracker)去重,会吞掉 ''→'' 的 change 事件。先将快照改写为脏值,
-    // 使本次空值变更真实触达 onChange,从而校验 handleSearchChange 的空值提前返回。
-    const tracker = (input as HTMLInputElement & { _valueTracker?: { setValue(value: string): void } })
-      ._valueTracker;
-    expect(tracker).toBeDefined();
-    tracker?.setValue('dirty');
-    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    await screen.findByTestId('topbar-search-popover');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(screen.getByTestId('palette-opt-cmd:cmd-alpha')).toHaveAttribute('aria-selected', 'true');
+    expect(input).toHaveAttribute('aria-activedescendant', 'palette-opt-cmd:cmd-alpha');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(runSpy).toHaveBeenCalledTimes(1);
     expect(onOpenSearch).not.toHaveBeenCalled();
-    expect(input).toHaveValue('');
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
   });
 
-  it('顶栏搜索 Escape 清空输入(不展开面板)', () => {
-    const onOpenSearch = vi.fn();
-    renderWithProviders(<TopBar state="connected" onOpenPalette={vi.fn()} onOpenHelp={vi.fn()} onOpenSearch={onOpenSearch} />);
+  it('点击结果项激活(鼠标等价路径)', async () => {
+    renderTopBar({ state: 'connected' });
     const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    fireEvent.click(await screen.findByTestId('palette-opt-cmd:cmd-alpha'));
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+  });
+
+  it('弹层打开后容器外 mousedown 关闭弹层;容器内按下不关闭(等价鼠标路径)', async () => {
+    renderTopBar({ state: 'connected' });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    expect(await screen.findByTestId('topbar-search-popover')).toBeInTheDocument();
+    // 容器内按下(输入框自身)不关闭
+    fireEvent.mouseDown(input);
+    expect(screen.getByTestId('topbar-search-popover')).toBeInTheDocument();
+    // 容器外按下 → 关闭
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+  });
+
+  it('对象结果中键点击经 openExternal 以新标签打开规范深链(window.open + noopener)', async () => {
+    // 有 token 才解析面板身份上下文(§3.2 匿名守卫),远程对象检索方可发起
+    useAuthStore.getState().setToken('test-token');
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const issueItem = {
+      type: 'issue',
+      id: 'i-1',
+      title: '登录崩溃排查',
+      icon: 'issue',
+      url: '/w/ws/issues/i-1',
+      context: {
+        identifier: 'MES-1',
+        project: null,
+        status: { id: 's-1', name: 'Todo', category: 'todo' },
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/users/me')) {
+          return fakeResponse({
+            body: {
+              data: {
+                user: { id: 'u-1', email: 'u@c.com', display_name: 'U' },
+                memberships: [
+                  {
+                    workspace_id: 'ws-1',
+                    workspace_name: 'WS',
+                    workspace_slug: 'ws',
+                    role: 'member',
+                    status: 'active',
+                    joined_at: null,
+                  },
+                ],
+              },
+            },
+          });
+        }
+        if (url.includes('/search')) {
+          return fakeResponse({ body: { data: [issueItem], next_cursor: null } });
+        }
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }) as typeof fetch,
+    );
+    renderTopBar({ state: 'connected' });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: '登录' } });
+    const option = await screen.findByTestId('palette-opt-issue:i-1');
+    // button=0/2 的 auxclick 不触发新标签语义;中键(1)才触发
+    fireEvent(option, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 0 }));
+    expect(openSpy).not.toHaveBeenCalled();
+    fireEvent(option, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+    expect(openSpy).toHaveBeenCalledWith('/w/ws/issues/i-1', '_blank', 'noopener');
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+    openSpy.mockRestore();
+  });
+
+  it('Esc 先关闭弹层,再按清空输入(不展开面板)', async () => {
+    const onOpenSearch = vi.fn();
+    renderTopBar({ state: 'connected', onOpenSearch });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    await screen.findByTestId('topbar-search-popover');
     fireEvent.keyDown(input, { key: 'Escape' });
-    expect(onOpenSearch).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+    expect(input).toHaveValue('alpha');
+    fireEvent.keyDown(input, { key: 'Escape' });
     expect(input).toHaveValue('');
+    expect(onOpenSearch).not.toHaveBeenCalled();
+  });
+
+  it('清空输入关闭弹层(不展开面板)', async () => {
+    const onOpenSearch = vi.fn();
+    renderTopBar({ state: 'connected', onOpenSearch });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'alpha' } });
+    await screen.findByTestId('topbar-search-popover');
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.queryByTestId('topbar-search-popover')).not.toBeInTheDocument();
+    expect(onOpenSearch).not.toHaveBeenCalled();
+  });
+
+  it('无结果时弹层呈现空态文案(shortcuts.paletteEmpty 既有键)', async () => {
+    renderTopBar({ state: 'connected' });
+    const input = screen.getByTestId('topbar-search');
+    fireEvent.change(input, { target: { value: 'zzz' } });
+    await waitFor(() =>
+      expect(screen.getByTestId('topbar-search-popover').textContent).toContain('No matching commands'),
+    );
   });
 });

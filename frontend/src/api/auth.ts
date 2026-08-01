@@ -52,6 +52,20 @@ export interface CurrentUser {
   created_at: string;
 }
 
+/** Agent credential resolved by the unified `GET /api/v1/me` principal endpoint. */
+export interface CurrentAgentPrincipal {
+  kind: 'agent';
+  id: string;
+  member_type: 'agent';
+  workspace_id: string;
+  role: string;
+  name: string | null;
+  scopes: string[];
+}
+
+/** `/me` is credential-polymorphic: web/session principals are users, agent tokens are roster identities. */
+export type CurrentPrincipal = CurrentUser | CurrentAgentPrincipal;
+
 /** 活跃会话(§3.1 GET /sessions) */
 export interface SessionInfo {
   id: string;
@@ -89,16 +103,22 @@ export async function login(client: MeshApiClient, input: LoginInput): Promise<L
 }
 
 /** 注册账号(409 conflict = 邮箱已占用;400 weak_password = 口令强度不足)。 */
-export async function register(
-  client: MeshApiClient,
-  input: RegisterInput,
-): Promise<CurrentUser> {
+export async function register(client: MeshApiClient, input: RegisterInput): Promise<CurrentUser> {
   return client.request<CurrentUser>('POST', '/api/v1/auth/register', { body: input });
 }
 
 /** 读取当前登录用户(需 Bearer token)。 */
 export async function fetchMe(client: MeshApiClient): Promise<CurrentUser> {
   return client.request<CurrentUser>('GET', '/api/v1/me');
+}
+
+/** Read the effective principal without assuming the credential belongs to a human user. */
+export async function fetchPrincipal(client: MeshApiClient): Promise<CurrentPrincipal> {
+  return client.request<CurrentPrincipal>('GET', '/api/v1/me');
+}
+
+export function isAgentPrincipal(principal: CurrentPrincipal): principal is CurrentAgentPrincipal {
+  return 'kind' in principal && principal.kind === 'agent';
 }
 
 /** refresh 续期(R4-H1 cookie 传输):refresh 经 HttpOnly cookie 自动呈递,

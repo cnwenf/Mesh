@@ -115,6 +115,22 @@ class Project(Base):
             postgresql_where=text("deleted_at IS NULL AND archived_at IS NULL"),
         ),
         Index("idx_projects_lead", "lead_member_id"),
+        # Search indexes (migration 0035, search-command-palette.md §2.2):
+        # expression indexes over the single normalization entry point.
+        Index(
+            "idx_projects_name_trgm",
+            text("mesh_search_norm(name)"),
+            postgresql_using="gin",
+            postgresql_ops={"mesh_search_norm(name)": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_projects_name_prefix",
+            "workspace_id",
+            text("mesh_search_norm(name)"),
+            postgresql_ops={"mesh_search_norm(name)": "text_pattern_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         # Lead: same-tenant composite FK, column-level SET NULL so deleting a
         # member only clears the reference column (PG16, README §6.2 rule 6).
         ForeignKeyConstraint(

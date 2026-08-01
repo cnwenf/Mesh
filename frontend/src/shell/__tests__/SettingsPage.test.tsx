@@ -1,12 +1,36 @@
 /**
- * SettingsPage — 主题即时切换(落 <html data-theme>)/locale 切换目录语言/时区即时更新 tz-sample/
- * 偏好同步错误横幅(MES-24 HIGH-3:422 具名 code → i18n 文案 + 可关闭)。
+ * 账号设置(SettingsLayout 二级导航 + 子路由分页):
+ * - 索引重定向 /settings → /settings/appearance;
+ * - 外观:主题即时切换(落 <html data-theme>)/locale 切换目录语言/时区即时更新 tz-sample;
+ * - 二级导航子路由切换(appearance ↔ notifications);
+ * - 偏好同步错误横幅(MES-24:422 具名 code → i18n 文案 + 可关闭)。
  */
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { Navigate, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NotificationPreferencesSection } from '../../features/inbox';
 import { useSettingsStore } from '../../state/settingsStore';
 import { renderWithProviders } from '../../test-utils/render';
 import { SettingsPage } from '../pages/SettingsPage';
+import { AppearanceSettingsSection } from '../pages/settings/AppearanceSettingsSection';
+import { SecuritySettingsSection } from '../pages/settings/SecuritySettingsSection';
+
+function SettingsRoutes(): React.JSX.Element {
+  return (
+    <Routes>
+      <Route path="/settings" element={<SettingsPage />}>
+        <Route index element={<Navigate to="appearance" replace />} />
+        <Route path="appearance" element={<AppearanceSettingsSection />} />
+        <Route path="notifications" element={<NotificationPreferencesSection />} />
+        <Route path="security" element={<SecuritySettingsSection />} />
+      </Route>
+    </Routes>
+  );
+}
+
+function renderAt(route: string): ReturnType<typeof renderWithProviders> {
+  return renderWithProviders(<SettingsRoutes />, { route });
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -31,14 +55,34 @@ const ME_BODY = {
   },
 };
 
-describe('SettingsPage', () => {
+describe('账号设置(SettingsLayout + 子路由)', () => {
   beforeEach(() => {
     useSettingsStore.getState().resetPreferences();
     useSettingsStore.getState().clearSyncError();
   });
 
+  it('索引路由重定向到 appearance(主题控件可见)', () => {
+    renderAt('/settings');
+    expect(screen.getByTestId('theme-select')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-nav-appearance')).toBeInTheDocument();
+  });
+
+  it('二级导航呈现三个分页项,当前项高亮', () => {
+    renderAt('/settings/notifications');
+    expect(screen.getByTestId('settings-nav-appearance')).toBeInTheDocument();
+    expect(screen.getByTestId('settings-nav-notifications').className).toContain('is-active');
+    expect(screen.getByTestId('settings-nav-security')).toBeInTheDocument();
+  });
+
+  it('切换到 notifications 子路由替换外观内容(路由化分页)', () => {
+    renderAt('/settings/notifications');
+    // 外观控件不再渲染,证明分页经子路由切换(通知区数据加载属 inbox 模块,此处不断言)。
+    expect(screen.queryByTestId('theme-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId('settings-nav-notifications').className).toContain('is-active');
+  });
+
   it('切换 theme-select 即时落到 document.documentElement.dataset.theme', () => {
-    renderWithProviders(<SettingsPage />);
+    renderAt('/settings/appearance');
     fireEvent.change(screen.getByTestId('theme-select'), { target: { value: 'dark' } });
     expect(document.documentElement.dataset.theme).toBe('dark');
     expect(useSettingsStore.getState().preferences.theme).toBe('dark');
@@ -47,7 +91,7 @@ describe('SettingsPage', () => {
   });
 
   it('切换 locale-select 使已渲染目录语言变化(en ↔ zh-CN)', () => {
-    renderWithProviders(<SettingsPage />);
+    renderAt('/settings/appearance');
     const heading = screen.getByRole('heading', { level: 1 });
     expect(heading.textContent).toBe('Settings');
     fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'zh-CN' } });
@@ -60,7 +104,7 @@ describe('SettingsPage', () => {
 
   it('切换 timezone-select 即时更新 tz-sample', () => {
     useSettingsStore.getState().setTimezone('UTC');
-    renderWithProviders(<SettingsPage />);
+    renderAt('/settings/appearance');
     const sample = screen.getByTestId('tz-sample');
     expect(sample.textContent).toContain('2026-07-25 18:00');
     expect(sample.textContent).toContain('UTC');
@@ -71,7 +115,7 @@ describe('SettingsPage', () => {
 
   it('timezone 选项包含基础候选与当前检测时区(去重)', () => {
     useSettingsStore.getState().setTimezone('Australia/Sydney');
-    renderWithProviders(<SettingsPage />);
+    renderAt('/settings/appearance');
     const options = [...(screen.getByTestId('timezone-select') as HTMLSelectElement).options].map(
       (option) => option.value,
     );
@@ -87,7 +131,7 @@ describe('SettingsPage', () => {
           lastSyncError: { code: 'unsupported_locale', message: 'bad', status: 422 },
         });
       });
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/appearance');
       const alert = screen.getByRole('alert');
       expect(alert).toBeInTheDocument();
       expect(alert.textContent).toContain('That language is not supported');
@@ -99,9 +143,8 @@ describe('SettingsPage', () => {
           lastSyncError: { code: 'invalid_timezone', message: 'bad tz', status: 422 },
         });
       });
-      renderWithProviders(<SettingsPage />);
-      const alert = screen.getByRole('alert');
-      expect(alert.textContent).toContain('That timezone is not valid');
+      renderAt('/settings/appearance');
+      expect(screen.getByRole('alert').textContent).toContain('That timezone is not valid');
     });
 
     it('lastSyncError server 渲染通用服务端错误文案', () => {
@@ -110,9 +153,8 @@ describe('SettingsPage', () => {
           lastSyncError: { code: 'server', message: 'oops', status: 500 },
         });
       });
-      renderWithProviders(<SettingsPage />);
-      const alert = screen.getByRole('alert');
-      expect(alert.textContent).toContain('Could not save your preference');
+      renderAt('/settings/appearance');
+      expect(screen.getByRole('alert').textContent).toContain('Could not save your preference');
     });
 
     it('lastSyncError network 渲染网络错误文案', () => {
@@ -121,9 +163,8 @@ describe('SettingsPage', () => {
           lastSyncError: { code: 'network', message: 'net', status: 0 },
         });
       });
-      renderWithProviders(<SettingsPage />);
-      const alert = screen.getByRole('alert');
-      expect(alert.textContent).toContain('Network error');
+      renderAt('/settings/appearance');
+      expect(screen.getByRole('alert').textContent).toContain('Network error');
     });
 
     it('点击关闭按钮后横幅消失(clearSyncError)', () => {
@@ -132,21 +173,20 @@ describe('SettingsPage', () => {
           lastSyncError: { code: 'unsupported_locale', message: 'bad', status: 422 },
         });
       });
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/appearance');
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      const dismissButton = screen.getByRole('button', { name: 'Dismiss' });
-      fireEvent.click(dismissButton);
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(useSettingsStore.getState().lastSyncError).toBeNull();
     });
 
     it('无 lastSyncError 时不渲染横幅', () => {
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/appearance');
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
   });
 
-  describe('安全设置区(auth.md §4.2,仅登录态)', () => {
+  describe('安全设置区(auth.md §4.2,仅登录态,/settings/security 子路由)', () => {
     it('fetchMe 成功返回当前用户 → 渲染安全设置区', async () => {
       const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
@@ -158,23 +198,23 @@ describe('SettingsPage', () => {
       });
       vi.stubGlobal('fetch', fetchMock);
 
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/security');
 
       await waitFor(() =>
         expect(screen.getByRole('heading', { name: 'Security' })).toBeInTheDocument(),
       );
     });
 
-    it('fetchMe 失败 → 不渲染安全设置区(优雅降级)', async () => {
+    it('fetchMe 失败 → 不渲染安全设置区(优雅降级,呈现 pending 占位)', async () => {
       const fetchMock = vi.fn().mockRejectedValue(new TypeError('connection refused'));
       vi.stubGlobal('fetch', fetchMock);
 
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/security');
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalled());
       expect(screen.queryByRole('heading', { name: 'Security' })).not.toBeInTheDocument();
-      // 页面其余分区不受影响
-      expect(screen.getByRole('heading', { name: 'Appearance' })).toBeInTheDocument();
+      // 优雅降级:未登录/失败态呈现 pending 占位而非崩溃
+      expect(screen.getByTestId('security-pending')).toBeInTheDocument();
     });
 
     it('fetchMe 在卸载后才落定 → 不向已拆除的渲染树派发更新', async () => {
@@ -189,7 +229,7 @@ describe('SettingsPage', () => {
       });
       vi.stubGlobal('fetch', fetchMock);
 
-      const result = renderWithProviders(<SettingsPage />);
+      const result = renderAt('/settings/security');
       expect(fetchMock).toHaveBeenCalled();
       result.unmount();
 
@@ -222,7 +262,7 @@ describe('SettingsPage', () => {
       };
       vi.stubGlobal('matchMedia', vi.fn(() => mediaQueryList));
 
-      renderWithProviders(<SettingsPage />);
+      renderAt('/settings/appearance');
       const select = screen.getByTestId('theme-select');
       expect(select.textContent).toContain('System (Light)');
 
@@ -238,7 +278,7 @@ describe('SettingsPage', () => {
 
   it('主题选择「跟随默认」→ 写入 null,解析值回落协商链(测试环境为 light)', () => {
     useSettingsStore.getState().setTheme('dark');
-    renderWithProviders(<SettingsPage />);
+    renderAt('/settings/appearance');
     expect(document.documentElement.dataset.theme).toBe('dark');
 
     fireEvent.change(screen.getByTestId('theme-select'), { target: { value: '' } });

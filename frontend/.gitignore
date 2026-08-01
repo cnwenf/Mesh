@@ -13,3 +13,4 @@ e2e/mes107/stack.env
 # 暂存目录,勿入库;入库的基线存证为历史轮次显式提交,不受本忽略规则影响)
 e2e/evidence/attachments/*-[0-9]*.png
 e2e/evidence/attachments/*-[0-9]*.txt
+e2e/mes111-b4/stack.env

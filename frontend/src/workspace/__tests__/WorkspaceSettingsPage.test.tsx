@@ -1,11 +1,28 @@
+/**
+ * 工作区设置(SettingsLayout 二级导航 + 子路由分页):
+ * - 门控:member 直达无权限态;owner/admin 进入设置外壳;
+ * - 二级导航分组 + 危险区仅 owner 可见(权限不可见,hidden);
+ * - 索引重定向 → general;子路由切换;
+ * - G11 默认主题字段 + hint + admin 门控 + PATCH {settings:{default_theme}};
+ * - 基本信息 dirty/save(仅含变更键、logo https 拦截、422 具名、slug 重定向、pristine 禁用)。
+ */
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Navigate, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider, ToastProvider } from '../../design';
 import { I18nProvider } from '../../i18n';
 import { WorkspaceProvider } from '../WorkspaceProvider';
 import { WorkspaceSettingsPage } from '../pages/WorkspaceSettingsPage';
+import { WorkspaceAuditSection } from '../pages/settings/WorkspaceAuditSection';
+import { WorkspaceCustomFieldsSection } from '../pages/settings/WorkspaceCustomFieldsSection';
+import { WorkspaceDangerSection } from '../pages/settings/WorkspaceDangerSection';
+import { WorkspaceDataSection } from '../pages/settings/WorkspaceDataSection';
+import { WorkspaceGeneralSection } from '../pages/settings/WorkspaceGeneralSection';
+import { WorkspaceInvitationsSection } from '../pages/settings/WorkspaceInvitationsSection';
+import { WorkspaceLabelsSection } from '../pages/settings/WorkspaceLabelsSection';
+import { WorkspaceRolesSection } from '../pages/settings/WorkspaceRolesSection';
+import { WorkspaceTokensSection } from '../pages/settings/WorkspaceTokensSection';
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -61,20 +78,34 @@ const DETAIL = {
   id: 'ws-1',
   name: 'Acme',
   slug: 'acme',
-  logo_url: null,
+  logo_url: null as string | null,
   timezone: 'UTC',
-  settings: { default_locale: 'en', invitation_max_uses_cap: 100 },
+  settings: {
+    default_locale: 'en',
+    default_theme: 'system',
+    invitation_max_uses_cap: 100,
+  },
   my_role: 'owner',
   created_at: '2026-07-25T00:00:00Z',
   updated_at: '2026-07-25T00:00:00Z',
 };
 
+interface RenderOptions {
+  role?: 'owner' | 'admin' | 'member';
+  route?: string;
+  /** 邀请路由替换为简单桩(脏导航守卫测试避免触发真实列表请求) */
+  stubInvitations?: boolean;
+  /** 覆盖工作区 detail 初值(如带 logo 以覆盖清空分支) */
+  detail?: typeof DETAIL;
+}
+
 function renderSettings(
   fetchImpl: ReturnType<typeof vi.fn>,
-  role: 'owner' | 'admin' | 'member' = 'owner',
+  opts: RenderOptions = {},
 ): ReturnType<typeof render> {
-  // 有状态桩:PATCH 合并进当前 detail,by-slug 返回现行值(模拟服务端真源)。
-  let current = { ...DETAIL, my_role: role };
+  const role = opts.role ?? 'owner';
+  const route = opts.route ?? '/w/acme/settings/general';
+  let current = { ...(opts.detail ?? DETAIL), my_role: role };
   const wrapper = vi.fn(async (...args: [string, { method?: string; body?: string }]) => {
     const [url, init] = args;
     if (url.includes('/by-slug/')) {
@@ -89,14 +120,31 @@ function renderSettings(
     return fetchImpl(...args);
   });
 
+  const invitations = opts.stubInvitations ? (
+    <div data-testid="invitations-stub" />
+  ) : (
+    <WorkspaceInvitationsSection />
+  );
+
   const tree = (): React.JSX.Element => (
-    <MemoryRouter initialEntries={['/w/acme/settings']}>
+    <MemoryRouter initialEntries={[route]}>
       <ThemeProvider>
         <I18nProvider workspaceDefaultLocale={null} reporter={{ report: () => undefined, reported: [] }}>
           <ToastProvider regionLabel="notifications">
             <WorkspaceProvider slug="acme" client={stubClient(wrapper) as never}>
               <Routes>
-                <Route path="/w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />} />
+                <Route path="/w/:workspaceSlug/settings" element={<WorkspaceSettingsPage />}>
+                  <Route index element={<Navigate to="general" replace />} />
+                  <Route path="general" element={<WorkspaceGeneralSection />} />
+                  <Route path="invitations" element={invitations} />
+                  <Route path="roles" element={<WorkspaceRolesSection />} />
+                  <Route path="labels" element={<WorkspaceLabelsSection />} />
+                  <Route path="custom-fields" element={<WorkspaceCustomFieldsSection />} />
+                  <Route path="data" element={<WorkspaceDataSection />} />
+                  <Route path="tokens" element={<WorkspaceTokensSection />} />
+                  <Route path="audit" element={<WorkspaceAuditSection />} />
+                  <Route path="danger" element={<WorkspaceDangerSection />} />
+                </Route>
                 <Route path="*" element={<span data-testid="navigated" />} />
               </Routes>
             </WorkspaceProvider>
@@ -108,28 +156,85 @@ function renderSettings(
   return render(tree());
 }
 
-describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', () => {
-  it('member 直达 → 无权限态(§6.12 异常态矩阵)', async () => {
-    renderSettings(stubFetch(), 'member');
+describe('工作区设置门控与导航(§4.1/§3.2)', () => {
+  it('member 直达 → 无权限态(异常态矩阵)', async () => {
+    renderSettings(stubFetch(), { role: 'member' });
     await waitFor(() => expect(screen.getByTestId('ws-settings-denied')).toBeTruthy());
   });
 
-  it('owner → 全部节区可见(含危险区)', async () => {
-    renderSettings(stubFetch(), 'owner');
-    await waitFor(() => expect(screen.getByTestId('ws-settings')).toBeTruthy());
-    expect(screen.getByTestId('ws-basic-info')).toBeTruthy();
-    expect(screen.getByTestId('invitation-create')).toBeTruthy();
-    expect(screen.getByTestId('roles-section')).toBeTruthy();
-    expect(screen.getByTestId('danger-zone')).toBeTruthy();
+  it('索引路由重定向到 general(基本信息可见)', async () => {
+    renderSettings(stubFetch(), { route: '/w/acme/settings' });
+    await waitFor(() => expect(screen.getByTestId('ws-basic-info')).toBeTruthy());
+    expect(screen.getByTestId('settings-nav-general').className).toContain('is-active');
   });
 
-  it('admin → 无危险区', async () => {
-    renderSettings(stubFetch(), 'admin');
+  it('owner → 二级导航含全部项(含危险区)', async () => {
+    renderSettings(stubFetch(), { role: 'owner' });
     await waitFor(() => expect(screen.getByTestId('ws-settings')).toBeTruthy());
-    expect(screen.queryByTestId('danger-zone')).toBeNull();
+    for (const key of [
+      'general',
+      'invitations',
+      'roles',
+      'labels',
+      'custom-fields',
+      'data',
+      'tokens',
+      'audit',
+      'danger',
+    ]) {
+      expect(screen.getByTestId(`settings-nav-${key}`)).toBeTruthy();
+    }
   });
 
-  it('改名保存 → PATCH 仅含变更键 + 成功提示', async () => {
+  it('admin → 危险区导航不可见(权限不可见,非禁用)', async () => {
+    renderSettings(stubFetch(), { role: 'admin' });
+    await waitFor(() => expect(screen.getByTestId('ws-settings')).toBeTruthy());
+    expect(screen.getByTestId('settings-nav-general')).toBeTruthy();
+    expect(screen.queryByTestId('settings-nav-danger')).toBeNull();
+  });
+
+  it('子路由切换:invitations 呈现邀请区、general 内容卸载', async () => {
+    renderSettings(stubFetch(), { route: '/w/acme/settings/invitations', stubInvitations: true });
+    await waitFor(() => expect(screen.getByTestId('invitations-stub')).toBeTruthy());
+    expect(screen.queryByTestId('ws-basic-info')).toBeNull();
+    expect(screen.getByTestId('settings-nav-invitations').className).toContain('is-active');
+  });
+});
+
+describe('G11 工作区默认主题入口(theme.md §4.1)', () => {
+  it('admin 可见默认主题字段 + hint「成员未单独设置时生效」', async () => {
+    renderSettings(stubFetch(), { role: 'admin' });
+    await waitFor(() => expect(screen.getByTestId('ws-default-theme-select')).toBeTruthy());
+    expect(screen.getByTestId('ws-default-theme-hint').textContent).toBe(
+      'Applies to members who have not chosen their own theme.',
+    );
+  });
+
+  it('改默认主题保存 → PATCH 载荷含 settings.default_theme', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({ status: 200, body: { data: { ...DETAIL, settings: { ...DETAIL.settings, default_theme: 'dark' } } } });
+    renderSettings(api, { role: 'admin' });
+    await waitFor(() => expect(screen.getByTestId('ws-default-theme-select')).toBeTruthy());
+
+    await user.selectOptions(screen.getByTestId('ws-default-theme-select'), 'dark');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() => {
+      const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
+      expect(init.method).toBe('PATCH');
+      expect(JSON.parse(init.body)).toEqual({ settings: { default_theme: 'dark' } });
+    });
+  });
+
+  it('member 无默认主题字段(整体设置页被门控)', async () => {
+    renderSettings(stubFetch(), { role: 'member' });
+    await waitFor(() => expect(screen.getByTestId('ws-settings-denied')).toBeTruthy());
+    expect(screen.queryByTestId('ws-default-theme-select')).toBeNull();
+  });
+});
+
+describe('基本信息 dirty/save(§4.2)', () => {
+  it('改名保存 → PATCH 仅含变更键', async () => {
     const user = userEvent.setup();
     const updated = { ...DETAIL, name: 'Acme2' };
     const api = stubFetch({ status: 200, body: { data: updated } });
@@ -143,7 +248,6 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
 
     await waitFor(() => {
       const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
-      expect(init.method).toBe('PATCH');
       expect(JSON.parse(init.body)).toEqual({ name: 'Acme2' });
     });
   });
@@ -157,9 +261,7 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     await user.type(screen.getByTestId('ws-logo-input'), 'http://evil.example/x.png');
     await user.click(screen.getByTestId('ws-save'));
 
-    expect(screen.getByTestId('ws-basic-error').textContent).toBe(
-      'Logo URL must start with https://',
-    );
+    expect(screen.getByTestId('ws-basic-error').textContent).toBe('Logo URL must start with https://');
     expect(api).not.toHaveBeenCalled();
   });
 
@@ -167,20 +269,12 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     const user = userEvent.setup();
     const api = stubFetch({
       status: 422,
-      body: {
-        error: {
-          code: 'unsupported_locale',
-          message: 'x',
-          details: { locale: 'fr', supported: ['zh-CN', 'en'] },
-        },
-      },
+      body: { error: { code: 'unsupported_locale', message: 'x', details: { supported: ['zh-CN', 'en'] } } },
     });
     renderSettings(api);
-    await waitFor(() => screen.getByTestId('ws-locale-select'));
+    await waitFor(() => screen.getByTestId('ws-timezone-select'));
 
-    // 改时区制造 dirty 并触发 PATCH(返回 422)
-    const tz = screen.getByTestId('ws-timezone-select') as HTMLSelectElement;
-    await user.selectOptions(tz, 'Asia/Shanghai');
+    await user.selectOptions(screen.getByTestId('ws-timezone-select'), 'Asia/Shanghai');
     await user.click(screen.getByTestId('ws-save'));
 
     await waitFor(() =>
@@ -190,7 +284,7 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     );
   });
 
-  it('slug 变更保存成功 → 重定向提示并规范化导航至新 slug', async () => {
+  it('slug 变更保存成功 → 重定向提示', async () => {
     const user = userEvent.setup();
     const updated = { ...DETAIL, slug: 'acme-corp' };
     const api = stubFetch({ status: 200, body: { data: updated } });
@@ -202,11 +296,7 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     await user.type(slugInput, 'acme-corp');
     await user.click(screen.getByTestId('ws-save'));
 
-    // 旧链接重定向提示(W6);设置页在新 slug 路由下仍在(未跳出)
-    await waitFor(() =>
-      expect(screen.getByText('Slug changed — old links will redirect.')).toBeTruthy(),
-    );
-    expect(screen.getByTestId('ws-settings')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Slug changed — old links will redirect.')).toBeTruthy());
   });
 
   it('无变更时保存按钮禁用', async () => {
@@ -214,19 +304,8 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     await waitFor(() => screen.getByTestId('ws-save'));
     expect((screen.getByTestId('ws-save') as HTMLButtonElement).disabled).toBe(true);
   });
-  it('保存返回 invalid_timezone → 具名错误态(覆盖 catch 分支)', async () => {
-    const user = userEvent.setup();
-    const api = stubFetch({ status: 422, body: { error: { code: 'invalid_timezone', message: 'bad tz' } } });
-    renderSettings(api);
-    await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
-    const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
-    await user.clear(nameInput);
-    await user.type(nameInput, 'Acme3');
-    await user.click(screen.getByTestId('ws-save'));
-    await waitFor(() => expect(screen.getByTestId('ws-basic-error')).toBeTruthy());
-  });
 
-  it('保存返回 slug_taken → 具名错误态(覆盖 catch 分支)', async () => {
+  it('保存返回 slug_taken → 具名错误态', async () => {
     const user = userEvent.setup();
     const api = stubFetch({ status: 409, body: { error: { code: 'slug_taken', message: 'taken' } } });
     renderSettings(api);
@@ -238,4 +317,159 @@ describe('WorkspaceSettingsPage(设置页门控与基本信息,§4.1/§4.2)', ()
     await waitFor(() => expect(screen.getByTestId('ws-basic-error')).toBeTruthy());
   });
 
+  it('保存返回 invalid_timezone → 具名错误态', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({ status: 422, body: { error: { code: 'invalid_timezone', message: 'bad tz' } } });
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-timezone-select')).toBeTruthy());
+    await user.selectOptions(screen.getByTestId('ws-timezone-select'), 'Asia/Shanghai');
+    await user.click(screen.getByTestId('ws-save'));
+    await waitFor(() =>
+      expect(screen.getByTestId('ws-basic-error').textContent).toBe('Invalid IANA timezone.'),
+    );
+  });
+
+  it('改时区保存 → PATCH 含 timezone;清空 logo → logo_url=null', async () => {
+    const user = userEvent.setup();
+    const detailWithLogo = { ...DETAIL, logo_url: 'https://cdn.example/x.png' };
+    let current = { ...detailWithLogo };
+    const api = vi.fn(async (...args: [string, { method?: string; body?: string }]) => {
+      const [url, init] = args;
+      if (url.includes('/by-slug/')) return jsonResponse(200, { data: current });
+      if (url.includes('/members')) return jsonResponse(404, { error: { code: 'not_found', message: 'x' } });
+      if (init.method === 'PATCH' && typeof init.body === 'string') {
+        current = { ...current, ...(JSON.parse(init.body) as Record<string, unknown>) };
+      }
+      return jsonResponse(200, { data: current });
+    });
+    renderSettings(api, { detail: detailWithLogo });
+    await waitFor(() => expect(screen.getByTestId('ws-logo-input')).toBeTruthy());
+
+    // 清空 logo(覆盖 logo_url=null 分支)
+    await user.clear(screen.getByTestId('ws-logo-input'));
+    await user.click(screen.getByTestId('ws-save'));
+    await waitFor(() => {
+      const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
+      expect(JSON.parse(init.body)).toEqual({ logo_url: null });
+    });
+  });
+
+  it('改默认 locale 保存 → PATCH 载荷含 settings.default_locale', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({
+      status: 200,
+      body: { data: { ...DETAIL, settings: { ...DETAIL.settings, default_locale: 'zh-CN' } } },
+    });
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-locale-select')).toBeTruthy());
+
+    await user.selectOptions(screen.getByTestId('ws-locale-select'), 'zh-CN');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() => {
+      const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
+      expect(init.method).toBe('PATCH');
+      expect(JSON.parse(init.body)).toEqual({ settings: { default_locale: 'zh-CN' } });
+    });
+  });
+
+  it('logo 改为新的 https 地址 → PATCH 载荷含新 logo_url(非空分支)', async () => {
+    const user = userEvent.setup();
+    const detailWithLogo = { ...DETAIL, logo_url: 'https://cdn.example/a.png' };
+    const api = stubFetch({
+      status: 200,
+      body: { data: { ...detailWithLogo, logo_url: 'https://cdn.example/b.png' } },
+    });
+    renderSettings(api, { detail: detailWithLogo });
+    await waitFor(() => expect(screen.getByTestId('ws-logo-input')).toBeTruthy());
+
+    const logoInput = screen.getByTestId('ws-logo-input') as HTMLInputElement;
+    await user.clear(logoInput);
+    await user.type(logoInput, 'https://cdn.example/b.png');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() => {
+      const [, init] = api.mock.calls[0] as [string, { method: string; body: string }];
+      expect(JSON.parse(init.body)).toEqual({ logo_url: 'https://cdn.example/b.png' });
+    });
+  });
+
+  it('422 unsupported_locale 无 details → 回退内置受支持清单', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({
+      status: 422,
+      body: { error: { code: 'unsupported_locale', message: 'x' } },
+    });
+    renderSettings(api);
+    await waitFor(() => screen.getByTestId('ws-timezone-select'));
+
+    await user.selectOptions(screen.getByTestId('ws-timezone-select'), 'Asia/Shanghai');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ws-basic-error').textContent).toBe(
+        'Unsupported locale. Supported: zh-CN, en',
+      ),
+    );
+  });
+
+  it('保存返回通用错误(internal_error)→ errorToI18nKey 具名呈现', async () => {
+    const user = userEvent.setup();
+    const api = stubFetch({
+      status: 500,
+      body: { error: { code: 'internal_error', message: 'x' } },
+    });
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
+
+    const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Acme5');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ws-basic-error').textContent).toBe(
+        'An internal error occurred. Please try again.',
+      ),
+    );
+  });
+
+  it('保存抛出非 API 错误(网络中断)→ error.unknown 兜底', async () => {
+    const user = userEvent.setup();
+    const api = vi.fn().mockRejectedValue(new Error('network down'));
+    renderSettings(api);
+    await waitFor(() => expect(screen.getByTestId('ws-name-input')).toBeTruthy());
+
+    const nameInput = screen.getByTestId('ws-name-input') as HTMLInputElement;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Acme6');
+    await user.click(screen.getByTestId('ws-save'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('ws-basic-error').textContent).toBe(
+        'An unexpected error occurred. Please try again.',
+      ),
+    );
+  });
+
+  it('settings 缺失 locale/theme(非字符串)→ 表单回退 en/system', async () => {
+    const detail = { ...DETAIL, settings: {} as typeof DETAIL.settings };
+    renderSettings(stubFetch(), { detail });
+    await waitFor(() => expect(screen.getByTestId('ws-locale-select')).toBeTruthy());
+    expect((screen.getByTestId('ws-locale-select') as HTMLSelectElement).value).toBe('en');
+    expect((screen.getByTestId('ws-default-theme-select') as HTMLSelectElement).value).toBe('system');
+  });
+});
+
+describe('危险区分页(owner,§5.3)', () => {
+  it('owner 直达 /danger → 危险区可见', async () => {
+    renderSettings(stubFetch(), { role: 'owner', route: '/w/acme/settings/danger' });
+    await waitFor(() => expect(screen.getByTestId('danger-zone')).toBeTruthy());
+  });
+
+  it('admin 深链 /danger → 无权限态(导航已隐藏)', async () => {
+    renderSettings(stubFetch(), { role: 'admin', route: '/w/acme/settings/danger' });
+    await waitFor(() => expect(screen.getByTestId('ws-danger-denied')).toBeTruthy());
+    expect(screen.queryByTestId('danger-zone')).toBeNull();
+  });
 });

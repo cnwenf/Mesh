@@ -333,6 +333,37 @@ class Issue(Base):
             "priority",
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # -- Search indexes (migration 0035, search-command-palette.md §2.2) --
+        # Expression indexes over the SINGLE normalization entry point; the
+        # query path must call public.mesh_search_norm() verbatim to match.
+        Index(
+            "idx_issues_title_trgm",
+            text("mesh_search_norm(title)"),
+            postgresql_using="gin",
+            postgresql_ops={"mesh_search_norm(title)": "gin_trgm_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_issues_title_prefix",
+            "workspace_id",
+            text("mesh_search_norm(title)"),
+            postgresql_ops={"mesh_search_norm(title)": "text_pattern_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "idx_issues_identifier_prefix",
+            "workspace_id",
+            text("mesh_search_norm(identifier)"),
+            postgresql_ops={"mesh_search_norm(identifier)": "text_pattern_ops"},
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        # Tenant/status support index for the issue search query (§2.2).
+        Index(
+            "idx_issues_ws_not_deleted",
+            "workspace_id",
+            "project_id",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
 

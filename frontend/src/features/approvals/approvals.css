@@ -1,0 +1,130 @@
+/* 统一审批页(README §6.10):卡片列表;颜色仅经语义 token,亮暗自如。 */
+
+.mesh-approvals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.mesh-approvals__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.mesh-approvals__card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mesh-approvals__card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.mesh-approvals__action {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-strong);
+  overflow-wrap: anywhere;
+}
+
+.mesh-approvals__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.mesh-approvals__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.mesh-approvals__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.mesh-approvals__resume {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+  border-inline-start: 2px solid var(--color-info);
+  padding-inline-start: var(--space-3);
+}
+
+.mesh-approvals__resume-tool {
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-body-sm);
+  overflow-wrap: anywhere;
+}
+
+.mesh-approvals__comment {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.mesh-approvals__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-block-start: var(--space-1);
+}
+
+/* 拒绝 Dialog:留言输入与按钮排布 */
+.mesh-approvals__comment-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+
+.mesh-approvals__comment-input {
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  resize: vertical;
+  min-block-size: 96px;
+}
+
+.mesh-approvals__comment-input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.mesh-approvals__dialog-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+
+/* 骨架卡片占位(与真实卡片量级一致) */
+.mesh-approvals__card-skeleton {
+  display: block;
+  min-block-size: 120px;
+  border-radius: var(--radius-md);
+}
+
+/* 窄屏:操作按钮占满整行,避免挤压(§8.3) */
+@media (max-width: 599px) {
+  .mesh-approvals__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

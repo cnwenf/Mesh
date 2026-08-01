@@ -4,7 +4,7 @@
  * 点击遮罩关闭;关闭后焦点归还打开前的触发元素(与 Drawer/Menu 共用 useFocusTrap)。
  * 无硬编码文案(closeLabel 来自调用方)。
  */
-import { useId, useRef } from 'react';
+import { useId, useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { IconButton } from './IconButton';
 import { trapTabKey, useFocusTrap } from './useFocusTrap';
@@ -26,16 +26,25 @@ export function Dialog(props: DialogProps): React.JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(open, dialogRef);
 
+  // Esc 关闭经 document 监听:模态须「任意焦点位置」均可 Esc 关闭(§7.5/§10.2)。
+  // 仅绑容器 onKeyDown 会在焦点意外落在 body 时漏接(焦点圈养竞态)→ 弹层关不掉。
+  useEffect(() => {
+    if (!open) return;
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, [open, onClose]);
+
   if (!open) {
     return null;
   }
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onClose();
-      return;
-    }
     if (event.key !== 'Tab') return;
     const root = dialogRef.current;
     if (!root) return;

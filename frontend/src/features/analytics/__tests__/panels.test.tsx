@@ -174,6 +174,70 @@ describe('ProjectDashboardPanel', () => {
       expect(screen.getByTestId('project-dashboard')).toBeInTheDocument();
     });
   });
+
+  it('milestone-scoped burndown refetches with milestoneId (not cycleId)', async () => {
+    const requests: string[] = [];
+    const milestoneDashboard = {
+      ...PROJECT_DASHBOARD,
+      burndown: { ...PROJECT_DASHBOARD.burndown, scope: { type: 'milestone', id: 'm1' } },
+    };
+    const client = {
+      request: vi.fn(async (_method: string, path: string, opts?: { query?: unknown }) => {
+        requests.push(`${path}?${JSON.stringify(opts?.query ?? {})}`);
+        if (path.endsWith('/analytics/burndown')) {
+          return { ...milestoneDashboard.burndown, metric: 'count', total: 3 };
+        }
+        return milestoneDashboard;
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(
+      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('project-dashboard-metric')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('project-dashboard-metric'), {
+      target: { value: 'count' },
+    });
+    await waitFor(() => {
+      expect(
+        requests.some(
+          (r) =>
+            r.includes('/analytics/burndown') &&
+            r.includes('"milestone_id":"m1"') &&
+            !r.includes('"cycle_id":"c1"'),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it('null dashboard payload renders the error state (data===null, no error)', async () => {
+    const client = makeStubClient(() => null);
+    renderWithProviders(
+      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText('Analytics unavailable')).toBeInTheDocument();
+    });
+  });
+
+  it('omits the insufficient-data note when insufficient_data is 0', async () => {
+    const client = makeStubClient(() => ({
+      ...PROJECT_DASHBOARD,
+      cycle_time: {
+        ...PROJECT_DASHBOARD.cycle_time,
+        meta: { insufficient_data: 0, display_timezone: 'UTC' },
+      },
+    }));
+    renderWithProviders(
+      <ProjectDashboardPanel client={client} workspaceId="ws1" projectId="p1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('project-dashboard')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('project-dashboard-insufficient')).toBeNull();
+  });
 });
 
 const AGENT_STATS = {
@@ -239,6 +303,64 @@ describe('AgentStatsCard', () => {
     renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
     await waitFor(() => {
       expect(screen.getByText('No data in this window.')).toBeInTheDocument();
+    });
+  });
+
+  it('mid success rate (0.7–0.9) renders the warn-tone KPI', async () => {
+    const client = makeStubClient(() => ({ ...AGENT_STATS, success_rate: 0.8 }));
+    const { container } = renderWithProviders(
+      <AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-stats-card')).toBeInTheDocument();
+    });
+    expect(container.querySelector('.mesh-analytics__kpi-big--warning')).not.toBeNull();
+  });
+
+  it('low success rate (<0.7) renders the danger-tone KPI', async () => {
+    const client = makeStubClient(() => ({ ...AGENT_STATS, success_rate: 0.5 }));
+    const { container } = renderWithProviders(
+      <AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('agent-stats-card')).toBeInTheDocument();
+    });
+    expect(container.querySelector('.mesh-analytics__kpi-big--danger')).not.toBeNull();
+  });
+
+  it('unmount in flight is a no-op (cancelled guard; no post-unmount state)', async () => {
+    let resolveStats: (value: unknown) => void = () => undefined;
+    const client = {
+      request: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveStats = resolve;
+          }),
+      ),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    const { unmount } = renderWithProviders(
+      <AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />,
+    );
+    await waitFor(() => expect(client.request).toHaveBeenCalled());
+    unmount();
+    // 卸载后落定:cancelled 分支吞掉结果,不抛错
+    resolveStats(AGENT_STATS);
+    await Promise.resolve();
+  });
+
+  it('non-Error rejection falls back to the generic error message', async () => {
+    const client = {
+      request: vi.fn(async () => {
+        throw 'raw failure';
+      }),
+      list: vi.fn(async () => ({ data: [], next_cursor: null })),
+    } as unknown as MeshApiClient;
+    renderWithProviders(<AgentStatsCard client={client} workspaceId="ws1" agentId="a1" />);
+    await waitFor(() => {
+      expect(
+        screen.getByText('Statistics are not available for this agent.'),
+      ).toBeInTheDocument();
     });
   });
 });
