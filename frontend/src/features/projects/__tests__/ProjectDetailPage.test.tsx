@@ -775,4 +775,68 @@ describe('ProjectDetailPage 加载竞态守卫(MES-30 覆盖加固)', () => {
     });
     expect(second.container.innerHTML).toBe('');
   });
+
+  it('实时帧在项目加载前到达被丢弃(prev===null 守卫,MES-128 覆盖加固)', async () => {
+    // 项目详情 GET 保持 pending,使 project===null 时收到实时帧。
+    let resolveProject: (response: Response) => void = () => undefined;
+    const pendingProject = new Promise<Response>((resolve) => {
+      resolveProject = resolve;
+    });
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return pendingProject;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    const realtime = makeFakeRealtime();
+    renderDetailWithRealtime(realtime);
+    await screen.findByText('Loading…');
+    await waitFor(() => expect(realtime.client.subscribe).toHaveBeenCalledWith('project:prj-1'));
+
+    // project.updated / project.archived 帧在 project===null 时到达:
+    // prev===null 分支应原样返回 null,不抛错、不污染状态。
+    await act(async () => {
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 1,
+        event: 'project.updated',
+        payload: { id: 'prj-1', name: 'Should Not Appear', updated_at: '2026-07-02T00:00:00Z' },
+      });
+      realtime.emit({
+        op: 'event',
+        channel: 'project:prj-1',
+        seq: 2,
+        event: 'project.archived',
+        payload: {},
+      });
+    });
+
+    // 解析加载后,确认未被空帧污染:头部仍为原始项目。
+    await act(async () => {
+      resolveProject(fakeResponse({ body: { data: makeProject() } }));
+    });
+    expect(await screen.findByTestId('project-detail-header')).toBeDefined();
+    expect(screen.queryByText('Should Not Appear')).toBeNull();
+  });
+
+  it('项目加载遇到非 MeshApiError 时回退通用错误描述(MES-128 覆盖加固)', async () => {
+    // 项目 GET 以非 MeshApiError 的通用错误拒绝 → catch 走 'state.errorDescription' 分支。
+    const rejection = Promise.reject(new Error('network down'));
+    rejection.catch(() => undefined);
+    const impl = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/users/me')) return fakeResponse({ body: { data: ME } });
+      if (url.includes('/updates')) {
+        return fakeResponse({ body: { data: [], next_cursor: null } });
+      }
+      return rejection;
+    }) as typeof fetch;
+    vi.stubGlobal('fetch', impl);
+    renderDetail();
+    expect(await screen.findByText('Something went wrong')).toBeDefined();
+  });
 });
