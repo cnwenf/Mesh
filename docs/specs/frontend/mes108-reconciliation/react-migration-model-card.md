@@ -3,28 +3,29 @@
 # MES-108 React 迁移模型卡
 
 > 本文件由 `frontend/model-card/mes108-react-migration.json` 生成，请勿手工编辑。
-> 机器校验只证明映射、路径、测试与令牌引用完整；像素差异仍须按固定环境人工验收。
+> 机器校验会核对映射、路径、令牌和 PNG 完整性/尺寸；release 作业还会在精确 PR head 上运行 Playwright，并重算实际操作、截图摘要与 RGBA 像素差异。产品视觉取舍仍须人工验收。
 
 ## 基线与门禁
 
-- 静态原型：MES-142 @ `a82df9ab382223c125b77635c94f228024384518`
-- 用户与验收确认：**尚未确认**
+- 固定设计输入：MES-142 / PR #100 @ `a82df9ab382223c125b77635c94f228024384518`
+- 输入生命周期：**cancelled**；采用方式：**partial-input**
+- Release 批准：**尚未确认**；批准不写入模型卡，必须来自当前 PR 上仓库 owner 的外部决策评论，并绑定 head、模型卡摘要与固定输入 revision。
 - 主题：`light`<br>`dark`
 - 固定视口：`390x844`<br>`1440x900`
 - 必填状态：`default`<br>`loading`<br>`empty`<br>`error`
 - 输入方式：`mouse`<br>`keyboard`<br>`touch`
 - 固定环境：Chromium / zh-CN / UTC / DPR 1 / e2e/fixtures/fonts
 
-确认门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。
+静态输入被取消或部分采用不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。
 
 ## 页面映射
 
 | Blueprint page | React route | Strategy | Reconciliation | Components | Unit tests | E2E | States | Interactions | 视觉矩阵 | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 登录 (`auth-login`)<br>`login` | `/login` | calibrate | pending | `src/shell/pages/LoginPage.tsx`<br>`src/design/components/PublicFlowShell.tsx` | `src/shell/__tests__/LoginPage.test.tsx`<br>`src/shell/__tests__/LoginPageReal.test.tsx` | `e2e/auth-smoke.spec.ts`<br>`e2e/real-mes106-auth-guard.spec.ts` | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `submit-and-return-to-safe-next` [mouse, keyboard]=pending<br>`switch-theme-and-locale` [mouse, keyboard]=pending | pending=12<br>not-applicable=4 | 真实鉴权和安全回跳已接通；仍须按未确认原型做固定环境像素校准。 |
+| 登录 (`auth-login`)<br>`login` | `/login` | calibrate | pending | `src/shell/pages/LoginPage.tsx`<br>`src/design/components/PublicFlowShell.tsx` | `src/shell/__tests__/LoginPage.test.tsx`<br>`src/shell/__tests__/LoginPageReal.test.tsx` | `e2e/auth-smoke.spec.ts`<br>`e2e/real-mes106-auth-guard.spec.ts` | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `submit-and-return-to-safe-next` [mouse, keyboard]=pending<br>`switch-theme-and-locale` [mouse, keyboard]=pending | pending=12<br>not-applicable=4 | 真实鉴权和安全回跳已接通；仍须按固定输入与 owner 决策补齐固定环境像素校准。 |
 | 邀请注册 (`auth-register`)<br>`register` | `/invite/:token` | calibrate | pending | `src/workspace/pages/InviteAcceptPage.tsx`<br>`src/design/components/PublicFlowShell.tsx` | `src/workspace/__tests__/InviteAcceptPage.test.tsx` | `e2e/workspace-flow.spec.ts` | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `preview-then-accept-invitation` [mouse, keyboard]=pending | pending=12<br>not-applicable=4 | 开放注册模型按真实产品契约收敛为邀请预览与接受流程，不伪造后端能力。 |
 | 验证码与恢复流程 (`auth-code`)<br>`code` | `/device`<br>`/forgot`<br>`/reset`<br>`/auth/oauth/callback/:provider` | calibrate | pending | `src/features/device/DeviceAuthorizationPage.tsx`<br>`src/shell/pages/ForgotPasswordPage.tsx`<br>`src/shell/pages/ResetPasswordPage.tsx`<br>`src/shell/pages/OAuthCallbackPage.tsx` | `src/features/device/__tests__/DeviceAuthorizationPage.test.tsx`<br>`src/shell/__tests__/ForgotPasswordPage.test.tsx`<br>`src/shell/__tests__/ResetPasswordPage.test.tsx`<br>`src/shell/__tests__/OAuthCallbackPage.test.tsx` | `e2e/auth-smoke.spec.ts` | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `authorize-or-recover-session` [mouse, keyboard]=pending | pending=12<br>not-applicable=4 | 原型单一验证码状态映射到真实设备码、密码恢复与 OAuth 回调页面族。 |
-| 收件箱 (`inbox`)<br>`inbox` | `/w/:workspaceSlug/inbox`<br>`/w/:workspaceSlug/inbox/:notificationId` | calibrate | pending | `src/features/inbox/InboxPage.tsx` | `src/features/inbox/__tests__/InboxPage.test.tsx` | `e2e/real-comments-inbox.spec.ts`<br>`e2e/real-inbox-notify.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `select-read-archive-and-open-deeplink` [mouse, keyboard, touch]=pending | pending=16 | 桌面双栏与移动单栏路由已实现；视觉校准仍待原型确认。 |
+| 收件箱 (`inbox`)<br>`inbox` | `/w/:workspaceSlug/inbox`<br>`/w/:workspaceSlug/inbox/:notificationId` | calibrate | pending | `src/features/inbox/InboxPage.tsx` | `src/features/inbox/__tests__/InboxPage.test.tsx` | `e2e/real-comments-inbox.spec.ts`<br>`e2e/real-inbox-notify.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `select-read-archive-and-open-deeplink` [mouse, keyboard, touch]=pending | pending=16 | 桌面双栏与移动单栏路由已实现；视觉校准仍待固定输入差异关闭与 owner release 决策。 |
 | 聊天 (`chat`)<br>`chat` | `/w/:workspaceSlug/chat`<br>`/w/:workspaceSlug/chat/:sessionId` | calibrate | pending | `src/features/chat/ChatPage.tsx` | `src/features/chat/__tests__/ChatPage.test.tsx` | `e2e/real-chat-compose.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `send-stop-regenerate-and-switch-candidate` [mouse, keyboard, touch]=pending | pending=16 | 真实流式会话、附件与运行反馈已接通。 |
 | 我的 Issues (`my-issues`)<br>`my` | `/w/:workspaceSlug/issues?mine=true`<br>alias → `issues` | calibrate | pending | `src/features/issues/IssuesPage.tsx` | `src/features/issues/__tests__/IssuesPage.test.tsx` | `e2e/mes79-deeplinks.spec.ts` | default=verified<br>loading=pending<br>empty=pending<br>error=pending | `filter-current-assignee` [mouse, keyboard, touch]=pending | pending=16 | 原型独立入口映射为真实 Issues 数据视图的当前负责人筛选；需补专用深链与状态证据。 |
 | Issue 列表 (`issues`)<br>`issues` | `/w/:workspaceSlug/issues` | calibrate | pending | `src/features/issues/IssuesPage.tsx`<br>`src/design/patterns/DataView.tsx` | `src/features/issues/__tests__/IssuesPage.test.tsx` | `e2e/mes111-b2.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `filter-sort-select-and-create` [mouse, keyboard, touch]=pending | pending=16 | 真实过滤、排序、保存视图与创建流程已实现。 |
@@ -42,13 +43,13 @@
 | 运行环境与执行详情 (`runtimes`)<br>`runtimes` | `/w/:workspaceSlug/automations/runtimes`<br>`/w/:workspaceSlug/automations/runtimes/:runtimeId`<br>`/w/:workspaceSlug/executions/:executionId` | calibrate | pending | `src/features/runtimes/RuntimesPage.tsx`<br>`src/features/runtimes/RuntimeDetailPage.tsx`<br>`src/features/runtimes/ExecutionDetailPage.tsx` | `src/features/runtimes/__tests__/RuntimesPage.test.tsx`<br>`src/features/runtimes/__tests__/ExecutionDetailPage.test.tsx` | `e2e/real-runtimes.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `register-inspect-log-and-reconnect` [mouse, keyboard]=pending | pending=16 | 真实 runtime 注册、详情与执行日志路径均有覆盖。 |
 | 分析 (`analytics`)<br>`usage`<br>`analytics` | `/w/:workspaceSlug/insights` | calibrate | pending | `src/features/analytics/InsightsPage.tsx` | `src/features/analytics/__tests__/InsightsPage.test.tsx`<br>`src/features/analytics/__tests__/InsightsPage.states.test.tsx` | `e2e/real-analytics.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `change-range-inspect-breakdown-and-export` [mouse, keyboard]=pending | pending=16 | 原型 Usage/Analytics 别名收敛为规范 Insights 深链。 |
 | 账号与工作区设置 (`settings`)<br>`settings` | `/settings`<br>`/settings/appearance`<br>`/settings/notifications`<br>`/settings/security`<br>`/w/:workspaceSlug/settings`<br>`/w/:workspaceSlug/settings/general`<br>`/w/:workspaceSlug/settings/invitations`<br>`/w/:workspaceSlug/settings/roles`<br>`/w/:workspaceSlug/settings/labels`<br>`/w/:workspaceSlug/settings/custom-fields`<br>`/w/:workspaceSlug/settings/data`<br>`/w/:workspaceSlug/settings/tokens`<br>`/w/:workspaceSlug/settings/audit`<br>`/w/:workspaceSlug/settings/danger`<br>`/w/:workspaceSlug/settings/members`<br>`/w/:workspaceSlug/settings/approvals`<br>`/w/:workspaceSlug/settings/fields` | calibrate | pending | `src/shell/pages/SettingsPage.tsx`<br>`src/workspace/pages/WorkspaceSettingsPage.tsx`<br>`src/design/patterns/SettingsLayout.tsx` | `src/shell/__tests__/SettingsPage.test.tsx`<br>`src/workspace/__tests__/WorkspaceSettingsPage.test.tsx` | `e2e/real-theme.spec.ts`<br>`e2e/real-mes111-b4.spec.ts` | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `switch-sections-edit-save-and-confirm-danger` [mouse, keyboard, touch]=pending | pending=12<br>not-applicable=4 | 账号与工作区设置按真实权限拆分，主题、通知、安全与管理子页均有路由。 |
-| 全局状态与组件画廊 (`state-gallery`)<br>`states` | `/styleguide` | calibrate | pending | `src/design/StyleguidePage.tsx`<br>`src/design/components/EmptyState.tsx`<br>`src/design/components/ErrorState.tsx`<br>`src/design/components/Skeleton.tsx` | `src/design/__tests__/StyleguidePage.test.tsx`<br>`src/design/__tests__/ErrorState.test.tsx` | `e2e/visual/styleguide.spec.ts`<br>`e2e/visual/theme-visual.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `inspect-component-state-theme-and-viewport` [mouse, keyboard, touch]=pending | pending=16 | 原型状态画廊映射到公开设计系统 fixture；像素校准仍待原型确认。 |
+| 全局状态与组件画廊 (`state-gallery`)<br>`states` | `/styleguide` | calibrate | pending | `src/design/StyleguidePage.tsx`<br>`src/design/components/EmptyState.tsx`<br>`src/design/components/ErrorState.tsx`<br>`src/design/components/Skeleton.tsx` | `src/design/__tests__/StyleguidePage.test.tsx`<br>`src/design/__tests__/ErrorState.test.tsx` | `e2e/visual/styleguide.spec.ts`<br>`e2e/visual/theme-visual.spec.ts` | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `inspect-component-state-theme-and-viewport` [mouse, keyboard, touch]=pending | pending=16 | 原型状态画廊映射到公开设计系统 fixture；像素校准仍待真实矩阵证据与 owner release 决策。 |
 
 ## React 扩展页面
 
 | Extension | React route | Strategy | Reconciliation | States | Interactions | 视觉矩阵 | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 首页、工作区入口与选择器 (`home-and-workspace-entry`) | `/`<br>`/w/:workspaceSlug`<br>`/workspace-picker` | reuse | pending | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `select-workspace-and-open-onboarding` [mouse, keyboard, touch]=pending | pending=16 | React 独有的多工作区入口；须在原型确认后决定是保留扩展还是补入基线。 |
+| 首页、工作区入口与选择器 (`home-and-workspace-entry`) | `/`<br>`/w/:workspaceSlug`<br>`/workspace-picker` | reuse | pending | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `select-workspace-and-open-onboarding` [mouse, keyboard, touch]=pending | pending=16 | React 独有的多工作区入口；须由产品 owner 在 release 决策中决定是保留扩展还是补入基线。 |
 | 待我审批 (`approvals`) | `/approvals`<br>`/w/:workspaceSlug/approvals` | reuse | pending | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `approve-or-reject-request` [mouse, keyboard]=pending | pending=16 | React 独有的审批页；真实权限与双深链已存在，最终视觉关系待确认。 |
 | 成员详情 (`member-detail`) | `/w/:workspaceSlug/members/:memberId` | reuse | pending | default=verified<br>loading=verified<br>empty=not-applicable<br>error=verified | `open-member-or-agent-profile` [mouse, keyboard, touch]=pending | pending=12<br>not-applicable=4 | React 独有的人类成员详情；Agent 会按成员类型转入 Agent 详情。 |
 | 周期 (`cycles`) | `/w/:workspaceSlug/cycles` | reuse | pending | default=verified<br>loading=verified<br>empty=verified<br>error=verified | `create-and-filter-cycle` [mouse, keyboard]=pending | pending=16 | React 独有的项目周期页面，当前只有可达性证据。 |
@@ -188,9 +189,9 @@
 ## 自动与人工边界
 
 - `node scripts/verify-model-card.mjs --mode audit` 校验原型/React 页面全集、路由兼容表、组件/测试文件、状态与视觉矩阵、令牌引用及本文件生成结果。
-- `node scripts/verify-model-card.mjs --mode release` 是最终门禁；未确认原型、`pending`、`blocked` 或缺少真实证据时必须失败。
-- Unit/E2E 文件存在不等于测试已通过；交付时仍须运行对应命令并记录精确结果。
-- 颜色、字号、间距、布局、动效、亮暗主题与响应式的像素一致性必须在固定浏览器、视口、DPR 与字体环境中逐页比对。
+- `node scripts/verify-model-card.mjs --mode release` 是最终门禁；缺少绑定当前 head 与模型卡摘要的仓库 owner 批准、存在 `pending` / `blocked` 或缺少真实证据时必须失败。
+- Unit/E2E 文件存在不等于测试已通过；交互证据必须绑定专用 config / project 与精确的普通 Playwright 测试，release 作业只采纳本次成功运行实际记录到的 mouse / keyboard / touch API。
+- 每个已验证视觉单元必须提交独立基线和唯一、摘要绑定且尺寸正确的实际 PNG；视觉 spec 必须用 MES-108 证据 fixture 的 `mes108Screenshot.capture(path)` 逐 claim 捕获，release 作业先隔离 claimed actual，再要求 Playwright 本次重建、精确报告输出路径与截图返回字节摘要，随后以 `rgba-exact-v1` 逐像素重算差异。机器校验不能代替产品对差异取舍的人工判断。
 - `pending` 与 `blocked` 必须保留，禁止为通过门禁而改写为已完成；只有真实验证证据才能推进状态。
 
 <!-- prettier-ignore-end -->

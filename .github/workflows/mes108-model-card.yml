@@ -36,11 +36,14 @@ jobs:
         with:
           node-version: 22.22.0
 
+      - name: Install frontend dependencies
+        run: npm ci
+
       - name: Fetch pinned static prototype revision
         working-directory: .
         shell: bash
         run: |
-          revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.blueprint.revision)")"
+          revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.baseline.revision)")"
           git fetch --no-tags --depth=1 origin "$revision"
 
       - name: Test model-card validator core
@@ -61,12 +64,29 @@ jobs:
           --test-coverage-functions=90
           --test scripts/__tests__/model-card-validation.node.mjs
 
+      - name: Test runtime Playwright evidence producer
+        run: >-
+          node --experimental-test-coverage
+          --test-coverage-include=scripts/run-model-card-evidence.mjs
+          --test-coverage-include=scripts/mes108-playwright-reporter.mjs
+          --test-coverage-include=e2e/mes108-evidence-fixture.mjs
+          --test-coverage-lines=90
+          --test-coverage-branches=90
+          --test-coverage-functions=90
+          --test-name-pattern="runtime|default Playwright|Playwright reporter|evidence fixture|evidence CLI"
+          --test scripts/__tests__/model-card-validation.node.mjs
+
       - name: Validate inventories and generated documentation
         run: node scripts/verify-model-card.mjs --mode audit
 
   release:
+    if: github.event_name == 'pull_request'
+    needs: audit
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: read
     defaults:
       run:
         working-directory: frontend
@@ -74,6 +94,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -83,8 +104,74 @@ jobs:
         working-directory: .
         shell: bash
         run: |
-          revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.blueprint.revision)")"
+          revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.baseline.revision)")"
           git fetch --no-tags --depth=1 origin "$revision"
 
-      - name: Enforce release gate
-        run: node scripts/verify-model-card.mjs --mode release
+      - name: Determine whether browser evidence is required
+        id: evidence-plan
+        shell: bash
+        run: |
+          required="$(node scripts/run-model-card-evidence.mjs --mode plan)"
+          if [[ "$required" != "true" && "$required" != "false" ]]; then
+            echo "Unexpected evidence plan: $required" >&2
+            exit 1
+          fi
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+
+      - name: Install frontend dependencies for browser evidence
+        if: steps.evidence-plan.outputs.required == 'true'
+        run: npm ci
+
+      - name: Install Chromium for browser evidence
+        if: steps.evidence-plan.outputs.required == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Produce current-head Playwright evidence
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          node scripts/run-model-card-evidence.mjs
+          --mode run
+          --output "$RUNNER_TEMP/mes108-runtime-evidence.json"
+          --repository "$RELEASE_REPOSITORY"
+          --head "$PR_HEAD_SHA"
+
+      - name: Resolve current-head repository-owner decision
+        id: owner-approval
+        working-directory: .
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_OWNER: ${{ github.repository_owner }}
+        run: |
+          approval_file="$(mktemp "$RUNNER_TEMP/mes108-release-approval.XXXXXX.json")"
+          card_sha="$(sha256sum frontend/model-card/mes108-react-migration.json | awk '{print $1}')"
+          baseline_revision="$(node -e "const fs = require('node:fs'); const card = JSON.parse(fs.readFileSync('frontend/model-card/mes108-react-migration.json', 'utf8')); process.stdout.write(card.baseline.revision)")"
+          approval_body="/mes108-release approve head=${PR_HEAD_SHA} card=${card_sha} baseline=${baseline_revision}"
+          echo "Required repository-owner decision: ${approval_body}"
+          decision="$(gh api "repos/${RELEASE_REPOSITORY}/issues/${{ github.event.pull_request.number }}/comments" --paginate --slurp | jq -c --arg owner "$RELEASE_OWNER" --arg body "$approval_body" 'add | map(select(.user.login == $owner and .author_association == "OWNER" and .body == $body)) | sort_by(.created_at) | last // {}')"
+          jq -n \
+            --argjson decision "$decision" \
+            --arg repository "$RELEASE_REPOSITORY" \
+            --arg head "$PR_HEAD_SHA" \
+            --arg card "$card_sha" \
+            --arg baseline "$baseline_revision" \
+            'if $decision.id then {source:"github-pull-request-comment",repository:$repository,reviewer:$decision.user.login,authorAssociation:$decision.author_association,state:"APPROVED",headSha:$head,modelCardSha256:$card,baselineRevision:$baseline,decisionUrl:$decision.html_url,decidedAt:$decision.updated_at} else null end' > "$approval_file"
+          echo "path=$approval_file" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce evidence and product-owner release gate
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_OWNER: ${{ github.repository_owner }}
+        run: >-
+          node scripts/verify-model-card.mjs
+          --mode release
+          --approval-file "${{ steps.owner-approval.outputs.path }}"
+          --evidence-run-file "$RUNNER_TEMP/mes108-runtime-evidence.json"
+          --release-head "$PR_HEAD_SHA"
+          --release-repository "$RELEASE_REPOSITORY"
+          --release-owner "$RELEASE_OWNER"

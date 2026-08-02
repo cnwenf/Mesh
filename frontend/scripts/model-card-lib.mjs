@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
+import { inflateSync } from 'node:zlib';
 
 export const BLUEPRINT_PAGE_IDS = Object.freeze([
   'auth-login',
@@ -110,6 +112,8 @@ export const REQUIRED_COMPONENT_IDS = Object.freeze([
 const STRATEGIES = new Set(['reuse', 'calibrate', 'add', 'remove']);
 const RECONCILIATION = new Set(['reused', 'calibrated', 'new', 'removed', 'pending', 'blocked']);
 const STATE_STATUSES = new Set(['verified', 'pending', 'blocked', 'not-applicable']);
+const BASELINE_DISPOSITIONS = new Set(['active', 'cancelled', 'superseded']);
+const BASELINE_ADOPTIONS = new Set(['authoritative', 'partial-input', 'discarded']);
 const REQUIRED_THEMES = ['light', 'dark'];
 const REQUIRED_VIEWPORTS = ['390x844', '1440x900'];
 const REQUIRED_INPUT_MODES = ['mouse', 'keyboard', 'touch'];
@@ -197,7 +201,465 @@ function visualCell(viewport, theme, state) {
   return `${viewport}|${theme}|${state}`;
 }
 
-function validateVisualArtifact(artifact, evidenceCells, frontendRoot, owner, errors) {
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function visualEnvironmentSha256(card) {
+  return sha256(JSON.stringify(card.visualEnvironment));
+}
+
+const PNG_CRC_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function pngCrc32(content) {
+  let value = 0xffffffff;
+  for (const byte of content) value = PNG_CRC_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function inspectPng(buffer) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (buffer.length < 57 || !buffer.subarray(0, signature.length).equals(signature)) return null;
+
+  let offset = signature.length;
+  let width;
+  let height;
+  let colorType;
+  const idat = [];
+  let sawIend = false;
+  while (offset < buffer.length) {
+    if (offset + 12 > buffer.length) return null;
+    const length = buffer.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = typeStart + 4;
+    const dataEnd = dataStart + length;
+    const chunkEnd = dataEnd + 4;
+    if (chunkEnd > buffer.length) return null;
+    const type = buffer.toString('ascii', typeStart, dataStart);
+    if (pngCrc32(buffer.subarray(typeStart, dataEnd)) !== buffer.readUInt32BE(dataEnd)) {
+      return null;
+    }
+    if (type === 'IHDR') {
+      if (offset !== signature.length || length !== 13) return null;
+      width = buffer.readUInt32BE(dataStart);
+      height = buffer.readUInt32BE(dataStart + 4);
+      const bitDepth = buffer[dataStart + 8];
+      colorType = buffer[dataStart + 9];
+      const compression = buffer[dataStart + 10];
+      const filter = buffer[dataStart + 11];
+      const interlace = buffer[dataStart + 12];
+      if (
+        width === 0 ||
+        height === 0 ||
+        bitDepth !== 8 ||
+        colorType !== 6 ||
+        compression !== 0 ||
+        filter !== 0 ||
+        interlace !== 0
+      ) {
+        return null;
+      }
+    } else if (type === 'IDAT') {
+      idat.push(buffer.subarray(dataStart, dataEnd));
+    } else if (type === 'IEND') {
+      if (length !== 0 || chunkEnd !== buffer.length) return null;
+      sawIend = true;
+    }
+    offset = chunkEnd;
+  }
+  if (!sawIend || width === undefined || height === undefined || idat.length === 0) return null;
+
+  const channels = 4;
+  const rowLength = width * channels + 1;
+  const expectedLength = rowLength * height;
+  if (!Number.isSafeInteger(expectedLength) || expectedLength > 100_000_000) return null;
+  let pixels;
+  try {
+    pixels = inflateSync(Buffer.concat(idat), { maxOutputLength: expectedLength });
+  } catch {
+    return null;
+  }
+  if (pixels.length !== expectedLength) return null;
+  const rgba = Buffer.alloc(width * height * channels);
+  const bytesPerRow = width * channels;
+  const paeth = (left, up, upperLeft) => {
+    const estimate = left + up - upperLeft;
+    const leftDistance = Math.abs(estimate - left);
+    const upDistance = Math.abs(estimate - up);
+    const upperLeftDistance = Math.abs(estimate - upperLeft);
+    if (leftDistance <= upDistance && leftDistance <= upperLeftDistance) return left;
+    return upDistance <= upperLeftDistance ? up : upperLeft;
+  };
+  for (let row = 0; row < height; row += 1) {
+    const filterType = pixels[row * rowLength];
+    if (filterType > 4) return null;
+    const targetOffset = row * bytesPerRow;
+    const sourceOffset = row * rowLength + 1;
+    for (let column = 0; column < bytesPerRow; column += 1) {
+      const left = column >= channels ? rgba[targetOffset + column - channels] : 0;
+      const up = row > 0 ? rgba[targetOffset + column - bytesPerRow] : 0;
+      const upperLeft =
+        row > 0 && column >= channels ? rgba[targetOffset + column - bytesPerRow - channels] : 0;
+      const predictor = [0, left, up, Math.floor((left + up) / 2), paeth(left, up, upperLeft)][
+        filterType
+      ];
+      rgba[targetOffset + column] = (pixels[sourceOffset + column] + predictor) & 0xff;
+    }
+  }
+  return { width, height, rgba };
+}
+
+export function comparePngBuffers(actualBuffer, baselineBuffer) {
+  const actual = inspectPng(actualBuffer);
+  const baseline = inspectPng(baselineBuffer);
+  if (
+    actual === null ||
+    baseline === null ||
+    actual.width !== baseline.width ||
+    actual.height !== baseline.height
+  ) {
+    return null;
+  }
+  let diffPixels = 0;
+  for (let pixel = 0; pixel < actual.width * actual.height; pixel += 1) {
+    const offset = pixel * 4;
+    if (
+      !actual.rgba.subarray(offset, offset + 4).equals(baseline.rgba.subarray(offset, offset + 4))
+    ) {
+      diffPixels += 1;
+    }
+  }
+  return {
+    width: actual.width,
+    height: actual.height,
+    totalPixels: actual.width * actual.height,
+    diffPixels,
+  };
+}
+
+function readQuotedLiteral(source, start) {
+  const quote = source[start];
+  if (quote !== "'" && quote !== '"') return null;
+  let value = '';
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === quote) return { value, end: index + 1 };
+    if (character === '\\') {
+      index += 1;
+      if (index >= source.length) return null;
+      const escaped = source[index];
+      value +=
+        {
+          n: '\n',
+          r: '\r',
+          t: '\t',
+        }[escaped] ?? escaped;
+    } else {
+      value += character;
+    }
+  }
+  return null;
+}
+
+function findTestCaseSource(source, testTitle) {
+  const invocations = [...source.matchAll(/(?:^|\n)\s*test\s*\(/gmu)];
+  for (const [index, invocation] of invocations.entries()) {
+    let cursor = (invocation.index ?? 0) + invocation[0].length;
+    while (/\s/u.test(source[cursor] ?? '')) cursor += 1;
+    const title = readQuotedLiteral(source, cursor);
+    if (title === null || title.value !== testTitle) continue;
+    cursor = title.end;
+    while (/\s/u.test(source[cursor] ?? '')) cursor += 1;
+    if (source[cursor] !== ',') continue;
+    const start = invocation.index ?? 0;
+    const end = invocations[index + 1]?.index ?? source.length;
+    return source.slice(start, end);
+  }
+  return null;
+}
+
+function executableSource(source) {
+  let result = '';
+  let state = 'code';
+  let escaped = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+    if (state === 'code') {
+      if (character === '/' && next === '/') {
+        result += '  ';
+        index += 1;
+        state = 'line-comment';
+      } else if (character === '/' && next === '*') {
+        result += '  ';
+        index += 1;
+        state = 'block-comment';
+      } else if (character === "'" || character === '"' || character === '`') {
+        result += ' ';
+        state = character;
+      } else {
+        result += character;
+      }
+    } else if (state === 'line-comment') {
+      result += character === '\n' ? '\n' : ' ';
+      if (character === '\n') state = 'code';
+    } else if (state === 'block-comment') {
+      if (character === '*' && next === '/') {
+        result += '  ';
+        index += 1;
+        state = 'code';
+      } else {
+        result += character === '\n' ? '\n' : ' ';
+      }
+    } else {
+      result += character === '\n' ? '\n' : ' ';
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === state) {
+        state = 'code';
+      }
+    }
+  }
+  return result;
+}
+
+function testExercisesInputMode(testSource, mode) {
+  const patterns = {
+    mouse:
+      /(?:\)|\b[A-Za-z_$][\w$]*)\.(?:click|dblclick|dragTo|hover)\s*\(|\bmouse\.(?:click|down|move|up)\s*\(/u,
+    keyboard:
+      /(?:\)|\b[A-Za-z_$][\w$]*)\.(?:press|pressSequentially|type)\s*\(|\bkeyboard\.(?:down|insertText|press|type|up)\s*\(/u,
+    touch: /(?:\)|\b[A-Za-z_$][\w$]*)\.tap\s*\(|\btouchscreen\.tap\s*\(/u,
+  };
+  return patterns[mode]?.test(executableSource(testSource)) === true;
+}
+
+function testCapturesVisualPath(testSource, path) {
+  const marker = 'MES108_CLAIMED_SCREENSHOT_PATH';
+  let marked = testSource;
+  for (const quote of ["'", '"', '`']) {
+    marked = marked.replaceAll(`${quote}${path}${quote}`, marker);
+  }
+  return new RegExp(`\\bmes108Screenshot\\.capture\\s*\\(\\s*${marker}(?:\\s*[,\\)])`, 'u').test(
+    executableSource(marked),
+  );
+}
+
+function validatePlaywrightTarget(target, frontendRoot, owner, errors) {
+  if (target.config !== 'playwright.mes108.config.ts') {
+    errors.push(`${owner}: Playwright config must equal playwright.mes108.config.ts`);
+  } else {
+    validatePath(frontendRoot, target.config, owner, errors);
+  }
+  if (!['phone', 'wide'].includes(target.project)) {
+    errors.push(`${owner}: Playwright project must be phone or wide`);
+  }
+}
+
+function validateVisualCapture(capture, artifactPath, viewport, card, frontendRoot, owner, errors) {
+  if (!isRecord(capture)) {
+    errors.push(`${owner}: visual artifact capture must be an object`);
+    return;
+  }
+  if (capture.runner !== 'playwright') {
+    errors.push(`${owner}: visual artifact capture.runner must equal playwright`);
+  }
+  validatePlaywrightTarget(capture, frontendRoot, owner, errors);
+  const expectedProject = { '390x844': 'phone', '1440x900': 'wide' }[viewport];
+  if (expectedProject !== undefined && capture.project !== expectedProject) {
+    errors.push(`${owner}: visual artifact capture.project does not match viewport ${viewport}`);
+  }
+  if (
+    typeof capture.spec !== 'string' ||
+    !capture.spec.startsWith('e2e/') ||
+    !capture.spec.endsWith('.spec.ts')
+  ) {
+    errors.push(`${owner}: visual artifact capture.spec must be an e2e spec`);
+  } else {
+    validatePath(frontendRoot, capture.spec, owner, errors);
+    const target = resolve(frontendRoot, capture.spec);
+    if (existsSync(target)) {
+      const source = readFileSync(target, 'utf8');
+      const fixtureImport =
+        /import\s*\{(?<names>[^}]*)\}\s*from\s*['"][^'"]*mes108-evidence-fixture\.mjs['"]/u.exec(
+          source,
+        );
+      const fixtureNames =
+        fixtureImport?.groups?.names
+          ?.split(',')
+          .map((name) => name.trim())
+          .filter(Boolean) ?? [];
+      if (
+        !fixtureNames.includes('test') ||
+        !fixtureNames.includes('expect') ||
+        /from\s*['"]@playwright\/test['"]/u.test(source)
+      ) {
+        errors.push(
+          `${owner}: visual artifact capture spec must import test and expect from mes108-evidence-fixture.mjs`,
+        );
+      }
+      const testSource =
+        typeof capture.testTitle === 'string'
+          ? findTestCaseSource(source, capture.testTitle)
+          : null;
+      if (testSource === null) {
+        errors.push(`${owner}: visual artifact capture.testTitle was not found`);
+      } else {
+        const executable = executableSource(testSource);
+        if (!/(?:\)|\b[A-Za-z_$][\w$]*)\.toHaveScreenshot\s*\(/u.test(executable)) {
+          errors.push(`${owner}: visual artifact capture test does not compare a screenshot`);
+        }
+        if (typeof artifactPath !== 'string' || !testCapturesVisualPath(testSource, artifactPath)) {
+          errors.push(
+            `${owner}: visual artifact capture test does not capture claimed screenshot path`,
+          );
+        }
+      }
+    }
+  }
+  if (
+    typeof capture.capturedAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(capture.capturedAt) ||
+    Number.isNaN(Date.parse(capture.capturedAt))
+  ) {
+    errors.push(`${owner}: visual artifact capture.capturedAt must be a UTC timestamp`);
+  }
+  if (capture.environmentSha256 !== visualEnvironmentSha256(card)) {
+    errors.push(`${owner}: visual artifact capture environment digest does not match`);
+  }
+}
+
+function validateVisualComparison(
+  comparison,
+  actualContent,
+  actualSha,
+  viewport,
+  card,
+  frontendRoot,
+  registry,
+  cell,
+  owner,
+  errors,
+) {
+  if (!isRecord(comparison)) {
+    errors.push(`${owner}: visual artifact comparison must be an object`);
+    return;
+  }
+  let computed = null;
+  const baselinePath = comparison.baselinePath;
+  if (
+    typeof baselinePath !== 'string' ||
+    !baselinePath.startsWith('e2e/evidence/mes108/baselines/') ||
+    !/\.png$/iu.test(baselinePath)
+  ) {
+    errors.push(`${owner}: visual artifact comparison.baselinePath is invalid`);
+  } else {
+    validatePath(frontendRoot, baselinePath, owner, errors);
+    const baselineTarget = resolve(frontendRoot, baselinePath);
+    if (existsSync(baselineTarget)) {
+      const baselineContent = readFileSync(baselineTarget);
+      const baselineImage = inspectPng(baselineContent);
+      if (baselineImage === null) {
+        errors.push(`${owner}: invalid baseline PNG content ${baselinePath}`);
+      } else {
+        const expected = /^(\d+)x(\d+)$/u.exec(viewport ?? '');
+        if (
+          expected !== null &&
+          (baselineImage.width !== Number(expected[1]) ||
+            baselineImage.height !== Number(expected[2]))
+        ) {
+          errors.push(`${owner}: baseline dimensions do not match ${String(viewport)}`);
+        }
+      }
+      const baselineSha = sha256(baselineContent);
+      if (comparison.baselineSha256 !== baselineSha) {
+        errors.push(`${owner}: visual artifact comparison.baselineSha256 does not match`);
+      }
+      registerVisualArtifact(registry, baselinePath, baselineSha, cell, owner, errors, 'baseline');
+      computed = comparePngBuffers(actualContent, baselineContent);
+    }
+  }
+  if (comparison.actualSha256 !== actualSha) {
+    errors.push(`${owner}: visual artifact comparison.actualSha256 does not match`);
+  }
+  if (comparison.algorithm !== 'rgba-exact-v1') {
+    errors.push(`${owner}: visual artifact comparison.algorithm must equal rgba-exact-v1`);
+  }
+  if (computed !== null && comparison.totalPixels !== computed.totalPixels) {
+    errors.push(`${owner}: visual artifact comparison.totalPixels does not match pixels`);
+  }
+  if (computed !== null && comparison.diffPixels !== computed.diffPixels) {
+    errors.push(`${owner}: visual artifact comparison.diffPixels does not match pixels`);
+  }
+  if (
+    typeof comparison.threshold !== 'number' ||
+    !Number.isFinite(comparison.threshold) ||
+    comparison.threshold < 0 ||
+    comparison.threshold > 1
+  ) {
+    errors.push(`${owner}: visual artifact comparison.threshold must be between 0 and 1`);
+  } else if (
+    computed !== null &&
+    computed.totalPixels > 0 &&
+    computed.diffPixels / computed.totalPixels > comparison.threshold
+  ) {
+    errors.push(`${owner}: visual artifact comparison exceeds its threshold`);
+  }
+  if (!['matched', 'approved-difference'].includes(comparison.status)) {
+    errors.push(`${owner}: visual artifact comparison.status is invalid`);
+  }
+  if (comparison.status === 'matched' && computed?.diffPixels !== 0) {
+    errors.push(`${owner}: matched visual comparison must have zero pixel differences`);
+  }
+  if (comparison.status === 'approved-difference') {
+    const risk = card.calibrationRisks?.find((candidate) => candidate?.id === comparison.riskId);
+    if (risk === undefined || ['pending', 'blocked'].includes(risk.status)) {
+      errors.push(`${owner}: approved visual difference requires a resolved calibration risk`);
+    }
+    if (typeof comparison.reason !== 'string' || comparison.reason.trim().length === 0) {
+      errors.push(`${owner}: approved visual difference requires a reason`);
+    }
+    if (computed?.diffPixels === 0) {
+      errors.push(`${owner}: approved visual difference must contain a pixel difference`);
+    }
+  }
+}
+
+function registerVisualArtifact(registry, path, digest, cell, owner, errors, namespace = 'actual') {
+  for (const [kind, value] of [
+    ['path', path],
+    ['sha256', digest],
+  ]) {
+    if (typeof value !== 'string') continue;
+    const key =
+      namespace === 'actual' ? kind : `${namespace}${kind[0].toUpperCase()}${kind.slice(1)}`;
+    const prior = registry[key].get(value);
+    if (prior !== undefined && prior !== `${owner}:${cell}`) {
+      const label = namespace === 'actual' ? 'visual artifact' : `visual ${namespace} artifact`;
+      errors.push(`${owner}: global duplicate ${label} ${kind} ${value} (also ${prior})`);
+    } else {
+      registry[key].set(value, `${owner}:${cell}`);
+    }
+  }
+}
+
+function validateVisualArtifact(
+  artifact,
+  evidenceCells,
+  card,
+  frontendRoot,
+  registry,
+  owner,
+  errors,
+) {
   if (!isRecord(artifact)) {
     errors.push(`${owner}: visual artifact must be an object`);
     return null;
@@ -210,18 +672,53 @@ function validateVisualArtifact(artifact, evidenceCells, frontendRoot, owner, er
   if (
     typeof path !== 'string' ||
     !path.startsWith('e2e/evidence/mes108/') ||
-    !/\.(?:png|webp)$/iu.test(path)
+    path.startsWith('e2e/evidence/mes108/baselines/') ||
+    !/\.png$/iu.test(path)
   ) {
     errors.push(
       `${owner}: visual artifact must be an image under e2e/evidence/mes108: ${String(path)}`,
     );
   } else {
     validatePath(frontendRoot, path, owner, errors);
+    const target = resolve(frontendRoot, path);
+    if (existsSync(target)) {
+      const content = readFileSync(target);
+      const image = inspectPng(content);
+      if (image === null) {
+        errors.push(`${owner}: invalid PNG content ${path}`);
+      } else {
+        const expected = /^(\d+)x(\d+)$/u.exec(viewport ?? '');
+        if (
+          expected !== null &&
+          (image.width !== Number(expected[1]) || image.height !== Number(expected[2]))
+        ) {
+          errors.push(`${owner}: visual artifact dimensions do not match ${String(viewport)}`);
+        }
+      }
+      const digest = sha256(content);
+      if (!/^[0-9a-f]{64}$/u.test(artifact.sha256 ?? '') || artifact.sha256 !== digest) {
+        errors.push(`${owner}: visual artifact sha256 does not match ${path}`);
+      }
+      registerVisualArtifact(registry, path, digest, cell, owner, errors);
+      validateVisualComparison(
+        artifact.comparison,
+        content,
+        digest,
+        viewport,
+        card,
+        frontendRoot,
+        registry,
+        cell,
+        owner,
+        errors,
+      );
+    }
   }
+  validateVisualCapture(artifact.capture, path, viewport, card, frontendRoot, owner, errors);
   return cell;
 }
 
-function validateVisualEvidence(surface, card, frontendRoot, owner, errors) {
+function validateVisualEvidence(surface, card, frontendRoot, registry, owner, errors) {
   if (!Array.isArray(surface.visualEvidence) || surface.visualEvidence.length === 0) {
     errors.push(`${owner}: visualEvidence must be a non-empty array`);
     return;
@@ -296,7 +793,15 @@ function validateVisualEvidence(surface, card, frontendRoot, owner, errors) {
         const artifactCells = [];
         const artifactPaths = [];
         for (const artifact of evidence.artifacts) {
-          const cell = validateVisualArtifact(artifact, evidenceCells, frontendRoot, owner, errors);
+          const cell = validateVisualArtifact(
+            artifact,
+            evidenceCells,
+            card,
+            frontendRoot,
+            registry,
+            owner,
+            errors,
+          );
           if (cell !== null) artifactCells.push(cell);
           if (isRecord(artifact) && typeof artifact.path === 'string') {
             artifactPaths.push(artifact.path);
@@ -511,6 +1016,8 @@ function validateInteractions(surface, card, frontendRoot, owner, errors) {
             continue;
           }
           const { path, testTitle, inputModes } = evidence;
+          validatePlaywrightTarget(evidence, frontendRoot, interactionOwner, errors);
+          let testSource = null;
           if (typeof path !== 'string' || !path.startsWith('e2e/') || !path.endsWith('.spec.ts')) {
             errors.push(`${interactionOwner}: evidence path must be an e2e spec: ${String(path)}`);
           } else {
@@ -519,21 +1026,29 @@ function validateInteractions(surface, card, frontendRoot, owner, errors) {
             if (existsSync(target)) {
               if (typeof testTitle !== 'string' || testTitle.trim().length === 0) {
                 errors.push(`${interactionOwner}: evidence testTitle must be a non-empty string`);
-              } else if (!readFileSync(target, 'utf8').includes(testTitle)) {
-                errors.push(`${interactionOwner}: evidence testTitle not found in ${path}`);
+              } else {
+                testSource = findTestCaseSource(readFileSync(target, 'utf8'), testTitle);
+                if (testSource === null) {
+                  errors.push(`${interactionOwner}: evidence testTitle not found in ${path}`);
+                }
               }
             }
           }
           if (!Array.isArray(inputModes) || inputModes.length === 0) {
             errors.push(`${interactionOwner}: evidence inputModes must be a non-empty array`);
           } else {
+            for (const mode of duplicates(inputModes)) {
+              errors.push(`${interactionOwner}: evidence has duplicate input mode ${mode}`);
+            }
             for (const mode of inputModes) {
               if (!interaction.inputModes.includes(mode)) {
                 errors.push(
                   `${interactionOwner}: evidence has undeclared input mode ${String(mode)}`,
                 );
-              } else {
+              } else if (testSource !== null && testExercisesInputMode(testSource, mode)) {
                 coveredModes.push(mode);
+              } else if (testSource !== null) {
+                errors.push(`${interactionOwner}: test does not exercise input mode ${mode}`);
               }
             }
           }
@@ -554,7 +1069,7 @@ function validateInteractions(surface, card, frontendRoot, owner, errors) {
   }
 }
 
-function validatePages(card, frontendRoot, routeSource, errors) {
+function validatePages(card, frontendRoot, routeSource, visualArtifactRegistry, errors) {
   const ownedRoutes = [];
   if (!Array.isArray(card.pages)) {
     errors.push('pages must be an array');
@@ -613,7 +1128,7 @@ function validatePages(card, frontendRoot, routeSource, errors) {
 
     validateStates(page, owner, errors);
     validateInteractions(page, card, frontendRoot, owner, errors);
-    validateVisualEvidence(page, card, frontendRoot, owner, errors);
+    validateVisualEvidence(page, card, frontendRoot, visualArtifactRegistry, owner, errors);
   }
 
   for (const route of duplicates(allBlueprintRoutes)) {
@@ -657,7 +1172,7 @@ function validatePages(card, frontendRoot, routeSource, errors) {
   return ownedRoutes;
 }
 
-function validateReactExtensions(card, frontendRoot, routeSource, errors) {
+function validateReactExtensions(card, frontendRoot, routeSource, visualArtifactRegistry, errors) {
   if (!Array.isArray(card.reactExtensions)) {
     errors.push('reactExtensions must be an array');
     return [];
@@ -703,7 +1218,7 @@ function validateReactExtensions(card, frontendRoot, routeSource, errors) {
     }
     validateStates(extension, owner, errors);
     validateInteractions(extension, card, frontendRoot, owner, errors);
-    validateVisualEvidence(extension, card, frontendRoot, owner, errors);
+    validateVisualEvidence(extension, card, frontendRoot, visualArtifactRegistry, owner, errors);
   }
   return ownedRoutes;
 }
@@ -947,53 +1462,378 @@ function validateTokens(card, tokenSource, errors) {
   }
 }
 
-function validateReleaseGate(card, errors) {
-  if (card.blueprint?.confirmed !== true) {
-    errors.push('release gate: blueprint confirmation is required');
+function validateBaseline(card, errors) {
+  if (!isRecord(card.baseline)) {
+    errors.push('baseline must be an object');
+    return;
   }
-  const unresolved = [];
-  const inspectSurface = (surface, owner) => {
-    if (['pending', 'blocked'].includes(surface?.reconciliation)) {
-      unresolved.push(`${owner}.reconciliation=${surface.reconciliation}`);
-    }
-    for (const [state, status] of Object.entries(surface?.states ?? {})) {
-      if (['pending', 'blocked'].includes(status))
-        unresolved.push(`${owner}.states.${state}=${status}`);
-    }
-    for (const interaction of surface?.interactions ?? []) {
-      if (['pending', 'blocked'].includes(interaction?.status)) {
-        unresolved.push(`${owner}.interactions.${String(interaction?.id)}=${interaction.status}`);
+  const baseline = card.baseline;
+  if (baseline.issue !== 'MES-142') errors.push('baseline.issue must equal MES-142');
+  if (baseline.pullRequest !== 100) errors.push('baseline.pullRequest must equal 100');
+  if (!/^[0-9a-f]{40}$/u.test(baseline.revision ?? '')) {
+    errors.push('baseline.revision must be a full lowercase commit SHA');
+  }
+  if (!BASELINE_DISPOSITIONS.has(baseline.disposition)) {
+    errors.push(`invalid baseline disposition ${String(baseline.disposition)}`);
+  }
+  if (!BASELINE_ADOPTIONS.has(baseline.adoption)) {
+    errors.push(`invalid baseline adoption ${String(baseline.adoption)}`);
+  }
+  if (baseline.disposition === 'cancelled' && baseline.adoption === 'authoritative') {
+    errors.push('cancelled baseline must be adopted as partial-input or discarded');
+  }
+  if (baseline.disposition === 'superseded') {
+    if (!isRecord(baseline.supersededBy)) {
+      errors.push('superseded baseline requires supersededBy');
+    } else {
+      if (
+        typeof baseline.supersededBy.issue !== 'string' ||
+        baseline.supersededBy.issue.length === 0
+      ) {
+        errors.push('baseline.supersededBy.issue must be a non-empty string');
+      }
+      if (
+        !Number.isInteger(baseline.supersededBy.pullRequest) ||
+        baseline.supersededBy.pullRequest <= 0
+      ) {
+        errors.push('baseline.supersededBy.pullRequest must be a positive integer');
+      }
+      if (!/^[0-9a-f]{40}$/u.test(baseline.supersededBy.revision ?? '')) {
+        errors.push('baseline.supersededBy.revision must be a full lowercase commit SHA');
       }
     }
-    for (const evidence of surface?.visualEvidence ?? []) {
-      if (evidence?.status !== 'verified' && evidence?.status !== 'not-applicable') {
-        unresolved.push(`${owner}.visualEvidence=${String(evidence?.status)}`);
+  } else if (baseline.supersededBy !== null) {
+    errors.push('baseline.supersededBy must be null unless disposition is superseded');
+  }
+}
+
+function validateReleasePolicy(card, errors) {
+  if (!isRecord(card.releasePolicy)) {
+    errors.push('releasePolicy must be an object');
+    return;
+  }
+  if (card.releasePolicy.ownerDecisionRequired !== true) {
+    errors.push('releasePolicy.ownerDecisionRequired must equal true');
+  }
+  if (card.releasePolicy.requiredAuthority !== 'repository-owner') {
+    errors.push('releasePolicy.requiredAuthority must equal repository-owner');
+  }
+  if (card.releasePolicy.source !== 'github-pull-request-comment') {
+    errors.push('releasePolicy.source must equal github-pull-request-comment');
+  }
+  if (card.releasePolicy.binding !== 'head-and-card-digest') {
+    errors.push('releasePolicy.binding must equal head-and-card-digest');
+  }
+  if (card.releaseApproval !== undefined) {
+    errors.push('releaseApproval must not be stored in the model card');
+  }
+  if (card.blueprint !== undefined) {
+    errors.push('legacy blueprint field must not be stored in schemaVersion 2');
+  }
+}
+
+function visualEvidenceCellCount(evidence) {
+  if (!isRecord(evidence)) return 0;
+  const dimensions = [evidence.viewports, evidence.themes, evidence.states];
+  if (dimensions.some((values) => !Array.isArray(values))) return 0;
+  return dimensions.reduce((count, values) => count * values.length, 1);
+}
+
+function runtimeClaimKey(parts) {
+  return sha256(JSON.stringify(parts));
+}
+
+export function collectRuntimeEvidenceClaims(card) {
+  const claims = [];
+  const inspectSurface = (surface, ownerType) => {
+    if (!isRecord(surface) || typeof surface.id !== 'string') return;
+    for (const interaction of Array.isArray(surface.interactions) ? surface.interactions : []) {
+      if (!isRecord(interaction) || interaction.status !== 'verified') continue;
+      for (const evidence of Array.isArray(interaction.evidence) ? interaction.evidence : []) {
+        if (!isRecord(evidence)) continue;
+        const inputModes = Array.isArray(evidence.inputModes) ? evidence.inputModes : [];
+        const identity = [
+          'interaction',
+          ownerType,
+          surface.id,
+          interaction.id,
+          evidence.path,
+          evidence.testTitle,
+          evidence.config,
+          evidence.project,
+          inputModes,
+        ];
+        claims.push({
+          key: runtimeClaimKey(identity),
+          kind: 'interaction',
+          ownerType,
+          ownerId: surface.id,
+          interactionId: interaction.id,
+          spec: evidence.path,
+          testTitle: evidence.testTitle,
+          config: evidence.config,
+          project: evidence.project,
+          inputModes,
+        });
+      }
+    }
+    for (const evidence of Array.isArray(surface.visualEvidence) ? surface.visualEvidence : []) {
+      if (!isRecord(evidence) || evidence.status !== 'verified') continue;
+      for (const artifact of Array.isArray(evidence.artifacts) ? evidence.artifacts : []) {
+        if (!isRecord(artifact) || !isRecord(artifact.capture)) continue;
+        const identity = [
+          'visual',
+          ownerType,
+          surface.id,
+          artifact.viewport,
+          artifact.theme,
+          artifact.state,
+          artifact.path,
+        ];
+        claims.push({
+          key: runtimeClaimKey(identity),
+          kind: 'visual',
+          ownerType,
+          ownerId: surface.id,
+          viewport: artifact.viewport,
+          theme: artifact.theme,
+          state: artifact.state,
+          path: artifact.path,
+          sha256: artifact.sha256,
+          comparison: artifact.comparison,
+          spec: artifact.capture.spec,
+          testTitle: artifact.capture.testTitle,
+          config: artifact.capture.config,
+          project: artifact.capture.project,
+        });
       }
     }
   };
-  for (const page of card.pages ?? []) inspectSurface(page, `pages.${String(page?.id)}`);
-  for (const extension of card.reactExtensions ?? []) {
+  for (const page of Array.isArray(card.pages) ? card.pages : []) inspectSurface(page, 'page');
+  for (const extension of Array.isArray(card.reactExtensions) ? card.reactExtensions : []) {
+    inspectSurface(extension, 'extension');
+  }
+  return claims;
+}
+
+export function summarizeUnresolvedEvidence(card) {
+  const items = [];
+  const counts = {
+    reconciliation: 0,
+    states: 0,
+    interactions: 0,
+    visualEvidenceGroups: 0,
+    visualEvidenceCells: 0,
+    components: 0,
+    tokens: 0,
+    calibrationRisks: 0,
+  };
+  const inspectSurface = (surface, owner) => {
+    if (['pending', 'blocked'].includes(surface?.reconciliation)) {
+      counts.reconciliation += 1;
+      items.push(`${owner}.reconciliation=${surface.reconciliation}`);
+    }
+    for (const [state, status] of Object.entries(surface?.states ?? {})) {
+      if (['pending', 'blocked'].includes(status)) {
+        counts.states += 1;
+        items.push(`${owner}.states.${state}=${status}`);
+      }
+    }
+    for (const interaction of Array.isArray(surface?.interactions) ? surface.interactions : []) {
+      if (['pending', 'blocked'].includes(interaction?.status)) {
+        counts.interactions += 1;
+        items.push(`${owner}.interactions.${String(interaction?.id)}=${interaction.status}`);
+      }
+    }
+    for (const evidence of Array.isArray(surface?.visualEvidence) ? surface.visualEvidence : []) {
+      if (evidence?.status !== 'verified' && evidence?.status !== 'not-applicable') {
+        counts.visualEvidenceGroups += 1;
+        counts.visualEvidenceCells += visualEvidenceCellCount(evidence);
+        items.push(`${owner}.visualEvidence=${String(evidence?.status)}`);
+      }
+    }
+  };
+  for (const page of Array.isArray(card.pages) ? card.pages : []) {
+    inspectSurface(page, `pages.${String(page?.id)}`);
+  }
+  for (const extension of Array.isArray(card.reactExtensions) ? card.reactExtensions : []) {
     inspectSurface(extension, `reactExtensions.${String(extension?.id)}`);
   }
-  for (const component of card.components ?? []) {
+  for (const component of Array.isArray(card.components) ? card.components : []) {
     if (['pending', 'blocked'].includes(component?.reconciliation)) {
-      unresolved.push(`components.${String(component?.id)}=${component.reconciliation}`);
+      counts.components += 1;
+      items.push(`components.${String(component?.id)}=${component.reconciliation}`);
     }
   }
-  for (const token of card.tokens ?? []) {
+  for (const token of Array.isArray(card.tokens) ? card.tokens : []) {
     if (['pending', 'blocked'].includes(token?.reconciliation)) {
-      unresolved.push(`tokens.${String(token?.blueprint)}=${token.reconciliation}`);
+      counts.tokens += 1;
+      items.push(`tokens.${String(token?.blueprint)}=${token.reconciliation}`);
     }
   }
-  for (const risk of card.calibrationRisks ?? []) {
+  for (const risk of Array.isArray(card.calibrationRisks) ? card.calibrationRisks : []) {
     if (['pending', 'blocked'].includes(risk?.status)) {
-      unresolved.push(`calibrationRisks.${String(risk?.id)}=${risk.status}`);
+      counts.calibrationRisks += 1;
+      items.push(`calibrationRisks.${String(risk?.id)}=${risk.status}`);
     }
   }
-  if (unresolved.length > 0) {
-    const sample = unresolved.slice(0, 12).join(', ');
-    const suffix = unresolved.length > 12 ? ` … and ${unresolved.length - 12} more` : '';
-    errors.push(`release gate: ${unresolved.length} unresolved item(s): ${sample}${suffix}`);
+  return { counts, items, totalItems: items.length };
+}
+
+function validateReleaseApproval(card, approval, context, errors) {
+  if (!isRecord(approval) || !isRecord(context)) {
+    errors.push(
+      `release gate [owner_decision_required]: product-owner approval is required; ${String(card.baseline?.issue)} is ${String(card.baseline?.disposition)}/${String(card.baseline?.adoption)} and does not authorize release`,
+    );
+    return;
+  }
+  const required = {
+    source: 'github-pull-request-comment',
+    repository: context.repository,
+    reviewer: context.repositoryOwner,
+    authorAssociation: 'OWNER',
+    state: 'APPROVED',
+    headSha: context.headSha,
+    modelCardSha256: context.modelCardSha256,
+    baselineRevision: card.baseline?.revision,
+  };
+  for (const [field, expected] of Object.entries(required)) {
+    if (approval[field] !== expected) {
+      errors.push(
+        `release gate [owner_decision_invalid]: approval ${field} does not match the trusted release context`,
+      );
+    }
+  }
+  if (
+    typeof approval.decisionUrl !== 'string' ||
+    !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+#issuecomment-\d+$/u.test(approval.decisionUrl)
+  ) {
+    errors.push('release gate [owner_decision_invalid]: approval decisionUrl is invalid');
+  }
+  if (
+    typeof approval.decidedAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(approval.decidedAt) ||
+    Number.isNaN(Date.parse(approval.decidedAt))
+  ) {
+    errors.push('release gate [owner_decision_invalid]: approval decidedAt is invalid');
+  }
+}
+
+function validateRuntimeEvidence(card, evidenceRun, context, errors) {
+  const claims = collectRuntimeEvidenceClaims(card);
+  if (claims.length === 0) return;
+  if (!isRecord(evidenceRun) || !isRecord(context)) {
+    errors.push(
+      'release gate [runtime_evidence_required]: a current-head Playwright evidence run is required',
+    );
+    return;
+  }
+  for (const [field, expected] of [
+    ['schemaVersion', 1],
+    ['source', 'github-actions-playwright'],
+    ['repository', context.repository],
+    ['headSha', context.headSha],
+    ['modelCardSha256', context.modelCardSha256],
+  ]) {
+    if (evidenceRun[field] !== expected) {
+      errors.push(
+        `release gate [runtime_evidence_invalid]: runtime evidence ${field} does not match`,
+      );
+    }
+  }
+  if (
+    typeof evidenceRun.generatedAt !== 'string' ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(evidenceRun.generatedAt) ||
+    Number.isNaN(Date.parse(evidenceRun.generatedAt))
+  ) {
+    errors.push('release gate [runtime_evidence_invalid]: runtime evidence generatedAt is invalid');
+  }
+  if (!Array.isArray(evidenceRun.results)) {
+    errors.push(
+      'release gate [runtime_evidence_invalid]: runtime evidence results must be an array',
+    );
+    return;
+  }
+  const results = new Map();
+  for (const result of evidenceRun.results) {
+    if (!isRecord(result) || typeof result.key !== 'string') {
+      errors.push('release gate [runtime_evidence_invalid]: invalid runtime evidence result');
+      continue;
+    }
+    if (results.has(result.key)) {
+      errors.push(
+        `release gate [runtime_evidence_invalid]: duplicate runtime result ${result.key}`,
+      );
+    }
+    results.set(result.key, result);
+  }
+  const claimKeys = new Set(claims.map((claim) => claim.key));
+  for (const resultKey of results.keys()) {
+    if (!claimKeys.has(resultKey)) {
+      errors.push(
+        `release gate [runtime_evidence_invalid]: unexpected runtime result ${resultKey}`,
+      );
+    }
+  }
+  for (const claim of claims) {
+    const result = results.get(claim.key);
+    if (result === undefined) {
+      errors.push(`release gate [runtime_evidence_invalid]: missing runtime result ${claim.key}`);
+      continue;
+    }
+    if (result.status !== 'passed') {
+      errors.push(`release gate [runtime_evidence_invalid]: runtime evidence result is not passed`);
+    }
+    if (claim.kind === 'interaction') {
+      const executed = Array.isArray(result.executedInputModes) ? result.executedInputModes : [];
+      for (const mode of claim.inputModes) {
+        if (!executed.includes(mode)) {
+          errors.push(
+            `release gate [runtime_evidence_invalid]: runtime interaction did not execute ${mode}`,
+          );
+        }
+      }
+    } else {
+      if (result.screenshotProduced !== true) {
+        errors.push(
+          'release gate [runtime_evidence_invalid]: runtime visual did not produce a screenshot',
+        );
+      }
+      for (const [field, expected] of [
+        ['artifactSha256', claim.sha256],
+        ['baselineSha256', claim.comparison?.baselineSha256],
+        ['totalPixels', claim.comparison?.totalPixels],
+        ['diffPixels', claim.comparison?.diffPixels],
+      ]) {
+        if (result[field] !== expected) {
+          errors.push(
+            `release gate [runtime_evidence_invalid]: runtime visual ${field} does not match`,
+          );
+        }
+      }
+    }
+  }
+}
+
+function validateReleaseGate(card, options, errors) {
+  validateReleaseApproval(card, options.releaseApproval, options.releaseContext, errors);
+  validateRuntimeEvidence(card, options.evidenceRun, options.releaseContext, errors);
+  const { counts, items, totalItems } = summarizeUnresolvedEvidence(card);
+  if (totalItems > 0) {
+    const sample = items.slice(0, 12).join(', ');
+    const suffix = totalItems > 12 ? ` … and ${totalItems - 12} more` : '';
+    const breakdown = [
+      `reconciliation=${counts.reconciliation}`,
+      `states=${counts.states}`,
+      `interactions=${counts.interactions}`,
+      `visualEvidence=${counts.visualEvidenceGroups} group(s)/${counts.visualEvidenceCells} cell(s)`,
+      `components=${counts.components}`,
+      `tokens=${counts.tokens}`,
+      `calibrationRisks=${counts.calibrationRisks}`,
+    ].join(', ');
+    errors.push(
+      `release gate: ${totalItems} unresolved item(s) [${breakdown}]: ${sample}${suffix}`,
+    );
   }
 }
 
@@ -1003,19 +1843,10 @@ export function validateModelCard(card, options = {}) {
   const mode = options.mode ?? 'audit';
   if (!isRecord(card)) return ['model card must be an object'];
   if (!['audit', 'release'].includes(mode)) errors.push(`invalid validation mode ${String(mode)}`);
-  if (card.schemaVersion !== 1) errors.push('schemaVersion must equal 1');
+  if (card.schemaVersion !== 2) errors.push('schemaVersion must equal 2');
   if (card.issue !== 'MES-108') errors.push('issue must equal MES-108');
-  if (!isRecord(card.blueprint)) {
-    errors.push('blueprint must be an object');
-  } else {
-    if (card.blueprint.issue !== 'MES-142') errors.push('blueprint.issue must equal MES-142');
-    if (typeof card.blueprint.confirmed !== 'boolean') {
-      errors.push('blueprint.confirmed must be a boolean');
-    }
-    if (!/^[0-9a-f]{40}$/u.test(card.blueprint.revision ?? '')) {
-      errors.push('blueprint.revision must be a full lowercase commit SHA');
-    }
-  }
+  validateBaseline(card, errors);
+  validateReleasePolicy(card, errors);
 
   validateDimensions(card, errors);
   validateVisualEnvironment(card, frontendRoot, errors);
@@ -1038,8 +1869,22 @@ export function validateModelCard(card, options = {}) {
     errors,
     'tokens',
   );
-  const ownedRoutes = validatePages(card, frontendRoot, routeSource, errors);
-  ownedRoutes.push(...validateReactExtensions(card, frontendRoot, routeSource, errors));
+  const visualArtifactRegistry = {
+    path: new Map(),
+    sha256: new Map(),
+    baselinePath: new Map(),
+    baselineSha256: new Map(),
+  };
+  const ownedRoutes = validatePages(
+    card,
+    frontendRoot,
+    routeSource,
+    visualArtifactRegistry,
+    errors,
+  );
+  ownedRoutes.push(
+    ...validateReactExtensions(card, frontendRoot, routeSource, visualArtifactRegistry, errors),
+  );
   validateRouteOwnership(routeSource, ownedRoutes, errors);
   const ownersById = new Map([
     ...(card.pages ?? []).map((page) => [page?.id, page]),
@@ -1054,7 +1899,7 @@ export function validateModelCard(card, options = {}) {
     options.prototypeTokenSource,
     errors,
   );
-  if (mode === 'release') validateReleaseGate(card, errors);
+  if (mode === 'release') validateReleaseGate(card, options, errors);
   return errors;
 }
 
@@ -1106,26 +1951,26 @@ function interactionSummary(surface) {
 }
 
 export function renderModelCardMarkdown(card) {
-  const confirmation = card.blueprint.confirmed ? '已确认' : '尚未确认';
   const lines = [
     '<!-- prettier-ignore-start -->',
     '',
     '# MES-108 React 迁移模型卡',
     '',
     '> 本文件由 `frontend/model-card/mes108-react-migration.json` 生成，请勿手工编辑。',
-    '> 机器校验只证明映射、路径、测试与令牌引用完整；像素差异仍须按固定环境人工验收。',
+    '> 机器校验会核对映射、路径、令牌和 PNG 完整性/尺寸；release 作业还会在精确 PR head 上运行 Playwright，并重算实际操作、截图摘要与 RGBA 像素差异。产品视觉取舍仍须人工验收。',
     '',
     '## 基线与门禁',
     '',
-    `- 静态原型：${escapeCell(card.blueprint.issue)} @ \`${escapeCell(card.blueprint.revision)}\``,
-    `- 用户与验收确认：**${confirmation}**`,
+    `- 固定设计输入：${escapeCell(card.baseline.issue)} / PR #${escapeCell(card.baseline.pullRequest)} @ \`${escapeCell(card.baseline.revision)}\``,
+    `- 输入生命周期：**${escapeCell(card.baseline.disposition)}**；采用方式：**${escapeCell(card.baseline.adoption)}**`,
+    '- Release 批准：**尚未确认**；批准不写入模型卡，必须来自当前 PR 上仓库 owner 的外部决策评论，并绑定 head、模型卡摘要与固定输入 revision。',
     `- 主题：${codeList(card.dimensions.themes)}`,
     `- 固定视口：${codeList(card.dimensions.viewports)}`,
     `- 必填状态：${codeList(card.dimensions.states)}`,
     `- 输入方式：${codeList(card.dimensions.inputModes ?? [])}`,
     `- 固定环境：${escapeCell(card.visualEnvironment?.browser)} / ${escapeCell(card.visualEnvironment?.locale)} / ${escapeCell(card.visualEnvironment?.timezone)} / DPR ${escapeCell(card.visualEnvironment?.deviceScaleFactor)} / ${escapeCell(card.visualEnvironment?.fontFixture)}`,
     '',
-    '确认门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。',
+    '静态输入被取消或部分采用不等于 release 批准；外部 owner 门禁未通过时，本表只用于迁移与差异追踪，不代表 React 页面已成为最终视觉交付。',
     '',
     '## 页面映射',
     '',
@@ -1203,9 +2048,9 @@ export function renderModelCardMarkdown(card) {
     '## 自动与人工边界',
     '',
     '- `node scripts/verify-model-card.mjs --mode audit` 校验原型/React 页面全集、路由兼容表、组件/测试文件、状态与视觉矩阵、令牌引用及本文件生成结果。',
-    '- `node scripts/verify-model-card.mjs --mode release` 是最终门禁；未确认原型、`pending`、`blocked` 或缺少真实证据时必须失败。',
-    '- Unit/E2E 文件存在不等于测试已通过；交付时仍须运行对应命令并记录精确结果。',
-    '- 颜色、字号、间距、布局、动效、亮暗主题与响应式的像素一致性必须在固定浏览器、视口、DPR 与字体环境中逐页比对。',
+    '- `node scripts/verify-model-card.mjs --mode release` 是最终门禁；缺少绑定当前 head 与模型卡摘要的仓库 owner 批准、存在 `pending` / `blocked` 或缺少真实证据时必须失败。',
+    '- Unit/E2E 文件存在不等于测试已通过；交互证据必须绑定专用 config / project 与精确的普通 Playwright 测试，release 作业只采纳本次成功运行实际记录到的 mouse / keyboard / touch API。',
+    '- 每个已验证视觉单元必须提交独立基线和唯一、摘要绑定且尺寸正确的实际 PNG；视觉 spec 必须用 MES-108 证据 fixture 的 `mes108Screenshot.capture(path)` 逐 claim 捕获，release 作业先隔离 claimed actual，再要求 Playwright 本次重建、精确报告输出路径与截图返回字节摘要，随后以 `rgba-exact-v1` 逐像素重算差异。机器校验不能代替产品对差异取舍的人工判断。',
     '- `pending` 与 `blocked` 必须保留，禁止为通过门禁而改写为已完成；只有真实验证证据才能推进状态。',
     '',
     '<!-- prettier-ignore-end -->',

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,12 +20,36 @@ const DOCUMENT_PATH = resolve(
 export function parseArguments(argv) {
   let mode = 'audit';
   let write = false;
+  let approvalFile;
+  let evidenceRunFile;
+  let releaseHead;
+  let releaseRepository;
+  let releaseOwner;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--write') {
       write = true;
     } else if (argument === '--mode') {
       mode = argv[index + 1];
+      index += 1;
+    } else if (
+      [
+        '--approval-file',
+        '--evidence-run-file',
+        '--release-head',
+        '--release-repository',
+        '--release-owner',
+      ].includes(argument)
+    ) {
+      const value = argv[index + 1];
+      if (typeof value !== 'string' || value.length === 0 || value.startsWith('--')) {
+        throw new Error(`${argument} requires a value`);
+      }
+      if (argument === '--approval-file') approvalFile = value;
+      if (argument === '--evidence-run-file') evidenceRunFile = value;
+      if (argument === '--release-head') releaseHead = value;
+      if (argument === '--release-repository') releaseRepository = value;
+      if (argument === '--release-owner') releaseOwner = value;
       index += 1;
     } else {
       throw new Error(`unknown argument: ${argument}`);
@@ -33,7 +58,15 @@ export function parseArguments(argv) {
   if (!['audit', 'release'].includes(mode)) {
     throw new Error(`--mode must be audit or release, received: ${String(mode)}`);
   }
-  return { mode, write };
+  return {
+    mode,
+    write,
+    ...(approvalFile === undefined ? {} : { approvalFile }),
+    ...(evidenceRunFile === undefined ? {} : { evidenceRunFile }),
+    ...(releaseHead === undefined ? {} : { releaseHead }),
+    ...(releaseRepository === undefined ? {} : { releaseRepository }),
+    ...(releaseOwner === undefined ? {} : { releaseOwner }),
+  };
 }
 
 export function readPinnedSource(
@@ -57,7 +90,15 @@ export function readPinnedSource(
 }
 
 export function verifyModelCard(argv, options = {}) {
-  const { mode, write } = parseArguments(argv);
+  const {
+    mode,
+    write,
+    approvalFile,
+    evidenceRunFile,
+    releaseHead,
+    releaseRepository,
+    releaseOwner,
+  } = parseArguments(argv);
   const frontendRoot = options.frontendRoot ?? FRONTEND_ROOT;
   const repositoryRoot = options.repositoryRoot ?? REPOSITORY_ROOT;
   const manifestPath = options.manifestPath ?? MANIFEST_PATH;
@@ -72,11 +113,33 @@ export function verifyModelCard(argv, options = {}) {
     options.readPinned ??
     ((revision, path) => readPinnedSource(revision, path, { repositoryRoot }));
 
-  const card = JSON.parse(readFile(manifestPath, 'utf8'));
-  const revision = card.blueprint?.revision;
+  const cardSource = readFile(manifestPath, 'utf8');
+  const card = JSON.parse(cardSource);
+  const revision = card.baseline?.revision;
+  const releaseApproval =
+    options.releaseApproval ??
+    (approvalFile === undefined ? undefined : JSON.parse(readFile(resolve(approvalFile), 'utf8')));
+  const evidenceRun =
+    options.evidenceRun ??
+    (evidenceRunFile === undefined
+      ? undefined
+      : JSON.parse(readFile(resolve(evidenceRunFile), 'utf8')));
+  const releaseContext =
+    options.releaseContext ??
+    (mode === 'release'
+      ? {
+          repository: releaseRepository,
+          repositoryOwner: releaseOwner,
+          headSha: releaseHead,
+          modelCardSha256: createHash('sha256').update(cardSource).digest('hex'),
+        }
+      : undefined);
   const errors = validate(card, {
     frontendRoot,
     mode,
+    releaseApproval,
+    evidenceRun,
+    releaseContext,
     prototypeRouteSource: readPinned(revision, 'frontend-prototype/app.js'),
     prototypeTokenSource: readPinned(revision, 'frontend-prototype/styles.css'),
   });

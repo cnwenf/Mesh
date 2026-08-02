@@ -1,10 +1,19 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "issue": "MES-108",
-  "blueprint": {
+  "baseline": {
     "issue": "MES-142",
+    "pullRequest": 100,
     "revision": "a82df9ab382223c125b77635c94f228024384518",
-    "confirmed": false
+    "disposition": "cancelled",
+    "adoption": "partial-input",
+    "supersededBy": null
+  },
+  "releasePolicy": {
+    "ownerDecisionRequired": true,
+    "requiredAuthority": "repository-owner",
+    "source": "github-pull-request-comment",
+    "binding": "head-and-card-digest"
   },
   "dimensions": {
     "themes": ["light", "dark"],
@@ -102,7 +111,7 @@
           "reason": "登录表单没有集合空态。"
         }
       ],
-      "notes": "真实鉴权和安全回跳已接通；仍须按未确认原型做固定环境像素校准。"
+      "notes": "真实鉴权和安全回跳已接通；仍须按固定输入与 owner 决策补齐固定环境像素校准。"
     },
     {
       "id": "auth-register",
@@ -233,7 +242,7 @@
           "status": "pending"
         }
       ],
-      "notes": "桌面双栏与移动单栏路由已实现；视觉校准仍待原型确认。"
+      "notes": "桌面双栏与移动单栏路由已实现；视觉校准仍待固定输入差异关闭与 owner release 决策。"
     },
     {
       "id": "chat",
@@ -1018,7 +1027,7 @@
           "status": "pending"
         }
       ],
-      "notes": "原型状态画廊映射到公开设计系统 fixture；像素校准仍待原型确认。"
+      "notes": "原型状态画廊映射到公开设计系统 fixture；像素校准仍待真实矩阵证据与 owner release 决策。"
     }
   ],
   "reactExtensions": [
@@ -1061,7 +1070,7 @@
           "status": "pending"
         }
       ],
-      "notes": "React 独有的多工作区入口；须在原型确认后决定是保留扩展还是补入基线。"
+      "notes": "React 独有的多工作区入口；须由产品 owner 在 release 决策中决定是保留扩展还是补入基线。"
     },
     {
       "id": "approvals",
