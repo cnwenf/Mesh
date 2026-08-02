@@ -1,0 +1,1673 @@
+{
+  "schemaVersion": 2,
+  "issue": "MES-108",
+  "baseline": {
+    "issue": "MES-142",
+    "pullRequest": 100,
+    "revision": "a82df9ab382223c125b77635c94f228024384518",
+    "disposition": "cancelled",
+    "adoption": "partial-input",
+    "supersededBy": null
+  },
+  "releasePolicy": {
+    "ownerDecisionRequired": true,
+    "requiredAuthority": "repository-owner",
+    "source": "github-pull-request-comment",
+    "binding": "head-and-card-digest"
+  },
+  "dimensions": {
+    "themes": ["light", "dark"],
+    "viewports": ["390x844", "1440x900"],
+    "states": ["default", "loading", "empty", "error"],
+    "inputModes": ["mouse", "keyboard", "touch"]
+  },
+  "visualEnvironment": {
+    "browser": "Chromium",
+    "locale": "zh-CN",
+    "timezone": "UTC",
+    "deviceScaleFactor": 1,
+    "fontFixture": "e2e/fixtures/fonts",
+    "animations": "disabled",
+    "frozenTime": "2026-07-25T12:00:00Z"
+  },
+  "calibrationRisks": [
+    {
+      "id": "shell-width",
+      "blueprint": "侧栏 256px",
+      "react": "--shell-sidebar-expanded 为 240px",
+      "status": "pending"
+    },
+    {
+      "id": "responsive-breakpoint",
+      "blueprint": "移动壳层断点 720px",
+      "react": "现有壳层断点 599px",
+      "status": "pending"
+    },
+    {
+      "id": "header-topology",
+      "blueprint": "页面内 48px page bar",
+      "react": "全局 TopBar 与页面 PageHeader 分层",
+      "status": "pending"
+    },
+    {
+      "id": "primary-action",
+      "blueprint": "中性主按钮",
+      "react": "indigo accent 主按钮",
+      "status": "pending"
+    },
+    {
+      "id": "surface-and-radius",
+      "blueprint": "canvas/surface/selected 与 10px/14px 圆角",
+      "react": "语义表面与 12px/16px 圆角",
+      "status": "pending"
+    }
+  ],
+  "pages": [
+    {
+      "id": "auth-login",
+      "label": "登录",
+      "blueprintRoutes": ["login"],
+      "reactRoutes": ["/login"],
+      "reactRouteFragments": ["/login"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/shell/pages/LoginPage.tsx", "src/design/components/PublicFlowShell.tsx"],
+      "unitTests": [
+        "src/shell/__tests__/LoginPage.test.tsx",
+        "src/shell/__tests__/LoginPageReal.test.tsx"
+      ],
+      "e2eTests": ["e2e/auth-smoke.spec.ts", "e2e/real-mes106-auth-guard.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "登录表单没有集合空态。" },
+      "interactions": [
+        {
+          "id": "submit-and-return-to-safe-next",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        },
+        {
+          "id": "switch-theme-and-locale",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "登录表单没有集合空态。"
+        }
+      ],
+      "notes": "真实鉴权和安全回跳已接通；仍须按固定输入与 owner 决策补齐固定环境像素校准。"
+    },
+    {
+      "id": "auth-register",
+      "label": "邀请注册",
+      "blueprintRoutes": ["register"],
+      "reactRoutes": ["/invite/:token"],
+      "reactRouteFragments": ["invite/:token"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/workspace/pages/InviteAcceptPage.tsx",
+        "src/design/components/PublicFlowShell.tsx"
+      ],
+      "unitTests": ["src/workspace/__tests__/InviteAcceptPage.test.tsx"],
+      "e2eTests": ["e2e/workspace-flow.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "邀请详情是单资源流程，没有集合空态。" },
+      "interactions": [
+        {
+          "id": "preview-then-accept-invitation",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "邀请详情是单资源流程，没有集合空态。"
+        }
+      ],
+      "notes": "开放注册模型按真实产品契约收敛为邀请预览与接受流程，不伪造后端能力。"
+    },
+    {
+      "id": "auth-code",
+      "label": "验证码与恢复流程",
+      "blueprintRoutes": ["code"],
+      "reactRoutes": ["/device", "/forgot", "/reset", "/auth/oauth/callback/:provider"],
+      "reactRouteFragments": ["/device", "/forgot", "/reset", "/auth/oauth/callback/:provider"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/device/DeviceAuthorizationPage.tsx",
+        "src/shell/pages/ForgotPasswordPage.tsx",
+        "src/shell/pages/ResetPasswordPage.tsx",
+        "src/shell/pages/OAuthCallbackPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/device/__tests__/DeviceAuthorizationPage.test.tsx",
+        "src/shell/__tests__/ForgotPasswordPage.test.tsx",
+        "src/shell/__tests__/ResetPasswordPage.test.tsx",
+        "src/shell/__tests__/OAuthCallbackPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/auth-smoke.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "授权与恢复均为单次事务，没有集合空态。" },
+      "interactions": [
+        {
+          "id": "authorize-or-recover-session",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "授权与恢复均为单次事务，没有集合空态。"
+        }
+      ],
+      "notes": "原型单一验证码状态映射到真实设备码、密码恢复与 OAuth 回调页面族。"
+    },
+    {
+      "id": "inbox",
+      "label": "收件箱",
+      "blueprintRoutes": ["inbox"],
+      "reactRoutes": ["/w/:workspaceSlug/inbox", "/w/:workspaceSlug/inbox/:notificationId"],
+      "reactRouteFragments": ["w/:workspaceSlug/inbox", "w/:workspaceSlug/inbox/:notificationId"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/inbox/InboxPage.tsx"],
+      "unitTests": ["src/features/inbox/__tests__/InboxPage.test.tsx"],
+      "e2eTests": ["e2e/real-comments-inbox.spec.ts", "e2e/real-inbox-notify.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "select-read-archive-and-open-deeplink",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "桌面双栏与移动单栏路由已实现；视觉校准仍待固定输入差异关闭与 owner release 决策。"
+    },
+    {
+      "id": "chat",
+      "label": "聊天",
+      "blueprintRoutes": ["chat"],
+      "reactRoutes": ["/w/:workspaceSlug/chat", "/w/:workspaceSlug/chat/:sessionId"],
+      "reactRouteFragments": ["w/:workspaceSlug/chat", "w/:workspaceSlug/chat/:sessionId"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/chat/ChatPage.tsx"],
+      "unitTests": ["src/features/chat/__tests__/ChatPage.test.tsx"],
+      "e2eTests": ["e2e/real-chat-compose.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "send-stop-regenerate-and-switch-candidate",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实流式会话、附件与运行反馈已接通。"
+    },
+    {
+      "id": "my-issues",
+      "label": "我的 Issues",
+      "blueprintRoutes": ["my"],
+      "reactRoutes": ["/w/:workspaceSlug/issues?mine=true"],
+      "reactRouteFragments": [],
+      "reactAliasOf": "issues",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/issues/IssuesPage.tsx"],
+      "unitTests": ["src/features/issues/__tests__/IssuesPage.test.tsx"],
+      "e2eTests": ["e2e/mes79-deeplinks.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "pending",
+        "empty": "pending",
+        "error": "pending"
+      },
+      "interactions": [
+        {
+          "id": "filter-current-assignee",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "原型独立入口映射为真实 Issues 数据视图的当前负责人筛选；需补专用深链与状态证据。"
+    },
+    {
+      "id": "issues",
+      "label": "Issue 列表",
+      "blueprintRoutes": ["issues"],
+      "reactRoutes": ["/w/:workspaceSlug/issues"],
+      "reactRouteFragments": ["w/:workspaceSlug/issues"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/issues/IssuesPage.tsx", "src/design/patterns/DataView.tsx"],
+      "unitTests": ["src/features/issues/__tests__/IssuesPage.test.tsx"],
+      "e2eTests": ["e2e/mes111-b2.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "filter-sort-select-and-create",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实过滤、排序、保存视图与创建流程已实现。"
+    },
+    {
+      "id": "board",
+      "label": "看板",
+      "blueprintRoutes": ["board"],
+      "reactRoutes": ["/w/:workspaceSlug/board", "/w/:workspaceSlug/views/:viewId"],
+      "reactRouteFragments": ["w/:workspaceSlug/board", "w/:workspaceSlug/views/:viewId"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/board/BoardPage.tsx"],
+      "unitTests": [
+        "src/features/board/__tests__/BoardPage.test.tsx",
+        "src/features/board/__tests__/BoardTouchMoveSheet.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-board.spec.ts", "e2e/real-board-projection.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "drag-with-feedback-and-rollback",
+          "inputModes": ["mouse", "touch"],
+          "status": "pending"
+        },
+        {
+          "id": "keyboard-and-touch-move",
+          "inputModes": ["keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实拖拽、键盘/触控替代路径和实时投影均有测试。"
+    },
+    {
+      "id": "issue-detail",
+      "label": "Issue 详情与评论",
+      "blueprintRoutes": ["issue"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/issues/by-identifier/:identifier",
+        "/w/:workspaceSlug/issues/:issueId"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/issues/by-identifier/:identifier",
+        "w/:workspaceSlug/issues/:issueId"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/issues/IssueDetailPage.tsx",
+        "src/features/comments/CommentsPanel.tsx"
+      ],
+      "unitTests": [
+        "src/features/issues/__tests__/IssueDetailPage.test.tsx",
+        "src/features/comments/__tests__/CommentsPanel.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-comments-inbox.spec.ts", "e2e/real-attachment.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "edit-comment-attach-retry-and-realtime-refresh",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "规范 identifier 深链、属性编辑、评论/附件与实时更新已接通。"
+    },
+    {
+      "id": "projects",
+      "label": "项目列表",
+      "blueprintRoutes": ["projects"],
+      "reactRoutes": ["/w/:workspaceSlug/projects"],
+      "reactRouteFragments": ["w/:workspaceSlug/projects"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/projects/ProjectsPage.tsx"],
+      "unitTests": ["src/features/projects/__tests__/ProjectsPage.test.tsx"],
+      "e2eTests": ["e2e/real-projects.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "search-switch-layout-and-create",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实项目 API 与创建流程已覆盖。"
+    },
+    {
+      "id": "project-detail",
+      "label": "项目详情与设置",
+      "blueprintRoutes": ["project"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/projects/:projectId",
+        "/w/:workspaceSlug/projects/:projectId/settings"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/projects/:projectId",
+        "w/:workspaceSlug/projects/:projectId/settings"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/projects/ProjectDetailPage.tsx",
+        "src/features/projects/ProjectSettingsPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/projects/__tests__/ProjectDetailPage.test.tsx",
+        "src/features/projects/__tests__/ProjectSettingsPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-projects.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "switch-tabs-update-health-and-settings",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "Overview、Issues、Updates、Dashboard 与项目设置均接真实数据。"
+    },
+    {
+      "id": "members",
+      "label": "成员名册",
+      "blueprintRoutes": ["members"],
+      "reactRoutes": ["/w/:workspaceSlug/members"],
+      "reactRouteFragments": ["w/:workspaceSlug/members"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/members/MembersPage.tsx"],
+      "unitTests": ["src/features/members/__tests__/MembersPage.test.tsx"],
+      "e2eTests": ["e2e/real-members.spec.ts", "e2e/real-mes111-b3-evidence.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "search-filter-change-role-and-remove",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "人类与 Agent 共用单一名册，移动端主次行卡片已实现。"
+    },
+    {
+      "id": "agents",
+      "label": "Agent 名册视图",
+      "blueprintRoutes": ["agents"],
+      "reactRoutes": ["/w/:workspaceSlug/members?member_type=agent"],
+      "reactRouteFragments": [],
+      "reactAliasOf": "members",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/members/MembersPage.tsx"],
+      "unitTests": ["src/features/members/__tests__/MembersPage.test.tsx"],
+      "e2eTests": ["e2e/real-members.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "pending",
+        "empty": "pending",
+        "error": "pending"
+      },
+      "interactions": [
+        {
+          "id": "filter-agent-roster-and-open-detail",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "原型独立 Agent 列表按单一名册契约合并，需补专用筛选深链证据。"
+    },
+    {
+      "id": "agent-detail",
+      "label": "Agent 详情",
+      "blueprintRoutes": ["agent"],
+      "reactRoutes": ["/w/:workspaceSlug/agents/:agentId"],
+      "reactRouteFragments": ["w/:workspaceSlug/agents/:agentId"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/agents/AgentDetailPage.tsx"],
+      "unitTests": ["src/features/agents/__tests__/AgentDetailPage.test.tsx"],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "edit-chat-and-manage-skills-tools",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "详情与运行五态已存在；工具写路径由 MES-116/PR #117 收口。"
+    },
+    {
+      "id": "skills",
+      "label": "Skills 列表与市场",
+      "blueprintRoutes": ["skills"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/automations/skills",
+        "/w/:workspaceSlug/automations/skills/marketplace",
+        "/marketplace"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/automations/skills",
+        "w/:workspaceSlug/automations/skills/marketplace",
+        "marketplace"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/skills/SkillsPage.tsx",
+        "src/features/skills/MarketplacePage.tsx"
+      ],
+      "unitTests": [
+        "src/features/skills/__tests__/SkillsPage.test.tsx",
+        "src/features/skills/__tests__/MarketplacePage.test.tsx"
+      ],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "search-import-install-and-open-detail",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实安装与授权信息架构在 PR #117 收口，当前保持待校准。"
+    },
+    {
+      "id": "skill-detail",
+      "label": "Skill 详情",
+      "blueprintRoutes": ["skill"],
+      "reactRoutes": ["/w/:workspaceSlug/automations/skills/:skillId"],
+      "reactRouteFragments": ["w/:workspaceSlug/automations/skills/:skillId"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/skills/SkillDetailPage.tsx"],
+      "unitTests": ["src/features/skills/__tests__/SkillDetailPage.test.tsx"],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "参数化详情不存在独立集合空态。" },
+      "interactions": [
+        {
+          "id": "inspect-version-permissions-and-bindings",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "参数化详情不存在独立集合空态。"
+        }
+      ],
+      "notes": "详情结构存在，最终真实交互证据随 PR #117 冻结 head 更新。"
+    },
+    {
+      "id": "autopilots",
+      "label": "自动值守",
+      "blueprintRoutes": ["autopilot", "automations"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/automations/autopilots",
+        "/w/:workspaceSlug/automations/autopilots/new",
+        "/w/:workspaceSlug/automations/autopilots/:autopilotId",
+        "/w/:workspaceSlug/automations/autopilots/:autopilotId/edit",
+        "/w/:workspaceSlug/automations/autopilots/runs/:runId",
+        "/w/:workspaceSlug/automations/webhooks",
+        "/automation"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/automations/autopilots",
+        "w/:workspaceSlug/automations/autopilots/new",
+        "w/:workspaceSlug/automations/autopilots/:autopilotId",
+        "w/:workspaceSlug/automations/autopilots/:autopilotId/edit",
+        "w/:workspaceSlug/automations/autopilots/runs/:runId",
+        "w/:workspaceSlug/automations/webhooks",
+        "automation"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/autopilots/AutopilotsPage.tsx",
+        "src/features/autopilots/AutopilotEditorPage.tsx",
+        "src/features/autopilots/AutopilotDetailPage.tsx",
+        "src/features/autopilots/AutopilotRunDetailPage.tsx",
+        "src/features/autopilots/WebhookConfigPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/autopilots/__tests__/AutopilotsPage.test.tsx",
+        "src/features/autopilots/__tests__/AutopilotEditorPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-autopilots.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "create-edit-toggle-test-run-and-inspect-timeline",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "原型单页扩展为真实列表、编辑器、详情、运行与 Webhook 页面族。"
+    },
+    {
+      "id": "squads",
+      "label": "小队",
+      "blueprintRoutes": ["squads"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/squads",
+        "/w/:workspaceSlug/squads/:squadId",
+        "/w/:workspaceSlug/squads/:squadId/tasks/:taskId"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/squads",
+        "w/:workspaceSlug/squads/:squadId",
+        "w/:workspaceSlug/squads/:squadId/tasks/:taskId"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/squads/SquadsPage.tsx",
+        "src/features/squads/SquadDetailPage.tsx",
+        "src/features/squads/SquadTaskDetailPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/squads/__tests__/SquadsPage.test.tsx",
+        "src/features/squads/__tests__/SquadTaskDetailPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "create-manage-members-and-move-task",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实小队编排接口已接通；完整按钮与持久化旅程由 PR #117 收口。"
+    },
+    {
+      "id": "runtimes",
+      "label": "运行环境与执行详情",
+      "blueprintRoutes": ["runtimes"],
+      "reactRoutes": [
+        "/w/:workspaceSlug/automations/runtimes",
+        "/w/:workspaceSlug/automations/runtimes/:runtimeId",
+        "/w/:workspaceSlug/executions/:executionId"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/automations/runtimes",
+        "w/:workspaceSlug/automations/runtimes/:runtimeId",
+        "w/:workspaceSlug/executions/:executionId"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/runtimes/RuntimesPage.tsx",
+        "src/features/runtimes/RuntimeDetailPage.tsx",
+        "src/features/runtimes/ExecutionDetailPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/runtimes/__tests__/RuntimesPage.test.tsx",
+        "src/features/runtimes/__tests__/ExecutionDetailPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-runtimes.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "register-inspect-log-and-reconnect",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "真实 runtime 注册、详情与执行日志路径均有覆盖。"
+    },
+    {
+      "id": "analytics",
+      "label": "分析",
+      "blueprintRoutes": ["usage", "analytics"],
+      "reactRoutes": ["/w/:workspaceSlug/insights"],
+      "reactRouteFragments": ["w/:workspaceSlug/insights"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": ["src/features/analytics/InsightsPage.tsx"],
+      "unitTests": [
+        "src/features/analytics/__tests__/InsightsPage.test.tsx",
+        "src/features/analytics/__tests__/InsightsPage.states.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-analytics.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "change-range-inspect-breakdown-and-export",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "原型 Usage/Analytics 别名收敛为规范 Insights 深链。"
+    },
+    {
+      "id": "settings",
+      "label": "账号与工作区设置",
+      "blueprintRoutes": ["settings"],
+      "reactRoutes": [
+        "/settings",
+        "/settings/appearance",
+        "/settings/notifications",
+        "/settings/security",
+        "/w/:workspaceSlug/settings",
+        "/w/:workspaceSlug/settings/general",
+        "/w/:workspaceSlug/settings/invitations",
+        "/w/:workspaceSlug/settings/roles",
+        "/w/:workspaceSlug/settings/labels",
+        "/w/:workspaceSlug/settings/custom-fields",
+        "/w/:workspaceSlug/settings/data",
+        "/w/:workspaceSlug/settings/tokens",
+        "/w/:workspaceSlug/settings/audit",
+        "/w/:workspaceSlug/settings/danger",
+        "/w/:workspaceSlug/settings/members",
+        "/w/:workspaceSlug/settings/approvals",
+        "/w/:workspaceSlug/settings/fields"
+      ],
+      "reactRouteFragments": [
+        "settings",
+        "appearance",
+        "notifications",
+        "security",
+        "w/:workspaceSlug/settings",
+        "general",
+        "invitations",
+        "roles",
+        "labels",
+        "custom-fields",
+        "data",
+        "tokens",
+        "audit",
+        "danger",
+        "w/:workspaceSlug/settings/members",
+        "w/:workspaceSlug/settings/approvals",
+        "w/:workspaceSlug/settings/fields"
+      ],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/shell/pages/SettingsPage.tsx",
+        "src/workspace/pages/WorkspaceSettingsPage.tsx",
+        "src/design/patterns/SettingsLayout.tsx"
+      ],
+      "unitTests": [
+        "src/shell/__tests__/SettingsPage.test.tsx",
+        "src/workspace/__tests__/WorkspaceSettingsPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-theme.spec.ts", "e2e/real-mes111-b4.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "设置是表单与配置集合，不使用独立空态。" },
+      "interactions": [
+        {
+          "id": "switch-sections-edit-save-and-confirm-danger",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "设置是表单与配置集合，不使用独立空态。"
+        }
+      ],
+      "notes": "账号与工作区设置按真实权限拆分，主题、通知、安全与管理子页均有路由。"
+    },
+    {
+      "id": "state-gallery",
+      "label": "全局状态与组件画廊",
+      "blueprintRoutes": ["states"],
+      "reactRoutes": ["/styleguide"],
+      "reactRouteFragments": ["/styleguide"],
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "components": [
+        "src/design/StyleguidePage.tsx",
+        "src/design/components/EmptyState.tsx",
+        "src/design/components/ErrorState.tsx",
+        "src/design/components/Skeleton.tsx"
+      ],
+      "unitTests": [
+        "src/design/__tests__/StyleguidePage.test.tsx",
+        "src/design/__tests__/ErrorState.test.tsx"
+      ],
+      "e2eTests": ["e2e/visual/styleguide.spec.ts", "e2e/visual/theme-visual.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "inspect-component-state-theme-and-viewport",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "原型状态画廊映射到公开设计系统 fixture；像素校准仍待真实矩阵证据与 owner release 决策。"
+    }
+  ],
+  "reactExtensions": [
+    {
+      "id": "home-and-workspace-entry",
+      "label": "首页、工作区入口与选择器",
+      "reactRoutes": ["/", "/w/:workspaceSlug", "/workspace-picker"],
+      "reactRouteFragments": ["/", "w/:workspaceSlug", "workspace-picker"],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": [
+        "src/shell/pages/HomePage.tsx",
+        "src/workspace/pages/WorkspaceHomePage.tsx",
+        "src/workspace/WorkspacePickerPage.tsx"
+      ],
+      "unitTests": [
+        "src/shell/__tests__/HomePage.test.tsx",
+        "src/workspace/__tests__/WorkspaceHomePage.test.tsx",
+        "src/workspace/__tests__/WorkspacePickerPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/real-mes107-home.spec.ts", "e2e/workspace-flow.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "select-workspace-and-open-onboarding",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "React 独有的多工作区入口；须由产品 owner 在 release 决策中决定是保留扩展还是补入基线。"
+    },
+    {
+      "id": "approvals",
+      "label": "待我审批",
+      "reactRoutes": ["/approvals", "/w/:workspaceSlug/approvals"],
+      "reactRouteFragments": ["approvals", "w/:workspaceSlug/approvals"],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": ["src/features/approvals/ApprovalsPage.tsx"],
+      "unitTests": ["src/features/approvals/__tests__/ApprovalsPage.test.tsx"],
+      "e2eTests": ["e2e/real-mes111-b4.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "approve-or-reject-request",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "React 独有的审批页；真实权限与双深链已存在，最终视觉关系待确认。"
+    },
+    {
+      "id": "member-detail",
+      "label": "成员详情",
+      "reactRoutes": ["/w/:workspaceSlug/members/:memberId"],
+      "reactRouteFragments": ["w/:workspaceSlug/members/:memberId"],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": ["src/features/members/MemberDetailPage.tsx"],
+      "unitTests": ["src/features/members/__tests__/MemberDetailPage.test.tsx"],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "not-applicable",
+        "error": "verified"
+      },
+      "stateNotes": { "empty": "参数化详情不存在独立集合空态。" },
+      "interactions": [
+        {
+          "id": "open-member-or-agent-profile",
+          "inputModes": ["mouse", "keyboard", "touch"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "error"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["empty"],
+          "status": "not-applicable",
+          "reason": "参数化详情不存在独立集合空态。"
+        }
+      ],
+      "notes": "React 独有的人类成员详情；Agent 会按成员类型转入 Agent 详情。"
+    },
+    {
+      "id": "cycles",
+      "label": "周期",
+      "reactRoutes": ["/w/:workspaceSlug/cycles"],
+      "reactRouteFragments": ["w/:workspaceSlug/cycles"],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": ["src/features/projects/CyclesPage.tsx"],
+      "unitTests": ["src/features/projects/__tests__/CyclesPage.test.tsx"],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "create-and-filter-cycle",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "React 独有的项目周期页面，当前只有可达性证据。"
+    },
+    {
+      "id": "integrations",
+      "label": "集成与出向 Webhook",
+      "reactRoutes": [
+        "/w/:workspaceSlug/automations/integrations",
+        "/w/:workspaceSlug/automations/integrations/:integrationId",
+        "/w/:workspaceSlug/automations/webhook-subscriptions"
+      ],
+      "reactRouteFragments": [
+        "w/:workspaceSlug/automations/integrations",
+        "w/:workspaceSlug/automations/integrations/:integrationId",
+        "w/:workspaceSlug/automations/webhook-subscriptions"
+      ],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": [
+        "src/features/integrations/IntegrationsPage.tsx",
+        "src/features/integrations/IntegrationDetailPage.tsx",
+        "src/features/integrations/WebhooksPage.tsx"
+      ],
+      "unitTests": [
+        "src/features/integrations/__tests__/IntegrationsPage.test.tsx",
+        "src/features/integrations/__tests__/IntegrationDetailPage.test.tsx",
+        "src/features/integrations/__tests__/WebhooksPage.test.tsx"
+      ],
+      "e2eTests": ["e2e/mes111-reachability.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "verified",
+        "empty": "verified",
+        "error": "verified"
+      },
+      "interactions": [
+        {
+          "id": "configure-test-and-inspect-integration",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default", "loading", "empty", "error"],
+          "status": "pending"
+        }
+      ],
+      "notes": "React 独有的集成管理页面族；当前主干只有可达性 e2e，真实写路径证据待收口。"
+    },
+    {
+      "id": "not-found",
+      "label": "404",
+      "reactRoutes": ["*"],
+      "reactRouteFragments": ["*"],
+      "strategy": "reuse",
+      "reconciliation": "pending",
+      "components": ["src/shell/pages/NotFoundPage.tsx"],
+      "unitTests": ["src/shell/__tests__/NotFoundPage.test.tsx"],
+      "e2eTests": ["e2e/ui-baseline.spec.ts"],
+      "states": {
+        "default": "verified",
+        "loading": "not-applicable",
+        "empty": "not-applicable",
+        "error": "not-applicable"
+      },
+      "stateNotes": {
+        "loading": "404 为终态，不发起数据加载。",
+        "empty": "404 本身即缺失路由终态。",
+        "error": "404 不叠加第二层错误态。"
+      },
+      "interactions": [
+        {
+          "id": "return-home",
+          "inputModes": ["mouse", "keyboard"],
+          "status": "pending"
+        }
+      ],
+      "visualEvidence": [
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["default"],
+          "status": "pending"
+        },
+        {
+          "viewports": ["390x844", "1440x900"],
+          "themes": ["light", "dark"],
+          "states": ["loading", "empty", "error"],
+          "status": "not-applicable",
+          "reason": "404 是无数据加载、集合空态或二次错误态的路由终态。"
+        }
+      ],
+      "notes": "AppShell 内外两个 catch-all 共用同一来源片段，模型卡按一个逻辑终态归属。"
+    }
+  ],
+  "legacyRoutes": [
+    { "pattern": "^\\/inbox$", "owner": "inbox", "target": "/w/:workspaceSlug/inbox" },
+    {
+      "pattern": "^\\/inbox\\/([^/]+)$",
+      "owner": "inbox",
+      "target": "/w/:workspaceSlug/inbox/:notificationId"
+    },
+    { "pattern": "^\\/board$", "owner": "board", "target": "/w/:workspaceSlug/board" },
+    {
+      "pattern": "^\\/views\\/([^/]+)$",
+      "owner": "board",
+      "target": "/w/:workspaceSlug/views/:viewId"
+    },
+    { "pattern": "^\\/members$", "owner": "members", "target": "/w/:workspaceSlug/members" },
+    {
+      "pattern": "^\\/members\\/([^/]+)$",
+      "owner": "member-detail",
+      "target": "/w/:workspaceSlug/members/:memberId"
+    },
+    { "pattern": "^\\/projects$", "owner": "projects", "target": "/w/:workspaceSlug/projects" },
+    {
+      "pattern": "^\\/projects\\/([^/]+)\\/settings$",
+      "owner": "project-detail",
+      "target": "/w/:workspaceSlug/projects/:projectId/settings"
+    },
+    {
+      "pattern": "^\\/projects\\/([^/]+)$",
+      "owner": "project-detail",
+      "target": "/w/:workspaceSlug/projects/:projectId"
+    },
+    { "pattern": "^\\/issues$", "owner": "issues", "target": "/w/:workspaceSlug/issues" },
+    {
+      "pattern": "^\\/issues\\/by-identifier\\/([^/]+)$",
+      "owner": "issue-detail",
+      "target": "/w/:workspaceSlug/issues/by-identifier/:identifier"
+    },
+    {
+      "pattern": "^\\/issues\\/([^/]+)$",
+      "owner": "issue-detail",
+      "target": "/w/:workspaceSlug/issues/:issueId"
+    },
+    { "pattern": "^\\/chat$", "owner": "chat", "target": "/w/:workspaceSlug/chat" },
+    {
+      "pattern": "^\\/chat\\/([^/]+)$",
+      "owner": "chat",
+      "target": "/w/:workspaceSlug/chat/:sessionId"
+    },
+    { "pattern": "^\\/squads$", "owner": "squads", "target": "/w/:workspaceSlug/squads" },
+    {
+      "pattern": "^\\/squads\\/([^/]+)\\/tasks\\/([^/]+)$",
+      "owner": "squads",
+      "target": "/w/:workspaceSlug/squads/:squadId/tasks/:taskId"
+    },
+    {
+      "pattern": "^\\/squads\\/([^/]+)$",
+      "owner": "squads",
+      "target": "/w/:workspaceSlug/squads/:squadId"
+    },
+    { "pattern": "^\\/cycles$", "owner": "cycles", "target": "/w/:workspaceSlug/cycles" },
+    {
+      "pattern": "^\\/executions\\/([^/]+)$",
+      "owner": "runtimes",
+      "target": "/w/:workspaceSlug/executions/:executionId"
+    },
+    { "pattern": "^\\/insights$", "owner": "analytics", "target": "/w/:workspaceSlug/insights" },
+    {
+      "pattern": "^\\/agents\\/([^/]+)$",
+      "owner": "agent-detail",
+      "target": "/w/:workspaceSlug/agents/:agentId"
+    },
+    {
+      "pattern": "^\\/automation$",
+      "owner": "autopilots",
+      "target": "/w/:workspaceSlug/automations/autopilots"
+    },
+    {
+      "pattern": "^\\/autopilots$",
+      "owner": "autopilots",
+      "target": "/w/:workspaceSlug/automations/autopilots"
+    },
+    {
+      "pattern": "^\\/autopilots\\/(.+)$",
+      "owner": "autopilots",
+      "target": "/w/:workspaceSlug/automations/autopilots/:rest"
+    },
+    {
+      "pattern": "^\\/runtimes$",
+      "owner": "runtimes",
+      "target": "/w/:workspaceSlug/automations/runtimes"
+    },
+    {
+      "pattern": "^\\/runtimes\\/([^/]+)$",
+      "owner": "runtimes",
+      "target": "/w/:workspaceSlug/automations/runtimes/:runtimeId"
+    },
+    {
+      "pattern": "^\\/webhooks$",
+      "owner": "autopilots",
+      "target": "/w/:workspaceSlug/automations/webhooks"
+    },
+    {
+      "pattern": "^\\/skills$",
+      "owner": "skills",
+      "target": "/w/:workspaceSlug/automations/skills"
+    },
+    {
+      "pattern": "^\\/skills\\/(.+)$",
+      "owner": "skills",
+      "target": "/w/:workspaceSlug/automations/skills/:rest"
+    },
+    {
+      "pattern": "^\\/integrations$",
+      "owner": "integrations",
+      "target": "/w/:workspaceSlug/automations/integrations"
+    },
+    {
+      "pattern": "^\\/integrations\\/([^/]+)$",
+      "owner": "integrations",
+      "target": "/w/:workspaceSlug/automations/integrations/:integrationId"
+    },
+    {
+      "pattern": "^\\/webhook-subscriptions$",
+      "owner": "integrations",
+      "target": "/w/:workspaceSlug/automations/webhook-subscriptions"
+    },
+    {
+      "pattern": "^\\/automations\\/(.+)$",
+      "owner": "autopilots",
+      "target": "/w/:workspaceSlug/automations/:rest"
+    },
+    {
+      "pattern": "^\\/settings\\/(labels|data|custom-fields|members|approvals|fields|danger)$",
+      "owner": "settings",
+      "target": "/w/:workspaceSlug/settings/:section"
+    }
+  ],
+  "tokenDefaultStrategy": "calibrate",
+  "components": [
+    {
+      "id": "app-shell",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "reactFiles": ["src/shell/AppShell.tsx", "src/shell/Sidebar.tsx", "src/shell/MobileNav.tsx"]
+    },
+    {
+      "id": "public-flow-shell",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/PublicFlowShell.tsx"]
+    },
+    {
+      "id": "page-header",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/PageHeader.tsx"]
+    },
+    {
+      "id": "breadcrumb",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/patterns/DataView.tsx", "src/design/components/PageHeader.tsx"]
+    },
+    {
+      "id": "data-view",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/patterns/DataView.tsx"]
+    },
+    {
+      "id": "detail-layout",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/patterns/DetailLayout.tsx"]
+    },
+    {
+      "id": "conversation-layout",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/patterns/ConversationLayout.tsx"]
+    },
+    {
+      "id": "settings-layout",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/patterns/SettingsLayout.tsx"]
+    },
+    {
+      "id": "surface-card",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "reactFiles": ["src/design/patterns/DataView.tsx", "src/design/patterns/DetailLayout.tsx"]
+    },
+    {
+      "id": "progress",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "reactFiles": [
+        "src/features/runtimes/ExecutionDetailPage.tsx",
+        "src/features/attachments/components/ProgressRing.tsx"
+      ]
+    },
+    {
+      "id": "kpi-card",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "reactFiles": ["src/features/analytics/Kpi.tsx", "src/features/analytics/KpiStrip.tsx"]
+    },
+    {
+      "id": "button",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Button.tsx"]
+    },
+    {
+      "id": "input",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Input.tsx"]
+    },
+    {
+      "id": "select",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Select.tsx"]
+    },
+    {
+      "id": "badge",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Badge.tsx"]
+    },
+    {
+      "id": "avatar",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Avatar.tsx"]
+    },
+    {
+      "id": "icon",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Icon.tsx"]
+    },
+    {
+      "id": "tabs",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Tabs.tsx"]
+    },
+    {
+      "id": "menu",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Menu.tsx"]
+    },
+    {
+      "id": "dialog",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Dialog.tsx"]
+    },
+    {
+      "id": "drawer",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Drawer.tsx"]
+    },
+    {
+      "id": "popover",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Popover.tsx"]
+    },
+    {
+      "id": "tooltip",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Tooltip.tsx"]
+    },
+    {
+      "id": "empty-state",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/EmptyState.tsx"]
+    },
+    {
+      "id": "error-state",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/ErrorState.tsx"]
+    },
+    {
+      "id": "skeleton",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Skeleton.tsx"]
+    },
+    {
+      "id": "status-dot",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/StatusDot.tsx"]
+    },
+    {
+      "id": "data-table",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/DataTable.tsx"]
+    },
+    {
+      "id": "toolbar",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Toolbar.tsx"]
+    },
+    {
+      "id": "command-palette",
+      "strategy": "calibrate",
+      "reconciliation": "pending",
+      "reactFiles": ["src/shortcuts/CommandPalette.tsx"]
+    },
+    {
+      "id": "toast",
+      "strategy": "reuse",
+      "reconciliation": "reused",
+      "reactFiles": ["src/design/components/Toast.tsx"]
+    }
+  ],
+  "tokens": [
+    { "blueprint": "--shell", "react": ["--color-bg"], "reconciliation": "pending" },
+    { "blueprint": "--canvas", "react": ["--color-canvas"], "reconciliation": "pending" },
+    { "blueprint": "--surface", "react": ["--color-surface"], "reconciliation": "pending" },
+    { "blueprint": "--raised", "react": ["--color-surface-raised"], "reconciliation": "pending" },
+    { "blueprint": "--hover", "react": ["--color-surface-hover"], "reconciliation": "pending" },
+    {
+      "blueprint": "--selected",
+      "react": ["--color-surface-selected"],
+      "reconciliation": "pending"
+    },
+    { "blueprint": "--ink", "react": ["--color-text-strong"], "reconciliation": "pending" },
+    { "blueprint": "--ink-soft", "react": ["--color-text-muted"], "reconciliation": "pending" },
+    { "blueprint": "--ink-faint", "react": ["--color-text-disabled"], "reconciliation": "pending" },
+    { "blueprint": "--line", "react": ["--color-border-subtle"], "reconciliation": "pending" },
+    { "blueprint": "--line-strong", "react": ["--color-border"], "reconciliation": "pending" },
+    { "blueprint": "--input-line", "react": ["--color-border"], "reconciliation": "pending" },
+    { "blueprint": "--primary", "react": ["--color-accent"], "reconciliation": "pending" },
+    {
+      "blueprint": "--primary-ink",
+      "react": ["--color-accent-contrast"],
+      "reconciliation": "pending"
+    },
+    {
+      "blueprint": "--disabled",
+      "react": ["--color-surface-pressed"],
+      "reconciliation": "pending"
+    },
+    {
+      "blueprint": "--disabled-ink",
+      "react": ["--color-text-disabled"],
+      "reconciliation": "pending"
+    },
+    { "blueprint": "--brand", "react": ["--color-accent"], "reconciliation": "pending" },
+    { "blueprint": "--brand-soft", "react": ["--color-accent-soft"], "reconciliation": "pending" },
+    { "blueprint": "--success", "react": ["--color-success-fg"], "reconciliation": "pending" },
+    { "blueprint": "--success-soft", "react": ["--color-success-bg"], "reconciliation": "pending" },
+    { "blueprint": "--warning", "react": ["--color-warning-fg"], "reconciliation": "pending" },
+    { "blueprint": "--warning-soft", "react": ["--color-warning-bg"], "reconciliation": "pending" },
+    { "blueprint": "--danger", "react": ["--color-danger-fg"], "reconciliation": "pending" },
+    { "blueprint": "--danger-soft", "react": ["--color-danger-bg"], "reconciliation": "pending" },
+    { "blueprint": "--info", "react": ["--color-info-fg"], "reconciliation": "pending" },
+    { "blueprint": "--info-soft", "react": ["--color-info-bg"], "reconciliation": "pending" },
+    { "blueprint": "--violet", "react": ["--color-avatar-h5-bg"], "reconciliation": "pending" },
+    { "blueprint": "--orange", "react": ["--color-avatar-h3-bg"], "reconciliation": "pending" },
+    { "blueprint": "--shadow-surface", "react": ["--shadow-1"], "reconciliation": "pending" },
+    { "blueprint": "--shadow-menu", "react": ["--shadow-2"], "reconciliation": "pending" },
+    { "blueprint": "--shadow-float", "react": ["--shadow-3"], "reconciliation": "pending" },
+    { "blueprint": "--radius-xs", "react": ["--radius-xs"], "reconciliation": "pending" },
+    { "blueprint": "--radius-sm", "react": ["--radius-sm"], "reconciliation": "pending" },
+    { "blueprint": "--radius-md", "react": ["--radius-md"], "reconciliation": "pending" },
+    { "blueprint": "--radius-lg", "react": ["--radius-lg"], "reconciliation": "pending" },
+    { "blueprint": "--radius-xl", "react": ["--radius-xl"], "reconciliation": "pending" },
+    { "blueprint": "--radius-round", "react": ["--radius-full"], "reconciliation": "pending" },
+    {
+      "blueprint": "--sidebar-size",
+      "react": ["--shell-sidebar-expanded"],
+      "reconciliation": "pending"
+    },
+    { "blueprint": "--page-header", "react": ["--space-12"], "reconciliation": "pending" },
+    {
+      "blueprint": "--ease",
+      "react": ["--ease-enter", "--ease-exit", "--ease-move"],
+      "reconciliation": "pending"
+    },
+    { "blueprint": "--font-ui", "react": ["--font-family"], "reconciliation": "pending" },
+    { "blueprint": "--font-mono", "react": ["--font-family-mono"], "reconciliation": "pending" }
+  ]
+}
