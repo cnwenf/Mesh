@@ -32,15 +32,21 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from mesh.auth.security import encrypt_secret
-from mesh.config import DEV_JWT_SECRET
-from mesh.db.models.integration import IntegrationEvent, IntegrationMessageQueue
+from mesh.db.models.integration import (
+    ExternalIdentity,
+    IntegrationEvent,
+    IntegrationMessageQueue,
+)
+from mesh.db.models.member import Member
+from mesh.db.models.runtime import Approval, TaskExecution
+from mesh.integrations.dingtalk_cards import derive_out_track_id
 
 PASSWORD = "DT-E2E-123456"
 APP_SECRET = "dt-e2e-app-secret-000000000000000000"
@@ -101,8 +107,7 @@ def _generate_test_ca(tmp_path):
     key_path = tmp_path / "server.key"
     ca_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
     cert_path.write_bytes(
-        srv_cert.public_bytes(serialization.Encoding.PEM)
-        + ca_cert.public_bytes(serialization.Encoding.PEM)
+        srv_cert.public_bytes(serialization.Encoding.PEM) + ca_cert.public_bytes(serialization.Encoding.PEM)
     )
     key_path.write_bytes(
         srv_key.private_bytes(
@@ -143,9 +148,7 @@ def _start_https_gateway(state: FakeGatewayState, server_ctx: ssl.SSLContext):
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length).decode() or "{}")
             with state.lock:
-                state.open_requests.append(
-                    {"path": self.path, "body": body, "at": time.time()}
-                )
+                state.open_requests.append({"path": self.path, "body": body, "at": time.time()})
                 state.ticket_counter += 1
                 ticket = f"ticket-{state.ticket_counter}"
             if body.get("clientSecret") != APP_SECRET:
@@ -156,6 +159,25 @@ def _start_https_gateway(state: FakeGatewayState, server_ctx: ssl.SSLContext):
                     {"endpoint": f"wss://127.0.0.1:{state.ws_port}/ws", "ticket": ticket}
                 ).encode()
                 self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            parsed = urlsplit(self.path)
+            query = parse_qs(parsed.query)
+            accepted = (
+                parsed.path == "/gettoken"
+                and query.get("appkey") == [APP_KEY]
+                and query.get("appsecret") == [APP_SECRET]
+            )
+            payload = json.dumps(
+                {"errcode": 0, "access_token": "e2e-owner-proof"}
+                if accepted
+                else {"errcode": 40089, "errmsg": "invalid app credentials"}
+            ).encode()
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -202,6 +224,31 @@ async def fake_dingtalk_gateway(tmp_path_factory):
 
 
 @pytest_asyncio.fixture(scope="module")
+async def api_server(provision_database, fake_dingtalk_gateway):
+    """Real API process whose first-claim proof hits the TLS fake OAPI."""
+    from tests.e2e.conftest import RunningServer, _free_port, _spawn, _terminate, _wait_ready
+
+    port = _free_port()
+    overrides = {
+        "MESH_DINGTALK_OAPI_BASE": (f"https://127.0.0.1:{fake_dingtalk_gateway.https_port}"),
+        "SSL_CERT_FILE": fake_dingtalk_gateway.ca_path,
+    }
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
+    try:
+        server = RunningServer("api", _spawn("mesh.api.app", port), f"http://127.0.0.1:{port}")
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    await _wait_ready(server.base_url)
+    yield server
+    _terminate(server)
+
+
+@pytest_asyncio.fixture(scope="module")
 async def dingtalk_worker(provision_database, fake_dingtalk_gateway):
     """Real worker process pointed at the fake gateway via the deploy-time
     door; trusts the test CA via SSL_CERT_FILE (real verification)."""
@@ -214,10 +261,9 @@ async def dingtalk_worker(provision_database, fake_dingtalk_gateway):
     env["MESH_OUTBOX_POLL_INTERVAL"] = "0.2"
     env["MESH_DINGTALK_GATEWAY_BASE"] = f"https://127.0.0.1:{fake_dingtalk_gateway.https_port}"
     env["MESH_DINGTALK_STREAM_SCAN_INTERVAL"] = "0.5"
+    env["MESH_APP_BASE_URL"] = "https://mesh.e2e.example"
     env["SSL_CERT_FILE"] = fake_dingtalk_gateway.ca_path
-    env["MESH_STORAGE_ENDPOINT"] = os.environ.get(
-        "MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100"
-    )
+    env["MESH_STORAGE_ENDPOINT"] = os.environ.get("MESH_TEST_STORAGE_ENDPOINT", "http://127.0.0.1:9100")
     env["MESH_STORAGE_ACCESS_KEY"] = os.environ.get("MESH_STORAGE_ACCESS_KEY", "mesh")
     env["MESH_STORAGE_SECRET_KEY"] = os.environ.get("MESH_STORAGE_SECRET_KEY", "mesh_minio_secret")
     import re as _re
@@ -238,12 +284,19 @@ async def dingtalk_worker(provision_database, fake_dingtalk_gateway):
         stdout=log_file,
         stderr=subprocess.STDOUT,
     )
-    await asyncio.sleep(2.5)
-    assert process.poll() is None, "dingtalk worker died during startup"
-    yield process
-    process.terminate()
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=10)
+    try:
+        await asyncio.sleep(2.5)
+        assert process.poll() is None, "dingtalk worker died during startup"
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+        log_file.close()
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +316,6 @@ async def _register_and_login(client: httpx.AsyncClient, email: str) -> str:
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
-
-
-def encrypt(value: str) -> str:
-    return encrypt_secret(value, DEV_JWT_SECRET)
 
 
 async def _make_dingtalk_world(api_client, suffix: str, *, receive_mode: str) -> dict:
@@ -294,8 +343,8 @@ async def _make_dingtalk_world(api_client, suffix: str, *, receive_mode: str) ->
                 "corp_id": CORP_ID,
                 "robot_code": APP_KEY,
                 "receive_mode": receive_mode,
-                "app_secret_ref": encrypt(APP_SECRET),
             },
+            "secret": APP_SECRET,
         },
         headers=_auth(token),
     )
@@ -311,8 +360,12 @@ async def _make_dingtalk_world(api_client, suffix: str, *, receive_mode: str) ->
         headers=_auth(token),
     )
     assert bind.status_code == 201, bind.text
-    return {"token": token, "ws_id": ws_id, "integration_id": integration_id,
-            "agent_id": agent_resp.json()["data"]["id"]}
+    return {
+        "token": token,
+        "ws_id": ws_id,
+        "integration_id": integration_id,
+        "agent_id": agent_resp.json()["data"]["id"],
+    }
 
 
 def _sign_headers(secret: str = APP_SECRET, offset_seconds: float = 0.0) -> dict:
@@ -367,17 +420,20 @@ async def test_http_callback_valid_signature_ingests_real_e2e(api_client, sessio
 
     async def _row():
         async with session_factory() as session:
-            return (await session.execute(
-                select(IntegrationEvent).where(
-                    IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+            return (
+                await session.execute(
+                    select(IntegrationEvent).where(
+                        IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+                    )
                 )
-            )).scalar_one_or_none()
+            ).scalar_one_or_none()
 
     event = await poll_until(_row)
     assert event is not None
     assert event.signature_status == "valid"
     assert event.process_status == "dispatched"
     assert event.payload["_mesh_channel"] == "http"
+
     # Deterministic state wait, NOT a transient snapshot. This test does
     # not request the worker fixture (the module's worker spins up at the
     # first stream test, AFTER this one), so the item normally stays
@@ -388,9 +444,7 @@ async def test_http_callback_valid_signature_ingests_real_e2e(api_client, sessio
     # has already committed the item by the time we get here).
     async def _http_in_queue_chain():
         async with session_factory() as session:
-            rows = (
-                await session.execute(select(IntegrationMessageQueue))
-            ).scalars().all()
+            rows = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
         if len(rows) != 1 or rows[0].state not in (
             "pending",
             "dispatching",
@@ -430,11 +484,17 @@ async def test_http_callback_reject_never_dispatches_real_e2e(api_client, sessio
 
     async with session_factory() as session:
         queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
-        events = (await session.execute(
-            select(IntegrationEvent).where(
-                IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+        events = (
+            (
+                await session.execute(
+                    select(IntegrationEvent).where(
+                        IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
     assert queues == []  # never queued
     assert all(e.process_status == "rejected" for e in events)
 
@@ -467,11 +527,13 @@ async def test_http_callback_non_text_audit_only_real_e2e(api_client, session_fa
     assert resp.json()["process_status"] == "processed"
     async with session_factory() as session:
         queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
-        event = (await session.execute(
-            select(IntegrationEvent).where(
-                IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+        event = (
+            await session.execute(
+                select(IntegrationEvent).where(
+                    IntegrationEvent.integration_id == uuid.UUID(world["integration_id"])
+                )
             )
-        )).scalar_one()
+        ).scalar_one()
     assert queues == []
     assert event.process_status == "processed"
 
@@ -486,9 +548,7 @@ async def test_http_pre_signature_limit_silent_200_real_e2e(api_client):
 
     last = None
     for _ in range(125):
-        last = await api_client.post(
-            "/api/v1/integrations/dingtalk/events", content=body, headers=headers
-        )
+        last = await api_client.post("/api/v1/integrations/dingtalk/events", content=body, headers=headers)
     assert last.status_code == 200  # silent — never 429 from this layer
     # Indistinguishable from ordinary acceptance — the over-limit caller
     # learns nothing about the defense (audit trail carries the truth).
@@ -560,11 +620,11 @@ async def test_stream_message_frame_ingests_and_acks_real_e2e(
 
     async def _ingested():
         async with session_factory() as session:
-            return (await session.execute(
-                select(IntegrationEvent).where(
-                    IntegrationEvent.external_event_id == msg_id
+            return (
+                await session.execute(
+                    select(IntegrationEvent).where(IntegrationEvent.external_event_id == msg_id)
                 )
-            )).scalar_one_or_none()
+            ).scalar_one_or_none()
 
     event = await poll_until(_ingested, timeout=15.0)
     assert event is not None
@@ -581,15 +641,115 @@ async def test_stream_message_frame_ingests_and_acks_real_e2e(
 
     async def _in_dispatch_chain():
         async with session_factory() as session:
-            rows = (
-                await session.execute(select(IntegrationMessageQueue))
-            ).scalars().all()
+            rows = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
         if len(rows) != 1 or rows[0].state not in ("dispatching", "processing"):
             return None
         return rows[0]
 
     queue = await poll_until(_in_dispatch_chain, timeout=15.0)
     assert queue is not None, "queue item never reached dispatching/processing"
+
+
+async def test_stream_card_callback_decides_and_returns_lifecycle_ack_real_e2e(
+    api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
+):
+    pre_seq = fake_dingtalk_gateway.conn_seq
+    world = await _make_dingtalk_world(api_client, "stream-card", receive_mode="stream")
+    conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
+    staff_id = "014728255240768602"
+    async with session_factory() as session, session.begin():
+        member = await session.scalar(
+            select(Member).where(
+                Member.workspace_id == uuid.UUID(world["ws_id"]),
+                Member.member_type == "human",
+            )
+        )
+        execution = TaskExecution(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            agent_id=uuid.UUID(world["agent_id"]),
+            trigger="integration",
+            status="awaiting_approval",
+            task_spec={},
+        )
+        session.add(execution)
+        await session.flush()
+        approval = Approval(
+            workspace_id=uuid.UUID(world["ws_id"]),
+            subject_type="tool_call",
+            subject_execution_id=execution.id,
+            requested_by_member_id=member.id,
+            action_summary={"action": "Deploy E2E service", "permission": "write"},
+            status="pending",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        session.add(approval)
+        session.add(
+            ExternalIdentity(
+                provider="dingtalk",
+                provider_tenant_key=CORP_ID,
+                external_user_key=staff_id,
+                user_id=member.user_id,
+                created_in_workspace_id=uuid.UUID(world["ws_id"]),
+            )
+        )
+        await session.flush()
+        approval_id = approval.id
+
+    message_id = f"card-e2e-{uuid.uuid4().hex}"
+    payload = {
+        "outTrackId": derive_out_track_id(approval_id, uuid.UUID(world["integration_id"])),
+        "corpId": CORP_ID,
+        "userId": staff_id,
+        "userIdType": "staffId",
+        "content": {
+            "cardPrivateData": {
+                "actionIds": ["approve"],
+                "params": {
+                    "approval_id": str(approval_id),
+                    "decision": "approve",
+                },
+            }
+        },
+    }
+    frame = _frame(
+        payload,
+        topic="/v1.0/card/instances/callback",
+        mid=message_id,
+    )
+    await conn.send(json.dumps(frame))
+
+    async def _decided():
+        async with session_factory() as session:
+            row = await session.get(Approval, approval_id)
+            return row if row is not None and row.status == "approved" else None
+
+    assert await poll_until(_decided, timeout=15.0) is not None
+
+    async def _lifecycle_ack():
+        return next(
+            (
+                ack
+                for ack in fake_dingtalk_gateway.acks
+                if ack.get("headers", {}).get("messageId") == message_id
+            ),
+            None,
+        )
+
+    ack = await poll_until(_lifecycle_ack, timeout=10.0)
+    assert ack["code"] == 200
+    assert "已批准" in ack["data"]["cardData"]["cardParamMap"]["status_text"]
+
+    # A real WSS redelivery remains idempotent and receives the same terminal
+    # writeback instead of re-running the approval action.
+    await conn.send(json.dumps(frame))
+
+    async def _two_lifecycle_acks():
+        matches = [
+            ack for ack in fake_dingtalk_gateway.acks if ack.get("headers", {}).get("messageId") == message_id
+        ]
+        return matches if len(matches) >= 2 else None
+
+    assert await poll_until(_two_lifecycle_acks, timeout=10.0)
 
 
 async def test_stream_redelivery_is_msgid_deduped_real_e2e(
@@ -605,11 +765,11 @@ async def test_stream_redelivery_is_msgid_deduped_real_e2e(
 
     async def _ingested():
         async with session_factory() as session:
-            return (await session.execute(
-                select(IntegrationEvent).where(
-                    IntegrationEvent.external_event_id == msg_id
+            return (
+                await session.execute(
+                    select(IntegrationEvent).where(IntegrationEvent.external_event_id == msg_id)
                 )
-            )).scalar_one_or_none()
+            ).scalar_one_or_none()
 
     assert await poll_until(_ingested, timeout=15.0) is not None
     acks_before = len(fake_dingtalk_gateway.acks)
@@ -622,11 +782,15 @@ async def test_stream_redelivery_is_msgid_deduped_real_e2e(
 
     assert await poll_until(_second_ack, timeout=10.0), "redelivery was not ACKed"
     async with session_factory() as session:
-        events = (await session.execute(
-            select(IntegrationEvent).where(
-                IntegrationEvent.external_event_id == msg_id
+        events = (
+            (
+                await session.execute(
+                    select(IntegrationEvent).where(IntegrationEvent.external_event_id == msg_id)
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
         queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
     assert len(events) == 1  # msgId dedup — one ledger row
     assert len(queues) == 1  # never queued twice
@@ -650,8 +814,7 @@ async def test_stream_ping_acked_verbatim_real_e2e(
 
     async def _ping_ack():
         return [
-            a for a in fake_dingtalk_gateway.acks
-            if a.get("headers", {}).get("messageId") == "e2e-ping-1"
+            a for a in fake_dingtalk_gateway.acks if a.get("headers", {}).get("messageId") == "e2e-ping-1"
         ] or None
 
     acks = await poll_until(_ping_ack, timeout=10.0)
@@ -682,3 +845,36 @@ async def test_stream_disconnect_triggers_reconnect_real_e2e(
         return len(fake_dingtalk_gateway.open_requests) > opens_before
 
     assert await poll_until(_reopened, timeout=15.0), "worker did not re-run connections/open"
+
+
+async def test_explicit_reconnect_api_replaces_live_socket_real_e2e(
+    api_client, dingtalk_worker, fake_dingtalk_gateway, session_factory
+):
+    """The UI action's durable marker must reach the real worker/socket."""
+    pre_seq = fake_dingtalk_gateway.conn_seq
+    world = await _make_dingtalk_world(api_client, "stream6", receive_mode="stream")
+    old_conn = await _wait_for_connection(fake_dingtalk_gateway, after_seq=pre_seq)
+    with fake_dingtalk_gateway.lock:
+        old_seq = next(seq for seq, conn in fake_dingtalk_gateway.connections if conn is old_conn)
+        opens_before = len(fake_dingtalk_gateway.open_requests)
+
+    response = await api_client.post(
+        f"/api/v1/workspaces/{world['ws_id']}/integrations/{world['integration_id']}:reconnect",
+        headers=_auth(world["token"]),
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["data"]["accepted"] is True
+
+    async def _replaced():
+        with fake_dingtalk_gateway.lock:
+            live = list(fake_dingtalk_gateway.connections)
+            opened = len(fake_dingtalk_gateway.open_requests)
+        return (
+            opened > opens_before
+            and all(conn is not old_conn for _seq, conn in live)
+            and any(seq > old_seq for seq, _conn in live)
+        )
+
+    assert await poll_until(_replaced, timeout=15.0), (
+        "explicit reconnect did not replace the worker's physical Stream socket"
+    )

@@ -75,11 +75,7 @@ def extract_clicker(
     """(provider, provider_tenant_key, external_user_key) of the clicker."""
     config = integration.config or {}
     if kind == "im_feishu":
-        user_key = str(
-            payload.get("open_id")
-            or (payload.get("operator") or {}).get("open_id")
-            or ""
-        )
+        user_key = str(payload.get("open_id") or (payload.get("operator") or {}).get("open_id") or "")
         tenant = str(payload.get("tenant_key") or config.get("tenant_key") or "")
         return ("feishu", tenant, user_key) if user_key else None
     if kind == "im_slack":
@@ -130,15 +126,8 @@ async def _locate_card_integration(
         team = payload.get("team") or {}
         team_id = str(team.get("id") or payload.get("team_id") or "")
         rows = (
-            await _lookup_by_config_value(session, kind=kind, key="team_id", value=team_id)
-            if team_id else []
+            await _lookup_by_config_value(session, kind=kind, key="team_id", value=team_id) if team_id else []
         )
-    elif kind == "im_dingtalk":
-        corp_id = str(payload.get("corpId") or "")
-        if corp_id:
-            rows = await _lookup_by_config_value(session, kind=kind, key="corp_id", value=corp_id)
-        else:
-            rows = await _lookup_active_by_kind(session, kind=kind)
     else:
         rows = []
     # Build detached integrations from the SECURITY DEFINER rows — ORM
@@ -224,44 +213,111 @@ async def handle_card_callback(
     signing_secret: str,
     now: datetime,
     tolerance: timedelta,
+    app_base_url: str = "",
 ) -> tuple[int, dict[str, Any]]:
     """Full card-callback pipeline. Returns (status, bare-JSON body)."""
     if kind not in ("im_feishu", "im_slack", "im_dingtalk"):
         return 401, _error("invalid_signature", "unsupported card callback")
     payload = parse_card_payload(raw_body, headers)
-    integration = await _locate_card_integration(session, kind=kind, payload=payload)
-    if integration is None:
-        return 401, _error("invalid_signature", "signature verification failed")
     if kind == "im_dingtalk":
         # HTTP callbackType (§3.10): the DingTalk signature scheme covers
         # timestamp + "\n" + app_secret with the OFFICIAL ±3600s tolerance
         # (written in stone — narrowing rejects legitimate callbacks).
+        from mesh.db.models.runtime import Approval
+        from mesh.db.tenant import set_tenant_context
         from mesh.integrations.dingtalk_cards import (
+            extract_dingtalk_action,
             handle_dingtalk_card_callback,
+            parse_out_track_context,
             verify_callback_signature,
         )
 
-        config = integration.config or {}
-        app_secret = _decrypt_ref(
-            signing_secret, str(config.get("app_secret_ref") or integration.secret_ref)
+        corp_id = str(payload.get("corpId") or "")
+        rows = (
+            await _lookup_by_config_value(session, kind=kind, key="corp_id", value=corp_id) if corp_id else []
         )
-        if not app_secret:
+        rows = [row for row in rows if str((row[4] or {}).get("receive_mode") or "") == "http"]
+        candidates = [_integration_from_row(row) for row in rows]
+        if not candidates:
             return 401, _error("invalid_signature", "signature verification failed")
         lowered = {k.lower(): v for k, v in headers.items()}
-        status = verify_callback_signature(
-            app_secret=app_secret,
-            timestamp=lowered.get("timestamp"),
-            sign=lowered.get("sign"),
-            now=now,
-        )
-        if status != "valid":
+        verified: list[Integration] = []
+        for candidate in candidates:
+            config = candidate.config or {}
+            app_secret = _decrypt_ref(
+                signing_secret,
+                str(config.get("app_secret_ref") or candidate.secret_ref),
+            )
+            if (
+                app_secret
+                and verify_callback_signature(
+                    app_secret=app_secret,
+                    timestamp=lowered.get("timestamp"),
+                    sign=lowered.get("sign"),
+                    now=now,
+                )
+                == "valid"
+            ):
+                verified.append(candidate)
+        if not verified:
             return 401, _error("invalid_signature", "signature verification failed")
+
+        # The immutable card instance identity and the clicked action must
+        # name the same approval. Validate only after signature admission so
+        # unauthenticated callers learn nothing about callback structure.
+        track_context = parse_out_track_context(str(payload.get("outTrackId") or ""))
+        approval_id = track_context[0] if track_context is not None else None
+        source_integration_id = track_context[1] if track_context is not None else None
+        action = extract_dingtalk_action(payload)
+        if approval_id is None or action is None or action[0] != approval_id:
+            return 400, _error("invalid_request", "card callback approval identity mismatch")
+
+        if source_integration_id is not None:
+            verified = [candidate for candidate in verified if candidate.id == source_integration_id]
+            if len(verified) != 1:
+                return 401, _error("invalid_signature", "signature verification failed")
+
+        by_workspace: dict[uuid.UUID, list[Integration]] = {}
+        for candidate in verified:
+            by_workspace.setdefault(candidate.workspace_id, []).append(candidate)
+        if len(by_workspace) > 1:
+            matching_workspaces: list[uuid.UUID] = []
+            for workspace_id in by_workspace:
+                async with session_factory() as probe:
+                    await set_tenant_context(probe, workspace_id)
+                    approval = await probe.get(Approval, approval_id)
+                if approval is not None and approval.workspace_id == workspace_id:
+                    matching_workspaces.append(workspace_id)
+            if len(matching_workspaces) != 1:
+                return 401, _error("invalid_signature", "signature verification failed")
+            by_workspace = {matching_workspaces[0]: by_workspace[matching_workspaces[0]]}
+        workspace_candidates = next(iter(by_workspace.values()))
+        # Legacy cards carry only approval identity. They remain compatible
+        # when the signed corp route has exactly one integration; shared-app
+        # sibling ambiguity fails closed instead of selecting an arbitrary id.
+        if len(workspace_candidates) != 1:
+            return 401, _error("invalid_signature", "signature verification failed")
+        integration = workspace_candidates[0]
         return await handle_dingtalk_card_callback(
-            session, session_factory, integration=integration, payload=payload, now=now
+            session,
+            session_factory,
+            integration=integration,
+            payload=payload,
+            now=now,
+            app_base_url=app_base_url,
         )
+    integration = await _locate_card_integration(session, kind=kind, payload=payload)
+    if integration is None:
+        return 401, _error("invalid_signature", "signature verification failed")
     if not await _verify_card_signature(
-        session, kind=kind, integration=integration, raw_body=raw_body,
-        headers=headers, signing_secret=signing_secret, now=now, tolerance=tolerance,
+        session,
+        kind=kind,
+        integration=integration,
+        raw_body=raw_body,
+        headers=headers,
+        signing_secret=signing_secret,
+        now=now,
+        tolerance=tolerance,
     ):
         return 401, _error("invalid_signature", "signature verification failed")
 
@@ -286,8 +342,11 @@ async def handle_card_callback(
     )
     if member is None:
         await _audit_denial(
-            session, workspace_id=workspace_id, approval_id=approval_id,
-            reason=denial, provider=provider,
+            session,
+            workspace_id=workspace_id,
+            approval_id=approval_id,
+            reason=denial,
+            provider=provider,
             external_user_key=external_user_key,
         )
         message = (
@@ -310,8 +369,11 @@ async def handle_card_callback(
         )
     except (ForbiddenError, NotFoundError) as exc:
         await _audit_denial(
-            session, workspace_id=workspace_id, approval_id=approval_id,
-            reason=f"permission_denied:{exc.code}", provider=provider,
+            session,
+            workspace_id=workspace_id,
+            approval_id=approval_id,
+            reason=f"permission_denied:{exc.code}",
+            provider=provider,
             external_user_key=external_user_key,
         )
         status = 403 if isinstance(exc, ForbiddenError) else 404

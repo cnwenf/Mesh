@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mesh.integrations.cards import handle_card_callback
 from mesh.integrations.inbound import _lookup_by_config_value, process_inbound
@@ -46,6 +47,30 @@ INBOUND_BODY_MAX_BYTES = 1024 * 1024
 # would trigger the external platform's retry amplification. Audit + alert
 # only; the post-signature semantic guardrails (§2.10) are the next layer.
 DINGTALK_PRE_LIMIT_PER_MIN = 120
+
+
+async def _locate_dingtalk_pre_limit_integration(
+    session: AsyncSession, payload: dict[str, object]
+) -> uuid.UUID | None:
+    """Resolve the same exact DingTalk route used by signature admission.
+
+    The pre-signature limiter is a coarse anti-amplification layer, but its
+    bucket still must not merge sibling robots that share a corp. Missing or
+    ambiguous identities deliberately fall back to the unattributable IP
+    bucket; no arbitrary first row is selected.
+    """
+    corp_id = str(payload.get("chatbotCorpId") or "")
+    robot_code = str(payload.get("robotCode") or "")
+    if not corp_id or not robot_code:
+        return None
+    rows = await _lookup_by_config_value(session, kind="im_dingtalk", key="corp_id", value=corp_id)
+    matches = [
+        row
+        for row in rows
+        if str((row[4] or {}).get("receive_mode") or "") == "http"
+        and str((row[4] or {}).get("robot_code") or (row[4] or {}).get("app_key") or "") == robot_code
+    ]
+    return matches[0][0] if len(matches) == 1 else None
 
 
 def _client_ip(request: Request) -> str:
@@ -106,9 +131,7 @@ def _tolerance(request: Request):
     return request.app.state.settings.integration_signature_tolerance
 
 
-async def _run_inbound(
-    request: Request, kind: str, *, raw_body: bytes | None = None
-) -> JSONResponse:
+async def _run_inbound(request: Request, kind: str, *, raw_body: bytes | None = None) -> JSONResponse:
     """Run the pipeline; ``raw_body`` skips the guards when the caller has
     already applied them (the DingTalk route guards + pre-limits first)."""
     if raw_body is None:
@@ -159,6 +182,7 @@ async def _run_card(request: Request, kind: str) -> JSONResponse:
             signing_secret=settings.jwt_secret,
             now=now,
             tolerance=_tolerance(request),
+            app_base_url=settings.app_base_url or "",
         )
     return JSONResponse(status_code=status_code, content=body)
 
@@ -191,24 +215,19 @@ async def dingtalk_events(request: Request) -> JSONResponse:
         return raw_body  # re-check pass: actual oversize (lying Content-Length)
 
     # Locate the integration BEFORE signature work so a located callback also
-    # consumes its (integration, IP) budget. Unlocatable payloads already
+    # consumes its exact (integration, IP) budget. Unlocatable payloads already
     # consumed the IP-only budget above and must not be double-counted.
-    corp_id = ""
     try:
         parsed = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-        if isinstance(parsed, dict):
-            corp_id = str(parsed.get("chatbotCorpId") or "")
+        if not isinstance(parsed, dict):
+            parsed = {}
     except (UnicodeDecodeError, json.JSONDecodeError):
-        parsed = None
+        parsed = {}
     integration_id: uuid.UUID | None = None
-    if corp_id:
+    if parsed:
         session_factory = request.app.state.session_factory
         async with session_factory() as session:
-            rows = await _lookup_by_config_value(
-                session, kind="im_dingtalk", key="corp_id", value=corp_id
-            )
-        if rows:
-            integration_id = rows[0][0]
+            integration_id = await _locate_dingtalk_pre_limit_integration(session, parsed)
     if integration_id is not None and await _dingtalk_pre_limit_exceeded(
         request, integration_id=integration_id
     ):
@@ -269,8 +288,7 @@ async def _dingtalk_pre_limit_exceeded(
         _removed, count, _added, _ttl = await pipe.execute()
     except Exception:  # noqa: BLE001 — Redis flakiness ⇒ fail OPEN, never 500
         logger.warning(
-            "dingtalk pre-signature limiter unavailable (redis) — failing open "
-            "for integration=%s ip=%s",
+            "dingtalk pre-signature limiter unavailable (redis) — failing open for integration=%s ip=%s",
             integration_id,
             _client_ip(request),
         )

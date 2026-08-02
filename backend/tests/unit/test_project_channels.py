@@ -100,12 +100,25 @@ async def test_public_project_allows_workspace_member(session_factory):
     assert await checker(_principal(outsider, workspace), f"project:{project.id}") is True
 
 
+async def test_public_project_denies_guest_without_explicit_grant(session_factory):
+    workspace, project, _member, outsider, _admin = await _workspace_with(
+        session_factory, visibility="public"
+    )
+    async with session_factory() as session, session.begin():
+        stored = await session.get(Member, outsider.id)
+        stored.role = "guest"
+    checker = make_project_channel_checker(session_factory)
+    assert await checker(_principal(outsider, workspace), f"project:{project.id}") is False
+
+
 async def test_private_project_member_allowed_outsider_denied(session_factory):
     workspace, project, member, outsider, _admin = await _workspace_with(session_factory)
     async with session_factory() as session, session.begin():
         session.add(
             ProjectMember(
-                workspace_id=workspace.id, project_id=project.id, member_id=member.id,
+                workspace_id=workspace.id,
+                project_id=project.id,
+                member_id=member.id,
                 role="member",
             )
         )
@@ -124,13 +137,25 @@ async def test_private_project_admin_allowed(session_factory):
 async def test_private_project_guest_grant_allowed(session_factory):
     workspace, project, _member, outsider, _admin = await _workspace_with(session_factory)
     async with session_factory() as session, session.begin():
+        stored = await session.get(Member, outsider.id)
+        stored.role = "guest"
         session.add(
-            MemberProjectAccess(
-                workspace_id=workspace.id, member_id=outsider.id, project_id=project.id
-            )
+            MemberProjectAccess(workspace_id=workspace.id, member_id=outsider.id, project_id=project.id)
         )
     checker = make_project_channel_checker(session_factory)
     assert await checker(_principal(outsider, workspace), f"project:{project.id}") is True
+
+
+async def test_private_project_ignores_stale_guest_grant_after_member_promotion(
+    session_factory,
+):
+    workspace, project, _member, outsider, _admin = await _workspace_with(session_factory)
+    async with session_factory() as session, session.begin():
+        session.add(
+            MemberProjectAccess(workspace_id=workspace.id, member_id=outsider.id, project_id=project.id)
+        )
+    checker = make_project_channel_checker(session_factory)
+    assert await checker(_principal(outsider, workspace), f"project:{project.id}") is False
 
 
 async def test_dev_principal_gets_workspace_level_access(session_factory):
@@ -180,9 +205,7 @@ def _make_authorizer(session_factory, *, with_project_checker: bool):
 
     authorizer = DefaultChannelAuthorizer(session_factory)
     if with_project_checker:
-        authorizer.register_prefix_checker(
-            "project", make_project_channel_checker(session_factory)
-        )
+        authorizer.register_prefix_checker("project", make_project_channel_checker(session_factory))
     return authorizer
 
 
@@ -213,16 +236,10 @@ async def test_authorizer_private_project_denies_non_member_with_checker(session
     channel = f"project:{project.id}"
     await _seed_channel_row(session_factory, workspace.id, channel)
     async with session_factory() as session, session.begin():
-        session.add(
-            ProjectMember(
-                workspace_id=workspace.id, project_id=project.id, member_id=member.id
-            )
-        )
+        session.add(ProjectMember(workspace_id=workspace.id, project_id=project.id, member_id=member.id))
     authorizer = _make_authorizer(session_factory, with_project_checker=True)
     member_p = Principal(subject=str(member.user_id), workspace_ids=frozenset({workspace.id}))
-    outsider_p = Principal(
-        subject=str(outsider.user_id), workspace_ids=frozenset({workspace.id})
-    )
+    outsider_p = Principal(subject=str(outsider.user_id), workspace_ids=frozenset({workspace.id}))
     assert await authorizer.authorize(member_p, channel) == workspace.id
     assert await authorizer.authorize(outsider_p, channel) is None
 

@@ -12,10 +12,11 @@ import {
 } from '../types';
 
 describe('integration kind constants', () => {
-  it('enumerates the five connector kinds', () => {
+  it('enumerates the six connector kinds including DingTalk', () => {
     expect(INTEGRATION_KINDS).toEqual([
       'im_feishu',
       'im_slack',
+      'im_dingtalk',
       'vcs_github',
       'vcs_gitlab',
       'webhook_outbound',
@@ -29,6 +30,7 @@ describe('integration kind constants', () => {
   it('flags exactly the oauth-capable kinds', () => {
     expect(OAUTH_KINDS.has('im_feishu')).toBe(true);
     expect(OAUTH_KINDS.has('im_slack')).toBe(true);
+    expect(OAUTH_KINDS.has('im_dingtalk')).toBe(false);
     expect(OAUTH_KINDS.has('vcs_github')).toBe(true);
     expect(OAUTH_KINDS.has('vcs_gitlab')).toBe(true);
     expect(OAUTH_KINDS.has('webhook_outbound')).toBe(false);
@@ -46,6 +48,7 @@ describe('connector catalog', () => {
     const expectedIcon = {
       im_feishu: 'message',
       im_slack: 'chat',
+      im_dingtalk: 'message',
       vcs_github: 'git-merge',
       vcs_gitlab: 'git-merge',
       webhook_outbound: 'upload',
@@ -60,8 +63,16 @@ describe('connector catalog', () => {
 
   it('tags im connectors with approval cards and vcs connectors with linking', () => {
     const feishu = CONNECTOR_CATALOG.find((meta) => meta.kind === 'im_feishu');
+    const dingtalk = CONNECTOR_CATALOG.find((meta) => meta.kind === 'im_dingtalk');
     const github = CONNECTOR_CATALOG.find((meta) => meta.kind === 'vcs_github');
     expect(feishu?.capabilityKeys).toContain('integrations.capability.approval_card');
+    expect(dingtalk?.capabilityKeys).toEqual(
+      expect.arrayContaining([
+        'integrations.capability.im_notify',
+        'integrations.capability.approval_card',
+        'integrations.capability.event_trigger',
+      ]),
+    );
     expect(github?.capabilityKeys).toContain('integrations.capability.vcs_link');
   });
 });

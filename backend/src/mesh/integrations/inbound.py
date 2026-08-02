@@ -53,6 +53,7 @@ from mesh.integrations.ingest import (
     REJECTED_KEY_PREFIX,
     REJECTED_PAYLOAD_HEAD_BYTES,
     REJECTED_PAYLOAD_MAX_BYTES,
+    emit_event_ingested_realtime,
     enqueue_idempotency_key,
     ingest_verified_event,
     match_bindings,
@@ -62,7 +63,8 @@ from mesh.integrations.ingest import (
     audit_payload as _audit_payload,
 )
 from mesh.integrations.matching import binding_matches, compute_im_signals
-from mesh.outbox.service import emit_event, emit_realtime
+from mesh.integrations.visibility import resolve_event_visibility
+from mesh.outbox.service import emit_event
 from mesh.runtime.credentials import decrypt_credential_value
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
 
@@ -77,6 +79,7 @@ def _is_event_dedup_conflict(exc: IntegrityError) -> bool:
     narrowed catch, ingest.py).
     """
     return _violates_constraint(exc, "uq_integration_event_dedup")
+
 
 __all__ = [
     "REJECTED_KEY_PREFIX",
@@ -141,48 +144,70 @@ def _decrypt_ref(session_signing_secret: str, ciphertext: str | None) -> str | N
 # ---------------------------------------------------------------------------
 
 
-async def _lookup_by_config_value(
-    session: AsyncSession, *, kind: str, key: str, value: str
-) -> list[tuple]:
+async def _lookup_by_config_value(session: AsyncSession, *, kind: str, key: str, value: str) -> list[tuple]:
     try:
         async with session.begin_nested():
-            return list((await session.execute(
-                text(
-                    "SELECT id, workspace_id, status, kind, config, secret_ref "
-                    "FROM mesh_integrations_by_kind_config_value(:k, :key, :v)"
-                ),
-                {"k": kind, "key": key, "v": value},
-            )).all())
-    except Exception:  # noqa: BLE001 — function absent (owner-role unit reuse)
-        return list((await session.execute(
-            select(
-                Integration.id, Integration.workspace_id, Integration.status,
-                Integration.kind, Integration.config, Integration.secret_ref,
-            ).where(
-                Integration.kind == kind,
-                Integration.deleted_at.is_(None),
-                Integration.config[key].astext == value,
+            return list(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT id, workspace_id, status, kind, config, secret_ref "
+                            "FROM mesh_integrations_by_kind_config_value(:k, :key, :v)"
+                        ),
+                        {"k": kind, "key": key, "v": value},
+                    )
+                ).all()
             )
-        )).all())
+    except Exception:  # noqa: BLE001 — function absent (owner-role unit reuse)
+        return list(
+            (
+                await session.execute(
+                    select(
+                        Integration.id,
+                        Integration.workspace_id,
+                        Integration.status,
+                        Integration.kind,
+                        Integration.config,
+                        Integration.secret_ref,
+                    ).where(
+                        Integration.kind == kind,
+                        Integration.deleted_at.is_(None),
+                        Integration.config[key].astext == value,
+                    )
+                )
+            ).all()
+        )
 
 
 async def _lookup_active_by_kind(session: AsyncSession, *, kind: str) -> list[tuple]:
     try:
         async with session.begin_nested():
-            return list((await session.execute(
-                text(
-                    "SELECT id, workspace_id, status, kind, config, secret_ref "
-                    "FROM mesh_integrations_active_by_kind(:k)"
-                ),
-                {"k": kind},
-            )).all())
+            return list(
+                (
+                    await session.execute(
+                        text(
+                            "SELECT id, workspace_id, status, kind, config, secret_ref "
+                            "FROM mesh_integrations_active_by_kind(:k)"
+                        ),
+                        {"k": kind},
+                    )
+                ).all()
+            )
     except Exception:  # noqa: BLE001 — function absent (owner-role unit reuse)
-        return list((await session.execute(
-            select(
-                Integration.id, Integration.workspace_id, Integration.status,
-                Integration.kind, Integration.config, Integration.secret_ref,
-            ).where(Integration.kind == kind, Integration.deleted_at.is_(None))
-        )).all())
+        return list(
+            (
+                await session.execute(
+                    select(
+                        Integration.id,
+                        Integration.workspace_id,
+                        Integration.status,
+                        Integration.kind,
+                        Integration.config,
+                        Integration.secret_ref,
+                    ).where(Integration.kind == kind, Integration.deleted_at.is_(None))
+                )
+            ).all()
+        )
 
 
 async def _lookup_binding_by_external_ref(
@@ -190,30 +215,36 @@ async def _lookup_binding_by_external_ref(
 ) -> tuple | None:
     try:
         async with session.begin_nested():
-            return (await session.execute(
-                text(
-                    "SELECT id, workspace_id, integration_id, provider_tenant_key, status "
-                    "FROM mesh_binding_by_external_ref(:p, :r) LIMIT 1"
-                ),
-                {"p": provider, "r": external_ref},
-            )).first()
+            return (
+                await session.execute(
+                    text(
+                        "SELECT id, workspace_id, integration_id, provider_tenant_key, status "
+                        "FROM mesh_binding_by_external_ref(:p, :r) LIMIT 1"
+                    ),
+                    {"p": provider, "r": external_ref},
+                )
+            ).first()
     except Exception:  # noqa: BLE001 — function absent (owner-role unit reuse)
-        return (await session.execute(
-            select(
-                IntegrationBinding.id, IntegrationBinding.workspace_id,
-                IntegrationBinding.integration_id,
-                IntegrationBinding.provider_tenant_key, IntegrationBinding.status,
-            ).where(
-                IntegrationBinding.provider == provider,
-                IntegrationBinding.external_ref == external_ref,
-            ).limit(1)
-        )).first()
+        return (
+            await session.execute(
+                select(
+                    IntegrationBinding.id,
+                    IntegrationBinding.workspace_id,
+                    IntegrationBinding.integration_id,
+                    IntegrationBinding.provider_tenant_key,
+                    IntegrationBinding.status,
+                )
+                .where(
+                    IntegrationBinding.provider == provider,
+                    IntegrationBinding.external_ref == external_ref,
+                )
+                .limit(1)
+            )
+        ).first()
 
 
 async def _load_integration(session: AsyncSession, integration_id: uuid.UUID) -> Integration | None:
-    return await session.scalar(
-        select(Integration).where(Integration.id == integration_id)
-    )
+    return await session.scalar(select(Integration).where(Integration.id == integration_id))
 
 
 async def _candidate_from_binding(session: AsyncSession, binding: tuple) -> tuple:
@@ -221,21 +252,27 @@ async def _candidate_from_binding(session: AsyncSession, binding: tuple) -> tupl
     repo routing) without pre-tenant ORM reads (RLS fail-closed)."""
     try:
         async with session.begin_nested():
-            row = (await session.execute(
-                text(
-                    "SELECT id, workspace_id, status, kind, config, secret_ref "
-                    "FROM mesh_integration_by_id(:id)"
-                ),
-                {"id": binding[2]},
-            )).first()
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT id, workspace_id, status, kind, config, secret_ref "
+                        "FROM mesh_integration_by_id(:id)"
+                    ),
+                    {"id": binding[2]},
+                )
+            ).first()
             if row is not None:
                 return tuple(row)
     except Exception:  # noqa: BLE001 — function absent (owner-role reuse)
         integration = await _load_integration(session, binding[2])
         if integration is not None:
             return (
-                integration.id, integration.workspace_id, integration.status,
-                integration.kind, integration.config, integration.secret_ref,
+                integration.id,
+                integration.workspace_id,
+                integration.status,
+                integration.kind,
+                integration.config,
+                integration.secret_ref,
             )
     return (binding[2], binding[1], "active", "vcs_gitlab", {}, None)
 
@@ -287,26 +324,19 @@ async def _locate_and_verify(
     if kind == "im_slack":
         team_id = str(payload.get("team_id") or (payload.get("event") or {}).get("team") or "")
         if team_id:
-            candidates = await _lookup_by_config_value(
-                session, kind=kind, key="team_id", value=team_id
-            )
+            candidates = await _lookup_by_config_value(session, kind=kind, key="team_id", value=team_id)
     elif kind == "im_dingtalk":
         # §3.2: locate by body chatbotCorpId (+ robotCode disambiguation).
         corp_id = str(payload.get("chatbotCorpId") or "")
-        if corp_id:
-            candidates = await _lookup_by_config_value(
-                session, kind=kind, key="corp_id", value=corp_id
-            )
-            robot_code = str(payload.get("robotCode") or "")
-            if robot_code:
-                robot_matches = [
-                    row
-                    for row in candidates
-                    if str((row[4] or {}).get("robot_code") or "") == robot_code
-                    or str((row[4] or {}).get("app_key") or "") == robot_code
-                ]
-                if robot_matches:
-                    candidates = robot_matches
+        robot_code = str(payload.get("robotCode") or "")
+        if corp_id and robot_code:
+            candidates = await _lookup_by_config_value(session, kind=kind, key="corp_id", value=corp_id)
+            candidates = [
+                row
+                for row in candidates
+                if str((row[4] or {}).get("receive_mode") or "") == "http"
+                and str((row[4] or {}).get("robot_code") or (row[4] or {}).get("app_key") or "") == robot_code
+            ]
     elif kind == "vcs_github":
         installation = payload.get("installation") or {}
         installation_id = str(installation.get("id") or "")
@@ -317,18 +347,14 @@ async def _locate_and_verify(
         if not candidates:
             repo = str((payload.get("repository") or {}).get("full_name") or "")
             if repo:
-                binding = await _lookup_binding_by_external_ref(
-                    session, provider="github", external_ref=repo
-                )
+                binding = await _lookup_binding_by_external_ref(session, provider="github", external_ref=repo)
                 if binding is not None:
                     candidates = [await _candidate_from_binding(session, binding)]
     elif kind == "vcs_gitlab":
         project = payload.get("project") or {}
         repo = str(project.get("path_with_namespace") or "")
         if repo:
-            binding = await _lookup_binding_by_external_ref(
-                session, provider="gitlab", external_ref=repo
-            )
+            binding = await _lookup_binding_by_external_ref(session, provider="gitlab", external_ref=repo)
             if binding is not None:
                 candidates = [await _candidate_from_binding(session, binding)]
     elif kind == "im_feishu":
@@ -357,16 +383,13 @@ async def _locate_and_verify(
             integration = _integration_from_row(row)
             normalized = adapter["normalize"](payload, lowered)
             # Refine gitlab tenant key from the integration instance config.
-            if provider == "gitlab" or (
-                provider == "feishu" and not normalized.tenant_key
-            ):
+            if provider == "gitlab" or (provider == "feishu" and not normalized.tenant_key):
                 normalized = NormalizedEvent(
                     external_event_id=normalized.external_event_id,
                     event_type=normalized.event_type,
                     external_ref=normalized.external_ref,
                     actor_key=normalized.actor_key,
-                    tenant_key=adapter["tenant_key_from_config"](config)
-                    or normalized.tenant_key,
+                    tenant_key=adapter["tenant_key_from_config"](config) or normalized.tenant_key,
                     text=normalized.text,
                     extra=normalized.extra,
                 )
@@ -462,9 +485,7 @@ def _envelope_from_normalized(
     if provider == "dingtalk":
         from mesh.integrations.dingtalk import normalize_message_payload
 
-        return normalize_message_payload(
-            raw_payload, max_chars=max_chars, channel=channel
-        )
+        return normalize_message_payload(raw_payload, max_chars=max_chars, channel=channel)
     bot_mentioned, is_direct_message = compute_im_signals(provider, event, config)
     msgtype = ""
     if provider == "feishu":
@@ -508,9 +529,7 @@ async def _enqueue_vcs_execution(
     provider: str,
 ) -> None:
     """Same-transaction execution.enqueue outbox write (§6.9 integration row)."""
-    agent = await session.scalar(
-        select(Agent).where(Agent.id == binding.bound_agent_id)
-    )
+    agent = await session.scalar(select(Agent).where(Agent.id == binding.bound_agent_id))
     if agent is None or agent.lifecycle_status != "active":
         return  # agent soft-deleted / paused → audit only (§6.9)
     external_event_id = event.external_event_id or str(event_row.id)
@@ -600,9 +619,7 @@ async def _ingest_vcs_event(
                 )
         except IntegrityError as exc:
             if not _is_event_dedup_conflict(exc):
-                logger.exception(
-                    "disabled-rejection audit insert failed on a non-dedup constraint"
-                )
+                logger.exception("disabled-rejection audit insert failed on a non-dedup constraint")
         return 401, {
             "error": {
                 "code": "integration_disabled",
@@ -611,6 +628,14 @@ async def _ingest_vcs_event(
             }
         }
 
+    visibility_scope, project_id_snapshot = await resolve_event_visibility(
+        session,
+        workspace_id=integration.workspace_id,
+        integration_id=integration.id,
+        provider=provider,
+        provider_tenant_key=event.tenant_key,
+        external_ref=event.external_ref,
+    )
     external_event_id = event.external_event_id or (
         f"sha256:{hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()}"
     )
@@ -626,6 +651,8 @@ async def _ingest_vcs_event(
                 signature_status="valid",
                 process_status="received",
                 now=now,
+                visibility_scope=visibility_scope,
+                project_id_snapshot=project_id_snapshot,
             )
     except IntegrityError as exc:
         if not _is_event_dedup_conflict(exc):
@@ -636,32 +663,13 @@ async def _ingest_vcs_event(
             "process_status": "deduped",
         }
 
-    await emit_realtime(
+    await emit_event_ingested_realtime(
         session,
         workspace_id=integration.workspace_id,
-        channel=f"workspace:{integration.workspace_id}:integrations",
-        event="integration.event_ingested",
-        data={
-            "event_id": str(event_row.id),
-            "integration_id": str(integration.id),
-            "event_type": event.event_type,
-            "signature_status": "valid",
-            "process_status": "received",
-        },
-        idempotency_key=f"integration-event:{event_row.id}:ingested",
-    )
-    await emit_realtime(
-        session,
-        workspace_id=integration.workspace_id,
-        channel=f"integration:{integration.id}",
-        event="integration.event_ingested",
-        data={
-            "event_id": str(event_row.id),
-            "event_type": event.event_type,
-            "signature_status": "valid",
-            "process_status": "received",
-        },
-        idempotency_key=f"integration-event:{event_row.id}:ingested:detail",
+        integration_id=integration.id,
+        event_row=event_row,
+        event_type=event.event_type,
+        process_status="received",
     )
 
     # VCS auto-linking + status flow (best effort, audit-only failures —
@@ -685,12 +693,13 @@ async def _ingest_vcs_event(
         session,
         workspace_id=integration.workspace_id,
         integration=integration,
+        provider=provider,
+        provider_tenant_key=event.tenant_key,
         external_ref=event.external_ref,
     )
     if len(bindings) > 1:
         logger.error(
-            "multiple bindings matched inbound event %s (integration %s) — "
-            "dispatch suppressed",
+            "multiple bindings matched inbound event %s (integration %s) — dispatch suppressed",
             event_row.id,
             integration.id,
         )
@@ -738,19 +747,13 @@ async def _ingest_vcs_event(
 
     event_row.updated_at = now
     await session.flush()
-    await emit_realtime(
+    await emit_event_ingested_realtime(
         session,
         workspace_id=integration.workspace_id,
-        channel=f"workspace:{integration.workspace_id}:integrations",
-        event="integration.event_ingested",
-        data={
-            "event_id": str(event_row.id),
-            "integration_id": str(integration.id),
-            "event_type": event.event_type,
-            "signature_status": "valid",
-            "process_status": event_row.process_status,
-        },
-        idempotency_key=f"integration-event:{event_row.id}:{event_row.process_status}",
+        integration_id=integration.id,
+        event_row=event_row,
+        event_type=event.event_type,
+        process_status=event_row.process_status,
     )
 
     return 200, {
@@ -794,9 +797,7 @@ async def process_inbound(
     # URL verification challenges (feishu validates its own token; slack
     # echoes after the signature verifies below).
     if kind == "im_feishu":
-        challenge = await _handle_feishu_challenge(
-            session, payload=payload, signing_secret=signing_secret
-        )
+        challenge = await _handle_feishu_challenge(session, payload=payload, signing_secret=signing_secret)
         if challenge is not None:
             return challenge
 
@@ -821,10 +822,7 @@ async def process_inbound(
                         session,
                         workspace_id=integration.workspace_id,
                         integration_id=integration.id,
-                        external_event_id=(
-                            f"{REJECTED_KEY_PREFIX}"
-                            f"{hashlib.sha256(raw_body).hexdigest()}"
-                        ),
+                        external_event_id=(f"{REJECTED_KEY_PREFIX}{hashlib.sha256(raw_body).hexdigest()}"),
                         event_type=str(payload.get("type") or kind),
                         payload=payload,
                         signature_status=signature_status,
@@ -835,9 +833,7 @@ async def process_inbound(
                 # repeated forgery, same body → already audited (dedup key);
                 # any other constraint violation is logged, not disguised.
                 if not _is_event_dedup_conflict(exc):
-                    logger.exception(
-                        "signature-rejection audit insert failed on a non-dedup constraint"
-                    )
+                    logger.exception("signature-rejection audit insert failed on a non-dedup constraint")
         # Unknown integration → indistinguishable from a bad signature.
         return 401, _invalid_signature_body()
 
@@ -846,8 +842,7 @@ async def process_inbound(
         # a server defect — surface it explicitly (never a bare assert in a
         # production path).
         raise RuntimeError(
-            "inbound invariant violated: valid signature without a resolved "
-            "integration/normalized event"
+            "inbound invariant violated: valid signature without a resolved integration/normalized event"
         )
     await set_tenant_context(session, integration.workspace_id)
 
@@ -867,9 +862,7 @@ async def process_inbound(
         effective_max_chars = text_max_chars
         if effective_max_chars is None:
             effective_max_chars = int(
-                getattr(
-                    settings, "im_inbound_text_max_chars", DEFAULT_INBOUND_TEXT_MAX_CHARS
-                )
+                getattr(settings, "im_inbound_text_max_chars", DEFAULT_INBOUND_TEXT_MAX_CHARS)
             )
         try:
             envelope = _envelope_from_normalized(
@@ -900,10 +893,7 @@ async def process_inbound(
                         session,
                         workspace_id=integration.workspace_id,
                         integration_id=integration.id,
-                        external_event_id=(
-                            f"{REJECTED_KEY_PREFIX}"
-                            f"{hashlib.sha256(raw_body).hexdigest()}"
-                        ),
+                        external_event_id=(f"{REJECTED_KEY_PREFIX}{hashlib.sha256(raw_body).hexdigest()}"),
                         event_type=str(event.event_type or kind),
                         payload=payload,
                         signature_status="valid",
@@ -914,9 +904,7 @@ async def process_inbound(
                 # same malformed body repeated → already audited (dedup key);
                 # any other constraint violation is logged, not disguised.
                 if not _is_event_dedup_conflict(exc):
-                    logger.exception(
-                        "malformed-payload audit insert failed on a non-dedup constraint"
-                    )
+                    logger.exception("malformed-payload audit insert failed on a non-dedup constraint")
             return 200, {
                 "received": True,
                 "event_id": "",

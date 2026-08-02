@@ -39,6 +39,15 @@ describe('getApproval', () => {
     await getApproval(client, 'ws1', 'ap1');
     expect(client.request).toHaveBeenCalledWith('GET', '/api/v1/workspaces/ws1/approvals/ap1');
   });
+
+  it('encodes the approval id as one path segment', async () => {
+    const client = makeClient();
+    await getApproval(client, 'ws1', 'approval/with space');
+    expect(client.request).toHaveBeenCalledWith(
+      'GET',
+      '/api/v1/workspaces/ws1/approvals/approval%2Fwith%20space',
+    );
+  });
 });
 
 describe('approveApproval / rejectApproval', () => {

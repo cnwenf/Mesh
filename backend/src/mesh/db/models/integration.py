@@ -88,6 +88,10 @@ EVENT_PROCESS_STATUS_VALUES = (
     "failed",
 )
 
+# Immutable authorization snapshot for inbound ledger reads.  ``unknown`` is
+# the fail-closed shape for legacy, rejected, unmatched, or unparseable rows.
+EVENT_VISIBILITY_SCOPE_VALUES = ("workspace", "project", "unknown")
+
 # integrations.md §2.5 — subscription states: paused = human pause,
 # disabled = circuit breaker tripped (consecutive failures over threshold).
 SUBSCRIPTION_STATUS_VALUES = ("active", "paused", "disabled")
@@ -273,6 +277,12 @@ class IntegrationEvent(Base):
             f"process_status IN {EVENT_PROCESS_STATUS_VALUES!r}",
             name="integration_events_process_status",
         ),
+        CheckConstraint(
+            "(visibility_scope = 'workspace' AND project_id_snapshot IS NULL) "
+            "OR (visibility_scope = 'project' AND project_id_snapshot IS NOT NULL) "
+            "OR (visibility_scope = 'unknown' AND project_id_snapshot IS NULL)",
+            name="ck_event_visibility_scope",
+        ),
         ForeignKeyConstraint(
             ("workspace_id", "integration_id"),
             ("integrations.workspace_id", "integrations.id"),
@@ -288,6 +298,14 @@ class IntegrationEvent(Base):
             text("received_at DESC"),
         ),
         Index("idx_event_ws_received", "workspace_id", text("received_at DESC")),
+        Index(
+            "idx_event_visibility",
+            "workspace_id",
+            "integration_id",
+            "visibility_scope",
+            "project_id_snapshot",
+            text("received_at DESC"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -302,6 +320,10 @@ class IntegrationEvent(Base):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     signature_status: Mapped[str] = mapped_column(TEXT, nullable=False)
     process_status: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'received'"))
+    visibility_scope: Mapped[str] = mapped_column(TEXT, nullable=False, server_default=text("'unknown'"))
+    # No FK by design: the immutable audit snapshot survives binding/project
+    # deletion; non-manager reads still require a matching live project.
+    project_id_snapshot: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     received_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=text("now()")
     )

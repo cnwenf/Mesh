@@ -39,6 +39,19 @@ const AGENT = {
   profile: null,
 };
 
+const ROSTER_AGENT = {
+  ...AGENT,
+  id: 'member-agent-1',
+  display_name: '真实名册 Agent',
+  profile: {
+    id: 'agent-entity-1',
+    name: '真实名册 Agent',
+    description: null,
+    avatar_url: null,
+    is_active: true,
+  },
+};
+
 const PROJECT = { id: 'proj-1', name: 'INFRA', key: 'INF', status: 'active' };
 
 interface Recorded {
@@ -47,9 +60,18 @@ interface Recorded {
   body: unknown;
 }
 
-function setup(opts: { readonly bindings?: unknown[]; readonly status?: number } = {}): Recorded[] {
+function setup(
+  opts: {
+    readonly bindings?: unknown[];
+    readonly agents?: unknown[];
+    readonly projects?: unknown[];
+    readonly status?: number;
+  } = {},
+): Recorded[] {
   const calls: Recorded[] = [];
   const bindings = opts.bindings ?? [BINDING];
+  const agents = opts.agents ?? [AGENT];
+  const projects = opts.projects ?? [PROJECT];
   const status = opts.status ?? 200;
   const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -58,11 +80,16 @@ function setup(opts: { readonly bindings?: unknown[]; readonly status?: number }
     calls.push({ url, method, body });
     if (/\/integrations\/int-1\/bindings/.test(url) && method === 'GET')
       return fakeResponse({ body: { data: bindings, next_cursor: null } });
-    if (url.includes('/members')) return fakeResponse({ body: { data: [AGENT], next_cursor: null } });
-    if (url.includes('/projects')) return fakeResponse({ body: { data: [PROJECT], next_cursor: null } });
+    if (url.includes('/members'))
+      return fakeResponse({ body: { data: agents, next_cursor: null } });
+    if (url.includes('/projects'))
+      return fakeResponse({ body: { data: projects, next_cursor: null } });
     if (method === 'POST' && /\/integrations\/int-1\/bindings/.test(url)) {
       if (status !== 200)
-        return fakeResponse({ status, body: { error: { code: 'binding_conflict', message: 'conflict' } } });
+        return fakeResponse({
+          status,
+          body: { error: { code: 'binding_conflict', message: 'conflict' } },
+        });
       return fakeResponse({ body: { data: BINDING } });
     }
     if (method === 'DELETE') return fakeResponse({ status: 204 });
@@ -72,9 +99,17 @@ function setup(opts: { readonly bindings?: unknown[]; readonly status?: number }
   return calls;
 }
 
-function renderDrawer(kind: 'im_slack' | 'vcs_github' = 'im_slack', isAdmin = true) {
+function renderDrawer(
+  kind: 'im_slack' | 'im_dingtalk' | 'vcs_github' = 'im_slack',
+  isAdmin = true,
+) {
   return renderWithProviders(
-    <BindingDrawer workspaceId="ws-1" integrationId="int-1" integrationKind={kind} isAdmin={isAdmin} />,
+    <BindingDrawer
+      workspaceId="ws-1"
+      integrationId="int-1"
+      integrationKind={kind}
+      isAdmin={isAdmin}
+    />,
   );
 }
 
@@ -86,11 +121,56 @@ describe('BindingDrawer', () => {
     expect(screen.getByTestId('binding-agent-b-1').textContent).toBe('值班 Agent');
   });
 
+  it('uses agents.id from the real roster profile instead of members.id', async () => {
+    const calls = setup({
+      agents: [ROSTER_AGENT],
+      bindings: [{ ...BINDING, bound_agent_id: 'agent-entity-1' }],
+    });
+    renderDrawer('im_dingtalk');
+    await waitFor(() => expect(screen.getByTestId('binding-agent-b-1')).toBeInTheDocument());
+    expect(screen.getByTestId('binding-agent-b-1')).toHaveTextContent('真实名册 Agent');
+
+    await userEvent.click(screen.getByTestId('binding-create'));
+    await userEvent.type(screen.getByTestId('binding-external-ref'), 'cid-real-roster');
+    await userEvent.selectOptions(screen.getByTestId('binding-agent-select'), 'agent-entity-1');
+    await userEvent.click(screen.getByTestId('binding-submit'));
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'POST' && /\/bindings$/.test(call.url))).toBe(
+        true,
+      ),
+    );
+    const body = calls.find(
+      (call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url),
+    )?.body as Record<string, unknown>;
+    expect(body.bound_agent_id).toBe('agent-entity-1');
+    expect(body.bound_agent_id).not.toBe('member-agent-1');
+  });
+
   it('hides the create button for non-admins', async () => {
     setup();
     renderDrawer('im_slack', false);
     await waitFor(() => expect(screen.getByTestId('binding-row-b-1')).toBeInTheDocument());
     expect(screen.queryByTestId('binding-create')).toBeNull();
+  });
+
+  it('filters project bindings against the viewer-visible project listing', async () => {
+    setup({
+      bindings: [
+        BINDING,
+        {
+          ...BINDING,
+          id: 'b-private',
+          scope: 'project',
+          project_id: 'private-project',
+          external_ref: 'private-conversation',
+        },
+      ],
+      projects: [],
+    });
+    renderDrawer('im_dingtalk', false);
+    await waitFor(() => expect(screen.getByTestId('binding-row-b-1')).toBeInTheDocument());
+    expect(screen.queryByTestId('binding-row-b-private')).toBeNull();
+    expect(screen.queryByText('private-conversation')).toBeNull();
   });
 
   it('creates an IM binding with match config and project scope', async () => {
@@ -107,7 +187,9 @@ describe('BindingDrawer', () => {
     await userEvent.click(screen.getByTestId('binding-submit'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url)),
+        calls.some(
+          (call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url),
+        ),
       ).toBe(true),
     );
     const createCall = calls.find(
@@ -118,8 +200,30 @@ describe('BindingDrawer', () => {
     expect(body.scope).toBe('project');
     expect(body.project_id).toBe('proj-1');
     expect((body.match_config as Record<string, unknown>).trigger_on).toContain('mention');
-    expect((body.match_config as Record<string, unknown>).keyword_include).toEqual(['值班', '线上']);
+    expect((body.match_config as Record<string, unknown>).keyword_include).toEqual([
+      '值班',
+      '线上',
+    ]);
     expect(body.bound_agent_id).toBe('agent-1');
+  });
+
+  it('creates a DingTalk workspace binding with the exact scope/project XOR shape', async () => {
+    const calls = setup();
+    renderDrawer('im_dingtalk');
+    await waitFor(() => expect(screen.getByTestId('binding-create')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('binding-create'));
+    await userEvent.type(screen.getByTestId('binding-external-ref'), 'cid6EUvB2O8qVF2RYQtHTKEsg==');
+    await userEvent.click(screen.getByTestId('binding-submit'));
+    await waitFor(() =>
+      expect(calls.some((call) => call.method === 'POST' && /\/bindings$/.test(call.url))).toBe(
+        true,
+      ),
+    );
+    const body = calls.find(
+      (call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url),
+    )?.body as Record<string, unknown>;
+    expect(body.scope).toBe('workspace');
+    expect(body).not.toHaveProperty('project_id');
   });
 
   it('creates a VCS binding with events and branch pattern; empty agent = audit only', async () => {
@@ -133,7 +237,9 @@ describe('BindingDrawer', () => {
     await userEvent.click(screen.getByTestId('binding-submit'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url)),
+        calls.some(
+          (call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url),
+        ),
       ).toBe(true),
     );
     const createCall = calls.find(
@@ -159,7 +265,11 @@ describe('BindingDrawer', () => {
     await waitFor(() => expect(screen.getByTestId('binding-delete-b-1')).toBeInTheDocument());
     await userEvent.click(screen.getByTestId('binding-delete-b-1'));
     await waitFor(() =>
-      expect(calls.some((call) => call.url.endsWith('/integration-bindings/b-1') && call.method === 'DELETE')).toBe(true),
+      expect(
+        calls.some(
+          (call) => call.url.endsWith('/integration-bindings/b-1') && call.method === 'DELETE',
+        ),
+      ).toBe(true),
     );
   });
 
@@ -181,7 +291,10 @@ describe('BindingDrawer', () => {
 
   it('shows the error state on load failure', async () => {
     const impl = (async () =>
-      fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } })) as typeof fetch;
+      fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      })) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderDrawer();
     await waitFor(() => expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument());
@@ -191,7 +304,10 @@ describe('BindingDrawer', () => {
     const calls: Recorded[] = [];
     const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), method: init?.method ?? 'GET', body: undefined });
-      return fakeResponse({ status: 500, body: { error: { code: 'internal_error', message: 'boom' } } });
+      return fakeResponse({
+        status: 500,
+        body: { error: { code: 'internal_error', message: 'boom' } },
+      });
     }) as typeof fetch;
     vi.stubGlobal('fetch', impl);
     renderDrawer();
@@ -241,7 +357,9 @@ describe('BindingDrawer', () => {
     await userEvent.click(screen.getByTestId('binding-submit'));
     await waitFor(() =>
       expect(
-        calls.some((call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url)),
+        calls.some(
+          (call) => call.method === 'POST' && /\/integrations\/int-1\/bindings$/.test(call.url),
+        ),
       ).toBe(true),
     );
     const createCall = calls.find(

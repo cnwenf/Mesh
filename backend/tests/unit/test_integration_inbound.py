@@ -23,10 +23,13 @@ from mesh.integrations.inbound import REJECTED_KEY_PREFIX, process_inbound
 from tests.unit.integrations_support import (
     NOW,
     TEST_SIGNING_SECRET,
+    dingtalk_message_payload,
+    dingtalk_request,
     feishu_request,
     github_request,
     gitlab_request,
     make_binding,
+    seed_dingtalk_world,
     seed_world,
     slack_request,
 )
@@ -53,8 +56,13 @@ def _slack_message(text_body: str = "<@U_BOT> 值班看一下") -> dict:
 async def _run(session_factory, kind: str, body: bytes, headers: dict) -> tuple[int, dict]:
     async with session_factory() as session, session.begin():
         return await process_inbound(
-            session, kind=kind, raw_body=body, headers=headers,
-            signing_secret=TEST_SIGNING_SECRET, now=NOW, tolerance=TOLERANCE,
+            session,
+            kind=kind,
+            raw_body=body,
+            headers=headers,
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
+            tolerance=TOLERANCE,
         )
 
 
@@ -66,7 +74,10 @@ async def _run(session_factory, kind: str, body: bytes, headers: dict) -> tuple[
 async def test_slack_mention_dispatches_integration_execution(session_factory):
     world = await seed_world(session_factory)
     binding = await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
         provider_tenant_key="T_TEST",
     )
     body, headers = slack_request(world["secrets"]["slack_signing_secret"], _slack_message())
@@ -78,9 +89,11 @@ async def test_slack_mention_dispatches_integration_execution(session_factory):
     # materializes task_executions (covered by the e2e suite with a real
     # worker). Assert the §6.9 payload contract here.
     async with session_factory() as session:
-        enqueues = (await session.execute(
-            select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")
-        )).scalars().all()
+        enqueues = (
+            (await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")))
+            .scalars()
+            .all()
+        )
         assert len(enqueues) == 1
         event_payload = enqueues[0].payload
         assert event_payload["trigger"] == "integration"
@@ -100,7 +113,10 @@ async def test_slack_mention_dispatches_integration_execution(session_factory):
 async def test_duplicate_event_is_idempotent_200_deduped(session_factory):
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
         provider_tenant_key="T_TEST",
     )
     body, headers = slack_request(world["secrets"]["slack_signing_secret"], _slack_message())
@@ -110,9 +126,11 @@ async def test_duplicate_event_is_idempotent_200_deduped(session_factory):
     assert second[0] == 200
     assert second[1]["process_status"] == "deduped"
     async with session_factory() as session:
-        enqueues = (await session.execute(
-            select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")
-        )).scalars().all()
+        enqueues = (
+            (await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")))
+            .scalars()
+            .all()
+        )
         assert len(enqueues) == 1, "duplicate event must not enqueue twice (§6.9)"
 
 
@@ -140,9 +158,7 @@ async def test_invalid_signature_rejected_and_audited(session_factory):
 async def test_missing_signature_rejected(session_factory):
     await seed_world(session_factory)
     body = json.dumps(_slack_message()).encode()
-    status, payload = await _run(
-        session_factory, "im_slack", body, {"content-type": "application/json"}
-    )
+    status, payload = await _run(session_factory, "im_slack", body, {"content-type": "application/json"})
     assert status == 401
     assert payload["error"]["code"] == "invalid_signature"
 
@@ -150,9 +166,7 @@ async def test_missing_signature_rejected(session_factory):
 async def test_replay_window_rejects_stale_valid_signature(session_factory):
     world = await seed_world(session_factory)
     stale_ts = str(int(NOW.timestamp()) - 301)
-    body, headers = slack_request(
-        world["secrets"]["slack_signing_secret"], _slack_message(), ts=stale_ts
-    )
+    body, headers = slack_request(world["secrets"]["slack_signing_secret"], _slack_message(), ts=stale_ts)
     status, _ = await _run(session_factory, "im_slack", body, headers)
     assert status == 401
 
@@ -162,7 +176,10 @@ async def test_forgery_cannot_preoccupy_legitimate_event_id(session_factory):
     the later LEGITIMATE event with the same external id still dispatches."""
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
         provider_tenant_key="T_TEST",
     )
     # Forgery (bad signature, same body → same event_ts id).
@@ -188,6 +205,26 @@ async def test_unknown_team_is_indistinguishable_401(session_factory):
     assert resp["error"]["code"] == "invalid_signature"
 
 
+@pytest.mark.parametrize("robot_code", [None, "ding-wrong-robot"])
+async def test_dingtalk_requires_exact_nonempty_corp_robot_identity(session_factory, robot_code):
+    """A valid app signature cannot turn a missing/wrong robot identity
+    into a corp-wide callback route."""
+    await seed_dingtalk_world(session_factory, receive_mode="http")
+    payload = dingtalk_message_payload()
+    if robot_code is None:
+        payload.pop("robotCode")
+    else:
+        payload["robotCode"] = robot_code
+    body, headers = dingtalk_request(payload)
+
+    status, response = await _run(session_factory, "im_dingtalk", body, headers)
+
+    assert status == 401
+    assert response["error"]["code"] == "invalid_signature"
+    async with session_factory() as session:
+        assert (await session.execute(select(IntegrationEvent))).scalars().all() == []
+
+
 # ---------------------------------------------------------------------------
 # Disabled integration / unmatched audit
 # ---------------------------------------------------------------------------
@@ -196,7 +233,10 @@ async def test_unknown_team_is_indistinguishable_401(session_factory):
 async def test_disabled_integration_rejects_distribution(session_factory):
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
         provider_tenant_key="T_TEST",
     )
     async with session_factory() as session, session.begin():
@@ -230,8 +270,12 @@ async def test_unmatched_message_audited_without_execution(session_factory):
 async def test_binding_without_agent_audits_only(session_factory):
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
-        provider_tenant_key="T_TEST", bound_agent=False,
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
+        provider_tenant_key="T_TEST",
+        bound_agent=False,
     )
     body, headers = slack_request(world["secrets"]["slack_signing_secret"], _slack_message())
     status, payload = await _run(session_factory, "im_slack", body, headers)
@@ -251,12 +295,18 @@ async def test_multiple_bindings_suppress_dispatch(session_factory):
     contract holds and two DIFFERENT providers don't cross-match)."""
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_ONCALL",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
         provider_tenant_key="T_TEST",
     )
     # A second binding on a DIFFERENT channel must not receive this event.
     await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_OTHER",
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_OTHER",
         provider_tenant_key="T_TEST",
     )
     body, headers = slack_request(world["secrets"]["slack_signing_secret"], _slack_message())
@@ -284,9 +334,13 @@ async def test_feishu_url_verification_challenge_echoed(session_factory):
 
 async def test_feishu_challenge_bad_token_rejected(session_factory):
     await seed_world(session_factory)
-    body = json.dumps({
-        "challenge": "x", "token": "WRONG", "type": "url_verification",
-    }).encode()
+    body = json.dumps(
+        {
+            "challenge": "x",
+            "token": "WRONG",
+            "type": "url_verification",
+        }
+    ).encode()
     status, payload = await _run(session_factory, "im_feishu", body, {})
     assert status == 401
     assert payload["error"]["code"] == "invalid_challenge"
@@ -309,7 +363,10 @@ async def test_slack_url_verification_after_signature(session_factory):
 async def test_feishu_message_dispatches(session_factory):
     world = await seed_world(session_factory)
     await make_binding(
-        session_factory, world=world, provider="feishu", external_ref="oc_oncall",
+        session_factory,
+        world=world,
+        provider="feishu",
+        external_ref="oc_oncall",
         provider_tenant_key="tk-test",
     )
     payload = {
@@ -335,9 +392,11 @@ async def test_feishu_message_dispatches(session_factory):
     assert status == 200
     assert resp["process_status"] == "dispatched"
     async with session_factory() as session:
-        enqueues = (await session.execute(
-            select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")
-        )).scalars().all()
+        enqueues = (
+            (await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == "execution.enqueue")))
+            .scalars()
+            .all()
+        )
         assert len(enqueues) == 1
         assert enqueues[0].payload["trigger"] == "integration"
         assert enqueues[0].payload["task_spec"]["untrusted_context"]["provider"] == "feishu"
@@ -365,8 +424,12 @@ async def test_gitlab_token_verification(session_factory):
     world = await seed_world(session_factory)
     # GitLab events are routed through the repo binding (spec §3.2 「经绑定路由」).
     await make_binding(
-        session_factory, world=world, provider="gitlab", external_ref="acme/api",
-        provider_tenant_key="gitlab.com", bound_agent=False,
+        session_factory,
+        world=world,
+        provider="gitlab",
+        external_ref="acme/api",
+        provider_tenant_key="gitlab.com",
+        bound_agent=False,
     )
     payload = {
         "event_uuid": "gl-uuid-1",
@@ -393,15 +456,25 @@ async def test_gitlab_token_verification(session_factory):
 
 async def test_event_ingested_realtime_emitted(session_factory):
     world = await seed_world(session_factory)
+    await make_binding(
+        session_factory,
+        world=world,
+        provider="slack",
+        external_ref="C_ONCALL",
+        provider_tenant_key="T_TEST",
+        bound_agent=False,
+    )
     body, headers = slack_request(
         world["secrets"]["slack_signing_secret"],
         {**_slack_message(), "event": {**_slack_message()["event"], "event_ts": "99.1"}},
     )
     await _run(session_factory, "im_slack", body, headers)
     async with session_factory() as session:
-        realtime_rows = (await session.execute(
-            select(OutboxEvent).where(OutboxEvent.event_type == "realtime.publish")
-        )).scalars().all()
+        realtime_rows = (
+            (await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == "realtime.publish")))
+            .scalars()
+            .all()
+        )
         events = {row.payload["event"] for row in realtime_rows}
         assert "integration.event_ingested" in events
         channels = {row.payload["channel"] for row in realtime_rows}

@@ -7,11 +7,13 @@ with per-cycle config refresh (rotation self-heal).
 
     stream worker (supervised asyncio task inside mesh.workers — same
     process family as the outbox relay, NOT a new compose service)
-      → per active im_dingtalk integration with receive_mode='stream':
+      → per active im_dingtalk app_key with receive_mode='stream':
         advisory-lock single-instance mutex (pg_try_advisory_lock on
-        hashtext('dingtalk_stream:'||integration_id)); integrations that
-        SHARE one app_key share ONE physical connection (platform cap:
-        50 connections per app — frames route by robotCode)
+        hashtext('dingtalk_stream_app:'||app_key)); every integration that
+        SHARES the app_key is acquired atomically and uses ONE physical
+        connection (platform cap: 50 connections per app — frames route by
+        the exact (chatbotCorpId, robotCode) pair and ambiguous/missing
+        identities fail closed)
       → POST {gateway}/v1.0/gateway/connections/open
         {clientId, clientSecret(in-memory plaintext only), subscriptions
          [CALLBACK /v1.0/im/bot/messages/get, CALLBACK
@@ -52,7 +54,7 @@ production boot triggers a startup warning + audit entry.
 from __future__ import annotations
 
 import asyncio
-import contextlib
+import hashlib
 import json
 import logging
 import random
@@ -66,9 +68,14 @@ from urllib.parse import quote
 
 import httpx
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from mesh.db.constraints import violates as _violates_constraint
 from mesh.db.models.integration import Integration
+from mesh.db.models.runtime import Approval
+from mesh.db.tenant import set_tenant_context
+from mesh.errors import ValidationError
 from mesh.integrations.dingtalk import (
     GATEWAY_OPEN_PATH,
     STREAM_CARD_TOPIC,
@@ -77,7 +84,12 @@ from mesh.integrations.dingtalk import (
     resolve_gateway_base,
     stream_user_agent,
 )
-from mesh.integrations.ingest import ingest_verified_event
+from mesh.integrations.dingtalk_cards import (
+    extract_dingtalk_action,
+    handle_dingtalk_card_callback,
+    parse_out_track_context,
+)
+from mesh.integrations.ingest import audit_payload, ingest_verified_event, store_event
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, redact_text
 
@@ -112,6 +124,10 @@ class StreamOpenError(Exception):
 
 class StreamEndpointInsecure(Exception):
     """The gateway returned a non-wss endpoint — refused (anti-downgrade)."""
+
+
+class StreamFrameMalformed(Exception):
+    """A wire frame could not be decoded into a JSON object."""
 
 
 def compute_backoff(
@@ -149,9 +165,7 @@ def _reconnect_config(integration: Integration) -> tuple[float, float, float]:
         reconnect = {}
     base = float(reconnect.get("base_seconds") or DEFAULT_BACKOFF_BASE_SECONDS)
     maximum = float(reconnect.get("max_seconds") or DEFAULT_BACKOFF_MAX_SECONDS)
-    heartbeat = float(
-        reconnect.get("heartbeat_timeout_seconds") or DEFAULT_HEARTBEAT_TIMEOUT_SECONDS
-    )
+    heartbeat = float(reconnect.get("heartbeat_timeout_seconds") or DEFAULT_HEARTBEAT_TIMEOUT_SECONDS)
     return base, maximum, heartbeat
 
 
@@ -171,9 +185,7 @@ async def _default_ws_connect(url: str, *, ssl_context: ssl.SSLContext):
     certificate verification (``ssl_context`` — never verify=False)."""
     import websockets
 
-    return await websockets.connect(
-        url, ssl=ssl_context, max_size=1024 * 1024, open_timeout=10
-    )
+    return await websockets.connect(url, ssl=ssl_context, max_size=1024 * 1024, open_timeout=10)
 
 
 class DingTalkStreamClient:
@@ -245,9 +257,7 @@ class DingTalkStreamClient:
             raise StreamOpenError(resp.status_code, "connections/open missing endpoint/ticket")
         if not endpoint.startswith("wss://"):
             # Anti-downgrade: a non-wss endpoint is refused + alerted.
-            logger.error(
-                "dingtalk gateway returned a non-wss endpoint — refused (anti-downgrade)"
-            )
+            logger.error("dingtalk gateway returned a non-wss endpoint — refused (anti-downgrade)")
             raise StreamEndpointInsecure(endpoint)
         url = f"{endpoint}?ticket={quote(ticket, safe='')}"
         self._ws = await self._ws_connect(url, ssl_context=self._ssl_context)
@@ -264,8 +274,10 @@ class DingTalkStreamClient:
         try:
             frame = json.loads(raw)
         except (ValueError, json.JSONDecodeError):
-            return {"specVersion": "1.0", "type": "SYSTEM", "headers": {"topic": "malformed"}}
-        return frame if isinstance(frame, dict) else None
+            raise StreamFrameMalformed("malformed stream frame: invalid JSON") from None
+        if not isinstance(frame, dict):
+            raise StreamFrameMalformed("malformed stream frame: expected JSON object")
+        return frame
 
     async def send_ack(self, frame: dict[str, Any], data: Any) -> None:
         if self._ws is None:
@@ -289,12 +301,11 @@ class DingTalkStreamClient:
 class StreamManager:
     """Reconciles DingTalk Stream connections for the whole deployment.
 
-    Runs inside mesh.workers as a supervised task. Each scan: load active
-    stream-mode integrations, take the per-integration advisory lock
-    (single-instance mutex), group locked integrations by app_key (one
-    physical connection per app), and serve each group on a dedicated task
-    with reconnect/backoff. Credential rotation / disable / deletion close
-    the connection (reconciled every scan).
+    Runs inside mesh.workers as a supervised task. Each scan groups active
+    stream-mode integrations by app_key, takes one advisory lock for the whole
+    group (single-instance, all-or-nothing ownership), and serves it on a
+    dedicated task with reconnect/backoff. Credential rotation / disable /
+    deletion close the connection (reconciled every scan).
     """
 
     def __init__(
@@ -320,9 +331,17 @@ class StreamManager:
         self._rng = rng or random.Random()
         self._now = now_fn or (lambda: datetime.now(UTC))
         self._groups: dict[str, asyncio.Task] = {}
+        # Lock-close fallbacks scheduled by a task's done callback. A group
+        # cancelled before its coroutine runs never enters ``_serve_group``'s
+        # finally block, so these tasks are tracked and drained synchronously
+        # by reconciliation/shutdown rather than being fire-and-forget.
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
         self._group_signals: dict[str, asyncio.Event] = {}
-        # (app_key, secret fingerprint) per running group — rotation detection.
-        self._group_secrets: dict[str, str] = {}
+        # app_key → durable connection fingerprint.  Credential rotation and
+        # an explicit reconnect request both change this value, so the lock
+        # owning worker closes and rebuilds the physical connection even when
+        # the API request was served by another process.
+        self._group_fingerprints: dict[str, str] = {}
         # Integration ids currently served by THIS manager — the serving
         # group holds their advisory locks on dedicated sessions; the scan
         # must not try to re-acquire them (it would fail and then close the
@@ -330,11 +349,14 @@ class StreamManager:
         self._served_ids: set[uuid.UUID] = set()
         self._group_integrations: dict[str, list[Integration]] = {}
         self._gateway_warned = False
-        # Per-frame failure diagnostics (R2: failures never disappear). The
-        # counter is exact in-memory; persistence into stream_state is
-        # throttled so an error storm cannot write-storm the ledger.
-        self._frame_error_count = 0
-        self._last_frame_error_persist = 0.0
+        self._ownership_conflicts_warned: set[str] = set()
+        # Per-app failure diagnostics (R2: failures never disappear). Counts
+        # and throttles are group-local so one noisy app cannot suppress a
+        # second app's first durable marker. Throttled tails are flushed when
+        # the frame loop exits.
+        self._frame_error_counts: dict[str, int] = {}
+        self._last_frame_error_persist: dict[str, float] = {}
+        self._pending_frame_errors: dict[str, tuple[int, str, datetime]] = {}
         # §6.16 defense-in-depth: decrypted app_secret plaintexts are
         # registered here and scrubbed from every error log line this
         # manager emits (the wire-level guarantee is "never log the body";
@@ -362,13 +384,18 @@ class StreamManager:
             await self.shutdown()
 
     async def shutdown(self) -> None:
+        tasks = list(self._groups.values())
         for event in self._group_signals.values():
             event.set()
-        for task in self._groups.values():
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await self._drain_cleanup_tasks()
         self._groups.clear()
         self._group_signals.clear()
-        self._group_secrets.clear()
+        self._group_fingerprints.clear()
+        self._group_integrations.clear()
         self._served_ids.clear()
 
     # -- scan + reconciliation ----------------------------------------------
@@ -404,113 +431,274 @@ class StreamManager:
 
         active_groups = _by_app(all_active)
         new_groups = _by_app(locked)
+        # A lock returned by _load_locked_integrations is provisional until a
+        # supervised group task is registered. Any cancellation/exception in
+        # between must release it synchronously.
+        untransferred_groups = dict(new_groups)
 
-        # Stop groups whose app_key vanished / secret rotated.
-        for app_key in list(self._groups.keys()):
-            current = active_groups.get(app_key)
-            fingerprint = self._secrets_fingerprint(current or [])
-            if not current or self._group_secrets.get(app_key) != fingerprint:
-                logger.info(
-                    "dingtalk stream group %s closing (disabled/deleted/rotated)",
-                    app_key,
+        try:
+            # Stop groups whose app_key vanished / secret or routing identity rotated.
+            retiring_tasks: list[asyncio.Future] = []
+            for app_key in list(self._groups.keys()):
+                current = active_groups.get(app_key)
+                fingerprint = self._connection_fingerprint(current or [])
+                if not current or self._group_fingerprints.get(app_key) != fingerprint:
+                    logger.info(
+                        "dingtalk stream group %s closing (disabled/deleted/rotated)",
+                        app_key,
+                    )
+                    self._group_signals[app_key].set()
+                    task = self._groups.pop(app_key, None)
+                    if task is not None and not task.done():
+                        # A signal alone cannot interrupt an in-flight websocket
+                        # recv until its heartbeat timeout. Cancellation reaches
+                        # the group's finally block immediately, closes the
+                        # physical socket, and releases its advisory lock.
+                        task.cancel()
+                    if task is not None:
+                        retiring_tasks.append(task)
+                    self._group_signals.pop(app_key, None)
+                    self._group_fingerprints.pop(app_key, None)
+                    self._served_ids.difference_update(i.id for i in (current or []))
+
+            # Cancellation is part of reconciliation, not detached cleanup.
+            if retiring_tasks:
+                await asyncio.gather(*retiring_tasks, return_exceptions=True)
+                await self._drain_cleanup_tasks()
+
+            # Start groups we do not serve yet (from the newly locked subset).
+            for app_key, integrations in new_groups.items():
+                if app_key in self._groups:
+                    continue
+                signal = asyncio.Event()
+                self._group_signals[app_key] = signal
+                self._group_fingerprints[app_key] = self._connection_fingerprint(integrations)
+                self._served_ids.update(i.id for i in integrations)
+                self._group_integrations[app_key] = integrations
+                task = asyncio.create_task(
+                    self._serve_group(app_key, integrations, gateway_base, signal),
+                    name=f"dingtalk-stream:{app_key}",
                 )
-                self._group_signals[app_key].set()
-                self._groups.pop(app_key, None)
-                self._group_signals.pop(app_key, None)
-                self._group_secrets.pop(app_key, None)
-                self._served_ids.difference_update(
-                    i.id for i in (current or [])
+                # H1 crash recovery: whatever ends the group task (clean close,
+                # cancel, or an escaping exception), reap ALL bookkeeping + the
+                # advisory-lock sessions so the next scan re-locks and rebuilds.
+                task.add_done_callback(
+                    lambda exited, key=app_key, owned=integrations: self._on_group_exit(key, exited, owned)
                 )
+                self._groups[app_key] = task
+                untransferred_groups.pop(app_key, None)
+        finally:
+            await self._release_group_locks(untransferred_groups)
 
-        # Start groups we do not serve yet (from the newly locked subset).
-        for app_key, integrations in new_groups.items():
-            if app_key in self._groups:
-                continue
-            signal = asyncio.Event()
-            self._group_signals[app_key] = signal
-            self._group_secrets[app_key] = self._secrets_fingerprint(integrations)
-            self._served_ids.update(i.id for i in integrations)
-            self._group_integrations[app_key] = integrations
-            task = asyncio.create_task(
-                self._serve_group(app_key, integrations, gateway_base, signal),
-                name=f"dingtalk-stream:{app_key}",
-            )
-            # H1 crash recovery: whatever ends the group task (clean close,
-            # cancel, or an escaping exception), reap ALL bookkeeping + the
-            # advisory-lock sessions so the next scan re-locks and rebuilds
-            # the group — a dead group must never strand the app_key.
-            task.add_done_callback(lambda _t, key=app_key: self._on_group_exit(key))
-            self._groups[app_key] = task
+    def _connection_fingerprint(self, integrations: list[Integration]) -> str:
+        """Return the durable inputs that require a physical reconnect.
 
-    def _secrets_fingerprint(self, integrations: list[Integration]) -> str:
-        """Rotation detection: the ciphertext refs (never the plaintext)."""
+        The fingerprint deliberately contains ciphertext references (never
+        plaintext credentials), the immutable per-socket message routing
+        identity, and the opaque reconnect request id written by the management
+        API. Because every worker reads these values from PostgreSQL during
+        reconciliation, credential, routing, and explicit reconnect changes
+        work across processes.
+        """
         refs = []
         for integration in sorted(integrations, key=lambda i: str(i.id)):
             config = dict(integration.config or {})
-            refs.append(f"{integration.id}:{config.get('app_secret_ref') or integration.secret_ref}")
+            reconnect_request_id = (integration.stream_state or {}).get("reconnect_request_id")
+            refs.append(
+                json.dumps(
+                    [
+                        str(integration.id),
+                        str(config.get("app_secret_ref") or integration.secret_ref or ""),
+                        str(config.get("corp_id") or ""),
+                        str(config.get("robot_code") or config.get("app_key") or ""),
+                        list(_reconnect_config(integration)),
+                        str(reconnect_request_id or ""),
+                    ],
+                    separators=(",", ":"),
+                )
+            )
         return "|".join(refs)
 
-    def _on_group_exit(self, app_key: str) -> None:
+    def _on_group_exit(
+        self,
+        app_key: str,
+        task: asyncio.Future,
+        integrations: list[Integration],
+    ) -> None:
         """Reap a finished group task: clear bookkeeping and close the
         advisory-lock sessions (releasing the locks) so the next scan
-        re-acquires and rebuilds the group — crash-safe lifecycle (H1)."""
-        self._groups.pop(app_key, None)
-        self._group_signals.pop(app_key, None)
-        self._group_secrets.pop(app_key, None)
-        integrations = self._group_integrations.pop(app_key, [])
-        self._served_ids.difference_update(i.id for i in integrations)
+        re-acquires and rebuilds the group — crash-safe lifecycle (H1).
+
+        A done callback may run after reconciliation has installed a
+        replacement for the same app key.  Registry cleanup is therefore
+        identity-guarded: a stale task can clean only its own lock objects,
+        never the replacement's task, signals, fingerprint, or served ids.
+        """
+        current = self._groups.get(app_key)
+        replacement_active = current is not None and current is not task
+        if current is task:
+            self._groups.pop(app_key, None)
+            self._group_signals.pop(app_key, None)
+            self._group_fingerprints.pop(app_key, None)
+        if self._group_integrations.get(app_key) is integrations:
+            self._group_integrations.pop(app_key, None)
+        if not replacement_active:
+            owned_elsewhere = {item.id for rows in self._group_integrations.values() for item in rows}
+            self._served_ids.difference_update(
+                item.id for item in integrations if item.id not in owned_elsewhere
+            )
         for integration in integrations:
             hold = getattr(integration, "_lock_session", None)
             if hold is None:
                 continue
             integration._lock_session = None  # type: ignore[attr-defined]
             try:
-                asyncio.get_running_loop().create_task(hold.close())
+                cleanup = asyncio.get_running_loop().create_task(self._release_lock_session(app_key, hold))
             except RuntimeError:
                 pass  # loop gone (process shutdown) — nothing to release
+            else:
+                self._cleanup_tasks.add(cleanup)
+                cleanup.add_done_callback(self._cleanup_tasks.discard)
+
+    async def _drain_cleanup_tasks(self) -> None:
+        """Wait for every fallback lock close scheduled by group callbacks."""
+        # Let done callbacks of just-gathered group tasks enqueue their cleanup
+        # before taking the first snapshot.
+        await asyncio.sleep(0)
+        while self._cleanup_tasks:
+            await asyncio.gather(*tuple(self._cleanup_tasks), return_exceptions=True)
+            await asyncio.sleep(0)
+
+    async def _release_group_locks(self, groups: dict[str, list[Integration]]) -> None:
+        """Release provisional app-key locks not owned by group tasks."""
+        for app_key, integrations in groups.items():
+            holder = next(
+                (item for item in integrations if getattr(item, "_lock_session", None) is not None),
+                None,
+            )
+            if holder is None:
+                continue
+            lock_session = holder._lock_session  # type: ignore[attr-defined]
+            holder._lock_session = None  # type: ignore[attr-defined]
+            await self._release_lock_session(app_key, lock_session)
+
+    @staticmethod
+    async def _release_lock_session(app_key: str, lock_session) -> None:
+        """Explicitly unlock before returning a pooled DB session.
+
+        PostgreSQL session-level advisory locks survive transaction rollback;
+        merely closing an AsyncSession can return the same physical connection
+        to SQLAlchemy's pool with the lock still held.
+        """
+        try:
+            await lock_session.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:key))"),
+                {"key": f"dingtalk_stream_app:{app_key}"},
+            )
+        except Exception:  # noqa: BLE001 — close still releases a real connection
+            logger.exception("dingtalk stream: advisory unlock failed during cleanup")
+        try:
+            await lock_session.close()
+        except Exception:  # noqa: BLE001 — cleanup is best-effort on broken connections
+            logger.exception("dingtalk stream: lock session close failed during cleanup")
 
     async def _load_locked_integrations(self) -> tuple[list[Integration], list[Integration]]:
         """Returns ``(all_active_stream, newly_locked)``.
 
         ``all_active_stream``: every active stream-mode integration (the
         reconciliation truth — includes integrations this manager already
-        serves). ``newly_locked``: the subset this process just won the
-        advisory lock for (single-instance mutex; held on a dedicated
-        session for the connection's lifetime, released on close).
-        Already-served integrations are never re-locked here — their locks
-        live on the serving group's session.
+        serves). ``newly_locked``: complete app-key groups for which this
+        process just won the advisory lock (single-instance mutex; one
+        dedicated session per app key for the connection's lifetime).
+        Group-level ownership is all-or-nothing, so two workers cannot split
+        integrations sharing an app key and open duplicate physical sockets.
+        Already-served groups are never re-locked here.
         """
         async with self._session_factory() as session:
             rows = (
-                await session.execute(
-                    select(Integration).where(
-                        Integration.kind == "im_dingtalk",
-                        Integration.status == "active",
-                        Integration.deleted_at.is_(None),
+                (
+                    await session.execute(
+                        select(Integration).where(
+                            Integration.kind == "im_dingtalk",
+                            Integration.status == "active",
+                            Integration.deleted_at.is_(None),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             active = [
                 integration
                 for integration in rows
                 if str((integration.config or {}).get("receive_mode") or "") == "stream"
             ]
-        kept: list[Integration] = []
-        for integration in active:
-            if integration.id in self._served_ids:
-                continue
-            hold = self._session_factory()
-            acquired = (
-                await hold.execute(
-                    text("SELECT pg_try_advisory_lock(hashtext(:key))"),
-                    {"key": f"dingtalk_stream:{integration.id}"},
+            owner_by_app: dict[str, uuid.UUID] = {}
+            for app_key in {str((integration.config or {}).get("app_key") or "") for integration in active}:
+                if app_key == "":
+                    continue
+                owner = await session.scalar(
+                    text("SELECT mesh_dingtalk_app_owner_workspace(:app_key)"),
+                    {"app_key": app_key},
                 )
-            ).scalar_one()
-            if acquired:
-                integration._lock_session = hold  # type: ignore[attr-defined]
-                kept.append(integration)
-            else:
-                await hold.close()
+                if owner is not None:
+                    owner_by_app[app_key] = uuid.UUID(str(owner))
+        filtered_active: list[Integration] = []
+        conflicted_apps: set[str] = set()
+        for integration in active:
+            app_key = str((integration.config or {}).get("app_key") or "")
+            owner_workspace = owner_by_app.get(app_key)
+            if owner_workspace is not None and integration.workspace_id != owner_workspace:
+                conflicted_apps.add(app_key)
+                continue
+            filtered_active.append(integration)
+        for app_key in sorted(conflicted_apps - self._ownership_conflicts_warned):
+            logger.error(
+                "AUDIT: ignored a foreign-workspace DingTalk integration for owned app_key=%s",
+                app_key,
+            )
+        self._ownership_conflicts_warned.intersection_update(conflicted_apps)
+        self._ownership_conflicts_warned.update(conflicted_apps)
+        active = filtered_active
+        groups: dict[str, list[Integration]] = {}
+        for integration in active:
+            app_key = str((integration.config or {}).get("app_key") or "")
+            if app_key:
+                groups.setdefault(app_key, []).append(integration)
+
+        kept: list[Integration] = []
+        acquired_groups: dict[str, list[Integration]] = {}
+        try:
+            for app_key, integrations in sorted(groups.items()):
+                integrations.sort(key=lambda item: str(item.id))
+                if any(integration.id in self._served_ids for integration in integrations):
+                    continue
+                hold = self._session_factory()
+                try:
+                    acquired = (
+                        await hold.execute(
+                            text("SELECT pg_try_advisory_lock(hashtext(:key))"),
+                            {"key": f"dingtalk_stream_app:{app_key}"},
+                        )
+                    ).scalar_one()
+                except BaseException:
+                    # The query may have reached PostgreSQL before client-side
+                    # cancellation/result handling failed. Explicit unlock is
+                    # safe whether acquisition succeeded or not; close alone
+                    # can return a still-locked physical connection to pool.
+                    await self._release_lock_session(app_key, hold)
+                    raise
+                if acquired:
+                    # The first row owns the group's single lock session. The
+                    # entire list travels together into _serve_group.
+                    integrations[0]._lock_session = hold  # type: ignore[attr-defined]
+                    acquired_groups[app_key] = integrations
+                    kept.extend(integrations)
+                else:
+                    await hold.close()
+        except BaseException:
+            await self._release_group_locks(acquired_groups)
+            raise
         return active, kept
 
     # -- group serve loop ----------------------------------------------------
@@ -543,34 +731,57 @@ class StreamManager:
         try:
             while not signal.is_set():
                 await self._refresh_configs(integrations)
+                # The reconnect policy is app/socket scoped. Admission keeps
+                # sibling values identical; recompute after every refresh so
+                # a hot update is effective in this cycle too.
+                base, maximum, heartbeat = _reconnect_config(integrations[0])
+                route_identities = [
+                    (
+                        str((item.config or {}).get("corp_id") or ""),
+                        str(
+                            (item.config or {}).get("robot_code") or (item.config or {}).get("app_key") or ""
+                        ),
+                    )
+                    for item in integrations
+                ]
+                decrypted_secrets = [
+                    _decrypt_app_secret(item, self._settings.jwt_secret) for item in integrations
+                ]
+                reconnect_policies = [_reconnect_config(item) for item in integrations]
+                group_configuration_valid = (
+                    all(corp_id and robot_code for corp_id, robot_code in route_identities)
+                    and len(set(route_identities)) == len(route_identities)
+                    and all(secret is not None for secret in decrypted_secrets)
+                    and len(set(decrypted_secrets)) == 1
+                    and len(set(reconnect_policies)) == 1
+                )
                 # M3: undecryptable app_secret (rotated ciphertext, revoked
                 # key) — the credential equivalent of "signature invalid".
                 # The group STAYS ALIVE: DOWN + capped backoff, re-trying
                 # decryption each cycle so a rotation to a valid ciphertext
                 # reconnects without a scan round-trip; the DOWN broadcast
                 # fires ONCE (transition-only) — no outbox/realtime flood.
-                app_secret = _decrypt_app_secret(integration, self._settings.jwt_secret)
-                if not app_secret:
+                app_secret = decrypted_secrets[0] if group_configuration_valid else None
+                if app_secret is None:
                     if not secret_was_bad:
                         message, _hits = redact_text(
-                            "dingtalk stream: undecryptable app_secret for "
-                            f"app_key={app_key} — down + backoff, retrying "
-                            "decryption each cycle (zero ingestion until fixed)",
+                            "dingtalk stream: invalid shared-app credential, routing, "
+                            "or reconnect "
+                            f"configuration for app_key={app_key} — down + backoff "
+                            "(zero ingestion until fixed)",
                             self._redact_values,
                         )
                         logger.error(message)
                         secret_was_bad = True
-                    await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
-                    await self._interruptible_sleep(
-                        compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                        signal,
-                    )
+                    delay = compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng)
+                    await self._mark_group(integrations, STATE_DOWN, backoff_seconds=delay)
+                    await self._interruptible_sleep(delay, signal)
                     attempt += 1
                     continue
                 if secret_was_bad:
                     logger.info(
-                        "dingtalk stream: app_secret for app_key=%s decrypts "
-                        "again — reconnecting",
+                        "dingtalk stream: shared app configuration for app_key=%s "
+                        "is valid again — reconnecting",
                         app_key,
                     )
                     secret_was_bad = False
@@ -602,11 +813,9 @@ class StreamManager:
                         self._redact_values,
                     )
                     logger.exception(message)
-                    await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
-                    await self._interruptible_sleep(
-                        compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                        signal,
-                    )
+                    delay = compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng)
+                    await self._mark_group(integrations, STATE_DOWN, backoff_seconds=delay)
+                    await self._interruptible_sleep(delay, signal)
                     attempt += 1
                     continue
                 if signal.is_set():
@@ -622,17 +831,14 @@ class StreamManager:
         finally:
             if client is not None:
                 await client.close()
-            for item in integrations:
-                lock_session = getattr(item, "_lock_session", None)
-                if lock_session is not None:
-                    try:
-                        await lock_session.execute(
-                            text("SELECT pg_advisory_unlock(hashtext(:key))"),
-                            {"key": f"dingtalk_stream:{item.id}"},
-                        )
-                    except Exception:  # noqa: BLE001 — unlock is best-effort
-                        pass
-                    await lock_session.close()
+            lock_holder = next(
+                (item for item in integrations if getattr(item, "_lock_session", None) is not None),
+                None,
+            )
+            if lock_holder is not None:
+                lock_session = lock_holder._lock_session  # type: ignore[attr-defined]
+                await self._release_lock_session(app_key, lock_session)
+                lock_holder._lock_session = None  # type: ignore[attr-defined]
 
     async def _serve_once(
         self,
@@ -648,15 +854,13 @@ class StreamManager:
         REACHED CONNECTED (caller resets the backoff counter — M2); False
         when the open itself failed (consecutive-failure backoff grows).
         Exceptions escape to the crash-safe supervisor in _serve_group."""
-        await self._mark_group(integrations, STATE_RECONNECTING, attempt, base, maximum)
+        await self._mark_group(integrations, STATE_RECONNECTING, backoff_seconds=0)
         try:
             await client.open_connection()
         except StreamEndpointInsecure:
-            await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
-            await self._interruptible_sleep(
-                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                signal,
-            )
+            delay = compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng)
+            await self._mark_group(integrations, STATE_DOWN, backoff_seconds=delay)
+            await self._interruptible_sleep(delay, signal)
             return False
         except (StreamOpenError, httpx.HTTPError, OSError) as exc:
             message, _hits = redact_text(
@@ -664,25 +868,27 @@ class StreamManager:
                 self._redact_values,
             )
             logger.error(message)
-            await self._mark_group(integrations, STATE_DOWN, attempt, base, maximum)
-            await self._interruptible_sleep(
-                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                signal,
-            )
+            delay = compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng)
+            await self._mark_group(integrations, STATE_DOWN, backoff_seconds=delay)
+            await self._interruptible_sleep(delay, signal)
             return False
-        await self._mark_group(integrations, STATE_CONNECTED, 0, base, maximum)
-        immediate_reconnect = await self._frame_loop(
-            client, integrations, heartbeat, signal
-        )
-        await client.close()
+        # Once open_connection succeeds, this cycle owns a physical socket.
+        # Close it on every exit path — including a CONNECTED state/outbox
+        # write failure before the frame loop starts — so a retry can never
+        # overwrite client._ws and orphan a second live consumer.
+        try:
+            await self._mark_group(integrations, STATE_CONNECTED, backoff_seconds=0)
+            immediate_reconnect = await self._frame_loop(client, integrations, heartbeat, signal)
+        finally:
+            await client.close()
         if not immediate_reconnect and not signal.is_set():
             # Connection dropped (close/heartbeat timeout) — back off before
             # the next cycle (the counter itself is reset by the caller
             # because this cycle did connect — M2).
-            await self._interruptible_sleep(
-                compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng),
-                signal,
-            )
+            # This cycle connected, so the drop starts at the first rung.
+            delay = compute_backoff(0, base=base, maximum=maximum, rng=self._rng)
+            await self._mark_group(integrations, STATE_RECONNECTING, backoff_seconds=delay)
+            await self._interruptible_sleep(delay, signal)
         return True  # reached CONNECTED (disconnect topic ⇒ immediate redo)
 
     async def _frame_loop(
@@ -692,18 +898,43 @@ class StreamManager:
         heartbeat: float,
         signal: asyncio.Event,
     ) -> bool:
+        try:
+            return await self._consume_frames(client, integrations, heartbeat, signal)
+        finally:
+            # Persist the latest throttled count/reason even when the socket
+            # closes before another 30-second persistence window begins.
+            await self._flush_frame_errors(integrations)
+
+    async def _consume_frames(
+        self,
+        client: DingTalkStreamClient,
+        integrations: list[Integration],
+        heartbeat: float,
+        signal: asyncio.Event,
+    ) -> bool:
         """Consume frames until close/heartbeat-timeout/disconnect. Returns
         True when the caller should reconnect IMMEDIATELY (disconnect frame)."""
-        by_robot_code = {
-            str((i.config or {}).get("robot_code") or (i.config or {}).get("app_key") or ""): i
-            for i in integrations
-        }
+        by_message_identity: dict[tuple[str, str], list[Integration]] = {}
+        for integration in integrations:
+            config = integration.config or {}
+            identity = (
+                str(config.get("corp_id") or ""),
+                str(config.get("robot_code") or config.get("app_key") or ""),
+            )
+            by_message_identity.setdefault(identity, []).append(integration)
         last_persist = 0.0
         while not signal.is_set():
             try:
                 frame = await client.recv(timeout=heartbeat)
             except TimeoutError:
                 logger.warning("dingtalk stream heartbeat timeout — reconnecting")
+                return False
+            except StreamFrameMalformed as exc:
+                # No callback identity exists at this layer, so the frame
+                # cannot enter an integration ledger or be ACKed safely.
+                # Persist at app-group level before reconnecting; redelivery
+                # remains the platform's recovery path.
+                await self._record_frame_error(integrations, exc, force_persist=True)
                 return False
             except Exception:  # noqa: BLE001 — socket error ⇒ reconnect
                 return False
@@ -732,13 +963,23 @@ class StreamManager:
                         ping_data = frame_payload.get("data")
                     await client.send_ack(frame, ping_data)
                 elif frame_type == "CALLBACK" and topic == STREAM_MESSAGE_TOPIC:
-                    await self._ingest_message_frame(integrations, by_robot_code, frame)
-                    # ACK AFTER the ingest transaction commits.
-                    await client.send_ack(frame, "received")
+                    safe_to_ack = await self._ingest_message_frame(integrations, by_message_identity, frame)
+                    # ACK only after either the ingest/rejected-ledger
+                    # transaction commits or an unattributable frame error is
+                    # durably recorded for the whole app group. If diagnostic
+                    # persistence fails, leave the frame un-ACKed so platform
+                    # redelivery gives us another chance to retain it.
+                    if safe_to_ack:
+                        await client.send_ack(frame, "received")
                 elif frame_type == "CALLBACK" and topic == STREAM_CARD_TOPIC:
-                    # Card authorization chain — MES-89 wires the handler.
-                    logger.info("dingtalk stream: card callback frame received (audit only)")
-                    await client.send_ack(frame, "received")
+                    lifecycle = await self._handle_card_frame(integrations, frame)
+                    # ACK only after the callback transaction (including a
+                    # denial audit) commits. The lifecycle body is the card
+                    # writeback; exceptions/non-lifecycle errors stay
+                    # un-ACKed for platform redelivery.
+                    await client.send_ack(frame, lifecycle)
+                elif frame_type == "CALLBACK":
+                    raise ValueError(f"unsupported callback topic: {topic or '<missing>'}")
             except Exception as exc:  # noqa: BLE001 — isolate per-frame failures
                 message, _hits = redact_text(
                     "dingtalk stream: frame handling failed — frame skipped "
@@ -771,54 +1012,194 @@ class StreamManager:
                         pass
         return False
 
+    async def _handle_card_frame(
+        self, integrations: list[Integration], frame: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Authorize and execute a card click on a shared app socket.
+
+        ``outTrackId`` anchors the approval/workspace while ``corpId``
+        anchors the external tenant. A shared app may have multiple routes
+        inside its owning workspace; any exact-corp sibling is equivalent
+        for the existing authorization chain, but a missing/mismatched
+        identity fails closed.
+        """
+        payload = frame.get("data")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise ValueError("unparseable card callback payload") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("unparseable card callback payload")
+
+        track_context = parse_out_track_context(str(payload.get("outTrackId") or ""))
+        approval_id = track_context[0] if track_context is not None else None
+        source_integration_id = track_context[1] if track_context is not None else None
+        action = extract_dingtalk_action(payload)
+        if approval_id is None or action is None or action[0] != approval_id:
+            raise ValueError("card callback approval identity mismatch")
+        corp_id = str(payload.get("corpId") or "")
+        candidates = [
+            integration
+            for integration in integrations
+            if corp_id and str((integration.config or {}).get("corp_id") or "") == corp_id
+        ]
+        if source_integration_id is not None:
+            candidates = [item for item in candidates if item.id == source_integration_id]
+        candidate_workspaces = {item.workspace_id for item in candidates}
+        if len(candidates) != 1 or len(candidate_workspaces) != 1:
+            raise ValueError("card callback tenant route missing or ambiguous")
+
+        workspace_id = next(iter(candidate_workspaces))
+        async with self._session_factory() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            integration = await session.scalar(
+                select(Integration).where(Integration.id == candidates[0].id).with_for_update()
+            )
+            if (
+                integration is None
+                or integration.deleted_at is not None
+                or str((integration.config or {}).get("receive_mode") or "") != "stream"
+                or str((integration.config or {}).get("corp_id") or "") != corp_id
+            ):
+                raise ValueError("card callback source integration is no longer a Stream route")
+            approval = await session.get(Approval, approval_id)
+            if approval is None or approval.workspace_id != workspace_id:
+                raise ValueError("card callback approval is outside the app owner workspace")
+            status, lifecycle = await handle_dingtalk_card_callback(
+                session,
+                self._session_factory,
+                integration=integration,
+                payload=payload,
+                now=self._now(),
+                app_base_url=str(getattr(self._settings, "app_base_url", "") or ""),
+            )
+        # Leave the transaction before raising so disabled/misconfigured
+        # denial audits are durable even though the frame intentionally stays
+        # un-ACKed for platform redelivery.
+        if status not in (200, 403):
+            raise RuntimeError(f"card callback failed with status {status}")
+        return lifecycle
+
+    @staticmethod
+    def _frame_error_group_key(integrations: list[Integration]) -> str:
+        app_keys = {str((integration.config or {}).get("app_key") or "") for integration in integrations}
+        if len(app_keys) == 1 and "" not in app_keys:
+            return next(iter(app_keys))
+        return "ids:" + ",".join(sorted(str(item.id) for item in integrations))
+
     async def _record_frame_error(
-        self, integrations: list[Integration], exc: Exception
-    ) -> None:
-        """Exact in-memory count + throttled stream_state marker for a
+        self,
+        integrations: list[Integration],
+        exc: Exception,
+        *,
+        force_persist: bool = False,
+    ) -> bool:
+        """Exact per-app count + throttled stream_state marker for a
         per-frame ingest/handling failure (R2 — failures never disappear).
 
         Best-effort by contract: a diagnostic write must never mask the
         isolation it reports. Throttled to at most one persistence per
         ``_FRAME_PERSIST_INTERVAL_SECONDS`` even under a continuous error
-        cycle (the counter stays exact; the persisted value is the count at
-        write time). The marker fields (``frame_error_count`` /
+        cycle (the counter stays exact; the latest throttled tail is flushed
+        when the frame loop exits). The marker fields (``frame_error_count`` /
         ``last_frame_error_at`` / ``last_frame_error``) ride the
         stream_state JSONB — the §3.9 diagnostic truth source that
         ``GET .../stream-status`` reads (the endpoint serves the
         whitelisted state view; the markers stay queryable on the truth
         source row itself). The error text is redacted through the same
         secret blacklist as every other log line this manager writes."""
-        self._frame_error_count += 1
+        group_key = self._frame_error_group_key(integrations)
+        if group_key not in self._frame_error_counts:
+            self._frame_error_counts[group_key] = await self._frame_error_baseline(integrations)
+        count = self._frame_error_counts.get(group_key, 0) + 1
+        self._frame_error_counts[group_key] = count
         now_epoch = time.time()
-        if now_epoch - self._last_frame_error_persist < _FRAME_PERSIST_INTERVAL_SECONDS:
-            return
-        self._last_frame_error_persist = now_epoch
-        reason, _hits = redact_text(
-            f"{type(exc).__name__}: {exc}"[:200], self._redact_values
-        )
+        reason, _hits = redact_text(f"{type(exc).__name__}: {exc}"[:200], self._redact_values)
         now = self._now()
+        self._pending_frame_errors[group_key] = (count, reason, now)
+        last_persist = self._last_frame_error_persist.get(group_key, 0.0)
+        if not force_persist and now_epoch - last_persist < _FRAME_PERSIST_INTERVAL_SECONDS:
+            return False
+        self._last_frame_error_persist[group_key] = now_epoch
+        persisted = await self._persist_frame_error(integrations, count, reason, now)
+        if persisted:
+            self._pending_frame_errors.pop(group_key, None)
+        return persisted
+
+    async def _frame_error_baseline(self, integrations: list[Integration]) -> int:
+        """Load the durable high-water mark after a restart/owner handoff."""
+        highest = 0
+        try:
+            async with self._session_factory() as session:
+                rows = (
+                    (
+                        await session.execute(
+                            select(Integration.stream_state).where(
+                                Integration.id.in_([item.id for item in integrations])
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            for state in rows:
+                try:
+                    highest = max(highest, int((state or {}).get("frame_error_count") or 0))
+                except (TypeError, ValueError):
+                    continue
+        except Exception:  # noqa: BLE001 — the best-effort writer below still runs
+            return 0
+        return highest
+
+    async def _flush_frame_errors(self, integrations: list[Integration]) -> None:
+        group_key = self._frame_error_group_key(integrations)
+        pending = self._pending_frame_errors.get(group_key)
+        if pending is None:
+            return
+        count, reason, occurred_at = pending
+        if await self._persist_frame_error(integrations, count, reason, occurred_at):
+            self._pending_frame_errors.pop(group_key, None)
+
+    async def _persist_frame_error(
+        self,
+        integrations: list[Integration],
+        count: int,
+        reason: str,
+        occurred_at: datetime,
+    ) -> bool:
+        complete = True
         for integration in integrations:
             try:
                 async with self._session_factory() as session, session.begin():
-                    row = await session.get(Integration, integration.id)
+                    row = await session.scalar(
+                        select(Integration).where(Integration.id == integration.id).with_for_update()
+                    )
                     if row is None:
+                        complete = False
                         continue
-                    row.stream_state = {
+                    persisted_state = {
                         **(row.stream_state or {}),
-                        "frame_error_count": self._frame_error_count,
-                        "last_frame_error_at": now.isoformat(),
+                        "frame_error_count": max(
+                            count,
+                            int((row.stream_state or {}).get("frame_error_count") or 0),
+                        ),
+                        "last_frame_error_at": occurred_at.isoformat(),
                         "last_frame_error": reason,
                     }
-                    row.updated_at = now
+                    row.stream_state = persisted_state
+                    row.updated_at = self._now()
+                integration.stream_state = persisted_state
             except Exception:  # noqa: BLE001 — diagnostic persistence is best-effort
-                pass
+                complete = False
+        return complete
 
     async def _ingest_message_frame(
         self,
         integrations: list[Integration],
-        by_robot_code: dict[str, Integration],
+        by_message_identity: dict[tuple[str, str], list[Integration]],
         frame: dict[str, Any],
-    ) -> None:
+    ) -> bool:
         payload = frame.get("data")
         if isinstance(payload, str):
             try:
@@ -827,38 +1208,171 @@ class StreamManager:
                 payload = None
         if not isinstance(payload, dict):
             logger.warning("dingtalk stream: unparseable message frame — skipped")
-            return
-        robot_code = str(payload.get("robotCode") or "")
-        integration = by_robot_code.get(robot_code)
-        if integration is None:
-            integration = integrations[0] if len(integrations) == 1 else None
-        if integration is None:
-            logger.warning(
-                "dingtalk stream: no integration for robotCode=%s — skipped", robot_code
+            return await self._record_frame_error(
+                integrations,
+                ValueError("unparseable message frame"),
+                force_persist=True,
             )
-            return
+        identity = (
+            str(payload.get("chatbotCorpId") or ""),
+            str(payload.get("robotCode") or ""),
+        )
+        candidates = by_message_identity.get(identity, [])
+        if len(candidates) != 1:
+            logger.warning("dingtalk stream: message routing identity missing or ambiguous — skipped")
+            return await self._record_frame_error(
+                integrations,
+                ValueError("message routing identity missing or ambiguous"),
+                force_persist=True,
+            )
+        integration = candidates[0]
         try:
             envelope = normalize_message_payload(
                 payload,
                 max_chars=int(getattr(self._settings, "im_inbound_text_max_chars", 4000)),
                 channel="stream",
             )
-        except Exception:  # noqa: BLE001 — malformed payload: audit-log, never crash
-            logger.exception("dingtalk stream: payload normalization failed")
-            return
+        except ValidationError:
+            logger.warning(
+                "dingtalk stream: payload normalization failed (integration=%s) — rejected audit",
+                integration.id,
+            )
+            await self._audit_malformed_message(integration, payload)
+            return True
         # Same shared core as the HTTP channel — the two receive modes
         # differ ONLY in the auth adapter in front (§2.10:651-664). The
         # §2.10 guards (fail-closed) and the §3.8 ack window read from the
         # same Settings the HTTP routes use — no drift between channels.
+        route_missing = False
         async with self._session_factory() as session, session.begin():
-            await ingest_verified_event(
-                session,
-                integration=integration,
-                envelope=envelope,
-                now=self._now(),
-                redis=self._redis,
-                settings=self._settings,
+            await set_tenant_context(session, integration.workspace_id)
+            current = await session.scalar(
+                select(Integration).where(Integration.id == integration.id).with_for_update()
             )
+            if current is None:
+                route_missing = True
+            else:
+                current_config = current.config or {}
+                current_identity = (
+                    str(current_config.get("corp_id") or ""),
+                    str(current_config.get("robot_code") or current_config.get("app_key") or ""),
+                )
+                if (
+                    current.deleted_at is not None
+                    or str(current_config.get("receive_mode") or "") != "stream"
+                    or current_identity != identity
+                ):
+                    await self._audit_inactive_stream_route(
+                        session,
+                        integration=current,
+                        envelope=envelope,
+                        reason=(
+                            "integration_deleted"
+                            if current.deleted_at is not None
+                            else "receive_mode_changed"
+                            if str(current_config.get("receive_mode") or "") != "stream"
+                            else "route_identity_changed"
+                        ),
+                    )
+                    return True
+                # The row lock linearizes this frame against disable/delete/
+                # mode updates. ingest_verified_event sees the authoritative
+                # status and records disabled traffic as rejected.
+                await ingest_verified_event(
+                    session,
+                    integration=current,
+                    envelope=envelope,
+                    now=self._now(),
+                    redis=self._redis,
+                    settings=self._settings,
+                )
+        if route_missing:
+            return await self._record_frame_error(
+                integrations,
+                ValueError("message source integration no longer exists"),
+                force_persist=True,
+            )
+        return True
+
+    async def _audit_inactive_stream_route(
+        self,
+        session: AsyncSession,
+        *,
+        integration: Integration,
+        envelope: Any,
+        reason: str,
+    ) -> None:
+        """Persist an authenticated frame rejected by current route truth."""
+        canonical = json.dumps(
+            envelope.raw_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        forensic = audit_payload(
+            {**envelope.raw_payload, "_mesh_channel": "stream"},
+            "rejected",
+        )
+        forensic = {
+            **forensic,
+            "_mesh_channel": "stream",
+            "_mesh_reject_reason": reason,
+        }
+        try:
+            async with session.begin_nested():
+                await store_event(
+                    session,
+                    workspace_id=integration.workspace_id,
+                    integration_id=integration.id,
+                    external_event_id="rejected:" + hashlib.sha256(canonical).hexdigest(),
+                    event_type=envelope.event_type,
+                    payload=forensic,
+                    signature_status="valid",
+                    process_status="rejected",
+                    now=self._now(),
+                )
+        except IntegrityError as exc:
+            if not _violates_constraint(exc, "uq_integration_event_dedup"):
+                raise
+
+    async def _audit_malformed_message(self, integration: Integration, payload: dict[str, Any]) -> None:
+        """Persist an authenticated, exactly-routed but malformed Stream
+        message in the same rejected namespace as the HTTP adapter.
+
+        Unknown visibility is deliberate: normalization could not establish a
+        trustworthy conversation/binding. Repeated delivery of the same body
+        deduplicates, after which it is safe to ACK again.
+        """
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        forensic = audit_payload({**payload, "_mesh_channel": "stream"}, "rejected")
+        forensic = {
+            **forensic,
+            "_mesh_channel": "stream",
+            "_mesh_reject_reason": "malformed_payload",
+        }
+        async with self._session_factory() as session, session.begin():
+            await set_tenant_context(session, integration.workspace_id)
+            try:
+                async with session.begin_nested():
+                    await store_event(
+                        session,
+                        workspace_id=integration.workspace_id,
+                        integration_id=integration.id,
+                        external_event_id=("rejected:" + hashlib.sha256(canonical).hexdigest()),
+                        event_type="im.bot.message",
+                        payload=forensic,
+                        signature_status="valid",
+                        process_status="rejected",
+                        now=self._now(),
+                    )
+            except IntegrityError as exc:
+                if not _violates_constraint(exc, "uq_integration_event_dedup"):
+                    raise
 
     # -- state persistence ---------------------------------------------------
 
@@ -870,27 +1384,23 @@ class StreamManager:
             return
         stop_waiter = asyncio.ensure_future(signal.wait())
         sleeper = asyncio.ensure_future(self._sleep(max(0.0, seconds)))
-        _done, pending = await asyncio.wait(
-            {stop_waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED
-        )
-        for task in pending:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        try:
+            await asyncio.wait({stop_waiter, sleeper}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (stop_waiter, sleeper):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(stop_waiter, sleeper, return_exceptions=True)
 
     async def _mark_group(
         self,
         integrations: list[Integration],
         state: str,
-        attempt: int,
-        base: float,
-        maximum: float,
+        *,
+        backoff_seconds: float,
     ) -> None:
-        backoff = compute_backoff(attempt, base=base, maximum=maximum, rng=self._rng)
         for integration in integrations:
-            await self._set_stream_state(
-                integration, state, backoff_seconds=backoff if state != STATE_CONNECTED else 0
-            )
+            await self._set_stream_state(integration, state, backoff_seconds=backoff_seconds)
 
     async def _set_stream_state(
         self,
@@ -903,20 +1413,24 @@ class StreamManager:
         """Persist stream_state + (on transitions) broadcast
         integration.updated(subject='stream_channel') via the outbox."""
         now = self._now()
-        payload_state: dict[str, Any] = {
-            "state": state,
-            "last_frame_at": (integration.stream_state or {}).get("last_frame_at"),
-            "last_attempt_at": now.isoformat(),
-            "backoff_seconds": round(float(backoff_seconds), 2),
-        }
-        if state == STATE_CONNECTED:
-            payload_state["last_frame_at"] = now.isoformat()
+        persisted_state: dict[str, Any] | None = None
         async with self._session_factory() as session, session.begin():
-            row = await session.get(Integration, integration.id)
+            row = await session.scalar(
+                select(Integration).where(Integration.id == integration.id).with_for_update()
+            )
             if row is None:
                 return
             previous = dict(row.stream_state or {})
-            row.stream_state = {**previous, **payload_state}
+            payload_state: dict[str, Any] = {
+                "state": state,
+                "last_frame_at": previous.get("last_frame_at"),
+                "last_attempt_at": now.isoformat(),
+                "backoff_seconds": round(float(backoff_seconds), 2),
+            }
+            if state == STATE_CONNECTED:
+                payload_state["last_frame_at"] = now.isoformat()
+            persisted_state = {**previous, **payload_state}
+            row.stream_state = persisted_state
             row.updated_at = now
             # M3: broadcast ONLY on state TRANSITIONS — a sustained
             # reconnecting/down must not flood the outbox/realtime path
@@ -935,12 +1449,10 @@ class StreamManager:
                         "subject": STREAM_CHANNEL_SUBJECT,
                         "stream_state": state,
                     },
-                    idempotency_key=(
-                        f"integration-stream:{row.id}:{state}:{now.isoformat()}"
-                    ),
+                    idempotency_key=(f"integration-stream:{row.id}:{state}:{now.isoformat()}"),
                 )
         # Keep the in-memory copy coherent for subsequent decisions.
-        integration.stream_state = {**(integration.stream_state or {}), **payload_state}
+        integration.stream_state = persisted_state
 
 
 __all__ = [

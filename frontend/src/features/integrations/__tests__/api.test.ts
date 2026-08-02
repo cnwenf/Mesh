@@ -14,7 +14,10 @@ import {
   deleteIntegration,
   deleteSubscription,
   deleteVcsLink,
+  dingtalkCallbackUrl,
+  getDingTalkStreamStatus,
   getIntegration,
+  getQueueSummary,
   getSubscription,
   integrationAuthorizeUrl,
   integrationChannel,
@@ -25,6 +28,8 @@ import {
   listIntegrationEvents,
   listIntegrations,
   listIssueVcsLinks,
+  listQueueAudit,
+  listQueueItems,
   listSubscriptions,
   patchBinding,
   patchIntegration,
@@ -34,6 +39,8 @@ import {
   retryDelivery,
   rotateIntegrationSecret,
   sendSubscriptionTestEvent,
+  cancelQueueItem,
+  testDingTalkSend,
   testIntegration,
   unlinkExternalIdentity,
   workspaceIntegrationsChannel,
@@ -71,6 +78,88 @@ describe('channel builders + urls', () => {
   it('builds the oauth authorize url', () => {
     const url = integrationAuthorizeUrl(WS, 'vcs_github');
     expect(url).toContain('/api/v1/workspaces/ws-1/integrations/oauth/vcs_github/authorize');
+  });
+
+  it('builds the DingTalk HTTP callback url without credentials', () => {
+    expect(dingtalkCallbackUrl()).toContain('/api/v1/integrations/dingtalk/events');
+    expect(dingtalkCallbackUrl()).not.toContain('secret');
+  });
+});
+
+describe('DingTalk diagnostics + queue endpoints', () => {
+  it('keeps outbound test-send and receive diagnostics on separate endpoints', async () => {
+    const { client, calls } = makeClient();
+    await testDingTalkSend(client, WS, 'i-1', {
+      conversation_ref: 'cid-1',
+      conversation_type: 'direct',
+      user_key: 'staff-1',
+    });
+    await getDingTalkStreamStatus(client, WS, 'i-1');
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        path: `/api/v1/workspaces/${WS}/integrations/i-1/test-send`,
+        opts: {
+          body: {
+            conversation_ref: 'cid-1',
+            conversation_type: 'direct',
+            user_key: 'staff-1',
+          },
+        },
+      },
+      {
+        method: 'GET',
+        path: `/api/v1/workspaces/${WS}/integrations/i-1/stream-status`,
+        opts: undefined,
+      },
+    ]);
+  });
+
+  it('lists authorized queue slices and summary, then cancels by item id', async () => {
+    const { client, calls } = makeClient();
+    const listing = await listQueueItems(client, WS, 'i-1', {
+      state: 'pending',
+      conversationKey: 'dingtalk:corp:cid-1',
+      cursor: 'cur',
+      limit: 20,
+    });
+    await getQueueSummary(client, WS, 'i-1');
+    await cancelQueueItem(client, WS, 'i-1', 'q-1');
+    expect(listing.nextCursor).toBe('c1');
+    expect(calls).toEqual([
+      {
+        method: 'LIST',
+        path: `/api/v1/workspaces/${WS}/integrations/i-1/queue`,
+        opts: {
+          query: {
+            state: 'pending',
+            conversation_key: 'dingtalk:corp:cid-1',
+            cursor: 'cur',
+            limit: 20,
+          },
+        },
+      },
+      {
+        method: 'LIST',
+        path: `/api/v1/workspaces/${WS}/integrations/i-1/queue/summary`,
+        opts: undefined,
+      },
+      {
+        method: 'POST',
+        path: `/api/v1/workspaces/${WS}/integrations/i-1/queue/q-1:cancel`,
+        opts: { body: {} },
+      },
+    ]);
+  });
+
+  it('maps the workspace-wide orphan audit endpoint', async () => {
+    const { client, calls } = makeClient();
+    await listQueueAudit(client, WS, { cursor: 'old', limit: 30 });
+    expect(calls[0]).toEqual({
+      method: 'LIST',
+      path: `/api/v1/workspaces/${WS}/integration-queue-audit`,
+      opts: { query: { cursor: 'old', limit: 30 } },
+    });
   });
 });
 
@@ -206,7 +295,11 @@ describe('external identity endpoints', () => {
       integration_id: 'i-1',
       external_user_key: 'U1',
     });
-    await confirmExternalIdentity(client, WS, { provider: 'slack', integration_id: 'i-1', code: '123' });
+    await confirmExternalIdentity(client, WS, {
+      provider: 'slack',
+      integration_id: 'i-1',
+      code: '123',
+    });
     await unlinkExternalIdentity(client, WS, 'id-1');
     expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual([
       `LIST /api/v1/workspaces/${WS}/external-identities`,

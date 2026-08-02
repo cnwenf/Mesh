@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import signal
 import sys
@@ -152,9 +153,7 @@ def _compose_execution_finished(squad_handler, comment_service):
         # Best-effort: a result sink failure must NOT crash the relay or
         # block the squad handler's savepoint.
         try:
-            await execution_finished_result_sink(
-                session, event, comment_service=comment_service
-            )
+            await execution_finished_result_sink(session, event, comment_service=comment_service)
         except Exception:  # noqa: BLE001
             logger.exception("result sink failed for event %s", event.id)
         # Integration queue terminal write-back (done/failed/cancelled +
@@ -312,7 +311,6 @@ def build_relay(
     )
 
 
-
 def _autopilot_executor_services(settings: Settings, session_factory) -> dict:
     """Action-step dependencies for the autopilot run executor.
 
@@ -333,9 +331,15 @@ def _autopilot_executor_services(settings: Settings, session_factory) -> dict:
         "issue_service": IssueService(session_factory),
     }
 
+
 async def run_worker(settings: Settings | None = None, stop: asyncio.Event | None = None) -> None:
     """Run all worker loops until ``stop`` is set (or forever)."""
     settings = settings or load_settings()
+    if not str(settings.app_base_url or "").strip():
+        logger.warning(
+            "MESH_APP_BASE_URL is unset; DingTalk approval card delivery "
+            "fails closed until an absolute deployment URL is configured"
+        )
     engine = create_engine_from_settings(settings)
     session_factory = create_session_factory(engine)
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
@@ -383,9 +387,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
     skill_content_store = ObjectStorageContentStore(storage)
     skill_import_settings = ImportSettings(
         host_allowlist=frozenset(
-            h.strip().lower()
-            for h in (settings.skill_source_host_allowlist or "").split(",")
-            if h.strip()
+            h.strip().lower() for h in (settings.skill_source_host_allowlist or "").split(",") if h.strip()
         ),
         marketplace_url=settings.skill_marketplace_url,
     )
@@ -431,7 +433,10 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         rate_limit_base_seconds=settings.im_rate_limit_base_seconds,
         rate_limit_max_seconds=settings.im_rate_limit_max_seconds,
         token_busy_backoff_seconds=settings.im_token_busy_backoff_seconds,
-        card_pusher=push_card_from_event,
+        card_pusher=functools.partial(
+            push_card_from_event,
+            app_base_url=settings.app_base_url or "",
+        ),
     )
 
     supervisor = Supervisor(
@@ -575,17 +580,13 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
             # crash-safe lease repair (five branches, outbox rearm).
             TaskSpec(
                 "imq-dispatcher",
-                lambda: dispatcher_loop(
-                    session_factory, settings=settings, wake=imq_wake, stop=stop
-                ),
+                lambda: dispatcher_loop(session_factory, settings=settings, wake=imq_wake, stop=stop),
             ),
             # integrations.md §3.9: terminal orphan audit-row retention purge
             # (binding_id IS NULL only; MESH_IM_QUEUE_AUDIT_RETENTION window).
             TaskSpec(
                 "imq-audit-retention",
-                lambda: integration_queue_audit_retention_loop(
-                    session_factory, settings=settings, stop=stop
-                ),
+                lambda: integration_queue_audit_retention_loop(session_factory, settings=settings, stop=stop),
             ),
         ]
     )
@@ -598,9 +599,7 @@ async def run_worker(settings: Settings | None = None, stop: asyncio.Event | Non
         from mesh.integrations.dingtalk_stream import StreamManager
 
         stream_manager = StreamManager(session_factory, settings, redis=redis_client)
-        supervisor.add_task(
-            TaskSpec("dingtalk-stream", lambda: stream_manager.run_forever(stop))
-        )
+        supervisor.add_task(TaskSpec("dingtalk-stream", lambda: stream_manager.run_forever(stop)))
 
     try:
         await supervisor.run()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import uuid
 from datetime import UTC, datetime
@@ -155,7 +156,15 @@ async def test_card_missing_approval_terminal(session_factory, redis_client):
         "approval_id": str(uuid.uuid4()),  # does not exist
         "delivery_id": str(delivery_id),
     }, "card-gone")
-    await _relay(session_factory, redis_client, transport, card_pusher=push_card_from_event).run_once()
+    await _relay(
+        session_factory,
+        redis_client,
+        transport,
+        card_pusher=functools.partial(
+            push_card_from_event,
+            app_base_url="https://mesh.example.com",
+        ),
+    ).run_once()
     assert (await _event_status(session_factory))[0][0] == "published"
     async with session_factory() as session:
         row = await session.get(NotificationDelivery, delivery_id)
@@ -368,7 +377,11 @@ async def test_card_upstream_error_exhausts_budget(session_factory, redis_client
     }, "card-err")
     relay = IMSendRelay(
         session_factory, redis=redis_client, signing_secret=TEST_SIGNING_SECRET,
-        http_client=make_client(transport), card_pusher=push_card_from_event,
+        http_client=make_client(transport),
+        card_pusher=functools.partial(
+            push_card_from_event,
+            app_base_url="https://mesh.example.com",
+        ),
         max_attempts=2, rate_limit_base_seconds=0.01,
     )
     from datetime import UTC, datetime
@@ -515,7 +528,13 @@ async def test_card_busy_defers_without_budget_then_succeeds(
     lock_key = f"dingtalk:token_lock:{world['integ_dingtalk']}"
     await redis_client.set(lock_key, "foreign-owner", nx=True, ex=30)
     relay = _busy_relay(
-        session_factory, redis_client, transport, card_pusher=push_card_from_event
+        session_factory,
+        redis_client,
+        transport,
+        card_pusher=functools.partial(
+            push_card_from_event,
+            app_base_url="https://mesh.example.com",
+        ),
     )
     await relay.run_once()
     async with session_factory() as session:

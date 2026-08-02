@@ -1,9 +1,10 @@
 """Per-channel resource authorization for ``project:{id}`` channels.
 
 Every subscription re-runs resource-level authorization (README §6.7): a
-``project:{id}`` channel requires workspace membership PLUS project
-visibility — private projects are subscribable only by project members,
-granted guests and workspace admins. The channel string is never the
+``project:{id}`` channel requires workspace membership PLUS the same project
+visibility predicate as API reads: guests require an explicit grant even for
+public projects, members see public projects or private memberships, and
+workspace admins see every live project. The channel string is never the
 isolation boundary (§6.2 rule 8); the check runs under the tenant GUC with
 an explicit ``workspace_id`` filter, and RLS backstops the restricted role.
 
@@ -31,9 +32,7 @@ class _CheckerRegistrar(Protocol):
     def register_prefix_checker(self, entity: str, checker: PrefixChecker) -> None: ...
 
 
-def register_resource_checkers(
-    authorizer: _CheckerRegistrar, session_factory
-) -> None:
+def register_resource_checkers(authorizer: _CheckerRegistrar, session_factory) -> None:
     """Register every project-module resource checker on ``authorizer``.
 
     Single source of truth shared by the API and the realtime gateway factories
@@ -69,9 +68,7 @@ def make_project_channel_checker(session_factory) -> PrefixChecker:
                     continue
                 if project.deleted_at is not None:
                     return False
-                if project.visibility == "public":
-                    return True
-                return await _private_project_allowed(
+                return await _project_allowed(
                     session, principal=principal, project=project, workspace_id=workspace_id
                 )
         return False
@@ -79,7 +76,7 @@ def make_project_channel_checker(session_factory) -> PrefixChecker:
     return check
 
 
-async def _private_project_allowed(
+async def _project_allowed(
     session, *, principal: Principal, project: Project, workspace_id: uuid.UUID
 ) -> bool:
     try:
@@ -98,21 +95,25 @@ async def _private_project_allowed(
         return False
     if role_satisfies(member.role, "project:manage"):
         return True
+    if member.role == "guest":
+        grant = await session.scalar(
+            select(MemberProjectAccess.id).where(
+                MemberProjectAccess.workspace_id == workspace_id,
+                MemberProjectAccess.project_id == project.id,
+                MemberProjectAccess.member_id == member.id,
+            )
+        )
+        return grant is not None
+    if project.visibility == "public":
+        return True
     project_role = await session.scalar(
         select(ProjectMember.role).where(
+            ProjectMember.workspace_id == workspace_id,
             ProjectMember.project_id == project.id,
             ProjectMember.member_id == member.id,
         )
     )
-    if project_role is not None:
-        return True
-    grant = await session.scalar(
-        select(MemberProjectAccess.id).where(
-            MemberProjectAccess.project_id == project.id,
-            MemberProjectAccess.member_id == member.id,
-        )
-    )
-    return grant is not None
+    return project_role is not None
 
 
 __all__ = ["make_project_channel_checker", "register_resource_checkers"]

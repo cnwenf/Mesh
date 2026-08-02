@@ -366,7 +366,13 @@ def _slack_envelope(text: str = "<@U_BOT> 看一下", event_ts: str = "175379040
 
 async def test_parallel_provider_dispatches_optimistically(session_factory):
     world = await seed_world(session_factory)  # slack integration, no inbound_queue
-    await make_binding(session_factory, world=world, provider="slack", external_ref="C_ONCALL")
+    await make_binding(
+        session_factory,
+        world=world,
+        provider="slack",
+        provider_tenant_key="T_TEST",
+        external_ref="C_ONCALL",
+    )
 
     integration = await _integration(session_factory, world, "integ_slack")
     async with session_factory() as session, session.begin():
@@ -400,7 +406,11 @@ async def test_parallel_provider_dispatches_optimistically(session_factory):
 async def test_drain_then_switch_forces_serial_behind_live_serial_lane(session_factory):
     world = await seed_world(session_factory)
     binding = await make_binding(
-        session_factory, world=world, provider="slack", external_ref="C_PAR"
+        session_factory,
+        world=world,
+        provider="slack",
+        provider_tenant_key="T_TEST",
+        external_ref="C_PAR",
     )
 
     # A non-terminal serial item occupies the conversation lane (carrying its

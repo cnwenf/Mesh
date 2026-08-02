@@ -82,7 +82,10 @@ export async function getApproval(
   workspaceId: string,
   approvalId: string,
 ): Promise<Approval> {
-  return client.request<Approval>('GET', `${approvalsPath(workspaceId)}/${approvalId}`);
+  return client.request<Approval>(
+    'GET',
+    `${approvalsPath(workspaceId)}/${encodeURIComponent(approvalId)}`,
+  );
 }
 
 export interface DecideParams {

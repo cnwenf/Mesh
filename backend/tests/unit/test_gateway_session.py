@@ -43,6 +43,18 @@ class DenyAuthorizer:
         return None
 
 
+class SequenceAuthorizer:
+    """Allow a fixed number of checks, then model a project-role revocation."""
+
+    def __init__(self, allowed_checks: int):
+        self._allowed_checks = allowed_checks
+        self.calls = 0
+
+    async def authorize(self, principal, channel):
+        self.calls += 1
+        return ALLOW_WS if self.calls <= self._allowed_checks else None
+
+
 class FakeSubscriber:
     async def start(self):
         pass
@@ -50,6 +62,29 @@ class FakeSubscriber:
     async def frames(self):
         await asyncio.Event().wait()  # block until cancelled
         yield ("", {})  # pragma: no cover — unreachable, makes this an async generator
+
+    async def close(self):
+        pass
+
+
+class OneFrameSubscriber:
+    def __init__(self, channel: str):
+        self._channel = channel
+
+    async def start(self):
+        pass
+
+    async def frames(self):
+        yield (
+            self._channel,
+            {
+                "op": FRAME_EVENT,
+                "channel": self._channel,
+                "seq": 1,
+                "event": "integration.event_ingested",
+                "payload": {"event_id": "private"},
+            },
+        )
 
     async def close(self):
         pass
@@ -166,9 +201,7 @@ async def test_auth_ok_then_subscribe_replays_from_resume(session_factory, works
     }
 
 
-async def test_replay_pages_through_backlog_larger_than_page_size(
-    session_factory, workspace_factory
-):
+async def test_replay_pages_through_backlog_larger_than_page_size(session_factory, workspace_factory):
     workspace = await workspace_factory()
     await _seed_events(session_factory, workspace.id, "issue:big", 5)
     transport = FakeTransport(
@@ -192,12 +225,39 @@ async def test_replay_pages_through_backlog_larger_than_page_size(
     assert subscribed[-1]["last_seq"] == 5
 
 
+async def test_project_replay_rechecks_authorization_before_each_row(session_factory, workspace_factory):
+    workspace = await workspace_factory()
+    channel = f"project:{uuid.uuid4()}"
+    await _seed_events(session_factory, workspace.id, channel, 3)
+    transport = FakeTransport([])
+    # Current replay first checks the page, then must check every row. Permit
+    # the page and first row, and revoke access before the second row.
+    authorizer = SequenceAuthorizer(allowed_checks=2)
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=authorizer,
+        subscriber_factory=FakeSubscriber,
+        replay_page_size=100,
+    )
+    session._state.principal = PRINCIPAL
+    session._state.subscriptions.add(channel)
+
+    await session._replay(channel, 0, workspace.id)
+
+    events = [frame for frame in transport.sent if frame.get("op") == FRAME_EVENT]
+    assert [frame["seq"] for frame in events] == [1]
+    assert channel not in session._state.subscriptions
+    errors = [frame for frame in transport.sent if frame.get("op") == FRAME_ERROR]
+    assert errors[-1]["code"] == "forbidden"
+    assert FRAME_SUBSCRIBED not in _ops(transport)
+
+
 async def test_subscribe_without_resume_replays_everything(session_factory, workspace_factory):
     workspace = await workspace_factory()
     await _seed_events(session_factory, workspace.id, "issue:all", 2)
-    transport = FakeTransport(
-        [{"op": "auth", "token": TOKEN}, {"op": "subscribe", "channel": "issue:all"}]
-    )
+    transport = FakeTransport([{"op": "auth", "token": TOKEN}, {"op": "subscribe", "channel": "issue:all"}])
     await _session(transport, session_factory).run()
     events = [f for f in transport.sent if f["op"] == FRAME_EVENT]
     assert [f["seq"] for f in events] == [1, 2]
@@ -284,6 +344,37 @@ async def test_forbidden_channel_keeps_connection_alive(session_factory, workspa
     assert errors[0]["code"] == "forbidden"
     assert not transport.closed  # connection survives a denied subscription
     assert _ops(transport)[-1] == FRAME_PING  # ping still answered
+
+
+async def test_live_resource_frame_rechecks_authorization_and_drops_revoked_subscription(
+    session_factory,
+):
+    channel = f"project:{uuid.uuid4()}"
+    transport = FakeTransport([])
+    session = RealtimeSession(
+        transport,
+        session_factory=session_factory,
+        authenticator=FixedAuthenticator(PRINCIPAL),
+        authorizer=DenyAuthorizer(),
+        subscriber_factory=lambda: OneFrameSubscriber(channel),
+        ping_interval=3600,
+    )
+    session._state.principal = PRINCIPAL
+    session._state.subscriptions.add(channel)
+
+    await session._pump()
+
+    assert channel not in session._state.subscriptions
+    assert not [frame for frame in transport.sent if frame.get("op") == FRAME_EVENT]
+    errors = [frame for frame in transport.sent if frame.get("op") == FRAME_ERROR]
+    assert errors == [
+        {
+            "op": FRAME_ERROR,
+            "code": "forbidden",
+            "message": "authorization changed; subscription removed",
+            "channel": channel,
+        }
+    ]
 
 
 async def test_unsubscribe_and_unknown_op(session_factory):
@@ -452,9 +543,7 @@ async def test_unknown_op_error_does_not_echo_client_content(session_factory):
 async def test_forbidden_error_message_is_fixed_text(session_factory, workspace_factory):
     await workspace_factory()
     channel = "issue:secret-" + "y" * 500
-    transport = FakeTransport(
-        [{"op": "auth", "token": TOKEN}, {"op": "subscribe", "channel": channel}]
-    )
+    transport = FakeTransport([{"op": "auth", "token": TOKEN}, {"op": "subscribe", "channel": channel}])
     await _session(transport, session_factory, authorizer=DenyAuthorizer()).run()
     errors = [f for f in transport.sent if f["op"] == FRAME_ERROR]
     assert errors[0]["code"] == "forbidden"

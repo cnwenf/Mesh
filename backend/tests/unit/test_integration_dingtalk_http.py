@@ -16,7 +16,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from mesh.db.models.integration import IntegrationEvent, IntegrationMessageQueue
+from mesh.db.models.integration import Integration, IntegrationEvent, IntegrationMessageQueue
 from mesh.db.models.outbox import OutboxEvent
 from mesh.integrations.inbound import process_inbound
 from mesh.runtime.enqueue import ENQUEUE_EVENT_TYPE
@@ -25,6 +25,7 @@ from tests.unit.integrations_support import (
     TEST_SIGNING_SECRET,
     dingtalk_message_payload,
     dingtalk_request,
+    encrypt,
     make_dingtalk_binding,
     seed_dingtalk_world,
 )
@@ -37,8 +38,13 @@ TOLERANCE = timedelta(seconds=300)  # global setting — DingTalk MUST widen to 
 async def _run(session_factory, body: bytes, headers: dict) -> tuple[int, dict]:
     async with session_factory() as session, session.begin():
         return await process_inbound(
-            session, kind="im_dingtalk", raw_body=body, headers=headers,
-            signing_secret=TEST_SIGNING_SECRET, now=NOW, tolerance=TOLERANCE,
+            session,
+            kind="im_dingtalk",
+            raw_body=body,
+            headers=headers,
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
+            tolerance=TOLERANCE,
         )
 
 
@@ -63,12 +69,26 @@ async def test_valid_signature_200_dispatched(session_factory):
         assert event.payload["_mesh_channel"] == "http"
 
 
+async def test_stream_mode_integration_is_not_admitted_on_http_endpoint(session_factory):
+    world = await seed_dingtalk_world(session_factory, receive_mode="stream")
+    await make_dingtalk_binding(session_factory, world=world)
+    body, headers = dingtalk_request(dingtalk_message_payload())
+
+    status, payload = await _run(session_factory, body, headers)
+
+    assert status == 401
+    assert payload["error"]["code"] == "invalid_signature"
+    async with session_factory() as session:
+        events = (await session.execute(select(IntegrationEvent))).scalars().all()
+        queues = (await session.execute(select(IntegrationMessageQueue))).scalars().all()
+    assert events == []
+    assert queues == []
+
+
 async def test_wrong_secret_rejected_never_dispatched(session_factory):
     world = await seed_dingtalk_world(session_factory)
     await make_dingtalk_binding(session_factory, world=world)
-    body, headers = dingtalk_request(
-        dingtalk_message_payload(), secret="attacker-guessed-secret"
-    )
+    body, headers = dingtalk_request(dingtalk_message_payload(), secret="attacker-guessed-secret")
 
     status, payload = await _run(session_factory, body, headers)
 
@@ -140,9 +160,7 @@ async def test_routing_field_tampering_mislocates_to_401(session_factory):
     mislocated → signature cannot verify → 401, never dispatched."""
     world = await seed_dingtalk_world(session_factory)
     await make_dingtalk_binding(session_factory, world=world)
-    body, headers = dingtalk_request(
-        dingtalk_message_payload(corp_id="dingOTHERcorp9999")
-    )
+    body, headers = dingtalk_request(dingtalk_message_payload(corp_id="dingOTHERcorp9999"))
     status, payload = await _run(session_factory, body, headers)
     assert status == 401
     assert payload["error"]["code"] == "invalid_signature"
@@ -209,9 +227,7 @@ async def test_group_without_at_is_matched_audit_only(session_factory):
     """Group message NOT @-ing the bot → matched audit, no trigger (§6.9)."""
     world = await seed_dingtalk_world(session_factory)
     await make_dingtalk_binding(session_factory, world=world)
-    body, headers = dingtalk_request(
-        dingtalk_message_payload(is_in_at_list=False, text="闲聊内容")
-    )
+    body, headers = dingtalk_request(dingtalk_message_payload(is_in_at_list=False, text="闲聊内容"))
     status, payload = await _run(session_factory, body, headers)
     assert status == 200
     assert payload["process_status"] == "matched"
@@ -224,9 +240,7 @@ async def test_direct_message_triggers_without_at(session_factory):
     """Single chat (conversationType '1') triggers on text (direct_message)."""
     world = await seed_dingtalk_world(session_factory)
     await make_dingtalk_binding(session_factory, world=world)
-    body, headers = dingtalk_request(
-        dingtalk_message_payload(conversation_type="1", is_in_at_list=False)
-    )
+    body, headers = dingtalk_request(dingtalk_message_payload(conversation_type="1", is_in_at_list=False))
     status, payload = await _run(session_factory, body, headers)
     assert status == 200
     assert payload["process_status"] == "dispatched"
@@ -261,9 +275,7 @@ async def test_parallel_config_dispatches_optimistically(session_factory):
     async with session_factory() as session:
         queue = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
         enqueue = (
-            await session.execute(
-                select(OutboxEvent).where(OutboxEvent.event_type == ENQUEUE_EVENT_TYPE)
-            )
+            await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == ENQUEUE_EVENT_TYPE))
         ).scalar_one()
     assert queue.state == "dispatching"
     assert queue.dispatch_mode == "parallel"
@@ -320,17 +332,57 @@ async def test_pre_limit_is_scoped_per_integration_and_ip(redis_client):
             make_request("203.0.113.7"), integration_id=integration_a
         )
     # Same integration, SAME ip → exceeded.
-    assert await _dingtalk_pre_limit_exceeded(
-        make_request("203.0.113.7"), integration_id=integration_a
-    )
+    assert await _dingtalk_pre_limit_exceeded(make_request("203.0.113.7"), integration_id=integration_a)
     # Same integration, OTHER ip → its own budget.
-    assert not await _dingtalk_pre_limit_exceeded(
-        make_request("203.0.113.9"), integration_id=integration_a
-    )
+    assert not await _dingtalk_pre_limit_exceeded(make_request("203.0.113.9"), integration_id=integration_a)
     # OTHER integration, original ip → its own budget ((integration, IP) tuple).
-    assert not await _dingtalk_pre_limit_exceeded(
-        make_request("203.0.113.7"), integration_id=integration_b
+    assert not await _dingtalk_pre_limit_exceeded(make_request("203.0.113.7"), integration_id=integration_b)
+
+
+async def test_pre_limit_locator_keeps_same_corp_robot_budgets_independent(session_factory, redis_client):
+    """Two robots under one corp may each stay below 120/min even when their
+    combined traffic exceeds 120.  The pre-signature locator must therefore
+    use the same exact ``(corp, robot)`` identity as signature routing."""
+    from unittest.mock import Mock
+
+    from mesh.integrations.inbound_routes import (
+        _dingtalk_pre_limit_exceeded,
+        _locate_dingtalk_pre_limit_integration,
     )
+
+    world = await seed_dingtalk_world(session_factory)
+    second_id = uuid.uuid4()
+    async with session_factory() as session, session.begin():
+        session.add(
+            Integration(
+                id=second_id,
+                workspace_id=world["ws"],
+                kind="im_dingtalk",
+                name="dingtalk-second-robot-prelimit",
+                config={
+                    "app_key": "dingappkey0001",
+                    "app_secret_ref": encrypt("same-app-secret"),
+                    "corp_id": "dingcorp0001",
+                    "robot_code": "dingrobotSECOND",
+                    "receive_mode": "http",
+                },
+                created_by=world["member"],
+            )
+        )
+    first_payload = dingtalk_message_payload(robot_code="dingappkey0001")
+    second_payload = dingtalk_message_payload(robot_code="dingrobotSECOND")
+    async with session_factory() as session:
+        first_id = await _locate_dingtalk_pre_limit_integration(session, first_payload)
+        located_second_id = await _locate_dingtalk_pre_limit_integration(session, second_payload)
+    assert first_id == world["integ_dingtalk"]
+    assert located_second_id == second_id
+
+    request = Mock()
+    request.app.state.redis = redis_client
+    request.client = Mock(host="203.0.113.17")
+    for _ in range(70):
+        assert not await _dingtalk_pre_limit_exceeded(request, integration_id=first_id)
+        assert not await _dingtalk_pre_limit_exceeded(request, integration_id=located_second_id)
 
 
 async def test_official_sample_ids_flow_through_http_path(session_factory):
@@ -350,9 +402,7 @@ async def test_official_sample_ids_flow_through_http_path(session_factory):
     assert payload["process_status"] == "dispatched"
     async with session_factory() as session:
         queue = (await session.execute(select(IntegrationMessageQueue))).scalar_one()
-    assert queue.conversation_key == (
-        "dingtalk:dingcorp0001:cid6EUvB2O8qVF2RYQtHTKEsg=="
-    )
+    assert queue.conversation_key == ("dingtalk:dingcorp0001:cid6EUvB2O8qVF2RYQtHTKEsg==")
     assert queue.sender_identity_key.startswith("dingtalk:dingcorp0001:x=")
     assert ":" not in queue.sender_identity_key.split(":", 2)[2]
 
@@ -423,9 +473,7 @@ async def test_malformed_conversation_id_colon_rejected_inside_core(session_fact
     §2.10 N-1 segment rules is a rejection inside ingest_verified_event —
     audit on the ledger row with _mesh_reject_reason, bare-JSON 200."""
     world = await seed_dingtalk_world(session_factory)
-    await make_dingtalk_binding(
-        session_factory, world=world, external_ref="cidWITHcolon:injection"
-    )
+    await make_dingtalk_binding(session_factory, world=world, external_ref="cidWITHcolon:injection")
     payload = dingtalk_message_payload(conversation_id="cidWITHcolon:injection")
     body, headers = dingtalk_request(payload)
 

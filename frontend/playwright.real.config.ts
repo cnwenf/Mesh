@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
+const apiBaseUrl = process.env.MES90_API_BASE ?? 'http://127.0.0.1:8000';
+const wsBaseUrl = process.env.MES90_WS_BASE ?? 'ws://127.0.0.1:8081';
+
 /**
  * 真实后端联调专用配置(复验 MES-16 B1):
  * 前置:origin/main 后端栈运行中(docker compose up postgres redis api worker gateway,
@@ -10,7 +13,14 @@ import { defineConfig } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['real-backend.spec.ts', 'workspace-flow.spec.ts', 'real-projects.spec.ts', 'real-lead-gate.spec.ts', 'real-labels.spec.ts'],
+  testMatch: [
+    'real-backend.spec.ts',
+    'workspace-flow.spec.ts',
+    'real-projects.spec.ts',
+    'real-lead-gate.spec.ts',
+    'real-labels.spec.ts',
+    'real-dingtalk-ui.spec.ts',
+  ],
   timeout: 120_000,
   retries: 0,
   workers: 1,
@@ -30,8 +40,8 @@ export default defineConfig({
       reuseExistingServer: true,
       timeout: 90_000,
       env: {
-        VITE_MESH_API_BASE_URL: 'http://127.0.0.1:8000',
-        VITE_MESH_WS_BASE_URL: 'ws://127.0.0.1:8081',
+        VITE_MESH_API_BASE_URL: apiBaseUrl,
+        VITE_MESH_WS_BASE_URL: wsBaseUrl,
         VITE_MESH_POLLING_INTERVAL_MS: '1000',
       },
     },

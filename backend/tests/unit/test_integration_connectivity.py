@@ -8,6 +8,8 @@ seam); the classification logic under test is the real thing.
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -138,6 +140,38 @@ async def test_dingtalk_healthy_when_errcode_zero():
             "im_dingtalk", config={"app_key": "ak"}, secret="as", http_client=client
         )
     assert (state, detail) == (HEALTH_HEALTHY, None)
+
+
+async def test_dingtalk_query_secret_is_redacted_from_httpx_info_log():
+    secret = "mes90-super-sensitive-app-secret"
+    httpx_logger = logging.getLogger("httpx")
+    messages: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            messages.append(record.getMessage())
+
+    handler = Capture()
+    old_level, old_disabled = httpx_logger.level, httpx_logger.disabled
+    httpx_logger.setLevel(logging.INFO)
+    httpx_logger.disabled = False
+    httpx_logger.addHandler(handler)
+    try:
+        async with _client(200, {"errcode": 0, "access_token": "t"}) as client:
+            state, detail = await check_connectivity(
+                "im_dingtalk",
+                config={"app_key": "ak"},
+                secret=secret,
+                http_client=client,
+            )
+    finally:
+        httpx_logger.removeHandler(handler)
+        httpx_logger.setLevel(old_level)
+        httpx_logger.disabled = old_disabled
+    assert (state, detail) == (HEALTH_HEALTHY, None)
+    logged = "\n".join(messages)
+    assert "HTTP Request" in logged  # useful request log remains
+    assert secret not in logged
 
 
 async def test_dingtalk_auth_failed_when_errcode_nonzero():
@@ -363,6 +397,119 @@ def test_validate_integration_config_guards_gitlab_only():
     # ...and absent instance_url (gitlab.com default) is fine.
     assert validate_integration_config("vcs_gitlab", {}) is None
     assert validate_integration_config("vcs_gitlab", None) is None
+
+
+@pytest.mark.parametrize(
+    ("config", "field"),
+    [
+        ({"corp_id": "dingcorp", "receive_mode": "stream"}, "app_key"),
+        ({"app_key": "dingapp", "receive_mode": "stream"}, "corp_id"),
+        (
+            {"app_key": "dingapp", "corp_id": "dingcorp", "receive_mode": "socket"},
+            "receive_mode",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "inbound_queue": "unordered",
+            },
+            "inbound_queue",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "verbosity": "everything",
+            },
+            "verbosity",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "stream_reconnect": "fast",
+            },
+            "stream_reconnect",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "stream_reconnect": {"base_seconds": 0},
+            },
+            "stream_reconnect.base_seconds",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "stream_reconnect": {"base_seconds": 5, "max_seconds": 4},
+            },
+            "stream_reconnect.max_seconds",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "stream_reconnect": {"heartbeat_timeout_seconds": float("nan")},
+            },
+            "stream_reconnect.heartbeat_timeout_seconds",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "gateway_base": "https://attacker.example",
+            },
+            "gateway_base",
+        ),
+        (
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "receive_mode": "stream",
+                "app_secret_ref": "encrypted-bypass",
+            },
+            "app_secret_ref",
+        ),
+    ],
+)
+def test_validate_dingtalk_config_rejects_missing_or_unbounded_fields(config, field):
+    with pytest.raises(ValidationError) as excinfo:
+        validate_integration_config("im_dingtalk", config)
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.details["field"] == field
+
+
+def test_validate_dingtalk_config_accepts_the_documented_shape():
+    assert (
+        validate_integration_config(
+            "im_dingtalk",
+            {
+                "app_key": "dingapp",
+                "corp_id": "dingcorp",
+                "robot_code": "dingrobot",
+                "receive_mode": "stream",
+                "inbound_queue": "serial_conversation",
+                "verbosity": "final_only",
+                "ack_template": "received",
+                "stream_reconnect": {
+                    "base_seconds": 2,
+                    "max_seconds": 300,
+                    "heartbeat_timeout_seconds": 90,
+                },
+            },
+        )
+        is None
+    )
 
 
 def _public_resolver(ip: str):

@@ -3,7 +3,7 @@
  * /w/:workspaceSlug/approvals 双路由(工作区解析见 useApprovalsWorkspace)。
  * pending 默认视图(role=mine),状态页签经 URL ?status= 同步;人类专属——
  * agent principal 呈现门控空态(§6.10:agent 不可审批,防自批)。
- * 决定走乐观更新 + 失败回滚 + toast;后端决定幂等,刷新即对账。
+ * 决定走乐观更新 + 单行失败回滚;成功后立即采用后端幂等真值。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
@@ -14,7 +14,7 @@ import { useT } from '../../i18n';
 import { useDocumentTitle } from '../../shell/hooks';
 import { ApprovalCard } from './ApprovalCard';
 import type { Approval, ApprovalStatus } from './api';
-import { approveApproval, listApprovals, rejectApproval } from './api';
+import { approveApproval, getApproval, listApprovals, rejectApproval } from './api';
 import { useApprovalsWorkspace } from './useApprovalsWorkspace';
 import './approvals.css';
 
@@ -62,6 +62,7 @@ export function ApprovalsPage(): React.JSX.Element {
   const ws = useApprovalsWorkspace(client);
   const [searchParams, setSearchParams] = useSearchParams();
   const status = parseStatusParam(searchParams.get('status'));
+  const focusedApprovalId = searchParams.get('approval_id')?.trim() || null;
   const workspaceId = ws.kind === 'ready' ? ws.workspaceId : null;
 
   const [approvals, setApprovals] = useState<readonly Approval[]>([]);
@@ -82,10 +83,17 @@ export function ApprovalsPage(): React.JSX.Element {
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    const params = status === 'pending' ? { role: 'mine' as const } : { status };
-    listApprovals(client, workspaceId, params)
-      .then((envelope) => {
-        if (!cancelled) setApprovals(envelope.data);
+    const request =
+      focusedApprovalId === null
+        ? listApprovals(
+            client,
+            workspaceId,
+            status === 'pending' ? { role: 'mine' as const } : { status },
+          ).then((envelope) => envelope.data)
+        : getApproval(client, workspaceId, focusedApprovalId).then((approval) => [approval]);
+    request
+      .then((rows) => {
+        if (!cancelled) setApprovals(rows);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -101,12 +109,11 @@ export function ApprovalsPage(): React.JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [client, workspaceId, status, reloadKey, isAgentGated]);
+  }, [client, workspaceId, status, focusedApprovalId, reloadKey, isAgentGated]);
 
   const applyDecision = useCallback(
     async (approval: Approval, decision: 'approved' | 'rejected', comment?: string) => {
       if (workspaceId === null) return;
-      const snapshot = approvals;
       setApprovals((prev) =>
         prev.map((a) =>
           a.id === approval.id
@@ -121,26 +128,35 @@ export function ApprovalsPage(): React.JSX.Element {
       );
       setDecidingId(approval.id);
       try {
-        if (decision === 'approved') {
-          await approveApproval(client, workspaceId, approval.id, {});
-        } else {
-          await rejectApproval(client, workspaceId, approval.id, { comment });
-        }
+        const committed =
+          decision === 'approved'
+            ? await approveApproval(client, workspaceId, approval.id, {})
+            : await rejectApproval(client, workspaceId, approval.id, { comment });
+        setApprovals((prev) => prev.map((row) => (row.id === approval.id ? committed : row)));
+        const committedToastKey =
+          committed.status === 'approved' || committed.status === 'rejected'
+            ? `approvals.toast.${committed.status}`
+            : `approvals.status.${committed.status}`;
         addToast(
-          t(decision === 'approved' ? 'approvals.toast.approved' : 'approvals.toast.rejected'),
+          t(committedToastKey),
           {
-            tone: 'success',
+            tone:
+              committed.status === 'approved' || committed.status === 'rejected'
+                ? 'success'
+                : 'info',
             closeLabel: t('a11y.dismiss'),
           },
         );
       } catch (err: unknown) {
-        setApprovals(snapshot); // 回滚并给出可见反馈
+        // Restore only this operation's row. A concurrent decision on a
+        // different approval must never be erased by this request failing.
+        setApprovals((prev) => prev.map((row) => (row.id === approval.id ? approval : row)));
         addToast(t(toastKeyForError(err)), { tone: 'danger', closeLabel: t('a11y.dismiss') });
       } finally {
         setDecidingId(null);
       }
     },
-    [approvals, workspaceId, client, addToast, t],
+    [workspaceId, client, addToast, t],
   );
 
   const handleRejectConfirm = useCallback(() => {
@@ -251,12 +267,26 @@ export function ApprovalsPage(): React.JSX.Element {
   return (
     <main className="mesh-page mesh-approvals" data-testid="approvals-page">
       <h1 className="mesh-text-title-1">{t('approvals.title')}</h1>
-      <Tabs
-        items={tabItems.map((item) => ({ ...item, content: listPanel }))}
-        value={status}
-        onChange={selectTab}
-        label={t('approvals.tabsLabel')}
-      />
+      {focusedApprovalId === null ? (
+        <Tabs
+          items={tabItems.map((item) => ({ ...item, content: listPanel }))}
+          value={status}
+          onChange={selectTab}
+          label={t('approvals.tabsLabel')}
+        />
+      ) : (
+        <section data-testid="approvals-focused-detail">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSearchParams({})}
+            data-testid="approvals-focused-back"
+          >
+            {t('common.back')}
+          </Button>
+          {listPanel}
+        </section>
+      )}
       <Dialog
         open={rejectTarget !== null}
         onClose={() => setRejectTarget(null)}

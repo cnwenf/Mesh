@@ -24,6 +24,13 @@ const state = vi.hoisted(() => ({
   /** 抛出非 MeshApiError 的普通错误(覆盖错误归一化回退分支) */
   listThrowPlain: false,
   postThrowPlain: false,
+  postResult: null as unknown,
+  postDeferred: false,
+  postResolvers: [] as Array<{
+    path: string;
+    resolve: (approval: unknown) => void;
+    reject: (err: unknown) => void;
+  }>,
   meShouldFail: false,
   /** 列表请求挂起,由测试手动 resolve/reject(覆盖过期响应竞态) */
   listDeferred: false,
@@ -33,6 +40,8 @@ const state = vi.hoisted(() => ({
   }>,
   pending: [] as unknown[],
   byStatus: {} as Record<string, unknown[]>,
+  byId: {} as Record<string, unknown>,
+  getShouldFail: false,
 }));
 
 vi.mock('../../../api', async (importOriginal) => {
@@ -47,13 +56,38 @@ vi.mock('../../../api', async (importOriginal) => {
         }
         return state.me;
       }
+      if (method === 'GET' && path.includes('/approvals/')) {
+        if (state.getShouldFail) {
+          throw new actual.MeshApiError({ status: 404, code: 'not_found', message: 'missing' });
+        }
+        const approvalId = path.split('/').at(-1) ?? '';
+        const approval = state.byId[approvalId];
+        if (approval === undefined) throw new Error(`unexpected approval ${approvalId}`);
+        return approval;
+      }
       if (path.endsWith('/approve') || path.endsWith('/reject')) {
         state.postCalls.push({ path, body: opts?.body });
+        if (state.postDeferred) {
+          return new Promise((resolve, reject) => {
+            state.postResolvers.push({ path, resolve, reject });
+          });
+        }
         if (state.postThrowPlain) throw new Error('plain failure');
         if (state.postShouldFail) {
           throw new actual.MeshApiError({ status: 403, code: 'forbidden', message: 'no' });
         }
-        return { id: path.split('/')[5] };
+        if (state.postResult !== null) return state.postResult;
+        const id = path.split('/').at(-2) ?? '';
+        const existing = state.pending.find(
+          (item) => typeof item === 'object' && item !== null && 'id' in item && item.id === id,
+        ) as Record<string, unknown> | undefined;
+        return {
+          ...existing,
+          id,
+          status: path.endsWith('/approve') ? 'approved' : 'rejected',
+          decided_at: new Date().toISOString(),
+          decision_comment: (opts?.body as { comment?: string | null } | undefined)?.comment ?? null,
+        };
       }
       throw new Error(`unexpected request ${method} ${path}`);
     }
@@ -185,11 +219,16 @@ beforeEach(() => {
   state.postShouldFail = false;
   state.listThrowPlain = false;
   state.postThrowPlain = false;
+  state.postResult = null;
+  state.postDeferred = false;
+  state.postResolvers = [];
   state.meShouldFail = false;
   state.listDeferred = false;
   state.listResolvers = [];
   state.pending = [TOOL_CALL, AUTOPILOT, SQUAD_PLAN];
   state.byStatus = { expired: [EXPIRED], approved: [APPROVED] };
+  state.byId = { 'ap-tool': TOOL_CALL, 'ap-ok': APPROVED, 'ap-exp': EXPIRED };
+  state.getShouldFail = false;
 });
 
 describe('ApprovalsPage pending inbox', () => {
@@ -262,6 +301,63 @@ describe('ApprovalsPage pending inbox', () => {
     expect(screen.queryByTestId('approval-status-ap-tool')).toBeNull();
   });
 
+  it('reconciles an optimistic approve to the opposite terminal server truth', async () => {
+    state.postResult = {
+      ...TOOL_CALL,
+      status: 'rejected',
+      decided_at: new Date().toISOString(),
+      decision_comment: 'already rejected elsewhere',
+    };
+    renderWithProviders(<ApprovalsPage />, { route: '/approvals' });
+    fireEvent.click(await screen.findByTestId('approval-approve-ap-tool'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-status-ap-tool')).toHaveTextContent(/Rejected/i),
+    );
+    expect(screen.getByTestId('approval-card-ap-tool')).toHaveTextContent(
+      'already rejected elsewhere',
+    );
+  });
+
+  it('reports an expired idempotent response as expired instead of approved', async () => {
+    state.postResult = { ...EXPIRED, id: TOOL_CALL.id };
+    renderWithProviders(<ApprovalsPage />, { route: '/approvals' });
+    fireEvent.click(await screen.findByTestId('approval-approve-ap-tool'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-status-ap-tool')).toHaveTextContent(/Expired/i),
+    );
+    const toastRegion = screen.getByRole('status', { name: /Notifications/i });
+    expect(toastRegion).toHaveTextContent('Expired');
+    expect(toastRegion).not.toHaveTextContent('Approved');
+  });
+
+  it('a failed decision restores only its own row while another decision commits', async () => {
+    state.postDeferred = true;
+    renderWithProviders(<ApprovalsPage />, { route: '/approvals' });
+    fireEvent.click(await screen.findByTestId('approval-approve-ap-tool'));
+    fireEvent.click(screen.getByTestId('approval-approve-ap-auto'));
+    await waitFor(() => expect(state.postResolvers).toHaveLength(2));
+
+    const toolRequest = state.postResolvers.find((item) => item.path.includes('/ap-tool/'));
+    const autoRequest = state.postResolvers.find((item) => item.path.includes('/ap-auto/'));
+    await act(async () => {
+      autoRequest?.resolve({
+        ...AUTOPILOT,
+        status: 'approved',
+        decided_at: new Date().toISOString(),
+      });
+      toolRequest?.reject(new Error('tool decision failed'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('approval-approve-ap-tool')).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId('approval-approve-ap-auto')).toBeNull();
+    expect(screen.getByTestId('approval-status-ap-auto')).toHaveTextContent(/Approved/i);
+  });
+
   it('reject collects an optional comment through the dialog and posts it', async () => {
     renderWithProviders(<ApprovalsPage />, { route: '/approvals' });
     await waitFor(() => {
@@ -294,6 +390,53 @@ describe('ApprovalsPage pending inbox', () => {
 });
 
 describe('ApprovalsPage states', () => {
+  it('resolves approval_id as a true-source detail deep link without loading the list', async () => {
+    state.optionalContext = {
+      status: 'ready',
+      workspace: { id: 'ws2', slug: 'team-b' },
+      error: null,
+      isAdmin: true,
+      isOwner: false,
+      refresh: vi.fn(),
+      patch: vi.fn(),
+    };
+    state.me = {
+      ...HUMAN_ME,
+      memberships: [
+        {
+          ...HUMAN_ME.memberships[0],
+          workspace_id: 'ws2',
+          workspace_slug: 'team-b',
+        },
+      ],
+    };
+
+    renderWithProviders(<ApprovalsPage />, {
+      route: '/w/team-b/approvals?approval_id=ap-ok',
+    });
+
+    expect(await screen.findByTestId('approval-card-ap-ok')).toBeInTheDocument();
+    expect(screen.getByTestId('approvals-focused-detail')).toBeInTheDocument();
+    expect(state.requestCalls).toContainEqual({
+      method: 'GET',
+      path: '/api/v1/workspaces/ws2/approvals/ap-ok',
+    });
+    expect(state.listCalls).toHaveLength(0);
+  });
+
+  it('leaves a focused approval and returns to the pending truth-source list', async () => {
+    renderWithProviders(<ApprovalsPage />, { route: '/approvals?approval_id=ap-ok' });
+    expect(await screen.findByTestId('approval-card-ap-ok')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('approvals-focused-back'));
+
+    await waitFor(() => {
+      expect(state.listCalls.at(-1)?.query).toEqual({ role: 'mine' });
+    });
+    expect(await screen.findByTestId('approval-card-ap-tool')).toBeInTheDocument();
+    expect(screen.queryByTestId('approvals-focused-detail')).toBeNull();
+  });
+
   it('shows the expired badge and a relaunch deep link on expired cards', async () => {
     renderWithProviders(<ApprovalsPage />, { route: '/approvals?status=expired' });
     await waitFor(() => {

@@ -303,6 +303,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
     load: 2,
     max: 4,
     offset: 1049012,
+    seconds: 5,
+    conversation: 'incident-room',
     status: 'completed',
     reason: 'nonzero_exit',
     branch: 'agent/8f3a1d2c/a1',
@@ -387,9 +389,7 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
         joined: '{name} 于 {date, date, medium} 加入',
       },
     });
-    expect(zh.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe(
-      '第 3 项，共 10 项',
-    );
+    expect(zh.formatMessage({ id: 'position' }, { n: 3, total: 10 })).toBe('第 3 项，共 10 项');
     const joined = zh.formatMessage(
       { id: 'joined' },
       { name: 'Mesh', date: new Date('2026-07-25T08:00:00Z') },
@@ -404,8 +404,8 @@ describe('ICU MessageFormat 可渲染性(§2.4)', () => {
       [...text.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)(?=[,}])/g)].map((m) => m[1]).sort();
     const enMessages = builtinCatalogs.en.messages;
     const zhMessages = builtinCatalogs['zh-CN'].messages;
-    const parameterized = Object.keys(enMessages).filter((key) =>
-      placeholder(enMessages[key]).length > 0,
+    const parameterized = Object.keys(enMessages).filter(
+      (key) => placeholder(enMessages[key]).length > 0,
     );
     expect(parameterized.length).toBeGreaterThan(0);
     for (const key of parameterized) {

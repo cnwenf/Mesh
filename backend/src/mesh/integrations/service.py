@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,14 +33,17 @@ from mesh.db.models.integration import (
 )
 from mesh.db.models.member import Member
 from mesh.db.tenant import set_tenant_context
-from mesh.errors import BusinessRuleError, ConflictError, NotFoundError
+from mesh.errors import BusinessRuleError, ConflictError, NotFoundError, UpstreamError
 from mesh.integrations.connectors import (
+    HEALTH_AUTH_FAILED,
+    HEALTH_HEALTHY,
     KIND_TO_PROVIDER,
     adapter_for,
     test_connectivity,
     validate_integration_config,
 )
 from mesh.integrations.matching import validate_match_config
+from mesh.integrations.visibility import binding_visibility_clause, event_visibility_clause
 from mesh.outbox.service import emit_realtime
 from mesh.runtime.credentials import decrypt_credential_value, encrypt_credential_value
 
@@ -90,7 +93,11 @@ def assert_config_non_secret(config: dict[str, Any]) -> None:
 # silently parallel direct-dispatch against the Spec. Explicit client
 # values always win over the defaults.
 _KIND_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
-    "im_dingtalk": {"inbound_queue": "serial_conversation"},
+    "im_dingtalk": {
+        "receive_mode": "stream",
+        "inbound_queue": "serial_conversation",
+        "verbosity": "final_only",
+    },
 }
 
 
@@ -101,14 +108,171 @@ def _config_with_kind_defaults(kind: str, config: dict[str, Any]) -> dict[str, A
     return {**defaults, **config}
 
 
+def _canonical_dingtalk_stream_reconnect(config: dict[str, Any]) -> tuple[float, float, float]:
+    reconnect = config.get("stream_reconnect") or {}
+    if not isinstance(reconnect, dict):
+        reconnect = {}
+    return (
+        float(reconnect.get("base_seconds") or 2.0),
+        float(reconnect.get("max_seconds") or 300.0),
+        float(reconnect.get("heartbeat_timeout_seconds") or 90.0),
+    )
+
+
 class IntegrationService:
-    def __init__(self, session_factory: async_sessionmaker[AsyncSession], signing_secret: str):
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        signing_secret: str,
+        *,
+        dingtalk_credential_verifier=None,
+        dingtalk_oapi_base: str = "https://oapi.dingtalk.com",
+    ):
         self._sf = session_factory
         self._signing_secret = signing_secret
+        self._dingtalk_oapi_base = dingtalk_oapi_base.rstrip("/")
+        self._dingtalk_credential_verifier = dingtalk_credential_verifier or self._verify_dingtalk_credentials
+
+    async def _verify_dingtalk_credentials(
+        self, config: dict[str, Any], secret: str
+    ) -> tuple[str, str | None]:
+        return await test_connectivity(
+            "im_dingtalk",
+            config=config,
+            secret=secret,
+            base_urls={"im_dingtalk": self._dingtalk_oapi_base},
+        )
 
     # ------------------------------------------------------------------
     # Integrations CRUD
     # ------------------------------------------------------------------
+
+    async def _admit_dingtalk_app_config(
+        self,
+        session: AsyncSession,
+        *,
+        workspace_id: uuid.UUID,
+        config: dict[str, Any],
+        secret_ref: str | None,
+        exclude_integration_id: uuid.UUID | None = None,
+    ) -> str | None:
+        """Serialize and validate one DingTalk app-key group admission.
+
+        The restricted API role cannot inspect foreign integration rows under
+        RLS. A narrow SECURITY DEFINER lookup, called only after a transaction
+        advisory lock, provides race-free global ownership admission without
+        exposing another tenant's integration data.
+        """
+        app_key = str(config.get("app_key") or "")
+        if app_key == "":
+            return secret_ref
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"dingtalk_app_owner:{app_key}"},
+        )
+        owner_workspace = await session.scalar(
+            text("SELECT mesh_dingtalk_app_owner_workspace(:app_key)"),
+            {"app_key": app_key},
+        )
+        if owner_workspace is not None and uuid.UUID(str(owner_workspace)) != workspace_id:
+            raise ConflictError(
+                "DingTalk app key is already owned by another workspace",
+                code="dingtalk_app_key_conflict",
+            )
+
+        # New API writes accept credentials only through the dedicated
+        # top-level secret/rotate-secret contract. Legacy config references
+        # are read from already-persisted sibling rows below, never admitted
+        # from this candidate config.
+        candidate_cipher = str(secret_ref or "")
+
+        def decrypt_cipher(cipher: str) -> str | None:
+            if cipher == "":
+                return None
+            try:
+                return decrypt_credential_value(cipher, self._signing_secret)
+            except Exception:  # noqa: BLE001 — malformed group credentials fail closed
+                return None
+
+        candidate_plaintext = decrypt_cipher(candidate_cipher)
+        if owner_workspace is None:
+            if candidate_plaintext is None:
+                raise BusinessRuleError(
+                    "DingTalk app ownership requires valid app credentials",
+                    code="dingtalk_credentials_invalid",
+                )
+            health, detail = await self._dingtalk_credential_verifier(config, candidate_plaintext)
+            if health == HEALTH_AUTH_FAILED:
+                raise BusinessRuleError(
+                    "DingTalk rejected the app credentials",
+                    code="dingtalk_credentials_invalid",
+                    details={"reason": detail},
+                )
+            if health != HEALTH_HEALTHY:
+                raise UpstreamError(
+                    "DingTalk credential ownership verification is unavailable",
+                    code="dingtalk_credential_verification_unavailable",
+                    details={"reason": detail},
+                )
+
+        stmt = select(Integration).where(
+            Integration.workspace_id == workspace_id,
+            Integration.kind == "im_dingtalk",
+            Integration.deleted_at.is_(None),
+            Integration.config["app_key"].astext == app_key,
+        )
+        if exclude_integration_id is not None:
+            stmt = stmt.where(Integration.id != exclude_integration_id)
+        siblings = (await session.execute(stmt)).scalars().all()
+
+        identity = (
+            str(config.get("corp_id") or ""),
+            str(config.get("robot_code") or app_key),
+        )
+        if any(
+            (
+                str((row.config or {}).get("corp_id") or ""),
+                str((row.config or {}).get("robot_code") or (row.config or {}).get("app_key") or ""),
+            )
+            == identity
+            for row in siblings
+        ):
+            raise ConflictError(
+                "DingTalk corp and robot route is already configured for this app",
+                code="dingtalk_route_conflict",
+            )
+
+        if str(config.get("receive_mode") or "") == "stream":
+            reconnect_policy = _canonical_dingtalk_stream_reconnect(config)
+            if any(
+                str((row.config or {}).get("receive_mode") or "") == "stream"
+                and _canonical_dingtalk_stream_reconnect(dict(row.config or {})) != reconnect_policy
+                for row in siblings
+            ):
+                raise ConflictError(
+                    "DingTalk integrations sharing a Stream app must share one reconnect policy",
+                    code="dingtalk_stream_config_conflict",
+                )
+
+        existing_ciphers = [
+            str((row.config or {}).get("app_secret_ref") or row.secret_ref or "") for row in siblings
+        ]
+        if not existing_ciphers:
+            return secret_ref
+        existing_plaintexts = [decrypt_cipher(cipher) for cipher in existing_ciphers]
+        if (
+            any(value is None for value in existing_plaintexts)
+            or len(set(existing_plaintexts)) != 1
+            or (candidate_cipher != "" and candidate_plaintext is None)
+            or (candidate_plaintext is not None and candidate_plaintext != existing_plaintexts[0])
+        ):
+            raise ConflictError(
+                "DingTalk integrations sharing an app key must share one credential",
+                code="dingtalk_app_credential_conflict",
+            )
+        # Reuse the group's encrypted credential when the caller omitted it.
+        # This reveals no plaintext and keeps one credential truth per app.
+        return secret_ref or existing_ciphers[0]
 
     async def create_integration(
         self,
@@ -131,14 +295,22 @@ class IntegrationService:
         assert_config_non_secret(config)
         validate_integration_config(kind, config)
         moment = now or datetime.now(UTC)
+        encrypted_secret = encrypt_credential_value(secret, self._signing_secret) if secret else None
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
+            if kind == "im_dingtalk":
+                encrypted_secret = await self._admit_dingtalk_app_config(
+                    session,
+                    workspace_id=workspace_id,
+                    config=config,
+                    secret_ref=encrypted_secret,
+                )
             integration = Integration(
                 workspace_id=workspace_id,
                 kind=kind,
                 name=name,
                 config=config,
-                secret_ref=(encrypt_credential_value(secret, self._signing_secret) if secret else None),
+                secret_ref=encrypted_secret,
                 created_by=creator.id,
                 created_at=moment,
                 updated_at=moment,
@@ -190,23 +362,26 @@ class IntegrationService:
         workspace_id: uuid.UUID,
         integration_ids: list[uuid.UUID],
         since: datetime,
+        viewer: Member,
     ) -> dict[uuid.UUID, int]:
         """Inbound event counts per integration since ``since`` (§4.1 近7天事件量)."""
         if not integration_ids:
             return {}
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
-            rows = (
-                await session.execute(
-                    select(IntegrationEvent.integration_id, func.count())
-                    .where(
-                        IntegrationEvent.workspace_id == workspace_id,
-                        IntegrationEvent.integration_id.in_(integration_ids),
-                        IntegrationEvent.received_at >= since,
-                    )
-                    .group_by(IntegrationEvent.integration_id)
+            stmt = (
+                select(IntegrationEvent.integration_id, func.count())
+                .where(
+                    IntegrationEvent.workspace_id == workspace_id,
+                    IntegrationEvent.integration_id.in_(integration_ids),
+                    IntegrationEvent.received_at >= since,
                 )
-            ).all()
+                .group_by(IntegrationEvent.integration_id)
+            )
+            visibility = event_visibility_clause(viewer)
+            if visibility is not None:
+                stmt = stmt.where(visibility)
+            rows = (await session.execute(stmt)).all()
             return {row[0]: row[1] for row in rows}
 
     async def record_health(
@@ -391,6 +566,102 @@ class IntegrationService:
             )
         return body
 
+    async def request_stream_reconnect(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        now: datetime | None = None,
+    ) -> dict[str, bool]:
+        """Persist an explicit Stream reconnect request for the lock owner.
+
+        API and Stream workers can live in different processes.  The opaque
+        request id therefore lives in ``stream_state`` rather than process
+        memory; the worker's connection fingerprint observes it during the
+        next reconciliation scan and closes/rebuilds the shared app_key
+        connection.  State and realtime invalidation commit atomically.
+        """
+        moment = now or datetime.now(UTC)
+        reconnect_request_id = str(uuid.uuid4())
+        async with self._sf() as session, session.begin():
+            await set_tenant_context(session, workspace_id)
+            integration = await session.scalar(
+                select(Integration)
+                .where(
+                    Integration.id == integration_id,
+                    Integration.workspace_id == workspace_id,
+                    Integration.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+            if integration is None:
+                raise NotFoundError("integration not found")
+            if integration.kind != "im_dingtalk":
+                raise BusinessRuleError(
+                    "reconnect is only supported for im_dingtalk integrations",
+                    code="invalid_request",
+                )
+            if integration.status != "active":
+                raise BusinessRuleError(
+                    "integration must be active to reconnect",
+                    code="invalid_request",
+                )
+            if str((integration.config or {}).get("receive_mode") or "") != "stream":
+                raise BusinessRuleError(
+                    "reconnect is only supported in Stream receive mode",
+                    code="invalid_request",
+                )
+            app_key = str((integration.config or {}).get("app_key") or "")
+            group = [integration]
+            if app_key:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": f"dingtalk_app_owner:{app_key}"},
+                )
+                group = (
+                    (
+                        await session.execute(
+                            select(Integration)
+                            .where(
+                                Integration.workspace_id == workspace_id,
+                                Integration.kind == "im_dingtalk",
+                                Integration.deleted_at.is_(None),
+                                Integration.status == "active",
+                                Integration.config["app_key"].astext == app_key,
+                                Integration.config["receive_mode"].astext == "stream",
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            for row in group:
+                previous = dict(row.stream_state or {})
+                row.stream_state = {
+                    **previous,
+                    "state": "reconnecting",
+                    "last_attempt_at": moment.isoformat(),
+                    "backoff_seconds": 0,
+                    "reconnect_request_id": reconnect_request_id,
+                }
+                row.updated_at = moment
+                await emit_realtime(
+                    session,
+                    workspace_id=workspace_id,
+                    channel=f"workspace:{workspace_id}:integrations",
+                    event="integration.updated",
+                    data={
+                        "integration_id": str(row.id),
+                        "kind": row.kind,
+                        "status": row.status,
+                        "subject": "stream_channel",
+                        "stream_state": "reconnecting",
+                    },
+                    idempotency_key=(f"integration-stream-reconnect:{row.id}:{reconnect_request_id}"),
+                )
+        return {"accepted": True}
+
     async def update_integration(
         self,
         *,
@@ -425,6 +696,17 @@ class IntegrationService:
                 # DingTalk integration back onto the parallel code fallback.
                 config = _config_with_kind_defaults(integration.kind, dict(config))
                 validate_integration_config(integration.kind, config)
+                if integration.kind == "im_dingtalk":
+                    effective_secret_ref = str(
+                        (integration.config or {}).get("app_secret_ref") or integration.secret_ref or ""
+                    )
+                    integration.secret_ref = await self._admit_dingtalk_app_config(
+                        session,
+                        workspace_id=workspace_id,
+                        config=config,
+                        secret_ref=effective_secret_ref or None,
+                        exclude_integration_id=integration.id,
+                    )
             if name is not None:
                 integration.name = name
             if status is not None:
@@ -505,6 +787,7 @@ class IntegrationService:
         self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID, secret: str
     ) -> dict[str, Any]:
         """Rotate the credential; returns the new plaintext ONCE."""
+        encrypted_secret = encrypt_credential_value(secret, self._signing_secret)
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             integration = await session.scalar(
@@ -516,10 +799,45 @@ class IntegrationService:
             )
             if integration is None:
                 raise NotFoundError("integration not found")
-            integration.secret_ref = encrypt_credential_value(secret, self._signing_secret)
-            integration.updated_at = datetime.now(UTC)
+            rows = [integration]
+            app_key = (
+                str((integration.config or {}).get("app_key") or "")
+                if integration.kind == "im_dingtalk"
+                else ""
+            )
+            if app_key:
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                    {"key": f"dingtalk_app_owner:{app_key}"},
+                )
+                rows = (
+                    (
+                        await session.execute(
+                            select(Integration)
+                            .where(
+                                Integration.workspace_id == workspace_id,
+                                Integration.kind == "im_dingtalk",
+                                Integration.deleted_at.is_(None),
+                                Integration.config["app_key"].astext == app_key,
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            rotated_at = datetime.now(UTC)
+            for row in rows:
+                # Legacy rows may carry app_secret_ref in config. Remove that
+                # precedence source so every sibling reads the same rotated
+                # top-level encrypted credential.
+                row.config = {
+                    key: value for key, value in (row.config or {}).items() if key != "app_secret_ref"
+                }
+                row.secret_ref = encrypted_secret
+                row.updated_at = rotated_at
+                await self._emit_integration_updated(session, row, rotated_at, "rotated")
             await session.flush()
-            await self._emit_integration_updated(session, integration, integration.updated_at, "rotated")
         return {"id": str(integration_id), "rotated": True}
 
     def decrypt_integration_secret(self, integration: Integration) -> str | None:
@@ -628,23 +946,23 @@ class IntegrationService:
             return render_binding(binding)
 
     async def list_bindings(
-        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        viewer: Member,
     ) -> list[dict[str, Any]]:
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
+            stmt = select(IntegrationBinding).where(
+                IntegrationBinding.workspace_id == workspace_id,
+                IntegrationBinding.integration_id == integration_id,
+            )
+            visibility = binding_visibility_clause(viewer)
+            if visibility is not None:
+                stmt = stmt.where(visibility)
             rows = (
-                (
-                    await session.execute(
-                        select(IntegrationBinding)
-                        .where(
-                            IntegrationBinding.workspace_id == workspace_id,
-                            IntegrationBinding.integration_id == integration_id,
-                        )
-                        .order_by(IntegrationBinding.created_at.desc())
-                    )
-                )
-                .scalars()
-                .all()
+                (await session.execute(stmt.order_by(IntegrationBinding.created_at.desc()))).scalars().all()
             )
             return [render_binding(row) for row in rows]
 
@@ -768,11 +1086,7 @@ class IntegrationService:
         the stop on recovery); the survivors then ride SET NULL into orphan
         audit rows when the parent is deleted.
         """
-        budget = (
-            DEFAULT_FORCE_CANCEL_WAIT_SECONDS
-            if wait_seconds is None
-            else float(wait_seconds)
-        )
+        budget = DEFAULT_FORCE_CANCEL_WAIT_SECONDS if wait_seconds is None else float(wait_seconds)
         async with self._sf() as session, session.begin():
             await set_tenant_context(session, workspace_id)
             binding = await session.scalar(
@@ -873,9 +1187,7 @@ class IntegrationService:
                 BINDING_DELETED_REASON,
             )
 
-    async def _count_active_binding_items(
-        self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID
-    ) -> int:
+    async def _count_active_binding_items(self, *, workspace_id: uuid.UUID, binding_id: uuid.UUID) -> int:
         """Non-terminal queue-item count for a binding (fresh session)."""
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
@@ -947,6 +1259,7 @@ class IntegrationService:
         *,
         workspace_id: uuid.UUID,
         integration_id: uuid.UUID,
+        viewer: Member,
         signature_status: str | None = None,
         process_status: str | None = None,
         cursor: str | None = None,
@@ -958,6 +1271,9 @@ class IntegrationService:
                 IntegrationEvent.workspace_id == workspace_id,
                 IntegrationEvent.integration_id == integration_id,
             )
+            visibility = event_visibility_clause(viewer)
+            if visibility is not None:
+                stmt = stmt.where(visibility)
             if signature_status:
                 stmt = stmt.where(IntegrationEvent.signature_status == signature_status)
             if process_status:
@@ -975,23 +1291,28 @@ class IntegrationService:
             )
 
     async def event_counts_7d(
-        self, *, workspace_id: uuid.UUID, integration_id: uuid.UUID, since: datetime
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        integration_id: uuid.UUID,
+        since: datetime,
+        viewer: Member,
     ) -> int:
         async with self._sf() as session:
             await set_tenant_context(session, workspace_id)
-            return int(
-                (
-                    await session.execute(
-                        select(func.count())
-                        .select_from(IntegrationEvent)
-                        .where(
-                            IntegrationEvent.workspace_id == workspace_id,
-                            IntegrationEvent.integration_id == integration_id,
-                            IntegrationEvent.received_at >= since,
-                        )
-                    )
-                ).scalar_one()
+            stmt = (
+                select(func.count())
+                .select_from(IntegrationEvent)
+                .where(
+                    IntegrationEvent.workspace_id == workspace_id,
+                    IntegrationEvent.integration_id == integration_id,
+                    IntegrationEvent.received_at >= since,
+                )
             )
+            visibility = event_visibility_clause(viewer)
+            if visibility is not None:
+                stmt = stmt.where(visibility)
+            return int((await session.execute(stmt)).scalar_one())
 
 
 # ---------------------------------------------------------------------------

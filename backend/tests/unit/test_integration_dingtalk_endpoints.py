@@ -8,9 +8,13 @@ reports the receive-channel state; stream-status is the ONLY place 503
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import select
 
+from mesh.db.models.integration import Integration
+from mesh.db.models.outbox import OutboxEvent
 from mesh.errors import BusinessRuleError, ServiceUnavailableError, UpstreamError
 from mesh.integrations.service import IntegrationService
 from tests.unit.integrations_dingtalk_support import (
@@ -149,7 +153,8 @@ async def _set_stream_state(session_factory, world, state: dict | None = None, s
 async def test_stream_status_connected(session_factory):
     world = await _seed(session_factory)
     await _set_stream_state(
-        session_factory, world,
+        session_factory,
+        world,
         state={"state": "connected", "last_frame_at": "2026-07-30T11:00:00+00:00"},
     )
     body = await _service(session_factory).get_stream_status(
@@ -161,9 +166,7 @@ async def test_stream_status_connected(session_factory):
 
 async def test_stream_status_down_is_503_stream_channel_unavailable(session_factory):
     world = await _seed(session_factory)
-    await _set_stream_state(
-        session_factory, world, state={"state": "down", "backoff_seconds": 64}
-    )
+    await _set_stream_state(session_factory, world, state={"state": "down", "backoff_seconds": 64})
     with pytest.raises(ServiceUnavailableError) as excinfo:
         await _service(session_factory).get_stream_status(
             workspace_id=world["ws"], integration_id=world["integ_dingtalk"]
@@ -207,3 +210,93 @@ async def test_stream_status_missing_integration_404(session_factory):
         await _service(session_factory).get_stream_status(
             workspace_id=world["ws"], integration_id=uuid.uuid4()
         )
+
+
+# ---------------------------------------------------------------------------
+# explicit Stream reconnect
+# ---------------------------------------------------------------------------
+
+
+async def test_request_stream_reconnect_persists_cross_worker_signal_and_broadcasts(
+    session_factory,
+):
+    """The API writes a durable marker; it must not rely on process-local state."""
+    world = await _seed(session_factory)
+    requested_at = datetime(2026, 7, 31, 9, 30, tzinfo=UTC)
+
+    result = await _service(session_factory).request_stream_reconnect(
+        workspace_id=world["ws"],
+        integration_id=world["integ_dingtalk"],
+        now=requested_at,
+    )
+
+    assert result == {"accepted": True}
+    async with session_factory() as session:
+        integration = await session.get(Integration, world["integ_dingtalk"])
+        realtime = (
+            (await session.execute(select(OutboxEvent).where(OutboxEvent.event_type == "realtime.publish")))
+            .scalars()
+            .all()
+        )
+
+    state = integration.stream_state
+    assert state["state"] == "reconnecting"
+    assert state["backoff_seconds"] == 0
+    assert state["last_attempt_at"] == requested_at.isoformat()
+    assert uuid.UUID(state["reconnect_request_id"])
+    assert any(
+        event.payload["data"]["subject"] == "stream_channel"
+        and event.payload["data"]["stream_state"] == "reconnecting"
+        for event in realtime
+    )
+
+
+async def test_repeated_stream_reconnect_gets_a_new_durable_marker(session_factory):
+    world = await _seed(session_factory)
+    service = _service(session_factory)
+
+    await service.request_stream_reconnect(workspace_id=world["ws"], integration_id=world["integ_dingtalk"])
+    async with session_factory() as session:
+        first = dict((await session.get(Integration, world["integ_dingtalk"])).stream_state)
+
+    await service.request_stream_reconnect(workspace_id=world["ws"], integration_id=world["integ_dingtalk"])
+    async with session_factory() as session:
+        second = dict((await session.get(Integration, world["integ_dingtalk"])).stream_state)
+
+    assert second["reconnect_request_id"] != first["reconnect_request_id"]
+
+
+@pytest.mark.parametrize("receive_mode", ["http", ""])
+async def test_request_stream_reconnect_rejects_non_stream_mode(session_factory, receive_mode):
+    world = await _seed(session_factory, receive_mode=receive_mode)
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await _service(session_factory).request_stream_reconnect(
+            workspace_id=world["ws"], integration_id=world["integ_dingtalk"]
+        )
+
+    assert excinfo.value.code == "invalid_request"
+
+
+async def test_request_stream_reconnect_rejects_disabled_integration(session_factory):
+    world = await _seed(session_factory)
+    await _set_stream_state(session_factory, world, status="disabled")
+
+    with pytest.raises(BusinessRuleError) as excinfo:
+        await _service(session_factory).request_stream_reconnect(
+            workspace_id=world["ws"], integration_id=world["integ_dingtalk"]
+        )
+
+    assert excinfo.value.code == "invalid_request"
+
+
+async def test_request_stream_reconnect_rejects_other_kind_and_missing(session_factory):
+    world = await _seed(session_factory)
+    service = _service(session_factory)
+
+    with pytest.raises(BusinessRuleError):
+        await service.request_stream_reconnect(workspace_id=world["ws"], integration_id=world["integ_slack"])
+    from mesh.errors import NotFoundError
+
+    with pytest.raises(NotFoundError):
+        await service.request_stream_reconnect(workspace_id=world["ws"], integration_id=uuid.uuid4())

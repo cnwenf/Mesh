@@ -2074,6 +2074,53 @@ CREATE TABLE integrations (
 CREATE UNIQUE INDEX uq_integrations_ws_name ON integrations(workspace_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_integrations_ws_kind ON integrations(workspace_id, kind) WHERE deleted_at IS NULL;
 
+-- MES-90 / migration 0039:the API role is RLS-restricted and therefore needs
+-- one deliberately narrow cross-tenant ownership lookup after acquiring the
+-- transaction advisory lock for ``dingtalk_app_owner:<app_key>``.  Upgrade
+-- preflight aborts when any active app_key already spans multiple workspaces;
+-- operators must resolve that conflict instead of the migration guessing an
+-- owner.  PUBLIC never receives execute permission.
+CREATE FUNCTION mesh_dingtalk_app_owner_workspace(p_app_key TEXT)
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT i.workspace_id
+  FROM integrations i
+  WHERE i.kind = 'im_dingtalk'
+    AND i.deleted_at IS NULL
+    AND i.config->>'app_key' = p_app_key
+  ORDER BY i.created_at ASC, i.id ASC
+  LIMIT 1
+$$;
+REVOKE ALL ON FUNCTION mesh_dingtalk_app_owner_workspace(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION mesh_dingtalk_app_owner_workspace(TEXT) TO mesh_app;
+
+INSERT INTO integrations (id, workspace_id, kind, name, status, config, created_by)
+VALUES (
+  'abababab-1111-0000-0000-000000000090',
+  '11111111-1111-1111-1111-111111111111',
+  'im_dingtalk',
+  'dingtalk-app-owner-probe',
+  'active',
+  '{"app_key":"mes90-owner-probe"}',
+  'cccccccc-0000-0000-0000-000000000001'
+);
+SET ROLE mesh_app;
+DO $$
+DECLARE v_owner UUID;
+BEGIN
+  SELECT mesh_dingtalk_app_owner_workspace('mes90-owner-probe') INTO v_owner;
+  ASSERT v_owner = '11111111-1111-1111-1111-111111111111',
+         'MES-90 FAIL:restricted API role must resolve the existing app owner through the narrow SECURITY DEFINER seam';
+  ASSERT NOT has_function_privilege('public', 'mesh_dingtalk_app_owner_workspace(text)', 'EXECUTE'),
+         'MES-90 FAIL:PUBLIC must not execute the cross-tenant DingTalk app ownership lookup';
+  RAISE NOTICE 'PASS MES-90:app owner lookup is callable by mesh_app while PUBLIC remains revoked';
+END $$;
+RESET ROLE;
+
 -- ============ integration_bindings(R3 修订 HIGH-3:规范化外部身份 + 全局唯一 + scope 精确异或)============
 CREATE TABLE integration_bindings (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2117,16 +2164,26 @@ CREATE TABLE integration_events (
   signature_status  TEXT NOT NULL CHECK (signature_status IN ('valid','invalid','missing')),
   process_status    TEXT NOT NULL DEFAULT 'received'
                     CHECK (process_status IN ('received','matched','dispatched','deduped','rejected','processed','failed')),
+  visibility_scope  TEXT NOT NULL DEFAULT 'unknown',
+  project_id_snapshot UUID NULL,
   received_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT uq_integration_events_ws_id UNIQUE (workspace_id, id),                  -- 供 trigger_event_id 引用(§6.2)
   CONSTRAINT uq_integration_event_dedup UNIQUE (integration_id, external_event_id),  -- 入站去重(§6.9)
+  CONSTRAINT ck_event_visibility_scope CHECK (
+       (visibility_scope = 'workspace' AND project_id_snapshot IS NULL)
+    OR (visibility_scope = 'project' AND project_id_snapshot IS NOT NULL)
+    OR (visibility_scope = 'unknown' AND project_id_snapshot IS NULL)
+  ),
   CONSTRAINT fk_event_integration FOREIGN KEY (workspace_id, integration_id)
     REFERENCES integrations(workspace_id, id) ON DELETE CASCADE
 );
 CREATE INDEX idx_event_integration_status ON integration_events(integration_id, process_status, received_at DESC);
 CREATE INDEX idx_event_ws_received ON integration_events(workspace_id, received_at DESC);
+CREATE INDEX idx_event_visibility ON integration_events(
+  workspace_id, integration_id, visibility_scope, project_id_snapshot, received_at DESC
+);
 
 -- ============ webhook_subscriptions ============
 CREATE TABLE webhook_subscriptions (

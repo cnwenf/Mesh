@@ -52,26 +52,21 @@ async def test_update_integration_invalid_status_and_404(session_factory):
     service = make_service(session_factory)
     with pytest.raises(BusinessRuleError):
         await service.update_integration(
-            workspace_id=world["ws"], integration_id=world["integ_slack"],
+            workspace_id=world["ws"],
+            integration_id=world["integ_slack"],
             status="exploded",
         )
     with pytest.raises(NotFoundError):
-        await service.update_integration(
-            workspace_id=world["ws"], integration_id=uuid.uuid4(), name="x"
-        )
+        await service.update_integration(workspace_id=world["ws"], integration_id=uuid.uuid4(), name="x")
     with pytest.raises(NotFoundError):
-        await service.delete_integration(
-            workspace_id=world["ws"], integration_id=uuid.uuid4()
-        )
+        await service.delete_integration(workspace_id=world["ws"], integration_id=uuid.uuid4())
 
 
 async def test_update_integration_name_conflict(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
     member = await _member(session_factory, world)
-    await service.create_integration(
-        workspace_id=world["ws"], creator=member, kind="im_slack", name="name-a"
-    )
+    await service.create_integration(workspace_id=world["ws"], creator=member, kind="im_slack", name="name-a")
     second = await service.create_integration(
         workspace_id=world["ws"], creator=member, kind="im_slack", name="name-b"
     )
@@ -88,18 +83,14 @@ async def test_update_integration_name_conflict(session_factory):
 async def test_decrypt_integration_secret_failure_modes(session_factory):
     world = await seed_world(session_factory)
     service = make_service(session_factory)
-    integration = await service.get_integration(
-        workspace_id=world["ws"], integration_id=world["integ_slack"]
-    )
+    integration = await service.get_integration(workspace_id=world["ws"], integration_id=world["integ_slack"])
     assert service.decrypt_integration_secret(integration) is None  # no secret_ref
     async with session_factory() as session, session.begin():
         from mesh.db.models.integration import Integration
 
         row = await session.get(Integration, world["integ_slack"])
         row.secret_ref = "not-a-fernet-token"
-    integration = await service.get_integration(
-        workspace_id=world["ws"], integration_id=world["integ_slack"]
-    )
+    integration = await service.get_integration(workspace_id=world["ws"], integration_id=world["integ_slack"])
     assert service.decrypt_integration_secret(integration) is None  # undecryptable
 
 
@@ -111,13 +102,19 @@ async def test_list_events_signature_filter_and_render(session_factory):
 
         await set_tenant_context(session, world["ws"])
         event = IntegrationEvent(
-            workspace_id=world["ws"], integration_id=world["integ_slack"],
-            external_event_id="sig-1", event_type="message", payload={"a": 1},
-            signature_status="invalid", process_status="rejected",
+            workspace_id=world["ws"],
+            integration_id=world["integ_slack"],
+            external_event_id="sig-1",
+            event_type="message",
+            payload={"a": 1},
+            signature_status="invalid",
+            process_status="rejected",
         )
         session.add(event)
     page = await service.list_events(
-        workspace_id=world["ws"], integration_id=world["integ_slack"],
+        workspace_id=world["ws"],
+        integration_id=world["integ_slack"],
+        viewer=await _member(session_factory, world),
         signature_status="invalid",
     )
     assert len(page.items) == 1
@@ -131,7 +128,8 @@ async def test_create_binding_provider_mismatch_and_foreign_integration(session_
     service = make_service(session_factory)
     with pytest.raises(NotFoundError):
         await service.create_binding(
-            workspace_id=world["ws"], integration_id=uuid.uuid4(),
+            workspace_id=world["ws"],
+            integration_id=uuid.uuid4(),
             external_ref="C_X",
         )
     # webhook_outbound kind has no bindings
@@ -164,21 +162,25 @@ async def test_delivery_transport_error_records_failure(session_factory):
 
         await set_tenant_context(session, world["ws"])
         subscription, _ = await ob.create_subscription(
-            session, workspace_id=world["ws"], creator_member_id=world["member"],
+            session,
+            workspace_id=world["ws"],
+            creator_member_id=world["member"],
             url="https://unreachable.example.com/x",
-            signing_secret=TEST_SIGNING_SECRET, now=NOW,
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
         )
         delivery = WebhookSubscriptionDelivery(
-            workspace_id=world["ws"], subscription_id=subscription.id,
-            event_ref="net-err-1", state="pending",
+            workspace_id=world["ws"],
+            subscription_id=subscription.id,
+            event_ref="net-err-1",
+            state="pending",
         )
         session.add(delivery)
     worker = ob.WebhookDeliveryWorker(
-        session_factory, signing_secret=TEST_SIGNING_SECRET,
+        session_factory,
+        signing_secret=TEST_SIGNING_SECRET,
         max_attempts=3,
-        http_client_factory=lambda: httpx.AsyncClient(
-            transport=httpx.MockTransport(raise_handler)
-        ),
+        http_client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(raise_handler)),
         resolver=lambda host, port: ["93.184.216.34"],
         clock=lambda: NOW,
     )
@@ -207,17 +209,27 @@ async def test_delivery_unresolvable_host(session_factory):
 
         await set_tenant_context(session, world["ws"])
         subscription, _ = await ob.create_subscription(
-            session, workspace_id=world["ws"], creator_member_id=world["member"],
+            session,
+            workspace_id=world["ws"],
+            creator_member_id=world["member"],
             url="https://no-dns.example.com/x",
-            signing_secret=TEST_SIGNING_SECRET, now=NOW,
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
         )
-        session.add(WebhookSubscriptionDelivery(
-            workspace_id=world["ws"], subscription_id=subscription.id,
-            event_ref="dns-1", state="pending",
-        ))
+        session.add(
+            WebhookSubscriptionDelivery(
+                workspace_id=world["ws"],
+                subscription_id=subscription.id,
+                event_ref="dns-1",
+                state="pending",
+            )
+        )
     worker = ob.WebhookDeliveryWorker(
-        session_factory, signing_secret=TEST_SIGNING_SECRET,
-        max_attempts=1, resolver=broken_resolver, clock=lambda: NOW,
+        session_factory,
+        signing_secret=TEST_SIGNING_SECRET,
+        max_attempts=1,
+        resolver=broken_resolver,
+        clock=lambda: NOW,
     )
     await worker.run_once()
     async with session_factory() as session:
@@ -243,9 +255,14 @@ async def test_card_missing_clicker_or_action_400(session_factory):
     )
     async with session_factory() as session, session.begin():
         status, resp = await handle_card_callback(
-            session, session_factory, kind="im_slack", raw_body=body,
-            headers=headers, signing_secret=TEST_SIGNING_SECRET,
-            now=NOW, tolerance=timedelta(seconds=300),
+            session,
+            session_factory,
+            kind="im_slack",
+            raw_body=body,
+            headers=headers,
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
+            tolerance=timedelta(seconds=300),
         )
     assert status == 400
     assert resp["error"]["code"] == "invalid_request"
@@ -255,9 +272,14 @@ async def test_card_unsupported_kind_401(session_factory):
     await seed_world(session_factory)
     async with session_factory() as session, session.begin():
         status, resp = await handle_card_callback(
-            session, session_factory, kind="vcs_github", raw_body=b"{}",
-            headers={}, signing_secret=TEST_SIGNING_SECRET,
-            now=NOW, tolerance=timedelta(seconds=300),
+            session,
+            session_factory,
+            kind="vcs_github",
+            raw_body=b"{}",
+            headers={},
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
+            tolerance=timedelta(seconds=300),
         )
     assert status == 401
 
@@ -280,15 +302,18 @@ async def _project_world(session_factory):
         await session.flush()
         # workspace-level done status (project has none)
         done = IssueStatus(workspace_id=world["ws"], name="Done", category="done")
-        todo = IssueStatus(
-            workspace_id=world["ws"], name="Todo", category="todo", is_default=True
-        )
+        todo = IssueStatus(workspace_id=world["ws"], name="Todo", category="todo", is_default=True)
         session.add_all([done, todo])
         await session.flush()
         issue = Issue(
-            workspace_id=world["ws"], project_id=project.id,
-            identifier_namespace_key="WEB", number=5, identifier="WEB-5",
-            title="t", status_id=todo.id, state_category="todo",
+            workspace_id=world["ws"],
+            project_id=project.id,
+            identifier_namespace_key="WEB",
+            number=5,
+            identifier="WEB-5",
+            title="t",
+            status_id=todo.id,
+            state_category="todo",
         )
         session.add(issue)
     return world, issue, done
@@ -301,12 +326,16 @@ async def test_find_target_status_project_fallback_to_workspace(session_factory)
 
         await set_tenant_context(session, world["ws"])
         found = await vl._find_target_status(
-            session, workspace_id=world["ws"], project_id=issue.project_id,
+            session,
+            workspace_id=world["ws"],
+            project_id=issue.project_id,
             target="done",
         )
         assert found is not None and found.id == done.id
         by_name = await vl._find_target_status(
-            session, workspace_id=world["ws"], project_id=issue.project_id,
+            session,
+            workspace_id=world["ws"],
+            project_id=issue.project_id,
             target="Done",
         )
         assert by_name is not None
@@ -319,9 +348,7 @@ async def test_delete_link_404(session_factory):
 
         await set_tenant_context(session, world["ws"])
         with pytest.raises(NotFoundError):
-            await vl.delete_link(
-                session, workspace_id=world["ws"], link_id=uuid.uuid4(), now=NOW
-            )
+            await vl.delete_link(session, workspace_id=world["ws"], link_id=uuid.uuid4(), now=NOW)
 
 
 async def test_ingest_non_merge_event_refreshes_state_not_stale(session_factory):
@@ -335,18 +362,30 @@ async def test_ingest_non_merge_event_refreshes_state_not_stale(session_factory)
         from mesh.db.tenant import set_tenant_context
 
         await set_tenant_context(session, world["ws"])
-        session.add(IntegrationBinding(
-            workspace_id=world["ws"], integration_id=world["integ_github"],
-            provider="github", provider_tenant_key="1234567",
-            external_ref="acme/web", match_config={},
-            bound_agent_id=world["agent"],
-        ))
+        session.add(
+            IntegrationBinding(
+                workspace_id=world["ws"],
+                integration_id=world["integ_github"],
+                provider="github",
+                provider_tenant_key="1234567",
+                external_ref="acme/web",
+                match_config={},
+                bound_agent_id=world["agent"],
+            )
+        )
     event = NormalizedEvent(
-        external_event_id="evt-open-1", event_type="pull_request",
-        external_ref="acme/web", actor_key="dev", tenant_key="1234567",
-        text="WEB-77 open", extra={
-            "action": "opened", "pr_number": 77, "pr_title": "WEB-77 open",
-            "pr_state": "open", "pr_merged": False,
+        external_event_id="evt-open-1",
+        event_type="pull_request",
+        external_ref="acme/web",
+        actor_key="dev",
+        tenant_key="1234567",
+        text="WEB-77 open",
+        extra={
+            "action": "opened",
+            "pr_number": 77,
+            "pr_title": "WEB-77 open",
+            "pr_state": "open",
+            "pr_merged": False,
         },
     )
     async with session_factory() as session, session.begin():
@@ -357,20 +396,35 @@ async def test_ingest_non_merge_event_refreshes_state_not_stale(session_factory)
         todo = IssueStatus(workspace_id=world["ws"], name="T", category="todo", is_default=True)
         session.add(todo)
         await session.flush()
-        session.add(Issue(
-            workspace_id=world["ws"], identifier_namespace_key="WEB", number=77,
-            identifier="WEB-77", title="t", status_id=todo.id, state_category="todo",
-        ))
+        session.add(
+            Issue(
+                workspace_id=world["ws"],
+                identifier_namespace_key="WEB",
+                number=77,
+                identifier="WEB-77",
+                title="t",
+                status_id=todo.id,
+                state_category="todo",
+            )
+        )
         event_row = IntegrationEvent(
-            workspace_id=world["ws"], integration_id=world["integ_github"],
-            external_event_id=event.external_event_id, event_type="pull_request",
-            payload={}, signature_status="valid",
+            workspace_id=world["ws"],
+            integration_id=world["integ_github"],
+            external_event_id=event.external_event_id,
+            event_type="pull_request",
+            payload={},
+            signature_status="valid",
         )
         session.add(event_row)
         await session.flush()
         result = await vl.ingest_vcs_event(
-            session, workspace_id=world["ws"], integration=integration,
-            provider="github", event=event, event_row=event_row, now=NOW,
+            session,
+            workspace_id=world["ws"],
+            integration=integration,
+            provider="github",
+            event=event,
+            event_row=event_row,
+            now=NOW,
         )
     assert result["links_created"] == 1
     assert result["issues_transitioned"] == 0
@@ -390,15 +444,19 @@ async def test_ingest_non_merge_event_refreshes_state_not_stale(session_factory)
 async def test_inbound_missing_signature_header(session_factory):
     await seed_world(session_factory)
     payload = {
-        "type": "event_callback", "team_id": "T_TEST",
-        "event": {"type": "message", "channel": "C", "user": "U",
-                  "text": "x", "event_ts": "9.9"},
+        "type": "event_callback",
+        "team_id": "T_TEST",
+        "event": {"type": "message", "channel": "C", "user": "U", "text": "x", "event_ts": "9.9"},
     }
     body = json.dumps(payload).encode()
     async with session_factory() as session, session.begin():
         status, resp = await process_inbound(
-            session, kind="im_slack", raw_body=body, headers={},
-            signing_secret=TEST_SIGNING_SECRET, now=NOW,
+            session,
+            kind="im_slack",
+            raw_body=body,
+            headers={},
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
             tolerance=timedelta(seconds=300),
         )
     assert status == 401
@@ -409,8 +467,12 @@ async def test_inbound_rejects_webhook_outbound_kind(session_factory):
     await seed_world(session_factory)
     async with session_factory() as session, session.begin():
         status, _ = await process_inbound(
-            session, kind="webhook_outbound", raw_body=b"{}", headers={},
-            signing_secret=TEST_SIGNING_SECRET, now=NOW,
+            session,
+            kind="webhook_outbound",
+            raw_body=b"{}",
+            headers={},
+            signing_secret=TEST_SIGNING_SECRET,
+            now=NOW,
             tolerance=timedelta(seconds=300),
         )
     assert status == 401

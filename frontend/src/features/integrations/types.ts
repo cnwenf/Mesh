@@ -15,15 +15,12 @@
 import type { IconName } from '../../design';
 
 export type IntegrationKind =
-  | 'im_feishu'
-  | 'im_slack'
-  | 'vcs_github'
-  | 'vcs_gitlab'
-  | 'webhook_outbound';
+  'im_feishu' | 'im_slack' | 'im_dingtalk' | 'vcs_github' | 'vcs_gitlab' | 'webhook_outbound';
 
 export const INTEGRATION_KINDS: ReadonlyArray<IntegrationKind> = [
   'im_feishu',
   'im_slack',
+  'im_dingtalk',
   'vcs_github',
   'vcs_gitlab',
   'webhook_outbound',
@@ -73,8 +70,40 @@ export interface Integration {
   readonly updated_at: string;
 }
 
+/** 钉钉企业内部应用机器人接收模式(§3.2 / §4.1)。 */
+export type DingTalkReceiveMode = 'stream' | 'http';
+
+/** 钉钉 IM 出站详略；站内始终保留完整过程。 */
+export type DingTalkVerbosity = 'final_only' | 'progress';
+
+// mesh-emoji-ok: 钉钉机器人对外回复模板的产品文案，不作为 Mesh UI 图标使用
+const DINGTALK_DEFAULT_ACK_TEMPLATE = '✅ 已接收，处理中';
+export { DINGTALK_DEFAULT_ACK_TEMPLATE };
+
+/** Stream 持久连接状态；disabled 为诊断端点对停用集成的显式状态。 */
+export type DingTalkStreamState = 'connected' | 'reconnecting' | 'down' | 'disabled';
+
+export const DINGTALK_STREAM_STATES: ReadonlyArray<DingTalkStreamState> = [
+  'connected',
+  'reconnecting',
+  'down',
+  'disabled',
+];
+
+export interface DingTalkStreamStatus {
+  readonly state: DingTalkStreamState;
+  readonly last_frame_at: string | null;
+  readonly last_attempt_at: string | null;
+  readonly backoff_seconds: number | null;
+}
+
+export interface DingTalkTestSendResult {
+  readonly status: 'sent';
+  readonly conversation_ref: string;
+}
+
 /** 规范化提供商标识(§2.3,从 `integrations.kind` 归一)。 */
-export type BindingProvider = 'feishu' | 'slack' | 'github' | 'gitlab' | 'webhook';
+export type BindingProvider = 'feishu' | 'slack' | 'dingtalk' | 'github' | 'gitlab' | 'webhook';
 
 export type BindingScope = 'workspace' | 'project';
 
@@ -109,13 +138,7 @@ export interface Binding {
 export type SignatureStatus = 'valid' | 'invalid' | 'missing';
 
 export type ProcessStatus =
-  | 'received'
-  | 'matched'
-  | 'dispatched'
-  | 'deduped'
-  | 'rejected'
-  | 'processed'
-  | 'failed';
+  'received' | 'matched' | 'dispatched' | 'deduped' | 'rejected' | 'processed' | 'failed';
 
 export interface IntegrationEvent {
   readonly id: string;
@@ -163,7 +186,7 @@ export interface Delivery {
   readonly created_at: string;
 }
 
-export type IdentityProvider = 'feishu' | 'slack' | 'github' | 'gitlab';
+export type IdentityProvider = 'feishu' | 'slack' | 'dingtalk' | 'github' | 'gitlab';
 
 export interface ExternalIdentity {
   readonly id: string;
@@ -174,6 +197,69 @@ export interface ExternalIdentity {
   readonly created_in_workspace_id: string | null;
   readonly verified_at: string;
   readonly created_at: string;
+}
+
+/** integration_message_queue 状态机(§2.10 / §3.9)。 */
+export type QueueItemState =
+  'pending' | 'dispatching' | 'processing' | 'cancelling' | 'done' | 'failed' | 'cancelled';
+
+export type QueueDispatchMode = 'serial_conversation' | 'parallel';
+
+export interface QueueSender {
+  readonly identity_key: string;
+  readonly display_name: string;
+  readonly linked: boolean;
+}
+
+export interface QueueTargetAgent {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** 普通队列端点只返回截断摘要，永不返回消息全文。 */
+export interface QueueItem {
+  readonly id: string;
+  readonly conversation_key: string;
+  readonly seq: number;
+  readonly state: QueueItemState;
+  readonly dispatch_mode: QueueDispatchMode;
+  readonly position: number | null;
+  readonly sender: QueueSender;
+  readonly target_agent: QueueTargetAgent | null;
+  readonly message_excerpt: string;
+  readonly ack_sent_at: string | null;
+  readonly ack_merged_into: string | null;
+  readonly execution_id: string | null;
+  readonly enqueued_at: string;
+  readonly started_at: string | null;
+  readonly finished_at: string | null;
+}
+
+export interface QueueInFlightSummary {
+  readonly id: string;
+  readonly state: Extract<QueueItemState, 'dispatching' | 'processing' | 'cancelling'>;
+  readonly seq: number;
+}
+
+export interface QueueConversationSummary {
+  readonly conversation_key: string;
+  readonly pending_count: number;
+  readonly in_flight: ReadonlyArray<QueueInFlightSummary>;
+}
+
+/** 已删绑定留下的终态孤儿审计行；仅 admin/owner UI 入口读取。 */
+export interface QueueAuditItem {
+  readonly id: string;
+  readonly binding_display: string;
+  readonly conversation_key: string;
+  readonly sender_identity_key: string;
+  readonly sender: QueueSender;
+  readonly state: Extract<QueueItemState, 'done' | 'failed' | 'cancelled'>;
+  readonly project_id_snapshot: string | null;
+  readonly message_excerpt: string;
+  readonly enqueued_at: string;
+  readonly started_at: string | null;
+  readonly finished_at: string | null;
 }
 
 export type VcsLinkStatus = 'active' | 'stale' | 'deleted';
@@ -234,6 +320,16 @@ export const CONNECTOR_CATALOG: ReadonlyArray<ConnectorMeta> = [
     kind: 'im_slack',
     icon: 'chat',
     nameKey: 'integrations.kind.im_slack',
+    capabilityKeys: [
+      'integrations.capability.im_notify',
+      'integrations.capability.approval_card',
+      'integrations.capability.event_trigger',
+    ],
+  },
+  {
+    kind: 'im_dingtalk',
+    icon: 'message',
+    nameKey: 'integrations.kind.im_dingtalk',
     capabilityKeys: [
       'integrations.capability.im_notify',
       'integrations.capability.approval_card',

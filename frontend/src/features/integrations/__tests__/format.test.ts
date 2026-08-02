@@ -5,20 +5,27 @@ import { describe, expect, it } from 'vitest';
 import { ICON_PATHS } from '../../../design';
 import {
   BINDING_STATUS_TONE,
+  DINGTALK_STREAM_STATE_TONE,
   DELIVERY_STATE_TONE,
   HEALTH_STATE_TONE,
   INTEGRATION_STATUS_TONE,
   KIND_ICON,
   PROCESS_STATUS_TONE,
+  QUEUE_STATE_TONE,
   SIGNATURE_STATUS_TONE,
   SUBSCRIPTION_STATUS_TONE,
   VCS_LINK_STATUS_TONE,
   formatExternalState,
+  conversationDisplayName,
+  externalIdentityTriple,
+  formatQueueDuration,
   formatRelativeTime,
   formatSuccessRate,
   isHttpsUrl,
   isSafeWebUrl,
   isTripped,
+  sanitizeMessageExcerpt,
+  toDingTalkStreamState,
   toHealthState,
 } from '../format';
 
@@ -62,6 +69,81 @@ describe('tone maps', () => {
     expect(HEALTH_STATE_TONE.healthy).toBe('success');
     expect(HEALTH_STATE_TONE.auth_failed).toBe('danger');
     expect(HEALTH_STATE_TONE.unreachable).toBe('warn');
+  });
+
+  it('maps every DingTalk stream and queue state with text-compatible tones', () => {
+    expect(DINGTALK_STREAM_STATE_TONE.connected).toBe('success');
+    expect(DINGTALK_STREAM_STATE_TONE.reconnecting).toBe('warn');
+    expect(DINGTALK_STREAM_STATE_TONE.down).toBe('danger');
+    expect(DINGTALK_STREAM_STATE_TONE.disabled).toBe('neutral');
+    expect(QUEUE_STATE_TONE.processing).toBe('info');
+    expect(QUEUE_STATE_TONE.cancelling).toBe('warn');
+    expect(QUEUE_STATE_TONE.failed).toBe('danger');
+  });
+});
+
+describe('DingTalk queue display guards', () => {
+  it('narrows unknown stream states to down', () => {
+    expect(toDingTalkStreamState('connected')).toBe('connected');
+    expect(toDingTalkStreamState('disabled')).toBe('disabled');
+    expect(toDingTalkStreamState('future-value')).toBe('down');
+  });
+
+  it('extracts only the opaque conversation ref after provider and tenant', () => {
+    expect(conversationDisplayName('dingtalk:dingCorp01:cid6EUvB2O8qVF2RYQtHTKEsg==')).toBe(
+      'cid6EUvB2O8qVF2RYQtHTKEsg==',
+    );
+    expect(conversationDisplayName('malformed')).toBe('malformed');
+  });
+
+  it('removes control characters and caps excerpts at 120 Unicode characters', () => {
+    const dirty = `hello\u0000\u0007\nworld\u0085\u200b\u202e\u2066\ufeff   ${'界'.repeat(130)}`;
+    const clean = sanitizeMessageExcerpt(dirty);
+    expect(clean).not.toContain('\u0085');
+    expect(clean).not.toContain('\u200b');
+    expect(clean).not.toContain('\u202e');
+    expect(clean).not.toContain('\u2066');
+    expect(clean).not.toContain('\ufeff');
+    expect(Array.from(clean)).toHaveLength(120);
+    expect(clean.startsWith('helloworld ')).toBe(true);
+  });
+
+  it('mirrors backend excerpt hygiene for soft-hyphen, joiner and bidi ranges', () => {
+    expect(sanitizeMessageExcerpt('  a\u00adb\u180ec\u200dd\u2029e\u2064f\u206fg  h  ')).toBe(
+      'abcdefg h',
+    );
+  });
+
+  it('builds the full identity triple used for ownership checks', () => {
+    expect(
+      externalIdentityTriple({
+        provider: 'dingtalk',
+        provider_tenant_key: 'dingCorp01',
+        external_user_key: 'staff-1',
+      }),
+    ).toBe('dingtalk:dingCorp01:staff-1');
+  });
+
+  it('formats active and completed queue runtimes defensively', () => {
+    expect(
+      formatQueueDuration('2026-08-01T10:00:00Z', null, Date.parse('2026-08-01T10:02:03Z')),
+    ).toBe('2:03');
+    expect(
+      formatQueueDuration(
+        '2026-08-01T10:00:00Z',
+        '2026-08-01T11:02:03Z',
+        Date.parse('2026-08-01T12:00:00Z'),
+      ),
+    ).toBe('1:02:03');
+    expect(
+      formatQueueDuration(
+        '2026-08-01T10:00:02Z',
+        '2026-08-01T10:00:00Z',
+        Date.parse('2026-08-01T12:00:00Z'),
+      ),
+    ).toBe('0:00');
+    expect(formatQueueDuration('not-a-date', null, Date.now())).toBeNull();
+    expect(formatQueueDuration('2026-08-01T10:00:00Z', 'also-not-a-date', Date.now())).toBeNull();
   });
 });
 
